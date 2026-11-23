@@ -6,15 +6,22 @@ import type {
   SubagentWorkspaceWriteApprovalDetails,
 } from "../shared/assistant";
 import type { AgentStep } from "../shared/generation-timeline";
-import type { SubagentTranscriptV1 } from "../shared/subagent-transcript";
+import type { SubagentRunSnapshotV2 } from "../shared/subagent-runs";
+import { mergeSubagentTranscript, type SubagentTranscriptV1 } from "../shared/subagent-transcript";
 import {
   MAX_SAVED_SUBAGENT_HELPER_TRANSCRIPTS,
   rememberSubagentHelperTranscript,
+  subagentFailureReason,
   subagentHelperApprovalFor,
+  subagentHelperApprovalsFor,
   subagentHelperBlocks,
+  subagentHelperHasActiveHelpers,
   subagentHelperProblem,
   subagentHelperTimeline,
+  subagentHelperTranscriptRefetchReason,
   subagentHelperWorkSummary,
+  withSubagentApprovalWaitSnapshots,
+  withSubagentApprovalWaitViews,
   type SavedSubagentHelperTranscripts,
 } from "./subagent-helper-chat-state";
 
@@ -273,4 +280,154 @@ test("consecutive tool-only messages read as one block of steps, and a written m
   );
   const grouped = blocks[1];
   assert.equal(grouped?.kind === "message" ? grouped.entry.finishedAt : null, 1_500);
+});
+
+test("the runner's reasons for a failed helper read as plain sentences, and other text passes through", () => {
+  assert.equal(
+    subagentFailureReason("The child reached its turn limit. These are incomplete, unverified partial findings."),
+    "It ran out of turns before finishing. Its findings so far may be incomplete.",
+  );
+  assert.equal(
+    subagentFailureReason("The child reached its tool-call limit."),
+    "It used all of its allowed steps before finishing.",
+  );
+  // Two runner phrases that mean the same thing are said once.
+  assert.equal(
+    subagentFailureReason(
+      "The child did not provide a final text report. The child completed without a textual assistant result.",
+    ),
+    "It stopped without writing a report.",
+  );
+  // A phrase that only restates the failure adds nothing.
+  assert.equal(subagentFailureReason("The child could not complete this task."), null);
+  assert.equal(subagentFailureReason("   "), null);
+  assert.equal(subagentFailureReason("The provider returned 429"), "The provider returned 429.");
+
+  const problem = subagentHelperProblem(
+    { state: "failed", label: "Scout", tools: 3, error: "The child reached its turn limit." },
+    { steps: 3, changedFiles: [] },
+  );
+  assert.equal(
+    problem?.text,
+    "This helper couldn't finish. It ran out of turns before finishing. It didn't change any files.",
+  );
+  assert.doesNotMatch(problem?.text ?? "", /child/iu);
+});
+
+test("every approval a helper is waiting on belongs to it, in queue order", () => {
+  const scout = { runId: "run-1", label: "Scout" };
+  const fixer = { runId: "run-3", label: "Fixer" };
+  const first = approval("first", grantDetails("run-1", "Scout"));
+  const other = approval("other", grantDetails("run-3", "Fixer"));
+  const second = approval("second", writeDetails("Scout"));
+  const owned = subagentHelperApprovalsFor(scout, [first, other, second], [scout, fixer]);
+  assert.deepEqual(
+    owned.map((prompt) => prompt.approvalId),
+    ["first", "second"],
+  );
+  assert.equal(subagentHelperApprovalFor(scout, [other, second, first], [scout, fixer])?.approvalId, "second");
+});
+
+function snapshot(runId: string, extra: Partial<SubagentRunSnapshotV2> = {}): SubagentRunSnapshotV2 {
+  return {
+    version: 2,
+    runId,
+    groupId: "group-1",
+    generationId: "generation-1",
+    childId: `child-${runId}`,
+    chatId: "chat-1",
+    workspaceId: "workspace-1",
+    revision: 1,
+    role: "scout",
+    label: runId,
+    taskPreview: "Look around",
+    state: "running",
+    activity: "Reading files",
+    startedAt: 1_000,
+    updatedAt: 2_000,
+    modelId: "test-model",
+    turns: 1,
+    tools: 0,
+    tokens: 0,
+    warnings: [],
+    depth: 1,
+    execution: "foreground",
+    context: "fresh",
+    authorityRevision: 1,
+    ...extra,
+  };
+}
+
+test("a running helper with a pending approval shows as waiting on you, and nothing else changes", () => {
+  const waiting = snapshot("run-1");
+  const busy = snapshot("run-2");
+  const done = snapshot("run-3", { state: "completed", finishedAt: 3_000 });
+  const runs = [waiting, busy, done];
+  const grant = approval("grant", grantDetails("run-1", "run-1"));
+  const doneGrant = approval("late", grantDetails("run-3", "run-3"));
+
+  const overlaid = withSubagentApprovalWaitSnapshots(runs, [grant, doneGrant]);
+  assert.deepEqual(
+    overlaid.map((run) => run.state),
+    ["needs_attention", "running", "completed"],
+  );
+  assert.equal(runs[0]?.state, "running", "the server's snapshot is not changed in place");
+
+  // Nothing pending, or nothing pending for a running helper: the same array comes back.
+  assert.equal(withSubagentApprovalWaitSnapshots(runs, []), runs);
+  assert.equal(withSubagentApprovalWaitSnapshots(runs, [doneGrant]), runs);
+
+  const views = runs.map((run) => ({ runId: run.runId, state: run.state, snapshot: run }));
+  const overlaidViews = withSubagentApprovalWaitViews(views, [grant]);
+  assert.equal(overlaidViews[0]?.state, "needs_attention");
+  assert.equal(overlaidViews[0]?.snapshot?.state, "needs_attention");
+  assert.equal(overlaidViews[1], views[1]);
+  assert.equal(withSubagentApprovalWaitViews(views, [doneGrant]), views);
+});
+
+test("Stop says it stops everything only while a helper under this one is still working", () => {
+  const parent = snapshot("run-1");
+  const child = snapshot("run-2", { parentRunId: "run-1", depth: 2 });
+  const sibling = snapshot("run-3");
+  const view = (run: SubagentRunSnapshotV2, terminal = false) => ({ terminal, snapshot: run });
+
+  assert.equal(subagentHelperHasActiveHelpers("run-1", [view(parent), view(child)]), true);
+  assert.equal(subagentHelperHasActiveHelpers("run-1", [view(parent), view(child, true)]), false);
+  assert.equal(subagentHelperHasActiveHelpers("run-1", [view(parent), view(sibling)]), false);
+  assert.equal(subagentHelperHasActiveHelpers("run-2", [view(parent), view(child)]), false);
+});
+
+test("a window reads a helper's saved conversation again only for a new reason", () => {
+  const saved = transcript("run-1", 3, [{ text: "First look." }]);
+  const complete = mergeSubagentTranscript(saved, null);
+  const running = snapshot("run-1", { revision: 4 });
+
+  // Updates stream to this window: the saved copy is not read again.
+  assert.equal(subagentHelperTranscriptRefetchReason(running, complete, true), null);
+
+  // Another window runs the chat: each move of the run is its own reason, including the end.
+  const moved = subagentHelperTranscriptRefetchReason(running, complete, false);
+  const movedAgain = subagentHelperTranscriptRefetchReason({ ...running, revision: 5 }, complete, false);
+  const finished = subagentHelperTranscriptRefetchReason({ state: "completed", revision: 5 }, complete, false);
+  assert.ok(moved && movedAgain && finished);
+  assert.equal(new Set([moved, movedAgain, finished]).size, 3);
+  assert.equal(subagentHelperTranscriptRefetchReason(running, complete, false), moved, "the same run reads once");
+
+  // A gap in the streamed updates is read even while they stream here.
+  const gap = mergeSubagentTranscript(saved, {
+    version: 1,
+    runId: "run-1",
+    baseRevision: 5,
+    revision: 6,
+    trimmed: false,
+    entryCount: 3,
+    changes: [],
+  });
+  assert.equal(gap.complete, false);
+  assert.ok(subagentHelperTranscriptRefetchReason(running, gap, true));
+
+  // Nothing here yet: a running helper reads once; one that ended has nothing more to read.
+  const empty = mergeSubagentTranscript(null, null);
+  assert.ok(subagentHelperTranscriptRefetchReason(running, empty, true));
+  assert.equal(subagentHelperTranscriptRefetchReason({ state: "completed", revision: 2 }, empty, false), null);
 });

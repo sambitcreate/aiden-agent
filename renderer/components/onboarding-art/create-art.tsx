@@ -316,7 +316,8 @@ export function ComputerUseArt() {
 
 export function NativeSubagentsArt() {
   return (
-    <ArtWindow className="oa-sub-window" style={{ left: 10, top: 10, width: 200, height: 250 }}>
+    <>
+    <ArtWindow className="oa-sub-window" style={{ left: 10, top: 10, width: 150, height: 250 }}>
       <div className="oa-sub-heading">Active · 2</div>
       <div className="oa-sub-row oa-selected">
         <span className="oa-sub-twisty">
@@ -373,6 +374,42 @@ export function NativeSubagentsArt() {
         <span className="oa-sub-state">Done</span>
       </div>
     </ArtWindow>
+    {/* The selected helper's own chat: its task, its steps, and its reply. */}
+    <ArtWindow raised style={{ left: 148, top: 10, width: 142, height: 130 }}>
+      <div role="group" aria-label="Implementer's chat" className="oa-stack" style={{ gap: 5, padding: "6px 7px" }}>
+        <div className="oa-row" style={{ gap: 4, height: 10 }}>
+          <i style={{ width: 5, height: 5, flex: "none", borderRadius: "50%", background: "var(--status-accent)" }} />
+          <span className="oa-strong">Implementer</span>
+          <span className="oa-grow" />
+          <span className="oa-sub-twisty">
+            <ArtIcon icon={MoreHorizontal} />
+          </span>
+        </div>
+        <div role="group" aria-label="Task" className="oa-ws-bubble" style={{ gap: 3, padding: "4px 6px", borderRadius: 7 }}>
+          <Bar width="100%" style={{ height: 4 }} />
+          <Bar width="58%" style={{ height: 4 }} />
+        </div>
+        <ul aria-label="Steps" className="oa-stack" style={{ gap: 3, margin: 0, padding: 0, listStyle: "none" }}>
+          <li className="oa-row" style={{ height: 9 }}>
+            <span className="oa-sub-twisty">
+              <ArtIcon icon={FileText} />
+            </span>
+            <Bar width="56%" tone="soft" style={{ height: 4 }} />
+          </li>
+          <li className="oa-row oa-anim-pop" style={{ height: 9, animationDelay: "0.3s" }}>
+            <span className="oa-sub-twisty">
+              <ArtIcon icon={SquareTerminal} />
+            </span>
+            <Bar width="44%" tone="soft" style={{ height: 4 }} />
+          </li>
+        </ul>
+        <div role="group" aria-label="Reply" className="oa-stack" style={{ gap: 3 }}>
+          <Bar width="92%" className="oa-anim-type" style={{ height: 4, animationDelay: "0.6s" }} />
+          <Bar width="70%" className="oa-anim-type" style={{ height: 4, animationDelay: "0.78s" }} />
+        </div>
+      </div>
+    </ArtWindow>
+    </>
   );
 }
 

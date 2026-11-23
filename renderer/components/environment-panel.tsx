@@ -62,7 +62,11 @@ import {
   useSubagentHelperChatSelector,
   useSubagentHelperChatStore,
 } from "../lib/subagent-helper-chat-store";
-import { subagentHelperApprovalFor } from "../lib/subagent-helper-chat-state";
+import {
+  subagentHelperApprovalFor,
+  subagentHelperHasActiveHelpers,
+  withSubagentApprovalWaitViews,
+} from "../lib/subagent-helper-chat-state";
 import { mergeSubagentTranscript } from "../shared/subagent-transcript";
 import {
   resolveEnvironmentPanelLayout,
@@ -250,10 +254,14 @@ export interface EnvironmentPanelContextValue {
   selectSubagent: (runId: string | null) => void;
   retrySubagentDetail: () => void;
   /**
-   * Read the selected helper's saved conversation again, once per gap between
-   * the saved copy (`savedRevision`) and what has streamed since.
+   * Read a helper's saved conversation again, once per `reason` (see
+   * `subagentHelperTranscriptRefetchReason`).
    */
-  refetchSubagentTranscript?: (runId: string, savedRevision: number) => void;
+  refetchSubagentTranscript?: (runId: string, reason: string) => void;
+  /** Helpers whose last saved-conversation read failed, by run, with the reason it was for. */
+  subagentTranscriptRefetchFailures: Readonly<Record<string, string>>;
+  /** Try a failed saved-conversation read again. */
+  retrySubagentTranscript: (runId: string) => void;
   stopSubagent: (run: SubagentRunSnapshot) => Promise<void>;
   editorState: FilesEditorState;
   agentBusy: boolean;
@@ -285,6 +293,11 @@ const EMPTY_EDITOR_STATE: FilesEditorState = {
   saving: false,
 };
 const EMPTY_ACTIVE_CHAT: EnvironmentActiveChat = { chatId: null, workspaceId: null };
+const NO_TRANSCRIPT_REFETCH_FAILURES: Readonly<Record<string, string>> = {};
+const EMPTY_TRANSCRIPT_REFETCH_FAILURES = {
+  chatId: null,
+  byRunId: NO_TRANSCRIPT_REFETCH_FAILURES,
+};
 
 const EMPTY_SUBAGENT_CONTEXT: EnvironmentSubagentContext = {
   chatId: null,
@@ -420,6 +433,10 @@ export function EnvironmentPanelProvider({ children }: React.PropsWithChildren) 
   const [subagentDetailRequestVersion, setSubagentDetailRequestVersion] = React.useState(0);
   const [helperChatStore] = React.useState(createSubagentHelperChatStore);
   const transcriptRefetchKeysRef = React.useRef(new Set<string>());
+  const [transcriptRefetchFailures, setTranscriptRefetchFailures] = React.useState<{
+    chatId: string | null;
+    byRunId: Readonly<Record<string, string>>;
+  }>(EMPTY_TRANSCRIPT_REFETCH_FAILURES);
   const [subagentDetailAnnouncement, setSubagentDetailAnnouncement] =
     React.useState<SubagentDetailAnnouncementRequest | null>(null);
   const [gitOperationBusy, setGitOperationBusyState] = React.useState(false);
@@ -831,38 +848,67 @@ export function EnvironmentPanelProvider({ children }: React.PropsWithChildren) 
     [subagentViews, subagentsEnabled],
   );
 
-  // A helper chat with a gap in its streamed updates, or one opened after its
-  // helper started, reads the saved copy once per saved revision. Only the
+  // A helper chat reads its saved copy again once per reason: a gap in its
+  // streamed updates, a helper that started before this window opened, or a
+  // run that moved while its updates stream to another window. Only the
   // transcript is taken from the answer; the run record keeps its own refresh.
+  // A failed read is kept so the helper chat can offer Try again.
   const refetchSubagentTranscript = React.useCallback(
-    (runId: string, savedRevision: number) => {
+    (runId: string, reason: string) => {
       const chatId = subagentChatIdRef.current;
       if (!subagentsEnabled || !chatId) return;
       const keys = transcriptRefetchKeysRef.current;
-      const key = `${chatId}:${runId}:${savedRevision}`;
+      const key = `${chatId}:${runId}:${reason}`;
       if (keys.has(key)) return;
       keys.add(key);
+      const settle = (failedReason: string | null) => {
+        setTranscriptRefetchFailures((current) => {
+          if (current.chatId !== chatId) {
+            return failedReason ? { chatId, byRunId: { [runId]: failedReason } } : current;
+          }
+          if (failedReason === null) {
+            if (!(runId in current.byRunId)) return current;
+            const { [runId]: _cleared, ...rest } = current.byRunId;
+            return { chatId, byRunId: rest };
+          }
+          if (current.byRunId[runId] === failedReason) return current;
+          return { chatId, byRunId: { ...current.byRunId, [runId]: failedReason } };
+        });
+      };
       void subagentsApi
         .get(chatId, runId)
         .then((detail) => {
           if (subagentChatIdRef.current !== chatId) return;
           if (detail?.transcript?.runId === runId) {
             helperChatStore.rememberSaved(chatId, detail.transcript);
+            settle(null);
           } else {
-            // Nothing to read yet: a later gap or reopen may ask again.
             keys.delete(key);
+            settle(reason);
           }
         })
         .catch(() => {
           keys.delete(key);
+          if (subagentChatIdRef.current === chatId) settle(reason);
         });
     },
     [helperChatStore, subagentsEnabled],
   );
 
-  // Refetch keys belong to one chat.
+  const retrySubagentTranscript = React.useCallback(
+    (runId: string) => {
+      const chatId = subagentChatIdRef.current;
+      if (!chatId || transcriptRefetchFailures.chatId !== chatId) return;
+      const reason = transcriptRefetchFailures.byRunId[runId];
+      if (reason) refetchSubagentTranscript(runId, reason);
+    },
+    [refetchSubagentTranscript, transcriptRefetchFailures],
+  );
+
+  // Refetch keys and failures belong to one chat.
   React.useEffect(() => {
     transcriptRefetchKeysRef.current.clear();
+    setTranscriptRefetchFailures(EMPTY_TRANSCRIPT_REFETCH_FAILURES);
   }, [subagents.chatId]);
 
   const retrySubagentDetail = React.useCallback(() => {
@@ -1276,6 +1322,11 @@ export function EnvironmentPanelProvider({ children }: React.PropsWithChildren) 
       selectSubagent,
       retrySubagentDetail,
       refetchSubagentTranscript,
+      subagentTranscriptRefetchFailures:
+        transcriptRefetchFailures.chatId === subagents.chatId
+          ? transcriptRefetchFailures.byRunId
+          : NO_TRANSCRIPT_REFETCH_FAILURES,
+      retrySubagentTranscript,
       stopSubagent,
       editorState: activeEditorState,
       agentBusy,
@@ -1314,6 +1365,8 @@ export function EnvironmentPanelProvider({ children }: React.PropsWithChildren) 
       reviewMode,
       retrySubagentDetail,
       refetchSubagentTranscript,
+      retrySubagentTranscript,
+      transcriptRefetchFailures,
       reportSurfaceLayout,
       reportDesignDockInset,
       stopSubagent,
@@ -1388,10 +1441,14 @@ export function useEnvironmentPanel(): EnvironmentPanelContextValue {
 function HelperAwareSubagentsPanel({
   onClosePanel,
   onTranscriptIncomplete,
+  transcriptRefetchFailures,
+  onRetryTranscript,
   ...props
 }: Omit<React.ComponentProps<typeof SubagentsPanel>, "helperChat"> & {
   onClosePanel: () => void;
-  onTranscriptIncomplete?: (runId: string, savedRevision: number) => void;
+  onTranscriptIncomplete?: (runId: string, reason: string) => void;
+  transcriptRefetchFailures: Readonly<Record<string, string>>;
+  onRetryTranscript: (runId: string) => void;
 }) {
   const store = useSubagentHelperChatStore();
   const chatId = props.chatId;
@@ -1402,7 +1459,15 @@ function HelperAwareSubagentsPanel({
   const approvals = useSubagentHelperChatSelector((state) => state.approvals);
   const decidingApprovalId = useSubagentHelperChatSelector((state) => state.decidingApprovalId);
   const expandedRunId = useSubagentHelperChatSelector((state) => state.expandedRunId);
-  const runs = props.runs;
+  // A running helper that waits on one of your approvals reads as waiting on you.
+  const runs = React.useMemo(
+    () => (scoped ? withSubagentApprovalWaitViews(props.runs, approvals) : props.runs),
+    [approvals, props.runs, scoped],
+  );
+  const selectedRunSnapshot =
+    runs === props.runs
+      ? props.selectedRunSnapshot
+      : (runs.find((run) => run.runId === runId)?.snapshot ?? props.selectedRunSnapshot);
   const activeRuns = React.useMemo(() => runs.filter((run) => !run.terminal), [runs]);
   const selectedTranscript = React.useMemo(() => mergeSubagentTranscript(saved, live), [live, saved]);
   const helperChat = React.useMemo<SubagentsPanelHelperChat | undefined>(() => {
@@ -1428,7 +1493,12 @@ function HelperAwareSubagentsPanel({
       },
       expandedRunId,
       onCollapse: () => store.collapse({ restoreFocus: false }),
+      streamingHere: (id) => (id === runId ? Boolean(live) : store.getState().live.has(id)),
       ...(onTranscriptIncomplete ? { onTranscriptIncomplete } : {}),
+      transcriptRefreshFailed: (id) => id in transcriptRefetchFailures,
+      onRetryTranscript,
+      onFocusMainApproval: () => store.focusMainWaiting("approval"),
+      hasActiveHelpers: (id) => subagentHelperHasActiveHelpers(id, runs),
     };
   }, [
     activeRuns,
@@ -1436,14 +1506,25 @@ function HelperAwareSubagentsPanel({
     chatId,
     decidingApprovalId,
     expandedRunId,
+    live,
     onClosePanel,
+    onRetryTranscript,
     onTranscriptIncomplete,
     runId,
+    runs,
     scoped,
     selectedTranscript,
     store,
+    transcriptRefetchFailures,
   ]);
-  return <SubagentsPanel {...props} helperChat={helperChat} />;
+  return (
+    <SubagentsPanel
+      {...props}
+      runs={runs}
+      selectedRunSnapshot={selectedRunSnapshot}
+      helperChat={helperChat}
+    />
+  );
 }
 
 function EnvironmentPanelSurface({
@@ -1670,6 +1751,8 @@ function EnvironmentPanelSurface({
       <HelperAwareSubagentsPanel
         onClosePanel={panel.closeTools}
         onTranscriptIncomplete={panel.refetchSubagentTranscript}
+        transcriptRefetchFailures={panel.subagentTranscriptRefetchFailures}
+        onRetryTranscript={panel.retrySubagentTranscript}
         chatId={panel.subagents.chatId}
         workspaceId={panel.subagents.workspaceId}
         runs={panel.subagentViews}

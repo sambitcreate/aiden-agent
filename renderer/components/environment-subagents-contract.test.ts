@@ -335,7 +335,6 @@ test("saved detail failures expose a versioned retry path", () => {
   assert.match(environment, /setSubagentDetailLoading\(true\)/u);
   assert.match(environment, /handoffSnapshots=\{panel\.subagents\.handoffSnapshots\}/u);
   assert.match(panel, /onRetryDetail/u);
-  assert.match(panel, /refreshError=\{savedDetailRefreshError\}/u);
   assert.match(panel, /refreshing=\{savedDetailRefreshing\}/u);
   assert.match(panel, /\sRetry\s*<\/Button>/u);
 });
@@ -556,7 +555,6 @@ test("the shell reconciles lifecycle-detached terminal chats without per-stream 
   );
   assert.match(pane, /React\.useSyncExternalStore\(\s+subscribeDetachedLifecycleStreams/u);
   assert.match(pane, /detachedLifecycleChatProjection\(chatId, effectiveWorkspaceId\)/u);
-  assert.match(pane, /liveSubagents=\{displayedLiveSubagents\}/u);
   assert.match(pane, /streamingText=\{displayedStreamingText\}/u);
   assert.match(
     pane,

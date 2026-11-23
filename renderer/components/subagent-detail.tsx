@@ -83,6 +83,11 @@ export interface SubagentDetailProps {
   presentation?: SubagentRunPresentation;
   refreshing?: boolean;
   refreshError?: string | null;
+  /**
+   * What could not be read: a saved message's run detail, or a helper's
+   * saved conversation (the helper chat's own wording, so both read alike).
+   */
+  refreshErrorKind?: "detail" | "conversation";
   onRetryRefresh?: () => void;
   now?: number;
   /** Live context reading; supplied only while the run is active. */
@@ -101,6 +106,7 @@ export const SubagentDetail = React.forwardRef<HTMLHeadingElement, SubagentDetai
       presentation,
       refreshing = false,
       refreshError = null,
+      refreshErrorKind = "detail",
       onRetryRefresh,
       now = Date.now(),
       contextUsage,
@@ -315,6 +321,22 @@ export const SubagentDetail = React.forwardRef<HTMLHeadingElement, SubagentDetai
               <Text as="p" variant="small" color="secondary" data-subagent-detail-refreshing="true">
                 Refreshing saved activity…
               </Text>
+            ) : refreshError && refreshErrorKind === "conversation" ? (
+              <Callout role="note" data-subagent-helper-refresh-error="true">
+                <Text as="p" variant="small" color="secondary">
+                  Couldn't load this helper's conversation. What's shown may be out of date.
+                </Text>
+                {onRetryRefresh ? (
+                  <Button
+                    variant="muted"
+                    size="small"
+                    onClick={onRetryRefresh}
+                    className="mt-2 w-fit self-start motion-reduce:transition-none"
+                  >
+                    Try again
+                  </Button>
+                ) : null}
+              </Callout>
             ) : refreshError ? (
               <Callout role="note" data-subagent-detail-refresh-error="true">
                 <Text variant="small-strong">Showing the last available activity</Text>

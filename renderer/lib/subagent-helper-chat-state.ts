@@ -12,7 +12,10 @@ import {
   type GenerationTimeline,
   type GenerationTimelineStatus,
 } from "../shared/generation-timeline";
-import type { SubagentRunSnapshot } from "../shared/subagent-runs";
+import {
+  SUBAGENT_NEEDS_ATTENTION_FALLBACK_ACTIVITY,
+  type SubagentRunSnapshot,
+} from "../shared/subagent-runs";
 import {
   mergeSubagentTranscript,
   type LiveSubagentTranscripts,
@@ -140,9 +143,56 @@ const GENERIC_FAILURES = new Set([
   "the child model could not complete this task.",
 ]);
 
-function failureReason(error: string | undefined): string | null {
-  const text = error?.trim().replace(/\s+/gu, " ");
+/**
+ * The runner writes its reasons for the main chat's model, which calls the
+ * helper "the child". People read these plain sentences instead; the model
+ * still gets the original text.
+ */
+const RUNNER_REASONS: ReadonlyArray<readonly [RegExp, string]> = [
+  [/the child reached its turn limit\./giu, "It ran out of turns before finishing."],
+  [/the child reached its tool-call limit\./giu, "It used all of its allowed steps before finishing."],
+  [
+    /the child reserved its remaining deadline for reporting\./giu,
+    "It ran short of time and stopped to write its report.",
+  ],
+  [/the child reached its output limit\./giu, "Its reply grew too long."],
+  [/the child reached its event limit\./giu, "It did more work than one helper is allowed."],
+  [/the child reached its protocol limit\./giu, "It sent more than one helper is allowed."],
+  [/the child did not provide a final text report\./giu, "It stopped without writing a report."],
+  [
+    /the child completed without a textual assistant result\./giu,
+    "It stopped without writing a report.",
+  ],
+  [/the child was interrupted before completion\./giu, "It was interrupted before it finished."],
+  [
+    /the child was stopped because the user sent new guidance\.(?: read it before relaunching this task\.)?/giu,
+    "It was stopped because you sent new guidance.",
+  ],
+  [/these are incomplete, unverified partial findings\./giu, "Its findings so far may be incomplete."],
+  [/the child (?:model )?could not complete this task\./giu, ""],
+  [/this helper couldn't finish\./giu, ""],
+];
+
+/**
+ * A failed helper's reason in plain words, or null when it only says the
+ * helper did not finish. Text the runner did not write passes through.
+ */
+export function subagentFailureReason(error: string | undefined): string | null {
+  let text = error?.trim().replace(/\s+/gu, " ");
   if (!text || GENERIC_FAILURES.has(text.toLocaleLowerCase())) return null;
+  for (const [pattern, plain] of RUNNER_REASONS) text = text.replace(pattern, ` ${plain} `);
+  // Sentences the replacements produced twice read once.
+  const seen = new Set<string>();
+  text = text
+    .split(/(?<=[.!?])\s+/u)
+    .map((sentence) => sentence.trim())
+    .filter((sentence) => {
+      if (!sentence || seen.has(sentence)) return false;
+      seen.add(sentence);
+      return true;
+    })
+    .join(" ");
+  if (!text) return null;
   return /[.!?]$/u.test(text) ? text : `${text}.`;
 }
 
@@ -188,7 +238,7 @@ export function subagentHelperProblem(
     text = `This helper ran out of time${after}.`;
     outcome = "It timed out";
   } else if (tone === "failed") {
-    const reason = failureReason(run.error);
+    const reason = subagentFailureReason(run.error);
     text = reason ? `This helper couldn't finish. ${reason}` : "This helper couldn't finish.";
     outcome = "It failed";
   } else {
@@ -212,13 +262,23 @@ export function subagentHelperApprovalFor(
   approvals: readonly ApprovalPrompt[],
   activeRuns: ReadonlyArray<Pick<SubagentRunSnapshot, "runId" | "label">>,
 ): ApprovalPrompt | null {
+  return subagentHelperApprovalsFor(run, approvals, activeRuns)[0] ?? null;
+}
+
+/** Every pending approval that belongs to this helper, in queue order. */
+export function subagentHelperApprovalsFor(
+  run: Pick<SubagentRunSnapshot, "runId" | "label">,
+  approvals: readonly ApprovalPrompt[],
+  activeRuns: ReadonlyArray<Pick<SubagentRunSnapshot, "runId" | "label">>,
+): ApprovalPrompt[] {
   const labelUnique =
     activeRuns.filter((other) => other.label === run.label && other.runId !== run.runId).length ===
     0;
+  const owned: ApprovalPrompt[] = [];
   for (const approval of approvals) {
     const details = approval.details;
     if (isSubagentRunGrantApprovalDetails(details)) {
-      if (details.runId === run.runId) return approval;
+      if (details.runId === run.runId) owned.push(approval);
       continue;
     }
     if (
@@ -228,10 +288,90 @@ export function subagentHelperApprovalFor(
       labelUnique &&
       details.childLabel === run.label
     ) {
-      return approval;
+      owned.push(approval);
     }
   }
-  return null;
+  return owned;
+}
+
+/**
+ * Show running helpers that wait on one of your approvals as waiting on you.
+ * The server still calls them running, so this is a display-only overlay.
+ * Returns the same array when nothing changes.
+ */
+export function withSubagentApprovalWaitSnapshots(
+  runs: readonly SubagentRunSnapshot[],
+  approvals: readonly ApprovalPrompt[],
+): readonly SubagentRunSnapshot[] {
+  if (approvals.length === 0) return runs;
+  const active = runs.filter((run) => subagentHelperIsActive(run.state));
+  let changed = false;
+  const next = runs.map((run) => {
+    if (run.state !== "running" || run.version !== 2) return run;
+    if (subagentHelperApprovalsFor(run, approvals, active).length === 0) return run;
+    changed = true;
+    return {
+      ...run,
+      state: "needs_attention" as const,
+      activity: SUBAGENT_NEEDS_ATTENTION_FALLBACK_ACTIVITY,
+    };
+  });
+  return changed ? next : runs;
+}
+
+/** The same overlay for run views that carry a snapshot. */
+export function withSubagentApprovalWaitViews<
+  T extends { state: SubagentRunSnapshot["state"]; snapshot?: SubagentRunSnapshot },
+>(views: readonly T[], approvals: readonly ApprovalPrompt[]): readonly T[] {
+  if (approvals.length === 0) return views;
+  const snapshots = views.flatMap((view) => (view.snapshot ? [view.snapshot] : []));
+  const overlaid = withSubagentApprovalWaitSnapshots(snapshots, approvals);
+  if (overlaid === snapshots) return views;
+  const byRun = new Map(overlaid.map((run) => [run.runId, run]));
+  let changed = false;
+  const next = views.map((view) => {
+    const snapshot = view.snapshot ? byRun.get(view.snapshot.runId) : undefined;
+    if (!snapshot || snapshot === view.snapshot) return view;
+    changed = true;
+    return { ...view, state: snapshot.state, snapshot };
+  });
+  return changed ? next : views;
+}
+
+/** Whether a helper this one started is still active, so stopping it stops them too. */
+export function subagentHelperHasActiveHelpers(
+  runId: string,
+  views: ReadonlyArray<{ terminal: boolean; snapshot?: SubagentRunSnapshot }>,
+): boolean {
+  return views.some(
+    (view) =>
+      !view.terminal && view.snapshot?.version === 2 && view.snapshot.parentRunId === runId,
+  );
+}
+
+/** Shown when a helper's saved conversation could not be read. */
+export const SUBAGENT_TRANSCRIPT_REFRESH_ERROR = "Couldn't load this helper's conversation.";
+
+/**
+ * Why this window should read a helper's saved conversation again, or null.
+ * Each distinct reason is read once.
+ *
+ * - `gap:<revision>`: the streamed updates start after the saved copy.
+ * - `join`: a running helper with nothing in this window yet (it started
+ *   before the window opened).
+ * - `run:<state>:<revision>`: no updates stream to this window (another
+ *   window runs the chat), so the saved copy is read again whenever the run's
+ *   state or revision moves, including when it finishes.
+ */
+export function subagentHelperTranscriptRefetchReason(
+  run: Pick<SubagentRunSnapshot, "state" | "revision">,
+  merged: MergedSubagentTranscript,
+  streamingHere: boolean,
+): string | null {
+  if (!merged.complete) return `gap:${merged.transcript?.revision ?? 0}`;
+  if (!merged.transcript) return subagentHelperIsActive(run.state) ? "join" : null;
+  if (streamingHere) return null;
+  return `run:${run.state}:${run.revision}`;
 }
 
 /** A timeline for one helper message, so the main chat's step rows can draw it. */

@@ -882,7 +882,7 @@ test("live text activity publishes only on an actual state transition", async ()
   await projector.flush();
 
   assert.equal(emitted.length, 3);
-  assert.equal(projector.snapshot()[0]?.activity, "Writing a bounded report");
+  assert.equal(projector.snapshot()[0]?.activity, "Writing its report");
   assert.deepEqual(projector.snapshot()[0]?.milestones, ["composing"]);
 });
 

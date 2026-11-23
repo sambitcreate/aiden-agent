@@ -36,6 +36,9 @@ export interface SubagentHelperChatState {
   questionPending: boolean;
 }
 
+/** Marks the side panel helper chat's Expand button, the usual opener of the expanded chat. */
+export const HELPER_EXPAND_ATTRIBUTE = "data-subagent-helper-expand";
+
 const NO_SAVED: SavedSubagentHelperTranscripts = new Map();
 const NO_LIVE: LiveSubagentTranscripts = new Map();
 const NO_APPROVALS: readonly ApprovalPrompt[] = [];
@@ -92,18 +95,24 @@ export function subagentHelperChatApproval(
   };
 }
 
+/** What the main chat waits on that this helper's chat cannot answer. */
+export type MainChatWaitingKind = "approval" | "question";
+
 /**
- * True when the main chat waits on the person for something this helper's chat
- * cannot answer: a question, or an approval that is not this helper's.
+ * What the main chat waits on beyond this helper's own approvals, or null.
+ * The main chat's card shows the first approval, so a question comes first
+ * when that card is this helper's own.
  */
-export function mainChatWaitingBeyondHelper(
+export function mainChatWaitingFor(
   state: Pick<SubagentHelperChatState, "approvals" | "questionPending">,
-  helperApprovalId: string | null,
-): boolean {
-  return (
-    state.questionPending ||
-    state.approvals.some((prompt) => prompt.approvalId !== helperApprovalId)
-  );
+  ownApprovalIds: ReadonlySet<string>,
+): MainChatWaitingKind | null {
+  const first = state.approvals[0];
+  if (first && !ownApprovalIds.has(first.approvalId)) return "approval";
+  if (state.questionPending) return "question";
+  return state.approvals.some((prompt) => !ownApprovalIds.has(prompt.approvalId))
+    ? "approval"
+    : null;
 }
 
 /**
@@ -140,16 +149,22 @@ export interface SubagentHelperChatStore {
   /** Return to the main chat; focus goes back to whatever opened the expanded chat. */
   collapse(options?: { restoreFocus?: boolean }): void;
   /** The main chat says whether a question is waiting and how to bring focus to what waits. */
-  syncMainWaiting(chatId: string, questionPending: boolean, focusWaiting: (() => void) | null): void;
+  syncMainWaiting(
+    chatId: string,
+    questionPending: boolean,
+    focusWaiting: ((kind: MainChatWaitingKind) => void) | null,
+  ): void;
   /** Return to the main chat and put focus on the approval or question waiting there. */
-  returnToMainWaiting(): void;
+  returnToMainWaiting(kind: MainChatWaitingKind): void;
+  /** Put focus on the main chat's approval or question without collapsing anything. */
+  focusMainWaiting(kind: MainChatWaitingKind): void;
 }
 
 export function createSubagentHelperChatStore(): SubagentHelperChatStore {
   let state = EMPTY_SUBAGENT_HELPER_CHAT_STATE;
   let decideHandler: SubagentHelperApprovalDecide | null = null;
   let opener: HTMLElement | null = null;
-  let focusWaitingHandler: (() => void) | null = null;
+  let focusWaitingHandler: ((kind: MainChatWaitingKind) => void) | null = null;
   const listeners = new Set<() => void>();
 
   const commit = (next: SubagentHelperChatState) => {
@@ -242,9 +257,23 @@ export function createSubagentHelperChatStore(): SubagentHelperChatStore {
       const target = opener;
       opener = null;
       if (state.expandedRunId !== null) commit({ ...state, expandedRunId: null });
-      if (options?.restoreFocus !== false && target?.isConnected) {
+      if (options?.restoreFocus === false || !target) return;
+      if (target.isConnected) {
         target.focus({ preventScroll: true });
+        return;
       }
+      // The side panel swaps its helper chat for a placeholder while expanded, so
+      // its Expand button is a new element after collapse. Focus that one once it
+      // renders, or the message box if the opener has no replacement.
+      if (typeof window === "undefined" || typeof document === "undefined") return;
+      const replaceable = target.hasAttribute(HELPER_EXPAND_ATTRIBUTE);
+      window.requestAnimationFrame(() => {
+        const replacement = replaceable
+          ? document.querySelector<HTMLElement>(`[${HELPER_EXPAND_ATTRIBUTE}]`)
+          : null;
+        if (replacement) replacement.focus({ preventScroll: true });
+        else focusRegion("composer");
+      });
     },
     syncMainWaiting(chatId, questionPending, focusWaiting) {
       const base = scoped(chatId);
@@ -252,11 +281,14 @@ export function createSubagentHelperChatStore(): SubagentHelperChatStore {
       if (base === state && questionPending === base.questionPending) return;
       commit({ ...base, questionPending });
     },
-    returnToMainWaiting() {
+    returnToMainWaiting(kind) {
       const focusWaiting = focusWaitingHandler;
       this.collapse({ restoreFocus: false });
       if (typeof window === "undefined") return;
-      window.requestAnimationFrame(() => focusWaiting?.());
+      window.requestAnimationFrame(() => focusWaiting?.(kind));
+    },
+    focusMainWaiting(kind) {
+      focusWaitingHandler?.(kind);
     },
   };
 }

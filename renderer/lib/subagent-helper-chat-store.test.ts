@@ -9,7 +9,7 @@ import type {
 import {
   combineLiveSubagentTranscripts,
   createSubagentHelperChatStore,
-  mainChatWaitingBeyondHelper,
+  mainChatWaitingFor,
   subagentHelperChatTranscript,
 } from "./subagent-helper-chat-store";
 
@@ -173,12 +173,21 @@ test("on a chat switch the old chat's live updates and approvals are not taken a
 
 test("the main chat waits beyond a helper for a question or another approval, not the helper's own", () => {
   const own: ApprovalPrompt = { approvalId: "own", toolCallId: "c1", toolName: "edit", summary: "Edit" };
+  const own2: ApprovalPrompt = { approvalId: "own-2", toolCallId: "c3", toolName: "bash", summary: "Run" };
   const other: ApprovalPrompt = { approvalId: "other", toolCallId: "c2", toolName: "bash", summary: "Run" };
-  assert.equal(mainChatWaitingBeyondHelper({ approvals: [own], questionPending: false }, "own"), false);
-  assert.equal(mainChatWaitingBeyondHelper({ approvals: [own, other], questionPending: false }, "own"), true);
-  assert.equal(mainChatWaitingBeyondHelper({ approvals: [other], questionPending: false }, null), true);
-  assert.equal(mainChatWaitingBeyondHelper({ approvals: [], questionPending: true }, null), true);
-  assert.equal(mainChatWaitingBeyondHelper({ approvals: [], questionPending: false }, null), false);
+  const mine = new Set(["own", "own-2"]);
+  const none = new Set<string>();
+  assert.equal(mainChatWaitingFor({ approvals: [own], questionPending: false }, mine), null);
+  // Two approvals from the same helper (parallel tool calls) are both its own.
+  assert.equal(mainChatWaitingFor({ approvals: [own, own2], questionPending: false }, mine), null);
+  assert.equal(mainChatWaitingFor({ approvals: [own, other], questionPending: false }, mine), "approval");
+  assert.equal(mainChatWaitingFor({ approvals: [other], questionPending: false }, none), "approval");
+  assert.equal(mainChatWaitingFor({ approvals: [], questionPending: true }, none), "question");
+  assert.equal(mainChatWaitingFor({ approvals: [], questionPending: false }, none), null);
+  // The main card shows the helper's own approval first, so the question is what to go to.
+  assert.equal(mainChatWaitingFor({ approvals: [own], questionPending: true }, mine), "question");
+  // Another approval at the front of the queue is what the main card shows.
+  assert.equal(mainChatWaitingFor({ approvals: [other, own], questionPending: true }, mine), "approval");
 });
 
 test("returning to what waits in the main chat closes the expanded chat, then focuses the waiting item", () => {
@@ -191,19 +200,66 @@ test("returning to what waits in the main chat closes the expanded chat, then fo
     const store = createSubagentHelperChatStore();
     const focused: string[] = [];
     store.rememberSaved("chat-1", saved("run-1", 2, ["Hi"]));
-    store.syncMainWaiting("chat-1", true, () => {
-      focused.push(store.getState().expandedRunId ?? "main");
+    store.syncMainWaiting("chat-1", true, (kind) => {
+      focused.push(`${store.getState().expandedRunId ?? "main"}:${kind}`);
     });
     store.expand("run-1", null);
     assert.equal(store.getState().questionPending, true);
 
-    store.returnToMainWaiting();
+    store.returnToMainWaiting("question");
     assert.equal(store.getState().expandedRunId, null);
     assert.deepEqual(focused, [], "focus waits for the main chat to render");
     for (const frame of frames) frame();
-    assert.deepEqual(focused, ["main"]);
+    assert.deepEqual(focused, ["main:question"]);
+
+    // From the side panel, focus moves without closing anything.
+    store.expand("run-1", null);
+    store.focusMainWaiting("approval");
+    assert.equal(store.getState().expandedRunId, "run-1");
+    assert.deepEqual(focused, ["main:question", "run-1:approval"]);
   } finally {
     if (hadWindow) globals.window = previous;
     else delete globals.window;
+  }
+});
+
+test("closing the expanded chat focuses the side panel's new Expand button when the old one is gone", () => {
+  const globals = globalThis as { window?: unknown; document?: unknown };
+  const had = { window: "window" in globals, document: "document" in globals };
+  const previous = { window: globals.window, document: globals.document };
+  const frames: Array<() => void> = [];
+  const focused: string[] = [];
+  const button = (name: string, isConnected: boolean) =>
+    ({
+      isConnected,
+      hasAttribute: (attribute: string) => attribute === "data-subagent-helper-expand",
+      focus: () => focused.push(name),
+    }) as unknown as HTMLElement;
+  globals.window = { requestAnimationFrame: (callback: () => void) => frames.push(callback) };
+  globals.document = {
+    querySelector: (selector: string) =>
+      selector === "[data-subagent-helper-expand]" ? button("new Expand", true) : null,
+  };
+  try {
+    const store = createSubagentHelperChatStore();
+    store.rememberSaved("chat-1", saved("run-1", 2, ["Hi"]));
+
+    // The opener is still on screen: it gets focus straight away.
+    store.expand("run-1", button("old Expand", true));
+    store.collapse();
+    assert.deepEqual(focused, ["old Expand"]);
+
+    // The placeholder replaced the opener: focus waits for the panel to render its new button.
+    store.expand("run-1", button("old Expand", false));
+    store.collapse();
+    assert.equal(store.getState().expandedRunId, null);
+    assert.deepEqual(focused, ["old Expand"]);
+    for (const frame of frames) frame();
+    assert.deepEqual(focused, ["old Expand", "new Expand"]);
+  } finally {
+    if (had.window) globals.window = previous.window;
+    else delete globals.window;
+    if (had.document) globals.document = previous.document;
+    else delete globals.document;
   }
 });

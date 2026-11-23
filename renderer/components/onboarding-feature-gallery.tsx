@@ -88,9 +88,9 @@ export const onboardingFeatures: OnboardingFeature[] = [
   {
     id: "subagents",
     group: "create",
-    title: "Native Subagents",
+    title: "Helpers",
     description:
-      "Delegate research, plans, reviews, or coding to a helper, and open any helper to follow its chat. Helper edits and commands follow your workspace permission.",
+      "Delegate research, plans, reviews, or coding to a helper. Each helper has its own chat you can open and follow. Helper edits and commands follow your workspace permission.",
     icon: UsersRound,
     size: "standard",
   },

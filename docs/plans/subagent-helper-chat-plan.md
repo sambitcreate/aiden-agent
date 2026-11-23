@@ -144,6 +144,7 @@ Nothing yet. This PR records each helper's task, messages and steps while it run
    - Saved: extend the existing `subagents:get` read to return the transcript alongside the summary, only after it proves ownership: the request comes from an active app window, the run belongs to that chat and workspace, and the chat's history references the run, or the running turn still tracks it under the same chat, workspace and generation. Nothing yet ties a chat to one window, so any open app window can read a chat it names.
    - Live: a new `chat:subagent-transcript` stream message (run, revision, changed entries), sent the same way as `chat:subagents` today.
    - A late joiner, such as someone who opens the panel mid-run, reads the saved copy, then applies newer live revisions.
+   - Live updates go only to the window running the chat. Another window that opens the helper chat re-reads the saved copy whenever the run's status or saved revision changes, including when it becomes terminal, so it follows the helper in steps rather than token by token.
 5. ### Bots and the Aiden server
    - Bot helpers record the same way. The Bot runtime builds its own helper manager, and the recorder hooks in at the same point.
    - The CLI server (`aiden serve`) runs the same code, so it saves transcripts too. Phones don't receive them yet.
@@ -191,20 +192,22 @@ What you seeAfter PR 2
    new `renderer/components/subagent-helper-chat.tsx`
    - **Top:** a status dot, the helper's name, and one line such as "Implementer · Running · 3m 12s". Status words match the chat card: Queued, Running, Waiting on you, Done, Failed, Stopped.
    - **Body:** the task as a message bubble with its code block, then the helper's messages drawn with the main chat's own Markdown and step-row components (`Markdown`, `ActivityFeed`). They look identical and stay in step with future main-chat changes.
-   - **Approvals:** a helper's approval card shows inside its chat, using the existing approval components (`subagent-workspace-write-approval.tsx`, `subagent-shell-approval.tsx`).
+   - **Approvals:** the approval card in the main chat is the one place a helper's approval is answered. While the helper chat sits in the side panel, it shows a compact row, "Waiting on your approval in the main chat", with a Go to approval button that focuses the main card. The full card (the existing `subagent-workspace-write-approval.tsx`, `subagent-shell-approval.tsx`) shows inside the helper chat only while it is expanded, when the main card is out of view. A helper waiting on an approval reads "Waiting on you" in its rows, the pill and the tray, as a display-only overlay on its running record.
    - **Problem box:** soft colour fill, no border. "You stopped this helper after 2 steps. It changed cookbook.html." or the provider's error in plain words.
    - **Ask main chat to retry** puts a ready-made message in the main composer and doesn't send it. For example: "Please retry the helper 'Add tweaks block to cookbook.html'. It stopped after 2 steps and changed cookbook.html."
    - **Trimmed note** at the top when PR 2 dropped old steps.
    - **⋯ menu, Technical details:** fresh start or copied chat, turns, tokens, where the model choice came from, and a copy button for the run ID.
    - Keeps scroll position, has a Jump to latest button, and announces status changes through the existing `SubagentLiveAnnouncer`. It respects Reduce Motion.
 2. ### Bottom bar
-   - Shows the model and effort, for example "GLM 5.3 Flash · Max", then Stop (only while running), Expand, and Close (Back to main chat when expanded; the effort is left out when it is off).
+   - Shows the model and effort, for example "GLM 5.3 Flash · Max", then Stop (only while running; Stop all when the helper has active helpers under it), Expand, and Close (Back to main chat when expanded; the effort is left out when it is off).
    - Stop uses the existing helper control (`subagents:manage`), the same as the Stop button today.
 3. ### Expand to full size
 
    `renderer/components/environment-panel.tsx`, the chat pane
    - The panel state gets an "expanded helper". While it is set, the chat pane shows the helper chat where the main messages normally are, with the composer hidden and the same bottom bar.
    - Back to main chat or Esc returns, and focus goes back to the button that opened it. Switching chats closes it.
+   - The side panel shows only “<label>” is open in the main chat, with no button; the expanded chat's own Back to main chat is the only Back.
+   - If the main chat waits on something else meanwhile, a note-style bar (warning fill, no border, announced once politely) says "The main chat needs your approval." or "The main chat has a question for you." Its button, Go to approval or Answer question, returns to the main chat and focuses the approval card or the questionnaire.
 4. ### Calmer fallback for older helpers
 
    `renderer/components/subagent-detail.tsx`

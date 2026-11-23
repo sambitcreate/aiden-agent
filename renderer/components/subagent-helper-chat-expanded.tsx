@@ -1,14 +1,25 @@
 import * as React from "react";
 import { EnvironmentPanelContext } from "./environment-panel";
-import { SubagentHelperChat, type SubagentHelperChatApproval } from "./subagent-helper-chat";
-import { subagentHelperApprovalFor, subagentHelperIsActive } from "../lib/subagent-helper-chat-state";
+import {
+  MAIN_CHAT_WAITING_TEXT,
+  SubagentHelperChat,
+  type SubagentHelperChatApproval,
+} from "./subagent-helper-chat";
+import {
+  SUBAGENT_TRANSCRIPT_REFRESH_ERROR,
+  subagentHelperApprovalsFor,
+  subagentHelperHasActiveHelpers,
+  subagentHelperIsActive,
+  subagentHelperTranscriptRefetchReason,
+} from "../lib/subagent-helper-chat-state";
 import {
   askMainChatToRetrySubagent,
-  mainChatWaitingBeyondHelper,
+  mainChatWaitingFor,
   useSubagentHelperChatSelector,
   useSubagentHelperChatStore,
 } from "../lib/subagent-helper-chat-store";
 import { focusRegion } from "../lib/focus-regions";
+import { subagentPanelOwnerKey } from "../lib/subagent-panel-state";
 import { mergeSubagentTranscript } from "../shared/subagent-transcript";
 import { useNow } from "../lib/use-now";
 
@@ -57,13 +68,16 @@ function ExpandedHelperChatView({ chatId, runId }: { chatId: string; runId: stri
   const now = useNow(Boolean(run && subagentHelperIsActive(run.state)));
   const headingRef = React.useRef<HTMLHeadingElement>(null);
   const available = Boolean(store && run && transcript);
-  const savedRevision = saved?.revision ?? 0;
   const refetch = panel?.refetchSubagentTranscript;
+  const refetchReason = run
+    ? subagentHelperTranscriptRefetchReason(run, merged, Boolean(live))
+    : null;
 
-  // A gap in the streamed updates is filled from the saved copy.
+  // A gap in the streamed updates, or a run that moved while its updates
+  // stream to another window, is read from the saved copy once per reason.
   React.useEffect(() => {
-    if (!merged.complete) refetch?.(runId, savedRevision);
-  }, [merged.complete, refetch, runId, savedRevision]);
+    if (refetchReason) refetch?.(runId, refetchReason);
+  }, [refetch, refetchReason, runId]);
 
   // A helper that is gone (the chat changed or its run was dropped) closes the
   // view; focus goes back to what opened it, or to the message box.
@@ -82,7 +96,11 @@ function ExpandedHelperChatView({ chatId, runId }: { chatId: string; runId: stri
     if (available) headingRef.current?.focus({ preventScroll: true });
   }, [available]);
 
-  const prompt = run ? subagentHelperApprovalFor(run, approvals, activeRuns) : null;
+  const ownPrompts = React.useMemo(
+    () => (run ? subagentHelperApprovalsFor(run, approvals, activeRuns) : []),
+    [activeRuns, approvals, run],
+  );
+  const prompt = ownPrompts[0] ?? null;
   const approval = React.useMemo<SubagentHelperChatApproval | null>(
     () =>
       prompt && store
@@ -94,13 +112,23 @@ function ExpandedHelperChatView({ chatId, runId }: { chatId: string; runId: stri
         : null,
     [decidingApprovalId, prompt, store],
   );
+  const waitingKind = mainChatWaitingFor(
+    { approvals, questionPending },
+    new Set(ownPrompts.map((own) => own.approvalId)),
+  );
+
+  // Say once, politely, that the main chat now waits on the person. Focus stays put.
+  const announce = panel?.announceSubagentDetail;
+  const ownerKey = panel
+    ? subagentPanelOwnerKey(panel.subagents.chatId, panel.subagents.workspaceId)
+    : null;
+  React.useEffect(() => {
+    if (waitingKind && ownerKey) announce?.(ownerKey, MAIN_CHAT_WAITING_TEXT[waitingKind]);
+  }, [announce, ownerKey, waitingKind]);
 
   if (!store || !panel || !run || !transcript) return null;
   const stopPending = panel.subagentStopPendingRunIds.includes(run.runId);
-  const waitingOnMain = mainChatWaitingBeyondHelper(
-    { approvals, questionPending },
-    prompt?.approvalId ?? null,
-  );
+  const refreshFailed = run.runId in panel.subagentTranscriptRefetchFailures;
   return (
     <div
       className="flex min-h-0 flex-1 flex-col"
@@ -118,14 +146,19 @@ function ExpandedHelperChatView({ chatId, runId }: { chatId: string; runId: stri
         transcript={transcript}
         presentation={stopPending ? { state: "stopping", label: "Stopping…" } : undefined}
         approval={approval}
+        hasActiveHelpers={subagentHelperHasActiveHelpers(run.runId, views ?? [])}
         onStop={panel.stopSubagent}
         stopPending={stopPending}
         stopError={panel.subagentStopErrorsByRunId[run.runId] ?? null}
         onAskRetry={(text) => askMainChatToRetrySubagent(store, chatId, text)}
         expanded
         onBack={() => store.collapse()}
-        waitingOnMain={waitingOnMain}
-        onReturnToMain={() => store.returnToMainWaiting()}
+        waitingOnMain={waitingKind}
+        onReturnToMain={() => {
+          if (waitingKind) store.returnToMainWaiting(waitingKind);
+        }}
+        refreshError={refreshFailed ? SUBAGENT_TRANSCRIPT_REFRESH_ERROR : null}
+        onRetryRefresh={() => panel.retrySubagentTranscript(run.runId)}
         now={now}
       />
     </div>

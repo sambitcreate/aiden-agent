@@ -28,6 +28,7 @@ import {
   subagentStatusLabel,
 } from "./subagent-chips";
 import { subagentMilestoneLabel } from "./subagent-detail";
+import { subagentFailureReason } from "../lib/subagent-helper-chat-state";
 import { Button, Popover, PopoverContent, PopoverTrigger } from "./ui";
 import { Kbd } from "./ui-primitives";
 
@@ -221,10 +222,18 @@ function RunFeed({
   const snapshot = run.snapshot;
   const active = isSubagentRunViewStateActive(run.state);
   const stoppable = subagentStoppableSnapshot(run);
-  const milestones = (snapshot?.milestones ?? []).slice(-4);
   const activity = snapshot?.activity?.trim();
+  const status = active ? subagentStatusLabel(run.state, activity) : null;
+  // The newest step and the live status can say the same thing ("Writing its
+  // report"); it is said once.
+  const milestoneLabels = (snapshot?.milestones ?? []).map((milestone, index, all) =>
+    subagentMilestoneLabel(milestone, { inProgress: active && index === all.length - 1 }),
+  );
+  if (status && milestoneLabels[milestoneLabels.length - 1] === status) milestoneLabels.pop();
+  const milestones = milestoneLabels.slice(-4);
   const latestText = snapshot?.latestText?.trim();
-  const error = snapshot?.error?.trim();
+  const rawError = snapshot?.error?.trim();
+  const error = rawError ? (subagentFailureReason(rawError) ?? "This helper couldn't finish.") : undefined;
   const catalog = useSubagentModelCatalog();
   const model = snapshot ? subagentModelName(snapshot, catalog) : null;
   const meta = [
@@ -237,18 +246,16 @@ function RunFeed({
     <div className="mt-0.5 mb-1.5 ml-[2.375rem] mr-2 rounded-card bg-well px-3 py-2.5" data-subagent-pill-feed={run.runId}>
       {meta.length ? <p className="m-0 truncate text-mini text-tertiary">{meta.join(" · ")}</p> : null}
       <ol className="m-0 mt-1.5 list-none space-y-1 p-0 text-small text-secondary" aria-label={`${run.label} activity`}>
-        {milestones.map((milestone, index) => (
-          <li key={`${index}:${milestone}`} className="flex items-start gap-2">
+        {milestones.map((label, index) => (
+          <li key={`${index}:${label}`} className="flex items-start gap-2">
             <span aria-hidden="true" className="mt-[0.45rem] size-1 shrink-0 rounded-full bg-tertiary" />
-            <span className="min-w-0">
-              {subagentMilestoneLabel(milestone, { inProgress: active && index === milestones.length - 1 })}
-            </span>
+            <span className="min-w-0">{label}</span>
           </li>
         ))}
-        {active ? (
+        {status ? (
           <li className="flex items-start gap-2 font-medium text-primary">
             <span aria-hidden="true" className="mt-[0.4rem] size-1.5 shrink-0 rounded-full bg-status-accent" />
-            <span className="min-w-0">{subagentStatusLabel(run.state, activity)}</span>
+            <span className="min-w-0">{status}</span>
           </li>
         ) : null}
         {error ? (

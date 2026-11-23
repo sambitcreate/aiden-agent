@@ -290,10 +290,15 @@ import {
 } from "../shared/subagent-transcript";
 import {
   combineLiveSubagentTranscripts,
+  type MainChatWaitingKind,
   useSubagentHelperChatSelector,
   useSubagentHelperChatStore,
 } from "../lib/subagent-helper-chat-store";
 import { ExpandedSubagentHelperChat } from "../components/subagent-helper-chat-expanded";
+import {
+  withSubagentApprovalWaitSnapshots,
+  withSubagentApprovalWaitViews,
+} from "../lib/subagent-helper-chat-state";
 import { focusRegion } from "../lib/focus-regions";
 import { visibleSubagentReferences } from "../lib/subagent-feature-gate";
 import { persistedChatWorkspaceId } from "../shared/chat-workspace";
@@ -1162,9 +1167,21 @@ export function ChatPane({ chatId }: { chatId: string }) {
     () => visibleSubagentReferences(messages, environmentPanel.subagentsEnabled),
     [environmentPanel.subagentsEnabled, messages],
   );
+  // A helper that waits on one of your approvals reads "Waiting on you" in the
+  // chat's helper rows and the tray, as its own chat does. Display only.
+  const shownLiveSubagents = React.useMemo(
+    () => withSubagentApprovalWaitSnapshots(displayedLiveSubagents, approvals),
+    [approvals, displayedLiveSubagents],
+  );
+  const chatSubagentViews =
+    environmentPanel.subagents.chatId === chatId ? environmentPanel.subagentViews : null;
+  const shownSubagentViews = React.useMemo(
+    () => (chatSubagentViews ? withSubagentApprovalWaitViews(chatSubagentViews, approvals) : null),
+    [approvals, chatSubagentViews],
+  );
   const subagentPill = useSubagentComposerPill(
     chatId,
-    environmentPanel.subagents.chatId === chatId ? environmentPanel.subagentViews : null,
+    shownSubagentViews,
     environmentPanel.subagentsEnabled,
   );
   const [subagentTrayOpen, setSubagentTrayOpen] = React.useState(false);
@@ -3711,10 +3728,17 @@ export function ChatPane({ chatId }: { chatId: string }) {
   // An expanded helper chat says when the main chat waits on a question, and
   // its Back to main chat lands on the approval or question waiting here.
   const mainQuestionPending = Boolean(questionnaire || recoveredQuestion);
-  const focusMainWaiting = React.useCallback(() => {
-    const target = approvalDenyRef.current ?? approvalCardRef.current;
-    if (target?.isConnected) target.focus({ preventScroll: false });
-    else focusRegion("composer");
+  // A question replaces the message box, and the questionnaire is the message
+  // box's focus area then.
+  const focusMainWaiting = React.useCallback((kind: MainChatWaitingKind) => {
+    if (kind === "approval") {
+      const target = approvalDenyRef.current ?? approvalCardRef.current;
+      if (target?.isConnected) {
+        target.focus({ preventScroll: false });
+        return;
+      }
+    }
+    focusRegion("composer");
   }, []);
   React.useLayoutEffect(() => {
     helperChatStore?.syncMainWaiting(chatId, mainQuestionPending, focusMainWaiting);
@@ -4467,7 +4491,7 @@ export function ChatPane({ chatId }: { chatId: string }) {
               persistedHandoffMessageId={persistedHandoffMessageId}
               onStreamHandoffComplete={() => streamHandoffRef.current?.()}
               timeline={displayedGenerationTimeline}
-              liveSubagents={displayedLiveSubagents}
+              liveSubagents={shownLiveSubagents}
               subagentsEnabled={environmentPanel.subagentsEnabled}
               onOpenSubagent={environmentPanel.openSubagent}
               agentActivity={visibleAgentActivity}

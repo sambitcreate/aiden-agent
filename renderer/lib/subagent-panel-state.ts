@@ -80,7 +80,7 @@ const EFFORT_LABELS: Record<GenerationThinkingLevel, string> = {
 };
 
 const MODEL_SELECTION_LABELS: Record<NonNullable<SubagentRunSnapshot["modelSelection"]>, string> = {
-  inherited: "Same as parent",
+  inherited: "Same as the helper that started it",
   requested: "Chosen by the agent",
   configured: "From subagent settings",
   role_locked: "Locked by role setting",
@@ -97,11 +97,19 @@ export interface SubagentModelDisplay {
 }
 
 export function subagentModelDisplay(
-  run: Pick<SubagentRunSnapshot, "modelId" | "providerId" | "thinkingLevel" | "modelSelection">,
+  run: Pick<SubagentRunSnapshot, "modelId" | "providerId" | "thinkingLevel" | "modelSelection"> & {
+    depth?: number;
+  },
 ): SubagentModelDisplay {
   const model = run.providerId ? `${run.providerId}/${run.modelId}` : run.modelId;
   const effort = run.thinkingLevel ? EFFORT_LABELS[run.thinkingLevel] : undefined;
-  const selection = run.modelSelection ? MODEL_SELECTION_LABELS[run.modelSelection] : undefined;
+  // A top-level helper's parent is the main chat; a nested one's is the helper that started it.
+  const selection =
+    run.modelSelection === "inherited" && (run.depth ?? 1) <= 1
+      ? "Same as main chat"
+      : run.modelSelection
+        ? MODEL_SELECTION_LABELS[run.modelSelection]
+        : undefined;
   return {
     model,
     ...(effort ? { effort } : {}),

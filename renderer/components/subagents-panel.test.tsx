@@ -30,6 +30,7 @@ import {
   subagentDetailPresentation,
   subagentDetailRestoreRunId,
   subagentLiveSummary,
+  subagentModelDisplay,
   subagentOverviewSummary,
   subagentPanelBreakpointFocusTarget,
   subagentPanelOwnerKey,
@@ -614,9 +615,9 @@ test("chips, roster, and detail show each child's recorded model and effort only
   );
   assert.match(
     chips,
-    /aria-label="Open Cheap scout\. Status: Reading component boundaries\. Model anthropic\/claude-haiku, effort extra high\."/u,
+    /aria-label="Open Cheap scout\. Status: Reading component boundaries\. Model Claude Haiku · Extra high\."/u,
   );
-  assert.match(chips, /aria-label="Open Parent-model scout\. Status: Reading component boundaries\. Model openai\/gpt-main, effort high\."/u);
+  assert.match(chips, /aria-label="Open Parent-model scout\. Status: Reading component boundaries\. Model GPT Main · High\."/u);
   assert.match(chips, /aria-label="Open Older scout\. Status: Reading component boundaries\."/u);
 
   const roster = renderToStaticMarkup(
@@ -2944,7 +2945,6 @@ test("detail and panel preserve bounded rendering and navigation contracts", () 
   assert.match(panelSource, /onFocusCapture=/u);
   assert.match(panelSource, /onBlurCapture=/u);
   assert.match(panelSource, /shouldRestoreSubagentDetailFocus/u);
-  assert.match(panelSource, /refreshError=\{savedDetailRefreshError\}/u);
   assert.doesNotMatch(panelSource, /aria-live=/u);
   assert.doesNotMatch(panelSource, /role="status"/u);
   assert.doesNotMatch(panelSource, /data-subagent-detail-announcer/u);
@@ -2977,4 +2977,15 @@ test("detail and panel preserve bounded rendering and navigation contracts", () 
     /focusSubagentRosterRun\(buttons \?\? \[\], restoreRunIdRef\.current\)/u,
   );
   assert.match(panelSource, /Back to subagents/u);
+});
+
+test("an inherited model names what it was inherited from: the main chat at the top, the starting helper below", () => {
+  const base = { modelId: "m", modelSelection: "inherited" as const };
+  assert.equal(subagentModelDisplay({ ...base, depth: 1 }).selection, "Same as main chat");
+  assert.equal(subagentModelDisplay(base).selection, "Same as main chat");
+  const nested = subagentModelDisplay({ ...base, depth: 2 }).selection;
+  assert.ok(nested);
+  assert.notEqual(nested, "Same as main chat");
+  assert.doesNotMatch(nested, /parent/u);
+  assert.equal(subagentModelDisplay({ modelId: "m", depth: 1, modelSelection: "requested" }).selection, "Chosen by the agent");
 });

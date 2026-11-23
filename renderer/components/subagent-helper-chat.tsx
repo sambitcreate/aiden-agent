@@ -1,8 +1,10 @@
 import * as React from "react";
-import { ArrowDownToLine, ArrowLeft, Maximize2, MoreHorizontal, Square, X } from "lucide-react";
+import { ArrowDownToLine, ArrowLeft, ArrowUpRight, Maximize2, MoreHorizontal, Square, X } from "lucide-react";
 import { cn } from "../lib/ui-utils";
 import type { ApprovalPrompt } from "../lib/ipc";
 import { prefersReducedMotion } from "../lib/appearance-runtime";
+import { pauseWhenUnseen } from "../lib/offscreen-pause";
+import type { MainChatWaitingKind } from "../lib/subagent-helper-chat-store";
 import {
   subagentDetailGrowthAction,
   subagentDetailIsAwayFromLatest,
@@ -17,7 +19,11 @@ import {
   subagentHelperTone,
   subagentHelperWorkSummary,
 } from "../lib/subagent-helper-chat-state";
-import { subagentModelLine, useSubagentModelCatalog } from "../lib/subagent-model-name";
+import {
+  subagentModelLine,
+  subagentModelName,
+  useSubagentModelCatalog,
+} from "../lib/subagent-model-name";
 import { subagentRoleLabel, type SubagentRunPresentation } from "../lib/subagent-view-state";
 import {
   activityTimelineFragment,
@@ -37,18 +43,25 @@ import type {
   SubagentTranscriptV1,
 } from "../shared/subagent-transcript";
 import { ActivityFeed } from "./activity-feed";
+import { AidenActivityMark } from "./aiden-activity-mark";
 import { AskUserQuestionRecap } from "./ask-user-question-recap";
 import { BrowserRecordingCard } from "./browser-recording-card";
 import { ChatApprovalCard, type ChatApprovalDecisionOptions } from "./chat-approval-card";
 import { CopyButton } from "./copy-button";
 import { SafeMessageBubble } from "./message-bubble";
 import { formatSubagentElapsed } from "./subagent-detail";
-import { subagentStateLabel } from "./subagent-chips";
+import { subagentActivityMark, subagentStateLabel } from "./subagent-chips";
 import { WebExtractRecap } from "./web-extract-recap";
 import { Button, Callout, Text } from "./ui";
 
 /** The main chat column's insets, so the expanded chat lines up with the composer. */
 const EXPANDED_COLUMN = "aiden-dock-inset chat-content-column";
+/**
+ * The expanded header, bar and footer reserve the same scrollbar gutter as the
+ * scrolling body, so a classic scrollbar does not shift the body's text
+ * against them.
+ */
+const EXPANDED_FRAME = "overflow-hidden [scrollbar-gutter:stable]";
 
 export interface SubagentHelperChatApproval {
   prompt: ApprovalPrompt;
@@ -60,8 +73,14 @@ export interface SubagentHelperChatProps {
   run: SubagentRunSnapshot;
   transcript: SubagentTranscriptV1;
   presentation?: SubagentRunPresentation;
-  /** The pending approval this helper is waiting on, answered from inside the chat. */
+  /**
+   * The pending approval this helper is waiting on. The main chat's card is the
+   * one to answer; the expanded chat, which covers that card, shows it in full,
+   * and the side panel shows a short row that points to it.
+   */
   approval?: SubagentHelperChatApproval | null;
+  /** Side panel only: move focus to the main chat's approval card. */
+  onFocusMainApproval?: () => void;
   onStop?: (run: SubagentRunSnapshot) => Promise<void> | void;
   stopPending?: boolean;
   stopError?: string | null;
@@ -74,9 +93,12 @@ export interface SubagentHelperChatProps {
   onBack?: () => void;
   /** Side panel only: close the panel. */
   onClose?: () => void;
-  /** The main chat waits on the person for something this chat cannot answer. */
-  waitingOnMain?: boolean;
+  /** What the main chat waits on that this chat cannot answer, or null. */
+  waitingOnMain?: MainChatWaitingKind | null;
+  /** Return to the main chat and put focus on what waits there. */
   onReturnToMain?: () => void;
+  /** Helpers this one started are still active, so Stop stops them too. */
+  hasActiveHelpers?: boolean;
   /** The saved copy could not be refreshed; what is shown may be out of date. */
   refreshError?: string | null;
   onRetryRefresh?: () => void;
@@ -100,6 +122,12 @@ function statusWord(
 ) {
   return presentation?.state === "stopping" ? presentation.label : subagentStateLabel(state);
 }
+
+/** What the waiting bar says, and what is announced once when it appears. */
+export const MAIN_CHAT_WAITING_TEXT: Record<MainChatWaitingKind, string> = {
+  approval: "The main chat needs your approval.",
+  question: "The main chat has a question for you.",
+};
 
 interface HelperMessageProps {
   runId: string;
@@ -211,6 +239,7 @@ export const SubagentHelperChat = React.forwardRef<HTMLHeadingElement, SubagentH
       transcript,
       presentation,
       approval = null,
+      onFocusMainApproval,
       onStop,
       stopPending = false,
       stopError = null,
@@ -219,8 +248,9 @@ export const SubagentHelperChat = React.forwardRef<HTMLHeadingElement, SubagentH
       onExpand,
       onBack,
       onClose,
-      waitingOnMain = false,
+      waitingOnMain = null,
       onReturnToMain,
+      hasActiveHelpers = false,
       refreshError = null,
       onRetryRefresh,
       contextUsage,
@@ -245,12 +275,14 @@ export const SubagentHelperChat = React.forwardRef<HTMLHeadingElement, SubagentH
     const role = subagentRoleLabel(run.role);
     const endedAt = run.finishedAt ?? now;
     const modelDisplay = subagentModelDisplay(run);
-    const modelLine = subagentModelLine(run, useSubagentModelCatalog());
+    const catalog = useSubagentModelCatalog();
+    const modelLine = subagentModelLine(run, catalog);
+    const modelName = subagentModelName(run, catalog);
     const summary = React.useMemo(() => subagentHelperWorkSummary(transcript), [transcript]);
     const blocks = React.useMemo(() => subagentHelperBlocks(transcript), [transcript]);
     const problem = subagentHelperProblem(run, summary, { trimmed: transcript.trimmed });
     const canStop = run.version === 2 && run.execution === "foreground" && active && onStop;
-    const stopText = run.version === 2 && run.depth === 1 ? "Stop all" : "Stop";
+    const stopText = hasActiveHelpers ? "Stop all" : "Stop";
     const working = !approval && (run.state === "running" || run.state === "queued" || run.state === "starting");
     const growthRevision = transcript.revision * 1_000_000 + run.revision;
 
@@ -351,6 +383,7 @@ export const SubagentHelperChat = React.forwardRef<HTMLHeadingElement, SubagentH
     };
 
     const column = expanded ? EXPANDED_COLUMN : "px-4";
+    const frame = expanded ? EXPANDED_FRAME : undefined;
 
     return (
       <article
@@ -360,7 +393,8 @@ export const SubagentHelperChat = React.forwardRef<HTMLHeadingElement, SubagentH
         data-subagent-helper-expanded={expanded ? "true" : undefined}
         aria-labelledby={headingId}
       >
-        <header className={cn("flex min-w-0 shrink-0 items-start gap-2.5 pb-2 pt-3", column)}>
+        <header className={cn("shrink-0", frame)}>
+          <div className={cn("flex min-w-0 items-start gap-2.5 pb-2 pt-3", column)}>
           <span
             aria-hidden="true"
             className={cn("mt-2 size-2 shrink-0 rounded-full", SUBAGENT_HELPER_TONE_DOT[tone])}
@@ -395,28 +429,30 @@ export const SubagentHelperChat = React.forwardRef<HTMLHeadingElement, SubagentH
           >
             <MoreHorizontal aria-hidden="true" />
           </Button>
+          </div>
         </header>
 
         {waitingOnMain && onReturnToMain ? (
-          <div className={cn("shrink-0 pb-2", column)}>
+          <div className={cn("shrink-0", frame)}>
+          <div className={cn("pb-2", column)}>
             <Callout
               role="note"
-              className="flex-row items-center justify-between gap-3 px-3 py-2"
-              data-subagent-helper-main-waiting="true"
+              className="flex-row items-center justify-between gap-3 bg-status-warning-surface px-3 py-2"
+              data-subagent-helper-main-waiting={waitingOnMain}
             >
-              <Text as="p" variant="small" color="secondary" className="min-w-0">
-                Main chat is waiting on you
+              <Text as="p" variant="small" className="min-w-0 text-support-warning">
+                {MAIN_CHAT_WAITING_TEXT[waitingOnMain]}
               </Text>
               <Button
-                variant="muted"
+                variant="transparent"
                 size="small"
                 onClick={onReturnToMain}
                 className="shrink-0 motion-reduce:transition-none"
               >
-                <ArrowLeft aria-hidden="true" className="size-3.5" />
-                Back to main chat
+                {waitingOnMain === "approval" ? "Go to approval" : "Answer question"}
               </Button>
             </Callout>
+          </div>
           </div>
         ) : null}
 
@@ -467,10 +503,21 @@ export const SubagentHelperChat = React.forwardRef<HTMLHeadingElement, SubagentH
                     <dt className="text-tertiary">Turns</dt>
                     <dd className="tabular-nums text-secondary">{run.turns}</dd>
                     <dt className="text-tertiary">Tokens</dt>
-                    <dd className="tabular-nums text-secondary">{run.tokens}</dd>
+                    <dd className="tabular-nums text-secondary">{run.tokens.toLocaleString()}</dd>
                     <dt className="text-tertiary">Model</dt>
-                    <dd className="break-words text-secondary [overflow-wrap:anywhere]">
-                      {[modelDisplay.model, modelDisplay.selection].filter(Boolean).join(" · ")}
+                    <dd className="break-words text-secondary">{modelName}</dd>
+                    {modelDisplay.selection ? (
+                      <>
+                        <dt className="text-tertiary">Model choice</dt>
+                        <dd className="text-secondary">{modelDisplay.selection}</dd>
+                      </>
+                    ) : null}
+                    <dt className="text-tertiary">Model ID</dt>
+                    <dd className="flex min-w-0 items-center gap-1">
+                      <span className="min-w-0 truncate font-mono text-secondary" title={modelDisplay.model}>
+                        {modelDisplay.model}
+                      </span>
+                      <CopyButton text={modelDisplay.model} label="Copy model ID" className="shrink-0" />
                     </dd>
                     <dt className="text-tertiary">Run ID</dt>
                     <dd className="flex min-w-0 items-center gap-1">
@@ -533,26 +580,56 @@ export const SubagentHelperChat = React.forwardRef<HTMLHeadingElement, SubagentH
               )}
 
               {working ? (
-                <p
-                  className="flex items-center gap-2 text-small text-secondary"
+                // The main chat's working line: the same mark and shimmer, which
+                // Reduce Motion and an off-screen pane both hold still.
+                <div
+                  className="flex h-6 w-fit max-w-full items-center gap-2"
                   data-subagent-helper-working="true"
                 >
-                  <span
-                    aria-hidden="true"
-                    className="size-1.5 shrink-0 rounded-full bg-status-accent motion-safe:animate-pulse"
+                  <AidenActivityMark
+                    mark={subagentActivityMark(run.state, run.role, run.activity)}
+                    size={20}
+                    className="shrink-0 text-primary"
                   />
-                  {run.state === "running" ? "Working…" : "Starting…"}
-                </p>
+                  <Text
+                    variant="small"
+                    color="secondary"
+                    ref={pauseWhenUnseen}
+                    className="agent-thinking-shimmer min-w-0 truncate"
+                  >
+                    {run.state === "running" ? "Working…" : "Starting…"}
+                  </Text>
+                </div>
               ) : null}
 
-              {approval ? (
-                <div data-subagent-helper-approval="true">
+              {approval && expanded ? (
+                <div data-subagent-helper-approval="full">
                   <ChatApprovalCard
                     pending={approval.prompt}
                     deciding={approval.deciding}
                     onDecide={approval.onDecide}
-                    keyboardShortcuts={expanded}
+                    keyboardShortcuts
                   />
+                </div>
+              ) : approval ? (
+                <div
+                  className="flex min-w-0 items-center justify-between gap-3 rounded-card bg-status-warning-surface px-3 py-2"
+                  data-subagent-helper-approval="compact"
+                >
+                  <Text as="p" variant="small" className="min-w-0 text-support-warning">
+                    Waiting on your approval in the main chat
+                  </Text>
+                  {onFocusMainApproval ? (
+                    <Button
+                      variant="transparent"
+                      size="small"
+                      onClick={onFocusMainApproval}
+                      className="shrink-0 motion-reduce:transition-none"
+                    >
+                      <ArrowUpRight aria-hidden="true" className="size-3.5" />
+                      Go to approval
+                    </Button>
+                  ) : null}
                 </div>
               ) : null}
 
@@ -567,7 +644,7 @@ export const SubagentHelperChat = React.forwardRef<HTMLHeadingElement, SubagentH
                   </Text>
                   {onAskRetry ? (
                     <Button
-                      variant="muted"
+                      variant="transparent"
                       size="small"
                       onClick={() => onAskRetry(problem.retryText)}
                       className="mt-2 w-fit self-start motion-reduce:transition-none"
@@ -602,8 +679,8 @@ export const SubagentHelperChat = React.forwardRef<HTMLHeadingElement, SubagentH
           ) : null}
         </div>
 
-        <footer className="shrink-0 border-t border-separator" data-subagent-helper-bar="true">
-          <div className={cn("flex min-w-0 items-center gap-2 py-2", expanded ? EXPANDED_COLUMN : "px-3")}>
+        <footer className={cn("shrink-0 border-t border-separator", frame)} data-subagent-helper-bar="true">
+          <div className={cn("flex min-w-0 items-center gap-2 py-2", column)}>
             <Text
               as="p"
               variant="small"

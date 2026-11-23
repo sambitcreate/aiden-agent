@@ -360,9 +360,9 @@ export class SubagentEventProjector {
     // while the child is live and publishes text only from the terminal result,
     // where the complete bounded value can be sanitized in one pass.
     void delta;
-    if (current.activity === "Writing a bounded report") return;
+    if (current.activity === "Writing its report") return;
     this.update(runId, {
-      activity: "Writing a bounded report",
+      activity: "Writing its report",
       milestones: appendMilestone(current.milestones, "composing"),
     });
   }

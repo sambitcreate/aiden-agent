@@ -104,7 +104,7 @@ function view(snapshot: SubagentRunSnapshotV2): SubagentRunView {
 
 test("a running helper shows what it was asked, its steps, a working row, and a Stop that stops it", async () => {
   const stopped: string[] = [];
-  render(
+  const { rerender } = render(
     <SubagentHelperChat
       run={helper()}
       transcript={conversation(2, [{ text: "Looking around.", steps: [readStep("running")] }])}
@@ -122,13 +122,77 @@ test("a running helper shows what it was asked, its steps, a working row, and a 
   assert.equal(chat.querySelector("[data-subagent-helper-problem]"), null);
   assert.match(chat.querySelector("[data-subagent-helper-working]")?.textContent ?? "", /Working/u);
 
-  // A top-level helper stops with everything it started, and says so.
-  const stop = screen.getByRole("button", { name: "Stop all Code scout" });
-  assert.match(stop.textContent ?? "", /^Stop all$/u);
+  // A helper with nothing running under it only stops itself.
+  assert.equal(screen.queryByRole("button", { name: "Stop all Code scout" }), null);
+  const stop = screen.getByRole("button", { name: "Stop Code scout" });
+  assert.match(stop.textContent ?? "", /^Stop$/u);
   await act(async () => {
     fireEvent.click(stop);
   });
   assert.deepEqual(stopped, ["run-1"]);
+
+  // One that started helpers which are still working stops them too, and says so.
+  rerender(
+    <SubagentHelperChat
+      run={helper()}
+      transcript={conversation(2, [{ text: "Looking around.", steps: [readStep("running")] }])}
+      hasActiveHelpers
+      onStop={(run) => {
+        stopped.push(run.runId);
+      }}
+      now={4_000}
+    />,
+  );
+  const stopAll = screen.getByRole("button", { name: "Stop all Code scout" });
+  assert.match(stopAll.textContent ?? "", /^Stop all$/u);
+});
+
+function writeApproval(onDecide: (decision: string) => void) {
+  return {
+    prompt: {
+      approvalId: "approval-1",
+      toolCallId: "call-1",
+      toolName: "subagent",
+      summary: "Allow writes for Code scout",
+      canAllow: true,
+      details: {
+        kind: "subagent-run-grant" as const,
+        lane: "write" as const,
+        runId: "run-1",
+        childLabel: "Code scout",
+        workspaceLabel: "Docs",
+        worktreeLabel: null,
+        isManagedWorktree: false,
+        workspaceRevisionPrefix: "0123456789ab",
+        fullHostAccess: false,
+        noRollback: false,
+      },
+    },
+    deciding: false,
+    onDecide,
+  };
+}
+
+test("in the side panel, a helper's approval is a compact row that points at the main chat's card", () => {
+  const focused: string[] = [];
+  render(
+    <SubagentHelperChat
+      run={helper({ activity: "Preparing a workspace update" })}
+      transcript={conversation(2, [{ text: "I'll write the plan." }])}
+      approval={writeApproval(() => undefined)}
+      onFocusMainApproval={() => focused.push("main card")}
+      now={4_000}
+    />,
+  );
+  const chat = screen.getByRole("article", { name: "Code scout" });
+  assert.match(chat.textContent ?? "", /Scout · Waiting on you · /u);
+  // One live card: the main chat's. The side panel offers no second set of buttons.
+  assert.equal(within(chat).queryByRole("button", { name: /Deny|Don.t allow/u }), null);
+  const row = chat.querySelector<HTMLElement>("[data-subagent-helper-approval]");
+  assert.ok(row);
+  assert.match(row.textContent ?? "", /Waiting on your approval in the main chat/u);
+  fireEvent.click(within(row).getByRole("button", { name: "Go to approval" }));
+  assert.deepEqual(focused, ["main card"]);
 });
 
 test("a running helper that asks to write says it is waiting on you, and the answer goes back", () => {
@@ -137,6 +201,8 @@ test("a running helper that asks to write says it is waiting on you, and the ans
     <SubagentHelperChat
       run={helper({ activity: "Preparing a workspace update" })}
       transcript={conversation(2, [{ text: "I'll write the plan." }])}
+      expanded
+      onBack={() => undefined}
       approval={{
         prompt: {
           approvalId: "approval-1",
@@ -335,12 +401,16 @@ function ExpandedHarness({
 }: {
   store: SubagentHelperChatStore;
   snapshot: SubagentRunSnapshotV2;
-  refetch?: (runId: string, savedRevision: number) => void;
+  refetch?: (runId: string, reason: string) => void;
 }) {
   const panel = {
+    subagents: { chatId: "chat-1", workspaceId: "workspace-1" },
     subagentViews: [view(snapshot)],
     subagentStopPendingRunIds: [],
     subagentStopErrorsByRunId: {},
+    subagentTranscriptRefetchFailures: {},
+    retrySubagentTranscript: () => undefined,
+    announceSubagentDetail: () => undefined,
     stopSubagent: () => undefined,
     refetchSubagentTranscript: refetch,
   } as unknown as EnvironmentPanelContextValue;
@@ -417,18 +487,19 @@ test("a window that joins late shows the saved conversation plus what streamed s
 
 test("a gap in the streamed updates makes the expanded chat read the saved copy again", () => {
   const store = expandedStore();
-  const refetched: Array<[string, number]> = [];
+  const refetched: Array<[string, string]> = [];
   render(
     <ExpandedHarness
       store={store}
       snapshot={helper()}
-      refetch={(runId, revision) => refetched.push([runId, revision])}
+      refetch={(runId, reason) => refetched.push([runId, reason])}
     />,
   );
   act(() => {
     fireEvent.click(screen.getByRole("button", { name: "Open Code scout" }));
   });
-  assert.deepEqual(refetched, [], "a complete conversation is not read again");
+  // Nothing streams to this window yet, so it reads the saved copy for this run state once.
+  assert.deepEqual(refetched, [["run-1", "run:running:1"]]);
   const update: SubagentTranscriptUpdateV1 = {
     version: 1,
     runId: "run-1",
@@ -441,7 +512,10 @@ test("a gap in the streamed updates makes the expanded chat read the saved copy 
   act(() => {
     store.syncLive("chat-1", new Map([["run-1", update]]));
   });
-  assert.deepEqual(refetched, [["run-1", 3]]);
+  assert.deepEqual(refetched, [
+    ["run-1", "run:running:1"],
+    ["run-1", "gap:3"],
+  ]);
   const text = screen.getByRole("article", { name: "Code scout" }).textContent ?? "";
   assert.match(text, /First look\./u, "the saved copy stays on screen meanwhile");
 });
@@ -468,50 +542,60 @@ function runGrant(runId: string, approvalId: string) {
   };
 }
 
-test("while expanded, the main chat's own approval shows a bar that returns to it", async () => {
+test("while expanded, an approval that is not this helper's shows a bar that goes to it", async () => {
   const store = expandedStore();
   const focused: string[] = [];
-  store.syncMainWaiting("chat-1", false, () => focused.push("main approval"));
+  store.syncMainWaiting("chat-1", false, (kind) => focused.push(kind));
   render(<ExpandedHarness store={store} snapshot={helper()} />);
   act(() => {
     fireEvent.click(screen.getByRole("button", { name: "Open Code scout" }));
   });
   const bar = () => document.querySelector<HTMLElement>("[data-subagent-helper-main-waiting]");
 
-  // This helper's own question is answered inside its chat: no bar.
+  // This helper's own approvals, however many, are answered inside its chat: no bar.
   act(() => {
-    store.syncApprovals("chat-1", [runGrant("run-1", "own")], null, () => undefined);
+    store.syncApprovals("chat-1", [runGrant("run-1", "own"), runGrant("run-1", "own-2")], null, () => undefined);
   });
   assert.equal(bar(), null);
-  assert.ok(document.querySelector("[data-subagent-helper-approval]"));
+  assert.equal(document.querySelector("[data-subagent-helper-approval]")?.getAttribute("data-subagent-helper-approval"), "full");
 
   act(() => {
     store.syncApprovals("chat-1", [runGrant("run-1", "own"), runGrant("run-other", "main")], null, () => undefined);
   });
   const waiting = bar();
   assert.ok(waiting, "an approval that is not this helper's shows the bar");
-  assert.match(waiting.textContent ?? "", /Main chat is waiting on you/u);
-  assert.ok(document.querySelector("[data-subagent-helper-approval]"), "the helper's own question still works");
+  assert.equal(waiting.getAttribute("role"), "note");
+  assert.match(waiting.textContent ?? "", /The main chat needs your approval\./u);
+  assert.ok(document.querySelector("[data-subagent-helper-approval]"), "the helper's own approval still works");
 
   await act(async () => {
-    fireEvent.click(within(waiting).getByRole("button", { name: "Back to main chat" }));
+    fireEvent.click(within(waiting).getByRole("button", { name: "Go to approval" }));
     await new Promise((resolve) => setTimeout(resolve, 50));
   });
   assert.equal(store.getState().expandedRunId, null, "the main chat is shown again");
-  assert.deepEqual(focused, ["main approval"], "focus goes to what waits in the main chat");
+  assert.deepEqual(focused, ["approval"], "focus goes to the approval waiting in the main chat");
 });
 
-test("a question waiting in the main chat also shows the bar", () => {
+test("a question waiting in the main chat shows the bar, and Answer question goes to it", async () => {
   const store = expandedStore();
-  store.syncMainWaiting("chat-1", true, () => undefined);
+  const focused: string[] = [];
+  store.syncMainWaiting("chat-1", true, (kind) => focused.push(kind));
   render(<ExpandedHarness store={store} snapshot={helper()} />);
   act(() => {
     fireEvent.click(screen.getByRole("button", { name: "Open Code scout" }));
   });
-  assert.ok(document.querySelector("[data-subagent-helper-main-waiting]"));
+  const waiting = document.querySelector<HTMLElement>("[data-subagent-helper-main-waiting]");
+  assert.ok(waiting);
+  assert.match(waiting.textContent ?? "", /The main chat has a question for you\./u);
+  await act(async () => {
+    fireEvent.click(within(waiting).getByRole("button", { name: "Answer question" }));
+    await new Promise((resolve) => setTimeout(resolve, 50));
+  });
+  assert.equal(store.getState().expandedRunId, null);
+  assert.deepEqual(focused, ["question"]);
 });
 
-test("the side panel shows a placeholder for the helper that fills the main chat", async () => {
+test("the side panel shows a placeholder for the helper that fills the main chat", () => {
   const snapshot = helper();
   const collapsed: string[] = [];
   render(
@@ -530,19 +614,17 @@ test("the side panel shows a placeholder for the helper that fills the main chat
   );
   assert.equal(screen.queryByRole("article", { name: "Code scout" }), null, "the chat is shown once, not twice");
   const heading = screen.getByRole("heading", { name: "Showing in the main chat" });
+  assert.match(heading.parentElement?.textContent ?? "", /“Code scout” is open in the main chat\./u);
+  // The expanded chat's own footer is the one way back; the placeholder adds no second one.
+  assert.equal(screen.queryByRole("button", { name: "Back to main chat" }), null);
+  assert.deepEqual(collapsed, []);
   // The helper list stays next to it.
   assert.ok(document.querySelector("[data-subagent-run-id='run-1']"));
-  await act(async () => {
-    fireEvent.click(screen.getByRole("button", { name: "Back to main chat" }));
-    await new Promise((resolve) => setTimeout(resolve, 50));
-  });
-  assert.deepEqual(collapsed, ["collapse"]);
-  assert.ok(heading);
 });
 
 test("a running helper opened before anything streamed to this window reads its conversation once", () => {
   const snapshot = helper();
-  const fetched: Array<[string, number]> = [];
+  const fetched: Array<[string, string]> = [];
   const props = {
     chatId: "chat-1",
     workspaceId: "workspace-1",
@@ -551,10 +633,79 @@ test("a running helper opened before anything streamed to this window reads its 
     active: true,
     helperChat: {
       transcriptFor: () => ({ transcript: null, complete: true }),
-      onTranscriptIncomplete: (runId: string, revision: number) => fetched.push([runId, revision]),
+      onTranscriptIncomplete: (runId: string, reason: string) => fetched.push([runId, reason]),
     },
   };
   const { rerender } = render(<SubagentsPanel {...props} />);
   rerender(<SubagentsPanel {...props} runs={[view(helper({ revision: 2, activity: "Still reading" }))]} />);
-  assert.deepEqual(fetched, [["run-1", 0]]);
+  assert.deepEqual(fetched, [["run-1", "join"]]);
+});
+
+test("a window that does not run the chat reads the saved conversation again as the run moves and when it ends", () => {
+  const fetched: Array<[string, string]> = [];
+  const saved = conversation(2, [{ text: "Looking around." }]);
+  const props = {
+    chatId: "chat-1",
+    workspaceId: "workspace-1",
+    selectedRunId: "run-1",
+    active: true,
+    helperChat: {
+      transcriptFor: () => ({ transcript: saved, complete: true }),
+      streamingHere: () => false,
+      onTranscriptIncomplete: (runId: string, reason: string) => fetched.push([runId, reason]),
+    },
+  };
+  const { rerender } = render(<SubagentsPanel {...props} runs={[view(helper({ revision: 2 }))]} />);
+  rerender(<SubagentsPanel {...props} runs={[view(helper({ revision: 2 }))]} />);
+  assert.equal(fetched.length, 1, "the same run state is read once");
+  rerender(<SubagentsPanel {...props} runs={[view(helper({ revision: 3, activity: "Still reading" }))]} />);
+  assert.equal(fetched.length, 2, "a new revision is read again");
+  rerender(
+    <SubagentsPanel
+      {...props}
+      runs={[view(helper({ revision: 4, state: "completed", activity: undefined, finishedAt: 5_000 }))]}
+    />,
+  );
+  assert.equal(fetched.length, 3, "the end of the run is read again");
+  assert.equal(new Set(fetched.map(([, reason]) => reason)).size, 3);
+
+  // The window that runs the chat gets every update streamed, so it reads nothing.
+  cleanup();
+  const streamed: string[] = [];
+  render(
+    <SubagentsPanel
+      {...props}
+      runs={[view(helper({ revision: 3 }))]}
+      helperChat={{ ...props.helperChat, streamingHere: () => true, onTranscriptIncomplete: (_runId, reason) => streamed.push(reason) }}
+    />,
+  );
+  assert.deepEqual(streamed, []);
+});
+
+test("when reading a helper's saved conversation fails, the side panel says so and offers Try again", () => {
+  // A window that joined late has nothing to show yet; one that missed updates shows its older copy.
+  for (const transcript of [null, conversation(2, [{ text: "Looking around." }])]) {
+  cleanup();
+  const retried: string[] = [];
+  render(
+    <SubagentsPanel
+      chatId="chat-1"
+      workspaceId="workspace-1"
+      runs={[view(helper())]}
+      selectedRunId="run-1"
+      active
+      helperChat={{
+        transcriptFor: () => ({ transcript, complete: true }),
+        streamingHere: () => false,
+        onTranscriptIncomplete: () => undefined,
+        transcriptRefreshFailed: (runId) => runId === "run-1",
+        onRetryTranscript: (runId) => retried.push(runId),
+      }}
+    />,
+  );
+  const refresh = document.querySelector<HTMLElement>("[data-subagent-helper-refresh-error]");
+  assert.ok(refresh, `the failed read is shown, not swallowed (${transcript ? "older copy" : "nothing yet"})`);
+  fireEvent.click(within(refresh).getByRole("button", { name: "Try again" }));
+  assert.deepEqual(retried, ["run-1"]);
+  }
 });

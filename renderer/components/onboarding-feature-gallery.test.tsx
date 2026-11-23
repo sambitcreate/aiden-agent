@@ -85,6 +85,28 @@ test("the Bots illustration is the first Bot's chat: it asks, the person answers
   cleanup();
 });
 
+test("the Helpers tile shows the helper list beside one helper's own chat: its task, its steps and its reply", () => {
+  const { container, unmount } = render(<OnboardingFeatureGallery features={onboardingFeatures} platform="darwin" />);
+  const tile = container.querySelector<HTMLElement>('[data-onboarding-feature="subagents"]');
+  assert.ok(tile);
+  assert.match(tile.getAttribute("aria-label") ?? "", /^Helpers\. .*Each helper has its own chat/u);
+  // The tile's art is aria-hidden, so look for the drawn chat with hidden elements included.
+  const chat = within(tile).getByRole("group", { name: "Implementer's chat", hidden: true });
+  assert.ok(within(chat).getByText("Implementer"), "the chat names the helper it belongs to");
+  assert.ok(within(chat).getByRole("group", { name: "Task", hidden: true }), "the helper's task sits in the chat as its first message");
+  assert.equal(within(within(chat).getByRole("list", { name: "Steps", hidden: true })).getAllByRole("listitem", { hidden: true }).length, 2);
+  assert.ok(within(chat).getByRole("group", { name: "Reply", hidden: true }));
+  assert.ok(within(tile).getByText("Running"), "the helper list is still drawn beside the chat");
+  assert.equal(tile.querySelectorAll("img").length, 0, "the helper chat is code-drawn");
+  for (const element of tile.querySelectorAll<HTMLElement>("[class*='anim']")) {
+    for (const name of element.className.split(/\s+/u).filter((part) => part.includes("anim"))) {
+      assert.match(name, /^oa-anim-[a-z]+$/u, "only the shared motion classes move, so Reduce Motion leaves a still pose");
+    }
+  }
+  unmount();
+  cleanup();
+});
+
 test("a feature tile scrolled out of the gallery is marked off-screen so its looping art holds still", () => {
   const { container, unmount } = render(<OnboardingFeatureGallery features={onboardingFeatures} platform="darwin" />);
   const tiles = Array.from(container.querySelectorAll("[data-onboarding-feature]"));

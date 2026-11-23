@@ -2,6 +2,7 @@ import * as React from "react";
 import { flushSync } from "react-dom";
 import { ChevronDown } from "lucide-react";
 import { subagentModelDisplay, subagentRunProgressLabel } from "../lib/subagent-panel-state";
+import { subagentModelLine, subagentModelName, useSubagentModelCatalog } from "../lib/subagent-model-name";
 import {
   formatSubagentElapsed,
   isSubagentRunViewStateActive,
@@ -14,6 +15,7 @@ import {
   type SubagentStatusWord,
   type SubagentRunViewState,
 } from "../lib/subagent-view-state";
+import { useSubagentHelperChatSelector } from "../lib/subagent-helper-chat-store";
 import { cn } from "../lib/ui-utils";
 import { useCollapsibleBody } from "../lib/use-collapsible-body";
 import { useNow } from "../lib/use-now";
@@ -43,7 +45,8 @@ export function subagentActivityMark(
   if (/^(?:Reading|Listing|Matching|Searching)\b/u.test(activity ?? ""))
     return "scan-grid";
   if (activity === "Reviewing workspace context") return "tri-step";
-  if (activity === "Writing a bounded report") return "compose";
+  // Older saved runs say "Writing a bounded report".
+  if (activity === "Writing its report" || activity === "Writing a bounded report") return "compose";
   return fallbackMarkForRole(role);
 }
 
@@ -413,8 +416,15 @@ function SubagentGroupRow({
   const { runId, label, role, state, run } = item;
   const status = subagentStatusLabel(state, run?.activity);
   const model = run ? subagentModelDisplay(run) : undefined;
+  const catalog = useSubagentModelCatalog();
+  const modelName = run ? subagentModelName(run, catalog) : undefined;
+  // An expanded helper chat covers this row. A model card left open on a hidden
+  // row can never finish closing, and an open card takes every Esc, so the card
+  // is not rendered while the main pane shows a helper.
+  const coveredByHelperChat = useSubagentHelperChatSelector((state) => state.expandedRunId !== null);
   // Older snapshots never recorded a model choice; their label stays unchanged.
-  const recordedModel = run?.modelSelection !== undefined ? model : undefined;
+  const spokenModel =
+    run && run.modelSelection !== undefined ? `Model ${subagentModelLine(run, catalog)}` : undefined;
   const elapsedMs = run ? subagentSnapshotElapsedMilliseconds(run, now) : undefined;
   const roleName = showRole ? subagentRoleLabel(role) : null;
   // One line per run: name, what it is doing, and how long it has run.
@@ -423,7 +433,7 @@ function SubagentGroupRow({
       type="button"
       data-subagent-chip-run-id={runId}
       className="flex min-h-9 w-full min-w-0 items-center gap-2.5 rounded-control px-2 py-1 text-left transition-colors [--keyboard-focus-offset:-2px] duration-150 ease-out hover:bg-list-hover active:bg-list-selection motion-reduce:transition-none"
-      aria-label={`Open ${label}. Status: ${status}.${recordedModel ? ` ${recordedModel.spoken}.` : ""}`}
+      aria-label={`Open ${label}. Status: ${status}.${spokenModel ? ` ${spokenModel}.` : ""}`}
       onClick={(event) => onOpen(runId, event.currentTarget)}
     >
       <SubagentMark role={role} state={state} activity={run?.activity} size={16} />
@@ -451,32 +461,36 @@ function SubagentGroupRow({
     <li>
       <HoverCard openDelay={200} closeDelay={100}>
         <HoverCardTrigger asChild>{row}</HoverCardTrigger>
-        <HoverCardContent
-          side="top"
-          align="start"
-          className="w-[min(18rem,calc(100vw-2rem))]"
-          data-subagent-model-card={runId}
-        >
-          <p className="truncate text-small font-medium text-primary">{label}</p>
-          <dl className="mt-1.5 grid grid-cols-[auto_minmax(0,1fr)] gap-x-3 gap-y-1 text-mini">
-            <dt className="text-tertiary">Model</dt>
-            <dd className="break-words text-secondary [overflow-wrap:anywhere]">{model.model}</dd>
-            {model.effort ? (
-              <>
-                <dt className="text-tertiary">Effort</dt>
-                <dd className="text-secondary">{model.effort}</dd>
-              </>
-            ) : null}
-            {model.selection ? (
-              <>
-                <dt className="text-tertiary">Choice</dt>
-                <dd className="text-secondary">{model.selection}</dd>
-              </>
-            ) : null}
-            <dt className="text-tertiary">Status</dt>
-            <dd className="break-words text-secondary">{status}</dd>
-          </dl>
-        </HoverCardContent>
+        {coveredByHelperChat ? null : (
+          <HoverCardContent
+            side="top"
+            align="start"
+            className="w-[min(18rem,calc(100vw-2rem))]"
+            data-subagent-model-card={runId}
+          >
+            <p className="truncate text-small font-medium text-primary">{label}</p>
+            <dl className="mt-1.5 grid grid-cols-[auto_minmax(0,1fr)] gap-x-3 gap-y-1 text-mini">
+              <dt className="text-tertiary">Model</dt>
+              <dd className="break-words text-secondary [overflow-wrap:anywhere]" title={model.model}>
+                {modelName}
+              </dd>
+              {model.effort && run?.thinkingLevel !== "off" ? (
+                <>
+                  <dt className="text-tertiary">Effort</dt>
+                  <dd className="text-secondary">{model.effort}</dd>
+                </>
+              ) : null}
+              {model.selection ? (
+                <>
+                  <dt className="text-tertiary">Model choice</dt>
+                  <dd className="text-secondary">{model.selection}</dd>
+                </>
+              ) : null}
+              <dt className="text-tertiary">Status</dt>
+              <dd className="break-words text-secondary">{status}</dd>
+            </dl>
+          </HoverCardContent>
+        )}
       </HoverCard>
     </li>
   );

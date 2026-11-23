@@ -48,11 +48,22 @@ Plan section "## The helper chat". Same branch; all three phases ship as one PR.
 ## Status words
 
 - One set everywhere: Queued, Running, Waiting on you, Done, Failed, Stopped (`STATUS_LABELS` in `subagent-view-state.ts`; starting→Queued, timed_out→Failed, interrupted/unknown→Stopped). `subagentStatusCounts` builds every count summary (card header, pill, overview, live announcement) in the order Waiting on you, Running, Queued, Failed, Stopped, Done. Status groups: Running, Waiting on you, Failed, Stopped, Done (unknown is Stopped). Stale leads: "Still running", "Still queued".
-- A helper asking for a run grant stays `running` in its record ("Preparing a workspace update"). The helper chat shows "Waiting on you" (and the waiting tone) while it holds a matched approval; the card row and list still say Running. Known gap.
+- A helper asking for a run grant stays `running` in its record ("Preparing a workspace update"). While it holds a matched approval, `withSubagentApprovalWaitSnapshots`/`withSubagentApprovalWaitViews` overlay a display-only `needs_attention` (returning the same array when nothing changes), so the helper chat, card rows, pill, tray and Subagents list all say "Waiting on you". `subagentHelperApprovalsFor` returns every approval the helper owns (in queue order); all of them are excluded when deciding whether the main chat waits on something else.
+- Writing step: "Writing its report" while it runs, "Wrote its report" once done (the projector no longer adds a duplicate milestone).
 - The pill's narrow fallback and aria label still say "N finished" for a settled batch (a batch word, not a status word).
+
+## Round 2 decisions (2026-11-22)
+
+- Approvals: the main chat's card is canonical. The side panel shows a compact row ("Waiting on your approval in the main chat", Go to approval → `focusMainWaiting("approval")`); the full card renders only in the expanded helper chat. `mainChatWaitingFor(state, ownIds)` picks what the bar points at: "approval" when the main card's first approval is not this helper's, else "question" when one is pending, else "approval" if any later approval is someone else's. So Go to approval never lands on the helper's own card when a question waits.
+- Waiting bar (expanded only): `Callout role="note"`, warning fill, no border; "The main chat needs your approval." / "The main chat has a question for you."; one polite announcement via `announceSubagentDetail`; button Go to approval / Answer question calls `store.returnToMainWaiting(kind)`, which collapses then focuses on the next frame (approval: Deny or the card; question: `focusRegion("composer")`, where the questionnaire carries `data-focus-region="composer"` and an entry on the current option or custom textarea).
+- Back: the footer Back to main chat is the only Back; the side-panel placeholder reads “<label>” is open in the main chat, with no button.
+- Stop vs Stop all: `subagentHelperHasActiveHelpers(runId, views)`.
+- Failure reasons: `subagentFailureReason` maps the runner's "the child …" sentences to plain ones (`RUNNER_REASONS`), drops duplicates, passes unknown reasons through.
+- Second windows: `subagentHelperTranscriptRefetchReason(run, merged, streamingHere)` gives `gap:<rev>`, `join`, or `run:<state>:<revision>`; a window without the live stream re-reads the saved copy on each new reason, including the terminal state. A failed read (late join or re-read) shows the refresh-error row with Try again (`SubagentDetail refreshErrorKind="conversation"` for the no-transcript fallback).
+- Model line: `subagentModelDisplay` is depth-aware ("Same as main chat" at depth ≤ 1, "Same as the helper that started it" deeper); Effort hidden when off; Technical details show tokens with `toLocaleString`, the model name and a copyable run id.
 
 ## Known limits
 
-Non-helper approvals are hidden while a helper chat is expanded, and their shortcuts are off; the side-panel copy of an approval has no shortcuts; a running helper that missed early updates shows the fallback until its next save; the side panel keeps showing the same helper while it is expanded; the timed_out warning colour folded into red.
+Other approvals are out of view while a helper chat is expanded (the waiting bar points to them) and their shortcuts are off; with two approvals queued, own first, Go to approval focuses the main card, which shows the helper's own first (its queue count shows the rest); a running helper that missed early updates shows the fallback until its next save; the timed_out warning colour folded into red.
 
-Tests: `subagent-helper-chat.test.tsx`, `subagent-helper-chat-state.test.ts`, `subagent-helper-chat-store.test.ts`, `scroll-area-follow.test.tsx`, E2E `tests/e2e/subagent-helper-chat.spec.ts`.
+Tests: `subagent-helper-chat.test.tsx`, `subagent-helper-chat-state.test.ts`, `subagent-helper-chat-store.test.ts`, `scroll-area-follow.test.tsx`, `ask-user-question-composer-keys.test.tsx` (questionnaire focus entry), E2E `tests/e2e/subagent-helper-chat.spec.ts`.
