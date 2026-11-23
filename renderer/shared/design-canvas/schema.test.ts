@@ -1,10 +1,11 @@
 // Design canvas document parser: the bounds and refusals every reader and
-// writer of `design-canvases/<chatId>.json` relies on.
+// writer of `design-canvases/<workspaceId>.json` relies on.
 
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
   type DesignCanvas,
+  DESIGN_CANVAS_LIMITS,
   emptyDesignCanvas,
   isDesignRelativePath,
   parseDesignCanvas,
@@ -27,9 +28,10 @@ function frame(overrides: Record<string, unknown> = {}): Record<string, unknown>
 
 function canvas(overrides: Record<string, unknown> = {}): Record<string, unknown> {
   return {
-    version: 1,
+    version: 3,
     revision: 3,
-    viewport: { x: 0, y: 0, zoom: 1 },
+    pages: [{ id: "page-1", name: "Page 1" }],
+    chatPages: {},
     frames: [],
     comments: [],
     ...overrides,
@@ -46,8 +48,9 @@ function parsed(value: unknown): { doc: DesignCanvas; dropped: number } {
 test("an empty canvas parses with nothing dropped", () => {
   const empty = emptyDesignCanvas();
   assert.equal(empty.revision, 0);
-  assert.deepEqual(empty.pages, [{ id: "page-1", name: "Page 1", viewport: { x: 0, y: 0, zoom: 1 } }]);
-  assert.equal(empty.activePageId, "page-1");
+  assert.equal(empty.version, 3);
+  assert.deepEqual(empty.pages, [{ id: "page-1", name: "Page 1" }]);
+  assert.deepEqual(empty.chatPages, {});
   const { doc, dropped } = parsed(empty);
   assert.equal(dropped, 0);
   assert.deepEqual(doc, empty);
@@ -102,22 +105,39 @@ test("file frames whose path escapes the workspace or names a hidden file are dr
   assert.equal(dropped, unsafe.length);
 });
 
-test("a page keeps at most 400 frames and the canvas 1 000, in document order", () => {
+test("a page keeps at most 400 frames, in document order", () => {
   const onePage = Array.from({ length: 401 }, (_, index) => frame({ id: `f${index}` }));
   const one = parsed(canvas({ frames: onePage }));
   assert.equal(one.doc.frames.length, 400);
   assert.equal(one.doc.frames[0]?.id, "f0");
   assert.equal(one.doc.frames[399]?.id, "f399");
   assert.equal(one.dropped, 1);
+});
 
-  const pages = ["a", "b", "c"].map((id) => ({ id, name: id, viewport: { x: 0, y: 0, zoom: 1 } }));
-  const spread = pages.flatMap((page) =>
-    Array.from({ length: 400 }, (_, index) => frame({ id: `${page.id}${index}`, pageId: page.id })),
+test("caps pages at 200, frames at 4000 and comments at 2000", () => {
+  assert.equal(DESIGN_CANVAS_LIMITS.pages, 200);
+  const pages = Array.from({ length: 205 }, (_, index) => ({ id: `p${index}`, name: `P${index}` }));
+  // Eleven full pages hold 4 400 frames; only the first 4 000 stay, the eleventh page filling what is left.
+  const spread = pages.slice(0, 11).flatMap((page) =>
+    Array.from({ length: 400 }, (_, index) => frame({ id: `${page.id}-${index}`, pageId: page.id })),
   );
-  const many = parsed(canvas({ version: 2, pages, activePageId: "a", frames: spread }));
-  assert.equal(many.doc.frames.length, 1000);
-  assert.equal(many.doc.frames.filter((entry) => entry.pageId === "c").length, 200, "the third page fills what is left");
-  assert.equal(many.dropped, 200);
+  const comments = Array.from({ length: 2005 }, (_, index) => ({
+    id: `c${index}`,
+    x: 0,
+    y: 0,
+    note: "",
+    state: "open",
+    anchorState: "anchored",
+    createdAt: "t",
+  }));
+  const many = parsed(canvas({ pages, frames: spread, comments }));
+  assert.equal(many.doc.pages.length, 200);
+  assert.equal(many.doc.pages[199]!.id, "p199");
+  assert.equal(many.doc.frames.length, 4000);
+  assert.equal(many.doc.frames.filter((entry) => entry.pageId === "p10").length, 0, "the eleventh page has no room left");
+  assert.equal(many.doc.frames.filter((entry) => entry.pageId === "p9").length, 400);
+  assert.equal(many.doc.comments.length, 2000);
+  assert.equal(many.dropped, 400 + 5);
 });
 
 test("a groupId naming a missing group is removed but the frame stays", () => {
@@ -151,8 +171,16 @@ test("duplicate frame ids keep the first occurrence", () => {
   assert.equal(dropped, 1);
 });
 
-test("another version or a non-object is refused", () => {
-  assert.equal(parseDesignCanvas(canvas({ version: 3 })).ok, false);
+test("refuses version 1 and 2 documents", () => {
+  for (const version of [1, 2, 4]) {
+    assert.equal(parseDesignCanvas(canvas({ version })).ok, false, `version ${version}`);
+  }
+  // A version 2 document exactly as v1 of design mode wrote it.
+  const v2 = { version: 2, revision: 4, pages: [{ id: "page-1", name: "Page 1", viewport: { x: 0, y: 0, zoom: 1 } }], activePageId: "page-1", frames: [], comments: [] };
+  assert.equal(parseDesignCanvas(v2).ok, false);
+});
+
+test("a non-object is refused", () => {
   for (const value of [null, "canvas", 42, [], undefined]) {
     const result = parseDesignCanvas(value);
     assert.equal(result.ok, false);
@@ -160,9 +188,71 @@ test("another version or a non-object is refused", () => {
   }
 });
 
-test("viewport zoom clamps to 0.1..4", () => {
-  assert.equal(parsed(canvas({ viewport: { x: 0, y: 0, zoom: 9 } })).doc.pages[0]!.viewport.zoom, 4);
-  assert.equal(parsed(canvas({ viewport: { x: 0, y: 0, zoom: 0.01 } })).doc.pages[0]!.viewport.zoom, 0.1);
+test("drops activePageId and page viewports from input", () => {
+  const { doc } = parsed(
+    canvas({
+      pages: [
+        { id: "a", name: "A", viewport: { x: 5, y: 6, zoom: 2 } },
+        { id: "b", name: "B", viewport: { x: 1, y: 1, zoom: 1 } },
+      ],
+      activePageId: "b",
+      viewport: { x: 1, y: 2, zoom: 3 },
+    }),
+  );
+  for (const page of doc.pages) assert.deepEqual(Object.keys(page).sort(), ["id", "name"]);
+  assert.equal("activePageId" in doc, false);
+  assert.equal("viewport" in doc, false);
+});
+
+test("parses a v3 document and keeps chatPages entries that name existing pages and safe chat ids", () => {
+  const { doc } = parsed(
+    canvas({
+      pages: [{ id: "a", name: "A" }, { id: "b", name: "B" }],
+      chatPages: {
+        "chat-1": "a",
+        "chat:2.x_y": "b",
+        "chat-3": "missing",
+        "../x": "a",
+        "..": "a",
+        "chat-4": 7,
+        [`c${"x".repeat(200)}`]: "a",
+      },
+    }),
+  );
+  assert.deepEqual(doc.chatPages, { "chat-1": "a", "chat:2.x_y": "b" });
+  // A missing or malformed map reads as empty.
+  assert.deepEqual(parsed(canvas({ chatPages: undefined })).doc.chatPages, {});
+  assert.deepEqual(parsed(canvas({ chatPages: ["a"] })).doc.chatPages, {});
+  // Read back after a save, nothing changes.
+  assert.deepEqual(parsed(JSON.parse(JSON.stringify(doc))).doc, doc);
+});
+
+test("keeps chatId on artifact frames and comments only when it is a safe chat id", () => {
+  const comment = (id: string, chatId: unknown) => ({
+    id,
+    chatId,
+    x: 0,
+    y: 0,
+    note: "",
+    state: "open",
+    anchorState: "anchored",
+    createdAt: "t",
+  });
+  const { doc } = parsed(
+    canvas({
+      frames: [
+        frame({ id: "art", kind: "artifact", mediaId: "m1", text: undefined, chatId: "chat-1" }),
+        frame({ id: "bad-art", kind: "artifact", mediaId: "m2", text: undefined, chatId: "../x" }),
+        frame({ id: "note", chatId: "chat-1" }),
+      ],
+      comments: [comment("c1", "chat-1"), comment("c2", "a/b"), comment("c3", 5)],
+    }),
+  );
+  const byId = new Map(doc.frames.map((entry) => [entry.id, entry]));
+  assert.equal(byId.get("art")!.chatId, "chat-1");
+  assert.equal("chatId" in byId.get("bad-art")!, false);
+  assert.equal("chatId" in byId.get("note")!, false, "only artifact frames carry their chat");
+  assert.deepEqual(doc.comments.map((entry) => entry.chatId), ["chat-1", undefined, undefined]);
 });
 
 test("a long note is cut to 2000 characters", () => {
@@ -186,55 +276,35 @@ test("a long note is cut to 2000 characters", () => {
   assert.equal(doc.comments[0]?.note.length, 2000);
 });
 
-test("a version 1 canvas becomes one page that keeps its view, and reads back the same as version 2", () => {
-  const v1 = canvas({
-    viewport: { x: -120, y: 40, zoom: 0.5 },
-    frames: [frame({ id: "g", kind: "group" }), frame({ id: "n", groupId: "g" })],
-    comments: [{ id: "c1", frameId: "n", x: 1, y: 2, note: "hi", state: "open", anchorState: "anchored", createdAt: "2026-11-05T00:00:00Z" }],
-  });
-  const { doc, dropped } = parsed(v1);
-  assert.equal(dropped, 0);
-  assert.equal(doc.version, 2);
-  assert.deepEqual(doc.pages, [{ id: "page-1", name: "Page 1", viewport: { x: -120, y: 40, zoom: 0.5 } }]);
-  assert.equal(doc.activePageId, "page-1");
-  assert.deepEqual(doc.frames.map((entry) => [entry.id, entry.pageId, entry.groupId]), [["g", "page-1", undefined], ["n", "page-1", "g"]]);
-  assert.equal(doc.comments[0]!.pageId, "page-1");
-  // Saved as version 2 and read again, nothing changes.
-  assert.deepEqual(parsed(JSON.parse(JSON.stringify(doc))).doc, doc);
-});
-
-test("version 2 pages: duplicates and nameless pages are fixed, and unknown pages fall back to the first", () => {
+test("pages: duplicates and nameless pages are fixed, and unknown pages fall back to the first", () => {
   const { doc } = parsed({
-    version: 2,
+    version: 3,
     revision: 1,
     pages: [
-      { id: "a", name: "  Home  ", viewport: { x: 5, y: 6, zoom: 2 } },
+      { id: "a", name: "  Home  " },
       { id: "a", name: "Again" },
       { id: "b", name: "" },
       "not a page",
     ],
-    activePageId: "missing",
+    chatPages: {},
     frames: [frame({ id: "on-b", pageId: "b" }), frame({ id: "lost", pageId: "gone" })],
     comments: [],
   });
-  assert.deepEqual(doc.pages.map((page) => [page.id, page.name]), [["a", "Home"], ["b", "Page 2"]]);
-  assert.deepEqual(doc.pages[1]!.viewport, { x: 0, y: 0, zoom: 1 });
-  assert.equal(doc.activePageId, "a");
+  assert.deepEqual(doc.pages, [{ id: "a", name: "Home" }, { id: "b", name: "Page 2" }]);
   assert.deepEqual(doc.frames.map((entry) => entry.pageId), ["b", "a"]);
-  const empty = parsed({ version: 2, revision: 0, pages: [], frames: [], comments: [] }).doc;
+  const empty = parsed({ version: 3, revision: 0, pages: [], frames: [], comments: [] }).doc;
   assert.equal(empty.pages.length, 1, "a canvas always has a page");
 });
 
 test("a frame leaves a group on another page, and a comment on a frame moves to that frame's page", () => {
   const { doc } = parsed({
-    version: 2,
+    version: 3,
     revision: 1,
     pages: [{ id: "a", name: "A" }, { id: "b", name: "B" }],
-    activePageId: "b",
+    chatPages: {},
     frames: [frame({ id: "g", kind: "group", pageId: "a" }), frame({ id: "n", groupId: "g", pageId: "b" })],
     comments: [{ id: "c", frameId: "n", pageId: "a", x: 0, y: 0, note: "", state: "open", anchorState: "anchored", createdAt: "t" }],
   });
-  assert.equal(doc.activePageId, "b");
   assert.equal(doc.frames[1]!.groupId, undefined);
   assert.equal(doc.comments[0]!.pageId, "b");
 });

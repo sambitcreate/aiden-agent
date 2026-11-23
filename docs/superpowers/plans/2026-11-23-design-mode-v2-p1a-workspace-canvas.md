@@ -69,7 +69,7 @@ Every `doc.activePageId` reader becomes an explicit `pageId` taken from the chat
     - `viewPageId(doc: Pick<DesignCanvas, "pages">, view?: { pageId?: string } | null): string`, which returns the view's page when it exists, otherwise `doc.pages[0].id`;
     - `DESIGN_FRESH_VIEWPORT = { x: 0, y: 0, zoom: 1 }`.
 
-- [ ] **Step 1: Write failing tests**
+- [x] **Step 1: Write failing tests**
   - `schema.test.ts`:
     - `parses a v3 document and keeps chatPages entries that name existing pages and safe chat ids`: an entry pointing at a missing page and one with chat id `"../x"` are dropped.
     - `refuses version 1 and 2 documents`: `ok: false`.
@@ -80,12 +80,12 @@ Every `doc.activePageId` reader becomes an explicit `pageId` taken from the chat
   - `view.test.ts`:
     - `viewPageId falls back to the first page when the view's page is gone, or there is no view`.
     - `parseDesignChatView clamps zoom to 0.1–4 and refuses a missing pageId or a non-finite viewport`.
-- [ ] **Step 2:** Run `npx tsx --test renderer/shared/design-canvas/schema.test.ts renderer/shared/design-canvas/view.test.ts`. Expected: FAIL.
-- [ ] **Step 3:** Implement.
+- [x] **Step 2:** Run `npx tsx --test renderer/shared/design-canvas/schema.test.ts renderer/shared/design-canvas/view.test.ts`. Expected: FAIL.
+- [x] **Step 3:** Implement.
   - Safe chat id: reuse the regex from `store.ts` (`/^[A-Za-z0-9._:-]{1,160}$/u`), exported from `schema.ts` as `isDesignChatId`, so the store and the schema share it.
   - `parseViewport` moves to `view.ts`.
-- [ ] **Step 4:** Rerun. Expected: PASS. `npx tsc -p renderer --noEmit` now lists every caller to fix in Tasks 2–8. Don't fix them here.
-- [ ] **Step 5:** Commit `feat(design): canvas document v3 with chat pages and no view state`.
+- [x] **Step 4:** Rerun. Expected: PASS. `npx tsc -p renderer --noEmit` now lists every caller to fix in Tasks 2–8. Don't fix them here.
+- [x] **Step 5:** Commit `feat(design): canvas document v3 with chat pages and no view state`.
 
 ### Task 2: Shared helpers take an explicit page
 

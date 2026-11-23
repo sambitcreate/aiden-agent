@@ -1,10 +1,11 @@
-// The per-chat design canvas document (version 2) and its parser.
+// The workspace design canvas document (version 3) and its parser.
 //
 // Pure on purpose: the renderer, main and the CLI bundle all import it, so it
 // must not touch Node. Every reader goes through `parseDesignCanvas`, which
 // clamps boxes, drops frames it cannot trust and reports how many it dropped.
-// It also reads version 1 documents (one page, no page ids) and returns them
-// as version 2, so the next save writes the new shape.
+// One document is shared by every chat of a workspace, so it holds no view
+// state: which page a chat looks at, and where, lives in `view.ts`. Earlier
+// versions are refused; there is no migration before 1.0.
 
 import { syncConnectors } from "./connectors.js";
 import {
@@ -74,6 +75,8 @@ export type DesignFrame = {
   path?: string;
   /** artifact. */
   mediaId?: string;
+  /** artifact: the chat that made it, whose media it loads. */
+  chatId?: string;
   /** note and text: the Markdown subset in rich-text.ts; a shape's label: plain words. */
   text?: string;
   /** text and note: how large its type is (medium for text and small for a note when left out). */
@@ -184,20 +187,22 @@ export type DesignComment = {
   resolvedAt?: string;
   /** Aiden's latest reply on the comment, cut to `replyChars`. */
   reply?: { text: string; at: string };
+  /** The chat whose window left the comment. */
+  chatId?: string;
 };
 
 export type DesignViewport = { x: number; y: number; zoom: number };
 
-/** A page of the canvas: its own name and its own place to look at. */
-export type DesignPage = { id: string; name: string; viewport: DesignViewport };
+/** A page of the canvas. Where each chat looks at it is that chat's view (`view.ts`). */
+export type DesignPage = { id: string; name: string };
 
 export type DesignCanvas = {
-  version: 2;
+  version: 3;
   revision: number;
   /** At least one, in the order the page picker lists them. */
   pages: DesignPage[];
-  /** The page on screen; always one of `pages`. */
-  activePageId: string;
+  /** The page each chat works on, by chat id; every value is one of `pages`. */
+  chatPages: Record<string, string>;
   frames: DesignFrame[];
   comments: DesignComment[];
   /**
@@ -210,10 +215,10 @@ export type DesignCanvas = {
 };
 
 export const DESIGN_CANVAS_LIMITS = {
-  frames: 1000,
+  frames: 4000,
   framesPerPage: 400,
-  comments: 500,
-  pages: 50,
+  comments: 2000,
+  pages: 200,
   pageNameChars: 60,
   minSize: 40,
   maxSize: 8000,
@@ -271,6 +276,12 @@ const TEXT_SIZES: ReadonlySet<string> = new Set<DesignTextSize>(["small", "mediu
 const COMMENT_STATES: ReadonlySet<string> = new Set(["open", "sent", "resolved"]);
 const ANCHOR_STATES: ReadonlySet<string> = new Set(["anchored", "stale", "lost"]);
 const MAX_ID_CHARS = 128;
+const SAFE_CHAT_ID = /^[A-Za-z0-9._:-]{1,160}$/u;
+
+/** A chat id safe to key a map or a file by: no slashes, and not `.` or `..`. */
+export function isDesignChatId(value: unknown): value is string {
+  return typeof value === "string" && SAFE_CHAT_ID.test(value) && value !== "." && value !== "..";
+}
 const MAX_PATH_CHARS = 1024;
 const MAX_SELECTOR_CHARS = 2000;
 const MAX_TAG_CHARS = 64;
@@ -282,23 +293,18 @@ export type DesignCanvasParseResult =
   | { ok: true; doc: DesignCanvas; dropped: number }
   | { ok: false; issues: string[] };
 
-/** The id of the page a version 1 document becomes, and of a new canvas's first page. */
+/** The id of a new canvas's first page. */
 export const DESIGN_FIRST_PAGE_ID = "page-1";
 
 export function emptyDesignCanvas(): DesignCanvas {
   return {
-    version: 2,
+    version: 3,
     revision: 0,
-    pages: [{ id: DESIGN_FIRST_PAGE_ID, name: "Page 1", viewport: { x: 0, y: 0, zoom: 1 } }],
-    activePageId: DESIGN_FIRST_PAGE_ID,
+    pages: [{ id: DESIGN_FIRST_PAGE_ID, name: "Page 1" }],
+    chatPages: {},
     frames: [],
     comments: [],
   };
-}
-
-/** The page on screen. */
-export function activeDesignPage(doc: DesignCanvas): DesignPage {
-  return doc.pages.find((page) => page.id === doc.activePageId) ?? doc.pages[0]!;
 }
 
 /** A workspace-relative page path as a frame stores it: trimmed, with no leading "./". */
@@ -308,40 +314,29 @@ export function designPagePath(path: string): string {
 
 /**
  * The frame showing a workspace page, such as design/home.html: the one on
- * the page on screen when that page shows it, else the first frame showing it
- * on any page, in document order. Undefined when no frame shows it.
+ * `pageId` when that page shows it, else the first frame showing it on any
+ * page, in document order. Undefined when no frame shows it.
  */
-export function frameShowingDesignPage(doc: DesignCanvas, path: string): DesignFrame | undefined {
+export function frameShowingDesignPage(doc: DesignCanvas, path: string, pageId?: string): DesignFrame | undefined {
   const wanted = designPagePath(path);
   if (!wanted) return undefined;
   const showing = doc.frames.filter((frame) => frame.kind === "file" && frame.path === wanted);
-  return showing.find((frame) => frame.pageId === doc.activePageId) ?? showing[0];
+  return (pageId === undefined ? undefined : showing.find((frame) => frame.pageId === pageId)) ?? showing[0];
 }
 
 /**
  * A frame named by its id or, when no frame has that id, by the workspace
- * page it shows (see `frameShowingDesignPage`). Undefined when neither matches.
+ * page it shows (see `frameShowingDesignPage`), preferring the one on
+ * `pageId`. Undefined when neither matches.
  */
-export function designFrameByIdOrPath(doc: DesignCanvas, value: unknown): DesignFrame | undefined {
+export function designFrameByIdOrPath(doc: DesignCanvas, value: unknown, pageId?: string): DesignFrame | undefined {
   if (typeof value !== "string" || !value) return undefined;
-  return doc.frames.find((frame) => frame.id === value) ?? frameShowingDesignPage(doc, value);
+  return doc.frames.find((frame) => frame.id === value) ?? frameShowingDesignPage(doc, value, pageId);
 }
 
-/** The frames on one page (the page on screen by default), in document order. */
-export function framesOnPage(doc: DesignCanvas, pageId: string = doc.activePageId): DesignFrame[] {
+/** The frames on one page, in document order. */
+export function framesOnPage(doc: DesignCanvas, pageId: string): DesignFrame[] {
   return doc.frames.filter((frame) => frame.pageId === pageId);
-}
-
-/** The document with the page on screen looking at `viewport`. */
-export function withActiveViewport(doc: DesignCanvas, viewport: DesignViewport): DesignCanvas {
-  const page = activeDesignPage(doc);
-  if (page.viewport.x === viewport.x && page.viewport.y === viewport.y && page.viewport.zoom === viewport.zoom) {
-    return doc;
-  }
-  return {
-    ...doc,
-    pages: doc.pages.map((entry) => (entry.id === page.id ? { ...entry, viewport: { ...viewport } } : entry)),
-  };
 }
 
 /**
@@ -362,7 +357,7 @@ export function isDesignRelativePath(value: unknown): value is string {
 export function parseDesignCanvas(value: unknown): DesignCanvasParseResult {
   if (!isRecord(value)) return { ok: false, issues: ["The canvas document is not an object."] };
   const issues: string[] = [];
-  if (value.version !== 1 && value.version !== 2) issues.push("The canvas document is not version 1 or 2.");
+  if (value.version !== 3) issues.push("The canvas document is not version 3.");
   const revision = value.revision;
   if (typeof revision !== "number" || !Number.isSafeInteger(revision) || revision < 0) {
     issues.push("The canvas revision is not a non-negative integer.");
@@ -372,19 +367,19 @@ export function parseDesignCanvas(value: unknown): DesignCanvasParseResult {
   if (issues.length > 0) return { ok: false, issues };
 
   let dropped = 0;
-  // A version 1 document is one page looking where the document looked.
-  const pages =
-    value.version === 1
-      ? [{ id: DESIGN_FIRST_PAGE_ID, name: "Page 1", viewport: parseViewport(value.viewport) }]
-      : parsePages(value.pages);
+  const pages = parsePages(value.pages);
   const pageIds = new Set(pages.map((page) => page.id));
   const firstPageId = pages[0]!.id;
   const pageOf = (raw: unknown) => {
     const id = isRecord(raw) ? identifier(raw.pageId) : undefined;
     return id && pageIds.has(id) ? id : firstPageId;
   };
-  const activePageId =
-    typeof value.activePageId === "string" && pageIds.has(value.activePageId) ? value.activePageId : firstPageId;
+  const chatPages: Record<string, string> = {};
+  if (isRecord(value.chatPages)) {
+    for (const [chatId, pageId] of Object.entries(value.chatPages)) {
+      if (isDesignChatId(chatId) && typeof pageId === "string" && pageIds.has(pageId)) chatPages[chatId] = pageId;
+    }
+  }
 
   const frames: DesignFrame[] = [];
   const frameIds = new Set<string>();
@@ -439,10 +434,10 @@ export function parseDesignCanvas(value: unknown): DesignCanvasParseResult {
     ok: true,
     // Arrows and lines follow the frames they are on, so a document read back is already up to date.
     doc: syncConnectors({
-      version: 2,
+      version: 3,
       revision: revision as number,
       pages,
-      activePageId,
+      chatPages,
       frames,
       comments,
       ...(removedPagePaths.length > 0 ? { removedPagePaths } : {}),
@@ -477,7 +472,7 @@ export function withRemovedPagePaths<T extends DesignCanvas>(
   return (removedPagePaths.length > 0 ? { ...rest, removedPagePaths } : rest) as T;
 }
 
-/** The pages of a version 2 document; never empty, and ids are unique. */
+/** The pages of a document; never empty, and ids are unique. */
 function parsePages(value: unknown): DesignPage[] {
   const pages: DesignPage[] = [];
   const ids = new Set<string>();
@@ -488,31 +483,16 @@ function parsePages(value: unknown): DesignPage[] {
       const id = identifier(raw.id);
       if (!id || ids.has(id)) continue;
       ids.add(id);
-      pages.push({ id, name: pageName(raw.name, pages.length), viewport: parseViewport(raw.viewport) });
+      pages.push({ id, name: pageName(raw.name, pages.length) });
     }
   }
-  if (pages.length === 0) {
-    pages.push({ id: DESIGN_FIRST_PAGE_ID, name: "Page 1", viewport: { x: 0, y: 0, zoom: 1 } });
-  }
+  if (pages.length === 0) pages.push({ id: DESIGN_FIRST_PAGE_ID, name: "Page 1" });
   return pages;
 }
 
 function pageName(value: unknown, index: number): string {
   const name = typeof value === "string" ? value.trim().slice(0, DESIGN_CANVAS_LIMITS.pageNameChars) : "";
   return name || `Page ${index + 1}`;
-}
-
-function parseViewport(value: unknown): DesignViewport {
-  if (!isRecord(value)) return { x: 0, y: 0, zoom: 1 };
-  const zoom = finite(value.zoom);
-  return {
-    x: clampCoord(finite(value.x) ?? 0),
-    y: clampCoord(finite(value.y) ?? 0),
-    zoom:
-      zoom === undefined
-        ? 1
-        : clamp(zoom, DESIGN_CANVAS_LIMITS.minZoom, DESIGN_CANVAS_LIMITS.maxZoom),
-  };
 }
 
 function parseFrame(value: unknown, pageId: string): DesignFrame | null {
@@ -550,6 +530,7 @@ function parseFrame(value: unknown, pageId: string): DesignFrame | null {
     const mediaId = identifier(value.mediaId);
     if (!mediaId) return null;
     frame.mediaId = mediaId;
+    if (isDesignChatId(value.chatId)) frame.chatId = value.chatId;
   }
   if (frame.kind === "note" || frame.kind === "text") {
     frame.text =
@@ -681,6 +662,7 @@ function parseComment(value: unknown, pageId: string): DesignComment | null {
     const at = timestamp(value.reply.at);
     if (at) comment.reply = { text: value.reply.text.slice(0, DESIGN_CANVAS_LIMITS.replyChars), at };
   }
+  if (isDesignChatId(value.chatId)) comment.chatId = value.chatId;
   return comment;
 }
 
