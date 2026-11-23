@@ -221,7 +221,11 @@ test("a save that names another workspace than the chat's is answered moved, and
   });
   await workspaceStore.save("ws-2", { ...note, frames: [] }, 0);
   // The canvas was opened while the chat was in ws-1; the chat has since moved to ws-2.
-  assert.deepEqual(await invoke("designCanvas:save", "chat-1", note, 1, { workspaceId: "ws-1" }), { ok: false, reason: "moved" });
+  assert.deepEqual(await invoke("designCanvas:save", "chat-1", note, 1, { workspaceId: "ws-1" }), {
+    ok: false,
+    reason: "moved",
+    workspaceId: "ws-2",
+  });
   assert.equal((await workspaceStore.get("ws-2")).revision, 1, "ws-2 is unchanged");
   assert.deepEqual((await workspaceStore.get("ws-1")).revision, 0, "ws-1 is untouched too");
   assert.deepEqual(broadcasts, []);
@@ -253,7 +257,12 @@ test("designCanvas:view stores a parsed view and refuses a malformed one", async
   // The canvas reads the kept view back when it mounts.
   await invoke("designCanvas:view", "chat-1", { mounted: false });
   assert.equal(views.mounted("workspace-1"), 0);
-  assert.deepEqual(await invoke("designCanvas:view:get", "chat-1"), { pageId: "p2", viewport: { x: 10, y: 20, zoom: 4 }, focusId: 0 });
+  assert.deepEqual(await invoke("designCanvas:view:get", "chat-1"), {
+    pageId: "p2",
+    viewport: { x: 10, y: 20, zoom: 4 },
+    focusId: 0,
+    viewports: { p2: { x: 10, y: 20, zoom: 4 } },
+  });
 });
 
 test("designCanvas:view:get answers null for a chat with no kept view", async (t) => {

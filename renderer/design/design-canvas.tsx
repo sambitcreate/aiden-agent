@@ -11,24 +11,12 @@ import { isMacPlatform } from "../lib/ghostty-terminal/host-platform";
 import { prefersReducedMotion } from "../lib/appearance-runtime";
 import { noteDesignCanvasView } from "../lib/design-mode";
 import { designCanvasApi } from "../lib/ipc";
-import {
-  addPage,
-  deletePage,
-  duplicatePage,
-  movePage,
-  renamePage,
-  showPage,
-} from "../shared/design-canvas/pages";
+import { addPage, deletePage, duplicatePage, movePage, renamePage } from "../shared/design-canvas/pages";
 import { attachTargetAt, syncConnectors, type DesignPoint } from "../shared/design-canvas/connectors";
 import type { DesignExportFormat } from "../shared/design-canvas/frame-export";
 import { presentationOrder } from "../shared/design-canvas/presentation";
 import { containerAt, regroupFrames } from "../shared/design-canvas/drawing";
-import {
-  activeDesignPage,
-  framesOnPage,
-  isDesignContainer,
-  withActiveViewport,
-} from "../shared/design-canvas/schema";
+import { framesOnPage, isDesignContainer } from "../shared/design-canvas/schema";
 import type { DesignCanvas as CanvasDocument, DesignConnectorEnd, DesignFrame } from "../shared/design-canvas/schema";
 import {
   applyNodeChanges,
@@ -77,13 +65,27 @@ import {
 } from "./nodes/design-node-context";
 import { designNodeTypes } from "./nodes/registry";
 import { useDesignCanvas } from "./use-design-canvas";
+import { useDesignView, type DesignViewHandle } from "./use-design-view";
 
 const NO_EDGES: never[] = [];
 
-/** The design canvas for one chat. */
-export default function DesignCanvas({ chatId }: { chatId: string }) {
-  const canvas = useDesignCanvas(chatId);
-  if (!canvas.doc) {
+/**
+ * The canvas of `workspaceId`, as `chatId` sees it: the shared document, on
+ * the chat's own page and view. `onMoved` hears the workspace the chat is in
+ * now when a save finds it has left this one.
+ */
+export default function DesignCanvas({
+  chatId,
+  workspaceId,
+  onMoved,
+}: {
+  chatId: string;
+  workspaceId: string;
+  onMoved?(workspaceId: string): void;
+}) {
+  const canvas = useDesignCanvas(workspaceId, chatId, { onMoved });
+  const view = useDesignView(workspaceId, chatId, canvas.doc);
+  if (!canvas.doc || !view.loaded) {
     // The landmark stays the same while the canvas loads or fails, so focus and
     // assistive tech find it in one place.
     return (
@@ -102,7 +104,7 @@ export default function DesignCanvas({ chatId }: { chatId: string }) {
       </div>
     );
   }
-  return <LoadedDesignCanvas chatId={chatId} doc={canvas.doc} canvas={canvas} />;
+  return <LoadedDesignCanvas chatId={chatId} doc={canvas.doc} canvas={canvas} view={view} />;
 }
 
 type CanvasHandle = ReturnType<typeof useDesignCanvas>;
@@ -148,11 +150,16 @@ function LoadedDesignCanvas({
   chatId,
   doc,
   canvas,
+  view,
 }: {
   chatId: string;
   doc: CanvasDocument;
   canvas: CanvasHandle;
+  view: DesignViewHandle;
 }) {
+  const pageId = view.pageId;
+  const latestPage = React.useRef(pageId);
+  latestPage.current = pageId;
   const { undo, redo, flush } = canvas;
   // A recorded change on the canvas comes after any words written into a
   // page's file, so ⌘Z undoes the canvas change before those.
@@ -187,7 +194,7 @@ function LoadedDesignCanvas({
   const [renaming, setRenaming] = React.useState<string | null>(null);
   const [editing, setEditing] = React.useState<string | null>(null);
   const [drawTool, setDrawTool] = React.useState<DesignDrawTool | null>(null);
-  const [viewport, setViewport] = React.useState<Viewport>(() => activeDesignPage(doc).viewport);
+  const [viewport, setViewport] = React.useState<Viewport>(() => view.viewport);
   const [viewSize, setViewSize] = React.useState({ w: 0, h: 0 });
   const [live, setLive] = React.useState<ReadonlySet<string>>(() => new Set());
   const [presentation, setPresentation] = React.useState<DesignPresentation | null>(null);
@@ -198,7 +205,7 @@ function LoadedDesignCanvas({
 
   const wrapper = React.useRef<HTMLDivElement | null>(null);
   const flow = React.useRef<ReactFlowInstance<DesignNode> | null>(null);
-  const latestViewport = React.useRef<Viewport>(activeDesignPage(doc).viewport);
+  const latestViewport = React.useRef<Viewport>(view.viewport);
   const moveFrame = React.useRef<number | null>(null);
   const gesture = React.useRef(false);
   const latestDoc = React.useRef(doc);
@@ -310,13 +317,16 @@ function LoadedDesignCanvas({
     },
     [],
   );
-  // A design-mode message carries the selection and the canvas's size on screen.
+  // A design-mode message carries the page on screen, the selection and the canvas's size on screen.
   React.useEffect(() => {
     noteDesignCanvasView(chatId, {
       selection: [...selection],
+      pageId,
       ...(viewSize.w >= 1 && viewSize.h >= 1 ? { viewSize: { w: viewSize.w, h: viewSize.h } } : {}),
     });
-  }, [chatId, selection, viewSize]);
+  }, [chatId, pageId, selection, viewSize]);
+  const setViewSizeOfView = view.setSize;
+  React.useEffect(() => setViewSizeOfView(viewSize), [setViewSizeOfView, viewSize]);
   React.useEffect(() => () => noteDesignCanvasView(chatId, null), [chatId]);
 
   const versionOf = React.useCallback(
@@ -335,13 +345,15 @@ function LoadedDesignCanvas({
   const latestFrameVersionOf = React.useRef(frameVersionOf);
   latestFrameVersionOf.current = frameVersionOf;
 
-  // Another page on screen (the picker, an undo, or Aiden's canvas_focus):
-  // go to where that page was left, with nothing selected or entered.
-  const shownPage = React.useRef(doc.activePageId);
+  // Another page on screen (the picker, Aiden's canvas_focus, or the page
+  // being deleted): go to where the chat left that page, with nothing
+  // selected or entered.
+  const shownPage = React.useRef(pageId);
+  const pageViewport = view.viewport;
   React.useEffect(() => {
-    if (shownPage.current === doc.activePageId) return;
-    shownPage.current = doc.activePageId;
-    const next = activeDesignPage(doc).viewport;
+    if (shownPage.current === pageId) return;
+    shownPage.current = pageId;
+    const next = pageViewport;
     latestViewport.current = next;
     setViewport(next);
     void flow.current?.setViewport(next, { duration: 0 });
@@ -349,21 +361,32 @@ function LoadedDesignCanvas({
     setEntered(null);
     setRenaming(null);
     setEditing(null);
-    // Only a change of page moves the view; the doc's other changes do not.
-  }, [doc]);
+    // Only a change of page moves the view; a pan of the same page does not.
+  }, [pageId]);
 
   // At most six frames run a real page; the rest show their snapshots.
   React.useEffect(() => {
     // A hidden frame is not drawn, so it never runs its page.
-    const frames = framesOnPage(doc).filter((frame) => !frame.hidden && missing.get(frame.id) !== frameVersionOf(frame));
+    const frames = framesOnPage(doc, pageId).filter((frame) => !frame.hidden && missing.get(frame.id) !== frameVersionOf(frame));
     setLive((previous) => {
       const next = selectLiveFrames({ frames, viewport, view: viewSize, selected: selection, entered, previous });
       return sameSet(previous, next) ? previous : next;
     });
-  }, [doc, missing, frameVersionOf, viewport, viewSize, selection, entered]);
+  }, [doc, pageId, missing, frameVersionOf, viewport, viewSize, selection, entered]);
 
-  const nodes = React.useMemo(() => nodesFromCanvas(doc, selection), [doc, selection]);
-  const comments = useDesignComments({ chatId, doc, change, flush, flow, wrapper, live, versionOf });
+  const nodes = React.useMemo(() => nodesFromCanvas(doc, pageId, selection), [doc, pageId, selection]);
+  const comments = useDesignComments({
+    chatId,
+    doc,
+    pageId,
+    showPage: view.showPage,
+    change,
+    flush,
+    flow,
+    wrapper,
+    live,
+    versionOf,
+  });
   const pageWindow = React.useCallback((frameId: string) => frameIframe(wrapper.current, frameId)?.contentWindow ?? null, []);
   const reloadPath = React.useCallback(
     (path: string, keep?: string) => {
@@ -406,25 +429,53 @@ function LoadedDesignCanvas({
   const noteInteraction = React.useCallback(() => {
     lastInteraction.current = Date.now();
   }, []);
-  // A request that arrived while this canvas was still loading counts too.
-  const [pendingFocus, setPendingFocus] = React.useState<CanvasFocusRequest | null>(() =>
-    takeCanvasFocus(chatId, FOCUS_WAIT_MS),
+  const [pendingFocus, setPendingFocus] = React.useState<CanvasFocusRequest | null>(null);
+  const applyFocus = view.applyFocus;
+  // The page a request names is the chat's at once, even when the fit is
+  // skipped or the request is too old to fit: main already counts it, and
+  // the view's reports say this canvas has seen it.
+  const receiveFocus = React.useCallback(
+    (request: CanvasFocusRequest) => {
+      const fresh = Date.now() - request.at <= FOCUS_WAIT_MS;
+      if (request.focusId !== undefined || (fresh && request.pageId !== undefined)) {
+        applyFocus({
+          ...(request.pageId !== undefined ? { pageId: request.pageId } : {}),
+          ...(request.focusId !== undefined ? { focusId: request.focusId } : {}),
+        });
+      }
+      if (fresh) setPendingFocus(request);
+    },
+    [applyFocus],
   );
+  // A request that arrived while this canvas was still loading counts too.
+  React.useEffect(() => {
+    const early = takeCanvasFocus(chatId);
+    if (early) receiveFocus(early);
+  }, [chatId, receiveFocus]);
   React.useEffect(
     () =>
       designCanvasApi.onDesignCanvasFocus((payload) => {
         const parsed = canvasFocusFrom(payload);
         if (parsed?.chatId !== chatId) return;
         forgetCanvasFocus(chatId);
-        setPendingFocus(parsed.request);
+        receiveFocus(parsed.request);
       }),
-    [chatId],
+    [chatId, receiveFocus],
   );
+  const showPageOfView = view.showPage;
   React.useEffect(() => {
     if (!pendingFocus) return;
     if (gesture.current || Date.now() - lastInteraction.current < FOCUS_QUIET_MS) {
       setPendingFocus(null);
       return;
+    }
+    // A request that names no page shows the page its frames are on.
+    if (pendingFocus.pageId === undefined) {
+      const onPage = latestDoc.current.frames.find((frame) => pendingFocus.ids.includes(frame.id))?.pageId;
+      if (onPage !== undefined && onPage !== latestPage.current) {
+        showPageOfView(onPage);
+        return;
+      }
     }
     // Frames Aiden just placed arrive with the next canvas read, and a canvas
     // that just opened has not measured them yet; wait briefly for both.
@@ -450,7 +501,7 @@ function LoadedDesignCanvas({
       maxZoom: 1,
       ...(decision.ids.length > 0 ? { nodes: decision.ids.map((id) => ({ id })) } : {}),
     });
-  }, [pendingFocus, nodes]);
+  }, [pendingFocus, nodes, showPageOfView]);
 
   const onNodesChange = (changes: NodeChange<DesignNode>[]) => {
     const selects = changes.filter((entry) => entry.type === "select");
@@ -504,7 +555,9 @@ function LoadedDesignCanvas({
     [change],
   );
 
-  const add = (frame: PlaceFrameInput): string | null => {
+  /** Adds a frame of the person's to the page on screen, beside what is in view. */
+  const add = (frame: Omit<PlaceFrameInput, "pageId">): string | null => {
+    const page = latestPage.current;
     const current = latestViewport.current;
     const zoom = current.zoom || 1;
     const view = { x: -current.x / zoom, y: -current.y / zoom, w: viewSize.w / zoom, h: viewSize.h / zoom };
@@ -512,7 +565,7 @@ function LoadedDesignCanvas({
     const id = crypto.randomUUID();
     let placed = false;
     change((latest) => {
-      const result = placeFrame(latest, frame, view, () => id);
+      const result = placeFrame(latest, { ...frame, pageId: page }, view, () => id);
       if ("error" in result) return latest;
       placed = true;
       return result.doc;
@@ -526,19 +579,25 @@ function LoadedDesignCanvas({
   };
 
   /** Places an item a drawing tool made, at its own box, in the group or artboard it was drawn in. */
-  const createDrawn = (input: PlaceFrameInput, options: { edit?: boolean } = {}): string | null => {
+  const createDrawn = (input: Omit<PlaceFrameInput, "pageId">, options: { edit?: boolean } = {}): string | null => {
+    const page = latestPage.current;
     const id = crypto.randomUUID();
     let placed = false;
     change((latest) => {
       const holder = isDesignContainer(input.kind)
         ? undefined
-        : containerAt(latest, latest.activePageId, {
+        : containerAt(latest, page, {
             x: input.x ?? 0,
             y: input.y ?? 0,
             w: input.w,
             h: input.h,
           });
-      const result = placeFrame(latest, { ...input, ...(holder ? { groupId: holder.id } : {}) }, { x: 0, y: 0, w: 0, h: 0 }, () => id);
+      const result = placeFrame(
+        latest,
+        { ...input, pageId: page, ...(holder ? { groupId: holder.id } : {}) },
+        { x: 0, y: 0, w: 0, h: 0 },
+        () => id,
+      );
       if ("error" in result) return latest;
       placed = true;
       return result.doc;
@@ -554,7 +613,7 @@ function LoadedDesignCanvas({
 
   const attachAt = React.useCallback((point: DesignPoint, except?: string) => {
     const current = latestDoc.current;
-    return attachTargetAt(current, current.activePageId, point, new Set(except ? [except] : []))?.id;
+    return attachTargetAt(current, latestPage.current, point, new Set(except ? [except] : []))?.id;
   }, []);
 
   const moveEnd = React.useCallback(
@@ -618,37 +677,59 @@ function LoadedDesignCanvas({
   const onPage = (action: DesignPageAction) => {
     switch (action.type) {
       case "show":
-        change((current) => showPage(current, action.id), { record: false });
+        // Only this chat's view moves: nothing is saved, and it is no undo step.
+        view.showPage(action.id);
         return;
       case "add": {
         // The id is fixed up front so an edit replayed after a save conflict adds the same page.
         const id = crypto.randomUUID();
-        change((current) => addPage(current, id));
+        const after = pageId;
+        let added = false;
+        change((current) => {
+          const next = addPage(current, id, undefined, after);
+          added = next !== current;
+          return next;
+        });
+        if (added) view.showPage(id);
         return;
       }
       case "rename":
         change((current) => renamePage(current, action.id, action.name));
         return;
       case "duplicate": {
-        const pageId = crypto.randomUUID();
+        const copyId = crypto.randomUUID();
         const ids: string[] = [];
         let made = true;
         change((current) => {
           let index = 0;
-          const next = duplicatePage(current, action.id, pageId, () => (ids[index++] ??= crypto.randomUUID()));
+          const next = duplicatePage(current, action.id, copyId, () => (ids[index++] ??= crypto.randomUUID()));
           made = next !== current;
           return next;
         });
         if (!made) toast.error("This canvas is full. Remove some frames to copy this page.");
+        else view.showPage(copyId);
         return;
       }
       case "move":
         change((current) => movePage(current, action.id, action.step));
         return;
       case "delete": {
-        const name = doc.pages.find((page) => page.id === action.id)?.name ?? "Page";
+        const at = doc.pages.findIndex((page) => page.id === action.id);
+        const name = doc.pages[at]?.name ?? "Page";
+        // The chat looking at the page goes to the one before it (the next, for the first).
+        const neighbour = doc.pages[at > 0 ? at - 1 : at + 1]?.id;
+        const shown = action.id === pageId;
         change((current) => deletePage(current, action.id));
-        toast(`Deleted "${name}"`, { action: { label: "Undo", onClick: () => undo() } });
+        if (shown && neighbour !== undefined) view.showPage(neighbour);
+        toast(`Deleted "${name}"`, {
+          action: {
+            label: "Undo",
+            onClick: () => {
+              undo();
+              if (shown) view.showPage(action.id);
+            },
+          },
+        });
         return;
       }
     }
@@ -826,7 +907,7 @@ function LoadedDesignCanvas({
    */
   function present(fromId: string | null, options: { single?: boolean } = {}) {
     const current = latestDoc.current;
-    const ids = options.single && fromId ? [fromId] : presentationOrder(framesOnPage(current));
+    const ids = options.single && fromId ? [fromId] : presentationOrder(framesOnPage(current, latestPage.current));
     if (ids.length === 0) {
       toast("There's nothing on this page to present yet.");
       return;
@@ -1176,7 +1257,7 @@ function LoadedDesignCanvas({
             onInit={(instance) => {
               flow.current = instance;
             }}
-            defaultViewport={activeDesignPage(doc).viewport}
+            defaultViewport={view.viewport}
             onMove={(_event, next) => {
               latestViewport.current = next;
               if (moveFrame.current !== null) return;
@@ -1189,9 +1270,8 @@ function LoadedDesignCanvas({
               latestViewport.current = next;
               // Present moves the view for itself; the page keeps where the person left it.
               if (presentingRef.current) return;
-              change((current) => withActiveViewport(current, { x: next.x, y: next.y, zoom: next.zoom }), {
-                record: false,
-              });
+              // A pan or zoom is the chat's view, never a change to the shared canvas.
+              view.moved({ x: next.x, y: next.y, zoom: next.zoom });
             }}
             onPaneClick={(event) => {
               if (presentation) return;
@@ -1241,6 +1321,7 @@ function LoadedDesignCanvas({
             toolbar={
               <DesignToolbar
                 doc={doc}
+                pageId={pageId}
                 tool={tool}
                 onToolChange={changeTool}
                 commenting={comments.active}
@@ -1263,6 +1344,7 @@ function LoadedDesignCanvas({
         <DesignSidePanel
           readSource={readSource}
           doc={doc}
+          pageId={pageId}
           selection={selection}
           tab={panel.tab}
           onTab={(tab) => setPanel((current) => ({ ...current, tab }))}

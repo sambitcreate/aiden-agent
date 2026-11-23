@@ -5,6 +5,7 @@ import path from "node:path";
 import { persistedChatWorkspaceId } from "../../../renderer/shared/chat-workspace.js";
 import { app, ipcMain, logger } from "../../platform.js";
 import { chatStore } from "../chat-store.js";
+import { configStore } from "../config-store.js";
 import { DesignCanvasSnapshots } from "./canvas-snapshots.js";
 import { DesignModeConsent } from "./design-mode-tool.js";
 import { DesignSystemOffers } from "./design-system-offers.js";
@@ -26,6 +27,7 @@ export const designCanvasStore = new DesignChatCanvases({
     const meta = await chatStore.getMeta(chatId);
     return meta ? persistedChatWorkspaceId(meta.workspaceId) : null;
   },
+  workspaceExists: async (workspaceId) => (await configStore.getWorkspace(workspaceId)) !== undefined,
 });
 
 /**

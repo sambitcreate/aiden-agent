@@ -274,6 +274,26 @@ const v2Document = {
   comments: [],
 };
 
+test("once a workspace's record is gone, its canvas is refused and no file is written back", async (t) => {
+  const root = await tempRoot(t);
+  const store = new DesignCanvasStore({ root: () => root });
+  const records = new Set(["ws-1"]);
+  const chats = new DesignChatCanvases({
+    store,
+    workspaceIdOf: async () => "ws-1",
+    workspaceExists: async (workspaceId) => records.has(workspaceId),
+  });
+  await chats.save("chat-a", withNote(emptyDesignCanvas(), "a"), 0);
+  // The workspace is removed: its record goes, then its canvas file.
+  records.delete("ws-1");
+  await store.delete("ws-1");
+  const gone = /This workspace is no longer available/u;
+  await assert.rejects(chats.save("chat-a", withNote(emptyDesignCanvas(), "late"), 1), gone);
+  await assert.rejects(chats.update("chat-a", (doc) => withNote(doc, "late"), { workspaceId: "ws-1" }), gone);
+  await assert.rejects(chats.get("chat-a"), gone);
+  assert.deepEqual(await fs.readdir(root), [DESIGN_CANVAS_LAYOUT_MARKER], "nothing brings ws-1.json back");
+});
+
 test("two chats of one workspace read and write the same document", async (t) => {
   const root = await tempRoot(t);
   const { chats } = chatCanvases(root, { "chat-a": "ws-1", "chat-b": "ws-1" });

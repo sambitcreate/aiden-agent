@@ -383,7 +383,7 @@ Round 3 (a review of the round-2 changes against the built code) found that most
     - panning never reaches `change()`.
 - In `design-canvas.tsx`, every `doc.activePageId` and `activeDesignPage(doc).viewport` becomes `view.pageId` / `view.viewport`. The page picker calls `view.showPage`. A focus request with `pageId` calls `view.showPage(pageId)` before fitting.
 
-- [ ] **Step 1: Write failing tests**
+- [x] **Step 1: Write failing tests**
   - `canvas-view-store.test.ts`:
     - `round-trips a view per workspace and chat`;
     - `reads junk and a throwing localStorage as an empty view`.

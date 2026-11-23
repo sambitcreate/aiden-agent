@@ -45,11 +45,14 @@ export function useCanvasFocusRequests(enabled: boolean): void {
   }, [enabled]);
 }
 
-/** The chat's newest focus request if it is at most `maxAgeMs` old, once. */
-export function takeCanvasFocus(chatId: string, maxAgeMs: number): CanvasFocusRequest | null {
+/**
+ * The chat's newest focus request, once, however old: the canvas still
+ * applies an old request's page change and only skips fitting its frames.
+ */
+export function takeCanvasFocus(chatId: string): CanvasFocusRequest | null {
   const request = latest.get(chatId);
   latest.delete(chatId);
-  return request && Date.now() - request.at <= maxAgeMs ? request : null;
+  return request ?? null;
 }
 
 /** Forgets a request the canvas already acted on. */

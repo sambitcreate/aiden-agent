@@ -29,6 +29,7 @@ function Harness({ initial, changes }: { initial: DesignCanvas; changes: string[
   return (
     <DesignSidePanel
       doc={doc}
+      pageId="page-1"
       selection={new Set()}
       tab="layers"
       tweaks={noTweaks}

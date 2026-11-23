@@ -56,7 +56,12 @@ test("switching chats A to B to A in one window restores A's kept page", async (
   views.unmount("chat-a");
   await views.report("chat-b", "ws-1", view("page-1"), 0);
   views.unmount("chat-b");
-  assert.deepEqual(await views.kept("chat-a", "ws-1"), { pageId: "pricing", viewport: { x: 120, y: 0, zoom: 1 }, focusId: 0 });
+  assert.deepEqual(await views.kept("chat-a", "ws-1"), {
+    pageId: "pricing",
+    viewport: { x: 120, y: 0, zoom: 1 },
+    focusId: 0,
+    viewports: { pricing: { x: 120, y: 0, zoom: 1 } },
+  });
 });
 
 test("Aiden showing a page counts at once and takes that page's own viewport", async () => {
@@ -84,7 +89,12 @@ test("a report echoing an older focusId is ignored, and one that applied the lat
   // Once the renderer applied it, its reports are the view again.
   await views.report("chat-a", "ws-1", view("p2", 80), focusId);
   assert.deepEqual(await views.get("chat-a", "ws-1"), view("p2", 80));
-  assert.deepEqual(await views.kept("chat-a", "ws-1"), { pageId: "p2", viewport: { x: 80, y: 0, zoom: 1 }, focusId });
+  assert.deepEqual(await views.kept("chat-a", "ws-1"), {
+    pageId: "p2",
+    viewport: { x: 80, y: 0, zoom: 1 },
+    focusId,
+    viewports: { "page-1": { x: 0, y: 0, zoom: 1 }, p2: { x: 80, y: 0, zoom: 1 } },
+  });
 });
 
 test("when the window goes, every view is unmounted and every page kept", async () => {
@@ -111,7 +121,13 @@ test("views survive a restart: a new instance on the same root reads the page, v
 
   const after = new DesignCanvasViews({ root: () => root });
   assert.equal(after.mounted("ws-1"), 0);
-  assert.deepEqual(await after.kept("chat-a", "ws-1"), { pageId: "p1", viewport: { x: 15, y: 0, zoom: 1 }, focusId: 1 });
+  // Every page's viewport comes back, so switching pages in the canvas opens each where it was left.
+  assert.deepEqual(await after.kept("chat-a", "ws-1"), {
+    pageId: "p1",
+    viewport: { x: 15, y: 0, zoom: 1 },
+    focusId: 1,
+    viewports: { p1: { x: 15, y: 0, zoom: 1 }, p2: { x: 25, y: 0, zoom: 1 } },
+  });
   await after.showPage("chat-a", "ws-1", "p2");
   assert.deepEqual((await after.get("chat-a", "ws-1"))?.viewport, { x: 25, y: 0, zoom: 1 });
 });
@@ -153,9 +169,10 @@ test("a missing or corrupt views file reads as empty, and junk entries are dropp
     pageId: "p1",
     viewport: { x: 5, y: 6, zoom: DESIGN_CANVAS_LIMITS.maxZoom },
     focusId: 3,
+    viewports: { p1: { x: 5, y: 6, zoom: DESIGN_CANVAS_LIMITS.maxZoom } },
   });
   assert.equal(await views.get("chat-b", "ws-2"), undefined);
-  assert.deepEqual(await views.kept("chat-c", "ws-2"), { pageId: "p1", viewport: { x: 0, y: 0, zoom: 1 }, focusId: 0 });
+  assert.deepEqual(await views.kept("chat-c", "ws-2"), { pageId: "p1", viewport: { x: 0, y: 0, zoom: 1 }, focusId: 0, viewports: {} });
 });
 
 test("a chat keeps at most one viewport per page limit, dropping the longest unvisited", async () => {

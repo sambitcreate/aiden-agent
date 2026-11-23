@@ -1,10 +1,12 @@
-// The design canvas controller: loads the chat's canvas, shows edits at once,
-// saves them 800 ms after the last one with the revision they started from,
-// and keeps undo history. Follows Create Images' autosave
+// The design canvas controller: loads the workspace canvas through one of its
+// chats, shows edits at once, saves them 800 ms after the last one with the
+// revision they started from, and keeps undo history. Where the chat looks at
+// the canvas (its page, pans and zooms) is not in the document: that is
+// `useDesignView`'s, so none of it is saved here or undone. Follows Create Images' autosave
 // (renderer/images/workflow-session-core.ts) for the debounce and revisions.
 //
 // Edits are kept as the functions that made them until a save lands, so a
-// revision conflict (the same chat edited in another window, or by Aiden) can
+// revision conflict (another chat of the workspace, or Aiden) can
 // take the stored canvas and replay this window's edits on top: neither
 // side's change is lost. That replay happens once; a second conflict in a row
 // keeps the edits on top of the newest stored canvas and reports an error
@@ -17,9 +19,10 @@
 //
 // Undo and redo are saved as the frames they change, not as whole canvases.
 // Taking in another writer's canvas keeps the history: Aiden's canvas changes
-// from one reply become one undo step (the person's own edit in between
-// starts a new one), and any other writer's change is carried into every
-// kept step, so undo never takes back what was changed elsewhere. A fetch or
+// from one of this chat's replies become one undo step (the person's own edit
+// in between starts a new one), and any other writer's change, another chat's
+// reply included, is carried into every kept step, so undo never takes back
+// what was changed elsewhere. A fetch or
 // a save's reply can bring a reply's revision before its announcement does;
 // the history is then built again when the announcement arrives, unless the
 // person has made a step of their own since. A change the person made
@@ -31,7 +34,7 @@
 import * as React from "react";
 import { designCanvasApi } from "../lib/ipc";
 import { registerLifecycleFlush, setRendererLifecycleGuard } from "../lib/lifecycle-guard";
-import { shownPagePaths, type DesignCanvas, type DesignViewport } from "../shared/design-canvas/schema";
+import { shownPagePaths, type DesignCanvas } from "../shared/design-canvas/schema";
 import {
   carryUnrecorded,
   changesBetween,
@@ -68,29 +71,6 @@ interface CanvasSync {
 
 const EMPTY_HISTORY: CanvasHistory = { past: [], future: [] };
 
-/**
- * The view each page moved to, when `after` differs from `before` only in
- * where its pages are looked at (a pan or zoom); otherwise null.
- */
-function viewsMoved(before: DesignCanvas, after: DesignCanvas): Map<string, DesignViewport> | null {
-  const keys = new Set([...Object.keys(before), ...Object.keys(after)] as (keyof DesignCanvas)[]);
-  for (const key of keys) {
-    if (key !== "pages" && before[key] !== after[key]) return null;
-  }
-  if (before.pages.length !== after.pages.length) return null;
-  const views = new Map<string, DesignViewport>();
-  for (const [index, page] of before.pages.entries()) {
-    const other = after.pages[index]!;
-    if (page.id !== other.id || page.name !== other.name) return null;
-    if (page.viewport !== other.viewport) views.set(page.id, other.viewport);
-  }
-  return views;
-}
-
-function withViews(doc: DesignCanvas, views: ReadonlyMap<string, DesignViewport>): DesignCanvas {
-  return { ...doc, pages: doc.pages.map((page) => (views.has(page.id) ? { ...page, viewport: views.get(page.id)! } : page)) };
-}
-
 /** Each canvas session's unsaved work; the app's close guard sees them as one "design" source. */
 const guardStates = new Map<symbol, { dirty: boolean; saving: boolean }>();
 function publishDesignGuard() {
@@ -101,7 +81,12 @@ function publishDesignGuard() {
   );
 }
 
-function createCanvasSync(chatId: string, publish: (state: SyncState) => void): CanvasSync {
+function createCanvasSync(
+  workspaceId: string,
+  chatId: string,
+  publish: (state: SyncState) => void,
+  onMoved: (workspaceId: string) => void,
+): CanvasSync {
   /** The last canvas the store confirmed: the base every save is made from. */
   let server: DesignCanvas | null = null;
   let local: DesignCanvas | null = null;
@@ -127,6 +112,8 @@ function createCanvasSync(chatId: string, publish: (state: SyncState) => void): 
     }
   };
   let failed = false;
+  /** The workspace a `moved` answer named, told once the save has settled. */
+  let movedTo: string | null = null;
   /** The canvas closed; the session lives on only while it holds edits it could not save. */
   let closed = false;
   let disposed = false;
@@ -167,12 +154,8 @@ function createCanvasSync(chatId: string, publish: (state: SyncState) => void): 
     return unknown;
   };
   type TakenIn = { before: DesignCanvas; from: DesignCanvas; to: DesignCanvas };
-  /**
-   * What changed the history without a step of the person's: a stored canvas
-   * taken in, an unrecorded edit, or the views pans moved to (one entry for a
-   * run of pans, since only each page's last view counts).
-   */
-  type HistoryChange = { takenIn: TakenIn } | { unrecorded: Mutation } | { views: Map<string, DesignViewport> };
+  /** What changed the history without a step of the person's: a stored canvas taken in, or an unrecorded edit. */
+  type HistoryChange = { takenIn: TakenIn } | { unrecorded: Mutation };
   /**
    * The history before a take-in that may still turn out to be an Aiden reply's,
    * and every change to it since, so the history can be built again once the
@@ -182,7 +165,6 @@ function createCanvasSync(chatId: string, publish: (state: SyncState) => void): 
   const historyAfter = (base: CanvasHistory, changes: readonly HistoryChange[]) =>
     changes.reduce((built, change) => {
       if ("unrecorded" in change) return carryUnrecorded(built, change.unrecorded);
-      if ("views" in change) return carryUnrecorded(built, (doc) => withViews(doc, change.views));
       const { from, to } = change.takenIn;
       return takeIn(built, { ...change.takenIn, aidenTurn: aidenTurnBetween(from.revision, to.revision) });
     }, base);
@@ -268,7 +250,10 @@ function createCanvasSync(chatId: string, publish: (state: SyncState) => void): 
     let retryNow = false;
     const attempt = (async () => {
       try {
-        const result = await designCanvasApi.saveDesignCanvas(chatId, doc, base, ...(undone.length > 0 ? [{ undone }] : []));
+        const result = await designCanvasApi.saveDesignCanvas(chatId, doc, base, {
+          workspaceId,
+          ...(undone.length > 0 ? { undone } : {}),
+        });
         if (result.ok) {
           for (const page of undone) undonePages.delete(page);
           server = { ...doc, revision: result.revision };
@@ -282,6 +267,12 @@ function createCanvasSync(chatId: string, publish: (state: SyncState) => void): 
           // report it, and leave the next try to the next edit instead of looping.
           if (replayed) failed = true;
           else retryNow = true;
+        } else if (result.reason === "moved") {
+          // The chat left this workspace: its edits belong to a canvas it no
+          // longer shows, so they are dropped and the canvas of the workspace
+          // it is in now opens instead.
+          unsent = [];
+          if (!disposed && !closed) movedTo = result.workspaceId;
         } else {
           // The store refused the canvas itself; retrying the same edits cannot help.
           failed = true;
@@ -296,6 +287,11 @@ function createCanvasSync(chatId: string, publish: (state: SyncState) => void): 
     await attempt;
     inFlight = null;
     emit();
+    if (movedTo !== null) {
+      const next = movedTo;
+      movedTo = null;
+      if (!disposed && !closed) onMoved(next);
+    }
     if (retryNow) return save(true);
     if (closed && unsent.length === 0) finish();
     // After a failure the edits wait for the next one, so an error the app cannot get past does not loop.
@@ -315,13 +311,7 @@ function createCanvasSync(chatId: string, publish: (state: SyncState) => void): 
       unsettled = null;
     } else {
       history = carryUnrecorded(history, mutate);
-      if (unsettled) {
-        const views = viewsMoved(local, next);
-        const last = unsettled.changes[unsettled.changes.length - 1];
-        // A run of pans is one change, so a long pan cannot use up the changes a late announcement rebuilds from.
-        if (views && last && "views" in last) for (const [page, view] of views) last.views.set(page, view);
-        else noteChange(views ? { views } : { unrecorded: mutate });
-      }
+      if (unsettled) noteChange({ unrecorded: mutate });
     }
     local = next;
     unsent.push(mutate);
@@ -364,12 +354,15 @@ function createCanvasSync(chatId: string, publish: (state: SyncState) => void): 
   }
 
   const unsubscribe = designCanvasApi.onDesignCanvasUpdated((update) => {
-    if (update.chatId !== chatId) return;
+    if (update.workspaceId !== workspaceId) return;
     announced = Math.max(announced, update.revision);
+    // Only this chat's replies and steps are undo steps here; another chat's
+    // change is carried into every step instead.
+    const own = update.chatId === chatId;
     const step =
-      typeof update.aidenTurn === "string"
+      own && typeof update.aidenTurn === "string"
         ? update.aidenTurn
-        : typeof update.step === "string"
+        : own && typeof update.step === "string"
           ? `person:${update.step}`
           : null;
     aidenRevisions.set(update.revision, step);
@@ -445,7 +438,15 @@ function createCanvasSync(chatId: string, publish: (state: SyncState) => void): 
   };
 }
 
-export function useDesignCanvas(chatId: string): {
+/**
+ * The canvas of `workspaceId`, through `chatId`. `onMoved` hears the workspace
+ * the chat is in now when a save finds it has left this one.
+ */
+export function useDesignCanvas(
+  workspaceId: string,
+  chatId: string,
+  options: { onMoved?(workspaceId: string): void } = {},
+): {
   doc: DesignCanvas | undefined;
   status: DesignCanvasStatus;
   change(mutate: Mutation, opts?: { record?: boolean }): void;
@@ -466,20 +467,29 @@ export function useDesignCanvas(chatId: string): {
     canRedo: false,
   });
   const sync = React.useRef<CanvasSync | null>(null);
+  const onMoved = React.useRef(options.onMoved);
+  onMoved.current = options.onMoved;
 
   React.useEffect(() => {
     let mounted = true;
     setState({ doc: undefined, status: "loading", canUndo: false, canRedo: false });
-    const current = createCanvasSync(chatId, (next) => {
-      if (mounted) setState(next);
-    });
+    const current = createCanvasSync(
+      workspaceId,
+      chatId,
+      (next) => {
+        if (mounted) setState(next);
+      },
+      (next) => {
+        if (mounted) onMoved.current?.(next);
+      },
+    );
     sync.current = current;
     return () => {
       mounted = false;
       if (sync.current === current) sync.current = null;
       current.dispose();
     };
-  }, [chatId]);
+  }, [workspaceId, chatId]);
 
   const change = React.useCallback((mutate: Mutation, opts?: { record?: boolean }) => {
     sync.current?.change(mutate, opts?.record !== false);

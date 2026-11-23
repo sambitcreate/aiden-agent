@@ -30,7 +30,17 @@ import { DESIGN_FRESH_VIEWPORT, parseDesignViewport, type DesignChatView } from 
 import { assertDesignCanvasWorkspaceId } from "./store.js";
 
 /** What a mounting canvas reads back: the page, where it looked there, and the latest Aiden page change. */
-export type DesignKeptView = { pageId: string; viewport: DesignViewport; focusId: number };
+/**
+ * What a mounting canvas reads: the chat's page, its viewport there, the newest
+ * `focusId`, and where the chat last looked at every page it has looked at, so
+ * switching pages in the canvas opens each where it was left.
+ */
+export type DesignKeptView = {
+  pageId: string;
+  viewport: DesignViewport;
+  focusId: number;
+  viewports: Record<string, DesignViewport>;
+};
 
 type Entry = {
   pageId: string;
@@ -150,6 +160,7 @@ export class DesignCanvasViews {
       pageId: entry.pageId,
       viewport: { ...(entry.viewports.get(entry.pageId) ?? DESIGN_FRESH_VIEWPORT) },
       focusId: entry.focusId,
+      viewports: Object.fromEntries([...entry.viewports].map(([pageId, viewport]) => [pageId, { ...viewport }])),
     };
   }
 

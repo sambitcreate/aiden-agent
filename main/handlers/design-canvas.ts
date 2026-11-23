@@ -354,7 +354,7 @@ export function registerDesignCanvasHandlers<Event>(deps: {
     // since left: nothing is written, and the renderer drops those edits and
     // opens the canvas of the workspace the chat is in now.
     if (expected !== undefined && expected !== workspaceId) {
-      return { ok: false, reason: "moved" } satisfies DesignCanvasSaveResult;
+      return { ok: false, reason: "moved", workspaceId } satisfies DesignCanvasSaveResult;
     }
     const { result } = await deps.store.save(chat.id, doc as DesignCanvas, baseRevision, { undone, workspaceId });
     if (result.ok) deps.broadcast({ workspaceId, chatId: chat.id, revision: result.revision });

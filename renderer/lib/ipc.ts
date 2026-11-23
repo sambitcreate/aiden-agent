@@ -359,7 +359,7 @@ import type {
   WorkspaceArtifactSourceResultV1,
   WorkspaceArtifactView,
 } from "../shared/workspace-artifacts";
-import type { DesignCanvas } from "../shared/design-canvas/schema";
+import type { DesignCanvas, DesignViewport } from "../shared/design-canvas/schema";
 import type { DesignChatView } from "../shared/design-canvas/view";
 import { invoke, onNotification } from "./ipc-bridge";
 import {
@@ -2730,7 +2730,7 @@ export const ttsApi = {
 export type DesignCanvasSaveResult =
   | { ok: true; revision: number }
   | { ok: false; reason: "conflict"; doc: DesignCanvas }
-  | { ok: false; reason: "moved" }
+  | { ok: false; reason: "moved"; workspaceId: string }
   | { ok: false; reason: "invalid"; issues: string[] };
 
 /** `designCanvas:updated`: a workspace's canvas changed, through `chatId`'s action. */
@@ -2788,15 +2788,22 @@ export const designCanvasApi = {
       ? invoke<DesignCanvasSaveResult>("designCanvas:save", chatId, doc, baseRevision)
       : invoke<DesignCanvasSaveResult>("designCanvas:save", chatId, doc, baseRevision, options),
   /**
-   * Tells main what this chat's canvas shows, so Aiden's tools read the same
-   * page; `null` when the canvas unmounts. `focusId` is the last Aiden page
-   * change the canvas applied.
+   * Tells main what this chat's canvas of `workspaceId` shows, so Aiden's tools
+   * read the same page; `{ mounted: false }` when the canvas unmounts.
+   * `focusId` is the newest Aiden page change the canvas has seen.
    */
-  reportDesignCanvasView: (chatId: string, view: DesignChatView | null, focusId?: number) =>
-    invoke<void>("designCanvas:view", chatId, view, ...(focusId === undefined ? [] : [focusId])),
-  /** The view main kept for the chat, if any: where Aiden or the person last left it. */
+  reportDesignCanvasView: (
+    chatId: string,
+    report: { workspaceId: string; view: DesignChatView; focusId: number } | { mounted: false },
+  ) => invoke<void>("designCanvas:view", chatId, report),
+  /** The view main keeps for the chat (its page, that page's viewport and newest `focusId`), if any. */
   getDesignCanvasView: (chatId: string) =>
-    invoke<{ view: DesignChatView; focusId: number } | null>("designCanvas:view:get", chatId),
+    invoke<{
+      pageId: string;
+      viewport: DesignViewport;
+      focusId: number;
+      viewports: Record<string, DesignViewport>;
+    } | null>("designCanvas:view:get", chatId),
   /**
    * Send to canvas: puts one of the chat's HTML visuals on the page on screen,
    * placed for a canvas of `viewSize` when known. A visual already there on

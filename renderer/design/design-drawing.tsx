@@ -55,8 +55,8 @@ export function useDesignDrawing({
   onDone(): void;
   flow: React.RefObject<ReactFlowInstance<DesignNode> | null>;
   wrapper: React.RefObject<HTMLDivElement | null>;
-  /** Places an item at its own box; returns its id, or null when the canvas is full. */
-  create(input: PlaceFrameInput, options?: { edit?: boolean }): string | null;
+  /** Places an item at its own box on the page on screen; returns its id, or null when the canvas is full. */
+  create(input: Omit<PlaceFrameInput, "pageId">, options?: { edit?: boolean }): string | null;
   /** The frame on the page on screen that an arrow end at `point` joins, if any. */
   attachAt(point: DesignPoint, except?: string): string | undefined;
 }) {

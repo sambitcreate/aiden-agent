@@ -2,8 +2,9 @@
 // and how big its canvas is on screen.
 //
 // The canvas document is shared by every chat of a workspace, so none of
-// this is in it. The renderer keeps each chat's view in `localStorage` and
-// reports it to main (`designCanvas:view`), where Aiden's tools read it.
+// this is in it. Main keeps each chat's view (`DesignCanvasViews`); the
+// renderer reads it on mount and reports changes (`designCanvas:view`), and
+// Aiden's tools read it there.
 // Panning, zooming and switching pages are view changes: they never save the
 // document and are never undo steps. Pure, like `schema.ts`.
 

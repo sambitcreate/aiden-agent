@@ -48,12 +48,13 @@ export const DESIGN_CANVAS_LAYOUT_MARKER = ".layout-v3";
 
 /**
  * A save's answer. `moved` means the canvas being saved belongs to a workspace
- * the chat has left: nothing was written, and the edits are not to be retried.
+ * the chat has left: nothing was written, the edits are not to be retried, and
+ * `workspaceId` names the workspace the chat is in now.
  */
 export type DesignCanvasSaveResult =
   | { ok: true; revision: number }
   | { ok: false; reason: "conflict"; doc: DesignCanvas }
-  | { ok: false; reason: "moved" }
+  | { ok: false; reason: "moved"; workspaceId: string }
   | { ok: false; reason: "invalid"; issues: string[] };
 
 /** A canvas holds at most 4 000 frames and 2 000 comments; anything past 16 MiB is not ours. */
@@ -292,13 +293,20 @@ export type DesignChatCanvasSave = { result: DesignCanvasSaveResult; workspaceId
 export class DesignChatCanvases {
   private readonly store: Pick<DesignCanvasStore, "get" | "save" | "update">;
   private readonly resolveWorkspace: (chatId: string) => Promise<string | null>;
+  private readonly workspaceExists: ((workspaceId: string) => Promise<boolean>) | undefined;
 
   constructor(options: {
     store: Pick<DesignCanvasStore, "get" | "save" | "update">;
     workspaceIdOf(chatId: string): Promise<string | null>;
+    /**
+     * Whether the workspace still has its record. A removed workspace's canvas
+     * is refused, so nothing writes its file back after the removal deleted it.
+     */
+    workspaceExists?(workspaceId: string): Promise<boolean>;
   }) {
     this.store = options.store;
     this.resolveWorkspace = options.workspaceIdOf;
+    this.workspaceExists = options.workspaceExists;
   }
 
   /** The chat's workspace id, or null when the chat is gone. */
@@ -335,12 +343,18 @@ export class DesignChatCanvases {
 
   private async workspaceFor(chatId: string, given: string | undefined): Promise<string> {
     assertDesignCanvasChatId(chatId);
+    let workspaceId: string;
     if (given !== undefined) {
       assertDesignCanvasWorkspaceId(given);
-      return given;
+      workspaceId = given;
+    } else {
+      const resolved = await this.resolveWorkspace(chatId);
+      if (resolved === null) throw new Error("This chat is no longer available.");
+      workspaceId = resolved;
     }
-    const workspaceId = await this.resolveWorkspace(chatId);
-    if (workspaceId === null) throw new Error("This chat is no longer available.");
+    if (this.workspaceExists && !(await this.workspaceExists(workspaceId))) {
+      throw new Error("This workspace is no longer available.");
+    }
     return workspaceId;
   }
 }
