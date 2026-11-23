@@ -95,6 +95,8 @@ export interface ForegroundSubagentPersistenceV2Input {
   runtime: ResolvedModelRuntime;
   thinkingLevel: ThinkingLevel;
   ownerDocumentId: string;
+  /** Optional dynamic owner resolver for desktop stream handoff across windows. */
+  getOwnerDocumentId?: () => string;
   permission: WorkspacePermission;
   /** Active turn ceiling; stored workspace permission alone cannot authorize a child. */
   generationPermission?: WorkspacePermission | "read-only";
@@ -310,7 +312,7 @@ export function createForegroundSubagentPersistenceV2(
       workspaceId: parentAuthority?.workspaceId ?? input.workspace.id,
       workspaceRevision: parentAuthority?.workspaceRevision ?? workspaceBinding,
       ownerDocumentId:
-        parentAuthority?.ownerDocumentId ?? input.ownerDocumentId,
+        parentAuthority?.ownerDocumentId ?? input.getOwnerDocumentId?.() ?? input.ownerDocumentId,
       // Model selection binds only runtime identity and effort. Capabilities
       // above were resolved from the parent grant and are never model-dependent.
       providerFingerprint: childModel
@@ -770,7 +772,7 @@ export function createForegroundSubagentPersistenceV2(
           if (prepared?.controlRegistered) {
             input.control?.unregisterPrepared(
               value.identity.runId,
-              input.ownerDocumentId,
+              input.getOwnerDocumentId?.() ?? input.ownerDocumentId,
             );
           }
           preparedRuns.delete(value.identity.runId);
@@ -782,7 +784,7 @@ export function createForegroundSubagentPersistenceV2(
           approvals.cancelRun(value.identity.runId);
           return input.control?.stateForRun(
             value.identity.runId,
-            input.ownerDocumentId,
+            input.getOwnerDocumentId?.() ?? input.ownerDocumentId,
           ) === "stopped"
             ? ("stopped" as const)
             : ("accepted" as const);
@@ -810,7 +812,7 @@ export function createForegroundSubagentPersistenceV2(
       const canonical = canonicalSnapshot(snapshot);
       input.control.register({
         snapshot: canonical,
-        ownerDocumentId: input.ownerDocumentId,
+        ownerDocumentId: input.getOwnerDocumentId?.() ?? input.ownerDocumentId,
         revokeApprovals: () => {
           revokeAuthority(snapshot.runId);
           approvals.cancelRun(snapshot.runId);

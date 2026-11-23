@@ -241,7 +241,19 @@ export const SETTINGS_DESTINATIONS: ReadonlyArray<{
   {
     id: "appearance",
     title: "Appearance",
-    keywords: ["theme", "light", "dark", "mode", "system", "chat width", "layout", "wide", "narrow"],
+    keywords: [
+      "theme",
+      "light",
+      "dark",
+      "mode",
+      "system",
+      "chat width",
+      "layout",
+      "wide",
+      "narrow",
+      "quick chat",
+      "floating",
+    ],
   },
   {
     id: "storage",

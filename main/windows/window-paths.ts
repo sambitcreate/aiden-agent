@@ -12,6 +12,10 @@ export function getPillPreloadPath(): string {
   return path.join(buildRoot, "preload", "preload-pill.cjs");
 }
 
+export function getQuickChatPreloadPath(): string {
+  return path.join(buildRoot, "preload", "preload-quick-chat.cjs");
+}
+
 export function getWindowUrl(htmlFileName: string): string {
   const devServer = process.env.AIDEN_RENDERER_URL;
   if (devServer) return `${devServer.replace(/\/$/, "")}/${htmlFileName}`;

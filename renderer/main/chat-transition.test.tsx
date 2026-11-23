@@ -17,6 +17,8 @@ import {
   queryKeys,
   upsertCreatedWorkspaceInCache,
 } from "../lib/queries.js";
+import { isDetachedLifecycleChatDraining } from "../lib/chat-terminal-sync.js";
+import { notifyPendingChatHandoff } from "../lib/chat-handoff-bridge";
 import type { Chat, Workspace } from "../lib/types.js";
 import { WorkspaceProvider } from "../lib/workspace-context";
 import { WorkspaceTerminalProvider } from "../components/terminal-drawer";
@@ -585,7 +587,7 @@ test("terminal chat snapshots reach cache before visual stream handoff awaits", 
   const pane = source("./chat-pane.tsx");
   const generation = between(
     pane,
-    "const runGeneration = React.useCallback(",
+    "const createStreamCallbacks = React.useCallback(",
     "const handleSend = React.useCallback(",
   );
   const done = between(generation, "onDone: async", "onError:");
@@ -1144,6 +1146,163 @@ test("a send waiting on its folder check sends nothing once the person moves to 
     assert.deepEqual(appended, [], "chat A's send must not go out from chat B's pane");
     assert.equal(screen.getByRole("heading", { level: 1 }).textContent, "Chat chat-b");
     assert.equal((await resume()).disabled, false);
+  } finally {
+    cleanup();
+    queryClient.clear();
+  }
+});
+
+test("ChatPane claims a pending desktop handoff, replays gap deltas, renders approval, and settles on done", async () => {
+  let resolveClaim!: (value: unknown) => void;
+  const claimPending = new Promise((resolve) => {
+    resolveClaim = resolve;
+  });
+  notifyPendingChatHandoff("chat-handoff");
+  const { queryClient } = await mountRoutedChatPane("chat-handoff", {
+    "chat:claimHandoff": () => claimPending,
+  });
+  try {
+    // Emit a delta while chat:claimHandoff is still in flight; the pre-subscribe buffer must keep it.
+    await act(async () => {
+      emitBotTestNotification("chat:delta", {
+        streamId: "stream-handoff-1",
+        delta: " and gap text",
+      });
+    });
+    await act(async () => {
+      resolveClaim({
+        kind: "chat",
+        chatId: "chat-handoff",
+        draftText: "Follow-up draft from floating",
+        liveStream: {
+          streamId: "stream-handoff-1",
+          chatId: "chat-handoff",
+          workspaceId: "default",
+          content: "Streaming from floating",
+          reasoning: "",
+          timeline: null,
+          artifacts: [],
+          uiVisuals: [],
+          subagents: [],
+          todoSnapshot: null,
+          contextPressure: null,
+          pendingApprovals: [
+            {
+              streamId: "stream-handoff-1",
+              approvalId: "approval-handoff-1",
+              toolCallId: "tc-1",
+              toolName: "run_command",
+              summary: "Run npm test",
+              scopes: ["once", "chat"],
+            },
+          ],
+          pendingQuestions: [],
+        },
+      });
+      await new Promise((resolve) => setTimeout(resolve, 40));
+    });
+    await waitFor(() => {
+      const bodyText = document.body.textContent ?? "";
+      assert.ok(bodyText.includes("Streaming from floating and gap text"), `expected streaming text, got: ${bodyText}`);
+      assert.ok(bodyText.includes("Run npm test"), "expected pending approval card");
+    });
+    const textbox = screen.getByRole("textbox") as HTMLTextAreaElement;
+    assert.equal(textbox.value, "Follow-up draft from floating");
+
+    // Settle the handed-off stream cleanly.
+    const doneChat: Chat = {
+      id: "chat-handoff",
+      workspaceId: "default",
+      title: "Chat chat-handoff",
+      messages: [
+        { id: "m-1", role: "user", content: "Hello from chat chat-handoff", createdAt: 1 },
+        { id: "m-2", role: "assistant", content: "Streaming from floating and gap text!", createdAt: 2 },
+      ],
+      createdAt: 1,
+      updatedAt: 2,
+    };
+    await act(async () => {
+      emitBotTestNotification("chat:done", {
+        streamId: "stream-handoff-1",
+        content: "Streaming from floating and gap text!",
+        chat: doneChat,
+      });
+      await new Promise((resolve) => setTimeout(resolve, 40));
+    });
+    await waitFor(() => {
+      assert.ok((document.body.textContent ?? "").includes("Streaming from floating and gap text!"));
+    });
+  } finally {
+    cleanup();
+    queryClient.clear();
+  }
+});
+
+test("ChatPane buffered chat:done during claimHandoff does not leave a stale handle on route departure", async () => {
+  let resolveClaim!: (value: unknown) => void;
+  const claimPending = new Promise((resolve) => {
+    resolveClaim = resolve;
+  });
+  const cancels: unknown[][] = [];
+  notifyPendingChatHandoff("chat-handoff-done");
+  const { router, queryClient } = await mountRoutedChatPane("chat-handoff-done", {
+    "chat:claimHandoff": () => claimPending,
+    "chat:cancel": (...args: unknown[]) => {
+      cancels.push(args);
+      return true;
+    },
+  });
+  try {
+    const doneChat: Chat = {
+      id: "chat-handoff-done",
+      workspaceId: "default",
+      title: "Chat chat-handoff-done",
+      messages: [
+        { id: "m-1", role: "user", content: "Hello", createdAt: 1 },
+        { id: "m-2", role: "assistant", content: "Finished during claim gap!", createdAt: 2 },
+      ],
+      createdAt: 1,
+      updatedAt: 2,
+    };
+    await act(async () => {
+      emitBotTestNotification("chat:done", {
+        streamId: "stream-handoff-done",
+        content: "Finished during claim gap!",
+        chat: doneChat,
+      });
+    });
+    await act(async () => {
+      resolveClaim({
+        kind: "chat",
+        chatId: "chat-handoff-done",
+        liveStream: {
+          streamId: "stream-handoff-done",
+          chatId: "chat-handoff-done",
+          workspaceId: "default",
+          content: "Finished",
+          reasoning: "",
+          timeline: null,
+          artifacts: [],
+          uiVisuals: [],
+          subagents: [],
+          todoSnapshot: null,
+          contextPressure: null,
+          pendingApprovals: [],
+          pendingQuestions: [],
+        },
+      });
+      await new Promise((resolve) => setTimeout(resolve, 40));
+    });
+    await waitFor(() => {
+      assert.ok((document.body.textContent ?? "").includes("Finished during claim gap!"));
+    });
+    // Navigate away: the already-settled stream must NOT be recorded as a detached lifecycle stream.
+    await act(async () => {
+      await router.navigate({ to: "/chat/$chatId", params: { chatId: "chat-other" } });
+      await new Promise((resolve) => setTimeout(resolve, 20));
+    });
+    assert.equal(isDetachedLifecycleChatDraining("chat-handoff-done", "default"), false);
+    assert.deepEqual(cancels, []);
   } finally {
     cleanup();
     queryClient.clear();

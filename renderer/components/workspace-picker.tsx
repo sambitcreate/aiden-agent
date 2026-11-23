@@ -21,7 +21,7 @@ import { useAllRegularChats } from "../lib/queries";
 import { workspacesApi } from "../lib/ipc";
 import { newChatWorkspaceChoices } from "../lib/new-chat-workspaces";
 import { formatRelativeTime } from "../lib/relative-time";
-import { useShortcutLabel } from "../lib/command-system";
+import { useOptionalShortcutLabel } from "../lib/command-system";
 import {
   adoptWorkspace,
   useOpenWorkspacePathRow,
@@ -277,7 +277,7 @@ function WorkspaceListView({
   onNoWorkspace?: () => void;
 }) {
   const pathPreferences = useWorkspacePathPreferences();
-  const openFolderShortcut = useShortcutLabel("workspace.openFolder");
+  const openFolderShortcut = useOptionalShortcutLabel("workspace.openFolder");
   const chats = useAllRegularChats(workspaces.length > 0);
   const [query, setQuery] = React.useState("");
   const [expanded, setExpanded] = React.useState(false);

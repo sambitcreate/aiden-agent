@@ -464,6 +464,7 @@ export function createChatStore(
           meta.lastAssistantAt >= 0)) &&
       (meta.lastAssistantFailed === undefined || meta.lastAssistantFailed === true) &&
       (meta.forkedFrom === undefined || parseChatForkLineageV1(meta.forkedFrom) !== undefined) &&
+      (meta.ephemeral === undefined || meta.ephemeral === true) &&
       (meta.designMode === undefined || meta.designMode === true)
     );
   }
@@ -859,6 +860,15 @@ export function createChatStore(
       const lineage = parseChatForkLineageV1(record.forkedFrom);
       if (lineage) record.forkedFrom = lineage;
       else delete record.forkedFrom;
+    }
+    if (
+      parsed !== null &&
+      typeof parsed === "object" &&
+      !Array.isArray(parsed) &&
+      Object.prototype.hasOwnProperty.call(parsed, "ephemeral") &&
+      (parsed as Record<string, unknown>).ephemeral !== true
+    ) {
+      delete (parsed as Record<string, unknown>).ephemeral;
     }
     if (
       parsed !== null &&
@@ -1270,6 +1280,7 @@ export function createChatStore(
       ...(lastAssistantAt !== undefined ? { lastAssistantAt, lastAssistantSequence, lastAssistantMessageId: lastAssistant.id } : {}),
       ...(lastAssistant && isFailedAssistantTurn(lastAssistant) ? { lastAssistantFailed: true } : {}),
       ...(chat.forkedFrom ? { forkedFrom: indexedForkLineage(chat.forkedFrom) } : {}),
+      ...(chat.ephemeral === true ? { ephemeral: true as const } : {}),
       ...(chat.designMode === true ? { designMode: true as const } : {}),
       createdAt: chat.createdAt,
       updatedAt: chat.updatedAt,
@@ -1527,6 +1538,7 @@ export function createChatStore(
       id: string;
       title?: string;
       workspaceId: string;
+      ephemeral?: true;
       providerId?: string;
       model?: string;
       turnId: string;
@@ -1577,6 +1589,7 @@ export function createChatStore(
         const chat: Chat = {
           id: input.id,
           workspaceId: input.workspaceId,
+          ...(input.ephemeral === true ? { ephemeral: true as const } : {}),
           providerId: await resolveProviderId(input.providerId),
           model: input.model,
           title: input.title?.trim() || deriveChatTitleSeed(message),
@@ -1595,6 +1608,7 @@ export function createChatStore(
       workspaceId?: string;
       botId?: string;
       owner?: ChatOwnerV1;
+      ephemeral?: true;
       providerId?: string;
       model?: string;
       assertCurrent?: () => void;
@@ -1613,6 +1627,7 @@ export function createChatStore(
           workspaceId: input.workspaceId ?? DEFAULT_WORKSPACE_ID,
           ...(input.botId ? { botId: input.botId } : {}),
           ...(owner ? { owner } : {}),
+          ...(input.ephemeral === true ? { ephemeral: true as const } : {}),
           providerId: await resolveProviderId(input.providerId),
           model: input.model,
           createdAt: now,
@@ -1962,6 +1977,45 @@ export function createChatStore(
           throw new Error("Only a new chat can change workspaces.");
         }
         chat.workspaceId = workspaceId;
+        chat.updatedAt = Date.now();
+        await writeChatAndMeta(chat);
+        return chat;
+      }));
+    },
+
+    /** Clear the ephemeral marker so a temporary floating chat becomes a durable chat. */
+    async promoteEphemeralChat(
+      id: string,
+      assertCurrent: (chat: Chat) => void | Promise<void> = () => undefined,
+    ): Promise<Chat> {
+      return withImageData(await shared([id], true, async () => {
+        const chat = await readChat(id, "owner");
+        if (!chat) throw new Error(`Chat ${id} not found`);
+        await assertCurrent(chat);
+        if (chat.ephemeral !== true) return chat;
+        delete chat.ephemeral;
+        chat.updatedAt = Date.now();
+        await writeChatAndMeta(chat);
+        return chat;
+      }));
+    },
+
+    /**
+     * Attach a populated or empty No workspace / ephemeral chat in-place to a
+     * target project workspace, clearing any ephemeral flag and advancing its
+     * summary revision. Callers must enforce workspace/run admission gates first.
+     */
+    async attachChatToWorkspace(
+      id: string,
+      workspaceId: string,
+      assertCurrent: (chat: Chat) => void | Promise<void> = () => undefined,
+    ): Promise<Chat> {
+      return withImageData(await shared([id], true, async () => {
+        const chat = await readChat(id, "owner");
+        if (!chat) throw new Error(`Chat ${id} not found`);
+        await assertCurrent(chat);
+        chat.workspaceId = workspaceId;
+        delete chat.ephemeral;
         chat.updatedAt = Date.now();
         await writeChatAndMeta(chat);
         return chat;

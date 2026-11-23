@@ -36,6 +36,7 @@ interface PendingApproval {
   streamId: string;
   toolCallId: string;
   ownerDocumentId?: string;
+  prompt: ToolApprovalPrompt;
   scopes: readonly ToolApprovalScope[];
   /** Identical calls waiting on this card, by tool call id. */
   followers: string[];
@@ -89,12 +90,10 @@ export function toolCallApprovalEffect(toolName: string, args: unknown, target?:
 function approvalEffectKey(
   descriptor: Omit<ToolApprovalPrompt, "approvalId">,
   effect: string | undefined,
-  ownerDocumentId: string | undefined,
 ): string | undefined {
   if (effect === undefined) return undefined;
   try {
     return JSON.stringify([
-      ownerDocumentId ?? null,
       effect,
       descriptor.toolName,
       descriptor.summary,
@@ -220,7 +219,7 @@ export class ToolApprovalCoordinator {
       if (closedOutcome === "detached") this.shortCircuited({ ...descriptor, approvalId });
       return Promise.resolve(closedOutcome);
     }
-    const effect = descriptor.approvalId === undefined ? approvalEffectKey(descriptor, callEffect, ownerDocumentId) : undefined;
+    const effect = descriptor.approvalId === undefined ? approvalEffectKey(descriptor, callEffect) : undefined;
     if (effect !== undefined) {
       if (this.denied.get(descriptor.streamId)?.has(effect)) return Promise.resolve("denied");
       const leader = this.shared.get(descriptor.streamId)?.get(effect);
@@ -253,7 +252,7 @@ export class ToolApprovalCoordinator {
       }
       // The shared card went away for its own call only: this call still waits.
       if (outcome === "cancelled" && !signal?.aborted && !this.stopped && !this.closedStreams.has(descriptor.streamId)) {
-        return this.request(descriptor, signal, ownerDocumentId);
+        return this.request(descriptor, signal, leader.entry.ownerDocumentId ?? ownerDocumentId);
       }
       return outcome;
     } finally {
@@ -304,11 +303,13 @@ export class ToolApprovalCoordinator {
         if (priorPhase === "publishing") settledWhilePublishing = outcome;
         resolve(outcome);
       };
+      const prompt: ToolApprovalPrompt = { ...descriptor, approvalId };
       entry = {
         approvalId,
         streamId: descriptor.streamId,
         toolCallId: descriptor.toolCallId,
         ownerDocumentId,
+        prompt,
         scopes: descriptor.scopes ?? ["once"],
         followers: [],
         settle: finish,
@@ -444,6 +445,27 @@ export class ToolApprovalCoordinator {
   /** A detached renderer cannot attend pending or future approval prompts. */
   detachStream(streamId: string): void {
     this.cancelStream(streamId, "detached");
+  }
+
+  /**
+   * Atomically transfer ownership of pending approvals for `streamId` from one
+   * desktop renderer document to another (e.g., floating mini-modal -> main
+   * window), returning the full desktop prompts so the new owner can render
+   * and decide them without detachment.
+   */
+  rebindStreamOwner(
+    streamId: string,
+    fromDocumentId: string,
+    toDocumentId: string,
+  ): ToolApprovalPrompt[] {
+    if (this.stopped || this.closedStreams.has(streamId)) return [];
+    const rebound: ToolApprovalPrompt[] = [];
+    for (const entry of this.pending.values()) {
+      if (entry.streamId !== streamId || entry.ownerDocumentId !== fromDocumentId) continue;
+      entry.ownerDocumentId = toDocumentId;
+      rebound.push(entry.prompt);
+    }
+    return rebound;
   }
 
   /** Release bounded per-stream state after the owning generation settles. */

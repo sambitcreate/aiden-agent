@@ -612,6 +612,22 @@ export class SubagentControlRegistryV2 {
     throw new Error("Could not allocate a safe subagent retry identity.");
   }
 
+  /**
+   * Reassign active/recent subagent control records for a chat when desktop
+   * stream ownership transfers from one renderer window to another.
+   */
+  rebindChatOwner(chatId: string, fromDocumentId: string, toDocumentId: string): number {
+    if (!validPrivateDocumentId(toDocumentId)) return 0;
+    let count = 0;
+    for (const record of this.records.values()) {
+      if (record.snapshot.chatId === chatId && record.ownerDocumentId === fromDocumentId) {
+        record.ownerDocumentId = toDocumentId;
+        count += 1;
+      }
+    }
+    return count;
+  }
+
   private assertRetryRegistration(
     source: SubagentRunSnapshotV2,
     owner: SubagentControlOwnerV2,

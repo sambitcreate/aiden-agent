@@ -18,6 +18,7 @@ one starts unassigned.
 | Key | Does |
 | --- | --- |
 | `⌘K` | Command palette: commands, chats, models, providers, Settings, appearance, Bots |
+| `⇧⌘Space` | Toggle Floating Quick Chat (global hotkey — works from any app while Aiden is running) |
 | `⌘/` | Keyboard shortcuts: every key as set in Settings plus the built-in ones, searchable |
 | `⌘N` / `⇧⌘N` | New chat / New chat in… |
 | `⇧⌘F` | Search chats |
@@ -74,7 +75,7 @@ claims it.
 The chat keys (`⌘1`–`⌘9`, `⇧⌘[` / `⇧⌘]`) also work while typing in the
 message box.
 
-Global keys (`⌥⌘Space` focus composer, `⇧⌘D` dictation, `⌥⌘A` open Aiden)
+Global keys (`⇧⌘Space` quick chat, `⌥⌘Space` focus composer, `⇧⌘D` dictation, `⌥⌘A` open Aiden)
 work while Aiden is in the background.
 
 ## In a chat

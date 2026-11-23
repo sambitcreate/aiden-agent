@@ -4,7 +4,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { extractFile, listPackage } from "@electron/asar";
 
-const REQUIRED_PAGES = ["main-window.html", "pill.html", "visual-snapshot.html"];
+const REQUIRED_PAGES = ["main-window.html", "pill.html", "quick-chat.html", "visual-snapshot.html"];
 
 export function assertProductionRendererCsp(html, name = "renderer page") {
   const policies = [...html.matchAll(/<meta\s+http-equiv="Content-Security-Policy"\s+content="([^"]+)"\s*\/?>/giu)];
