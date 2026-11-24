@@ -11,6 +11,10 @@ struct AidenRunsSummaryActivityAttributes: ActivityAttributes {
         var status: AgentRunActivityStatus
         var updatedAt: Date
         var isFinal: Bool
+        /// This run's status may be old (the phone lost track of it). Kept
+        /// on the row so a relaunched app still knows which run made the
+        /// summary stale; that run's next real update clears it.
+        var isStale: Bool = false
     }
 
     struct ContentState: Codable, Hashable, Sendable {

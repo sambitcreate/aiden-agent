@@ -1162,6 +1162,40 @@ final class AidenNativeIntegrationTests: XCTestCase {
         XCTAssertTrue(fresh)
     }
 
+    /// After a relaunch the summary still knows which run is stale: another
+    /// run's update keeps it reading as old, and only the stale run's own
+    /// next update clears it.
+    @MainActor
+    func testAStaleRunKeepsTheSummaryStaleAcrossARelaunch() async throws {
+        guard ActivityAuthorizationInfo().areActivitiesEnabled else {
+            throw XCTSkip("Live Activities are disabled on this device.")
+        }
+        let mac = "summary-relaunch-stale-\(UUID().uuidString)"
+        let before = AidenRemoteLiveActivityManager(preferences: { AidenNotificationPreferences() })
+        defer { Task { @MainActor in await before.endAll(forInstanceID: mac) } }
+        await before.start(instanceID: mac, chatID: "c1", title: "One", streamID: "s1", machineName: "Mac")
+        await before.start(instanceID: mac, chatID: "c2", title: "Two", streamID: "s2", machineName: "Mac")
+        let summary = try XCTUnwrap(Activity<AidenRunsSummaryActivityAttributes>.activities.first {
+            $0.attributes.instanceID == mac
+        })
+        await before.approvalRequired(instanceID: mac, streamID: "s1", target: nil)
+        await before.markStale(instanceID: mac, streamID: "s1")
+        let stale = await eventually("the summary to read as old") { summary.content.state.isStale }
+        XCTAssertTrue(stale)
+
+        let relaunched = AidenRemoteLiveActivityManager(preferences: { AidenNotificationPreferences() })
+        await relaunched.updateStatus(instanceID: mac, streamID: "s2", state: .waitingForApproval)
+        let otherUpdated = await eventually("s2's update to land") {
+            summary.content.state.rows.first { $0.streamID == "s2" }?.status == .waitingForApproval
+        }
+        XCTAssertTrue(otherUpdated)
+        XCTAssertTrue(summary.content.state.isStale, "another run's update leaves the stale run's status old")
+
+        await relaunched.updateStatus(instanceID: mac, streamID: "s1", state: .waitingForApproval)
+        let fresh = await eventually("the stale run's own update to clear it") { !summary.content.state.isStale }
+        XCTAssertTrue(fresh)
+    }
+
     @MainActor
     func testSecondRunOnTheSameMacMergesIntoOneSummaryCard() async throws {
         guard ActivityAuthorizationInfo().areActivitiesEnabled else {
