@@ -14,14 +14,18 @@ import {
 const HOUR = 3_600_000;
 const NOW = Date.UTC(2026, 10, 24, 9);
 
+/** Rows as a revision 66 host lists them: every Bot with a message has a preview. */
+const listed = (...replies: (number | undefined)[]) =>
+  replies.map((lastReplyAt) => ({ preview: "Release moved to Friday", ...(lastReplyAt === undefined ? {} : { lastReplyAt }) }));
+
 test("a paired Mac's Bot reads unread only for a reply newer than the last one shown here, or than its host's first listing", () => {
   let seen = parseRemoteBotSeen(null);
   assert.equal(isRemoteBotUnread(seen, "host", "bot", NOW), false, "nothing to compare with before the host is listed");
-  seen = withRemoteBotHostListed(seen, "host", [NOW - 5_000, undefined, NOW]);
+  seen = withRemoteBotHostListed(seen, "host", listed(NOW - 5_000, undefined, NOW));
   assert.equal(isRemoteBotUnread(seen, "host", "bot", undefined), false, "no reply time, no dot");
   assert.equal(isRemoteBotUnread(seen, "host", "bot", NOW - 5_000), false, "a reply from before the first listing is not new");
   assert.equal(isRemoteBotUnread(seen, "host", "bot", NOW + 500), true);
-  assert.equal(withRemoteBotHostListed(seen, "host", [NOW + 9_000]), seen, "a host's baseline is set once");
+  assert.equal(withRemoteBotHostListed(seen, "host", listed(NOW + 9_000)), seen, "a host's baseline is set once");
   const shown = withRemoteBotSeen(seen, "host/bot", NOW + 500);
   assert.equal(isRemoteBotUnread(shown, "host", "bot", NOW + 500), false);
   assert.equal(isRemoteBotUnread(shown, "host", "bot", NOW + 600), true);
@@ -31,23 +35,40 @@ test("a paired Mac's Bot reads unread only for a reply newer than the last one s
 });
 
 test("a host whose Bots hadn't replied when first listed shows a dot for their first reply, also after a reload", () => {
-  let seen = withRemoteBotHostListed(parseRemoteBotSeen(null), "quiet", [undefined, undefined]);
+  const silent = withRemoteBotHostListed(parseRemoteBotSeen(null), "quiet", [{}, {}]);
+  assert.deepEqual(silent.hostSince, {}, "Bots with no message yet don't show the host's revision; nothing is set");
+  // The person's first message is the preview; the reply hasn't come yet.
+  let seen = withRemoteBotHostListed(silent, "quiet", listed(undefined, undefined));
+  assert.equal(seen.hostSince.quiet, 0);
   // The next feed update brings the first reply; listing again must not swallow it.
-  seen = withRemoteBotHostListed(seen, "quiet", [NOW]);
+  seen = withRemoteBotHostListed(seen, "quiet", listed(NOW));
   assert.equal(isRemoteBotUnread(seen, "quiet", "bot", NOW), true);
   const reloaded = parseRemoteBotSeen(serializeRemoteBotSeen(seen));
-  assert.equal(isRemoteBotUnread(withRemoteBotHostListed(reloaded, "quiet", [NOW]), "quiet", "bot", NOW), true);
+  assert.equal(isRemoteBotUnread(withRemoteBotHostListed(reloaded, "quiet", listed(NOW)), "quiet", "bot", NOW), true);
   assert.equal(isRemoteBotUnread(withRemoteBotSeen(reloaded, "quiet/bot", NOW), "quiet", "bot", NOW), false);
+});
+
+test("a host older than revision 66 sets no baseline, so its earlier replies start read once it upgrades", () => {
+  // An older host sends no preview, and reply times only for Bots whose chat is open there.
+  const old = withRemoteBotHostListed(parseRemoteBotSeen(null), "host", [{ lastReplyAt: NOW - 9 * HOUR }, {}, {}]);
+  assert.deepEqual(old.hostSince, {});
+  assert.equal(isRemoteBotUnread(old, "host", "closed", NOW - HOUR), false);
+  // After the upgrade every Bot's newest reply arrives at once; none of them is new.
+  const upgraded = withRemoteBotHostListed(old, "host", listed(NOW - 9 * HOUR, NOW - HOUR, NOW - 2 * HOUR));
+  for (const [botId, at] of [["open", NOW - 9 * HOUR], ["closed", NOW - HOUR], ["other", NOW - 2 * HOUR]] as const) {
+    assert.equal(isRemoteBotUnread(upgraded, "host", botId, at), false, botId);
+  }
+  assert.equal(isRemoteBotUnread(upgraded, "host", "closed", NOW), true, "the next reply shows a dot");
 });
 
 test("a host whose clock is an hour ahead or behind this Mac still starts read and shows its next reply", () => {
   for (const skew of [HOUR, -HOUR]) {
     const hostNow = NOW + skew;
-    const listed = withRemoteBotHostListed(parseRemoteBotSeen(null), "host", [hostNow - 60_000, hostNow - 120_000]);
-    assert.equal(isRemoteBotUnread(listed, "host", "scout", hostNow - 60_000), false, `skew ${skew}: the reply already there is read`);
-    assert.equal(isRemoteBotUnread(listed, "host", "planner", hostNow - 120_000), false, `skew ${skew}: so is an older one`);
-    assert.equal(isRemoteBotUnread(listed, "host", "scout", hostNow + 1_000), true, `skew ${skew}: the next reply shows a dot`);
-    assert.equal(isRemoteBotUnread(listed, "host", "newbot", hostNow + 1_000), true, `skew ${skew}: so does a new Bot's first reply`);
+    const first = withRemoteBotHostListed(parseRemoteBotSeen(null), "host", listed(hostNow - 60_000, hostNow - 120_000));
+    assert.equal(isRemoteBotUnread(first, "host", "scout", hostNow - 60_000), false, `skew ${skew}: the reply already there is read`);
+    assert.equal(isRemoteBotUnread(first, "host", "planner", hostNow - 120_000), false, `skew ${skew}: so is an older one`);
+    assert.equal(isRemoteBotUnread(first, "host", "scout", hostNow + 1_000), true, `skew ${skew}: the next reply shows a dot`);
+    assert.equal(isRemoteBotUnread(first, "host", "newbot", hostNow + 1_000), true, `skew ${skew}: so does a new Bot's first reply`);
   }
 });
 
@@ -68,8 +89,8 @@ test("only a reply the remote chat shows counts as seen", () => {
 });
 
 test("the record survives a reload and refuses what it can't trust", () => {
-  const listed = withRemoteBotHostListed(parseRemoteBotSeen(null), "host", [NOW]);
-  const shown = withRemoteBotSeen(listed, "host/bot", NOW + 1);
+  const first = withRemoteBotHostListed(parseRemoteBotSeen(null), "host", listed(NOW));
+  const shown = withRemoteBotSeen(first, "host/bot", NOW + 1);
   assert.deepEqual(parseRemoteBotSeen(serializeRemoteBotSeen(shown)), shown);
   for (const raw of ["not json", "[]", JSON.stringify({ version: 1, since: 10, seenReplyAt: { "host/bot": 5 } })]) {
     assert.deepEqual(parseRemoteBotSeen(raw), { hostSince: {}, seenReplyAt: {} }, raw);

@@ -16,6 +16,7 @@ import {
   carryOlderRemoteBotEntries,
   hostServesBotHandoffs,
   hostSharesBotSessions,
+  remoteBotPlanView,
   remoteBotSessionView,
   withOlderRemoteBotEntries,
   withRereadOlderRemoteBotEntries,
@@ -377,7 +378,7 @@ test("a host's access card reaches this Mac's chat as the card it answers by wai
   assert.deepEqual(cleared?.snapshot.entries, view.snapshot.entries);
 });
 
-test("a host's plan reaches this Mac's chat as the plan card, and every new frame of it is a new revision", () => {
+test("a host's plan reaches this Mac's chat as the plan card, and every change to it is a new revision", () => {
   const plan = parseAidenRemoteBotSession(contract.botPlans.session).plan!;
   const before = remoteBotSessionView(session());
   assert.equal(before.snapshot.plan, null);
@@ -390,8 +391,14 @@ test("a host's plan reaches this Mac's chat as the plan card, and every new fram
   assert.deepEqual(shown.steps, plan.steps);
   assert.deepEqual(shown.items.map(({ line, details }) => ({ line, details })), plan.items.map(({ line, details }) => ({ line, details })));
   assert.equal(new Set(shown.items.map(({ id }) => id)).size, plan.items.length, "each item has its own key");
+  // Reading the session again (a reload, a reconnect) shows the same card, so
+  // it keeps its revision, its key, and with them its busy and error state.
+  const reread = remoteBotSessionView(session({ seq: 9, plan }));
+  assert.equal(reread.snapshot.plan?.revision, shown.revision);
   const again = applyRemoteBotSessionEvent(after!, event(6, { type: "plan", payload: { plan: { ...plan, status: "active" } } }));
   assert.notEqual(again?.snapshot.plan?.revision, shown.revision);
+  const stepDone = { ...plan, steps: plan.steps.map((step, index) => (index === 0 ? { ...step, status: "done" as const } : step)) };
+  assert.notEqual(remoteBotPlanView("bot_1", stepDone).revision, shown.revision, "a step finishing is a change too");
   assert.equal(applyRemoteBotSessionEvent(again!, event(7, { type: "plan", payload: { plan: null } }))?.snapshot.plan, null);
 });
 
