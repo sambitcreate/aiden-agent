@@ -69,7 +69,6 @@ export const FILE_SECONDS = Object.freeze({
   "lmstudio-chat-attachments.spec.ts": 22,
   "memory-list.spec.ts": 16,
   "model-call-retry.spec.ts": 26,
-  "model-pad-responsive.spec.ts": 13,
   "no-workspace-chat.spec.ts": 37,
   "onboarding-lmstudio.spec.ts": 41,
   "peer-project-clone.spec.ts": 11,
