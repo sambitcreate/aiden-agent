@@ -184,6 +184,26 @@ test("a status read and a broadcast that race keep the higher revision of each a
   }
 });
 
+test("a status read that a broadcast overtook keeps the broadcast's apps and choices, and an unraced read replaces the cache", async () => {
+  const docs = status({ appRoot: "docs", framework: "astro", frameworkLabel: "Astro", phase: "running", origin: "http://127.0.0.1:4321", port: 4321, revision: 3 });
+  const candidates = [
+    { appRoot: ".", framework: "vite" as const, frameworkLabel: "Vite", script: "dev" },
+    { appRoot: "docs", framework: "astro" as const, frameworkLabel: "Astro", script: "dev" },
+  ];
+  const read = pending<DesignAppsSnapshot>();
+  mount(() => read.promise);
+  // While the read is on its way, a broadcast adds docs and makes the workspace a Choose one.
+  broadcast(snapshot([status({ revision: 2 }), docs], { target: "choose", candidates }));
+  await act(async () => read.resolve(snapshot([status({ revision: 1 })])));
+  const button = await trigger();
+  await until(() => assert.equal(button.textContent, "2 apps"));
+  assert.equal(menuItems(await openMenu()).includes("Choose apps…"), true, "the broadcast's candidates stay");
+  cleanup();
+  // Mounted again with no broadcast in flight: the fresh read is newer than the cache, and docs has gone.
+  mount(snapshot([status({ revision: 4 })]));
+  await until(() => assert.equal(screen.getByRole("button", { name: /^Live app:/u }).textContent, "Start"));
+});
+
 // ── Labels (D2) ──
 
 test("the label follows the snapshot", async () => {

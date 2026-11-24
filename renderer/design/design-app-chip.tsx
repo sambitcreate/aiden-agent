@@ -41,11 +41,16 @@ const CRASHED = "The app's dev server stopped.";
 /** The last snapshot of each workspace, and each chat's workspace, for the whole window. */
 const snapshots = new Map<string, DesignAppsSnapshot>();
 const chatWorkspaces = new Map<string, string>();
+/** Counts broadcasts; `broadcastAt` is each workspace's last one, so a read can tell whether one overtook it. */
+let broadcasts = 0;
+const broadcastAt = new Map<string, number>();
 
 /** For tests: forget every cached snapshot. */
 export function resetDesignAppChipForTests(): void {
   snapshots.clear();
   chatWorkspaces.clear();
+  broadcastAt.clear();
+  broadcasts = 0;
 }
 
 function cachedFor(chatId: string): DesignAppsSnapshot | undefined {
@@ -54,17 +59,23 @@ function cachedFor(chatId: string): DesignAppsSnapshot | undefined {
 }
 
 /**
- * A status read answered from main's state when it was asked; a broadcast may
- * have brought a newer state of some app meanwhile. Each app keeps whichever
- * is newer by `revision` (B7). Broadcasts arrive in order and replace as they are.
+ * What a status read leaves in the cache. `asked` is the broadcast count when
+ * the read was sent. With no broadcast for the workspace since, the read is
+ * the newest state and replaces the cache whole, removals included. When one
+ * arrived meanwhile, main may have answered before or after it, so the
+ * broadcast keeps the workspace's apps, target and candidates, and each app
+ * keeps whichever is newer by `revision` (B7): an app the read lacks was added
+ * after it, and an app only the read has was removed or will come in a later
+ * broadcast. Broadcasts arrive in order and replace as they are.
  */
-function newerApps(read: DesignAppsSnapshot, known: DesignAppsSnapshot | undefined): DesignAppsSnapshot {
-  if (!known || known.workspaceId !== read.workspaceId) return read;
-  const knownByRoot = new Map(known.apps.map((app) => [app.appRoot, app]));
+function settledRead(read: DesignAppsSnapshot, asked: number): DesignAppsSnapshot {
+  const known = snapshots.get(read.workspaceId);
+  if (!known || (broadcastAt.get(read.workspaceId) ?? 0) <= asked) return read;
+  const readByRoot = new Map(read.apps.map((app) => [app.appRoot, app]));
   return {
-    ...read,
-    apps: read.apps.map((app) => {
-      const other = knownByRoot.get(app.appRoot);
+    ...known,
+    apps: known.apps.map((app) => {
+      const other = readByRoot.get(app.appRoot);
       return other && other.revision > app.revision ? other : app;
     }),
   };
@@ -87,12 +98,14 @@ export function useDesignAppsSnapshot(chatId: string, enabled: boolean): DesignA
     const unsubscribe = designAppApi.onStatus((next) => {
       if (!next || typeof next.workspaceId !== "string" || !Array.isArray(next.apps)) return;
       snapshots.set(next.workspaceId, next);
+      broadcastAt.set(next.workspaceId, (broadcasts += 1));
       if (live && chatWorkspaces.get(chatId) === next.workspaceId) setSnapshot(next);
     });
+    const asked = broadcasts;
     designAppApi.status(chatId).then(
       (answer) => {
         if (!live) return;
-        const read = newerApps(answer, snapshots.get(answer.workspaceId));
+        const read = settledRead(answer, asked);
         chatWorkspaces.set(chatId, read.workspaceId);
         snapshots.set(read.workspaceId, read);
         setSnapshot(read);
