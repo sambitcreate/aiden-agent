@@ -3,7 +3,7 @@
 A Bot computer is a macOS virtual machine that belongs to one Bot, so the Bot
 can work in apps without touching the person's own desktop. Bot computers are
 opt-in, run only on a Mac with Apple silicon, and are built and managed with
-[Lume](https://github.com/trycua/cua/tree/lume-v0.6.1/libs/lume) 0.6.1, which
+[Lume](https://github.com/trycua/cua/tree/lume-v0.8.0/libs/lume) 0.8.0, which
 ships inside Aiden.
 
 This page covers setting up, sizing, limiting and removing Bot computers,
@@ -81,7 +81,9 @@ Bot computer that was interrupted while it was being made is marked for
   that figure can count shared space more than once.
 - **Starting a computer** needs 8 GB of available memory (free, inactive and
   purgeable pages from `vm_stat`) and 5 GB of free disk. If either is short,
-  the start is refused with a message saying which.
+  the start is refused with a message saying which. Lume 0.8.0 also refuses to
+  start a writable disk when the host volume is low on free space; Aiden maps
+  that refusal to a free-space message as well.
 
 ## Limits
 
@@ -125,7 +127,8 @@ Bot computer that was interrupted while it was being made is marked for
   comes up. Until then the computer still reads Starting and keeps its place,
   so stopping it can take that long. Aiden stops checking as soon as Lume's
   log says the launch failed, and doesn't wait at all when Lume refused the
-  start (no such computer, one still being made, or macOS's limit). A computer
+  start (no such computer, one still being made, low host disk space, or
+  macOS's limit). A computer
   that comes up even later is turned off by its next start (which then fails
   once) or at Aiden's next launch. If Lume can't turn it off, it stays shown as
   running, keeps its place and has no screen to use: its Computer tab says it
@@ -225,6 +228,9 @@ the screen keeps working.
   `LUME_UPDATE_CHECK=false`, a fixed `PATH` and its own `HOME` under Aiden's
   data folder, and every command names Aiden's own storage. Lume's own
   configuration in `~/.lume` is not used.
+- **No host audio or clipboard.** Every VM start passes `--no-audio-device` and
+  `--no-clipboard-device`, so the guest gets no virtio sound device (no host
+  microphone or speaker) and no SPICE clipboard-sharing device.
 - **Screen.** Each start sets a new random screen-sharing password. Aiden uses
   the computer's screen only if Lume reports it on `127.0.0.1`, and stops the
   computer if the screen-sharing port also answers on any of the Mac's network
@@ -278,12 +284,15 @@ Everything lives under `bot-computers/` in Aiden's data folder
 
 Some Lume and macOS behaviour can't be checked in Linux CI. The fake Lume CLI
 (`tests/e2e/lume-fake.mjs`) and the fixtures in
-`main/services/bot-computers/fixtures/` follow Lume 0.6.1's source and are
+`main/services/bot-computers/fixtures/` follow Lume 0.8.0's source and are
 marked assumed until they are recorded on an Apple-silicon Mac:
 
 - `npm run bot-computers:vendor`, `npm run package` and
   `node scripts/verify-macos-package.mjs` (pinned hashes, signature,
   `com.apple.security.virtualization`, `embedded.provisionprofile`).
+- Start and stop a Bot computer on Lume 0.8.0 and confirm `--no-audio-device`
+  and `--no-clipboard-device` leave the guest with no host audio or clipboard
+  device.
 - Record `lume get --format json`, `lume ls --format json` and the error for a
   third running macOS guest into the fixtures, then run
   `npm run test:bot-computers`.

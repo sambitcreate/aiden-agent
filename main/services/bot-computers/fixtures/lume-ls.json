@@ -19,7 +19,8 @@
     "networkMode" : "nat",
     "downloadProgress" : null,
     "machineIdentifier" : "YnBsaXN0MDDRAQJURUNJRBMAKDBQ3/M+cAgLEAAAAAAAAAEBAAAAAAAAAAMAAAAAAAAAAAAAAAAAAAAZ",
-    "macAddress" : "a6:4f:2c:9e:13:70"
+    "macAddress" : "a6:4f:2c:9e:13:70",
+    "savedState" : false
   },
   {
     "name" : "aiden-bot-5d41402abc4b2a76",
@@ -41,7 +42,8 @@
     "networkMode" : "nat",
     "downloadProgress" : null,
     "machineIdentifier" : "YnBsaXN0MDDRAQJURUNJRBMAKDBQ3/M+cAgLEAAAAAAAAAEBAAAAAAAAAAMAAAAAAAAAAAAAAAAAAAAZ",
-    "macAddress" : "a6:4f:2c:9e:13:71"
+    "macAddress" : "a6:4f:2c:9e:13:71",
+    "savedState" : false
   },
   {
     "name" : "aiden-bot-7d793037a0760186",
@@ -63,6 +65,7 @@
     "networkMode" : "nat",
     "downloadProgress" : null,
     "machineIdentifier" : null,
-    "macAddress" : "a6:4f:2c:9e:13:72"
+    "macAddress" : "a6:4f:2c:9e:13:72",
+    "savedState" : false
   }
 ]

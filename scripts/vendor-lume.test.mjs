@@ -232,7 +232,7 @@ test("vendored Lume validation requires the bundle identity, the deep upstream s
   assert.equal(await validateVendoredLume(app, otherBundle.runner, pinnedHash), false);
   assert.equal(otherBundle.calls.some((call) => call.command === "/usr/bin/codesign"), false);
 
-  const otherVersion = recordingRunner({ version: "0.6.2" });
+  const otherVersion = recordingRunner({ version: "0.8.1" });
   assert.equal(await validateVendoredLume(app, otherVersion.runner, pinnedHash), false);
 });
 

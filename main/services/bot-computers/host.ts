@@ -379,6 +379,11 @@ export function createBotComputerHost(deps: BotComputerHostDependencies): BotCom
           "vm_limit",
           "macOS runs at most two virtual machines at once, and another app is using one. Quit it or stop another Bot's computer, then try again.",
         );
+      case "low_disk":
+        return new BotComputerError(
+          "low_disk",
+          `${owner} computer didn't start because this Mac doesn't have enough free disk space. Free up space and try again.`,
+        );
       case "not_found":
       case "stale":
         return new BotComputerError("stale", `${owner} computer is missing or incomplete. Reset it in the Bot's profile.`);
@@ -454,9 +459,10 @@ export function createBotComputerHost(deps: BotComputerHostDependencies): BotCom
         true,
       );
       const refusal = started.exitCode === 0 ? undefined : failureKind(started);
-      // Lume refused this VM (it has none by that name, it is still being made, or macOS's limit
-      // is reached): nothing is coming up. Any other failure may have launched it.
-      if (refusal === "not_found" || refusal === "stale" || refusal === "vm_limit") launch = "ended";
+      // Lume refused this VM (it has none by that name, it is still being made, the host lacks
+      // disk space, or macOS's limit is reached): nothing is coming up. Any other failure may have
+      // launched it.
+      if (refusal === "not_found" || refusal === "stale" || refusal === "vm_limit" || refusal === "low_disk") launch = "ended";
       if (signal?.aborted) throw new BotComputerError("cancelled", "Starting the computer was cancelled.");
       if (refusal !== undefined) throw startFailure(refusal, owner);
       const deadline = now() + startTimeoutMs;
@@ -1249,8 +1255,10 @@ export function createBotComputerHost(deps: BotComputerHostDependencies): BotCom
         const result = await lume({ op: "create", name: target, ipsw, unattended: "tahoe" }, 3 * 60 * 60_000, signal);
         if (result.exitCode === 0) return;
         log(`lume create failed: ${result.stderr.slice(-600)}`);
-        // The unattended install boots the VM, so another app's macOS VM can fill the last place.
-        if (failureKind(result) === "vm_limit") throw startFailure("vm_limit", "The base");
+        // The unattended install boots the VM, so another app's macOS VM can fill the last place,
+        // or the host volume can run out of free space before it boots.
+        const kind = failureKind(result);
+        if (kind === "vm_limit" || kind === "low_disk") throw startFailure(kind, "The base");
         throw new BotComputerError("lume_failed", "Installing macOS on the base computer failed. Choose Set up to try again.");
       },
       start: async () => {

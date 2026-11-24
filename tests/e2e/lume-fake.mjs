@@ -1,4 +1,4 @@
-// A stand-in for the vendored `lume` 0.6.1 CLI in Bot-computer host tests.
+// A stand-in for the vendored `lume` 0.8.0 CLI in Bot-computer host tests.
 // It parses arguments the way Lume's swift-argument-parser commands do and
 // prints the JSON shapes in main/services/bot-computers/fixtures/, but runs no
 // VM: `run --detach` starts a detached loopback TCP server that plays the VNC
@@ -8,12 +8,14 @@
 // - LUME_TELEMETRY_ENABLED and LUME_UPDATE_CHECK are "false";
 // - every command names Aiden's storage (`--storage`, or for `clone` both
 //   `--source-storage` and `--dest-storage`);
+// - `run` passes `--detach`, `--display none`, `--no-audio-device`,
+//   `--no-clipboard-device`, `--vnc-password`, and a `:rw` `--shared-dir`;
 // - `serve`, `pull`, `update`, `push`, `ipsw` and `setup` are refused;
 // - `delete` needs `--force` (the real CLI would wait on stdin).
 //
 // State lives in <storage>/.fake-state.json. Every call is appended as a JSON
 // line to AIDEN_E2E_FAKE_LUME_LOG. Switches (environment variables, or the
-// keys log, stale, limit, vncHost, stopDelayMs, stopFails, stopFailsBooting, cloneDelayMs, runLaunchDelayMs,
+// keys log, stale, limit, lowDisk, vncHost, stopDelayMs, stopFails, stopFailsBooting, cloneDelayMs, runLaunchDelayMs,
 // runIgnoresTerm, runReturnDelayMs, runFailsLate, bootDelayMs, hostKey and vncUpstream of a JSON file named by
 // a leading `--fake-config <file>`):
 // - AIDEN_FAKE_LUME_STALE: comma-separated VM names reported as "provisioning (stale)"; `run`
@@ -22,6 +24,8 @@
 //   Virtualization VM-limit error (written to the --log-file, as the detached run does, before
 //   `run` returns: AIDEN_FAKE_LUME_RUN_RETURN_DELAY_MS applies);
 //   an unattended `create` boots its VM, so it fails the same way, on stderr;
+// - AIDEN_FAKE_LUME_LOW_DISK: comma-separated VM names whose `run` (written to --log-file, as
+//   the detached run does) or `create` (on stderr) fails with Lume's `insufficientHostSpace` refusal;
 // - AIDEN_FAKE_LUME_VNC_HOST: the host `get` reports in vncUrl (default 127.0.0.1);
 // - AIDEN_FAKE_LUME_STOP_DELAY_MS: how long `stop` takes before the VM is off (default 0);
 // - AIDEN_FAKE_LUME_STOP_FAILS: comma-separated VM names whose `stop` (graceful or forced)
@@ -68,6 +72,7 @@ if (args[0] === "--fake-config") {
     log: "AIDEN_E2E_FAKE_LUME_LOG",
     stale: "AIDEN_FAKE_LUME_STALE",
     limit: "AIDEN_FAKE_LUME_LIMIT",
+    lowDisk: "AIDEN_FAKE_LUME_LOW_DISK",
     vncHost: "AIDEN_FAKE_LUME_VNC_HOST",
     stopDelayMs: "AIDEN_FAKE_LUME_STOP_DELAY_MS",
     stopFails: "AIDEN_FAKE_LUME_STOP_FAILS",
@@ -126,7 +131,7 @@ function parse(list) {
     if (VALUE_OPTIONS.has(value)) {
       options[value] = list[index + 1];
       index += 1;
-    } else if (value.startsWith("--")) {
+    } else if (value.startsWith("--") || value === "-r") {
       flags.add(value);
     } else {
       positionals.push(value);
@@ -269,7 +274,7 @@ async function main() {
     },
   });
   if (op === "--version") {
-    process.stdout.write("0.6.1\n");
+    process.stdout.write("0.8.0\n");
     return;
   }
   if (process.env.LUME_TELEMETRY_ENABLED !== "false" || process.env.LUME_UPDATE_CHECK !== "false") {
@@ -303,7 +308,11 @@ async function main() {
       if (!options["--ipsw"] || !existsSync(options["--ipsw"])) fail("restore image not found");
       if (state.vms[name]) fail(`Virtual machine already exists with name: ${name}`);
       // `--unattended` boots the new VM to drive Setup Assistant, so it needs one of
-      // the macOS VM places like `run` does (assumed, confirm on the owner Mac).
+      // the macOS VM places and host free space like `run` does.
+      if (listed("AIDEN_FAKE_LUME_LOW_DISK", name)) {
+        process.stderr.write(readFileSync(path.join(fixtures, "lume-error-low-disk.txt"), "utf8"));
+        process.exit(1);
+      }
       const createLimit = Number(process.env.AIDEN_FAKE_LUME_LIMIT ?? "0");
       if (createLimit > 0 && Object.values(state.vms).filter(isRunning).length >= createLimit) {
         process.stderr.write(readFileSync(path.join(fixtures, "lume-error-vm-limit.txt"), "utf8"));
@@ -352,6 +361,12 @@ async function main() {
       const vm = state.vms[name];
       if (!vm) fail(`Virtual machine not found: ${name}`);
       if (!flags.has("--detach") || options["--display"] !== "none") fail("Aiden always runs detached with no display", 75);
+      if (!flags.has("--no-audio-device") || !flags.has("--no-clipboard-device")) {
+        fail("Aiden always disables host audio and clipboard devices", 75);
+      }
+      if (flags.has("--clipboard")) {
+        fail("'--clipboard' cannot be combined with '--no-clipboard-device'.", 75);
+      }
       const shared = options["--shared-dir"] ?? "";
       if (!shared.endsWith(":rw") || !path.isAbsolute(shared.slice(0, -3)) || !existsSync(shared.slice(0, -3))) {
         fail("shared directory must be an existing absolute path tagged :rw", 76);
@@ -361,6 +376,15 @@ async function main() {
       if (isRunning(vm)) fail(`Virtual machine already running: ${name}`);
       if (staleNames().has(name)) fail(`Virtual machine is still being provisioned: ${name}`);
       const returnDelay = Number(process.env.AIDEN_FAKE_LUME_RUN_RETURN_DELAY_MS ?? "0");
+      if (listed("AIDEN_FAKE_LUME_LOW_DISK", name)) {
+        if (logFile) {
+          mkdirSync(path.dirname(logFile), { recursive: true });
+          appendFileSync(logFile, readFileSync(path.join(fixtures, "lume-error-low-disk.txt"), "utf8"));
+        }
+        if (returnDelay > 0) await sleep(returnDelay);
+        process.stdout.write(`Started '${name}' in the background (PID 1).\nLog: ${logFile}\n`);
+        return;
+      }
       const limit = Number(process.env.AIDEN_FAKE_LUME_LIMIT ?? "0");
       const running = Object.values(state.vms).filter(isRunning).length;
       if (limit > 0 && running >= limit) {
@@ -461,6 +485,49 @@ async function main() {
       if (!isRunning(vm)) fail(`VM '${name}' is not running`);
       if (command.join(" ") === "cat /etc/ssh/ssh_host_ed25519_key.pub") {
         process.stdout.write(`${vm.hostKey ?? DEFAULT_HOST_KEY} root@guest\n`);
+      }
+      return;
+    }
+    case "cp": {
+      if (positionals.length !== 3) fail("cp needs a source and a destination", 74);
+      const [, rawSource, rawDestination] = positionals;
+      const parseEndpoint = (raw) => {
+        const colon = raw.indexOf(":");
+        if (colon > 0 && !raw.slice(0, colon).includes("/")) {
+          return { kind: "remote", vm: raw.slice(0, colon), path: raw.slice(colon + 1) };
+        }
+        return { kind: "local", path: raw };
+      };
+      const src = parseEndpoint(rawSource);
+      const dst = parseEndpoint(rawDestination);
+      if (src.kind === "local" && dst.kind === "local") {
+        fail("Either the source or the destination must be a VM path (VM:PATH).");
+      }
+      if (src.kind === "remote" && dst.kind === "remote") {
+        fail("Copying directly between two VMs is not supported; one path must be on the host.");
+      }
+      const upload = src.kind === "local";
+      const remote = upload ? dst : src;
+      const local = upload ? src : dst;
+      if (upload && !existsSync(local.path)) {
+        fail(`Source path '${local.path}' does not exist on the host`);
+      }
+      const vm = state.vms[remote.vm];
+      log({
+        kind: "cp",
+        name: remote.vm,
+        direction: upload ? "to_guest" : "from_guest",
+        localPath: local.path,
+        remotePath: remote.path,
+        recursive: flags.has("--recursive") || flags.has("-r"),
+        timeout: options["--timeout"],
+      });
+      if (!vm) fail(`VM '${remote.vm}' not found`);
+      if (!isRunning(vm)) fail(`VM '${remote.vm}' is not running`);
+      if (upload) {
+        process.stdout.write(`Copied ${local.path} to ${remote.vm}:${remote.path}\n`);
+      } else {
+        process.stdout.write(`Copied ${remote.vm}:${remote.path} to ${local.path}\n`);
       }
       return;
     }

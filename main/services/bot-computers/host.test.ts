@@ -38,6 +38,7 @@ interface FakeConfig {
   log: string;
   stale?: string;
   limit?: number;
+  lowDisk?: string;
   vncHost?: string;
   stopDelayMs?: number;
   stopFails?: string;
@@ -260,6 +261,11 @@ async function withHost(run: (context: Harness) => Promise<void>, overrides: Par
       assert.equal(args[args.indexOf("--dest-storage") + 1], storage);
     } else {
       assert.equal(args[args.indexOf("--storage") + 1], storage, `${call.op} names Aiden's storage`);
+    }
+    if (call.op === "run") {
+      assert.ok(args.includes("--no-audio-device"), "every VM start leaves out the host audio device");
+      assert.ok(args.includes("--no-clipboard-device"), "every VM start leaves out the host clipboard device");
+      assert.equal(args.includes("--clipboard"), false, "no VM start enables host clipboard sync");
     }
     assert.ok(!["serve", "pull", "update"].includes(call.op ?? ""));
   }
@@ -1047,6 +1053,35 @@ test("Lume's VM-limit failure becomes a clear message, and the slot is released"
       (error: unknown) => error instanceof BotComputerError && error.code === "vm_limit" && /two virtual machines/u.test(error.message),
     );
     assert.equal((await context.host.computer("ben"))?.state, "stopped");
+  });
+});
+
+test("Lume's low-disk refusal during start or base create becomes a clear message and releases the slot", async () => {
+  await withHost(async (context) => {
+    // Base create refused by Lume for insufficient host free space.
+    context.config.lowDisk = BOT_COMPUTER_BASE_VM;
+    context.writeConfig();
+    await assert.rejects(
+      context.host.setUp(),
+      (error: unknown) => error instanceof BotComputerError && error.code === "low_disk" && /free disk space/u.test(error.message),
+    );
+    assert.equal((await context.host.status()).setup.kind, "failed");
+
+    // Once space is free, Set up succeeds; then Lume refuses a Bot start for low disk.
+    context.config.lowDisk = undefined;
+    context.writeConfig();
+    await setUp(context);
+    const { vmName } = await context.host.give("ada");
+    context.config.lowDisk = vmName;
+    context.writeConfig();
+    const from = context.calls().length;
+    await assert.rejects(
+      context.host.ensureRunning("ada", { reason: "tool" }),
+      (error: unknown) => error instanceof BotComputerError && error.code === "low_disk" && /Ada's computer.*free disk space/u.test(error.message),
+    );
+    assert.equal((await context.host.computer("ada"))?.state, "stopped");
+    const stops = context.calls().slice(from).filter((call) => call.op === "stop").length;
+    assert.equal(stops, 1, "a low-disk refusal in Lume's log stops watching at once");
   });
 });
 
