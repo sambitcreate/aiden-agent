@@ -452,11 +452,15 @@ test("a Bot paused after its opening feed read the state is still reported pause
   try {
     await live.service.send("bot:a", { text: "Take your time", requestId: "desk-1" });
     await atPlan;
+    // A second running notice (a follow-up accepted mid-run) joins the same opening.
+    live.projection.notifyState("bot:a", await live.service.state("bot:a"));
     assert.equal((await live.service.pause("bot:a", "mac")).kind, "paused");
     held = false;
     release!();
     await waitFor(() => settled.length > 0, { what: "the paused run to be reported" });
-    assert.deepEqual(settled, ["paused"]);
+    // Give a second report, if any, time to arrive.
+    await new Promise((resolve) => setTimeout(resolve, 200));
+    assert.deepEqual(settled, ["paused"], "one opening, one report");
     const view = await live.projection.subscribe("bot:a", recorder().sink);
     view.unsubscribe();
     assert.equal(view.snapshot.state.kind, "paused", "the feed shows the pause, not the running state read before it");

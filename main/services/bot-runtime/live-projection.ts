@@ -1193,6 +1193,8 @@ export function createBotLiveProjection(deps: BotLiveProjectionDeps): BotLivePro
   const lastSeq = new Map<string, number>();
 
   const report = (botId: string, error: unknown) => deps.onError?.(botId, error);
+  /** Errors of feed openings already handled, so notices that joined one act on it once. */
+  const failedOpenings = new WeakSet<object>();
   const classifyRetryMs = deps.classifyRetryMs ?? 1_000;
 
   function snapshotOf(feed: Feed): BotLiveSnapshot {
@@ -1655,6 +1657,12 @@ export function createBotLiveProjection(deps: BotLiveProjectionDeps): BotLivePro
             }
           }),
         (error) => {
+          // Every notice that joined the same opening sees the same error:
+          // the failed opening is reported, and settled, once.
+          if (typeof error === "object" && error !== null) {
+            if (failedOpenings.has(error)) return;
+            failedOpenings.add(error);
+          }
           report(botId, error);
           // A pause can stop the conversation's watch while the feed opens, so
           // the feed never opens; a run that ended meanwhile is still reported.
