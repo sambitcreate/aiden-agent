@@ -27,15 +27,31 @@ async function eachBot<T>(ids: readonly string[], read: (id: string) => Promise<
 /**
  * The summary this host's Bot rows come from, as on the desktop: what waits on
  * the person (an approval), the run state, the newest reply and its line. A
- * Bot's transcript is read again only after its newest entry changes.
+ * Bot's transcript is read again only after its newest entry changes. As on
+ * the desktop, a running Bot's feed stays open until its run settles, so the
+ * end of every turn (a reply, a failure) reaches the host feed with its row.
  */
 export function createCliBotSignals(durable: NonNullable<Awaited<ReturnType<typeof createCliBots>>["durable"]>) {
+  const listeners = new Set<() => void>();
+  const changed = () => {
+    for (const listener of [...listeners]) {
+      try { listener(); } catch (error) { process.stderr.write(`aiden: Bot row listener failed: ${error instanceof Error ? error.message : String(error)}\n`); }
+    }
+  };
   const live: BotLiveProjection = createBotLiveProjection({
     conversation: (botId) => durable.runtime.conversation(botId),
     state: (botId) => durable.runtime.state(botId),
     quietInputs: (botId, ids) => durable.runtime.quietInputs(botId, ids),
     approvalPending: (botId) => durable.approvals.pending(botId).length > 0,
+    // A run ended: its reply, or why it failed, is now readable.
+    onRunSettled: () => changed(),
+    onError: (botId, error) => process.stderr.write(`aiden: Bot ${botId} row: ${error instanceof Error ? error.message : String(error)}\n`),
   });
+  // A turn started or ended, or a pause: the feed follows a running Bot to its end.
+  const detach = [
+    durable.stateChanges((botId, state) => { live.notifyState(botId, state); changed(); }),
+    durable.approvals.onChange(() => changed()),
+  ];
   return {
     /** Host feed Bot rows (revisions 52 and 66): Needs you, Failed, last reply and its line. */
     botSignals: async (bots: readonly { id: string }[]): Promise<ReadonlyMap<string, AidenRemoteHostFeedBotSignals>> =>
@@ -43,12 +59,16 @@ export function createCliBotSignals(durable: NonNullable<Awaited<ReturnType<type
     /** Revision 68 (`bot:needs-you`): which Bots wait on the person, without reading transcripts. */
     botNeedsYou: async (botIds: readonly string[]): Promise<ReadonlySet<string>> =>
       new Set((await eachBot(botIds, (id) => live.needsYou(id).catch(() => false))).filter(([, waiting]) => waiting).map(([id]) => id)),
-    /** A Bot's row changed: its state (a turn started or ended, a pause) or an approval. */
+    /** A Bot's row changed: a turn started or ended, a pause, or an approval. */
     onChange(listener: () => void): () => void {
-      const detach = [durable.stateChanges(() => listener()), durable.approvals.onChange(() => listener())];
-      return () => { for (const off of detach) off(); };
+      listeners.add(listener);
+      return () => { listeners.delete(listener); };
     },
-    close: () => live.close(),
+    close: () => {
+      for (const off of detach) off();
+      listeners.clear();
+      return live.close();
+    },
   };
 }
 

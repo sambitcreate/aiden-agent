@@ -1,4 +1,5 @@
 import { createBotMessageLedger } from "../../../main/services/bot-messages/ledger.js";
+import type { BotSessionState } from "../../../main/services/bot-runtime/bot-session-service.js";
 import { createBotMessageCourier } from "../../../main/services/bot-messages/courier.js";
 import { createBotMessageLifecycle } from "../../../main/services/bot-messages/lifecycle.js";
 import { projectBotMessageRoster } from "../../../main/services/bot-messages/roster.js";
@@ -86,9 +87,9 @@ export async function createCliDurableBots(profileDir: string, ports: CliDurable
   const imageInputs = new Map<string, boolean>();
   const approvals = createBotApprovals({ publish: () => {} });
   const memory = createBotMemoryService({ store: createBotMemoryStore({ profileDir }) });
-  const stateListeners = new Set<(botId: string) => void>();
+  const stateListeners = new Set<(botId: string, state: BotSessionState) => void>();
   /** Pause changes commit no entry; open phone streams hear them here. */
-  const stateChanges = (listener: (botId: string) => void) => { stateListeners.add(listener); return () => { stateListeners.delete(listener); }; };
+  const stateChanges = (listener: (botId: string, state: BotSessionState) => void) => { stateListeners.add(listener); return () => { stateListeners.delete(listener); }; };
   const spending = createCliBotSpending(profileDir);
   const spendingRefusal = async (botId: string) => spending.refusal(botId, (await ports.botStore.get(botId))?.name);
   const roster = async () => projectBotMessageRoster(await ports.botStore.list(), {
@@ -227,9 +228,9 @@ export async function createCliDurableBots(profileDir: string, ports: CliDurable
       },
     },
     onSessionOpen: (botId) => memory.beginSession(botId),
-    onStateChange: (botId) => {
+    onStateChange: (botId, state) => {
       for (const listener of stateListeners) {
-        try { listener(botId); } catch (error) { process.stderr.write(`Bot ${botId} state listener failed: ${error instanceof Error ? error.message : String(error)}\n`); }
+        try { listener(botId, state); } catch (error) { process.stderr.write(`Bot ${botId} state listener failed: ${error instanceof Error ? error.message : String(error)}\n`); }
       }
     },
     deleteEffects: [(botId) => messages.forgetBot(botId), ports.deleteRoutines, async (botId) => { try { await spending.forgetBot(botId); } catch (error) { process.stderr.write(`Bot ${botId} spending cleanup: ${String(error)}\n`); } }, async (botId) => { memory.forgetBot(botId); models.forget(botId); imageInputs.delete(botId); }, async (botId) => { await ports.pauses.forgetBot(botId); }, async (botId) => { await ports.application.deleteBot({ botId }); }],

@@ -2472,9 +2472,10 @@ test("durable CLI Bot migration preserves history, dedupes across restart, and f
   const oldEntry = process.env.AIDEN_CLI_ENTRY;
   process.env.AIDEN_CLI_ENTRY = join(pkg, "dist/app/cli.js");
   t.after(() => { if (oldEntry === undefined) delete process.env.AIDEN_CLI_ENTRY; else process.env.AIDEN_CLI_ENTRY = oldEntry; });
-  let calls = 0, hold = false, scriptResult, scriptTools;
+  let calls = 0, hold = false, gate = null, scriptResult, scriptTools;
   const server = createServer(async (request, response) => {
     let body = ""; for await (const chunk of request) body += chunk;
+    if (gate) await gate.promise;
     const parsed = JSON.parse(body);
     const write = JSON.stringify(parsed.messages).includes("Write durable file") && !parsed.messages.some((message) => message.role === "tool");
     const last = parsed.messages.at(-1);
@@ -2537,6 +2538,7 @@ test("durable CLI Bot migration preserves history, dedupes across restart, and f
   assert.equal(remoteBots.botSessions.supportsAttachments, false);
   assert.equal(remoteBots.botSessions.supportsActivity, false);
   await remoteBots.botSessions.close();
+  remoteBots.signals.close();
   const routine = await host.routines.create({ botId: bot.id, name: "Read update", prompt: "Give a brief update", schedule: { kind: "daily", time: "12:00" }, timezone: "UTC" });
   const routineRun = await scheduler.service.runNow(routine.id, { runId: "stable-routine-fire" });
   assert.equal(routineRun.result, "success");
@@ -2581,8 +2583,28 @@ test("durable CLI Bot migration preserves history, dedupes across restart, and f
   forkSnapshot.messages.find((message) => message.role === "user").content = "caller mutated snapshot";
   assert.equal((await callContext.loadChat()).messages.find((message) => message.role === "user").content, "Hello", "call snapshot cannot be mutated by another consumer");
 
+  // A paired desktop's feed re-reads its rows on each change: a turn's end alone brings the row its reply.
+  const { signals: replySignals } = api.createCliRemoteBots(dir, "test-instance", host, daemon, {}, ledger, async () => {});
+  const before = Date.parse((await replySignals.botSignals([{ id: bot.id }])).get(bot.id).lastReplyAt);
+  const seen = [];
+  const offReply = replySignals.onChange(() => { seen.push(replySignals.botSignals([{ id: bot.id }]).then((rows) => rows.get(bot.id))); });
+  let release;
+  gate = { promise: new Promise((resolve) => { release = resolve; }) };
   const writeTurn = await host.durable.runtime.send(bot.id, { text: "Write durable file", requestId: "durable-write-once" });
-  assert.equal((await host.durable.runtime.awaitReply(bot.id, writeTurn.submissionId, new AbortController().signal)).kind, "completed");
+  try {
+    await Promise.all(seen);
+    const whileRunning = seen.length;
+    gate = null;
+    release();
+    assert.equal((await host.durable.runtime.awaitReply(bot.id, writeTurn.submissionId, new AbortController().signal)).kind, "completed");
+    let settledRow;
+    for (let attempt = 0; attempt < 100 && !settledRow; attempt += 1) {
+      settledRow = (await Promise.all(seen.slice(whileRunning))).find((value) => value?.lastReplyAt && Date.parse(value.lastReplyAt) > before);
+      if (!settledRow) await new Promise((resolve) => setTimeout(resolve, 20));
+    }
+    assert.ok(settledRow, "the finished turn alone reaches the host feed, with its reply");
+    assert.equal(settledRow.preview, "Durable answer");
+  } finally { gate = null; release(); offReply(); replySignals.close(); }
   assert.equal(readFileSync(join((await host.managedWorkspace.resolve(bot.id)).homePath, "durable.txt"), "utf8"), "Written by the durable Bot");
   // Codemode runs in the bundle: the script's read is a nested call through the Bot's own checks.
   const scriptTurn = await host.durable.runtime.send(bot.id, { text: "Script durable file", requestId: "durable-script-once" });
