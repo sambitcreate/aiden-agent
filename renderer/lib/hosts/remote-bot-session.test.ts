@@ -731,9 +731,43 @@ test("a rewrite that removed every kept entry asks the host about only a few of 
   const probes = asked.filter(([before]) => before.startsWith("k"));
   assert.ok(probes.length > 0 && probes.length <= 8, JSON.stringify(probes));
   assert.ok(asked.length <= probes.length + 2, JSON.stringify(asked));
+  // Kept entries were left unasked, so the loaded part is dropped and Load older starts again.
+  assert.deepEqual(follower.getState().view!.snapshot.entries.map((entry) => entry.id), ["m5", "m6", "m7"]);
+  assert.equal(follower.getState().view!.hasOlder, true);
+  follower.stop();
+});
+
+test("running out of questions drops the loaded part rather than show a partial re-read as it", async () => {
+  const message = (id: string) => ({ type: "message" as const, id, role: "assistant" as const, text: id });
+  const keptIds = Array.from({ length: 12 }, (_, index) => `k${index + 1}`);
+  // The host removed the first ten kept entries; "k11" and "k12" remain, far back behind entries this Mac
+  // can't show, and two new entries sit where the bounded re-read reaches.
+  const host = ["k11", "k12", ...Array.from({ length: 60 }, (_, index) => `u${index + 1}`), "o1", "o2", "m5", "m6", "m7"];
+  const fake = fakeTransport([session({ hasOlder: true, entries: [...keptIds, "m5", "m6"].map(message) })]);
+  const asked: Array<[string, number | undefined]> = [];
+  fake.transport.older = async (_hostId, _botId, before, limit) => {
+    asked.push([before, limit]);
+    const end = host.indexOf(before);
+    if (end < 0) return { ok: false, error: { code: "http_error", status: 409, remoteCode: "operation_stale", message: "This Bot's chat changed. Read it again." } };
+    const start = Math.max(0, end - (limit ?? 2));
+    const sent = host.slice(start, end);
+    return {
+      ok: true,
+      value: {
+        botId: "bot_1", epoch: "e1", hasOlder: start > 0, olderCursor: sent[0], hostCount: sent.length,
+        entries: sent.filter((id) => !id.startsWith("u")).map(message),
+      },
+    };
+  };
+  const follower = new RemoteBotSessionFollower(fake.transport, "host_a", "bot_1");
+  follower.start();
+  await settle();
+  fake.push(event(4, { type: "snapshot", payload: { session: session({ seq: 5, hasOlder: true, entries: ["m5", "m6", "m7"].map(message) }) } }));
+  await settle();
+  assert.ok(asked.filter(([before]) => before.startsWith("k")).length <= 8, JSON.stringify(asked));
   const ids = follower.getState().view!.snapshot.entries.map((entry) => entry.id);
-  assert.ok(!ids.some((id) => id.startsWith("k")), "the removed entries are gone");
-  assert.deepEqual(ids.slice(-3), ["m5", "m6", "m7"]);
+  assert.deepEqual(ids, ["m5", "m6", "m7"], "a partial re-read missing k11 and k12 is not shown as the loaded part");
+  assert.equal(follower.getState().view!.hasOlder, true);
   follower.stop();
 });
 
