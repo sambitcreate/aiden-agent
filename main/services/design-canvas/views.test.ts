@@ -108,6 +108,21 @@ test("when the window goes, every view is unmounted and every page kept", async 
   assert.equal((await views.get("chat-b", "ws-2"))?.pageId, "p3");
 });
 
+test("pageIdsOf lists other chats' kept pages, not the asking chat's, and reads them from the file after a restart", async (t) => {
+  const root = await tempRoot(t);
+  const before = new DesignCanvasViews({ root: () => root });
+  await before.report("chat-a", "ws-1", view("page-1"), 0);
+  await before.report("chat-b", "ws-1", view("page-2"), 0);
+  await before.showPage("chat-c", "ws-1", "page-3");
+  await before.report("chat-d", "ws-2", view("page-4"), 0);
+  assert.deepEqual([...(await before.pageIdsOf("ws-1", "chat-a"))].sort(), ["page-2", "page-3"]);
+  await before.flush();
+
+  const after = new DesignCanvasViews({ root: () => root });
+  assert.deepEqual([...(await after.pageIdsOf("ws-1", "chat-b"))].sort(), ["page-1", "page-3"]);
+  assert.deepEqual([...(await after.pageIdsOf("ws-3", "chat-a"))], []);
+});
+
 test("views survive a restart: a new instance on the same root reads the page, viewports and focusId", async (t) => {
   const root = await tempRoot(t);
   const before = new DesignCanvasViews({ root: () => root });

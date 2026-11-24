@@ -164,6 +164,15 @@ export class DesignCanvasViews {
     };
   }
 
+  /** The pages every other chat on the workspace was last on, whether or not its canvas is open. */
+  async pageIdsOf(workspaceId: string, exceptChatId: string): Promise<Set<string>> {
+    const pageIds = new Set<string>();
+    for (const [chatId, entry] of (await this.workspace(workspaceId)).entries) {
+      if (chatId !== exceptChatId) pageIds.add(entry.pageId);
+    }
+    return pageIds;
+  }
+
   /** How many chats have this workspace's canvas open. */
   mounted(workspaceId: string): number {
     let count = 0;
