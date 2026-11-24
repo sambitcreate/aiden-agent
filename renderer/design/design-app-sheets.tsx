@@ -154,6 +154,8 @@ export function DesignAppConnectSheet({
   const [connecting, setConnecting] = React.useState<string | null>(null);
   const [errors, setErrors] = React.useState<ReadonlyMap<string, string>>(new Map());
   const reads = React.useRef(0);
+  /** Each open and each close starts a new lifetime: a connect from an earlier one settles into nothing. */
+  const lifetime = React.useRef(0);
 
   const scan = React.useCallback(async () => {
     const read = ++reads.current;
@@ -168,6 +170,7 @@ export function DesignAppConnectSheet({
   }, [chatId]);
 
   React.useEffect(() => {
+    lifetime.current += 1;
     if (!open) {
       reads.current += 1;
       return;
@@ -179,6 +182,7 @@ export function DesignAppConnectSheet({
 
   const connect = async (server: DesignAppRunningServer) => {
     const key = `${server.port}:${server.pid}`;
+    const begun = lifetime.current;
     setConnecting(key);
     setErrors((current) => {
       const next = new Map(current);
@@ -192,6 +196,8 @@ export function DesignAppConnectSheet({
     } catch (cause) {
       message = cause instanceof Error && cause.message ? cause.message : CONNECT_FAILED;
     }
+    // The sheet closed (and maybe opened again) meanwhile: this answer is no longer its to show or act on.
+    if (begun !== lifetime.current) return;
     setConnecting(null);
     if (message === null) {
       onOpenChange(false);

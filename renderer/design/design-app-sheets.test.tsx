@@ -249,6 +249,50 @@ test("a successful connect closes the sheet and returns focus through returnFocu
   chip.remove();
 });
 
+test("a connect still pending when the sheet closes and opens again neither closes the new sheet nor writes its failure there", async () => {
+  for (const ending of ["fails", "succeeds"] as const) {
+    const answer = pending<DesignAppStatus>();
+    installBotTestIpc({ "designApp:running": () => scanOf([server()]), "designApp:connect": () => answer.promise });
+    let setOpen: (open: boolean) => void = () => undefined;
+    let closes = 0;
+    function Toggle() {
+      const [open, set] = React.useState(true);
+      setOpen = set;
+      return (
+        <DesignAppConnectSheet
+          open={open}
+          onOpenChange={(next) => {
+            set(next);
+            if (!next) closes += 1;
+          }}
+          chatId="chat-1"
+        />
+      );
+    }
+    render(<Toggle />);
+    fireEvent.click(await within(await dialog()).findByRole("button", { name: "Connect to 127.0.0.1:5173" }));
+    act(() => setOpen(false));
+    await waitFor(() => assert.equal(screen.queryByRole("dialog", { name: "Connect running server" }) === null, true));
+    act(() => setOpen(true));
+    const reopened = await dialog();
+    await within(reopened).findByRole("button", { name: "Connect to 127.0.0.1:5173" });
+    await act(async () =>
+      answer.resolve(
+        ending === "fails"
+          ? status({ appRoot: "apps/web", phase: "stopped", problem: { problem: "attach-not-loopback" } })
+          : status({ appRoot: "apps/web", source: "attached", phase: "running", origin: "http://127.0.0.1:5173", port: 5173 }),
+      ),
+    );
+    await act(() => new Promise<void>((resolve) => setTimeout(resolve, 20)));
+    assert.equal(within(reopened).queryAllByRole("alert").length, 0, `${ending}: no failure in the new sheet`);
+    assert.equal(closes, 0, `${ending}: the new sheet stays open`);
+    assert.equal(reopened.isConnected, true, ending);
+    const button = within(reopened).getByRole("button", { name: "Connect to 127.0.0.1:5173" }) as HTMLButtonElement;
+    assert.equal(button.disabled, false, `${ending}: its rows can connect`);
+    cleanup();
+  }
+});
+
 test("an incomplete scan says some servers may be missing", async () => {
   installBotTestIpc({ "designApp:running": () => scanOf([server()], { incomplete: true }) });
   render(<ConnectHarness />);
