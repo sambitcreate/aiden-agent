@@ -705,7 +705,9 @@ export class DesignAppServers {
           const job = this.spawn(entry, attempt, {
             workspaceId: entry.workspaceId,
             appRoot: entry.appRoot,
-            cwd: absolute(workspacePath, app.installRoot),
+            // The checkout the consent covers (its real path, read with the surface), never the configured
+            // path, which a retargeted link could point elsewhere by now.
+            cwd: absolute(surface.surface.checkout, app.installRoot),
             argv: { file: toolchain.manager.path, args: command.args },
             display: [command.command, ...command.args].join(" "),
             description: "Install the app's dependencies",
@@ -747,7 +749,7 @@ export class DesignAppServers {
         const job = this.spawn(entry, attempt, {
           workspaceId: entry.workspaceId,
           appRoot: entry.appRoot,
-          cwd: absolute(workspacePath, entry.appRoot),
+          cwd: absolute(surface.surface.checkout, entry.appRoot),
           argv: { file: toolchain.manager.path, args: plan.run.args },
           display: surface.surface.runArgv.join(" "),
           description: "Run the app's dev server",

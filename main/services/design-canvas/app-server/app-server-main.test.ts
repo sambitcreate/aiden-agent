@@ -259,6 +259,8 @@ function harness(_t: test.TestContext, options: Options = {}) {
     portCalls: [] as Array<{ sticky?: number; fallback: number }>,
     osPorts: 40_000,
     saved: [] as Array<{ root: string; script: string }>,
+    /** The real folder a workspace path resolves to when the surface is read (a link's target). */
+    checkouts: new Map<string, string>(),
   };
   const records = memoryRecords();
   const consent = new DesignAppConsent();
@@ -289,7 +291,7 @@ function harness(_t: test.TestContext, options: Options = {}) {
       return {
         fingerprint: state.fingerprints.get(app.root) ?? "F1",
         surface: {
-          checkout: root,
+          checkout: state.checkouts.get(root) ?? root,
           appRoot: app.root,
           installRoot: app.installRoot,
           lockfileLevelsUp: app.packageManager.lockfileLevelsUp,
@@ -1191,6 +1193,22 @@ test("a described entry naming a non-web root, a missing script or an unsafe nam
   await settle();
   assert.equal(h.cards().length, 0);
   assert.equal(h.jobs.jobs.length, 0);
+});
+
+test("the install and the server run in the checkout the consent covers, even if the workspace link is retargeted after the read", async (t) => {
+  const h = harness(t, { apps: [webApp({ root: "apps/web", installRoot: ".", installed: false })] });
+  // /w/ws is a link to /real/a when the launch surface is read; nothing re-resolves it at spawn.
+  h.state.checkouts.set("/w/ws", "/real/a");
+  void h.servers.start({ ...h.input(), appRoot: "apps/web" });
+  await settle();
+  await h.answer("allow");
+  const install = h.jobs.last();
+  assert.equal(install.input.cwd, "/real/a", "the install runs in the fingerprinted checkout, not the configured path");
+  h.state.apps = [webApp({ root: "apps/web", installRoot: ".", installed: true })];
+  h.jobs.exit(install.view.id, 0);
+  await settle();
+  const server = h.jobs.last();
+  assert.equal(server.input.cwd, "/real/a/apps/web");
 });
 
 test("choose shows a card with reason choose and savesChoice, and Allow calls saveCanvasConfigApp before starting", async (t) => {
