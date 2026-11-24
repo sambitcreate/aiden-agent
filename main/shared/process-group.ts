@@ -404,9 +404,15 @@ function parseDarwinLsofSharedPipeMatches(
     } else if (tag === "n") {
       const trimmed = value.trim();
       if (trimmed.length === 0) continue;
-      const match = trimmed.match(/^->(0x[0-9a-f]+)(?:\s+\([^)]*\))?$/iu);
-      if (match) {
-        peerAddr = normalizeKernelHexAddr(match[1]!);
+      // Darwin `lsof` appends `, cnt=<bytes>` to non-empty anonymous pipes
+      // (`process_pipe_common` in dialects/darwin/dfile.c) and may include a
+      // trailing ` (...)` annotation. Reject named paths, all-zero peer
+      // addresses, malformed suffixes, and unconnected entries (`->(none)` or
+      // bare `, cnt=N`).
+      const match = trimmed.match(/^->(0x[0-9a-f]+)(?:,\s*cnt=\d+)?(?:\s+\([^)]*\))?$/iu);
+      const parsedPeerAddr = match ? normalizeKernelHexAddr(match[1]!) : undefined;
+      if (parsedPeerAddr) {
+        peerAddr = parsedPeerAddr;
       } else {
         hasNamedPath = true;
       }
@@ -438,8 +444,10 @@ function parseDarwinLsofSharedPipeMatches(
 /**
  * Parses macOS/Darwin `lsof -nP -p <selfPid>,<candidates> -F pftdDn` output and
  * returns the candidate PIDs proven to hold the peer endpoint of an anonymous
- * `PIPE` or `unix` socketpair held open by `selfPid` on `transportFds`.
- * Named Unix sockets, all-zero addresses, and unconnected endpoints are rejected.
+ * `PIPE` or `unix` socketpair held open by `selfPid` on `transportFds`
+ * (including buffered pipes reported as `->0x<hex>, cnt=<bytes>`).
+ * Named Unix sockets, all-zero addresses, malformed suffixes, and unconnected
+ * endpoints are rejected.
  */
 export function parseDarwinLsofSharedPipePids(
   stdout: string,

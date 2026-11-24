@@ -375,6 +375,91 @@ test("Darwin lsof parser verifies anonymous PIPE and unix socketpairs and reject
   assert.deepEqual([...matched].sort((a, b) => a - b), [2001, 2002]);
 });
 
+test("Darwin lsof parser accepts buffered anonymous pipes with cnt=N while rejecting named, zero, malformed, and unconnected endpoints", () => {
+  const darwinLsof = [
+    "p1000",
+    // Buffered anonymous PIPE on transport FD 25 (unread bytes on parent end)
+    "f25",
+    "tPIPE",
+    "d0x1111aaaa",
+    "n->0x2222bbbb, cnt=42",
+    // Anonymous PIPE on transport FD 26 with trailing annotation; candidate end is buffered
+    "f26",
+    "tPIPE",
+    "d0x1111cccc",
+    "n->0x2222dddd (pipe)",
+    // Parent PIPE on FD 27 paired against malformed/zero/named candidates below
+    "f27",
+    "tPIPE",
+    "d0x3333aaaa",
+    "n->0x4444bbbb",
+    // Unconnected parent PIPE on FD 28 (no peer)
+    "f28",
+    "tPIPE",
+    "d0x5555aaaa",
+    // Candidate 3001: peer of buffered FD 25 (unbuffered write end)
+    "p3001",
+    "f1",
+    "tPIPE",
+    "d0x2222bbbb",
+    "n->0x1111aaaa",
+    // Candidate 3002: peer of FD 26 with buffered cnt=N and optional annotation
+    "p3002",
+    "f2",
+    "tPIPE",
+    "d0x2222dddd",
+    "n->0x1111cccc, cnt=128 (pipe)",
+    // Candidate 3003: named path target on matching local address (rejected)
+    "p3003",
+    "f1",
+    "tPIPE",
+    "d0x4444bbbb",
+    "n->/tmp/mcp.sock",
+    // Candidate 3004: explicit zero peer address on matching local address (rejected)
+    "p3004",
+    "f1",
+    "tPIPE",
+    "d0x4444bbbb",
+    "n->0x00000000, cnt=5",
+    // Candidate 3005: malformed cnt suffix on matching local address (rejected)
+    "p3005",
+    "f1",
+    "tPIPE",
+    "d0x4444bbbb",
+    "n->0x3333aaaa, cnt=abc",
+    // Candidate 3006: unknown extra suffix on matching local address (rejected)
+    "p3006",
+    "f1",
+    "tPIPE",
+    "d0x4444bbbb",
+    "n->0x3333aaaa, extra=1",
+    // Candidate 3007: unconnected buffered pipe (bare `, cnt=42`) (rejected)
+    "p3007",
+    "f1",
+    "tPIPE",
+    "d0x4444bbbb",
+    "n, cnt=42",
+    // Candidate 3008: unconnected unix socket `->(none)` (rejected)
+    "p3008",
+    "f1",
+    "tunix",
+    "d0x4444bbbb",
+    "n->(none)",
+    // Candidate 3009: unconnected pipe with no `n` line matching unconnected FD 28 (rejected)
+    "p3009",
+    "f1",
+    "tPIPE",
+    "d0x5555aaaa",
+  ].join("\n");
+  const matched = parseDarwinLsofSharedPipePids(
+    darwinLsof,
+    1000,
+    new Set([25, 26, 27, 28]),
+    new Set([3001, 3002, 3003, 3004, 3005, 3006, 3007, 3008, 3009]),
+  );
+  assert.deepEqual([...matched].sort((a, b) => a - b), [3001, 3002]);
+});
+
 test("captureProcessGroupSurvivors fails closed without proof and verifies pipe-inheriting survivors while rejecting unrelated leaderless groups", { skip: !posix }, async (t) => {
   const dir = await mkdtemp(path.join(os.tmpdir(), "aiden-survivor-proof-"));
   t.after(() => rm(dir, { recursive: true, force: true }));
