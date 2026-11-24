@@ -376,7 +376,8 @@ export const AIDEN_REMOTE_STREAM_SNAPSHOT_REASONS_CONTRACT_REVISION = 65 as cons
  * `main`'s at merge by changing only this constant): host feed Bot rows may
  * carry `preview`, the one plain line the host's own Bots list shows under the
  * Bot's name (at most 140 characters), and a host now sends `lastReplyAt` for
- * every Bot rather than only Bots whose chat is open there. Display-only, no
+ * every Bot rather than only Bots whose chat is open there, marking each row
+ * whose summary it read `summarized: true`. Display-only, no
  * capability or feature token; older desktops ignore the key, and phones don't
  * read the host feed.
  */
@@ -3506,12 +3507,12 @@ export const AIDEN_REMOTE_HOST_FEED_BOT_PREVIEW_MAX = 140;
 /**
  * A host feed Bot row: a Bot summary without `issueCount` (a phone shape),
  * plus revision 52's `needsYou`, `failed` and `lastReplyAt` and revision 66's
- * `preview`, one trimmed plain line.
+ * `preview`, one trimmed plain line, and `summarized`.
  */
 export function parseAidenRemoteHostFeedBot(value: unknown, label = "Host feed Bot"): Record<string, unknown> {
   if (!isRecord(value)) throw new Error(`${label} must be an object.`);
   if (hasOwn(value, "issueCount")) throw new Error(`${label} carries no issueCount.`);
-  const { needsYou, failed, lastReplyAt, preview, ...summary } = value;
+  const { needsYou, failed, lastReplyAt, preview, summarized, ...summary } = value;
   parseAidenRemoteBotSummary(summary);
   assertExactKeys(
     summary,
@@ -3520,6 +3521,7 @@ export function parseAidenRemoteHostFeedBot(value: unknown, label = "Host feed B
   );
   if (needsYou !== undefined && needsYou !== true) throw new Error(`${label} needsYou must be true when present.`);
   if (failed !== undefined && failed !== true) throw new Error(`${label} failed must be true when present.`);
+  if (summarized !== undefined && summarized !== true) throw new Error(`${label} summarized must be true when present.`);
   if (lastReplyAt !== undefined) dateTimeValue(lastReplyAt, `${label} lastReplyAt`);
   if (preview !== undefined) {
     const text = boundedText(preview, `${label} preview`, AIDEN_REMOTE_HOST_FEED_BOT_PREVIEW_MAX);

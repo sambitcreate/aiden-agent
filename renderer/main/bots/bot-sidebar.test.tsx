@@ -702,6 +702,35 @@ test("a paired Mac's Bot shows its last message and photo, and only a reply afte
   assert.equal(photoReads.length, 1, "the same photo is read once");
 });
 
+test("a paired Mac whose Bot had no message when first listed shows a dot for that Bot's first reply", async () => {
+  const queryClient = createBotTestQueryClient();
+  queryClient.setQueryData(hostQueryKeys.list(), [
+    { id: "host-b", name: "Studio", enabled: true, state: "connected", features: ["bot-durable-session-v1"], capabilities: ["chat:read", "chat:write", "bot:read", "bot:write"] },
+  ]);
+  queryClient.setQueryData(hostQueryKeys.statuses(), [
+    { hostId: "host-b", generation: 1, state: { kind: "connected", since: 1 }, feed: "live", stale: false },
+  ]);
+  const scout = { id: "remote-1", name: "Scout", purpose: "", avatar: { semantic: { version: 1, shape: "orb", color: "rose" } }, sessionState: "idle" };
+  const feed = (bot: Record<string, unknown>) => ({
+    hostId: "host-b", epoch: "e1", sequence: 1, stale: false, summaries: [], workspaces: [], bots: [bot], runs: [],
+  });
+  // A new Bot: the host read its summary and found nothing to show.
+  queryClient.setQueryData(hostQueryKeys.feed("host-b"), feed({ ...scout, summarized: true }));
+  sidebarIpc([], {}, { "bots:list": () => [] });
+  await mountSidebar("/bots", queryClient);
+  await screen.findByRole("button", { name: "Scout, on Studio" });
+  await act(async () => {
+    queryClient.setQueryData(hostQueryKeys.feed("host-b"), feed({
+      ...scout,
+      summarized: true,
+      lastReplyAt: new Date(Date.now() - 86_400_000).toISOString(),
+      preview: "Found three flights",
+    }));
+  });
+  const unread = await screen.findByRole("button", { name: "Scout, on Studio, unread" });
+  assert.ok(within(unread).getByRole("img", { name: "Unread", hidden: true }));
+});
+
 test("on a Bots page, a paired Mac's Bots keep up with what that Mac sends", async () => {
   const host = {
     id: "host-b",

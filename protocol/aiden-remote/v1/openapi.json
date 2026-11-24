@@ -18392,6 +18392,10 @@
             "type": "string",
             "minLength": 1,
             "maxLength": 140
+          },
+          "summarized": {
+            "description": "Contract revision 66: the row's preview and lastReplyAt come from the Bot's summary, so a row with this and neither of them is a Bot with no message yet. Absent when the host could not read the summary, and on hosts before revision 66.",
+            "const": true
           }
         },
         "additionalProperties": false
