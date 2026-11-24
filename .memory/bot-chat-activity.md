@@ -101,3 +101,8 @@ If `main` has moved past 29, change every `30` D introduced to the next free rev
 - Still open: a manual VoiceOver/TalkBack pass and an end-to-end run against a real Mac on this branch.
 - Overlapping Stops where one fails briefly clear "Stopping" (cosmetic). No Remove for queued messages on phones (no Remote withdraw route). Chat activity picks have no durable queue.
 
+### Bots across Macs (2026-11-24)
+- PR 1 (#895, desktop only): paired Mac's Bot rows show the feed's avatar, Needs you over Thinking over stop status, never the description; `ChatSidebar` owns `usePeerHostSidebar` so feeds stay live on the Bots page; remote Bot chat only treats 404/403 as gone.
+- PR 2 (Remote revision 66, provisional; re-claim at merge): host-feed Bot rows (`HostFeedBot` in openapi.json, `parseAidenRemoteHostFeedBot`) carry an optional one-line `preview` (140 characters, no control or format characters) and always come from `BotLiveProjection.summary` (`inboxSignals` was removed). New peer binary operation `botAvatar` (`GET /bots/{botId}/avatar/{assetRevision}`) fetches photo avatars for the row and chat title. Unread dots for remote Bots are a per-device record in local storage (`renderer/lib/remote-bot-seen.ts`, key `aiden-agent.remote-bots-seen.v1`), compared only against the host's own `lastReplyAt`.
+- Still to come: PR 3 (plan, access-request and memory cards in remote Bot chats, load older), PR 4 (phones show Needs you), PR 5 (headless server sends the same Bot signals).
+

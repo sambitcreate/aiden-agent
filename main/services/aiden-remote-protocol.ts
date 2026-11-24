@@ -371,7 +371,17 @@ export const AIDEN_REMOTE_CONTINUE_IN_NEW_CHAT_CONTRACT_REVISION = 64 as const;
  * payload so closed decoders on revision <= 64 stay valid.
  */
 export const AIDEN_REMOTE_STREAM_SNAPSHOT_REASONS_CONTRACT_REVISION = 65 as const;
-export const AIDEN_REMOTE_CONTRACT_REVISION = AIDEN_REMOTE_STREAM_SNAPSHOT_REASONS_CONTRACT_REVISION;
+/**
+ * Contract revision 66 (provisional; re-claim the next revision after
+ * `main`'s at merge by changing only this constant): host feed Bot rows may
+ * carry `preview`, the one plain line the host's own Bots list shows under the
+ * Bot's name (at most 140 characters), and a host now sends `lastReplyAt` for
+ * every Bot rather than only Bots whose chat is open there. Display-only, no
+ * capability or feature token; older desktops ignore the key, and phones don't
+ * read the host feed.
+ */
+export const AIDEN_REMOTE_BOT_FEED_PREVIEW_CONTRACT_REVISION = 66 as const;
+export const AIDEN_REMOTE_CONTRACT_REVISION = AIDEN_REMOTE_BOT_FEED_PREVIEW_CONTRACT_REVISION;
 export const AIDEN_REMOTE_BASE_PATH = "/api/aiden/v1" as const;
 export const AIDEN_REMOTE_MAX_SSE_FRAME_BYTES = 1_048_576;
 export const AIDEN_REMOTE_MAX_JSON_RESPONSE_BYTES = 1_048_576;
@@ -3451,6 +3461,36 @@ function parseBotSummaryFields(value: unknown): AidenRemoteBotSummary {
         }
       : {}),
   };
+}
+
+/** The longest `preview` a host feed Bot row carries (revision 66). */
+export const AIDEN_REMOTE_HOST_FEED_BOT_PREVIEW_MAX = 140;
+
+/**
+ * A host feed Bot row: a Bot summary without `issueCount` (a phone shape),
+ * plus revision 52's `needsYou`, `failed` and `lastReplyAt` and revision 66's
+ * `preview`, one trimmed plain line.
+ */
+export function parseAidenRemoteHostFeedBot(value: unknown, label = "Host feed Bot"): Record<string, unknown> {
+  if (!isRecord(value)) throw new Error(`${label} must be an object.`);
+  if (hasOwn(value, "issueCount")) throw new Error(`${label} carries no issueCount.`);
+  const { needsYou, failed, lastReplyAt, preview, ...summary } = value;
+  parseAidenRemoteBotSummary(summary);
+  assertExactKeys(
+    summary,
+    ["id", "name", "purpose", "avatar", "health", "createdAt", "updatedAt", "revision", "sessionState", "paused"],
+    label,
+  );
+  if (needsYou !== undefined && needsYou !== true) throw new Error(`${label} needsYou must be true when present.`);
+  if (failed !== undefined && failed !== true) throw new Error(`${label} failed must be true when present.`);
+  if (lastReplyAt !== undefined) dateTimeValue(lastReplyAt, `${label} lastReplyAt`);
+  if (preview !== undefined) {
+    const text = boundedText(preview, `${label} preview`, AIDEN_REMOTE_HOST_FEED_BOT_PREVIEW_MAX);
+    if (text.trim() !== text || /[\p{Cc}\p{Cf}\u2028\u2029]/u.test(text.replace(/[\u200C\u200D]/gu, ""))) {
+      throw new Error(`${label} preview must be one trimmed plain line.`);
+    }
+  }
+  return value;
 }
 
 export function parseAidenRemoteBotList(value: unknown): AidenRemoteBotList {
@@ -9935,8 +9975,11 @@ function parseRevision19Fixture(
         throw new Error("Host feed snapshot lists must be arrays.");
       }
       event.payload.workspaces.forEach((workspace) => parseHostFeedWorkspaceRepository(workspace, "Host feed workspace"));
+      event.payload.bots.forEach((bot) => parseAidenRemoteHostFeedBot(bot));
     } else if (event.type === "workspace.upsert") {
       parseHostFeedWorkspaceRepository(event.payload, "Host feed workspace");
+    } else if (event.type === "bot.upsert") {
+      parseAidenRemoteHostFeedBot(event.payload);
     } else if (event.type === "run.state") {
       assertExactKeys(
         event.payload,

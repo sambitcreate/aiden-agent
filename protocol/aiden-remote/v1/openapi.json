@@ -5561,7 +5561,7 @@
             "name": "since",
             "in": "query",
             "required": false,
-            "description": "Epoch-milliseconds cursor; runs finished at or after it are returned (inclusive — clients dedupe by run id).",
+            "description": "Epoch-milliseconds cursor; runs finished at or after it are returned (inclusive \u2014 clients dedupe by run id).",
             "schema": {
               "type": "integer",
               "minimum": 0
@@ -5588,7 +5588,7 @@
                     },
                     "now": {
                       "type": "integer",
-                      "description": "Server epoch-milliseconds clock — clients baseline first-poll cursors to this rather than the device clock."
+                      "description": "Server epoch-milliseconds clock \u2014 clients baseline first-poll cursors to this rather than the device clock."
                     }
                   },
                   "additionalProperties": false
@@ -6545,7 +6545,10 @@
             "name": "Aiden-Run-Checkpoint",
             "in": "header",
             "description": "Revision 58. Set to 1 to accept a bounded snapshot of an active run at its current sequence. Older hosts ignore this header.",
-            "schema": { "type": "string", "const": "1" }
+            "schema": {
+              "type": "string",
+              "const": "1"
+            }
           },
           {
             "$ref": "#/components/parameters/ChatId"
@@ -6587,7 +6590,10 @@
             "name": "Aiden-Run-Checkpoint",
             "in": "header",
             "description": "Revision 58. Set to 1 to accept a bounded snapshot of an active run at its current sequence. Older hosts ignore this header.",
-            "schema": { "type": "string", "const": "1" }
+            "schema": {
+              "type": "string",
+              "const": "1"
+            }
           },
           {
             "name": "runId",
@@ -12548,7 +12554,9 @@
           },
           "inputSource": {
             "type": "string",
-            "enum": ["voice"],
+            "enum": [
+              "voice"
+            ],
             "description": "Additive in contract revision 60, user messages only: Aiden Live sent this message for the person on the Mac. Clients show a small \"By voice\" label; they ignore the key on assistant messages and any value they do not know."
           },
           "createdAt": {
@@ -18179,6 +18187,92 @@
         },
         "additionalProperties": false
       },
+      "HostFeedBot": {
+        "type": "object",
+        "description": "A host feed Bot row: a BotSummary (without issueCount, which only phones read) plus the Inbox signals of contract revision 52 and the preview of revision 66. Each optional field is present only when it holds.",
+        "x-aiden-updated-at-not-before-created-at": true,
+        "required": [
+          "id",
+          "name",
+          "purpose",
+          "avatar",
+          "health",
+          "createdAt",
+          "updatedAt",
+          "revision"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 160,
+            "pattern": "^[A-Za-z0-9._:-]+$"
+          },
+          "name": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 80
+          },
+          "purpose": {
+            "type": "string",
+            "maxLength": 280
+          },
+          "avatar": {
+            "$ref": "#/components/schemas/BotAvatarView"
+          },
+          "health": {
+            "$ref": "#/components/schemas/BotHealth"
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "updatedAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "revision": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          },
+          "sessionState": {
+            "description": "Contract revision 37: paused reaches only devices holding bot:handoffs; every other device sees a paused Bot as unavailable.",
+            "enum": [
+              "idle",
+              "running",
+              "interrupted",
+              "needs_model",
+              "unavailable",
+              "paused"
+            ]
+          },
+          "paused": {
+            "description": "Contract revision 37, only for devices holding bot:handoffs and only while the person paused the Bot (sessionState is then paused).",
+            "const": true
+          },
+          "needsYou": {
+            "description": "Contract revision 52: an approval, a question, a hand-off or an open issue waits on the person.",
+            "const": true
+          },
+          "failed": {
+            "description": "Contract revision 52: the Bot's last turn was cut short, or its model cannot be used.",
+            "const": true
+          },
+          "lastReplyAt": {
+            "description": "Contract revision 52: when the Bot's newest reply with visible text arrived. Since revision 66 a host sends it for every Bot, not only Bots whose chat is open there.",
+            "type": "string",
+            "format": "date-time"
+          },
+          "preview": {
+            "description": "Contract revision 66: the one plain line the host's own Bots list shows under the Bot's name (its newest reply, else the person's newest message). No line breaks or control characters.",
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 140
+          }
+        },
+        "additionalProperties": false
+      },
       "HostFeedSnapshot": {
         "type": "object",
         "required": [
@@ -18214,7 +18308,7 @@
             "type": "array",
             "description": "Empty for devices without bot:read.",
             "items": {
-              "$ref": "#/components/schemas/BotSummary"
+              "$ref": "#/components/schemas/HostFeedBot"
             }
           },
           "partial": {
@@ -18381,7 +18475,7 @@
             "then": {
               "properties": {
                 "payload": {
-                  "$ref": "#/components/schemas/BotSummary"
+                  "$ref": "#/components/schemas/HostFeedBot"
                 }
               }
             }
@@ -19190,7 +19284,7 @@
                 "type": "string",
                 "minLength": 1,
                 "maxLength": 120,
-                "description": "When the routine runs, ready to show: a schedule with its timezone (\"Every day at 9:00 AM · Pacific Time\"), or what starts an event routine (\"When this routine's link is called\"). A card the Bot replaced with a revised one is omitted; the revised card follows as a new entry."
+                "description": "When the routine runs, ready to show: a schedule with its timezone (\"Every day at 9:00 AM \u00b7 Pacific Time\"), or what starts an event routine (\"When this routine's link is called\"). A card the Bot replaced with a revised one is omitted; the revised card follows as a new entry."
               },
               "status": {
                 "enum": [

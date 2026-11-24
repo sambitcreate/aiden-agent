@@ -1235,13 +1235,14 @@ async function createRuntime(): Promise<AidenRemoteRuntime> {
               approvalMode: async () => effectiveApprovalMode(await configStore.getSettings(), true),
               repositoryIdentity: gitCachedRepositoryIdentity,
               ...(bots ? { listBots: () => bots.list() } : {}),
-              // Read runtime signals without opening conversation entries or context.
-              // Reply times are available only from an already-open live feed.
+              // The same summary this Mac's own Bots list reads (revision 66): a closed
+              // Bot's preview and last reply come from the projection's cache, which
+              // reads the transcript again only after its newest entry changes.
               botSignals: async (botRows) => {
                 const { botLiveProjection } = await import("./bot-runtime/bot-session-main.js");
                 const live = botLiveProjection();
                 return new Map(await mapWithConcurrency(botRows, 4, async (bot) =>
-                  [bot.id, hostFeedBotSignals(await live.inboxSignals(bot.id).catch(() => undefined))] as const,
+                  [bot.id, hostFeedBotSignals(await live.summary(bot.id).catch(() => undefined))] as const,
                 ));
               },
             }),

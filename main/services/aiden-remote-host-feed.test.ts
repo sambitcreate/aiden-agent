@@ -734,3 +734,23 @@ test("a Bot row's Inbox signals hold only what its live summary says", () => {
   assert.deepEqual(hostFeedBotSignals({ ...idle, lastReplyAt: -1 }), {}, "a negative time is unknown");
   assert.deepEqual(hostFeedBotSignals({ ...idle, lastReplyAt: 1.5 }), {}, "a fractional time is unknown");
 });
+
+test("a Bot row's preview is the host's own row line, as one plain line a paired Mac can trust", async () => {
+  const { parseAidenRemoteHostFeedBot } = await import("./aiden-remote-protocol.js");
+  const idle = { state: { kind: "idle" } as BotSessionState, needsYou: false, lastReplyAt: null as number | null };
+  assert.deepEqual(hostFeedBotSignals({ ...idle, preview: null }), {}, "no preview, no key");
+  assert.deepEqual(hostFeedBotSignals({ ...idle, preview: "  \n " }), {}, "a blank preview sends no key");
+  assert.equal(hostFeedBotSignals({ ...idle, preview: "Release moved\nto Friday" }).preview, "Release moved to Friday");
+  const long = hostFeedBotSignals({ ...idle, preview: `${"word ".repeat(60)}\u202Eend` }).preview!;
+  assert.equal(Array.from(long).length, 140);
+  assert.ok(long.endsWith("…"));
+  // Whatever the transcript held, the row it makes passes the contract's own check.
+  const row = {
+    id: "bot_1", name: "Scout", purpose: "", health: "ready", revision: "r1",
+    avatar: { semantic: { version: 1, shape: "orb", color: "rose" } },
+    createdAt: "2026-11-01T00:00:00.000Z", updatedAt: "2026-11-01T00:00:00.000Z",
+  };
+  for (const preview of ["\u0000\u0007bell", "tab\there", `${"😀".repeat(200)}`, "\u2028para\u2029graph", "\u200Bzero width"]) {
+    assert.doesNotThrow(() => parseAidenRemoteHostFeedBot({ ...row, ...hostFeedBotSignals({ ...idle, preview }) }), JSON.stringify(preview));
+  }
+});

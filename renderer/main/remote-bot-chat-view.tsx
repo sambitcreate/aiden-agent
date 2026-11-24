@@ -30,6 +30,8 @@ import { useAppCapabilities } from "../lib/app-capabilities";
 import { botListLocation } from "../lib/bot-routes";
 import { insertTextIntoTextarea } from "../lib/composer-type-focus";
 import { hostQueryKeys } from "../lib/hosts/host-query-keys";
+import { remoteBotPhotoAsset } from "../lib/hosts/remote-bot-photo-asset";
+import { markRemoteBotSeen } from "../lib/remote-bot-seen";
 import { hostServesBotHandoffs, hostSharesBotSessions } from "../lib/hosts/remote-bot-session";
 import { useRemoteBotSession } from "../lib/hosts/use-remote-bot-session";
 import { browserApi, peerHostsApi } from "../lib/ipc";
@@ -52,7 +54,7 @@ import { botReplyQuote } from "./bots/bot-message-actions";
 import { BotPausedNotice, botPausedText } from "./bots/bot-paused-card";
 import { BotStatusLine } from "./bots/bot-status-line";
 import { useChatFind } from "../components/chat-find-bar";
-import { useRemoteBotImages } from "../lib/hosts/remote-images";
+import { useRemoteBotImages, useRemoteBotPhoto } from "../lib/hosts/remote-images";
 
 /** Text files ride along in the message, as in a local Bot chat. */
 function attachmentText(attachments: readonly Attachment[]): string {
@@ -137,6 +139,13 @@ export function RemoteBotChatView({ hostId, botId }: { hostId: string; botId: st
   const toolActivitySetting = useAppearancePreference("showToolActivity");
   const localBots = useBots(false, toolActivitySetting === undefined);
   const avatar = botAvatar(feed.data, botId);
+  const row = feed.data?.bots.find((bot) => bot.id === botId);
+  const photoUrl = useRemoteBotPhoto(hostId, botId, row ? remoteBotPhotoAsset(row) : undefined);
+  // The newest reply is on screen here, so it is not unread when the person leaves (revision 66 hosts send its time).
+  const lastReplyAt = typeof row?.lastReplyAt === "string" ? Date.parse(row.lastReplyAt) : Number.NaN;
+  React.useEffect(() => {
+    if (Number.isFinite(lastReplyAt)) markRemoteBotSeen(`${hostId}/${botId}`, lastReplyAt);
+  }, [hostId, botId, lastReplyAt]);
   // A host too old to share the conversation is told so below, without asking it.
   const shared = !host || hostSharesBotSessions(host);
   const live = useRemoteBotSession(hostId, botId, shared);
@@ -217,7 +226,7 @@ export function RemoteBotChatView({ hostId, botId }: { hostId: string; botId: st
       title={
         <span className="flex min-w-0 items-center gap-2">
           <span aria-hidden="true" className="shrink-0">
-            <BotAvatarMark avatar={avatar} name={name} size="small" working={running} />
+            <BotAvatarMark avatar={avatar} name={name} size="small" photoUrl={photoUrl} working={running} />
           </span>
           <span className="truncate">{name}</span>
           <Text as="span" variant="small" color="tertiary" className="truncate">

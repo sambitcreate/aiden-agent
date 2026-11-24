@@ -10,6 +10,7 @@ import { useCommandSystem } from "../../lib/command-system";
 import type { CommandId } from "../../shared/keybindings";
 import { useBotNotificationsSync } from "../../lib/bot-notifications-sync";
 import { hostQueryKeys } from "../../lib/hosts/host-query-keys";
+import { resetRemoteBotSeenForTests } from "../../lib/remote-bot-seen";
 import {
   BOT_SIDEBAR_PREFERENCES_KEY,
   parseBotSidebarPreferences,
@@ -24,7 +25,10 @@ import { AppCapabilitiesProvider, DISABLED_APP_CAPABILITIES } from "../../lib/ap
 import { createBotTestQueryClient, mountWithBotRouter } from "./test-providers";
 import { botFixture } from "./test-fixtures";
 
-beforeEach(() => localStorage.clear());
+beforeEach(() => {
+  localStorage.clear();
+  resetRemoteBotSeenForTests();
+});
 afterEach(cleanup);
 
 const PLANNER = botFixture({ id: "bot-1", name: "Planner", description: "Plans trips" });
@@ -622,6 +626,76 @@ test("a paired Mac's Bot shows when it is working there, and marks the one whose
   assert.ok(!within(waiting).queryByText("Thinking…"));
   assert.ok(waiting.querySelector(".bot-avatar"), "the Bot's own avatar, not a stock icon");
   assert.ok(!working.querySelector(".bot-avatar"), "a row with no avatar keeps the stock icon");
+});
+
+test("a paired Mac's Bot shows its last message and photo, and a new reply shows a dot until its chat is opened", async () => {
+  const queryClient = createBotTestQueryClient();
+  queryClient.setQueryData(hostQueryKeys.list(), [
+    { id: "host-b", name: "Studio", enabled: true, state: "connected", features: ["bot-durable-session-v1"], capabilities: ["chat:read", "chat:write", "bot:read", "bot:write"] },
+  ]);
+  queryClient.setQueryData(hostQueryKeys.statuses(), [
+    { hostId: "host-b", generation: 1, state: { kind: "connected", since: 1 }, feed: "live", stale: false },
+  ]);
+  const revision = `avatar_revision_${"a".repeat(32)}`;
+  const feed = (lastReplyAt: string) => ({
+    hostId: "host-b",
+    epoch: "e1",
+    sequence: 1,
+    stale: false,
+    summaries: [],
+    workspaces: [],
+    bots: [
+      {
+        id: "remote-1",
+        name: "Scout",
+        purpose: "You find flights.",
+        avatar: {
+          semantic: { version: 1, shape: "orb", color: "rose" },
+          asset: { assetRevision: revision, mimeType: "image/png", width: 512, height: 512, byteSize: 4 },
+        },
+        sessionState: "idle",
+        lastReplyAt,
+        // Another computer's text: the row shows it as one plain line.
+        preview: "Flights to Lisbon\nare cheaper on Tuesday",
+      },
+    ],
+    runs: [],
+  });
+  const inAMinute = () => new Date(Date.now() + 60_000).toISOString();
+  queryClient.setQueryData(hostQueryKeys.feed("host-b"), feed(inAMinute()));
+  const photoReads: unknown[] = [];
+  sidebarIpc([], {}, {
+    "bots:list": () => [],
+    "remote:peerCall": (_hostId, raw) => {
+      const call = raw as { operation: string; resourceId?: string; itemId?: string };
+      if (call.operation !== "botAvatar") return { ok: false, error: { code: "not_found", message: "Not in this test." } };
+      photoReads.push(call);
+      return { ok: true, value: { mimeType: "image/png", bytes: new Uint8Array([1, 2, 3, 4]) } };
+    },
+  });
+  const { router } = await mountSidebar("/bots", queryClient);
+  const row = await screen.findByRole("button", { name: "Scout, on Studio, unread" });
+  assert.ok(within(row).getByText("Flights to Lisbon are cheaper on Tuesday"));
+  assert.ok(within(row).getByRole("img", { name: "Unread", hidden: true }));
+  assert.equal(row.getAttribute("aria-description"), "Flights to Lisbon are cheaper on Tuesday");
+  await waitFor(() => assert.equal(row.querySelector("img")?.getAttribute("src"), "data:image/png;base64,AQIDBA=="));
+  assert.deepEqual(photoReads, [{ operation: "botAvatar", resourceId: "remote-1", itemId: revision }]);
+
+  await act(async () => {
+    await router.navigate({ to: "/host/$hostId/bots/$botId/chat", params: { hostId: "host-b", botId: "remote-1" } });
+  });
+  await act(async () => {
+    await router.navigate({ to: "/bots" });
+  });
+  await screen.findByRole("button", { name: "Scout, on Studio" });
+  assert.ok(!within(screen.getByRole("button", { name: "Scout, on Studio" })).queryByRole("img", { name: "Unread", hidden: true }));
+
+  // The next reply is new again.
+  await act(async () => {
+    queryClient.setQueryData(hostQueryKeys.feed("host-b"), feed(new Date(Date.now() + 120_000).toISOString()));
+  });
+  await screen.findByRole("button", { name: "Scout, on Studio, unread" });
+  assert.equal(photoReads.length, 1, "the same photo is read once");
 });
 
 test("on a Bots page, a paired Mac's Bots keep up with what that Mac sends", async () => {

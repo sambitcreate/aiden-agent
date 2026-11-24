@@ -5,6 +5,8 @@ import { hostControlRefusal, remoteHostCapabilities } from "./remote-host-adapte
 import { localComputerNoun } from "../../shared/computer-noun";
 import { isBotAvatarAppearance, type BotAvatar } from "../../shared/bots";
 import { peerFeedBotAttention } from "../../shared/peer-feed-inbox";
+import { clipPendingAttentionSummary } from "../../shared/chat-pending-attention";
+import { remoteBotPhotoAsset, type RemoteBotPhotoAsset } from "./remote-bot-photo-asset";
 
 /**
  * Where new work can start: this Mac or a paired host, the projects each host
@@ -138,7 +140,16 @@ export interface RemoteBotChoice {
    * resumed, or the Bot's AI model cannot be used.
    */
   status?: "paused" | "interrupted" | "needs_model";
+  /** The line the host's own Bots list shows under the name (revision 66), one plain line. */
+  preview?: string;
+  /** When the Bot's newest reply arrived, by the host's clock; the row's unread dot compares it with what this Mac showed. */
+  lastReplyAt?: number;
+  /** The Bot's photo, as the host lists it; read on demand. */
+  photo?: RemoteBotPhotoAsset;
 }
+
+/** The longest preview a remote Bot row shows; a host sends at most this (revision 66). */
+export const REMOTE_BOT_PREVIEW_MAX = 140;
 
 export interface RemoteBotGroup {
   host: NewChatMachine;
@@ -167,6 +178,10 @@ export function remoteBotGroups(
         const purpose = text(row, "purpose");
         const semantic = (row.avatar as { semantic?: unknown } | null | undefined)?.semantic;
         const { needsYou } = peerFeedBotAttention(row);
+        // The host already sends one plain line; it is still another computer's text.
+        const preview = clipPendingAttentionSummary(row.preview, REMOTE_BOT_PREVIEW_MAX);
+        const lastReplyAt = typeof row.lastReplyAt === "string" ? Date.parse(row.lastReplyAt) : Number.NaN;
+        const photo = remoteBotPhotoAsset(row);
         return {
           id: row.id,
           name: text(row, "name") ?? "Untitled Bot",
@@ -177,6 +192,9 @@ export function remoteBotGroups(
           ...(row.sessionState === "paused" || row.sessionState === "interrupted" || row.sessionState === "needs_model"
             ? { status: row.sessionState as "paused" | "interrupted" | "needs_model" }
             : {}),
+          ...(preview ? { preview } : {}),
+          ...(Number.isFinite(lastReplyAt) && lastReplyAt > 0 ? { lastReplyAt } : {}),
+          ...(photo ? { photo } : {}),
         };
       });
     if (bots.length === 0) continue;

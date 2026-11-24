@@ -3,6 +3,7 @@ import { randomBytes } from "node:crypto";
 import {
   AIDEN_REMOTE_HOST_FEED_MAX_BYTES,
   AIDEN_REMOTE_HOST_FEED_MAX_EVENTS,
+  AIDEN_REMOTE_HOST_FEED_BOT_PREVIEW_MAX,
   AIDEN_REMOTE_HOST_FEED_SNAPSHOT_CHUNK_BYTES,
   AIDEN_REMOTE_PROTOCOL_VERSION,
   type AidenRemoteCapability,
@@ -34,7 +35,7 @@ export interface AidenRemoteHostFeedBot {
   [key: string]: unknown;
 }
 
-/** A Bot row's revision-50 Inbox signals; each is present only when it holds. */
+/** A Bot row's revision-50 Inbox signals and revision-66 preview; each is present only when it holds. */
 export interface AidenRemoteHostFeedBotSignals {
   /** An approval, a question, a hand-off or an open issue waits on the person. */
   needsYou?: true;
@@ -42,25 +43,33 @@ export interface AidenRemoteHostFeedBotSignals {
   failed?: true;
   /** When the Bot's newest reply with visible text arrived, RFC 3339. */
   lastReplyAt?: string;
+  /**
+   * Revision 66: the line the host's own Bots list shows under the Bot's name
+   * (its newest reply, else the person's newest message), one plain line of at
+   * most `AIDEN_REMOTE_HOST_FEED_BOT_PREVIEW_MAX` characters.
+   */
+  preview?: string;
 }
 
-/** The Inbox signals of one Bot from its live summary; none when the summary is unknown. */
+/** The Inbox signals and preview of one Bot from its live summary; none when the summary is unknown. */
 export function hostFeedBotSignals(
-  live: Pick<BotLiveSummary, "state" | "needsYou" | "lastReplyAt"> | undefined,
+  live: (Pick<BotLiveSummary, "state" | "needsYou" | "lastReplyAt"> & Partial<Pick<BotLiveSummary, "preview">>) | undefined,
 ): AidenRemoteHostFeedBotSignals {
   if (!live) return {};
   const failed = isFailedBotSession(live.state);
   const replied = live.lastReplyAt !== null && Number.isSafeInteger(live.lastReplyAt) && live.lastReplyAt >= 0
     ? new Date(live.lastReplyAt)
     : undefined;
+  const preview = clipPendingAttentionSummary(live.preview, AIDEN_REMOTE_HOST_FEED_BOT_PREVIEW_MAX);
   return {
     ...(live.needsYou ? { needsYou: true as const } : {}),
     ...(failed ? { failed: true as const } : {}),
     ...(replied && Number.isFinite(replied.getTime()) ? { lastReplyAt: replied.toISOString() } : {}),
+    ...(preview ? { preview } : {}),
   };
 }
 
-/** One transcript-free read of everything the feed projects. */
+/** One read of everything the feed projects; it opens no chat transcript (Bot previews come from cached summaries). */
 export interface AidenRemoteHostFeedState {
   /** Non-Bot chat summaries, exactly as `/chat-summaries` projects them. */
   summaries: readonly AidenRemoteChatSummaryProjection[];
@@ -167,7 +176,7 @@ const DEFAULT_DEBOUNCE_MS = 50;
 
 /**
  * Host-wide change feed for paired desktop controllers. It never scans
- * transcripts: every refresh is one transcript-free `source.read()` diffed
+ * chat transcripts: every refresh is one `source.read()` diffed
  * against the previous read, and run states come from HostRunRegistry
  * change notifications. The journal is the only queue; a reader that falls
  * behind retention, or presents a cursor from another epoch, gets a fresh

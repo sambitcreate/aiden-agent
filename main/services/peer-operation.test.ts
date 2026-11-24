@@ -60,6 +60,7 @@ test("expanded peer operations resolve to the contract's routes, not arbitrary U
     [{ operation: "runInputs", resourceId: "run_1", idempotencyKey: KEY }, "submitRunInput"],
     [{ operation: "createBotChat", resourceId: "bot_1", idempotencyKey: KEY }, "createBotChat"],
     [{ operation: "botSessionImage", resourceId: "bot_1", itemId: "entry_7" }, "getBotSessionImage"],
+    [{ operation: "botAvatar", resourceId: "bot_1", itemId: `avatar_revision_${"a".repeat(32)}` }, "getBotAvatarContent"],
     [{ operation: "uploadAttachment", resourceId: "chat_1", body: { name: "a.txt" } }, "uploadChatAttachment"],
     [{ operation: "removeAttachment", resourceId: "chat_1", itemId: `att_${"A".repeat(43)}` }, "removeChatAttachment"],
     [{ operation: "botSession", resourceId: "bot_1" }, "getBotSession"],
@@ -262,7 +263,13 @@ test("expanded peer reads reject malformed DTOs and attachment bytes stay bounde
     { mimeType: "image/jpeg", data: png },
   )) as { mimeType: string; bytes: Uint8Array };
   assert.deepEqual([shared.mimeType, [...shared.bytes]], ["image/jpeg", [...png]]);
-  for (const operation of ["attachmentContent", "botSessionImage"])
+  // A Bot's photo avatar too.
+  const photo = (await peerOperationResult(
+    { operation: "botAvatar" },
+    { mimeType: "image/png", data: png },
+  )) as { mimeType: string; bytes: Uint8Array };
+  assert.deepEqual([photo.mimeType, [...photo.bytes]], ["image/png", [...png]]);
+  for (const operation of ["attachmentContent", "botSessionImage", "botAvatar"])
     for (const invalid of [
       { mimeType: "text/html", data: png },
       { mimeType: "image/png", data: Buffer.alloc(0) },
