@@ -211,6 +211,12 @@ test.describe("with a 15 s presence grace", () => {
     const output = page.getByRole("log", { name: /^Output of Vite/u });
     await expect(output).toContainText(`Local:   http://127.0.0.1:${app.port}/`, { timeout: 15_000 });
     await expect(output).toBeFocused();
+    // The drawer leaves room for the zoom controls at the bottom right (B5): they stay visible and take clicks.
+    const zoom = page.getByRole("toolbar", { name: "Zoom" });
+    await expect(zoom).toBeVisible();
+    await zoom.getByRole("button", { name: "Zoom in" }).click({ trial: true, timeout: 5_000 });
+    const [zoomBox, drawerBox] = await Promise.all([zoom.boundingBox(), page.locator(".design-app-logs").boundingBox()]);
+    expect(zoomBox && drawerBox && zoomBox.y >= drawerBox.y + drawerBox.height).toBe(true);
     await shoot(page, testInfo, "design-app-logs");
     await page.keyboard.press("Escape");
     await expect(output).toHaveCount(0);

@@ -175,7 +175,8 @@ export function DesignAppLogsDrawer({
     <div
       ref={ref}
       data-presence={exiting ? "exiting" : "visible"}
-      className="design-app-logs glass-surface absolute inset-x-3 bottom-3 z-10 flex flex-col overflow-hidden rounded-button shadow-control"
+      // bottom-14 keeps the canvas's zoom controls (bottom-3, one control row high) visible and usable below it (B5).
+      className="design-app-logs glass-surface absolute inset-x-3 bottom-14 z-10 flex flex-col overflow-hidden rounded-button shadow-control"
     >
       <DesignAppLogsBody chatId={chatId} appRoot={root} open={open} onClose={close} pollMs={pollMs} />
     </div>
