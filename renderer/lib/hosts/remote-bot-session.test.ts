@@ -509,6 +509,57 @@ test("a snapshot that rewrote loaded history replaces it, and a page asked for b
   follower.stop();
 });
 
+test("loaded history longer than one page survives a same-epoch snapshot whole, and a rewrite in its oldest page still shows", async () => {
+  const message = (id: string, text: string) => ({ type: "message" as const, id, role: "assistant" as const, text });
+  let history = Array.from({ length: 450 }, (_, index) => message(`h${index}`, `Message ${index}`));
+  const newest = () => session({ seq: 4, hasOlder: true, entries: history.slice(-2) });
+  const fake = fakeTransport([newest()]);
+  const asked: Array<[string, number | undefined]> = [];
+  let failAt: number | null = null;
+  fake.transport.older = async (_hostId, _botId, before, limit) => {
+    asked.push([before, limit]);
+    if (failAt === asked.length) return { ok: false, error: { code: "failed", message: "Offline.", status: 503 } };
+    const end = history.findIndex((entry) => entry.id === before);
+    const start = Math.max(0, end - (limit ?? 150));
+    return { ok: true, value: { botId: "bot_1", epoch: "e1", entries: history.slice(start, end), hasOlder: start > 0 } };
+  };
+  const follower = new RemoteBotSessionFollower(fake.transport, "host_a", "bot_1");
+  follower.start();
+  await settle();
+  const ids = () => follower.getState().view!.snapshot.entries.map((entry) => entry.id);
+  await follower.loadOlder();
+  await follower.loadOlder();
+  const loaded = history.slice(-302).map((entry) => entry.id);
+  assert.deepEqual(ids(), loaded);
+
+  // Nothing changed on the host: every one of the 300 loaded entries stays.
+  asked.length = 0;
+  fake.push(event(4, { type: "snapshot", payload: { session: newest() } }));
+  await settle();
+  assert.deepEqual(ids(), loaded);
+  assert.equal(follower.getState().view!.olderCursor, loaded[0]);
+  assert.ok(asked.every(([, limit]) => limit !== undefined && limit <= 200), "each read is a bounded page");
+
+  // The host hides the oldest loaded entry: it goes, and the rest stays.
+  history = history.filter((entry) => entry.id !== loaded[0]);
+  fake.push(event(4, { type: "snapshot", payload: { session: newest() } }));
+  await settle();
+  assert.equal(ids().includes(loaded[0]!), false);
+  assert.deepEqual(ids().slice(-301), loaded.slice(1));
+
+  // A later page that fails keeps the pages already read, and Load older continues from there.
+  asked.length = 0;
+  failAt = 2;
+  fake.push(event(4, { type: "snapshot", payload: { session: newest() } }));
+  await settle();
+  const kept = ids();
+  assert.equal(kept.length, 202);
+  assert.deepEqual(kept, loaded.slice(-202));
+  assert.equal(follower.getState().view!.hasOlder, true);
+  assert.equal(follower.getState().view!.olderCursor, kept[0]);
+  follower.stop();
+});
+
 test("a page whose entries this Mac can't show still moves Load older past them", () => {
   const message = (id: string, text: string) => ({ type: "message" as const, id, role: "assistant" as const, text });
   const view = remoteBotSessionView(session({ hasOlder: true, entries: [message("m5", "Five")] }));
