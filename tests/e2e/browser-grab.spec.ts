@@ -216,7 +216,7 @@ test("grabbing a React element attaches an inspectable chip, masks secrets, and 
         .find((contents) => contents.getURL().startsWith(guestUrl));
       if (!guest) throw new Error("Browser guest missing");
       const point = (await guest.executeJavaScript(
-        "(() => { const r = document.getElementById('hero-cta').getBoundingClientRect(); return { x: Math.round(r.x + r.width / 2), y: Math.round(r.y + r.height / 2) }; })()",
+        "(() => { const el = document.getElementById('hero-cta'); el.scrollIntoView({ block: 'center', inline: 'center' }); const r = el.getBoundingClientRect(); return { x: Math.round(r.x + r.width / 2), y: Math.round(r.y + r.height / 2) }; })()",
       )) as { x: number; y: number };
       guest.focus();
       guest.sendInputEvent({ type: "mouseMove", ...point });
@@ -411,7 +411,7 @@ test("shortcut, unstoppable Escape, Shift+Click multi-grab, DevTools-open captur
         .getAllWebContents()
         .find((contents) => contents.getURL().startsWith(guestUrl))!;
       const point = (await guest.executeJavaScript(
-        "(() => { const r = document.getElementById('hero-cta').getBoundingClientRect(); return { x: Math.round(r.x + r.width / 2), y: Math.round(r.y + r.height / 2) }; })()",
+        "(() => { const el = document.getElementById('hero-cta'); el.scrollIntoView({ block: 'center', inline: 'center' }); const r = el.getBoundingClientRect(); return { x: Math.round(r.x + r.width / 2), y: Math.round(r.y + r.height / 2) }; })()",
       )) as { x: number; y: number };
       guest.focus();
       guest.sendInputEvent({ type: "mouseMove", ...point });
@@ -428,7 +428,7 @@ test("shortcut, unstoppable Escape, Shift+Click multi-grab, DevTools-open captur
         .getAllWebContents()
         .find((contents) => contents.getURL().startsWith(guestUrl))!;
       const point = (await guest.executeJavaScript(
-        "(() => { const r = document.getElementById('plain-card').getBoundingClientRect(); return { x: Math.round(r.x + r.width / 2), y: Math.round(r.y + r.height / 2) }; })()",
+        "(() => { const el = document.getElementById('plain-card'); el.scrollIntoView({ block: 'center', inline: 'center' }); const r = el.getBoundingClientRect(); return { x: Math.round(r.x + r.width / 2), y: Math.round(r.y + r.height / 2) }; })()",
       )) as { x: number; y: number };
       guest.sendInputEvent({ type: "mouseMove", ...point });
       await new Promise((resolve) => setTimeout(resolve, 40));
@@ -463,7 +463,7 @@ test("shortcut, unstoppable Escape, Shift+Click multi-grab, DevTools-open captur
         .getAllWebContents()
         .find((contents) => contents.getURL().startsWith(guestUrl))!;
       const point = (await guest.executeJavaScript(
-        "(() => { const r = document.getElementById('secret-form').getBoundingClientRect(); return { x: Math.round(r.x + r.width / 2), y: Math.round(r.y + r.height / 2) }; })()",
+        "(() => { const el = document.getElementById('secret-form'); el.scrollIntoView({ block: 'center', inline: 'center' }); const r = el.getBoundingClientRect(); return { x: Math.round(r.x + r.width / 2), y: Math.round(r.y + r.height / 2) }; })()",
       )) as { x: number; y: number };
       guest.focus();
       guest.sendInputEvent({ type: "mouseMove", ...point });

@@ -2441,8 +2441,8 @@ export class BrowserService {
     const resolvedAccent = resolveGrabAccent(accent);
     const token = Symbol("browser-grab");
     const grabSource: BrowserGrabSource = source === "shortcut" ? "shortcut" : "toolbar";
-    // The picker waits on page animation frames. A covered or occluded window
-    // (on macOS, a detached DevTools window on top) would otherwise pause them.
+    // The picker waits on page animation frames, which a hidden or occluded page
+    // would otherwise pause.
     tab.grab?.release();
     tab.grab = { token, accent: resolvedAccent, source: grabSource, release: tab.backgroundThrottling.acquire() };
     tab.state.grabbing = true;
