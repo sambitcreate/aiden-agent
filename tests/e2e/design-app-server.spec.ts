@@ -28,12 +28,16 @@ const SECOND_CHAT = "Another look at the landing page";
 
 type Ipc = { aidenAPI: { ipc: { invoke<T>(channel: string, ...args: unknown[]): Promise<T> } } };
 
-async function seedApp(workspaceDir: string): Promise<void> {
+// A pre script whose second command sits below a run of blank lines, as a
+// script hiding a line would.
+const MULTI_LINE_PREDEV = `echo preparing &&${"\n".repeat(12)}echo ready`;
+
+async function seedApp(workspaceDir: string, extraScripts: Record<string, string> = {}): Promise<void> {
   await mkdir(path.join(workspaceDir, "node_modules"), { recursive: true });
   await copyFile(path.join(FIXTURES, "server.mjs"), path.join(workspaceDir, "server.mjs"));
   await writeFile(
     path.join(workspaceDir, "package.json"),
-    `${JSON.stringify({ name: "landing", private: true, devDependencies: { vite: "*" }, scripts: { dev: "node server.mjs" } }, null, 2)}\n`,
+    `${JSON.stringify({ name: "landing", private: true, devDependencies: { vite: "*" }, scripts: { dev: "node server.mjs", ...extraScripts } }, null, 2)}\n`,
   );
 }
 
@@ -57,9 +61,12 @@ async function rootApp(page: Page, chatId: string): Promise<DesignAppStatus | un
 
 const runCard = (page: Page) => page.getByRole("group", { name: /^Run .* app\?$/u });
 
-async function openDesignChat(aiden: { app: import("@playwright/test").ElectronApplication; page: Page; workspaceDir: string }) {
+async function openDesignChat(
+  aiden: { app: import("@playwright/test").ElectronApplication; page: Page; workspaceDir: string },
+  extraScripts: Record<string, string> = {},
+) {
   const { app, page, workspaceDir } = aiden;
-  await seedApp(workspaceDir);
+  await seedApp(workspaceDir, extraScripts);
   await finishLmStudioOnboarding(page);
   await waitForToastsToClear(page);
   await setDisplayWidth(app, 1440);
@@ -102,10 +109,15 @@ test.describe("with a 2 s presence grace", () => {
 
   test("turning design mode on shows the run-app card with the script text; Not now starts nothing", async ({ aiden }, testInfo) => {
     const { page } = aiden;
-    const chatId = await openDesignChat(aiden);
+    const chatId = await openDesignChat(aiden, { predev: MULTI_LINE_PREDEV });
     const card = runCard(page);
     await expect(card).toBeVisible({ timeout: 20_000 });
     await expect(card).toContainText("node server.mjs");
+    // The pre script's hidden-looking second line shows right under a count of the blank lines.
+    await expect(card).toContainText("Script predev · 13 lines");
+    await expect(card).toContainText("[11 blank lines]");
+    await expect(card).toContainText("echo ready");
+    await expect(card.getByRole("button", { name: "Allow" })).toBeInViewport();
     await expect(card).toContainText("This approves the commands above.");
     await expect(card.getByRole("button", { name: "Not now" })).toBeFocused();
 
@@ -115,6 +127,7 @@ test.describe("with a 2 s presence grace", () => {
       await expect(page.locator("html")).toHaveAttribute("data-appearance-scheme", scheme);
       await page.screenshot({ path: testInfo.outputPath(`1440-design-app-consent-${scheme}.png`), animations: "disabled" });
     }
+    await card.screenshot({ path: testInfo.outputPath("design-app-consent-multi-line-card.png"), animations: "disabled" });
     await previewAppearance(page, null);
 
     await card.getByRole("button", { name: "Not now" }).click();
