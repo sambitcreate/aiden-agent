@@ -41,6 +41,13 @@ export function electronBuildOptions({ production = false, analytics } = {}) {
     },
     {
       ...common,
+      entryPoints: ["main/services/design-canvas/design-md/lint-worker.ts"],
+      outfile: "build/main/design-md-lint-worker.js",
+      format: "esm",
+      packages: "external",
+    },
+    {
+      ...common,
       entryPoints: ["main/bootstrap.ts"],
       outfile: "build/main/index.js",
       format: "esm",

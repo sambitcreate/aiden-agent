@@ -888,3 +888,27 @@ vendored or installed.
 Copyright (c) 2025 Nico Bailon
 
 MIT License. See https://github.com/nicobailon/pi-web-access/blob/main/LICENSE
+
+## DESIGN.md linter (@google/design.md 0.4.0)
+
+Design mode checks an app's `DESIGN.md` with the `@google/design.md` package,
+pinned at exactly 0.4.0 (https://github.com/google-labs-code/design.md). Only
+its `dist/linter/` entry point is loaded, inside a worker thread
+(`build/main/design-md-lint-worker.js`); the package's command-line tool is left
+out of the app.
+
+Copyright 2026 Google LLC
+
+Apache License 2.0. See https://www.apache.org/licenses/LICENSE-2.0. The
+package's `package.json` has no `license` field; the licence is taken from the
+`LICENSE` file it ships, which is the Apache License 2.0. It ships no `NOTICE`
+file.
+
+The linter bundle inlines these modules, each checked against its npm entry:
+unified, bail, extend, is-plain-obj, trough, vfile, vfile-message, devlop,
+remark-parse, remark-frontmatter, mdast-util-from-markdown,
+mdast-util-frontmatter, mdast-util-to-string, micromark and its `micromark-*`
+packages, micromark-extension-frontmatter, unist-util-is, unist-util-visit,
+unist-util-visit-parents, unist-util-stringify-position, character-entities,
+decode-named-character-reference, escape-string-regexp, fault, format, zod 3,
+debug and ms (all MIT License), and yaml (ISC License).

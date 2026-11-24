@@ -2,7 +2,10 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import {
   CREATE_IMAGES_FEATURE_FLAG,
+  DESIGN_LIVE_FEATURE_FLAG,
   DESIGN_MODE_KILL_SWITCH,
+  designFlagOn,
+  designLiveEnabled,
   designModeEnabled,
   studioAssetsEnabled,
   studioCapabilities,
@@ -69,4 +72,27 @@ test("design mode and Create Images are independent capabilities", () => {
 
 test("design mode does not open the shared asset store", () => {
   assert.equal(studioAssetsEnabled({}), false);
+});
+
+test("live apps are on only for 1, true, yes or on", () => {
+  assert.equal(DESIGN_LIVE_FEATURE_FLAG, "AIDEN_EXPERIMENTAL_DESIGN_LIVE");
+  assert.equal(designLiveEnabled({}), false);
+  for (const value of ["", "0", "false", "off", "no", "maybe"]) {
+    assert.equal(designLiveEnabled({ [DESIGN_LIVE_FEATURE_FLAG]: value }), false, value);
+    assert.equal(designFlagOn(value), false, value);
+  }
+  for (const value of ["1", "TRUE", " true ", "yes", "On"]) {
+    assert.equal(designLiveEnabled({ [DESIGN_LIVE_FEATURE_FLAG]: value }), true, value);
+    assert.equal(designFlagOn(value), true, value);
+  }
+  assert.equal(designFlagOn(undefined), false);
+});
+
+test("live apps are off whenever design mode is off", () => {
+  assert.equal(designLiveEnabled({ ...DESIGN_OFF, [DESIGN_LIVE_FEATURE_FLAG]: "1" }), false);
+  // The live flag never turns Create Images on.
+  assert.deepEqual(studioCapabilities({ [DESIGN_LIVE_FEATURE_FLAG]: "1" }), {
+    createImages: false,
+    designMode: true,
+  });
 });

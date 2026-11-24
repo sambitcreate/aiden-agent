@@ -11,6 +11,7 @@ import { DesignCanvasSnapshots } from "./canvas-snapshots.js";
 import { createDesignCanvasCarry } from "./carry.js";
 import { createDesignChatCleanup, createDesignWorkspaceCleanup } from "./cleanup.js";
 import { DesignModeConsent } from "./design-mode-tool.js";
+import { runDesignMdWorker } from "./design-md/lint-client.js";
 import { DesignSystemOffers } from "./design-system-offers.js";
 import { DesignGrantRegistry } from "./grants.js";
 import { createDesignLiveChats } from "./liveness.js";
@@ -140,3 +141,13 @@ export const designSystemOffers = new DesignSystemOffers({
   file: () => path.join(app.getPath("userData"), "design-system-offers.json"),
   onSaveError: (error) => logger.warn("design", "Could not record the design-system offer.", error),
 });
+
+/**
+ * The DESIGN.md linter. Lazy: no worker starts until the first check, and the
+ * linter itself loads only inside that worker, never on the main thread.
+ */
+export const designMdLinter: typeof runDesignMdWorker = (request, options = {}) =>
+  runDesignMdWorker(request, {
+    log: (message) => logger.warn("design", message),
+    ...options,
+  });

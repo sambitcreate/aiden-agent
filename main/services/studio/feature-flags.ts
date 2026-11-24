@@ -24,6 +24,20 @@ export function designModeEnabled(environment: Environment = process.env): boole
   return !flagOff(environment, DESIGN_MODE_KILL_SWITCH);
 }
 
+/** Design mode v2's live-app work (DESIGN.md first, then live apps); off by default. */
+export const DESIGN_LIVE_FEATURE_FLAG = "AIDEN_EXPERIMENTAL_DESIGN_LIVE";
+
+/** Design flags accept 1, true, yes or on, trimmed and case-insensitive. */
+export function designFlagOn(value: string | undefined): boolean {
+  const normalized = value?.trim().toLowerCase();
+  return normalized === "1" || normalized === "true" || normalized === "yes" || normalized === "on";
+}
+
+/** Read on every check, so a changed environment takes effect at the next turn. */
+export function designLiveEnabled(environment: Environment = process.env): boolean {
+  return designModeEnabled(environment) && designFlagOn(environment[DESIGN_LIVE_FEATURE_FLAG]);
+}
+
 /** The shared studio asset store and `aiden-asset:` protocol exist only while Create Images is on. */
 export function studioAssetsEnabled(environment: Environment = process.env): boolean {
   return createImagesEnabled(environment);
