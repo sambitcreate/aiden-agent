@@ -14,7 +14,7 @@
 //   computer sign-in can stop it without the guest password (see
 //   `guestDriverSuspendScript`).
 // - The CLI shape (`serve --socket`, `mcp --embedded --socket`) is cua-driver
-//   0.36.0's documented one; the scripts are unproven until owner-Mac
+//   0.38.0's documented one; the scripts are unproven until owner-Mac
 //   acceptance (docs/bot-computers.md, "Guest driver lane").
 
 import { quoteRemoteArg } from "../devices/ssh-device-script.js";

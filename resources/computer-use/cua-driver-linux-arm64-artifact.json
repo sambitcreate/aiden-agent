@@ -1,0 +1,17 @@
+{
+  "schemaVersion": 1,
+  "upstream": "https://github.com/trycua/cua",
+  "tag": "cua-driver-rs-v0.38.0",
+  "sourceCommit": "85e2b1318bd77ccf3cfa88ccdf875a4bb7eaed19",
+  "version": "0.38.0",
+  "platform": "linux",
+  "architecture": "arm64",
+  "asset": "cua-driver-rs-0.38.0-linux-arm64-binary.tar.gz",
+  "url": "https://github.com/trycua/cua/releases/download/cua-driver-rs-v0.38.0/cua-driver-rs-0.38.0-linux-arm64-binary.tar.gz",
+  "archiveBytes": 36674648,
+  "sha256": "80c9ae66bc7322052dd426c6133c96086b33894bf06c972bca8215384400b33d",
+  "binaryBytes": 56512184,
+  "binarySha256": "26e9eee8165e9ce7b614b5e3d68e5d963231385a82b65236406718b5ce1ff936",
+  "license": "MIT",
+  "releaseChannel": "pre-release"
+}

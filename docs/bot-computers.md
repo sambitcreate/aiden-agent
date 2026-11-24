@@ -404,7 +404,7 @@ marked assumed until they are recorded on an Apple-silicon Mac:
 
 The screen (VNC) lane above is the default. On a base that has **element
 control**, a Bot's `computer` tool can also read an app's buttons and fields
-and click them by number, through Aiden's own pinned `cua-driver` 0.36.0
+and click them by number, through Aiden's own pinned `cua-driver` 0.38.0
 running inside the guest. Where element control is missing, failed or was
 skipped, everything above applies unchanged.
 
@@ -450,7 +450,7 @@ skipped, everything above applies unchanged.
   `element` in place of `coordinate`; the numbers last until anything acts.
   Screenshots, `type`, `key`, `drag` and `scroll` stay on the screen lane. The
   driver is reached over Aiden's own SSH, one `cua-driver mcp --embedded`
-  bridge per session, and the exact 0.36.0 tool catalog is checked before any
+  bridge per session, and the exact 0.38.0 tool catalog is checked before any
   call, as for Computer Use on the Mac. If the driver can't be reached, the
   call says so and the Bot can act with coordinates instead.
 - **Rules see more.** An element click gives the rules its app, window, role

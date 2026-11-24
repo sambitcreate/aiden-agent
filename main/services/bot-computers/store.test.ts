@@ -45,7 +45,7 @@ test("a damaged file keeps what is valid and drops foreign VM names and bad sett
 });
 
 test("the guest driver flag is kept for a base and its computers only when it is well formed", () => {
-  const driver = { version: "0.36.0", home: "/Users/lume", uid: 501 };
+  const driver = { version: "0.38.0", home: "/Users/lume", uid: 501 };
   const parsed = parseBotComputersState({
     setup: { baseBuild: "25G83", guestDriver: driver },
     computers: {

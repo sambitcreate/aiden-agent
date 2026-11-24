@@ -2,7 +2,7 @@
 
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
-import { chmod, mkdir, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, readFile, readdir, rm, symlink, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
@@ -15,16 +15,23 @@ import {
   assertArchiveListing,
   buildBrokerApp,
   extractDriverMember,
+  isElfAarch64Header,
   resolveCargo,
   runBoundedCommand,
   sigstoreBundleArchiveDigest,
   validateArtifact,
+  validateLinuxArm64Artifact,
   validateVendoredBinary,
+  validateVendoredLinuxArm64Binary,
   verifySigstoreBundle,
 } from "./vendor-cua-driver.mjs";
 import {
   CUA_DRIVER_ARTIFACT_KEYS,
   CUA_DRIVER_ARTIFACT_PROVENANCE,
+  CUA_DRIVER_LINUX_ARM64_ARTIFACT_KEYS,
+  CUA_DRIVER_LINUX_ARM64_ARTIFACT_PROVENANCE,
+  CUA_DRIVER_LINUX_ARM64_SHA256,
+  CUA_DRIVER_LINUX_ARM64_SIGSTORE_BUNDLE,
   CUA_DRIVER_SHA256,
 } from "./computer-use-signing-pins.mjs";
 
@@ -163,6 +170,93 @@ test("checked-in cua-driver provenance exactly matches the compiled pins", async
   );
   assert.equal(validateArtifact(checkedIn), CUA_DRIVER_ARTIFACT_PROVENANCE);
   assert.deepEqual(checkedIn, CUA_DRIVER_ARTIFACT_PROVENANCE);
+});
+
+test("checked-in Linux arm64 cua-driver provenance exactly matches the compiled pins", async () => {
+  const checkedIn = JSON.parse(
+    await readFile(
+      new URL("../resources/computer-use/cua-driver-linux-arm64-artifact.json", import.meta.url),
+      "utf8",
+    ),
+  );
+  assert.equal(validateLinuxArm64Artifact(checkedIn), CUA_DRIVER_LINUX_ARM64_ARTIFACT_PROVENANCE);
+  assert.deepEqual(checkedIn, CUA_DRIVER_LINUX_ARM64_ARTIFACT_PROVENANCE);
+  assert.equal(checkedIn.tag, CUA_DRIVER_ARTIFACT_PROVENANCE.tag);
+  assert.equal(checkedIn.sourceCommit, CUA_DRIVER_ARTIFACT_PROVENANCE.sourceCommit);
+  assert.equal(checkedIn.version, CUA_DRIVER_ARTIFACT_PROVENANCE.version);
+});
+
+test("Linux arm64 artifact validation rejects missing, extra, and drifted fields", async (t) => {
+  const missing = { ...CUA_DRIVER_LINUX_ARM64_ARTIFACT_PROVENANCE };
+  delete missing.releaseChannel;
+  assert.throws(() => validateLinuxArm64Artifact(missing), /provenance keys differ/);
+  assert.throws(
+    () =>
+      validateLinuxArm64Artifact({
+        ...CUA_DRIVER_LINUX_ARM64_ARTIFACT_PROVENANCE,
+        unexpected: true,
+      }),
+    /provenance keys differ/,
+  );
+  for (const field of CUA_DRIVER_LINUX_ARM64_ARTIFACT_KEYS) {
+    await t.test(field, () => {
+      const expected = CUA_DRIVER_LINUX_ARM64_ARTIFACT_PROVENANCE[field];
+      const drifted = {
+        ...CUA_DRIVER_LINUX_ARM64_ARTIFACT_PROVENANCE,
+        [field]: typeof expected === "number" ? expected + 1 : `${expected}-drifted`,
+      };
+      assert.throws(() => validateLinuxArm64Artifact(drifted), new RegExp(`field '${field}'`));
+    });
+  }
+});
+
+test("Linux arm64 binary validation requires a regular ELF64 aarch64 file with the pinned hash", async () => {
+  const elfAarch64 = Buffer.alloc(24);
+  elfAarch64[0] = 0x7f;
+  elfAarch64[1] = 0x45;
+  elfAarch64[2] = 0x4c;
+  elfAarch64[3] = 0x46;
+  elfAarch64[4] = 2; // ELFCLASS64
+  elfAarch64[5] = 1; // ELFDATA2LSB
+  elfAarch64.writeUInt16LE(183, 18); // EM_AARCH64
+
+  const elfX64 = Buffer.from(elfAarch64);
+  elfX64.writeUInt16LE(62, 18); // EM_X86_64
+
+  assert.equal(isElfAarch64Header(elfAarch64), true);
+  assert.equal(isElfAarch64Header(elfX64), false);
+  assert.equal(isElfAarch64Header(Buffer.from("not-an-elf")), false);
+
+  const root = await mkdtemp(path.join(os.tmpdir(), "aiden-cua-linux-arm64-"));
+  try {
+    const validFile = path.join(root, "cua-driver");
+    const wrongArch = path.join(root, "cua-driver-x64");
+    const linked = path.join(root, "cua-driver-link");
+    await writeFile(validFile, elfAarch64);
+    await writeFile(wrongArch, elfX64);
+    await symlink(validFile, linked);
+
+    assert.equal(
+      await validateVendoredLinuxArm64Binary(validFile, async () => CUA_DRIVER_LINUX_ARM64_SHA256),
+      true,
+    );
+    assert.equal(
+      await validateVendoredLinuxArm64Binary(validFile, async () => "0".repeat(64)),
+      false,
+    );
+    assert.equal(
+      await validateVendoredLinuxArm64Binary(wrongArch, async () => CUA_DRIVER_LINUX_ARM64_SHA256),
+      false,
+    );
+    assert.equal(
+      await validateVendoredLinuxArm64Binary(linked, async () => CUA_DRIVER_LINUX_ARM64_SHA256),
+      false,
+    );
+    // Real hash path also rejects wrong byte size before/with hash mismatch.
+    assert.equal(await validateVendoredLinuxArm64Binary(validFile), false);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
 });
 
 test("artifact validation rejects missing and additional provenance keys", () => {
@@ -418,6 +512,21 @@ test("optional Sigstore verification rejects an unpinned bundle before running c
         commands.push(command);
         return "";
       }),
+      /Sigstore bundle checksum mismatch/,
+    );
+    await assert.rejects(
+      verifySigstoreBundle(
+        path.join(root, "linux-archive.tar.gz"),
+        bundle,
+        async (command) => {
+          commands.push(command);
+          return "";
+        },
+        {
+          bundlePin: CUA_DRIVER_LINUX_ARM64_SIGSTORE_BUNDLE,
+          archiveSha256: CUA_DRIVER_LINUX_ARM64_ARTIFACT_PROVENANCE.sha256,
+        },
+      ),
       /Sigstore bundle checksum mismatch/,
     );
     assert.deepEqual(commands, []);

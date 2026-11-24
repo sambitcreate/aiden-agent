@@ -606,7 +606,7 @@ mod tests {
         assert_eq!(bytes.len(), 272);
         assert_eq!(
             format!("{:x}", Sha256::digest(bytes)),
-            "6961457c7a7ba4d30c962591fc5c10fd2b4f55a58102c8115c708e0d81a222a8"
+            "aa81883fbec5a03dfa04834b40a4bd3773c9324b19e8d15fba29bdbacc86f62f"
         );
         assert_eq!(
             DRIVER_ARGUMENTS,
@@ -760,6 +760,9 @@ mod tests {
             "CUA_DRIVER_PERMISSION_MODE",
             "CUA_DRIVER_DANGEROUSLY_BYPASS_APPROVALS",
             "CUA_DRIVER_MCP_ENVELOPES",
+            // 0.37+ brief-foreground drag auto-escalation would bypass Aiden's
+            // explicit foreground approval.
+            "CUA_DRIVER_ALLOW_BRIEF_FOREGROUND",
         ] {
             assert!(!keys.contains(&forbidden));
         }

@@ -45,7 +45,7 @@ interface Call {
   signal?: AbortSignal;
 }
 
-/** Aiden's allowlisted 0.36.0 catalog, parsed exactly as a live session parses it. */
+/** Aiden's allowlisted 0.38.0 catalog, parsed exactly as a live session parses it. */
 function pinnedCatalog(): Map<string, CuaDriverToolInfo> {
   return parseCuaDriverTools(toolListResult([...CUA_DRIVER_ALLOWED_TOOLS])).tools;
 }
@@ -121,7 +121,7 @@ class FakeHost implements CuaDriverHostLike {
   }
 }
 
-/** The 0.36.0 driver's answer, with extra driver data Aiden must not forward. */
+/** The 0.38.0 driver's answer, with extra driver data Aiden must not forward. */
 function fakeResponse(call: Call, driver: FakeCuaDriver): unknown {
   const result = driver.call(call.name, call.args) as {
     structuredContent?: Record<string, unknown>;
@@ -1144,7 +1144,7 @@ test("desktop resolution ignores Finder folders and desktop-named third-party ap
   await missing.controller.close();
 });
 
-test("maps every action to arguments the pinned 0.36.0 schemas admit", async () => {
+test("maps every action to arguments the pinned 0.38.0 schemas admit", async () => {
   const { controller, session } = harness(true);
   const tokens: string[] = [];
   await capture(controller, "som");
@@ -2184,5 +2184,58 @@ test("electron_main_process_unavailable asks for an approved foreground retry", 
   assert.match(error.message, /delivery_mode "foreground"/u);
   assert.equal(controller.lifecycleState, "ready");
   assert.equal(await captureStillUsable(controller), true);
+  await controller.close();
+});
+
+test("screen_locked invalidates the capture and never suggests a foreground retry", async () => {
+  const { controller, error } = await refuseAfterCapture("screen_locked", "click", {
+    action: "click",
+    element: 0,
+  });
+  assert.equal(error.code, "screen_locked");
+  assert.match(error.message, /screen is locked/iu);
+  assert.match(error.message, /do not retry in the foreground/iu);
+  assert.equal(controller.lifecycleState, "ready");
+  assert.equal(await captureStillUsable(controller), false);
+  await controller.close();
+});
+
+test("select_menu_would_raise_window keeps the capture and steers to set_value", async () => {
+  const { controller, error } = await refuseAfterCapture(
+    "select_menu_would_raise_window",
+    "click",
+    { action: "click", element: 0 },
+  );
+  assert.equal(error.code, "select_menu_would_raise_window");
+  assert.match(error.message, /set_value/u);
+  assert.equal(controller.lifecycleState, "ready");
+  assert.equal(await captureStillUsable(controller), true);
+  await controller.close();
+});
+
+test("refused ActionResult falls back to 0.38 top-level recovery hint when error.hint is absent", async () => {
+  const { controller, session } = harness(false);
+  await capture(controller, "ax");
+  session.handler = (call) =>
+    call.name === "click"
+      ? {
+          content: [{ type: "text", text: "refused" }],
+          structuredContent: {
+            effect: "refused",
+            route: "accessibility",
+            error: { code: "select_menu_would_raise_window" },
+            hint: "Choose the option with set_value instead.",
+            next_call: { tool: "get_window_state", arguments: { pid: 42, window_id: 7 } },
+          },
+        }
+      : fakeResponse(call, session.driver);
+  await assert.rejects(
+    () => approved(controller, "top-level-hint", { action: "click", element: 0 }),
+    (error: Error & { code?: string }) => {
+      assert.equal(error.code, "select_menu_would_raise_window");
+      assert.match(error.message, /Choose the option with set_value instead\./u);
+      return true;
+    },
+  );
   await controller.close();
 });

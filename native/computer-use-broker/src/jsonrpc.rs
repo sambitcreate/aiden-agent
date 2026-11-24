@@ -228,14 +228,15 @@ mod tests {
             "clipboard_read",
             "clipboard_write",
             "browser_navigate",
+            "browser_select",
             "install_extension",
             // Superseded by get_window_state; Aiden never calls them.
             "get_screen_size",
             "get_accessibility_tree",
             "get_desktop_state",
-            // 0.35 batch/script tools (`run_actions` is run_steps' hidden
+            // 0.35+ batch/script tools (`run_actions` is run_steps' hidden
             // alias): one call would run many actions past Aiden's per-action
-            // approval. Upstream main's skill-pack reader stays out as well.
+            // approval. 0.37's skill-pack reader `get_guide` stays out as well.
             "run_steps",
             "run_actions",
             "run_script",

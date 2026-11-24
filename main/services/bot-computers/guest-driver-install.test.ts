@@ -86,8 +86,8 @@ function parsePlist(xml: string): unknown {
 }
 
 const PIN: GuestDriverPin = {
-  version: "0.36.0",
-  binarySha256: "87c7e782e69703d95524e4ceb7ceba03c8a159caabf1f1ce2c118eade7d2a5ec",
+  version: "0.38.0",
+  binarySha256: "92067848d0eeb9de76929fbd06a137af801b0ff6caedbb3109bd7a6cc84a1f9f",
   signingRequirement: 'anchor apple generic and identifier "cua-driver" and certificate leaf[subject.OU] = "YCK386LBJ7"',
 };
 const LOCATION: GuestDriverLocation = { home: "/Users/lume", uid: 501 };
