@@ -415,3 +415,52 @@ test("a host's memory line and routine suggestion become this Mac's own transcri
     { proposalId: "4b1f8a52-7f0e-4b8e-9d55-3f2c1a6b7e10", name: "Morning brief", label: "Weekdays at 8:00 AM" },
   );
 });
+
+test("Load older places the host's earlier page before what is shown, keeps it across a reconnect, and tells an older host apart", async () => {
+  const message = (id: string, text: string) => ({ type: "message" as const, id, role: "assistant" as const, text });
+  const newest = session({ hasOlder: true, entries: [message("m5", "Five"), message("m6", "Six")] });
+  const fake = fakeTransport([newest, newest]);
+  const asked: string[] = [];
+  const pages: Record<string, PeerOperationOutcome> = {
+    m5: { ok: true, value: { botId: "bot_1", epoch: "e1", entries: [message("m3", "Three"), message("m4", "Four")], hasOlder: true } },
+    m3: { ok: true, value: { botId: "bot_1", epoch: "e1", entries: [message("m1", "One"), message("m2", "Two")], hasOlder: false } },
+  };
+  fake.transport.older = async (_hostId, _botId, before) => {
+    asked.push(before);
+    return pages[before]!;
+  };
+  const follower = new RemoteBotSessionFollower(fake.transport, "host_a", "bot_1");
+  follower.start();
+  await settle();
+  const texts = () => follower.getState().view!.snapshot.entries.map((entry) => (entry as { text?: string }).text);
+  assert.deepEqual(await follower.loadOlder(), { kind: "loaded" });
+  assert.deepEqual(texts(), ["Three", "Four", "Five", "Six"]);
+  assert.equal(follower.getState().view!.hasOlder, true);
+
+  // A reconnect's snapshot of the same session keeps what was loaded.
+  fake.push(event(4, { type: "snapshot", payload: { session: session({ seq: 5, hasOlder: true, entries: [message("m5", "Five"), message("m6", "Six"), message("m7", "Seven")] }) } }));
+  assert.deepEqual(texts(), ["Three", "Four", "Five", "Six", "Seven"]);
+
+  await follower.loadOlder();
+  assert.deepEqual(texts(), ["One", "Two", "Three", "Four", "Five", "Six", "Seven"]);
+  assert.equal(follower.getState().view!.hasOlder, false);
+  assert.deepEqual(asked, ["m5", "m3"], "each page ends where the last began");
+
+  // A new epoch is another transcript: the loaded pages go.
+  fake.push(event(0, { type: "snapshot", payload: { session: session({ epoch: "e2", seq: 0, hasOlder: true, entries: [message("n1", "New")] }) } }, "e2"));
+  assert.deepEqual(texts(), ["New"]);
+  follower.stop();
+
+  // A host older than revision 67 has no such route; one that moved on is read again.
+  const old = fakeTransport([newest, newest]);
+  old.transport.older = async () => ({ ok: false, error: { code: "not_found", message: "This Aiden Remote endpoint does not exist.", status: 404 } });
+  const legacy = new RemoteBotSessionFollower(old.transport, "host_a", "bot_1");
+  legacy.start();
+  await settle();
+  assert.deepEqual(await legacy.loadOlder(), { kind: "unsupported" });
+  old.transport.older = async () => ({ ok: false, error: { code: "operation_stale", message: "This Bot's chat changed.", status: 409 } });
+  assert.deepEqual(await legacy.loadOlder(), { kind: "loaded" });
+  await settle();
+  assert.equal(old.reads(), 2, "the session is read again");
+  legacy.stop();
+});

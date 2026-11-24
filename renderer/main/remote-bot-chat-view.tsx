@@ -7,7 +7,7 @@ import * as React from "react";
 import { useReportGoalView } from "../lib/use-report-goal-view";
 import { skipToken, useQuery } from "@tanstack/react-query";
 import { useNavigate } from "@tanstack/react-router";
-import { Ellipsis, Pause, Play, Square } from "lucide-react";
+import { Ellipsis, Loader2, Pause, Play, Square } from "lucide-react";
 import { BotAvatar as BotAvatarMark } from "../components/bot-avatar";
 import { AskUserQuestionComposer } from "../components/ask-user-question-composer";
 import { AccessRequestCard } from "../components/bots/access-request-card";
@@ -227,6 +227,57 @@ export function RemoteBotChatView({ hostId, botId }: { hostId: string; botId: st
     if (outcome.ok) return outcome;
     toast.error(outcome.error.code === "outcome_unknown" ? `${hostName} may not have received that. Check the chat before trying again.` : outcome.error.message || failure);
     throw Object.assign(new Error(outcome.error.message || failure), { code: outcome.error.code });
+  };
+
+  // Contract revision 67: earlier messages, a page at a time. A host older than that keeps them.
+  const [loadingOlder, setLoadingOlder] = React.useState(false);
+  const [olderOnHostOnly, setOlderOnHostOnly] = React.useState(false);
+  const loadOlder = async () => {
+    setLoadingOlder(true);
+    try {
+      const outcome = await live.loadOlder();
+      if (outcome.kind === "unsupported") setOlderOnHostOnly(true);
+      else if (outcome.kind === "failed") toast.error(outcome.message || "Aiden couldn’t load older messages.");
+    } finally {
+      setLoadingOlder(false);
+    }
+  };
+
+  // Queued messages taken back here, while the host's answer is on its way.
+  const [removing, setRemoving] = React.useState<ReadonlySet<string>>(() => new Set());
+  const removeQueued = async (submissionId: string, button: HTMLButtonElement) => {
+    // The row leaves the page, so keyboard focus moves on first: the next Remove, else the composer.
+    const removes = Array.from(document.querySelectorAll<HTMLButtonElement>("[data-bot-queued-remove]"));
+    const next = removes[removes.indexOf(button) + 1];
+    (next ?? composerRef.current)?.focus();
+    setRemoving((ids) => new Set(ids).add(submissionId));
+    try {
+      const outcome = await peerHostsApi.call(hostId, {
+        operation: "botWithdrawQueued",
+        resourceId: botId,
+        itemId: submissionId,
+        idempotencyKey: mintPeerIdempotencyKey(),
+        body: {},
+      });
+      if (outcome.ok) {
+        if ((outcome.value as { outcome?: string }).outcome === "started") toast.info("That message already started, so it stays.");
+        if (live.stream !== "streaming") live.reload();
+      } else if (outcome.error.status === 404) {
+        toast.info(`Update Aiden on ${hostName} to remove a waiting message from here.`);
+      } else {
+        toast.error(
+          outcome.error.code === "outcome_unknown"
+            ? `${hostName} may not have received that. Check the chat before trying again.`
+            : outcome.error.message || "Aiden couldn’t remove that message.",
+        );
+      }
+    } finally {
+      setRemoving((ids) => {
+        const rest = new Set(ids);
+        rest.delete(submissionId);
+        return rest;
+      });
+    }
   };
 
   /** Pause the Bot on its own Mac, or lift the pause. The host's stream then carries the new state. */
@@ -888,6 +939,20 @@ export function RemoteBotChatView({ hostId, botId }: { hostId: string; botId: st
           Reconnecting to {hostName}…
         </Text>
       ) : null}
+      {view.hasOlder ? (
+        olderOnHostOnly ? (
+          <Text as="p" variant="small" color="tertiary" className="text-center">
+            Older messages are on {hostName}. Update Aiden there to see them here.
+          </Text>
+        ) : (
+          <div className="flex justify-center">
+            <Button variant="muted" size="small" disabled={loadingOlder} onClick={() => void loadOlder()} data-remote-load-older="true">
+              {loadingOlder ? <Loader2 className="size-3.5 animate-spin" aria-hidden="true" /> : null}
+              Load older messages
+            </Button>
+          </div>
+        )
+      ) : null}
       <MessageAttachmentPreviewProvider>
         <TranscriptEntries
           name={name}
@@ -896,7 +961,8 @@ export function RemoteBotChatView({ hostId, botId }: { hostId: string; botId: st
           running={running}
           level={chatActivity.level}
           queued={snapshot.queued}
-          removing={new Set()}
+          removing={removing}
+          {...(steerAndQueue ? { onRemoveQueued: (id: string, button: HTMLButtonElement) => void removeQueued(id, button) } : {})}
           retrying={busy("retry")}
           onConnect={(pluginId) => void connect(pluginId)}
           connectLabel={`Finish on ${hostName}`}

@@ -117,6 +117,12 @@ import {
   type AidenRemoteBotRoutineSuggestionList,
   AIDEN_REMOTE_BOT_PRESETS_MAX,
   AIDEN_REMOTE_BOT_SESSION_MAX_ENTRIES,
+  AIDEN_REMOTE_BOT_SESSION_PAGE_DEFAULT_LIMIT,
+  parseAidenRemoteBotSessionEntriesPage,
+  parseAidenRemoteBotSessionEntryId,
+  parseAidenRemoteBotSubmissionId,
+  type AidenRemoteBotQueuedWithdrawReceipt,
+  type AidenRemoteBotSessionEntriesPage,
   AIDEN_REMOTE_BOT_SESSION_MAX_TEXT_CHARS,
   AIDEN_REMOTE_MAX_SSE_FRAME_BYTES,
   AIDEN_REMOTE_PROTOCOL_VERSION,
@@ -259,6 +265,11 @@ export interface AidenRemoteBotSessionRuntime {
    * the self-intro (`BotSessionRuntime.placedSubmissions`).
    */
   placedSubmissions(botId: string): Promise<ReadonlyMap<string, string>>;
+  /**
+   * Revision 67: take back a queued submission before its turn starts, as the
+   * desktop's Remove does (`BotSessionService.withdraw`).
+   */
+  withdraw(botId: string, submissionId: string): Promise<"withdrawn" | "started" | "gone">;
 }
 
 export interface AidenRemoteBotSessionServiceOptions {
@@ -865,9 +876,10 @@ export function projectBotSessionState(
 function windowed(
   entries: AidenRemoteBotSessionEntry[],
   budgetBytes: number,
+  maxEntries: number = AIDEN_REMOTE_BOT_SESSION_MAX_ENTRIES,
 ): { entries: AidenRemoteBotSessionEntry[]; hasOlder: boolean } {
   const limit = Math.min(MAX_SESSION_JSON_BYTES, budgetBytes);
-  let start = Math.max(0, entries.length - AIDEN_REMOTE_BOT_SESSION_MAX_ENTRIES);
+  let start = Math.max(0, entries.length - Math.min(maxEntries, AIDEN_REMOTE_BOT_SESSION_MAX_ENTRIES));
   let window = entries.slice(start);
   while (window.length > 0 && Buffer.byteLength(JSON.stringify(window), "utf8") > limit) {
     start = Math.min(entries.length, start + Math.max(1, Math.floor(window.length / 4)));
@@ -1140,6 +1152,19 @@ class BotLiveProjector {
       ...(audience.accessRequests ? { accessRequest } : {}),
       ...(audience.plans ? { plan: this.plan } : {}),
     });
+  }
+
+  /**
+   * Revision 67: up to `limit` entries just older than `before`, as this
+   * device's session shows them, inside the transcript's byte limit. Null when
+   * `before` is not an entry this device's session holds (another epoch, or
+   * an id it was never sent).
+   */
+  olderEntries(audience: Audience, before: string, limit: number): { entries: AidenRemoteBotSessionEntry[]; hasOlder: boolean } | null {
+    const shown = entriesFor(this.entries, audience);
+    const index = shown.findIndex((entry) => entry.id === before);
+    if (index < 0) return null;
+    return windowed(shown.slice(0, index), MAX_SESSION_JSON_BYTES, limit);
   }
 
   private issuesFor(audience: Audience): AidenRemoteBotIssue[] {
@@ -2694,6 +2719,70 @@ export class AidenRemoteBotSessionService {
       return projector.snapshot(audience);
     } catch (error) {
       return mapSessionError(error, audience);
+    }
+  }
+
+  /**
+   * Revision 67, `GET /bots/{botId}/session/entries`: the entries just older
+   * than `before`, as this device's session shows them. A `before` the
+   * session does not hold is `operation_stale`: read the session again.
+   */
+  async olderEntries(
+    botId: string,
+    query: { before: string; limit?: number },
+    options: AudienceOptions = {},
+  ): Promise<AidenRemoteBotSessionEntriesPage> {
+    const before = parseOrInvalid(parseAidenRemoteBotSessionEntryId, query.before, "The session page cursor is invalid.");
+    const limit = query.limit ?? AIDEN_REMOTE_BOT_SESSION_PAGE_DEFAULT_LIMIT;
+    if (!Number.isSafeInteger(limit) || limit < 1 || limit > AIDEN_REMOTE_BOT_SESSION_MAX_ENTRIES) {
+      throw new AidenRemoteServiceError("invalid_request", "The session page limit is invalid.", 400);
+    }
+    const bot = await this.options.bots.bot(botId);
+    const audience = this.audience(options);
+    let projector: BotLiveProjector;
+    try {
+      projector = await this.liveProjector(bot.id);
+    } catch (error) {
+      return mapSessionError(error, audience);
+    }
+    const page = projector.olderEntries(audience, before, limit);
+    if (!page) throw new AidenRemoteServiceError("operation_stale", "This Bot's chat changed. Read it again.", 409);
+    return parseAidenRemoteBotSessionEntriesPage({ botId: bot.id, epoch: projector.epoch, ...page });
+  }
+
+  /**
+   * Revision 67, `POST /bots/{botId}/queued/{submissionId}/withdraw`: take
+   * back one of the person's queued messages. Only the person's own message
+   * is theirs to take back, so a routine's input or the self-intro reads as
+   * `gone`, as does an id the host can't find; one whose turn began is
+   * `started` and stays in the chat. Idempotent per key.
+   */
+  async withdrawQueued(
+    deviceId: string,
+    botId: string,
+    submissionId: string,
+    key: string,
+    input: unknown,
+  ): Promise<AidenRemoteBotQueuedWithdrawReceipt> {
+    if (!this.supportsActivity) throw new AidenRemoteServiceError("not_found", "This endpoint is unavailable.", 404);
+    const id = parseOrInvalid(parseAidenRemoteBotSubmissionId, submissionId, "The queued message is invalid.");
+    parseOrInvalid((value) => parseAidenRemoteEmptyRequest(value, "Bot request"), input ?? {}, "The Bot request is invalid.");
+    const bot = await this.options.bots.bot(botId);
+    try {
+      const receipt = await this.options.bots.executeIdempotent(
+        { deviceId, route: "POST /bots/{id}/queued/{submissionId}/withdraw", resourceId: `${bot.id}:${id}`, key },
+        {},
+        async (): Promise<AidenRemoteBotQueuedWithdrawReceipt> => {
+          const runtime = await this.options.runtime();
+          const quiet = await runtime.quietInputs(bot.id, [id]);
+          if (quiet.get(id) === true) return { submissionId: id, outcome: "gone" };
+          return { submissionId: id, outcome: await runtime.withdraw(bot.id, id) };
+        },
+      );
+      await this.afterAction(bot.id);
+      return receipt;
+    } catch (error) {
+      return mapSessionError(error);
     }
   }
 

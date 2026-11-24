@@ -17,6 +17,7 @@ import type {
   AidenRemoteBotQueuedMessage,
   AidenRemoteBotSession,
   AidenRemoteBotSessionActivity,
+  AidenRemoteBotSessionEntriesPage,
   AidenRemoteBotSessionEntry,
   AidenRemoteBotSessionEvent,
   AidenRemoteBotSessionStateView,
@@ -40,6 +41,10 @@ export interface RemoteBotSessionView {
    * interrupted again once it is lifted.
    */
   paused: boolean;
+  /** Contract revision 67: the host holds entries older than the oldest one here. */
+  hasOlder: boolean;
+  /** The host's id of the oldest entry here, drawn or not: where the next older page ends. */
+  olderCursor: string | null;
 }
 
 /**
@@ -243,6 +248,51 @@ export function remoteBotSessionView(session: AidenRemoteBotSession): RemoteBotS
     approval: session.approval,
     handoff: session.handoff ?? null,
     paused: remoteBotSessionPaused(session),
+    hasOlder: session.hasOlder,
+    olderCursor: session.entries[0]?.id ?? null,
+  };
+}
+
+/**
+ * A fresh read or a reconnect's snapshot of the same session keeps the older
+ * pages this Mac already loaded, when the snapshot's window starts inside
+ * them. Anything else (another epoch, a gap, a whole transcript) is the
+ * snapshot as sent.
+ */
+export function carryOlderRemoteBotEntries(
+  previous: RemoteBotSessionView | null,
+  next: RemoteBotSessionView,
+): RemoteBotSessionView {
+  if (!previous || !next.hasOlder || previous.snapshot.epoch !== next.snapshot.epoch) return next;
+  const first = next.snapshot.entries[0];
+  if (!first) return next;
+  const index = previous.snapshot.entries.findIndex((entry) => entry.id === first.id);
+  if (index <= 0) return next;
+  return {
+    ...next,
+    snapshot: { ...next.snapshot, entries: [...previous.snapshot.entries.slice(0, index), ...next.snapshot.entries] },
+    hasOlder: previous.hasOlder,
+    olderCursor: previous.olderCursor,
+  };
+}
+
+/**
+ * Contract revision 67: one page of entries older than the view's oldest,
+ * placed before it. A page from another epoch is not this transcript's: the
+ * view is returned unchanged and the caller reads the session again.
+ */
+export function withOlderRemoteBotEntries(
+  view: RemoteBotSessionView,
+  page: AidenRemoteBotSessionEntriesPage,
+): RemoteBotSessionView {
+  if (page.botId !== view.snapshot.botId || page.epoch !== view.snapshot.epoch) return view;
+  const held = new Set(view.snapshot.entries.map((entry) => entry.id));
+  const older = entries(page.entries).filter((entry) => !held.has(entry.id));
+  return {
+    ...view,
+    snapshot: { ...view.snapshot, entries: [...older, ...view.snapshot.entries] },
+    hasOlder: page.hasOlder,
+    olderCursor: page.entries[0]?.id ?? view.olderCursor,
   };
 }
 

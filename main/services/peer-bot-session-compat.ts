@@ -101,6 +101,12 @@ export function peerBotSessionCompat(value: unknown): unknown {
   return session;
 }
 
+/** One page of older entries as this client can read it: an entry it cannot read is left out. */
+export function peerBotSessionPageCompat(value: unknown): unknown {
+  if (!isRecord(value) || !Array.isArray(value.entries)) return value;
+  return { ...value, entries: value.entries.filter((entry) => parses(parseAidenRemoteBotSessionEntry, entry)) };
+}
+
 /** An event this client cannot apply: the session must be read again. */
 export interface PeerBotSessionResync {
   type: "resync";

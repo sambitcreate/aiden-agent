@@ -1,12 +1,19 @@
 import * as React from "react";
 import { peerHostsApi } from "../ipc";
-import { RemoteBotSessionFollower, type RemoteBotSessionState, type RemoteBotSessionTransport } from "./remote-bot-session-follower";
+import {
+  RemoteBotSessionFollower,
+  type RemoteBotOlderOutcome,
+  type RemoteBotSessionState,
+  type RemoteBotSessionTransport,
+} from "./remote-bot-session-follower";
 
 const transport: RemoteBotSessionTransport = {
   subscribe: (hostId, botId) => peerHostsApi.botSessionSubscribe(hostId, botId),
   unsubscribe: (subscriptionId) => peerHostsApi.botSessionUnsubscribe(subscriptionId),
   onMessage: (handler) => peerHostsApi.onBotSession(handler),
   read: (hostId, botId) => peerHostsApi.call(hostId, { operation: "botSession", resourceId: botId }),
+  older: (hostId, botId, before) =>
+    peerHostsApi.call(hostId, { operation: "botSessionEntries", resourceId: botId, before }),
 };
 
 const IDLE: RemoteBotSessionState = { view: null, stream: "waiting", failed: null, gone: false };
@@ -16,7 +23,7 @@ export function useRemoteBotSession(
   hostId: string,
   botId: string,
   enabled = true,
-): RemoteBotSessionState & { reload(): void } {
+): RemoteBotSessionState & { reload(): void; loadOlder(): Promise<RemoteBotOlderOutcome> } {
   const [follower, setFollower] = React.useState<RemoteBotSessionFollower | null>(null);
   React.useEffect(() => {
     if (!enabled) {
@@ -34,7 +41,11 @@ export function useRemoteBotSession(
     current?.getState ?? idleState,
   );
   const reload = React.useCallback(() => current?.reload(), [current]);
-  return React.useMemo(() => ({ ...state, reload }), [state, reload]);
+  const loadOlder = React.useCallback(
+    (): Promise<RemoteBotOlderOutcome> => current?.loadOlder() ?? Promise.resolve({ kind: "loaded" }),
+    [current],
+  );
+  return React.useMemo(() => ({ ...state, reload, loadOlder }), [state, reload, loadOlder]);
 }
 
 const noSubscribe = () => () => undefined;

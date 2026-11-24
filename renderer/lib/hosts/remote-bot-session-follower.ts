@@ -5,8 +5,18 @@
 
 import type { PeerBotSessionMessage, PeerBotSessionStreamState, PeerBotSessionSubscription } from "../../shared/peer-bot-session";
 import type { PeerOperationOutcome } from "../../shared/peer-host";
-import type { AidenRemoteBotSession, AidenRemoteBotSessionEvent } from "../../../main/services/aiden-remote-protocol";
-import { applyRemoteBotSessionEvent, remoteBotSessionView, type RemoteBotSessionView } from "./remote-bot-session";
+import type {
+  AidenRemoteBotSession,
+  AidenRemoteBotSessionEntriesPage,
+  AidenRemoteBotSessionEvent,
+} from "../../../main/services/aiden-remote-protocol";
+import {
+  applyRemoteBotSessionEvent,
+  carryOlderRemoteBotEntries,
+  remoteBotSessionView,
+  withOlderRemoteBotEntries,
+  type RemoteBotSessionView,
+} from "./remote-bot-session";
 
 export interface RemoteBotSessionTransport {
   subscribe(hostId: string, botId: string): Promise<PeerBotSessionSubscription>;
@@ -14,7 +24,16 @@ export interface RemoteBotSessionTransport {
   onMessage(handler: (message: PeerBotSessionMessage) => void): () => void;
   /** `GET /bots/{botId}/session` through the host supervisor. */
   read(hostId: string, botId: string): Promise<PeerOperationOutcome>;
+  /** Contract revision 67: `GET /bots/{botId}/session/entries?before=` through the host supervisor. */
+  older?(hostId: string, botId: string, before: string): Promise<PeerOperationOutcome>;
 }
+
+/**
+ * What Load older came to: `loaded` (or nothing left to load), `unsupported`
+ * when the host is older than revision 67, `failed` with the host's reason.
+ * A page the session moved past reads the session again and reports `loaded`.
+ */
+export type RemoteBotOlderOutcome = { kind: "loaded" } | { kind: "unsupported" } | { kind: "failed"; message: string };
 
 export interface RemoteBotSessionState {
   view: RemoteBotSessionView | null;
@@ -41,6 +60,7 @@ export class RemoteBotSessionFollower {
   private subscribing = false;
   private resyncPending = false;
   private buffered: AidenRemoteBotSessionEvent[] = [];
+  private loadingOlder: Promise<RemoteBotOlderOutcome> | null = null;
 
   constructor(
     private readonly transport: RemoteBotSessionTransport,
@@ -79,6 +99,46 @@ export class RemoteBotSessionFollower {
     this.publish({ failed: null });
     if (!this.subscriptionId && !this.subscribing) this.follow();
     void this.read();
+  };
+
+  /** Contract revision 67: place the page of entries just older than the oldest one shown. One at a time. */
+  loadOlder = (): Promise<RemoteBotOlderOutcome> => {
+    if (this.loadingOlder) return this.loadingOlder;
+    const view = this.state.view;
+    if (this.stopped || !view || !view.hasOlder || !view.olderCursor || !this.transport.older)
+      return Promise.resolve({ kind: this.transport.older ? "loaded" : "unsupported" });
+    const { epoch } = view.snapshot;
+    const request = this.transport.older(this.hostId, this.botId, view.olderCursor).then(
+      (outcome): RemoteBotOlderOutcome => {
+        if (this.stopped) return { kind: "loaded" };
+        if (!outcome.ok) {
+          // Older hosts have no such route.
+          if (outcome.error.status === 404) return { kind: "unsupported" };
+          // The session moved on (a new epoch, a rewrite): read it again.
+          if (outcome.error.status === 409) {
+            this.reload();
+            return { kind: "loaded" };
+          }
+          return { kind: "failed", message: outcome.error.message };
+        }
+        const current = this.state.view;
+        const page = outcome.value as AidenRemoteBotSessionEntriesPage;
+        if (!current || current.snapshot.epoch !== epoch || page.epoch !== epoch) {
+          this.reload();
+          return { kind: "loaded" };
+        }
+        this.publish({ view: withOlderRemoteBotEntries(current, page) });
+        return { kind: "loaded" };
+      },
+      (error: unknown): RemoteBotOlderOutcome => ({
+        kind: "failed",
+        message: error instanceof Error ? error.message : "The request failed.",
+      }),
+    );
+    this.loadingOlder = request.finally(() => {
+      this.loadingOlder = null;
+    });
+    return this.loadingOlder;
   };
 
   private follow(): void {
@@ -134,7 +194,10 @@ export class RemoteBotSessionFollower {
       else this.publish({ failed: outcome.error.message });
       return;
     }
-    let view: RemoteBotSessionView | null = remoteBotSessionView(outcome.value as AidenRemoteBotSession);
+    let view: RemoteBotSessionView | null = carryOlderRemoteBotEntries(
+      this.state.view,
+      remoteBotSessionView(outcome.value as AidenRemoteBotSession),
+    );
     for (const event of buffered) {
       if (view === null) break;
       view = applyRemoteBotSessionEvent(view, event);
@@ -167,7 +230,11 @@ export class RemoteBotSessionFollower {
       this.inFlight = false;
       this.resyncPending = false;
       this.buffered = [];
-      this.publish({ view: remoteBotSessionView(event.payload.session), failed: null, gone: false });
+      this.publish({
+        view: carryOlderRemoteBotEntries(this.state.view, remoteBotSessionView(event.payload.session)),
+        failed: null,
+        gone: false,
+      });
       return;
     }
     if (this.inFlight) {
