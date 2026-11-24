@@ -2,7 +2,7 @@ import * as React from "react";
 import { Bot, Loader2 } from "lucide-react";
 import type { NewChatMachine, RemoteBotChoice, RemoteBotGroup } from "../lib/hosts/new-chat-targets";
 import { useRemoteBotPhoto } from "../lib/hosts/remote-images";
-import { isRemoteBotUnread, markRemoteBotSeen, useRemoteBotSeen } from "../lib/remote-bot-seen";
+import { isRemoteBotUnread, markRemoteBotHostListed, useRemoteBotSeen } from "../lib/remote-bot-seen";
 import { matchesSearch } from "../lib/search-fold";
 import { RemoteHostMarker } from "./sidebar-remote";
 import { cn } from "../lib/ui-utils";
@@ -68,11 +68,11 @@ export function RemoteBotsSection({
   onOpen(hostId: string, botId: string): void;
 }) {
   const seen = useRemoteBotSeen();
-  // The open Bot's newest reply is on screen, so it is not unread when the person leaves.
-  const open = selected ? groups.flatMap(({ host, bots }) => bots.filter((bot) => `${host.id}/${bot.id}` === selected))[0] : undefined;
+  // The replies a host's Bots had when this Mac first lists them start read.
+  // The open Bot's chat records what it shows itself (`RemoteBotChatView`).
   React.useEffect(() => {
-    if (selected && open?.lastReplyAt !== undefined) markRemoteBotSeen(selected, open.lastReplyAt);
-  }, [selected, open?.lastReplyAt]);
+    for (const { host, bots } of groups) markRemoteBotHostListed(host.id, bots.map((bot) => bot.lastReplyAt));
+  }, [groups]);
   if (groups.length === 0) return null;
   return (
     <div className="mt-5 flex flex-col gap-5" data-remote-bots="true">
@@ -100,7 +100,7 @@ export function RemoteBotsSection({
                   bot={bot}
                   busy={opening === key}
                   current={current}
-                  unread={!current && isRemoteBotUnread(seen, key, bot.lastReplyAt)}
+                  unread={!current && isRemoteBotUnread(seen, host.id, bot.id, bot.lastReplyAt)}
                   onOpen={onOpen}
                 />
               );

@@ -31,7 +31,7 @@ import { botListLocation } from "../lib/bot-routes";
 import { insertTextIntoTextarea } from "../lib/composer-type-focus";
 import { hostQueryKeys } from "../lib/hosts/host-query-keys";
 import { remoteBotPhotoAsset } from "../lib/hosts/remote-bot-photo-asset";
-import { markRemoteBotSeen } from "../lib/remote-bot-seen";
+import { markRemoteBotSeen, remoteBotShownReplyAt } from "../lib/remote-bot-seen";
 import { hostServesBotHandoffs, hostSharesBotSessions } from "../lib/hosts/remote-bot-session";
 import { useRemoteBotSession } from "../lib/hosts/use-remote-bot-session";
 import { browserApi, peerHostsApi } from "../lib/ipc";
@@ -141,14 +141,19 @@ export function RemoteBotChatView({ hostId, botId }: { hostId: string; botId: st
   const avatar = botAvatar(feed.data, botId);
   const row = feed.data?.bots.find((bot) => bot.id === botId);
   const photoUrl = useRemoteBotPhoto(hostId, botId, row ? remoteBotPhotoAsset(row) : undefined);
-  // The newest reply is on screen here, so it is not unread when the person leaves (revision 66 hosts send its time).
-  const lastReplyAt = typeof row?.lastReplyAt === "string" ? Date.parse(row.lastReplyAt) : Number.NaN;
-  React.useEffect(() => {
-    if (Number.isFinite(lastReplyAt)) markRemoteBotSeen(`${hostId}/${botId}`, lastReplyAt);
-  }, [hostId, botId, lastReplyAt]);
   // A host too old to share the conversation is told so below, without asking it.
   const shared = !host || hostSharesBotSessions(host);
   const live = useRemoteBotSession(hostId, botId, shared);
+  // The newest reply the chat shows is not unread when the person leaves. Only
+  // what the session shows counts, never the feed alone (revision 52 hosts send `lastReplyAt`).
+  const feedReplyAt = typeof row?.lastReplyAt === "string" ? Date.parse(row.lastReplyAt) : Number.NaN;
+  const shownReplyAt = remoteBotShownReplyAt(
+    live.view?.snapshot.entries,
+    Number.isFinite(feedReplyAt) ? feedReplyAt : undefined,
+  );
+  React.useEffect(() => {
+    markRemoteBotSeen(`${hostId}/${botId}`, shownReplyAt);
+  }, [hostId, botId, shownReplyAt]);
   const { busy, run } = useBusyOperations();
   const composerRef = React.useRef<HTMLTextAreaElement | null>(null);
   const findBar = useChatFind(`${hostId}/${botId}`);
