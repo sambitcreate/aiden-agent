@@ -300,7 +300,7 @@ Remix 3's default starter calls `listen(44100)` and ignores `HOST` and `PORT`, s
   - output that overruns `maxBuffer` (4 MiB);
   - a live process's fd folder that can't be read;
   - a process with more than 4 096 open fds (`MAX_DESIGN_JOB_FDS`), on Linux, where each fd is read;
-  - `/proc/net/tcp` or `tcp6` that can't be read.
+  - `/proc/net/tcp` that can't be read, or a `tcp6` that exists but can't be read (a kernel without IPv6 has no `tcp6`, which counts as no IPv6 sockets).
 
   lsof exiting 1 with output is fine: it does that when one of several pids has no sockets.
 - **The rule.** Every socket must be on `127.0.0.0/8`, `::1` or `::ffff:127.x.x.x`. Any wildcard (`*`, `0.0.0.0`, `::`) or other address stops the job with `exposed`. The check runs on every tick: every 500 ms while starting, and every 2 s while running.
@@ -671,7 +671,7 @@ It keeps `DesignModeConsent`'s rules: a 2-minute timeout, at most 16 pending, an
     - `isLoopbackAddress accepts 127.0.0.0/8, ::1 and ::ffff:127.x, and refuses *, 0.0.0.0, ::, 192.168.1.10 and localhost`;
     - `the ps tree gives the group and every descendant by parent pid`. A `pid ppid pgid` table where a grandchild has its own pgid.
   - **Failing closed** (injected exec and fs):
-    - a timeout, a `maxBuffer` overrun, an unreadable `/proc/<pid>/fd` of a live pid, more than 4 096 fds, and an unreadable `/proc/net/tcp6` each give `{ ok: false }`, never an empty list;
+    - a timeout, a `maxBuffer` overrun, an unreadable `/proc/<pid>/fd` of a live pid, more than 4 096 fds, and an unreadable (not missing) `/proc/net/tcp6` each give `{ ok: false }`, never an empty list;
     - `an unreadable fd folder fails only the job that owns that pid`;
     - `lsof exiting 1 with output is a success`;
     - `the existing ports-only functions behave as before`.
@@ -1324,7 +1324,7 @@ Built on `t3/design-mode-v2-p2b` in plan order. Where the code differs from the 
 - `launchPlan` takes an options object (`binDirs`, `providerKeys`, `platform`) and returns `run` as well as `extraArgs` and `env`. `readLaunchSurface` takes no toolchain. `hashBounded` also reports `{missing}`.
 - `saveCanvasConfigApp` takes write hooks, for its tests. `toolchainProblemMessage` moved to `renderer/shared/design-app.ts`, so 2c needs no main import. `scriptDevCommand` and `scriptTextWords` were added for the flag rules.
 - `listeningSocketsByProcess`' failure carries `byPid`. The ports-only functions are unchanged.
-- A missing `/proc/net/tcp6` fails closed. This is a risk on Linux kernels without IPv6.
+- A missing `/proc/net/tcp6` (ENOENT, a kernel without IPv6) reads as no IPv6 sockets when `/proc/net/tcp` read fine. Any other `tcp6` error still fails closed.
 - The renderer capability is `designLive`.
 - `BackgroundJobs` gained `designTail(jobId)` for crash tails.
 - The consent broker's `request` takes `by` (only Aiden's request is silenced by a decline), and it gained `closeAll(prefix)`.
@@ -1367,6 +1367,21 @@ Built on `t3/design-mode-v2-p2b` in plan order. Where the code differs from the 
 - The spec ran in the Cua Space. It was not run with Playwright on the host: the orchestrator allows window-opening tests only in the Space. The darwin `lsof` branch runs on the host headlessly in `app-server-process.test.ts` (13/13).
 - The second-chat case runs with a 15 s grace, so switching chats can't outlast it.
 - The stop cases assert both phase `stopped` and that the origin no longer answers.
+
+**Review fixes (2026-11-24).** These change behaviour described above.
+- **Provider keys.** `AWS_BEARER_TOKEN_BEDROCK` is scrubbed as a fixed extra, because pi-ai's env lookup doesn't name it.
+- **Hidden characters.** The D5 escapes also cover every `\p{Default_Ignorable_Code_Point}` (U+034F, U+17B4 and the rest).
+- **Forced install above the workspace.** A forced install (Aiden's own unfinished or stale install) with the lockfile in a parent folder answers `install-outside-workspace` instead of installing there.
+- **No lockfile.** After a successful install, Aiden re-reads the surface. When the only change from the consented surface is one new lockfile in the install root (same manager, same everything else), the consent moves to the new fingerprint and keeps `installShown`, and the install record stores the post-install `lockHash`. So an app with no lockfile asks once and installs once.
+- **Read-only access.** A workspace whose permission is `read-only` (or none) is treated as no access at start, at entering design mode, at the attempt's first read, at the pre-spawn re-read and while running. The tool refuses `start`, `restart` and `choose` on such a turn with `no-access`, before counting a start. The pre-spawn re-read has tests for a folder or access change while the card waits and during the install.
+- **Logs run identity.** `DesignAppLogs` gains `run` (the job id) and `end`. `logs` takes `run`; when it doesn't match the current job, or `after` is past the end, the read starts at the oldest kept byte with `truncated: true`. `designApp:logs` accepts `run`. The tool probes the end, then reads the last 64 KiB of that run.
+- **Consent wait.** The tool's wait while a card is open is the card's time plus 5 s (`DESIGN_APP_CONSENT_GRACE_MS`), so an ignored card answers `unanswered`, not `consent`.
+- **Origins.** `onOriginsChanged` fires whenever the served-origin set changes: a socket added while running (such as `[::1]` after `127.0.0.1`), and `forgetWorkspace` dropping served origins.
+- **Concurrent roots.** `designModeEntered` starts every chosen root at once.
+- **Presence (replaces D12's `document.visibilityState`).** The renderer reports `visible` from the canvas pane alone (stacked layout: Canvas pane shown). Main decides the window part: `designCanvas:view` takes a `senderWindowShown` dependency that is true while the sender's `BrowserWindow` is visible and not minimized, and `DesignCanvasViews.windowChanged()` re-announces presence on `minimize`, `restore`, `hide` and `show`. An occluded window, which macOS may report as a hidden document, still counts as shown.
+- **Escaped processes.** When a design job's root exits, `BackgroundJobs` sweeps processes whose environment carries its `AIDEN_BACKGROUND_JOB=<id>` marker (SIGTERM, the stop grace, then SIGKILL). After `reapPreviousLaunch`, the same sweep runs for record entries marked `design: true`. The marker is read from `/proc/*/environ` on Linux and `ps -E -A -ww` on macOS. macOS doesn't show the environment of Apple platform binaries (such as `sleep` or `sh`), so a leftover of that kind isn't found; the user's own `node` processes are.
+- **Card.** Script wells show every line break as a muted ↵ and collapse 3 or more blank lines or 8 or more spaces into `[N blank lines]` or `[N spaces]` (`consentScriptParts`); a multi-line script's label gives its line count. No well scrolls on its own. The details sit in one keyboard-focusable region (`What Allow runs`) capped at 50vh (25vh when several cards show), with a **Scroll for more** cue, and the buttons stay outside it. Waiting cards are keyed by `requestId`, so every pending card shows, oldest first (`useDesignAppConsents`, `DesignAppConsentCards`). A new card leaves focus in a card the person is already in.
+- **Fixtures.** The fake package manager writes `package-lock.json` on install when there is none. `server.mjs --fake-setsid-loopback-child` leaves a setsid loopback child for the crash sweep test.
 
 **Left for the PR.**
 - One full `npm run test`.
