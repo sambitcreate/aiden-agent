@@ -2,18 +2,21 @@
  * Reads, lints and caches an app's DESIGN.md (spec §6.9, R3, S44).
  *
  * The file is resolved inside the workspace's real path, sized with `lstat`
- * (over 64 KiB is `too-large` and never linted), then read with 2a's bounded,
- * no-follow read, so a swap between the two fails closed as `unreadable`. The
+ * (over 64 KiB is `too-large` and never linted), then read with a bounded,
+ * no-follow read that then re-resolves the path and compares the opened
+ * file's device and inode with the checked one, so a swap of the file or a
+ * folder above it fails closed as `unreadable`. A file that resolves to a
+ * credential the workspace policy protects is `unreadable` too. The
  * lint runs in the worker; Aiden adds the two checks 0.4.0 lacks (duplicate
  * sections, unresolved token-group references). Results are cached by real
  * path and content hash, so an unchanged file is linted once per run.
  */
 import { createHash } from "node:crypto";
-import { lstat, realpath } from "node:fs/promises";
+import { constants as fsConstants } from "node:fs";
+import { lstat, open, realpath, stat } from "node:fs/promises";
 import path from "node:path";
 import { isPathInside } from "../../../shared/path-containment.js";
 import { countBucket } from "../../analytics/analytics-sanitize.js";
-import { readBounded } from "../app-server/app-detect.js";
 import {
   runDesignMdWorker,
   type DesignMdExportFormat,
@@ -130,6 +133,37 @@ function okState(result: DesignMdLintResult, hash: string): Omit<DesignMdOkState
 const stripBom = (text: string) => (text.charCodeAt(0) === 0xfeff ? text.slice(1) : text);
 const sha256 = (text: string) => createHash("sha256").update(text).digest("hex");
 
+/**
+ * The bounded no-follow read, then proof it read the file that was checked:
+ * the path still resolves to `realPath`, and the opened file is the one at
+ * `realPath` (same device and inode). A folder or file swapped since the
+ * checks, or growth past the cap, fails closed as `null`.
+ */
+async function readPinned(joinedPath: string, realPath: string): Promise<string | null> {
+  let handle: Awaited<ReturnType<typeof open>> | undefined;
+  try {
+    handle = await open(realPath, fsConstants.O_RDONLY | fsConstants.O_NOFOLLOW | fsConstants.O_NONBLOCK);
+    const opened = await handle.stat();
+    if (!opened.isFile()) return null;
+    const buffer = Buffer.alloc(DESIGN_MD_MAX_BYTES + 1);
+    let length = 0;
+    while (length < buffer.length) {
+      const { bytesRead } = await handle.read(buffer, length, buffer.length - length, length);
+      if (bytesRead === 0) break;
+      length += bytesRead;
+    }
+    if (length > DESIGN_MD_MAX_BYTES) return null;
+    if ((await realpath(joinedPath)) !== realPath || (await realpath(realPath)) !== realPath) return null;
+    const current = await stat(realPath);
+    if (current.dev !== opened.dev || current.ino !== opened.ino) return null;
+    return buffer.subarray(0, length).toString("utf8");
+  } catch {
+    return null;
+  } finally {
+    await handle?.close().catch(() => undefined);
+  }
+}
+
 type Loaded =
   | { ok: true; realPath: string; content: string; hash: string; file: FileFields }
   | { ok: false; state: Exclude<DesignMdState, DesignMdOkState> };
@@ -141,6 +175,7 @@ export class DesignMdReader {
   private readonly report: ReportEvent;
   private readonly log: (message: string) => void;
   private readonly maxEntries: number;
+  private readonly beforeRead?: () => Promise<void>;
   private readonly cache = new Map<string, CacheEntry>();
   private readonly exports = new Map<string, DesignMdExportState>();
 
@@ -150,12 +185,15 @@ export class DesignMdReader {
       report?: ReportEvent;
       log?: (message: string) => void;
       maxEntries?: number;
+      /** Test hook: runs after the path checks, just before the file is opened. */
+      beforeRead?: () => Promise<void>;
     } = {},
   ) {
     this.run = deps.run ?? runDesignMdWorker;
     this.report = deps.report ?? (() => undefined);
     this.log = deps.log ?? (() => undefined);
     this.maxEntries = deps.maxEntries ?? DEFAULT_MAX_ENTRIES;
+    this.beforeRead = deps.beforeRead;
   }
 
   private async load(workspaceRoot: string, located: LocatedDesignMd): Promise<Loaded> {
@@ -182,8 +220,8 @@ export class DesignMdReader {
     } catch {
       return { ok: false, state: { status: "unreadable", ...file } };
     }
-    // The bounded no-follow read is the last check: a swap or growth since lstat is refused.
-    const text = await readBounded(realPath, DESIGN_MD_MAX_BYTES);
+    await this.beforeRead?.();
+    const text = await readPinned(path.join(realRoot, ...located.path.split("/")), realPath);
     if (text === null) return { ok: false, state: { status: "unreadable", ...file } };
     const content = stripBom(text);
     return { ok: true, realPath, content, hash: sha256(content), file };

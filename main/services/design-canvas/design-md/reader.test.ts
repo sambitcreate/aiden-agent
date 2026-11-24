@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { mkdir, mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rename, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import test from "node:test";
@@ -164,6 +164,30 @@ test("a DESIGN.md that resolves to a credential file is unreadable and never lin
       assert.equal((await reader.export(ws, at(relative), "css-vars")).status, "unreadable", relative);
     }
     assert.equal(counter.runs, 0);
+  });
+});
+
+test("a folder swapped for a link out of the workspace mid-read fails closed as unreadable", async () => {
+  await withWorkspace(async (base) => {
+    const ws = path.join(base, "ws");
+    await mkdir(path.join(ws, "a"), { recursive: true });
+    await mkdir(path.join(base, "out", "a"), { recursive: true });
+    await writeFile(path.join(ws, "a", "DESIGN.md"), await fixture("valid.md"));
+    await writeFile(path.join(base, "out", "a", "DESIGN.md"), "---\nname: SECRET\n---\n\n## Overview\n");
+    let runs = 0;
+    const reader = new DesignMdReader({
+      run: ((request, options) => {
+        runs++;
+        return runDesignMdWorker(request, options);
+      }) as typeof runDesignMdWorker,
+      beforeRead: async () => {
+        await rename(path.join(ws, "a"), path.join(ws, "a-old"));
+        await symlink(path.join(base, "out", "a"), path.join(ws, "a"));
+      },
+    });
+    const state = await reader.read(ws, at("a/DESIGN.md"));
+    assert.deepEqual(state, { status: "unreadable", path: "a/DESIGN.md", source: "workspace" });
+    assert.equal(runs, 0);
   });
 });
 
