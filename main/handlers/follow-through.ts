@@ -4,13 +4,12 @@ import { normalizeGitHubHost, normalizeGitHubRepositoryIdentity } from "../../re
 import { rendererDocumentOwner } from "../services/renderer-document-owner.js";
 import { chatPullRequestService } from "../services/chat-pull-request-service-main.js";
 import {
+  cancelCheckBackForPerson,
   chatFollowThrough,
-  clearDoneWhenCheck,
   followChatPullRequest,
   pullRequestFollows,
   readJobOutput,
   resolvePullRequestTarget,
-  setDoneWhenCheck,
   stopJobForPerson,
 } from "../services/follow-through/follow-through-main.js";
 
@@ -75,15 +74,10 @@ export function registerFollowThroughHandlers(): void {
     pullRequestFollows.nudge(chatId(value.chatId), "action");
   });
 
-  ipcMain.handle("chats:followThroughSetCheck", async (event, input: unknown) => {
+  ipcMain.handle("chats:followThroughCancelCheckBack", (event, input: unknown) => {
     activeDocument(event);
     const value = record(input);
-    if (typeof value.command !== "string") throw new Error("Name the check to run.");
-    await setDoneWhenCheck(chatId(value.chatId), value.command);
-  });
-
-  ipcMain.handle("chats:followThroughClearCheck", (event, input: unknown) => {
-    activeDocument(event);
-    return clearDoneWhenCheck(chatId(record(input).chatId));
+    if (typeof value.id !== "string" || !value.id || value.id.length > 200) throw new Error("Invalid check-back.");
+    return cancelCheckBackForPerson(chatId(value.chatId), value.id);
   });
 }

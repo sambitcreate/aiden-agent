@@ -421,6 +421,37 @@ test("/until and /follow need a chat with folder access, and /until can be set w
   assert.equal(executeSlashCommandAction(until, "npm test", { ...handlers, followThrough: undefined }), false);
 });
 
+test("/goal works in a new chat and while an answer runs, only on this computer, and passes what follows it", () => {
+  const goal = command("goal");
+  assert.deepEqual(slashCommandAvailability(goal, context), { available: true });
+  assert.deepEqual(slashCommandAvailability(goal, { ...context, idle: false }), { available: true }, "pause and clear work mid-answer");
+  assert.deepEqual(slashCommandAvailability(goal, { ...context, hasWorkspace: false }), { available: true }, "chats without a folder can have goals");
+  assert.deepEqual(slashCommandAvailability(goal, { ...context, hasChat: false }), { available: true }, "the objective can be a new chat's first message");
+  assert.equal(
+    slashCommandAvailability(goal, { ...context, goalBlockedReason: "Available in chats on this Mac." }).reason,
+    "Available in chats on this Mac.",
+  );
+  assert.equal(validateSlashCommandArgument(goal, "x".repeat(4_001)).valid, false);
+
+  const asked: string[] = [];
+  const handlers: SlashCommandActionHandlers = {
+    executeCommand: () => true,
+    openSettings: () => undefined,
+    requestRename: () => undefined,
+    copyLatestResponse: () => undefined,
+    openReview: () => undefined,
+    openAccess: () => undefined,
+    goal: (argument) => {
+      asked.push(argument);
+      return true;
+    },
+  };
+  assert.equal(executeSlashCommandAction(goal, "  ship the release notes  ", handlers), true);
+  assert.equal(executeSlashCommandAction(goal, "", handlers), true);
+  assert.deepEqual(asked, ["ship the release notes", ""]);
+  assert.equal(executeSlashCommandAction(goal, "pause", { ...handlers, goal: undefined }), false);
+});
+
 test("/design turns design mode on, /design off turns it off, and needs a chat that can use it", () => {
   const design = command("design");
   assert.deepEqual(slashCommandAvailability(design, { ...context, designModeAvailable: true }), { available: true });

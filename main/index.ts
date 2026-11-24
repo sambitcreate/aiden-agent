@@ -101,6 +101,7 @@ import { projectDiagnosticError } from "./services/diagnostics-contract.js";
 import { flushDiagnosticHealth } from "./services/diagnostic-health.js";
 import { pruneExpiredDiagnosticCrashDumps } from "./services/diagnostic-support.js";
 import { scheduleService } from "./services/schedule-service.js";
+import { startScheduledTaskTriggers, stopScheduledTaskTriggers } from "./services/scheduled-task-triggers-main.js";
 import { analyticsService, installAnalyticsCrashCapture } from "./services/analytics/analytics-main.js";
 import { initializeHookService } from "./services/hooks/hook-service-main.js";
 import { telegramService } from "./services/telegram/telegram-service.js";
@@ -223,11 +224,14 @@ import { hostPlatformCapabilities } from "./services/host-platform-capabilities.
 import { installElectronConnectorWatchTransport } from "./services/bot-routine-events/connector-watch-startup.js";
 import {
   backgroundJobs,
+  checkBacks,
   pullRequestFollows,
   reapFollowThroughProcesses,
   shutdownFollowThrough,
   startFollowThrough,
 } from "./services/follow-through/follow-through-main.js";
+import { shutdownGoalLoop, startGoalLoop } from "./services/goal/goal-main.js";
+import { startKeepAwake, stopKeepAwake } from "./services/keep-awake/keep-awake-main.js";
 import { reconcileChatScopedStores } from "./services/startup-chat-reconciliation.js";
 import { removeWorkspaceArtifacts } from "./services/workspace-artifacts/main.js";
 
@@ -418,6 +422,9 @@ function cleanupApplication(): void {
   formFillRuntime.dispose();
   computerUseStatus.invalidate();
   scheduleService.stop();
+  // Synchronously, so no trigger timer fires once cleanup has begun.
+  stopScheduledTaskTriggers();
+  stopKeepAwake();
   stopChatTriage();
   stopInboxDockBadge();
   llmClient.abortAll();
@@ -585,6 +592,10 @@ async function runShutdownAndQuit(settingsPrepared: boolean): Promise<void> {
     }
   }
   const disarmShutdownCeiling = armShutdownCeiling();
+  // Quitting ends Aiden's work, so nothing is left to keep the computer awake for.
+  stopKeepAwake();
+  // No goal reviews or rounds start while generations stop: the quit's aborts aren't the person's Stop.
+  shutdownGoalLoop();
   // First, so no further chat or worktree is deleted while the rest of the app stops.
   await settleShutdownStep("main", "Storage cleanup", SHUTDOWN_BUDGET_MS.storageCleanup, () => storageUsageService.shutdown());
   await settleShutdownStep("voice", "Gemini Live", SHUTDOWN_BUDGET_MS.geminiLive, () => geminiLiveService.shutdown());
@@ -602,8 +613,8 @@ async function runShutdownAndQuit(settingsPrepared: boolean): Promise<void> {
       "Parent generation did not settle before the shutdown deadline; forcing application shutdown.",
     );
   }
-  // Background jobs and done-when checks stop with the app; follows and
-  // checks are saved for the next launch. Bounded so a stuck job never holds quit.
+  // Background jobs and goal checks stop with the app; follows and
+  // goals are saved for the next launch. Bounded so a stuck job never holds quit.
   await settleShutdownStep("follow-through", "Background jobs", SHUTDOWN_BUDGET_MS.backgroundJobs, () => shutdownFollowThrough());
   // Settled generations have recorded their last pace samples; persist the
   // debounced remainder. Never fatal: it is a regenerable measurement cache.
@@ -2887,6 +2898,26 @@ if (!ownsSingleInstanceLock) {
       await startFollowThrough().catch((error: unknown) => {
         logger.warn("follow-through", "Could not finish restoring checks and pull request follows.", error);
       });
+      // Goals live in follow-through's saved state; ones active at quit come back paused.
+      if (!shutdownHasBegun()) {
+        try {
+          startGoalLoop();
+        } catch (error) {
+          logger.warn("goal", "Could not restore keep-going goals.", error);
+        }
+      }
+      // Started chats' endings that a quit kept from their lead are posted now, without waking it.
+      if (!shutdownHasBegun()) {
+        void import("./services/chat-orchestration/child-chats-main.js")
+          .then(({ childChatCompletions }) => childChatCompletions.recoverOwed())
+          .catch((error: unknown) => logger.warn("chat-orchestration", "Could not post started chats' owed endings.", error));
+      }
+      // Watches runs, jobs and checks to keep the computer awake while Aiden works.
+      if (!shutdownHasBegun()) {
+        await startKeepAwake().catch((error: unknown) => {
+          logger.warn("keep-awake", "Could not start keeping the computer awake while Aiden works.", error);
+        });
+      }
       // Back in front, awake or unlocked: followed pull requests may have
       // moved while nobody looked. These nudges are debounced and read a
       // follow at most every five minutes, so repeated focus costs nothing extra.
@@ -2894,6 +2925,10 @@ if (!ownsSingleInstanceLock) {
       app.on("browser-window-focus", nudgeFollows);
       powerMonitor.on("resume", nudgeFollows);
       powerMonitor.on("unlock-screen", nudgeFollows);
+      // A check-back due while the computer slept fires now (or leaves a
+      // "Missed" card when it is over 2 hours late); the timer re-arms.
+      powerMonitor.on("resume", () => checkBacks.rearm());
+      powerMonitor.on("unlock-screen", () => checkBacks.rearm());
       try {
         if (!shutdownHasBegun()) await initializeAidenRemoteService();
       } catch (error) {
@@ -2930,6 +2965,10 @@ if (!ownsSingleInstanceLock) {
           scheduleService.reevaluateCatchUp(),
         );
         if (!shutdownHasBegun()) await scheduleService.start();
+        // Chat tasks that run when something happens; never hold keep-awake.
+        if (!shutdownHasBegun()) {
+          await startScheduledTaskTriggers();
+        }
       } catch (error) {
         logger.error(
           "scheduled-tasks",

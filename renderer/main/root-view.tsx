@@ -32,6 +32,8 @@ import { botListLocation, environmentToggleTarget, isBotsPath } from "../lib/bot
 import { AssistantDock } from "../components/assistant/assistant-dock";
 import { LiveAppControlLayer } from "../components/assistant/live-app-control-layer";
 import { queryKeys, upsertCreatedWorkspaceInCache } from "../lib/queries";
+import { goalSettleNotification, windowShowsChat } from "../lib/goal-notification";
+import type { GoalView } from "../shared/goal";
 import { subscribeGitQuerySync } from "../lib/git-query-sync";
 import { subscribeWorkspaceFilesSync } from "../lib/workspace-files-sync";
 import {
@@ -512,6 +514,43 @@ function RootContent() {
       void queryClient.invalidateQueries({ queryKey: ["chat-follow-through", ...(chatId ? [chatId] : [])] });
       // A follow-up notice was saved without a turn to stream it: re-read the transcript.
       if (chatId && update.transcript === true) void queryClient.invalidateQueries({ queryKey: queryKeys.chat(chatId) });
+    });
+  }, [queryClient]);
+
+  const goalPathnameRef = React.useRef(pathname);
+  goalPathnameRef.current = pathname;
+  React.useEffect(() => {
+    // The change carries the goal's view, so the bar updates without a re-read.
+    return chatsApi.onGoalChanged((chatId, goal) => {
+      const key = queryKeys.chatGoal(chatId);
+      const notice = goalSettleNotification(queryClient.getQueryData<GoalView | null>(key), goal);
+      queryClient.setQueryData(key, goal);
+      if (!notice || windowShowsChat({ focused: document.hasFocus(), pathname: goalPathnameRef.current }, chatId)) return;
+      try {
+        if (typeof Notification === "undefined") return;
+        const notification = new Notification(notice.title, { body: notice.body });
+        notification.onclick = () => {
+          window.focus();
+          void navigate({ to: "/chat/$chatId", params: { chatId } });
+        };
+      } catch {
+        // A notification the system refuses is not worth a second message.
+      }
+    });
+  }, [navigate, queryClient]);
+  // A goal the agent suggested, or the suggestion answered: the card updates without a re-read.
+  React.useEffect(
+    () => chatsApi.onGoalProposalChanged((chatId, proposal) => queryClient.setQueryData(queryKeys.chatGoalProposal(chatId), proposal)),
+    [queryClient],
+  );
+
+  React.useEffect(() => {
+    return onNotification("chats:child-chats-changed", (payload: unknown) => {
+      const leadChatId =
+        payload && typeof payload === "object" && typeof (payload as { leadChatId?: unknown }).leadChatId === "string"
+          ? (payload as { leadChatId: string }).leadChatId
+          : undefined;
+      void queryClient.invalidateQueries({ queryKey: leadChatId ? queryKeys.startedChats(leadChatId) : ["started-chats"] });
     });
   }, [queryClient]);
 

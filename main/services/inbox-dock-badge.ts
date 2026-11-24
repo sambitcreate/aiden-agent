@@ -31,7 +31,7 @@ export interface InboxBadgeLocal {
   /** Null when the markers can't be read: nothing then reads as unread. */
   markers: ChatReadMarkersSnapshot | null;
   triage: Readonly<Record<string, ChatTriageEntry>>;
-  /** What each chat waits on (`chats:pendingAttention`); only detached and interrupted waits add to the activity. */
+  /** What each chat waits on (`chats:pendingAttention`); only detached, interrupted and goal waits add to the activity. */
   pending: ReadonlyMap<string, ChatPendingAttention>;
   /** This Mac's Bots that need the person (`needsYou`). */
   botsNeedingYou: readonly string[];
@@ -84,7 +84,7 @@ export function inboxBadgeCount(input: InboxBadgeInput): number {
   for (const chat of local.chats) {
     if (!isLocalInboxChat(chat, (id) => local.workspaceIds.has(id))) continue;
     const pending = local.pending.get(chat.id);
-    const attention = pending?.kind === "detached" || pending?.kind === "interrupted" ? pending.kind : undefined;
+    const attention = pending?.kind === "detached" || pending?.kind === "interrupted" || pending?.kind === "goal" ? pending.kind : undefined;
     const signals: InboxSignals = {
       rowState: chatRowState({
         active: active.has(chat.id),

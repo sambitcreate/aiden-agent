@@ -151,7 +151,14 @@ more careful about where things go next. Outside content is a web page or
 search result, anything from the browser (except resizing it or changing its
 appearance), a simulator screenshot, a subagent's report, a pull request's
 comments, codemode, or any connector's result (a connector's result still
-counts after that connector is removed or renamed), and it counts for the rest
+counts after that connector is removed or renamed). A notice Aiden posts that
+quotes outside text counts too: a followed pull request's news, a
+**Started chat** notice or a `child_chats` result that returns the words of a
+started chat that read outside content, and a trigger's event
+(a link call's body, a watched page's change, a connector's new mail), in a
+scheduled task's notice or in its own chat's prompt. A job's, check's or task
+script's output is your own commands' and doesn't count. Outside content
+counts for the rest
 of the chat, earlier turns included, even after the chat is compacted. Files
 in the workspace, and in a Bot's home or selected folders, are not outside
 content. A summary
@@ -161,7 +168,8 @@ to a site you didn't name in the chat and before the first use of each
 connector, even one that only reads; **Auto** has the approval model judge
 those; **Never ask** runs them. A consequential step in a chat that has
 read outside content is still judged in **Auto**, against what you wrote in
-the chat; a Bot shows its card instead. Expect a few more cards in Ask after a chat has
+the chat (on a turn a notice woke, against the last message you wrote, never
+the notice; sites inside a trigger's event text never count as named by you); a Bot shows its card instead. Expect a few more cards in Ask after a chat has
 used the browser or a subagent: that is by design, since text you didn't write
 could be steering the model.
 

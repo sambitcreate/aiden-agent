@@ -167,6 +167,13 @@
       "renderer/components/scroll-area-follow",
       "renderer/lib/sticky-section.ts"
     ],
+    "chats-that-run-chats.spec.ts": [
+      "renderer/components/started-chats-chip",
+      "renderer/lib/chat-lineage.ts",
+      "renderer/shared/child-chats.ts",
+      "main/services/chat-orchestration",
+      "main/handlers/child-chats.ts"
+    ],
     "chat-fork.spec.ts": [
       "renderer/components/chat",
       "main/services/chat-fork"
@@ -281,6 +288,17 @@
       "renderer/components/follow",
       "main/services/follow-through",
       "main/services/durable-jobs/"
+    ],
+    "keep-going-goals.spec.ts": [
+      "renderer/components/goal-bar",
+      "renderer/lib/goal-notification",
+      "renderer/shared/goal.ts",
+      "main/services/goal/",
+      "main/handlers/goals.ts"
+    ],
+    "keep-going-goals-computer-use.spec.ts": [
+      "main/services/goal/",
+      "main/services/computer-use/"
     ],
     "guided-setup.spec.ts": [
       "renderer/components/onboarding",

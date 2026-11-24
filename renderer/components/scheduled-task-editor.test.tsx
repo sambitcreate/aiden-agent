@@ -6,7 +6,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 
 import { scheduledTaskProviderGuardrail } from "../lib/scheduled-task-view.js";
 import type { Provider } from "../lib/types.js";
-import { ScheduledTaskProviderWarning, scheduledTaskMcpServerChoices } from "./scheduled-task-editor.js";
+import { ScheduledTaskProviderWarning, WatchTriggerFields, parseLinkFilterLines, scheduledTaskMcpServerChoices } from "./scheduled-task-editor.js";
 import { ChatApprovalCard } from "./chat-approval-card";
 import type { ScheduledTaskApprovalDetails } from "../shared/assistant";
 
@@ -35,6 +35,15 @@ test("task approval discloses instructions, runtime, exact connectors and paused
   }
   assert.ok(markup.includes("Allow once"));
   assert.ok(!markup.includes("Remember this exact action"));
+});
+
+test("task approval says whether results post in this chat or the task's own chat", () => {
+  const here = renderApproval({ ...approval, postsIn: "this_chat" });
+  assert.ok(here.includes("Posts in") && here.includes("This chat"));
+  const own = renderApproval({ ...approval, postsIn: "own_chat" });
+  assert.ok(own.includes("Posts in") && own.includes("Its own chat"));
+  assert.ok(!renderApproval(approval).includes("Posts in"), "older approvals carry no row");
+  assert.ok(!renderApproval({ ...approval, postsIn: "somewhere" }).includes("Allow once"), "an unknown value withholds Allow");
 });
 
 test("malformed schedule approval withholds Allow instead of presenting incomplete consent", () => {
@@ -147,4 +156,30 @@ test("a selected server switched off for the model is shown as unavailable with 
       ["drive", false, "Off for the model in Settings → Connectors"],
     ],
   );
+});
+
+test("the watch fields flag a bad address and say a script watch needs Full permission", () => {
+  const render = (props: Parameters<typeof WatchTriggerFields>[0]) => renderToStaticMarkup(createElement(WatchTriggerFields, props));
+  const bad = render({ trigger: { kind: "watch", source: { type: "url", url: "http://example.com" }, everyMinutes: 15 }, scripts: [], fullAccess: false, onChange: () => undefined });
+  assert.ok(bad.includes('role="alert"') && bad.includes("Use an https address"));
+  const good = render({ trigger: { kind: "watch", source: { type: "url", url: "https://example.com" }, everyMinutes: 15 }, scripts: [], fullAccess: false, onChange: () => undefined });
+  assert.ok(!good.includes('role="alert"'));
+  const script = render({ trigger: { kind: "watch", source: { type: "script", script: "check.sh" }, everyMinutes: 45 }, scripts: ["check.sh"], fullAccess: false, onChange: () => undefined });
+  assert.ok(script.includes("needs Full permission"));
+  assert.ok(render({ trigger: { kind: "watch", source: { type: "script", script: "check.sh" }, everyMinutes: 45 }, scripts: ["check.sh"], fullAccess: true, onChange: () => undefined }).includes("AIDEN_CHECK_STATE"));
+});
+
+test("link filters are written one field = value per line; lines without a field are ignored", () => {
+  assert.deepEqual(parseLinkFilterLines("action = opened\n= nope\nnot a filter\npull_request.state=closed = yes"), [
+    { path: "action", equals: "opened" },
+    { path: "pull_request.state", equals: "closed = yes" },
+  ]);
+});
+
+test("a trigger task's approval names its trigger instead of a schedule and promises no next run", () => {
+  const markup = renderApproval({ ...approval, cron: "", nextRunAt: 0, schedulerEnabled: true, whenLabel: "Every 15 min, when example.com/status changes" });
+  assert.ok(markup.includes("Every 15 min, when example.com/status changes"));
+  assert.ok(!markup.includes("Next run"));
+  assert.ok(markup.includes("Allow once"));
+  assert.ok(!renderApproval({ ...approval, cron: "" }).includes("Allow once"), "an empty cron without a trigger withholds Allow");
 });

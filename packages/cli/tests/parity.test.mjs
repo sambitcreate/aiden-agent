@@ -209,6 +209,27 @@ test("schedule CRUD uses shared validation, preview and persisted state", async 
   assert.deepEqual(await api.scheduleCommand(dir, ["list"]), []);
 });
 
+test("the server refuses a task that runs when something changes, from a link or from a connected app, and saves nothing", async (t) => {
+  const dir = temporary(t), input = join(dir, "input.json");
+  for (const trigger of [
+    { kind: "watch", source: { type: "url", url: "https://example.com/status" }, everyMinutes: 15 },
+    { kind: "webhook", gapMinutes: 5 },
+    {
+      kind: "connector",
+      everyMinutes: 15,
+      condition: { kind: "email", unreadOnly: true },
+      source: { providerLabel: "Mail", accountLabel: "Work", resourceLabel: "Inbox" },
+    },
+  ]) {
+    writeFileSync(input, JSON.stringify({ name: "Status", mode: "llm", cron: "", timezone: "UTC", prompt: "Tell me what changed", permission: "read-only", trigger }));
+    await assert.rejects(api.scheduleCommand(dir, ["save", input]), /run in the desktop app only/u, trigger.kind);
+  }
+  // The scheduler the Remote API saves through refuses it the same way.
+  const scheduler = api.createCliScheduler(dir);
+  await assert.rejects(scheduler.service.save({ name: "Status", mode: "llm", cron: "", timezone: "UTC", prompt: "Tell me what changed", permission: "read-only", trigger: { kind: "webhook", gapMinutes: 5 } }), /run in the desktop app only/u);
+  assert.deepEqual(await api.scheduleCommand(dir, ["list"]), []);
+});
+
 test("daemon lifecycle and control refuse unsafe existing directories before touching their contents", { skip: process.platform === "win32" }, async (t) => {
   const base = temporary(t), unsafe = join(base, "shared"); mkdirSync(unsafe, { mode: 0o777 }); chmodSync(unsafe, 0o777);
   const marker = join(unsafe, "serve.sock"); writeFileSync(marker, "preserve existing object");

@@ -1580,6 +1580,16 @@ test("run input admission binds to the stream owner and returns an accepted rece
   assert.equal(app.calls[0]!.ownerDocumentId, owner.owner.documentId);
 });
 
+test("input a lead chat sends to a chat it started reaches the host as the lead's, and a phone's as the person's", async () => {
+  const app = inputFixture(async () => ({ admitted: true, queue: "steer", committed: true, messageId: "m" }));
+  app.service.create("chat:lead-1", "stream-lead", "chat-2", "turn-2");
+  app.service.create("device-1", "stream-phone", "chat-3", "turn-3");
+  await app.service.submitInput("chat:lead-1", "stream-lead", { mode: "steer", text: "From the lead" }, "input-key-lead-00001", inputPassthrough);
+  await app.service.submitInput("device-1", "stream-phone", { mode: "steer", text: "From the phone" }, "input-key-phone-0001", inputPassthrough);
+  assert.equal(app.calls[0]!.fromLeadChat, true);
+  assert.equal("fromLeadChat" in app.calls[1]!, false);
+});
+
 test("run input admission rejects terminal and cancelled streams without calling the host", async () => {
   const app = inputFixture(async () => ({
     admitted: true,
@@ -2854,4 +2864,32 @@ test("blocked synthetic gap snapshot drains retained tail in order or disconnect
   stalled.response.emit("drain");
   assert.equal(stalled.response.destroyed, true);
   assert.equal(stalled.response.listenerCount("drain"), 0);
+});
+
+test("a lead chat's started chat keeps approvals and questions open 30 minutes; a phone keeps 5", () => {
+  const now = Date.parse("2026-11-22T10:00:00.000Z");
+  const denied: string[] = [];
+  const service = new AidenRemoteStreamService({
+    now: () => now,
+    cancel: () => true,
+    approve: (approvalId, decision) => {
+      denied.push(`${approvalId}:${decision}`);
+      return true;
+    },
+    respondQuestion: () => true,
+  });
+  const child = service.create("chat:lead-1", "stream-child", "child-1", "turn-1");
+  child.owner.send("chat:approval", { approvalId: "approval-child", summary: "Run tests", toolCallId: "call-1", toolName: "run_command" });
+  assert.equal(service.pendingApproval("chat:lead-1", "stream-child")?.expiresAt, "2026-11-22T10:30:00.000Z");
+  const phone = service.create("device-1", "stream-phone", "chat-2", "turn-2");
+  phone.owner.send("chat:approval", { approvalId: "approval-phone", summary: "Run tests", toolCallId: "call-2", toolName: "run_command" });
+  assert.equal(service.pendingApproval("device-1", "stream-phone")?.expiresAt, "2026-11-22T10:05:00.000Z");
+
+  const childQuestion = service.create("chat:lead-1", "stream-child-2", "child-2", "turn-3");
+  childQuestion.owner.send("chat:questionnaire", { ...QUESTION_PROMPT, promptId: "q-child", streamId: "stream-child-2" });
+  assert.equal(service.pendingQuestion("chat:lead-1", "stream-child-2")?.expiresAt, "2026-11-22T10:30:00.000Z");
+  assert.deepEqual(denied, []);
+  for (const owner of [child, phone, childQuestion]) {
+    owner.owner.send("chat:done", { chat: { messages: [{ id: "a-1", role: "assistant" }] } });
+  }
 });

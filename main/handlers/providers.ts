@@ -446,6 +446,10 @@ export function registerProviderHandlers(): void {
       if (typeof p.botMessaging !== "boolean") throw new Error("Invalid Bot messaging setting.");
       next.botMessaging = p.botMessaging;
     }
+    if (p.childChats !== undefined) {
+      if (typeof p.childChats !== "boolean") throw new Error("Invalid started chats setting.");
+      next.childChats = p.childChats;
+    }
     if (p.spendingLimits !== undefined) {
       const limits = parseSpendingLimitsSettings(p.spendingLimits);
       if (limits === undefined) throw new Error("Invalid spending limits.");

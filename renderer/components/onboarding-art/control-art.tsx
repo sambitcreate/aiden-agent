@@ -1,4 +1,5 @@
 import {
+  AlarmClock,
   Bot,
   CalendarClock,
   Check,
@@ -18,6 +19,7 @@ import {
   PanelRightOpen,
   PictureInPicture2,
   Play,
+  Repeat,
   Search,
   Send,
   Settings,
@@ -257,62 +259,84 @@ export function BotComputersArt() {
   );
 }
 
-const SCHEDULED_TASKS = [
-  { name: "58%", cadence: "Every day at 9:00 AM", on: true },
-  { name: "46%", cadence: "Weekdays at 5:00 PM", on: false },
-  { name: "64%", cadence: "Every hour", on: true },
-  { name: "52%", cadence: "Every 30 minutes", on: true },
-  { name: "40%", cadence: "Every Monday at 10:00 AM", on: false },
-] as const;
-
-/** The scheduled-tasks list with one task open on its access and actions. */
+/**
+ * A workspace chat a scheduled task was made in: this morning's run arrives as a
+ * "Scheduled task" card with the answer under it, and the composer carries the
+ * chat's check-back and the task that posts here.
+ */
 export function ScheduledAutomationsArt() {
-  const [first, ...rest] = SCHEDULED_TASKS;
   return (
-    <ArtWindow className="oa-sched" style={{ left: 10, top: 10, width: 171, height: "calc(100% + 20px)", minHeight: 260 }}>
-      <div className="oa-sched-title">
-        <ArtIcon icon={CalendarClock} />
-        Scheduled tasks
+    <ArtWindow className="oa-schat" style={{ left: 10, top: 10, width: 176, height: "calc(100% + 20px)", minHeight: 260 }}>
+      <div className="oa-schat-head oa-separator-bottom">
+        <ArtIcon icon={MessageSquare} />
+        <Bar width={58} tone="ink" />
       </div>
-      <div className="oa-sched-list">
-        <div className="oa-sched-open oa-selected">
-          <div className="oa-sched-row">
-            <i className="oa-sched-dot" data-on="" />
-            <span className="oa-sched-text">
-              <Bar width={first.name} tone="ink" />
-              <span>{first.cadence}</span>
-            </span>
-            <Toggle on />
-          </div>
-          <div className="oa-sched-detail">
-            <div className="oa-sched-field">
-              <ArtIcon icon={ShieldCheck} />
-              <span>Access</span>
-              <b>Read-only</b>
-            </div>
-            <div className="oa-sched-field">
-              <ArtIcon icon={Folder} />
-              <span>Workspace</span>
-              <Bar width={40} />
-            </div>
-            <div className="oa-row" style={{ gap: 4, marginTop: 3 }}>
-              <ArtButton variant="ghost" icon={Play} className="oa-anim-press" style={{ animationDelay: "0.6s" }}>
-                Run now
-              </ArtButton>
-              <ArtButton variant="ghost">Pause</ArtButton>
-            </div>
-          </div>
+      <div className="oa-schat-chat" role="group" aria-label="A scheduled task's run in the chat it was made in">
+        <div className="oa-schat-bubble">
+          <Bar width="100%" />
+          <Bar width="56%" />
         </div>
-        {rest.map((task) => (
-          <div key={task.cadence} className="oa-sched-row">
-            <i className="oa-sched-dot" data-on={task.on || undefined} />
-            <span className="oa-sched-text">
-              <Bar width={task.name} />
-              <span>{task.on ? task.cadence : "Paused"}</span>
-            </span>
-            <Toggle on={task.on} />
-          </div>
-        ))}
+        <div className="oa-schat-card oa-anim-pop" role="group" aria-label="Scheduled task card" style={{ animationDelay: "0.3s" }}>
+          <ArtIcon icon={CalendarClock} />
+          <span className="oa-schat-card-text">
+            <span className="oa-strong">Scheduled task</span>
+            <span>Every day at 9:00 AM</span>
+          </span>
+        </div>
+        <div className="oa-schat-reply">
+          <Bar width="94%" tone="ink" className="oa-anim-type" style={{ animationDelay: "0.8s" }} />
+          <Bar width="100%" className="oa-anim-type" style={{ animationDelay: "0.98s" }} />
+          <Bar width="62%" className="oa-anim-type" style={{ animationDelay: "1.16s" }} />
+        </div>
+      </div>
+      <div className="oa-schat-foot">
+        <div className="oa-row oa-schat-chips" role="list" aria-label="Chat chips">
+          <span role="listitem">
+            <ArtChip icon={AlarmClock} className="oa-anim-pop" style={{ animationDelay: "1.6s" }}>
+              Checking back at 3:10 PM
+            </ArtChip>
+          </span>
+          <span role="listitem">
+            <ArtChip icon={CalendarClock}>next 9:00 AM</ArtChip>
+          </span>
+        </div>
+        <ArtComposer style={{ position: "relative" }} />
+      </div>
+    </ArtWindow>
+  );
+}
+
+/** A chat with a keep-going goal: a round's card in the transcript and the goal bar over the composer. */
+export function KeepGoingArt() {
+  return (
+    <ArtWindow className="oa-goal" style={{ left: 10, top: 10, width: 176, height: "calc(100% + 20px)", minHeight: 220 }}>
+      <div className="oa-goal-chat" role="group" aria-label="A chat working toward its goal">
+        <div className="oa-goal-reply">
+          <Bar width="92%" tone="ink" />
+          <Bar width="70%" />
+        </div>
+        <div className="oa-goal-card oa-anim-pop" role="group" aria-label="Round card" style={{ animationDelay: "0.3s" }}>
+          <ArtIcon icon={Repeat} />
+          <span className="oa-strong">Keep going · round 3 of 50</span>
+        </div>
+        <div className="oa-goal-reply">
+          <Bar width="96%" tone="ink" className="oa-anim-type" style={{ animationDelay: "0.8s" }} />
+          <Bar width="100%" className="oa-anim-type" style={{ animationDelay: "0.98s" }} />
+          <Bar width="54%" className="oa-anim-type" style={{ animationDelay: "1.16s" }} />
+        </div>
+      </div>
+      <div className="oa-goal-foot">
+        <div className="oa-goal-bar" role="group" aria-label="Goal bar">
+          <span className="oa-goal-badge">
+            <ArtIcon icon={Repeat} />
+          </span>
+          <span className="oa-goal-bar-text">
+            <span className="oa-strong">Working · round 3 of 50</span>
+            <Bar width="80%" />
+          </span>
+          <ArtButton variant="ghost">Pause</ArtButton>
+        </div>
+        <ArtComposer style={{ position: "relative" }} />
       </div>
     </ArtWindow>
   );

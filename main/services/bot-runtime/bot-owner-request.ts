@@ -6,6 +6,7 @@
 // else's instructions, so a run that has any of it is never judged.
 
 import { BOT_ROUTINE_NOTES_HEADER } from "../bot-routine-notes.js";
+import { EVENT_TRIGGER_BLOCK_PATTERN } from "../event-trigger-block.js";
 import { botRoutinePromptOf } from "../scheduled-bot-routines.js";
 import { BOT_PERSON_INPUT_KIND, BOT_ROUTINE_INPUT_KIND, parseBotRoutineInputOrigin } from "./bot-input-entry.js";
 import { botTurnOf } from "./bot-tool-policy.js";
@@ -20,8 +21,8 @@ export interface BotRunInputForJudge {
   text: string;
 }
 
-/** A routine's event block, as `botRoutineEventBlock` writes it. */
-const EVENT_BLOCK = /<event source="/u;
+/** A routine's event block, as `eventTriggerBlock` writes it. */
+const EVENT_BLOCK = EVENT_TRIGGER_BLOCK_PATTERN;
 
 /** Whether a request id can carry the owner's words: not another Bot, Telegram, a peer, a self-introduction or a wake-up the Bot set. */
 function ownerRequestId(requestId: string | undefined): boolean {

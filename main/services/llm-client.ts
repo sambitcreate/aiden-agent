@@ -23,8 +23,9 @@ import { withUsageLimitWait } from "./usage-limit-stream.js";
 import { spending } from "./spending-main.js";
 import { createSpendingMeter, spendCounts } from "./spending-service.js";
 import { parseApprovalModel, type MacGrantClass } from "../../renderer/shared/approval-mode.js";
-import { currentWorkspaceApproval, generationApprovalPolicy, legacyAccessOf } from "./approval-gate/run-approval.js";
-import { RunTaint, runTaintHistoryOfBranch } from "./approval-gate/run-taint.js";
+import { currentWorkspaceApproval, generationApprovalPolicy, legacyAccessOf, runJudgeAvailable } from "./approval-gate/run-approval.js";
+import { CHAT_AUDIENCE_PROMPT_LIFETIME_MS } from "./chat-orchestration/audience.js";
+import { ownerRequestText, RunTaint, runTaintHistoryOfRun, runTaintPersonText, toolResultSaysOutside } from "./approval-gate/run-taint.js";
 import { declaredReadOnlyHint } from "./approval-gate/tool-classes.js";
 import { approvalJudgeAction, createApprovalJudge, type ApprovalJudge } from "./approval-judge/judge.js";
 import { approvalJudgeComplete } from "./approval-judge/model-complete.js";
@@ -81,6 +82,10 @@ import { devicesEnabled } from "./devices/feature-flag.js";
 import { geminiLiveEnabled } from "./gemini-live/feature-flag.js";
 import { webSearchService } from "./web-search-main.js";
 import { WEB_FETCH_TOOL_NAME } from "../../renderer/shared/web-extract.js";
+import { CHECK_BACK_TOOL_NAME } from "../../renderer/shared/check-backs.js";
+import { goalLoopEnabled, PROPOSE_GOAL_TOOL_NAME } from "../../renderer/shared/goal.js";
+import { createProposeGoalTool } from "./goal/propose-goal-tool.js";
+import { CHILD_CHATS_TOOL_NAME, SUBMIT_RESULT_TOOL_NAME, childChatsEnabled } from "../../renderer/shared/child-chats.js";
 import { webFetchService } from "./web-fetch-main.js";
 import { createVisionAnalysisTool, INSPECT_IMAGE_TOOL_NAME } from "./vision-analysis-tool.js";
 import {
@@ -96,6 +101,7 @@ import {
 import { generationGitContext } from "./generation-git-context.js";
 import { configStore } from "./config-store.js";
 import { chatStore } from "./chat-store.js";
+import { generationModelMeta } from "./chat-model-selection-meta.js";
 import { botStore } from "./bot-store.js";
 import {
   resolveBotForGeneration,
@@ -301,7 +307,7 @@ import { isAcpHarnessProvider } from "../../renderer/shared/acp-harness.js";
 import { advisorRuntime } from "./advisor-runtime-main.js";
 import { ADVISOR_NO_CHOOSER_TURN_NOTE, ADVISOR_TOOL_NAME, type AdvisorExtensionInput } from "./advisor-runtime.js";
 import { snapshotAdvisorRuntimeMessages } from "./advisor-context.js";
-import { persistGenerationInitializationTerminal } from "./generation-initialization-terminal.js";
+import { chatStoreInitializationTerminalAppend, persistGenerationInitializationTerminal } from "./generation-initialization-terminal.js";
 import type { GenerationCancellationOrigin } from "../../renderer/shared/generation-timeline.js";
 import {
   assertGenerationContextCapacity,
@@ -431,7 +437,8 @@ import {
 } from "./chat-run-input-admission.js";
 import { createChatOwedTurns, type OwedTurnPlan } from "./chat-owed-turns.js";
 import { owedTurnStartRequest, type OwedTurnContext } from "./chat-owed-turn-start.js";
-import { createOwedTurnPrompts } from "./chat-owed-turn-prompts.js";
+import { goalTurnHooks } from "./goal/goal-turn-hooks.js";
+import { createOwedTurnPrompts, withPromptLifetime, type OwedTurnPromptLifetime } from "./chat-owed-turn-prompts.js";
 import { persistedChatWorkspaceId } from "../../renderer/shared/chat-workspace.js";
 import { btwOperationRegistry, btwService } from "./rpiv-btw/service.js";
 import { createPiCodemodeTool } from "./pi-codemode.js";
@@ -527,7 +534,8 @@ import {
   createVisualizeGuideTool,
   VISUALIZE_GUIDE_TOOL_NAME,
 } from "./generative-ui-extension.js";
-import { chatToolOffers, chatTurnAudienceFor, chatTurnToolRefusal, declaresAppTools, declaresWindowTools, firstTurnToolRefusal, windowlessChatTurn, type ChatToolSurface, type TurnToolRefusal } from "./chat-turn-tool-policy.js";
+import { agentNoticeRun } from "./follow-through/notice-delivery.js";
+import { chatToolOffers, personWroteChatTurn, offersChildChats, chatTurnArgsToolRefusal, chatTurnAudienceFor, chatTurnToolRefusal, screenedPromptAnswersPerson, declaresAppTools, declaresWindowTools, firstTurnToolRefusal, refusedForWantOfWindow, windowlessChatTurn, type ChatToolSurface, type TurnToolRefusal } from "./chat-turn-tool-policy.js";
 import { createGenerativeUiDraftSession } from "./generative-ui-draft.js";
 import { createUiDraftSession } from "./aiden-ui-draft.js";
 import { withoutVisualSnapshots } from "../../renderer/shared/visual-snapshots.js";
@@ -715,11 +723,34 @@ export interface GenerationExecutionOptions {
    */
   questionPromptsUnavailable?: boolean;
   /**
+   * Main-owned: the lead chat that started this chat sent this turn (Phase 5).
+   * Its questions wait 30 minutes for the person, like its approval cards.
+   */
+  leadChatTurn?: boolean;
+  /**
+   * Main-owned: a scheduled task's run (on its schedule, from a trigger, or
+   * from Run now). Aiden started it, so it can't set check-backs, suggest a
+   * goal or start chats (`aidenStartedTurn`).
+   */
+  scheduledRun?: boolean;
+  /**
    * Main-owned: this turn answers input UserPromptSubmit already accepted
    * while the chat's previous run was going, so the hooks do not screen it
    * again and what they said then is this turn's prompt context.
    */
   screenedPrompt?: { messageId: string; context?: string };
+  /**
+   * Main-owned: a round of a keep-going goal the person set. Attended (its
+   * approvals and questions wait for the person), but Aiden began it, so it
+   * may not set check-backs (`TURN_ARGS_REFUSAL_RULES`).
+   */
+  goalRound?: boolean;
+  /**
+   * Main-owned: this turn answers on another model than the chat's own (a
+   * scheduled task running in the chat it was made in). Its saved messages
+   * never change the chat's stored model.
+   */
+  keepChatModel?: boolean;
 }
 
 interface BotGenerationAuthorityContext {
@@ -759,6 +790,10 @@ interface ActiveGeneration {
   inputHooks?: ChatRunInputHooks;
   /** Saved input this run's queue no longer takes becomes the chat's next turn. */
   owedTurn?: ChatRunInputGenerationRef["owedTurn"];
+  /** The lead chat that started this chat steered or queued a message into the run. */
+  leadChatInput?: ChatRunInputGenerationRef["leadChatInput"];
+  /** A notice quoting outside text was saved into the run. */
+  outsideInput?: ChatRunInputGenerationRef["outsideInput"];
 }
 
 const active = new Map<string, ActiveGeneration>();
@@ -794,15 +829,27 @@ const initializing = new Map<string, InitializingGeneration>();
 const computerUseGenerationGate = new ComputerUseGenerationGate();
 const chatDeletionGate = new ChatDeletionGate();
 const chatWorkspaceMutationGate = new ChatWorkspaceMutationGate();
+/** The person steered or queued input into a chat: if another chat started it, it is theirs now. */
+async function personSteeredStartedChat(chatId: string): Promise<void> {
+  const { chatLinks } = await import("./chat-orchestration/links-main.js");
+  await chatLinks.restore();
+  if (!chatLinks.get(chatId)) return;
+  await (await import("./chat-orchestration/child-chats-main.js")).personTookOverStartedChat(chatId);
+}
+
 const runInputAdmission = createChatRunInputAdmission({
   active,
   isChatDeleting: (chatId) => chatDeletionGate.isDeleting(chatId),
   appendMessage: (chatId, message, meta) => chatStore.appendMessage(chatId, message, meta),
   readChat: (chatId) => chatStore.get(chatId),
-  // A steer or follow-up is the person writing in the chat, so it ends a snooze.
+  // A steer or follow-up is the person writing in the chat, so it ends a
+  // snooze, and a chat another chat started is theirs from now on (Phase 5).
   onPersonWrote: (chatId) => {
     void chatTriage.wake(chatId).catch((error: unknown) => {
       logger.warn("inbox", "Could not end the chat's snooze after its steer or follow-up.", error);
+    });
+    void personSteeredStartedChat(chatId).catch((error: unknown) => {
+      logger.warn("chat-orchestration", "Could not record that the person took over a started chat.", error);
     });
   },
 });
@@ -865,6 +912,19 @@ function startOwedTurn(plan: OwedTurnPlan<OwedTurnContext, GenerationCancellatio
   );
 }
 
+/** What a run that can owe its chat a turn ran with: an owed turn or a goal round starts with the same. */
+function owedTurnContextOf(params: ChatStartParams, options: GenerationExecutionOptions): OwedTurnContext {
+  return {
+    ...(params.workspaceId !== undefined ? { workspaceId: params.workspaceId } : {}),
+    providerId: params.providerId,
+    model: params.model,
+    ...(params.thinkingLevel !== undefined ? { thinkingLevel: params.thinkingLevel } : {}),
+    ...(params.inlineVisuals !== undefined ? { inlineVisuals: params.inlineVisuals } : {}),
+    ...(options.visualAudience !== undefined ? { visualAudience: options.visualAudience } : {}),
+    ...(options.excludeToolNames !== undefined ? { excludeToolNames: options.excludeToolNames } : {}),
+  };
+}
+
 /**
  * Work that holds the chat's turn. A cancelled subagent that is still draining
  * is left out: its parent already settled it, so it must not trap queued sends
@@ -889,15 +949,21 @@ function chatTurnIsHeld(chatId: string): boolean {
  * Wait until `busy()` is false, waking early once the chat's running
  * generations complete. False when the settlement grace ran out first.
  */
-async function waitForChatSettlement(chatId: string, busy: () => boolean): Promise<boolean> {
-  const deadline = Date.now() + CHAT_CANCEL_SETTLEMENT_GRACE_MS;
+async function waitForChatSettlement(
+  chatId: string,
+  busy: () => boolean,
+  graceMs = CHAT_CANCEL_SETTLEMENT_GRACE_MS,
+): Promise<boolean> {
+  const deadline = Date.now() + graceMs;
+  // Long waits (a scheduled task waiting its turn) poll less often.
+  const pollMs = graceMs > CHAT_CANCEL_SETTLEMENT_GRACE_MS ? 250 : 25;
   while (busy()) {
     const remaining = deadline - Date.now();
     if (remaining <= 0) return false;
     const completions = [...active.values()]
       .filter((entry) => entry.chatId === chatId && entry.completion)
       .map((entry) => entry.completion!);
-    const pause = new Promise<void>((resolve) => setTimeout(resolve, Math.min(25, remaining)));
+    const pause = new Promise<void>((resolve) => setTimeout(resolve, Math.min(pollMs, remaining)));
     if (completions.length > 0) {
       await Promise.race([Promise.allSettled(completions), pause]);
     } else {
@@ -1266,7 +1332,7 @@ const questionnaires = new AskUserQuestionCoordinator(
  * read them like a phone turn's card, and phones answer them through their
  * run controls; the coordinators' one-shot settlement lets the first answer
  * win. A card nobody answers is denied, or its question closed, after five
- * minutes, the same as a phone turn's.
+ * minutes, the same as a phone turn's; a goal round's cards wait 30 minutes.
  */
 const owedTurnPrompts = createOwedTurnPrompts({
   now: Date.now,
@@ -1479,6 +1545,7 @@ async function prepareGeneration(
               questions,
               timeoutMs: resolveAskUserQuestionTimeoutMs(timeoutSeconds, {
                 unattended: liveOwner.kind === "remote",
+                ...(options.leadChatTurn === true ? { maxSeconds: CHAT_AUDIENCE_PROMPT_LIFETIME_MS / 1_000 } : {}),
               }),
             },
             liveOwner.documentId,
@@ -1505,8 +1572,19 @@ async function prepareGeneration(
   // A person's workspace chat follows the global approval mode, or the
   // workspace's own when it is customized (plan §3.1). Internal policies
   // (scheduled runs), Bot-bound turns and the Assistant keep their access.
+  // A chat another chat started never gets more than its lead allowed (Phase 5, D2).
+  // `undefined` when the chat's record can't be read: such a chat is not offered `child_chats`.
+  const chatLineage = workspace && !botBound && params.chatId
+    ? await chatStore.getMeta(params.chatId).then((meta) => ({ startedBy: meta?.startedBy }), () => undefined)
+    : undefined;
+  const approvalCeiling = workspace && !botBound && params.chatId && params.mode === undefined
+    ? await (await import("./chat-orchestration/links-main.js")).startedChatApprovalCeiling(
+        params.chatId,
+        chatLineage?.startedBy,
+      )
+    : undefined;
   const approvalPolicy = await generationApprovalPolicy(
-    { workspace, botBound, mode: params.mode, permission: options.permission },
+    { workspace, botBound, mode: params.mode, permission: options.permission, ceiling: approvalCeiling },
     () => configStore.getSettings(),
   );
   const permission: GenerationPermission =
@@ -1982,10 +2060,28 @@ async function prepareGeneration(
     harnessProvider: isAcpHarnessProvider(runtime.provider.id),
     excludedToolNames: options.excludeToolNames,
   };
+  // The owed turn for the person's queued message is theirs; one answering a notice is not.
+  const answersPerson = windowless && screenedPromptAnswersPerson(chat.messages, options.screenedPrompt);
   const turnAudience = {
-    ...chatTurnAudienceFor({ ...options, windowless }, params),
+    ...chatTurnAudienceFor({ ...options, windowless, answersPerson }, params),
     ...(windowless ? { windowOnlyToolNames } : {}),
   };
+  /** Calls this turn refuses because of their arguments (a woken turn setting a check-back). */
+  const turnArgsRefusal = chatTurnArgsToolRefusal(turnAudience);
+  // The person sent in a lead chat: its started chats' endings may wake it
+  // again after a Stop (Phase 5, D4). A scheduled run posting here is not them.
+  const personWroteTurn = personWroteChatTurn(options.usageSource, turnAudience);
+  if (params.chatId && chatLineage && !chatLineage.startedBy && personWroteTurn) {
+    (await import("./chat-orchestration/child-chats-main.js")).leadChatResumed(params.chatId);
+  }
+  // The person wrote in a chat another chat started: from now on it is theirs,
+  // and the lead's `send` and Stop leave it alone (Phase 5, D3).
+  if (params.chatId && chatLineage?.startedBy && options.leadChatTurn !== true && personWroteTurn) {
+    const tookOverChatId = params.chatId;
+    await (await import("./chat-orchestration/child-chats-main.js")).personTookOverStartedChat(tookOverChatId).catch((error: unknown) => {
+      logger.warn("chat-orchestration", "Could not record that the person took over a started chat.", error);
+    });
+  }
   // Offered by the chat's surface alone; a turn nobody watches, or one a paired
   // device sent, keeps the declaration and refuses the call.
   const offerHooksTool = hostPlatformCapabilities().hooks && chatToolOffers(chatToolSurface).hooks;
@@ -2014,6 +2110,17 @@ async function prepareGeneration(
     !options.excludeToolNames?.has(SCHEDULE_TOOL_NAME) &&
     (!botContext || options.interactionSurface !== "telegram") &&
     (!botContext || botHasOrdinaryCapability(botContext, "schedules"));
+  // A Temporary chat (Floating Quick Chat, not yet saved or attached) keeps no
+  // lasting state of its own: its window shows only the live reply and an
+  // unsaved one is deleted at the next launch. Check-backs, goal proposals and
+  // started chats wait until it's saved or attached, and a task made in it gets
+  // its own chat instead of posting into this one.
+  const temporaryChat = chat.ephemeral === true;
+  // An ordinary workspace chat: a task made here posts its runs back into it.
+  const scheduleOriginChatId =
+    schedulingAllowed && !botContext && !assistantMode && !chat.botId && chat.owner === undefined && !temporaryChat
+      ? params.chatId
+      : undefined;
   const botScheduleToolNames =
     botContext && schedulingAllowed
       ? new Set(
@@ -2220,6 +2327,7 @@ async function prepareGeneration(
       ...(deviceShimDir ? { shellPathPrefix: deviceShimDir } : {}),
       ...(shellLeftovers ? { shellLeftovers } : {}),
       allowScheduling: schedulingAllowed,
+      ...(scheduleOriginChatId ? { scheduleOriginChatId } : {}),
       allowMcpTools: botContext
         ? options.allowMcpTools !== false && botConnectionIds!.length > 0
         : options.allowMcpTools,
@@ -2304,6 +2412,103 @@ async function prepareGeneration(
         excludeToolNames: options.excludeToolNames,
       }),
     );
+  }
+  // Check-backs: every turn of an ordinary workspace chat declares the tool,
+  // read-only folders included, so the chat's tool list holds; a turn Aiden
+  // started refuses `set` (`turnArgsRefusal`).
+  if (
+    !botContext &&
+    !assistantMode &&
+    !temporaryChat &&
+    params.chatId &&
+    workspace?.folderPath &&
+    options.usageSource === "chat" &&
+    options.interactionSurface !== "telegram" &&
+    hostPlatformCapabilities().chatCheckBacks &&
+    !options.excludeToolNames?.has(CHECK_BACK_TOOL_NAME)
+  ) {
+    const { createChatCheckBackTool } = await import("./follow-through/follow-through-tools-main.js");
+    tools.push(
+      createChatCheckBackTool({
+        chatId: params.chatId,
+        turnId: options.turnId ?? streamId,
+        refusal: (args) => turnArgsRefusal(CHECK_BACK_TOOL_NAME, args),
+      }),
+    );
+  }
+  // Suggesting a keep-going goal: declared in every turn of an ordinary chat
+  // on this computer, goal rounds and unattended turns included, so the tool
+  // list (and the chat's cached prefix) is the same in every turn; turns Aiden
+  // started and a paired device's turns refuse it when called
+  // (`turnArgsRefusal`). Only the person's Start on the card sets the goal.
+  if (
+    !botContext &&
+    !assistantMode &&
+    !temporaryChat &&
+    params.chatId &&
+    options.usageSource === "chat" &&
+    options.interactionSurface !== "telegram" &&
+    !isAcpHarnessProvider(runtime.provider.id) &&
+    goalLoopEnabled() &&
+    !options.excludeToolNames?.has(PROPOSE_GOAL_TOOL_NAME)
+  ) {
+    const chatId = params.chatId;
+    tools.push(
+      createProposeGoalTool({
+        chatId,
+        proposals: { propose: (id, objective) => goalTurnHooks().proposeGoal(id, objective) },
+      }),
+    );
+  }
+  // Whether this run holds outside content, read by `child_chats` when it
+  // starts or sends; the run sets it once its taint exists.
+  const leadRunTaint = { tainted: (): boolean => false };
+  // Chats that run other chats (Phase 5, D3): a workspace chat with the
+  // follow-through checks, not itself started by a chat (depth 1). A turn
+  // Aiden started refuses `start` (`turnArgsRefusal`).
+  if (
+    params.chatId &&
+    offersChildChats({
+      followThroughAvailable: Boolean(followThroughAvailable),
+      temporary: temporaryChat,
+      workspace: Boolean(workspace),
+      lineage: chatLineage,
+      enabled: childChatsEnabled(settings),
+      hostSupports: hostPlatformCapabilities().childChats,
+      excludedToolNames: options.excludeToolNames,
+    })
+  ) {
+    const [{ createChildChatsTool }, { childChats }] = await Promise.all([
+      import("./chat-orchestration/child-chats-tool.js"),
+      import("./chat-orchestration/child-chats-main.js"),
+    ]);
+    tools.push(
+      createChildChatsTool({
+        leadChatId: params.chatId,
+        childChats,
+        refusal: (args) => turnArgsRefusal(CHILD_CHATS_TOOL_NAME, args),
+        leadTainted: () => leadRunTaint.tainted(),
+      }),
+    );
+  }
+  // A started chat's link: its result schema (D6) and whether a tainted lead wrote in it.
+  const startedChatLink = params.chatId && chatLineage?.startedBy
+    ? await (async () => {
+        const { chatLinks } = await import("./chat-orchestration/links-main.js");
+        await chatLinks.restore();
+        return chatLinks.get(params.chatId!);
+      })()
+    : undefined;
+  // A started chat whose lead asked for a structured result (Phase 5, D6).
+  if (params.chatId && startedChatLink && !options.excludeToolNames?.has(SUBMIT_RESULT_TOOL_NAME)) {
+    const resultSchema = startedChatLink.resultSchema;
+    if (resultSchema) {
+      const [{ createSubmitResultTool }, { childChats }] = await Promise.all([
+        import("./chat-orchestration/submit-result-tool.js"),
+        import("./chat-orchestration/child-chats-main.js"),
+      ]);
+      tools.push(createSubmitResultTool({ chatId: params.chatId, schema: resultSchema, childChats }));
+    }
   }
   const botMutatingToolNames = new Set<string>();
   if (botContext) {
@@ -2733,7 +2938,18 @@ async function prepareGeneration(
    * the reason names the condition, and the call is refused before it runs.
    */
   const turnToolRefusals: TurnToolRefusal[] = [];
-  turnToolRefusals.push(chatTurnToolRefusal(chatToolSurface, turnAudience));
+  const audienceRefusal = chatTurnToolRefusal(chatToolSurface, turnAudience);
+  turnToolRefusals.push(
+    turnAudience.goalRound === true && windowless
+      ? (name) => {
+          // A goal round off screen that needs the window: the goal bar offers Continue here.
+          const reason = audienceRefusal(name);
+          if (reason && refusedForWantOfWindow(turnAudience, name)) goalTurnHooks().windowToolRefused(params.chatId);
+          return reason;
+        }
+      : audienceRefusal,
+    turnArgsRefusal,
+  );
   if (declaresAppTools(ownerScope, { attendedAssistant, schedulingAllowed })) {
     // A windowless turn declares them with no live state and no navigation,
     // and refuses every call (`chatTurnToolRefusal`).
@@ -3072,6 +3288,7 @@ async function prepareGeneration(
     permission,
     /** The run decides approvals by the mode, read fresh before each call. */
     usesApprovalModes: approvalPolicy !== undefined,
+    approvalCeiling,
     folderPath,
     git,
     tools,
@@ -3113,7 +3330,13 @@ async function prepareGeneration(
     botApprovedRoots,
     botMutatingToolNames,
     offerHooksTool,
+    scheduleOriginChatId,
     turnToolRefusal: firstTurnToolRefusal(turnToolRefusals),
+    leadRunTaint,
+    /** Whether a lead whose run held outside content wrote in this started chat. */
+    startedChatTrust: startedChatLink
+      ? (await import("./chat-orchestration/child-chats.js")).startedChatRunTrust(startedChatLink)
+      : { tainted: false, judgeTrusted: true },
   };
 }
 
@@ -3278,7 +3501,7 @@ export const llmClient = {
         isCurrent: () =>
           initializing.get(streamId) === initialization ||
           (active.get(streamId)?.chatId === params.chatId && active.get(streamId)?.owner === currentOwner()),
-        append: (message, meta) => chatStore.appendMessage(params.chatId, message, meta),
+        append: chatStoreInitializationTerminalAppend(chatStore, params.chatId, options.keepChatModel),
         onUnknownOutcome: (terminalError) =>
           logger.error(
             "pi",
@@ -3523,7 +3746,11 @@ export const llmClient = {
       botMutatingToolNames,
       offerHooksTool,
       usesApprovalModes,
+      approvalCeiling,
+      scheduleOriginChatId,
       turnToolRefusal,
+      leadRunTaint,
+      startedChatTrust,
     } = setup;
     // Claim checks tell connector failures by the tools' real MCP identity.
     const claimCheckOptions = {
@@ -3601,6 +3828,15 @@ export const llmClient = {
     let hookTurnContext: string | undefined;
     /** Outside content in this run, for the gate's new destinations (plan §3.2). */
     let runTaint: RunTaint | undefined;
+    /**
+     * A lead whose own run held outside content wrote in this started chat
+     * (its task, a send or a steer): the run is tainted from the start, and
+     * while the chat still answers the lead the Auto judge can't pass a call
+     * on the lead's word, so judged calls show their card (Phase 5 review).
+     */
+    let leadTaintedRun = startedChatTrust.tainted;
+    let leadTaintedRequest = !startedChatTrust.judgeTrusted;
+    const judgeTrusted = () => !leadTaintedRequest;
     /** What the person asked for in this run, for the Auto judge. */
     let approvalRequestText = "";
     // Mid-flight input's UserPromptSubmit context, on that input's message only.
@@ -3870,8 +4106,7 @@ export const llmClient = {
               : undefined,
           },
           {
-            providerId: params.providerId,
-            model: params.model,
+            ...generationModelMeta(params, options.keepChatModel),
             expectedWorkspaceId: initialization.workspaceId,
           },
         );
@@ -4412,7 +4647,9 @@ export const llmClient = {
         deferredTools,
         // Every request drops removed memory facts and, after a compaction
         // inside the turn, states the current state again.
-        prepareMessages: chatStateRequestMessages(chatStatePlan.head, currentChatState),
+        // While the chat has a goal (until it is done or cleared), its
+        // byte-stable reminder sits right after a compaction summary.
+        prepareMessages: chatStateRequestMessages(chatStatePlan.head, currentChatState, goalTurnHooks().reminder(params.chatId)),
       };
       assertGenerationContextCapacity(generationContextOptions);
       const onCompactionEvent = (event: PiCompactionEvent) => {
@@ -4606,7 +4843,14 @@ export const llmClient = {
         params.chatId,
       );
       if (recoveryEffects.length > 0) {
-        await recordPiEffectRecoveryBoundary(promptJournal, recoveryEffects);
+        // A `child_chats` start Aiden quit in the middle of names the chats it
+        // already made, so Resume finds them instead of starting more.
+        await recordPiEffectRecoveryBoundary(promptJournal, recoveryEffects, async (pending) => {
+          const starts = pending.filter((effect) => effect.toolName === CHILD_CHATS_TOOL_NAME).map((effect) => effect.toolCallId);
+          if (starts.length === 0) return undefined;
+          const { childChats } = await import("./chat-orchestration/child-chats-main.js");
+          return childChats.interruptedStarts(params.chatId, starts);
+        });
         if (!piJournalless) {
           for (const effect of recoveryEffects) {
             await piRuntimeEffectStore.markRecoveryRecorded({
@@ -4626,11 +4870,16 @@ export const llmClient = {
             contentOverrides.get(currentUser.id),
           )
         : undefined;
+      // A keep-going goal the person just set: its kickoff note follows their
+      // objective, once. A notice (a round's continuation) never carries it.
+      const goalKickoffNote = currentPromptMessage && currentUser?.notice === undefined
+        ? goalTurnHooks().kickoff(params.chatId) ?? ""
+        : "";
       turnFollowingMessages = currentPromptMessage
         ? [
             ...(hookTurnContext ? [hookContextMessage(hookTurnContext, currentPromptMessage.timestamp)] : []),
             ...(chatStatePlan.update ? [chatStatePlan.update(currentPromptMessage.timestamp)] : []),
-            ...[turnNoteMessage([generativeUiTurnNote, advisorTurnNote, formFillNote, mcpServersSection.turnNote], currentPromptMessage.timestamp)].filter(
+            ...[turnNoteMessage([goalKickoffNote, generativeUiTurnNote, advisorTurnNote, formFillNote, mcpServersSection.turnNote], currentPromptMessage.timestamp)].filter(
               (note): note is AgentMessage => note !== undefined,
             ),
           ]
@@ -4665,19 +4914,23 @@ export const llmClient = {
         }
         onDemandDeclaredRecord = { recorded: declaredNow, current: () => onDemandTools.declaredNames() };
       }
-      const journalHistory = runTaintHistoryOfBranch(journalBranch);
       runTaint = new RunTaint({
-        personText: generationChat.messages.filter((message) => message.role === "user").map((message) => message.content),
-        history: [
-          ...initialMessages.map((message) => ({
-            role: message.role,
-            ...("toolName" in message && typeof message.toolName === "string" ? { toolName: message.toolName } : {}),
-          })),
-          ...journalHistory,
-        ],
+        // A tainted lead's own words are not the person naming a site.
+        personText: runTaintPersonText(generationChat.messages, { leadWordsTrusted: judgeTrusted() }),
+        history: runTaintHistoryOfRun({ initialMessages, branch: journalBranch, messages: generationChat.messages }),
         isConnectorTool: (name) => claimCheckOptions.isConnectorTool(name),
+        // In a started chat, the lead's notice of this run's ending will quote outside content.
+        onOutside: () => {
+          void import("./chat-orchestration/links-main.js")
+            .then(({ chatLinks }) => chatLinks.markChildTainted(params.chatId))
+            .catch((error: unknown) => logger.warn("chat-orchestration", "Could not record that a started chat read outside content.", error));
+        },
       });
-      approvalRequestText = currentUser?.content ?? "";
+      if (leadTaintedRun) runTaint.markOutside();
+      leadRunTaint.tainted = () => runTaint?.tainted === true;
+      // A goal round works toward the objective the person set.
+      const goalObjective = options.goalRound === true ? goalTurnHooks().objective(params.chatId) : undefined;
+      approvalRequestText = ownerRequestText(generationChat.messages, currentUser, goalObjective ? { goalObjective } : {});
       // A design turn's first request carries the canvas counts, journaled
       // after the history they follow (see `withJournaledCanvasStatusNote`).
       const canvasStatusLine = await enteredCanvasTools.initialStatusLine();
@@ -4936,8 +5189,7 @@ export const llmClient = {
               params.chatId,
               { role: "user", content: message.content, model: params.model },
               {
-                providerId: params.providerId,
-                model: params.model,
+                ...generationModelMeta(params, options.keepChatModel),
                 expectedWorkspaceId: initialization.workspaceId,
               },
             );
@@ -5045,7 +5297,7 @@ export const llmClient = {
           // (plan §3.2): a connector's real name and declared hint, and
           // whether it is a new destination after outside content.
           const runApproval = usesApprovalModes && workspaceId
-            ? await currentWorkspaceApproval(configStore, workspaceId).catch((error: unknown) => {
+            ? await currentWorkspaceApproval(configStore, workspaceId, approvalCeiling).catch((error: unknown) => {
                 logger.warn("pi", "Could not read the approval mode; asking as in Ask.", error);
                 return { mode: "ask" as const, macGrants: new Set<MacGrantClass>(), customized: false, chatOnly: false, legacyFull: false };
               })
@@ -5302,8 +5554,9 @@ export const llmClient = {
               ...(runApproval
                 ? {
                     approval: { mode: runApproval.mode, macGrants: runApproval.macGrants },
-                    // An ACP agent's run has no model Aiden can ask (`runApprovalJudge`).
-                    ...(harnessProvider ? {} : { judgeAvailable: true }),
+                    ...(runJudgeAvailable({ harnessProvider, leadRequestTrusted: judgeTrusted() })
+                      ? { judgeAvailable: true }
+                      : {}),
                     ...(calledMcp && !preparedBotContext
                       ? {
                           connector: {
@@ -5436,6 +5689,7 @@ export const llmClient = {
                   approvalModelSelection,
                   undefined,
                   workspaceId,
+                  scheduleOriginChatId,
                 );
                 if (signal?.aborted) throw new Error("Scheduled task action was cancelled.");
                 preparedStandardScheduleSummary = prepared.summary;
@@ -5967,6 +6221,9 @@ export const llmClient = {
               phase: denied ? "blocked" : event.isError ? "error" : "result",
               toolName: event.toolName,
             });
+            // A result that says it brought outside content in (a started chat's words, when
+            // that chat's run held outside content) taints the rest of the run.
+            if (!denied && toolResultSaysOutside(event.result?.details)) runTaint?.markOutside();
             // A failed command may still have written files, so only a denied call is skipped.
             if (!denied) notifyWorkspaceFilesTouched(workspaceId, event.toolName);
             // A write or edit that finished before Stop took effect already changed the file on disk.
@@ -6205,6 +6462,17 @@ export const llmClient = {
       promptsUnattended: initialization.promptsUnattended,
       computerUse,
       formFill,
+      // The lead steered or queued a message here: if its run held outside
+      // content, so does this one from now on.
+      leadChatInput: async () => {
+        const { chatLinks } = await import("./chat-orchestration/links-main.js");
+        await chatLinks.restore();
+        if (chatLinks.get(params.chatId)?.leadTainted !== true) return;
+        leadTaintedRun = true;
+        leadTaintedRequest = true;
+        runTaint?.markOutside();
+      },
+      outsideInput: () => runTaint?.markOutside(),
       ...(chatHooks
         ? {
             inputHooks: {
@@ -6262,6 +6530,8 @@ export const llmClient = {
       generationChat.owner === undefined;
     // The outcome the run records (a Stop, or not), once it has one.
     let owedRunRecordedStop: boolean | undefined;
+    // The run ended in an error, for a keep-going goal's pre-checks.
+    let goalRunFailed = false;
     // Only a turn that ended normally counts a design-system offer as made.
     let designSystemOfferDelivered = false;
     // Ends the run's ownership, then settles its owed turn even when a
@@ -6278,20 +6548,29 @@ export const llmClient = {
           recordedStop,
         },
       );
+      // A keep-going goal looks at the chat once it is idle again, whatever
+      // run held it (a scheduled task's or a phone's too, or the goal would
+      // wait for a settle that never comes). A round starts with what an
+      // ordinary run ran with, as an owed turn does.
+      if (params.chatId && !generationChat.botId && generationChat.owner === undefined) {
+        try {
+          goalTurnHooks().runSettled({
+            chatId: params.chatId,
+            streamId,
+            ...(owesItsChatTurns ? { context: owedTurnContextOf(params, options) } : {}),
+            stopped: recordedStop,
+            failed: owesItsChatTurns && goalRunFailed && !recordedStop,
+          });
+        } catch (error) {
+          logger.warn("goal", "The keep-going goal could not observe a settled run.", error);
+        }
+      }
     };
     if (owesItsChatTurns) {
       owedTurns.open(streamId, {
         chatId: params.chatId,
         ownerDocumentId: currentOwnerDocumentId(),
-        context: {
-          ...(params.workspaceId !== undefined ? { workspaceId: params.workspaceId } : {}),
-          providerId: params.providerId,
-          model: params.model,
-          ...(params.thinkingLevel !== undefined ? { thinkingLevel: params.thinkingLevel } : {}),
-          ...(params.inlineVisuals !== undefined ? { inlineVisuals: params.inlineVisuals } : {}),
-          ...(options.visualAudience !== undefined ? { visualAudience: options.visualAudience } : {}),
-          ...(options.excludeToolNames !== undefined ? { excludeToolNames: options.excludeToolNames } : {}),
-        },
+        context: owedTurnContextOf(params, options),
       });
       activeGeneration.owedTurn = { hold: () => owedTurns.hold(streamId) };
     }
@@ -6326,6 +6605,7 @@ export const llmClient = {
       return promotedRunAbandoned;
     };
     escape.settle = async () => {
+      goalRunFailed = !activeGeneration.cancelRequested;
       try {
         await abandonPromotedRun(activeGeneration.cancelRequested ? "cancelled" : "failed");
       } finally {
@@ -6635,6 +6915,7 @@ export const llmClient = {
         collectUndeliveredGuidance();
         // A failed run records a failure, never a Stop, so the input it owes still runs.
         owedRunRecordedStop = false;
+        goalRunFailed = true;
         logger.error("pi", `Generation failed for stream ${streamId}`, error);
         const finalTimeline = attachClaimCheck(timeline.finish("failed"), full, claimCheckOptions);
         const persisted = await persistAssistant(full, reasoning, finalTimeline);
@@ -6718,6 +6999,48 @@ export const llmClient = {
   /** Host-authority questionnaire answer; same one-shot rule as `approveAsHost`. */
   answerQuestionnaireAsHost(promptId: string, response: unknown): AskUserQuestionRespondOutcome {
     return questionnaires.respondAsHost(promptId, response);
+  },
+
+  /**
+   * The owner of a turn main starts for an attended chat with no window behind
+   * it (a goal round): approvals and questions go where an owed turn's do, to
+   * a desktop window showing the chat or a paired phone, whichever answers.
+   * `lifetime` sets how long its cards wait (an owed turn's five minutes by
+   * default) and who hears when one expires unanswered.
+   */
+  attendedTurnOwner(chatId: string, documentId: string, lifetime?: OwedTurnPromptLifetime): ChatGenerationOwner {
+    return {
+      id: 0,
+      documentId,
+      isDestroyed: () => false,
+      send: (channel, payload) => owedTurnPrompts.publish(chatId, channel, payload, lifetime),
+      onInvalidated: () => () => undefined,
+    };
+  },
+
+  /**
+   * The owner of a turn Aiden started in a window that shows the chat (a goal
+   * round on screen): the window's own owner, except that a card nobody
+   * answers within `lifetime` is denied or closed, as an attended turn's is.
+   */
+  attendedWindowOwner(owner: ChatGenerationOwner, chatId: string, lifetime: OwedTurnPromptLifetime): ChatGenerationOwner {
+    return withPromptLifetime(owner, chatId, lifetime, {
+      now: Date.now,
+      setTimer: (callback, ms) => {
+        const timer = setTimeout(callback, ms);
+        timer.unref?.();
+        return timer;
+      },
+      clearTimer: (handle) => clearTimeout(handle as ReturnType<typeof setTimeout>),
+      expireApproval: (approvalId) => approvals.decideAsHost(approvalId, false, undefined, false),
+      expireQuestion: (promptId) =>
+        questionnaires.respondAsHost(promptId, { version: ASK_USER_QUESTION_VERSION, promptId, cancelled: true, answers: [] }) !== "rejected",
+    });
+  },
+
+  /** The chat has a helper (subagent) still running. */
+  chatHasLiveHelpers(chatId: string): boolean {
+    return subagentRuntimeRegistry.hasLiveChatChildren(chatId);
   },
 
   /** The open approval of this chat's owed turn, for the desktop's host card. */
@@ -6936,6 +7259,12 @@ export const llmClient = {
     subagentRuntimeRegistry.abortGeneration(streamId);
     approvals.cancelStream(streamId);
     logger.info("pi", `Generation ${streamId} cancellation requested (${origin}).`);
+    // The person's Stop in a lead chat also stops the chats it started (Phase 5, D4).
+    if (origin === "user_stop" && stoppedChatId) {
+      void import("./chat-orchestration/child-chats-main.js")
+        .then(({ leadChatStopped }) => leadChatStopped(stoppedChatId))
+        .catch((error: unknown) => logger.warn("chat-orchestration", "Could not stop a lead chat's started chats.", error));
+    }
     return true;
   },
 
@@ -6952,17 +7281,22 @@ export const llmClient = {
   },
 
   /**
-   * Queue a follow-up notice into the chat's running generation, whoever owns
-   * it. Null when nothing is running there that takes input.
+   * Queue a follow-up notice into the chat's own running turn, whoever owns
+   * it. `busyWith` that run while a run another feature owns (a scheduled
+   * task's) holds the chat: it never takes notices. Null when nothing runs there.
    */
   async admitAgentNotice(
     chatId: string,
     input: { text: string; notice: AgentNoticeV1 },
-  ): Promise<ChatRunInputAdmissionResult | null> {
-    const streamId = [...active.entries()].find(
-      ([, entry]) => entry.chatId === chatId && !entry.cancelRequested,
-    )?.[0];
-    if (!streamId) return null;
+  ): Promise<ChatRunInputAdmissionResult | { busyWith: string } | null> {
+    // Only the chat's own turns open an owed turn (`owesItsChatTurns`).
+    const target = agentNoticeRun(
+      [...active.entries()].map(([id, entry]) => [id, { chatId: entry.chatId, cancelRequested: entry.cancelRequested, chatTurn: entry.owedTurn !== undefined }] as const),
+      chatId,
+    );
+    if (!target) return null;
+    if ("busyWith" in target) return target;
+    const { streamId } = target;
     return runInputAdmission.admit({
       streamId,
       chatId,
@@ -7005,6 +7339,11 @@ export const llmClient = {
    */
   async waitForChatIdle(chatId: string): Promise<boolean> {
     return waitForChatSettlement(chatId, () => chatTurnIsHeld(chatId));
+  },
+
+  /** Like `waitForChatIdle`, with its own bound: false when the chat is still held after `timeoutMs`. */
+  async waitForChatIdleWithin(chatId: string, timeoutMs: number): Promise<boolean> {
+    return waitForChatSettlement(chatId, () => chatTurnIsHeld(chatId), Math.max(0, timeoutMs));
   },
 
   /** Stop and drain foreground work before cross-store chat deletion begins. */

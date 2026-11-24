@@ -1,5 +1,6 @@
 // Builds a generation's follow-through tools: `background_job` and
-// `follow_pull_request`, bound to the chat and its workspace folder.
+// `follow_pull_request`, bound to the chat and its workspace folder, and
+// `check_back`, bound to the chat.
 
 import type { AgentTool } from "@earendil-works/pi-agent-core";
 import { agentShellCommandEnvironment } from "../agent-command-environment.js";
@@ -9,7 +10,9 @@ import { configStore } from "../config-store.js";
 import { workspaceMutationGate } from "../workspace-mutation-gate.js";
 import type { WorkspacePermission } from "../types.js";
 import { createBackgroundJobTool } from "./background-job-tool.js";
-import { backgroundJobs, pullRequestFollows, resolvePullRequestTarget } from "./follow-through-main.js";
+import { systemTimezone } from "../schedule-store-core.js";
+import { backgroundJobs, checkBacks, pullRequestFollows, resolvePullRequestTarget } from "./follow-through-main.js";
+import { createCheckBackTool } from "./check-back-tool.js";
 import { createPullRequestFollowTool } from "./pull-request-follow-tool.js";
 
 export interface FollowThroughToolContext {
@@ -55,4 +58,19 @@ export function createFollowThroughTools(context: FollowThroughToolContext): Age
     }),
   ];
   return tools.filter(({ name }) => !context.excludeToolNames?.has(name));
+}
+
+/** The chat's `check_back` tool; `refusal` is the turn's own (a woken turn may not set one). */
+export function createChatCheckBackTool(context: {
+  chatId: string;
+  turnId?: string;
+  refusal?: (args: unknown) => string | undefined;
+}): AgentTool {
+  return createCheckBackTool({
+    chatId: context.chatId,
+    ...(context.turnId ? { turnId: context.turnId } : {}),
+    checkBacks,
+    timezone: systemTimezone,
+    ...(context.refusal ? { refusal: context.refusal } : {}),
+  });
 }

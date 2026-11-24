@@ -130,7 +130,15 @@ function scriptCommand(scriptPath: string): { command: string; args: string[] } 
  */
 export async function runScheduledScript(
   scriptPath: string,
-  options: { cwd: string; timeoutMs?: number; outputLimit?: number; signal?: AbortSignal; groupProbe?: ProcessGroupProbe },
+  options: {
+    cwd: string;
+    timeoutMs?: number;
+    outputLimit?: number;
+    signal?: AbortSignal;
+    groupProbe?: ProcessGroupProbe;
+    /** Extra variables on top of the agent environment (a watch's AIDEN_CHECK_STATE). */
+    env?: Readonly<Record<string, string>>;
+  },
 ): Promise<ScriptProcessResult> {
   const { command, args } = scriptCommand(scriptPath);
   const timeoutMs = options.timeoutMs ?? SCRIPT_TIMEOUT_MS;
@@ -150,7 +158,7 @@ export async function runScheduledScript(
   const child = spawn(command, args, {
     cwd: options.cwd,
     detached: process.platform !== "win32",
-    env: agentShellCommandEnvironment(),
+    env: options.env ? { ...agentShellCommandEnvironment(), ...options.env } : agentShellCommandEnvironment(),
     shell: false,
     stdio: ["ignore", "pipe", "pipe"],
   });

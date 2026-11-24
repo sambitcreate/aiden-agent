@@ -1,22 +1,22 @@
 // Chips in the composer's context bar for what a chat has going on after an
 // answer: background jobs ("2 in background"), followed pull requests
-// ("Following #12") and the done-when check ("Until npm test passes"). Each
-// opens a small popover with its state and a Stop action.
+// ("Following #12") and the agent's check-backs ("Checking back at 3:10 PM").
+// Each opens a small popover with its state and a Stop or Cancel action. A
+// `/until` check is a keep-going goal and shows in the goal bar instead.
 
 import * as React from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { ChevronDown, ExternalLink, GitPullRequest, ListChecks, TerminalSquare } from "lucide-react";
+import { AlarmClock, ChevronDown, ExternalLink, GitPullRequest, TerminalSquare } from "lucide-react";
 import { Button, Popover, PopoverContent, PopoverTrigger, Text, toast } from "./ui";
 import { chatsApi } from "../lib/ipc";
 import { queryKeys, useChatFollowThrough } from "../lib/queries";
 import { useLinkOpener } from "../lib/link-opener";
 import { cn } from "../lib/ui-utils";
 import { backgroundJobLabel, backgroundJobPortUrl, type BackgroundJobView } from "../shared/background-jobs";
+import { checkBackWhen, type CheckBackView } from "../shared/check-backs";
 import {
-  MAX_DONE_WHEN_CHECKS,
   MAX_COMMENT_ONLY_FOLLOW_UPDATES,
   type ChatFollowThroughV1,
-  type DoneWhenCheckView,
   type PullRequestFollowView,
 } from "../shared/follow-through";
 
@@ -38,35 +38,6 @@ export function backgroundJobStatus(job: BackgroundJobView, now: number): string
   if (job.origin === "command") return "Ended";
   if (job.signal) return `Ended by ${job.signal}`;
   return job.exitCode === 0 ? "Finished" : `Failed with code ${job.exitCode ?? "unknown"}`;
-}
-
-export function doneWhenChipLabel(check: DoneWhenCheckView): string {
-  switch (check.state) {
-    case "running":
-      return `Checking ${check.command}`;
-    case "passed":
-      return "Check passed";
-    case "gave-up":
-      return "Check still failing";
-    default:
-      return `Until ${check.command} passes`;
-  }
-}
-
-export function doneWhenStatus(check: DoneWhenCheckView): string {
-  const count = `${check.checksRun} of ${MAX_DONE_WHEN_CHECKS} checks used`;
-  switch (check.state) {
-    case "running":
-      return `Running now · ${count}`;
-    case "passed":
-      return `Passed · ${count}`;
-    case "gave-up":
-      return `Still failing after ${MAX_DONE_WHEN_CHECKS} checks`;
-    default:
-      return check.checksRun === 0
-        ? "Runs after the next answer"
-        : `Last run failed${check.lastTimedOut ? " (took over 10 minutes)" : check.lastExitCode !== undefined && check.lastExitCode !== null ? ` with code ${check.lastExitCode}` : ""} · ${count}`;
-  }
 }
 
 const FOLLOW_END_LABELS: Record<NonNullable<PullRequestFollowView["endedReason"]>, string> = {
@@ -320,41 +291,75 @@ function FollowChip({ chatId, follows, onChanged }: { chatId: string; follows: P
   );
 }
 
-function CheckChip({ chatId, check, onChanged }: { chatId: string; check: DoneWhenCheckView; onChanged: () => void }) {
+/** "Checking back at 3:10 PM", and how many more wait after it. */
+export function checkBackChipLabel(checkBacks: readonly CheckBackView[], now: number): string {
+  const [first] = checkBacks;
+  if (!first) return "";
+  const more = checkBacks.length - 1;
+  return `Checking back ${checkBackWhen(first.fireAt, now)}${more > 0 ? ` +${more}` : ""}`;
+}
+
+function CheckBackChip({ chatId, checkBacks, onChanged }: { chatId: string; checkBacks: CheckBackView[]; onChanged: () => void }) {
   const [open, setOpen] = React.useState(false);
-  const settled = check.state === "passed" || check.state === "gave-up";
-  const clear = () => {
+  const [cancelling, setCancelling] = React.useState<ReadonlySet<string>>(() => new Set());
+  const now = useNow(open);
+  // Hide a cancelled row at once; it comes back if the cancel fails.
+  const visible = checkBacks.filter((checkBack) => !cancelling.has(checkBack.id));
+  const cancel = (checkBack: CheckBackView) => {
+    setCancelling((current) => new Set(current).add(checkBack.id));
     void chatsApi
-      .clearDoneWhenCheck(chatId)
-      .then(() => {
-        setOpen(false);
-        onChanged();
-      })
-      .catch((error: unknown) => toast.error(error instanceof Error ? error.message : "The check could not be cleared."));
+      .cancelCheckBack(chatId, checkBack.id)
+      .then(onChanged)
+      .catch((error: unknown) => {
+        setCancelling((current) => {
+          const next = new Set(current);
+          next.delete(checkBack.id);
+          return next;
+        });
+        toast.error(error instanceof Error ? error.message : "The check-back could not be cancelled.");
+      });
   };
+  if (!visible.length) return null;
+  const label = checkBackChipLabel(visible, now);
   return (
     <Popover open={open} onOpenChange={setOpen}>
       <ChipTrigger
-        icon={ListChecks}
-        label={doneWhenChipLabel(check)}
-        ariaLabel={`Done when: ${check.command}. ${doneWhenStatus(check)}`}
-        tone={check.state === "passed" ? "success" : check.state === "gave-up" ? "failure" : undefined}
+        icon={AlarmClock}
+        label={label}
+        ariaLabel={visible.length === 1 ? label : `${visible.length} check-backs pending, next ${checkBackWhen(visible[0]!.fireAt, now)}`}
       />
-      <PopoverContent align="start" className="w-[20rem] p-0" aria-label="Done-when check">
-        <div className="flex flex-col gap-1 px-3 pb-2 pt-2.5">
+      <PopoverContent align="start" className="w-[22rem] p-0" aria-label="Check-backs">
+        <div className="px-3 pb-1 pt-2.5">
           <Text as="h3" variant="small-strong" color="secondary">
-            Keep going until this passes
-          </Text>
-          <code className="block truncate rounded-lg bg-well px-2 py-1 font-mono text-small text-primary">{check.command}</code>
-          <Text as="p" variant="small" color="tertiary">
-            {doneWhenStatus(check)}
+            Checking back
           </Text>
         </div>
-        <div className="flex justify-end border-t border-separator px-2 py-1.5">
-          <Button variant="transparent" size="small" className="px-2" onClick={clear}>
-            {settled ? "Dismiss" : "Stop checking"}
-          </Button>
-        </div>
+        <ul className="flex max-h-80 flex-col overflow-y-auto px-1.5 pb-2">
+          {visible.map((checkBack) => (
+            <li key={checkBack.id} className="flex min-w-0 items-start gap-2 rounded-lg px-2 py-1.5">
+              <div className="min-w-0 flex-1">
+                <Text as="p" variant="small-strong" className="truncate">
+                  {checkBackWhen(checkBack.fireAt, now).replace(/^./u, (first) => first.toUpperCase())}
+                </Text>
+                <Text as="p" variant="small" color="tertiary" className="line-clamp-2 break-words">
+                  {checkBack.note}
+                </Text>
+              </div>
+              <Button
+                variant="transparent"
+                size="small"
+                className="shrink-0 px-2"
+                aria-label={`Cancel check-back ${checkBackWhen(checkBack.fireAt, now)}`}
+                onClick={() => cancel(checkBack)}
+              >
+                Cancel
+              </Button>
+            </li>
+          ))}
+        </ul>
+        <p className="border-t border-separator px-3 py-2 text-small text-tertiary">
+          At each time Aiden posts the note here and answers it. Stopping a reply keeps these.
+        </p>
       </PopoverContent>
     </Popover>
   );
@@ -373,7 +378,8 @@ export function FollowThroughChipList({
   if (!state) return null;
   const running = state.jobs.some((job) => job.state === "running");
   const following = state.pullRequests.some((follow) => follow.state === "following");
-  if (!running && !following && !state.check) return null;
+  const checkingBack = state.checkBacks.length > 0;
+  if (!running && !following && !checkingBack) return null;
   return (
     <>
       {running ? (
@@ -386,9 +392,9 @@ export function FollowThroughChipList({
           <FollowChip chatId={chatId} follows={state.pullRequests} onChanged={onChanged} />
         </span>
       ) : null}
-      {state.check ? (
+      {checkingBack ? (
         <span className="composer-context-chip-enter flex shrink-0">
-          <CheckChip chatId={chatId} check={state.check} onChanged={onChanged} />
+          <CheckBackChip chatId={chatId} checkBacks={state.checkBacks} onChanged={onChanged} />
         </span>
       ) : null}
     </>

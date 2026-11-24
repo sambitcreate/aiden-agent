@@ -55,7 +55,6 @@ function mount(state: ChatFollowThroughV1 | undefined, handlers: Record<string, 
   const calls = installBotTestIpc({
     "chats:followThroughStopJob": () => undefined,
     "chats:followThroughStopFollow": () => undefined,
-    "chats:followThroughClearCheck": () => undefined,
     "chats:followThroughNudgePullRequests": () => undefined,
     "chats:followThroughJobOutput": () => ({ job: job(), output: "VITE ready on http://localhost:5173\n", truncated: false }),
     ...handlers,
@@ -190,29 +189,6 @@ test("the follow chip names the pull request, opens it, and stops following", as
   ]);
 });
 
-test("the check chip reads as the loop's state and can be stopped or dismissed", async () => {
-  const waiting = {
-    ...emptyChatFollowThrough("chat-1"),
-    check: { command: "npm test", state: "waiting" as const, checksRun: 2, setAt: NOW, lastExitCode: 1 },
-  };
-  const first = mount(waiting);
-  const chip = screen.getByRole("button", { name: /^Done when: npm test\./u });
-  assert.equal(chip.textContent, "Until npm test passes");
-  fireEvent.click(chip);
-  const dialog = await screen.findByRole("dialog", { name: "Done-when check" });
-  assert.ok(within(dialog).getByText("Last run failed with code 1 · 2 of 5 checks used"));
-  fireEvent.click(within(dialog).getByRole("button", { name: "Stop checking" }));
-  await waitFor(() => assert.equal(first.changed(), 1));
-  assert.deepEqual(first.calls.find((call) => call.channel === "chats:followThroughClearCheck")?.args, [{ chatId: "chat-1" }]);
-  cleanup();
-
-  mount({ ...waiting, check: { ...waiting.check, state: "passed", checksRun: 3, lastExitCode: 0 } });
-  const passed = screen.getByRole("button", { name: /^Done when: npm test\./u });
-  assert.equal(passed.textContent, "Check passed");
-  fireEvent.click(passed);
-  assert.ok(await screen.findByRole("button", { name: "Dismiss" }));
-});
-
 test("a notice card shows its heading and opens to exactly what the agent was told", () => {
   const output = "FAIL src/export.test.ts\n  expected 2, got 3";
   const content = `[Aiden follow-up: done-when check]\n\n${fenceAsData("The check's output", output)}`;
@@ -231,4 +207,68 @@ test("a notice card shows its heading and opens to exactly what the agent was to
   assert.equal(details.getAttribute("aria-expanded"), "true");
   assert.ok(within(card).getByText("What Aiden told the agent"));
   assert.ok(within(card).getByText(/expected 2, got 3/u));
+});
+
+test("the check-back chip names the next time, lists each note and cancels one at once", async () => {
+  const state = {
+    ...emptyChatFollowThrough("chat-1"),
+    checkBacks: [
+      { id: "cb_1", fireAt: NOW + 20 * 60_000, note: "See whether the deploy finished", setAt: NOW },
+      { id: "cb_2", fireAt: NOW + 90 * 60_000, note: "Read the nightly report", setAt: NOW },
+    ],
+  };
+  let release!: () => void;
+  const held = new Promise<void>((resolve) => (release = resolve));
+  const { calls, changed } = mount(state, { "chats:followThroughCancelCheckBack": () => held });
+  const chip = screen.getByRole("button", { name: /^2 check-backs pending, next (at|tomorrow at) \d{1,2}:\d{2} [AP]M$/u });
+  assert.match(chip.textContent ?? "", /^Checking back (at|tomorrow at) \d{1,2}:\d{2} [AP]M \+1$/u);
+  fireEvent.click(chip);
+  const dialog = await screen.findByRole("dialog", { name: "Check-backs" });
+  assert.ok(within(dialog).getByText("See whether the deploy finished"));
+  assert.ok(within(dialog).getByText("Read the nightly report"));
+  const [firstCancel] = within(dialog).getAllByRole("button", { name: /^Cancel check-back/u });
+  fireEvent.click(firstCancel!);
+  // Gone before main answers.
+  await waitFor(() => assert.equal(within(dialog).queryByText("See whether the deploy finished"), null));
+  assert.deepEqual(calls.find((call) => call.channel === "chats:followThroughCancelCheckBack")?.args, [{ chatId: "chat-1", id: "cb_1" }]);
+  release();
+  await waitFor(() => assert.equal(changed(), 1));
+});
+
+test("a check-back whose cancel fails comes back", async () => {
+  const state = {
+    ...emptyChatFollowThrough("chat-1"),
+    checkBacks: [{ id: "cb_1", fireAt: NOW + 20 * 60_000, note: "See whether the deploy finished", setAt: NOW }],
+  };
+  let fail!: (error: Error) => void;
+  const held = new Promise<void>((_resolve, reject) => (fail = reject));
+  mount(state, { "chats:followThroughCancelCheckBack": () => held });
+  fireEvent.click(screen.getByRole("button", { name: /^Checking back/u }));
+  const dialog = await screen.findByRole("dialog", { name: "Check-backs" });
+  fireEvent.click(within(dialog).getByRole("button", { name: /^Cancel check-back/u }));
+  await waitFor(() => assert.equal(screen.queryByRole("button", { name: /^Checking back/u }), null));
+  fail(new Error("That check-back already ran or was cancelled."));
+  assert.ok(await screen.findByRole("button", { name: /^Checking back/u }));
+});
+
+test("a check-back notice card reads as the agent checking back", () => {
+  render(
+    <AgentNoticeCard
+      notice={agentNotice({ source: "check_back", tone: "info", title: "Checking back", summary: "See whether the deploy finished" })}
+      content="[Aiden follow-up: check-back]"
+    />,
+  );
+  const card = screen.getByRole("note", { name: "Check-back: Checking back" });
+  assert.ok(within(card).getByText("See whether the deploy finished"));
+});
+
+test("a started chat's notice card names it as a started chat", () => {
+  render(
+    <AgentNoticeCard
+      notice={agentNotice({ source: "chat", tone: "failure", title: "2 started chats ended", summary: "Docs: finished · Tests: stopped with an error" })}
+      content="Chats this chat started have ended."
+    />,
+  );
+  const card = screen.getByRole("note", { name: "Started chat: 2 started chats ended" });
+  assert.ok(within(card).getByText("Docs: finished · Tests: stopped with an error"));
 });

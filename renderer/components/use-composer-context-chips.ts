@@ -11,8 +11,11 @@ import {
   useChatCurrentPullRequest,
   useChatPullRequestPending,
   useChatPullRequests,
+  useScheduledTasks,
+  useStartedChats,
   useWorkspaceRepositoryIdentity,
 } from "../lib/queries";
+import { tasksPostingInChat } from "./chat-task-chips";
 import {
   branchCanOpenPullRequest,
   composerContextChips,
@@ -20,8 +23,11 @@ import {
   type ComposerContextChips,
 } from "../lib/composer-context-chips";
 import { chatPullRequestChipLabels } from "../lib/chat-pull-request-chip";
-import type { GitInfo, Workspace } from "../lib/types";
+import type { GitInfo, ScheduledTask, Workspace } from "../lib/types";
 import { hasActiveFollowThrough } from "../shared/follow-through";
+import type { StartedChatView } from "../shared/child-chats";
+
+const EMPTY_STARTED_CHATS: StartedChatView[] = [];
 
 export interface ComposerContextChipsState {
   chips: ComposerContextChips;
@@ -30,6 +36,10 @@ export interface ComposerContextChipsState {
    * chat's PR state had already loaded (not when a qualifying chat opens).
    */
   pullRequestAnnouncement: string;
+  /** Enabled scheduled tasks that post into this chat, soonest first. */
+  postingTasks: ScheduledTask[];
+  /** The chats this chat started. */
+  startedChats: StartedChatView[];
 }
 
 export function useComposerContextChips({
@@ -57,6 +67,10 @@ export function useComposerContextChips({
   const current = useChatCurrentPullRequest(chatId, remoteReadable);
   const pending = useChatPullRequestPending(chatId, remoteReadable);
   const followThrough = useChatFollowThrough(chatId, started && hasFolder && !accessOff);
+  const startedChatsQuery = useStartedChats(chatId, started);
+  const startedChats = startedChatsQuery.data ?? EMPTY_STARTED_CHATS;
+  const scheduledTasks = useScheduledTasks();
+  const postingTasks = React.useMemo(() => tasksPostingInChat(scheduledTasks.data, chatId), [scheduledTasks.data, chatId]);
   const views = links.data?.links ?? [];
   const linked = views.length;
   const pendingCount = pending.data?.length ?? 0;
@@ -80,7 +94,9 @@ export function useComposerContextChips({
       current: Boolean(currentView),
       branchCanOpen: branchCanOpenPullRequest(gitStatus),
     },
-    followThrough: hasActiveFollowThrough(followThrough.data) || Boolean(followThrough.data?.check),
+    followThrough: hasActiveFollowThrough(followThrough.data),
+    postingTasks: postingTasks.length > 0,
+    startedChats: startedChats.length > 0,
   });
   const pullRequestSettled =
     !remoteReadable || (!identity.isPending && !links.isPending && !current.isPending && !pending.isPending);
@@ -111,5 +127,5 @@ export function useComposerContextChips({
           : "",
     });
   }
-  return { chips, pullRequestAnnouncement: seen.announcement };
+  return { chips, pullRequestAnnouncement: seen.announcement, postingTasks, startedChats };
 }

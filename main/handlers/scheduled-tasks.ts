@@ -3,6 +3,8 @@ import { parseScheduledTaskInput } from "./scheduled-tasks-parse.js";
 import { scheduledTaskApplicationService } from "../services/scheduled-task-application-service-main.js";
 import { scheduledTaskRevision } from "../services/scheduled-task-application-service.js";
 import { systemTimezone } from "../services/schedule-store.js";
+import { saveConnectorTask } from "../services/scheduled-task-connector-trigger.js";
+import { keepAwakeStatus } from "../services/keep-awake/keep-awake-main.js";
 
 function requiredString(value: unknown, name: string): string {
   if (typeof value !== "string" || !value.trim()) {
@@ -35,7 +37,17 @@ export function registerScheduledTaskHandlers(): void {
   ipcMain.handle("schedule:save", async (_event, input: unknown, updatedAt?: unknown) => {
     const parsed = parseScheduledTaskInput(input);
     const revision = parsed.id ? await revisionFor(parsed.id, updatedAt) : undefined;
-    return scheduledTaskApplicationService.save(parsed, { expectedRevision: revision });
+    if (parsed.trigger?.kind !== "connector") return scheduledTaskApplicationService.save(parsed, { expectedRevision: revision });
+    // A connected-app task: its Find sources choice becomes its exact source,
+    // which stays in main and is bound once the task is saved.
+    const triggers = await import("../services/scheduled-task-triggers-main.js");
+    const existing = parsed.id ? (await scheduledTaskApplicationService.get(parsed.id)).trigger : undefined;
+    return saveConnectorTask(parsed.trigger, existing, {
+      connector: triggers.taskConnectorChoices,
+      save: (trigger) => scheduledTaskApplicationService.save({ ...parsed, trigger }, { expectedRevision: revision }),
+      bind: triggers.bindTaskConnectorSource,
+      needsSource: triggers.markTaskNeedsSource,
+    });
   });
   ipcMain.handle("schedule:remove", async (_event, id: unknown, updatedAt: unknown) =>
     scheduledTaskApplicationService.remove(
@@ -51,6 +63,23 @@ export function registerScheduledTaskHandlers(): void {
   );
   ipcMain.handle("schedule:resume", async (_event, id: unknown, updatedAt: unknown) =>
     scheduledTaskApplicationService.resume(
+      requiredString(id, "id"),
+      await revisionFor(requiredString(id, "id"), updatedAt),
+    ),
+  );
+  // A link task's link is shown once, when made or rotated; reads never include it.
+  ipcMain.handle("schedule:trigger-link:rotate", async (_event, id: unknown) =>
+    (await import("../services/scheduled-task-triggers-main.js")).rotateTaskTriggerLink(requiredString(id, "id")),
+  );
+  // Find sources for a connected-app task: foreground, through connections that are already open.
+  ipcMain.handle("schedule:trigger-connector:find-sources", async () =>
+    (await import("../services/scheduled-task-triggers-main.js")).findTaskConnectorSources(AbortSignal.timeout(60_000)),
+  );
+  ipcMain.handle("schedule:trigger-link:state", async (_event, id: unknown) =>
+    (await import("../services/scheduled-task-triggers-main.js")).taskTriggerLinkState(requiredString(id, "id")),
+  );
+  ipcMain.handle("schedule:use-own-chat", async (_event, id: unknown, updatedAt: unknown) =>
+    scheduledTaskApplicationService.useOwnChat(
       requiredString(id, "id"),
       await revisionFor(requiredString(id, "id"), updatedAt),
     ),
@@ -71,6 +100,7 @@ export function registerScheduledTaskHandlers(): void {
   );
   ipcMain.handle("schedule:scripts", (_event, workspaceId?: unknown) =>
     scheduledTaskApplicationService.scripts(optionalString(workspaceId)));
+  ipcMain.handle("schedule:keepAwakeStatus", () => keepAwakeStatus());
   ipcMain.handle("schedule:settings", async (_event, patch?: unknown) => {
     const current = await scheduledTaskApplicationService.settings();
     if (patch === undefined) return current.value;

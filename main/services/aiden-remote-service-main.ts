@@ -60,6 +60,7 @@ import {
   type AidenMcpServerStatus,
 } from "./aiden-mcp-server.js";
 import { AidenMcpToolRunner } from "./aiden-mcp-tools.js";
+import { audienceReportsAnalytics } from "./chat-orchestration/audience.js";
 import {
   AidenMcpProvenanceLog,
   emptyAidenMcpProvenanceDocument,
@@ -330,6 +331,8 @@ export interface AidenRemoteRuntime {
   mcp: AidenMcpHost;
   /** Which outside app started a chat; read only by Aiden on this computer. */
   mcpProvenance: AidenMcpProvenanceLog;
+  /** The chat and stream services, for chats a lead chat starts (`child_chats`). */
+  chatServices(): Promise<{ chats: AidenRemoteChatService; streams: AidenRemoteStreamService }>;
   revokeDevice(deviceId: string): Promise<boolean>;
   pendingApprovalForChat(chatId: string): AidenRemotePendingApproval | null;
   pendingQuestionForChat(chatId: string): AidenRemotePendingQuestion | null;
@@ -550,6 +553,11 @@ async function createRuntime(): Promise<AidenRemoteRuntime> {
     hostPlatform: aidenRemoteHostPlatform(process.platform),
     botRoutineWebhook: async (request) =>
       (await import("./bot-routine-events/sources-main.js")).handleBotRoutineWebhook(request),
+    taskTriggerWebhook: {
+      admit: async (request) => (await import("./scheduled-task-triggers-main.js")).admitTaskTriggerWebhook(request),
+      deliver: async (request) => (await import("./scheduled-task-triggers-main.js")).deliverTaskTriggerWebhook(request),
+      tooLarge: async (request) => (await import("./scheduled-task-triggers-main.js")).taskTriggerWebhookTooLarge(request),
+    },
     workspaceApi: remoteWorkspaceApi = async (instanceId) => {
       // A failed build is retried by the next start rather than replayed.
       const api = await workspaceApis(
@@ -607,13 +615,27 @@ async function createRuntime(): Promise<AidenRemoteRuntime> {
           const chats = new AidenRemoteChatService({
             attachments: remoteAttachmentStore,
             // Revision 53: a phone's New worktree, through the desktop's first-message coordinator.
-            newWorktrees: createAidenRemoteNewWorktrees({
-              getWorkspace: (workspaceId) => configStore.getWorkspace(workspaceId),
-              branches: (folderPath) => gitBranches(folderPath),
-              ensure: (request, seed, owner) => firstMessageWorktrees.ensure(request, seed, owner),
-              owner: (deviceId) => workspaceOwners.owner(deviceId),
-              record: (key) => firstMessageWorktrees.record(key),
-            }),
+            newWorktrees: {
+              ...createAidenRemoteNewWorktrees({
+                getWorkspace: (workspaceId) => configStore.getWorkspace(workspaceId),
+                branches: (folderPath) => gitBranches(folderPath),
+                ensure: (request, seed, owner) => firstMessageWorktrees.ensure(request, seed, owner),
+                owner: (deviceId) => workspaceOwners.owner(deviceId),
+                record: (key) => firstMessageWorktrees.record(key),
+                listWorkspaces: () => configStore.listWorkspaces(),
+              }),
+              // The chat couldn't move into the worktree just made for it. Main
+              // removes it (no window or device owns this), never by force; the
+              // first-message record then starts over on a retry.
+              discard: async (workspaceId) => {
+                await workspaceWorktreeApplicationService.remove(
+                  { isDestroyed: () => false, onInvalidated: () => () => undefined },
+                  workspaceId,
+                  undefined,
+                  { force: false },
+                );
+              },
+            },
             application: chatApplicationService,
             chatStore,
             generation: {
@@ -693,6 +715,8 @@ async function createRuntime(): Promise<AidenRemoteRuntime> {
                 device.capabilities.includes("questions:respond")
               );
             },
+            deviceIsOutsideApp: async (deviceId) =>
+              (await state.snapshot()).devices.some((candidate) => candidate.id === deviceId && candidate.type === "agent"),
             workspaceFolderRefusal: async (workspaceId) => {
               const workspace = await configStore.getWorkspace(workspaceId);
               return workspace ? workspaceFolderRemoteRefusal(workspace) : undefined;
@@ -710,9 +734,9 @@ async function createRuntime(): Promise<AidenRemoteRuntime> {
               const device = (await state.snapshot()).devices.find((candidate) => candidate.id === deviceId);
               return device?.type === "mac" || device?.type === "linux";
             },
-            // An outside MCP app's chats and turns are never product analytics.
+            // An outside MCP app's and a lead chat's started chats are never product analytics.
             deviceReportsAnalytics: async (deviceId) =>
-              (await state.snapshot()).devices.find((candidate) => candidate.id === deviceId)?.type !== "agent",
+              audienceReportsAnalytics(deviceId, (await state.snapshot()).devices),
             noWorkspace: {
               // The desktop's sidebar lists a chat only once it knows the chat's workspace, so a
               // hidden record made or removed here is announced like any other workspace change.
@@ -1396,6 +1420,11 @@ async function createRuntime(): Promise<AidenRemoteRuntime> {
     approvedRoots: new AidenRemoteApprovedRootService(state),
     mcp,
     mcpProvenance,
+    chatServices: async () => {
+      const api = await remoteWorkspaceApi?.((await state.snapshot()).instanceId);
+      if (!api) throw new Error("Aiden's chat services are unavailable.");
+      return api;
+    },
     revokeDevice,
     // A phone turn's card first, then the card of an owed turn no window owns.
     pendingApprovalForChat: (chatId) =>
@@ -1468,4 +1497,14 @@ export async function revokeAidenMcpApp(appId: string): Promise<boolean> {
 /** The outside app that started `chatId` through the MCP server, for the chat's "Started by" label. */
 export async function aidenMcpChatProvenance(chatId: string): Promise<AidenMcpChatProvenance | undefined> {
   return (await getAidenRemoteRuntime()).mcpProvenance.get(chatId);
+}
+
+/** The chat and stream services `child_chats` runs started chats through. */
+export async function aidenChatOrchestrationServices() {
+  return (await getAidenRemoteRuntime()).chatServices();
+}
+
+/** This computer's name as the person sees it, for "approve in Aiden on …". */
+export async function aidenHostDisplayName(): Promise<string> {
+  return (await (await getAidenRemoteRuntime()).state.snapshot()).displayName;
 }

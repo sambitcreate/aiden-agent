@@ -66,7 +66,7 @@ export function visibleOnboardingFeatures<
   T extends { id: string; description: string | ((computer: LocalComputerNoun) => string) },
 >(
   features: readonly T[],
-  capabilities: { computerUse: boolean; bots: boolean; botComputers: boolean; platform: string; designMode?: boolean; mcpServer?: boolean },
+  capabilities: { computerUse: boolean; bots: boolean; botComputers: boolean; platform: string; designMode?: boolean; mcpServer?: boolean; childChats?: boolean },
 ): (T & { description: string })[] {
   return features.filter((feature) =>
     (capabilities.computerUse || feature.id !== "computerUse") &&
@@ -74,6 +74,8 @@ export function visibleOnboardingFeatures<
     (capabilities.designMode !== false || feature.id !== "designMode") &&
     // Apps using Aiden exists only where the desktop can host the MCP server.
     (capabilities.mcpServer === true || feature.id !== "otherApps") &&
+    // Chats start other chats only where the desktop can run them (Mac and Linux).
+    (capabilities.childChats === true || feature.id !== "chatsRunChats") &&
     (capabilities.bots || feature.id !== "bots") &&
     (capabilities.bots || feature.id !== "botOpenWork") &&
     (capabilities.bots || feature.id !== "botRoutineModels") &&

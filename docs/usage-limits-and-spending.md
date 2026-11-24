@@ -53,6 +53,8 @@ Spending limits stop a chat, a Bot or a routine run once it has spent a set amou
 
 Only requests paid for with an **API key** count. A Claude or ChatGPT sign-in (a subscription), and models running on the computer, count as $0. A chat's helpers count toward that chat, including the summaries a helper writes to shorten its history; a helper checks the balance before each summary. Prices come from the model catalog Aiden ships; a model with no price counts as $0.
 
+The check that asks a keep-going goal's chat model whether the goal is done (`goal-review` in usage) counts toward that chat too, and is checked against the chat's limit before it is sent: a chat at its limit sends no review.
+
 Bot conversation summaries and helpers run under the originating input’s Bot and routine budget scopes. The Bot memory review and chat titles remain outside this accounting.
 
 ### The three limits
@@ -99,5 +101,6 @@ Aiden On The Go for iPhone and Android shows the same 80% line and reached notic
 - `main/services/usage-limit-core.ts`: reading a rejection (status, headers, text), wait times, and the gate that lets one test request through per limit. `usage-limit-stream.ts` wraps a Pi stream function with it; `usage-limit-service.ts` saves waits and broadcasts them; `usage-limit-main.ts` binds it to Electron.
 - `main/services/provider-failure.ts`: the existing provider-failure classifier the wait builds on.
 - `main/services/spending-core.ts`, `spending-service.ts`, `spending-main.ts`: the ledger, the meter wrapped around each request, and its Electron binding. `aiden-remote-spending.ts` is the phone projection.
+- `main/services/goal/goal-reviewer.ts`: the goal review's spending pre-check, its cost and its `goal-review` usage record.
 - `renderer/shared/usage-limits.ts` and `renderer/shared/spending.ts`: settings, parsing and the words the app shows.
 - `renderer/components/settings/limits-settings.tsx`: Settings → Context & Limits. `renderer/components/spending/` and `renderer/main/bots/bot-spending-section.tsx`: the notices and the Bot's Advanced-tab row.

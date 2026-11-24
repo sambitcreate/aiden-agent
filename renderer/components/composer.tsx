@@ -52,6 +52,8 @@ import {
 import { DesignCommentTray } from "../design/design-comment-tray";
 import { useComposerContextChips } from "./use-composer-context-chips";
 import { FollowThroughChips } from "./follow-through-chips";
+import { StartedChatsChip } from "./started-chats-chip";
+import { ChatTaskChip } from "./chat-task-chips";
 import { ChatPullRequestsChip } from "./chat-pull-requests";
 import { GitBranchPicker, type GitBranchPickerDraft } from "./git-branch-picker";
 import { isWorktreeSendCancelled } from "../lib/draft-worktree-send";
@@ -90,6 +92,8 @@ import {
 import { isUsable } from "../lib/model-picker-data";
 import { openWorkspaceSettings } from "./workspace-settings-dialog";
 import { aidenLivePreferences } from "../shared/aiden-live-settings";
+import { parseGoalCommand } from "../shared/goal";
+import { goalBarView } from "../lib/goal-bar-view";
 import {
   APPROVAL_MODE_LABELS,
   APPROVAL_MODES,
@@ -231,7 +235,8 @@ interface ComposerProps {
     text: string,
     attachments: Attachment[],
     skillInvocation?: SkillInvocationV1,
-    options?: { visualize?: boolean; btw?: boolean },
+    /** `goal`: set this chat's keep-going goal once the message is saved, before its answer starts. */
+    options?: { visualize?: boolean; btw?: boolean; goal?: string },
   ) => Promise<void>;
   onQueue?: ComposerProps["onSend"];
   onSteer?: ComposerProps["onSend"];
@@ -988,6 +993,7 @@ export function Composer({
           : workspace.permission === "none"
             ? "Turn on folder access for this chat first."
             : undefined,
+      goalBlockedReason: surfaces.localContext ? undefined : `Available in chats on this ${localComputerNoun(platform)}.`,
       chatCloneBlockedReason: forkEligibility.cloneBlocked
         ? "This chat has too many messages to clone safely. Fork from an earlier turn instead."
         : undefined,
@@ -1385,6 +1391,8 @@ export function Composer({
       skillRevision: number;
       visualize?: boolean;
       btw?: boolean;
+      /** The message is a goal's objective: the chat's goal is set before its answer starts. */
+      goal?: string;
       mode?: BusySendMode;
       afterCompaction?: boolean;
       afterForkSummary?: boolean;
@@ -1438,8 +1446,8 @@ export function Composer({
           payload.sendText,
           payload.attachments,
           payload.selectedSkill?.invocation,
-          payload.visualize || payload.btw
-            ? { visualize: payload.visualize, btw: payload.btw }
+          payload.visualize || payload.btw || payload.goal
+            ? { visualize: payload.visualize, btw: payload.btw, ...(payload.goal ? { goal: payload.goal } : {}) }
             : undefined,
         );
         if (payload.mode === "queue") {
@@ -1624,11 +1632,59 @@ export function Composer({
               toast.info("Add the check after /until, for example /until npm test.");
               return false;
             }
-            await chatsApi.setDoneWhenCheck(chatId, argument);
-            toast.success(`Aiden runs ${argument} after each answer until it passes, 5 checks at most.`);
+            await chatsApi.setGoalCheck(chatId, argument);
             return true;
           } catch (error) {
             toast.error(error instanceof Error ? error.message : "That could not be set up.");
+            return false;
+          }
+        },
+        goal: async (argument) => {
+          const command = parseGoalCommand(argument ? `/goal ${argument}` : "/goal");
+          if (!command) return false;
+          try {
+            switch (command.kind) {
+              case "invalid":
+                toast.info(command.message);
+                return false;
+              case "show": {
+                const goal = await chatsApi.goal(chatId);
+                if (!goal) toast.info("This chat has no goal. Type /goal and what Aiden should finish.");
+                else {
+                  const view = goalBarView(goal);
+                  toast.info(`${view.title}: ${view.detail}`);
+                }
+                return true;
+              }
+              case "pause":
+                if (!(await chatsApi.pauseGoal(chatId))) toast.info("This chat has no goal to pause.");
+                return true;
+              case "resume":
+                if (!(await chatsApi.resumeGoal(chatId))) toast.info("This chat has no goal to resume.");
+                return true;
+              case "clear":
+                await chatsApi.clearGoal(chatId);
+                return true;
+              case "set": {
+                if (isGenerating || sending || hasQueuedMessages) {
+                  toast.info("Finish the current answer first, then set the goal.");
+                  return false;
+                }
+                // The objective is the person's message. The pane sets the goal once it is
+                // saved (creating the chat first in a draft), before the answer starts, so
+                // the kickoff note rides on that answer.
+                return sendComposerPayload({
+                  draftText: text,
+                  sendText: command.objective,
+                  attachments,
+                  selectedSkill,
+                  skillRevision: skillSelection.revision,
+                  goal: command.objective,
+                });
+              }
+            }
+          } catch (error) {
+            toast.error(error instanceof Error ? error.message : "The goal could not be changed.");
             return false;
           }
         },
@@ -2443,7 +2499,7 @@ export function Composer({
   const WorkspaceChipIcon = noWorkspace ? MessageCircle : Folder;
   const hasUserMessages =
     sessionChat?.messages.some((message) => message.role === "user") ?? hasMessages;
-  const { chips: contextChips, pullRequestAnnouncement } = useComposerContextChips({
+  const { chips: contextChips, pullRequestAnnouncement, postingTasks, startedChats } = useComposerContextChips({
     chatId,
     started: hasUserMessages,
     workspace,
@@ -2634,7 +2690,17 @@ export function Composer({
                 <ChatPullRequestsChip chatId={chatId} />
               </span>
             ) : null}
+            {contextChips.startedChats ? (
+              <span className="composer-context-chip-enter flex shrink-0">
+                <StartedChatsChip leadChatId={chatId} views={startedChats} />
+              </span>
+            ) : null}
             {contextChips.followThrough ? <FollowThroughChips chatId={chatId} /> : null}
+            {contextChips.tasks ? (
+              <span className="composer-context-chip-enter flex shrink-0">
+                <ChatTaskChip tasks={postingTasks} />
+              </span>
+            ) : null}
             {/* Polite, focus-free notice when the PR chip appears mid-chat. */}
             <span role="status" className="sr-only">
               {pullRequestAnnouncement}

@@ -356,6 +356,15 @@ Computer Use smoke is accepted until its identity-bound receipt exists.
   `no_drop`); Aiden then invalidates the capture and tells the model to capture
   and check before any foreground retry. Aiden never re-sends the drag itself. Drag still has no element endpoints: a named
   element becomes its center point.
+- Turns nobody started from a window (unattended follow-ups, a paired
+  device's turns, turns Aiden owes a chat) refuse `computer_use`. A
+  [keep-going goal](keep-going-goals.md) round may use it only when it starts
+  in a focused window that shows the chat on an unlocked screen; the round is
+  then that window's own run, with the same access card, approval mode and
+  lock-screen refusal as the person's message. Focus is checked only before the
+  round starts, since Computer Use brings other apps forward; the window
+  closing, reloading or showing another chat stops the round. A round without
+  a window is refused the tool and the goal bar offers **Continue here**.
 - Dangerous system shortcuts and destructive shell-like text are rejected
   before the approval prompt.
 - Screenshots and base64 image payloads remain transient in the Pi tool loop;

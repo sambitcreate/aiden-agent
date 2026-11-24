@@ -72,12 +72,16 @@ export function createCliScheduler(agentDir: string) {
           }
         } catch (cause) { error = cause instanceof Error ? cause.message : String(cause); }
         finally { active.delete(task.id); }
-        return store.recordRun({ taskId: task.id, startedAt, finishedAt: Date.now(), result: error ? "error" : "success", output, error });
+        return store.recordRun({ taskId: task.id, startedAt, finishedAt: Date.now(), result: error ? "error" : "success", output, error,
+          // A run started by hand never counts toward pausing the task.
+          ...(trigger?.kind === "manual" ? { byHand: true as const } : {}) });
       },
     },
   });
   async function saveInput(input: ScheduledTaskInput, options?: { expectedUpdatedAt?: number; signal?: AbortSignal }) {
     input = structuredClone(input);
+    // The server has no watch, link or connector runner, so a task that would run from one never starts here.
+    if (input.trigger) throw new Error("Tasks that run when something changes, from a link or from a connected app run in the desktop app only.");
     if (input.botId) return service.save(input, options);
         if (input.mode === "script" && input.permission !== "full") throw new Error("Script schedules require explicit full permission.");
         const servers = await storeFor(agentDir).load();

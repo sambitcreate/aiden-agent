@@ -1,3 +1,4 @@
+import type { AidenRemoteNewWorktreeOptions } from "./aiden-remote-new-worktree.js";
 import { parseChatInputSource } from "../../renderer/shared/chat-input-source.js";
 import type { WorkspaceChatAssignment } from "./workspace-application-service.js";
 import { agentNoticeDisplayText, parseAgentNoticeV1 } from "../../renderer/shared/agent-notices.js";
@@ -11,6 +12,7 @@ import {
   timingSafeEqual,
 } from "node:crypto";
 import { ASSISTANT_WORKSPACE_ID } from "../../renderer/shared/assistant.js";
+import { CHILD_CHATS_TOOL_NAME } from "../../renderer/shared/child-chats.js";
 import { chatSurface } from "../../renderer/shared/chat-visibility.js";
 import { hostInboxPlacement, type HostInboxSignals, type InboxBucket } from "../../renderer/shared/inbox-state.js";
 import { persistedChatWorkspaceId } from "../../renderer/shared/chat-workspace.js";
@@ -132,6 +134,10 @@ import {
 } from "./skill-invocation-turn.js";
 import type { RegisteredSkill } from "./skill-registry.js";
 import { workspaceMutationGate } from "./workspace-mutation-gate.js";
+import { chatAudienceLead, isChatAudience } from "./chat-orchestration/audience.js";
+
+/** Tools an outside MCP app's turns are never offered (Phase 5 review). */
+const OUTSIDE_APP_EXCLUDED_TOOLS: ReadonlySet<string> = new Set([CHILD_CHATS_TOOL_NAME]);
 
 const SAFE_ID = /^[A-Za-z0-9._:-]{1,128}$/u;
 const IDEMPOTENCY_KEY = /^[\x21-\x7e]{16,128}$/u;
@@ -1417,6 +1423,7 @@ export class AidenRemoteChatService {
             botAudienceId?: string;
             excludeToolNames?: ReadonlySet<string>;
             questionPromptsUnavailable?: true;
+            leadChatTurn?: true;
             onTurnAccepted(): void;
           },
         ): Promise<boolean>;
@@ -1463,9 +1470,16 @@ export class AidenRemoteChatService {
           sourceWorkspaceId: string,
           text: string,
           chatId: string,
+          options?: AidenRemoteNewWorktreeOptions,
         ): Promise<{ workspaceId: string; branch: string }>;
         /** The branch of the worktree New worktree made for this chat, when the chat is in it. */
-        worktreeBranch(chatId: string, workspaceId: string): Promise<string | undefined>;
+        worktreeBranch(chatId: string, workspaceId: string, key?: string): Promise<string | undefined>;
+        /**
+         * Removes a worktree `create` just made when the chat could not move
+         * into it, so a failed request leaves nothing behind. A retry makes
+         * it again. Refuses (and the worktree stays) when it holds work.
+         */
+        discard?(workspaceId: string): Promise<void>;
       };
       idempotency?: AidenIdempotencyLedger;
       persistIdempotency?: (snapshot: AidenIdempotencySnapshot) => Promise<void>;
@@ -1475,6 +1489,12 @@ export class AidenRemoteChatService {
        * excluded from that device's turns so a prompt can never be stranded.
        */
       deviceSupportsQuestionPrompts?: (deviceId: string) => Promise<boolean>;
+      /**
+       * Whether the device is an outside MCP app (type "agent"). Its turns are
+       * never offered `child_chats`: a chat it started can't start chats past
+       * the app's own limits (Phase 5 review).
+       */
+      deviceIsOutsideApp?: (deviceId: string) => Promise<boolean>;
       /**
        * Why a workspace's turns are refused when its folder (or its managed
        * worktree's checkout) was moved or deleted, so a paired device hears
@@ -2207,7 +2227,11 @@ export class AidenRemoteChatService {
             const workspaceId = assignment?.workspaceId ?? (typeof target === "string" ? target : parsed.workspaceId);
             let uncertain = false;
             try {
-              const reportAnalytics = (await this.options.deviceReportsAnalytics?.(deviceId)) !== false;
+              const reportAnalytics =
+                !isChatAudience(deviceId) && (await this.options.deviceReportsAnalytics?.(deviceId)) !== false;
+              // A chat a lead chat starts records its lead, once, at creation.
+              const lead = chatAudienceLead(deviceId);
+              const startedBy = lead ? { version: 1 as const, kind: "chat" as const, chatId: lead, at: Date.now() } : undefined;
               return await this.options.application.create(
                 {
                   workspaceId,
@@ -2216,7 +2240,9 @@ export class AidenRemoteChatService {
                     : {}),
                 },
                 owner,
-                ...(reportAnalytics ? [] : [{ reportAnalytics: false }] as const),
+                ...(reportAnalytics && !startedBy
+                  ? []
+                  : [{ ...(reportAnalytics ? {} : { reportAnalytics: false }), ...(startedBy ? { startedBy } : {}) }] as const),
               );
             } catch (error) {
               uncertain = isChatCreateReconciliationRequiredError(error);
@@ -2309,6 +2335,8 @@ export class AidenRemoteChatService {
     revision: string,
     key: string,
     input: unknown,
+    /** Set only in-process, for a chat a lead chat started (Phase 5, D5); never from a phone. */
+    worktree: AidenRemoteNewWorktreeOptions = {},
   ): Promise<{ chat: AidenRemoteChatProjection; branch: string }> {
     const newWorktrees = this.options.newWorktrees;
     if (!newWorktrees) throw new AidenRemoteServiceError("not_found", "This endpoint is unavailable.", 404);
@@ -2338,7 +2366,7 @@ export class AidenRemoteChatService {
         async () => {
           const chat = await this.chat(chatId);
           if (chat.messages.length === 0 && chat.workspaceId) {
-            const branch = await newWorktrees.worktreeBranch(chatId, chat.workspaceId);
+            const branch = await newWorktrees.worktreeBranch(chatId, chat.workspaceId, worktree.key);
             if (branch) return { chat: projectAidenRemoteChat(chat), branch };
           }
           // Messages first: appending one changes the revision, and a chat that
@@ -2351,7 +2379,7 @@ export class AidenRemoteChatService {
           const sourceWorkspaceId = chat.workspaceId;
           let created: { workspaceId: string; branch: string };
           try {
-            created = await newWorktrees.create(deviceId, sourceWorkspaceId, parsed.text, chatId);
+            created = await newWorktrees.create(deviceId, sourceWorkspaceId, parsed.text, chatId, worktree);
           } catch (error) {
             if (error instanceof AidenRemoteServiceError) throw error;
             throw new AidenRemoteServiceError(
@@ -2370,8 +2398,12 @@ export class AidenRemoteChatService {
               },
             }) as Chat;
           } catch (error) {
-            if (error instanceof AidenRemoteServiceError) throw error;
             const current = await this.chat(chatId).catch(() => undefined);
+            // The chat stayed out of the worktree made for it: take it away again.
+            if (current?.workspaceId !== created.workspaceId) {
+              await newWorktrees.discard?.(created.workspaceId).catch(() => undefined);
+            }
+            if (error instanceof AidenRemoteServiceError) throw error;
             if (current && current.messages.length > 0) throw notEmpty();
             throw new AidenRemoteServiceError(
               "operation_in_progress",
@@ -2867,9 +2899,14 @@ export class AidenRemoteChatService {
             thinkingLevel: parsed.thinkingLevel,
             ...(authoritative.botId ? { botAudienceId: deviceId } : {}),
             ...(inlineVisuals ? { inlineVisuals } : {}),
-            ...((await this.options.deviceSupportsQuestionPrompts?.(deviceId)) === true
+            // A lead chat's started chat asks on the desktop card, which always reads questions.
+            ...(isChatAudience(deviceId) || (await this.options.deviceSupportsQuestionPrompts?.(deviceId)) === true
               ? {}
               : { questionPromptsUnavailable: true }),
+            ...(isChatAudience(deviceId) ? { leadChatTurn: true } : {}),
+            ...(!isChatAudience(deviceId) && (await this.options.deviceIsOutsideApp?.(deviceId)) === true
+              ? { excludeToolNames: OUTSIDE_APP_EXCLUDED_TOOLS }
+              : {}),
             onTurnAccepted: () => {
               accepted = true;
               this.options.streams.markRunning(deviceId, streamId);
@@ -2999,6 +3036,8 @@ export class AidenRemoteChatService {
                   content: parsed.text,
                   ...(attachments?.length ? { attachments } : {}),
                   ...(preparedSkill ? { skill: preparedSkill.provenance } : {}),
+                  // The lead chat sent it: the desktop labels it "From “<lead>”".
+                  ...(isChatAudience(deviceId) ? { fromLeadChat: true as const } : {}),
                 },
                 {
                   providerId: selection.providerId,
@@ -3023,7 +3062,7 @@ export class AidenRemoteChatService {
               surface,
               owner.owner,
             );
-            if (started && (await this.options.deviceReportsAnalytics?.(deviceId)) !== false) {
+            if (started && !isChatAudience(deviceId) && (await this.options.deviceReportsAnalytics?.(deviceId)) !== false) {
               reportChatMessageSent({
                 providerId: selection.providerId,
                 model: selection.modelId,

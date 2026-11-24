@@ -9,6 +9,7 @@ import { terminalAssistantThinkingSegments } from "./generation-runtime.js";
 import { markMcpAgentTool, mcpToolActivityLabel } from "./mcp-tool-identity.js";
 import { mcpAgentToolPresentation } from "./mcp-tool-result.js";
 import { assistantPresentationRows } from "../../renderer/lib/assistant-message-presentation.js";
+import { activityLineText } from "../../renderer/lib/agent-steps.js";
 import {
   isToolStep,
   parseGenerationTimeline,
@@ -1268,4 +1269,38 @@ test("a run that writes a line before every call still keeps a timeline past the
   const rows = assistantPresentationRows(content, final)!;
   assert.equal(rows.filter((row) => row.kind === "text").map((row) => row.content).join(""), content);
   assert.equal(toolSteps(final)[0]?.target, "src/file-30.ts");
+});
+
+test("a started-chats row names the action and how many chats, never a task or message", () => {
+  const projector = new GenerationTimelineProjector("generation-child-chats", () => {}, () => Date.UTC(2026, 10, 22, 14, 50));
+  projector.toolStarted("start", "child_chats", {
+    action: "start",
+    chats: [
+      { title: "Docs", task: "private task about the release" },
+      { title: "Tests", task: "another private task" },
+    ],
+  });
+  projector.toolStarted("send", "child_chats", { action: "send", chat_id: "c1", text: "private follow-up" });
+  projector.toolStarted("wait", "child_chats", { action: "wait", chat_ids: ["c1"] });
+  projector.toolStarted("result", "submit_result", { result: { summary: "private result" } });
+  const [start, send, wait, result] = toolSteps(projector.snapshot());
+  assert.equal(result!.label, "Submit result");
+  assert.equal(start!.label, "Start chats");
+  assert.equal(start!.detail, "2 chats");
+  assert.equal(send!.label, "Send to a started chat");
+  assert.equal(wait!.label, "Wait for started chats");
+  assert.doesNotMatch(JSON.stringify(projector.snapshot()), /private/u);
+});
+
+test("a check-back row names its time once set, and never the note", () => {
+  const projector = new GenerationTimelineProjector("generation-check-back", () => {}, () => Date.UTC(2026, 10, 22, 14, 50));
+  projector.toolStarted("set", "check_back", { action: "set", in_minutes: 20, note: "private note about the deploy" });
+  projector.toolStarted("list", "check_back", { action: "list" });
+  projector.toolFinished("set", "completed", { checkBack: { fireAt: Date.UTC(2026, 10, 22, 15, 10) } });
+  projector.toolFinished("list", "completed", {});
+  const [set, list] = toolSteps(projector.snapshot());
+  assert.equal(activityLineText(set!), `Will check back ${set!.detail}`);
+  assert.match(set!.detail ?? "", /^(at|tomorrow at) \d{1,2}:\d{2} [AP]M$/u);
+  assert.equal(activityLineText(list!), "List check-backs");
+  assert.doesNotMatch(JSON.stringify(projector.snapshot()), /private note/u);
 });
