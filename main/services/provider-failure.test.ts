@@ -12,6 +12,7 @@ import {
   parseProviderFailureV1,
   providerFailurePresentation,
 } from "../../renderer/shared/provider-failure.js";
+import { normalizeDiagnosticFields } from "./diagnostics-contract.js";
 
 const PRIVATE_CANARY = "PRIVATE_PROVIDER_DETAIL_7dbfe9";
 
@@ -45,6 +46,13 @@ test("main-only provider diagnostics distinguish model availability without pers
   });
   assert.equal(hangUp.providerCategory, "network");
   assert.equal(hangUp.transportCause, "socket-closed");
+  const codexLimit = providerFailureDiagnosticFields({
+    kind: "provider_failed", reason: "request-failed", attempts: 1,
+    finalMessage: { errorMessage: `Responses websocket connection limit reached ${PRIVATE_CANARY}` },
+  });
+  assert.equal(codexLimit.providerCategory, "network");
+  assert.equal(codexLimit.transportCause, "websocket-closed");
+  assert.equal(normalizeDiagnosticFields(codexLimit)?.transportCause, "websocket-closed");
 });
 
 function classify(

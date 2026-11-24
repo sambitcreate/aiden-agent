@@ -3454,3 +3454,9 @@ test("prompt-cache miss detection agrees with Pi's detectCacheMiss over a mixed 
   }
   assert.ok(compared > 100 && misses > 10, `the sequence exercised misses (${misses} of ${compared})`);
 });
+
+test("Aiden's copy of Pi's per-provider default models matches the pinned pi-coding-agent", async () => {
+  // Pi does not export this table from its package entry, so load the module file directly.
+  const resolver = await import(pathToFileURL(join(pkg, "node_modules/@earendil-works/pi-coding-agent/dist/core/model-resolver.js")).href);
+  assert.deepEqual({ ...api.PI_DEFAULT_MODEL_PER_PROVIDER }, { ...resolver.defaultModelPerProvider });
+});
