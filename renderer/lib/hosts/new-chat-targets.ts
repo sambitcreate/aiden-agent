@@ -146,6 +146,8 @@ export interface RemoteBotChoice {
   lastReplyAt?: number;
   /** The Bot's photo, as the host lists it; read on demand. */
   photo?: RemoteBotPhotoAsset;
+  /** The host read this Bot's summary (revision 66): no `preview` or `lastReplyAt` means it has none. */
+  summarized?: true;
 }
 
 /** The longest preview a remote Bot row shows; a host sends at most this (revision 66). */
@@ -195,6 +197,7 @@ export function remoteBotGroups(
           ...(preview ? { preview } : {}),
           ...(Number.isFinite(lastReplyAt) && lastReplyAt > 0 ? { lastReplyAt } : {}),
           ...(photo ? { photo } : {}),
+          ...(row.summarized === true ? { summarized: true as const } : {}),
         };
       });
     if (bots.length === 0) continue;

@@ -4009,6 +4009,7 @@ test("revision 66 host feed Bot rows carry a one-line preview and refuse anythin
   assert.ok(upsert, "the fixture sends a Bot row");
   assert.equal(typeof upsert.payload.preview, "string");
   assert.equal(upsert.payload.needsYou, true);
+  assert.equal(upsert.payload.summarized, true);
 
   const row = (raw.hostFeedEvents as { type: string; payload: Record<string, unknown> }[])
     .find((event) => event.type === "bot.upsert")!.payload;
@@ -4022,6 +4023,7 @@ test("revision 66 host feed Bot rows carry a one-line preview and refuse anythin
   assert.doesNotThrow(parse({ preview: "family 👨\u200D👩\u200D👧" }), "emoji joiners stay");
   assert.throws(parse({ needsYou: false }), /needsYou/u);
   assert.throws(parse({ failed: "yes" }), /failed/u);
+  assert.throws(parse({ summarized: false }), /summarized/u);
   assert.throws(parse({ lastReplyAt: "yesterday" }));
   assert.throws(parse({ issueCount: 2 }), /issueCount/u);
   assert.throws(parse({ secret: "x" }), /unsupported field/u);
@@ -4035,4 +4037,5 @@ test("revision 66 host feed Bot rows carry a one-line preview and refuse anythin
   const feedBot = ajv.compile({ $ref: "#/components/schemas/HostFeedBot", components: spec.components });
   assert.equal(feedBot(row), true, JSON.stringify(feedBot.errors));
   assert.equal(feedBot({ ...row, preview: "x".repeat(141) }), false);
+  assert.equal(feedBot({ ...row, summarized: false }), false);
 });
