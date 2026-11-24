@@ -43,7 +43,7 @@ export interface RemoteBotSessionView {
   paused: boolean;
   /** Contract revision 67: the host holds entries older than the oldest one here. */
   hasOlder: boolean;
-  /** The host's id of the oldest entry here, drawn or not: where the next older page ends. */
+  /** While `hasOlder`, the host's id of the oldest entry here, drawn or not: where the next older page ends. */
   olderCursor: string | null;
 }
 
@@ -249,7 +249,8 @@ export function remoteBotSessionView(session: AidenRemoteBotSession): RemoteBotS
     handoff: session.handoff ?? null,
     paused: remoteBotSessionPaused(session),
     hasOlder: session.hasOlder,
-    olderCursor: session.entries[0]?.id ?? null,
+    // Only a transcript with more before it needs a place to page back from.
+    olderCursor: session.hasOlder ? (session.entries[0]?.id ?? null) : null,
   };
 }
 
@@ -292,7 +293,7 @@ export function withOlderRemoteBotEntries(
     ...view,
     snapshot: { ...view.snapshot, entries: [...older, ...view.snapshot.entries] },
     hasOlder: page.hasOlder,
-    olderCursor: page.entries[0]?.id ?? view.olderCursor,
+    olderCursor: page.hasOlder ? (page.entries[0]?.id ?? view.olderCursor) : null,
   };
 }
 

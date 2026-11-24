@@ -765,7 +765,7 @@ test("a message waiting for a Bot on another computer can be taken back from her
   await act(async () => {
     fireEvent.click(screen.getByRole("button", { name: "Remove queued message: and Friday?" }));
   });
-  await waitFor(() => assert.equal(told.at(-1), "Update Aiden on Studio to remove a waiting message from here."));
+  await waitFor(() => assert.equal(told[told.length - 1], "Update Aiden on Studio to remove a waiting message from here."));
 });
 
 test("earlier messages of a Bot on another computer load a page at a time above the chat", async () => {
