@@ -1893,11 +1893,11 @@ class AidenBotSessionController(
         } catch (error: CancellationException) { throw error
         } catch (error: Exception) {
             if (generation != planGeneration || released || planWrites != writes || _state.value.session?.plan != shown) return false
-            if (error is AidenRemoteClientException.Server && error.statusCode == 409 && error.body.code == AidenRemoteErrorCode.PLAN_EXPIRED) {
+            if (error is AidenRemoteClientException.Server && error.isDecodedEnvelope && error.statusCode == 409 && error.body.code == AidenRemoteErrorCode.PLAN_EXPIRED) {
                 planKeys.clear()
                 _state.update { it.copy(session = it.session?.copy(plan = null), planError = null) }
             } else {
-                if (error is AidenRemoteClientException.Server && error.statusCode < 500) planKeys.remove(action)
+                if (aidenBotMacAnswered(error)) planKeys.remove(action)
                 _state.update { it.copy(planError = "That answer wasn't sent. Please try again.") }
             }
             false

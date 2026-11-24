@@ -32,6 +32,7 @@ import org.junit.Test
 import org.junit.rules.TemporaryFolder
 import sbtbiswas.AidenOnTheGo.features.shared.activitymarks.AidenActivityMarkKind
 import sbtbiswas.AidenOnTheGo.models.*
+import sbtbiswas.AidenOnTheGo.networking.AidenRemoteClient
 import sbtbiswas.AidenOnTheGo.peerFixture
 import sbtbiswas.AidenOnTheGo.protocol.AidenRemoteCapability
 import java.time.Instant
@@ -221,7 +222,12 @@ class AidenBotSessionControllerTest {
         controller.stopFollowing()
     }
     @Test fun sameDecisionUnknownRetryKeepsKeyAndDifferentDecisionSendsNewBody() = runTest {
-        for (failure in listOf(IOException("lost"), planError(503))) {
+        val inFlight409 = AidenRemoteClientException.Server(
+            409,
+            AidenRemoteErrorEnvelope.Body(AidenRemoteErrorCode.IDEMPOTENCY_IN_FLIGHT, "In flight", "req_in_flight", true)
+        )
+        val malformed409 = AidenRemoteClient.parseError(409, "{\"error\":{\"code\":\"idempotency_in_flight\"".toByteArray(Charsets.UTF_8))
+        for (failure in listOf(IOException("lost"), planError(503), inFlight409, malformed409)) {
             val initial = planSession(); val transport = FakeTransport(initial)
             val controller = AidenBotSessionController(initial.botId, transport, backgroundScope, plansSupported = true)
             controller.refetch(); transport.planFailure = failure
