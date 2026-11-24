@@ -53,6 +53,10 @@ export const ANALYTICS_EVENTS = {
     in_workspace: bool,
     thinking: enumProp("off", "minimal", "low", "medium", "high", "xhigh", "max", "other"),
     origin: enumProp("desktop", "phone", "peer", "bot", "schedule"),
+    // The Agent Slider stop the chat sat on (1-based, left to right) or custom,
+    // and how many stops the slider has. Desktop sends with a readable slider only.
+    slider_stop: optional(enumProp("1", "2", "3", "4", "5", "6", "7", "custom")),
+    slider_stop_count: optional({ kind: "integer", min: 3, max: 7 } as const),
   },
   chat_created: { workspace_kind: enumProp("folder", "scratch", "worktree", "none") },
   provider_connected: { provider_id: id, auth: enumProp("key", "oauth", "local") },
