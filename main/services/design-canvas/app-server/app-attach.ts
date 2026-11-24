@@ -8,12 +8,14 @@
  */
 import path from "node:path";
 import type { DesignAppRunningServer } from "../../../../renderer/shared/design-app.js";
+import { BACKGROUND_JOB_MARKER } from "../../follow-through/background-jobs.js";
 import {
   isLoopbackAddress,
   listeningSocketsByProcess,
   MAX_SCAN_PIDS,
   portHolders,
   processFolders,
+  processEnvironmentMarks,
   processNames,
   processSubtree,
   processTable,
@@ -98,6 +100,22 @@ function relativeInside(root: string, folder: string): string | undefined {
   if (relative === "") return ".";
   if (relative === ".." || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative)) return undefined;
   return relative.split(path.sep).join("/");
+}
+
+/** The entry every background job's processes start with (A-M2), whatever the job id. */
+const JOB_MARKER_PREFIX = `${BACKGROUND_JOB_MARKER}=`;
+
+/**
+ * Whether a holder's subtree may attach as far as background jobs go (A-M2):
+ * `marked` when a process in it carries a job's marker (a job's child that
+ * left the job's tree with `setsid` is still the job's), `unreadable` when an
+ * environment couldn't be read. Fails closed: a failed read is `unreadable`.
+ */
+async function jobMarkVerdict(subtree: readonly number[], deps: AttachScanDeps): Promise<"clear" | "marked" | "unreadable"> {
+  const marks = await processEnvironmentMarks(subtree, JOB_MARKER_PREFIX, deps.reader);
+  if (!marks.ok) return "unreadable";
+  if (subtree.some((pid) => marks.marked.has(pid))) return "marked";
+  return subtree.some((pid) => marks.unreadable.has(pid)) ? "unreadable" : "clear";
 }
 
 const excluded = (port: number, deps: AttachScanDeps) =>
@@ -203,9 +221,24 @@ export async function scanRunningServers(
   }
   const listed = [...holdersByPort.keys()].sort((left, right) => left - right).slice(0, MAX_ROWS);
   const chosen = new Map(listed.map((port) => [port, outermostHolders(rows, holdersByPort.get(port)!).sort((a, b) => a - b)[0]!]));
-  const names = await processNames([...new Set(chosen.values())], deps.reader);
+  // A background job's processes are Aiden's wherever they run now (A-M2); an environment that can't be read hides the row.
+  // Another user's process in a subtree is listed as other-user instead; its environment is never read.
+  const subtreeOf = new Map([...new Set(chosen.values())].map((pid) => [pid, processSubtree(rows, pid).filter((member) => myPids.has(member))]));
+  const marks = await processEnvironmentMarks([...new Set([...subtreeOf.values()].flat())], JOB_MARKER_PREFIX, deps.reader);
+  if (!marks.ok) return { ok: false };
+  let hidden = false;
+  const visible = listed.filter((port) => {
+    const subtree = subtreeOf.get(chosen.get(port)!)!;
+    if (subtree.some((pid) => marks.marked.has(pid))) return false;
+    if (subtree.some((pid) => marks.unreadable.has(pid))) {
+      hidden = true;
+      return false;
+    }
+    return true;
+  });
+  const names = await processNames([...new Set(visible.map((port) => chosen.get(port)!))], deps.reader);
   if (!names.ok) return { ok: false };
-  const servers: DesignAppRunningServer[] = listed.map((port) => {
+  const servers: DesignAppRunningServer[] = visible.map((port) => {
     const pid = chosen.get(port)!;
     const folder = inside.get(pid)!;
     const appRoot = deepestRoot(input.roots, folder);
@@ -215,7 +248,7 @@ export async function scanRunningServers(
     if (input.busyRoots.has(appRoot)) return { ...base, connectable: false, why: "already-running" as const };
     return { ...base, origin: verdict.origin, connectable: true };
   });
-  return { ok: true, incomplete: folders.incomplete || read.incomplete === true, servers };
+  return { ok: true, incomplete: folders.incomplete || read.incomplete === true || hidden, servers };
 }
 
 export type AttachCheck =
@@ -275,6 +308,9 @@ export async function checkAttach(
   const subtree = processSubtree(rows, holder);
   const uidOf = new Map(rows.map((row) => [row.pid, row.uid]));
   if (subtree.some((pid) => uidOf.get(pid) !== deps.uid)) return notLoopback;
+  const marked = await jobMarkVerdict(subtree, deps);
+  if (marked === "marked") return notInApp;
+  if (marked === "unreadable") return unreachable;
   const read = await listeningSocketsByProcess(subtree, deps.reader);
   if (!read.ok) return unreachable;
   const verdict = judgeSubtree(rows, holder, input.port, deps.uid, (pid) => read.byPid.get(pid) ?? []);
@@ -324,11 +360,23 @@ export function rebindHolder(
   return { pid: holder, ppid: rows.find((row) => row.pid === holder)!.ppid };
 }
 
-/** `rebindHolder` over a fresh process table and a strict socket read of the old parent's subtree. */
-export async function findRebind(
-  input: { ppid: number; port: number; held: readonly string[] },
-  deps: AttachScanDeps,
-): Promise<{ pid: number; ppid: number } | undefined> {
+export type RebindInput = { ppid: number; port: number; held: readonly string[]; workspacePath: string; appRoot: string };
+
+/**
+ * What a look for a re-bind found: nothing yet (`undefined`, the watch keeps
+ * waiting), the new holder, or a new holder that may not attach, which
+ * detaches at once with that problem.
+ */
+export type RebindResult = { ok: true; pid: number; ppid: number } | { ok: false; problem: "attach-not-in-app" | "attach-unreachable" } | undefined;
+
+/**
+ * `rebindHolder` over a fresh process table and a strict socket read of the
+ * old parent's subtree. The new holder then passes the attach check's folder
+ * and job rules again (A-M1, A-M2): its folder, read strictly, inside the app
+ * root's real folder, itself inside the workspace's; and no background job's
+ * marker in its subtree. A folder or environment that can't be read refuses.
+ */
+export async function findRebind(input: RebindInput, deps: AttachScanDeps): Promise<RebindResult> {
   if (input.ppid <= 1) return undefined;
   const table = await processTable(deps.reader);
   if (!table.ok) return undefined;
@@ -338,7 +386,24 @@ export async function findRebind(
   const read = await listeningSocketsByProcess(under, deps.reader);
   if (!read.ok) return undefined;
   const found = rebindHolder(table.rows, (pid) => read.byPid.get(pid) ?? [], { ...input, uid: deps.uid });
-  return found && !aiden.has(found.pid) ? found : undefined;
+  if (!found) return undefined;
+  const notInApp = { ok: false, problem: "attach-not-in-app" } as const;
+  if (aiden.has(found.pid)) return notInApp;
+  let workspaceReal: string;
+  try {
+    workspaceReal = await deps.realpath(input.workspacePath);
+  } catch {
+    return notInApp;
+  }
+  const rootReal = await realAppRoot(workspaceReal, input.workspacePath, input.appRoot, deps);
+  if (!rootReal) return notInApp;
+  const folders = await processFolders([found.pid], deps.reader, { uid: deps.uid, maxPids: 1 });
+  const folder = folders.ok ? folders.byPid.get(found.pid) : undefined;
+  if (folder === undefined || relativeInside(rootReal, folder) === undefined) return notInApp;
+  const marked = await jobMarkVerdict(processSubtree(table.rows, found.pid), deps);
+  if (marked === "marked") return notInApp;
+  if (marked === "unreadable") return { ok: false, problem: "attach-unreachable" };
+  return { ok: true, ...found };
 }
 
 /** What `DesignAppServers` asks of the attach code: the scan, the check, re-binds and the workspace's real folder. */
@@ -347,7 +412,7 @@ export interface DesignAppAttachDeps {
   uid: number;
   scan(input: { workspacePath: string; roots: readonly string[]; busyRoots: ReadonlySet<string> }): ReturnType<typeof scanRunningServers>;
   check(input: { workspacePath: string; appRoot: string; port: number; pid?: number }): Promise<AttachCheck>;
-  rebind(input: { ppid: number; port: number; held: readonly string[] }): Promise<{ pid: number; ppid: number } | undefined>;
+  rebind(input: RebindInput): Promise<RebindResult>;
   realpath(target: string): Promise<string>;
 }
 

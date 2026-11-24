@@ -6,7 +6,7 @@ import net from "node:net";
 import path from "node:path";
 import test from "node:test";
 import type { SocketReaderDeps } from "../../follow-through/listening-ports.js";
-import { attachOrigin, attachOrigins, checkAttach, parseAttachUrl, rebindHolder, scanRunningServers, type AttachScanDeps } from "./app-attach.js";
+import { attachOrigin, attachOrigins, checkAttach, findRebind, parseAttachUrl, rebindHolder, scanRunningServers, type AttachScanDeps } from "./app-attach.js";
 
 test("parseAttachUrl accepts a loopback http origin with an explicit port, as written", () => {
   assert.deepEqual(parseAttachUrl("http://localhost:4321"), { ok: true, url: "http://localhost:4321", port: 4321 });
@@ -69,6 +69,8 @@ interface FakeProcess {
   /** "127.0.0.1:5173", "*:3000", "::1:4321" (last colon splits the port). */
   sockets?: string[];
   name?: string;
+  /** The starting environment; "unreadable" for one `ps -E` or /proc can't show (an Apple platform binary on macOS). */
+  env?: string[] | "unreadable";
 }
 
 const ME = 501;
@@ -124,6 +126,17 @@ function world(spec: World) {
         );
         return { ok: true, stdout: rows.join("\n"), stderr: "", exitCode: 0 };
       }
+      if (file === "ps" && args.includes("pid=,command=")) {
+        const pids = args[args.indexOf("-p") + 1]!.split(",").map(Number);
+        const lines = pids.flatMap((pid) => {
+          const entry = spec.processes.find((candidate) => candidate.pid === pid);
+          if (!entry) return [];
+          const env = entry.env ?? ["PATH=/usr/bin", "HOME=/Users/me"];
+          const shown = args.includes("-E") && env !== "unreadable" ? ` ${env.join(" ")}` : "";
+          return [`${pid} /usr/local/bin/${entry.name ?? "node"} --port 1${shown}`];
+        });
+        return { ok: true, stdout: lines.join("\n"), stderr: "", exitCode: lines.length ? 0 : 1 };
+      }
       if (file === "ps") {
         const pids = args[args.indexOf("-p") + 1]!.split(",").map(Number);
         const lines = pids.flatMap((pid) => {
@@ -155,6 +168,14 @@ function world(spec: World) {
       return { ok: true, stdout: lines.join("\n"), stderr: spec.socketStderr ?? "", exitCode: lines.length ? 0 : 1 };
     },
     readFile: async (file) => {
+      const environ = /^\/proc\/(\d+)\/environ$/u.exec(file);
+      if (environ) {
+        const entry = spec.processes.find((candidate) => candidate.pid === Number(environ[1]));
+        if (!entry) throw Object.assign(new Error("ENOENT"), { code: "ENOENT" });
+        const env = entry.env ?? ["PATH=/usr/bin", "HOME=/Users/me"];
+        if (env === "unreadable" || (entry.uid ?? ME) !== ME) throw Object.assign(new Error("EACCES"), { code: "EACCES" });
+        return `${env.join("\0")}\0`;
+      }
       const family = file.endsWith("tcp6") ? 6 : 4;
       const header = "  sl  local_address rem_address   st tx_queue rx_queue tr tm->when retrnsmt   uid  timeout inode";
       const rows = [...inodes]
@@ -297,7 +318,7 @@ test("scan marks rows that can't be connected, and why", async () => {
         { pid: 11, ppid: 10, cwd: `${WORKSPACE}/apps/a`, sockets: ["0.0.0.0:3010"] }, // child binds a wildcard
         { pid: 20, ppid: 1, cwd: `${WORKSPACE}/apps/b`, sockets: ["127.0.0.2:3001"] },
         { pid: 30, ppid: 1, cwd: `${WORKSPACE}/apps/c`, sockets: ["127.0.0.1:3002"] },
-        { pid: 31, ppid: 30, uid: 0, cwd: "/" },
+        { pid: 31, ppid: 30, uid: 0, cwd: "/", env: "unreadable" }, // another user's environment isn't shown
         { pid: 40, ppid: 1, cwd: `${WORKSPACE}/apps/web`, sockets: ["127.0.0.1:3003"] },
       ],
     },
@@ -412,4 +433,68 @@ test("rebindHolder accepts a same-uid loopback holder under the old parent, and 
   assert.equal(rebindHolder([...rows, { pid: 62, ppid: 61, pgid: 50, uid: 0 }], of, input), undefined, "another user's child");
   sockets.set(61, [{ address: "127.0.0.1", port: 5173 }, { address: "0.0.0.0", port: 24000 }]);
   assert.equal(rebindHolder(rows, of, input), undefined, "a wildcard in the new subtree");
+});
+
+// ── Re-binds re-check the folder (A-M1) ──
+
+const rebindWorld = (holder: Partial<FakeProcess>, extra: FakeProcess[] = [], spec: Partial<World> = {}) =>
+  world({
+    ...spec,
+    processes: [
+      { pid: 50, ppid: 1, cwd: `${WORKSPACE}/apps/web`, name: "sh" }, // the runner (old parent)
+      { pid: 61, ppid: 50, cwd: `${WORKSPACE}/apps/web`, sockets: ["127.0.0.1:5173"], ...holder },
+      ...extra,
+    ],
+  });
+const rebindInput = { ppid: 50, port: 5173, held: ["127.0.0.1"], workspacePath: WORKSPACE, appRoot: "apps/web" };
+
+test("findRebind re-binds a new holder in the app root, and refuses one whose folder is outside it or can't be read", async () => {
+  assert.deepEqual(await findRebind(rebindInput, rebindWorld({}).deps), { ok: true, pid: 61, ppid: 50 });
+  assert.deepEqual(await findRebind(rebindInput, rebindWorld({ cwd: `${WORKSPACE}/apps/web/src` }).deps), { ok: true, pid: 61, ppid: 50 });
+  const refused = { ok: false, problem: "attach-not-in-app" };
+  assert.deepEqual(await findRebind(rebindInput, rebindWorld({ cwd: "/Users/me/outside" }).deps), refused, "the same parent, a server started elsewhere");
+  assert.deepEqual(await findRebind(rebindInput, rebindWorld({ cwd: `${WORKSPACE}/apps/admin` }).deps), refused, "another app of the workspace");
+  assert.deepEqual(await findRebind(rebindInput, rebindWorld({ cwd: `${WORKSPACE}/apps/web` }, [], { cwdTimeout: true }).deps), refused, "an unreadable folder");
+  assert.deepEqual(
+    await findRebind(rebindInput, rebindWorld({ cwd: "/elsewhere/web" }, [], { links: { [`${WORKSPACE}/apps/web`]: "/elsewhere/web" } }).deps),
+    refused,
+    "an app root that became a link out of the workspace",
+  );
+  assert.equal(await findRebind(rebindInput, rebindWorld({ sockets: [] }).deps), undefined, "nothing holds the port yet");
+});
+
+// ── Background jobs' processes never attach (A-M2) ──
+
+const MARKED = ["PATH=/usr/bin", "AIDEN_BACKGROUND_JOB=job_deadbeef"];
+
+test("a process carrying a background job's marker never attaches, so the marker sweep and an attached watch never share a process", async () => {
+  // The sweep (`sweepMarked`) signals exactly the processes whose environment carries the marker. Each way a
+  // process becomes attached (the scan's list, the check, a re-bind) refuses every one of them, wherever it now runs.
+  for (const platform of ["darwin", "linux"] as const) {
+    const escapee = server({ ppid: 1, env: MARKED }); // a job's setsid child, re-parented away from the job's tree
+    const swept = [escapee].filter((entry) => Array.isArray(entry.env) && entry.env.some((line) => line.startsWith("AIDEN_BACKGROUND_JOB=")));
+    assert.deepEqual(swept.map((entry) => entry.pid), [10], platform);
+    const listed = await scan({ platform, processes: [escapee] });
+    assert.deepEqual(listed.result.ok && listed.result.servers.map((row) => row.pid), [], `${platform}: never listed`);
+    assert.deepEqual((await check({ platform, processes: [escapee] })).result, { ok: false, problem: "attach-not-in-app" }, `${platform}: never checked in`);
+    assert.deepEqual(await findRebind(rebindInput, rebindWorld({ env: MARKED }, [], { platform }).deps), { ok: false, problem: "attach-not-in-app" }, `${platform}: never re-bound`);
+    // A marked process anywhere in the holder's subtree counts too.
+    const child = { pid: 11, ppid: 10, cwd: "/", env: MARKED };
+    assert.deepEqual((await scan({ platform, processes: [server(), child] })).result.ok && (await scan({ platform, processes: [server(), child] })).result, { ok: true, incomplete: false, servers: [] });
+    assert.deepEqual((await check({ platform, processes: [server(), child] })).result, { ok: false, problem: "attach-not-in-app" });
+    assert.deepEqual(await findRebind(rebindInput, rebindWorld({}, [{ pid: 62, ppid: 61, cwd: "/", env: MARKED }], { platform }).deps), {
+      ok: false,
+      problem: "attach-not-in-app",
+    });
+  }
+});
+
+test("an environment that can't be read fails closed: not listed (incomplete), not checked in, not re-bound", async () => {
+  for (const platform of ["darwin", "linux"] as const) {
+    const hidden = server({ env: "unreadable" }); // macOS: an Apple platform binary, whose environment ps -E doesn't print
+    const listed = await scan({ platform, processes: [hidden] });
+    assert.deepEqual(listed.result, { ok: true, incomplete: true, servers: [] }, platform);
+    assert.deepEqual((await check({ platform, processes: [hidden] })).result, { ok: false, problem: "attach-unreachable" }, platform);
+    assert.deepEqual(await findRebind(rebindInput, rebindWorld({ env: "unreadable" }, [], { platform }).deps), { ok: false, problem: "attach-unreachable" }, platform);
+  }
 });

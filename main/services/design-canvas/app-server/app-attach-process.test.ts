@@ -15,7 +15,8 @@ import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
-import { defaultSocketReaderDeps, readJobSockets } from "../../follow-through/listening-ports.js";
+import { BACKGROUND_JOB_MARKER } from "../../follow-through/background-jobs.js";
+import { defaultSocketReaderDeps, jobProcessTree, portHolders, processTable, readJobSockets } from "../../follow-through/listening-ports.js";
 import { checkAttach, findRebind, rebindHolder, scanRunningServers, type AttachScanDeps } from "./app-attach.js";
 import { defaultOsPort } from "./app-ports.js";
 
@@ -234,8 +235,46 @@ test("with --respawn-child, killing the child leaves a new child under the same 
   }, "a new child to hold the port");
   assert.equal(found.ppid, parent);
   assert.ok(alive(found.pid));
-  // The async helper over a fresh table agrees.
-  assert.deepEqual(await findRebind({ ppid: parent, port, held: first.held }, deps()), found);
+  // The async helper over a fresh table agrees, and reads the new holder's folder: it's in apps/web.
+  const where = { workspacePath: h.workspace, appRoot: "apps/web" };
+  assert.deepEqual(await findRebind({ ppid: parent, port, held: first.held, ...where }, deps()), { ok: true, ...found });
+  // For another app root of the same workspace, the same holder is outside it.
+  await mkdir(path.join(h.workspace, "apps", "admin"), { recursive: true });
+  assert.deepEqual(await findRebind({ ppid: parent, port, held: first.held, workspacePath: h.workspace, appRoot: "apps/admin" }, deps()), {
+    ok: false,
+    problem: "attach-not-in-app",
+  });
   // Under launchd or init there's no re-bind.
-  assert.equal(await findRebind({ ppid: 1, port, held: first.held }, deps()), undefined);
+  assert.equal(await findRebind({ ppid: 1, port, held: first.held, ...where }, deps()), undefined);
+});
+
+test("a server that a background job started and that left the job's tree with setsid is neither listed nor attachable", { skip }, async (t) => {
+  const h = await harness(t);
+  const port = await defaultOsPort();
+  const marker = `--aiden-attach-test=${path.basename(path.dirname(h.workspace))}`;
+  // The job's leader: a shell carrying the job marker, as BackgroundJobs starts one. A node it runs starts the
+  // server in its own session and exits, so the server is re-parented out of the job's process tree.
+  const launcher = `require("node:child_process").spawn(process.execPath, ${JSON.stringify([SERVER, "--host", "127.0.0.1", "--port", String(port), marker])}, { detached: true, stdio: "ignore" }).unref()`;
+  const leader = spawn("/bin/sh", ["-c", `${shellQuote(process.execPath)} -e ${shellQuote(launcher)}; exec sleep 60`], {
+    cwd: h.web,
+    detached: true,
+    stdio: "ignore",
+    env: { ...process.env, [BACKGROUND_JOB_MARKER]: "job_0badc0de" },
+  });
+  t.after(() => {
+    if (leader.pid && alive(leader.pid)) process.kill(leader.pid, "SIGKILL");
+  });
+  const jobDeps = deps({ ownedPids: (rows) => new Set(jobProcessTree(rows, leader.pid!)) });
+  const reader = defaultSocketReaderDeps();
+  const escapee = await eventually(async () => {
+    const holders = await portHolders(port, process.getuid!(), reader);
+    return holders.ok ? holders.pids[0] : undefined;
+  }, "the escapee to listen");
+  const table = await processTable(reader);
+  assert.ok(table.ok);
+  assert.equal(jobProcessTree(table.rows, leader.pid!).includes(escapee), false, "it left the job's tree");
+  const result = await scanRunningServers({ workspacePath: h.workspace, roots: ["apps/web"], busyRoots: new Set() }, jobDeps);
+  assert.ok(result.ok);
+  assert.equal(result.servers.some((server) => server.port === port), false);
+  assert.deepEqual(await checkAttach({ workspacePath: h.workspace, appRoot: "apps/web", port }, jobDeps), { ok: false, problem: "attach-not-in-app" });
 });
