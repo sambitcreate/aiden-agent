@@ -40,6 +40,7 @@ import sbtbiswas.AidenOnTheGo.ui.theme.AidenActivityDot
 import java.io.ByteArrayOutputStream
 import java.security.MessageDigest
 import java.util.Base64
+import java.util.UUID
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.compose.ui.res.stringResource
 import sbtbiswas.AidenOnTheGo.R
@@ -178,6 +179,18 @@ class AidenBotGeneratedAvatarModel(
     /** The last photo the Mac took, kept until a refreshed Bot that carries it is seen. */
     @Volatile private var committed: CommittedAvatar? = null
 
+    private class UploadAttempt(val botId: String, val revision: String, val data: ByteArray, val key: UUID) {
+        fun isFor(botId: String, revision: String, data: ByteArray): Boolean =
+            this.botId == botId && this.revision == revision && this.data.contentEquals(data)
+    }
+
+    /**
+     * An upload whose outcome is unknown. Sending the same photo to the same Bot revision again
+     * reuses its `Idempotency-Key`, so the Mac replays what it did rather than taking the photo a
+     * second time. A reply, or a refusal that proves nothing was written, ends it.
+     */
+    @Volatile private var uncertainUpload: UploadAttempt? = null
+
     /**
      * The If-Match for the next avatar change. A photo the Mac took whose Bot could not be re-read
      * still moved the avatar revision on, so a page holding the older Bot sends the committed one.
@@ -237,10 +250,16 @@ class AidenBotGeneratedAvatarModel(
             }
 
             _phase.value = AidenBotGeneratedAvatarPhase.UPLOADING
+            val earlier = uncertainUpload?.takeIf { it.isFor(botId, revision, data) }
+            // Once an attempt is uncertain, no later refusal can prove the first try did nothing.
+            val retried = earlier != null
+            val attempt = earlier ?: UploadAttempt(botId, revision, data, UUID.randomUUID())
+            uncertainUpload = attempt
             try {
                 val base64Data = Base64.getEncoder().encodeToString(data)
                 val upload = AidenBotAvatarUpload(data = base64Data)
-                val asset = client.putBotAvatar(botId, revision, upload)
+                val asset = client.putBotAvatar(botId, revision, upload, attempt.key)
+                if (uncertainUpload === attempt) uncertainUpload = null
                 committed = CommittedAvatar(botId, revision, asset.assetRevision)
                 botCache?.putAvatar(botId, asset.assetRevision, data)
                 // A pick made during the upload owns the phase and the candidate now.
@@ -263,6 +282,7 @@ class AidenBotGeneratedAvatarModel(
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
+                if (!retried && !aidenBotAvatarMutationFailureIsAmbiguous(e) && uncertainUpload === attempt) uncertainUpload = null
                 if (mine == selection) {
                     _phase.value = AidenBotGeneratedAvatarPhase.FAILED
                     _errorMessage.value = e.message ?: "Avatar upload failed"
