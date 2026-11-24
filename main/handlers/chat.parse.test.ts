@@ -37,6 +37,15 @@ test("registered chat:start forwards foreground delegation and the appended turn
   lease.settleAsyncWork();
   let starts = 0;
   let titles = 0;
+  const startedSlider = {
+    version: 1,
+    stops: [
+      { id: "stop_00000001", label: "Other", providerId: "p", model: "other" },
+      { id: "stop_00000002", label: "This one", providerId: "p", model: "m" },
+      { id: "stop_00000003", label: "Empty" },
+    ],
+    homeStopId: "stop_00000002",
+  };
   const start: typeof llmClient.start = async (streamId, params, generationOwner, options) => {
     starts++;
     assert.equal(streamId, "stream-1");
@@ -53,6 +62,8 @@ test("registered chat:start forwards foreground delegation and the appended turn
     assert.equal(admission.handoff(params.chatId, options.turnId!, generationOwner.documentId, () => {}), true);
     assert.ok(options.onTurnAccepted, "accepted turn must be acknowledged to the renderer");
     options.onTurnAccepted();
+    // The turn started on the slider's second stop (the same model, no level).
+    options.onTurnSettings?.({ agentSlider: startedSlider });
     return true;
   };
   const mocks: Record<string, unknown> = {
@@ -60,7 +71,26 @@ test("registered chat:start forwards foreground delegation and the appended turn
     "../services/llm-client.js": { llmClient: { start } },
     "../services/chat-generation-owner.js": { chatGenerationOwner: (received: unknown) => { assert.equal(received, event); return owner; } },
     "../services/chat-title.js": { chatTitleService: { startForFirstTurn: () => { titles++; } } },
-    "../services/config-store.js": { configStore: { setSettings: async () => {}, getWorkspace: async () => ({}) } },
+    "../services/config-store.js": {
+      configStore: {
+        setSettings: async () => {},
+        getWorkspace: async () => ({}),
+        // Settings were edited after the turn started: the model moved to the
+        // first of four stops. The count must still describe the started turn.
+        getSettings: async () => ({
+          agentSlider: {
+            version: 1,
+            stops: [
+              { id: "stop_00000002", label: "This one", providerId: "p", model: "m" },
+              { id: "stop_00000001", label: "Other", providerId: "p", model: "other" },
+              { id: "stop_00000003", label: "Empty" },
+              { id: "stop_00000004", label: "New" },
+            ],
+            homeStopId: "stop_00000002",
+          },
+        }),
+      },
+    },
     "../services/gemini-live/service-main.js": { geminiLiveService: {} },
     "../services/tool-approval-rules-main.js": { toolApprovalRules: {} },
     "../services/analytics/analytics-feature-reports.js": analyticsFeatureReports,
@@ -98,7 +128,10 @@ test("registered chat:start forwards foreground delegation and the appended turn
     await analyticsSettled();
     assert.deepEqual(sent, [{
       event: "chat_message_sent",
-      props: { provider_id: "custom", model_id: "custom", in_workspace: true, thinking: "other", origin: "desktop" },
+      props: {
+        provider_id: "custom", model_id: "custom", in_workspace: true, thinking: "other", origin: "desktop",
+        slider_stop: "2", slider_stop_count: 3,
+      },
     }]);
   } finally {
     lease.release();

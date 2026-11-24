@@ -45,14 +45,7 @@ function withProviderFallback(
   providerId: string,
 ): ModelInfo {
   const substitute = catalog.matched ? undefined : providerInfo(modelId, metadata);
-  // Benchmark evidence can match by exact OpenRouter permaslug even when
-  // models.dev does not, so carry it onto the provider-owned description.
-  const catalogInfo = substitute
-    ? {
-        ...substitute,
-        ...(catalog.benchmark ? { benchmark: catalog.benchmark } : {}),
-      }
-    : catalog;
+  const catalogInfo = substitute ?? catalog;
   // A model name in a public catalog is not evidence about a private server.
   // Keep descriptive enrichment, but show the same connection-bound image and
   // reasoning capabilities that resolveProviderRuntimeLimits sends to Pi.
@@ -95,12 +88,11 @@ export function mergeCodexModelInfo(
   catalog: ModelInfo,
 ): ModelInfo {
   if (!pinned) return unmatched(modelId);
-  if (!catalog.benchmark && !catalog.cost && !catalog.canonicalModelId) {
+  if (!catalog.cost && !catalog.canonicalModelId) {
     return pinned;
   }
   return {
     ...pinned,
-    ...(catalog.benchmark ? { benchmark: catalog.benchmark } : {}),
     // Display-only models.dev pricing and identity; Pi's capabilities stay authoritative.
     ...(catalog.cost ? { cost: catalog.cost } : {}),
     ...(catalog.canonicalModelId ? { canonicalModelId: catalog.canonicalModelId } : {}),
@@ -108,7 +100,7 @@ export function mergeCodexModelInfo(
   };
 }
 
-/** Preserve Pi's pinned Codex capabilities while enriching them with local benchmark data. */
+/** Preserve Pi's pinned Codex capabilities while enriching them with models.dev display data. */
 export function createProviderModelInfo(dependencies: ProviderModelInfoDependencies) {
   return {
     async info(providerId: string, modelId: string): Promise<ModelInfo> {

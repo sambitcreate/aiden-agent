@@ -141,6 +141,7 @@ export function createFirstMessageCommitter(deps: Dependencies) {
           ...(input.ephemeral === true ? { ephemeral: true as const } : {}),
           providerId: input.providerId,
           model: input.metaModel,
+          ...(input.thinkingLevel ? { thinkingLevel: input.thinkingLevel } : {}),
           turnId: input.turnId,
           fingerprint,
           message: {

@@ -1,40 +1,22 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
-  benchmarkCoverage,
   createChatModelProviders,
   createModelEntries,
   decodeSelection,
   encodeSelection,
-  findDirectionalModel,
-  MODEL_PAD_CAPTURE_RADIUS,
-  nearestModel,
-  modelBenchmarkPercentiles,
   modelInfoByValue,
   orderModelEntries,
   parseModel,
-  pinnedAndRecentQuickStart,
-  positionSavedModels,
-  previewBenchmarkSuggestions,
   recentModelsForList,
-  topBenchmarkSuggestions,
   visibleModelEntries,
   resolveExplicitModelSelection,
   alsoViaLabel,
   alsoViaProviders,
-  sortModelsByProviderAndName,
   modelIdentityKey,
   modelSiblings,
   type ModelEntry,
-  type PositionedModel,
 } from "./model-picker-data";
-import {
-  addModelPadPlacement,
-  modelPadGridSize,
-  modelPadGridSizeForPlacements,
-  reflowVisibleModelPadPlacements,
-  type ModelPadPlacement,
-} from "./model-pad-layout";
 import type { Provider } from "./types";
 import {
   firstVisibleModelForProvider,
@@ -182,7 +164,7 @@ test("selection encoding preserves model ids and format parsing isolates quantiz
   assert.deepEqual(parseModel("gpt-4.1"), { label: "gpt-4.1", format: null });
 });
 
-test("picker entries carry custom provider artwork into the model list and pad", () => {
+test("picker entries carry custom provider artwork into the model list", () => {
   const artwork = normalizeProviderArtwork({
     mimeType: "image/png",
     dataBase64:
@@ -201,7 +183,7 @@ test("picker entries carry custom provider artwork into the model list and pad",
   assert.deepEqual(entries[0]?.providerArtwork, artwork);
 });
 
-test("entry creation includes every usable model, keeps hosted providers first, and ignores pins", () => {
+test("entry creation includes every usable model, keeps hosted providers first, and pins lead the list", () => {
   const providers = [
     provider({
       id: "local",
@@ -228,20 +210,6 @@ test("entry creation includes every usable model, keeps hosted providers first, 
     orderModelEntries(entries, ["local::local-b", "stale::model"]).map((model) => model.value),
     ["local::local-b", "hosted::cloud-a", "local::local-a"],
   );
-  const placements = Object.fromEntries(
-    entries.map((model, index) => [
-      model.value,
-      { x: index / 6, y: 0.5, xSource: "user" as const, ySource: "user" as const },
-    ]),
-  );
-  const coordinates = (models: ModelEntry[]) =>
-    positionSavedModels(models, placements)
-      .map(({ value, x, y }) => ({ value, x, y }))
-      .sort((a, b) => a.value.localeCompare(b.value));
-  assert.deepEqual(
-    coordinates(entries),
-    coordinates(orderModelEntries(entries, ["local::local-b"])),
-  );
 });
 
 test("recent rows are up to three visible models in recency order, skipping the current and pinned models", () => {
@@ -266,130 +234,6 @@ test("recent rows are up to three visible models in recency order, skipping the 
   );
 });
 
-test("the pinned & recent quick start takes visible, unplaced pinned models then recent ones, up to the limit", () => {
-  const entries = ["a", "b", "c", "d", "e", "f", "g", "h", "i", "j", "k"].map((value) =>
-    entry(`p::${value}`),
-  );
-  const values = (rows: ModelEntry[]) => rows.map((row) => row.value);
-  const placed: Record<string, ModelPadPlacement> = {
-    "p::b": { x: 0.5, y: 0.5, xSource: "user", ySource: "user" },
-  };
-
-  assert.deepEqual(
-    values(
-      pinnedAndRecentQuickStart(entries, {
-        // Stored order is kept; a placed pin and a pin that is no longer visible are skipped.
-        pinned: ["p::c", "p::b", "p::hidden", "p::a"],
-        // A recent model that is also pinned appears once, in the pinned slot.
-        recent: ["p::e", "p::a", "p::d"],
-        placements: placed,
-      }),
-    ),
-    ["p::c", "p::a", "p::e", "p::d"],
-  );
-
-  // Stops at eight models by default.
-  assert.deepEqual(
-    values(
-      pinnedAndRecentQuickStart(entries, {
-        pinned: ["p::a", "p::b", "p::c", "p::d", "p::e", "p::f"],
-        recent: ["p::g", "p::h", "p::i", "p::j", "p::k"],
-        placements: {},
-      }),
-    ),
-    ["p::a", "p::b", "p::c", "p::d", "p::e", "p::f", "p::g", "p::h"],
-  );
-  assert.deepEqual(
-    values(
-      pinnedAndRecentQuickStart(entries, {
-        pinned: ["p::b"],
-        recent: ["p::b", "p::gone"],
-        placements: placed,
-      }),
-    ),
-    [],
-  );
-});
-
-test("benchmark quick-start candidates are the most capable unplaced models first, at most eight", () => {
-  const entries = Array.from({ length: 12 }, (_, index) => entry(`p::m${index}`));
-  // m0 is least capable, m11 most; m3 has no score for the metric.
-  const percentiles = new Map(
-    entries.flatMap((model, index) => (index === 3 ? [] : [[model.value, index / 11] as const])),
-  );
-  const placements: Record<string, ModelPadPlacement> = {
-    "p::m11": { x: 0.5, y: 1, xSource: "user", ySource: "user" },
-  };
-
-  const top = topBenchmarkSuggestions(entries, percentiles, { placements });
-  assert.deepEqual(
-    top.map((suggestion) => suggestion.value),
-    ["p::m10", "p::m9", "p::m8", "p::m7", "p::m6", "p::m5", "p::m4", "p::m2"],
-  );
-  assert.equal(top[0].capabilityPercentile, 10 / 11);
-
-  assert.deepEqual(
-    topBenchmarkSuggestions(entries, percentiles, { placements, limit: 2 }).map(
-      (suggestion) => suggestion.value,
-    ),
-    ["p::m10", "p::m9"],
-  );
-  // Scores for models that are not visible never become candidates.
-  assert.deepEqual(
-    topBenchmarkSuggestions([], percentiles, { placements: {} }),
-    [],
-  );
-});
-
-test("previewed suggestions put scored pinned then recent models first, then the most capable, at most eight", () => {
-  const entries = Array.from({ length: 14 }, (_, index) => entry(`p::m${index}`));
-  // m0 is least capable, m13 most; m3 has no score for the metric.
-  const percentiles = new Map(
-    entries.flatMap((model, index) => (index === 3 ? [] : [[model.value, index / 13] as const])),
-  );
-  const placements: Record<string, ModelPadPlacement> = {
-    "p::m13": { x: 0.5, y: 1, xSource: "user", ySource: "user" },
-  };
-  const values = (rows: { value: string }[]) => rows.map((row) => row.value);
-
-  const preview = previewBenchmarkSuggestions(entries, percentiles, {
-    placements,
-    // m3 is unscored, m13 is already placed and m99 is not visible: none is previewed.
-    pinned: ["p::m1", "p::m3", "p::m13", "p::m99"],
-    // m1 is pinned too and appears once, in its pinned slot.
-    recent: ["p::m0", "p::m1"],
-  });
-  assert.deepEqual(values(preview), [
-    "p::m1",
-    "p::m0",
-    "p::m12",
-    "p::m11",
-    "p::m10",
-    "p::m9",
-    "p::m8",
-    "p::m7",
-  ]);
-  // Each suggestion carries its percentile, which sets its height.
-  assert.equal(preview[1].capabilityPercentile, 0);
-  assert.equal(preview[2].capabilityPercentile, 12 / 13);
-
-  assert.deepEqual(
-    values(
-      previewBenchmarkSuggestions(entries, percentiles, {
-        placements,
-        pinned: [],
-        recent: ["p::m2"],
-        limit: 3,
-      }),
-    ),
-    ["p::m2", "p::m12", "p::m11"],
-  );
-  assert.deepEqual(
-    previewBenchmarkSuggestions(entries, new Map(), { placements: {}, pinned: ["p::m1"], recent: [] }),
-    [],
-  );
-});
-
 test("stale embedding ids stay out of the picker", () => {
   const local = provider({
     id: "local",
@@ -408,136 +252,6 @@ test("stale embedding ids stay out of the picker", () => {
     entries.map((model) => model.value),
     ["hosted::cloud", "local::chat"],
   );
-});
-
-test("saved personal placements alone determine membership and snap to Pad geometry", () => {
-  const entries = [entry("first"), entry("second")];
-  const positioned = positionSavedModels(entries, {
-    first: { x: 0.17, y: 0.83, xSource: "user", ySource: "user" },
-  });
-  assert.deepEqual(
-    positioned.map(({ value, x, y, placementKind }) => ({ value, x, y, placementKind })),
-    [
-      {
-        value: "first",
-        x: 1 / 6,
-        y: 5 / 6,
-        placementKind: "personal",
-      },
-    ],
-  );
-});
-
-test("saved geometry is sized by placed, visible models while hidden placements reserve no dot", () => {
-  const entries = Array.from({ length: 40 }, (_, index) => entry(`model-${index}`));
-  const positioned = positionSavedModels(entries, {
-    "model-0": { x: 0.19, y: 0.5, xSource: "user", ySource: "user" },
-    hidden: { x: 0.19, y: 0.5, xSource: "user", ySource: "user" },
-  });
-
-  // One placed, visible model: the base 7x7 grid, not a 17x17 grid for 40 entries.
-  assert.deepEqual(
-    positioned.map(({ value, x, y }) => ({ value, x, y })),
-    [{ value: "model-0", x: 1 / 6, y: 0.5 }],
-  );
-});
-
-test("unplaced catalog models never move placed models on the Pad", () => {
-  const placements: Record<string, ModelPadPlacement> = {
-    "model-0": { x: 0.31, y: 0.72, xSource: "user", ySource: "user" },
-    "model-1": { x: 0.9, y: 0.1, xSource: "neutral", ySource: "benchmark" },
-    "model-2": { x: 0.31, y: 0.7, xSource: "user", ySource: "benchmark" },
-  };
-  const geometry = (count: number) =>
-    positionSavedModels(
-      Array.from({ length: count }, (_, index) => entry(`model-${index}`)),
-      placements,
-    ).map(({ value, x, y }) => ({ value, x, y }));
-
-  const small = geometry(5);
-  assert.equal(small.length, 3);
-  assert.deepEqual(geometry(300), small);
-  // Hiding unplaced models (dropping them from the visible entries) changes nothing either.
-  assert.deepEqual(geometry(3), small);
-});
-
-test("the composer Pad and the settings editor reflow agree on placed positions", () => {
-  const entries = Array.from({ length: 120 }, (_, index) => entry(`model-${index}`));
-  const visibleValues = entries.map(({ value }) => value);
-  const placements: Record<string, ModelPadPlacement> = {
-    "model-3": { x: 0.5, y: 0.5, xSource: "user", ySource: "user" },
-    "model-7": { x: 0.52, y: 0.49, xSource: "neutral", ySource: "benchmark" },
-    "model-9": { x: 0.12, y: 0.95, xSource: "user", ySource: "user" },
-    offline: { x: 0.5, y: 0.5, xSource: "user", ySource: "user" },
-  };
-  const gridSize = modelPadGridSizeForPlacements(placements, visibleValues);
-  const editor = reflowVisibleModelPadPlacements(placements, visibleValues, gridSize);
-  const picker = positionSavedModels(entries, placements);
-
-  assert.equal(gridSize, 7);
-  assert.deepEqual(
-    picker.map(({ value, x, y }) => ({ value, x, y })),
-    ["model-3", "model-7", "model-9"].map((value) => ({
-      value,
-      x: editor[value].x,
-      y: editor[value].y,
-    })),
-  );
-  assert.deepEqual(editor.offline, placements.offline);
-});
-
-test("colliding OpenRouter suggestions snap to distinct dots without outranking personal geometry", () => {
-  const entries = [entry("a-suggested"), entry("b-suggested"), entry("z-personal")];
-  const positioned = positionSavedModels(entries, {
-    "a-suggested": { x: 0.5, y: 0.92, xSource: "neutral", ySource: "benchmark" },
-    "b-suggested": { x: 0.5, y: 0.92, xSource: "neutral", ySource: "benchmark" },
-    "z-personal": { x: 0.5, y: 0.92, xSource: "user", ySource: "user" },
-  });
-  const personal = positioned.find(({ value }) => value === "z-personal")!;
-  const cells = positioned.map(({ x, y }) => `${x}:${y}`);
-
-  assert.deepEqual({ x: personal.x, y: personal.y }, { x: 0.5, y: 1 });
-  assert.equal(new Set(cells).size, positioned.length);
-});
-
-test("OpenRouter benchmark percentiles average ties and axis-aware suggestions disclose neutral pace", () => {
-  const models = [entry("low"), entry("tied-a"), entry("tied-b"), entry("high")];
-  const values = [10, 20, 20, 40];
-  models.forEach((model, index) => {
-    model.info = {
-      id: model.model,
-      matched: true,
-      metadataSource: "models-dev",
-      benchmark: {
-        source: "openrouter",
-        datasetSource: "artificial-analysis",
-        sourceLabel: "Artificial Analysis via OpenRouter",
-        sourceUrl: "https://artificialanalysis.ai",
-        citation: "Source: Artificial Analysis via OpenRouter.",
-        asOf: "2026-06-03T12:00:00.000Z",
-        license: "CC BY 4.0",
-        coding: values[index],
-      },
-    };
-  });
-  assert.deepEqual(Object.fromEntries(modelBenchmarkPercentiles(models, "coding")), {
-    low: 0,
-    "tied-a": 0.5,
-    "tied-b": 0.5,
-    high: 1,
-  });
-  const [suggested] = positionSavedModels(models, {
-    low: { x: 0.5, y: 0.08, xSource: "neutral", ySource: "benchmark" },
-  });
-  assert.equal(suggested.placementKind, "benchmark");
-  assert.equal(suggested.placementSourceLabel, "Benchmark-assisted");
-
-  const [paced, both] = positionSavedModels(models, {
-    low: { x: 0, y: 0.5, xSource: "measured", ySource: "user" },
-    high: { x: 1, y: 1, xSource: "measured", ySource: "benchmark" },
-  });
-  assert.equal(paced.placementSourceLabel, "Measured pace");
-  assert.equal(both.placementSourceLabel, "Benchmark height, measured pace");
 });
 
 test("embedding-like ids stay out when stale discovery metadata is unavailable", () => {
@@ -774,144 +488,6 @@ test("face-generation selection excludes embeddings and never reroutes stale pro
   );
 });
 
-test("every active model occupies a unique, equally spaced lattice point", () => {
-  for (const count of [15, 130]) {
-    const entries = Array.from({ length: count }, (_, index) =>
-      entry(`model-${index}`, `private-model-${index}`),
-    );
-    const values = entries.map((model) => model.value);
-    let placements: Record<string, ModelPadPlacement> = {};
-    for (const value of values) placements = addModelPadPlacement(placements, values, value);
-    const positioned = positionSavedModels(entries, placements);
-    assert.equal(positioned.length, count);
-    const gridDivisions = modelPadGridSize(count) - 1;
-    const cells = positioned.map(({ x, y }) => `${x.toFixed(8)}:${y.toFixed(8)}`);
-
-    assert.equal(new Set(cells).size, positioned.length);
-    for (const model of positioned) {
-      assert.equal(Number((model.x * gridDivisions).toFixed(8)) % 1, 0);
-      assert.equal(Number((model.y * gridDivisions).toFixed(8)) % 1, 0);
-    }
-  }
-});
-
-test("nearest selection has hysteresis and directional navigation favors aligned models", () => {
-  const models = positionSavedModels([entry("left"), entry("right"), entry("up")], {
-    left: { x: 1 / 6, y: 0.5, xSource: "user", ySource: "user" },
-    right: { x: 5 / 6, y: 0.5, xSource: "user", ySource: "user" },
-    up: { x: 1 / 6, y: 5 / 6, xSource: "user", ySource: "user" },
-  });
-
-  assert.equal(nearestModel(models, { x: 0.49, y: 0.5 }, "left")?.value, "left");
-  assert.equal(nearestModel(models, { x: 0.72, y: 0.5 }, "left")?.value, "right");
-  assert.equal(findDirectionalModel(models, "left", "right")?.value, "right");
-  assert.equal(findDirectionalModel(models, "left", "up")?.value, "up");
-  assert.equal(findDirectionalModel(models, "left", "left")?.value, "left");
-  // Without an active model there is nothing to move from.
-  assert.equal(findDirectionalModel(models, undefined, "right"), undefined);
-  assert.equal(findDirectionalModel(models, "missing", "right"), undefined);
-});
-
-test("hysteresis never keeps the current model once it is beyond the capture radius", () => {
-  const at = (value: string, x: number, y: number): PositionedModel => ({
-    ...positionSavedModels([entry(value)], {
-      [value]: { x: 0.5, y: 0.5, xSource: "user", ySource: "user" },
-    })[0],
-    x,
-    y,
-  });
-  const models = [at("a", 0.3, 0.5), at("b", 0.7, 0.5)];
-  // 0.205 from A and 0.195 from B: inside the hysteresis band, but A is out of reach.
-  assert.equal(nearestModel(models, { x: 0.505, y: 0.5 }, "a", 0.025, 0.2)?.value, "b");
-  // Within reach, the same band keeps A.
-  assert.equal(nearestModel(models, { x: 0.505, y: 0.5 }, "a", 0.025, 0.3)?.value, "a");
-});
-
-test("nearest selection ignores points beyond the capture radius of every model", () => {
-  const models = positionSavedModels([entry("center"), entry("corner")], {
-    center: { x: 0.5, y: 0.5, xSource: "user", ySource: "user" },
-    corner: { x: 0, y: 0, xSource: "user", ySource: "user" },
-  });
-  // About 0.64 from the center model and 1.34 from the corner one.
-  const empty = { x: 0.95, y: 0.95 };
-  assert.equal(nearestModel(models, empty, undefined, 0.025, MODEL_PAD_CAPTURE_RADIUS), undefined);
-  assert.equal(nearestModel(models, empty, "center", 0.025, MODEL_PAD_CAPTURE_RADIUS), undefined);
-  // Without a limit the nearest model still wins, as keyboard fallbacks expect.
-  assert.equal(nearestModel(models, empty)?.value, "center");
-  // Within the radius the nearest model is returned.
-  assert.equal(
-    nearestModel(models, { x: 0.12, y: 0.1 }, undefined, 0.025, MODEL_PAD_CAPTURE_RADIUS)?.value,
-    "corner",
-  );
-  assert.equal(
-    nearestModel(models, { x: 0.6, y: 0.62 }, "corner", 0.025, MODEL_PAD_CAPTURE_RADIUS)?.value,
-    "center",
-  );
-});
-
-test("benchmark coverage counts scored Pad and visible models and explains unmatched Pad models", () => {
-  const scores = {
-    source: "openrouter",
-    datasetSource: "artificial-analysis",
-    sourceLabel: "Artificial Analysis via OpenRouter",
-    sourceUrl: "https://openrouter.ai",
-    citation: "Artificial Analysis",
-    asOf: "2026-10-01",
-    license: "CC BY 4.0",
-  } as const;
-  const scored = (value: string): ModelEntry => ({
-    ...entry(value),
-    info: {
-      id: value,
-      metadataSource: "fallback",
-      matched: true,
-      benchmark: { ...scores, coding: 40 },
-    },
-  });
-  const entries: ModelEntry[] = [
-    scored("test::placed-scored"),
-    { ...entry("test::placed-hosted"), label: "Hosted One" },
-    { ...entry("ollama::placed-local"), label: "Local One", providerLabel: "Ollama", isLocal: true },
-    // A benchmark record without a finite score is not a match.
-    {
-      ...entry("test::placed-empty"),
-      info: { id: "empty", metadataSource: "fallback", matched: true, benchmark: { ...scores } },
-    },
-    scored("test::unplaced-scored"),
-    entry("test::unplaced-unscored"),
-  ];
-  const at: ModelPadPlacement = { x: 0.5, y: 0.5, xSource: "user", ySource: "user" };
-  const coverage = benchmarkCoverage(entries, {
-    "test::placed-scored": at,
-    "test::placed-hosted": at,
-    "ollama::placed-local": at,
-    "test::placed-empty": at,
-    // A placement for a model that is no longer visible is not counted.
-    "gone::model": at,
-  });
-
-  assert.deepEqual(coverage.pad, { matched: 1, total: 4 });
-  assert.deepEqual(coverage.visible, { matched: 2, total: 6 });
-  assert.deepEqual(coverage.unmatchedPad, [
-    { value: "test::placed-hosted", label: "Hosted One", providerLabel: "Test", reason: "no-row" },
-    { value: "ollama::placed-local", label: "Local One", providerLabel: "Ollama", reason: "local" },
-    {
-      value: "test::placed-empty",
-      label: "test::placed-empty",
-      providerLabel: "Test",
-      reason: "no-row",
-    },
-  ]);
-});
-
-test("benchmark coverage of an empty Pad has nothing unmatched", () => {
-  assert.deepEqual(benchmarkCoverage([entry("test::a")], {}), {
-    pad: { matched: 0, total: 0 },
-    visible: { matched: 0, total: 1 },
-    unmatchedPad: [],
-  });
-});
-
 function routeEntry(
   providerId: string,
   providerLabel: string,
@@ -1051,17 +627,3 @@ test("the also-via label names one or two providers and counts the rest", () => 
   assert.equal(alsoViaProviders([]), undefined);
 });
 
-test("models sort by provider, then by name, without changing the input", () => {
-  const entries = [
-    routeEntry("zephyr", "Zephyr", "swift"),
-    routeEntry("acme", "Acme", "nova"),
-    routeEntry("zephyr", "Zephyr", "atlas"),
-    routeEntry("acme", "Acme", "bolt"),
-  ];
-  const sorted = sortModelsByProviderAndName(entries);
-  assert.deepEqual(
-    sorted.map((entry) => `${entry.providerLabel}/${entry.model}`),
-    ["Acme/bolt", "Acme/nova", "Zephyr/atlas", "Zephyr/swift"],
-  );
-  assert.equal(entries[0].model, "swift");
-});

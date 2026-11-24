@@ -37,6 +37,10 @@ import { parseChatStartedByV1, type ChatStartedByV1 } from "../../renderer/share
 import { parseGenerationTimeline } from "../../renderer/shared/generation-timeline.js";
 import { parseSubagentMessageReferenceV1 } from "../../renderer/shared/subagent-runs.js";
 import { migrateLegacyPiProviderId } from "../../renderer/shared/google-provider.js";
+import {
+  isGenerationThinkingLevel,
+  type GenerationThinkingLevel,
+} from "../../renderer/shared/generation-thinking.js";
 import { parseSkillProvenanceV1 } from "../../renderer/shared/slash-commands.js";
 import { parseChatInputSource } from "../../renderer/shared/chat-input-source.js";
 import { parseAgentNoticeV1 } from "../../renderer/shared/agent-notices.js";
@@ -449,6 +453,7 @@ export function createChatStore(
         (parseChatOwnerV1(meta.owner) !== undefined && meta.botId === undefined)) &&
       (meta.providerId === undefined || typeof meta.providerId === "string") &&
       (meta.model === undefined || typeof meta.model === "string") &&
+      (meta.thinkingLevel === undefined || isGenerationThinkingLevel(meta.thinkingLevel)) &&
       (meta.preview === undefined ||
         (typeof meta.preview === "string" &&
           Array.from(meta.preview).length <= MAX_CHAT_META_PREVIEW_CHARS &&
@@ -894,6 +899,16 @@ export function createChatStore(
       // A layout preference only: anything but a literal true reads as off.
       delete (parsed as Record<string, unknown>).designMode;
     }
+    if (
+      parsed !== null &&
+      typeof parsed === "object" &&
+      !Array.isArray(parsed) &&
+      Object.prototype.hasOwnProperty.call(parsed, "thinkingLevel") &&
+      !isGenerationThinkingLevel((parsed as Record<string, unknown>).thinkingLevel)
+    ) {
+      // An unknown effort falls back to the model's saved level, never the transcript.
+      delete (parsed as Record<string, unknown>).thinkingLevel;
+    }
     const messages = (parsed as { messages?: unknown } | null)?.messages;
     if (
       policy !== "pure" &&
@@ -1290,6 +1305,7 @@ export function createChatStore(
       ...(chat.owner ? { owner: chat.owner } : {}),
       providerId: chat.providerId,
       model: chat.model,
+      ...(chat.thinkingLevel ? { thinkingLevel: chat.thinkingLevel } : {}),
       ...(boundedPreview ? { preview: boundedPreview } : {}),
       summaryRevision: chatSummaryRevision(chat),
       ...(lastAssistantAt !== undefined ? { lastAssistantAt, lastAssistantSequence, lastAssistantMessageId: lastAssistant.id } : {}),
@@ -1557,6 +1573,8 @@ export function createChatStore(
       ephemeral?: true;
       providerId?: string;
       model?: string;
+      /** The chat's own effort, saved only with a model. */
+      thinkingLevel?: GenerationThinkingLevel;
       turnId: string;
       fingerprint: string;
       message: Pick<ChatMessage, "id" | "content" | "attachments" | "skill" | "model" | "inputSource">;
@@ -1608,6 +1626,9 @@ export function createChatStore(
           ...(input.ephemeral === true ? { ephemeral: true as const } : {}),
           providerId: await resolveProviderId(input.providerId),
           model: input.model,
+          ...(input.model && isGenerationThinkingLevel(input.thinkingLevel)
+            ? { thinkingLevel: input.thinkingLevel }
+            : {}),
           title: input.title?.trim() || deriveChatTitleSeed(message),
           createdAt: now,
           updatedAt: now,
@@ -2076,12 +2097,17 @@ export function createChatStore(
      * Change the model an ordinary chat answers with. It is this chat's own
      * choice: other chats and the app's model for new chats stay as they are,
      * and neither the history nor the sidebar order changes.
+     *
+     * `thinkingLevel` sets the chat's own effort and `null` clears it. Left
+     * out, the chat keeps its level only while the model stays the same: a
+     * level belongs to its model.
      */
     async setChatModelSelection(
       id: string,
       providerId: string,
       model: string,
       assertCurrent: (chat: Chat) => void | Promise<void> = () => undefined,
+      thinkingLevel?: GenerationThinkingLevel | null,
     ): Promise<Chat> {
       return withImageData(await shared([id], true, async () => {
         const chat = await readChat(id, "owner");
@@ -2094,12 +2120,50 @@ export function createChatStore(
         if (!resolvedProviderId || !model.trim()) {
           throw new Error("A chat model selection requires a provider and model.");
         }
-        if (chat.providerId === resolvedProviderId && chat.model === model) return chat;
+        if (thinkingLevel !== undefined && thinkingLevel !== null && !isGenerationThinkingLevel(thinkingLevel)) {
+          throw new Error("Invalid thinking level.");
+        }
+        const sameModel = chat.providerId === resolvedProviderId && chat.model === model;
+        const nextLevel =
+          thinkingLevel === undefined ? (sameModel ? chat.thinkingLevel : undefined) : (thinkingLevel ?? undefined);
+        if (sameModel && chat.thinkingLevel === nextLevel) return chat;
         chat.providerId = resolvedProviderId;
         chat.model = model;
+        if (nextLevel) chat.thinkingLevel = nextLevel;
+        else delete chat.thinkingLevel;
         await writeChatAndMeta(chat);
         return chat;
       }));
+    },
+
+    /**
+     * Record the level a turn really ran with after main clamped the chat's
+     * own level to what its model supports. A compare-and-set: it writes only
+     * while the chat still names the turn's provider, model and starting level,
+     * so a newer selection always wins. Bot chats never take a level. Returns
+     * the chat when it wrote, else null.
+     */
+    async reconcileChatThinkingLevel(
+      id: string,
+      expected: { providerId: string; model: string; thinkingLevel: GenerationThinkingLevel },
+      resolved: GenerationThinkingLevel,
+    ): Promise<Chat | null> {
+      return shared([id], true, async () => {
+        const chat = await readChat(id, "owner");
+        if (
+          !chat ||
+          chat.botId ||
+          chat.providerId !== expected.providerId ||
+          chat.model !== expected.model ||
+          chat.thinkingLevel !== expected.thinkingLevel ||
+          chat.thinkingLevel === resolved
+        ) {
+          return null;
+        }
+        chat.thinkingLevel = resolved;
+        await writeChatAndMeta(chat);
+        return chat;
+      });
     },
 
     /**
@@ -2427,6 +2491,13 @@ export function createChatStore(
           !chat.messages.some((entry) => entry.role === "user");
         chat.messages.push(full);
         chat.updatedAt = Date.now();
+        if (
+          (meta?.providerId && meta.providerId !== chat.providerId) ||
+          (meta?.model && meta.model !== chat.model)
+        ) {
+          // A chat's own effort belongs to the model it was chosen for.
+          delete chat.thinkingLevel;
+        }
         if (meta?.providerId) chat.providerId = meta.providerId;
         if (meta?.model) chat.model = meta.model;
         if (

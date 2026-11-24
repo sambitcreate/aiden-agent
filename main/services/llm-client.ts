@@ -16,8 +16,6 @@ import type { AppControlPanel } from "../../renderer/shared/app-controls.js";
 import { canUseProviderAuthenticatedMcp } from "./mcp-provider-auth-core.js";
 import { providerRegistry } from "./provider-registry.js";
 import { adoptChatCacheWarmer, canWarmForegroundChat, PiCacheWarmer, settleReplyCacheWarmer, stopAllPiCacheWarmers, withPiCacheWarming } from "./pi-cache-warming.js";
-import { createModelPaceMeasurement } from "./model-pace-core.js";
-import { modelPaceRecorder } from "./model-pace-runtime.js";
 import { usageLimits } from "./usage-limit-main.js";
 import { withUsageLimitWait } from "./usage-limit-stream.js";
 import { spending } from "./spending-main.js";
@@ -101,6 +99,7 @@ import {
 import { generationGitContext } from "./generation-git-context.js";
 import { configStore } from "./config-store.js";
 import { chatStore } from "./chat-store.js";
+import { reconcileTurnThinkingLevel } from "./chat-thinking-level-reconcile.js";
 import { generationModelMeta } from "./chat-model-selection-meta.js";
 import { botStore } from "./bot-store.js";
 import {
@@ -678,6 +677,13 @@ function uniqueResponseImages(
 }
 
 
+/** What a turn read when it started: the portable Agent Slider and its chat's own level. */
+export interface TurnSettingsSnapshot {
+  readonly agentSlider: unknown;
+  readonly chatThinkingLevel?: Chat["thinkingLevel"];
+  readonly botId?: string;
+}
+
 export interface GenerationExecutionOptions {
   /** Main-owned Telegram queue provenance, resolved freshly at generation. */
   telegramSkillInvocation?: import("./telegram/telegram-queue.js").TelegramSkillInvocation;
@@ -703,6 +709,12 @@ export interface GenerationExecutionOptions {
   turnId?: string;
   /** Fires once the persisted turn has synchronously transferred to generation ownership. */
   onTurnAccepted?: () => void;
+  /**
+   * Main-owned: receives the settings and chat this turn resolved its model
+   * and level from, so a send is counted against that state and not a later
+   * Settings edit.
+   */
+  onTurnSettings?: (snapshot: TurnSettingsSnapshot) => void;
   /** Main-owned interactive delivery surface; renderer starts cannot set this. */
   interactionSurface?: "telegram";
   /** Main-owned: a paired device sent this turn and sees visuals as snapshots. */
@@ -1634,11 +1646,37 @@ async function prepareGeneration(
   };
   const supportsImages = runtimeSupportsImages(model);
   const settings = await configStore.getSettings();
+  try {
+    options.onTurnSettings?.({
+      agentSlider: settings.agentSlider,
+      chatThinkingLevel: chat.thinkingLevel,
+      botId: chat.botId,
+    });
+  } catch (error) {
+    logger.debug("chat", "Could not record the settings this turn started with.", error);
+  }
   const savedThinkingLevel = savedGenerationThinkingLevel(settings, params.providerId, params.model, runtime.provider);
   const thinkingLevel = resolveGenerationThinkingLevel(
     params.providerId,
     model,
     params.thinkingLevel ?? savedThinkingLevel,
+  );
+  // A chat's own level (an Agent Slider stop) the model no longer supports was
+  // just clamped; record the level that runs so the chat says what was sent.
+  await reconcileTurnThinkingLevel(
+    {
+      chatStore,
+      broadcast: (update) => ipcMain.broadcast("chats:metadata-updated", update),
+    },
+    {
+      chat,
+      providerId: params.providerId,
+      model: params.model,
+      requested: params.thinkingLevel,
+      resolved: thinkingLevel,
+    },
+  ).catch((error: unknown) =>
+    logger.warn("chat", "Could not record the thinking level this chat's turn ran with.", error),
   );
   // With the beta on, the model always gets the tool on a build and OS that
   // can run it (a cheap static check; no driver probe here). Access is asked
@@ -5040,22 +5078,12 @@ export const llmClient = {
           })
         : measuredStream;
       const warmedStream = cacheWarmer ? withPiCacheWarming(prefixedStream, cacheWarmer) : prefixedStream;
-      // Device-local pace: Pi calls the stream function once per model
-      // response, right before the provider request, so the wrapper marks
-      // each response's request start (see ModelPaceTimer for what TTFT covers).
-      const pace = createModelPaceMeasurement({
-        providerId: runtime.provider.id,
-        agentHarness: harnessProvider,
-        record: (key, sample) => modelPaceRecorder.record(key, sample),
-        onError: (error) =>
-          logger.debug("model-pace", `Could not measure pace for stream ${streamId}.`, error),
-      });
       // A retry can wait while the chat's balance or limit changes. Check it
       // again at dispatch, after waiting and before starting the provider call.
       const observedStream: typeof realStream = harnessProvider
-        ? pace.wrap(warmedStream)
+        ? warmedStream
         : spendingMeter.wrap(
-            withUsageLimitWait(pace.wrap(warmedStream), {
+            withUsageLimitWait(warmedStream, {
               ...usageLimits.streamOptions({ kind: "chat", id: params.chatId }, runtime.provider.label),
               beforeSendRefusal: async () => {
                 await spendingMeter.settled();
@@ -5962,7 +5990,6 @@ export const llmClient = {
       });
 
       candidate.subscribe(async (event) => {
-        pace.observe(event);
         switch (event.type) {
           case "agent_end":
             // The warmer settles or ends once the reply is saved (the run's finally).
