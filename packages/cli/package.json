@@ -26,13 +26,13 @@
     "quickjs-wasi": "3.6.2"
   },
   "devDependencies": {
-    "@earendil-works/chord": "1.5.2",
-    "@earendil-works/pi-agent-core": "1.5.2",
-    "@earendil-works/pi-ai": "1.5.2",
-    "@earendil-works/pi-codemode": "1.5.2",
-    "@earendil-works/pi-coding-agent": "1.5.2",
-    "@earendil-works/pi-durable": "1.5.2",
-    "@earendil-works/pi-mcp": "1.5.2",
+    "@earendil-works/chord": "1.6.0",
+    "@earendil-works/pi-agent-core": "1.6.0",
+    "@earendil-works/pi-ai": "1.6.0",
+    "@earendil-works/pi-codemode": "1.6.0",
+    "@earendil-works/pi-coding-agent": "1.6.0",
+    "@earendil-works/pi-durable": "1.6.0",
+    "@earendil-works/pi-mcp": "1.6.0",
     "@modelcontextprotocol/sdk": "1.32.1",
     "@types/node": "22.19.19",
     "@types/proper-lockfile": "4.1.4",
@@ -60,7 +60,7 @@
         "@posthog/types": "1.416.0"
       }
     },
-    "@earendil-works/chord@1.5.2": {
+    "@earendil-works/chord@1.6.0": {
       "ws": "8.22.0"
     }
   }
