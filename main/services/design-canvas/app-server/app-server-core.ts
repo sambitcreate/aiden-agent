@@ -15,7 +15,9 @@ export type AppReason =
   | "no-dev-script"
   | "unknown-framework"
   | "no-web-framework"
-  | "invalid-package-json";
+  | "invalid-package-json"
+  /** A folder found by its Deno files alone; its manager is reported unsupported. */
+  | "no-package-json";
 export type FrameworkId =
   | "next"
   | "react-router"
@@ -390,10 +392,15 @@ export const INSTALL_MARKERS: ReadonlyArray<readonly [string, PackageManagerName
 
 export const DENO_MARKERS: readonly string[] = ["deno.lock", "deno.json", "deno.jsonc"];
 
-/** `"pnpm@9.15.0+sha512…"` → `{ name: "pnpm", major: 9 }`. Anything but npm, pnpm, yarn or bun is ignored. */
+/**
+ * `"pnpm@9.15.0+sha512…"` → `{ name: "pnpm", major: 9 }`. The whole value must
+ * be a bare manager or `manager@version`, the version a number with up to two
+ * more parts and an optional prerelease, then an optional `+hash`. Anything
+ * else, and any manager but npm, pnpm, yarn or bun, is ignored.
+ */
 export function parsePackageManagerField(value: unknown): { name: PackageManagerName; major?: number } | null {
   if (typeof value !== "string") return null;
-  const match = /^([a-z]+)(?:@(\d+))?/u.exec(value.trim());
+  const match = /^([a-z]+)(?:@(\d+)(?:\.\d+){0,2}(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.+/=_-]+)?)?$/u.exec(value.trim());
   if (!match || !isPackageManagerName(match[1])) return null;
   return match[2] === undefined ? { name: match[1] } : { name: match[1], major: Number(match[2]) };
 }

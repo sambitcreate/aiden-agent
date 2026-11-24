@@ -28,6 +28,7 @@ import {
   safeScriptNames,
   workspacePatterns,
   type DetectedApp,
+  type PackageClassification,
   type PackageJson,
   type PackageManagerSignals,
   type WebAppDetection,
@@ -277,8 +278,15 @@ async function findCandidates(
   patterns: { include: string[]; exclude: string[] },
 ): Promise<Map<string, boolean>> {
   const found = new Map<string, boolean>();
+  // A Deno project has no package.json; it is still listed, so its manager can be reported unsupported.
   const consider = async (rel: string, viaPattern: boolean) => {
-    if (await exists(path.join(toAbsolute(root, rel), "package.json"))) found.set(rel, (found.get(rel) ?? false) || viaPattern);
+    const dir = toAbsolute(root, rel);
+    let admitted = await exists(path.join(dir, "package.json"));
+    for (const marker of DENO_MARKERS) {
+      if (admitted) break;
+      admitted = await exists(path.join(dir, marker));
+    }
+    if (admitted) found.set(rel, (found.get(rel) ?? false) || viaPattern);
   };
 
   await consider(".", false);
@@ -350,7 +358,10 @@ export async function detectWebApp(root: string, options: { stopAt?: string; hom
       installed ||= enclosing.signals.nodeModules || enclosing.signals.pnp;
     }
 
-    const classification = classifyPackage(pkg, {
+    const noPackageJson = pkg === null && !(await exists(path.join(dir, "package.json")));
+    const classification: PackageClassification = noPackageJson
+      ? { kind: "none", reason: "no-package-json", usesReact: false }
+      : classifyPackage(pkg, {
       workspaceRunnerFile: own.runnerFile,
       workspaceRoot: rel === "." && patterns.include.length > 0,
     });

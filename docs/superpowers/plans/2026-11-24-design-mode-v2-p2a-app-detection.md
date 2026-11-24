@@ -198,6 +198,7 @@ The check is word-based, so the tokens match only as words: `tsc` doesn't match 
 
 | # | Condition | `kind` | `reason` |
 |---|---|---|---|
+| 0 | No `package.json`, but a Deno marker (`deno.json`, `deno.jsonc`, `deno.lock`); the folder is still a candidate so its manager reports `unsupported: "deno"` (PR #911 review) | `none` | `no-package-json` |
 | 1 | `package.json` unreadable, over the cap, not a regular file, or not a JSON object | `none` | `invalid-package-json` |
 | 2 | a desktop shell in deps (`electron`, `@tauri-apps/api`, `@tauri-apps/cli`) and React (`react` or `react-dom`) | `react-nonweb` | `desktop` |
 | 3 | a desktop shell, no React | `none` | `desktop` |
@@ -265,7 +266,7 @@ Two files of the same manager (`bun.lock` with `bun.lockb`, `package-lock.json` 
 ```ts
 type AppKind = "web" | "react-nonweb" | "none";
 type AppReason = "ok" | "desktop" | "workspace-runner" | "react-native" | "no-dev-script"
-  | "unknown-framework" | "no-web-framework" | "invalid-package-json";
+  | "unknown-framework" | "no-web-framework" | "invalid-package-json" | "no-package-json";
 type FrameworkId = "next" | "react-router" | "remix" | "remix-3" | "tanstack-start" | "nuxt" | "angular"
   | "astro" | "gatsby" | "create-react-app" | "tanstack-router" | "vite";
 type PackageManagerName = "npm" | "pnpm" | "yarn" | "bun";

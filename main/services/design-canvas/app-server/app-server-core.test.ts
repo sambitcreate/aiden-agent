@@ -374,6 +374,13 @@ test("an unknown or malformed packageManager field is ignored", () => {
   assert.equal(parsePackageManagerField(""), null);
   assert.deepEqual(parsePackageManagerField("pnpm"), { name: "pnpm" });
   assert.deepEqual(parsePackageManagerField("yarn@4.5.0"), { name: "yarn", major: 4 });
+  // A known manager followed by anything but a version is not a declaration.
+  for (const malformed of ["pnpm@junk", "pnpm@", "yarn!", "npm@11.x", "bun 1.2.0", "pnpmx", "pnpm@9.0.0 extra"]) {
+    assert.equal(parsePackageManagerField(malformed), null, malformed);
+  }
+  assert.deepEqual(parsePackageManagerField("npm@11.11.0+sha512.3f1c0e9a8b"), { name: "npm", major: 11 });
+  assert.deepEqual(parsePackageManagerField("pnpm@10.0.0-rc.1"), { name: "pnpm", major: 10 });
+  assert.equal(decidePackageManager(signals({ field: "pnpm@junk", files: [] })).name, "npm");
   assert.equal(decidePackageManager(signals({ field: "deno@2", files: ["yarn.lock"] })).name, "yarn");
 });
 

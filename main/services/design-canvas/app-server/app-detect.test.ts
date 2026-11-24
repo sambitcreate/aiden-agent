@@ -122,6 +122,22 @@ test("a folder with no package.json anywhere gives no apps and target none", asy
   });
 });
 
+test("a Deno-only folder with no package.json is listed, with Deno as its unsupported manager", async () => {
+  await withBase(async (base) => {
+    await writeTree(base, { "ws/deno.json": { tasks: { dev: "deno run -A main.ts" } }, "ws/main.ts": "" });
+    const detection = await detect(base);
+    const deno = app(detection, ".");
+    assert.equal(deno.kind, "none");
+    assert.equal(deno.reason, "no-package-json");
+    assert.equal(deno.packageManager.name, null);
+    assert.equal(deno.packageManager.unsupported, "deno");
+  });
+  await withBase(async (base) => {
+    await writeTree(base, { "ws/deno.lock": "{}" });
+    assert.equal(app(await detect(base), ".").packageManager.unsupported, "deno");
+  });
+});
+
 test("a missing root folder gives no apps instead of throwing", async () => {
   await withBase(async (base) => {
     assert.deepEqual(await detect(base, "missing"), { apps: [], truncated: false });
