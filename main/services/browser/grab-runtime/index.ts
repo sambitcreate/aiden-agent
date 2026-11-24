@@ -77,29 +77,40 @@ interface ActiveSession {
 let activeSession: ActiveSession | null = null;
 
 const MAX_SHIELD_SCAN = 15_000;
+const MAX_ADOPT_DEPTH = 64;
+// Literal node types: the page can replace its own `Node` global.
+const ELEMENT_NODE = 1;
+const DOCUMENT_NODE = 9;
+const DOCUMENT_FRAGMENT_NODE = 11;
 
 /**
  * Frame documents never deliver their pointer events to this document, so while
  * Grab runs every frame is made transparent to the pointer: input lands here,
  * where it is suppressed, and hit tests briefly lift the shield to look inside
  * same-origin frames. A cross-origin frame stays a single grabbable element.
+ *
+ * A mutation observer on the document does not see into shadow trees, so every
+ * open shadow root the scans find gets observed too. A shadow root attached
+ * after the grab starts raises no mutation at all; `adopt` catches it, and any
+ * frame inside it, from the pointer events its host receives first.
  */
 class FrameShield {
   private readonly saved = new Map<HTMLElement, { value: string; priority: string }>();
+  private readonly watched = new WeakSet<Node>();
   private observer: MutationObserver | null = null;
 
   start(): void {
-    this.scan(document, 0);
-    if (typeof MutationObserver === "function" && document.documentElement) {
+    if (typeof MutationObserver === "function") {
       this.observer = new MutationObserver((records) => {
         for (const record of records) {
           for (const node of Array.from(record.addedNodes)) {
-            if (node instanceof Element) this.scanElement(node);
+            if (node.nodeType === ELEMENT_NODE) this.scanElement(node as Element);
           }
         }
       });
-      this.observer.observe(document.documentElement, { childList: true, subtree: true });
     }
+    if (document.documentElement) this.watch(document.documentElement);
+    this.scan(document, 0);
     // Keys typed into a focused frame would bypass the grab's own handling.
     const focused = document.activeElement;
     if (focused && this.isFrame(focused)) (focused as HTMLElement).blur();
@@ -115,11 +126,55 @@ class FrameShield {
     }
   }
 
+  /**
+   * Shields any of this document's frames around `start` and watches every open
+   * shadow root on the way up, through shadow hosts and same-origin frames.
+   * Nodes from frame documents belong to another realm, so this checks node
+   * types rather than `instanceof`.
+   */
+  adopt(start: Node | null): void {
+    let node: Node | null = start;
+    for (let depth = 0; node && depth < MAX_ADOPT_DEPTH; depth += 1) {
+      // Only this document's frames and shadow roots matter; a shielded frame
+      // already keeps the pointer out of everything inside it.
+      if (node.nodeType === ELEMENT_NODE && (node as Element).ownerDocument === document) {
+        const element = node as Element;
+        if (this.isFrame(element)) this.shield(element);
+        const shadow = element.shadowRoot;
+        if (shadow && !this.watched.has(shadow)) this.scanShadow(shadow, 1);
+      }
+      if (node.parentNode) {
+        node = node.parentNode;
+      } else if (node.nodeType === DOCUMENT_FRAGMENT_NODE && "host" in node) {
+        node = (node as ShadowRoot).host;
+      } else if (node.nodeType === DOCUMENT_NODE && node !== document) {
+        let owner: Element | null = null;
+        try {
+          owner = (node as Document).defaultView?.frameElement ?? null;
+        } catch {
+          owner = null;
+        }
+        node = owner;
+      } else {
+        node = null;
+      }
+    }
+  }
+
   stop(): void {
     this.observer?.disconnect();
     this.observer = null;
     for (const [frame, previous] of this.saved) frame.style.setProperty("pointer-events", previous.value, previous.priority);
     this.saved.clear();
+  }
+
+  private watch(root: Element | ShadowRoot): void {
+    this.watched.add(root);
+    try {
+      this.observer?.observe(root, { childList: true, subtree: true });
+    } catch {
+      // Pointer events still adopt anything that can't be observed.
+    }
   }
 
   private isFrame(element: Element): boolean {
@@ -138,8 +193,13 @@ class FrameShield {
 
   private scanElement(element: Element): void {
     if (this.isFrame(element)) this.shield(element);
-    if (element.shadowRoot) this.scan(element.shadowRoot, 1);
+    if (element.shadowRoot) this.scanShadow(element.shadowRoot, 1);
     this.scan(element, 1);
+  }
+
+  private scanShadow(shadow: ShadowRoot, depth: number): void {
+    if (!this.watched.has(shadow)) this.watch(shadow);
+    this.scan(shadow, depth);
   }
 
   private scan(root: Document | ShadowRoot | Element, depth: number): void {
@@ -154,9 +214,16 @@ class FrameShield {
       const element = elements[index];
       if (!element) continue;
       if (this.isFrame(element)) this.shield(element);
-      if (element.shadowRoot) this.scan(element.shadowRoot, depth + 1);
+      if (element.shadowRoot) this.scanShadow(element.shadowRoot, depth + 1);
     }
   }
+}
+
+/** The innermost target in open shadow trees, where `event.target` is retargeted to the host. */
+function eventTarget(event: Event): Node | null {
+  const first = typeof event.composedPath === "function" ? event.composedPath()[0] : undefined;
+  if (first && typeof (first as Node).nodeType === "number") return first as Node;
+  return event.target && typeof (event.target as Node).nodeType === "number" ? (event.target as Node) : null;
 }
 
 function formatHoverLabel(element: Element, crossOriginIframe: boolean): string {
@@ -309,13 +376,22 @@ function startSession(options?: GrabStartOptions): boolean {
     event.stopImmediatePropagation();
   };
 
+  // Backstop for frames and shadow roots no observer saw: the pointer crosses
+  // their host, and on entering a frame the frame element, in this document
+  // first, so they are shielded before input can reach the frame.
+  const onPointerOver = (event: PointerEvent) => {
+    frames.adopt(eventTarget(event));
+  };
+
   const onPointerMove = (event: PointerEvent) => {
+    frames.adopt(eventTarget(event));
     if (session.pausedForCapture) return;
     const hit = frames.hittable(() => deepElementFromPoint(event.clientX, event.clientY, overlay.host));
     if (!hit) {
       overlay.hide();
       return;
     }
+    frames.adopt(hit.element);
     session.lastCrossOriginIframe = hit.crossOriginIframe;
     session.lastInIframe = hit.inIframe;
     stepping.onPointerMove(event.clientX, event.clientY, hit.element);
@@ -394,6 +470,7 @@ function startSession(options?: GrabStartOptions): boolean {
     refresh();
   };
 
+  document.addEventListener("pointerover", onPointerOver, true);
   document.addEventListener("pointermove", onPointerMove, true);
   document.addEventListener("click", onClick, true);
   document.addEventListener("keydown", onKeyDown, true);
@@ -406,6 +483,7 @@ function startSession(options?: GrabStartOptions): boolean {
 
   session.cleanup = () => {
     frames.stop();
+    document.removeEventListener("pointerover", onPointerOver, true);
     document.removeEventListener("pointermove", onPointerMove, true);
     document.removeEventListener("click", onClick, true);
     document.removeEventListener("keydown", onKeyDown, true);

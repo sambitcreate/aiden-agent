@@ -123,15 +123,39 @@ const FRAME_CLICK_COUNTER = `<script>
   }
 </script>`;
 
-// A same-origin srcdoc frame and a cross-origin (localhost vs 127.0.0.1) frame.
+const frameSrcdoc = (buttonId: string) =>
+  `<!doctype html><html><body style="margin:0;padding:16px"><button id="${buttonId}" style="width:160px;height:40px">Inside</button>${FRAME_CLICK_COUNTER}</body></html>`;
+
+// A same-origin srcdoc frame, a cross-origin (localhost vs 127.0.0.1) frame, a
+// host whose open shadow root exists from the start, and a plain host that gets
+// a shadow root only once a grab is running.
 const FRAMES_FIXTURE_HTML = `<!doctype html>
 <html>
   <head><meta charset="utf-8" /><title>Grab frames fixture</title></head>
   <body style="margin:0;padding:24px">
-    <iframe id="same-frame" style="display:block;width:320px;height:120px;border:0" srcdoc='<!doctype html><html><body style="margin:0;padding:16px"><button id="frame-cta" style="width:160px;height:40px">Inside</button>${FRAME_CLICK_COUNTER.replace(/'/gu, "&#39;")}</body></html>'></iframe>
+    <iframe id="same-frame" style="display:block;width:320px;height:120px;border:0" srcdoc='${frameSrcdoc("frame-cta").replace(/'/gu, "&#39;")}'></iframe>
     <iframe id="cross-frame" style="display:block;width:320px;height:80px;border:0;margin-top:16px" src="CROSS_ORIGIN_SRC"></iframe>
+    <div id="shadow-host" style="display:block;width:320px;padding:12px;margin-top:16px;background:#eef2ff"></div>
+    <div id="late-host" style="display:block;width:320px;padding:12px;margin-top:16px;background:#ecfdf5"></div>
+    <script>document.getElementById("shadow-host").attachShadow({ mode: "open" });</script>
   </body>
 </html>`;
+
+// Runs in the guest page once a grab is active: frames appear inside shadow trees
+// the grab could not have scanned when it started.
+const ADD_SHADOW_FRAMES_SCRIPT = `(() => {
+  const frame = (id, buttonId) => {
+    const element = document.createElement("iframe");
+    element.id = id;
+    element.style.cssText = "display:block;width:320px;height:80px;border:0";
+    element.srcdoc = ${JSON.stringify(frameSrcdoc("BUTTON_ID"))}.replace("BUTTON_ID", buttonId);
+    return element;
+  };
+  document.getElementById("shadow-host").shadowRoot.append(frame("shadow-frame", "shadow-cta"));
+  const late = document.getElementById("late-host").attachShadow({ mode: "open" });
+  late.append(frame("late-frame", "late-cta"));
+  return true;
+})()`;
 
 async function startFixtureServer() {
   const server = createServer((request, response) => {
@@ -543,21 +567,39 @@ test("grabbing inside same-origin and cross-origin frames captures the element a
       )
       .toBe(true);
 
-    const clickAt = (selector: "same" | "cross", shift: boolean) =>
-      app.evaluate(async ({ webContents }, { pageUrl, selector, shift }) => {
+    // Same-origin frames by where they live: the light DOM, a shadow root that
+    // existed when the grab started, and one attached while it runs.
+    const SAME_ORIGIN_FRAMES = {
+      same: "document.getElementById('same-frame')",
+      shadow: "document.getElementById('shadow-host').shadowRoot.getElementById('shadow-frame')",
+      late: "document.getElementById('late-host').shadowRoot.getElementById('late-frame')",
+    } as const;
+    const BUTTON_IDS = { same: "frame-cta", shadow: "shadow-cta", late: "late-cta" } as const;
+    type FrameName = keyof typeof SAME_ORIGIN_FRAMES;
+
+    const clickAt = (selector: FrameName | "cross", shift: boolean, approachFrom?: "late-host") =>
+      app.evaluate(async ({ webContents }, { pageUrl, selector, shift, approachFrom, frames, buttons }) => {
         const guest = webContents.getAllWebContents().find((contents) => contents.getURL() === pageUrl)!;
         const point = (await guest.executeJavaScript(
-          selector === "same"
-            ? "(() => { const frame = document.getElementById('same-frame').getBoundingClientRect(); const r = document.getElementById('same-frame').contentDocument.getElementById('frame-cta').getBoundingClientRect(); return { x: Math.round(frame.x + r.x + r.width / 2), y: Math.round(frame.y + r.y + r.height / 2) }; })()"
-            : "(() => { const r = document.getElementById('cross-frame').getBoundingClientRect(); return { x: Math.round(r.x + r.width / 2), y: Math.round(r.y + r.height / 2) }; })()",
+          selector === "cross"
+            ? "(() => { const r = document.getElementById('cross-frame').getBoundingClientRect(); return { x: Math.round(r.x + r.width / 2), y: Math.round(r.y + r.height / 2) }; })()"
+            : `(() => { const element = ${frames[selector]}; element.scrollIntoView({ block: 'center' }); const frame = element.getBoundingClientRect(); const r = element.contentDocument.getElementById('${buttons[selector]}').getBoundingClientRect(); return { x: Math.round(frame.x + r.x + r.width / 2), y: Math.round(frame.y + r.y + r.height / 2) }; })()`,
         )) as { x: number; y: number };
         const modifiers: Array<"shift"> = shift ? ["shift"] : [];
         guest.focus();
+        if (approachFrom) {
+          // Cross the host's padding on the way in, as a real pointer does.
+          const edge = (await guest.executeJavaScript(
+            `(() => { const r = document.getElementById('${approachFrom}').getBoundingClientRect(); return { x: Math.round(r.x + r.width / 2), y: Math.round(r.y + 4) }; })()`,
+          )) as { x: number; y: number };
+          guest.sendInputEvent({ type: "mouseMove", ...edge });
+          await new Promise((resolve) => setTimeout(resolve, 40));
+        }
         guest.sendInputEvent({ type: "mouseMove", ...point });
         await new Promise((resolve) => setTimeout(resolve, 40));
         guest.sendInputEvent({ type: "mouseDown", button: "left", clickCount: 1, modifiers, ...point });
         guest.sendInputEvent({ type: "mouseUp", button: "left", clickCount: 1, modifiers, ...point });
-      }, { pageUrl, selector, shift });
+      }, { pageUrl, selector, shift, approachFrom, frames: SAME_ORIGIN_FRAMES, buttons: BUTTON_IDS });
 
     await surface.getByRole("button", { name: "Grab element", exact: true }).click();
     await expect
@@ -570,25 +612,50 @@ test("grabbing inside same-origin and cross-origin frames captures the element a
     await expect(chips).toHaveCount(1);
     await expect(chips.first()).toContainText("button#frame-cta");
 
+    // Frames added inside shadow trees after the grab started are shielded too:
+    // one in a shadow root the grab already knew, one in a root attached later.
+    const evaluateGuest = (script: string) =>
+      app.evaluate(async ({ webContents }, { pageUrl, script }) => {
+        const guest = webContents.getAllWebContents().find((contents) => contents.getURL() === pageUrl)!;
+        return guest.executeJavaScript(script);
+      }, { pageUrl, script });
+    expect(await evaluateGuest(ADD_SHADOW_FRAMES_SCRIPT)).toBe(true);
+    await expect
+      .poll(() =>
+        evaluateGuest(
+          `[${SAME_ORIGIN_FRAMES.shadow}, ${SAME_ORIGIN_FRAMES.late}].every((frame) => typeof frame?.contentWindow?.frameClicks === "number" && frame.contentDocument.querySelector("button"))`,
+        ),
+      )
+      .toBe(true);
+    await clickAt("shadow", true);
+    await expect(chips).toHaveCount(2);
+    await expect(chips.nth(1)).toContainText("button#shadow-cta");
+    await clickAt("late", true, "late-host");
+    await expect(chips).toHaveCount(3);
+    await expect(chips.nth(2)).toContainText("button#late-cta");
+
     // A cross-origin frame is captured as the frame element itself.
     await clickAt("cross", false);
-    await expect(chips).toHaveCount(2);
-    await expect(chips.nth(1)).toContainText("iframe#cross-frame");
+    await expect(chips).toHaveCount(4);
+    await expect(chips.nth(3)).toContainText("iframe#cross-frame");
     await expect
       .poll(async () => (await state(page)).tabs.find((tab) => tab.id === tabId)?.grabbing)
       .toBe(false);
 
-    // Neither frame saw a pointer event, and the frames are clickable again afterwards.
-    const counts = await app.evaluate(async ({ webContents }, { pageUrl, crossUrl }) => {
+    // No frame saw a pointer event, and the frames are clickable again afterwards.
+    const counts = await app.evaluate(async ({ webContents }, { pageUrl, crossUrl, frames }) => {
       const guest = webContents.getAllWebContents().find((contents) => contents.getURL() === pageUrl)!;
       const cross = guest.mainFrame.framesInSubtree.find((frame) => frame.url === crossUrl)!;
+      const sameOrigin = `[${Object.values(frames).join(", ")}]`;
       return {
-        same: await guest.executeJavaScript("document.getElementById('same-frame').contentWindow.frameClicks"),
+        same: await guest.executeJavaScript(`${sameOrigin}.map((frame) => frame.contentWindow.frameClicks)`),
         cross: await cross.executeJavaScript("globalThis.frameClicks"),
-        restored: await guest.executeJavaScript("[...document.querySelectorAll('iframe')].every((frame) => frame.style.pointerEvents === '')"),
+        restored: await guest.executeJavaScript(
+          `[...document.querySelectorAll('iframe'), ...${sameOrigin}].every((frame) => frame.style.pointerEvents === '')`,
+        ),
       };
-    }, { pageUrl, crossUrl });
-    expect(counts).toEqual({ same: 0, cross: 0, restored: true });
+    }, { pageUrl, crossUrl, frames: SAME_ORIGIN_FRAMES });
+    expect(counts).toEqual({ same: [0, 0, 0], cross: 0, restored: true });
 
     await command(page, { action: "close", tabId });
   } finally {
