@@ -227,6 +227,34 @@ test("parses a v3 document and keeps chatPages entries that name existing pages 
   assert.deepEqual(parsed(JSON.parse(JSON.stringify(doc))).doc, doc);
 });
 
+test("keeps namedFor only when it is a safe chat id", () => {
+  const { doc } = parsed(
+    canvas({
+      pages: [
+        { id: "a", name: "A", namedFor: "chat-1" },
+        { id: "b", name: "B", namedFor: "../x" },
+        { id: "c", name: "C", namedFor: 4 },
+      ],
+    }),
+  );
+  assert.deepEqual(doc.pages, [
+    { id: "a", name: "A", namedFor: "chat-1" },
+    { id: "b", name: "B" },
+    { id: "c", name: "C" },
+  ]);
+  assert.deepEqual(parsed(JSON.parse(JSON.stringify(doc))).doc.pages, doc.pages);
+});
+
+test("parse keeps the first 2 000 chatPages entries and counts the rest in dropped, without setting the canvas aside", () => {
+  const chatPages: Record<string, string> = {};
+  for (let index = 0; index < DESIGN_CANVAS_LIMITS.chatPages + 3; index += 1) chatPages[`chat-${index}`] = "page-1";
+  const { doc, dropped } = parsed(canvas({ chatPages }));
+  assert.equal(Object.keys(doc.chatPages).length, DESIGN_CANVAS_LIMITS.chatPages);
+  assert.equal(doc.chatPages["chat-0"], "page-1");
+  assert.equal(doc.chatPages[`chat-${DESIGN_CANVAS_LIMITS.chatPages}`], undefined);
+  assert.equal(dropped, 3);
+});
+
 test("keeps chatId on artifact frames and comments only when it is a safe chat id", () => {
   const comment = (id: string, chatId: unknown) => ({
     id,

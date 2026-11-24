@@ -32,6 +32,23 @@ export function viewPageId(doc: Pick<DesignCanvas, "pages">, view?: { pageId?: s
 }
 
 /**
+ * The page a chat's canvas shows: its view's page while that page exists,
+ * else the chat's own page (`chatPages`) while that exists, else the first
+ * page. `viewPageId` stays chat-blind for frames and comment inputs.
+ */
+export function chatPageId(
+  doc: Pick<DesignCanvas, "pages" | "chatPages">,
+  view: { pageId?: string } | null | undefined,
+  chatId: string,
+): string {
+  const exists = (id: string | undefined): id is string => id !== undefined && doc.pages.some((page) => page.id === id);
+  if (exists(view?.pageId)) return view.pageId;
+  const claim = Object.prototype.hasOwnProperty.call(doc.chatPages, chatId) ? doc.chatPages[chatId] : undefined;
+  if (exists(claim)) return claim;
+  return doc.pages[0]!.id;
+}
+
+/**
  * A viewport, with its coordinates and zoom clamped to the canvas's bounds.
  * Null unless `x`, `y` and `zoom` are all finite numbers.
  */

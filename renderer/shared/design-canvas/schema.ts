@@ -193,15 +193,22 @@ export type DesignComment = {
 
 export type DesignViewport = { x: number; y: number; zoom: number };
 
-/** A page of the canvas. Where each chat looks at it is that chat's view (`view.ts`). */
-export type DesignPage = { id: string; name: string };
+/**
+ * A page of the canvas. Where each chat looks at it is that chat's view
+ * (`view.ts`). `namedFor` is the chat a page was made for: it takes that
+ * chat's title until someone renames it (`chat-pages.ts`).
+ */
+export type DesignPage = { id: string; name: string; namedFor?: string };
 
 export type DesignCanvas = {
   version: 3;
   revision: number;
   /** At least one, in the order the page picker lists them. */
   pages: DesignPage[];
-  /** The page each chat works on, by chat id; every value is one of `pages`. */
+  /**
+   * Each chat's own page, by chat id; every value is one of `pages`. Only
+   * main writes it (`chat-pages.ts`); a person's save is merged in the store.
+   */
   chatPages: Record<string, string>;
   frames: DesignFrame[];
   comments: DesignComment[];
@@ -220,6 +227,7 @@ export const DESIGN_CANVAS_LIMITS = {
   comments: 2000,
   pages: 200,
   pageNameChars: 60,
+  chatPages: 2000,
   minSize: 40,
   maxSize: 8000,
   maxCoord: 1_000_000,
@@ -376,8 +384,16 @@ export function parseDesignCanvas(value: unknown): DesignCanvasParseResult {
   };
   const chatPages: Record<string, string> = {};
   if (isRecord(value.chatPages)) {
+    let kept = 0;
     for (const [chatId, pageId] of Object.entries(value.chatPages)) {
-      if (isDesignChatId(chatId) && typeof pageId === "string" && pageIds.has(pageId)) chatPages[chatId] = pageId;
+      if (!isDesignChatId(chatId) || typeof pageId !== "string" || !pageIds.has(pageId)) continue;
+      // Past the cap an entry is dropped and counted, as frames are, so the canvas is never set aside.
+      if (kept >= DESIGN_CANVAS_LIMITS.chatPages) {
+        dropped += 1;
+        continue;
+      }
+      chatPages[chatId] = pageId;
+      kept += 1;
     }
   }
 
@@ -483,7 +499,9 @@ function parsePages(value: unknown): DesignPage[] {
       const id = identifier(raw.id);
       if (!id || ids.has(id)) continue;
       ids.add(id);
-      pages.push({ id, name: pageName(raw.name, pages.length) });
+      const page: DesignPage = { id, name: pageName(raw.name, pages.length) };
+      if (isDesignChatId(raw.namedFor)) page.namedFor = raw.namedFor;
+      pages.push(page);
     }
   }
   if (pages.length === 0) pages.push({ id: DESIGN_FIRST_PAGE_ID, name: "Page 1" });

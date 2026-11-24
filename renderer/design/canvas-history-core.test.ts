@@ -70,14 +70,61 @@ test("undoing a frame move keeps a page rename another chat made meanwhile", () 
   assert.deepEqual(kept, { ...renamedElsewhere, frames: two.frames });
 });
 
-test("undoing a page edit takes the pages back whole, and drops chat pages that point at a page gone", () => {
+test("undoing a page edit puts the pages back, and a chat on a page the undo removes moves to the first page", () => {
   const two: DesignCanvas = { ...addPage(state("a"), "p2"), chatPages: { "chat-1": "p2" } };
   const reordered = movePage(two, "p2", -1);
   assert.deepEqual(changesBetween(reordered, two)(reordered).pages.map((page) => page.id), ["page-1", "p2"]);
-  // Undoing the add of p2 takes it away again, and the chat that used it no longer names it.
-  const withoutP2 = changesBetween(two, state("a"))(two);
+  // Undoing the add of p2 takes it away again; the claim that the step did not make is the doc's to keep.
+  const withoutP2 = changesBetween(two, { ...state("a"), chatPages: { "chat-1": "p2" } })({ ...two, chatPages: { "chat-1": "p2", "chat-2": "p2" } });
   assert.deepEqual(withoutP2.pages.map((page) => page.id), ["page-1"]);
-  assert.deepEqual(withoutP2.chatPages, {});
+  assert.deepEqual(withoutP2.chatPages, { "chat-1": "page-1", "chat-2": "page-1" });
+});
+
+const pageIds = (doc: DesignCanvas | undefined) => doc?.pages.map((page) => page.id);
+
+test("a page another writer adds or renames does not stop an undo from bringing back a deleted page, its frames and its comments", () => {
+  const three = addPage(addPage(state("kept"), "P", "Pricing"), "Q", "Plans");
+  const before: DesignCanvas = {
+    ...three,
+    frames: [...three.frames, { ...three.frames[0]!, id: "on-p", pageId: "P" }],
+    comments: [
+      { id: "c", pageId: "P", frameId: "on-p", x: 0, y: 0, note: "c", state: "open", anchorState: "anchored", createdAt: "2026-11-23T10:00:00.000Z" },
+    ],
+  };
+  const deleted = deletePage(before, "P");
+  let history = record(fresh, before);
+  // A store update from another writer adds R and renames Q while the delete is on screen.
+  const elsewhere = keepUnchanged(deleted, renamePage(addPage(deleted, "R", "Roadmap"), "Q", "Tiers"));
+  history = takeIn(history, { before: deleted, from: deleted, to: elsewhere });
+  const back = undo(history, elsewhere)!;
+  assert.deepEqual(pageIds(back.doc), ["page-1", "P", "Q", "R"], "P is back in its old place among the shared pages");
+  assert.equal(back.doc.pages.find((page) => page.id === "Q")?.name, "Tiers");
+  assert.deepEqual(back.doc.frames.map((frame) => frame.id).sort(), ["kept", "on-p"]);
+  assert.deepEqual(back.doc.comments.map((entry) => entry.id), ["c"]);
+});
+
+test("a claim another writer made reaches every kept step, so undoing a page delete brings back the current claim", () => {
+  const before: DesignCanvas = { ...addPage(addPage(state("a"), "P"), "Q"), chatPages: { B: "P" } };
+  const deleted = deletePage(before, "P");
+  let history = record(fresh, before);
+  const claimed: DesignCanvas = { ...deleted, chatPages: { B: "Q" } };
+  history = takeIn(history, { before: deleted, from: deleted, to: claimed });
+  const back = undo(history, claimed)!;
+  assert.deepEqual(pageIds(back.doc), ["page-1", "P", "Q"]);
+  assert.equal(back.doc.chatPages.B, "Q");
+});
+
+test("a page that exists only in an older step stays in that step after a carry", () => {
+  const from = state("a");
+  const to = addPage(from, "R", "Roadmap");
+  const step = addPage(from, "X", "Mine");
+  const carried = changesBetween(from, to)(step);
+  assert.deepEqual(pageIds(carried), ["page-1", "R", "X"]);
+  // A brought-back page whose predecessor is gone goes after the nearest earlier page that exists.
+  const wide = addPage(addPage(addPage(state("a"), "P1"), "P2"), "P3");
+  const narrowed = deletePage(deletePage(wide, "P1"), "P2");
+  const restored = changesBetween(narrowed, wide)(deletePage(narrowed, "page-1"));
+  assert.deepEqual(pageIds(restored), ["P1", "P2", "P3"]);
 });
 
 test("undoing a comment edit keeps comments someone else changed, and a comment goes with its frame", () => {

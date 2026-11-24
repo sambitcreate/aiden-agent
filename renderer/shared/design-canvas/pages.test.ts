@@ -102,9 +102,29 @@ test("deleting a page removes its frames and comments", () => {
   assert.equal(deletePage(single, "page-1"), single, "the last page stays");
 });
 
-test("deletePage drops chatPages entries for the deleted page", () => {
+test("deletePage moves the deleted page's chats to the first page left", () => {
   const doc: DesignCanvas = { ...addPage(twoPages(), "p3"), chatPages: { "chat-1": "p3", "chat-2": "p2", "chat-3": "p3" } };
-  assert.deepEqual(deletePage(doc, "p3").chatPages, { "chat-2": "p2" });
+  assert.deepEqual(deletePage(doc, "p3").chatPages, { "chat-1": "page-1", "chat-2": "p2", "chat-3": "page-1" });
+  // Deleting the first page moves its chats to the page that is first after it.
+  const first: DesignCanvas = { ...doc, chatPages: { "chat-1": "page-1", "chat-2": "p3" } };
+  assert.deepEqual(deletePage(first, "page-1").chatPages, { "chat-1": "p2", "chat-2": "p3" });
+});
+
+test("renaming a page stops it following its chat", () => {
+  const doc: DesignCanvas = { ...emptyDesignCanvas(), pages: [{ id: "page-1", name: "Landing", namedFor: "chat-1" }] };
+  assert.equal(renamePage(doc, "page-1", "Landing"), doc, "the same name changes nothing");
+  assert.deepEqual(renamePage(doc, "page-1", "Mine").pages, [{ id: "page-1", name: "Mine" }]);
+});
+
+test("duplicating a page copies neither namedFor nor claims", () => {
+  const doc: DesignCanvas = {
+    ...emptyDesignCanvas(),
+    pages: [{ id: "page-1", name: "Landing", namedFor: "chat-1" }],
+    chatPages: { "chat-1": "page-1" },
+  };
+  const copied = duplicatePage(doc, "page-1", "copy", () => "x");
+  assert.deepEqual(copied.pages[1], { id: "copy", name: "Landing copy" });
+  assert.deepEqual(copied.chatPages, { "chat-1": "page-1" });
 });
 
 test("pages move one place at a time and stop at the ends", () => {

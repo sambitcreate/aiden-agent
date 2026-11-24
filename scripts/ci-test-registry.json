@@ -1245,6 +1245,7 @@
         "renderer/shared/design-canvas/view.test.ts",
         "renderer/shared/design-canvas/canvas-summary.test.ts",
         "renderer/shared/design-canvas/pages.test.ts",
+        "renderer/shared/design-canvas/chat-pages.test.ts",
         "renderer/shared/design-canvas/comments.test.ts",
         "renderer/shared/design-canvas/connectors.test.ts",
         "renderer/shared/design-canvas/drawing.test.ts",
