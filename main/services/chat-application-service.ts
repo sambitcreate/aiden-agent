@@ -12,6 +12,7 @@ import { appendReconciliationFailureMessage } from "../../renderer/shared/chat-m
 import { persistedChatWorkspaceId } from "../../renderer/shared/chat-workspace.js";
 import type { ParsedPublicChatCreate } from "../handlers/chat-create-params.js";
 import type { ChatStartedByV1 } from "../../renderer/shared/chat-started-by.js";
+import type { GenerationThinkingLevel } from "../../renderer/shared/generation-thinking.js";
 import type { chatStore } from "./chat-store.js";
 import type { ChatPullRequestStore } from "./chat-pull-request-store.js";
 import type { configStore } from "./config-store.js";
@@ -367,18 +368,25 @@ export function createChatApplicationService(deps: ChatApplicationDependencies) 
       providerId: string,
       model: string,
       options: ChatApplicationMutationOptions = {},
+      thinkingLevel?: GenerationThinkingLevel | null,
     ) {
       if (deps.llmClient.isChatBusy(chatId)) {
         throw new Error("Finish or stop the current response before changing this chat's model.");
       }
       return chatForRenderer(
-        await deps.chatStore.setChatModelSelection(chatId, providerId, model, async (chat) => {
-          assertRenameAllowedFromChat(chat, options);
-          await options.assertCurrent?.(chat);
-          if (deps.llmClient.isChatBusy(chatId)) {
-            throw new Error("Finish or stop the current response before changing this chat's model.");
-          }
-        }),
+        await deps.chatStore.setChatModelSelection(
+          chatId,
+          providerId,
+          model,
+          async (chat) => {
+            assertRenameAllowedFromChat(chat, options);
+            await options.assertCurrent?.(chat);
+            if (deps.llmClient.isChatBusy(chatId)) {
+              throw new Error("Finish or stop the current response before changing this chat's model.");
+            }
+          },
+          thinkingLevel,
+        ),
       );
     },
 
