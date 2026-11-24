@@ -89,6 +89,7 @@ test("same-window model writes notify every mounted consumer", async () => {
     value: {
       getItem: (key: string) => values.get(key) ?? null,
       setItem: (key: string, value: string) => values.set(key, value),
+      removeItem: (key: string) => values.delete(key),
     },
   });
   Object.defineProperty(globalThis, "window", {
@@ -155,6 +156,7 @@ test("a new-chat model Aiden sets on the host reaches the window, and a pick her
     value: {
       getItem: (key: string) => values.get(key) ?? null,
       setItem: (key: string, value: string) => values.set(key, value),
+      removeItem: (key: string) => values.delete(key),
     },
   });
   Object.defineProperty(globalThis, "window", {
@@ -171,7 +173,9 @@ test("a new-chat model Aiden sets on the host reaches the window, and a pick her
   persistModelSelection("lmstudio", "qwen3-8b");
   persistModelSelection("lmstudio", "qwen3-8b");
   await new Promise((resolve) => setTimeout(resolve, 0));
-  assert.deepEqual(invoked, [["settings:set", { lastProviderId: "lmstudio", lastModel: "qwen3-8b" }]]);
+  assert.deepEqual(invoked, [
+    ["settings:set", { lastProviderId: "lmstudio", lastModel: "qwen3-8b", lastThinkingLevel: null }],
+  ]);
 
   let deliver: ((payload: unknown) => void) | undefined;
   const unsubscribe = subscribeHostNewChatModel(((_channel: string, handler: (payload: unknown) => void) => {
@@ -196,21 +200,25 @@ test("at startup the host's new-chat model is brought in line with this window's
     value: {
       getItem: (key: string) => values.get(key) ?? null,
       setItem: (key: string, value: string) => values.set(key, value),
+      removeItem: (key: string) => values.delete(key),
     },
   });
   const { mirrorNewChatModelToHost } = await import("./use-model-selection");
   // The host still names the model an older version wrote after a send in another chat.
-  let host = { lastProviderId: "lmstudio", lastModel: "model-a" };
+  let host: { lastProviderId: string; lastModel: string; lastThinkingLevel?: string | null } = {
+    lastProviderId: "lmstudio",
+    lastModel: "model-a",
+  };
   const writes: unknown[] = [];
   const api = {
-    get: async () => structuredClone(host),
+    get: async () => ({ lastProviderId: host.lastProviderId, lastModel: host.lastModel }),
     set: async (patch: typeof host) => {
       writes.push(patch);
       host = { ...host, ...patch };
     },
   };
   await mirrorNewChatModelToHost(api);
-  assert.deepEqual(host, { lastProviderId: "lmstudio", lastModel: "model-b" });
+  assert.deepEqual(host, { lastProviderId: "lmstudio", lastModel: "model-b", lastThinkingLevel: null });
   await mirrorNewChatModelToHost(api);
   assert.equal(writes.length, 1, "nothing is written when they already match");
   values.clear();
@@ -229,6 +237,7 @@ test("a pick made while the startup read is pending is the one the host keeps", 
     value: {
       getItem: (key: string) => values.get(key) ?? null,
       setItem: (key: string, value: string) => values.set(key, value),
+      removeItem: (key: string) => values.delete(key),
     },
   });
   const { mirrorNewChatModelToHost } = await import("./use-model-selection");
@@ -246,6 +255,58 @@ test("a pick made while the startup read is pending is the one the host keeps", 
   host = { lastProviderId: "lmstudio", lastModel: "model-c" };
   answer(staleRead);
   await mirrored;
-  assert.deepEqual(host, { lastProviderId: "lmstudio", lastModel: "model-c" });
+  assert.deepEqual(host, { lastProviderId: "lmstudio", lastModel: "model-c", lastThinkingLevel: null });
   assert.equal(values.get("aiden-agent.model"), "model-c");
+});
+
+test("a new-chat pick keeps its level until another model is picked, and the host follows", async () => {
+  const values = new Map<string, string>();
+  const events = new EventTarget();
+  const invoked: unknown[][] = [];
+  Object.defineProperty(globalThis, "localStorage", {
+    configurable: true,
+    value: {
+      getItem: (key: string) => values.get(key) ?? null,
+      setItem: (key: string, value: string) => values.set(key, value),
+      removeItem: (key: string) => values.delete(key),
+    },
+  });
+  Object.defineProperty(globalThis, "window", {
+    configurable: true,
+    value: {
+      addEventListener: events.addEventListener.bind(events),
+      removeEventListener: events.removeEventListener.bind(events),
+      dispatchEvent: events.dispatchEvent.bind(events),
+      aidenAPI: { ipc: { invoke: async (...args: unknown[]) => { invoked.push(args); return {}; } } },
+    },
+  });
+  const { persistModelSelection, readModelSelection, chatModelSelection } = await import("./use-model-selection");
+  persistModelSelection("anthropic", "claude", "high");
+  assert.deepEqual(readModelSelection(), { providerId: "anthropic", model: "claude", thinkingLevel: "high" });
+  persistModelSelection("anthropic", "claude", "low");
+  assert.equal(readModelSelection().thinkingLevel, "low", "a level-only change is a new pick");
+  persistModelSelection("openai", "gpt");
+  assert.deepEqual(readModelSelection(), { providerId: "openai", model: "gpt" }, "a pick without a level clears it");
+  values.set("aiden-agent.thinkingLevel", "turbo");
+  assert.equal(readModelSelection().thinkingLevel, undefined, "an unknown stored level reads as none");
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  assert.deepEqual(
+    invoked.map(([, patch]) => patch),
+    [
+      { lastProviderId: "anthropic", lastModel: "claude", lastThinkingLevel: "high" },
+      { lastProviderId: "anthropic", lastModel: "claude", lastThinkingLevel: "low" },
+      { lastProviderId: "openai", lastModel: "gpt", lastThinkingLevel: null },
+    ],
+  );
+  const app = { providerId: "openai", model: "gpt", thinkingLevel: "low" as const };
+  assert.deepEqual(
+    chatModelSelection({ providerId: "anthropic", model: "claude", thinkingLevel: "max" }, true, app),
+    { providerId: "anthropic", model: "claude", thinkingLevel: "max" },
+    "a chat that owns its model answers with its own level",
+  );
+  assert.deepEqual(chatModelSelection({ providerId: "anthropic", model: "claude" }, true, app), {
+    providerId: "anthropic",
+    model: "claude",
+  });
+  assert.deepEqual(chatModelSelection({ providerId: "anthropic", model: "claude" }, false, app), app);
 });
