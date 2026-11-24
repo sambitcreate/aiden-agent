@@ -15,30 +15,46 @@ import { designAppRootText, EMPTY_LOG_CARRY, logDisplayChunk, type DesignAppLogs
 import { designAppStatusLine, useDesignAppsSnapshot } from "./design-app-chip";
 import { useDesignPane } from "./design-pane";
 
-/** How much of a run the drawer starts with and keeps (D4). */
+/** How much of a run the drawer starts with and keeps (D4), in UTF-8 bytes. */
 export const DESIGN_APP_LOGS_KEEP = 256 * 1024;
 const POLL_MS = 1000;
 const DROPPED = "Earlier output was dropped";
 const NEW_RUN = "New run";
 const SKIPPED = "Output was skipped to show the latest";
 
-type Chunk = { id: number; kind: "text"; text: string } | { id: number; kind: "note"; text: string };
+/** `bytes`: the text's UTF-8 length, which the drawer's cap counts. */
+type Chunk = { id: number; kind: "text"; text: string; bytes: number } | { id: number; kind: "note"; text: string };
+
+/** `text`'s length in UTF-8, as `TextEncoder` would encode it (a lone surrogate as U+FFFD's three bytes), without encoding it. */
+function utf8Bytes(text: string): number {
+  let bytes = 0;
+  for (let index = 0; index < text.length; index += 1) {
+    const unit = text.charCodeAt(index);
+    if (unit < 0x80) bytes += 1;
+    else if (unit < 0x800) bytes += 2;
+    else if (unit >= 0xd800 && unit <= 0xdbff && index + 1 < text.length && (text.charCodeAt(index + 1) & 0xfc00) === 0xdc00) {
+      bytes += 4;
+      index += 1;
+    } else bytes += 3;
+  }
+  return bytes;
+}
 
 interface Cursor {
   run: string;
   next: number;
 }
 
-/** Appends cleaned text to the kept chunks, keeping at most `DESIGN_APP_LOGS_KEEP` characters of output. */
+/** Appends cleaned text to the kept chunks, keeping at most `DESIGN_APP_LOGS_KEEP` bytes of output, counted in UTF-8. */
 function keep(chunks: readonly Chunk[], added: readonly Chunk[]): Chunk[] {
   let next = [...chunks, ...added];
-  let size = next.reduce((total, chunk) => total + (chunk.kind === "text" ? chunk.text.length : 0), 0);
+  let size = next.reduce((total, chunk) => total + (chunk.kind === "text" ? chunk.bytes : 0), 0);
   if (size <= DESIGN_APP_LOGS_KEEP) return next;
   let dropped = false;
   while (size > DESIGN_APP_LOGS_KEEP && next.length > 0) {
     const [first, ...rest] = next;
     next = rest;
-    if (first!.kind === "text") size -= first!.text.length;
+    if (first!.kind === "text") size -= first!.bytes;
     dropped = true;
   }
   // The new first chunk starts at a line, so no half line shows at the top.
@@ -47,7 +63,7 @@ function keep(chunks: readonly Chunk[], added: readonly Chunk[]): Chunk[] {
     const chunk = next[firstText] as Extract<Chunk, { kind: "text" }>;
     const newline = chunk.text.indexOf("\n");
     const text = newline < 0 ? "" : chunk.text.slice(newline + 1);
-    next = [...next.slice(0, firstText), { ...chunk, text }, ...next.slice(firstText + 1)];
+    next = [...next.slice(0, firstText), { ...chunk, text, bytes: utf8Bytes(text) }, ...next.slice(firstText + 1)];
   }
   // One dropped line stays on top.
   while (next[0]?.kind === "note") next = next.slice(1);
@@ -82,7 +98,7 @@ function useDesignAppLog(chatId: string, appRoot: string, active: boolean, pollM
     const clean = (text: string): Chunk[] => {
       const cleaned = logDisplayChunk(text, carry.current);
       carry.current = cleaned.carry;
-      return cleaned.text ? [{ id: (ids.current += 1), kind: "text", text: cleaned.text }] : [];
+      return cleaned.text ? [{ id: (ids.current += 1), kind: "text", text: cleaned.text, bytes: utf8Bytes(cleaned.text) }] : [];
     };
     const add = (added: Chunk[]) => {
       if (added.length > 0) setChunks((current) => keep(current, added));

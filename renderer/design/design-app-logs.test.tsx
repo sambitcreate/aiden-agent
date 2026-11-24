@@ -169,6 +169,28 @@ test("past 256 KiB the oldest chunks go, the first kept chunk starts at a line, 
   assert.ok(text.length - "Earlier output was dropped".length <= DESIGN_APP_LOGS_KEEP);
 });
 
+test("the 256 KiB the drawer keeps are UTF-8 bytes, not characters", async () => {
+  // Two chunks of three-byte characters: about 100 K characters together (under 256 K), but about 300 KiB.
+  const chunk = (head: string, letter: string) => `${head}\n${`${letter.repeat(99)}\n`.repeat(500)}`;
+  const first = chunk("first", "€");
+  const second = chunk("second", "₩");
+  const bytes = (text: string) => new TextEncoder().encode(text).length;
+  assert.ok(first.length + second.length < DESIGN_APP_LOGS_KEEP && bytes(first) + bytes(second) > DESIGN_APP_LOGS_KEEP);
+  const logs = scriptLogs([
+    read({ text: first, next: bytes(first), end: bytes(first) }),
+    read({ text: second, from: bytes(first), next: bytes(first) + bytes(second), end: bytes(first) + bytes(second) }),
+    read({ text: "", from: bytes(first) + bytes(second), next: bytes(first) + bytes(second), end: bytes(first) + bytes(second) }),
+  ]);
+  mount(logs, { pollMs: 10 });
+  // The kept chunk starts at a line, so its head line goes with the dropped chunk.
+  const body = second.slice(second.indexOf("\n") + 1);
+  await until(() => assert.equal(outputText().endsWith(body), true));
+  const text = outputText();
+  assert.equal(text.includes("first"), false, "the oldest chunk went");
+  assert.equal(text.startsWith("Earlier output was dropped"), true);
+  assert.ok(bytes(text.slice("Earlier output was dropped".length)) <= DESIGN_APP_LOGS_KEEP);
+});
+
 /** A log main serves like `DesignAppServers.logs`: 64 KiB a read from the cursor, a cursor of another run reading the new run from 0. */
 function liveLog(initial: string) {
   const state = { run: "r1", text: initial };
