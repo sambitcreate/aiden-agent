@@ -36,6 +36,7 @@ import {
   formatDuration,
   newBackgroundJobId,
   type BackgroundJobEnded,
+  type DesignJobView,
 } from "./background-jobs.js";
 import type { RunCommandLeftovers } from "../coding-tools.js";
 import { ChatSettlement } from "./chat-settlement.js";
@@ -188,12 +189,29 @@ function jobEndedNotice({ job, tail }: BackgroundJobEnded): void {
 
 // ── The three services ─────────────────────────────────────────────────────
 
+/** Design mode's listeners for its dev-server jobs; design-canvas subscribes here, so nothing imports it from this file. */
+const designJobListeners = new Set<(view: DesignJobView) => void>();
+
+export function onDesignJobChange(listener: (view: DesignJobView) => void): () => void {
+  designJobListeners.add(listener);
+  return () => designJobListeners.delete(listener);
+}
+
 export const backgroundJobs = new BackgroundJobs({
   logDir: path.join(app.getPath("userData"), "background-jobs"),
   onEnded: jobEndedNotice,
   onChange: (chatId) => {
     changed(chatId);
     if (!deletedChats.has(chatId)) chatSettlement.jobsChanged(chatId);
+  },
+  onDesignChange: (view) => {
+    for (const listener of designJobListeners) {
+      try {
+        listener(view);
+      } catch (error) {
+        logger.warn("background-jobs", "A design job listener failed.", error);
+      }
+    }
   },
   log: (message, error) => logger.warn("background-jobs", message, error),
 });

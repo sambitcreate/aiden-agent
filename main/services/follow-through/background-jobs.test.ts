@@ -13,8 +13,10 @@ import {
   defaultProcessGroupMembers,
   defaultProcessStartTime,
   describeJobEnd,
+  MAX_RUNNING_DESIGN_JOBS,
   newBackgroundJobId,
   type BackgroundJobEnded,
+  type DesignJobView,
 } from "./background-jobs.js";
 import { ChatSettlement } from "./chat-settlement.js";
 import { GoalCheckRunner } from "./done-when.js";
@@ -881,4 +883,209 @@ test("a shell's background job that cannot be confirmed gone is not reported sto
   assert.equal(result.exitCode, 0);
   assert.equal(result.timedOut, false);
   assert.equal(result.backgroundStopped, false);
+});
+
+// ── Design jobs: a dev server design mode runs for a workspace, owned by no chat ──
+
+const NODE = process.execPath;
+
+function designHarness(dir: string, options: Partial<ConstructorParameters<typeof BackgroundJobs>[0]> = {}) {
+  const ended: BackgroundJobEnded[] = [];
+  const changed: string[] = [];
+  const designChanges: DesignJobView[] = [];
+  const jobs = new BackgroundJobs({
+    logDir: path.join(dir, "logs"),
+    onEnded: (event) => ended.push(event),
+    onChange: (chatId) => changed.push(chatId),
+    onDesignChange: (view) => designChanges.push(view),
+    stopGraceMs: 500,
+    ...options,
+  });
+  const startDesign = (file: string, args: string[], appRoot = ".") =>
+    jobs.startDesign({
+      workspaceId: "ws-1",
+      appRoot,
+      cwd: dir,
+      argv: { file, args },
+      display: "npm run dev",
+      description: "Run the app",
+      env: process.env,
+    });
+  const startNode = (script: string, appRoot = ".") => startDesign(NODE, ["-e", script], appRoot);
+  return { jobs, ended, changed, designChanges, startDesign, startNode };
+}
+
+const FOREVER = "setInterval(() => {}, 1000);";
+
+test("a design job runs its argv without a shell", { skip }, async (t) => {
+  const dir = await tempDir();
+  const { jobs, startDesign } = designHarness(dir);
+  t.after(() => cleanUp(jobs, dir));
+  const job = startDesign(NODE, ["-e", "console.log(process.argv.slice(1).join('|'))", "a b", "$(echo x)", ";"]);
+  assert.equal(job.owner, "design");
+  assert.equal(job.appRoot, ".");
+  assert.equal(job.command, "npm run dev");
+  assert.equal("chatId" in job, false);
+  await eventually(() => jobs.getDesign(job.id)?.state === "exited", "the job to end");
+  await eventually(async () => (await jobs.readDesignLog(job.id, { after: 0, maxBytes: 4096 })).text === "a b|$(echo x)|;\n", "the output");
+});
+
+test("a design job is invisible to every chat-keyed method", { skip }, async (t) => {
+  const dir = await tempDir();
+  const { jobs, startNode } = designHarness(dir);
+  t.after(() => cleanUp(jobs, dir));
+  const job = startNode(FOREVER);
+  for (const chatId of ["chat-1", "", "ws-1"]) {
+    assert.deepEqual(jobs.list(chatId), [], chatId);
+    assert.equal(jobs.get(chatId, job.id), undefined, chatId);
+    assert.throws(() => jobs.read(chatId, job.id), /no background job/u, chatId);
+    await assert.rejects(jobs.settle(chatId, job.id, 0), /no background job/u, chatId);
+    await assert.rejects(jobs.stop(chatId, job.id, "agent"), /no background job/u, chatId);
+    assert.equal(jobs.runningCount(chatId), 0, chatId);
+    assert.equal(jobs.hasSettleStoppable(chatId), false, chatId);
+    await jobs.stopChat(chatId, "chat-deleted", true);
+    assert.deepEqual(await jobs.stopSettled(chatId), [], chatId);
+  }
+  assert.equal(jobs.getDesign(job.id)?.state, "running", "a chat's stop leaves the design job running");
+  assert.deepEqual(jobs.listDesign("ws-1").map((view) => view.id), [job.id]);
+  assert.deepEqual(jobs.listDesign("ws-2"), []);
+});
+
+test("a design job never calls onEnded or onChange, from its end, a port scan or finished-job eviction, and calls onDesignChange", { skip }, async (t) => {
+  const dir = await tempDir();
+  const { jobs, ended, changed, designChanges, startNode } = designHarness(dir, {
+    processGroups: async () => new Map([...jobs.listAll()].filter((view) => view.pid).map((view) => [view.pid!, [view.pid!]])),
+    listeningPorts: async (pids) => new Map(pids.map((pid) => [pid, [5173]])),
+    portScanMs: 60_000,
+  });
+  t.after(() => cleanUp(jobs, dir));
+  const server = startNode(FOREVER);
+  await jobs.scanPorts();
+  assert.deepEqual(jobs.getDesign(server.id)?.ports, [5173]);
+  assert.ok(designChanges.some((view) => view.id === server.id && view.ports?.[0] === 5173), "the port change reaches onDesignChange");
+  await jobs.stopDesign(server.id);
+  // More finished design jobs than are kept: the oldest are forgotten.
+  const quick: string[] = [];
+  for (let index = 0; index < MAX_RUNNING_DESIGN_JOBS + 2; index += 1) {
+    const job = startNode("process.exit(index % 2)".replace("index", String(index)));
+    quick.push(job.id);
+    await eventually(() => jobs.getDesign(job.id)?.state !== "running", `quick job ${index} to end`);
+  }
+  assert.equal(jobs.getDesign(server.id), undefined, "the oldest finished design job is forgotten");
+  assert.deepEqual(ended, [], "no chat hears about a design job");
+  assert.deepEqual(changed, [], "no chat list changes for a design job");
+  assert.ok(designChanges.some((view) => view.id === quick[quick.length - 1] && view.state !== "running"));
+});
+
+test("design jobs don't count toward a chat's 10 or Aiden's 20, and chat jobs don't count toward the design 8", { skip }, async (t) => {
+  const dir = await tempDir();
+  const { jobs, startDesign } = designHarness(dir, { maxRunningPerChat: 2, maxRunning: 2, maxRunningDesign: 2 });
+  t.after(() => cleanUp(jobs, dir));
+  const start = (chatId: string) => jobs.start({ chatId, workspaceId: "ws-1", cwd: dir, command: "sleep 30", env: process.env });
+  startDesign("sleep", ["30"]);
+  startDesign("sleep", ["30"]);
+  start("chat-1");
+  start("chat-1");
+  assert.throws(() => start("chat-2"), /Aiden already has 2 background jobs running/u);
+  assert.throws(() => startDesign("sleep", ["30"]), BackgroundJobLimitError);
+  assert.equal(jobs.runningCount(), 2);
+});
+
+test("a ninth running design job is refused with BackgroundJobLimitError", { skip }, async (t) => {
+  const dir = await tempDir();
+  const { jobs, startDesign } = designHarness(dir);
+  t.after(() => cleanUp(jobs, dir));
+  for (let index = 0; index < MAX_RUNNING_DESIGN_JOBS; index += 1) startDesign("sleep", ["30"], `apps/a${index}`);
+  assert.equal(MAX_RUNNING_DESIGN_JOBS, 8);
+  assert.throws(() => startDesign("sleep", ["30"]), BackgroundJobLimitError);
+});
+
+test("stopWorkspace and shutdown stop design jobs, and running.json lists them for the next launch", { skip }, async (t) => {
+  const dir = await tempDir();
+  const logDir = path.join(dir, "logs");
+  const { jobs, startNode } = designHarness(dir);
+  t.after(() => cleanUp(jobs, dir));
+  const ledger = async () =>
+    (JSON.parse(await fs.readFile(path.join(logDir, "running.json"), "utf8")) as { jobs: Array<{ id: string }> }).jobs.map((entry) => entry.id);
+
+  const first = startNode(FOREVER);
+  await eventually(async () => (await ledger().catch((): string[] => [])).includes(first.id), "the record to list the design job");
+  await jobs.stopWorkspace("ws-1", "access-changed");
+  assert.equal(jobs.getDesign(first.id)?.state, "stopped");
+
+  // A crash: the next launch reaps the design job the record lists.
+  const crashed = startNode(FOREVER);
+  await eventually(async () => {
+    const raw = JSON.parse(await fs.readFile(path.join(logDir, "running.json"), "utf8").catch(() => "{}")) as {
+      jobs?: Array<{ id: string; processStart?: string }>;
+    };
+    return raw.jobs?.some((entry) => entry.id === crashed.id && entry.processStart) === true;
+  }, "the record to hold the design job's start time");
+  const next = new BackgroundJobs({ logDir, stopGraceMs: 500 });
+  assert.equal(await next.reapPreviousLaunch(), 1);
+  await eventually(() => !alive(crashed.pid!), "the left-over design job to end");
+
+  const last = startNode(FOREVER);
+  await jobs.shutdown();
+  assert.equal(jobs.getDesign(last.id)?.state, "stopped");
+});
+
+test("a design log rotates past its size and keeps running", { skip }, async (t) => {
+  const dir = await tempDir();
+  const { jobs, startNode } = designHarness(dir, { designLogRotateBytes: 4 * 1024 });
+  t.after(() => cleanUp(jobs, dir));
+  const job = startNode(
+    "let n = 0; const timer = setInterval(() => { process.stdout.write('x'.repeat(1023) + '\\n'); if (++n === 32) clearInterval(timer); }, 2); setInterval(() => {}, 1000);",
+  );
+  await eventually(() => (jobs.getDesign(job.id)?.outputBytes ?? 0) >= 32 * 1024, "32 KiB of output");
+  const view = jobs.getDesign(job.id)!;
+  assert.equal(view.state, "running");
+  assert.ok(view.oldestKeptByte > 0, "older output was let go");
+  const logs = (await fs.readdir(path.join(dir, "logs"))).filter((name) => name.startsWith(job.id));
+  assert.ok(logs.length <= 2, logs.join(", "));
+  await eventually(async () => {
+    const read = await jobs.readDesignLog(job.id, { after: 0, maxBytes: 64 * 1024 });
+    return read.from === jobs.getDesign(job.id)!.oldestKeptByte && read.truncated && read.next === jobs.getDesign(job.id)!.outputBytes;
+  }, "a read from the start to begin at the oldest kept byte");
+});
+
+test("readDesignLog returns the bytes after a cursor and the next cursor", { skip }, async (t) => {
+  const dir = await tempDir();
+  const { jobs, startNode } = designHarness(dir);
+  t.after(() => cleanUp(jobs, dir));
+  const expected = Array.from({ length: 50 }, (_, index) => `line ${index} é\n`).join("");
+  const job = startNode(`process.stdout.write(${JSON.stringify(expected)})`);
+  await eventually(() => jobs.getDesign(job.id)?.state === "exited", "the job to end");
+  await eventually(async () => (await jobs.readDesignLog(job.id, { after: 0, maxBytes: 1 << 20 })).next === Buffer.byteLength(expected), "the log to flush");
+  const first = await jobs.readDesignLog(job.id, { after: 0, maxBytes: 100 });
+  assert.equal(first.from, 0);
+  assert.equal(first.next, 100);
+  assert.equal(first.truncated, false);
+  const second = await jobs.readDesignLog(job.id, { after: first.next, maxBytes: 1 << 20 });
+  assert.equal(second.from, 100);
+  assert.equal(first.text + second.text, expected, "two reads join with nothing lost");
+  assert.equal(second.next, Buffer.byteLength(expected));
+  const past = await jobs.readDesignLog(job.id, { after: 1 << 20, maxBytes: 100 });
+  assert.equal(past.text, "");
+  await assert.rejects(jobs.readDesignLog("job_00000000", { after: 0, maxBytes: 10 }));
+});
+
+test("stopDesign ends the group, children included", { skip }, async (t) => {
+  const dir = await tempDir();
+  const { jobs, startNode } = designHarness(dir);
+  t.after(() => cleanUp(jobs, dir));
+  const pidFile = path.join(dir, "child.pid");
+  const job = startNode(
+    `const { spawn } = require("node:child_process"); const fs = require("node:fs");
+     const child = spawn(process.execPath, ["-e", "process.on('SIGTERM', () => {}); setInterval(() => {}, 1000)"], { stdio: "ignore" });
+     fs.writeFileSync(${JSON.stringify(pidFile)}, String(child.pid)); setInterval(() => {}, 1000);`,
+  );
+  await eventually(async () => (await fs.readFile(pidFile, "utf8").catch(() => "")).length > 0, "the child pid");
+  const child = Number(await fs.readFile(pidFile, "utf8"));
+  assert.ok(alive(child));
+  const stopped = await jobs.stopDesign(job.id);
+  assert.equal(stopped.state, "stopped");
+  await eventually(() => !alive(child), "the SIGTERM-ignoring child to end", 3_000);
+  // A second stop is a no-op.
+  assert.equal((await jobs.stopDesign(job.id)).state, "stopped");
 });
