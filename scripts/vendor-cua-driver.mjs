@@ -26,6 +26,7 @@ import {
   CUA_DRIVER_ARTIFACT_PROVENANCE,
   CUA_DRIVER_LINUX_ARM64_ARTIFACT_PROVENANCE,
   CUA_DRIVER_LINUX_ARM64_SHA256,
+  CUA_DRIVER_LINUX_ARM64_SIGSTORE_BUNDLE,
   CUA_DRIVER_SHA256,
   CUA_DRIVER_SIGNING_IDENTIFIER,
   CUA_DRIVER_SIGNING_TEAM_ID,
@@ -44,7 +45,20 @@ const artifactPath = path.join(
   "computer-use",
   "cua-driver-artifact.json",
 );
+const linuxArm64ArtifactPath = path.join(
+  repositoryRoot,
+  "resources",
+  "computer-use",
+  "cua-driver-linux-arm64-artifact.json",
+);
 const destination = path.join(repositoryRoot, "build", "computer-use", "cua-driver");
+const linuxArm64Destination = path.join(
+  repositoryRoot,
+  "build",
+  "computer-use",
+  "cua-driver-linux-arm64",
+  "cua-driver",
+);
 const brokerPackage = path.join(repositoryRoot, "native", "computer-use-broker");
 const brokerTarget = path.join(repositoryRoot, "build", "computer-use-broker-cargo");
 const brokerApp = path.join(repositoryRoot, "build", "computer-use", "CuaDriver.app");
@@ -556,6 +570,95 @@ export async function buildBrokerApp(runner = run, findCargo = resolveCargo) {
   }
 }
 
+async function installLinuxArm64Binary(
+  extractedBinary,
+  target = linuxArm64Destination,
+  validate = validateVendoredLinuxArm64Binary,
+) {
+  await mkdir(path.dirname(target), { recursive: true, mode: 0o755 });
+  const stagedDestination = path.join(
+    path.dirname(target),
+    `.cua-driver-linux-arm64-${process.pid}-${Date.now()}.tmp`,
+  );
+  try {
+    await copyFile(extractedBinary, stagedDestination, fsConstants.COPYFILE_EXCL);
+    // Stored non-executable on macOS so codesign/notarization treats this Linux
+    // ELF payload as a data resource; the Linux guest sets 0755 on install.
+    await chmod(stagedDestination, 0o644);
+    if (!(await validate(stagedDestination))) {
+      throw new Error("The staged Linux arm64 cua-driver binary failed its ELF or hash pin.");
+    }
+    await rename(stagedDestination, target);
+    if (!(await validate(target))) {
+      await rm(target, { force: true });
+      throw new Error("The installed Linux arm64 cua-driver binary failed final verification.");
+    }
+  } finally {
+    await rm(stagedDestination, { force: true });
+  }
+}
+
+export async function vendorLinuxArm64Driver({
+  verifySigstore = false,
+  artifactFilePath = linuxArm64ArtifactPath,
+  destinationPath = linuxArm64Destination,
+  download = downloadArtifact,
+  extract = extractDriverMember,
+  hashBinary = hashFile,
+  validateBinary = validateVendoredLinuxArm64Binary,
+  verifySigstoreFile = verifySigstoreBundle,
+  expectedArtifact = CUA_DRIVER_LINUX_ARM64_ARTIFACT_PROVENANCE,
+} = {}) {
+  const artifact =
+    expectedArtifact === CUA_DRIVER_LINUX_ARM64_ARTIFACT_PROVENANCE
+      ? validateLinuxArm64Artifact(JSON.parse(await readFile(artifactFilePath, "utf8")))
+      : expectedArtifact;
+  if (!verifySigstore && (await validateBinary(destinationPath))) {
+    return { status: "cached", destinationPath, version: artifact.version };
+  }
+  const temporary = await mkdtemp(path.join(os.tmpdir(), "aiden-cua-linux-vendor-"));
+  try {
+    const archive = path.join(temporary, artifact.asset);
+    await download(artifact, archive);
+    const archiveInfo = await lstat(archive);
+    if (archiveInfo.size !== artifact.archiveBytes) {
+      throw new Error(
+        `Linux arm64 cua-driver archive size mismatch: expected ${artifact.archiveBytes}, received ${archiveInfo.size}`,
+      );
+    }
+    const actualSha256 = await hashBinary(archive);
+    if (actualSha256 !== artifact.sha256) {
+      throw new Error(
+        `Linux arm64 cua-driver checksum mismatch: expected ${artifact.sha256}, received ${actualSha256}`,
+      );
+    }
+    if (verifySigstore) {
+      const bundle = path.join(temporary, `${artifact.asset}.sigstore.json`);
+      await download(CUA_DRIVER_LINUX_ARM64_SIGSTORE_BUNDLE, bundle, MAX_SIGSTORE_BUNDLE_BYTES);
+      await verifySigstoreFile(archive, bundle, undefined, {
+        bundlePin: CUA_DRIVER_LINUX_ARM64_SIGSTORE_BUNDLE,
+        archiveSha256: artifact.sha256,
+      });
+    }
+    const extractDirectory = path.join(temporary, "extracted");
+    await mkdir(extractDirectory, { mode: 0o700 });
+    const extractedBinary = await extract(archive, extractDirectory);
+    if (!(await validateBinary(extractedBinary))) {
+      throw new Error("The downloaded Linux arm64 cua-driver failed its ELF or binary hash pin.");
+    }
+    await installLinuxArm64Binary(extractedBinary, destinationPath, validateBinary);
+    return {
+      status: "vendored",
+      destinationPath,
+      version: artifact.version,
+      archiveSha256: actualSha256,
+      binarySha256: artifact.binarySha256,
+    };
+  } finally {
+    await rm(temporary, { recursive: true, force: true });
+  }
+}
+
 async function main() {
   if (process.platform !== "darwin") {
     throw new Error("The pinned Aiden cua-driver artifact currently supports macOS only.");
@@ -570,48 +673,58 @@ async function main() {
     await buildBrokerApp();
     console.log(`cua-driver ${artifact.version} is already verified at ${destination}`);
     console.log(`Aiden Computer Use broker: ${brokerApp}`);
-    return;
+  } else {
+    const temporary = await mkdtemp(path.join(os.tmpdir(), "aiden-cua-vendor-"));
+    try {
+      const archive = path.join(temporary, artifact.asset);
+      await downloadArtifact(artifact, archive);
+      const archiveInfo = await lstat(archive);
+      if (archiveInfo.size !== artifact.archiveBytes) {
+        throw new Error(
+          `cua-driver archive size mismatch: expected ${artifact.archiveBytes}, received ${archiveInfo.size}`,
+        );
+      }
+      const actualSha256 = await hashFile(archive);
+      if (actualSha256 !== artifact.sha256) {
+        throw new Error(
+          `cua-driver checksum mismatch: expected ${artifact.sha256}, received ${actualSha256}`,
+        );
+      }
+
+      if (verifySigstore) {
+        const bundle = path.join(temporary, `${artifact.asset}.sigstore.json`);
+        await downloadArtifact(CUA_DRIVER_SIGSTORE_BUNDLE, bundle, MAX_SIGSTORE_BUNDLE_BYTES);
+        await verifySigstoreBundle(archive, bundle);
+        console.log(`Sigstore bundle verified for ${CUA_DRIVER_SIGSTORE_BUNDLE.certificateIdentity}`);
+      }
+
+      const extractDirectory = path.join(temporary, "extracted");
+      await mkdir(extractDirectory, { mode: 0o700 });
+      const extractedBinary = await extractDriverMember(archive, extractDirectory);
+      if (!(await validateVendoredBinary(extractedBinary))) {
+        throw new Error("The downloaded cua-driver failed its binary hash or signing identity pin.");
+      }
+
+      await installBinary(extractedBinary);
+      await buildBrokerApp();
+      console.log(
+        `Vendored verified cua-driver ${artifact.version} (archive ${actualSha256}, binary ${artifact.binarySha256})`,
+      );
+      console.log(`Aiden Computer Use broker: ${brokerApp}`);
+    } finally {
+      await rm(temporary, { recursive: true, force: true });
+    }
   }
 
-  const temporary = await mkdtemp(path.join(os.tmpdir(), "aiden-cua-vendor-"));
-  try {
-    const archive = path.join(temporary, artifact.asset);
-    await downloadArtifact(artifact, archive);
-    const archiveInfo = await lstat(archive);
-    if (archiveInfo.size !== artifact.archiveBytes) {
-      throw new Error(
-        `cua-driver archive size mismatch: expected ${artifact.archiveBytes}, received ${archiveInfo.size}`,
-      );
-    }
-    const actualSha256 = await hashFile(archive);
-    if (actualSha256 !== artifact.sha256) {
-      throw new Error(
-        `cua-driver checksum mismatch: expected ${artifact.sha256}, received ${actualSha256}`,
-      );
-    }
-
-    if (verifySigstore) {
-      const bundle = path.join(temporary, `${artifact.asset}.sigstore.json`);
-      await downloadArtifact(CUA_DRIVER_SIGSTORE_BUNDLE, bundle, MAX_SIGSTORE_BUNDLE_BYTES);
-      await verifySigstoreBundle(archive, bundle);
-      console.log(`Sigstore bundle verified for ${CUA_DRIVER_SIGSTORE_BUNDLE.certificateIdentity}`);
-    }
-
-    const extractDirectory = path.join(temporary, "extracted");
-    await mkdir(extractDirectory, { mode: 0o700 });
-    const extractedBinary = await extractDriverMember(archive, extractDirectory);
-    if (!(await validateVendoredBinary(extractedBinary))) {
-      throw new Error("The downloaded cua-driver failed its binary hash or signing identity pin.");
-    }
-
-    await installBinary(extractedBinary);
-    await buildBrokerApp();
+  const linuxResult = await vendorLinuxArm64Driver({ verifySigstore });
+  if (linuxResult.status === "cached") {
     console.log(
-      `Vendored verified cua-driver ${artifact.version} (archive ${actualSha256}, binary ${artifact.binarySha256})`,
+      `Linux arm64 cua-driver ${linuxResult.version} is already verified at ${linuxResult.destinationPath}`,
     );
-    console.log(`Aiden Computer Use broker: ${brokerApp}`);
-  } finally {
-    await rm(temporary, { recursive: true, force: true });
+  } else {
+    console.log(
+      `Vendored verified Linux arm64 cua-driver ${linuxResult.version} (archive ${linuxResult.archiveSha256}, binary ${linuxResult.binarySha256})`,
+    );
   }
 }
 

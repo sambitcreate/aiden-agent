@@ -264,29 +264,27 @@ Use unavailable.
 
 ## Guest lane in Bot computers
 
-Bot computers (`docs/bot-computers.md`, "Guest driver lane") run the same
-pinned `cua-driver` 0.38.0 inside a Bot's own virtual machine, for element
-reads and element clicks there (the macOS universal binary for macOS guests,
-and the pinned Linux arm64 binary in
-`resources/computer-use/cua-driver-linux-arm64-artifact.json` for upcoming
-Linux guests):
+Bot computers (`docs/bot-computers.md`, "Guest driver lane") run the pinned
+Linux arm64 `cua-driver` 0.38.0 binary
+(`resources/computer-use/cua-driver-linux-arm64-artifact.json`) inside each
+Bot's Debian 13 + XFCE virtual machine for element reads and element clicks
+over AT-SPI:
 
-- Set up and Update base copy only the upstream-signed `cua-driver`
-  executable from the vendored helper into the base over Aiden's SSH, with the
-  helper's `LICENSE.cua-driver.md` beside it. The
-  guest checks its SHA-256 against the compiled pin and its signature against
-  the pinned Cua identifier and Team ID before it is put in place. The guest
-  never downloads a driver, never resolves one from `PATH`, and never runs the
-  installer or the self-updater.
+- Set up and Update base verify the vendored Linux arm64 `cua-driver`
+  executable on the Mac (regular non-symlink ELF aarch64 file matching the
+  compiled byte size and SHA-256), copy it into the base VM over Aiden's SSH
+  with `LICENSE.cua-driver.md` beside it, and re-verify its SHA-256 in the
+  guest with `/usr/bin/sha256sum` before placing it in
+  `~/.local/libexec/aiden-cua-driver`. The guest never downloads a driver,
+  never resolves one from `PATH`, and never runs the installer or the
+  self-updater.
 - Aiden's broker stays on the Mac and is not copied: inside the guest the
-  virtual machine is the boundary. A LaunchAgent in the guest's logged-in
-  session runs `cua-driver serve --socket <guest socket> --no-overlay
-  --no-permissions-gate` with the Mac driver's fixed environment (telemetry
-  and update checks off, `DO_NOT_TRACK=1`, `CUA_DRIVER_DISABLE_RUN_SCRIPT=1`)
-  but without the broker's host bundle identifier, since the guest driver
-  holds its own grants. The grants of Accessibility and Screen
-  Recording are made by the person in the base's live view and copied into
-  every Bot computer made from it.
+  virtual machine is the boundary. A `systemd --user` service in the guest's
+  logged-in XFCE session runs `cua-driver serve --socket <guest socket>
+  --no-overlay --no-permissions-gate` with the fixed environment (telemetry
+  and update checks off, `DO_NOT_TRACK=1`, `CUA_DRIVER_DISABLE_RUN_SCRIPT=1`).
+  AT-SPI accessibility works without macOS TCC grants or a manual live-view
+  permissions step.
 - Each session is one SSH child running `cua-driver mcp --embedded --socket
   <guest socket>`. `CuaDriverSession` checks the exact 0.38.0 catalog,
   Aiden's allowlist and every required tool before any call, and
@@ -298,9 +296,8 @@ Linux guests):
   call starts a fresh session.
 - A computer uses the guest lane only when the base's probe (a list of apps
   and a screenshot) passed for this exact pin. A new pin arrives only with an
-  Aiden release; until the base is set up again with it (Update base or Set up
-  element control) and a Bot's computer is Reset, that computer stays on the
-  screen lane.
+  Aiden release; until the base is updated with it (Update base) and a Bot's
+  computer is Reset, that computer stays on the screen lane.
 
 ## Phased delivery and review gates
 

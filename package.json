@@ -510,6 +510,14 @@
         {
           "from": "resources/bot-computers/LICENSE.lume.md",
           "to": "bot-computers/LICENSE.lume.md"
+        },
+        {
+          "from": "resources/computer-use/cua-driver-linux-arm64-artifact.json",
+          "to": "bot-computers/cua-driver-linux-arm64-artifact.json"
+        },
+        {
+          "from": "build/computer-use/cua-driver-linux-arm64/cua-driver",
+          "to": "bot-computers/cua-driver-linux-arm64/cua-driver"
         }
       ],
       "extraFiles": [

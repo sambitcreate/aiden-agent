@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import { createHash } from "node:crypto";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, statSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import test from "node:test";
@@ -1987,4 +1987,132 @@ test("reconcile does not migrate or show a notice on a fresh install or an exist
     assert.ok(context.vmNames().includes(BOT_COMPUTER_BASE_VM));
     assert.ok(context.vmNames().includes(botComputerVmName("ada")));
   });
+});
+
+test("first-launch macOS cleanup retries cleanly after lume ls or delete failure without duplicating Bot notes or miscounting freedBytes", async () => {
+  const migratedNotes: Array<{ botId: string; note: string }> = [];
+  const controlDir = mkdtempSync(path.join(tmpdir(), "aiden-bc-migration-retry-"));
+  const controlFile = path.join(controlDir, "control.json");
+  const wrapper = path.join(controlDir, "lume-wrapper.mjs");
+  writeFileSync(
+    wrapper,
+    [
+      'import { spawnSync } from "node:child_process";',
+      'import { readFileSync } from "node:fs";',
+      'const [controlPath, realFake, ...rest] = process.argv.slice(2);',
+      'const control = JSON.parse(readFileSync(controlPath, "utf8"));',
+      'if (control.failLs && rest.includes("ls")) { process.stderr.write("lume ls transient failure\\n"); process.exit(1); }',
+      'if (control.failDelete && rest.includes("delete") && rest.includes(control.failDelete)) { process.stderr.write("lume delete transient failure\\n"); process.exit(1); }',
+      'const result = spawnSync(process.execPath, [realFake, ...rest], { stdio: "inherit" });',
+      'process.exit(result.status ?? 1);',
+    ].join("\n"),
+  );
+  const setControl = (value: { failLs?: boolean; failDelete?: string }) => writeFileSync(controlFile, JSON.stringify(value));
+  setControl({ failLs: true });
+
+  try {
+    await withHost(
+    async (context) => {
+      const vmsDir = path.join(context.root, "vms");
+      mkdirSync(vmsDir, { recursive: true });
+      const adaVm = botComputerVmName("ada");
+      for (const name of [BOT_COMPUTER_BASE_VM, adaVm]) {
+        mkdirSync(path.join(vmsDir, name), { recursive: true });
+        writeFileSync(path.join(vmsDir, name, "disk.img"), Buffer.alloc(64 * 1024, 3));
+      }
+      writeFileSync(
+        path.join(vmsDir, ".fake-state.json"),
+        JSON.stringify({
+          vms: {
+            [BOT_COMPUTER_BASE_VM]: { os: "macOS", status: "stopped", mac: "02:00:00:00:00:01" },
+            [adaVm]: { os: "macOS", status: "stopped", mac: "02:00:00:00:00:02" },
+          },
+        }),
+      );
+      writeFileSync(
+        path.join(context.root, "state.json"),
+        JSON.stringify({
+          version: 1,
+          settings: { maxRunning: 2, idleStopMinutes: 10 },
+          setup: { baseBuild: "25G83", baseVersion: "26.6.2" },
+          computers: { ada: { vmName: adaVm, baseBuild: "25G83", createdAt: 100 } },
+        }),
+      );
+
+      // Launch 1: lume ls fails — migration must NOT mark itself complete or touch state.
+      await context.host.reconcile();
+      assert.equal((await context.host.status()).migrationNotice, undefined);
+      assert.equal(migratedNotes.length, 0);
+      assert.deepEqual(context.vmNames().sort(), [BOT_COMPUTER_BASE_VM, adaVm].sort());
+
+      // Launch 2: lume ls works, but deleting ada's VM fails — base is removed, ada's VM remains,
+      // migration stays incomplete (no notice yet), and Ada gets its memory note once.
+      setControl({ failDelete: adaVm });
+      await context.host.reconcile();
+      assert.deepEqual(context.vmNames(), [adaVm], "failed delete kept adaVm in storage");
+      assert.equal((await context.host.status()).migrationNotice, undefined, "notice waits until all VMs are removed");
+      assert.equal(migratedNotes.length, 1);
+
+      // Launch 3: delete succeeds — adaVm is removed, freedBytes includes both VMs, notice appears,
+      // and Ada's memory note is NOT duplicated.
+      setControl({});
+      await context.host.reconcile();
+      assert.deepEqual(context.vmNames(), []);
+      const after = await context.host.status();
+      assert.ok((after.migrationNotice?.freedBytes ?? 0) >= 128 * 1024, "freedBytes totals both removed VMs");
+      assert.equal(migratedNotes.length, 1, "Bot memory note is never duplicated on retry");
+    },
+    {
+      onMacosComputerMigrated: (botId, note) => {
+        migratedNotes.push({ botId, note });
+      },
+      lume: async () => ({ command: process.execPath, prefixArgs: [wrapper, controlFile, fake] }),
+    },
+  );
+  } finally {
+    rmSync(controlDir, { recursive: true, force: true });
+  }
+});
+
+test("host.guestDriver resolves the ready Linux base guest driver for a migrated Bot on its first turn", async () => {
+  const guest = guestDriverHarness();
+  await withHost(
+    async (context) => {
+      answerLinuxGuest(context);
+      const vmsDir = path.join(context.root, "vms");
+      mkdirSync(vmsDir, { recursive: true });
+      const adaVm = botComputerVmName("ada");
+      writeFileSync(
+        path.join(vmsDir, ".fake-state.json"),
+        JSON.stringify({ vms: { [adaVm]: { os: "macOS", status: "stopped", mac: "02:00:00:00:00:01" } } }),
+      );
+      writeFileSync(
+        path.join(context.root, "state.json"),
+        JSON.stringify({
+          version: 1,
+          settings: { maxRunning: 2, idleStopMinutes: 10 },
+          setup: { baseBuild: "25G83", baseVersion: "26.6.2" },
+          computers: { ada: { vmName: adaVm, baseBuild: "25G83", createdAt: 100 } },
+        }),
+      );
+
+      await context.host.reconcile();
+      assert.equal(await context.host.guestDriver("ada"), undefined, "no guest driver before Linux setup");
+
+      // Set up Linux with a ready guest driver; before Ada's VM is even cloned, guestDriver("ada") is available.
+      await setUp(context);
+      const guestHost = await context.host.guestDriver("ada");
+      assert.ok(guestHost, "migrated Bot resolves guest driver immediately after Linux setup");
+    },
+    {
+      ...guest.overrides,
+      image: {
+        version: "13",
+        build: "20261123-2671",
+        url: "https://cloud.debian.org/images/debian.raw",
+        bytes: restoreImage.length,
+        sha256: createHash("sha256").update(restoreImage).digest("hex"),
+      },
+    },
+  );
 });

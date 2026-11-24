@@ -5,18 +5,14 @@
 // - `botComputers:status()` → `BotComputersStatus`. Reading it never runs Lume.
 // - `botComputers:setUp()` / `updateBase()` start the person's explicit setup
 //   and return at once; progress arrives as `botComputers:changed` broadcasts.
-// - `cancelSetUp`, `removeEverything`, `updateSettings(patch)`.
+// - `cancelSetUp`, `removeEverything`, `updateSettings(patch)`,
+//   `dismissMigrationNotice()`.
 // - `give(botId)`, `reset(botId)`, `remove(botId)`, `stop(botId)`.
 // - The Computer tab (plan §8.5): `viewerGrant(botId, { start })` lends a
 //   device stream target (starting the computer only with `start`, and
 //   cancelled if the asking window goes away), `takeOver` (a running
 //   computer only) / `giveBack` switch who drives it, and `pointer` reads the
 //   Bot's last action point.
-// - The guest driver lane (plan §8.6): `setUpElementControl()` starts element
-//   control on a ready base without it and returns at once; while setup waits
-//   for the person's grants, `baseViewerGrant()` lends Settings the base's
-//   screen, and `checkPermissions()` / `skipPermissions()` check again or
-//   finish without element control.
 
 import {
   BOT_COMPUTER_CHANNELS,

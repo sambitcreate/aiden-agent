@@ -44,9 +44,10 @@ export interface BotComputersSetupRecord {
   guestDriver?: BotComputerGuestDriverRecord;
 }
 
-/** Recorded after the one-time first-launch removal of legacy macOS Bot computers. */
+/** Recorded during and after the one-time first-launch removal of legacy macOS Bot computers. */
 export interface BotComputersMacosMigrationRecord {
-  completedAt: number;
+  /** Set only once every targeted legacy macOS VM and .ipsw file has been removed. */
+  completedAt?: number;
   freedBytes: number;
   /** True once the person sets up Linux, removes everything, or dismisses the Settings notice. */
   noticeDismissed?: boolean;
@@ -84,11 +85,12 @@ function guestDriver(value: unknown): BotComputerGuestDriverRecord | undefined {
 function parseMigration(value: unknown): BotComputersMacosMigrationRecord | undefined {
   if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
   const input = value as Record<string, unknown>;
-  const completedAt = time(input.completedAt);
   const freedBytes = time(input.freedBytes);
-  if (completedAt === undefined || freedBytes === undefined) return undefined;
+  if (freedBytes === undefined) return undefined;
+  const completedAt = input.completedAt === undefined ? undefined : time(input.completedAt);
+  if (input.completedAt !== undefined && completedAt === undefined) return undefined;
   return {
-    completedAt,
+    ...(completedAt !== undefined ? { completedAt } : {}),
     freedBytes,
     ...(input.noticeDismissed === true ? { noticeDismissed: true } : {}),
   };

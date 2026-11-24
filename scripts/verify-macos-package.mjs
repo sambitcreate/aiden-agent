@@ -3,7 +3,7 @@
 import { createHash } from "node:crypto";
 import { execFile } from "node:child_process";
 import { createReadStream } from "node:fs";
-import { lstat, mkdtemp, readFile, readdir, realpath, rm, writeFile } from "node:fs/promises";
+import { lstat, mkdtemp, open, readFile, readdir, realpath, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
@@ -15,12 +15,16 @@ import {
   AIDEN_COMPUTER_USE_BUNDLE_ID,
   AIDEN_SIGNING_TEAM_ID,
   CUA_DRIVER_HELPER_EXECUTABLE,
+  CUA_DRIVER_LINUX_ARM64_ARTIFACT_PROVENANCE,
+  CUA_DRIVER_LINUX_ARM64_SHA256,
   CUA_DRIVER_SHA256,
   CUA_DRIVER_SIGNING_IDENTIFIER,
   CUA_DRIVER_SIGNING_TEAM_ID,
   appleRequirement,
   assertCuaDriverArtifactProvenance,
+  assertCuaDriverLinuxArm64ArtifactProvenance,
   packagedComputerUsePaths,
+  packagedLinuxGuestDriverPaths,
 } from "./computer-use-signing-pins.mjs";
 import {
   LUME_APP_TREE,
@@ -44,6 +48,12 @@ const reviewedProvenancePath = path.join(
   "resources",
   "computer-use",
   "cua-driver-artifact.json",
+);
+const reviewedLinuxGuestDriverProvenancePath = path.join(
+  repositoryRoot,
+  "resources",
+  "computer-use",
+  "cua-driver-linux-arm64-artifact.json",
 );
 const reviewedLicenseNoticePath = path.join(
   repositoryRoot,
@@ -920,6 +930,65 @@ export async function verifyPackagedLume(
   assertLumeArchitecture((await runCommand("/usr/bin/lipo", ["-archs", paths.binary])).stdout);
 }
 
+function isElfAarch64Header(bytes) {
+  return (
+    bytes.length >= 20 &&
+    bytes[0] === 0x7f &&
+    bytes[1] === 0x45 &&
+    bytes[2] === 0x4c &&
+    bytes[3] === 0x46 &&
+    bytes[4] === 2 &&
+    bytes[5] === 1 &&
+    bytes.readUInt16LE(18) === 183
+  );
+}
+
+/**
+ * Verifies the vendored Linux arm64 `cua-driver` binary and provenance packaged
+ * for Bot computers under `Contents/Resources/bot-computers/`.
+ */
+export async function verifyPackagedLinuxGuestDriver(
+  appPath,
+  {
+    reviewedProvenance = reviewedLinuxGuestDriverProvenancePath,
+    expectedBytes = CUA_DRIVER_LINUX_ARM64_ARTIFACT_PROVENANCE.binaryBytes,
+    expectedSha256 = CUA_DRIVER_LINUX_ARM64_SHA256,
+  } = {},
+) {
+  const paths = packagedLinuxGuestDriverPaths(appPath);
+  const dirInfo = await lstat(paths.dir);
+  if (!dirInfo.isDirectory() || dirInfo.isSymbolicLink() || (await realpath(paths.dir)) !== paths.dir) {
+    throw new Error(`Expected a regular non-symlinked Linux guest driver directory: ${paths.dir}`);
+  }
+  const driverInfo = await assertRegularFile(paths.driver);
+  await assertRegularFile(paths.provenance);
+
+  assertCuaDriverLinuxArm64ArtifactProvenance(JSON.parse(await readFile(reviewedProvenance, "utf8")));
+  await verifyReviewedResource(paths.provenance, reviewedProvenance);
+
+  if (driverInfo.size !== expectedBytes) {
+    throw new Error(
+      `Packaged Linux arm64 cua-driver size mismatch: expected ${expectedBytes}, received ${driverInfo.size}`,
+    );
+  }
+  const handle = await open(paths.driver, "r");
+  try {
+    const header = Buffer.alloc(20);
+    const { bytesRead } = await handle.read(header, 0, header.length, 0);
+    if (!isElfAarch64Header(header.subarray(0, bytesRead))) {
+      throw new Error(`Packaged Linux arm64 cua-driver is not an ELF aarch64 binary: ${paths.driver}`);
+    }
+  } finally {
+    await handle.close();
+  }
+  const actualSha256 = await sha256(paths.driver);
+  if (actualSha256 !== expectedSha256) {
+    throw new Error(
+      `Packaged Linux arm64 cua-driver hash mismatch: expected ${expectedSha256}, received ${actualSha256}`,
+    );
+  }
+}
+
 export async function verifyMacPackage(appPath) {
   if (process.platform !== "darwin") {
     throw new Error("Packaged macOS verification can only run on macOS.");
@@ -1202,6 +1271,7 @@ export async function verifyMacPackage(appPath) {
   });
 
   await verifyPackagedLume(paths.app);
+  await verifyPackagedLinuxGuestDriver(paths.app);
 
   assertMinimalComputerUseEntitlements(await readEntitlements(paths.helperApp));
   assertMinimalComputerUseEntitlements(await readEntitlements(paths.broker));

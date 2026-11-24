@@ -152,6 +152,17 @@ export function packagedComputerUsePaths(appPath) {
   });
 }
 
+export function packagedLinuxGuestDriverPaths(appPath) {
+  const resolvedApp = path.resolve(appPath);
+  const botComputersResources = path.join(resolvedApp, "Contents", "Resources", "bot-computers");
+  const dir = path.join(botComputersResources, "cua-driver-linux-arm64");
+  return Object.freeze({
+    dir,
+    driver: path.join(dir, "cua-driver"),
+    provenance: path.join(botComputersResources, "cua-driver-linux-arm64-artifact.json"),
+  });
+}
+
 export function appleRequirement({ identifier, teamId }) {
   const identifierClause = identifier ? ` and identifier "${identifier}"` : "";
   return `anchor apple generic${identifierClause} and certificate leaf[subject.OU] = "${teamId}"`;

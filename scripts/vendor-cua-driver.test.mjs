@@ -23,6 +23,7 @@ import {
   validateLinuxArm64Artifact,
   validateVendoredBinary,
   validateVendoredLinuxArm64Binary,
+  vendorLinuxArm64Driver,
   verifySigstoreBundle,
 } from "./vendor-cua-driver.mjs";
 import {
@@ -254,6 +255,91 @@ test("Linux arm64 binary validation requires a regular ELF64 aarch64 file with t
     );
     // Real hash path also rejects wrong byte size before/with hash mismatch.
     assert.equal(await validateVendoredLinuxArm64Binary(validFile), false);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("vendorLinuxArm64Driver verifies archive size/hash, stages non-executable binary, and reuses valid cache", async () => {
+  const { createHash } = await import("node:crypto");
+  const root = await mkdtemp(path.join(os.tmpdir(), "aiden-cua-linux-stage-"));
+  try {
+    const elfAarch64 = Buffer.alloc(32);
+    elfAarch64[0] = 0x7f;
+    elfAarch64[1] = 0x45;
+    elfAarch64[2] = 0x4c;
+    elfAarch64[3] = 0x46;
+    elfAarch64[4] = 2;
+    elfAarch64[5] = 1;
+    elfAarch64.writeUInt16LE(183, 18);
+    const binarySha256 = createHash("sha256").update(elfAarch64).digest("hex");
+    const archivePayload = Buffer.from("fake-tar-gz-payload");
+    const archiveSha256 = createHash("sha256").update(archivePayload).digest("hex");
+    const expectedArtifact = {
+      ...CUA_DRIVER_LINUX_ARM64_ARTIFACT_PROVENANCE,
+      archiveBytes: archivePayload.length,
+      sha256: archiveSha256,
+      binaryBytes: elfAarch64.length,
+      binarySha256,
+    };
+    const dest = path.join(root, "cua-driver-linux-arm64", "cua-driver");
+    const validateBinary = async (candidate) => {
+      try {
+        const bytes = await readFile(candidate);
+        return (
+          bytes.length === elfAarch64.length &&
+          isElfAarch64Header(bytes) &&
+          createHash("sha256").update(bytes).digest("hex") === binarySha256
+        );
+      } catch {
+        return false;
+      }
+    };
+    let downloadCalls = 0;
+    const download = async (_artifact, target) => {
+      downloadCalls += 1;
+      await writeFile(target, archivePayload);
+    };
+    const extract = async (_archive, directory) => {
+      const out = path.join(directory, "cua-driver");
+      await writeFile(out, elfAarch64);
+      return out;
+    };
+
+    const first = await vendorLinuxArm64Driver({
+      destinationPath: dest,
+      expectedArtifact,
+      download,
+      extract,
+      validateBinary,
+    });
+    assert.equal(first.status, "vendored");
+    assert.equal(downloadCalls, 1);
+    assert.deepEqual(await readFile(dest), elfAarch64);
+
+    // Second run reuses verified cached binary without downloading again.
+    const second = await vendorLinuxArm64Driver({
+      destinationPath: dest,
+      expectedArtifact,
+      download,
+      extract,
+      validateBinary,
+    });
+    assert.equal(second.status, "cached");
+    assert.equal(downloadCalls, 1);
+
+    // Corrupted archive hash fails before extraction.
+    const badDest = path.join(root, "bad", "cua-driver");
+    await assert.rejects(
+      vendorLinuxArm64Driver({
+        destinationPath: badDest,
+        expectedArtifact: { ...expectedArtifact, sha256: "f".repeat(64) },
+        download,
+        extract,
+        validateBinary,
+      }),
+      /checksum mismatch/,
+    );
   } finally {
     await rm(root, { recursive: true, force: true });
   }

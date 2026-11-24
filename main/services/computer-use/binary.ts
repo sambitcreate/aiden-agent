@@ -326,7 +326,7 @@ export async function resolveVendoredLinuxCuaDriverExecutable(
   const driverPath = path.join(driverDir, "cua-driver");
   const missing = options.isPackaged
     ? "The packaged Linux arm64 cua-driver executable is missing or invalid."
-    : "The pinned Linux arm64 cua-driver has not been vendored.";
+    : "The pinned Linux arm64 cua-driver has not been vendored. Run npm run computer-use:vendor.";
   try {
     const dirInfo = await lstat(driverDir);
     throwIfAborted(signal);

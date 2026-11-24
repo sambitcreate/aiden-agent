@@ -103,10 +103,12 @@ async function botComputer({ takeOverOnWait }: { takeOverOnWait: number }) {
   await Promise.all([mkdir(path.join(home, "Shared"), { recursive: true }), mkdir(bin)]);
   await writeFile(path.join(bin, "uname"), '#!/bin/sh\n[ "$1" = -sm ] && echo "Linux aarch64"\n');
   await chmod(path.join(bin, "uname"), 0o755);
+  await writeFile(path.join(bin, "id"), '#!/bin/sh\n[ "$1" = -un ] && printf "%s\\n" "${FAKE_SUDO_USER:-lume}"\n');
+  await chmod(path.join(bin, "id"), 0o755);
   // Stand-in for Linux's scoped `/usr/bin/sudo -n -H -u aiden-bot -- /bin/sh -c ...`.
   await writeFile(
     path.join(bin, "sudo"),
-    '#!/bin/sh\nwhile [ "$#" -gt 0 ]; do case "$1" in -n|-H) shift ;; -u) shift 2 ;; --) shift; break ;; *) break ;; esac; done\nexec "$@"\n',
+    '#!/bin/sh\nwhile [ "$#" -gt 0 ]; do case "$1" in -n|-H) shift ;; -u) FAKE_SUDO_USER="$2"; export FAKE_SUDO_USER; shift 2 ;; --) shift; break ;; *) break ;; esac; done\nexec "$@"\n',
   );
   await chmod(path.join(bin, "sudo"), 0o755);
 
@@ -215,7 +217,7 @@ test("the packaged acceptance's calls are valid for the real computer tools, and
     assert.deepEqual(core.evaluateAcceptanceRequests(model.requests, { ...context, sharedFileText }), {
       ok: true,
       failures: [],
-      evidence: { captureSize: { width: 1280, height: 800 }, waits: 2, interrupted: "wait", guestLinux: "Linux aarch64" },
+      evidence: { captureSize: { width: 1280, height: 800 }, waits: 2, interrupted: "wait", guestLinux: "Linux aarch64", shellUser: "aiden-bot" },
     });
   } finally {
     await model.close();

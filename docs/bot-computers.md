@@ -107,8 +107,8 @@ interrupted while it was being made is marked for **Reset**.
 ## Disk and memory
 
 - **Set up** checks for free space before it downloads: the remaining download
-  plus 20 GiB for the base and headroom. Settings states that figure before you
-  choose Set up.
+  plus 16 GiB for the base and headroom (about 20 GB total). Settings states
+  that figure before you choose Set up.
 - **Set up** checks for 2 GB of available memory before it downloads and again
   before building the base.
 - **The base** takes about 8 GB once Debian 13 and XFCE packages are installed

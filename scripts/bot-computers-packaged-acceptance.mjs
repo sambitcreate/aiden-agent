@@ -16,7 +16,7 @@
 // as Aiden runs it), from Aiden's state files and from the process table, and
 // writes an evidence-only receipt to build/bot-computers-acceptance-receipt.json.
 //
-// Without --linux-image, Set up downloads Debian 13 (about 500 MB plus desktop
+// Without --linux-image, Set up downloads Debian 13 (about 3 GB plus desktop
 // packages) from Debian's pinned URL. With it, the given file is copied
 // (cloned on APFS) to where Set up looks first; Set up still verifies its size
 // and SHA-256.
@@ -265,7 +265,7 @@ async function runAcceptance() {
   }
   if (process.env.AIDEN_BOT_COMPUTERS_ACCEPTANCE !== "1") {
     throw new Error(
-      "This test creates Linux virtual machines and, without --linux-image, downloads Debian 13 and desktop packages (about 1 GB). " +
+      "This test creates Linux virtual machines and, without --linux-image, downloads Debian 13 and desktop packages (about 3 GB). " +
         "Re-run with AIDEN_BOT_COMPUTERS_ACCEPTANCE=1 after reading the checklist at the top of this script.",
     );
   }
@@ -348,7 +348,7 @@ async function runAcceptance() {
 
     console.log(`\nPackaged Bot computers acceptance is running in ${temporary} (Aiden's log: ${log}).`);
     console.log("1. If onboarding opens, check that its feature tour shows Bot computers, then finish onboarding.");
-    console.log(`2. Settings → Computers & VMs → Bot computers → Set up${linuxImage ? " (the Debian Linux image is pre-seeded; Set up verifies it)" : " (downloads about 1 GB)"}. Wait for Ready.`);
+    console.log(`2. Settings → Computers & VMs → Bot computers → Set up${linuxImage ? " (the Debian Linux image is pre-seeded; Set up verifies it)" : " (downloads about 3 GB plus desktop packages)"}. Wait for Ready.`);
     console.log(`3. Create a Bot with Full access whose AI model is ${ACCEPTANCE_PROVIDER_LABEL}.`);
     console.log("4. In the Bot's profile, give the Bot a computer.");
     console.log(`5. In the Bot's chat, send exactly: ${ACCEPTANCE_PROMPT}`);
@@ -359,7 +359,7 @@ async function runAcceptance() {
     await beforeDeadline(
       Promise.race([model.finished, childState.promise.then(() => Promise.reject(new Error("Aiden quit before the Bot's sequence ended.")))]),
       deadline,
-      "The Bot's acceptance sequence did not end within four hours.",
+      "The Bot's acceptance sequence did not end within two hours.",
     );
     if (!botId) throw new Error("No Bot had been given a computer when the prompt arrived.");
     const vmName = timeline.given.computers[0].vmName;
@@ -415,6 +415,7 @@ async function runAcceptance() {
           lume: LUME_PINS.version,
           base: { version: timeline.given.baseVersion ?? null, build: timeline.given.baseBuild },
           guestLinux: requests.evidence.guestLinux,
+          shellUser: requests.evidence.shellUser,
           linuxImage: linuxImage ? "preseeded_and_verified_by_set_up" : "downloaded_by_set_up",
           capture: requests.evidence.captureSize,
           interruptedAction: requests.evidence.interrupted,
@@ -428,6 +429,7 @@ async function runAcceptance() {
             "give_back_returned_the_note",
             "fresh_capture_after_give_back",
             "computer_shell_ran_in_the_guest",
+            "computer_shell_ran_as_aiden_bot",
             "shared_folder_reached_the_computer_folder",
             "pause_stopped_the_vm",
             "delete_bot_removed_the_vm_and_kept_the_base",
