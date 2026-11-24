@@ -175,3 +175,49 @@ main:has(.design-presenting) {
     opacity: 1;
   }
 }
+
+/* The live app's logs drawer, docked to the bottom of the canvas (D4). */
+.design-app-logs {
+  height: 40%;
+  min-height: 160px;
+  max-height: 60%;
+}
+
+.design-app-logs[data-presence="exiting"] {
+  pointer-events: none;
+}
+
+:root[data-reduce-motion="false"] .design-app-logs[data-presence="visible"] {
+  animation: design-app-logs-in var(--motion-large-duration) var(--motion-large-easing) both;
+}
+
+:root[data-reduce-motion="false"] .design-app-logs[data-presence="exiting"] {
+  animation: design-app-logs-out var(--motion-duration) var(--motion-easing) both;
+}
+
+@keyframes design-app-logs-in {
+  from {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+@keyframes design-app-logs-out {
+  from {
+    opacity: 1;
+    transform: none;
+  }
+  to {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+}
+
+.design-app-logs-output:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: -2px;
+}

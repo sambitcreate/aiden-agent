@@ -906,7 +906,19 @@ export class BackgroundJobs {
       // A short read (output not flushed yet, or a file rotated away) ends here, so nothing is skipped.
       if (got.length < want) break;
     }
-    return { text: Buffer.concat(chunks).toString("utf8"), from, next: at, end, truncated };
+    let bytes = Buffer.concat(chunks);
+    // A cursor on continuation bytes starts at the next character (D4), so no read begins with half a character.
+    const skipped = leadingContinuationBytes(bytes);
+    bytes = bytes.subarray(skipped);
+    // While more bytes can follow (the job runs, or this read stopped short), end before an incomplete
+    // character: its bytes stay in the log and arrive whole in the next read. An ended job's last bytes
+    // are returned as they are, so `next` reaches `end`.
+    if (job.view.state === "running" || at < end) {
+      const cut = incompleteTrailingBytes(bytes);
+      bytes = bytes.subarray(0, bytes.length - cut);
+      at -= cut;
+    }
+    return { text: bytes.toString("utf8"), from: from + skipped, next: at, end, truncated };
   }
 
   private openLog(logPath: string): { log: fs.WriteStream; logClosed: Promise<void> } {
@@ -1493,6 +1505,24 @@ export function formatDuration(ms: number): string {
 }
 
 /** Up to `length` bytes of a file from `position`; fewer at its end, none when it is gone. */
+/** How many continuation bytes (10xxxxxx) a buffer starts with, at most 3: the tail of a character begun before it. */
+function leadingContinuationBytes(bytes: Buffer): number {
+  let count = 0;
+  while (count < 3 && count < bytes.length && (bytes[count]! & 0xc0) === 0x80) count += 1;
+  return count;
+}
+
+/** How many bytes at a buffer's end are an incomplete UTF-8 character (0–3). */
+function incompleteTrailingBytes(bytes: Buffer): number {
+  for (let back = 1; back <= Math.min(4, bytes.length); back += 1) {
+    const byte = bytes[bytes.length - back]!;
+    if ((byte & 0xc0) === 0x80) continue;
+    const length = byte >= 0xf0 ? 4 : byte >= 0xe0 ? 3 : byte >= 0xc0 ? 2 : 1;
+    return length > back ? back : 0;
+  }
+  return 0;
+}
+
 async function readAt(file: string, position: number, length: number): Promise<Buffer> {
   let handle: fsp.FileHandle | undefined;
   try {

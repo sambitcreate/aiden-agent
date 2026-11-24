@@ -57,7 +57,7 @@ function cachedFor(chatId: string): DesignAppsSnapshot | undefined {
  * once per mount, then every broadcast for that workspace. `undefined` until
  * the first read answers with nothing cached; `null` when live apps are off.
  */
-function useDesignAppsSnapshot(chatId: string, enabled: boolean): DesignAppsSnapshot | null | undefined {
+export function useDesignAppsSnapshot(chatId: string, enabled: boolean): DesignAppsSnapshot | null | undefined {
   const [snapshot, setSnapshot] = React.useState<DesignAppsSnapshot | null | undefined>(() => (enabled ? cachedFor(chatId) : null));
   React.useEffect(() => {
     if (!enabled) {
@@ -138,7 +138,8 @@ function triggerLabel(chip: ChipModel): string {
   return `Live app: ${chip.label}`;
 }
 
-function statusLine(app: DesignAppStatus, problem: DesignAppProblem | undefined): string {
+/** One app's line in the menu and the logs drawer's header: its state, or its problem's fixed message. */
+export function designAppStatusLine(app: DesignAppStatus, problem?: DesignAppProblem): string {
   const shown = problem ?? app.problem;
   if (shown) return designAppProblemMessage(shown);
   const address = app.origin?.replace(/^http:\/\//u, "");
@@ -174,6 +175,7 @@ export function DesignAppStatusChip({ chatId, onShowLogs }: { chatId: string; on
   const [sheet, setSheet] = React.useState<{ kind: "choose" } | { kind: "connect"; filterRoot?: string } | null>(null);
   const triggerRef = React.useRef<HTMLButtonElement>(null);
   const previous = React.useRef<Map<string, DesignAppStatus>>(new Map());
+  const focusLeaves = React.useRef(false);
 
   // A broadcast with a newer revision for an app replaces its pending state and its inline problem;
   // an app no longer in the snapshot drops its pending state.
@@ -282,7 +284,15 @@ export function DesignAppStatusChip({ chatId, onShowLogs }: { chatId: string; on
     }
     if (app.phase === "running" || app.phase === "crashed") list.push({ label: "Restart", run: () => void act(app, "restart") });
     if (designAppRetryable(app)) list.push({ label: "Retry", run: () => void act(app, "retry") });
-    if (onShowLogs && app.revision > 0 && app.phase !== "consent") list.push({ label: "Show logs", run: () => onShowLogs(app.appRoot) });
+    if (onShowLogs && app.revision > 0 && app.phase !== "consent") {
+      list.push({
+        label: "Show logs",
+        run: () => {
+          focusLeaves.current = true;
+          onShowLogs(app.appRoot);
+        },
+      });
+    }
     return list;
   };
 
@@ -297,7 +307,15 @@ export function DesignAppStatusChip({ chatId, onShowLogs }: { chatId: string; on
             </span>
           </Button>
         </DropdownMenuTrigger>
-        <DropdownMenuContent align="end" className="w-72">
+        <DropdownMenuContent
+          align="end"
+          className="w-72"
+          onCloseAutoFocus={(event) => {
+            // Show logs hands focus to the drawer's output; anything else returns it to the chip.
+            if (focusLeaves.current) event.preventDefault();
+            focusLeaves.current = false;
+          }}
+        >
           {chip.connectOnly
             ? null
             : chip.apps.map((app, index) => (
@@ -307,7 +325,7 @@ export function DesignAppStatusChip({ chatId, onShowLogs }: { chatId: string; on
                     <span className="text-small font-medium text-primary">
                       {app.frameworkLabel} · <span className="font-mono">{consentDisplayText(app.appRoot)}</span>
                     </span>
-                    <span className="text-small whitespace-normal break-words text-secondary">{statusLine(app, problems.get(app.appRoot))}</span>
+                    <span className="text-small whitespace-normal break-words text-secondary">{designAppStatusLine(app, problems.get(app.appRoot))}</span>
                   </DropdownMenuLabel>
                   {items(app).map((item) => (
                     <DropdownMenuItem key={item.label} onSelect={item.run}>

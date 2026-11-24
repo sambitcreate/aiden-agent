@@ -1097,6 +1097,50 @@ test("readDesignLog returns the bytes after a cursor and the next cursor", { ski
   await assert.rejects(jobs.readDesignLog("job_00000000", { after: 0, maxBytes: 10 }));
 });
 
+test("while a design job runs, readDesignLog never splits a UTF-8 character", { skip }, async (t) => {
+  const dir = await tempDir();
+  const { jobs, startNode } = designHarness(dir);
+  t.after(() => cleanUp(jobs, dir));
+  const flag = path.join(dir, "more");
+  // "a", then the first two bytes of "€" (E2 82 AC); the third byte and a newline follow once the test asks.
+  const job = startNode(
+    `process.stdout.write(Buffer.from([0x61, 0xe2, 0x82]));
+     const timer = setInterval(() => { if (require("node:fs").existsSync(${JSON.stringify(flag)})) { clearInterval(timer); process.stdout.write(Buffer.from([0xac, 0x0a])); } }, 10);
+     setInterval(() => {}, 1000);`,
+  );
+  await eventually(() => (jobs.getDesign(job.id)?.outputBytes ?? 0) === 3, "the half character");
+  await eventually(async () => (await jobs.readDesignLog(job.id, { after: 0, maxBytes: 4096 })).text === "a", "the flushed bytes");
+  const half = await jobs.readDesignLog(job.id, { after: 0, maxBytes: 4096 });
+  assert.equal(half.next, 1, "the cursor stops before the incomplete character");
+  assert.equal(half.end, 3);
+  assert.equal(half.text.includes("�"), false);
+  await fs.writeFile(flag, "");
+  await eventually(() => (jobs.getDesign(job.id)?.outputBytes ?? 0) === 5, "the rest of the character");
+  await eventually(async () => (await jobs.readDesignLog(job.id, { after: half.next, maxBytes: 4096 })).next === 5, "the flushed rest");
+  const rest = await jobs.readDesignLog(job.id, { after: half.next, maxBytes: 4096 });
+  assert.equal(rest.text, "€\n", "the next read returns the whole character");
+  // A cursor on a continuation byte starts at the next character.
+  const inside = await jobs.readDesignLog(job.id, { after: 2, maxBytes: 4096 });
+  assert.equal(inside.from, 4);
+  assert.equal(inside.text, "\n");
+  // A read cut short by maxBytes also ends on a character boundary.
+  const short = await jobs.readDesignLog(job.id, { after: 0, maxBytes: 3 });
+  assert.equal(short.text, "a");
+  assert.equal(short.next, 1);
+});
+
+test("a design job that ended mid-character returns every byte, so next reaches end", { skip }, async (t) => {
+  const dir = await tempDir();
+  const { jobs, startNode } = designHarness(dir);
+  t.after(() => cleanUp(jobs, dir));
+  const job = startNode("process.stdout.write(Buffer.from([0x61, 0xe2, 0x82]))");
+  await eventually(() => jobs.getDesign(job.id)?.state === "exited", "the job to end");
+  await eventually(async () => (await jobs.readDesignLog(job.id, { after: 0, maxBytes: 4096 })).end === 3, "the log to flush");
+  const read = await jobs.readDesignLog(job.id, { after: 0, maxBytes: 4096 });
+  assert.equal(read.next, read.end);
+  assert.equal(read.text.startsWith("a"), true);
+});
+
 test("stopDesign ends the group, children included", { skip }, async (t) => {
   const dir = await tempDir();
   const { jobs, startNode } = designHarness(dir);

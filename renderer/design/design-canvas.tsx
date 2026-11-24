@@ -64,6 +64,7 @@ import {
   type DesignNodeContextValue,
 } from "./nodes/design-node-context";
 import { DesignAppStatusChip } from "./design-app-chip";
+import { DesignAppLogsDrawer } from "./design-app-logs";
 import { designNodeTypes } from "./nodes/registry";
 import { useDesignCanvas } from "./use-design-canvas";
 import { useDesignView, type DesignViewHandle } from "./use-design-view";
@@ -200,6 +201,10 @@ function LoadedDesignCanvas({
   const [live, setLive] = React.useState<ReadonlySet<string>>(() => new Set());
   const [presentation, setPresentation] = React.useState<DesignPresentation | null>(null);
   const [panel, setPanel] = React.useState(readPanelState);
+  // The app whose output the logs drawer shows, from the chip's Show logs.
+  const [logsRoot, setLogsRoot] = React.useState<string | null>(null);
+  const closeLogs = React.useCallback(() => setLogsRoot(null), []);
+  const chipTrigger = React.useCallback(() => document.querySelector<HTMLElement>("[data-design-app-chip]"), []);
   React.useEffect(() => writePanelState(panel), [panel]);
   const presentingRef = React.useRef(false);
   presentingRef.current = presentation !== null;
@@ -1307,7 +1312,7 @@ function LoadedDesignCanvas({
             presenting={presentation !== null}
             actions={
               <div className="flex items-center gap-2">
-                <DesignAppStatusChip chatId={chatId} />
+                <DesignAppStatusChip chatId={chatId} onShowLogs={setLogsRoot} />
                 <div
                   role="toolbar"
                   aria-label="Canvas view"
@@ -1324,16 +1329,26 @@ function LoadedDesignCanvas({
               </div>
             }
             overlay={
-              presentation ? (
-                <DesignPresentBar
-                  presentation={presentation}
-                  title={doc.frames.find((frame) => frame.id === presentation.ids[presentation.index])?.title ?? ""}
-                  onStep={step}
-                  onExit={stopPresenting}
-                />
-              ) : enteredPage && !panelShowsTweaks ? (
-                <DesignTweaksFloat key={enteredPage.id} frame={enteredPage} readSource={readSource} versionOf={versionOf} ops={tweakOps} />
-              ) : null
+              <>
+                {presentation ? null : (
+                  <DesignAppLogsDrawer
+                    chatId={chatId}
+                    appRoot={logsRoot}
+                    onClose={closeLogs}
+                    returnFocus={chipTrigger}
+                  />
+                )}
+                {presentation ? (
+                  <DesignPresentBar
+                    presentation={presentation}
+                    title={doc.frames.find((frame) => frame.id === presentation.ids[presentation.index])?.title ?? ""}
+                    onStep={step}
+                    onExit={stopPresenting}
+                  />
+                ) : enteredPage && !panelShowsTweaks ? (
+                  <DesignTweaksFloat key={enteredPage.id} frame={enteredPage} readSource={readSource} versionOf={versionOf} ops={tweakOps} />
+                ) : null}
+              </>
             }
             emptyState={<DesignCanvasEmpty />}
             toolbar={
