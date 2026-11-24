@@ -47,6 +47,8 @@ function harness(options: {
     holdStart: undefined as Promise<void> | undefined,
     /** Holds startNoticeRound open to test races while a notice round starts. */
     holdNoticeStart: undefined as Promise<void> | undefined,
+    /** Overrides fallbackContext for tests that hold or vary context lookup. */
+    fallbackContext: undefined as (() => Promise<typeof CONTEXT | undefined>) | undefined,
     review: (async (goal) => continueWith(`Next step ${goal.rounds}`)) as Review,
   };
   const rounds: Array<{ text: string; notice: AgentNoticeV1 }> = [];
@@ -86,6 +88,7 @@ function harness(options: {
       return state.activity;
     },
     fallbackContext: async () => {
+      if (state.fallbackContext) return state.fallbackContext();
       if (state.throws.context || state.throws.noticeContext) throw new Error("The chat file could not be read.");
       return CONTEXT;
     },
@@ -978,4 +981,71 @@ test("a relook that wakes while the chat is still busy waits again, and shutdown
   stopping.loop.shutdown();
   await stopping.becomeIdle();
   assert.equal(stopping.reviews(), 0);
+});
+
+test("pausing and resuming the same goal while noticeRound awaits fallbackContext fences the stale notice", async () => {
+  const news = { text: "job ended", notice: agentNotice({ source: "background_job", tone: "success", title: "Done", summary: "x" }) };
+  for (const outcome of ["context", "empty", "reject"] as const) {
+    const h = harness();
+    const initial = await h.loop.set(CHAT, { objective: "Ship it", source: "slash" });
+    let resolveContext!: (value: typeof CONTEXT | undefined) => void;
+    let rejectContext!: (reason: Error) => void;
+    h.state.fallbackContext = () =>
+      new Promise((resolve, reject) => {
+        resolveContext = resolve;
+        rejectContext = reject;
+      });
+
+    const pending = h.loop.noticeRound(CHAT, news);
+    await h.flush();
+
+    // Same-goal pause + resume retains the goal ID and restores active,
+    // while advancing the revision.
+    h.loop.pause(CHAT);
+    h.state.busy = true;
+    const resumed = await h.loop.resume(CHAT);
+    assert.equal(resumed?.id, initial.id, outcome);
+    assert.equal(resumed?.status, "active", outcome);
+    assert.ok((resumed?.revision ?? 0) > initial.revision, `${outcome}: revision advanced`);
+    const resumedRevision = resumed!.revision;
+
+    if (outcome === "context") resolveContext(CONTEXT);
+    else if (outcome === "empty") resolveContext(undefined);
+    else rejectContext(new Error("The chat file could not be read."));
+
+    const result = await pending;
+    assert.equal(result, undefined, `${outcome}: stale notice returns undefined`);
+    assert.deepEqual(h.noticeRounds, [], `${outcome}: stale notice starts no round`);
+    assert.equal(h.goal()?.id, initial.id, outcome);
+    assert.equal(h.goal()?.revision, resumedRevision, `${outcome}: resumed revision untouched`);
+    assert.equal(h.goal()?.rounds, 1, `${outcome}: stale notice does not count a round`);
+    assert.equal(h.idleWaitersCount(), 0, `${outcome}: no relook armed on resumed revision`);
+    await h.becomeIdle();
+    assert.equal(h.reviews(), 0, `${outcome}: no review triggered on resumed revision`);
+  }
+
+  // Capturing the revision fence after dropLook() still lets a current notice
+  // proceed when dropLook() synchronously restores an uncounted round.
+  const h = harness();
+  await h.loop.set(CHAT, { objective: "Ship it", source: "slash" });
+  let releaseStart!: () => void;
+  h.state.holdStart = new Promise<void>((resolve) => { releaseStart = resolve; });
+  h.loop.runSettled({ chatId: CHAT, streamId: "s", stopped: false, failed: false });
+  await h.flush();
+  assert.equal(h.roundCurrent.length, 1, "the look's round is waiting to start");
+  assert.equal(h.goal()?.rounds, 2, "the waiting look counted round 2");
+
+  let resolveContext!: (value: typeof CONTEXT | undefined) => void;
+  h.state.fallbackContext = () => new Promise((resolve) => { resolveContext = resolve; });
+  const pending = h.loop.noticeRound(CHAT, news);
+  await h.flush();
+  assert.equal(h.goal()?.rounds, 1, "dropLook restored the uncounted round before fallbackContext");
+  resolveContext(CONTEXT);
+  const started = await pending;
+  releaseStart();
+  await h.flush();
+  assert.equal(started?.kind, "started", "the current notice still starts after dropLook uncounted");
+  assert.deepEqual(h.noticeRounds, ["job ended"]);
+  assert.equal(h.rounds.length, 0, "the dropped look's round never started");
+  assert.equal(h.goal()?.rounds, 2);
 });

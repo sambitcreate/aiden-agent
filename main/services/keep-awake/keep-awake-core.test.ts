@@ -349,7 +349,11 @@ test("blocker, idleSeconds, and onStatus errors are isolated via onError without
   let reasons: KeepAwakeReason[] = [chat("a")];
   controller.addInput({ read: () => ({ reasons }) });
   assert.equal(controller.status().holding, false, "failed start leaves holding false");
-  assert.ok(errors.length >= 2, "idleSeconds, start, and onStatus errors reported");
+  assert.deepEqual(
+    errors.map((error) => (error instanceof Error ? error.message : String(error))),
+    ["idle failed", "start failed", "status failed"],
+    "idleSeconds, start, and onStatus errors are each reported",
+  );
 
   // Non-finite idleSeconds falls back to 0 rather than triggering the idle cap.
   failStart = false;
@@ -366,5 +370,10 @@ test("blocker, idleSeconds, and onStatus errors are isolated via onError without
   controller.setEnabled(false);
   assert.equal(controller.status().holding, false);
   assert.equal(active.size, 0);
+  assert.deepEqual(
+    errors.map((error) => (error instanceof Error ? error.message : String(error))),
+    ["idle failed", "start failed", "status failed", "stop failed"],
+    "stop error is also reported",
+  );
   controller.dispose();
 });

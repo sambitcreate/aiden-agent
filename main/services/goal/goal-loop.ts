@@ -300,19 +300,32 @@ export class GoalLoop {
     // The news is newer than what a look under way read: its review is
     // dropped (its verdict would be stale) and this round's settling is looked at.
     this.dropLook(chatId);
+    // Capture the exact revision after dropLook(), which may synchronously
+    // restore an uncounted round, so a same-goal pause/resume across the await
+    // cannot look active under a stale notice.
+    const fenced = this.goals.get(chatId);
+    if (this.stopped || fenced?.id !== before.id || fenced.status !== "active") return undefined;
+    const expected: GoalRef = { id: fenced.id, revision: fenced.revision };
+    const currentIfFenced = (): GoalRecordV1 | undefined => {
+      if (this.stopped) return undefined;
+      const current = this.goals.get(chatId);
+      if (current?.id !== expected.id || current.revision !== expected.revision || current.status !== "active") {
+        return undefined;
+      }
+      return current;
+    };
     let context: OwedTurnContext | undefined;
     try {
       context = this.contexts.get(chatId) ?? (await this.deps.fallbackContext(chatId));
     } catch (error) {
       // The notice is still saved, as one no round could answer.
       this.deps.log("A keep-going notice round could not read the chat.", error);
-      const current = this.goals.get(chatId);
-      if (current?.id !== before.id || current.status !== "active") return undefined;
+      if (!currentIfFenced()) return undefined;
       this.relookAfterNotice(chatId);
       return { kind: "unavailable", reason: "The round could not start." };
     }
-    const latest = this.goals.get(chatId);
-    if (latest?.id !== before.id || latest.status !== "active") return undefined;
+    const latest = currentIfFenced();
+    if (!latest) return undefined;
     if (!context) {
       this.relookAfterNotice(chatId);
       return { kind: "unavailable", reason: "The chat has no model yet." };
