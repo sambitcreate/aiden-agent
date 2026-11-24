@@ -4,11 +4,11 @@ import {
   DESIGN_SYSTEM_MAX_CONFIG_VALUES,
   collapsedName,
   designSystemFileRank,
-  designSystemOfferLine,
   detectDesignSystem,
   parseDesignColor,
   shortenedName,
-} from "./design-system.js";
+} from "./design-md/style-scan.js";
+import { designSystemOfferLine } from "./design-system.js";
 
 const colorNamed = (detected: ReturnType<typeof detectDesignSystem>, name: string) => detected.colors.find((color) => color.name === name);
 

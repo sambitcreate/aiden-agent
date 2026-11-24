@@ -12,7 +12,7 @@
 import path from "node:path";
 import { stringify } from "yaml";
 import { isSafeWorkspaceRelativePath } from "../canvas-config.js";
-import { findWorkspaceDesignSystem } from "../design-system-offers.js";
+import { findWorkspaceDesignSystem } from "./style-scan.js";
 
 export const DESIGN_MD_DRAFT_MAX_BYTES = 32 * 1024;
 const NO_EVIDENCE = "No evidence in the app's styles yet.";
