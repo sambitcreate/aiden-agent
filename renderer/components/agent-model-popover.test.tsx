@@ -66,7 +66,6 @@ function settingsServer(initial: AppSettings) {
       return structuredClone(current);
     },
     "models:info": () => ({}),
-    "modelPace:summaries": () => ({}),
   });
   return { calls, current: () => current };
 }

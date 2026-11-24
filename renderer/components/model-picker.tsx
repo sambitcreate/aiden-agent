@@ -15,7 +15,7 @@ import {
   visibleModelEntries,
   type ModelEntry,
 } from "../lib/model-picker-data";
-import { useModelPaceSummaries, useProvidersModelInfo } from "../lib/queries";
+import { useProvidersModelInfo } from "../lib/queries";
 import type { Provider } from "../lib/types";
 import { ProviderIcon } from "./provider-icon";
 import type { HiddenModelsByProvider } from "../shared/model-visibility";
@@ -74,9 +74,6 @@ export function ModelPicker({
   const listId = React.useId();
 
   const catalog = useProvidersModelInfo(providers);
-  // Device-local measured speed for the detail card; display-only. Read afresh
-  // each time the picker opens so new chats show up without a remount.
-  const paceSummaries = useModelPaceSummaries({ enabled: open, staleTime: 0 }).data;
   // The composer re-renders on every streamed token. Keep the catalog derivation
   // keyed on its real inputs, and derive siblings only while the popover is open.
   // `catalog.data` keeps its identity until some provider's model info changes.
@@ -100,12 +97,6 @@ export function ModelPicker({
       entries.find((entry) => entry.value === selectedValue) ??
       entries[0])
     : undefined;
-  const activeAttribution = activeEntry?.info?.benchmark
-    ? {
-        url: activeEntry.info.benchmark.sourceUrl,
-        label: `${activeEntry.info.benchmark.sourceLabel} · ${activeEntry.info.benchmark.license}`,
-      }
-    : null;
   const hasUnavailableSelection = Boolean(selectedValue && !selected);
   const hasModels = entries.length > 0;
   const unavailableMessage =
@@ -226,24 +217,11 @@ export function ModelPicker({
             pageKey={`${showing}`}
             sectionProps={{ id: listId, "aria-label": "Models" }}
           />
-          {!showExternalDetails && activeAttribution ? (
-            <div className="border-t border-separator px-3 py-1.5 text-mini leading-4">
-              <a
-                href={activeAttribution.url}
-                target="_blank"
-                rel="noreferrer"
-                className="text-tertiary underline decoration-separator underline-offset-2 hover:text-secondary"
-              >
-                {activeAttribution.label}
-              </a>
-            </div>
-          ) : null}
         </div>
         {showExternalDetails ? (
           <ModelHoverDetails
             model={activeEntry}
             alsoVia={activeEntry ? alsoViaLabel(siblingsByValue.get(activeEntry.value)) : undefined}
-            pace={activeEntry ? paceSummaries?.[activeEntry.value] : undefined}
             metadataLoading={catalog.isLoading}
           />
         ) : null}

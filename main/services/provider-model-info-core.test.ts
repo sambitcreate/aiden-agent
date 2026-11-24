@@ -4,16 +4,7 @@ import { OPENAI_CODEX_PROVIDER_ID } from "./codex-provider.js";
 import { createProviderModelInfo, mergeCodexModelInfo } from "./provider-model-info-core.js";
 import type { ModelInfo } from "./types.js";
 
-const benchmark: NonNullable<ModelInfo["benchmark"]> = {
-  source: "openrouter",
-  datasetSource: "artificial-analysis",
-  sourceLabel: "Artificial Analysis via OpenRouter",
-  sourceUrl: "https://artificialanalysis.ai",
-  citation: "Source: Artificial Analysis via OpenRouter.",
-  asOf: "2026-06-03T12:00:00.000Z",
-  license: "CC BY 4.0",
-  coding: 80,
-};
+const cost: NonNullable<ModelInfo["cost"]> = { input: 1.25, output: 10 };
 
 const pinned: ModelInfo = {
   id: "gpt-5.4",
@@ -39,7 +30,7 @@ function fixture() {
     reasoning: false,
     openWeights: true,
     contextLength: 1,
-    ...(modelId === "gpt-5.4" ? { benchmark } : {}),
+    ...(modelId === "gpt-5.4" ? { cost } : {}),
     metadataSource: "models-dev",
     matched: true,
   });
@@ -63,29 +54,8 @@ function fixture() {
 test("enriches pinned Codex models without replacing Pi-authoritative capabilities", async () => {
   const { service, requests } = fixture();
   const result = await service.info(OPENAI_CODEX_PROVIDER_ID, "gpt-5.4");
-  assert.deepEqual(result, { ...pinned, benchmark, matched: true });
+  assert.deepEqual(result, { ...pinned, cost, matched: true });
   assert.deepEqual(requests, [{ providerId: OPENAI_CODEX_PROVIDER_ID, modelIds: ["gpt-5.4"] }]);
-});
-
-test("benchmark-only Codex enrichment preserves Pi metadata authority", () => {
-  const result = mergeCodexModelInfo("gpt-5.4", pinned, {
-    id: "gpt-5.4",
-    metadataSource: "models-dev",
-    matched: true,
-    benchmark: {
-      source: "openrouter",
-      datasetSource: "artificial-analysis",
-      sourceLabel: "Artificial Analysis via OpenRouter",
-      sourceUrl: "https://artificialanalysis.ai",
-      citation: "Source: Artificial Analysis via OpenRouter.",
-      asOf: "2026-06-03T12:00:00.000Z",
-      license: "CC BY 4.0",
-      coding: 80,
-    },
-  });
-  assert.equal(result.metadataSource, "provider");
-  assert.equal(result.benchmark?.coding, 80);
-  assert.equal(result.contextLength, pinned.contextLength);
 });
 
 test("Codex enrichment grafts models.dev cost and canonical id onto Pi metadata", () => {
@@ -106,7 +76,7 @@ test("Codex enrichment grafts models.dev cost and canonical id onto Pi metadata"
 test("keeps unknown Codex ids unavailable and enriches batches consistently", async () => {
   const { service } = fixture();
   const result = await service.infoMany(OPENAI_CODEX_PROVIDER_ID, ["gpt-5.4", "unknown"]);
-  assert.equal(result["gpt-5.4"].benchmark, benchmark);
+  assert.deepEqual(result["gpt-5.4"].cost, cost);
   assert.deepEqual(result.unknown, {
     id: "unknown",
     vision: false,
@@ -209,26 +179,6 @@ test("private connection image and reasoning switches follow request capabilitie
 
 async function openRouterGatewayService(overrides?: { contextLength: number }) {
   const { parseModelCatalog, resolveModelInfo } = await import("./models-catalog-core.js");
-  const { buildOpenRouterBenchmarkCache } = await import("./openrouter-benchmark-catalog-core.js");
-  const benchmarks = buildOpenRouterBenchmarkCache({
-    data: [{
-      source: "artificial-analysis",
-      model_permaslug: "acme/fresh-model-20261001",
-      display_name: "Fresh Model",
-      intelligence_index: 61.5,
-      coding_index: 70.2,
-      agentic_index: 55.8,
-    }],
-    meta: {
-      as_of: "2026-10-01T00:00:00.000Z",
-      version: "v1",
-      source: "artificial-analysis",
-      source_url: "https://artificialanalysis.ai",
-      citation: "Source: Artificial Analysis (artificialanalysis.ai) via OpenRouter (openrouter.ai/rankings).",
-      model_count: 1,
-      task_type: null,
-    },
-  });
   // models.dev knows an unrelated model only, so the gateway model is unmatched.
   const modelsDev = parseModelCatalog({ openrouter: { models: { "other/model": { name: "Other Model" } } } });
   const modelId = "acme/fresh-model-20261001";
@@ -246,13 +196,9 @@ async function openRouterGatewayService(overrides?: { contextLength: number }) {
   };
   const service = createProviderModelInfo({
     modelsCatalog: {
-      info: async (catalogProvider, id) =>
-        resolveModelInfo(modelsDev, catalogProvider, id, benchmarks),
+      info: async (catalogProvider, id) => resolveModelInfo(modelsDev, catalogProvider, id),
       infoMany: async (catalogProvider, ids) =>
-        Object.fromEntries(ids.map((id) => [
-          id,
-          resolveModelInfo(modelsDev, catalogProvider, id, benchmarks),
-        ])),
+        Object.fromEntries(ids.map((id) => [id, resolveModelInfo(modelsDev, catalogProvider, id)])),
     },
     legacyProvider: async () => provider,
     codexModelInfo: () => undefined,
@@ -260,27 +206,21 @@ async function openRouterGatewayService(overrides?: { contextLength: number }) {
   return { service, provider, modelId };
 }
 
-test("provider metadata fallback keeps exact OpenRouter benchmark scores when models.dev has no match", async () => {
+test("a gateway model models.dev does not know is described by the provider's own metadata", async () => {
   const { service, provider, modelId } = await openRouterGatewayService();
   const single = await service.info(provider.id, modelId);
   assert.equal(single.name, "Fresh Model (gateway)");
   assert.equal(single.metadataSource, "provider");
-  assert.equal(single.benchmark?.intelligence, 61.5);
-  assert.equal(single.benchmark?.coding, 70.2);
-  assert.equal(single.benchmark?.agentic, 55.8);
-  assert.equal(single.benchmark?.asOf, "2026-10-01T00:00:00.000Z");
+  assert.equal(single.contextLength, 128_000);
   const batch = (await service.infoMany(provider.id, [modelId]))[modelId]!;
-  assert.equal(batch.benchmark?.coding, 70.2);
+  assert.equal(batch.name, "Fresh Model (gateway)");
 });
 
-test("provider metadata overrides still apply and keep the benchmark through the fallback", async () => {
+test("provider metadata overrides still apply through the fallback", async () => {
   const { service, provider, modelId } = await openRouterGatewayService({ contextLength: 64_000 });
   const info = await service.info(provider.id, modelId);
   assert.equal(info.contextLength, 64_000);
   assert.equal(info.detectedCapabilities?.contextLength, 128_000);
-  assert.equal(info.benchmark?.intelligence, 61.5);
-  assert.equal(info.benchmark?.agentic, 55.8);
   const batch = (await service.infoMany(provider.id, [modelId]))[modelId]!;
   assert.equal(batch.contextLength, 64_000);
-  assert.equal(batch.benchmark?.coding, 70.2);
 });

@@ -274,7 +274,6 @@ test("picking a model in one chat leaves other chats and the new-chat model alon
     "providers:list": () => [provider],
     "settings:get": () => ({}),
     "models:info": () => ({}),
-    "modelPace:summaries": () => ({}),
   });
   const trigger = () => screen.getByRole("button", { name: /^Selected model: .*Choose a model\.$/u });
   try {
@@ -356,7 +355,6 @@ test("an Agent Slider stop moves this chat to its model and effort, and a stop w
       },
     }),
     "models:info": () => ({}),
-    "modelPace:summaries": () => ({}),
   });
   const trigger = () => screen.getByRole("button", { name: /^Selected model: .*Choose a model\.$/u });
   try {

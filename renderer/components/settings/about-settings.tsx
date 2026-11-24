@@ -316,8 +316,8 @@ export function AboutSettings() {
         description={
           <div className="space-y-2">
             <p>
-              This removes your profile, app preferences, custom provider and MCP setup, saved API
-              keys and OAuth sessions, and cached benchmark data.
+              This removes your profile, app preferences, custom provider and MCP setup, and saved
+              API keys and OAuth sessions.
             </p>
             <p>
               Chats, projects, schedules, skills, and downloaded local models stay. Aiden will

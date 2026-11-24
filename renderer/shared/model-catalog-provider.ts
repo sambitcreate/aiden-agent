@@ -27,32 +27,6 @@ export function catalogProviderSlug(providerId: string): string | undefined {
     : undefined;
 }
 
-/** OpenRouter/Artificial Analysis author slug for providers that serve one vendor's models directly. */
-const OPENROUTER_AUTHOR: Readonly<Record<string, string>> = {
-  openai: "openai",
-  "openai-codex": "openai",
-  anthropic: "anthropic",
-  google: "google",
-  gemini: "google",
-  deepseek: "deepseek",
-  moonshot: "moonshotai",
-  moonshotai: "moonshotai",
-  xai: "x-ai",
-  mistral: "mistralai",
-  minimax: "minimax",
-  zai: "z-ai",
-  "zai-coding-cn": "z-ai",
-  xiaomi: "xiaomi",
-  nvidia: "nvidia",
-};
-
-/** The benchmark author whose models an Aiden provider serves directly, if any. */
-export function openRouterAuthor(providerId: string): string | undefined {
-  return Object.prototype.hasOwnProperty.call(OPENROUTER_AUTHOR, providerId)
-    ? OPENROUTER_AUTHOR[providerId]
-    : undefined;
-}
-
 /** A model id's last path segment, lowercased: "OpenAI/GPT-4o" -> "gpt-4o". */
 export function modelIdLeaf(id: string): string {
   return id.slice(id.lastIndexOf("/") + 1).toLowerCase();

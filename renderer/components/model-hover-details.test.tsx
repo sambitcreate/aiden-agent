@@ -3,11 +3,8 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { renderToStaticMarkup } from "react-dom/server";
 import type { ModelEntry } from "../lib/model-picker-data";
-import type { ModelBenchmarkScores, ModelInfo } from "../lib/types";
-import type { ModelPaceSummary } from "../shared/model-pace";
+import type { ModelInfo } from "../lib/types";
 import { ModelHoverDetails } from "./model-list-panel";
-
-const DAY_MS = 24 * 60 * 60 * 1_000;
 
 function entry(overrides: Partial<ModelEntry> = {}, info: Partial<ModelInfo> = {}): ModelEntry {
   return {
@@ -21,23 +18,6 @@ function entry(overrides: Partial<ModelEntry> = {}, info: Partial<ModelInfo> = {
     info: { id: "claude-test", metadataSource: "models-dev", matched: true, ...info },
     ...overrides,
   };
-}
-
-function benchmark(asOf: string): ModelBenchmarkScores {
-  return {
-    source: "openrouter",
-    datasetSource: "artificial-analysis",
-    sourceLabel: "Artificial Analysis via OpenRouter",
-    sourceUrl: "https://openrouter.ai",
-    citation: "Artificial Analysis",
-    asOf,
-    license: "CC BY 4.0",
-    coding: 40,
-  };
-}
-
-function pace(sampleCount: number): ModelPaceSummary {
-  return { medianTtftMs: 420, medianTokensPerSecond: 61.6, sampleCount, lastSampledAt: 1 };
 }
 
 /** The card's detail rows as label → value. */
@@ -56,28 +36,12 @@ function render(props: Parameters<typeof ModelHoverDetails>[0]): Map<string, str
   return rows(renderToStaticMarkup(<ModelHoverDetails {...props} />));
 }
 
-test("the detail card shows the list price and the speed measured on this device", () => {
+test("the detail card shows the list price as plain text", () => {
   const details = render({
     model: entry({}, { cost: { input: 3, output: 15, cacheRead: 0.3 } }),
-    pace: pace(4),
     metadataLoading: false,
   });
   assert.equal(details.get("List price"), "$3 / $15 per 1M");
-  assert.equal(details.get("Your speed"), "0.4 s first token · 62 tok/s (4 runs)");
-});
-
-test("a single measured run is named in the singular", () => {
-  const details = render({ model: entry(), pace: pace(1), metadataLoading: false });
-  assert.equal(details.get("Your speed"), "0.4 s first token · 62 tok/s (1 run)");
-});
-
-test("measured speed shows even when the catalog knows nothing about the model", () => {
-  const details = render({
-    model: entry({}, { matched: false, metadataSource: "fallback" }),
-    pace: pace(2),
-    metadataLoading: false,
-  });
-  assert.equal(details.get("Your speed"), "0.4 s first token · 62 tok/s (2 runs)");
 });
 
 test("local and custom endpoints never show an inherited list price", () => {
@@ -96,22 +60,20 @@ test("local and custom endpoints never show an inherited list price", () => {
   assert.equal(custom.has("List price"), false);
 });
 
-test("a benchmark snapshot over 60 days old says so; a recent one does not", () => {
-  const stale = new Date(Date.now() - 90 * DAY_MS).toISOString();
-  const recent = new Date(Date.now() - 5 * DAY_MS).toISOString();
-  const staleRow = render({ model: entry({}, { benchmark: benchmark(stale) }), metadataLoading: false }).get(
-    "Benchmark as of",
-  );
-  assert.match(staleRow ?? "", / \(over 60 days old\)$/u);
-  const recentRow = render({ model: entry({}, { benchmark: benchmark(recent) }), metadataLoading: false }).get(
-    "Benchmark as of",
-  );
-  assert.ok(recentRow);
-  assert.doesNotMatch(recentRow, /days old/u);
+test("the card shows models.dev facts and no score or measured-speed rows", () => {
+  const details = render({
+    model: entry({}, { contextLength: 200_000, knowledge: "2025-03", releaseDate: "2025-05-01" }),
+    metadataLoading: false,
+  });
+  assert.equal(details.get("Context"), "200K");
+  assert.equal(details.get("Knowledge"), "2025-03");
+  assert.equal(details.get("Released"), "2025-05-01");
+  for (const retired of ["Your speed", "Intelligence", "Coding", "Agentic", "Benchmark as of"]) {
+    assert.equal(details.has(retired), false, retired);
+  }
 });
 
-test("without measurements or a price the card has no speed or price rows", () => {
-  const details = render({ model: entry(), pace: pace(0), metadataLoading: false });
-  assert.equal(details.has("Your speed"), false);
+test("without a price the card has no price row", () => {
+  const details = render({ model: entry(), metadataLoading: false });
   assert.equal(details.has("List price"), false);
 });
