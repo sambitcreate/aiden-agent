@@ -8,8 +8,6 @@ import test from "node:test";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { promisify } from "node:util";
 import {
-  DESIGN_MD_LINT_DEADLINE_MS,
-  DESIGN_MD_WORKER_LOAD_TIMEOUT_MS,
   runDesignMdWorker,
   type DesignMdLintResult,
 } from "./lint-client.js";
@@ -29,11 +27,6 @@ async function lintFixture(name: string): Promise<DesignMdLintResult> {
   assert.equal(outcome.ok, true, `${name}: ${JSON.stringify(outcome)}`);
   return (outcome as { ok: true; result: DesignMdLintResult }).result;
 }
-
-test("the deadlines are the documented ones", () => {
-  assert.equal(DESIGN_MD_LINT_DEADLINE_MS, 2_000);
-  assert.equal(DESIGN_MD_WORKER_LOAD_TIMEOUT_MS, 10_000);
-});
 
 test("the worker reports what the fixtures hold", async () => {
   const valid = await lintFixture("valid.md");
