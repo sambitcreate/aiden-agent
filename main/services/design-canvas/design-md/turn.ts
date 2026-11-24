@@ -6,8 +6,9 @@
  *
  * The sentence holds only checked, quoted paths, counts and fixed words (see
  * `designMdStatusSentence`), so the system prompt and tools never change with
- * the file and an unchanged file adds no new note. Any failure to read leaves
- * the sentence empty and is logged: a broken DESIGN.md never breaks the note.
+ * the file and an unchanged file adds no new note. Any failure to read, or a
+ * read over the 3 s budget, leaves the sentence empty and is logged: a broken
+ * or slow DESIGN.md never breaks or holds up the note.
  */
 import { lstat } from "node:fs/promises";
 import path from "node:path";
@@ -15,7 +16,6 @@ import type { AgentMessage, AgentTool } from "@earendil-works/pi-agent-core";
 import { readCanvasConfig, type CanvasConfig } from "../canvas-config.js";
 import { locateDesignMd, type DesignAppRoots } from "./locate.js";
 import type { DesignMdOffers } from "./offers.js";
-import type { DesignMdState } from "./reader.js";
 import { designMdStatusSentence } from "./status.js";
 import { createDesignSystemTool, type DesignSystemToolDeps } from "./tool.js";
 
@@ -37,7 +37,12 @@ export type DesignMdTurnDeps = {
   report?: (event: "design_md_drafted", props: { source: "app" }) => void;
   log?: (message: string, error?: unknown) => void;
   draftFor?: DesignSystemToolDeps["draftFor"];
+  /** How long the sentence may take before the note goes without it; 3 s by default. */
+  budgetMs?: number;
 };
+
+/** The status note waits this long for the DESIGN.md sentence, then goes without it. */
+export const DESIGN_MD_SENTENCE_BUDGET_MS = 3_000;
 
 export type DesignMdTurn = {
   tool: AgentTool;
@@ -45,7 +50,7 @@ export type DesignMdTurn = {
   statusSentence(signal?: AbortSignal): Promise<string>;
   /** The same sentence without the offer, for `canvas_read`; "" on failure. */
   canvasReadLine(signal?: AbortSignal): Promise<string>;
-  /** Settles the turn's offer and reports drafts the turn wrote (R7). */
+  /** Settles the offers this turn made (only those) and reports drafts the turn wrote (R7). */
   settle(delivered: boolean): Promise<void>;
 };
 
@@ -65,24 +70,67 @@ export function createDesignMdTurn(deps: DesignMdTurnDeps): DesignMdTurn {
     onDraft: (target) => drafted.add(target),
   });
 
-  const sentence = async (withOffer: boolean, signal?: AbortSignal): Promise<string> => {
-    try {
-      const current = await config();
-      const { roots, more } = await deps.appRoots(deps.workspaceRoot, { signal, config: current });
-      const entries: { appRoot: string; state: DesignMdState }[] = [];
-      for (const appRoot of roots) {
+  /** Keys of the offers this turn's sentences carried, settled by this turn alone. */
+  const offered: string[] = [];
+  const budgetMs = deps.budgetMs ?? DESIGN_MD_SENTENCE_BUDGET_MS;
+
+  const compose = async (withOffer: boolean, signal: AbortSignal): Promise<{ text: string; key?: string }> => {
+    const current = await config();
+    const { roots, more } = await deps.appRoots(deps.workspaceRoot, { signal, config: current });
+    // Each root is read at once; the linter's own pool still runs at most two.
+    const entries = await Promise.all(
+      roots.map(async (appRoot) => {
         const located = await locateDesignMd(deps.workspaceRoot, appRoot, current, { signal });
-        entries.push({ appRoot, state: await deps.reader.read(deps.workspaceRoot, located, { signal }) });
+        return { appRoot, state: await deps.reader.read(deps.workspaceRoot, located, { signal }) };
+      }),
+    );
+    let offer: { sentence: string; key: string } | null = null;
+    if (withOffer && deps.offerable && deps.askOffered) {
+      // The first app without a DESIGN.md that hasn't had its offer yet.
+      for (const entry of entries) {
+        if (entry.state.status !== "missing") continue;
+        offer = await deps.offers.offerFor(deps.workspaceRoot, entry.appRoot);
+        if (offer) break;
       }
-      let offer = "";
-      const missing = entries.find((entry) => entry.state.status === "missing");
-      if (withOffer && deps.offerable && deps.askOffered && missing) {
-        offer = await deps.offers.offerFor(deps.workspaceRoot, missing.appRoot);
+    }
+    const text = designMdStatusSentence(entries, { more, ...(offer ? { offer: offer.sentence } : {}) });
+    return offer ? { text, key: offer.key } : { text };
+  };
+
+  const sentence = async (withOffer: boolean, signal?: AbortSignal): Promise<string> => {
+    const controller = new AbortController();
+    const stop = () => controller.abort();
+    signal?.addEventListener("abort", stop, { once: true });
+    if (signal?.aborted) stop();
+    let timer: NodeJS.Timeout | undefined;
+    let overBudget = false;
+    const work = compose(withOffer, controller.signal);
+    const budget = new Promise<null>((resolve) => {
+      timer = setTimeout(() => {
+        overBudget = true;
+        controller.abort();
+        resolve(null);
+      }, budgetMs);
+    });
+    try {
+      const result = await Promise.race([work, budget]);
+      if (result === null) {
+        // An offer claimed after the budget ran out was never shown; release it.
+        void work.then(
+          (late) => (late.key ? deps.offers.settle(late.key, false) : undefined),
+          () => undefined,
+        );
+        deps.log?.("The app's DESIGN.md took too long for the canvas note; it's left out this time.");
+        return "";
       }
-      return designMdStatusSentence(entries, { more, ...(offer ? { offer } : {}) });
+      if (result.key) offered.push(result.key);
+      return result.text;
     } catch (error) {
-      if (!signal?.aborted) deps.log?.("Could not read the app's DESIGN.md for the canvas note.", error);
+      if (!signal?.aborted && !overBudget) deps.log?.("Could not read the app's DESIGN.md for the canvas note.", error);
       return "";
+    } finally {
+      clearTimeout(timer);
+      signal?.removeEventListener("abort", stop);
     }
   };
 
@@ -103,7 +151,8 @@ export function createDesignMdTurn(deps: DesignMdTurnDeps): DesignMdTurn {
           deps.report?.("design_md_drafted", { source: "app" });
         }
       }
-      await deps.offers.settle(deps.workspaceRoot, delivered);
+      const keys = offered.splice(0);
+      for (const key of keys) await deps.offers.settle(key, delivered);
     },
   };
 }

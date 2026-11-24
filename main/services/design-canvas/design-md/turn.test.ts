@@ -49,6 +49,8 @@ function turnFor(
     report?: (event: "design_md_drafted", props: { source: "app" }) => void;
     log?: (message: string, error?: unknown) => void;
     offers?: DesignMdOffers;
+    appRoots?: DesignAppRoots;
+    budgetMs?: number;
   } = {},
 ) {
   const offers = options.offers ?? new DesignMdOffers({ file: () => path.join(setup.userData, "design-md-offers.json") });
@@ -58,7 +60,8 @@ function turnFor(
       workspaceRoot: setup.workspace,
       reader: new DesignMdReader({ run: countingRun, ...options.reader }),
       offers,
-      appRoots: twoApps,
+      appRoots: options.appRoots ?? twoApps,
+      ...(options.budgetMs !== undefined ? { budgetMs: options.budgetMs } : {}),
       offerable: options.offerable ?? true,
       askOffered: options.askOffered ?? true,
       ...(options.report ? { report: options.report } : {}),
@@ -96,7 +99,7 @@ test("the offer isn't made when ask_user_question isn't offered", async (t) => {
   const setup = await monorepo(t);
   const { turn, offers } = turnFor(setup, { askOffered: false });
   assert.ok(!(await turn.statusSentence()).includes("ask_user_question"));
-  assert.equal(await offers.offerFor(setup.workspace, "apps/admin"), designMdOfferSentence("apps/admin"), "nothing was claimed");
+  assert.equal((await offers.offerFor(setup.workspace, "apps/admin"))?.sentence, designMdOfferSentence("apps/admin"), "nothing was claimed");
 });
 
 test("settle(true) logs the offer; settle(false) leaves it for a later turn", async (t) => {
@@ -135,6 +138,81 @@ test("a draft whose target exists at a delivered turn's end sends design_md_draf
   await fs.writeFile(path.join(stopped.workspace, "apps/admin/DESIGN.md"), "---\nname: Admin\n---\n");
   await failed.turn.settle(false);
   assert.equal(events.length, 1, "an undelivered turn sends nothing");
+});
+
+test("two chats in one workspace settle only their own offers", async (t) => {
+  const setup = await monorepo(t);
+  await fs.mkdir(path.join(setup.workspace, "apps/docs"), { recursive: true });
+  const offers = new DesignMdOffers({ file: () => path.join(setup.userData, "design-md-offers.json") });
+  const roots: DesignAppRoots = async () => ({ roots: ["apps/web", "apps/admin", "apps/docs"], more: 0 });
+  const first = turnFor(setup, { offers, appRoots: roots }).turn;
+  const second = turnFor(setup, { offers, appRoots: roots }).turn;
+  assert.ok((await first.statusSentence()).endsWith(designMdOfferSentence("apps/admin")));
+  assert.ok((await second.statusSentence()).endsWith(designMdOfferSentence("apps/docs")), "the next missing app is offered");
+  // The second chat's turn ends normally while the first one is still running, then fails.
+  await second.settle(true);
+  await first.settle(false);
+  const later = turnFor(setup, { offers, appRoots: roots }).turn;
+  assert.ok((await later.statusSentence()).endsWith(designMdOfferSentence("apps/admin")), "the failed chat's offer comes back");
+  await later.settle(false);
+  const restarted = new DesignMdOffers({ file: () => path.join(setup.userData, "design-md-offers.json") });
+  assert.equal(await restarted.offerFor(setup.workspace, "apps/docs"), null, "the delivered offer was logged");
+});
+
+test("with no offer left for the first missing app, the next missing one is offered", async (t) => {
+  const setup = await monorepo(t);
+  await fs.mkdir(path.join(setup.workspace, "apps/docs"), { recursive: true });
+  const offers = new DesignMdOffers({ file: () => path.join(setup.userData, "design-md-offers.json") });
+  const made = await offers.offerFor(setup.workspace, "apps/admin");
+  await offers.settle(made!.key, true);
+  const roots: DesignAppRoots = async () => ({ roots: ["apps/admin", "apps/web", "apps/docs"], more: 0 });
+  const sentence = await turnFor(setup, { offers, appRoots: roots }).turn.statusSentence();
+  assert.ok(sentence.endsWith(designMdOfferSentence("apps/docs")), sentence);
+});
+
+test("roots are read together, and a sentence that takes over its budget is empty", async (t) => {
+  const setup = await monorepo(t);
+  let inFlight = 0;
+  let most = 0;
+  const logged: string[] = [];
+  const slowRun = (async (request: { content: string }, options?: { signal?: AbortSignal }) => {
+    inFlight++;
+    most = Math.max(most, inFlight);
+    await new Promise((resolve) => setTimeout(resolve, 40));
+    inFlight--;
+    return countingRun(request as never, options as never);
+  }) as unknown as typeof runDesignMdWorker;
+  await fs.writeFile(path.join(setup.workspace, "apps/admin/DESIGN.md"), "---\nname: Admin\n---\n");
+  const quick = turnFor(setup, { reader: { run: slowRun } }).turn;
+  assert.ok((await quick.statusSentence()).includes('"apps/admin/DESIGN.md"'));
+  assert.equal(most, 2, "both roots were linted at once");
+
+  let aborted = false;
+  const stuck = createDesignMdTurn({
+    workspaceRoot: setup.workspace,
+    reader: {
+      read: (_root, _located, options) =>
+        new Promise((_resolve, reject) => {
+          options?.signal?.addEventListener("abort", () => {
+            aborted = true;
+            reject(new DOMException("stopped", "AbortError"));
+          });
+        }),
+      lintContent: async () => ({ status: "busy" }),
+      export: async () => ({ status: "busy", path: "x", source: "app" }),
+    },
+    offers: new DesignMdOffers({ file: () => path.join(setup.userData, "design-md-offers.json") }),
+    appRoots: twoApps,
+    offerable: true,
+    askOffered: true,
+    budgetMs: 50,
+    log: (message) => logged.push(message),
+  });
+  const started = performance.now();
+  assert.equal(await stuck.statusSentence(), "");
+  assert.ok(performance.now() - started < 1_000);
+  assert.equal(aborted, true, "the reads were stopped");
+  assert.equal(logged.length, 1);
 });
 
 test("the canvas_read line is one sentence with the quoted path and counts", async (t) => {
