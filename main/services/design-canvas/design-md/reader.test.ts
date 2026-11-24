@@ -345,3 +345,126 @@ test("a file read reports design_md_linted once per new content, bucketed", asyn
     assert.equal(events.length, 2);
   });
 });
+
+const emptyResult = () => ({ summary: { errors: 0, warnings: 0, infos: 0 }, findings: [], sections: [], omitted: [], symbols: [], tailwindConfig: null });
+
+test("a timed-out file is retried after five minutes, not before", async () => {
+  await withWorkspace(async (ws) => {
+    await writeFile(path.join(ws, "DESIGN.md"), "# x\n");
+    let clock = 1_000_000;
+    const outcomes: unknown[] = [{ ok: false, status: "timed-out" }, { ok: true, result: emptyResult() }];
+    let runs = 0;
+    const reader = new DesignMdReader({
+      now: () => clock,
+      run: (async () => outcomes[runs++]) as unknown as typeof runDesignMdWorker,
+    });
+    assert.equal((await reader.read(ws, at("DESIGN.md"))).status, "timed-out");
+    clock += 5 * 60_000 - 1;
+    assert.equal((await reader.read(ws, at("DESIGN.md"))).status, "timed-out");
+    assert.equal(runs, 1);
+    clock += 1;
+    assert.equal((await reader.read(ws, at("DESIGN.md"))).status, "ok");
+    assert.equal(runs, 2);
+    await reader.read(ws, at("DESIGN.md"));
+    assert.equal(runs, 2);
+  });
+});
+
+test("a timed-out export is retried after five minutes too", async () => {
+  await withWorkspace(async (ws) => {
+    await writeFile(path.join(ws, "DESIGN.md"), "# x\n");
+    let clock = 0;
+    const outcomes: unknown[] = [{ ok: false, status: "timed-out" }, { ok: true, result: { success: true, text: ":root {}" } }];
+    let runs = 0;
+    const reader = new DesignMdReader({
+      now: () => clock,
+      run: (async () => outcomes[runs++]) as unknown as typeof runDesignMdWorker,
+    });
+    assert.equal((await reader.export(ws, at("DESIGN.md"), "css-vars")).status, "timed-out");
+    assert.equal((await reader.export(ws, at("DESIGN.md"), "css-vars")).status, "timed-out");
+    clock += 5 * 60_000;
+    assert.equal((await reader.export(ws, at("DESIGN.md"), "css-vars")).status, "ok");
+    assert.equal(runs, 2);
+  });
+});
+
+test("after the linter fails to load in time, no more workers start this run", async () => {
+  await withWorkspace(async (ws) => {
+    await writeFile(path.join(ws, "DESIGN.md"), "# x\n");
+    let runs = 0;
+    const reader = new DesignMdReader({
+      run: (async () => {
+        runs++;
+        return { ok: false, status: "linter-unavailable", cause: "load-timeout" };
+      }) as unknown as typeof runDesignMdWorker,
+    });
+    assert.equal((await reader.read(ws, at("DESIGN.md"))).status, "linter-unavailable");
+    await writeFile(path.join(ws, "DESIGN.md"), "# y\n");
+    assert.equal((await reader.read(ws, at("DESIGN.md"))).status, "linter-unavailable");
+    assert.equal((await reader.lintContent("# z\n")).status, "linter-unavailable");
+    assert.equal((await reader.export(ws, at("DESIGN.md"), "css-vars")).status, "linter-unavailable");
+    assert.equal(runs, 1);
+  });
+});
+
+test("a linter that can't load for another reason is tried again next time", async () => {
+  await withWorkspace(async (ws) => {
+    await writeFile(path.join(ws, "DESIGN.md"), "# x\n");
+    let runs = 0;
+    const reader = new DesignMdReader({
+      run: (async () => {
+        runs++;
+        return { ok: false, status: "linter-unavailable" };
+      }) as unknown as typeof runDesignMdWorker,
+    });
+    await reader.read(ws, at("DESIGN.md"));
+    await reader.read(ws, at("DESIGN.md"));
+    assert.equal(runs, 2);
+  });
+});
+
+test("an export over 64 KiB is kept only as its size", async () => {
+  await withWorkspace(async (ws) => {
+    await writeFile(path.join(ws, "DESIGN.md"), "# x\n");
+    const big = "x".repeat(DESIGN_MD_MAX_BYTES + 1);
+    let runs = 0;
+    const reader = new DesignMdReader({
+      run: (async () => {
+        runs++;
+        return { ok: true, result: { success: true, text: big } };
+      }) as unknown as typeof runDesignMdWorker,
+    });
+    const first = await reader.export(ws, at("DESIGN.md"), "dtcg");
+    assert.deepEqual(first, { status: "oversized", path: "DESIGN.md", source: "workspace", bytes: DESIGN_MD_MAX_BYTES + 1 });
+    assert.deepEqual(await reader.export(ws, at("DESIGN.md"), "dtcg"), first);
+    assert.equal(runs, 1);
+  });
+});
+
+test("long finding paths, rules, section names and omitted entries are bounded", async () => {
+  await withWorkspace(async (ws) => {
+    await writeFile(path.join(ws, "DESIGN.md"), "# x\n");
+    const long = "L".repeat(5_000);
+    const reader = new DesignMdReader({
+      run: (async () => ({
+        ok: true,
+        result: {
+          ...emptyResult(),
+          findings: [{ severity: "warning", rule: long, path: long, message: "m" }],
+          sections: [long],
+          omitted: Array.from({ length: 100 }, (_, index) => ({ section: `${index}${long}`, reason: long })),
+        },
+      })) as unknown as typeof runDesignMdWorker,
+    });
+    const state = ok(await reader.read(ws, at("DESIGN.md")));
+    assert.ok(state.findings[0]!.rule!.length <= 200);
+    assert.ok(state.findings[0]!.path!.length <= 200);
+    assert.ok(state.sections[0]!.length <= 200);
+    assert.equal(state.omitted.length, 40);
+    for (const entry of state.omitted) {
+      assert.ok(entry.section.length <= 200);
+      assert.ok(entry.reason!.length <= 200);
+    }
+    assert.ok(state.omitted[0]!.section.startsWith("0L"));
+  });
+});

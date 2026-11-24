@@ -40,7 +40,10 @@ export type DesignMdLintResult = {
 export type DesignMdExportResult = { success: boolean; text?: string; errors?: string[] };
 
 export type LintFailureStatus = "timed-out" | "lint-failed" | "linter-unavailable" | "busy";
-export type LintOutcome<T = DesignMdLintResult> = { ok: true; result: T } | { ok: false; status: LintFailureStatus };
+/** `cause: "load-timeout"`: the linter didn't load in time, so this run shouldn't try again. */
+export type LintOutcome<T = DesignMdLintResult> =
+  | { ok: true; result: T }
+  | { ok: false; status: LintFailureStatus; cause?: "load-timeout" };
 
 export type RunDesignMdWorkerOptions = {
   deadlineMs?: number;
@@ -180,7 +183,7 @@ function executeWorker(
     };
     const abort = () => finish(abortError());
     const loadTimer = setTimeout(
-      () => finish({ ok: false, status: "linter-unavailable" }),
+      () => finish({ ok: false, status: "linter-unavailable", cause: "load-timeout" }),
       options.loadTimeoutMs ?? DESIGN_MD_WORKER_LOAD_TIMEOUT_MS,
     );
     options.signal?.addEventListener("abort", abort, { once: true });

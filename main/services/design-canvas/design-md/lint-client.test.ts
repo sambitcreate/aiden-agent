@@ -75,7 +75,7 @@ test("a worker that never posts ready gives linter-unavailable after the load ti
     { op: "lint", content: "# x" },
     { workerUrl: supportUrl("never-ready.mjs"), loadTimeoutMs: 300 },
   );
-  assert.deepEqual(outcome, { ok: false, status: "linter-unavailable" });
+  assert.deepEqual(outcome, { ok: false, status: "linter-unavailable", cause: "load-timeout" });
   assert.ok(performance.now() - started < 1_000);
 });
 

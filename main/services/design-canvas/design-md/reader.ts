@@ -29,10 +29,16 @@ import { isCredentialTarget } from "./credential-paths.js";
 import { canonicalSection } from "./sections.js";
 
 export const DESIGN_MD_MAX_BYTES = 65_536;
+/** The most export text the reader keeps or the tool shows. */
+export const DESIGN_MD_EXPORT_MAX_BYTES = 64 * 1024;
 const MAX_TOKENS = 300;
 const MAX_VALUE_CHARS = 200;
 const MAX_MESSAGE_CHARS = 300;
+const MAX_NAME_CHARS = 200;
+const MAX_OMITTED = 40;
 const DEFAULT_MAX_ENTRIES = 16;
+/** A timed-out file is linted again after this long, in case the linter was only slow. */
+export const DESIGN_MD_TIMED_OUT_RETRY_MS = 5 * 60_000;
 const UNRESOLVED_REF = /^\{[^}]+\}$/;
 
 export type DesignMdToken = { path: string; kind: string; value: string };
@@ -63,8 +69,10 @@ export type DesignMdContentState =
   | { status: "too-large"; size: number }
   | { status: LintFailureStatus };
 
+/** An export over 64 KiB is `oversized` with its size; its text is never kept. */
 export type DesignMdExportState =
   | (FileFields & { status: "ok"; text: string })
+  | (FileFields & { status: "oversized"; bytes: number })
   | (FileFields & { status: "error"; errors: string[] })
   | Exclude<DesignMdState, DesignMdOkState>;
 
@@ -122,9 +130,17 @@ function okState(result: DesignMdLintResult, hash: string): Omit<DesignMdOkState
     status: "ok",
     hash,
     summary: withAiden.summary,
-    findings: withAiden.findings.map((finding) => ({ ...finding, message: cut(finding.message, MAX_MESSAGE_CHARS) })),
-    sections: withAiden.sections,
-    omitted: withAiden.omitted,
+    findings: withAiden.findings.map((finding) => ({
+      severity: finding.severity,
+      message: cut(finding.message, MAX_MESSAGE_CHARS),
+      ...(finding.rule !== undefined ? { rule: cut(finding.rule, MAX_NAME_CHARS) } : {}),
+      ...(finding.path !== undefined ? { path: cut(finding.path, MAX_NAME_CHARS) } : {}),
+    })),
+    sections: withAiden.sections.map((section) => cut(section, MAX_NAME_CHARS)),
+    omitted: withAiden.omitted.slice(0, MAX_OMITTED).map((entry) => ({
+      section: cut(entry.section, MAX_NAME_CHARS),
+      ...(entry.reason !== undefined ? { reason: cut(entry.reason, MAX_NAME_CHARS) } : {}),
+    })),
     tokens: tokens.slice(0, MAX_TOKENS),
     truncated: tokens.length > MAX_TOKENS,
   };
@@ -168,7 +184,13 @@ type Loaded =
   | { ok: true; realPath: string; content: string; hash: string; file: FileFields }
   | { ok: false; state: Exclude<DesignMdState, DesignMdOkState> };
 
-type CacheEntry = { hash: string; state: Omit<DesignMdState, "path" | "source">; reported: boolean };
+type CacheEntry = {
+  hash: string;
+  state: Omit<DesignMdState, "path" | "source">;
+  reported: boolean;
+  /** For a timed-out lint: when to try again. */
+  retryAt?: number;
+};
 
 export class DesignMdReader {
   private readonly run: typeof runDesignMdWorker;
@@ -176,8 +198,11 @@ export class DesignMdReader {
   private readonly log: (message: string) => void;
   private readonly maxEntries: number;
   private readonly beforeRead?: () => Promise<void>;
+  private readonly now: () => number;
+  /** Set once the linter failed to load in time: no more workers start this run. */
+  private unavailable = false;
   private readonly cache = new Map<string, CacheEntry>();
-  private readonly exports = new Map<string, DesignMdExportState>();
+  private readonly exports = new Map<string, { state: DesignMdExportState; retryAt?: number }>();
 
   constructor(
     deps: {
@@ -187,6 +212,7 @@ export class DesignMdReader {
       maxEntries?: number;
       /** Test hook: runs after the path checks, just before the file is opened. */
       beforeRead?: () => Promise<void>;
+      now?: () => number;
     } = {},
   ) {
     this.run = deps.run ?? runDesignMdWorker;
@@ -194,6 +220,7 @@ export class DesignMdReader {
     this.log = deps.log ?? (() => undefined);
     this.maxEntries = deps.maxEntries ?? DEFAULT_MAX_ENTRIES;
     this.beforeRead = deps.beforeRead;
+    this.now = deps.now ?? Date.now;
   }
 
   private async load(workspaceRoot: string, located: LocatedDesignMd): Promise<Loaded> {
@@ -233,8 +260,16 @@ export class DesignMdReader {
     while (this.cache.size > this.maxEntries) this.cache.delete(this.cache.keys().next().value!);
   }
 
+  /** Runs the worker unless the linter already failed to load in time this run. */
+  private async runWorker<R extends Parameters<typeof runDesignMdWorker>[0]>(request: R, signal?: AbortSignal) {
+    if (this.unavailable) return { ok: false as const, status: "linter-unavailable" as const };
+    const outcome = await this.run(request, { signal });
+    if (!outcome.ok && outcome.cause === "load-timeout") this.unavailable = true;
+    return outcome;
+  }
+
   private async lint(content: string, hash: string, signal?: AbortSignal) {
-    const outcome = await this.run({ op: "lint", content }, { signal });
+    const outcome = await this.runWorker({ op: "lint", content }, signal);
     if (outcome.ok) return okState(outcome.result, hash);
     if (outcome.status === "lint-failed") this.log("The DESIGN.md linter failed on a file.");
     return { status: outcome.status };
@@ -250,9 +285,14 @@ export class DesignMdReader {
     if (!loaded.ok) return loaded.state;
     const { realPath, content, hash, file } = loaded;
     let entry = this.cache.get(realPath);
-    if (entry?.hash !== hash) {
+    if (entry?.hash !== hash || (entry.retryAt !== undefined && this.now() >= entry.retryAt)) {
       const state = await this.lint(content, hash, options.signal);
-      entry = { hash, state, reported: false };
+      entry = {
+        hash,
+        state,
+        reported: false,
+        ...(state.status === "timed-out" ? { retryAt: this.now() + DESIGN_MD_TIMED_OUT_RETRY_MS } : {}),
+      };
       if (state.status === "ok" || state.status === "timed-out" || state.status === "lint-failed") {
         this.remember(realPath, entry);
       }
@@ -289,20 +329,29 @@ export class DesignMdReader {
     if (!loaded.ok) return loaded.state;
     const key = `${loaded.hash}:${format}`;
     const cached = this.exports.get(key);
-    if (cached) return { ...cached, ...loaded.file } as DesignMdExportState;
-    const outcome = await this.run({ op: "export", content: loaded.content, format }, { signal });
+    if (cached && (cached.retryAt === undefined || this.now() < cached.retryAt)) {
+      return { ...cached.state, ...loaded.file } as DesignMdExportState;
+    }
+    const outcome = await this.runWorker({ op: "export", content: loaded.content, format }, signal);
     let state: DesignMdExportState;
     if (!outcome.ok) {
       if (outcome.status === "lint-failed") this.log("The DESIGN.md linter failed on an export.");
       state = { status: outcome.status, ...loaded.file };
       if (outcome.status === "busy" || outcome.status === "linter-unavailable") return state;
     } else if (outcome.result.success && typeof outcome.result.text === "string") {
-      state = { status: "ok", text: outcome.result.text, ...loaded.file };
+      const size = Buffer.byteLength(outcome.result.text);
+      state =
+        size > DESIGN_MD_EXPORT_MAX_BYTES
+          ? { status: "oversized", bytes: size, ...loaded.file }
+          : { status: "ok", text: outcome.result.text, ...loaded.file };
     } else {
       state = { status: "error", errors: (outcome.result.errors ?? []).map((error) => cut(error, MAX_MESSAGE_CHARS)), ...loaded.file };
     }
     this.exports.delete(key);
-    this.exports.set(key, state);
+    this.exports.set(key, {
+      state,
+      ...(state.status === "timed-out" ? { retryAt: this.now() + DESIGN_MD_TIMED_OUT_RETRY_MS } : {}),
+    });
     while (this.exports.size > this.maxEntries) this.exports.delete(this.exports.keys().next().value!);
     return state;
   }
