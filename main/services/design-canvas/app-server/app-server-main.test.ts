@@ -5,6 +5,7 @@ import { BackgroundJobLimitError, type DesignJobView, type DesignLogRead, type S
 import type { JobSockets } from "../../follow-through/listening-ports.js";
 import { WorkspaceMutationGate } from "../../workspace-mutation-gate.js";
 import type { CanvasConfig } from "../canvas-config.js";
+import type { AttachCheck, DesignAppAttachDeps } from "./app-attach.js";
 import { DesignAppConsent, type DesignAppConsentOwner } from "./app-consent.js";
 import type { LaunchSurfaceProblem, LaunchSurfaceRead } from "./app-fingerprint.js";
 import { missingModuleHint } from "./app-launch-core.js";
@@ -106,9 +107,36 @@ class FakeJobs {
     return job ? { ...job.view } : undefined;
   };
   designTail = (jobId: string) => this.jobs.find((entry) => entry.view.id === jobId)?.tail ?? "";
-  designSockets = async (jobIds: readonly string[]) => {
+  /** 2c: the person's processes, for attached servers' subtrees. */
+  procs = new Map<number, { ppid: number; uid: number; sockets: Array<{ address: string; port: number }> }>();
+  rootCalls: string[][] = [];
+  /** Attach roots whose socket read fails. */
+  rootFails = false;
+  designSockets = async (jobIds: readonly string[], roots?: ReadonlyMap<string, number>) => {
     this.socketCalls.push([...jobIds]);
-    return new Map(jobIds.map((id) => [id, this.sockets.get(id) ?? { ok: true as const, sockets: [] }]));
+    const answers = new Map<string, JobSockets>(jobIds.map((id) => [id, this.sockets.get(id) ?? { ok: true as const, sockets: [] }]));
+    if (roots) {
+      this.rootCalls.push([...roots.keys()]);
+      for (const [key, pid] of roots) {
+        if (this.rootFails) {
+          answers.set(key, { ok: false, reason: "lsof reported a problem" });
+          continue;
+        }
+        const tree: number[] = [];
+        const queue = this.procs.has(pid) ? [pid] : [];
+        while (queue.length) {
+          const next = queue.shift()!;
+          tree.push(next);
+          for (const [child, proc] of this.procs) if (proc.ppid === next) queue.push(child);
+        }
+        answers.set(key, {
+          ok: true,
+          sockets: tree.flatMap((member) => this.procs.get(member)!.sockets.map((socket) => ({ pid: member, ...socket }))),
+          rows: tree.map((member) => ({ pid: member, ppid: this.procs.get(member)!.ppid, pgid: member, uid: this.procs.get(member)!.uid })),
+        });
+      }
+    }
+    return answers;
   };
   readDesignLog = async (jobId: string, options: { after: number; maxBytes: number }): Promise<DesignLogRead> => {
     this.logReads.push({ jobId, ...options });
@@ -267,6 +295,18 @@ function harness(_t: test.TestContext, options: Options = {}) {
   };
   const records = memoryRecords();
   const consent = new DesignAppConsent();
+  // 2c: the person's server and the scripted attach code.
+  const holder = { pid: 300, ppid: 30, port: 5173, origin: "http://127.0.0.1:5173", held: ["127.0.0.1"], processName: "vite", folder: "." };
+  jobs.procs.set(30, { ppid: 1, uid: 501, sockets: [] });
+  jobs.procs.set(300, { ppid: 30, uid: 501, sockets: [{ address: "127.0.0.1", port: 5173 }] });
+  const attachCalls = { scans: [] as Array<{ roots: readonly string[]; busyRoots: ReadonlySet<string> }>, checks: [] as Array<{ appRoot: string; port: number; pid?: number }>, rebinds: 0 };
+  const attachState = {
+    check: undefined as undefined | ((input: { appRoot: string; port: number; pid?: number }) => AttachCheck),
+    scan: { ok: true, incomplete: false, servers: [] } as Awaited<ReturnType<DesignAppAttachDeps["scan"]>>,
+    rebind: undefined as undefined | { pid: number; ppid: number },
+    real: new Map<string, string>(),
+    clears: 0,
+  };
   const deps: DesignAppServersDeps = {
     jobs,
     onJobChange: jobs.onChange,
@@ -331,9 +371,36 @@ function harness(_t: test.TestContext, options: Options = {}) {
     now: () => clock.now,
     timers: { set: clock.set, clear: clock.clear },
     platform: "darwin",
+    attach: {
+      uid: 501,
+      scan: async (input) => {
+        attachCalls.scans.push(input);
+        return attachState.scan;
+      },
+      check: async (input) => {
+        attachCalls.checks.push(input);
+        if (attachState.check) return attachState.check(input);
+        if (input.pid !== undefined && input.pid !== holder.pid) return { ok: false, problem: "attach-not-in-app" };
+        if (!jobs.procs.has(holder.pid) || input.port !== holder.port) return { ok: false, problem: "attach-unreachable" };
+        const { port: _port, ...rest } = holder;
+        return { ok: true, ...rest, held: [...rest.held] };
+      },
+      rebind: async () => {
+        attachCalls.rebinds += 1;
+        return attachState.rebind;
+      },
+      realpath: async (target) => attachState.real.get(target) ?? target,
+    },
+    clearToolchainCache: () => {
+      attachState.clears += 1;
+    },
   };
   const servers = new DesignAppServers(deps);
   servers.onStatus((snapshot) => statuses.push(snapshot));
+  const origins = { changes: 0 };
+  servers.onOriginsChanged(() => {
+    origins.changes += 1;
+  });
   const cards = () => owner.sent.filter((entry) => entry.channel === "designApp:consent").map((entry) => entry.payload);
   const closedCards = () => owner.sent.filter((entry) => entry.channel === "designApp:consentClosed").map((entry) => entry.payload.requestId);
   const openCard = () => cards().find((card) => !closedCards().includes(card.requestId));
@@ -383,7 +450,37 @@ function harness(_t: test.TestContext, options: Options = {}) {
     await makeReady();
     return started;
   };
-  return { servers, deps, clock, jobs, owner, views, gate, reports, statuses, workspaces, state, records, consent, order, cards, openCard, answer, input, latest, phases, makeReady, runApp };
+  const connect = (overrides: Partial<Parameters<DesignAppServers["connect"]>[0]> = {}) =>
+    servers.connect({ workspaceId: "ws", chatId: "chat-1", by: "person", owner, permission: "full", port: holder.port, pid: holder.pid, ...overrides });
+  return {
+    servers,
+    deps,
+    clock,
+    jobs,
+    owner,
+    views,
+    gate,
+    reports,
+    statuses,
+    workspaces,
+    state,
+    records,
+    consent,
+    order,
+    cards,
+    openCard,
+    answer,
+    input,
+    latest,
+    phases,
+    makeReady,
+    runApp,
+    holder,
+    attachCalls,
+    attachState,
+    origins,
+    connect,
+  };
 }
 
 function plannedPort(job: FakeJob): number {
@@ -1446,4 +1543,600 @@ test("snapshot lists candidates, described roots and every app's status with rel
   assert.equal(snapshot.apps.find((app) => app.appRoot === "apps/a")?.phase, "running");
   const text = JSON.stringify(snapshot);
   for (const absolute of ["/w/ws", "/opt/tools"]) assert.equal(text.includes(absolute), false, absolute);
+});
+
+// ── 2c: attaching to the person's own server (D1, D5, D7–D10) ──
+
+const DOCS_CONFIG: CanvasConfig = { version: 1, apps: [{ root: "docs", url: "http://localhost:4321" }] };
+
+/** The holder serves docs on 4321, from the docs folder. */
+function docsHolder(h: ReturnType<typeof harness>) {
+  Object.assign(h.holder, { port: 4321, origin: "http://127.0.0.1:4321", processName: "astro", folder: "docs" });
+  h.jobs.procs.set(300, { ppid: 30, uid: 501, sockets: [{ address: "127.0.0.1", port: 4321 }] });
+}
+
+test("connect from the person registers 127.0.0.1:<port> as running and attached, as an app origin", async (t) => {
+  const h = harness(t);
+  const status = await h.connect();
+  assert.equal(status.phase, "running");
+  assert.equal(status.source, "attached");
+  assert.equal(status.origin, "http://127.0.0.1:5173");
+  assert.equal(status.port, 5173);
+  assert.equal(status.startedBy, "person");
+  assert.equal(h.latest()?.source, "attached");
+  assert.deepEqual(h.servers.appForOrigin("http://127.0.0.1:5173"), { workspaceId: "ws", appRoot: "." });
+  assert.equal(h.servers.isAppOrigin("http://127.0.0.1:5173"), true);
+  assert.equal(h.servers.isAppOrigin("http://localhost:5173"), true);
+  assert.equal(h.servers.isAppOrigin("http://[::1]:5173"), false);
+  assert.equal(h.origins.changes, 1);
+  assert.equal(h.jobs.jobs.length, 0, "nothing is spawned");
+  assert.deepEqual(h.reports, [], "an attach is never reported");
+});
+
+test("a [::1]-only attachment registers [::1] and localhost, never 127.0.0.1; a later 127.0.0.1 bind is added at the next tick", async (t) => {
+  const h = harness(t);
+  Object.assign(h.holder, { origin: "http://[::1]:5173", held: ["::1"] });
+  h.jobs.procs.set(300, { ppid: 30, uid: 501, sockets: [{ address: "::1", port: 5173 }] });
+  const status = await h.connect();
+  assert.equal(status.origin, "http://[::1]:5173");
+  assert.equal(h.servers.isAppOrigin("http://[::1]:5173"), true);
+  assert.equal(h.servers.isAppOrigin("http://localhost:5173"), true);
+  assert.equal(h.servers.isAppOrigin("http://127.0.0.1:5173"), false);
+  assert.equal(h.servers.appForOrigin("http://127.0.0.1:5173"), undefined);
+  const before = h.origins.changes;
+  h.jobs.procs.set(300, { ppid: 30, uid: 501, sockets: [{ address: "::1", port: 5173 }, { address: "127.0.0.1", port: 5173 }] });
+  await h.clock.advance(2_000);
+  assert.equal(h.servers.isAppOrigin("http://127.0.0.1:5173"), true);
+  assert.equal(h.origins.changes, before + 1);
+  assert.equal(h.latest()?.phase, "running");
+});
+
+test("connect re-checks in main: a pid that is no longer the port's holder gives attach-not-in-app and registers nothing", async (t) => {
+  const h = harness(t);
+  const status = await h.connect({ pid: 999 });
+  assert.equal(status.phase, "stopped");
+  assert.deepEqual(status.problem, { problem: "attach-not-in-app" });
+  assert.equal(h.servers.isAppOrigin("http://127.0.0.1:5173"), false);
+  assert.equal(h.origins.changes, 0);
+});
+
+test("connect refuses desktop-only, no-access and unavailable before any check", async (t) => {
+  const h = harness(t);
+  assert.deepEqual((await h.connect({ owner: fakeOwner(7, "remote") })).problem, { problem: "desktop-only" });
+  assert.deepEqual((await h.connect({ permission: "read-only" })).problem, { problem: "no-access" });
+  assert.deepEqual((await h.connect({ permission: "none" })).problem, { problem: "no-access" });
+  h.workspaces.set("ws", { id: "ws", permission: "full" });
+  assert.deepEqual((await h.connect()).problem, { problem: "no-access" });
+  h.deps.enabled = () => false;
+  assert.deepEqual((await h.connect()).problem, { problem: "unavailable" });
+  assert.equal(h.attachCalls.checks.length, 0);
+});
+
+test("connect for a root with a started server or a pending attempt is refused with already-running and spawns nothing more", async (t) => {
+  const h = harness(t);
+  const pending = h.servers.start(h.input());
+  await settle();
+  assert.ok(h.openCard());
+  assert.deepEqual((await h.connect()).problem, { problem: "already-running", started: true });
+  await h.answer("allow");
+  await h.makeReady();
+  assert.equal((await pending).phase, "running");
+  const refused = await h.connect();
+  assert.deepEqual(refused.problem, { problem: "already-running", started: true });
+  assert.equal(refused.source, "started");
+  assert.equal(h.jobs.jobs.length, 1);
+  assert.equal(h.latest()?.phase, "running");
+});
+
+test("a second connect for the same root replaces the first, and origins change once per change", async (t) => {
+  const h = harness(t);
+  await h.connect();
+  assert.equal(h.origins.changes, 1);
+  h.jobs.procs.delete(300);
+  h.jobs.procs.set(301, { ppid: 30, uid: 501, sockets: [{ address: "127.0.0.1", port: 5174 }] });
+  Object.assign(h.holder, { pid: 301, port: 5174, origin: "http://127.0.0.1:5174" });
+  const status = await h.connect();
+  assert.equal(status.origin, "http://127.0.0.1:5174");
+  assert.equal(h.origins.changes, 3, "the old one detached, the new one attached");
+  assert.equal(h.servers.appForOrigin("http://127.0.0.1:5173"), undefined);
+  assert.deepEqual(h.servers.appForOrigin("http://127.0.0.1:5174"), { workspaceId: "ws", appRoot: "." });
+  assert.equal(h.jobs.stopCalls.length, 0);
+});
+
+test("start and retry on a live attachment answer the attached status and spawn nothing", async (t) => {
+  const h = harness(t);
+  const attached = await h.connect();
+  const started = await h.servers.start(h.input());
+  assert.equal(started.phase, "running");
+  assert.equal(started.source, "attached");
+  assert.equal(started.revision, attached.revision);
+  const retried = await h.servers.retry({ ...h.input(), appRoot: "." });
+  assert.equal(retried.source, "attached");
+  assert.equal(retried.revision, attached.revision);
+  assert.equal(h.jobs.jobs.length, 0);
+  assert.equal(h.attachState.clears, 0, "nothing to retry");
+  assert.equal(h.openCard(), undefined);
+});
+
+test("restart and choose on a live attachment refuse with already-running, spawn nothing and leave it attached", async (t) => {
+  const h = harness(t);
+  await h.connect();
+  const restarted = await h.servers.restart({ ...h.input(), appRoot: "." });
+  assert.deepEqual(restarted.problem, { problem: "already-running" });
+  const chosen = await h.servers.choose({ ...h.input(), appRoot: ".", script: "dev" });
+  assert.deepEqual(chosen.problem, { problem: "already-running" });
+  assert.equal(h.jobs.jobs.length, 0);
+  assert.equal(h.latest()?.phase, "running");
+  assert.equal(h.latest()?.source, "attached");
+  assert.equal(h.servers.isAppOrigin("http://127.0.0.1:5173"), true);
+});
+
+test("turning design mode on with a live attachment starts nothing on that root", async (t) => {
+  const h = harness(t);
+  await h.connect();
+  h.servers.designModeEntered({ chatId: "chat-1", workspaceId: "ws", owner: h.owner });
+  await settle();
+  assert.equal(h.openCard(), undefined);
+  assert.equal(h.jobs.jobs.length, 0);
+  assert.equal(h.latest()?.source, "attached");
+});
+
+test("after Disconnect, start on a Connect-pick root launches as in 2b", async (t) => {
+  const h = harness(t);
+  await h.connect();
+  const stopped = await h.servers.stop("ws", ".");
+  assert.equal(stopped.phase, "stopped");
+  assert.equal(stopped.problem, undefined);
+  const started = await h.runApp();
+  const status = await started;
+  assert.equal(status.phase, "running");
+  assert.equal(status.source, "started");
+  assert.equal(h.jobs.jobs.length, 1);
+});
+
+test("stop on an attached app detaches: stopped, no problem, origins changed, and no job is stopped", async (t) => {
+  const h = harness(t);
+  await h.connect();
+  const before = h.origins.changes;
+  const status = await h.servers.stop("ws", ".");
+  assert.equal(status.phase, "stopped");
+  assert.equal(status.source, "attached");
+  assert.equal(status.problem, undefined);
+  assert.equal(h.origins.changes, before + 1);
+  assert.equal(h.jobs.stopCalls.length, 0);
+  assert.equal(h.servers.appForOrigin("http://127.0.0.1:5173"), undefined);
+  assert.equal(h.servers.isAppOrigin("http://127.0.0.1:5173"), true, "an origin once served stays restricted (S29)");
+  await h.clock.advance(10_000);
+  assert.equal(h.jobs.rootCalls.length, 0, "the poller stopped");
+});
+
+test("the poll detaches when the holder stops holding the port, binds a wildcard, or another user's process joins", async (t) => {
+  const cases: Array<[string, (h: ReturnType<typeof harness>) => void, string]> = [
+    ["port gone", (h) => h.jobs.procs.set(300, { ppid: 30, uid: 501, sockets: [] }), "attach-unreachable"],
+    ["wildcard", (h) => h.jobs.procs.set(301, { ppid: 300, uid: 501, sockets: [{ address: "0.0.0.0", port: 24000 }] }), "attach-not-loopback"],
+    ["other user", (h) => h.jobs.procs.set(302, { ppid: 300, uid: 0, sockets: [] }), "attach-not-loopback"],
+  ];
+  for (const [label, change, problem] of cases) {
+    const h = harness(t);
+    await h.connect();
+    change(h);
+    await h.clock.advance(2_000);
+    assert.equal(h.latest()?.phase, "stopped", label);
+    assert.deepEqual(h.latest()?.problem, { problem }, label);
+    assert.equal(h.jobs.stopCalls.length, 0, label);
+  }
+});
+
+test("three failed looks of the attached subtree detach it, and a started job in the same ticks counts no failure", async (t) => {
+  const h = harness(t, { apps: [webApp({ root: "apps/web" })] });
+  const started = h.servers.start(h.input({ appRoot: "apps/web" }));
+  await settle();
+  await h.answer("allow");
+  await h.makeReady();
+  assert.equal((await started).phase, "running");
+  await h.connect();
+  assert.equal(h.latest(".")?.phase, "running");
+  h.jobs.rootFails = true;
+  await h.clock.advance(6_000);
+  assert.deepEqual(h.latest(".")?.problem, { problem: "attach-unreachable" });
+  assert.equal(h.latest("apps/web")?.phase, "running");
+  h.jobs.sockets.set(h.jobs.last().view.id, { ok: false, reason: "lsof" });
+  await h.clock.advance(4_000);
+  assert.equal(h.latest("apps/web")?.phase, "running", "the started job's own count starts from zero");
+});
+
+test("three failed looks of the started jobs halt them with exposure-unknown and leave the attachment running", async (t) => {
+  const h = harness(t, { apps: [webApp({ root: "apps/web" })] });
+  const started = h.servers.start(h.input({ appRoot: "apps/web" }));
+  await settle();
+  await h.answer("allow");
+  await h.makeReady();
+  await started;
+  await h.connect();
+  h.jobs.sockets.set(h.jobs.last().view.id, { ok: false, reason: "lsof" });
+  await h.clock.advance(6_000);
+  assert.deepEqual(h.latest("apps/web")?.problem, { problem: "exposure-unknown" });
+  assert.equal(h.latest(".")?.phase, "running");
+  assert.equal(h.latest(".")?.problem, undefined);
+});
+
+test("one tick makes one designSockets call carrying both the started jobs and the attached roots", async (t) => {
+  const h = harness(t, { apps: [webApp({ root: "apps/web" })] });
+  const started = h.servers.start(h.input({ appRoot: "apps/web" }));
+  await settle();
+  await h.answer("allow");
+  await h.makeReady();
+  await started;
+  await h.connect();
+  h.jobs.socketCalls.length = 0;
+  h.jobs.rootCalls.length = 0;
+  await h.clock.advance(2_000);
+  assert.deepEqual(h.jobs.socketCalls, [[h.jobs.last().view.id]]);
+  assert.deepEqual(h.jobs.rootCalls, [["attach:ws\0."]]);
+});
+
+test("a holder that exits and is replaced under the same parent within 6 s re-binds, and the chip doesn't change", async (t) => {
+  const h = harness(t);
+  await h.connect();
+  const revision = h.latest()!.revision;
+  h.jobs.procs.delete(300);
+  await h.clock.advance(2_000);
+  assert.equal(h.latest()?.phase, "running", "waiting for a re-bind");
+  h.jobs.procs.set(310, { ppid: 30, uid: 501, sockets: [{ address: "127.0.0.1", port: 5173 }] });
+  h.attachState.rebind = { pid: 310, ppid: 30 };
+  await h.clock.advance(2_000);
+  assert.equal(h.latest()?.phase, "running");
+  assert.equal(h.latest()?.revision, revision);
+  h.attachState.rebind = undefined;
+  await h.clock.advance(10_000);
+  assert.equal(h.latest()?.phase, "running", "it now watches the new holder");
+  assert.equal(h.jobs.stopCalls.length, 0);
+});
+
+test("a holder that exits with no re-bind detaches with attach-unreachable after 6 s", async (t) => {
+  const h = harness(t);
+  await h.connect();
+  h.jobs.procs.delete(300);
+  await h.clock.advance(4_000);
+  assert.equal(h.latest()?.phase, "running");
+  await h.clock.advance(2_000);
+  assert.equal(h.latest()?.phase, "stopped");
+  assert.deepEqual(h.latest()?.problem, { problem: "attach-unreachable" });
+  assert.ok(h.attachCalls.rebinds >= 3);
+});
+
+test("60 s with no visible canvas detaches attached apps and stops started ones", async (t) => {
+  const h = harness(t, { apps: [webApp({ root: "apps/web" })] });
+  const started = h.servers.start(h.input({ appRoot: "apps/web" }));
+  await settle();
+  await h.answer("allow");
+  await h.makeReady();
+  await started;
+  await h.connect();
+  h.views.set("ws", 0);
+  await h.clock.advance(60_000);
+  assert.equal(h.latest(".")?.phase, "stopped");
+  assert.equal(h.latest(".")?.problem, undefined);
+  assert.equal(h.latest("apps/web")?.phase, "stopped");
+  assert.deepEqual(h.jobs.stopCalls, [h.jobs.last().view.id], "only the started job is stopped");
+});
+
+test("forgetWorkspace detaches, and a workspace path change detaches with interrupted", async (t) => {
+  const forgotten = harness(t);
+  await forgotten.connect();
+  const before = forgotten.origins.changes;
+  await forgotten.servers.forgetWorkspace("ws");
+  assert.equal(forgotten.origins.changes, before + 1);
+  assert.equal(forgotten.servers.appForOrigin("http://127.0.0.1:5173"), undefined);
+  assert.equal(forgotten.jobs.stopCalls.length, 0);
+  const moved = harness(t);
+  await moved.connect();
+  moved.workspaces.set("ws", { id: "ws", path: "/w/moved", permission: "full" });
+  await moved.clock.advance(2_000);
+  assert.deepEqual(moved.latest()?.problem, { problem: "interrupted" });
+  const lost = harness(t);
+  await lost.connect();
+  lost.workspaces.set("ws", { id: "ws", path: "/w/ws", permission: "read-only" });
+  await lost.clock.advance(2_000);
+  assert.deepEqual(lost.latest()?.problem, { problem: "no-access" });
+});
+
+test("no job path ever touches an attached server: stop, presence, forget, failure, re-bind and replace", async (t) => {
+  const h = harness(t);
+  await h.connect();
+  await h.servers.stop("ws", ".");
+  await h.connect();
+  h.views.set("ws", 0);
+  await h.clock.advance(60_000);
+  h.views.set("ws", 1);
+  await h.connect();
+  h.jobs.rootFails = true;
+  await h.clock.advance(6_000);
+  h.jobs.rootFails = false;
+  await h.connect();
+  h.jobs.procs.delete(300);
+  h.jobs.procs.set(320, { ppid: 30, uid: 501, sockets: [{ address: "127.0.0.1", port: 5173 }] });
+  h.attachState.rebind = { pid: 320, ppid: 30 };
+  await h.clock.advance(2_000);
+  Object.assign(h.holder, { pid: 320 });
+  await h.connect();
+  await h.servers.forgetWorkspace("ws");
+  assert.deepEqual(h.jobs.stopCalls, []);
+  assert.equal(h.jobs.jobs.length, 0);
+});
+
+test("a root that ran as a started app and is now attached answers logs with empty text and no run", async (t) => {
+  const h = harness(t);
+  await h.runApp();
+  h.jobs.output(h.jobs.last().view.id, "hello\n");
+  await h.servers.stop("ws", ".");
+  await h.connect();
+  assert.deepEqual(await h.servers.logs("ws", ".", { after: 0, maxBytes: 1024 }), { text: "", from: 0, next: 0, end: 0, truncated: false });
+});
+
+// ── 2c: apps[].url roots ──
+
+test("turning design mode on with a url root shows the attach card; Allow attaches and records it with the workspace realpath", async (t) => {
+  const h = harness(t, { config: DOCS_CONFIG });
+  docsHolder(h);
+  h.attachState.real.set("/w/ws", "/real/ws");
+  h.servers.designModeEntered({ chatId: "chat-1", workspaceId: "ws", owner: h.owner });
+  await settle();
+  const card = h.openCard();
+  assert.ok(card);
+  assert.deepEqual(
+    { ...card, requestId: undefined },
+    {
+      kind: "attach",
+      requestId: undefined,
+      chatId: "chat-1",
+      workspaceId: "ws",
+      appRoot: "docs",
+      url: "http://127.0.0.1:4321",
+      configUrl: "http://localhost:4321",
+      processName: "astro",
+      folder: "docs",
+    },
+  );
+  assert.equal(h.latest("docs")?.phase, "consent");
+  await h.answer("allow");
+  assert.equal(h.latest("docs")?.phase, "running");
+  assert.equal(h.latest("docs")?.source, "attached");
+  assert.equal(h.latest("docs")?.url, "http://localhost:4321");
+  assert.equal(h.latest("docs")?.origin, "http://127.0.0.1:4321");
+  const record = await h.records.attachOf("ws", "docs");
+  assert.deepEqual({ ...record, at: 0 }, { origin: "http://127.0.0.1:4321", configUrl: "http://localhost:4321", workspaceReal: "/real/ws", at: 0 });
+  assert.equal(h.jobs.jobs.length, 0);
+  assert.deepEqual(h.reports, []);
+});
+
+test("when the holder, its name or its folder differ after Allow, the card shows again and nothing registers; a second change ends unreachable", async (t) => {
+  const h = harness(t, { config: DOCS_CONFIG });
+  docsHolder(h);
+  const started = h.servers.start(h.input({ appRoot: "docs" }));
+  await settle();
+  Object.assign(h.holder, { processName: "python3" });
+  await h.answer("allow");
+  const again = h.openCard();
+  assert.ok(again, "the card shows again");
+  assert.equal(again.processName, "python3");
+  assert.equal(h.servers.isAppOrigin("http://127.0.0.1:4321"), false);
+  assert.equal(await h.records.attachOf("ws", "docs"), undefined);
+  Object.assign(h.holder, { folder: "docs/site" });
+  await h.answer("allow");
+  const status = await started;
+  assert.deepEqual(status.problem, { problem: "attach-unreachable" });
+  assert.equal(h.cards().length, 2, "at most twice in one attempt");
+  assert.equal(h.servers.isAppOrigin("http://127.0.0.1:4321"), false);
+});
+
+test("the next toggle attaches without a card while the record matches; a changed url, ::1, or another realpath asks again", async (t) => {
+  const h = harness(t, { config: DOCS_CONFIG });
+  docsHolder(h);
+  const first = h.servers.start(h.input({ appRoot: "docs" }));
+  await settle();
+  await h.answer("allow");
+  assert.equal((await first).phase, "running");
+  await h.servers.stop("ws", "docs");
+  assert.equal((await h.servers.start(h.input({ appRoot: "docs" }))).phase, "running");
+  assert.equal(h.cards().length, 1, "no second card");
+  const asksAgain = async (change: () => void, label: string) => {
+    await h.servers.stop("ws", "docs");
+    change();
+    const cards = h.cards().length;
+    const pending = h.servers.start(h.input({ appRoot: "docs" }));
+    await settle();
+    assert.equal(h.cards().length, cards + 1, label);
+    await h.answer("allow");
+    assert.equal((await pending).phase, "running", label);
+  };
+  await asksAgain(() => {
+    h.state.config = { version: 1, apps: [{ root: "docs", url: "http://127.0.0.1:4321" }] };
+  }, "a changed config url");
+  await asksAgain(() => {
+    Object.assign(h.holder, { origin: "http://[::1]:4321", held: ["::1"] });
+    h.jobs.procs.set(300, { ppid: 30, uid: 501, sockets: [{ address: "::1", port: 4321 }] });
+  }, "::1 instead of 127.0.0.1");
+  await asksAgain(() => h.attachState.real.set("/w/ws", "/elsewhere/ws"), "another workspace realpath");
+});
+
+test("Not now ends with consent-declined, and Aiden's start for that root answers declined without a card", async (t) => {
+  const h = harness(t, { config: DOCS_CONFIG });
+  docsHolder(h);
+  const first = h.servers.start(h.input({ appRoot: "docs" }));
+  await settle();
+  await h.answer("decline");
+  assert.deepEqual((await first).problem, { problem: "consent-declined" });
+  const aiden = await h.servers.start(h.input({ appRoot: "docs", by: "aiden" }));
+  assert.deepEqual(aiden.problem, { problem: "consent-declined" });
+  assert.equal(h.cards().length, 1);
+});
+
+test("a url root whose server isn't running ends stopped with attach-unreachable and shows no card", async (t) => {
+  const h = harness(t, { config: DOCS_CONFIG });
+  docsHolder(h);
+  h.jobs.procs.delete(300);
+  h.servers.designModeEntered({ chatId: "chat-1", workspaceId: "ws", owner: h.owner });
+  await settle();
+  assert.equal(h.openCard(), undefined);
+  assert.equal(h.latest("docs")?.phase, "stopped");
+  assert.deepEqual(h.latest("docs")?.problem, { problem: "attach-unreachable" });
+});
+
+test("a urlRefused root is listed stopped with attach-url-invalid, nothing is checked, and start answers the same", async (t) => {
+  const h = harness(t, { config: { version: 1, apps: [{ root: "docs", urlRefused: true }] } });
+  const snapshot = await h.servers.snapshot("ws");
+  const docs = snapshot.apps.find((app) => app.appRoot === "docs");
+  assert.equal(docs?.phase, "stopped");
+  assert.equal(docs?.source, "attached");
+  assert.deepEqual(docs?.problem, { problem: "attach-url-invalid" });
+  const status = await h.servers.start(h.input({ appRoot: "docs" }));
+  assert.deepEqual(status.problem, { problem: "attach-url-invalid" });
+  assert.equal(h.attachCalls.checks.length, 0);
+  assert.equal(h.attachCalls.scans.length, 0);
+});
+
+test("a root with both url and script attaches and never spawns; a urlRefused root with a script never spawns", async (t) => {
+  const h = harness(t, { apps: [webApp()], config: { version: 1, apps: [{ root: ".", script: "dev", url: "http://localhost:5173" }] } });
+  h.servers.designModeEntered({ chatId: "chat-1", workspaceId: "ws", owner: h.owner });
+  await settle();
+  assert.equal(h.openCard()?.kind, "attach");
+  await h.answer("allow");
+  assert.equal(h.latest()?.source, "attached");
+  assert.equal(h.jobs.jobs.length, 0);
+  const refused = harness(t, { apps: [webApp()], config: { version: 1, apps: [{ root: ".", script: "dev", urlRefused: true }] } });
+  refused.servers.designModeEntered({ chatId: "chat-1", workspaceId: "ws", owner: refused.owner });
+  await settle();
+  assert.deepEqual((await refused.servers.start(refused.input())).problem, { problem: "attach-url-invalid" });
+  assert.equal(refused.openCard(), undefined);
+  assert.equal(refused.jobs.jobs.length, 0);
+});
+
+// ── 2c: Retry (D5) ──
+
+test("retry after install-failed clears the toolchain cache once and restarts with an install", async (t) => {
+  const h = harness(t, { apps: [webApp({ installed: false })] });
+  const first = h.servers.start(h.input());
+  await settle();
+  await h.answer("allow");
+  h.jobs.exit(h.jobs.last().view.id, 1);
+  assert.equal((await first).problem?.problem, "install-failed");
+  h.state.apps = [webApp({ installed: true })];
+  const retried = h.servers.retry({ ...h.input(), appRoot: "." });
+  await settle();
+  assert.equal(h.attachState.clears, 1);
+  if (h.openCard()) await h.answer("allow");
+  assert.deepEqual(h.jobs.last().input.argv.args, ["ci"], "the install runs again although node_modules exists");
+  h.jobs.exit(h.jobs.last().view.id, 0);
+  await settle();
+  await h.makeReady();
+  assert.equal((await retried).phase, "running");
+});
+
+test("retry after node-missing clears the cache and starts without forcing an install", async (t) => {
+  const h = harness(t);
+  h.state.toolchain = { ok: false, problem: "node-missing" } as AppToolchain;
+  assert.equal((await h.servers.start(h.input())).problem?.problem, "node-missing");
+  h.state.toolchain = { ok: true, node: NODE, manager: { name: "npm", path: MANAGER } } as AppToolchain;
+  const retried = h.servers.retry({ ...h.input(), appRoot: "." });
+  await settle();
+  assert.equal(h.attachState.clears, 1);
+  await h.answer("allow");
+  await h.makeReady();
+  assert.equal((await retried).phase, "running");
+  assert.equal(h.order.some((entry) => entry === "spawn:ci"), false);
+});
+
+test("retry after a crash whose tail shows a missing module reinstalls", async (t) => {
+  const h = harness(t);
+  await h.runApp();
+  const job = h.jobs.last();
+  h.jobs.output(job.view.id, "Error: Cannot find module 'react'\n");
+  h.jobs.exit(job.view.id, 1);
+  await settle();
+  assert.equal(h.latest()?.phase, "crashed");
+  void h.servers.retry({ ...h.input(), appRoot: "." });
+  await settle();
+  if (h.openCard()) await h.answer("allow");
+  assert.deepEqual(h.jobs.last().input.argv.args, ["ci"]);
+});
+
+test("retry after choice-not-saved shows the choose card again with the same script and saves on Allow", async (t) => {
+  const h = harness(t, { apps: [webApp({ root: "apps/a" }), webApp({ root: "apps/b" })] });
+  const save = h.deps.saveConfigApp;
+  h.deps.saveConfigApp = async () => "unknown-version";
+  const chosen = h.servers.choose({ ...h.input(), appRoot: "apps/b", script: "build" });
+  await settle();
+  await h.answer("allow");
+  assert.deepEqual((await chosen).problem, { problem: "choice-not-saved" });
+  h.deps.saveConfigApp = save;
+  const retried = h.servers.retry({ ...h.input(), appRoot: "apps/b" });
+  await settle();
+  assert.equal(h.openCard()?.reason, "choose");
+  assert.deepEqual(h.openCard()?.scripts, [{ name: "build", text: "vite" }]);
+  await h.answer("allow");
+  assert.deepEqual(h.state.saved, [{ root: "apps/b", script: "build" }]);
+  await h.makeReady();
+  assert.equal((await retried).phase, "running");
+});
+
+test("retry after a choose that ended install-failed replays the choose, script included", async (t) => {
+  const h = harness(t, { apps: [webApp({ root: "apps/a" }), webApp({ root: "apps/b", installed: false })] });
+  const chosen = h.servers.choose({ ...h.input(), appRoot: "apps/b", script: "build" });
+  await settle();
+  await h.answer("allow");
+  h.jobs.exit(h.jobs.last().view.id, 1);
+  assert.equal((await chosen).problem?.problem, "install-failed");
+  void h.servers.retry({ ...h.input(), appRoot: "apps/b" });
+  await settle();
+  assert.equal(h.openCard()?.reason, "choose");
+  await h.answer("allow");
+  assert.deepEqual(h.state.saved, [{ root: "apps/b", script: "build" }, { root: "apps/b", script: "build" }]);
+});
+
+// ── 2c: the scan entry point and what never scans ──
+
+test("running() answers the scan with busy roots marked and incomplete passed through, and refuses like connect", async (t) => {
+  const h = harness(t, { apps: [webApp({ root: "apps/web" }), webApp({ root: "apps/admin" })], config: DOCS_CONFIG });
+  const started = h.servers.start(h.input({ appRoot: "apps/web" }));
+  await settle();
+  h.attachState.scan = {
+    ok: true,
+    incomplete: true,
+    servers: [{ port: 4321, pid: 300, origin: "http://127.0.0.1:4321", appRoot: "docs", folder: "docs", processName: "astro", connectable: true }],
+  };
+  const scan = await h.servers.running({ workspaceId: "ws", owner: h.owner, permission: "full" });
+  assert.deepEqual(scan, { workspaceId: "ws", ok: true, incomplete: true, servers: h.attachState.scan.ok ? h.attachState.scan.servers : [] });
+  const [input] = h.attachCalls.scans;
+  assert.deepEqual([...input!.busyRoots], ["apps/web"]);
+  assert.deepEqual([...input!.roots].sort(), ["apps/admin", "apps/web", "docs"]);
+  for (const refused of [
+    { owner: fakeOwner(7, "remote"), permission: "full" as const },
+    { owner: h.owner, permission: "read-only" as const },
+  ]) {
+    assert.deepEqual(await h.servers.running({ workspaceId: "ws", ...refused }), { workspaceId: "ws", ok: false, incomplete: false, servers: [] });
+  }
+  assert.equal(h.attachCalls.scans.length, 1);
+  await h.answer("decline");
+  await started;
+});
+
+test("construction, snapshot, presence and the flag off never call an attach dep", async (t) => {
+  const h = harness(t, { config: DOCS_CONFIG });
+  const boom = () => {
+    throw new Error("an attach dep was called");
+  };
+  h.deps.attach = { uid: 501, scan: boom, check: boom, rebind: boom, realpath: boom };
+  await h.servers.snapshot("ws");
+  h.views.set("ws", 0);
+  h.views.set("ws", 1);
+  await h.clock.advance(120_000);
+  h.deps.enabled = () => false;
+  assert.deepEqual((await h.servers.connect({ workspaceId: "ws", chatId: "chat-1", by: "person", owner: h.owner, permission: "full", port: 5173, pid: 300 })).problem, {
+    problem: "unavailable",
+  });
+  assert.equal((await h.servers.running({ workspaceId: "ws", owner: h.owner, permission: "full" })).ok, false);
+  assert.deepEqual((await h.servers.retry({ ...h.input(), appRoot: "docs" })).problem, { problem: "unavailable" });
+  h.servers.designModeEntered({ chatId: "chat-1", workspaceId: "ws", owner: h.owner });
+  await settle();
 });

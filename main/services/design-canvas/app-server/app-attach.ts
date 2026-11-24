@@ -120,7 +120,7 @@ function outermostHolders(rows: readonly ProcessRow[], holders: readonly number[
 }
 
 /** The deepest root holding `folder` (both workspace-relative POSIX), else the folder itself (B-M3). */
-function deepestRoot(roots: readonly string[], folder: string): string {
+export function deepestRoot(roots: readonly string[], folder: string): string {
   let best: string | undefined;
   for (const root of roots) {
     const inside = root === "." || folder === root || folder.startsWith(`${root}/`);
@@ -290,5 +290,73 @@ export async function checkAttach(
     held: verdict.held,
     processName,
     folder: shortFolder(relativeInside(workspaceReal, folder)!),
+  };
+}
+
+// ── Watch-mode re-binds (D9, A-M5) ──
+
+/** Processes looked at under the old parent, at most. */
+const MAX_REBIND_PIDS = 256;
+
+/**
+ * The process that took over an attached server's port after its holder
+ * exited, or undefined: it must be under the holder's old parent, which is
+ * still alive and the person's (and not launchd or init), hold one of the
+ * same loopback addresses on the same port, and have a subtree that is all
+ * the person's and all loopback. Pure: the caller read `rows` and the
+ * sockets of the parent's subtree.
+ */
+export function rebindHolder(
+  rows: readonly ProcessRow[],
+  socketsOf: (pid: number) => readonly SocketAddress[],
+  input: { ppid: number; uid: number; port: number; held: readonly string[] },
+): { pid: number; ppid: number } | undefined {
+  const parent = rows.find((row) => row.pid === input.ppid);
+  if (!parent || parent.pid <= 1 || parent.uid !== input.uid) return undefined;
+  const under = processSubtree(rows, parent.pid).filter((pid) => pid !== parent.pid);
+  const holders = under.filter((pid) =>
+    socketsOf(pid).some((socket) => socket.port === input.port && input.held.includes(socket.address)),
+  );
+  const holder = outermostHolders(rows, holders).sort((a, b) => a - b)[0];
+  if (holder === undefined) return undefined;
+  const verdict = judgeSubtree(rows, holder, input.port, input.uid, socketsOf);
+  if (!verdict.ok) return undefined;
+  return { pid: holder, ppid: rows.find((row) => row.pid === holder)!.ppid };
+}
+
+/** `rebindHolder` over a fresh process table and a strict socket read of the old parent's subtree. */
+export async function findRebind(
+  input: { ppid: number; port: number; held: readonly string[] },
+  deps: AttachScanDeps,
+): Promise<{ pid: number; ppid: number } | undefined> {
+  if (input.ppid <= 1) return undefined;
+  const table = await processTable(deps.reader);
+  if (!table.ok) return undefined;
+  const under = processSubtree(table.rows, input.ppid);
+  if (!under.length || under.length > MAX_REBIND_PIDS) return undefined;
+  const aiden = aidenProcesses(table.rows, deps);
+  const read = await listeningSocketsByProcess(under, deps.reader);
+  if (!read.ok) return undefined;
+  const found = rebindHolder(table.rows, (pid) => read.byPid.get(pid) ?? [], { ...input, uid: deps.uid });
+  return found && !aiden.has(found.pid) ? found : undefined;
+}
+
+/** What `DesignAppServers` asks of the attach code: the scan, the check, re-binds and the workspace's real folder. */
+export interface DesignAppAttachDeps {
+  /** The person's uid: every process in an attached subtree must be theirs. */
+  uid: number;
+  scan(input: { workspacePath: string; roots: readonly string[]; busyRoots: ReadonlySet<string> }): ReturnType<typeof scanRunningServers>;
+  check(input: { workspacePath: string; appRoot: string; port: number; pid?: number }): Promise<AttachCheck>;
+  rebind(input: { ppid: number; port: number; held: readonly string[] }): Promise<{ pid: number; ppid: number } | undefined>;
+  realpath(target: string): Promise<string>;
+}
+
+export function designAppAttachDeps(deps: AttachScanDeps): DesignAppAttachDeps {
+  return {
+    uid: deps.uid,
+    scan: (input) => scanRunningServers(input, deps),
+    check: (input) => checkAttach(input, deps),
+    rebind: (input) => findRebind(input, deps),
+    realpath: (target) => deps.realpath(target),
   };
 }

@@ -6,7 +6,7 @@ import net from "node:net";
 import path from "node:path";
 import test from "node:test";
 import type { SocketReaderDeps } from "../../follow-through/listening-ports.js";
-import { attachOrigin, attachOrigins, checkAttach, parseAttachUrl, scanRunningServers, type AttachScanDeps } from "./app-attach.js";
+import { attachOrigin, attachOrigins, checkAttach, parseAttachUrl, rebindHolder, scanRunningServers, type AttachScanDeps } from "./app-attach.js";
 
 test("parseAttachUrl accepts a loopback http origin with an explicit port, as written", () => {
   assert.deepEqual(parseAttachUrl("http://localhost:4321"), { ok: true, url: "http://localhost:4321", port: 4321 });
@@ -391,4 +391,25 @@ test("neither the scan nor the check makes a network request or a name lookup", 
   assert.equal((await scan(spec)).result.ok, true);
   assert.equal((await check(spec)).result.ok, true);
   assert.equal(calls, 0);
+});
+
+test("rebindHolder accepts a same-uid loopback holder under the old parent, and nothing else", () => {
+  const rows = [
+    { pid: 50, ppid: 1, pgid: 50, uid: ME }, // the runner (old parent)
+    { pid: 61, ppid: 50, pgid: 50, uid: ME }, // the new server
+    { pid: 70, ppid: 1, pgid: 70, uid: ME }, // elsewhere
+  ];
+  const sockets = new Map<number, Array<{ address: string; port: number }>>([
+    [61, [{ address: "127.0.0.1", port: 5173 }]],
+    [70, [{ address: "127.0.0.1", port: 5174 }]],
+  ]);
+  const of = (pid: number) => sockets.get(pid) ?? [];
+  const input = { ppid: 50, uid: ME, port: 5173, held: ["127.0.0.1"] };
+  assert.deepEqual(rebindHolder(rows, of, input), { pid: 61, ppid: 50 });
+  assert.equal(rebindHolder(rows, of, { ...input, ppid: 70 }), undefined, "another parent");
+  assert.equal(rebindHolder(rows, of, { ...input, ppid: 1 }), undefined, "never under init or launchd");
+  assert.equal(rebindHolder(rows, of, { ...input, held: ["::1"] }), undefined, "another address");
+  assert.equal(rebindHolder([...rows, { pid: 62, ppid: 61, pgid: 50, uid: 0 }], of, input), undefined, "another user's child");
+  sockets.set(61, [{ address: "127.0.0.1", port: 5173 }, { address: "0.0.0.0", port: 24000 }]);
+  assert.equal(rebindHolder(rows, of, input), undefined, "a wildcard in the new subtree");
 });

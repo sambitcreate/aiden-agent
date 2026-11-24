@@ -19,6 +19,7 @@ import {
   type DesignAppLogs,
   type DesignAppPhase,
   type DesignAppProblem,
+  type DesignAppRunningScan,
   type DesignAppsSnapshot,
   type DesignAppStatus,
   type FrameworkId,
@@ -33,8 +34,16 @@ import {
 } from "../../follow-through/background-jobs.js";
 import type { JobSockets } from "../../follow-through/listening-ports.js";
 import type { WorkspaceMutationGate } from "../../workspace-mutation-gate.js";
-import { configuredRoots, type CanvasConfig } from "../canvas-config.js";
-import { isDesktopOwner, type DesignAppConsent, type DesignAppConsentOwner, type LaunchConsentCard } from "./app-consent.js";
+import { attachRoots, configuredRoots, type CanvasConfig } from "../canvas-config.js";
+import { attachOrigins, deepestRoot, parseAttachUrl, type AttachCheck, type DesignAppAttachDeps } from "./app-attach.js";
+import {
+  attachConsentKey,
+  isDesktopOwner,
+  type AttachConsentCard,
+  type DesignAppConsent,
+  type DesignAppConsentOwner,
+  type LaunchConsentCard,
+} from "./app-consent.js";
 import type { LaunchSurfaceProblem, LaunchSurfaceRead } from "./app-fingerprint.js";
 import {
   exposedSockets,
@@ -43,6 +52,7 @@ import {
   lastLines,
   launchEnvironment,
   launchPlan,
+  missingModuleHint,
   needsInstall,
   readyPort,
 } from "./app-launch-core.js";
@@ -67,6 +77,10 @@ export const DESIGN_APP_POLL_RUNNING_MS = 2_000;
 export const DESIGN_APP_EXPOSURE_FAILURES = 3;
 /** The most log bytes one read returns. */
 export const DESIGN_APP_LOG_MAX_BYTES = 64 * 1024;
+/** Ticks an attached server's holder may be gone, waiting for a re-bind, before it detaches (D9, A-M5). */
+export const DESIGN_APP_REBIND_TICKS = 3;
+/** Attach cards one attempt may show before it ends with attach-unreachable (D10, A-M4). */
+const ATTACH_CARDS = 2;
 const TAIL_LINES = 20;
 const TAIL_CHARS = 2_000;
 
@@ -82,7 +96,8 @@ export interface DesignAppJobs {
   stopDesign(jobId: string): Promise<DesignJobView>;
   getDesign(jobId: string): DesignJobView | undefined;
   designTail(jobId: string): string;
-  designSockets(jobIds: readonly string[]): Promise<Map<string, JobSockets>>;
+  /** 2c: `roots` maps `attach:<key>` to an attached server's holder pid, answered from a separate socket read (D9, B-B3). */
+  designSockets(jobIds: readonly string[], roots?: ReadonlyMap<string, number>): Promise<Map<string, JobSockets>>;
   readDesignLog(jobId: string, options: { after: number; maxBytes: number }): Promise<DesignLogRead>;
 }
 
@@ -114,6 +129,10 @@ export interface DesignAppServersDeps {
   log?(event: string, detail?: Record<string, unknown>): void;
   /** Shorter limits, for tests against real processes. */
   limits?: Partial<DesignAppLimits>;
+  /** 2c: finding and checking the person's own servers; without it, nothing attaches. */
+  attach?: DesignAppAttachDeps;
+  /** 2c: Retry forgets where Node and the package managers were (D5). */
+  clearToolchainCache?(): void;
 }
 
 export interface DesignAppLimits {
@@ -149,6 +168,16 @@ interface AttemptInput {
   signal?: AbortSignal;
 }
 
+export interface DesignAppConnectInput {
+  workspaceId: string;
+  chatId: string;
+  by: "person";
+  owner?: DesignAppConsentOwner;
+  permission: WorkspaceGatePermission;
+  port: number;
+  pid: number;
+}
+
 type StartOutcome = { kind: "ready"; port: number } | { kind: "exited"; view: DesignJobView } | { kind: "problem"; problem: DesignAppProblem };
 
 interface ServerWatch {
@@ -163,6 +192,22 @@ interface ServerWatch {
   idleTimer?: unknown;
   capTimer?: unknown;
   settle?: (outcome: StartOutcome) => void;
+}
+
+/**
+ * An attached server (D9). It has no job, so no job path (stopDesign, halt's
+ * job branch) can ever reach it: Aiden never signals a process it didn't start.
+ */
+interface AttachWatch {
+  pid: number;
+  ppid: number;
+  port: number;
+  origin: string;
+  held: string[];
+  workspacePath: string;
+  failedLooks: number;
+  /** Ticks the holder has been gone without a re-bind. */
+  lostTicks: number;
 }
 
 interface Attempt {
@@ -180,6 +225,14 @@ interface Entry {
   queue: Promise<void>;
   attempt?: Attempt;
   server?: ServerWatch;
+  /** 2c: the person's server this root is attached to. Never set together with `server`. */
+  attached?: AttachWatch;
+  /** Whether the root's latest attempt launched (`started`) or attaches (`attached`). */
+  source: DesignAppStatus["source"];
+  /** An `apps[].url` root's config url, display text only. */
+  url?: string;
+  /** A choose attempt that ended with a problem: Retry replays it (D5, B-m2). */
+  lastChoose?: { script?: string };
   lastJobId?: string;
   /** The port the server last ran on, kept by restart. */
   port?: number;
@@ -313,7 +366,7 @@ export class DesignAppServers {
       const workspace = await this.deps.workspace(input.workspaceId);
       if (!runnable(workspace)) return this.statusWith(input.workspaceId, ".", { problem: "no-access" });
       const cached = await this.detectFor(workspace.id, workspace.path);
-      appRoot = this.toggleRoots(cached.detection, cached.config)[0];
+      appRoot = this.toggleRoots(cached.detection, cached.config)[0] ?? attachRoots(cached.config)[0]?.root;
       if (appRoot === undefined) return this.statusWith(input.workspaceId, ".", { problem: "not-web" });
     }
     return this.begin(this.ensure(input.workspaceId, appRoot), input);
@@ -333,6 +386,8 @@ export class DesignAppServers {
     const refusal = this.refusal(input.workspaceId, input.appRoot, input);
     if (refusal) return refusal;
     const entry = this.ensure(input.workspaceId, input.appRoot);
+    // An attached root never launches (D1): the person stops their own server.
+    if (entry.attached) return { ...entry.status, problem: { problem: "already-running" } };
     const keepPort = entry.port;
     await this.stop(input.workspaceId, input.appRoot);
     return this.begin(entry, { ...input, ...(keepPort !== undefined ? { keepPort } : {}) });
@@ -342,7 +397,87 @@ export class DesignAppServers {
     const refusal = this.refusal(input.workspaceId, input.appRoot, input);
     if (refusal) return refusal;
     const entry = this.ensure(input.workspaceId, input.appRoot);
+    if (entry.attached) return { ...entry.status, problem: { problem: "already-running" } };
     return this.begin(entry, { ...input, choose: { ...(input.script !== undefined ? { script: input.script } : {}) } });
+  }
+
+  /**
+   * D5's Retry: the right next step for how the app last ended. Main decides
+   * whether to reinstall or which script to run; every 2b rule still applies.
+   */
+  async retry(input: DesignAppStartInput & { appRoot: string }): Promise<DesignAppStatus> {
+    const refusal = this.refusal(input.workspaceId, input.appRoot, input);
+    if (refusal) return refusal;
+    const entry = this.entries.get(keyOf(input.workspaceId, input.appRoot));
+    if (entry?.attached) return { ...entry.status };
+    this.deps.clearToolchainCache?.();
+    if (!entry) return this.start(input);
+    if (entry.lastChoose) {
+      const { install: _install, ...rest } = input;
+      return this.choose({ ...rest, ...(entry.lastChoose.script !== undefined ? { script: entry.lastChoose.script } : {}) });
+    }
+    const { status } = entry;
+    const problem = status.problem?.problem;
+    const reinstall =
+      problem === "install-failed" || problem === "install-timeout" || (status.phase === "crashed" && missingModuleHint(status.tail ?? "") !== undefined);
+    return this.restart({ ...input, ...(reinstall ? { install: true } : {}) });
+  }
+
+  /**
+   * D6: the person's running servers in this workspace, read only now that
+   * the person asked. Busy roots (a started server or a pending attempt) are
+   * listed but not connectable.
+   */
+  async running(input: { workspaceId: string; owner?: DesignAppConsentOwner; permission: WorkspaceGatePermission }): Promise<DesignAppRunningScan> {
+    const refused: DesignAppRunningScan = { workspaceId: input.workspaceId, ok: false, incomplete: false, servers: [] };
+    const attach = this.deps.attach;
+    if (!attach || this.refusal(input.workspaceId, ".", input)) return refused;
+    const workspace = await this.deps.workspace(input.workspaceId);
+    if (!runnable(workspace)) return refused;
+    const cached = await this.detectFor(workspace.id, workspace.path);
+    const busyRoots = new Set(
+      [...this.entries.values()]
+        .filter((entry) => entry.workspaceId === workspace.id && (entry.attempt !== undefined || entry.server !== undefined))
+        .map((entry) => entry.appRoot),
+    );
+    const scan = await attach.scan({ workspacePath: workspace.path, roots: this.knownRoots(cached.detection, cached.config), busyRoots });
+    return { workspaceId: input.workspaceId, ok: scan.ok, incomplete: scan.ok ? scan.incomplete : false, servers: scan.ok ? scan.servers : [] };
+  }
+
+  /**
+   * D8–D9: attach to the server the person picked in Connect. The pick is the
+   * consent (D10), but main checks it again: the pid must still be the port's
+   * holder, inside the app root, the person's, and on loopback only.
+   */
+  async connect(input: DesignAppConnectInput): Promise<DesignAppStatus> {
+    const refusal = this.refusal(input.workspaceId, ".", input);
+    if (refusal) return refusal;
+    const attach = this.deps.attach;
+    if (!attach) return this.statusWith(input.workspaceId, ".", { problem: "unavailable" });
+    const workspace = await this.deps.workspace(input.workspaceId);
+    if (!runnable(workspace)) return this.statusWith(input.workspaceId, ".", { problem: "no-access" });
+    const workspacePath = workspace.path;
+    const first = await attach.check({ workspacePath, appRoot: ".", port: input.port, pid: input.pid });
+    if (!first.ok) return this.statusWith(input.workspaceId, ".", { problem: first.problem });
+    // A folder shortened for display can't name a root.
+    if (first.folder.endsWith("…")) return this.statusWith(input.workspaceId, ".", { problem: "attach-not-in-app" });
+    const cached = await this.detectFor(workspace.id, workspacePath);
+    const appRoot = deepestRoot(this.knownRoots(cached.detection, cached.config), first.folder);
+    const found = appRoot === "." ? first : await attach.check({ workspacePath, appRoot, port: input.port, pid: first.pid });
+    if (!found.ok) return this.statusWith(input.workspaceId, appRoot, { problem: found.problem });
+    const entry = this.ensure(input.workspaceId, appRoot);
+    const stops = entry.stops;
+    return this.enqueue(entry, async () => {
+      if (entry.attempt || entry.server) return { ...entry.status, problem: { problem: "already-running", started: true } };
+      // A stop asked for while this was checked wins.
+      if (entry.stops !== stops) return { ...entry.status };
+      if (entry.attached) this.detach(entry);
+      const current = await this.deps.workspace(input.workspaceId);
+      if (!runnable(current)) return this.setPhase(entry, "stopped", { problem: { problem: "no-access" } });
+      if (current.path !== workspacePath) return this.setPhase(entry, "stopped", { problem: { problem: "interrupted" } });
+      entry.url = undefined;
+      return this.register(entry, found, workspacePath, "person", cached.detection);
+    });
   }
 
   /**
@@ -351,7 +486,9 @@ export class DesignAppServers {
    * this run's oldest kept byte instead, marked `truncated`.
    */
   async logs(workspaceId: string, appRoot: string, options: { after?: number; run?: string; maxBytes: number }): Promise<DesignAppLogs> {
-    const jobId = this.entries.get(keyOf(workspaceId, appRoot))?.lastJobId;
+    const entry = this.entries.get(keyOf(workspaceId, appRoot));
+    // Aiden doesn't own an attached server's output (D9, B-M4).
+    const jobId = entry?.attached ? undefined : entry?.lastJobId;
     if (!jobId) return { text: "", from: 0, next: 0, end: 0, truncated: false };
     const maxBytes = Math.max(0, Math.min(DESIGN_APP_LOG_MAX_BYTES, Math.floor(options.maxBytes)));
     const after = options.after ?? 0;
@@ -371,8 +508,13 @@ export class DesignAppServers {
       if (!runnable(workspace)) return;
       const cached = await this.detectFor(workspace.id, workspace.path);
       // Every configured root starts at once, each with its own card: one waiting card never holds up the others.
+      const roots = [
+        ...this.toggleRoots(cached.detection, cached.config),
+        // D7: url roots attach (never launch); a refused url waits for the person to fix it.
+        ...attachRoots(cached.config).flatMap((root) => (root.refused ? [] : [root.root])),
+      ];
       await Promise.all(
-        this.toggleRoots(cached.detection, cached.config).map((appRoot) =>
+        roots.map((appRoot) =>
           this.start({ workspaceId: workspace.id, appRoot, by: "person", chatId: input.chatId, owner: input.owner, permission: workspace.permission }),
         ),
       );
@@ -384,7 +526,7 @@ export class DesignAppServers {
     const entries = [...this.entries.values()].filter((entry) => entry.workspaceId === workspaceId);
     let originsGo = (this.served.get(workspaceId)?.size ?? 0) > 0;
     for (const entry of entries) {
-      originsGo ||= entry.server?.running === true;
+      originsGo ||= entry.server?.running === true || entry.attached !== undefined;
       await this.halt(entry, { quiet: true });
     }
     for (const entry of entries) this.entries.delete(entry.key);
@@ -403,6 +545,13 @@ export class DesignAppServers {
     const host = url.hostname;
     if (host !== "127.0.0.1" && host !== "[::1]") return undefined;
     for (const entry of this.entries.values()) {
+      const attached = entry.attached;
+      if (attached) {
+        if (attached.port !== port) continue;
+        const exact = host === "127.0.0.1" ? attached.held.some((address) => address === "127.0.0.1" || address === "::ffff:127.0.0.1") : attached.held.includes("::1");
+        if (exact) return { workspaceId: entry.workspaceId, appRoot: entry.appRoot };
+        continue;
+      }
       const watch = entry.server;
       if (!watch?.running || entry.status.port !== port) continue;
       const held = watch.held.some(
@@ -467,17 +616,18 @@ export class DesignAppServers {
         status: this.blankStatus(workspaceId, appRoot),
         queue: Promise.resolve(),
         stops: 0,
+        source: "started",
       };
       this.entries.set(key, entry);
     }
     return entry;
   }
 
-  private blankStatus(workspaceId: string, appRoot: string, app?: DetectedApp): DesignAppStatus {
+  private blankStatus(workspaceId: string, appRoot: string, app?: DetectedApp, source: DesignAppStatus["source"] = "started"): DesignAppStatus {
     return {
       workspaceId,
       appRoot,
-      source: "started",
+      source,
       ...(app?.framework ? { framework: app.framework } : {}),
       frameworkLabel: frameworkLabel(app?.framework),
       ...(app?.packageManager.name ? { manager: app.packageManager.name } : {}),
@@ -514,6 +664,10 @@ export class DesignAppServers {
     const stops = entry.stops;
     const created = entry.queue.then(() => {
       if (input.choose && entry.stops !== stops) return { promise: this.afterQueued(entry) };
+      // An attached root never launches (D1): a start answers the attachment, a choose is refused.
+      if (entry.attached) {
+        return { promise: Promise.resolve<DesignAppStatus>(input.choose ? { ...entry.status, problem: { problem: "already-running" } } : { ...entry.status }) };
+      }
       if (entry.attempt) {
         const pending = entry.attempt.promise;
         if (!input.choose) return { promise: pending };
@@ -525,9 +679,15 @@ export class DesignAppServers {
       }
       const attempt: Attempt = { controller: new AbortController(), promise: Promise.resolve(entry.status) };
       entry.attempt = attempt;
-      attempt.promise = this.runAttempt(entry, input, attempt).finally(() => {
-        if (entry.attempt === attempt) entry.attempt = undefined;
-      });
+      attempt.promise = this.runAttempt(entry, input, attempt)
+        .then((status) => {
+          // D5: Retry replays a choose that ended with a problem; anything else ending clears it.
+          entry.lastChoose = input.choose && status.phase !== "running" && status.problem ? input.choose : undefined;
+          return status;
+        })
+        .finally(() => {
+          if (entry.attempt === attempt) entry.attempt = undefined;
+        });
       return { promise: attempt.promise };
     });
     entry.queue = created.then(
@@ -590,6 +750,10 @@ export class DesignAppServers {
       for (;;) {
         // Read everything again: what runs is what is on disk now (D5).
         const cached = await race(this.detectFor(entry.workspaceId, workspacePath), signal);
+        // D7: a url root attaches to the person's server and never launches, even with a script.
+        const urlRoot = attachRoots(cached.config).find((root) => root.root === entry.appRoot);
+        entry.source = urlRoot ? "attached" : "started";
+        if (urlRoot && !input.choose) return await this.runAttach(entry, input, urlRoot, workspacePath, cached.detection, signal);
         const app = this.resolveApp(cached.detection, cached.config, entry.appRoot, input.choose?.script);
         if (!app) throw new End({ problem: "not-web" });
         framework = app.framework;
@@ -693,6 +857,8 @@ export class DesignAppServers {
           }
           saved = true;
         }
+        // A choose on a url root saves its script (2b), and the root still attaches.
+        if (urlRoot) return await this.runAttach(entry, input, urlRoot, workspacePath, cached.detection, signal);
         const { env, providerKeys } = this.deps.launchEnv();
         const binDirs = [path.dirname(toolchain.node), path.dirname(toolchain.manager.path)];
         const keys = [...providerKeys];
@@ -813,6 +979,115 @@ export class DesignAppServers {
     }
   }
 
+  // ── Attaching (D7–D10) ──
+
+  /**
+   * A url root's attempt: check the server the config names, then attach
+   * without a card while the record matches, else after the attach card. After
+   * Allow, the same holder, name and folder the card showed must still be
+   * there (A-M4), or the card shows again, at most twice.
+   */
+  private async runAttach(
+    entry: Entry,
+    input: AttemptInput,
+    urlRoot: { url?: string; refused: boolean },
+    workspacePath: string,
+    detection: WebAppDetection,
+    signal: AbortSignal,
+  ): Promise<DesignAppStatus> {
+    entry.url = urlRoot.url;
+    const parsed = urlRoot.url === undefined ? undefined : parseAttachUrl(urlRoot.url);
+    if (!parsed?.ok) throw new End({ problem: "attach-url-invalid" });
+    const configUrl = urlRoot.url!;
+    const attach = this.deps.attach;
+    if (!attach) throw new End({ problem: "unavailable" });
+    let shown: Extract<AttachCheck, { ok: true }> | undefined;
+    let cards = 0;
+    for (;;) {
+      const found = await race(attach.check({ workspacePath, appRoot: entry.appRoot, port: parsed.port }), signal);
+      if (!found.ok) throw new End({ problem: found.problem });
+      const workspaceReal = await race(attach.realpath(workspacePath), signal);
+      if (shown) {
+        const same = found.pid === shown.pid && found.processName === shown.processName && found.folder === shown.folder && found.origin === shown.origin;
+        shown = undefined;
+        if (same) {
+          await race(this.deps.records.approveAttach(entry.workspaceId, entry.appRoot, { origin: found.origin, configUrl, workspaceReal }), signal);
+          return this.registerChecked(entry, found, workspacePath, input.by, detection);
+        }
+        if (cards >= ATTACH_CARDS) throw new End({ problem: "attach-unreachable" });
+      } else {
+        const record = await race(this.deps.records.attachOf(entry.workspaceId, entry.appRoot), signal);
+        if (record && record.origin === found.origin && record.configUrl === configUrl && record.workspaceReal === workspaceReal) {
+          return this.registerChecked(entry, found, workspacePath, input.by, detection);
+        }
+      }
+      const card: AttachConsentCard = {
+        kind: "attach",
+        chatId: input.chatId,
+        workspaceId: entry.workspaceId,
+        appRoot: entry.appRoot,
+        url: found.origin,
+        configUrl,
+        processName: found.processName,
+        folder: found.folder,
+      };
+      const key = attachConsentKey(entry.workspaceId, entry.appRoot);
+      if (input.by === "person") this.deps.consent.forgetDecline(key);
+      this.setPhase(entry, "consent");
+      const answer = await this.deps.consent.request({ key, by: input.by, request: card, ...(input.owner ? { owner: input.owner } : {}), signal });
+      if (signal.aborted) throw new Aborted();
+      if (answer !== "allow") {
+        throw new End({ problem: answer === "decline" ? "consent-declined" : answer === "unanswered" ? "consent-unanswered" : "consent-unavailable" });
+      }
+      shown = found;
+      cards += 1;
+    }
+  }
+
+  /** Registers a url root's attachment once the workspace is still the one checked. */
+  private async registerChecked(
+    entry: Entry,
+    found: Extract<AttachCheck, { ok: true }>,
+    workspacePath: string,
+    by: "person" | "aiden",
+    detection: WebAppDetection,
+  ): Promise<DesignAppStatus> {
+    const current = await this.deps.workspace(entry.workspaceId);
+    if (!runnable(current)) throw new End({ problem: "no-access" });
+    if (current.path !== workspacePath) throw new End({ problem: "interrupted" });
+    return this.register(entry, found, workspacePath, by, detection);
+  }
+
+  /** D9: the attachment is live. Its origins are exactly the loopback addresses it holds, plus the localhost alias. */
+  private register(
+    entry: Entry,
+    found: Extract<AttachCheck, { ok: true }>,
+    workspacePath: string,
+    by: "person" | "aiden",
+    detection: WebAppDetection,
+  ): DesignAppStatus {
+    const port = Number(new URL(found.origin).port);
+    const app = detection.apps.find((candidate) => candidate.root === entry.appRoot && candidate.kind === "web");
+    entry.meta = { ...(app?.framework ? { framework: app.framework } : {}), frameworkLabel: frameworkLabel(app?.framework), startedBy: by };
+    entry.source = "attached";
+    entry.attached = { pid: found.pid, ppid: found.ppid, port, origin: found.origin, held: [...found.held], workspacePath, failedLooks: 0, lostTicks: 0 };
+    this.serveAttached(entry, entry.attached);
+    const status = this.setPhase(entry, "running", { origin: found.origin, port });
+    this.originsChanged();
+    this.ensurePoller();
+    return status;
+  }
+
+  /** Ends an attachment. It never signals anything: the person's server keeps running (D9, A-m4). */
+  private detach(entry: Entry, options: { problem?: DesignAppProblem; quiet?: boolean } = {}): void {
+    if (!entry.attached) return;
+    entry.attached = undefined;
+    this.stopPollerIfIdle();
+    if (options.quiet) return;
+    this.setPhase(entry, "stopped", options.problem ? { problem: options.problem } : {});
+    this.originsChanged();
+  }
+
   private spawn(entry: Entry, attempt: Attempt, input: StartDesignJobInput): DesignJobView {
     let job: DesignJobView;
     try {
@@ -927,6 +1202,10 @@ export class DesignAppServers {
       attempt.controller.abort(STOP);
       await attempt.promise.catch(() => undefined);
     }
+    if (entry.attached) {
+      this.detach(entry, options);
+      return;
+    }
     const watch = entry.server;
     if (!watch) return;
     watch.stopping = true;
@@ -944,7 +1223,11 @@ export class DesignAppServers {
     this.timers.clear(watch.idleTimer);
     this.timers.clear(watch.capTimer);
     entry.server = undefined;
-    if (!this.watches().length && this.pollTimer !== undefined) {
+    this.stopPollerIfIdle();
+  }
+
+  private stopPollerIfIdle(): void {
+    if (!this.watches().length && !this.attachedEntries().length && this.pollTimer !== undefined) {
       this.timers.clear(this.pollTimer);
       this.pollTimer = undefined;
     }
@@ -952,6 +1235,10 @@ export class DesignAppServers {
 
   private watches(): ServerWatch[] {
     return [...this.entries.values()].flatMap((entry) => (entry.server ? [entry.server] : []));
+  }
+
+  private attachedEntries(): Entry[] {
+    return [...this.entries.values()].filter((entry) => entry.attached);
   }
 
   private ensurePoller(): void {
@@ -965,7 +1252,7 @@ export class DesignAppServers {
   private schedulePoll(): void {
     this.pollTimer = undefined;
     const watches = this.watches();
-    if (!watches.length) return;
+    if (!watches.length && !this.attachedEntries().length) return;
     this.pollDelay = watches.some((watch) => !watch.running) ? DESIGN_APP_POLL_STARTING_MS : DESIGN_APP_POLL_RUNNING_MS;
     this.pollTimer = this.timers.set(() => {
       this.pollTimer = undefined;
@@ -973,16 +1260,22 @@ export class DesignAppServers {
     }, this.pollDelay);
   }
 
-  /** One `designSockets` call for every design job; never overlapping (D9). */
+  /**
+   * One `designSockets` call for every design job and every attached root;
+   * never overlapping (D9). The attached roots are a separate socket read, so
+   * one side's failed look never counts against the other (B-B3).
+   */
   private async tick(): Promise<void> {
     this.polling = true;
     try {
       const entries = [...this.entries.values()].filter((entry) => entry.server);
-      if (!entries.length) return;
+      const attached = this.attachedEntries().map((entry) => ({ entry, watch: entry.attached!, key: `attach:${entry.key}` }));
+      if (!entries.length && !attached.length) return;
       const ids = entries.map((entry) => entry.server!.jobId);
+      const roots = new Map(attached.map(({ watch, key }) => [key, watch.pid]));
       let results: Map<string, JobSockets>;
       try {
-        results = await this.deps.jobs.designSockets(ids);
+        results = await (roots.size ? this.deps.jobs.designSockets(ids, roots) : this.deps.jobs.designSockets(ids));
       } catch {
         results = new Map();
       }
@@ -990,6 +1283,10 @@ export class DesignAppServers {
         const watch = entry.server;
         if (!watch || !ids.includes(watch.jobId)) continue;
         await this.checkSockets(entry, watch, results.get(watch.jobId) ?? { ok: false, reason: "not read" });
+      }
+      for (const { entry, watch, key } of attached) {
+        if (entry.attached !== watch) continue;
+        await this.checkAttached(entry, watch, results.get(key) ?? { ok: false, reason: "not read" });
       }
     } catch (error) {
       this.deps.log?.("design-app-poll-failed", { error: String(error) });
@@ -1037,6 +1334,57 @@ export class DesignAppServers {
     else if (workspace.path !== watch.workspacePath) await this.halt(entry, { problem: { problem: "interrupted" } });
   }
 
+  /** D9's rules for an attached server, each tick. Every way out detaches; nothing is ever signalled. */
+  private async checkAttached(entry: Entry, watch: AttachWatch, result: JobSockets): Promise<void> {
+    if (!result.ok) {
+      if (++watch.failedLooks >= DESIGN_APP_EXPOSURE_FAILURES) this.detach(entry, { problem: { problem: "attach-unreachable" } });
+      return;
+    }
+    watch.failedLooks = 0;
+    const rows = result.rows ?? [];
+    if (!rows.some((row) => row.pid === watch.pid)) {
+      // The holder is gone (A-M5): a watch-mode restart under the same parent re-binds; otherwise it detaches after three ticks.
+      const next = await this.deps.attach?.rebind({ ppid: watch.ppid, port: watch.port, held: watch.held }).catch(() => undefined);
+      if (entry.attached !== watch) return;
+      if (next) {
+        watch.pid = next.pid;
+        watch.ppid = next.ppid;
+        watch.lostTicks = 0;
+      } else if (++watch.lostTicks >= DESIGN_APP_REBIND_TICKS) {
+        this.detach(entry, { problem: { problem: "attach-unreachable" } });
+      }
+      return;
+    }
+    watch.lostTicks = 0;
+    const uid = this.deps.attach?.uid;
+    if (uid === undefined || rows.some((row) => row.uid !== uid) || exposedSockets(result.sockets).length > 0) {
+      this.detach(entry, { problem: { problem: "attach-not-loopback" } });
+      return;
+    }
+    const held = [...new Set(result.sockets.filter((socket) => socket.port === watch.port).map((socket) => socket.address))];
+    const ipv4 = watch.origin.startsWith("http://127.0.0.1:");
+    if (!held.some((address) => (ipv4 ? address === "127.0.0.1" || address === "::ffff:127.0.0.1" : address === "::1"))) {
+      this.detach(entry, { problem: { problem: "attach-unreachable" } });
+      return;
+    }
+    watch.held = held;
+    if (this.serveAttached(entry, watch)) this.originsChanged();
+    const workspace = await this.deps.workspace(entry.workspaceId).catch(() => undefined);
+    if (entry.attached !== watch) return;
+    if (!runnable(workspace)) this.detach(entry, { problem: { problem: "no-access" } });
+    else if (workspace.path !== watch.workspacePath) this.detach(entry, { problem: { problem: "interrupted" } });
+  }
+
+  /** D9, B-m6: exactly the loopback origins an attached server holds, plus the localhost alias. True when one was added. */
+  private serveAttached(entry: Entry, watch: AttachWatch): boolean {
+    const origins = this.served.get(entry.workspaceId) ?? new Set<string>();
+    const before = origins.size;
+    for (const origin of attachOrigins(watch.held.map((address) => ({ address, port: watch.port })), watch.port)) origins.add(origin);
+    origins.add(`http://localhost:${watch.port}`);
+    this.served.set(entry.workspaceId, origins);
+    return origins.size > before;
+  }
+
   /** Every origin this session served stays an app origin until the workspace is forgotten (3a). True when one was added. */
   private serve(entry: Entry, port: number, held: ReadonlyArray<{ address: string; port: number }>): boolean {
     const origins = this.served.get(entry.workspaceId) ?? new Set<string>();
@@ -1060,7 +1408,7 @@ export class DesignAppServers {
 
   private activeIn(workspaceId: string): boolean {
     return [...this.entries.values()].some(
-      (entry) => entry.workspaceId === workspaceId && (entry.attempt !== undefined || entry.server !== undefined),
+      (entry) => entry.workspaceId === workspaceId && (entry.attempt !== undefined || entry.server !== undefined || entry.attached !== undefined),
     );
   }
 
@@ -1072,7 +1420,7 @@ export class DesignAppServers {
         this.presenceTimers.delete(workspaceId);
         if (this.deps.views.visible(workspaceId) > 0) return;
         for (const entry of [...this.entries.values()]) {
-          if (entry.workspaceId === workspaceId && (entry.attempt || entry.server)) void this.stop(workspaceId, entry.appRoot);
+          if (entry.workspaceId === workspaceId && (entry.attempt || entry.server || entry.attached)) void this.stop(workspaceId, entry.appRoot);
         }
       }, this.limits.graceMs),
     );
@@ -1114,10 +1462,15 @@ export class DesignAppServers {
     return runnable(script) ? { ...app, script } : undefined;
   }
 
-  /** D4: the configured roots with a script they may run, else the single web app, else nothing. */
+  /**
+   * D4: the configured roots with a script they may run, else the single web
+   * app, else nothing. Url roots never launch (D7), and a config that lists
+   * url roots describes the workspace's apps, so it never falls back.
+   */
   private toggleRoots(detection: WebAppDetection, config: CanvasConfig | null): string[] {
-    const configured = configuredRoots(config, detection);
-    if (configured.length > 0) {
+    const urls = new Set(attachRoots(config).map((root) => root.root));
+    const configured = configuredRoots(config, detection).filter((root) => !urls.has(root));
+    if (configured.length > 0 || urls.size > 0) {
       return configured.filter((root) => {
         const entry = config?.apps.find((candidate) => candidate.root === root && candidate.script);
         return entry?.script !== undefined && this.resolveApp(detection, null, root, entry.script) !== undefined;
@@ -1127,11 +1480,21 @@ export class DesignAppServers {
     return target.kind === "single" && this.resolveApp(detection, config, target.app.root) ? [target.app.root] : [];
   }
 
+  /** The roots a running server's folder can belong to (D6): the candidates, the chosen roots and the url roots. */
+  private knownRoots(detection: WebAppDetection, config: CanvasConfig | null): string[] {
+    const roots = new Set<string>();
+    for (const app of detection.apps) if (app.kind === "web") roots.add(app.root);
+    for (const root of configuredRoots(config, detection)) roots.add(root);
+    for (const root of attachRoots(config)) roots.add(root.root);
+    return [...roots];
+  }
+
   private setPhase(entry: Entry, phase: DesignAppPhase, extra: Partial<DesignAppStatus> = {}): DesignAppStatus {
     entry.status = {
       workspaceId: entry.workspaceId,
       appRoot: entry.appRoot,
-      source: "started",
+      source: entry.source,
+      ...(entry.source === "attached" && entry.url !== undefined ? { url: entry.url } : {}),
       ...(entry.meta.framework ? { framework: entry.meta.framework } : {}),
       frameworkLabel: entry.meta.frameworkLabel,
       ...(entry.meta.manager ? { manager: entry.meta.manager } : {}),
@@ -1169,6 +1532,17 @@ export class DesignAppServers {
       for (const root of this.toggleRoots(cached.detection, cached.config)) {
         if (known.some((entry) => entry.appRoot === root)) continue;
         apps.push(this.blankStatus(workspaceId, root, this.resolveApp(cached.detection, cached.config, root)));
+      }
+      // D7: url roots are listed as attached apps; a refused url says why (B-m4).
+      for (const root of attachRoots(cached.config)) {
+        if (known.some((entry) => entry.appRoot === root.root)) continue;
+        const app = cached.detection.apps.find((candidate) => candidate.root === root.root && candidate.kind === "web");
+        const blank = this.blankStatus(workspaceId, root.root, app ? { ...app, script: undefined } : undefined, "attached");
+        apps.push({
+          ...blank,
+          ...(root.url !== undefined ? { url: root.url } : {}),
+          ...(root.refused ? { problem: { problem: "attach-url-invalid" } } : {}),
+        });
       }
     }
     return { workspaceId, target, apps, candidates, chosen };
