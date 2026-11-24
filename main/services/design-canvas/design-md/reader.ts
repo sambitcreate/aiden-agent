@@ -146,13 +146,13 @@ export class DesignMdReader {
   constructor(
     deps: {
       run?: typeof runDesignMdWorker;
-      report?: ReportEvent | ((event: string, props: unknown) => void);
+      report?: ReportEvent;
       log?: (message: string) => void;
       maxEntries?: number;
     } = {},
   ) {
     this.run = deps.run ?? runDesignMdWorker;
-    this.report = (deps.report as ReportEvent | undefined) ?? (() => undefined);
+    this.report = deps.report ?? (() => undefined);
     this.log = deps.log ?? (() => undefined);
     this.maxEntries = deps.maxEntries ?? DEFAULT_MAX_ENTRIES;
   }
