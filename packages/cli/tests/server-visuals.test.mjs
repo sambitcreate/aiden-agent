@@ -173,12 +173,12 @@ test("an installed browser draws a chart offline into a picture and leaves no pr
   const dir = mkdtempSync(join(tmpdir(), "aiden-server-visuals-")); t.after(() => rmSync(dir, { recursive: true, force: true }));
   const previous = process.env.AIDEN_CLI_ENTRY; process.env.AIDEN_CLI_ENTRY = join(pkg, "dist/app/cli.js");
   t.after(() => { if (previous === undefined) delete process.env.AIDEN_CLI_ENTRY; else process.env.AIDEN_CLI_ENTRY = previous; });
+  const profiles = () => readdirSync(tmpdir()).filter((name) => name.startsWith("aiden-visual-")).length;
+  const before = profiles();
   // The first launch of Chrome on a fresh CI machine reads the browser from a
   // cold disk and has taken 8-14 s to answer; later launches answer in under
   // 200 ms. Draw once without the limit, so the limit below times the drawing.
   await api.renderServerVisualImage({ browserPath: browser.path, hostPage: api.serverVisualHostPage("<p>Warm-up</p>", "Warm-up", 720, () => ""), width: 720, timeoutMs: 120_000 });
-  const profiles = () => readdirSync(tmpdir()).filter((name) => name.startsWith("aiden-visual-")).length;
-  const before = profiles();
   const visuals = api.createServerVisualCollector();
   const html = `<div style="height:240px"><canvas id="c"></canvas></div><script>new Chart(document.getElementById("c"), {type:"bar",data:{labels:["Q1","Q2"],datasets:[{label:"Sales",data:[3,5]}]},options:{animation:false,maintainAspectRatio:false}})</script>`;
   const started = Date.now();
