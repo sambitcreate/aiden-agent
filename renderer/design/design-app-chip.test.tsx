@@ -166,6 +166,24 @@ test("a broadcast for another workspace leaves the chip alone", async () => {
   assert.equal(button.textContent, "Start");
 });
 
+test("a status read and a broadcast that race keep the higher revision of each app", async () => {
+  const cases: Array<[string, DesignAppStatus, DesignAppStatus, string]> = [
+    ["the broadcast is newer", { ...RUNNING, revision: 5 }, status({ revision: 3 }), "Vite · :5173"],
+    ["the read is newer", status({ revision: 2 }), { ...RUNNING, revision: 4 }, "Vite · :5173"],
+  ];
+  for (const [label, broadcasted, answered, shown] of cases) {
+    const read = pending<DesignAppsSnapshot>();
+    mount(() => read.promise);
+    // The broadcast lands while the read is on its way.
+    broadcast(snapshot([broadcasted]));
+    await act(async () => read.resolve(snapshot([answered])));
+    const button = await trigger();
+    await until(() => assert.equal(button.textContent, shown, label));
+    cleanup();
+    resetDesignAppChipForTests();
+  }
+});
+
 // ── Labels (D2) ──
 
 test("the label follows the snapshot", async () => {

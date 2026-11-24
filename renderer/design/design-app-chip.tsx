@@ -53,6 +53,23 @@ function cachedFor(chatId: string): DesignAppsSnapshot | undefined {
 }
 
 /**
+ * A status read answered from main's state when it was asked; a broadcast may
+ * have brought a newer state of some app meanwhile. Each app keeps whichever
+ * is newer by `revision` (B7). Broadcasts arrive in order and replace as they are.
+ */
+function newerApps(read: DesignAppsSnapshot, known: DesignAppsSnapshot | undefined): DesignAppsSnapshot {
+  if (!known || known.workspaceId !== read.workspaceId) return read;
+  const knownByRoot = new Map(known.apps.map((app) => [app.appRoot, app]));
+  return {
+    ...read,
+    apps: read.apps.map((app) => {
+      const other = knownByRoot.get(app.appRoot);
+      return other && other.revision > app.revision ? other : app;
+    }),
+  };
+}
+
+/**
  * The chat's workspace snapshot: the last one known at once, then a fresh read
  * once per mount, then every broadcast for that workspace. `undefined` until
  * the first read answers with nothing cached; `null` when live apps are off.
@@ -72,8 +89,9 @@ export function useDesignAppsSnapshot(chatId: string, enabled: boolean): DesignA
       if (live && chatWorkspaces.get(chatId) === next.workspaceId) setSnapshot(next);
     });
     designAppApi.status(chatId).then(
-      (read) => {
+      (answer) => {
         if (!live) return;
+        const read = newerApps(answer, snapshots.get(answer.workspaceId));
         chatWorkspaces.set(chatId, read.workspaceId);
         snapshots.set(read.workspaceId, read);
         setSnapshot(read);
