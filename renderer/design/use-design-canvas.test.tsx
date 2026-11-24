@@ -10,7 +10,16 @@ import {
   type DesignCanvas,
   type DesignFrame,
 } from "../shared/design-canvas/schema";
-import { DESIGN_CANVAS_CLOSED_RETRY_MS, useDesignCanvas } from "./use-design-canvas";
+import {
+  createInitialDesignCanvasSyncState,
+  DESIGN_CANVAS_CLOSED_RETRY_MS,
+  DESIGN_CANVAS_SAVE_DELAY_MS,
+  isDesignCanvasFlushComplete,
+  reduceDesignCanvasSync,
+  selectDesignCanvasGuard,
+  selectDesignCanvasView,
+  useDesignCanvas,
+} from "./use-design-canvas";
 
 type Controller = ReturnType<typeof useDesignCanvas>;
 type SaveReply =
@@ -626,4 +635,275 @@ test("saving now says whether the stored canvas caught up, so readers of it can 
   });
   assert.equal(saved, true, "the next save takes the kept edit with it");
   assert.deepEqual(ids(stored), ["a", "b", "c"]);
+});
+
+test("closing while a save is in flight flushes edits added during that save and clears the guard once landed", async () => {
+  const dataset = document.documentElement.dataset;
+  const designDirty = () => (dataset.aidenDirtySources ?? "").split(" ").includes("design");
+  let resolveFirstSave!: (reply: SaveReply) => void;
+  let firstSave = true;
+  calls = installBotTestIpc({
+    "designCanvas:get": () => structuredClone(stored),
+    "designCanvas:save": (_chatId, doc, base) => {
+      if (firstSave) {
+        firstSave = false;
+        return new Promise<SaveReply>((resolve) => {
+          resolveFirstSave = resolve;
+        });
+      }
+      stored = { ...(doc as DesignCanvas), revision: (base as number) + 1 };
+      return { ok: true, revision: stored.revision };
+    },
+  });
+
+  const view = await mount();
+  await act(async () => controller.change(moveTo("a", 40)));
+  await tick(DESIGN_CANVAS_SAVE_DELAY_MS);
+  assert.equal(saves().length, 1, "first save is in flight");
+
+  // A second edit arrives while the first save is still in flight, then the canvas unmounts.
+  await act(async () => controller.change(addNote("b")));
+  assert.equal(designDirty(), true);
+  view.unmount();
+  await settle();
+  assert.equal(saves().length, 1, "waits for the in-flight save before sending the follow-up");
+
+  await act(async () => {
+    stored = canvas(5, note("a", 40));
+    resolveFirstSave({ ok: true, revision: 5 });
+  });
+  await settle();
+
+  assert.equal(saves().length, 2, "follow-up edit saves immediately once the first save settles");
+  const [, secondDoc, secondBase] = saves()[1]!.args as [string, DesignCanvas, number];
+  assert.equal(secondBase, 5);
+  assert.deepEqual(ids(secondDoc), ["a", "b"]);
+  assert.equal(xOf(secondDoc, "a"), 40);
+  assert.equal(designDirty(), false, "guard clears once all closed edits are saved");
+});
+
+test("retry backoff timer is cancelled once a teardown flush succeeds, so no late retry fires", async () => {
+  const view = await mount();
+  saveReplies.push(() => {
+    throw new Error("store busy");
+  });
+  await act(async () => controller.change(addNote("b")));
+  view.unmount();
+  await settle();
+  assert.equal(saves().length, 1, "initial close flush failed and scheduled backoff");
+
+  // Before the first backoff delay elapses, a teardown flush succeeds.
+  await tick(DESIGN_CANVAS_CLOSED_RETRY_MS[0]! / 2);
+  await act(async () => {
+    await window.__aidenFlushPendingSaves?.();
+  });
+  await settle();
+  assert.equal(saves().length, 2);
+  assert.deepEqual(ids(stored), ["a", "b"]);
+
+  // Advancing past every closed retry window must not trigger any further save attempts.
+  for (const delay of DESIGN_CANVAS_CLOSED_RETRY_MS) await tick(delay);
+  await tick(60_000);
+  assert.equal(saves().length, 2, "cancelled retry backoff timer never fires after disposal");
+});
+
+test("a failed save recovers via explicit flush without needing another edit", async () => {
+  const dataset = document.documentElement.dataset;
+  const designDirty = () => (dataset.aidenDirtySources ?? "").split(" ").includes("design");
+  await mount();
+  saveReplies.push(() => {
+    throw new Error("temporary failure");
+  });
+
+  await act(async () => controller.change(moveTo("a", 75)));
+  await tick(DESIGN_CANVAS_SAVE_DELAY_MS);
+  assert.equal(controller.status, "error");
+  assert.equal(designDirty(), true);
+
+  let flushed = false;
+  await act(async () => {
+    flushed = await controller.flush();
+  });
+  assert.equal(flushed, true);
+  assert.equal(controller.status, "ready");
+  assert.equal(designDirty(), false);
+  assert.equal(xOf(stored, "a"), 75);
+});
+
+test("a person's own edit ends unsettled late-announcement tracking, and a non-reply announcement settles it cleanly", async () => {
+  await mount();
+  // Revision 6 is fetched before its announcement arrives, so history is unsettled.
+  stored = canvas(6, note("a"), note("b", 400));
+  await act(async () => emitBotTestNotification("designCanvas:updated", { chatId: "chat-1", revision: 5, aidenTurn: "reply-1" }));
+  await settle();
+  assert.deepEqual(ids(controller.doc), ["a", "b"]);
+
+  // A recorded edit by the person ends unsettled history rebuild before revision 6 is announced.
+  await act(async () => controller.change(moveTo("a", 25)));
+  await act(async () => emitBotTestNotification("designCanvas:updated", { chatId: "chat-1", revision: 6, aidenTurn: "reply-1" }));
+  await settle();
+
+  // Undo reverts only the person's move; the previously fetched frame stays carried rather than rebuilt.
+  await act(async () => controller.undo());
+  assert.equal(xOf(controller.doc, "a"), 0);
+  assert.deepEqual(ids(controller.doc), ["a", "b"]);
+  assert.equal(controller.canUndo, false);
+});
+
+test("closing while still loading disposes immediately and ignores late load settlement", async () => {
+  let rejectLoad!: (error: Error) => void;
+  calls = installBotTestIpc({
+    "designCanvas:get": () =>
+      new Promise<DesignCanvas>((_resolve, reject) => {
+        rejectLoad = reject;
+      }),
+    "designCanvas:save": () => ({ ok: true, revision: 1 }),
+  });
+
+  const view = render(<Probe chatId="chat-1" />);
+  await settle();
+  assert.equal(controller.status, "loading");
+  view.unmount();
+  await settle();
+
+  rejectLoad(new Error("aborted"));
+  await settle();
+  assert.equal(saves().length, 0);
+  assert.equal(document.documentElement.dataset.aidenDirty ?? "0", "0");
+});
+
+test("reducer: closed retry backoff schedule, cancellation on flush/dispose, and double-conflict recovery", () => {
+  const initialDoc = canvas(4, note("a"));
+  let state = createInitialDesignCanvasSyncState();
+  state = reduceDesignCanvasSync(state, { type: "load_succeeded", doc: initialDoc }).state;
+  assert.equal(selectDesignCanvasView(state).status, "ready");
+  assert.deepEqual(selectDesignCanvasGuard(state), { dirty: false, saving: false });
+
+  // Edit schedules an 800 ms debounce timer and marks the guard dirty.
+  const edit = reduceDesignCanvasSync(state, { type: "change", mutate: addNote("b"), recordHistory: true });
+  state = edit.state;
+  assert.deepEqual(edit.effects, [{ type: "schedule_timer", timer: { kind: "debounce", delayMs: DESIGN_CANVAS_SAVE_DELAY_MS } }]);
+  assert.deepEqual(selectDesignCanvasGuard(state), { dirty: true, saving: false });
+
+  // Disposing with unsent edits cancels the debounce timer, unsubscribes, and starts an immediate close save.
+  const closing = reduceDesignCanvasSync(state, { type: "dispose" });
+  state = closing.state;
+  assert.equal(state.lifecycle, "closing");
+  assert.deepEqual(
+    closing.effects.map((effect) => effect.type),
+    ["unsubscribe", "cancel_timer", "start_save"],
+  );
+  assert.deepEqual(selectDesignCanvasGuard(state), { dirty: false, saving: true });
+
+  // Calling dispose again while closing is a no-op.
+  assert.deepEqual(reduceDesignCanvasSync(state, { type: "dispose" }).effects, []);
+
+  // Walk through every retry backoff delay in DESIGN_CANVAS_CLOSED_RETRY_MS.
+  const scheduledDelays: number[] = [];
+  for (let index = 0; index < DESIGN_CANVAS_CLOSED_RETRY_MS.length; index += 1) {
+    const failed = reduceDesignCanvasSync(state, { type: "save_failed" });
+    state = failed.state;
+    assert.equal(failed.effects.length, 1);
+    assert.equal(failed.effects[0]!.type, "schedule_timer");
+    if (failed.effects[0]!.type === "schedule_timer") {
+      assert.equal(failed.effects[0]!.timer.kind, "closed_retry");
+      scheduledDelays.push(failed.effects[0]!.timer.delayMs);
+    }
+    const retry = reduceDesignCanvasSync(state, { type: "closed_retry_fired" });
+    state = retry.state;
+    assert.deepEqual(
+      retry.effects.map((effect) => effect.type),
+      ["start_save"],
+    );
+  }
+  assert.deepEqual(scheduledDelays, [...DESIGN_CANVAS_CLOSED_RETRY_MS]);
+
+  // After the final retry fails, backoff is exhausted: no more timers, guard stays dirty.
+  const exhausted = reduceDesignCanvasSync(state, { type: "save_failed" });
+  state = exhausted.state;
+  assert.deepEqual(exhausted.effects, []);
+  assert.equal(state.lifecycle, "closing");
+  assert.equal(state.timer, null);
+  assert.deepEqual(selectDesignCanvasGuard(state), { dirty: true, saving: false });
+
+  // A subsequent lifecycle flush that conflicts twice re-enters error without looping, then succeeds on next flush.
+  const flush1 = reduceDesignCanvasSync(state, { type: "flush_requested" });
+  state = flush1.state;
+  assert.deepEqual(
+    flush1.effects.map((effect) => effect.type),
+    ["start_save"],
+  );
+  const conflict1 = reduceDesignCanvasSync(state, { type: "save_conflicted", doc: canvas(5, note("a"), note("c")) });
+  state = conflict1.state;
+  assert.deepEqual(
+    conflict1.effects.map((effect) => effect.type),
+    ["start_save"],
+  );
+  const conflict2 = reduceDesignCanvasSync(state, {
+    type: "save_conflicted",
+    doc: canvas(6, note("a"), note("c"), note("d")),
+  });
+  state = conflict2.state;
+  assert.deepEqual(conflict2.effects, [], "exhausted closed session does not restart backoff on double conflict");
+  assert.equal(isDesignCanvasFlushComplete(state), false);
+
+  const flush2 = reduceDesignCanvasSync(state, { type: "flush_requested" });
+  state = flush2.state;
+  const saved = reduceDesignCanvasSync(state, { type: "save_succeeded", revision: 7 });
+  state = saved.state;
+  assert.equal(state.lifecycle, "disposed");
+  assert.deepEqual(saved.effects, [{ type: "finish" }]);
+  assert.deepEqual(selectDesignCanvasGuard(state), { dirty: false, saving: false });
+  assert.equal(isDesignCanvasFlushComplete(state), true);
+
+  // Late timer events after disposal are strictly ignored.
+  assert.deepEqual(reduceDesignCanvasSync(state, { type: "closed_retry_fired" }).effects, []);
+  assert.deepEqual(reduceDesignCanvasSync(state, { type: "debounce_fired" }).effects, []);
+});
+
+test("reducer: flush during closed retry backoff cancels the pending retry timer and finishes on save", () => {
+  let state = createInitialDesignCanvasSyncState();
+  state = reduceDesignCanvasSync(state, { type: "load_succeeded", doc: canvas(4, note("a")) }).state;
+  state = reduceDesignCanvasSync(state, { type: "change", mutate: addNote("b"), recordHistory: true }).state;
+  state = reduceDesignCanvasSync(state, { type: "dispose" }).state;
+  state = reduceDesignCanvasSync(state, { type: "save_failed" }).state;
+  assert.equal(state.timer?.kind, "closed_retry");
+
+  const flush = reduceDesignCanvasSync(state, { type: "flush_requested" });
+  state = flush.state;
+  assert.deepEqual(
+    flush.effects.map((effect) => effect.type),
+    ["cancel_timer", "start_save"],
+  );
+  assert.equal(state.timer, null);
+
+  const done = reduceDesignCanvasSync(state, { type: "save_succeeded", revision: 5 });
+  state = done.state;
+  assert.equal(state.lifecycle, "disposed");
+  assert.deepEqual(done.effects, [{ type: "finish" }]);
+});
+
+test("reducer: late revision announcement settles unsettled history and forgets old revision entries", () => {
+  let state = createInitialDesignCanvasSyncState();
+  state = reduceDesignCanvasSync(state, { type: "load_succeeded", doc: canvas(4, note("a")) }).state;
+  // Announce revision 5 as reply-1, then refetch directly to revision 6 before revision 6 is announced.
+  const ann5 = reduceDesignCanvasSync(state, { type: "announcement", revision: 5, aidenTurn: "reply-1" });
+  state = ann5.state;
+  assert.deepEqual(ann5.effects, [{ type: "refetch" }]);
+
+  const fetch6 = reduceDesignCanvasSync(state, {
+    type: "refetch_succeeded",
+    doc: canvas(6, note("a"), note("b", 400)),
+  });
+  state = fetch6.state;
+  assert.ok(state.unsettled !== null, "history waits for revision 6's announcement");
+  assert.equal(selectDesignCanvasView(state).canUndo, false);
+
+  // Late announcement for revision 6 with the same reply settles unsettled history into one undo step.
+  const ann6 = reduceDesignCanvasSync(state, { type: "announcement", revision: 6, aidenTurn: "reply-1" });
+  state = ann6.state;
+  assert.deepEqual(ann6.effects, [], "already-held revision does not trigger a refetch");
+  assert.equal(state.unsettled, null, "unsettled history settled once all revisions were announced");
+  assert.equal(state.aidenRevisions.size, 0, "old revision announcements pruned after settling");
+  assert.equal(selectDesignCanvasView(state).canUndo, true);
 });
