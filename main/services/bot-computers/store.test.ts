@@ -60,4 +60,17 @@ test("the guest driver flag is kept for a base and its computers only when it is
   assert.equal(parsed.computers.cy?.guestDriver, undefined);
   // Without a base there is nothing the flag could describe.
   assert.equal(parseBotComputersState({ setup: { guestDriver: driver } }).setup.guestDriver, undefined);
+
+  // Linux bases allow /home/<user> guest homes and maxRunning up to 4.
+  const linuxDriver = { version: "0.38.0", home: "/home/lume", uid: 1000 };
+  const linuxParsed = parseBotComputersState({
+    settings: { maxRunning: 4, idleStopMinutes: 10 },
+    setup: { baseBuild: "20261123-2671", guestDriver: linuxDriver },
+    computers: {
+      ada: { vmName: `aiden-bot-${"d".repeat(16)}`, baseBuild: "20261123-2671", createdAt: 4, guestDriver: linuxDriver },
+    },
+  });
+  assert.equal(linuxParsed.settings.maxRunning, 4);
+  assert.deepEqual(linuxParsed.setup.guestDriver, linuxDriver);
+  assert.deepEqual(linuxParsed.computers.ada?.guestDriver, linuxDriver);
 });

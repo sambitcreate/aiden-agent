@@ -59,7 +59,7 @@ function guestDriver(value: unknown): BotComputerGuestDriverRecord | undefined {
   if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
   const { version, home, uid } = value as Record<string, unknown>;
   if (typeof version !== "string" || !/^\d{1,4}\.\d{1,4}\.\d{1,6}$/u.test(version)) return undefined;
-  if (typeof home !== "string" || !/^\/Users\/[A-Za-z0-9._-]{1,64}$/u.test(home)) return undefined;
+  if (typeof home !== "string" || !/^\/(?:Users|home)\/[A-Za-z0-9._-]{1,64}$/u.test(home)) return undefined;
   if (typeof uid !== "number" || !Number.isSafeInteger(uid) || uid < 0 || uid > 9_999_999) return undefined;
   return { version, home, uid };
 }
@@ -71,7 +71,14 @@ export function parseBotComputersState(value: unknown): BotComputersState {
   const input = value as Record<string, unknown>;
   const settings = input.settings as Record<string, unknown> | undefined;
   if (settings && typeof settings === "object") {
-    if (settings.maxRunning === 1 || settings.maxRunning === 2) state.settings.maxRunning = settings.maxRunning;
+    if (
+      settings.maxRunning === 1 ||
+      settings.maxRunning === 2 ||
+      settings.maxRunning === 3 ||
+      settings.maxRunning === 4
+    ) {
+      state.settings.maxRunning = settings.maxRunning;
+    }
     if ((BOT_COMPUTER_IDLE_STOP_CHOICES as readonly unknown[]).includes(settings.idleStopMinutes)) {
       state.settings.idleStopMinutes = settings.idleStopMinutes as number;
     }

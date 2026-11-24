@@ -3,6 +3,7 @@ import test from "node:test";
 
 import {
   BOT_COMPUTER_LINUX_APT_SNAPSHOT,
+  BOT_COMPUTER_LINUX_BASE_SIZE_BYTES,
   BOT_COMPUTER_LINUX_DISK_BYTES,
   BOT_COMPUTER_LINUX_IMAGE,
   BOT_COMPUTER_LINUX_MEMORY_BYTES,
@@ -10,6 +11,7 @@ import {
   BOT_COMPUTER_RESTORE_IMAGE,
   compareMacosVersions,
   hostMacosSupportsBotComputers,
+  hostMacosSupportsLinuxBotComputers,
 } from "./release.js";
 import { BOT_COMPUTERS_LINUX_FLAG, botComputersLinuxEnabled } from "./linux-feature-flag.js";
 
@@ -56,6 +58,13 @@ test("the Linux image pin is a fixed Debian 13 generic arm64 raw URL with verifi
   assert.ok(Number.isSafeInteger(BOT_COMPUTER_LINUX_IMAGE.bytes) && BOT_COMPUTER_LINUX_IMAGE.bytes >= 1024 ** 3);
   assert.ok(BOT_COMPUTER_LINUX_DISK_BYTES >= BOT_COMPUTER_LINUX_IMAGE.bytes);
   assert.equal(BOT_COMPUTER_LINUX_MEMORY_BYTES, 4 * 1024 ** 3);
+  assert.equal(BOT_COMPUTER_LINUX_BASE_SIZE_BYTES, 8_000_000_000);
+  assert.equal(hostMacosSupportsLinuxBotComputers("13.6.1"), false);
+  assert.equal(hostMacosSupportsLinuxBotComputers("14.0"), true);
+  assert.equal(hostMacosSupportsLinuxBotComputers("15.7.1"), true);
+  assert.equal(hostMacosSupportsLinuxBotComputers("26.0"), true);
+  assert.equal(hostMacosSupportsLinuxBotComputers(undefined), false);
+  assert.equal(hostMacosSupportsLinuxBotComputers("garbage"), false);
   assert.ok(Object.isFrozen(BOT_COMPUTER_LINUX_IMAGE));
 
   const archive = new URL(BOT_COMPUTER_LINUX_APT_SNAPSHOT.archiveUrl);

@@ -209,3 +209,88 @@ test("a stalled download stops with a resumable message", async () => {
     server.close();
   }
 });
+
+test("Linux downloader follows bounded HTTPS redirects to mirrors, keeps Range, and refuses HTTP downgrades or loops", async () => {
+  const dir = path.join(mkdtempSync(path.join(tmpdir(), "p8-linux-img-")), "restore-images");
+  const linuxPin = pin("https://cloud.debian.org/images/cloud/trixie/20261123-2671/debian-13-generic-arm64-20261123-2671.raw", {
+    version: "13",
+    build: "20261123-2671",
+  });
+  const visited: { url: string; redirect?: RequestRedirect; range: string | null }[] = [];
+  const fetchImpl = (async (input: string | URL | Request, init?: RequestInit) => {
+    const url = String(input);
+    const range = new Headers(init?.headers).get("range");
+    visited.push({ url, redirect: init?.redirect, range });
+    if (url.startsWith("https://cloud.debian.org/")) {
+      return new Response(null, {
+        status: 302,
+        headers: { location: "https://mirror.debian.org/debian-13-generic-arm64-20261123-2671.raw" },
+      });
+    }
+    if (url.startsWith("https://mirror.debian.org/")) {
+      const from = range ? Number(/^bytes=(\d+)-$/u.exec(range)?.[1] ?? "0") : 0;
+      return new Response(new Uint8Array(body.subarray(from)), {
+        status: from > 0 ? 206 : 200,
+        headers: from > 0 ? { "content-range": `bytes ${from}-${body.length - 1}/${body.length}` } : undefined,
+      });
+    }
+    return new Response(null, { status: 404 });
+  }) as typeof fetch;
+
+  const downloader = createRestoreImageDownloader({
+    dir,
+    image: linuxPin,
+    filename: "debian-20261123-2671.raw",
+    label: "Debian Linux",
+    serverLabel: "Debian's download server",
+    allowHttpsRedirects: true,
+    fetchImpl,
+    freeDiskBytes: async () => 1e12,
+    reserveBytes: 1024,
+    progressIntervalMs: 0,
+  });
+
+  // Seed partial to verify Range survives the HTTPS redirect hop.
+  mkdirSync(dir, { recursive: true });
+  writeFileSync(downloader.paths().partial, body.subarray(0, 4096));
+  const file = await downloader.download();
+  assert.equal(path.basename(file), "debian-20261123-2671.raw");
+  assert.equal(statSync(file).mode & 0o777, 0o600);
+  assert.deepEqual(readFileSync(file), body);
+  assert.deepEqual(visited, [
+    { url: linuxPin.url, redirect: "manual", range: "bytes=4096-" },
+    { url: "https://mirror.debian.org/debian-13-generic-arm64-20261123-2671.raw", redirect: "manual", range: "bytes=4096-" },
+  ]);
+
+  // Downgrade to http:// is strictly refused.
+  const downgrade = createRestoreImageDownloader({
+    dir: path.join(mkdtempSync(path.join(tmpdir(), "p8-linux-http-")), "restore-images"),
+    image: linuxPin,
+    filename: "debian-20261123-2671.raw",
+    label: "Debian Linux",
+    allowHttpsRedirects: true,
+    fetchImpl: (async () => new Response(null, { status: 302, headers: { location: "http://insecure.mirror/debian.raw" } })) as typeof fetch,
+    freeDiskBytes: async () => 1e12,
+    reserveBytes: 1024,
+  });
+  await assert.rejects(
+    downgrade.download(),
+    (error: unknown) => error instanceof BotComputerError && error.code === "download_failed" && /insecure address/u.test(error.message),
+  );
+
+  // Redirect loops are bounded.
+  const loop = createRestoreImageDownloader({
+    dir: path.join(mkdtempSync(path.join(tmpdir(), "p8-linux-loop-")), "restore-images"),
+    image: linuxPin,
+    filename: "debian-20261123-2671.raw",
+    label: "Debian Linux",
+    allowHttpsRedirects: true,
+    fetchImpl: (async () => new Response(null, { status: 302, headers: { location: "https://mirror.debian.org/loop.raw" } })) as typeof fetch,
+    freeDiskBytes: async () => 1e12,
+    reserveBytes: 1024,
+  });
+  await assert.rejects(
+    loop.download(),
+    (error: unknown) => error instanceof BotComputerError && error.code === "download_failed" && /too many times/u.test(error.message),
+  );
+});

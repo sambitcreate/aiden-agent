@@ -98,6 +98,11 @@ function harness(overrides: Partial<BotComputerHostDependencies> = {}) {
       writeFileSync(`${file}.pub`, "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIAidenKeyForBotComputerProvisioningTests012345678 aiden\n");
       return done;
     }
+    if (command.endsWith("ssh-keyscan")) {
+      const targetIp = args[args.length - 1] ?? "";
+      const guest = Object.values(fakeState().vms).find((vm) => vm.ip === targetIp);
+      return { ...done, stdout: `${targetIp} ${guest?.hostKey ?? HOST_KEY}\n` };
+    }
     sshCalls.push({ args, stdin: options.stdin, stdinFile: options.stdinFile });
     // As ssh with StrictHostKeyChecking=yes: the guest's own host key must be pinned under the alias.
     const address = args[args.indexOf("--") + 1];
@@ -1777,4 +1782,194 @@ test("a finished Set up counts once, and one that failed counts nothing", async 
     await analyticsSettled();
     assert.deepEqual(sent, [{ event: "bot_computer_set_up", props: { element_control: false } }]);
   });
+});
+
+test("Linux Set up downloads via HTTPS mirror redirect, creates and provisions a Linux base with no permissions step, and cleans up", async () => {
+  const linuxRaw = Buffer.from("fake Debian 13 generic arm64 raw disk image\n".repeat(64));
+  const linuxImage = {
+    version: "13",
+    build: "20261123-2671",
+    url: "https://cloud.debian.org/images/cloud/trixie/20261123-2671/debian-13-generic-arm64-20261123-2671.raw",
+    bytes: linuxRaw.length,
+    sha256: createHash("sha256").update(linuxRaw).digest("hex"),
+  };
+  const mirrorUrl = "https://mirror.debian.org/images/debian-13-generic-arm64-20261123-2671.raw";
+  const observedSteps: string[] = [];
+  const fetched: { url: string; redirect?: RequestRedirect }[] = [];
+
+  await withHost(
+    async (context) => {
+      const before = await context.host.status();
+      assert.equal(before.requirements.guestOs, "linux");
+      assert.equal(before.requirements.maxRunningLimit, 4);
+      assert.equal(before.requirements.memoryPerComputerBytes, 4 * 1024 ** 3);
+      assert.equal(before.requirements.baseDiskBytes, 8_000_000_000);
+
+      context.host.onChange(() => {
+        void context.host.status().then((next) => {
+          if (next.setup.kind === "building_base") observedSteps.push(next.setup.step);
+        });
+      });
+
+      await setUp(context);
+      const status = await context.host.status();
+      assert.deepEqual(status.setup, {
+        kind: "ready",
+        baseVersion: "13",
+        baseBuild: "20261123-2671",
+        updateAvailable: false,
+      });
+      assert.equal(observedSteps.includes("permissions"), false, "Linux setup has no macOS permissions step");
+      assert.deepEqual(fetched, [
+        { url: linuxImage.url, redirect: "manual" },
+        { url: mirrorUrl, redirect: "manual" },
+      ]);
+
+      const cliCalls = context.calls().filter((call) => call.kind === "cli");
+      const createCall = cliCalls.find((call) => call.op === "create");
+      assert.equal(createCall?.args?.[createCall.args.indexOf("--os") + 1], "linux");
+      assert.equal(createCall?.args?.[createCall.args.indexOf("--memory") + 1], "4GB");
+      assert.equal(createCall?.args?.[createCall.args.indexOf("--disk-size") + 1], "24GB");
+      assert.equal(createCall?.args?.[createCall.args.indexOf("--display") + 1], "1280x800");
+      assert.equal(createCall?.args?.includes("--ipsw"), false);
+
+      const runCall = cliCalls.find((call) => call.op === "run");
+      assert.ok(runCall?.args?.includes("--mount"), "first Linux boot mounts the CIDATA seed ISO");
+      const mountedIso = runCall?.args?.[runCall.args.indexOf("--mount") + 1] ?? "";
+      assert.equal(existsSync(mountedIso), false, "temporary CIDATA seed ISO is deleted after base build");
+
+      assert.equal(context.calls().filter((call) => call.kind === "ssh").length, 0, "Linux provisioning never uses password lume ssh");
+      assert.ok(context.sshCalls.length >= 6, "provisioning runs over key-based system ssh");
+      const stored = context.secrets.get(BOT_COMPUTER_GUEST_PASSWORD_SECRET);
+      assert.match(stored ?? "", /^[A-Za-z0-9]{32}$/u);
+      assert.ok(context.sshCalls.every((call) => !call.args.some((arg) => arg.includes(stored ?? "<none>"))));
+      assert.equal(readFileSync(path.join(context.root, "known_hosts"), "utf8"), `aiden-bot-computer ${HOST_KEY}\n`);
+      assert.equal(existsSync(path.join(context.root, "restore-images", "debian-20261123-2671.raw")), false);
+      assert.equal(context.vmRunning(BOT_COMPUTER_BASE_VM), false);
+
+      // setUpElementControl is a no-op on Linux (no macOS permission flow).
+      const beforeElementControl = context.calls().length;
+      await context.host.setUpElementControl();
+      assert.equal(context.calls().length, beforeElementControl);
+    },
+    {
+      env: { LANG: "en_US.UTF-8", AIDEN_BOT_COMPUTERS_LINUX: "1" },
+      image: linuxImage,
+      fetchImpl: (async (url: string | URL | Request, init?: RequestInit) => {
+        const href = String(url);
+        fetched.push({ url: href, redirect: init?.redirect });
+        if (href === linuxImage.url) {
+          return new Response(null, { status: 302, headers: { location: mirrorUrl } });
+        }
+        return new Response(new Uint8Array(linuxRaw));
+      }) as typeof fetch,
+    },
+  );
+});
+
+test("Linux Update base builds aiden-base-next, swaps cleanly, and marks existing Bot computers outdated until Reset", async () => {
+  const firstRaw = Buffer.from("debian build 1\n".repeat(64));
+  const secondRaw = Buffer.from("debian build 2\n".repeat(64));
+  const firstImage = {
+    version: "13",
+    build: "20261101-1001",
+    url: "https://cloud.debian.org/images/debian-1.raw",
+    bytes: firstRaw.length,
+    sha256: createHash("sha256").update(firstRaw).digest("hex"),
+  };
+  const secondImage = {
+    version: "13",
+    build: "20261123-2671",
+    url: "https://cloud.debian.org/images/debian-2.raw",
+    bytes: secondRaw.length,
+    sha256: createHash("sha256").update(secondRaw).digest("hex"),
+  };
+
+  await withHost(
+    async (context) => {
+      context.serve(firstImage.url, firstRaw);
+      context.serve(secondImage.url, secondRaw);
+      await setUp(context);
+      await context.host.give("ada");
+
+      const updatedHost = context.relaunch({ linux: true, image: secondImage });
+      const before = await updatedHost.status();
+      assert.equal(before.setup.kind === "ready" && before.setup.updateAvailable, true);
+
+      await updatedHost.updateBase();
+      const after = await updatedHost.status();
+      assert.deepEqual(after.setup, {
+        kind: "ready",
+        baseVersion: "13",
+        baseBuild: "20261123-2671",
+        updateAvailable: false,
+      });
+      assert.equal((await updatedHost.computer("ada"))?.outdated, true);
+      assert.equal(context.vmNames().includes("aiden-base-next"), false, "staging base removed after swap");
+      assert.equal(context.vmNames().includes(BOT_COMPUTER_BASE_VM), true);
+
+      const reset = await updatedHost.reset("ada");
+      assert.equal(reset.outdated, false);
+      assert.equal(reset.baseBuild, "20261123-2671");
+    },
+    { linux: true, image: firstImage },
+  );
+});
+
+test("Linux mode scales maxRunning up to 4 with host free memory and enforces the 2 GB minimum floor", async () => {
+  const linuxRaw = Buffer.from("debian concurrency image\n".repeat(64));
+  const linuxImage = {
+    version: "13",
+    build: "20261123-2671",
+    url: "https://cloud.debian.org/images/debian.raw",
+    bytes: linuxRaw.length,
+    sha256: createHash("sha256").update(linuxRaw).digest("hex"),
+  };
+  let freeMem = 64 * 1024 ** 3;
+
+  await withHost(
+    async (context) => {
+      context.serve(linuxImage.url, linuxRaw);
+      await setUp(context);
+
+      // 64 GiB available → limit is 4; all four Bots can run at once.
+      assert.equal((await context.host.status()).requirements.maxRunningLimit, 4);
+      const updated = await context.host.updateSettings({ maxRunning: 4 });
+      assert.equal(updated.maxRunning, 4);
+      await assert.rejects(context.host.updateSettings({ maxRunning: 5 as 4 }), /At most 4/u);
+
+      for (const botId of ["ada", "ben", "cyd", "dan"]) {
+        await context.host.give(botId);
+        await context.host.ensureRunning(botId, { reason: "tool" });
+      }
+      for (const botId of ["ada", "ben", "cyd", "dan"]) {
+        assert.equal((await context.host.computer(botId))?.state, "running", `${botId} runs concurrently`);
+        await context.host.stop(botId, { reason: "person" });
+      }
+
+      // 10 GiB available → limit drops to 2; setting maxRunning to 3 is refused.
+      freeMem = 10 * 1024 ** 3;
+      assert.equal((await context.host.status()).requirements.maxRunningLimit, 2);
+      await assert.rejects(context.host.updateSettings({ maxRunning: 3 }), /one or two/u);
+
+      // 3 GiB available (above 2 GiB minimum, below 4 GiB) → limit is 1 and the first Linux VM still starts.
+      freeMem = 3 * 1024 ** 3;
+      assert.equal((await context.host.status()).requirements.maxRunningLimit, 1);
+      await context.host.ensureRunning("ada", { reason: "tool" });
+      assert.equal((await context.host.computer("ada"))?.state, "running");
+      await context.host.stop("ada", { reason: "person" });
+
+      // 1 GiB available (below 2 GiB minimum) → starting even one Linux VM is refused with low_memory.
+      freeMem = 1 * 1024 ** 3;
+      await assert.rejects(
+        context.host.ensureRunning("ada", { reason: "tool" }),
+        (error: unknown) => error instanceof BotComputerError && error.code === "low_memory",
+      );
+    },
+    {
+      linux: true,
+      image: linuxImage,
+      resources: { freeDiskBytes: async () => 1e13, availableMemoryBytes: async () => freeMem },
+    },
+  );
 });

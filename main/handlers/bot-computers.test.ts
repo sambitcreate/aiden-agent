@@ -293,3 +293,39 @@ test("the pointer is the Bot's last action point, or null before it acted", asyn
   assert.deepEqual(await invoke(BOT_COMPUTER_CHANNELS.pointer, BOT), { x: 512, y: 300, width: 1024, height: 768 });
   await assert.rejects(invoke(BOT_COMPUTER_CHANNELS.pointer, "../escape"), /Invalid bot id/u);
 });
+
+test("Linux host maxRunningLimit up to 4 is honored by updateSettings while values above it are refused", async () => {
+  const control = createBotComputerControl();
+  const fake = fakeHost(control);
+  const originalStatus = fake.host.status;
+  fake.host.status = async () => ({
+    ...(await originalStatus()),
+    requirements: {
+      downloadBytes: 3_221_225_472,
+      baseDiskBytes: 8_000_000_000,
+      setupFreeBytes: 20_401_094_656,
+      memoryPerComputerBytes: 4 * 1024 ** 3,
+      baseVersion: "13",
+      guestOs: "linux",
+      maxRunningLimit: 4,
+    },
+  });
+  const { viewer } = fakeViewer();
+  const handlers = new Map<string, (event: unknown, ...args: unknown[]) => unknown>();
+  registerBotComputerHandlers({
+    handle: (channel, handler) => handlers.set(channel, handler),
+    host: fake.host,
+    viewer,
+    control,
+    sessions: { lastPointer: () => undefined },
+    broadcast: () => undefined,
+    botExists: async () => true,
+  });
+  const invoke = (channel: string, ...args: unknown[]) => Promise.resolve(handlers.get(channel)!.call(null, {}, ...args));
+  await assert.rejects(invoke(BOT_COMPUTER_CHANNELS.updateSettings, { maxRunning: 5 }));
+  assert.deepEqual(fake.reached, []);
+  assert.deepEqual(await invoke(BOT_COMPUTER_CHANNELS.updateSettings, { maxRunning: 4 }), {
+    maxRunning: 4,
+    idleStopMinutes: 10,
+  });
+});

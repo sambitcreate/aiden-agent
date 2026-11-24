@@ -239,3 +239,44 @@ export async function writeKnownHost(paths: GuestSshPaths, hostPublicKey: string
   const lines = pinned.includes(line) ? pinned : [...pinned, line];
   await writeFileAtomic(paths.knownHosts, `${lines.join("\n")}\n`, { mode: 0o600, mkdirMode: 0o700 });
 }
+
+/**
+ * Scan the guest's ed25519 SSH host key over Lume's private VM network during
+ * Linux base provisioning, before pinning it into `known_hosts`.
+ */
+export async function scanGuestHostKey(
+  host: string,
+  options: {
+    env: Record<string, string>;
+    run?: ProcessRunner;
+    keyscanCommand?: string;
+    timeoutSeconds?: number;
+    signal?: AbortSignal;
+  },
+): Promise<string> {
+  if (isIP(host) === 0) throw new BotComputerError("invalid", "The computer's address is not an IP address.");
+  const timeoutSeconds = Math.max(1, Math.min(30, options.timeoutSeconds ?? 10));
+  const run = options.run ?? runBoundedProcess;
+  const result = await run(
+    options.keyscanCommand ?? "/usr/bin/ssh-keyscan",
+    ["-t", "ed25519", "-T", String(timeoutSeconds), host],
+    {
+      env: options.env,
+      signal: options.signal,
+      timeoutMs: (timeoutSeconds + 5) * 1_000,
+      maxStdoutBytes: 16 * 1024,
+      maxStderrBytes: 16 * 1024,
+      overflow: "fail",
+    },
+  );
+  if (result.exitCode !== 0 || result.timedOut) {
+    throw new BotComputerError("start_failed", "The base computer did not report its SSH host key.");
+  }
+  for (const rawLine of result.stdout.split(/\r?\n/u)) {
+    const trimmed = rawLine.trim();
+    if (!trimmed || trimmed.startsWith("#")) continue;
+    const match = /^\S+\s+(ssh-ed25519\s+\S+(?:\s+[\x20-\x7e]{0,100})?)$/u.exec(trimmed);
+    if (match?.[1]) return parsePublicKey(match[1]);
+  }
+  throw new BotComputerError("start_failed", "The base computer did not report its SSH host key.");
+}
