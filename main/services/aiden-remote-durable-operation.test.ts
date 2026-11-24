@@ -17,6 +17,7 @@ import {
   AidenOperationReplayedRejection,
   AidenOperationReplaySafeRetryError,
   AidenOperationUnknownOutcomeError,
+  assertRevision,
   type AidenIdempotencySnapshot,
 } from "./aiden-remote-operation-contract.js";
 import { AIDEN_REMOTE_ERROR_CODES, type AidenRemoteErrorCode } from "./aiden-remote-protocol.js";
@@ -771,7 +772,6 @@ test("mutation-failure-ambiguity fixture matches executeAidenDurableOperation, A
     "idempotency_in_flight",
     "operation_in_progress",
     "internal_error",
-    "revision_conflict",
     "server_interrupted",
   ]) {
     assert.equal(recognized.has(forbidden), false, `${forbidden} must never be in recognizedBeforeEffectCodes`);
@@ -853,16 +853,23 @@ test("mutation-failure-ambiguity fixture matches executeAidenDurableOperation, A
       case "replayed_revision_conflict": {
         const ledger = new AidenIdempotencyLedger();
         const durable = owner(ledger, async () => undefined);
+        const thing = { revision: "r2", writes: 0 };
         let effects = 0;
-        await executeAidenDurableOperation(durable, SCOPE, { v: 1 }, async () => {
+        const casWrite = async () => {
           effects += 1;
-          throw new AidenOperationContractError("revision_conflict");
-        }).catch(() => undefined);
-        const error = await executeAidenDurableOperation(durable, SCOPE, { v: 1 }, async () => (effects += 1))
+          assertRevision("r1", thing.revision);
+          thing.writes += 1;
+        };
+        const first = await executeAidenDurableOperation(durable, SCOPE, { v: 1 }, casWrite)
+          .then(() => assert.fail("expected revision_conflict"), mapDurableRouteError);
+        assert.equal(first.status, 409);
+        assert.equal(first.code, "revision_conflict");
+        const error = await executeAidenDurableOperation(durable, SCOPE, { v: 1 }, casWrite)
           .then(() => assert.fail("expected replayed revision_conflict"), (caught) => {
             assert.ok(caught instanceof AidenOperationReplayedRejection);
             return mapDurableRouteError(caught);
           });
+        assert.equal(thing.writes, 0, "revision_conflict is refused before anything is written");
         return { error, effects };
       }
       case "replayed_internal_error": {
@@ -963,4 +970,68 @@ test("mutation-failure-ambiguity fixture matches executeAidenDurableOperation, A
       assert.equal(result.effects, 1, `${row.name}: cached rejection replay must not re-run effect`);
     }
   }
+});
+
+test("a 409 revision_conflict proves nothing was written, so the client drops the key and a fresh one commits", async () => {
+  const ledger = new AidenIdempotencyLedger();
+  const durable = owner(ledger, async () => undefined);
+  const thing = { revision: "r1", value: "original", runs: 0 };
+  const write = (expected: string, value: string) => async () => {
+    thing.runs += 1;
+    assertRevision(expected, thing.revision);
+    thing.value = value;
+    thing.revision = `r${Number(thing.revision.slice(1)) + 1}`;
+    return thing.revision;
+  };
+
+  // Another client moves the revision first.
+  assert.equal(await executeAidenDurableOperation(durable, OTHER_SCOPE, { value: "theirs" }, write("r1", "theirs")), "r2");
+
+  const stale = await executeAidenDurableOperation(durable, SCOPE, { value: "mine" }, write("r1", "mine"))
+    .then(() => assert.fail("expected revision_conflict"), mapDurableRouteError);
+  assert.equal(stale.status, 409);
+  assert.equal(stale.code, "revision_conflict");
+  assert.deepEqual(thing, { revision: "r2", value: "theirs", runs: 2 }, "the refused write changed nothing");
+
+  // The key is spent: reusing it only replays the refusal and never runs again.
+  await assert.rejects(
+    executeAidenDurableOperation(durable, SCOPE, { value: "mine" }, write("r2", "mine")),
+    (error: unknown) => error instanceof AidenOperationReplayedRejection && error.code === "revision_conflict",
+  );
+  assert.equal(thing.runs, 2);
+
+  // A fresh key with the current revision commits once.
+  const fresh = { ...SCOPE, key: "operation-key-0003" };
+  assert.equal(await executeAidenDurableOperation(durable, fresh, { value: "mine" }, write("r2", "mine")), "r3");
+  assert.deepEqual(thing, { revision: "r3", value: "mine", runs: 3 });
+});
+
+test("a same-key retry after an unknown outcome stays in flight and never turns into revision_conflict", async () => {
+  const ledger = new AidenIdempotencyLedger();
+  let saves = 0;
+  const durable = owner(ledger, async () => {
+    saves += 1;
+    if (saves === 2) throw new Error("disk lost");
+  });
+  const thing = { revision: "r1", runs: 0 };
+  const write = async () => {
+    thing.runs += 1;
+    assertRevision("r1", thing.revision);
+    thing.revision = "r2";
+    return thing.revision;
+  };
+
+  // The write commits, but its outcome cannot be recorded.
+  const unknown = await executeAidenDurableOperation(durable, SCOPE, { value: "mine" }, write)
+    .then(() => assert.fail("expected an unknown outcome"), mapDurableRouteError);
+  assert.equal(unknown.code, "idempotency_in_flight");
+  assert.equal(thing.revision, "r2");
+
+  // Re-running the stale write would now fail its own revision check. The ledger
+  // never re-runs it, so the retry cannot report the attempt's own commit as a conflict.
+  const retried = await executeAidenDurableOperation(durable, SCOPE, { value: "mine" }, write)
+    .then(() => assert.fail("expected the unknown outcome again"), mapDurableRouteError);
+  assert.equal(retried.status, 409);
+  assert.equal(retried.code, "idempotency_in_flight");
+  assert.equal(thing.runs, 1);
 });
