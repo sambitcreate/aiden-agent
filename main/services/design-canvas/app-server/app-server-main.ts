@@ -362,7 +362,7 @@ export class DesignAppServers {
     return { run: jobId, ...(await this.deps.jobs.readDesignLog(jobId, { after: 0, maxBytes })), truncated: true };
   }
 
-  /** D4: the person turned design mode on; starts the configured roots or the single web app. Fire and forget. */
+  /** D4: the person turned design mode on; starts the configured roots together, or the single web app. Fire and forget. */
   designModeEntered(input: { chatId: string; workspaceId: string; owner: DesignAppConsentOwner }): void {
     void (async () => {
       if (!this.available() || !isDesktopOwner(input.owner)) return;
@@ -370,9 +370,12 @@ export class DesignAppServers {
       const workspace = await this.deps.workspace(input.workspaceId);
       if (!runnable(workspace)) return;
       const cached = await this.detectFor(workspace.id, workspace.path);
-      for (const appRoot of this.toggleRoots(cached.detection, cached.config)) {
-        await this.start({ workspaceId: workspace.id, appRoot, by: "person", chatId: input.chatId, owner: input.owner, permission: workspace.permission });
-      }
+      // Every configured root starts at once, each with its own card: one waiting card never holds up the others.
+      await Promise.all(
+        this.toggleRoots(cached.detection, cached.config).map((appRoot) =>
+          this.start({ workspaceId: workspace.id, appRoot, by: "person", chatId: input.chatId, owner: input.owner, permission: workspace.permission }),
+        ),
+      );
     })().catch((error: unknown) => this.deps.log?.("design-app-toggle-failed", { error: String(error) }));
   }
 

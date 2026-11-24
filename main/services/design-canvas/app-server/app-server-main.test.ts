@@ -1149,24 +1149,28 @@ test("designModeEntered with two web apps and no described roots starts nothing,
   assert.deepEqual(snapshot.candidates.map((candidate) => candidate.appRoot), ["apps/a", "apps/b"]);
 });
 
-test("described roots in .aiden/canvas.json start in turn, each with its own card; a designMd-only entry describes nothing", async (t) => {
+test("described roots in .aiden/canvas.json start together, each with its own card; a designMd-only entry describes nothing", async (t) => {
   const h = harness(t, {
     apps: [webApp({ root: "apps/a" }), webApp({ root: "apps/b", scripts: ["dev", "start"] }), webApp({ root: "apps/c" })],
     config: { version: 1, apps: [{ root: "apps/b", script: "start" }, { root: "apps/a", script: "dev" }, { root: "apps/c", designMd: "DESIGN.md" }] },
   });
   h.servers.designModeEntered({ chatId: "chat-1", workspaceId: "ws", owner: h.owner });
   await settle();
-  assert.equal(h.openCard()?.appRoot, "apps/b");
-  assert.equal(h.openCard()?.runCommand, "npm run start");
-  await h.answer("allow");
-  await h.makeReady();
-  assert.equal(h.openCard()?.appRoot, "apps/a");
-  await h.answer("allow");
-  await h.makeReady();
+  const cards = h.cards();
+  assert.deepEqual(cards.map((card) => card.appRoot), ["apps/b", "apps/a"], "both cards are open at once, not one after the other");
+  assert.equal(cards[0]!.runCommand, "npm run start");
+  // Answering the second card first starts its app without waiting on the first.
+  assert.equal(h.consent.answer(String(cards[1]!.requestId), "allow", h.owner), true);
   await settle();
-  assert.equal(h.cards().length, 2);
-  assert.deepEqual(h.jobs.jobs.map((job) => job.input.appRoot), ["apps/b", "apps/a"]);
-  assert.deepEqual(h.jobs.jobs[0]!.input.argv.args.slice(0, 2), ["run", "start"]);
+  assert.deepEqual(h.jobs.jobs.map((job) => job.input.appRoot), ["apps/a"]);
+  await h.makeReady();
+  assert.equal(h.consent.answer(String(cards[0]!.requestId), "allow", h.owner), true);
+  await settle();
+  await h.makeReady();
+  assert.deepEqual(h.jobs.jobs.map((job) => job.input.appRoot), ["apps/a", "apps/b"]);
+  assert.deepEqual(h.jobs.jobs[1]!.input.argv.args.slice(0, 2), ["run", "start"]);
+  assert.equal(h.latest("apps/a")?.phase, "running");
+  assert.equal(h.latest("apps/b")?.phase, "running");
   assert.deepEqual((await h.servers.snapshot("ws")).chosen, ["apps/b", "apps/a"]);
 });
 
