@@ -21,6 +21,7 @@ import type {
   DesignAppConsentClosed,
   DesignAppConsentRequest,
   DesignAppLogs,
+  DesignAppRunningScan,
   DesignAppsSnapshot,
   DesignAppStatus,
 } from "../shared/design-app";
@@ -2904,6 +2905,13 @@ export const designAppApi = {
   /** The server's own output from `after` in `run`, at most 64 KiB. Untrusted text. A stale run or cursor reads the latest run from its start. */
   logs: (chatId: string, appRoot: string, options: { after?: number; run?: string } = {}) =>
     invoke<DesignAppLogs>("designApp:logs", chatId, appRoot, options),
+  /** 2c: the person's own running servers in the chat's workspace. Read only when asked. */
+  running: (chatId: string) => invoke<DesignAppRunningScan>("designApp:running", chatId),
+  /** 2c: connect to a row from `running`. Main checks the pick again before anything attaches. */
+  connect: (chatId: string, pick: { port: number; pid: number }) =>
+    invoke<DesignAppStatus>("designApp:connect", chatId, { port: pick.port, pid: pick.pid }),
+  /** 2c: the right next step after a failure; main decides whether to reinstall or which script to run. */
+  retry: (chatId: string, appRoot: string) => invoke<DesignAppStatus>("designApp:retry", chatId, appRoot),
   /** The person's answer to a run-app card. False when the card no longer waits. */
   answerConsent: (requestId: string, answer: DesignAppConsentAnswer) =>
     invoke<boolean>("designApp:consentAnswer", requestId, answer),

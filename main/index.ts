@@ -272,7 +272,12 @@ setUnavailableCommandCapabilities((["createImages", "designMode"] as const).filt
 
 // Design mode's live apps run as background jobs; llm-client loads
 // follow-through lazily, so main connects the two here instead of an import.
-connectDesignAppJobs({ jobs: backgroundJobs, onJobChange: onDesignJobChange });
+connectDesignAppJobs({
+  jobs: backgroundJobs,
+  onJobChange: onDesignJobChange,
+  ownedPids: (rows) => backgroundJobs.ownedPids(rows),
+  terminalShellPids: () => terminalService.shellPids(),
+});
 
 const ownsSingleInstanceLock = app.requestSingleInstanceLock();
 

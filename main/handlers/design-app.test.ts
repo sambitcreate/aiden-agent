@@ -4,9 +4,9 @@
 import assert from "node:assert/strict";
 import { EventEmitter } from "node:events";
 import test from "node:test";
-import type { DesignAppsSnapshot, DesignAppStatus } from "../../renderer/shared/design-app.js";
+import type { DesignAppRunningScan, DesignAppsSnapshot, DesignAppStatus } from "../../renderer/shared/design-app.js";
 import { DesignAppConsent } from "../services/design-canvas/app-server/app-consent.js";
-import type { DesignAppChooseInput, DesignAppStartInput } from "../services/design-canvas/app-server/app-server-main.js";
+import type { DesignAppChooseInput, DesignAppConnectInput, DesignAppStartInput } from "../services/design-canvas/app-server/app-server-main.js";
 import { rendererDocumentOwner } from "../services/renderer-document-owner.js";
 import { createDesignModeCardEnter, registerDesignAppHandlers, type DesignAppHandlerDeps } from "./design-app.js";
 
@@ -82,6 +82,18 @@ function harness(options: { enabled?: boolean } = {}) {
         calls.push({ method: "logs", input: { workspaceId, appRoot, ...logOptions } });
         return { text: "ready", from: 0, next: 5, end: 5, truncated: false };
       },
+      running: async (input) => {
+        calls.push({ method: "running", input });
+        return SCAN;
+      },
+      connect: async (input: DesignAppConnectInput) => {
+        calls.push({ method: "connect", input });
+        return status({ source: "attached" });
+      },
+      retry: async (input: DesignAppStartInput & { appRoot: string }) => {
+        calls.push({ method: "retry", input });
+        return status();
+      },
     },
     consent,
   };
@@ -101,7 +113,17 @@ const PERSON_CHANNELS: Array<[string, unknown[]]> = [
   ["designApp:restart", ["site-chat", ".", {}]],
   ["designApp:choose", ["site-chat", "."]],
   ["designApp:logs", ["site-chat", ".", {}]],
+  ["designApp:running", ["site-chat"]],
+  ["designApp:connect", ["site-chat", { port: 5173, pid: 300 }]],
+  ["designApp:retry", ["site-chat", "."]],
 ];
+
+const SCAN: DesignAppRunningScan = {
+  workspaceId: "site",
+  ok: true,
+  incomplete: false,
+  servers: [{ port: 5173, pid: 300, origin: "http://127.0.0.1:5173", appRoot: ".", folder: ".", processName: "vite", connectable: true }],
+};
 
 test("every designApp channel is registered, and every handler refuses while the flag is off", async () => {
   const on = harness();
@@ -243,4 +265,72 @@ test("Enter on Aiden's design-mode card starts the workspace's app for the answe
   await enter(false)(owner)("site-chat");
   assert.equal(entered.length, 1, "with the flag off nothing starts");
   assert.deepEqual(broadcasts, ["site-chat", "site-chat"], "design mode turns on either way");
+});
+
+test("running, connect and retry refuse a subframe, a Bot chat, a missing chat and a chat whose workspace has no folder", async () => {
+  const { invoke, calls } = harness();
+  const window = windowContents(1);
+  const channels = PERSON_CHANNELS.filter(([channel]) => ["designApp:running", "designApp:connect", "designApp:retry"].includes(channel));
+  for (const [channel, args] of channels) {
+    await assert.rejects(Promise.resolve(invoke(channel, window.fromSubframe, ...args)), /Active renderer required/u, channel);
+    for (const chatId of ["bot-chat", "routine-chat", "missing-chat", "folderless-chat"]) {
+      await assert.rejects(Promise.resolve(invoke(channel, window.fromMain, chatId, ...args.slice(1))), Error, `${channel} ${chatId}`);
+    }
+  }
+  assert.deepEqual(calls, []);
+});
+
+test("connect takes only a whole port from 1 to 65535 and a positive whole pid", async () => {
+  const { invoke, calls } = harness();
+  const window = windowContents(1);
+  const bad: unknown[] = [
+    undefined,
+    null,
+    "5173",
+    [5173, 300],
+    { port: "5173", pid: 300 },
+    { port: 5173.5, pid: 300 },
+    { port: 0, pid: 300 },
+    { port: 70_000, pid: 300 },
+    { port: -1, pid: 300 },
+    { port: 5173 },
+    { port: 5173, pid: 0 },
+    { port: 5173, pid: -4 },
+    { port: 5173, pid: 1.5 },
+    { port: 5173, pid: "300" },
+    { port: 5173, pid: Number.MAX_SAFE_INTEGER + 2 },
+  ];
+  for (const pick of bad) {
+    await assert.rejects(Promise.resolve(invoke("designApp:connect", window.fromMain, "site-chat", pick)), Error, JSON.stringify(pick));
+  }
+  assert.deepEqual(calls, []);
+  await invoke("designApp:connect", window.fromMain, "site-chat", { port: 65_535, pid: 1 });
+  assert.equal(calls.length, 1);
+});
+
+test("retry checks the app root like restart", async () => {
+  const { invoke, calls } = harness();
+  const window = windowContents(1);
+  for (const root of [undefined, 5, "", "../x", "/etc", "apps/../x", "apps\\web"]) {
+    await assert.rejects(Promise.resolve(invoke("designApp:retry", window.fromMain, "site-chat", root)), Error, String(root));
+  }
+  assert.deepEqual(calls, []);
+});
+
+test("connect and retry pass by person, the sender's document owner and the workspace permission; running returns the scan", async () => {
+  const { invoke, calls } = harness();
+  const window = windowContents(4);
+  const documentId = rendererDocumentOwner(window.fromMain, () => new Error("x")).documentId;
+  const connected = (await invoke("designApp:connect", window.fromMain, "site-chat", { port: 5173, pid: 300 })) as DesignAppStatus;
+  assert.equal(connected.source, "attached");
+  await invoke("designApp:retry", window.fromMain, "site-chat", "apps/web");
+  assert.deepEqual(await invoke("designApp:running", window.fromMain, "site-chat"), SCAN);
+  const [connect, retry, running] = calls as Array<{ method: string; input: Record<string, unknown> & { owner?: { id: number; documentId: string } } }>;
+  assert.deepEqual(
+    { ...connect!.input, owner: undefined },
+    { workspaceId: "site", chatId: "site-chat", by: "person", owner: undefined, permission: "ask", port: 5173, pid: 300 },
+  );
+  assert.deepEqual([connect!.input.owner?.id, connect!.input.owner?.documentId], [4, documentId]);
+  assert.deepEqual([retry!.method, retry!.input.appRoot, retry!.input.by, retry!.input.permission, retry!.input.owner?.id], ["retry", "apps/web", "person", "ask", 4]);
+  assert.deepEqual([running!.method, running!.input.workspaceId, running!.input.permission, running!.input.owner?.documentId], ["running", "site", "ask", documentId]);
 });
