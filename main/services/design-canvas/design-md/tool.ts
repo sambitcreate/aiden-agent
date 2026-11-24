@@ -66,8 +66,8 @@ const answer = (headValue: Record<string, unknown>, ...rest: string[]): ToolResu
 
 class DesignSystemToolError extends Error {}
 
-/** A safe app root that exists as a real folder inside the workspace. */
-async function checkedAppRoot(workspaceRoot: string, value: unknown): Promise<string> {
+/** A safe app root that exists as a real folder inside the workspace (R1); the IPC uses it too. */
+export async function checkedAppRoot(workspaceRoot: string, value: unknown): Promise<string> {
   const refusal = 'appRoot must be "." or a workspace-relative folder such as apps/web, inside the workspace.';
   if (!isSafeWorkspaceRelativePath(value)) throw new DesignSystemToolError(refusal);
   try {

@@ -41,6 +41,10 @@ import { isHtmlArtifactMediaId } from "../../renderer/shared/generative-ui.js";
 import { isWorkspaceArtifactWorkspaceId } from "../../renderer/shared/workspace-artifacts.js";
 import { ARTIFACT_FRAME_BOX } from "../services/design-canvas/artifact-frames.js";
 import type { DesignGrantRegistry } from "../services/design-canvas/grants.js";
+import { readCanvasConfig } from "../services/design-canvas/canvas-config.js";
+import { locateDesignMd, type DesignAppRoots } from "../services/design-canvas/design-md/locate.js";
+import type { DesignMdReader, DesignMdSummary } from "../services/design-canvas/design-md/reader.js";
+import { checkedAppRoot } from "../services/design-canvas/design-md/tool.js";
 import { designTurnPages, type DesignCanvasViews } from "../services/design-canvas/views.js";
 import { validateGenerativeUiHtml } from "../services/generative-ui-html.js";
 import { replaceWorkspaceText } from "../services/design-canvas/text-write.js";
@@ -125,6 +129,23 @@ const PICK_FILTER_NAMES: Readonly<Record<DesignCanvasPickKind, string>> = {
   file: "Web pages",
   image: "Images",
 };
+
+/**
+ * `designCanvas:designSystem` reply (S41, R9): the app's DESIGN.md state with
+ * at most 50 findings, or `unavailable`. Read only; it sends no event.
+ */
+export type DesignCanvasDesignSystemResult =
+  | {
+      status: string;
+      appRoot: string;
+      path?: string;
+      summary?: DesignMdSummary;
+      sections?: string[];
+      findings?: { severity: string; rule?: string; path?: string; message: string }[];
+    }
+  | { error: "unavailable" };
+
+const DESIGN_SYSTEM_MAX_FINDINGS = 50;
 
 /** `designCanvas:export` reply. */
 export type DesignCanvasExportResult =
@@ -279,6 +300,15 @@ export function registerDesignCanvasHandlers<Event>(deps: {
   artifactTitle(chatId: string, mediaId: string): Promise<string | undefined>;
   /** New frame ids; tests pin them. */
   newId?: () => string;
+  /**
+   * DESIGN.md reads for `designCanvas:designSystem`, behind the live flag
+   * (`enabled`). Left out, the channel answers `unavailable`.
+   */
+  designMd?: {
+    enabled(): boolean;
+    reader: Pick<DesignMdReader, "read">;
+    appRoots: DesignAppRoots;
+  };
 }): void {
   if (!deps.enabled()) return;
 
@@ -492,6 +522,52 @@ export function registerDesignCanvasHandlers<Event>(deps: {
       return { error: "unavailable" };
     }
     return { grant };
+  });
+
+  // The app's DESIGN.md for a workspace chat, read only (S41, R9). Like
+  // designCanvas:get it doesn't need design mode on; it never writes, and it
+  // reads with report: false, so it sends no event.
+  deps.handle("designCanvas:designSystem", async (_event, request): Promise<DesignCanvasDesignSystemResult> => {
+    if (!deps.enabled()) throw new Error(UNAVAILABLE);
+    if (typeof request !== "object" || request === null || Array.isArray(request)) {
+      throw new Error("Invalid design system request.");
+    }
+    const { chatId, appRoot } = request as { chatId?: unknown; appRoot?: unknown };
+    assertDesignCanvasChatId(chatId);
+    const unavailable = { error: "unavailable" } as const;
+    const designMd = deps.designMd;
+    if (!designMd?.enabled()) return unavailable;
+    const chat = await deps.getChat(chatId);
+    if (!chat || !attended(chat)) return unavailable;
+    const root = await deps.workspaceRoot(chat);
+    if (!root) return unavailable;
+    const config = await readCanvasConfig(root);
+    let app: string;
+    try {
+      app = await checkedAppRoot(
+        root,
+        appRoot === undefined ? ((await designMd.appRoots(root, { config })).roots[0] ?? ".") : appRoot,
+      );
+    } catch {
+      return unavailable;
+    }
+    const state = await designMd.reader.read(root, await locateDesignMd(root, app, config), { report: false });
+    if (state.status !== "ok") {
+      return { status: state.status, appRoot: app, ...("path" in state ? { path: state.path } : {}) };
+    }
+    return {
+      status: "ok",
+      appRoot: app,
+      path: state.path,
+      summary: state.summary,
+      sections: state.sections,
+      findings: state.findings.slice(0, DESIGN_SYSTEM_MAX_FINDINGS).map((finding) => ({
+        severity: finding.severity,
+        ...(finding.rule ? { rule: finding.rule } : {}),
+        ...(finding.path ? { path: finding.path } : {}),
+        message: finding.message,
+      })),
+    };
   });
 
   // Replaces the set of workspace files whose changes reload this chat's frames.

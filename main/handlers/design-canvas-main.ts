@@ -12,13 +12,15 @@ import {
   designGrants,
   designCanvasSnapshots,
   designModeConsent,
+  designAppRoots,
+  designMdReader,
 } from "../services/design-canvas/main.js";
 import { chatApplicationService } from "../services/chat-application-service-main.js";
 import { renderDesignFrame } from "../services/design-canvas/frame-render.js";
 import { exportStoredHtmlArtifact, wrapStoredHtmlArtifact } from "../services/gui-artifact-recovery.js";
 import { generativeUiArtifactStore } from "../services/generative-ui-artifact-store.js";
 import { rendererDocumentOwner } from "../services/renderer-document-owner.js";
-import { designModeEnabled } from "../services/studio/feature-flags.js";
+import { designLiveEnabled, designModeEnabled } from "../services/studio/feature-flags.js";
 import { registerDesignCanvasHandlers } from "./design-canvas.js";
 
 /** Windows whose reload, crash or destruction already unmounts every canvas view. */
@@ -47,6 +49,7 @@ export function registerDesignCanvasIpc(): void {
   });
   registerDesignCanvasHandlers<Electron.IpcMainInvokeEvent>({
     enabled: () => designModeEnabled(),
+    designMd: { enabled: () => designLiveEnabled(), reader: designMdReader, appRoots: designAppRoots },
     handle: (channel, handler) => ipcMain.handle(channel, handler),
     store: designCanvasStore,
     broadcast: broadcastDesignCanvasUpdate,

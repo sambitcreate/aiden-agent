@@ -8,6 +8,7 @@ import {
   type DesignCanvas,
 } from "../../renderer/shared/design-canvas/schema.js";
 import { DesignGrantRegistry } from "../services/design-canvas/grants.js";
+import { DesignMdReader } from "../services/design-canvas/design-md/reader.js";
 import { DesignCanvasStore, DesignChatCanvases } from "../services/design-canvas/store.js";
 import { DesignCanvasViews } from "../services/design-canvas/views.js";
 import { persistedChatWorkspaceId } from "../../renderer/shared/chat-workspace.js";
@@ -59,6 +60,7 @@ async function fixture(
     artifacts?: Record<string, string>;
     artifactHtml?: Record<string, string>;
     artifactTitles?: Record<string, string>;
+    designMd?: Parameters<typeof registerDesignCanvasHandlers>[0]["designMd"];
   } = {},
 ) {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-design-canvas-handlers-"));
@@ -151,6 +153,7 @@ async function fixture(
       artifactExports.push(`${chatId}/${mediaId}`);
       return { saved: true, canceled: false };
     },
+    ...(options.designMd ? { designMd: options.designMd } : {}),
   });
   const invokeFrom = async (event: unknown, channel: string, ...args: unknown[]) => {
     const handler = handlers.get(channel);
@@ -1144,4 +1147,92 @@ test("Send to canvas is refused in a Bot or routine chat and reports a full canv
     })),
   }));
   assert.deepEqual(await invoke("designCanvas:placeArtifact", "chat-1", "media-1"), { error: "full" });
+});
+
+/** A workspace folder holding the linter's valid fixture as its DESIGN.md, with an `apps/web` folder. */
+async function designMdWorkspace(t: TestContext): Promise<string> {
+  const workspace = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-design-md-ipc-"));
+  t.after(() => fs.rm(workspace, { recursive: true, force: true }));
+  const valid = await fs.readFile(new URL("../services/design-canvas/design-md/fixtures/valid.md", import.meta.url), "utf8");
+  await fs.writeFile(path.join(workspace, "DESIGN.md"), valid);
+  await fs.mkdir(path.join(workspace, "apps", "web"), { recursive: true });
+  return workspace;
+}
+
+/** A listing of every file under `folder` with its size and mtime, to show nothing was written. */
+async function listing(folder: string): Promise<string[]> {
+  const entries = await fs.readdir(folder, { recursive: true, withFileTypes: true });
+  return Promise.all(
+    entries.map(async (entry) => {
+      const full = path.join(entry.parentPath, entry.name);
+      const info = await fs.stat(full);
+      return `${path.relative(folder, full)} ${info.size} ${info.mtimeMs}`;
+    }),
+  ).then((rows) => rows.sort());
+}
+
+function designMdDeps(options: { live?: () => boolean; events?: unknown[] } = {}) {
+  return {
+    enabled: options.live ?? (() => true),
+    reader: new DesignMdReader({ report: (event, props) => options.events?.push({ event, props }) }),
+    appRoots: async () => ({ roots: ["."], more: 0 }),
+  };
+}
+
+test("designSystem answers for an attended workspace chat with the flag on", async (t) => {
+  const workspace = await designMdWorkspace(t);
+  const { invoke } = await fixture(t, { roots: { "workspace-1": workspace }, designMd: designMdDeps() });
+  const answer = (await invoke("designCanvas:designSystem", { chatId: "chat-1" })) as Record<string, any>;
+  assert.equal(answer.status, "ok");
+  assert.equal(answer.path, "DESIGN.md");
+  assert.equal(answer.appRoot, ".");
+  assert.equal(answer.summary.errors, 0);
+  assert.equal(answer.sections[0], "Overview");
+  assert.ok(Array.isArray(answer.findings) && answer.findings.length <= 50);
+  const nested = (await invoke("designCanvas:designSystem", { chatId: "chat-1", appRoot: "apps/web" })) as Record<string, any>;
+  assert.equal(nested.status, "ok");
+  assert.equal(nested.appRoot, "apps/web");
+  assert.equal(nested.path, "DESIGN.md", "an app without its own DESIGN.md uses the workspace's");
+});
+
+test("designSystem refuses with the flag off, for an unknown, Bot, owner or folderless chat, and for an unsafe appRoot", async (t) => {
+  const workspace = await designMdWorkspace(t);
+  let live = false;
+  const { invoke } = await fixture(t, {
+    chats: {
+      "chat-1": { id: "chat-1", workspaceId: "workspace-1", designMode: true },
+      bot: { id: "bot", workspaceId: "workspace-1", designMode: true, botId: "bot-1" },
+      owned: { id: "owned", workspaceId: "workspace-1", owner: { kind: "routine" } as unknown as DesignCanvasChat["owner"] },
+      folderless: { id: "folderless", workspaceId: "workspace-2", designMode: true },
+    },
+    roots: { "workspace-1": workspace, "workspace-2": null },
+    designMd: designMdDeps({ live: () => live }),
+  });
+  const unavailable = { error: "unavailable" };
+  assert.deepEqual(await invoke("designCanvas:designSystem", { chatId: "chat-1" }), unavailable, "the live flag is off");
+  live = true;
+  for (const chatId of ["missing", "bot", "owned", "folderless"]) {
+    assert.deepEqual(await invoke("designCanvas:designSystem", { chatId }), unavailable, chatId);
+  }
+  for (const appRoot of ["../outside", "/etc", "apps/missing", "DESIGN.md", 'a"b', 7]) {
+    assert.deepEqual(await invoke("designCanvas:designSystem", { chatId: "chat-1", appRoot }), unavailable, String(appRoot));
+  }
+  for (const request of [null, "chat-1", [], { chatId: 3 }]) {
+    await assert.rejects(Promise.resolve().then(() => invoke("designCanvas:designSystem", request)), /Invalid|chat/iu);
+  }
+});
+
+test("designSystem works with design mode off, writes nothing, and sends no analytics event", async (t) => {
+  const workspace = await designMdWorkspace(t);
+  const events: unknown[] = [];
+  const { invoke } = await fixture(t, {
+    chats: { "chat-1": { id: "chat-1", workspaceId: "workspace-1" } },
+    roots: { "workspace-1": workspace },
+    designMd: designMdDeps({ events }),
+  });
+  const before = await listing(workspace);
+  const answer = (await invoke("designCanvas:designSystem", { chatId: "chat-1" })) as Record<string, any>;
+  assert.equal(answer.status, "ok");
+  assert.deepEqual(await listing(workspace), before);
+  assert.deepEqual(events, []);
 });

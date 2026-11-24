@@ -182,6 +182,10 @@ jobs:
         if: ${{ steps.version.outputs.publish == 'true' }}
         run: npm run test:e2e:diagnostics:packaged
 
+      - name: Verify the DESIGN.md linter in the signed packaged app
+        if: ${{ steps.version.outputs.publish == 'true' }}
+        run: npm run test:design-md:packaged
+
       - name: Stage verified macOS release assets
         if: ${{ steps.version.outputs.publish == 'true' }}
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02

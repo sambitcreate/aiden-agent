@@ -11,6 +11,8 @@ import { listPackage } from "@electron/asar";
 import { verifyAidenFuses } from "./configure-electron-fuses.mjs";
 import { verifyPackagedRendererCsp } from "./verify-renderer-csp.mjs";
 import {
+  DESIGN_MD_BUILD_FILE_RULES,
+  verifyPackagedDesignMdLinter,
   verifyPackagedModelCatalogResources,
   verifyPackagedLocalSpeechWorker,
   verifyPackagedSpeechResources,
@@ -200,6 +202,10 @@ export function assertLinuxBuildConfiguration(packageJson) {
   if (typeof packageJson.license !== "string" || !packageJson.license.trim()) {
     throw new Error("Linux package metadata must declare the repository license.");
   }
+  const files = new Set((build.files ?? []).filter((entry) => typeof entry === "string"));
+  for (const rule of DESIGN_MD_BUILD_FILE_RULES) {
+    if (!files.has(rule)) throw new Error(`build.files must leave out the DESIGN.md CLI files: ${rule} is missing.`);
+  }
   if (build.toolsets?.appimage !== "1.0.3") {
     throw new Error(
       "Linux AppImage packages must use the pinned static runtime toolset.",
@@ -346,6 +352,7 @@ export async function verifyLinuxPackage(appDirectory) {
   await verifyPackagedSlimness(asar);
   await verifyPackagedSubagentInferenceWorker(asar);
   await verifyPackagedLocalSpeechWorker(asar);
+  await verifyPackagedDesignMdLinter(asar);
   await verifyPackagedSpeechResources(resources);
 
   const architecture = process.arch === "arm64" ? "arm64" : "x64";

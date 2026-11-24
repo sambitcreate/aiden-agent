@@ -1,4 +1,4 @@
-/* global Buffer */
+/* global Buffer, URL */
 
 import assert from "node:assert/strict";
 import {
@@ -60,6 +60,8 @@ import {
   assertLumeArchitecture,
   assertLumeEntitlements,
   verifyPackagedLume,
+  verifyPackagedDesignMdLinter,
+  PACKAGED_DESIGN_MD_ENTRIES,
 } from "./verify-macos-package.mjs";
 import {
   LUME_APP_TREE,
@@ -1039,4 +1041,87 @@ test("package verifier requires Lume's virtualization entitlements and an arm64-
   assert.doesNotThrow(() => assertLumeArchitecture("arm64\n"));
   assert.throws(() => assertLumeArchitecture("x86_64 arm64\n"), /arm64-only/);
   assert.throws(() => assertLumeArchitecture(""), /arm64-only/);
+});
+
+const DESIGN_MD_PACKAGE = "node_modules/@google/design.md";
+const installedDesignMdLinter = new URL("../node_modules/@google/design.md/dist/linter/", import.meta.url);
+
+/**
+ * A fake app.asar source holding the lint worker and the installed linter.
+ * `linter` replaces the linter's index.js; `extra` adds files by path.
+ */
+async function designMdAsarSource(source, { linter, extra = {}, omit = [] } = {}) {
+  const files = {
+    "build/main/design-md-lint-worker.js": "export {};\n",
+    [`${DESIGN_MD_PACKAGE}/package.json`]: JSON.stringify({ name: "@google/design.md", type: "module" }),
+    [`${DESIGN_MD_PACKAGE}/dist/linter/index.js`]:
+      linter ?? (await readFile(new URL("index.js", installedDesignMdLinter), "utf8")),
+    [`${DESIGN_MD_PACKAGE}/dist/linter/spec-config.yaml`]: await readFile(
+      new URL("spec-config.yaml", installedDesignMdLinter),
+      "utf8",
+    ),
+    ...extra,
+  };
+  for (const [name, text] of Object.entries(files)) {
+    if (omit.includes(name)) continue;
+    await mkdir(path.dirname(path.join(source, name)), { recursive: true });
+    await writeFile(path.join(source, name), text);
+  }
+}
+
+async function withDesignMdAsar(name, options, check) {
+  const temporaryRoot = await mkdtemp(path.join(os.tmpdir(), `aiden-design-md-asar-${name}-`));
+  const root = await realpath(temporaryRoot);
+  try {
+    const source = path.join(root, "source");
+    await designMdAsarSource(source, options);
+    const asar = path.join(root, "app.asar");
+    await (options.unpack ? createPackageWithOptions(source, asar, { unpack: options.unpack }) : createPackage(source, asar));
+    await check(asar);
+  } finally {
+    await rm(temporaryRoot, { recursive: true, force: true });
+  }
+}
+
+test("the packaged lint worker and linter must be packed", async () => {
+  await withDesignMdAsar("ok", {}, (asar) => assert.doesNotReject(verifyPackagedDesignMdLinter(asar)));
+  const required = [
+    "build/main/design-md-lint-worker.js",
+    `${DESIGN_MD_PACKAGE}/dist/linter/index.js`,
+    `${DESIGN_MD_PACKAGE}/dist/linter/spec-config.yaml`,
+  ];
+  for (const entry of required) assert.ok(PACKAGED_DESIGN_MD_ENTRIES.includes(entry), `${entry} is required`);
+  for (const entry of required) {
+    const named = new RegExp(entry.replaceAll(".", "\\."), "u");
+    await withDesignMdAsar("missing", { omit: [entry] }, (asar) => assert.rejects(verifyPackagedDesignMdLinter(asar), named));
+    await withDesignMdAsar("empty", { extra: { [entry]: "" } }, (asar) => assert.rejects(verifyPackagedDesignMdLinter(asar), named));
+    await withDesignMdAsar("unpacked", { unpack: `**/${path.basename(entry)}` }, (asar) =>
+      assert.rejects(verifyPackagedDesignMdLinter(asar), named),
+    );
+  }
+});
+
+test("the packaged linter must lint a fixture", async () => {
+  await withDesignMdAsar("throws", { linter: 'export function lint() { throw new Error("broken"); }\n' }, (asar) =>
+    assert.rejects(verifyPackagedDesignMdLinter(asar), /could not lint/u),
+  );
+  await withDesignMdAsar(
+    "wrong",
+    { linter: "export function lint() { return { summary: { errors: 0, warnings: 0, infos: 0 }, findings: [], sections: [] }; }\n" },
+    (asar) => assert.rejects(verifyPackagedDesignMdLinter(asar), /could not lint/u),
+  );
+});
+
+test("the trimmed files must be absent", async () => {
+  for (const extra of [
+    `${DESIGN_MD_PACKAGE}/dist/index.js`,
+    `${DESIGN_MD_PACKAGE}/dist/spec-config.yaml`,
+    `${DESIGN_MD_PACKAGE}/dist/spec.md`,
+    `${DESIGN_MD_PACKAGE}/dist/linter/spec.md`,
+    `${DESIGN_MD_PACKAGE}/node_modules/zod/index.js`,
+  ]) {
+    await withDesignMdAsar("trimmed", { extra: { [extra]: "x" } }, (asar) =>
+      assert.rejects(verifyPackagedDesignMdLinter(asar), /trimmed DESIGN\.md files/u),
+    );
+  }
 });
