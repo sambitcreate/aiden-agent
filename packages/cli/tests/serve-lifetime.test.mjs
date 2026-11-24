@@ -505,6 +505,21 @@ setInterval(() => {}, 1e9);`);
   while (api.pidAlive(started.wrapper) && Date.now() < waitExit) await new Promise((r) => setTimeout(r, 25));
   assert.equal(api.pidAlive(started.wrapper), false, "wrapper leader should have exited and been reaped");
   assert.equal(isRunning(started.grandchild), true, "grandchild survivor should still be running");
+  const mcpGroupsFile = join(box.lock, "mcp-groups.json");
+  const hasRecordedSurvivor = () => {
+    if (!existsSync(mcpGroupsFile)) return false;
+    try {
+      const recorded = JSON.parse(readFileSync(mcpGroupsFile, "utf8"));
+      return Array.isArray(recorded.groupRecords) && recorded.groupRecords.some(
+        (record) => record?.pgid === started.group
+          && Array.isArray(record.survivors)
+          && record.survivors.some((survivor) => survivor?.pid === started.grandchild),
+      );
+    } catch { return false; }
+  };
+  const waitRecorded = Date.now() + 5_000;
+  while (!hasRecordedSurvivor() && Date.now() < waitRecorded) await new Promise((r) => setTimeout(r, 25));
+  assert.equal(hasRecordedSurvivor(), true, "daemon should record orphaned MCP grandchild survivor before force-stop");
   api.atomicJson(join(box.lock, "owner.json"), {
     detached: true,
     pid: daemon.pid,
@@ -527,6 +542,7 @@ test("serve stop fails closed and spares unrelated same-UID leaderless groups ma
   const box = sandbox(t);
   const unrelatedWrapper = join(box.agentDir, "unrelated-wrapper.mjs");
   const stuckDaemon = join(box.agentDir, "stuck-serve-stale-pgid.mjs");
+  const daemonReadyFile = join(box.agentDir, "stuck-daemon.ready");
   mkdirSync(box.lock, { mode: 0o700, recursive: true });
   writeFileSync(unrelatedWrapper, `import { spawn } from "node:child_process"; import { renameSync, writeFileSync } from "node:fs";
 const outFile = process.argv[2];
@@ -534,7 +550,11 @@ const child = spawn(process.execPath, ["-e", "process.on('SIGTERM', () => {}); s
 writeFileSync(outFile + ".tmp", JSON.stringify({ wrapper: process.pid, child: child.pid }));
 renameSync(outFile + ".tmp", outFile);
 process.exit(0);`);
-  writeFileSync(stuckDaemon, `process.on("SIGTERM", () => {}); setInterval(() => {}, 1e9);`);
+  writeFileSync(stuckDaemon, `import { renameSync, writeFileSync } from "node:fs";
+process.on("SIGTERM", () => {});
+writeFileSync(${JSON.stringify(daemonReadyFile + ".tmp")}, "ready");
+renameSync(${JSON.stringify(daemonReadyFile + ".tmp")}, ${JSON.stringify(daemonReadyFile)});
+setInterval(() => {}, 1e9);`);
 
   const spawnUnrelatedLeaderlessGroup = async (label) => {
     const outFile = join(box.agentDir, `${label}.json`);
@@ -564,6 +584,13 @@ process.exit(0);`);
       }
     }
   });
+
+  const daemonReadyDeadline = Date.now() + 10_000;
+  while (!existsSync(daemonReadyFile) && Date.now() < daemonReadyDeadline) {
+    await new Promise((r) => setTimeout(r, 25));
+  }
+  assert.equal(existsSync(daemonReadyFile), true, "stuck daemon failed to install SIGTERM handler in time");
+  assert.equal(isRunning(daemon.pid), true, "stuck daemon should be running");
 
   const waitReaped = Date.now() + 5_000;
   while ((api.pidAlive(groupA.wrapper) || api.pidAlive(groupB.wrapper)) && Date.now() < waitReaped) {
