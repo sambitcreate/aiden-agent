@@ -475,18 +475,15 @@ function LoadedDesignCanvas({
       setPendingFocus(null);
       return;
     }
-    // A fit main did not count is for the page on screen only.
-    if (pendingFocus.focusId === undefined && pendingFocus.pageId !== undefined && pendingFocus.pageId !== latestPage.current) {
-      setPendingFocus(null);
+    // The page the request is for: the one it names, else the one its frames are on.
+    const forPage =
+      pendingFocus.pageId ?? latestDoc.current.frames.find((frame) => pendingFocus.ids.includes(frame.id))?.pageId;
+    if (forPage !== undefined && forPage !== latestPage.current) {
+      // A fit main did not count is for the page on screen only. A counted
+      // request that names no page shows its frames' page.
+      if (pendingFocus.focusId === undefined || pendingFocus.pageId !== undefined) setPendingFocus(null);
+      else showPageOfView(forPage);
       return;
-    }
-    // A request that names no page shows the page its frames are on.
-    if (pendingFocus.pageId === undefined) {
-      const onPage = latestDoc.current.frames.find((frame) => pendingFocus.ids.includes(frame.id))?.pageId;
-      if (onPage !== undefined && onPage !== latestPage.current) {
-        showPageOfView(onPage);
-        return;
-      }
     }
     // Frames Aiden just placed arrive with the next canvas read, and a canvas
     // that just opened has not measured them yet; wait briefly for both.

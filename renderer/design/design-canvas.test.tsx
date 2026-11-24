@@ -526,14 +526,14 @@ test("the canvas opens on the chat's kept page, and on the first page when that 
   assert.ok(screen.getByRole("group", { name: "On home" }));
 });
 
-test("Aiden's focus on frames of another page shows that page; a focus naming no page finds its frames' page", async () => {
+test("Aiden's focus on frames of another page shows that page; a counted focus naming no page finds its frames' page", async () => {
   const { calls } = setup(twoPageCanvas());
   await mount();
   act(() => emitBotTestNotification("designCanvas:focus", { chatId: "chat-1", pageId: "p2", frameIds: ["n2"], focusId: 2 }));
   assert.ok(await screen.findByRole("button", { name: "Page: Pricing" }));
   await waitFor(() => assert.equal(lastViewReport(calls)?.focusId, 2, "the report says the canvas has seen Aiden's page change"), SAVE_WAIT);
 
-  act(() => emitBotTestNotification("designCanvas:focus", { chatId: "chat-1", frameIds: ["n1"] }));
+  act(() => emitBotTestNotification("designCanvas:focus", { chatId: "chat-1", frameIds: ["n1"], focusId: 3 }));
   assert.ok(await screen.findByRole("button", { name: "Page: Home" }));
   assert.ok(await screen.findByRole("group", { name: "On home" }));
 });
@@ -545,6 +545,8 @@ test("a fit main did not count never takes the canvas back to a page a later pag
   act(() => emitBotTestNotification("designCanvas:focus", { chatId: "chat-1", pageId: "p2", frameIds: ["n2"], focusId: 2 }));
   assert.ok(await screen.findByRole("button", { name: "Page: Pricing" }));
   act(() => emitBotTestNotification("designCanvas:focus", { chatId: "chat-1", pageId: "page-1", frameIds: ["n1"] }));
+  // A late fit that names only its frames is held to the page on screen too.
+  act(() => emitBotTestNotification("designCanvas:focus", { chatId: "chat-1", frameIds: ["n1"] }));
   await act(async () => {
     await new Promise((resolve) => setTimeout(resolve, DESIGN_VIEW_REPORT_DELAY_MS + 100));
   });
