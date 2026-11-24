@@ -723,17 +723,18 @@ test("an observer's waiting-run announcements never push a cursor taken at the s
 
 test("a Bot row's Inbox signals hold only what its live summary says", () => {
   const idle = { state: { kind: "idle" } as BotSessionState, needsYou: false, lastReplyAt: null as number | null };
-  assert.deepEqual(hostFeedBotSignals(undefined), {});
-  assert.deepEqual(hostFeedBotSignals(idle), {});
+  const read = { summarized: true };
+  assert.deepEqual(hostFeedBotSignals(undefined), {}, "an unread summary says nothing, not even that the Bot is empty");
+  assert.deepEqual(hostFeedBotSignals(idle), read, "a Bot with no message yet is still marked summarized");
   assert.deepEqual(
     hostFeedBotSignals({ ...idle, needsYou: true, lastReplyAt: 3_000 }),
-    { needsYou: true, lastReplyAt: new Date(3_000).toISOString() },
+    { needsYou: true, lastReplyAt: new Date(3_000).toISOString(), ...read },
   );
   for (const kind of ["interrupted", "model_error"]) {
-    assert.deepEqual(hostFeedBotSignals({ ...idle, state: { kind } as BotSessionState }), { failed: true }, kind);
+    assert.deepEqual(hostFeedBotSignals({ ...idle, state: { kind } as BotSessionState }), { failed: true, ...read }, kind);
   }
-  assert.deepEqual(hostFeedBotSignals({ ...idle, lastReplyAt: -1 }), {}, "a negative time is unknown");
-  assert.deepEqual(hostFeedBotSignals({ ...idle, lastReplyAt: 1.5 }), {}, "a fractional time is unknown");
+  assert.deepEqual(hostFeedBotSignals({ ...idle, lastReplyAt: -1 }), read, "a negative time is unknown");
+  assert.deepEqual(hostFeedBotSignals({ ...idle, lastReplyAt: 1.5 }), read, "a fractional time is unknown");
 });
 
 test("a refresh reads again only the Bots whose own change arrived, and never keeps a failed or overtaken read", async () => {
@@ -791,8 +792,8 @@ test("a refresh reads again only the Bots whose own change arrived, and never ke
 test("a Bot row's preview is the host's own row line, as one plain line a paired Mac can trust", async () => {
   const { parseAidenRemoteHostFeedBot } = await import("./aiden-remote-protocol.js");
   const idle = { state: { kind: "idle" } as BotSessionState, needsYou: false, lastReplyAt: null as number | null };
-  assert.deepEqual(hostFeedBotSignals({ ...idle, preview: null }), {}, "no preview, no key");
-  assert.deepEqual(hostFeedBotSignals({ ...idle, preview: "  \n " }), {}, "a blank preview sends no key");
+  assert.deepEqual(hostFeedBotSignals({ ...idle, preview: null }), { summarized: true }, "no preview, no key");
+  assert.deepEqual(hostFeedBotSignals({ ...idle, preview: "  \n " }), { summarized: true }, "a blank preview sends no key");
   assert.equal(hostFeedBotSignals({ ...idle, preview: "Release moved\nto Friday" }).preview, "Release moved to Friday");
   const long = hostFeedBotSignals({ ...idle, preview: `${"word ".repeat(60)}\u202Eend` }).preview!;
   assert.equal(Array.from(long).length, 140);
