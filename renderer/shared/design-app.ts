@@ -58,6 +58,8 @@ export type DesignAppProblem =
   | { problem: "consent-declined" }
   | { problem: "consent-unanswered" }
   | { problem: "consent-unavailable" }
+  /** Allow on a choose card, but .aiden/canvas.json couldn't take the choice, so nothing ran. */
+  | { problem: "choice-not-saved" }
   | { problem: "job-limit" }
   | { problem: "install-outside-workspace" }
   | { problem: "install-failed"; exitCode: number | null; tail: string }
@@ -232,6 +234,8 @@ export function designAppProblemMessage(problem: DesignAppProblem): string {
       return "Nobody answered the run-app card in time, so the app didn't start.";
     case "consent-unavailable":
       return "There was no Aiden window to ask in, so the app didn't start.";
+    case "choice-not-saved":
+      return "Aiden couldn't save your choice in .aiden/canvas.json (it may be a link, unreadable, or from a newer Aiden), so it didn't start the app.";
     case "job-limit":
       return "Design mode already runs 8 apps. Stop one, then try again.";
     case "install-outside-workspace":

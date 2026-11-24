@@ -339,9 +339,6 @@ export class DesignAppServers {
     const refusal = this.refusal(input.workspaceId, input.appRoot, input);
     if (refusal) return refusal;
     const entry = this.ensure(input.workspaceId, input.appRoot);
-    if (entry.server?.running && input.script !== undefined && entry.status.script !== input.script) {
-      await this.stop(input.workspaceId, input.appRoot);
-    }
     return this.begin(entry, { ...input, choose: { ...(input.script !== undefined ? { script: input.script } : {}) } });
   }
 
@@ -502,11 +499,21 @@ export class DesignAppServers {
     return result;
   }
 
-  /** A new attempt, or the pending one (D2): one card and one job per key. */
+  /**
+   * A new attempt, or the pending one (D2): one card and one job per key. A
+   * choose is never folded into other work: it waits for a pending attempt,
+   * and on a running app it stops it and starts again through its own
+   * choose card, which is what saves the choice.
+   */
   private begin(entry: Entry, input: AttemptInput): Promise<DesignAppStatus> {
     const created = entry.queue.then(() => {
-      if (entry.attempt) return { promise: entry.attempt.promise };
-      if (entry.server?.running) return { promise: Promise.resolve({ ...entry.status }) };
+      if (entry.attempt) {
+        const pending = entry.attempt.promise;
+        return { promise: input.choose ? pending.then(() => this.begin(entry, input), () => this.begin(entry, input)) : pending };
+      }
+      if (entry.server?.running) {
+        return { promise: input.choose ? this.chooseOverRunning(entry, input) : Promise.resolve({ ...entry.status }) };
+      }
       const attempt: Attempt = { controller: new AbortController(), promise: Promise.resolve(entry.status) };
       entry.attempt = attempt;
       attempt.promise = this.runAttempt(entry, input, attempt).finally(() => {
@@ -519,6 +526,12 @@ export class DesignAppServers {
       () => undefined,
     );
     return created.then(({ promise }) => promise);
+  }
+
+  private async chooseOverRunning(entry: Entry, input: AttemptInput): Promise<DesignAppStatus> {
+    const keepPort = entry.port;
+    await this.stop(entry.workspaceId, entry.appRoot);
+    return this.begin(entry, { ...input, ...(keepPort !== undefined && input.keepPort === undefined ? { keepPort } : {}) });
   }
 
   private async runAttempt(entry: Entry, input: AttemptInput, attempt: Attempt): Promise<DesignAppStatus> {
@@ -648,13 +661,19 @@ export class DesignAppServers {
         if (!runnable(current)) throw new End({ problem: "no-access" });
         if (current.path !== workspacePath) throw new End({ problem: "interrupted" });
         if (input.choose && !saved) {
-          saved = true;
+          // The card said Allow saves the choice: without the save, nothing runs.
+          let outcome: "saved" | "unknown-version" | "failed";
           try {
-            await race(this.deps.saveConfigApp(workspacePath, { root: entry.appRoot, script: app.script! }, signal), signal);
+            outcome = await race(this.deps.saveConfigApp(workspacePath, { root: entry.appRoot, script: app.script! }, signal), signal);
           } catch (error) {
             if (error instanceof Aborted) throw error;
-            this.deps.log?.("design-app-choice-not-saved", { error: String(error) });
+            outcome = "failed";
           }
+          if (outcome !== "saved") {
+            this.deps.log?.("design-app-choice-not-saved", { outcome });
+            throw new End({ problem: "choice-not-saved" });
+          }
+          saved = true;
         }
         const { env, providerKeys } = this.deps.launchEnv();
         const binDirs = [path.dirname(toolchain.node), path.dirname(toolchain.manager.path)];

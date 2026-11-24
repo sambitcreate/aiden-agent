@@ -1207,6 +1207,57 @@ test("choose shows a card with reason choose and savesChoice, and Allow calls sa
   assert.equal((await chosen).phase, "running");
 });
 
+test("choose while a start's card is open waits for it, then still shows its own choose card and saves", async (t) => {
+  const h = harness(t, { apps: [webApp({ root: "apps/a" }), webApp({ root: "apps/b", scripts: ["dev", "start"] })] });
+  void h.servers.start({ ...h.input(), appRoot: "apps/b" });
+  await settle();
+  assert.equal(h.openCard()?.reason, "first");
+  const chosen = h.servers.choose({ ...h.input(), appRoot: "apps/b", script: "start" });
+  await settle();
+  await h.answer("allow");
+  await h.makeReady();
+  await settle();
+  const card = h.openCard();
+  assert.equal(card?.reason, "choose", "the choice gets its own card once the start settles");
+  assert.equal(card?.savesChoice, true);
+  await h.answer("allow");
+  assert.deepEqual(h.state.saved, [{ root: "apps/b", script: "start" }]);
+  await h.makeReady();
+  const status = await chosen;
+  assert.equal(status.phase, "running");
+  assert.equal(status.script, "start");
+});
+
+test("choose on an app that is already running shows the choose card, saves, and runs it again", async (t) => {
+  const h = harness(t, { apps: [webApp({ root: "apps/a" }), webApp({ root: "apps/b" })] });
+  await h.runApp({ appRoot: "apps/b" });
+  assert.equal(h.latest("apps/b")?.phase, "running");
+  const chosen = h.servers.choose({ ...h.input(), appRoot: "apps/b" });
+  await settle();
+  assert.equal(h.openCard()?.reason, "choose");
+  await h.answer("allow");
+  assert.deepEqual(h.state.saved, [{ root: "apps/b", script: "dev" }]);
+  await h.makeReady();
+  assert.equal((await chosen).phase, "running");
+});
+
+test("when saving the choice fails or meets an unknown version, nothing is spawned and the problem is choice-not-saved", async (t) => {
+  for (const failure of ["unknown-version", "throws"] as const) {
+    const h = harness(t, { apps: [webApp({ root: "apps/a" }), webApp({ root: "apps/b", installed: false })] });
+    h.deps.saveConfigApp = async () => {
+      if (failure === "throws") throw new Error("EACCES");
+      return "unknown-version";
+    };
+    const chosen = h.servers.choose({ ...h.input(), appRoot: "apps/b" });
+    await settle();
+    await h.answer("allow");
+    const status = await chosen;
+    assert.deepEqual(status.problem, { problem: "choice-not-saved" }, failure);
+    assert.equal(status.phase, "stopped", failure);
+    assert.equal(h.jobs.jobs.length, 0, `${failure}: neither the install nor the server ran`);
+  }
+});
+
 test("choose on a react-nonweb or unknown-framework root is refused with not-web", async (t) => {
   const h = harness(t, {
     apps: [
