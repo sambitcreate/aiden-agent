@@ -2,7 +2,9 @@
 
 2026-11-23. Plan: `docs/plans/agent-slider-plan.md`. Prototype: `docs/plans/assets/agent-slider-prototype.html`.
 
-- The owner asked to drop the Model Pad's scores and chart. In its place, one slider with 3 to 7 stops, each a label plus an optional provider, model and thinking level that the person picks. It ships as a six-PR stack: plan, data, slider, editor and Pad removal, scoring backend removal, phones.
+**Status (2026-11-24):** PRs 0–4 merged to main bottom-up with merge commits (#888, #889, #892, #893, #896; main at f7c19a008). PR 5 (phones) is NOT being built from this stack: the owner is building the phone slider by hand, so don't start it unless asked.
+
+- The owner asked to drop the Model Pad's scores and chart. In its place, one slider with 3 to 7 stops, each a label plus an optional provider, model and thinking level that the person picks. It was planned as a six-PR stack: plan, data, slider, editor and Pad removal, scoring backend removal, phones. PRs 0–4 shipped; the phone PR was dropped (see Status above).
 - The plan came from three Opus research plans that were cross-reviewed against each other. They agreed on the following:
   - Effort is stored per chat (`ChatMeta.thinkingLevel`, plus `chats:setModel` taking a level). A stop never writes the global per-model thinking maps, because those maps would leak effort into other chats and collide two stops that use the same model.
   - The active stop is derived from the chat's provider, model and level, never stored. No match means the chat is Custom, and Custom shows `ThinkingControl`.
@@ -14,7 +16,7 @@
   - The slider travels with the portable `~/.aiden/config.json`, which is its only durable home. `settings.json` never holds it; the renderer reads it through a projected field of the settings read.
   - When main clamps an unsupported level, it writes the resolved level back to the chat with a compare-and-set, so a newer selection wins.
   - A one-time, delete-only cleanup of the retired benchmark and Artificial Analysis keys and caches.
-  - Phones are in scope (PR 5).
+  - Phones were in scope as PR 5. Superseded 2026-11-24: the owner builds the phone slider by hand.
   - Quick Chat gets the slider.
   - The onboarding Thinking tile merges into the Agent Slider tile.
   - The home stop is only the ↺ target.
