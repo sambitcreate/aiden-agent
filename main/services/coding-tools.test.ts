@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
 import { execFile } from "node:child_process";
 import fsPromises, * as fs from "node:fs/promises";
 import { runInNewContext } from "node:vm";
@@ -19,6 +20,7 @@ import {
   DISCLOSURE_APPROVAL_TOOL_NAMES,
   runCommandEnv,
   summarizeToolCall,
+  writeConfinedWorkspaceText,
   writeWorkspaceBinaryFile,
 } from "./coding-tools.js";
 import { withCodingToolMatcher } from "./coding-tool-matcher.js";
@@ -3640,4 +3642,72 @@ test("run_command keeps a refused handoff's output flowing and still shows the r
     }
     await fs.rm(root, { recursive: true, force: true });
   }
+});
+
+// ── writeConfinedWorkspaceText: write_file's confined writer for Aiden's own files (design mode's canvas.json) ──
+
+async function confinedRoot(t: test.TestContext): Promise<string> {
+  const root = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), "aiden-confined-")));
+  t.after(() => fs.rm(root, { recursive: true, force: true }));
+  return root;
+}
+
+const sha256Of = (text: string) => createHash("sha256").update(text).digest("hex");
+
+test("writeConfinedWorkspaceText creates parents, refuses a path outside the root, and honours expectedSha256 null as create-only", async (t) => {
+  const root = await confinedRoot(t);
+  await writeConfinedWorkspaceText(root, ".aiden/canvas.json", "{}\n", { expectedSha256: null });
+  assert.equal(await fs.readFile(path.join(root, ".aiden/canvas.json"), "utf8"), "{}\n");
+  await assert.rejects(writeConfinedWorkspaceText(root, ".aiden/canvas.json", "{\"x\":1}", { expectedSha256: null }), /already exists|changed/u);
+  assert.equal(await fs.readFile(path.join(root, ".aiden/canvas.json"), "utf8"), "{}\n");
+  await assert.rejects(writeConfinedWorkspaceText(root, "../escape.txt", "x", {}), /outside the workspace/u);
+  await assert.rejects(writeConfinedWorkspaceText(root, ".aiden/canvas.json", "y", { expectedSha256: sha256Of("other") }), /changed/u);
+  await writeConfinedWorkspaceText(root, ".aiden/canvas.json", "y", { expectedSha256: sha256Of("{}\n") });
+  assert.equal(await fs.readFile(path.join(root, ".aiden/canvas.json"), "utf8"), "y");
+});
+
+test("with followLinks false, a symlinked parent folder or target is refused, even one pointing inside the root, and the target is unchanged", { skip: process.platform === "win32" }, async (t) => {
+  const root = await confinedRoot(t);
+  await fs.mkdir(path.join(root, "real"));
+  await fs.writeFile(path.join(root, "real", "canvas.json"), "inside\n");
+  await fs.symlink(path.join(root, "real"), path.join(root, ".aiden"));
+  await assert.rejects(writeConfinedWorkspaceText(root, ".aiden/canvas.json", "x", { followLinks: false }), /link/u);
+  assert.equal(await fs.readFile(path.join(root, "real", "canvas.json"), "utf8"), "inside\n");
+  await fs.rm(path.join(root, ".aiden"));
+  await fs.mkdir(path.join(root, ".aiden"));
+  await fs.symlink(path.join(root, "real", "canvas.json"), path.join(root, ".aiden", "canvas.json"));
+  await assert.rejects(writeConfinedWorkspaceText(root, ".aiden/canvas.json", "x", { followLinks: false }), /link/u);
+  assert.equal(await fs.readFile(path.join(root, "real", "canvas.json"), "utf8"), "inside\n");
+});
+
+test("with followLinks false, a link swapped in between the check and the commit is still refused", { skip: process.platform === "win32" }, async (t) => {
+  const root = await confinedRoot(t);
+  const target = path.join(root, "elsewhere");
+  await fs.mkdir(target);
+  await fs.mkdir(path.join(root, ".aiden"));
+  await assert.rejects(
+    writeConfinedWorkspaceText(root, ".aiden/canvas.json", "swapped", {
+      followLinks: false,
+      expectedSha256: null,
+      testObserver: {
+        beforeWriteCommit: async () => {
+          await fs.rm(path.join(root, ".aiden"), { recursive: true });
+          await fs.symlink(target, path.join(root, ".aiden"));
+        },
+      },
+    }),
+  );
+  await assert.rejects(fs.access(path.join(target, "canvas.json")), "nothing was written through the link");
+});
+
+test("write_file's behaviour (following in-root links) is unchanged", { skip: process.platform === "win32" }, async (t) => {
+  const root = await confinedRoot(t);
+  await fs.mkdir(path.join(root, "real"));
+  await fs.symlink(path.join(root, "real"), path.join(root, "linked"));
+  const write = buildCodingTools(root).find((tool) => tool.name === "write_file")!;
+  await write.execute("w", { path: "linked/file.txt", content: "through the link" });
+  assert.equal(await fs.readFile(path.join(root, "real", "file.txt"), "utf8"), "through the link");
+  // The same in-root link through the confined writer's default also follows.
+  await writeConfinedWorkspaceText(root, "linked/other.txt", "default follows", {});
+  assert.equal(await fs.readFile(path.join(root, "real", "other.txt"), "utf8"), "default follows");
 });

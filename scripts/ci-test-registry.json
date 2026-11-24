@@ -466,7 +466,9 @@
         "renderer/main/peer-project-clone-dialog.test.tsx",
         "main/services/storage-usage-core.test.ts",
         "main/services/storage-usage.test.ts",
-        "main/services/design-canvas/app-server/app-launch-core.test.ts"
+        "main/services/design-canvas/app-server/app-launch-core.test.ts",
+        "main/services/design-canvas/app-server/app-fingerprint.test.ts",
+        "main/services/design-canvas/app-server/app-records.test.ts"
       ],
       "preserved": [
         "browser"
