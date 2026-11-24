@@ -1,8 +1,6 @@
 package sbtbiswas.AidenOnTheGo.features.chat
 
 import android.content.Context
-import android.os.Handler
-import android.os.Looper
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -45,10 +43,6 @@ import java.util.concurrent.CopyOnWriteArrayList
 import java.util.concurrent.Executors
 import java.util.concurrent.LinkedBlockingQueue
 import java.util.concurrent.TimeUnit
-import kotlin.coroutines.intrinsics.COROUTINE_SUSPENDED
-import kotlin.coroutines.intrinsics.intercepted
-import kotlin.coroutines.intrinsics.suspendCoroutineUninterceptedOrReturn
-import kotlin.coroutines.resume
 import javax.net.ssl.KeyManagerFactory
 import javax.net.ssl.SSLContext
 import sbtbiswas.AidenOnTheGo.auth.InMemoryAidenSecureStore
@@ -64,7 +58,6 @@ class AidenBrowserRecordingOwnershipUiTest {
     @get:Rule
     val compose = createComposeRule()
     private val instrumentation get() = InstrumentationRegistry.getInstrumentation()
-    private val mainThread = Handler(Looper.getMainLooper())
     private val visible = mutableStateOf(true)
     private val releaseFiles = CopyOnWriteArrayList<File>()
     private val requested = CountDownLatch(1)
@@ -200,12 +193,11 @@ class AidenBrowserRecordingOwnershipUiTest {
      * The test composition's dispatcher is unconfined, so the card would otherwise adopt its
      * file on the download thread, racing its main-thread disposal and finishing after
      * [finishWithoutFrame]'s main-thread sync. On a device the card resumes on the main thread.
-     * Always suspends, and resumes even when the card was cancelled, so a late delivery still
-     * reaches the disposed owner.
+     * Hops through the coroutine library, which handles a resume that races the suspension, and
+     * ignores cancellation, so a late delivery still reaches the disposed owner.
      */
-    private suspend fun continueOnMainThread(): Unit = suspendCoroutineUninterceptedOrReturn { continuation ->
-        mainThread.post { continuation.intercepted().resume(Unit) }
-        COROUTINE_SUSPENDED
+    private suspend fun continueOnMainThread() {
+        withContext(NonCancellable) { withContext(Dispatchers.Main) {} }
     }
 
     private fun startPaused() {
