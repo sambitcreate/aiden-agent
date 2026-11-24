@@ -7,8 +7,30 @@
 // a process outside the group holds the server's stdout.
 import type { ChildProcess } from "node:child_process";
 import process from "node:process";
-import { groupStoppedWithin, processGroupExists, processGroupStillRuns } from "../shared/process-group.js";
+import {
+  captureProcessGroupSurvivors,
+  groupStoppedWithin,
+  listObservedProcesses,
+  processGroupExists,
+  processGroupStillRuns,
+  readProcessStartId,
+  type ObservedProcessEntry,
+  type ProcessIncarnationSurvivor,
+} from "../shared/process-group.js";
 import { StdioTransport, type McpTransport, type StdioTransportOptions } from "@earendil-works/pi-mcp";
+
+export interface McpProcessGroupRecord {
+  pgid: number;
+  leaderStartId?: string;
+  survivors: readonly ProcessIncarnationSurvivor[];
+}
+
+interface TrackedMcpGroupRecord {
+  pgid: number;
+  leaderStartId?: string;
+  leaderExited: boolean;
+  survivors: ProcessIncarnationSurvivor[];
+}
 
 export interface McpStdioTransportOptions {
   groupStillRuns?: (pid: number) => Promise<boolean>;
@@ -32,13 +54,26 @@ const DEFAULT_CLOSE_GRACE_MS = 2_000;
 const SURVIVOR_POLL_MS = 1_000;
 // SIGKILL is asynchronous and can be denied, so sending it proves nothing.
 const KILL_CONFIRM_MS = 2_000;
-const liveGroups = new Set<number>();
+const liveGroups = new Map<number, TrackedMcpGroupRecord>();
 const groupListeners = new Set<(groups: readonly number[]) => void>();
+const groupRecordListeners = new Set<(records: readonly McpProcessGroupRecord[]) => void>();
 let exitHookInstalled = false;
 
+function snapshotGroupRecords(): McpProcessGroupRecord[] {
+  return [...liveGroups.values()].map((record) => ({
+    pgid: record.pgid,
+    ...(record.leaderStartId ? { leaderStartId: record.leaderStartId } : {}),
+    survivors: record.survivors.map((survivor) => ({ pid: survivor.pid, startId: survivor.startId })),
+  }));
+}
+
 function groupsChanged(): void {
-  const groups = [...liveGroups];
+  const groups = [...liveGroups.keys()];
   for (const listener of groupListeners) listener(groups);
+  if (groupRecordListeners.size > 0) {
+    const records = snapshotGroupRecords();
+    for (const listener of groupRecordListeners) listener(records);
+  }
 }
 
 /**
@@ -48,8 +83,40 @@ function groupsChanged(): void {
  */
 export function watchMcpProcessGroups(listener: (groups: readonly number[]) => void): () => void {
   groupListeners.add(listener);
-  listener([...liveGroups]);
+  listener([...liveGroups.keys()]);
   return () => { groupListeners.delete(listener); };
+}
+
+/**
+ * Reports live stdio MCP process groups together with kernel start-ID
+ * incarnation proof (leader start ID and any survivors captured when a wrapper
+ * leader exited), so a force-stop caller never signals a reused PGID.
+ */
+export function watchMcpProcessGroupRecords(
+  listener: (records: readonly McpProcessGroupRecord[]) => void,
+): () => void {
+  groupRecordListeners.add(listener);
+  listener(snapshotGroupRecords());
+  return () => { groupRecordListeners.delete(listener); };
+}
+
+function isDescendantOfAny(
+  proc: ObservedProcessEntry,
+  roots: ReadonlySet<number>,
+  byPid: ReadonlyMap<number, ObservedProcessEntry>,
+): boolean {
+  if (roots.has(proc.pid)) return true;
+  const visited = new Set<number>([proc.pid]);
+  let parentPid = proc.ppid;
+  while (Number.isSafeInteger(parentPid) && parentPid > 0) {
+    if (roots.has(parentPid)) return true;
+    if (visited.has(parentPid)) return false;
+    visited.add(parentPid);
+    const parent = byPid.get(parentPid);
+    if (!parent) return false;
+    parentPid = parent.ppid;
+  }
+  return false;
 }
 
 /** The environment every stdio server may see, matching the MCP SDK's default set. */
@@ -85,7 +152,10 @@ function installExitHook(): void {
   if (exitHookInstalled) return;
   exitHookInstalled = true;
   process.once("exit", () => {
-    for (const pid of liveGroups) signalGroup(pid, "SIGTERM");
+    for (const [pid, record] of liveGroups) {
+      if (record.leaderExited && record.survivors.length === 0) continue;
+      signalGroup(pid, "SIGTERM");
+    }
   });
 }
 
@@ -109,6 +179,9 @@ const OVERSIZED_MESSAGE = /^MCP stdio message exceeds \d+ bytes$/u;
  */
 class AidenStdioTransport extends StdioTransport {
   private groupPid?: number;
+  private groupRecord?: TrackedMcpGroupRecord;
+  private readonly customGroupProbe: boolean;
+  private readonly groupStillRuns: (pid: number) => Promise<boolean>;
   /** The process group's teardown, which runs exactly once. */
   private reaping?: Promise<void>;
 
@@ -116,9 +189,11 @@ class AidenStdioTransport extends StdioTransport {
     options: StdioTransportOptions,
     private readonly graceMs: number,
     private readonly processGroups: boolean,
-    private readonly groupStillRuns: (pid: number) => Promise<boolean> = processGroupStillRuns,
+    groupStillRuns?: (pid: number) => Promise<boolean>,
   ) {
     super(options);
+    this.customGroupProbe = groupStillRuns !== undefined;
+    this.groupStillRuns = groupStillRuns ?? processGroupStillRuns;
     // Every pipe is closed, so nothing left in the group can reach Aiden. A
     // wrapper that exited on its own may still have left its server there.
     this.onClose(() => void this.reapGroup());
@@ -136,7 +211,29 @@ class AidenStdioTransport extends StdioTransport {
     if (pid === undefined || !this.processGroups) return;
     this.groupPid = pid;
     installExitHook();
-    liveGroups.add(pid);
+    const leaderStartId = readProcessStartId(pid);
+    const record: TrackedMcpGroupRecord = {
+      pgid: pid,
+      ...(leaderStartId ? { leaderStartId } : {}),
+      leaderExited: false,
+      survivors: [],
+    };
+    this.groupRecord = record;
+    liveGroups.set(pid, record);
+    const child = (this as unknown as { child?: ChildProcess }).child;
+    const captureLeaderExit = (): void => {
+      if (liveGroups.get(pid) !== record || record.leaderExited) return;
+      record.leaderExited = true;
+      const survivors = captureProcessGroupSurvivors(pid, record.leaderStartId);
+      if (survivors.length > 0) {
+        record.survivors = survivors;
+        groupsChanged();
+      }
+    };
+    if (child) {
+      if (child.exitCode !== null || child.signalCode !== null) captureLeaderExit();
+      else child.once("exit", captureLeaderExit);
+    }
     groupsChanged();
   }
 
@@ -162,33 +259,77 @@ class AidenStdioTransport extends StdioTransport {
     await this.reapGroup();
   }
 
+  private async incarnationStillRuns(pid: number, record: TrackedMcpGroupRecord): Promise<boolean> {
+    if (this.customGroupProbe) return this.groupStillRuns(pid);
+    if (!processGroupExists(pid)) return false;
+    const processes = listObservedProcesses({ exactStartIdForPgids: new Set([pid]) });
+    if (!processes) return this.groupStillRuns(pid);
+    const members = processes.filter((proc) => proc.pgid === pid);
+    if (members.length === 0) return false;
+    const leader = processes.find((proc) => proc.pid === pid);
+    if (!record.leaderExited) {
+      if (leader && record.leaderStartId && leader.startId && leader.startId !== record.leaderStartId) {
+        return false;
+      }
+      return members.some((proc) => !proc.zombie);
+    }
+    // Leader already exited and was reaped: a live leader PID now means PGID reuse.
+    if (leader || record.survivors.length === 0) return false;
+    const currentUid = typeof process.getuid === "function" ? process.getuid() : undefined;
+    const byPid = new Map<number, ObservedProcessEntry>();
+    for (const proc of processes) byPid.set(proc.pid, proc);
+    const verifiedPids = new Set<number>();
+    for (const member of members) {
+      if (currentUid !== undefined && member.uid !== currentUid) continue;
+      if (!member.startId) continue;
+      if (record.survivors.some((survivor) => survivor.pid === member.pid && survivor.startId === member.startId)) {
+        verifiedPids.add(member.pid);
+      }
+    }
+    if (verifiedPids.size === 0) return false;
+    return members.some(
+      (member) => !member.zombie && (currentUid === undefined || member.uid === currentUid) && isDescendantOfAny(member, verifiedPids, byPid),
+    );
+  }
+
+  private removeRecord(pid: number, record: TrackedMcpGroupRecord): void {
+    if (liveGroups.get(pid) === record && liveGroups.delete(pid)) groupsChanged();
+  }
+
   /**
    * Terminate whatever remains of the group: SIGTERM, then SIGKILL after the
-   * grace. A group is forgotten only once nothing in it runs, so whoever
-   * force-stops this process can still find one that survived.
+   * grace. A group is forgotten only once our incarnation no longer runs, so
+   * whoever force-stops this process can still find one that survived without
+   * ever chasing a reused PGID.
    */
   private reapGroup(): Promise<void> {
     const pid = this.groupPid;
-    if (pid === undefined) return Promise.resolve();
+    const record = this.groupRecord;
+    if (pid === undefined || record === undefined) return Promise.resolve();
     this.reaping ??= (async () => {
       signalGroup(pid, "SIGTERM");
-      const probe = { exists: () => processGroupExists(pid), stillRuns: () => this.groupStillRuns(pid) };
+      const probe = {
+        exists: () => processGroupExists(pid),
+        stillRuns: () => this.incarnationStillRuns(pid, record),
+      };
       if (!(await groupStoppedWithin(probe, this.graceMs))) {
-        signalGroup(pid, "SIGKILL");
-        await groupStoppedWithin(probe, KILL_CONFIRM_MS);
+        if (await this.incarnationStillRuns(pid, record)) {
+          signalGroup(pid, "SIGKILL");
+          await groupStoppedWithin(probe, KILL_CONFIRM_MS);
+        }
       }
-      if (await this.groupStillRuns(pid)) this.forgetWhenGone(pid);
-      else if (liveGroups.delete(pid)) groupsChanged();
+      if (await this.incarnationStillRuns(pid, record)) this.forgetWhenGone(pid, record);
+      else this.removeRecord(pid, record);
     })();
     return this.reaping;
   }
 
-  /** A listed ID gets signalled later, so a dead group must not stay listed for reuse to hit. */
-  private forgetWhenGone(pid: number): void {
+  /** A listed ID gets signalled later, so a dead or reused group must not stay listed. */
+  private forgetWhenGone(pid: number, record: TrackedMcpGroupRecord): void {
     const timer = setTimeout(() => {
-      void this.groupStillRuns(pid).then((runs) => {
-        if (runs) this.forgetWhenGone(pid);
-        else if (liveGroups.delete(pid)) groupsChanged();
+      void this.incarnationStillRuns(pid, record).then((runs) => {
+        if (runs) this.forgetWhenGone(pid, record);
+        else this.removeRecord(pid, record);
       });
     }, SURVIVOR_POLL_MS);
     timer.unref?.();

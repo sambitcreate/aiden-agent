@@ -398,27 +398,59 @@ test("the command client settles once for every way a daemon can answer", posix,
   await assert.rejects(api.remoteDaemonCommand(missing.agentDir, "serve", ["status"]), (error) => error.code === "ENOENT" && /not running/u.test(error.message));
 });
 
-test("selectDaemonMcpGroups includes orphaned wrapper survivors and refuses recycled, foreign-uid, or daemon-group entries", () => {
+test("selectDaemonMcpGroups requires incarnation proof for leaderless groups and refuses stale PGID reuse", () => {
   const daemonPid = 500;
   const processes = [
-    { pid: daemonPid, ppid: 400, pgid: 400, uid: 1000, zombie: false },
+    { pid: daemonPid, ppid: 400, pgid: 400, uid: 1000, zombie: false, startId: "proc:50" },
     // Direct child wrapper still alive.
-    { pid: 601, ppid: daemonPid, pgid: 601, uid: 1000, zombie: false },
-    // Orphaned grandchild whose wrapper (602) exited and was reaped; reparented to init (1).
-    { pid: 612, ppid: 1, pgid: 602, uid: 1000, zombie: false },
+    { pid: 601, ppid: daemonPid, pgid: 601, uid: 1000, zombie: false, startId: "proc:100" },
+    // Orphaned grandchild whose wrapper (602) exited and was reaped; matches recorded survivor incarnation.
+    { pid: 612, ppid: 1, pgid: 602, uid: 1000, zombie: false, startId: "proc:110" },
+    // Orphaned survivor (622) turned zombie while its child (623) still runs in group 620.
+    { pid: 622, ppid: 1, pgid: 620, uid: 1000, zombie: true, startId: "proc:115" },
+    { pid: 623, ppid: 622, pgid: 620, uid: 1000, zombie: false, startId: "proc:116" },
     // Recycled leader PID (603) now owned by an unrelated parent (777) with a child in group 603.
-    { pid: 603, ppid: 777, pgid: 603, uid: 1000, zombie: false },
-    { pid: 613, ppid: 603, pgid: 603, uid: 1000, zombie: false },
-    // Leaderless group with only a zombie left.
-    { pid: 614, ppid: 1, pgid: 604, uid: 1000, zombie: true },
+    { pid: 603, ppid: 777, pgid: 603, uid: 1000, zombie: false, startId: "proc:120" },
+    { pid: 613, ppid: 603, pgid: 603, uid: 1000, zombie: false, startId: "proc:121" },
+    // Leaderless group with only a zombie left (even with matching startId).
+    { pid: 614, ppid: 1, pgid: 604, uid: 1000, zombie: true, startId: "proc:130" },
     // Leaderless group whose live member belongs to another user.
-    { pid: 615, ppid: 1, pgid: 605, uid: 2000, zombie: false },
+    { pid: 615, ppid: 1, pgid: 605, uid: 2000, zombie: false, startId: "proc:140" },
+    // Stale bare PGID (606) with no survivor incarnation proof, reused by an unrelated same-UID wrapper that exited.
+    { pid: 616, ppid: 1, pgid: 606, uid: 1000, zombie: false, startId: "proc:200" },
+    // Stale PGID (607) whose original survivor (617) exited; unrelated same-UID wrapper reused PGID 607 and left 717.
+    { pid: 717, ppid: 1, pgid: 607, uid: 1000, zombie: false, startId: "proc:210" },
+    // Stale PGID (608) where both PGID 608 and survivor PID 618 were reused with a newer startId.
+    { pid: 618, ppid: 1, pgid: 608, uid: 1000, zombie: false, startId: "proc:220" },
+    // Leaderless group (609) whose live member has no observable startId (must fail closed).
+    { pid: 619, ppid: 1, pgid: 609, uid: 1000, zombie: false },
+    // Direct child whose leaderStartId mismatches the recorded leader incarnation.
+    { pid: 610, ppid: daemonPid, pgid: 610, uid: 1000, zombie: false, startId: "proc:230" },
     // Unrelated process sharing the foreground daemon's shell process group (400).
-    { pid: 401, ppid: 400, pgid: 400, uid: 1000, zombie: false },
+    { pid: 401, ppid: 400, pgid: 400, uid: 1000, zombie: false, startId: "proc:40" },
   ];
   assert.deepEqual(
-    api.selectDaemonMcpGroups(daemonPid, [601, 602, 603, 604, 605, 400, daemonPid, 699], processes),
-    [601, 602],
+    api.selectDaemonMcpGroups(
+      daemonPid,
+      [
+        { pgid: 601, leaderStartId: "proc:100", survivors: [] },
+        { pgid: 602, leaderStartId: "proc:105", survivors: [{ pid: 612, startId: "proc:110" }] },
+        { pgid: 620, leaderStartId: "proc:114", survivors: [{ pid: 622, startId: "proc:115" }] },
+        { pgid: 603, leaderStartId: "proc:90", survivors: [{ pid: 613, startId: "proc:91" }] },
+        { pgid: 604, leaderStartId: "proc:129", survivors: [{ pid: 614, startId: "proc:130" }] },
+        { pgid: 605, leaderStartId: "proc:139", survivors: [{ pid: 615, startId: "proc:140" }] },
+        606,
+        { pgid: 607, leaderStartId: "proc:95", survivors: [{ pid: 617, startId: "proc:100" }] },
+        { pgid: 608, leaderStartId: "proc:96", survivors: [{ pid: 618, startId: "proc:100" }] },
+        { pgid: 609, leaderStartId: "proc:97", survivors: [{ pid: 619, startId: "proc:100" }] },
+        { pgid: 610, leaderStartId: "proc:98", survivors: [] },
+        400,
+        daemonPid,
+        699,
+      ],
+      processes,
+    ),
+    [601, 602, 620],
   );
 });
 
@@ -488,5 +520,98 @@ setInterval(() => {}, 1e9);`);
   }
   assert.equal(isRunning(daemon.pid), false, "daemon must be stopped");
   assert.equal(isRunning(started.grandchild), false, "orphaned MCP grandchild survivor must be stopped");
+  assert.equal(existsSync(box.lock), false);
+});
+
+test("serve stop fails closed and spares unrelated same-UID leaderless groups matching a stale mcp-groups record", posix, async (t) => {
+  const box = sandbox(t);
+  const unrelatedWrapper = join(box.agentDir, "unrelated-wrapper.mjs");
+  const stuckDaemon = join(box.agentDir, "stuck-serve-stale-pgid.mjs");
+  mkdirSync(box.lock, { mode: 0o700, recursive: true });
+  writeFileSync(unrelatedWrapper, `import { spawn } from "node:child_process"; import { renameSync, writeFileSync } from "node:fs";
+const outFile = process.argv[2];
+const child = spawn(process.execPath, ["-e", "process.on('SIGTERM', () => {}); setInterval(() => {}, 1e9);"], { stdio: "ignore" });
+writeFileSync(outFile + ".tmp", JSON.stringify({ wrapper: process.pid, child: child.pid }));
+renameSync(outFile + ".tmp", outFile);
+process.exit(0);`);
+  writeFileSync(stuckDaemon, `process.on("SIGTERM", () => {}); setInterval(() => {}, 1e9);`);
+
+  const spawnUnrelatedLeaderlessGroup = async (label) => {
+    const outFile = join(box.agentDir, `${label}.json`);
+    const wrapper = spawn(process.execPath, [unrelatedWrapper, outFile], { stdio: "ignore", detached: true });
+    const exited = new Promise((resolveExit) => wrapper.once("exit", resolveExit));
+    const deadline = Date.now() + 10_000;
+    while (!existsSync(outFile) && Date.now() < deadline) await new Promise((r) => setTimeout(r, 25));
+    assert.equal(existsSync(outFile), true, `unrelated wrapper ${label} did not report child`);
+    await exited;
+    return JSON.parse(readFileSync(outFile, "utf8"));
+  };
+
+  const isRunning = (pid) => {
+    if (!api.pidAlive(pid)) return false;
+    const state = spawnSync("ps", ["-o", "stat=", "-p", String(pid)], { encoding: "utf8" });
+    return state.status === 0 && state.stdout.trim() !== "" && !state.stdout.trim().startsWith("Z");
+  };
+
+  const groupA = await spawnUnrelatedLeaderlessGroup("stale-incarnation");
+  const groupB = await spawnUnrelatedLeaderlessGroup("stale-unproven");
+  const daemon = spawn(process.execPath, [stuckDaemon, "serve"], { stdio: "ignore", detached: true });
+  t.after(() => {
+    for (const pid of [daemon.pid, groupA.wrapper, groupA.child, groupB.wrapper, groupB.child]) {
+      if (pid) {
+        try { process.kill(-pid, "SIGKILL"); } catch { /* already gone */ }
+        try { process.kill(pid, "SIGKILL"); } catch { /* already gone */ }
+      }
+    }
+  });
+
+  const waitReaped = Date.now() + 5_000;
+  while ((api.pidAlive(groupA.wrapper) || api.pidAlive(groupB.wrapper)) && Date.now() < waitReaped) {
+    await new Promise((r) => setTimeout(r, 25));
+  }
+  assert.equal(api.pidAlive(groupA.wrapper), false, "unrelated wrapper A should have exited and been reaped");
+  assert.equal(api.pidAlive(groupB.wrapper), false, "unrelated wrapper B should have exited and been reaped");
+  assert.equal(isRunning(groupA.child), true, "unrelated leaderless child A should be running");
+  assert.equal(isRunning(groupB.child), true, "unrelated leaderless child B should be running");
+
+  const token = "stale-pgid-reuse-test";
+  api.atomicJson(join(box.lock, "owner.json"), {
+    detached: true,
+    pid: daemon.pid,
+    argv: [process.execPath, stuckDaemon, "serve"],
+    startedAt: Date.now(),
+    token,
+  });
+  // Simulate a stale mcp-groups.json left behind after earlier groups emptied and
+  // their PGIDs were reused by unrelated same-UID wrappers that exited:
+  // - groupA has a mismatched survivor startId (even with the same child PID),
+  // - groupB has no survivor incarnation proof at all.
+  api.atomicJson(join(box.lock, "mcp-groups.json"), {
+    pid: daemon.pid,
+    token,
+    groups: [groupA.wrapper, groupB.wrapper],
+    groupRecords: [
+      {
+        pgid: groupA.wrapper,
+        leaderStartId: "proc:1",
+        survivors: [{ pid: groupA.child, startId: "proc:1" }],
+      },
+      {
+        pgid: groupB.wrapper,
+        leaderStartId: "proc:2",
+        survivors: [],
+      },
+    ],
+  });
+  writeFileSync(box.socket, "");
+
+  assert.deepEqual(await api.stopDaemon(box.agentDir, 1_000), { stopped: true, pid: daemon.pid, forced: true });
+  const stopDeadline = Date.now() + 5_000;
+  while (isRunning(daemon.pid) && Date.now() < stopDeadline) {
+    await new Promise((r) => setTimeout(r, 25));
+  }
+  assert.equal(isRunning(daemon.pid), false, "daemon must be stopped");
+  assert.equal(isRunning(groupA.child), true, "unrelated same-UID leaderless group with stale startId must be spared");
+  assert.equal(isRunning(groupB.child), true, "unrelated same-UID leaderless group without survivor proof must be spared");
   assert.equal(existsSync(box.lock), false);
 });

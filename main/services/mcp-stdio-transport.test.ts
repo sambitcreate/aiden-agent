@@ -6,7 +6,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { McpClient } from "@earendil-works/pi-mcp";
-import { createMcpStdioTransport, watchMcpProcessGroups } from "./mcp-stdio-transport.js";
+import { createMcpStdioTransport, watchMcpProcessGroupRecords, watchMcpProcessGroups, type McpProcessGroupRecord } from "./mcp-stdio-transport.js";
 
 /**
  * A wrapper-shaped server (like `npx`/`uvx`): it starts a long-lived
@@ -151,6 +151,50 @@ test("a closed transport means the whole group is gone, even a descendant that i
   await client.close();
   assert.equal(alive(report.grandchild), false, "close resolved with a descendant still running");
   assert.equal(listedWhileAlive, true, "a running group left the list a force-stop owner reads");
+});
+
+test("watchMcpProcessGroupRecords captures surviving grandchild incarnation when a wrapper exits while pipes stay open", {
+  skip: process.platform === "win32" ? "POSIX process groups" : false,
+  timeout: 15_000,
+}, async (t) => {
+  const directory = await mkdtemp(join(tmpdir(), "aiden-mcp-stdio-"));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  const reportFile = join(directory, "report.json");
+  const wrapper = `
+const { spawn } = require("node:child_process");
+const { writeFileSync } = require("node:fs");
+const grandchild = spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)"], { stdio: ["ignore", "inherit", "inherit"] });
+writeFileSync(${JSON.stringify(reportFile)}, JSON.stringify({ wrapper: process.pid, grandchild: grandchild.pid }));
+process.exit(0);
+`;
+  let latest: readonly McpProcessGroupRecord[] = [];
+  const stopWatching = watchMcpProcessGroupRecords((records) => { latest = records; });
+  t.after(stopWatching);
+  const transport = createMcpStdioTransport({
+    command: process.execPath,
+    args: ["-e", wrapper],
+    closeGraceMs: 300,
+    stderr: "pipe",
+  });
+  t.after(() => transport.close().catch(() => undefined));
+  await transport.start();
+  for (let attempt = 0; attempt < 200 && !existsSync(reportFile); attempt += 1) await delay(20);
+  const report = JSON.parse(await readFile(reportFile, "utf8")) as { wrapper: number; grandchild: number };
+  t.after(() => { try { process.kill(report.grandchild, "SIGKILL"); } catch { /* already gone */ } });
+  for (let attempt = 0; attempt < 200; attempt += 1) {
+    const record = latest.find((entry) => entry.pgid === report.wrapper);
+    if (record?.survivors.some((survivor) => survivor.pid === report.grandchild && survivor.startId.length > 0)) break;
+    await delay(20);
+  }
+  const captured = latest.find((entry) => entry.pgid === report.wrapper);
+  assert.ok(captured, "wrapper group record should still be tracked while grandchild holds pipes");
+  assert.ok(
+    captured.survivors.some((survivor) => survivor.pid === report.grandchild && survivor.startId.length > 0),
+    `expected grandchild ${report.grandchild} with startId in ${JSON.stringify(captured)}`,
+  );
+  await transport.close();
+  for (let attempt = 0; attempt < 150 && alive(report.grandchild); attempt += 1) await delay(20);
+  assert.equal(alive(report.grandchild), false, "transport.close() must reap the surviving grandchild");
 });
 
 test("a group that survives close leaves the list once it is gone, so its ID is never signalled again", {

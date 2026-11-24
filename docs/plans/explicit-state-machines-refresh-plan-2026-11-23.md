@@ -53,7 +53,7 @@ Three independent verification passes against `b2b5c3517` established the exact 
 | **D3** | Phase 1B failure-ambiguity policy | **Option A:** Two-tier endpoint contract (`beforeEffectRefusal` vs `cachedRejectionLedger`) in `AidenRemoteFailureClassification.{swift,kt}`, backed by shared fixture `protocol/aiden-remote/v1/fixtures/mutation-failure-ambiguity.json` (no Remote protocol revision bump). |
 | **D4** | Phase 1C `bot-execution.ts` & `bot-peers/service.ts` | **Option A:** Land transition worksheets (`docs/state-machines/bot-execution-and-peers.md`) first; keep security-critical receipt code untouched unless a test reproduces a defect. |
 | **D5** | Phase 2A Android parity scope | **Option B (executed):** Unified classifiers + extracted `AidenDurablePendingMutation` on both iOS and Android alongside fixing two `STORAGE`-masking defects in Android `OpenWork` and `Peers`. |
-| **D6** | Phase 4B `AidenChatViewModel` first slice | **Option A (planned):** Start with `AidenForeignRunObserver` (`AidenChatViewModel+ForeignRuns.swift`), then `AidenPendingSendCoordinator`, then `AidenChatMutationSubMachines`. |
+| **D6** | Phase 4B `AidenChatViewModel` first slice | **Option A (executed):** Extracted `AidenForeignRunObserver` (`AidenChatViewModel+ForeignRuns.swift`), `AidenPendingSendCoordinator`, and `AidenChatMutationSubMachines` in stacked PR #906 (`feat/sm-ios-dense-owners`). |
 | **D7** | Phase 4D/4E backlog depth | **Option A (risk-gated):** Fix `aiden serve stop` MCP survivor gap, execute cross-lane P1–P4 shutdown trace, reconcile P5/P6/Tier-A owners via transition worksheets + targeted race/teardown tests, fixing only reproduced defects. |
 
 ---
@@ -66,24 +66,26 @@ Three independent verification passes against `b2b5c3517` established the exact 
 | **Phase 1** (`1A`, `1B`, `1C`) | Unify 4 subagent progression copies (`renderer/shared/subagent-runs.ts`); two-tier `AidenRemoteFailureClassification` on iOS (12 sites) & Android + `mutation-failure-ambiguity.json` fixture fixing `409 idempotency_in_flight`; `bot-execution-and-peers.md` | **Implemented** (iOS `xcodebuild` simulator check pending macOS host) | `renderer/shared/subagent-runs.ts`, `protocol/aiden-remote/v1/fixtures/mutation-failure-ambiguity.json`, `AidenRemoteFailureClassification.{swift,kt}`, `docs/state-machines/bot-execution-and-peers.md` |
 | **Phase 2** (`2A`, `2B`) | Shared `AidenDurablePendingMutation` across 5 iOS Bot files (6 classes) & Android parity + direct unit tests (`AidenDurablePendingMutationTests`, `AidenBotResumeModelTests`, `AidenScheduledTasksModel`, `ComposerVoiceInputController`) | **Implemented** (iOS `xcodebuild` simulator check pending macOS host) | `ios/AidenOnTheGo/Features/Bots/AidenDurablePendingMutation.swift`, `android/.../AidenDurablePendingMutation.kt`, mobile test suites |
 | **Phase 3** (`3A`, `3B`) | Proactive Aiden (`proactive-aiden.md`, 2 `goal-loop.ts` race fixes); Phase 3B desktop owners (`new-desktop-owners-2026-11.md`, `use-design-canvas.ts` sync races, `provider.ts` close-during-`enabled()` fixes, `hook-dispatcher.ts` idempotency eviction-identity fix, `aiden-mcp-tools`/`bot-plans`/`bot-messages` teardown tests) | **Implemented** | `docs/state-machines/{proactive-aiden,new-desktop-owners-2026-11}.md`, `main/services/goal/goal-loop.ts`, `main/services/gemini-live/app-control/provider.ts`, `main/services/hooks/hook-dispatcher.ts`, `renderer/design/use-design-canvas.ts` |
-| **Phase 4A–4C** (iOS dense owners) | Explicit `AidenHostConnectionLifecycle` (`AidenHostConnection.swift`), incremental `AidenChatViewModel` extractions (`AidenForeignRunObserver`, `AidenPendingSendCoordinator`, `AidenChatMutationSubMachines`), explicit `ComposerVoiceInputReducer` + simulator tests | **Implemented** (macOS `xcodebuild` Simulator CI & physical-device mic acceptance pending) | `ios/AidenOnTheGo/Features/Remote/Hosts/AidenHostConnectionLifecycle.swift`, `ios/AidenOnTheGo/Features/Chat/{AidenForeignRunObserver,AidenPendingSendCoordinator,AidenChatMutationSubMachines,ComposerVoiceInputController}.swift` |
+| **Phase 4A–4C** (iOS dense owners) | Explicit `AidenHostConnectionLifecycle` (`AidenHostConnection.swift`), incremental `AidenChatViewModel` extractions (`AidenForeignRunObserver`, `AidenPendingSendCoordinator`, `AidenChatMutationSubMachines`), explicit `ComposerVoiceInputReducer` + simulator tests | **Implemented** in stacked PR #906 (`feat/sm-ios-dense-owners`; macOS `xcodebuild` Simulator CI & physical-device mic acceptance pending) | `ios/AidenOnTheGo/Features/Remote/Hosts/AidenHostConnectionLifecycle.swift`, `ios/AidenOnTheGo/Features/Chat/{AidenForeignRunObserver,AidenPendingSendCoordinator,AidenChatMutationSubMachines,ComposerVoiceInputController}.swift` |
 | **Phase 4D–4E** (P5, P6, CLI, Tier-A) | Fix `aiden serve stop` orphaned MCP survivor (`packages/cli/src/serve-lifecycle.ts` `selectDaemonMcpGroups`), review `cli-native:N13, O01, C12, C16, C28, C32` (`serve-daemon.md`), audit P5 unaudited remainder + cross-lane P1–P4 shutdown trace (`physical-teardown.md`), reconcile P6 & Tier-A queue (`p5-p6-tier-a-reconciliation.md`) + targeted teardown tests | **Implemented** (hardware/macOS acceptance separate) | `packages/cli/src/serve-lifecycle.ts`, `packages/cli/tests/serve-lifetime.test.mjs`, `docs/state-machines/{serve-daemon,physical-teardown,p5-p6-tier-a-reconciliation}.md` |
 
 ---
 
-## 4. Remaining Open Execution Slices (Phases 4A–4C)
+## 4. Phase 4A–4C Implementation Record (Stacked PR #906 / `feat/sm-ios-dense-owners`)
 
-### PR 4A: Explicit `AidenHostConnection` Lifecycle (`ios/AidenOnTheGo/Features/Remote/Hosts/AidenHostConnection.swift`)
-- Consolidate the 8 coupled axes (`connectionState`, `generation`, `hostGeneration`, `connectionGeneration`, `isRevoked`, `isPurgePending`, `connectInFlight`, `settledState`) into an explicit pure transition type separating terminal custody (`active` vs `revoked(purgePending: Bool)`) from connection attempt state (`idle` / `connecting` / `connected` / `offline`), keeping all `@Observable` properties derived and `AidenHostRegistry` / `AidenHostConnectScheduler` untouched.
-- Check Android's host connection coordinator for revocation-vs-reconnect parity.
+All three iOS dense-owner slices (4A–4C) are implemented in stacked PR #906 (`feat/sm-ios-dense-owners`); only macOS `xcodebuild` Simulator CI, Android `:app:lintDebug`, and physical-device/hardware acceptance remain open before closing the wave:
 
-### PR 4B (Series of 3 Small PRs): Incremental `AidenChatViewModel` Extraction
-- **PR 4B-1:** Extract `AidenForeignRunObserver` from `AidenChatViewModel+ForeignRuns.swift` (`probeForForeignRuns`, `isCurrentForeignRun`, `foreignRunGeneration`).
-- **PR 4B-2:** Extract `AidenPendingSendCoordinator` (`pendingSend`, `canRetrySend`, `scheduleRateLimitedSendRetry`) over `AidenChatDraftStore`.
-- **PR 4B-3:** Extract `AidenChatMutationSubMachines` (worktree setup cancel-after-finish guard, fork/continue attempts, approval/question snapshot generation fences).
+### Phase 4A: Explicit `AidenHostConnection` Lifecycle (`ios/AidenOnTheGo/Features/Remote/Hosts/AidenHostConnectionLifecycle.swift`)
+- Consolidated the 8 coupled axes (`connectionState`, `generation`, `hostGeneration`, `connectionGeneration`, `isRevoked`, `isPurgePending`, `connectInFlight`, `settledState`) into an explicit pure transition type separating terminal custody (`active` vs `revoked(purgePending: Bool)`) from connection attempt state (`idle` / `connecting` / `connected` / `offline`), keeping all `@Observable` properties derived and `AidenHostRegistry` / `AidenHostConnectScheduler` untouched.
+- Verified Android host connection coordinator revocation-vs-reconnect parity.
 
-### PR 4C: Explicit `ComposerVoiceInputController` Reducer (`ios/AidenOnTheGo/Features/Chat/ComposerVoiceInputController.swift`)
-- Consolidate the 12 `state` write sites and audio/task ownership flags (`activatedAudioSessionForRecording`, `audioTapInstalled`, `macTranscriptionTask`, `nativeFinalizationTask`, `suppressNextRecognitionError`, `sessionFence`) into one explicit transition function over `(State, Backend, ResourceOwnership)` guaranteeing tap/audio-session/task cleanup on every exit to `.idle`.
+### Phase 4B: Incremental `AidenChatViewModel` Extractions (`ios/AidenOnTheGo/Features/Chat/`)
+- **4B-1:** Extracted `AidenForeignRunObserver` from `AidenChatViewModel+ForeignRuns.swift` (`probeForForeignRuns`, `isCurrentForeignRun`, `foreignRunGeneration`).
+- **4B-2:** Extracted `AidenPendingSendCoordinator` (`pendingSend`, `canRetrySend`, `scheduleRateLimitedSendRetry`) over `AidenChatDraftStore`.
+- **4B-3:** Extracted `AidenChatMutationSubMachines` (worktree setup cancel-after-finish guard, fork/continue attempts, approval/question snapshot generation fences).
+
+### Phase 4C: Explicit `ComposerVoiceInputController` Reducer (`ios/AidenOnTheGo/Features/Chat/ComposerVoiceInputController.swift`)
+- Consolidated the 12 `state` write sites and audio/task ownership flags (`activatedAudioSessionForRecording`, `audioTapInstalled`, `macTranscriptionTask`, `nativeFinalizationTask`, `suppressNextRecognitionError`, `sessionFence`) into one explicit `ComposerVoiceInputReducer` transition function over `(State, Backend, ResourceOwnership)` guaranteeing tap/audio-session/task cleanup on every exit to `.idle`.
 
 ---
 
