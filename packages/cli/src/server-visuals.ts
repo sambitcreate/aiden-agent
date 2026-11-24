@@ -306,6 +306,7 @@ async function renderNow(options: RenderServerVisualOptions): Promise<CapturedIm
   const signal = options.signal ? AbortSignal.any([options.signal, timeout]) : timeout;
   if (signal.aborted) return null;
   const platform = options.platform ?? process.platform;
+  const __t0 = Date.now(); const mark = (label: string) => { process.stderr.write(`[visual-trace] ${label} +${Date.now() - __t0}ms\n`); };
   const profileDir = mkdtempSync(join(tmpdir(), "aiden-visual-"));
   let child: ChildProcess | undefined;
   let cdp: PipeCdp | undefined;
@@ -313,11 +314,14 @@ async function renderNow(options: RenderServerVisualOptions): Promise<CapturedIm
   signal.addEventListener("abort", kill, { once: true });
   try {
     child = spawn(options.browserPath, serverBrowserArguments(profileDir, platform), {
-      stdio: ["ignore", "ignore", "ignore", "pipe", "pipe"],
+      stdio: ["ignore", "ignore", "pipe", "pipe", "pipe"],
       env: browserEnvironment(profileDir),
       cwd: profileDir,
     });
     const started = child;
+    started.stderr?.on("data", (chunk: Buffer) => { for (const line of chunk.toString("utf8").split("\n")) if (line.trim()) process.stderr.write(`[chrome-stderr +${Date.now() - __t0}ms] ${line.slice(0, 300)}\n`); });
+    started.once("exit", (code, sig) => mark(`chrome exit ${code} ${sig}`));
+    mark("spawned");
     const exited = new Promise<never>((_resolve, reject) => {
       started.once("error", () => reject(new Error("The browser could not start.")));
       started.once("exit", () => reject(new Error("The browser stopped.")));
@@ -343,6 +347,7 @@ async function renderNow(options: RenderServerVisualOptions): Promise<CapturedIm
       return Promise.race([connection.send(method, params, sessionId), exited]);
     };
     const { targetId } = await call("Target.createTarget", { url: "about:blank" });
+    mark("browser answered createTarget");
     const { sessionId } = await call("Target.attachToTarget", { targetId, flatten: true }) as { sessionId: string };
     await call("Page.bringToFront", {}, sessionId);
     await call("Fetch.enable", { patterns: [{ urlPattern: "*" }] }, sessionId);
@@ -352,12 +357,15 @@ async function renderNow(options: RenderServerVisualOptions): Promise<CapturedIm
     await call("Page.enable", {}, sessionId);
     const fullWidth = options.width + PADDING * 2;
     await call("Emulation.setDeviceMetricsOverride", { width: fullWidth, height: 400, deviceScaleFactor: DEVICE_SCALE, mobile: false }, sessionId);
+    mark("target ready");
     const { frameTree } = await call("Page.getFrameTree", {}, sessionId) as { frameTree: { frame: { id: string } } };
     await call("Page.setDocumentContent", { frameId: frameTree.frame.id, html: options.hostPage }, sessionId);
+    mark("document set");
     // Wait for the visual to report its height and then stop changing.
-    let height = 0;
+    let height = 0; let __last = "";
     while (!signal.aborted) {
       const evaluated = await call("Runtime.evaluate", { expression: "JSON.stringify(window.__snap || null)", returnByValue: true }, sessionId) as { result?: { value?: unknown } };
+      if (String(evaluated.result?.value) !== __last) { __last = String(evaluated.result?.value); mark("snap " + __last); }
       const snap = typeof evaluated.result?.value === "string" ? JSON.parse(evaluated.result.value) as { height?: number; changedAt?: number } | null : null;
       if (snap && typeof snap.height === "number" && snap.height > 0 && typeof snap.changedAt === "number" && Date.now() - snap.changedAt >= SETTLE_MS) {
         height = snap.height;
@@ -365,17 +373,18 @@ async function renderNow(options: RenderServerVisualOptions): Promise<CapturedIm
       }
       await sleep(100, signal);
     }
-    if (!height) return null;
+    mark("settle loop end height=" + height); if (!height) return null;
     const fullHeight = Math.min(height, MAX_INLINE_VISUAL_HEIGHT) + PADDING * 2;
     await call("Emulation.setDeviceMetricsOverride", { width: fullWidth, height: fullHeight, deviceScaleFactor: DEVICE_SCALE, mobile: false }, sessionId);
     await call("Runtime.evaluate", { expression: "new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(() => resolve(true))))", awaitPromise: true, returnByValue: true }, sessionId);
+    mark("before capture");
     const png = Buffer.from(String((await call("Page.captureScreenshot", { format: "png" }, sessionId)).data ?? ""), "base64");
     if (png.length > 0 && png.length <= SERVER_VISUAL_MAX_PNG_BYTES) return { bytes: png, mimeType: "image/png" };
     const jpeg = Buffer.from(String((await call("Page.captureScreenshot", { format: "jpeg", quality: 88 }, sessionId)).data ?? ""), "base64");
     return jpeg.length > 0 && jpeg.length <= SERVER_VISUAL_MAX_IMAGE_BYTES ? { bytes: jpeg, mimeType: "image/jpeg" } : null;
-  } catch {
+  } catch (__e) { mark("error " + String(__e));
     return null;
-  } finally {
+  } finally { mark("finally");
     signal.removeEventListener("abort", kill);
     if (child) {
       if (cdp && child.exitCode === null) {

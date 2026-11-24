@@ -190,3 +190,16 @@ test("an installed browser draws a chart offline into a picture and leaves no pr
   assert.ok(bytes.readUInt32BE(20) >= (240 + 32) * 2);
   assert.equal(profiles(), before, "the temporary profile is deleted");
 });
+
+// TEMPORARY CI DIAGNOSTIC: render the same chart five more times and log each duration.
+test("DIAGNOSTIC repeated real-browser renders", { skip: browser.kind !== "found" && "no browser" }, async () => {
+  process.stderr.write(`[visual-diag] browser ${browser.path} cpus ${(await import("node:os")).availableParallelism()} dbus=${process.env.DBUS_SESSION_BUS_ADDRESS ?? "unset"} display=${process.env.DISPLAY ?? "unset"}\n`);
+  const html = `<div style="height:240px"><canvas id="c"></canvas></div><script>new Chart(document.getElementById("c"), {type:"bar",data:{labels:["Q1","Q2"],datasets:[{label:"Sales",data:[3,5]}]},options:{animation:false,maintainAspectRatio:false}})</script>`;
+  for (let i = 0; i < 5; i++) {
+    const dir = mkdtempSync(join(tmpdir(), "aiden-server-visuals-diag-"));
+    const started = Date.now();
+    const text = await run(tools(dir, { visuals: api.createServerVisualCollector() }).render_artifact, "raw_html", { title: "Quarterly sales", html });
+    process.stderr.write(`[visual-diag] render ${i} ${Date.now() - started}ms ${text.slice(0, 20)}\n`);
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
