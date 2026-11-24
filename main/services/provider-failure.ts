@@ -37,7 +37,7 @@ const SERVICE_UNAVAILABLE =
 const MODEL_UNAVAILABLE =
   /(?:(?:model|models)[^\r\n]{0,120}(?:not found|does not exist|unknown|unavailable|not available|no longer available|shut down|retired|deprecated)|(?:not found|unavailable|not available)[^\r\n]{0,120}(?:model|models))/iu;
 const NETWORK =
-  /(?:\bE(?:CONNRESET|CONNREFUSED|HOSTUNREACH|NETUNREACH|NETDOWN|PIPE|AI_AGAIN|NOTFOUND)\b|network error|fetch failed|getaddrinfo|upstream connect|reset before headers|other side closed|connection (?:closed|error|failed|lost|refused|reset)|socket (?:connection (?:was )?closed|closed|hang up))/iu;
+  /(?:\bE(?:CONNRESET|CONNREFUSED|HOSTUNREACH|NETUNREACH|NETDOWN|PIPE|AI_AGAIN|NOTFOUND)\b|network error|fetch failed|getaddrinfo|upstream connect|reset before headers|other side closed|connection (?:closed|error|failed|lost|refused|reset)|socket (?:connection (?:was )?closed|closed|hang up)|websocket[_ -]?(?:closed|error|connection[_ -]?limit[_ -]?reached))/iu;
 const CONTEXT_WINDOW =
   /(?:context (?:window|length)|maximum context|too many (?:input )?tokens|request (?:is )?too large)/iu;
 const INVALID_REQUEST =

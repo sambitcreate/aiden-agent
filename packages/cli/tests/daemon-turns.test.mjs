@@ -36,6 +36,12 @@ const callTool = (name, args) => (response) => {
   response.write(chunk({}, "tool_calls")); response.write(usage);
   response.end("data: [DONE]\n\n");
 };
+/** One assistant message that calls each `[name, args]` in order, as a tool batch. */
+const callTools = (calls) => (response) => {
+  response.write(chunk({ role: "assistant", tool_calls: calls.map(([name, args], index) => ({ index, id: `call_${index + 1}`, type: "function", function: { name, arguments: JSON.stringify(args) } })) }));
+  response.write(chunk({}, "tool_calls")); response.write(usage);
+  response.end("data: [DONE]\n\n");
+};
 /** Streams a first delta and then stays open, as a slow provider does. */
 const hangAfter = (text) => (response) => { response.write(chunk({ role: "assistant", content: text })); };
 
@@ -564,6 +570,29 @@ test("a stop during a Bot tool's authority check keeps the tool from running", a
   await f.daemon.llmClient.waitForChatIdle("bot-tool");
   assert.equal(ran, 0);
   assert.equal(owner.of("chat:error")[0].cancelled, true);
+});
+
+test("a stop during a tool batch shows each unfinished call as stopped and the later call never runs", async (t) => {
+  const f = await fixture(t), owner = ownerFor();
+  let afterRan = 0;
+  const started = Promise.withResolvers();
+  const empty = { type: "object", properties: {} };
+  // A sequential tool makes Pi run the batch one call at a time, so the stop lands before `after` starts.
+  const slow = { name: "slow", description: "Slow", parameters: empty, executionMode: "sequential",
+    execute: (_id, _params, signal) => new Promise((_, reject) => { started.resolve(); signal?.addEventListener("abort", () => reject(new Error("aborted")), { once: true }); }) };
+  const after = { name: "after", description: "After", parameters: empty, execute: async () => { afterRan += 1; return { content: [{ type: "text", text: "ran" }], details: {} }; } };
+  f.daemon.setBots(fakeBots(async () => {}, [slow, after]));
+  f.steps.push(callTools([["slow", {}], ["after", {}]]), reply("Finished"));
+  await beginBotTurn(f, "batch-stop", owner);
+  await started.promise;
+  await f.daemon.llmClient.cancelChat("batch-stop", "user_stop");
+  await f.daemon.llmClient.waitForChatIdle("batch-stop");
+  assert.equal(afterRan, 0);
+  assert.equal(f.requests.length, 1, "no follow-up request after the stop");
+  const [ended] = owner.of("chat:error");
+  assert.equal(ended.cancelled, true);
+  const tools = ended.timeline.steps.filter((step) => step.kind === "tool");
+  assert.deepEqual(tools.map((step) => [step.toolName, step.status, step.stoppedByUser]), [["slow", "cancelled", true], ["after", "cancelled", true]]);
 });
 
 test("a run whose session lease cannot be removed still reports idle", { skip: process.platform === "win32" || process.getuid?.() === 0 }, async (t) => {

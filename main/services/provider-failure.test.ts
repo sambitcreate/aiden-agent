@@ -68,6 +68,10 @@ test("provider failures map to a closed privacy-safe category", () => {
   > = [
     ["request-failed", `Connection error. ${PRIVATE_CANARY}`, "network"],
     ["request-failed", `request timed out ${PRIVATE_CANARY}`, "timeout"],
+    // Codex closes its WebSocket after 60 minutes; Pi 1.6 retries it, and a
+    // failure that outlasts the retries is a dropped connection, not "unknown".
+    ["request-failed", `Responses websocket connection limit reached ${PRIVATE_CANARY}`, "network"],
+    ["request-failed", `websocket_connection_limit_reached ${PRIVATE_CANARY}`, "network"],
     ["request-failed", `503 service unavailable ${PRIVATE_CANARY}`, "service_unavailable"],
     ["request-failed", `503 model service unavailable ${PRIVATE_CANARY}`, "service_unavailable"],
     ["request-failed", `404 model gemini-old is not found or unavailable ${PRIVATE_CANARY}`, "invalid_request"],

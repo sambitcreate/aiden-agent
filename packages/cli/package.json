@@ -53,15 +53,11 @@
     "sherpa-onnx-node": "1.13.8"
   },
   "overrides": {
-    "undici": "8.12.3",
     "posthog-node@5.56.1": {
       "@posthog/core": {
         ".": "1.59.0",
         "@posthog/types": "1.416.0"
       }
-    },
-    "@earendil-works/chord@1.6.0": {
-      "ws": "8.22.0"
     }
   }
 }
