@@ -2,7 +2,7 @@ import { isIP } from "node:net";
 
 /**
  * What Aiden reads from `lume get --format json` and `lume ls --format json`.
- * Lume 0.6.1 prints a pretty JSON array of `VMDetails` (src/VM/VMDetails.swift)
+ * Lume 0.8.0 prints a pretty JSON array of `VMDetails` (src/VM/VMDetails.swift)
  * and its logger may print `[timestamp] LEVEL: …` lines to stdout first.
  */
 export interface LumeVmInfo {
@@ -90,12 +90,15 @@ export function parseLumeVmInfo(stdout: string): LumeVmInfo {
   return parseEntry(entries[0]);
 }
 
-export type LumeErrorKind = "vm_limit" | "not_found" | "stale" | "not_running" | "other";
+export type LumeErrorKind = "vm_limit" | "low_disk" | "not_found" | "stale" | "not_running" | "other";
 
 /**
- * Map Lume's diagnostics to what Aiden does next. The VM-limit text comes from
- * Virtualization.framework (VZErrorDomain code 6, `virtualMachineLimitExceeded`)
- * and is assumed until recorded on the owner Mac.
+ * Map Lume's diagnostics to what Aiden does next.
+ * - `vm_limit`: Virtualization.framework (VZErrorDomain code 6,
+ *   `virtualMachineLimitExceeded`) and Lume 0.7.0+'s own macOS guest limit
+ *   refusal (`host limit of N running macOS guests reached`).
+ * - `low_disk`: Lume 0.7.1+'s `VMError.insufficientHostSpace` and
+ *   `DiskResizeError.insufficientHostSpace` refusals.
  */
 export function classifyLumeError(stderr: string, exitCode: number | null): LumeErrorKind {
   if (exitCode === 0) return "other";
@@ -104,9 +107,13 @@ export function classifyLumeError(stderr: string, exitCode: number | null): Lume
     /VZErrorDomain\W+Code=6\b/u.test(text) ||
     /virtual machines? exceeds? the limit/iu.test(text) ||
     /maximum supported number of active virtual machines/iu.test(text) ||
-    /virtualMachineLimitExceeded/u.test(text)
+    /virtualMachineLimitExceeded/u.test(text) ||
+    /host limit of \d+ running macOS guests reached/iu.test(text)
   ) {
     return "vm_limit";
+  }
+  if (/Not enough free space on host volume\b/iu.test(text) || /Not enough host free space\b/iu.test(text)) {
+    return "low_disk";
   }
   if (/Virtual machine not found\b/u.test(text) || /\bVM '[^'\n]*' not found\b/u.test(text)) return "not_found";
   if (/still being provisioned/iu.test(text) || /provisioning \(stale\)/u.test(text)) return "stale";

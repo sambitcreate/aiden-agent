@@ -10,14 +10,14 @@ import { BotComputerError } from "./types.js";
 // is human-readable provenance; scripts/bot-computers-lume-pins.mjs is the
 // packaging authority. lume-binary.test.ts fails when any of the three drift.
 export const LUME_PINS = Object.freeze({
-  version: "0.6.1",
-  tag: "lume-v0.6.1",
+  version: "0.8.0",
+  tag: "lume-v0.8.0",
   bundleIdentifier: "com.trycua.lume",
-  bundleVersion: "0.6.1",
-  binarySha256: "a369d63746690afe79626e357241df2f95b523e7f6f60ac9bc7665762abfc904",
-  binaryBytes: 21_425_024,
+  bundleVersion: "0.8.0",
+  binarySha256: "0a51a37a11b94f82f431f259cf4437f2b2fac52881b16c44de94e081c8e98955",
+  binaryBytes: 21_890_832,
   upstreamSigningTeamId: "YCK386LBJ7",
-  archiveSha256: "2675b7981b7d3eb525cd27f40a385c986052eb71b3360c0b2579644725f1bad8",
+  archiveSha256: "65e695febc92284960b87ffabffaf5f1fba75c3a5bdf756439648abcaeeb0049",
 });
 
 export function lumeSigningRequirement(): string {

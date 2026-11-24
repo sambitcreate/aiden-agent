@@ -804,10 +804,10 @@ SOFTWARE.
 
 ## Lume
 
-Lume 0.6.1 (`lume.app`, the macOS virtualization CLI Aiden uses for Bot
+Lume 0.8.0 (`lume.app`, the macOS virtualization CLI Aiden uses for Bot
 computers on Apple silicon) is vendored unmodified from the signed release
 asset and shipped at `Contents/Helpers/lume.app`. Source:
-https://github.com/trycua/cua/tree/lume-v0.6.1/libs/lume. The licence text is
+https://github.com/trycua/cua/tree/lume-v0.8.0/libs/lume. The licence text is
 kept at `resources/bot-computers/LICENSE.lume.md`.
 
 MIT License

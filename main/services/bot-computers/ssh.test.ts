@@ -15,6 +15,7 @@ import {
   guestSshPaths,
   parsePublicKey,
   runGuestCommand,
+  scanGuestHostKey,
   writeKnownHost,
 } from "./ssh.js";
 import { BotComputerError } from "./types.js";
@@ -138,4 +139,36 @@ test("the key pair is made once with ssh-keygen and kept owner-only", async () =
   assert.equal(readFileSync(local.knownHosts, "utf8"), `${BOT_COMPUTER_HOST_KEY_ALIAS} ${KEY}\n`);
   assert.equal(statSync(local.knownHosts).mode & 0o777, 0o600);
   assert.throws(() => parsePublicKey("ssh-rsa AAAA"), BotComputerError);
+});
+
+test("scanGuestHostKey extracts and validates an ed25519 key from ssh-keyscan and refuses bad hosts or output", async () => {
+  const seen: { command: string; args: readonly string[] }[] = [];
+  const scanned = await scanGuestHostKey("192.168.64.22", {
+    env: { PATH: "/usr/bin" },
+    run: async (command, args) => {
+      seen.push({ command, args });
+      return {
+        exitCode: 0,
+        signal: null,
+        stdout: `# 192.168.64.22:22 SSH-2.0-OpenSSH_9.9p2 Debian-2\n192.168.64.22 ${KEY}\n`,
+        stderr: "",
+        truncated: false,
+        timedOut: false,
+      };
+    },
+  });
+  assert.equal(scanned, KEY);
+  assert.deepEqual(seen, [{ command: "/usr/bin/ssh-keyscan", args: ["-t", "ed25519", "-T", "10", "192.168.64.22"] }]);
+
+  await assert.rejects(
+    scanGuestHostKey("evil.example", { env: {}, run: async () => ({ exitCode: 0, signal: null, stdout: "", stderr: "", truncated: false, timedOut: false }) }),
+    (error: unknown) => error instanceof BotComputerError && error.code === "invalid",
+  );
+  await assert.rejects(
+    scanGuestHostKey("192.168.64.22", {
+      env: {},
+      run: async () => ({ exitCode: 0, signal: null, stdout: "192.168.64.22 ssh-rsa AAAA\n", stderr: "", truncated: false, timedOut: false }),
+    }),
+    (error: unknown) => error instanceof BotComputerError && error.code === "start_failed",
+  );
 });

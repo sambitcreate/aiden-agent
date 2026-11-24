@@ -1,6 +1,6 @@
 /* global AbortController, clearTimeout, console, fetch, process, setTimeout */
 
-// Vendors the pinned, upstream-signed Lume 0.6.1 bundle into
+// Vendors the pinned, upstream-signed Lume 0.8.0 bundle into
 // build/bot-computers/lume.app for packaging (npm run bot-computers:vendor).
 // Lume keeps its own Developer ID signature: it carries the virtualization
 // entitlement and a provisioning profile for vm.networking, which re-signing

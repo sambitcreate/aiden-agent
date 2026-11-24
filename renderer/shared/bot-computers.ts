@@ -53,14 +53,17 @@ export interface BotComputerStatus {
   activity?: string;
 }
 
+export type BotComputerGuestOs = "macos" | "linux";
+export type BotComputerMaxRunning = 1 | 2 | 3 | 4;
+
 export interface BotComputersSettings {
-  maxRunning: 1 | 2;
+  maxRunning: BotComputerMaxRunning;
   idleStopMinutes: number;
 }
 
 /** What Set up and each start need, stated up front on the Settings page. */
 export interface BotComputersRequirements {
-  /** The pinned macOS restore image download. */
+  /** The pinned OS image download. */
   downloadBytes: number;
   /** About how much disk the finished base computer takes. */
   baseDiskBytes: number;
@@ -68,8 +71,12 @@ export interface BotComputersRequirements {
   setupFreeBytes: number;
   /** Free memory each running computer needs. */
   memoryPerComputerBytes: number;
-  /** The macOS version the pinned base installs. */
+  /** The guest OS version the pinned base installs. */
   baseVersion: string;
+  /** Guest OS for Bot computers (defaults to `"macos"` when omitted). */
+  guestOs?: BotComputerGuestOs;
+  /** Upper bound on "Computers running at once" allowed by the guest OS and host memory. */
+  maxRunningLimit?: BotComputerMaxRunning;
 }
 
 export interface BotComputersStatus {
@@ -140,24 +147,37 @@ export interface BotComputerPointer {
 export const BOT_COMPUTERS_CHANGED_CHANNEL = "botComputers:changed";
 
 export const BOT_COMPUTER_MAX_RUNNING_CHOICES = [1, 2] as const;
+export const BOT_COMPUTER_LINUX_MAX_RUNNING_CHOICES = [1, 2, 3, 4] as const;
 export const BOT_COMPUTER_IDLE_STOP_CHOICES = [5, 10, 15, 30, 60] as const;
 export const DEFAULT_BOT_COMPUTERS_SETTINGS: BotComputersSettings = Object.freeze({
   maxRunning: 2,
   idleStopMinutes: 10,
 });
 
+/** Offered "Computers running at once" values up to the host's limit (defaults to 1–2 for macOS). */
+export function botComputerMaxRunningChoices(limit: BotComputerMaxRunning = 2): readonly BotComputerMaxRunning[] {
+  return BOT_COMPUTER_LINUX_MAX_RUNNING_CHOICES.slice(0, limit);
+}
+
 /**
  * Validate a settings change from the renderer. Unknown keys and values
  * outside the offered choices throw rather than being clamped.
  */
-export function parseBotComputersSettingsPatch(value: unknown): Partial<BotComputersSettings> {
+export function parseBotComputersSettingsPatch(
+  value: unknown,
+  maxRunningLimit: BotComputerMaxRunning = 2,
+): Partial<BotComputersSettings> {
   const input = record(value);
   if (!input) throw new Error("Bot computer settings must be an object.");
   const patch: Partial<BotComputersSettings> = {};
   for (const [key, entry] of Object.entries(input)) {
     if (key === "maxRunning") {
-      if (entry !== 1 && entry !== 2) throw new Error("At most one or two Bot computers can run at once.");
-      patch.maxRunning = entry;
+      if (typeof entry !== "number" || !Number.isSafeInteger(entry) || entry < 1 || entry > maxRunningLimit) {
+        if (maxRunningLimit === 2) throw new Error("At most one or two Bot computers can run at once.");
+        if (maxRunningLimit === 1) throw new Error("At most one Bot computer can run at once on this Mac.");
+        throw new Error(`At most ${maxRunningLimit} Bot computers can run at once on this Mac.`);
+      }
+      patch.maxRunning = entry as BotComputerMaxRunning;
     } else if (key === "idleStopMinutes") {
       if (!(BOT_COMPUTER_IDLE_STOP_CHOICES as readonly unknown[]).includes(entry)) {
         throw new Error("Choose one of the offered idle stop times.");
@@ -279,7 +299,32 @@ export function parseBotComputersStatus(value: unknown): BotComputersStatus | un
   const settings = record(input?.settings);
   const requirements = record(input?.requirements);
   if (!input || !setup || !settings || !requirements || !Array.isArray(input.computers)) return undefined;
-  if (settings.maxRunning !== 1 && settings.maxRunning !== 2) return undefined;
+  const guestOs =
+    requirements.guestOs === undefined
+      ? undefined
+      : requirements.guestOs === "macos" || requirements.guestOs === "linux"
+        ? requirements.guestOs
+        : null;
+  if (guestOs === null) return undefined;
+  const maxRunningLimit =
+    requirements.maxRunningLimit === undefined
+      ? undefined
+      : requirements.maxRunningLimit === 1 ||
+          requirements.maxRunningLimit === 2 ||
+          requirements.maxRunningLimit === 3 ||
+          requirements.maxRunningLimit === 4
+        ? requirements.maxRunningLimit
+        : null;
+  if (maxRunningLimit === null) return undefined;
+  const allowedMaxRunning = guestOs === "linux" || maxRunningLimit !== undefined ? 4 : 2;
+  if (
+    typeof settings.maxRunning !== "number" ||
+    !Number.isSafeInteger(settings.maxRunning) ||
+    settings.maxRunning < 1 ||
+    settings.maxRunning > allowedMaxRunning
+  ) {
+    return undefined;
+  }
   const idleStopMinutes = count(settings.idleStopMinutes);
   const diskUsedBytes = count(input.diskUsedBytes);
   const freeDiskBytes = count(input.freeDiskBytes);
@@ -306,11 +351,19 @@ export function parseBotComputersStatus(value: unknown): BotComputersStatus | un
   }
   return {
     setup,
-    settings: { maxRunning: settings.maxRunning, idleStopMinutes },
+    settings: { maxRunning: settings.maxRunning as BotComputerMaxRunning, idleStopMinutes },
     diskUsedBytes,
     ...(freeDiskBytes !== undefined ? { freeDiskBytes } : {}),
     computers,
-    requirements: { downloadBytes, baseDiskBytes, setupFreeBytes, memoryPerComputerBytes, baseVersion },
+    requirements: {
+      downloadBytes,
+      baseDiskBytes,
+      setupFreeBytes,
+      memoryPerComputerBytes,
+      baseVersion,
+      ...(guestOs !== undefined ? { guestOs } : {}),
+      ...(maxRunningLimit !== undefined ? { maxRunningLimit } : {}),
+    },
   };
 }
 
@@ -333,27 +386,37 @@ const BUILD_STEP_COPY: Record<BotComputerBuildStep, string> = {
   permissions: "Waiting for permissions in the base computer",
 };
 
+const LINUX_BUILD_STEP_COPY: Record<BotComputerBuildStep, string> = {
+  create: "Setting up Debian Linux on the base computer",
+  provision: "Preparing the base computer",
+  guest_driver: "Installing Aiden's helper in the base computer",
+  permissions: "Preparing the base computer",
+};
+
 /** One line describing setup, for the Settings row and screen readers. */
-export function botComputerSetupSummary(setup: BotComputerSetupState): string {
+export function botComputerSetupSummary(setup: BotComputerSetupState, guestOs: BotComputerGuestOs = "macos"): string {
+  const linux = guestOs === "linux";
   switch (setup.kind) {
     case "unsupported":
       return setup.reason === "host_os"
-        ? "Bot computers need macOS 26 or later on this Mac."
+        ? linux
+          ? "Bot computers need macOS 14 or later on this Mac."
+          : "Bot computers need macOS 26 or later on this Mac."
         : "Bot computers need a Mac with Apple silicon.";
     case "not_set_up":
       return "Not set up.";
     case "downloading":
       return setup.totalBytes > 0
-        ? `Downloading macOS ${formatHarnessBytes(setup.receivedBytes)} of ${formatHarnessBytes(setup.totalBytes)}…`
-        : "Downloading macOS…";
+        ? `Downloading ${linux ? "Debian Linux" : "macOS"} ${formatHarnessBytes(setup.receivedBytes)} of ${formatHarnessBytes(setup.totalBytes)}…`
+        : `Downloading ${linux ? "Debian Linux" : "macOS"}…`;
     case "verifying":
       return "Checking the download…";
     case "building_base":
-      return `${BUILD_STEP_COPY[setup.step]}…`;
-    case "ready":
-      return setup.updateAvailable
-        ? `Ready. A newer base (macOS ${setup.baseVersion}) is available.`
-        : `Ready (macOS ${setup.baseVersion}).`;
+      return `${(linux ? LINUX_BUILD_STEP_COPY : BUILD_STEP_COPY)[setup.step]}…`;
+    case "ready": {
+      const osLabel = linux ? `Debian ${setup.baseVersion}` : `macOS ${setup.baseVersion}`;
+      return setup.updateAvailable ? `Ready. A newer base (${osLabel}) is available.` : `Ready (${osLabel}).`;
+    }
     case "failed":
       return setup.message;
   }

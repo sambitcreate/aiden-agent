@@ -13,16 +13,49 @@ export interface LumeInvocation {
  * Every Lume operation Aiden runs. There is deliberately no `serve` (an
  * unauthenticated HTTP API on localhost:7777), `pull`, `update`, `push`,
  * `ipsw` or `setup`: none of them can be expressed.
+ *
+ * `ssh` and `cp` use Lume's default preset credentials without ever placing a
+ * rotated secret on argv, so they apply only before guest SSH hardening turns
+ * off password login; post-hardening commands and file copies use Aiden's own
+ * key-authenticated, host-key-pinned `/usr/bin/ssh`.
  */
 export type LumeCommand =
-  | { op: "create"; name: string; ipsw: string; unattended: "tahoe" }
+  | { op: "create"; os?: "macOS"; name: string; ipsw: string; unattended: "tahoe" }
+  | {
+      op: "create";
+      os: "linux";
+      name: string;
+      cpu?: number;
+      memoryGb?: number;
+      diskSizeGb?: number;
+      display?: string;
+    }
   | { op: "clone"; source: string; target: string }
-  | { op: "run"; name: string; vncPassword: string; sharedDir: string; logFile?: string }
+  | {
+      op: "run";
+      name: string;
+      vncPassword: string;
+      sharedDir: string;
+      logFile?: string;
+      /** For Linux VMs only: read-only disk image / ISO to attach (e.g. cloud-init `cidata` ISO). */
+      mount?: string;
+      /** Optional override path to the primary disk image file (`--disk-path`). */
+      diskPath?: string;
+    }
   | { op: "get"; name: string }
   | { op: "list" }
   | { op: "stop"; name: string; force?: boolean; timeoutSeconds?: number }
   | { op: "delete"; name: string }
-  | { op: "ssh"; name: string; command: string; timeoutSeconds?: number };
+  | { op: "ssh"; name: string; command: string; timeoutSeconds?: number }
+  | {
+      op: "cp";
+      name: string;
+      direction: "to_guest" | "from_guest";
+      localPath: string;
+      remotePath: string;
+      recursive?: boolean;
+      timeoutSeconds?: number;
+    };
 
 function requireAbsolute(value: string, what: string): string {
   if (typeof value !== "string" || value.length === 0 || value.includes("\0") || !path.isAbsolute(value)) {
@@ -55,6 +88,36 @@ export function lumeArgs(command: LumeCommand, storage: string): string[] {
   requireAbsolute(storage, "Aiden's VM storage");
   switch (command.op) {
     case "create": {
+      if (command.os === "linux") {
+        const args = ["create", requireName(command.name), "--os", "linux"];
+        if (command.cpu !== undefined) {
+          if (!Number.isSafeInteger(command.cpu) || command.cpu < 1 || command.cpu > 32) {
+            throw new BotComputerError("invalid", "Linux VM CPU count must be a whole number between 1 and 32.");
+          }
+          args.push("--cpu", String(command.cpu));
+        }
+        if (command.memoryGb !== undefined) {
+          if (!Number.isSafeInteger(command.memoryGb) || command.memoryGb < 2 || command.memoryGb > 128) {
+            throw new BotComputerError("invalid", "Linux VM memory must be a whole number of GB (at least 2 GB).");
+          }
+          args.push("--memory", `${command.memoryGb}GB`);
+        }
+        if (command.diskSizeGb !== undefined) {
+          // Lume 0.8.0 enforces a 10 GB minimum for Linux VMs (Create.swift).
+          if (!Number.isSafeInteger(command.diskSizeGb) || command.diskSizeGb < 10 || command.diskSizeGb > 1024) {
+            throw new BotComputerError("invalid", "Linux VM disk size must be a whole number of GB (at least 10 GB).");
+          }
+          args.push("--disk-size", `${command.diskSizeGb}GB`);
+        }
+        if (command.display !== undefined) {
+          if (!/^\d{3,4}x\d{3,4}$/u.test(command.display)) {
+            throw new BotComputerError("invalid", "VM display resolution must be WIDTHxHEIGHT.");
+          }
+          args.push("--display", command.display);
+        }
+        args.push("--storage", storage);
+        return args;
+      }
       const ipsw = requireAbsolute(command.ipsw, "The restore image");
       if (command.unattended !== "tahoe") throw new BotComputerError("invalid", "Unknown unattended preset.");
       return [
@@ -95,6 +158,8 @@ export function lumeArgs(command: LumeCommand, storage: string): string[] {
         "--detach",
         "--display",
         "none",
+        "--no-audio-device",
+        "--no-clipboard-device",
         "--vnc-password",
         command.vncPassword,
         "--shared-dir",
@@ -102,6 +167,8 @@ export function lumeArgs(command: LumeCommand, storage: string): string[] {
         "--storage",
         storage,
       ];
+      if (command.mount !== undefined) args.push("--mount", requireAbsolute(command.mount, "The mount image"));
+      if (command.diskPath !== undefined) args.push("--disk-path", requireAbsolute(command.diskPath, "The disk image"));
       if (command.logFile !== undefined) args.push("--log-file", requireAbsolute(command.logFile, "The Lume log"));
       return args;
     }
@@ -131,6 +198,21 @@ export function lumeArgs(command: LumeCommand, storage: string): string[] {
         requireName(command.name),
         command.command,
       ];
+    case "cp": {
+      const localPath = requireAbsolute(command.localPath, "The host path");
+      if (typeof command.remotePath !== "string" || command.remotePath.length === 0 || /[\0\r\n]/u.test(command.remotePath)) {
+        throw new BotComputerError("invalid", "A guest path is required.");
+      }
+      if (command.direction !== "to_guest" && command.direction !== "from_guest") {
+        throw new BotComputerError("invalid", "Unknown copy direction.");
+      }
+      const remoteEndpoint = `${requireName(command.name)}:${command.remotePath}`;
+      const [source, destination] = command.direction === "to_guest" ? [localPath, remoteEndpoint] : [remoteEndpoint, localPath];
+      const args = ["cp", "--storage", storage, "--timeout", requireSeconds(command.timeoutSeconds, 600)];
+      if (command.recursive) args.push("--recursive");
+      args.push(source, destination);
+      return args;
+    }
     default: {
       const unknown: never = command;
       throw new BotComputerError("invalid", `Unknown Lume operation: ${String((unknown as { op?: unknown }).op)}`);

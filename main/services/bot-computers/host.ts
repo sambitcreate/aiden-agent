@@ -4,6 +4,7 @@ import { mkdir, open, rm, type FileHandle } from "node:fs/promises";
 import path from "node:path";
 import {
   parseBotComputersSettingsPatch,
+  type BotComputerMaxRunning,
   type BotComputerRunState,
   type BotComputerSetupState,
   type BotComputersSettings,
@@ -14,14 +15,34 @@ import { reportAnalyticsEvent } from "../analytics/analytics-report.js";
 import { CUA_DRIVER_UPSTREAM_PIN } from "../computer-use/binary.js";
 import { CUA_DRIVER_VERSION } from "../computer-use/contract.js";
 import type { CuaDriverHostFactory, CuaDriverSessionLike } from "../computer-use/controller.js";
+import { writeCloudInitSeedIso } from "./cloud-init-iso.js";
 import { createBotComputerControl, type BotComputerControlRegistry } from "./control.js";
 import { createGuestCuaDriverHostFactory, guestDriverSshBridge, type GuestDriverBridgeCommand } from "./guest-driver.js";
 import { guestDriverRestartScript, installGuestDriver, type GuestDriverLocation } from "./guest-driver-install.js";
 import { guestDriverPermissions, guestDriverReady, probeGuestDriver, type GuestDriverPermissions } from "./guest-driver-readiness.js";
+import { prepareLinuxBaseDisk } from "./linux-base.js";
+import { botComputersLinuxEnabled } from "./linux-feature-flag.js";
 import { lumeEnvironment, runLume, type LumeCommand, type LumeInvocation, type LumeRunResult } from "./lume-cli.js";
 import { classifyLumeError, isLoopbackHost, parseLumeVmInfo, parseLumeVmList, type LumeErrorKind, type LumeVmInfo } from "./lume-output.js";
-import { buildBaseVm, generateGuestPassword, type ProvisionContext } from "./provision.js";
 import {
+  BOT_COMPUTER_LINUX_DESKTOP_PACKAGES,
+  buildBaseVm,
+  buildLinuxBaseVm,
+  generateGuestPassword,
+  type LinuxProvisionContext,
+  type ProvisionContext,
+} from "./provision.js";
+import {
+  BOT_COMPUTER_LINUX_BASE_DISK_RESERVE_BYTES,
+  BOT_COMPUTER_LINUX_BASE_SIZE_BYTES,
+  BOT_COMPUTER_LINUX_CPU_COUNT,
+  BOT_COMPUTER_LINUX_DISK_BYTES,
+  BOT_COMPUTER_LINUX_DISK_GB,
+  BOT_COMPUTER_LINUX_DISPLAY,
+  BOT_COMPUTER_LINUX_IMAGE,
+  BOT_COMPUTER_LINUX_MEMORY_BYTES,
+  BOT_COMPUTER_LINUX_MEMORY_GB,
+  BOT_COMPUTER_LINUX_MIN_MEMORY_BYTES,
   BOT_COMPUTER_RESTORE_IMAGE,
   BOT_COMPUTER_BASE_DISK_RESERVE_BYTES,
   BOT_COMPUTER_BASE_SIZE_BYTES,
@@ -36,6 +57,7 @@ import {
   guestSshEnvironment,
   guestSshPaths,
   runGuestCommand as runSshCommand,
+  scanGuestHostKey,
   writeKnownHost,
   type GuestSshTarget,
   type ProcessRunner,
@@ -92,10 +114,13 @@ export interface BotComputerHostDependencies {
    * (Lume's detached run can return before the VM it launched is up), to turn it off.
    */
   launchSettleMs?: number;
-  /** `/usr/bin/ssh` and `/usr/bin/ssh-keygen`, or fakes. */
+  /** `/usr/bin/ssh`, `/usr/bin/ssh-keygen`, and `/usr/bin/ssh-keyscan`, or fakes. */
   sshCommand?: string;
   keygenCommand?: string;
+  keyscanCommand?: string;
   runProcess?: ProcessRunner;
+  /** Override `AIDEN_BOT_COMPUTERS_LINUX` for tests (defaults to checking `deps.env ?? process.env`). */
+  linux?: boolean;
   vncExposed?(port: number): Promise<boolean>;
   control?: BotComputerControlRegistry;
   activity?: BotComputerActivity;
@@ -194,7 +219,12 @@ export function createBotComputerHost(deps: BotComputerHostDependencies): BotCom
     baseShared: path.join(root, "base-shared"),
   };
   const sshPaths = guestSshPaths(root);
-  const image = deps.image ?? BOT_COMPUTER_RESTORE_IMAGE;
+  const linux = deps.linux ?? botComputersLinuxEnabled(deps.env ?? process.env);
+  const image = deps.image ?? (linux ? BOT_COMPUTER_LINUX_IMAGE : BOT_COMPUTER_RESTORE_IMAGE);
+  const baseDiskSizeBytes = linux ? BOT_COMPUTER_LINUX_BASE_SIZE_BYTES : BOT_COMPUTER_BASE_SIZE_BYTES;
+  const baseDiskReserveBytes = linux ? BOT_COMPUTER_LINUX_BASE_DISK_RESERVE_BYTES : BOT_COMPUTER_BASE_DISK_RESERVE_BYTES;
+  const vmMemoryBytes = linux ? BOT_COMPUTER_LINUX_MEMORY_BYTES : BOT_COMPUTER_VM_MEMORY_BYTES;
+  const vmMinMemoryBytes = linux ? BOT_COMPUTER_LINUX_MIN_MEMORY_BYTES : BOT_COMPUTER_VM_MEMORY_BYTES;
   const store = createBotComputersStore(path.join(root, "state.json"));
   const resources = deps.resources ?? systemResourceProbe;
   const now = deps.now ?? Date.now;
@@ -215,9 +245,17 @@ export function createBotComputerHost(deps: BotComputerHostDependencies): BotCom
   const downloader = createRestoreImageDownloader({
     dir: dirs.images,
     image,
+    ...(linux
+      ? {
+          filename: `debian-${image.build}.raw`,
+          label: "Debian Linux",
+          serverLabel: "Debian's download server",
+          allowHttpsRedirects: true,
+        }
+      : {}),
     fetchImpl: deps.fetchImpl,
     freeDiskBytes: (dir) => resources.freeDiskBytes(dir),
-    reserveBytes: BOT_COMPUTER_BASE_DISK_RESERVE_BYTES,
+    reserveBytes: baseDiskReserveBytes,
   });
 
   const runtimes = new Map<string, Runtime>();
@@ -270,6 +308,18 @@ export function createBotComputerHost(deps: BotComputerHostDependencies): BotCom
   };
   const occupied = () =>
     [...runtimes.values()].filter((entry) => SLOT_STATES.has(entry.state)).length + (baseHoldsSlot ? 1 : 0);
+
+  /** Upper bound on concurrent Bot computers: 2 on macOS, 1–4 on Linux based on host memory. */
+  async function currentMaxRunningLimit(): Promise<BotComputerMaxRunning> {
+    if (!linux) return 2;
+    try {
+      const available = await resources.availableMemoryBytes();
+      const effective = available + occupied() * BOT_COMPUTER_LINUX_MEMORY_BYTES;
+      return Math.max(1, Math.min(4, Math.floor(effective / BOT_COMPUTER_LINUX_MEMORY_BYTES))) as BotComputerMaxRunning;
+    } catch {
+      return 2;
+    }
+  }
   const wakeSlotWaiters = () => {
     const waiters = [...slotWaiters];
     slotWaiters.clear();
@@ -377,7 +427,14 @@ export function createBotComputerHost(deps: BotComputerHostDependencies): BotCom
       case "vm_limit":
         return new BotComputerError(
           "vm_limit",
-          "macOS runs at most two virtual machines at once, and another app is using one. Quit it or stop another Bot's computer, then try again.",
+          linux
+            ? "Another virtual machine is using the last available slot. Stop another virtual machine or Bot's computer, then try again."
+            : "macOS runs at most two virtual machines at once, and another app is using one. Quit it or stop another Bot's computer, then try again.",
+        );
+      case "low_disk":
+        return new BotComputerError(
+          "low_disk",
+          `${owner} computer didn't start because this Mac doesn't have enough free disk space. Free up space and try again.`,
         );
       case "not_found":
       case "stale":
@@ -428,6 +485,7 @@ export function createBotComputerHost(deps: BotComputerHostDependencies): BotCom
     signal: AbortSignal | undefined,
     requireSsh: boolean,
     onLeftRunning?: () => void,
+    mount?: string,
   ): Promise<{ info: LumeVmInfo & { ip: string; vnc: { host: string; port: number } }; password: string }> {
     const password = vncPassword();
     await mkdir(dirs.logs, { recursive: true, mode: 0o700 });
@@ -445,7 +503,7 @@ export function createBotComputerHost(deps: BotComputerHostDependencies): BotCom
       // with nobody left to turn it off. A run that fails, times out or is ended by quit may
       // still have launched the VM: the catch turns it off.
       const started = await lume(
-        { op: "run", name: vmName, vncPassword: password, sharedDir, logFile },
+        { op: "run", name: vmName, vncPassword: password, sharedDir, ...(mount ? { mount } : {}), logFile },
         60_000,
         quitting.signal,
         () => {
@@ -454,9 +512,10 @@ export function createBotComputerHost(deps: BotComputerHostDependencies): BotCom
         true,
       );
       const refusal = started.exitCode === 0 ? undefined : failureKind(started);
-      // Lume refused this VM (it has none by that name, it is still being made, or macOS's limit
-      // is reached): nothing is coming up. Any other failure may have launched it.
-      if (refusal === "not_found" || refusal === "stale" || refusal === "vm_limit") launch = "ended";
+      // Lume refused this VM (it has none by that name, it is still being made, the host lacks
+      // disk space, or macOS's limit is reached): nothing is coming up. Any other failure may have
+      // launched it.
+      if (refusal === "not_found" || refusal === "stale" || refusal === "vm_limit" || refusal === "low_disk") launch = "ended";
       if (signal?.aborted) throw new BotComputerError("cancelled", "Starting the computer was cancelled.");
       if (refusal !== undefined) throw startFailure(refusal, owner);
       const deadline = now() + startTimeoutMs;
@@ -510,7 +569,8 @@ export function createBotComputerHost(deps: BotComputerHostDependencies): BotCom
       if (signal.aborted) throw new BotComputerError("cancelled", "Starting the computer was cancelled.");
       if (shuttingDown) throw new BotComputerError("busy", "Aiden is quitting.");
       const { settings } = await store.read();
-      if (occupied() < settings.maxRunning) {
+      const cap = linux ? Math.min(settings.maxRunning, await currentMaxRunningLimit()) : settings.maxRunning;
+      if (occupied() < cap) {
         entry.state = "starting";
         return;
       }
@@ -551,7 +611,8 @@ export function createBotComputerHost(deps: BotComputerHostDependencies): BotCom
       if (signal.aborted) throw new BotComputerError("cancelled", "Setting up Bot computers was cancelled.");
       if (shuttingDown) throw new BotComputerError("busy", "Aiden is quitting.");
       const { settings } = await store.read();
-      if (occupied() < settings.maxRunning) {
+      const cap = linux ? Math.min(settings.maxRunning, await currentMaxRunningLimit()) : settings.maxRunning;
+      if (occupied() < cap) {
         baseHoldsSlot = true;
         return;
       }
@@ -667,7 +728,7 @@ export function createBotComputerHost(deps: BotComputerHostDependencies): BotCom
       await requireResources(resources, {
         dir: root,
         diskBytes: START_DISK_BYTES,
-        memoryBytes: BOT_COMPUTER_VM_MEMORY_BYTES,
+        memoryBytes: linux && occupied() <= 1 ? vmMinMemoryBytes : vmMemoryBytes,
         signal: options.signal,
       });
       options.onProgress?.(`Starting ${owner} computer…`);
@@ -857,7 +918,11 @@ export function createBotComputerHost(deps: BotComputerHostDependencies): BotCom
     if (!support.ok) {
       throw new BotComputerError(
         "unsupported",
-        support.reason === "host_os" ? "Bot computers need macOS 26 or later." : "Bot computers need a Mac with Apple silicon.",
+        support.reason === "host_os"
+          ? linux
+            ? "Bot computers need macOS 14 or later."
+            : "Bot computers need macOS 26 or later."
+          : "Bot computers need a Mac with Apple silicon.",
       );
     }
   }
@@ -871,6 +936,14 @@ export function createBotComputerHost(deps: BotComputerHostDependencies): BotCom
     if (!support.ok) return { kind: "unsupported", reason: support.reason };
     if (setupState) return setupState;
     if (state.setup.baseBuild) {
+      if (linux) {
+        return {
+          kind: "ready",
+          baseVersion: state.setup.baseVersion ?? image.version,
+          baseBuild: state.setup.baseBuild,
+          updateAvailable: state.setup.baseBuild !== image.build,
+        };
+      }
       const elementControl = guestDriverReady(state.setup.guestDriver);
       return {
         kind: "ready",
@@ -1132,6 +1205,8 @@ export function createBotComputerHost(deps: BotComputerHostDependencies): BotCom
   /** Element control for a ready base made without it: boot it once, install, wait for the grants, shut it down. */
   /** Whether this run added element control; false when it was already there. */
   async function performElementControlSetup(signal: AbortSignal): Promise<boolean> {
+    // Linux Bot computers have no macOS permission grant flow.
+    if (linux) return false;
     // A Bot's computer still being copied from the base finishes before the base boots.
     await copiesSettled();
     const state = await store.read();
@@ -1189,7 +1264,7 @@ export function createBotComputerHost(deps: BotComputerHostDependencies): BotCom
     // download; with Bot computers running, their memory is not free yet (an idle
     // one may stop for the base), so only the check before the install applies.
     if (occupied() === 0) {
-      await requireResources(resources, { dir: root, memoryBytes: BOT_COMPUTER_VM_MEMORY_BYTES, signal });
+      await requireResources(resources, { dir: root, memoryBytes: vmMinMemoryBytes, signal });
     }
     setupState = { kind: "downloading", receivedBytes: await downloader.partialBytes(), totalBytes: image.bytes };
     emit();
@@ -1209,8 +1284,10 @@ export function createBotComputerHost(deps: BotComputerHostDependencies): BotCom
     await acquireBaseSlot(signal);
     let guestDriver: BotComputerGuestDriverRecord | undefined;
     try {
-      await requireResources(resources, { dir: root, memoryBytes: BOT_COMPUTER_VM_MEMORY_BYTES, signal });
-      guestDriver = await buildAndInstallBase(mode, target, ipsw, signal);
+      await requireResources(resources, { dir: root, memoryBytes: vmMinMemoryBytes, signal });
+      guestDriver = linux
+        ? await buildAndInstallLinuxBase(mode, target, ipsw, signal)
+        : await buildAndInstallBase(mode, target, ipsw, signal);
     } finally {
       releaseBaseSlot();
     }
@@ -1249,8 +1326,10 @@ export function createBotComputerHost(deps: BotComputerHostDependencies): BotCom
         const result = await lume({ op: "create", name: target, ipsw, unattended: "tahoe" }, 3 * 60 * 60_000, signal);
         if (result.exitCode === 0) return;
         log(`lume create failed: ${result.stderr.slice(-600)}`);
-        // The unattended install boots the VM, so another app's macOS VM can fill the last place.
-        if (failureKind(result) === "vm_limit") throw startFailure("vm_limit", "The base");
+        // The unattended install boots the VM, so another app's macOS VM can fill the last place,
+        // or the host volume can run out of free space before it boots.
+        const kind = failureKind(result);
+        if (kind === "vm_limit" || kind === "low_disk") throw startFailure(kind, "The base");
         throw new BotComputerError("lume_failed", "Installing macOS on the base computer failed. Choose Set up to try again.");
       },
       start: async () => {
@@ -1290,6 +1369,117 @@ export function createBotComputerHost(deps: BotComputerHostDependencies): BotCom
       await deleteVm(BOT_COMPUTER_STAGING_BASE_VM);
     }
     return driver?.result();
+  }
+
+  /** Install Debian Linux into `target`, provision it via cloud-init + SSH, and (for an update) swap it in as the base. */
+  async function buildAndInstallLinuxBase(
+    mode: "setup" | "update",
+    target: string,
+    downloadedImage: string,
+    signal: AbortSignal,
+  ): Promise<BotComputerGuestDriverRecord | undefined> {
+    setupState = { kind: "building_base", step: "create" };
+    emit();
+    const sshEnv = guestSshEnvironment(deps.env ?? process.env, dirs.home);
+    await mkdir(dirs.home, { recursive: true, mode: 0o700 });
+    const publicKey = await ensureKeyPair(sshPaths, {
+      env: sshEnv,
+      run: deps.runProcess,
+      keygenCommand: deps.keygenCommand,
+      signal,
+    });
+    await mkdir(dirs.baseShared, { recursive: true, mode: 0o700 });
+    const stored = await deps.secrets.get(BOT_COMPUTER_GUEST_PASSWORD_SECRET);
+    const guestPassword = stored !== null && /^[A-Za-z0-9]{16,128}$/u.test(stored) ? stored : generateGuestPassword();
+    await deps.secrets.set(BOT_COMPUTER_GUEST_PASSWORD_SECRET, guestPassword);
+    const seedIsoPath = path.join(dirs.images, `${target}-cidata.iso`);
+    const targetDiskPath = path.join(dirs.vms, target, "disk.img");
+
+    await buildLinuxBaseVm({
+      signal,
+      deleteVm: () => deleteVm(target),
+      create: async () => {
+        const result = await lume(
+          {
+            op: "create",
+            os: "linux",
+            name: target,
+            cpu: BOT_COMPUTER_LINUX_CPU_COUNT,
+            memoryGb: BOT_COMPUTER_LINUX_MEMORY_GB,
+            diskSizeGb: BOT_COMPUTER_LINUX_DISK_GB,
+            display: BOT_COMPUTER_LINUX_DISPLAY,
+          },
+          120_000,
+          signal,
+        );
+        if (result.exitCode !== 0) {
+          log(`lume create (linux) failed: ${result.stderr.slice(-600)}`);
+          const kind = failureKind(result);
+          if (kind === "vm_limit" || kind === "low_disk") throw startFailure(kind, "The base");
+          throw new BotComputerError("lume_failed", "Creating the Linux base computer failed. Choose Set up to try again.");
+        }
+        await prepareLinuxBaseDisk({
+          sourceImagePath: downloadedImage,
+          targetDiskPath,
+          targetBytes: BOT_COMPUTER_LINUX_DISK_BYTES,
+        });
+        await writeCloudInitSeedIso(seedIsoPath, {
+          instanceId: target,
+          hostname: target,
+          sshAuthorizedKey: publicKey,
+          password: guestPassword,
+          packages: BOT_COMPUTER_LINUX_DESKTOP_PACKAGES,
+        });
+      },
+      start: async () => {
+        const { info } = await runAndWait(target, dirs.baseShared, "The base", signal, true, undefined, seedIsoPath);
+        return { ip: info.ip };
+      },
+      provisionContext: (ip): LinuxProvisionContext => ({
+        signal,
+        publicKey,
+        password: guestPassword,
+        scanHostKey: () =>
+          scanGuestHostKey(ip, {
+            env: sshEnv,
+            run: deps.runProcess,
+            keyscanCommand: deps.keyscanCommand,
+            signal,
+          }),
+        writeKnownHost: (line) => writeKnownHost(sshPaths, line),
+        guestSsh: (command, options) =>
+          runSshCommand(
+            { host: ip, user: BOT_COMPUTER_GUEST_USER },
+            command,
+            { timeoutMs: options.timeoutMs, maxOutputBytes: 64 * 1024, signal, stdin: options.stdin },
+            { paths: sshPaths, env: sshEnv, sshCommand: deps.sshCommand, run: deps.runProcess },
+          ),
+        stopBase: () => shutDownBase(target, signal),
+      }),
+      stop: async () => {
+        await stopVm(target, true);
+      },
+      removeSeedIso: async () => {
+        await rm(seedIsoPath, { force: true });
+      },
+      removeImage: async () => {
+        await downloader.remove();
+      },
+      onStep: (step) => {
+        setupState = { kind: "building_base", step };
+        emit();
+      },
+    });
+    if (mode === "update") {
+      await deleteVm(BOT_COMPUTER_BASE_VM);
+      await lumeOrThrow(
+        { op: "clone", source: BOT_COMPUTER_STAGING_BASE_VM, target: BOT_COMPUTER_BASE_VM },
+        600_000,
+        "Aiden couldn't swap in the new base.",
+      );
+      await deleteVm(BOT_COMPUTER_STAGING_BASE_VM);
+    }
+    return undefined;
   }
 
   function startSetup(mode: "setup" | "update"): Promise<void> {
@@ -1374,6 +1564,7 @@ export function createBotComputerHost(deps: BotComputerHostDependencies): BotCom
     async status(): Promise<BotComputersStatus> {
       const state = await store.read();
       const freeDiskBytes = await resources.freeDiskBytes(root).catch(() => undefined);
+      const maxRunningLimit = linux ? await currentMaxRunningLimit() : undefined;
       return {
         setup: currentSetup(state),
         settings: { ...state.settings },
@@ -1382,10 +1573,11 @@ export function createBotComputerHost(deps: BotComputerHostDependencies): BotCom
         computers: Object.entries(state.computers).map(([botId, record]) => computerStatus(botId, record, state)),
         requirements: {
           downloadBytes: image.bytes,
-          baseDiskBytes: BOT_COMPUTER_BASE_SIZE_BYTES,
-          setupFreeBytes: image.bytes + BOT_COMPUTER_BASE_DISK_RESERVE_BYTES,
-          memoryPerComputerBytes: BOT_COMPUTER_VM_MEMORY_BYTES,
+          baseDiskBytes: baseDiskSizeBytes,
+          setupFreeBytes: image.bytes + baseDiskReserveBytes,
+          memoryPerComputerBytes: vmMemoryBytes,
           baseVersion: image.version,
+          ...(linux ? { guestOs: "linux" as const, maxRunningLimit } : {}),
         },
       };
     },
@@ -1456,7 +1648,7 @@ export function createBotComputerHost(deps: BotComputerHostDependencies): BotCom
       }),
 
     async updateSettings(patch) {
-      const parsed = parseBotComputersSettingsPatch(patch);
+      const parsed = parseBotComputersSettingsPatch(patch, await currentMaxRunningLimit());
       const state = await store.update((draft) => {
         Object.assign(draft.settings, parsed);
       });

@@ -47,14 +47,21 @@ test("log lines Lume prints to stdout before the JSON are skipped", () => {
   assert.throws(() => parseLumeVmInfo("not json"), /can't read/u);
 });
 
-test("errors map to the VM limit, a missing VM, a stale VM, or a stopped one", () => {
+test("errors map to the VM limit, low disk, a missing VM, a stale VM, or a stopped one", () => {
   assert.equal(classifyLumeError(fixture("lume-error-vm-limit.txt"), 1), "vm_limit");
+  assert.equal(classifyLumeError("Error: VM start rejected: host limit of 2 running macOS guests reached\n", 1), "vm_limit");
+  assert.equal(classifyLumeError(fixture("lume-error-low-disk.txt"), 1), "low_disk");
+  assert.equal(
+    classifyLumeError("Error: Not enough host free space for the resize (need ~1073741824 bytes, have 536870912 bytes); the disk was not modified.\n", 1),
+    "low_disk",
+  );
   assert.equal(classifyLumeError(fixture("lume-error-not-found.txt"), 1), "not_found");
   assert.equal(classifyLumeError("Error: VM 'aiden-base' not found\n", 1), "not_found");
   assert.equal(classifyLumeError("Error: Virtual machine is still being provisioned: aiden-base\n", 1), "stale");
   assert.equal(classifyLumeError("Error: Virtual machine not running: aiden-base\n", 1), "not_running");
   assert.equal(classifyLumeError("Error: Disk full\n", 1), "other");
   assert.equal(classifyLumeError(fixture("lume-error-vm-limit.txt"), 0), "other");
+  assert.equal(classifyLumeError(fixture("lume-error-low-disk.txt"), 0), "other");
 });
 
 test("only loopback hosts count as private (G22)", () => {
