@@ -1456,6 +1456,23 @@ final class AidenRemoteClientTests: XCTestCase {
         XCTAssertTrue(grants.contains(.streamSnapshotReasons))
     }
 
+    /// Revision 68: `bot:needs-you` is negotiated alone, because a Mac before
+    /// revision 68 refuses the name, and only its holders' Bot lists carry `needsYou`.
+    func testBotNeedsYouIsAnOptInNegotiatedAlone() async throws {
+        XCTAssertEqual(AidenRemoteCapability(rawValue: "bot:needs-you"), .botNeedsYou)
+        XCTAssertFalse(AidenRemoteCapability.v1Known.contains(.botNeedsYou))
+        XCTAssertTrue(AidenRemoteCapability.phoneNegotiable.contains(.botNeedsYou))
+        let askedForAlone = await MainActor.run { AidenRemoteCoordinator.capabilitiesAskedForAlone }
+        XCTAssertTrue(askedForAlone.contains([.botNeedsYou]))
+        AidenRemoteMockURLProtocol.handler = { request in
+            XCTAssertEqual(request.url?.path, "/api/aiden/v1/device/capabilities")
+            XCTAssertEqual(try Self.jsonBody(request)["accepts"] as? [String], ["bot:needs-you"])
+            return Self.response(for: request, status: 200, json: #"{"capabilities":["server:read","bot:read","bot:needs-you"]}"#)
+        }
+        let grants = try await makeClient().updateDeviceCapabilities(accepts: [.botNeedsYou])
+        XCTAssertTrue(grants.contains(.botNeedsYou))
+    }
+
     /// Revision 64: Continue in a new chat posts only the destination workspace
     /// to the fork route, with the chat's revision and a key, and accepts only a
     /// new chat in that workspace that records this chat as its source.

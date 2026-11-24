@@ -421,6 +421,7 @@ final class AidenUnifiedInboxTests: XCTestCase {
         name: String? = nil,
         state: String? = "idle",
         issues: Int? = nil,
+        needsYou: Bool = false,
         minutesAgo: Double = 5
     ) -> AidenBotSummary {
         let formatter = ISO8601DateFormatter()
@@ -438,6 +439,7 @@ final class AidenUnifiedInboxTests: XCTestCase {
         if let state { object["sessionState"] = state }
         if state == "paused" { object["paused"] = true }
         if let issues { object["issueCount"] = issues }
+        if needsYou { object["needsYou"] = true }
         let data = try! JSONSerialization.data(withJSONObject: object)
         return try! AidenRemoteJSONDecoder.decode(AidenBotSummary.self, from: data)
     }
@@ -472,6 +474,22 @@ final class AidenUnifiedInboxTests: XCTestCase {
         XCTAssertEqual(labels(offline.needsYou), ["mac-a:bot_cards"])
         XCTAssertEqual(offline.needsYou.map(\.isOnline), [false])
         XCTAssertEqual(offline.needsYouCount, 0)
+    }
+
+    /// Revision 68 (`bot:needs-you`): a running Bot waiting on an approval or a
+    /// question leaves the accessory for Needs you, and says it is waiting.
+    func testARunningBotWaitingOnThePersonNeedsYouInsteadOfWorking() {
+        let scout = bot("bot_scout", name: "Scout", state: "running", needsYou: true, minutesAgo: 9)
+        XCTAssertTrue(scout.needsYou)
+        XCTAssertTrue(AidenBotAttention.needsYou(scout))
+        XCTAssertEqual(AidenBotAttention.reason(scout), "Waiting for you")
+        XCTAssertEqual(AidenBotAttention.reason(bot("bot_cards", needsYou: true, issues: 2)), "2 things need you", "the count says more")
+        let inbox = make([snapshot("mac-a", bots: [scout, bot("bot_busy", state: "running")])])
+        XCTAssertEqual(labels(inbox.needsYou), ["mac-a:bot_scout"])
+        XCTAssertEqual(labels(inbox.running), ["mac-a:bot_busy"])
+        XCTAssertEqual(inbox.needsYouCount, 1)
+        // A Mac without revision 68 never sends it; the Bot reads as working.
+        XCTAssertFalse(bot("bot_old", state: "running").needsYou)
     }
 
     func testAnIdleOrPausedBotStaysOutOfInbox() {

@@ -43,7 +43,8 @@ final class AidenBotHomeProfileTests: XCTestCase {
         name: String,
         purpose: String = "",
         updatedAt: String,
-        sessionState: String? = nil
+        sessionState: String? = nil,
+        needsYou: Bool = false
     ) throws -> AidenBotSummary {
         var object: [String: Any] = [
             "id": id,
@@ -58,6 +59,8 @@ final class AidenBotHomeProfileTests: XCTestCase {
         if let sessionState { object["sessionState"] = sessionState }
         // Revision 37: a paused Bot's summary also carries `paused: true`.
         if sessionState == "paused" { object["paused"] = true }
+        // Revision 68: only a `bot:needs-you` phone is told, and only as `true`.
+        if needsYou { object["needsYou"] = true }
         return try AidenRemoteJSONDecoder.decode(
             AidenBotSummary.self,
             from: JSONSerialization.data(withJSONObject: object)
@@ -148,6 +151,27 @@ final class AidenBotHomeProfileTests: XCTestCase {
         XCTAssertEqual(rows["working"]?.isWorking, true)
         XCTAssertEqual(rows["interrupted"]?.isWorking, false)
         XCTAssertEqual(rows["paused"]?.isWorking, false)
+    }
+
+    /// Revision 68: a Bot waiting on an approval or a question says so first,
+    /// over its last message, and stops showing the working dot.
+    func testHomeRowSaysWaitingForYouWhenTheMacSaysTheBotNeedsThePerson() throws {
+        let bots = [
+            try summary(id: "waiting", name: "Waiting", updatedAt: "2026-08-18T18:00:00.000Z", sessionState: "running", needsYou: true),
+            try summary(id: "busy", name: "Busy", updatedAt: "2026-08-18T17:00:00.000Z", sessionState: "running"),
+        ]
+        let conversations = [
+            try conversation(botID: "waiting", preview: "Booking the flight", updatedAt: "2026-08-18T18:00:00.000Z"),
+        ]
+        let rows = Dictionary(uniqueKeysWithValues: aidenBotHomeRows(
+            bots: bots,
+            conversations: conversations,
+            query: ""
+        ).map { ($0.id, $0) })
+        XCTAssertEqual(rows["waiting"]?.preview, "Waiting for you")
+        XCTAssertEqual(rows["waiting"]?.isWorking, false)
+        XCTAssertEqual(rows["busy"]?.isWorking, true)
+        XCTAssertEqual(rows["busy"]?.preview, "Say hello")
     }
 
     func testHomeSearchMatchesNameSubtitlePreviewAndServerMatches() throws {

@@ -155,10 +155,12 @@ struct AidenBotHomeRow: Equatable, Identifiable {
 
     var id: String { bot.id }
 
-    /// The durable session state comes first: an interrupted turn, a Bot the
-    /// person paused (revision 37) or a missing model says so; otherwise the
-    /// last message, or a greeting prompt.
+    /// A wait on the person comes first (revision 68: an approval, a question,
+    /// a hand-off or an open issue), then the durable session state: an
+    /// interrupted turn, a Bot the person paused (revision 37) or a missing
+    /// model says so; otherwise the last message, or a greeting prompt.
     var preview: String {
+        if bot.needsYou { return AidenBotSessionCopy.waitingForYou }
         switch bot.sessionState {
         case .interrupted: return AidenBotSessionCopy.interruptedSubtitle
         case .paused: return AidenBotSessionCopy.pausedSubtitle
@@ -169,8 +171,10 @@ struct AidenBotHomeRow: Equatable, Identifiable {
         return text.isEmpty ? "Say hello" : text
     }
 
-    /// Shows the small activity dot on the avatar while the Bot is working.
+    /// Shows the small activity dot on the avatar while the Bot is working,
+    /// but not while it waits on the person.
     var isWorking: Bool {
+        if bot.needsYou { return false }
         if let state = bot.sessionState { return state == .running }
         guard let conversation else { return false }
         return conversation.activityState != .idle

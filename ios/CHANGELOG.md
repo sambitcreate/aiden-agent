@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- **2026-11-24 — Bots waiting on you (provisional Remote revision 68, `bot:needs-you`).** On a Mac that offers it, the app asks for `bot:needs-you` in a call of its own. A Bot the Mac says waits on the person reads "Waiting for you" on its Bots row and is no longer shown as working, and the Inbox lists it under Needs you with that reason (after an open-issue count). An approval the phone can see in the Bot's chat keeps its own line. Other Macs look as before.
+
 - **2026-11-22 — Pairing feedback and QR framing.** Add Computer scans for QR codes inside the visible viewfinder. Manual pairing shows what to correct below the address or setup code field. Search keeps Add Computer available until a computer is paired.
 
 - **2026-11-22 — No "Sending…" in Bot chats.** A message you send to a Bot looks sent from the moment you press Send and never gains a "Sending…" caption, however long the Mac takes to take it. The status line ("Getting ready", then "Thinking" once the model starts) shows the wait; Queued and "Couldn’t send · Try again" are unchanged. Paired Macs on the next Aiden release also start a Bot's reply much sooner, because a turn no longer re-reads every provider, connector and skill a dozen times before asking the model. No Remote wire or revision change.
