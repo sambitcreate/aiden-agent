@@ -139,15 +139,11 @@ private actor ClassificationResumeHost: AidenBotResumeTransport {
 
 @MainActor
 final class AidenRemoteFailureClassificationTests: XCTestCase {
-    func testTier1BeforeEffectRefusalSitesAgreeOnAmbiguityAnd409InFlight() throws {
-        let tier1Sites: [(String, (Error) -> Bool)] = [
+    func testTier1StrictBeforeEffectRefusalSitesAgreeOnAmbiguityAnd409InFlight() throws {
+        let strictBeforeEffectSites: [(String, (Error) -> Bool)] = [
             ("beforeEffectRefusal", { AidenRemoteFailureClassification.isAmbiguous($0, policy: .beforeEffectRefusal()) }),
             ("aidenBotResumeFailureIsAmbiguous", aidenBotResumeFailureIsAmbiguous),
             ("aidenPeerFailureIsAmbiguous", aidenPeerFailureIsAmbiguous),
-            ("aidenBotSessionFailureIsAmbiguous", aidenBotSessionFailureIsAmbiguous),
-            ("aidenBotEditorCreateFailureIsAmbiguous", aidenBotEditorCreateFailureIsAmbiguous),
-            ("aidenBotAvatarMutationFailureIsAmbiguous", aidenBotAvatarMutationFailureIsAmbiguous),
-            ("aidenBotConversationCreateFailureIsAmbiguous", aidenBotConversationCreateFailureIsAmbiguous),
         ]
 
         let mustBeAmbiguous: [(String, Error)] = [
@@ -189,7 +185,7 @@ final class AidenRemoteFailureClassificationTests: XCTestCase {
             ("installationChanged", AidenRemoteClientError.installationChanged),
         ]
 
-        for (siteName, classifier) in tier1Sites {
+        for (siteName, classifier) in strictBeforeEffectSites {
             for (label, error) in mustBeAmbiguous {
                 XCTAssertTrue(classifier(error), "\(siteName) must treat \(label) as ambiguous")
             }
@@ -199,23 +195,72 @@ final class AidenRemoteFailureClassificationTests: XCTestCase {
         }
     }
 
-    func testBotSessionMessageFailureTreats409InFlightAsAmbiguousAndReplayed409InternalErrorAsSettled() throws {
-        XCTAssertTrue(AidenBotSessionModel.messageFailureIsAmbiguous(try classificationServerError(409, "idempotency_in_flight")))
-        XCTAssertTrue(AidenBotSessionModel.messageFailureIsAmbiguous(try classificationServerError(500, "internal_error")))
-        XCTAssertTrue(AidenBotSessionModel.messageFailureIsAmbiguous(try classificationServerError(503, "internal_error")))
-        XCTAssertTrue(AidenBotSessionModel.messageFailureIsAmbiguous(try classificationServerError(408, "internal_error")))
-        XCTAssertTrue(AidenBotSessionModel.messageFailureIsAmbiguous(try classificationServerError(429, "rate_limited")))
-        XCTAssertTrue(AidenBotSessionModel.messageFailureIsAmbiguous(CancellationError()))
-        XCTAssertTrue(AidenBotSessionModel.messageFailureIsAmbiguous(URLError(.networkConnectionLost)))
-        XCTAssertTrue(AidenBotSessionModel.messageFailureIsAmbiguous(AidenRemoteClientError.invalidResponse))
-        XCTAssertTrue(AidenBotSessionModel.messageFailureIsAmbiguous(AidenRemoteClientError.unexpectedStatus(409)))
+    func testDurableBotLedgerSitesTreatDecoded409InternalErrorAsSettledWhilePreservingInFlightAndMalformed409() throws {
+        XCTAssertEqual(
+            AidenRemoteFailureClassification.Policy.durableBotLedgerBeforeEffectRefusal,
+            .beforeEffectRefusal(treatsReplayedInternalErrorConflictAsSettled: true)
+        )
 
-        // Per protocol/aiden-remote/v1/fixtures/bot-outbox-delivery.json ("a settled rejection replayed").
-        XCTAssertFalse(AidenBotSessionModel.messageFailureIsAmbiguous(try classificationServerError(409, "internal_error")))
-        XCTAssertFalse(AidenBotSessionModel.messageFailureIsAmbiguous(try classificationServerError(409, "idempotency_conflict")))
-        XCTAssertFalse(AidenBotSessionModel.messageFailureIsAmbiguous(try classificationServerError(409, "handle_invalid")))
-        XCTAssertFalse(AidenBotSessionModel.messageFailureIsAmbiguous(try classificationServerError(400, "invalid_request")))
-        XCTAssertFalse(AidenBotSessionModel.messageFailureIsAmbiguous(AidenRemoteClientError.installationChanged))
+        let durableBotLedgerSites: [(String, @MainActor (Error) -> Bool)] = [
+            ("durableBotLedgerBeforeEffectRefusal", { AidenRemoteFailureClassification.isAmbiguous($0, policy: .durableBotLedgerBeforeEffectRefusal) }),
+            ("AidenBotSessionModel.messageFailureIsAmbiguous", { AidenBotSessionModel.messageFailureIsAmbiguous($0) }),
+            ("aidenBotSessionFailureIsAmbiguous", { aidenBotSessionFailureIsAmbiguous($0) }),
+            ("aidenBotEditorCreateFailureIsAmbiguous", { aidenBotEditorCreateFailureIsAmbiguous($0) }),
+            ("aidenBotAvatarMutationFailureIsAmbiguous", { aidenBotAvatarMutationFailureIsAmbiguous($0) }),
+            ("aidenBotConversationCreateFailureIsAmbiguous", { aidenBotConversationCreateFailureIsAmbiguous($0) }),
+        ]
+
+        let mustBeAmbiguous: [(String, Error)] = [
+            ("409 idempotency_in_flight", try classificationServerError(409, "idempotency_in_flight")),
+            ("400 operation_in_progress", try classificationServerError(400, "operation_in_progress")),
+            ("400 internal_error", try classificationServerError(400, "internal_error")),
+            ("403 internal_error", try classificationServerError(403, "internal_error")),
+            ("409 server_interrupted", try classificationServerError(409, "server_interrupted")),
+            ("500 internal_error", try classificationServerError(500, "internal_error")),
+            ("503 internal_error", try classificationServerError(503, "internal_error")),
+            ("408 internal_error", try classificationServerError(408, "internal_error")),
+            ("429 rate_limited", try classificationServerError(429, "rate_limited", retryable: true)),
+            ("200 invalid_request", try classificationServerError(200, "invalid_request")),
+            ("CancellationError", CancellationError()),
+            ("URLError(.networkConnectionLost)", URLError(.networkConnectionLost)),
+            ("non-AidenRemoteClientError", ClassificationUnexpectedError()),
+            ("invalidResponse", AidenRemoteClientError.invalidResponse),
+            ("unexpectedStatus(400)", AidenRemoteClientError.unexpectedStatus(400)),
+            ("unexpectedStatus(409)", AidenRemoteClientError.unexpectedStatus(409)),
+            ("unexpectedStatus(502)", AidenRemoteClientError.unexpectedStatus(502)),
+        ]
+
+        let mustBeSettled: [(String, Error)] = [
+            // Durable Bot ledger replays a settled ordinary rejection as HTTP 409 internal_error
+            // (main/services/aiden-remote-operation-contract.ts, main/services/aiden-remote-bots.ts,
+            // protocol/aiden-remote/v1/fixtures/bot-outbox-delivery.json).
+            ("409 internal_error", try classificationServerError(409, "internal_error")),
+            ("400 invalid_request", try classificationServerError(400, "invalid_request")),
+            ("401 authentication_required", try classificationServerError(401, "authentication_required")),
+            ("401 credential_revoked", try classificationServerError(401, "credential_revoked")),
+            ("403 capability_denied", try classificationServerError(403, "capability_denied")),
+            ("404 not_found", try classificationServerError(404, "not_found")),
+            ("409 operation_stale", try classificationServerError(409, "operation_stale")),
+            ("409 revision_conflict", try classificationServerError(409, "revision_conflict")),
+            ("409 bot_paused", try classificationServerError(409, "bot_paused")),
+            ("409 idempotency_conflict", try classificationServerError(409, "idempotency_conflict")),
+            ("409 handle_invalid", try classificationServerError(409, "handle_invalid")),
+            ("409 approval_already_resolved", try classificationServerError(409, "approval_already_resolved")),
+            ("422 memory_blocked", try classificationServerError(422, "memory_blocked")),
+            ("invalidEndpoint", AidenRemoteClientError.invalidEndpoint),
+            ("missingCredential", AidenRemoteClientError.missingCredential),
+            ("missingTrustConfiguration", AidenRemoteClientError.missingTrustConfiguration),
+            ("installationChanged", AidenRemoteClientError.installationChanged),
+        ]
+
+        for (siteName, classifier) in durableBotLedgerSites {
+            for (label, error) in mustBeAmbiguous {
+                XCTAssertTrue(classifier(error), "\(siteName) must treat \(label) as ambiguous")
+            }
+            for (label, error) in mustBeSettled {
+                XCTAssertFalse(classifier(error), "\(siteName) must treat \(label) as settled")
+            }
+        }
     }
 
     func testTier2CachedRejectionLedgerSitesAgreeAndNeverDropKeysOnCancellationOrInFlight() throws {

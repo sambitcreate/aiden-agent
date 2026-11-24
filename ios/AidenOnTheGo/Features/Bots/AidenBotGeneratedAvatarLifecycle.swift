@@ -66,7 +66,10 @@ func aidenBotAvatarExpectedRevision(_ detail: AidenBotDetail) -> String {
 }
 
 func aidenBotAvatarMutationFailureIsAmbiguous(_ error: Error) -> Bool {
-    AidenRemoteFailureClassification.isAmbiguous(error, policy: .beforeEffectRefusal())
+    AidenRemoteFailureClassification.isAmbiguous(
+        error,
+        policy: .durableBotLedgerBeforeEffectRefusal
+    )
 }
 
 /// Bounded, metadata-free normalization shared by candidate admission and

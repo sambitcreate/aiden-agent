@@ -228,7 +228,16 @@ final class AidenBotGeneratedAvatarTests: XCTestCase {
             AidenRemoteClientError.unexpectedStatus(400)
         ))
         XCTAssertTrue(aidenBotAvatarMutationFailureIsAmbiguous(
+            AidenRemoteClientError.unexpectedStatus(409)
+        ))
+        XCTAssertTrue(aidenBotAvatarMutationFailureIsAmbiguous(
             try refusal(409, "idempotency_in_flight")
+        ))
+        XCTAssertTrue(aidenBotAvatarMutationFailureIsAmbiguous(
+            try refusal(500, "internal_error")
+        ))
+        XCTAssertFalse(aidenBotAvatarMutationFailureIsAmbiguous(
+            try refusal(409, "internal_error")
         ))
         XCTAssertFalse(aidenBotAvatarMutationFailureIsAmbiguous(
             try refusal(400, "invalid_request")
@@ -239,6 +248,128 @@ final class AidenBotGeneratedAvatarTests: XCTestCase {
         XCTAssertFalse(aidenBotAvatarMutationFailureIsAmbiguous(
             AidenRemoteClientError.installationChanged
         ))
+    }
+
+    @MainActor
+    func testReplayed409InternalErrorAfterLostAvatarUploadReleasesSettledKeyWhileMalformed409RetainsKey() async throws {
+        let fixture = try Self.fixtureObject()
+        let typedFixture = try Self.typedFixture()
+        let root = FileManager.default.temporaryDirectory
+            .appending(path: "aiden-avatar-replay-\(UUID().uuidString)", directoryHint: .isDirectory)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let cache = AidenBotCache(root: root)
+        let candidate = try AidenBotGeneratedAvatarNormalizer.normalize(
+            Self.solidImageData(width: 800, height: 800, color: .systemTeal)
+        )
+        let uploadedRevision = "avatar_revision_\(String(repeating: "9", count: 32))"
+        let uploadedAsset = Self.assetObject(revision: uploadedRevision, byteSize: candidate.count)
+        var currentDetail = try XCTUnwrap(fixture["botDetail"] as? [String: Any])
+        var currentAvatar = try XCTUnwrap(currentDetail["avatar"] as? [String: Any])
+        currentAvatar.removeValue(forKey: "asset")
+        currentDetail["avatar"] = currentAvatar
+        var putKeys: [String] = []
+        var putCount = 0
+
+        AidenAvatarURLProtocol.handler = { request in
+            let path = try XCTUnwrap(request.url?.path)
+            switch (request.httpMethod, path) {
+            case ("GET", "/api/aiden/v1/server"):
+                return try Self.jsonResponse(request, status: 200, object: try XCTUnwrap(fixture["server"]))
+            case ("GET", "/api/aiden/v1/workspaces"):
+                return try Self.jsonResponse(request, status: 200, object: ["workspaces": []])
+            case ("GET", "/api/aiden/v1/bots/bot_fixture_01"):
+                return try Self.jsonResponse(request, status: 200, object: currentDetail)
+            case ("PUT", "/api/aiden/v1/bots/bot_fixture_01/avatar"):
+                putCount += 1
+                putKeys.append(try XCTUnwrap(request.value(forHTTPHeaderField: "Idempotency-Key")))
+                switch putCount {
+                case 1:
+                    // Lost first rejection response: retain key.
+                    throw URLError(.networkConnectionLost)
+                case 2:
+                    // Malformed 409 body cannot masquerade as decoded internal_error: retain key.
+                    let response = try XCTUnwrap(HTTPURLResponse(
+                        url: try XCTUnwrap(request.url),
+                        statusCode: 409,
+                        httpVersion: "HTTP/1.1",
+                        headerFields: ["Content-Type": "application/json", "Aiden-Protocol-Version": "1"]
+                    ))
+                    return (response, Data("malformed-409".utf8))
+                case 3:
+                    // 409 idempotency_in_flight: retain key.
+                    return try Self.jsonResponse(request, status: 409, object: [
+                        "error": [
+                            "code": "idempotency_in_flight",
+                            "message": "Still running.",
+                            "requestId": "req_avatar_inflight",
+                            "retryable": true,
+                        ] as [String: Any],
+                    ])
+                case 4:
+                    // Decoded 409 internal_error (replayed settled rejection): release settled key.
+                    return try Self.jsonResponse(request, status: 409, object: [
+                        "error": [
+                            "code": "internal_error",
+                            "message": "This Bot request cannot be safely repeated.",
+                            "requestId": "req_avatar_replay",
+                            "retryable": false,
+                        ] as [String: Any],
+                    ])
+                default:
+                    var avatar = try XCTUnwrap(currentDetail["avatar"] as? [String: Any])
+                    avatar["asset"] = uploadedAsset
+                    currentDetail["avatar"] = avatar
+                    return try Self.jsonResponse(request, status: 200, object: uploadedAsset)
+                }
+            case ("GET", "/api/aiden/v1/bots/bot_fixture_01/avatar/\(uploadedRevision)"):
+                return try Self.imageResponse(request, data: candidate)
+            default:
+                XCTFail("Unexpected avatar replay request: \(request.httpMethod ?? "nil") \(path)")
+                return try Self.jsonResponse(request, status: 404, object: ["error": try XCTUnwrap(fixture["error"])])
+            }
+        }
+
+        let session = Self.mockSession()
+        let keychain = AidenAvatarMemoryKeychain()
+        let store = AidenInstallationStore(keychain: keychain)
+        _ = try store.savePairing(
+            typedFixture.pairingExchange,
+            trust: .init(mode: .system),
+            name: "Avatar Replay Mac",
+            validatedServer: typedFixture.server
+        )
+        let coordinator = AidenRemoteCoordinator(
+            installationStore: store,
+            clientFactory: { _, credential in
+                AidenRemoteClient(
+                    endpoint: URL(string: "https://aiden-fixture.example.test/api/aiden/v1")!,
+                    credential: credential,
+                    session: session
+                )
+            }
+        )
+        await coordinator.start()
+        let model = AidenBotGeneratedAvatarModel(
+            coordinator: coordinator,
+            machine: nil,
+            botID: "bot_fixture_01",
+            cache: cache
+        )
+        await model.sessionDidChangeAndRefresh()
+        await model.ingestCopiedCandidate(data: candidate)
+
+        await model.useCandidate() // 1: lost response -> retains key
+        await model.useCandidate() // 2: malformed 409 -> retains key
+        await model.useCandidate() // 3: 409 idempotency_in_flight -> retains key
+        await model.useCandidate() // 4: decoded 409 internal_error -> releases settled key
+        await model.useCandidate() // 5: fresh attempt mints new key and succeeds
+
+        XCTAssertEqual(putCount, 5)
+        XCTAssertEqual(putKeys[0], putKeys[1], "Lost response retains key")
+        XCTAssertEqual(putKeys[1], putKeys[2], "Malformed 409 retains key")
+        XCTAssertEqual(putKeys[2], putKeys[3], "409 idempotency_in_flight retains key")
+        XCTAssertNotEqual(putKeys[3], putKeys[4], "Decoded replayed 409 internal_error releases settled key for fresh attempt")
+        XCTAssertTrue(model.hasGeneratedAvatar)
     }
 
     @MainActor

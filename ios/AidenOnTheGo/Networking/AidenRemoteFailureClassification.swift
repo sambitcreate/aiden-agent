@@ -8,13 +8,23 @@ import Foundation
 ///   endpoints where only a recognized before-effect refusal code proves no side
 ///   effect occurred (`AidenBotResumeModel`, `AidenBotPeersModel`,
 ///   `AidenBotPeerExchangeModel`, `AidenBotOpenWorkModel`, `AidenBotWatchModel`,
-///   `AidenBotRoutineModelsModel`, `AidenBotSessionModel`, Bot settings/avatar/
-///   conversation creation). Unknown or unfinished codes (including
+///   `AidenBotRoutineModelsModel`). Unknown or unfinished codes (including
 ///   `409 idempotency_in_flight`, `400 operation_in_progress`,
 ///   `409 server_interrupted`, `5xx`, `408`, `429`), unparsed HTTP statuses
 ///   (`.unexpectedStatus`), `.invalidResponse`, `URLError`, `CancellationError`,
 ///   and non-`AidenRemoteClientError` failures are ambiguous so the caller retains
 ///   its exact request body and idempotency key.
+///
+/// - ``Policy/durableBotLedgerBeforeEffectRefusal``:
+///   the same before-effect refusal policy for routes backed by the durable Bot
+///   ledger (`AidenRemoteBotService.executeIdempotent` / `AidenIdempotencyLedger`:
+///   Bot create, Bot avatar upload, Bot conversation create, Bot message send,
+///   and Bot-session retained-key actions). On those routes, ordinary action
+///   failures are recorded in the 24-hour ledger as `internal_error` and replayed
+///   as a genuinely decoded HTTP `409 internal_error`, so releasing the settled
+///   key lets the next attempt mint a fresh key while `409 idempotency_in_flight`,
+///   undecodable/malformed HTTP `409` (`.unexpectedStatus(409)`), and live
+///   `5xx`/`408`/`429` failures stay ambiguous.
 ///
 /// - ``Policy/cachedRejectionLedger``:
 ///   endpoints backed by `executeAidenDurableOperation` (`AidenRemoteCoordinator`,
@@ -30,15 +40,26 @@ enum AidenRemoteFailureClassification {
     enum Policy: Sendable, Equatable {
         /// Strict before-effect refusal allowlist.
         ///
-        /// Set `treatsReplayedInternalErrorConflictAsSettled: true` only for
-        /// `POST /bots/{botId}/messages` (`AidenBotSessionModel.messageFailureIsAmbiguous`),
-        /// where the host durable ledger maps a replayed settled `internal_error`
-        /// rejection to HTTP `409 internal_error`
-        /// (`protocol/aiden-remote/v1/fixtures/bot-outbox-delivery.json`).
+        /// Set `treatsReplayedInternalErrorConflictAsSettled: true` (or use
+        /// ``durableBotLedgerBeforeEffectRefusal``) only for routes backed by the
+        /// durable Bot ledger (`AidenRemoteBotService.executeIdempotent`), where
+        /// the host records ordinary rejections as `internal_error` and replays
+        /// them as a genuinely decoded HTTP `409 internal_error`
+        /// (`main/services/aiden-remote-operation-contract.ts`,
+        /// `main/services/aiden-remote-bots.ts`,
+        /// `protocol/aiden-remote/v1/fixtures/bot-outbox-delivery.json`).
         case beforeEffectRefusal(treatsReplayedInternalErrorConflictAsSettled: Bool = false)
 
         /// Durable ledger (`executeAidenDurableOperation`) cached-rejection policy.
         case cachedRejectionLedger
+
+        /// Before-effect refusal policy for routes backed by the durable Bot
+        /// ledger (`AidenRemoteBotService.executeIdempotent`), where a decoded
+        /// `409 internal_error` is a replayed settled rejection while
+        /// `409 idempotency_in_flight`, undecodable HTTP `409`
+        /// (`.unexpectedStatus(409)`), and live `5xx`/`408`/`429` remain ambiguous.
+        static let durableBotLedgerBeforeEffectRefusal: Self =
+            .beforeEffectRefusal(treatsReplayedInternalErrorConflictAsSettled: true)
     }
 
     /// Recognized server error codes that prove a request was refused before any
