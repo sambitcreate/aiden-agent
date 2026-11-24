@@ -402,11 +402,12 @@ chats) renders one page and a **Show N more** row, through
 - An option holds no focusable control (axe `nested-interactive`). A row's
   secondary actions are `aria-hidden` mouse targets with a `title`, and the
   keyboard gets a shortcut on the highlighted row, named in its description
-  and `aria-keyshortcuts` (the model picker: ⇧⌘P pins, ⇧⌘A adds to the Pad).
+  and `aria-keyshortcuts` (the model list: ⇧⌘P pins, and ⇧⌘A adds to the Pad
+  where the list offers the Pad).
 
 ## Accessibility gate
 
-`tests/e2e/accessibility.spec.ts` opens Aiden's core surfaces (the chat window and composer, the model picker, the command palette, a confirm dialog, Settings) and runs axe with the WCAG 2.x A and AA tags through `auditAccessibility` in `tests/e2e/axe-gate.ts`. Each surface also gets one small `toMatchAriaSnapshot`. To add a surface, open it in a new `test.step`, call `auditAccessibility(page, { surface, include })` with its root selector, and snapshot only its stable structure: roles, names and states, with no model lists, dates or platform shortcut text. Fix violations in the component. When a fix is out of scope, add an `AXE_EXCLUSIONS` entry keyed by surface, rule id and target selector, with a reason. An entry that stops matching fails the gate until it is deleted, so the list only shrinks.
+`tests/e2e/accessibility.spec.ts` opens Aiden's core surfaces (the chat window and composer, the composer's model popover with its Agent Slider and model list, the command palette, a confirm dialog, Settings) and runs axe with the WCAG 2.x A and AA tags through `auditAccessibility` in `tests/e2e/axe-gate.ts`. Each surface also gets one small `toMatchAriaSnapshot`. To add a surface, open it in a new `test.step`, call `auditAccessibility(page, { surface, include })` with its root selector, and snapshot only its stable structure: roles, names and states, with no model lists, dates or platform shortcut text. Fix violations in the component. When a fix is out of scope, add an `AXE_EXCLUSIONS` entry keyed by surface, rule id and target selector, with a reason. An entry that stops matching fails the gate until it is deleted, so the list only shrinks.
 
 ## Component sink
 

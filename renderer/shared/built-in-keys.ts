@@ -5,6 +5,12 @@
 
 import type { CommandCapability } from "./keybindings";
 
+/**
+ * Opens the model list from the composer's model popover. Not ⇧⌘M: that is
+ * Change model (the command palette), which the app catches first.
+ */
+export const OTHER_MODELS_SHORTCUT = "Command+L";
+
 export type BuiltInKeySection = "Moving around" | "In a chat" | "Design canvas";
 
 export interface BuiltInKey {
@@ -125,6 +131,20 @@ export const BUILT_IN_KEYS: readonly BuiltInKey[] = [
     title: "Pin / add to Pad",
     description: "On the highlighted model in the model picker's List; pressed again, unpins it or takes it off the Pad.",
     keys: ["Command+Shift+P", "Command+Shift+A"],
+    section: "In a chat",
+  },
+  {
+    id: "agent-slider",
+    title: "Move the Agent Slider",
+    description: "With the slider focused in the model popover; skips stops that can't run, and Home and End go to the first and last. Typing a letter opens the model list with it filled in.",
+    keys: ["Left", "Right"],
+    section: "In a chat",
+  },
+  {
+    id: "agent-slider-other-models",
+    title: "Other models",
+    description: "In the model popover, opens the full model list.",
+    keys: [OTHER_MODELS_SHORTCUT],
     section: "In a chat",
   },
   {

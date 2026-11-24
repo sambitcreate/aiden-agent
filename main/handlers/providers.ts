@@ -385,6 +385,10 @@ export function registerProviderHandlers(): void {
   ipcMain.handle("settings:setAgentSlider", async (_event, slider: unknown) =>
     configStore.setAgentSlider(slider),
   );
+  // The first-run seed: writes only when config.json holds no slider at all.
+  ipcMain.handle("settings:seedAgentSlider", async (_event, slider: unknown) =>
+    configStore.seedAgentSlider(slider),
+  );
   ipcMain.handle("settings:set", async (_event, patch: unknown) => {
     if (typeof patch !== "object" || patch === null) throw new Error("Invalid settings patch.");
     const p = patch as Record<string, unknown>;

@@ -312,6 +312,8 @@ test("workspace picker closes and exposes a persistent reason when workspace cha
 
 test("model picker details sit beside the menu without overlapping the pad", () => {
   const modelPicker = source("./model-picker.tsx");
+  // The detail card moved to the shared list module with ModelListPanel.
+  const modelList = source("./model-list-panel.tsx");
   const pad = source("./model-picker-pad.tsx");
   const styles = source("../styles.css");
 
@@ -324,7 +326,7 @@ test("model picker details sit beside the menu without overlapping the pad", () 
     /className="relative w-\[min\(19\.75rem,calc\(100vw-1\.5rem\)\)\] overflow-hidden rounded-popover bg-popover shadow-popover"/u,
   );
   assert.match(
-    modelPicker,
+    modelList,
     /className="pointer-events-auto flex h-\[min\(22\.5rem,70vh\)\] w-56 shrink-0 flex-col overflow-hidden rounded-popover bg-popover p-3 text-primary shadow-popover"/u,
   );
   assert.doesNotMatch(modelPicker, /left-\[calc\(100%\+0\.5rem\)\]/u);

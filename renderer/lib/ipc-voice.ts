@@ -33,6 +33,12 @@ export const settingsApi = {
    */
   setAgentSlider: (slider: NonNullable<AppSettings["agentSlider"]> | null) =>
     invoke<AppSettings>("settings:setAgentSlider", slider),
+  /**
+   * Save a first-run slider only while config.json holds none (a malformed
+   * hand edit counts as one and is kept). Resolves to the current settings.
+   */
+  seedAgentSlider: (slider: NonNullable<AppSettings["agentSlider"]>) =>
+    invoke<AppSettings>("settings:seedAgentSlider", slider),
   setGeminiVoiceSetup: (scope: NonNullable<AppSettings["geminiUsageScope"]>, model: string) =>
     invoke<AppSettings>("settings:setGeminiVoiceSetup", scope, model),
   setGeminiUsageScope: (scope: NonNullable<AppSettings["geminiUsageScope"]>) =>

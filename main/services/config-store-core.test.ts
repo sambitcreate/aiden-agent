@@ -543,6 +543,44 @@ test("a malformed hand-edited slider reads as absent and is never rewritten", as
   );
 });
 
+test("the first-run seed writes only when config.json holds no slider at all", async (t) => {
+  const h = await harness(t);
+  await h.store.saveProvider(provider);
+  const seed = {
+    version: 1 as const,
+    stops: [
+      { id: "stop_seed_a", label: "Fast" },
+      { id: "stop_seed_b", label: "Balanced", providerId: provider.id, model: "qwen3-8b" },
+      { id: "stop_seed_c", label: "Smart" },
+    ],
+    homeStopId: "stop_seed_b",
+  };
+
+  // Absent: the seed is saved and read back.
+  const seeded = await h.store.seedAgentSlider(seed);
+  assert.deepEqual(seeded.agentSlider, seed);
+  assert.deepEqual((await readJson<{ agentSlider?: unknown }>(h.portableFile)).agentSlider, seed);
+
+  // A valid slider is already there: a second seed (another window) changes nothing.
+  await h.store.setAgentSlider(sliderFor(provider.id));
+  const again = await h.store.seedAgentSlider(seed);
+  assert.deepEqual(again.agentSlider, sliderFor(provider.id), "the call still returns the current settings");
+  assert.deepEqual((await readJson<{ agentSlider?: unknown }>(h.portableFile)).agentSlider, sliderFor(provider.id));
+
+  // A malformed hand edit reads as no slider, but the seed never overwrites it.
+  const portable = await readJson<Record<string, unknown>>(h.portableFile);
+  const broken = { version: 1, stops: [{ id: "only", label: "One" }], homeStopId: "only" };
+  await fs.writeFile(h.portableFile, JSON.stringify({ ...portable, agentSlider: broken }, null, 2), "utf-8");
+  await h.stores.portable.reload();
+  assert.equal((await h.store.getSettings()).agentSlider, undefined);
+  const afterBroken = await h.store.seedAgentSlider(seed);
+  assert.equal(afterBroken.agentSlider, undefined);
+  assert.deepEqual((await readJson<{ agentSlider?: unknown }>(h.portableFile)).agentSlider, broken);
+
+  // A malformed seed is refused before anything is written.
+  await assert.rejects(h.store.seedAgentSlider({ ...seed, stops: seed.stops.slice(0, 2) }), /3 to 7 stops/u);
+});
+
 test("removing a provider keeps the slider stops that use it", async (t) => {
   const h = await harness(t);
   await h.store.saveProvider(provider);

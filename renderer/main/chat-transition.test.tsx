@@ -281,6 +281,8 @@ test("picking a model in one chat leaves other chats and the new-chat model alon
     await waitFor(() => assert.match(trigger().getAttribute("aria-label") ?? "", /Model A/iu));
 
     await act(async () => { fireEvent.click(trigger()); });
+    // The composer's popover opens on the Agent Slider; the full list is one step in.
+    await act(async () => { fireEvent.click(screen.getByRole("button", { name: /^Other models…/u })); });
     const optionB = await waitFor(() => {
       const option = screen.queryAllByRole("option").find((row) => row.textContent?.includes("Model B"));
       assert.ok(option);
@@ -306,6 +308,74 @@ test("picking a model in one chat leaves other chats and the new-chat model alon
     await waitFor(() => screen.getByText("Hello from chat chat-b"));
     await waitFor(() => assert.match(trigger().getAttribute("aria-label") ?? "", /Model A/iu));
     assert.equal(setModelCalls.length, 1, "opening another chat changes no model");
+  } finally {
+    cleanup();
+    queryClient.clear();
+    localStorage.removeItem("aiden-agent.providerId");
+    localStorage.removeItem("aiden-agent.model");
+  }
+});
+
+test("an Agent Slider stop moves this chat to its model and effort, and a stop without one clears it", async () => {
+  const provider = {
+    id: "acme",
+    kind: "openai-compatible",
+    label: "Acme Cloud",
+    baseUrl: "https://acme.invalid/v1",
+    models: ["app-model", "model-a", "model-b"],
+    needsKey: false,
+    hasKey: true,
+  };
+  const stored: { model: string; thinkingLevel?: string } = { model: "model-a" };
+  const setModelCalls: unknown[][] = [];
+  localStorage.setItem("aiden-agent.providerId", "acme");
+  localStorage.setItem("aiden-agent.model", "app-model");
+  const { queryClient } = await mountRoutedChatPane("chat-a", {
+    "chats:get": (id) => {
+      const response = chatReadResponse(String(id));
+      return { ...response, chat: { ...response.chat, providerId: "acme", ...stored } };
+    },
+    "chats:setModel": (...args) => {
+      setModelCalls.push(args);
+      const [id, , model, level] = args as [string, string, string, string | null | undefined];
+      stored.model = model;
+      if (level === null) delete stored.thinkingLevel;
+      else if (level) stored.thinkingLevel = level;
+      return { ...chatReadResponse(id).chat, providerId: "acme", ...stored };
+    },
+    "providers:list": () => [provider],
+    "settings:get": () => ({
+      agentSlider: {
+        version: 1,
+        homeStopId: "everyday",
+        stops: [
+          { id: "everyday", label: "Everyday", providerId: "acme", model: "model-a" },
+          { id: "deep", label: "Deep", providerId: "acme", model: "model-b", thinkingLevel: "high" },
+          { id: "spare", label: "Spare" },
+        ],
+      },
+    }),
+    "models:info": () => ({}),
+    "modelPace:summaries": () => ({}),
+  });
+  const trigger = () => screen.getByRole("button", { name: /^Selected model: .*Choose a model\.$/u });
+  try {
+    await waitFor(() => assert.match(trigger().getAttribute("aria-label") ?? "", /Everyday on the Agent Slider/u));
+    await act(async () => { fireEvent.click(trigger()); });
+    const slider = await screen.findByRole("slider", { name: "Agent Slider" });
+    await act(async () => { fireEvent.keyDown(slider, { key: "ArrowRight" }); });
+
+    await waitFor(() => assert.deepEqual(setModelCalls, [["chat-a", "acme", "model-b", "high"]]));
+    await waitFor(() => assert.match(trigger().getAttribute("aria-label") ?? "", /Deep on the Agent Slider/u));
+    assert.equal(queryClient.getQueryData<Chat>(queryKeys.chat("chat-a"))?.thinkingLevel, "high");
+    assert.equal(localStorage.getItem("aiden-agent.model"), "app-model", "new chats keep their model");
+
+    // Back on the home stop, which names no effort: the chat's own level is cleared.
+    await act(async () => { fireEvent.keyDown(screen.getByRole("slider", { name: "Agent Slider" }), { key: "Home" }); });
+    await waitFor(() => assert.deepEqual(setModelCalls[1], ["chat-a", "acme", "model-a", null]));
+    await waitFor(() =>
+      assert.equal(queryClient.getQueryData<Chat>(queryKeys.chat("chat-a"))?.thinkingLevel, undefined),
+    );
   } finally {
     cleanup();
     queryClient.clear();

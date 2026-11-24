@@ -40,6 +40,7 @@ import {
   providersApi,
   quickChatApi,
   settingsApi,
+  shortcutApi,
   startGeneration,
   workspacesApi,
   type ApprovalPrompt,
@@ -51,7 +52,9 @@ import { applyChatMetadataUpdate } from "../shared/chat-metadata-update";
 import type { GenerationThinkingLevel } from "../shared/generation-thinking";
 import { isNoWorkspace, noWorkspaceHome, workspaceChoices } from "../lib/no-workspace";
 import { resolveVisibleModelSelection } from "../lib/use-model-selection";
-import { isEscapeKey } from "../lib/dismiss-key";
+import { isComposingKey, isEscapeKey } from "../lib/dismiss-key";
+import { agentSliderComposerState, agentSliderStepTarget } from "../lib/agent-slider-view";
+import { matchesAccelerator, type KeybindingSnapshot } from "../shared/keybindings";
 import { hasOpenLayer } from "../lib/layer-stack";
 import { reduceVisualDrafts, type VisualDrafts } from "../lib/html-artifact-transcript";
 import { reduceUiDrafts, reduceUiVisuals, type UiDrafts } from "../lib/ui-visual-transcript";
@@ -85,6 +88,13 @@ function resolveDefaultTargetMode(
   return { kind: "ephemeral" };
 }
 
+/** The model a Quick Chat turn runs on, with an Agent Slider stop's effort. */
+interface QuickChatSelection {
+  providerId: string;
+  model: string;
+  thinkingLevel?: GenerationThinkingLevel;
+}
+
 export function FloatingChatApp() {
   const qc = useQueryClient();
   const textareaRef = React.useRef<HTMLTextAreaElement | null>(null);
@@ -110,7 +120,9 @@ export function FloatingChatApp() {
   const [targetMode, setTargetMode] = React.useState<QuickChatTargetMode>({ kind: "ephemeral" });
   const targetModeTouchedRef = React.useRef(false);
 
-  const [selectedModel, setSelectedModel] = React.useState<{ providerId: string; model: string }>({
+  // `thinkingLevel` is set only by an Agent Slider stop (or the main window's
+  // new-chat pick); a model from the list runs at its saved level.
+  const [selectedModel, setSelectedModel] = React.useState<QuickChatSelection>({
     providerId: "",
     model: "",
   });
@@ -141,7 +153,15 @@ export function FloatingChatApp() {
       settings?.hiddenModelsByProvider,
     );
     if (resolved?.providerId && resolved.model) {
-      setSelectedModel(resolved);
+      const level =
+        resolved.providerId === saved.providerId && resolved.model === saved.model
+          ? settings?.lastThinkingLevel
+          : undefined;
+      setSelectedModel({
+        providerId: resolved.providerId,
+        model: resolved.model,
+        ...(level ? { thinkingLevel: level } : {}),
+      });
     }
   }, [providers, settings]);
 
@@ -149,7 +169,21 @@ export function FloatingChatApp() {
   const [text, setText] = React.useState("");
   const [attachments, setAttachments] = React.useState<Attachment[]>([]);
   const [chat, setChat] = React.useState<Chat | null>(null);
-  const [sending, setSending] = React.useState(false);
+  const [sending, setSendingState] = React.useState(false);
+  // Read synchronously by model picks: once Send starts, a pick can't overtake
+  // the selection that send captured.
+  const sendingRef = React.useRef(false);
+  // A stop reassignment still saving: Send waits so the turn runs on that stop.
+  const [selectionSaving, setSelectionSavingState] = React.useState(false);
+  const selectionSavingRef = React.useRef(false);
+  const setSelectionSaving = React.useCallback((value: boolean) => {
+    selectionSavingRef.current = value;
+    setSelectionSavingState(value);
+  }, []);
+  const setSending = React.useCallback((value: boolean) => {
+    sendingRef.current = value;
+    setSendingState(value);
+  }, []);
   const [queuedMessages, setQueuedMessages] = React.useState<HandoffQueuedMessage[]>([]);
 
   // Live streaming state
@@ -280,6 +314,17 @@ export function FloatingChatApp() {
       "chats:metadata-updated",
       (payload) => {
         if (!payload?.chatId || chatRef.current?.id !== payload.chatId) return;
+        // Main reconciled the chat's own level (a clamp): the slider follows the
+        // level that actually ran while this window still has the chat's model.
+        const reconciled = payload.thinkingLevel;
+        if (reconciled !== undefined) {
+          const owned = chatRef.current;
+          setSelectedModel((prev) => {
+            if (!owned || prev.providerId !== owned.providerId || prev.model !== owned.model) return prev;
+            const { thinkingLevel: _previous, ...rest } = prev;
+            return reconciled ? { ...rest, thinkingLevel: reconciled } : rest;
+          });
+        }
         setChat((prev) =>
           prev && prev.id === payload.chatId
             ? applyChatMetadataUpdate(prev, {
@@ -297,14 +342,127 @@ export function FloatingChatApp() {
     const offControls = onNotification("settings:controls-changed", () => {
       void qc.invalidateQueries({ queryKey: queryKeys.settings });
     });
+    // A hand edit of config.json (the Agent Slider among it) reaches this window too.
+    const offConfig = onNotification("app:config-externally-changed", () => {
+      void qc.invalidateQueries({ queryKey: queryKeys.settings });
+    });
     return () => {
       offOpened();
       offHidden();
       offHandoff();
       offMeta();
       offControls();
+      offConfig();
     };
   }, [dismissStarterPopovers, qc, resetToStarter]);
+
+  // The Agent Slider step shortcuts (⌥⌘[ / ⌥⌘] unless rebound). Quick Chat has
+  // no command system, so it reads the bindings when the window opens.
+  const [shortcutBindings, setShortcutBindings] = React.useState<KeybindingSnapshot["effective"] | null>(null);
+  React.useEffect(() => {
+    let live = true;
+    const load = () =>
+      void shortcutApi.get().then(
+        (snapshot) => {
+          if (live) setShortcutBindings(snapshot.effective);
+        },
+        () => undefined,
+      );
+    load();
+    const offOpened = onNotification("quickChat:opened", load);
+    return () => {
+      live = false;
+      offOpened();
+    };
+  }, []);
+  const agentSliderState = React.useMemo(
+    () =>
+      agentSliderComposerState(
+        settings?.agentSlider,
+        { providers, hiddenModelsByProvider: settings?.hiddenModelsByProvider },
+        selectedModel,
+      ),
+    [settings?.agentSlider, settings?.hiddenModelsByProvider, providers, selectedModel],
+  );
+  // Before the first send the pick is local and goes with the first message.
+  // Once the chat exists, main holds its selection (`chats:setModel`), so a
+  // handoff, a reopen and the clamp write-back all see the stop chosen here.
+  // `level`: a stop's effort, or null for a stop without one; left out, a list
+  // pick keeps the chat's level only while the model stays the same.
+  const selectionPickRef = React.useRef(0);
+  // The latest pick's save, resolving to the selection main now holds (the
+  // saved pick, or the chat's own selection again if main refused it). Send
+  // waits on it, so a turn never overtakes the pick it was meant to run on.
+  const pendingSelectionRef = React.useRef<Promise<QuickChatSelection> | null>(null);
+  const applySelection = React.useCallback(
+    (providerId: string, model: string, level?: GenerationThinkingLevel | null) => {
+      // A send in flight already captured its selection; a pick now would let
+      // the turn and the chat's saved model and effort disagree.
+      if (sendingRef.current) return;
+      modelTouchedRef.current = true;
+      const picked: QuickChatSelection = { providerId, model, ...(level ? { thinkingLevel: level } : {}) };
+      setSelectedModel(picked);
+      const owned = chatRef.current;
+      if (!owned) return;
+      const pick = ++selectionPickRef.current;
+      const isLatest = () => pick === selectionPickRef.current && chatRef.current?.id === owned.id;
+      const authoritative = (chat: Chat): QuickChatSelection | undefined =>
+        chat.providerId && chat.model
+          ? {
+              providerId: chat.providerId,
+              model: chat.model,
+              ...(chat.thinkingLevel ? { thinkingLevel: chat.thinkingLevel } : {}),
+            }
+          : undefined;
+      const save = chatsApi.setModel(owned.id, providerId, model, level).then(
+        (saved) => {
+          const selection = saved ? authoritative(saved) : undefined;
+          if (saved && isLatest()) {
+            setChat(saved);
+            if (selection) setSelectedModel(selection);
+          }
+          return selection ?? picked;
+        },
+        (error: unknown) => {
+          toast.error(error instanceof Error ? error.message : "Couldn’t change this chat’s model.");
+          // Main kept the chat's own selection: show that again, not the refused pick.
+          const kept = authoritative(chatRef.current ?? owned) ?? picked;
+          if (isLatest()) setSelectedModel(kept);
+          return kept;
+        },
+      );
+      pendingSelectionRef.current = save;
+      void save.finally(() => {
+        if (pendingSelectionRef.current === save) pendingSelectionRef.current = null;
+      });
+    },
+    [],
+  );
+  const selectAgentSliderStop = React.useCallback(
+    (providerId: string, model: string, thinkingLevel: GenerationThinkingLevel | undefined) => {
+      applySelection(providerId, model, thinkingLevel ?? null);
+    },
+    [applySelection],
+  );
+  React.useEffect(() => {
+    if (!shortcutBindings) return;
+    const next = shortcutBindings["agentSlider.next"];
+    const previous = shortcutBindings["agentSlider.previous"];
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.defaultPrevented || event.repeat || isComposingKey(event)) return;
+      const direction =
+        next && matchesAccelerator(event, next) ? 1 : previous && matchesAccelerator(event, previous) ? -1 : 0;
+      if (direction === 0) return;
+      event.preventDefault();
+      if (isGenerating || sending) return;
+      const target = agentSliderStepTarget(agentSliderState, direction);
+      if (target?.providerId && target.model) {
+        selectAgentSliderStop(target.providerId, target.model, target.thinkingLevel);
+      }
+    };
+    window.addEventListener("keydown", handleKeyDown, true);
+    return () => window.removeEventListener("keydown", handleKeyDown, true);
+  }, [agentSliderState, isGenerating, selectAgentSliderStop, sending, shortcutBindings]);
 
   // Global Escape handler: close popovers/dialogs first, then hide floating window.
   React.useEffect(() => {
@@ -326,7 +484,7 @@ export function FloatingChatApp() {
     (
       activeChat: Chat,
       turnId: string,
-      modelChoice: { providerId: string; model: string },
+      modelChoice: { providerId: string; model: string; thinkingLevel?: GenerationThinkingLevel },
     ) => {
       const intent = (generationIntentRef.current += 1);
       streamedTextRef.current = "";
@@ -349,6 +507,7 @@ export function FloatingChatApp() {
           providerId: modelChoice.providerId,
           model: modelChoice.model,
           inlineVisuals: "automatic",
+          ...(modelChoice.thinkingLevel ? { thinkingLevel: modelChoice.thinkingLevel } : {}),
         },
         {
           onDelta: (delta) => {
@@ -457,7 +616,7 @@ export function FloatingChatApp() {
   // Drain next queued follow-up automatically once idle and without errors.
   const drainingQueueRef = React.useRef(false);
   React.useEffect(() => {
-    if (isGenerating || sending || error || !chat || queuedMessages.length === 0) return;
+    if (isGenerating || sending || selectionSaving || error || !chat || queuedMessages.length === 0) return;
     if (drainingQueueRef.current) return;
     drainingQueueRef.current = true;
     const drainIntent = generationIntentRef.current;
@@ -497,11 +656,12 @@ export function FloatingChatApp() {
       .finally(() => {
         drainingQueueRef.current = false;
       });
-  }, [chat, error, isGenerating, queuedMessages, selectedModel, sending, startTurnStream]);
+  }, [chat, error, isGenerating, queuedMessages, selectedModel, selectionSaving, sending, startTurnStream]);
 
   const handleSend = async () => {
     const content = text.trim();
     if (!content && attachments.length === 0) return;
+    if (selectionSavingRef.current) return;
     if (!selectedModel.providerId || !selectedModel.model) {
       toast.info("Choose a model before sending.");
       return;
@@ -557,6 +717,7 @@ export function FloatingChatApp() {
           title: content.slice(0, 48) || "Quick Chat",
           providerId: selectedModel.providerId,
           model: selectedModel.model,
+          ...(selectedModel.thinkingLevel ? { thinkingLevel: selectedModel.thinkingLevel } : {}),
           messages: [
             {
               id: `optimistic-${turnId}`,
@@ -577,6 +738,7 @@ export function FloatingChatApp() {
           ...(targetMode.kind === "ephemeral" ? { ephemeral: true as const } : {}),
           providerId: selectedModel.providerId,
           model: selectedModel.model,
+          ...(selectedModel.thinkingLevel ? { thinkingLevel: selectedModel.thinkingLevel } : {}),
           turnId,
           message: {
             role: "user",
@@ -594,6 +756,11 @@ export function FloatingChatApp() {
         startTurnStream(created, turnId, selectedModel);
       } else {
         const activeChatId = chat.id;
+        // A pick made just before Send is saved on the chat first, so the turn
+        // and the chat's stored model and effort agree.
+        const pendingSelection = pendingSelectionRef.current;
+        const choice = pendingSelection ? await pendingSelection : selectedModel;
+        if (generationIntentRef.current !== sendIntent || chatRef.current?.id !== activeChatId) return;
         const turnId = createChatTurnId();
         const updated = await chatsApi.appendMessage(
           activeChatId,
@@ -603,8 +770,8 @@ export function FloatingChatApp() {
             ...(outgoingAttachments.length > 0 ? { attachments: outgoingAttachments } : {}),
           },
           {
-            providerId: selectedModel.providerId,
-            model: selectedModel.model,
+            providerId: choice.providerId,
+            model: choice.model,
             turnId,
           },
         );
@@ -612,7 +779,7 @@ export function FloatingChatApp() {
           return;
         }
         setChat(updated);
-        startTurnStream(updated, turnId, selectedModel);
+        startTurnStream(updated, turnId, choice);
       }
     } catch (err) {
       if (generationIntentRef.current !== sendIntent) return;
@@ -836,10 +1003,11 @@ export function FloatingChatApp() {
             providers={providers}
             providerId={selectedModel.providerId}
             model={selectedModel.model}
-            onModelChange={(providerId, model) => {
-              modelTouchedRef.current = true;
-              setSelectedModel({ providerId, model });
-            }}
+            onModelChange={(providerId, model) => applySelection(providerId, model)}
+            thinkingLevel={selectedModel.thinkingLevel}
+            agentSlider={settings?.agentSlider}
+            settingsLoaded={settings !== undefined}
+            onSelectStop={selectAgentSliderStop}
             hiddenModelsByProvider={settings?.hiddenModelsByProvider}
             workspaces={workspaces}
             targetMode={targetMode}
@@ -852,6 +1020,8 @@ export function FloatingChatApp() {
             }}
             isGenerating={false}
             sending={sending}
+            selectionSaving={selectionSaving}
+            onSelectionSavingChange={setSelectionSaving}
             onSend={() => void handleSend()}
             onStop={handleStop}
             onExpand={() => void handleExpand()}
@@ -1106,15 +1276,18 @@ export function FloatingChatApp() {
             providers={providers}
             providerId={selectedModel.providerId}
             model={selectedModel.model}
-            onModelChange={(providerId, model) => {
-              modelTouchedRef.current = true;
-              setSelectedModel({ providerId, model });
-            }}
+            onModelChange={(providerId, model) => applySelection(providerId, model)}
+            thinkingLevel={selectedModel.thinkingLevel}
+            agentSlider={settings?.agentSlider}
+            settingsLoaded={settings !== undefined}
+            onSelectStop={selectAgentSliderStop}
             hiddenModelsByProvider={settings?.hiddenModelsByProvider}
             workspaces={workspaces}
             targetMode={targetMode}
             isGenerating={isGenerating}
             sending={sending}
+            selectionSaving={selectionSaving}
+            onSelectionSavingChange={setSelectionSaving}
             onSend={() => void handleSend()}
             onStop={handleStop}
             textareaRef={textareaRef}
