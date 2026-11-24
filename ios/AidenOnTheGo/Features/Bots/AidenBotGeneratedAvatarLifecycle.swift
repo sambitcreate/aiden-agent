@@ -66,19 +66,7 @@ func aidenBotAvatarExpectedRevision(_ detail: AidenBotDetail) -> String {
 }
 
 func aidenBotAvatarMutationFailureIsAmbiguous(_ error: Error) -> Bool {
-    if error is CancellationError || error is URLError { return true }
-    guard let remoteError = error as? AidenRemoteClientError else { return true }
-    switch remoteError {
-    case .invalidResponse:
-        return true
-    case let .server(statusCode, _), let .unexpectedStatus(statusCode):
-        return (200..<300).contains(statusCode)
-            || statusCode == 408
-            || statusCode == 429
-            || statusCode >= 500
-    case .invalidEndpoint, .missingCredential, .missingTrustConfiguration, .installationChanged:
-        return false
-    }
+    AidenRemoteFailureClassification.isAmbiguous(error, policy: .beforeEffectRefusal())
 }
 
 /// Bounded, metadata-free normalization shared by candidate admission and

@@ -13,18 +13,13 @@ enum AidenNewWorktreeCopy {
 
 /// Which key the next New worktree request carries.
 enum AidenNewWorktreeRetry {
-    /// The Mac keeps each answer under its key for a day, refusals included,
-    /// so a request it answered needs a new key next time. One that got no
-    /// answer (no connection, a timeout, Cancel) or that the Mac is still
-    /// working on keeps its key, so the retry gets what the Mac did with it.
-    /// An answer this phone could not read spends it too: the Mac would only
-    /// replay the same answer under that key.
+    /// The Mac keeps each answer under its key for a day, structured refusals
+    /// included, so a structured server refusal other than `idempotency_in_flight`
+    /// spends the key. Requests with no valid structured refusal (connection loss,
+    /// timeout, Cancel, invalid response, unparsed status, or `idempotency_in_flight`)
+    /// keep their key so replay cannot duplicate the worktree.
     static func spendsKey(_ error: Error) -> Bool {
-        switch error as? AidenRemoteClientError {
-        case .server(_, let body): return body.code.rawValue != "idempotency_in_flight"
-        case .unexpectedStatus, .invalidResponse: return true
-        default: return false
-        }
+        AidenRemoteFailureClassification.spendsDurableKey(error)
     }
 }
 

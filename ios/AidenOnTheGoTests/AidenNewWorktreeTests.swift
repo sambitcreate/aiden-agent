@@ -154,10 +154,11 @@ final class AidenNewWorktreeTests: XCTestCase {
         }
         XCTAssertTrue(AidenNewWorktreeRetry.spendsKey(try refusal(409, "git_capability_denied")))
         XCTAssertTrue(AidenNewWorktreeRetry.spendsKey(try refusal(500, "internal_error")))
-        XCTAssertTrue(AidenNewWorktreeRetry.spendsKey(AidenRemoteClientError.unexpectedStatus(502)))
-        XCTAssertTrue(AidenNewWorktreeRetry.spendsKey(AidenRemoteClientError.invalidResponse), "an answer the phone could not read would only replay")
+        XCTAssertFalse(AidenNewWorktreeRetry.spendsKey(AidenRemoteClientError.unexpectedStatus(502)), "an unparsed HTTP status leaves the host ledger outcome unknown")
+        XCTAssertFalse(AidenNewWorktreeRetry.spendsKey(AidenRemoteClientError.invalidResponse), "a malformed/truncated response may follow a committed worktree")
         XCTAssertFalse(AidenNewWorktreeRetry.spendsKey(try refusal(409, "idempotency_in_flight")), "the Mac is still on it")
         XCTAssertFalse(AidenNewWorktreeRetry.spendsKey(URLError(.timedOut)))
         XCTAssertFalse(AidenNewWorktreeRetry.spendsKey(CancellationError()))
+        XCTAssertFalse(AidenNewWorktreeRetry.spendsKey(AidenRemoteClientError.missingCredential))
     }
 }

@@ -212,13 +212,29 @@ final class AidenBotGeneratedAvatarTests: XCTestCase {
         XCTAssertTrue(FileManager.default.fileExists(atPath: target.path))
     }
 
-    func testMutationAmbiguityClassificationClearsDefiniteFailures() {
+    func testMutationAmbiguityClassificationClearsDefiniteFailures() throws {
+        func refusal(_ status: Int, _ code: String) throws -> AidenRemoteClientError {
+            let body = try AidenRemoteJSONDecoder.decode(
+                AidenRemoteErrorEnvelope.Body.self,
+                from: Data(#"{"code":"\#(code)","message":"Refused.","requestId":"req_test_1","retryable":false}"#.utf8)
+            )
+            return .server(statusCode: status, body: body)
+        }
         XCTAssertTrue(aidenBotAvatarMutationFailureIsAmbiguous(URLError(.networkConnectionLost)))
         XCTAssertTrue(aidenBotAvatarMutationFailureIsAmbiguous(
             AidenRemoteClientError.unexpectedStatus(503)
         ))
-        XCTAssertFalse(aidenBotAvatarMutationFailureIsAmbiguous(
+        XCTAssertTrue(aidenBotAvatarMutationFailureIsAmbiguous(
             AidenRemoteClientError.unexpectedStatus(400)
+        ))
+        XCTAssertTrue(aidenBotAvatarMutationFailureIsAmbiguous(
+            try refusal(409, "idempotency_in_flight")
+        ))
+        XCTAssertFalse(aidenBotAvatarMutationFailureIsAmbiguous(
+            try refusal(400, "invalid_request")
+        ))
+        XCTAssertFalse(aidenBotAvatarMutationFailureIsAmbiguous(
+            try refusal(409, "revision_conflict")
         ))
         XCTAssertFalse(aidenBotAvatarMutationFailureIsAmbiguous(
             AidenRemoteClientError.installationChanged

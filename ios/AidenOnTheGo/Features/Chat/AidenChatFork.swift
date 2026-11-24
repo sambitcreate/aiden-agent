@@ -154,23 +154,15 @@ struct AidenChatForkAttempt: Equatable {
     }
 
     /// Whether the Mac may have created the fork although the request failed,
-    /// so the key must be kept for the next try. That is the case only when
-    /// no Aiden error response arrived (transport failure, timeout, lost
-    /// connection, or a cancelled request that may already have been sent),
-    /// a 201 arrived but could not be accepted, or the Mac reports the same
-    /// key still in flight. Every other error response is a definitive
-    /// rejection, and the Mac's ledger would replay it for a reused key.
+    /// so the key must be kept for the next try. That is the case when no
+    /// structured Aiden error response arrived (transport failure, timeout,
+    /// lost connection, a cancelled request that may already have been sent,
+    /// an unparsed status, or an invalid response) or when the Mac reports the
+    /// same key still in flight (`409 idempotency_in_flight`). Every other
+    /// structured server error is a definitive rejection cached by the ledger
+    /// for 24 hours.
     static func outcomeIsUnknown(after error: Error) -> Bool {
-        guard let clientError = error as? AidenRemoteClientError else { return true }
-        switch clientError {
-        case .server(_, let body):
-            return body.code.rawValue == "idempotency_in_flight"
-        case .invalidResponse:
-            return true
-        case .unexpectedStatus, .invalidEndpoint, .missingCredential,
-             .missingTrustConfiguration, .installationChanged:
-            return false
-        }
+        AidenRemoteFailureClassification.isAmbiguous(error, policy: .cachedRejectionLedger)
     }
 }
 
