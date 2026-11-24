@@ -5,7 +5,7 @@
   {"rule":"network-allowlist","file":"main/services/image-generation/replicate-images.ts","reason":"Replicate image generation API for a user-requested image with the user’s image key."},
   {"rule":"network-allowlist","file":"main/services/models-dev-cache-core.ts","reason":"Owns the fixed models.dev endpoint for the manual Update model catalogs action and CLI fetch."},
   {"rule":"network-allowlist","file":"scripts/update-model-capabilities.mjs","reason":"npm run models:refresh and the release refresh contact models.dev."},
-  {"rule":"literal-motion","file":"renderer/styles.css","reason":"Deliberate one-offs: activity-mark and Bot-face loops (shared timing with iOS and Android, docs/activity-marks.md), the image-scan choreography, the Live trigger lift and the reasoning body row growth.","max":13},
+  {"rule":"literal-motion","file":"renderer/styles.css","reason":"Deliberate one-offs: activity-mark loops (shared timing with iOS and Android, docs/activity-marks.md), the image-scan choreography, the Live trigger lift and the reasoning body row growth.","max":12},
   {"rule":"no-source-grep-test","file":"main/handlers/aiden-remote.test.ts","reason":"legacy; replace with behavioral test"},
   {"rule":"no-source-grep-test","file":"main/handlers/attachments.contract.test.ts","reason":"legacy; replace with behavioral test"},
   {"rule":"no-source-grep-test","file":"main/handlers/bots-platform-contract.test.ts","reason":"legacy; replace with behavioral test"},
