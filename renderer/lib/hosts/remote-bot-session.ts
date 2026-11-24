@@ -255,10 +255,21 @@ export function remoteBotSessionView(session: AidenRemoteBotSession): RemoteBotS
 }
 
 /**
+ * A page of older entries as the host supervisor returns it: the wire page
+ * plus `olderCursor`, the oldest entry the host sent (read or not), where the
+ * next page starts. Entries this Mac can't read are already left out, so the
+ * page's own oldest entry may be newer than that, or missing.
+ */
+export type RemoteBotSessionEntriesPage = AidenRemoteBotSessionEntriesPage & { olderCursor?: string };
+
+/**
  * A fresh read or a reconnect's snapshot of the same session keeps the older
  * pages this Mac already loaded, when the snapshot's window starts inside
  * them. Anything else (another epoch, a gap, a whole transcript) is the
- * snapshot as sent.
+ * snapshot as sent. A snapshot can also mean the host rewrote its history
+ * (removed or reordered entries) within the same epoch, so what this keeps is
+ * provisional: the follower reads those entries again and replaces them
+ * (`withRereadOlderRemoteBotEntries`), or drops them if it can't.
  */
 export function carryOlderRemoteBotEntries(
   previous: RemoteBotSessionView | null,
@@ -284,7 +295,7 @@ export function carryOlderRemoteBotEntries(
  */
 export function withOlderRemoteBotEntries(
   view: RemoteBotSessionView,
-  page: AidenRemoteBotSessionEntriesPage,
+  page: RemoteBotSessionEntriesPage,
 ): RemoteBotSessionView {
   if (page.botId !== view.snapshot.botId || page.epoch !== view.snapshot.epoch) return view;
   const held = new Set(view.snapshot.entries.map((entry) => entry.id));
@@ -293,8 +304,29 @@ export function withOlderRemoteBotEntries(
     ...view,
     snapshot: { ...view.snapshot, entries: [...older, ...view.snapshot.entries] },
     hasOlder: page.hasOlder,
-    olderCursor: page.hasOlder ? (page.entries[0]?.id ?? view.olderCursor) : null,
+    olderCursor: page.hasOlder ? (page.olderCursor ?? page.entries[0]?.id ?? view.olderCursor) : null,
   };
+}
+
+/**
+ * The first `carried` entries of `view` were kept from before a snapshot
+ * (`carryOlderRemoteBotEntries`); `page` is those entries read again from the
+ * host, just older than the snapshot's own. They are replaced with the page,
+ * so history the host removed or reordered doesn't stay. Without a page, or
+ * with one from another epoch, they are dropped and the snapshot's own
+ * "older" state comes back.
+ */
+export function withRereadOlderRemoteBotEntries(
+  view: RemoteBotSessionView,
+  carried: number,
+  snapshot: Pick<RemoteBotSessionView, "hasOlder" | "olderCursor">,
+  page: RemoteBotSessionEntriesPage | null,
+): RemoteBotSessionView {
+  const own = view.snapshot.entries.slice(carried);
+  if (page === null || page.botId !== view.snapshot.botId || page.epoch !== view.snapshot.epoch) {
+    return { ...view, snapshot: { ...view.snapshot, entries: own }, ...snapshot };
+  }
+  return withOlderRemoteBotEntries({ ...view, snapshot: { ...view.snapshot, entries: own } }, page);
 }
 
 /**

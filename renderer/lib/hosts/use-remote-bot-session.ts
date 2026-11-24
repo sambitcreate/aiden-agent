@@ -12,8 +12,8 @@ const transport: RemoteBotSessionTransport = {
   unsubscribe: (subscriptionId) => peerHostsApi.botSessionUnsubscribe(subscriptionId),
   onMessage: (handler) => peerHostsApi.onBotSession(handler),
   read: (hostId, botId) => peerHostsApi.call(hostId, { operation: "botSession", resourceId: botId }),
-  older: (hostId, botId, before) =>
-    peerHostsApi.call(hostId, { operation: "botSessionEntries", resourceId: botId, before }),
+  older: (hostId, botId, before, limit) =>
+    peerHostsApi.call(hostId, { operation: "botSessionEntries", resourceId: botId, before, ...(limit === undefined ? {} : { limit }) }),
 };
 
 const IDLE: RemoteBotSessionState = { view: null, stream: "waiting", failed: null, gone: false };
