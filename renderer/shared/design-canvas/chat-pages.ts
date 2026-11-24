@@ -80,6 +80,15 @@ export function claimPage(doc: DesignCanvas, chatId: string, pageId: string, isL
 }
 
 /**
+ * Drops the claims of chats `isLive` says are gone, so a chat deleted between
+ * its delete and the cleanup that follows it does not keep its page forever.
+ */
+export function withoutGoneClaims(doc: DesignCanvas, isLive: IsChatLive): DesignCanvas {
+  const kept = Object.entries(doc.chatPages).filter(([chatId]) => isLive(chatId));
+  return kept.length === Object.keys(doc.chatPages).length ? doc : { ...doc, chatPages: Object.fromEntries(kept) };
+}
+
+/**
  * Adds a page made for the chat right after `after`, named after its title
  * (`uniquePageName`), marked `namedFor` and claimed. At the page limit, or
  * when `id` is taken, returns `doc`.

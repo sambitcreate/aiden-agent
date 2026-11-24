@@ -135,8 +135,9 @@ export interface ChatApplicationDependencies {
   /** Forgets the person's "Not now" on Aiden's design mode card once they open design mode themselves. */
   designModeConsent?: { forgetDecline(chatId: string): void };
   /**
-   * Runs once design mode turns on: puts the HTML pages this chat's earlier
-   * replies wrote on an empty canvas. Never awaited by the switch.
+   * Runs once design mode turns on: the chat claims its page of the
+   * workspace canvas, and the HTML pages its earlier replies wrote go there.
+   * Awaited by the switch only with `awaitEntry`.
    */
   designPagesOnEntry?(chat: Chat, workspaceRoot: string): Promise<unknown>;
   /** Queued visual snapshots; a deleted chat's are dropped, not captured. */
@@ -388,7 +389,14 @@ export function createChatApplicationService(deps: ChatApplicationDependencies) 
      * folder. Turning it off is always allowed. A running reply is not
      * affected, because design mode only changes the layout.
      */
-    async setDesignMode(chatId: string, enabled: boolean, options: ChatApplicationMutationOptions = {}) {
+    async setDesignMode(
+      chatId: string,
+      enabled: boolean,
+      options: ChatApplicationMutationOptions & {
+        /** Answer only once entry has claimed the chat's page (Aiden's card), logging a failure. */
+        awaitEntry?: boolean;
+      } = {},
+    ) {
       let turnedOn = false;
       let workspaceRoot: string | undefined;
       const updated = await deps.chatStore.setDesignMode(chatId, enabled, async (chat) => {
@@ -405,9 +413,10 @@ export function createChatApplicationService(deps: ChatApplicationDependencies) 
       if (!enabled) deps.designGrants?.revokeChat(chatId);
       else deps.designModeConsent?.forgetDecline(chatId);
       if (turnedOn && workspaceRoot && deps.designPagesOnEntry) {
-        void deps.designPagesOnEntry(updated, workspaceRoot).catch((error) => {
-          deps.logError("design", "Could not put earlier pages on the design canvas.", error);
+        const entry = deps.designPagesOnEntry(updated, workspaceRoot).catch((error) => {
+          deps.logError("design", "Could not give the chat its page on the design canvas.", error);
         });
+        if (options.awaitEntry) await entry;
       }
       return chatForRenderer(updated);
     },

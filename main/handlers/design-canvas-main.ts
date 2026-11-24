@@ -39,7 +39,8 @@ export function registerDesignCanvasIpc(): void {
       answer,
       rendererDocumentOwner(event, () => new Error("Active renderer required.")),
       async (chatId) => {
-        await chatApplicationService.setDesignMode(chatId, true, { rejectFeatureOwned: true });
+        // Waits for the chat's page, so Aiden's first placement after "entered" lands there.
+        await chatApplicationService.setDesignMode(chatId, true, { rejectFeatureOwned: true, awaitEntry: true });
         ipcMain.broadcast("chats:design-mode-changed", { chatId, designMode: true });
       },
     );

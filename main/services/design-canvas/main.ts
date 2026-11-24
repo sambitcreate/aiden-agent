@@ -24,6 +24,18 @@ export const designWorkspaceCanvasStore = new DesignCanvasStore({
   root: () => path.join(app.getPath("userData"), "design-canvases"),
 });
 
+/** Whether the chat still exists and is in that workspace: a chat that moved away is not live there. */
+async function designChatIsLive(chatId: string, workspaceId: string): Promise<boolean> {
+  const meta = await chatStore.getMeta(chatId);
+  return meta !== null && persistedChatWorkspaceId(meta.workspaceId) === workspaceId;
+}
+
+/** Which of `chatIds` are live in the workspace, for claims on its canvas. */
+export async function designLiveChats(chatIds: readonly string[], workspaceId: string): Promise<Set<string>> {
+  const live = await Promise.all(chatIds.map((chatId) => designChatIsLive(chatId, workspaceId)));
+  return new Set(chatIds.filter((_, index) => live[index]));
+}
+
 /** The workspace canvases seen through chats: what handlers, tools and placements use. */
 export const designCanvasStore = new DesignChatCanvases({
   store: designWorkspaceCanvasStore,
@@ -32,10 +44,7 @@ export const designCanvasStore = new DesignChatCanvases({
     return meta ? persistedChatWorkspaceId(meta.workspaceId) : null;
   },
   workspaceExists: async (workspaceId) => (await configStore.getWorkspace(workspaceId)) !== undefined,
-  chatIsLive: async (chatId, workspaceId) => {
-    const meta = await chatStore.getMeta(chatId);
-    return meta !== null && persistedChatWorkspaceId(meta.workspaceId) === workspaceId;
-  },
+  chatIsLive: designChatIsLive,
 });
 
 /**

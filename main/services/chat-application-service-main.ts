@@ -24,7 +24,9 @@ import {
   designCanvasStore,
   designCanvasViews,
   designGrants,
+  designLiveChats,
   designModeConsent,
+  designTitleFollow,
   recentWrittenPages,
 } from "./design-canvas/main.js";
 import { designTurnPages } from "./design-canvas/views.js";
@@ -67,12 +69,15 @@ export const chatApplicationService = createChatApplicationService({
       pages: designTurnPages({ views: designCanvasViews, chatId: chat.id }),
       broadcast: (update) => ipcMain.broadcast(DESIGN_CANVAS_UPDATED_CHANNEL, update),
       newId: randomUUID,
-      // The chat's earlier pages land on its own page of the shared canvas.
+      // The chat claims its own page of the shared canvas, and its earlier pages land there.
       entry: {
         pageName: chat.title,
-        hasView: async (workspaceId) => (await designCanvasViews.get(chat.id, workspaceId)) !== undefined,
+        otherViews: (workspaceId) => designCanvasViews.pageIdsOf(workspaceId, chat.id),
+        isLive: designLiveChats,
       },
     });
+    // The title may have changed while entry ran; a page made for the chat follows it.
+    await designTitleFollow.follow(chat.id);
     // The canvas shows that page and fits them once it loads, so the person sees them whole.
     const { frameIds, pageId, focusId } = entered;
     if (pageId && (frameIds.length > 0 || focusId !== undefined)) {
