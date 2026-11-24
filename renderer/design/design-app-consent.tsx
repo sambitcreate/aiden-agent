@@ -6,7 +6,9 @@
 // none times out unseen behind another. Its details scroll inside it, with a
 // cue while their end is out of view, and Allow and Not now stay on screen.
 // It also raises one toast when an app the person started fails or stops on
-// its own.
+// its own. 2c adds the attach card: before design mode connects to a server
+// the person runs that `.aiden/canvas.json` names, it shows the address, the
+// process and its folder.
 
 import { AppWindow } from "lucide-react";
 import * as React from "react";
@@ -14,6 +16,7 @@ import { Button, Callout, toast } from "../components/ui";
 import { isDismissKey } from "../lib/dismiss-key";
 import { designAppApi } from "../lib/ipc";
 import {
+  DESIGN_APP_ATTACH_SCOPE,
   DESIGN_APP_CONSENT_SCOPE,
   DESIGN_APP_INSTALL_NOTE,
   DESIGN_APP_SAVES_CHOICE,
@@ -27,6 +30,7 @@ import {
 } from "../shared/design-app";
 
 export type DesignAppLaunchRequest = Extract<DesignAppConsentRequest, { kind: "launch" }>;
+export type DesignAppAttachRequest = Extract<DesignAppConsentRequest, { kind: "attach" }>;
 
 const ANSWER_FAILED = "Aiden couldn't send your answer.";
 const CRASHED = "The app's dev server stopped.";
@@ -37,6 +41,12 @@ const QUIET_PROBLEMS: ReadonlySet<DesignAppProblem["problem"]> = new Set([
   "consent-unanswered",
   "consent-unavailable",
   "desktop-only",
+  // 2c (D3): attach outcomes show in place, in the Connect sheet and the chip's menu.
+  "attach-not-loopback",
+  "attach-unreachable",
+  "attach-not-in-app",
+  "attach-url-invalid",
+  "already-running",
 ]);
 
 /**
@@ -44,20 +54,20 @@ const QUIET_PROBLEMS: ReadonlySet<DesignAppProblem["problem"]> = new Set([
  * whole app so switching chats and back still shows them. Main closes each
  * when it stops waiting.
  */
-const waiting = new Map<string, DesignAppLaunchRequest>();
+const waiting = new Map<string, DesignAppConsentRequest>();
 const listeners = new Set<() => void>();
 let installed = false;
 let version = 0;
 /** Each chat's list at the last version it was read, so React sees a stable snapshot. */
-const lists = new Map<string, { version: number; requests: readonly DesignAppLaunchRequest[] }>();
-const NONE: readonly DesignAppLaunchRequest[] = [];
+const lists = new Map<string, { version: number; requests: readonly DesignAppConsentRequest[] }>();
+const NONE: readonly DesignAppConsentRequest[] = [];
 
 function changed() {
   version += 1;
   for (const listener of listeners) listener();
 }
 
-function waitingFor(chatId: string | undefined): readonly DesignAppLaunchRequest[] {
+function waitingFor(chatId: string | undefined): readonly DesignAppConsentRequest[] {
   if (!chatId) return NONE;
   const kept = lists.get(chatId);
   if (kept?.version === version) return kept.requests;
@@ -88,12 +98,27 @@ function isLaunchRequest(request: unknown): request is DesignAppLaunchRequest {
   );
 }
 
+function isAttachRequest(request: unknown): request is DesignAppAttachRequest {
+  if (!request || typeof request !== "object") return false;
+  const candidate = request as Partial<DesignAppAttachRequest>;
+  return (
+    candidate.kind === "attach" &&
+    typeof candidate.requestId === "string" &&
+    typeof candidate.chatId === "string" &&
+    typeof candidate.appRoot === "string" &&
+    typeof candidate.url === "string" &&
+    typeof candidate.configUrl === "string" &&
+    typeof candidate.processName === "string" &&
+    typeof candidate.folder === "string"
+  );
+}
+
 function install() {
   if (installed) return;
   installed = true;
   designAppApi.onConsent((request) => {
-    // 2c renders attach cards; a malformed launch card is never shown half-filled.
-    if (!isLaunchRequest(request)) return;
+    // A malformed card is never shown half-filled.
+    if (!isLaunchRequest(request) && !isAttachRequest(request)) return;
     waiting.set(request.requestId, request);
     changed();
   });
@@ -111,8 +136,8 @@ export function resetDesignAppConsentForTests(): void {
   toasted.clear();
 }
 
-/** The run-app cards waiting for this chat, oldest first. */
-export function useDesignAppConsents(chatId: string | undefined): readonly DesignAppLaunchRequest[] {
+/** The run-app and attach cards waiting for this chat, oldest first. */
+export function useDesignAppConsents(chatId: string | undefined): readonly DesignAppConsentRequest[] {
   React.useEffect(() => install(), []);
   return React.useSyncExternalStore(
     React.useCallback((listener: () => void) => {
@@ -179,13 +204,10 @@ function useMoreBelow(box: React.RefObject<HTMLElement | null>): [boolean, () =>
   return [more, measure];
 }
 
-export function DesignAppConsentCard({ request, stacked = false }: { request: DesignAppLaunchRequest; stacked?: boolean }) {
+/** A card's answer, once, and its first focus on Not now. */
+function useCardAnswer(requestId: string) {
   const [answering, setAnswering] = React.useState<DesignAppConsentAnswer | null>(null);
   const notNowRef = React.useRef<HTMLButtonElement>(null);
-  const detailsRef = React.useRef<HTMLDivElement>(null);
-  const [more, measure] = useMoreBelow(detailsRef);
-  const again = request.reason === "changed" || request.reason === "install";
-  const title = `Run ${request.frameworkLabel} app${again ? " again" : ""}?`;
 
   React.useEffect(() => {
     // A card that arrives while the person is in another run-app card leaves their focus there.
@@ -197,26 +219,79 @@ export function DesignAppConsentCard({ request, stacked = false }: { request: De
     if (answering) return;
     setAnswering(choice);
     try {
-      const accepted = await designAppApi.answerConsent(request.requestId, choice);
+      const accepted = await designAppApi.answerConsent(requestId, choice);
       if (!accepted) toast.info("Aiden is no longer waiting for this answer.");
     } catch (error) {
       toast.error(error instanceof Error && error.message ? error.message : ANSWER_FAILED);
     } finally {
       // Main closes the card either way; drop it here too in case the window missed that.
-      drop(request.requestId);
+      drop(requestId);
     }
   };
+  const onKeyDown = (event: React.KeyboardEvent) => {
+    if (!isDismissKey(event)) return;
+    event.preventDefault();
+    void answer("decline");
+  };
+  return { answering, notNowRef, answer, onKeyDown };
+}
+
+export function DesignAppConsentCard({ request, stacked = false }: { request: DesignAppConsentRequest; stacked?: boolean }) {
+  return request.kind === "attach" ? <DesignAppAttachCard request={request} /> : <DesignAppLaunchCard request={request} stacked={stacked} />;
+}
+
+/**
+ * 2c (D10): before design mode connects to a server `.aiden/canvas.json`
+ * names. It shows the address main found, the url the file asks for, and the
+ * process and folder that hold it; Allow binds to exactly those.
+ */
+function DesignAppAttachCard({ request }: { request: DesignAppAttachRequest }) {
+  const { answering, notNowRef, answer, onKeyDown } = useCardAnswer(request.requestId);
+  const address = request.url.replace(/^http:\/\//u, "");
+  const title = `Connect to ${consentDisplayText(request.processName)} at ${address}?`;
+  return (
+    <Callout role="group" aria-label={title} data-design-app-card="" onKeyDown={onKeyDown}>
+      <div className="flex items-start gap-2">
+        <AppWindow className="mt-0.5 size-3.5 shrink-0 text-secondary" aria-hidden="true" />
+        <div className="min-w-0 flex-1">
+          <p className="text-small font-medium break-words text-primary">{title}</p>
+          <p className="mt-0.5 text-small break-words text-secondary">
+            .aiden/canvas.json asks for <span className="font-mono">{consentDisplayText(request.configUrl)}</span>
+          </p>
+          <p className="mt-0.5 text-small break-words text-secondary">
+            Folder: <span className="font-mono">{consentDisplayText(request.folder)}</span>
+          </p>
+          <p className="mt-0.5 text-small break-words text-secondary">
+            App <span className="font-mono">{consentDisplayText(request.appRoot)}</span>
+          </p>
+          <p className="mt-2 text-small text-tertiary">{DESIGN_APP_ATTACH_SCOPE}</p>
+        </div>
+      </div>
+      <div className="mt-2 flex flex-wrap items-center justify-end gap-1.5">
+        <Button ref={notNowRef} variant="transparent" size="small" disabled={answering !== null} onClick={() => void answer("decline")}>
+          Not now
+        </Button>
+        <Button variant="accent" size="small" disabled={answering !== null} onClick={() => void answer("allow")}>
+          {answering === "allow" ? "Connecting…" : "Allow"}
+        </Button>
+      </div>
+    </Callout>
+  );
+}
+
+function DesignAppLaunchCard({ request, stacked = false }: { request: DesignAppLaunchRequest; stacked?: boolean }) {
+  const { answering, notNowRef, answer, onKeyDown } = useCardAnswer(request.requestId);
+  const detailsRef = React.useRef<HTMLDivElement>(null);
+  const [more, measure] = useMoreBelow(detailsRef);
+  const again = request.reason === "changed" || request.reason === "install";
+  const title = `Run ${request.frameworkLabel} app${again ? " again" : ""}?`;
 
   return (
     <Callout
       role="group"
       aria-label={title}
       data-design-app-card=""
-      onKeyDown={(event: React.KeyboardEvent) => {
-        if (!isDismissKey(event)) return;
-        event.preventDefault();
-        void answer("decline");
-      }}
+      onKeyDown={onKeyDown}
     >
       <div className="flex items-start gap-2">
         <AppWindow className="mt-0.5 size-3.5 shrink-0 text-secondary" aria-hidden="true" />
@@ -285,8 +360,8 @@ export function DesignAppConsentCard({ request, stacked = false }: { request: De
   );
 }
 
-/** Every run-app card waiting for the chat, stacked oldest first above the composer. */
-export function DesignAppConsentCards({ requests }: { requests: readonly DesignAppLaunchRequest[] }) {
+/** Every run-app and attach card waiting for the chat, stacked oldest first above the composer. */
+export function DesignAppConsentCards({ requests }: { requests: readonly DesignAppConsentRequest[] }) {
   return (
     <div className="aiden-dock-inset chat-content-column flex flex-col gap-2 pb-2">
       {requests.map((request) => (
