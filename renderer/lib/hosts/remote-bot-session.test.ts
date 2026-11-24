@@ -655,6 +655,52 @@ test("a same-epoch snapshot that starts inside the loaded history keeps what was
   follower.stop();
 });
 
+test("a shifted snapshot keeps every kept entry the host still has, however many unshown entries sit between them", async () => {
+  const message = (id: string, text: string) => ({ type: "message" as const, id, role: "assistant" as const, text });
+  // The host, newer than this Mac: five "u…" entries this Mac can't show sit between "m3" and "m4",
+  // more than the two entries this Mac keeps across the snapshot.
+  let host = ["m1", "m2", "m3", "u1", "u2", "u3", "u4", "u5", "m4", "m5", "m6", "m7"];
+  const fake = fakeTransport([session({ hasOlder: true, entries: [message("m3", "m3"), message("m4", "m4"), message("m5", "m5")] })]);
+  const asked: Array<[string, number | undefined]> = [];
+  fake.transport.older = async (_hostId, _botId, before, limit) => {
+    asked.push([before, limit]);
+    const end = host.indexOf(before);
+    if (end < 0) return { ok: false, error: { code: "http_error", status: 409, remoteCode: "operation_stale", message: "This Bot's chat changed. Read it again." } };
+    const start = Math.max(0, end - (limit ?? 2));
+    const sent = host.slice(start, end);
+    return {
+      ok: true,
+      value: {
+        botId: "bot_1", epoch: "e1", hasOlder: start > 0, olderCursor: sent[0], hostCount: sent.length,
+        entries: sent.filter((id) => id.startsWith("m")).map((id) => message(id, id)),
+      },
+    };
+  };
+  const follower = new RemoteBotSessionFollower(fake.transport, "host_a", "bot_1");
+  follower.start();
+  await settle();
+  const ids = () => follower.getState().view!.snapshot.entries.map((entry) => entry.id);
+  const snapshot = (seq: number, entries: string[]) =>
+    fake.push(event(seq, { type: "snapshot", payload: { session: session({ seq: seq + 1, hasOlder: true, entries: entries.map((id) => message(id, id)) }) } }));
+
+  // The snapshot now starts at "m5": "m3" and "m4" are kept, and both are read back.
+  snapshot(4, ["m5", "m6"]);
+  await settle();
+  assert.deepEqual(ids(), ["m3", "m4", "m5", "m6"], "nothing shown is lost, and m1 and m2 are not added");
+  assert.equal(follower.getState().view!.hasOlder, true);
+  assert.ok(asked.every(([, limit]) => (limit ?? 0) <= 200), JSON.stringify(asked));
+
+  // The host drops "m3": the re-read stops at "m4", the earliest kept entry it still has.
+  host = host.filter((id) => id !== "m3");
+  snapshot(6, ["m6", "m7"]);
+  await settle();
+  assert.deepEqual(ids(), ["m4", "m5", "m6", "m7"]);
+  assert.ok(host.includes(follower.getState().view!.olderCursor ?? ""), "Load older starts from an entry the host has");
+  await follower.loadOlder();
+  assert.deepEqual(ids(), ["m2", "m4", "m5", "m6", "m7"], "Load older goes on from an entry the host has");
+  follower.stop();
+});
+
 test("a page whose entries this Mac can't show still moves Load older past them", () => {
   const message = (id: string, text: string) => ({ type: "message" as const, id, role: "assistant" as const, text });
   const view = remoteBotSessionView(session({ hasOlder: true, entries: [message("m5", "Five")] }));
