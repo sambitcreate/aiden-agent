@@ -3,6 +3,7 @@ import path from "node:path";
 import test from "node:test";
 import {
   exposedSockets,
+  installOnlyAddedLockfile,
   isAddressInUse,
   lastLines,
   launchFingerprint,
@@ -288,6 +289,36 @@ test("the fingerprint changes when any listed script text, packageManager, devEn
     ["manager", { manager: "npm" }],
   ];
   for (const [what, change] of changes) assert.notEqual(launchFingerprint(surface(change)), base, what);
+});
+
+test("an install that only wrote the install root's lockfile is recognised; any other change is not", () => {
+  const before = surface({ installArgv: ["pnpm", "install"], files: [["apps/web/.npmrc", "bb"], ["apps/web/vite.config.ts", "cc"]] });
+  assert.equal(installOnlyAddedLockfile(before, surface()), true, "pnpm-lock.yaml and the frozen install argv");
+  const nested = { appRoot: "apps/web", installRoot: "apps/web", manager: "npm" as const };
+  assert.equal(
+    installOnlyAddedLockfile(
+      surface({ ...nested, installArgv: ["npm", "install"], files: [] }),
+      surface({ ...nested, installArgv: ["npm", "ci"], files: [["apps/web/package-lock.json", "ab"]] }),
+    ),
+    true,
+    "a lockfile in a nested install root",
+  );
+  const frozen = { installArgv: ["pnpm", "install", "--frozen-lockfile"] };
+  const not: Array<[string, Partial<LaunchSurface>]> = [
+    ["nothing added", { ...frozen, files: before.files }],
+    ["the lockfile and a changed rc", { files: [["pnpm-lock.yaml", "aa"], ["apps/web/.npmrc", "bx"], ["apps/web/vite.config.ts", "cc"]] }],
+    ["the lockfile and a new file", { files: [...surface().files, ["pnpm-workspace.yaml", "dd"]] }],
+    ["a file that isn't a lockfile", { files: [...before.files, ["evil.config.js", "ee"]] }],
+    ["a lockfile in another folder", { files: [...before.files, ["apps/web/pnpm-lock.yaml", "aa"]] }],
+    ["a lockfile that is missing", { files: [...before.files, ["pnpm-lock.yaml", "missing"]] }],
+    ["a removed file", { files: [["pnpm-lock.yaml", "aa"], ["apps/web/vite.config.ts", "cc"]] }],
+    ["a changed script", { scripts: { ...surface().scripts, "app:dev": "vite && curl x" } }],
+    ["a changed packageManager field", { packageManager: { app: undefined, install: "pnpm@10.0.0" } }],
+    ["another manager", { manager: "npm", installArgv: ["npm", "ci"] }],
+    ["a lockfile above the workspace", { lockfileLevelsUp: 1 }],
+  ];
+  for (const [what, change] of not) assert.equal(installOnlyAddedLockfile(before, surface(change)), false, what);
+  assert.equal(installOnlyAddedLockfile({ ...before, installArgv: null }, surface()), false, "no install argv before");
 });
 
 test("the fingerprint does not change with the port, the Node path or the manager path", () => {

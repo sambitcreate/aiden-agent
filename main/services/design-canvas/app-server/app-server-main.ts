@@ -38,6 +38,7 @@ import { isDesktopOwner, type DesignAppConsent, type DesignAppConsentOwner, type
 import type { LaunchSurfaceProblem, LaunchSurfaceRead } from "./app-fingerprint.js";
 import {
   exposedSockets,
+  installOnlyAddedLockfile,
   isAddressInUse,
   lastLines,
   launchEnvironment,
@@ -667,7 +668,20 @@ export class DesignAppServers {
               "failed",
             );
           }
-          await race(this.deps.records.markInstall(entry.workspaceId, app.installRoot, { state: "done", manager: toolchain.manager.name, lockHash: surface.lockHash }), signal);
+          // An install with no lockfile writes one (A-M1): read the surface again, and when that is all
+          // that changed, the consent moves to it and the stamp takes the new lockfile's hash.
+          let lockHash = surface.lockHash;
+          const after = await race(this.readSurface(entry, workspacePath, input.choose?.script), signal);
+          if (after) {
+            lockHash = after.lockHash;
+            if (consent && consent.fingerprint === surface.fingerprint && installOnlyAddedLockfile(surface.surface, after.surface)) {
+              await race(
+                this.deps.records.approveShown(entry.workspaceId, entry.appRoot, { script: consent.script, installShown: consent.installShown }, after.fingerprint, after.fingerprint),
+                signal,
+              );
+            }
+          }
+          await race(this.deps.records.markInstall(entry.workspaceId, app.installRoot, { state: "done", manager: toolchain.manager.name, lockHash }), signal);
           installDone = true;
           continue;
         }
@@ -1020,6 +1034,15 @@ export class DesignAppServers {
   }
 
   // ── Detection and status ──
+
+  /** The launch surface read again, for an app that still resolves; undefined otherwise. */
+  private async readSurface(entry: Entry, workspacePath: string, chosen: string | undefined): Promise<LaunchSurfaceRead | undefined> {
+    const cached = await this.detectFor(entry.workspaceId, workspacePath);
+    const app = this.resolveApp(cached.detection, cached.config, entry.appRoot, chosen);
+    if (!app) return undefined;
+    const surface = await this.deps.fingerprint(workspacePath, app);
+    return "problem" in surface ? undefined : surface;
+  }
 
   private async detectFor(workspaceId: string, workspacePath: string) {
     const [detection, config] = await Promise.all([this.deps.detect(workspacePath), this.deps.readConfig(workspacePath).catch(() => null)]);

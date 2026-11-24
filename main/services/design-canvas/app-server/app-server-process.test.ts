@@ -298,6 +298,21 @@ test("a first install runs fake-pm ci, writes the stamp, and the next start skip
   assert.equal(h.jobs.listDesign("ws").length, jobsBefore + 1, "no second install");
 });
 
+test("with no lockfile, one card covers the install that writes one: one install, and the next start asks nothing", { skip }, async (t) => {
+  const h = await harness(t, { scripts: { dev: serve() }, lockfile: false, nodeModules: false });
+  const status = await h.start();
+  assert.equal(status.phase, "running", JSON.stringify(status));
+  assert.equal(await readFile(path.join(h.root, "node_modules", ".fake-installed"), "utf8"), "install\n");
+  assert.ok((await readFile(path.join(h.root, "package-lock.json"), "utf8")).includes("lockfileVersion"), "the install wrote a lockfile");
+  const installs = () => h.jobs.listDesign("ws").filter((job) => / (install|ci)$/u.test(job.command));
+  assert.equal(h.cards.length, 1, "no second card for the lockfile Aiden's install wrote");
+  assert.equal(installs().length, 1);
+  await h.servers.stop("ws", ".");
+  assert.equal((await h.start()).phase, "running");
+  assert.equal(h.cards.length, 1, "the next start asks nothing");
+  assert.equal(installs().length, 1, "and installs nothing");
+});
+
 test("CRA's address-in-use message is retried once on another port", { skip }, async (t) => {
   const h = await harness(t, { scripts: { dev: serve("--fake-in-use-once=.in-use-once") }, nodeModules: true });
   const status = await h.start();

@@ -279,6 +279,30 @@ export function launchFingerprintInput(surface: LaunchSurface): Record<string, u
   };
 }
 
+/** The lockfile names an install writes when there is none (R5's names). */
+const LOCKFILE_NAMES: ReadonlySet<string> = new Set(["package-lock.json", "npm-shrinkwrap.json", "pnpm-lock.yaml", "yarn.lock", "bun.lock", "bun.lockb"]);
+
+/**
+ * A-M1: whether `after` differs from `before` only by the lockfile an install
+ * wrote in the install root, and the install argv that follows from it. Every
+ * other file, script, field and argv is the same, so the consent for `before`
+ * still covers what runs.
+ */
+export function installOnlyAddedLockfile(before: LaunchSurface, after: LaunchSurface): boolean {
+  if (before.lockfileLevelsUp !== 0 || after.lockfileLevelsUp !== 0) return false;
+  if (!before.installArgv || !after.installArgv || before.installArgv[0] !== after.installArgv[0]) return false;
+  const previous = new Map(before.files);
+  if (previous.size !== before.files.length || after.files.length !== before.files.length + 1) return false;
+  const added = after.files.filter(([name]) => !previous.has(name));
+  if (added.length !== 1) return false;
+  const [name, hash] = added[0]!;
+  const folder = after.installRoot === "." ? "" : `${after.installRoot}/`;
+  if (hash === "missing" || !name.startsWith(folder) || !LOCKFILE_NAMES.has(name.slice(folder.length))) return false;
+  if (after.files.some(([file, value]) => file !== name && previous.get(file) !== value)) return false;
+  const rest = (surface: LaunchSurface) => JSON.stringify(canonical(launchFingerprintInput({ ...surface, files: [], installArgv: null })));
+  return rest(before) === rest(after);
+}
+
 export function launchFingerprint(surface: LaunchSurface): string {
   return createHash("sha256").update(JSON.stringify(canonical(launchFingerprintInput(surface)))).digest("hex");
 }
