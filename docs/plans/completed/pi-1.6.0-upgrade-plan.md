@@ -24,6 +24,8 @@ The upgrade was split into three lanes that touched separate files.
 5. **Web search model.** `OPENAI_WEB_SEARCH_MODEL` stays `gpt-5.6`. It is the fallback for the separate OpenAI web-search tool, not the chat default, and Pi's default change does not reach it.
 6. **Upstream week W3.** pi-durable 1.6 releases signals and tools that park, which [W3](../upstream-week-2026-11-11-plan.md) waited for. W3 is unblocked but not started; it is not part of this upgrade.
 
+7. **Runtime identity.** Pi Durable 1.6 keys per-run state by the scheduler's `TaskRuntime` object, so Bot execution scoping overrides properties on that object for the run instead of passing a Proxy to phase handlers.
+
 ## Validation
 
 Local Mac:
