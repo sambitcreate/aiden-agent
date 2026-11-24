@@ -174,6 +174,16 @@ export const DESIGN_APP_CHANNELS = {
   consentClosed: "designApp:consentClosed",
 } as const;
 
+/**
+ * Whether a chat may run its workspace's apps: only an attended desktop chat,
+ * never a Bot's or a feature-owned one (any present owner counts). Every path
+ * that starts an app for a chat (the designApp:* channels, the Design toggle
+ * and Enter on Aiden's design-mode card) asks this one guard.
+ */
+export function chatRunsDesignApps<T extends { botId?: string; owner?: unknown }>(chat: T | null | undefined): chat is T {
+  return chat !== null && chat !== undefined && !chat.botId && chat.owner === undefined;
+}
+
 /** The S2 sentence every launch card ends with. */
 export const DESIGN_APP_CONSENT_SCOPE =
   "This approves the commands above. The dev server then runs this app's own code, and approving doesn't cover what that code does.";

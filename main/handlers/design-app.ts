@@ -6,7 +6,7 @@
 // design-canvas-main.ts.
 
 import { persistedChatWorkspaceId } from "../../renderer/shared/chat-workspace.js";
-import { DESIGN_APP_CHANNELS } from "../../renderer/shared/design-app.js";
+import { chatRunsDesignApps, DESIGN_APP_CHANNELS } from "../../renderer/shared/design-app.js";
 import type { WorkspaceGatePermission } from "../services/approval-gate/workspace-tool-approval.js";
 import { isSafeWorkspaceRelativePath } from "../services/design-canvas/canvas-config.js";
 import type { DesignAppConsent, DesignAppConsentOwner } from "../services/design-canvas/app-server/app-consent.js";
@@ -59,8 +59,8 @@ export function registerDesignAppHandlers<Event>(deps: DesignAppHandlerDeps<Even
     const owner = deps.owner(event);
     const chatId = chatIdOf(chatIdArg);
     const chat = await deps.getChat(chatId);
-    // Only an attended desktop chat runs apps: never a Bot's or a routine's.
-    if (!chat || chat.botId || chat.owner) throw new Error("This chat can't run apps.");
+    // Only an attended desktop chat runs apps: never a Bot's or a feature-owned one.
+    if (!chatRunsDesignApps(chat)) throw new Error("This chat can't run apps.");
     const workspace = await deps.workspace(persistedChatWorkspaceId(chat.workspaceId));
     if (!workspace?.folderPath) throw new Error("This chat's workspace has no folder on this computer.");
     return {
@@ -140,7 +140,7 @@ export function registerDesignAppHandlers<Event>(deps: DesignAppHandlerDeps<Even
  * run-app card first).
  */
 export function createDesignModeCardEnter(deps: {
-  setDesignMode(chatId: string): Promise<{ id: string; workspaceId?: string } | null>;
+  setDesignMode(chatId: string): Promise<{ id: string; workspaceId?: string; botId?: string; owner?: unknown } | null>;
   broadcastEntered(chatId: string): void;
   designApp: {
     enabled(): boolean;
@@ -150,7 +150,8 @@ export function createDesignModeCardEnter(deps: {
   return (owner: DesignAppConsentOwner) => async (chatId: string): Promise<void> => {
     const chat = await deps.setDesignMode(chatId);
     deps.broadcastEntered(chatId);
-    if (chat && deps.designApp.enabled()) {
+    // The same guard as the designApp:* channels and the Design toggle.
+    if (chat && chatRunsDesignApps(chat) && deps.designApp.enabled()) {
       deps.designApp.entered({ chatId, workspaceId: persistedChatWorkspaceId(chat.workspaceId), owner });
     }
   };

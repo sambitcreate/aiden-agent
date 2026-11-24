@@ -15,6 +15,7 @@ import {
   MAX_PROVIDER_ID_CHARS,
 } from "../../renderer/shared/chat-message-contract.js";
 import { persistedChatWorkspaceId } from "../../renderer/shared/chat-workspace.js";
+import { chatRunsDesignApps } from "../../renderer/shared/design-app.js";
 import {
   appendChatMessageWithReconciliation,
   isAppendReconciliationRequiredError,
@@ -162,7 +163,8 @@ export function createRendererChatMutationHandlers(deps: RendererChatMutationDep
       broadcastDesignModeChanged({ chatId, designMode: enabled });
       if (wasOn === false && enabled) reportAnalyticsEvent("design_mode_entered", { source: designModeEntrySource(source) });
       else if (wasOn === true && !enabled) reportAnalyticsEvent("design_mode_exited", {});
-      if (chat && wasOn === false && enabled && deps.designApp?.enabled()) {
+      // The designApp:* channels' guard: a Bot's or a feature-owned chat never starts an app.
+      if (chatRunsDesignApps(chat) && wasOn === false && enabled && deps.designApp?.enabled()) {
         try {
           const owner = rendererDocumentOwner(event, () => new Error("Active renderer required."));
           deps.designApp.entered({ chatId, workspaceId: persistedChatWorkspaceId(chat.workspaceId), owner });

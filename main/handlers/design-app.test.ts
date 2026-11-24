@@ -244,3 +244,22 @@ test("Enter on Aiden's design-mode card starts the workspace's app for the answe
   assert.equal(entered.length, 1, "with the flag off nothing starts");
   assert.deepEqual(broadcasts, ["site-chat", "site-chat"], "design mode turns on either way");
 });
+
+test("Enter on Aiden's design-mode card starts no app for a chat the designApp:* channels refuse", async () => {
+  const window = windowContents(6);
+  const owner = rendererDocumentOwner(window.fromMain, () => new Error("x"));
+  const { invoke } = harness();
+  const entered: string[] = [];
+  const enter = createDesignModeCardEnter({
+    // A setDesignMode that lets design mode on for any chat it finds.
+    setDesignMode: async (chatId) => CHATS[chatId] ?? null,
+    broadcastEntered: () => undefined,
+    designApp: { enabled: () => true, entered: (input) => entered.push(input.chatId) },
+  })(owner);
+  for (const chatId of ["site-chat", "bot-chat", "routine-chat"]) {
+    const refused = await Promise.resolve(invoke("designApp:start", window.fromMain, chatId)).then(() => false, () => true);
+    await enter(chatId);
+    assert.equal(entered.includes(chatId), !refused, `${chatId}: Enter starts an app exactly when the channel would`);
+  }
+  assert.deepEqual(entered, ["site-chat"]);
+});
