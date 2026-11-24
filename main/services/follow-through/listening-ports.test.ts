@@ -506,6 +506,21 @@ test("portHolders on Linux maps the port's listening inode to this uid's process
   assert.deepEqual(await portHolders(4000, 501, deps), { ok: true, pids: [] });
 });
 
+test("portHolders on Linux skips an unreadable process only while the readable ones account for every socket on the port", async () => {
+  // 40 is the person's but its fds can't be read, as with Chromium's non-dumpable sandboxed helpers.
+  const deps = linuxDeps({
+    exec: async () => ({ ok: true, stdout: "10 1 10 501\n40 1 40 501\n", stderr: "", exitCode: 0 }),
+    tcp: [TCP_HEADER, row("0100007F:1435", "11"), row("0100007F:0BB8", "12")].join("\n"),
+    fds: { 10: ["socket:[11]"], 40: denied() },
+  });
+  assert.deepEqual(await portHolders(5173, 501, deps), { ok: true, pids: [10] }, "port 5173's one socket is 10's");
+  assert.deepEqual(
+    await portHolders(3000, 501, deps),
+    { ok: false, reason: "a holder of port 3000 couldn't be read" },
+    "no readable process holds port 3000's socket, and 40 might",
+  );
+});
+
 test("listeningSocketsByProcess with partial keeps what lsof read next to a diagnostic", async () => {
   const deps = fakeDeps({ platform: "darwin", exec: async () => ({ ok: true, stdout: "p501\nf3\nn127.0.0.1:5173\n", stderr: "lsof: can't read 502\n", exitCode: 1 }) });
   assert.deepEqual(await listeningSocketsByProcess([501, 502], deps, { partial: true }), {

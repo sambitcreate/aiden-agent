@@ -635,7 +635,8 @@ export async function processNames(
  * address. macOS: one `lsof -iTCP:<port> -sTCP:LISTEN -u <uid>`, failing
  * closed on any diagnostic; Linux: the port's listening inodes from
  * /proc/net/tcp and tcp6, then the fds of this uid's processes only. Fails
- * closed.
+ * closed; on Linux an unreadable process is skipped only when the readable
+ * ones hold every socket on the port, so it can't be the holder.
  */
 export async function portHolders(
   port: number,
@@ -665,11 +666,21 @@ export async function portHolders(
     const mine = table.rows.filter((row) => row.uid === uid && row.pid > 1).map((row) => row.pid);
     if (mine.length > MAX_SCAN_PIDS) return { ok: false, reason: "too many processes" };
     const pids: number[] = [];
+    const held = new Set<string>();
+    let unreadable = false;
     for (const pid of mine) {
       const read = await linuxSocketInodes(pid, deps);
-      if ("failed" in read) return { ok: false, reason: read.failed };
-      if (read.inodes.some((inode) => inodes.has(inode))) pids.push(pid);
+      // Some of the person's processes can't be read (Chromium's sandboxed helpers aren't dumpable).
+      // One may be skipped only if the readable ones turn out to hold every socket on the port.
+      if ("failed" in read) {
+        unreadable = true;
+        continue;
+      }
+      const mineHere = read.inodes.filter((inode) => inodes.has(inode));
+      if (mineHere.length) pids.push(pid);
+      for (const inode of mineHere) held.add(inode);
     }
+    if (unreadable && [...inodes].some((inode) => !held.has(inode))) return { ok: false, reason: `a holder of port ${port} couldn't be read` };
     return { ok: true, pids };
   }
   return { ok: false, reason: "unsupported platform" };
