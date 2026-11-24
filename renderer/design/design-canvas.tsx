@@ -434,13 +434,16 @@ function LoadedDesignCanvas({
   }, []);
   const [pendingFocus, setPendingFocus] = React.useState<CanvasFocusRequest | null>(null);
   const applyFocus = view.applyFocus;
-  // The page a request names is the chat's at once, even when the fit is
-  // skipped or the request is too old to fit: main already counts it, and
-  // the view's reports say this canvas has seen it.
+  // A page change main counted (it carries a `focusId`) is the chat's page at
+  // once, even when the fit is skipped or the request is too old to fit, and
+  // the view's reports say this canvas has seen it. A request without one
+  // (frames Aiden's turn placed on the chat's page) only fits, and only on
+  // the page on screen: it is in no order with main's page changes, so it
+  // could otherwise bring back a page a later change already left.
   const receiveFocus = React.useCallback(
     (request: CanvasFocusRequest) => {
       const fresh = Date.now() - request.at <= FOCUS_WAIT_MS;
-      if (request.focusId !== undefined || (fresh && request.pageId !== undefined)) {
+      if (request.focusId !== undefined) {
         applyFocus({
           ...(request.pageId !== undefined ? { pageId: request.pageId } : {}),
           ...(request.focusId !== undefined ? { focusId: request.focusId } : {}),
@@ -469,6 +472,11 @@ function LoadedDesignCanvas({
   React.useEffect(() => {
     if (!pendingFocus) return;
     if (gesture.current || Date.now() - lastInteraction.current < FOCUS_QUIET_MS) {
+      setPendingFocus(null);
+      return;
+    }
+    // A fit main did not count is for the page on screen only.
+    if (pendingFocus.focusId === undefined && pendingFocus.pageId !== undefined && pendingFocus.pageId !== latestPage.current) {
       setPendingFocus(null);
       return;
     }

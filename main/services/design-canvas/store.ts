@@ -98,12 +98,14 @@ export class DesignCanvasStore {
    * Stores `doc` as `baseRevision + 1` only if `baseRevision` is still the
    * stored revision. `undone` names pages the person's undo took off, which
    * are not remembered as removed, so Aiden writing one again shows it again.
+   * `beforeWrite` runs on the workspace's chain just before the file is
+   * written, as for `update`; throwing there writes nothing.
    */
   async save(
     workspaceId: string,
     doc: DesignCanvas,
     baseRevision: number,
-    options: { undone?: readonly string[] } = {},
+    options: { undone?: readonly string[]; beforeWrite?: () => Promise<void> | void } = {},
   ): Promise<DesignCanvasSaveResult> {
     assertDesignCanvasWorkspaceId(workspaceId);
     if (!Number.isSafeInteger(baseRevision) || baseRevision < 0) {
@@ -126,6 +128,7 @@ export class DesignCanvasStore {
       const doc = withRemovedPagePaths(current, { ...parsed.doc, revision }, true, new Set(options.undone ?? []));
       // The pages remembered as taken off count too: what is written must read back.
       if (this.tooLarge(doc)) return tooLarge();
+      await options.beforeWrite?.();
       await this.write(workspaceId, doc);
       return { ok: true, revision };
     });
@@ -300,7 +303,10 @@ export class DesignChatCanvases {
     workspaceIdOf(chatId: string): Promise<string | null>;
     /**
      * Whether the workspace still has its record. A removed workspace's canvas
-     * is refused, so nothing writes its file back after the removal deleted it.
+     * is refused. Writes ask on the workspace's chain, just before the file is
+     * written: removal deletes the record before it queues the file's delete
+     * on that chain, so a write queued before the delete is deleted with it,
+     * and one queued after finds the record gone and writes nothing.
      */
     workspaceExists?(workspaceId: string): Promise<boolean>;
   }) {
@@ -327,7 +333,10 @@ export class DesignChatCanvases {
     options: { undone?: readonly string[]; workspaceId?: string } = {},
   ): Promise<DesignChatCanvasSave> {
     const workspaceId = await this.workspaceFor(chatId, options.workspaceId);
-    const result = await this.store.save(workspaceId, doc, baseRevision, options.undone ? { undone: options.undone } : {});
+    const result = await this.store.save(workspaceId, doc, baseRevision, {
+      ...(options.undone ? { undone: options.undone } : {}),
+      beforeWrite: () => this.assertWorkspaceExists(workspaceId),
+    });
     return { result, workspaceId };
   }
 
@@ -337,7 +346,13 @@ export class DesignChatCanvases {
     options: { beforeWrite?: () => Promise<void> | void; workspaceId?: string } = {},
   ): Promise<DesignChatCanvasRead> {
     const workspaceId = await this.workspaceFor(chatId, options.workspaceId);
-    const doc = await this.store.update(workspaceId, mutate, options.beforeWrite ? { beforeWrite: options.beforeWrite } : {});
+    const beforeWrite = options.beforeWrite;
+    const doc = await this.store.update(workspaceId, mutate, {
+      beforeWrite: async () => {
+        await this.assertWorkspaceExists(workspaceId);
+        await beforeWrite?.();
+      },
+    });
     return { doc, workspaceId };
   }
 
@@ -352,9 +367,14 @@ export class DesignChatCanvases {
       if (resolved === null) throw new Error("This chat is no longer available.");
       workspaceId = resolved;
     }
+    // Asked again on the chain before a write; this early answer only spares the wait.
+    await this.assertWorkspaceExists(workspaceId);
+    return workspaceId;
+  }
+
+  private async assertWorkspaceExists(workspaceId: string): Promise<void> {
     if (this.workspaceExists && !(await this.workspaceExists(workspaceId))) {
       throw new Error("This workspace is no longer available.");
     }
-    return workspaceId;
   }
 }

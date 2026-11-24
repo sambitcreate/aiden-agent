@@ -294,6 +294,42 @@ test("once a workspace's record is gone, its canvas is refused and no file is wr
   assert.deepEqual(await fs.readdir(root), [DESIGN_CANVAS_LAYOUT_MARKER], "nothing brings ws-1.json back");
 });
 
+test("a write that saw the workspace live before its removal does not bring the deleted canvas back", async (t) => {
+  const root = await tempRoot(t);
+  const store = new DesignCanvasStore({ root: () => root });
+  const records = new Set(["ws-1"]);
+  let checks = 0;
+  let releaseFirstCheck: () => void = () => undefined;
+  const firstCheckHeld = new Promise<void>((resolve) => {
+    releaseFirstCheck = resolve;
+  });
+  let firstCheckAnswered: () => void = () => undefined;
+  const firstCheckMade = new Promise<void>((resolve) => {
+    firstCheckAnswered = resolve;
+  });
+  const chats = new DesignChatCanvases({
+    store,
+    workspaceIdOf: async () => "ws-1",
+    workspaceExists: async (workspaceId) => {
+      const live = records.has(workspaceId);
+      // The save's early check answers "live", then waits while the removal runs.
+      if (++checks === 1) {
+        firstCheckAnswered();
+        await firstCheckHeld;
+      }
+      return live;
+    },
+  });
+  const pending = chats.save("chat-a", withNote(emptyDesignCanvas(), "late"), 0);
+  await firstCheckMade;
+  // The removal: the record goes, then the canvas file's delete is queued and finishes.
+  records.delete("ws-1");
+  await store.delete("ws-1");
+  releaseFirstCheck();
+  await assert.rejects(pending, /This workspace is no longer available/u);
+  assert.deepEqual(await fs.readdir(root), [DESIGN_CANVAS_LAYOUT_MARKER], "ws-1.json stays deleted");
+});
+
 test("two chats of one workspace read and write the same document", async (t) => {
   const root = await tempRoot(t);
   const { chats } = chatCanvases(root, { "chat-a": "ws-1", "chat-b": "ws-1" });

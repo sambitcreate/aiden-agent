@@ -15,6 +15,7 @@ import { designFrameSnapshots } from "./frame-snapshots";
 import { designCommentTray, type DesignCommentSend } from "./comment-tray-store";
 import { useCanvasFocusRequests } from "./canvas-focus-requests";
 import { DESIGN_CANVAS_SAVE_DELAY_MS } from "./use-design-canvas";
+import { DESIGN_VIEW_REPORT_DELAY_MS } from "./use-design-view";
 
 // The canvas imports React Flow's CSS, which Node cannot load; tests get an empty module.
 registerHooks({
@@ -535,6 +536,23 @@ test("Aiden's focus on frames of another page shows that page; a focus naming no
   act(() => emitBotTestNotification("designCanvas:focus", { chatId: "chat-1", frameIds: ["n1"] }));
   assert.ok(await screen.findByRole("button", { name: "Page: Home" }));
   assert.ok(await screen.findByRole("group", { name: "On home" }));
+});
+
+test("a fit main did not count never takes the canvas back to a page a later page change left", async () => {
+  const { calls } = setup(twoPageCanvas());
+  await mount();
+  // Aiden shows Pricing; then a fit for frames placed earlier on Home arrives late.
+  act(() => emitBotTestNotification("designCanvas:focus", { chatId: "chat-1", pageId: "p2", frameIds: ["n2"], focusId: 2 }));
+  assert.ok(await screen.findByRole("button", { name: "Page: Pricing" }));
+  act(() => emitBotTestNotification("designCanvas:focus", { chatId: "chat-1", pageId: "page-1", frameIds: ["n1"] }));
+  await act(async () => {
+    await new Promise((resolve) => setTimeout(resolve, DESIGN_VIEW_REPORT_DELAY_MS + 100));
+  });
+  assert.ok(screen.getByRole("button", { name: "Page: Pricing" }), "the canvas stays on Pricing");
+  // Main hears Pricing with Aiden's change, never Home.
+  await waitFor(() => assert.equal(lastViewReport(calls)?.focusId, 2), SAVE_WAIT);
+  assert.equal(lastViewReport(calls)?.view?.pageId, "p2");
+  assert.equal(viewReports(calls).some((report) => report.view?.pageId === "page-1" && report.focusId === 2), false);
 });
 
 test("Aiden's page change applies even when the person just moved the canvas and its frames are not fitted", async () => {
