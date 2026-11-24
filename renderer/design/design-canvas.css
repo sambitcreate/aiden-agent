@@ -161,3 +161,17 @@ main:has(.design-presenting) {
 [data-capturing] .design-tweaks-float {
   visibility: hidden;
 }
+
+/* The live app chip's label cross-fades when it changes; under Reduce Motion the token is 0 ms. */
+.design-app-chip-label {
+  animation: design-app-chip-label-in var(--motion-duration) var(--motion-easing) both;
+}
+
+@keyframes design-app-chip-label-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}

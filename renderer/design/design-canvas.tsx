@@ -63,6 +63,7 @@ import {
   DESIGN_FRAME_HEADER_PX,
   type DesignNodeContextValue,
 } from "./nodes/design-node-context";
+import { DesignAppStatusChip } from "./design-app-chip";
 import { designNodeTypes } from "./nodes/registry";
 import { useDesignCanvas } from "./use-design-canvas";
 import { useDesignView, type DesignViewHandle } from "./use-design-view";
@@ -1305,18 +1306,21 @@ function LoadedDesignCanvas({
             resolveKey={resolveKey}
             presenting={presentation !== null}
             actions={
-              <div
-                role="toolbar"
-                aria-label="Canvas view"
-                className="glass-surface flex items-center gap-0.5 rounded-button p-1 shadow-control"
-              >
-                <DesignPresentButton onPresent={() => present(null)} />
-                <div aria-hidden className="mx-1 h-4 w-px shrink-0 bg-separator" />
-                <DesignExpandButton />
-                <DesignPanelButton
-                  open={panel.open}
-                  onToggle={() => setPanel((current) => ({ ...current, open: !current.open }))}
-                />
+              <div className="flex items-center gap-2">
+                <DesignAppStatusChip chatId={chatId} />
+                <div
+                  role="toolbar"
+                  aria-label="Canvas view"
+                  className="glass-surface flex items-center gap-0.5 rounded-button p-1 shadow-control"
+                >
+                  <DesignPresentButton onPresent={() => present(null)} />
+                  <div aria-hidden className="mx-1 h-4 w-px shrink-0 bg-separator" />
+                  <DesignExpandButton />
+                  <DesignPanelButton
+                    open={panel.open}
+                    onToggle={() => setPanel((current) => ({ ...current, open: !current.open }))}
+                  />
+                </div>
               </div>
             }
             overlay={

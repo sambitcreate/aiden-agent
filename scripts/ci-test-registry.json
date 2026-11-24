@@ -1595,7 +1595,8 @@
         "renderer/shared/bot-messages.test.ts",
         "renderer/components/settings/storage-settings.test.ts",
         "renderer/shared/design-app.test.ts",
-        "renderer/design/design-app-sheets.test.tsx"
+        "renderer/design/design-app-sheets.test.tsx",
+        "renderer/design/design-app-chip.test.tsx"
       ],
       "preserved": [
         "ios-release-policy",
