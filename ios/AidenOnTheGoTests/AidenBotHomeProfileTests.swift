@@ -71,6 +71,7 @@ final class AidenBotHomeProfileTests: XCTestCase {
         botID: String,
         preview: String?,
         state: String = "idle",
+        canRespond: Bool = false,
         updatedAt: String
     ) throws -> AidenBotConversationItem {
         var object: [String: Any] = [
@@ -78,7 +79,7 @@ final class AidenBotHomeProfileTests: XCTestCase {
             "botId": botID,
             "title": "",
             "activityState": state,
-            "canRespondToApproval": false,
+            "canRespondToApproval": canRespond,
             "createdAt": "2026-08-18T17:00:00.000Z",
             "updatedAt": updatedAt,
             "revision": "chat-rev-\(botID)",
@@ -172,6 +173,30 @@ final class AidenBotHomeProfileTests: XCTestCase {
         XCTAssertEqual(rows["waiting"]?.isWorking, false)
         XCTAssertEqual(rows["busy"]?.isWorking, true)
         XCTAssertEqual(rows["busy"]?.preview, "Say hello")
+    }
+
+    /// An approval the phone can see keeps its own line, also while the Mac
+    /// says the Bot waits on the person, as on Android.
+    func testHomeRowKeepsTheApprovalLineWhenTheBotAlsoNeedsThePerson() throws {
+        let bots = [
+            try summary(id: "answerable", name: "A", updatedAt: "2026-08-18T18:00:00.000Z", sessionState: "running", needsYou: true),
+            try summary(id: "mac-only", name: "B", updatedAt: "2026-08-18T17:00:00.000Z", sessionState: "running", needsYou: true),
+            try summary(id: "plain", name: "C", updatedAt: "2026-08-18T16:00:00.000Z", sessionState: "running"),
+        ]
+        let conversations = [
+            try conversation(botID: "answerable", preview: "Booking", state: "waiting_for_approval", canRespond: true, updatedAt: "2026-08-18T18:00:00.000Z"),
+            try conversation(botID: "mac-only", preview: "Booking", state: "waiting_for_approval", updatedAt: "2026-08-18T17:00:00.000Z"),
+            try conversation(botID: "plain", preview: "Booking", state: "waiting_for_approval", canRespond: true, updatedAt: "2026-08-18T16:00:00.000Z"),
+        ]
+        let rows = Dictionary(uniqueKeysWithValues: aidenBotHomeRows(
+            bots: bots,
+            conversations: conversations,
+            query: ""
+        ).map { ($0.id, $0) })
+        XCTAssertEqual(rows["answerable"]?.preview, "Needs your OK")
+        XCTAssertEqual(rows["mac-only"]?.preview, "Waiting for your OK on your Mac")
+        XCTAssertEqual(rows["plain"]?.preview, "Needs your OK")
+        XCTAssertEqual(rows["answerable"]?.isWorking, false)
     }
 
     func testHomeSearchMatchesNameSubtitlePreviewAndServerMatches() throws {

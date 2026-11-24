@@ -158,14 +158,21 @@ struct AidenBotHomeRow: Equatable, Identifiable {
     /// A wait on the person comes first (revision 68: an approval, a question,
     /// a hand-off or an open issue), then the durable session state: an
     /// interrupted turn, a Bot the person paused (revision 37) or a missing
-    /// model says so; otherwise the last message, or a greeting prompt.
+    /// model says so; then an approval this phone can see, which keeps its own
+    /// line as on Android; otherwise the last message, or a greeting prompt.
     var preview: String {
-        if bot.needsYou { return AidenBotSessionCopy.waitingForYou }
+        let waitsOnApproval = conversation?.activityState == .waitingForApproval
+        if bot.needsYou && !waitsOnApproval { return AidenBotSessionCopy.waitingForYou }
         switch bot.sessionState {
         case .interrupted: return AidenBotSessionCopy.interruptedSubtitle
         case .paused: return AidenBotSessionCopy.pausedSubtitle
         case .needsModel: return AidenBotSessionCopy.needsModel
         default: break
+        }
+        if let conversation, waitsOnApproval {
+            return conversation.canRespondToApproval
+                ? AidenBotSessionCopy.needsYourOK
+                : AidenBotSessionCopy.waitingForYourOKOnMac
         }
         let text = (conversation?.preview ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
         return text.isEmpty ? "Say hello" : text
