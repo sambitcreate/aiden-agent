@@ -101,22 +101,48 @@ const findingsList = (findings: Extract<DesignMdState, { status: "ok" }>["findin
     message: finding.message,
   }));
 
-/**
- * The JSON of `build(items)` with as many leading items as fit in 64 KiB, so
- * no fenced answer grows past it however long the file's strings are.
- */
-function boundedJson<T>(items: readonly T[], build: (kept: readonly T[]) => unknown): { json: string; shown: number; cut: boolean } {
-  const json = (count: number) => JSON.stringify(build(items.slice(0, count)));
+/** The most leading items of a list for which `json(count)` fits in 64 KiB; `json(0)` must fit. */
+function fittingCount(total: number, json: (count: number) => string): number {
   const fits = (count: number) => Buffer.byteLength(json(count)) <= MAX_FENCED_BYTES;
-  if (fits(items.length)) return { json: json(items.length), shown: items.length, cut: false };
+  if (fits(total)) return total;
   let low = 0;
-  let high = items.length - 1;
+  let high = total - 1;
   while (low < high) {
     const middle = Math.ceil((low + high) / 2);
     if (fits(middle)) low = middle;
     else high = middle - 1;
   }
-  return { json: json(low), shown: low, cut: true };
+  return low;
+}
+
+/**
+ * The JSON of `build(items)` with as many leading items as fit in 64 KiB, so
+ * no fenced answer grows past it however long the file's strings are.
+ * `build([])` must be small; for answers with several lists, use `boundedLists`.
+ */
+function boundedJson<T>(items: readonly T[], build: (kept: readonly T[]) => unknown): { json: string; shown: number; cut: boolean } {
+  const json = (count: number) => JSON.stringify(build(items.slice(0, count)));
+  const shown = fittingCount(items.length, json);
+  return { json: json(shown), shown, cut: shown < items.length };
+}
+
+/**
+ * A read answer's sections, omitted and tokens, filled in that order while
+ * they fit in 64 KiB together. Every list can be cut, so even a file whose
+ * every string is at its length cap and escapes to six bytes a character
+ * stays inside the bound.
+ */
+function boundedLists<S, O, K>(
+  sections: readonly S[],
+  omitted: readonly O[],
+  tokens: readonly K[],
+): { json: string; cut: boolean } {
+  const json = (s: number, o: number, k: number) =>
+    JSON.stringify({ sections: sections.slice(0, s), omitted: omitted.slice(0, o), tokens: tokens.slice(0, k) });
+  const s = fittingCount(sections.length, (count) => json(count, 0, 0));
+  const o = fittingCount(omitted.length, (count) => json(s, count, 0));
+  const k = fittingCount(tokens.length, (count) => json(s, o, count));
+  return { json: json(s, o, k), cut: s < sections.length || o < omitted.length || k < tokens.length };
 }
 
 export function createDesignSystemTool(deps: DesignSystemToolDeps): AgentTool {
@@ -265,7 +291,7 @@ export function createDesignSystemTool(deps: DesignSystemToolDeps): AgentTool {
             );
           }
           const sections = state.sections.slice(0, MAX_SECTIONS);
-          const data = boundedJson(state.tokens, (tokens) => ({ sections, omitted: state.omitted, tokens }));
+          const data = boundedLists(sections, state.omitted, state.tokens);
           return answer(
             { ...stateHead(state, root), truncated: state.truncated || data.cut, sectionCount: state.sections.length },
             fenceAsData(`DESIGN.md tokens and sections from ${JSON.stringify(state.path)}`, data.json),

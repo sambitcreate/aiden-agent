@@ -350,3 +350,29 @@ test("the fenced JSON of read, lint and export errors stays within 64 KiB and sa
     assert.equal(head(text).truncated, true, JSON.stringify(params));
   }
 });
+
+test("a read whose sections and omitted alone escape past 64 KiB is still cut to fit", async (t) => {
+  const ws = await withWorkspace(t);
+  await writeFile(path.join(ws, "DESIGN.md"), "# x\n");
+  // 40 sections and 40 omissions at the 200-character cap, each character escaping to six bytes: about 145 KiB.
+  const control = "\u0001".repeat(200);
+  const state = {
+    status: "ok" as const,
+    path: "DESIGN.md",
+    source: "workspace" as const,
+    hash: "0".repeat(64),
+    summary: { errors: 0, warnings: 0, infos: 0 },
+    findings: [],
+    sections: Array.from({ length: 40 }, () => control),
+    omitted: Array.from({ length: 40 }, () => ({ section: control, reason: control })),
+    tokens: [{ path: "colors.primary", kind: "color", value: "#000" }],
+    truncated: false,
+  };
+  const reader = { read: async () => state } as unknown as Deps["reader"];
+  const text = await call(tool(ws, { reader }), { action: "read" });
+  const [block] = fences(text);
+  assert.ok(Buffer.byteLength(block.body) <= 64 * 1024, `${Buffer.byteLength(block.body)}`);
+  const body = JSON.parse(block.body) as { sections: unknown[]; omitted: unknown[] };
+  assert.ok(body.sections.length > 0 && body.sections.length + body.omitted.length < 80);
+  assert.equal(head(text).truncated, true);
+});
