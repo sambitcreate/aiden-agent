@@ -483,7 +483,7 @@ final class AidenUnifiedInboxTests: XCTestCase {
         XCTAssertTrue(scout.needsYou)
         XCTAssertTrue(AidenBotAttention.needsYou(scout))
         XCTAssertEqual(AidenBotAttention.reason(scout), "Waiting for you")
-        XCTAssertEqual(AidenBotAttention.reason(bot("bot_cards", needsYou: true, issues: 2)), "2 things need you", "the count says more")
+        XCTAssertEqual(AidenBotAttention.reason(bot("bot_cards", issues: 2, needsYou: true)), "2 things need you", "the count says more")
         let inbox = make([snapshot("mac-a", bots: [scout, bot("bot_busy", state: "running")])])
         XCTAssertEqual(labels(inbox.needsYou), ["mac-a:bot_scout"])
         XCTAssertEqual(labels(inbox.running), ["mac-a:bot_busy"])
