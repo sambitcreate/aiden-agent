@@ -81,8 +81,16 @@ lines.on("line", (line) => {
     if (name === "check_permissions" && args.prompt === true && grantOnPrompt && permissionsFile) {
       writeFileSync(permissionsFile, JSON.stringify({ accessibility: true, screen_recording: true }));
     }
-    driver.permissions = readPermissions();
-    let result = driver.call(name, args);
+    const currentPermissions = readPermissions();
+    driver.permissions = currentPermissions;
+    let result =
+      name === "check_permissions" &&
+      (typeof currentPermissions.x11 === "boolean" || typeof currentPermissions.atspi === "boolean")
+        ? {
+            content: [{ type: "text", text: JSON.stringify(currentPermissions) }],
+            structuredContent: currentPermissions,
+          }
+        : driver.call(name, args);
     if (name === "health_report") {
       result = {
         ...result,

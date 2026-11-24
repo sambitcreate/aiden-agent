@@ -59,6 +59,15 @@ export async function guestDriverPermissions(
       { signal: options.signal, timeoutMs: PROBE_TIMEOUT_MS },
     ),
   );
+  // Linux cua-driver 0.38.0 reports X11 + AT-SPI readiness (`{ x11, atspi, xsend_event, wayland }`)
+  // instead of macOS TCC grants (`accessibility` / `screen_recording`).
+  if (typeof report?.x11 === "boolean" || typeof report?.atspi === "boolean") {
+    const x11Ready = report.x11 === true;
+    return {
+      accessibility: x11Ready && report.atspi === true,
+      screenRecording: x11Ready,
+    };
+  }
   return {
     accessibility: report?.accessibility === true,
     // A probe that did run and could not capture vetoes the preflight.
