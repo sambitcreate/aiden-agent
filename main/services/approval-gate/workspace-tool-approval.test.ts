@@ -262,3 +262,82 @@ test("rules page: a workspace click or typing is on the site its tab shows, unle
     assert.equal(decision.outcome === "block" && decision.reason, "rule", mode);
   }
 });
+
+// design_app runs only an app's own dev script, and the run-app card already
+// asked the person before the first start; its calls skip the per-call card.
+const designApp = (action: string): Pick<WorkspaceToolApprovalInput, "toolName" | "args"> => ({
+  toolName: "design_app",
+  args: { action },
+});
+
+test("design_app is allowed with via reviewed-exception in ask, auto and full modes, and with legacy permissions", () => {
+  for (const action of ["status", "start", "restart", "choose", "stop", "logs"]) {
+    for (const mode of ["ask", "auto", "never"] as const) {
+      const result = workspaceToolApproval({
+        ...designApp(action),
+        permission: "ask",
+        workspaceId: "w1",
+        approval: { mode, macGrants: new Set() },
+        judgeAvailable: true,
+      });
+      assert.deepEqual(result, { decision: { outcome: "allow", via: "reviewed-exception" } }, `${action} in ${mode}`);
+    }
+    for (const permission of ["ask", "full"] as const) {
+      assert.deepEqual(
+        workspaceToolApproval({ ...designApp(action), permission, workspaceId: "w1" }),
+        { decision: { outcome: "allow", via: "reviewed-exception" } },
+        `${action} with legacy ${permission}`,
+      );
+    }
+  }
+});
+
+test("design_app is never judged and offers no Mac grant", () => {
+  for (const newDestination of [false, true]) {
+    const result = workspaceToolApproval({
+      ...designApp("start"),
+      permission: "ask",
+      workspaceId: "w1",
+      approval: { mode: "auto", macGrants: new Set() },
+      judgeAvailable: true,
+      newDestination,
+    });
+    assert.equal(result.readsJudge, undefined);
+    assert.equal(result.readsRemembered, undefined);
+    assert.equal(result.decision.outcome, "allow");
+  }
+  // Even with a rule that asks, the card is a plain once card: no Mac grant, no remembered scopes.
+  const asked = workspaceToolApproval({
+    ...designApp("start"),
+    permission: "ask",
+    workspaceId: "w1",
+    approval: { mode: "ask", macGrants: new Set() },
+    pageRule: "ask",
+  });
+  assert.deepEqual(asked, { decision: { outcome: "ask" } });
+});
+
+test("a PreToolUse hook block and a rules-page Block still block design_app", () => {
+  const base = { ...designApp("start"), permission: "ask" as const, workspaceId: "w1" };
+  for (const approval of [undefined, { mode: "never" as const, macGrants: new Set<MacGrantClass>() }]) {
+    assert.deepEqual(workspaceToolApproval({ ...base, approval, hook: "block" }).decision, { outcome: "block", reason: "hook" });
+    assert.deepEqual(workspaceToolApproval({ ...base, approval, pageRule: "block" }).decision, { outcome: "block", reason: "rule" });
+  }
+  // A hook's Ask and an unreadable rules file ask too.
+  assert.deepEqual(workspaceToolApproval({ ...base, hook: "ask" }).decision, { outcome: "ask" });
+  assert.deepEqual(workspaceToolApproval({ ...base, pageRule: "unreadable" }).decision, { outcome: "ask" });
+});
+
+test("a rules-page Ask on design_app still asks", () => {
+  for (const mode of ["ask", "auto"] as const) {
+    const result = workspaceToolApproval({
+      ...designApp("start"),
+      permission: "ask",
+      workspaceId: "w1",
+      approval: { mode, macGrants: new Set() },
+      judgeAvailable: true,
+      pageRule: "ask",
+    });
+    assert.deepEqual(result, { decision: { outcome: "ask" } }, mode);
+  }
+});

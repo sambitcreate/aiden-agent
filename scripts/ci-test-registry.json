@@ -471,7 +471,8 @@
         "main/services/design-canvas/app-server/app-records.test.ts",
         "main/services/design-canvas/app-server/app-ports.test.ts",
         "main/services/design-canvas/app-server/app-consent.test.ts",
-        "main/services/design-canvas/app-server/app-server-main.test.ts"
+        "main/services/design-canvas/app-server/app-server-main.test.ts",
+        "main/services/design-canvas/app-server/app-tool.test.ts"
       ],
       "preserved": [
         "browser"

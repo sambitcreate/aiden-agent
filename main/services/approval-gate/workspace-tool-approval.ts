@@ -57,6 +57,17 @@ export function stricterPageRule(
   return own === undefined || PAGE_RULE_RANK[also] > PAGE_RULE_RANK[own] ? also : own;
 }
 
+/**
+ * Tools whose calls skip the per-call card after a review, each with why. They
+ * still obey a PreToolUse hook's Block or Ask and a Settings → Approvals Block
+ * or Ask, and they are never judged. `design_app` runs only the app's own dev
+ * script, which the run-app card shows the person before the first start
+ * (and again whenever it changes); other commands go through run_command.
+ */
+export const REVIEWED_CARDLESS_TOOLS: ReadonlyMap<string, string> = new Map([
+  ["design_app", "design-mode dev-server control: per-call approval skipped after workspace consent"],
+]);
+
 export type WorkspaceGatePermission = "full" | "ask" | "read-only" | "none";
 
 export interface WorkspaceToolApprovalInput {
@@ -109,7 +120,8 @@ export interface WorkspaceToolApprovalInput {
 
 export type WorkspaceToolApproval =
   | { outcome: "block"; reason: "hook" | "rule" }
-  | { outcome: "allow"; via?: "remembered" | "hook-allow" }
+  /** `reviewed-exception`: a `REVIEWED_CARDLESS_TOOLS` call that no hook or rule stopped. */
+  | { outcome: "allow"; via?: "remembered" | "hook-allow" | "reviewed-exception" }
   /** Memory proposals and removals go to the memory policy, which may show its own card. */
   | { outcome: "memory" }
   | {
@@ -204,6 +216,7 @@ export function workspaceGateAction(input: WorkspaceToolApprovalInput): GateActi
  * (`computer-use/access-gate.ts`).
  */
 export function workspaceToolApproval(input: WorkspaceToolApprovalInput): WorkspaceToolApprovalDecision {
+  if (REVIEWED_CARDLESS_TOOLS.has(input.toolName)) return reviewedCardlessApproval(input);
   const context: GateContext = {
     surface: "workspace",
     access: input.permission,
@@ -247,6 +260,29 @@ export function workspaceToolApproval(input: WorkspaceToolApprovalInput): Worksp
       // Workspace chats have no hand-off rules; refuse rather than run.
       return { decision: { outcome: "block", reason: "hook" } };
   }
+}
+
+/**
+ * A reviewed cardless tool's call: only the hook and rules steps apply, in
+ * the gate's own order, so their Block and Ask hold as for any tool. It is
+ * never judged, never offers a Mac grant or a remembered scope, and otherwise
+ * runs with `via: "reviewed-exception"`.
+ */
+function reviewedCardlessApproval(input: WorkspaceToolApprovalInput): WorkspaceToolApprovalDecision {
+  const context: GateContext = {
+    surface: "workspace",
+    access: input.permission,
+    ...(input.approval ? { mode: input.approval.mode } : {}),
+    ...(input.hook ? { hook: HOOK_VERDICTS[input.hook] } : {}),
+  };
+  const { pageRule } = workspaceGateAction(input);
+  const decision = planActionGate(context, { toolName: input.toolName, ...(pageRule ? { pageRule } : {}) });
+  if (decision.outcome === "block") {
+    return { decision: { outcome: "block", reason: decision.reason === "rule" ? "rule" : "hook" } };
+  }
+  if (decision.outcome === "allow") return { decision: { outcome: "allow", via: "reviewed-exception" } };
+  // An ask (or anything else the gate might add) shows a plain once card.
+  return { decision: { outcome: "ask" } };
 }
 
 /**
