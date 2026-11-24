@@ -249,6 +249,11 @@ function printedPorts(tail: string): number[] {
 
 const keyOf = (workspaceId: string, appRoot: string) => `${workspaceId}\0${appRoot}`;
 
+/** A workspace a dev server may run in: it has a folder, and its access is neither none nor read-only. */
+function runnable(workspace: DesignWorkspace | undefined): workspace is DesignWorkspace & { path: string } {
+  return !!workspace?.path && workspace.permission !== "none" && workspace.permission !== "read-only";
+}
+
 export class DesignAppServers {
   private readonly entries = new Map<string, Entry>();
   private readonly cache = new Map<string, { detection: WebAppDetection; config: CanvasConfig | null }>();
@@ -303,7 +308,7 @@ export class DesignAppServers {
     if (appRoot === undefined) {
       if (!(await this.recovered())) return this.statusWith(input.workspaceId, ".", { problem: "recovery-failed" });
       const workspace = await this.deps.workspace(input.workspaceId);
-      if (!workspace?.path || workspace.permission === "none") return this.statusWith(input.workspaceId, ".", { problem: "no-access" });
+      if (!runnable(workspace)) return this.statusWith(input.workspaceId, ".", { problem: "no-access" });
       const cached = await this.detectFor(workspace.id, workspace.path);
       appRoot = this.toggleRoots(cached.detection, cached.config)[0];
       if (appRoot === undefined) return this.statusWith(input.workspaceId, ".", { problem: "not-web" });
@@ -352,7 +357,7 @@ export class DesignAppServers {
       if (!this.available() || !isDesktopOwner(input.owner)) return;
       if (!(await this.recovered())) return;
       const workspace = await this.deps.workspace(input.workspaceId);
-      if (!workspace?.path || workspace.permission === "none" || workspace.permission === "read-only") return;
+      if (!runnable(workspace)) return;
       const cached = await this.detectFor(workspace.id, workspace.path);
       for (const appRoot of this.toggleRoots(cached.detection, cached.config)) {
         await this.start({ workspaceId: workspace.id, appRoot, by: "person", chatId: input.chatId, owner: input.owner, permission: workspace.permission });
@@ -517,7 +522,7 @@ export class DesignAppServers {
     try {
       if (!(await race(this.recovered(), signal))) throw new End({ problem: "recovery-failed" });
       const workspace = await race(this.deps.workspace(entry.workspaceId), signal);
-      if (!workspace?.path || workspace.permission === "none") throw new End({ problem: "no-access" });
+      if (!runnable(workspace)) throw new End({ problem: "no-access" });
       const workspacePath = workspace.path;
       try {
         admission = this.deps.gate.admit(entry.workspaceId);
@@ -626,7 +631,7 @@ export class DesignAppServers {
 
         // Right before a spawn: the workspace is still there, with the same folder.
         const current = await race(this.deps.workspace(entry.workspaceId), signal);
-        if (!current?.path || current.permission === "none") throw new End({ problem: "no-access" });
+        if (!runnable(current)) throw new End({ problem: "no-access" });
         if (current.path !== workspacePath) throw new End({ problem: "interrupted" });
         if (input.choose && !saved) {
           saved = true;
@@ -728,7 +733,7 @@ export class DesignAppServers {
         let problem: DesignAppProblem | undefined;
         if (signal.reason === GATE) {
           const workspace = await this.deps.workspace(entry.workspaceId).catch(() => undefined);
-          problem = !workspace?.path || workspace.permission === "none" ? { problem: "no-access" } : { problem: "interrupted" };
+          problem = !runnable(workspace) ? { problem: "no-access" } : { problem: "interrupted" };
         }
         return this.setPhase(entry, "stopped", problem ? { problem } : {});
       }
@@ -964,7 +969,7 @@ export class DesignAppServers {
     if (entry.status.port !== undefined) this.serve(entry, entry.status.port, watch.held);
     const workspace = await this.deps.workspace(entry.workspaceId).catch(() => undefined);
     if (entry.server !== watch) return;
-    if (!workspace?.path || workspace.permission === "none") await this.halt(entry, { problem: { problem: "no-access" } });
+    if (!runnable(workspace)) await this.halt(entry, { problem: { problem: "no-access" } });
     else if (workspace.path !== watch.workspacePath) await this.halt(entry, { problem: { problem: "interrupted" } });
   }
 

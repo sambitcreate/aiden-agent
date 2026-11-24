@@ -83,12 +83,14 @@ class FakeServers implements DesignAppToolServers {
 
 const owner = { id: 7, documentId: "doc-a", kind: "window" as const };
 
-function harness(options: { available?: () => Promise<boolean>; waits?: { consentMs: number; settleMs: number } } = {}) {
+function harness(
+  options: { available?: () => Promise<boolean>; waits?: { consentMs: number; settleMs: number }; permission?: "full" | "ask" | "read-only" | "none" } = {},
+) {
   const servers = new FakeServers();
   const tool = createDesignAppTool({
     workspaceId: "ws",
     chatId: "chat-1",
-    permission: "ask",
+    permission: options.permission ?? "ask",
     owner: () => owner as never,
     stillAvailable: options.available ?? (async () => true),
     servers,
@@ -302,4 +304,17 @@ test("after design mode is turned off mid-turn, every action answers unavailable
     assert.equal(result.status, "unavailable", action);
   }
   assert.equal(servers.serviceCalls().length, 0);
+});
+
+test("a read-only or no-access turn can read status and logs, but start, restart and choose answer no-access without reaching the service", async () => {
+  for (const permission of ["read-only", "none"] as const) {
+    const { servers, run } = harness({ permission });
+    assert.equal((await run({ action: "status" })).status, "ok", permission);
+    for (const action of ["start", "restart", "choose"]) {
+      const refused = await run({ action, root: "." });
+      assert.equal(refused.status, "failed", `${permission} ${action}`);
+      assert.equal(refused.problem, "no-access", `${permission} ${action}`);
+    }
+    assert.equal(servers.serviceCalls().length, 0, permission);
+  }
 });

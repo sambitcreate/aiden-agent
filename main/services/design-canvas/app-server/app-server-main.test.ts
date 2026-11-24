@@ -712,6 +712,47 @@ test("a rename-only update ends the attempt with interrupted; a permission chang
   }
 });
 
+test("a folder or access change while the card waits or the install runs spawns nothing more, and ends with interrupted or no-access", async (t) => {
+  const cases = [
+    ["moved", { id: "ws", path: "/w/moved", permission: "full" }, "interrupted"],
+    ["none", { id: "ws", path: "/w/ws", permission: "none" }, "no-access"],
+    ["read-only", { id: "ws", path: "/w/ws", permission: "read-only" }, "no-access"],
+    ["removed", undefined, "no-access"],
+  ] as const;
+  for (const during of ["card", "install"] as const) {
+    for (const [name, changed, problem] of cases) {
+      const h = harness(t, { apps: [webApp({ installed: during === "card" })] });
+      const started = h.servers.start(h.input());
+      await settle();
+      const change = () => (changed ? h.workspaces.set("ws", { ...changed }) : h.workspaces.delete("ws"));
+      if (during === "card") change();
+      await h.answer("allow");
+      if (during === "install") {
+        assert.equal(h.jobs.jobs.length, 1, "the install runs");
+        change();
+        h.state.apps = [webApp({ installed: true })];
+        h.jobs.exit(h.jobs.last().view.id, 0);
+      }
+      // A server spawned by mistake would end not-ready here, so the test fails rather than hangs.
+      await h.clock.advance(DESIGN_APP_READY_IDLE_MS);
+      const status = await started;
+      const label = `${name} during the ${during}`;
+      assert.deepEqual(status.problem, { problem }, label);
+      assert.equal(status.phase, "stopped", label);
+      assert.equal(h.jobs.jobs.length, during === "card" ? 0 : 1, `${label}: no server spawns`);
+    }
+  }
+});
+
+test("a workspace that is read-only when the attempt reads it is refused with no-access before any card", async (t) => {
+  const h = harness(t);
+  h.workspaces.set("ws", { id: "ws", path: "/w/ws", permission: "read-only" });
+  const status = await h.servers.start(h.input());
+  assert.deepEqual(status.problem, { problem: "no-access" });
+  assert.equal(h.cards().length, 0);
+  assert.equal(h.state.calls.fingerprint, 0);
+});
+
 test("a running server whose workspace folder path changes is stopped", async (t) => {
   const h = harness(t);
   await h.runApp();

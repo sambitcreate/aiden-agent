@@ -262,6 +262,15 @@ export function createDesignAppTool(deps: DesignAppToolDeps): AgentTool {
       return result({ status: "ok", root: appRoot, output: fenceAsData("Server output", kept) });
     }
 
+    // A turn that can't write to the workspace never runs its app: the same answer the service gives.
+    if (deps.permission === "read-only" || deps.permission === "none") {
+      return result({
+        status: "failed",
+        ...(appRoot !== undefined ? { root: appRoot } : {}),
+        problem: "no-access",
+        message: designAppProblemMessage({ problem: "no-access" }),
+      });
+    }
     starts += 1;
     const base = {
       workspaceId: deps.workspaceId,
