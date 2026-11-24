@@ -249,6 +249,10 @@ test("desktop E2E and unit work are sharded with independent Apple and iOS check
   assert.equal(simulatorResults.if, "failure()");
   assert.equal(simulatorResults.uses, "actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02");
   assert.ok(simulatorTest.run.includes("-skip-testing:AidenOnTheGoUITests"), "the unit run must not launch the UI target");
+  assert.ok(
+    simulatorTest.run.includes("-parallel-testing-enabled NO"),
+    "simulator clones stall and hang the hosted runner; the unit run uses one simulator",
+  );
   const shellSmoke = jobs.ios.steps.find((step) => step.run?.includes("-only-testing:AidenOnTheGoUITests/AidenShellUITests/testShellLaunchesForEveryScenario"));
   assert.ok(shellSmoke, "the shell UI smoke step is missing");
   assert.ok(jobs.ios.steps.indexOf(shellSmoke) > jobs.ios.steps.indexOf(simulatorTest));
