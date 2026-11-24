@@ -162,3 +162,38 @@ test("when the page on screen goes (an added page undone), the chat goes back to
   await tick(DESIGN_VIEW_REPORT_DELAY_MS);
   assert.equal((lastReport()?.[1] as { view: { pageId: string } }).view.pageId, "p2");
 });
+
+test("when the view's page is gone, the canvas shows the claim before an earlier page", async () => {
+  kept = { pageId: "page-1", viewport: { x: 0, y: 0, zoom: 1 }, focusId: 0, viewports: {} };
+  const claimed: DesignCanvas = { ...doc, chatPages: { "chat-1": "p3" } };
+  const shown = render(<Probe canvas={claimed} />);
+  await settle();
+  await act(async () => view.showPage("p2"));
+  assert.equal(view.pageId, "p2");
+  // Another chat deletes p2; page-1 was shown earlier, but the chat's own page comes first.
+  shown.rerender(<Probe canvas={{ ...claimed, pages: claimed.pages.filter((page) => page.id !== "p2") }} />);
+  assert.equal(view.pageId, "p3");
+});
+
+test("a canvas with no kept view opens on the claim", async () => {
+  kept = null;
+  render(<Probe canvas={{ ...doc, chatPages: { "chat-1": "p3", "chat-2": "p2" } }} />);
+  await settle();
+  assert.equal(view.pageId, "p3");
+});
+
+test("a fallback page is reported to main", async () => {
+  kept = { pageId: "p2", viewport: { x: 0, y: 0, zoom: 1 }, focusId: 0, viewports: {} };
+  const claimed: DesignCanvas = { ...doc, chatPages: { "chat-1": "p3" } };
+  const shown = render(<Probe canvas={claimed} />);
+  await settle();
+  await tick(DESIGN_VIEW_REPORT_DELAY_MS);
+  const opened = reports().length;
+  shown.rerender(<Probe canvas={{ ...claimed, pages: claimed.pages.filter((page) => page.id !== "p2") }} />);
+  await settle();
+  await tick(DESIGN_VIEW_REPORT_DELAY_MS);
+  assert.deepEqual(reports().slice(opened), [
+    ["chat-1", { workspaceId: "ws-1", view: { pageId: "p3", viewport: { x: 0, y: 0, zoom: 1 } }, focusId: 0 }],
+  ]);
+});
+

@@ -633,6 +633,26 @@ test("when another chat deletes the page on screen, the canvas goes back to the 
   assert.ok(screen.getByRole("button", { name: "Page: Home" }));
 });
 
+test("when another chat deletes the page on screen, the canvas shows this chat's claim", async () => {
+  const base = twoPageCanvas();
+  let doc: DesignCanvas = {
+    ...base,
+    pages: [...base.pages, { id: "p3", name: "Ideas" }],
+    frames: [...base.frames, sticky("n3", "On ideas", "p3")],
+    chatPages: { "chat-1": "p3" },
+  };
+  setup(doc, { "designCanvas:get": () => doc });
+  await mount();
+  assert.ok(screen.getByRole("button", { name: "Page: Ideas" }), "with no kept view, the canvas opens on the claim");
+  await choosePageItem("Pricing", "menuitemradio");
+  assert.ok(await screen.findByRole("group", { name: "On pricing" }));
+
+  doc = { ...doc, revision: doc.revision + 1, pages: doc.pages.filter((page) => page.id !== "p2"), frames: doc.frames.filter((frame) => frame.pageId !== "p2") };
+  act(() => emitBotTestNotification("designCanvas:updated", { workspaceId: "workspace-1", chatId: "chat-2", revision: doc.revision }));
+  assert.ok(await screen.findByRole("group", { name: "On ideas" }, SAVE_WAIT));
+  assert.ok(screen.getByRole("button", { name: "Page: Ideas" }));
+});
+
 test("a new page starts empty and is shown; deleting it can be undone from the toast", async () => {
   const { saved } = setup(canvasWith(sticky("n1", "On home")));
   render(<Toaster />);

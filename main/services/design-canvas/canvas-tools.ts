@@ -223,8 +223,8 @@ export type DesignCanvasToolDeps = {
   broadcast(update: DesignCanvasUpdated): void;
   /**
    * The page this turn works on (`designTurnPages`): a page Aiden showed this
-   * turn, the page the message came from, the chat's kept page, then the
-   * first page. Built from `viewState` alone when absent.
+   * turn, the page the message came from, the chat's kept page, the chat's
+   * own page, then the first page. Built from `viewState` alone when absent.
    */
   pages?: DesignTurnPages;
   /** False once the chat left design mode or was deleted. Checked on every call. */

@@ -249,6 +249,30 @@ test("a turn's page: what Aiden showed this turn, then the message's page, then 
   assert.equal((await turn.view(docWith("p9"), "ws-1")).pageId, "p9");
 });
 
+test("with no view, a turn works on the chat's claimed page", async () => {
+  const views = new DesignCanvasViews();
+  const doc = { ...docWith("p1", "p2", "p3"), chatPages: { "chat-a": "p3", "chat-b": "p2" } };
+  assert.equal((await designTurnPages({ views, chatId: "chat-a" }).view(doc, "ws-1")).pageId, "p3");
+  assert.equal((await designTurnPages({ chatId: "chat-b" }).view(doc, "ws-1")).pageId, "p2");
+  assert.equal((await designTurnPages({ views, chatId: "chat-c" }).view(doc, "ws-1")).pageId, "p1", "no claim: the first page");
+});
+
+test("when the view's page is gone, a turn works on the claim before the first page", async () => {
+  const views = new DesignCanvasViews();
+  await views.report("chat-a", "ws-1", view("deleted"), 0);
+  const doc = { ...docWith("p1", "p2"), chatPages: { "chat-a": "p2" } };
+  assert.equal((await designTurnPages({ views, chatId: "chat-a" }).view(doc, "ws-1")).pageId, "p2");
+  // A claim on a page that is gone too falls through to the first page.
+  assert.equal((await designTurnPages({ views, chatId: "chat-a" }).view({ ...doc, chatPages: { "chat-a": "gone" } }, "ws-1")).pageId, "p1");
+});
+
+test("the view still wins over the claim", async () => {
+  const views = new DesignCanvasViews();
+  await views.report("chat-a", "ws-1", view("p1"), 0);
+  const doc = { ...docWith("p1", "p2"), chatPages: { "chat-a": "p2" } };
+  assert.equal((await designTurnPages({ views, chatId: "chat-a" }).view(doc, "ws-1")).pageId, "p1");
+});
+
 test("a turn without the registry still follows its own shown page", async () => {
   const doc = docWith("p1", "p2");
   const turn = designTurnPages({ chatId: "chat-a" });
