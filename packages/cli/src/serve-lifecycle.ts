@@ -209,7 +209,7 @@ function parseRecordedMcpGroups(
     for (const item of recorded.groupRecords) {
       if (!item || typeof item !== "object") continue;
       const raw = item as { pgid?: unknown; leaderStartId?: unknown; survivors?: unknown };
-      if (!validPid(raw.pgid as number | undefined) || raw.pgid === daemonPid) continue;
+      if (!validPid(raw.pgid) || raw.pgid === daemonPid) continue;
       const leaderStartId = typeof raw.leaderStartId === "string" && raw.leaderStartId.length > 0
         ? raw.leaderStartId
         : undefined;
@@ -218,7 +218,7 @@ function parseRecordedMcpGroups(
         for (const survivor of raw.survivors) {
           if (!survivor || typeof survivor !== "object") continue;
           const s = survivor as { pid?: unknown; startId?: unknown };
-          if (validPid(s.pid as number | undefined) && typeof s.startId === "string" && s.startId.length > 0) {
+          if (validPid(s.pid) && typeof s.startId === "string" && s.startId.length > 0) {
             survivors.push({ pid: s.pid, startId: s.startId });
           }
         }
@@ -270,8 +270,8 @@ function serveOwner(agentDir: string): ServeOwner | undefined {
   }
 }
 
-function validPid(pid: number | undefined): pid is number {
-  return Number.isSafeInteger(pid) && (pid as number) > 0;
+function validPid(pid: unknown): pid is number {
+  return typeof pid === "number" && Number.isSafeInteger(pid) && pid > 0;
 }
 
 /** True when the PID refers to a live process (EPERM still means alive). */
