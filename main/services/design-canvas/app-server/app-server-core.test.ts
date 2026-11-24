@@ -2,11 +2,21 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import {
   classifyPackage,
+  decidePackageManager,
   detectFramework,
+  installCommand,
+  installedMarkerManagers,
+  lockfileManagers,
+  matchesWorkspacePattern,
   parsePackageJson,
+  parsePackageManagerField,
   pickDevScript,
+  runScriptCommand,
   safeScriptNames,
+  workspacePatterns,
   type PackageJson,
+  type PackageManagerInfo,
+  type PackageManagerSignals,
 } from "./app-server-core.js";
 
 const NO_MARKERS = { workspaceRunnerFile: false };
@@ -274,4 +284,243 @@ test("parsePackageJson strips a BOM and returns null for arrays, strings and bro
   for (const text of ["[]", '"vite"', "null", "42", "{", ""]) {
     assert.equal(parsePackageJson(text), null, text);
   }
+});
+
+// ---- package managers (R5) ----
+
+function signals(input: {
+  field?: unknown;
+  files?: string[];
+  markers?: string[];
+  pnpmWorkspaceFile?: boolean;
+  denoMarker?: boolean;
+  yarnrc?: boolean;
+  pnp?: boolean;
+  lockHead?: string | null;
+  levelsUp?: number;
+}): PackageManagerSignals {
+  return {
+    field: parsePackageManagerField(input.field),
+    lockfiles: lockfileManagers(input.files ?? []),
+    installedMarkers: installedMarkerManagers(input.markers ?? []),
+    pnpmWorkspaceFile: input.pnpmWorkspaceFile ?? false,
+    denoMarker: input.denoMarker ?? false,
+    yarnFlavourHints: { yarnrc: input.yarnrc ?? false, pnp: input.pnp ?? false, lockHead: input.lockHead ?? null },
+    levelsUp: input.levelsUp ?? 0,
+  };
+}
+
+test("each lockfile name maps to its manager, and two files of one manager are not a conflict", () => {
+  assert.deepEqual([...lockfileManagers(["pnpm-lock.yaml"])], [["pnpm", "pnpm-lock.yaml"]]);
+  assert.deepEqual([...lockfileManagers(["yarn.lock"])], [["yarn", "yarn.lock"]]);
+  assert.deepEqual([...lockfileManagers(["bun.lockb"])], [["bun", "bun.lockb"]]);
+  assert.deepEqual([...lockfileManagers(["package-lock.json"])], [["npm", "package-lock.json"]]);
+  assert.deepEqual([...lockfileManagers(["npm-shrinkwrap.json"])], [["npm", "npm-shrinkwrap.json"]]);
+  assert.deepEqual([...lockfileManagers(["README.md", "deno.lock", "package.json"])], []);
+  for (const files of [["bun.lock", "bun.lockb"], ["package-lock.json", "npm-shrinkwrap.json"]]) {
+    const info = decidePackageManager(signals({ files }));
+    assert.ok(info.name !== null, files.join(" + "));
+    assert.equal(info.conflict, undefined);
+  }
+});
+
+test("the packageManager field decides when there's no lockfile or only its own", () => {
+  assert.deepEqual(decidePackageManager(signals({ field: "pnpm@9.15.0+sha512.abc" })), {
+    name: "pnpm",
+    source: "packageManager",
+    lockfileLevelsUp: 0,
+  });
+  assert.deepEqual(decidePackageManager(signals({ field: "pnpm@9.15.0+sha512.abc", files: ["pnpm-lock.yaml"] })), {
+    name: "pnpm",
+    source: "packageManager",
+    lockfile: "pnpm-lock.yaml",
+    lockfileLevelsUp: 0,
+  });
+});
+
+test("a packageManager field that disagrees with the lockfile is a conflict naming both", () => {
+  assert.deepEqual(decidePackageManager(signals({ field: "pnpm@9.15.0", files: ["package-lock.json"] })), {
+    name: null,
+    source: "packageManager",
+    lockfileLevelsUp: 0,
+    conflict: ["npm", "pnpm"],
+  });
+});
+
+test("an unknown or malformed packageManager field is ignored", () => {
+  assert.equal(parsePackageManagerField("deno@2"), null);
+  assert.equal(parsePackageManagerField(42), null);
+  assert.equal(parsePackageManagerField(""), null);
+  assert.deepEqual(parsePackageManagerField("pnpm"), { name: "pnpm" });
+  assert.deepEqual(parsePackageManagerField("yarn@4.5.0"), { name: "yarn", major: 4 });
+  assert.equal(decidePackageManager(signals({ field: "deno@2", files: ["yarn.lock"] })).name, "yarn");
+});
+
+test("one manager's lockfile decides the manager", () => {
+  assert.deepEqual(decidePackageManager(signals({ files: ["bun.lock"] })), {
+    name: "bun",
+    source: "lockfile",
+    lockfile: "bun.lock",
+    lockfileLevelsUp: 0,
+  });
+});
+
+test("lockfiles of two managers give no manager and list the conflict", () => {
+  assert.deepEqual(decidePackageManager(signals({ files: ["yarn.lock", "package-lock.json"] })), {
+    name: null,
+    source: "lockfile",
+    lockfileLevelsUp: 0,
+    conflict: ["npm", "yarn"],
+  });
+});
+
+test("a conflict with exactly one manager's install marker picks it and keeps the conflict", () => {
+  const files = ["package-lock.json", "yarn.lock"];
+  assert.deepEqual(decidePackageManager(signals({ files, markers: [".yarn-integrity"], lockHead: "# yarn lockfile v1\n" })), {
+    name: "yarn",
+    source: "installed",
+    lockfile: "yarn.lock",
+    lockfileLevelsUp: 0,
+    conflict: ["npm", "yarn"],
+    yarn: "classic",
+  });
+  assert.equal(decidePackageManager(signals({ files, markers: [".package-lock.json", ".yarn-integrity"] })).name, null);
+  // A marker of a manager outside the conflict settles nothing.
+  assert.equal(decidePackageManager(signals({ files, markers: [".modules.yaml"] })).name, null);
+});
+
+test("pnpm-workspace.yaml without a lockfile means pnpm", () => {
+  assert.deepEqual(decidePackageManager(signals({ pnpmWorkspaceFile: true })), {
+    name: "pnpm",
+    source: "workspace-file",
+    lockfileLevelsUp: 0,
+  });
+});
+
+test("a Deno project without an npm-family lockfile has no manager and is marked unsupported", () => {
+  assert.deepEqual(decidePackageManager(signals({ denoMarker: true })), {
+    name: null,
+    source: "none",
+    lockfileLevelsUp: 0,
+    unsupported: "deno",
+  });
+  assert.equal(decidePackageManager(signals({ denoMarker: true, files: ["package-lock.json"] })).name, "npm");
+});
+
+test("no signal means npm with source none and lockfileLevelsUp 0", () => {
+  assert.deepEqual(decidePackageManager(signals({})), { name: "npm", source: "none", lockfileLevelsUp: 0 });
+});
+
+test("an enclosing signal sets source enclosing and lockfileLevelsUp", () => {
+  assert.deepEqual(decidePackageManager(signals({ files: ["pnpm-lock.yaml"], levelsUp: 2 })), {
+    name: "pnpm",
+    source: "enclosing",
+    lockfile: "pnpm-lock.yaml",
+    lockfileLevelsUp: 2,
+  });
+  assert.deepEqual(decidePackageManager(signals({ pnpmWorkspaceFile: true, levelsUp: 1 })), {
+    name: "pnpm",
+    source: "enclosing",
+    lockfileLevelsUp: 1,
+  });
+});
+
+test("the yarn flavour follows the field's major version, then .yarnrc.yml, .pnp.cjs or a non-v1 yarn.lock head", () => {
+  const flavour = (input: Parameters<typeof signals>[0]) => decidePackageManager(signals({ files: ["yarn.lock"], ...input })).yarn;
+  assert.equal(flavour({ field: "yarn@1.22.22", yarnrc: true }), "classic");
+  assert.equal(flavour({ field: "yarn@4.5.0" }), "berry");
+  assert.equal(flavour({ yarnrc: true }), "berry");
+  assert.equal(flavour({ pnp: true }), "berry");
+  assert.equal(flavour({ lockHead: "# This file is generated by running \"yarn install\"\n\n__metadata:\n  version: 8\n" }), "berry");
+  assert.equal(flavour({ lockHead: "# THIS IS AN AUTOGENERATED FILE.\n# yarn lockfile v1\n" }), "classic");
+  assert.equal(flavour({ lockHead: "" }), "classic");
+  assert.equal(decidePackageManager(signals({ files: ["pnpm-lock.yaml"] })).yarn, undefined);
+});
+
+// ---- commands (R10) ----
+
+function info(name: PackageManagerInfo["name"], extra: Partial<PackageManagerInfo> = {}): PackageManagerInfo {
+  return { name, source: "lockfile", lockfileLevelsUp: 0, ...extra };
+}
+
+test("installCommand gives the frozen install with a lockfile and a plain install without one", () => {
+  const rows: Array<[PackageManagerInfo, string, string[]]> = [
+    [info("npm", { lockfile: "package-lock.json" }), "npm", ["ci"]],
+    [info("npm", { lockfile: "npm-shrinkwrap.json" }), "npm", ["ci"]],
+    [info("npm", { source: "none" }), "npm", ["install"]],
+    [info("pnpm", { lockfile: "pnpm-lock.yaml" }), "pnpm", ["install", "--frozen-lockfile"]],
+    [info("pnpm", { source: "packageManager" }), "pnpm", ["install"]],
+    [info("pnpm", { source: "workspace-file" }), "pnpm", ["install"]],
+    [info("yarn", { lockfile: "yarn.lock", yarn: "classic" }), "yarn", ["install", "--frozen-lockfile"]],
+    [info("yarn", { lockfile: "yarn.lock", yarn: "berry" }), "yarn", ["install", "--immutable"]],
+    [info("yarn", { source: "packageManager", yarn: "berry" }), "yarn", ["install"]],
+    [info("bun", { lockfile: "bun.lock" }), "bun", ["install", "--frozen-lockfile"]],
+    [info("bun", { source: "packageManager" }), "bun", ["install"]],
+    [info("pnpm", { source: "enclosing", lockfile: "pnpm-lock.yaml", lockfileLevelsUp: 2 }), "pnpm", ["install", "--frozen-lockfile"]],
+  ];
+  for (const [input, command, args] of rows) {
+    assert.deepEqual(installCommand(input), { command, args }, JSON.stringify(input));
+  }
+  assert.throws(() => installCommand(info(null, { conflict: ["npm", "yarn"] })));
+});
+
+test("runScriptCommand passes extra arguments the way each manager expects", () => {
+  const extra = ["--port", "5173"];
+  assert.deepEqual(runScriptCommand(info("npm"), "dev", extra), { command: "npm", args: ["run", "dev", "--", "--port", "5173"] });
+  // pnpm and Yarn 2+ pass a bare -- through to the script, so they get none.
+  assert.deepEqual(runScriptCommand(info("pnpm"), "dev", extra), { command: "pnpm", args: ["run", "dev", "--port", "5173"] });
+  assert.deepEqual(runScriptCommand(info("yarn", { yarn: "classic" }), "dev", extra), { command: "yarn", args: ["run", "dev", "--port", "5173"] });
+  assert.deepEqual(runScriptCommand(info("yarn", { yarn: "berry" }), "dev", extra), { command: "yarn", args: ["run", "dev", "--port", "5173"] });
+  assert.deepEqual(runScriptCommand(info("bun"), "dev", extra), { command: "bun", args: ["run", "dev", "--port", "5173"] });
+  assert.deepEqual(runScriptCommand(info("npm"), "start"), { command: "npm", args: ["run", "start"] });
+  assert.deepEqual(runScriptCommand(info("npm"), "start", []), { command: "npm", args: ["run", "start"] });
+});
+
+test("runScriptCommand refuses an unsafe name, a null manager, or an extra argument with a control character", () => {
+  assert.throws(() => runScriptCommand(info("npm"), "--prefix"));
+  assert.throws(() => runScriptCommand(info("npm"), "dev\nrm"));
+  assert.throws(() => runScriptCommand(info("npm"), ""));
+  assert.throws(() => runScriptCommand(info(null, { unsupported: "deno" }), "dev"));
+  assert.throws(() => runScriptCommand(info("pnpm"), "dev", ["--port", "5173\n"]));
+});
+
+// ---- workspace patterns (R1) ----
+
+test("workspacePatterns reads package.json workspaces in both shapes and pnpm-workspace.yaml packages, splits out ! patterns, and drops absolute and .. patterns", () => {
+  assert.deepEqual(workspacePatterns({ workspaces: ["apps/*", "./packages/*", "!packages/legacy", "/etc", "../outside", "apps/../..", 42] }, null), {
+    include: ["apps/*", "packages/*"],
+    exclude: ["packages/legacy"],
+  });
+  assert.deepEqual(workspacePatterns({ workspaces: { packages: ["apps/*"], nohoist: ["**/x"] } }, null), { include: ["apps/*"], exclude: [] });
+  assert.deepEqual(workspacePatterns(null, { packages: ["apps/*", "packages/**", "!**/test/**"] }), {
+    include: ["apps/*", "packages/**"],
+    exclude: ["**/test/**"],
+  });
+  assert.deepEqual(workspacePatterns({ workspaces: ["apps/*"] }, { packages: ["apps/*", "tools/web"] }), {
+    include: ["apps/*", "tools/web"],
+    exclude: [],
+  });
+  assert.deepEqual(workspacePatterns({ workspaces: "apps/*" }, ["apps/*"]), { include: [], exclude: [] });
+});
+
+test("matchesWorkspacePattern handles exact paths, one-level stars, a star inside a segment and ** as one level, and ignores braces", () => {
+  const yes: Array<[string, string]> = [
+    ["web", "web"],
+    ["apps/web", "apps/web"],
+    ["apps/group/web", "apps/group/web"],
+    ["apps/web", "apps/*"],
+    ["apps/group/web", "apps/group/*"],
+    ["apps/admin-app", "apps/*-app"],
+    ["packages/ui", "packages/**"],
+  ];
+  const no: Array<[string, string]> = [
+    ["apps/group/web", "apps/*"],
+    ["apps/admin", "apps/*-app"],
+    ["apps/web", "apps/{web,docs}"],
+    ["a/b/c/d", "a/b/c/d"],
+    ["apps/web", "*/web"],
+    ["apps", "apps/*"],
+  ];
+  for (const [rel, pattern] of yes) assert.equal(matchesWorkspacePattern(rel, pattern), true, `${rel} ~ ${pattern}`);
+  for (const [rel, pattern] of no) assert.equal(matchesWorkspacePattern(rel, pattern), false, `${rel} !~ ${pattern}`);
 });

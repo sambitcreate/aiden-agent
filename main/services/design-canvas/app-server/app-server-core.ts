@@ -313,3 +313,221 @@ export function classifyPackage(pkg: PackageJson | null, markers: { workspaceRun
   if (usesReact) return result("react-nonweb", "no-web-framework");
   return result("none", "no-web-framework");
 }
+
+// ---- package managers (R5) ----
+
+const PACKAGE_MANAGERS: readonly PackageManagerName[] = ["npm", "pnpm", "yarn", "bun"];
+
+function isPackageManagerName(value: string): value is PackageManagerName {
+  return (PACKAGE_MANAGERS as readonly string[]).includes(value);
+}
+
+/** Lockfile names, in the order a manager's own files are preferred. */
+export const LOCKFILES: ReadonlyArray<readonly [string, PackageManagerName]> = [
+  ["pnpm-lock.yaml", "pnpm"],
+  ["yarn.lock", "yarn"],
+  ["bun.lock", "bun"],
+  ["bun.lockb", "bun"],
+  ["npm-shrinkwrap.json", "npm"],
+  ["package-lock.json", "npm"],
+];
+
+/** Files a manager leaves inside `node_modules` after an install. */
+export const INSTALL_MARKERS: ReadonlyArray<readonly [string, PackageManagerName]> = [
+  [".package-lock.json", "npm"],
+  [".modules.yaml", "pnpm"],
+  [".yarn-integrity", "yarn"],
+  [".yarn-state.yml", "yarn"],
+];
+
+export const DENO_MARKERS: readonly string[] = ["deno.lock", "deno.json", "deno.jsonc"];
+
+/** `"pnpm@9.15.0+sha512…"` → `{ name: "pnpm", major: 9 }`. Anything but npm, pnpm, yarn or bun is ignored. */
+export function parsePackageManagerField(value: unknown): { name: PackageManagerName; major?: number } | null {
+  if (typeof value !== "string") return null;
+  const match = /^([a-z]+)(?:@(\d+))?/u.exec(value.trim());
+  if (!match || !isPackageManagerName(match[1])) return null;
+  return match[2] === undefined ? { name: match[1] } : { name: match[1], major: Number(match[2]) };
+}
+
+export function lockfileManagers(fileNames: readonly string[]): Map<PackageManagerName, string> {
+  const present = new Set(fileNames);
+  const result = new Map<PackageManagerName, string>();
+  for (const [file, manager] of LOCKFILES) {
+    if (present.has(file) && !result.has(manager)) result.set(manager, file);
+  }
+  return result;
+}
+
+export function installedMarkerManagers(fileNames: readonly string[]): Set<PackageManagerName> {
+  const present = new Set(fileNames);
+  return new Set(INSTALL_MARKERS.filter(([file]) => present.has(file)).map(([, manager]) => manager));
+}
+
+export interface PackageManagerSignals {
+  field: { name: PackageManagerName; major?: number } | null;
+  /** Lockfiles in the folder the signals came from. */
+  lockfiles: Map<PackageManagerName, string>;
+  /** Managers with an install marker in that folder's `node_modules`. */
+  installedMarkers: Set<PackageManagerName>;
+  pnpmWorkspaceFile: boolean;
+  denoMarker: boolean;
+  /** From the folder holding the yarn signal. `lockHead` is at most the first 512 bytes of `yarn.lock`. */
+  yarnFlavourHints: { yarnrc: boolean; pnp: boolean; lockHead: string | null };
+  /** 0 for the install root; 1 or more when the signals came from an enclosing folder. */
+  levelsUp: number;
+}
+
+function yarnFlavour(signals: PackageManagerSignals): "classic" | "berry" {
+  const { field, yarnFlavourHints: hints } = signals;
+  if (field?.name === "yarn" && field.major !== undefined) return field.major >= 2 ? "berry" : "classic";
+  return hints.yarnrc || hints.pnp || (hints.lockHead ?? "").includes("__metadata:") ? "berry" : "classic";
+}
+
+/** R5. Disk-free: the caller gathers the signals of one folder. */
+export function decidePackageManager(signals: PackageManagerSignals): PackageManagerInfo {
+  const enclosing = signals.levelsUp > 0;
+  const levelsUp = signals.levelsUp;
+  const pick = (name: PackageManagerName, source: PackageManagerInfo["source"], conflict?: PackageManagerName[]): PackageManagerInfo => {
+    const lockfile = signals.lockfiles.get(name);
+    return {
+      name,
+      source,
+      ...(lockfile ? { lockfile } : {}),
+      lockfileLevelsUp: levelsUp,
+      ...(conflict ? { conflict } : {}),
+      ...(name === "yarn" ? { yarn: yarnFlavour(signals) } : {}),
+    };
+  };
+  const settle = (conflict: PackageManagerName[], source: PackageManagerInfo["source"]): PackageManagerInfo => {
+    const installed = conflict.filter((name) => signals.installedMarkers.has(name));
+    if (installed.length === 1) return pick(installed[0], "installed", conflict);
+    return { name: null, source, lockfileLevelsUp: levelsUp, conflict };
+  };
+  const locked = [...signals.lockfiles.keys()].sort();
+  const lockSource = enclosing ? "enclosing" : "lockfile";
+
+  if (signals.field) {
+    const field = signals.field.name;
+    if (locked.every((name) => name === field)) return pick(field, "packageManager");
+    return settle([...new Set([...locked, field])].sort(), "packageManager");
+  }
+  if (locked.length === 1) return pick(locked[0], lockSource);
+  if (locked.length > 1) return settle(locked, lockSource);
+  if (signals.pnpmWorkspaceFile) return pick("pnpm", enclosing ? "enclosing" : "workspace-file");
+  if (signals.denoMarker) return { name: null, source: "none", lockfileLevelsUp: 0, unsupported: "deno" };
+  return { name: "npm", source: "none", lockfileLevelsUp: 0 };
+}
+
+// ---- commands (R10) ----
+
+export interface ManagerCommand {
+  command: PackageManagerName;
+  args: string[];
+}
+
+function requireManager(info: PackageManagerInfo): PackageManagerName {
+  if (info.name === null) throw new Error("This app has no package manager to run.");
+  return info.name;
+}
+
+/** The frozen install when R5 chose a lockfile (an enclosing one included), else a plain install. */
+export function installCommand(info: PackageManagerInfo): ManagerCommand {
+  const name = requireManager(info);
+  if (!info.lockfile) return { command: name, args: ["install"] };
+  if (name === "npm") return { command: name, args: ["ci"] };
+  if (name === "yarn" && info.yarn === "berry") return { command: name, args: ["install", "--immutable"] };
+  return { command: name, args: ["install", "--frozen-lockfile"] };
+}
+
+/**
+ * `<manager> run <script> <extra…>`. Only npm needs `--` to hand options to
+ * the script; pnpm and Yarn 2+ would pass a bare `--` through to it.
+ */
+export function runScriptCommand(info: PackageManagerInfo, script: string, extraArgs: readonly string[] = []): ManagerCommand {
+  const name = requireManager(info);
+  if (!isSafeScriptName(script)) throw new Error("That script name can't be run.");
+  if (extraArgs.some((arg) => CONTROL_CHARS.test(arg))) throw new Error("A script argument has a control character.");
+  const extra = name === "npm" && extraArgs.length > 0 ? ["--", ...extraArgs] : [...extraArgs];
+  return { command: name, args: ["run", script, ...extra] };
+}
+
+// ---- workspace patterns (R1) ----
+
+function patternList(value: unknown): string[] {
+  if (Array.isArray(value)) return value.filter((item): item is string => typeof item === "string");
+  if (isRecord(value) && Array.isArray(value.packages)) return patternList(value.packages);
+  return [];
+}
+
+function normalisePattern(raw: string): string | null {
+  let pattern = raw.trim();
+  while (pattern.startsWith("./")) pattern = pattern.slice(2);
+  pattern = pattern.replace(/\/+$/u, "");
+  if (!pattern || pattern.startsWith("/") || /^[a-zA-Z]:/u.test(pattern) || pattern.includes("\\")) return null;
+  if (pattern.split("/").some((segment) => segment === ".." || segment === "." || segment === "")) return null;
+  return pattern;
+}
+
+/** The root's declared workspace patterns: package.json `workspaces` and pnpm-workspace.yaml `packages`. */
+export function workspacePatterns(rootPkg: PackageJson | null, pnpmWorkspaceYaml: unknown): { include: string[]; exclude: string[] } {
+  const include = new Set<string>();
+  const exclude = new Set<string>();
+  const raw = [
+    ...(rootPkg ? patternList(rootPkg.workspaces) : []),
+    ...(isRecord(pnpmWorkspaceYaml) ? patternList(pnpmWorkspaceYaml.packages) : []),
+  ];
+  for (const entry of raw) {
+    const negated = entry.trim().startsWith("!");
+    const pattern = normalisePattern(negated ? entry.trim().slice(1) : entry);
+    if (pattern) (negated ? exclude : include).add(pattern);
+  }
+  return { include: [...include], exclude: [...exclude] };
+}
+
+export interface WorkspacePatternShape {
+  /** Literal parent segments. */
+  parent: string[];
+  /** The last segment; may hold `*`. */
+  last: string;
+  wildcard: boolean;
+}
+
+/**
+ * The supported forms: up to three segments, literal except the last, which
+ * may hold `*` (`**` counts as `*`). Braces and deeper wildcards give null.
+ */
+export function parseWorkspacePattern(pattern: string): WorkspacePatternShape | null {
+  const segments = pattern.split("/");
+  if (segments.length === 0 || segments.length > 3 || /[{}]/u.test(pattern)) return null;
+  const parent = segments.slice(0, -1);
+  if (parent.some((segment) => segment.includes("*") || segment === "")) return null;
+  const last = segments[segments.length - 1].replace(/\*+/gu, "*");
+  if (!last) return null;
+  return { parent, last, wildcard: last.includes("*") };
+}
+
+function matchesSegment(name: string, glob: string): boolean {
+  const pieces = glob.split("*");
+  if (pieces.length === 1) return name === glob;
+  const [first, ...rest] = pieces;
+  if (!name.startsWith(first)) return false;
+  let at = first.length;
+  for (let i = 0; i < rest.length; i++) {
+    const piece = rest[i];
+    if (i === rest.length - 1) return name.length - piece.length >= at && name.endsWith(piece);
+    const found = name.indexOf(piece, at);
+    if (found < 0) return false;
+    at = found + piece.length;
+  }
+  return true;
+}
+
+export function matchesWorkspacePattern(relPath: string, pattern: string): boolean {
+  const shape = parseWorkspacePattern(pattern);
+  if (!shape) return false;
+  const segments = relPath.split("/");
+  if (segments.length !== shape.parent.length + 1) return false;
+  if (!shape.parent.every((segment, i) => segments[i] === segment)) return false;
+  return matchesSegment(segments[segments.length - 1], shape.last);
+}
