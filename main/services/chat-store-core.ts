@@ -181,6 +181,7 @@ export function createChatStore(
   durability: ChatStoreDurability = {},
 ) {
   const indexListeners = new Set<() => void>();
+  const titleListeners = new Set<(chatId: string) => void>();
   const syncDirectory = durability.syncDirectory ?? syncPath;
   const syncFile = durability.syncFile ?? syncPath;
   const readFile =
@@ -543,6 +544,28 @@ export function createChatStore(
         // Observers are best-effort signals; the durable write already succeeded.
       }
     }
+  }
+
+  /** Called after a title write resolved, outside the chat lock. */
+  function notifyTitleChanged(chatId: string): void {
+    for (const listener of [...titleListeners]) {
+      try {
+        listener(chatId);
+      } catch {
+        // Observers are best-effort signals; the title is already written.
+      }
+    }
+  }
+
+  /** Runs a title write and tells title listeners when the title it returns differs from `before`'s. */
+  async function withTitleNotice<T extends Chat | null>(
+    id: string,
+    write: (before: { title?: string }) => Promise<T>,
+  ): Promise<T> {
+    const before: { title?: string } = {};
+    const chat = await write(before);
+    if (chat && before.title !== undefined && chat.title !== before.title) notifyTitleChanged(id);
+    return chat;
   }
 
   async function writeIndex(index: readonly ChatMeta[]): Promise<void> {
@@ -1420,6 +1443,16 @@ export function createChatStore(
       return () => indexListeners.delete(listener);
     },
 
+    /**
+     * Observe title changes: told once after `rename`, `replaceTitleIfUnchanged`,
+     * `replaceAutoTitle` or a first-message seed in `appendMessage` wrote a new
+     * title, outside the chat lock. A listener that throws is ignored.
+     */
+    onTitleChanged(listener: (chatId: string) => void): () => void {
+      titleListeners.add(listener);
+      return () => titleListeners.delete(listener);
+    },
+
     /** List chats, newest first. Legacy chats without a workspace fall under the default one. */
     async list(workspaceId?: string): Promise<ChatMeta[]> {
       return shared([], true, () => withIndexLock(async () => {
@@ -1935,15 +1968,16 @@ export function createChatStore(
       title: string,
       assertCurrent: (chat: Chat) => void | Promise<void> = () => undefined,
     ): Promise<Chat> {
-      return withImageData(await shared([id], true, async () => {
+      return withImageData(await withTitleNotice(id, (before) => shared([id], true, async () => {
         const chat = await readChat(id, "owner");
         if (!chat) throw new Error(`Chat ${id} not found`);
         await assertCurrent(chat);
+        before.title = chat.title;
         chat.title = title.trim() || chat.title;
         chat.updatedAt = Date.now();
         await writeChatAndMeta(chat);
         return chat;
-      }));
+      })));
     },
 
     /**
@@ -1974,16 +2008,17 @@ export function createChatStore(
       expectedTitle: string,
       title: string,
     ): Promise<Chat | null> {
-      return withImageData(await shared([id], true, async () => {
+      return withImageData(await withTitleNotice(id, (before) => shared([id], true, async () => {
         const chat = await readChat(id, "owner");
         if (!chat || chat.title !== expectedTitle) return null;
         const nextTitle = title.trim();
         if (!nextTitle || nextTitle === chat.title) return null;
+        before.title = chat.title;
         chat.title = nextTitle;
         chat.updatedAt = Date.now();
         await writeChatAndMeta(chat);
         return chat;
-      }));
+      })));
     },
 
     /** Move only an untouched new chat so its workspace can be chosen from the composer. */
@@ -2336,9 +2371,10 @@ export function createChatStore(
         hookBlockedReason?: string;
       },
     ): Promise<Chat> {
-      return withImageData(await shared([id], true, async () => {
+      return withImageData(await withTitleNotice(id, (before) => shared([id], true, async () => {
         const chat = await readChat(id, "owner");
         if (!chat) throw new Error(`Chat ${id} not found`);
+        before.title = chat.title;
         if (meta?.rejectFeatureOwned && chat.owner !== undefined) {
           throw new Error("This conversation belongs to another Aiden feature and cannot be written from chat.");
         }
@@ -2442,7 +2478,7 @@ export function createChatStore(
           }
         });
         return chat;
-      }));
+      })));
     },
 
     /** Replace only the untouched first-message seed, preserving any manual rename. */
@@ -2451,17 +2487,18 @@ export function createChatStore(
       expectedSeed: string,
       title: string,
     ): Promise<Chat | null> {
-      return withImageData(await shared([id], true, async () => {
+      return withImageData(await withTitleNotice(id, (before) => shared([id], true, async () => {
         const chat = await readChat(id, "owner");
         if (!chat || !canReplaceGeneratedChatTitle(chat.title, expectedSeed))
           return null;
         const nextTitle = title.trim();
         if (!nextTitle || nextTitle === chat.title) return null;
+        before.title = chat.title;
         chat.title = nextTitle;
         chat.updatedAt = Date.now();
         await writeChatAndMeta(chat);
         return chat;
-      }));
+      })));
     },
   };
 }

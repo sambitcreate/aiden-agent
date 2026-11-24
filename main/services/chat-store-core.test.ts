@@ -65,6 +65,70 @@ test("index observers see each committed summary change and stop after unsubscri
   assert.equal(observed.length, beforeQuiet);
 });
 
+test("a rename, a replaced title, an auto-title and the first-message seed each tell title listeners once, after the write", async (t) => {
+  const store = await testStore(t);
+  const chat = await store.create({ workspaceId: "workspace" });
+  const seen: Promise<string | undefined>[] = [];
+  store.onTitleChanged((chatId) => {
+    assert.equal(chatId, chat.id);
+    seen.push(store.getMeta(chatId).then((meta) => meta?.title));
+  });
+
+  const seeded = await store.appendMessage(chat.id, { role: "user", content: "Sketch the pricing table" }, { autoTitle: true });
+  assert.equal(seen.length, 1);
+  assert.equal(await seen[0], "Sketch the pricing table");
+
+  await store.replaceAutoTitle(chat.id, seeded.title, "Pricing table");
+  assert.equal(seen.length, 2);
+  assert.equal(await seen[1], "Pricing table");
+
+  await store.replaceTitleIfUnchanged(chat.id, "Pricing table", "Pricing table sketch");
+  assert.equal(seen.length, 3);
+  assert.equal(await seen[2], "Pricing table sketch");
+
+  await store.rename(chat.id, "Plans page");
+  assert.equal(seen.length, 4);
+  assert.equal(await seen[3], "Plans page");
+
+  // A later message seeds nothing, so nobody is told.
+  await store.appendMessage(chat.id, { role: "user", content: "And a footer" }, { autoTitle: true });
+  assert.equal(seen.length, 4);
+});
+
+test("a rename that changes nothing tells no one", async (t) => {
+  const store = await testStore(t);
+  const chat = await store.create({});
+  await store.rename(chat.id, "Same");
+  let told = 0;
+  const unsubscribe = store.onTitleChanged(() => {
+    told += 1;
+  });
+  await store.rename(chat.id, "Same");
+  await store.rename(chat.id, "   ");
+  assert.equal(await store.replaceTitleIfUnchanged(chat.id, "Other", "New"), null);
+  assert.equal(await store.replaceAutoTitle(chat.id, "Other", "New"), null);
+  assert.equal(told, 0);
+
+  unsubscribe();
+  await store.rename(chat.id, "Changed");
+  assert.equal(told, 0);
+});
+
+test("a title listener that throws does not fail the rename", async (t) => {
+  const store = await testStore(t);
+  const chat = await store.create({});
+  let later = 0;
+  store.onTitleChanged(() => {
+    throw new Error("listener failed");
+  });
+  store.onTitleChanged(() => {
+    later += 1;
+  });
+  const renamed = await store.rename(chat.id, "Still renamed");
+  assert.equal(renamed.title, "Still renamed");
+  assert.equal(later, 1);
+});
+
 test("serializes assistant persistence with a background title update", async (t) => {
   const store = await testStore(t);
   const chat = await store.create({});

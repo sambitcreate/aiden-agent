@@ -14,6 +14,7 @@ import { DesignModeConsent } from "./design-mode-tool.js";
 import { DesignSystemOffers } from "./design-system-offers.js";
 import { DesignGrantRegistry } from "./grants.js";
 import { DESIGN_CANVAS_UPDATED_CHANNEL, DesignCanvasStore, DesignChatCanvases, type DesignCanvasUpdated } from "./store.js";
+import { createDesignTitleFollow } from "./title-follow.js";
 import { DesignCanvasViews } from "./views.js";
 import { DESIGN_FILES_CHANGED_CHANNEL, DesignFileWatcher } from "./watch.js";
 import { RecentWrittenPages } from "./written-pages.js";
@@ -49,6 +50,15 @@ export function broadcastDesignCanvasUpdate(update: DesignCanvasUpdated): void {
     logger.warn("design", "Could not announce a canvas change.", error);
   }
 }
+
+/** A page made for a chat follows the chat's title; entry runs it once more after claiming. */
+export const designTitleFollow = createDesignTitleFollow({
+  canvases: designCanvasStore,
+  titleOf: async (chatId) => (await chatStore.getMeta(chatId))?.title,
+  broadcast: broadcastDesignCanvasUpdate,
+  onError: (error) => logger.warn("design", "Could not rename the chat's canvas page.", error),
+});
+chatStore.onTitleChanged((chatId) => void designTitleFollow.follow(chatId));
 
 /**
  * Each chat's canvas view (page, viewports, the latest Aiden page change), as
