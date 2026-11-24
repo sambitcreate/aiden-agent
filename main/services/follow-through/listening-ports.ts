@@ -171,7 +171,8 @@ export type SocketsByProcess =
 export type JobSockets =
   /** `rows`: an attach root's subtree (2c), so the watch can check owners and re-bind. */
   | { ok: true; sockets: Array<{ pid: number; address: string; port: number }>; rows?: ProcessRow[] }
-  | { ok: false; reason: string };
+  /** `rows` (2c): an attach root's subtree even when its socket read failed, so another user's process in it still detaches (A-m1). */
+  | { ok: false; reason: string; rows?: ProcessRow[] };
 
 function execBounded(file: string, args: readonly string[], limits: { timeoutMs: number; maxBuffer: number }): Promise<ExecResult> {
   return new Promise((resolve) => {
@@ -483,7 +484,7 @@ async function answerTrees(
   const failedPids = new Set(read.ok ? [] : (read.pids ?? []));
   for (const [key, tree] of trees) {
     if (!read.ok && (!read.pids || tree.some((pid) => failedPids.has(pid)))) {
-      results.set(key, { ok: false, reason: read.reason });
+      results.set(key, { ok: false, reason: read.reason, ...(rowsOf ? { rows: rowsOf(tree) } : {}) });
       continue;
     }
     const byPid = read.byPid ?? new Map<number, SocketAddress[]>();
@@ -667,21 +668,97 @@ export async function portHolders(
     if (mine.length > MAX_SCAN_PIDS) return { ok: false, reason: "too many processes" };
     const pids: number[] = [];
     const held = new Set<string>();
-    let unreadable = false;
+    const unreadable = new Set<number>();
     for (const pid of mine) {
       const read = await linuxSocketInodes(pid, deps);
       // Some of the person's processes can't be read (Chromium's sandboxed helpers aren't dumpable).
       // One may be skipped only if the readable ones turn out to hold every socket on the port.
       if ("failed" in read) {
-        unreadable = true;
+        unreadable.add(pid);
         continue;
       }
       const mineHere = read.inodes.filter((inode) => inodes.has(inode));
       if (mineHere.length) pids.push(pid);
       for (const inode of mineHere) held.add(inode);
     }
-    if (unreadable && [...inodes].some((inode) => !held.has(inode))) return { ok: false, reason: `a holder of port ${port} couldn't be read` };
+    if (unreadable.size && [...inodes].some((inode) => !held.has(inode))) return { ok: false, reason: `a holder of port ${port} couldn't be read` };
+    // A skipped process above a holder may share its socket (a forked descriptor), and so be the outermost holder (A-m2).
+    if (unreadable.size) {
+      const parent = new Map(table.rows.map((row) => [row.pid, row.ppid]));
+      for (const pid of pids) {
+        const seen = new Set<number>();
+        for (let up = parent.get(pid); up !== undefined && up > 1 && !seen.has(up); up = parent.get(up)) {
+          if (unreadable.has(up)) return { ok: false, reason: `an ancestor of port ${port}'s holder couldn't be read` };
+          seen.add(up);
+        }
+      }
+    }
     return { ok: true, pids };
+  }
+  return { ok: false, reason: "unsupported platform" };
+}
+
+/** What `processEnvironmentMarks` read: the pids whose starting environment carries the prefix, and the ones it couldn't read. */
+export type EnvironmentMarks = { ok: true; marked: Set<number>; unreadable: Set<number> } | { ok: false; reason: string };
+
+/**
+ * Which of these processes started with an environment entry beginning
+ * `prefix` (2c, A-M2). Fails closed per process: one whose environment can't
+ * be shown is `unreadable`, never "not marked". Linux reads
+ * `/proc/<pid>/environ`. macOS runs `ps -E` and plain `ps` over the same
+ * pids: `ps -E` appends the environment after the command, except for
+ * Apple's platform binaries (and a process with an empty environment), whose
+ * two lines then match, so those are unreadable. A process that left between
+ * the reads is unreadable too.
+ */
+export async function processEnvironmentMarks(pids: readonly number[], prefix: string, deps: SocketReaderDeps): Promise<EnvironmentMarks> {
+  const wanted = [...new Set(pids)].filter((pid) => Number.isSafeInteger(pid) && pid > 1);
+  const marked = new Set<number>();
+  const unreadable = new Set<number>();
+  if (!wanted.length) return { ok: true, marked, unreadable };
+  if (wanted.length > MAX_SCAN_PIDS) return { ok: false, reason: "too many processes" };
+  if (deps.platform === "linux") {
+    for (const pid of wanted) {
+      try {
+        const environment = await deps.readFile(`/proc/${pid}/environ`);
+        if (environment.split("\0").some((entry) => entry.startsWith(prefix))) marked.add(pid);
+      } catch {
+        unreadable.add(pid);
+      }
+    }
+    return { ok: true, marked, unreadable };
+  }
+  if (deps.platform === "darwin") {
+    const list = wanted.join(",");
+    const limits = { timeoutMs: PS_TIMEOUT_MS, maxBuffer: 32 * 1024 * 1024 };
+    const withEnvironment = await deps.exec("ps", ["-E", "-ww", "-o", "pid=,command=", "-p", list], limits);
+    const plain = await deps.exec("ps", ["-ww", "-o", "pid=,command=", "-p", list], limits);
+    for (const result of [withEnvironment, plain]) {
+      if (!result.ok) return { ok: false, reason: `ps: ${result.reason}` };
+      // ps exits 1 when some pid has gone; those are unreadable below.
+      if (result.exitCode !== 0 && result.exitCode !== 1) return { ok: false, reason: `ps exited ${result.exitCode}` };
+    }
+    const lines = (stdout: string) => {
+      const byPid = new Map<number, string>();
+      for (const line of stdout.split("\n")) {
+        const match = /^\s*(\d+) (.*)$/u.exec(line);
+        if (match) byPid.set(Number(match[1]), match[2]!);
+      }
+      return byPid;
+    };
+    const full = lines((withEnvironment as { stdout: string }).stdout);
+    const bare = lines((plain as { stdout: string }).stdout);
+    for (const pid of wanted) {
+      const line = full.get(pid);
+      const command = bare.get(pid);
+      if (line === undefined || command === undefined || !line.startsWith(command) || line.length === command.length) {
+        unreadable.add(pid);
+        continue;
+      }
+      // Fail closed: an argument that only looks like the entry counts as one.
+      if (line.slice(command.length).split(/\s+/u).some((entry) => entry.startsWith(prefix))) marked.add(pid);
+    }
+    return { ok: true, marked, unreadable };
   }
   return { ok: false, reason: "unsupported platform" };
 }

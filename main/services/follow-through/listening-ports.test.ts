@@ -7,6 +7,7 @@ import {
   listeningSocketsByProcess,
   parseLsofCwd,
   portHolders,
+  processEnvironmentMarks,
   processFolders,
   processNames,
   processSubtree,
@@ -583,4 +584,71 @@ test("an attach root whose pid is gone answers with no sockets and no rows", asy
   const deps = fakeDeps({ exec: async (file) => (file.endsWith("ps") ? { ok: true, stdout: "100 1 100 501\n", stderr: "", exitCode: 0 } : { ok: true, stdout: "", stderr: "", exitCode: 1 }) });
   const result = await readJobSockets(new Map(), deps, new Map([["attach:r", 777]]));
   assert.deepEqual(result.get("attach:r"), { ok: true, sockets: [], rows: [] });
+});
+
+test("portHolders on Linux fails closed when an unreadable process is an ancestor of a holder it found", async () => {
+  // 40 can't be read and is 10's parent: it may hold the same listening socket (a forked fd), so it may be the outermost holder.
+  const deps = linuxDeps({
+    exec: async () => ({ ok: true, stdout: "40 1 40 501\n10 40 10 501\n", stderr: "", exitCode: 0 }),
+    tcp: [TCP_HEADER, row("0100007F:1435", "11")].join("\n"),
+    fds: { 10: ["socket:[11]"], 40: denied() },
+  });
+  assert.equal((await portHolders(5173, 501, deps)).ok, false);
+});
+
+test("on Linux, an attach root whose subtree holds another user's unreadable process answers its rows with the failed read", async () => {
+  const deps = linuxDeps({
+    exec: async () => ({ ok: true, stdout: "300 1 300 501\n301 300 300 501\n302 301 300 0\n", stderr: "", exitCode: 0 }),
+    tcp: [TCP_HEADER, row("0100007F:1435", "11")].join("\n"),
+    fds: { 301: ["socket:[11]"], 302: denied() },
+  });
+  const result = (await readJobSockets(new Map(), deps, new Map([["attach:r", 301]]))).get("attach:r");
+  assert.equal(result?.ok, false);
+  assert.deepEqual(result?.rows, [
+    { pid: 301, ppid: 300, pgid: 300, uid: 501 },
+    { pid: 302, ppid: 301, pgid: 300, uid: 0 },
+  ]);
+});
+
+test("processEnvironmentMarks on Linux reads each /proc/<pid>/environ and fails closed per process", async () => {
+  const environ: Record<number, string | Error> = { 10: "PATH=/bin\0AIDEN_BACKGROUND_JOB=job_0badc0de\0", 11: "PATH=/bin\0", 12: denied() };
+  const deps = fakeDeps({
+    platform: "linux",
+    readFile: async (file) => {
+      const value = environ[Number(file.split("/")[2])];
+      if (value === undefined) throw Object.assign(new Error("ENOENT"), { code: "ENOENT" });
+      if (value instanceof Error) throw value;
+      return value;
+    },
+  });
+  assert.deepEqual(await processEnvironmentMarks([10, 11, 12, 13], "AIDEN_BACKGROUND_JOB=", deps), {
+    ok: true,
+    marked: new Set([10]),
+    unreadable: new Set([12, 13]),
+  });
+});
+
+test("processEnvironmentMarks on macOS compares ps -E with plain ps, so an environment ps can't show is unreadable", async () => {
+  const command: Record<number, string> = { 10: "node server.mjs", 11: "node server.mjs", 12: "sleep 30" };
+  const environment: Record<number, string> = { 10: " PATH=/bin AIDEN_BACKGROUND_JOB=job_0badc0de", 11: " PATH=/bin HOME=/Users/me", 12: "" };
+  const calls: string[][] = [];
+  const deps = fakeDeps({
+    platform: "darwin",
+    exec: async (file, args) => {
+      calls.push([file, ...args]);
+      const shown = args.includes("-E");
+      // 13 left between the two reads.
+      const pids = args[args.indexOf("-p") + 1]!.split(",").map(Number).filter((pid) => command[pid] && !(pid === 13 && !shown));
+      return { ok: true, stdout: pids.map((pid) => `${String(pid).padStart(5)} ${command[pid]}${shown ? environment[pid] : ""}`).join("\n"), stderr: "", exitCode: 0 };
+    },
+  });
+  command[13] = "node other.mjs";
+  environment[13] = " PATH=/bin";
+  assert.deepEqual(await processEnvironmentMarks([10, 11, 12, 13], "AIDEN_BACKGROUND_JOB=", deps), {
+    ok: true,
+    marked: new Set([10]),
+    unreadable: new Set([12, 13]),
+  });
+  assert.equal(calls.length, 2, "two ps calls cover every pid");
+  assert.equal((await processEnvironmentMarks([10], "AIDEN_BACKGROUND_JOB=", fakeDeps({ exec: async () => ({ ok: false, reason: "timeout" }) }))).ok, false);
 });
