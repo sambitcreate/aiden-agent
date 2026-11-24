@@ -176,53 +176,58 @@ export function findFirstFailure(attempts, options = {}) {
     ? options.logsByJobId
     : (job) => (options.logsByJobId && job?.id !== undefined ? options.logsByJobId[job.id] ?? null : null);
 
+  const candidates = [];
   for (const entry of ordered) {
     const failedJobs = (entry.jobs ?? [])
       .filter((job) => job.status === "completed" && FAILURE_CONCLUSIONS.has(job.conclusion));
-    if (failedJobs.length === 0) continue;
-
-    const lowestTier = Math.min(...failedJobs.map((job) => failureTier(job.name)));
-    const candidates = failedJobs
-      .filter((job) => failureTier(job.name) === lowestTier)
-      .map((job, index) => {
-        const step = (job.steps ?? []).find((candidate) => STEP_FAILURE_CONCLUSIONS.has(candidate.conclusion)) ?? null;
-        const failedAt = timestampMs(step?.completed_at ?? step?.started_at ?? job.completed_at ?? job.started_at);
-        return { job, step, failedAt, index };
-      })
-      .sort((a, b) => a.failedAt - b.failedAt || a.index - b.index);
-
-    const { job, step } = candidates[0];
-    const log = getLog(job);
-    const currentBlockingFailures = currentJobs.some(
-      (candidate) => candidate.status === "completed"
-        && FAILURE_CONCLUSIONS.has(candidate.conclusion)
-        && failureTier(candidate.name) < 2,
-    );
-    const sameJobFailedAgain = currentJobs.some(
-      (candidate) => candidate.status === "completed"
-        && candidate.name === job.name
-        && FAILURE_CONCLUSIONS.has(candidate.conclusion),
-    );
-    const currentHasSuccess = currentJobs.some(
-      (candidate) => candidate.status === "completed" && candidate.conclusion === "success",
-    );
-    const rerunPassed = entry.attempt < currentAttempt && !currentBlockingFailures && !sameJobFailedAgain && currentHasSuccess;
-
-    return {
-      attempt: entry.attempt,
-      currentAttempt,
-      rerunPassed,
-      job: job.name,
-      jobId: job.id ?? null,
-      conclusion: job.conclusion,
-      step: step?.name ?? null,
-      stepNumber: step?.number ?? null,
-      failedTest: extractFirstFailedTest(log),
-      url: stepUrl(job.html_url, step),
-      phases: extractPhaseTimings(log),
-    };
+    for (const [index, job] of failedJobs.entries()) {
+      const step = (job.steps ?? []).find((candidate) => STEP_FAILURE_CONCLUSIONS.has(candidate.conclusion)) ?? null;
+      const failedAt = timestampMs(step?.completed_at ?? step?.started_at ?? job.completed_at ?? job.started_at);
+      candidates.push({
+        attempt: entry.attempt,
+        tier: failureTier(job.name),
+        job,
+        step,
+        failedAt,
+        index,
+      });
+    }
   }
-  return null;
+  if (candidates.length === 0) return null;
+
+  candidates.sort(
+    (a, b) => a.tier - b.tier || a.attempt - b.attempt || a.failedAt - b.failedAt || a.index - b.index,
+  );
+  const { attempt, job, step } = candidates[0];
+  const log = getLog(job);
+  const currentBlockingFailures = currentJobs.some(
+    (candidate) => candidate.status === "completed"
+      && FAILURE_CONCLUSIONS.has(candidate.conclusion)
+      && failureTier(candidate.name) < 2,
+  );
+  const sameJobFailedAgain = currentJobs.some(
+    (candidate) => candidate.status === "completed"
+      && candidate.name === job.name
+      && FAILURE_CONCLUSIONS.has(candidate.conclusion),
+  );
+  const currentHasSuccess = currentJobs.some(
+    (candidate) => candidate.status === "completed" && candidate.conclusion === "success",
+  );
+  const rerunPassed = attempt < currentAttempt && !currentBlockingFailures && !sameJobFailedAgain && currentHasSuccess;
+
+  return {
+    attempt,
+    currentAttempt,
+    rerunPassed,
+    job: job.name,
+    jobId: job.id ?? null,
+    conclusion: job.conclusion,
+    step: step?.name ?? null,
+    stepNumber: step?.number ?? null,
+    failedTest: extractFirstFailedTest(log),
+    url: stepUrl(job.html_url, step),
+    phases: extractPhaseTimings(log),
+  };
 }
 
 export function summarizeJobs(jobs, createdAt, options = {}) {
@@ -367,7 +372,9 @@ export function collectReport(env = process.env, execute = execFileSync) {
       const priorPages = api(`${runPrefix}/attempts/${prior}/jobs?per_page=100`, true);
       const priorJobs = priorPages.flatMap((page) => page.jobs);
       attempts.push({ attempt: prior, jobs: priorJobs });
-      if (findFirstFailure([{ attempt: prior, jobs: priorJobs }])) break;
+      if (priorJobs.some((job) => job.status === "completed" && FAILURE_CONCLUSIONS.has(job.conclusion) && failureTier(job.name) === 0)) {
+        break;
+      }
     } catch {
       // Keep generating the report even if an earlier attempt's jobs cannot be read.
     }

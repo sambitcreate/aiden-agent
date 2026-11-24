@@ -249,6 +249,74 @@ test("report surfaces attempt 1 first failure even when attempt 2 rerun passed, 
   assert.equal(calls.filter(([, args]) => args.at(-1).endsWith("/logs")).length, 1);
 });
 
+test("blocking failure in a later attempt outranks an earlier non-blocking failure across reruns", () => {
+  const attempt1NonBlocking = makeJob({
+    id: 4301,
+    name: "iOS build and simulator tests (Xcode 27, non-blocking)",
+    conclusion: "failure",
+    completed_at: "2026-11-24T10:05:00Z",
+    html_url: "https://github.com/owner/repo/actions/runs/901/job/4301",
+    steps: [{ number: 8, name: "Run Aiden On The Go XCTest on the simulator", conclusion: "failure", completed_at: "2026-11-24T10:04:58Z" }],
+  });
+  const attempt2Blocking = makeJob({
+    id: 4302,
+    name: "Desktop tests (core-git)",
+    conclusion: "failure",
+    completed_at: "2026-11-24T10:15:00Z",
+    html_url: "https://github.com/owner/repo/actions/runs/901/job/4302",
+    labels: ["ubuntu-24.04"],
+    steps: [{ number: 7, name: "Run assigned regression tests and prerequisites", conclusion: "failure", completed_at: "2026-11-24T10:14:58Z" }],
+  });
+  const attempt3Passed = makeJob({
+    id: 4303,
+    name: "Desktop tests (core-git)",
+    conclusion: "success",
+    created_at: "2026-11-24T10:25:05Z",
+    started_at: "2026-11-24T10:25:10Z",
+    completed_at: "2026-11-24T10:28:10Z",
+    labels: ["ubuntu-24.04"],
+  });
+
+  // Attempt 1 non-blocking + attempt 2 blocking (current): reports attempt 2 blocking, rerunPassed=false.
+  const twoAttempts = findFirstFailure(
+    [
+      { attempt: 1, jobs: [attempt1NonBlocking] },
+      { attempt: 2, jobs: [attempt2Blocking] },
+    ],
+    { currentAttempt: 2, currentJobs: [attempt2Blocking] },
+  );
+  assert.equal(twoAttempts.job, "Desktop tests (core-git)");
+  assert.equal(twoAttempts.attempt, 2);
+  assert.equal(twoAttempts.rerunPassed, false);
+
+  // Across 3 attempts in collectReport, attempt 1's non-blocking failure must not stop scanning attempt 2.
+  const execute = (_command, args) => {
+    const endpoint = args.at(-1);
+    if (endpoint === "repos/owner/repo/actions/runs/901/attempts/3") {
+      return JSON.stringify({ run_started_at: "2026-11-24T10:25:00Z" });
+    }
+    if (endpoint === "repos/owner/repo/actions/runs/901/attempts/3/jobs?per_page=100") {
+      return JSON.stringify([{ jobs: [attempt3Passed] }]);
+    }
+    if (endpoint === "repos/owner/repo/actions/runs/901/attempts/1/jobs?per_page=100") {
+      return JSON.stringify([{ jobs: [attempt1NonBlocking] }]);
+    }
+    if (endpoint === "repos/owner/repo/actions/runs/901/attempts/2/jobs?per_page=100") {
+      return JSON.stringify([{ jobs: [attempt2Blocking] }]);
+    }
+    if (endpoint === "repos/owner/repo/actions/jobs/4302/logs") {
+      return "not ok 1 - rejects stale lock\n";
+    }
+    throw new Error(`Unexpected endpoint: ${endpoint}`);
+  };
+  const report = collectReport(
+    { GITHUB_REPOSITORY: "owner/repo", GITHUB_RUN_ID: "901", GITHUB_RUN_ATTEMPT: "3" },
+    execute,
+  );
+  assert.match(report, /\[Desktop tests \(core-git\)\]\(https:\/\/github\.com\/owner\/repo\/actions\/runs\/901\/job\/4302#step:7:1\) \(`failure`, attempt 2 — rerun passed on attempt 3\)/u);
+  assert.match(report, /\*\*First failed test:\*\* `rejects stale lock`/u);
+});
+
 test("report on green attempt 1 paginates current attempt only and validates coordinates", () => {
   const calls = [];
   const execute = (command, args) => {
