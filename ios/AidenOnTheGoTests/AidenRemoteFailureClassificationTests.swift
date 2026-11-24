@@ -220,12 +220,12 @@ final class AidenRemoteFailureClassificationTests: XCTestCase {
 
     func testTier2CachedRejectionLedgerSitesAgreeAndNeverDropKeysOnCancellationOrInFlight() throws {
         let gitModel = AidenWorkspaceGitModel()
-        let tier2Sites: [(String, (Error) -> Bool)] = [
+        let tier2Sites: [(String, @MainActor (Error) -> Bool)] = [
             ("cachedRejectionLedger", { AidenRemoteFailureClassification.isAmbiguous($0, policy: .cachedRejectionLedger) }),
-            ("AidenRemoteCoordinator.isAmbiguousMutationError", AidenRemoteCoordinator.isAmbiguousMutationError),
-            ("AidenScheduledTasksModel.isAmbiguous", AidenScheduledTasksModel.isAmbiguous),
+            ("AidenRemoteCoordinator.isAmbiguousMutationError", { AidenRemoteCoordinator.isAmbiguousMutationError($0) }),
+            ("AidenScheduledTasksModel.isAmbiguous", { AidenScheduledTasksModel.isAmbiguous($0) }),
             ("AidenWorkspaceGitModel.shouldRetainForReconciliation", { gitModel.shouldRetainForReconciliation($0) }),
-            ("AidenChatForkAttempt.outcomeIsUnknown", AidenChatForkAttempt.outcomeIsUnknown(after:)),
+            ("AidenChatForkAttempt.outcomeIsUnknown", { AidenChatForkAttempt.outcomeIsUnknown(after: $0) }),
         ]
 
         let mustRetain: [(String, Error)] = [

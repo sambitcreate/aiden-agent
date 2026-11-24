@@ -207,8 +207,18 @@ struct AidenDurablePendingMutation<Attempt: AidenDurablePendingAttempt> {
     /// `.uncertain(attempt)` -> `.inFlight(attempt, previouslyUnknown: true)`.
     mutating func beginRetry(
         now: Date = Date(),
+        policy: ReplayPolicy = .bounded()
+    ) -> RetryStart {
+        beginRetry(now: now, policy: policy) { _ in .saved }
+    }
+
+    /// Evaluates the replay age policy, runs `persist` before transitioning
+    /// `.uncertain(attempt)` -> `.inFlight(attempt, previouslyUnknown: true)`,
+    /// and fails closed to `.storageBlocked(retained: attempt)` if persistence fails.
+    mutating func beginRetry(
+        now: Date = Date(),
         policy: ReplayPolicy = .bounded(),
-        persist: ((_ pending: Attempt) -> PersistOutcome)? = nil
+        persist: (_ pending: Attempt) -> PersistOutcome
     ) -> RetryStart {
         guard canWrite, case let .uncertain(attempt) = phase else {
             return .unavailable
@@ -217,19 +227,16 @@ struct AidenDurablePendingMutation<Attempt: AidenDurablePendingAttempt> {
         guard Self.allowsReplay(age: age, policy: policy) else {
             return .expired(attempt)
         }
-        if let persist {
-            switch persist(attempt) {
-            case .saved:
-                break
-            case .rejectedBeforeWrite:
-                return .rejectedBeforeWrite
-            case .storageFailed:
-                phase = .storageBlocked(retained: attempt)
-                return .storageBlocked
-            }
+        switch persist(attempt) {
+        case .saved:
+            phase = .inFlight(attempt: attempt, previouslyUnknown: true)
+            return .started(attempt)
+        case .rejectedBeforeWrite:
+            return .rejectedBeforeWrite
+        case .storageFailed:
+            phase = .storageBlocked(retained: attempt)
+            return .storageBlocked
         }
-        phase = .inFlight(attempt: attempt, previouslyUnknown: true)
-        return .started(attempt)
     }
 
     /// Settles the current pending attempt (either from an accepted transport

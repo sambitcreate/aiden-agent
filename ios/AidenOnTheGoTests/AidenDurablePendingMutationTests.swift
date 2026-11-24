@@ -256,4 +256,47 @@ final class AidenDurablePendingMutationTests: XCTestCase {
         XCTAssertEqual(engine.pending, attempt)
         XCTAssertFalse(engine.canWrite)
     }
+
+    private func echoOutcome(
+        _ outcome: AidenDurablePendingMutation<TestDurableAttempt>.PersistOutcome
+    ) -> AidenDurablePendingMutation<TestDurableAttempt>.PersistOutcome {
+        outcome
+    }
+
+    func testBeginRetryWithPersistClosureIsNonEscapingAndFailsClosed() {
+        let createdAt = Date(timeIntervalSince1970: 200_000)
+        let attempt = TestDurableAttempt(id: UUID(), createdAt: createdAt, payload: "retry-persist")
+        var engine = AidenDurablePendingMutation<TestDurableAttempt>(restoredAttempt: attempt)
+
+        var persisted: [TestDurableAttempt] = []
+        let rejected = engine.beginRetry(
+            now: createdAt.addingTimeInterval(10),
+            policy: .bounded(),
+            persist: {
+                persisted.append($0)
+                return echoOutcome(.rejectedBeforeWrite)
+            }
+        )
+        XCTAssertEqual(rejected, .rejectedBeforeWrite)
+        XCTAssertEqual(persisted, [attempt])
+        XCTAssertEqual(engine.phase, .uncertain(attempt: attempt))
+
+        let started = engine.beginRetry(
+            now: createdAt.addingTimeInterval(20),
+            persist: { _ in echoOutcome(.saved) }
+        )
+        XCTAssertEqual(started, .started(attempt))
+        XCTAssertEqual(engine.phase, .inFlight(attempt: attempt, previouslyUnknown: true))
+
+        engine.markUncertain(matching: attempt.id)
+        let blocked = engine.beginRetry(
+            now: createdAt.addingTimeInterval(30),
+            policy: .bounded(),
+            persist: { _ in echoOutcome(.storageFailed) }
+        )
+        XCTAssertEqual(blocked, .storageBlocked)
+        XCTAssertEqual(engine.phase, .storageBlocked(retained: attempt))
+        XCTAssertEqual(engine.pending, attempt)
+        XCTAssertFalse(engine.canWrite)
+    }
 }
