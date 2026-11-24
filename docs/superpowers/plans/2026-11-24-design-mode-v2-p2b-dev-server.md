@@ -606,39 +606,39 @@ It keeps `DesignModeConsent`'s rules: a 2-minute timeout, at most 16 pending, an
 
 ### Task 0: Baseline
 
-- [ ] Check the base: `git log --oneline -5` must show DM's commits on top of PR #911. Confirm that these exist before any change:
+- [x] Check the base: `git log --oneline -5` must show DM's commits on top of PR #911. Confirm that these exist before any change:
   - `main/services/design-canvas/canvas-config.ts` with `parseCanvasConfig` (returning `null` for an unknown `version`), `parseCanvasConfigObject`, `readCanvasConfigText`, `readCanvasConfig`, `inspectCanvasConfig`, `configuredRoots`, `describedRoots`, `isSafeWorkspaceRelativePath`, and `script?` on `CanvasConfigApp`;
   - `designLiveEnabled` in `main/services/studio/feature-flags.ts`;
   - `designLive` in `llm-client.ts`;
   - `docs/design-mode.md`.
 
   If one is missing, stop and report: 2b builds on DM.
-- [ ] Run `npm run build:native:c`. `write_file`'s pinned writer, which Task 5 reuses, needs the native file-mutator helper, and a fresh worktree doesn't have it.
-- [ ] Run `npm run test:design-mode`, `npm run test:follow-through` and `npx tsx --test main/services/follow-through/background-jobs.test.ts main/services/follow-through/listening-ports.test.ts main/services/approval-gate/workspace-tool-approval.test.ts main/services/studio/feature-flags.test.ts main/services/design-canvas/canvas-config.test.ts main/services/analytics/analytics-feature-reports.test.ts`. Note the pass counts. All must pass.
+- [x] Run `npm run build:native:c`. `write_file`'s pinned writer, which Task 5 reuses, needs the native file-mutator helper, and a fresh worktree doesn't have it.
+- [x] Run `npm run test:design-mode`, `npm run test:follow-through` and `npx tsx --test main/services/follow-through/background-jobs.test.ts main/services/follow-through/listening-ports.test.ts main/services/approval-gate/workspace-tool-approval.test.ts main/services/studio/feature-flags.test.ts main/services/design-canvas/canvas-config.test.ts main/services/analytics/analytics-feature-reports.test.ts`. Note the pass counts. All must pass.
 
 ### Task 1: The flag, from DM
 
 **Files:**
 - Modify (only if needed): `main/services/studio/feature-flags.ts`, `main/services/studio/feature-flags.test.ts`
 
-- [ ] **Step 1:** Read DM's `designLiveEnabled` tests. Add any that are missing for the binding definition:
+- [x] **Step 1:** Read DM's `designLiveEnabled` tests. Add any that are missing for the binding definition:
   - `yes`, `on`, ` TRUE ` and `On` are on;
   - `0`, `no` and `""` are off;
   - it's off whenever `AIDEN_DESIGN_MODE=0`;
   - `studioCapabilities` reports `designLive`.
 
   If DM's tests cover all of them, add nothing and go to Step 4.
-- [ ] **Step 2:** Run `npx tsx --test main/services/studio/feature-flags.test.ts`. Expected: FAIL only for what's missing.
-- [ ] **Step 3:** Fix the helper to the binding definition if it differs; never add a second helper. Add `designLive` to `studioCapabilities` and its renderer type if DM didn't.
-- [ ] **Step 4:** Rerun, then `npx tsc --noEmit -p .`. Expected: PASS.
-- [ ] **Step 5:** Commit `feat(design): live-app flag capabilities` (skip if nothing changed).
+- [x] **Step 2:** Run `npx tsx --test main/services/studio/feature-flags.test.ts`. Expected: FAIL only for what's missing.
+- [x] **Step 3:** Fix the helper to the binding definition if it differs; never add a second helper. Add `designLive` to `studioCapabilities` and its renderer type if DM didn't.
+- [x] **Step 4:** Rerun, then `npx tsc --noEmit -p .`. Expected: PASS.
+- [x] **Step 5:** Commit `feat(design): live-app flag capabilities` (skip if nothing changed).
 
 ### Task 2: Background jobs get a design owner
 
 **Files:**
 - Modify: `main/services/follow-through/background-jobs.ts`, `background-jobs.test.ts`, `follow-through-main.ts`
 
-- [ ] **Step 1: Write failing tests** in `background-jobs.test.ts`, with real spawns of `process.execPath` scripts as the file already does:
+- [x] **Step 1: Write failing tests** in `background-jobs.test.ts`, with real spawns of `process.execPath` scripts as the file already does:
   - `a design job runs its argv without a shell`. Args `["-e", "console.log(process.argv.slice(1).join('|'))", "a b", "$(echo x)", ";"]` print `a b|$(echo x)|;`;
   - `a design job is invisible to every chat-keyed method`. After `startDesign`, these find nothing for any chat id, including `""` and the job's `workspaceId`: `list(c)`, `get(c, id)`, `read(c, id)`, `settle(c, id, 0)`, `stop(c, id, …)`, `runningCount(c)` and `hasSettleStoppable(c)`. `stopChat(c, …)` leaves it running;
   - `a design job never calls onEnded or onChange, from its end, a port scan or finished-job eviction, and calls onDesignChange`. Drive `scanPorts()` with a fake `listeningPorts`, and overflow the finished cap;
@@ -649,22 +649,22 @@ It keeps `DesignModeConsent`'s rules: a 2-minute timeout, at most 16 pending, an
   - `readDesignLog returns the bytes after a cursor and the next cursor`. Two reads in a row join to the output with nothing lost;
   - `a chat job past the log cap still stops with output-limit`, unchanged;
   - `stopDesign ends the group, children included`. The script spawns a child that ignores SIGTERM. After `stopDesign` resolves, the child's pid is gone.
-- [ ] **Step 2:** Run `npx tsx --test main/services/follow-through/background-jobs.test.ts`. Expected: FAIL.
-- [ ] **Step 3: Implement.**
+- [x] **Step 2:** Run `npx tsx --test main/services/follow-through/background-jobs.test.ts`. Expected: FAIL.
+- [x] **Step 3: Implement.**
   - Keep `JobRecord.owner`. Chat jobs get `{ kind: "chat", chatId }` from `start` and `adopt`. Guard every chat-keyed method on `owner.kind === "chat"`.
   - Add `startDesign` (sharing `start`'s body, with `shell: false`), `getDesign`, `readDesignLog`, `stopDesign`, `listDesign`, `onDesignChange` and `MAX_RUNNING_DESIGN_JOBS`.
   - `finish`, `finishAdopted`, `scanPorts` (`:871`) and `forgetOldFinished` (`:967-969`) call `onDesignChange` instead of `onEnded` or `onChange` for design jobs. `forgetOldFinished` keeps at most 8 finished design jobs, apart from chats.
   - `capture` rotates design logs, and tracks `oldestKeptByte`.
   - In `follow-through-main.ts`, pass `onDesignChange` through a listener set (`designJobListeners`), so `design-canvas` can subscribe without an import cycle.
-- [ ] **Step 4:** Rerun, plus `npm run test:follow-through`. Expected: PASS, with the existing tests unedited.
-- [ ] **Step 5:** Commit `feat(jobs): a design job owner, argv spawning and a rotating log`.
+- [x] **Step 4:** Rerun, plus `npm run test:follow-through`. Expected: PASS, with the existing tests unedited.
+- [x] **Step 5:** Commit `feat(jobs): a design job owner, argv spawning and a rotating log`.
 
 ### Task 3: Socket addresses, the job's process tree, and a reader that fails closed
 
 **Files:**
 - Modify: `main/services/follow-through/listening-ports.ts`, `listening-ports.test.ts`, `background-jobs.ts` (`designSockets`), `background-jobs.test.ts`
 
-- [ ] **Step 1: Write failing tests.**
+- [x] **Step 1: Write failing tests.**
   - **Parsers** (captured text):
     - `lsof sockets keep their address`. `n127.0.0.1:5173`, `n*:3000`, `n[::1]:4321`, `n[::]:8000`. The reader passes `-n -P`;
     - `/proc tcp and tcp6 rows give addresses`. `0100007F:1435` gives 127.0.0.1:5173 and `00000000:0BB8` gives 0.0.0.0:3000; also the tcp6 loopback, `::` and IPv4-mapped `::ffff:127.0.0.1` rows;
@@ -678,15 +678,15 @@ It keeps `DesignModeConsent`'s rules: a 2-minute timeout, at most 16 pending, an
   - **`designSockets`**:
     - `three jobs cost one ps and one lsof call`. Injected exec counts the calls; the lsof argv has one `-p` with every pid of the three trees;
     - (real spawn, in `background-jobs.test.ts`) `a design job's sockets include a listener started by a setsid grandchild, with its address`. A `node:net` server on `127.0.0.1:0` inside a `setsid` child; skipped where `setsid` is missing.
-- [ ] **Step 2:** Run both files. Expected: FAIL.
-- [ ] **Step 3: Implement.**
+- [x] **Step 2:** Run both files. Expected: FAIL.
+- [x] **Step 3: Implement.**
   - The socket parsers.
   - `processTable()`: one `ps -A -o pid=,ppid=,pgid=` call, 2 s timeout, 4 MiB buffer; and the pure `jobProcessTree(rows, pgid)`.
   - `listeningSocketsByProcess(pids)`, one lsof call for all pids (or one `/proc` pass), reporting failures.
   - `designSockets(jobIds)`, which runs one `processTable()`, builds each job's tree, makes one `listeningSocketsByProcess` call for the union, and splits the result per job.
   - Aiden's own sockets are left out, as `portsOfProcesses` does. The ports-only functions become wrappers that keep today's "nothing on failure" behaviour for chat jobs.
-- [ ] **Step 4:** Rerun. Expected: PASS.
-- [ ] **Step 5:** Commit `feat(jobs): a design job's sockets with addresses, read fail-closed`.
+- [x] **Step 4:** Rerun. Expected: PASS.
+- [x] **Step 5:** Commit `feat(jobs): a design job's sockets with addresses, read fail-closed`.
 
 ### Task 4: The shared contract and the pure launch core
 
@@ -697,7 +697,7 @@ It keeps `DesignModeConsent`'s rules: a 2-minute timeout, at most 16 pending, an
   - `app-launch-core.test.ts` in `test:design-mode` and `core-git`;
   - `design-app.test.ts` in `test:design-mode` and `renderer-other`.
 
-- [ ] **Step 1: Write failing tests.**
+- [x] **Step 1: Write failing tests.**
   - **Launch plan** (D7), from hand-built `DetectedApp`s:
     - `a Vite script gets --host 127.0.0.1 --port --strictPort, after -- for npm and bare for pnpm`;
     - `react-router dev and remix vite:dev get --strictPort; astro, nuxt, angular and vinxi do not`;
@@ -737,10 +737,10 @@ It keeps `DesignModeConsent`'s rules: a 2-minute timeout, at most 16 pending, an
     - `every problem has a fixed message that never contains its tail`. Fixtures put a marker string in `tail`;
     - `manager-missing names the manager; exposed and install-outside-workspace say how to fix it`;
     - `consentDisplayText escapes every class in D5`. Cases: `"dev‮rm"`, `"a​b"`, `"x\u0007"`, `"a\rb"`, `"a b"`, `"a b"`, `"ㅤ"`, `"ﾠ"`, `"ᅟᅠ"`, `"a️"` and `"a\u{E0100}"`. Plain text and `\n` stay as they are.
-- [ ] **Step 2:** Run both files. Expected: FAIL.
-- [ ] **Step 3:** Implement. Move the two type aliases into the shared file; `app-server-core.ts` re-exports them.
-- [ ] **Step 4:** Rerun, `npx tsc --noEmit -p .`, `npm run test:ci-policy`. Expected: PASS.
-- [ ] **Step 5:** Commit `feat(design): launch plan, readiness and the live-app contract`.
+- [x] **Step 2:** Run both files. Expected: FAIL.
+- [x] **Step 3:** Implement. Move the two type aliases into the shared file; `app-server-core.ts` re-exports them.
+- [x] **Step 4:** Rerun, `npx tsc --noEmit -p .`, `npm run test:ci-policy`. Expected: PASS.
+- [x] **Step 5:** Commit `feat(design): launch plan, readiness and the live-app contract`.
 
 ### Task 5: Launch fingerprint, the records file and the canvas.json writer
 
@@ -749,7 +749,7 @@ It keeps `DesignModeConsent`'s rules: a 2-minute timeout, at most 16 pending, an
 - Modify: `main/services/design-canvas/canvas-config.ts`, `canvas-config.test.ts` (DM's), `main/services/coding-tools.ts` (export `writeConfinedWorkspaceText`), `coding-tools.test.ts`
 - Register: the new tests in `test:design-mode` and `core-git`
 
-- [ ] **Step 1: Write failing tests** (temp folders, real disk).
+- [x] **Step 1: Write failing tests** (temp folders, real disk).
   - **Fingerprint reads:**
     - `the surface lists the script, pre and post texts, both roots' install lifecycle scripts, and the files present`;
     - `rc and workspace files in every folder from the app root to the lockfile folder are hashed`. A pnpm monorepo where the member has an `.npmrc` and the root has `pnpm-workspace.yaml` and `.pnpmfile.cjs`;
@@ -782,15 +782,15 @@ It keeps `DesignModeConsent`'s rules: a 2-minute timeout, at most 16 pending, an
     - `with followLinks false, a symlinked parent folder or target is refused, even one pointing inside the root, and the target is unchanged`;
     - `with followLinks false, a link swapped in between the check and the commit is still refused`, through `testObserver.beforeWriteCommit`;
     - `write_file's behaviour (following in-root links) is unchanged`.
-- [ ] **Step 2:** Run the files. Expected: FAIL.
-- [ ] **Step 3: Implement.**
+- [x] **Step 2:** Run the files. Expected: FAIL.
+- [x] **Step 3: Implement.**
   - `hashBounded` and `readLaunchSurface`, reusing 2a's `readBounded` for package.json, and `yaml` for `yarnPath`.
   - `createDesignAppRecords` on `writeJsonAtomic` with a serial queue.
   - `writeConfinedWorkspaceText`, from `write_file`'s internals (`pinWorkspaceRoot`, `resolveWritableInRoot`, `assertAgentMayWriteConfigPath`, `readReplacedFile`, `verifyWorkspaceRoot`, `commitPinnedWrite`), with the file's current SHA-256 checked against `expectedSha256`.
   - **`followLinks: false`.** `resolveWritableInRoot` (`coding-tools.ts:563-598`) resolves the parents and the target to their real paths, so on its own it writes through a link. Add an option: with `followLinks: false`, it `lstat`s every existing component from the root to the target and refuses on any symbolic link. It then returns the unresolved relative path, which goes to `commitPinnedWrite` so the native mutator creates folders and commits without following links. `write_file` keeps the default (`true`).
   - `saveCanvasConfigApp` on top of it: DM's `readCanvasConfigText` for the read, `inspectCanvasConfig` for the version check and `parseCanvasConfigObject` for the raw object, then a raw-JSON merge.
-- [ ] **Step 4:** Rerun, `npm run test:ci-policy`. Expected: PASS.
-- [ ] **Step 5:** Commit `feat(design): launch fingerprint, records and the canvas.json writer`.
+- [x] **Step 4:** Rerun, `npm run test:ci-policy`. Expected: PASS.
+- [x] **Step 5:** Commit `feat(design): launch fingerprint, records and the canvas.json writer`.
 
 ### Task 6: Port choice
 
@@ -798,16 +798,16 @@ It keeps `DesignModeConsent`'s rules: a 2-minute timeout, at most 16 pending, an
 - Create: `main/services/design-canvas/app-server/app-ports.ts`, `app-ports.test.ts`
 - Register: in `test:design-mode` and `core-git`
 
-- [ ] **Step 1: Write failing tests** (real sockets on loopback):
+- [x] **Step 1: Write failing tests** (real sockets on loopback):
   - `the sticky port is used when free`;
   - `a sticky port in use falls back to the framework default, then to an OS port`;
   - `a port held on the wildcard address counts as in use`;
   - `a port held on ::1 only counts as in use`. Skipped when the host has no IPv6 loopback;
   - `the probe finishes within a second when nothing answers`.
-- [ ] **Step 2:** Run. Expected: FAIL.
-- [ ] **Step 3:** Implement `chooseAppPort` and `defaultPortProbe`.
-- [ ] **Step 4:** Rerun. Expected: PASS.
-- [ ] **Step 5:** Commit `feat(design): pick a free loopback port for the app`.
+- [x] **Step 2:** Run. Expected: FAIL.
+- [x] **Step 3:** Implement `chooseAppPort` and `defaultPortProbe`.
+- [x] **Step 4:** Rerun. Expected: PASS.
+- [x] **Step 5:** Commit `feat(design): pick a free loopback port for the app`.
 
 ### Task 7: Visible-canvas presence
 
@@ -816,7 +816,7 @@ It keeps `DesignModeConsent`'s rules: a 2-minute timeout, at most 16 pending, an
   - main: `main/services/design-canvas/views.ts`, `views.test.ts`, `main/handlers/design-canvas.ts` (parse `visible`), `main/handlers/design-canvas.test.ts`;
   - renderer: `renderer/design/use-design-view.ts`, `renderer/design/use-design-view.test.tsx`.
 
-- [ ] **Step 1: Write failing tests.**
+- [x] **Step 1: Write failing tests.**
   - **Views:**
     - `onPresence fires with the workspace's visible count on mount, visibility change, unmount and unmountAll`. Two chats on one workspace;
     - `a hidden mounted canvas doesn't count`;
@@ -826,13 +826,13 @@ It keeps `DesignModeConsent`'s rules: a 2-minute timeout, at most 16 pending, an
   - **Renderer** (`use-design-view.test.tsx`):
     - `the stacked layout reports visible false when the Chat pane is shown and true when the Canvas pane is`;
     - `a hidden document reports visible false, and becoming visible reports true`. Stub `document.visibilityState` and dispatch `visibilitychange`.
-- [ ] **Step 2:** Run the files. Expected: FAIL.
-- [ ] **Step 3: Implement.**
+- [x] **Step 2:** Run the files. Expected: FAIL.
+- [x] **Step 3: Implement.**
   - The report field. A missing field means not visible, so an older renderer never keeps a server alive.
   - `visible(workspaceId)` and `onPresence`.
   - The renderer reads the stacked pane from the layout context and `document.visibilityState`, and reports on change. A throwing listener is logged and never breaks a report.
-- [ ] **Step 4:** Rerun, plus `npm run test:design-mode`. Expected: PASS.
-- [ ] **Step 5:** Commit `feat(design): report whether the canvas is visible`.
+- [x] **Step 4:** Rerun, plus `npm run test:design-mode`. Expected: PASS.
+- [x] **Step 5:** Commit `feat(design): report whether the canvas is visible`.
 
 ### Task 8: `DesignAppServers` and the consent broker
 
@@ -848,7 +848,7 @@ The tests use fakes for every dep:
 - a resolved `recoveryReady`;
 - an analytics recorder.
 
-- [ ] **Step 1: Write failing tests.**
+- [x] **Step 1: Write failing tests.**
   - **Consent broker** (`app-consent.test.ts`):
     - `a card goes to the owner's window and an answer from another window is refused`;
     - `a second request for a pending key joins it: one card, both callers get the answer`;
@@ -912,8 +912,8 @@ The tests use fakes for every dep:
     - `onOriginsChanged fires when a server starts and stops running`;
     - `logs pass the byte cursor through and cap at maxBytes`;
     - `snapshot lists candidates, described roots and every app's status with relative roots only`. No absolute path anywhere in the JSON.
-- [ ] **Step 2:** Run both files. Expected: FAIL.
-- [ ] **Step 3: Implement** the state machine of D2–D17:
+- [x] **Step 2:** Run both files. Expected: FAIL.
+- [x] **Step 3: Implement** the state machine of D2–D17:
   - a per-key promise queue;
   - one workspace admission per attempt, released at `running` or the end;
   - phase changes through one `setPhase`, which bumps `revision`, notifies `onStatus` and, for running changes, `onOriginsChanged`;
@@ -922,8 +922,8 @@ The tests use fakes for every dep:
   - a session set of served origins per workspace.
 
   Every external effect goes through `deps`.
-- [ ] **Step 4:** Rerun, `npx tsc --noEmit -p .`, `npm run test:ci-policy`. Expected: PASS.
-- [ ] **Step 5:** Commit `feat(design): DesignAppServers runs one dev server per app root`.
+- [x] **Step 4:** Rerun, `npx tsc --noEmit -p .`, `npm run test:ci-policy`. Expected: PASS.
+- [x] **Step 5:** Commit `feat(design): DesignAppServers runs one dev server per app root`.
 
 ### Task 9: Real processes: a fake dev server and the real Vite
 
@@ -950,7 +950,7 @@ The fixture is plain Node with no dependencies.
 
 Each test copies the fixture into a temp app root with a `package.json` (`"devDependencies": { "vite": "*" }`), so detection classifies it as `web`. Install tests add a `package-lock.json`, so the install command is `ci`.
 
-- [ ] **Step 1: Write failing tests.** They use the real `BackgroundJobs`, the real socket reader, the real port chooser, a temp userData records file and real timers. The readiness timer is a constructor option set to 5 s, and the grace period to 1 s.
+- [x] **Step 1: Write failing tests.** They use the real `BackgroundJobs`, the real socket reader, the real port chooser, a temp userData records file and real timers. The readiness timer is a constructor option set to 5 s, and the grace period to 1 s.
   - `a custom dev script starts on loopback and runs at http://127.0.0.1:<port>`. An HTTP GET to the origin answers 200;
   - `the real Vite starts through a node_modules symlink with --host, --port and --strictPort, and binds loopback only`. The temp app's `node_modules` is a symlink to the repo root's (which carries `vite`, as §7 plans for 3a), with `dev: "vite"`, an `index.html`, and npm as the real manager. The socket read shows only `127.0.0.1:<p>`;
   - `a wildcard listener is stopped as exposed`;
@@ -964,10 +964,10 @@ Each test copies the fixture into a temp app root with a `package.json` (`"devDe
   - `stop ends the server and its SIGTERM-ignoring child`;
   - `a first install runs fake-pm ci, writes the stamp, and the next start skips it`;
   - `CRA's address-in-use message is retried once on another port`.
-- [ ] **Step 2:** Run `npx tsx --test main/services/design-canvas/app-server/app-server-process.test.ts`. Expected: FAIL.
-- [ ] **Step 3:** Fix what the real processes show (timing, group kill, address reads on this host). The fake-dep tests in Task 8 stay the oracle for rules; this file proves the wiring.
-- [ ] **Step 4:** Rerun three times in a row on the host, then once in the Cua Space (`npm run test:e2e:space -- --run npx tsx --test main/services/design-canvas/app-server/app-server-process.test.ts`) for Linux `/proc` sockets. Expected: PASS each time. A failure that passes on rerun is a bug (AGENTS.md).
-- [ ] **Step 5:** Commit `test(design): dev-server lifecycle against a fake server and real Vite`.
+- [x] **Step 2:** Run `npx tsx --test main/services/design-canvas/app-server/app-server-process.test.ts`. Expected: FAIL.
+- [x] **Step 3:** Fix what the real processes show (timing, group kill, address reads on this host). The fake-dep tests in Task 8 stay the oracle for rules; this file proves the wiring.
+- [x] **Step 4:** Rerun three times in a row on the host, then once in the Cua Space (`npm run test:e2e:space -- --run npx tsx --test main/services/design-canvas/app-server/app-server-process.test.ts`) for Linux `/proc` sockets. Expected: PASS each time. A failure that passes on rerun is a bug (AGENTS.md).
+- [x] **Step 5:** Commit `test(design): dev-server lifecycle against a fake server and real Vite`.
 
 ### Task 10: The consent card
 
@@ -994,7 +994,7 @@ Before styling, review `GUI.md`, `docs/design-guide.md`, `docs/chatgpt-desktop-u
 - **Keyboard.** Focus lands on Not now, and Escape is Not now.
 - **Attach requests.** The card ignores `kind: "attach"` requests: 2c renders those.
 
-- [ ] **Step 1: Write failing tests** (Testing Library, a stub `designAppApi`):
+- [x] **Step 1: Write failing tests** (Testing Library, a stub `designAppApi`):
   - `the card shows the command, the install line, every script's text and the launch file names`;
   - `a script, app root or package name with a bidi override or a Hangul filler shows the escape, not the character`;
   - `a choose request says Allow saves the choice to .aiden/canvas.json`;
@@ -1002,14 +1002,14 @@ Before styling, review `GUI.md`, `docs/design-guide.md`, `docs/chatgpt-desktop-u
   - `a request for another chat waits until that chat is shown`, as `design-mode-consent.test.tsx` does;
   - `Escape answers Not now and focus starts on Not now`;
   - `a problem status from a person-started attempt shows one toast with the fixed message and never the tail`.
-- [ ] **Step 2:** Run `npx tsx --test renderer/design/design-app-consent.test.tsx`. Expected: FAIL.
-- [ ] **Step 3: Implement.**
+- [x] **Step 2:** Run `npx tsx --test renderer/design/design-app-consent.test.tsx`. Expected: FAIL.
+- [x] **Step 3: Implement.**
   - The card.
   - The preload channels: `designApp:consent`, `designApp:consentClosed`, `designApp:status` and the invoke channels.
   - The `designAppApi` wrappers.
   - The toast: it listens to `designApp:status`, and shows only for an app whose `startedBy` is `person`, once per `revision` with a new `problem` or `crashed`.
-- [ ] **Step 4:** Rerun, plus `npm run test:design-mode`. Expected: PASS.
-- [ ] **Step 5:** Commit `feat(design): the run-app consent card`.
+- [x] **Step 4:** Rerun, plus `npm run test:design-mode`. Expected: PASS.
+- [x] **Step 5:** Commit `feat(design): the run-app consent card`.
 
 ### Task 11: The `design_app` tool and its approval exception
 
@@ -1036,7 +1036,7 @@ The tool:
   - **Abort** stops the waiting, not the server.
   - **Budget.** A fifth `start`/`restart`/`choose` in one turn answers an error result without acting (D16).
 
-- [ ] **Step 1: Write failing tests.**
+- [x] **Step 1: Write failing tests.**
   - **Tool** (fake service):
     - `status lists apps with relative roots, 127.0.0.1 urls and fenced tails`;
     - `start passes by aiden, the turn's owner and permission, and returns running with the url`;
@@ -1052,8 +1052,8 @@ The tool:
     - `design_app is never judged and offers no Mac grant`;
     - `a PreToolUse hook block and a rules-page Block still block design_app`;
     - `a rules-page Ask on design_app still asks`.
-- [ ] **Step 2:** Run both files. Expected: FAIL.
-- [ ] **Step 3: Implement.**
+- [x] **Step 2:** Run both files. Expected: FAIL.
+- [x] **Step 3: Implement.**
   - **The exception.** In `workspace-tool-approval.ts`, add `REVIEWED_CARDLESS_TOOLS: ReadonlyMap<string, string>` with `design_app` and the reason "design-mode dev-server control: per-call approval skipped after workspace consent".
   - **Its decision.** For a tool in that map, `workspaceToolApproval` runs the hook and rules steps first. If neither blocks or asks, it returns `{ outcome: "allow", via: "reviewed-exception" }`. Widen `WorkspaceToolApproval`'s `via`, and update the callers that switch on `via` (log or ignore it like `hook-allow`).
   - **The offer.** In `llm-client.ts`, reuse DM's `designLive`. Offer `design_app` beside the canvas tools only when all of these hold:
@@ -1064,8 +1064,8 @@ The tool:
     List it in `windowOnlyToolNames` as the canvas tools are.
   - **`stillAvailable`** reuses the canvas tools' check (design mode on, same folder, permission not `none`), plus the flag.
   - **The card's owner** is `getOwner()`.
-- [ ] **Step 4:** Rerun, `npx tsc --noEmit -p .`, plus `npx tsx --test main/services/approval-gate/workspace-tool-approval.test.ts`. Expected: PASS.
-- [ ] **Step 5:** Commit `feat(design): design_app tool, a reviewed approval exception`.
+- [x] **Step 4:** Rerun, `npx tsc --noEmit -p .`, plus `npx tsx --test main/services/approval-gate/workspace-tool-approval.test.ts`. Expected: PASS.
+- [x] **Step 5:** Commit `feat(design): design_app tool, a reviewed approval exception`.
 
 ### Task 12: Production wiring and IPC
 
@@ -1079,7 +1079,7 @@ The tool:
   - `main/services/analytics/analytics-events.ts` and `main/services/analytics/analytics-feature-reports.test.ts`.
 - Register: `design-app.test.ts` in `test:design-mode` and `core-git`
 
-- [ ] **Step 1: Write failing tests.**
+- [x] **Step 1: Write failing tests.**
   - **IPC** (register and invoke, in the style of `main/handlers/design-canvas.test.ts`):
     - `every designApp handler refuses while the flag is off`;
     - `every designApp handler refuses a subframe sender`. A fake event whose `senderFrame` isn't the main frame;
@@ -1097,8 +1097,8 @@ The tool:
     - `design_app_started is sent with framework, manager and outcome`;
     - `it is sent without manager`;
     - `an unknown framework, manager or outcome, or any other property, is dropped`.
-- [ ] **Step 2:** Run. Expected: FAIL.
-- [ ] **Step 3: Implement.**
+- [x] **Step 2:** Run. Expected: FAIL.
+- [x] **Step 3: Implement.**
   - Build `designAppServers` in `design-canvas/main.ts` from the real deps:
     - `backgroundJobs`;
     - `detectWebApp` with `stopAt` set to home;
@@ -1128,8 +1128,8 @@ The tool:
     ```
 
     Append it after DM's rows.
-- [ ] **Step 4:** Rerun, `npm run test:design-mode`, `npm run test:follow-through`, `npx tsc --noEmit -p .`, `npm run lint`, `npm run test:ci-policy`. Expected: PASS.
-- [ ] **Step 5:** Commit `feat(design): wire live apps into design mode behind the flag`.
+- [x] **Step 4:** Rerun, `npm run test:design-mode`, `npm run test:follow-through`, `npx tsc --noEmit -p .`, `npm run lint`, `npm run test:ci-policy`. Expected: PASS.
+- [x] **Step 5:** Commit `feat(design): wire live apps into design mode behind the flag`.
 
 ### Task 13: E2E and screenshots
 
@@ -1137,7 +1137,7 @@ The tool:
 - Create: `tests/e2e/design-app-server.spec.ts`
 - Modify: `scripts/ci-e2e-spec-map.json` (map the spec to `main/services/design-canvas/app-server/`, `main/handlers/design-app`, `renderer/design/design-app-consent`, `renderer/shared/design-app.ts`, `main/services/follow-through/background-jobs.ts`, `main/services/follow-through/listening-ports.ts` and `tests/fixtures/design-app-server/`)
 
-- [ ] **Step 1: Write the spec.**
+- [x] **Step 1: Write the spec.**
   - **Launch.** `AIDEN_EXPERIMENTAL_DESIGN_LIVE=1` and `AIDEN_E2E_DESIGN_APP_GRACE_MS=2000`.
   - **Workspace.** A temp copy of `tests/fixtures/design-app-server/` with an empty `node_modules/` (so no install) and `dev: "node server.mjs"`. The real `npm` from the environment runs it.
   - **Cases:**
@@ -1146,8 +1146,8 @@ The tool:
     - `showing the Chat pane in the stacked layout, or leaving design mode, stops the server after the grace period`;
     - `a second chat in the same workspace turning design mode on doesn't start a second server or ask again`.
   - **Screenshots:** `1440-design-app-consent-{light,dark}.png` in the test's output folder.
-- [ ] **Step 2:** Run `npm run test:e2e:space -- tests/e2e/design-app-server.spec.ts`. Then run it on the host with `npx playwright test tests/e2e/design-app-server.spec.ts`: the socket reader has a darwin branch (lsof), which the Linux Space doesn't exercise. Expected: PASS both.
-- [ ] **Step 3:** Commit `test(design): live app start and stop E2E`.
+- [x] **Step 2:** Run `npm run test:e2e:space -- tests/e2e/design-app-server.spec.ts`. Then run it on the host with `npx playwright test tests/e2e/design-app-server.spec.ts`: the socket reader has a darwin branch (lsof), which the Linux Space doesn't exercise. Expected: PASS both.
+- [x] **Step 3:** Commit `test(design): live app start and stop E2E`.
 
 ### Task 14: Docs, memory and spec amendments
 
@@ -1157,7 +1157,7 @@ The tool:
 - `.memory/design-mode.md`
 - this plan
 
-- [ ] **Step 1: `docs/design-mode.md`.** Append a "Live apps (experimental)" section after DM's. It covers:
+- [x] **Step 1: `docs/design-mode.md`.** Append a "Live apps (experimental)" section after DM's. It covers:
   - the flag;
   - that turning design mode on starts the workspace's web app after an approval card, and when the card comes back;
   - that installs use the package registry, and never run in a parent repo;
@@ -1167,8 +1167,8 @@ The tool:
   - the 60 s stop when the canvas isn't visible, and the other stops;
   - that monorepos pick apps once, saved as `script` in `.aiden/canvas.json` `apps`;
   - macOS and Linux only.
-- [ ] **Step 2: `docs/analytics.md`.** After DM's rows, add `design_app_started`: "A design-mode app start that got past the approval card settled". List `framework`, `manager` (left out when none was resolved) and `outcome`, with their values.
-- [ ] **Step 3: Spec amendments.** Add "### Phase 2b amendments (2026-11-24)" with exactly these numbers (DM uses S33–S44):
+- [x] **Step 2: `docs/analytics.md`.** After DM's rows, add `design_app_started`: "A design-mode app start that got past the approval card settled". List `framework`, `manager` (left out when none was resolved) and `outcome`, with their values.
+- [x] **Step 3: Spec amendments.** Add "### Phase 2b amendments (2026-11-24)" with exactly these numbers (DM uses S33–S44):
   - **S25. Design jobs (2b).** A design owner with its own cap of 8 and its own read, stop and socket methods. The log rotates at 25 MB and keeps 50 MB; reads take byte offsets. `scanPorts` and finished-job eviction never notify a chat. The shared job types and Remote are unchanged.
   - **S26. Consent detail (2b).** The fingerprint covers:
     - both roots' install lifecycle scripts;
@@ -1207,8 +1207,8 @@ The tool:
   - **S32. Phase split (2b, 2c).** 2b owns the `design_app` tool and the `designApp:*` IPC (all through `rendererDocumentOwner`), the `launch | attach` consent union and the attach problems. 2c adds only UI and attaching.
 
   Update the status line at the top to name the 2b plan.
-- [ ] **Step 4: Plan index.** Extend the design mode v2 row in `docs/plans/README.md`: "Phase 2b (the dev server process) planned 2026-11-24, stacked on DM, plan [p2b](../superpowers/plans/2026-11-24-design-mode-v2-p2b-dev-server.md)". Add the PR number and "in review" when the PR opens.
-- [ ] **Step 5: Memory.** Add a "v2 Phase 2b: dev server" section to `.memory/design-mode.md`, covering:
+- [x] **Step 4: Plan index.** Extend the design mode v2 row in `docs/plans/README.md`: "Phase 2b (the dev server process) planned 2026-11-24, stacked on DM, plan [p2b](../superpowers/plans/2026-11-24-design-mode-v2-p2b-dev-server.md)". Add the PR number and "in review" when the PR opens.
+- [x] **Step 5: Memory.** Add a "v2 Phase 2b: dev server" section to `.memory/design-mode.md`, covering:
   - the module layout;
   - the design owner;
   - the consent fingerprint and where records live;
@@ -1222,12 +1222,12 @@ The tool:
   - the test files and lanes.
 
   Update the v2 summary line at the top.
-- [ ] **Step 6: Stale claims.** Run `rg -n "design_app|DesignAppServers|AIDEN_EXPERIMENTAL_DESIGN_LIVE|localhost:<port>|background job" README.md PRODUCT.md docs .memory AGENTS.md packages/cli/README.md` and fix what 2b made wrong. Expected:
+- [x] **Step 6: Stale claims.** Run `rg -n "design_app|DesignAppServers|AIDEN_EXPERIMENTAL_DESIGN_LIVE|localhost:<port>|background job" README.md PRODUCT.md docs .memory AGENTS.md packages/cli/README.md` and fix what 2b made wrong. Expected:
   - `README.md` and `PRODUCT.md` describe shipped defaults, and live apps are off by default, so no edit (Phase 7 updates them);
   - `docs/keyboard.md` has nothing new;
   - onboarding doesn't change while the feature is flagged: S6 moves the tile and art to Phase 7, so onboarding changes once, at launch;
   - `host-platform-capabilities.ts` needs no change (2b relies on `backgroundJobs`, true on darwin and linux).
-- [ ] **Step 7:** Tick this plan's boxes, and commit `docs(design): Phase 2b docs, spec amendments and memory`.
+- [x] **Step 7:** Tick this plan's boxes, and commit `docs(design): Phase 2b docs, spec amendments and memory`.
 
 ## Verification
 
@@ -1315,3 +1315,60 @@ Each has the answer this plan uses. Q1, Q2, Q5 and Q8 were settled by the review
 7. **`.aiden/canvas.json` before 3b.** *Settled* (cross-phase decision 2): DM owns the reader; 2b adds `script` and `saveCanvasConfigApp`, which keeps every other field.
 8. **The E2E grace knob.** *Settled:* `AIDEN_E2E_DESIGN_APP_GRACE_MS`, read only when `!app.isPackaged`, as `AIDEN_ANALYTICS_DEBUG` is (`analytics-main.ts:51`), and clamped to 1–60 s.
 9. **Spec amendment numbers.** *Settled:* 2b uses S25–S32 and DM uses S33–S44.
+
+## As built (2026-11-24)
+
+Built on `t3/design-mode-v2-p2b` in plan order. Where the code differs from the text above, the code and this list win.
+
+**Interfaces adapted (Tasks 1–8).**
+- `launchPlan` takes an options object (`binDirs`, `providerKeys`, `platform`) and returns `run` as well as `extraArgs` and `env`. `readLaunchSurface` takes no toolchain. `hashBounded` also reports `{missing}`.
+- `saveCanvasConfigApp` takes write hooks, for its tests. `toolchainProblemMessage` moved to `renderer/shared/design-app.ts`, so 2c needs no main import. `scriptDevCommand` and `scriptTextWords` were added for the flag rules.
+- `listeningSocketsByProcess`' failure carries `byPid`. The ports-only functions are unchanged.
+- A missing `/proc/net/tcp6` fails closed. This is a risk on Linux kernels without IPv6.
+- The renderer capability is `designLive`.
+- `BackgroundJobs` gained `designTail(jobId)` for crash tails.
+- The consent broker's `request` takes `by` (only Aiden's request is silenced by a decline), and it gained `closeAll(prefix)`.
+- `DesignAppServersDeps` has `choosePort`, `osPort`, `launchEnv`, `platform`, `enabled`, `limits` and a `workspace` getter, instead of the plan's `ports` and `timers` names.
+- Readiness counts only IPv4 loopback (127.x) ports a process of the job holds.
+- Output resets the quiet timer at the next poll tick (at most 500 ms later), because output is deliberately not a job change event.
+- A choose always asks once per attempt.
+- Toolchain problems answer before any card, and analytics records `failed` (D17).
+- A card shown again after a repo change between the card and Allow says `changed`.
+
+**Task 9.**
+- `stopDesign` also finds the job tree's members that left its process group (`setsid`) by parent pid, before any signal, and signals them with the group. The setsid process test failed without this fix.
+- The fixture's address-in-use flag is `--fake-in-use-once=<file>`, so the retry succeeds.
+- The process tests use the real records file; the fake-dependency tests keep records in memory.
+- The Vite test links the repo's `node_modules` and asserts nothing installs.
+
+**Task 10.**
+- `designApp:status` and the `designApp:` invoke prefix were added in Task 12 with their send site and handlers. The IPC contract test requires every allowlisted notification to have a main send site and every prefix to have a handler.
+- The card's script wells use the `bg-control` token, because the `Callout` already uses `bg-well`.
+- Problem toasts are one `DesignAppProblemToasts` mounted beside the `Toaster` in `app.tsx`.
+- No toast is shown for `consent-declined`, `consent-unanswered`, `consent-unavailable` or `desktop-only`.
+
+**Task 11.**
+- Offering `design_app` in `llm-client.ts` moved to Task 12, because it needs the `designAppServers` singleton.
+- The gate exception runs `planActionGate` with only the hook verdict and the rules-page rule. Block and Ask keep the gate's own order, and a rules-page Allow also answers `reviewed-exception`. In Never ask mode, a rules-page Ask is pre-approved as it is for every tool.
+- The tool's statuses are `running`, `consent`, `installing`, `starting`, `declined`, `unanswered`, `unavailable`, `desktop-only`, `failed`, `crashed` and `stopped`. An aborted wait answers an error result.
+- Roots are checked against the snapshot. `choose` accepts candidates only; the other actions accept candidates, apps and chosen roots.
+- `logs` finds the log's end, then reads its last 64 KiB.
+- The wait lasts as long as the card's own time while a card for that workspace and root is open, and 90 s since the last change otherwise.
+
+**Task 12.**
+- `llm-client.ts` imports `design-canvas/main.ts` and loads `follow-through-main` lazily, so `main/index.ts` connects the jobs (`connectDesignAppJobs`) and recovery (`designAppRecoveryDone`) instead of `design-canvas/main.ts` importing them.
+- The toggle hook is a `designApp` dependency of `createRendererChatMutationHandlers`. The card's Enter path is `createDesignModeCardEnter` in `main/handlers/design-app.ts`, so both are tested by register and invoke.
+- Workspace removal forgets the workspace's apps through `createDesignWorkspaceCleanup({ apps })`, which covers both `designCanvasWorkspaceCleanup` and `removeDesignCanvasWorkspace`. A failed stop still deletes the canvas.
+- The `designApp:*` handlers are always registered and refuse each call while the flag is off; `consentAnswer` answers false.
+- `findEnvKeys` receives only the variables that are set (pi-ai's `ProviderEnv`).
+- The analytics core drops an unknown optional `manager` by itself and keeps the event, as it does for every optional property.
+
+**Task 13.**
+- The spec ran in the Cua Space. It was not run with Playwright on the host: the orchestrator allows window-opening tests only in the Space. The darwin `lsof` branch runs on the host headlessly in `app-server-process.test.ts` (13/13).
+- The second-chat case runs with a 15 s grace, so switching chats can't outlast it.
+- The stop cases assert both phase `stopped` and that the origin no longer answers.
+
+**Left for the PR.**
+- One full `npm run test`.
+- The PR number in `docs/plans/README.md`.
+- The light and dark card screenshots in the PR body. They are saved in the E2E test's output folder.
