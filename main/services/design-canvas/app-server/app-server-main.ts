@@ -234,10 +234,6 @@ function defaultPort(framework: FrameworkId | undefined): number {
   return FRAMEWORKS.find((spec) => spec.id === framework)?.defaultPort ?? 5173;
 }
 
-function absolute(workspacePath: string, relative: string): string {
-  return relative === "." ? workspacePath : path.join(workspacePath, ...relative.split("/"));
-}
-
 function isIpv4Loopback(address: string): boolean {
   const bare = address.startsWith("::ffff:") ? address.slice(7) : address;
   return /^127\.\d{1,3}\.\d{1,3}\.\d{1,3}$/u.test(bare);
@@ -705,9 +701,9 @@ export class DesignAppServers {
           const job = this.spawn(entry, attempt, {
             workspaceId: entry.workspaceId,
             appRoot: entry.appRoot,
-            // The checkout the consent covers (its real path, read with the surface), never the configured
-            // path, which a retargeted link could point elsewhere by now.
-            cwd: absolute(surface.surface.checkout, app.installRoot),
+            // The real folder this pass's surface read validated, never a path rebuilt from the configured
+            // workspace path or relative roots, which a retargeted or swapped-in link could point elsewhere.
+            cwd: surface.dirs.install,
             argv: { file: toolchain.manager.path, args: command.args },
             display: [command.command, ...command.args].join(" "),
             description: "Install the app's dependencies",
@@ -749,7 +745,7 @@ export class DesignAppServers {
         const job = this.spawn(entry, attempt, {
           workspaceId: entry.workspaceId,
           appRoot: entry.appRoot,
-          cwd: absolute(surface.surface.checkout, entry.appRoot),
+          cwd: surface.dirs.app,
           argv: { file: toolchain.manager.path, args: plan.run.args },
           display: surface.surface.runArgv.join(" "),
           description: "Run the app's dev server",

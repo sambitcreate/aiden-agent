@@ -124,6 +124,23 @@ test("another checkout with identical launch files has another fingerprint; the 
   assert.equal((await surfaceOf(linked, await webApp(site))).fingerprint, ofSite.fingerprint, "the same folder by another path keeps its consent");
 });
 
+test("the read reports the real app and install folders it validated, so a spawn never rebuilds them from relative roots", { skip }, async (t) => {
+  const root = await workspace(t);
+  await put(root, "package.json", JSON.stringify({ name: "mono", private: true, workspaces: ["apps/*"] }));
+  await put(root, "package-lock.json", "{}");
+  await put(root, "apps/web/package.json", pkg({ dev: "vite" }));
+  const app = await webApp(root, "apps/web");
+  const read = await surfaceOf(root, app);
+  assert.equal(read.dirs.app, path.join(root, "apps", "web"));
+  assert.equal(read.dirs.install, path.join(root, ...app.installRoot.split("/").filter((part) => part !== ".")));
+
+  const links = await workspace(t);
+  const linked = path.join(links, "mono-link");
+  await symlink(root, linked);
+  const viaLink = await surfaceOf(linked, app);
+  assert.equal(viaLink.dirs.app, path.join(root, "apps", "web"), "a path through a link reports the real folder");
+});
+
 test("a .yarnrc.yml yarnPath target is hashed, and a yarnPath that is a symlink refuses", { skip }, async (t) => {
   const root = await workspace(t);
   await put(root, "package.json", pkg({ dev: "vite" }, { packageManager: "yarn@4.5.0" }));
