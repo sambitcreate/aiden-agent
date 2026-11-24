@@ -30,12 +30,15 @@ function colorToRgba(color: string, alpha: number): string {
   return `rgba(0, 106, 214, ${alpha})`;
 }
 
+/** A hidden page may never paint, so a timer bounds the wait for the next frame. */
 function nextFrame(): Promise<void> {
   return new Promise((resolve) => {
+    const timer = setTimeout(resolve, 100);
     if (typeof requestAnimationFrame === "function") {
-      requestAnimationFrame(() => resolve());
-    } else {
-      setTimeout(resolve, 16);
+      requestAnimationFrame(() => {
+        clearTimeout(timer);
+        resolve();
+      });
     }
   });
 }

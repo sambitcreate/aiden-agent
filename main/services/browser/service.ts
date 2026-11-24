@@ -216,7 +216,8 @@ interface LiveTab {
   closing: boolean;
   expectedInputs: Array<{ type: string; key?: string; button?: string; modifiers?: number; expires: number }>;
   picking?: boolean;
-  grab?: { token: symbol; accent: GrabbedElementAccent; source: BrowserGrabSource };
+  /** `release` drops the background-throttling lease that keeps a covered tab's frames running while grabbing. */
+  grab?: { token: symbol; accent: GrabbedElementAccent; source: BrowserGrabSource; release: () => void };
   crashTimes: number[];
   crashTimer?: ReturnType<typeof setTimeout>;
   pendingNavigationUrl?: string;
@@ -1633,12 +1634,11 @@ export class BrowserService {
     fullPage = false,
     bounds?: BrowserBounds,
     signal?: AbortSignal,
-    viewport?: { width: number; height: number },
   ): Promise<BrowserImage> {
     const release = tab.backgroundThrottling.acquire(signal);
     const unhost = this.hostWhileActive(tab);
     try {
-      return await this.capturePage(tab, fullPage, bounds, signal, viewport);
+      return await this.capturePage(tab, fullPage, bounds, signal);
     } finally {
       unhost();
       release();
@@ -1649,7 +1649,6 @@ export class BrowserService {
     fullPage: boolean,
     bounds?: BrowserBounds,
     signal?: AbortSignal,
-    viewport?: { width: number; height: number },
   ): Promise<BrowserImage> {
     if (fullPage) {
       const metrics = await this.send(tab, "Page.getLayoutMetrics", {}, signal);
@@ -1681,13 +1680,10 @@ export class BrowserService {
     let captureBounds = pageBounds;
     if (bounds) {
       const region = boundedBounds(bounds);
-      const measured =
-        browserMeasuredViewport(viewport) ??
-        browserMeasuredViewport(
-          await tab.view.webContents
-            .executeJavaScript("({width:Math.round(innerWidth),height:Math.round(innerHeight)})", true)
-            .catch(() => undefined),
-        );
+      // Read the size in Aiden's isolated world so page-defined viewport globals can't skew crops.
+      const measured = browserMeasuredViewport(
+        await this.evaluate(tab, "({width:innerWidth,height:innerHeight})", signal, true),
+      );
       if (!measured) throw new Error("The browser viewport cannot be measured safely. Try resizing the browser.");
       const scaleX = pageBounds.width / measured.width,
         scaleY = pageBounds.height / measured.height;
@@ -2445,7 +2441,10 @@ export class BrowserService {
     const resolvedAccent = resolveGrabAccent(accent);
     const token = Symbol("browser-grab");
     const grabSource: BrowserGrabSource = source === "shortcut" ? "shortcut" : "toolbar";
-    tab.grab = { token, accent: resolvedAccent, source: grabSource };
+    // The picker waits on page animation frames. A covered or occluded window
+    // (on macOS, a detached DevTools window on top) would otherwise pause them.
+    tab.grab?.release();
+    tab.grab = { token, accent: resolvedAccent, source: grabSource, release: tab.backgroundThrottling.acquire() };
     tab.state.grabbing = true;
     this.emit(tab.state.workspaceId);
 
@@ -2471,6 +2470,7 @@ export class BrowserService {
 
   private async stopGrab(tab: LiveTab, reason: BrowserGrabEndReason): Promise<void> {
     if (!tab.grab) return;
+    tab.grab.release();
     tab.grab = undefined;
     tab.state.grabbing = false;
     const wc = tab.view.webContents;
