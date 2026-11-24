@@ -1272,6 +1272,25 @@ test("onOriginsChanged fires when a server starts and stops running", async (t) 
   assert.equal(changes, 2);
 });
 
+test("onOriginsChanged fires whenever the served origins change: [::1] held later, and forgetting a stopped app's workspace", async (t) => {
+  const h = harness(t);
+  let changes = 0;
+  h.servers.onOriginsChanged(() => (changes += 1));
+  await h.runApp();
+  const job = h.jobs.last().view.id;
+  await h.clock.advance(2_000);
+  assert.equal(changes, 1, "an unchanged poll changes nothing");
+  h.jobs.sockets.set(job, { ok: true, sockets: [{ pid: 1, address: "127.0.0.1", port: 5173 }, { pid: 1, address: "::1", port: 5173 }] });
+  await h.clock.advance(2_000);
+  assert.equal(h.servers.isAppOrigin("http://[::1]:5173"), true);
+  assert.equal(changes, 2, "the [::1] origin was added");
+  await h.servers.stop("ws", ".");
+  const stopped = changes;
+  await h.servers.forgetWorkspace("ws");
+  assert.equal(h.servers.isAppOrigin("http://127.0.0.1:5173"), false);
+  assert.equal(changes, stopped + 1, "forgetting the workspace dropped its served origins");
+});
+
 test("logs pass the byte cursor through and cap at maxBytes", async (t) => {
   const h = harness(t);
   await h.runApp();

@@ -379,9 +379,9 @@ export class DesignAppServers {
   async forgetWorkspace(workspaceId: string): Promise<void> {
     this.clearPresence(workspaceId);
     const entries = [...this.entries.values()].filter((entry) => entry.workspaceId === workspaceId);
-    let hadRunning = false;
+    let originsGo = (this.served.get(workspaceId)?.size ?? 0) > 0;
     for (const entry of entries) {
-      hadRunning ||= entry.server?.running === true;
+      originsGo ||= entry.server?.running === true;
       await this.halt(entry, { quiet: true });
     }
     for (const entry of entries) this.entries.delete(entry.key);
@@ -389,7 +389,7 @@ export class DesignAppServers {
     this.cache.delete(workspaceId);
     this.deps.consent.closeAll(`${workspaceId}\0`);
     await this.deps.records.forgetWorkspace(workspaceId);
-    if (hadRunning) this.originsChanged();
+    if (originsGo) this.originsChanged();
     this.emit(workspaceId);
   }
 
@@ -990,20 +990,22 @@ export class DesignAppServers {
       }
       return;
     }
-    if (entry.status.port !== undefined) this.serve(entry, entry.status.port, watch.held);
+    if (entry.status.port !== undefined && this.serve(entry, entry.status.port, watch.held)) this.originsChanged();
     const workspace = await this.deps.workspace(entry.workspaceId).catch(() => undefined);
     if (entry.server !== watch) return;
     if (!runnable(workspace)) await this.halt(entry, { problem: { problem: "no-access" } });
     else if (workspace.path !== watch.workspacePath) await this.halt(entry, { problem: { problem: "interrupted" } });
   }
 
-  /** Every origin this session served stays an app origin until the workspace is forgotten (3a). */
-  private serve(entry: Entry, port: number, held: ReadonlyArray<{ address: string; port: number }>): void {
+  /** Every origin this session served stays an app origin until the workspace is forgotten (3a). True when one was added. */
+  private serve(entry: Entry, port: number, held: ReadonlyArray<{ address: string; port: number }>): boolean {
     const origins = this.served.get(entry.workspaceId) ?? new Set<string>();
+    const before = origins.size;
     origins.add(`http://127.0.0.1:${port}`);
     origins.add(`http://localhost:${port}`);
     if (held.some((socket) => socket.port === port && socket.address === "::1")) origins.add(`http://[::1]:${port}`);
     this.served.set(entry.workspaceId, origins);
+    return origins.size > before;
   }
 
   // ── Presence (D12) ──
