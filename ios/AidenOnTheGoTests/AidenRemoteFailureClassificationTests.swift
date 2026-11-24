@@ -263,7 +263,7 @@ final class AidenRemoteFailureClassificationTests: XCTestCase {
         }
     }
 
-    func testTier2CachedRejectionLedgerSitesAgreeAndNeverDropKeysOnCancellationOrInFlight() throws {
+    func testTier2CachedRejectionLedgerSitesAgreeAndNeverDropKeysOnCancellationInFlightOrTransientStatus() throws {
         let gitModel = AidenWorkspaceGitModel()
         let tier2Sites: [(String, @MainActor (Error) -> Bool)] = [
             ("cachedRejectionLedger", { AidenRemoteFailureClassification.isAmbiguous($0, policy: .cachedRejectionLedger) }),
@@ -281,6 +281,14 @@ final class AidenRemoteFailureClassificationTests: XCTestCase {
             ("unexpectedStatus(502)", AidenRemoteClientError.unexpectedStatus(502)),
             ("unexpectedStatus(409)", AidenRemoteClientError.unexpectedStatus(409)),
             ("409 idempotency_in_flight", try classificationServerError(409, "idempotency_in_flight")),
+            // A structured transient status can come from admission or a host failure
+            // before the ledger settled the attempt, so it proves nothing about the effect
+            // (mutation-failure-ambiguity.json cachedRejectionLedger rows).
+            ("408 internal_error", try classificationServerError(408, "internal_error")),
+            ("429 rate_limited", try classificationServerError(429, "rate_limited", retryable: true)),
+            ("429 idempotency_capacity", try classificationServerError(429, "idempotency_capacity", retryable: true)),
+            ("500 internal_error", try classificationServerError(500, "internal_error")),
+            ("503 internal_error", try classificationServerError(503, "internal_error", retryable: true)),
         ]
 
         let mustNotRetain: [(String, Error)] = [
@@ -288,10 +296,12 @@ final class AidenRemoteFailureClassificationTests: XCTestCase {
             ("403 capability_denied", try classificationServerError(403, "capability_denied")),
             ("404 not_found", try classificationServerError(404, "not_found")),
             ("409 revision_conflict", try classificationServerError(409, "revision_conflict")),
+            ("409 idempotency_conflict", try classificationServerError(409, "idempotency_conflict")),
+            ("409 internal_error", try classificationServerError(409, "internal_error")),
             ("409 operation_in_progress", try classificationServerError(409, "operation_in_progress")),
             ("409 git_capability_denied", try classificationServerError(409, "git_capability_denied")),
             ("409 schedule_disabled", try classificationServerError(409, "schedule_disabled")),
-            ("500 internal_error", try classificationServerError(500, "internal_error")),
+            ("422 memory_over_budget", try classificationServerError(422, "memory_over_budget")),
             ("invalidEndpoint", AidenRemoteClientError.invalidEndpoint),
             ("missingCredential", AidenRemoteClientError.missingCredential),
             ("missingTrustConfiguration", AidenRemoteClientError.missingTrustConfiguration),
@@ -312,7 +322,7 @@ final class AidenRemoteFailureClassificationTests: XCTestCase {
             XCTAssertFalse(AidenNewWorktreeRetry.spendsKey(error), "spendsKey must keep key for \(label)")
         }
         XCTAssertTrue(AidenNewWorktreeRetry.spendsKey(try classificationServerError(409, "git_capability_denied")))
-        XCTAssertTrue(AidenNewWorktreeRetry.spendsKey(try classificationServerError(500, "internal_error")))
+        XCTAssertTrue(AidenNewWorktreeRetry.spendsKey(try classificationServerError(409, "internal_error")))
         XCTAssertTrue(AidenNewWorktreeRetry.spendsKey(try classificationServerError(400, "invalid_request")))
         XCTAssertFalse(AidenNewWorktreeRetry.spendsKey(AidenRemoteClientError.missingCredential))
         XCTAssertFalse(AidenNewWorktreeRetry.spendsKey(AidenRemoteClientError.installationChanged))

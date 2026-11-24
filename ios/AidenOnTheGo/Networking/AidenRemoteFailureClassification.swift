@@ -33,9 +33,13 @@ import Foundation
 ///   the key for 24 hours (`AidenIdempotencyLedger`) and reports every unrecorded,
 ///   in-flight, or unknown outcome as `409 idempotency_in_flight`. Client-local
 ///   failures never reach the host; `CancellationError`, `URLError`,
-///   non-`AidenRemoteClientError`, `.invalidResponse`, `.unexpectedStatus`, and
-///   `409 idempotency_in_flight` are always ambiguous (never drop the key), while
-///   other structured `.server` rejections are settled refusals cached by the ledger.
+///   non-`AidenRemoteClientError`, `.invalidResponse`, `.unexpectedStatus`,
+///   `409 idempotency_in_flight`, and structured transient statuses (`408`, `429`,
+///   and every `5xx`, such as `500` and `503`) are always ambiguous (never drop the
+///   key), while other structured `.server` rejections are settled refusals cached
+///   by the ledger. A transient status may come from admission or a host failure
+///   before the ledger settled the attempt, so it proves nothing about the effect
+///   (`protocol/aiden-remote/v1/fixtures/mutation-failure-ambiguity.json`).
 enum AidenRemoteFailureClassification {
     enum Policy: Sendable, Equatable {
         /// Strict before-effect refusal allowlist.
@@ -131,6 +135,7 @@ enum AidenRemoteFailureClassification {
                 return isAmbiguousHTTPStatus(statusCode)
             case .cachedRejectionLedger:
                 return body.code.rawValue == "idempotency_in_flight"
+                    || isAmbiguousHTTPStatus(statusCode)
             }
         }
     }
@@ -140,8 +145,9 @@ enum AidenRemoteFailureClassification {
     /// attempt must mint a fresh key.
     ///
     /// Client-local failures never reached the host and do not spend the key.
-    /// Transport losses, cancellations, unparsed HTTP responses, and
-    /// `409 idempotency_in_flight` leave the outcome unknown and never spend the key.
+    /// Transport losses, cancellations, unparsed HTTP responses,
+    /// `409 idempotency_in_flight`, and structured `408`, `429`, and `5xx`
+    /// responses leave the outcome unknown and never spend the key.
     static func spendsDurableKey(_ error: Error) -> Bool {
         guard case .server = error as? AidenRemoteClientError else {
             return false
