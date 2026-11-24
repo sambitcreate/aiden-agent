@@ -6,7 +6,7 @@ import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 import { detectWebApp } from "./app-detect.js";
-import { hashBounded, launchDirsUnchanged, readLaunchSurface } from "./app-fingerprint.js";
+import { folderIdentity, hashBounded, launchDirsUnchanged, readLaunchSurface } from "./app-fingerprint.js";
 import type { DetectedApp } from "./app-server-core.js";
 
 const skip = process.platform === "win32" ? "POSIX file types" : false;
@@ -122,6 +122,13 @@ test("another checkout with identical launch files has another fingerprint; the 
   const linked = path.join(links, "site-link");
   await symlink(site, linked);
   assert.equal((await surfaceOf(linked, await webApp(site))).fingerprint, ofSite.fingerprint, "the same folder by another path keeps its consent");
+});
+
+test("folder identities past 2^53 stay distinct, where numbers would round them together", () => {
+  const big = 2n ** 53n;
+  assert.equal(Number(big + 1n), Number(big), "the numeric form can't tell these inodes apart");
+  assert.notEqual(folderIdentity({ dev: 7n, ino: big + 1n }), folderIdentity({ dev: 7n, ino: big }));
+  assert.notEqual(folderIdentity({ dev: big + 1n, ino: 3n }), folderIdentity({ dev: big, ino: 3n }));
 });
 
 test("the folders a read validated stop matching when one is renamed and its name reused, by a link or a new folder", { skip }, async (t) => {
