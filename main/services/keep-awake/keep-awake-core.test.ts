@@ -223,3 +223,148 @@ test("a recheck time far ahead (or behind a clock jump) waits at most an hour, n
   assert.equal(reads, afterAdd + 1, "one hourly re-read");
   controller.dispose();
 });
+
+test("removing an input starts the grace period, releases after grace, and is idempotent", () => {
+  const clock = fakeClock();
+  const active = new Set<number>();
+  let nextHandle = 1;
+  const controller = new KeepAwakeController<number, number>({
+    blocker: {
+      start: () => {
+        const id = nextHandle++;
+        active.add(id);
+        return id;
+      },
+      stop: (id) => { active.delete(id); },
+    },
+    clock,
+    idleSeconds: () => 0,
+  });
+  const remove = controller.addInput({ read: () => ({ reasons: [chat("a")] }) });
+  assert.equal(active.size, 1);
+  remove();
+  assert.equal(active.size, 1, "removing the last active input still honors grace");
+  clock.advance(KEEP_AWAKE_GRACE_MS - 1);
+  assert.equal(active.size, 1);
+  // A second removal is a safe no-op and does not reset grace.
+  remove();
+  clock.advance(1);
+  assert.equal(active.size, 0);
+  assert.equal(clock.pending(), 0);
+});
+
+test("a past recheckAt waits at least a second rather than spinning, and grace is not reset by idle rechecks", () => {
+  const clock = fakeClock();
+  let reads = 0;
+  let reasons: KeepAwakeReason[] = [chat("a")];
+  let recheckAt: number | undefined;
+  const active = new Set<number>();
+  const controller = new KeepAwakeController<number, number>({
+    blocker: {
+      start: () => { active.add(1); return 1; },
+      stop: (id) => { active.delete(id); },
+    },
+    clock,
+    idleSeconds: () => 0,
+  });
+  controller.addInput({
+    read: () => {
+      reads += 1;
+      return { reasons, ...(recheckAt === undefined ? {} : { recheckAt }) };
+    },
+  });
+  // Enter grace with a past recheckAt (already due).
+  reasons = [];
+  recheckAt = clock.now() - 5_000;
+  controller.update();
+  const afterUpdate = reads;
+  clock.advance(999);
+  assert.equal(reads, afterUpdate, "past recheckAt is floored to 1,000 ms");
+  clock.advance(1);
+  assert.equal(reads, afterUpdate + 1, "fires once after the 1,000 ms floor");
+  recheckAt = undefined;
+  // Grace still ends at KEEP_AWAKE_GRACE_MS from when work ended, not from the recheck.
+  clock.advance(KEEP_AWAKE_GRACE_MS - 1_001);
+  assert.equal(active.size, 1);
+  clock.advance(1);
+  assert.equal(active.size, 0);
+  assert.equal(clock.pending(), 0);
+});
+
+test("pausedWhileIdle clears cleanly without grace when work ends, and mid-grace idle-capped work releases at once", () => {
+  const h = harness();
+  h.setIdle(KEEP_AWAKE_IDLE_CAP_SECONDS);
+  h.set([chat("a")]);
+  assert.equal(h.blocker.active.size, 0);
+  assert.equal(h.controller.status().pausedWhileIdle, true);
+
+  // All work ends while pausedWhileIdle: no grace timer or idle timer remains.
+  h.set([]);
+  assert.equal(h.controller.status().pausedWhileIdle, false);
+  assert.equal(h.clock.pending(), 0);
+
+  // Hold while active, enter grace, then idle past the cap before non-exempt work arrives.
+  h.setIdle(0);
+  h.set([chat("b")]);
+  assert.equal(h.blocker.active.size, 1);
+  h.set([]);
+  assert.equal(h.blocker.active.size, 1, "in grace");
+  h.setIdle(KEEP_AWAKE_IDLE_CAP_SECONDS);
+  h.set([chat("c")]);
+  assert.equal(h.blocker.active.size, 0, "idle-capped work cancels grace and releases immediately");
+  assert.equal(h.controller.status().pausedWhileIdle, true);
+});
+
+test("blocker, idleSeconds, and onStatus errors are isolated via onError without leaking state", () => {
+  const clock = fakeClock();
+  const errors: unknown[] = [];
+  let failStart = true;
+  let failStop = false;
+  let idleMode: "throw" | "nan" | "normal" = "throw";
+  let failStatus = true;
+  const active = new Set<number>();
+  const controller = new KeepAwakeController<number, number>({
+    blocker: {
+      start: () => {
+        if (failStart) throw new Error("start failed");
+        active.add(1);
+        return 1;
+      },
+      stop: (id) => {
+        active.delete(id);
+        if (failStop) throw new Error("stop failed");
+      },
+    },
+    clock,
+    idleSeconds: () => {
+      if (idleMode === "throw") throw new Error("idle failed");
+      if (idleMode === "nan") return Number.NaN;
+      return 0;
+    },
+    onStatus: () => {
+      if (failStatus) throw new Error("status failed");
+    },
+    onError: (error) => errors.push(error),
+  });
+  let reasons: KeepAwakeReason[] = [chat("a")];
+  controller.addInput({ read: () => ({ reasons }) });
+  assert.equal(controller.status().holding, false, "failed start leaves holding false");
+  assert.ok(errors.length >= 2, "idleSeconds, start, and onStatus errors reported");
+
+  // Non-finite idleSeconds falls back to 0 rather than triggering the idle cap.
+  failStart = false;
+  failStatus = false;
+  idleMode = "nan";
+  controller.update();
+  assert.equal(controller.status().holding, true);
+  assert.equal(active.size, 1);
+
+  // Failed stop still clears the handle so status reflects release.
+  failStop = true;
+  idleMode = "normal";
+  reasons = [];
+  controller.setEnabled(false);
+  assert.equal(controller.status().holding, false);
+  assert.equal(active.size, 0);
+  controller.dispose();
+});
