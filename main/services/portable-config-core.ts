@@ -54,11 +54,9 @@ import {
   withProviderPolicyHidden,
 } from "../../renderer/shared/model-visibility.js";
 import {
-  normalizeModelPadPlacements,
   normalizePinnedModels,
   normalizeRecentModels,
-  normalizeModelPadMetric,
-} from "../../renderer/shared/model-pad-preferences.js";
+} from "../../renderer/shared/model-preferences.js";
 import { normalizeAgentSlider, type AgentSliderSettings } from "../../renderer/shared/agent-slider.js";
 import { GOOGLE_PROVIDER_ID } from "../../renderer/shared/google-provider.js";
 import { normalizeProviderArtwork } from "../../renderer/shared/provider-artwork.js";
@@ -588,37 +586,39 @@ function normalizedSettingsVisibility(settings: {
   );
 }
 
-type ModelPadPreferenceFields = {
-  modelPadPlacements?: unknown;
+type ModelPreferenceFields = {
   pinnedModels?: unknown;
   recentModels?: unknown;
-  modelPadMetric?: unknown;
 };
 
 /**
- * Model Pad placements, pins, recent models and the benchmark metric: invalid
- * entries are dropped, wrong shapes removed. All of them live in machine-local
- * settings.json, never in the portable config.json.
+ * Settings keys of retired features. Pre-1.0 nothing migrates them: they are
+ * dropped whenever settings.json is read, so the next save leaves them out.
+ * `modelPadPlacements` and `modelPadMetric` belonged to the Model Pad, which
+ * the Agent Slider replaced.
  */
-function applyModelPadPreferences(
-  source: ModelPadPreferenceFields,
-  target: ModelPadPreferenceFields,
-): void {
-  const placements = normalizeModelPadPlacements(source.modelPadPlacements);
-  if (placements) target.modelPadPlacements = placements;
-  else delete target.modelPadPlacements;
+const RETIRED_SETTINGS_KEYS = ["modelPadPlacements", "modelPadMetric"] as const;
+
+/**
+ * Model-list pins and recent models: invalid entries are dropped, wrong
+ * shapes removed. Both live in machine-local settings.json, never in the
+ * portable config.json. Retired keys go too.
+ */
+function applyModelPreferences(source: ModelPreferenceFields, target: ModelPreferenceFields): void {
   const pins = normalizePinnedModels(source.pinnedModels);
   if (pins) target.pinnedModels = pins;
   else delete target.pinnedModels;
   const recents = normalizeRecentModels(source.recentModels);
   if (recents) target.recentModels = recents;
   else delete target.recentModels;
-  const metric = normalizeModelPadMetric(source.modelPadMetric);
-  if (metric) target.modelPadMetric = metric;
-  else delete target.modelPadMetric;
+  for (const key of RETIRED_SETTINGS_KEYS) delete (target as Record<string, unknown>)[key];
 }
 
-type AgentSliderFields = { agentSlider?: unknown; lastThinkingLevel?: unknown };
+type AgentSliderFields = {
+  agentSlider?: unknown;
+  agentSliderUnreadable?: unknown;
+  lastThinkingLevel?: unknown;
+};
 
 /**
  * The new-chat model's thinking level (anything but a known level removed).
@@ -627,6 +627,7 @@ type AgentSliderFields = { agentSlider?: unknown; lastThinkingLevel?: unknown };
  */
 function applyAgentSliderSettings(source: AgentSliderFields, target: AgentSliderFields): void {
   delete target.agentSlider;
+  delete target.agentSliderUnreadable;
   if (!isGenerationThinkingLevel(source.lastThinkingLevel)) delete target.lastThinkingLevel;
 }
 
@@ -772,7 +773,7 @@ function normalizeSettingsShape(value: unknown): SettingsShape {
   const hiddenModelsByProvider = normalizedSettingsVisibility(settings);
   if (hiddenModelsByProvider) normalized.hiddenModelsByProvider = hiddenModelsByProvider;
   else delete normalized.hiddenModelsByProvider;
-  applyModelPadPreferences(settings, normalized);
+  applyModelPreferences(settings, normalized);
   applyAgentSliderSettings(settings, normalized);
   return {
     ...rest,
@@ -836,7 +837,7 @@ export function runtimeSettingsFrom(settings: AppSettings): AppSettings {
   const hiddenModelsByProvider = normalizedSettingsVisibility(settings);
   if (hiddenModelsByProvider) runtime.hiddenModelsByProvider = hiddenModelsByProvider;
   else delete runtime.hiddenModelsByProvider;
-  applyModelPadPreferences(settings, runtime);
+  applyModelPreferences(settings, runtime);
   applyAgentSliderSettings(settings, runtime);
   const retainKnownValue = (key: keyof AppSettings, allowed: readonly string[]): void => {
     const value = settings[key];

@@ -2,7 +2,7 @@ import { E2E_MODEL_DISPLAY_NAME, expect, expectSquircleButtons, finishLmStudioOn
 
 const SETTINGS_SECTIONS = [
   "Providers",
-  "Model Pad",
+  "Agent Slider",
   "Skills",
   "Connectors",
   "Web Search",
@@ -27,10 +27,12 @@ async function assertRenderedSettingsDestination(
         page.getByRole("button", { name: "Connect another AI" }),
       ).toBeVisible();
       return;
-    case "Model Pad":
+    case "Agent Slider":
       await expect(
-        page.getByRole("heading", { level: 1, name: "Model Pad", exact: true }),
+        page.getByRole("heading", { level: 1, name: "Agent Slider", exact: true }),
       ).toBeVisible();
+      // Onboarding seeded the slider, so the editor shows its preview.
+      await expect(page.getByRole("slider", { name: "Agent Slider" })).toBeVisible();
       return;
     case "Skills":
       await expect(

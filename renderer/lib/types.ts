@@ -55,7 +55,6 @@ export type {
   WebSearchExistingAuthRendererStatus,
 };
 import type { HiddenModelsByProvider } from "../shared/model-visibility";
-import type { ModelPadMetric, ModelPadPlacements } from "../shared/model-pad-preferences";
 export type { BotDefinition } from "../shared/bots";
 
 export type ProviderKind = "openai" | "anthropic";
@@ -576,8 +575,8 @@ export interface Attachment {
   text?: string;
 }
 
-/** One of the benchmark scores (defined with the Pad preferences that persist it). */
-export type ModelBenchmarkMetric = ModelPadMetric;
+/** One of the benchmark scores (General, Coding, Agentic). */
+export type ModelBenchmarkMetric = "intelligence" | "coding" | "agentic";
 
 export interface ModelBenchmarkScores {
   source: "openrouter";
@@ -1006,11 +1005,15 @@ export interface AppSettings extends AidenLiveSettingsFields {
    * Absent until first seeded; change it with `settingsApi.setAgentSlider`.
    */
   agentSlider?: import("../shared/agent-slider").AgentSliderSettings;
+  /**
+   * config.json holds an Agent Slider that can't be read (a malformed hand
+   * edit): `agentSlider` is absent, the first-run seed leaves it alone, and
+   * only `settingsApi.setAgentSlider` replaces it.
+   */
+  agentSliderUnreadable?: true;
   /** Most recently selected real project workspace ID in the main window (shared with Quick Chat). */
   lastWorkspaceId?: string;
   hiddenModelsByProvider?: HiddenModelsByProvider;
-  /** Presentation-only Model Pad positions keyed `provider::model` (at most 2,000). */
-  modelPadPlacements?: ModelPadPlacements;
   /** Presentation-only model-picker pins as distinct `provider::model` values (at most 200). */
   pinnedModels?: string[];
   /**
@@ -1018,8 +1021,6 @@ export interface AppSettings extends AidenLiveSettingsFields {
    * first (at most 5). Machine-local; never part of the portable config.
    */
   recentModels?: string[];
-  /** Benchmark score that sets Model Pad suggestion height; absent means "coding". */
-  modelPadMetric?: ModelBenchmarkMetric;
   exaEnabled?: boolean;
   /** Versioned Web Search routing/preferences; credentials stay main-owned. */
   webSearch?: WebSearchSettingsV2;

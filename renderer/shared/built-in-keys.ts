@@ -128,9 +128,9 @@ export const BUILT_IN_KEYS: readonly BuiltInKey[] = [
   },
   {
     id: "model-row-actions",
-    title: "Pin / add to Pad",
-    description: "On the highlighted model in the model picker's List; pressed again, unpins it or takes it off the Pad.",
-    keys: ["Command+Shift+P", "Command+Shift+A"],
+    title: "Pin a model",
+    description: "On the highlighted model in a model list; pressed again, unpins it.",
+    keys: ["Command+Shift+P"],
     section: "In a chat",
   },
   {

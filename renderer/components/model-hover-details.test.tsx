@@ -5,7 +5,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 import type { ModelEntry } from "../lib/model-picker-data";
 import type { ModelBenchmarkScores, ModelInfo } from "../lib/types";
 import type { ModelPaceSummary } from "../shared/model-pace";
-import { ModelHoverDetails } from "./model-picker";
+import { ModelHoverDetails } from "./model-list-panel";
 
 const DAY_MS = 24 * 60 * 60 * 1_000;
 

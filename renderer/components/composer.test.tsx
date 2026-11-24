@@ -310,44 +310,6 @@ test("workspace picker closes and exposes a persistent reason when workspace cha
   assert.match(composer, /Workspace unavailable: \$\{workspaceChangeBlockedReason\}/u);
 });
 
-test("model picker details sit beside the menu without overlapping the pad", () => {
-  const modelPicker = source("./model-picker.tsx");
-  // The detail card moved to the shared list module with ModelListPanel.
-  const modelList = source("./model-list-panel.tsx");
-  const pad = source("./model-picker-pad.tsx");
-  const styles = source("../styles.css");
-
-  assert.match(
-    modelPicker,
-    /className="flex w-max max-w-\[calc\(100vw-1\.5rem\)\] items-start gap-2 overflow-visible bg-transparent p-0 shadow-none"/u,
-  );
-  assert.match(
-    modelPicker,
-    /className="relative w-\[min\(19\.75rem,calc\(100vw-1\.5rem\)\)\] overflow-hidden rounded-popover bg-popover shadow-popover"/u,
-  );
-  assert.match(
-    modelList,
-    /className="pointer-events-auto flex h-\[min\(22\.5rem,70vh\)\] w-56 shrink-0 flex-col overflow-hidden rounded-popover bg-popover p-3 text-primary shadow-popover"/u,
-  );
-  assert.doesNotMatch(modelPicker, /left-\[calc\(100%\+0\.5rem\)\]/u);
-  assert.doesNotMatch(modelPicker, /right: showExternalDetails/u);
-  assert.doesNotMatch(pad, /focus-visible:bg-list-selection/u);
-  assert.match(
-    styles,
-    /\.model-pad:focus-visible\s*\{\s*outline: none !important;\s*box-shadow:\s*inset 0 0 0 2px var\(--focus-ring\)/u,
-  );
-  assert.match(pad, /import \{ ProviderIcon \} from "\.\/provider-icon"/u);
-  assert.match(pad, /artwork=\{puckPoint\.providerArtwork\}/u);
-  assert.match(
-    styles,
-    /\.model-pad-knob\s*\{[^}]*color: var\(--model-pad-knob-foreground\)/u,
-  );
-  assert.match(
-    styles,
-    /\.model-pad-knob\[data-confirmed="true"\]\s*\{[^}]*color: var\(--fill-accent-foreground\)/u,
-  );
-});
-
 test("first-send draft freeze blocks edits and browser annotation delivery until commit", () => {
   const composer = source("./composer.tsx");
   assert.match(composer, /firstSendPendingRef\.current = freezeWhileSending/u);

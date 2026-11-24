@@ -52,12 +52,19 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value && typeof value === "object" && !Array.isArray(value));
 }
 
+export type AgentSliderLabelProblem = "empty" | "too-long" | "control-characters";
+
+/** Why a stop label would be refused, or undefined when it is fine (after trimming). */
+export function agentSliderLabelProblem(value: string): AgentSliderLabelProblem | undefined {
+  const codePoints = Array.from(value.trim(), (character) => character.codePointAt(0)!);
+  if (codePoints.length === 0) return "empty";
+  if (codePoints.length > AGENT_SLIDER_LABEL_MAX) return "too-long";
+  return codePoints.some(isForbiddenLabelCodePoint) ? "control-characters" : undefined;
+}
+
 function validLabel(value: unknown): string | undefined {
   if (typeof value !== "string") return undefined;
-  const label = value.trim();
-  const codePoints = Array.from(label, (character) => character.codePointAt(0)!);
-  if (codePoints.length === 0 || codePoints.length > AGENT_SLIDER_LABEL_MAX) return undefined;
-  return codePoints.some(isForbiddenLabelCodePoint) ? undefined : label;
+  return agentSliderLabelProblem(value) ? undefined : value.trim();
 }
 
 function validProviderId(value: unknown): value is string {
@@ -290,7 +297,8 @@ export function activeStopIndex(
   );
 }
 
-function randomStopId(): string {
+/** A fresh "stop_" + 8 hex id. */
+export function randomStopId(): string {
   const bytes = new Uint8Array(4);
   const cryptoApi = (globalThis as { crypto?: { getRandomValues?: (array: Uint8Array) => Uint8Array } })
     .crypto;

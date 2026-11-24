@@ -427,15 +427,10 @@ test("removing a provider clears its model visibility preferences", async (t) =>
   });
 });
 
-test("removing a provider drops its Model Pad placements, pins and recent models", async (t) => {
+test("removing a provider drops its pins and recent models", async (t) => {
   const h = await harness(t);
   await h.store.saveProvider(provider);
-  const placement = { x: 0.5, y: 0.5, xSource: "user", ySource: "user" } as const;
   await h.store.setSettings({
-    modelPadPlacements: {
-      [`${provider.id}::qwen3-8b`]: placement,
-      "openai::gpt": placement,
-    },
     pinnedModels: [`${provider.id}::qwen3-8b`, "openai::gpt"],
     recentModels: ["openai::gpt", `${provider.id}::qwen3-8b`, "google::gemini"],
   });
@@ -443,7 +438,6 @@ test("removing a provider drops its Model Pad placements, pins and recent models
   await h.store.removeProvider(provider.id);
 
   const settings = await createConfigStore(h.stores, h.secrets.port).getSettings();
-  assert.deepEqual(settings.modelPadPlacements, { "openai::gpt": placement });
   assert.deepEqual(settings.pinnedModels, ["openai::gpt"]);
   assert.deepEqual(settings.recentModels, ["openai::gpt", "google::gemini"]);
 });
@@ -533,7 +527,9 @@ test("a malformed hand-edited slider reads as absent and is never rewritten", as
   await h.stores.portable.reload();
   const before = await fs.readFile(h.portableFile, "utf-8");
 
-  assert.equal((await h.store.getSettings()).agentSlider, undefined);
+  const read = await h.store.getSettings();
+  assert.equal(read.agentSlider, undefined);
+  assert.equal(read.agentSliderUnreadable, true, "the editor can tell a bad hand edit from no slider");
   assert.equal(await fs.readFile(h.portableFile, "utf-8"), before, "reading does not rewrite the file");
   await h.store.saveProvider({ ...provider, label: "LM Studio 2" });
   assert.deepEqual(
@@ -555,6 +551,9 @@ test("the first-run seed writes only when config.json holds no slider at all", a
     ],
     homeStopId: "stop_seed_b",
   };
+
+  // Absent: nothing to report as unreadable.
+  assert.equal((await h.store.getSettings()).agentSliderUnreadable, undefined);
 
   // Absent: the seed is saved and read back.
   const seeded = await h.store.seedAgentSlider(seed);
@@ -579,6 +578,12 @@ test("the first-run seed writes only when config.json holds no slider at all", a
 
   // A malformed seed is refused before anything is written.
   await assert.rejects(h.store.seedAgentSlider({ ...seed, stops: seed.stops.slice(0, 2) }), /3 to 7 stops/u);
+
+  // Replacing it on purpose goes through setAgentSlider, and the flag clears.
+  const replaced = await h.store.setAgentSlider(seed);
+  assert.deepEqual(replaced.agentSlider, seed);
+  assert.equal(replaced.agentSliderUnreadable, undefined);
+  assert.deepEqual((await readJson<{ agentSlider?: unknown }>(h.portableFile)).agentSlider, seed);
 });
 
 test("removing a provider keeps the slider stops that use it", async (t) => {
@@ -1115,20 +1120,12 @@ test("released onboarding local identity migration re-homes cache and remembered
   });
 });
 
-test("provider identity migration re-homes Model Pad placements, pins and recent models with canonical precedence", async (t) => {
+test("provider identity migration re-homes pins and recent models with canonical precedence", async (t) => {
   const releasedId = "custom:onboarding-lmstudio";
   const canonicalId = "custom:lmstudio";
-  const legacyPlacement = { x: 0.1, y: 0.2, xSource: "measured", ySource: "user" } as const;
-  const canonicalPlacement = { x: 0.9, y: 0.8, xSource: "benchmark", ySource: "benchmark" } as const;
   const h = await harness(t, {
     providers: [{ ...provider, id: releasedId, defaultModel: "qwen3-8b" }],
     settings: {
-      modelPadPlacements: {
-        [`${releasedId}::qwen3-8b`]: legacyPlacement,
-        [`${releasedId}::other`]: legacyPlacement,
-        [`${canonicalId}::other`]: canonicalPlacement,
-        "openai::gpt": legacyPlacement,
-      },
       pinnedModels: [`${releasedId}::other`, "openai::gpt", `${canonicalId}::other`, `${releasedId}::qwen3-8b`],
       recentModels: [`${releasedId}::qwen3-8b`, `${canonicalId}::other`, `${releasedId}::other`],
     },
@@ -1138,18 +1135,12 @@ test("provider identity migration re-homes Model Pad placements, pins and recent
   await h.store.listProviders();
 
   const settings = await h.store.getSettings();
-  assert.deepEqual(settings.modelPadPlacements, {
-    [`${canonicalId}::qwen3-8b`]: legacyPlacement,
-    [`${canonicalId}::other`]: canonicalPlacement,
-    "openai::gpt": legacyPlacement,
-  });
   assert.deepEqual(settings.pinnedModels, [
     "openai::gpt",
     `${canonicalId}::other`,
     `${canonicalId}::qwen3-8b`,
   ]);
   const persisted = await readJson<{ settings: typeof settings }>(h.settingsFile);
-  assert.deepEqual(persisted.settings.modelPadPlacements, settings.modelPadPlacements);
   assert.deepEqual(persisted.settings.pinnedModels, settings.pinnedModels);
   assert.deepEqual(settings.recentModels, [`${canonicalId}::qwen3-8b`, `${canonicalId}::other`]);
   assert.deepEqual(persisted.settings.recentModels, settings.recentModels);

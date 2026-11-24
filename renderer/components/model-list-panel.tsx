@@ -1,8 +1,8 @@
 // The searchable model list: a filter field, pinned and recent groups, one row
-// per model with its Pin (and, in the Model Pad picker, Pad) toggle, a Show
-// more row, and the read-only detail card that sits beside it. Shared by the
-// Model Pad picker and the composer's model popover, which shows it as its
-// "Other models" and reassign sub-view.
+// per model with its Pin toggle, a Show more row, and the read-only detail
+// card that sits beside it. Shared by the Bot chat's model picker, the
+// composer's model popover (its "Other models" and reassign sub-view) and the
+// Agent Slider editor's model chooser.
 
 import * as React from "react";
 import {
@@ -27,12 +27,12 @@ import {
   isOlderThanDays,
   showsListPrice,
 } from "../lib/model-details";
-import { formatModelPace } from "../lib/model-pad-pace";
+import { formatModelPace } from "../lib/model-pace-format";
 import type { ModelPaceSummary } from "../shared/model-pace";
-import { useModelPadPreferences } from "../lib/model-pad-preferences";
-import { recordRecentModel } from "../shared/model-pad-preferences";
+import { useModelPreferences } from "../lib/model-preferences";
+import { recordRecentModel } from "../shared/model-preferences";
 import type { ModelInfo } from "../lib/types";
-import { Check, Ellipsis, Grid2x2Check, Grid2x2Plus, Pin } from "lucide-react";
+import { Check, Ellipsis, Pin } from "lucide-react";
 import { ProviderIcon } from "./provider-icon";
 import { providerDeploymentLabel } from "../shared/provider-deployment";
 import { rankMatches, type MatchRange } from "../lib/text-match";
@@ -132,14 +132,12 @@ function useExternalModelDetails(): boolean {
 
 /** Pins or unpins the highlighted List row. */
 const PIN_SHORTCUT = "Command+Shift+P";
-/** Adds the highlighted List row to the Pad, or takes it off. */
-const PAD_SHORTCUT = "Command+Shift+A";
 /** Model rows the List renders before a Show more row. */
 const MODEL_LIST_PAGE = 100;
 const SHOW_MORE_MODELS = "show-more-models";
 
 /**
- * A secondary action inside a cmdk list row (Pin, Pad toggle), for the mouse.
+ * A secondary action inside a cmdk list row (Pin), for the mouse.
  * An option can't hold a focusable control, so it isn't one: keyboard and
  * screen reader users get the row's shortcut, named in its description. A
  * press never chooses the row.
@@ -153,7 +151,7 @@ function ModelRowAction({
 }: {
   label: string;
   shortcut: string;
-  /** Pinned or on the Pad: the action stays visible instead of appearing on hover. */
+  /** Pinned: the action stays visible instead of appearing on hover. */
   active: boolean;
   onToggle: () => void;
   children: React.ReactNode;
@@ -182,53 +180,39 @@ function ModelRowAction({
   );
 }
 
-/** What a row's description says about its Pin and Pad state and shortcuts. */
-function rowActionsDescription(isPinned: boolean, isOnPad: boolean): string {
+/** What a row's description says about its Pin state and shortcut. */
+function rowActionsDescription(isPinned: boolean): string {
   const pin = prettyAccelerator(PIN_SHORTCUT);
-  const pad = prettyAccelerator(PAD_SHORTCUT);
-  return [
-    `${isPinned ? "Pinned" : "Not pinned"}, ${isOnPad ? "on your Pad" : "not on your Pad"}`,
-    `${pin} ${isPinned ? "unpins it" : "pins it"}, ${pad} ${isOnPad ? "removes it from" : "adds it to"} your Pad`,
-  ].join(". ");
+  return `${isPinned ? "Pinned" : "Not pinned"}. ${pin} ${isPinned ? "unpins it" : "pins it"}`;
 }
 
 const NO_RANGES: MatchRange[] = [];
 
-/** One model row in the List, with its Pin and Pad toggles. */
+/** One model row in the List, with its Pin toggle. */
 function ModelListRow({
   entry,
   ranges,
   isActive,
   isPinned,
-  isOnPad,
-  showPadToggle = true,
   onChoose,
   onPreview,
   onTogglePin,
-  onTogglePad,
 }: {
   entry: ModelEntry;
   /** What the filter matched in the label. */
   ranges: readonly MatchRange[];
   isActive: boolean;
   isPinned: boolean;
-  isOnPad: boolean;
-  showPadToggle?: boolean;
   onChoose: (entry: ModelEntry) => void;
   onPreview: (value: string) => void;
   onTogglePin: (value: string) => unknown;
-  onTogglePad: (value: string) => unknown;
 }) {
   const descriptionId = `model-description-${entry.value.replace(/[^a-zA-Z0-9_-]/gu, "-")}`;
   return (
     <CommandItem
       value={entry.value}
       aria-describedby={descriptionId}
-      aria-keyshortcuts={
-        showPadToggle
-          ? [ariaKeyShortcut(PIN_SHORTCUT), ariaKeyShortcut(PAD_SHORTCUT)].join(" ")
-          : ariaKeyShortcut(PIN_SHORTCUT)
-      }
+      aria-keyshortcuts={ariaKeyShortcut(PIN_SHORTCUT)}
       onSelect={() => onChoose(entry)}
       onMouseEnter={() => onPreview(entry.value)}
       className="group gap-2"
@@ -254,9 +238,7 @@ function ModelListRow({
       ) : null}
       {/* Read through aria-describedby only, so the option's name stays the model's. */}
       <span id={descriptionId} className="sr-only" aria-hidden="true">
-        {showPadToggle
-          ? `${describeModel(entry)}. ${rowActionsDescription(isPinned, isOnPad)}.`
-          : `${describeModel(entry)}. ${isPinned ? "Pinned" : "Not pinned"}.`}
+        {`${describeModel(entry)}. ${rowActionsDescription(isPinned)}.`}
       </span>
       {isActive ? <Check className="size-4 shrink-0 text-accent-text" /> : null}
       <ModelRowAction
@@ -267,20 +249,6 @@ function ModelListRow({
       >
         <Pin className={cn("size-3.5", isPinned && "fill-current text-accent-text")} />
       </ModelRowAction>
-      {showPadToggle ? (
-        <ModelRowAction
-          label={isOnPad ? "Remove from Pad" : "Add to Pad"}
-          shortcut={PAD_SHORTCUT}
-          active={isOnPad}
-          onToggle={() => onTogglePad(entry.value)}
-        >
-          {isOnPad ? (
-            <Grid2x2Check className="size-3.5 text-accent-text" />
-          ) : (
-            <Grid2x2Plus className="size-3.5" />
-          )}
-        </ModelRowAction>
-      ) : null}
     </CommandItem>
   );
 }
@@ -431,7 +399,7 @@ export { useExternalModelDetails };
  * for.
  */
 export function useRecordRecentModel(): (value: string) => void {
-  const { save } = useModelPadPreferences();
+  const { save } = useModelPreferences();
   return React.useCallback(
     (value: string) => {
       void save(({ recentModels: recent }) => {
@@ -462,12 +430,6 @@ export interface ModelListPanelProps {
   onPreviewChange: (value: string | undefined) => void;
   onChoose: (entry: ModelEntry) => void;
   searchRef?: React.Ref<HTMLInputElement>;
-  /** Rows offer Add to Pad / Remove from Pad when given. */
-  pad?: {
-    isOnPad: (value: string) => boolean;
-    /** Resolves to whether the model is now on the Pad, or null when saving failed. */
-    toggle: (value: string) => Promise<boolean | null>;
-  };
   /** Changes when the list is shown afresh, so it starts on its first page again. */
   pageKey: string;
   /** The accessible name of the list ("Chat model"). */
@@ -495,18 +457,13 @@ export function ModelListPanel({
   onPreviewChange,
   onChoose,
   searchRef,
-  pad,
   pageKey,
   label = "Chat model",
   filterLabel = "Filter chat models",
   placeholder = "Filter models…",
   sectionProps,
 }: ModelListPanelProps) {
-  const {
-    pinnedModels: pinned,
-    recentModels,
-    save: saveModelPadPreferences,
-  } = useModelPadPreferences();
+  const { pinnedModels: pinned, recentModels, save: saveModelPreferences } = useModelPreferences();
   const sectionRef = React.useRef<HTMLElement | null>(null);
   const orderedEntries = React.useMemo(
     () => (active ? orderModelEntries([...entries], pinned) : []),
@@ -547,7 +504,7 @@ export function ModelListPanel({
     /** Resolves to whether the model is now pinned, or null when saving failed. */
     (value: string): Promise<boolean | null> =>
       // Selection stays usable if saving fails; the pin reverts and says why.
-      saveModelPadPreferences(({ pinnedModels }) => ({
+      saveModelPreferences(({ pinnedModels }) => ({
         pinnedModels: pinnedModels.includes(value)
           ? pinnedModels.filter((entry) => entry !== value)
           : [...pinnedModels, value],
@@ -558,14 +515,14 @@ export function ModelListPanel({
           return null;
         },
       ),
-    [saveModelPadPreferences],
+    [saveModelPreferences],
   );
 
   const [listAnnouncement] = useDebouncedAnnouncement(
     resultCountMessage(listSections.leading.length, search),
     500,
   );
-  // Pin and Pad changes made with a row's shortcut, said politely.
+  // Pin changes made with a row's shortcut, said politely.
   const [actionAnnouncement, setActionAnnouncement] = React.useState("");
   const listLimit = useListLimit(MODEL_LIST_PAGE, `${pageKey}:${search}`);
   // The current and the highlighted model stay mounted past the cap (in their
@@ -610,24 +567,15 @@ export function ModelListPanel({
     if (row) revealInList(row, list);
   }, [pinned]);
   const handleRowShortcut = (event: React.KeyboardEvent) => {
-    const pin = matchesAccelerator(event, PIN_SHORTCUT);
-    const padKey = Boolean(pad) && matchesAccelerator(event, PAD_SHORTCUT);
-    if (!pin && !padKey) return;
+    if (!matchesAccelerator(event, PIN_SHORTCUT)) return;
     event.preventDefault();
     if (event.repeat || isComposingKey(event)) return;
     const entry = listPage.sections.flat().find((row) => row.value === previewValue);
     if (!entry) return;
-    if (pin) {
-      revealAfterPinRef.current = true;
-      void togglePin(entry.value).then((nowPinned) => {
-        if (nowPinned === null) revealAfterPinRef.current = false;
-        else announceAction(`${nowPinned ? "Pinned" : "Unpinned"} ${entry.label}`);
-      });
-      return;
-    }
-    // A removal says so in its toast.
-    void pad!.toggle(entry.value).then((onPad) => {
-      if (onPad) announceAction(`Added ${entry.label} to your Pad`);
+    revealAfterPinRef.current = true;
+    void togglePin(entry.value).then((nowPinned) => {
+      if (nowPinned === null) revealAfterPinRef.current = false;
+      else announceAction(`${nowPinned ? "Pinned" : "Unpinned"} ${entry.label}`);
     });
   };
   const renderListRow = (entry: ModelEntry) => (
@@ -637,12 +585,9 @@ export function ModelListPanel({
       ranges={listSections.ranges.get(entry.value) ?? NO_RANGES}
       isActive={entry.value === selectedValue}
       isPinned={pinned.includes(entry.value)}
-      isOnPad={pad?.isOnPad(entry.value) ?? false}
-      showPadToggle={Boolean(pad)}
       onChoose={onChoose}
       onPreview={onPreviewChange}
       onTogglePin={togglePin}
-      onTogglePad={(value) => pad?.toggle(value)}
     />
   );
 

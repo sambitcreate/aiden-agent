@@ -829,7 +829,11 @@ export function useKeepAwakeStatus() {
   return useQuery({ queryKey: queryKeys.keepAwakeStatus, queryFn: () => scheduleApi.keepAwakeStatus() });
 }
 
-/** Reads device-local Model Pad credential/cache state; never fetches benchmark data. */
+/**
+ * Reads device-local benchmark credential/cache state; never fetches benchmark
+ * data. Unused since the Model Pad page went; PR 4 of the Agent Slider stack
+ * removes it with the benchmark backend.
+ */
 export function useModelInsightsStatus() {
   return useQuery({
     queryKey: queryKeys.modelInsightsStatus,

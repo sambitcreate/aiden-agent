@@ -84,13 +84,11 @@ import {
   withoutProviderVisibility,
 } from "../../renderer/shared/model-visibility.js";
 import {
-  remapModelPadPlacementsProvider,
   remapPinnedModelsProvider,
   remapRecentModelsProvider,
-  withoutProviderModelPadPlacements,
   withoutProviderPinnedModels,
   withoutProviderRecentModels,
-} from "../../renderer/shared/model-pad-preferences.js";
+} from "../../renderer/shared/model-preferences.js";
 import { hiddenModelsForGeminiScope } from "../../renderer/shared/gemini-usage-scope.js";
 import { ASSISTANT_WORKSPACE_ID } from "../../renderer/shared/assistant.js";
 import { workspaceCapabilityFields } from "./workspace-capabilities.js";
@@ -548,7 +546,6 @@ export function createConfigStore(
         const currentSettings = runtimeSettingsFrom((await settingsStore.load()).settings);
         let lastProviderId = currentSettings.lastProviderId;
         let hiddenModelsByProvider = currentSettings.hiddenModelsByProvider;
-        let modelPadPlacements = currentSettings.modelPadPlacements;
         let pinnedModels = currentSettings.pinnedModels;
         let recentModels = currentSettings.recentModels;
         let migrated: StoredProvider[] = [];
@@ -630,7 +627,6 @@ export function createConfigStore(
         const compactionModelOverrides = { ...currentSettings.compactionModelOverrides };
         for (const [legacyId, targetId] of preferenceRoutes) {
           hiddenModelsByProvider = remapHiddenModelProvider(hiddenModelsByProvider, legacyId, targetId);
-          modelPadPlacements = remapModelPadPlacementsProvider(modelPadPlacements, legacyId, targetId);
           pinnedModels = remapPinnedModelsProvider(pinnedModels, legacyId, targetId);
           recentModels = remapRecentModelsProvider(recentModels, legacyId, targetId);
           if (Object.prototype.hasOwnProperty.call(providerThinkingByModel, legacyId)) {
@@ -650,14 +646,12 @@ export function createConfigStore(
           lastProviderId !== currentSettings.lastProviderId ||
           JSON.stringify(hiddenModelsByProvider) !==
             JSON.stringify(currentSettings.hiddenModelsByProvider) ||
-          JSON.stringify(modelPadPlacements) !== JSON.stringify(currentSettings.modelPadPlacements) ||
           JSON.stringify(pinnedModels) !== JSON.stringify(currentSettings.pinnedModels) ||
           JSON.stringify(recentModels) !== JSON.stringify(currentSettings.recentModels)
         ) {
           await settingsStore.update((config) => {
             config.settings.lastProviderId = lastProviderId;
             config.settings.hiddenModelsByProvider = hiddenModelsByProvider;
-            if (modelPadPlacements) config.settings.modelPadPlacements = modelPadPlacements;
             if (pinnedModels) config.settings.pinnedModels = pinnedModels;
             if (recentModels) config.settings.recentModels = recentModels;
             if (Object.keys(providerThinkingByModel).length) config.settings.providerThinkingByModel = providerThinkingByModel;
@@ -802,12 +796,16 @@ export function createConfigStore(
 
   let compactionSnapshot: { source: SettingsShape; value: CompactionSettingsSnapshot } | undefined;
 
-  let agentSliderSnapshot: { source: unknown; value: AgentSliderSettings | undefined } | undefined;
+  let agentSliderSnapshot:
+    | { source: unknown; value: AgentSliderSettings | undefined; unreadable: boolean }
+    | undefined;
 
   /**
    * The settings callers see: settings.json plus the Agent Slider projected
    * read-only from the portable config.json, its only durable home. The
-   * normalized slider is reused until the portable document changes.
+   * normalized slider is reused until the portable document changes. A
+   * present but malformed slider (a hand edit) reads as absent and sets
+   * `agentSliderUnreadable`, so the editor can tell it from "never set up".
    */
   async function publicSettings(settings: AppSettings): Promise<AppSettings> {
     const runtime = runtimeSettingsFrom(settings);
@@ -820,9 +818,15 @@ export function createConfigStore(
       return runtime;
     }
     if (agentSliderSnapshot?.source !== document) {
-      agentSliderSnapshot = { source: document, value: portableAgentSlider(document) };
+      const value = portableAgentSlider(document);
+      agentSliderSnapshot = {
+        source: document,
+        value,
+        unreadable: value === undefined && document.agentSlider !== undefined,
+      };
     }
     if (agentSliderSnapshot.value) runtime.agentSlider = structuredClone(agentSliderSnapshot.value);
+    else if (agentSliderSnapshot.unreadable) runtime.agentSliderUnreadable = true;
     return runtime;
   }
 
@@ -992,11 +996,6 @@ export function createConfigStore(
           config.settings.hiddenModelsByProvider,
           id,
         );
-        const modelPadPlacements = withoutProviderModelPadPlacements(
-          config.settings.modelPadPlacements,
-          id,
-        );
-        if (modelPadPlacements) config.settings.modelPadPlacements = modelPadPlacements;
         const pinnedModels = withoutProviderPinnedModels(config.settings.pinnedModels, id);
         if (pinnedModels) config.settings.pinnedModels = pinnedModels;
         const recentModels = withoutProviderRecentModels(config.settings.recentModels, id);

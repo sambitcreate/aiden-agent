@@ -1,6 +1,6 @@
 export const SETTINGS_SECTIONS = [
   "providers",
-  "modelData",
+  "agentSlider",
   "limits",
   "skills",
   "mcp",
@@ -40,19 +40,18 @@ export const SETTINGS_DESTINATIONS: ReadonlyArray<{
 }> = [
   { id: "providers", title: "Providers", keywords: ["models", "api", "keys", "connect my ai", "chatgpt", "lm studio", "ollama", "custom provider"] },
   {
-    id: "modelData",
-    title: "Model Pad",
+    id: "agentSlider",
+    title: "Agent Slider",
     keywords: [
-      "personal",
       "models",
-      "arrange",
-      "rank",
-      "capability",
-      "speed",
-      "pace",
-      "artificial analysis",
-      "openrouter",
-      "benchmark insights",
+      "model and effort",
+      "effort",
+      "reasoning",
+      "thinking",
+      "stops",
+      "home stop",
+      "local to cloud",
+      "effort ladder",
     ],
   },
   {
@@ -306,7 +305,7 @@ export const SETTINGS_GROUPS: readonly SettingsGroup[] = [
 
 export type SettingsPageId =
   | "providers"
-  | "modelData"
+  | "agentSlider"
   | "limits"
   | "skills"
   | "mcp"
@@ -338,7 +337,7 @@ export type SettingsPageEntry = {
 /** The sidebar. `section` stays the only URL state; these pages group sections into tabs. */
 export const SETTINGS_PAGES: readonly SettingsPageEntry[] = [
   { id: "providers", title: "Providers", group: "Models & Context", tabs: ["providers"] },
-  { id: "modelData", title: "Model Pad", group: "Models & Context", tabs: ["modelData"] },
+  { id: "agentSlider", title: "Agent Slider", group: "Models & Context", tabs: ["agentSlider"] },
   { id: "limits", title: "Context & Limits", group: "Models & Context", tabs: ["limits"] },
   { id: "skills", title: "Skills", group: "Capabilities", tabs: ["skills"] },
   { id: "mcp", title: "Connectors", group: "Capabilities", tabs: ["mcp"] },

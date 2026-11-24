@@ -402,8 +402,7 @@ chats) renders one page and a **Show N more** row, through
 - An option holds no focusable control (axe `nested-interactive`). A row's
   secondary actions are `aria-hidden` mouse targets with a `title`, and the
   keyboard gets a shortcut on the highlighted row, named in its description
-  and `aria-keyshortcuts` (the model list: ⇧⌘P pins, and ⇧⌘A adds to the Pad
-  where the list offers the Pad).
+  and `aria-keyshortcuts` (the model list: ⇧⌘P pins).
 
 ## Accessibility gate
 

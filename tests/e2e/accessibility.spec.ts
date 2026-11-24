@@ -49,7 +49,7 @@ async function seedChat({ app, page }: AidenE2e): Promise<void> {
 test("core surfaces pass the WCAG A/AA axe gate and keep their accessible structure", async ({
   aiden,
 }) => {
-  const { page } = aiden;
+  const { page, app } = aiden;
   await finishLmStudioOnboarding(page);
   await waitForToastsToClear(page);
   const problems: string[] = [];
@@ -212,6 +212,57 @@ test("core surfaces pass the WCAG A/AA axe gate and keep their accessible struct
         - radiogroup "Themes":
           - radio "Aiden" [checked]
     `);
+  });
+
+  await test.step("settings: Agent Slider editor at narrow and wide widths", async () => {
+    const navigation = page.getByRole("navigation", { name: "Settings" });
+    await navigation
+      .getByRole("button", { name: "Agent Slider", exact: true })
+      .click();
+    for (const [label, width, height] of [
+      ["wide", 1280, 800],
+      ["narrow", 600, 720],
+    ] as const) {
+      await app.evaluate(
+        ({ BrowserWindow }, size) => {
+          BrowserWindow.getAllWindows()[0]?.setSize(size.width, size.height);
+        },
+        { width, height },
+      );
+      await expect(
+        page.getByRole("slider", { name: "Agent Slider" }),
+      ).toBeVisible();
+      problems.push(
+        ...(await auditAccessibility(page, {
+          surface: `settings agent slider (${label})`,
+        })),
+      );
+      // Onboarding seeded Fast / Balanced (the connected model, home) / Smart.
+      await expect(page.getByRole("main")).toMatchAriaSnapshot(`
+        - main:
+          - heading "Agent Slider" [level=1]
+          - heading "Preview" [level=2]
+          - button "Templates"
+          - slider "Agent Slider"
+          - heading "Stops" [level=2]
+          - radiogroup "Home stop":
+            - list "Slider stops, left to right":
+              - listitem:
+                - 'radio "Home stop: Fast"'
+                - textbox "Name of stop 1"
+                - button "Move Fast up"
+                - button "Move Fast down"
+                - button "Remove Fast"
+                - button "Choose a model for Fast"
+              - listitem:
+                - 'radio "Home stop: Balanced" [checked]'
+                - textbox "Name of stop 2"
+              - listitem:
+                - 'radio "Home stop: Smart"'
+                - textbox "Name of stop 3"
+          - button "Add stop"
+      `);
+    }
   });
 
   expect(problems).toEqual([]);
