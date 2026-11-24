@@ -282,13 +282,14 @@ function harness(_t: test.TestContext, options: Options = {}) {
       state.calls.toolchain += 1;
       return state.toolchain;
     },
-    fingerprint: async (_root, app): Promise<LaunchSurfaceRead | LaunchSurfaceProblem> => {
+    fingerprint: async (root, app): Promise<LaunchSurfaceRead | LaunchSurfaceProblem> => {
       state.calls.fingerprint += 1;
       if (state.surfaceProblem) return state.surfaceProblem;
       const script = app.script!;
       return {
         fingerprint: state.fingerprints.get(app.root) ?? "F1",
         surface: {
+          checkout: root,
           appRoot: app.root,
           installRoot: app.installRoot,
           lockfileLevelsUp: app.packageManager.lockfileLevelsUp,

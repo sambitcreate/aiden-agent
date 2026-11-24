@@ -206,6 +206,7 @@ async function readSurface(workspaceRoot: string, app: DetectedApp): Promise<Lau
   const install = info.name ? installCommand(info) : null;
   const run = info.name ? runScriptCommand(info, script) : null;
   const surface: LaunchSurface = {
+    checkout: realRoot,
     appRoot: app.root,
     installRoot: app.installRoot,
     lockfileLevelsUp: info.lockfileLevelsUp,

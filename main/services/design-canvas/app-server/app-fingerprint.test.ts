@@ -102,6 +102,28 @@ test("an enclosing lockfile two levels up is hashed", { skip }, async (t) => {
   assert.notEqual((await surfaceOf(root, app)).fingerprint, first.fingerprint);
 });
 
+test("another checkout with identical launch files has another fingerprint; the same checkout through a link has the same one", { skip }, async (t) => {
+  const files = async (root: string) => {
+    await put(root, "package.json", pkg({ dev: "vite", predev: "node gen.js" }));
+    await put(root, "package-lock.json", "{}");
+    await put(root, "vite.config.ts", "export default {}");
+  };
+  const site = await workspace(t);
+  const fork = await workspace(t);
+  await files(site);
+  await files(fork);
+  const ofSite = await surfaceOf(site, await webApp(site));
+  const ofFork = await surfaceOf(fork, await webApp(fork));
+  assert.deepEqual(ofFork.scripts, ofSite.scripts, "the card would show the same scripts");
+  assert.deepEqual(ofFork.surface.files, ofSite.surface.files, "and the same launch files, byte for byte");
+  assert.notEqual(ofFork.fingerprint, ofSite.fingerprint, "a workspace re-pointed at the fork asks again");
+
+  const links = await workspace(t);
+  const linked = path.join(links, "site-link");
+  await symlink(site, linked);
+  assert.equal((await surfaceOf(linked, await webApp(site))).fingerprint, ofSite.fingerprint, "the same folder by another path keeps its consent");
+});
+
 test("a .yarnrc.yml yarnPath target is hashed, and a yarnPath that is a symlink refuses", { skip }, async (t) => {
   const root = await workspace(t);
   await put(root, "package.json", pkg({ dev: "vite" }, { packageManager: "yarn@4.5.0" }));
