@@ -14,6 +14,11 @@
 import * as fs from "node:fs/promises";
 import path from "node:path";
 import {
+  deletedClaims,
+  mergeSavedChatPages,
+  type DeletedPage,
+} from "../../../renderer/shared/design-canvas/chat-pages.js";
+import {
   emptyDesignCanvas,
   isDesignChatId,
   parseDesignCanvas,
@@ -49,16 +54,21 @@ export const DESIGN_CANVAS_LAYOUT_MARKER = ".layout-v3";
 /**
  * A save's answer. `moved` means the canvas being saved belongs to a workspace
  * the chat has left: nothing was written, the edits are not to be retried, and
- * `workspaceId` names the workspace the chat is in now.
+ * `workspaceId` names the workspace the chat is in now. `chatPages` and
+ * `namedFor` (page id to chat id) come back only when the store's merge
+ * changed what was sent: they are what was stored.
  */
 export type DesignCanvasSaveResult =
-  | { ok: true; revision: number }
+  | { ok: true; revision: number; chatPages?: Record<string, string>; namedFor?: Record<string, string> }
   | { ok: false; reason: "conflict"; doc: DesignCanvas }
   | { ok: false; reason: "moved"; workspaceId: string }
   | { ok: false; reason: "invalid"; issues: string[] };
 
 /** A canvas holds at most 4 000 frames and 2 000 comments; anything past 16 MiB is not ours. */
 const MAX_DOCUMENT_BYTES = 16 * 1024 * 1024;
+
+/** Deleted pages with claims or a `namedFor` remembered per workspace; the oldest go first. */
+const DELETED_PAGES_LIMIT = 200;
 
 /** Same alphabet and bound as the chat store's file names. */
 export function assertDesignCanvasChatId(chatId: unknown): asserts chatId is string {
@@ -75,6 +85,13 @@ export class DesignCanvasStore {
   private readonly writeJson: typeof writeJsonAtomic;
   private readonly maxDocumentBytes: number;
   private readonly chains = new Map<string, Promise<unknown>>();
+  /**
+   * Per workspace, the deleted pages that had claims or a `namedFor`, and
+   * where each chat on one went, so an undo that brings a page back brings
+   * back its claims (`mergeSavedChatPages`). Memory only: main and the
+   * renderer's undo history restart together.
+   */
+  private readonly deletedPages = new Map<string, Map<string, DeletedPage>>();
   /** The one-time clear of pre-v3 files; shared by every workspace's first call. */
   private layout: Promise<void> | null = null;
 
@@ -100,6 +117,12 @@ export class DesignCanvasStore {
    * are not remembered as removed, so Aiden writing one again shows it again.
    * `beforeWrite` runs on the workspace's chain just before the file is
    * written, as for `update`; throwing there writes nothing.
+   *
+   * Chats' own pages are main's: the save's `chatPages` and `namedFor` are
+   * merged with the stored ones (`mergeSavedChatPages`). A save never adds or
+   * moves a claim, except to give back a claim on a page it brings back that
+   * this store recorded when the page was deleted, while the chat is still
+   * where that delete moved it. The record changes only once the write lands.
    */
   async save(
     workspaceId: string,
@@ -123,14 +146,21 @@ export class DesignCanvasStore {
       const current = await this.read(workspaceId);
       if (current.revision !== baseRevision) return { ok: false, reason: "conflict", doc: current };
       const revision = baseRevision + 1;
+      const merged = mergeSavedChatPages(current, parsed.doc, this.deletedOf(workspaceId));
       // A save comes from the person's canvas: a page they took off is remembered,
       // unless it was their undo that took it off.
-      const doc = withRemovedPagePaths(current, { ...parsed.doc, revision }, true, new Set(options.undone ?? []));
+      const doc = withRemovedPagePaths(current, { ...merged.doc, revision }, true, new Set(options.undone ?? []));
       // The pages remembered as taken off count too: what is written must read back.
       if (this.tooLarge(doc)) return tooLarge();
       await options.beforeWrite?.();
       await this.write(workspaceId, doc);
-      return { ok: true, revision };
+      this.forgetRestored(workspaceId, merged.restored);
+      this.remember(workspaceId, merged.deletedNow);
+      if (!merged.changed) return { ok: true, revision };
+      const namedFor = Object.fromEntries(
+        doc.pages.flatMap((page) => (page.namedFor !== undefined ? [[page.id, page.namedFor]] : [])),
+      );
+      return { ok: true, revision, chatPages: { ...doc.chatPages }, namedFor };
     });
   }
 
@@ -157,6 +187,7 @@ export class DesignCanvasStore {
       if (this.tooLarge(doc)) throw new Error("The canvas is too large to save.");
       await options.beforeWrite?.();
       await this.write(workspaceId, doc);
+      this.remember(workspaceId, deletedClaims(current, doc));
       return doc;
     });
   }
@@ -165,6 +196,7 @@ export class DesignCanvasStore {
   async delete(workspaceId: string): Promise<void> {
     assertDesignCanvasWorkspaceId(workspaceId);
     return this.serialize(workspaceId, async () => {
+      this.deletedPages.delete(workspaceId);
       await fs.rm(this.file(workspaceId), { force: true });
       const prefix = `${workspaceId}.json.corrupt-`;
       const names = await fs.readdir(this.root()).catch((error: unknown) => {
@@ -175,6 +207,39 @@ export class DesignCanvasStore {
         if (name.startsWith(prefix)) await fs.rm(path.join(this.root(), name), { force: true });
       }
     });
+  }
+
+  private deletedOf(workspaceId: string): ReadonlyMap<string, DeletedPage> {
+    return this.deletedPages.get(workspaceId) ?? new Map();
+  }
+
+  /** Records pages a write deleted. A new delete of a page id replaces what an older one recorded. */
+  private remember(workspaceId: string, deleted: ReadonlyMap<string, DeletedPage>): void {
+    if (deleted.size === 0) return;
+    let record = this.deletedPages.get(workspaceId);
+    if (!record) this.deletedPages.set(workspaceId, (record = new Map()));
+    for (const [pageId, entry] of deleted) {
+      record.delete(pageId);
+      record.set(pageId, entry);
+    }
+    for (const pageId of record.keys()) {
+      if (record.size <= DELETED_PAGES_LIMIT) break;
+      record.delete(pageId);
+    }
+  }
+
+  /** Takes what a save gave back out of the record, so a later undo acts on the newest delete only. */
+  private forgetRestored(workspaceId: string, restored: ReadonlyMap<string, DeletedPage>): void {
+    const record = this.deletedPages.get(workspaceId);
+    if (!record) return;
+    for (const [pageId, given] of restored) {
+      const entry = record.get(pageId);
+      if (!entry) continue;
+      for (const chatId of given.claims.keys()) entry.claims.delete(chatId);
+      if (given.namedFor !== undefined && entry.namedFor === given.namedFor) delete entry.namedFor;
+      if (entry.claims.size === 0 && entry.namedFor === undefined) record.delete(pageId);
+    }
+    if (record.size === 0) this.deletedPages.delete(workspaceId);
   }
 
   private file(workspaceId: string): string {

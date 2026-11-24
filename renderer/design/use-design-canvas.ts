@@ -34,6 +34,7 @@
 import * as React from "react";
 import { designCanvasApi } from "../lib/ipc";
 import { registerLifecycleFlush, setRendererLifecycleGuard } from "../lib/lifecycle-guard";
+import { applyStoredClaims } from "../shared/design-canvas/chat-pages";
 import { shownPagePaths, type DesignCanvas } from "../shared/design-canvas/schema";
 import {
   carryUnrecorded,
@@ -257,7 +258,19 @@ function createCanvasSync(
         if (result.ok) {
           for (const page of undone) undonePages.delete(page);
           server = { ...doc, revision: result.revision };
-          if (local === doc) local = server;
+          if (result.chatPages) {
+            // The store kept its own chats' pages over what was sent: show those, and
+            // carry them into every kept step, so no undo brings the sent ones back.
+            const storedClaims = (target: DesignCanvas) => applyStoredClaims(target, result.chatPages!, result.namedFor);
+            const before = local ?? doc;
+            server = storedClaims(server);
+            local = local === doc ? server : storedClaims(before);
+            const change = { before, from: doc, to: server };
+            if (unsettled) noteChange({ takenIn: change });
+            history = takeIn(history, change);
+          } else if (local === doc) {
+            local = server;
+          }
           failed = false;
         } else if (result.reason === "conflict") {
           takeInStored(result.doc, local ?? doc);

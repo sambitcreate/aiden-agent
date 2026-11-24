@@ -5,6 +5,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import {
   addChatPage,
+  applyStoredClaims,
   ChatPagesFullError,
   chatsOnPage,
   claimPage,
@@ -275,4 +276,17 @@ test("mergeSavedChatPages never adds namedFor to a stored page without it, and r
   assert.equal(pageOf(mergeSavedChatPages(now, undone, deleted, () => false).doc, "pa")?.namedFor, undefined);
   // Nor for a brought-back page the record does not hold.
   assert.equal(pageOf(mergeSavedChatPages(now, undone, new Map(), () => true).doc, "pa")?.namedFor, undefined);
+});
+
+test("applyStoredClaims takes the stored claims and marks, keeps newer edits, and moves a claim on a page since deleted to the first page", () => {
+  const local: DesignCanvas = {
+    ...canvas(["p2", "p3"], { chatPages: { a: "page-1", stale: "p2" } }),
+    frames: [note("newer", "p3")],
+  };
+  local.pages = local.pages.map((page) => (page.id === "p3" ? { ...page, namedFor: "x" } : page));
+  const applied = applyStoredClaims(local, { a: "p2", b: "gone" }, { p2: "a" });
+  assert.deepEqual(applied.chatPages, { a: "p2", b: "page-1" });
+  assert.equal(pageOf(applied, "p2")?.namedFor, "a");
+  assert.equal(pageOf(applied, "p3")?.namedFor, undefined);
+  assert.deepEqual(applied.frames, local.frames);
 });

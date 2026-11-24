@@ -242,6 +242,30 @@ export function mergeSavedChatPages(
   return { doc, changed: doc !== saved, deletedNow: deletedClaims(current, doc), restored };
 }
 
+/**
+ * `doc` with the claims and `namedFor` marks a save's answer says were
+ * stored (`namedFor` maps page id to chat id). Nothing else changes, so newer
+ * edits in `doc` stay. A claim on a page `doc` no longer has goes to its
+ * first page, as a delete would move it.
+ */
+export function applyStoredClaims(
+  doc: DesignCanvas,
+  chatPages: Readonly<Record<string, string>>,
+  namedFor: Readonly<Record<string, string>> = {},
+): DesignCanvas {
+  const ids = new Set(doc.pages.map((page) => page.id));
+  const first = doc.pages[0]!.id;
+  const claims = Object.fromEntries(
+    Object.entries(chatPages).map(([chatId, pageId]) => [chatId, ids.has(pageId) ? pageId : first]),
+  );
+  const pages = doc.pages.map((page) => {
+    const named = Object.prototype.hasOwnProperty.call(namedFor, page.id) ? namedFor[page.id] : undefined;
+    if (named === page.namedFor) return page;
+    return named === undefined ? withoutNamedFor(page) : { ...page, namedFor: named };
+  });
+  return { ...doc, pages, chatPages: claims };
+}
+
 function withoutNamedFor(page: DesignPage): DesignPage {
   if (page.namedFor === undefined) return page;
   const { namedFor: _namedFor, ...rest } = page;

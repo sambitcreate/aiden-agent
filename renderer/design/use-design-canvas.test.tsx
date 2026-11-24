@@ -8,7 +8,7 @@ import { DESIGN_CANVAS_CLOSED_RETRY_MS, useDesignCanvas } from "./use-design-can
 
 type Controller = ReturnType<typeof useDesignCanvas>;
 type SaveReply =
-  | { ok: true; revision: number }
+  | { ok: true; revision: number; chatPages?: Record<string, string>; namedFor?: Record<string, string> }
   | { ok: false; reason: "conflict"; doc: DesignCanvas }
   | { ok: false; reason: "moved"; workspaceId: string }
   | { ok: false; reason: "invalid"; issues: string[] };
@@ -400,6 +400,33 @@ test("all of one Aiden reply's canvas changes undo as one step, after which the 
   assert.deepEqual(ids(controller.doc), ["a", "b", "c"]);
   await tick(800);
   assert.deepEqual(ids(stored), ["a", "b", "c"]);
+});
+
+test("undoing a turn that used a page keeps the picker on the stored claim", async () => {
+  stored = { ...canvas(4, note("a")), pages: [{ id: "page-1", name: "Page 1" }, { id: "p2", name: "Pricing" }] };
+  await mount();
+  await act(async () => controller.change(moveTo("a", 10)));
+  await tick(800);
+  // Aiden's reply makes Pricing this chat's page and adds a note there.
+  await aidenSaves({ ...stored, revision: 6, chatPages: { "chat-1": "p2" }, frames: [note("a", 10), { ...note("b"), pageId: "p2" }] }, "reply-1");
+  assert.deepEqual(controller.doc?.chatPages, { "chat-1": "p2" });
+
+  // Undoing the reply sends the old claims; the store keeps its own and says so.
+  saveReplies.push((doc, base) => {
+    stored = { ...doc, revision: base + 1, chatPages: { "chat-1": "p2" } };
+    return { ok: true, revision: stored.revision, chatPages: { "chat-1": "p2" }, namedFor: {} };
+  });
+  await act(async () => controller.undo());
+  await tick(800);
+  assert.deepEqual(ids(controller.doc), ["a"]);
+  assert.deepEqual(controller.doc?.chatPages, { "chat-1": "p2" }, "the canvas shows the stored claim");
+
+  // The claim is in every kept step, so the next undo does not bring the stale one back.
+  await act(async () => controller.undo());
+  assert.equal(xOf(controller.doc, "a"), 0);
+  assert.deepEqual(controller.doc?.chatPages, { "chat-1": "p2" });
+  await tick(800);
+  assert.deepEqual(stored.chatPages, { "chat-1": "p2" });
 });
 
 test("a reply's change the canvas fetched before hearing whose it was still undoes with the rest of that reply", async () => {

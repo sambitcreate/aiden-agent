@@ -7,6 +7,8 @@ import {
   emptyDesignCanvas,
   type DesignCanvas,
 } from "../../../renderer/shared/design-canvas/schema.js";
+import { addChatPage } from "../../../renderer/shared/design-canvas/chat-pages.js";
+import { addPage, deletePage } from "../../../renderer/shared/design-canvas/pages.js";
 import { writeJsonAtomic } from "../durable-fs.js";
 import { DESIGN_CANVAS_LAYOUT_MARKER, DesignCanvasStore, DesignChatCanvases } from "./store.js";
 
@@ -406,4 +408,152 @@ test("a v2 document at a workspace path is set aside as corrupt", async (t) => {
   const names = await fs.readdir(root);
   assert.equal(names.includes("ws-1.json"), false);
   assert.equal(names.filter((name) => name.startsWith("ws-1.json.corrupt-")).length, 1);
+});
+
+// Chats' own pages are main's: a person's save is merged with the stored claims.
+
+const pageIdsOf = (doc: DesignCanvas) => doc.pages.map((page) => page.id);
+
+/** A store whose canvas has pages page-1, then each of `ids`, and the given claims, written as main would. */
+async function claimedStore(t: TestContext, ids: string[], chatPages: Record<string, string>) {
+  const root = await tempRoot(t);
+  const real = new DesignCanvasStore({ root: () => root });
+  const doc = await real.update("ws-1", (current) => {
+    let next = current;
+    for (const id of ids) next = addPage(next, id, id);
+    return { ...next, chatPages };
+  });
+  return { store: real, doc };
+}
+
+async function saveOk(store: DesignCanvasStore, doc: DesignCanvas, options: Parameters<DesignCanvasStore["save"]>[3] = {}) {
+  const current = await store.get("ws-1");
+  const result = await store.save("ws-1", doc, current.revision, options);
+  assert.equal(result.ok, true, JSON.stringify(result));
+  return result as Extract<typeof result, { ok: true }>;
+}
+
+test("a person's save cannot add or move a claim", async (t) => {
+  const { store, doc } = await claimedStore(t, ["P2"], { A: "page-1" });
+  const result = await saveOk(store, { ...doc, chatPages: { A: "P2", B: "page-1" } });
+  assert.deepEqual((await store.get("ws-1")).chatPages, { A: "page-1" });
+  assert.deepEqual(result.chatPages, { A: "page-1" });
+  // A save that changes no claim answers with the revision alone.
+  const plain = await saveOk(store, withNote(await store.get("ws-1"), "n"));
+  assert.deepEqual(Object.keys(plain).sort(), ["ok", "revision"]);
+});
+
+test("a stale claim in a save after the chat's own turn does not move it back", async (t) => {
+  const { store, doc: held } = await claimedStore(t, ["P", "Q"], { A: "P" });
+  // A's turn makes Q its page.
+  const turned = await store.update("ws-1", (current) => ({ ...current, chatPages: { A: "Q" } }));
+  // A's canvas, still holding {A: P}, saves an unrelated edit at the new revision.
+  const result = await store.save("ws-1", withNote({ ...held, revision: turned.revision }, "n"), turned.revision);
+  assert.equal(result.ok, true);
+  const stored = await store.get("ws-1");
+  assert.equal(stored.chatPages.A, "Q");
+  assert.deepEqual(stored.frames.map((frame) => frame.id), ["n"]);
+});
+
+test("an undo that brings a deleted page back brings its claims back", async (t) => {
+  const { store, doc: before } = await claimedStore(t, ["P2"], { B: "P2" });
+  await saveOk(store, deletePage(before, "P2"));
+  assert.deepEqual((await store.get("ws-1")).chatPages, { B: "page-1" });
+  await saveOk(store, before, { undone: [] });
+  const stored = await store.get("ws-1");
+  assert.deepEqual(pageIdsOf(stored), ["page-1", "P2"]);
+  assert.deepEqual(stored.chatPages, { B: "P2" });
+});
+
+test("a renderer cannot move another chat's claim to a new page id", async (t) => {
+  const { store, doc } = await claimedStore(t, [], { B: "page-1" });
+  await saveOk(store, { ...addPage(doc, "P9", "New"), chatPages: { B: "P9" } });
+  const stored = await store.get("ws-1");
+  assert.deepEqual(pageIdsOf(stored), ["page-1", "P9"]);
+  assert.deepEqual(stored.chatPages, { B: "page-1" });
+});
+
+test("a page Aiden deletes is recorded, so the person's undo of a later edit cannot resurrect claims for it unless it brings the page back", async (t) => {
+  const { store, doc: before } = await claimedStore(t, ["P2"], { B: "P2" });
+  await store.update("ws-1", (current) => deletePage(current, "P2"));
+  // An undo that does not bring P2 back leaves B where the delete moved it.
+  await saveOk(store, withNote(await store.get("ws-1"), "n"));
+  assert.deepEqual((await store.get("ws-1")).chatPages, { B: "page-1" });
+  // One that does brings B back with it.
+  await saveOk(store, before);
+  assert.deepEqual((await store.get("ws-1")).chatPages, { B: "P2" });
+});
+
+test("a save that deletes a page moves its chats to the first page, even when the renderer's copy forgot them", async (t) => {
+  const { store, doc } = await claimedStore(t, ["P2"], { B: "P2" });
+  const result = await saveOk(store, { ...deletePage(doc, "P2"), chatPages: {} });
+  assert.deepEqual((await store.get("ws-1")).chatPages, { B: "page-1" });
+  assert.deepEqual(result.chatPages, { B: "page-1" });
+});
+
+test("a save cannot mark a page as following a chat", async (t) => {
+  const { store, doc } = await claimedStore(t, ["P2"], {});
+  const marked = { ...doc, pages: doc.pages.map((page) => (page.id === "P2" ? { ...page, namedFor: "A" } : page)) };
+  const result = await saveOk(store, marked);
+  assert.equal((await store.get("ws-1")).pages.find((page) => page.id === "P2")?.namedFor, undefined);
+  assert.deepEqual(result.namedFor, {});
+});
+
+test("a chat deleted or moved after its page was deleted is not brought back by undoing the delete", async (t) => {
+  const { store, doc: before } = await claimedStore(t, ["P2"], { B: "P2", C: "P2", D: "P2" });
+  await saveOk(store, deletePage(before, "P2"));
+  // B is deleted and C moves away: main drops both entries. D stays.
+  await store.update("ws-1", (current) => ({ ...current, chatPages: { D: "page-1" } }));
+  await saveOk(store, before);
+  assert.deepEqual((await store.get("ws-1")).chatPages, { D: "P2" });
+});
+
+test("undoing the delete of a page made for a chat that now uses another page brings back its namedFor", async (t) => {
+  const root = await tempRoot(t);
+  const store = new DesignCanvasStore({ root: () => root });
+  const before = await store.update("ws-1", (current) => addChatPage(current, "A", "Landing", "pa"));
+  await saveOk(store, deletePage(before, "pa"));
+  // A uses another page since.
+  await store.update("ws-1", (current) => ({ ...addPage(current, "P3", "Other"), chatPages: { A: "P3" } }));
+  // The person's undo: the old document, with the claim carried into it.
+  const result = await saveOk(store, { ...addPage(before, "P3", "Other"), chatPages: { A: "P3" } });
+  const stored = await store.get("ws-1");
+  assert.deepEqual(stored.pages.find((page) => page.id === "pa"), { id: "pa", name: "Landing", namedFor: "A" });
+  assert.deepEqual(stored.chatPages, { A: "P3" });
+  assert.equal("namedFor" in result, false, "nothing was merged, so the answer is plain");
+});
+
+test("a write whose beforeWrite throws leaves the delete record unchanged", async (t) => {
+  const { store, doc: before } = await claimedStore(t, ["P2"], { B: "P2" });
+  await store.update("ws-1", (current) => deletePage(current, "P2"));
+  const current = await store.get("ws-1");
+  await assert.rejects(
+    store.save("ws-1", before, current.revision, {
+      beforeWrite: () => {
+        throw new Error("workspace gone");
+      },
+    }),
+    /workspace gone/u,
+  );
+  assert.deepEqual((await store.get("ws-1")).chatPages, { B: "page-1" });
+  // The failed restore did not use up the record.
+  await saveOk(store, before);
+  assert.deepEqual((await store.get("ws-1")).chatPages, { B: "P2" });
+});
+
+test("deleting the same page id twice and undoing restores the claims of the newest delete only", async (t) => {
+  const { store, doc: original } = await claimedStore(t, ["P2", "P3"], { B: "P2", D: "P2" });
+  await saveOk(store, deletePage(original, "P2"));
+  // D uses P3, so the undo brings back only B; D's part of that delete stays recorded.
+  await store.update("ws-1", (current) => ({ ...current, chatPages: { ...current.chatPages, D: "P3" } }));
+  await saveOk(store, { ...original, chatPages: { B: "P2", D: "P2" } });
+  assert.deepEqual((await store.get("ws-1")).chatPages, { B: "P2", D: "P3" });
+  // D goes back to Page 1, where the first delete moved it, and C joins P2.
+  const shared = await store.update("ws-1", (current) => ({ ...current, chatPages: { B: "P2", C: "P2", D: "page-1" } }));
+  // The redo deletes P2 again: B and C are on it, D is not.
+  await saveOk(store, deletePage(shared, "P2"));
+  await store.update("ws-1", (current) => ({ ...current, chatPages: { ...current.chatPages, B: "P3" } }));
+  // An undo that claims all three on P2 restores C only: B moved since, and D was not on P2 at this delete.
+  await saveOk(store, { ...original, chatPages: { B: "P2", C: "P2", D: "P2" } });
+  assert.deepEqual((await store.get("ws-1")).chatPages, { B: "P3", C: "P2", D: "page-1" });
 });
