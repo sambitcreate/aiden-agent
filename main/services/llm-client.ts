@@ -595,6 +595,7 @@ import {
   recentWrittenPages,
 } from "./design-canvas/main.js";
 import { createDesignMdTurn, withDesignModeSection, type DesignMdTurn } from "./design-canvas/design-md/turn.js";
+import { createDesignNoteOffers, designMdTurnDeps, designOfferable } from "./design-canvas/design-md/turn-wiring.js";
 import { reportAnalyticsEvent } from "./analytics/analytics-report.js";
 import { designTurnPages } from "./design-canvas/views.js";
 import {
@@ -3004,8 +3005,13 @@ async function prepareGeneration(
   // this chat could write them, and Aiden writes them only once the person
   // says yes in chat. With the live flag on, the DESIGN.md draft offer takes
   // its place under the same conditions.
-  const designSystemOfferable =
-    !botContext && !assistantMode && !windowless && permission !== "none" && permission !== "read-only" && !options.excludeToolNames?.has("write_file");
+  const designSystemOfferable = designOfferable({
+    bot: botContext !== undefined,
+    assistantMode: Boolean(assistantMode),
+    windowless,
+    permission,
+    writeFileExcluded: options.excludeToolNames?.has("write_file") ?? false,
+  });
   /** This turn's DESIGN.md glue, when the live flag is on and the canvas tools are built. */
   let designMdTurn: DesignMdTurn | undefined;
   if (folderPath && (designCanvasOffered || designModeToolOffered || canvasHoldable)) {
@@ -3016,19 +3022,21 @@ async function prepareGeneration(
       const current = workspace ? await configStore.getWorkspace(workspace.id) : undefined;
       return (await designModeOn()) && current?.folderPath === canvasRoot && current.permission !== "none";
     };
-    const mdTurn = designLive
-      ? createDesignMdTurn({
-          workspaceRoot: canvasRoot,
-          reader: designMdReader,
-          offers: designMdOffers,
-          appRoots: designAppRoots,
-          stillAvailable: canvasStillAvailable,
-          offerable: designSystemOfferable,
-          askOffered,
-          report: reportAnalyticsEvent,
-          log: (message, error) => logger.warn("design", message, error),
-        })
-      : undefined;
+    const mdTurnDeps = designMdTurnDeps({
+      live: designLive,
+      workspaceRoot: canvasRoot,
+      offerable: designSystemOfferable,
+      askOffered,
+      stillAvailable: canvasStillAvailable,
+      services: {
+        reader: designMdReader,
+        offers: designMdOffers,
+        appRoots: designAppRoots,
+        report: reportAnalyticsEvent,
+        log: (message, error) => logger.warn("design", message, error),
+      },
+    });
+    const mdTurn = mdTurnDeps ? createDesignMdTurn(mdTurnDeps) : undefined;
     designMdTurn = mdTurn;
     const canvasTools = [
       ...createDesignCanvasTools({
@@ -3234,26 +3242,22 @@ async function prepareGeneration(
    * the next turn's transcript holds it and an unchanged count adds nothing.
    */
   let canvasStatusNoted = false;
-  let offeredDesignSystemFolder: string | undefined;
+  const designNoteOffers = createDesignNoteOffers({
+    live: designLive,
+    folderPath,
+    offerable: designSystemOfferable,
+    mdTurn: designMdTurn,
+    v1: designSystemOffers,
+    signal,
+    log: (message, error) => logger.warn("design", message, error),
+  });
   const canvasStatusLine = async (): Promise<string> => {
     const { doc, workspaceId } = await designCanvasStore.get(params.chatId);
     // The canvas is shared by the workspace's chats; the comment count is this chat's own.
     const own = { ...doc, comments: doc.comments.filter((comment) => comment.chatId === params.chatId) };
     const line = canvasPromptLine(own, await designPages.view(doc, workspaceId), params.designView?.selection);
     // With the live flag on, the DESIGN.md sentence (and its draft offer) replaces v1's tokens offer.
-    if (designLive) {
-      const sentence = designMdTurn ? await designMdTurn.statusSentence(signal) : "";
-      return sentence ? `${line} ${sentence}` : line;
-    }
-    if (!folderPath || !designSystemOfferable) return line;
-    try {
-      const offer = await designSystemOffers.offerFor(folderPath, signal);
-      if (offer) offeredDesignSystemFolder = folderPath;
-      return offer ? `${line} ${offer}` : line;
-    } catch (error) {
-      if (!signal.aborted) logger.warn("pi", "Could not read the workspace's colours and fonts for a design-system offer.", error);
-      return line;
-    }
+    return designNoteOffers.statusLine(line);
   };
   const withCanvasStatus = async (context: AgentContext): Promise<AgentContext> => {
     if (canvasStatusNoted || !(canvasStatusOffered || canvasToolsEntered)) return context;
@@ -3277,7 +3281,7 @@ async function prepareGeneration(
     // The prompt is read-only here: the section is patched into the
     // transcript once, as browser discovery and MCP servers do, and again
     // only if the live flag changed its text since.
-    const messages = withDesignModeSection(context.messages, designModePromptSection(designLive), Date.now());
+    const messages = withDesignModeSection(context.messages, designModePromptSection(designLive), Date.now(), { live: designLive });
     if (additions.length === 0 && messages === context.messages) return withCanvasStatus(context);
     return withCanvasStatus({ ...context, messages, tools: [...(context.tools ?? []), ...additions] });
   };
@@ -3294,13 +3298,7 @@ async function prepareGeneration(
       }
     },
     deferred: () => (canvasToolsEntered ? heldCanvasTools : []),
-    settleDesignSystemOffer: (delivered) => {
-      designMdTurn?.settle(delivered).catch((error: unknown) => logger.warn("design", "Could not settle the DESIGN.md offer.", error));
-      if (offeredDesignSystemFolder === undefined) return;
-      const folder = offeredDesignSystemFolder;
-      offeredDesignSystemFolder = undefined;
-      void designSystemOffers.settle(folder, delivered);
-    },
+    settleDesignSystemOffer: (delivered) => designNoteOffers.settle(delivered),
   };
   return {
     runtime: { ...runtime, model },

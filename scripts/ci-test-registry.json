@@ -356,6 +356,7 @@
         "main/services/design-canvas/app-server/app-detect.test.ts",
         "main/services/design-canvas/app-server/app-server-core.test.ts",
         "main/services/design-canvas/design-md/turn.test.ts",
+        "main/services/design-canvas/design-md/turn-wiring.test.ts",
         "main/services/design-canvas/offer-log.test.ts",
         "main/services/design-canvas/design-md/offers.test.ts",
         "main/services/design-canvas/design-md/status.test.ts",
