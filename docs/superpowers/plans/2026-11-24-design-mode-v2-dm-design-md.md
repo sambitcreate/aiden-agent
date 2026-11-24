@@ -306,8 +306,8 @@ The sentence: `There's no DESIGN.md for "<appRoot>" yet. Before you design in it
 
 ### Task 0: Baseline
 
-- [ ] Run `npm run test:design-mode` and note the pass count. Run `npx tsx --test main/services/design-canvas/design-system.test.ts main/services/design-canvas/design-system-offers.test.ts main/services/design-canvas/canvas-tools.test.ts main/services/design-canvas/skill.test.ts main/handlers/design-canvas.test.ts main/services/analytics/analytics-feature-reports.test.ts main/services/studio/feature-flags.test.ts renderer/shared/design-canvas/canvas-summary.test.ts main/services/prompt-prefix-stability.test.ts` and `node --test scripts/main-runtime-dependencies.test.mjs scripts/verify-linux-package.test.mjs scripts/verify-macos-package.test.mjs`. All must pass before any change.
-- [ ] Confirm the branch is based on `t3/design-mode-v2-p2a` and that 2b hasn't merged (DM lands first). If 2b has merged anyway, use its `designLiveEnabled` and skip Task 1 Step 1's flag part.
+- [x] Run `npm run test:design-mode` and note the pass count. Run `npx tsx --test main/services/design-canvas/design-system.test.ts main/services/design-canvas/design-system-offers.test.ts main/services/design-canvas/canvas-tools.test.ts main/services/design-canvas/skill.test.ts main/handlers/design-canvas.test.ts main/services/analytics/analytics-feature-reports.test.ts main/services/studio/feature-flags.test.ts renderer/shared/design-canvas/canvas-summary.test.ts main/services/prompt-prefix-stability.test.ts` and `node --test scripts/main-runtime-dependencies.test.mjs scripts/verify-linux-package.test.mjs scripts/verify-macos-package.test.mjs`. All must pass before any change.
+- [x] Confirm the branch is based on `t3/design-mode-v2-p2a` and that 2b hasn't merged (DM lands first). If 2b has merged anyway, use its `designLiveEnabled` and skip Task 1 Step 1's flag part.
 
 ### Task 1: The flag, the pinned linter and its worker
 
@@ -316,9 +316,9 @@ The sentence: `There's no DESIGN.md for "<appRoot>" yet. Before you design in it
 - Create: `main/services/design-canvas/design-md/lint-worker.ts`, `lint-client.ts`, `lint-client.test.ts`, `test-support/trap-network.mjs` (the preload for the offline and resolve-hook tests; it writes to the file named by `AIDEN_TEST_TRAP_LOG`), fixtures under `design-md/fixtures/` (`valid.md`, `broken-ref.md` with a broken reference both in `components` and in `colors`, `low-contrast.md`, `duplicate-section.md` with Overview and Brand & Style, `bad-yaml.md`, `motion.md`, `emphasis.md` generated in the test, not committed)
 - Register: the new test file
 
-- [ ] **Step 1: The flag, test first.** In `feature-flags.test.ts`: `live apps are on only for 1, true, yes or on`: unset, `""`, `0`, `false`, `off` are off; `1`, `TRUE`, ` true `, `yes`, `On` are on; and `live apps are off whenever design mode is off`: the flag on with `AIDEN_DESIGN_MODE=0`. Run it (FAIL), add `DESIGN_LIVE_FEATURE_FLAG`, `designFlagOn` and `designLiveEnabled`, rerun (PASS). Create Images' cases stay as they are.
-- [ ] **Step 2: Install.** `npm install --save-exact --ignore-scripts @google/design.md@0.4.0`. Check that `package.json` reads `"@google/design.md": "0.4.0"`, that the lockfile entry has the integrity above, and that no new lockfile entry has `hasInstallScript`. Record the added packages and the `node_modules` size change in the PR description (a clean probe measured about 9.6 MB on disk).
-- [ ] **Step 3: Write failing tests** in `lint-client.test.ts`, against the real library through the real worker:
+- [x] **Step 1: The flag, test first.** In `feature-flags.test.ts`: `live apps are on only for 1, true, yes or on`: unset, `""`, `0`, `false`, `off` are off; `1`, `TRUE`, ` true `, `yes`, `On` are on; and `live apps are off whenever design mode is off`: the flag on with `AIDEN_DESIGN_MODE=0`. Run it (FAIL), add `DESIGN_LIVE_FEATURE_FLAG`, `designFlagOn` and `designLiveEnabled`, rerun (PASS). Create Images' cases stay as they are.
+- [x] **Step 2: Install.** `npm install --save-exact --ignore-scripts @google/design.md@0.4.0`. Check that `package.json` reads `"@google/design.md": "0.4.0"`, that the lockfile entry has the integrity above, and that no new lockfile entry has `hasInstallScript`. Record the added packages and the `node_modules` size change in the PR description (a clean probe measured about 9.6 MB on disk).
+- [x] **Step 3: Write failing tests** in `lint-client.test.ts`, against the real library through the real worker:
   - `the worker reports what the fixtures hold`: `valid.md` has 0 errors; `broken-ref.md` has one `broken-ref` error at `components.<name>`, and its `colors` symbol comes back `{unresolved: "{colors.nope}"}`; `low-contrast.md` has a `contrast-ratio` warning; `bad-yaml.md` has a warning and no failure; `motion.md` has `token-like-ignored` at `motion`. These pin S38's facts, so a pin upgrade that changes them fails here first;
   - `a pathological file comes back timed-out within the deadline`: 64 KiB of `*a_` (about 14 s of linting); the outcome is `timed-out`, and the time from the worker's `ready` to the outcome is under 2.5 s (measured with an `onReady` test hook in the options, so the `tsx` compile and import don't count);
   - `a worker that never posts ready gives linter-unavailable after the load timeout` (a `workerUrl` to a test worker that never posts, `loadTimeoutMs: 300`; the outcome arrives in under 1 s and the worker is terminated);
@@ -329,11 +329,11 @@ The sentence: `There's no DESIGN.md for "<appRoot>" yet. Before you design in it
   - `an explicit execArgv option replaces the inherited one`: with `execArgv: ["--import", "tsx"]` the log has no `installed` line from the worker. This shows the control can fail;
   - `a worker that can't load gives linter-unavailable` (a `workerUrl` to a file that throws on import) and `with two running and sixteen waiting, the nineteenth request is busy` (a fake worker URL that sleeps; 19 requests give 18 that finish and one `busy`);
   - `an aborted signal terminates the worker` (the `*a_` input, abort after 100 ms, the call settles within 500 ms).
-- [ ] **Step 4:** Run `npx tsx --test main/services/design-canvas/design-md/lint-client.test.ts`. Expected: FAIL (modules missing).
-- [ ] **Step 5: Implement** `lint-worker.ts` and `lint-client.ts` per Interfaces, following `pi-vcc/worker-client.ts` (acquire, timer, `terminate()` before release). Add the esbuild entry `main/services/design-canvas/design-md/lint-worker.ts` → `build/main/design-md-lint-worker.js` (`format: "esm"`, `packages: "external"`) to `electronBuildOptions` after the vcc worker. Add `designMdLinter` to `design-canvas/main.ts`: a lazy holder that starts no worker until called.
-- [ ] **Step 6: Notice.** Add `## DESIGN.md linter (@google/design.md 0.4.0)` to `THIRD_PARTY_NOTICES.md`: Copyright Google LLC, Apache License 2.0, the licence URL; that the package's `package.json` has no `license` field and the licence comes from its `LICENSE` file; that only `dist/linter/` is loaded; and the licences of the modules it inlines (unified, remark, micromark, yaml, zod, debug), each checked in the bundle's header comments or their npm entries.
-- [ ] **Step 7:** Rerun the test file, `npx tsx --test main/services/studio/feature-flags.test.ts`, `node --test scripts/main-runtime-dependencies.test.mjs` (it now sees `@google/design.md` through the worker entry), `npm run build:electron` (the worker file is written), `npx tsc --noEmit -p .`, `npm run lint`, `npm run test:ci-policy`. Expected: PASS.
-- [ ] **Step 8:** Commit `feat(design): add the live flag and the pinned DESIGN.md linter in a worker`.
+- [x] **Step 4:** Run `npx tsx --test main/services/design-canvas/design-md/lint-client.test.ts`. Expected: FAIL (modules missing).
+- [x] **Step 5: Implement** `lint-worker.ts` and `lint-client.ts` per Interfaces, following `pi-vcc/worker-client.ts` (acquire, timer, `terminate()` before release). Add the esbuild entry `main/services/design-canvas/design-md/lint-worker.ts` → `build/main/design-md-lint-worker.js` (`format: "esm"`, `packages: "external"`) to `electronBuildOptions` after the vcc worker. Add `designMdLinter` to `design-canvas/main.ts`: a lazy holder that starts no worker until called.
+- [x] **Step 6: Notice.** Add `## DESIGN.md linter (@google/design.md 0.4.0)` to `THIRD_PARTY_NOTICES.md`: Copyright Google LLC, Apache License 2.0, the licence URL; that the package's `package.json` has no `license` field and the licence comes from its `LICENSE` file; that only `dist/linter/` is loaded; and the licences of the modules it inlines (unified, remark, micromark, yaml, zod, debug), each checked in the bundle's header comments or their npm entries.
+- [x] **Step 7:** Rerun the test file, `npx tsx --test main/services/studio/feature-flags.test.ts`, `node --test scripts/main-runtime-dependencies.test.mjs` (it now sees `@google/design.md` through the worker entry), `npm run build:electron` (the worker file is written), `npx tsc --noEmit -p .`, `npm run lint`, `npm run test:ci-policy`. Expected: PASS.
+- [x] **Step 8:** Commit `feat(design): add the live flag and the pinned DESIGN.md linter in a worker`.
 
 ### Task 2: Read `.aiden/canvas.json`
 
@@ -341,7 +341,7 @@ The sentence: `There's no DESIGN.md for "<appRoot>" yet. Before you design in it
 - Create: `main/services/design-canvas/canvas-config.ts`, `main/services/design-canvas/canvas-config.test.ts`
 - Register the test file
 
-- [ ] **Step 1: Write failing tests:**
+- [x] **Step 1: Write failing tests:**
   - `a config lists its apps with root, script and designMd`: `{"apps":[{"root":"web","script":"dev","designMd":"web/design/DESIGN.md"},{"root":"."}]}`;
   - `a missing version or version 1 is understood, and any other version isn't`: no `version` and `1` give `ok`; `2`, `0`, `"1"`, `1.5`, `null` and `true` give `unsupported-version` from `inspectCanvasConfig` (with the raw object) and `null` from `parseCanvasConfig`; bad JSON gives `invalid`;
   - `described roots are scripted entries that detection also sees as web apps, else detection`, on hand-built `WebAppDetection` values:
@@ -355,10 +355,10 @@ The sentence: `There's no DESIGN.md for "<appRoot>" yet. Before you design in it
   - `unsafe paths are dropped`: absolute, `..`, `a//b`, a space, a quote, a control character, 201 characters, `designMd` not ending in `.md`, `designMd: "."`, a non-string. A bad `root` drops the entry; a bad `designMd` or `script` drops that field. A `script` of `-x` or 101 characters is dropped (2a's `isSafeScriptName`);
   - `bad JSON, an array, or apps that isn't an array gives no apps`; a BOM is fine; more than 32 entries keep the first 32;
   - `the reader refuses a symlinked, oversized, folder or FIFO config without hanging`; `a missing config is null`.
-- [ ] **Step 2:** Run the file. Expected: FAIL.
-- [ ] **Step 3: Implement** with `readBounded` from `app-server/app-detect.ts` and `isSafeScriptName` from `app-server-core.ts`. A header comment says 2b adds the writer, which merges into `parseCanvasConfigObject`'s result so unknown fields survive.
-- [ ] **Step 4:** Rerun, `npx tsc --noEmit -p .`, `node --test scripts/main-runtime-dependencies.test.mjs`, `npm run test:ci-policy`. Expected: PASS.
-- [ ] **Step 5:** Commit `feat(design): read app roots, scripts and designMd from .aiden/canvas.json`.
+- [x] **Step 2:** Run the file. Expected: FAIL.
+- [x] **Step 3: Implement** with `readBounded` from `app-server/app-detect.ts` and `isSafeScriptName` from `app-server-core.ts`. A header comment says 2b adds the writer, which merges into `parseCanvasConfigObject`'s result so unknown fields survive.
+- [x] **Step 4:** Rerun, `npx tsc --noEmit -p .`, `node --test scripts/main-runtime-dependencies.test.mjs`, `npm run test:ci-policy`. Expected: PASS.
+- [x] **Step 5:** Commit `feat(design): read app roots, scripts and designMd from .aiden/canvas.json`.
 
 ### Task 3: Find an app's DESIGN.md
 
@@ -366,7 +366,7 @@ The sentence: `There's no DESIGN.md for "<appRoot>" yet. Before you design in it
 - Create: `main/services/design-canvas/design-md/locate.ts`, `main/services/design-canvas/design-md/locate.test.ts`
 - Register the test file
 
-- [ ] **Step 1: Write failing tests** (real temp folders):
+- [x] **Step 1: Write failing tests** (real temp folders):
   - `the app root's DESIGN.md wins over the workspace root's`;
   - `with none in the app root, the nearest folder above it wins`: `apps/web` finds `apps/DESIGN.md` before `DESIGN.md`;
   - `nothing above the workspace root is read`: a `DESIGN.md` in the parent is never found; `searched` ends at `.`;
@@ -381,10 +381,10 @@ The sentence: `There's no DESIGN.md for "<appRoot>" yet. Before you design in it
   - `more than 8 roots give more`;
   - `detection runs once per workspace until package.json or pnpm-workspace.yaml changes` (a counting `detect`; edit `package.json`, it runs again);
   - `an aborted signal stops before detection and before each lookup`.
-- [ ] **Step 2:** Run the file. Expected: FAIL.
-- [ ] **Step 3: Implement** R1 and R2.
-- [ ] **Step 4:** Rerun, `npx tsc --noEmit -p .`, `node --test scripts/main-runtime-dependencies.test.mjs`, `npm run test:ci-policy`. Expected: PASS.
-- [ ] **Step 5:** Commit `feat(design): find the DESIGN.md for an app root`.
+- [x] **Step 2:** Run the file. Expected: FAIL.
+- [x] **Step 3: Implement** R1 and R2.
+- [x] **Step 4:** Rerun, `npx tsc --noEmit -p .`, `node --test scripts/main-runtime-dependencies.test.mjs`, `npm run test:ci-policy`. Expected: PASS.
+- [x] **Step 5:** Commit `feat(design): find the DESIGN.md for an app root`.
 
 ### Task 4: Read, lint and cache
 
@@ -393,7 +393,7 @@ The sentence: `There's no DESIGN.md for "<appRoot>" yet. Before you design in it
 - Modify: `main/services/analytics/analytics-events.ts` (`design_md_linted`), `main/services/analytics/analytics-feature-reports.test.ts`, `docs/analytics.md`
 - Register the new test files
 
-- [ ] **Step 1: Write failing tests:**
+- [x] **Step 1: Write failing tests:**
   - `sections.test.ts`: `the alias table matches the installed linter's spec-config.yaml`. Parse `node_modules/@google/design.md/dist/linter/spec-config.yaml` with `yaml` (data, not production source) and check that every `aliases` entry maps to its `canonical` in `DESIGN_MD_SECTION_ALIASES`, and nothing else is in the table;
   - `reader.test.ts`, with the real worker:
     - `a valid file reads as ok with counts, sections, omitted and tokens`;
@@ -409,10 +409,10 @@ The sentence: `There's no DESIGN.md for "<appRoot>" yet. Before you design in it
     - `tokens are flat, sorted and capped at 300 with truncated`; long values are cut at 200;
     - `a file read reports design_md_linted once per new content, bucketed`: 0 errors and 2 warnings give `{errors_bucket: "0", warnings_bucket: "2-3"}`; a cache hit, `lintContent` and `read({report: false})` report nothing;
   - `analytics-feature-reports.test.ts`: `design_md_linted` passes with both buckets; an unknown bucket is dropped.
-- [ ] **Step 2:** Run the files. Expected: FAIL.
-- [ ] **Step 3: Implement** R3. Register `design_md_linted: { errors_bucket: enumProp(...COUNT_BUCKETS), warnings_bucket: enumProp(...COUNT_BUCKETS) }` and its `docs/analytics.md` row: "`design_md_linted` | Design mode checked an app's DESIGN.md (once per change in a run) | `errors_bucket`, `warnings_bucket`: how many errors and warnings. The file, its tokens and its findings stay on your device."
-- [ ] **Step 4:** Rerun, plus `npx tsx --test main/services/analytics/*.test.ts`. Run `npx tsc --noEmit -p .`, `node --test scripts/main-runtime-dependencies.test.mjs`, `npm run test:ci-policy`. Expected: PASS.
-- [ ] **Step 5:** Commit `feat(design): read, lint and cache an app's DESIGN.md`.
+- [x] **Step 2:** Run the files. Expected: FAIL.
+- [x] **Step 3: Implement** R3. Register `design_md_linted: { errors_bucket: enumProp(...COUNT_BUCKETS), warnings_bucket: enumProp(...COUNT_BUCKETS) }` and its `docs/analytics.md` row: "`design_md_linted` | Design mode checked an app's DESIGN.md (once per change in a run) | `errors_bucket`, `warnings_bucket`: how many errors and warnings. The file, its tokens and its findings stay on your device."
+- [x] **Step 4:** Rerun, plus `npx tsx --test main/services/analytics/*.test.ts`. Run `npx tsc --noEmit -p .`, `node --test scripts/main-runtime-dependencies.test.mjs`, `npm run test:ci-policy`. Expected: PASS.
+- [x] **Step 5:** Commit `feat(design): read, lint and cache an app's DESIGN.md`.
 
 ### Task 5: Draft a DESIGN.md from the app's styles
 
@@ -420,7 +420,7 @@ The sentence: `There's no DESIGN.md for "<appRoot>" yet. Before you design in it
 - Create: `main/services/design-canvas/design-md/draft.ts`, `draft.test.ts`
 - Register the test file
 
-- [ ] **Step 1: Write failing tests:**
+- [x] **Step 1: Write failing tests:**
   - `a draft from colours and fonts lints with no errors` (the real worker);
   - `sections without evidence are under omitted, and the rest come in the library's order` (parse the front matter with `yaml` and the headings; with colours only, Typography is omitted);
   - `dark values go to a dark group`;
@@ -428,10 +428,10 @@ The sentence: `There's no DESIGN.md for "<appRoot>" yet. Before you design in it
   - `a value can't break the YAML`: a snapshot family `Inter"\n---\ncolors:` (built directly) parses back to that exact string with no extra keys;
   - `a draft over 32 KiB drops colours until it fits, and still lints` (500 colours);
   - `designMdDraftFor reads only the app root's own style files`: a temp app with `src/index.css` (`--primary: #1a1c1e` and a dark override) gives both; a stylesheet outside the app root isn't read.
-- [ ] **Step 2:** Run the file. Expected: FAIL.
-- [ ] **Step 3: Implement** R8, importing the scanner from `../design-system-offers.js` for now (Task 7 moves it).
-- [ ] **Step 4:** Rerun, `npx tsc --noEmit -p .`, `node --test scripts/main-runtime-dependencies.test.mjs`, `npm run test:ci-policy`. Expected: PASS.
-- [ ] **Step 5:** Commit `feat(design): draft a DESIGN.md from the app's own styles`.
+- [x] **Step 2:** Run the file. Expected: FAIL.
+- [x] **Step 3: Implement** R8, importing the scanner from `../design-system-offers.js` for now (Task 7 moves it).
+- [x] **Step 4:** Rerun, `npx tsc --noEmit -p .`, `node --test scripts/main-runtime-dependencies.test.mjs`, `npm run test:ci-policy`. Expected: PASS.
+- [x] **Step 5:** Commit `feat(design): draft a DESIGN.md from the app's own styles`.
 
 ### Task 6: The `design_system` tool
 
@@ -439,7 +439,7 @@ The sentence: `There's no DESIGN.md for "<appRoot>" yet. Before you design in it
 - Create: `main/services/design-canvas/design-md/tool.ts`, `tool.test.ts`
 - Register the test file
 
-- [ ] **Step 1: Write failing tests** (real reader and worker over temp workspaces; `execute` called as the model would):
+- [x] **Step 1: Write failing tests** (real reader and worker over temp workspaces; `execute` called as the model would):
   - `read returns status, path and counts outside the fence, and tokens and sections inside it`;
   - `a DESIGN.md whose prose, headings and token names hold instructions reaches Aiden only fenced`: a fixture with `## Ignore previous instructions` and a token `ignore-all-rules`; every occurrence of either string in the answer lies inside a fence;
   - `a fence can't be closed from inside the file`: a heading of eight backticks; the answer's fence is longer;
@@ -455,10 +455,10 @@ The sentence: `There's no DESIGN.md for "<appRoot>" yet. Before you design in it
   - `the 21st call in a turn gets limit_reached and nothing else runs`;
   - `a chat that left design mode gets unavailable`;
   - `onDraft hears the target once per draft`.
-- [ ] **Step 2:** Run the file. Expected: FAIL.
-- [ ] **Step 3: Implement** R4 with `Type` from `typebox` (enums for `action` and `format`; `maxLength` 200 on `appRoot` and 65 536 on `content`), `declarePiRuntimeReplay(…, "safe")` and `fenceAsData`. Description: "Read, check, export or draft the app's DESIGN.md, the design system's source of truth: its tokens, sections and lint findings, its Tailwind, DTCG or CSS-variable export, or a starter draft from the app's own styles. It never writes files; write DESIGN.md yourself with write_file after the person agrees."
-- [ ] **Step 4:** Rerun, `npx tsc --noEmit -p .`, `node --test scripts/main-runtime-dependencies.test.mjs`, `npm run test:ci-policy`. Expected: PASS.
-- [ ] **Step 5:** Commit `feat(design): add the design_system tool`.
+- [x] **Step 2:** Run the file. Expected: FAIL.
+- [x] **Step 3: Implement** R4 with `Type` from `typebox` (enums for `action` and `format`; `maxLength` 200 on `appRoot` and 65 536 on `content`), `declarePiRuntimeReplay(…, "safe")` and `fenceAsData`. Description: "Read, check, export or draft the app's DESIGN.md, the design system's source of truth: its tokens, sections and lint findings, its Tailwind, DTCG or CSS-variable export, or a starter draft from the app's own styles. It never writes files; write DESIGN.md yourself with write_file after the person agrees."
+- [x] **Step 4:** Rerun, `npx tsc --noEmit -p .`, `node --test scripts/main-runtime-dependencies.test.mjs`, `npm run test:ci-policy`. Expected: PASS.
+- [x] **Step 5:** Commit `feat(design): add the design_system tool`.
 
 ### Task 7: Move the scanner and the offer log; the draft offer and the status sentence
 
@@ -467,8 +467,8 @@ The sentence: `There's no DESIGN.md for "<appRoot>" yet. Before you design in it
 - Modify: `main/services/design-canvas/design-system.ts` (keeps only `designSystemOfferLine` and what it needs), `design-system-offers.ts` (uses `OfferLog` and imports the scanner), `design-md/draft.ts` (imports from `style-scan.ts`), `design-system.test.ts` and `design-system-offers.test.ts` (import paths only)
 - Register the new test files
 
-- [ ] **Step 1: Guards first.** Run `design-system.test.ts` and `design-system-offers.test.ts` **(guard)**. After the move, the only edits allowed in them are import paths; any other edit means the move changed behaviour.
-- [ ] **Step 2: Write failing tests:**
+- [x] **Step 1: Guards first.** Run `design-system.test.ts` and `design-system-offers.test.ts` **(guard)**. After the move, the only edits allowed in them are import paths; any other edit means the move changed behaviour.
+- [x] **Step 2: Write failing tests:**
   - `offer-log.test.ts`: a key is claimed once per run; `settle(true)` persists it for a new instance; `settle(false)` releases it; a log written by today's `DesignSystemOffers` (version 2, HMAC keys) reads unchanged; an unreadable key file gives a run-only key; 1 000 entries are kept, oldest out;
   - `offers.test.ts`: one offer per workspace and app root; another app root gets its own; no repeat after a delivered turn, even from a new instance; a repeat after an undelivered one; the log file holds no path (search its text for the temp folder name and the app root);
   - `status.test.ts`:
@@ -478,10 +478,10 @@ The sentence: `There's no DESIGN.md for "<appRoot>" yet. Before you design in it
     - `the offer sentence is appended when given`;
     - `the sentence holds no file content`: states from a hostile fixture produce a sentence with none of its strings;
     - `the note stays the same when the counts do, and changes once when they change`: `withCanvasStatusNote` with the canvas line plus the sentence for two turns with equal states adds no second message; one more warning adds one.
-- [ ] **Step 3:** Run the files. Expected: FAIL.
-- [ ] **Step 4: Implement.** Move `findWorkspaceDesignSystem`, `detectDesignSystem`, `designSystemFileRank` and their types into `design-md/style-scan.ts`, unchanged. Move the HMAC key, load, save and settle code into `OfferLog` without changing the file format or the key file; `DesignSystemOffers` keeps its public methods. `DesignMdOffers` keys by `keyFor(path.resolve(workspaceRoot), appRoot)`.
-- [ ] **Step 5:** Rerun the new files and the guards. Run `npx tsc --noEmit -p .`, `node --test scripts/main-runtime-dependencies.test.mjs`, `npm run test:ci-policy`. Expected: PASS.
-- [ ] **Step 6:** Commit `refactor(design): move the style scanner and offer log; offer a DESIGN.md draft once per app`.
+- [x] **Step 3:** Run the files. Expected: FAIL.
+- [x] **Step 4: Implement.** Move `findWorkspaceDesignSystem`, `detectDesignSystem`, `designSystemFileRank` and their types into `design-md/style-scan.ts`, unchanged. Move the HMAC key, load, save and settle code into `OfferLog` without changing the file format or the key file; `DesignSystemOffers` keeps its public methods. `DesignMdOffers` keys by `keyFor(path.resolve(workspaceRoot), appRoot)`.
+- [x] **Step 5:** Rerun the new files and the guards. Run `npx tsc --noEmit -p .`, `node --test scripts/main-runtime-dependencies.test.mjs`, `npm run test:ci-policy`. Expected: PASS.
+- [x] **Step 6:** Commit `refactor(design): move the style scanner and offer log; offer a DESIGN.md draft once per app`.
 
 ### Task 8: Wire it into design-mode turns, behind the flag
 
@@ -492,7 +492,7 @@ The sentence: `There's no DESIGN.md for "<appRoot>" yet. Before you design in it
 
 `turn.ts` holds the per-turn glue, so llm-client stays thin and the glue is tested.
 
-- [ ] **Step 1: Write failing tests.**
+- [x] **Step 1: Write failing tests.**
   - `turn.test.ts`:
     - `the status sentence describes each root, and offers a draft for the first missing one`;
     - `the sentence is there but the offer isn't when the chat can't write` (`offerable: false`);
@@ -506,8 +506,8 @@ The sentence: `There's no DESIGN.md for "<appRoot>" yet. Before you design in it
   - `skill.test.ts`: `every tool the flag-on prompt section names is one a flag-on turn offers`, built from `createDesignCanvasTools` plus `createDesignSystemTool` and the names matched in `designModePromptSection(true)` (`canvas_*` and `design_system`). The existing case stays unedited;
   - `prompt-prefix-stability.test.ts`: a flag-on case (`AIDEN_EXPERIMENTAL_DESIGN_LIVE=1` set for the case and restored after). Two design-mode turns whose DESIGN.md counts differ send a byte-identical system prompt and tool list; only the `design-canvas-status` note differs. Run on the default wire and on one that keeps system messages in place, as the existing canvas cases do;
   - `analytics-feature-reports.test.ts`: `design_md_drafted` with `source: "app"` passes; `"mock"` is refused until 3d.
-- [ ] **Step 2:** Run the files. Expected: FAIL.
-- [ ] **Step 3: Implement.**
+- [x] **Step 2:** Run the files. Expected: FAIL.
+- [x] **Step 3: Implement.**
   - `DESIGN_MD_PROMPT_BULLET`: "- The app's DESIGN.md is its design system's source of truth, ahead of design/tokens.css. Use its tokens, never one-off values, and its prose as guidance. The canvas note names it and its lint counts; design_system reads, lints and exports it. When a change adds or alters a token, update DESIGN.md in the same turn, keeping its sections in order and its YAML valid, then run design_system lint." `designModePromptSection(false)` returns today's `DESIGN_MODE_PROMPT_SECTION`.
   - `main.ts`: `designMdReader` (on `designMdLinter`, with `reportAnalyticsEvent`) and `designMdOffers` (`design-md-offers.json` under userData).
   - `llm-client.ts`:
@@ -522,8 +522,8 @@ The sentence: `There's no DESIGN.md for "<appRoot>" yet. Before you design in it
     With the flag off none of these paths run, and the prompt text is today's.
   - `pi-compaction-session-store.ts:647`: "…and the one-time design-system or DESIGN.md offer…".
   - Register `design_md_drafted: { source: enumProp("app") }` and its row: "`design_md_drafted` | Aiden drafted an app's DESIGN.md and it was written in the same turn | `source`: app (from the app's own styles). The file and its contents stay on your device."
-- [ ] **Step 4:** Rerun the files, `npm run test:design-mode`, and `npx tsx --test main/services/pi-agent-runtime-harness.test.ts` (its canvas status note cases). Run `npx tsc --noEmit -p .`, `npm run lint`, `node --test scripts/main-runtime-dependencies.test.mjs`, `npm run test:ci-policy`. Expected: PASS.
-- [ ] **Step 5:** Commit `feat(design): give design-mode turns the app's DESIGN.md, behind the live flag`.
+- [x] **Step 4:** Rerun the files, `npm run test:design-mode`, and `npx tsx --test main/services/pi-agent-runtime-harness.test.ts` (its canvas status note cases). Run `npx tsc --noEmit -p .`, `npm run lint`, `node --test scripts/main-runtime-dependencies.test.mjs`, `npm run test:ci-policy`. Expected: PASS.
+- [x] **Step 5:** Commit `feat(design): give design-mode turns the app's DESIGN.md, behind the live flag`.
 
 ### Task 9: The read-only IPC and the packaged-build checks
 
@@ -531,7 +531,7 @@ The sentence: `There's no DESIGN.md for "<appRoot>" yet. Before you design in it
 - Modify: `main/handlers/design-canvas.ts`, `main/handlers/design-canvas-main.ts`, `main/handlers/design-canvas.test.ts`, `renderer/lib/ipc.ts` (`designCanvasApi.designSystem`), `package.json` (`build.files`, the `test:design-md:packaged` script), `scripts/verify-macos-package.mjs` (+ `.test.mjs`), `scripts/verify-linux-package.mjs` (+ `.test.mjs`), `.github/workflows/release.yml`
 - Create: `scripts/design-md-packaged-acceptance.mjs`
 
-- [ ] **Step 1: Write failing tests:**
+- [x] **Step 1: Write failing tests:**
   - `design-canvas.test.ts` (register and invoke):
     - `designSystem answers for an attended workspace chat with the flag on` (a temp workspace with `valid.md` as `DESIGN.md`: status `ok`, counts, sections, findings ≤ 50);
     - `it refuses with the flag off, for an unknown chat, a Bot chat, an owner chat, a chat without a folder, and an unsafe appRoot`;
@@ -540,15 +540,15 @@ The sentence: `There's no DESIGN.md for "<appRoot>" yet. Before you design in it
     - `the packaged lint worker and linter must be packed`: missing `build/main/design-md-lint-worker.js`, `node_modules/@google/design.md/dist/linter/index.js` or `…/dist/linter/spec-config.yaml` fails, naming the entry; an unpacked or empty entry fails;
     - `the packaged linter must lint a fixture`: the check extracts `dist/linter/` into a temp folder, imports it under Node and lints a fixed DESIGN.md; a fake linter whose `lint` throws fails;
     - `the trimmed files must be absent`: an asar with `@google/design.md/dist/index.js`, `dist/spec-config.yaml` (top level) or `node_modules/@google/design.md/node_modules/` fails.
-- [ ] **Step 2:** Run them. Expected: FAIL.
-- [ ] **Step 3: Implement.**
+- [x] **Step 2:** Run them. Expected: FAIL.
+- [x] **Step 3: Implement.**
   - The handler per R9, behind `designLiveEnabled()`, with `designMdReader.read(…, {report: false})`.
   - `build.files` additions: `"!**/node_modules/@google/design.md/dist/index.js"`, `"!**/node_modules/@google/design.md/dist/spec.md"`, `"!**/node_modules/@google/design.md/dist/spec-config.yaml"`, `"!**/node_modules/@google/design.md/dist/linter/spec.md"`, `"!**/node_modules/@google/design.md/node_modules/**"`. Only the CLI reads the top-level `spec-config.yaml` and `spec.md` (`dist/index.js:20996`, `:24707`); the linter reads only `dist/linter/spec-config.yaml`, which stays. `dist/commands/` holds only declarations, which are already dropped, so it needs no rule.
   - `verifyPackagedDesignMdLinter(appAsar)` in `verify-macos-package.mjs`, exported, called from its own run and from `verifyLinuxPackage` (PR coverage, through `ci.yml:821`). Add `build/main/design-md-lint-worker.js` beside `pi-vcc-worker.js` in the macOS required-entries list (`:467`).
   - `scripts/design-md-packaged-acceptance.mjs`, run by `npm run test:design-md:packaged`: launch the packaged app from `release/distribution` (as `run-packaged-diagnostics-acceptance.mjs` finds it) with `AIDEN_EXPERIMENTAL_DESIGN_LIVE=1`, `AIDEN_ANALYTICS=0`, a temp `--user-data-dir` and a DevTools port; through `globalThis.aidenAPI.ipc.invoke`, create a scratch workspace (`workspaces:createScratch`) and a chat in it (`chats:create`); write the `valid.md` fixture as `DESIGN.md` into the returned folder; invoke `designCanvas:designSystem`; assert `status: "ok"` and the fixture's counts. This runs the worker and the linter from inside the asar (§6.9, §11 item 1). Register the script in `scripts/ci-test-registry.json` the way the diagnostics acceptance is registered.
   - `release.yml`: a step running `npm run test:design-md:packaged` right after the `test:e2e:diagnostics:packaged` step (`:183`), on the same runner and conditions.
-- [ ] **Step 4:** Rerun. Then check a real package: `npm run build`, the repo's unpacked macOS build (`npx electron-builder --dir`, unsigned), `verifyPackagedDesignMdLinter` on its `app.asar` with `node --input-type=module -e`, and `npm run test:design-md:packaged` against that build if the script can point at it (it takes an app path argument). Record the asar size before and after in the PR description. The Linux check runs in CI; the macOS check and the acceptance run in the release workflow. Run `npx tsc --noEmit -p .`, `npm run lint`, `node --test scripts/main-runtime-dependencies.test.mjs`, `npm run test:ci-policy`. Expected: PASS.
-- [ ] **Step 5:** Commit `feat(design): read DESIGN.md over IPC and check the packaged linter`.
+- [x] **Step 4:** Rerun. Then check a real package: `npm run build`, the repo's unpacked macOS build (`npx electron-builder --dir`, unsigned), `verifyPackagedDesignMdLinter` on its `app.asar` with `node --input-type=module -e`, and `npm run test:design-md:packaged` against that build if the script can point at it (it takes an app path argument). Record the asar size before and after in the PR description. The Linux check runs in CI; the macOS check and the acceptance run in the release workflow. Run `npx tsc --noEmit -p .`, `npm run lint`, `node --test scripts/main-runtime-dependencies.test.mjs`, `npm run test:ci-policy`. Expected: PASS.
+- [x] **Step 5:** Commit `feat(design): read DESIGN.md over IPC and check the packaged linter`.
 
 ### Task 10: Docs, memory and the spec amendments
 
@@ -559,16 +559,16 @@ The sentence: `There's no DESIGN.md for "<appRoot>" yet. Before you design in it
 - `.memory/design-mode.md`
 - this plan
 
-- [ ] **Step 1: Spec.** Add "### Phase DM amendments (2026-11-24)" with S33–S44 as written above, after the Phase 2a block (2b's S25–S32 block goes between them when 2b lands). In §6.9, add one line under "Reading and checking" pointing at S34–S38 and S44 (don't rewrite §6.9). In §11 item 2 (`:559`), add: "Changed by S6 (removal moves to 3d) and S37 (the scanner stays, in `design-md/style-scan.ts`)." Update the status line at the top to name this plan.
-- [ ] **Step 2: User guide.** Create `docs/design-mode.md` with a short intro and a "DESIGN.md (experimental)" section: it needs `AIDEN_EXPERIMENTAL_DESIGN_LIVE=1`; where the file is looked for (R1) and `apps[].designMd`; that Aiden checks it offline with the bundled linter and writes it only after asking; what 0.4.0 does and doesn't check (S38); that nothing leaves the Mac.
-- [ ] **Step 3: Plan index.** In `docs/plans/README.md`, extend the design mode v2 row: "Phase DM (DESIGN.md) planned 2026-11-24, plan [dm](../superpowers/plans/2026-11-24-design-mode-v2-dm-design-md.md)". When the PR opens, add its number and "in review".
-- [ ] **Step 4: Memory.** Add a "v2 Phase DM: DESIGN.md" section to `.memory/design-mode.md`: the module layout, the flag, the worker and its deadline, the linter facts (self-contained bundle, `spec-config.yaml` read at import, no `license` field, the S38 gaps, quadratic emphasis), the note sentence instead of a prompt line, the scanner and offer-log moves, the packaging exclusions and checks, and that DM lands before 2b. In the v2 summary at `:3`, replace "v1 `design-system*.ts` used only by `main.ts`, deleted in 3b" with "removed in 3d (S6), except the scanner, which moved to `design-md/style-scan.ts` (S37)".
-- [ ] **Step 5: Stale claims.** Run `rg -n "DESIGN\.md|design_system|design/tokens\.css|tokens\.css|design-system-offers|design-system\.ts|AIDEN_EXPERIMENTAL_DESIGN_LIVE" README.md PRODUCT.md docs .memory AGENTS.md packages/cli/README.md` and fix what DM made wrong. Expected:
+- [x] **Step 1: Spec.** Add "### Phase DM amendments (2026-11-24)" with S33–S44 as written above, after the Phase 2a block (2b's S25–S32 block goes between them when 2b lands). In §6.9, add one line under "Reading and checking" pointing at S34–S38 and S44 (don't rewrite §6.9). In §11 item 2 (`:559`), add: "Changed by S6 (removal moves to 3d) and S37 (the scanner stays, in `design-md/style-scan.ts`)." Update the status line at the top to name this plan.
+- [x] **Step 2: User guide.** Create `docs/design-mode.md` with a short intro and a "DESIGN.md (experimental)" section: it needs `AIDEN_EXPERIMENTAL_DESIGN_LIVE=1`; where the file is looked for (R1) and `apps[].designMd`; that Aiden checks it offline with the bundled linter and writes it only after asking; what 0.4.0 does and doesn't check (S38); that nothing leaves the Mac.
+- [x] **Step 3: Plan index.** In `docs/plans/README.md`, extend the design mode v2 row: "Phase DM (DESIGN.md) planned 2026-11-24, plan [dm](../superpowers/plans/2026-11-24-design-mode-v2-dm-design-md.md)". When the PR opens, add its number and "in review".
+- [x] **Step 4: Memory.** Add a "v2 Phase DM: DESIGN.md" section to `.memory/design-mode.md`: the module layout, the flag, the worker and its deadline, the linter facts (self-contained bundle, `spec-config.yaml` read at import, no `license` field, the S38 gaps, quadratic emphasis), the note sentence instead of a prompt line, the scanner and offer-log moves, the packaging exclusions and checks, and that DM lands before 2b. In the v2 summary at `:3`, replace "v1 `design-system*.ts` used only by `main.ts`, deleted in 3b" with "removed in 3d (S6), except the scanner, which moved to `design-md/style-scan.ts` (S37)".
+- [x] **Step 5: Stale claims.** Run `rg -n "DESIGN\.md|design_system|design/tokens\.css|tokens\.css|design-system-offers|design-system\.ts|AIDEN_EXPERIMENTAL_DESIGN_LIVE" README.md PRODUCT.md docs .memory AGENTS.md packages/cli/README.md` and fix what DM made wrong. Expected:
   - README and `PRODUCT.md`: no change, since DM is behind a flag;
   - `docs/analytics.md`: the two rows;
   - `THIRD_PARTY_NOTICES.md`: Task 1's section;
   - dated plans that mention `design/tokens.css` or deleting `design-system.ts` in 3b: history, no edit.
-- [ ] **Step 6:** Tick this plan's boxes and commit `docs(design): Phase DM spec amendments, guide and memory`.
+- [x] **Step 6:** Tick this plan's boxes and commit `docs(design): Phase DM spec amendments, guide and memory`.
 
 ## Verification
 
@@ -617,3 +617,15 @@ All seven from the first draft were agreed by both reviews:
 5. Trimming the asar: yes (S42), with the corrected file list.
 6. `designMd` relative to the workspace root: yes (S39).
 7. Infos in the note: no.
+
+## As built (2026-11-24): deviations
+
+- Drafts list only token groups under `omitted`: 0.4.0 accepts only `colors`, `typography`, `rounded`, `spacing` and `components` there (anything else is `unknown-omission`), so prose sections without evidence are left out instead.
+- `locateDesignMd` takes an optional fourth `{ signal }`; `LocatedDesignMd.invalid` adds `"unsafe-path"`.
+- The lint client's options add `onReady`, `onOutput` and `log`; the worker's stdout is drained as well as stderr, since `LOG_STREAM` and `LOG_TOKENS` print there. `designMdLinter` in `main.ts` wraps `runDesignMdWorker` to pass the main-process logger.
+- The `canvas_read` dep is `designMdLine` (the plan's `canvasReadLine` is the turn method that feeds it).
+- Prompt-prefix case: the `design-canvas-status` note is a section patch, which both wires tested fold into the system head, so a changed count changes the system segment once (as v1's canvas counts do). The case checks that the tools and the assembled system prompt are byte-identical, that the telemetry names `system:design-canvas-status` as the only change, and that a third turn with unchanged counts extends the prefix exactly.
+- The design-md lint worker isn't added to `verifyPackagedVccWorker`'s list: `verifyPackagedDesignMdLinter` requires it, and both package checks call that.
+- `verify-linux-package.test.mjs` checks the `build.files` trim rules through `assertLinuxBuildConfiguration`; the asar-level behaviour is tested once, on the shared `verifyPackagedDesignMdLinter`, in `verify-macos-package.test.mjs`.
+- `test:design-md:packaged` has no `ci-test-registry.json` entry: the registry lists test files only, and the diagnostics acceptance it mirrors isn't listed either.
+- The package's own runtime dependencies (`remark-mdx`, `citty`, micromark extensions and others) became production dependencies and are packed (about 0.6 MB, 173 files), although the linter bundle doesn't load them. S42 doesn't trim them; a follow-up could.
