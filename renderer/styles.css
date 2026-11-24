@@ -673,6 +673,28 @@ body {
   }
 }
 
+/* A command card turns over between its plain words and the exact command.
+   Only a flip the person made animates; Reduce Motion lands it at once. */
+.approval-flip-face[data-flipped] {
+  animation: approval-flip-in var(--motion-duration) var(--motion-decelerate-easing);
+  transform-origin: 50% 50%;
+}
+
+@keyframes approval-flip-in {
+  from {
+    opacity: 0;
+    transform: perspective(640px) rotateX(-60deg);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+:root[data-reduce-motion="true"] .approval-flip-face[data-flipped] {
+  animation: none;
+}
+
 /* A diff's line bands run to the well's edge; a scrollbar appears only when it overflows. */
 .approval-diff {
   scrollbar-gutter: auto;

@@ -1,5 +1,6 @@
 import { parseBotResumeAcknowledgement } from "../../renderer/shared/bot-execution-resume.js";
-import { buildApprovalCard } from "../../renderer/shared/approval-card-model.js";
+import { buildApprovalCard, type ApprovalCard } from "../../renderer/shared/approval-card-model.js";
+import type { CommandReading } from "../../renderer/shared/command-reading.js";
 import { BOT_TEMPLATE_STALE_MESSAGE } from "../../renderer/shared/bot-presets.js";
 import {
   AIDEN_REMOTE_BOT_SETTINGS_CHANGE_ENTRY_TYPES,
@@ -903,6 +904,8 @@ interface Audience {
   allowed: boolean;
   /** `approval:cards`: the typed `card` on the Bot's approval (revision 61). */
   approvalCards: boolean;
+  /** `approval:plain-words`: a shell card's `explanation` and `tags` (revision 69). */
+  approvalPlainWords: boolean;
   /** `bot:settings-changes`: `settings_change` entries (revision 61). */
   settingsChanges: boolean;
   /** `bot:suggestions`: `skill_proposal`, `lesson` and `memory_tidy` entries (revision 61). */
@@ -1091,7 +1094,7 @@ class BotLiveProjector {
     const state = stateViewForAudience(this.state, audience);
     const handoff = handoffForAudience(this.handoff?.handoff ?? null, audience);
     const issues = this.issuesFor(audience);
-    const approval = approvalForAudience(this.approval, audience.allowed, audience.approvalCards);
+    const approval = approvalForAudience(this.approval, audience.allowed, audience.approvalCards, audience.approvalPlainWords);
     const accessRequest = accessForAudience(this.accessRequest?.card ?? null, audience.allowed);
     let used = 2 + memberBytes("botId", this.botId) + memberBytes("epoch", this.epoch) + memberBytes("seq", this.seq);
     for (const [key, value] of Object.entries(state)) used += memberBytes(key, value);
@@ -1167,7 +1170,7 @@ class BotLiveProjector {
         // A stalled client is dropped; it reconnects and gets a fresh snapshot.
         subscriber.overflowed = true;
       } else {
-        const key = `${subscriber.cards}:${subscriber.activity}:${subscriber.handoffs}:${subscriber.notes}:${subscriber.onMac}:${subscriber.images}:${subscriber.issues}:${subscriber.accessRequests}:${subscriber.plans}:${subscriber.allowed}:${subscriber.peers}:${subscriber.approvalCards}:${subscriber.settingsChanges}:${subscriber.suggestions}`;
+        const key = `${subscriber.cards}:${subscriber.activity}:${subscriber.handoffs}:${subscriber.notes}:${subscriber.onMac}:${subscriber.images}:${subscriber.issues}:${subscriber.accessRequests}:${subscriber.plans}:${subscriber.allowed}:${subscriber.peers}:${subscriber.approvalCards}:${subscriber.approvalPlainWords}:${subscriber.settingsChanges}:${subscriber.suggestions}`;
         let text = rendered.get(key);
         if (text === undefined) {
           text = render(subscriber);
@@ -1231,7 +1234,7 @@ class BotLiveProjector {
       if (entry?.type === "peer" && !audience.peers) return noOp(audience);
       if (!botUxEntryVisible(entry, audience)) return noOp(audience);
       if (event.type === "approval") {
-        const approval = approvalForAudience((event.payload as { approval: AidenRemoteBotApproval | null }).approval, audience.allowed, audience.approvalCards);
+        const approval = approvalForAudience((event.payload as { approval: AidenRemoteBotApproval | null }).approval, audience.allowed, audience.approvalCards, audience.approvalPlainWords);
         return sseFrame(id, "approval", { ...data, payload: { approval } });
       }
       if (event.type === "access_request" && audience.accessRequests) {
@@ -1596,14 +1599,21 @@ class BotLiveProjector {
 // Service
 // ---------------------------------------------------------------------------
 
-function approvalForAudience(approval: AidenRemoteBotApproval | null, allowed: boolean, cards: boolean): AidenRemoteBotApproval | null {
+function approvalForAudience(approval: AidenRemoteBotApproval | null, allowed: boolean, cards: boolean, plainWords = false): AidenRemoteBotApproval | null {
   if (!approval) return approval;
   const { alwaysCount, card, ...legacy } = approval;
   return {
     ...legacy,
     ...(allowed && alwaysCount !== undefined ? { alwaysCount } : {}),
-    ...(cards && card ? { card: botApprovalCardForAudience(card, allowed) } : {}),
+    ...(cards && card ? { card: botApprovalCardForAudience(withoutPlainWords(card, plainWords), allowed) } : {}),
   };
+}
+
+/** A shell card's plain words go only to an `approval:plain-words` holder (revision 69). */
+function withoutPlainWords(card: ApprovalCard, plainWords: boolean): ApprovalCard {
+  if (plainWords) return card;
+  const { explanation: _explanation, tags: _tags, ...rest } = card;
+  return rest;
 }
 function accessForAudience(card: AidenRemoteBotAccessRequest | null, allowed: boolean): AidenRemoteBotAccessRequest | null {
   if (!card || allowed) return card;
@@ -1616,7 +1626,7 @@ function botApprovalOffersAlways(prompt: { toolName: string; always?: { count: n
 }
 
 /** A waiting Bot approval as phones see it. */
-function wireApproval(prompt: { waitId: string; toolCallId: string; toolName: string; summary: string; always?: { count: number } }): AidenRemoteBotApproval {
+function wireApproval(prompt: { waitId: string; toolCallId: string; toolName: string; summary: string; always?: { count: number }; reading?: CommandReading }): AidenRemoteBotApproval {
   // Always allow is offered on every eligible card. The older `alwaysCount`
   // field still appears only with a repeat count (3 to 20), so a phone that
   // reads it alone keeps offering Always from the third approval.
@@ -1639,6 +1649,9 @@ function wireApproval(prompt: { waitId: string; toolCallId: string; toolName: st
       canAllow: !isComputerUseCapabilityTool(prompt.toolName),
       ...(alwaysOffered ? { scopes: ["always"], alwaysLabel: "Always allow this tool" } : {}),
       ...(alwaysCount !== undefined ? { notes: [`You’ve allowed this ${alwaysCount} times in the last 2 weeks.`] } : {}),
+      // Built with the plain words; `approvalForAudience` drops them for a device without the opt-in.
+      ...(prompt.reading ? { reading: prompt.reading } : {}),
+      plainWords: true,
     }),
   };
 }
@@ -1841,7 +1854,7 @@ function routineError(error: unknown): never {
 const HOLDER_AUDIENCE: AidenRemoteBotHandoffAudience = { handoffs: true };
 
 /** The opt-ins a route was called with, from the device's grants. */
-type AudienceOptions = { cards?: boolean; activity?: boolean; handoffs?: boolean; handoffNotes?: boolean; handoffOnMac?: boolean; images?: boolean; issues?: boolean; peers?: boolean; accessRequests?: boolean; plans?: boolean; allowed?: boolean; approvalCards?: boolean; settingsChanges?: boolean; suggestions?: boolean };
+type AudienceOptions = { cards?: boolean; activity?: boolean; handoffs?: boolean; handoffNotes?: boolean; handoffOnMac?: boolean; images?: boolean; issues?: boolean; peers?: boolean; accessRequests?: boolean; plans?: boolean; allowed?: boolean; approvalCards?: boolean; approvalPlainWords?: boolean; settingsChanges?: boolean; suggestions?: boolean };
 
 /** Ledger route of each session control. */
 const CONTROL_ROUTES = {
@@ -2663,6 +2676,7 @@ export class AidenRemoteBotSessionService {
       plans: options.plans === true && this.supportsPlans,
       allowed: options.allowed === true,
       approvalCards: options.approvalCards === true,
+      approvalPlainWords: options.approvalCards === true && options.approvalPlainWords === true,
       settingsChanges: options.settingsChanges === true && this.options.settingsChanges !== undefined,
       suggestions: options.suggestions === true && this.options.suggestions !== undefined,
     };

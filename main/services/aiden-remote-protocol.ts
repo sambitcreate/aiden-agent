@@ -371,7 +371,19 @@ export const AIDEN_REMOTE_CONTINUE_IN_NEW_CHAT_CONTRACT_REVISION = 64 as const;
  * payload so closed decoders on revision <= 64 stay valid.
  */
 export const AIDEN_REMOTE_STREAM_SNAPSHOT_REASONS_CONTRACT_REVISION = 65 as const;
-export const AIDEN_REMOTE_CONTRACT_REVISION = AIDEN_REMOTE_STREAM_SNAPSHOT_REASONS_CONTRACT_REVISION;
+/**
+ * Contract revision 69 (provisional; re-claim the next revision after
+ * `main`'s at merge by changing only this constant): plain-words command
+ * approvals (`approval:plain-words`, an opt-in that needs `approval:cards`).
+ * A holder's shell card (`kind: "mac"`, `mac: "shell"`, a `command` body) may
+ * carry `explanation`, the model's one-line description of the command, and
+ * `tags`, Aiden's own reading of the command text (`{label, tone: "calm" |
+ * "risk"}`, risky first). Display-only: the body stays the exact command,
+ * buttons and `canAllow` are unchanged, and closed revision-68 decoders never
+ * see the two keys.
+ */
+export const AIDEN_REMOTE_APPROVAL_PLAIN_WORDS_CONTRACT_REVISION = 69 as const;
+export const AIDEN_REMOTE_CONTRACT_REVISION = AIDEN_REMOTE_APPROVAL_PLAIN_WORDS_CONTRACT_REVISION;
 export const AIDEN_REMOTE_BASE_PATH = "/api/aiden/v1" as const;
 export const AIDEN_REMOTE_MAX_SSE_FRAME_BYTES = 1_048_576;
 export const AIDEN_REMOTE_MAX_JSON_RESPONSE_BYTES = 1_048_576;
@@ -702,6 +714,13 @@ export const AIDEN_REMOTE_CHAT_CONTINUE_CAPABILITIES = ["chat:continue-in-new-ch
 export const AIDEN_REMOTE_STREAM_SNAPSHOT_REASON_CAPABILITIES = ["stream:snapshot-reasons"] as const;
 
 /**
+ * Contract revision 69: a device holding `approval:plain-words` (with
+ * `approval:cards`) receives `explanation` and `tags` on shell approval cards.
+ * Display-only, no authority of its own.
+ */
+export const AIDEN_REMOTE_APPROVAL_PLAIN_WORDS_CAPABILITIES = ["approval:plain-words"] as const;
+
+/**
  * Every opt-in a paired device may persist. Each changes what a device is
  * shown; `chat:jobs` also opens its two routes, which still need the chat
  * grant (`chat:read`, `chat:write`); `attachments:raw` opens a second body
@@ -721,6 +740,7 @@ export const AIDEN_REMOTE_OPT_IN_CAPABILITIES = [
   ...AIDEN_REMOTE_APPROVAL_SETTINGS_CAPABILITIES,
   ...AIDEN_REMOTE_CHAT_CONTINUE_CAPABILITIES,
   ...AIDEN_REMOTE_STREAM_SNAPSHOT_REASON_CAPABILITIES,
+  ...AIDEN_REMOTE_APPROVAL_PLAIN_WORDS_CAPABILITIES,
 ] as const;
 
 /** Vocabulary a paired device may add after pairing through `POST /device/capabilities`. */
@@ -753,6 +773,7 @@ export const AIDEN_REMOTE_NEGOTIABLE_CAPABILITIES = [
   ...AIDEN_REMOTE_APPROVAL_SETTINGS_CAPABILITIES,
   ...AIDEN_REMOTE_CHAT_CONTINUE_CAPABILITIES,
   ...AIDEN_REMOTE_STREAM_SNAPSHOT_REASON_CAPABILITIES,
+  ...AIDEN_REMOTE_APPROVAL_PLAIN_WORDS_CAPABILITIES,
 ] as const;
 
 export type AidenRemoteNegotiableCapability =
@@ -789,6 +810,7 @@ export const AIDEN_REMOTE_CAPABILITIES = [
   ...AIDEN_REMOTE_APPROVAL_SETTINGS_CAPABILITIES,
   ...AIDEN_REMOTE_CHAT_CONTINUE_CAPABILITIES,
   ...AIDEN_REMOTE_STREAM_SNAPSHOT_REASON_CAPABILITIES,
+  ...AIDEN_REMOTE_APPROVAL_PLAIN_WORDS_CAPABILITIES,
 ] as const;
 
 export type AidenRemoteCapability = (typeof AIDEN_REMOTE_CAPABILITIES)[number];

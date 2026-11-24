@@ -1920,6 +1920,14 @@ function untrackedLeftoversNote(group: number): string {
   return `[Aiden: this command left processes running that Aiden could not take over, so they are not tracked or shown to the person and keep running after this chat. If they should not keep running, stop them yourself with: kill -- -${group}]`;
 }
 
+/**
+ * How `run_command` asks for its `description`: the plain-words line the
+ * approval card shows a person who may not read shell, so it names what the
+ * command touches. Aiden adds its own tags from the command text beside it.
+ */
+export const RUN_COMMAND_DESCRIPTION_GUIDANCE =
+  'Required. One short, plain-language sentence for someone who does not read code, saying what the command will do and naming the files, folders and websites it touches, e.g. "Runs the unit tests" or "Makes a bf-out folder, points fetch.py at it and runs it". Be accurate and complete: the person approves the command from this line, and Aiden shows the exact command beside it.';
+
 function makeRunCommand(workspace: WorkspaceRootGuard, options: CodingToolOptions = {}): AgentTool {
   const root = workspace.lexical;
   return {
@@ -1927,16 +1935,15 @@ function makeRunCommand(workspace: WorkspaceRootGuard, options: CodingToolOption
     label: "Run Command",
     description:
       "Run a shell command with the workspace folder as the working directory. Returns combined stdout/stderr (capped). Use for builds, tests, git, package managers, etc.",
-    // `description` is what the activity feed shows; the command itself is
-    // never written to the timeline or to chat history.
+    // `description` is what the activity feed shows and what the approval
+    // card says in plain words; the command itself is never written to the
+    // timeline or to chat history. It is required so every card can explain
+    // the command; the card still keeps the exact command one flip away.
     parameters: Type.Object({
       command: Type.String({ description: "The shell command to run." }),
-      description: Type.Optional(
-        Type.String({
-          description:
-            'A short present-tense description of what the command does, in 5-10 words, e.g. "Run the unit test suite".',
-        }),
-      ),
+      description: Type.String({
+        description: RUN_COMMAND_DESCRIPTION_GUIDANCE,
+      }),
     }),
     execute: async (_id, params, signal): Promise<AgentToolResult<null>> => {
       const { command, description } = params as { command: string; description?: string };

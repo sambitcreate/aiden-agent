@@ -1,6 +1,7 @@
 import type { ServerResponse } from "node:http";
 import { CHAT_AUDIENCE_PROMPT_LIFETIME_MS, isChatAudience } from "./chat-orchestration/audience.js";
 import { approvalCardAllows, buildApprovalCard, type ApprovalCard } from "../../renderer/shared/approval-card-model.js";
+import { parseCommandReading, type CommandReading } from "../../renderer/shared/command-reading.js";
 import type { NotificationChannel } from "../../renderer/preload-channels.js";
 import type { ToolApprovalDetails } from "../../renderer/shared/assistant.js";
 import {
@@ -153,6 +154,8 @@ export interface AidenRemotePendingApproval {
   card?: ApprovalCard;
   /** Exact renderer-safe facts are host-only and never enter the mobile wire contract. */
   details?: ToolApprovalDetails;
+  /** Host-only: a command's plain words, which reach a phone only inside its card (revision 69). */
+  reading?: CommandReading;
 }
 
 export type AidenRemoteChatActivityProjection =
@@ -239,6 +242,8 @@ interface ApprovalRecord {
   canAllow: boolean;
   scopes?: ToolApprovalScope[];
   details?: ToolApprovalDetails;
+  /** A command's plain words and Aiden's tags, re-validated from the host's prompt. */
+  reading?: CommandReading;
   expiresAt: number;
   expiry: ReturnType<typeof setTimeout>;
 }
@@ -275,10 +280,10 @@ function approvalIsHostOnly(details: ToolApprovalDetails | undefined): boolean {
  */
 export function projectPhoneStreamApproval(
   approval: AidenRemotePendingApproval,
-  options: { scheduleCard?: boolean; card?: boolean } = {},
+  options: { scheduleCard?: boolean; card?: boolean; plainWords?: boolean } = {},
 ): AidenRemotePendingApproval {
-  const { details: _hostOnly, scopes, ...mobile } = approval;
-  const card = options.card === true ? streamApprovalCard(approval) : undefined;
+  const { details: _hostOnly, reading: _reading, scopes, ...mobile } = approval;
+  const card = options.card === true ? streamApprovalCard(approval, options.plainWords === true) : undefined;
   const canAllow = card ? approvalCardAllows(card) : approvalIsHostOnly(approval.details) ? false : approval.canAllow;
   const offered = card && scopes ? scopes.filter((scope) => approvalCardAllows(card, scope)) : scopes;
   const schedule = options.scheduleCard === true ? approvalScheduleCard(approval.details) : undefined;
@@ -292,13 +297,17 @@ export function projectPhoneStreamApproval(
 }
 
 /** The typed card for a phone's own stream approval (revision 61), from the one card model. */
-function streamApprovalCard(approval: Pick<ApprovalRecord, "toolName" | "summary" | "canAllow" | "scopes" | "details">): ApprovalCard {
+function streamApprovalCard(
+  approval: Pick<ApprovalRecord, "toolName" | "summary" | "canAllow" | "scopes" | "details" | "reading">,
+  plainWords = false,
+): ApprovalCard {
   return buildApprovalCard({
     toolName: approval.toolName,
     summary: approval.summary,
     canAllow: approval.canAllow,
     ...(approval.scopes ? { scopes: approval.scopes } : {}),
     ...(approval.details ? { details: approval.details } : {}),
+    ...(plainWords && approval.reading ? { reading: approval.reading, plainWords: true } : {}),
   });
 }
 
@@ -965,6 +974,7 @@ export class AidenRemoteStreamService {
       canAllow: entry.canAllow,
       ...(entry.canAllow && entry.scopes ? { scopes: [...entry.scopes] } : {}),
       ...(entry.details ? { details: structuredClone(entry.details) } : {}),
+      ...(entry.reading ? { reading: structuredClone(entry.reading) } : {}),
     };
   }
 
@@ -1303,6 +1313,8 @@ export class AidenRemoteStreamService {
       const details = projectApprovalDetails(payload.details);
       const claimsStructuredDetails = ownRecord(payload.details)?.kind !== undefined;
       const scopes = offeredScopes(payload.scopes);
+      // Only the plain words cross from the host's prompt, never its preview.
+      const reading = parseCommandReading(payload.reading);
       const approvalLifetimeMs = promptLifetimeMs(stream.deviceId, APPROVAL_LIFETIME_MS);
       const expiresAt = this.options.now() + approvalLifetimeMs;
       const expiry = setTimeout(() => {
@@ -1324,6 +1336,7 @@ export class AidenRemoteStreamService {
         canAllow: toolName !== "classify" && toolName !== "generate_image" && (!claimsStructuredDetails || details !== undefined),
         ...(scopes ? { scopes } : {}),
         ...(details ? { details } : {}),
+        ...(reading ? { reading } : {}),
         expiresAt,
         expiry,
       });
@@ -1548,7 +1561,7 @@ export class AidenRemoteStreamService {
   pendingApproval(
     deviceId: string,
     streamId: string,
-    options: { scheduleCard?: boolean; card?: boolean } = {},
+    options: { scheduleCard?: boolean; card?: boolean; plainWords?: boolean } = {},
   ): AidenRemotePendingApproval | null {
     const stream = this.requireStream(deviceId, streamId);
     const approval = this.pendingApprovalForStream(stream.streamId);

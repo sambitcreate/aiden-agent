@@ -10131,7 +10131,8 @@
                 "approval:cards",
                 "approvals:settings",
                 "chat:continue-in-new-chat",
-                "stream:snapshot-reasons"
+                "stream:snapshot-reasons",
+                "approval:plain-words"
               ]
             },
             "uniqueItems": true
@@ -10192,7 +10193,8 @@
                 "approval:cards",
                 "approvals:settings",
                 "chat:continue-in-new-chat",
-                "stream:snapshot-reasons"
+                "stream:snapshot-reasons",
+                "approval:plain-words"
               ]
             },
             "uniqueItems": true
@@ -10356,7 +10358,8 @@
                 "approval:cards",
                 "approvals:settings",
                 "chat:continue-in-new-chat",
-                "stream:snapshot-reasons"
+                "stream:snapshot-reasons",
+                "approval:plain-words"
               ]
             },
             "uniqueItems": true
@@ -10426,7 +10429,8 @@
                 "approval:cards",
                 "approvals:settings",
                 "chat:continue-in-new-chat",
-                "stream:snapshot-reasons"
+                "stream:snapshot-reasons",
+                "approval:plain-words"
               ]
             },
             "uniqueItems": true
