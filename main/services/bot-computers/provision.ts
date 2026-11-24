@@ -299,7 +299,13 @@ export async function buildBaseVm(deps: BaseBuildDependencies): Promise<void> {
 /** Separate unprivileged Linux user for Bot `computer_shell` isolation (decision 4a). */
 export const BOT_COMPUTER_LINUX_SHELL_USER = "aiden-bot";
 export const BOT_COMPUTER_LINUX_SHARED_MOUNT = "/mnt/aiden-shared";
-export const BOT_COMPUTER_LINUX_VIRTIOFS_TAG = "automount";
+/**
+ * Lume exposes the Bot's `<botHome>/Computer` directory through Apple's
+ * `VZMultipleDirectoryShare` under tag `com.apple.virtio-fs.automount`, which
+ * appears inside the mount point as `<mount>/Computer`.
+ */
+export const BOT_COMPUTER_LINUX_VIRTIOFS_TAG = "com.apple.virtio-fs.automount";
+export const BOT_COMPUTER_LINUX_SHARED_TARGET = `${BOT_COMPUTER_LINUX_SHARED_MOUNT}/Computer`;
 
 /** Desktop, browser, AT-SPI, and font packages installed from the pinned Debian snapshot. */
 export const BOT_COMPUTER_LINUX_DESKTOP_PACKAGES: readonly string[] = Object.freeze([
@@ -505,9 +511,27 @@ export const LINUX_BASE_PROVISION_STEPS: readonly LinuxProvisionStep[] = Object.
         "Exec=/usr/local/bin/aiden-session-prep",
         "X-GNOME-Autostart-enabled=true",
       ].join("\n");
+      // Cloud-init's default netplan pins DHCP to the base VM's MAC address,
+      // which leaves cloned VMs (fresh MAC from `lume clone`) without an IP.
+      // Replace it with a MAC-agnostic `en*` DHCP config so clones lease fast.
+      const disableCloudNet = "network: {config: disabled}";
+      const netplanDhcp = [
+        "network:",
+        "  version: 2",
+        "  ethernets:",
+        "    aiden-virtio:",
+        "      match:",
+        '        name: "en*"',
+        "      dhcp4: true",
+        "      dhcp-identifier: mac",
+      ].join("\n");
+      const waitDesktop =
+        `for i in $(seq 1 30); do ` +
+        `if [ -s /home/${BOT_COMPUTER_GUEST_USER}/.Xauthority ] && pgrep -u ${BOT_COMPUTER_GUEST_USER} xfce4-session >/dev/null 2>&1; then break; fi; ` +
+        `sleep 1; done`;
       const script = [
         "umask 022",
-        "mkdir -p /etc/lightdm/lightdm.conf.d /etc/environment.d /etc/profile.d /etc/apt/apt.conf.d /etc/xdg/autostart /usr/local/bin",
+        "mkdir -p /etc/lightdm/lightdm.conf.d /etc/environment.d /etc/profile.d /etc/apt/apt.conf.d /etc/xdg/autostart /etc/cloud/cloud.cfg.d /etc/netplan /usr/local/bin",
         `printf '%s\\n' ${quoteRemoteArg(autologin)} > /etc/lightdm/lightdm.conf.d/50-aiden-autologin.conf`,
         `printf '%s\\n' ${quoteRemoteArg(atspiEnv)} > /etc/environment.d/50-aiden-atspi.conf`,
         `printf '%s\\n' ${quoteRemoteArg(atspiEnv.split("\n").map((line) => `export ${line}`).join("\n"))} > /etc/profile.d/aiden-atspi.sh`,
@@ -515,10 +539,17 @@ export const LINUX_BASE_PROVISION_STEPS: readonly LinuxProvisionStep[] = Object.
         `printf '%s\\n' ${quoteRemoteArg(sessionPrep)} > /usr/local/bin/aiden-session-prep`,
         "chmod 755 /usr/local/bin/aiden-session-prep",
         `printf '%s\\n' ${quoteRemoteArg(desktopEntry)} > /etc/xdg/autostart/aiden-no-lock.desktop`,
+        `printf '%s\\n' ${quoteRemoteArg(disableCloudNet)} > /etc/cloud/cloud.cfg.d/99-disable-network-config.cfg`,
+        "rm -f /etc/netplan/50-cloud-init.yaml",
+        `printf '%s\\n' ${quoteRemoteArg(netplanDhcp)} > /etc/netplan/50-aiden-dhcp.yaml`,
+        "chmod 600 /etc/netplan/50-aiden-dhcp.yaml",
+        "if command -v netplan >/dev/null 2>&1; then netplan generate >/dev/null 2>&1 || true; fi",
         "systemctl set-default graphical.target >/dev/null 2>&1 || true",
         "systemctl enable lightdm >/dev/null 2>&1 || true",
         "systemctl mask sleep.target suspend.target hibernate.target hybrid-sleep.target >/dev/null 2>&1 || true",
         "systemctl disable --now apt-daily.timer apt-daily-upgrade.timer unattended-upgrades.service >/dev/null 2>&1 || true",
+        "systemctl restart lightdm >/dev/null 2>&1 || true",
+        waitDesktop,
       ].join(" && ");
       checkLinuxStep(
         "configure_desktop",
@@ -554,10 +585,13 @@ export const LINUX_BASE_PROVISION_STEPS: readonly LinuxProvisionStep[] = Object.
         `(grep -qxF ${keyLine} /home/${user}/.ssh/authorized_keys || printf '%s\\n' ${keyLine} >> /home/${user}/.ssh/authorized_keys)`,
         `chown ${user}:${user} /home/${user}/.ssh/authorized_keys`,
         `chmod 600 /home/${user}/.ssh/authorized_keys`,
-        `printf '%s\\n' ${quoteRemoteArg(sudoers)} > /etc/sudoers.d/90-aiden-bot-shell.tmp`,
-        "chmod 440 /etc/sudoers.d/90-aiden-bot-shell.tmp",
-        "if command -v visudo >/dev/null 2>&1; then visudo -cf /etc/sudoers.d/90-aiden-bot-shell.tmp >/dev/null; fi",
-        "mv -f /etc/sudoers.d/90-aiden-bot-shell.tmp /etc/sudoers.d/90-aiden-bot-shell",
+        // `99-aiden-bot-shell` sorts after cloud-init's `90-cloud-init-users`
+        // (`lume ALL=(ALL) ALL`), because in sudoers the last matching rule wins.
+        `printf '%s\\n' ${quoteRemoteArg(sudoers)} > /etc/sudoers.d/99-aiden-bot-shell.tmp`,
+        "chmod 440 /etc/sudoers.d/99-aiden-bot-shell.tmp",
+        "if command -v visudo >/dev/null 2>&1; then visudo -cf /etc/sudoers.d/99-aiden-bot-shell.tmp >/dev/null; fi",
+        "mv -f /etc/sudoers.d/99-aiden-bot-shell.tmp /etc/sudoers.d/99-aiden-bot-shell",
+        "rm -f /etc/sudoers.d/90-aiden-bot-shell",
       ].join(" && ");
       checkLinuxStep(
         "bot_shell_user",
@@ -569,8 +603,9 @@ export const LINUX_BASE_PROVISION_STEPS: readonly LinuxProvisionStep[] = Object.
     },
   },
   {
-    // `<botHome>/Computer` is shared read-write over virtiofs; mount it at
-    // `/mnt/aiden-shared` and expose `~/Shared` for both `lume` and `aiden-bot`.
+    // `<botHome>/Computer` is shared read-write over virtiofs under Apple's
+    // `com.apple.virtio-fs.automount` share, appearing at `/mnt/aiden-shared/Computer`;
+    // expose `~/Shared` directly to that directory for both `lume` and `aiden-bot`.
     id: "shared_folder",
     channel: "guest_ssh",
     async run(context) {
@@ -579,7 +614,7 @@ export const LINUX_BASE_PROVISION_STEPS: readonly LinuxProvisionStep[] = Object.
         `mkdir -p ${quoteRemoteArg(BOT_COMPUTER_LINUX_SHARED_MOUNT)}`,
         `(grep -qxF ${quoteRemoteArg(fstabLine)} /etc/fstab || printf '%s\\n' ${quoteRemoteArg(fstabLine)} >> /etc/fstab)`,
         `mount ${quoteRemoteArg(BOT_COMPUTER_LINUX_SHARED_MOUNT)} >/dev/null 2>&1 || true`,
-        `for u in ${BOT_COMPUTER_GUEST_USER} ${BOT_COMPUTER_LINUX_SHELL_USER}; do s="/home/$u/Shared"; if [ -L "$s" ] || [ ! -e "$s" ]; then ln -sfn ${quoteRemoteArg(BOT_COMPUTER_LINUX_SHARED_MOUNT)} "$s" && chown -h "$u:$u" "$s"; else exit 65; fi; done`,
+        `for u in ${BOT_COMPUTER_GUEST_USER} ${BOT_COMPUTER_LINUX_SHELL_USER}; do s="/home/$u/Shared"; if [ -L "$s" ] || [ ! -e "$s" ]; then ln -sfn ${quoteRemoteArg(BOT_COMPUTER_LINUX_SHARED_TARGET)} "$s" && chown -h "$u:$u" "$s"; else exit 65; fi; done`,
       ].join(" && ");
       checkLinuxStep(
         "shared_folder",
@@ -607,7 +642,7 @@ export const LINUX_BASE_PROVISION_STEPS: readonly LinuxProvisionStep[] = Object.
         "command -v firefox-esr >/dev/null",
         `id -u ${BOT_COMPUTER_LINUX_SHELL_USER} >/dev/null`,
         '/usr/sbin/sshd -T 2>/dev/null | grep -qx "passwordauthentication no"',
-        "systemctl start lightdm >/dev/null 2>&1 || true",
+        "systemctl is-active --quiet lightdm || systemctl start lightdm >/dev/null 2>&1 || true",
       ].join(" && ");
       checkLinuxStep(
         "verify_desktop",
@@ -619,9 +654,18 @@ export const LINUX_BASE_PROVISION_STEPS: readonly LinuxProvisionStep[] = Object.
     },
   },
   {
+    // Flush ext4 delayed-allocation dirty pages before `lume stop`, which ends
+    // a Linux VM in ~1s and otherwise risks zero-filling newly written files.
     id: "shut_down",
     channel: "lume",
     async run(context) {
+      checkLinuxStep(
+        "shut_down",
+        await context.guestSsh(`${SUDO} /bin/sh -c 'sync && sync'`, {
+          stdin: `${context.password}\n`,
+          timeoutMs: 30_000,
+        }),
+      );
       await context.stopBase();
     },
   },
