@@ -143,6 +143,8 @@ export interface ProcessRow {
   pid: number;
   ppid: number;
   pgid: number;
+  /** The owner's user id (2c): a subtree with another user's process can't be confirmed. */
+  uid: number;
 }
 
 export type ExecResult =
@@ -161,12 +163,14 @@ export interface SocketReaderDeps {
 }
 
 export type SocketsByProcess =
-  | { ok: true; byPid: Map<number, SocketAddress[]> }
+  /** `incomplete` only with `{ partial: true }`: a diagnostic or an unreadable process, and the rest was read. */
+  | { ok: true; byPid: Map<number, SocketAddress[]>; incomplete?: true }
   /** `pids` names the processes whose read failed when the rest were read (in `byPid`); without it, everything failed. */
   | { ok: false; reason: string; pids?: number[]; byPid?: Map<number, SocketAddress[]> };
 
 export type JobSockets =
-  | { ok: true; sockets: Array<{ pid: number; address: string; port: number }> }
+  /** `rows`: an attach root's subtree (2c), so the watch can check owners and re-bind. */
+  | { ok: true; sockets: Array<{ pid: number; address: string; port: number }>; rows?: ProcessRow[] }
   | { ok: false; reason: string };
 
 function execBounded(file: string, args: readonly string[], limits: { timeoutMs: number; maxBuffer: number }): Promise<ExecResult> {
@@ -293,25 +297,25 @@ export function parseProcNetTcpSockets(table: string, family: 4 | 6): Map<string
   return listening;
 }
 
-/** One `ps -A -o pid=,ppid=,pgid=`; fails closed. */
+/** One `ps -A -o pid=,ppid=,pgid=,uid=`; fails closed. */
 export async function processTable(
   deps: SocketReaderDeps = defaultSocketReaderDeps(),
 ): Promise<{ ok: true; rows: ProcessRow[] } | { ok: false; reason: string }> {
-  const result = await deps.exec("ps", ["-A", "-o", "pid=,ppid=,pgid="], { timeoutMs: PS_TIMEOUT_MS, maxBuffer: READER_MAX_BUFFER });
+  const result = await deps.exec("ps", ["-A", "-o", "pid=,ppid=,pgid=,uid="], { timeoutMs: PS_TIMEOUT_MS, maxBuffer: READER_MAX_BUFFER });
   if (!result.ok) return { ok: false, reason: `ps: ${result.reason}` };
   if (result.exitCode !== 0) return { ok: false, reason: `ps exited ${result.exitCode}` };
   const rows: ProcessRow[] = [];
   for (const line of result.stdout.split("\n")) {
     const fields = line.trim().split(/\s+/u).map(Number);
-    if (fields.length !== 3 || !fields.every((value) => Number.isSafeInteger(value) && value >= 0)) continue;
-    rows.push({ pid: fields[0]!, ppid: fields[1]!, pgid: fields[2]! });
+    if (fields.length !== 4 || !fields.every((value) => Number.isSafeInteger(value) && value >= 0)) continue;
+    rows.push({ pid: fields[0]!, ppid: fields[1]!, pgid: fields[2]!, uid: fields[3]! });
   }
   if (!rows.length) return { ok: false, reason: "ps listed no processes" };
   return { ok: true, rows };
 }
 
 /** A job's processes: its process group, plus every descendant by parent pid (a child that called `setsid` included). */
-export function jobProcessTree(rows: readonly ProcessRow[], pgid: number): number[] {
+export function jobProcessTree(rows: ReadonlyArray<Pick<ProcessRow, "pid" | "ppid" | "pgid">>, pgid: number): number[] {
   const children = new Map<number, number[]>();
   for (const row of rows) {
     const list = children.get(row.ppid) ?? [];
@@ -329,9 +333,29 @@ export function jobProcessTree(rows: readonly ProcessRow[], pgid: number): numbe
   return [...found].sort((left, right) => left - right);
 }
 
+/** A process and every descendant by parent pid (2c): unlike `jobProcessTree`, not its whole process group. */
+export function processSubtree(rows: readonly ProcessRow[], pid: number): number[] {
+  if (!rows.some((row) => row.pid === pid)) return [];
+  const children = new Map<number, number[]>();
+  for (const row of rows) {
+    const list = children.get(row.ppid) ?? [];
+    list.push(row.pid);
+    children.set(row.ppid, list);
+  }
+  const found = new Set<number>();
+  const queue = [pid];
+  while (queue.length) {
+    const next = queue.shift()!;
+    if (found.has(next) || next <= 1) continue;
+    found.add(next);
+    queue.push(...(children.get(next) ?? []));
+  }
+  return [...found].sort((left, right) => left - right);
+}
+
 const sameSocket = (left: SocketAddress, right: SocketAddress) => left.address === right.address && left.port === right.port;
 
-async function macSockets(pids: readonly number[], deps: SocketReaderDeps): Promise<SocketsByProcess> {
+async function macSockets(pids: readonly number[], deps: SocketReaderDeps, partial = false): Promise<SocketsByProcess> {
   const result = await deps.exec(
     "/usr/sbin/lsof",
     ["-nP", "-a", "-iTCP", "-sTCP:LISTEN", "-p", [...pids, deps.self].join(","), "-Fpn"],
@@ -340,7 +364,9 @@ async function macSockets(pids: readonly number[], deps: SocketReaderDeps): Prom
   if (!result.ok) return { ok: false, reason: `lsof: ${result.reason}` };
   // lsof exits 1, silently, when some (or all) of the pids hold no listening socket or have gone. Any other exit, or
   // anything it printed on stderr (even next to output, even on exit 0), may mean a partial scan, so it is a failed look.
-  if (result.stderr.trim().length > 0) return { ok: false, reason: "lsof reported a problem" };
+  // Discovery alone (`partial`) keeps what was read and says it may be incomplete.
+  const noisy = result.stderr.trim().length > 0;
+  if (noisy && !partial) return { ok: false, reason: "lsof reported a problem" };
   if (result.exitCode !== 0 && result.exitCode !== 1) return { ok: false, reason: `lsof exited ${result.exitCode}` };
   const found = parseLsofListeningSockets(result.stdout);
   const own = found.get(deps.self) ?? [];
@@ -349,6 +375,7 @@ async function macSockets(pids: readonly number[], deps: SocketReaderDeps): Prom
     byPid: new Map(
       pids.map((pid) => [pid, (found.get(pid) ?? []).filter((socket) => !own.some((mine) => sameSocket(mine, socket)))]),
     ),
+    ...(noisy ? { incomplete: true as const } : {}),
   };
 }
 
@@ -380,7 +407,8 @@ async function linuxSocketInodes(pid: number, deps: SocketReaderDeps): Promise<{
   return { inodes };
 }
 
-async function linuxSockets(pids: readonly number[], deps: SocketReaderDeps): Promise<SocketsByProcess> {
+/** Every listening socket in /proc/net/tcp and tcp6, by inode; null when a table that must exist couldn't be read. */
+async function linuxListeningTable(deps: SocketReaderDeps): Promise<Map<string, SocketAddress> | { failed: string }> {
   const listening = new Map<string, SocketAddress>();
   for (const [file, family] of [["/proc/net/tcp", 4], ["/proc/net/tcp6", 6]] as const) {
     let table: string;
@@ -389,10 +417,16 @@ async function linuxSockets(pids: readonly number[], deps: SocketReaderDeps): Pr
     } catch (error) {
       // A kernel booted with IPv6 off has no tcp6 table and so no IPv6 socket; any other failure fails closed.
       if (family === 6 && errorCode(error) === "ENOENT") continue;
-      return { ok: false, reason: `${file} unreadable` };
+      return { failed: `${file} unreadable` };
     }
     for (const [inode, socket] of parseProcNetTcpSockets(table, family)) listening.set(inode, socket);
   }
+  return listening;
+}
+
+async function linuxSockets(pids: readonly number[], deps: SocketReaderDeps, partial = false): Promise<SocketsByProcess> {
+  const listening = await linuxListeningTable(deps);
+  if ("failed" in listening) return { ok: false, reason: listening.failed as string };
   const ownRead = await linuxSocketInodes(deps.self, deps);
   if ("failed" in ownRead) return { ok: false, reason: "Aiden's own sockets unreadable" };
   const own = new Set(ownRead.inodes);
@@ -414,23 +448,51 @@ async function linuxSockets(pids: readonly number[], deps: SocketReaderDeps): Pr
       }),
     );
   }
+  if (failed.length && partial) return { ok: true, byPid, incomplete: true };
   return failed.length ? { ok: false, reason, pids: failed, byPid } : { ok: true, byPid };
 }
 
 /**
  * Every listening TCP socket, with its address, of each of these processes,
  * from one look for all of them: one lsof call on macOS, one pass over
- * /proc on Linux. Fails closed.
+ * /proc on Linux. Fails closed, except that discovery (2c's Connect list)
+ * passes `partial` to keep what was read next to a diagnostic, marked
+ * `incomplete`.
  */
 export async function listeningSocketsByProcess(
   pids: readonly number[],
   deps: SocketReaderDeps = defaultSocketReaderDeps(),
+  options: { partial?: boolean } = {},
 ): Promise<SocketsByProcess> {
   const valid = [...new Set(pids)].filter((pid) => Number.isSafeInteger(pid) && pid > 1 && pid !== deps.self);
   if (!valid.length) return { ok: true, byPid: new Map() };
-  if (deps.platform === "darwin") return macSockets(valid, deps);
-  if (deps.platform === "linux") return linuxSockets(valid, deps);
+  if (deps.platform === "darwin") return macSockets(valid, deps, options.partial === true);
+  if (deps.platform === "linux") return linuxSockets(valid, deps, options.partial === true);
   return { ok: false, reason: "unsupported platform" };
+}
+
+/** One socket read for some trees: a failed read fails every tree, a per-pid failure only the trees with that pid. */
+async function answerTrees(
+  trees: ReadonlyMap<string, number[]>,
+  deps: SocketReaderDeps,
+  results: Map<string, JobSockets>,
+  rowsOf?: (tree: number[]) => ProcessRow[],
+): Promise<void> {
+  if (!trees.size) return;
+  const read = await listeningSocketsByProcess([...new Set([...trees.values()].flat())], deps);
+  const failedPids = new Set(read.ok ? [] : (read.pids ?? []));
+  for (const [key, tree] of trees) {
+    if (!read.ok && (!read.pids || tree.some((pid) => failedPids.has(pid)))) {
+      results.set(key, { ok: false, reason: read.reason });
+      continue;
+    }
+    const byPid = read.byPid ?? new Map<number, SocketAddress[]>();
+    results.set(key, {
+      ok: true,
+      sockets: tree.flatMap((pid) => (byPid.get(pid) ?? []).map((socket) => ({ pid, ...socket }))),
+      ...(rowsOf ? { rows: rowsOf(tree) } : {}),
+    });
+  }
 }
 
 /**
@@ -438,31 +500,177 @@ export async function listeningSocketsByProcess(
  * them. `groups` maps a job id to its process group. A failed `ps` or socket
  * read fails every job; a failure for some processes fails only the jobs
  * those processes belong to.
+ *
+ * `roots` (2c) maps a key to an attached server's holder pid. They're
+ * answered from the same `ps` (the holder and its descendants, with their
+ * rows) but from a separate socket read, so a diagnostic from one side never
+ * fails the other. A holder that has left the table answers no sockets and
+ * no rows.
  */
 export async function readJobSockets(
   groups: ReadonlyMap<string, number>,
   deps: SocketReaderDeps = defaultSocketReaderDeps(),
+  roots?: ReadonlyMap<string, number>,
 ): Promise<Map<string, JobSockets>> {
   const results = new Map<string, JobSockets>();
-  if (!groups.size) return results;
+  if (!groups.size && !roots?.size) return results;
   const table = await processTable(deps);
   if (!table.ok) {
-    for (const jobId of groups.keys()) results.set(jobId, { ok: false, reason: table.reason });
+    for (const key of [...groups.keys(), ...(roots?.keys() ?? [])]) results.set(key, { ok: false, reason: table.reason });
     return results;
   }
-  const trees = new Map([...groups].map(([jobId, pgid]) => [jobId, jobProcessTree(table.rows, pgid)]));
-  const read = await listeningSocketsByProcess([...new Set([...trees.values()].flat())], deps);
-  const failedPids = new Set(read.ok ? [] : (read.pids ?? []));
-  for (const [jobId, tree] of trees) {
-    if (!read.ok && (!read.pids || tree.some((pid) => failedPids.has(pid)))) {
-      results.set(jobId, { ok: false, reason: read.reason });
-      continue;
-    }
-    const byPid = read.byPid ?? new Map<number, SocketAddress[]>();
-    results.set(jobId, {
-      ok: true,
-      sockets: tree.flatMap((pid) => (byPid.get(pid) ?? []).map((socket) => ({ pid, ...socket }))),
-    });
+  await answerTrees(new Map([...groups].map(([jobId, pgid]) => [jobId, jobProcessTree(table.rows, pgid)])), deps, results);
+  if (roots?.size) {
+    const byPid = new Map(table.rows.map((row) => [row.pid, row]));
+    await answerTrees(
+      new Map([...roots].map(([key, pid]) => [key, processSubtree(table.rows, pid)])),
+      deps,
+      results,
+      (tree) => tree.map((pid) => ({ ...byPid.get(pid)! })),
+    );
   }
   return results;
+}
+
+// ── 2c: whose processes run where, for Connect running server… (D6, D8) ──
+
+/** Processes discovery looks at, at most; past this it fails closed. */
+export const MAX_SCAN_PIDS = 4_096;
+
+/** `lsof -d cwd -Fpn` output: a `p<pid>` line, then `n<folder>` (the rest of the line, spaces included). */
+export function parseLsofCwd(output: string): Map<number, string> {
+  const byPid = new Map<number, string>();
+  let pid: number | undefined;
+  for (const line of output.split("\n")) {
+    if (line.startsWith("p")) {
+      const value = Number(line.slice(1));
+      pid = Number.isSafeInteger(value) && value > 0 && line.length > 1 ? value : undefined;
+      continue;
+    }
+    if (line.startsWith("n") && pid !== undefined && line.length > 1 && !byPid.has(pid)) byPid.set(pid, line.slice(1));
+  }
+  return byPid;
+}
+
+export type ProcessFolders = { ok: true; byPid: Map<number, string>; incomplete: boolean } | { ok: false; reason: string };
+
+/**
+ * Each process's working folder. macOS: one `lsof -d cwd` for the uid's
+ * processes (its folders are canonical); Linux: `readlink /proc/<pid>/cwd`
+ * for exactly these pids, skipping EACCES and ENOENT. A skipped pid or an
+ * lsof diagnostic is `incomplete` with `partial` and a failure without; a
+ * timeout, an overrun, an exit other than 0 or 1, or more than `maxPids`
+ * processes always fails.
+ */
+export async function processFolders(
+  pids: readonly number[],
+  deps: SocketReaderDeps,
+  options: { uid: number; maxPids: number; partial?: boolean },
+): Promise<ProcessFolders> {
+  const wanted = [...new Set(pids)].filter((pid) => Number.isSafeInteger(pid) && pid > 1);
+  if (wanted.length > options.maxPids) return { ok: false, reason: "too many processes" };
+  const partial = options.partial === true;
+  const byPid = new Map<number, string>();
+  if (!wanted.length) return { ok: true, byPid, incomplete: false };
+  if (deps.platform === "darwin") {
+    const result = await deps.exec("/usr/sbin/lsof", ["-nP", "-a", "-d", "cwd", "-Fpn", "-u", String(options.uid)], {
+      timeoutMs: LSOF_TIMEOUT_MS,
+      maxBuffer: READER_MAX_BUFFER,
+    });
+    if (!result.ok) return { ok: false, reason: `lsof: ${result.reason}` };
+    if (result.exitCode !== 0 && result.exitCode !== 1) return { ok: false, reason: `lsof exited ${result.exitCode}` };
+    const noisy = result.stderr.trim().length > 0;
+    if (noisy && !partial) return { ok: false, reason: "lsof reported a problem" };
+    const found = parseLsofCwd(result.stdout);
+    for (const pid of wanted) {
+      const folder = found.get(pid);
+      if (folder !== undefined) byPid.set(pid, folder);
+    }
+    return { ok: true, byPid, incomplete: noisy };
+  }
+  if (deps.platform === "linux") {
+    let skipped = false;
+    for (const pid of wanted) {
+      try {
+        byPid.set(pid, await deps.readlink(`/proc/${pid}/cwd`));
+      } catch (error) {
+        const code = errorCode(error);
+        if (code !== "EACCES" && code !== "ENOENT" && code !== "EPERM") return { ok: false, reason: `cwd of ${pid} unreadable` };
+        if (!partial) return { ok: false, reason: `cwd of ${pid} unreadable` };
+        skipped = true;
+      }
+    }
+    return { ok: true, byPid, incomplete: skipped };
+  }
+  return { ok: false, reason: "unsupported platform" };
+}
+
+/** A process name as shown: the last path segment of `comm`, at most 64 characters. */
+const PROCESS_NAME_MAX = 64;
+
+/** Each process's name, from one `ps -o pid=,comm= -p <list>`; fails closed. */
+export async function processNames(
+  pids: readonly number[],
+  deps: SocketReaderDeps,
+): Promise<{ ok: true; byPid: Map<number, string> } | { ok: false; reason: string }> {
+  const wanted = [...new Set(pids)].filter((pid) => Number.isSafeInteger(pid) && pid > 1);
+  const byPid = new Map<number, string>();
+  if (!wanted.length) return { ok: true, byPid };
+  const result = await deps.exec("ps", ["-o", "pid=,comm=", "-p", wanted.join(",")], { timeoutMs: PS_TIMEOUT_MS, maxBuffer: READER_MAX_BUFFER });
+  if (!result.ok) return { ok: false, reason: `ps: ${result.reason}` };
+  // ps exits 1 when some pid has gone; what it printed is still right.
+  if (result.exitCode !== 0 && result.exitCode !== 1) return { ok: false, reason: `ps exited ${result.exitCode}` };
+  for (const line of result.stdout.split("\n")) {
+    const match = /^\s*(\d+)\s+(.+?)\s*$/u.exec(line);
+    if (!match) continue;
+    const pid = Number(match[1]);
+    const name = match[2]!.split("/").filter(Boolean).pop() ?? "";
+    if (wanted.includes(pid) && name) byPid.set(pid, [...name].slice(0, PROCESS_NAME_MAX).join(""));
+  }
+  return { ok: true, byPid };
+}
+
+/**
+ * The processes of `uid` that hold a listening TCP socket on `port`, on any
+ * address. macOS: one `lsof -iTCP:<port> -sTCP:LISTEN -u <uid>`, failing
+ * closed on any diagnostic; Linux: the port's listening inodes from
+ * /proc/net/tcp and tcp6, then the fds of this uid's processes only. Fails
+ * closed.
+ */
+export async function portHolders(
+  port: number,
+  uid: number,
+  deps: SocketReaderDeps,
+): Promise<{ ok: true; pids: number[] } | { ok: false; reason: string }> {
+  if (!Number.isInteger(port) || port < 1 || port > 65_535) return { ok: false, reason: "bad port" };
+  if (deps.platform === "darwin") {
+    const result = await deps.exec(
+      "/usr/sbin/lsof",
+      ["-nP", "-a", `-iTCP:${port}`, "-sTCP:LISTEN", "-u", String(uid), "-Fpn"],
+      { timeoutMs: LSOF_TIMEOUT_MS, maxBuffer: READER_MAX_BUFFER },
+    );
+    if (!result.ok) return { ok: false, reason: `lsof: ${result.reason}` };
+    if (result.stderr.trim().length > 0) return { ok: false, reason: "lsof reported a problem" };
+    if (result.exitCode !== 0 && result.exitCode !== 1) return { ok: false, reason: `lsof exited ${result.exitCode}` };
+    const found = parseLsofListeningSockets(result.stdout);
+    return { ok: true, pids: [...found].filter(([, sockets]) => sockets.some((socket) => socket.port === port)).map(([pid]) => pid) };
+  }
+  if (deps.platform === "linux") {
+    const listening = await linuxListeningTable(deps);
+    if ("failed" in listening) return { ok: false, reason: listening.failed as string };
+    const inodes = new Set([...listening].filter(([, socket]) => socket.port === port).map(([inode]) => inode));
+    if (!inodes.size) return { ok: true, pids: [] };
+    const table = await processTable(deps);
+    if (!table.ok) return { ok: false, reason: table.reason };
+    const mine = table.rows.filter((row) => row.uid === uid && row.pid > 1).map((row) => row.pid);
+    if (mine.length > MAX_SCAN_PIDS) return { ok: false, reason: "too many processes" };
+    const pids: number[] = [];
+    for (const pid of mine) {
+      const read = await linuxSocketInodes(pid, deps);
+      if ("failed" in read) return { ok: false, reason: read.failed };
+      if (read.inodes.some((inode) => inodes.has(inode))) pids.push(pid);
+    }
+    return { ok: true, pids };
+  }
+  return { ok: false, reason: "unsupported platform" };
 }

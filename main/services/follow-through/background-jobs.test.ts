@@ -1163,3 +1163,60 @@ test("designTail gives a design job's in-memory tail, and nothing for a chat job
   assert.equal(jobs.designTail(chatJob.id), "");
   assert.equal(jobs.designTail("job_00000000"), "");
 });
+
+// ── 2c: attached servers share the tick, and Aiden's own processes are known ──
+
+test("designSockets passes attach roots through, and without roots asks exactly as before", { skip }, async (t) => {
+  const dir = await tempDir();
+  const calls: Array<{ groups: string[]; roots?: string[] }> = [];
+  const { jobs, startNode } = designHarness(dir, {
+    jobSockets: async (groups, roots) => {
+      calls.push({ groups: [...groups.keys()], ...(roots ? { roots: [...roots.keys()] } : {}) });
+      const answers = new Map<string, { ok: true; sockets: [] }>();
+      for (const key of [...groups.keys(), ...(roots?.keys() ?? [])]) answers.set(key, { ok: true, sockets: [] });
+      return answers;
+    },
+  });
+  t.after(() => cleanUp(jobs, dir));
+  const job = startNode("setInterval(() => {}, 1000)");
+  const withRoots = await jobs.designSockets([job.id], new Map([["attach:ws\0docs", 4242]]));
+  assert.deepEqual(calls, [{ groups: [job.id], roots: ["attach:ws\0docs"] }]);
+  assert.deepEqual(withRoots.get("attach:ws\0docs"), { ok: true, sockets: [] });
+  assert.deepEqual(withRoots.get(job.id), { ok: true, sockets: [] });
+  calls.length = 0;
+  await jobs.designSockets([job.id]);
+  assert.deepEqual(calls, [{ groups: [job.id] }], "no roots: one look for the jobs, as before");
+  calls.length = 0;
+  const rootsOnly = await jobs.designSockets([], new Map([["attach:r", 4242]]));
+  assert.deepEqual(calls, [{ groups: [], roots: ["attach:r"] }]);
+  assert.equal(rootsOnly.get("attach:r")?.ok, true);
+});
+
+test("ownedPids is every running job's tree, design, chat and adopted alike, and nothing else", { skip }, async (t) => {
+  const dir = await tempDir();
+  const { jobs, startNode } = designHarness(dir, { listeningPorts: null });
+  t.after(() => cleanUp(jobs, dir));
+  const design = startNode("setInterval(() => {}, 1000)");
+  const chat = jobs.start({ chatId: "chat-1", workspaceId: "ws-1", cwd: dir, command: "sleep 30", description: "Wait", env: process.env });
+  const ended = jobs.start({ chatId: "chat-1", workspaceId: "ws-1", cwd: dir, command: "exit 0", description: "Quick", env: process.env });
+  await eventually(() => jobs.get("chat-1", ended.id)?.state === "exited", "the quick job to end");
+  const id = newBackgroundJobId();
+  const portFile = path.join(dir, "port");
+  const left = await leaveServerRunning(dir, id, server(portFile));
+  const adopted = await jobs.adopt({ id, chatId: "chat-1", workspaceId: "ws-1", cwd: dir, command: "node server.cjs &", processGroup: left.leftoverProcessGroup! });
+  assert.ok(adopted);
+  const group = left.leftoverProcessGroup!;
+  const rows = [
+    { pid: design.pid!, ppid: process.pid, pgid: design.pid!, uid: 501 },
+    { pid: 900_001, ppid: design.pid!, pgid: 900_001, uid: 501 }, // a setsid child of the design job
+    { pid: chat.pid!, ppid: process.pid, pgid: chat.pid!, uid: 501 },
+    { pid: ended.pid!, ppid: process.pid, pgid: ended.pid!, uid: 501 }, // an ended job's pid, reused or not
+    { pid: group, ppid: 1, pgid: group, uid: 501 },
+    { pid: 900_002, ppid: group, pgid: group, uid: 501 },
+    { pid: 900_003, ppid: 1, pgid: 900_003, uid: 501 }, // a stranger
+  ];
+  assert.deepEqual(
+    [...jobs.ownedPids(rows)].sort((a, b) => a - b),
+    [design.pid!, 900_001, chat.pid!, group, 900_002].sort((a, b) => a - b),
+  );
+});

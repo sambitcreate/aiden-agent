@@ -29,6 +29,7 @@ import {
   processTable,
   readJobSockets,
   type JobSockets,
+  type ProcessRow,
 } from "./listening-ports.js";
 
 export const MAX_RUNNING_JOBS_PER_CHAT = 10;
@@ -150,7 +151,7 @@ export interface BackgroundJobsOptions {
   /** The TCP ports each of the given processes listens on; null turns port lookups off. */
   listeningPorts?: ((pids: readonly number[]) => Promise<Map<number, number[]>>) | null;
   /** Each job's listening sockets with addresses, from one look for all of them; fails closed (design jobs). */
-  jobSockets?: (groups: ReadonlyMap<string, number>) => Promise<Map<string, JobSockets>>;
+  jobSockets?: (groups: ReadonlyMap<string, number>, roots?: ReadonlyMap<string, number>) => Promise<Map<string, JobSockets>>;
   /** A design job's processes that left its group (a `setsid` child), found by parent pid. */
   designStrays?: (pgid: number) => Promise<number[]>;
   /**
@@ -826,7 +827,7 @@ export class BackgroundJobs {
    * that isn't a running design job, or whose read failed, comes back failed,
    * never as an empty list.
    */
-  async designSockets(jobIds: readonly string[]): Promise<Map<string, JobSockets>> {
+  async designSockets(jobIds: readonly string[], roots?: ReadonlyMap<string, number>): Promise<Map<string, JobSockets>> {
     const results = new Map<string, JobSockets>();
     const groups = new Map<string, number>();
     for (const jobId of jobIds) {
@@ -835,11 +836,32 @@ export class BackgroundJobs {
       if (!job || !isDesign(job) || job.view.state !== "running" || !pid) results.set(jobId, { ok: false, reason: "not running" });
       else groups.set(jobId, pid);
     }
-    if (groups.size) {
-      const read = await (this.options.jobSockets ?? readJobSockets)(groups);
-      for (const jobId of groups.keys()) results.set(jobId, read.get(jobId) ?? { ok: false, reason: "not read" });
+    // 2c: attached servers' holders ride the same `ps`, with their own socket read.
+    if (groups.size || roots?.size) {
+      const look =
+        this.options.jobSockets ??
+        ((jobGroups: ReadonlyMap<string, number>, attachRoots?: ReadonlyMap<string, number>) =>
+          readJobSockets(jobGroups, undefined, attachRoots));
+      const read = roots?.size ? await look(groups, roots) : await look(groups);
+      for (const key of [...groups.keys(), ...(roots?.keys() ?? [])]) results.set(key, read.get(key) ?? { ok: false, reason: "not read" });
     }
     return results;
+  }
+
+  /**
+   * Every process in a running job's tree (2c, A-M1): design jobs, chat and
+   * check jobs, and adopted groups alike, from rows the caller already read.
+   * Connect running server… never lists these, and an attach never accepts one.
+   */
+  ownedPids(rows: readonly ProcessRow[]): Set<number> {
+    const owned = new Set<number>();
+    for (const job of this.jobs.values()) {
+      if (job.view.state !== "running") continue;
+      const group = job.adoptedGroup ?? job.child?.pid;
+      if (!group) continue;
+      for (const pid of jobProcessTree(rows, group)) owned.add(pid);
+    }
+    return owned;
   }
 
   /** Stop a design job: polite first, forced after the grace period. Resolves once it has ended. Idempotent. */

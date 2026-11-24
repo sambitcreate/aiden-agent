@@ -5,6 +5,11 @@ import {
   isLoopbackAddress,
   jobProcessTree,
   listeningSocketsByProcess,
+  parseLsofCwd,
+  portHolders,
+  processFolders,
+  processNames,
+  processSubtree,
   MAX_DESIGN_JOB_FDS,
   parseLsofListening,
   parseLsofListeningSockets,
@@ -151,8 +156,8 @@ test("the ps tree gives the group and every descendant by parent pid", () => {
 });
 
 test("processTable parses ps and fails closed", async () => {
-  const table = await processTable(fakeDeps({ exec: async () => ({ ok: true, stdout: "  100     1   100\n  101   100   100\n\n", stderr: "", exitCode: 0 }) }));
-  assert.deepEqual(table, { ok: true, rows: [{ pid: 100, ppid: 1, pgid: 100 }, { pid: 101, ppid: 100, pgid: 100 }] });
+  const table = await processTable(fakeDeps({ exec: async () => ({ ok: true, stdout: "  100     1   100   501\n  101   100   100   501\n\n", stderr: "", exitCode: 0 }) }));
+  assert.deepEqual(table, { ok: true, rows: [{ pid: 100, ppid: 1, pgid: 100, uid: 501 }, { pid: 101, ppid: 100, pgid: 100, uid: 501 }] });
   for (const failure of ["timeout", "max-buffer", "error"] as const) {
     const failed = await processTable(fakeDeps({ exec: async () => ({ ok: false, reason: failure }) }));
     assert.equal(failed.ok, false, failure);
@@ -294,7 +299,7 @@ test("more than 4 096 open fds fails closed for that pid", async () => {
 
 test("three jobs cost one ps and one lsof call", async () => {
   const calls: string[][] = [];
-  const ps = ["100 1 100", "101 100 100", "200 1 200", "201 200 201", "300 1 300", "400 1 400"].join("\n");
+  const ps = ["100 1 100 501", "101 100 100 501", "200 1 200 501", "201 200 201 501", "300 1 300 501", "400 1 400 501"].join("\n");
   const deps = fakeDeps({
     platform: "darwin",
     exec: async (file, args) => {
@@ -317,7 +322,7 @@ test("a failed ps or socket read fails every job it covers; a per-pid failure fa
   const groups = new Map([["job_a", 100], ["job_b", 200]]);
   const psFailed = await readJobSockets(groups, fakeDeps({ exec: async () => ({ ok: false, reason: "timeout" }) }));
   assert.deepEqual([...psFailed.values()].map((entry) => entry.ok), [false, false]);
-  const ps = "100 1 100\n200 1 200\n";
+  const ps = "100 1 100 501\n200 1 200 501\n";
   const perPid = await readJobSockets(
     groups,
     linuxDeps({
@@ -349,3 +354,218 @@ function fakeDeps(overrides: Partial<SocketReaderDeps> = {}): SocketReaderDeps {
     ...overrides,
   };
 }
+
+// ── 2c: process owners, folders, names, port holders, and a separate read for attached servers ──
+
+test("processTable reads the uid column and skips a line without it", async () => {
+  const table = await processTable(fakeDeps({ exec: async () => ({ ok: true, stdout: "100 1 100 501\n101 100 100\n102 1 102 0\n", stderr: "", exitCode: 0 }) }));
+  assert.deepEqual(table, { ok: true, rows: [{ pid: 100, ppid: 1, pgid: 100, uid: 501 }, { pid: 102, ppid: 1, pgid: 102, uid: 0 }] });
+});
+
+test("processTable asks ps for pid, ppid, pgid and uid", async () => {
+  const calls: string[][] = [];
+  await processTable(fakeDeps({ exec: async (file, args) => (calls.push([file, ...args]), { ok: true, stdout: "1 0 1 0\n", stderr: "", exitCode: 0 }) }));
+  assert.deepEqual(calls, [["ps", "-A", "-o", "pid=,ppid=,pgid=,uid="]]);
+});
+
+test("processSubtree is a pid and its descendants by parent pid, not its process group", () => {
+  const rows = [
+    { pid: 100, ppid: 1, pgid: 100, uid: 501 },
+    { pid: 101, ppid: 100, pgid: 100, uid: 501 },
+    { pid: 102, ppid: 101, pgid: 102, uid: 501 },
+    { pid: 103, ppid: 1, pgid: 100, uid: 501 }, // same group, not a descendant
+    { pid: 104, ppid: 100, pgid: 100, uid: 501 },
+  ];
+  assert.deepEqual(processSubtree(rows, 101), [101, 102]);
+  assert.deepEqual(processSubtree(rows, 100), [100, 101, 102, 104]);
+  assert.deepEqual(processSubtree(rows, 999), []);
+});
+
+test("parseLsofCwd maps each pid to its folder, spaces and unicode included, skipping malformed lines", () => {
+  const output = "p123\nfcwd\nn/Users/x/app\np124\nfcwd\nn/Users/x/My App/ünï\npnope\nn/ignored\np125\nfcwd\nxjunk\n";
+  assert.deepEqual([...parseLsofCwd(output)], [
+    [123, "/Users/x/app"],
+    [124, "/Users/x/My App/ünï"],
+  ]);
+});
+
+const enoent = () => Object.assign(new Error("ENOENT"), { code: "ENOENT" });
+
+test("processFolders on macOS runs one lsof for the uid and keeps only the pids asked for", async () => {
+  const calls: string[][] = [];
+  const deps = fakeDeps({
+    platform: "darwin",
+    exec: async (file, args) => {
+      calls.push([file, ...args]);
+      return { ok: true, stdout: "p10\nfcwd\nn/w/apps/web\np11\nfcwd\nn/w\np12\nfcwd\nn/elsewhere\n", stderr: "", exitCode: 0 };
+    },
+  });
+  const result = await processFolders([10, 11], deps, { uid: 501, maxPids: 4096 });
+  assert.deepEqual(result, { ok: true, incomplete: false, byPid: new Map([[10, "/w/apps/web"], [11, "/w"]]) });
+  assert.equal(calls.length, 1);
+  const [call] = calls;
+  assert.equal(call![0], "/usr/sbin/lsof");
+  assert.ok(call!.includes("-d") && call![call!.indexOf("-d") + 1] === "cwd");
+  assert.equal(call![call!.indexOf("-u") + 1], "501");
+});
+
+test("processFolders on macOS: stderr is incomplete with partial and a failure without; a timeout always fails", async () => {
+  const noisy = fakeDeps({ platform: "darwin", exec: async () => ({ ok: true, stdout: "p10\nfcwd\nn/w\n", stderr: "lsof: WARNING: can't stat()\n", exitCode: 1 }) });
+  assert.deepEqual(await processFolders([10, 11], noisy, { uid: 501, maxPids: 4096, partial: true }), {
+    ok: true,
+    incomplete: true,
+    byPid: new Map([[10, "/w"]]),
+  });
+  assert.equal((await processFolders([10], noisy, { uid: 501, maxPids: 4096 })).ok, false);
+  for (const partial of [true, false]) {
+    const timedOut = fakeDeps({ platform: "darwin", exec: async () => ({ ok: false, reason: "timeout" }) });
+    assert.equal((await processFolders([10], timedOut, { uid: 501, maxPids: 4096, partial })).ok, false);
+  }
+  const exit2 = fakeDeps({ platform: "darwin", exec: async () => ({ ok: true, stdout: "", stderr: "", exitCode: 2 }) });
+  assert.equal((await processFolders([10], exit2, { uid: 501, maxPids: 4096, partial: true })).ok, false);
+});
+
+test("processFolders on Linux reads /proc/<pid>/cwd for exactly the pids given and skips EACCES and ENOENT", async () => {
+  const read: string[] = [];
+  const deps = fakeDeps({
+    platform: "linux",
+    readlink: async (link) => {
+      read.push(link);
+      if (link === "/proc/11/cwd") throw denied();
+      if (link === "/proc/12/cwd") throw enoent();
+      return "/w/apps/web";
+    },
+  });
+  assert.deepEqual(await processFolders([10, 11, 12], deps, { uid: 501, maxPids: 4096, partial: true }), {
+    ok: true,
+    incomplete: true,
+    byPid: new Map([[10, "/w/apps/web"]]),
+  });
+  assert.deepEqual(read, ["/proc/10/cwd", "/proc/11/cwd", "/proc/12/cwd"]);
+  assert.equal((await processFolders([10, 11], deps, { uid: 501, maxPids: 4096 })).ok, false, "strict reads fail on a skipped pid");
+  assert.deepEqual(await processFolders([10], deps, { uid: 501, maxPids: 4096 }), { ok: true, incomplete: false, byPid: new Map([[10, "/w/apps/web"]]) });
+});
+
+test("processFolders refuses more than maxPids processes", async () => {
+  const deps = fakeDeps({ platform: "linux", readlink: async () => "/w" });
+  assert.equal((await processFolders([10, 11, 12], deps, { uid: 501, maxPids: 2, partial: true })).ok, false);
+});
+
+test("processNames keeps the last path segment of comm, cut to 64 characters, and fails closed", async () => {
+  const long = "x".repeat(80);
+  const calls: string[][] = [];
+  const deps = fakeDeps({
+    exec: async (file, args) => {
+      calls.push([file, ...args]);
+      return { ok: true, stdout: `  10 /Applications/My Tools/node server\n  11 vite\n  12 /opt/${long}\n`, stderr: "", exitCode: 0 };
+    },
+  });
+  assert.deepEqual(await processNames([10, 11, 12], deps), {
+    ok: true,
+    byPid: new Map([[10, "node server"], [11, "vite"], [12, "x".repeat(64)]]),
+  });
+  assert.deepEqual(calls, [["ps", "-o", "pid=,comm=", "-p", "10,11,12"]]);
+  assert.equal((await processNames([10], fakeDeps({ exec: async () => ({ ok: false, reason: "timeout" }) }))).ok, false);
+});
+
+test("portHolders on macOS asks lsof for the uid's listeners on the port and fails closed on stderr", async () => {
+  const calls: string[][] = [];
+  const deps = fakeDeps({
+    platform: "darwin",
+    exec: async (file, args) => {
+      calls.push([file, ...args]);
+      return { ok: true, stdout: "p10\nf3\nn127.0.0.1:5173\np11\nf4\nn[::1]:5173\n", stderr: "", exitCode: 0 };
+    },
+  });
+  assert.deepEqual(await portHolders(5173, 501, deps), { ok: true, pids: [10, 11] });
+  const [call] = calls;
+  assert.ok(call!.includes("-iTCP:5173"));
+  assert.ok(call!.includes("-sTCP:LISTEN"));
+  assert.equal(call![call!.indexOf("-u") + 1], "501");
+  const noisy = fakeDeps({ platform: "darwin", exec: async () => ({ ok: true, stdout: "p10\nn127.0.0.1:5173\n", stderr: "lsof: oops\n", exitCode: 0 }) });
+  assert.equal((await portHolders(5173, 501, noisy)).ok, false);
+  const nobody = fakeDeps({ platform: "darwin", exec: async () => ({ ok: true, stdout: "", stderr: "", exitCode: 1 }) });
+  assert.deepEqual(await portHolders(5173, 501, nobody), { ok: true, pids: [] });
+});
+
+test("portHolders on Linux maps the port's listening inode to this uid's process and never reads another uid's", async () => {
+  const opened: number[] = [];
+  const deps = linuxDeps({
+    exec: async () => ({ ok: true, stdout: "10 1 10 501\n20 1 20 0\n30 1 30 501\n", stderr: "", exitCode: 0 }),
+    tcp: [TCP_HEADER, row("0100007F:1435", "11"), row("0100007F:0BB8", "12")].join("\n"),
+    tcp6: [TCP_HEADER, row("00000000000000000000000001000000:1435", "21")].join("\n"),
+    fds: { 10: ["socket:[11]"], 20: ["socket:[21]"], 30: ["socket:[21]"] },
+  });
+  const readdir = deps.readdir;
+  deps.readdir = async (folder) => {
+    opened.push(Number(folder.split("/")[2]));
+    return readdir(folder);
+  };
+  assert.deepEqual(await portHolders(5173, 501, deps), { ok: true, pids: [10, 30] });
+  assert.equal(opened.includes(20), false, "another uid's fds are never read");
+  assert.deepEqual(await portHolders(4000, 501, deps), { ok: true, pids: [] });
+});
+
+test("listeningSocketsByProcess with partial keeps what lsof read next to a diagnostic", async () => {
+  const deps = fakeDeps({ platform: "darwin", exec: async () => ({ ok: true, stdout: "p501\nf3\nn127.0.0.1:5173\n", stderr: "lsof: can't read 502\n", exitCode: 1 }) });
+  assert.deepEqual(await listeningSocketsByProcess([501, 502], deps, { partial: true }), {
+    ok: true,
+    incomplete: true,
+    byPid: new Map([[501, [{ address: "127.0.0.1", port: 5173 }]], [502, []]]),
+  });
+  assert.equal((await listeningSocketsByProcess([501, 502], deps)).ok, false, "without partial it still fails closed");
+});
+
+test("readJobSockets answers jobs and attach roots from one ps and two socket reads", async () => {
+  const calls: string[][] = [];
+  const ps = ["100 1 100 501", "101 100 100 501", "300 1 300 501", "301 300 300 501", "302 301 300 0"].join("\n");
+  const deps = fakeDeps({
+    platform: "darwin",
+    exec: async (file, args) => {
+      calls.push([file, ...args]);
+      if (file.endsWith("ps")) return { ok: true, stdout: ps, stderr: "", exitCode: 0 };
+      const pids = args[args.indexOf("-p") + 1]!;
+      if (pids.includes("101")) return { ok: true, stdout: "p101\nn127.0.0.1:5173\n", stderr: "", exitCode: 1 };
+      return { ok: true, stdout: "p301\nn[::1]:4321\n", stderr: "", exitCode: 1 };
+    },
+  });
+  const result = await readJobSockets(new Map([["job_a", 100]]), deps, new Map([["attach:ws\0docs", 301]]));
+  assert.equal(calls.filter((call) => call[0]!.endsWith("ps")).length, 1);
+  assert.equal(calls.filter((call) => call[0]!.endsWith("lsof")).length, 2);
+  assert.deepEqual(result.get("job_a"), { ok: true, sockets: [{ pid: 101, address: "127.0.0.1", port: 5173 }] });
+  assert.deepEqual(result.get("attach:ws\0docs"), {
+    ok: true,
+    sockets: [{ pid: 301, address: "::1", port: 4321 }],
+    rows: [
+      { pid: 301, ppid: 300, pgid: 300, uid: 501 },
+      { pid: 302, ppid: 301, pgid: 300, uid: 0 },
+    ],
+  });
+});
+
+test("a diagnostic on one side's socket read never fails the other", async () => {
+  const ps = ["100 1 100 501", "300 1 300 501"].join("\n");
+  const noisyOn = (noisy: "100" | "300") =>
+    fakeDeps({
+      platform: "darwin",
+      exec: async (file, args) => {
+        if (file.endsWith("ps")) return { ok: true, stdout: ps, stderr: "", exitCode: 0 };
+        const pids = args[args.indexOf("-p") + 1]!;
+        const stdout = pids.startsWith("100") ? "p100\nn127.0.0.1:5173\n" : "p300\nn127.0.0.1:4321\n";
+        return { ok: true, stdout, stderr: pids.startsWith(noisy) ? "lsof: WARNING\n" : "", exitCode: 0 };
+      },
+    });
+  const roots = new Map([["attach:r", 300]]);
+  const rootsNoisy = await readJobSockets(new Map([["job_a", 100]]), noisyOn("300"), roots);
+  assert.equal(rootsNoisy.get("attach:r")?.ok, false);
+  assert.equal(rootsNoisy.get("job_a")?.ok, true);
+  const jobsNoisy = await readJobSockets(new Map([["job_a", 100]]), noisyOn("100"), roots);
+  assert.equal(jobsNoisy.get("job_a")?.ok, false);
+  assert.equal(jobsNoisy.get("attach:r")?.ok, true);
+});
+
+test("an attach root whose pid is gone answers with no sockets and no rows", async () => {
+  const deps = fakeDeps({ exec: async (file) => (file.endsWith("ps") ? { ok: true, stdout: "100 1 100 501\n", stderr: "", exitCode: 0 } : { ok: true, stdout: "", stderr: "", exitCode: 1 }) });
+  const result = await readJobSockets(new Map(), deps, new Map([["attach:r", 777]]));
+  assert.deepEqual(result.get("attach:r"), { ok: true, sockets: [], rows: [] });
+});
