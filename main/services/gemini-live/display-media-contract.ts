@@ -109,7 +109,7 @@ export function bindGeminiLiveDisplayMediaDocument(
   };
 }
 
-interface DisplayMediaGuardSession {
+export interface DisplayMediaGuardSession {
   setPermissionCheckHandler(
     handler: ((
       webContents: Electron.WebContents | null,

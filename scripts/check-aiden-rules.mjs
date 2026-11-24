@@ -358,6 +358,74 @@ function literalMotion(file, text) {
   return hits;
 }
 
+
+// default-session-owner — design mode v2 Phase 3a (D6, D8): only default-session-web-request.ts
+// and default-session-permissions.ts touch the default session's webRequest, its permission
+// setters and its will-download / select-*-device events. It sees the default session as
+// `<x>.defaultSession`, `fromPartition("")`, `<x>.webContents.session` and a const bound to one
+// of those in the same file. A session reached dynamically escapes an AST rule; that is what the
+// dispatchers' runtime setter guard (non-packaged builds) is for.
+const DEFAULT_SESSION_OWNER = /^main\/services\/default-session-[\w-]+\.ts$/u;
+const PERMISSION_SETTERS = new Set([
+  "setPermissionCheckHandler",
+  "setPermissionRequestHandler",
+  "setDisplayMediaRequestHandler",
+  "setDevicePermissionHandler",
+]);
+const WEB_REQUEST_METHODS = new Set([
+  "onBeforeRequest",
+  "onBeforeSendHeaders",
+  "onSendHeaders",
+  "onHeadersReceived",
+  "onResponseStarted",
+  "onBeforeRedirect",
+  "onCompleted",
+  "onErrorOccurred",
+]);
+const SESSION_EVENTS = new Set(["will-download", "select-hid-device", "select-serial-port", "select-usb-device"]);
+const LISTEN_METHODS = new Set(["on", "once", "addListener", "prependListener", "prependOnceListener"]);
+function defaultSessionOwner(file, text) {
+  if (!/^main\/.*\.(?:[cm]?ts|tsx)$/u.test(file) || isTest(file) || DEFAULT_SESSION_OWNER.test(file)) return [];
+  if (!/defaultSession|fromPartition|\.session\b/u.test(text)) return [];
+  const sourceFile = parse(file, text);
+  const aliases = new Set();
+  const isDefault = (node) => {
+    while (ts.isParenthesizedExpression(node) || ts.isNonNullExpression(node) || ts.isAsExpression(node)) node = node.expression;
+    if (ts.isIdentifier(node)) return aliases.has(node.text);
+    if (ts.isPropertyAccessExpression(node)) {
+      if (node.name.text === "defaultSession") return true;
+      if (node.name.text === "session") {
+        const owner = node.expression;
+        return (ts.isPropertyAccessExpression(owner) && owner.name.text === "webContents") || (ts.isIdentifier(owner) && owner.text === "webContents");
+      }
+      return false;
+    }
+    if (ts.isCallExpression(node) && calleeName(node) === "fromPartition") {
+      const [arg] = node.arguments;
+      return Boolean(arg && (ts.isStringLiteral(arg) || ts.isNoSubstitutionTemplateLiteral(arg)) && arg.text === "");
+    }
+    return false;
+  };
+  walk(sourceFile, (node) => {
+    if (ts.isVariableDeclaration(node) && ts.isIdentifier(node.name) && node.initializer && isDefault(node.initializer)) aliases.add(node.name.text);
+  });
+  const hits = [];
+  walk(sourceFile, (node) => {
+    if (!ts.isCallExpression(node) || !ts.isPropertyAccessExpression(node.expression)) return;
+    const method = node.expression.name.text;
+    const receiver = node.expression.expression;
+    let hit = false;
+    if (PERMISSION_SETTERS.has(method)) hit = isDefault(receiver);
+    else if (WEB_REQUEST_METHODS.has(method)) hit = ts.isPropertyAccessExpression(receiver) && receiver.name.text === "webRequest" && isDefault(receiver.expression);
+    else if (LISTEN_METHODS.has(method)) {
+      const [event] = node.arguments;
+      hit = Boolean(event && ts.isStringLiteral(event) && SESSION_EVENTS.has(event.text) && isDefault(receiver));
+    }
+    if (hit) hits.push({ line: lineOf(sourceFile, node), message: `${method} on the default session; register through default-session-web-request.ts or default-session-permissions.ts` });
+  });
+  return hits;
+}
+
 export const RULES = {
   "no-brain-icon": noBrainIcon,
   "text-input-focus-ring": textInputFocusRing,
@@ -365,6 +433,7 @@ export const RULES = {
   "network-allowlist": networkAllowlist,
   "no-source-grep-test": noSourceGrepTest,
   "literal-motion": literalMotion,
+  "default-session-owner": defaultSessionOwner,
 };
 
 // Ends as a line comment, a CSS comment, or a JSX `{/* ... */}` comment.

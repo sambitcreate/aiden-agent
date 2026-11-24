@@ -210,3 +210,49 @@ test("allowlist entries need a known rule and a reason, and a file-level entry c
   assert.ok(problems.some((problem) => /unknown rule "made-up"/u.test(problem.message)));
   assert.deepEqual(check(motion(4), [{ rule: "literal-motion", file: "renderer/m.css", reason: "legacy" }]), []);
 });
+
+test("default-session-owner: the default session's webRequest, permission setters and session events belong to their dispatchers", () => {
+  const problems = check({
+    "main/services/a.ts": [
+      'import { session } from "electron";',
+      "session.defaultSession.webRequest.onBeforeRequest(() => undefined);",
+      "session.defaultSession.setPermissionCheckHandler(null);",
+      'session.fromPartition("").setPermissionRequestHandler(null);',
+      "win.webContents.session.setDisplayMediaRequestHandler(null);",
+      "mainWindow.webContents.session.setDevicePermissionHandler(null);",
+      'session.defaultSession.on("will-download", () => undefined);',
+      'session.defaultSession.on("select-hid-device", () => undefined);',
+      "const ses = session.defaultSession;",
+      'ses.on("select-usb-device", () => undefined);',
+      "ses.webRequest.onHeadersReceived(() => undefined);",
+    ].join("\n"),
+    "main/services/b.ts": [
+      'import { session } from "electron";',
+      'session.fromPartition("persist:browser").setPermissionRequestHandler(null);',
+      'session.fromPartition("persist:browser").webRequest.onBeforeRequest(() => undefined);',
+      'session.defaultSession.on("will-quit", () => undefined);',
+      "session.defaultSession.clearCache();",
+    ].join("\n"),
+    "main/services/default-session-permissions.ts": "target.setPermissionCheckHandler(null); session.defaultSession.setPermissionCheckHandler(null);",
+    "main/services/a.test.ts": "session.defaultSession.setPermissionCheckHandler(null);",
+  });
+  assert.deepEqual(summary(problems), [
+    "main/services/a.ts:2 default-session-owner",
+    "main/services/a.ts:3 default-session-owner",
+    "main/services/a.ts:4 default-session-owner",
+    "main/services/a.ts:5 default-session-owner",
+    "main/services/a.ts:6 default-session-owner",
+    "main/services/a.ts:7 default-session-owner",
+    "main/services/a.ts:8 default-session-owner",
+    "main/services/a.ts:10 default-session-owner",
+    "main/services/a.ts:11 default-session-owner",
+  ]);
+});
+
+test("default-session-owner: an allowlisted file passes", () => {
+  const problems = check(
+    { "main/services/gemini-live/display-capture-acceptance.ts": "session.defaultSession.setPermissionCheckHandler(null);" },
+    [{ rule: "default-session-owner", file: "main/services/gemini-live/display-capture-acceptance.ts", reason: "Its own launch mode." }],
+  );
+  assert.deepEqual(problems, []);
+});

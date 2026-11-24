@@ -577,14 +577,22 @@ script can check and prints `file:line rule message` for each hit:
   file and `match`, `doesNotMatch` or `includes` against it.
 - `literal-motion`: no literal `cubic-bezier(` in renderer CSS or code outside a
   `--motion-*` or `--ease-*` token definition. Comments are skipped.
+- `default-session-owner`: only `main/services/default-session-web-request.ts`
+  and `main/services/default-session-permissions.ts` call the default session's
+  `webRequest.on*`, its permission setters (`setPermissionCheckHandler`,
+  `setPermissionRequestHandler`, `setDisplayMediaRequestHandler`,
+  `setDevicePermissionHandler`) or listen to its `will-download` and
+  `select-*-device` events. It sees `<x>.defaultSession`, `fromPartition("")`,
+  `<x>.webContents.session` and a `const` bound to one of them in the same file.
 
 Known gaps: the checker does not see focus styles on `focus-within` wrappers,
 CSS `:focus` outlines, a `className` passed in through a variable, or a
 focus shadow ring that does not name the accent (`focus:shadow-[…]` with a
 literal color). It also
 misses source-grep tests that use `indexOf` or `split` instead of `match` or
-`includes`, and an OpenRouter base URL that is joined with a catalog path in
-another file.
+`includes`, an OpenRouter base URL that is joined with a catalog path in
+another file, and a default session reached dynamically (unpackaged builds
+replace its setters with throwing stubs after the dispatchers claim them).
 
 An exception needs a reason. For one line, put
 `// check-aiden-rules: allow <rule> <why>` (or `/* … */` in CSS) on that line or

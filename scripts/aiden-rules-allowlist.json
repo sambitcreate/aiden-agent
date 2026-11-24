@@ -106,5 +106,6 @@
   {"rule":"no-source-grep-test","file":"scripts/diagnostic-policy.test.mjs","reason":"legacy; replace with behavioral test"},
   {"rule":"no-source-grep-test","file":"scripts/gemini-live-google-acceptance.test.mjs","reason":"legacy; replace with behavioral test"},
   {"rule":"no-source-grep-test","file":"scripts/pullfrog-locked-runtime.test.mjs","reason":"legacy; replace with behavioral test"},
-  {"rule":"no-source-grep-test","file":"scripts/subagent-file-mutator.test.mjs","reason":"False positive: reads a .ts file the test wrote into a temp root."}
+  {"rule":"no-source-grep-test","file":"scripts/subagent-file-mutator.test.mjs","reason":"False positive: reads a .ts file the test wrote into a temp root."},
+  {"rule":"default-session-owner","file":"main/services/gemini-live/display-capture-acceptance.ts","reason":"Its own isolated acceptance launch mode (bootstrap.ts runs it instead of index.ts), so the dispatchers are never claimed there."}
 ]

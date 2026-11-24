@@ -475,7 +475,9 @@
         "main/services/design-canvas/app-server/app-tool.test.ts",
         "main/handlers/design-app.test.ts",
         "main/services/design-canvas/app-server/app-attach.test.ts",
-        "renderer/shared/design-canvas/app-frame.test.ts"
+        "renderer/shared/design-canvas/app-frame.test.ts",
+        "main/services/default-session-web-request.test.ts",
+        "main/services/default-session-permissions.test.ts"
       ],
       "preserved": [
         "browser"

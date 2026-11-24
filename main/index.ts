@@ -10,7 +10,9 @@ import {
   screen,
   shell,
 } from "./platform.js";
-import { Menu, nativeImage, nativeTheme, type IpcMainInvokeEvent } from "electron";
+import { Menu, nativeImage, nativeTheme, session, type IpcMainInvokeEvent } from "electron";
+import { claimDefaultSessionWebRequest } from "./services/default-session-web-request.js";
+import { claimDefaultSessionPermissions } from "./services/default-session-permissions.js";
 import path from "node:path";
 
 import { registerHandlers } from "./handlers/index.js";
@@ -2423,6 +2425,21 @@ if (!ownsSingleInstanceLock) {
   app
     .whenReady()
     .then(async () => {
+      // One owner each for the default session's webRequest and its permission
+      // handlers and session events (design mode v2 Phase 3a, D6, D8), claimed
+      // synchronously before any window exists. Unpackaged builds also stub the
+      // session's own setters, so nothing else can take them over.
+      claimDefaultSessionWebRequest(session.defaultSession.webRequest, {
+        guardSetters: !isPackagedRuntime(),
+        log: (kind, fields) =>
+          writeDiagnosticEvent({
+            level: "warn",
+            area: "electron",
+            event: "electron-degraded",
+            fields: { kind, subscriber: typeof fields.subscriber === "string" ? fields.subscriber : null },
+          }),
+      });
+      claimDefaultSessionPermissions(session.defaultSession, { guardSetters: !isPackagedRuntime() });
       installElectronConnectorWatchTransport(hostPlatformCapabilities().bots);
       const runtimeProfile = currentRuntimeProfile();
       writeDiagnosticEvent({

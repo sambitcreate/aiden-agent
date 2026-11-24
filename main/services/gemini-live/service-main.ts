@@ -19,6 +19,7 @@ import { randomUUID } from "node:crypto";
 import type { RendererDocumentOwner } from "../renderer-document-owner.js";
 import { Behavior } from "@google/genai";
 import { desktopCapturer, session } from "electron";
+import { defaultSessionPermissions } from "../default-session-permissions.js";
 import { installGeminiLiveDisplayMediaGuards } from "./display-media-contract.js";
 import {
   listLiveDisplaySources,
@@ -142,7 +143,9 @@ export const geminiLiveService = new GeminiLiveService({
   onDisplayBindingsChanged: (bindings) => {
     if (bindings.length > 0 && !disposeDisplayMediaGuards) {
       disposeDisplayMediaGuards = installGeminiLiveDisplayMediaGuards(
-        session.defaultSession,
+        // The default session's handlers have one owner (default-session-permissions.ts);
+        // Live fills its owner slot. Before the claim (never after ready) the session itself.
+        defaultSessionPermissions()?.ownerSlot("gemini-live") ?? session.defaultSession,
         () => geminiLiveService.displayMediaBindings(),
         // macOS uses its system picker; Linux resolves the person's choice here.
         process.platform === "linux"
