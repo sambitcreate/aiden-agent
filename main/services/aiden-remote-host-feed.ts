@@ -69,6 +69,77 @@ export function hostFeedBotSignals(
   };
 }
 
+export interface HostFeedBotSignalsCache {
+  /** Each listed Bot's signals: kept ones as they are, the rest read again. */
+  signals(bots: readonly { id: string }[]): Promise<ReadonlyMap<string, AidenRemoteHostFeedBotSignals>>;
+  /** That Bot changed (`bots:changed`, `bots:attention`); with no Bot, every Bot did. */
+  invalidate(botId?: string): void;
+}
+
+/**
+ * Each Bot's host-feed signals, kept until that Bot itself changes. A closed
+ * Bot's live summary opens its conversation, and the feed refreshes on every
+ * chat, workspace or Bot change, so a refresh reads again only the Bots whose
+ * own change arrived since: the same events this Mac's Bots list re-reads a
+ * row on. A failed read is not kept, and a read a change overtook is not kept.
+ */
+export function createHostFeedBotSignalsCache(deps: {
+  summary(botId: string): Promise<Parameters<typeof hostFeedBotSignals>[0]>;
+  /** At most this many summaries read at once (default 4). */
+  concurrency?: number;
+}): HostFeedBotSignalsCache {
+  const concurrency = Math.max(1, deps.concurrency ?? 4);
+  const kept = new Map<string, AidenRemoteHostFeedBotSignals>();
+  // Change counts only rise, so a read a change overtook never matches again.
+  let changes = 0;
+  let everyBot = 0;
+  const generations = new Map<string, number>();
+  const generationOf = (botId: string) => `${everyBot}:${generations.get(botId) ?? 0}`;
+
+  async function read(botId: string): Promise<AidenRemoteHostFeedBotSignals> {
+    const hit = kept.get(botId);
+    if (hit) return hit;
+    const generation = generationOf(botId);
+    let live: Parameters<typeof hostFeedBotSignals>[0];
+    try {
+      live = await deps.summary(botId);
+    } catch {
+      return {};
+    }
+    const signals = hostFeedBotSignals(live);
+    if (generationOf(botId) === generation) kept.set(botId, signals);
+    return signals;
+  }
+
+  return {
+    async signals(bots) {
+      const listed = new Set(bots.map((bot) => bot.id));
+      for (const botId of [...kept.keys()]) if (!listed.has(botId)) kept.delete(botId);
+      for (const botId of [...generations.keys()]) if (!listed.has(botId)) generations.delete(botId);
+      const results = new Map<string, AidenRemoteHostFeedBotSignals>();
+      const ids = [...listed];
+      let next = 0;
+      await Promise.all(Array.from({ length: Math.min(concurrency, ids.length) }, async () => {
+        while (next < ids.length) {
+          const botId = ids[next++]!;
+          results.set(botId, await read(botId));
+        }
+      }));
+      return results;
+    },
+    invalidate(botId) {
+      changes += 1;
+      if (botId === undefined) {
+        everyBot = changes;
+        kept.clear();
+        return;
+      }
+      generations.set(botId, changes);
+      kept.delete(botId);
+    },
+  };
+}
+
 /** One read of everything the feed projects; it opens no chat transcript (Bot previews come from cached summaries). */
 export interface AidenRemoteHostFeedState {
   /** Non-Bot chat summaries, exactly as `/chat-summaries` projects them. */
