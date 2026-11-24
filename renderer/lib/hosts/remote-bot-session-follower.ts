@@ -232,7 +232,8 @@ export class RemoteBotSessionFollower {
    * asked about, at most `KEPT_PROBE_MAX` in all: reading goes on to each one
    * the host still has. The re-read is cut back to whichever kept entry comes
    * first, so nothing older than before is added and no kept entry the host
-   * has is dropped. A read that fails keeps the pages already read (Load older
+   * has is dropped. If the questions run out with kept entries still not
+   * accounted for, the loaded part is dropped instead. A read that fails keeps the pages already read (Load older
    * continues from there), or drops the kept entries if none was.
    */
   private rereadCarried(carried: number, fresh: RemoteBotSessionView): void {
@@ -290,7 +291,10 @@ export class RemoteBotSessionFollower {
     // answers `operation_stale` when it no longer has it.
     const ask = (cursor: string, total: number): void => {
       const id = kept.find((candidate) => !seen.has(candidate) && !gone.has(candidate));
-      if (id === undefined || probes >= KEPT_PROBE_MAX || !transport.older) return settle(pages);
+      if (id === undefined || !transport.older) return settle(pages);
+      // Out of questions with kept entries still unaccounted for: the loaded
+      // part is dropped rather than guessed at, and Load older starts again.
+      if (probes >= KEPT_PROBE_MAX) return settle([]);
       probes += 1;
       transport.older(this.hostId, this.botId, id, 1).then(
         (outcome) => {
