@@ -170,7 +170,14 @@ test("on macOS, a timeout, a maxBuffer overrun or lsof's own error fails closed,
     fakeDeps({ platform: "darwin", exec: async () => ({ ok: true, stdout: "", stderr: "lsof: WARNING: can't stat()", exitCode: 1 }) }),
   );
   assert.equal(errored.ok, false);
-  const other = await listeningSocketsByProcess([501], fakeDeps({ platform: "darwin", exec: async () => ({ ok: true, stdout: "", stderr: "", exitCode: 2 }) }));
+  for (const exitCode of [0, 1]) {
+    const partial = await listeningSocketsByProcess(
+      [501],
+      fakeDeps({ platform: "darwin", exec: async () => ({ ok: true, stdout: "p501\nf3\nn127.0.0.1:5173\n", stderr: "lsof: can't read process 502\n", exitCode }) }),
+    );
+    assert.equal(partial.ok, false, `a loopback-only answer next to a diagnostic is not a complete look (exit ${exitCode})`);
+  }
+  const other =await listeningSocketsByProcess([501], fakeDeps({ platform: "darwin", exec: async () => ({ ok: true, stdout: "", stderr: "", exitCode: 2 }) }));
   assert.equal(other.ok, false);
 });
 

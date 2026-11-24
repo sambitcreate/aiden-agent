@@ -338,9 +338,10 @@ async function macSockets(pids: readonly number[], deps: SocketReaderDeps): Prom
     { timeoutMs: LSOF_TIMEOUT_MS, maxBuffer: READER_MAX_BUFFER },
   );
   if (!result.ok) return { ok: false, reason: `lsof: ${result.reason}` };
-  // lsof exits 1 when some (or all) of the pids hold no listening socket; anything else, or an error it printed, is a failed look.
-  const quietMiss = result.exitCode === 1 && (result.stdout.trim().length > 0 || result.stderr.trim().length === 0);
-  if (result.exitCode !== 0 && !quietMiss) return { ok: false, reason: `lsof exited ${result.exitCode}` };
+  // lsof exits 1, silently, when some (or all) of the pids hold no listening socket or have gone. Any other exit, or
+  // anything it printed on stderr (even next to output, even on exit 0), may mean a partial scan, so it is a failed look.
+  if (result.stderr.trim().length > 0) return { ok: false, reason: "lsof reported a problem" };
+  if (result.exitCode !== 0 && result.exitCode !== 1) return { ok: false, reason: `lsof exited ${result.exitCode}` };
   const found = parseLsofListeningSockets(result.stdout);
   const own = found.get(deps.self) ?? [];
   return {
