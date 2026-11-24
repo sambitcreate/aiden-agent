@@ -22,6 +22,9 @@ final class AidenChatTests: XCTestCase {
     override func setUp() {
         super.setUp()
         AidenChatProgressLifecycleURLProtocol.beginTestEpoch()
+        // A test that ended early can leave an armed hold, override, or open
+        // event stream behind; the next test starts without them.
+        AidenChatProgressLifecycleURLProtocol.reset()
         storageRoot = FileManager.default.temporaryDirectory.appending(path: "aiden-chat-tests-\(UUID())")
         preferenceSuite = "AidenChatTests.\(UUID().uuidString)"
         testCache = AidenChatCache(root: storageRoot.appending(path: "cache"))
@@ -11917,7 +11920,21 @@ private final class AidenChatProgressLifecycleURLProtocol: URLProtocol, @uncheck
         }
     }
 
-    static func releaseHeldRequest() { takeHeldRequest()?() }
+    /// Ends the hold: a request already held completes, and one that has not
+    /// arrived yet is no longer held when it does. Otherwise a request that
+    /// arrives after the test's release, as on a slow simulator, stays parked
+    /// with nobody left to release it, and the test waits on it until the
+    /// session's request timeout.
+    static func releaseHeldRequest() {
+        let completion = lock.withLock {
+            heldPathSuffix = nil
+            onHeldRequest = nil
+            let held = heldCompletion
+            heldCompletion = nil
+            return held
+        }
+        completion?()
+    }
 
     static var progressRequestCount: Int {
         lock.lock()
