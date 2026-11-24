@@ -716,6 +716,8 @@ For reviewers to attack:
    - the npm lookup gaining a `maxBuffer`, or the Node lookup losing its 16 KiB;
    - an `isExecutable` that now rejects Electron for npm;
    - a wrapper that drops `appExecutable` or `isElectron`, or their defaults.
+
+   The code review extended the fix to the agent-device launcher (Q7) and to `run`'s branch for commands that start before Node is resolved (`xcrun simctl help`), which drops inherited empty entries and leaves an unset PATH unset. Follow-up, not changed in 2a: `ssh-device-script.ts:26` builds the remote PATH as `…:$PATH`, which gives a trailing empty entry when the remote PATH is empty.
 2. **Design never inherits an empty PATH entry.** A dev server's cwd is the person's repo, so an empty PATH entry would let a file named `node` in the repo run. `nodeCommandEnvironment` drops empty entries, inherited ones included. 2b must build the launch environment only through it.
 3. **Login-shell lookup.**
    - It runs the person's shell rc files, with a 5 s default timeout (as devices do today).
@@ -755,6 +757,6 @@ Settled by the reviews:
 
 Still open, with the answer this plan assumes:
 6. **The 3a fixture.** Should 2a create `tests/fixtures/design-live-app/` now? *Assumed:* no. 3a owns it with its E2E setup; Task 5 covers its shape, and 3a adds a `detectWebApp` check on the real fixture.
-7. **The agent-device shim.** `agent-device-shim.ts:35` builds its child's PATH as `dirname(node) + ":" + (process.env.PATH ?? "")`. That's the same empty-entry pattern, inside generated script text. *Assumed:* left out of Task 1. The shim runs inside agent shells whose PATH is always set, and fixing generated text needs a test that runs the shim. Note it in the PR description for a follow-up.
+7. **The agent-device shim.** *Settled by the code review:* fixed in 2a. The generated launcher (`agent-device-shim.ts`) used to build `dirname(node) + ":" + (process.env.PATH ?? "")`, and it runs from the person's repo. It now drops every empty entry, and `device-tools.test.ts` runs the launcher with PATH unset, `""` and holding `::`.
 8. **Remix 3.** *Assumed:* the row ships only if Task 3 finds a stable dev command and default port in Remix 3's docs; otherwise it's dropped and S22 says why.
 9. **`unknown-framework` in 2b.** Can the person still start such an app through `choose`, with S2's consent showing the script text? *Assumed:* that's 2b's decision. 2a only promises that 3d never scaffolds for it.

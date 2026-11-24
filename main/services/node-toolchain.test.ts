@@ -10,6 +10,7 @@ import {
   nodeCommandEnvironment,
   resolveExecutable,
   type ExecutableResolutionDeps,
+  type LoginShellExecFile,
   type ToolCommand,
 } from "./node-toolchain.js";
 
@@ -104,11 +105,20 @@ test("the login-shell lookup gives null when the shell fails, times out, or prin
   });
 });
 
-test("the lookup's timeout defaults to five seconds", async () => {
-  await withTempDir(async (dir) => {
-    const slow = await recordingShell(dir, "sleep 1\nprintf '/x/yarn\\n'");
-    assert.equal(await loginShellCommandLookup({ env: { PATH: "/usr/bin:/bin" } })(slow.shell, "yarn"), "/x/yarn\n");
-  });
+test("the lookup's timeout defaults to five seconds, and maxBuffer reaches execFile only when given", async () => {
+  const seen: Array<Record<string, unknown>> = [];
+  const execFile: LoginShellExecFile = (_file, _args, options, callback) => {
+    seen.push({ ...options });
+    callback(null, "/x/yarn\n");
+  };
+  const env = { PATH: "/usr/bin:/bin" };
+  assert.equal(await loginShellCommandLookup({ env, execFile })("/bin/zsh", "yarn"), "/x/yarn\n");
+  await loginShellCommandLookup({ env, execFile, timeoutMs: 200, maxBuffer: 16_384 })("/bin/zsh", "yarn");
+  assert.equal(seen[0].timeout, 5_000);
+  assert.equal("maxBuffer" in seen[0], false);
+  assert.equal(seen[0].env, env);
+  assert.equal(seen[1].timeout, 200);
+  assert.equal(seen[1].maxBuffer, 16_384);
 });
 
 function countingDeps(answer: () => string | null, valid: () => string[]): ExecutableResolutionDeps & { calls: ToolCommand[] } {
@@ -170,10 +180,15 @@ test("without a cache, resolveExecutable asks the login shell every time", async
 test("isStandaloneNodeExecutable takes the minimum major version", async () => {
   await withTempDir(async (dir) => {
     const candidate = path.join(dir, "node");
-    await writeFile(candidate, `#!/bin/sh\nprintf '%s\\n' '${JSON.stringify({ node: "20.19.0", electron: false })}'\n`);
+    // The probe must run with Electron's Node mode cleared, so this candidate fails when it is set.
+    await writeFile(
+      candidate,
+      `#!/bin/sh\nif [ -n "\${ELECTRON_RUN_AS_NODE+x}" ]; then exit 1; fi\nprintf '%s\\n' '${JSON.stringify({ node: "20.19.0", electron: false })}'\n`,
+    );
     await chmod(candidate, 0o755);
-    assert.equal(await isStandaloneNodeExecutable(candidate, process.env, { minMajor: 20, isElectron: false }), true);
-    assert.equal(await isStandaloneNodeExecutable(candidate, process.env, { minMajor: 22, isElectron: false }), false);
+    const env = { ...process.env, ELECTRON_RUN_AS_NODE: "1" };
+    assert.equal(await isStandaloneNodeExecutable(candidate, env, { minMajor: 20, isElectron: false }), true);
+    assert.equal(await isStandaloneNodeExecutable(candidate, env, { minMajor: 22, isElectron: false }), false);
   });
 });
 

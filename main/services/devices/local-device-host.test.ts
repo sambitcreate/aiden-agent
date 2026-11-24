@@ -866,6 +866,17 @@ test("the Android SDK environment puts the SDK tools first and never adds an emp
   assert.equal(androidSdkEnv(untouched, null), untouched);
 });
 
+test("host commands run before Node is resolved never inherit an empty PATH entry", async () => {
+  await withHost(async (harness) => {
+    harness.deps.env = { PATH: "/usr/bin::/bin:", HOME: "/Users/me" };
+    const host = createLocalDeviceHost(harness.deps);
+    assert.equal((await host.platformAvailability("ios")).available, true);
+    const xcrun = harness.commands.find((entry) => entry.command === "xcrun");
+    assert.equal(xcrun?.env.PATH, "/usr/bin:/bin");
+    assert.equal(xcrun?.env.HOME, "/Users/me");
+  });
+});
+
 test("missing Node fails before install or spawn, and Retry discovers a newly installed runtime", async () => {
   await withHost(async (harness) => {
     let available = false;

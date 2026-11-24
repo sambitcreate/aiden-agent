@@ -392,4 +392,4 @@ Branch `t3/design-mode-v2-p2a`, stacked on PR #908. Plan `docs/superpowers/plans
 - Remix 3 (checked against `remix@3.3.0`): dev command `node --watch`, port 44100. TanStack Start's starter uses port 3000. Only npm gets `--` before extra script arguments (pnpm 12 and Yarn 4 pass a bare `--` through).
 - Node 22 for design, the same as devices. No corepack fallback; 2b sets `COREPACK_ENABLE_DOWNLOAD_PROMPT=0` (S19).
 - Nothing calls the design modules until 2b. Tests: `node-toolchain.test.ts` (in `test:devices`), `app-server-core.test.ts`, `app-detect.test.ts`, `app-toolchain.test.ts` (in `test:design-mode`).
-- For 2b: the agent-device shim (`agent-device-shim.ts:35`) still builds `dirname(node) + ":" + PATH` in generated script text (plan Q7, left for a follow-up).
+- Code review fixes (2026-11-24): the agent-device launcher and `run`'s no-Node branch also drop empty PATH entries (plan Q7 settled). Follow-up: `ssh-device-script.ts:26` builds the remote PATH as `…:$PATH`.

@@ -78,6 +78,18 @@ export async function resolveExecutable(command: ToolCommand, deps: ExecutableRe
   return null;
 }
 
+/** The slice of `child_process.execFile` the login-shell lookup uses; tests pass a fake. */
+export type LoginShellExecFile = (
+  file: string,
+  args: readonly string[],
+  options: { timeout: number; encoding: "utf8"; env: NodeJS.ProcessEnv; maxBuffer?: number },
+  callback: (error: Error | null, stdout: string) => void,
+) => void;
+
+const nodeExecFile: LoginShellExecFile = (file, args, options, callback) => {
+  execFile(file, args, options, (error, stdout) => callback(error, stdout));
+};
+
 /**
  * Runs `$SHELL -ilc "command -v <command>"`. `maxBuffer` reaches `execFile`
  * only when given, so leaving it out keeps Node's default (1 MiB).
@@ -86,15 +98,17 @@ export function loginShellCommandLookup(options: {
   env: NodeJS.ProcessEnv;
   timeoutMs?: number;
   maxBuffer?: number;
+  execFile?: LoginShellExecFile;
 }): (shell: string, command: ToolCommand) => Promise<string | null> {
   const timeout = options.timeoutMs ?? 5_000;
+  const run = options.execFile ?? nodeExecFile;
   return (shell, command) =>
     new Promise((resolve) => {
       if (!isToolCommand(command)) {
         resolve(null);
         return;
       }
-      execFile(
+      run(
         shell,
         ["-ilc", `command -v ${command}`],
         {
