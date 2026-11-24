@@ -2,8 +2,11 @@
 // along when its files come too. Its pages are appended to the project's
 // canvas, named after the chat, and file and image frames follow the paths
 // their files were copied to (`appendCanvasPages`). The hidden canvas is only
-// read: it goes with the hidden workspace.
+// read: it goes with the hidden workspace, and its own claims and `namedFor`
+// marks never come over. The attaching chat claims the first page it brought
+// (in the same write); at a full `chatPages` only that claim is skipped.
 
+import { ChatPagesFullError, claimPage } from "../../../renderer/shared/design-canvas/chat-pages.js";
 import { appendCanvasPages } from "../../../renderer/shared/design-canvas/pages.js";
 import type { DesignCanvasStore, DesignCanvasUpdated } from "./store.js";
 import type { DesignCanvasViews } from "./views.js";
@@ -47,8 +50,13 @@ export function createDesignCanvasCarry(deps: {
           }
           if (merged.pageIds.length === 0) throw STOP;
           outcome = "carried";
-          firstPage = merged.pageIds[0];
-          return merged.doc;
+          firstPage = merged.pageIds[0]!;
+          try {
+            return claimPage(merged.doc, input.chatId, firstPage);
+          } catch (error) {
+            if (error instanceof ChatPagesFullError) return merged.doc;
+            throw error;
+          }
         });
         deps.broadcast?.({ workspaceId: input.toWorkspaceId, chatId: input.chatId, revision: doc.revision });
       } catch (error) {

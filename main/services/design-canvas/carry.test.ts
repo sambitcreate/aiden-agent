@@ -105,3 +105,55 @@ test("a hidden workspace with nothing on its canvas writes no canvas for the pro
   assert.equal(outcome, "nothing");
   assert.deepEqual((await fs.readdir(root)).filter((name) => name.endsWith(".json")), []);
 });
+
+test("an attached chat claims the first page it brought along, and the hidden canvas's own claims and marks stay behind", async (t) => {
+  const { store, carry } = await setup(t);
+  await store.update("hidden", (current): DesignCanvas => ({
+    ...hiddenCanvas(),
+    pages: [{ id: "page-1", name: "Page 1", namedFor: "chat-1" }],
+    chatPages: { "chat-1": "page-1", "chat-7": "page-1" },
+    revision: current.revision,
+  }));
+  await store.update("project", (current): DesignCanvas => ({ ...current, chatPages: { "chat-2": "page-1" } }));
+  await carry.carry({
+    chatId: "chat-1",
+    label: "Brand refresh",
+    fromWorkspaceId: "hidden",
+    toWorkspaceId: "project",
+    copied: [{ from: "design/hero.html", to: "design/hero.html" }],
+  });
+  const merged = await store.get("project");
+  const carriedPage = merged.pages[1]!;
+  assert.deepEqual(merged.chatPages, { "chat-2": "page-1", "chat-1": carriedPage.id });
+  assert.equal(carriedPage.namedFor, undefined, "carried pages are named after the chat, not made for it");
+});
+
+test("at a full set of chat pages, the pages still come over without a claim", async (t) => {
+  const { store, views, carry } = await setup(t);
+  await store.save("hidden", hiddenCanvas(), 0);
+  const full = Object.fromEntries(
+    Array.from({ length: DESIGN_CANVAS_LIMITS.chatPages }, (_, index) => [`chat-other-${index}`, "page-1"]),
+  );
+  await store.update("project", (current): DesignCanvas => ({ ...current, chatPages: full }));
+  const outcome = await carry.carry({
+    chatId: "chat-1",
+    label: "Chat",
+    fromWorkspaceId: "hidden",
+    toWorkspaceId: "project",
+    copied: [{ from: "design/hero.html", to: "design/hero.html" }],
+  });
+  assert.equal(outcome, "carried");
+  const merged = await store.get("project");
+  assert.equal(merged.pages.length, 2);
+  assert.equal(merged.chatPages["chat-1"], undefined);
+  assert.equal((await views.get("chat-1", "project"))?.pageId, merged.pages[1]!.id, "the chat is still shown its page");
+});
+
+test("when nothing comes along, no claim is made", async (t) => {
+  const { store, carry } = await setup(t);
+  await store.save("hidden", { ...emptyDesignCanvas(), frames: [frame("left-behind", { kind: "image", path: "tmp/scratch.png" })] }, 0);
+  await store.save("project", { ...emptyDesignCanvas(), frames: [frame("theirs", { kind: "note", text: "" })] }, 0);
+  const outcome = await carry.carry({ chatId: "chat-1", label: "Chat", fromWorkspaceId: "hidden", toWorkspaceId: "project", copied: [] });
+  assert.equal(outcome, "nothing");
+  assert.deepEqual((await store.get("project")).chatPages, {});
+});
