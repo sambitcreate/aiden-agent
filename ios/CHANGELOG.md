@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- **2026-11-24 — Commands in plain words (provisional Remote revision 69).** On a Mac offering `approval:plain-words`, the app asks for it alone after `approval:cards`. A "Run on your Mac?" card then opens on **What it will do**, the one-line description Aiden wrote with the command, and a flip button in the corner turns it to the exact command and back. Under it, Aiden's own tags read from the command: soft red for risky steps (deleting files, the internet, a downloaded script, admin rights, files outside the project, stopping programs), grey for calm ones. While an answer can't be sent, only the buttons dim, so the command can still be checked. Older Macs, and commands sent without a description, show the command as before. Contract-test revision assertions now expect 69.
+
 - **2026-11-22 — Pairing feedback and QR framing.** Add Computer scans for QR codes inside the visible viewfinder. Manual pairing shows what to correct below the address or setup code field. Search keeps Add Computer available until a computer is paired.
 
 - **2026-11-22 — No "Sending…" in Bot chats.** A message you send to a Bot looks sent from the moment you press Send and never gains a "Sending…" caption, however long the Mac takes to take it. The status line ("Getting ready", then "Thinking" once the model starts) shows the wait; Queued and "Couldn’t send · Try again" are unchanged. Paired Macs on the next Aiden release also start a Bot's reply much sooner, because a turn no longer re-reads every provider, connector and skill a dozen times before asking the model. No Remote wire or revision change.
