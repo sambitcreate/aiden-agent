@@ -44,6 +44,8 @@ export interface PackageManagerInfo {
   /** 0 inside the workspace; 1 or more for a signal found in an enclosing folder. */
   lockfileLevelsUp: number;
   conflict?: PackageManagerName[];
+  /** The packageManager field's manager, when the field is part of `conflict`. */
+  field?: PackageManagerName;
   unsupported?: "deno";
   yarn?: "classic" | "berry";
 }
@@ -399,10 +401,10 @@ export function decidePackageManager(signals: PackageManagerSignals): PackageMan
       ...(name === "yarn" ? { yarn: yarnFlavour(signals) } : {}),
     };
   };
-  const settle = (conflict: PackageManagerName[], source: PackageManagerInfo["source"]): PackageManagerInfo => {
+  const settle = (conflict: PackageManagerName[], source: PackageManagerInfo["source"], field?: PackageManagerName): PackageManagerInfo => {
     const installed = conflict.filter((name) => signals.installedMarkers.has(name));
     if (installed.length === 1) return pick(installed[0], "installed", conflict);
-    return { name: null, source, lockfileLevelsUp: levelsUp, conflict };
+    return { name: null, source, lockfileLevelsUp: levelsUp, conflict, ...(field ? { field } : {}) };
   };
   const locked = [...signals.lockfiles.keys()].sort();
   const lockSource = enclosing ? "enclosing" : "lockfile";
@@ -410,7 +412,7 @@ export function decidePackageManager(signals: PackageManagerSignals): PackageMan
   if (signals.field) {
     const field = signals.field.name;
     if (locked.every((name) => name === field)) return pick(field, "packageManager");
-    return settle([...new Set([...locked, field])].sort(), "packageManager");
+    return settle([...new Set([...locked, field])].sort(), "packageManager", field);
   }
   if (locked.length === 1) return pick(locked[0], lockSource);
   if (locked.length > 1) return settle(locked, lockSource);

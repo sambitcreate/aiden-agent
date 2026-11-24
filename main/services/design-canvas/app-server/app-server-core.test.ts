@@ -346,7 +346,10 @@ test("a packageManager field that disagrees with the lockfile is a conflict nami
     source: "packageManager",
     lockfileLevelsUp: 0,
     conflict: ["npm", "pnpm"],
+    field: "pnpm",
   });
+  // The field's manager is named only when the field is part of the conflict.
+  assert.equal(decidePackageManager(signals({ files: ["yarn.lock", "package-lock.json"] })).field, undefined);
 });
 
 test("an unknown or malformed packageManager field is ignored", () => {
