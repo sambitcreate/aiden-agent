@@ -910,6 +910,8 @@ export function RemoteBotChatView({ hostId, botId }: { hostId: string; botId: st
           // The failed turn's id comes first; the host only needs its words.
           onRetry={(_failedId, text) => void retry(text)}
           onRespondToProposal={respondToProposal}
+          // Revision 27 takes only the decision, so a reason would not be recorded there.
+          proposalDeclineReasons={false}
           onOpenMemory={() => toast.info(`Open ${name}’s memory on ${hostName}.`)}
         />
         {shownSends.map((send) => (

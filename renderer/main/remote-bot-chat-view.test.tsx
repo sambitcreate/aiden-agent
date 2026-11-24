@@ -704,6 +704,35 @@ test("a routine a Bot on another computer suggested is added there, and a memory
   assert.ok(screen.getByText("Memory updated"));
 });
 
+test("Not now on a routine a Bot on another computer suggested doesn't ask why, since that computer can't record a reason", async () => {
+  const { peerCalls } = await mountCards(
+    {
+      ...SESSION,
+      entries: [
+        ...SESSION.entries,
+        {
+          type: "routine_proposal",
+          id: "rp-entry",
+          proposalId: "4b1f8a52-7f0e-4b8e-9d55-3f2c1a6b7e10",
+          name: "Morning brief",
+          prompt: "Summarize my day.",
+          label: "Weekdays at 8:00 AM",
+          status: "pending",
+        },
+      ],
+    },
+    { botRespondRoutineProposal: () => ({ ok: true, value: { status: "dismissed" } }) },
+  );
+  const card = await screen.findByRole("group", { name: "Routine suggestion: Morning brief" });
+  fireEvent.click(within(card).getByRole("button", { name: /^Not now/u }));
+  assert.ok(await screen.findByText("Not added: Morning brief"));
+  assert.deepEqual(peerCalls().filter((call) => call.operation === "botRespondRoutineProposal").map((call) => call.body), [
+    { decision: "dismiss" },
+  ]);
+  assert.equal(screen.queryByRole("button", { name: /^Why not/u }), null);
+  assert.equal(screen.queryByText(/Noted, thanks/u), null);
+});
+
 test("a message sent to a Bot on another computer shows at once, before that computer has it", async () => {
   let acknowledge: (value: unknown) => void = () => undefined;
   await mount(HOST, {
