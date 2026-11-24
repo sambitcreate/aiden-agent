@@ -208,7 +208,8 @@ test("a running app offers Stop, Restart and Show logs; Show logs opens the draw
   const menu = await openMenu();
   assert.deepEqual(menuItems(menu), ["Stop", "Restart", "Show logs", "Connect running server…"]);
   await choose(menu, "Show logs");
-  assert.deepEqual(logs, ["."]);
+  // The drawer opens from the menu's onCloseAutoFocus, after the menu has gone (deviation #17).
+  await until(() => assert.deepEqual(logs, ["."]));
 });
 
 test("a stopped app offers Start; an install failure offers Retry, which calls retry with its root", async () => {
