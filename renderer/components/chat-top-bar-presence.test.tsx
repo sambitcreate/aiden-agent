@@ -22,6 +22,10 @@ let heldDiscoveries: Array<() => void> = [];
 
 // Stands in for the stylesheet: a leaving control runs these animations.
 let exitAnimations: Array<{ finished: Promise<unknown>; effect: unknown; finish: () => void }> = [];
+/** Set while a control's slide (in or out) is still running, whatever its attributes say. */
+let slideRunning = false;
+/** Tabs the header asked the Environment panel to open. */
+let shownTools: string[] = [];
 const originalGetAnimations = Element.prototype.getAnimations;
 
 function exitAnimation() {
@@ -29,7 +33,11 @@ function exitAnimation() {
   const animation = {
     finished: new Promise<void>((done) => (resolve = done)),
     effect: { getComputedTiming: () => ({ endTime: 200, localTime: 0 }) },
-    finish: () => resolve(),
+    finished_: false,
+    finish: () => {
+      animation.finished_ = true;
+      resolve();
+    },
   };
   return animation;
 }
@@ -37,6 +45,8 @@ function exitAnimation() {
 beforeEach(() => {
   heldDiscoveries = [];
   exitAnimations = [];
+  slideRunning = false;
+  shownTools = [];
   installBotTestIpc({
     "shortcut:get": () => ({ overrides: { version: 1, commands: {} }, effective: effectiveBindings(undefined), global: [] }),
     "workspaces:externalEditors": async () => {
@@ -46,7 +56,9 @@ beforeEach(() => {
   });
   queryClient = createBotTestQueryClient();
   Element.prototype.getAnimations = function (this: Element) {
-    return (this.getAttribute("data-presence") === "exiting" ? exitAnimations : []) as unknown as Animation[];
+    const sliding =
+      this.getAttribute("data-presence") === "exiting" || (slideRunning && this.classList.contains("toolbar-presence"));
+    return (sliding ? exitAnimations : []) as unknown as Animation[];
   };
   document.documentElement.dataset.reduceMotion = "false";
 });
@@ -81,7 +93,7 @@ function stubPanel(state: HeaderState): EnvironmentPanelContextValue {
     tab: "browser",
     gitOperationBusy: state.gitOperationBusy ?? false,
     gitOperationDimmed: state.gitOperationDimmed ?? false,
-    showTools: () => {},
+    showTools: (tab: string) => shownTools.push(tab),
     closeTools: () => {},
   } as unknown as EnvironmentPanelContextValue;
 }
@@ -254,10 +266,44 @@ test("a button leaving mid-chat can't be used on its way out and hands focus to 
   }
 });
 
-test("a running Git operation dims the buttons only once it is past the delay", () => {
+test("a chat switch mid-slide shows the next chat's header at once", async () => {
+  const header = renderHeader({ hasFolderAccess: false });
+  try {
+    const slide = exitAnimation();
+    exitAnimations = [slide];
+    slideRunning = true;
+    header.rerender({ hasFolderAccess: true });
+    assert.equal(filesButton()?.closest(".toolbar-presence")?.getAttribute("data-enter"), "animate", "Files starts sliding in");
+
+    // The next chat has access off: Files must not linger while its slide-in runs out.
+    header.rerender({ chatId: "chat-2", hasFolderAccess: false });
+    assert.equal(document.querySelector('[data-workspace-tool="files"]'), null, "gone before the next paint");
+    assert.equal(terminalButton(), null);
+
+    // Back mid-chat it slides in again; a switch to a chat that has it lands it fully at once.
+    const second = exitAnimation();
+    exitAnimations = [second];
+    header.rerender({ chatId: "chat-2", hasFolderAccess: true });
+    header.rerender({ chatId: "chat-3", hasFolderAccess: true });
+    assert.equal(second.finished_, true, "the half-done slide is finished, not left running");
+    assert.ok(filesButton());
+  } finally {
+    header.restore();
+  }
+});
+
+test("a running Git operation refuses tool clicks at once but dims them only past the delay", () => {
   const header = renderHeader({ gitOperationBusy: true, gitOperationDimmed: false });
   try {
-    assert.equal((screen.getByRole("button", { name: "Show Browser" }) as HTMLButtonElement).disabled, false);
+    const browser = screen.getByRole("button", { name: "Show Browser" }) as HTMLButtonElement;
+    assert.equal(browser.disabled, false, "no dim for a quick commit");
+    fireEvent.click(browser);
+    assert.deepEqual(shownTools, [], "but the click does nothing while Git runs");
+    header.rerender({ gitOperationBusy: false, gitOperationDimmed: false });
+    fireEvent.click(screen.getByRole("button", { name: "Show Browser" }));
+    assert.deepEqual(shownTools, ["browser"], "and works again once it ends");
+
+    header.rerender({ gitOperationBusy: true, gitOperationDimmed: false });
     header.rerender({ gitOperationBusy: true, gitOperationDimmed: true });
     assert.equal((screen.getByRole("button", { name: "Show Browser" }) as HTMLButtonElement).disabled, true);
     assert.equal((screen.getByRole("button", { name: "More workspace tools" }) as HTMLButtonElement).disabled, true);

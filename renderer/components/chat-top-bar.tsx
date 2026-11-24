@@ -519,9 +519,15 @@ export function WorkspaceToolButtons({
     return true;
   };
   const showing = (id: EnvironmentPanelTab) => panel.toolsPresented && panel.tab === id;
+  // The buttons dim only after GIT_BUSY_DIM_DELAY_MS, but a running Git operation
+  // refuses them from its first moment, as the ⌘K commands below do.
   const activate = (id: EnvironmentPanelTab) => {
+    if (panel.gitOperationBusy) return;
     if (showing(id)) panel.closeTools();
     else panel.showTools(id);
+  };
+  const openFromMenu = (id: EnvironmentPanelTab) => {
+    if (!panel.gitOperationBusy) panel.showTools(id);
   };
   const buttons = TOOL_BUTTON_ORDER.filter(available);
   // ⌘K "Open Files" and friends open the same tabs the buttons do, while those tools exist here.
@@ -639,7 +645,7 @@ export function WorkspaceToolButtons({
                   <DropdownMenuItem
                     key={id}
                     className={cn(showing(id) && "text-primary")}
-                    onSelect={() => panel.showTools(id)}
+                    onSelect={() => openFromMenu(id)}
                   >
                     <ToolIcon aria-hidden="true" className="size-4" />
                     <span className="min-w-0 flex-1">{tool.label}</span>

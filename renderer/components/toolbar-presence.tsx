@@ -72,12 +72,22 @@ export function ToolbarPresence({ present, children }: { present: boolean; child
     if (exiting && ref.current) handOffFocus(ref.current);
   }, [exiting]);
 
-  if (!rendered) return null;
+  // A chat switch lands on the final state at once, even in the middle of a slide.
+  React.useLayoutEffect(() => {
+    for (const animation of ref.current?.getAnimations?.() ?? []) {
+      if (Number.isFinite(Number(animation.effect?.getComputedTiming().endTime))) animation.finish();
+    }
+  }, [scope]);
+
+  // Only a mid-chat change slides out. Anything else (a chat switch, even one that
+  // lands while this control is still sliding) drops it before the next paint,
+  // rather than letting a running transition keep the last chat's control around.
+  if (!rendered || (exiting && !current.animateExit)) return null;
   return (
     <span
       ref={ref}
       className="toolbar-presence"
-      data-presence={exiting ? (current.animateExit ? "exiting" : "leaving") : "visible"}
+      data-presence={exiting ? "exiting" : "visible"}
       data-enter={current.animateEnter ? "animate" : undefined}
       aria-hidden={exiting ? "true" : undefined}
       inert={exiting || undefined}
