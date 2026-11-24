@@ -2410,7 +2410,8 @@
         "revision": "bot_revision_7",
         "needsYou": true,
         "lastReplyAt": "2026-08-18T19:01:30.000Z",
-        "preview": "Three things changed this week: the release moved to Friday, and two reviews are waiting on you."
+        "preview": "Three things changed this week: the release moved to Friday, and two reviews are waiting on you.",
+        "summarized": true
       }
     }
   ],

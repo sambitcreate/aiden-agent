@@ -14,9 +14,15 @@ import {
 const HOUR = 3_600_000;
 const NOW = Date.UTC(2026, 10, 24, 9);
 
-/** Rows as a revision 66 host lists them: every Bot with a message has a preview. */
+/** Rows as a revision 66 host lists them: every Bot is summarized, and one with a message has a preview. */
 const listed = (...replies: (number | undefined)[]) =>
-  replies.map((lastReplyAt) => ({ preview: "Release moved to Friday", ...(lastReplyAt === undefined ? {} : { lastReplyAt }) }));
+  replies.map((lastReplyAt) => ({
+    summarized: true as const,
+    preview: "Release moved to Friday",
+    ...(lastReplyAt === undefined ? {} : { lastReplyAt }),
+  }));
+/** A revision 66 host's Bots that have no message yet. */
+const empty = (count: number) => Array.from({ length: count }, () => ({ summarized: true as const }));
 
 test("a paired Mac's Bot reads unread only for a reply newer than the last one shown here, or than its host's first listing", () => {
   let seen = parseRemoteBotSeen(null);
@@ -35,23 +41,26 @@ test("a paired Mac's Bot reads unread only for a reply newer than the last one s
 });
 
 test("a host whose Bots hadn't replied when first listed shows a dot for their first reply, also after a reload", () => {
-  const silent = withRemoteBotHostListed(parseRemoteBotSeen(null), "quiet", [{}, {}]);
-  assert.deepEqual(silent.hostSince, {}, "Bots with no message yet don't show the host's revision; nothing is set");
-  // The person's first message is the preview; the reply hasn't come yet.
-  let seen = withRemoteBotHostListed(silent, "quiet", listed(undefined, undefined));
+  // Bots with no message at all: the host still says it read their summaries.
+  let seen = withRemoteBotHostListed(parseRemoteBotSeen(null), "quiet", empty(2));
   assert.equal(seen.hostSince.quiet, 0);
   // The next feed update brings the first reply; listing again must not swallow it.
   seen = withRemoteBotHostListed(seen, "quiet", listed(NOW));
   assert.equal(isRemoteBotUnread(seen, "quiet", "bot", NOW), true);
+  // Also when the person's first message came before the reply.
+  const asked = withRemoteBotHostListed(parseRemoteBotSeen(null), "quiet", listed(undefined, undefined));
+  assert.equal(isRemoteBotUnread(withRemoteBotHostListed(asked, "quiet", listed(NOW)), "quiet", "bot", NOW), true);
   const reloaded = parseRemoteBotSeen(serializeRemoteBotSeen(seen));
   assert.equal(isRemoteBotUnread(withRemoteBotHostListed(reloaded, "quiet", listed(NOW)), "quiet", "bot", NOW), true);
   assert.equal(isRemoteBotUnread(withRemoteBotSeen(reloaded, "quiet/bot", NOW), "quiet", "bot", NOW), false);
 });
 
 test("a host older than revision 66 sets no baseline, so its earlier replies start read once it upgrades", () => {
-  // An older host sends no preview, and reply times only for Bots whose chat is open there.
+  // An older host marks no row summarized, sends no preview, and sends reply
+  // times only for Bots whose chat is open there.
   const old = withRemoteBotHostListed(parseRemoteBotSeen(null), "host", [{ lastReplyAt: NOW - 9 * HOUR }, {}, {}]);
   assert.deepEqual(old.hostSince, {});
+  assert.deepEqual(withRemoteBotHostListed(old, "host", [{}, {}]).hostSince, {}, "nor do its Bots with no reply");
   assert.equal(isRemoteBotUnread(old, "host", "closed", NOW - HOUR), false);
   // After the upgrade every Bot's newest reply arrives at once; none of them is new.
   const upgraded = withRemoteBotHostListed(old, "host", listed(NOW - 9 * HOUR, NOW - HOUR, NOW - 2 * HOUR));
