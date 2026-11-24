@@ -346,6 +346,47 @@ test("a file read reports design_md_linted once per new content, bucketed", asyn
   });
 });
 
+test("reads of one file that overlap share one lint and one event", async () => {
+  await withWorkspace(async (ws) => {
+    const events: Array<[string, unknown]> = [];
+    const { reader, counter } = countingReader({ report: (event, props) => events.push([event, props]) });
+    await writeFile(path.join(ws, "DESIGN.md"), await fixture("duplicate-section.md"));
+    // Eight app roots inheriting the workspace's DESIGN.md read it at once.
+    const states = await Promise.all(Array.from({ length: 8 }, () => reader.read(ws, at("DESIGN.md"))));
+    for (const state of states) assert.equal(ok(state).summary.warnings, 2);
+    assert.equal(counter.runs, 1);
+    assert.equal(events.length, 1);
+  });
+});
+
+test("an export requested twice at once starts one worker", async () => {
+  await withWorkspace(async (ws) => {
+    const { reader, counter } = countingReader();
+    await writeFile(path.join(ws, "DESIGN.md"), await fixture("valid.md"));
+    const [first, second] = await Promise.all([
+      reader.export(ws, at("DESIGN.md"), "css-vars"),
+      reader.export(ws, at("DESIGN.md"), "css-vars"),
+    ]);
+    assert.equal(first.status, "ok");
+    assert.deepEqual(second, first);
+    assert.equal(counter.runs, 1);
+  });
+});
+
+test("a reader whose turn is cancelled stops waiting without cancelling the shared lint", async () => {
+  await withWorkspace(async (ws) => {
+    const { reader, counter } = countingReader();
+    await writeFile(path.join(ws, "DESIGN.md"), await fixture("valid.md"));
+    const controller = new AbortController();
+    const cancelled = reader.read(ws, at("DESIGN.md"), { signal: controller.signal });
+    const kept = reader.read(ws, at("DESIGN.md"));
+    controller.abort();
+    await assert.rejects(cancelled, { name: "AbortError" });
+    assert.equal((await kept).status, "ok");
+    assert.equal(counter.runs, 1);
+  });
+});
+
 const emptyResult = () => ({ summary: { errors: 0, warnings: 0, infos: 0 }, findings: [], sections: [], omitted: [], symbols: [], tailwindConfig: null });
 
 test("a timed-out file is retried after five minutes, not before", async () => {

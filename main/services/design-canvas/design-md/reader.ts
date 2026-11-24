@@ -184,6 +184,27 @@ type Loaded =
   | { ok: true; realPath: string; content: string; hash: string; file: FileFields }
   | { ok: false; state: Exclude<DesignMdState, DesignMdOkState> };
 
+/** `pending`, or an AbortError as soon as `signal` aborts, whichever is first. */
+function untilAborted<T>(pending: Promise<T>, signal?: AbortSignal): Promise<T> {
+  if (!signal) return pending;
+  const aborted = () => new DOMException("The DESIGN.md check was cancelled.", "AbortError");
+  if (signal.aborted) return Promise.reject(aborted());
+  return new Promise<T>((resolve, reject) => {
+    const onAbort = () => reject(aborted());
+    signal.addEventListener("abort", onAbort, { once: true });
+    pending.then(
+      (value) => {
+        signal.removeEventListener("abort", onAbort);
+        resolve(value);
+      },
+      (error: unknown) => {
+        signal.removeEventListener("abort", onAbort);
+        reject(error);
+      },
+    );
+  });
+}
+
 type CacheEntry = {
   hash: string;
   state: Omit<DesignMdState, "path" | "source">;
@@ -203,6 +224,8 @@ export class DesignMdReader {
   private unavailable = false;
   private readonly cache = new Map<string, CacheEntry>();
   private readonly exports = new Map<string, { state: DesignMdExportState; retryAt?: number }>();
+  /** Lints and exports in flight, so reads of the same content that overlap share one worker. */
+  private readonly inFlight = new Map<string, Promise<unknown>>();
 
   constructor(
     deps: {
@@ -268,6 +291,21 @@ export class DesignMdReader {
     return outcome;
   }
 
+  /**
+   * Runs `start` once per key while it's in flight; every overlapping caller
+   * gets the same result. A caller's signal only stops that caller waiting,
+   * so one cancelled turn never cancels a lint another turn is waiting on
+   * (the worker's own deadline bounds it).
+   */
+  private shared<T>(key: string, start: () => Promise<T>, signal?: AbortSignal): Promise<T> {
+    let pending = this.inFlight.get(key) as Promise<T> | undefined;
+    if (!pending) {
+      pending = start().finally(() => this.inFlight.delete(key));
+      this.inFlight.set(key, pending);
+    }
+    return untilAborted(pending, signal);
+  }
+
   private async lint(content: string, hash: string, signal?: AbortSignal) {
     const outcome = await this.runWorker({ op: "lint", content }, signal);
     if (outcome.ok) return okState(outcome.result, hash);
@@ -286,16 +324,23 @@ export class DesignMdReader {
     const { realPath, content, hash, file } = loaded;
     let entry = this.cache.get(realPath);
     if (entry?.hash !== hash || (entry.retryAt !== undefined && this.now() >= entry.retryAt)) {
-      const state = await this.lint(content, hash, options.signal);
-      entry = {
-        hash,
-        state,
-        reported: false,
-        ...(state.status === "timed-out" ? { retryAt: this.now() + DESIGN_MD_TIMED_OUT_RETRY_MS } : {}),
-      };
-      if (state.status === "ok" || state.status === "timed-out" || state.status === "lint-failed") {
-        this.remember(realPath, entry);
-      }
+      entry = await this.shared(
+        `read\0${realPath}\0${hash}`,
+        async (): Promise<CacheEntry> => {
+          const state = await this.lint(content, hash);
+          const fresh: CacheEntry = {
+            hash,
+            state,
+            reported: false,
+            ...(state.status === "timed-out" ? { retryAt: this.now() + DESIGN_MD_TIMED_OUT_RETRY_MS } : {}),
+          };
+          if (state.status === "ok" || state.status === "timed-out" || state.status === "lint-failed") {
+            this.remember(realPath, fresh);
+          }
+          return fresh;
+        },
+        options.signal,
+      );
     } else {
       this.remember(realPath, entry);
     }
@@ -332,7 +377,16 @@ export class DesignMdReader {
     if (cached && (cached.retryAt === undefined || this.now() < cached.retryAt)) {
       return { ...cached.state, ...loaded.file } as DesignMdExportState;
     }
-    const outcome = await this.runWorker({ op: "export", content: loaded.content, format }, signal);
+    const state = await this.shared(`export\0${key}`, () => this.exportFresh(loaded, format, key), signal);
+    return { ...state, ...loaded.file } as DesignMdExportState;
+  }
+
+  private async exportFresh(
+    loaded: Extract<Loaded, { ok: true }>,
+    format: DesignMdExportFormat,
+    key: string,
+  ): Promise<DesignMdExportState> {
+    const outcome = await this.runWorker({ op: "export", content: loaded.content, format });
     let state: DesignMdExportState;
     if (!outcome.ok) {
       if (outcome.status === "lint-failed") this.log("The DESIGN.md linter failed on an export.");
