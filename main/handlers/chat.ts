@@ -5,11 +5,10 @@ import { ipcMain, logger } from "../platform.js";
 import { reportChatMessageSent, reportDesignCommentsSent } from "../services/analytics/analytics-feature-reports.js";
 import { analyticsWorkspaceKind } from "../services/analytics/analytics-ids.js";
 import { configStore } from "../services/config-store.js";
-import { chatStore } from "../services/chat-store.js";
 import { desktopChatExecutionOptions, startGenerationAndMaybeTitle } from "../services/chat-generation-start.js";
 import { isExplicitUserStop, parseChatCancelOrigin } from "../services/chat-cancel.js";
 import { chatTitleService } from "../services/chat-title.js";
-import { llmClient } from "../services/llm-client.js";
+import { llmClient, type TurnSettingsSnapshot } from "../services/llm-client.js";
 import { chatGenerationOwner } from "../services/chat-generation-owner.js";
 import { isSafeSubagentIdentifier } from "../../renderer/shared/subagent-runs.js";
 import { parseChatRunInput } from "../../renderer/shared/chat-run-input.js";
@@ -49,6 +48,7 @@ export function registerChatGenerationHandlers(): void {
       const parsed = parseParams(params);
       assertQuickChatConversationAccess(event, parsed.chatId);
       let accepted = false;
+      let turnSettings: TurnSettingsSnapshot | undefined;
       try {
         const started = await startGenerationAndMaybeTitle(
           {
@@ -57,10 +57,15 @@ export function registerChatGenerationHandlers(): void {
                 streamId,
                 params,
                 owner,
-                desktopChatExecutionOptions(messageTurnId, () => { accepted = true; }),
+                desktopChatExecutionOptions(
+                  messageTurnId,
+                  () => { accepted = true; },
+                  (snapshot) => { turnSettings = snapshot; },
+                ),
               ),
             startTitle: (input) => chatTitleService.startForFirstTurn(input),
-            onStarted: ({ chatId, providerId, model, thinkingLevel, workspaceId }) => {
+            onStarted: ({ providerId, model, thinkingLevel, workspaceId }) => {
+              const started = turnSettings;
               reportChatMessageSent({
                 providerId,
                 model,
@@ -69,12 +74,12 @@ export function registerChatGenerationHandlers(): void {
                 inWorkspace: async () =>
                   Boolean(workspaceId) &&
                   analyticsWorkspaceKind(await configStore.getWorkspace(workspaceId!)) !== "none",
-                // A Bot's chat has no slider; every other desktop chat sits on a stop or is custom.
-                agentSlider: async () => {
-                  const meta = await chatStore.getMeta(chatId);
-                  if (!meta || meta.botId) return undefined;
-                  return { slider: (await configStore.getSettings()).agentSlider, chatThinkingLevel: meta.thinkingLevel };
-                },
+                // The slider and level this turn started with. A Bot's chat has no
+                // slider; every other desktop chat sits on a stop or is custom.
+                agentSlider: async () =>
+                  started && !started.botId
+                    ? { slider: started.agentSlider, chatThinkingLevel: started.chatThinkingLevel }
+                    : undefined,
               });
               reportDesignCommentsSent(parsed.messages);
             },

@@ -25,8 +25,9 @@ export interface ChatMessageSent {
   readonly inWorkspace: () => boolean | Promise<boolean>;
   /**
    * Desktop sends only: the portable Agent Slider and the chat's own stored
-   * level, read after the turn started. Leave it out, or resolve without a
-   * slider, and the event carries no slider properties.
+   * level as the turn read them when it started, so a later Settings edit
+   * cannot change what is counted. Leave it out, or resolve without a slider,
+   * and the event carries no slider properties.
    */
   readonly agentSlider?: () => Promise<{ slider: unknown; chatThinkingLevel?: GenerationThinkingLevel } | undefined>;
 }

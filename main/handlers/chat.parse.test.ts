@@ -37,6 +37,15 @@ test("registered chat:start forwards foreground delegation and the appended turn
   lease.settleAsyncWork();
   let starts = 0;
   let titles = 0;
+  const startedSlider = {
+    version: 1,
+    stops: [
+      { id: "stop_00000001", label: "Other", providerId: "p", model: "other" },
+      { id: "stop_00000002", label: "This one", providerId: "p", model: "m" },
+      { id: "stop_00000003", label: "Empty" },
+    ],
+    homeStopId: "stop_00000002",
+  };
   const start: typeof llmClient.start = async (streamId, params, generationOwner, options) => {
     starts++;
     assert.equal(streamId, "stream-1");
@@ -53,6 +62,8 @@ test("registered chat:start forwards foreground delegation and the appended turn
     assert.equal(admission.handoff(params.chatId, options.turnId!, generationOwner.documentId, () => {}), true);
     assert.ok(options.onTurnAccepted, "accepted turn must be acknowledged to the renderer");
     options.onTurnAccepted();
+    // The turn started on the slider's second stop (the same model, no level).
+    options.onTurnSettings?.({ agentSlider: startedSlider });
     return true;
   };
   const mocks: Record<string, unknown> = {
@@ -64,21 +75,22 @@ test("registered chat:start forwards foreground delegation and the appended turn
       configStore: {
         setSettings: async () => {},
         getWorkspace: async () => ({}),
-        // The chat sits on the slider's second stop (the same model, no level).
+        // Settings were edited after the turn started: the model moved to the
+        // first of four stops. The count must still describe the started turn.
         getSettings: async () => ({
           agentSlider: {
             version: 1,
             stops: [
-              { id: "stop_00000001", label: "Other", providerId: "p", model: "other" },
               { id: "stop_00000002", label: "This one", providerId: "p", model: "m" },
+              { id: "stop_00000001", label: "Other", providerId: "p", model: "other" },
               { id: "stop_00000003", label: "Empty" },
+              { id: "stop_00000004", label: "New" },
             ],
             homeStopId: "stop_00000002",
           },
         }),
       },
     },
-    "../services/chat-store.js": { chatStore: { getMeta: async (id: string) => ({ id, title: "Chat" }) } },
     "../services/gemini-live/service-main.js": { geminiLiveService: {} },
     "../services/tool-approval-rules-main.js": { toolApprovalRules: {} },
     "../services/analytics/analytics-feature-reports.js": analyticsFeatureReports,

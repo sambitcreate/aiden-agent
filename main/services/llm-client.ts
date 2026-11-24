@@ -677,6 +677,13 @@ function uniqueResponseImages(
 }
 
 
+/** What a turn read when it started: the portable Agent Slider and its chat's own level. */
+export interface TurnSettingsSnapshot {
+  readonly agentSlider: unknown;
+  readonly chatThinkingLevel?: Chat["thinkingLevel"];
+  readonly botId?: string;
+}
+
 export interface GenerationExecutionOptions {
   /** Main-owned Telegram queue provenance, resolved freshly at generation. */
   telegramSkillInvocation?: import("./telegram/telegram-queue.js").TelegramSkillInvocation;
@@ -702,6 +709,12 @@ export interface GenerationExecutionOptions {
   turnId?: string;
   /** Fires once the persisted turn has synchronously transferred to generation ownership. */
   onTurnAccepted?: () => void;
+  /**
+   * Main-owned: receives the settings and chat this turn resolved its model
+   * and level from, so a send is counted against that state and not a later
+   * Settings edit.
+   */
+  onTurnSettings?: (snapshot: TurnSettingsSnapshot) => void;
   /** Main-owned interactive delivery surface; renderer starts cannot set this. */
   interactionSurface?: "telegram";
   /** Main-owned: a paired device sent this turn and sees visuals as snapshots. */
@@ -1633,6 +1646,15 @@ async function prepareGeneration(
   };
   const supportsImages = runtimeSupportsImages(model);
   const settings = await configStore.getSettings();
+  try {
+    options.onTurnSettings?.({
+      agentSlider: settings.agentSlider,
+      chatThinkingLevel: chat.thinkingLevel,
+      botId: chat.botId,
+    });
+  } catch (error) {
+    logger.debug("chat", "Could not record the settings this turn started with.", error);
+  }
   const savedThinkingLevel = savedGenerationThinkingLevel(settings, params.providerId, params.model, runtime.provider);
   const thinkingLevel = resolveGenerationThinkingLevel(
     params.providerId,

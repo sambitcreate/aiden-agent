@@ -72,6 +72,8 @@ export function insightCredentials(agentDir: string) {
   const valueOf = (credential: Awaited<ReturnType<typeof store.read>>) => credential?.type === "api_key" ? credential.key : undefined;
   return {
     async read(source: string) { return valueOf(await store.read(source)); },
+    /** Names of the stored keys, read without decrypting any of them. */
+    async list() { return (await store.list()).map((entry) => entry.providerId); },
     /** `isCurrent` is checked under the writer lease; a superseded writer changes nothing. */
     write(source: string, value: string, isCurrent?: () => boolean) { return withCredentialWriterLease(lease, async () => { assertCurrent(isCurrent); await store.modify(source, async () => ({ type: "api_key", key: value })); }); },
     /**
@@ -100,7 +102,7 @@ export async function cleanUpRetiredInsights(agentDir: string): Promise<void> {
       directory: agentDir,
       ...RETIRED_SERVER_MODEL_SCORING,
       credentials: {
-        has: async (id) => (await credentials.read(id)) !== undefined,
+        has: async (id) => (await credentials.list()).includes(id),
         delete: (id) => credentials.delete(id),
       },
     });

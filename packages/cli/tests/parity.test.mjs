@@ -180,13 +180,17 @@ test("the retired insights keys and caches are deleted, other keys stay, and a s
   await credentials.write("aa", "aa-secret");
   await credentials.write("openrouter", "benchmark-secret");
   await credentials.write("telegram", "bot-secret");
+  // A retired key that no longer decrypts is still removed.
+  const file = join(dir, "credentials", "insights.json"), stored = JSON.parse(readFileSync(file, "utf8"));
+  stored.entries.aa.ciphertext = Buffer.from("not a valid ciphertext").toString("base64");
+  writeFileSync(file, JSON.stringify(stored));
+  await assert.rejects(credentials.read("aa"));
   writeFileSync(join(dir, "aa-insights.json"), "null\n");
   writeFileSync(join(dir, "openrouter-insights.json"), "{}\n");
   writeFileSync(join(dir, "models-dev.json"), "{}\n");
   await api.cleanUpRetiredInsights(dir);
   await api.cleanUpRetiredInsights(dir);
-  assert.equal(await credentials.read("aa"), undefined);
-  assert.equal(await credentials.read("openrouter"), undefined);
+  assert.deepEqual(await credentials.list(), ["telegram"]);
   assert.equal(await credentials.read("telegram"), "bot-secret");
   assert.equal(existsSync(join(dir, "aa-insights.json")), false);
   assert.equal(existsSync(join(dir, "openrouter-insights.json")), false);
