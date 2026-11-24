@@ -446,6 +446,7 @@
       "!**/node_modules/@google/design.md/dist/spec-config.yaml",
       "!**/node_modules/@google/design.md/dist/linter/spec.md",
       "!**/node_modules/@google/design.md/node_modules/**",
+      "!**/node_modules/{citty,consola,estree-util-visit,fault,format,mdast-util-frontmatter,mdast-util-mdx,micromark-extension-frontmatter,micromark-extension-mdx-expression,micromark-extension-mdx-jsx,micromark-extension-mdx-md,micromark-extension-mdxjs,micromark-extension-mdxjs-esm,micromark-factory-mdx-expression,micromark-util-events-to-acorn,remark-frontmatter,remark-mdx,unist-util-position-from-estree}/**",
       {
         "from": "build/package-resources",
         "to": "resources",

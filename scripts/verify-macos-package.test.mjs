@@ -62,6 +62,7 @@ import {
   verifyPackagedLume,
   verifyPackagedDesignMdLinter,
   PACKAGED_DESIGN_MD_ENTRIES,
+  DESIGN_MD_ONLY_DEPENDENCIES,
 } from "./verify-macos-package.mjs";
 import {
   LUME_APP_TREE,
@@ -1112,16 +1113,67 @@ test("the packaged linter must lint a fixture", async () => {
   );
 });
 
-test("the trimmed files must be absent", async () => {
+test("the trimmed files, and the packages only the DESIGN.md CLI needs, must be absent", async () => {
   for (const extra of [
     `${DESIGN_MD_PACKAGE}/dist/index.js`,
     `${DESIGN_MD_PACKAGE}/dist/spec-config.yaml`,
     `${DESIGN_MD_PACKAGE}/dist/spec.md`,
     `${DESIGN_MD_PACKAGE}/dist/linter/spec.md`,
     `${DESIGN_MD_PACKAGE}/node_modules/zod/index.js`,
+    "node_modules/citty/dist/index.mjs",
+    "node_modules/remark-mdx/lib/index.js",
+    "node_modules/unified/node_modules/fault/index.js",
   ]) {
     await withDesignMdAsar("trimmed", { extra: { [extra]: "x" } }, (asar) =>
       assert.rejects(verifyPackagedDesignMdLinter(asar), /trimmed DESIGN\.md files/u),
     );
   }
+});
+
+/**
+ * Where Node would resolve `name` from the lockfile package at `from`: its own
+ * node_modules, then each one above it, then the top level.
+ */
+function resolveLocked(packages, from, name) {
+  let base = from;
+  for (;;) {
+    const candidate = `${base ? `${base}/` : ""}node_modules/${name}`;
+    if (packages[candidate]) return candidate;
+    if (!base) return null;
+    const index = base.lastIndexOf("/node_modules/");
+    base = index < 0 ? "" : base.slice(0, index);
+  }
+}
+
+test("each package build.files leaves out is reached in production only through @google/design.md", async () => {
+  const lockfile = JSON.parse(await readFile(new URL("../package-lock.json", import.meta.url), "utf8"));
+  const packages = lockfile.packages;
+  const designMd = "node_modules/@google/design.md";
+  const reached = new Map();
+  const walk = (start, skip) => {
+    const seen = new Set();
+    const queue = [start];
+    while (queue.length > 0) {
+      const at = queue.shift();
+      const entry = packages[at];
+      for (const name of Object.keys({ ...entry.dependencies, ...entry.optionalDependencies, ...entry.peerDependencies })) {
+        const target = resolveLocked(packages, at, name);
+        if (!target || target === skip || seen.has(target) || packages[target].dev === true) continue;
+        seen.add(target);
+        queue.push(target);
+      }
+    }
+    return seen;
+  };
+  // Positive control: through @google/design.md, every excluded package is reached.
+  const viaDesignMd = walk(designMd, null);
+  for (const name of DESIGN_MD_ONLY_DEPENDENCIES) {
+    assert.ok(viaDesignMd.has(`node_modules/${name}`), `${name} is no longer a @google/design.md dependency; drop it from the exclusion`);
+  }
+  // Everything production reaches without going through @google/design.md.
+  for (const target of walk("", designMd)) reached.set(target, true);
+  const leaked = DESIGN_MD_ONLY_DEPENDENCIES.filter((name) =>
+    [...reached.keys()].some((target) => target === `node_modules/${name}` || target.endsWith(`/node_modules/${name}`)),
+  );
+  assert.deepEqual(leaked, [], "another production dependency needs these, so build.files must ship them");
 });

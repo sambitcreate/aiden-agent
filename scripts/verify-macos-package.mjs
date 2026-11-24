@@ -81,6 +81,31 @@ export const PACKAGED_DESIGN_MD_ENTRIES = Object.freeze([
   `${PACKAGED_DESIGN_MD_PACKAGE}/dist/linter/index.js`,
   `${PACKAGED_DESIGN_MD_PACKAGE}/dist/linter/spec-config.yaml`,
 ]);
+/**
+ * Packages only @google/design.md's CLI needs: its linter is one bundled
+ * file, so none of them ships. unified, remark-parse, remark-stringify,
+ * unist-util-visit, yaml and zod do ship, since other dependencies use them.
+ */
+export const DESIGN_MD_ONLY_DEPENDENCIES = Object.freeze([
+  "citty",
+  "consola",
+  "estree-util-visit",
+  "fault",
+  "format",
+  "mdast-util-frontmatter",
+  "mdast-util-mdx",
+  "micromark-extension-frontmatter",
+  "micromark-extension-mdx-expression",
+  "micromark-extension-mdx-jsx",
+  "micromark-extension-mdx-md",
+  "micromark-extension-mdxjs",
+  "micromark-extension-mdxjs-esm",
+  "micromark-factory-mdx-expression",
+  "micromark-util-events-to-acorn",
+  "remark-frontmatter",
+  "remark-mdx",
+  "unist-util-position-from-estree",
+]);
 /** What only the package's CLI reads; `build.files` leaves it out. */
 export const DESIGN_MD_BUILD_FILE_RULES = Object.freeze([
   `!**/${PACKAGED_DESIGN_MD_PACKAGE}/dist/index.js`,
@@ -88,6 +113,7 @@ export const DESIGN_MD_BUILD_FILE_RULES = Object.freeze([
   `!**/${PACKAGED_DESIGN_MD_PACKAGE}/dist/spec-config.yaml`,
   `!**/${PACKAGED_DESIGN_MD_PACKAGE}/dist/linter/spec.md`,
   `!**/${PACKAGED_DESIGN_MD_PACKAGE}/node_modules/**`,
+  `!**/node_modules/{${DESIGN_MD_ONLY_DEPENDENCIES.join(",")}}/**`,
 ]);
 const TRIMMED_DESIGN_MD_ENTRIES = Object.freeze([
   `${PACKAGED_DESIGN_MD_PACKAGE}/dist/index.js`,
@@ -481,8 +507,9 @@ process.stdout.write(JSON.stringify({
 /**
  * The DESIGN.md linter ships packed and trimmed (spec S42): the lint worker,
  * the linter entry and the spec config it reads are bounded packed regular
- * files; the package's CLI, its top-level spec files and its nested
- * node_modules are absent; and the packed linter, extracted and run under
+ * files; the package's CLI, its top-level spec files, its nested
+ * node_modules and the packages only its CLI needs are absent; and the packed
+ * linter, extracted and run under
  * Node, lints a fixed DESIGN.md with its rules.
  */
 export async function verifyPackagedDesignMdLinter(appAsar) {
@@ -506,9 +533,13 @@ export async function verifyPackagedDesignMdLinter(appAsar) {
     entry.replaceAll("\\", "/").replace(/^\//u, ""),
   );
   const shipped = new Set(entries);
+  const cliOnly = new Set(DESIGN_MD_ONLY_DEPENDENCIES);
   const trimmed = [
     ...TRIMMED_DESIGN_MD_ENTRIES.filter((entry) => shipped.has(entry)),
     ...entries.filter((entry) => entry.startsWith(`${PACKAGED_DESIGN_MD_PACKAGE}/node_modules/`)).slice(0, 5),
+    ...entries
+      .filter((entry) => [...entry.matchAll(/(?:^|\/)node_modules\/([^/]+)(?=\/)/gu)].some((match) => cliOnly.has(match[1])))
+      .slice(0, 5),
   ];
   if (trimmed.length > 0) {
     throw new Error(`Packaged app.asar ships trimmed DESIGN.md files: ${trimmed.join(", ")}`);
