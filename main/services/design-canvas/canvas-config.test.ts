@@ -8,6 +8,7 @@ import type { AppKind, DetectedApp, WebAppDetection } from "./app-server/app-ser
 import {
   CANVAS_CONFIG_MAX_BYTES,
   CANVAS_CONFIG_PATH,
+  configuredRoots,
   describedRoots,
   inspectCanvasConfig,
   isSafeWorkspaceRelativePath,
@@ -73,6 +74,19 @@ test("a missing version or version 1 is understood, and any other version isn't"
   }
   assert.deepEqual(inspectCanvasConfig("{not json"), { status: "invalid" });
   assert.deepEqual(inspectCanvasConfig("[1]"), { status: "invalid" });
+});
+
+test("configured roots are only the scripted entries detection sees as web apps, in file order", () => {
+  assert.deepEqual(
+    configuredRoots(
+      config({ root: "b", script: "dev" }, { root: "docs", script: "dev" }, { root: "a", script: "start" }, { root: "c" }, { root: "b", script: "dev" }),
+      detected(["a", "web"], ["b", "web"], ["c", "web"], ["docs", "react-nonweb"]),
+    ),
+    ["b", "a"],
+  );
+  assert.deepEqual(configuredRoots(config({ root: "old", script: "dev" }), detected(["site", "web"])), [], "no fallback to detection");
+  assert.deepEqual(configuredRoots(config(), detected(["site", "web"])), []);
+  assert.deepEqual(configuredRoots(null, detected(["site", "web"])), [], "no config, or one Aiden can't read");
 });
 
 test("described roots are scripted entries that detection also sees as web apps, else detection", () => {
@@ -154,27 +168,33 @@ test("bad JSON, an array, or apps that isn't an array gives no apps", () => {
   assert.equal(kept[31], "app31");
 });
 
-test("the reader refuses a symlinked, oversized, folder or FIFO config without hanging", async () => {
+test("the reader says why it refused a symlinked, oversized, folder or FIFO config, without hanging", async () => {
   const root = await tempWorkspace();
   try {
+    assert.deepEqual(await readCanvasConfigText(root), { status: "missing" });
+    await mkdir(path.join(root, ".aiden"));
+    assert.deepEqual(await readCanvasConfigText(root), { status: "missing" });
+
     const elsewhere = path.join(root, "elsewhere.json");
     await writeFile(elsewhere, '{"apps":[{"root":"web"}]}');
-    await mkdir(path.join(root, ".aiden"));
     await symlink(elsewhere, path.join(root, CANVAS_CONFIG_PATH));
-    assert.equal(await readCanvasConfigText(root), null);
+    assert.deepEqual(await readCanvasConfigText(root), { status: "link" });
     await rm(path.join(root, CANVAS_CONFIG_PATH));
 
     await writeConfig(root, JSON.stringify({ apps: [{ root: "x".repeat(CANVAS_CONFIG_MAX_BYTES) }] }));
-    assert.equal(await readCanvasConfigText(root), null);
+    assert.deepEqual(await readCanvasConfigText(root), { status: "too-large" });
     await rm(path.join(root, CANVAS_CONFIG_PATH));
 
     await mkdir(path.join(root, CANVAS_CONFIG_PATH));
-    assert.equal(await readCanvasConfigText(root), null);
+    assert.deepEqual(await readCanvasConfigText(root), { status: "unreadable" });
     await rm(path.join(root, CANVAS_CONFIG_PATH), { recursive: true });
 
     execFileSync("mkfifo", [path.join(root, CANVAS_CONFIG_PATH)]);
-    assert.equal(await readCanvasConfigText(root), null);
+    assert.deepEqual(await readCanvasConfigText(root), { status: "unreadable" });
     await rm(path.join(root, CANVAS_CONFIG_PATH));
+
+    await writeConfig(root, '{"apps":[]}');
+    assert.deepEqual(await readCanvasConfigText(root), { status: "ok", text: '{"apps":[]}' });
 
     // A symlinked .aiden folder leading out of the workspace isn't followed.
     const outside = await tempWorkspace();
@@ -182,10 +202,14 @@ test("the reader refuses a symlinked, oversized, folder or FIFO config without h
       await writeConfig(outside, '{"apps":[{"root":"web"}]}');
       await rm(path.join(root, ".aiden"), { recursive: true });
       await symlink(path.join(outside, ".aiden"), path.join(root, ".aiden"));
-      assert.equal(await readCanvasConfigText(root), null);
+      assert.deepEqual(await readCanvasConfigText(root), { status: "link" });
+      assert.equal(await readCanvasConfig(root), null);
     } finally {
       await rm(outside, { recursive: true, force: true });
     }
+    await rm(path.join(root, ".aiden"));
+    await writeFile(path.join(root, ".aiden"), "not a folder");
+    assert.deepEqual(await readCanvasConfigText(root), { status: "unreadable" });
   } finally {
     await rm(root, { recursive: true, force: true });
   }

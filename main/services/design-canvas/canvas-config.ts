@@ -88,43 +88,74 @@ export function parseCanvasConfig(text: string): CanvasConfig | null {
 }
 
 /**
- * Which app roots design mode describes (R2, shared with 2b's D4): the
- * entries with a `script` whose root detection also sees as a web app, in
- * file order; otherwise detection decides. An entry detection doesn't see as
- * a web app any more is ignored rather than trusted.
+ * Step 1 of which app roots design mode describes (R2, shared with 2b's D4):
+ * the entries with a `script` whose root detection also sees as a web app, in
+ * file order, each once. `[]` with no config, or one Aiden can't read. An
+ * entry detection doesn't see as a web app any more is ignored rather than
+ * trusted.
  */
-export function describedRoots(config: CanvasConfig | null, detected: WebAppDetection): string[] {
+export function configuredRoots(config: CanvasConfig | null, detected: WebAppDetection): string[] {
   const web = new Set(detected.apps.filter((app) => app.kind === "web").map((app) => app.root));
   const scripted: string[] = [];
   for (const entry of config?.apps ?? []) {
     if (entry.script && web.has(entry.root) && !scripted.includes(entry.root)) scripted.push(entry.root);
   }
-  if (scripted.length > 0) return scripted;
+  return scripted;
+}
+
+/** Which app roots design mode describes (R2): the configured roots, otherwise what detection decides. */
+export function describedRoots(config: CanvasConfig | null, detected: WebAppDetection): string[] {
+  const configured = configuredRoots(config, detected);
+  if (configured.length > 0) return configured;
   const target = designTarget(detected);
   if (target.kind === "single") return [target.app.root];
   if (target.kind === "choose") return target.apps.map((app) => app.root);
   return ["."];
 }
 
+/** Why `.aiden/canvas.json` wasn't read, or its text. */
+export type CanvasConfigText =
+  | { status: "ok"; text: string }
+  | { status: "missing" | "link" | "too-large" | "unreadable" };
+
+const isMissing = (error: unknown) => (error as NodeJS.ErrnoException | null)?.code === "ENOENT";
+
 /**
- * The file's text, or `null` when it's missing, not a regular file, a
- * symlink, over 64 KiB, or reached through a `.aiden` that isn't a real
- * folder inside the workspace.
+ * The file's text, or why it wasn't read: `missing`; `link` when it or the
+ * `.aiden` folder is a symlink; `too-large` over 64 KiB; `unreadable` when
+ * either isn't the kind of entry it should be or the read failed. Never
+ * follows a link and never blocks on a FIFO.
  */
-export async function readCanvasConfigText(workspaceRoot: string): Promise<string | null> {
+export async function readCanvasConfigText(workspaceRoot: string): Promise<CanvasConfigText> {
+  let realRoot: string;
   try {
-    const realRoot = await realpath(workspaceRoot);
-    const folder = path.join(realRoot, ".aiden");
-    if (!(await lstat(folder)).isDirectory()) return null;
-    const file = path.join(realRoot, CANVAS_CONFIG_PATH);
-    if (!isPathInside(realRoot, file)) return null;
-    return await readBounded(file, CANVAS_CONFIG_MAX_BYTES);
-  } catch {
-    return null;
+    realRoot = await realpath(workspaceRoot);
+  } catch (error) {
+    return { status: isMissing(error) ? "missing" : "unreadable" };
   }
+  const folder = path.join(realRoot, ".aiden");
+  const file = path.join(realRoot, CANVAS_CONFIG_PATH);
+  if (!isPathInside(realRoot, file)) return { status: "unreadable" };
+  for (const [entry, kind] of [
+    [folder, "folder"],
+    [file, "file"],
+  ] as const) {
+    let info;
+    try {
+      info = await lstat(entry);
+    } catch (error) {
+      return { status: isMissing(error) ? "missing" : "unreadable" };
+    }
+    if (info.isSymbolicLink()) return { status: "link" };
+    if (kind === "folder" ? !info.isDirectory() : !info.isFile()) return { status: "unreadable" };
+    if (kind === "file" && info.size > CANVAS_CONFIG_MAX_BYTES) return { status: "too-large" };
+  }
+  // The bounded no-follow read is the last check: a swap or growth since lstat is refused.
+  const text = await readBounded(file, CANVAS_CONFIG_MAX_BYTES);
+  return text === null ? { status: "unreadable" } : { status: "ok", text };
 }
 
 export async function readCanvasConfig(workspaceRoot: string): Promise<CanvasConfig | null> {
-  const text = await readCanvasConfigText(workspaceRoot);
-  return text === null ? null : parseCanvasConfig(text);
+  const read = await readCanvasConfigText(workspaceRoot);
+  return read.status === "ok" ? parseCanvasConfig(read.text) : null;
 }
