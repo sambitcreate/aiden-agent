@@ -310,23 +310,29 @@ export function withOlderRemoteBotEntries(
 
 /**
  * The first `carried` entries of `view` were kept from before a snapshot
- * (`carryOlderRemoteBotEntries`); `page` is those entries read again from the
- * host, just older than the snapshot's own. They are replaced with the page,
- * so history the host removed or reordered doesn't stay. Without a page, or
- * with one from another epoch, they are dropped and the snapshot's own
- * "older" state comes back.
+ * (`carryOlderRemoteBotEntries`); `pages` are that history read again from the
+ * host, newest page first, each just older than the one before it, starting
+ * just older than the snapshot's own entries. The kept entries are replaced
+ * with the pages, so history the host removed or reordered doesn't stay. Pages
+ * that stop short of the kept range (a later page failed) leave Load older
+ * where the last one ends. Without a page, or with one from another epoch, the
+ * kept entries are dropped and the snapshot's own "older" state comes back.
  */
 export function withRereadOlderRemoteBotEntries(
   view: RemoteBotSessionView,
   carried: number,
   snapshot: Pick<RemoteBotSessionView, "hasOlder" | "olderCursor">,
-  page: RemoteBotSessionEntriesPage | null,
+  pages: readonly RemoteBotSessionEntriesPage[] | null,
 ): RemoteBotSessionView {
-  const own = view.snapshot.entries.slice(carried);
-  if (page === null || page.botId !== view.snapshot.botId || page.epoch !== view.snapshot.epoch) {
-    return { ...view, snapshot: { ...view.snapshot, entries: own }, ...snapshot };
+  const own: RemoteBotSessionView = { ...view, snapshot: { ...view.snapshot, entries: view.snapshot.entries.slice(carried) } };
+  if (
+    !pages ||
+    pages.length === 0 ||
+    pages.some((page) => page.botId !== view.snapshot.botId || page.epoch !== view.snapshot.epoch)
+  ) {
+    return { ...own, ...snapshot };
   }
-  return withOlderRemoteBotEntries({ ...view, snapshot: { ...view.snapshot, entries: own } }, page);
+  return pages.reduce(withOlderRemoteBotEntries, own);
 }
 
 /**

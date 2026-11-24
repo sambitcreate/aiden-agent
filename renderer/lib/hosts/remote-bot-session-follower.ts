@@ -222,28 +222,47 @@ export class RemoteBotSessionFollower {
 
   /**
    * The host may have rewritten history inside the same epoch (a snapshot
-   * also says so), so older entries kept across a snapshot are read again
-   * and replaced, or dropped if that fails.
+   * also says so), so older entries kept across a snapshot are read again, a
+   * bounded page at a time until all of them are covered, and replaced. A read
+   * that fails keeps the pages already read (Load older continues from there),
+   * or drops the kept entries if none was.
    */
   private rereadCarried(carried: number, fresh: RemoteBotSessionView): void {
     const view = this.state.view;
     if (carried <= 0 || !view) return;
     const own = view.snapshot.entries[carried]?.id;
     const history = this.history;
-    const settle = (page: RemoteBotSessionEntriesPage | null) => {
-      const current = this.state.view;
-      if (this.stopped || history !== this.history || !current) return;
+    const current = () => !this.stopped && history === this.history && this.state.view !== null;
+    const settle = (pages: RemoteBotSessionEntriesPage[]) => {
+      const latest = this.state.view;
+      if (!current() || !latest) return;
       this.history += 1;
-      this.publish({ view: withRereadOlderRemoteBotEntries(current, carried, fresh, page) });
+      this.publish({ view: withRereadOlderRemoteBotEntries(latest, carried, fresh, pages) });
     };
-    if (!own || !this.transport.older) {
-      settle(null);
+    const { transport } = this;
+    if (!own || !transport.older) {
+      settle([]);
       return;
     }
-    this.transport.older(this.hostId, this.botId, own, Math.min(carried, OLDER_PAGE_MAX)).then(
-      (outcome) => settle(outcome.ok ? (outcome.value as RemoteBotSessionEntriesPage) : null),
-      () => settle(null),
-    );
+    const pages: RemoteBotSessionEntriesPage[] = [];
+    const next = (before: string, read: number): void => {
+      if (!transport.older) return settle(pages);
+      transport.older(this.hostId, this.botId, before, Math.min(Math.max(carried - read, 1), OLDER_PAGE_MAX)).then(
+        (outcome) => {
+          if (!current()) return;
+          if (!outcome.ok) return settle(pages);
+          const page = outcome.value as RemoteBotSessionEntriesPage;
+          pages.push(page);
+          const total = read + page.entries.length;
+          const cursor = page.olderCursor ?? page.entries[0]?.id;
+          // Every kept entry is covered, or the host has nothing older.
+          if (total >= carried || !page.hasOlder || !cursor || cursor === before) return settle(pages);
+          next(cursor, total);
+        },
+        () => settle(pages),
+      );
+    };
+    next(own, 0);
   }
 
   private receive(message: PeerBotSessionMessage): void {
