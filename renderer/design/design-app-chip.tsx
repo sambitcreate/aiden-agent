@@ -175,7 +175,8 @@ export function DesignAppStatusChip({ chatId, onShowLogs }: { chatId: string; on
   const [sheet, setSheet] = React.useState<{ kind: "choose" } | { kind: "connect"; filterRoot?: string } | null>(null);
   const triggerRef = React.useRef<HTMLButtonElement>(null);
   const previous = React.useRef<Map<string, DesignAppStatus>>(new Map());
-  const focusLeaves = React.useRef(false);
+  /** The app Show logs picked: the drawer opens once the menu has closed, so its focus trap can't take focus back. */
+  const logsFor = React.useRef<string | null>(null);
 
   // A broadcast with a newer revision for an app replaces its pending state and its inline problem;
   // an app no longer in the snapshot drops its pending state.
@@ -288,8 +289,7 @@ export function DesignAppStatusChip({ chatId, onShowLogs }: { chatId: string; on
       list.push({
         label: "Show logs",
         run: () => {
-          focusLeaves.current = true;
-          onShowLogs(app.appRoot);
+          logsFor.current = app.appRoot;
         },
       });
     }
@@ -312,8 +312,11 @@ export function DesignAppStatusChip({ chatId, onShowLogs }: { chatId: string; on
           className="w-72"
           onCloseAutoFocus={(event) => {
             // Show logs hands focus to the drawer's output; anything else returns it to the chip.
-            if (focusLeaves.current) event.preventDefault();
-            focusLeaves.current = false;
+            const root = logsFor.current;
+            logsFor.current = null;
+            if (root === null || !onShowLogs) return;
+            event.preventDefault();
+            onShowLogs(root);
           }}
         >
           {chip.connectOnly

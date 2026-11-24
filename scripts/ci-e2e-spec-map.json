@@ -229,6 +229,19 @@
       "main/services/follow-through/listening-ports.ts",
       "tests/fixtures/design-app-server/"
     ],
+    "design-app-status.spec.ts": [
+      "renderer/design/design-app-chip",
+      "renderer/design/design-app-logs",
+      "renderer/design/design-app-sheets",
+      "renderer/design/design-app-consent",
+      "renderer/shared/design-app.ts",
+      "main/services/design-canvas/app-server/",
+      "main/handlers/design-app",
+      "main/services/browser/core.ts",
+      "main/services/follow-through/listening-ports.ts",
+      "main/services/terminal.ts",
+      "tests/fixtures/design-app-server/"
+    ],
     "design-canvas.spec.ts": [
       "renderer/components/design",
       "main/services/design-canvas/",
