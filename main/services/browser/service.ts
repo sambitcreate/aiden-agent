@@ -29,6 +29,7 @@ import type {
   BrowserEvent,
   BrowserImage,
   BrowserProfile,
+  BrowserServer,
   BrowserRecording,
   BrowserSnapshot,
   BrowserStylePreview,
@@ -57,6 +58,7 @@ import {
   applyBrowserGuestIdentityHeaders,
   browserGuestUserAgent,
   browserLocalServers,
+  mergeBrowserServers,
   BrowserActionQueue,
   BROWSER_MAX_TABS,
   sameBrowserPage,
@@ -294,6 +296,10 @@ export class BrowserService {
   private readonly popupOwners = new Map<number, { workspaceId: string; ownerDocumentId: string }>();
   private readonly sessions = new Map<string, Session>();
   private readonly terminalTails = new Map<string, string>();
+  /** What each workspace's terminal printed, newest first; merged after its design-mode apps (D12). */
+  private readonly terminalServers = new Map<string, BrowserServer[]>();
+  /** Each workspace's running design-mode apps, from `DesignAppServers` in main. */
+  private readonly designServers = new Map<string, BrowserServer[]>();
   private readonly agentFileAcquisitions = new Map<string, Set<AbortController>>();
   private profiles: BrowserProfile[] = clone(BUILT_IN_BROWSER_PROFILES);
   private readonly deletingProfiles = new Set<string>();
@@ -367,7 +373,7 @@ export class BrowserService {
             this.workspaceAccess.get(id) ?? "inherit",
           ),
           history: [],
-          servers: [],
+          servers: mergeBrowserServers(this.designServers.get(id) ?? [], this.terminalServers.get(id) ?? []),
         },
       };
       this.workspaces.set(id, workspace);
@@ -638,13 +644,26 @@ export class BrowserService {
     if (!tail.slice(-(data.length + 256)).includes("://")) return;
     const servers = browserLocalServers(tail);
     if (!servers.length) return;
+    const terminal = mergeBrowserServers(servers, this.terminalServers.get(workspaceId) ?? []);
+    this.terminalServers.set(workspaceId, terminal);
+    if (this.terminalServers.size > 100) this.terminalServers.delete(this.terminalServers.keys().next().value!);
+    this.updateServers(workspaceId);
+  }
+  /**
+   * Design mode's running apps for a workspace (2c, D12), listed before the
+   * terminal's servers. Fed from main; nothing is probed. Emits only on a change.
+   */
+  setDesignServers(workspaceId: string, servers: readonly BrowserServer[]): void {
+    const next = servers.map((server) => ({ url: server.url, label: server.label }));
+    if (JSON.stringify(this.designServers.get(workspaceId) ?? []) === JSON.stringify(next)) return;
+    if (next.length) this.designServers.set(workspaceId, next);
+    else this.designServers.delete(workspaceId);
+    // A workspace this window never opened gets its list when it is built.
+    if (this.workspaces.has(workspaceId)) this.updateServers(workspaceId);
+  }
+  private updateServers(workspaceId: string): void {
     const workspace = this.workspace(workspaceId);
-    const next = [...servers, ...workspace.state.servers]
-      .filter(
-        (server, index, all) =>
-          all.findIndex((candidate) => candidate.url === server.url) === index,
-      )
-      .slice(0, 12);
+    const next = mergeBrowserServers(this.designServers.get(workspaceId) ?? [], this.terminalServers.get(workspaceId) ?? []);
     if (JSON.stringify(workspace.state.servers) !== JSON.stringify(next)) {
       workspace.state.servers = next;
       this.emit(workspaceId);
@@ -1425,6 +1444,7 @@ export class BrowserService {
     workspace?.removeOwner?.();
     this.workspaces.delete(workspaceId);
     this.terminalTails.delete(workspaceId);
+    this.terminalServers.delete(workspaceId);
     void browserFileService.closeForWorkspace(workspaceId).catch(() => {});
   }
   async shutdown(): Promise<void> {

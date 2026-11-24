@@ -318,6 +318,29 @@ export function browserLocalServers(output: string): Array<{ url: string; label:
   });
 }
 
+/** The most servers the panel lists under Local servers. */
+export const BROWSER_SERVERS_MAX = 12;
+
+/**
+ * The panel's Local servers (design mode 2c, D12): design-mode apps first,
+ * then what the terminal printed, one entry per URL (the first, so a design
+ * app keeps its label), at most 12.
+ */
+export function mergeBrowserServers(
+  design: ReadonlyArray<{ url: string; label: string }>,
+  terminal: ReadonlyArray<{ url: string; label: string }>,
+): Array<{ url: string; label: string }> {
+  const seen = new Set<string>();
+  const merged: Array<{ url: string; label: string }> = [];
+  for (const server of [...design, ...terminal]) {
+    if (seen.has(server.url)) continue;
+    seen.add(server.url);
+    merged.push({ url: server.url, label: server.label });
+    if (merged.length === BROWSER_SERVERS_MAX) break;
+  }
+  return merged;
+}
+
 type BrowserActionSource = "user" | "agent";
 type BrowserQueuedAction = { source: BrowserActionSource; cancelled: boolean };
 

@@ -7,8 +7,10 @@ import os from "node:os";
 import path from "node:path";
 import { findEnvKeys, getProviders } from "@earendil-works/pi-ai/compat";
 import { persistedChatWorkspaceId } from "../../../renderer/shared/chat-workspace.js";
+import { designBrowserServers } from "../../../renderer/shared/design-app.js";
 import { app, ipcMain, logger } from "../../platform.js";
 import { reportAnalyticsEvent } from "../analytics/analytics-report.js";
+import { browserService } from "../browser/service.js";
 import { chatStore } from "../chat-store.js";
 import { configStore } from "../config-store.js";
 import { DesignCanvasSnapshots } from "./canvas-snapshots.js";
@@ -334,3 +336,5 @@ export const designAppServers = new DesignAppServers({
 
 // Every window hears each workspace's app status; it carries no output beyond a crash's bounded tail.
 designAppServers.onStatus((snapshot) => ipcMain.broadcast("designApp:status", snapshot));
+// D12: running design apps, started and attached, lead the browser panel's Local servers.
+designAppServers.onStatus((snapshot) => browserService.setDesignServers(snapshot.workspaceId, designBrowserServers(snapshot)));
