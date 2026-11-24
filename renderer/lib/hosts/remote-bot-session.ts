@@ -327,7 +327,8 @@ export function withOlderRemoteBotEntries(
  * (`carryOlderRemoteBotEntries`); `pages` are that history read again from the
  * host, newest page first, each just older than the one before it, starting
  * just older than the snapshot's own entries. The kept entries are replaced
- * with the pages, so history the host removed or reordered doesn't stay. Pages
+ * with the pages, so history the host removed or reordered doesn't stay, and
+ * cut back to the oldest kept entry when they reach past it. Pages
  * that stop short of the kept range (a later page failed) leave Load older
  * where the last one ends. Without a page, or with one from another epoch, the
  * kept entries are dropped and the snapshot's own "older" state comes back.
@@ -351,7 +352,20 @@ export function withRereadOlderRemoteBotEntries(
   ) {
     return { ...own, ...snapshot };
   }
-  return pages.reduce(withOlderRemoteBotEntries, own);
+  const reread = pages.reduce(withOlderRemoteBotEntries, own);
+  // Pages that reached past the oldest kept entry are cut back to it, so history
+  // older than what was shown before isn't added; Load older resumes where it was.
+  const oldest = view.snapshot.entries[0]?.id;
+  const at = carried > 0 && oldest !== undefined ? reread.snapshot.entries.findIndex((entry) => entry.id === oldest) : -1;
+  if (at <= 0) return reread;
+  return {
+    ...reread,
+    snapshot: { ...reread.snapshot, entries: reread.snapshot.entries.slice(at) },
+    hasOlder: view.hasOlder,
+    olderCursor: view.olderCursor,
+    olderLoaded: (reread.olderLoaded ?? 0) - at,
+    olderHostSpan: view.olderHostSpan ?? 0,
+  };
 }
 
 /**
