@@ -558,6 +558,7 @@ export function BotSidebar() {
           {list}
           <RemoteBotsSection
             groups={remoteShown}
+            listed={remote.groups}
             opening={remote.opening}
             selected={hostBotChatRouteKey(pathname)}
             onOpen={remote.open}

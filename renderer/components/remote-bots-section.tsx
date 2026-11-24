@@ -52,15 +52,22 @@ export function remoteBotGroupsMatching(groups: readonly RemoteBotGroup[], query
  * Bots that live on paired Macs, grouped by Mac, as rows in the Bots sidebar.
  * Opening one opens its chat on that Mac; nothing about a remote Bot is stored
  * or run on this one. The sidebar narrows `groups` with its search first
- * (`remoteBotGroupsMatching`).
+ * (`remoteBotGroupsMatching`) and passes every Bot as `listed`.
  */
 export function RemoteBotsSection({
   groups,
+  listed = groups,
   opening,
   selected = null,
   onOpen,
 }: {
   groups: readonly RemoteBotGroup[];
+  /**
+   * Every paired Mac's Bots before search narrows `groups`. A host's unread
+   * baseline is taken from these, since a search that hides some of a host's
+   * Bots would leave their replies out of it.
+   */
+  listed?: readonly RemoteBotGroup[];
   /** `hostId/botId` of the Bot whose chat is being opened; a click on any row waits for it. */
   opening: string | null;
   /** `hostId/botId` of the Bot whose chat is open. */
@@ -71,8 +78,8 @@ export function RemoteBotsSection({
   // The replies a host's Bots had when this Mac first lists them start read.
   // The open Bot's chat records what it shows itself (`RemoteBotChatView`).
   React.useEffect(() => {
-    for (const { host, bots } of groups) markRemoteBotHostListed(host.id, bots);
-  }, [groups]);
+    for (const { host, bots } of listed) markRemoteBotHostListed(host.id, bots);
+  }, [listed]);
   if (groups.length === 0) return null;
   return (
     <div className="mt-5 flex flex-col gap-5" data-remote-bots="true">
