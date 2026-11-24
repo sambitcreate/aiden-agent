@@ -49,6 +49,12 @@ export interface AidenRemoteHostFeedBotSignals {
    * most `AIDEN_REMOTE_HOST_FEED_BOT_PREVIEW_MAX` characters.
    */
   preview?: string;
+  /**
+   * Revision 66: `preview` and `lastReplyAt` come from the Bot's summary, so
+   * their absence means the Bot has none. A paired Mac waits for it before
+   * setting a host's unread baseline (`withRemoteBotHostListed`).
+   */
+  summarized?: true;
 }
 
 /** The Inbox signals and preview of one Bot from its live summary; none when the summary is unknown. */
@@ -66,6 +72,7 @@ export function hostFeedBotSignals(
     ...(failed ? { failed: true as const } : {}),
     ...(replied && Number.isFinite(replied.getTime()) ? { lastReplyAt: replied.toISOString() } : {}),
     ...(preview ? { preview } : {}),
+    summarized: true,
   };
 }
 
