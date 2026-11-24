@@ -216,8 +216,8 @@ interface LiveTab {
   closing: boolean;
   expectedInputs: Array<{ type: string; key?: string; button?: string; modifiers?: number; expires: number }>;
   picking?: boolean;
-  /** `release` drops the background-throttling lease that keeps a covered tab's frames running while grabbing. */
-  grab?: { token: symbol; accent: GrabbedElementAccent; source: BrowserGrabSource; release: () => void };
+  /** `pageUrl` is the page's URL when the grab started; payloads are judged against it. */
+  grab?: { token: symbol; accent: GrabbedElementAccent; source: BrowserGrabSource; pageUrl: string };
   crashTimes: number[];
   crashTimer?: ReturnType<typeof setTimeout>;
   pendingNavigationUrl?: string;
@@ -2441,10 +2441,7 @@ export class BrowserService {
     const resolvedAccent = resolveGrabAccent(accent);
     const token = Symbol("browser-grab");
     const grabSource: BrowserGrabSource = source === "shortcut" ? "shortcut" : "toolbar";
-    // The picker waits on page animation frames, which a hidden or occluded page
-    // would otherwise pause.
-    tab.grab?.release();
-    tab.grab = { token, accent: resolvedAccent, source: grabSource, release: tab.backgroundThrottling.acquire() };
+    tab.grab = { token, accent: resolvedAccent, source: grabSource, pageUrl: wc.getURL() };
     tab.state.grabbing = true;
     this.emit(tab.state.workspaceId);
 
@@ -2470,7 +2467,6 @@ export class BrowserService {
 
   private async stopGrab(tab: LiveTab, reason: BrowserGrabEndReason): Promise<void> {
     if (!tab.grab) return;
-    tab.grab.release();
     tab.grab = undefined;
     tab.state.grabbing = false;
     const wc = tab.view.webContents;
@@ -2559,11 +2555,13 @@ export class BrowserService {
         await this.stopGrab(tab, "cancelled");
         return;
       }
+      const grabPageUrl = tab.grab.pageUrl;
 
       try {
         const workspace = await configStore.getWorkspace(tab.state.workspaceId).catch(() => undefined);
         const sanitized = await sanitizeRawGrabPayload(raw, {
           pageUrl: wc.getURL(),
+          grabPageUrl,
           pageTitle: wc.getTitle(),
           workspaceRoot: workspace?.folderPath,
           zoomFactor: tab.state.zoom,

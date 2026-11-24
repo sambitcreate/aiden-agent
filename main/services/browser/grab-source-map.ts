@@ -214,6 +214,19 @@ export function grabSourceAuthority(pageUrl: string | undefined): GrabSourceAuth
   return isAllowedSourceMapUrl(parsed.href) ? { kind: "http", origin: parsed.origin } : undefined;
 }
 
+/**
+ * Whether two page URLs grant the same source authority. A grab payload's stack
+ * belongs to the page it was taken on, so it may only be judged against that
+ * page's origin.
+ */
+export function sameGrabSourceAuthority(first: string | undefined, second: string | undefined): boolean {
+  const a = grabSourceAuthority(first);
+  const b = grabSourceAuthority(second);
+  if (!a || !b) return !a && !b;
+  if (a.kind === "file" || b.kind === "file") return a.kind === b.kind;
+  return a.origin === b.origin;
+}
+
 /** Whether a guest-supplied script or map URL falls under the page's authority. */
 export function isAuthorizedSourceUrl(rawUrl: string, authority: GrabSourceAuthority | undefined): boolean {
   if (!authority || !isAllowedSourceMapUrl(rawUrl)) return false;

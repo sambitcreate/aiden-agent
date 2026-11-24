@@ -10,7 +10,11 @@ import {
 import { browserDisplayUrl, browserMeasuredViewport } from "./core.js";
 import type { CssRect } from "./credential-fields.js";
 import type { RawGrabComponentFrame, RawGrabSourceHint } from "./grab-runtime/inspect-react.js";
-import { defaultGrabSourceMapResolver, type LocalGrabSourceMapResolver } from "./grab-source-map.js";
+import {
+  defaultGrabSourceMapResolver,
+  sameGrabSourceAuthority,
+  type LocalGrabSourceMapResolver,
+} from "./grab-source-map.js";
 
 const FRAMEWORK_SET = new Set<string>(GRABBED_ELEMENT_FRAMEWORKS);
 const TAG_NAME_PATTERN = /^[a-z][a-z0-9:_-]{0,63}$/u;
@@ -27,6 +31,12 @@ const SECRET_VALUE_PATTERN =
 export interface SanitizeGrabOptions {
   /** Authoritative URL from `webContents.getURL()` — never trust guest `location.href`. */
   pageUrl: string;
+  /**
+   * Authoritative URL recorded when the grab started. When the page has since
+   * moved to another origin, the payload's stack belongs to the old page, so no
+   * source hint is resolved or reported.
+   */
+  grabPageUrl?: string;
   /** Authoritative title from `webContents.getTitle()`. */
   pageTitle?: string;
   workspaceRoot?: string;
@@ -218,6 +228,8 @@ export async function sanitizeRawGrabPayload(
   const pageUrl = stripUrlCredentials(options.pageUrl);
   // The resolver binds source-map reads to this authoritative page origin.
   const sourceAuthority = { pageUrl: options.pageUrl };
+  const sourceHintsTrusted =
+    options.grabPageUrl === undefined || sameGrabSourceAuthority(options.grabPageUrl, options.pageUrl);
 
   const rawTag = typeof rec.tagName === "string" ? rec.tagName.trim().toLowerCase() : "div";
   const tagName = TAG_NAME_PATTERN.test(rawTag) ? rawTag : "div";
@@ -238,7 +250,7 @@ export async function sanitizeRawGrabPayload(
       if (!name) return;
       const env = (frame as { environment?: unknown }).environment;
       const minified = (frame as { minified?: unknown }).minified === true;
-      const hint = sanitizeSourceHint((frame as { source?: unknown }).source);
+      const hint = sourceHintsTrusted ? sanitizeSourceHint((frame as { source?: unknown }).source) : undefined;
       // Symbolicate up to the top 5 component frames to stay fast.
       const source =
         index < 5 && hint
@@ -253,7 +265,7 @@ export async function sanitizeRawGrabPayload(
   );
   const componentStack = resolvedFrames.filter(Boolean);
 
-  const topSourceHint = sanitizeSourceHint(rec.source);
+  const topSourceHint = sourceHintsTrusted ? sanitizeSourceHint(rec.source) : undefined;
   const resolvedTopSource =
     (topSourceHint
       ? await resolver.resolveSourceHint(topSourceHint, options.workspaceRoot, sourceAuthority)

@@ -30,7 +30,11 @@ function colorToRgba(color: string, alpha: number): string {
   return `rgba(0, 106, 214, ${alpha})`;
 }
 
-/** A hidden page may never paint, so a timer bounds the wait for the next frame. */
+/**
+ * Waits for the next animation frame, bounded by a 100 ms timer. This is a
+ * bound, not a throttling fix: a page that does not paint (hidden, occluded or
+ * throttled) would otherwise leave the capture handshake waiting forever.
+ */
 function nextFrame(): Promise<void> {
   return new Promise((resolve) => {
     const timer = setTimeout(resolve, 100);

@@ -340,3 +340,52 @@ test("a grabbed credential field never carries its live value in props, whatever
   assert.deepEqual(wrapper.element.props, { current: "[redacted]", pin: "[redacted]", disabled: false });
   assert.doesNotMatch(JSON.stringify([controlled.element, typed.element, wrapper.element]), /hunter2|4321/);
 });
+
+test("a payload taken before the page moved to another origin carries no source hint and fetches nothing", async () => {
+  const fetchedUrls: string[] = [];
+  const sourceMapJson = JSON.stringify({ version: 3, sources: ["src/components/Card.tsx"], mappings: "AAUI" });
+  const inlineMap = `data:application/json;base64,${Buffer.from(sourceMapJson, "utf8").toString("base64")}`;
+  const resolver = new LocalGrabSourceMapResolver({
+    fetchImpl: (async (input: RequestInfo | URL) => {
+      fetchedUrls.push(String(input));
+      return new Response(`console.log(1);\n//# sourceMappingURL=${inlineMap}\n`, { status: 200 });
+    }) as typeof fetch,
+  });
+  // The stale stack names the new page's origin, so only the grab-start URL can tell it apart.
+  const raw = {
+    framework: "react",
+    componentName: "Card",
+    componentStack: [
+      { name: "Card", source: { debugStack: "Error\n    at Card (http://localhost:5173/chunks/card.js:1:1)" } },
+      { name: "Shell", source: { fileName: "/Users/dev/app/src/Shell.tsx", lineNumber: 3 } },
+    ],
+    source: { debugStack: "Error\n    at Card (http://localhost:5173/chunks/card.js:1:1)" },
+    tagName: "div",
+    selector: "div.card",
+    htmlSnippet: '<div class="card">Hi</div>',
+    boundingBox: { x: 0, y: 0, width: 100, height: 50 },
+    viewport: { width: 1280, height: 720, devicePixelRatio: 1 },
+  };
+  const base = { workspaceRoot: "/Users/dev/app", capturedAt: 1, sourceMapResolver: resolver };
+
+  const moved = await sanitizeRawGrabPayload(raw, {
+    ...base,
+    id: "moved_origin",
+    pageUrl: "http://localhost:5173/",
+    grabPageUrl: "http://localhost:3000/dashboard",
+  });
+  assert.equal(moved.element.source, undefined);
+  assert.deepEqual(moved.element.componentStack, [{ name: "Card" }, { name: "Shell" }]);
+  assert.deepEqual(fetchedUrls, []);
+
+  // A same-origin route change during the grab keeps the page's source hints.
+  const routed = await sanitizeRawGrabPayload(raw, {
+    ...base,
+    id: "same_origin",
+    pageUrl: "http://localhost:5173/settings",
+    grabPageUrl: "http://localhost:5173/",
+  });
+  assert.deepEqual(routed.element.source, { filePath: "src/components/Card.tsx", line: 11, column: 5, symbolicated: true });
+  assert.deepEqual(routed.element.componentStack?.[1]?.source, { filePath: "src/Shell.tsx", line: 3, symbolicated: false });
+  assert.deepEqual(fetchedUrls, ["http://localhost:5173/chunks/card.js"]);
+});
