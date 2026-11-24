@@ -80,8 +80,10 @@ from the new base automatically.
    - Creates the unprivileged `aiden-bot` user (no sudo privileges) for
      `computer_shell` isolation, with narrowly scoped sudoers rules for
      `lume` to run commands as `aiden-bot` and stop its processes during sign-in,
-   - Mounts `<botHome>/Computer` over `virtiofs` at `/mnt/aiden-shared` and
-     links `~/Shared` for both `lume` and `aiden-bot`,
+   - Mounts the VM's `Computer` folder over `virtiofs` at
+     `/mnt/aiden-shared/Computer`, linking `~/Shared` for both `lume` and
+     `aiden-bot` and `~/Bots` (`lume`) / `~/bots` (`aiden-bot`) to its `bots/`
+     subfolder,
    - Starts LightDM, copies Aiden's pinned Linux arm64 `cua-driver` binary and
      MIT notice over SSH, verifies its SHA-256 against Aiden's compiled pin,
      starts it as a `systemd --user` service, and probes element control,
@@ -148,12 +150,14 @@ interrupted while it was being made is marked for **Reset**.
   cancelling a queued Bot removes it cleanly from the queue. Taking over the
   screen or opening a sign-in handoff on a shared VM blocks all Bots assigned to
   it and stops `aiden-bot` processes before handing you the desktop.
-- **Shared and per-Bot folders.** Each shared Linux VM mounts a host workspace
-  folder (`bot-computers/computers/<computerId>/workspace/`) over `virtiofs`
-  containing `shared/` (linked at `~/Shared`) and `bots/<botDir>/` (one folder
-  per assigned Bot). `computer_shell` starts in the calling Bot's own folder by
-  default while `~/Shared` sits right beside it. Deleting a Bot disconnects it
-  from the shared computer without deleting the shared VM.
+- **Shared and per-Bot folders.** Shared (`shared`) and pool (`vm-*`) Linux VMs
+  mount `bot-computers/computers/<computerId>/Computer/` directly over `virtiofs`
+  at `/mnt/aiden-shared/Computer` (`~/Shared`), with per-Bot subfolders inside it
+  at `bots/<botDir>/` (`~/Bots/<botDir>` for `lume` and `~/bots/<botDir>` for
+  `aiden-bot`). Legacy per-Bot VMs (`aiden-bot-*`) mount `<botHome>/Computer/`
+  the same way. `computer_shell` starts in the calling Bot's own `~/bots/<botDir>`
+  folder by default while `~/Shared` sits right beside it. Deleting a Bot
+  disconnects it from the shared computer without deleting the shared VM.
 
 ## Limits
 
@@ -300,29 +304,35 @@ Aiden's data folder for owner-Mac debugging. Delete recordings afterwards.
   root login are turned off in the guest, agent and X11 forwarding are off, and
   nothing from the person's `~/.ssh` is used. The guest's account password is
   random and kept in Aiden's encrypted secret store.
-- **Shared folder.** Only the Bot's `Computer` folder (inside its Aiden home)
-  is shared into its computer, read-write over `virtiofs` at
-  `/mnt/aiden-shared`, where it appears as `~/Shared` for both `lume` and
-  `aiden-bot`.
+- **Shared folder.** Only the VM's `Computer` folder is shared into the guest,
+  read-write over `virtiofs` at `/mnt/aiden-shared/Computer` (`~/Shared` for both
+  `lume` and `aiden-bot`, with per-Bot subfolders under `bots/<botDir>/` linked
+  at `~/Bots/<botDir>` for `lume` and `~/bots/<botDir>` for `aiden-bot`):
+  `bot-computers/computers/<computerId>/Computer/` for the shared computer and
+  pool VMs, and `<botHome>/Computer/` for legacy per-Bot VMs.
 - **Guest network.** Bot computers use Lume's default shared (NAT) network, so
   a guest can reach the internet and, like any NAT guest, services that listen
   on this Mac.
 
 ## Removal
 
-- **Remove** in a Bot's Advanced tab stops and deletes that Bot's computer.
-  Files in the Bot's `Computer` folder stay, and you can give the Bot a new
-  computer later.
-- **Reset** deletes the Bot's computer and makes a fresh copy of the current
-  base. Files in the `Computer` folder stay.
-- **Delete Bot** stops and deletes its computer, then erases the Bot's files,
-  including its `Computer` folder.
+- **Remove** in a Bot's Advanced tab disconnects the Bot from the shared
+  computer (leaving the shared VM intact for other Bots) or stops and deletes a
+  dedicated VM that only that Bot uses. Files in the Bot's `<botHome>/Computer`
+  folder stay, and you can assign the Bot a computer later.
+- **Reset** deletes the VM and makes a fresh copy of the current base. Files in
+  the mounted `Computer` folder stay.
+- **Delete Bot** disconnects the Bot from the shared computer (without deleting
+  the shared VM) or stops and deletes a dedicated VM that only that Bot used,
+  then erases the Bot's files, including its `<botHome>/Computer` folder.
 - **Remove everything** in Settings → Computers & VMs → Bot computers asks
   first, then stops and deletes every Bot computer (including one an earlier
   launch left running), the base, the Linux download and any partial download,
-  Aiden's SSH key and pinned host key, the guest password, and the Bot-computer
-  settings. Files in each Bot's `Computer` folder stay. To use Bot computers
-  again, choose Set up, which downloads Debian Linux again.
+  Aiden's SSH key and pinned host key, the guest password, the Bot-computer
+  settings, and everything under `bot-computers/` (including
+  `bot-computers/computers/` for shared and pool VMs). Each Bot's own
+  `<botHome>/Computer` folder stays. To use Bot computers again, choose Set up,
+  which downloads Debian Linux again.
 - **One at a time, in order:** Give, Reset, Remove and Delete Bot for the same
   Bot wait for each other and run in the order you chose them. Remove
   everything waits for any already chosen, and anything chosen after it waits
