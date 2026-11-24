@@ -127,6 +127,24 @@ test("a symlink inside the workspace is followed; one leading out is invalid; a 
   });
 });
 
+test("a DESIGN.md linked to a credential file is skipped, never located", async () => {
+  await withBase(async (base, ws) => {
+    await writeTree(base, {
+      "ws/.env": "SECRET_TOKEN=abc\n",
+      "ws/web/DESIGN.md": { symlink: "../.env" },
+      "ws/admin/.npmrc": "//registry/:_authToken=abc\n",
+      "ws/admin/DESIGN.md": { symlink: ".npmrc" },
+      "ws/DESIGN.md": DOC,
+    });
+    assert.deepEqual(await locateDesignMd(ws, "web", null), { path: "DESIGN.md", source: "workspace" });
+    assert.deepEqual(await locateDesignMd(ws, "admin", null), { path: "DESIGN.md", source: "workspace" });
+    assert.deepEqual(await locateDesignMd(ws, "web", config({ root: "web", designMd: "web/DESIGN.md" })), {
+      missing: true,
+      searched: ["web/DESIGN.md"],
+    });
+  });
+});
+
 test("an unsafe app root is invalid", async () => {
   await withBase(async (_base, ws) => {
     for (const root of ["..", "/etc", "./web", "a b"]) {

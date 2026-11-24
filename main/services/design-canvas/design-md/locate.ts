@@ -15,6 +15,7 @@ import { isPathInside } from "../../../shared/path-containment.js";
 import { detectWebApp, readBounded } from "../app-server/app-detect.js";
 import type { WebAppDetection } from "../app-server/app-server-core.js";
 import { describedRoots, isSafeWorkspaceRelativePath, type CanvasConfig } from "../canvas-config.js";
+import { isCredentialTarget } from "./credential-paths.js";
 
 export const DESIGN_MD_NAME = "DESIGN.md";
 const MAX_RESOLVED_ROOTS = 8;
@@ -56,7 +57,10 @@ function foldersUp(appRoot: string): string[] {
 
 type EntryCheck = "file" | "skip" | "outside";
 
-/** A regular file, or a symlink whose real target is a regular file inside the workspace. */
+/**
+ * A regular file, or a symlink whose real target is a regular file inside the
+ * workspace. A target the credential policy protects is skipped (S11).
+ */
 async function checkEntry(realRoot: string, fullPath: string): Promise<EntryCheck> {
   let info;
   try {
@@ -73,6 +77,7 @@ async function checkEntry(realRoot: string, fullPath: string): Promise<EntryChec
     return "skip";
   }
   if (!isPathInside(realRoot, target)) return "outside";
+  if (isCredentialTarget(realRoot, target)) return "skip";
   try {
     return (await stat(target)).isFile() ? "file" : "skip";
   } catch {

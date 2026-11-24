@@ -22,6 +22,7 @@ import {
   type LintFailureStatus,
 } from "./lint-client.js";
 import type { DesignMdSource, LocatedDesignMd } from "./locate.js";
+import { isCredentialTarget } from "./credential-paths.js";
 import { canonicalSection } from "./sections.js";
 
 export const DESIGN_MD_MAX_BYTES = 65_536;
@@ -170,6 +171,10 @@ export class DesignMdReader {
       return { ok: false, state: { status: "unreadable", ...file } };
     }
     if (!isPathInside(realRoot, realPath)) return { ok: false, state: { status: "invalid", reason: "outside-workspace" } };
+    // A DESIGN.md that is, or links to, a credential file is never read (S11).
+    if (isCredentialTarget(realRoot, realPath) || isCredentialTarget(realRoot, path.join(realRoot, ...located.path.split("/")))) {
+      return { ok: false, state: { status: "unreadable", ...file } };
+    }
     try {
       const info = await lstat(realPath);
       if (!info.isFile()) return { ok: false, state: { status: "unreadable", ...file } };

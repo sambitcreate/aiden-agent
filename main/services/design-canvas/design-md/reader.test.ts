@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import test from "node:test";
@@ -146,6 +146,23 @@ test("a vanished file, a FIFO or a folder reads as unreadable without hanging", 
     await rm(path.join(ws, "DESIGN.md"));
     await mkdir(path.join(ws, "DESIGN.md"));
     assert.equal((await reader.read(ws, at("DESIGN.md"))).status, "unreadable");
+    assert.equal(counter.runs, 0);
+  });
+});
+
+test("a DESIGN.md that resolves to a credential file is unreadable and never linted", async () => {
+  await withWorkspace(async (ws) => {
+    const { reader, counter } = countingReader();
+    await writeFile(path.join(ws, ".env"), "---\nname: SECRET_TOKEN=abc\n---\n\n## Overview\n");
+    await symlink(".env", path.join(ws, "DESIGN.md"));
+    await mkdir(path.join(ws, "keys"));
+    await writeFile(path.join(ws, "keys", "id_rsa"), "SECRET_KEY\n");
+    await symlink(path.join("keys", "id_rsa"), path.join(ws, "keys.md"));
+    for (const relative of ["DESIGN.md", "keys.md"]) {
+      const state = await reader.read(ws, at(relative));
+      assert.deepEqual(state, { status: "unreadable", path: relative, source: "workspace" }, relative);
+      assert.equal((await reader.export(ws, at(relative), "css-vars")).status, "unreadable", relative);
+    }
     assert.equal(counter.runs, 0);
   });
 });
