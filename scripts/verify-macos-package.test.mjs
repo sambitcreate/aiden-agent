@@ -1045,7 +1045,7 @@ test("package verifier requires Lume's virtualization entitlements and an arm64-
 
 test("package verifier validates packaged Linux arm64 guest cua-driver and rejects tampering", async (t) => {
   const { createHash } = await import("node:crypto");
-  const root = await mkdtemp(path.join(os.tmpdir(), "aiden-verify-linux-driver-"));
+  const root = await realpath(await mkdtemp(path.join(os.tmpdir(), "aiden-verify-linux-driver-")));
   t.after(() => rm(root, { recursive: true, force: true }));
 
   const elfAarch64 = Buffer.alloc(32);

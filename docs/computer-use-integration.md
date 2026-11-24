@@ -275,7 +275,7 @@ over AT-SPI:
   compiled byte size and SHA-256), copy it into the base VM over Aiden's SSH
   with `LICENSE.cua-driver.md` beside it, and re-verify its SHA-256 in the
   guest with `/usr/bin/sha256sum` before placing it in
-  `~/.local/libexec/aiden-cua-driver`. The guest never downloads a driver,
+  `~/.local/share/aiden/cua-driver/cua-driver`. The guest never downloads a driver,
   never resolves one from `PATH`, and never runs the installer or the
   self-updater.
 - Aiden's broker stays on the Mac and is not copied: inside the guest the
