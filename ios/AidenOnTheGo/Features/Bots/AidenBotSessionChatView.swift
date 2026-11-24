@@ -1096,10 +1096,14 @@ struct AidenBotSessionChatView: View {
     private func approvalCard(_ approval: AidenRemoteBotApproval, model: AidenBotSessionModel) -> some View {
         if let card = approval.card {
             // Revision 61: the Mac's card, with Always among its own buttons.
-            AidenTypedApprovalCard(card: card, canRespond: canRespondToApprovals, sendableScopes: model.sendableScopes(for: approval)) { button in
+            AidenTypedApprovalCard(
+                card: card,
+                canRespond: canRespondToApprovals,
+                sendableScopes: model.sendableScopes(for: approval),
+                answersEnabled: canRespondToApprovals && model.canAnswerApproval
+            ) { button in
                 Task { await model.answerApproval(button: button) }
             }
-            .disabled(!canRespondToApprovals || !model.canAnswerApproval)
             .id(approval.waitId)
         } else {
             legacyApprovalCard(approval, model: model)

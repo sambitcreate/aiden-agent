@@ -441,8 +441,9 @@ enum AidenDemoHosts {
         }
         if AidenDemoBotUX.isRequested {
             // Revision 61: the Mac offers the five opt-ins and this phone holds them.
-            installation.deviceCapabilities += AidenRemoteCapability.botUX + [.botMessaging, .botAllowed]
-            installation.serverCapabilities? += AidenRemoteCapability.botUX + [.botMessaging, .botAllowed]
+            // Revision 69: and the command's plain words on the card.
+            installation.deviceCapabilities += AidenRemoteCapability.botUX + [.botMessaging, .botAllowed, .approvalPlainWords]
+            installation.serverCapabilities? += AidenRemoteCapability.botUX + [.botMessaging, .botAllowed, .approvalPlainWords]
         }
         return installation
     }
