@@ -24,28 +24,24 @@ enum class AidenRemoteFailurePolicy {
     BEFORE_EFFECT_REFUSAL,
 
     /**
-     * Durable idempotency ledger routes (`executeAidenDurableOperation`) aligned with
-     * `protocol/aiden-remote/v1/fixtures/bot-outbox-delivery.json` (`messages`, Bot session
-     * control actions, scheduled task run-now, Bot create):
-     * - `5xx`, `408`, `429`, and `409 idempotency_in_flight` are ambiguous (keep key).
+     * Durable idempotency ledger routes (`executeAidenDurableOperation` and
+     * `AidenIdempotencyLedger`) aligned with
+     * `protocol/aiden-remote/v1/fixtures/bot-outbox-delivery.json`: `messages`, Bot session
+     * control actions, scheduled task run-now, Bot create, chat `fork`, `continue-in-new-chat`
+     * and `new-worktree`.
+     * - Structured `5xx`, `408` and `429` responses, and `idempotency_in_flight`, are ambiguous
+     *   (keep key).
      * - Other structured 4xx responses with a genuinely decoded error envelope (including
      *   replayed settled rejections such as `409 internal_error` and `409 idempotency_conflict`)
      *   settle the key.
      * - Unreadable/malformed error envelopes ([AidenRemoteClientException.Server.isDecodedEnvelope]
      *   == `false`), unstructured [AidenRemoteClientException.UnexpectedStatus], transport/parse
      *   failures, and [CancellationException] are ambiguous (keep key), because an unreadable HTTP
-     *   409 may have been `409 idempotency_in_flight`.
+     *   409 may have been `409 idempotency_in_flight`. A route that passes
+     *   `unreadableResponseAmbiguous = false` to [AidenRemoteFailureClassification.isAmbiguous]
+     *   spends the key on unreadable non-409 responses instead.
      */
-    CACHED_REJECTION_LEDGER,
-
-    /**
-     * Durable idempotency ledger routes (`fork`, `continue-in-new-chat`, `new-worktree`) where
-     * the host caches every structured server rejection under the key for 24 hours:
-     * - `409 idempotency_in_flight`, unreadable/malformed error envelopes (including any
-     *   undecodable HTTP 409), transport failures, and [CancellationException] keep the key;
-     *   any other genuinely decoded [AidenRemoteClientException.Server] response spends it.
-     */
-    CACHED_REJECTION_LEDGER_STRICT
+    CACHED_REJECTION_LEDGER
 }
 
 object AidenRemoteFailureClassification {
@@ -122,9 +118,7 @@ object AidenRemoteFailureClassification {
         return when (policy) {
             AidenRemoteFailurePolicy.BEFORE_EFFECT_REFUSAL -> isBeforeEffectAmbiguous(error)
             AidenRemoteFailurePolicy.CACHED_REJECTION_LEDGER ->
-                isCachedRejectionLedgerAmbiguous(error)
-            AidenRemoteFailurePolicy.CACHED_REJECTION_LEDGER_STRICT ->
-                isCachedRejectionLedgerStrictAmbiguous(error, unreadableResponseAmbiguous)
+                isCachedRejectionLedgerAmbiguous(error, unreadableResponseAmbiguous)
         }
     }
 
@@ -138,16 +132,7 @@ object AidenRemoteFailureClassification {
         else -> true
     }
 
-    private fun isCachedRejectionLedgerAmbiguous(error: Throwable): Boolean = when (error) {
-        is AidenRemoteClientException.Server ->
-            !error.isDecodedEnvelope ||
-                isTransientHttpStatus(error.statusCode) ||
-                (error.statusCode == 409 && error.body.code == AidenRemoteErrorCode.IDEMPOTENCY_IN_FLIGHT)
-        is AidenRemoteClientException.UnexpectedStatus -> true
-        else -> true
-    }
-
-    private fun isCachedRejectionLedgerStrictAmbiguous(
+    private fun isCachedRejectionLedgerAmbiguous(
         error: Throwable,
         unreadableResponseAmbiguous: Boolean
     ): Boolean = when (error) {
@@ -155,7 +140,8 @@ object AidenRemoteFailureClassification {
             if (!error.isDecodedEnvelope) {
                 unreadableResponseAmbiguous || error.statusCode == 409
             } else {
-                error.body.code == AidenRemoteErrorCode.IDEMPOTENCY_IN_FLIGHT
+                isTransientHttpStatus(error.statusCode) ||
+                    error.body.code == AidenRemoteErrorCode.IDEMPOTENCY_IN_FLIGHT
             }
         is AidenRemoteClientException.UnexpectedStatus ->
             unreadableResponseAmbiguous || error.statusCode == 409

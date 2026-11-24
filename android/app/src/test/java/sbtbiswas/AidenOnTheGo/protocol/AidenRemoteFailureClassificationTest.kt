@@ -200,7 +200,7 @@ class AidenRemoteFailureClassificationTest {
     }
 
     @Test
-    fun cachedRejectionLedgerMatchesSharedBotOutboxFixtureAndPreservesStrictReplayContract() {
+    fun cachedRejectionLedgerRoutesMatchSharedBotOutboxFixture() {
         val relative = "protocol/aiden-remote/v1/fixtures/bot-outbox-delivery.json"
         val root = generateSequence(File(System.getProperty("user.dir")!!).absoluteFile) { it.parentFile }
             .first { File(it, relative).isFile }
@@ -220,12 +220,13 @@ class AidenRemoteFailureClassificationTest {
                 AidenRemoteFailureClassification.isAmbiguous(error, AidenRemoteFailurePolicy.CACHED_REJECTION_LEDGER)
             )
             assertEquals(name, expected, aidenScheduledRunFailureIsAmbiguous(error))
+            // Fork, continue-in-new-chat and new-worktree are cached-rejection-ledger routes too:
+            // a structured 5xx, 408 or 429 keeps the key, like every other ledger route.
+            assertEquals("fork: $name", expected, AidenChatForkErrors.isOutcomeUnknown(error))
+            assertEquals("new-worktree: $name", expected, !AidenNewWorktreeRetry.spendsKey(error))
         }
 
-        // Strict cached-rejection endpoints spend the key on 500 internal_error as well.
-        val server500 = server(500, AidenRemoteErrorCode.INTERNAL_ERROR)
-        assertFalse(AidenChatForkErrors.isOutcomeUnknown(server500))
-        assertTrue(AidenNewWorktreeRetry.spendsKey(server500))
+        // Only an unreadable non-409 answer separates new-worktree: the Mac would replay it.
         assertTrue(AidenNewWorktreeRetry.spendsKey(AidenRemoteClientException.UnexpectedStatus(502)))
         assertTrue(AidenNewWorktreeRetry.spendsKey(AidenRemoteClientException.InvalidResponse()))
         assertFalse(AidenNewWorktreeRetry.spendsKey(SocketTimeoutException("timeout")))
@@ -345,7 +346,6 @@ class AidenRemoteFailureClassificationTest {
         assertFalse(malformed400.isDecodedEnvelope)
         assertTrue(AidenRemoteFailureClassification.isAmbiguous(malformed400, AidenRemoteFailurePolicy.BEFORE_EFFECT_REFUSAL))
         assertTrue(AidenRemoteFailureClassification.isAmbiguous(malformed400, AidenRemoteFailurePolicy.CACHED_REJECTION_LEDGER))
-        assertTrue(AidenRemoteFailureClassification.isAmbiguous(malformed400, AidenRemoteFailurePolicy.CACHED_REJECTION_LEDGER_STRICT))
         assertTrue(aidenBotMessageFailureIsAmbiguous(malformed400))
         assertFalse(aidenBotMacAnswered(malformed400))
         assertTrue(aidenScheduledRunFailureIsAmbiguous(malformed400))
@@ -360,7 +360,6 @@ class AidenRemoteFailureClassificationTest {
         assertTrue(decoded409Internal.isDecodedEnvelope)
         assertEquals(AidenRemoteErrorCode.INTERNAL_ERROR, decoded409Internal.body.code)
         assertFalse(AidenRemoteFailureClassification.isAmbiguous(decoded409Internal, AidenRemoteFailurePolicy.CACHED_REJECTION_LEDGER))
-        assertFalse(AidenRemoteFailureClassification.isAmbiguous(decoded409Internal, AidenRemoteFailurePolicy.CACHED_REJECTION_LEDGER_STRICT))
         assertFalse(aidenBotMessageFailureIsAmbiguous(decoded409Internal))
         assertTrue(aidenBotMacAnswered(decoded409Internal))
         assertFalse(aidenScheduledRunFailureIsAmbiguous(decoded409Internal))

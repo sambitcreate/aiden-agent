@@ -25,13 +25,13 @@ object AidenNewWorktreeRetry {
     /**
      * The Mac keeps each answer under its key for a day, refusals included, so a request it
      * answered needs a new key next time. One that got no answer (no connection, a timeout,
-     * Cancel) or that the Mac is still working on keeps its key, so the retry gets what the Mac
-     * did with it. An answer this phone could not read spends it too: the Mac would only replay
-     * the same answer under that key.
+     * Cancel), that the Mac is still working on, or that got a `5xx`, `408` or `429` keeps its
+     * key, so the retry gets what the Mac did with it. An answer this phone could not read
+     * spends it: the Mac would only replay the same answer under that key.
      */
     fun spendsKey(error: Throwable): Boolean = !AidenRemoteFailureClassification.isAmbiguous(
         error,
-        AidenRemoteFailurePolicy.CACHED_REJECTION_LEDGER_STRICT,
+        AidenRemoteFailurePolicy.CACHED_REJECTION_LEDGER,
         unreadableResponseAmbiguous = false
     )
 }
