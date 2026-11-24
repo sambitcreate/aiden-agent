@@ -9,6 +9,7 @@ import type { DesignAppRoots } from "./locate.js";
 import { DesignMdOffers } from "./offers.js";
 import { DesignMdReader } from "./reader.js";
 import { designMdOfferSentence } from "./status.js";
+import { designModePromptSection } from "../canvas-tools.js";
 import { createDesignMdTurn, DESIGN_MODE_SECTION, withDesignModeSection } from "./turn.js";
 
 async function tempDir(t: test.TestContext, prefix: string): Promise<string> {
@@ -255,4 +256,16 @@ test("with the live flag off, any copy of the section already there is kept, as 
   const older = withDesignModeSection([user], "an older section text", 2, { live: false });
   assert.equal(older.length, 2, "absent, it's appended");
   assert.equal(withDesignModeSection(older, "today's section text", 3, { live: false }), older, "an older copy isn't replaced");
+});
+
+test("without DESIGN.md this turn, a journaled section naming design_system is replaced by the flag-off text", () => {
+  // A chat whose earlier turn had DESIGN.md, now with the flag off or design_system excluded.
+  const user: AgentMessage = { role: "user", content: "hi", timestamp: 1 };
+  const withBullet = withDesignModeSection([user], designModePromptSection(true), 2, { live: true });
+  const now = withDesignModeSection(withBullet, designModePromptSection(false), 3, { live: false });
+  assert.equal(now.length, 3);
+  const latest = (now[2] as { sections?: Record<string, string> }).sections?.[DESIGN_MODE_SECTION];
+  assert.equal(latest, designModePromptSection(false));
+  assert.doesNotMatch(latest!, /design_system/u);
+  assert.equal(withDesignModeSection(now, designModePromptSection(false), 4, { live: false }), now, "then it stays");
 });
