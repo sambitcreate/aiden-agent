@@ -13,6 +13,7 @@ import {
   designAppRootClass,
   designAppRootText,
   designAppProblemMessage,
+  type DesignAppProblem,
   type DesignAppRunningScan,
   type DesignAppRunningServer,
   type DesignAppsSnapshot,
@@ -40,33 +41,36 @@ function rowAddress(server: DesignAppRunningServer): string {
   return server.origin ? server.origin.replace(/^http:\/\//u, "") : `:${server.port}`;
 }
 
+/** How a Run from Choose apps… ended, when it didn't go ahead: a refusal main gave, or a call that failed. */
+export type DesignAppChooseOutcome = { appRoot: string; problem: DesignAppProblem } | { appRoot: string; message: string };
+
 export function DesignAppChooseSheet({
   open,
   onOpenChange,
   chatId,
   snapshot,
+  onOutcome,
   returnFocus,
 }: {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   chatId: string;
   snapshot: DesignAppsSnapshot;
+  /**
+   * A refusal or a failed call. The sheet has closed by then (the run-app card
+   * comes next and `choose` waits for it), so the chip shows it, never the sheet.
+   */
+  onOutcome: (outcome: DesignAppChooseOutcome) => void;
   returnFocus?: () => HTMLElement | null;
 }) {
-  const [error, setError] = React.useState<{ appRoot: string; message: string } | null>(null);
-  React.useEffect(() => {
-    if (open) setError(null);
-  }, [open]);
-
   const run = async (appRoot: string) => {
-    setError(null);
     // The card comes next; the sheet's job is done.
     onOpenChange(false);
     try {
       const status = await designAppApi.choose(chatId, appRoot);
-      if (status.problem && status.phase === "stopped") setError({ appRoot, message: designAppProblemMessage(status.problem) });
+      if (status.problem && status.phase === "stopped") onOutcome({ appRoot, problem: status.problem });
     } catch (cause) {
-      setError({ appRoot, message: cause instanceof Error && cause.message ? cause.message : CHOOSE_FAILED });
+      onOutcome({ appRoot, message: cause instanceof Error && cause.message ? cause.message : CHOOSE_FAILED });
     }
   };
 
@@ -98,11 +102,6 @@ export function DesignAppChooseSheet({
                       .filter(Boolean)
                       .join(" · ") || "No dev script found"}
                   </Text>
-                  {error?.appRoot === candidate.appRoot ? (
-                    <Text variant="small" color="status-red" className="mt-0.5 block">
-                      {error.message}
-                    </Text>
-                  ) : null}
                 </div>
                 <Button
                   variant="filled"

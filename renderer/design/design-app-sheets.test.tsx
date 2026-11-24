@@ -65,6 +65,7 @@ function ChooseHarness({ onClose = () => undefined }: { onClose?: () => void }) 
       }}
       chatId="chat-1"
       snapshot={CHOOSE_SNAPSHOT}
+      onOutcome={() => undefined}
     />
   );
 }

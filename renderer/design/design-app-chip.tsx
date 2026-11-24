@@ -382,6 +382,15 @@ export function DesignAppStatusChip({ chatId, onShowLogs }: { chatId: string; on
         onOpenChange={(open) => setSheet(open ? { kind: "choose" } : null)}
         chatId={chatId}
         snapshot={snapshot}
+        onOutcome={(outcome) => {
+          // As for the menu's own actions: a refusal goes on the app's menu line, a failed call is a toast.
+          // A refusal for an app the menu doesn't list has no line, so it's a toast too.
+          if ("problem" in outcome && snapshot.apps.some((app) => app.appRoot === outcome.appRoot)) {
+            setProblems((current) => new Map(current).set(outcome.appRoot, outcome.problem));
+          } else {
+            toast.error("problem" in outcome ? designAppProblemMessage(outcome.problem) : outcome.message);
+          }
+        }}
         returnFocus={returnFocus}
       />
       <DesignAppConnectSheet

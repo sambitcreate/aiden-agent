@@ -362,6 +362,52 @@ test("a rejected invoke rolls back and shows one toast", async () => {
   assert.equal(screen.getAllByText("Live apps are not available.").length, 1);
 });
 
+test("Choose's outcome shows on the chip after its sheet has closed: a refusal in the app's menu line, a rejected call or an unlisted app's refusal as a toast", async () => {
+  const limit = "Design mode already runs 8 apps. Stop one, then try again.";
+  const answers: Array<() => unknown> = [
+    () => status({ appRoot: "docs", frameworkLabel: "Astro", revision: 2, problem: { problem: "job-limit" } }),
+    () => {
+      throw new Error("Live apps are not available.");
+    },
+    () => status({ appRoot: "blog", frameworkLabel: "Astro", revision: 0, problem: { problem: "choice-not-saved" } }),
+  ];
+  mount(
+    snapshot([status({ revision: 2 }), status({ appRoot: "docs", frameworkLabel: "Astro", revision: 2 })], {
+      target: "choose",
+      candidates: [
+        { appRoot: ".", framework: "vite", frameworkLabel: "Vite", script: "dev" },
+        { appRoot: "docs", framework: "astro", frameworkLabel: "Astro", script: "dev" },
+        { appRoot: "blog", framework: "astro", frameworkLabel: "Astro", script: "dev" },
+      ],
+    }),
+    { "designApp:choose": () => answers.shift()!() },
+  );
+  const run = async (root: string) => {
+    await choose(await openMenu(), "Choose apps…");
+    const sheet = await until(() => screen.getByRole("dialog", { name: "Choose apps" }));
+    await act(async () => {
+      fireEvent.click(within(sheet).getByRole("button", { name: `Run ${root}` }));
+    });
+    await until(() => assert.equal(screen.queryByRole("dialog", { name: "Choose apps" }) === null, true));
+  };
+  await run("docs");
+  // The refusal lands once choose answers; the menu is read again until it does.
+  for (let tries = 0; !(await menuText()).includes(limit); tries += 1) assert.ok(tries < 50, "the refusal shows in the menu");
+  assert.equal(screen.queryAllByText(limit).length, 0, "no toast for a refusal the menu shows");
+  // Opening the sheet again doesn't clear it.
+  await choose(await openMenu(), "Choose apps…");
+  await act(async () => {
+    fireEvent.keyDown(await until(() => screen.getByRole("dialog", { name: "Choose apps" })), { key: "Escape" });
+  });
+  await until(() => assert.equal(screen.queryByRole("dialog", { name: "Choose apps" }) === null, true));
+  assert.equal((await menuText()).includes(limit), true);
+  await run("docs");
+  await until(() => assert.equal(screen.getAllByText("Live apps are not available.").length, 1));
+  await run("blog");
+  const unsaved = "Aiden couldn't save your choice in .aiden/canvas.json (it may be a link, unreadable, or from a newer Aiden), so it didn't start the app.";
+  await until(() => assert.equal(screen.getAllByText(unsaved).length, 1, "blog has no menu line, so its refusal is a toast"));
+});
+
 test("while an action is pending, an equal or older broadcast for its app keeps the optimistic state and a newer one replaces it", async () => {
   mount(snapshot([status({ revision: 5 }), status({ appRoot: "docs", revision: 1 })]), { "designApp:start": () => new Promise(() => {}) });
   await choose(await openMenu(), "Start", 0);
