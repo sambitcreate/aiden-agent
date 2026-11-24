@@ -18,6 +18,8 @@ import {
 
 /** The host's largest page (`limit`, revision 67). */
 const OLDER_PAGE_MAX = 200;
+/** At most this many kept entries are asked about after a bounded re-read misses the oldest. */
+const KEPT_PROBE_MAX = 8;
 
 export interface RemoteBotSessionTransport {
   subscribe(hostId: string, botId: string): Promise<PeerBotSessionSubscription>;
@@ -229,7 +231,7 @@ export class RemoteBotSessionFollower {
    * Mac can't show may sit between them), the host is asked whether it still
    * has it, then each later kept entry in turn: reading goes on to the
    * earliest one it has, and the re-read is cut back to it. Only if the host
-   * has none of them does the bounded read stand. A read that fails keeps the
+   * has none of the first few (`KEPT_PROBE_MAX`) does the bounded read stand. A read that fails keeps the
    * pages already read (Load older continues from there), or drops the kept
    * entries if none was.
    */
@@ -284,7 +286,7 @@ export class RemoteBotSessionFollower {
     // when it no longer has that entry.
     const probe = (index: number, cursor: string, total: number): void => {
       const id = kept[index];
-      if (id === undefined || !transport.older) return settle(pages);
+      if (id === undefined || index >= KEPT_PROBE_MAX || !transport.older) return settle(pages);
       if (read(id)) return settle(pages);
       transport.older(this.hostId, this.botId, id, 1).then(
         (outcome) => {
