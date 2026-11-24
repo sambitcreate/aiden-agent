@@ -907,3 +907,215 @@ test("reducer: late revision announcement settles unsettled history and forgets 
   assert.equal(state.aidenRevisions.size, 0, "old revision announcements pruned after settling");
   assert.equal(selectDesignCanvasView(state).canUndo, true);
 });
+
+test("an edit whose debounce elapses while a slow save is in flight saves immediately once that save settles", async () => {
+  let resolveFirstSave!: (reply: SaveReply) => void;
+  let saveCount = 0;
+  calls = installBotTestIpc({
+    "designCanvas:get": () => structuredClone(stored),
+    "designCanvas:save": (_chatId, doc, base) => {
+      saveCount += 1;
+      if (saveCount === 1) {
+        return new Promise<SaveReply>((resolve) => {
+          resolveFirstSave = resolve;
+        });
+      }
+      stored = { ...(doc as DesignCanvas), revision: (base as number) + 1 };
+      return { ok: true, revision: stored.revision };
+    },
+  });
+
+  await mount();
+  await act(async () => controller.change(moveTo("a", 40)));
+  await tick(DESIGN_CANVAS_SAVE_DELAY_MS);
+  assert.equal(saves().length, 1, "first save is in flight");
+
+  // A newer edit arrives during the slow save, and its full 800 ms debounce elapses before save #1 returns.
+  await act(async () => controller.change(addNote("b")));
+  await tick(DESIGN_CANVAS_SAVE_DELAY_MS);
+  assert.equal(saves().length, 1, "active saves never overlap while save #1 is still in flight");
+
+  // Once save #1 lands, the already-aged edit saves immediately without waiting another 800 ms.
+  await act(async () => {
+    stored = canvas(5, note("a", 40));
+    resolveFirstSave({ ok: true, revision: 5 });
+  });
+  await settle();
+
+  assert.equal(saves().length, 2, "already-aged edit saves immediately upon settlement");
+  const [, secondDoc, secondBase] = saves()[1]!.args as [string, DesignCanvas, number];
+  assert.equal(secondBase, 5);
+  assert.deepEqual(ids(secondDoc), ["a", "b"]);
+  assert.equal(xOf(secondDoc, "a"), 40);
+  assert.equal(controller.status, "ready");
+});
+
+test("a flush queued during a failing flush-origin or backoff-origin save makes an immediate follow-up attempt", async () => {
+  let rejectFirstFlush!: (error: Error) => void;
+  let saveCount = 0;
+  calls = installBotTestIpc({
+    "designCanvas:get": () => structuredClone(stored),
+    "designCanvas:save": (_chatId, doc, base) => {
+      saveCount += 1;
+      if (saveCount === 1) {
+        return new Promise<SaveReply>((_resolve, reject) => {
+          rejectFirstFlush = reject;
+        });
+      }
+      stored = { ...(doc as DesignCanvas), revision: (base as number) + 1 };
+      return { ok: true, revision: stored.revision };
+    },
+  });
+
+  await mount();
+  await act(async () => controller.change(moveTo("a", 85)));
+
+  // First flush starts a "flush"-origin save; a second flush queues while it is in flight.
+  let firstFlushPromise!: Promise<boolean>;
+  let secondFlushPromise!: Promise<boolean>;
+  await act(async () => {
+    firstFlushPromise = controller.flush();
+    secondFlushPromise = controller.flush();
+  });
+  assert.equal(saves().length, 1, "queued flush waits for the active flush save");
+
+  await act(async () => {
+    rejectFirstFlush(new Error("transient store busy"));
+  });
+  const [firstResult, secondResult] = await Promise.all([firstFlushPromise, secondFlushPromise]);
+  await settle();
+
+  assert.equal(saves().length, 2, "queued flush immediately retries restored edits after flush failure");
+  assert.equal(firstResult, true);
+  assert.equal(secondResult, true);
+  assert.equal(xOf(stored, "a"), 85);
+  assert.equal(controller.status, "ready");
+
+  // Also verify a flush queued while a closed retry backoff save fails retries immediately rather than waiting for backoff.
+  let rejectBackoffSave!: (error: Error) => void;
+  let closeAttempt = 0;
+  calls = installBotTestIpc({
+    "designCanvas:get": () => structuredClone(stored),
+    "designCanvas:save": (_chatId, doc, base) => {
+      closeAttempt += 1;
+      if (closeAttempt === 1) throw new Error("initial close failed");
+      if (closeAttempt === 2) {
+        return new Promise<SaveReply>((_resolve, reject) => {
+          rejectBackoffSave = reject;
+        });
+      }
+      stored = { ...(doc as DesignCanvas), revision: (base as number) + 1 };
+      return { ok: true, revision: stored.revision };
+    },
+  });
+
+  cleanup();
+  const view = await mount("chat-2");
+  await act(async () => controller.change(addNote("b")));
+  view.unmount();
+  await settle();
+  assert.equal(saves().length, 1, "initial close failed and scheduled backoff");
+
+  await tick(DESIGN_CANVAS_CLOSED_RETRY_MS[0]!);
+  assert.equal(saves().length, 2, "first backoff retry is now in flight");
+
+  let teardownFlush!: Promise<void>;
+  await act(async () => {
+    teardownFlush = window.__aidenFlushPendingSaves!();
+  });
+  assert.equal(saves().length, 2, "teardown flush queues behind active backoff save");
+
+  await act(async () => {
+    rejectBackoffSave(new Error("backoff save failed"));
+  });
+  await teardownFlush;
+  await settle();
+
+  assert.equal(saves().length, 3, "queued teardown flush retries immediately without waiting for the next backoff");
+  assert.deepEqual(ids(stored), ["a", "b"]);
+});
+
+test("save_refused with newer unsent edits and a queued flush immediately attempts the newer canvas", async () => {
+  let resolveRefusedSave!: (reply: SaveReply) => void;
+  let saveCount = 0;
+  calls = installBotTestIpc({
+    "designCanvas:get": () => structuredClone(stored),
+    "designCanvas:save": (_chatId, doc, base) => {
+      saveCount += 1;
+      if (saveCount === 1) {
+        return new Promise<SaveReply>((resolve) => {
+          resolveRefusedSave = resolve;
+        });
+      }
+      stored = { ...(doc as DesignCanvas), revision: (base as number) + 1 };
+      return { ok: true, revision: stored.revision };
+    },
+  });
+
+  await mount();
+  await act(async () => controller.change(addNote("c")));
+  await tick(DESIGN_CANVAS_SAVE_DELAY_MS);
+  assert.equal(saves().length, 1, "first save is in flight");
+
+  // A newer edit arrives after the refused batch started, then an explicit flush queues behind save #1.
+  await act(async () => controller.change(moveTo("c", 30)));
+  let flushPromise!: Promise<boolean>;
+  await act(async () => {
+    flushPromise = controller.flush();
+  });
+  assert.equal(saves().length, 1, "flush waits for active save to settle");
+
+  await act(async () => {
+    resolveRefusedSave({ ok: false, reason: "invalid", issues: ["too big"] });
+  });
+  const flushed = await flushPromise;
+  await settle();
+
+  assert.equal(saves().length, 2, "newer unsent edits trigger an immediate follow-up save after refusal");
+  assert.equal(flushed, true);
+  assert.equal(controller.status, "ready");
+  assert.deepEqual(ids(stored), ["a", "c"]);
+  assert.equal(xOf(stored, "c"), 30);
+});
+
+test("disposing during a failing flush-origin save retries immediately instead of deferring to close backoff", async () => {
+  const dataset = document.documentElement.dataset;
+  const designDirty = () => (dataset.aidenDirtySources ?? "").split(" ").includes("design");
+  let rejectFlush!: (error: Error) => void;
+  let saveCount = 0;
+  calls = installBotTestIpc({
+    "designCanvas:get": () => structuredClone(stored),
+    "designCanvas:save": (_chatId, doc, base) => {
+      saveCount += 1;
+      if (saveCount === 1) {
+        return new Promise<SaveReply>((_resolve, reject) => {
+          rejectFlush = reject;
+        });
+      }
+      stored = { ...(doc as DesignCanvas), revision: (base as number) + 1 };
+      return { ok: true, revision: stored.revision };
+    },
+  });
+
+  const view = await mount();
+  await act(async () => controller.change(addNote("b")));
+  let flushPromise!: Promise<boolean>;
+  await act(async () => {
+    flushPromise = controller.flush();
+  });
+  assert.equal(saves().length, 1, "flush save is in flight");
+
+  view.unmount();
+  await settle();
+  assert.equal(saves().length, 1, "dispose waits for the active flush save");
+
+  await act(async () => {
+    rejectFlush(new Error("transient flush error"));
+  });
+  await flushPromise;
+  await settle();
+
+  assert.equal(saves().length, 2, "close retry runs immediately upon flush failure without waiting for backoff");
+  assert.deepEqual(ids(stored), ["a", "b"]);
+  assert.equal(designDirty(), false, "guard clears once the immediate close attempt succeeds");
+});

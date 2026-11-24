@@ -1,9 +1,14 @@
 {
   "version": 1,
-  "description": "Canonical failure-ambiguity matrix for Aiden Remote idempotent mutations across server, iOS, and Android. Compares beforeEffectRefusal routes (custom-receipt / state-check routes such as Bot peers, open-work, resume, watches, and routine-models where only recognized non-transient 4xx codes prove no side effect occurred) against cachedRejectionLedger routes (executeAidenDurableOperation routes backed by AidenIdempotencyLedger where settled rejections are cached for 24h and unrecorded/unknown outcomes return 409 idempotency_in_flight).",
+  "scope": "host-durable-operation-contract",
+  "enforcedBy": [
+    "main/services/aiden-remote-durable-operation.test.ts"
+  ],
+  "consumerAdoption": "Host/desktop durable-operation and error-contract matrix verified by main/services/aiden-remote-durable-operation.test.ts and cross-checked against bot-outbox-delivery.json. Native iOS and Android behavioral suites remain separate consumer adoption with their own route-specific classifiers (for example, their 13-code Resume allowlists).",
+  "description": "Host/desktop durable-operation and error-classification failure-ambiguity matrix for Aiden Remote idempotent mutations, verified by main/services/aiden-remote-durable-operation.test.ts. Compares beforeEffectRefusal (fail-closed pre-effect refusal codes proven before any side effect, excluding replayed ledger conflicts such as 409 revision_conflict and 409 internal_error) against cachedRejectionLedger (executeAidenDurableOperation routes backed by AidenIdempotencyLedger where settled rejections are cached for 24h and unrecorded/unknown outcomes return 409 idempotency_in_flight).",
   "policies": {
-    "beforeEffectRefusal": "Only a structured non-transient 4xx response (400-499 excluding 408 and 429) whose error code is on recognizedBeforeEffectCodes proves no side effect occurred. 409 idempotency_in_flight (including post-effect authorization loss on Bot peers and open-work), 409 internal_error, unknown codes, 408/429/5xx, unparsed HTTP responses, transport losses, and cancellations remain ambiguous.",
-    "cachedRejectionLedger": "Backed by executeAidenDurableOperation and AidenIdempotencyLedger. Structured non-transient 4xx responses (including replayed settled rejections such as 409 internal_error and 409 idempotency_conflict) settle the attempt; 409 idempotency_in_flight, 408/429/5xx, unparsed HTTP responses, transport losses, and cancellations remain ambiguous so the caller retains its idempotency key."
+    "beforeEffectRefusal": "Only a structured non-transient 4xx response (400-499 excluding 408 and 429) whose error code is on recognizedBeforeEffectCodes proves no side effect occurred on a non-ledger before-effect route. 409 idempotency_in_flight (including post-effect authorization loss on Bot peers and open-work), 409 revision_conflict, 409 internal_error, unknown codes, 408/429/5xx, unparsed HTTP responses, transport losses, and cancellations remain ambiguous.",
+    "cachedRejectionLedger": "Backed by executeAidenDurableOperation and AidenIdempotencyLedger. Structured non-transient 4xx responses (including replayed settled rejections such as 409 revision_conflict, 409 internal_error, and 409 idempotency_conflict) settle the attempt; 409 idempotency_in_flight, 408/429/5xx, unparsed HTTP responses, transport losses, and cancellations remain ambiguous so the caller retains its idempotency key."
   },
   "recognizedBeforeEffectCodes": [
     "invalid_request",
@@ -19,7 +24,6 @@
     "idempotency_conflict",
     "idempotency_capacity",
     "rate_limited",
-    "revision_conflict",
     "already_exists",
     "handle_invalid",
     "handle_expired",
@@ -58,11 +62,11 @@
       "serverScenario": "restored_in_flight"
     },
     {
-      "name": "optimistic-concurrency revision mismatch before effect",
+      "name": "replayed settled revision_conflict rejection from ledger",
       "kind": "server",
       "status": 409,
       "code": "revision_conflict",
-      "beforeEffectRefusal": { "ambiguous": false },
+      "beforeEffectRefusal": { "ambiguous": true },
       "cachedRejectionLedger": { "ambiguous": false },
       "serverScenario": "replayed_revision_conflict"
     },

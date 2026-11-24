@@ -707,6 +707,9 @@ interface FailureAmbiguityFixtureCase {
 
 interface FailureAmbiguityFixture {
   version: number;
+  scope: string;
+  enforcedBy: string[];
+  consumerAdoption: string;
   description: string;
   policies: {
     beforeEffectRefusal: string;
@@ -756,13 +759,21 @@ test("mutation-failure-ambiguity fixture matches executeAidenDurableOperation, A
   const outboxFixture = JSON.parse(await fs.readFile(outboxPath, "utf8")) as BotOutboxDeliveryFixture;
 
   assert.equal(fixture.version, 1);
+  assert.equal(fixture.scope, "host-durable-operation-contract");
+  assert.deepEqual(fixture.enforcedBy, ["main/services/aiden-remote-durable-operation.test.ts"]);
   const protocolCodes = new Set<string>(AIDEN_REMOTE_ERROR_CODES);
   const recognized = new Set(fixture.recognizedBeforeEffectCodes);
   assert.equal(recognized.size, fixture.recognizedBeforeEffectCodes.length, "recognizedBeforeEffectCodes must be unique");
   for (const entryCode of fixture.recognizedBeforeEffectCodes) {
     assert.ok(protocolCodes.has(entryCode), `recognized code ${entryCode} must exist in AIDEN_REMOTE_ERROR_CODES`);
   }
-  for (const forbidden of ["idempotency_in_flight", "operation_in_progress", "internal_error", "server_interrupted"]) {
+  for (const forbidden of [
+    "idempotency_in_flight",
+    "operation_in_progress",
+    "internal_error",
+    "revision_conflict",
+    "server_interrupted",
+  ]) {
     assert.equal(recognized.has(forbidden), false, `${forbidden} must never be in recognizedBeforeEffectCodes`);
   }
 

@@ -140,6 +140,8 @@ export interface DesignCanvasSyncState {
   readonly closedRetryNextIndex: number;
   /** Whether a flush or close arrived while a save was already in flight. */
   readonly flushQueuedWhileSaving: boolean;
+  /** Whether the 800 ms debounce elapsed for newer edits while a save was already in flight. */
+  readonly debounceElapsedWhileSaving: boolean;
 }
 
 export type DesignCanvasSyncEvent =
@@ -199,6 +201,7 @@ export function createInitialDesignCanvasSyncState(): DesignCanvasSyncState {
     unsettled: null,
     closedRetryNextIndex: 0,
     flushQueuedWhileSaving: false,
+    debounceElapsedWhileSaving: false,
   };
 }
 
@@ -456,6 +459,7 @@ function startSaveTransition(
     unsent: [],
     timer,
     flushQueuedWhileSaving: options.clearFlushQueue ? false : state.flushQueuedWhileSaving,
+    debounceElapsedWhileSaving: false,
     savePhase: {
       kind: "saving",
       save: {
@@ -501,6 +505,7 @@ function finishClosedSession(
     lifecycle: "disposed",
     timer: null,
     flushQueuedWhileSaving: false,
+    debounceElapsedWhileSaving: false,
   };
 }
 
@@ -551,6 +556,7 @@ function applyLocalEdit(
       unsettled,
       undonePages,
       timer,
+      debounceElapsedWhileSaving: false,
     },
     effects: [{ type: "schedule_timer", timer }],
   };
@@ -614,7 +620,13 @@ export function reduceDesignCanvasSync(
     case "debounce_fired": {
       if (state.lifecycle !== "open" || state.timer?.kind !== "debounce") return { state, effects: [] };
       const cleared: DesignCanvasSyncState = { ...state, timer: null };
-      if (cleared.savePhase.kind === "saving" || cleared.unsent.length === 0 || !cleared.server || !cleared.local) {
+      if (cleared.savePhase.kind === "saving") {
+        if (cleared.unsent.length > 0 && cleared.server && cleared.local) {
+          return { state: { ...cleared, debounceElapsedWhileSaving: true }, effects: [] };
+        }
+        return { state: cleared, effects: [] };
+      }
+      if (cleared.unsent.length === 0 || !cleared.server || !cleared.local) {
         return { state: cleared, effects: [] };
       }
       const effects: DesignCanvasSyncEffect[] = [];
@@ -642,10 +654,12 @@ export function reduceDesignCanvasSync(
         effects.push({ type: "cancel_timer" });
       }
       if (next.savePhase.kind === "saving") {
-        return { state: { ...next, flushQueuedWhileSaving: true }, effects };
+        return { state: { ...next, flushQueuedWhileSaving: true, debounceElapsedWhileSaving: false }, effects };
       }
       if (next.unsent.length > 0 && next.server && next.local) {
         next = startSaveTransition(next, { replayed: false, source: "flush", clearFlushQueue: true }, effects);
+      } else if (next.debounceElapsedWhileSaving) {
+        next = { ...next, debounceElapsedWhileSaving: false };
       }
       return { state: next, effects };
     }
@@ -677,6 +691,10 @@ export function reduceDesignCanvasSync(
           next = startSaveTransition(next, { replayed: false, source, clearFlushQueue: true }, effects);
           return { state: next, effects };
         }
+        if (next.lifecycle === "open" && next.debounceElapsedWhileSaving) {
+          next = startSaveTransition(next, { replayed: false, source: "open", clearFlushQueue: false }, effects);
+          return { state: next, effects };
+        }
         if (next.lifecycle === "open" && next.timer === null) {
           const timer: DesignCanvasTimer = { kind: "debounce", delayMs: DESIGN_CANVAS_SAVE_DELAY_MS };
           next = { ...next, timer };
@@ -685,7 +703,7 @@ export function reduceDesignCanvasSync(
         return { state: next, effects };
       }
 
-      next = { ...next, flushQueuedWhileSaving: false };
+      next = { ...next, flushQueuedWhileSaving: false, debounceElapsedWhileSaving: false };
       // Another writer saved while this save was on its way.
       if (next.lifecycle === "open" && next.timer === null && next.announced > nextServer.revision) {
         effects.push({ type: "refetch" });
@@ -719,7 +737,17 @@ export function reduceDesignCanvasSync(
 
       // Conflicted again straight after a replay: keep the edits on the newest canvas,
       // report it, and leave the next try to the next edit (or closed retry) instead of looping.
-      next = { ...next, failed: true, flushQueuedWhileSaving: false };
+      next = { ...next, failed: true };
+      if (next.flushQueuedWhileSaving) {
+        const source = next.lifecycle === "closing" ? "close" : "flush";
+        next = startSaveTransition(next, { replayed: false, source, clearFlushQueue: true }, effects);
+        return { state: next, effects };
+      }
+      if (next.lifecycle === "open" && next.debounceElapsedWhileSaving) {
+        next = startSaveTransition(next, { replayed: false, source: "open", clearFlushQueue: false }, effects);
+        return { state: next, effects };
+      }
+      next = { ...next, flushQueuedWhileSaving: false, debounceElapsedWhileSaving: false };
       if (next.lifecycle === "closing") {
         next = scheduleClosedRetryIfRemaining(next, effects);
       }
@@ -729,14 +757,27 @@ export function reduceDesignCanvasSync(
     case "save_refused": {
       if (state.savePhase.kind !== "saving") return { state, effects: [] };
       const effects: DesignCanvasSyncEffect[] = [];
-      // The store refused the canvas itself; retrying the same edits cannot help.
-      const next: DesignCanvasSyncState = {
+      // The store refused the canvas itself; retrying the same edits cannot help,
+      // but newer edits queued after the refused batch started still need their attempt.
+      let next: DesignCanvasSyncState = {
         ...state,
         failed: true,
         savePhase: { kind: "idle" },
-        flushQueuedWhileSaving: false,
       };
-      if (next.lifecycle === "closing" && next.unsent.length === 0) {
+      if (next.unsent.length > 0) {
+        if (next.flushQueuedWhileSaving || next.lifecycle === "closing") {
+          const source = next.lifecycle === "closing" ? "close" : "flush";
+          next = startSaveTransition(next, { replayed: false, source, clearFlushQueue: true }, effects);
+          return { state: next, effects };
+        }
+        if (next.lifecycle === "open" && next.debounceElapsedWhileSaving) {
+          next = startSaveTransition(next, { replayed: false, source: "open", clearFlushQueue: false }, effects);
+          return { state: next, effects };
+        }
+        return { state: { ...next, flushQueuedWhileSaving: false, debounceElapsedWhileSaving: false }, effects };
+      }
+      next = { ...next, flushQueuedWhileSaving: false, debounceElapsedWhileSaving: false };
+      if (next.lifecycle === "closing") {
         return { state: finishClosedSession(next, effects), effects };
       }
       return { state: next, effects };
@@ -752,18 +793,22 @@ export function reduceDesignCanvasSync(
         failed: true,
         savePhase: { kind: "idle" },
       };
-      if (save.source === "open" && next.flushQueuedWhileSaving) {
+      if (next.flushQueuedWhileSaving) {
         const source = next.lifecycle === "closing" ? "close" : "flush";
         next = startSaveTransition(next, { replayed: false, source, clearFlushQueue: true }, effects);
         return { state: next, effects };
       }
+      if (next.lifecycle === "open" && next.debounceElapsedWhileSaving) {
+        next = startSaveTransition(next, { replayed: false, source: "open", clearFlushQueue: false }, effects);
+        return { state: next, effects };
+      }
       if (next.lifecycle === "closing") {
-        next = { ...next, flushQueuedWhileSaving: false };
+        next = { ...next, flushQueuedWhileSaving: false, debounceElapsedWhileSaving: false };
         next = scheduleClosedRetryIfRemaining(next, effects);
         return { state: next, effects };
       }
       // After a failure while open, the edits wait for the next edit or explicit flush.
-      return { state: { ...next, flushQueuedWhileSaving: false }, effects };
+      return { state: { ...next, flushQueuedWhileSaving: false, debounceElapsedWhileSaving: false }, effects };
     }
 
     case "announcement": {
@@ -848,7 +893,7 @@ export function reduceDesignCanvasSync(
         effects.push({ type: "cancel_timer" });
       }
       if (next.savePhase.kind === "saving") {
-        return { state: { ...next, flushQueuedWhileSaving: true }, effects };
+        return { state: { ...next, flushQueuedWhileSaving: true, debounceElapsedWhileSaving: false }, effects };
       }
       if (next.unsent.length === 0 || !next.server || !next.local) {
         return { state: finishClosedSession(next, effects), effects };
