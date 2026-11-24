@@ -3,6 +3,7 @@
  * rules: a card goes only to a live desktop window, waits at most 2 minutes,
  * at most 16 wait at once, and only the window that shows a card may answer
  * it. One card per app key: a second request while one waits joins it.
+ * 2c adds attach cards, under their own key (`attachConsentKey`).
  */
 import { randomUUID } from "node:crypto";
 import {
@@ -20,6 +21,13 @@ const DECLINED_KEPT = 500;
 export type DesignAppConsentOwner = Pick<ChatGenerationOwner, "kind" | "id" | "documentId" | "isDestroyed" | "send" | "onInvalidated">;
 export type DesignAppConsentResult = "allow" | "decline" | "unanswered" | "unavailable";
 export type LaunchConsentCard = Omit<Extract<DesignAppConsentRequest, { kind: "launch" }>, "requestId">;
+/** 2c (D10): an `apps[].url` root asks before Aiden connects to the person's server. */
+export type AttachConsentCard = Omit<Extract<DesignAppConsentRequest, { kind: "attach" }>, "requestId">;
+
+/** An attach card's key: apart from the root's launch key, so the two never join or share a decline. */
+export function attachConsentKey(workspaceId: string, appRoot: string): string {
+  return `${workspaceId}\0${appRoot}\0attach`;
+}
 
 type Pending = {
   key: string;
@@ -46,7 +54,7 @@ export class DesignAppConsent {
   request(input: {
     key: string;
     by: "person" | "aiden";
-    request: LaunchConsentCard;
+    request: LaunchConsentCard | AttachConsentCard;
     owner?: DesignAppConsentOwner;
     signal?: AbortSignal;
   }): Promise<DesignAppConsentResult> {

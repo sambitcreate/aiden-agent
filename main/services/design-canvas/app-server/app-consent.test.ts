@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import type { DesignAppConsentRequest } from "../../../../renderer/shared/design-app.js";
-import { DesignAppConsent, type DesignAppConsentOwner } from "./app-consent.js";
+import { attachConsentKey, DesignAppConsent, type AttachConsentCard, type DesignAppConsentOwner } from "./app-consent.js";
 
 type Sent = { channel: string; payload: Record<string, unknown> };
 
@@ -150,4 +150,69 @@ test("at most 16 cards wait at once", async () => {
   for (let index = 0; index < 16; index += 1) void consent.request({ key: `k${index}`, by: "person", request: card, owner });
   assert.equal(await consent.request({ key: "k16", by: "person", request: card, owner }), "unavailable");
   assert.equal(shown(owner).length, 16);
+});
+
+// ── 2c: attach cards (D10) ──
+
+const attachCard: AttachConsentCard = {
+  kind: "attach",
+  chatId: "chat-1",
+  workspaceId: "ws",
+  appRoot: "docs",
+  url: "http://127.0.0.1:4321",
+  configUrl: "http://localhost:4321",
+  processName: "astro",
+  folder: "docs",
+};
+
+test("an attach card is sent with kind attach and its display fields", async () => {
+  const consent = new DesignAppConsent();
+  const owner = fakeOwner(7);
+  const answer = consent.request({ key: attachConsentKey("ws", "docs"), by: "person", request: attachCard, owner });
+  const [sentCard] = shown(owner);
+  assert.equal(sentCard!.payload.kind, "attach");
+  assert.deepEqual(
+    { ...sentCard!.payload, requestId: undefined },
+    { ...attachCard, requestId: undefined },
+  );
+  assert.equal(consent.answer(sentCard!.payload.requestId, "allow", owner), true);
+  assert.equal(await answer, "allow");
+});
+
+test("a launch and an attach for one root are two cards", async () => {
+  const consent = new DesignAppConsent();
+  const owner = fakeOwner(7);
+  const launchKey = "ws\0docs";
+  assert.notEqual(attachConsentKey("ws", "docs"), launchKey);
+  const launch = consent.request({ key: launchKey, by: "person", request: { ...card, appRoot: "docs" }, owner });
+  const attach = consent.request({ key: attachConsentKey("ws", "docs"), by: "person", request: attachCard, owner });
+  assert.equal(shown(owner).length, 2, "neither joins the other");
+  const [launchId, attachId] = shown(owner).map((entry) => entry.payload.requestId);
+  consent.answer(attachId, "decline", owner);
+  assert.equal(await attach, "decline");
+  consent.answer(launchId, "allow", owner);
+  assert.equal(await launch, "allow");
+});
+
+test("Not now on an attach card silences Aiden's next attach for that root, not a launch", async () => {
+  const consent = new DesignAppConsent();
+  const owner = fakeOwner(7);
+  const first = consent.request({ key: attachConsentKey("ws", "docs"), by: "person", request: attachCard, owner });
+  consent.answer(shown(owner)[0]!.payload.requestId, "decline", owner);
+  assert.equal(await first, "decline");
+  assert.equal(await consent.request({ key: attachConsentKey("ws", "docs"), by: "aiden", request: attachCard, owner }), "decline");
+  assert.equal(shown(owner).length, 1, "no second attach card");
+  const launch = consent.request({ key: "ws\0docs", by: "aiden", request: { ...card, appRoot: "docs" }, owner });
+  assert.equal(shown(owner).length, 2, "the launch still asks");
+  consent.answer(shown(owner)[1]!.payload.requestId, "allow", owner);
+  assert.equal(await launch, "allow");
+});
+
+test("closeAll for the workspace closes attach cards too", async () => {
+  const consent = new DesignAppConsent();
+  const owner = fakeOwner(7);
+  const attach = consent.request({ key: attachConsentKey("ws", "docs"), by: "person", request: attachCard, owner });
+  consent.closeAll("ws\0");
+  assert.equal(await attach, "unavailable");
+  assert.equal(closed(owner).length, 1);
 });
