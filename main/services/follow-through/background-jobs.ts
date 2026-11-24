@@ -113,6 +113,8 @@ export interface DesignLogRead {
   from: number;
   /** The cursor for the next read. */
   next: number;
+  /** The job's output so far, in bytes: the cursor at the end. */
+  end: number;
   /** The cursor was before the oldest kept byte, so the read started there. */
   truncated: boolean;
 }
@@ -822,7 +824,7 @@ export class BackgroundJobs {
     const truncated = requested < oldest;
     const from = Math.min(Math.max(requested, oldest), end);
     const maxBytes = Math.max(0, Math.floor(options.maxBytes));
-    if (from >= end || maxBytes === 0) return { text: "", from, next: from, truncated };
+    if (from >= end || maxBytes === 0) return { text: "", from, next: from, end, truncated };
     const segments = [
       ...(state.rotatedStart !== undefined ? [{ file: state.rotatedPath, start: state.rotatedStart, end: state.currentStart }] : []),
       { file: job.logPath, start: state.currentStart, end },
@@ -840,7 +842,7 @@ export class BackgroundJobs {
       // A short read (output not flushed yet, or a file rotated away) ends here, so nothing is skipped.
       if (got.length < want) break;
     }
-    return { text: Buffer.concat(chunks).toString("utf8"), from, next: at, truncated };
+    return { text: Buffer.concat(chunks).toString("utf8"), from, next: at, end, truncated };
   }
 
   private openLog(logPath: string): { log: fs.WriteStream; logClosed: Promise<void> } {

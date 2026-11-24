@@ -105,13 +105,17 @@ export function registerDesignAppHandlers<Event>(deps: DesignAppHandlerDeps<Even
 
   deps.handle(DESIGN_APP_CHANNELS.logs, async (event, chatId, appRoot, options) => {
     const root = appRootOf(appRoot);
-    const { after } = optionsOf(options);
+    const { after, run } = optionsOf(options);
     if (after !== undefined && !(Number.isSafeInteger(after) && (after as number) >= 0)) {
       throw new Error('Expected a non-negative whole number for "after".');
+    }
+    if (run !== undefined && (typeof run !== "string" || run.length === 0 || run.length > MAX_ID_CHARS)) {
+      throw new Error('Expected a run id for "run".');
     }
     const { base } = await person(event, chatId);
     return deps.servers.logs(base.workspaceId, root, {
       ...(after !== undefined ? { after: after as number } : {}),
+      ...(run !== undefined ? { run: run as string } : {}),
       maxBytes: DESIGN_APP_LOG_MAX_BYTES,
     });
   });

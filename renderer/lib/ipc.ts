@@ -2901,8 +2901,8 @@ export const designAppApi = {
   /** Choose an app root (and its script) in a multi-app workspace; Allow saves it to `.aiden/canvas.json`. */
   choose: (chatId: string, appRoot: string, script?: string) =>
     invoke<DesignAppStatus>("designApp:choose", ...(script === undefined ? [chatId, appRoot] : [chatId, appRoot, script])),
-  /** The server's own output from `after`, at most 64 KiB. Untrusted text. */
-  logs: (chatId: string, appRoot: string, options: { after?: number } = {}) =>
+  /** The server's own output from `after` in `run`, at most 64 KiB. Untrusted text. A stale run or cursor reads the latest run from its start. */
+  logs: (chatId: string, appRoot: string, options: { after?: number; run?: string } = {}) =>
     invoke<DesignAppLogs>("designApp:logs", chatId, appRoot, options),
   /** The person's answer to a run-app card. False when the card no longer waits. */
   answerConsent: (requestId: string, answer: DesignAppConsentAnswer) =>

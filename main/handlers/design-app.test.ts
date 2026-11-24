@@ -78,9 +78,9 @@ function harness(options: { enabled?: boolean } = {}) {
         calls.push({ method: "choose", input });
         return status();
       },
-      logs: async (workspaceId: string, appRoot: string, logOptions: { after?: number; maxBytes: number }) => {
+      logs: async (workspaceId: string, appRoot: string, logOptions: { after?: number; run?: string; maxBytes: number }) => {
         calls.push({ method: "logs", input: { workspaceId, appRoot, ...logOptions } });
-        return { text: "ready", from: 0, next: 5, truncated: false };
+        return { text: "ready", from: 0, next: 5, end: 5, truncated: false };
       },
     },
     consent,
@@ -162,8 +162,10 @@ test("start passes by person, the sender's document owner and the workspace perm
   await invoke("designApp:stop", window.fromMain, "site-chat", ".");
   assert.deepEqual(calls[calls.length - 1], { method: "stop", input: { workspaceId: "site", appRoot: "." } });
   const logs = await invoke("designApp:logs", window.fromMain, "site-chat", ".", { after: 12 });
-  assert.deepEqual(logs, { text: "ready", from: 0, next: 5, truncated: false });
+  assert.deepEqual(logs, { text: "ready", from: 0, next: 5, end: 5, truncated: false });
   assert.deepEqual(calls[calls.length - 1], { method: "logs", input: { workspaceId: "site", appRoot: ".", after: 12, maxBytes: 64 * 1024 } });
+  await invoke("designApp:logs", window.fromMain, "site-chat", ".", { after: 12, run: "job_00000002" });
+  assert.equal((calls[calls.length - 1]!.input as { run?: string }).run, "job_00000002", "the run reaches the service");
   await invoke("designApp:status:get", window.fromMain, "site-chat");
   assert.deepEqual(calls[calls.length - 1], { method: "snapshot", input: "site" });
 });
@@ -216,6 +218,8 @@ test("malformed arguments are refused", async () => {
     ["designApp:logs", ["site-chat", ".", { after: -1 }]],
     ["designApp:logs", ["site-chat", ".", { after: 1.5 }]],
     ["designApp:logs", ["site-chat", ".", null]],
+    ["designApp:logs", ["site-chat", ".", { run: 7 }]],
+    ["designApp:logs", ["site-chat", ".", { run: "" }]],
   ];
   for (const [channel, args] of bad) {
     await assert.rejects(Promise.resolve(invoke(channel, window.fromMain, ...args)), Error, `${channel} ${JSON.stringify(args)}`);

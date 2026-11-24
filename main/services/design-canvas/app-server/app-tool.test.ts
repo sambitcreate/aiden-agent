@@ -63,7 +63,7 @@ class FakeServers implements DesignAppToolServers {
     const bytes = Buffer.byteLength(this.logText);
     const from = Math.min(options.after ?? 0, bytes);
     const text = Buffer.from(this.logText).subarray(from, from + options.maxBytes).toString("utf8");
-    return { text, from, next: from + Buffer.byteLength(text), truncated: false };
+    return { run: "job_00000001", text, from, next: from + Buffer.byteLength(text), end: bytes, truncated: false };
   }
   onStatus(listener: (snapshot: DesignAppsSnapshot) => void) {
     this.listeners.add(listener);
@@ -245,6 +245,8 @@ test("logs are fenced as data and capped at 200 lines and 8 000 characters", asy
   const body = fenced.split("\n").slice(2, -1);
   assert.equal(body.length, 50, "50 lines by default");
   assert.match(body[body.length - 1]!, /^line 499 /u, "the newest lines");
+  const reads = servers.serviceCalls("logs").map((call) => call.input as { run?: string });
+  assert.equal(reads[reads.length - 1]!.run, "job_00000001", "the window is read from the run the end was found in");
 
   // 200 lines of about 70 characters would be 14 000: the character cap keeps the newest 8 000.
   servers.logText = Array.from({ length: 500 }, (_, index) => `line ${index} ${"x".repeat(60)}`).join("\n") + "\n";

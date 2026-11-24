@@ -252,10 +252,11 @@ export function createDesignAppTool(deps: DesignAppToolDeps): AgentTool {
 
     if (action === "stop") return result(attemptResult(await deps.servers.stop(deps.workspaceId, appRoot!)));
     if (action === "logs") {
-      // The newest output: find where the log ends, then read its last window.
-      const end = (await deps.servers.logs(deps.workspaceId, appRoot!, { after: Number.MAX_SAFE_INTEGER, maxBytes: 0 })).next;
+      // The newest output: find where the run's log ends, then read that run's last window.
+      const probe = await deps.servers.logs(deps.workspaceId, appRoot!, { after: 0, maxBytes: 0 });
       const read = await deps.servers.logs(deps.workspaceId, appRoot!, {
-        after: Math.max(0, end - DESIGN_APP_LOG_MAX_BYTES),
+        after: Math.max(0, probe.end - DESIGN_APP_LOG_MAX_BYTES),
+        ...(probe.run !== undefined ? { run: probe.run } : {}),
         maxBytes: DESIGN_APP_LOG_MAX_BYTES,
       });
       const kept = lastLines(read.text, (lines as number | undefined) ?? LOG_LINES_DEFAULT, LOG_CHARS_MAX);

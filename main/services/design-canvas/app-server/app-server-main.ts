@@ -345,11 +345,21 @@ export class DesignAppServers {
     return this.begin(entry, { ...input, choose: { ...(input.script !== undefined ? { script: input.script } : {}) } });
   }
 
-  async logs(workspaceId: string, appRoot: string, options: { after?: number; maxBytes: number }): Promise<DesignAppLogs> {
+  /**
+   * The latest run's output from `after`. A cursor that names another `run`, or
+   * points past this run's end, belongs to an earlier run: the read starts at
+   * this run's oldest kept byte instead, marked `truncated`.
+   */
+  async logs(workspaceId: string, appRoot: string, options: { after?: number; run?: string; maxBytes: number }): Promise<DesignAppLogs> {
     const jobId = this.entries.get(keyOf(workspaceId, appRoot))?.lastJobId;
-    if (!jobId) return { text: "", from: 0, next: 0, truncated: false };
+    if (!jobId) return { text: "", from: 0, next: 0, end: 0, truncated: false };
     const maxBytes = Math.max(0, Math.min(DESIGN_APP_LOG_MAX_BYTES, Math.floor(options.maxBytes)));
-    return this.deps.jobs.readDesignLog(jobId, { after: options.after ?? 0, maxBytes });
+    const after = options.after ?? 0;
+    if (options.run === undefined || options.run === jobId) {
+      const read = await this.deps.jobs.readDesignLog(jobId, { after, maxBytes });
+      if (after <= read.end) return { run: jobId, ...read };
+    }
+    return { run: jobId, ...(await this.deps.jobs.readDesignLog(jobId, { after: 0, maxBytes })), truncated: true };
   }
 
   /** D4: the person turned design mode on; starts the configured roots or the single web app. Fire and forget. */

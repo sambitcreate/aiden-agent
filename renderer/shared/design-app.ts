@@ -146,9 +146,14 @@ export interface DesignAppConsentClosed {
 }
 
 export interface DesignAppLogs {
+  /** The run (the dev server's job) the bytes belong to; absent before the app's first run. */
+  run?: string;
   text: string;
   from: number;
   next: number;
+  /** The run's output so far, in bytes. */
+  end: number;
+  /** The read began at the run's oldest kept byte instead of the cursor: older output was dropped, or the cursor was another run's. */
   truncated: boolean;
 }
 

@@ -1065,6 +1065,7 @@ test("readDesignLog returns the bytes after a cursor and the next cursor", { ski
   assert.equal(second.from, 100);
   assert.equal(first.text + second.text, expected, "two reads join with nothing lost");
   assert.equal(second.next, Buffer.byteLength(expected));
+  assert.equal(first.end, Buffer.byteLength(expected), "every read tells where the output ends");
   const past = await jobs.readDesignLog(job.id, { after: 1 << 20, maxBytes: 100 });
   assert.equal(past.text, "");
   await assert.rejects(jobs.readDesignLog("job_00000000", { after: 0, maxBytes: 10 }));

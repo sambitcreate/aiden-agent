@@ -112,8 +112,11 @@ class FakeJobs {
   };
   readDesignLog = async (jobId: string, options: { after: number; maxBytes: number }): Promise<DesignLogRead> => {
     this.logReads.push({ jobId, ...options });
-    const text = this.designTail(jobId).slice(options.after, options.after + options.maxBytes);
-    return { text, from: options.after, next: options.after + text.length, truncated: false };
+    // Like `BackgroundJobs`: a cursor past the end reads nothing from the end.
+    const tail = this.designTail(jobId);
+    const from = Math.min(Math.max(0, options.after), tail.length);
+    const text = tail.slice(from, from + options.maxBytes);
+    return { text, from, next: from + text.length, end: tail.length, truncated: false };
   };
   byId(jobId: string): FakeJob {
     const job = this.jobs.find((entry) => entry.view.id === jobId);
@@ -1277,7 +1280,36 @@ test("logs pass the byte cursor through and cap at maxBytes", async (t) => {
   assert.equal(logs.from, 4);
   await h.servers.logs("ws", ".", { after: 0, maxBytes: 10 * 1024 * 1024 });
   assert.equal(h.jobs.logReads[1]!.maxBytes, 64 * 1024);
-  assert.deepEqual(await h.servers.logs("ws", "apps/none", { maxBytes: 100 }), { text: "", from: 0, next: 0, truncated: false });
+  assert.deepEqual(await h.servers.logs("ws", "apps/none", { maxBytes: 100 }), { text: "", from: 0, next: 0, end: 0, truncated: false });
+});
+
+test("logs name their run; a cursor from an earlier run or past the end reads this run from its oldest byte, marked truncated", async (t) => {
+  const h = harness(t);
+  await h.runApp();
+  const first = h.jobs.last();
+  h.jobs.output(first.view.id, "first run output\n");
+  const read = await h.servers.logs("ws", ".", { maxBytes: 1024 });
+  assert.equal(read.run, first.view.id);
+  assert.equal(read.truncated, false);
+  assert.equal(read.end, read.next);
+
+  const pastEnd = await h.servers.logs("ws", ".", { run: first.view.id, after: read.end + 500, maxBytes: 1024 });
+  assert.equal(pastEnd.from, 0, "a cursor past the end can't belong to this log");
+  assert.equal(pastEnd.truncated, true);
+  assert.equal(pastEnd.text, read.text);
+
+  void h.servers.restart({ ...h.input(), appRoot: "." });
+  await settle();
+  const second = h.jobs.last();
+  assert.notEqual(second.view.id, first.view.id);
+  h.jobs.output(second.view.id, "x".repeat(read.next + 40));
+  const stale = await h.servers.logs("ws", ".", { run: first.view.id, after: read.next, maxBytes: 1024 });
+  assert.equal(stale.run, second.view.id);
+  assert.equal(stale.from, 0, "the new run is read from its start, not from the old run's cursor");
+  assert.equal(stale.truncated, true);
+  const same = await h.servers.logs("ws", ".", { run: second.view.id, after: 10, maxBytes: 1024 });
+  assert.equal(same.from, 10);
+  assert.equal(same.truncated, false);
 });
 
 test("snapshot lists candidates, described roots and every app's status with relative roots only", async (t) => {
