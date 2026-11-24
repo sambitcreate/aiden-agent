@@ -1084,6 +1084,24 @@ final class AidenNativeIntegrationTests: XCTestCase {
         XCTAssertEqual(AidenRunsSummaryPolicy.visible(Array(rows.prefix(2))).hiddenCount, 0)
     }
 
+    /// A summary saved by the build before rows recorded staleness still
+    /// reads after an update, with its rows current; a stale row keeps its
+    /// flag through a round trip.
+    func testASummaryRowFromTheEarlierBuildStillDecodes() throws {
+        typealias Row = AidenRunsSummaryActivityAttributes.Row
+        let earlier = Data("""
+        {"streamID":"s1","chatID":"c1","title":"One","status":"thinking","updatedAt":0,"isFinal":false}
+        """.utf8)
+        let row = try JSONDecoder().decode(Row.self, from: earlier)
+        XCTAssertEqual(row.streamID, "s1")
+        XCTAssertFalse(row.isStale)
+
+        let stale = Row(streamID: "s2", chatID: "c2", title: "Two", status: .thinking,
+                        updatedAt: Date(timeIntervalSince1970: 0), isFinal: false, isStale: true)
+        let decoded = try JSONDecoder().decode(Row.self, from: JSONEncoder().encode(stale))
+        XCTAssertTrue(decoded.isStale)
+    }
+
     /// A summary is no more trustworthy than a single card: once the app
     /// stops updating it, it says so until every run has ended.
     func testSummaryNotesStalenessUntilEveryRunEnds() {

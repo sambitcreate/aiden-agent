@@ -15,6 +15,37 @@ struct AidenRunsSummaryActivityAttributes: ActivityAttributes {
         /// on the row so a relaunched app still knows which run made the
         /// summary stale; that run's next real update clears it.
         var isStale: Bool = false
+
+        init(
+            streamID: String,
+            chatID: String,
+            title: String,
+            status: AgentRunActivityStatus,
+            updatedAt: Date,
+            isFinal: Bool,
+            isStale: Bool = false
+        ) {
+            self.streamID = streamID
+            self.chatID = chatID
+            self.title = title
+            self.status = status
+            self.updatedAt = updatedAt
+            self.isFinal = isFinal
+            self.isStale = isStale
+        }
+
+        /// A summary saved before rows recorded staleness has no `isStale`;
+        /// its rows read as current.
+        init(from decoder: Decoder) throws {
+            let values = try decoder.container(keyedBy: CodingKeys.self)
+            streamID = try values.decode(String.self, forKey: .streamID)
+            chatID = try values.decode(String.self, forKey: .chatID)
+            title = try values.decode(String.self, forKey: .title)
+            status = try values.decode(AgentRunActivityStatus.self, forKey: .status)
+            updatedAt = try values.decode(Date.self, forKey: .updatedAt)
+            isFinal = try values.decode(Bool.self, forKey: .isFinal)
+            isStale = try values.decodeIfPresent(Bool.self, forKey: .isStale) ?? false
+        }
     }
 
     struct ContentState: Codable, Hashable, Sendable {
