@@ -561,7 +561,13 @@ export async function placeWrittenPagesOnCanvas(input: {
   if (showable.length === 0 && !rules) return { frameIds: [] };
   if (!rules) await input.pendingEntry?.();
   const viewOf = await input.pages.resolver(workspaceId);
-  const shouldSave = input.shouldSave;
+  // Asked on the canvas's chain before the write, and again after it: the
+  // chat must still be in design mode, if the caller asks that, and still in
+  // this workspace. A chat that moved while this ran writes nothing back to the
+  // canvas it left, whose cleanup may already have run.
+  const callerAllows = input.shouldSave;
+  const shouldSave = async (): Promise<boolean> =>
+    (await input.store.workspaceIdOf(input.chatId)) === workspaceId && (!callerAllows || (await callerAllows()));
   let placedIds: string[] = [];
   let removed: string[] = [];
   let pageId: string | undefined;
@@ -603,24 +609,20 @@ export async function placeWrittenPagesOnCanvas(input: {
       },
       {
         workspaceId,
-        // Leaving design mode (or deleting the chat) while this waited keeps the frames off the stored canvas.
-        ...(shouldSave
-          ? {
-              beforeWrite: async () => {
-                if (!(await shouldSave())) {
-                  removed = [];
-                  refused = true;
-                  throw UNCHANGED;
-                }
-              },
-            }
-          : {}),
+        // Leaving design mode, deleting the chat or moving it while this waited keeps the frames off the stored canvas.
+        beforeWrite: async () => {
+          if (!(await shouldSave())) {
+            removed = [];
+            refused = true;
+            throw UNCHANGED;
+          }
+        },
       },
     );
     // The mode can still turn off while the file is being written. Then the
     // frames are taken back off, unless the person changed the canvas since
     // or design mode is on again by the time that runs.
-    if (shouldSave && !(await shouldSave())) {
+    if (!(await shouldSave())) {
       if (placedIds.length > 0 || addedPageId !== undefined) {
         await retractPlacedFrames(input, workspaceId, saved.revision, placedIds, shouldSave, addedPageId);
       }
@@ -642,7 +644,7 @@ export async function placeWrittenPagesOnCanvas(input: {
   } catch (error) {
     if (error === UNCHANGED) {
       reportRemoved();
-      if (!rules || refused || (shouldSave && !(await shouldSave()))) return { frameIds: [] };
+      if (!rules || refused || !(await shouldSave())) return { frameIds: [] };
       const focusId = await show();
       return { frameIds: [], ...(pageId ? { pageId } : {}), ...(focusId !== undefined ? { focusId } : {}) };
     }

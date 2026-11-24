@@ -959,6 +959,52 @@ test("with design mode turned off before the write, no claim is made and nothing
   assert.equal(await canvases.views.get("chat-2", "ws-1"), undefined);
 });
 
+test("an entry still running when its chat moves to another workspace writes nothing back to the canvas it left", async (t) => {
+  const { workspaceRoot, canvases } = await workspaceWith(t, ["b-home.html"]);
+  await canvases.store.update("chat-1", (doc) => ({ ...doc, chatPages: { "chat-1": "page-1" } }));
+  const before = await canvases.workspaceStore.get("ws-1");
+  // chat-2 starts in ws-1; the move points it at ws-2 while entry waits.
+  const workspaces = new Map([["chat-1", "ws-1"], ["chat-2", "ws-1"]]);
+  const store = new DesignChatCanvases({
+    store: canvases.workspaceStore,
+    workspaceIdOf: async (chatId) => workspaces.get(chatId) ?? null,
+  });
+  let release: () => void = () => undefined;
+  const held = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  let reached: () => void = () => undefined;
+  const waiting = new Promise<void>((resolve) => {
+    reached = resolve;
+  });
+  const entry = placeWrittenPagesOnCanvas({
+    chatId: "chat-2",
+    store,
+    pages: canvases.pages("chat-2"),
+    shouldSave: () => true,
+    workspaceRoot,
+    paths: ["design/b-home.html"],
+    broadcast: () => undefined,
+    newId: ids(),
+    entry: {
+      ...entryFor(canvases, "chat-2", "Brand refresh"),
+      isLive: async (chatIds: string[]) => {
+        reached();
+        await held;
+        return new Set(chatIds);
+      },
+    },
+  });
+  await waiting;
+  // The move commits, then the old canvas's cleanup finds nothing of chat-2's.
+  workspaces.set("chat-2", "ws-2");
+  release();
+  const placed = await entry;
+  assert.deepEqual(await canvases.workspaceStore.get("ws-1"), before, "no claim, named page or frames come back to ws-1");
+  assert.deepEqual(placed.frameIds, []);
+  assert.equal(placed.focusId, undefined);
+});
+
 test("a turn's write while design mode's entry runs waits for it, lands on the chat's new page, and the page takes the newest title", async (t) => {
   const { workspaceRoot, canvases } = await workspaceWith(t, []);
   await canvases.store.update("chat-1", (doc) => ({ ...doc, chatPages: { "chat-1": "page-1" } }));
