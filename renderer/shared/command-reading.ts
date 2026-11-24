@@ -442,18 +442,22 @@ interface Reader {
 function outsideProject(word: string, reader: Reader): boolean {
   let path = word.includes("=") && word.startsWith("-") ? word.slice(word.indexOf("=") + 1) : word;
   if (path.includes("://")) return false;
+  // A home path is the person's own files, even when the home folder itself sits under a temp root.
+  let fromHome = false;
   if (path === "~" || path.startsWith("~/") || path.startsWith("~")) {
     if (!reader.home) return true;
     path = path === "~" ? reader.home : path.startsWith("~/") ? `${reader.home}${path.slice(1)}` : path;
     if (path.startsWith("~")) return true;
+    fromHome = true;
   } else if (/^\$\{?HOME\}?(\/|$)/u.test(path)) {
     if (!reader.home) return true;
     path = path.replace(/^\$\{?HOME\}?/u, reader.home);
+    fromHome = true;
   }
   if (path === ".." || path.startsWith("../")) return true;
   if (!path.startsWith("/")) return false;
   if (DEVICE_FILES.test(path)) return false;
-  if (TEMP_ROOTS.some((root) => path === root || path.startsWith(`${root}/`))) return false;
+  if (!fromHome && TEMP_ROOTS.some((root) => path === root || path.startsWith(`${root}/`))) return false;
   const root = reader.root?.replace(/\/+$/u, "");
   if (root && (path === root || path.startsWith(`${root}/`))) {
     // `/project/../elsewhere` climbs back out.

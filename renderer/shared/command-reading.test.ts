@@ -64,6 +64,7 @@ test("files outside the project are flagged; the project, temp folders and /dev 
   assert.deepEqual(labels(commandTags("cat /Users/me/project/../other/a.txt", where)), ["Uses files outside this project"]);
   assert.deepEqual(labels(commandTags("cat $HOME/.zshrc", where)), ["Uses files outside this project"]);
   assert.deepEqual(labels(commandTags("ls /tmp/build > /dev/null", where)), []);
+  assert.deepEqual(labels(commandTags("rm ~/notes.txt", { workspaceRoot: "/tmp/work/project", home: "/tmp/home" })), ["Deletes files", "Uses files outside this project"], "a home under a temp folder is still home");
 });
 
 test("internet, power and append steps are named", () => {
