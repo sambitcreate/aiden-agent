@@ -249,6 +249,17 @@ test("on Linux, an unreadable table fails closed", async () => {
   }
 });
 
+test("on Linux with IPv6 disabled, a missing tcp6 table is an empty one; a missing tcp table still fails", async () => {
+  const missing = () => Object.assign(new Error("ENOENT"), { code: "ENOENT" });
+  const noIpv6 = await listeningSocketsByProcess(
+    [501],
+    linuxDeps({ tcp: [TCP_HEADER, row("0100007F:1435", "11")].join("\n"), tcp6: missing(), fds: { 501: ["socket:[11]"] } }),
+  );
+  assert.deepEqual(noIpv6, { ok: true, byPid: new Map([[501, [{ address: "127.0.0.1", port: 5173 }]]]) });
+  assert.equal((await listeningSocketsByProcess([501], linuxDeps({ tcp: missing() }))).ok, false, "no IPv4 table is never empty");
+  assert.equal((await listeningSocketsByProcess([501], linuxDeps({ tcp: missing(), tcp6: missing() }))).ok, false);
+});
+
 test("an unreadable fd folder fails only the job that owns that pid", async () => {
   const result = await listeningSocketsByProcess(
     [501, 502],

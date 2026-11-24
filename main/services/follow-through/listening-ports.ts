@@ -385,7 +385,9 @@ async function linuxSockets(pids: readonly number[], deps: SocketReaderDeps): Pr
     let table: string;
     try {
       table = await deps.readFile(file);
-    } catch {
+    } catch (error) {
+      // A kernel booted with IPv6 off has no tcp6 table and so no IPv6 socket; any other failure fails closed.
+      if (family === 6 && errorCode(error) === "ENOENT") continue;
       return { ok: false, reason: `${file} unreadable` };
     }
     for (const [inode, socket] of parseProcNetTcpSockets(table, family)) listening.set(inode, socket);
