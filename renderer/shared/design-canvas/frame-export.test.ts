@@ -75,3 +75,9 @@ test("a tall frame beside short ones is one row, and a frame below the row's mid
   // `left-later` starts above that row's middle (650), so it joins it, on the left.
   assert.deepEqual(presentationOrder([...frames, box("left-later", -100, 620)]), ["tall", "short", "left-later", "later"]);
 });
+
+test("an app frame saves as a picture or a PDF, never its source, at its viewport width", () => {
+  const app = { kind: "app", viewport: { width: 1024, height: 700 }, w: 512 } as DesignFrame;
+  assert.deepEqual(designExportFormats(app), ["png", "pdf"]);
+  assert.equal(designExportWidth(app), 1024);
+});

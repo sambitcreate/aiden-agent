@@ -474,7 +474,8 @@
         "main/services/design-canvas/app-server/app-server-main.test.ts",
         "main/services/design-canvas/app-server/app-tool.test.ts",
         "main/handlers/design-app.test.ts",
-        "main/services/design-canvas/app-server/app-attach.test.ts"
+        "main/services/design-canvas/app-server/app-attach.test.ts",
+        "renderer/shared/design-canvas/app-frame.test.ts"
       ],
       "preserved": [
         "browser"
@@ -1597,7 +1598,8 @@
         "renderer/shared/design-app.test.ts",
         "renderer/design/design-app-sheets.test.tsx",
         "renderer/design/design-app-chip.test.tsx",
-        "renderer/design/design-app-logs.test.tsx"
+        "renderer/design/design-app-logs.test.tsx",
+        "main/services/design-canvas/app-frames/react-source-walk.test.ts"
       ],
       "preserved": [
         "ios-release-policy",

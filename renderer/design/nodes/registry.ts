@@ -1,4 +1,5 @@
 import type { NodeTypes } from "@xyflow/react";
+import { AppNode } from "./app-node";
 import { ArtboardNode } from "./artboard-node";
 import { ArtifactNode } from "./artifact-node";
 import { ConnectorNode } from "./connector-node";
@@ -22,4 +23,5 @@ export const designNodeTypes: NodeTypes = {
   connector: ConnectorNode,
   stroke: StrokeNode,
   frame: ArtboardNode,
+  app: AppNode,
 };

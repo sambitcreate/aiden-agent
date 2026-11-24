@@ -23,13 +23,16 @@ const PAPER_INCHES: Readonly<Record<DesignPaper, { width: number; height: number
 /** The formats a frame offers, in the order the Download menu lists them. */
 export function designExportFormats(frame: Pick<DesignFrame, "kind">): DesignExportFormat[] {
   if (isDesignPrintable(frame.kind)) return ["png", "pdf", "source"];
+  // A live app frame is drawn from the running app; it has no source file to save (D15).
+  if (frame.kind === "app") return ["png", "pdf"];
   if (frame.kind === "image") return ["source"];
   return [];
 }
 
 /** The width a frame's page is laid out at when it is exported. */
-export function designExportWidth(frame: Pick<DesignFrame, "kind" | "designWidth" | "w">): number {
+export function designExportWidth(frame: Pick<DesignFrame, "kind" | "designWidth" | "w" | "viewport">): number {
   if (frame.kind === "file") return frame.designWidth ?? 1280;
+  if (frame.kind === "app" && frame.viewport) return frame.viewport.width;
   return Math.min(1440, Math.max(320, Math.round(frame.w)));
 }
 

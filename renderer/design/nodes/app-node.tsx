@@ -1,0 +1,49 @@
+// A route of the workspace's running web app (design mode v2 Phase 3a, D16).
+// Until the live body lands, every app frame draws as a static card over its
+// last snapshot.
+
+import type { NodeProps } from "@xyflow/react";
+import { CanvasNodeChrome } from "../../canvas";
+import { designMinSize } from "../../shared/design-canvas/schema";
+import type { DesignNode } from "../canvas-adapter-core";
+import { useFrameSnapshot } from "../frame-snapshots";
+import { FrameActions } from "./frame-actions";
+import { DesignNodeResizer, FrameSkeleton } from "./frame-parts";
+import { FrameTitle } from "./frame-title";
+
+/** A fixed sentence over the frame's last picture: the app isn't live here. */
+export function AppFrameCard({ title, snapshot, children }: { title: string; snapshot: string | undefined; children: React.ReactNode }) {
+  return (
+    <div className="relative h-full w-full overflow-hidden rounded-b-button">
+      {snapshot ? (
+        <img src={snapshot} alt={title} draggable={false} className="block h-full w-full object-cover object-top opacity-60" />
+      ) : (
+        <FrameSkeleton title={title} />
+      )}
+      <div className="absolute inset-0 flex flex-col items-center justify-center gap-2 bg-popover/80 p-4 text-center">{children}</div>
+    </div>
+  );
+}
+
+export function AppNode({ id, data, selected }: NodeProps<DesignNode>) {
+  const { frame } = data;
+  const { snapshot } = useFrameSnapshot(id, 0);
+  return (
+    <>
+      <DesignNodeResizer selected={selected} minSize={designMinSize("app")} />
+      <div className="h-full w-full">
+        <CanvasNodeChrome
+          title={frame.title}
+          titleSlot={<FrameTitle frame={frame} />}
+          selected={selected}
+          flush
+          toolbar={<FrameActions frame={frame} />}
+        >
+          <AppFrameCard title={frame.title} snapshot={snapshot}>
+            <span className="text-strong text-secondary">Live apps are off</span>
+          </AppFrameCard>
+        </CanvasNodeChrome>
+      </div>
+    </>
+  );
+}

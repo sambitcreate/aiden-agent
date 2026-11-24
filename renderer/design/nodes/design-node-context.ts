@@ -10,7 +10,7 @@ import type { DesignExportFormat } from "../../shared/design-canvas/frame-export
 import type { DesignFrame } from "../../shared/design-canvas/schema";
 
 /** Height of a frame's title bar; a page frame's content box is the rest. */
-export const DESIGN_FRAME_HEADER_PX = 36;
+export { DESIGN_FRAME_HEADER_PX } from "../../shared/design-canvas/app-frame";
 /** A page frame drawn without a design width is laid out at this width. */
 export const DESIGN_DEFAULT_WIDTH = 1280;
 
