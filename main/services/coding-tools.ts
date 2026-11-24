@@ -1941,7 +1941,9 @@ function makeRunCommand(workspace: WorkspaceRootGuard, options: CodingToolOption
     // the command; the card still keeps the exact command one flip away.
     parameters: Type.Object({
       command: Type.String({ description: "The shell command to run." }),
+      // At least one visible character: a blank line would leave the card with nothing to say.
       description: Type.String({
+        pattern: "\\S",
         description: RUN_COMMAND_DESCRIPTION_GUIDANCE,
       }),
     }),

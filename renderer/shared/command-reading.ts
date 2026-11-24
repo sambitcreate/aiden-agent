@@ -64,7 +64,8 @@ export function commandExplanation(value: unknown): string | undefined {
 
 interface ParsedShell {
   /** Simple commands in order, as their words (quotes removed). */
-  commands: Array<{ words: string[]; pipedFrom: boolean }>;
+  /** Each simple command, with the files its own redirections write. */
+  commands: Array<{ words: string[]; pipedFrom: boolean; writes: string[] }>;
   /** Files written by `>`/`>>` (and `&>`), with whether they append. */
   writes: Array<{ path: string; append: boolean }>;
   /** `$( … )`, backtick and `<( … )` bodies, read separately. */
@@ -101,31 +102,64 @@ function closingParen(text: string, start: number): number {
   return -1;
 }
 
+/**
+ * Collects the command substitutions an expanding text runs (an unquoted
+ * here-document body). Returns false when one is left unfinished.
+ */
+function expandedSubstitutions(text: string, into: string[]): boolean {
+  for (let index = 0; index < text.length; index += 1) {
+    const char = text[index]!;
+    if (char === "\\") {
+      index += 1;
+    } else if (char === "$" && text[index + 1] === "(") {
+      const close = closingParen(text, index + 2);
+      if (close < 0) return false;
+      into.push(text.slice(index + 2, close));
+      index = close;
+    } else if (char === "`") {
+      const close = text.indexOf("`", index + 1);
+      if (close < 0) return false;
+      into.push(text.slice(index + 1, close));
+      index = close;
+    }
+  }
+  return true;
+}
+
 function parseShell(text: string): ParsedShell {
   const parsed: ParsedShell = { commands: [], writes: [], substitutions: [], complete: true };
   let words: string[] = [];
   let word: string | null = null;
   let pipedFrom = false;
   let pendingRedirect: { kind: "write"; append: boolean } | { kind: "read" } | { kind: "heredoc" } | undefined;
-  const heredocs: string[] = [];
+  // A quoted delimiter (`<<'EOF'`) keeps the body literal; an unquoted one expands `$(…)` and backticks in it.
+  const heredocs: Array<{ delimiter: string; expands: boolean }> = [];
+  let commandWrites: string[] = [];
+  let wordQuoted = false;
 
   const endWord = () => {
     if (word === null) return;
     const value = word;
+    const quoted = wordQuoted;
     word = null;
+    wordQuoted = false;
     if (pendingRedirect) {
       const redirect = pendingRedirect;
       pendingRedirect = undefined;
-      if (redirect.kind === "write" && !value.startsWith("&")) parsed.writes.push({ path: value, append: redirect.append });
-      if (redirect.kind === "heredoc") heredocs.push(value.replace(/^-/u, ""));
+      if (redirect.kind === "write" && !value.startsWith("&")) {
+        parsed.writes.push({ path: value, append: redirect.append });
+        commandWrites.push(value);
+      }
+      if (redirect.kind === "heredoc") heredocs.push({ delimiter: value.replace(/^-/u, ""), expands: !quoted });
       return;
     }
     words.push(value);
   };
   const endCommand = (pipeNext: boolean) => {
     endWord();
-    if (words.length > 0) parsed.commands.push({ words, pipedFrom });
+    if (words.length > 0 || commandWrites.length > 0) parsed.commands.push({ words, pipedFrom, writes: commandWrites });
     words = [];
+    commandWrites = [];
     pipedFrom = pipeNext;
   };
   const append = (value: string) => {
@@ -139,6 +173,7 @@ function parseShell(text: string): ParsedShell {
     if (char === "\\") {
       if (next === "\n") index += 2;
       else {
+        wordQuoted = true;
         if (next !== undefined) append(next);
         index += 2;
       }
@@ -152,6 +187,7 @@ function parseShell(text: string): ParsedShell {
         break;
       }
       append(text.slice(index + 1, end));
+      wordQuoted = true;
       index = end + 1;
       continue;
     }
@@ -193,6 +229,7 @@ function parseShell(text: string): ParsedShell {
       }
       if (end >= text.length) parsed.complete = false;
       append(value);
+      wordQuoted = true;
       index = end + 1;
       continue;
     }
@@ -282,10 +319,12 @@ function parseShell(text: string): ParsedShell {
       }
       endCommand(false);
       if (char === "\n" && heredocs.length > 0) {
-        // Skip each here-document's body, which is data, not commands.
+        // A here-document's body is data, not commands, except what an
+        // unquoted delimiter lets the shell expand in it: `$(…)` and backticks run.
         let cursor = index + 1;
-        for (const delimiter of heredocs.splice(0)) {
+        for (const { delimiter, expands } of heredocs.splice(0)) {
           let found = false;
+          const body: string[] = [];
           while (cursor <= text.length) {
             const lineEnd = text.indexOf("\n", cursor);
             const line = text.slice(cursor, lineEnd < 0 ? text.length : lineEnd);
@@ -294,8 +333,10 @@ function parseShell(text: string): ParsedShell {
               found = true;
               break;
             }
+            body.push(line);
           }
           if (!found) parsed.complete = false;
+          if (expands && !expandedSubstitutions(body.join("\n"), parsed.substitutions)) parsed.complete = false;
         }
         index = cursor;
         continue;
@@ -436,6 +477,8 @@ interface Reader {
   found: Set<string>;
   calm: Map<string, true>;
   depth: number;
+  /** Names of files an earlier step downloaded, so running one later is a downloaded script. */
+  downloads: Set<string>;
 }
 
 /** A path the command reaches outside the workspace folder (and outside temp folders). */
@@ -454,16 +497,84 @@ function outsideProject(word: string, reader: Reader): boolean {
     path = path.replace(/^\$\{?HOME\}?/u, reader.home);
     fromHome = true;
   }
-  if (path === ".." || path.startsWith("../")) return true;
-  if (!path.startsWith("/")) return false;
+  // Relative paths start at the project folder; `src/../../x` still climbs out of it.
+  if (!path.startsWith("/")) return climbsOut(path);
   if (DEVICE_FILES.test(path)) return false;
   if (!fromHome && TEMP_ROOTS.some((root) => path === root || path.startsWith(`${root}/`))) return false;
   const root = reader.root?.replace(/\/+$/u, "");
   if (root && (path === root || path.startsWith(`${root}/`))) {
     // `/project/../elsewhere` climbs back out.
-    return path.slice(root.length).split("/").includes("..");
+    return climbsOut(path.slice(root.length));
   }
   return true;
+}
+
+/** Whether a path, read from a folder, ends up above that folder at any step. */
+function climbsOut(path: string): boolean {
+  let depth = 0;
+  for (const segment of path.split("/")) {
+    if (segment === "..") depth -= 1;
+    else if (segment !== "" && segment !== ".") depth += 1;
+    if (depth < 0) return true;
+  }
+  return false;
+}
+
+/** The file name a URL saves as (`curl -O`, a bare `wget`). */
+function urlFileName(url: string): string | undefined {
+  const match = /^[a-z][a-z0-9+.-]*:\/\/[^/?#]*(\/[^?#]*)?/iu.exec(url);
+  const name = match?.[1] ? baseName(match[1]) : "";
+  return name && name !== "/" ? name : undefined;
+}
+
+/** The files a `curl` or `wget` call saves what it downloads to. */
+function fetchedFiles(name: string, args: readonly string[]): string[] {
+  const files: string[] = [];
+  const urls = args.filter((arg) => /^[a-z][a-z0-9+.-]*:\/\//iu.test(arg));
+  let remoteName = false;
+  let explicit = false;
+  for (let index = 0; index < args.length; index += 1) {
+    const arg = args[index]!;
+    if (name === "curl") {
+      if (arg === "--output" || arg === "-o") {
+        if (args[index + 1]) files.push(args[index + 1]!);
+        index += 1;
+      } else if (arg.startsWith("--output=")) {
+        files.push(arg.slice("--output=".length));
+      } else if (arg === "--remote-name" || arg === "--remote-name-all") {
+        remoteName = true;
+      } else if (/^-[a-zA-Z]+$/u.test(arg)) {
+        if (arg.includes("O")) remoteName = true;
+        // `-fsSLo file`: the file follows the flag that takes it.
+        if (arg.endsWith("o") && args[index + 1]) {
+          files.push(args[index + 1]!);
+          index += 1;
+        }
+      } else if (/^-[a-zA-Z]*o./u.test(arg) && !arg.startsWith("--")) {
+        files.push(arg.slice(arg.indexOf("o") + 1));
+      }
+    } else {
+      if (arg === "-O" || arg === "--output-document") {
+        if (args[index + 1]) files.push(args[index + 1]!);
+        explicit = true;
+        index += 1;
+      } else if (arg.startsWith("--output-document=")) {
+        files.push(arg.slice("--output-document=".length));
+        explicit = true;
+      } else if (/^-O./u.test(arg)) {
+        files.push(arg.slice(2));
+        explicit = true;
+      }
+    }
+  }
+  // A bare `wget URL` saves under the URL's own file name, as `curl -O` does.
+  if (remoteName || (name === "wget" && !explicit)) {
+    for (const url of urls) {
+      const file = urlFileName(url);
+      if (file) files.push(file);
+    }
+  }
+  return files.filter((file) => file !== "-");
 }
 
 function readCommands(text: string, reader: Reader): void {
@@ -485,12 +596,18 @@ function readCommands(text: string, reader: Reader): void {
   const fetchSubstitution = parsed.substitutions.some((body) =>
     parseShell(body).commands.some(({ words }) => FETCHERS.has(baseName(stripWrappers(words, new Set())[0] ?? ""))),
   );
-  for (const { words: raw, pipedFrom } of parsed.commands) {
+  for (const { words: raw, pipedFrom, writes } of parsed.commands) {
     if (!pipedFrom) fetchInPipeline = false;
     const words = stripWrappers(raw, reader.found);
     if (words.length === 0) continue;
     const name = baseName(words[0]!);
     const args = words.slice(1);
+    // A downloaded file run later in the same command: `curl -o x.sh URL && sh x.sh`, `wget URL/x.sh && ./x.sh`.
+    const ran = INTERPRETERS.has(name) ? (scriptFile(args) ?? args.find((arg) => !arg.startsWith("-"))) : name === "source" || name === "." ? args[0] : words[0]!.includes("/") ? words[0] : undefined;
+    if (ran && reader.downloads.has(baseName(ran))) reader.found.add("downloaded");
+    if (FETCHERS.has(name)) {
+      for (const file of [...fetchedFiles(name, args), ...writes]) reader.downloads.add(baseName(file));
+    }
     for (const arg of args) if (outsideProject(arg, reader)) reader.found.add("outside");
     if (words[0]!.startsWith("~") || words[0]!.startsWith("..")) reader.found.add("outside");
     // What runs is only known when it runs: `$CMD`, `$(…)`, or `eval "$(…)"`.
@@ -594,6 +711,7 @@ export function commandTags(command: string, options: { workspaceRoot?: string; 
     found: new Set(),
     calm: new Map(),
     depth: 0,
+    downloads: new Set(),
   };
   if (command.length > COMMAND_READING_LIMITS.command) reader.found.add("unread");
   else readCommands(command, reader);

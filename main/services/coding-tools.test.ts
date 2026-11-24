@@ -1937,7 +1937,7 @@ test("run_command reports real exit failures through Pi and codemode without re-
   }
 });
 
-test("a run_command call without its plain-words description is refused before anything runs", async () => {
+test("a run_command call without a plain-words description, or with a blank one, is refused before anything runs", async () => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-command-description-"));
   try {
     const tools = buildCodingTools(root);
@@ -1952,6 +1952,13 @@ test("a run_command call without its plain-words description is refused before a
     const text = missing.result.content[0];
     assert.match(text?.type === "text" ? text.text : "", /description: missing/u, "the model is told what to add");
     await assert.rejects(fs.stat(path.join(root, "ran")), "nothing ran");
+    for (const blank of ["", "   \n\t"]) {
+      const empty = await call({ command: "touch ran", description: blank });
+      assert.equal(empty.isError, true, JSON.stringify(blank));
+      const message = empty.result.content[0];
+      assert.match(message?.type === "text" ? message.text : "", /description/u, "the model is told the description is the problem");
+    }
+    await assert.rejects(fs.stat(path.join(root, "ran")), "a blank description runs nothing either");
 
     const described = await call({ command: "touch ran", description: "Creates an empty file named ran" });
     assert.notEqual(described.isError, true);
