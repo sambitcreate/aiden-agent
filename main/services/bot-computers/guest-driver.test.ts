@@ -142,6 +142,31 @@ test("the probe passes only with both grants, the pinned version, apps, and a re
   assert.equal((await probeGuestDriver(older)).ready, false);
 });
 
+test("Linux check_permissions x11 and atspi booleans map to readiness and veto when either is false", async (t) => {
+  const dir = scratch(t);
+  const permissions = path.join(dir, "permissions.json");
+  writeFileSync(permissions, JSON.stringify({ x11: true, atspi: true, xsend_event: true, wayland: false }));
+  const session = await (await host(t, "--permissions-file", permissions)).createSession();
+
+  assert.deepEqual(await probeGuestDriver(session), {
+    ready: true,
+    permissions: { accessibility: true, screenRecording: true },
+  });
+
+  writeFileSync(permissions, JSON.stringify({ x11: true, atspi: false, xsend_event: true, wayland: false }));
+  assert.deepEqual(await probeGuestDriver(session), {
+    ready: false,
+    permissions: { accessibility: false, screenRecording: true },
+    reason: "permissions",
+  });
+
+  writeFileSync(permissions, JSON.stringify({ x11: false, atspi: true, xsend_event: false, wayland: false }));
+  assert.deepEqual(await guestDriverPermissions(session, { prompt: false }), {
+    accessibility: false,
+    screenRecording: false,
+  });
+});
+
 test("asking for the grants prompts in the guest; checking never does", async (t) => {
   const dir = scratch(t);
   const permissions = path.join(dir, "permissions.json");

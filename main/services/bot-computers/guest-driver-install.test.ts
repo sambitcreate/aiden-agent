@@ -433,6 +433,7 @@ test("Linux systemd user unit uses absolute paths, DISPLAY=:0, bus env, and keep
   assert.match(unit, /^WorkingDirectory=\/home\/aiden$/mu);
   assert.match(unit, /^Environment="HOME=\/home\/aiden"$/mu);
   assert.match(unit, /^Environment="DISPLAY=:0"$/mu);
+  assert.match(unit, /^Environment="XAUTHORITY=\/home\/aiden\/\.Xauthority"$/mu);
   assert.match(unit, /^Environment="XDG_RUNTIME_DIR=\/run\/user\/1000"$/mu);
   assert.match(unit, /^Environment="DBUS_SESSION_BUS_ADDRESS=unix:path=\/run\/user\/1000\/bus"$/mu);
   assert.match(unit, /^Environment="CUA_DRIVER_RS_TELEMETRY_ENABLED=0"$/mu);
@@ -481,6 +482,7 @@ test("Linux bridge and suspend manage the enabled file, clean environment, and d
   assert.equal(run.status, 0, run.stderr);
   assert.match(run.stdout, new RegExp(`^ARGS mcp --embedded --socket ${socket.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&")}$`, "mu"));
   assert.match(run.stdout, /^DISPLAY=:0$/mu);
+  assert.match(run.stdout, new RegExp(`^XAUTHORITY=${home.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&")}/\\.Xauthority$`, "mu"));
   assert.match(run.stdout, /^CUA_DRIVER_RS_TELEMETRY_ENABLED=0$/mu);
   assert.doesNotMatch(run.stdout, /AIDEN_SECRET|provider-key/u);
   assert.equal(existsSync(path.join(home, LINUX_GUEST_DRIVER_ENABLED_FILE)), true);

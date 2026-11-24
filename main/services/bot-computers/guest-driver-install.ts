@@ -137,6 +137,9 @@ export function guestDriverEnvironment(
   if (guestOs === "linux") {
     env.DISPLAY = ":0";
     if (location !== undefined) {
+      // LightDM launches Xorg with `-auth /var/run/lightdm/root/:0` and writes the
+      // session cookie to `$HOME/.Xauthority`, so `cua-driver` needs XAUTHORITY to reach `:0`.
+      env.XAUTHORITY = `${location.home}/.Xauthority`;
       env.XDG_RUNTIME_DIR = `/run/user/${location.uid}`;
       env.DBUS_SESSION_BUS_ADDRESS = `unix:path=/run/user/${location.uid}/bus`;
     }
