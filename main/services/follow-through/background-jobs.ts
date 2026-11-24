@@ -153,6 +153,11 @@ export interface BackgroundJobsOptions {
   jobSockets?: (groups: ReadonlyMap<string, number>) => Promise<Map<string, JobSockets>>;
   /** A design job's processes that left its group (a `setsid` child), found by parent pid. */
   designStrays?: (pgid: number) => Promise<number[]>;
+  /**
+   * Every live process of this user started with this `NAME=value` in its
+   * environment, wherever its group or parent is now; rejects when it could not look.
+   */
+  markedProcesses?: (entry: string) => Promise<number[]>;
   portScanMs?: number;
   adoptedPollMs?: number;
   adoptSettleMs?: number;
@@ -227,7 +232,7 @@ interface JobRecord {
 /** Durable note of running jobs, so a launch after a crash can stop what was left. */
 interface RunningRecordFile {
   version: 1;
-  jobs: Array<{ id: string; pid: number; processStart?: string; check?: { workspaceId: string; chatId: string } }>;
+  jobs: Array<{ id: string; pid: number; processStart?: string; check?: { workspaceId: string; chatId: string }; design?: true }>;
 }
 
 const RECORD_FILE = "running.json";
@@ -298,6 +303,39 @@ export function defaultProcessHasEnvironment(pid: number, entry: string): Promis
       unreadable(error).then(resolve, reject);
     });
   });
+}
+
+/**
+ * Every live process of this user whose starting environment holds `entry`.
+ * Linux reads each `/proc/<pid>/environ` (another user's is unreadable and
+ * skipped). macOS's `ps -E` prints a process's starting environment after its
+ * command for this user's processes, though not for Apple's own platform
+ * binaries, so a marked `sh` or `sleep` there is not found.
+ */
+export async function defaultMarkedProcesses(entry: string): Promise<number[]> {
+  const found: number[] = [];
+  if (process.platform === "linux") {
+    for (const name of await fsp.readdir("/proc")) {
+      const pid = Number(name);
+      if (!Number.isSafeInteger(pid) || pid <= 1 || pid === process.pid) continue;
+      const environment = await fsp.readFile(`/proc/${pid}/environ`, "utf8").catch(() => "");
+      if (environment.split("\0").includes(entry)) found.push(pid);
+    }
+    return found;
+  }
+  const stdout = await new Promise<string>((resolve, reject) => {
+    execFile("ps", ["-E", "-A", "-ww", "-o", "pid=,command="], { timeout: 5_000, maxBuffer: 32 * 1024 * 1024 }, (error, out) => {
+      if (error || typeof out !== "string") reject(error ?? new Error("ps printed nothing."));
+      else resolve(out);
+    });
+  });
+  for (const line of stdout.split("\n")) {
+    const match = /^\s*(\d+)\s+(.*)$/u.exec(line);
+    const pid = Number(match?.[1]);
+    if (!match || pid <= 1 || pid === process.pid) continue;
+    if (match[2]!.split(/\s+/u).includes(entry)) found.push(pid);
+  }
+  return found;
 }
 
 /** A chat, or Aiden, already runs as many background jobs as it may. */
@@ -569,7 +607,11 @@ export class BackgroundJobs {
       this.finish(record, null, null);
       resolveExited();
     });
-    child.once("exit", () => this.endLeftovers(record));
+    child.once("exit", () => {
+      this.endLeftovers(record);
+      // A design job's setsid children outlive its group when it crashes: end them by marker.
+      if (isDesign(record)) void this.sweepMarked(id).catch((error: unknown) => this.options.log?.("A design job's leftovers could not be ended.", error));
+    });
     child.once("close", (code, signal) => {
       this.finish(record, code, signal);
       resolveExited();
@@ -980,7 +1022,26 @@ export class BackgroundJobs {
       this.writeRecord();
       await this.recordWrite;
     }
+    // A design job's setsid children left its group, so ending the group missed them: find them by marker.
+    for (const entry of parsed?.jobs ?? []) {
+      if (entry?.design === true && typeof entry.id === "string" && /^job_[0-9a-f]{8}$/u.test(entry.id)) await this.sweepMarked(entry.id);
+    }
     return stopped;
+  }
+
+  /**
+   * Ends every process still carrying a job's marker, wherever it is now:
+   * politely, then forced. A look that fails ends nothing.
+   */
+  private async sweepMarked(jobId: string): Promise<void> {
+    const find = this.options.markedProcesses ?? defaultMarkedProcesses;
+    const entry = `${BACKGROUND_JOB_MARKER}=${jobId}`;
+    const asked = await find(entry).catch((): number[] => []);
+    if (!asked.length) return;
+    signalEach(asked, "SIGTERM");
+    await this.waitUntil(() => asked.every((pid) => !processExists(pid)));
+    const left = await find(entry).catch(() => asked.filter((pid) => processExists(pid)));
+    signalEach(left, "SIGKILL");
   }
 
   /**
@@ -1368,7 +1429,12 @@ export class BackgroundJobs {
         ...this.checkGroups.values(),
         ...[...this.jobs.values()]
           .filter((job) => job.view.state === "running" && job.view.pid)
-          .map((job) => ({ id: job.view.id, pid: job.view.pid!, ...(job.processStart ? { processStart: job.processStart } : {}) })),
+          .map((job) => ({
+            id: job.view.id,
+            pid: job.view.pid!,
+            ...(job.processStart ? { processStart: job.processStart } : {}),
+            ...(isDesign(job) ? { design: true as const } : {}),
+          })),
       ],
     };
     const target = path.join(this.options.logDir, RECORD_FILE);

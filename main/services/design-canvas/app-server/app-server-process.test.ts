@@ -216,6 +216,18 @@ test("a setsid child's wildcard listener is caught, and the stop ends it", { ski
   await eventually(() => !alive(pid), "the setsid listener to end", 5_000);
 });
 
+test("a crash ends the setsid child the server started, found by the job's marker", { skip }, async (t) => {
+  const h = await harness(t, { scripts: { dev: serve("--fake-setsid-loopback-child --fake-crash-after=1500") }, nodeModules: true });
+  assert.equal((await h.start()).phase, "running");
+  const pid = Number(/setsid pid (\d+)/u.exec(await h.logText())?.[1]);
+  t.after(() => {
+    if (pid && alive(pid)) process.kill(pid, "SIGKILL");
+  });
+  assert.ok(pid > 0 && alive(pid));
+  await eventually(() => h.latest()?.phase === "crashed", "the crash", 10_000);
+  await eventually(() => !alive(pid), "the setsid child to end with the crash", 5_000);
+});
+
 test("a server that never listens is stopped as not-ready, and its process is gone", { skip }, async (t) => {
   const h = await harness(t, { scripts: { dev: serve("--fake-never-listen") }, nodeModules: true });
   const status = await h.start();

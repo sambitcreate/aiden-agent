@@ -1030,6 +1030,32 @@ test("stopWorkspace and shutdown stop design jobs, and running.json lists them f
   assert.equal(jobs.getDesign(last.id)?.state, "stopped");
 });
 
+test("the next launch ends a design job's setsid escapee by its marker, even when the job's group is gone", { skip }, async (t) => {
+  const dir = await tempDir();
+  const logDir = path.join(dir, "logs");
+  await fs.mkdir(logDir, { recursive: true });
+  // Its own session, as `setsid` makes it: nothing links it to the job's group any more.
+  const escapee = spawn(NODE, ["-e", FOREVER], { detached: true, stdio: "ignore", env: { ...process.env, AIDEN_BACKGROUND_JOB: "job_0000cccc" } });
+  const bystander = spawn(NODE, ["-e", FOREVER], { detached: true, stdio: "ignore", env: { ...process.env, AIDEN_BACKGROUND_JOB: "job_0000dddd" } });
+  const gone = spawn(NODE, ["-e", ""], { detached: true, stdio: "ignore" });
+  await new Promise((resolve) => gone.once("exit", resolve));
+  t.after(async () => {
+    for (const child of [escapee, bystander]) {
+      try {
+        process.kill(child.pid!, "SIGKILL");
+      } catch {
+        // Already gone.
+      }
+    }
+    await fs.rm(dir, { recursive: true, force: true });
+  });
+  await new Promise((resolve) => setTimeout(resolve, 300));
+  await fs.writeFile(path.join(logDir, "running.json"), JSON.stringify({ version: 1, jobs: [{ id: "job_0000cccc", pid: gone.pid, design: true }] }));
+  await new BackgroundJobs({ logDir, stopGraceMs: 500 }).reapPreviousLaunch();
+  await eventually(() => !alive(escapee.pid!), "the escapee to end");
+  assert.ok(alive(bystander.pid!), "another job's marked process is left alone");
+});
+
 test("a design log rotates past its size and keeps running", { skip }, async (t) => {
   const dir = await tempDir();
   const { jobs, startNode } = designHarness(dir, { designLogRotateBytes: 4 * 1024 });

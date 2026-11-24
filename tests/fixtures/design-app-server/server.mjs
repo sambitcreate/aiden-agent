@@ -75,6 +75,14 @@ if (inUseOnce && !existsSync(inUseOnce)) {
       const child = spawn(process.execPath, ["-e", "process.on('SIGTERM', () => {}); setInterval(() => {}, 1000)"], { stdio: "ignore" });
       console.log(`child pid ${child.pid}`);
     }
+    if (has("fake-setsid-loopback-child")) {
+      // A setsid child that stays on loopback, so only a crash or a stop can end it.
+      const child = spawn(process.execPath, ["-e", "require('node:net').createServer().listen(0, '127.0.0.1'); setInterval(() => {}, 1000)"], {
+        stdio: "ignore",
+        detached: true,
+      });
+      console.log(`setsid pid ${child.pid}`);
+    }
     if (has("fake-setsid-child")) {
       // `detached` makes the child call setsid(): it leaves the job's process group.
       const child = spawn(process.execPath, ["-e", "require('node:net').createServer().listen(0, '0.0.0.0'); setInterval(() => {}, 1000)"], {
