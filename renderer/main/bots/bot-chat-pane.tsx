@@ -724,6 +724,7 @@ export function TranscriptEntries({
   onRunRoutine,
   onRespondToProposal,
   onNewRoutineLink,
+  proposalDeclineReasons = true,
   onRespondToSkill,
   onRespondToLesson,
   onUndoLearning,
@@ -760,6 +761,8 @@ export function TranscriptEntries({
   ): Promise<BotRoutineProposalRespondResult | null>;
   /** A new link for a link routine a card added; the old one stops working. */
   onNewRoutineLink?(routineId: string): Promise<string | null>;
+  /** Whether a routine suggestion's Not now offers "Why not?"; off where the reason can't be recorded. */
+  proposalDeclineReasons?: boolean;
   /** One action on a "Needs you" issue card. */
   /** Undo on a "Settings updated" receipt; resolves to its settled status. */
   onUndoSettings?(changeId: string): Promise<BotSettingsChangeStatus>;
@@ -937,6 +940,7 @@ export function TranscriptEntries({
                 {...(row.supersededBy ? { supersededBy: row.supersededBy } : {})}
                 onRespond={(decision, reason) => onRespondToProposal(row.proposal.proposalId, decision, reason)}
                 {...(onNewRoutineLink ? { onNewLink: onNewRoutineLink } : {})}
+                declineReasons={proposalDeclineReasons}
               />
             ) : null);
           case "lesson_proposal":

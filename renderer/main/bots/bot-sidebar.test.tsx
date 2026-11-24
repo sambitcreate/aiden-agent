@@ -628,7 +628,7 @@ test("a paired Mac's Bot shows when it is working there, and marks the one whose
   assert.ok(!working.querySelector(".bot-avatar"), "a row with no avatar keeps the stock icon");
 });
 
-test("a paired Mac's Bot shows its last message and photo, and a new reply shows a dot until its chat is opened", async () => {
+test("a paired Mac's Bot shows its last message and photo, and only a reply after it was first listed shows a dot", async () => {
   const queryClient = createBotTestQueryClient();
   queryClient.setQueryData(hostQueryKeys.list(), [
     { id: "host-b", name: "Studio", enabled: true, state: "connected", features: ["bot-durable-session-v1"], capabilities: ["chat:read", "chat:write", "bot:read", "bot:write"] },
@@ -661,8 +661,9 @@ test("a paired Mac's Bot shows its last message and photo, and a new reply shows
     ],
     runs: [],
   });
-  const inAMinute = () => new Date(Date.now() + 60_000).toISOString();
-  queryClient.setQueryData(hostQueryKeys.feed("host-b"), feed(inAMinute()));
+  // The host's clock is a day ahead of this Mac's: only its own times are compared.
+  const hostTime = (offset: number) => new Date(Date.now() + 86_400_000 + offset).toISOString();
+  queryClient.setQueryData(hostQueryKeys.feed("host-b"), feed(hostTime(0)));
   const photoReads: unknown[] = [];
   sidebarIpc([], {}, {
     "bots:list": () => [],
@@ -674,25 +675,28 @@ test("a paired Mac's Bot shows its last message and photo, and a new reply shows
     },
   });
   const { router } = await mountSidebar("/bots", queryClient);
-  const row = await screen.findByRole("button", { name: "Scout, on Studio, unread" });
+  // The reply already there when this Mac first lists the Bot starts read.
+  const row = await screen.findByRole("button", { name: "Scout, on Studio" });
   assert.ok(within(row).getByText("Flights to Lisbon are cheaper on Tuesday"));
-  assert.ok(within(row).getByRole("img", { name: "Unread", hidden: true }));
+  assert.ok(!within(row).queryByRole("img", { name: "Unread", hidden: true }));
   assert.equal(row.getAttribute("aria-description"), "Flights to Lisbon are cheaper on Tuesday");
   await waitFor(() => assert.equal(row.querySelector("img")?.getAttribute("src"), "data:image/png;base64,AQIDBA=="));
   assert.deepEqual(photoReads, [{ operation: "botAvatar", resourceId: "remote-1", itemId: revision }]);
 
+  // The next reply is new.
+  await act(async () => {
+    queryClient.setQueryData(hostQueryKeys.feed("host-b"), feed(hostTime(60_000)));
+  });
+  const unread = await screen.findByRole("button", { name: "Scout, on Studio, unread" });
+  assert.ok(within(unread).getByRole("img", { name: "Unread", hidden: true }));
+
+  // The open Bot shows no dot, but choosing it is not seeing the reply: only its chat showing it is.
   await act(async () => {
     await router.navigate({ to: "/host/$hostId/bots/$botId/chat", params: { hostId: "host-b", botId: "remote-1" } });
   });
+  await screen.findByRole("button", { name: "Scout, on Studio" });
   await act(async () => {
     await router.navigate({ to: "/bots" });
-  });
-  await screen.findByRole("button", { name: "Scout, on Studio" });
-  assert.ok(!within(screen.getByRole("button", { name: "Scout, on Studio" })).queryByRole("img", { name: "Unread", hidden: true }));
-
-  // The next reply is new again.
-  await act(async () => {
-    queryClient.setQueryData(hostQueryKeys.feed("host-b"), feed(new Date(Date.now() + 120_000).toISOString()));
   });
   await screen.findByRole("button", { name: "Scout, on Studio, unread" });
   assert.equal(photoReads.length, 1, "the same photo is read once");
