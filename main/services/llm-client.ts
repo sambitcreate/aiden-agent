@@ -585,6 +585,7 @@ import {
   designCanvasStore,
   designCanvasViews,
   designGrants,
+  designLiveChats,
   designModeConsent,
   designSystemOffers,
   recentWrittenPages,
@@ -2994,6 +2995,7 @@ async function prepareGeneration(
       store: designCanvasStore,
       broadcast: announceCanvasChange,
       pages: designPages,
+      isLive: designLiveChats,
       focus: focusDesignCanvas,
       snapshot: async (toolSignal) =>
         supportsImages
