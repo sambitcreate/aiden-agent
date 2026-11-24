@@ -359,6 +359,43 @@ test("a run that ends while its feed is still opening is reported settled, and n
   }
 });
 
+test("a run that ends after its opening feed read the state is reported settled once", async () => {
+  const fauxModels = createFauxModels([fauxAssistantMessage("Done already.")]);
+  let release: (() => void) | undefined;
+  let held = true;
+  const planRead = new Promise<void>((resolve) => (release = resolve));
+  let reachedPlan: (() => void) | undefined;
+  const atPlan = new Promise<void>((resolve) => (reachedPlan = resolve));
+  const settled: string[] = [];
+  const live = await start(fauxModels, {
+    projection: {
+      // The plan is read after the state and the transcript, so the run's last frame is still to come.
+      plan: async () => {
+        if (held) {
+          reachedPlan!();
+          await planRead;
+        }
+        return null;
+      },
+      onRunSettled: (_botId, state) => settled.push(state.kind),
+    },
+  });
+  try {
+    const sent = await live.service.send("bot:a", { text: "Quick one", requestId: "desk-1" });
+    await atPlan;
+    const outcome = await live.service.awaitReply("bot:a", sent.submissionId, new AbortController().signal);
+    assert.equal(outcome.kind, "completed");
+    held = false;
+    release!();
+    await waitFor(() => settled.length > 0, { what: "the settled run to be reported" });
+    // Give a second report, if any, time to arrive.
+    await new Promise((resolve) => setTimeout(resolve, 200));
+    assert.deepEqual(settled, ["idle"], "one run, one report");
+  } finally {
+    await live.close();
+  }
+});
+
 test("a Bot paused while its feed is still opening reads paused, not running", async () => {
   const fauxModels = createFauxModels([slowAnswer()], { tokensPerSecond: 20 });
   let release: (() => void) | undefined;

@@ -1128,6 +1128,11 @@ interface Feed {
    */
   projectedFrom: readonly EntryRecord[] | undefined;
   runActive: boolean;
+  /**
+   * Whether the current run's end was already reported (`onRunSettled`), so a
+   * frame and the opening reconciliation don't both report it. A new run clears it.
+   */
+  settled: boolean;
   /** Identity of the current run; a follow-up turn replaces the run without a gap. */
   runKey: string | null;
   watch: ActiveConversationWatch;
@@ -1383,6 +1388,7 @@ export function createBotLiveProjection(deps: BotLiveProjectionDeps): BotLivePro
       return;
     }
     feed.runActive = runActive;
+    if (runActive) feed.settled = false;
     // The run's end is reported with its new state, so the line never flashes a phase after the reply.
     const state = await deps.state(feed.botId).catch(() => feed.state);
     setState(feed, state);
@@ -1391,7 +1397,10 @@ export function createBotLiveProjection(deps: BotLiveProjectionDeps): BotLivePro
       feed.stopping = false;
       feed.resuming = false;
       resumingBots.delete(feed.botId);
-      deps.onRunSettled?.(feed.botId, state);
+      if (!feed.settled) {
+        feed.settled = true;
+        deps.onRunSettled?.(feed.botId, state);
+      }
       void closeIfUnwatched(feed);
     }
   }
@@ -1400,7 +1409,10 @@ export function createBotLiveProjection(deps: BotLiveProjectionDeps): BotLivePro
     if (JSON.stringify(state) === JSON.stringify(feed.state)) return;
     const wasRunning = feed.state.kind === "running";
     feed.state = state;
-    if (state.kind === "running" && !wasRunning) startRun(feed);
+    if (state.kind === "running" && !wasRunning) {
+      feed.settled = false;
+      startRun(feed);
+    }
     if (state.kind !== "running") {
       feed.stopping = false;
       feed.resuming = false;
@@ -1460,6 +1472,7 @@ export function createBotLiveProjection(deps: BotLiveProjectionDeps): BotLivePro
         frame: { entries: initial.entries, docs: initial.docs },
         projectedFrom: projected.stable ? initial.entries : undefined,
         runActive: liveRunActive(initial.docs),
+        settled: false,
         runKey: liveRunKey(initial.docs),
         watch,
         cancel: () => cancel(new Error("Bot live feed closed.")),
@@ -1633,7 +1646,10 @@ export function createBotLiveProjection(deps: BotLiveProjectionDeps): BotLivePro
             // or was interrupted) while it opened is reported settled.
             const latest = await deps.state(botId).catch(() => opened.state);
             setState(opened, latest);
-            if (state.kind === "running" && latest.kind !== "running") {
+            // A run whose last frame is still to come is reported by that frame
+            // or here, whichever is first; a paused run's frame may never come.
+            if (state.kind === "running" && latest.kind !== "running" && !opened.settled) {
+              opened.settled = true;
               deps.onRunSettled?.(opened.botId, latest);
               void closeIfUnwatched(opened);
             }
