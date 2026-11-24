@@ -217,9 +217,11 @@ export function botSettingsReceiptLabel(fields: readonly BotSettingsField[]): st
   return fields.length === 1 && fields[0] === "instructions" ? "Instructions updated" : "Settings updated";
 }
 
-/** "Update instructions?" when the held change touches the instructions, else "Update settings?". */
+/** "Update instructions?" for instructions, "Change computer?" for computer-only, else "Update settings?". */
 export function botSettingsHeldTitle(fields: readonly BotSettingsField[]): string {
-  return fields.includes("instructions") ? "Update instructions?" : "Update settings?";
+  if (fields.includes("instructions")) return "Update instructions?";
+  if (fields.length === 1 && fields[0] === "computer") return "Change computer?";
+  return "Update settings?";
 }
 
 /** One readable line for a changed field. `modelLabel` names a model. */

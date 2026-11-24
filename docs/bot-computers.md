@@ -1,9 +1,12 @@
 # Bot computers
 
-A Bot computer is a Linux virtual machine (Debian 13 with XFCE) that belongs to
-one Bot, so the Bot can work in apps and a browser without touching the
-person's own desktop. Bot computers are opt-in, run only on a Mac with Apple
-silicon, and are built and managed with
+A Bot computer is a Linux virtual machine (Debian 13 with XFCE) where one or
+more Bots can work in apps and a browser without touching the person's own
+desktop. By default, Bots share one **Shared computer** (`aiden-vm-shared`),
+taking turns through a FIFO queue with both a shared folder and their own
+per-Bot working folders; you can also assign any Bot to another existing Linux
+VM or create a fresh dedicated Linux computer at any time. Bot computers are
+opt-in, run only on a Mac with Apple silicon, and are built and managed with
 [Lume](https://github.com/trycua/cua/tree/lume-v0.8.0/libs/lume) 0.8.0, which
 ships inside Aiden.
 
@@ -123,14 +126,43 @@ interrupted while it was being made is marked for **Reset**.
   refuses to start a writable disk when the host volume is low on free space;
   Aiden maps that refusal to a free-space message as well.
 
+## Shared and selectable computers
+
+- **Shared by default.** Settings → Computers & VMs → Bot computers → **Default
+  for new Bots** defaults to **Shared computer** (`defaultComputerMode: "shared"`),
+  or can be switched to **New computer for each Bot** (`"dedicated"`). Multiple
+  Bots assigned to **Shared computer** share a single running Linux VM (so five
+  Bots on the shared computer count as one running VM toward your running limit).
+- **Selecting or creating a computer.** In a Bot's Advanced tab → **Computer**,
+  pick **Off**, **Shared computer**, any existing Linux VM, or **+ New computer**
+  to clone a fresh dedicated VM from the base. Settings → Computers & VMs →
+  **Computers** lists every Linux VM with its Shared/Dedicated badge, run state,
+  assigned Bots, disk usage, and **New computer**, **Rename**, **Reset**, and
+  **Delete** actions. A Bot can also propose switching computers or requesting a
+  new dedicated VM via `update_bot`; computer changes are always held on an
+  approval card (**Change computer?**) for you to apply.
+- **FIFO turn queue & human takeover.** When two Bots share a Linux VM and both
+  try to act at once, Aiden serializes their `computer` and `computer_shell`
+  calls through a FIFO queue. The Computer tab displays the assigned computer
+  name and a status banner when another Bot holds the VM or is waiting in line;
+  cancelling a queued Bot removes it cleanly from the queue. Taking over the
+  screen or opening a sign-in handoff on a shared VM blocks all Bots assigned to
+  it and stops `aiden-bot` processes before handing you the desktop.
+- **Shared and per-Bot folders.** Each shared Linux VM mounts a host workspace
+  folder (`bot-computers/computers/<computerId>/workspace/`) over `virtiofs`
+  containing `shared/` (linked at `~/Shared`) and `bots/<botDir>/` (one folder
+  per assigned Bot). `computer_shell` starts in the calling Bot's own folder by
+  default while `~/Shared` sits right beside it. Deleting a Bot disconnects it
+  from the shared computer without deleting the shared VM.
+
 ## Limits
 
-- **Running at once:** 1 to 4 computers (default 2), bounded by the Mac's
-  available memory (4 GB per running computer). At the limit, the computer used
-  longest ago stops if it is idle. A computer is idle when nothing is using it,
-  the person is not controlling it, and it has not been used for a minute. If
-  none is idle, the next Bot waits, and its computer shows "Waiting for another
-  Bot's computer".
+- **Running at once:** 1 to 4 distinct running computers (default 2), bounded by
+  the Mac's available memory (4 GB per running computer). At the limit, the
+  computer used longest ago stops if it is idle. A computer is idle when nothing
+  is using it, the person is not controlling it, and it has not been used for a
+  minute. If none is idle, the next Bot waits, and its computer shows "Waiting
+  for another Bot's computer".
 - **Building the base** (Set up or Update base) runs it as a computer, so it
   takes one of those places while Debian installs and Aiden prepares it. An idle
   computer stops to make room. If every running computer is in use, Update base

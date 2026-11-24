@@ -1,6 +1,6 @@
 import * as React from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import type { BotComputersStatus, BotComputerStatus } from "../shared/bot-computers";
+import type { BotComputersStatus, BotComputerStatus, BotComputerVmStatus } from "../shared/bot-computers";
 import { useAppCapabilities } from "./app-capabilities";
 import { botComputersApi } from "./ipc";
 
@@ -45,6 +45,20 @@ export function useBotComputersCache() {
         })),
       dropComputer: (botId: string): void =>
         update((current) => ({ ...current, computers: current.computers.filter((entry) => entry.botId !== botId) })),
+      putVm: (vm: BotComputerVmStatus): void =>
+        update((current) => {
+          const exists = current.vms.some((entry) => entry.id === vm.id);
+          return {
+            ...current,
+            vms: exists ? current.vms.map((entry) => (entry.id === vm.id ? vm : entry)) : [...current.vms, vm],
+          };
+        }),
+      dropVm: (computerId: string): void =>
+        update((current) => ({
+          ...current,
+          vms: current.vms.filter((entry) => entry.id !== computerId),
+          computers: current.computers.filter((entry) => entry.computerId !== computerId),
+        })),
       refresh: (): Promise<void> => queryClient.invalidateQueries({ queryKey: BOT_COMPUTERS_QUERY_KEY }),
     };
   }, [queryClient]);

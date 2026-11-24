@@ -115,6 +115,7 @@ const BOT_TEST_IPC_DEFAULTS: Record<string, (...args: unknown[]) => unknown> = {
     setup: { kind: "not_set_up" },
     settings: { ...DEFAULT_BOT_COMPUTERS_SETTINGS },
     diskUsedBytes: 0,
+    vms: [],
     computers: [],
     requirements: {
       downloadBytes: 3_221_225_472,

@@ -152,3 +152,74 @@ test("without the Bot computers capability there is no Computer section and no I
   assert.equal(screen.queryByText("Computer"), null);
   assert.deepEqual(ipc.calls.filter((call) => call.channel.startsWith("botComputers:")), []);
 });
+
+test("Linux computer picker switches between Shared computer, existing VMs, and + New computer, and shows queue status", async () => {
+  const assigned: unknown[] = [];
+  const sharedVm = {
+    id: "shared",
+    name: "Shared computer",
+    kind: "shared" as const,
+    vmName: "aiden-vm-shared",
+    state: "running" as const,
+    baseBuild: "25G83",
+    outdated: false,
+    assignedBotIds: [bot.id, "bot-2"],
+    activeBotId: "bot-2",
+    queuedBotIds: [bot.id],
+    controller: "bot" as const,
+  };
+  const researchVm = {
+    id: "research",
+    name: "Research Linux",
+    kind: "dedicated" as const,
+    vmName: "aiden-vm-research",
+    state: "stopped" as const,
+    baseBuild: "25G83",
+    outdated: false,
+    assignedBotIds: [],
+    queuedBotIds: [],
+    controller: "bot" as const,
+  };
+  let current: BotComputersStatus = {
+    ...status(READY, [
+      computer({
+        vmName: "aiden-vm-shared",
+        computerId: "shared",
+        computerName: "Shared computer",
+        shared: true,
+        state: "running",
+        activeBotId: "bot-2",
+        queuePosition: 1,
+      }),
+    ]),
+    vms: [sharedVm, researchVm],
+  };
+  installBotTestIpc({
+    "bots:list": () => [
+      { id: bot.id, name: "Ada" },
+      { id: "bot-2", name: "Ben" },
+    ],
+    "botComputers:status": () => current,
+    "botComputers:assignComputer": (botId, target) => {
+      assigned.push([botId, target]);
+      const next =
+        (target as { kind: string }).kind === "new"
+          ? computer({ vmName: "aiden-vm-new-1", computerId: "new-1", computerName: "Ada's Linux", shared: false })
+          : computer({ vmName: "aiden-vm-research", computerId: "research", computerName: "Research Linux", shared: false });
+      current = { ...current, computers: [next] };
+      return next;
+    },
+  });
+  await mount();
+
+  await screen.findByText(/Waiting for Ben on Shared computer \(queue #1\)/u);
+
+  const picker = screen.getByRole("combobox", { name: "Linux computer" });
+  fireEvent.click(picker);
+  fireEvent.click(await screen.findByRole("option", { name: "Research Linux" }));
+  await waitFor(() => assert.deepEqual(assigned[0], [bot.id, { kind: "existing", computerId: "research" }]));
+
+  fireEvent.click(screen.getByRole("combobox", { name: "Linux computer" }));
+  fireEvent.click(await screen.findByRole("option", { name: "+ New computer" }));
+  await waitFor(() => assert.deepEqual(assigned[1], [bot.id, { kind: "new" }]));
+});

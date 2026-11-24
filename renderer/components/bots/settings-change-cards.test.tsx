@@ -116,3 +116,29 @@ test("the held card marks changes against the instructions as they are now, and 
   assert.equal(kind("List travel first."), "same");
   assert.equal(kind("Book window seats."), "removed", "the person's own line that Apply would drop is shown");
 });
+
+test("a held computer change asks Change computer? and explains the Linux computer request", async () => {
+  const answers: string[] = [];
+  render(
+    <HeldSettingsCard
+      change={{
+        changeId: "c-computer",
+        mode: "held",
+        fields: ["computer"],
+        lines: ["Computer: New dedicated computer (Research Linux)"],
+        heldReason: "widens",
+      }}
+      botName="Chief"
+      onRespond={async (decision) => {
+        answers.push(decision);
+      }}
+    />,
+  );
+  screen.getByRole("group", { name: "Change computer?" });
+  screen.getByText("Chief asked to change its Linux computer.");
+  screen.getByText("Computer: New dedicated computer (Research Linux)");
+  await act(async () => {
+    fireEvent.click(screen.getByRole("button", { name: "Apply" }));
+  });
+  assert.deepEqual(answers, ["apply"]);
+});

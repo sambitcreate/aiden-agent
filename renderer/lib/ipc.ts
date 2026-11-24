@@ -82,11 +82,14 @@ import {
   parseBotComputerStatus,
   parseBotComputersStatus,
   parseBotComputerViewerGrant,
+  parseBotComputerVmStatus,
+  type BotComputerAssignTarget,
   type BotComputerPointer,
   type BotComputersSettings,
   type BotComputersStatus,
   type BotComputerStatus,
   type BotComputerViewerGrant,
+  type BotComputerVmStatus,
 } from "../shared/bot-computers.js";
 import type { AgentsInstructionNotice } from "../shared/agents-instructions-notice";
 import type { ChatForkPosition } from "../shared/chat-copy-contract";
@@ -1325,10 +1328,16 @@ async function botComputersStatus(channel: string): Promise<BotComputersStatus> 
   return status;
 }
 
-async function botComputer(channel: string, botId: string): Promise<BotComputerStatus> {
-  const computer = parseBotComputerStatus(await invoke<unknown>(channel, botId));
+async function botComputer(channel: string, ...args: unknown[]): Promise<BotComputerStatus> {
+  const computer = parseBotComputerStatus(await invoke<unknown>(channel, ...args));
   if (!computer) throw new Error("Aiden returned an invalid Bot computer.");
   return computer;
+}
+
+async function botComputerVm(channel: string, ...args: unknown[]): Promise<BotComputerVmStatus> {
+  const vm = parseBotComputerVmStatus(await invoke<unknown>(channel, ...args));
+  if (!vm) throw new Error("Aiden returned an invalid Linux computer.");
+  return vm;
 }
 
 /** Settings → Computers & VMs → Bot computers and the profile's Computer section (Apple silicon only). */
@@ -1345,6 +1354,16 @@ export const botComputersApi = {
   reset: (botId: string) => botComputer(BOT_COMPUTER_CHANNELS.reset, botId),
   remove: (botId: string) => invoke<void>(BOT_COMPUTER_CHANNELS.remove, botId),
   stop: (botId: string) => invoke<void>(BOT_COMPUTER_CHANNELS.stop, botId),
+  assignComputer: (botId: string, target: BotComputerAssignTarget) =>
+    botComputer(BOT_COMPUTER_CHANNELS.assignComputer, botId, target),
+  createComputer: (name?: string) =>
+    botComputerVm(BOT_COMPUTER_CHANNELS.createComputer, ...(name === undefined ? [] : [name])),
+  renameComputer: (computerId: string, name: string) =>
+    botComputerVm(BOT_COMPUTER_CHANNELS.renameComputer, computerId, name),
+  deleteComputer: (computerId: string, options?: { force?: boolean }) =>
+    invoke<void>(BOT_COMPUTER_CHANNELS.deleteComputer, computerId, options),
+  resetComputer: (computerId: string) =>
+    botComputerVm(BOT_COMPUTER_CHANNELS.resetComputer, computerId),
   /** The Computer tab's stream target. `start` boots a stopped computer; only a person's switch to the tab passes it. */
   viewerGrant: async (botId: string, options: { start: boolean }): Promise<BotComputerViewerGrant> => {
     const grant = parseBotComputerViewerGrant(await invoke<unknown>(BOT_COMPUTER_CHANNELS.viewerGrant, botId, options));

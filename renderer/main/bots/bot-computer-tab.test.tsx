@@ -437,3 +437,47 @@ test("reopening a chat whose remembered view still shows a sign-in answered sinc
   assert.equal(screen.queryByRole("group", { name: "Planner needs you" }), null);
   assert.equal(botPanel().getAttribute("data-state"), "closed");
 });
+
+test("a shared computer shows its name badge and a live queue banner when another Bot holds it", async () => {
+  openPanelOn("computer");
+  const sharedRunning = computer({
+    vmName: "aiden-vm-shared",
+    computerId: "shared",
+    computerName: "Shared computer",
+    shared: true,
+    state: "running",
+    controller: "bot",
+    activeBotId: "bot-2",
+    queuePosition: 1,
+  });
+  await mountBotChat(
+    { computers: [sharedRunning] },
+    {
+      "bots:list": () => [
+        { id: "bot-1", name: "Planner" },
+        { id: "bot-2", name: "Researcher" },
+      ],
+    },
+  );
+  const panel = botPanel();
+  await waitFor(() => {
+    const badge = panel.querySelector("[data-bot-computer-name]");
+    assert.equal(badge?.textContent, "Shared computer");
+  });
+  const banner = await waitFor(() => {
+    const el = panel.querySelector("[data-bot-computer-queue]");
+    assert.ok(el);
+    return el;
+  });
+  assert.equal(banner.textContent, "Waiting for Researcher on Shared computer (queue #1)");
+
+  // Once taken over by the person, the status line names the shared computer.
+  act(() =>
+    emitBotTestNotification(
+      BOT_COMPUTERS_CHANGED_CHANNEL,
+      status([{ ...sharedRunning, controller: "person", activeBotId: undefined, queuePosition: undefined }]),
+    ),
+  );
+  await waitFor(() => assert.ok(within(panel).getByText("You're using Shared computer")));
+  assert.equal(panel.querySelector("[data-bot-computer-queue]"), null);
+});

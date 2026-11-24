@@ -16,6 +16,7 @@ import {
   botSettingsReceiptLabel,
   type BotSettingsChangeEntryData,
   type BotSettingsChangeStatus,
+  type BotSettingsField,
   type BotSettingsHeldReason,
 } from "../../shared/bot-settings-changes";
 import { cn } from "../../lib/ui-utils";
@@ -112,7 +113,7 @@ export function HeldSettingsCard({
       }
     >
       <Text as="p" variant="small" color="secondary">
-        {heldReasonText(botName, change.heldReason ?? "not_owner")}
+        {heldReasonText(botName, change.heldReason ?? "not_owner", change.fields)}
       </Text>
       {other.length > 0 ? (
         <Text as="p" variant="small" color="secondary">
@@ -131,14 +132,23 @@ export function HeldSettingsCard({
   );
 }
 
-function heldReasonText(botName: string, reason: BotSettingsHeldReason): string {
+function heldReasonText(botName: string, reason: BotSettingsHeldReason, fields: readonly BotSettingsField[]): string {
   switch (reason) {
     case "not_owner":
       return `${botName} asked to change its settings in a run you didn't start.`;
     case "outside_content":
       return `${botName} asked to change its settings after this chat read content from outside it, like a web page or an app's data.`;
-    case "widens":
+    case "widens": {
+      const hasComputer = fields.includes("computer");
+      const hasReachOut = fields.includes("dailyCheckIns") || fields.includes("notifications");
+      if (hasComputer && !hasReachOut) {
+        return `${botName} asked to change its Linux computer.`;
+      }
+      if (hasComputer && hasReachOut) {
+        return `${botName} asked to change its Linux computer and reach out to you more on its own.`;
+      }
       return `${botName} asked to reach out to you more on its own.`;
+    }
   }
 }
 

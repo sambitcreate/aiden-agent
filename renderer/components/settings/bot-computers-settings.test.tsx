@@ -262,3 +262,135 @@ test("first-launch macOS removal notice displays freed GB and dismisses through 
   assert.ok(channels().includes("botComputers:dismissMigrationNotice"));
   await waitFor(() => assert.equal(screen.queryByRole("status"), null));
 });
+
+test("Default for new Bots saves defaultComputerMode and Computers section manages VMs (create, rename, reset, delete)", async () => {
+  const created: unknown[] = [];
+  const renamed: unknown[] = [];
+  const resetIds: unknown[] = [];
+  const deleted: unknown[] = [];
+  const updatedSettings: unknown[] = [];
+  const sharedVm = {
+    id: "shared",
+    name: "Shared computer",
+    kind: "shared" as const,
+    vmName: "aiden-vm-shared",
+    state: "running" as const,
+    baseBuild: "20261123-2671",
+    outdated: false,
+    assignedBotIds: ["bot-1", "bot-2"],
+    activeBotId: "bot-1",
+    queuedBotIds: ["bot-2"],
+    diskUsedBytes: 5_000_000_000,
+    controller: "bot" as const,
+  };
+  const dedicatedVm = {
+    id: "research",
+    name: "Research Linux",
+    kind: "dedicated" as const,
+    vmName: "aiden-vm-research",
+    state: "stopped" as const,
+    baseBuild: "20261101-1",
+    outdated: true,
+    assignedBotIds: [],
+    queuedBotIds: [],
+    diskUsedBytes: 4_000_000_000,
+    controller: "bot" as const,
+  };
+  let currentVms: typeof sharedVm[] = [sharedVm, dedicatedVm];
+  let currentSettings = { ...DEFAULT_BOT_COMPUTERS_SETTINGS };
+  const initial = status(READY, {
+    vms: currentVms,
+    diskUsedBytes: 9_000_000_000,
+  });
+  mount(initial, {
+    handlers: {
+      "botComputers:status": () => ({ ...initial, settings: currentSettings, vms: currentVms }),
+      "bots:list": () => [
+        { id: "bot-1", name: "Ada" },
+        { id: "bot-2", name: "Ben" },
+      ],
+      "botComputers:updateSettings": (patch) => {
+        updatedSettings.push(patch);
+        currentSettings = { ...currentSettings, ...(patch as object) };
+        return currentSettings;
+      },
+      "botComputers:createComputer": (name) => {
+        created.push(name);
+        const createdVm = {
+          id: "dev-box",
+          name: String(name || "Linux computer"),
+          kind: "dedicated" as const,
+          vmName: "aiden-vm-dev-box",
+          state: "stopped" as const,
+          baseBuild: "20261123-2671",
+          outdated: false,
+          assignedBotIds: [],
+          queuedBotIds: [],
+          diskUsedBytes: 0,
+          controller: "bot" as const,
+        };
+        currentVms = [...currentVms, createdVm];
+        return createdVm;
+      },
+      "botComputers:renameComputer": (computerId, name) => {
+        renamed.push([computerId, name]);
+        const next = { ...dedicatedVm, name: String(name) };
+        currentVms = currentVms.map((vm) => (vm.id === computerId ? next : vm));
+        return next;
+      },
+      "botComputers:resetComputer": (computerId) => {
+        resetIds.push(computerId);
+        const current = currentVms.find((vm) => vm.id === computerId) ?? dedicatedVm;
+        const next = { ...current, outdated: false, baseBuild: "20261123-2671" };
+        currentVms = currentVms.map((vm) => (vm.id === computerId ? next : vm));
+        return next;
+      },
+      "botComputers:deleteComputer": (computerId, opts) => {
+        deleted.push([computerId, opts]);
+        currentVms = currentVms.filter((vm) => vm.id !== computerId);
+      },
+    },
+  });
+
+  // Shared VM displays kind/running badges, assigned Bots, disk size, and live active/queued line.
+  await screen.findByText(/Ada, Ben · 5 GB · In use by Ada · 1 waiting/u);
+  assert.ok(screen.getAllByText("Shared computer").length >= 1);
+  assert.ok(screen.getByText("Outdated"));
+
+  // Default for new Bots saves defaultComputerMode.
+  const defaultSelect = screen.getByRole("combobox", { name: "Default for new Bots" });
+  fireEvent.click(defaultSelect);
+  fireEvent.click(await screen.findByRole("option", { name: "New computer for each Bot" }));
+  await waitFor(() => assert.deepEqual(updatedSettings, [{ defaultComputerMode: "dedicated" }]));
+
+  // New computer dialog calls createComputer.
+  fireEvent.click(screen.getByRole("button", { name: "New computer" }));
+  const createDialog = await screen.findByRole("dialog");
+  fireEvent.change(within(createDialog).getByRole("textbox", { name: "Computer name" }), {
+    target: { value: "Dev box" },
+  });
+  fireEvent.click(within(createDialog).getByRole("button", { name: "Create computer" }));
+  await waitFor(() => assert.deepEqual(created, ["Dev box"]));
+
+  // Rename dialog calls renameComputer.
+  fireEvent.click(screen.getByRole("button", { name: "Rename Research Linux" }));
+  const renameDialog = await screen.findByRole("dialog");
+  fireEvent.change(within(renameDialog).getByRole("textbox", { name: "Computer name" }), {
+    target: { value: "Lab Linux" },
+  });
+  fireEvent.click(within(renameDialog).getByRole("button", { name: "Save name" }));
+  await waitFor(() => assert.deepEqual(renamed, [["research", "Lab Linux"]]));
+
+  // Reset confirmation calls resetComputer.
+  fireEvent.click(await screen.findByRole("button", { name: "Reset Lab Linux" }));
+  const resetDialog = await screen.findByRole("alertdialog");
+  fireEvent.click(within(resetDialog).getByRole("button", { name: "Reset computer" }));
+  await waitFor(() => assert.deepEqual(resetIds, ["research"]));
+
+  // Deleting an assigned VM confirms and passes { force: true }.
+  fireEvent.click(screen.getByRole("button", { name: "Delete Shared computer" }));
+  const deleteDialog = await screen.findByRole("alertdialog");
+  assert.match(deleteDialog.textContent ?? "", /2 Bots are currently assigned/u);
+  fireEvent.click(within(deleteDialog).getByRole("button", { name: "Delete computer" }));
+  await waitFor(() => assert.deepEqual(deleted, [["shared", { force: true }]]));
+});
