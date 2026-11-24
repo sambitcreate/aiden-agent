@@ -62,7 +62,7 @@ interface ControlEntry {
   controller: "bot" | "person";
   by?: BotComputerTakeOverSource;
   actions: Set<{ botId: string; controller: AbortController }>;
-  waiters: Set<{ botId: string; resolve(): void }>;
+  waiters: Set<{ botId: string; resolve(): void; reject(error: unknown): void }>;
 }
 
 /**
@@ -135,8 +135,9 @@ export function createBotComputerControl(): BotComputerControl & {
   const forgetScope = (scope: string) => {
     const current = entries.get(scope);
     if (!current) return;
-    for (const action of current.actions) action.controller.abort(new BotComputerError("cancelled", "The Bot's computer was removed."));
-    for (const waiter of current.waiters) waiter.resolve();
+    const cancelled = new BotComputerError("cancelled", "The Bot's computer was removed.");
+    for (const action of current.actions) action.controller.abort(cancelled);
+    for (const waiter of current.waiters) waiter.reject(cancelled);
     entries.delete(scope);
   };
 
@@ -206,6 +207,10 @@ export function createBotComputerControl(): BotComputerControl & {
             signal?.removeEventListener("abort", abort);
             resolve();
           },
+          reject: (error: unknown) => {
+            signal?.removeEventListener("abort", abort);
+            reject(error);
+          },
         };
         const abort = () => {
           current.waiters.delete(waiter);
@@ -229,16 +234,17 @@ export function createBotComputerControl(): BotComputerControl & {
       }
       const current = entries.get(scope);
       if (!current) return;
+      const cancelled = new BotComputerError("cancelled", "The Bot's computer was changed or removed.");
       for (const action of [...current.actions]) {
         if (action.botId === botId) {
           current.actions.delete(action);
-          action.controller.abort(new BotComputerError("cancelled", "The Bot's computer was removed."));
+          action.controller.abort(cancelled);
         }
       }
       for (const waiter of [...current.waiters]) {
         if (waiter.botId === botId) {
           current.waiters.delete(waiter);
-          waiter.resolve();
+          waiter.reject(cancelled);
         }
       }
     },

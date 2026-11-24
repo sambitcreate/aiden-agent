@@ -153,10 +153,24 @@ export function createBotComputerShellTool(
         return waitForBotWithin(deps.control, botId, signal, giveBackBudget);
       };
       let releaseLease: (() => void) | undefined;
+      const releaseNow = () => {
+        const release = releaseLease;
+        releaseLease = undefined;
+        release?.();
+      };
       try {
-        releaseLease = await deps.host.acquireLease?.(botId, { signal, onProgress: progress });
-        if (deps.control.controller(botId) === "person" && !(await waitForGiveBack())) {
-          return textResult(botComputerUnattendedGaveUp(`${owner}'s`), true);
+        // Never hold the FIFO VM lease while waiting for human Give back, so unattended
+        // Bots sharing the VM observe person control immediately and keep their bounded wait.
+        for (;;) {
+          if (deps.control.controller(botId) === "person" && !(await waitForGiveBack())) {
+            return textResult(botComputerUnattendedGaveUp(`${owner}'s`), true);
+          }
+          releaseLease = await deps.host.acquireLease?.(botId, { signal, onProgress: progress });
+          if (deps.control.controller(botId) === "person") {
+            releaseNow();
+            continue;
+          }
+          break;
         }
         await deps.host.ensureRunning(botId, { reason, signal, onProgress: progress });
         const remoteCommand = botComputerShellCommand(command, BOT_COMPUTER_LINUX_SHELL_USER, {
@@ -172,6 +186,7 @@ export function createBotComputerShellTool(
         return await formatBotComputerShellResult(result);
       } catch (error) {
         if (error instanceof BotComputerTakenOverError) {
+          releaseNow();
           const back = await waitForGiveBack();
           const stopped =
             "The person took over the computer, so Aiden stopped waiting for the command. It may have partly run, or still be running in the computer: check before running it again.";
@@ -181,7 +196,7 @@ export function createBotComputerShellTool(
         if (error instanceof BotComputerError) return textResult(error.message, true);
         return textResult(`Aiden couldn't run the command in ${owner}'s computer. Try again.`, true);
       } finally {
-        releaseLease?.();
+        releaseNow();
         deps.host.touch(botId);
       }
     },
