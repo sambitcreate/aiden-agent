@@ -2,7 +2,7 @@
 
 ## Unreleased
 
-- **2026-11-24 — Bots waiting on you (provisional Remote revision 68, `bot:needs-you`).** On a Mac that offers it, the app asks for `bot:needs-you` in a call of its own. A Bot the Mac says waits on the person reads "Waiting for you" on its Bots row and is no longer shown as working, and the Inbox lists it under Needs you with that reason (after an open-issue count). An approval the phone can see in the Bot's chat keeps its own line. Other Macs look as before.
+- **2026-11-24 — Bots waiting on you (provisional Remote revision 68, `bot:needs-you`).** On a Mac that offers it, the app asks for `bot:needs-you` in a call of its own. A Bot the Mac says waits on the person reads "Waiting for you" on its Bots row and is no longer shown as working, and the Inbox lists it under Needs you with that reason (after an open-issue count). A Bot waiting on an approval the phone can see in its chat reads "Needs your OK" (or "Waiting for your OK on your Mac" when only the Mac may answer) instead, as on Android, with or without this capability. Other Macs look as before.
 
 - **2026-11-22 — Pairing feedback and QR framing.** Add Computer scans for QR codes inside the visible viewfinder. Manual pairing shows what to correct below the address or setup code field. Search keeps Add Computer available until a computer is paired.
 

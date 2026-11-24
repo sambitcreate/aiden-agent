@@ -277,6 +277,9 @@ enum AidenBotSessionCopy {
     static let needsModel = "Needs an AI model"
     /// Revision 68: an approval, a question or a hand-off waits on the person.
     static let waitingForYou = "Waiting for you"
+    /// A run waits on an approval this phone may answer, or only the Mac can.
+    static let needsYourOK = "Needs your OK"
+    static let waitingForYourOKOnMac = "Waiting for your OK on your Mac"
     static let needsModelHint = "Set up on your computer"
     static let setUp = "Set up"
     static let queued = "Queued"
