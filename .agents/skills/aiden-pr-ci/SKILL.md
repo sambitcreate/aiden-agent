@@ -9,19 +9,20 @@ An Aiden CI run takes anywhere from 10 minutes to 6 hours, mostly waiting for ma
 
 ## What has to pass
 
-The `main` ruleset requires four checks: `CI required`, `Linux x64`, `Linux arm64` and `Linux x64 · Fedora RPM`. `CI required` (in `.github/workflows/ci.yml`) passes only when every selected job it depends on passes: policy, TypeScript and lint, the desktop build and diagnostics, model catalog contracts, the desktop unit lanes, the four Electron E2E shards, Apple Foundation Models, iOS, Android and the headless CLI. `iOS build and simulator tests (Xcode 27, non-blocking)` does not gate a merge; mention its failures, but don't block on them or treat them as yours unless your change touched that code.
+The `main` ruleset requires four checks: `CI required`, `Linux x64`, `Linux arm64` and `Linux x64 · Fedora RPM`. `CI required` (in `.github/workflows/ci.yml`) passes only when every selected job it depends on passes: policy, TypeScript and lint, the desktop build and diagnostics, model catalog contracts, the desktop unit lanes, every Electron E2E shard, Apple Foundation Models, iOS, Android and the headless CLI. `iOS build and simulator tests (Xcode 27, non-blocking)` does not gate a merge; mention its failures, but don't block on them or treat them as yours unless your change touched that code.
 
 ## After you push: hand off the wait, then end your turn
 
-One `gh pr checks <n> --repo sambitcreate/aiden-agent` right after pushing is fine, to catch an instant failure. Then do the first of these that applies and end the turn:
+One `gh pr checks <n> --repo sambitcreate/aiden-agent` right after pushing is fine, to catch an instant failure. Then do both of these steps and end the turn:
 
-1. **Merge when green**, only when the person or task asked for a merge: `gh pr merge <n> --repo sambitcreate/aiden-agent --auto --merge`. Aiden lands PRs as merge commits. GitHub merges once the required checks pass on that head; nothing needs to watch it.
-2. **Be told about failures, conflicts and people's comments**, with whichever watcher this environment has:
+1. **If the person or task asked for a merge, turn on auto-merge:** `gh pr merge <n> --repo sambitcreate/aiden-agent --auto --merge`. Aiden lands PRs as merge commits. GitHub merges once the required checks pass on that head, but it tells nobody when a check fails, a conflict appears or someone comments, so step 2 still applies.
+2. **Always register a watcher** for failures, conflicts and people's comments, using whichever one this environment has:
    - **Claude desktop app session:** turn on Auto-fix for the session's PR. The app wakes the session on CI failures, merge conflicts and review comments.
    - **Inside Aiden (a workspace chat):** call `follow_pull_request` with the PR link. Aiden posts failed checks, conflicts and comments into the chat and starts a follow-up answer for the ones that need work.
-   - **The owner's Mac (any agent):** if `command -v pr-watchd` finds it, run `pr-watchd add sambitcreate/aiden-agent <n>`. Add `--auto` to also turn on auto-merge, and `--agent --dir <this checkout>` to have a headless agent fix failures. Check with `pr-watchd list`. It checks GitHub every 5 minutes from launchd without a model, ignores bots and its own replies, and stops watching when the PR is merged or closed.
+   - **The owner's Mac (any agent):** if `command -v pr-watchd` finds it, run `pr-watchd add sambitcreate/aiden-agent <n>`. Add `--auto` to also turn on auto-merge (only when a merge was asked for), and `--agent --dir <this checkout>` to have a headless agent fix failures. Check with `pr-watchd list`. It checks GitHub every 5 minutes from launchd without a model, ignores bots and its own replies, and stops watching when the PR is merged or closed.
    - **None of these (cloud or another machine):** say the PR is pushed and CI is running, and end the turn. The person or the next session picks it up.
-3. **Status of many PRs:** `pr-watchd digest sambitcreate/aiden-agent`, not one `gh` call per PR.
+
+For the status of many PRs at once, run `pr-watchd digest sambitcreate/aiden-agent`, not one `gh` call per PR.
 
 Never wait inside your turn. None of these, for any reason:
 
