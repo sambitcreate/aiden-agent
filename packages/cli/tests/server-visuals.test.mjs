@@ -167,6 +167,33 @@ test("a reply holds no more pictures than one message can carry, and Aiden is to
   assert.match(api.htmlVisualResultText("V2", "full", "/x.html"), /^Not shown: .+as many pictures as one message can/u);
 });
 
+function formatChartPhase(event) {
+  if (event.status === "start") return `[phase] chart test / ${event.phase}: started`;
+  const status = event.status === "done" ? "ok" : "failed";
+  return `[phase] chart test / ${event.phase}: ${event.elapsedMs ?? 0}ms (${status})`;
+}
+
+test("renderServerVisualImage reports named launch failure and close phases when the browser cannot start", async () => {
+  const profiles = () => readdirSync(tmpdir()).filter((name) => name.startsWith("aiden-visual-")).length;
+  const before = profiles();
+  const events = [];
+  const image = await api.renderServerVisualImage({
+    browserPath: join(tmpdir(), "aiden-missing-browser-binary"),
+    hostPage: "<!doctype html><html><body></body></html>",
+    width: 720,
+    onPhase(event) { events.push(event); },
+  });
+  assert.equal(image, null);
+  assert.deepEqual(
+    events.map(({ phase, status }) => [phase, status]),
+    [["browser launch", "start"], ["browser launch", "failed"], ["close", "start"], ["close", "done"]],
+  );
+  for (const event of events) {
+    if (event.status !== "start") assert.ok(typeof event.elapsedMs === "number" && event.elapsedMs >= 0);
+  }
+  assert.equal(profiles(), before, "the temporary profile is deleted even after a launch failure");
+});
+
 const browser = api.findServerBrowser({ platform: process.platform, isRoot: process.getuid?.() === 0 });
 
 test("an installed browser draws a chart offline into a picture and leaves no profile behind", { skip: browser.kind !== "found" && "no Chrome or Chromium at a fixed path" }, async (t) => {
@@ -176,11 +203,32 @@ test("an installed browser draws a chart offline into a picture and leaves no pr
   const profiles = () => readdirSync(tmpdir()).filter((name) => name.startsWith("aiden-visual-")).length;
   const before = profiles();
   const visuals = api.createServerVisualCollector();
+  const phaseEvents = [];
+  const render = (options) => api.renderServerVisualImage({
+    ...options,
+    onPhase(event) {
+      phaseEvents.push(event);
+      console.log(formatChartPhase(event));
+    },
+  });
   const html = `<div style="height:240px"><canvas id="c"></canvas></div><script>new Chart(document.getElementById("c"), {type:"bar",data:{labels:["Q1","Q2"],datasets:[{label:"Sales",data:[3,5]}]},options:{animation:false,maintainAspectRatio:false}})</script>`;
   const started = Date.now();
-  const text = await run(tools(dir, { visuals }).render_artifact, "raw_html", { title: "Quarterly sales", html });
-  assert.ok(Date.now() - started < 20_000);
-  assert.match(text, /^Shown as an image:/u, text);
+  const text = await run(tools(dir, { visuals, render }).render_artifact, "raw_html", { title: "Quarterly sales", html });
+  const phaseSummary = phaseEvents.map(formatChartPhase).join("; ");
+  assert.ok(Date.now() - started < 20_000, `chart render exceeded 20s (${phaseSummary})`);
+  assert.match(text, /^Shown as an image:/u, `${text} (${phaseSummary})`);
+  assert.deepEqual(
+    phaseEvents.map(({ phase, status }) => [phase, status]),
+    [
+      ["browser launch", "start"], ["browser launch", "done"],
+      ["page ready", "start"], ["page ready", "done"],
+      ["screenshot", "start"], ["screenshot", "done"],
+      ["close", "start"], ["close", "done"],
+    ],
+  );
+  for (const event of phaseEvents) {
+    if (event.status !== "start") assert.ok(typeof event.elapsedMs === "number" && event.elapsedMs >= 0);
+  }
   const [attachment] = visuals.messageFields("chat-1", "message-1", publicIds).attachments;
   const bytes = Buffer.from(attachment.data, "base64");
   assert.equal(attachment.mimeType, "image/png");

@@ -280,6 +280,14 @@ function waitForExit(child: ChildProcess, ms: number): Promise<void> {
 /** One render at a time on the whole server: each one starts its own browser. */
 let renderQueue: Promise<unknown> = Promise.resolve();
 
+export type ServerVisualPhase = "browser launch" | "page ready" | "screenshot" | "close";
+
+export interface ServerVisualPhaseEvent {
+  phase: ServerVisualPhase;
+  status: "start" | "done" | "failed";
+  elapsedMs?: number;
+}
+
 export interface RenderServerVisualOptions {
   browserPath: string;
   hostPage: string;
@@ -287,6 +295,7 @@ export interface RenderServerVisualOptions {
   signal?: AbortSignal;
   timeoutMs?: number;
   platform?: NodeJS.Platform;
+  onPhase?: (event: ServerVisualPhaseEvent) => void;
 }
 
 /**
@@ -305,6 +314,20 @@ async function renderNow(options: RenderServerVisualOptions): Promise<CapturedIm
   const timeout = AbortSignal.timeout(options.timeoutMs ?? SERVER_VISUAL_TIMEOUT_MS);
   const signal = options.signal ? AbortSignal.any([options.signal, timeout]) : timeout;
   if (signal.aborted) return null;
+  const emitPhase = (event: ServerVisualPhaseEvent) => {
+    try { options.onPhase?.(event); } catch { /* Phase telemetry must never fail a render. */ }
+  };
+  let activePhase: { name: ServerVisualPhase; startedAt: number } | undefined;
+  const startPhase = (name: ServerVisualPhase) => {
+    activePhase = { name, startedAt: Date.now() };
+    emitPhase({ phase: name, status: "start" });
+  };
+  const endPhase = (status: "done" | "failed") => {
+    if (!activePhase) return;
+    const { name, startedAt } = activePhase;
+    activePhase = undefined;
+    emitPhase({ phase: name, status, elapsedMs: Math.max(0, Date.now() - startedAt) });
+  };
   const platform = options.platform ?? process.platform;
   const profileDir = mkdtempSync(join(tmpdir(), "aiden-visual-"));
   let child: ChildProcess | undefined;
@@ -312,6 +335,7 @@ async function renderNow(options: RenderServerVisualOptions): Promise<CapturedIm
   const kill = () => { if (child && child.exitCode === null && child.signalCode === null) child.kill("SIGKILL"); };
   signal.addEventListener("abort", kill, { once: true });
   try {
+    startPhase("browser launch");
     child = spawn(options.browserPath, serverBrowserArguments(profileDir, platform), {
       stdio: ["ignore", "ignore", "ignore", "pipe", "pipe"],
       env: browserEnvironment(profileDir),
@@ -352,6 +376,9 @@ async function renderNow(options: RenderServerVisualOptions): Promise<CapturedIm
     await call("Page.enable", {}, sessionId);
     const fullWidth = options.width + PADDING * 2;
     await call("Emulation.setDeviceMetricsOverride", { width: fullWidth, height: 400, deviceScaleFactor: DEVICE_SCALE, mobile: false }, sessionId);
+    endPhase("done");
+
+    startPhase("page ready");
     const { frameTree } = await call("Page.getFrameTree", {}, sessionId) as { frameTree: { frame: { id: string } } };
     await call("Page.setDocumentContent", { frameId: frameTree.frame.id, html: options.hostPage }, sessionId);
     // Wait for the visual to report its height and then stop changing.
@@ -365,18 +392,34 @@ async function renderNow(options: RenderServerVisualOptions): Promise<CapturedIm
       }
       await sleep(100, signal);
     }
-    if (!height) return null;
+    if (!height) {
+      endPhase("failed");
+      return null;
+    }
+    endPhase("done");
+
+    startPhase("screenshot");
     const fullHeight = Math.min(height, MAX_INLINE_VISUAL_HEIGHT) + PADDING * 2;
     await call("Emulation.setDeviceMetricsOverride", { width: fullWidth, height: fullHeight, deviceScaleFactor: DEVICE_SCALE, mobile: false }, sessionId);
     await call("Runtime.evaluate", { expression: "new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(() => resolve(true))))", awaitPromise: true, returnByValue: true }, sessionId);
     const png = Buffer.from(String((await call("Page.captureScreenshot", { format: "png" }, sessionId)).data ?? ""), "base64");
-    if (png.length > 0 && png.length <= SERVER_VISUAL_MAX_PNG_BYTES) return { bytes: png, mimeType: "image/png" };
+    if (png.length > 0 && png.length <= SERVER_VISUAL_MAX_PNG_BYTES) {
+      endPhase("done");
+      return { bytes: png, mimeType: "image/png" };
+    }
     const jpeg = Buffer.from(String((await call("Page.captureScreenshot", { format: "jpeg", quality: 88 }, sessionId)).data ?? ""), "base64");
-    return jpeg.length > 0 && jpeg.length <= SERVER_VISUAL_MAX_IMAGE_BYTES ? { bytes: jpeg, mimeType: "image/jpeg" } : null;
+    if (jpeg.length > 0 && jpeg.length <= SERVER_VISUAL_MAX_IMAGE_BYTES) {
+      endPhase("done");
+      return { bytes: jpeg, mimeType: "image/jpeg" };
+    }
+    endPhase("failed");
+    return null;
   } catch {
+    endPhase("failed");
     return null;
   } finally {
     signal.removeEventListener("abort", kill);
+    startPhase("close");
     if (child) {
       if (cdp && child.exitCode === null) {
         await Promise.race([cdp.send("Browser.close").catch(() => undefined), sleep(1_000, AbortSignal.timeout(2_000)).catch(() => undefined)]);
@@ -392,6 +435,7 @@ async function renderNow(options: RenderServerVisualOptions): Promise<CapturedIm
       // A profile the system will not let go of (a file still held open) is
       // left in the temp folder; it never fails a picture already drawn.
     }
+    endPhase("done");
   }
 }
 
