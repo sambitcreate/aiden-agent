@@ -480,7 +480,9 @@
         "main/services/default-session-permissions.test.ts",
         "main/services/design-canvas/app-frames/app-network-policy.test.ts",
         "main/services/design-canvas/app-frames/app-frame-registry.test.ts",
-        "main/services/loopback-ports.test.ts"
+        "main/services/loopback-ports.test.ts",
+        "main/services/design-canvas/app-frames/app-frame-guard.test.ts",
+        "main/windows/main-window-navigation.test.ts"
       ],
       "preserved": [
         "browser"

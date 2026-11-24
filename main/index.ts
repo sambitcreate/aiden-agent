@@ -37,7 +37,10 @@ import { disposeWorkspaceGitWatchers } from "./handlers/workspaces.js";
 import { forwardTrackpadScrollEnd } from "./services/devices/trackpad-scroll-end.js";
 import { registerBrowserHandlers } from "./handlers/browser.js";
 import { TerminalHistoryStore } from "./services/terminal-history.js";
-import { getPreloadPath, getWindowUrl } from "./windows/window-paths.js";
+import { getPreloadPath, getWindowUrl, rendererOrigin } from "./windows/window-paths.js";
+import { installMainWindowNavigation } from "./windows/main-window-navigation.js";
+import type { AppFrameRegistry } from "./services/design-canvas/app-frames/app-frame-registry.js";
+import { aidenLoopbackPorts } from "./services/loopback-ports.js";
 import { mainWindowOptions } from "./windows/main-window-options.js";
 import {
   registerWindowControlHandlers,
@@ -142,8 +145,7 @@ import { registerChatAttachmentProtocol } from "./services/chat-attachment-proto
 import { createMainVisualSnapshotQueue } from "./services/visual-snapshot-main.js";
 import { disposeVisualSnapshots, installVisualSnapshotQueue } from "./services/visual-snapshot-service.js";
 import { registerCustomSchemes } from "./services/custom-schemes.js";
-import { createImagesEnabled, designModeEnabled, studioAssetsEnabled, studioCapabilities } from "./services/studio/feature-flags.js";
-import { createDesignFrameNavigationGuard } from "./services/design-canvas/frame-navigation.js";
+import { createImagesEnabled, designLiveEnabled, designModeEnabled, studioAssetsEnabled, studioCapabilities } from "./services/studio/feature-flags.js";
 import {
   closeGuardDiscardPrompt,
   closeGuardSavingPrompt,
@@ -284,6 +286,9 @@ connectDesignAppJobs({
 const ownsSingleInstanceLock = app.requestSingleInstanceLock();
 
 let mainWindow: BrowserWindow | null = null;
+/** Live app frames (design mode v2 Phase 3a): set by the design wiring, with the flag on only. */
+let appFrameRegistry: AppFrameRegistry | null = null;
+const appFrameOwnPorts = (): ReadonlySet<number> => aidenLoopbackPorts.snapshot();
 const mainWindowLoads = createSupersedingTaskGate();
 const rendererReadiness = createRendererReadinessGate();
 let resolveShortcutInitialization: (() => void) | null = null;
@@ -1952,28 +1957,16 @@ async function createMainWindow(
     writeDiagnosticEvent({ level: "info", area: "voice", event: "legacy-log", fields: { message: details.message } });
   });
 
-  createdWindow.webContents.setWindowOpenHandler(({ url }) => {
-    openExternalUrl(url);
-    return { action: "deny" };
-  });
-  createdWindow.webContents.on("will-navigate", (event, url) => {
-    const current = createdWindow.webContents.getURL();
-    if (url === current) return;
-    event.preventDefault();
-    openExternalUrl(url);
-  });
-  createdWindow.webContents.on("will-redirect", (event, url) => {
-    event.preventDefault();
-    openExternalUrl(url);
-  });
-  // A design canvas frame runs a workspace page's own scripts; it must never leave its
-  // aiden-design: host for the web or a blank page that keeps the frame's window.
-  const designFrames = createDesignFrameNavigationGuard();
-  createdWindow.webContents.on("did-navigate", () => designFrames.reset());
-  createdWindow.webContents.on("will-frame-navigate", (event) => {
-    if (designFrames.allows(event)) return;
-    event.preventDefault();
-    logger.warn("design", "Blocked a design canvas frame from leaving its workspace page");
+  // Navigation rules for every main window (design mode v2 Phase 3a, D9, D11,
+  // S1): today's handlers, the loopback refusal in both flag states, and with
+  // live apps on, admission and the app guard.
+  installMainWindowNavigation(createdWindow.webContents, {
+    openExternal: openExternalUrl,
+    warn: (message) => logger.warn("design", message),
+    designLive: designLiveEnabled(),
+    registry: () => appFrameRegistry,
+    rendererOrigin: rendererOrigin(),
+    ownPorts: () => appFrameOwnPorts(),
   });
 
   logger.info("main", "Loading renderer", { url: mainWindowUrl });

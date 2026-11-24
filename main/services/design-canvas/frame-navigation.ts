@@ -46,6 +46,8 @@ export function createDesignFrameNavigationGuard(): {
   allows(navigation: FrameNavigation): boolean;
   /** The window's own document changed, and with it every frame. */
   reset(): void;
+  /** Whether a frame has shown a design page (the v1 pin applies to it). */
+  has(frameTreeNodeId: number): boolean;
 } {
   /** Frames that have shown a design page, by Chromium's frame tree node id. */
   const designFrames = new Set<number>();
@@ -65,6 +67,9 @@ export function createDesignFrameNavigationGuard(): {
     },
     reset() {
       designFrames.clear();
+    },
+    has(frameTreeNodeId) {
+      return designFrames.has(frameTreeNodeId);
     },
   };
 }
