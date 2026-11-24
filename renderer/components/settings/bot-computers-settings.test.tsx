@@ -11,6 +11,7 @@ import {
   DEFAULT_BOT_COMPUTERS_SETTINGS,
   type BotComputersStatus,
   type BotComputerSetupState,
+  type BotComputerVmStatus,
 } from "../../shared/bot-computers";
 import { BotComputersSettings } from "./bot-computers-settings";
 
@@ -296,7 +297,7 @@ test("Default for new Bots saves defaultComputerMode and Computers section manag
     diskUsedBytes: 4_000_000_000,
     controller: "bot" as const,
   };
-  let currentVms: typeof sharedVm[] = [sharedVm, dedicatedVm];
+  let currentVms: BotComputerVmStatus[] = [sharedVm, dedicatedVm];
   let currentSettings = { ...DEFAULT_BOT_COMPUTERS_SETTINGS };
   const initial = status(READY, {
     vms: currentVms,
