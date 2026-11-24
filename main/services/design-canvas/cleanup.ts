@@ -70,15 +70,21 @@ export function createDesignChatCleanup(deps: {
 /**
  * A chat delete rolled forward at startup: the same two canvas passes as the
  * live delete around `remove`. The chat's workspace is read before the
- * remove; a chat whose metadata is already gone has none, and only `remove`
- * runs. A failed pass before the remove throws, so the delete stays pending;
- * one after it is reported to `onError`.
+ * remove. When its metadata is already gone (the crash came after the remove
+ * committed), no record names its workspace: the pending-deletion marker
+ * belongs to the subagent run stores, whose strict format older builds must
+ * still read, so it cannot carry one. Every canvas is checked instead, and
+ * `all` runs on each, writing only those that hold something of the chat's.
+ * A failed pass before the remove throws, so the delete stays pending; one
+ * after it is reported to `onError`.
  */
 export async function recoverDeletedChatCanvas(
   deps: {
     getMeta(chatId: string): Promise<{ workspaceId?: string } | null>;
     remove(chatId: string): Promise<void>;
     cleanup: Pick<DesignChatCleanup, "forgetChat">;
+    /** The workspaces with a canvas file (`DesignCanvasStore.workspaceIds`). */
+    workspaceIds(): Promise<string[]>;
     onError(error: unknown): void;
   },
   chatId: string,
@@ -87,8 +93,13 @@ export async function recoverDeletedChatCanvas(
   const workspaceId = meta ? persistedChatWorkspaceId(meta.workspaceId) : undefined;
   if (workspaceId !== undefined) await deps.cleanup.forgetChat(chatId, workspaceId, "comments");
   await deps.remove(chatId);
-  if (workspaceId !== undefined) {
-    await deps.cleanup.forgetChat(chatId, workspaceId, "all").catch(deps.onError);
+  try {
+    const workspaceIds = workspaceId !== undefined ? [workspaceId] : await deps.workspaceIds();
+    for (const id of workspaceIds) {
+      await deps.cleanup.forgetChat(chatId, id, "all").catch(deps.onError);
+    }
+  } catch (error) {
+    deps.onError(error);
   }
 }
 

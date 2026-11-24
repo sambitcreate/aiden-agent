@@ -7,7 +7,8 @@ import {
   emptyDesignCanvas,
   type DesignCanvas,
 } from "../../../renderer/shared/design-canvas/schema.js";
-import { addChatPage } from "../../../renderer/shared/design-canvas/chat-pages.js";
+import { addChatPage, applyStoredClaims, claimPage } from "../../../renderer/shared/design-canvas/chat-pages.js";
+import { changesBetween, keepUnchanged, redo, takeIn, undo, type CanvasHistory } from "../../../renderer/design/canvas-history-core.js";
 import { addPage, deletePage } from "../../../renderer/shared/design-canvas/pages.js";
 import { writeJsonAtomic } from "../durable-fs.js";
 import { DESIGN_CANVAS_LAYOUT_MARKER, DesignCanvasStore, DesignChatCanvases } from "./store.js";
@@ -463,6 +464,70 @@ test("an undo that brings a deleted page back brings its claims back", async (t)
   const stored = await store.get("ws-1");
   assert.deepEqual(pageIdsOf(stored), ["page-1", "P2"]);
   assert.deepEqual(stored.chatPages, { B: "P2" });
+});
+
+/**
+ * One chat's canvas the way `useDesignCanvas` keeps it: Aiden's turns are
+ * taken in as undo steps, undo and redo are saves, and stored claims in a
+ * save's answer are applied and carried into every kept step.
+ */
+function canvasWindow(store: DesignCanvasStore, start: DesignCanvas) {
+  let server = start;
+  let local = start;
+  let history: CanvasHistory = { past: [], future: [] };
+  const save = async (step: { doc: DesignCanvas; history: CanvasHistory } | null) => {
+    assert.ok(step);
+    const doc = changesBetween(local, step.doc)(local);
+    history = step.history;
+    const result = await store.save("ws-1", doc, server.revision);
+    assert.equal(result.ok, true, JSON.stringify(result));
+    const ok = result as Extract<typeof result, { ok: true }>;
+    server = { ...doc, revision: ok.revision };
+    local = server;
+    if (ok.chatPages) {
+      server = applyStoredClaims(server, ok.chatPages, ok.namedFor);
+      local = server;
+      history = takeIn(history, { before: doc, from: doc, to: server });
+    }
+  };
+  return {
+    takeInTurn(to: DesignCanvas, aidenTurn: string) {
+      const kept = keepUnchanged(server, to);
+      history = takeIn(history, { before: local, from: server, to: kept, aidenTurn });
+      server = kept;
+      local = kept;
+    },
+    undo: () => save(undo(history, local)),
+    redo: () => save(redo(history, local)),
+    shown: () => local,
+  };
+}
+
+test("undoing a turn that added and used a page puts the chat back on its own page, and redoing it brings the claim back", async (t) => {
+  const { store, doc: start } = await claimedStore(t, ["p2"], { A: "page-1", B: "p2" });
+  const canvas = canvasWindow(store, start);
+  // B's turn: canvas_page add Q, then use Q.
+  canvas.takeInTurn(await store.update("ws-1", (current) => claimPage(addPage(current, "q", "Q", "p2"), "B", "q")), "turn-1");
+
+  await canvas.undo();
+  let stored = await store.get("ws-1");
+  assert.deepEqual(pageIdsOf(stored), ["page-1", "p2"]);
+  assert.deepEqual(stored.chatPages, { A: "page-1", B: "p2" }, "B is back on its own page, not A's");
+  assert.deepEqual(canvas.shown().chatPages, stored.chatPages);
+
+  await canvas.redo();
+  stored = await store.get("ws-1");
+  assert.deepEqual(pageIdsOf(stored), ["page-1", "p2", "q"]);
+  assert.deepEqual(stored.chatPages, { A: "page-1", B: "q" });
+  assert.deepEqual(canvas.shown().chatPages, stored.chatPages);
+});
+
+test("an undo that brings a deleted page back restores its chats from the record, even when the save's copy carried them elsewhere", async (t) => {
+  const { store, doc: before } = await claimedStore(t, ["P2"], { B: "P2" });
+  await saveOk(store, deletePage(before, "P2"));
+  // The renderer carried the stored move into its steps, so the undone document says page-1.
+  await saveOk(store, { ...before, chatPages: { B: "page-1" } });
+  assert.deepEqual((await store.get("ws-1")).chatPages, { B: "P2" });
 });
 
 test("a renderer cannot move another chat's claim to a new page id", async (t) => {

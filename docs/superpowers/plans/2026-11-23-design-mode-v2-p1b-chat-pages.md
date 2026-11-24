@@ -47,7 +47,7 @@ Out of scope:
 | `chatPages` in the schema | Parsed; entries kept only for safe chat ids naming existing pages (`schema.ts:377`). Nothing writes it. | Add the writers, `DesignPage.namedFor` and an explicit 2 000-entry cap. |
 | `deletePage` | Drops `chatPages` entries for the deleted page (`pages.ts:84`). | Reassign them to the first page left. |
 | `changesBetween` (undo carry) | Takes `to.pages` whole when the outline changed (`canvas-history-core.ts:119-125`). An undo that restores a deleted page loses it when another writer also changed the page list. Claims are kept from the step, not carried. | Apply page changes item by item, and carry claim changes (Task 1). |
-| `viewPageId` | View page, else first page (`view.ts:28`). Frames and comment inputs also call it, so it isn't chat-aware. | Leave it. Add `chatPageId(doc, view, chatId)`. |
+| `viewPageId` | View page, else first page (`view.ts:28`). Frames and comment inputs also call it, so it isn't chat-aware. | Leave it. Chat-aware resolution lives in `designTurnPages` (main) and `useDesignView` (renderer); the planned `chatPageId` helper was built and then removed as unused (final review). |
 | `designTurnPages` resolver | Shown this turn → message page → kept view page → first page (`views.ts:283`). | Insert `doc.chatPages[chatId]` before the first page. |
 | Renderer shown page (`use-design-view.ts:61` `shownPageId`) | View page → newest earlier page → first page. | View page → claim → newest earlier page → first page, and report when the fallback differs from the view. |
 | `DesignCanvasViews` | `showPage` mints a `focusId`. Views persist per workspace. `forget` runs on chat delete. | Add `pageIdsOf(workspaceId, exceptChatId)` for entry rule 3. Claims show their page through `showPage`. |
@@ -65,7 +65,7 @@ Out of scope:
 - **Schema.** No version bump. `version: 3` gains one optional page field, `namedFor?: string`, a safe chat id (`isDesignChatId`). Pre-1.0, no migration: a 1a document has `chatPages: {}` and no `namedFor`, and both read fine.
 - **Cap.** `chatPages` holds at most 2 000 entries. `claimPage` enforces it explicitly: it evicts entries of chats that no longer exist first, and otherwise throws `ChatPagesFullError` (`"This canvas has too many chats with pages of their own."`). `mergeSavedChatPages` never adds entries (D3), so it has no cap check and never refuses a person's save. Parse has no cap today (`schema.ts:377-382`); 1b makes it drop entries past 2 000 and count them in `dropped`, as it does for frames, so a hand-edited file is never set aside whole. Every caller of `claimPage` that is part of a larger write (the lazy claim, attach carry) catches `ChatPagesFullError` and skips only the claim.
 - **Where claims are written.** Every claim read and write happens inside `store.update`'s mutate on the latest document. Main's checks that need I/O (which chats still exist, other chats' kept views) run before the update. A claim that appears after the check counts as a live chat's.
-- **Saves.** A person's save (`DesignCanvasStore.save`) never adds or moves a claim on its own say, except to restore entries that the store recorded when the page was deleted (D3). The save's answer carries the merged claims back.
+- **Saves.** A person's save (`DesignCanvasStore.save`) never adds or moves a claim on its own say, except to restore entries that the store recorded when the page was deleted, and to send a chat whose page the save removes back to the page the save names for it when both documents have that page (D3). The save's answer carries the merged claims back.
 - **Undo.** Claim changes are never undo steps:
   - entry, the lazy claim inside a tool edit, title-follow and cleanup updates are carried into every kept step;
   - the save merge keeps a `canvas_page use` claim when the person undoes that turn (D3).
@@ -117,8 +117,8 @@ After the update, main always calls `pages.show(workspaceId, pageId)`, so the vi
   - The record changes only after the write succeeded (`beforeWrite` can throw, `store.ts:130`, `store.ts:157`).
   - A new delete of the same page id replaces its entry; it never merges into the old one.
   - A restore removes the restored chats (and the restored `namedFor`) from the entry, and drops the entry once it is empty. So a redo after an undo, and the same page id deleted twice, each act on the newest delete only.
-- For a page the save brings back (in `saved`, not in `current`), take the saved entry `C → P` only when `deleted` records C on P and `current[C]` is exactly the page that delete moved C to. A chat that is missing from `current` is never brought back: a live chat of this workspace always has its entry (only dead chats are evicted), so a missing entry means C was deleted or moved away. The merge therefore never adds an entry, so it never hits the cap and never refuses a person's save.
-- Every resulting entry whose page is not in `saved` is reassigned to `saved.pages[0]` (the save deleted that page), and recorded in `deleted`.
+- For a page the save brings back (in `saved`, not in `current`), restore every chat C that `deleted` records on P while `current[C]` is exactly the page that delete moved C to, whatever the save's own entry for C says. *(Amended 2026-11-24, final review: the renderer carries stored claims into its kept steps, so a redo's document no longer names P for C; requiring the saved entry lost the claim on redo. The record alone makes this safe: it holds only what the store saw.)* A chat that is missing from `current` is never brought back: a live chat of this workspace always has its entry (only dead chats are evicted), so a missing entry means C was deleted or moved away. The merge therefore never adds an entry, so it never hits the cap and never refuses a person's save.
+- Every resulting entry whose page is not in `saved` (the save deleted that page) goes to the page the save names for that chat when both `saved` and `current` have that page, else to `saved.pages[0]`, and is recorded in `deleted`. *(Amended 2026-11-24: undoing a turn that added Q and used it puts the chat back on its own earlier page, not the first page, which may be another chat's; the redo then brings Q's claim back through the record.)*
 - `namedFor`: a saved page keeps it only when `current`'s page with that id has the same value, or when the page is brought back and its `deleted` entry holds that `namedFor` for a chat that is still live in this workspace. A save can always drop it, as a hand rename does.
 - "Live" everywhere in 1b (`isLive`) means the chat's metadata exists **and** its `workspaceId` is this canvas's workspace. A chat that moved away is not live here.
 
@@ -257,13 +257,13 @@ Two adversarial reviews (data and races; lifecycle, UI and tests) were settled i
 - Modify:
   - `renderer/shared/design-canvas/schema.ts` (`DesignPage.namedFor`, `DESIGN_CANVAS_LIMITS.chatPages = 2000`)
   - `renderer/shared/design-canvas/pages.ts` (`deletePage` reassigns, `renamePage` clears `namedFor`)
-  - `renderer/shared/design-canvas/view.ts` (`chatPageId`)
+  - `renderer/shared/design-canvas/view.ts` (`chatPageId`, later removed as unused)
   - `renderer/design/canvas-history-core.ts` (`changesBetween`)
 - Test: create `renderer/shared/design-canvas/chat-pages.test.ts`; extend `schema.test.ts`, `pages.test.ts`, `view.test.ts`, `renderer/design/canvas-history-core.test.ts`
 
 **Interfaces** (all pure; each returns `doc` itself when nothing changes):
 - `DesignPage = { id: string; name: string; namedFor?: string }`.
-- `chatPageId(doc: Pick<DesignCanvas, "pages" | "chatPages">, view: { pageId?: string } | null | undefined, chatId: string): string`: the view page while it exists, else the claim while its page exists, else the first page.
+- `chatPageId(doc: Pick<DesignCanvas, "pages" | "chatPages">, view: { pageId?: string } | null | undefined, chatId: string): string`: the view page while it exists, else the claim while its page exists, else the first page. *(Removed in the final review: nothing used it; Task 3 put the order into `designTurnPages` and `useDesignView`.)*
 - `chatsOnPage(doc, pageId, isLive?: (chatId: string) => boolean): string[]`.
 - `uniquePageName(doc, base, exceptPageId?)` (D5).
 - `claimPage(doc, chatId, pageId, isLive?)`: throws a `ChatPagesFullError` when the cap is reached and no dead chat's entry can be evicted. The caller checks that the page exists.
@@ -291,7 +291,7 @@ Two adversarial reviews (data and races; lifecycle, UI and tests) were settled i
     - `a claim another writer made reaches every kept step, so undoing a page delete brings back the current claim`. History: delete P (claimed by B), then take in an update where B claims Q. Undo, and the doc has P and `chatPages.B === "Q"`;
     - `a page that exists only in an older step stays in that step after a carry`.
   - `chat-pages.test.ts`:
-    - `chatPageId prefers the view's page, then the claim, then the first page, skipping pages that are gone`;
+    - `chatPageId prefers the view's page, then the claim, then the first page, skipping pages that are gone` (removed with `chatPageId`);
     - `uniquePageName adds the lowest free number and cuts the base so the name stays within 60 characters`;
     - `uniquePageName ignores the page being renamed`;
     - `addChatPage adds a named page after the given page, marks it and claims it; at the page limit it changes nothing`;
@@ -647,10 +647,9 @@ For reviewers to attack:
 6. **Retraction and claims.** Leaving design mode while entry writes takes back the added page and its claim. A claim on an existing page (rule 3) stays after a retraction; the next entry keeps it.
 7. **Lazy claim breadth.** Placing an artifact in a turn claims the resolved page for a chat with no claim. That page may be another chat's page that this chat's person was looking at. That is intended: the person was working there.
 8. **Delete refusal counts claims only.** A chat that uses a page without a claim (D10) is not protected until its first write or entry.
-9. **Crash windows in chat delete.**
-   - Live delete: the claim and artifacts are pruned after `chatStore.remove`. A crash between the remove and that prune leaves them. The pending marker is still set then (it is cleared later, near `chat-application-service.ts:866`), but `getMeta` already returns null (`chat-store-core.ts:2312`), so recovery's `if (meta)` (`main/index.ts:2602-2603`) has no workspace id and prunes nothing.
-   - Entry, `canvas_page delete` and `canvas_page use` already read which claimed chats are live before their update; in the same mutate they drop the entries of chats that are not live. So the leftover goes at the next of those writes in the workspace. Artifact frames of such a chat show their missing state (1a).
-   - Until then the picker, which can't check liveness, still counts the claim ("1 chat"). That is accepted: the window is one crash between two awaits.
+9. **Crash windows in chat delete.** *(Corrected 2026-11-24, final review.)*
+   - Live delete: the claim, `namedFor` and artifacts are pruned after `chatStore.remove`. A crash between the remove and that prune leaves them. The pending marker is still set then, but `getMeta` already returns null, so no record names the chat's workspace. The marker belongs to the subagent run stores, whose V1 file format is strict (exactly three keys) and must stay readable by rollback builds, so it cannot carry a workspace id. Recovery (`recoverDeletedChatCanvas`) therefore checks every canvas file (`DesignCanvasStore.workspaceIds`) for a chat with no metadata and runs `all` on each, writing only those that hold something of the chat's. This runs only for pending deletions at startup.
+   - Independently, entry, `canvas_page delete` and `canvas_page use` read which chats with claims or `namedFor` marks are live before their update, and drop the claims and marks of chats that are not live in the same mutate. Other `canvas_page` actions and other writes don't.
 10. **Shared page and `namedFor`.** Chat B uses chat A's named page, and A is renamed. The page follows A's title, which may surprise B. That is the spec's rule.
 11. **Existing E2E expectations.** Rule 3 keeps Page 1's name, so existing assertions on `["Page 1", "Page 2"]` hold. Entry now writes `chatPages` into saved docs that tests read: check `savedCanvases` callers for deep-equal assertions.
 12. **Awaiting entry in the consent path.** The card's answer waits for entry's file reads and one canvas write. Entry already limits itself to `EARLIER_PAGES_LIMIT` pages, so the wait is short. A failure is logged, and the tool still answers "entered".

@@ -1623,6 +1623,27 @@ test("canvas_page delete ignores the claim of a chat that no longer exists", asy
   assert.deepEqual((await store.get("chat-1")).chatPages, { "chat-2": "page-1" });
 });
 
+test("canvas_page delete and use drop the page marks of chats that no longer exist", async (t) => {
+  const { store, call } = await setup(t, liveExceptGone);
+  await store.update("chat-1", (doc) => ({
+    ...doc,
+    pages: [
+      { id: "page-1", name: "Page 1", namedFor: "chat-gone" },
+      { id: "p2", name: "Pricing" },
+      { id: "p3", name: "Ideas", namedFor: "chat-2" },
+    ],
+  }));
+  assert.equal((await call("canvas_page", { action: "delete", page: "Pricing" })).status, "deleted");
+  assert.deepEqual((await store.get("chat-1")).pages, [{ id: "page-1", name: "Page 1" }, { id: "p3", name: "Ideas", namedFor: "chat-2" }]);
+
+  await store.update("chat-1", (doc) => ({ ...doc, pages: doc.pages.map((page) => (page.id === "page-1" ? { ...page, namedFor: "chat-gone" } : page)) }));
+  await call("canvas_page", { action: "use", page: "Ideas" });
+  const used = await store.get("chat-1");
+  assert.equal(used.chatPages["chat-1"], "p3");
+  assert.equal(used.pages[0]!.namedFor, undefined);
+  assert.equal(used.pages[1]!.namedFor, "chat-2", "a live chat's mark stays");
+});
+
 test("canvas_page delete of this chat's own page needs no force", async (t) => {
   const { store, call } = await setup(t);
   await store.update("chat-1", (doc) => ({ ...addPage(doc, "p2", "Pricing"), chatPages: { "chat-1": "p2" } }));

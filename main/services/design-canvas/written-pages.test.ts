@@ -750,6 +750,23 @@ test("a page named for another chat is never taken by rule 3", async (t) => {
   assert.equal(placed.pageId, doc.pages[1]!.id);
 });
 
+test("a page named for a chat that no longer exists is taken by rule 3, and the mark goes in the same write", async (t) => {
+  const { workspaceRoot, canvases } = await workspaceWith(t, []);
+  await canvases.store.update("chat-1", (doc) => ({ ...doc, pages: [{ id: "page-1", name: "Landing", namedFor: "chat-gone" }] }));
+  const placed = await placeWrittenPagesOnCanvas({
+    ...canvases.via("chat-2"),
+    workspaceRoot,
+    paths: [],
+    broadcast: () => undefined,
+    newId: ids(),
+    entry: entryFor(canvases, "chat-2", "Pricing table", ["chat-gone"]),
+  });
+  const doc = await canvases.workspaceStore.get("ws-1");
+  assert.deepEqual(doc.pages, [{ id: "page-1", name: "Landing" }]);
+  assert.equal(placed.pageId, "page-1");
+  assert.deepEqual(doc.chatPages, { "chat-2": "page-1" });
+});
+
 test("a chat entering again keeps its claim, adds no page and still shows it", async (t) => {
   const { workspaceRoot, canvases } = await workspaceWith(t, ["home.html", "about.html"]);
   await canvases.store.update("chat-1", (doc) => ({

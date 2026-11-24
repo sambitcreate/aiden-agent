@@ -3,7 +3,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { emptyDesignCanvas } from "./schema.js";
-import { chatPageId, DESIGN_FRESH_VIEWPORT, parseDesignChatView, viewPageId } from "./view.js";
+import { DESIGN_FRESH_VIEWPORT, parseDesignChatView, viewPageId } from "./view.js";
 
 const twoPages = { pages: [{ id: "a", name: "A" }, { id: "b", name: "B" }] };
 
@@ -14,15 +14,6 @@ test("viewPageId falls back to the first page when the view's page is gone, or t
   assert.equal(viewPageId(twoPages, null), "a");
   assert.equal(viewPageId(twoPages), "a");
   assert.equal(viewPageId(emptyDesignCanvas(), undefined), "page-1");
-});
-
-test("chatPageId prefers the view's page, then the claim, then the first page, skipping pages that are gone", () => {
-  const doc = { ...twoPages, pages: [...twoPages.pages, { id: "c", name: "C" }], chatPages: { "chat-1": "c", "chat-2": "gone" } };
-  assert.equal(chatPageId(doc, { pageId: "b" }, "chat-1"), "b");
-  assert.equal(chatPageId(doc, { pageId: "deleted" }, "chat-1"), "c");
-  assert.equal(chatPageId(doc, null, "chat-1"), "c");
-  assert.equal(chatPageId(doc, undefined, "chat-2"), "a", "a claim on a page that is gone is skipped");
-  assert.equal(chatPageId(doc, { pageId: "deleted" }, "chat-3"), "a");
 });
 
 test("parseDesignChatView clamps zoom to 0.1–4 and refuses a missing pageId or a non-finite viewport", () => {

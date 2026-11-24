@@ -149,6 +149,37 @@ test("at a full set of chat pages, the pages still come over without a claim", a
   assert.equal((await views.get("chat-1", "project"))?.pageId, merged.pages[1]!.id, "the chat is still shown its page");
 });
 
+test("at a full set of chat pages, a gone chat's entry makes room for the attached chat's claim", async (t) => {
+  const { root, store } = await setup(t);
+  await store.save("hidden", hiddenCanvas(), 0);
+  const full = Object.fromEntries(
+    Array.from({ length: DESIGN_CANVAS_LIMITS.chatPages }, (_, index) => [`chat-other-${index}`, "page-1"]),
+  );
+  await store.update("project", (current): DesignCanvas => ({ ...current, chatPages: full }));
+  const asked: string[][] = [];
+  const carry = createDesignCanvasCarry({
+    store: new DesignCanvasStore({ root: () => root }),
+    views: new DesignCanvasViews(),
+    newId: () => "carried-page",
+    isLive: async (chatIds) => {
+      asked.push(chatIds);
+      return new Set(chatIds.filter((chatId) => chatId !== "chat-other-7"));
+    },
+  });
+  await carry.carry({
+    chatId: "chat-1",
+    label: "Chat",
+    fromWorkspaceId: "hidden",
+    toWorkspaceId: "project",
+    copied: [{ from: "design/hero.html", to: "design/hero.html" }],
+  });
+  const merged = await store.get("project");
+  assert.equal(merged.chatPages["chat-1"], "carried-page");
+  assert.equal(merged.chatPages["chat-other-7"], undefined);
+  assert.equal(Object.keys(merged.chatPages).length, DESIGN_CANVAS_LIMITS.chatPages);
+  assert.equal(asked.length, 1);
+});
+
 test("when nothing comes along, no claim is made", async (t) => {
   const { store, carry } = await setup(t);
   await store.save("hidden", { ...emptyDesignCanvas(), frames: [frame("left-behind", { kind: "image", path: "tmp/scratch.png" })] }, 0);

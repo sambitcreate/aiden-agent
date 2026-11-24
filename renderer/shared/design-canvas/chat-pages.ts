@@ -116,13 +116,25 @@ export function lazyClaimNeedsRoom(doc: DesignCanvas, chatId: string): boolean {
   return claimOf(doc, chatId) === undefined && Object.keys(doc.chatPages).length >= DESIGN_CANVAS_LIMITS.chatPages;
 }
 
+/** Every chat the canvas names as a page's owner: claims and `namedFor` marks. */
+export function chatsOnCanvas(doc: Pick<DesignCanvas, "chatPages" | "pages">): string[] {
+  const ids = new Set(Object.keys(doc.chatPages));
+  for (const page of doc.pages) if (page.namedFor !== undefined) ids.add(page.namedFor);
+  return [...ids];
+}
+
 /**
- * Drops the claims of chats `isLive` says are gone, so a chat deleted between
- * its delete and the cleanup that follows it does not keep its page forever.
+ * Drops the claims and `namedFor` marks of chats `isLive` says are gone, so a
+ * chat deleted between its delete and the cleanup that follows it does not
+ * keep its page, or keep other chats off it, forever.
  */
 export function withoutGoneClaims(doc: DesignCanvas, isLive: IsChatLive): DesignCanvas {
   const kept = Object.entries(doc.chatPages).filter(([chatId]) => isLive(chatId));
-  return kept.length === Object.keys(doc.chatPages).length ? doc : { ...doc, chatPages: Object.fromEntries(kept) };
+  let next = kept.length === Object.keys(doc.chatPages).length ? doc : { ...doc, chatPages: Object.fromEntries(kept) };
+  if (next.pages.some((page) => page.namedFor !== undefined && !isLive(page.namedFor))) {
+    next = { ...next, pages: next.pages.map((page) => (page.namedFor !== undefined && !isLive(page.namedFor) ? withoutNamedFor(page) : page)) };
+  }
+  return next;
 }
 
 /**
@@ -227,12 +239,13 @@ export function deletedClaims(before: DesignCanvas, after: DesignCanvas): Map<st
  * A person's save (`saved`, the whole document from the renderer) merged with
  * the stored claims (`current`) and the store's record of deleted pages:
  * - claims start from `current`;
- * - a page the save brings back gets back a saved claim only when `deleted`
- *   records that chat on it and the chat is still exactly where that delete
- *   moved it, so a save never adds an entry and never moves a chat on its own
- *   say;
- * - a claim on a page the save removed moves to the save's first page, and is
- *   recorded in `deletedNow`;
+ * - a page the save brings back gets back every chat `deleted` records on it
+ *   that is still exactly where that delete moved it, whatever the save's
+ *   copy says, so a save never adds an entry and never moves a chat the
+ *   store did not record there;
+ * - a claim on a page the save removed moves to the page the save names for
+ *   that chat when both documents have it, else to the save's first page,
+ *   and is recorded in `deletedNow`;
  * - a saved page keeps `namedFor` only when `current`'s page has the same, or
  *   when it is brought back with that `namedFor` in its record for a chat
  *   still live here. A save may always drop it.
@@ -262,7 +275,7 @@ export function mergeSavedChatPages(
     const record = deleted.get(page.id);
     if (record) {
       for (const [chatId, movedTo] of record.claims) {
-        if (claimOf(saved, chatId) !== page.id || claimOf(current, chatId) !== movedTo || isLive?.(chatId) === false) continue;
+        if (claimOf(current, chatId) !== movedTo || isLive?.(chatId) === false) continue;
         chatPages[chatId] = page.id;
         restoredOf(page.id).claims.set(chatId, movedTo);
       }
@@ -275,9 +288,14 @@ export function mergeSavedChatPages(
     return withoutNamedFor(page);
   });
 
+  // A chat whose page the save removed goes back to the page the save names
+  // for it when both documents have that page (an undo of the turn that made
+  // the page its own), else to the first page.
   const first = pages[0]!.id;
   for (const [chatId, pageId] of Object.entries(chatPages)) {
-    if (!savedIds.has(pageId)) chatPages[chatId] = first;
+    if (savedIds.has(pageId)) continue;
+    const named = claimOf(saved, chatId);
+    chatPages[chatId] = named !== undefined && savedIds.has(named) && currentPages.has(named) ? named : first;
   }
 
   const sameClaims =

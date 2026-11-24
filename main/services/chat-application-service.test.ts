@@ -998,33 +998,6 @@ test("a delete that fails after the first cleanup keeps the chat's claim and art
   assert.ok(after.frames.some((entry) => entry.id === "art-1"));
 });
 
-test("a canvas save that lands while the chat is being deleted does not bring back its claim or artifact frames", async (t) => {
-  const root = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-chat-delete-claim-race-"));
-  t.after(() => fs.rm(root, { recursive: true, force: true }));
-  const store = new DesignCanvasStore({ root: () => root });
-  await seedChatOnCanvas(store);
-  const { service } = fixture({
-    designCanvasCleanup: createDesignChatCleanup({ store, views: new DesignCanvasViews() }),
-    chatStore: {
-      listRegular: async () => [],
-      list: async () => [],
-      get: async (id: string) => chat(id),
-      create: async () => chat(),
-      rename: async () => chat(),
-      setChatModelSelection: async () => chat(),
-      setDesignMode: async () => chat(),
-      moveEmptyChatToWorkspace: async () => chat(),
-      // An open canvas still holding the chat's frames saves before the remove commits.
-      remove: async () => {
-        const current = await store.get("workspace-1");
-        await store.save("workspace-1", { ...current, frames: [...current.frames] }, current.revision);
-      },
-    } as ChatApplicationDependencies["chatStore"],
-  });
-  await service.remove("chat-1");
-  assertChatOneForgotten(await store.get("workspace-1"));
-});
-
 test("a chat delete recovered at startup prunes the claim and artifact frames after the remove", async (t) => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-chat-delete-recovered-"));
   t.after(() => fs.rm(root, { recursive: true, force: true }));
@@ -1041,6 +1014,7 @@ test("a chat delete recovered at startup prunes the claim and artifact frames af
         present = false;
       },
       cleanup,
+      workspaceIds: () => store.workspaceIds(),
       onError: (error) => assert.fail(String(error)),
     },
     "chat-1",
@@ -1048,13 +1022,29 @@ test("a chat delete recovered at startup prunes the claim and artifact frames af
   assert.equal(atRemove?.chatPages["chat-1"], "page-2", "only comments go before the remove commits");
   assertChatOneForgotten(await store.get("workspace-1"));
 
-  // A chat whose metadata is already gone has no workspace to prune; the remove still runs.
+});
+
+test("a chat delete cut short after the remove committed is pruned at startup from every canvas that holds it", async (t) => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-chat-delete-recovered-late-"));
+  t.after(() => fs.rm(root, { recursive: true, force: true }));
+  const store = new DesignCanvasStore({ root: () => root });
+  await seedChatOnCanvas(store);
+  const untouched = await store.update("workspace-2", (current): DesignCanvas => ({ ...current, chatPages: { "chat-2": "page-1" } }));
   let removed = false;
+  // The remove committed before the crash, so the chat's metadata and workspace are gone.
   await recoverDeletedChatCanvas(
-    { getMeta: async () => null, remove: async () => { removed = true; }, cleanup, onError: () => undefined },
-    "chat-9",
+    {
+      getMeta: async () => null,
+      remove: async () => { removed = true; },
+      cleanup: createDesignChatCleanup({ store, views: new DesignCanvasViews() }),
+      workspaceIds: () => store.workspaceIds(),
+      onError: (error) => assert.fail(String(error)),
+    },
+    "chat-1",
   );
   assert.equal(removed, true);
+  assertChatOneForgotten(await store.get("workspace-1"));
+  assert.equal((await store.get("workspace-2")).revision, untouched.revision, "a canvas without the chat is not written");
 });
 
 test("moving an empty chat drops its claim and deletes the empty page made for it; a page with frames stays, no longer following", async (t) => {

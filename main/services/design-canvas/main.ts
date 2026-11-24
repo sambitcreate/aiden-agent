@@ -13,6 +13,7 @@ import { createDesignChatCleanup, createDesignWorkspaceCleanup } from "./cleanup
 import { DesignModeConsent } from "./design-mode-tool.js";
 import { DesignSystemOffers } from "./design-system-offers.js";
 import { DesignGrantRegistry } from "./grants.js";
+import { createDesignLiveChats } from "./liveness.js";
 import { DESIGN_CANVAS_UPDATED_CHANNEL, DesignCanvasStore, DesignChatCanvases, type DesignCanvasUpdated } from "./store.js";
 import { createDesignTitleFollow } from "./title-follow.js";
 import { DesignCanvasViews } from "./views.js";
@@ -30,11 +31,8 @@ async function designChatIsLive(chatId: string, workspaceId: string): Promise<bo
   return meta !== null && persistedChatWorkspaceId(meta.workspaceId) === workspaceId;
 }
 
-/** Which of `chatIds` are live in the workspace, for claims on its canvas. */
-export async function designLiveChats(chatIds: readonly string[], workspaceId: string): Promise<Set<string>> {
-  const live = await Promise.all(chatIds.map((chatId) => designChatIsLive(chatId, workspaceId)));
-  return new Set(chatIds.filter((_, index) => live[index]));
-}
+/** Which of `chatIds` are live in the workspace, for claims on its canvas: one chat index read per check. */
+export const designLiveChats = createDesignLiveChats(chatStore);
 
 /** The workspace canvases seen through chats: what handlers, tools and placements use. */
 export const designCanvasStore = new DesignChatCanvases({
@@ -92,6 +90,7 @@ export const designCanvasCarry = createDesignCanvasCarry({
   views: designCanvasViews,
   broadcast: broadcastDesignCanvasUpdate,
   newId: randomUUID,
+  isLive: designLiveChats,
 });
 
 /** A removed workspace's canvas, its corrupt copies and its chats' views of it. */

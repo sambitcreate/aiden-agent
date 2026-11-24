@@ -23,6 +23,7 @@ import {
   claimPage,
   landedPageId,
   withLazyClaim,
+  chatsOnCanvas,
   withoutGoneClaims,
   type IsChatLive,
 } from "../../../renderer/shared/design-canvas/chat-pages.js";
@@ -418,7 +419,8 @@ function tryClaim(claim: () => DesignCanvas): DesignCanvas | undefined {
  * 4. else a new page named after the chat, right after the resolved page. At
  *    the page limit the resolved page is shared instead.
  * Pages already on the canvas, on any page, are not placed again; the missing
- * ones go on the chat's page. Claims of chats that are gone are dropped.
+ * ones go on the chat's page. Claims and `namedFor` marks of chats that are
+ * gone are dropped first, so a gone chat's mark does not keep rule 3 off a page.
  */
 function entryPlacement(
   doc: DesignCanvas,
@@ -530,7 +532,7 @@ export async function placeWrittenPagesOnCanvas(input: {
   if (input.entry) {
     const otherViews = await input.entry.otherViews(workspaceId);
     const { doc: current } = await input.store.get(input.chatId, { workspaceId });
-    const checked = new Set(Object.keys(current.chatPages).filter((chatId) => chatId !== input.chatId));
+    const checked = new Set(chatsOnCanvas(current).filter((chatId) => chatId !== input.chatId));
     const live = await input.entry.isLive([...checked], workspaceId);
     // A claim made after this check is a live chat's.
     const isLive: IsChatLive = (chatId) => !checked.has(chatId) || live.has(chatId);

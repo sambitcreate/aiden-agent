@@ -141,3 +141,31 @@ test("a follow of a chat that is gone writes nothing", async (t) => {
   assert.deepEqual(broadcasts, []);
   assert.deepEqual(errors, []);
 });
+
+test("once the canvas is known, a title change of a chat with no page made for it reads no canvas, and a page made for it later still follows", async (t) => {
+  const { root, titles } = await setup(t, { seed: withChatPage });
+  // A fresh start: nothing is known about the canvas until one read.
+  const store = new DesignCanvasStore({ root: () => root });
+  let reads = 0;
+  const counted = {
+    get: (...args: Parameters<DesignCanvasStore["get"]>) => ((reads += 1), store.get(...args)),
+    save: (...args: Parameters<DesignCanvasStore["save"]>) => store.save(...args),
+    update: (...args: Parameters<DesignCanvasStore["update"]>) => ((reads += 1), store.update(...args)),
+    namedChats: (workspaceId: string) => store.namedChats(workspaceId),
+  };
+  const follow = createDesignTitleFollow({
+    canvases: new DesignChatCanvases({ store: counted, workspaceIdOf: async () => "ws-1" }),
+    titleOf: async (chatId) => titles.get(chatId),
+    broadcast: () => undefined,
+  });
+  titles.set("chat-a", "Northwind landing");
+  await follow.follow("chat-a");
+  assert.equal(reads, 1, "one read learns which chats have pages made for them");
+  await follow.follow("chat-a");
+  assert.equal(reads, 1, "a chat with no page made for it reads nothing");
+
+  // Any write that makes a page for the chat (entry here) is seen, so the next rename follows.
+  await store.update("ws-1", (doc) => addChatPage(doc, "chat-a", "New chat", "page-a", "page-1"));
+  await follow.follow("chat-a");
+  assert.equal((await store.get("ws-1")).pages.find((page) => page.id === "page-a")?.name, "Northwind landing");
+});

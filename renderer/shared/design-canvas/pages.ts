@@ -83,7 +83,8 @@ export function duplicatePage(doc: DesignCanvas, id: string, pageId: string, new
 /**
  * Deletes a page with its frames and comments. Chats whose page it was move
  * to the first page left. The last page cannot be deleted. A chat looking at
- * it sees its own page, else the first page, instead (`chatPageId`).
+ * it sees its own page, else the first page, instead (`designTurnPages` in
+ * main, `useDesignView` in the renderer).
  */
 export function deletePage(doc: DesignCanvas, id: string): DesignCanvas {
   const at = doc.pages.findIndex((page) => page.id === id);

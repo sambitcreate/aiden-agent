@@ -193,6 +193,16 @@ test("forgetChatMove deletes the empty page made for the chat, and keeps a page 
   // The only page is never deleted.
   const only: DesignCanvas = { ...emptyDesignCanvas(), pages: [{ id: "pa", name: "Landing", namedFor: "chat-a" }], chatPages: { "chat-a": "pa" } };
   assert.deepEqual(forgetChatMove(only, "chat-a").pages, [{ id: "pa", name: "Landing" }]);
+
+  // An empty page made for the chat goes even when it is the first page; other chats keep theirs.
+  const first: DesignCanvas = {
+    ...emptyDesignCanvas(),
+    pages: [{ id: "pa", name: "Landing", namedFor: "chat-a" }, { id: "page-1", name: "Page 1" }],
+    chatPages: { "chat-a": "pa", "chat-b": "page-1" },
+  };
+  const left = forgetChatMove(first, "chat-a");
+  assert.deepEqual(left.pages, [{ id: "page-1", name: "Page 1" }]);
+  assert.deepEqual(left.chatPages, { "chat-b": "page-1" });
 });
 
 test("deletedClaims records each removed page's chats and where they went, and its namedFor", () => {

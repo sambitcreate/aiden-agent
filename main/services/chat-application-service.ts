@@ -709,6 +709,12 @@ export function createChatApplicationService(deps: ChatApplicationDependencies) 
             });
           if (outcome === "too-large" || outcome === "failed") canvasCarried = false;
         }
+        if (sharedLegacyScratch) {
+          // The shared canvas stays for the other chats: this chat leaves it as a moved chat does.
+          await deps.designCanvasCleanup?.forgetChat(chatId, oldWorkspaceId, "move").catch((error: unknown) => {
+            deps.logError("design", "Could not take the attached chat off its old shared canvas.", error);
+          });
+        }
 
         // Release workspace operation admissions BEFORE releasing the old hidden
         // workspace, otherwise `workspaceOperationRegistry.cancelAndSettle(oldWorkspaceId)`

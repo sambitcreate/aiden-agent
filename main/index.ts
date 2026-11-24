@@ -170,7 +170,7 @@ import { EmptyChatMigrationSnapshotError } from "./services/empty-chat-migration
 import { migrateLegacyEmptyWorkspaceChats } from "./services/empty-chat-migration-main.js";
 import { ensureUserDataDir } from "./services/data-store.js";
 import { piCompactionSessionStore } from "./services/pi-compaction-session-store.js";
-import { designCanvasChatCleanup, designCanvasViews, removeDesignCanvasWorkspace } from "./services/design-canvas/main.js";
+import { designCanvasChatCleanup, designCanvasViews, designWorkspaceCanvasStore, removeDesignCanvasWorkspace } from "./services/design-canvas/main.js";
 import { recoverDeletedChatCanvas } from "./services/design-canvas/cleanup.js";
 import {
   reconcileExternalProviderCredentialChanges,
@@ -2606,6 +2606,7 @@ if (!ownsSingleInstanceLock) {
             getMeta: (id) => chatStore.getMeta(id),
             remove: (id) => chatStore.remove(id),
             cleanup: designCanvasChatCleanup,
+            workspaceIds: () => designWorkspaceCanvasStore.workspaceIds(),
             onError: (error) => logger.warn("design", "Could not remove a deleted chat's page claim and artifacts from its design canvas.", error),
           },
           chatId,

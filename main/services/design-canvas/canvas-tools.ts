@@ -90,6 +90,7 @@ import {
   claimPage,
   landedPageId,
   withLazyClaim,
+  chatsOnCanvas,
   withoutGoneClaims,
   type IsChatLive,
 } from "../../../renderer/shared/design-canvas/chat-pages.js";
@@ -1011,11 +1012,11 @@ export function createDesignCanvasTools(deps: DesignCanvasToolDeps): AgentTool[]
     }));
 
   /**
-   * Which chats claiming pages in `doc` are live, as a check that needs no
-   * waiting. A claim made after this read counts as a live chat's.
+   * Which chats claiming or named on pages in `doc` are live, as a check that
+   * needs no waiting. A claim made after this read counts as a live chat's.
    */
   const livenessOf = async (doc: DesignCanvas, workspaceId: string): Promise<IsChatLive> => {
-    const checked = new Set(Object.keys(doc.chatPages).filter((chatId) => chatId !== deps.chatId));
+    const checked = new Set(chatsOnCanvas(doc).filter((chatId) => chatId !== deps.chatId));
     if (!deps.isLive || checked.size === 0) return () => true;
     const live = await deps.isLive([...checked], workspaceId);
     return (chatId) => !checked.has(chatId) || live.has(chatId);
