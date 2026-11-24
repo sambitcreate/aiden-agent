@@ -18,7 +18,7 @@ import {
 
 /** The host's largest page (`limit`, revision 67). */
 const OLDER_PAGE_MAX = 200;
-/** At most this many kept entries are asked about after a bounded re-read misses the oldest. */
+/** At most this many kept entries a re-read didn't reach are asked about. */
 const KEPT_PROBE_MAX = 8;
 
 export interface RemoteBotSessionTransport {
@@ -225,15 +225,15 @@ export class RemoteBotSessionFollower {
   /**
    * The host may have rewritten history inside the same epoch (a snapshot
    * also says so), so older entries kept across a snapshot are read again, a
-   * bounded page at a time, and replaced. Reading stops at the oldest kept
-   * entry (anything past it is cut off). If it isn't reached within the host
-   * entries the kept ones spanned, plus a slack (a newer host's entries this
-   * Mac can't show may sit between them), the host is asked whether it still
-   * has it, then each later kept entry in turn: reading goes on to the
-   * earliest one it has, and the re-read is cut back to it. Only if the host
-   * has none of the first few (`KEPT_PROBE_MAX`) does the bounded read stand. A read that fails keeps the
-   * pages already read (Load older continues from there), or drops the kept
-   * entries if none was.
+   * bounded page at a time, and replaced. Reading goes back to the oldest kept
+   * entry within the host entries the kept ones spanned, plus a slack (a newer
+   * host's entries this Mac can't show may sit between them). Then any kept
+   * entry still not read (one the host removed, or moved further back) is
+   * asked about, at most `KEPT_PROBE_MAX` in all: reading goes on to each one
+   * the host still has. The re-read is cut back to whichever kept entry comes
+   * first, so nothing older than before is added and no kept entry the host
+   * has is dropped. A read that fails keeps the pages already read (Load older
+   * continues from there), or drops the kept entries if none was.
    */
   private rereadCarried(carried: number, fresh: RemoteBotSessionView): void {
     const view = this.state.view;
@@ -259,9 +259,12 @@ export class RemoteBotSessionFollower {
       return;
     }
     const pages: RemoteBotSessionEntriesPage[] = [];
-    const read = (id: string) => pages.some((page) => page.entries.some((entry) => entry.id === id));
-    // The kept entry to read back to; null while the read is bounded.
-    let target: string | null = kept[0] ?? null;
+    // Entries read back, the snapshot's own included (a kept entry may have moved into it).
+    const seen = new Set(fresh.snapshot.entries.map((entry) => entry.id));
+    const gone = new Set<string>();
+    let probes = 0;
+    // The kept entry being read back to; while bounded, the oldest.
+    let target = kept[0]!;
     let bounded = true;
     const next = (before: string, total: number): void => {
       if (!transport.older) return settle(pages);
@@ -272,22 +275,23 @@ export class RemoteBotSessionFollower {
           if (!outcome.ok) return settle(pages);
           const page = outcome.value as RemoteBotSessionEntriesPage;
           pages.push(page);
+          for (const entry of page.entries) seen.add(entry.id);
           // Counted in the host's entries, drawn or not, as the kept span was.
           const after = total + (page.hostCount ?? page.entries.length);
           const cursor = page.olderCursor ?? page.entries[0]?.id;
-          if ((target !== null && read(target)) || !page.hasOlder || !cursor || cursor === before) return settle(pages);
-          if (bounded && after >= bound) return probe(0, cursor, after);
+          if (!page.hasOlder || !cursor || cursor === before) return settle(pages);
+          if (seen.has(target) || (bounded && after >= bound)) return ask(cursor, after);
           next(cursor, after);
         },
         () => settle(pages),
       );
     };
-    // Asks for one entry before kept[index]: the host answers `operation_stale`
-    // when it no longer has that entry.
-    const probe = (index: number, cursor: string, total: number): void => {
-      const id = kept[index];
-      if (id === undefined || index >= KEPT_PROBE_MAX || !transport.older) return settle(pages);
-      if (read(id)) return settle(pages);
+    // Asks for one entry before the next kept entry not yet read: the host
+    // answers `operation_stale` when it no longer has it.
+    const ask = (cursor: string, total: number): void => {
+      const id = kept.find((candidate) => !seen.has(candidate) && !gone.has(candidate));
+      if (id === undefined || probes >= KEPT_PROBE_MAX || !transport.older) return settle(pages);
+      probes += 1;
       transport.older(this.hostId, this.botId, id, 1).then(
         (outcome) => {
           if (!current()) return;
@@ -296,8 +300,9 @@ export class RemoteBotSessionFollower {
             bounded = false;
             return next(cursor, total);
           }
-          if (outcome.error.remoteCode === "operation_stale") return probe(index + 1, cursor, total);
-          settle(pages);
+          if (outcome.error.remoteCode !== "operation_stale") return settle(pages);
+          gone.add(id);
+          ask(cursor, total);
         },
         () => settle(pages),
       );
