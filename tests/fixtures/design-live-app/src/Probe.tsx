@@ -140,22 +140,28 @@ function workerProbe(kind: "dedicated" | "shared" | "blob") {
   return () =>
     new Promise<string>((resolve, reject) => {
       const url = "https://example.com/worker";
+      const answer = (event: MessageEvent) =>
+        String(event.data).startsWith("ok")
+          ? resolve(String(event.data))
+          : reject(Object.assign(new Error(String(event.data)), { name: "WorkerFetchFailed" }));
       if (kind === "shared") {
-        const worker = new SharedWorker(new URL(`./worker.ts?url=${encodeURIComponent(url)}`, import.meta.url), { type: "module" });
-        worker.port.onmessage = (event) => (String(event.data).startsWith("ok") ? resolve(String(event.data)) : reject(Object.assign(new Error(String(event.data)), { name: "WorkerFetchFailed" })));
+        const worker = new SharedWorker(new URL("./worker.ts", import.meta.url), { type: "module" });
+        worker.port.onmessage = answer;
         worker.port.start();
+        worker.port.postMessage(url);
         return;
       }
       const worker =
         kind === "blob"
           ? new Worker(
               URL.createObjectURL(
-                new Blob([`fetch(${JSON.stringify(url)}, {mode: "no-cors"}).then(r => postMessage("ok:" + r.type), e => postMessage("failed:" + e.name));`], { type: "text/javascript" }),
+                new Blob([`onmessage = (e) => fetch(e.data, {mode: "no-cors"}).then(r => postMessage("ok:" + r.type), err => postMessage("failed:" + err.name));`], { type: "text/javascript" }),
               ),
             )
-          : new Worker(new URL(`./worker.ts?url=${encodeURIComponent(url)}`, import.meta.url), { type: "module" });
-      worker.onmessage = (event) => (String(event.data).startsWith("ok") ? resolve(String(event.data)) : reject(Object.assign(new Error(String(event.data)), { name: "WorkerFetchFailed" })));
+          : new Worker(new URL("./worker.ts", import.meta.url), { type: "module" });
+      worker.onmessage = answer;
       worker.onerror = () => reject(Object.assign(new Error("error"), { name: "WorkerError" }));
+      worker.postMessage(url);
     });
 }
 

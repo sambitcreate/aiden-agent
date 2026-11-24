@@ -1,7 +1,6 @@
-// A dedicated or shared worker that tries one fetch and reports the outcome.
-const url = new URL(self.location.href).searchParams.get("url") ?? "";
-
-async function attempt(): Promise<string> {
+// A dedicated or shared worker that tries one fetch of the URL it is sent and
+// answers with the outcome.
+async function attempt(url: string): Promise<string> {
   try {
     const response = await fetch(url, { mode: "no-cors", cache: "no-store" });
     return `ok:${response.type}`;
@@ -10,12 +9,16 @@ async function attempt(): Promise<string> {
   }
 }
 
-const scope = self as unknown as { onconnect?: unknown; postMessage?: (value: unknown) => void };
-if ("onconnect" in scope) {
-  (self as unknown as { onconnect: (event: MessageEvent) => void }).onconnect = (event) => {
-    const port = event.ports[0];
-    void attempt().then((result) => port.postMessage(result));
+const scope = self as unknown as {
+  onconnect?: (event: MessageEvent) => void;
+  onmessage?: (event: MessageEvent) => void;
+  postMessage?: (value: unknown) => void;
+};
+if ("SharedWorkerGlobalScope" in self) {
+  scope.onconnect = (event) => {
+    const port = event.ports[0]!;
+    port.onmessage = (message) => void attempt(String(message.data)).then((result) => port.postMessage(result));
   };
 } else {
-  void attempt().then((result) => scope.postMessage?.(result));
+  scope.onmessage = (message) => void attempt(String(message.data)).then((result) => scope.postMessage?.(result));
 }
