@@ -356,18 +356,20 @@ export function withRereadOlderRemoteBotEntries(
   const reread = pages.reduce(withOlderRemoteBotEntries, own);
   // Pages that reached past the kept entries are cut back to the earliest one
   // the host still has, so history older than what was shown before isn't
-  // added. At the oldest kept entry Load older resumes where it was; at a later
-  // one (the host removed the older ones), it resumes from that entry.
-  const ids = reread.snapshot.entries.map((entry) => entry.id);
-  const kept = view.snapshot.entries.slice(0, Math.max(0, carried));
-  const boundary = kept.findIndex((entry) => ids.includes(entry.id));
-  const at = boundary < 0 ? -1 : ids.indexOf(kept[boundary]!.id);
+  // added. At the oldest kept entry Load older resumes where it was; at another
+  // (the host removed or moved the older ones), it resumes from that entry.
+  // The boundary is whichever kept entry comes first in the host's order now,
+  // so a reorder doesn't cut off a kept entry that moved earlier.
+  const kept = new Set(view.snapshot.entries.slice(0, Math.max(0, carried)).map((entry) => entry.id));
+  const at = reread.snapshot.entries.findIndex((entry) => kept.has(entry.id));
   if (at <= 0) return reread;
+  const boundary = reread.snapshot.entries[at]!.id;
+  const same = boundary === view.snapshot.entries[0]?.id;
   return {
     ...reread,
     snapshot: { ...reread.snapshot, entries: reread.snapshot.entries.slice(at) },
-    hasOlder: boundary === 0 ? view.hasOlder : true,
-    olderCursor: boundary === 0 ? view.olderCursor : kept[boundary]!.id,
+    hasOlder: same ? view.hasOlder : true,
+    olderCursor: same ? view.olderCursor : boundary,
     olderLoaded: (reread.olderLoaded ?? 0) - at,
     olderHostSpan: view.olderHostSpan ?? 0,
   };

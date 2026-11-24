@@ -13,10 +13,12 @@ import {
 import { RemoteBotSessionFollower, type RemoteBotSessionTransport } from "./remote-bot-session-follower";
 import {
   applyRemoteBotSessionEvent,
+  carryOlderRemoteBotEntries,
   hostServesBotHandoffs,
   hostSharesBotSessions,
   remoteBotSessionView,
   withOlderRemoteBotEntries,
+  withRereadOlderRemoteBotEntries,
   type RemoteBotSessionView,
 } from "./remote-bot-session";
 
@@ -699,6 +701,50 @@ test("a shifted snapshot keeps every kept entry the host still has, however many
   await follower.loadOlder();
   assert.deepEqual(ids(), ["m2", "m4", "m5", "m6", "m7"], "Load older goes on from an entry the host has");
   follower.stop();
+});
+
+test("a rewrite that removed every kept entry asks the host about only a few of them", async () => {
+  const message = (id: string) => ({ type: "message" as const, id, role: "assistant" as const, text: id });
+  const keptIds = Array.from({ length: 30 }, (_, index) => `k${index + 1}`);
+  // The host rewrote its history: none of the kept entries is left.
+  const host = [...Array.from({ length: 80 }, (_, index) => `h${index + 1}`), "m5", "m6", "m7"];
+  const fake = fakeTransport([session({ hasOlder: true, entries: [...keptIds, "m5", "m6"].map(message) })]);
+  const asked: Array<[string, number | undefined]> = [];
+  fake.transport.older = async (_hostId, _botId, before, limit) => {
+    asked.push([before, limit]);
+    const end = host.indexOf(before);
+    if (end < 0) return { ok: false, error: { code: "http_error", status: 409, remoteCode: "operation_stale", message: "This Bot's chat changed. Read it again." } };
+    const start = Math.max(0, end - (limit ?? 2));
+    const sent = host.slice(start, end);
+    return { ok: true, value: { botId: "bot_1", epoch: "e1", hasOlder: start > 0, olderCursor: sent[0], hostCount: sent.length, entries: sent.map(message) } };
+  };
+  const follower = new RemoteBotSessionFollower(fake.transport, "host_a", "bot_1");
+  follower.start();
+  await settle();
+  fake.push(event(4, { type: "snapshot", payload: { session: session({ seq: 5, hasOlder: true, entries: ["m5", "m6", "m7"].map(message) }) } }));
+  await settle();
+  const probes = asked.filter(([before]) => before.startsWith("k"));
+  assert.ok(probes.length > 0 && probes.length <= 8, JSON.stringify(probes));
+  assert.ok(asked.length <= probes.length + 2, JSON.stringify(asked));
+  const ids = follower.getState().view!.snapshot.entries.map((entry) => entry.id);
+  assert.ok(!ids.some((id) => id.startsWith("k")), "the removed entries are gone");
+  assert.deepEqual(ids.slice(-3), ["m5", "m6", "m7"]);
+  follower.stop();
+});
+
+test("a host that reorders kept entries keeps every one the re-read finds, in the host's order", () => {
+  const message = (id: string) => ({ type: "message" as const, id, role: "assistant" as const, text: id });
+  const shown = remoteBotSessionView(session({ hasOlder: true, entries: ["m3", "m4", "m5", "m6"].map(message) }));
+  const fresh = remoteBotSessionView(session({ seq: 6, hasOlder: true, entries: ["m5", "m6"].map(message) }));
+  const kept = carryOlderRemoteBotEntries(shown, fresh);
+  assert.deepEqual(kept.snapshot.entries.map((entry) => entry.id), ["m3", "m4", "m5", "m6"]);
+  // The host now has "m4" before "m3".
+  const reread = withRereadOlderRemoteBotEntries(kept, 2, fresh, [
+    { botId: "bot_1", epoch: "e1", entries: ["m1", "m4", "m3"].map(message), hasOlder: false },
+  ]);
+  assert.deepEqual(reread.snapshot.entries.map((entry) => entry.id), ["m4", "m3", "m5", "m6"], "m1 is not added and m4 stays");
+  assert.equal(reread.hasOlder, true);
+  assert.equal(reread.olderCursor, "m4");
 });
 
 test("a page whose entries this Mac can't show still moves Load older past them", () => {
