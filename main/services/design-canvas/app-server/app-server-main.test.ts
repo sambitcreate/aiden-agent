@@ -311,11 +311,13 @@ function harness(_t: test.TestContext, options: Options = {}) {
   const holder = { pid: 300, ppid: 30, ident: "start-300", port: 5173, origin: "http://127.0.0.1:5173", held: ["127.0.0.1"], processName: "vite", folder: "." };
   jobs.procs.set(30, { ppid: 1, uid: 501, sockets: [] });
   jobs.procs.set(300, { ppid: 30, uid: 501, sockets: [{ address: "127.0.0.1", port: 5173 }] });
-  const attachCalls = { scans: [] as Array<{ roots: readonly string[]; busyRoots: ReadonlySet<string> }>, checks: [] as Array<{ appRoot: string; port: number; pid?: number }>, rebinds: 0, rebindInputs: [] as Array<Parameters<DesignAppAttachDeps["rebind"]>[0]> };
+  const attachCalls = { scans: [] as Array<{ roots: readonly string[]; busyRoots: ReadonlySet<string> }>, checks: [] as Array<{ appRoot: string; port: number; pid?: number }>, rebinds: 0, rebindInputs: [] as Array<Parameters<DesignAppAttachDeps["rebind"]>[0]>, rechecks: [] as Array<Parameters<DesignAppAttachDeps["recheck"]>[0]> };
   const attachState = {
     check: undefined as undefined | ((input: { appRoot: string; port: number; pid?: number }) => AttachCheck),
     scan: { ok: true, incomplete: false, servers: [] } as Awaited<ReturnType<DesignAppAttachDeps["scan"]>>,
     rebind: undefined as Awaited<ReturnType<DesignAppAttachDeps["rebind"]>>,
+    /** What each tick's re-check of the holder's folder and its subtree's job marks finds. */
+    recheck: { ok: true } as Awaited<ReturnType<DesignAppAttachDeps["recheck"]>>,
     real: new Map<string, string>(),
     clears: 0,
   };
@@ -412,6 +414,10 @@ function harness(_t: test.TestContext, options: Options = {}) {
         attachCalls.rebinds += 1;
         attachCalls.rebindInputs.push(input);
         return attachState.rebind;
+      },
+      recheck: async (input) => {
+        attachCalls.rechecks.push({ ...input, subtree: [...input.subtree] });
+        return attachState.recheck;
       },
       realpath: async (target) => attachState.real.get(target) ?? target,
     },
@@ -1911,6 +1917,63 @@ test("a holder whose identity changes under the same pid is lost: only the re-bi
   assert.deepEqual(rebound.servers.appForOrigin("http://127.0.0.1:5173"), { workspaceId: "ws", appRoot: "." });
 });
 
+test("every tick re-checks the holder's folder and its whole subtree's job marks, even while its identity is unchanged", async (t) => {
+  const h = harness(t);
+  await h.connect();
+  h.jobs.procs.set(301, { ppid: 300, uid: 501, sockets: [] });
+  h.attachCalls.rechecks.length = 0;
+  await h.clock.advance(2_000);
+  assert.deepEqual(h.attachCalls.rechecks, [{ holder: 300, subtree: [300, 301], workspacePath: "/w/ws", appRoot: "." }]);
+  await h.clock.advance(2_000);
+  assert.equal(h.attachCalls.rechecks.length, 2);
+  assert.equal(h.latest()?.phase, "running");
+});
+
+test("a same-name exec in place that keeps the identity but moves out of the app, or gains a job's marker, detaches on the next tick", async (t) => {
+  // The pid, the start time and the command are all unchanged, so the identity can't tell; the re-check can.
+  for (const label of ["its folder moved outside the app", "a job's marker appeared in its subtree"]) {
+    const h = harness(t);
+    await h.connect();
+    h.attachState.recheck = { ok: false, problem: "attach-not-in-app" };
+    await h.clock.advance(2_000);
+    assert.equal(h.latest()?.phase, "stopped", label);
+    assert.deepEqual(h.latest()?.problem, { problem: "attach-not-in-app" }, label);
+    assert.equal(h.attachCalls.rebinds, 0, `${label}: the holder isn't lost, so no re-bind look`);
+    assert.equal(h.servers.appForOrigin("http://127.0.0.1:5173"), undefined, label);
+    assert.equal(h.jobs.stopCalls.length, 0, `${label}: nothing is signalled`);
+  }
+  const hidden = harness(t);
+  await hidden.connect();
+  hidden.attachState.recheck = { ok: false, problem: "attach-unreachable" };
+  await hidden.clock.advance(2_000);
+  assert.deepEqual(hidden.latest()?.problem, { problem: "attach-unreachable" }, "an environment that can't be read");
+});
+
+test("a re-check that can't read counts toward the three failed looks, and a good look resets them", async (t) => {
+  const h = harness(t);
+  await h.connect();
+  h.attachState.recheck = { ok: false, reason: "lsof: timeout" };
+  await h.clock.advance(4_000);
+  assert.equal(h.latest()?.phase, "running", "two failed looks");
+  h.attachState.recheck = { ok: true };
+  await h.clock.advance(2_000);
+  h.attachState.recheck = { ok: false, reason: "lsof: timeout" };
+  await h.clock.advance(4_000);
+  assert.equal(h.latest()?.phase, "running", "the count started again");
+  await h.clock.advance(2_000);
+  assert.equal(h.latest()?.phase, "stopped");
+  assert.deepEqual(h.latest()?.problem, { problem: "attach-unreachable" });
+  assert.equal(h.jobs.stopCalls.length, 0);
+  // A thrown re-check is a failed look too.
+  const thrown = harness(t);
+  await thrown.connect();
+  thrown.deps.attach!.recheck = async () => {
+    throw new Error("boom");
+  };
+  await thrown.clock.advance(6_000);
+  assert.deepEqual(thrown.latest()?.problem, { problem: "attach-unreachable" });
+});
+
 test("another user's process in an attached subtree detaches on the first tick even when the read of it failed (Linux)", async (t) => {
   const h = harness(t);
   await h.connect();
@@ -2294,7 +2357,7 @@ test("construction, snapshot, presence and the flag off never call an attach dep
   const boom = () => {
     throw new Error("an attach dep was called");
   };
-  h.deps.attach = { uid: 501, scan: boom, check: boom, rebind: boom, realpath: boom };
+  h.deps.attach = { uid: 501, scan: boom, check: boom, rebind: boom, recheck: boom, realpath: boom };
   await h.servers.snapshot("ws");
   h.views.set("ws", 0);
   h.views.set("ws", 1);

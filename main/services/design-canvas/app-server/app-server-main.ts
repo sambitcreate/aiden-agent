@@ -35,7 +35,7 @@ import {
 import type { JobSockets } from "../../follow-through/listening-ports.js";
 import type { WorkspaceMutationGate } from "../../workspace-mutation-gate.js";
 import { attachRoots, configuredRoots, type CanvasConfig } from "../canvas-config.js";
-import { attachOrigins, deepestRoot, parseAttachUrl, type AttachCheck, type DesignAppAttachDeps } from "./app-attach.js";
+import { attachOrigins, deepestRoot, parseAttachUrl, type AttachCheck, type AttachRecheck, type DesignAppAttachDeps } from "./app-attach.js";
 import {
   attachConsentKey,
   isDesktopOwner,
@@ -206,7 +206,9 @@ interface AttachWatch {
   /**
    * The holder's identity (`ProcessRow.ident`: start time and command) from
    * the check or re-bind that bound it. A pid alone isn't the process: an
-   * `exec` in place or a reused pid changes this, and the holder is then lost.
+   * `exec` into another program or a reused pid changes this, and the holder
+   * is then lost. A same-name `exec` in place keeps it, so it is only the
+   * trigger for a re-bind: the folder and job rules are re-checked every tick.
    */
   ident: string;
   port: number;
@@ -1364,13 +1366,13 @@ export class DesignAppServers {
       return;
     }
     if (!result.ok) {
-      if (++watch.failedLooks >= DESIGN_APP_EXPOSURE_FAILURES) this.detach(entry, { problem: { problem: "attach-unreachable" } });
+      this.failedAttachLook(entry, watch);
       return;
     }
-    watch.failedLooks = 0;
     const rows = result.rows ?? [];
     const holder = rows.find((row) => row.pid === watch.pid);
     if (!holder || holder.ident === undefined || holder.ident !== watch.ident) {
+      watch.failedLooks = 0;
       // The holder is gone (A-M5), or its pid now names another process (an exec in place, or the pid reused), or
       // that can't be told: a watch-mode restart under the same parent re-binds, through every one of the re-bind's
       // checks (the same pid included); otherwise it detaches after three ticks.
@@ -1405,12 +1407,29 @@ export class DesignAppServers {
       this.detach(entry, { problem: { problem: "attach-unreachable" } });
       return;
     }
+    // The identity can't show a same-name exec in place (it keeps the pid, start time and command), so the attach
+    // check's folder and job rules run again on every tick, over this tick's subtree. Nothing is signalled.
+    const recheck = await this.deps.attach!
+      .recheck({ holder: watch.pid, subtree: rows.map((row) => row.pid), workspacePath: watch.workspacePath, appRoot: entry.appRoot })
+      .catch((error: unknown): AttachRecheck => ({ ok: false, reason: String(error) }));
+    if (entry.attached !== watch) return;
+    if (!recheck.ok) {
+      if ("problem" in recheck) this.detach(entry, { problem: { problem: recheck.problem } });
+      else this.failedAttachLook(entry, watch);
+      return;
+    }
+    watch.failedLooks = 0;
     watch.held = held;
     if (this.serveAttached(entry, watch)) this.originsChanged();
     const workspace = await this.deps.workspace(entry.workspaceId).catch(() => undefined);
     if (entry.attached !== watch) return;
     if (!runnable(workspace)) this.detach(entry, { problem: { problem: "no-access" } });
     else if (workspace.path !== watch.workspacePath) this.detach(entry, { problem: { problem: "interrupted" } });
+  }
+
+  /** A failed look of an attached server: its socket read or its re-check. Three in a row detach it (D9, B-B3). */
+  private failedAttachLook(entry: Entry, watch: AttachWatch): void {
+    if (++watch.failedLooks >= DESIGN_APP_EXPOSURE_FAILURES) this.detach(entry, { problem: { problem: "attach-unreachable" } });
   }
 
   /** D9, B-m6: exactly the loopback origins an attached server holds, plus the localhost alias. True when one was added. */

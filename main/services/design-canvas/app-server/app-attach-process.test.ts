@@ -18,7 +18,7 @@ import test from "node:test";
 import { fileURLToPath } from "node:url";
 import { BACKGROUND_JOB_MARKER } from "../../follow-through/background-jobs.js";
 import { defaultSocketReaderDeps, jobProcessTree, portHolders, processTable, readJobSockets } from "../../follow-through/listening-ports.js";
-import { checkAttach, findRebind, rebindHolder, scanRunningServers, type AttachScanDeps } from "./app-attach.js";
+import { checkAttach, findRebind, rebindHolder, recheckAttached, scanRunningServers, type AttachScanDeps } from "./app-attach.js";
 import { defaultOsPort } from "./app-ports.js";
 
 const skip = process.platform === "win32" || typeof process.getuid !== "function" ? "attaching reads Unix process tables" : false;
@@ -350,3 +350,76 @@ test(
     );
   },
 );
+
+/**
+ * Listens on 127.0.0.1:<port>, then, once <trigger> exists, execs the same
+ * python3 in place with another script: the same pid, start time and command
+ * name, still holding the socket. `cwd` first moves to <outside>; `marker`
+ * adds a background job's marker to the environment instead.
+ */
+const SAME_NAME_EXEC = [
+  "import os, socket, sys, time",
+  "python, port, trigger, mode, outside, marker_name = sys.argv[1], int(sys.argv[2]), sys.argv[3], sys.argv[4], sys.argv[5], sys.argv[6]",
+  "s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)",
+  "s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)",
+  's.bind(("127.0.0.1", port))',
+  "s.listen(8)",
+  "s.set_inheritable(True)",
+  "while not os.path.exists(trigger): time.sleep(0.05)",
+  "env = dict(os.environ)",
+  'if mode == "cwd": os.chdir(outside)',
+  'else: env[marker_name] = "job_0badc0de"',
+  'os.execve(python, [python, "-c", "import time; time.sleep(60)"] + sys.argv[7:], env)',
+].join("\n");
+
+for (const mode of ["cwd", "marker"] as const) {
+  test(
+    `a same-name exec in place that keeps the listener and the identity, but ${mode === "cwd" ? "runs outside the app" : "carries a job's marker"}, fails the tick's re-check`,
+    { skip: skip || (PYTHON ? false : "needs a python3 to exec in place with the socket kept") },
+    async (t) => {
+      const h = await harness(t);
+      const port = await defaultOsPort();
+      const trigger = path.join(h.outside, `exec-${mode}`);
+      const marker = `--aiden-attach-test=${path.basename(path.dirname(h.workspace))}`;
+      const line = [PYTHON!, "-c", SAME_NAME_EXEC, PYTHON!, String(port), trigger, mode, h.outside, BACKGROUND_JOB_MARKER, marker].map(shellQuote).join(" ");
+      // Its shell exits at once, so the holder is no descendant of the test runner (whose tree is Aiden's).
+      const shell = spawn("/bin/sh", ["-c", `${line} >/dev/null 2>&1 & echo $!`], { cwd: h.web, stdio: ["ignore", "pipe", "ignore"] });
+      let out = "";
+      shell.stdout.on("data", (chunk: Buffer) => (out += chunk.toString("utf8")));
+      await new Promise((resolve) => shell.once("exit", resolve));
+      const pid = Number(out.trim());
+      assert.ok(Number.isInteger(pid) && pid > 1, `a pid from the shell: ${out}`);
+      t.after(() => {
+        if (alive(pid)) process.kill(pid, "SIGKILL");
+      });
+      const attached = await eventually(async () => {
+        const result = await checkAttach({ workspacePath: h.workspace, appRoot: "apps/web", port, pid }, deps());
+        return result.ok ? result : undefined;
+      }, "the holder to listen and pass the check");
+      const look = async () => (await readJobSockets(new Map(), defaultSocketReaderDeps(), new Map([["attach:web", pid]]))).get("attach:web");
+      const recheck = async () => {
+        const read = await look();
+        assert.ok(read?.ok, "the watch's socket look succeeds");
+        return recheckAttached({ holder: pid, subtree: read.rows!.map((row) => row.pid), workspacePath: h.workspace, appRoot: "apps/web" }, deps());
+      };
+      assert.deepEqual(await recheck(), { ok: true }, "before the exec, the tick keeps it");
+      await writeFile(trigger, "");
+      const verdict = await eventually(async () => {
+        const result = await recheck();
+        return result.ok ? undefined : result;
+      }, "the re-check to refuse the exec'd holder");
+      assert.deepEqual(verdict, { ok: false, problem: "attach-not-in-app" });
+      // The exec'd program is settled once its script runs; then its identity is what the watch bound.
+      const after = await eventually(async () => {
+        const read = await look();
+        const row = read?.ok ? read.rows?.find((candidate) => candidate.pid === pid) : undefined;
+        return read?.ok && row?.ident === attached.ident ? read : undefined;
+      }, "the exec'd holder to show the identity the watch bound");
+      assert.equal(
+        after.sockets.some((socket) => socket.pid === pid && socket.port === port),
+        true,
+        "the same pid still holds the port under the same identity, so only the re-check detaches it",
+      );
+    },
+  );
+}

@@ -451,6 +451,23 @@ test("processFolders on macOS runs one lsof for the uid and keeps only the pids 
   assert.equal(call![0], "/usr/sbin/lsof");
   assert.ok(call!.includes("-d") && call![call!.indexOf("-d") + 1] === "cwd");
   assert.equal(call![call!.indexOf("-u") + 1], "501");
+  assert.equal(call![call!.indexOf("-p") + 1], "10,11", "a short list names its pids, so lsof reads only those processes");
+});
+
+test("processFolders on macOS reads every process of the uid for a list too long to name", async () => {
+  const calls: string[][] = [];
+  const deps = fakeDeps({
+    platform: "darwin",
+    exec: async (file, args) => {
+      calls.push([file, ...args]);
+      return { ok: true, stdout: "p10\nfcwd\nn/w\n", stderr: "", exitCode: 0 };
+    },
+  });
+  const many = Array.from({ length: 1_000 }, (_, index) => index + 10);
+  const result = await processFolders(many, deps, { uid: 501, maxPids: 4096, partial: true });
+  assert.deepEqual(result, { ok: true, incomplete: false, byPid: new Map([[10, "/w"]]) });
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0]!.includes("-p"), false);
 });
 
 test("processFolders on macOS: stderr is incomplete with partial and a failure without; a timeout always fails", async () => {
@@ -678,11 +695,14 @@ test("processEnvironmentMarks on Linux reads each /proc/<pid>/environ and fails 
       if (value instanceof Error) throw value;
       return value;
     },
+    // 13 has exited; 14's environ is missing while the process still runs.
+    processExists: (pid) => pid !== 13,
   });
-  assert.deepEqual(await processEnvironmentMarks([10, 11, 12, 13], "AIDEN_BACKGROUND_JOB=", deps), {
+  assert.deepEqual(await processEnvironmentMarks([10, 11, 12, 13, 14], "AIDEN_BACKGROUND_JOB=", deps), {
     ok: true,
     marked: new Set([10]),
-    unreadable: new Set([12, 13]),
+    unreadable: new Set([12, 13, 14]),
+    gone: new Set([13]),
   });
 });
 
@@ -695,17 +715,21 @@ test("processEnvironmentMarks on macOS compares ps -E with plain ps, so an envir
     exec: async (file, args) => {
       calls.push([file, ...args]);
       const shown = args.includes("-E");
-      // 13 left between the two reads.
-      const pids = args[args.indexOf("-p") + 1]!.split(",").map(Number).filter((pid) => command[pid] && !(pid === 13 && !shown));
+      // 13 left between the two reads; 14 appeared between them.
+      const pids = args[args.indexOf("-p") + 1]!.split(",").map(Number).filter((pid) => command[pid] && !(pid === 13 && !shown) && !(pid === 14 && shown));
       return { ok: true, stdout: pids.map((pid) => `${String(pid).padStart(5)} ${command[pid]}${shown ? environment[pid] : ""}`).join("\n"), stderr: "", exitCode: 0 };
     },
   });
   command[13] = "node other.mjs";
   environment[13] = " PATH=/bin";
-  assert.deepEqual(await processEnvironmentMarks([10, 11, 12, 13], "AIDEN_BACKGROUND_JOB=", deps), {
+  command[14] = "node new.mjs";
+  environment[14] = " PATH=/bin";
+  // 14 started after the environment read and before the plain one (a pid reused): it was never read, and it runs.
+  assert.deepEqual(await processEnvironmentMarks([10, 11, 12, 13, 14], "AIDEN_BACKGROUND_JOB=", deps), {
     ok: true,
     marked: new Set([10]),
-    unreadable: new Set([12, 13]),
+    unreadable: new Set([12, 13, 14]),
+    gone: new Set([13]),
   });
   assert.equal(calls.length, 2, "two ps calls cover every pid");
   assert.equal((await processEnvironmentMarks([10], "AIDEN_BACKGROUND_JOB=", fakeDeps({ exec: async () => ({ ok: false, reason: "timeout" }) }))).ok, false);
