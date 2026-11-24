@@ -1136,6 +1136,32 @@ final class AidenNativeIntegrationTests: XCTestCase {
         XCTAssertTrue(fresh)
     }
 
+    /// A chat whose approval read never reached the Mac marks its run stale.
+    /// On a summary that reads as old too, until that run's next real update.
+    @MainActor
+    func testAStaleRunOnASummaryMarksTheSummaryStaleUntilItsNextUpdate() async throws {
+        guard ActivityAuthorizationInfo().areActivitiesEnabled else {
+            throw XCTSkip("Live Activities are disabled on this device.")
+        }
+        let mac = "summary-run-stale-\(UUID().uuidString)"
+        let manager = AidenRemoteLiveActivityManager(preferences: { AidenNotificationPreferences() })
+        defer { Task { @MainActor in await manager.endAll(forInstanceID: mac) } }
+        await manager.start(instanceID: mac, chatID: "c1", title: "One", streamID: "s1", machineName: "Mac")
+        await manager.start(instanceID: mac, chatID: "c2", title: "Two", streamID: "s2", machineName: "Mac")
+        let summary = try XCTUnwrap(Activity<AidenRunsSummaryActivityAttributes>.activities.first {
+            $0.attributes.instanceID == mac
+        })
+        await manager.approvalRequired(instanceID: mac, streamID: "s1", target: nil)
+
+        await manager.markStale(instanceID: mac, streamID: "s1")
+        let stale = await eventually("the summary to read as old") { summary.content.state.isStale }
+        XCTAssertTrue(stale)
+
+        await manager.updateStatus(instanceID: mac, streamID: "s1", state: .waitingForApproval)
+        let fresh = await eventually("the run's next update to clear it") { !summary.content.state.isStale }
+        XCTAssertTrue(fresh)
+    }
+
     @MainActor
     func testSecondRunOnTheSameMacMergesIntoOneSummaryCard() async throws {
         guard ActivityAuthorizationInfo().areActivitiesEnabled else {

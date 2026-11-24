@@ -569,7 +569,8 @@ final class AidenRemoteLiveActivityManager {
     }
 
     private func summaryState(for instanceID: String) -> SummaryState {
-        let rows = (summaryRuns[instanceID] ?? [:]).map { streamID, run in
+        let runs = summaryRuns[instanceID] ?? [:]
+        let rows = runs.map { streamID, run in
             AidenRunsSummaryActivityAttributes.Row(
                 streamID: streamID,
                 chatID: run.chatID,
@@ -579,7 +580,10 @@ final class AidenRemoteLiveActivityManager {
                 isFinal: run.state.isFinal
             )
         }
-        return SummaryState(rows: AidenRunsSummaryPolicy.ordered(rows))
+        // A run still going that was marked stale (its status may be old)
+        // makes the summary read as old until that run's next real update.
+        let hasStaleRun = runs.values.contains { $0.state.isStale && !$0.state.isFinal }
+        return SummaryState(rows: AidenRunsSummaryPolicy.ordered(rows), isStale: hasStaleRun)
     }
 
     private func endSummary(
