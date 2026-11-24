@@ -3522,6 +3522,7 @@ test("parent cancellation during prepareRun aborts all fulfilled preparations wi
 test("nested projector flush failure aborts the tree and completes projected nested runs without duplicate SubagentStop", async () => {
   const completedNested: string[] = [];
   const stopHooksFired: string[] = [];
+  const nestedRunIds: string[] = [];
   let failedNestedFlush = false;
   const projector = new SubagentEventProjector({
     generationId: "generation-nested-flush-fail",
@@ -3560,6 +3561,7 @@ test("nested projector flush failure aborts the tree and completes projected nes
         }),
       );
       if (!parentAuthority) return prepared;
+      nestedRunIds.push(identity.runId);
       return {
         ...prepared,
         complete: async (result) => {
@@ -3590,8 +3592,14 @@ test("nested projector flush failure aborts the tree and completes projected nes
     }),
     /nested projection disk full/u,
   );
-  assert.ok(completedNested.length >= 1);
-  // Every finished run fires SubagentStop at most once.
+  assert.equal(nestedRunIds.length, 1);
+  const [nestedRunId] = nestedRunIds;
+  assert.equal(completedNested.length, 1);
+  assert.ok(completedNested[0]?.startsWith(`${nestedRunId}:`));
+  assert.deepEqual(
+    stopHooksFired.filter((id) => id === nestedRunId),
+    [nestedRunId],
+  );
   assert.equal(new Set(stopHooksFired).size, stopHooksFired.length);
   const nestedSnapshot = projector.snapshot().find((entry) => entry.label === "Nested child");
   assert.ok(nestedSnapshot && ["failed", "interrupted"].includes(nestedSnapshot.state));
