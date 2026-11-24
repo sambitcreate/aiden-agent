@@ -61,6 +61,11 @@ test("a host older than revision 66 sets no baseline, so its earlier replies sta
   const old = withRemoteBotHostListed(parseRemoteBotSeen(null), "host", [{ lastReplyAt: NOW - 9 * HOUR }, {}, {}]);
   assert.deepEqual(old.hostSince, {});
   assert.deepEqual(withRemoteBotHostListed(old, "host", [{}, {}]).hostSince, {}, "nor do its Bots with no reply");
+  assert.deepEqual(
+    withRemoteBotHostListed(old, "host", [{ preview: "Hi", lastReplyAt: NOW }]).hostSince,
+    {},
+    "a preview alone is not a summarized row",
+  );
   assert.equal(isRemoteBotUnread(old, "host", "closed", NOW - HOUR), false);
   // After the upgrade every Bot's newest reply arrives at once; none of them is new.
   const upgraded = withRemoteBotHostListed(old, "host", listed(NOW - 9 * HOUR, NOW - HOUR, NOW - 2 * HOUR));
@@ -68,6 +73,17 @@ test("a host older than revision 66 sets no baseline, so its earlier replies sta
     assert.equal(isRemoteBotUnread(upgraded, "host", botId, at), false, botId);
   }
   assert.equal(isRemoteBotUnread(upgraded, "host", "closed", NOW), true, "the next reply shows a dot");
+});
+
+test("a listing where one Bot's summary failed sets no baseline, so that Bot's earlier reply starts read once it is read", () => {
+  // The host read Scout's summary but not Planner's; Planner replied an hour ago.
+  const partial = withRemoteBotHostListed(parseRemoteBotSeen(null), "host", [...listed(NOW - 2 * HOUR), {}]);
+  assert.deepEqual(partial.hostSince, {});
+  // The next refresh reads Planner too.
+  const complete = withRemoteBotHostListed(partial, "host", listed(NOW - 2 * HOUR, NOW - HOUR));
+  assert.equal(complete.hostSince.host, NOW - HOUR);
+  assert.equal(isRemoteBotUnread(complete, "host", "planner", NOW - HOUR), false, "Planner's earlier reply is not new");
+  assert.equal(isRemoteBotUnread(complete, "host", "planner", NOW), true, "its next reply is");
 });
 
 test("a host whose clock is an hour ahead or behind this Mac still starts read and shows its next reply", () => {
