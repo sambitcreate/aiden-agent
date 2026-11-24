@@ -1120,3 +1120,15 @@ test("a design job's sockets include a listener started by a setsid grandchild, 
   process.kill(pid, "SIGKILL");
 });
 
+
+test("designTail gives a design job's in-memory tail, and nothing for a chat job", { skip }, async (t) => {
+  const dir = await tempDir();
+  const { jobs, startNode } = designHarness(dir);
+  t.after(() => cleanUp(jobs, dir));
+  const job = startNode("console.log('Local: http://127.0.0.1:5173/')");
+  await eventually(() => jobs.getDesign(job.id)?.state === "exited", "the job to end");
+  assert.equal(jobs.designTail(job.id), "Local: http://127.0.0.1:5173/\n");
+  const chatJob = jobs.start({ chatId: "chat-1", workspaceId: "ws-1", cwd: dir, command: "echo hi", description: "Say hi", env: process.env });
+  assert.equal(jobs.designTail(chatJob.id), "");
+  assert.equal(jobs.designTail("job_00000000"), "");
+});

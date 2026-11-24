@@ -469,7 +469,9 @@
         "main/services/design-canvas/app-server/app-launch-core.test.ts",
         "main/services/design-canvas/app-server/app-fingerprint.test.ts",
         "main/services/design-canvas/app-server/app-records.test.ts",
-        "main/services/design-canvas/app-server/app-ports.test.ts"
+        "main/services/design-canvas/app-server/app-ports.test.ts",
+        "main/services/design-canvas/app-server/app-consent.test.ts",
+        "main/services/design-canvas/app-server/app-server-main.test.ts"
       ],
       "preserved": [
         "browser"

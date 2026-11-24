@@ -735,6 +735,12 @@ export class BackgroundJobs {
     return job && isDesign(job) ? designView(job) : undefined;
   }
 
+  /** A design job's newest output kept in memory (at most `JOB_TAIL_CHARS`), for its printed URL and crash tail; "" for any other id. */
+  designTail(jobId: string): string {
+    const job = this.jobs.get(jobId);
+    return job && isDesign(job) ? job.tail : "";
+  }
+
   /** A workspace's design jobs, newest first. */
   listDesign(workspaceId: string): DesignJobView[] {
     return [...this.jobs.values()]

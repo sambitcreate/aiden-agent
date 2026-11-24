@@ -132,6 +132,10 @@ export const NOTIFICATION_CHANNEL_VALUES = [
   "designCanvas:consent",
   /** That card stopped waiting (answered, stopped or timed out): `{requestId}`. */
   "designCanvas:consentClosed",
+  /** A run-app card for the window that asked or owns the turn: a `DesignAppConsentRequest`. */
+  "designApp:consent",
+  /** That card stopped waiting (answered, stopped or timed out): `{requestId}`. */
+  "designApp:consentClosed",
   /** Aiden asks the canvas to fit frames (all when empty): `{chatId, frameIds}`. */
   "designCanvas:focus",
   /** Aiden asks for a picture of the canvas: `{requestId, chatId}`; answered with `designCanvas:snapshotAnswer`. */
