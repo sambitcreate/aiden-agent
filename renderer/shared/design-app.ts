@@ -354,7 +354,7 @@ export const EMPTY_LOG_CARRY: LogCarry = Object.freeze({ pending: "", column: 0,
 
 /** A line longer than this shows its first characters and a count of the rest. */
 const LOG_LINE_MAX = 4096;
-/** An unfinished escape sequence longer than this is dropped whole. */
+/** An escape sequence longer than this without its end shows escaped instead (A-m4). */
 const LOG_PENDING_MAX = 4096;
 const ESC = "\u001B";
 
@@ -368,45 +368,46 @@ function logEscapeHidden(text: string): string {
 /**
  * Where the escape sequence that starts at `at` (an ESC) ends: the index after
  * it, "incomplete" when the text ends first, or "lone" when the ESC starts no
- * sequence (it then shows escaped).
+ * sequence it can finish (it then shows escaped, and what follows shows as
+ * text). A sequence still unfinished after 4 KiB is "lone", whether or not
+ * the text ends there, so the answer doesn't depend on how the log was read.
  */
 function escapeEnd(text: string, at: number): number | "incomplete" | "lone" {
+  const limit = at + LOG_PENDING_MAX;
+  const unfinished = () => (text.length > limit ? "lone" : "incomplete");
+  const end = Math.min(text.length, limit);
   const introducer = text[at + 1];
   if (introducer === undefined) return "incomplete";
   if (introducer === "[") {
     // CSI: parameter bytes, intermediate bytes, then one final byte.
     let index = at + 2;
-    while (index < text.length && text.charCodeAt(index) >= 0x30 && text.charCodeAt(index) <= 0x3f) index++;
-    while (index < text.length && text.charCodeAt(index) >= 0x20 && text.charCodeAt(index) <= 0x2f) index++;
-    if (index >= text.length) return "incomplete";
+    while (index < end && text.charCodeAt(index) >= 0x30 && text.charCodeAt(index) <= 0x3f) index++;
+    while (index < end && text.charCodeAt(index) >= 0x20 && text.charCodeAt(index) <= 0x2f) index++;
+    if (index >= end) return unfinished();
     const final = text.charCodeAt(index);
     // A malformed CSI ends where it breaks; the breaking character is shown.
     return final >= 0x40 && final <= 0x7e ? index + 1 : index;
   }
   if (introducer === "]" || introducer === "P" || introducer === "X" || introducer === "^" || introducer === "_") {
-    // OSC ends at BEL or ST; DCS, SOS, PM and APC at ST (BEL accepted too).
-    for (let index = at + 2; index < text.length; index++) {
-      if (text[index] === "\u0007") return index + 1;
-      if (text[index] === ESC) {
-        if (index + 1 >= text.length) return "incomplete";
+    // OSC ends at BEL or ST; DCS, SOS, PM and APC at ST (BEL accepted too). CAN and SUB cancel it.
+    // A line break ends it unfinished (the newline policy), so one never hides the lines after it.
+    for (let index = at + 2; index < end; index++) {
+      const character = text[index];
+      if (character === "\u0007" || character === "\u0018" || character === "\u001A") return index + 1;
+      if (character === "\n" || character === "\r") return "lone";
+      if (character === ESC) {
+        if (index + 1 >= text.length) return unfinished();
         if (text[index + 1] === "\\") return index + 2;
       }
     }
-    return "incomplete";
+    return unfinished();
   }
   // Two-byte (or intermediate-prefixed) sequences: ESC, intermediates, a final byte.
   let index = at + 1;
-  while (index < text.length && text.charCodeAt(index) >= 0x20 && text.charCodeAt(index) <= 0x2f) index++;
-  if (index >= text.length) return "incomplete";
+  while (index < end && text.charCodeAt(index) >= 0x20 && text.charCodeAt(index) <= 0x2f) index++;
+  if (index >= end) return unfinished();
   const final = text.charCodeAt(index);
   return final >= 0x30 && final <= 0x7e ? index + 1 : "lone";
-}
-
-/** A pending sequence past the cap keeps only what's needed to keep skipping it: its introducer, and a trailing ESC that may start ST. */
-function boundedPending(pending: string): string {
-  if (pending.length <= LOG_PENDING_MAX) return pending;
-  const head = pending.slice(0, 2);
-  return pending.endsWith(ESC) ? `${head}${ESC}` : head;
 }
 
 /**
@@ -445,7 +446,7 @@ export function logDisplayChunk(text: string, carry: LogCarry): { text: string; 
     if (character === ESC) {
       const end = escapeEnd(input, index);
       if (end === "incomplete") {
-        pending = boundedPending(input.slice(index));
+        pending = input.slice(index);
         break;
       }
       if (end === "lone") {

@@ -189,13 +189,32 @@ test("logDisplayChunk caps a line at 4 KiB and counts the rest when its newline 
   assert.equal(logDisplayChunk(chunks.join(""), EMPTY_LOG_CARRY).text, expected);
 });
 
-test("an unterminated OSC longer than 4 KiB is dropped and the text after its BEL shows", () => {
+test("an escape sequence running past 4 KiB without its end shows escaped, chunked or whole, and the carry stays bounded", () => {
   const payload = "A".repeat(10 * 1024);
   const chunks = ["before ", `${ESC}]52;c;${payload.slice(0, 5000)}`, payload.slice(5000), `${BEL}after\n`];
-  assert.equal(chunked(chunks), "before after\n");
+  const shown = chunked(chunks);
+  assert.ok(shown.startsWith("before \\u{1B}]52;c;AAAA"), "the started sequence shows, its ESC escaped");
+  assert.equal(shown.includes(ESC), false);
+  assert.ok(shown.endsWith(" more characters]\n"), "the rest of the long line is counted");
+  assert.equal(shown, logDisplayChunk(chunks.join(""), EMPTY_LOG_CARRY).text, "the same whatever the reads");
   let carry = EMPTY_LOG_CARRY;
-  for (const chunk of chunks.slice(0, 3)) carry = logDisplayChunk(chunk, carry).carry;
-  assert.ok(carry.pending.length <= 4096, "the carry stays bounded");
+  for (const chunk of chunks.slice(0, 3)) {
+    carry = logDisplayChunk(chunk, carry).carry;
+    assert.ok(carry.pending.length <= 4096, "the carry stays bounded");
+  }
+});
+
+test("an OSC or DCS that a newline breaks shows escaped, so the lines after it show (newline policy)", () => {
+  const chunks = [`${ESC}]0;title`, "\nimportant error line\n", "more\n"];
+  assert.equal(chunked(chunks), "\\u{1B}]0;title\nimportant error line\nmore\n");
+  assert.equal(chunked(chunks), logDisplayChunk(chunks.join(""), EMPTY_LOG_CARRY).text);
+  assert.equal(chunked([`${ESC}P1$qm`, "\r\nnext\n"]), "\\u{1B}P1$qm\nnext\n");
+});
+
+test("CAN and SUB cancel an OSC or DCS, which shows nothing", () => {
+  assert.equal(chunked([`a${ESC}]0;title\u0018b\n`]), "ab\n");
+  assert.equal(chunked([`a${ESC}]8;;http://x`, `\u001Ab\n`]), "ab\n");
+  assert.equal(chunked([`a${ESC}P1$q\u001Ab\n`]), "ab\n");
 });
 
 function app(overrides: Partial<DesignAppStatus> = {}): DesignAppStatus {
