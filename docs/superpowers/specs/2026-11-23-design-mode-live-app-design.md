@@ -699,10 +699,11 @@ Phase DM (DESIGN.md, plan `docs/superpowers/plans/2026-11-24-design-mode-v2-dm-d
 
 Phase 2c (app status, logs and attaching, plan `docs/superpowers/plans/2026-11-24-design-mode-v2-p2c-app-status.md`) builds §6.2.5's chip and lets design mode connect to a dev server the person already runs, behind `AIDEN_EXPERIMENTAL_DESIGN_LIVE`.
 
-- **S45. Status chip (2c; details §6.2.5).** One chip per workspace in the canvas's top-right `actions` slot, before the Canvas view tools. It is hidden without the flag or when live apps are `unavailable`; with no web app it is a Connect chip offering only Connect running server…. It summarises several apps as "<N> apps", has no spinner or pulse, and announces only a crash and a disconnect. Its menu has Start, Stop, Restart, Retry, Show logs, Disconnect, Connect, Connect again, Choose apps… and Connect running server…. The actions are optimistic: the invoke's own result settles them, a refusal rolls back with the problem shown inline, and only a newer revision for that app replaces them.
+- **S45. Status chip (2c; details §6.2.5).** One chip per workspace in the canvas's top-right `actions` slot, before the Canvas view tools. It is hidden without the flag or when live apps are `unavailable`; with no web app it is a Connect chip offering only Connect running server…. It summarises several apps as "<N> apps", has no spinner or pulse, and announces only a crash and a disconnect that carries a problem (the person's own Disconnect isn't announced). A status read that races a broadcast keeps each app's higher revision. Its menu has Start, Stop, Restart, Retry, Show logs, Disconnect, Connect, Connect again, Choose apps… and Connect running server…. The actions are optimistic: the invoke's own result settles them, a refusal rolls back with the problem shown inline, and only a newer revision for that app replaces them.
 - **S46. Logs drawer (2c; replaces §6.2.5's terminal drawer).** Logs open in a read-only drawer inside the canvas, never the PTY terminal:
   - the text is plain, with escape sequences removed (also across reads), lines capped at 4 KiB, and hidden characters shown as escapes;
-  - it starts at the last 256 KiB of the run, polls by run and byte cursor while the canvas is shown, and keeps 256 KiB;
+  - CAN and SUB cancel an OSC or DCS; a line break ends one unfinished, and a sequence still unfinished after 4 KiB shows as escaped text, so none hides later output;
+  - it starts at the last 256 KiB of the run, polls by run and byte cursor while the canvas is shown, and keeps 256 KiB; a read that finds it more than 256 KiB behind (after a pause, or a long new run) drops what it shows, says output was skipped, and jumps to the last 256 KiB;
   - main ends each read on a UTF-8 character boundary while the job runs;
   - attached servers have no logs.
 - **S47. Retry (2c; S8).** `designApp:retry` clears the toolchain cache, and main decides what runs: a failed choice is replayed as that choice; an install failure or a missing-module crash reinstalls; anything else restarts. Not offered for `exposed` or attached apps.
@@ -717,7 +718,7 @@ Phase 2c (app status, logs and attaching, plan `docs/superpowers/plans/2026-11-2
   - **The check** finds the port's holder first, then its folder, inside `realpath(appRoot)` inside `realpath(workspace)`.
   - **The origin** comes from sockets: exactly `127.0.0.1` (or `::ffff:127.0.0.1`), else `::1`; never `localhost` and never another loopback address. Aiden serves exactly the origins the subtree holds.
   - **Ownership and loopback.** Every process in the holder's subtree must be the person's, and every socket loopback. The shared poller re-checks every 2 s, in the same `ps` as jobs but with its own socket read, so one side's failed look never fails the other.
-  - **Re-binding.** A holder that exits may be replaced within 6 s by a same-uid process under the same parent holding the same address and port; anything else detaches.
+  - **Re-binding.** A holder that exits may be replaced within 6 s by a same-uid process under the same parent holding the same address and port, whose folder (read strictly) is inside the app root and whose subtree carries no background job's marker; a new holder that fails either detaches at once, and anything else detaches after 6 s. While the holder is gone, its origin maps to no app.
   - **Detaching.** An attachment detaches when the holder is gone or stops holding the port (`attach-unreachable`), after three failed looks of its own (`attach-unreachable`), when it binds beyond loopback or another user's process joins (`attach-not-loopback`), on workspace changes, and 60 s after no canvas is visible. Stop means disconnect. Aiden never signals an attached process.
   - **No launch.** While attached, start and retry answer the attachment, and restart and choose refuse with `already-running`.
   - **Access.** Read-only and `none` workspaces can't attach.
@@ -728,7 +729,7 @@ Phase 2c (app status, logs and attaching, plan `docs/superpowers/plans/2026-11-2
 - **S51. `apps[].url` (2c; §6.3.6's example).**
   - Accepted: `http:`, a host of `localhost`, `127.0.0.1` or `[::1]`, an explicit port from 1024 to 65535, no credentials, query or fragment, and a path that is empty or `/`.
   - Anything else is `urlRefused` and shown as `attach-url-invalid`.
-  - A url or refused-url root never launches, even with a `script`.
+  - A url or refused-url root never launches, even with a `script`, and choose on it is refused with `not-web` before any card.
 - **S52. IPv6 loopback apps (2c → 3a; amends §6.3.2).** An attached app may have the origin `http://[::1]:<port>`, since Vite on macOS often binds `localhost` to `::1` only. 3a adds `http://[::1]:*` to the main window's `frame-src` and treats `[::1]` like `127.0.0.1` in its filter. §6.3.4 already allows it.
 - **S53. Browser listing (2c; §6.2.3).** A main-side feed from `onStatus` into `BrowserService`: running design apps, started and attached, are listed first in Local servers with a "design mode" label. There's no new IPC and no `BrowserServer` type change. 3a's `isAppOrigin` restriction applies to canvas frames only and must not block opening that URL in the browser panel.
 - **S54. 2b contract widenings (2c).** D13's table:
@@ -746,5 +747,5 @@ Phase 2c (app status, logs and attaching, plan `docs/superpowers/plans/2026-11-2
   - the new `attach-not-loopback` and `attach-unreachable` text.
 
   No 2b field is renamed or retyped.
-- **S55. Aiden's own processes (2c).** Connect never lists, and an attach never accepts, a process in any background job's tree, a descendant of Aiden outside a terminal-drawer shell, or a port Aiden uses for debugging. Servers the person runs in Aiden's terminal drawer are theirs and are listed.
+- **S55. Aiden's own processes (2c).** Connect never lists, and an attach or re-bind never accepts, a process in any background job's tree, a holder whose subtree has a process carrying a background job's marker (`AIDEN_BACKGROUND_JOB=`, so a job's `setsid` escapee too), a descendant of Aiden outside a terminal-drawer shell, or a port Aiden uses for debugging. An environment that can't be read fails closed; on macOS that includes Apple's platform binaries, whose environment `ps -E` doesn't print. Servers the person runs in Aiden's terminal drawer are theirs and are listed.
 - **S56. An attached root never launches (2c).** While a root is attached, nothing spawns for it: the toggle starts nothing, start and retry answer the attachment, and restart and choose refuse with `already-running`. The person disconnects first.
