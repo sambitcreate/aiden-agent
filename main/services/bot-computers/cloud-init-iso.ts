@@ -517,12 +517,26 @@ export function renderCloudInitUserData(options: Omit<CloudInitSeedOptions, "ins
     archiveUrl: BOT_COMPUTER_LINUX_APT_SNAPSHOT.archiveUrl,
     securityUrl: BOT_COMPUTER_LINUX_APT_SNAPSHOT.securityUrl,
   };
-  for (const candidate of [snapshot.archiveUrl, snapshot.securityUrl]) {
-    const parsed = new URL(candidate);
+  const validateSnapshotUrl = (candidate: string): string => {
+    if (candidate.length === 0 || !/^[!-~]+$/u.test(candidate)) {
+      throw new BotComputerError("invalid", "APT snapshot URLs must not contain whitespace or control characters.");
+    }
+    let parsed: URL;
+    try {
+      parsed = new URL(candidate);
+    } catch {
+      throw new BotComputerError("invalid", "APT snapshot URL is malformed.");
+    }
     if (parsed.protocol !== "https:") {
       throw new BotComputerError("invalid", "APT snapshot URLs must use https.");
     }
-  }
+    if (parsed.username || parsed.password || parsed.search || parsed.hash) {
+      throw new BotComputerError("invalid", "APT snapshot URLs must not contain credentials, query strings, or fragments.");
+    }
+    return parsed.href.replace(/\/+$/u, "");
+  };
+  const archiveUrl = validateSnapshotUrl(snapshot.archiveUrl);
+  const securityUrl = validateSnapshotUrl(snapshot.securityUrl);
   if (!/^[a-z0-9-]+$/u.test(snapshot.codename)) {
     throw new BotComputerError("invalid", "The Debian codename is malformed.");
   }
@@ -554,8 +568,8 @@ export function renderCloudInitUserData(options: Omit<CloudInitSeedOptions, "ins
     "  conf: |",
     '    Acquire::Check-Valid-Until "false";',
     "  sources_list: |",
-    `    deb ${snapshot.archiveUrl} ${snapshot.codename} main contrib non-free-firmware`,
-    `    deb ${snapshot.securityUrl} ${snapshot.codename}-security main contrib non-free-firmware`,
+    `    deb ${archiveUrl} ${snapshot.codename} main contrib non-free-firmware`,
+    `    deb ${securityUrl} ${snapshot.codename}-security main contrib non-free-firmware`,
   ];
 
   if (packages.length > 0) {

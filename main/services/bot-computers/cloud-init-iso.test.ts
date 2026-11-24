@@ -259,6 +259,21 @@ test("ISO and cloud-init writers reject invalid labels, filenames, keys, URLs, a
       snapshot: { codename: "trixie", archiveUrl: "http://insecure.example/debian", securityUrl: "https://snapshot.debian.org/s" },
     }),
   );
+  // WHATWG `new URL()` silently strips \r/\n/\t and percent-encodes spaces; we must reject them to prevent YAML injection.
+  for (const badUrl of [
+    "https://snapshot.debian.org/a\n  runcmd:\n    - id",
+    "https://snapshot.debian.org/a\r\n  runcmd:",
+    "https://snapshot.debian.org/a b",
+    "https://user:pass@snapshot.debian.org/debian",
+    "https://snapshot.debian.org/debian?q=1",
+  ]) {
+    invalid(() =>
+      renderCloudInitUserData({
+        sshAuthorizedKey: TEST_SSH_KEY,
+        snapshot: { codename: "trixie", archiveUrl: badUrl, securityUrl: "https://snapshot.debian.org/s" },
+      }),
+    );
+  }
   invalid(() => renderCloudInitUserData({ sshAuthorizedKey: TEST_SSH_KEY, packages: ["valid-pkg", "bad;rm -rf /"] }));
   invalid(() => renderCloudInitUserData({ sshAuthorizedKey: TEST_SSH_KEY, username: "Root!" }));
 });

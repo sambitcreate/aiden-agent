@@ -193,3 +193,53 @@ test("createAndBootHiddenLinuxBase supports --disk-path override and stops the V
   assert.equal(runCall?.args?.[runCall.args.indexOf("--disk-path") + 1], customDisk);
   assert.ok(calls.some((entry) => entry.op === "stop" && entry.args?.includes("--force")), "a non-loopback Linux VM is force-stopped");
 });
+
+test("createAndBootHiddenLinuxBase force-stops a VM when aborted while lume run is still returning", async (t) => {
+  const dir = mkdtempSync(path.join(tmpdir(), "aiden-linux-abort-"));
+  const storage = path.join(dir, "vms");
+  const home = path.join(dir, "home");
+  const logPath = path.join(dir, "lume.jsonl");
+  const configFile = path.join(dir, "fake.json");
+  writeFileSync(configFile, JSON.stringify({ log: logPath, runReturnDelayMs: 2_000 }));
+  const rawImage = path.join(dir, "debian.raw");
+  writeFileSync(rawImage, "debian-13-generic-arm64");
+  const invocation = { command: process.execPath, prefixArgs: [FAKE_LUME, "--fake-config", configFile] };
+  const env = lumeEnvironment({}, home);
+
+  t.after(async () => {
+    await runLume(invocation, { op: "stop", name: BOT_COMPUTER_BASE_VM, force: true }, { storage, env, timeoutMs: 10_000 }).catch(
+      () => undefined,
+    );
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  const controller = new AbortController();
+  const pending = createAndBootHiddenLinuxBase({
+    vmName: BOT_COMPUTER_BASE_VM,
+    invocation,
+    storage,
+    lumeEnv: env,
+    sharedDir: path.join(dir, "shared"),
+    logFile: path.join(dir, "base.log"),
+    sourceImagePath: rawImage,
+    seedIsoPath: path.join(dir, "cidata.iso"),
+    sshAuthorizedKey: TEST_SSH_KEY,
+    vncPassword: "Zq7Tn2Lw9Rk4Hm6X",
+    featureEnv: { [BOT_COMPUTERS_LINUX_FLAG]: "1" },
+    pollIntervalMs: 20,
+    startTimeoutMs: 10_000,
+    signal: controller.signal,
+  });
+
+  // Wait until `lume run` has spawned the VM, then abort before `lume run` returns.
+  for (let attempt = 0; attempt < 200; attempt += 1) {
+    if (readCalls(logPath).some((entry) => entry.kind === "vnc")) break;
+    await new Promise((resolve) => setTimeout(resolve, 20));
+  }
+  assert.ok(readCalls(logPath).some((entry) => entry.kind === "vnc"), "fake VM spawned before abort");
+  controller.abort();
+  await assert.rejects(pending);
+
+  const calls = readCalls(logPath).filter((entry) => entry.kind === "cli");
+  assert.ok(calls.some((entry) => entry.op === "stop" && entry.args?.includes("--force")), "aborted mid-run launch still force-stops the VM");
+});

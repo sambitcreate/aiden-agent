@@ -168,12 +168,13 @@ export async function createAndBootHiddenLinuxBase(options: HiddenLinuxBaseOptio
   const pollMs = options.pollIntervalMs ?? 500;
   const startTimeoutMs = options.startTimeoutMs ?? 240_000;
 
-  const execLume = (command: LumeCommand, timeoutMs: number): Promise<LumeRunResult> =>
+  const execLume = (command: LumeCommand, timeoutMs: number, onSpawn?: () => void): Promise<LumeRunResult> =>
     runLume(options.invocation, command, {
       storage: options.storage,
       env: options.lumeEnv,
       timeoutMs,
       signal: options.signal,
+      onSpawn,
     });
 
   await mkdir(options.storage, { recursive: true, mode: 0o700 });
@@ -224,8 +225,10 @@ export async function createAndBootHiddenLinuxBase(options: HiddenLinuxBaseOptio
         logFile: options.logFile,
       },
       60_000,
+      () => {
+        launched = true;
+      },
     );
-    launched = true;
     if (started.exitCode !== 0) {
       const kind = classifyLumeError(`${started.stderr}\n${started.stdout}`, started.exitCode);
       if (kind === "low_disk") {
