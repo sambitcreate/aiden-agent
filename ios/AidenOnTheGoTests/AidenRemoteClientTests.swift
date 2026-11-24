@@ -2024,6 +2024,12 @@ final class AidenRemoteClientTests: XCTestCase {
             from: Data(#"{"code":"idempotency_in_flight","message":"In flight.","requestId":"req_test_2","retryable":true}"#.utf8)
         )
         XCTAssertTrue(aidenBotConversationCreateFailureIsAmbiguous(AidenRemoteClientError.server(statusCode: 409, body: inFlightBody)))
+        let internalErrorBody = try AidenRemoteJSONDecoder.decode(
+            AidenRemoteErrorEnvelope.Body.self,
+            from: Data(#"{"code":"internal_error","message":"This Bot request cannot be safely repeated.","requestId":"req_test_3","retryable":false}"#.utf8)
+        )
+        XCTAssertTrue(aidenBotConversationCreateFailureIsAmbiguous(AidenRemoteClientError.server(statusCode: 500, body: internalErrorBody)))
+        XCTAssertFalse(aidenBotConversationCreateFailureIsAmbiguous(AidenRemoteClientError.server(statusCode: 409, body: internalErrorBody)))
     }
 
     func testBotFileRoutesUseBoundedFilePayloadsAndValidateCanonicalResponses() async throws {

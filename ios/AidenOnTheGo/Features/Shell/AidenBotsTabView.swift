@@ -768,5 +768,8 @@ func aidenBotConversationCreateAttempt(
 }
 
 func aidenBotConversationCreateFailureIsAmbiguous(_ error: Error) -> Bool {
-    AidenRemoteFailureClassification.isAmbiguous(error, policy: .beforeEffectRefusal())
+    AidenRemoteFailureClassification.isAmbiguous(
+        error,
+        policy: .durableBotLedgerBeforeEffectRefusal
+    )
 }

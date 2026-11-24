@@ -423,7 +423,10 @@ func aidenBotEditorIsDirty(
 }
 
 func aidenBotEditorCreateFailureIsAmbiguous(_ error: Error) -> Bool {
-    AidenRemoteFailureClassification.isAmbiguous(error, policy: .beforeEffectRefusal())
+    AidenRemoteFailureClassification.isAmbiguous(
+        error,
+        policy: .durableBotLedgerBeforeEffectRefusal
+    )
 }
 
 func aidenBotEditorResolvedDraft(

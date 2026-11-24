@@ -1935,6 +1935,14 @@ final class AidenBotContractTests: XCTestCase {
             aidenBotEditorCreateFailureIsAmbiguous(try refusal(409, "idempotency_in_flight")),
             "An in-flight conflict must retain the key for replay."
         )
+        XCTAssertTrue(
+            aidenBotEditorCreateFailureIsAmbiguous(try refusal(500, "internal_error")),
+            "A live 500 internal_error may have committed and must retain the key."
+        )
+        XCTAssertFalse(
+            aidenBotEditorCreateFailureIsAmbiguous(try refusal(409, "internal_error")),
+            "A decoded replayed 409 internal_error is a settled Bot-ledger rejection and must release the key."
+        )
         XCTAssertFalse(
             aidenBotEditorCreateFailureIsAmbiguous(try refusal(409, "revision_conflict")),
             "A definite before-effect conflict must unlock the draft for correction."
