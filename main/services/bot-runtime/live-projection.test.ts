@@ -391,6 +391,43 @@ test("a Bot paused while its feed is still opening reads paused, not running", a
   }
 });
 
+test("a Bot paused after its opening feed read the state is still reported paused", async () => {
+  const fauxModels = createFauxModels([slowAnswer()], { tokensPerSecond: 20 });
+  let release: (() => void) | undefined;
+  let held = true;
+  const planRead = new Promise<void>((resolve) => (release = resolve));
+  let reachedPlan: (() => void) | undefined;
+  const atPlan = new Promise<void>((resolve) => (reachedPlan = resolve));
+  const settled: string[] = [];
+  const live = await start(fauxModels, {
+    projection: {
+      // The plan is read after the state, so holding it holds the feed open past its state read.
+      plan: async () => {
+        if (held) {
+          reachedPlan!();
+          await planRead;
+        }
+        return null;
+      },
+      onRunSettled: (_botId, state) => settled.push(state.kind),
+    },
+  });
+  try {
+    await live.service.send("bot:a", { text: "Take your time", requestId: "desk-1" });
+    await atPlan;
+    assert.equal((await live.service.pause("bot:a", "mac")).kind, "paused");
+    held = false;
+    release!();
+    await waitFor(() => settled.length > 0, { what: "the paused run to be reported" });
+    assert.deepEqual(settled, ["paused"]);
+    const view = await live.projection.subscribe("bot:a", recorder().sink);
+    view.unsubscribe();
+    assert.equal(view.snapshot.state.kind, "paused", "the feed shows the pause, not the running state read before it");
+  } finally {
+    await live.close();
+  }
+});
+
 test("a failed reply is a typed failed turn, and Retry as a new submission answers after it", async () => {
   const failure = fauxAssistantMessage("", { stopReason: "error", errorMessage: "provider is down" });
   const fauxModels = createFauxModels([failure, fauxAssistantMessage("Here it is.")]);

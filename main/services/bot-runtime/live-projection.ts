@@ -1471,12 +1471,21 @@ export function createBotLiveProjection(deps: BotLiveProjectionDeps): BotLivePro
       else runStarts.ended(botId);
       feed.activity = computeActivity(feed);
       feed.queued = await queuedFor(feed, initial.docs);
-      feeds.set(botId, feed);
-      watch.start((value) => enqueueWork(feed, () => onFrame(feed, value.entries, value.docs)));
-      void watch.closed.then(() => {
+      const end = () => {
         feed.ended = true;
         if (feeds.get(botId) === feed) feeds.delete(botId);
-      });
+      };
+      feeds.set(botId, feed);
+      void watch.closed.then(end);
+      try {
+        watch.start((value) => enqueueWork(feed, () => onFrame(feed, value.entries, value.docs)));
+      } catch (error) {
+        // The conversation closed while the feed opened (a pause can): this feed
+        // never follows it, so it isn't kept with the state it read.
+        end();
+        feed.cancel();
+        throw error;
+      }
       return feed;
     })();
     opening.set(botId, promise);
@@ -1618,15 +1627,29 @@ export function createBotLiveProjection(deps: BotLiveProjectionDeps): BotLivePro
       void openFeed(botId).then(
         (opened) =>
           enqueueWork(opened, async () => {
-            // The feed read the state as it opened, after this notice, so the
-            // notice is never applied over it. A run that ended (or paused, or
-            // was interrupted) while it opened is reported settled.
-            if (state.kind === "running" && opened.state.kind !== "running") {
-              deps.onRunSettled?.(opened.botId, opened.state);
+            // A notice that arrived while the feed opened may be older or newer
+            // than the state it read, so neither is trusted: the state is read
+            // again now, after every notice so far. A run that ended (or paused,
+            // or was interrupted) while it opened is reported settled.
+            const latest = await deps.state(botId).catch(() => opened.state);
+            setState(opened, latest);
+            if (state.kind === "running" && latest.kind !== "running") {
+              deps.onRunSettled?.(opened.botId, latest);
               void closeIfUnwatched(opened);
             }
           }),
-        (error) => report(botId, error),
+        (error) => {
+          report(botId, error);
+          // A pause can stop the conversation's watch while the feed opens, so
+          // the feed never opens; a run that ended meanwhile is still reported.
+          if (state.kind !== "running") return;
+          void deps.state(botId).then(
+            (latest) => {
+              if (latest.kind !== "running") deps.onRunSettled?.(botId, latest);
+            },
+            (stateError) => report(botId, stateError),
+          );
+        },
       );
     },
 
