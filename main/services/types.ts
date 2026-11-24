@@ -504,6 +504,12 @@ export interface ChatMeta {
   botId?: string;
   providerId?: string;
   model?: string;
+  /**
+   * This chat's own reasoning effort for its model, set by an Agent Slider
+   * stop. Absent: the per-model saved level applies. Cleared when the model
+   * changes without a level. Never sent to Aiden Remote.
+   */
+  thinkingLevel?: GenerationThinkingLevel;
   /** Bounded last visible message text for list projections; never a full history. */
   preview?: string;
   /**
@@ -910,6 +916,18 @@ export interface AppSettings extends AidenLiveSettingsFields {
   spendingLimits?: import("../../renderer/shared/spending.js").SpendingLimitsSettings;
   lastProviderId?: string;
   lastModel?: string;
+  /**
+   * The reasoning effort picked with the new-chat model, so a new chat lands
+   * on the same Agent Slider stop. Machine-local like `lastModel`; cleared when
+   * the new-chat model changes without a level.
+   */
+  lastThinkingLevel?: GenerationThinkingLevel;
+  /**
+   * Read-only projection of the Agent Slider stored in the portable
+   * config.json (`PortableConfigShape.agentSlider`); settings.json never holds
+   * it. Absent until first seeded. Written only by `setAgentSlider`.
+   */
+  agentSlider?: import("../../renderer/shared/agent-slider.js").AgentSliderSettings;
   /** Most recently selected real project workspace ID in the main window (shared with Quick Chat). */
   lastWorkspaceId?: string;
   /** Presentation-only chat models hidden from Mac and paired mobile selection UI. */

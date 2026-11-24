@@ -48,6 +48,7 @@ import {
 import { queryKeys } from "../lib/queries";
 import { newChatUuid } from "../shared/chat-identity";
 import { applyChatMetadataUpdate } from "../shared/chat-metadata-update";
+import type { GenerationThinkingLevel } from "../shared/generation-thinking";
 import { isNoWorkspace, noWorkspaceHome, workspaceChoices } from "../lib/no-workspace";
 import { resolveVisibleModelSelection } from "../lib/use-model-selection";
 import { isEscapeKey } from "../lib/dismiss-key";
@@ -274,6 +275,7 @@ export function FloatingChatApp() {
       workspaceId?: string;
       updatedAt?: number;
       ephemeral?: boolean;
+      thinkingLevel?: GenerationThinkingLevel | null;
     }>(
       "chats:metadata-updated",
       (payload) => {
@@ -286,6 +288,7 @@ export function FloatingChatApp() {
                 ...(payload.workspaceId !== undefined ? { workspaceId: payload.workspaceId } : {}),
                 updatedAt: payload.updatedAt ?? prev.updatedAt,
                 ...(payload.ephemeral !== undefined ? { ephemeral: payload.ephemeral } : {}),
+                ...(payload.thinkingLevel !== undefined ? { thinkingLevel: payload.thinkingLevel } : {}),
               })
             : prev,
         );

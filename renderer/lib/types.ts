@@ -694,6 +694,8 @@ export interface ChatMeta {
   botId?: string;
   providerId?: string;
   model?: string;
+  /** This chat's own reasoning effort (an Agent Slider stop); absent: the per-model saved level. */
+  thinkingLevel?: GenerationThinkingLevel;
   /** createdAt of the newest assistant output; drives honest unread markers. */
   lastAssistantAt?: number;
   lastAssistantSequence?: number;
@@ -830,6 +832,8 @@ export interface ChatMetadataUpdated {
   title: string;
   updatedAt: number;
   ephemeral?: boolean;
+  /** Main reconciled the chat's own level to the one its model ran; `null` clears it. */
+  thinkingLevel?: GenerationThinkingLevel | null;
 }
 
 /** `chats:design-mode-changed`: one chat's design mode turned on or off. */
@@ -995,6 +999,13 @@ export interface AppSettings extends AidenLiveSettingsFields {
   spendingLimits?: import("../shared/spending").SpendingLimitsSettings;
   lastProviderId?: string;
   lastModel?: string;
+  /** The reasoning effort picked with the new-chat model; machine-local like `lastModel`. */
+  lastThinkingLevel?: GenerationThinkingLevel;
+  /**
+   * The Agent Slider, read from the portable config.json (never settings.json).
+   * Absent until first seeded; change it with `settingsApi.setAgentSlider`.
+   */
+  agentSlider?: import("../shared/agent-slider").AgentSliderSettings;
   /** Most recently selected real project workspace ID in the main window (shared with Quick Chat). */
   lastWorkspaceId?: string;
   hiddenModelsByProvider?: HiddenModelsByProvider;

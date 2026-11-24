@@ -1419,6 +1419,34 @@ test("Model Pad placements, pins, recent models and metric survive a settings.js
   assert.equal(wrongShapes.modelPadMetric, undefined);
 });
 
+test("settings.json keeps a known new-chat level and drops an unknown one and any stray Agent Slider", async (t) => {
+  const r = await roots(t);
+  const slider = {
+    version: 1,
+    stops: [{ id: "a", label: "A" }, { id: "b", label: "B" }, { id: "c", label: "C" }],
+    homeStopId: "b",
+  };
+  await fs.writeFile(
+    r.settingsFile,
+    JSON.stringify({ settings: { lastModel: "gpt", lastThinkingLevel: "xhigh", agentSlider: slider } }),
+    "utf-8",
+  );
+  const loaded = await stores(r).settings.load();
+  assert.equal(loaded.settings.lastThinkingLevel, "xhigh");
+  assert.equal("agentSlider" in loaded.settings, false, "the slider's only home is the portable config");
+  assert.equal(runtimeSettingsFrom({ ...loaded.settings, agentSlider: slider } as never).agentSlider, undefined);
+
+  const target = await roots(t);
+  await fs.writeFile(
+    target.settingsFile,
+    JSON.stringify({ settings: { lastModel: "gpt", lastThinkingLevel: "turbo" } }),
+    "utf-8",
+  );
+  const unknown = await stores(target).settings.load();
+  assert.equal(unknown.settings.lastThinkingLevel, undefined);
+  assert.equal(unknown.settings.lastModel, "gpt");
+});
+
 test("a post-startup unsafe local edit cannot be erased by a workspace write", async (t) => {
   const r = await roots(t);
   await fs.writeFile(

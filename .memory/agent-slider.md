@@ -20,3 +20,10 @@
   - The home stop is only the ↺ target.
 - The "Effort ⌃T" slider in the owner's reference screenshot is not in 0.69.0.
 - `⌘[`, `⌘]`, `⇧⌘[` and `⇧⌘]` are already bound in `renderer/shared/keybindings.ts`.
+- PR 1 (2026-11-23, `feature/agent-slider-1-data`):
+  - The slider is stored raw (`unknown`) in `PortableConfigShape.agentSlider`, and a bad hand edit is never rewritten. `config-store-core`'s `publicSettings()` projects the normalized value into every settings result, cached per portable document.
+  - Writes go only through `settings:setAgentSlider`, and `settings:set` refuses `agentSlider`.
+  - `setChatModelSelection(id, provider, model, assertCurrent, thinkingLevel?)`: `null` clears the level, and leaving it out keeps the level only on the same model. A message append on another model drops the level.
+  - Clamp write-back is `reconcileTurnThinkingLevel` (`main/services/chat-thinking-level-reconcile.ts`), called from llm-client's `prepareGeneration`. It broadcasts `chats:metadata-updated` with `thinkingLevel`.
+  - The Remote summaries whitelist their fields (`safeSummaryMetadata`), so `ChatMeta.thinkingLevel` never reaches phones.
+  - Stop limits match `chats:setModel`: provider 256 characters, model 512.

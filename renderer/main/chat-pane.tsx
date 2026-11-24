@@ -242,6 +242,7 @@ import {
   setActiveChatModelTarget,
   useModelSelection,
 } from "../lib/use-model-selection";
+import { turnThinkingLevel } from "../lib/turn-thinking-level";
 import { useActiveWorkspace } from "../lib/workspace-context";
 import { useWorkspaceTerminal } from "../components/terminal-drawer";
 import {
@@ -527,7 +528,11 @@ export function ChatPane({ chatId }: { chatId: string }) {
   // A chat with messages owns its model: picking one here changes this chat
   // only. An empty chat follows, and sets, the app's model for new chats.
   const chatOwnsModel = !draft && hasMessages && !chat.data?.botId;
-  const { providerId, model } = chatModelSelection(chat.data, chatOwnsModel, appModel);
+  const { providerId, model, thinkingLevel: selectionThinkingLevel } = chatModelSelection(
+    chat.data,
+    chatOwnsModel,
+    appModel,
+  );
   const selectAppModel = appModel.select;
   // The latest pick per chat, so an older pick's answer never replaces a newer one.
   const chatModelPicksRef = React.useRef(new Map<string, number>());
@@ -541,14 +546,33 @@ export function ChatPane({ chatId }: { chatId: string }) {
       const pick = (chatModelPicksRef.current.get(chatId) ?? 0) + 1;
       chatModelPicksRef.current.set(chatId, pick);
       const isLatestPick = () => chatModelPicksRef.current.get(chatId) === pick;
-      const withModel = (pair: Pick<Chat, "providerId" | "model">) => (current: Chat | null | undefined) =>
-        current ? { ...current, providerId: pair.providerId, model: pair.model } : current;
+      // A chat's own level belongs to its model, so it travels with the pair.
+      const withModel =
+        (pair: Pick<Chat, "providerId" | "model" | "thinkingLevel">) => (current: Chat | null | undefined) => {
+          if (!current) return current;
+          const { thinkingLevel: _replaced, ...rest } = current;
+          return {
+            ...rest,
+            providerId: pair.providerId,
+            model: pair.model,
+            ...(pair.thinkingLevel ? { thinkingLevel: pair.thinkingLevel } : {}),
+          };
+        };
       const previous = qc.getQueryData<Chat | null>(key);
       void (async () => {
         // A read started before this pick must not land on top of it.
         await qc.cancelQueries({ queryKey: key, exact: true });
         if (!isLatestPick()) return;
-        qc.setQueryData<Chat | null>(key, withModel({ providerId: nextProviderId, model: nextModel }));
+        const current = qc.getQueryData<Chat | null>(key);
+        const sameModel = current?.providerId === nextProviderId && current?.model === nextModel;
+        qc.setQueryData<Chat | null>(
+          key,
+          withModel({
+            providerId: nextProviderId,
+            model: nextModel,
+            thinkingLevel: sameModel ? current?.thinkingLevel : undefined,
+          }),
+        );
         try {
           const saved = await chatsApi.setModel(chatId, nextProviderId, nextModel);
           // A read that overlapped the save may still carry the old model.
@@ -2096,15 +2120,12 @@ export function ChatPane({ chatId }: { chatId: string }) {
           ...(visualize ? { visualize: true as const } : {}),
           ...(designView ? { designView } : {}),
           inlineVisuals: readCachedAppearance()?.inlineVisuals ?? "automatic",
-          thinkingLevel: googleThinkingSupported
-            ? googleThinkingLevel
-            : codexThinkingSupported
-              ? codexThinkingLevel
-              : anthropicThinkingSupported
-                ? anthropicThinkingLevel
-                : providerThinkingSupported
-                  ? providerThinkingLevel
-                  : undefined,
+          thinkingLevel: turnThinkingLevel(selectionThinkingLevel, {
+            google: { supported: googleThinkingSupported, level: googleThinkingLevel },
+            codex: { supported: codexThinkingSupported, level: codexThinkingLevel },
+            anthropic: { supported: anthropicThinkingSupported, level: anthropicThinkingLevel },
+            provider: { supported: providerThinkingSupported, level: providerThinkingLevel },
+          }),
         },
         createStreamCallbacks(generationIntent, { providerId }),
         messageTurnId,
@@ -2127,6 +2148,7 @@ export function ChatPane({ chatId }: { chatId: string }) {
       providerId,
       providerThinkingLevel,
       providerThinkingSupported,
+      selectionThinkingLevel,
       model,
     ],
   );

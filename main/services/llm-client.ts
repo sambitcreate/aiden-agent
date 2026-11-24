@@ -101,6 +101,7 @@ import {
 import { generationGitContext } from "./generation-git-context.js";
 import { configStore } from "./config-store.js";
 import { chatStore } from "./chat-store.js";
+import { reconcileTurnThinkingLevel } from "./chat-thinking-level-reconcile.js";
 import { generationModelMeta } from "./chat-model-selection-meta.js";
 import { botStore } from "./bot-store.js";
 import {
@@ -1639,6 +1640,23 @@ async function prepareGeneration(
     params.providerId,
     model,
     params.thinkingLevel ?? savedThinkingLevel,
+  );
+  // A chat's own level (an Agent Slider stop) the model no longer supports was
+  // just clamped; record the level that runs so the chat says what was sent.
+  await reconcileTurnThinkingLevel(
+    {
+      chatStore,
+      broadcast: (update) => ipcMain.broadcast("chats:metadata-updated", update),
+    },
+    {
+      chat,
+      providerId: params.providerId,
+      model: params.model,
+      requested: params.thinkingLevel,
+      resolved: thinkingLevel,
+    },
+  ).catch((error: unknown) =>
+    logger.warn("chat", "Could not record the thinking level this chat's turn ran with.", error),
   );
   // With the beta on, the model always gets the tool on a build and OS that
   // can run it (a cheap static check; no driver probe here). Access is asked
