@@ -220,6 +220,15 @@
       "main/services/chat-generation",
       "main/services/generation"
     ],
+    "design-app-server.spec.ts": [
+      "main/services/design-canvas/app-server/",
+      "main/handlers/design-app",
+      "renderer/design/design-app-consent",
+      "renderer/shared/design-app.ts",
+      "main/services/follow-through/background-jobs.ts",
+      "main/services/follow-through/listening-ports.ts",
+      "tests/fixtures/design-app-server/"
+    ],
     "design-canvas.spec.ts": [
       "renderer/components/design",
       "main/services/design-canvas/",
