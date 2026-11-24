@@ -22,7 +22,7 @@ import {
 import { processGroupStillRuns } from "../../shared/process-group.js";
 import { tailText } from "../../../renderer/shared/agent-notices.js";
 import { CheckInterruptedError } from "./done-when.js";
-import { defaultListeningPortsByProcess } from "./listening-ports.js";
+import { defaultListeningPortsByProcess, readJobSockets, type JobSockets } from "./listening-ports.js";
 
 export const MAX_RUNNING_JOBS_PER_CHAT = 10;
 export const MAX_RUNNING_JOBS = 20;
@@ -140,6 +140,8 @@ export interface BackgroundJobsOptions {
   processHasEnvironment?: (pid: number, entry: string) => Promise<boolean>;
   /** The TCP ports each of the given processes listens on; null turns port lookups off. */
   listeningPorts?: ((pids: readonly number[]) => Promise<Map<number, number[]>>) | null;
+  /** Each job's listening sockets with addresses, from one look for all of them; fails closed (design jobs). */
+  jobSockets?: (groups: ReadonlyMap<string, number>) => Promise<Map<string, JobSockets>>;
   portScanMs?: number;
   adoptedPollMs?: number;
   adoptSettleMs?: number;
@@ -739,6 +741,28 @@ export class BackgroundJobs {
       .filter((job) => isDesign(job) && job.view.workspaceId === workspaceId)
       .map(designView)
       .sort((left, right) => right.startedAt - left.startedAt);
+  }
+
+  /**
+   * Every listening TCP socket, with its address, of each design job's process
+   * group and descendants: one `ps` and one socket read for all of them. A job
+   * that isn't a running design job, or whose read failed, comes back failed,
+   * never as an empty list.
+   */
+  async designSockets(jobIds: readonly string[]): Promise<Map<string, JobSockets>> {
+    const results = new Map<string, JobSockets>();
+    const groups = new Map<string, number>();
+    for (const jobId of jobIds) {
+      const job = this.jobs.get(jobId);
+      const pid = job?.child?.pid;
+      if (!job || !isDesign(job) || job.view.state !== "running" || !pid) results.set(jobId, { ok: false, reason: "not running" });
+      else groups.set(jobId, pid);
+    }
+    if (groups.size) {
+      const read = await (this.options.jobSockets ?? readJobSockets)(groups);
+      for (const jobId of groups.keys()) results.set(jobId, read.get(jobId) ?? { ok: false, reason: "not read" });
+    }
+    return results;
   }
 
   /** Stop a design job: polite first, forced after the grace period. Resolves once it has ended. Idempotent. */

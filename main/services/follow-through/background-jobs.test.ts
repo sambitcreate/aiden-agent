@@ -1089,3 +1089,34 @@ test("stopDesign ends the group, children included", { skip }, async (t) => {
   // A second stop is a no-op.
   assert.equal((await jobs.stopDesign(job.id)).state, "stopped");
 });
+
+test("a design job's sockets include a listener started by a setsid grandchild, with its address", { skip }, async (t) => {
+  const dir = await tempDir();
+  const { jobs, startNode } = designHarness(dir);
+  t.after(() => cleanUp(jobs, dir));
+  const portFile = path.join(dir, "port");
+  const grandchild = `const s = require("node:net").createServer().listen(0, "127.0.0.1", () => require("node:fs").writeFileSync(${JSON.stringify(portFile)}, String(s.address().port)));`;
+  const job = startNode(
+    // `detached` makes the child call setsid(): a new session and process group, as the setsid tool does.
+    `require("node:child_process").spawn(process.execPath, ["-e", ${JSON.stringify(grandchild)}], { stdio: "ignore", detached: true }); setInterval(() => {}, 1000);`,
+  );
+  await eventually(async () => (await fs.readFile(portFile, "utf8").catch(() => "")).length > 0, "the grandchild to listen");
+  const port = Number(await fs.readFile(portFile, "utf8"));
+  let found: Awaited<ReturnType<BackgroundJobs["designSockets"]>> | undefined;
+  await eventually(async () => {
+    found = await jobs.designSockets([job.id]);
+    const entry = found.get(job.id);
+    return entry?.ok === true && entry.sockets.some((socket) => socket.port === port);
+  }, "the grandchild's socket in the job's sockets");
+  const entry = found!.get(job.id);
+  assert.ok(entry?.ok);
+  assert.deepEqual(
+    entry.sockets.filter((socket) => socket.port === port).map((socket) => socket.address),
+    ["127.0.0.1"],
+  );
+  assert.deepEqual(await jobs.designSockets(["job_00000000"]), new Map([["job_00000000", { ok: false, reason: "not running" }]]));
+  // The setsid grandchild left the group, so stopping the job does not reach it; end it here.
+  const pid = entry.sockets.find((socket) => socket.port === port)!.pid;
+  process.kill(pid, "SIGKILL");
+});
+
