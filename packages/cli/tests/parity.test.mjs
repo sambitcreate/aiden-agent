@@ -2556,6 +2556,7 @@ test("durable CLI Bot migration preserves history, dedupes across restart, and f
     const row = (await signals.botSignals([{ id: bot.id }])).get(bot.id);
     assert.equal(row.preview, "Durable answer");
     assert.ok(Date.parse(row.lastReplyAt) > 0, JSON.stringify(row));
+    assert.equal(row.summarized, true, "a paired Mac can tell this server reports every Bot's reply");
     assert.equal(row.needsYou, undefined);
     assert.equal(row.failed, undefined);
     assert.deepEqual([...await signals.botNeedsYou([bot.id])], []);
