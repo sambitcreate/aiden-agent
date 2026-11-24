@@ -397,3 +397,96 @@ test("the command client settles once for every way a daemon can answer", posix,
   const missing = sandbox(t);
   await assert.rejects(api.remoteDaemonCommand(missing.agentDir, "serve", ["status"]), (error) => error.code === "ENOENT" && /not running/u.test(error.message));
 });
+
+test("selectDaemonMcpGroups includes orphaned wrapper survivors and refuses recycled, foreign-uid, or daemon-group entries", () => {
+  const daemonPid = 500;
+  const processes = [
+    { pid: daemonPid, ppid: 400, pgid: 400, uid: 1000, zombie: false },
+    // Direct child wrapper still alive.
+    { pid: 601, ppid: daemonPid, pgid: 601, uid: 1000, zombie: false },
+    // Orphaned grandchild whose wrapper (602) exited and was reaped; reparented to init (1).
+    { pid: 612, ppid: 1, pgid: 602, uid: 1000, zombie: false },
+    // Recycled leader PID (603) now owned by an unrelated parent (777) with a child in group 603.
+    { pid: 603, ppid: 777, pgid: 603, uid: 1000, zombie: false },
+    { pid: 613, ppid: 603, pgid: 603, uid: 1000, zombie: false },
+    // Leaderless group with only a zombie left.
+    { pid: 614, ppid: 1, pgid: 604, uid: 1000, zombie: true },
+    // Leaderless group whose live member belongs to another user.
+    { pid: 615, ppid: 1, pgid: 605, uid: 2000, zombie: false },
+    // Unrelated process sharing the foreground daemon's shell process group (400).
+    { pid: 401, ppid: 400, pgid: 400, uid: 1000, zombie: false },
+  ];
+  assert.deepEqual(
+    api.selectDaemonMcpGroups(daemonPid, [601, 602, 603, 604, 605, 400, daemonPid, 699], processes),
+    [601, 602],
+  );
+});
+
+test("serve stop force-stops an orphaned MCP grandchild survivor after its wrapper exited", posix, async (t) => {
+  const box = sandbox(t);
+  const pkg = resolve(dirname(fileURLToPath(import.meta.url)), "..");
+  const wrapper = join(box.agentDir, "mcp-wrapper.mjs");
+  const stuck = join(box.agentDir, "stuck-serve-orphan-mcp.mjs");
+  const pidsFile = join(box.agentDir, "pids.json");
+  const grandchildFile = join(box.agentDir, "grandchild.json");
+  mkdirSync(box.lock, { mode: 0o700, recursive: true });
+  // Wrapper spawns a stubborn grandchild in the same process group, then exits immediately.
+  writeFileSync(wrapper, `import { spawn } from "node:child_process"; import { renameSync, writeFileSync } from "node:fs";
+const child = spawn(process.execPath, ["-e", "process.on('SIGTERM', () => {}); process.stdin.resume(); process.stdin.on('end', () => {}); setInterval(() => {}, 1e9);"], { stdio: ["ignore", "inherit", "inherit"] });
+writeFileSync(${JSON.stringify(grandchildFile + ".tmp")}, JSON.stringify({ wrapper: process.pid, grandchild: child.pid }));
+renameSync(${JSON.stringify(grandchildFile + ".tmp")}, ${JSON.stringify(grandchildFile)});
+process.exit(0);`);
+  writeFileSync(stuck, `import { existsSync, readFileSync, renameSync, writeFileSync } from "node:fs";
+import * as api from ${JSON.stringify(join(pkg, "dist/parity-test-api.js"))};
+process.on("SIGTERM", () => {});
+api.recordServeMcpGroups(${JSON.stringify(box.agentDir)});
+const transport = api.createMcpStdioTransport({ command: process.execPath, args: [${JSON.stringify(wrapper)}], stderr: "pipe" });
+await transport.start();
+const deadline = Date.now() + 10_000;
+while (!existsSync(${JSON.stringify(grandchildFile)}) && Date.now() < deadline) await new Promise((r) => setTimeout(r, 25));
+const info = JSON.parse(readFileSync(${JSON.stringify(grandchildFile)}, "utf8"));
+writeFileSync(${JSON.stringify(pidsFile + ".tmp")}, JSON.stringify({ ...info, group: transport.pid }));
+renameSync(${JSON.stringify(pidsFile + ".tmp")}, ${JSON.stringify(pidsFile)});
+setInterval(() => {}, 1e9);`);
+  const daemon = spawn(process.execPath, [stuck, "serve"], { stdio: "ignore", detached: true });
+  let started;
+  t.after(() => {
+    for (const pid of [daemon.pid, started?.group, started?.grandchild]) {
+      if (pid) {
+        try { process.kill(-pid, "SIGKILL"); } catch { /* already gone */ }
+        try { process.kill(pid, "SIGKILL"); } catch { /* already gone */ }
+      }
+    }
+  });
+  const ready = Date.now() + 10_000;
+  while (!existsSync(pidsFile) && Date.now() < ready) await new Promise((r) => setTimeout(r, 25));
+  assert.equal(existsSync(pidsFile), true, "stuck daemon failed to start wrapper fixture");
+  started = JSON.parse(readFileSync(pidsFile, "utf8"));
+  // Wait for the wrapper leader to finish exiting and be reaped by the daemon,
+  // leaving only the orphaned grandchild alive in the recorded MCP group.
+  const isRunning = (pid) => {
+    if (!api.pidAlive(pid)) return false;
+    const state = spawnSync("ps", ["-o", "stat=", "-p", String(pid)], { encoding: "utf8" });
+    return state.status === 0 && state.stdout.trim() !== "" && !state.stdout.trim().startsWith("Z");
+  };
+  const waitExit = Date.now() + 5_000;
+  while (api.pidAlive(started.wrapper) && Date.now() < waitExit) await new Promise((r) => setTimeout(r, 25));
+  assert.equal(api.pidAlive(started.wrapper), false, "wrapper leader should have exited and been reaped");
+  assert.equal(isRunning(started.grandchild), true, "grandchild survivor should still be running");
+  api.atomicJson(join(box.lock, "owner.json"), {
+    detached: true,
+    pid: daemon.pid,
+    argv: [process.execPath, stuck, "serve"],
+    startedAt: Date.now(),
+    token: "orphan-test",
+  });
+  writeFileSync(box.socket, "");
+  assert.deepEqual(await api.stopDaemon(box.agentDir, 1_000), { stopped: true, pid: daemon.pid, forced: true });
+  const stopDeadline = Date.now() + 5_000;
+  while ((isRunning(daemon.pid) || isRunning(started.grandchild)) && Date.now() < stopDeadline) {
+    await new Promise((r) => setTimeout(r, 25));
+  }
+  assert.equal(isRunning(daemon.pid), false, "daemon must be stopped");
+  assert.equal(isRunning(started.grandchild), false, "orphaned MCP grandchild survivor must be stopped");
+  assert.equal(existsSync(box.lock), false);
+});

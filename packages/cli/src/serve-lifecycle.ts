@@ -48,6 +48,14 @@ function processGroupId(pid: number): number | undefined {
   } catch { return undefined; }
 }
 
+export interface ObservedProcess {
+  pid: number;
+  ppid: number;
+  pgid: number;
+  uid?: number;
+  zombie?: boolean;
+}
+
 /**
  * Publishes the serving process's live stdio MCP process groups beside its lease
  * owner. Each server leads its own group, outside the daemon's, and a SIGKILL
@@ -59,31 +67,113 @@ export function recordServeMcpGroups(agentDir: string): () => void {
   return watchMcpProcessGroups((groups) => {
     // Never recreate a lease directory that was already released.
     if (!existsSync(lock)) return;
-    try { atomicJson(join(lock, MCP_GROUPS), { pid: process.pid, groups }); } catch { /* best effort */ }
+    const owner = serveOwner(agentDir);
+    const token = owner?.pid === process.pid && typeof owner.token === "string" ? owner.token : undefined;
+    try { atomicJson(join(lock, MCP_GROUPS), { pid: process.pid, ...(token ? { token } : {}), groups }); } catch { /* best effort */ }
   });
 }
 
 /**
- * The recorded MCP groups of daemon `pid` that still have a member the daemon
- * spawned, read before the daemon dies and its children are reparented. A group
- * id with no such member may have been reused, so it is never signalled.
+ * Selects which recorded MCP process groups belong to `daemonPid` and may be
+ * force-stopped when the daemon is SIGKILLed:
+ * - A group whose leader PID is currently held by a process outside the
+ *   daemon's tree was recycled and is never signalled.
+ * - A group with a live or zombie member descended from `daemonPid` is owned.
+ * - A leaderless group (`pid === group` already exited and was reaped, e.g. an
+ *   `npx`/`uvx` wrapper whose grandchild server outlived it) with live members
+ *   owned by the daemon's UID is owned: POSIX prevents PID `group` reuse while
+ *   any member stays in that group, and `AidenStdioTransport` drops empty groups.
  */
-function daemonMcpGroups(agentDir: string, pid: number): number[] {
-  let recorded: { pid?: unknown; groups?: unknown } | undefined;
-  try { recorded = readJson<{ pid?: unknown; groups?: unknown } | undefined>(join(agentDir, SERVE_LOCK, MCP_GROUPS), undefined); } catch { return []; }
-  if (recorded?.pid !== pid || !Array.isArray(recorded.groups)) return [];
-  const wanted = new Set(recorded.groups.filter((group): group is number => validPid(group) && group !== pid));
-  if (!wanted.size) return [];
-  const owned = new Set<number>();
-  try {
-    const out = spawnSync("ps", ["-A", "-o", "pid=,ppid=,pgid="], { encoding: "utf8" });
-    if (out.status !== 0) return [];
-    for (const line of out.stdout.split("\n")) {
-      const [, ppid, pgid] = line.trim().split(/\s+/u).map(Number);
-      if (ppid === pid && pgid !== undefined && wanted.has(pgid)) owned.add(pgid);
+export function selectDaemonMcpGroups(
+  daemonPid: number,
+  recordedGroups: readonly number[],
+  processes: readonly ObservedProcess[],
+  options: { daemonPgid?: number; daemonUid?: number } = {},
+): number[] {
+  const byPid = new Map<number, ObservedProcess>();
+  const byPgid = new Map<number, ObservedProcess[]>();
+  for (const proc of processes) {
+    byPid.set(proc.pid, proc);
+    let members = byPgid.get(proc.pgid);
+    if (!members) {
+      members = [];
+      byPgid.set(proc.pgid, members);
     }
-  } catch { return []; }
+    members.push(proc);
+  }
+  const daemonProc = byPid.get(daemonPid);
+  const daemonPgid = options.daemonPgid ?? daemonProc?.pgid;
+  const daemonUid = daemonProc?.uid ?? options.daemonUid;
+  const isDescendantOfDaemon = (proc: ObservedProcess): boolean => {
+    const visited = new Set<number>([proc.pid]);
+    let parentPid = proc.ppid;
+    while (validPid(parentPid)) {
+      if (parentPid === daemonPid) return true;
+      if (visited.has(parentPid)) return false;
+      visited.add(parentPid);
+      const parent = byPid.get(parentPid);
+      if (!parent) return false;
+      parentPid = parent.ppid;
+    }
+    return false;
+  };
+  const owned = new Set<number>();
+  for (const group of recordedGroups) {
+    if (!validPid(group) || group === daemonPid || group === daemonPgid) continue;
+    const members = byPgid.get(group);
+    if (!members || members.length === 0) continue;
+    const leader = byPid.get(group);
+    if (leader && !isDescendantOfDaemon(leader)) continue;
+    if (members.some((member) => isDescendantOfDaemon(member))) {
+      owned.add(group);
+      continue;
+    }
+    const liveMembers = members.filter((member) => !member.zombie);
+    if (liveMembers.length === 0) continue;
+    if (daemonUid !== undefined && liveMembers.some((member) => member.uid !== daemonUid)) continue;
+    owned.add(group);
+  }
   return [...owned];
+}
+
+/**
+ * The recorded MCP groups of daemon `pid` that still belong to it, read before
+ * the daemon dies and its live children are reparented. Covers both direct
+ * children and orphaned grandchild servers whose wrapper exited.
+ */
+function daemonMcpGroups(agentDir: string, pid: number, owner?: ServeOwner): number[] {
+  let recorded: { pid?: unknown; token?: unknown; groups?: unknown } | undefined;
+  try { recorded = readJson<{ pid?: unknown; token?: unknown; groups?: unknown } | undefined>(join(agentDir, SERVE_LOCK, MCP_GROUPS), undefined); } catch { return []; }
+  if (recorded?.pid !== pid || !Array.isArray(recorded.groups)) return [];
+  if (typeof recorded.token === "string" && typeof owner?.token === "string" && recorded.token !== owner.token) return [];
+  const wanted = recorded.groups.filter((group): group is number => validPid(group) && group !== pid);
+  if (!wanted.length) return [];
+  try {
+    const out = spawnSync("ps", ["-A", "-o", "pid=,ppid=,pgid=,uid=,stat="], { encoding: "utf8" });
+    if (out.status !== 0) return [];
+    const processes: ObservedProcess[] = [];
+    for (const line of out.stdout.split("\n")) {
+      const trimmed = line.trim();
+      if (!trimmed) continue;
+      const parts = trimmed.split(/\s+/u);
+      const procPid = Number(parts[0]);
+      const ppid = Number(parts[1]);
+      const pgid = Number(parts[2]);
+      const uid = Number(parts[3]);
+      const stat = parts[4] ?? "";
+      if (!validPid(procPid) || !Number.isSafeInteger(ppid) || !validPid(pgid)) continue;
+      processes.push({
+        pid: procPid,
+        ppid,
+        pgid,
+        ...(Number.isSafeInteger(uid) ? { uid } : {}),
+        zombie: stat.startsWith("Z"),
+      });
+    }
+    return selectDaemonMcpGroups(pid, wanted, processes, {
+      daemonUid: typeof process.getuid === "function" ? process.getuid() : undefined,
+    });
+  } catch { return []; }
 }
 
 function serveOwner(agentDir: string): ServeOwner | undefined {
@@ -412,7 +502,7 @@ export async function stopDaemon(agentDir: string, timeoutMs = 15_000): Promise<
     // shares its group with the shell job (`aiden serve | tee`), so only the
     // serve process itself is killed. Either way its stdio MCP servers each lead
     // a group of their own, which the daemon recorded, and are killed as well.
-    const mcpGroups = daemonMcpGroups(agentDir, pid);
+    const mcpGroups = daemonMcpGroups(agentDir, pid, owner);
     const ownGroup = owner.detached === true && processGroupId(pid) === pid;
     try { process.kill(ownGroup ? -pid : pid, "SIGKILL"); } catch { /* already gone */ }
     for (const group of mcpGroups) { try { process.kill(-group, "SIGKILL"); } catch { /* already gone */ } }
