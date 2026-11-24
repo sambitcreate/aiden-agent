@@ -361,22 +361,57 @@ test("a burst of unreadable frames during a read becomes one follow-up read, and
   follower.stop();
 });
 
-test("paired desktops advance access request frames without exposing a phone card", () => {
+test("a host's access card reaches this Mac's chat as the card it answers by wait id, and a cleared frame takes it away", () => {
   const card = { waitId: "access-55", target: "folder" as const, label: "Reports", place: "~/Reports", why: "Summarize reports.", choices: ["not_now", "once"] as Array<"not_now" | "once"> };
   const view = remoteBotSessionView(session({ accessRequest: card }));
-  assert.equal(view.snapshot.accessRequest, undefined);
-  const next = applyRemoteBotSessionEvent(view, event(5, { type: "access_request", payload: { accessRequest: card } }));
-  assert.equal(next?.snapshot.seq, 5);
-  assert.equal(next?.snapshot.accessRequest, undefined);
-  assert.deepEqual(next?.snapshot.entries, view.snapshot.entries);
+  assert.deepEqual(view.snapshot.accessRequest, {
+    botId: "bot_1", waitId: "access-55", toolCallId: "access-55", target: "folder", label: "Reports", place: "~/Reports",
+    why: "Summarize reports.", choices: ["not_now", "once"],
+  });
+  const cleared = applyRemoteBotSessionEvent(view, event(5, { type: "access_request", payload: { accessRequest: null } }));
+  assert.equal(cleared?.snapshot.seq, 5);
+  assert.equal(cleared?.snapshot.accessRequest, null);
+  assert.deepEqual(cleared?.snapshot.entries, view.snapshot.entries);
 });
 
-test("paired desktops advance plan frames without exposing a phone plan card", () => {
+test("a host's plan reaches this Mac's chat as the plan card, and every new frame of it is a new revision", () => {
+  const plan = parseAidenRemoteBotSession(contract.botPlans.session).plan!;
   const before = remoteBotSessionView(session());
-  const frame = event(5, { type: "plan", payload: { plan: parseAidenRemoteBotSession(contract.botPlans.session).plan! } });
-  const after = applyRemoteBotSessionEvent(before, frame);
-  assert.ok(after);
-  assert.equal(after.snapshot.seq, 5);
-  assert.deepEqual(after.snapshot, { ...before.snapshot, seq: 5 });
-  assert.equal(Object.prototype.hasOwnProperty.call(after.snapshot, "plan"), false);
+  assert.equal(before.snapshot.plan, null);
+  const after = applyRemoteBotSessionEvent(before, event(5, { type: "plan", payload: { plan } }));
+  const shown = after?.snapshot.plan;
+  assert.ok(shown);
+  assert.equal(shown.planId, plan.planId);
+  assert.equal(shown.botId, "bot_1");
+  assert.equal(shown.status, plan.status);
+  assert.deepEqual(shown.steps, plan.steps);
+  assert.deepEqual(shown.items.map(({ line, details }) => ({ line, details })), plan.items.map(({ line, details }) => ({ line, details })));
+  assert.equal(new Set(shown.items.map(({ id }) => id)).size, plan.items.length, "each item has its own key");
+  const again = applyRemoteBotSessionEvent(after!, event(6, { type: "plan", payload: { plan: { ...plan, status: "active" } } }));
+  assert.notEqual(again?.snapshot.plan?.revision, shown.revision);
+  assert.equal(applyRemoteBotSessionEvent(again!, event(7, { type: "plan", payload: { plan: null } }))?.snapshot.plan, null);
+});
+
+test("a host's memory line and routine suggestion become this Mac's own transcript rows", () => {
+  const view = remoteBotSessionView(
+    session({
+      entries: [
+        { type: "memory_update", id: "mem-1", createdAt: "2026-11-24T08:00:00.000Z" },
+        {
+          type: "routine_proposal", id: "rp-1", proposalId: "4b1f8a52-7f0e-4b8e-9d55-3f2c1a6b7e10", name: "Morning brief",
+          prompt: "Summarize my day.", label: "Weekdays at 8:00 AM", status: "accepted", routineId: "routine-9",
+        },
+      ],
+    }),
+  );
+  const [memory, routine] = view.snapshot.entries;
+  assert.equal(memory?.type, "memory_update");
+  assert.equal(memory?.at, Date.parse("2026-11-24T08:00:00.000Z"));
+  assert.ok(routine?.type === "routine_proposal");
+  assert.equal(routine.status, "accepted");
+  assert.equal(routine.routineId, "routine-9");
+  assert.deepEqual(
+    { proposalId: routine.proposal.proposalId, name: routine.proposal.name, label: routine.proposal.label },
+    { proposalId: "4b1f8a52-7f0e-4b8e-9d55-3f2c1a6b7e10", name: "Morning brief", label: "Weekdays at 8:00 AM" },
+  );
 });

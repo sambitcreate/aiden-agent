@@ -327,6 +327,18 @@ test("a Bot summary carries issueCount only while it holds open issues, and an u
   assert.equal((await app.service.summaryOf("bot_1")).issueCount, 2);
 });
 
+test("one Bot the Remote contract can't carry is left out of the list, and the others still reach every device", async () => {
+  // A clock that went back between creating and editing a Bot, and a name from before today's limit.
+  const app = fixture([
+    bot("bot_1"),
+    bot("bot_2", { createdAt: 5_000, updatedAt: 4_000 }),
+    bot("bot_3", { name: "N".repeat(200) }),
+    bot("bot_4"),
+  ]);
+  const list = parseAidenRemoteBotList(await app.service.list());
+  assert.deepEqual(list.bots.map(({ id }) => id), ["bot_1", "bot_4"]);
+});
+
 test("Remote Bot inbox and avatar adapter stay device-scoped, mutation-gated, and idempotent", async () => {
   const avatarCalls: string[] = [];
   let asset: {

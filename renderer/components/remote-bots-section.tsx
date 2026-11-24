@@ -41,11 +41,16 @@ export function remoteBotLine(bot: RemoteBotChoice): RemoteBotLine | null {
   return null;
 }
 
-/** The paired Macs' Bots that match the sidebar's search; a Mac with none is left out. */
+/**
+ * The paired Macs' Bots that match the sidebar's search; a Mac with none is
+ * left out. A Mac that lists no Bots only for a reason (an old pairing) shows
+ * that reason until the person searches.
+ */
 export function remoteBotGroupsMatching(groups: readonly RemoteBotGroup[], query: string): RemoteBotGroup[] {
+  const searching = query.trim().length > 0;
   return groups
     .map(({ host, bots }) => ({ host, bots: bots.filter((bot) => matchesSearch([bot.name, bot.purpose ?? ""], query)) }))
-    .filter((group) => group.bots.length > 0);
+    .filter((group) => group.bots.length > 0 || (!searching && group.host.disabledReason !== undefined));
 }
 
 /**
@@ -89,7 +94,7 @@ export function RemoteBotsSection({
               {host.disabledReason}
             </Text>
           ) : null}
-          <ul className="flex flex-col gap-0.5">
+          {bots.length === 0 ? null : <ul className="flex flex-col gap-0.5">
             {bots.map((bot) => {
               const key = `${host.id}/${bot.id}`;
               const current = selected === key;
@@ -105,7 +110,7 @@ export function RemoteBotsSection({
                 />
               );
             })}
-          </ul>
+          </ul>}
         </section>
       ))}
     </div>

@@ -500,8 +500,11 @@ export class AidenRemoteBotService {
       this.options.healthBatch?.(ids),
       this.options.sessionStates?.(ids),
     ]);
-    const summaries = await mapBounded(bots, 8, (bot) =>
-      this.summary(bot, health?.get(bot.id) ?? "ready", sessions?.get(bot.id)));
+    // One Bot the contract can't carry (a clock that went back, a name from an
+    // older limit) is left out, so it never empties every device's Bot list.
+    const summaries = (await mapBounded(bots, 8, (bot) =>
+      this.summary(bot, health?.get(bot.id) ?? "ready", sessions?.get(bot.id)).catch(() => null)))
+      .filter((summary): summary is AidenRemoteBotSummary => summary !== null);
     return parseAidenRemoteBotList({ bots: summaries, maxBots: MAX_BOTS, ...(this.options.messaging ? {messaging: {enabled: await this.options.messaging.enabled()}} : {}) });
   }
 

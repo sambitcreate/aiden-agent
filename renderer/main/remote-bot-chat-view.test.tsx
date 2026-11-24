@@ -1,7 +1,7 @@
 import { emitBotTestNotification, installBotTestIpc } from "./bots/test-dom";
 import assert from "node:assert/strict";
 import { afterEach, test } from "node:test";
-import { act, cleanup, fireEvent, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, screen, waitFor, within } from "@testing-library/react";
 import { createBotTestQueryClient, mountWithBotRouter } from "./bots/test-providers";
 import { hostQueryKeys } from "../lib/hosts/host-query-keys";
 import { detectedKeyboardPlatform } from "../shared/keybindings";
@@ -573,4 +573,171 @@ test("a shared image whose bytes cannot be read from the other computer says wha
   );
   assert.ok(await screen.findByText(/I shared an image: dentist-map\.png\. Open this chat on its computer to see it\./));
   assert.ok(!screen.queryByRole("img", { name: "dentist-map.png" }), "no image drawn");
+});
+
+const CARDS_HOST: PeerHostView = {
+  ...HOST,
+  capabilities: [...HOST.capabilities, "bot:cards", "bot:access-requests", "bot:plans"],
+};
+
+const TRIP_PLAN = {
+  planId: "plan-1",
+  status: "pending",
+  title: "Book the Lisbon trip",
+  why: "You asked for flights and a hotel.",
+  steps: [
+    { text: "Find flights", status: "pending" },
+    { text: "Hold a hotel", status: "pending" },
+  ],
+  items: [{ line: "Gmail · send (up to 3)", details: ["Send email"], used: 0, max: 3 }],
+};
+
+const DOCS_ACCESS = {
+  waitId: "wait-docs",
+  target: "folder",
+  label: "Documents",
+  place: "~/Documents",
+  why: "To read your passport scan.",
+  choices: ["once", "always", "not_now"],
+};
+
+async function mountCards(session: Record<string, unknown>, answers: Partial<Record<string, (operation: PeerOperation) => unknown>> = {}) {
+  return mount(CARDS_HOST, {
+    "remote:peerCall": (_hostId, raw) => {
+      const operation = raw as PeerOperation;
+      if (operation.operation === "botSession") return { ok: true, value: session };
+      const answer = answers[operation.operation];
+      return answer ? answer(operation) : { ok: false, error: { code: "failed", message: `unexpected ${operation.operation}` } };
+    },
+  });
+}
+
+test("a Bot on another computer waiting on a folder and a plan shows both cards here, and each answers there by its own id", async () => {
+  const { peerCalls } = await mountCards(
+    { ...SESSION, state: "running", accessRequest: DOCS_ACCESS, plan: TRIP_PLAN },
+    {
+      botAnswerAccessRequest: () => ({ ok: true, value: { answered: true } }),
+      botRespondPlan: (operation) => ({ ok: true, value: { planId: operation.itemId, status: "active" } }),
+    },
+  );
+  // Two things wait, one card at a time; the composer can't skip past the plan.
+  assert.ok(await screen.findByText("1 of 2"));
+  assert.ok(screen.getByText("Answer the plan under Needs you, then send a message."));
+  fireEvent.click(await screen.findByRole("button", { name: "Allow once" }));
+  await waitFor(() => {
+    const answer = peerCalls().find((call) => call.operation === "botAnswerAccessRequest");
+    assert.equal(answer?.itemId, "wait-docs");
+    assert.deepEqual(answer?.body, { choice: "once" });
+  });
+  // Answered: the plan is what's left.
+  assert.ok(await screen.findByText("Approve this plan?"));
+  assert.ok(screen.getByText("Book the Lisbon trip"));
+  fireEvent.click(screen.getByRole("button", { name: "Allow once" }));
+  await waitFor(() => {
+    const answer = peerCalls().find((call) => call.operation === "botRespondPlan");
+    assert.equal(answer?.resourceId, "bot_1");
+    assert.equal(answer?.itemId, "plan-1");
+    assert.deepEqual(answer?.body, { decision: "approve" });
+  });
+  await waitFor(() => assert.equal(screen.queryByText("Approve this plan?"), null));
+
+  // The host's next frame carries the approved plan: its checklist shows in the chat, with Stop.
+  await act(async () => {
+    emitBotTestNotification("remote:peer-bot-session", event(4, "access_request", { accessRequest: null }));
+    emitBotTestNotification("remote:peer-bot-session", event(5, "plan", { plan: { ...TRIP_PLAN, status: "active" } }));
+  });
+  fireEvent.click(await screen.findByRole("button", { name: "Stop plan" }));
+  await waitFor(() =>
+    assert.deepEqual(peerCalls().filter((call) => call.operation === "botRespondPlan").map((call) => call.body), [
+      { decision: "approve" },
+      { decision: "stop" },
+    ]),
+  );
+});
+
+test("a plan already answered on the other computer says so on the card instead of failing quietly", async () => {
+  await mountCards(
+    { ...SESSION, plan: TRIP_PLAN },
+    {
+      botRespondPlan: () => ({
+        ok: false,
+        error: { code: "request_failed", remoteCode: "plan_expired", message: "This plan is no longer waiting." },
+      }),
+    },
+  );
+  fireEvent.click(await screen.findByRole("button", { name: "Allow once" }));
+  assert.ok(await screen.findByText("This plan is no longer waiting."));
+});
+
+test("a routine a Bot on another computer suggested is added there, and a memory line says where to open it", async () => {
+  const { peerCalls } = await mountCards(
+    {
+      ...SESSION,
+      entries: [
+        ...SESSION.entries,
+        { type: "memory_update", id: "mem-1" },
+        {
+          type: "routine_proposal",
+          id: "rp-entry",
+          proposalId: "4b1f8a52-7f0e-4b8e-9d55-3f2c1a6b7e10",
+          name: "Morning brief",
+          prompt: "Summarize my day.",
+          label: "Weekdays at 8:00 AM",
+          status: "pending",
+        },
+      ],
+    },
+    {
+      botRespondRoutineProposal: () => ({ ok: true, value: { status: "accepted", routineId: "routine-9" } }),
+    },
+  );
+  const card = await screen.findByRole("group", { name: "Routine suggestion: Morning brief" });
+  assert.ok(card.textContent?.includes("Weekdays at 8:00 AM"));
+  fireEvent.click(within(card).getByRole("button", { name: /^Add/u }));
+  await waitFor(() => {
+    const answer = peerCalls().find((call) => call.operation === "botRespondRoutineProposal");
+    assert.equal(answer?.itemId, "4b1f8a52-7f0e-4b8e-9d55-3f2c1a6b7e10");
+    assert.deepEqual(answer?.body, { decision: "accept" });
+  });
+  assert.ok(screen.getByText("Memory updated"));
+});
+
+test("a message sent to a Bot on another computer shows at once, before that computer has it", async () => {
+  let acknowledge: (value: unknown) => void = () => undefined;
+  await mount(HOST, {
+    "remote:peerCall": (_hostId, raw) => {
+      const operation = raw as PeerOperation;
+      if (operation.operation === "botSession") return { ok: true, value: SESSION };
+      if (operation.operation === "botSend") return new Promise((resolve) => (acknowledge = resolve));
+      return { ok: false, error: { code: "failed", message: `unexpected ${operation.operation}` } };
+    },
+  });
+  const box = await screen.findByPlaceholderText("Ask Planner");
+  fireEvent.change(box, { target: { value: "Move the dentist to Friday" } });
+  fireEvent.click(await screen.findByRole("button", { name: "Send message" }));
+  assert.ok(await screen.findByText("Move the dentist to Friday"));
+  // The host's entry takes its place: the words show once.
+  await act(async () => {
+    acknowledge({ ok: true, value: { submissionId: "s1", deduped: false, state: "running", interrupted: false } });
+    emitBotTestNotification(
+      "remote:peer-bot-session",
+      event(4, "entry", { entry: { type: "message", id: "m3", role: "user", text: "Move the dentist to Friday" } }),
+    );
+  });
+  await waitFor(() => assert.equal(screen.getAllByText("Move the dentist to Friday").length, 1));
+});
+
+test("a send the other computer refuses takes its echo away and keeps the draft", async () => {
+  await mount(HOST, {
+    "remote:peerCall": (_hostId, raw) => {
+      const operation = raw as PeerOperation;
+      if (operation.operation === "botSession") return { ok: true, value: SESSION };
+      return { ok: false, error: { code: "failed", message: "Studio is busy." } };
+    },
+  });
+  const box = (await screen.findByPlaceholderText("Ask Planner")) as HTMLTextAreaElement;
+  fireEvent.change(box, { target: { value: "Move the dentist to Friday" } });
+  fireEvent.click(await screen.findByRole("button", { name: "Send message" }));
+  await waitFor(() => assert.equal(box.value, "Move the dentist to Friday"));
+  await waitFor(() => assert.equal(document.querySelector("[data-bot-pending-send]"), null));
 });
