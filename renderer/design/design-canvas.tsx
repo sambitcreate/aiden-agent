@@ -1335,6 +1335,7 @@ function LoadedDesignCanvas({
             toolbar={
               <DesignToolbar
                 doc={doc}
+                chatId={chatId}
                 pageId={pageId}
                 tool={tool}
                 onToolChange={changeTool}
