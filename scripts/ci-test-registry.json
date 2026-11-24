@@ -352,6 +352,7 @@
         "main/windows/pill-window-security.test.ts",
         "main/windows/design-window-core.test.ts",
         "main/services/design-canvas/store.test.ts",
+        "main/services/design-canvas/app-server/app-server-core.test.ts",
         "main/services/design-canvas/views.test.ts",
         "main/services/design-canvas/title-follow.test.ts",
         "main/services/design-canvas/liveness.test.ts",
