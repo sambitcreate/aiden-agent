@@ -128,7 +128,7 @@ test("the export shapes are right", async () => {
   assert.equal(config.theme.extend.colors.primary, "#1a1c1e");
 });
 
-async function runTrapped(mode: "inherit" | "explicit-execargv") {
+async function runTrapped(mode: "inherit" | "explicit-execargv" | "calls-network") {
   const dir = await mkdtemp(path.join(os.tmpdir(), "aiden-design-md-trap-"));
   const logFile = path.join(dir, "trap.log");
   try {
@@ -173,6 +173,18 @@ test("the worker lints with no network and no subprocess, and only the linter en
   assert.ok(!resolved.some((url) => url.endsWith("@google/design.md/dist/index.js")));
   for (const banned of ["node_modules/citty/", "node_modules/remark-mdx/", "node_modules/remark-frontmatter/", "@google/design.md/node_modules/"]) {
     assert.ok(!resolved.some((url) => url.includes(banned)), banned);
+  }
+});
+
+test("the trap catches a worker that calls http.request", async () => {
+  const { outcomes, log } = await runTrapped("calls-network");
+  assert.deepEqual(outcomes.map((outcome) => outcome.ok), [true, true, true]);
+  const calls = log.filter((line) => line.startsWith("call "));
+  assert.equal(calls.length, 3, log.join("\n"));
+  for (const line of calls) {
+    const [, thread, what] = line.split(" ");
+    assert.notEqual(thread, "0", line);
+    assert.equal(what, "http.request", line);
   }
 });
 
