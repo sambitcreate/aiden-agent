@@ -102,4 +102,30 @@ class AidenBotRoutineModelsControllerTest {
         d.save();slow.complete(fresh.view.copy(revision="old",selection=AidenRoutineModelSelection.Inherit));job.join()
         assertEquals("r2",d.state.value.settings!!.revision);assertEquals(primary,d.state.value.settings!!.selection.primary)
     }
+
+    @Test fun first409InFlightUnknown409AndUnexpectedStatusRetainPendingWhileFirstDefiniteClears()=runTest {
+        val ambiguous=listOf<Exception>(
+            AidenRemoteClientException.Server(409,AidenRemoteErrorEnvelope.Body(AidenRemoteErrorCode.IDEMPOTENCY_IN_FLIGHT,"In flight","req_1",false)),
+            AidenRemoteClientException.Server(409,AidenRemoteErrorEnvelope.Body(AidenRemoteErrorCode.INTERNAL_ERROR,"Unknown","req_2",false)),
+            AidenRemoteClientException.Server(400,AidenRemoteErrorEnvelope.Body(AidenRemoteErrorCode("outcome_unknown"),"Unknown","req_3",false)),
+            AidenRemoteClientException.UnexpectedStatus(400)
+        )
+        for(failure in ambiguous) {
+            val host=Host();val c=controller(host);c.load();c.select(primary,false)
+            host.answer={throw failure}
+            c.save()
+            assertNotNull("must retain pending on $failure",c.state.value.pending)
+            assertEquals(AidenRoutineControlProblem.UNCERTAIN,c.state.value.problem)
+            host.answer={r->AidenRoutineModelResult(true,host.view.copy(revision="r2",selection=r.selection,lastMutationId=r.mutationId),r.mutationId,true)}
+            c.retry()
+            assertNull(c.state.value.pending)
+            assertEquals(listOf(MODEL_NONCE,MODEL_NONCE),host.writes.map{it.mutationId})
+        }
+
+        val host=Host();val c=controller(host);c.load();c.select(primary,false)
+        host.answer={throw AidenRemoteClientException.Server(403,AidenRemoteErrorEnvelope.Body(AidenRemoteErrorCode.CAPABILITY_DENIED,"Denied","req_4",false))}
+        c.save()
+        assertNull(c.state.value.pending)
+        assertEquals(AidenRoutineControlProblem.FAILED,c.state.value.problem)
+    }
 }

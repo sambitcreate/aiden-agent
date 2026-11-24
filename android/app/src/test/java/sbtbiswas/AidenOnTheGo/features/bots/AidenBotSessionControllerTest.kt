@@ -86,7 +86,13 @@ class AidenBotSessionControllerTest {
     @Test fun sameChoiceUncertainRetryReusesBodyAndKey() = runTest {
         val body = json.decodeFromJsonElement(AidenRemoteErrorEnvelope.serializer(), accessSection().getValue("expired")).error
             .copy(code = AidenRemoteErrorCode.INTERNAL_ERROR)
-        for (failure in listOf(IOException("lost"), AidenRemoteClientException.Server(503, body))) {
+        val inFlightBody = body.copy(code = AidenRemoteErrorCode.IDEMPOTENCY_IN_FLIGHT)
+        for (failure in listOf(
+            IOException("lost"),
+            AidenRemoteClientException.Server(503, body),
+            AidenRemoteClientException.Server(409, inFlightBody),
+            AidenRemoteClientException.Server(429, body.copy(code = AidenRemoteErrorCode.RATE_LIMITED))
+        )) {
             val transport = FakeTransport(accessSession())
             val controller = AidenBotSessionController("bot_fixture_01", transport, backgroundScope)
             controller.refetch()

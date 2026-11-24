@@ -19,6 +19,8 @@ import sbtbiswas.AidenOnTheGo.networking.AidenRemoteClient
 import sbtbiswas.AidenOnTheGo.protocol.AidenRemoteCapability
 import sbtbiswas.AidenOnTheGo.protocol.AidenRemoteClientException
 import sbtbiswas.AidenOnTheGo.protocol.AidenRemoteErrorCode
+import sbtbiswas.AidenOnTheGo.protocol.AidenRemoteFailureClassification
+import sbtbiswas.AidenOnTheGo.protocol.AidenRemoteFailurePolicy
 import java.util.UUID
 
 /** The routes a durable Bot chat uses. [AidenRemoteClient] provides them on a revision-25 Mac. */
@@ -303,8 +305,8 @@ class AidenBotActionKeys(private val newKey: () -> UUID = UUID::randomUUID) {
         keys.remove(action)
     }
 
-    /** Ends [action] when [error] is an answer from the Mac; keeps its key when the outcome is unknown. */
-    fun failed(action: String, error: Exception) {
+    /** Ends [action] when [error] is a definite refusal from the Mac; keeps its key when the outcome is unknown. */
+    fun failed(action: String, error: Throwable) {
         if (aidenBotMacAnswered(error)) complete(action)
     }
 }
@@ -313,8 +315,14 @@ class AidenBotActionKeys(private val newKey: () -> UUID = UUID::randomUUID) {
 fun aidenBotFilesChatId(botId: String, conversations: List<AidenBotConversationItem>): String? =
     aidenCanonicalBotConversations(conversations).firstOrNull { it.botId == botId }?.chatId
 
-/** True when the Mac sent an HTTP answer, so a retry is a new action rather than a replay. */
-fun aidenBotMacAnswered(error: Exception): Boolean = error is AidenRemoteClientException.Server
+/**
+ * True when the host returned a definite refusal that settled or rejected the action, so a retry
+ * should start a fresh request rather than replay the same `Idempotency-Key`. Ambiguous outcomes
+ * (`409 idempotency_in_flight`, `5xx`, `408`, `429`, transport/parse failures, cancellation) keep
+ * the key.
+ */
+fun aidenBotMacAnswered(error: Throwable): Boolean =
+    !AidenRemoteFailureClassification.isAmbiguous(error, AidenRemoteFailurePolicy.CACHED_REJECTION_LEDGER)
 
 /** Where a connect card's action stands on this phone. */
 enum class AidenBotConnectRequestPhase { IDLE, SENDING, SENT, FAILED }
@@ -371,18 +379,8 @@ fun aidenBotOutboxFailureStep(
 }
 
 /** True when a message request may have reached the Mac, so the next attempt must reuse its key. */
-fun aidenBotMessageFailureIsAmbiguous(error: Exception): Boolean = when (error) {
-    is AidenRemoteClientException.Server -> error.statusCode >= 500 || error.statusCode == 408 || error.statusCode == 429 ||
-        // The Mac is still working on the first attempt: its outcome is unknown.
-        (error.statusCode == 409 && error.body.code == AidenRemoteErrorCode.IDEMPOTENCY_IN_FLIGHT)
-    is AidenRemoteClientException.UnexpectedStatus -> error.statusCode >= 500 || error.statusCode == 408 || error.statusCode == 429
-    is AidenRemoteClientException.MissingCredential,
-    is AidenRemoteClientException.MissingTrustConfiguration,
-    is AidenRemoteClientException.InstallationChanged,
-    is AidenRemoteClientException.InvalidEndpoint -> false
-    // A dropped connection or an unreadable answer: the Mac may have taken it.
-    else -> true
-}
+fun aidenBotMessageFailureIsAmbiguous(error: Throwable): Boolean =
+    AidenRemoteFailureClassification.isAmbiguous(error, AidenRemoteFailurePolicy.CACHED_REJECTION_LEDGER)
 
 /** 401 or 403, or a pairing that's gone: this phone no longer reaches this Bot. */
 fun aidenBotLostAccess(error: Exception): Boolean = when (error) {
@@ -1931,7 +1929,7 @@ class AidenBotSessionController(
             if (accessRequestWrites == writes) _state.update { it.copy(session = it.session?.copy(accessRequest = shown)) }
             throw error
         } catch (error: Exception) {
-            if (error is AidenRemoteClientException.Server && error.statusCode < 500) keys.complete(action)
+            keys.failed(action, error)
             val expired = (error as? AidenRemoteClientException.Server)?.body?.code == AidenRemoteErrorCode.ACCESS_REQUEST_EXPIRED
             _state.update { state ->
                 val session = state.session

@@ -6,6 +6,8 @@ import sbtbiswas.AidenOnTheGo.models.AidenChatRole
 import sbtbiswas.AidenOnTheGo.models.AidenGenerationTimelineStatus
 import sbtbiswas.AidenOnTheGo.protocol.AidenRemoteClientException
 import sbtbiswas.AidenOnTheGo.protocol.AidenRemoteErrorCode
+import sbtbiswas.AidenOnTheGo.protocol.AidenRemoteFailureClassification
+import sbtbiswas.AidenOnTheGo.protocol.AidenRemoteFailurePolicy
 
 /**
  * Which messages offer the fork actions. Mirrors the Mac's rules so the menu
@@ -83,7 +85,7 @@ object AidenChatForkErrors {
      * `internal_error`, so the next attempt needs a fresh key.
      */
     fun isOutcomeUnknown(error: Throwable): Boolean =
-        serverError(error)?.let { it.body.code == AidenRemoteErrorCode.IDEMPOTENCY_IN_FLIGHT } ?: true
+        AidenRemoteFailureClassification.isAmbiguous(error, AidenRemoteFailurePolicy.CACHED_REJECTION_LEDGER_STRICT)
 
     /** A summary route's 404 or 409 means the summary already changed elsewhere. */
     fun isSummaryMovedOn(error: Throwable): Boolean = isNotFound(error) || isRevisionConflict(error)

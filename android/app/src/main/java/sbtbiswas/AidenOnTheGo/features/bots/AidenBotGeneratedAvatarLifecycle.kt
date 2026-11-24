@@ -34,6 +34,8 @@ import sbtbiswas.AidenOnTheGo.models.AidenBotSummary
 import sbtbiswas.AidenOnTheGo.models.AidenBotSemanticAvatar
 import sbtbiswas.AidenOnTheGo.networking.AidenRemoteClient
 import sbtbiswas.AidenOnTheGo.persistence.AidenBotCache
+import sbtbiswas.AidenOnTheGo.protocol.AidenRemoteFailureClassification
+import sbtbiswas.AidenOnTheGo.protocol.AidenRemoteFailurePolicy
 import sbtbiswas.AidenOnTheGo.ui.theme.AidenActivityDot
 import java.io.ByteArrayOutputStream
 import java.security.MessageDigest
@@ -61,7 +63,11 @@ fun aidenBotAvatarExpectedRevision(bot: AidenBotDetail): String =
     bot.avatar.asset?.assetRevision ?: bot.revision
 
 fun aidenBotAvatarMutationFailureIsAmbiguous(error: Throwable): Boolean {
-    return error !is AidenBotGeneratedAvatarError.Unavailable
+    if (error is AidenBotGeneratedAvatarError.Unavailable) return false
+    return AidenRemoteFailureClassification.isAmbiguous(
+        error,
+        AidenRemoteFailurePolicy.BEFORE_EFFECT_REFUSAL_WITH_REVISION_CONFLICT
+    )
 }
 
 object AidenBotGeneratedAvatarNormalizer {

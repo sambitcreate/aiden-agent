@@ -5,7 +5,8 @@ import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.jsonObject
 import sbtbiswas.AidenOnTheGo.protocol.AidenRemoteClientException
-import sbtbiswas.AidenOnTheGo.protocol.AidenRemoteErrorCode
+import sbtbiswas.AidenOnTheGo.protocol.AidenRemoteFailureClassification
+import sbtbiswas.AidenOnTheGo.protocol.AidenRemoteFailurePolicy
 
 /**
  * Contract revision 53 (`chat:new-worktree`): the first message of an empty Workspace chat can
@@ -28,13 +29,11 @@ object AidenNewWorktreeRetry {
      * did with it. An answer this phone could not read spends it too: the Mac would only replay
      * the same answer under that key.
      */
-    fun spendsKey(error: Throwable): Boolean = when (error) {
-        is AidenRemoteClientException.Server -> error.body.code != AidenRemoteErrorCode.IDEMPOTENCY_IN_FLIGHT
-        is AidenRemoteClientException.UnexpectedStatus,
-        is AidenRemoteClientException.InvalidResponse,
-        is AidenRemoteClientException.IdempotencyConflict -> true
-        else -> false
-    }
+    fun spendsKey(error: Throwable): Boolean = !AidenRemoteFailureClassification.isAmbiguous(
+        error,
+        AidenRemoteFailurePolicy.CACHED_REJECTION_LEDGER_STRICT,
+        unreadableResponseAmbiguous = false
+    )
 }
 
 /** The empty chat, now in its new worktree's workspace, and the worktree's branch. */
