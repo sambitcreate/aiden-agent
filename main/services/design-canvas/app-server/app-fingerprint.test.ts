@@ -1,12 +1,12 @@
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { mkdir, mkdtemp, realpath, rm, symlink, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, realpath, rename, rm, symlink, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 import { detectWebApp } from "./app-detect.js";
-import { hashBounded, readLaunchSurface } from "./app-fingerprint.js";
+import { hashBounded, launchDirsUnchanged, readLaunchSurface } from "./app-fingerprint.js";
 import type { DetectedApp } from "./app-server-core.js";
 
 const skip = process.platform === "win32" ? "POSIX file types" : false;
@@ -122,6 +122,22 @@ test("another checkout with identical launch files has another fingerprint; the 
   const linked = path.join(links, "site-link");
   await symlink(site, linked);
   assert.equal((await surfaceOf(linked, await webApp(site))).fingerprint, ofSite.fingerprint, "the same folder by another path keeps its consent");
+});
+
+test("the folders a read validated stop matching when one is renamed and its name reused, by a link or a new folder", { skip }, async (t) => {
+  for (const swap of ["link", "folder"] as const) {
+    const root = await workspace(t);
+    await put(root, "package.json", JSON.stringify({ name: "mono", private: true, workspaces: ["apps/*"] }));
+    await put(root, "package-lock.json", "{}");
+    await put(root, "apps/web/package.json", pkg({ dev: "vite" }));
+    await put(root, "apps/other/package.json", pkg({ dev: "vite" }));
+    const read = await surfaceOf(root, await webApp(root, "apps/web"));
+    assert.equal(await launchDirsUnchanged(read.dirs), true, `${swap}: untouched folders still match`);
+    await rename(path.join(root, "apps/web"), path.join(root, "apps/web-old"));
+    if (swap === "link") await symlink(path.join(root, "apps/other"), path.join(root, "apps/web"));
+    else await put(root, "apps/web/package.json", pkg({ dev: "vite" }));
+    assert.equal(await launchDirsUnchanged(read.dirs), false, `${swap}: the name now names another folder`);
+  }
 });
 
 test("the read reports the real app and install folders it validated, so a spawn never rebuilds them from relative roots", { skip }, async (t) => {
