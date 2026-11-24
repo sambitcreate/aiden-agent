@@ -731,6 +731,7 @@
         "main/services/devices/device-service-ssh.test.ts",
         "main/services/devices/device-tool-maintenance.test.ts",
         "main/services/devices/device-toolchain.test.ts",
+        "main/services/node-toolchain.test.ts",
         "main/services/devices/feature-flag.test.ts",
         "main/services/devices/local-device-host.test.ts",
         "main/services/devices/local-ssh-target.test.ts",

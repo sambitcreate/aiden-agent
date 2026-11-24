@@ -10,11 +10,25 @@
  * Install stages into a temp sibling, writes a sentinel only after npm exits
  * 0 and the entry exists, then renames into place. npm extracts files before
  * it finishes, so an entry file alone does not prove a usable tree.
+ *
+ * Finding Node and npm lives in `../node-toolchain.ts`, which design mode
+ * shares. The exports here keep the device's own settings: Node 22 or newer,
+ * no cache, and the lookup limits devices have always used.
  */
-import { execFile, spawn } from "node:child_process";
-import { constants as fsConstants } from "node:fs";
-import { access, mkdir, mkdtemp, readdir, readFile, rename, realpath, rm, stat, writeFile } from "node:fs/promises";
+import { spawn } from "node:child_process";
+import { access, mkdir, mkdtemp, readdir, readFile, rename, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
+import {
+  isExecutableFile,
+  isStandaloneNodeExecutable,
+  loginShellCommandLookup,
+  nodeCommandEnvironment,
+  prependPathEntries,
+  resolveExecutable,
+  type ExecutableResolutionDeps,
+} from "../node-toolchain.js";
+
+export { prependPathEntries } from "../node-toolchain.js";
 
 export interface ToolSpec {
   name: string;
@@ -182,70 +196,23 @@ export async function installedToolVersions(baseDir: string, spec: ToolSpec): Pr
   return checks.filter((version): version is string => version !== null).sort();
 }
 
-export interface NpmResolutionDeps {
-  env: NodeJS.ProcessEnv;
-  isExecutable(filePath: string): Promise<boolean>;
-  /** Prints `command -v npm` from the user's login shell, which a Finder launch does not inherit. */
-  loginShellLookup(shell: string): Promise<string | null>;
-}
+/** The login-shell lookup prints `command -v npm` (or `node`), which a Finder launch does not inherit. */
+export type NpmResolutionDeps = ExecutableResolutionDeps;
 
 /** Finds the user's npm: PATH, then the login shell, then the usual Homebrew locations. */
 export function resolveNpm(deps: NpmResolutionDeps): Promise<string | null> {
   return resolveExecutable("npm", deps);
 }
 
-async function resolveExecutable(command: "npm" | "node", deps: NpmResolutionDeps): Promise<string | null> {
-  for (const dir of (deps.env.PATH ?? "").split(path.delimiter)) {
-    if (!path.isAbsolute(dir)) continue;
-    const candidate = path.join(dir, command);
-    if (await deps.isExecutable(candidate)) return candidate;
-  }
-  const shell = deps.env.SHELL;
-  if (shell && path.isAbsolute(shell)) {
-    const printed = await deps.loginShellLookup(shell).catch(() => null);
-    const candidate = printed
-      ?.split(/\r?\n/u)
-      .map((line) => line.trim())
-      .reverse()
-      .find((line) => path.isAbsolute(line));
-    if (candidate && (await deps.isExecutable(candidate))) return candidate;
-  }
-  for (const candidate of [path.join("/opt/homebrew/bin", command), path.join("/usr/local/bin", command)]) {
-    if (await deps.isExecutable(candidate)) return candidate;
-  }
-  return null;
-}
+const npmLookup = loginShellCommandLookup({ env: process.env });
 
 export const defaultNpmResolutionDeps: NpmResolutionDeps = {
   env: process.env,
-  isExecutable: async (filePath) => {
-    try {
-      await access(filePath, fsConstants.X_OK);
-      return true;
-    } catch {
-      return false;
-    }
-  },
-  loginShellLookup: (shell) =>
-    new Promise((resolve) => {
-      execFile(
-        shell,
-        ["-ilc", "command -v npm"],
-        { timeout: 5_000, encoding: "utf8", env: process.env },
-        (error, stdout) => resolve(error ? null : stdout),
-      );
-    }),
+  isExecutable: isExecutableFile,
+  loginShellLookup: (shell) => npmLookup(shell, "npm"),
 };
 
 const STDERR_LIMIT = 16_384;
-
-/**
- * `dirs` first, then the inherited PATH, with every empty entry dropped. An
- * empty entry means the working folder, so a file named `node` there would run.
- */
-export function prependPathEntries(dirs: readonly string[], pathValue: string | undefined): string {
-  return [...dirs, ...(pathValue ?? "").split(path.delimiter)].filter((entry) => entry !== "").join(path.delimiter);
-}
 
 /** Runs the resolved npm with its own directory first on PATH, since npm's shebang is `env node`. */
 export function createNpmRunner(npmPath: string, env: NodeJS.ProcessEnv = process.env): NpmRunner {
@@ -294,47 +261,24 @@ export function resolveDeviceNode(deps: NpmResolutionDeps): Promise<string | nul
 }
 
 export function deviceNodeEnvironment(env: NodeJS.ProcessEnv, nodePath: string): NodeJS.ProcessEnv {
-  const clean: NodeJS.ProcessEnv = { ...env, PATH: prependPathEntries([path.dirname(nodePath)], env.PATH) };
-  delete clean.ELECTRON_RUN_AS_NODE;
-  return clean;
+  return nodeCommandEnvironment(env, [path.dirname(nodePath)]);
 }
 
 /** Reject the app itself before probing, including symlinks and hard links named node. */
-export async function isDeviceNodeExecutable(
+export function isDeviceNodeExecutable(
   candidate: string,
   env: NodeJS.ProcessEnv,
   appExecutable = process.execPath,
   isElectron = !!process.versions.electron,
 ): Promise<boolean> {
-  try {
-    await access(candidate, fsConstants.X_OK);
-    if (isElectron) {
-      const [target, appTarget, targetStat, appStat] = await Promise.all([
-        realpath(candidate), realpath(appExecutable), stat(candidate), stat(appExecutable),
-      ]);
-      if (target === appTarget || (targetStat.dev === appStat.dev && targetStat.ino === appStat.ino)) return false;
-    }
-    const output = await new Promise<string>((resolve, reject) => {
-      execFile(candidate, ["-p", 'JSON.stringify({node:process.versions.node,electron:!!process.versions.electron})'], {
-        env: deviceNodeEnvironment(env, candidate), timeout: 5_000, maxBuffer: 4096, encoding: "utf8",
-      }, (error, stdout) => error ? reject(error) : resolve(stdout));
-    });
-    const runtime = JSON.parse(output.trim()) as { node?: unknown; electron?: unknown };
-    return runtime.electron === false && typeof runtime.node === "string" && /^\d+\.\d+\.\d+$/u.test(runtime.node)
-      && Number(runtime.node.split(".")[0]) >= 22;
-  } catch {
-    return false;
-  }
+  return isStandaloneNodeExecutable(candidate, env, { minMajor: 22, appExecutable, isElectron });
 }
 
 export function defaultDeviceNodeResolutionDeps(env: NodeJS.ProcessEnv = process.env): NpmResolutionDeps {
+  const nodeLookup = loginShellCommandLookup({ env, maxBuffer: 16_384 });
   return {
     env,
     isExecutable: (candidate) => isDeviceNodeExecutable(candidate, env),
-    loginShellLookup: (shell) => new Promise((resolve) => {
-      execFile(shell, ["-ilc", "command -v node"], {
-        timeout: 5_000, maxBuffer: 16_384, encoding: "utf8", env,
-      }, (error, stdout) => resolve(error ? null : stdout));
-    }),
+    loginShellLookup: (shell) => nodeLookup(shell, "node"),
   };
 }

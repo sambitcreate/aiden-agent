@@ -16,6 +16,8 @@ import {
   isDeviceNodeExecutable,
   deviceNodeEnvironment,
   createNpmRunner,
+  defaultNpmResolutionDeps,
+  defaultDeviceNodeResolutionDeps,
   type NpmRunner,
   type ToolSpec,
 } from "./device-toolchain.js";
@@ -317,5 +319,33 @@ test("the npm runner's PATH has no empty entry", async () => {
     const result = await createNpmRunner(npm, { PATH: "/usr/bin::/bin" })(["--version"], { timeoutMs: 5_000 });
     assert.equal(result.code, 0);
     assert.equal(await readFile(out, "utf8"), `${root}:/usr/bin:/bin`);
+  });
+});
+
+/** A login shell that records its argv, one argument per line, then runs `body`. */
+async function recordingShell(root: string, body: string): Promise<{ shell: string; argv: () => Promise<string[]> }> {
+  const shell = path.join(root, "shell");
+  const out = path.join(root, "argv.txt");
+  await writeFile(shell, `#!/bin/sh\nprintf '%s\\n' "$@" > '${out}'\n${body}\n`);
+  await chmod(shell, 0o755);
+  return { shell, argv: async () => (await readFile(out, "utf8")).split("\n").filter(Boolean) };
+}
+
+test("the npm login-shell lookup runs the shell with -ilc and command -v npm", async () => {
+  await withBaseDir(async (root) => {
+    const { shell, argv } = await recordingShell(root, "printf '/x/npm\\n'");
+    assert.equal(await defaultNpmResolutionDeps.loginShellLookup(shell, "npm"), "/x/npm\n");
+    assert.deepEqual(await argv(), ["-ilc", "command -v npm"]);
+  });
+});
+
+test("the Node login-shell lookup runs command -v node and gives up on more than 16 KiB of output", async () => {
+  await withBaseDir(async (root) => {
+    const { shell, argv } = await recordingShell(root, "printf '/x/node\\n'");
+    const deps = defaultDeviceNodeResolutionDeps({ PATH: "/usr/bin:/bin" });
+    assert.equal(await deps.loginShellLookup(shell, "node"), "/x/node\n");
+    assert.deepEqual(await argv(), ["-ilc", "command -v node"]);
+    const loud = await recordingShell(root, `head -c ${20 * 1024} /dev/zero | tr '\\0' 'a'`);
+    assert.equal(await deps.loginShellLookup(loud.shell, "node"), null);
   });
 });
