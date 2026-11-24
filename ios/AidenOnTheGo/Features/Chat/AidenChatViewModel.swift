@@ -3587,6 +3587,14 @@ final class AidenChatViewModel {
             guard !isRemoved, coordinator.isLive(context), activeStreamID == streamID,
                   snapshotGeneration == approvalSnapshotGeneration,
                   pendingApproval == expectedApproval, streamState == expectedState else { return }
+            if error is URLError {
+                // The Mac never answered, as when the app opens from its Live
+                // Activity before the link is back. The run may still be
+                // waiting, so the card and its state stay for the next
+                // reload to ask again, and the Live Activity reads as old.
+                await liveActivities.markStale(instanceID: instanceId, streamID: streamID)
+                return
+            }
             pendingApproval = nil
             await restorePendingQuestion(
                 streamID: streamID,
@@ -3674,6 +3682,12 @@ final class AidenChatViewModel {
             guard coordinator.isLive(context), activeStreamID == streamID,
                   snapshotGeneration == questionSnapshotGeneration,
                   pendingQuestion == expectedQuestion, streamState == expectedState else { return }
+            if error is URLError {
+                // The Mac never answered; as for an approval, the question
+                // and its state stay for the next reload to ask again.
+                await liveActivities.markStale(instanceID: instanceId, streamID: streamID)
+                return
+            }
             pendingQuestion = nil
             if reconcilesOnNil && pendingApproval == nil {
                 streamState = .reconciling

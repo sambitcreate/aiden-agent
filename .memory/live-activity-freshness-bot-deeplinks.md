@@ -64,3 +64,11 @@ Status (2026-10-01): merged in PR #276 (on main after 0.51.0); plan moved to `do
 - `AidenPendingApproval.alertCanAllow` gates the alert's Approve: a card must offer `.allow` with scope `.once`, since Approve always sends a one-time allow.
 - `mergeIntoSummary` keeps an existing row when a run already on the summary starts again (reattach).
 - `questionAnswered(instanceID:chatID:landed:)` takes a card (single or summary row) out of `.waitingForAnswer` after a notification Reply: "Answered" when it landed, "No longer waiting" when the question was already gone.
+
+## A failed approval read no longer clears the card (2026-11-24)
+
+- Owner report on a Debug build of PR #881 installed on a phone: after tapping the Live Activity, the chat showed no Allow/Deny while the Mac still asked. The Mac's `aiden-remote-streams-v1.json` showed it was a phone-started stream (28 approvals); one waited 2 min 10 s and was answered on the Mac.
+- Cause: the foreground reload calls `restorePendingApproval` before the link to the Mac is back. The read fails with a `URLError`, and the catch cleared `pendingApproval` and moved the stream to `.reconciling`. The reload after reconnecting refreshes only when a card or `.waitingForApproval` is still there, so nothing re-asked, and the waiting run sends no new events.
+- Fix: in `restorePendingApproval` and `restorePendingQuestion`, a `URLError` (the Mac never answered) keeps the card and state and marks the Live Activity stale. An answer from the Mac (`AidenRemoteClientError`) keeps the old clearing behavior.
+- Tests: `AidenChatTests.testAnApprovalStillWaitingComesBackAfterAReadFailsWhileReconnecting` and `testAQuestionStillWaitingComesBackAfterAReadFailsWhileReconnecting`.
+- Debugging tip: the Mac's `~/Library/Application Support/Aiden Agent/logs/aiden.log` records only remote requests that are slow or return 4xx/5xx. Requests that never reach the Mac don't appear there, and `aiden-remote-streams-v1.json` keeps each phone stream's event timeline.

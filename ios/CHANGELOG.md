@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- **2026-11-24 — Allow and Deny stay after opening from the Live Activity.** Opening the app from a run's Live Activity reloads the chat before the phone is back in touch with the Mac. That first check used to fail and clear the approval or question card, and the run showed as reconciling while the Mac still waited. Now a check the Mac never answered keeps the card. The reload after reconnecting asks the Mac again, so Allow, Deny or Reply stay available. No Remote wire or revision change.
+
 - **2026-11-23 — Run alerts settle in more cases.** An answer to a run that already finished, or that the Mac no longer has, counts as done instead of opening the chat. A Mac that revoked this phone drops the answer instead of bringing the notification back. Approve is left off an alert whose approval can't be allowed just once. A run that reconnects keeps its row on the summary card instead of going back to "Starting". After a Reply lands, the Live Activity reads "Answered" instead of "Has a question for you". No Remote wire or revision change.
 
 - **2026-11-22 — A finishing run still alerts after you leave the app.** When the app goes to the background while a run is going, it asks iOS for a little more time (usually about half a minute) and gives it back once the runs end or you return. A run that finishes in that window still posts its alert and its Live Activity reads Done instead of freezing. No Remote wire or revision change.

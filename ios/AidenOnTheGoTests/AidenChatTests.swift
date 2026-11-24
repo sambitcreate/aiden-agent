@@ -2008,6 +2008,51 @@ final class AidenChatTests: XCTestCase {
         XCTAssertNotNil(model.presentedError)
     }
 
+    /// Opening the app from its Live Activity reloads the chat before the
+    /// link to the Mac is back, so the approval read fails. The run is still
+    /// waiting on the Mac, so the reload once the link is back shows its
+    /// Allow and Deny again.
+    @MainActor
+    func testAnApprovalStillWaitingComesBackAfterAReadFailsWhileReconnecting() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root); AidenChatProgressLifecycleURLProtocol.reset() }
+        let cache = AidenChatCache(root: root)
+        let model = try await makeProgressLifecycleModel(mode: .controls, cache: cache)
+        try await cache.saveActiveStream(.init(deviceId: "device-progress-lifecycle", streamId: "stream-control", turnId: "turn-control", lastSequence: 0), instanceId: "instance-progress-lifecycle", chatId: model.chat.id, chatWriteToken: cache.reserveChatWrite())
+        await model.load(observeProgress: false)
+        XCTAssertEqual(model.pendingApproval?.id, "approval-current")
+
+        AidenChatProgressLifecycleURLProtocol.failApprovalReads()
+        await model.reload(observeProgress: false)
+        AidenChatProgressLifecycleURLProtocol.failApprovalReads(false)
+        await model.reload(observeProgress: false)
+
+        XCTAssertEqual(model.pendingApproval?.id, "approval-current")
+        XCTAssertEqual(model.streamState, .waitingForApproval)
+    }
+
+    /// The same reload for a run waiting on a question: a read the Mac never
+    /// answered leaves its Reply for the reload once the link is back.
+    @MainActor
+    func testAQuestionStillWaitingComesBackAfterAReadFailsWhileReconnecting() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root); AidenChatProgressLifecycleURLProtocol.reset() }
+        let cache = AidenChatCache(root: root)
+        let model = try await makeProgressLifecycleModel(mode: .questions, cache: cache)
+        AidenChatProgressLifecycleURLProtocol.resolveApproval()
+        try await cache.saveActiveStream(.init(deviceId: "device-progress-lifecycle", streamId: "stream-control", turnId: "turn-control", lastSequence: 0), instanceId: "instance-progress-lifecycle", chatId: model.chat.id, chatWriteToken: cache.reserveChatWrite())
+        await model.load(observeProgress: false)
+        try await waitUntil { model.pendingQuestion?.id == "question-current" }
+
+        AidenChatProgressLifecycleURLProtocol.failQuestionReads()
+        await model.reload(observeProgress: false)
+        AidenChatProgressLifecycleURLProtocol.failQuestionReads(false)
+        await model.reload(observeProgress: false)
+
+        XCTAssertEqual(model.pendingQuestion?.id, "question-current")
+        XCTAssertEqual(model.streamState, .waitingForApproval)
+    }
+
     @MainActor
     func testFallbackDoesNotCoalesceWithPreResponseApprovalState() async throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
@@ -11860,7 +11905,11 @@ private final class AidenChatProgressLifecycleURLProtocol: URLProtocol, @uncheck
     nonisolated(unsafe) private static var _controlWriteCount = 0
     nonisolated(unsafe) private static var approvalID = "approval-current"
     nonisolated(unsafe) private static var approvalReadFails = false
-    static func failApprovalReads() { lock.withLock { approvalReadFails = true } }
+    /// Approval reads fail as an unreachable Mac's do, until set back.
+    static func failApprovalReads(_ fails: Bool = true) { lock.withLock { approvalReadFails = fails } }
+    nonisolated(unsafe) private static var questionReadFails = false
+    /// Question reads fail as an unreachable Mac's do, until set back.
+    static func failQuestionReads(_ fails: Bool = true) { lock.withLock { questionReadFails = fails } }
     nonisolated(unsafe) private static var _approvalReadCount = 0
     static var approvalReadCount: Int { lock.withLock { _approvalReadCount } }
     static var controlWriteCount: Int { lock.withLock { _controlWriteCount } }
@@ -11978,6 +12027,7 @@ private final class AidenChatProgressLifecycleURLProtocol: URLProtocol, @uncheck
         _postPaths = []
         approvalID = "approval-current"
         approvalReadFails = false
+        questionReadFails = false
         approvalResolved = false
         eventSink = nil
         responseOverride = nil
@@ -12095,6 +12145,10 @@ private final class AidenChatProgressLifecycleURLProtocol: URLProtocol, @uncheck
             }
             result = Self.response(for: request, status: 200, contentType: "text/event-stream", data: Data(": keepalive\n\n".utf8))
         case "/api/aiden/v1/streams/stream-control/question" where Self.lock.withLock({ Self.mode == .questions }):
+            if Self.lock.withLock({ Self.questionReadFails }) {
+                failCurrentRequest(URLError(.networkConnectionLost))
+                return
+            }
             result = Self.response(for: request, status: 200, contentType: "application/json", data: Data("""
                 {"question":{"promptId":"question-current","streamId":"stream-control","chatId":"chat-progress-lifecycle","toolCallId":"tool-question","questions":\(Self.questionList),"expiresAt":"2099-01-01T00:00:00Z"}}
                 """.utf8))
