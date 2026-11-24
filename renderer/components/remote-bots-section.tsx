@@ -71,7 +71,7 @@ export function RemoteBotsSection({
   // The replies a host's Bots had when this Mac first lists them start read.
   // The open Bot's chat records what it shows itself (`RemoteBotChatView`).
   React.useEffect(() => {
-    for (const { host, bots } of groups) markRemoteBotHostListed(host.id, bots.map((bot) => bot.lastReplyAt));
+    for (const { host, bots } of groups) markRemoteBotHostListed(host.id, bots);
   }, [groups]);
   if (groups.length === 0) return null;
   return (
