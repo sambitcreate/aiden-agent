@@ -460,9 +460,15 @@ export function createBotComputerTool(
 
       let connection: BotComputerConnection | undefined;
       let releaseLease: (() => void) | undefined;
+      const releaseNow = () => {
+        const release = releaseLease;
+        releaseLease = undefined;
+        release?.();
+      };
       try {
         releaseLease = await deps.host.acquireLease?.(botId, { signal, onProgress: progress });
         if (deps.control.controller(botId) === "person") {
+          releaseNow();
           return await waitForGiveBack();
         }
         connection = await deps.host.ensureRunning(botId, { reason, signal, onProgress: progress });
@@ -731,8 +737,11 @@ export function createBotComputerTool(
           }
         }
       } catch (error) {
-        // Awaited, so the idle timer below restarts when the call ends, after Give back.
-        if (error instanceof BotComputerTakenOverError) return await waitForGiveBack();
+        // Release the FIFO VM lease before waiting for Give back so other Bots aren't starved behind us.
+        if (error instanceof BotComputerTakenOverError) {
+          releaseNow();
+          return await waitForGiveBack();
+        }
         if (signal?.aborted) throw signal.reason instanceof Error ? signal.reason : error;
         if (error instanceof BotComputerArgumentError || error instanceof BotComputerKeyError) {
           return text(error.message, details, true);
@@ -748,7 +757,7 @@ export function createBotComputerTool(
             : `Aiden couldn't reach ${possessive} computer screen. Try again.`;
         return text(redact(message, connection ? [connection.vnc.password] : []), details, true);
       } finally {
-        releaseLease?.();
+        releaseNow();
         deps.host.touch(botId);
       }
     },

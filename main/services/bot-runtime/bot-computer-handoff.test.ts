@@ -281,3 +281,73 @@ test("Linux open script launches Chromium detached on DISPLAY=:0 with quoted URL
   assert.equal(nonexistent.status, 76);
   assert.throws(() => botComputerStopShellUserScript("bad;user"), /Invalid Linux shell user/u);
 });
+
+test("two Bots sharing one VM keep person sign-in control until both sign-in cards settle", async () => {
+  const control = createBotComputerControl();
+  control.setScopeResolver(
+    (botId) => (botId === "bot:ada" || botId === "bot:ben" ? "shared" : botId),
+    (scope) => (scope === "shared" ? ["bot:ada", "bot:ben"] : []),
+  );
+  const handoffs = createBotHandoffs();
+  const open = createBotComputerHandoffOpener({
+    host: {
+      computer: async (botId) =>
+        ({
+          botId,
+          vmName: "aiden-vm-shared",
+          computerId: "shared",
+          computerName: "Shared computer",
+          shared: true,
+          state: "running",
+          baseBuild: "20261123-2671",
+          outdated: false,
+          controller: control.controller(botId),
+        }),
+      ensureRunning: async () => CONNECTION,
+      runGuestCommand: async () => ok(),
+    },
+    control,
+    handoffs,
+    enabled: () => true,
+  });
+  const askFor = (botId: string, waitId: string) => {
+    const controller = new AbortController();
+    const answer = handoffs
+      .request({
+        botId,
+        waitId,
+        toolCallId: `call-${waitId}`,
+        kind: "sign_in",
+        action: "Sign in to github.com",
+        open: { url: ORIGIN },
+        origin: ORIGIN,
+        target: "computer",
+        source: "tool",
+        signal: controller.signal,
+      })
+      .catch(() => null);
+    return { controller, answer };
+  };
+
+  const adaCard = askFor("bot:ada", "wait-ada");
+  const benCard = askFor("bot:ben", "wait-ben");
+  assert.equal(await open("bot:ada", "wait-ada", ORIGIN), true);
+  assert.equal(await open("bot:ben", "wait-ben", ORIGIN), true);
+  assert.equal(control.controller("bot:ada"), "person");
+  assert.equal(control.controller("bot:ben"), "person");
+
+  // Settling Ada's sign-in card must NOT give back the shared VM while Ben's card is still open.
+  handoffs.answer("bot:ada", "wait-ada", { outcome: "done" });
+  await adaCard.answer;
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(control.controller("bot:ada"), "person");
+  assert.equal(control.controller("bot:ben"), "person");
+  assert.equal(control.takenOverBy("bot:ben"), "sign_in");
+
+  // Settling Ben's card releases the shared VM back to both Bots.
+  handoffs.answer("bot:ben", "wait-ben", { outcome: "done" });
+  await benCard.answer;
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(control.controller("bot:ada"), "bot");
+  assert.equal(control.controller("bot:ben"), "bot");
+});

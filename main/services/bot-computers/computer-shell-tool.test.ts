@@ -259,3 +259,85 @@ test("computer_shell acquires and releases the host FIFO lease around command ex
   assert.equal(textOf(result), "done");
   assert.deepEqual(events, ["acquire:ada", "ensureRunning", "runGuestCommand", "release:ada", "touch"]);
 });
+
+test("waiting for human Give back releases the FIFO lease so unattended Bots time out cleanly, and reassignment cancels the wait", async () => {
+  const control = createBotComputerControl();
+  control.setScopeResolver(
+    (botId) => (botId === "ada" || botId === "ben" ? "shared" : botId),
+    (scope) => (scope === "shared" ? ["ada", "ben"] : []),
+  );
+  // Real single-slot FIFO lease on the shared VM.
+  let active: string | undefined;
+  const waiters: Array<() => void> = [];
+  const acquireLease = async (botId: string) => {
+    if (active !== undefined && active !== botId) {
+      await new Promise<void>((resolve) => waiters.push(resolve));
+    }
+    active = botId;
+    let released = false;
+    return () => {
+      if (released) return;
+      released = true;
+      active = undefined;
+      waiters.shift()?.();
+    };
+  };
+  let ranCommands = 0;
+  const host = {
+    acquireLease,
+    ensureRunning: async () => connection,
+    runGuestCommand: async (_botId: string, _command: string, opts: { signal?: AbortSignal }) => {
+      ranCommands += 1;
+      return await new Promise<BotComputerGuestCommandResult>((_resolve, reject) => {
+        opts.signal?.addEventListener("abort", () => reject(opts.signal?.reason), { once: true });
+      });
+    },
+    touch: () => undefined,
+  };
+  const adaTool = createBotComputerShellTool("ada", { host, control, botName: async () => "Ada" }, { routine: false });
+  const benTool = createBotComputerShellTool(
+    "ben",
+    { host, control, botName: async () => "Ben", unattendedWaitMs: 40 },
+    { routine: true },
+  );
+
+  // Ada starts running, then person takes over mid-command: Ada releases the FIFO lease while waiting.
+  const adaRun = adaTool.execute("ada-1", { command: "sleep 30" }) as Promise<AgentToolResult<null>>;
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(active, "ada");
+  control.takeOver("ada", "viewer");
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(active, undefined, "FIFO lease released before Ada waits for Give back");
+
+  // Unattended Ben calls while Ada is still waiting for Give back: Ben must time out in ~40ms, not hang.
+  // Keep a ref'd timeout on the event loop so waitForBotWithin's unref'd budget timer can fire in isolation.
+  let guard: NodeJS.Timeout | undefined;
+  const benRace = await Promise.race([
+    benTool.execute("ben-1", { command: "echo hi" }) as Promise<AgentToolResult<null>>,
+    new Promise<"hung">((resolve) => {
+      guard = setTimeout(() => resolve("hung"), 2_000);
+    }),
+  ]);
+  clearTimeout(guard);
+  assert.notEqual(benRace, "hung");
+  if (benRace === "hung") return;
+  assert.equal(benRace.isError, true);
+  assert.match(textOf(benRace), /still using Ben's computer/u);
+
+  // Give back lets Ada finish with the takeover message.
+  control.giveBack("ada");
+  const adaResult = await adaRun;
+  assert.equal(adaResult.isError, true);
+  assert.match(textOf(adaResult), /took over the computer/u);
+
+  // Reassigning/forgetting Ada while she waits for Give back rejects the wait and never runs the command.
+  const beforeCalls = ranCommands;
+  control.takeOver("ada", "viewer");
+  const reassignedWait = adaTool.execute("ada-2", { command: "echo must-not-run" }) as Promise<AgentToolResult<null>>;
+  await new Promise((resolve) => setImmediate(resolve));
+  control.forget("ada");
+  const reassignedResult = await reassignedWait;
+  assert.equal(reassignedResult.isError, true);
+  assert.match(textOf(reassignedResult), /changed or removed/u);
+  assert.equal(ranCommands, beforeCalls, "command never ran after reassignment");
+});

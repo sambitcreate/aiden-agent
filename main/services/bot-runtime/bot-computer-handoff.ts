@@ -92,11 +92,18 @@ function heldKey(botId: string, waitId: string): string {
 }
 
 export function createBotComputerHandoffOpener(deps: BotComputerHandoffDeps): BotComputerHandoffOpener {
-  /** The cards whose Open took the computer over. */
-  const held = new Set<string>();
+  /** Open sign-in cards holding each VM (`botId\0waitId` -> VM scope key). */
+  const held = new Map<string, string>();
 
   const release = (botId: string, waitId: string): void => {
-    if (!held.delete(heldKey(botId, waitId))) return;
+    const key = heldKey(botId, waitId);
+    const scopeKey = held.get(key);
+    if (scopeKey === undefined) return;
+    held.delete(key);
+    // Keep the shared VM with the person while another open sign-in card still holds it.
+    for (const activeScope of held.values()) {
+      if (activeScope === scopeKey) return;
+    }
     if (deps.control.controller(botId) === "person" && deps.control.takenOverBy(botId) === "sign_in") {
       deps.control.giveBack(botId);
     }
@@ -118,8 +125,11 @@ export function createBotComputerHandoffOpener(deps: BotComputerHandoffDeps): Bo
 
   return async (botId, waitId, url) => {
     if (!deps.enabled() || deps.handoffs.get(botId, waitId) === undefined) return false;
+    let scopeKey: string;
     try {
-      if ((await deps.host.computer(botId)) === undefined) return false;
+      const computer = await deps.host.computer(botId);
+      if (computer === undefined) return false;
+      scopeKey = computer.computerId ?? computer.vmName ?? botId;
       await deps.host.ensureRunning(botId, { reason: "viewer" });
     } catch (error) {
       deps.onError?.(error);
@@ -127,7 +137,11 @@ export function createBotComputerHandoffOpener(deps: BotComputerHandoffDeps): Bo
     }
     if (deps.control.controller(botId) !== "person") {
       deps.control.takeOver(botId, "sign_in");
-      held.add(heldKey(botId, waitId));
+      held.set(heldKey(botId, waitId), scopeKey);
+    } else if (deps.control.takenOverBy(botId) === "sign_in") {
+      // Another sign-in card already holds this shared VM; track this card too so
+      // settling the first card never returns the VM while the person finishes this one.
+      held.set(heldKey(botId, waitId), scopeKey);
     }
     try {
       await run(botId, guestDriverSuspendScript(), "stop its screen helper");

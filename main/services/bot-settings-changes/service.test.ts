@@ -367,6 +367,13 @@ test("update_bot computer selection always waits for the person to apply, while 
   );
   assert.equal(entries.length, 0);
 
+  // { kind: "existing", computerId: "shared" } normalizes to { kind: "shared" } and is a no-op when already on shared.
+  assert.match(
+    await service.call(BOT, { computer: { kind: "existing", computerId: "shared" } }, { owner: true }),
+    /Nothing changed/u,
+  );
+  assert.equal(entries.length, 0);
+
   // Requesting a new dedicated Linux VM is ALWAYS held (widens), even in an owner-started clean chat.
   const heldText = await service.call(BOT, { computer: { kind: "new", name: "Research Linux" } }, { owner: true });
   assert.match(heldText, /waits for them to apply it/u);

@@ -11,6 +11,7 @@
 
 import {
   BOT_COMPUTER_SHARED_DEFAULT_NAME,
+  BOT_COMPUTER_SHARED_ID,
   parseBotComputerAssignTarget,
   type BotComputerAssignTarget,
 } from "./bot-computers.js";
@@ -384,7 +385,11 @@ export function parseBotSettingsArgs(raw: unknown, current: BotSettingsValues): 
       patch.computer = { kind: "new" };
     } else {
       try {
-        patch.computer = parseBotComputerAssignTarget(raw.computer);
+        const parsed = parseBotComputerAssignTarget(raw.computer);
+        patch.computer =
+          parsed.kind === "existing" && parsed.computerId === BOT_COMPUTER_SHARED_ID
+            ? { kind: "shared" }
+            : parsed;
       } catch {
         return {
           ok: false,
