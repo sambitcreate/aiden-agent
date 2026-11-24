@@ -45,8 +45,7 @@ async function selectVisionModel(
   model: LiveModel,
 ): Promise<void> {
   await page.getByRole("button", { name: /^Selected model:/u }).click();
-  const listTab = page.getByRole("tab", { name: "List" });
-  if (await listTab.count()) await listTab.click();
+  await page.getByRole("button", { name: /^Other models…/u }).click();
   await page
     .getByRole("listbox", { name: "Suggestions" })
     .getByRole("option")

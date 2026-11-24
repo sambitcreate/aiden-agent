@@ -7,11 +7,6 @@ import { ModelRuntime, VERSION } from "@earendil-works/pi-coding-agent";
 import { concentrateProvider } from "../../../main/services/concentrate-provider.js";
 import { withPiRemoteCatalog, isPiRemoteCatalogProvider } from "../../../main/services/pi-remote-catalog.js";
 import { fetchModelsDevCatalog, parseModelsDevCacheDocument } from "../../../main/services/models-dev-cache-core.js";
-import { fetchArtificialAnalysisUserCache } from "../../../main/services/artificial-analysis-runtime-core.js";
-import { fetchOpenRouterBenchmarkCache } from "../../../main/services/openrouter-benchmark-runtime-core.js";
-import { parseArtificialAnalysisUserCache } from "../../../main/services/artificial-analysis-catalog-core.js";
-import { parseOpenRouterBenchmarkCache } from "../../../main/services/openrouter-benchmark-catalog-core.js";
-import { insightCredentials } from "./credentials.ts";
 import { atomicJson, readJson, JsonStore } from "./state.ts";
 import { rmSync } from "node:fs";
 import { randomUUID } from "node:crypto";
@@ -58,25 +53,6 @@ export async function catalogCommand(agentDir: string, args: string[]) {
   }
   if (args.join(" ") === "models-dev status") return readJson(join(agentDir, "models-dev.json"), null);
   throw new Error("Usage: catalog refresh | models-dev fetch | models-dev status");
-}
-
-export async function insightsCommand(agentDir: string, args: string[]) {
-  const [source, action = "show"] = args;
-  if (source !== "aa" && source !== "openrouter") throw new Error("Usage: insights <aa|openrouter> <show|fetch|disconnect>");
-  const file = join(agentDir, `${source}-insights.json`);
-  if (action === "show") {
-    const value = readJson(file, null);
-    return value ? (source === "openrouter" ? parseOpenRouterBenchmarkCache(value) : parseArtificialAnalysisUserCache(value)) : null;
-  }
-  if (action === "disconnect") { await insightCredentials(agentDir).delete(source); atomicJson(file, null); return { disconnected: source }; }
-  if (action !== "fetch" && action !== "connect") throw new Error("Expected show, fetch, or disconnect.");
-  // Dedicated benchmark key only; never fall back to OPENROUTER_API_KEY.
-  const key = process.env[source === "aa" ? "AIDEN_AA_KEY" : "AIDEN_OPENROUTER_BENCHMARK_KEY"]?.trim() ?? (action === "fetch" ? await insightCredentials(agentDir).read(source) : undefined);
-  if (!key) throw new Error(`Set ${source === "aa" ? "AIDEN_AA_KEY" : "AIDEN_OPENROUTER_BENCHMARK_KEY"} for this manual fetch.`);
-  const value = source === "aa" ? await fetchArtificialAnalysisUserCache(key) : await fetchOpenRouterBenchmarkCache(key);
-  if (action === "connect") await insightCredentials(agentDir).write(source, key);
-  atomicJson(file, value);
-  return value;
 }
 
 /** Main-owned provider inventory. Remote projections remove endpoints and credentials. */
