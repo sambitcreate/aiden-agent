@@ -1,6 +1,6 @@
 # Design mode v2: the live app canvas
 
-Status: approved by the owner, 2026-11-23. Pre-build checks recorded in §11, and the PR split revised in §8. Phase 1a is in progress; its plan is [`2026-11-23-design-mode-v2-p1a-workspace-canvas.md`](../plans/2026-11-23-design-mode-v2-p1a-workspace-canvas.md). Builds on [Design mode v1](2026-10-31-design-mode-design.md) (P0–P5 shipped, on by default). Project memory: `.memory/design-mode.md`.
+Status: approved by the owner, 2026-11-23. Pre-build checks recorded in §11, and the PR split revised in §8. Phase 1a is in progress; its plan is [`2026-11-23-design-mode-v2-p1a-workspace-canvas.md`](../plans/2026-11-23-design-mode-v2-p1a-workspace-canvas.md). Phase 2a (app detection) is built from [`2026-11-24-design-mode-v2-p2a-app-detection.md`](../plans/2026-11-24-design-mode-v2-p2a-app-detection.md); its decisions are S19–S24. Builds on [Design mode v1](2026-10-31-design-mode-design.md) (P0–P5 shipped, on by default). Project memory: `.memory/design-mode.md`.
 
 ## 1. Intent
 
@@ -55,7 +55,7 @@ Standing preferences that apply: pre-1.0 means no migrations (delete old shapes)
 
 - Electron 43, default session, main window `sandbox: true`, `contextIsolation`, no `webviewTag`. The main-window CSP `frame-src` today is `'self' aiden-genui: aiden-design:` (`main-window.html:8`).
 - No `defaultSession.webRequest` handlers exist yet. Electron allows one listener per event per session, so the new filter must own each event through one dispatcher.
-- Aiden does not bundle Node. Agent commands use the user's PATH with no login-shell lookup today. `devices/device-toolchain.ts` already resolves `npm`/`node` through `$SHELL -ilc` and rejects the Electron binary.
+- Aiden does not bundle Node. Agent commands use the user's PATH with no login-shell lookup today. `main/services/node-toolchain.ts` (lifted out of `devices/device-toolchain.ts` in 2a, S24) resolves `node` and the package managers through `$SHELL -ilc` and rejects the Electron binary.
 - `backgroundJobs` (`main/services/follow-through/background-jobs.ts`) already supervises long-running processes: process groups, logs, port polling via lsof or `/proc`, crash reaping, and teardown on quit, chat delete and workspace removal. `hostPlatformCapabilities().backgroundJobs` is true on darwin and linux.
 - AGENTS.md:
   - New analytics events go in the registry, with a docs row and a test.
@@ -608,3 +608,25 @@ Phase 1b (chat pages, plan `docs/superpowers/plans/2026-11-23-design-mode-v2-p1b
 - **S16. Entry takes the free page on screen (1b).** Entry doesn't always add a page named after the chat. It keeps a live claim; else it takes the page holding most of the chat's earlier pages; else it takes the page on screen as it is (no rename, no `namedFor`) when no other live chat claims it, it isn't another live chat's named page, and it is empty or no other chat's kept view is on it. Only otherwise does it add a page named after the chat. So the first chat on a fresh canvas keeps Page 1.
 - **S17. A moved chat's empty named page goes (1b).** Moving an empty chat drops its claim, its `namedFor` marks and its artifact frames, and deletes the page made for it when that page holds no frames or comments, no other chat uses it, and it isn't the only page. §6.1's "just drops its entry" is replaced. The same applies when a chat attaches from a shared legacy No workspace canvas that stays behind.
 - **S18. The view comes before the claim when placing (1b).** A placement with no page lands on the page Aiden showed this turn, then the message's page, then the chat's kept view page, then its claim, then the first page; the renderer shows the view page, then the claim. So Aiden works on the page the person is looking at, not always on the claimed page as §6.5 "Where Aiden's work lands" says. §6.5 is to be revisited in 3b, when app frames and the rewritten prompt land.
+
+### Phase 2a amendments (2026-11-24)
+
+Phase 2a (app detection, plan `docs/superpowers/plans/2026-11-24-design-mode-v2-p2a-app-detection.md`) built §6.2.1's detection and §6.2.2's toolchain lookup. These win over §6.2 and §6.8 where they disagree. Nothing calls the new modules until 2b.
+
+- **S19. Launch environment in 2b.** The dev-server command environment (`agentShellCommandEnvironment()`, `BROWSER`, `FORCE_COLOR`, `PORT`, S14's host flags) lands in 2b with the process, through `nodeCommandEnvironment(env, binDirs)` and `runScriptCommand(info, script, extraArgs)`. 2b always sets `COREPACK_ENABLE_DOWNLOAD_PROMPT=0`. There's no corepack fallback for a missing manager. Only npm gets `--` before extra arguments: pnpm 12 and Yarn 4 pass a bare `--` through to the script (checked 2026-11-24).
+- **S20. Package manager rules.**
+  - The `packageManager` field decides only with no lockfile or its own; otherwise it's a conflict.
+  - A conflict is settled only by a single manager's install marker in `node_modules`; otherwise 2b refuses with a message saying how to fix it.
+  - `pnpm-workspace.yaml` means pnpm.
+  - Deno is unsupported.
+  - An enclosing repo's signal counts when the workspace has none of its own and no `.git`. The walk stops at `.git`, home, a caller's `stopAt` and five levels.
+- **S21. Kinds and scripts.**
+  - Desktop shells (Electron, Tauri) are never `web`.
+  - The dev script prefers the framework's dev command and skips builds, production runs, Storybook and workspace runners.
+  - New reasons: `workspace-runner` and `unknown-framework`. 3d never scaffolds for either.
+  - `no-dev-script` is only for a framework app with no dev/start/serve script and no Storybook.
+  - React Native or Expo is `react-nonweb`.
+  - "React Router v7 framework mode" means `@react-router/dev`.
+- **S22. Frameworks.** The allowlist gains Angular, Nuxt, `@tanstack/start` and Remix 3 (`remix` at major 3 or later; dev command `node --watch`, default port 44100, from the `remix@3.3.0` starter). They run as live frames; source mapping and component cards stay React-only.
+- **S23. `detectWebApp` lives in `app-detect.ts`.** §6.2.1 put it in `app-server-core.ts`. It reads the disk with bounded, no-follow reads; `app-server-core.ts` stays pure.
+- **S24. Device PATH fix.** The device helpers (`deviceNodeEnvironment`, `androidSdkEnv`, `createNpmRunner`) no longer put an empty entry on PATH. Node and package-manager lookup moved to `main/services/node-toolchain.ts`, shared by devices and design mode; the device exports are unchanged.

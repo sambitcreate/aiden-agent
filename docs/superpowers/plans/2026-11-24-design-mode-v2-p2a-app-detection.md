@@ -164,7 +164,7 @@ Patterns that are absolute or contain a `..` segment are dropped. Other forms (b
 | `next` | `next` | Next.js | 3000 | `next dev` |
 | `@react-router/dev` | `react-router` | React Router | 5173 | `react-router dev` |
 | `@remix-run/dev` | `remix` | Remix | 5173 | `remix vite:dev`, `remix dev` |
-| `remix` at major 3 or later | `remix-3` | Remix | check | check |
+| `remix` at major 3 or later | `remix-3` | Remix | 44100 | `node --watch` |
 | `@tanstack/react-start` | `tanstack-start` | TanStack Start | 3000 | `vite`, `vinxi dev` |
 | `@tanstack/start` | `tanstack-start` | TanStack Start | 3000 | `vinxi dev`, `vite` |
 | `nuxt` | `nuxt` | Nuxt | 3000 | `nuxt dev`, `nuxi dev` |
@@ -177,7 +177,7 @@ Patterns that are absolute or contain a `..` segment are dropped. Other forms (b
 
 Notes:
 - "React Router v7 framework mode" in the spec is read as `@react-router/dev`. A plain `react-router` dependency is library mode inside some other framework, usually Vite, and matches that framework instead.
-- The `remix` package's major version comes from its range (`^3`, `3.x`, `~3.0.0`, `>=3`). Below 3 it is the old v1 meta package and is ignored. Task 3 confirms Remix 3's dev command and default port from its docs. If Remix 3 has no stable dev command yet, the row is dropped and S22 says so.
+- The `remix` package's major version comes from its range (`^3`, `3.x`, `~3.0.0`, `>=3`). Below 3 it is the old v1 meta package and is ignored. Task 3 checked `remix@3.3.0` (npm `latest`): the starter in `@remix-run/cli` runs `NODE_ENV=development node --watch --import remix/node-tsx server.ts`, and `server.ts` listens on `PORT` or 44100.
 - `vite` as a dev command means the word `vite` (also `npx vite`, `vite dev`, `vite serve`) not followed by `build`, `preview` or `optimize`.
 - The label and default port feed 2c's chip ("Vite · :5173") and its port suggestion. Task 3 checks each port against the framework's current docs and corrects the table if one is wrong.
 - Non-React frameworks (Angular, Nuxt, Remix 3, and Vue or Svelte apps through `vite`) run as live frames. Source mapping and component cards stay React-only (§3 non-goals).
@@ -273,6 +273,7 @@ interface PackageManagerInfo {
   lockfile?: string;                        // the file R5 chose, e.g. "pnpm-lock.yaml"
   lockfileLevelsUp: number;                 // 0 inside the workspace; ≥ 1 for an enclosing signal
   conflict?: PackageManagerName[];          // R5 steps 2, 4 (kept after a step-5 tie-break)
+  field?: PackageManagerName;               // the packageManager field's manager, on a step-2 conflict (added in Task 6)
   unsupported?: "deno";                     // R5 step 7
   yarn?: "classic" | "berry";
 }
@@ -342,7 +343,7 @@ The design callers pass a shared `ExecutableCache` to `resolveExecutable` (B-M3)
 
 Rules:
 - "With a lockfile" means the R5 lockfile, including an enclosing one, since the manager runs from the member folder and finds it. `workspace-file` without a lockfile is "without".
-- Only npm needs `--` to pass arguments to the script. Task 4 checks the pass-through of each other manager against its docs and adds `--` where one needs it.
+- Only npm needs `--` to pass arguments to the script. Task 4 ran each manager against a script printing its argv: npm 10.9.9 needs `--`; pnpm 12.15.0 and Yarn 4.19.0 pass a bare `--` through to the script; Yarn 1.22.22 and bun 1.3.11 forward arguments with or without it.
 - Both builders throw for a `null` manager, an unsafe script name, or an extra argument with a control character.
 - 2b runs the result through `backgroundJobs` with the resolved binary path in place of the bare name.
 
@@ -388,11 +389,11 @@ It also re-exports `prependPathEntries` for `local-device-host.ts`.
 - `installCommand(info)`, `runScriptCommand(info, script, extraArgs?: string[])` → `{ command: PackageManagerName; args: string[] }` (R10).
 
 `main/services/design-canvas/app-server/app-detect.ts`:
-- `readBounded(filePath, cap): Promise<string | null>` (Global Constraints);
+- `readBounded(filePath, cap, options?: { head?: boolean }): Promise<string | null>` (Global Constraints; `head` returns the first `cap` bytes of a longer file, for the `yarn.lock` head);
 - `detectWebApp(root: string, options?: { stopAt?: string; homeDir?: string }): Promise<WebAppDetection>`.
 
 `main/services/design-canvas/app-server/app-toolchain.ts`:
-- `type ToolchainProblem = { problem: "node-missing" } | { problem: "manager-missing"; manager: PackageManagerName } | { problem: "manager-conflict"; conflict: PackageManagerName[] } | { problem: "unsupported-manager"; manager: "deno" }`;
+- `type ToolchainProblem = { problem: "node-missing" } | { problem: "manager-missing"; manager: PackageManagerName } | { problem: "manager-conflict"; conflict: PackageManagerName[]; field?: PackageManagerName } | { problem: "unsupported-manager"; manager: "deno" }`;
 - `resolveAppToolchain(app: Pick<DetectedApp, "packageManager">, deps: { node: ExecutableResolutionDeps; manager: ExecutableResolutionDeps }): Promise<{ ok: true; node: string; manager: { name: PackageManagerName; path: string } } | ({ ok: false } & ToolchainProblem)>`;
 - `defaultAppToolchainDeps(env?)`: both resolvers share one module-level `createExecutableCache()`, and use `loginShellCommandLookup({ env, maxBuffer: 16_384 })`;
 - `toolchainProblemMessage(problem: ToolchainProblem): string`.
@@ -401,7 +402,7 @@ It also re-exports `prependPathEntries` for `local-device-host.ts`.
 
 ### Task 0: Baseline
 
-- [ ] Run `npm run test:devices` and note the pass count. Run `npx tsx --test main/services/devices/device-toolchain.test.ts main/services/devices/local-device-host.test.ts main/services/devices/android-device-features.test.ts` on its own. All must pass before any change.
+- [x] Run `npm run test:devices` and note the pass count. Run `npx tsx --test main/services/devices/device-toolchain.test.ts main/services/devices/local-device-host.test.ts main/services/devices/android-device-features.test.ts` on its own. All must pass before any change.
 
 ### Task 1: Device helpers stop putting an empty entry on PATH
 
@@ -409,17 +410,17 @@ It also re-exports `prependPathEntries` for `local-device-host.ts`.
 - Modify: `main/services/devices/device-toolchain.ts` (`prependPathEntries`, `deviceNodeEnvironment`, `createNpmRunner`), `main/services/devices/local-device-host.ts` (`androidSdkEnv`)
 - Test: extend `main/services/devices/device-toolchain.test.ts` (the environment test at `:294-301`) and `main/services/devices/local-device-host.test.ts` (a new test after the SDK tests at `:769` and `:800`)
 
-- [ ] **Step 1: Write failing tests:**
+- [x] **Step 1: Write failing tests:**
   - in `device-toolchain.test.ts`, next to the existing environment test, `the device environment never puts an empty entry on PATH`, with three cases:
     - PATH unset gives exactly `/opt/node/bin`;
     - PATH `""` gives exactly `/opt/node/bin`;
     - PATH `/usr/bin::/bin` gives `/opt/node/bin:/usr/bin:/bin`;
   - in `device-toolchain.test.ts`, `the npm runner's PATH has no empty entry`. Run `createNpmRunner` against a temp-folder `npm` script that prints `$PATH` to a file, with `PATH: "/usr/bin::/bin"`;
   - in `local-device-host.test.ts`, `the Android SDK environment puts the SDK tools first and never adds an empty PATH entry`. `androidSdkEnv` with PATH unset, `""` and `/usr/bin::/bin`, with and without `javaHome`, and `root: null` returning the env unchanged.
-- [ ] **Step 2:** Run `npx tsx --test main/services/devices/device-toolchain.test.ts main/services/devices/local-device-host.test.ts`. Expected: the new cases FAIL, and every existing case passes.
-- [ ] **Step 3: Implement** `prependPathEntries(dirs, pathValue)` in `device-toolchain.ts` and use it in all three places. Use `path.delimiter`, which is `:` on darwin and linux, as today. `androidSdkEnv` imports it from `./device-toolchain.js` (already an import of that file).
-- [ ] **Step 4:** Rerun both files and `npm run test:devices`. Expected: PASS, Task 0's count plus the new cases. Run `npx tsc --noEmit -p .` and `npm run test:ci-policy`.
-- [ ] **Step 5:** Commit `fix(devices): never put an empty entry on a helper's PATH`.
+- [x] **Step 2:** Run `npx tsx --test main/services/devices/device-toolchain.test.ts main/services/devices/local-device-host.test.ts`. Expected: the new cases FAIL, and every existing case passes.
+- [x] **Step 3: Implement** `prependPathEntries(dirs, pathValue)` in `device-toolchain.ts` and use it in all three places. Use `path.delimiter`, which is `:` on darwin and linux, as today. `androidSdkEnv` imports it from `./device-toolchain.js` (already an import of that file).
+- [x] **Step 4:** Rerun both files and `npm run test:devices`. Expected: PASS, Task 0's count plus the new cases. Run `npx tsc --noEmit -p .` and `npm run test:ci-policy`.
+- [x] **Step 5:** Commit `fix(devices): never put an empty entry on a helper's PATH`.
 
 ### Task 2: Lift the Node toolchain out of the device toolchain
 
@@ -430,12 +431,12 @@ It also re-exports `prependPathEntries` for `local-device-host.ts`.
 - Register: `node-toolchain.test.ts` in `test:devices` (next to `device-toolchain.test.ts`) and in the `runtime-subagents` lane of `scripts/ci-test-registry.json`
 - Not modified: `local-device-host.ts`, `main/handlers/devices.ts`, `device-tool-maintenance.ts`, `scripts/devices-acceptance.mjs`
 
-- [ ] **Step 1a: Guards first** (in `device-toolchain.test.ts`; they must pass on the old code):
+- [x] **Step 1a: Guards first** (in `device-toolchain.test.ts`; they must pass on the old code):
   - `the npm login-shell lookup runs the shell with -ilc and command -v npm` **(guard)**. Call the real `defaultNpmResolutionDeps.loginShellLookup(shell)` against a temp-folder shell script that writes `"$@"` to a file and prints `/x/npm`. Assert the argv is exactly `["-ilc", "command -v npm"]` and the output comes back;
   - `the Node login-shell lookup runs command -v node and gives up on more than 16 KiB of output` **(guard)**. Call the real `defaultDeviceNodeResolutionDeps(env).loginShellLookup(shell)`: the argv is `["-ilc", "command -v node"]`, and a shell printing 20 KiB gives `null`.
 
   Run the file. Expected: PASS before any change.
-- [ ] **Step 1b: Write failing tests** in `node-toolchain.test.ts`:
+- [x] **Step 1b: Write failing tests** in `node-toolchain.test.ts`:
   - `resolveExecutable finds pnpm on PATH, then through the login shell, then in Homebrew, and passes the command to the lookup`. The fake lookup records `(shell, command)` and returns a banner line before the path. Assert the order, that the lookup sees `"pnpm"`, and that relative PATH entries are skipped;
   - `the login-shell lookup runs the shell with -ilc and command -v for the asked command`. A temp-folder shell script records its argv: exactly `["-ilc", "command -v bun"]`;
   - `the login-shell lookup refuses a command outside the fixed set without starting the shell`. Call it with `"npm; touch x"` cast to `ToolCommand`, against a temp shell script that would create a marker. It resolves `null`, and the marker doesn't exist;
@@ -448,8 +449,8 @@ It also re-exports `prependPathEntries` for `local-device-host.ts`.
   - `isStandaloneNodeExecutable takes the minimum major version`. A temp script printing `{"node":"20.19.0","electron":false}` passes at `minMajor: 20` and fails at 22;
   - `isStandaloneNodeExecutable rejects the app binary and its links without running it` (the device test's setup, through the new function; **(guard)** for the move);
   - `nodeCommandEnvironment puts every bin folder first, in order, with no empty PATH entry, and clears Electron mode`. Two bin folders; PATH unset, `""` and `/usr/bin::/bin`; the input object is unchanged.
-- [ ] **Step 2:** Run `npx tsx --test main/services/node-toolchain.test.ts`. Expected: FAIL (module missing).
-- [ ] **Step 3: Implement.**
+- [x] **Step 2:** Run `npx tsx --test main/services/node-toolchain.test.ts`. Expected: FAIL (module missing).
+- [x] **Step 3: Implement.**
   - Create `node-toolchain.ts` with everything under Interfaces. Move `resolveExecutable` and `prependPathEntries` there; `resolveExecutable` gains the `cache` path.
   - In `device-toolchain.ts`, keep each export:
     - `resolveNpm(deps)` = `resolveExecutable("npm", deps)`;
@@ -461,12 +462,12 @@ It also re-exports `prependPathEntries` for `local-device-host.ts`.
     - `export { prependPathEntries } from "../node-toolchain.js"`.
   - Update the file's header comment to say where resolution now lives.
   - Register the test file.
-- [ ] **Step 4:** Rerun the new file. Then run, with no edits to existing cases:
+- [x] **Step 4:** Rerun the new file. Then run, with no edits to existing cases:
   - `npx tsx --test main/services/devices/device-toolchain.test.ts main/services/devices/local-device-host.test.ts main/services/devices/android-device-features.test.ts main/services/devices/device-tool-maintenance.test.ts renderer/components/settings/simulator-settings.test.tsx`;
   - `npm run test:devices`, with Task 1's count plus the new tests.
 
   Run `npx tsc --noEmit -p .` and `npm run test:ci-policy`. Expected: PASS.
-- [ ] **Step 5:** Commit `refactor(devices): shared node-toolchain for Node and package-manager lookup`.
+- [x] **Step 5:** Commit `refactor(devices): shared node-toolchain for Node and package-manager lookup`.
 
 ### Task 3: Framework, dev script and kind (pure)
 
@@ -474,7 +475,7 @@ It also re-exports `prependPathEntries` for `local-device-host.ts`.
 - Create: `main/services/design-canvas/app-server/app-server-core.ts`, `main/services/design-canvas/app-server/app-server-core.test.ts`
 - Register: `app-server-core.test.ts` in `test:design-mode` and in the `core-git` lane (where the other `design-canvas` tests are)
 
-- [ ] **Step 1: Write failing tests** (package objects in, results out):
+- [x] **Step 1: Write failing tests** (package objects in, results out):
   - **frameworks:**
     - `each framework is found from dependencies or devDependencies, and peerDependencies are ignored`, one row per R2 entry, including Angular's two packages, Nuxt and `@tanstack/start`;
     - `a framework app that also lists vite is that framework, not vite` (React Router, Remix, TanStack Start and TanStack Router, each with `vite`);
@@ -523,17 +524,17 @@ It also re-exports `prependPathEntries` for `local-device-host.ts`.
     - `a vite Vue app is web and does not use React`;
     - `an Angular app is web`, and `a Nuxt app is web`;
   - `parsePackageJson strips a BOM and returns null for arrays, strings and broken JSON`.
-- [ ] **Step 2:** Run `npx tsx --test main/services/design-canvas/app-server/app-server-core.test.ts`. Expected: FAIL.
-- [ ] **Step 3:** Implement R2–R4. Check each default port and dev command in R2 against the framework's current docs, Remix 3 included, and fix the table here and in this plan if one is wrong. Register the test file.
-- [ ] **Step 4:** Rerun. Run `npx tsc --noEmit -p .` and `npm run test:ci-policy`. Expected: PASS.
-- [ ] **Step 5:** Commit `feat(design): pure web-app classification for design mode`.
+- [x] **Step 2:** Run `npx tsx --test main/services/design-canvas/app-server/app-server-core.test.ts`. Expected: FAIL.
+- [x] **Step 3:** Implement R2–R4. Check each default port and dev command in R2 against the framework's current docs, Remix 3 included, and fix the table here and in this plan if one is wrong. Register the test file.
+- [x] **Step 4:** Rerun. Run `npx tsc --noEmit -p .` and `npm run test:ci-policy`. Expected: PASS.
+- [x] **Step 5:** Commit `feat(design): pure web-app classification for design mode`.
 
 ### Task 4: Package managers, lockfiles and commands (pure)
 
 **Files:**
 - Modify: `app-server-core.ts`, `app-server-core.test.ts`
 
-- [ ] **Step 1: Write failing tests** (`decidePackageManager` and helpers with plain inputs):
+- [x] **Step 1: Write failing tests** (`decidePackageManager` and helpers with plain inputs):
   - `each lockfile name maps to its manager, and two files of one manager are not a conflict`;
   - `the packageManager field decides when there's no lockfile or only its own`. Field `pnpm@9.15.0+sha512.abc` with no lockfile; then with `pnpm-lock.yaml`;
   - `a packageManager field that disagrees with the lockfile is a conflict naming both`. Field pnpm with `package-lock.json`: `name: null`, `conflict: ["npm", "pnpm"]`;
@@ -551,10 +552,10 @@ It also re-exports `prependPathEntries` for `local-device-host.ts`.
   - `runScriptCommand refuses an unsafe name, a null manager, or an extra argument with a control character`;
   - `workspacePatterns reads package.json workspaces in both shapes and pnpm-workspace.yaml packages, splits out ! patterns, and drops absolute and .. patterns`;
   - `matchesWorkspacePattern handles exact paths, one-level stars, a star inside a segment and ** as one level, and ignores braces`.
-- [ ] **Step 2:** Run the file. Expected: FAIL.
-- [ ] **Step 3:** Implement R5 (without disk access), R10 and the pattern helpers from R1. Check how pnpm, yarn classic, yarn berry and bun pass arguments after `run <script>`, using each manager's docs, and set the table to match.
-- [ ] **Step 4:** Rerun. Run `npx tsc --noEmit -p .`. Expected: PASS.
-- [ ] **Step 5:** Commit `feat(design): package-manager and lockfile rules for design mode`.
+- [x] **Step 2:** Run the file. Expected: FAIL.
+- [x] **Step 3:** Implement R5 (without disk access), R10 and the pattern helpers from R1. Check how pnpm, yarn classic, yarn berry and bun pass arguments after `run <script>`, using each manager's docs, and set the table to match.
+- [x] **Step 4:** Rerun. Run `npx tsc --noEmit -p .`. Expected: PASS.
+- [x] **Step 5:** Commit `feat(design): package-manager and lockfile rules for design mode`.
 
 ### Task 5: `detectWebApp` on the disk, and `designTarget`
 
@@ -568,7 +569,7 @@ The test file has a small `writeTree(base, { "package.json": {...}, "apps/web/pa
 - it makes `node_modules` folders, and makes symlinks from a `{ symlink: target }` value;
 - it lives in the test file. 3b can move it into a shared helper when `discoverRoutes` needs it.
 
-- [ ] **Step 1: Write failing tests.** Each test runs in its own `mkdtemp` folder, removed afterwards, with `stopAt` and `homeDir` set to the temp base.
+- [x] **Step 1: Write failing tests.** Each test runs in its own `mkdtemp` folder, removed afterwards, with `stopAt` and `homeDir` set to the temp base.
   - **Basic shapes:**
     - `a single Vite React app at the root is the one web app and counts as installed`. `designTarget` is `single`;
     - `the design-live-app fixture shape counts as installed through a symlinked node_modules`. Vite + React, no lockfile, `node_modules` a symlink to another temp folder: `web`, npm with source `none`, `installed: true`;
@@ -608,8 +609,8 @@ The test file has a small `writeTree(base, { "package.json": {...}, "apps/web/pa
     - a `package.json` with `scripts` as an array;
     - one with `dev: null`.
   - In `app-server-core.test.ts`, `designTarget gives single, choose, react-nonweb or none` from hand-built detections. Include `react-nonweb` next to one `web` (which gives `single`), and a `none` target that keeps `workspace-runner` and `unknown-framework` candidates.
-- [ ] **Step 2:** Run `npx tsx --test main/services/design-canvas/app-server/app-detect.test.ts main/services/design-canvas/app-server/app-server-core.test.ts`. Expected: FAIL.
-- [ ] **Step 3: Implement** `readBounded` and `detectWebApp`:
+- [x] **Step 2:** Run `npx tsx --test main/services/design-canvas/app-server/app-detect.test.ts main/services/design-canvas/app-server/app-server-core.test.ts`. Expected: FAIL.
+- [x] **Step 3: Implement** `readBounded` and `detectWebApp`:
   - read the root `package.json` and `pnpm-workspace.yaml` through `readBounded`;
   - `lstat` `apps/`, `packages/` and each pattern's parent folders; list real folders with `readdir({ withFileTypes: true })`, skipping symlinks, dot names and `node_modules`, at most 200 entries per folder, sorted by name before the cap;
   - for each candidate:
@@ -621,8 +622,8 @@ The test file has a small `writeTree(base, { "package.json": {...}, "apps/web/pa
   - feed the core.
 
   Catch every per-file error and turn it into a reason. Register the test file.
-- [ ] **Step 4:** Rerun. Run `npx tsc --noEmit -p .` and `npm run test:ci-policy`. Expected: PASS.
-- [ ] **Step 5:** Commit `feat(design): detectWebApp finds a workspace's web apps`.
+- [x] **Step 4:** Rerun. Run `npx tsc --noEmit -p .` and `npm run test:ci-policy`. Expected: PASS.
+- [x] **Step 5:** Commit `feat(design): detectWebApp finds a workspace's web apps`.
 
 ### Task 6: Missing Node or package manager
 
@@ -630,7 +631,7 @@ The test file has a small `writeTree(base, { "package.json": {...}, "apps/web/pa
 - Create: `main/services/design-canvas/app-server/app-toolchain.ts`, `main/services/design-canvas/app-server/app-toolchain.test.ts`
 - Register: `app-toolchain.test.ts` in `test:design-mode` and the `core-git` lane
 
-- [ ] **Step 1: Write failing tests** (fake resolution deps, plus temp-folder cases):
+- [x] **Step 1: Write failing tests** (fake resolution deps, plus temp-folder cases):
   - `with Node and pnpm found, the toolchain gives both paths`;
   - `npm next to the resolved Node wins over another npm on PATH`. Node at `/a/bin/node` with `/a/bin/npm` executable, and `/usr/bin/npm` on PATH: `/a/bin/npm`;
   - `without a usable Node the problem is node-missing, even when the manager exists`;
@@ -639,10 +640,10 @@ The test file has a small `writeTree(base, { "package.json": {...}, "apps/web/pa
   - `a conflict gives manager-conflict and a Deno project gives unsupported-manager, without looking a manager up`. The manager fakes count zero calls;
   - `after Node is installed, the next resolve finds it without a restart`. First call: the lookup returns null. Then the fake starts returning a path, and the second call finds it, because misses aren't cached;
   - `each problem has a message that names what to install or fix`. `manager-missing` names the manager, `manager-conflict` names both managers, `node-missing` says 22, `unsupported-manager` says Deno.
-- [ ] **Step 2:** Run the file. Expected: FAIL.
-- [ ] **Step 3:** Implement R9. `defaultAppToolchainDeps` shares one `createExecutableCache()`, uses `loginShellCommandLookup({ env, maxBuffer: 16_384 })`, `isStandaloneNodeExecutable(…, { minMajor: 22 })` for Node and `isExecutableFile` for managers. Register the test file.
-- [ ] **Step 4:** Rerun. Run `npx tsc --noEmit -p .` and `npm run test:ci-policy`. Expected: PASS.
-- [ ] **Step 5:** Commit `feat(design): resolve Node and the package manager for a detected app`.
+- [x] **Step 2:** Run the file. Expected: FAIL.
+- [x] **Step 3:** Implement R9. `defaultAppToolchainDeps` shares one `createExecutableCache()`, uses `loginShellCommandLookup({ env, maxBuffer: 16_384 })`, `isStandaloneNodeExecutable(…, { minMajor: 22 })` for Node and `isExecutableFile` for managers. Register the test file.
+- [x] **Step 4:** Rerun. Run `npx tsc --noEmit -p .` and `npm run test:ci-policy`. Expected: PASS.
+- [x] **Step 5:** Commit `feat(design): resolve Node and the package manager for a detected app`.
 
 ### Task 7: Docs, memory and the spec amendments
 
@@ -652,7 +653,7 @@ The test file has a small `writeTree(base, { "package.json": {...}, "apps/web/pa
 - `.memory/design-mode.md`, `.memory/devices-ssh-hosts-toolchain.md`
 - this plan
 
-- [ ] **Step 1: Spec.** Add "### Phase 2a amendments (2026-11-24)" after the Phase 1b amendments, numbered on from S18:
+- [x] **Step 1: Spec.** Add "### Phase 2a amendments (2026-11-24)" after the Phase 1b amendments, numbered on from S18:
   - **S19. Launch environment in 2b.** The dev-server command environment (`agentShellCommandEnvironment()`, `BROWSER`, `FORCE_COLOR`, `PORT`, S14's host flags) lands in 2b with the process, through `nodeCommandEnvironment(env, binDirs)` and `runScriptCommand(info, script, extraArgs)`. 2b always sets `COREPACK_ENABLE_DOWNLOAD_PROMPT=0`. There's no corepack fallback for a missing manager.
   - **S20. Package manager rules** (R5, R6):
     - the `packageManager` field decides only with no lockfile or its own; otherwise it's a conflict;
@@ -672,8 +673,8 @@ The test file has a small `writeTree(base, { "package.json": {...}, "apps/web/pa
   - **S24. Device PATH fix.** The device helpers (`deviceNodeEnvironment`, `androidSdkEnv`, `createNpmRunner`) no longer put an empty entry on PATH.
 
   Also update the header's status line to name the 2a plan.
-- [ ] **Step 2: Plan index.** In `docs/plans/README.md`, extend the design mode v2 row: "Phase 2a (app detection) planned 2026-11-24, plan [p2a](../superpowers/plans/2026-11-24-design-mode-v2-p2a-app-detection.md)". When the PR opens, add its number and "in review".
-- [ ] **Step 3: Memory.**
+- [x] **Step 2: Plan index.** In `docs/plans/README.md`, extend the design mode v2 row: "Phase 2a (app detection) planned 2026-11-24, plan [p2a](../superpowers/plans/2026-11-24-design-mode-v2-p2a-app-detection.md)". When the PR opens, add its number and "in review".
+- [x] **Step 3: Memory.**
   - Add a "v2 Phase 2a: app detection" section to `.memory/design-mode.md`. Cover:
     - the module layout;
     - Task 1's PATH fix;
@@ -684,12 +685,12 @@ The test file has a small `writeTree(base, { "package.json": {...}, "apps/web/pa
 
     Update the v2 summary line at the top.
   - In `.memory/devices-ssh-hosts-toolchain.md`, add a dated entry after "Packaged local runtime fix (2026-10-12)" (its line 59 describes resolution). Say that resolution now lives in `main/services/node-toolchain.ts` behind the same device exports, and that the device helpers drop empty PATH entries. Don't rewrite the dated entry.
-- [ ] **Step 4: Check for stale claims.** Run `rg -n "device-toolchain|resolveExecutable|node-toolchain|deviceNodeEnvironment|androidSdkEnv|createNpmRunner" docs .memory AGENTS.md packages/cli/README.md` and fix anything the fix or the lift made wrong. Known results:
+- [x] **Step 4: Check for stale claims.** Run `rg -n "device-toolchain|resolveExecutable|node-toolchain|deviceNodeEnvironment|androidSdkEnv|createNpmRunner" docs .memory AGENTS.md packages/cli/README.md` and fix anything the fix or the lift made wrong. Known results:
   - `docs/devices.md` says Node 22 and npm for local devices. That's still true, so no edit.
   - `docs/devices.md:164` names `device-toolchain.ts` for installs, which stay there, so no edit.
   - `docs/plans/simulator-devices-plan.md` is a dated plan: history, no edit.
   - README, `PRODUCT.md` and `docs/keyboard.md` describe nothing 2a changes. `docs/design-mode.md` doesn't exist yet; it starts with the first phase that has a person-facing surface.
-- [ ] **Step 5:** Tick this plan's boxes, and commit `docs(design): Phase 2a plan, spec amendments and memory`.
+- [x] **Step 5:** Tick this plan's boxes, and commit `docs(design): Phase 2a plan, spec amendments and memory`.
 
 ## Verification
 
