@@ -574,7 +574,8 @@ export function designAppRetryable(status: DesignAppStatus): boolean {
 export function designAppAnnouncement(previous: DesignAppStatus | undefined, next: DesignAppStatus): string | null {
   if (!previous || previous.phase !== "running") return null;
   if (next.phase === "crashed") return `${next.frameworkLabel} crashed.`;
-  if (previous.source === "attached" && next.source === "attached" && next.phase === "stopped" && previous.origin) {
+  // The person's own Disconnect leaves no problem and isn't announced (B6).
+  if (previous.source === "attached" && next.source === "attached" && next.phase === "stopped" && next.problem && previous.origin) {
     return `Disconnected from your server at ${previous.origin.replace(/^http:\/\//u, "")}.`;
   }
   return null;

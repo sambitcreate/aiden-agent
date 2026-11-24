@@ -304,14 +304,15 @@ test("designAppRetryable offers Retry for failures a retry can fix, never for at
   assert.equal(designAppRetryable(app({ phase: "running" })), false);
 });
 
-test("designAppAnnouncement speaks a crash and a disconnect only", () => {
+test("designAppAnnouncement speaks a crash and a disconnect with a problem only", () => {
   const running = app({ phase: "running", origin: "http://127.0.0.1:5173", port: 5173 });
   assert.equal(designAppAnnouncement(running, app({ phase: "crashed", revision: 2 })), "Vite crashed.");
   const attached = app({ source: "attached", phase: "running", origin: "http://127.0.0.1:5173", port: 5173 });
   assert.equal(
-    designAppAnnouncement(attached, app({ source: "attached", phase: "stopped", revision: 2 })),
+    designAppAnnouncement(attached, app({ source: "attached", phase: "stopped", revision: 2, problem: { problem: "attach-unreachable" } })),
     "Disconnected from your server at 127.0.0.1:5173.",
   );
+  assert.equal(designAppAnnouncement(attached, app({ source: "attached", phase: "stopped", revision: 2 })), null, "the person's own Disconnect");
   assert.equal(designAppAnnouncement(app({ phase: "starting" }), running), null);
   assert.equal(designAppAnnouncement(app({ phase: "stopped" }), app({ phase: "starting" })), null);
   assert.equal(designAppAnnouncement(running, { ...running, revision: 2 }), null);
