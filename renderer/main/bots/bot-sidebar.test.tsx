@@ -654,6 +654,7 @@ test("a paired Mac's Bot shows its last message and photo, and only a reply afte
           asset: { assetRevision: revision, mimeType: "image/png", width: 512, height: 512, byteSize: 4 },
         },
         sessionState: "idle",
+        summarized: true,
         lastReplyAt,
         // Another computer's text: the row shows it as one plain line.
         preview: "Flights to Lisbon\nare cheaper on Tuesday",

@@ -8,7 +8,7 @@
 // Bots had when this Mac first listed them: those replies start read. A host
 // first listed with Bots but no replies gets 0, so its first reply is unread.
 // Only a revision 66 host reports every Bot's reply, so the baseline waits for
-// a listing that shows it is one (a row marked `summarized`).
+// a listing whose every row it marked `summarized`.
 
 import * as React from "react";
 import { botLastReplyAt } from "../shared/bot-live";
@@ -76,12 +76,13 @@ export interface RemoteBotListedRow {
  * read: the host's newest reply becomes its baseline. Bots with no reply yet
  * get a baseline of 0, so the first reply that arrives later is unread.
  *
- * Nothing is set until the listing shows the host reports every Bot's reply:
- * a revision 66 host marks each Bot whose summary it read `summarized` (and
- * sends its `preview`, which only such a host has). An older host sends reply
- * times only for Bots whose chat is open there, so a baseline taken from it
- * would be too low and every earlier reply would read as new once the host
- * upgrades. An empty list sets nothing either.
+ * Nothing is set until a listing reports every Bot's reply: a revision 66
+ * host marks each Bot whose summary it read `summarized`, and the baseline
+ * waits until every listed Bot is. An older host marks none and sends reply
+ * times only for Bots whose chat is open there, and a Bot whose summary read
+ * failed this time is unmarked; a baseline taken without them would be too low
+ * and their earlier replies would read as new later. An empty list sets
+ * nothing either.
  */
 export function withRemoteBotHostListed(
   seen: RemoteBotSeen,
@@ -89,9 +90,7 @@ export function withRemoteBotHostListed(
   rows: readonly RemoteBotListedRow[],
 ): RemoteBotSeen {
   if (seen.hostSince[hostId] !== undefined) return seen;
-  if (!rows.some((row) => row.summarized === true || (typeof row.preview === "string" && row.preview.length > 0))) {
-    return seen;
-  }
+  if (rows.length === 0 || !rows.every((row) => row.summarized === true)) return seen;
   const known = rows.map((row) => row.lastReplyAt).filter(validTime);
   const since = known.length === 0 ? 0 : Math.max(...known);
   return { ...seen, hostSince: newest({ ...seen.hostSince, [hostId]: since }) };
