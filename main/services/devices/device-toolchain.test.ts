@@ -15,6 +15,7 @@ import {
   resolveDeviceNode,
   isDeviceNodeExecutable,
   deviceNodeEnvironment,
+  createNpmRunner,
   type NpmRunner,
   type ToolSpec,
 } from "./device-toolchain.js";
@@ -298,4 +299,23 @@ test("the device environment selects the resolved Node for nested helpers and cl
   assert.equal(env.ELECTRON_RUN_AS_NODE, undefined);
   assert.equal(env.HOME, source.HOME);
   assert.equal(source.ELECTRON_RUN_AS_NODE, "1");
+});
+
+test("the device environment never puts an empty entry on PATH", () => {
+  // An empty entry means the working folder, so a file named node there would run.
+  assert.equal(deviceNodeEnvironment({}, "/opt/node/bin/node").PATH, "/opt/node/bin");
+  assert.equal(deviceNodeEnvironment({ PATH: "" }, "/opt/node/bin/node").PATH, "/opt/node/bin");
+  assert.equal(deviceNodeEnvironment({ PATH: "/usr/bin::/bin" }, "/opt/node/bin/node").PATH, "/opt/node/bin:/usr/bin:/bin");
+});
+
+test("the npm runner's PATH has no empty entry", async () => {
+  await withBaseDir(async (root) => {
+    const npm = path.join(root, "npm");
+    const out = path.join(root, "path.txt");
+    await writeFile(npm, `#!/bin/sh\nprintf '%s' "$PATH" > '${out}'\n`);
+    await chmod(npm, 0o755);
+    const result = await createNpmRunner(npm, { PATH: "/usr/bin::/bin" })(["--version"], { timeoutMs: 5_000 });
+    assert.equal(result.code, 0);
+    assert.equal(await readFile(out, "utf8"), `${root}:/usr/bin:/bin`);
+  });
 });

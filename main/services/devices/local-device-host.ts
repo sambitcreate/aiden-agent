@@ -32,6 +32,7 @@ import {
   DeviceNodeUnavailableError,
   defaultDeviceNodeResolutionDeps,
   deviceNodeEnvironment,
+  prependPathEntries,
   resolveDeviceNode,
   DEVICE_HUB,
   deviceToolPaths,
@@ -267,12 +268,10 @@ export function androidSdkEnv(env: NodeJS.ProcessEnv, root: string | null, javaH
     ...env,
     ANDROID_HOME: root,
     ...(javaHome ? { JAVA_HOME: javaHome } : {}),
-    PATH: [
-      path.join(root, "platform-tools"),
-      path.join(root, "emulator"),
-      ...(javaHome ? [path.join(javaHome, "bin")] : []),
-      env.PATH ?? "",
-    ].join(":"),
+    PATH: prependPathEntries(
+      [path.join(root, "platform-tools"), path.join(root, "emulator"), ...(javaHome ? [path.join(javaHome, "bin")] : [])],
+      env.PATH,
+    ),
   };
 }
 

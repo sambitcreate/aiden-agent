@@ -239,6 +239,14 @@ export const defaultNpmResolutionDeps: NpmResolutionDeps = {
 
 const STDERR_LIMIT = 16_384;
 
+/**
+ * `dirs` first, then the inherited PATH, with every empty entry dropped. An
+ * empty entry means the working folder, so a file named `node` there would run.
+ */
+export function prependPathEntries(dirs: readonly string[], pathValue: string | undefined): string {
+  return [...dirs, ...(pathValue ?? "").split(path.delimiter)].filter((entry) => entry !== "").join(path.delimiter);
+}
+
 /** Runs the resolved npm with its own directory first on PATH, since npm's shebang is `env node`. */
 export function createNpmRunner(npmPath: string, env: NodeJS.ProcessEnv = process.env): NpmRunner {
   return (args, { timeoutMs }) =>
@@ -246,7 +254,7 @@ export function createNpmRunner(npmPath: string, env: NodeJS.ProcessEnv = proces
       const child = spawn(npmPath, args, {
         env: {
           ...env,
-          PATH: [path.dirname(npmPath), env.PATH].filter(Boolean).join(path.delimiter),
+          PATH: prependPathEntries([path.dirname(npmPath)], env.PATH),
           npm_config_update_notifier: "false",
         },
         stdio: ["ignore", "ignore", "pipe"],
@@ -286,7 +294,7 @@ export function resolveDeviceNode(deps: NpmResolutionDeps): Promise<string | nul
 }
 
 export function deviceNodeEnvironment(env: NodeJS.ProcessEnv, nodePath: string): NodeJS.ProcessEnv {
-  const clean: NodeJS.ProcessEnv = { ...env, PATH: [path.dirname(nodePath), env.PATH ?? ""].join(path.delimiter) };
+  const clean: NodeJS.ProcessEnv = { ...env, PATH: prependPathEntries([path.dirname(nodePath)], env.PATH) };
   delete clean.ELECTRON_RUN_AS_NODE;
   return clean;
 }
