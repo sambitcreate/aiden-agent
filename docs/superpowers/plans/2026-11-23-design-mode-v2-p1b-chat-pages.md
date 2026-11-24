@@ -285,7 +285,7 @@ Two adversarial reviews (data and races; lifecycle, UI and tests) were settled i
   - claims: apply `to.chatPages`' differences from `from.chatPages` (added, changed, removed) to the step, then reassign entries whose page is gone in the step to the step's first page;
   - comments still follow their frames and pages as today.
 
-- [ ] **Step 1: Write failing tests**
+- [x] **Step 1: Write failing tests**
   - `canvas-history-core.test.ts`:
     - `a page another writer adds or renames does not stop an undo from bringing back a deleted page, its frames and its comments`. History: the person deletes P (with a frame and a comment). Take in a store update that adds R and renames Q. Undo. P is back, in its old place among the shared pages, with its frame and comment; R and Q's new name are kept;
     - `a claim another writer made reaches every kept step, so undoing a page delete brings back the current claim`. History: delete P (claimed by B), then take in an update where B claims Q. Undo, and the doc has P and `chatPages.B === "Q"`;
@@ -311,10 +311,10 @@ Two adversarial reviews (data and races; lifecycle, UI and tests) were settled i
     - replace `deletePage drops chatPages entries for the deleted page` with `deletePage moves the deleted page's chats to the first page left`, including deleting the first page;
     - `renaming a page stops it following its chat`;
     - `duplicating a page copies neither namedFor nor claims` **(guard)**.
-- [ ] **Step 2:** Run `npx tsx --test renderer/shared/design-canvas/chat-pages.test.ts renderer/shared/design-canvas/schema.test.ts renderer/shared/design-canvas/pages.test.ts renderer/shared/design-canvas/view.test.ts renderer/design/canvas-history-core.test.ts`. Expected: FAIL.
-- [ ] **Step 3:** Implement. `appendCanvasPages` builds `{id, name}` pages, so it drops `namedFor`; note that in its comment. Register `chat-pages.test.ts` in `scripts/ci-test-registry.json` and `test:design-mode`.
-- [ ] **Step 4:** Rerun, plus `npx tsx --test renderer/design/use-design-canvas.test.tsx` (history consumer). Expected: PASS. Run `npm run test:ci-policy`.
-- [ ] **Step 5:** Commit `fix(design): undo keeps deleted pages; chat page rules`.
+- [x] **Step 2:** Run `npx tsx --test renderer/shared/design-canvas/chat-pages.test.ts renderer/shared/design-canvas/schema.test.ts renderer/shared/design-canvas/pages.test.ts renderer/shared/design-canvas/view.test.ts renderer/design/canvas-history-core.test.ts`. Expected: FAIL.
+- [x] **Step 3:** Implement. `appendCanvasPages` builds `{id, name}` pages, so it drops `namedFor`; note that in its comment. Register `chat-pages.test.ts` in `scripts/ci-test-registry.json` and `test:design-mode`.
+- [x] **Step 4:** Rerun, plus `npx tsx --test renderer/design/use-design-canvas.test.tsx` (history consumer). Expected: PASS. Run `npm run test:ci-policy`.
+- [x] **Step 5:** Commit `fix(design): undo keeps deleted pages; chat page rules`.
 
 ### Task 2: The store merges claims and the saving canvas sees them
 
@@ -339,7 +339,7 @@ Two adversarial reviews (data and races; lifecycle, UI and tests) were settled i
   - `local` gets the same claims (`applyStoredClaims(local)`);
   - `history = takeIn(history, { before: local, from: doc, to: server })` with no `aidenTurn`, so the claims reach every kept step and make no step.
 
-- [ ] **Step 1: Write failing tests**
+- [x] **Step 1: Write failing tests**
   - `store.test.ts`:
     - `a person's save cannot add or move a claim`: store `{A: P1}`; save `{A: P2, B: P1}`, both pages present; stored stays `{A: P1}`, and the answer carries `chatPages: {A: P1}`;
     - `a stale claim in a save after the chat's own turn does not move it back` (review A's M1): A's turn claims Q (update); A's canvas, still holding `{A: P}`, saves an unrelated edit at the new revision; the stored claim stays Q;
@@ -349,10 +349,10 @@ Two adversarial reviews (data and races; lifecycle, UI and tests) were settled i
     - `a save that deletes a page moves its chats to the first page, even when the renderer's copy forgot them`;
     - `a save cannot mark a page as following a chat`.
   - `use-design-canvas.test.tsx`: `undoing a turn that used a page keeps the picker on the stored claim`. The fake save answers with `chatPages`; after the save the hook's `doc.chatPages` equals the stored ones, and one more undo does not bring the stale claim back.
-- [ ] **Step 2:** Run `npx tsx --test main/services/design-canvas/store.test.ts renderer/design/use-design-canvas.test.tsx`. Expected: FAIL.
-- [ ] **Step 3:** Implement. Update the `save` doc comment to say claims are main's, and how the record works.
-- [ ] **Step 4:** Rerun, plus `npx tsx --test main/handlers/design-canvas.test.ts`. Expected: PASS.
-- [ ] **Step 5:** Commit `feat(design): saves keep main's chat pages and report them back`.
+- [x] **Step 2:** Run `npx tsx --test main/services/design-canvas/store.test.ts renderer/design/use-design-canvas.test.tsx`. Expected: FAIL.
+- [x] **Step 3:** Implement. Update the `save` doc comment to say claims are main's, and how the record works.
+- [x] **Step 4:** Rerun, plus `npx tsx --test main/handlers/design-canvas.test.ts`. Expected: PASS.
+- [x] **Step 5:** Commit `feat(design): saves keep main's chat pages and report them back`.
 
 ### Task 3: Page resolution falls back to the claim, on both sides
 
@@ -365,7 +365,7 @@ Two adversarial reviews (data and races; lifecycle, UI and tests) were settled i
 - `shownPageId(doc, state, chatId)`: the view page, the claim, the newest existing earlier page, then the first page.
 - When the shown page differs from `state.pageId` (a fallback), the hook schedules a report of the shown page, through the 250 ms debounce.
 
-- [ ] **Step 1: Write failing tests.** Check that each fails before the change.
+- [x] **Step 1: Write failing tests.** Check that each fails before the change.
   - `views.test.ts`:
     - `with no view, a turn works on the chat's claimed page`;
     - `when the view's page is gone, a turn works on the claim before the first page`;
@@ -375,10 +375,10 @@ Two adversarial reviews (data and races; lifecycle, UI and tests) were settled i
     - `a canvas with no kept view opens on the claim`;
     - `a fallback page is reported to main`: the fake `reportDesignCanvasView` receives P3 after the debounce.
   - `design-canvas.test.tsx`: `when another chat deletes the page on screen, the canvas shows this chat's claim`.
-- [ ] **Step 2:** Run `npx tsx --test main/services/design-canvas/views.test.ts renderer/design/use-design-view.test.tsx renderer/design/design-canvas.test.tsx`. Expected: FAIL (except the guard).
-- [ ] **Step 3:** Implement. Update both doc comments. Remove A12's "1b note" wherever 1a left it in code comments.
-- [ ] **Step 4:** Rerun, plus `npx tsx --test main/services/design-canvas/canvas-tools.test.ts main/services/design-canvas/written-pages.test.ts`. Expected: PASS.
-- [ ] **Step 5:** Commit `feat(design): a chat falls back to its own page`.
+- [x] **Step 2:** Run `npx tsx --test main/services/design-canvas/views.test.ts renderer/design/use-design-view.test.tsx renderer/design/design-canvas.test.tsx`. Expected: FAIL (except the guard).
+- [x] **Step 3:** Implement. Update both doc comments. Remove A12's "1b note" wherever 1a left it in code comments.
+- [x] **Step 4:** Rerun, plus `npx tsx --test main/services/design-canvas/canvas-tools.test.ts main/services/design-canvas/written-pages.test.ts`. Expected: PASS.
+- [x] **Step 5:** Commit `feat(design): a chat falls back to its own page`.
 
 ### Task 4: Title listeners and the title follow
 
@@ -397,7 +397,7 @@ Two adversarial reviews (data and races; lifecycle, UI and tests) were settled i
   - It broadcasts `{ workspaceId, chatId, revision }` and logs failures. A chat or workspace that is gone is a no-op.
 - `main.ts` subscribes `chatStore.onTitleChanged((chatId) => void designTitleFollow.follow(chatId))` and exports `designTitleFollow` for entry (Task 6).
 
-- [ ] **Step 1: Write failing tests**
+- [x] **Step 1: Write failing tests**
   - `chat-store-core.test.ts`:
     - `a rename, a replaced title, an auto-title and the first-message seed each tell title listeners once, after the write`;
     - `a rename that changes nothing tells no one`;
@@ -409,10 +409,10 @@ Two adversarial reviews (data and races; lifecycle, UI and tests) were settled i
     - `a title another page already has gets a number`;
     - `two quick renames and an entry running at once end on the newest title`: three `follow` calls race a `titleOf` that changes between them; the final page name is the last title, and no run writes after a newer one;
     - `a follow after the workspace was removed writes no file`.
-- [ ] **Step 2:** Run `npx tsx --test main/services/chat-store-core.test.ts main/services/design-canvas/title-follow.test.ts`. Expected: FAIL.
-- [ ] **Step 3:** Implement. Register the new test. `packages/cli` bundles `chat-store-core.ts`, so run `npm run cli:build`.
-- [ ] **Step 4:** Rerun. Expected: PASS. Run `npm run test:ci-policy`.
-- [ ] **Step 5:** Commit `feat(design): a page made for a chat follows its title`.
+- [x] **Step 2:** Run `npx tsx --test main/services/chat-store-core.test.ts main/services/design-canvas/title-follow.test.ts`. Expected: FAIL.
+- [x] **Step 3:** Implement. Register the new test. `packages/cli` bundles `chat-store-core.ts`, so run `npm run cli:build`.
+- [x] **Step 4:** Rerun. Expected: PASS. Run `npm run test:ci-policy`.
+- [x] **Step 5:** Commit `feat(design): a page made for a chat follows its title`.
 
 ### Task 5: Other chats' kept views
 
@@ -422,11 +422,11 @@ Two adversarial reviews (data and races; lifecycle, UI and tests) were settled i
 
 **Interfaces:** `DesignCanvasViews.pageIdsOf(workspaceId, exceptChatId): Promise<Set<string>>`, the kept view pages of every other chat on that workspace. It loads the views file the way `get` does.
 
-- [ ] **Step 1: Write failing tests:** `pageIdsOf lists other chats' kept pages, not the asking chat's, and reads them from the file after a restart`.
-- [ ] **Step 2:** Run `npx tsx --test main/services/design-canvas/views.test.ts`. Expected: FAIL.
-- [ ] **Step 3:** Implement.
-- [ ] **Step 4:** Rerun. Expected: PASS.
-- [ ] **Step 5:** Commit `feat(design): main can list the pages other chats look at`.
+- [x] **Step 1: Write failing tests:** `pageIdsOf lists other chats' kept pages, not the asking chat's, and reads them from the file after a restart`.
+- [x] **Step 2:** Run `npx tsx --test main/services/design-canvas/views.test.ts`. Expected: FAIL.
+- [x] **Step 3:** Implement.
+- [x] **Step 4:** Rerun. Expected: PASS.
+- [x] **Step 5:** Commit `feat(design): main can list the pages other chats look at`.
 
 ### Task 6: Entry claims the chat's page
 
@@ -449,7 +449,7 @@ Two adversarial reviews (data and races; lifecycle, UI and tests) were settled i
 - `designPagesOnEntry` keeps `pageName: chat.title`. After the claim, it calls `designTitleFollow.follow(chat.id)` (Task 4).
 - `setDesignMode(chatId, enabled, options & { awaitEntry?: boolean })`: with `awaitEntry`, it awaits `designPagesOnEntry` (logging, not throwing, on failure) before returning. The consent `enter` passes it, so the `design_mode` tool answers "entered" only after the claim.
 
-- [ ] **Step 1: Write failing tests** (edit the A21 tests that assumed 1a's rule, seeding claims where needed):
+- [x] **Step 1: Write failing tests** (edit the A21 tests that assumed 1a's rule, seeding claims where needed):
   - `the first chat on a fresh canvas claims Page 1 without renaming it, adds no page, and shows it`, with no written pages;
   - `chat B entering a workspace whose first page is chat A's gets a page named after B, claimed and shown`: `chatPages: {A: page-1}`, A alive, page-1 holding no frames (so the test pins that an empty claimed page is not shared), B with no written pages;
   - `a page with frames that another chat's kept view is on is not taken; B gets its own page`: no claims, A's view on page-1;
@@ -464,10 +464,10 @@ Two adversarial reviews (data and races; lifecycle, UI and tests) were settled i
   - `leaving design mode while entry's file is being written takes back the added page and the claim on it`;
   - `with design mode turned off before the write, no claim is made and nothing is shown`;
   - `chat-application-service.test.ts`: `entering design mode from Aiden's card waits for the chat's page, so a placement right after lands on it`. A fake entry resolves late; `setDesignMode(..., { awaitEntry: true })` resolves only after it, and a placement through `designTurnPages` then lands on the claimed page.
-- [ ] **Step 2:** Run `npx tsx --test main/services/design-canvas/written-pages.test.ts main/services/chat-application-service.test.ts`. Expected: FAIL.
-- [ ] **Step 3:** Implement with Task 1's helpers. Rewrite the `entryPlacement` doc comment to list D2's rules.
-- [ ] **Step 4:** Rerun, plus `npx tsx --test main/services/design-canvas/design-mode-tool.test.ts`. Expected: PASS.
-- [ ] **Step 5:** Commit `feat(design): a chat claims its page when design mode opens`.
+- [x] **Step 2:** Run `npx tsx --test main/services/design-canvas/written-pages.test.ts main/services/chat-application-service.test.ts`. Expected: FAIL.
+- [x] **Step 3:** Implement with Task 1's helpers. Rewrite the `entryPlacement` doc comment to list D2's rules.
+- [x] **Step 4:** Rerun, plus `npx tsx --test main/services/design-canvas/design-mode-tool.test.ts`. Expected: PASS.
+- [x] **Step 5:** Commit `feat(design): a chat claims its page when design mode opens`.
 
 ### Task 7: `canvas_page use`, one delete refusal, and page marks for Aiden
 
@@ -493,7 +493,7 @@ Two adversarial reviews (data and races; lifecycle, UI and tests) were settled i
 - **Description:** `"…move (step -1 or 1), show, or use (make it this chat's own page and show it) a design canvas page… delete needs force: true for a page holding the person's or locked frames or used by another chat, only when they asked."`
 - **Prompt line** replaces line 209's first clause: `"Work on the page the person is looking at, which starts as this chat's own page, unless they name another; canvas_page use makes a page this chat's page."`
 
-- [ ] **Step 1: Write failing tests**
+- [x] **Step 1: Write failing tests**
   - `canvas_page use makes the page this chat's and shows it, leaving other chats' claims alone`;
   - `canvas_page use on a missing page is refused and writes nothing` (revision unchanged);
   - `canvas_page use on the chat's own page writes nothing and still shows it` (revision unchanged, `focus` called);
@@ -503,10 +503,10 @@ Two adversarial reviews (data and races; lifecycle, UI and tests) were settled i
   - `canvas_page delete of this chat's own page needs no force`;
   - `the pages list marks this chat's page and counts other chats, naming none of them`: no other chat's id or title appears in the answer;
   - `after canvas_page use, a placement with no page in the same turn lands on the used page` **(guard: A1's `shown` step already does this; kept to pin `use` going through it)**.
-- [ ] **Step 2:** Run `npx tsx --test main/services/design-canvas/canvas-tools.test.ts`. Expected: FAIL (except the guard).
-- [ ] **Step 3:** Implement.
-- [ ] **Step 4:** Rerun, plus `npx tsx --test main/services/llm-client*.test.ts`, in case tool schemas or prompt text are asserted by replay. Expected: PASS.
-- [ ] **Step 5:** Commit `feat(design): canvas_page use and pages other chats rely on`.
+- [x] **Step 2:** Run `npx tsx --test main/services/design-canvas/canvas-tools.test.ts`. Expected: FAIL (except the guard).
+- [x] **Step 3:** Implement.
+- [x] **Step 4:** Rerun, plus `npx tsx --test main/services/llm-client*.test.ts`, in case tool schemas or prompt text are asserted by replay. Expected: PASS.
+- [x] **Step 5:** Commit `feat(design): canvas_page use and pages other chats rely on`.
 
 ### Task 8: Lazy claim on a chat's first canvas write
 
@@ -524,7 +524,7 @@ Two adversarial reviews (data and races; lifecycle, UI and tests) were settled i
 - Never on reads (`canvas_read`, `canvas_inspect`), never on mount, never in the person's `designCanvas:placeArtifact` (`main/handlers/design-canvas.ts:415`, not a design turn).
 - A cap refusal from `claimPage` skips the claim and lets the write land.
 
-- [ ] **Step 1: Write failing tests**
+- [x] **Step 1: Write failing tests**
   - `a chat with no claim claims the page its first tool edit lands on, in the same write` (one revision bump);
   - `canvas_read claims nothing`;
   - `a written page auto-placed in a turn claims for a chat with none`; `an artifact placed in a turn claims for a chat with none`;
@@ -532,10 +532,10 @@ Two adversarial reviews (data and races; lifecycle, UI and tests) were settled i
   - `canvas_page use and a frame placed in the same write keep the use claim`;
   - `a write that deletes the turn's page claims nothing`;
   - `a write during a pending entry waits for it and keeps the entry's claim`.
-- [ ] **Step 2:** Run `npx tsx --test main/services/design-canvas/canvas-tools.test.ts main/services/design-canvas/written-pages.test.ts main/services/design-canvas/artifact-frames.test.ts`. Expected: FAIL.
-- [ ] **Step 3:** Implement with one helper in `chat-pages.ts`, `withLazyClaim(doc, chatId, pageId)`.
-- [ ] **Step 4:** Rerun. Expected: PASS.
-- [ ] **Step 5:** Commit `feat(design): a chat claims the page its first write lands on`.
+- [x] **Step 2:** Run `npx tsx --test main/services/design-canvas/canvas-tools.test.ts main/services/design-canvas/written-pages.test.ts main/services/design-canvas/artifact-frames.test.ts`. Expected: FAIL.
+- [x] **Step 3:** Implement with one helper in `chat-pages.ts`, `withLazyClaim(doc, chatId, pageId)`.
+- [x] **Step 4:** Rerun. Expected: PASS.
+- [x] **Step 5:** Commit `feat(design): a chat claims the page its first write lands on`.
 
 ### Task 9: Lifecycle
 
@@ -556,7 +556,7 @@ Two adversarial reviews (data and races; lifecycle, UI and tests) were settled i
   - `main/services/design-canvas/carry.ts`: the same update claims `merged.pageIds[0]` for `input.chatId` (D9).
 - Test: `main/services/chat-application-service.test.ts`, `main/services/design-canvas/carry.test.ts`, and a recovery test where the reconcile callback is reachable. If `reconcilePendingChatDeletions`' callback lives only in `main/index.ts`, extract it into a small function in `cleanup.ts` (`recoverDeletedChatCanvas(deps, chatId)`) and test that function.
 
-- [ ] **Step 1: Write failing tests**
+- [x] **Step 1: Write failing tests**
   - `deleting a chat drops its claim, its named-for mark and its artifact frames, and keeps the page, its notes and other chats' frames and claims`;
   - `a delete that fails after the first cleanup keeps the chat's claim and artifact frames` **(guard: nothing prunes them before 1b; pins that the pre-commit pass stays comments-only)**;
   - `a canvas save that lands while the chat is being deleted does not bring back its claim or artifact frames` (extends the A25 case);
@@ -564,10 +564,10 @@ Two adversarial reviews (data and races; lifecycle, UI and tests) were settled i
   - `moving an empty chat drops its claim and deletes the empty page made for it; a page with frames stays, no longer following`;
   - `carry.test.ts`: `an attached chat claims the first page it brought along`; `when nothing comes along, no claim is made` **(guard)**.
   - Worktree: confirm `workspace-worktree-application-service.test.ts` still asserts that create rollback and managed delete call `removeWorkspace` (from line 18, rollback cases near 174 and 814). No new test.
-- [ ] **Step 2:** Run `npx tsx --test main/services/chat-application-service.test.ts main/services/design-canvas/carry.test.ts` and the recovery test. Expected: FAIL (except guards).
-- [ ] **Step 3:** Implement. Update the `cleanup.ts` header comment: a deleted chat's artifact frames and claim go after the delete commits, while its other frames stay as the workspace's work.
-- [ ] **Step 4:** Rerun. Expected: PASS.
-- [ ] **Step 5:** Commit `feat(design): chat delete takes its page claim and artifacts off the canvas`.
+- [x] **Step 2:** Run `npx tsx --test main/services/chat-application-service.test.ts main/services/design-canvas/carry.test.ts` and the recovery test. Expected: FAIL (except guards).
+- [x] **Step 3:** Implement. Update the `cleanup.ts` header comment: a deleted chat's artifact frames and claim go after the delete commits, while its other frames stay as the workspace's work.
+- [x] **Step 4:** Rerun. Expected: PASS.
+- [x] **Step 5:** Commit `feat(design): chat delete takes its page claim and artifacts off the canvas`.
 
 ### Task 10: The page picker shows how many chats use each page
 
@@ -583,11 +583,11 @@ Two adversarial reviews (data and races; lifecycle, UI and tests) were settled i
 
 Each row's accessible name is the page name, a comma, then the label (`"Page 1, This chat"`). The trigger's `aria-label` stays `Page: <name>`. Counts only; no titles. Semantic tokens only, with no new colours, borders or badges.
 
-- [ ] **Step 1: Write failing tests:** `the page picker marks this chat's page and counts other chats on theirs`. Use Testing Library: open the menu and assert each row's accessible name, covering all four labels.
-- [ ] **Step 2:** Run `npx tsx --test renderer/design/design-canvas.test.tsx`. Expected: FAIL.
-- [ ] **Step 3:** Implement.
-- [ ] **Step 4:** Rerun. Expected: PASS. Take before and after screenshots of the open picker with two chats, light and dark, for the PR body.
-- [ ] **Step 5:** Commit `feat(design): the page picker shows each page's chats`.
+- [x] **Step 1: Write failing tests:** `the page picker marks this chat's page and counts other chats on theirs`. Use Testing Library: open the menu and assert each row's accessible name, covering all four labels.
+- [x] **Step 2:** Run `npx tsx --test renderer/design/design-canvas.test.tsx`. Expected: FAIL.
+- [x] **Step 3:** Implement.
+- [x] **Step 4:** Rerun. Expected: PASS. Take before and after screenshots of the open picker with two chats, light and dark, for the PR body.
+- [x] **Step 5:** Commit `feat(design): the page picker shows each page's chats`.
 
 ### Task 11: Two-chats E2E, docs and memory
 
@@ -595,7 +595,7 @@ Each row's accessible name is the page name, a comma, then the label (`"Page 1, 
 - Modify: `tests/e2e/design-canvas.spec.ts` (new test; extend `savedCanvases`' type with `chatPages` and `namedFor`)
 - Docs: `PRODUCT.md` (design-mode paragraph, line 69), `README.md` (only if its design-mode line mentions pages), `docs/plans/README.md` (the v2 row), `.memory/design-mode.md`, and this plan's checkboxes.
 
-- [ ] **Step 1: Write the E2E** `two chats on one workspace each get their own page, keep it across switches, and a page another chat uses is not deleted without force`:
+- [x] **Step 1: Write the E2E** `two chats on one workspace each get their own page, keep it across switches, and a page another chat uses is not deleted without force`:
   1. Chat A sends "Design the Northwind landing page" and runs `/design`. Assert the saved doc's `chatPages[A] === pages[0].id`.
   2. A's turn places a note through `canvas_place_frame` (fake model tool scenario).
   3. Start chat B in the same workspace. It sends "Sketch the pricing table" and runs `/design`.
@@ -609,8 +609,8 @@ Each row's accessible name is the page name, a comma, then the label (`"Page 1, 
   7. Rename B from the sidebar. The picker trigger and the saved page name follow.
   8. Delete chat B. The saved doc has no `chatPages[B]`, B's page is still there with B's note, and that page has no `namedFor`.
   9. Capture `1440-canvas-two-chats` for the PR body.
-- [ ] **Step 2:** Run `npm run test:e2e:space -- tests/e2e/design-canvas.spec.ts`. Fix until it passes. If an existing test fails because entry now claims, update the expectation only where the claim causes it, and say so in the commit.
-- [ ] **Step 3: Docs**
+- [x] **Step 2:** Run `npm run test:e2e:space -- tests/e2e/design-canvas.spec.ts`. Fix until it passes. If an existing test fails because entry now claims, update the expectation only where the claim causes it, and say so in the commit.
+- [x] **Step 3: Docs**
   - `PRODUCT.md`, after "each chat remembers its own page and view":
     > "Opening design mode gives the chat a page of its own: the page on screen when no other chat is using it, otherwise a new page named after the chat, which follows the chat's title until someone renames the page. Aiden can switch the chat to another page. Deleting a page moves its chats to the first page, and Aiden won't delete a page another chat uses unless the person asks. Deleting a chat removes its comments, its page claim, and the images and visuals it sent from the chat (artifact frames); workspace images, its page, notes and page frames stay."
 
@@ -618,8 +618,8 @@ Each row's accessible name is the page name, a comma, then the label (`"Page 1, 
   - `docs/plans/README.md` v2 row: "Phase 1b (chat pages) built <date>, in review as PR #<n>, plan [p1b](../superpowers/plans/2026-11-23-design-mode-v2-p1b-chat-pages.md)."
   - `.memory/design-mode.md`: add a "v2 Phase 1b: chat pages" section with D1–D10 and the delete record in short form, and replace "Phase 1b still owns `chatPages` writes and `canvas_page use`".
   - Search the docs for stale claims: `rg -n "chatPages|own page|page per chat|empty page" README.md PRODUCT.md docs .memory`.
-- [ ] **Step 4: Verify the whole phase** (below).
-- [ ] **Step 5:** Commit `feat(design): two chats keep their own pages; docs`.
+- [x] **Step 4: Verify the whole phase** (below).
+- [x] **Step 5:** Commit `feat(design): two chats keep their own pages; docs`.
 
 ## Verification
 

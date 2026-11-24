@@ -7,6 +7,7 @@ import {
   capture,
   chooseWorkspace,
   designCanvas,
+  previewAppearance,
   sendFirstMessage,
   setDisplayWidth,
   setWindowWidth,
@@ -183,7 +184,8 @@ async function savedCanvases(userDataDir: string): Promise<
   Array<{
     version: number;
     frames: Array<{ kind: string; text?: string; title: string; pageId: string }>;
-    pages: Array<{ id: string; name: string }>;
+    pages: Array<{ id: string; name: string; namedFor?: string }>;
+    chatPages: Record<string, string>;
   }>
 > {
   const root = path.join(userDataDir, "design-canvases");
@@ -1590,4 +1592,139 @@ test("pages Aiden writes land on the canvas by themselves and follow its edits, 
   await clickEmptyCanvas(page);
   await waitForToastsToClear(page);
   await capture(page, "1440-canvas-live-pages");
+});
+
+const sidebarChat = (page: Page, title: string) =>
+  page.locator("[data-sidebar]").getByRole("button", { name: new RegExp(`^${title}`, "u") }).first();
+
+/** Opens a sidebar chat row's menu from the keyboard, where the row is. */
+async function openChatRowMenu(page: Page, title: string): Promise<void> {
+  await sidebarChat(page, title).focus();
+  await page.keyboard.press("Shift+F10");
+}
+
+/** Light and dark screenshots in the test's output folder, so a sandboxed run brings them back; also `capture`'s folder when set. */
+async function captureToResults(page: Page, name: string): Promise<void> {
+  await capture(page, name);
+  for (const scheme of ["light", "dark"] as const) {
+    await previewAppearance(page, scheme);
+    await expect(page.locator("html")).toHaveAttribute("data-appearance-scheme", scheme);
+    await page.screenshot({ path: test.info().outputPath(`${name}-${scheme}.png`), animations: "disabled" });
+  }
+  await previewAppearance(page, null);
+}
+
+test("two chats on one workspace each get their own page, keep it across switches, and a page another chat uses is not deleted without force", async ({
+  aiden,
+}) => {
+  const { app, page, lmStudio, userDataDir } = aiden;
+  const A_TITLE = "Design the Northwind landing page";
+  const B_TITLE = "Sketch the pricing table";
+  const B_RENAMED = "Pricing table for launch";
+  const composer = page.locator("textarea").first();
+  const pickerTrigger = () => designCanvas(page).getByRole("button", { name: /^Page: /u });
+  const canvasDoc = async () => (await savedCanvases(userDataDir))[0];
+
+  // 1. Chat A opens design mode on a fresh canvas and claims Page 1 as it is.
+  await openDesignChat(app, page);
+  await expect.poll(async () => Object.keys((await canvasDoc())?.chatPages ?? {}).length).toBe(1);
+  const first = (await canvasDoc())!;
+  const [chatA, aPage] = Object.entries(first.chatPages)[0]!;
+  expect(aPage).toBe(first.pages[0]!.id);
+  expect(first.pages.map((entry) => entry.name)).toEqual(["Page 1"]);
+
+  // 2. A's turn places a note on its page.
+  const aPrompt = "Two chats test: note the Northwind hero.";
+  const aNote = lmStudio.enqueueToolScenario!({
+    prompt: aPrompt,
+    calls: [{ name: "canvas_place_frame", arguments: { kind: "note", title: "Northwind hero", text: "A bigger headline" } }],
+    finalText: "Placed a note for the hero.",
+  });
+  await composer.fill(aPrompt);
+  await composer.press("Enter");
+  await expect.poll(() => aNote.completed).toBe(true);
+  expect(aNote.error).toBeUndefined();
+  await expect(frame(page, "Northwind hero")).toBeVisible();
+
+  // 3. Chat B in the same workspace gets a page of its own, named after it (its title is set by hand, so it has settled).
+  await page.getByRole("button", { name: "New Agent", exact: true }).click();
+  await chooseWorkspace(page, new RegExp(`^${WORKSPACE_NAME}`, "u"));
+  await sendFirstMessage(page, B_TITLE);
+  await typeSlashCommand(page, "/design");
+  await expect(pickerTrigger()).toHaveAccessibleName(`Page: ${B_TITLE}`);
+  await expect(frame(page, "Northwind hero")).toHaveCount(0);
+  await expect.poll(async () => Object.keys((await canvasDoc())?.chatPages ?? {}).length).toBe(2);
+  const second = (await canvasDoc())!;
+  const chatB = Object.keys(second.chatPages).find((id) => id !== chatA)!;
+  const bPage = second.pages.find((entry) => entry.namedFor === chatB);
+  expect(bPage?.name).toBe(B_TITLE);
+  expect(second.chatPages[chatB]).toBe(bPage!.id);
+  expect(second.chatPages[chatA]).toBe(aPage);
+
+  // 4. B's turn places a note on B's page; each chat keeps its page across switches.
+  const bPrompt = "Two chats test: note the pricing tiers.";
+  const bNote = lmStudio.enqueueToolScenario!({
+    prompt: bPrompt,
+    calls: [{ name: "canvas_place_frame", arguments: { kind: "note", title: "Pricing tiers", text: "Three tiers" } }],
+    finalText: "Placed a note for the tiers.",
+  });
+  await composer.fill(bPrompt);
+  await composer.press("Enter");
+  await expect.poll(() => bNote.completed).toBe(true);
+  expect(bNote.error).toBeUndefined();
+  await expect(frame(page, "Pricing tiers")).toBeVisible();
+  expect((await canvasDoc())!.frames.find((entry) => entry.title === "Pricing tiers")?.pageId).toBe(bPage!.id);
+
+  await sidebarChat(page, A_TITLE).click();
+  await expect(pickerTrigger()).toHaveAccessibleName("Page: Page 1");
+  await expect(frame(page, "Northwind hero")).toBeVisible();
+  await expect(frame(page, "Pricing tiers")).toHaveCount(0);
+  await sidebarChat(page, B_TITLE).click();
+  await expect(pickerTrigger()).toHaveAccessibleName(`Page: ${B_TITLE}`);
+  await expect(frame(page, "Pricing tiers")).toBeVisible();
+  await expect(frame(page, "Northwind hero")).toHaveCount(0);
+
+  // 5. B's picker marks its own page and counts A on Page 1, naming no chat.
+  await pickerTrigger().click();
+  await expect(page.getByRole("menuitemradio", { name: `${B_TITLE}, This chat`, exact: true })).toBeVisible();
+  await expect(page.getByRole("menuitemradio", { name: "Page 1, 1 chat", exact: true })).toBeVisible();
+  await waitForToastsToClear(page);
+  await captureToResults(page, "1440-canvas-two-chats");
+  await page.keyboard.press("Escape");
+  await expect(page.getByRole("menuitemradio")).toHaveCount(0);
+
+  // 6. Aiden in B won't delete A's page without force.
+  const deletePrompt = "Two chats test: delete Page 1.";
+  const refused = lmStudio.enqueueToolScenario!({
+    prompt: deletePrompt,
+    calls: [{ name: "canvas_page", arguments: { action: "delete", page: "Page 1" } }],
+    finalText: "Page 1 is another chat's page, so I left it.",
+  });
+  await composer.fill(deletePrompt);
+  await composer.press("Enter");
+  await expect.poll(() => refused.completed).toBe(true);
+  expect(JSON.stringify(refused.results)).toContain("1 other chat");
+  expect((await canvasDoc())!.pages.some((entry) => entry.id === aPage)).toBe(true);
+
+  // 7. Renaming B from the sidebar renames the page made for it.
+  await openChatRowMenu(page, B_TITLE);
+  await page.getByRole("menu").getByRole("menuitem", { name: "Rename", exact: true }).click();
+  const rename = page.getByRole("dialog", { name: "Rename chat" });
+  await rename.getByRole("textbox").fill(B_RENAMED);
+  await rename.getByRole("button", { name: "Save" }).click();
+  await expect(rename).toBeHidden();
+  await expect(pickerTrigger()).toHaveAccessibleName(`Page: ${B_RENAMED}`);
+  await expect.poll(async () => (await canvasDoc())!.pages.find((entry) => entry.id === bPage!.id)?.name).toBe(B_RENAMED);
+
+  // 8. Deleting B takes its claim and mark off the canvas; its page and note stay.
+  await openChatRowMenu(page, B_RENAMED);
+  await page.getByRole("menu").getByRole("menuitem", { name: "Delete", exact: true }).click();
+  await page.getByRole("alertdialog").getByRole("button", { name: "Delete", exact: true }).click();
+  await expect(sidebarChat(page, B_RENAMED)).toHaveCount(0);
+  await expect.poll(async () => Object.keys((await canvasDoc())!.chatPages)).toEqual([chatA]);
+  const after = (await canvasDoc())!;
+  const kept = after.pages.find((entry) => entry.id === bPage!.id);
+  expect(kept?.name).toBe(B_RENAMED);
+  expect(kept?.namedFor).toBeUndefined();
+  expect(after.frames.find((entry) => entry.title === "Pricing tiers")?.pageId).toBe(bPage!.id);
 });
