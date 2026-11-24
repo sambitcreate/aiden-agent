@@ -170,3 +170,17 @@ test("goal events carry only their source, outcome and round bucket", async (t) 
     { event: "goal_settled", props: undefined },
   ]);
 });
+
+test("design_md_linted carries only its two count buckets", async (t) => {
+  const events = captureAnalyticsEvents(t);
+  reportAnalyticsEvent("design_md_linted", { errors_bucket: "0", warnings_bucket: "2-3" });
+  // A raw count or a file path is never a value the registry keeps.
+  reportAnalyticsEvent("design_md_linted", { errors_bucket: "7", warnings_bucket: "0" } as never);
+  reportAnalyticsEvent("design_md_linted", { errors_bucket: "0", warnings_bucket: "0", path: "/Users/person/DESIGN.md" } as never);
+  await analyticsSettled();
+  assert.deepEqual(events, [
+    { event: "design_md_linted", props: { errors_bucket: "0", warnings_bucket: "2-3" } },
+    { event: "design_md_linted", props: undefined },
+    { event: "design_md_linted", props: { errors_bucket: "0", warnings_bucket: "0" } },
+  ]);
+});

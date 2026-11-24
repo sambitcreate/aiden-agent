@@ -51,6 +51,7 @@ Feature events fire once, at the moment the action succeeded, from the service t
 | `design_mode_exited` | A chat left design mode from the Design button, ⇧⌘L or `/design off` | none |
 | `design_mode_declined` | Not now on Aiden's "Open design mode?" card. A card that times out or stops with the reply is not counted. | none |
 | `design_comments_sent` | A desktop message carried design-canvas comments for Aiden | `count_bucket`: how many comments. Their notes, pages, files and elements stay on your device. |
+| `design_md_linted` | Design mode checked an app's DESIGN.md (once per change in a run) | `errors_bucket`, `warnings_bucket`: how many errors and warnings. The file, its tokens and its findings stay on your device. |
 | `goal_started` | A keep-going goal was set in a chat | `source`: `slash`, `menu`, `proposal`, `phone` or `until`. The objective stays on your device. |
 | `goal_settled` | A keep-going goal stopped: done, needs you, paused or cleared | `outcome`: `done`, `needs_you`, `paused` or `cleared`; `rounds`: how many rounds it ran, as `1`, `2-5`, `6-10`, `11-20`, `21-49` or `50`. The objective and the reviewer's reasons stay on your device. |
 | `floating_chat_opened` | The floating Quick Chat window opened | `source`: hotkey (global shortcut) or command (command palette or in-app command) |
