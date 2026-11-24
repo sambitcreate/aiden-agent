@@ -359,6 +359,38 @@ test("a run that ends while its feed is still opening is reported settled, and n
   }
 });
 
+test("a Bot paused while its feed is still opening reads paused, not running", async () => {
+  const fauxModels = createFauxModels([slowAnswer()], { tokensPerSecond: 20 });
+  let release: (() => void) | undefined;
+  let held = true;
+  const opened = new Promise<void>((resolve) => (release = resolve));
+  const settled: string[] = [];
+  let service: BotSessionRuntime | undefined;
+  const live = await start(fauxModels, {
+    projection: {
+      conversation: async (botId) => {
+        if (held) await opened;
+        return service!.conversation(botId);
+      },
+      onRunSettled: (_botId, state) => settled.push(state.kind),
+    },
+  });
+  service = live.service;
+  try {
+    await live.service.send("bot:a", { text: "Take your time", requestId: "desk-1" });
+    assert.equal((await live.service.pause("bot:a", "mac")).kind, "paused");
+    held = false;
+    release!();
+    await waitFor(() => settled.length > 0, { what: "the paused run to be reported" });
+    assert.deepEqual(settled, ["paused"]);
+    const view = await live.projection.subscribe("bot:a", recorder().sink);
+    view.unsubscribe();
+    assert.equal(view.snapshot.state.kind, "paused", "the earlier running notice was not applied");
+  } finally {
+    await live.close();
+  }
+});
+
 test("a failed reply is a typed failed turn, and Retry as a new submission answers after it", async () => {
   const failure = fauxAssistantMessage("", { stopReason: "error", errorMessage: "provider is down" });
   const fauxModels = createFauxModels([failure, fauxAssistantMessage("Here it is.")]);

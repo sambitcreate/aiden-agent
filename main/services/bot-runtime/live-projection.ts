@@ -1618,14 +1618,13 @@ export function createBotLiveProjection(deps: BotLiveProjectionDeps): BotLivePro
       void openFeed(botId).then(
         (opened) =>
           enqueueWork(opened, async () => {
-            // The feed read the state as it opened, after this notice: a run that
-            // ended while it opened is reported settled, never set running again.
-            if (state.kind === "running" && opened.state.kind !== "running" && !opened.runActive) {
+            // The feed read the state as it opened, after this notice, so the
+            // notice is never applied over it. A run that ended (or paused, or
+            // was interrupted) while it opened is reported settled.
+            if (state.kind === "running" && opened.state.kind !== "running") {
               deps.onRunSettled?.(opened.botId, opened.state);
               void closeIfUnwatched(opened);
-              return;
             }
-            setState(opened, state);
           }),
         (error) => report(botId, error),
       );
