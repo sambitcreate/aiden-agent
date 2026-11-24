@@ -559,31 +559,44 @@ struct AidenBotSessionChatView: View {
         filesTools = files
     }
 
+    /// The header avatar's signal. Before the model loads, nothing has run, so
+    /// a missing model reads as a quiet stop rather than a turn that finished.
+    private var avatarSignal: AidenBotAvatarSignal {
+        model.map { AidenBotAvatarSignal(model: $0) } ?? AidenBotAvatarSignal(stopped: true)
+    }
+
     private var header: some View {
-        Button {
-            isShowingProfile = true
-        } label: {
-            HStack(spacing: 8) {
-                if let bot {
-                    AidenBotCanonicalAvatarView(
-                        coordinator: coordinator,
-                        machine: openedOn,
-                        botID: bot.id,
-                        avatar: bot.avatar,
-                        name: bot.name,
-                        size: 26
-                    )
+        // The header plays what the turn is doing, from the status line's signal,
+        // and VoiceOver reads the same state as the button's value.
+        AidenBotSettledAvatarState(signal: avatarSignal) { state in
+            Button {
+                isShowingProfile = true
+            } label: {
+                HStack(spacing: 8) {
+                    if let bot {
+                        AidenBotCanonicalAvatarView(
+                            coordinator: coordinator,
+                            machine: openedOn,
+                            botID: bot.id,
+                            avatar: bot.avatar,
+                            name: bot.name,
+                            size: 26,
+                            // A resting header draws the still sprite, with no animation clock.
+                            state: state == .idle ? nil : state
+                        )
+                    }
+                    Text(bot?.name ?? "Bot")
+                        .font(.headline)
+                        .foregroundStyle(palette.foreground)
+                        .lineLimit(1)
                 }
-                Text(bot?.name ?? "Bot")
-                    .font(.headline)
-                    .foregroundStyle(palette.foreground)
-                    .lineLimit(1)
+                .contentShape(Rectangle())
             }
-            .contentShape(Rectangle())
+            .buttonStyle(.plain)
+            .disabled(bot == nil)
+            .accessibilityValue(state.accessibilityValue ?? "")
+            .accessibilityHint("Opens the Bot’s profile")
         }
-        .buttonStyle(.plain)
-        .disabled(bot == nil)
-        .accessibilityHint("Opens the Bot’s profile")
     }
 
     /// Never a spinner or a blocking error (R14): the last transcript, or

@@ -248,6 +248,8 @@ read the pairing's saved `/server` features until the connection answers.
 
 Show agent activity with the shared activity marks (`AidenActivityMark` on desktop), never with new spinners, canvas loops or shimmering icons. Geometry, timing and the phase mapping live in [`activity-marks.md`](activity-marks.md), and iOS and Android draw the same marks natively. Chat marks use the text colour, and Live uses the accent. Pass `active={false}` for terminal states so the mark freezes on its still pose rather than disappearing.
 
+The documented exception is a Bot's Hi-bit sprite avatar, which acts out its Bot's live state itself; see [Bot avatar states](activity-marks.md#bot-avatar-states-hi-bit-sprites). Its eyes use the tone's `deep` at every size. Faces drawn at 24 px and below add a small white glint while the eyes are open; larger faces keep the tone's `light` glint.
+
 ## Inbox rows
 
 The sidebar's Inbox view ([plan](plans/inbox-sidebar-plan.md)) uses a compact

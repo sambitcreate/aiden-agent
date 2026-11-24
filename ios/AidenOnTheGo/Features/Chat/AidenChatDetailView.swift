@@ -1224,38 +1224,49 @@ struct AidenChatDetailView: View {
         coordinator: AidenRemoteCoordinator,
         model botModel: AidenBotChatToolsModel
     ) -> some View {
-        Button {
-            openBotProfile(coordinator: coordinator, model: botModel)
-        } label: {
-            HStack(spacing: 8) {
-                if let bot = botModel.bot {
-                    AidenBotCanonicalAvatarView(
-                        coordinator: coordinator,
-                        machine: pinnedOwner,
-                        botID: bot.id,
-                        avatar: bot.avatar,
-                        name: bot.name,
-                        size: 26
-                    )
-                } else {
-                    Circle()
-                        .fill(palette.raised)
-                        .frame(width: 26, height: 26)
+        // A pending approval or question waits on the person, as in a Bot chat.
+        AidenBotSettledAvatarState(
+            signal: AidenBotAvatarSignal(
+                stream: model.streamState,
+                isStopping: model.isStopping,
+                awaitingPerson: model.pendingApproval != nil || model.pendingQuestion != nil
+            )
+        ) { state in
+            Button {
+                openBotProfile(coordinator: coordinator, model: botModel)
+            } label: {
+                HStack(spacing: 8) {
+                    if let bot = botModel.bot {
+                        AidenBotCanonicalAvatarView(
+                            coordinator: coordinator,
+                            machine: pinnedOwner,
+                            botID: bot.id,
+                            avatar: bot.avatar,
+                            name: bot.name,
+                            size: 26,
+                            state: state == .idle ? nil : state
+                        )
+                    } else {
+                        Circle()
+                            .fill(palette.raised)
+                            .frame(width: 26, height: 26)
+                    }
+                    Text(botModel.bot?.name ?? model.chat.title)
+                        .font(.headline)
+                        .foregroundStyle(palette.foreground)
+                        .lineLimit(1)
                 }
-                Text(botModel.bot?.name ?? model.chat.title)
-                    .font(.headline)
-                    .foregroundStyle(palette.foreground)
-                    .lineLimit(1)
+                .padding(.leading, 4)
+                .padding(.trailing, 12)
+                .frame(minHeight: 34)
+                .aidenBotHeaderNameGlass()
+                .contentShape(Capsule())
             }
-            .padding(.leading, 4)
-            .padding(.trailing, 12)
-            .frame(minHeight: 34)
-            .aidenBotHeaderNameGlass()
-            .contentShape(Capsule())
+            .buttonStyle(.plain)
+            .accessibilityLabel(botModel.bot?.name ?? model.chat.title)
+            .accessibilityValue(state.accessibilityValue ?? "")
+            .accessibilityHint("Opens the Bot’s profile")
         }
-        .buttonStyle(.plain)
-        .accessibilityLabel(botModel.bot?.name ?? model.chat.title)
-        .accessibilityHint("Opens the Bot’s profile")
     }
 
     @ViewBuilder

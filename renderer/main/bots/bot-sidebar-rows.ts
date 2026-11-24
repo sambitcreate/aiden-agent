@@ -21,6 +21,8 @@ export interface BotSidebarRow {
   activityAt: number;
   needsYou: boolean;
   lastReplyAt: number | null;
+  /** How the newest turn ended, when it failed or the person stopped it. */
+  lastTurnEnd?: "failed" | "stopped";
 }
 
 const BOT_WORKING_LINE = "Thinking…";
@@ -40,6 +42,7 @@ function botSidebarRows(
         activityAt: summary?.updatedAt ?? bot.updatedAt,
         needsYou: summary?.needsYou ?? false,
         lastReplyAt: summary?.lastReplyAt ?? null,
+        ...(summary?.lastTurnEnd ? { lastTurnEnd: summary.lastTurnEnd } : {}),
       };
     })
     .sort((left, right) => right.activityAt - left.activityAt || left.bot.name.localeCompare(right.bot.name));

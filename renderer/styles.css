@@ -392,8 +392,6 @@
   --bot-avatar-plum: #dda8f2;
   --bot-avatar-graphite: #c5c5ce;
   --bot-avatar-face: #292735;
-  --bot-avatar-eye-highlight: #ffffff;
-  --bot-avatar-sheen: #ffffff;
   --bot-avatar-marker: #2f7eea;
   /* Categorical chart series for inline visuals: the bot-avatar hues, deepened
      for >=3:1 non-text contrast on light surfaces. Never status colors. */
@@ -488,8 +486,6 @@
   --bot-avatar-plum: #dda8f2;
   --bot-avatar-graphite: #c5c5ce;
   --bot-avatar-face: #292735;
-  --bot-avatar-eye-highlight: #ffffff;
-  --bot-avatar-sheen: #ffffff;
   --bot-avatar-marker: #2f7eea;
   /* Dark surfaces take the bot-avatar hues as-is. */
   --chart-1: var(--bot-avatar-sky);
@@ -2797,16 +2793,50 @@ textarea {
 .aiden-mark[data-aiden-mark="bounce"] circle { animation: aiden-mark-bounce 1.2s cubic-bezier(.45, 0, .55, 1) infinite both; }
 @keyframes aiden-mark-bounce { 0%, 55%, 100% { transform: translateY(0); } 27% { transform: translateY(-5px); } }
 
-/* Bot faces glance and blink while their Bot works (spec §6), reusing the glance
-   keyframes. Motion runs only with Reduce Motion off and on screen; off screen the
-   face pauses where it is. */
-:root[data-reduce-motion="false"] .bot-avatar[data-working] .bot-avatar-eyes { animation: aiden-mark-look 4s cubic-bezier(.5, 0, .3, 1) infinite; }
-:root[data-reduce-motion="false"] .bot-avatar[data-working] .bot-avatar-eye { transform-box: fill-box; transform-origin: center; animation: aiden-mark-blink 4s ease-in-out infinite; }
+/* Bot sprites (Hi-bit; docs/plans/hibit-sprite-avatars-plan.md). Still poses live in the
+   markup and these rules, so Reduce Motion, hidden documents and static avatars show a
+   complete pose. Motion is stepped, transform and opacity only, and runs only in a live
+   avatar with Aiden's Reduce Motion off; off screen it pauses where it is. Pixel art
+   never rotates or scales its body. */
+.bot-sprite { --bs-mark: var(--bs-mark-light); display: block; overflow: visible; }
+:root.dark .bot-sprite { --bs-mark: var(--bs-mark-dark); }
+.bot-sprite :is(.bs-rig, .bs-row, .bs-px, .bs-look, .bs-lid, .bs-open, .bs-dot, .bs-plug) { transform-box: fill-box; transform-origin: center; }
+.bot-sprite[data-state="thinking"] .bs-look { transform: translate(1.05px, -1.19px); }
+.bot-sprite[data-state="reading"] .bs-look { transform: translate(-1.12px, .63px); }
+.bot-sprite[data-state="reading"] .bs-lid { transform: scaleY(.78); }
+.bot-sprite[data-state="tool"] .bs-look { transform: translateX(1.54px); }
+.bot-sprite[data-state="writing"] .bs-look { transform: translateY(1.19px); }
+.bot-sprite[data-state="writing"] .bs-px:not([data-cell="o"]) { opacity: .92; }
+.bot-sprite[data-state="editing"] .bs-look { transform: translate(.84px, .49px); }
+.bot-sprite[data-state="editing"] .bs-lid { transform: scaleY(.5); }
+.bot-sprite[data-state="waiting"] .bs-open { transform: scale(1.14); }
+.bot-sprite[data-state="error"] .bs-rig { transform: translateY(1.5px); }
+.bot-sprite[data-state="error"] .bs-row[data-odd] { transform: translateX(1.5px); }
+:root[data-reduce-motion="false"] .bot-avatar[data-live] .bot-sprite[data-state="idle"] .bs-lid { animation: bs-blink 6s steps(1, end) infinite; }
+:root[data-reduce-motion="false"] .bot-avatar[data-live] .bot-sprite[data-state="thinking"] .bs-rig { animation: bs-bob 1.2s steps(1, end) infinite; }
+:root[data-reduce-motion="false"] .bot-avatar[data-live] .bot-sprite[data-state="thinking"] .bs-dot { animation: bs-dot 1.2s steps(1, end) infinite calc(var(--i) * .3s - 1.2s); }
+:root[data-reduce-motion="false"] .bot-avatar[data-live] .bot-sprite[data-state="reading"] .bs-px { animation: bs-scan 1.1s steps(1, end) infinite calc(var(--r) * .11s - 1.1s); }
+:root[data-reduce-motion="false"] .bot-avatar[data-live] .bot-sprite[data-state="tool"] .bs-plug { animation: bs-plug 1.2s steps(1, end) infinite; }
+:root[data-reduce-motion="false"] .bot-avatar[data-live] .bot-sprite[data-state="writing"] .bs-px:not([data-cell="o"]) { animation: bs-type 1.2s steps(1, end) infinite calc(var(--c) * .15s); }
+:root[data-reduce-motion="false"] .bot-avatar[data-live] .bot-sprite[data-state="editing"] .bs-cursor { animation: bs-cursor 1s steps(1, end) infinite; }
+:root[data-reduce-motion="false"] .bot-avatar[data-live] .bot-sprite[data-state="waiting"] .bs-rig { animation: bs-breathe 1.2s steps(1, end) infinite; }
+:root[data-reduce-motion="false"] .bot-avatar[data-live] .bot-sprite[data-state="waiting"] .bs-lid { animation: bs-blink 2.4s steps(1, end) infinite; }
+:root[data-reduce-motion="false"] .bot-avatar[data-live] .bot-sprite[data-state="done"] .bs-rig { animation: bs-hop .6s steps(1, end) 1 both; }
+:root[data-reduce-motion="false"] .bot-avatar[data-live] .bot-sprite[data-state="error"] .bs-rig { animation: bs-drop .52s steps(1, end) 1 both; }
+:root[data-reduce-motion="false"] .bot-avatar[data-live] .bot-sprite[data-state="error"] .bs-row[data-odd] { animation: bs-glitch .52s steps(1, end) 1 both; }
 .bot-avatar[data-offscreen] *,
 :root[data-document-hidden] .bot-avatar * { animation-play-state: paused !important; }
-/* Under Reduce Motion a working face holds the glance's look-aside pose instead,
-   so it still reads as working without moving. */
-:root[data-reduce-motion="true"] .bot-avatar[data-working] .bot-avatar-eyes { transform: translateX(-2.6px); }
+@keyframes bs-blink { 0%, 94%, 100% { transform: scaleY(1); } 97% { transform: scaleY(.08); } }
+@keyframes bs-bob { 0%, 49% { transform: none; } 50%, 100% { transform: translateY(-1.5px); } }
+@keyframes bs-dot { 0% { opacity: .25; } 50% { opacity: 1; } }
+@keyframes bs-scan { 0%, 100% { opacity: 1; } 12% { opacity: .42; } 24% { opacity: 1; } }
+@keyframes bs-plug { 0% { transform: translateX(-4.5px); } 25% { transform: translateX(-1.5px); } 50%, 85% { transform: none; } 92% { transform: translateX(-3px); } }
+@keyframes bs-type { 0% { opacity: .35; } 35%, 100% { opacity: .92; } }
+@keyframes bs-cursor { 0% { opacity: .35; } 50% { opacity: 1; } }
+@keyframes bs-breathe { 0%, 49% { transform: none; } 50%, 100% { transform: translateY(-.75px); } }
+@keyframes bs-hop { 0% { transform: none; } 20% { transform: translateY(-3px); } 45% { transform: translateY(-4.5px); } 70% { transform: translateY(-1.5px); } 85%, 100% { transform: none; } }
+@keyframes bs-drop { 0%, 49% { transform: none; } 50%, 100% { transform: translateY(1.5px); } }
+@keyframes bs-glitch { 0%, 24% { transform: translateX(-3px); } 25%, 49% { transform: translateX(3px); } 50%, 74% { transform: translateX(-1.5px); } 75%, 100% { transform: translateX(1.5px); } }
 
 /* Helix family (Live). Position and depth run on the same period with depth a
    quarter behind (per-circle delays are inline), so the strands read as

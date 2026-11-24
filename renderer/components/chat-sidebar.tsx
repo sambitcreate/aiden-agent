@@ -1810,7 +1810,7 @@ function WorkspaceChatSidebar({
         }}
         selected={entry.signals.isOpen}
         layout="inbox"
-        inbox={{ ...inboxParts, metaIcon: <AvatarFace avatar={bot.avatar} /> }}
+        inbox={{ ...inboxParts, metaIcon: <AvatarFace avatar={bot.avatar} small /> }}
         shortcutHint={shortcutBinding ? prettyAccelerator(shortcutBinding) : undefined}
         shortcutsRevealed={chatShortcutsVisible}
         ariaKeyShortcuts={ariaKeyShortcut(shortcutBinding)}
@@ -1850,7 +1850,7 @@ function WorkspaceChatSidebar({
         selected={entry.signals.isOpen}
         layout="inbox"
         remote={{ hostLabel: entry.hostLabel, stale: !entry.signals.hostOnline }}
-        inbox={{ ...inboxParts, ...(source.avatar ? { metaIcon: <AvatarFace avatar={source.avatar} /> } : {}) }}
+        inbox={{ ...inboxParts, ...(source.avatar ? { metaIcon: <AvatarFace avatar={source.avatar} small /> } : {}) }}
         shortcutHint={shortcutBinding ? prettyAccelerator(shortcutBinding) : undefined}
         shortcutsRevealed={chatShortcutsVisible}
         ariaKeyShortcuts={ariaKeyShortcut(shortcutBinding)}

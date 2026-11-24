@@ -132,14 +132,59 @@ test("a working Bot's face works and its line reads Thinking…, and Needs you a
   });
   await mountSidebar();
   await waitFor(() => assert.ok(within(rowButton("Planner")).getByText("Thinking…")));
-  assert.equal(within(rowButton("Planner")).getByTitle("Planner").hasAttribute("data-working"), true);
-  assert.equal(within(rowButton("Inbox Helper")).getByTitle("Inbox Helper").hasAttribute("data-working"), false);
+  // The sprite settles into the running turn after a short debounce, so quick turns don't flicker.
+  await waitFor(() => {
+    const face = within(rowButton("Planner")).getByTitle("Planner");
+    assert.equal(face.hasAttribute("data-working"), true);
+    assert.equal(face.dataset.state, "thinking");
+  });
+  const resting = within(rowButton("Inbox Helper")).getByTitle("Inbox Helper");
+  assert.equal(resting.hasAttribute("data-working"), false);
+  assert.equal(resting.hasAttribute("data-live"), false, "a resting Bot's sidebar face is static");
   asking = true;
   act(() => emitBotTestNotification("bots:attention", { botId: "bot-1" }));
   await waitFor(() => assert.ok(within(rowButton("Planner")).getByText("Needs you")));
+  await waitFor(() => assert.equal(within(rowButton("Planner")).getByTitle("Planner").dataset.state, "waiting"));
   assert.ok(within(rowButton("Planner")).getByText("Waiting for you"));
   assert.equal(within(rowButton("Inbox Helper")).queryByText("Needs you") === null, true);
   assert.ok(screen.getByRole("button", { name: /^Planner.*Needs you/u }), "the row's name says it needs you");
+});
+
+test("a sidebar face shows error when its turn failed, and a stopped turn rests without a done moment", async () => {
+  const ends: Record<string, BotLiveSummary["lastTurnEnd"]> = {};
+  let running = true;
+  sidebarIpc([PLANNER, INBOX], {}, {
+    "bots:live:summary": (botId) =>
+      running
+        ? summary(botId as string, { state: { kind: "running", submissionId: "s1" } })
+        : summary(botId as string, ends[botId as string] ? { lastTurnEnd: ends[botId as string] } : {}),
+  });
+  await mountSidebar();
+  const face = (name: string) => within(rowButton(name)).getByTitle(name);
+  await waitFor(() => {
+    assert.equal(face("Planner").dataset.state, "thinking");
+    assert.equal(face("Inbox Helper").dataset.state, "thinking");
+  });
+  const seen: string[] = [];
+  const observer = new MutationObserver(() => seen.push(face("Inbox Helper").dataset.state ?? ""));
+  observer.observe(screen.getByRole("navigation", { name: "Bots" }), {
+    subtree: true,
+    attributes: true,
+    attributeFilter: ["data-state"],
+  });
+  ends["bot-1"] = "failed";
+  ends["bot-2"] = "stopped";
+  running = false;
+  act(() => emitBotTestNotification("bots:attention", { botId: "bot-1" }));
+  act(() => emitBotTestNotification("bots:attention", { botId: "bot-2" }));
+  await waitFor(() => assert.equal(face("Planner").dataset.state, "error"));
+  await waitFor(() => assert.equal(face("Inbox Helper").dataset.state, "idle"));
+  // Past the length of a done moment, the stopped Bot never showed one.
+  await new Promise((resolve) => setTimeout(resolve, 1_700));
+  observer.disconnect();
+  assert.ok(!seen.includes("done"), `Inbox Helper states: ${seen.join(" → ")}`);
+  assert.equal(face("Inbox Helper").hasAttribute("data-live"), false);
+  assert.equal(face("Planner").dataset.state, "idle", "the error moment passes");
 });
 
 test("a reply since the person last looked shows an unread dot, but not on the open Bot or on replies from before the sidebar existed", async () => {
