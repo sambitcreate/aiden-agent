@@ -38,7 +38,7 @@ export const FILE_SECONDS = Object.freeze({
   "bots-starter.spec.ts": 22,
   "browser-agent.spec.ts": 38,
   "browser-cancellation.spec.ts": 66,
-  "browser-grab.spec.ts": 45,
+  "browser-grab.spec.ts": 60,
   "browser-initial-crash.spec.ts": 3,
   "browser-lifecycle.spec.ts": 237,
   "browser-throttling.spec.ts": 29,

@@ -1,6 +1,6 @@
 import { AnimationFreezer } from "./freeze.js";
 import { deepElementFromPoint, rectInTopViewport, type ViewportRect } from "./hit-test.js";
-import { collectSensitiveFieldRects, inspectDomElement } from "./inspect-dom.js";
+import { collectSensitiveFieldRects, containsSensitiveField, inspectDomElement } from "./inspect-dom.js";
 import { inspectFrameworkElement } from "./inspect-frameworks.js";
 import {
   findReactComponentBoundaryElement,
@@ -19,6 +19,8 @@ export interface RawGrabPayload {
   componentStack?: RawGrabComponentFrame[];
   source?: RawGrabSourceHint;
   props?: Record<string, string | number | boolean | null>;
+  /** The grabbed element is or wraps a credential field, so its props must not carry contents. */
+  sensitiveTarget?: boolean;
   tagName: string;
   selector: string;
   role?: string;
@@ -74,6 +76,89 @@ interface ActiveSession {
 
 let activeSession: ActiveSession | null = null;
 
+const MAX_SHIELD_SCAN = 15_000;
+
+/**
+ * Frame documents never deliver their pointer events to this document, so while
+ * Grab runs every frame is made transparent to the pointer: input lands here,
+ * where it is suppressed, and hit tests briefly lift the shield to look inside
+ * same-origin frames. A cross-origin frame stays a single grabbable element.
+ */
+class FrameShield {
+  private readonly saved = new Map<HTMLElement, { value: string; priority: string }>();
+  private observer: MutationObserver | null = null;
+
+  start(): void {
+    this.scan(document, 0);
+    if (typeof MutationObserver === "function" && document.documentElement) {
+      this.observer = new MutationObserver((records) => {
+        for (const record of records) {
+          for (const node of Array.from(record.addedNodes)) {
+            if (node instanceof Element) this.scanElement(node);
+          }
+        }
+      });
+      this.observer.observe(document.documentElement, { childList: true, subtree: true });
+    }
+    // Keys typed into a focused frame would bypass the grab's own handling.
+    const focused = document.activeElement;
+    if (focused && this.isFrame(focused)) (focused as HTMLElement).blur();
+  }
+
+  /** Runs a hit test with the frames hittable again; no event can dispatch in between. */
+  hittable<T>(test: () => T): T {
+    for (const [frame, previous] of this.saved) frame.style.setProperty("pointer-events", previous.value, previous.priority);
+    try {
+      return test();
+    } finally {
+      for (const frame of this.saved.keys()) frame.style.setProperty("pointer-events", "none", "important");
+    }
+  }
+
+  stop(): void {
+    this.observer?.disconnect();
+    this.observer = null;
+    for (const [frame, previous] of this.saved) frame.style.setProperty("pointer-events", previous.value, previous.priority);
+    this.saved.clear();
+  }
+
+  private isFrame(element: Element): boolean {
+    const tag = (element.localName || element.tagName || "").toLowerCase();
+    return tag === "iframe" || tag === "frame" || tag === "embed" || tag === "object";
+  }
+
+  private shield(element: Element): void {
+    if (!(element instanceof HTMLElement) || this.saved.has(element)) return;
+    this.saved.set(element, {
+      value: element.style.getPropertyValue("pointer-events"),
+      priority: element.style.getPropertyPriority("pointer-events"),
+    });
+    element.style.setProperty("pointer-events", "none", "important");
+  }
+
+  private scanElement(element: Element): void {
+    if (this.isFrame(element)) this.shield(element);
+    if (element.shadowRoot) this.scan(element.shadowRoot, 1);
+    this.scan(element, 1);
+  }
+
+  private scan(root: Document | ShadowRoot | Element, depth: number): void {
+    if (depth > 8) return;
+    let elements: NodeListOf<Element>;
+    try {
+      elements = root.querySelectorAll("*");
+    } catch {
+      return;
+    }
+    for (let index = 0; index < elements.length && index < MAX_SHIELD_SCAN; index += 1) {
+      const element = elements[index];
+      if (!element) continue;
+      if (this.isFrame(element)) this.shield(element);
+      if (element.shadowRoot) this.scan(element.shadowRoot, depth + 1);
+    }
+  }
+}
+
 function formatHoverLabel(element: Element, crossOriginIframe: boolean): string {
   if (crossOriginIframe) return "iframe (cross-origin)";
   const react = inspectReactElement(element);
@@ -90,7 +175,8 @@ function buildPayload(
   keepActive: boolean,
 ): RawGrabPayload {
   const dom = inspectDomElement(element);
-  const react = inspectReactElement(element);
+  const sensitiveTarget = containsSensitiveField(element);
+  const react = inspectReactElement(element, sensitiveTarget);
   const fw = react ? null : inspectFrameworkElement(element);
 
   const framework = react ? "react" : fw ? fw.framework : "dom";
@@ -112,6 +198,7 @@ function buildPayload(
     ...(componentStack ? { componentStack } : {}),
     ...(source ? { source } : {}),
     ...(props ? { props } : {}),
+    ...(sensitiveTarget ? { sensitiveTarget: true } : {}),
     tagName: dom.tagName,
     selector: dom.selector,
     ...(dom.role ? { role: dom.role } : {}),
@@ -179,6 +266,7 @@ function startSession(options?: GrabStartOptions): boolean {
   const overlay = new GrabOverlay(accent, Boolean(options?.reducedMotion));
   const stepping = new GrabSteppingState();
   const freezer = new AnimationFreezer();
+  const frames = new FrameShield();
   const rootEl = document.documentElement;
   const previousCursor = rootEl ? rootEl.style.cursor : "";
   if (rootEl) rootEl.style.cursor = "crosshair";
@@ -223,7 +311,7 @@ function startSession(options?: GrabStartOptions): boolean {
 
   const onPointerMove = (event: PointerEvent) => {
     if (session.pausedForCapture) return;
-    const hit = deepElementFromPoint(event.clientX, event.clientY, overlay.host);
+    const hit = frames.hittable(() => deepElementFromPoint(event.clientX, event.clientY, overlay.host));
     if (!hit) {
       overlay.hide();
       return;
@@ -242,7 +330,7 @@ function startSession(options?: GrabStartOptions): boolean {
     let target = stepping.getCurrent();
     let inIframe = session.lastInIframe;
     if (!target || !target.isConnected) {
-      const hit = deepElementFromPoint(event.clientX, event.clientY, overlay.host);
+      const hit = frames.hittable(() => deepElementFromPoint(event.clientX, event.clientY, overlay.host));
       if (!hit) return;
       target = hit.element;
       inIframe = hit.inIframe;
@@ -314,8 +402,10 @@ function startSession(options?: GrabStartOptions): boolean {
   for (const name of SUPPRESSED_POINTER_EVENTS) {
     document.addEventListener(name, suppress, true);
   }
+  frames.start();
 
   session.cleanup = () => {
+    frames.stop();
     document.removeEventListener("pointermove", onPointerMove, true);
     document.removeEventListener("click", onClick, true);
     document.removeEventListener("keydown", onKeyDown, true);

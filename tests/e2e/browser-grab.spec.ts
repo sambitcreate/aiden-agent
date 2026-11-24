@@ -116,11 +116,36 @@ const FIXTURE_HTML = `<!doctype html>
   </body>
 </html>`;
 
+const FRAME_CLICK_COUNTER = `<script>
+  globalThis.frameClicks = 0;
+  for (const name of ["pointerdown", "mousedown", "mouseup", "click"]) {
+    document.addEventListener(name, () => { globalThis.frameClicks += 1; }, true);
+  }
+</script>`;
+
+// A same-origin srcdoc frame and a cross-origin (localhost vs 127.0.0.1) frame.
+const FRAMES_FIXTURE_HTML = `<!doctype html>
+<html>
+  <head><meta charset="utf-8" /><title>Grab frames fixture</title></head>
+  <body style="margin:0;padding:24px">
+    <iframe id="same-frame" style="display:block;width:320px;height:120px;border:0" srcdoc='<!doctype html><html><body style="margin:0;padding:16px"><button id="frame-cta" style="width:160px;height:40px">Inside</button>${FRAME_CLICK_COUNTER.replace(/'/gu, "&#39;")}</body></html>'></iframe>
+    <iframe id="cross-frame" style="display:block;width:320px;height:80px;border:0;margin-top:16px" src="CROSS_ORIGIN_SRC"></iframe>
+  </body>
+</html>`;
+
 async function startFixtureServer() {
   const server = createServer((request, response) => {
     response.writeHead(200, { "content-type": "text/html; charset=utf-8" });
     if (request.url === "/next") {
       response.end("<!doctype html><html><head><title>Next page</title></head><body><h1>Next</h1></body></html>");
+      return;
+    }
+    if (request.url === "/frames") {
+      response.end(FRAMES_FIXTURE_HTML.replace("CROSS_ORIGIN_SRC", `http://localhost:${(server.address() as AddressInfo).port}/cross-frame`));
+      return;
+    }
+    if (request.url === "/cross-frame") {
+      response.end(`<!doctype html><html><body style="margin:0"><button id="cross-cta" style="width:100%;height:60px">Cross</button>${FRAME_CLICK_COUNTER}</body></html>`);
       return;
     }
     response.end(FIXTURE_HTML);
@@ -481,6 +506,90 @@ test("shortcut, unstoppable Escape, Shift+Click multi-grab, DevTools-open captur
       .toBe(false);
 
     await command(page, { action: "close", tabId: secondTabId });
+    await command(page, { action: "close", tabId });
+  } finally {
+    await fixture.close();
+  }
+});
+
+test("grabbing inside same-origin and cross-origin frames captures the element and never reaches frame handlers", async ({
+  aiden,
+}) => {
+  const fixture = await startFixtureServer();
+  try {
+    const { app, page } = aiden;
+    await finishLmStudioOnboarding(page);
+    await page.getByRole("button", { name: "Show Environment" }).click();
+    const surface = page.getByRole("complementary", { name: "Environment work surface" });
+    await surface.getByRole("button", { name: "Browser", exact: true }).click();
+    const opened = await command(page, { action: "create", url: `${fixture.url}/frames` });
+    const tabId = opened.state.activeTabId!;
+    await expect
+      .poll(async () => (await state(page)).tabs.find((tab) => tab.id === tabId)?.title)
+      .toBe("Grab frames fixture");
+    await expect
+      .poll(async () => (await state(page)).tabs.find((tab) => tab.id === tabId)?.visible)
+      .toBe(true);
+    const pageUrl = `${fixture.url}/frames`;
+    const crossUrl = `http://localhost:${new URL(fixture.url).port}/cross-frame`;
+    await expect
+      .poll(() =>
+        app.evaluate(async ({ webContents }, { pageUrl, crossUrl }) => {
+          const guest = webContents.getAllWebContents().find((contents) => contents.getURL() === pageUrl);
+          const cross = guest?.mainFrame.framesInSubtree.find((frame) => frame.url === crossUrl);
+          const same = await guest?.executeJavaScript("document.getElementById('same-frame').contentDocument?.getElementById('frame-cta') ? true : false");
+          return Boolean(cross && same && (await cross.executeJavaScript("typeof globalThis.frameClicks")) === "number");
+        }, { pageUrl, crossUrl }),
+      )
+      .toBe(true);
+
+    const clickAt = (selector: "same" | "cross", shift: boolean) =>
+      app.evaluate(async ({ webContents }, { pageUrl, selector, shift }) => {
+        const guest = webContents.getAllWebContents().find((contents) => contents.getURL() === pageUrl)!;
+        const point = (await guest.executeJavaScript(
+          selector === "same"
+            ? "(() => { const frame = document.getElementById('same-frame').getBoundingClientRect(); const r = document.getElementById('same-frame').contentDocument.getElementById('frame-cta').getBoundingClientRect(); return { x: Math.round(frame.x + r.x + r.width / 2), y: Math.round(frame.y + r.y + r.height / 2) }; })()"
+            : "(() => { const r = document.getElementById('cross-frame').getBoundingClientRect(); return { x: Math.round(r.x + r.width / 2), y: Math.round(r.y + r.height / 2) }; })()",
+        )) as { x: number; y: number };
+        const modifiers: Array<"shift"> = shift ? ["shift"] : [];
+        guest.focus();
+        guest.sendInputEvent({ type: "mouseMove", ...point });
+        await new Promise((resolve) => setTimeout(resolve, 40));
+        guest.sendInputEvent({ type: "mouseDown", button: "left", clickCount: 1, modifiers, ...point });
+        guest.sendInputEvent({ type: "mouseUp", button: "left", clickCount: 1, modifiers, ...point });
+      }, { pageUrl, selector, shift });
+
+    await surface.getByRole("button", { name: "Grab element", exact: true }).click();
+    await expect
+      .poll(async () => (await state(page)).tabs.find((tab) => tab.id === tabId)?.grabbing)
+      .toBe(true);
+
+    // The element inside the same-origin frame is captured, not the frame.
+    await clickAt("same", true);
+    const chips = page.locator("[data-grabbed-element-trigger]");
+    await expect(chips).toHaveCount(1);
+    await expect(chips.first()).toContainText("button#frame-cta");
+
+    // A cross-origin frame is captured as the frame element itself.
+    await clickAt("cross", false);
+    await expect(chips).toHaveCount(2);
+    await expect(chips.nth(1)).toContainText("iframe#cross-frame");
+    await expect
+      .poll(async () => (await state(page)).tabs.find((tab) => tab.id === tabId)?.grabbing)
+      .toBe(false);
+
+    // Neither frame saw a pointer event, and the frames are clickable again afterwards.
+    const counts = await app.evaluate(async ({ webContents }, { pageUrl, crossUrl }) => {
+      const guest = webContents.getAllWebContents().find((contents) => contents.getURL() === pageUrl)!;
+      const cross = guest.mainFrame.framesInSubtree.find((frame) => frame.url === crossUrl)!;
+      return {
+        same: await guest.executeJavaScript("document.getElementById('same-frame').contentWindow.frameClicks"),
+        cross: await cross.executeJavaScript("globalThis.frameClicks"),
+        restored: await guest.executeJavaScript("[...document.querySelectorAll('iframe')].every((frame) => frame.style.pointerEvents === '')"),
+      };
+    }, { pageUrl, crossUrl });
+    expect(counts).toEqual({ same: 0, cross: 0, restored: true });
+
     await command(page, { action: "close", tabId });
   } finally {
     await fixture.close();

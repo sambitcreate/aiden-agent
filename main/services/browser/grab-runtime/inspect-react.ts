@@ -27,6 +27,22 @@ const MAX_PROP_STRING_CHARS = 256;
 
 const SECRET_PROP_PATTERN =
   /pass|secret|token|auth|api[_-]?key|cookie|session|credit|card|cvv|cvc|ssn|bearer|jwt|private|credential/iu;
+/** A field's live contents travel under these keys whatever the field is. */
+const VALUE_PROP_PATTERN = /^(?:default)?value$/iu;
+/** On a credential field only these describe the field rather than hold its contents. */
+const SENSITIVE_FIELD_SAFE_PROPS = new Set(["type", "autocomplete", "inputmode"]);
+const CREDENTIAL_AUTOCOMPLETE_PATTERN = /(?:^|\s)(?:current-password|new-password|one-time-code|cc-[a-z-]+)(?:\s|$)/iu;
+
+/** Whether props describe a password, one-time-code or payment-card field. */
+export function propsDescribeSensitiveField(props: object): boolean {
+  const type = safeOwnProp(props, "type");
+  if (typeof type === "string" && type.trim().toLowerCase() === "password") return true;
+  for (const key of ["autoComplete", "autocomplete"]) {
+    const value = safeOwnProp(props, key);
+    if (typeof value === "string" && CREDENTIAL_AUTOCOMPLETE_PATTERN.test(value)) return true;
+  }
+  return false;
+}
 
 const IGNORED_WRAPPER_NAMES = new Set([
   "AppRouter",
@@ -212,9 +228,13 @@ function extractDebugSource(node: unknown): RawGrabSourceHint | undefined {
   return hint.fileName || hint.debugStack ? hint : undefined;
 }
 
-function extractSafeProps(fiber: unknown): Record<string, string | number | boolean | null> | undefined {
+function extractSafeProps(
+  fiber: unknown,
+  sensitiveTarget: boolean,
+): Record<string, string | number | boolean | null> | undefined {
   const rawProps = safeOwnProp(fiber, "memoizedProps");
   if (!rawProps || typeof rawProps !== "object" || Array.isArray(rawProps)) return undefined;
+  const sensitive = sensitiveTarget || propsDescribeSensitiveField(rawProps);
   let keys: string[];
   try {
     keys = Object.getOwnPropertyNames(rawProps);
@@ -237,12 +257,17 @@ function extractSafeProps(fiber: unknown): Record<string, string | number | bool
       continue;
     }
     if (key.length === 0 || key.length > 80) continue;
-    if (SECRET_PROP_PATTERN.test(key)) {
+    const value = safeOwnProp(rawProps, key);
+    if (
+      SECRET_PROP_PATTERN.test(key) ||
+      VALUE_PROP_PATTERN.test(key) ||
+      (sensitive && (typeof value === "string" || typeof value === "number") &&
+        !SENSITIVE_FIELD_SAFE_PROPS.has(key.toLowerCase()))
+    ) {
       props[key] = "[redacted]";
       count += 1;
       continue;
     }
-    const value = safeOwnProp(rawProps, key);
     if (value === null || typeof value === "boolean") {
       props[key] = value;
       count += 1;
@@ -355,7 +380,7 @@ export function findReactComponentBoundaryElement(element: Element): Element | n
  * Extracts React 16–19 component hierarchy, source hints (`_debugSource`, `_debugStack`,
  * RSC `_debugOwner`/`_debugInfo`), and redacted primitive props from a mounted DOM element.
  */
-export function inspectReactElement(element: unknown): ReactInspectionResult | null {
+export function inspectReactElement(element: unknown, sensitiveTarget = false): ReactInspectionResult | null {
   const hostFiber = findReactFiberOnElement(element);
   if (!hostFiber) return null;
 
@@ -413,7 +438,7 @@ export function inspectReactElement(element: unknown): ReactInspectionResult | n
   const hostSource = extractDebugSource(hostFiber);
   const primaryFrame = frames.find((frame) => !frame.minified);
   const source = hostSource ?? primaryFrame?.source;
-  const props = immediateCompositeFiber ? extractSafeProps(immediateCompositeFiber) : undefined;
+  const props = immediateCompositeFiber ? extractSafeProps(immediateCompositeFiber, sensitiveTarget) : undefined;
 
   return {
     ...(primaryFrame ? { componentName: primaryFrame.name } : {}),

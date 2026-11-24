@@ -76,6 +76,22 @@ export function isSensitiveDomElement(element: Element): boolean {
   return false;
 }
 
+/** Whether the element is, or wraps, a password, one-time-code or payment-card field. */
+export function containsSensitiveField(element: Element): boolean {
+  if (isSensitiveDomElement(element)) return true;
+  let fields: NodeListOf<Element>;
+  try {
+    fields = element.querySelectorAll("input, [autocomplete]");
+  } catch {
+    return false;
+  }
+  for (let i = 0; i < fields.length && i < 500; i += 1) {
+    const field = fields[i];
+    if (field && isSensitiveDomElement(field)) return true;
+  }
+  return false;
+}
+
 function isDisallowedAttrName(name: string): boolean {
   const lower = name.toLowerCase();
   return lower === "value" || /^on[a-z]/u.test(lower);

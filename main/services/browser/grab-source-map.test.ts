@@ -1,5 +1,9 @@
 import assert from "node:assert/strict";
+import { mkdir, mkdtemp, rm, symlink, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import path from "node:path";
 import test from "node:test";
+import { pathToFileURL } from "node:url";
 import {
   allowedLocalSourceMapFilePath,
   decodeSourceMapMappings,
@@ -114,7 +118,8 @@ test("LocalGrabSourceMapResolver symbolicates React 19 _debugStack via loopback 
     "    at LandingHeroClient (http://localhost:3000/chunks/hero.js:1:1)",
   ].join("\n");
 
-  const resolved = await resolver.resolveSourceHint({ debugStack }, "/Users/dev/app");
+  const page = { pageUrl: "http://localhost:3000/dashboard" };
+  const resolved = await resolver.resolveSourceHint({ debugStack }, "/Users/dev/app", page);
   assert.deepEqual(resolved, {
     filePath: "src/components/LandingHeroClient.tsx",
     line: 11,
@@ -125,13 +130,13 @@ test("LocalGrabSourceMapResolver symbolicates React 19 _debugStack via loopback 
   assert.equal(fetchOptions[0]?.redirect, "error");
 
   // Second call hits LRU cache without re-fetching.
-  const cached = await resolver.resolveSourceHint({ debugStack }, "/Users/dev/app");
+  const cached = await resolver.resolveSourceHint({ debugStack }, "/Users/dev/app", page);
   assert.deepEqual(cached, resolved);
   assert.equal(fetchedUrls.length, 1);
 
   // Remote URL must NEVER be fetched; gracefully returns un-symbolicated fallback.
   const remoteStack = "Error\n    at Widget (https://cdn.example.com/bundle.js:10:5)";
-  const remote = await resolver.resolveSourceHint({ debugStack: remoteStack });
+  const remote = await resolver.resolveSourceHint({ debugStack: remoteStack }, undefined, page);
   assert.equal(fetchedUrls.length, 1);
   assert.deepEqual(remote, {
     filePath: "https://cdn.example.com/bundle.js",
@@ -139,6 +144,23 @@ test("LocalGrabSourceMapResolver symbolicates React 19 _debugStack via loopback 
     column: 5,
     symbolicated: false,
   });
+
+  // A forged stack naming another loopback port (or the same port over another scheme) is never fetched.
+  for (const forged of ["http://localhost:5173/admin.js", "https://localhost:3000/chunk.js", "http://127.0.0.1:3000/chunk.js"]) {
+    const crossOrigin = await resolver.resolveSourceHint({ debugStack: `Error\n    at Probe (${forged}:1:1)` }, "/Users/dev/app", page);
+    assert.equal(crossOrigin?.symbolicated, false);
+  }
+  assert.deepEqual(fetchedUrls, ["http://localhost:3000/chunks/hero.js"]);
+
+  // Without an authoritative page URL nothing local is fetched at all.
+  const unbound = await new LocalGrabSourceMapResolver({
+    fetchImpl: (async (input: RequestInfo | URL) => {
+      fetchedUrls.push(String(input));
+      return new Response("", { status: 404 });
+    }) as typeof fetch,
+  }).resolveSourceHint({ debugStack }, "/Users/dev/app");
+  assert.equal(unbound?.symbolicated, false);
+  assert.deepEqual(fetchedUrls, ["http://localhost:3000/chunks/hero.js"]);
 });
 
 test("parseDebugStackFrames skips react-dom and node_modules frames", () => {
@@ -165,13 +187,16 @@ test("LocalGrabSourceMapResolver restricts file:// reads to script/map extension
       if (filePath.endsWith(".map")) return Buffer.from(sourceMapJson, "utf8");
       return Buffer.from("//# sourceMappingURL=bundle.js.map\n", "utf8");
     },
+    realpathImpl: async (filePath: string) => filePath,
   });
+  const page = { pageUrl: "file:///Users/dev/app/index.html" };
 
   // Non-script/map file extension is rejected before reading disk.
   assert.equal(allowedLocalSourceMapFilePath("file:///etc/passwd", "/Users/dev/app"), null);
   await resolver.resolveSourceHint(
     { debugStack: "Error\n    at Evil (file:///etc/passwd:1:1)" },
     "/Users/dev/app",
+    page,
   );
   assert.deepEqual(readPaths, []);
 
@@ -184,6 +209,24 @@ test("LocalGrabSourceMapResolver restricts file:// reads to script/map extension
   await resolver.resolveSourceHint(
     { debugStack: "Error\n    at Evil (file:///Users/other/secret.js:1:1)" },
     "/Users/dev/app",
+    page,
+  );
+  assert.deepEqual(readPaths, []);
+
+  // With no workspace root nothing bounds the read, so it is refused.
+  assert.equal(allowedLocalSourceMapFilePath("file:///Users/dev/app/dist/bundle.js"), null);
+  await resolver.resolveSourceHint(
+    { debugStack: "Error\n    at Widget (file:///Users/dev/app/dist/bundle.js:1:1)" },
+    undefined,
+    page,
+  );
+  assert.deepEqual(readPaths, []);
+
+  // A loopback page cannot reach workspace files through a forged file:// frame.
+  await resolver.resolveSourceHint(
+    { debugStack: "Error\n    at Widget (file:///Users/dev/app/dist/bundle.js:1:1)" },
+    "/Users/dev/app",
+    { pageUrl: "http://localhost:3000/" },
   );
   assert.deepEqual(readPaths, []);
 
@@ -191,6 +234,7 @@ test("LocalGrabSourceMapResolver restricts file:// reads to script/map extension
   const resolved = await resolver.resolveSourceHint(
     { debugStack: "Error\n    at Widget (file:///Users/dev/app/dist/bundle.js:1:1)" },
     "/Users/dev/app",
+    page,
   );
   assert.deepEqual(resolved, {
     filePath: "src/Widget.tsx",
@@ -199,4 +243,33 @@ test("LocalGrabSourceMapResolver restricts file:// reads to script/map extension
     symbolicated: true,
   });
   assert.equal(readPaths.length, 2);
+});
+
+test("LocalGrabSourceMapResolver refuses an in-workspace symlink that points outside the workspace", async () => {
+  const base = await mkdtemp(path.join(tmpdir(), "aiden-grab-map-"));
+  try {
+    const workspace = path.join(base, "app");
+    const outside = path.join(base, "outside");
+    await mkdir(path.join(workspace, "dist"), { recursive: true });
+    await mkdir(outside, { recursive: true });
+    const sourceMapJson = JSON.stringify({ version: 3, sources: ["src/Secret.tsx"], mappings: "AAUI" });
+    await writeFile(path.join(outside, "bundle.js"), "//# sourceMappingURL=bundle.js.map\n");
+    await writeFile(path.join(outside, "bundle.js.map"), sourceMapJson);
+    await writeFile(path.join(workspace, "dist", "own.js"), "//# sourceMappingURL=own.js.map\n");
+    await writeFile(path.join(workspace, "dist", "own.js.map"), JSON.stringify({ version: 3, sources: ["src/Own.tsx"], mappings: "AAUI" }));
+    await symlink(path.join(outside, "bundle.js"), path.join(workspace, "dist", "linked.js"));
+    await symlink(path.join(outside, "bundle.js.map"), path.join(workspace, "dist", "linked.js.map"));
+
+    const resolver = new LocalGrabSourceMapResolver();
+    const page = { pageUrl: pathToFileURL(path.join(workspace, "index.html")).href };
+    const linkedUrl = pathToFileURL(path.join(workspace, "dist", "linked.js")).href;
+    const escaped = await resolver.resolveSourceHint({ debugStack: `Error\n    at Leak (${linkedUrl}:1:1)` }, workspace, page);
+    assert.equal(escaped?.symbolicated, false);
+
+    const ownUrl = pathToFileURL(path.join(workspace, "dist", "own.js")).href;
+    const own = await resolver.resolveSourceHint({ debugStack: `Error\n    at Own (${ownUrl}:1:1)` }, workspace, page);
+    assert.deepEqual(own, { filePath: "src/Own.tsx", line: 11, column: 5, symbolicated: true });
+  } finally {
+    await rm(base, { recursive: true, force: true });
+  }
 });

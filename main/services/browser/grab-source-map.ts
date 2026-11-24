@@ -1,4 +1,4 @@
-import { readFile } from "node:fs/promises";
+import { readFile, realpath } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import type { GrabbedElementSourceLocation } from "../../../renderer/shared/browser-element-grab.js";
@@ -159,10 +159,15 @@ export function lookupOriginalPosition(
 
 const ALLOWED_LOCAL_FILE_EXTENSIONS = /\.(?:js|mjs|cjs|map)$/iu;
 
+function isStrictlyInside(root: string, file: string): boolean {
+  const rel = path.relative(root, file);
+  return Boolean(rel) && !rel.startsWith("..") && !path.isAbsolute(rel);
+}
+
 /**
  * Validates that a `file://` URL points to an allowed script/source-map extension
- * (`.js`, `.mjs`, `.cjs`, `.map`) and, when `workspaceRoot` is provided, resolves
- * strictly inside `workspaceRoot`.
+ * (`.js`, `.mjs`, `.cjs`, `.map`) that lies lexically inside `workspaceRoot`.
+ * Without a workspace root there is nothing to contain the read, so it is refused.
  */
 export function allowedLocalSourceMapFilePath(
   rawUrl: string,
@@ -182,13 +187,44 @@ export function allowedLocalSourceMapFilePath(
     return null;
   }
   if (!ALLOWED_LOCAL_FILE_EXTENSIONS.test(filePath)) return null;
+  if (!workspaceRoot) return null;
   const resolvedFile = path.resolve(filePath);
-  if (workspaceRoot) {
-    const resolvedRoot = path.resolve(workspaceRoot);
-    const rel = path.relative(resolvedRoot, resolvedFile);
-    if (!rel || rel.startsWith("..") || path.isAbsolute(rel)) return null;
-  }
+  if (!isStrictlyInside(path.resolve(workspaceRoot), resolvedFile)) return null;
   return resolvedFile;
+}
+
+/**
+ * Where a page's own source hints may be read from: its exact loopback HTTP(S)
+ * origin, or workspace files when the page itself is a `file://` document.
+ * Any other page gets no local reads at all.
+ */
+export type GrabSourceAuthority = { kind: "http"; origin: string } | { kind: "file" };
+
+export function grabSourceAuthority(pageUrl: string | undefined): GrabSourceAuthority | undefined {
+  if (!pageUrl) return undefined;
+  let parsed: URL;
+  try {
+    parsed = new URL(pageUrl);
+  } catch {
+    return undefined;
+  }
+  if (parsed.protocol === "file:") return { kind: "file" };
+  parsed.username = "";
+  parsed.password = "";
+  return isAllowedSourceMapUrl(parsed.href) ? { kind: "http", origin: parsed.origin } : undefined;
+}
+
+/** Whether a guest-supplied script or map URL falls under the page's authority. */
+export function isAuthorizedSourceUrl(rawUrl: string, authority: GrabSourceAuthority | undefined): boolean {
+  if (!authority || !isAllowedSourceMapUrl(rawUrl)) return false;
+  let parsed: URL;
+  try {
+    parsed = new URL(rawUrl);
+  } catch {
+    return false;
+  }
+  if (authority.kind === "file") return parsed.protocol === "file:";
+  return parsed.protocol !== "file:" && parsed.origin === authority.origin;
 }
 
 /**
@@ -327,6 +363,7 @@ function parseInlineDataSourceMap(dataUrl: string): ParsedSourceMapV3 | null {
 export interface SourceMapFetcherDeps {
   fetchImpl?: typeof fetch;
   readFileImpl?: (filePath: string) => Promise<Buffer>;
+  realpathImpl?: (filePath: string) => Promise<string>;
 }
 
 async function readBoundedResponseText(response: Response): Promise<string | null> {
@@ -359,17 +396,32 @@ async function readBoundedResponseText(response: Response): Promise<string | nul
 }
 
 /**
- * Local-only (loopback + `file://`) VLQ source-map resolver with 25-entry LRU cache,
+ * VLQ source-map resolver bound to the page's own loopback origin (or workspace files for a `file://` page) with 25-entry LRU cache,
  * `redirect: "error"`, 1500ms timeout, and 10 MB size cap.
  */
 export class LocalGrabSourceMapResolver {
   private readonly cache = new Map<string, IndexedSourceMap | null>();
   private readonly fetchImpl: typeof fetch;
   private readonly readFileImpl: (filePath: string) => Promise<Buffer>;
+  private readonly realpathImpl: (filePath: string) => Promise<string>;
 
   constructor(deps: SourceMapFetcherDeps = {}) {
     this.fetchImpl = deps.fetchImpl ?? globalThis.fetch;
     this.readFileImpl = deps.readFileImpl ?? ((filePath) => readFile(filePath));
+    this.realpathImpl = deps.realpathImpl ?? ((filePath) => realpath(filePath));
+  }
+
+  /** Resolves symlinks on both sides so an in-root link cannot reach outside the workspace. */
+  private async canonicalWorkspaceFile(url: string, workspaceRoot?: string): Promise<string | null> {
+    const lexical = allowedLocalSourceMapFilePath(url, workspaceRoot);
+    if (!lexical || !workspaceRoot) return null;
+    try {
+      const [root, file] = await Promise.all([this.realpathImpl(workspaceRoot), this.realpathImpl(lexical)]);
+      if (!ALLOWED_LOCAL_FILE_EXTENSIONS.test(file) || !isStrictlyInside(root, file)) return null;
+      return file;
+    } catch {
+      return null;
+    }
   }
 
   private cacheGet(key: string): IndexedSourceMap | null | undefined {
@@ -390,12 +442,16 @@ export class LocalGrabSourceMapResolver {
     }
   }
 
-  private async fetchLocalText(url: string, workspaceRoot?: string): Promise<string | null> {
-    if (!isAllowedSourceMapUrl(url)) return null;
+  private async fetchLocalText(
+    url: string,
+    authority: GrabSourceAuthority,
+    workspaceRoot?: string,
+  ): Promise<string | null> {
+    if (!isAuthorizedSourceUrl(url, authority)) return null;
     try {
       const parsed = new URL(url);
       if (parsed.protocol === "file:") {
-        const filePath = allowedLocalSourceMapFilePath(url, workspaceRoot);
+        const filePath = await this.canonicalWorkspaceFile(url, workspaceRoot);
         if (!filePath) return null;
         const buf = await this.readFileImpl(filePath);
         if (buf.byteLength > MAX_SOURCE_MAP_BYTES) return null;
@@ -414,9 +470,10 @@ export class LocalGrabSourceMapResolver {
 
   private async loadSourceMapForBundle(
     bundleUrl: string,
+    authority: GrabSourceAuthority,
     workspaceRoot?: string,
   ): Promise<IndexedSourceMap | null> {
-    if (!isAllowedSourceMapUrl(bundleUrl)) {
+    if (!isAuthorizedSourceUrl(bundleUrl, authority)) {
       return null;
     }
     if (bundleUrl.startsWith("file:") && !allowedLocalSourceMapFilePath(bundleUrl, workspaceRoot)) {
@@ -427,7 +484,7 @@ export class LocalGrabSourceMapResolver {
     if (cached !== undefined) return cached;
 
     let parsedMap: ParsedSourceMapV3 | null = null;
-    const jsText = await this.fetchLocalText(bundleUrl, workspaceRoot);
+    const jsText = await this.fetchLocalText(bundleUrl, authority, workspaceRoot);
     if (jsText) {
       const mappingRef = extractSourceMappingUrl(jsText);
       if (mappingRef) {
@@ -436,7 +493,7 @@ export class LocalGrabSourceMapResolver {
         } else {
           try {
             const mapUrl = new URL(mappingRef, bundleUrl).href;
-            const mapText = await this.fetchLocalText(mapUrl, workspaceRoot);
+            const mapText = await this.fetchLocalText(mapUrl, authority, workspaceRoot);
             if (mapText) {
               const json = JSON.parse(mapText) as Partial<ParsedSourceMapV3>;
               if (json.version === 3 && Array.isArray(json.sources) && typeof json.mappings === "string") {
@@ -454,7 +511,7 @@ export class LocalGrabSourceMapResolver {
       // Fallback: try <bundleUrl>.map directly if still allowed.
       try {
         const directMapUrl = `${bundleUrl.split(/[?#]/u)[0]}.map`;
-        const mapText = await this.fetchLocalText(directMapUrl, workspaceRoot);
+        const mapText = await this.fetchLocalText(directMapUrl, authority, workspaceRoot);
         if (mapText) {
           const json = JSON.parse(mapText) as Partial<ParsedSourceMapV3>;
           if (json.version === 3 && Array.isArray(json.sources) && typeof json.mappings === "string") {
@@ -474,10 +531,11 @@ export class LocalGrabSourceMapResolver {
   async resolveSourceHint(
     hint: RawGrabSourceHint | undefined,
     workspaceRoot?: string,
-    options?: { allowLocalFetch?: boolean },
+    options?: { pageUrl?: string },
   ): Promise<GrabbedElementSourceLocation | undefined> {
     if (!hint) return undefined;
-    const allowLocalFetch = options?.allowLocalFetch !== false;
+    // Only the authoritative page URL grants local reads, never the guest's stack text.
+    const authority = grabSourceAuthority(options?.pageUrl);
 
     if (hint.fileName) {
       const normalized = normalizeBundlerSourcePath(hint.fileName, workspaceRoot);
@@ -494,8 +552,8 @@ export class LocalGrabSourceMapResolver {
     if (hint.debugStack) {
       const frames = parseDebugStackFrames(hint.debugStack);
       for (const frame of frames.slice(0, 4)) {
-        if (allowLocalFetch && isAllowedSourceMapUrl(frame.url)) {
-          const map = await this.loadSourceMapForBundle(frame.url, workspaceRoot);
+        if (authority && isAuthorizedSourceUrl(frame.url, authority)) {
+          const map = await this.loadSourceMapForBundle(frame.url, authority, workspaceRoot);
           if (map) {
             const original = lookupOriginalPosition(map, frame.line, frame.column);
             if (original) {

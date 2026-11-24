@@ -10,16 +10,17 @@ import {
 import { browserDisplayUrl, browserMeasuredViewport } from "./core.js";
 import type { CssRect } from "./credential-fields.js";
 import type { RawGrabComponentFrame, RawGrabSourceHint } from "./grab-runtime/inspect-react.js";
-import {
-  defaultGrabSourceMapResolver,
-  isAllowedSourceMapUrl,
-  type LocalGrabSourceMapResolver,
-} from "./grab-source-map.js";
+import { defaultGrabSourceMapResolver, type LocalGrabSourceMapResolver } from "./grab-source-map.js";
 
 const FRAMEWORK_SET = new Set<string>(GRABBED_ELEMENT_FRAMEWORKS);
 const TAG_NAME_PATTERN = /^[a-z][a-z0-9:_-]{0,63}$/u;
 const SECRET_KEY_PATTERN =
   /pass|secret|token|auth|api[_-]?key|cookie|session|credit|card|cvv|cvc|ssn|bearer|jwt|private|credential/iu;
+/** A field's live contents travel under these keys whatever the field is. */
+const VALUE_KEY_PATTERN = /^(?:default)?value$/iu;
+/** On a credential field only these describe the field rather than hold its contents. */
+const SENSITIVE_FIELD_SAFE_KEYS = new Set(["type", "autocomplete", "inputmode"]);
+const CREDENTIAL_AUTOCOMPLETE_PATTERN = /(?:^|\s)(?:current-password|new-password|one-time-code|cc-[a-z-]+)(?:\s|$)/iu;
 const SECRET_VALUE_PATTERN =
   /\b(?:gh[pousr]_[A-Za-z0-9]{20,}|sk-[A-Za-z0-9_-]{20,}|AKIA[0-9A-Z]{16}|Bearer\s+[A-Za-z0-9._~+/=-]{12,}|eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,})\b/gu;
 
@@ -83,16 +84,33 @@ function sanitizeSourceHint(raw: unknown): RawGrabSourceHint | undefined {
   return hint.fileName || hint.debugStack ? hint : undefined;
 }
 
+function propsDescribeSensitiveField(props: Record<string, unknown>): boolean {
+  const type = props.type;
+  if (typeof type === "string" && type.trim().toLowerCase() === "password") return true;
+  return [props.autoComplete, props.autocomplete].some(
+    (value) => typeof value === "string" && CREDENTIAL_AUTOCOMPLETE_PATTERN.test(value),
+  );
+}
+
 function sanitizeProps(
   raw: unknown,
+  sensitiveTarget: boolean,
 ): Record<string, string | number | boolean | null> | undefined {
   if (!raw || typeof raw !== "object" || Array.isArray(raw)) return undefined;
+  const entries = raw as Record<string, unknown>;
+  // A password, one-time-code or card field keeps only the props that describe it.
+  const sensitive = sensitiveTarget || propsDescribeSensitiveField(entries);
   const out: Record<string, string | number | boolean | null> = {};
   let count = 0;
-  for (const [key, val] of Object.entries(raw as Record<string, unknown>)) {
+  for (const [key, val] of Object.entries(entries)) {
     if (count >= 12) break;
     if (!key || key.length > 80 || key === "__proto__" || key === "constructor" || key === "prototype") continue;
-    if (SECRET_KEY_PATTERN.test(key)) {
+    if (
+      SECRET_KEY_PATTERN.test(key) ||
+      VALUE_KEY_PATTERN.test(key) ||
+      (sensitive && (typeof val === "string" || typeof val === "number") &&
+        !SENSITIVE_FIELD_SAFE_KEYS.has(key.toLowerCase()))
+    ) {
       out[key] = "[redacted]";
       count += 1;
       continue;
@@ -197,9 +215,9 @@ export async function sanitizeRawGrabPayload(
   }
   const rec = raw as Record<string, unknown>;
   const resolver = options.sourceMapResolver ?? defaultGrabSourceMapResolver;
-  // Only allow local source-map fetch/readFile when the authoritative page URL itself is local/loopback.
   const pageUrl = stripUrlCredentials(options.pageUrl);
-  const allowLocalFetch = isAllowedSourceMapUrl(pageUrl);
+  // The resolver binds source-map reads to this authoritative page origin.
+  const sourceAuthority = { pageUrl: options.pageUrl };
 
   const rawTag = typeof rec.tagName === "string" ? rec.tagName.trim().toLowerCase() : "div";
   const tagName = TAG_NAME_PATTERN.test(rawTag) ? rawTag : "div";
@@ -224,7 +242,7 @@ export async function sanitizeRawGrabPayload(
       // Symbolicate up to the top 5 component frames to stay fast.
       const source =
         index < 5 && hint
-          ? await resolver.resolveSourceHint(hint, options.workspaceRoot, { allowLocalFetch })
+          ? await resolver.resolveSourceHint(hint, options.workspaceRoot, sourceAuthority)
           : undefined;
       const cleanFrame: GrabbedElementComponentFrame = { name };
       if (env === "client" || env === "server") cleanFrame.environment = env;
@@ -238,7 +256,7 @@ export async function sanitizeRawGrabPayload(
   const topSourceHint = sanitizeSourceHint(rec.source);
   const resolvedTopSource =
     (topSourceHint
-      ? await resolver.resolveSourceHint(topSourceHint, options.workspaceRoot, { allowLocalFetch })
+      ? await resolver.resolveSourceHint(topSourceHint, options.workspaceRoot, sourceAuthority)
       : undefined) ?? componentStack.find((frame) => !frame.minified && frame.source)?.source;
 
   const rawComponentName = cleanString(rec.componentName, 160);
@@ -246,6 +264,7 @@ export async function sanitizeRawGrabPayload(
   const componentName = rawComponentName ?? primaryNonMinified;
 
   const attributes = sanitizeAttributes(rec.attributes);
+  const props = sanitizeProps(rec.props, rec.sensitiveTarget === true);
   const label = (componentName ? `<${componentName} />` : semanticDomLabel(tagName, attributes)).slice(0, 160);
   const selector = cleanString(rec.selector, 1024) ?? tagName;
   const htmlSnippet =
@@ -275,7 +294,7 @@ export async function sanitizeRawGrabPayload(
     ...(componentName ? { componentName } : {}),
     ...(componentStack.length > 0 ? { componentStack } : {}),
     ...(resolvedTopSource ? { source: resolvedTopSource } : {}),
-    ...(sanitizeProps(rec.props) ? { props: sanitizeProps(rec.props) } : {}),
+    ...(props ? { props } : {}),
     tagName,
     selector,
     ...(cleanString(rec.role, 80) ? { role: cleanString(rec.role, 80) } : {}),

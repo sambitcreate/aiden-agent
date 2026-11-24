@@ -303,3 +303,40 @@ test("sanitizeRawGrabPayload prevents remote pages from triggering local fetch o
     symbolicated: false,
   });
 });
+
+test("a grabbed credential field never carries its live value in props, whatever the prop is called", async () => {
+  function OtpField() {}
+  const otpFiber = {
+    type: OtpField,
+    return: null,
+    memoizedProps: { value: "493817", autoComplete: "one-time-code", code: "493817", label: "Code" },
+  };
+  const otp = inspectReactElement({ __reactFiber$otp: { type: "input", return: otpFiber, _debugOwner: otpFiber } });
+  assert.deepEqual(otp?.props, { value: "[redacted]", autoComplete: "one-time-code", code: "[redacted]", label: "[redacted]" });
+
+  // The page reports its own props, so the main process applies the same rule to whatever arrives.
+  const raw = (props: Record<string, unknown>, sensitiveTarget?: boolean) => ({
+    framework: "react",
+    componentStack: [{ name: "PasswordField" }],
+    props,
+    ...(sensitiveTarget ? { sensitiveTarget } : {}),
+    tagName: "input",
+    selector: "input#password",
+    htmlSnippet: '<input id="password" type="password">',
+    boundingBox: { x: 0, y: 0, width: 200, height: 30 },
+    viewport: { width: 1280, height: 720, devicePixelRatio: 1 },
+  });
+  const options = { pageUrl: "http://localhost:3000/login", id: "credential_props", capturedAt: 1 };
+
+  const controlled = await sanitizeRawGrabPayload(raw({ value: "hunter2-secret-pass", placeholder: "Password" }), options);
+  assert.equal(controlled.element.props?.value, "[redacted]");
+  assert.equal(controlled.element.props?.placeholder, "Password");
+
+  const typed = await sanitizeRawGrabPayload(raw({ type: "password", draft: "hunter2-secret-pass", defaultValue: "x" }), options);
+  assert.deepEqual(typed.element.props, { type: "password", draft: "[redacted]", defaultValue: "[redacted]" });
+
+  // A wrapper around a password input is sensitive even when its own props don't say so.
+  const wrapper = await sanitizeRawGrabPayload(raw({ current: "hunter2-secret-pass", pin: 4321, disabled: false }, true), options);
+  assert.deepEqual(wrapper.element.props, { current: "[redacted]", pin: "[redacted]", disabled: false });
+  assert.doesNotMatch(JSON.stringify([controlled.element, typed.element, wrapper.element]), /hunter2|4321/);
+});
