@@ -46,9 +46,12 @@ export function studioAssetsEnabled(environment: Environment = process.env): boo
 export function studioCapabilities(environment: Environment = process.env): {
   createImages: boolean;
   designMode: boolean;
+  /** DESIGN.md and live apps in design mode (`AIDEN_EXPERIMENTAL_DESIGN_LIVE`). */
+  designLive: boolean;
 } {
   return {
     createImages: createImagesEnabled(environment),
     designMode: designModeEnabled(environment),
+    designLive: designLiveEnabled(environment),
   };
 }
