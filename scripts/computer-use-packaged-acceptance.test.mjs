@@ -6,28 +6,51 @@ import path from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
 import {
+  ACCEPTANCE_DECOY_INITIAL_TEXT,
+  ACCEPTANCE_DENIED_MODEL,
+  ACCEPTANCE_DENIED_TEXT,
+  ACCEPTANCE_MODEL,
   ACCEPTANCE_SAVED_TEXT,
+  ACCEPTANCE_TARGET_INITIAL_TEXT,
   ACCEPTANCE_TEXT,
+  ACCEPTANCE_TWO_WINDOW_TOOL_COUNT,
   acceptanceCapabilityBaseUrl,
   acceptanceChatCompletionPath,
+  acceptanceDeniedToolCall,
   acceptanceFixture,
   acceptanceGateEvidence,
   acceptanceToolCall,
+  buildUnsupportedRealDesktopReport,
+  classifyAcceptanceError,
   evaluateAcceptanceRequests,
+  evaluateDeniedPermissionCheck,
+  evaluateHostSupport,
+  evaluateRealDesktopReport,
+  evaluateStopCleanupCheck,
+  evaluateTextEditMarkerCheck,
+  evaluateTwoWindowsIsolationCheck,
   openAiToolCallChunks,
+  parseMacOSVersion,
+  REAL_DESKTOP_CHECK_IDS,
+  renderRealDesktopReport,
   resolveAcceptanceTarget,
+  resolveAcceptanceWindows,
 } from "./computer-use-packaged-acceptance-core.mjs";
 import {
   bindOwnedProcesses,
   computerUseHelperExecutables,
   emergencyCleanup,
   launchTrackedApplicationProcess,
+  readHostCursorPosition,
+  readHostMacOSVersion,
+  readPackagedMetadata,
   resolveTextEditExecutable,
   startAcceptanceModel,
   terminateLingeringComputerUseProcesses,
   waitForCleanComputerUseExit,
   waitForStopTeardown,
 } from "./computer-use-packaged-acceptance.mjs";
+import { CUA_DRIVER_ARTIFACT_PROVENANCE } from "./computer-use-signing-pins.mjs";
 
 const target = {
   pid: 123,
@@ -528,4 +551,474 @@ test("packaged acceptance rejects wrong targets, missing images, and unsaved tex
   });
   assert.equal(result.ok, false);
   assert.match(result.failures.join(" "), /did not retain|no image|did not contain/u);
+});
+
+const decoy = {
+  pid: 123,
+  window_id: 789,
+  app_name: "TextEdit",
+  title: "Aiden CUA Decoy 123.txt",
+};
+
+const sampleMetadata = Object.freeze({
+  appVersion: "0.69.0",
+  driverVersion: CUA_DRIVER_ARTIFACT_PROVENANCE.version,
+  macOSVersion: "15.4.1",
+});
+
+test("host support classification distinguishes supported macOS, older macOS, and non-macOS hosts", () => {
+  assert.deepEqual(parseMacOSVersion("15.4.1"), { major: 15, minor: 4, patch: 1 });
+  assert.deepEqual(parseMacOSVersion("14.4"), { major: 14, minor: 4, patch: 0 });
+  assert.equal(parseMacOSVersion("unavailable (linux)"), null);
+
+  assert.equal(evaluateHostSupport({ platform: "darwin", macOSVersion: "14.4" }).supported, true);
+  assert.equal(evaluateHostSupport({ platform: "darwin", macOSVersion: "15.4.1" }).supported, true);
+  assert.equal(evaluateHostSupport({ platform: "darwin", macOSVersion: "26.0" }).supported, true);
+
+  const oldMac = evaluateHostSupport({ platform: "darwin", macOSVersion: "14.3.1" });
+  assert.equal(oldMac.supported, false);
+  assert.match(oldMac.reason, /14\.4/u);
+
+  const linux = evaluateHostSupport({ platform: "linux", macOSVersion: "unavailable (linux)" });
+  assert.equal(linux.supported, false);
+  assert.match(linux.reason, /linux/u);
+
+  const unknown = evaluateHostSupport({ platform: "darwin", macOSVersion: "bad" });
+  assert.equal(unknown.supported, false);
+});
+
+test("TextEdit marker check inspects disk contents rather than trusting tool replies", () => {
+  const passed = evaluateTextEditMarkerCheck({
+    metadata: sampleMetadata,
+    targetFileText: `${ACCEPTANCE_TARGET_INITIAL_TEXT}${ACCEPTANCE_SAVED_TEXT}`,
+    targetMatched: true,
+  });
+  assert.equal(passed.status, "pass");
+  assert.equal(passed.driverVersion, CUA_DRIVER_ARTIFACT_PROVENANCE.version);
+
+  const missingMarker = evaluateTextEditMarkerCheck({
+    metadata: sampleMetadata,
+    targetFileText: `${ACCEPTANCE_TARGET_INITIAL_TEXT}something else`,
+    targetMatched: true,
+  });
+  assert.equal(missingMarker.status, "failed");
+
+  const unchanged = evaluateTextEditMarkerCheck({
+    metadata: sampleMetadata,
+    targetFileText: ACCEPTANCE_TARGET_INITIAL_TEXT,
+    expectedMarker: ACCEPTANCE_TARGET_INITIAL_TEXT,
+    targetMatched: true,
+  });
+  assert.equal(unchanged.status, "failed");
+
+  const wrongTarget = evaluateTextEditMarkerCheck({
+    metadata: sampleMetadata,
+    targetFileText: `${ACCEPTANCE_TARGET_INITIAL_TEXT}${ACCEPTANCE_SAVED_TEXT}`,
+    targetMatched: false,
+  });
+  assert.equal(wrongTarget.status, "failed");
+
+  const envProblem = evaluateTextEditMarkerCheck({
+    metadata: sampleMetadata,
+    targetFileText: null,
+    environmentError: "TextEdit failed to launch",
+  });
+  assert.equal(envProblem.status, "environment problem");
+});
+
+test("two-window isolation check verifies decoy disk/live invariance and unmoved mouse cursor", () => {
+  const baseArgs = {
+    metadata: sampleMetadata,
+    targetWindow: target,
+    decoyWindow: decoy,
+    targetFileText: `${ACCEPTANCE_TARGET_INITIAL_TEXT}${ACCEPTANCE_SAVED_TEXT}`,
+    decoyFileBefore: ACCEPTANCE_DECOY_INITIAL_TEXT,
+    decoyFileAfter: ACCEPTANCE_DECOY_INITIAL_TEXT,
+    decoyLiveCaptureText: JSON.stringify({ elements: [{ value: ACCEPTANCE_DECOY_INITIAL_TEXT }] }),
+    cursorBefore: { x: 412.5, y: 310.0 },
+    cursorAfter: { x: 412.5, y: 310.5 },
+  };
+  assert.equal(evaluateTwoWindowsIsolationCheck(baseArgs).status, "pass");
+
+  // Decoy file on disk changed -> failed.
+  assert.equal(
+    evaluateTwoWindowsIsolationCheck({
+      ...baseArgs,
+      decoyFileAfter: `${ACCEPTANCE_DECOY_INITIAL_TEXT}oops`,
+    }).status,
+    "failed",
+  );
+
+  // Unsaved keystrokes leaked into decoy live AX tree -> failed even though disk file matched.
+  assert.equal(
+    evaluateTwoWindowsIsolationCheck({
+      ...baseArgs,
+      decoyLiveCaptureText: JSON.stringify({ elements: [{ value: ACCEPTANCE_SAVED_TEXT }] }),
+    }).status,
+    "failed",
+  );
+
+  // Host mouse cursor moved during background actions -> failed.
+  const moved = evaluateTwoWindowsIsolationCheck({
+    ...baseArgs,
+    cursorAfter: { x: 440, y: 310 },
+  });
+  assert.equal(moved.status, "failed");
+  assert.match(moved.detail, /cursor moved/iu);
+
+  // Same window ID for target and decoy -> failed.
+  assert.equal(
+    evaluateTwoWindowsIsolationCheck({
+      ...baseArgs,
+      decoyWindow: { ...decoy, window_id: target.window_id },
+    }).status,
+    "failed",
+  );
+
+  // Missing cursor probe -> environment problem, never pass.
+  assert.equal(
+    evaluateTwoWindowsIsolationCheck({
+      ...baseArgs,
+      cursorAfter: null,
+    }).status,
+    "environment problem",
+  );
+});
+
+test("Stop cleanup check requires observed helper, explicit user Stop, and zero lingering processes", () => {
+  assert.equal(
+    evaluateStopCleanupCheck({
+      metadata: sampleMetadata,
+      observedHelperBeforeStop: true,
+      observedUserStop: true,
+      helpersAfterStop: [],
+      helpersAfterQuit: [],
+    }).status,
+    "pass",
+  );
+  assert.equal(
+    evaluateStopCleanupCheck({
+      metadata: sampleMetadata,
+      observedHelperBeforeStop: true,
+      observedUserStop: true,
+      helpersAfterStop: [{ pid: 901 }],
+      helpersAfterQuit: [],
+    }).status,
+    "failed",
+  );
+  assert.equal(
+    evaluateStopCleanupCheck({
+      metadata: sampleMetadata,
+      observedHelperBeforeStop: true,
+      observedUserStop: true,
+      helpersAfterStop: [],
+      helpersAfterQuit: [{ pid: 902 }],
+    }).status,
+    "failed",
+  );
+  assert.equal(
+    evaluateStopCleanupCheck({
+      metadata: sampleMetadata,
+      observedHelperBeforeStop: false,
+      observedUserStop: true,
+      helpersAfterStop: [],
+      helpersAfterQuit: [],
+    }).status,
+    "failed",
+  );
+  assert.equal(
+    evaluateStopCleanupCheck({
+      metadata: sampleMetadata,
+      observedHelperBeforeStop: false,
+      observedUserStop: false,
+      environmentError: "Timed out waiting for operator",
+    }).status,
+    "environment problem",
+  );
+});
+
+test("denied permission check verifies refusal and zero disk or window changes", () => {
+  const baseArgs = {
+    metadata: sampleMetadata,
+    deniedResponseText: "The user declined Computer Use in this chat. Do not retry it unless the user asks again.",
+    accessGranted: false,
+    targetFileBefore: ACCEPTANCE_TARGET_INITIAL_TEXT,
+    targetFileAfter: ACCEPTANCE_TARGET_INITIAL_TEXT,
+    decoyFileBefore: ACCEPTANCE_DECOY_INITIAL_TEXT,
+    decoyFileAfter: ACCEPTANCE_DECOY_INITIAL_TEXT,
+    targetWindowTextBefore: ACCEPTANCE_TARGET_INITIAL_TEXT,
+    targetWindowTextAfter: ACCEPTANCE_TARGET_INITIAL_TEXT,
+  };
+  assert.equal(evaluateDeniedPermissionCheck(baseArgs).status, "pass");
+
+  // Also accepts a macOS TCC permission_required refusal when nothing changed.
+  assert.equal(
+    evaluateDeniedPermissionCheck({
+      ...baseArgs,
+      deniedResponseText: JSON.stringify({ ok: false, error: { code: "permission_required" } }),
+    }).status,
+    "pass",
+  );
+
+  // Even if the tool said declined, a disk mutation fails the check.
+  assert.equal(
+    evaluateDeniedPermissionCheck({
+      ...baseArgs,
+      targetFileAfter: `${ACCEPTANCE_TARGET_INITIAL_TEXT}${ACCEPTANCE_DENIED_TEXT}`,
+    }).status,
+    "failed",
+  );
+
+  // Target window changed in memory despite denial -> failed.
+  assert.equal(
+    evaluateDeniedPermissionCheck({
+      ...baseArgs,
+      targetWindowTextAfter: `${ACCEPTANCE_TARGET_INITIAL_TEXT}${ACCEPTANCE_DENIED_TEXT}`,
+    }).status,
+    "failed",
+  );
+
+  // Tool claimed ok: true -> failed.
+  assert.equal(
+    evaluateDeniedPermissionCheck({
+      ...baseArgs,
+      deniedResponseText: JSON.stringify({ ok: true, action: "type" }),
+    }).status,
+    "failed",
+  );
+
+  // Denied chat unexpectedly recorded a grant -> failed.
+  assert.equal(
+    evaluateDeniedPermissionCheck({
+      ...baseArgs,
+      accessGranted: true,
+    }).status,
+    "failed",
+  );
+});
+
+test("real-desktop report evaluator fails closed on missing rows, invalid statuses, and version drift", () => {
+  const passingRows = REAL_DESKTOP_CHECK_IDS.map((id) => ({
+    id,
+    status: "pass",
+    detail: "verified",
+    ...sampleMetadata,
+  }));
+  const complete = { schemaVersion: 1, ...sampleMetadata, checks: passingRows };
+  const okResult = evaluateRealDesktopReport(complete);
+  assert.equal(okResult.ok, true);
+  assert.equal(okResult.overallStatus, "pass");
+  assert.deepEqual(okResult.missingChecks, []);
+
+  // Missing a single required row NEVER counts as a pass.
+  const missingOne = evaluateRealDesktopReport({
+    schemaVersion: 1,
+    ...sampleMetadata,
+    checks: passingRows.slice(0, 3),
+  });
+  assert.equal(missingOne.ok, false);
+  assert.equal(missingOne.overallStatus, "failed");
+  assert.deepEqual(missingOne.missingChecks, [REAL_DESKTOP_CHECK_IDS[3]]);
+  assert.match(renderRealDesktopReport({ schemaVersion: 1, ...sampleMetadata, checks: passingRows.slice(0, 3) }), /Missing required checks/u);
+
+  // Duplicate row fails closed.
+  const duplicate = evaluateRealDesktopReport({
+    schemaVersion: 1,
+    ...sampleMetadata,
+    checks: [...passingRows, passingRows[0]],
+  });
+  assert.equal(duplicate.ok, false);
+  assert.equal(duplicate.overallStatus, "failed");
+
+  // Unknown status fails closed.
+  const badStatus = evaluateRealDesktopReport({
+    schemaVersion: 1,
+    ...sampleMetadata,
+    checks: passingRows.map((row, index) => (index === 0 ? { ...row, status: "skipped" } : row)),
+  });
+  assert.equal(badStatus.ok, false);
+  assert.equal(badStatus.overallStatus, "failed");
+
+  // Version mismatch fails closed.
+  const versionDrift = evaluateRealDesktopReport({
+    schemaVersion: 1,
+    ...sampleMetadata,
+    checks: passingRows.map((row, index) => (index === 1 ? { ...row, driverVersion: "0.0.0" } : row)),
+  });
+  assert.equal(versionDrift.ok, false);
+  assert.equal(versionDrift.overallStatus, "failed");
+
+  // Environment problem aggregates cleanly without falsely passing.
+  const envReport = evaluateRealDesktopReport({
+    schemaVersion: 1,
+    ...sampleMetadata,
+    checks: passingRows.map((row, index) =>
+      index === 2 ? { ...row, status: "environment problem" } : row,
+    ),
+  });
+  assert.equal(envReport.ok, false);
+  assert.equal(envReport.overallStatus, "environment problem");
+
+  // Unsupported report marks every check unsupported and carries all three versions.
+  const unsupported = buildUnsupportedRealDesktopReport(sampleMetadata, "Host is linux.");
+  const unsupportedEval = evaluateRealDesktopReport(unsupported);
+  assert.equal(unsupportedEval.ok, false);
+  assert.equal(unsupportedEval.overallStatus, "unsupported");
+  assert.equal(unsupportedEval.counts.unsupported, REAL_DESKTOP_CHECK_IDS.length);
+  const rendered = renderRealDesktopReport(unsupported);
+  assert.match(rendered, new RegExp(CUA_DRIVER_ARTIFACT_PROVENANCE.version.replaceAll(".", "\\."), "u"));
+  assert.match(rendered, /Overall:\*\* unsupported/u);
+});
+
+test("error classifier separates unsupported hosts, environment problems, and product failures", () => {
+  assert.equal(classifyAcceptanceError(new Error("Computer Use requires macOS 14.4 or newer")), "unsupported");
+  assert.equal(classifyAcceptanceError(new Error("Quit every running Aiden window before starting")), "environment problem");
+  assert.equal(classifyAcceptanceError(new Error("permission_required: Accessibility")), "environment problem");
+  assert.equal(classifyAcceptanceError(new Error("Host mouse cursor moved by 24.0 px")), "failed");
+});
+
+test("cursor and metadata probes parse macOS output and reject invalid or non-macOS responses", async () => {
+  const pos = await readHostCursorPosition({
+    platform: "darwin",
+    exec: async () => ({ stdout: '{"x":512.25,"y":280.5}\n' }),
+  });
+  assert.deepEqual(pos, { x: 512.25, y: 280.5 });
+
+  await assert.rejects(
+    readHostCursorPosition({ platform: "linux", exec: async () => ({ stdout: "{}" }) }),
+    /macOS-only/u,
+  );
+  await assert.rejects(
+    readHostCursorPosition({ platform: "darwin", exec: async () => ({ stdout: "not json" }) }),
+    /parse host mouse cursor/u,
+  );
+
+  assert.equal(
+    await readHostMacOSVersion({ platform: "darwin", exec: async () => ({ stdout: "15.4.1\n" }) }),
+    "15.4.1",
+  );
+  assert.equal(await readHostMacOSVersion({ platform: "linux" }), "unavailable (linux)");
+
+  const meta = await readPackagedMetadata({
+    root: path.dirname(path.dirname(fileURLToPath(import.meta.url))),
+    platform: "darwin",
+    exec: async () => ({ stdout: "15.4.1\n" }),
+  });
+  assert.equal(meta.driverVersion, CUA_DRIVER_ARTIFACT_PROVENANCE.version);
+  assert.equal(meta.macOSVersion, "15.4.1");
+  assert.match(meta.appVersion, /^\d+\.\d+\.\d+/u);
+});
+
+test("two-window and denied-chat loopback sequence samples cursor around background mutations and captures decoy", async () => {
+  const capability = "k".repeat(43);
+  const sampled = [];
+  let deniedObserved = false;
+  const model = await startAcceptanceModel({
+    capability,
+    expectedTitles: [target.title],
+    decoyTitles: [decoy.title],
+    readGates: async () => ({ globalEnabled: true, accessGranted: true }),
+    readDeniedGates: async () => ({ globalEnabled: true, accessGranted: false }),
+    onDeniedObserved: async () => {
+      deniedObserved = true;
+    },
+    onSampleCursor: async (phase) => {
+      sampled.push(phase);
+      return { x: 300, y: 200 };
+    },
+  });
+  const endpoint = `http://127.0.0.1:${model.port}${acceptanceChatCompletionPath(capability)}`;
+  const post = async (body) => {
+    const response = await fetch(endpoint, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(body),
+    });
+    assert.equal(response.status, 200);
+    return response.text();
+  };
+  try {
+    // 1. Denied chat: model issues type with ACCEPTANCE_DENIED_TEXT, then records refusal.
+    const deniedTurn0 = await post({
+      model: ACCEPTANCE_DENIED_MODEL,
+      messages: [{ role: "user", content: "Run denied check" }],
+    });
+    assert.match(deniedTurn0, new RegExp(ACCEPTANCE_DENIED_TEXT, "u"));
+    assert.deepEqual(acceptanceDeniedToolCall(0), {
+      action: "type",
+      text: ACCEPTANCE_DENIED_TEXT,
+      capture_after: false,
+    });
+    const deniedTurn1 = await post({
+      model: ACCEPTANCE_DENIED_MODEL,
+      messages: [
+        {
+          role: "tool",
+          tool_call_id: "aiden-cua-denied-0",
+          content: "The user declined Computer Use in this chat.",
+        },
+      ],
+    });
+    assert.match(deniedTurn1, /Denied check complete/u);
+    assert.equal(deniedObserved, true);
+    assert.equal(model.deniedResponseText(), "The user declined Computer Use in this chat.");
+    assert.equal(model.deniedGateEvidence()?.accessGranted, false);
+
+    // 2. Allowed chat with two windows: verify target + decoy resolution, cursor sampling, decoy capture, wait.
+    const twoWindowReqs = successfulRequests();
+    twoWindowReqs[2] = {
+      messages: [
+        assistantMessage(1, acceptanceToolCall(1, target, decoy)),
+        toolMessage(1, { ok: true, action: "list_windows", windows: [target, decoy] }),
+      ],
+    };
+    const decoyTarget = {
+      pid: decoy.pid,
+      windowId: decoy.window_id,
+      app: decoy.app_name,
+      title: decoy.title,
+    };
+    twoWindowReqs.push({
+      messages: [
+        assistantMessage(8, acceptanceToolCall(8, target, decoy)),
+        toolMessage(8, {
+          ok: true,
+          action: "capture",
+          mode: "ax",
+          target: decoyTarget,
+          elements: [{ value: ACCEPTANCE_DECOY_INITIAL_TEXT }],
+        }),
+      ],
+    });
+    assert.equal(twoWindowReqs.length, ACCEPTANCE_TWO_WINDOW_TOOL_COUNT);
+    assert.deepEqual(
+      resolveAcceptanceWindows(twoWindowReqs[2], {
+        targetTitles: [target.title],
+        decoyTitles: [decoy.title],
+      }),
+      { target, decoy },
+    );
+
+    for (const req of twoWindowReqs) {
+      await post({ model: ACCEPTANCE_MODEL, ...req });
+    }
+    await model.waitIssued;
+    assert.deepEqual(sampled, ["before", "after"]);
+    assert.deepEqual(model.cursorSamples(), { before: { x: 300, y: 200 }, after: { x: 300, y: 200 } });
+    assert.deepEqual(model.decoy(), decoy);
+    assert.equal(model.issuedCalls[8].action, "capture");
+    assert.equal(model.issuedCalls[8].window_id, decoy.window_id);
+    assert.equal(model.issuedCalls[9].action, "wait");
+
+    const evalResult = evaluateAcceptanceRequests(twoWindowReqs, {
+      expectedTitles: [target.title],
+      decoyTitles: [decoy.title],
+      savedText: `${ACCEPTANCE_TARGET_INITIAL_TEXT}${ACCEPTANCE_SAVED_TEXT}`,
+      decoySavedText: ACCEPTANCE_DECOY_INITIAL_TEXT,
+    });
+    assert.deepEqual(evalResult.failures, []);
+    assert.equal(evalResult.ok, true);
+  } finally {
+    await model.close();
+  }
 });

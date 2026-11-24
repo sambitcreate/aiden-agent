@@ -9,15 +9,36 @@ import path from "node:path";
 import { promisify } from "node:util";
 import { fileURLToPath } from "node:url";
 import {
+  ACCEPTANCE_DECOY_INITIAL_TEXT,
+  ACCEPTANCE_DENIED_MODEL,
+  ACCEPTANCE_DENIED_TEXT,
+  ACCEPTANCE_MODEL,
+  ACCEPTANCE_SAVED_TEXT,
+  ACCEPTANCE_TARGET_INITIAL_TEXT,
   ACCEPTANCE_TOOL_COUNT,
+  ACCEPTANCE_TWO_WINDOW_TOOL_COUNT,
   acceptanceChatCompletionPath,
+  acceptanceDeniedToolCall,
   acceptanceFixture,
   acceptanceGateEvidence,
   acceptanceToolCall,
+  buildUnsupportedRealDesktopReport,
+  classifyAcceptanceError,
+  correlatedToolMessage,
   evaluateAcceptanceRequests,
+  evaluateDeniedPermissionCheck,
+  evaluateHostSupport,
+  evaluateRealDesktopReport,
+  evaluateStopCleanupCheck,
+  evaluateTextEditMarkerCheck,
+  evaluateTwoWindowsIsolationCheck,
   openAiToolCallChunks,
+  REAL_DESKTOP_CHECK_IDS,
+  renderRealDesktopReport,
   resolveAcceptanceTarget,
+  resolveAcceptanceWindows,
 } from "./computer-use-packaged-acceptance-core.mjs";
+import { CUA_DRIVER_ARTIFACT_PROVENANCE } from "./computer-use-signing-pins.mjs";
 import {
   invalidateComputerUseAcceptanceReceipt,
   resolveComputerUseAcceptanceReceipt,
@@ -46,6 +67,91 @@ function argumentValue(name) {
   return index >= 0 ? process.argv[index + 1] : undefined;
 }
 
+export async function readHostMacOSVersion({
+  platform = process.platform,
+  exec = executeFile,
+} = {}) {
+  if (platform !== "darwin") return `unavailable (${platform})`;
+  try {
+    const { stdout } = await exec("/usr/bin/sw_vers", ["-productVersion"], { encoding: "utf8" });
+    const version = String(stdout ?? "").trim();
+    return version || `unavailable (${os.release()})`;
+  } catch {
+    return `unavailable (${os.release()})`;
+  }
+}
+
+export async function readHostCursorPosition({
+  platform = process.platform,
+  exec = executeFile,
+} = {}) {
+  if (platform !== "darwin") {
+    throw new Error(`Host cursor position probe is macOS-only (host platform is ${platform}).`);
+  }
+  const { stdout } = await exec(
+    "/usr/bin/osascript",
+    [
+      "-l",
+      "JavaScript",
+      "-e",
+      'ObjC.import("AppKit"); const p = $.NSEvent.mouseLocation; JSON.stringify({ x: p.x, y: p.y });',
+    ],
+    { encoding: "utf8", timeout: 5_000 },
+  );
+  let parsed;
+  try {
+    parsed = JSON.parse(String(stdout ?? "").trim());
+  } catch {
+    throw new Error("Could not parse host mouse cursor position from AppKit.");
+  }
+  if (
+    !parsed ||
+    typeof parsed.x !== "number" ||
+    !Number.isFinite(parsed.x) ||
+    typeof parsed.y !== "number" ||
+    !Number.isFinite(parsed.y)
+  ) {
+    throw new Error("Host mouse cursor position was not a finite coordinate pair.");
+  }
+  return { x: parsed.x, y: parsed.y };
+}
+
+export async function readPackagedMetadata({
+  root = repositoryRoot,
+  appPath = null,
+  artifact = null,
+  platform = process.platform,
+  exec = executeFile,
+} = {}) {
+  let appVersion = artifact?.shortVersion ?? null;
+  if (!appVersion) {
+    try {
+      const manifest = JSON.parse(await readFile(path.join(root, "package.json"), "utf8"));
+      appVersion = typeof manifest?.version === "string" ? manifest.version : "unknown";
+    } catch {
+      appVersion = "unknown";
+    }
+  }
+  let driverVersion = CUA_DRIVER_ARTIFACT_PROVENANCE.version;
+  if (appPath) {
+    try {
+      const provenance = JSON.parse(
+        await readFile(
+          path.join(appPath, "Contents", "Resources", "computer-use", "cua-driver-artifact.json"),
+          "utf8",
+        ),
+      );
+      if (typeof provenance?.version === "string" && provenance.version.trim()) {
+        driverVersion = provenance.version.trim();
+      }
+    } catch {
+      // Fall back to the compiled pin version.
+    }
+  }
+  const macOSVersion = await readHostMacOSVersion({ platform, exec });
+  return { appVersion, driverVersion, macOSVersion };
+}
+
 async function readJsonRequest(request) {
   const chunks = [];
   let bytes = 0;
@@ -61,11 +167,43 @@ function writeSse(response, value) {
   response.write(`data: ${JSON.stringify(value)}\n\n`);
 }
 
-export async function startAcceptanceModel({ capability, expectedTitles, readGates }) {
+function writeTextCompletion(response, { id, model, content }) {
+  writeSse(response, {
+    id,
+    object: "chat.completion.chunk",
+    created: 0,
+    model,
+    choices: [{ index: 0, delta: { role: "assistant", content }, finish_reason: null }],
+  });
+  writeSse(response, {
+    id,
+    object: "chat.completion.chunk",
+    created: 0,
+    model,
+    choices: [{ index: 0, delta: {}, finish_reason: "stop" }],
+  });
+}
+
+export async function startAcceptanceModel({
+  capability,
+  expectedTitles,
+  decoyTitles = null,
+  readGates,
+  readDeniedGates = null,
+  onSampleCursor = null,
+  onDeniedObserved = null,
+}) {
+  const twoWindow = Array.isArray(decoyTitles) && decoyTitles.length > 0;
   const requests = [];
   const issuedCalls = [];
+  const deniedRequests = [];
   let target = null;
+  let decoy = null;
   let gateEvidence = null;
+  let deniedGateEvidence = null;
+  let deniedResponseText = null;
+  let cursorBefore = null;
+  let cursorAfter = null;
   let resolveWaitIssued;
   const waitIssued = new Promise((resolve) => {
     resolveWaitIssued = resolve;
@@ -77,6 +215,46 @@ export async function startAcceptanceModel({ capability, expectedTitles, readGat
         return;
       }
       const body = await readJsonRequest(request);
+
+      if (body?.model === ACCEPTANCE_DENIED_MODEL) {
+        const deniedTurn = deniedRequests.length;
+        deniedRequests.push(body);
+        if (deniedTurn === 0) {
+          if (!(await readGates()).globalEnabled) {
+            throw new Error("Turn on Computer Use in Settings before sending.");
+          }
+        }
+        if (deniedTurn === 1) {
+          deniedGateEvidence = readDeniedGates ? await readDeniedGates() : null;
+          try {
+            deniedResponseText = correlatedToolMessage(body, 0, "aiden-cua-denied").content;
+          } catch (error) {
+            deniedResponseText = error instanceof Error ? error.message : String(error);
+          }
+          if (onDeniedObserved) await onDeniedObserved();
+        }
+        const args = acceptanceDeniedToolCall(deniedTurn);
+        response.writeHead(200, {
+          "cache-control": "no-store",
+          "content-type": "text/event-stream",
+        });
+        const chunks = openAiToolCallChunks(deniedTurn, args, {
+          model: ACCEPTANCE_DENIED_MODEL,
+          callPrefix: "aiden-cua-denied",
+        });
+        if (chunks) {
+          for (const chunk of chunks) writeSse(response, chunk);
+        } else {
+          writeTextCompletion(response, {
+            id: "chatcmpl-aiden-cua-denied-complete",
+            model: ACCEPTANCE_DENIED_MODEL,
+            content: "Denied check complete. Switch to the 'Computer Use acceptance' chat.",
+          });
+        }
+        response.end("data: [DONE]\n\n");
+        return;
+      }
+
       const turn = requests.length;
       requests.push(body);
       if (turn === 0) {
@@ -93,8 +271,23 @@ export async function startAcceptanceModel({ capability, expectedTitles, readGat
           throw new Error("Choose Allow for this chat on the Computer Use access card.");
         }
       }
-      if (turn === 2) target = resolveAcceptanceTarget(body, expectedTitles);
-      const args = acceptanceToolCall(turn, target);
+      if (turn === 2) {
+        if (twoWindow) {
+          ({ target, decoy } = resolveAcceptanceWindows(body, {
+            targetTitles: expectedTitles,
+            decoyTitles,
+          }));
+        } else {
+          target = resolveAcceptanceTarget(body, expectedTitles);
+        }
+      }
+      if (turn === 5 && onSampleCursor) {
+        cursorBefore = await onSampleCursor("before");
+      }
+      if (turn === 7 && onSampleCursor) {
+        cursorAfter = await onSampleCursor("after");
+      }
+      const args = acceptanceToolCall(turn, target, decoy);
       issuedCalls.push(args);
       response.writeHead(200, {
         "cache-control": "no-store",
@@ -104,25 +297,10 @@ export async function startAcceptanceModel({ capability, expectedTitles, readGat
       if (chunks) {
         for (const chunk of chunks) writeSse(response, chunk);
       } else {
-        writeSse(response, {
+        writeTextCompletion(response, {
           id: "chatcmpl-aiden-cua-complete",
-          object: "chat.completion.chunk",
-          created: 0,
-          model: "aiden-cua-acceptance",
-          choices: [
-            {
-              index: 0,
-              delta: { role: "assistant", content: "Acceptance sequence reached its end." },
-              finish_reason: null,
-            },
-          ],
-        });
-        writeSse(response, {
-          id: "chatcmpl-aiden-cua-complete",
-          object: "chat.completion.chunk",
-          created: 0,
-          model: "aiden-cua-acceptance",
-          choices: [{ index: 0, delta: {}, finish_reason: "stop" }],
+          model: ACCEPTANCE_MODEL,
+          content: "Acceptance sequence reached its end.",
         });
       }
       response.end("data: [DONE]\n\n");
@@ -139,9 +317,14 @@ export async function startAcceptanceModel({ capability, expectedTitles, readGat
     port: address.port,
     requests,
     issuedCalls,
+    deniedRequests,
     waitIssued,
     target: () => target,
+    decoy: () => decoy,
     gateEvidence: () => gateEvidence,
+    deniedGateEvidence: () => deniedGateEvidence,
+    deniedResponseText: () => deniedResponseText,
+    cursorSamples: () => ({ before: cursorBefore, after: cursorAfter }),
     close: () =>
       new Promise((resolve, reject) => {
         server.close((error) => (error ? reject(error) : resolve()));
@@ -162,13 +345,18 @@ async function seedAcceptanceUserData(userData, port, capability) {
       JSON.stringify(fixture.chat, null, 2),
       "utf8",
     ),
+    writeFile(
+      path.join(chats, `${fixture.deniedChat.id}.json`),
+      JSON.stringify(fixture.deniedChat, null, 2),
+      "utf8",
+    ),
   ]);
 }
 
-async function readAcceptanceGates(userData) {
+async function readAcceptanceGates(userData, chatId = "computer-use-acceptance") {
   const [config, chat] = await Promise.all([
     readFile(path.join(userData, "config.json"), "utf8").then(JSON.parse),
-    readFile(path.join(userData, "chats", "computer-use-acceptance.json"), "utf8").then(JSON.parse),
+    readFile(path.join(userData, "chats", `${chatId}.json`), "utf8").then(JSON.parse),
   ]);
   return acceptanceGateEvidence(config, chat);
 }
@@ -375,12 +563,13 @@ export async function launchTrackedApplicationProcess({
   }
 }
 
-async function launchDisposableTextEdit(targetFile) {
+async function launchDisposableTextEdit(targetFile, decoyFile = null) {
   const executable = await resolveTextEditExecutable();
   const appPath = path.dirname(path.dirname(path.dirname(executable)));
+  const files = decoyFile ? [targetFile, decoyFile] : [targetFile];
   return launchTrackedApplicationProcess({
     executable,
-    launch: () => executeFile("/usr/bin/open", ["-na", appPath, targetFile]),
+    launch: () => executeFile("/usr/bin/open", ["-na", appPath, ...files]),
   });
 }
 
@@ -567,6 +756,7 @@ export async function waitForStopTeardown({
   model,
   stopAudit,
   deadline,
+  expectedToolCount = ACCEPTANCE_TOOL_COUNT,
   listHelpers = lingeringComputerUseProcesses,
   sleep = () => new Promise((resolve) => setTimeout(resolve, PROCESS_POLL_MS)),
   now = Date.now,
@@ -595,7 +785,7 @@ export async function waitForStopTeardown({
     if (childState.outcome()) {
       throw new Error("Aiden quit before Stop reaped Computer Use while the app was still alive.");
     }
-    if (model.requests.length > ACCEPTANCE_TOOL_COUNT) {
+    if (model.requests.length > expectedToolCount) {
       throw new Error("The 30-second wait completed instead of being cancelled with Stop.");
     }
     const helpers = await listHelpers(appPath);
@@ -612,7 +802,11 @@ export async function waitForStopTeardown({
             "Aiden quit before Stop reaped Computer Use while the app was still alive.",
           );
         }
-        return;
+        return {
+          observedHelperBeforeStop: true,
+          observedUserStop: true,
+          helpersAfterStop: [],
+        };
       }
     }
     await sleep();
@@ -651,8 +845,16 @@ export async function emergencyCleanup(
 }
 
 async function runAcceptance() {
-  if (process.platform !== "darwin") {
-    throw new Error("Packaged Computer Use acceptance is macOS-only.");
+  let metadata = await readPackagedMetadata({ root: repositoryRoot });
+  const support = evaluateHostSupport({
+    platform: process.platform,
+    macOSVersion: metadata.macOSVersion,
+  });
+  if (!support.supported) {
+    const unsupportedReport = buildUnsupportedRealDesktopReport(metadata, support.reason);
+    console.log(`\n${renderRealDesktopReport(unsupportedReport)}`);
+    await invalidateComputerUseAcceptanceReceipt(repositoryRoot).catch(() => {});
+    throw new Error(support.reason);
   }
   if (process.env.AIDEN_COMPUTER_USE_ACCEPTANCE !== "1") {
     throw new Error(
@@ -669,26 +871,55 @@ async function runAcceptance() {
   await verifyMacPackage(appPath);
   await assertNoRunningAiden(appPath);
   const artifact = await packagedArtifactIdentity(appPath);
+  metadata = await readPackagedMetadata({ root: repositoryRoot, appPath, artifact });
 
   const temporary = await mkdtemp(path.join(os.tmpdir(), "aiden-cua-acceptance-"));
   const userData = path.join(temporary, "user-data");
-  const targetName = `Aiden CUA Acceptance ${path.basename(temporary)}.txt`;
+  const runId = path.basename(temporary);
+  const targetName = `Aiden CUA Target ${runId}.txt`;
+  const decoyName = `Aiden CUA Decoy ${runId}.txt`;
   const targetFile = path.join(temporary, targetName);
+  const decoyFile = path.join(temporary, decoyName);
   const expectedTitles = [targetName, path.parse(targetName).name];
+  const decoyTitles = [decoyName, path.parse(decoyName).name];
   const modelCapability = randomBytes(32).toString("base64url");
   let model = null;
   let textEditProcess = null;
   let aidenProcess = null;
   let failure = null;
   let completed = false;
+  let realDesktopReport = null;
+  let deniedDiskSnapshots = null;
+  let cursorProbeError = null;
+  let stopEvidence = null;
 
   try {
-    await writeFile(targetFile, "Aiden Computer Use disposable acceptance window.\n", "utf8");
-    textEditProcess = await launchDisposableTextEdit(targetFile);
+    await Promise.all([
+      writeFile(targetFile, ACCEPTANCE_TARGET_INITIAL_TEXT, "utf8"),
+      writeFile(decoyFile, ACCEPTANCE_DECOY_INITIAL_TEXT, "utf8"),
+    ]);
+    textEditProcess = await launchDisposableTextEdit(targetFile, decoyFile);
     model = await startAcceptanceModel({
       capability: modelCapability,
       expectedTitles,
-      readGates: () => readAcceptanceGates(userData),
+      decoyTitles,
+      readGates: () => readAcceptanceGates(userData, "computer-use-acceptance"),
+      readDeniedGates: () => readAcceptanceGates(userData, "computer-use-acceptance-denied"),
+      onDeniedObserved: async () => {
+        const [targetAfterDenied, decoyAfterDenied] = await Promise.all([
+          readFile(targetFile, "utf8"),
+          readFile(decoyFile, "utf8"),
+        ]);
+        deniedDiskSnapshots = { target: targetAfterDenied, decoy: decoyAfterDenied };
+      },
+      onSampleCursor: async () => {
+        try {
+          return await readHostCursorPosition();
+        } catch (error) {
+          cursorProbeError = error instanceof Error ? error.message : String(error);
+          return null;
+        }
+      },
     });
     await seedAcceptanceUserData(userData, model.port, modelCapability);
 
@@ -704,19 +935,30 @@ async function runAcceptance() {
     const deadline = Date.now() + ACCEPTANCE_TIMEOUT_MS;
 
     console.log(`\nPackaged Computer Use acceptance is running in: ${temporary}`);
+    console.log(
+      `App ${metadata.appVersion} · cua-driver ${metadata.driverVersion} · macOS ${metadata.macOSVersion}`,
+    );
     console.log("1. In Settings → Computers & VMs → Computer Use, turn on the global beta gate.");
     console.log("2. Request access if macOS reports missing permissions.");
-    console.log("3. Return to the acceptance chat and send: “Run the packaged Computer Use acceptance sequence.”");
-    console.log("4. On the Computer Use access card, choose Allow for this chat.");
-    console.log("5. The type, save-key and stale click run without further cards; the stale click must be rejected.");
-    console.log("6. When the 30-second wait starts, press Stop but keep Aiden open.");
-    console.log("7. Quit Aiden normally only after this terminal confirms Stop teardown.");
+    console.log("3. Open “Computer Use acceptance (denied)”, send a message, and choose Deny on the access card.");
+    console.log("4. Open “Computer Use acceptance” and send: “Run the packaged Computer Use acceptance sequence.”");
+    console.log("5. On the Computer Use access card, choose Allow in this chat — then keep hands off the mouse until the 30-second wait starts.");
+    console.log("6. Both TextEdit windows stay open; only the Target window changes, the Decoy stays unchanged, and the stale click is rejected.");
+    console.log("7. When the 30-second wait starts, press Stop but keep Aiden open.");
+    console.log("8. Quit Aiden normally only after this terminal confirms Stop teardown.");
     console.log("No model data leaves this Mac; the provider listens only on 127.0.0.1.");
     console.log(
       "macOS TCC grants persist after this test; revoke them in System Settings if you no longer want Aiden Computer Use access.\n",
     );
 
-    await waitForStopTeardown({ appPath, childState, model, stopAudit, deadline });
+    stopEvidence = await waitForStopTeardown({
+      appPath,
+      childState,
+      model,
+      stopAudit,
+      deadline,
+      expectedToolCount: ACCEPTANCE_TWO_WINDOW_TOOL_COUNT,
+    });
     console.log("Stop teardown observed while Aiden is still running. Quit Aiden normally now.");
     const exit = await beforeDeadline(
       childState.promise,
@@ -729,8 +971,72 @@ async function runAcceptance() {
     }
     aidenProcess = null;
     await waitForCleanComputerUseExit(appPath);
+    const helpersAfterQuit = await lingeringComputerUseProcesses(appPath);
 
-    if (model.issuedCalls.length !== ACCEPTANCE_TOOL_COUNT) {
+    const [savedText, decoySavedText] = await Promise.all([
+      readFile(targetFile, "utf8"),
+      readFile(decoyFile, "utf8"),
+    ]);
+    const evidence = evaluateAcceptanceRequests(model.requests, {
+      expectedTitles,
+      decoyTitles,
+      savedText,
+      decoySavedText,
+    });
+    const resolvedTarget = model.target();
+    const resolvedDecoy = model.decoy();
+    const targetMatched = Boolean(resolvedTarget && resolvedTarget.pid === textEditProcess.pid);
+    const { before: cursorBefore, after: cursorAfter } = model.cursorSamples();
+
+    const checkRows = [
+      evaluateTextEditMarkerCheck({
+        metadata,
+        targetFileText: savedText,
+        initialText: ACCEPTANCE_TARGET_INITIAL_TEXT,
+        expectedMarker: ACCEPTANCE_SAVED_TEXT,
+        targetMatched,
+      }),
+      evaluateTwoWindowsIsolationCheck({
+        metadata,
+        targetWindow: resolvedTarget,
+        decoyWindow: resolvedDecoy,
+        targetFileText: savedText,
+        decoyFileBefore: ACCEPTANCE_DECOY_INITIAL_TEXT,
+        decoyFileAfter: decoySavedText,
+        decoyLiveCaptureText: evidence.decoyLiveCaptureText,
+        expectedMarker: ACCEPTANCE_SAVED_TEXT,
+        cursorBefore,
+        cursorAfter,
+        environmentError: cursorProbeError,
+      }),
+      evaluateStopCleanupCheck({
+        metadata,
+        observedHelperBeforeStop: stopEvidence?.observedHelperBeforeStop === true,
+        observedUserStop: stopEvidence?.observedUserStop === true,
+        helpersAfterStop: stopEvidence?.helpersAfterStop ?? [],
+        helpersAfterQuit,
+      }),
+      evaluateDeniedPermissionCheck({
+        metadata,
+        deniedResponseText: model.deniedResponseText(),
+        accessGranted: model.deniedGateEvidence()?.accessGranted ?? false,
+        targetFileBefore: ACCEPTANCE_TARGET_INITIAL_TEXT,
+        targetFileAfter: deniedDiskSnapshots?.target ?? null,
+        decoyFileBefore: ACCEPTANCE_DECOY_INITIAL_TEXT,
+        decoyFileAfter: deniedDiskSnapshots?.decoy ?? null,
+        deniedMarker: ACCEPTANCE_DENIED_TEXT,
+      }),
+    ];
+
+    realDesktopReport = {
+      schemaVersion: 1,
+      ...metadata,
+      checks: checkRows,
+    };
+    const reportEval = evaluateRealDesktopReport(realDesktopReport);
+    console.log(`\n${renderRealDesktopReport(realDesktopReport)}`);
+
+    if (model.issuedCalls.length !== ACCEPTANCE_TWO_WINDOW_TOOL_COUNT) {
       throw new Error(`Only ${model.issuedCalls.length} scripted Computer Use calls were issued.`);
     }
     const gateEvidence = model.gateEvidence();
@@ -739,15 +1045,17 @@ async function runAcceptance() {
         "The operator did not turn on Computer Use and allow the acceptance chat.",
       );
     }
-    const resolvedTarget = model.target();
-    if (!resolvedTarget || resolvedTarget.pid !== textEditProcess.pid) {
+    if (!targetMatched) {
       throw new Error(
         "Computer Use did not bind to the newly launched disposable TextEdit process.",
       );
     }
-    const savedText = await readFile(targetFile, "utf8");
-    const evidence = evaluateAcceptanceRequests(model.requests, { expectedTitles, savedText });
     if (!evidence.ok) throw new Error(evidence.failures.join(" "));
+    if (!reportEval.ok) {
+      throw new Error(
+        `Real-desktop acceptance did not pass (${reportEval.overallStatus}): ${reportEval.failures.join(" ")}`,
+      );
+    }
 
     await terminateTrackedProcess(textEditProcess);
     textEditProcess = null;
@@ -758,14 +1066,18 @@ async function runAcceptance() {
     await writeComputerUseAcceptanceReceipt(
       JSON.stringify(
         {
-          schemaVersion: 3,
+          schemaVersion: 4,
           completedAt: new Date().toISOString(),
+          ...metadata,
           artifact,
           modelTransport: "capability_authenticated_loopback",
+          realDesktopReport,
           checks: [
             "global_gate_enabled_through_settings",
             "chat_access_allowed_through_access_card",
+            "denied_permission_changes_nothing",
             "exact_disposable_textedit_target",
+            "two_windows_isolation_and_cursor",
             "list_apps",
             "list_windows",
             "capture_ax",
@@ -791,6 +1103,26 @@ async function runAcceptance() {
     console.log(`Packaged Computer Use acceptance passed. Receipt: ${receiptPath}`);
   } catch (error) {
     failure = error;
+    if (!realDesktopReport) {
+      const status = classifyAcceptanceError(error);
+      const detail = error instanceof Error ? error.message : String(error);
+      realDesktopReport = {
+        schemaVersion: 1,
+        ...metadata,
+        checks: REAL_DESKTOP_CHECK_IDS.map((id) => ({
+          id,
+          status,
+          detail,
+          ...metadata,
+        })),
+      };
+      console.log(`\n${renderRealDesktopReport(realDesktopReport)}`);
+    }
+    await writeFile(
+      path.join(temporary, "real-desktop-report.json"),
+      `${JSON.stringify(realDesktopReport, null, 2)}\n`,
+      "utf8",
+    ).catch(() => {});
   } finally {
     if (!completed) {
       await invalidateComputerUseAcceptanceReceipt(repositoryRoot).catch(() => {});
