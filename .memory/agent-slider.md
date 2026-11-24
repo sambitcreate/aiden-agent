@@ -2,6 +2,8 @@
 
 2026-11-23. Plan: `docs/plans/agent-slider-plan.md`. Prototype: `docs/plans/assets/agent-slider-prototype.html`.
 
+**Status (2026-11-24):** PRs 0–4 merged to main bottom-up with merge commits (#888, #889, #892, #893, #896; main at f7c19a008). PR 5 (phones) is NOT being built from this stack: the owner is building the phone slider by hand, so don't start it unless asked.
+
 - The owner asked to drop the Model Pad's scores and chart. In its place, one slider with 3 to 7 stops, each a label plus an optional provider, model and thinking level that the person picks. It ships as a six-PR stack: plan, data, slider, editor and Pad removal, scoring backend removal, phones.
 - The plan came from three Opus research plans that were cross-reviewed against each other. They agreed on the following:
   - Effort is stored per chat (`ChatMeta.thinkingLevel`, plus `chats:setModel` taking a level). A stop never writes the global per-model thinking maps, because those maps would leak effort into other chats and collide two stops that use the same model.
