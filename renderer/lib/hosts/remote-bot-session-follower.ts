@@ -223,15 +223,18 @@ export class RemoteBotSessionFollower {
   /**
    * The host may have rewritten history inside the same epoch (a snapshot
    * also says so), so older entries kept across a snapshot are read again, a
-   * bounded page at a time until as many host entries as were kept are read
-   * (at most one more request per 200 kept), and replaced. A read
-   * that fails keeps the pages already read (Load older continues from there),
-   * or drops the kept entries if none was.
+   * bounded page at a time, and replaced. Reading stops at the oldest kept
+   * entry, or, if the host no longer has it, once as many host entries as the
+   * kept ones spanned (drawn or not) are read. A read that fails keeps the
+   * pages already read (Load older continues from there), or drops the kept
+   * entries if none was.
    */
   private rereadCarried(carried: number, fresh: RemoteBotSessionView): void {
     const view = this.state.view;
     if (carried <= 0 || !view) return;
     const own = view.snapshot.entries[carried]?.id;
+    const oldest = view.snapshot.entries[0]?.id;
+    const span = Math.max(view.olderHostSpan ?? 0, carried);
     const history = this.history;
     const current = () => !this.stopped && history === this.history && this.state.view !== null;
     const settle = (pages: RemoteBotSessionEntriesPage[]) => {
@@ -248,18 +251,17 @@ export class RemoteBotSessionFollower {
     const pages: RemoteBotSessionEntriesPage[] = [];
     const next = (before: string, read: number): void => {
       if (!transport.older) return settle(pages);
-      transport.older(this.hostId, this.botId, before, Math.min(Math.max(carried - read, 1), OLDER_PAGE_MAX)).then(
+      transport.older(this.hostId, this.botId, before, Math.min(Math.max(span - read, 1), OLDER_PAGE_MAX)).then(
         (outcome) => {
           if (!current()) return;
           if (!outcome.ok) return settle(pages);
           const page = outcome.value as RemoteBotSessionEntriesPage;
           pages.push(page);
-          // Counted in the host's entries, read or not: entries this Mac leaves out
-          // still use up the kept range, so a newer host's pages never walk past it.
+          // Counted in the host's entries, drawn or not, as the kept span was.
           const total = read + (page.hostCount ?? page.entries.length);
           const cursor = page.olderCursor ?? page.entries[0]?.id;
-          // Every kept entry is covered, or the host has nothing older.
-          if (total >= carried || !page.hasOlder || !cursor || cursor === before) return settle(pages);
+          const reachedOldest = page.entries.some((entry) => entry.id === oldest);
+          if (reachedOldest || total >= span || !page.hasOlder || !cursor || cursor === before) return settle(pages);
           next(cursor, total);
         },
         () => settle(pages),

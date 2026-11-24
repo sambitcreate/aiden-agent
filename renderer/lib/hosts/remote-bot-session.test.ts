@@ -560,12 +560,12 @@ test("loaded history longer than one page survives a same-epoch snapshot whole, 
   follower.stop();
 });
 
-test("re-reading kept history from a newer host counts the entries this Mac leaves out, so it never walks past the kept range", async () => {
+test("re-reading kept history from a newer host covers the same span, entries this Mac leaves out included, and no further", async () => {
   const message = (id: string, text: string) => ({ type: "message" as const, id, role: "assistant" as const, text });
   const newest = session({ hasOlder: true, entries: [message("m5", "Five"), message("m6", "Six")] });
   const fake = fakeTransport([newest]);
   // The host, newer than this Mac: two entries of a kind this Mac can't show sit just before "Five".
-  const host = ["m1", "m2", "m3", "m4", "u1", "u2"];
+  let host = ["m1", "m2", "m3", "m4", "u1", "u2"];
   const asked: Array<[string, number | undefined]> = [];
   fake.transport.older = async (_hostId, _botId, before, limit) => {
     asked.push([before, limit]);
@@ -584,22 +584,32 @@ test("re-reading kept history from a newer host counts the entries this Mac leav
   follower.start();
   await settle();
   const ids = () => follower.getState().view!.snapshot.entries.map((entry) => entry.id);
+  const snapshot = (seq: number) =>
+    fake.push(event(seq, { type: "snapshot", payload: { session: session({ seq: seq + 1, hasOlder: true, entries: [message("m5", "Five"), message("m6", "Six")] }) } }));
   // Two Load olders: an all-unknown page, then "m3" and "m4".
   await follower.loadOlder();
   assert.deepEqual(ids(), ["m5", "m6"]);
   await follower.loadOlder();
   assert.deepEqual(ids(), ["m3", "m4", "m5", "m6"]);
 
-  // A snapshot keeps 2 shown entries; the host's 2 newest older ones are unknown, and re-reading stops there.
+  // Unchanged history: the re-read spans the four host entries loaded, so "m3" and "m4" stay.
   asked.length = 0;
-  fake.push(event(4, { type: "snapshot", payload: { session: session({ seq: 5, hasOlder: true, entries: [message("m5", "Five"), message("m6", "Six")] }) } }));
+  snapshot(4);
   await settle();
-  assert.deepEqual(asked, [["m5", 2]], "one request, for as many host entries as were kept");
-  assert.deepEqual(ids(), ["m5", "m6"]);
-  assert.equal(follower.getState().view!.hasOlder, true);
-  assert.equal(follower.getState().view!.olderCursor, "u1", "Load older continues past the entries left out");
-  await follower.loadOlder();
+  assert.deepEqual(asked, [["m5", 4]], "one request, for the host entries the loaded pages spanned");
   assert.deepEqual(ids(), ["m3", "m4", "m5", "m6"]);
+  assert.equal(follower.getState().view!.olderCursor, "m3");
+
+  // The host drops "m3": the re-read stops after the same span instead of walking to the start.
+  host = host.filter((id) => id !== "m3");
+  asked.length = 0;
+  snapshot(6);
+  await settle();
+  assert.deepEqual(asked, [["m5", 4]]);
+  assert.deepEqual(ids(), ["m2", "m4", "m5", "m6"]);
+  await follower.loadOlder();
+  assert.deepEqual(ids(), ["m1", "m2", "m4", "m5", "m6"]);
+  assert.equal(follower.getState().view!.hasOlder, false);
   follower.stop();
 });
 

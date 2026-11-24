@@ -45,6 +45,13 @@ export interface RemoteBotSessionView {
   hasOlder: boolean;
   /** While `hasOlder`, the host's id of the oldest entry here, drawn or not: where the next older page ends. */
   olderCursor: string | null;
+  /**
+   * Of the entries shown, how many came before the newest snapshot's own
+   * (loaded pages, or entries kept across a snapshot), and how many host
+   * entries those span, drawn or not. A snapshot re-reads that span.
+   */
+  olderLoaded?: number;
+  olderHostSpan?: number;
 }
 
 /**
@@ -281,11 +288,15 @@ export function carryOlderRemoteBotEntries(
   if (!first) return next;
   const index = previous.snapshot.entries.findIndex((entry) => entry.id === first.id);
   if (index <= 0) return next;
+  // The kept part is what earlier pages loaded plus the old snapshot's own entries before `first`.
+  const loaded = previous.olderLoaded ?? 0;
   return {
     ...next,
     snapshot: { ...next.snapshot, entries: [...previous.snapshot.entries.slice(0, index), ...next.snapshot.entries] },
     hasOlder: previous.hasOlder,
     olderCursor: previous.olderCursor,
+    olderLoaded: index,
+    olderHostSpan: (previous.olderHostSpan ?? 0) + Math.max(0, index - loaded),
   };
 }
 
@@ -304,6 +315,8 @@ export function withOlderRemoteBotEntries(
   return {
     ...view,
     snapshot: { ...view.snapshot, entries: [...older, ...view.snapshot.entries] },
+    olderLoaded: (view.olderLoaded ?? 0) + older.length,
+    olderHostSpan: (view.olderHostSpan ?? 0) + (page.hostCount ?? page.entries.length),
     hasOlder: page.hasOlder,
     olderCursor: page.hasOlder ? (page.olderCursor ?? page.entries[0]?.id ?? view.olderCursor) : null,
   };
@@ -325,7 +338,12 @@ export function withRereadOlderRemoteBotEntries(
   snapshot: Pick<RemoteBotSessionView, "hasOlder" | "olderCursor">,
   pages: readonly RemoteBotSessionEntriesPage[] | null,
 ): RemoteBotSessionView {
-  const own: RemoteBotSessionView = { ...view, snapshot: { ...view.snapshot, entries: view.snapshot.entries.slice(carried) } };
+  const own: RemoteBotSessionView = {
+    ...view,
+    snapshot: { ...view.snapshot, entries: view.snapshot.entries.slice(carried) },
+    olderLoaded: 0,
+    olderHostSpan: 0,
+  };
   if (
     !pages ||
     pages.length === 0 ||
