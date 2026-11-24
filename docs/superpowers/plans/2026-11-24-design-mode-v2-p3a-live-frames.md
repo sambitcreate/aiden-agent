@@ -7,7 +7,7 @@
 **Goal:** A route of the workspace's running web app shows on the canvas as a live, interactive frame, and nothing that frame does can reach the internet, leave its frame, open a dialog or a window, download a file, take keyboard focus from Aiden, or get a device permission.
 - A new frame kind, `app`, names an app root and a route. The canvas draws it as an `<iframe>` of the app's **own loopback origin** (served or attached, from 2b and 2c), at a real viewport size, scaled to its box. It counts toward the six-live limit. With no server running it shows its last snapshot under an overlay that follows the app's phase: **Start app** (or **Connect**), "Waiting for you to allow…", "Starting…", or the crash sentence with **Retry**.
 - **Admission is main's decision.** A main-window frame becomes an app frame only when the renderer placed it as an `app` node, main recorded its name token and the origin it expects, it is a direct child of the main frame, and its first navigation goes to exactly that origin. Every other frame (generative UI, v1 file frames, anything else) keeps v1's guard and pin, and a loopback target stays refused for it, flag on or off (S69).
-- **Every request** from an app frame, from any frame nested inside it, from a frameless request an app origin started, and from an app export window goes through one **default-session request dispatcher**. Only `http:`/`ws:` to `localhost`, `127.0.0.1` and `[::1]` (minus Aiden's own ports), `data:` and `blob:` pass. Everything else is cancelled and counted. Transports that skip `webRequest` are closed separately: with the flag on, WebTransport is switched off at startup, and app responses carry a loopback-only `connect-src` and `X-DNS-Prefetch-Control: off` (S71).
+- **Every request** from an app frame, from any frame nested inside it, from a frameless request an app origin started, and from an app export window goes through one **default-session request dispatcher**. Only `http:`/`ws:` to `localhost`, `127.0.0.1` and `[::1]` (minus Aiden's own ports), `data:` and `blob:` pass. Everything else is cancelled and counted. Transports that skip `webRequest` are narrowed where Electron allows: app responses carry a loopback-only `connect-src` and `X-DNS-Prefetch-Control: off`, and reporting headers are stripped. WebTransport can't be seen or switched off in Electron 43.8.4, so it is a documented gap next to TURN over TCP and server-side requests (S71).
 - **No modals, popups, downloads or top navigation.** The iframe's sandbox is `allow-scripts allow-same-origin allow-forms` (S10). A navigation guard pins app frames to loopback; a link out shows "Open in browser", which opens the URL in Aiden's browser panel. A subframe redirect never reaches `shell.openExternal` (S1).
 - **No focus theft.** An app iframe is `inert` until the person enters it, so a page script can't pull focus out of Aiden's composer (S75).
 - **Permissions are denied** for app frames by one default-session permission dispatcher, which Gemini Live now registers through (S9).
@@ -96,7 +96,6 @@ Out of scope:
 
 **Feature flag.** While `designLiveEnabled()` is false:
 - the design subscribers are never added to either dispatcher, so the default session has **no** `webRequest` listener, no `will-download` listener, and the permission handlers are exactly what Gemini Live sets today (null when Live is unbound);
-- no `disable-blink-features=WebTransport` switch is added;
 - `main-window-navigation.ts` runs today's handlers byte-for-byte, plus one refusal: a main-window subframe navigating to a loopback `http:` origin other than the renderer's own is refused, as is any subframe navigation reported with `frame: null` to a loopback `http:`, `https:` or unknown-scheme target. That is what today's CSP does (D11);
 - no bridge is injected, no `designCanvas:appFrame` event is sent, and `designCanvas:appFrameMount` answers `{error: "live-off"}`;
 - `canvas_place_frame`'s `kind` enum and description are today's; `canvas_read` reports any `app` frame as `kind: "app"` with its route but nothing places one;
@@ -117,7 +116,7 @@ These are unflagged and inert while the flag is off:
 |---|---|---|
 | Main window navigation (`main/index.ts:1953-1975`) | `setWindowOpenHandler` opens every URL externally and denies; `will-navigate` prevents and opens externally; **`will-redirect` prevents and opens externally for every frame, subframes included** (`:1963`); `will-frame-navigate` runs `createDesignFrameNavigationGuard` | Moved into `main-window-navigation.ts`. Flag off: same, plus the loopback-subframe refusal and the `frame: null` refusal (D11). Flag on: `will-redirect` acts only on the main frame; subframe redirects go to the app guard (S1, D9) |
 | Main window lifetime (`main/index.ts:1895-1899`, `:2066`, `:2330`) | `mainWindow = null` on `closed`; `app.on("activate")` → `showMainWindow()` → `createMainWindow()` makes a new window | Navigation, console, registry binding and injection run for **every** created window; main looks the window up through a getter, never a captured reference (D6) |
-| Startup switches (`main/index.ts:254`, `:264`) | `enable-features=GlobalShortcutsPortal` (Linux), `blink-settings=dnsPrefetchingEnabled=false` (all) | With the flag on, `disable-blink-features=WebTransport` is added next to them, before ready (S71). DNS prefetching is already off app-wide |
+| Startup switches (`main/index.ts:254`, `:264`) | `enable-features=GlobalShortcutsPortal` (Linux), `blink-settings=dnsPrefetchingEnabled=false` (all) Unchanged. No WebTransport switch is added: the Task 2 probe showed none of them stops it (S71). DNS prefetching is already off app-wide |
 | WebRTC (`main/index.ts:1686`) | `disable_non_proxied_udp` on the main window | Unchanged; TURN over TCP stays a documented gap (S5) |
 | `console-message` (`main/index.ts:1945-1951`) | Forwards fixed `[aiden-live]` markers from **any** frame (200 per window) | Moved to `main-window-console.ts`; markers accepted only when `details.frame` is the main frame. Flag on: an app frame's sandboxed-dialog notice is counted (D10). Nothing is forwarded |
 | `createDesignFrameNavigationGuard` (`frame-navigation.ts:44-64`) | Pins `aiden-design:` frames to their host; any other subframe may go anywhere; `if (isMainFrame \|\| !frame) return true` (`:52`) | Kept as is for `aiden-design:` targets. `app-frame-guard.ts` runs the v1 pin **first**, then admission, the app rule, and the loopback and `frame: null` refusals (D9) |
@@ -159,7 +158,7 @@ These are unflagged and inert while the flag is off:
 ## Decisions
 
 **D1. What 3a changes, and what the flag protects.**
-- With the flag on, 3a adds the `app` kind, its node, admission, the bridge, the two dispatcher subscribers, the WebTransport switch, the guard and app export.
+- With the flag on, 3a adds the `app` kind, its node, admission, the bridge, the two dispatcher subscribers, the guard and app export.
 - With the flag off, the observable behaviour is today's. The only code that runs is:
   - the dispatcher modules with no design subscriber, which for `webRequest` and `will-download` means no Electron listener at all;
   - the Gemini Live owner slot, which passes Live's handlers through untouched;
@@ -280,8 +279,8 @@ The test is this table, run through `appRequestVerdict` with fabricated `details
 
 | # | Context | Action | Expected | Where |
 |---|---|---|---|---|
-| W1 | app frame | `new WebTransport("https://127.0.0.1:P/")` with a UDP observer on P | `WebTransport` undefined or the constructor/handshake fails; observer sees 0 datagrams* | Task 2 probe, Task 14 |
-| W2 | app service worker | the same | the same* | Task 2 probe, Task 14 |
+| W1 | app frame | `new WebTransport("https://127.0.0.1:P/")` with a UDP observer on P | documented gap (S71): Electron 43.8.4 can't see or stop it | Task 2 probe; not asserted in Task 14 |
+| W2 | app service worker | the same | documented gap (S71) | Task 2 probe; not asserted in Task 14 |
 | H1 | app response | `Reporting-Endpoints: e="https://127.0.0.1:P/r"`, `Report-To`, `NEL`, plus a CSP with `report-to e` | headers stripped; observer 0 bytes* | Task 5 unit, Task 14 |
 | H2 | app frame | `history.go(-1)` after a sibling app frame navigated | the sibling's URL unchanged (or, per Task 2, the documented limit) | Task 2 probe, Task 14 |
 | S1 | an app origin's service worker, after the flag is turned off and Aiden restarted | any | registration cleared | Task 7 unit, Task 14 |
@@ -292,7 +291,7 @@ The test is this table, run through `appRequestVerdict` with fabricated `details
 | D2 | app frame | `<a download href="/f.zip">` click | no download, no dialog | Task 14 |
 | E3 | app export window | `location = "/f.zip"` (attachment), `<a download>` | no download, no Save dialog | Task 13 unit, Task 14 |
 | E4 | app export window | `window.print()` | no print dialog | Task 14 |
-| E5 | app export window | `new WebTransport(…)`, `sendBeacon("https://…")` | refused or cancelled* | Task 14 |
+| E5 | app export window | `sendBeacon("https://…")`; `new WebTransport(…)` | the beacon cancelled*; WebTransport a documented gap (S71), not asserted | Task 14 |
 | E6 | app export window | `getUserMedia`, `Notification.requestPermission()` | denied | Task 7 unit, Task 14 |
 
 **D4. Frameless requests (S3, S57).** Electron 43.8.4 reports `initiatorOrigin`, "kept from the original request across redirects; absent for requests the browser started itself". So:
@@ -538,7 +537,6 @@ The path is the module URL's path relative to the frame's origin (`/src/Pricing.
 | 2b/2c `DesignAppServers` | None; read only | `app-server-main.test.ts` unedited |
 | IPC | One notification, `designCanvas:appFrame` | The IPC channel inventory test (send site and allowlist) |
 | `check:aiden-rules` | Rules `default-session-owner` and `loopback-listen-registered` | `check-aiden-rules.test.mjs` existing cases unedited; new cases |
-| Startup switches | `disable-blink-features=WebTransport` with the flag on | A pure `designLiveSwitches(env)` test |
 | Listening services | Register their ports | Each service's suite unedited |
 
 ## Interfaces
@@ -690,7 +688,7 @@ export class AppFrameRegistry {
 - **Install before any window.** The claims and the design subscribers install inside `app.whenReady()` before the first `createMainWindow` (D6).
 - **The page is untrusted.** No security decision reads a bridge message, page-set globals, or console text. A frame's `name` is used only as a one-use admission token next to main's own placement record, never as a sufficient condition (D2). Bridge output is bounded and shown escaped; none reaches the model in 3a.
 - **Main decides URLs.** The iframe's origin comes from main's mount reply; export URLs come from main's store and `designAppServers`; the renderer never supplies an origin to main.
-- **Flag off is today.** Tests in Tasks 4, 6, 7, 10, 12 and 13 each include a flag-off case proving no listener, handler, injection, event or switch appears, and that the tool definition is unchanged.
+- **Flag off is today.** Tests in Tasks 4, 6, 7, 10, 12 and 13 each include a flag-off case proving no listener, handler, injection or event appears, and that the tool definition is unchanged.
 - **No new network** (D20).
 - **UI rules** (AGENTS.md, `GUI.md`, `docs/design-guide.md`; read both ChatGPT references before styling): shared squircle `Button`s, Radix overlays from `ui.tsx`, semantic tokens only, no decorative borders or outlines, status in soft fills and labels, visible `focus-visible` rings on every non-text control, Reduce Motion through the motion tokens, focus return through `returnFocus`, no brain icons.
 - **AGENTS.md test rules.**
@@ -755,7 +753,7 @@ export class AppFrameRegistry {
   10. **Background sync**: when the service worker registers `sync` and `periodicSync`, does the permission check handler see a call, and with what name (D8)?
   11. **Reporting**: with the reporting headers stripped by a headers subscriber, does the observer see any report upload (H1)?
 - [ ] **Step 6: Apply the outcomes.** Defaults stand whatever the probes show (D7, S71). Then:
-  - if any WebTransport datagram arrives with the switch on, stop and escalate: S71 can't hold, and the plan needs a new layer before Task 7;
+  - ~~if any WebTransport datagram arrives with the switch on, stop and escalate~~ Resolved 2026-11-24: datagrams arrived in every mode, and the main session made WebTransport a documented gap (S71), with no switch;
   - if preconnect or DNS still reaches the observer, write the gap into S71 (next to S5) and into Task 15's docs, and mark A40 as "documented gap" in Task 14 instead of asserting zero;
   - if custom-scheme loads aren't seen by `webRequest`, stop and escalate, as for WebTransport: A22–A24 and A35 can't hold, and a check in the `aiden-*` protocol handlers has to be designed and reviewed before Task 7;
   - if the initiator is `null` for `src`-set navigations, record it; D2 accepts `null` but never another frame;
@@ -884,15 +882,14 @@ export class AppFrameRegistry {
 - [ ] **Step 6:** Rerun, plus `npx tsx --test main/services/design-canvas/frame-navigation.test.ts` unedited. Expected: PASS.
 - [ ] **Step 7:** Commit `fix(main): subframe redirects never open the browser; admit and guard live app frames`.
 
-### Task 7: Wiring the design subscribers, admission IPC, console, WebTransport and service workers
+### Task 7: Wiring the design subscribers, admission IPC, console and service workers
 
 **Files:**
-- Create: `main/services/design-canvas/app-frames/app-network-main.ts`, `app-network-main.test.ts`, `main/windows/main-window-console.ts`, `main-window-console.test.ts`, `main/services/design-canvas/app-frames/app-sw-origins.ts`, `app-sw-origins.test.ts`, `main/services/design-canvas/app-frames/design-live-switches.ts` (pure `designLiveSwitches(env)`) with its cases in `app-network-main.test.ts`
-- Modify: `main/index.ts` (append the switches before ready next to `:264`; install `installAppNetwork` right after the claims, before the first window; replace the inline `console-message` listener at `:1945-1951` with `installMainWindowConsole` for every created window), `main/handlers/design-canvas.ts` and `design-canvas.test.ts` (`designCanvas:appFrameMount`), `renderer/preload-channels.ts`, `package.json`, `scripts/ci-test-registry.json`
+- Create: `main/services/design-canvas/app-frames/app-network-main.ts`, `app-network-main.test.ts`, `main/windows/main-window-console.ts`, `main-window-console.test.ts`, `main/services/design-canvas/app-frames/app-sw-origins.ts`, `app-sw-origins.test.ts`
+- Modify: `main/index.ts` (install `installAppNetwork` right after the claims, before the first window; replace the inline `console-message` listener at `:1945-1951` with `installMainWindowConsole` for every created window), `main/handlers/design-canvas.ts` and `design-canvas.test.ts` (`designCanvas:appFrameMount`), `renderer/preload-channels.ts`, `package.json`, `scripts/ci-test-registry.json`
 
 - [ ] **Step 1: Write failing tests** with the real dispatchers over fake targets, a real registry and a fake `DesignAppServers` (`isAppOrigin`, `appForOrigin`, `onOriginsChanged`, `forgetWorkspace`, `snapshot`):
-  - **flag off:** `installAppNetwork({enabled: false})` adds no subscriber, no deny layer, no download or chooser subscriber and no console counter; the fake targets record no setter call; `designLiveSwitches({})` is empty;
-  - **switches:** `designLiveSwitches({AIDEN_EXPERIMENTAL_DESIGN_LIVE: "1"})` is exactly `[["disable-blink-features", "WebTransport"]]`;
+  - **flag off:** `installAppNetwork({enabled: false})` adds no subscriber, no deny layer, no download or chooser subscriber and no console counter; the fake targets record no setter call;
   - **flag on, requests:** a request from a registered app frame to `https://example.com/` is cancelled and its host reaches a `blocked` event for that frame's `{frameId, mountToken}`; a main-frame request is untouched (M1); a `frame: null` request with no initiator to a non-allowlisted host is cancelled and logs one `design-live frameless-cancel` with the host only, and a second within a minute logs nothing;
   - **flag on, headers:** an app-frame response from an app origin with `Set-Cookie: sid=1` comes back `SameSite=None; Secure`; the same response for a non-app frame is untouched; `X-Frame-Options` goes only for the app frame; `Report-To` goes for any app-context response; the `connect-src` CSP is added to an app-context document response;
   - **debugging ports:** with a fake command line whose `remote-debugging-port` is 9333 and a fake `inspector.url()` on 9339, both are in `ownPorts` after install;
@@ -916,7 +913,7 @@ export class AppFrameRegistry {
 - [ ] **Step 3: Implement.** `designAppServers.onOriginsChanged` needs no action: the policy reads `isAppOrigin` on each request. The startup clear runs after ready and never blocks window creation. Add `"designCanvas:appFrame"` (send) and `"designCanvas:appFrameMount"` (invoke) to `renderer/preload-channels.ts` with their sites, so the IPC inventory test passes. When `AIDEN_E2E_DESIGN_LIVE_RECORD` is set and `app.isPackaged` is false, attach D6's recorder.
 - [ ] **Step 4: Register** the three new test files (`core-git`); append `main-window-console.test.ts` and `app-network-main.test.ts` to `test:gemini-live` too. Run `npm run test:ci-policy`.
 - [ ] **Step 5:** Rerun, plus the IPC contract test, `npm run test:gemini-live`, `npx tsx --test main/handlers/design-canvas.test.ts` and `npx tsc --noEmit -p .`. Expected: PASS.
-- [ ] **Step 6:** Commit `feat(design): live app frames reach only loopback, get no permissions and no WebTransport`.
+- [ ] **Step 6:** Commit `feat(design): live app frames reach only loopback and get no permissions`.
 
 ### Task 8: The CSP
 
@@ -1067,7 +1064,7 @@ Before styling, read `docs/chatgpt-desktop-ui-inspiration.md` and `docs/chatgpt-
     - A41: failed in the page, and the recorder holds a `cancel` for the own port;
     - A35: the custom-scheme loads failed and Aiden's scheme handlers logged no hit for them (the recorder's `untouched`/`cancel` lines and the handler's test counter);
     - A40: no TCP connect at the observer (or, if Task 2 recorded the gap, the test asserts the documented S71 behaviour instead);
-    - W1, W2: `WebTransport` is undefined in the page and in the service worker, and the UDP observer saw zero datagrams;
+    - W1, W2 are a documented gap (S71): the spec asserts nothing about WebTransport, neither that it is stopped nor that it leaks;
     - the frame's title shows a blocked count ≥ 5, and its popover lists `example.com`, `192.168.1.10` and `www.youtube.com` with the localhost sentence;
     - `window.open` returned `null` and the external-open recorder saw nothing;
     - `alert`, `confirm` and `print` returned at once; the popover lists "Dialogs are turned off on the canvas";
@@ -1106,14 +1103,14 @@ Before styling, read `docs/chatgpt-desktop-ui-inspiration.md` and `docs/chatgpt-
 - [ ] **Step 2: `docs/design-mode.md`.** Rewrite line 31 ("showing the app on the canvas comes with the next phases") to say live frames show the app on the canvas and link the new section. Add a "Live frames" section:
   - placing a route (Aiden places them in 3a; Add ▸ Page from app comes later), entering (double-click or ↩) and leaving (Esc or a click on the canvas), and the overlays for each phase;
   - **localhost only:** what passes (the app's own server and other loopback servers, not Aiden's own ports), what is blocked, the "N blocked" label and its popover, Open in browser;
-  - no dialogs, popups, downloads or top navigation; device and other permissions are denied; frames can't take keyboard focus until entered; WebTransport is off while live apps are on;
+  - no dialogs, popups, downloads or top navigation; device and other permissions are denied; frames can't take keyboard focus until entered;
   - redirects inside the app work; redirects out are blocked;
   - session cookies in packaged builds (or the known limit, per Task 14), and that a cookie set by another loopback port isn't rewritten;
   - `X-Frame-Options` and `frame-ancestors` are ignored for the app's own pages on the canvas;
   - `[::1]` servers (per Task 2);
   - Download of an app frame as PNG or PDF (frames inside the app draw empty; the app must be running);
   - the app's service workers are cleared when design mode ends for the workspace and at the next start;
-  - what isn't covered: WebRTC TURN over TCP, the dev server's own server-side requests (S5), and whatever Task 2 recorded for preconnect and DNS (S71) and joint history (H2);
+  - what isn't covered: WebTransport (HTTP/3 over QUIC, from pages, workers and service workers), WebRTC TURN over TCP, the dev server's own server-side requests (S5), and whatever Task 2 recorded for preconnect and DNS (S71) and joint history (H2);
   - **loopback is broad:** other local services, including a separately run `aiden serve`, are reachable as they would be from the person's browser;
   - **dev only:** in `npm run dev` the renderer (`http://127.0.0.1:4143`) and an app on `127.0.0.1` are the same site, so they may share a renderer process, and a runaway app can freeze Aiden's window. Packaged builds load the renderer from `file://`.
 - [ ] **Step 3: PRODUCT.md.** Line 69 describes the flagged 2b behaviour and says workspace pages are "served only to the canvas in a sandbox with no network". Add a clause after the flagged dev-server sentence: with the same flag, the canvas shows the running app live in frames that reach only localhost (not Aiden's own ports), with no dialogs, popups, downloads or device permissions, a blocked label listing refused hosts, and PNG or PDF download. Keep the sandbox sentence true for workspace pages.
@@ -1139,7 +1136,18 @@ Before styling, read `docs/chatgpt-desktop-ui-inspiration.md` and `docs/chatgpt-
 - **S68. Element comments, text editing, Inspect and measure on app frames move to Phase 4 (3a; amends §6.3.3).** 3a's bridge carries the v1 pick core; `inspect-at`, `measure-at` and `edit-*` are re-added to the v2 bridge in Phase 4, which wires the Comment tool's element anchors, Inspect and text editing to it. In 3a, C + click on an app frame places a frame-level pin.
 - **S69. Admission of app frames (3a; amends §6.3.2 and §6.3.4).** A main-window frame becomes an app frame only when the renderer placed it as an `app` node and main recorded its name token and expected origin, it is a fresh direct child of the main frame, its first navigation goes to exactly that origin, the initiator is the main frame, and the flag is on. Generative-UI frames, v1 file frames and unknown frames keep v1's guard and pin and are refused loopback targets.
 - **S70. The registry never forgets a live frame (3a).** Membership lasts for the element's life with no reset. At the cap, only frames gone from the main window's frame tree are pruned; if it is still full, the new frame isn't admitted and shows its snapshot with "Too many live frames".
-- **S71. Transports outside `webRequest` (3a; next to S5).** With live apps on, WebTransport is switched off at startup (`disable-blink-features=WebTransport`), app-context documents and workers get an added loopback-only `connect-src` and `X-DNS-Prefetch-Control: off`, and reporting headers are stripped. DNS prefetching is already off app-wide. Task 2's probe outcomes for preconnect and DNS are recorded here; any leak it showed is a documented gap, alongside TURN over TCP and server-side requests.
+- **S71. Transports outside `webRequest` (3a; next to S5).** WebTransport (HTTP/3 over QUIC, from pages, dedicated workers and service workers) isn't seen by `webRequest`, and Electron 43.8.4 can't turn it off: neither `--disable-blink-features=WebTransport`, `--disable-features=WebTransport`, `--disable-quic` nor a CSP `connect-src` stops it. It joins TURN over TCP and the dev server's server-side requests as a documented gap; the guarantee is what §3 states, requests that go through `webRequest`, and the full route is §5.1 B's proxy in a later phase. App-context documents and workers still get an added loopback-only `connect-src` and `X-DNS-Prefetch-Control: off` as defence in depth, and reporting headers are stripped. DNS prefetching is already off app-wide. Task 2's probe (Linux Space, Electron 43.8.4, a UDP observer per source):
+
+  | Mode | Page | Dedicated worker | Service worker | `webRequest` saw it | CSP violation |
+  |---|---|---|---|---|---|
+  | no switch | datagrams | datagrams | datagrams | no | — |
+  | `--disable-blink-features=WebTransport` | datagrams | datagrams | datagrams | no | — |
+  | `--disable-features=WebTransport` | datagrams | datagrams | datagrams | no | — |
+  | `--disable-quic` (+ the Blink switch) | datagrams | datagrams | datagrams | no | — |
+  | CSP `connect-src` (confirmed active: `fetch` to example.com blocked) | datagrams | datagrams | datagrams | no | none raised |
+  | CSP + `--disable-quic` | datagrams | datagrams | datagrams | no | none raised |
+
+  Preconnect and DNS prefetch outcomes are recorded in As built.
 - **S72. Aiden's own ports, complete (3a; extends S59).** The set covers every Aiden loopback listener in `main/` (including the device hub proxy and local device host), the device hub and agent daemons Aiden spawns or reuses, electron-updater's Squirrel.Mac proxy (from the native feed URL), the renderer dev server, and the debugging ports read from the real switches. `check:aiden-rules` fails when a new loopback `listen` isn't registered or allowlisted with a reason.
 - **S73. App export hardening (3a; extends S13 and S65).** App frames export as PNG or PDF only. The app must be running before the Save dialog opens; the handler answers `app-not-running` or `live-off`. The export window's document is CSP-sandboxed (no downloads, modals, printing or popups), downloads from it are cancelled, and it renders at zoom 1 with 2× through device emulation (or 1×, per Task 2).
 - **S74. `[::1]` framing outcome (3a; S52).** Task 2's result: Chromium keeps `http://[::1]:*` in `frame-src` and `[::1]` apps frame, or it drops the source and app frames refuse `[::1]` origins with a sentence asking to restart the app on `127.0.0.1`.
@@ -1178,7 +1186,7 @@ For reviewers to attack (the anti-goals reviewer takes items 1–9):
 5. **Permissions without a frame.** The rule denies every non-Aiden subframe of the main window. Attack: a future feature that frames a third-party page in the main window and needs a permission. It would need its own deny-layer exception and a test; the CSP and the guard already block such frames.
 6. **The bridge in the main world.** The page can pre-empt or spoof everything the bridge says. Nothing security-related reads it (S61), outputs are bounded, rate-limited and escaped, injection grants no user activation, and no bridge text reaches the model in 3a.
 7. **Redirect handling.** `will-redirect` and `onBeforeRequest` both see redirects. A navigation redirect out is prevented by the guard and cancelled by the filter; a `fetch` redirect out is cancelled at its second hop (R1–R2). `openExternal` is no longer reachable from a subframe redirect (S1).
-8. **Gaps by design (S5, S71).** WebRTC TURN over TCP, the dev server's own server-side requests (SSR fetches, proxies), and whatever Task 2 showed for preconnect and DNS aren't covered by `webRequest`. Documented.
+8. **Gaps by design (S5, S71).** WebTransport, WebRTC TURN over TCP, the dev server's own server-side requests (SSR fetches, proxies), and whatever Task 2 showed for preconnect and DNS aren't covered by `webRequest`. Documented.
 9. **Cookies.** The rewrite makes app cookies `SameSite=None; Secure` on loopback in the shared default-session jar. Attack: another localhost page the renderer loads reads them. Only the person's own apps' loopback origins get the rewrite, and §9 already accepts the shared jar.
 10. **Shared cookie jar with export.** Export on the default session sees the canvas's cookies, which is S13's intent; zoom is reset per commit so the shared host's zoom doesn't leak (D18).
 11. **Electron defaults when composing permissions.** If Electron 43's default for a handler isn't what D8 records, a composed handler could change Aiden's own behaviour with the flag on. Task 4 cites the docs and tests the composed defaults; the flag-on `live-app-control.spec.ts` run exercises dictation and Live.
@@ -1206,7 +1214,7 @@ Review A is the anti-goals-only review, review B the full review. "Same as" mark
 
 | Finding | Decision | Task and step |
 |---|---|---|
-| A-B1 WebTransport skips `webRequest` | Switch WebTransport off at startup with the flag on; loopback-only `connect-src` and `X-DNS-Prefetch-Control: off` on app responses; probe in the Space; record leaks in S71 (D7, S71) | Task 2 Step 5 (probe 1, 2) and Step 6; Task 5 Step 2 (`appResponseHeaders`); Task 7 Steps 1, 3 (`designLiveSwitches`); Task 14 Step 1 (W1, W2, E5) |
+| A-B1 WebTransport skips `webRequest` | Loopback-only `connect-src` and `X-DNS-Prefetch-Control: off` on app responses; probe in the Space; record leaks in S71 (D7, S71). **Amended after the probe:** no switch stops WebTransport, so it is a documented gap (main session's decision, 2026-11-24) | Task 2 Step 5 (probe 1, 2) and Step 6; Task 5 Step 2 (`appResponseHeaders`); Task 14 Step 1 (E5's beacon) |
 | A-B2 Registry eviction and reset drop a live frame | Never evict a live id; prune by `framesInSubtree`; refuse when full; no reset (D2, S70) | Task 5 Step 2 (600-remount test, cap test); Task 6 Step 2 (G17); Task 11 Step 1 (too-many-frames state) |
 | A-M1 Any direct child can navigate to loopback | Admission by placement record, expected origin, fresh direct child, main-frame initiator; v1 pin first; loopback refused for every other frame in both flag states (D2, D9, D11, S67, S69) | Task 5 Step 2 (admission); Task 6 Steps 1–2 (G7–G16, G24); Task 7 Step 1 (`designCanvas:appFrameMount`) |
 | A-M2 Install order and window recreation | Claims and subscribers installed in `whenReady` before the first window; window getter; per-window wiring; fail closed before install (D6) | Task 4 Step 3; Task 6 Step 2 (second window, G22); Task 7 Step 1 (R7); Task 10 Step 1 (recreated window) |
@@ -1284,4 +1292,23 @@ Review A is the anti-goals-only review, review B the full review. "Same as" mark
 
 ## As built
 
-(Filled in by Task 15: Task 2's React and probe outcomes, Task 5's audit, the cookie outcome, and any deviation from this plan.)
+Recorded as the build goes. Task 15 adds Task 5's audit, the cookie outcome and the final notes.
+
+### Deviations
+
+1. **`fitAppScale`.** `renderer/shared/design-canvas/app-frame.ts` lowers an app frame's `scale` (rounded down to 4 decimals) so its box stays within the canvas's 8000 maximum frame size, after D15's box rule. Without it the generic size clamp would move a recomputed box and break the parse fixed point (Task 3).
+2. **`DESIGN_FRAME_HEADER_PX` moved** into `renderer/shared/design-canvas/app-frame.ts`, so the shared box rule can use it; `renderer/design/nodes/design-node-context.ts` re-exports it (Task 3).
+3. **Side panel naming.** The side panel calls the `app` kind "App page", with the `AppWindow` icon (Task 3).
+4. **aiden-rules allowlist.** `scripts/aiden-rules-allowlist.json` has a `default-session-owner` entry for `main/services/gemini-live/display-capture-acceptance.ts` (its own launch mode), as Task 4 planned (Task 4).
+5. **WebTransport is a documented gap, with no switch** (main session's decision, 2026-11-24, after probe 1). S71 is rewritten with the probe table; `designLiveSwitches` and its test are dropped from Task 7; W1, W2 and E5's WebTransport part are "documented gap (S71)" and Task 14 asserts nothing about them; the docs name WebTransport next to TURN over TCP and server-side requests.
+
+### Task 2 probe outcomes (Linux Space, Electron 43.8.4)
+
+| Probe | Outcome | Effect |
+|---|---|---|
+| 1. WebTransport | Leaks in every mode tried (no switch, `--disable-blink-features=WebTransport`, `--disable-features=WebTransport`, `--disable-quic`, CSP `connect-src`, CSP + `--disable-quic`), from the page, a dedicated worker and a service worker; `webRequest` never sees it and CSP raises no violation | Documented gap (S71), deviation 5 |
+| 2a. Preconnect | `<link rel=preconnect href="https://127.0.0.1:P">` from an app frame opened **no** TCP connection at the observer | A40 asserted as zero in Task 14 |
+| 5. Initiator | `will-frame-navigate`'s `initiator` for an `src`-set navigation is the **main frame** | D2 holds as written; admission never needs to accept `null` |
+| 4. Attribution | An app frame's own navigation reaches `onBeforeRequest` with `details.frame` = the frame's own `frameTreeNodeId` and `resourceType: "subFrame"` | A46 holds |
+| 10. Background sync | The permission **check** handler is consulted with `background-sync` when the service worker registers a sync | The design layer denies it (it denies every app-context check); S76 stays the guarantee |
+| 6. `[::1]` in `frame-src` | A `[::1]` server frames under `frame-src … http://[::1]:*` | S74: `[::1]` apps frame; no IPv6 refusal sentence |
