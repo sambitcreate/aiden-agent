@@ -11,6 +11,7 @@ import {
   captureProcessGroupSurvivors,
   groupStoppedWithin,
   listObservedProcesses,
+  observePreExitProcessGroupMembers,
   processGroupExists,
   processGroupStillRuns,
   readProcessStartId,
@@ -29,6 +30,7 @@ interface TrackedMcpGroupRecord {
   pgid: number;
   leaderStartId?: string;
   leaderExited: boolean;
+  preExitMembers: ProcessIncarnationSurvivor[];
   survivors: ProcessIncarnationSurvivor[];
 }
 
@@ -172,6 +174,50 @@ function settlesWithin(operation: Promise<unknown>, ms: number): Promise<boolean
 
 const OVERSIZED_MESSAGE = /^MCP stdio message exceeds \d+ bytes$/u;
 
+interface PipeStreamHandleLike {
+  destroyed?: boolean;
+  _handle?: { fd?: unknown };
+}
+
+function streamOpenFd(stream: unknown): number | undefined {
+  if (!stream || typeof stream !== "object") return undefined;
+  const candidate = stream as PipeStreamHandleLike;
+  if (candidate.destroyed) return undefined;
+  const fd = candidate._handle?.fd;
+  return typeof fd === "number" && Number.isSafeInteger(fd) && fd >= 0 ? fd : undefined;
+}
+
+function openTransportStdioFds(child: ChildProcess | undefined): number[] {
+  if (!child) return [];
+  const fds: number[] = [];
+  for (const stream of [child.stdin, child.stdout, child.stderr]) {
+    const fd = streamOpenFd(stream);
+    if (fd !== undefined && !fds.includes(fd)) fds.push(fd);
+  }
+  return fds;
+}
+
+function isTransportStdioFdOpen(child: ChildProcess | undefined, fd: number): boolean {
+  if (!child) return false;
+  for (const stream of [child.stdin, child.stdout, child.stderr]) {
+    if (streamOpenFd(stream) === fd) return true;
+  }
+  return false;
+}
+
+function mergePreExitMembers(
+  record: TrackedMcpGroupRecord,
+  observed: readonly ProcessIncarnationSurvivor[],
+): void {
+  const seen = new Set(record.preExitMembers.map((entry) => `${entry.pid}:${entry.startId}`));
+  for (const entry of observed) {
+    const key = `${entry.pid}:${entry.startId}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    record.preExitMembers.push({ pid: entry.pid, startId: entry.startId });
+  }
+}
+
 /**
  * Pi's stdio transport with Aiden's lifecycle guarantees: close never waits
  * forever, an oversized message ends the connection, and on POSIX the
@@ -180,6 +226,7 @@ const OVERSIZED_MESSAGE = /^MCP stdio message exceeds \d+ bytes$/u;
 class AidenStdioTransport extends StdioTransport {
   private groupPid?: number;
   private groupRecord?: TrackedMcpGroupRecord;
+  private trackedChild?: ChildProcess;
   private readonly customGroupProbe: boolean;
   private readonly groupStillRuns: (pid: number) => Promise<boolean>;
   /** The process group's teardown, which runs exactly once. */
@@ -205,36 +252,62 @@ class AidenStdioTransport extends StdioTransport {
     });
   }
 
+  private observePreExitMembers(): void {
+    const pid = this.groupPid;
+    const record = this.groupRecord;
+    const child = this.trackedChild;
+    if (pid === undefined || record === undefined || record.leaderExited || !record.leaderStartId) return;
+    if (liveGroups.get(pid) !== record) return;
+    if (child && (child.exitCode !== null || child.signalCode !== null)) return;
+    const observed = observePreExitProcessGroupMembers(pid, record.leaderStartId);
+    if (observed.length > 0) mergePreExitMembers(record, observed);
+  }
+
   override async start(): Promise<void> {
     await super.start();
     const pid = this.pid;
     if (pid === undefined || !this.processGroups) return;
     this.groupPid = pid;
     installExitHook();
+    const child = (this as unknown as { child?: ChildProcess }).child;
+    this.trackedChild = child;
     const leaderStartId = readProcessStartId(pid);
     const record: TrackedMcpGroupRecord = {
       pgid: pid,
       ...(leaderStartId ? { leaderStartId } : {}),
       leaderExited: false,
+      preExitMembers: [],
       survivors: [],
     };
     this.groupRecord = record;
     liveGroups.set(pid, record);
-    const child = (this as unknown as { child?: ChildProcess }).child;
     const captureLeaderExit = (): void => {
       if (liveGroups.get(pid) !== record || record.leaderExited) return;
       record.leaderExited = true;
-      const survivors = captureProcessGroupSurvivors(pid, record.leaderStartId);
+      const transportFds = openTransportStdioFds(child);
+      const survivors = captureProcessGroupSurvivors(pid, {
+        leaderStartId: record.leaderStartId,
+        preExitMembers: record.preExitMembers,
+        transportFds,
+        isTransportFdStillOpen: (fd) => isTransportStdioFdOpen(child, fd),
+      });
       if (survivors.length > 0) {
         record.survivors = survivors;
         groupsChanged();
+      } else if (!this.customGroupProbe) {
+        this.removeRecord(pid, record);
       }
     };
     if (child) {
-      if (child.exitCode !== null || child.signalCode !== null) captureLeaderExit();
-      else child.once("exit", captureLeaderExit);
+      if (child.exitCode !== null || child.signalCode !== null) {
+        captureLeaderExit();
+      } else {
+        this.observePreExitMembers();
+        child.stdout?.prependOnceListener("data", () => this.observePreExitMembers());
+        child.once("exit", captureLeaderExit);
+      }
     }
-    groupsChanged();
+    if (liveGroups.get(pid) === record) groupsChanged();
   }
 
   /**
@@ -243,6 +316,8 @@ class AidenStdioTransport extends StdioTransport {
    * so after twice the grace the pipes are destroyed and the server killed.
    */
   override async close(): Promise<void> {
+    // Capture any non-pipe descendants while our verified leader is still live.
+    this.observePreExitMembers();
     const closing = super.close();
     if (!(await settlesWithin(closing, 2 * this.graceMs))) {
       // Pi keeps the child private; only its pipes and process are touched.
@@ -250,8 +325,12 @@ class AidenStdioTransport extends StdioTransport {
       child?.stdin?.destroy();
       child?.stdout?.destroy();
       child?.stderr?.destroy();
-      if (this.groupPid !== undefined) signalGroup(this.groupPid, "SIGKILL");
-      else child?.kill("SIGKILL");
+      const record = this.groupRecord;
+      if (this.groupPid !== undefined && !(record?.leaderExited && record.survivors.length === 0 && !this.customGroupProbe)) {
+        signalGroup(this.groupPid, "SIGKILL");
+      } else if (!record?.leaderExited) {
+        child?.kill("SIGKILL");
+      }
       await settlesWithin(closing, this.graceMs);
     }
     // A wrapper that already exited while its server holds the pipes never
@@ -268,10 +347,16 @@ class AidenStdioTransport extends StdioTransport {
     if (members.length === 0) return false;
     const leader = processes.find((proc) => proc.pid === pid);
     if (!record.leaderExited) {
-      if (leader && record.leaderStartId && leader.startId && leader.startId !== record.leaderStartId) {
-        return false;
+      if (leader) {
+        if (record.leaderStartId && leader.startId && leader.startId !== record.leaderStartId) {
+          return false;
+        }
+        return members.some((proc) => !proc.zombie);
       }
-      return members.some((proc) => !proc.zombie);
+      const byPid = new Map<number, ObservedProcessEntry>();
+      for (const proc of processes) byPid.set(proc.pid, proc);
+      const selfRoots = new Set<number>([process.pid]);
+      return members.some((proc) => !proc.zombie && isDescendantOfAny(proc, selfRoots, byPid));
     }
     // Leader already exited and was reaped: a live leader PID now means PGID reuse.
     if (leader || record.survivors.length === 0) return false;
@@ -307,6 +392,10 @@ class AidenStdioTransport extends StdioTransport {
     const record = this.groupRecord;
     if (pid === undefined || record === undefined) return Promise.resolve();
     this.reaping ??= (async () => {
+      if (!this.customGroupProbe && !(await this.incarnationStillRuns(pid, record))) {
+        this.removeRecord(pid, record);
+        return;
+      }
       signalGroup(pid, "SIGTERM");
       const probe = {
         exists: () => processGroupExists(pid),

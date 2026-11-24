@@ -197,6 +197,39 @@ process.exit(0);
   assert.equal(alive(report.grandchild), false, "transport.close() must reap the surviving grandchild");
 });
 
+test("watchMcpProcessGroupRecords drops a wrapper PGID immediately when the leader exits with no proven survivors", {
+  skip: process.platform === "win32" ? "POSIX process groups" : false,
+  timeout: 15_000,
+}, async (t) => {
+  let latest: readonly McpProcessGroupRecord[] = [];
+  const stopWatching = watchMcpProcessGroupRecords((records) => { latest = records; });
+  t.after(stopWatching);
+  const transport = createMcpStdioTransport({
+    command: process.execPath,
+    args: ["-e", "setTimeout(() => process.exit(0), 50);"],
+    closeGraceMs: 300,
+    stderr: "pipe",
+  });
+  t.after(() => transport.close().catch(() => undefined));
+  await transport.start();
+  const groupPid = (transport as { pid?: number }).pid;
+  assert.ok(groupPid && groupPid > 0, "expected spawned transport PID");
+  assert.equal(
+    latest.some((entry) => entry.pgid === groupPid),
+    true,
+    `live wrapper group ${groupPid} should be tracked before exit`,
+  );
+  for (let attempt = 0; attempt < 200; attempt += 1) {
+    if (!latest.some((entry) => entry.pgid === groupPid)) break;
+    await delay(20);
+  }
+  assert.equal(
+    latest.some((entry) => entry.pgid === groupPid),
+    false,
+    `dead wrapper group ${groupPid} with no survivors must be removed immediately`,
+  );
+});
+
 test("a group that survives close leaves the list once it is gone, so its ID is never signalled again", {
   skip: process.platform === "win32" ? "POSIX process groups" : false,
   timeout: 15_000,
