@@ -732,6 +732,36 @@ test("a paired Mac whose Bot had no message when first listed shows a dot for th
   assert.ok(within(unread).getByRole("img", { name: "Unread", hidden: true }));
 });
 
+test("a paired Mac first listed during a search counts every Bot's reply, also the ones the search hides", async () => {
+  const queryClient = createBotTestQueryClient();
+  queryClient.setQueryData(hostQueryKeys.list(), [
+    { id: "host-b", name: "Studio", enabled: true, state: "connected", features: ["bot-durable-session-v1"], capabilities: ["chat:read", "chat:write", "bot:read", "bot:write"] },
+  ]);
+  queryClient.setQueryData(hostQueryKeys.statuses(), [
+    { hostId: "host-b", generation: 1, state: { kind: "connected", since: 1 }, feed: "live", stale: false },
+  ]);
+  const at = (offset: number) => new Date(Date.now() - 86_400_000 + offset).toISOString();
+  const bot = (id: string, name: string, lastReplyAt: string) => ({
+    id, name, purpose: "", avatar: { semantic: { version: 1, shape: "orb", color: "rose" } }, sessionState: "idle",
+    summarized: true, lastReplyAt, preview: `${name} replied`,
+  });
+  sidebarIpc([], {}, { "bots:list": () => [] });
+  await mountSidebar("/bots", queryClient);
+  fireEvent.click(screen.getByRole("button", { name: "Search Bots" }));
+  fireEvent.change(screen.getByRole("searchbox", { name: "Search Bots" }), { target: { value: "scout" } });
+  // The host's Bots arrive while the search shows only Scout; Planner replied later.
+  await act(async () => {
+    queryClient.setQueryData(hostQueryKeys.feed("host-b"), {
+      hostId: "host-b", epoch: "e1", sequence: 1, stale: false, summaries: [], workspaces: [], runs: [],
+      bots: [bot("remote-1", "Scout", at(0)), bot("remote-2", "Planner", at(60_000))],
+    });
+  });
+  await screen.findByRole("button", { name: "Scout, on Studio" });
+  assert.equal(screen.queryByRole("button", { name: /^Planner/u }), null);
+  fireEvent.change(screen.getByRole("searchbox", { name: "Search Bots" }), { target: { value: "" } });
+  assert.ok(await screen.findByRole("button", { name: "Planner, on Studio" }), "Planner's reply was already there");
+});
+
 test("on a Bots page, a paired Mac's Bots keep up with what that Mac sends", async () => {
   const host = {
     id: "host-b",
