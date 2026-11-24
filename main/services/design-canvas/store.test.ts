@@ -614,3 +614,56 @@ test("undoing the delete of a page made for a chat that has since moved does not
   assert.equal(stored.pages.find((page) => page.id === "pc")?.namedFor, "C");
   assert.ok(asked.some(([chatId, workspaceId]) => chatId === "A" && workspaceId === "ws-1"));
 });
+
+test("a save that brings back no page made for a chat asks about no chat's liveness", async (t) => {
+  const root = await tempRoot(t);
+  const store = new DesignCanvasStore({ root: () => root });
+  let asked = 0;
+  const chats = new DesignChatCanvases({
+    store,
+    workspaceIdOf: async () => "ws-1",
+    chatIsLive: async () => {
+      asked += 1;
+      return true;
+    },
+  });
+  const named = await store.update("ws-1", (current) => addChatPage(addChatPage(current, "A", "Landing", "pa"), "B", "Pricing", "pb"));
+  // An unrelated edit of a canvas whose pages follow two chats.
+  const { result } = await chats.save("chat-x", withNote(named, "n"), named.revision);
+  assert.equal(result.ok, true);
+  assert.equal(asked, 0);
+});
+
+test("a chat that moves away while an undo waits its turn does not get its page's namedFor back", async (t) => {
+  const root = await tempRoot(t);
+  const store = new DesignCanvasStore({ root: () => root });
+  const live = new Set(["A"]);
+  const chats = new DesignChatCanvases({
+    store,
+    workspaceIdOf: async () => "ws-1",
+    chatIsLive: async (chatId) => live.has(chatId),
+  });
+  const before = await store.update("ws-1", (current) => addChatPage(current, "A", "Landing", "pa"));
+  const deleted = await chats.save("chat-x", deletePage(before, "pa"), before.revision);
+  assert.equal(deleted.result.ok, true);
+  const revision = (await store.get("ws-1")).revision;
+  // Another write holds the workspace's chain while the undo is sent.
+  let release!: () => void;
+  const held = new Promise<void>((resolve) => (release = resolve));
+  const holding = store
+    .update("ws-1", (current) => current, {
+      beforeWrite: async () => {
+        await held;
+        throw new Error("held only");
+      },
+    })
+    .catch(() => undefined);
+  const undo = chats.save("chat-x", { ...before, chatPages: { A: "page-1" } }, revision);
+  await new Promise((resolve) => setTimeout(resolve, 20));
+  // A moves to another workspace before the undo's turn comes.
+  live.delete("A");
+  release();
+  await holding;
+  assert.equal((await undo).result.ok, true);
+  assert.deepEqual((await store.get("ws-1")).pages.find((page) => page.id === "pa"), { id: "pa", name: "Landing" });
+});

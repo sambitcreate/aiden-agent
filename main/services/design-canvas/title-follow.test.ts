@@ -121,17 +121,16 @@ test("two quick renames and an entry running at once end on the newest title", a
   assert.equal(reads, 2);
 });
 
-test("a follow after the workspace was removed writes no file", async (t) => {
-  const { root, store, workspaces, titles, broadcasts, follow } = await setup(t, { seed: withChatPage });
+test("a follow after the workspace record was removed writes nothing and logs nothing", async (t) => {
+  const { store, workspaces, titles, broadcasts, errors, follow } = await setup(t, { seed: withChatPage });
+  // The record goes first; the canvas file is still there until cleanup runs.
   workspaces.delete("ws-1");
-  await store.delete("ws-1");
+  const before = await store.get("ws-1");
   titles.set("chat-b", "Pricing table");
   await follow.follow("chat-b");
-  assert.deepEqual(
-    (await fs.readdir(root)).filter((name) => name.startsWith("ws-1")),
-    [],
-  );
+  assert.deepEqual(await store.get("ws-1"), before);
   assert.deepEqual(broadcasts, []);
+  assert.deepEqual(errors, [], "a chat whose workspace has no record has no canvas to follow");
 });
 
 test("a follow of a chat that is gone writes nothing", async (t) => {

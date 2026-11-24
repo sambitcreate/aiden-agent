@@ -6,8 +6,7 @@ import { DesignGrantRegistry } from "./design-canvas/grants.js";
 import { DesignModeConsent } from "./design-canvas/design-mode-tool.js";
 import type { ChatGenerationOwner } from "./chat-generation-owner.js";
 import { DesignCanvasStore } from "./design-canvas/store.js";
-import { DesignCanvasViews, designTurnPages } from "./design-canvas/views.js";
-import { addChatPage } from "../../renderer/shared/design-canvas/chat-pages.js";
+import { DesignCanvasViews } from "./design-canvas/views.js";
 import { createDesignChatCleanup } from "./design-canvas/cleanup.js";
 import { captureAnalyticsEvents } from "./analytics/test-support.js";
 import type { Chat, Workspace } from "./types.js";
@@ -843,13 +842,7 @@ test("turning design mode on hands the chat and its folder to the canvas once, a
   assert.equal(logged.length, 1);
 });
 
-test("entering design mode from Aiden's card waits for the chat's page, so a placement right after lands on it", async (t) => {
-  const root = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-design-entry-wait-"));
-  t.after(() => fs.rm(root, { recursive: true, force: true }));
-  const store = new DesignCanvasStore({ root: () => root });
-  const views = new DesignCanvasViews();
-  // Another chat's page is first, so this chat's own page is a new one.
-  await store.update("workspace-1", (doc) => ({ ...doc, chatPages: { "chat-2": "page-1" } }));
+test("entering design mode from Aiden's card answers only once entry has claimed the chat's page, and a failed entry is logged", async () => {
   const folderWorkspace: Workspace = {
     id: "workspace-1",
     name: "Workspace",
@@ -861,6 +854,7 @@ test("entering design mode from Aiden's card waits for the chat's page, so a pla
   let releaseEntry!: () => void;
   const entryHeld = new Promise<void>((resolve) => (releaseEntry = resolve));
   const logged: string[] = [];
+  const finished: string[] = [];
   let failEntry = false;
   const { service } = fixture({
     configStore: { getWorkspace: async (id: string) => (id === folderWorkspace.id ? folderWorkspace : undefined) },
@@ -872,25 +866,22 @@ test("entering design mode from Aiden's card waits for the chat's page, so a pla
     } as unknown as ChatApplicationDependencies["chatStore"],
     designPagesOnEntry: async (entered) => {
       if (failEntry) throw new Error("disk failed");
-      await entryHeld;
-      await store.update("workspace-1", (doc) => addChatPage(doc, entered.id, entered.title, "page-chat-1", "page-1"));
-      await views.showPage(entered.id, "workspace-1", "page-chat-1");
+      if (entered.id === "chat-1") await entryHeld;
+      finished.push(entered.id);
     },
     logError: (_area, message) => logged.push(message),
   });
 
-  let entered = false;
+  let answered = false;
   const switched = service.setDesignMode("chat-1", true, { awaitEntry: true }).then((result) => {
-    entered = true;
+    answered = true;
     return result;
   });
   await new Promise((resolve) => setImmediate(resolve));
-  assert.equal(entered, false, "the answer waits for the chat's page");
+  assert.equal(answered, false, "the answer waits for entry");
   releaseEntry();
   assert.equal((await switched)?.designMode, true);
-
-  const resolve = await designTurnPages({ views, chatId: "chat-1" }).resolver("workspace-1");
-  assert.equal(resolve(await store.get("workspace-1")).pageId, "page-chat-1");
+  assert.deepEqual(finished, ["chat-1"], "entry had finished when the switch answered");
 
   // A failed entry is logged; the switch still answers.
   failEntry = true;

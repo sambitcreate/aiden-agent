@@ -95,6 +95,31 @@ test("a rename, a replaced title, an auto-title and the first-message seed each 
   assert.equal(seen.length, 4);
 });
 
+test("title listeners hear only committed titles, and can write the chat from inside the listener", async (t) => {
+  const store = await testStore(t);
+  const chat = await store.create({ workspaceId: "workspace" });
+  let told = 0;
+  const nested: Promise<unknown>[] = [];
+  store.onTitleChanged((chatId) => {
+    told += 1;
+    // A write that takes the chat's lock: it completes because the listener runs after the lock is released.
+    if (told === 1) nested.push(store.rename(chatId, "Renamed from the listener"));
+  });
+
+  // The renderer document goes away while the seeded title is being written: the write fails.
+  let checks = 0;
+  await assert.rejects(
+    store.appendMessage(chat.id, { role: "user", content: "Sketch the pricing table" }, { autoTitle: true, isCurrent: () => ++checks === 1 }),
+  );
+  assert.equal(told, 0, "a failed write tells no one");
+
+  await store.appendMessage(chat.id, { role: "user", content: "Sketch the pricing table" }, { autoTitle: true });
+  assert.equal(told, 1);
+  await Promise.all(nested);
+  assert.equal((await store.getMeta(chat.id))?.title, "Renamed from the listener");
+  assert.equal(told, 2, "the listener's own rename is heard too");
+});
+
 test("a rename that changes nothing tells no one", async (t) => {
   const store = await testStore(t);
   const chat = await store.create({});

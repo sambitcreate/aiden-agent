@@ -4,7 +4,7 @@
 // and design-mode entry interleave.
 
 import { followChatTitle } from "../../../renderer/shared/design-canvas/chat-pages.js";
-import type { DesignCanvasUpdated, DesignChatCanvases } from "./store.js";
+import { DesignCanvasUnavailableError, type DesignCanvasUpdated, type DesignChatCanvases } from "./store.js";
 
 export interface DesignTitleFollow {
   /** Renames the pages made for the chat to its current title. Never throws. */
@@ -34,7 +34,8 @@ export function createDesignTitleFollow(deps: {
       });
       deps.broadcast({ workspaceId, chatId, revision: doc.revision });
     } catch (error) {
-      if (error !== NOTHING_TO_RENAME) deps.onError?.(error);
+      // A chat with no canvas (gone, or in a workspace with no record, such as an Assistant thread) has nothing to follow.
+      if (error !== NOTHING_TO_RENAME && !(error instanceof DesignCanvasUnavailableError)) deps.onError?.(error);
     }
   }
 

@@ -2745,6 +2745,7 @@ async function prepareGeneration(
                       broadcast: announceCanvasChange,
                       newId: randomUUID,
                       pendingEntry: designPendingEntry,
+                      isLive: designLiveChats,
                     });
                     if (placed === null) return null;
                     if (placed.frameIds.length > 0) focusDesignCanvas(placed);
@@ -3038,6 +3039,7 @@ async function prepareGeneration(
           broadcast: announceCanvasChange,
           newId: randomUUID,
           pendingEntry: designPendingEntry,
+          isLive: designLiveChats,
         });
       };
     }
@@ -3144,6 +3146,7 @@ async function prepareGeneration(
           broadcast: announceCanvasChange,
           newId: randomUUID,
           pendingEntry: designPendingEntry,
+          isLive: designLiveChats,
           onRemoved: () => {
             leftOff = true;
           },

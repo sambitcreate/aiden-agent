@@ -98,7 +98,7 @@ The renderer never writes a claim beyond what the store's merge allows (D3). Bot
 
 Claims of chats that no longer exist count as absent. The rules, in order:
 1. The chat already has a live claim (its entry names an existing page). Keep it. Missing written pages go there; pages already on the canvas are not placed again. No new page.
-2. Some of the chat's written pages are already on the canvas. Claim the page holding the most of them (on a tie: the resolved page, then the earliest page). This is A21's rule, now written as a claim.
+2. Some of the chat's written pages are already on the canvas. Claim the page holding the most of them (on a tie: the resolved page, then the earliest page). Pages another live chat claims are not counted; when only such pages hold them, go on to rules 3 and 4. This is A21's rule, now written as a claim.
 3. The resolved page (kept view page, else first page) is taken as it is, with no rename and no `namedFor`, when:
    - its `namedFor`, if any, names this chat;
    - and no other live chat claims it;
@@ -195,7 +195,7 @@ So:
 - it moved from another workspace;
 - it attached without carried pages.
 
-Its next entry claims by D2. Rule 3 checks other chats' views, so it doesn't take a page another chat is working on. If it writes the canvas in a design turn first, the lazy claim (Task 8) claims the page the turn resolved to, inside that write. Reads and canvas mounts never claim. Attach carry claims the first carried page in its own update, without `namedFor` (carried pages are named "<title> · <page>"); a `ChatPagesFullError` there skips only the claim. The hidden canvas's own `chatPages` and `namedFor` never come over.
+Its next entry claims by D2. Rule 3 checks other chats' views, so it doesn't take a page another chat is working on. If it writes the canvas in a design turn first, the lazy claim (Task 8) claims the page the write landed on, inside that write. Reads and canvas mounts never claim. Attach carry claims the first carried page in its own update, without `namedFor` (carried pages are named "<title> · <page>"); a `ChatPagesFullError` there skips only the claim. The hidden canvas's own `chatPages` and `namedFor` never come over.
 
 **D10. Legacy documents.** v1 and v2 files are gone (1a's layout wipe). A 1a v3 document has `chatPages: {}`. Its chats resolve as in 1a until they enter design mode again, write the canvas in a design turn, or call `canvas_page use`. Until then, `canvas_page delete` doesn't protect their page. No sweep runs at startup.
 
@@ -517,7 +517,7 @@ Two adversarial reviews (data and races; lifecycle, UI and tests) were settled i
   - `main/services/design-canvas/artifact-frames.ts` (`placeArtifactsOnCanvas` line 107, `placeImagesOnCanvas` line 189)
 - Test: `canvas-tools.test.ts`, `written-pages.test.ts`, `artifact-frames.test.ts`
 
-**Behaviour:** Inside the mutate of each design-turn write, after the write's own change, the write checks `next.chatPages[chatId]` and resolves the turn's page on `next` (not on the document before the change). When the chat has no claim and that page exists in `next`, it calls `claimPage(next, chatId, pageId)`.
+**Behaviour:** Inside the mutate of each design-turn write, after the write's own change, the write checks `next.chatPages[chatId]` and takes the page the write landed on: the page it shows (`canvas_page add` or `duplicate`), else the page of the frames it added or changed, else the turn's page. A delete lands on no page. When the chat has no claim and that page exists in `next`, it calls `claimPage(next, chatId, pageId)`. Answers that list pages (`pagesAnswer`) are built after the claim. At a full `chatPages` the write skips the claim, then asks which claimed chats are live and claims in a follow-up write when a gone chat's entry makes room (`claimWithRoom`).
 - Checking on `next` keeps a `canvas_page use` claim made by this same write, and never claims a page this write deleted.
 - While an entry for the chat is pending, the lazy claim waits for it: main keeps a per-chat promise for a running entry (`pendingEntries`, set by `designPagesOnEntry` and cleared when it settles, whichever path turned design mode on, including the toolbar's `chat-renderer-mutations.ts:145`), and the design-turn write awaits it before its update.
 - It runs only when the write changes something else; a refused or no-change write claims nothing.

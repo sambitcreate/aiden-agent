@@ -30,8 +30,7 @@ import {
   designTitleFollow,
   recentWrittenPages,
 } from "./design-canvas/main.js";
-import { designTurnPages } from "./design-canvas/views.js";
-import { EARLIER_PAGES_LIMIT, pagesWrittenInChat, placeWrittenPagesOnCanvas } from "./design-canvas/written-pages.js";
+import { createDesignEntry } from "./design-canvas/entry.js";
 import { DESIGN_CANVAS_UPDATED_CHANNEL } from "../handlers/design-canvas.js";
 import { cancelVisualSnapshots } from "./visual-snapshot-service.js";
 import { beginFollowThroughMove, deleteChatFollowThrough, restoreChatFollowThrough } from "./follow-through/follow-through-main.js";
@@ -59,33 +58,18 @@ export const chatApplicationService = createChatApplicationService({
   designGrants,
   designModeConsent,
   // Tracked whichever way design mode turned on, so the chat's canvas writes wait for its claim.
-  designPagesOnEntry: (chat, workspaceRoot) => designPendingEntries.track(chat.id, (async () => {
-    const entered = await placeWrittenPagesOnCanvas({
-      chatId: chat.id,
-      workspaceRoot,
-      // A reply still running has not saved its activity yet; its pages come from this run's record.
-      paths: recentWrittenPages.merged(chat.id, pagesWrittenInChat(chat.messages)),
-      limit: EARLIER_PAGES_LIMIT,
-      shouldSave: async () => (await chatStore.getMeta(chat.id))?.designMode === true,
-      store: designCanvasStore,
-      pages: designTurnPages({ views: designCanvasViews, chatId: chat.id }),
-      broadcast: (update) => ipcMain.broadcast(DESIGN_CANVAS_UPDATED_CHANNEL, update),
-      newId: randomUUID,
-      // The chat claims its own page of the shared canvas, and its earlier pages land there.
-      entry: {
-        pageName: chat.title,
-        otherViews: (workspaceId) => designCanvasViews.pageIdsOf(workspaceId, chat.id),
-        isLive: designLiveChats,
-      },
-    });
-    // The canvas shows that page and fits them once it loads, so the person sees them whole.
-    const { frameIds, pageId, focusId } = entered;
-    if (pageId && (frameIds.length > 0 || focusId !== undefined)) {
-      ipcMain.broadcast("designCanvas:focus", { chatId: chat.id, pageId, frameIds, ...(focusId !== undefined ? { focusId } : {}) });
-    }
-    // The title may have changed while entry ran; a page made for the chat follows it.
-    await designTitleFollow.follow(chat.id);
-  })()),
+  designPagesOnEntry: createDesignEntry({
+    store: designCanvasStore,
+    views: designCanvasViews,
+    recent: recentWrittenPages,
+    pending: designPendingEntries,
+    titleFollow: designTitleFollow,
+    isLive: designLiveChats,
+    designModeOn: async (chatId) => (await chatStore.getMeta(chatId))?.designMode === true,
+    broadcast: (update) => ipcMain.broadcast(DESIGN_CANVAS_UPDATED_CHANNEL, update),
+    focus: (request) => ipcMain.broadcast("designCanvas:focus", request),
+    newId: randomUUID,
+  }),
   visualSnapshots: { cancelChat: cancelVisualSnapshots },
   followThrough: { beginMove: beginFollowThroughMove, deleteChat: deleteChatFollowThrough, restoreChat: restoreChatFollowThrough },
   memoryStore,

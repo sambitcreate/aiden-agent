@@ -3,7 +3,8 @@
 // llm-client runs it once the turn's artifacts are committed.
 
 import { canvasView } from "../../../renderer/shared/design-canvas/canvas-summary.js";
-import { withLazyClaim } from "../../../renderer/shared/design-canvas/chat-pages.js";
+import { landedPageId, withLazyClaim } from "../../../renderer/shared/design-canvas/chat-pages.js";
+import { claimWithRoom } from "./lazy-claim.js";
 import { placeFrame } from "../../../renderer/shared/design-canvas/placement.js";
 import { DESIGN_CANVAS_LIMITS, type DesignCanvas } from "../../../renderer/shared/design-canvas/schema.js";
 import type { DesignChatView } from "../../../renderer/shared/design-canvas/view.js";
@@ -90,6 +91,8 @@ type CanvasPlacement = {
   newId(): string;
   /** Settles once a design-mode entry running for this chat has claimed its page. */
   pendingEntry?(): Promise<void>;
+  /** Which claimed chats are live, asked only when the lazy claim finds `chatPages` full. */
+  isLive?(chatIds: string[], workspaceId: string): Promise<Set<string>>;
 };
 
 /**
@@ -113,17 +116,20 @@ export async function placeArtifactsOnCanvas(input: CanvasPlacement & { artifact
   if (input.artifacts.length === 0) return false;
   try {
     const { workspaceId, viewOf } = await placementTurn(input);
+    let landed: string | undefined;
     const { doc: saved } = await input.store.update(
       input.chatId,
       (doc) => {
         const view = viewOf(doc);
         const placed = placeArtifactFrames(doc, input.artifacts, input.newId, { chatId: input.chatId, view });
         if (!placed.changed) throw UNCHANGED;
-        return withLazyClaim(placed.doc, input.chatId, view.pageId);
+        landed = landedPageId(doc, placed.doc, view.pageId);
+        return withLazyClaim(placed.doc, input.chatId, landed);
       },
       { workspaceId },
     );
     input.broadcast({ workspaceId, chatId: input.chatId, revision: saved.revision });
+    await claimWithRoom({ ...input, workspaceId, pageId: landed, saved });
     return true;
   } catch (error) {
     if (error === UNCHANGED) return false;
@@ -203,6 +209,7 @@ export async function placeImagesOnCanvas(
   let frameIds: string[] = [];
   let pageId = "";
   let refused = false;
+  let landed: string | undefined;
   const { workspaceId, viewOf } = await placementTurn(input);
   try {
     const { doc: saved } = await input.store.update(
@@ -214,7 +221,8 @@ export async function placeImagesOnCanvas(
         const placed = placeImageFrames(doc, input.images, input.newId, view);
         frameIds = placed.frameIds;
         if (!placed.changed) throw UNCHANGED;
-        return withLazyClaim(placed.doc, input.chatId, view.pageId);
+        landed = landedPageId(doc, placed.doc, view.pageId);
+        return withLazyClaim(placed.doc, input.chatId, landed);
       },
       {
         workspaceId,
@@ -231,6 +239,7 @@ export async function placeImagesOnCanvas(
       },
     );
     input.broadcast({ workspaceId, chatId: input.chatId, revision: saved.revision });
+    await claimWithRoom({ ...input, workspaceId, pageId: landed, saved });
     return { frameIds, pageId };
   } catch (error) {
     if (error !== UNCHANGED) throw error;

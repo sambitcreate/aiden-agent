@@ -88,11 +88,13 @@ import {
   ChatPagesFullError,
   chatsOnPage,
   claimPage,
+  landedPageId,
   withLazyClaim,
   withoutGoneClaims,
   type IsChatLive,
 } from "../../../renderer/shared/design-canvas/chat-pages.js";
 import { designPageTweakNames } from "./inspect.js";
+import { claimWithRoom } from "./lazy-claim.js";
 import { resolveDesignFile } from "./resolve-core.js";
 import type { DesignCanvasUpdated, DesignChatCanvases } from "./store.js";
 import { viewPageId, type DesignChatView } from "../../../renderer/shared/design-canvas/view.js";
@@ -916,13 +918,29 @@ export function createDesignCanvasTools(deps: DesignCanvasToolDeps): AgentTool[]
    * refuse, and gets the turn's view of the document it changes. A frame the
    * person moved since Aiden last saw it keeps the person's box, and the
    * answer says so with its box now. `show` brings a page on screen after
-   * the change has landed. A chat with no page of its own claims the page
-   * the turn worked on, in the same write, once a pending entry is done.
+   * the change has landed.
+   *
+   * A chat with no page of its own claims the page the change landed on, in
+   * the same write, once a pending entry is done: the page it shows, else
+   * the page of the frames it touched, else the turn's page. `landed: null`
+   * says it landed on no page (a delete). `answer` builds the value from the
+   * saved document, so it sees that claim.
    */
   const edit = async <T>(
-    change: (doc: DesignCanvas, view: DesignChatView) => { doc: DesignCanvas; value: T; show?: { pageId: string; frameIds: string[] } },
+    change: (
+      doc: DesignCanvas,
+      view: DesignChatView,
+    ) => {
+      doc: DesignCanvas;
+      value: T;
+      show?: { pageId: string; frameIds: string[] };
+      landed?: null;
+      answer?: (saved: DesignCanvas) => T;
+    },
   ): Promise<T> => {
     let value: T | undefined;
+    let answer: ((saved: DesignCanvas) => T) | undefined;
+    let landed: string | undefined;
     let show: { pageId: string; frameIds: string[] } | undefined;
     let report: ReturnType<typeof keepPersonsMoves> | undefined;
     let touched = new Set<string>();
@@ -939,19 +957,26 @@ export function createDesignCanvasTools(deps: DesignCanvasToolDeps): AgentTool[]
           report.doc.frames.filter((frame) => earlier.get(frame.id) !== JSON.stringify(frame)).map((frame) => frame.id),
         );
         value = next.value;
+        answer = next.answer;
         show = next.show;
-        return next.doc === doc ? report.doc : withLazyClaim(report.doc, deps.chatId, view.pageId);
+        landed = undefined;
+        if (next.doc === doc || next.landed === null) return report.doc;
+        const exists = (pageId: string | undefined): pageId is string =>
+          pageId !== undefined && report!.doc.pages.some((page) => page.id === pageId);
+        landed = exists(next.show?.pageId) ? next.show.pageId : landedPageId(doc, report.doc, view.pageId);
+        return withLazyClaim(report.doc, deps.chatId, landed);
       },
       { workspaceId },
     );
     deps.broadcast({ workspaceId, chatId: deps.chatId, revision: saved.revision });
+    await claimWithRoom({ chatId: deps.chatId, workspaceId, pageId: landed, saved, store: deps.store, isLive: deps.isLive, broadcast: deps.broadcast });
     remember(saved.frames.filter((frame) => touched.has(frame.id)));
     for (const entry of report?.changed ?? []) {
       const now = saved.frames.find((frame) => frame.id === entry.id);
       if (now) seen.set(entry.id, boxKey(now));
     }
     if (show) await showOnCanvas(workspaceId, show.pageId, show.frameIds);
-    return withCoEditReport(value as T, report, saved);
+    return withCoEditReport(answer ? answer(saved) : (value as T), report, saved);
   };
 
   const frameIn = (doc: DesignCanvas, id: unknown, onScreen: string): DesignFrame => {
@@ -1731,15 +1756,20 @@ export function createDesignCanvasTools(deps: DesignCanvasToolDeps): AgentTool[]
                 throw new CanvasToolError(`The ${String(action)} action needs page.`);
               }
             };
-            const { doc: current, view: currentView, workspaceId } = await read();
-            const isLive = await livenessOf(current, workspaceId);
-            // Showing a page changes only this chat's view, never the shared canvas,
-            // and so does using the page that is already this chat's.
-            if (action === "show" || action === "use") {
+            // Only show, use and delete read the canvas first, to tell which
+            // claimed chats are live; the other actions count every claim.
+            let isLive: IsChatLive = () => true;
+            let workspaceId = "";
+            if (action === "show" || action === "use" || action === "delete") {
               pageNeeded();
-              const pageId = pageOf(current, p.page, currentView.pageId);
+              const { doc: current, view: currentView, workspaceId: readWorkspace } = await read();
+              workspaceId = readWorkspace;
+              isLive = await livenessOf(current, workspaceId);
+              // Showing a page changes only this chat's view, never the shared canvas,
+              // and so does using the page that is already this chat's.
+              const pageId = action === "delete" ? "" : pageOf(current, p.page, currentView.pageId);
               const own = Object.prototype.hasOwnProperty.call(current.chatPages, deps.chatId) && current.chatPages[deps.chatId] === pageId;
-              if (action === "show" || own) {
+              if (action === "show" || (action === "use" && own)) {
                 await showOnCanvas(workspaceId, pageId, []);
                 return {
                   status: "done",
@@ -1824,15 +1854,20 @@ export function createDesignCanvasTools(deps: DesignCanvasToolDeps): AgentTool[]
                   default:
                     throw new CanvasToolError('action must be "add", "rename", "duplicate", "delete", "move", "show" or "use".');
                 }
+                const onScreen = shown ?? viewPageId(next, view);
+                const value = (saved: DesignCanvas) => ({
+                  status: action === "delete" ? "deleted" : "done",
+                  action,
+                  ...(action !== "delete" ? { page: { id: pageId, name: saved.pages.find((entry) => entry.id === pageId)?.name } } : { page: { id: pageId } }),
+                  pages: pagesAnswer(saved, onScreen, isLive),
+                });
                 return {
                   doc: next,
                   ...(shown ? { show: { pageId: shown, frameIds: [] } } : {}),
-                  value: {
-                    status: action === "delete" ? "deleted" : "done",
-                    action,
-                    ...(action !== "delete" ? { page: { id: pageId, name: next.pages.find((entry) => entry.id === pageId)?.name } } : { page: { id: pageId } }),
-                    pages: pagesAnswer(next, shown ?? viewPageId(next, view), isLive),
-                  },
+                  // A delete lands on no page, so it claims none.
+                  ...(action === "delete" ? { landed: null } : {}),
+                  value: value(next),
+                  answer: value,
                 };
               });
             } catch (error) {

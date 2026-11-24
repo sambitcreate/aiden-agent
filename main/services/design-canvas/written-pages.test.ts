@@ -21,6 +21,10 @@ import type { DesignViewState } from "../../../renderer/shared/design-canvas/can
 import type { DesignChatView } from "../../../renderer/shared/design-canvas/view.js";
 import { DesignCanvasStore, DesignChatCanvases } from "./store.js";
 import { DesignCanvasViews, designTurnPages } from "./views.js";
+import { placeArtifactsOnCanvas } from "./artifact-frames.js";
+import { createDesignEntry } from "./entry.js";
+import { createDesignTitleFollow } from "./title-follow.js";
+import { PendingEntries } from "./written-pages.js";
 
 const ids = () => {
   let next = 0;
@@ -798,6 +802,28 @@ test("the chat's earlier pages already on the canvas make the page holding most 
   assert.equal((await canvases.views.get("chat-1", "ws-1"))?.pageId, "p2");
 });
 
+test("a page another live chat claims does not count toward the chat's earlier pages", async (t) => {
+  const { workspaceRoot, canvases } = await workspaceWith(t, ["index.html"]);
+  // A's page holds design/index.html; B wrote the same file in its own replies.
+  await canvases.store.update("chat-1", (doc) => ({
+    ...doc,
+    chatPages: { "chat-1": "page-1" },
+    frames: [fileFrame("a-index", "design/index.html", "page-1")],
+  }));
+  const placed = await placeWrittenPagesOnCanvas({
+    ...canvases.via("chat-2"),
+    workspaceRoot,
+    paths: ["design/index.html"],
+    broadcast: () => undefined,
+    newId: ids(),
+    entry: entryFor(canvases, "chat-2", "Pricing"),
+  });
+  const doc = await canvases.workspaceStore.get("ws-1");
+  assert.notEqual(placed.pageId, "page-1");
+  assert.deepEqual(doc.pages.map((page) => page.name), ["Page 1", "Pricing"]);
+  assert.deepEqual(doc.chatPages, { "chat-1": "page-1", "chat-2": placed.pageId });
+});
+
 test("two chats entering a fresh canvas at once end on Page 1 and a new page", async (t) => {
   const { workspaceRoot, canvases } = await workspaceWith(t, []);
   const enter = (chatId: string, title: string) =>
@@ -914,4 +940,41 @@ test("with design mode turned off before the write, no claim is made and nothing
   assert.deepEqual(placed.frameIds, []);
   assert.equal(placed.focusId, undefined);
   assert.equal(await canvases.views.get("chat-2", "ws-1"), undefined);
+});
+
+test("a turn's write while design mode's entry runs waits for it, lands on the chat's new page, and the page takes the newest title", async (t) => {
+  const { workspaceRoot, canvases } = await workspaceWith(t, []);
+  await canvases.store.update("chat-1", (doc) => ({ ...doc, chatPages: { "chat-1": "page-1" } }));
+  const pending = new PendingEntries();
+  // The auto-title lands while entry runs.
+  const titles = new Map([["chat-2", "Pricing table"]]);
+  const focused: { chatId: string; pageId: string; focusId?: number }[] = [];
+  const enter = createDesignEntry({
+    store: canvases.store,
+    views: canvases.views,
+    recent: new RecentWrittenPages(),
+    pending,
+    titleFollow: createDesignTitleFollow({ canvases: canvases.store, titleOf: async (chatId) => titles.get(chatId), broadcast: () => undefined }),
+    isLive: async (chatIds) => new Set(chatIds),
+    designModeOn: async () => true,
+    broadcast: () => undefined,
+    focus: (request) => focused.push(request),
+    newId: () => "page-chat-2",
+  });
+  const entered = enter({ id: "chat-2", title: "New chat", messages: [] }, workspaceRoot);
+  // The turn places a visual right away.
+  const placed = placeArtifactsOnCanvas({
+    ...canvases.via("chat-2"),
+    broadcast: () => undefined,
+    newId: () => "frame-visual",
+    artifacts: [{ mediaId: "m1", title: "Chart" }],
+    pendingEntry: () => pending.wait("chat-2"),
+  });
+  await Promise.all([entered, placed]);
+  const doc = await canvases.workspaceStore.get("ws-1");
+  assert.deepEqual(doc.chatPages, { "chat-1": "page-1", "chat-2": "page-chat-2" });
+  assert.deepEqual(doc.pages.find((page) => page.id === "page-chat-2"), { id: "page-chat-2", name: "Pricing table", namedFor: "chat-2" });
+  assert.equal(doc.frames.find((frame) => frame.id === "frame-visual")?.pageId, "page-chat-2");
+  assert.deepEqual(focused.map(({ chatId, pageId }) => [chatId, pageId]), [["chat-2", "page-chat-2"]]);
+  assert.equal(typeof focused[0]?.focusId, "number");
 });

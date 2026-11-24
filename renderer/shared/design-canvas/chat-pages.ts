@@ -80,19 +80,40 @@ export function claimPage(doc: DesignCanvas, chatId: string, pageId: string, isL
 }
 
 /**
- * A design turn's write claims the page the turn worked on for a chat with
- * no claim yet, in the same write. `doc` is the document after the write's
- * own change, so a claim that change made stays, and a page it deleted is
- * not claimed. A full `chatPages` skips the claim and leaves the write.
+ * A design turn's write claims the page it landed on for a chat with no
+ * claim yet, in the same write. `doc` is the document after the write's own
+ * change, so a claim that change made stays, and a page it deleted is not
+ * claimed. At a full `chatPages`, entries of chats `isLive` says are gone
+ * make room; when none is, only the claim is skipped.
  */
-export function withLazyClaim(doc: DesignCanvas, chatId: string, pageId: string): DesignCanvas {
+export function withLazyClaim(doc: DesignCanvas, chatId: string, pageId: string, isLive?: IsChatLive): DesignCanvas {
   if (claimOf(doc, chatId) !== undefined || !doc.pages.some((page) => page.id === pageId)) return doc;
   try {
-    return claimPage(doc, chatId, pageId);
+    return claimPage(doc, chatId, pageId, isLive);
   } catch (error) {
     if (error instanceof ChatPagesFullError) return doc;
     throw error;
   }
+}
+
+/**
+ * The page a write landed on: the page of the first frame in `after` that
+ * it added or changed, while that page exists, else `fallback`.
+ */
+export function landedPageId(before: DesignCanvas, after: DesignCanvas, fallback: string): string {
+  const earlier = new Map(before.frames.map((frame) => [frame.id, frame]));
+  const pages = new Set(after.pages.map((page) => page.id));
+  for (const frame of after.frames) {
+    const old = earlier.get(frame.id);
+    if (old === frame || !pages.has(frame.pageId)) continue;
+    if (old === undefined || JSON.stringify(old) !== JSON.stringify(frame)) return frame.pageId;
+  }
+  return fallback;
+}
+
+/** Whether a design turn's write should look for room to claim: no claim yet, and `chatPages` is full. */
+export function lazyClaimNeedsRoom(doc: DesignCanvas, chatId: string): boolean {
+  return claimOf(doc, chatId) === undefined && Object.keys(doc.chatPages).length >= DESIGN_CANVAS_LIMITS.chatPages;
 }
 
 /**

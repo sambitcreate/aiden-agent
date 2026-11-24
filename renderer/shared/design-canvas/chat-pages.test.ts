@@ -14,7 +14,9 @@ import {
   forgetChatMove,
   forgetChatOnCanvas,
   mergeSavedChatPages,
+  landedPageId,
   uniquePageName,
+  withLazyClaim,
   type DeletedPage,
 } from "./chat-pages.js";
 import { addPage, deletePage } from "./pages.js";
@@ -289,4 +291,24 @@ test("applyStoredClaims takes the stored claims and marks, keeps newer edits, an
   assert.equal(pageOf(applied, "p2")?.namedFor, "a");
   assert.equal(pageOf(applied, "p3")?.namedFor, undefined);
   assert.deepEqual(applied.frames, local.frames);
+});
+
+test("the lazy claim at a full chatPages evicts a gone chat's entry and claims, and skips only the claim when every entry is live", () => {
+  const full = (prefix: string): DesignCanvas => ({
+    ...emptyDesignCanvas(),
+    chatPages: Object.fromEntries(Array.from({ length: DESIGN_CANVAS_LIMITS.chatPages }, (_, index) => [`${prefix}-${index}`, "page-1"])),
+  });
+  const claimed = withLazyClaim(full("gone"), "chat-1", "page-1", (chatId) => !chatId.startsWith("gone-"));
+  assert.equal(claimed.chatPages["chat-1"], "page-1");
+  assert.ok(Object.keys(claimed.chatPages).length <= DESIGN_CANVAS_LIMITS.chatPages);
+  const live = full("live");
+  assert.equal(withLazyClaim(live, "chat-1", "page-1", () => true), live);
+});
+
+test("a write lands on the page of the first frame it adds or changes, else on the fallback", () => {
+  const before: DesignCanvas = { ...addPage(emptyDesignCanvas(), "p2", "Pricing"), frames: [note("a", "page-1")] };
+  assert.equal(landedPageId(before, { ...before, frames: [...before.frames, note("b", "p2")] }, "page-1"), "p2");
+  assert.equal(landedPageId(before, { ...before, frames: [{ ...note("a", "page-1"), x: 50 }] }, "p2"), "page-1");
+  assert.equal(landedPageId(before, { ...before, frames: [note("a", "page-1")] }, "p2"), "p2", "an equal copy is no change");
+  assert.equal(landedPageId(before, { ...before, frames: [] }, "p2"), "p2");
 });

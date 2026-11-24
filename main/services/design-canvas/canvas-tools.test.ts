@@ -16,7 +16,7 @@ import {
 } from "../../../renderer/shared/design-canvas/canvas-summary.js";
 import { addPage, deletePage, movePage } from "../../../renderer/shared/design-canvas/pages.js";
 import { addComment, markCommentsSent, reopenComment } from "../../../renderer/shared/design-canvas/comments.js";
-import type { DesignCanvas } from "../../../renderer/shared/design-canvas/schema.js";
+import { DESIGN_CANVAS_LIMITS, type DesignCanvas } from "../../../renderer/shared/design-canvas/schema.js";
 import { DesignCanvasStore, DesignChatCanvases, type DesignCanvasUpdated } from "./store.js";
 import { DesignCanvasViews, designTurnPages } from "./views.js";
 import { PendingEntries } from "./written-pages.js";
@@ -525,6 +525,8 @@ test("canvas_focus asks the canvas to show frames that exist, and refuses ones t
 test("Aiden reads and places on a page it names, and focusing a frame on another page brings that page on screen", async (t) => {
   const { store, views, focused, focusRequests, personShows, call, newTurn } = await setup(t);
   await store.update("chat-1", (doc) => addPage(addPage(doc, "p2", "Pricing"), "p3", "Empty"));
+  // The person is on Page 1. (With no view, the chat would read its own page, which this placement claims.)
+  await personShows("page-1");
 
   const placed = await call("canvas_place_frame", { kind: "note", title: "Tiers", page: "pricing" });
   assert.equal(placed.status, "placed");
@@ -1595,8 +1597,8 @@ test("canvas_page delete refuses a page another live chat uses, and with force d
   assert.equal((await call("canvas_page", { action: "delete", page: "Pricing", force: true })).status, "deleted");
   const doc = await store.get("chat-1");
   assert.deepEqual(doc.pages.map((page) => page.id), ["page-1"]);
-  // chat-1 had no page of its own, so its write claims the page its turn is on.
-  assert.deepEqual(doc.chatPages, { "chat-2": "page-1", "chat-1": "page-1" });
+  // A delete lands on no page, so it claims none for chat-1.
+  assert.deepEqual(doc.chatPages, { "chat-2": "page-1" });
 });
 
 test("canvas_page delete names both reasons once when the page holds the person's frames and another chat's claim", async (t) => {
@@ -1618,7 +1620,7 @@ test("canvas_page delete ignores the claim of a chat that no longer exists", asy
   const { store, call } = await setup(t, liveExceptGone);
   await store.update("chat-1", (doc) => ({ ...addPage(doc, "p2", "Pricing"), chatPages: { "chat-gone": "p2", "chat-2": "page-1" } }));
   assert.equal((await call("canvas_page", { action: "delete", page: "Pricing" })).status, "deleted");
-  assert.deepEqual((await store.get("chat-1")).chatPages, { "chat-2": "page-1", "chat-1": "page-1" });
+  assert.deepEqual((await store.get("chat-1")).chatPages, { "chat-2": "page-1" });
 });
 
 test("canvas_page delete of this chat's own page needs no force", async (t) => {
@@ -1639,10 +1641,11 @@ test("the pages list marks this chat's page and counts other chats, naming none 
     shown.pages.map((page: { id: string; yours: boolean; otherChats: number }) => [page.id, page.yours, page.otherChats]),
     [["page-1", false, 2], ["p2", true, 0]],
   );
+  // A rename reads no liveness, so it counts every claim; it still marks this chat's page.
   const renamed = await call("canvas_page", { action: "rename", page: "Pricing", name: "Plans" });
   assert.deepEqual(
-    renamed.pages.map((page: { id: string; yours: boolean; otherChats: number }) => [page.id, page.yours, page.otherChats]),
-    [["page-1", false, 2], ["p2", true, 0]],
+    renamed.pages.map((page: { id: string; yours: boolean }) => [page.id, page.yours]),
+    [["page-1", false], ["p2", true]],
   );
   for (const answer of [shown, renamed]) assert.doesNotMatch(JSON.stringify(answer), /chat-2|chat-3|chat-gone/u);
 });
@@ -1691,6 +1694,77 @@ test("canvas_page use and the lazy claim in the same write keep the use claim", 
   await store.update("chat-1", (doc) => addPage(doc, "p2", "Pricing"));
   await call("canvas_page", { action: "use", page: "Pricing" });
   assert.deepEqual((await store.get("chat-1")).chatPages, { "chat-1": "p2" });
+});
+
+test("a frame placed on a named page claims that page, not the one on screen", async (t) => {
+  const { store, call } = await setup(t);
+  await store.update("chat-1", (doc) => ({ ...addPage(doc, "p2", "Pricing"), chatPages: { "chat-2": "page-1" } }));
+  const placed = await call("canvas_place_frame", { kind: "note", title: "Idea", page: "Pricing" });
+  const doc = await store.get("chat-1");
+  assert.equal(doc.frames.find((frame) => frame.id === placed.frame.id)?.pageId, "p2");
+  assert.deepEqual(doc.chatPages, { "chat-2": "page-1", "chat-1": "p2" }, "chat-2's page is never shared by the lazy claim");
+});
+
+test("canvas_page add claims the new page, and the answer marks it this chat's", async (t) => {
+  const { store, call } = await setup(t);
+  await store.update("chat-1", (doc) => ({ ...doc, chatPages: { "chat-2": "page-1" } }));
+  const added = await call("canvas_page", { action: "add", name: "Mine" });
+  assert.deepEqual((await store.get("chat-1")).chatPages, { "chat-2": "page-1", "chat-1": added.page.id });
+  assert.deepEqual(
+    added.pages.map((page: { name: string; yours: boolean; otherChats: number }) => [page.name, page.yours, page.otherChats]),
+    [["Page 1", false, 1], ["Mine", true, 0]],
+  );
+});
+
+test("at a full chatPages of gone chats, the lazy claim makes room and claims", async (t) => {
+  const { store, call } = await setup(t, { isLive: async (chatIds: string[]) => new Set(chatIds.filter((chatId) => !chatId.startsWith("gone-"))) });
+  await store.update("chat-1", (doc) => ({
+    ...doc,
+    chatPages: Object.fromEntries(Array.from({ length: DESIGN_CANVAS_LIMITS.chatPages }, (_, index) => [`gone-${index}`, "page-1"])),
+  }));
+  await call("canvas_place_frame", { kind: "note", title: "Idea" });
+  const doc = await store.get("chat-1");
+  assert.equal(doc.chatPages["chat-1"], "page-1");
+  assert.ok(Object.keys(doc.chatPages).length <= DESIGN_CANVAS_LIMITS.chatPages);
+});
+
+test("canvas_page rename asks about no chat's liveness", async (t) => {
+  let asked = 0;
+  const { store, call } = await setup(t, {
+    isLive: async (chatIds: string[]) => {
+      asked += 1;
+      return new Set(chatIds);
+    },
+  });
+  await store.update("chat-1", (doc) => ({ ...addPage(doc, "p2", "Pricing"), chatPages: { "chat-2": "p2" } }));
+  assert.equal((await call("canvas_page", { action: "rename", page: "Pricing", name: "Plans" })).status, "done");
+  assert.equal(asked, 0);
+});
+
+test("canvas_page use writes nothing when the chat's claim on that page lands between its read and its edit", async (t) => {
+  const { canvases, store, focusRequests, newTurn } = await setup(t);
+  await store.update("chat-1", (doc) => addPage(doc, "p2", "Pricing"));
+  let landed = false;
+  // Another write makes Pricing this chat's right after use has read the canvas.
+  const racing: ToolDeps["store"] = {
+    workspaceIdOf: (chatId) => canvases.workspaceIdOf(chatId),
+    update: (chatId, mutate, options) => canvases.update(chatId, mutate, options),
+    get: async (chatId, options) => {
+      const read = await canvases.get(chatId, options);
+      if (!landed) {
+        landed = true;
+        await canvases.update(chatId, (doc) => claimPage(doc, "chat-1", "p2"));
+      }
+      return read;
+    },
+  };
+  const call = newTurn("chat-1", { store: racing });
+  const revision = (await store.get("chat-1")).revision;
+  const used = await call("canvas_page", { action: "use", page: "Pricing" });
+  assert.equal(used.status, "done");
+  assert.equal((await store.get("chat-1")).revision, revision + 1, "only the racing write landed");
+  assert.deepEqual((await store.get("chat-1")).chatPages, { "chat-1": "p2" });
+  assert.equal(focusRequests[focusRequests.length - 1]?.pageId, "p2");
 });
 
 test("a write that deletes the turn's page claims nothing", async (t) => {
