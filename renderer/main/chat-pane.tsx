@@ -126,7 +126,7 @@ import { useReadAloud } from "../lib/tts-client";
 import type { ReadAloudActionProps } from "../components/read-aloud-button";
 import { Composer, type ComposerApprovalsPatch } from "../components/composer";
 import { AskUserQuestionComposer } from "../components/ask-user-question-composer";
-import { DesignAppConsentCard, useDesignAppConsent } from "../design/design-app-consent";
+import { DesignAppConsentCards, useDesignAppConsents } from "../design/design-app-consent";
 import { DesignModeConsentCard, useDesignModeConsent } from "../design/design-mode-consent";
 import { useCanvasFocusRequests } from "../design/canvas-focus-requests";
 import { designCanvasViewFor } from "../lib/design-mode";
@@ -870,7 +870,7 @@ export function ChatPane({ chatId }: { chatId: string }) {
   const [questionnaireSubmitting, setQuestionnaireSubmitting] = React.useState(false);
   // Aiden's "Open design mode?" card for this chat, while one is waiting.
   const designModeConsent = useDesignModeConsent(capabilities.designMode ? chatId : undefined);
-  const designAppConsent = useDesignAppConsent(capabilities.designMode ? chatId : undefined);
+  const designAppConsents = useDesignAppConsents(capabilities.designMode ? chatId : undefined);
   // Aiden's canvas_focus can arrive before the canvas loads; keep it until it does.
   useCanvasFocusRequests(capabilities.designMode);
   // The prompt whose agent deadline passed while its card was still open.
@@ -4499,9 +4499,7 @@ export function ChatPane({ chatId }: { chatId: string }) {
             {designModeConsent && !questionnaire ? (
               <DesignModeConsentCard key={designModeConsent.requestId} request={designModeConsent} />
             ) : null}
-            {designAppConsent && !questionnaire ? (
-              <DesignAppConsentCard key={designAppConsent.requestId} request={designAppConsent} />
-            ) : null}
+            {designAppConsents.length > 0 && !questionnaire ? <DesignAppConsentCards requests={designAppConsents} /> : null}
             {missingWorkspaceFolder && !questionnaire ? (
               <WorkspaceFolderMissingNotice
                 workspaceName={missingWorkspaceFolder.name}

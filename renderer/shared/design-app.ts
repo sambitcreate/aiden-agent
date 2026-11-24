@@ -274,3 +274,47 @@ export function consentDisplayText(text: string): string {
     character === "\n" ? character : `\\u{${character.codePointAt(0)!.toString(16).toUpperCase()}}`,
   );
 }
+
+/** A piece of script text as the card shows it: text, a marked line break, or a collapsed run shown as its count. */
+export type ConsentScriptPart = { kind: "text"; text: string } | { kind: "break" } | { kind: "gap"; text: string };
+
+/** Blank lines in a row that collapse into one "[N blank lines]" line. */
+const BLANK_LINE_RUN = 3;
+/** Space characters in a row that collapse into "[N spaces]". */
+const SPACE_RUN = 8;
+
+/**
+ * Script text for the card (A-M2): `consentDisplayText`'s escapes, every line
+ * break marked, and runs of three or more blank lines or eight or more
+ * spaces shown as their count, so nothing can be pushed out of view below or
+ * beside the text the person reads.
+ */
+export function consentScriptParts(text: string): ConsentScriptPart[] {
+  const spaced = (line: string): ConsentScriptPart[] => {
+    const parts: ConsentScriptPart[] = [];
+    let at = 0;
+    for (const match of line.matchAll(new RegExp(`\\p{Zs}{${SPACE_RUN},}`, "gu"))) {
+      if (match.index > at) parts.push({ kind: "text", text: line.slice(at, match.index) });
+      parts.push({ kind: "gap", text: `[${[...match[0]].length} spaces]` });
+      at = match.index + match[0].length;
+    }
+    if (at < line.length) parts.push({ kind: "text", text: line.slice(at) });
+    return parts;
+  };
+  const lines: ConsentScriptPart[][] = [];
+  let blank: string[] = [];
+  const flush = () => {
+    if (blank.length >= BLANK_LINE_RUN) lines.push([{ kind: "gap", text: `[${blank.length} blank lines]` }]);
+    else for (const line of blank) lines.push(spaced(line));
+    blank = [];
+  };
+  for (const line of consentDisplayText(text).split("\n")) {
+    if (/^\p{Zs}*$/u.test(line)) blank.push(line);
+    else {
+      flush();
+      lines.push(spaced(line));
+    }
+  }
+  flush();
+  return lines.flatMap((line, index) => (index === 0 ? line : [{ kind: "break" as const }, ...line]));
+}
