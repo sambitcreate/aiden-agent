@@ -14,6 +14,7 @@ import { lstat } from "node:fs/promises";
 import path from "node:path";
 import type { AgentMessage, AgentTool } from "@earendil-works/pi-agent-core";
 import { readCanvasConfig, type CanvasConfig } from "../canvas-config.js";
+import { DESIGN_MD_PROMPT_BULLET } from "../canvas-tools.js";
 import { locateDesignMd, type DesignAppRoots } from "./locate.js";
 import type { DesignMdOffers } from "./offers.js";
 import { designMdStatusSentence } from "./status.js";
@@ -177,6 +178,10 @@ export function withDesignModeSection(
       latest = sections[DESIGN_MODE_SECTION];
     }
   }
-  if (latest === text || (!options.live && latest !== undefined)) return messages;
+  // Flag off (or design_system excluded): keep any copy already there, as
+  // before the flag, unless it carries the DESIGN.md bullet, which names a
+  // tool this turn doesn't have.
+  const namesDesignMd = typeof latest === "string" && latest.includes(DESIGN_MD_PROMPT_BULLET);
+  if (latest === text || (!options.live && latest !== undefined && !namesDesignMd)) return messages;
   return [...messages, { role: "system", content: "", sections: { [DESIGN_MODE_SECTION]: text }, timestamp: now } as unknown as AgentMessage];
 }
