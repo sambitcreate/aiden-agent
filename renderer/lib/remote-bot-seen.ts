@@ -5,7 +5,8 @@
 // (`lastReplyAt` on its feed rows, revision 52, and its session entries'
 // `createdAt`), never this Mac's clock, so a host whose clock is ahead or
 // behind still gets the right dots. `hostSince` is the newest reply a host's
-// Bots had when this Mac first listed them: those replies start read.
+// Bots had when this Mac first listed them: those replies start read. A host
+// first listed with Bots but no replies gets 0, so its first reply is unread.
 
 import * as React from "react";
 import { botLastReplyAt } from "../shared/bot-live";
@@ -15,7 +16,7 @@ export const REMOTE_BOT_SEEN_KEY = "aiden-agent.remote-bots-seen.v1";
 export const REMOTE_BOT_SEEN_LIMIT = 200;
 
 export interface RemoteBotSeen {
-  /** Each host's newest reply when this Mac first listed its Bots, by host id. */
+  /** Each host's newest reply when this Mac first listed its Bots (0 when none had replied), by host id. */
   hostSince: Readonly<Record<string, number>>;
   /** The newest reply each remote Bot's chat showed here, by `hostId/botId`. */
   seenReplyAt: Readonly<Record<string, number>>;
@@ -30,11 +31,13 @@ function newest(times: Record<string, number>): Record<string, number> {
   return Object.fromEntries(entries.sort((left, right) => right[1] - left[1]).slice(0, REMOTE_BOT_SEEN_LIMIT));
 }
 
-function times(value: unknown): Record<string, number> {
+const validBaseline = (value: unknown): value is number => value === 0 || validTime(value);
+
+function times(value: unknown, valid: (at: unknown) => at is number = validTime): Record<string, number> {
   const out: Record<string, number> = {};
   if (!value || typeof value !== "object" || Array.isArray(value)) return out;
   for (const [key, at] of Object.entries(value as Record<string, unknown>)) {
-    if (key && validTime(at)) out[key] = at;
+    if (key && valid(at)) out[key] = at;
   }
   return newest(out);
 }
@@ -51,7 +54,7 @@ export function parseRemoteBotSeen(raw: string | null): RemoteBotSeen {
   if (!value || typeof value !== "object" || Array.isArray(value)) return fresh;
   const record = value as Record<string, unknown>;
   if (record.version !== 2) return fresh;
-  return { hostSince: times(record.hostSince), seenReplyAt: times(record.seenReplyAt) };
+  return { hostSince: times(record.hostSince, validBaseline), seenReplyAt: times(record.seenReplyAt) };
 }
 
 export function serializeRemoteBotSeen(seen: RemoteBotSeen): string {
@@ -60,8 +63,9 @@ export function serializeRemoteBotSeen(seen: RemoteBotSeen): string {
 
 /**
  * The first time this Mac lists a host's Bots, their replies so far start
- * read: the host's newest reply becomes its baseline. A host whose Bots have
- * no reply times yet gets none, and its Bots show no dot until one is set.
+ * read: the host's newest reply becomes its baseline. Bots with no reply yet
+ * get a baseline of 0, so the first reply that arrives later is unread. An
+ * empty list sets nothing: the host's Bots may not have arrived yet.
  */
 export function withRemoteBotHostListed(
   seen: RemoteBotSeen,
@@ -69,9 +73,10 @@ export function withRemoteBotHostListed(
   replyTimes: readonly (number | undefined)[],
 ): RemoteBotSeen {
   if (seen.hostSince[hostId] !== undefined) return seen;
+  if (replyTimes.length === 0) return seen;
   const known = replyTimes.filter(validTime);
-  if (known.length === 0) return seen;
-  return { ...seen, hostSince: newest({ ...seen.hostSince, [hostId]: Math.max(...known) }) };
+  const since = known.length === 0 ? 0 : Math.max(...known);
+  return { ...seen, hostSince: newest({ ...seen.hostSince, [hostId]: since }) };
 }
 
 /** The remote Bot's chat showed the reply at `replyAt`; the seen time only moves forward. */

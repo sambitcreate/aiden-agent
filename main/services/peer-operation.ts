@@ -1,4 +1,4 @@
-import { peerBotSessionCompat, peerBotSessionPageCompat } from "./peer-bot-session-compat.js";
+import { peerBotSessionCompat, peerBotSessionPageCompat, peerBotSessionPageCursor } from "./peer-bot-session-compat.js";
 import { validatePeerResponse } from "./peer-response.js";
 import { hostIdentifier } from "../../renderer/shared/peer-host.js";
 import type {
@@ -181,7 +181,10 @@ export async function peerOperationResult(
     // Like the session: an entry this client cannot read is left out.
     const page = peerBotSessionPageCompat(value);
     await validatePeerResponse(name, page);
-    return parseAidenRemoteBotSessionEntriesPage(page);
+    const parsed = parseAidenRemoteBotSessionEntriesPage(page);
+    // Not part of the wire page: the host's own oldest entry, for the next request.
+    const olderCursor = peerBotSessionPageCursor(value);
+    return olderCursor === undefined ? parsed : { ...parsed, olderCursor };
   }
   await validatePeerResponse(name, value);
   if (name === "summaries")

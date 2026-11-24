@@ -27,7 +27,17 @@ test("a paired Mac's Bot reads unread only for a reply newer than the last one s
   assert.equal(isRemoteBotUnread(shown, "host", "bot", NOW + 600), true);
   assert.equal(isRemoteBotUnread(shown, "other", "bot", NOW + 500), false, "each host has its own baseline");
   assert.equal(withRemoteBotSeen(shown, "host/bot", NOW + 200), shown, "the seen time never moves back");
-  assert.equal(withRemoteBotHostListed(seen, "quiet", [undefined]), seen, "a host with no reply times sets no baseline");
+  assert.equal(withRemoteBotHostListed(seen, "quiet", []), seen, "a host with no Bots listed yet sets no baseline");
+});
+
+test("a host whose Bots hadn't replied when first listed shows a dot for their first reply, also after a reload", () => {
+  let seen = withRemoteBotHostListed(parseRemoteBotSeen(null), "quiet", [undefined, undefined]);
+  // The next feed update brings the first reply; listing again must not swallow it.
+  seen = withRemoteBotHostListed(seen, "quiet", [NOW]);
+  assert.equal(isRemoteBotUnread(seen, "quiet", "bot", NOW), true);
+  const reloaded = parseRemoteBotSeen(serializeRemoteBotSeen(seen));
+  assert.equal(isRemoteBotUnread(withRemoteBotHostListed(reloaded, "quiet", [NOW]), "quiet", "bot", NOW), true);
+  assert.equal(isRemoteBotUnread(withRemoteBotSeen(reloaded, "quiet/bot", NOW), "quiet", "bot", NOW), false);
 });
 
 test("a host whose clock is an hour ahead or behind this Mac still starts read and shows its next reply", () => {
@@ -64,8 +74,8 @@ test("the record survives a reload and refuses what it can't trust", () => {
   for (const raw of ["not json", "[]", JSON.stringify({ version: 1, since: 10, seenReplyAt: { "host/bot": 5 } })]) {
     assert.deepEqual(parseRemoteBotSeen(raw), { hostSince: {}, seenReplyAt: {} }, raw);
   }
-  const odd = parseRemoteBotSeen(JSON.stringify({ version: 2, hostSince: { h: "x", g: 4 }, seenReplyAt: { a: -1, b: "x", c: 7 } }));
-  assert.deepEqual(odd, { hostSince: { g: 4 }, seenReplyAt: { c: 7 } });
+  const odd = parseRemoteBotSeen(JSON.stringify({ version: 2, hostSince: { h: "x", g: 4, z: 0, n: -1 }, seenReplyAt: { a: -1, b: "x", c: 7, d: 0 } }));
+  assert.deepEqual(odd, { hostSince: { g: 4, z: 0 }, seenReplyAt: { c: 7 } });
   let many = parseRemoteBotSeen(null);
   for (let index = 1; index <= REMOTE_BOT_SEEN_LIMIT + 5; index++) many = withRemoteBotSeen(many, `h/${index}`, index + 10);
   assert.equal(Object.keys(many.seenReplyAt).length, REMOTE_BOT_SEEN_LIMIT, "only the newest are kept");

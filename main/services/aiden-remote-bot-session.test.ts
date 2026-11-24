@@ -4921,11 +4921,30 @@ test("the person takes back a queued message before its turn: it never runs, and
     );
 
     const routine = await runtime.send(BOT_ID, { text: "Check my inbox.", requestId: "routine:task_1:1", label: "Morning brief" });
-    assert.equal(
-      (await service.withdrawQueued(DEVICE_ID, BOT_ID, routine.submissionId, "withdraw-request-0000003", {})).outcome,
-      "gone",
-      "a routine's input stays queued",
-    );
+    // A request that raced the routine's send could only have looked before the
+    // id existed, when nothing marked it as a routine's. Whose message it is must
+    // be decided with the abort, so even that request leaves the routine queued.
+    const lookedTooEarly = new Proxy(runtime, {
+      get: (target, property, receiver) =>
+        property === "quietInputs"
+          ? async (_botId: string, ids: readonly string[]) => new Map(ids.map((id) => [id, false]))
+          : Reflect.get(target, property, receiver),
+    });
+    const raced = new AidenRemoteBotSessionService({ bots: activityBots(), runtime: async () => lookedTooEarly, turnIntents: createBotTurnIntents() });
+    try {
+      assert.equal(
+        (await raced.withdrawQueued(DEVICE_ID, BOT_ID, routine.submissionId, "withdraw-request-0000003", {})).outcome,
+        "gone",
+        "a routine's input stays queued",
+      );
+      assert.equal(
+        (await raced.withdrawQueued(DEVICE_ID, BOT_ID, String(Number(routine.submissionId) + 1000), "withdraw-request-0000005", {})).outcome,
+        "gone",
+        "an id the Bot doesn't hold is gone",
+      );
+    } finally {
+      await raced.close();
+    }
     await assert.rejects(service.withdrawQueued(DEVICE_ID, BOT_ID, "not a submission", "withdraw-request-0000004", {}), { code: "invalid_request" });
 
     releases.shift()!();

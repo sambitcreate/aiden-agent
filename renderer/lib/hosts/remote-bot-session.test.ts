@@ -16,6 +16,7 @@ import {
   hostServesBotHandoffs,
   hostSharesBotSessions,
   remoteBotSessionView,
+  withOlderRemoteBotEntries,
   type RemoteBotSessionView,
 } from "./remote-bot-session";
 
@@ -437,14 +438,16 @@ test("Load older places the host's earlier page before what is shown, keeps it a
   assert.deepEqual(texts(), ["Three", "Four", "Five", "Six"]);
   assert.equal(follower.getState().view!.hasOlder, true);
 
-  // A reconnect's snapshot of the same session keeps what was loaded.
+  // A reconnect's snapshot of the same session keeps what was loaded, read again from the host.
   fake.push(event(4, { type: "snapshot", payload: { session: session({ seq: 5, hasOlder: true, entries: [message("m5", "Five"), message("m6", "Six"), message("m7", "Seven")] }) } }));
+  assert.deepEqual(texts(), ["Three", "Four", "Five", "Six", "Seven"]);
+  await settle();
   assert.deepEqual(texts(), ["Three", "Four", "Five", "Six", "Seven"]);
 
   await follower.loadOlder();
   assert.deepEqual(texts(), ["One", "Two", "Three", "Four", "Five", "Six", "Seven"]);
   assert.equal(follower.getState().view!.hasOlder, false);
-  assert.deepEqual(asked, ["m5", "m3"], "each page ends where the last began");
+  assert.deepEqual(asked, ["m5", "m5", "m3"], "each page ends where the last began");
 
   // A new epoch is another transcript: the loaded pages go.
   fake.push(event(0, { type: "snapshot", payload: { session: session({ epoch: "e2", seq: 0, hasOlder: true, entries: [message("n1", "New")] }) } }, "e2"));
@@ -463,4 +466,53 @@ test("Load older places the host's earlier page before what is shown, keeps it a
   await settle();
   assert.equal(old.reads(), 2, "the session is read again");
   legacy.stop();
+});
+
+test("a snapshot that rewrote loaded history replaces it, and a page asked for before the snapshot is never placed", async () => {
+  const message = (id: string, text: string) => ({ type: "message" as const, id, role: "assistant" as const, text });
+  const newest = session({ hasOlder: true, entries: [message("m5", "Five"), message("m6", "Six")] });
+  const fake = fakeTransport([newest]);
+  // The host's history: "Four" is a routine's input that a later [SILENT] turn hides.
+  let history = [message("m1", "One"), message("m2", "Two"), message("m3", "Three"), message("m4", "Four")];
+  const asked: Array<[string, number | undefined]> = [];
+  let hold: (() => void) | null = null;
+  fake.transport.older = async (_hostId, _botId, before, limit) => {
+    asked.push([before, limit]);
+    if (hold === null && asked.length === 3) await new Promise<void>((resolve) => (hold = resolve));
+    const end = before === "m5" ? history.length : history.findIndex((entry) => entry.id === before);
+    const start = Math.max(0, end - (limit ?? 2));
+    return { ok: true, value: { botId: "bot_1", epoch: "e1", entries: history.slice(start, end), hasOlder: start > 0 } };
+  };
+  const follower = new RemoteBotSessionFollower(fake.transport, "host_a", "bot_1");
+  follower.start();
+  await settle();
+  const texts = () => follower.getState().view!.snapshot.entries.map((entry) => (entry as { text?: string }).text);
+  await follower.loadOlder();
+  assert.deepEqual(texts(), ["Three", "Four", "Five", "Six"]);
+
+  // The host hides "Four" and sends a snapshot of the same epoch: it is gone once the loaded part is read again.
+  history = history.filter((entry) => entry.id !== "m4");
+  fake.push(event(3, { type: "snapshot", payload: { session: session({ seq: 4, hasOlder: true, entries: [message("m5", "Five"), message("m6", "Six")] }) } }));
+  await settle();
+  assert.deepEqual(texts(), ["Two", "Three", "Five", "Six"]);
+  assert.deepEqual(asked[1], ["m5", 2], "the loaded part is read again, as many entries as were kept");
+
+  // A Load older that is out when another snapshot arrives belongs to the history before it.
+  const pending = follower.loadOlder();
+  await settle();
+  fake.push(event(5, { type: "snapshot", payload: { session: session({ seq: 6, hasOlder: true, entries: [message("m5", "Five"), message("m6", "Six")] }) } }));
+  await settle();
+  hold!();
+  assert.deepEqual(await pending, { kind: "loaded" });
+  await settle();
+  assert.equal(texts().includes("One"), false, "the page asked for before the snapshot was not placed");
+  follower.stop();
+});
+
+test("a page whose entries this Mac can't show still moves Load older past them", () => {
+  const message = (id: string, text: string) => ({ type: "message" as const, id, role: "assistant" as const, text });
+  const view = remoteBotSessionView(session({ hasOlder: true, entries: [message("m5", "Five")] }));
+  const skipped = withOlderRemoteBotEntries(view, { botId: "bot_1", epoch: "e1", entries: [], hasOlder: true, olderCursor: "h3" });
+  assert.equal(skipped.olderCursor, "h3", "the next page starts before the entries left out");
+  assert.equal(skipped.hasOlder, true);
 });

@@ -16,6 +16,7 @@ import {
   parseAidenRemoteBotQuestion,
   parseAidenRemoteBotSessionActivity,
   parseAidenRemoteBotSessionEntry,
+  parseAidenRemoteBotSessionEntryId,
   parseAidenRemoteBotSessionEvent,
   parseAidenRemoteBotQueuedList,
   type AidenRemoteBotSessionEvent,
@@ -105,6 +106,20 @@ export function peerBotSessionCompat(value: unknown): unknown {
 export function peerBotSessionPageCompat(value: unknown): unknown {
   if (!isRecord(value) || !Array.isArray(value.entries)) return value;
   return { ...value, entries: value.entries.filter((entry) => parses(parseAidenRemoteBotSessionEntry, entry)) };
+}
+
+/**
+ * Where the next older page starts: the oldest entry the host sent, read or
+ * not. Paging from the oldest entry this client kept would ask for the same
+ * page again when the oldest ones (or the whole page) are of a kind it can't
+ * show, and never reach the history before them.
+ */
+export function peerBotSessionPageCursor(value: unknown): string | undefined {
+  if (!isRecord(value) || !Array.isArray(value.entries)) return undefined;
+  for (const entry of value.entries) {
+    if (isRecord(entry) && parses(parseAidenRemoteBotSessionEntryId, entry.id)) return entry.id as string;
+  }
+  return undefined;
 }
 
 /** An event this client cannot apply: the session must be read again. */

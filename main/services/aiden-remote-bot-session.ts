@@ -267,9 +267,11 @@ export interface AidenRemoteBotSessionRuntime {
   placedSubmissions(botId: string): Promise<ReadonlyMap<string, string>>;
   /**
    * Revision 67: take back a queued submission before its turn starts, as the
-   * desktop's Remove does (`BotSessionService.withdraw`).
+   * desktop's Remove does (`BotSessionService.withdraw`). `personOnly` makes a
+   * routine's input, the self-intro or an unknown id `gone`, checked in the
+   * Bot's lane so a send racing the request is seen.
    */
-  withdraw(botId: string, submissionId: string): Promise<"withdrawn" | "started" | "gone">;
+  withdraw(botId: string, submissionId: string, options?: { personOnly?: boolean }): Promise<"withdrawn" | "started" | "gone">;
 }
 
 export interface AidenRemoteBotSessionServiceOptions {
@@ -2774,9 +2776,8 @@ export class AidenRemoteBotSessionService {
         {},
         async (): Promise<AidenRemoteBotQueuedWithdrawReceipt> => {
           const runtime = await this.options.runtime();
-          const quiet = await runtime.quietInputs(bot.id, [id]);
-          if (quiet.get(id) === true) return { submissionId: id, outcome: "gone" };
-          return { submissionId: id, outcome: await runtime.withdraw(bot.id, id) };
+          // Whose message it is is decided in the Bot's lane, with the abort, not before it.
+          return { submissionId: id, outcome: await runtime.withdraw(bot.id, id, { personOnly: true }) };
         },
       );
       await this.afterAction(bot.id);

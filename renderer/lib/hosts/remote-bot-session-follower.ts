@@ -5,18 +5,19 @@
 
 import type { PeerBotSessionMessage, PeerBotSessionStreamState, PeerBotSessionSubscription } from "../../shared/peer-bot-session";
 import type { PeerOperationOutcome } from "../../shared/peer-host";
-import type {
-  AidenRemoteBotSession,
-  AidenRemoteBotSessionEntriesPage,
-  AidenRemoteBotSessionEvent,
-} from "../../../main/services/aiden-remote-protocol";
+import type { AidenRemoteBotSession, AidenRemoteBotSessionEvent } from "../../../main/services/aiden-remote-protocol";
 import {
   applyRemoteBotSessionEvent,
   carryOlderRemoteBotEntries,
   remoteBotSessionView,
   withOlderRemoteBotEntries,
+  withRereadOlderRemoteBotEntries,
+  type RemoteBotSessionEntriesPage,
   type RemoteBotSessionView,
 } from "./remote-bot-session";
+
+/** The host's largest page (`limit`, revision 67). */
+const OLDER_PAGE_MAX = 200;
 
 export interface RemoteBotSessionTransport {
   subscribe(hostId: string, botId: string): Promise<PeerBotSessionSubscription>;
@@ -24,8 +25,8 @@ export interface RemoteBotSessionTransport {
   onMessage(handler: (message: PeerBotSessionMessage) => void): () => void;
   /** `GET /bots/{botId}/session` through the host supervisor. */
   read(hostId: string, botId: string): Promise<PeerOperationOutcome>;
-  /** Contract revision 67: `GET /bots/{botId}/session/entries?before=` through the host supervisor. */
-  older?(hostId: string, botId: string, before: string): Promise<PeerOperationOutcome>;
+  /** Contract revision 67: `GET /bots/{botId}/session/entries?before=&limit=` through the host supervisor. */
+  older?(hostId: string, botId: string, before: string, limit?: number): Promise<PeerOperationOutcome>;
 }
 
 /**
@@ -61,6 +62,12 @@ export class RemoteBotSessionFollower {
   private resyncPending = false;
   private buffered: AidenRemoteBotSessionEvent[] = [];
   private loadingOlder: Promise<RemoteBotOlderOutcome> | null = null;
+  /**
+   * Bumped whenever the shown history is replaced (a snapshot, or older
+   * entries read again). A page asked for before that belongs to history this
+   * Mac no longer shows, so it is never placed.
+   */
+  private history = 0;
 
   constructor(
     private readonly transport: RemoteBotSessionTransport,
@@ -108,6 +115,7 @@ export class RemoteBotSessionFollower {
     if (this.stopped || !view || !view.hasOlder || !view.olderCursor || !this.transport.older)
       return Promise.resolve({ kind: this.transport.older ? "loaded" : "unsupported" });
     const { epoch } = view.snapshot;
+    const history = this.history;
     const request = this.transport.older(this.hostId, this.botId, view.olderCursor).then(
       (outcome): RemoteBotOlderOutcome => {
         if (this.stopped) return { kind: "loaded" };
@@ -121,8 +129,10 @@ export class RemoteBotSessionFollower {
           }
           return { kind: "failed", message: outcome.error.message };
         }
+        // The history changed while the page was out; the button reads the new history.
+        if (history !== this.history) return { kind: "loaded" };
         const current = this.state.view;
-        const page = outcome.value as AidenRemoteBotSessionEntriesPage;
+        const page = outcome.value as RemoteBotSessionEntriesPage;
         if (!current || current.snapshot.epoch !== epoch || page.epoch !== epoch) {
           this.reload();
           return { kind: "loaded" };
@@ -194,10 +204,9 @@ export class RemoteBotSessionFollower {
       else this.publish({ failed: outcome.error.message });
       return;
     }
-    let view: RemoteBotSessionView | null = carryOlderRemoteBotEntries(
-      this.state.view,
-      remoteBotSessionView(outcome.value as AidenRemoteBotSession),
-    );
+    const fresh = remoteBotSessionView(outcome.value as AidenRemoteBotSession);
+    let view: RemoteBotSessionView | null = carryOlderRemoteBotEntries(this.state.view, fresh);
+    const carried = view.snapshot.entries.length - fresh.snapshot.entries.length;
     for (const event of buffered) {
       if (view === null) break;
       view = applyRemoteBotSessionEvent(view, event);
@@ -206,7 +215,35 @@ export class RemoteBotSessionFollower {
       void this.read();
       return;
     }
+    this.history += 1;
     this.publish({ view, failed: null, gone: false });
+    this.rereadCarried(carried, fresh);
+  }
+
+  /**
+   * The host may have rewritten history inside the same epoch (a snapshot
+   * also says so), so older entries kept across a snapshot are read again
+   * and replaced, or dropped if that fails.
+   */
+  private rereadCarried(carried: number, fresh: RemoteBotSessionView): void {
+    const view = this.state.view;
+    if (carried <= 0 || !view) return;
+    const own = view.snapshot.entries[carried]?.id;
+    const history = this.history;
+    const settle = (page: RemoteBotSessionEntriesPage | null) => {
+      const current = this.state.view;
+      if (this.stopped || history !== this.history || !current) return;
+      this.history += 1;
+      this.publish({ view: withRereadOlderRemoteBotEntries(current, carried, fresh, page) });
+    };
+    if (!own || !this.transport.older) {
+      settle(null);
+      return;
+    }
+    this.transport.older(this.hostId, this.botId, own, Math.min(carried, OLDER_PAGE_MAX)).then(
+      (outcome) => settle(outcome.ok ? (outcome.value as RemoteBotSessionEntriesPage) : null),
+      () => settle(null),
+    );
   }
 
   private receive(message: PeerBotSessionMessage): void {
@@ -230,11 +267,11 @@ export class RemoteBotSessionFollower {
       this.inFlight = false;
       this.resyncPending = false;
       this.buffered = [];
-      this.publish({
-        view: carryOlderRemoteBotEntries(this.state.view, remoteBotSessionView(event.payload.session)),
-        failed: null,
-        gone: false,
-      });
+      const fresh = remoteBotSessionView(event.payload.session);
+      const view = carryOlderRemoteBotEntries(this.state.view, fresh);
+      this.history += 1;
+      this.publish({ view, failed: null, gone: false });
+      this.rereadCarried(view.snapshot.entries.length - fresh.snapshot.entries.length, fresh);
       return;
     }
     if (this.inFlight) {

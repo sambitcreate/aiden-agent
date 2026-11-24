@@ -607,7 +607,19 @@ test("a remote Bot chat pages back from its oldest entry and takes back a queued
     { operation: "botSessionEntries", resourceId: "bot_1" },
     { botId: "bot_1", epoch: "e1", entries: [...entries, { type: "hand_off", id: "h1", text: "Sign in" }], hasOlder: true },
   )) as { entries: unknown[]; hasOlder: boolean };
-  assert.deepEqual(read, { botId: "bot_1", epoch: "e1", entries, hasOlder: true });
+  const oldest = (entries[0] as { id: string }).id;
+  assert.deepEqual(read, { botId: "bot_1", epoch: "e1", entries, hasOlder: true, olderCursor: oldest });
+  // When the oldest entries are of a kind this Mac can't show, the next page still starts at the host's oldest,
+  // so paging moves past them instead of asking for the same page again.
+  const unreadable = { type: "hand_off", id: "h0", text: "Sign in" };
+  assert.deepEqual(
+    await peerOperationResult({ operation: "botSessionEntries", resourceId: "bot_1" }, { botId: "bot_1", epoch: "e1", entries: [unreadable, ...entries], hasOlder: true }),
+    { botId: "bot_1", epoch: "e1", entries, hasOlder: true, olderCursor: "h0" },
+  );
+  assert.deepEqual(
+    await peerOperationResult({ operation: "botSessionEntries", resourceId: "bot_1" }, { botId: "bot_1", epoch: "e1", entries: [unreadable], hasOlder: true }),
+    { botId: "bot_1", epoch: "e1", entries: [], hasOlder: true, olderCursor: "h0" },
+  );
   await assert.rejects(peerOperationResult({ operation: "botSessionEntries", resourceId: "bot_1" }, { botId: "bot_1", epoch: "e1", entries }));
   assert.deepEqual(
     await peerOperationResult({ operation: "botWithdrawQueued", resourceId: "bot_1" }, { submissionId: "42", outcome: "started" }),
