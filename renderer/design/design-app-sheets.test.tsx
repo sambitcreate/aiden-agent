@@ -159,6 +159,17 @@ test("rows show the address, process, folder and app root, and Connect calls con
   );
 });
 
+test("a row from the workspace's own folder says workspace folder, never '.'", async () => {
+  installBotTestIpc({ "designApp:running": () => scanOf([server({ appRoot: ".", folder: "." })]) });
+  render(<ConnectHarness />);
+  const shown = await dialog();
+  await within(shown).findByText("127.0.0.1:5173");
+  const text = shown.textContent ?? "";
+  assert.ok(text.includes("vite · workspace folder"), text);
+  assert.ok(text.includes("App workspace folder"), text);
+  assert.equal(/· \.|App \./u.test(text), false);
+});
+
 test("rows that can't connect are disabled and say why: beyond this computer with the fix, another address, another user, already running", async () => {
   installBotTestIpc({
     "designApp:running": () =>

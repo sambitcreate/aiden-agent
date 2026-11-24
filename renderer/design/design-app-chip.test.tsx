@@ -220,6 +220,14 @@ test("the trigger names the app and its state for screen readers, and Enter open
   assert.ok(within(menu).getByText("Running at 127.0.0.1:5173"));
 });
 
+test("the menu names the workspace's own folder as the workspace folder, never '.'", async () => {
+  mount(snapshot([RUNNING]));
+  const menu = await openMenu();
+  const text = menu.textContent ?? "";
+  assert.ok(text.includes("Vite · workspace folder"), text);
+  assert.equal(text.includes("Vite · ."), false);
+});
+
 test("a running app offers Stop, Restart and Show logs; Show logs opens the drawer for its root", async () => {
   const logs: string[] = [];
   mount(snapshot([RUNNING]), {}, { onShowLogs: (root) => logs.push(root) });

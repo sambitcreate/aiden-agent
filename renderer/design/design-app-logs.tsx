@@ -11,7 +11,7 @@ import { Button } from "../components/ui";
 import { designAppApi } from "../lib/ipc";
 import { useLayer } from "../lib/layer-stack";
 import { usePresence } from "../lib/use-presence";
-import { consentDisplayText, EMPTY_LOG_CARRY, logDisplayChunk, type DesignAppLogs, type LogCarry } from "../shared/design-app";
+import { designAppRootText, EMPTY_LOG_CARRY, logDisplayChunk, type DesignAppLogs, type LogCarry } from "../shared/design-app";
 import { designAppStatusLine, useDesignAppsSnapshot } from "./design-app-chip";
 import { useDesignPane } from "./design-pane";
 
@@ -229,7 +229,7 @@ function DesignAppLogsBody({
     setFollowing(true);
   };
 
-  const label = `${app?.frameworkLabel ?? "App"} · ${consentDisplayText(appRoot)}`;
+  const label = `${app?.frameworkLabel ?? "App"} · ${designAppRootText(appRoot)}`;
   return (
     <>
       <div className="flex items-center gap-2 px-3 pb-1 pt-2">

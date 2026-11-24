@@ -10,6 +10,8 @@ import { Button, Dialog, Separator, Text } from "../components/ui";
 import { designAppApi } from "../lib/ipc";
 import {
   consentDisplayText,
+  designAppRootClass,
+  designAppRootText,
   designAppProblemMessage,
   type DesignAppRunningScan,
   type DesignAppRunningServer,
@@ -246,10 +248,10 @@ export function DesignAppConnectSheet({
                           {address}
                         </Text>
                         <Text variant="small" color="secondary" className="mt-0.5 block break-words">
-                          {consentDisplayText(server.processName)} · <span className="font-mono">{consentDisplayText(server.folder)}</span>
+                          {consentDisplayText(server.processName)} · <span className={designAppRootClass(server.folder)}>{designAppRootText(server.folder)}</span>
                         </Text>
                         <Text variant="small" color="tertiary" className="mt-0.5 block break-words">
-                          App <span className="font-mono">{consentDisplayText(server.appRoot)}</span>
+                          App <span className={designAppRootClass(server.appRoot)}>{designAppRootText(server.appRoot)}</span>
                         </Text>
                         {!server.connectable && server.why ? (
                           <Text id={reasonId} variant="small" color="secondary" className="mt-1 block">

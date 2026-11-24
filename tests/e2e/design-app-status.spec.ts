@@ -254,7 +254,7 @@ test.describe("with a 15 s presence grace", () => {
       await expect(sheet).toBeVisible();
       const connect = sheet.getByRole("button", { name: `Connect to 127.0.0.1:${port}` });
       await expect(connect).toBeEnabled({ timeout: 15_000 });
-      await expect(sheet).toContainText("App .");
+      await expect(sheet).toContainText("App workspace folder");
       await page.mouse.move(1, 1);
       await shoot(page, testInfo, "design-app-connect");
       await connect.click();

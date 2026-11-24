@@ -341,6 +341,18 @@ export function consentDisplayText(text: string): string {
   );
 }
 
+/**
+ * An app root or folder as the chip's menu, the logs drawer, the attach card
+ * and the Connect sheet show it: the workspace's own folder (`.`) as
+ * "workspace folder", anything else escaped (B8). Main's values keep `.`.
+ */
+export function designAppRootText(root: string): string {
+  return root === "." ? "workspace folder" : consentDisplayText(root);
+}
+
+/** Paths show in monospace; the workspace folder's name is words. */
+export const designAppRootClass = (root: string): string | undefined => (root === "." ? undefined : "font-mono");
+
 // ---- 2c: the logs drawer's text (D4) ----
 
 /** What one log chunk leaves for the next: an unfinished sequence, the line's length so far, and its dropped characters. */

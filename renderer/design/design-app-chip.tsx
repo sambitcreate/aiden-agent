@@ -20,7 +20,8 @@ import { useAppCapabilities } from "../lib/app-capabilities";
 import { designAppApi } from "../lib/ipc";
 import { cn } from "../lib/ui-utils";
 import {
-  consentDisplayText,
+  designAppRootClass,
+  designAppRootText,
   designAppAnnouncement,
   designAppChip,
   designAppProblemMessage,
@@ -344,7 +345,7 @@ export function DesignAppStatusChip({ chatId, onShowLogs }: { chatId: string; on
                   {index > 0 ? <DropdownMenuSeparator /> : null}
                   <DropdownMenuLabel className="flex flex-col gap-0.5 py-1.5 font-normal">
                     <span className="text-small font-medium text-primary">
-                      {app.frameworkLabel} · <span className="font-mono">{consentDisplayText(app.appRoot)}</span>
+                      {app.frameworkLabel} · <span className={designAppRootClass(app.appRoot)}>{designAppRootText(app.appRoot)}</span>
                     </span>
                     <span className="text-small whitespace-normal break-words text-secondary">{designAppStatusLine(app, problems.get(app.appRoot))}</span>
                   </DropdownMenuLabel>

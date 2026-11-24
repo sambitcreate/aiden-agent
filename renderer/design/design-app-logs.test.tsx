@@ -370,14 +370,14 @@ test("the log region is focusable by keyboard, has focus when the drawer opens, 
   const pre = await until(() => output());
   assert.equal(pre.tabIndex, 0);
   assert.equal(pre.getAttribute("aria-live"), "off");
-  await until(() => assert.equal(pre.getAttribute("aria-label"), "Output of Vite · ."));
+  await until(() => assert.equal(pre.getAttribute("aria-label"), "Output of Vite · workspace folder"));
   await until(() => assert.equal(document.activeElement === pre, true, "focus is on the output"));
 });
 
 test("the header names the app and its state", async () => {
   const logs = scriptLogs([read({ text: "", next: 0, end: 0 })]);
   mount(logs);
-  await until(() => screen.getByRole("heading", { name: "Logs: Vite · ." }));
+  await until(() => screen.getByRole("heading", { name: "Logs: Vite · workspace folder" }));
   await until(() => screen.getByText("Running at 127.0.0.1:5173"));
 });
 

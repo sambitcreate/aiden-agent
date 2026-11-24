@@ -18,6 +18,8 @@ import { designAppApi } from "../lib/ipc";
 import {
   DESIGN_APP_ATTACH_SCOPE,
   DESIGN_APP_CONSENT_SCOPE,
+  designAppRootClass,
+  designAppRootText,
   DESIGN_APP_INSTALL_NOTE,
   DESIGN_APP_SAVES_CHOICE,
   consentDisplayText,
@@ -259,10 +261,10 @@ function DesignAppAttachCard({ request }: { request: DesignAppAttachRequest }) {
             .aiden/canvas.json asks for <span className="font-mono">{consentDisplayText(request.configUrl)}</span>
           </p>
           <p className="mt-0.5 text-small break-words text-secondary">
-            Folder: <span className="font-mono">{consentDisplayText(request.folder)}</span>
+            Folder: <span className={designAppRootClass(request.folder)}>{designAppRootText(request.folder)}</span>
           </p>
           <p className="mt-0.5 text-small break-words text-secondary">
-            App <span className="font-mono">{consentDisplayText(request.appRoot)}</span>
+            App <span className={designAppRootClass(request.appRoot)}>{designAppRootText(request.appRoot)}</span>
           </p>
           <p className="mt-2 text-small text-tertiary">{DESIGN_APP_ATTACH_SCOPE}</p>
         </div>

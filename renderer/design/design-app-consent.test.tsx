@@ -300,6 +300,16 @@ test("an attach card shows the address, the config url, the process and its fold
   for (const hidden of ["\u202E", "\u2066"]) assert.equal(text.includes(hidden), false);
 });
 
+test("an attach card names the workspace's own folder as the workspace folder, never '.'", async () => {
+  installBotTestIpc();
+  render(<ChatSlot chatId="chat-1" />);
+  ask(attach({ appRoot: ".", folder: "." }));
+  const text = (await attachCard()).textContent ?? "";
+  assert.ok(text.includes("Folder: workspace folder"), text);
+  assert.ok(text.includes("App workspace folder"), text);
+  assert.equal(/Folder: \.|App \./u.test(text), false);
+});
+
 test("Allow and Not now on an attach card answer with its request id", async () => {
   const calls = installBotTestIpc({ "designApp:consentAnswer": () => true });
   render(<ChatSlot chatId="chat-1" />);
