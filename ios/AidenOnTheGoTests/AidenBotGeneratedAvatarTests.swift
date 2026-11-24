@@ -414,11 +414,16 @@ final class AidenBotGeneratedAvatarTests: XCTestCase {
                 putKeys.append(try XCTUnwrap(request.value(forHTTPHeaderField: "Idempotency-Key")))
                 putMatches.append(try XCTUnwrap(request.value(forHTTPHeaderField: "If-Match")))
                 if putCount == 1 {
-                    return try Self.jsonResponse(
-                        request,
-                        status: 400,
-                        object: ["error": try XCTUnwrap(fixture["error"])]
-                    )
+                    // A decoded before-effect refusal is definite, so the key is
+                    // discarded. An undecodable 400 would stay ambiguous.
+                    return try Self.jsonResponse(request, status: 400, object: [
+                        "error": [
+                            "code": "invalid_request",
+                            "message": "The avatar upload was refused.",
+                            "requestId": "req_avatar_refused",
+                            "retryable": false,
+                        ] as [String: Any],
+                    ])
                 }
                 if putCount == 2 {
                     throw URLError(.networkConnectionLost)
