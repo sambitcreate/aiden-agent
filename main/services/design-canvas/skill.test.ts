@@ -5,7 +5,9 @@ import path from "node:path";
 import test from "node:test";
 import { readGenerativeUiHostLibrary } from "../generative-ui-host-libraries.js";
 import { LOAD_TOOLS_TOOL_NAME, ON_DEMAND_TOOL_NAMES } from "../on-demand-tools.js";
-import { createDesignCanvasTools, DESIGN_MODE_PROMPT_SECTION } from "./canvas-tools.js";
+import { createDesignCanvasTools, DESIGN_MODE_PROMPT_SECTION, designModePromptSection } from "./canvas-tools.js";
+import { DesignMdReader } from "./design-md/reader.js";
+import { createDesignSystemTool } from "./design-md/tool.js";
 import { AIDEN_DESIGN_SKILL } from "./skill.js";
 import { DesignCanvasStore, DesignChatCanvases } from "./store.js";
 
@@ -24,6 +26,26 @@ test("every canvas tool the design skill and prompt name is a tool Aiden actuall
   );
   assert.ok(named.size >= 3, "the skill teaches the canvas tools by name");
   for (const name of named) assert.ok(offered.has(name), `${name} is named but not offered`);
+});
+
+test("every tool the flag-on prompt section names is one a flag-on turn offers", async (t) => {
+  const base = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-design-skill-"));
+  t.after(() => fs.rm(base, { recursive: true, force: true }));
+  const tools = [
+    ...createDesignCanvasTools({
+      chatId: "chat-1",
+      workspaceRoot: base,
+      store: new DesignChatCanvases({ store: new DesignCanvasStore({ root: () => base }), workspaceIdOf: async () => "ws-1" }),
+      broadcast: () => undefined,
+    }),
+    createDesignSystemTool({ workspaceRoot: base, reader: new DesignMdReader() }),
+  ];
+  const offered = new Set(tools.map((tool) => tool.name));
+  const section = designModePromptSection(true);
+  const named = new Set(section.match(/\bcanvas_[a-z_]+|\bdesign_system\b/gu) ?? []);
+  assert.ok(named.has("design_system"), "the flag-on section teaches design_system");
+  for (const name of named) assert.ok(offered.has(name), `${name} is named but not offered`);
+  assert.equal(designModePromptSection(false), DESIGN_MODE_PROMPT_SECTION, "the flag-off section is today's");
 });
 
 test("every library the design skill offers is one a design page can load", async () => {

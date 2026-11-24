@@ -346,6 +346,16 @@ test("canvas_read names the frames the person had selected and judges what is in
   assert.deepEqual({ w: answer.view.w, h: answer.view.h }, { w: 700, h: 500 });
 });
 
+test("canvas_read includes the DESIGN.md line when the turn gives one, and not otherwise", async (t) => {
+  const line = 'DESIGN.md: "DESIGN.md" (0 errors, 2 warnings).';
+  const { call, newTurn } = await setup(t, { designMdLine: async () => line });
+  assert.equal((await call("canvas_read")).designMd, line);
+  const without = newTurn("chat-1", { designMdLine: async () => "" });
+  assert.equal("designMd" in (await without("canvas_read")), false, "an empty line adds no field");
+  const flagOff = newTurn("chat-1", { designMdLine: undefined });
+  assert.equal("designMd" in (await flagOff("canvas_read")), false, "a turn without DESIGN.md support adds no field");
+});
+
 test("canvas_read lists what is in view, the page's waiting comments, and counts the rest by group", async (t) => {
   const { store, call } = await setup(t);
   await store.update("chat-1", (doc) => ({

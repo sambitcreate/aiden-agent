@@ -83,6 +83,7 @@ export const ANALYTICS_EVENTS = {
   design_mode_declined: {},
   design_comments_sent: { count_bucket: enumProp(...COUNT_BUCKETS) },
   design_md_linted: { errors_bucket: enumProp(...COUNT_BUCKETS), warnings_bucket: enumProp(...COUNT_BUCKETS) },
+  design_md_drafted: { source: enumProp("app") },
   // Keep-going goals. `rounds` has its own buckets, up to the 50-round limit,
   // because COUNT_BUCKETS stops at 11+ and can't show how often goals hit 50
   // (the same buckets as `goalRoundBucket` in renderer/shared/goal.ts).

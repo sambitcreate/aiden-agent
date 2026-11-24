@@ -579,7 +579,7 @@ import { DesktopLiveStreamAccumulator } from "./desktop-stream-handoff.js";
 import { desktopHandoffTickets } from "./desktop-stream-handoff-main.js";
 import type { DesktopHandoffLiveStreamSnapshot } from "../../renderer/shared/chat-handoff.js";
 import { randomUUID } from "node:crypto";
-import { designModeEnabled } from "./studio/feature-flags.js";
+import { designLiveEnabled, designModeEnabled } from "./studio/feature-flags.js";
 import {
   designCanvasSnapshots,
   designCanvasStore,
@@ -589,13 +589,18 @@ import {
   designModeConsent,
   designPendingEntries,
   designSystemOffers,
+  designAppRoots,
+  designMdOffers,
+  designMdReader,
   recentWrittenPages,
 } from "./design-canvas/main.js";
+import { createDesignMdTurn, withDesignModeSection, type DesignMdTurn } from "./design-canvas/design-md/turn.js";
+import { reportAnalyticsEvent } from "./analytics/analytics-report.js";
 import { designTurnPages } from "./design-canvas/views.js";
 import {
   createDesignCanvasTools,
-  DESIGN_MODE_PROMPT_SECTION,
   designCanvasToolsAllowed,
+  designModePromptSection,
   designModeToolAllowed,
 } from "./design-canvas/canvas-tools.js";
 import { createDesignModeTool, DESIGN_MODE_TOOL_NAME } from "./design-canvas/design-mode-tool.js";
@@ -633,9 +638,6 @@ const VISUAL_TOOL_NAMES: readonly string[] = [RENDER_UI_TOOL_NAME, GENERATIVE_UI
 /** Tools whose writes are not reported file by file, so design/ is looked at after each one ends. */
 const DESIGN_PAGE_COMMAND_TOOLS: ReadonlySet<string> = new Set(["run_command", "codemode"]);
 
-/** Transcript section carrying the design-mode prompt once design mode is entered mid-reply. */
-const DESIGN_MODE_SECTION = "design-mode";
-
 /** Canvas tools held back until the person enters design mode during the turn. */
 interface EnteredCanvasTools {
   /**
@@ -652,9 +654,10 @@ interface EnteredCanvasTools {
   /** The held canvas tools once entered, for codemode's late deferred tools. */
   deferred(): readonly AgentTool[];
   /**
-   * Settles a design-system offer this turn's status note carried: logged as
-   * made once the turn ended normally, or offered again on a later turn when
-   * it failed or was stopped.
+   * Settles a design-system or DESIGN.md offer this turn's status note
+   * carried: logged as made once the turn ended normally, or offered again on
+   * a later turn when it failed or was stopped. A DESIGN.md draft the turn
+   * wrote is reported then too.
    */
   settleDesignSystemOffer(delivered: boolean): void;
 }
@@ -1514,17 +1517,17 @@ async function prepareGeneration(
   const declaresWindow = declaresWindowTools(ownerScope);
   /** Window-dependent tools this windowless turn declared; their calls are refused. */
   const windowOnlyToolNames = new Set<string>();
-  if (
-    shouldEnableAskUserQuestionExtension({
-      usageSource: options.usageSource,
-      interactionSurface: options.interactionSurface,
-      assistantMode,
-      botBound,
-      rendererOwner: declaresWindow,
-      remoteOwner: initialOwner.kind === "remote",
-      excluded: options.excludeToolNames?.has(ASK_USER_QUESTION_TOOL_NAME) ?? false,
-    })
-  ) {
+  /** ask_user_question is offered this turn; the DESIGN.md draft offer asks with it. */
+  const askOffered = shouldEnableAskUserQuestionExtension({
+    usageSource: options.usageSource,
+    interactionSurface: options.interactionSurface,
+    assistantMode,
+    botBound,
+    rendererOwner: declaresWindow,
+    remoteOwner: initialOwner.kind === "remote",
+    excluded: options.excludeToolNames?.has(ASK_USER_QUESTION_TOOL_NAME) ?? false,
+  });
+  if (askOffered) {
     generationExtensions.push(
       createAskUserQuestionExtension({
         request: (toolCallId, questions, requestSignal, timeoutSeconds) => {
@@ -2993,41 +2996,73 @@ async function prepareGeneration(
   // Aiden may not offer the design_mode card, since the person can switch
   // design mode on themselves.
   const designModeOn = async () => (await chatStore.getMeta(params.chatId))?.designMode === true;
+  /** DESIGN.md support (spec §6.9), behind its own flag; 2b reuses this read. */
+  const designLive = designLiveEnabled();
+  // The first time design mode is on in a workspace with no design/tokens.css,
+  // the note also offers a tokens file and a specimen page built from the
+  // workspace's own colours and fonts (see `DesignSystemOffers`): only where
+  // this chat could write them, and Aiden writes them only once the person
+  // says yes in chat. With the live flag on, the DESIGN.md draft offer takes
+  // its place under the same conditions.
+  const designSystemOfferable =
+    !botContext && !assistantMode && !windowless && permission !== "none" && permission !== "read-only" && !options.excludeToolNames?.has("write_file");
+  /** This turn's DESIGN.md glue, when the live flag is on and the canvas tools are built. */
+  let designMdTurn: DesignMdTurn | undefined;
   if (folderPath && (designCanvasOffered || designModeToolOffered || canvasHoldable)) {
     const canvasRoot = folderPath;
-    const canvasTools = createDesignCanvasTools({
-      chatId: params.chatId,
-      workspaceRoot: canvasRoot,
-      store: designCanvasStore,
-      broadcast: announceCanvasChange,
-      pages: designPages,
-      isLive: designLiveChats,
-      pendingEntry: designPendingEntry,
-      focus: focusDesignCanvas,
-      snapshot: async (toolSignal) =>
-        supportsImages
-          ? designCanvasSnapshots.request({ chatId: params.chatId, owner: getOwner(), signal: toolSignal ?? signal })
-          : null,
-      seesImages: supportsImages,
-      ...(params.designView ? { viewState: params.designView } : {}),
-      // Drawn offline in a hidden window, through the same scheme and grant the canvas uses.
-      inspect: (frame, inspectOptions, toolSignal) =>
-        inspectDesignPage({
+    // Turning design mode off, deleting the chat or moving its workspace mid-turn ends the canvas tools.
+    const canvasStillAvailable = async () => {
+      if (signal.aborted) return false;
+      const current = workspace ? await configStore.getWorkspace(workspace.id) : undefined;
+      return (await designModeOn()) && current?.folderPath === canvasRoot && current.permission !== "none";
+    };
+    const mdTurn = designLive
+      ? createDesignMdTurn({
           workspaceRoot: canvasRoot,
-          frame,
-          pageUrl: (relativePath) => designUrl(designGrants.issue(params.chatId, canvasRoot), relativePath),
-          render: inspectDesignFrame,
-          picture: inspectOptions.picture ? { top: inspectOptions.top } : null,
-          seesImages: supportsImages,
-          signal: toolSignal ?? signal,
-        }),
-      // Turning design mode off, deleting the chat or moving its workspace mid-turn ends the canvas tools.
-      stillAvailable: async () => {
-        if (signal.aborted) return false;
-        const current = workspace ? await configStore.getWorkspace(workspace.id) : undefined;
-        return (await designModeOn()) && current?.folderPath === canvasRoot && current.permission !== "none";
-      },
-    }).filter((tool) => !options.excludeToolNames?.has(tool.name));
+          reader: designMdReader,
+          offers: designMdOffers,
+          appRoots: designAppRoots,
+          stillAvailable: canvasStillAvailable,
+          offerable: designSystemOfferable,
+          askOffered,
+          report: reportAnalyticsEvent,
+          log: (message, error) => logger.warn("design", message, error),
+        })
+      : undefined;
+    designMdTurn = mdTurn;
+    const canvasTools = [
+      ...createDesignCanvasTools({
+        chatId: params.chatId,
+        workspaceRoot: canvasRoot,
+        store: designCanvasStore,
+        broadcast: announceCanvasChange,
+        pages: designPages,
+        isLive: designLiveChats,
+        pendingEntry: designPendingEntry,
+        focus: focusDesignCanvas,
+        snapshot: async (toolSignal) =>
+          supportsImages
+            ? designCanvasSnapshots.request({ chatId: params.chatId, owner: getOwner(), signal: toolSignal ?? signal })
+            : null,
+        seesImages: supportsImages,
+        ...(params.designView ? { viewState: params.designView } : {}),
+        // Drawn offline in a hidden window, through the same scheme and grant the canvas uses.
+        inspect: (frame, inspectOptions, toolSignal) =>
+          inspectDesignPage({
+            workspaceRoot: canvasRoot,
+            frame,
+            pageUrl: (relativePath) => designUrl(designGrants.issue(params.chatId, canvasRoot), relativePath),
+            render: inspectDesignFrame,
+            picture: inspectOptions.picture ? { top: inspectOptions.top } : null,
+            seesImages: supportsImages,
+            signal: toolSignal ?? signal,
+          }),
+        stillAvailable: canvasStillAvailable,
+        ...(mdTurn ? { designMdLine: (toolSignal?: AbortSignal) => mdTurn.canvasReadLine(toolSignal ?? signal) } : {}),
+      }),
+      // The design_system tool joins the canvas tools, so it is declared, held and refused with them.
+      ...(mdTurn ? [mdTurn.tool] : []),
+    ].filter((tool) => !options.excludeToolNames?.has(tool.name));
     if (canvasTools.length > 0 && !windowless) {
       placeCanvasArtifacts = async (artifacts) => {
         if (!(await designModeOn())) return;
@@ -3073,7 +3108,7 @@ async function prepareGeneration(
       canvasStatusOffered = true;
       generationExtensions.push({
         id: "aiden.design-canvas",
-        systemPrompt: DESIGN_MODE_PROMPT_SECTION,
+        systemPrompt: designModePromptSection(designLive),
         tools: [...canvasTools, ...designModeTool],
       });
     } else {
@@ -3199,19 +3234,17 @@ async function prepareGeneration(
    * the next turn's transcript holds it and an unchanged count adds nothing.
    */
   let canvasStatusNoted = false;
-  // The first time design mode is on in a workspace with no design/tokens.css,
-  // the note also offers a tokens file and a specimen page built from the
-  // workspace's own colours and fonts (see `DesignSystemOffers`): only where
-  // this chat could write them, and Aiden writes them only once the person
-  // says yes in chat.
-  const designSystemOfferable =
-    !botContext && !assistantMode && !windowless && permission !== "none" && permission !== "read-only" && !options.excludeToolNames?.has("write_file");
   let offeredDesignSystemFolder: string | undefined;
   const canvasStatusLine = async (): Promise<string> => {
     const { doc, workspaceId } = await designCanvasStore.get(params.chatId);
     // The canvas is shared by the workspace's chats; the comment count is this chat's own.
     const own = { ...doc, comments: doc.comments.filter((comment) => comment.chatId === params.chatId) };
     const line = canvasPromptLine(own, await designPages.view(doc, workspaceId), params.designView?.selection);
+    // With the live flag on, the DESIGN.md sentence (and its draft offer) replaces v1's tokens offer.
+    if (designLive) {
+      const sentence = designMdTurn ? await designMdTurn.statusSentence(signal) : "";
+      return sentence ? `${line} ${sentence}` : line;
+    }
     if (!folderPath || !designSystemOfferable) return line;
     try {
       const offer = await designSystemOffers.offerFor(folderPath, signal);
@@ -3242,28 +3275,11 @@ async function prepareGeneration(
     const present = new Set(context.tools?.map((tool) => tool.name) ?? []);
     const additions = heldCanvasTools.filter((tool) => !present.has(tool.name));
     // The prompt is read-only here: the section is patched into the
-    // transcript once, as browser discovery and MCP servers do.
-    const sectionPresent = context.messages.some(
-      (message) =>
-        message.role === "system" &&
-        typeof (message as { sections?: Record<string, unknown> }).sections?.[DESIGN_MODE_SECTION] === "string",
-    );
-    if (additions.length === 0 && sectionPresent) return withCanvasStatus(context);
-    return withCanvasStatus({
-      ...context,
-      messages: sectionPresent
-        ? context.messages
-        : [
-            ...context.messages,
-            {
-              role: "system",
-              content: "",
-              sections: { [DESIGN_MODE_SECTION]: DESIGN_MODE_PROMPT_SECTION },
-              timestamp: Date.now(),
-            },
-          ],
-      tools: [...(context.tools ?? []), ...additions],
-    });
+    // transcript once, as browser discovery and MCP servers do, and again
+    // only if the live flag changed its text since.
+    const messages = withDesignModeSection(context.messages, designModePromptSection(designLive), Date.now());
+    if (additions.length === 0 && messages === context.messages) return withCanvasStatus(context);
+    return withCanvasStatus({ ...context, messages, tools: [...(context.tools ?? []), ...additions] });
   };
   const enteredCanvasTools: EnteredCanvasTools = {
     prepare: async (context, requestSignal) => withWrittenPageReports(await prepareCanvasTools(context), requestSignal),
@@ -3279,6 +3295,7 @@ async function prepareGeneration(
     },
     deferred: () => (canvasToolsEntered ? heldCanvasTools : []),
     settleDesignSystemOffer: (delivered) => {
+      designMdTurn?.settle(delivered).catch((error: unknown) => logger.warn("design", "Could not settle the DESIGN.md offer.", error));
       if (offeredDesignSystemFolder === undefined) return;
       const folder = offeredDesignSystemFolder;
       offeredDesignSystemFolder = undefined;

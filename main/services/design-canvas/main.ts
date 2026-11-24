@@ -5,6 +5,7 @@ import { randomUUID } from "node:crypto";
 import path from "node:path";
 import { persistedChatWorkspaceId } from "../../../renderer/shared/chat-workspace.js";
 import { app, ipcMain, logger } from "../../platform.js";
+import { reportAnalyticsEvent } from "../analytics/analytics-report.js";
 import { chatStore } from "../chat-store.js";
 import { configStore } from "../config-store.js";
 import { DesignCanvasSnapshots } from "./canvas-snapshots.js";
@@ -12,6 +13,9 @@ import { createDesignCanvasCarry } from "./carry.js";
 import { createDesignChatCleanup, createDesignWorkspaceCleanup } from "./cleanup.js";
 import { DesignModeConsent } from "./design-mode-tool.js";
 import { runDesignMdWorker } from "./design-md/lint-client.js";
+import { createDesignAppRoots } from "./design-md/locate.js";
+import { DesignMdOffers } from "./design-md/offers.js";
+import { DesignMdReader } from "./design-md/reader.js";
 import { DesignSystemOffers } from "./design-system-offers.js";
 import { DesignGrantRegistry } from "./grants.js";
 import { createDesignLiveChats } from "./liveness.js";
@@ -151,3 +155,19 @@ export const designMdLinter: typeof runDesignMdWorker = (request, options = {}) 
     log: (message) => logger.warn("design", message),
     ...options,
   });
+
+/** Each app's DESIGN.md, linted once per change in this run. Memory only. */
+export const designMdReader = new DesignMdReader({
+  run: designMdLinter,
+  report: reportAnalyticsEvent,
+  log: (message) => logger.warn("design", message),
+});
+
+/** Workspaces and app roots already offered a DESIGN.md draft (HMACs only). */
+export const designMdOffers = new DesignMdOffers({
+  file: () => path.join(app.getPath("userData"), "design-md-offers.json"),
+  onSaveError: (error) => logger.warn("design", "Could not record the DESIGN.md offer.", error),
+});
+
+/** The app roots each workspace's design turns describe, cached on its manifests. Memory only. */
+export const designAppRoots = createDesignAppRoots();

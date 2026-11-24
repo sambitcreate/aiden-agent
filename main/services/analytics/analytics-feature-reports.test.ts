@@ -184,3 +184,15 @@ test("design_md_linted carries only its two count buckets", async (t) => {
     { event: "design_md_linted", props: { errors_bucket: "0", warnings_bucket: "0" } },
   ]);
 });
+
+test("design_md_drafted carries only where the draft came from", async (t) => {
+  const events = captureAnalyticsEvents(t);
+  reportAnalyticsEvent("design_md_drafted", { source: "app" });
+  // Drafting from a mockup arrives with Phase 3d; until then it isn't a value the registry keeps.
+  reportAnalyticsEvent("design_md_drafted", { source: "mock" } as never);
+  await analyticsSettled();
+  assert.deepEqual(events, [
+    { event: "design_md_drafted", props: { source: "app" } },
+    { event: "design_md_drafted", props: undefined },
+  ]);
+});
