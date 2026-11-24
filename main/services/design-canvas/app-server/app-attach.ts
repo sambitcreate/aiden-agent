@@ -252,7 +252,8 @@ export async function scanRunningServers(
 }
 
 export type AttachCheck =
-  | { ok: true; pid: number; ppid: number; origin: string; held: string[]; processName: string; folder: string }
+  /** `ident`: the holder's identity (`ProcessRow.ident`) from the table these checks read; the watch re-checks it every tick. */
+  | { ok: true; pid: number; ppid: number; ident: string; origin: string; held: string[]; processName: string; folder: string }
   | { ok: false; problem: "attach-not-loopback" | "attach-unreachable" | "attach-not-in-app" };
 
 /** `appRoot`'s real folder (D7): an existing folder that isn't a link, inside the workspace's real folder. */
@@ -274,7 +275,8 @@ async function realAppRoot(workspaceReal: string, workspacePath: string, appRoot
  * allowed port; this user's outermost listener on it (`pid`, when given, must
  * be that holder); not Aiden's; its folder inside the app root, itself inside
  * the workspace; every process in its subtree the person's; every socket
- * loopback; and an exact loopback origin. Fails closed at every read.
+ * loopback; and an exact loopback origin. Fails closed at every read, and
+ * when `ps` gave the holder no identity to bind the attachment to.
  */
 export async function checkAttach(
   input: { workspacePath: string; appRoot: string; port: number; pid?: number },
@@ -286,7 +288,7 @@ export async function checkAttach(
   if (excluded(input.port, deps)) return notInApp;
   const holders = await portHolders(input.port, deps.uid, deps.reader);
   if (!holders.ok || !holders.pids.length) return unreachable;
-  const table = await processTable(deps.reader);
+  const table = await processTable(deps.reader, { identity: true });
   if (!table.ok) return unreachable;
   const rows = table.rows;
   const outermost = outermostHolders(rows, holders.pids.filter((pid) => rows.some((row) => row.pid === pid))).sort((a, b) => a - b);
@@ -294,6 +296,8 @@ export async function checkAttach(
   const holder = input.pid !== undefined ? outermost.find((pid) => pid === input.pid) : outermost[0];
   if (holder === undefined) return notInApp;
   if (aidenProcesses(rows, deps).has(holder)) return notInApp;
+  const holderRow = rows.find((row) => row.pid === holder)!;
+  if (holderRow.ident === undefined) return unreachable;
   let workspaceReal: string;
   try {
     workspaceReal = await deps.realpath(input.workspacePath);
@@ -321,7 +325,8 @@ export async function checkAttach(
   return {
     ok: true,
     pid: holder,
-    ppid: rows.find((row) => row.pid === holder)!.ppid,
+    ppid: holderRow.ppid,
+    ident: holderRow.ident,
     origin: verdict.origin,
     held: verdict.held,
     processName,
@@ -367,18 +372,24 @@ export type RebindInput = { ppid: number; port: number; held: readonly string[];
  * waiting), the new holder, or a new holder that may not attach, which
  * detaches at once with that problem.
  */
-export type RebindResult = { ok: true; pid: number; ppid: number } | { ok: false; problem: "attach-not-in-app" | "attach-unreachable" } | undefined;
+export type RebindResult =
+  | { ok: true; pid: number; ppid: number; ident: string }
+  | { ok: false; problem: "attach-not-in-app" | "attach-unreachable" }
+  | undefined;
 
 /**
  * `rebindHolder` over a fresh process table and a strict socket read of the
  * old parent's subtree. The new holder then passes the attach check's folder
  * and job rules again (A-M1, A-M2): its folder, read strictly, inside the app
  * root's real folder, itself inside the workspace's; and no background job's
- * marker in its subtree. A folder or environment that can't be read refuses.
+ * marker in its subtree. A folder or environment that can't be read refuses,
+ * and so does a holder `ps` gave no identity (`ProcessRow.ident`) to bind to.
+ * The same holder whose identity changed (an `exec` in place) comes here too,
+ * so it passes every one of these checks again.
  */
 export async function findRebind(input: RebindInput, deps: AttachScanDeps): Promise<RebindResult> {
   if (input.ppid <= 1) return undefined;
-  const table = await processTable(deps.reader);
+  const table = await processTable(deps.reader, { identity: true });
   if (!table.ok) return undefined;
   const under = processSubtree(table.rows, input.ppid);
   if (!under.length || under.length > MAX_REBIND_PIDS) return undefined;
@@ -403,7 +414,9 @@ export async function findRebind(input: RebindInput, deps: AttachScanDeps): Prom
   const marked = await jobMarkVerdict(processSubtree(table.rows, found.pid), deps);
   if (marked === "marked") return notInApp;
   if (marked === "unreadable") return { ok: false, problem: "attach-unreachable" };
-  return { ok: true, ...found };
+  const ident = table.rows.find((row) => row.pid === found.pid)?.ident;
+  if (ident === undefined) return { ok: false, problem: "attach-unreachable" };
+  return { ok: true, ...found, ident };
 }
 
 /** What `DesignAppServers` asks of the attach code: the scan, the check, re-binds and the workspace's real folder. */

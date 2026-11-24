@@ -369,6 +369,49 @@ test("processTable asks ps for pid, ppid, pgid and uid", async () => {
   assert.deepEqual(calls, [["ps", "-A", "-o", "pid=,ppid=,pgid=,uid="]]);
 });
 
+test("with identity, one ps also reads each process's start time and command, so an exec or a reused pid shows while padding doesn't", async () => {
+  const calls: string[][] = [];
+  const table = (stdout: string) =>
+    processTable(
+      fakeDeps({ exec: async (file, args) => (calls.push([file, ...args]), { ok: true, stdout, stderr: "", exitCode: 0 }) }),
+      { identity: true },
+    );
+  const identOf = async (stdout: string, pid: number) => {
+    const read = await table(stdout);
+    assert.ok(read.ok);
+    return read.rows.find((row) => row.pid === pid)?.ident;
+  };
+  const before = await identOf("  100     1   100   501 Tue Nov 24 10:00:00 2026     /usr/local/bin/node\n", 100);
+  assert.equal(calls.length, 1, "one ps call");
+  assert.equal(calls[0]![0], "ps");
+  assert.ok(before);
+  // The same process, printed with other column widths (another row was wider): the same identity.
+  assert.equal(await identOf("100 1 100 501 Tue Nov 24 10:00:00 2026 /usr/local/bin/node\n99999 1 99999 501 Tue Nov 24 09:00:00 2026 x\n", 100), before);
+  // An exec in place: another command under the same pid and start time.
+  assert.notEqual(await identOf("100 1 100 501 Tue Nov 24 10:00:00 2026 /bin/sleep\n", 100), before);
+  // The pid reused by a process started later.
+  assert.notEqual(await identOf("100 1 100 501 Tue Nov 24 10:05:00 2026 /usr/local/bin/node\n", 100), before);
+  // A row ps printed without the identity columns has none, and is still a row.
+  const bare = await table("100 1 100 501\n");
+  assert.deepEqual(bare, { ok: true, rows: [{ pid: 100, ppid: 1, pgid: 100, uid: 501 }] });
+});
+
+test("readJobSockets gives an attach root's rows their identity", async () => {
+  const deps = fakeDeps({
+    platform: "darwin",
+    exec: async (file, args) => {
+      if (file.endsWith("ps")) {
+        const identity = args.some((arg) => arg.includes("lstart"));
+        return { ok: true, stdout: identity ? "300 1 300 501 Tue Nov 24 10:00:00 2026 /usr/local/bin/node\n" : "300 1 300 501\n", stderr: "", exitCode: 0 };
+      }
+      return { ok: true, stdout: "p300\nn127.0.0.1:5173\n", stderr: "", exitCode: 0 };
+    },
+  });
+  const result = (await readJobSockets(new Map(), deps, new Map([["attach:r", 300]]))).get("attach:r");
+  assert.ok(result?.ok);
+  assert.equal(typeof result.rows?.[0]?.ident, "string");
+});
+
 test("processSubtree is a pid and its descendants by parent pid, not its process group", () => {
   const rows = [
     { pid: 100, ppid: 1, pgid: 100, uid: 501 },

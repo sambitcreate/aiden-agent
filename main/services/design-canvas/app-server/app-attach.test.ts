@@ -71,6 +71,8 @@ interface FakeProcess {
   name?: string;
   /** The starting environment; "unreadable" for one `ps -E` or /proc can't show (an Apple platform binary on macOS). */
   env?: string[] | "unreadable";
+  /** `ps`'s start time for it; "none" when `ps` prints no identity columns for it. */
+  started?: string;
 }
 
 const ME = 501;
@@ -121,9 +123,11 @@ function world(spec: World) {
       calls.exec.push([file, ...args]);
       if (file === "ps" && args[0] === "-A") {
         if (spec.psFails) return { ok: false, reason: "timeout" };
-        const rows = [{ pid: SELF, ppid: 1, uid: ME }, ...spec.processes].map(
-          (entry) => `${entry.pid} ${entry.ppid} ${entry.pid} ${"uid" in entry && entry.uid !== undefined ? entry.uid : ME}`,
-        );
+        const identity = args.some((arg) => arg.includes("lstart"));
+        const rows = [{ pid: SELF, ppid: 1, uid: ME } as FakeProcess, ...spec.processes].map((entry) => {
+          const ident = identity && entry.started !== "none" ? ` ${entry.started ?? "Tue Nov 24 10:00:00 2026"} /usr/local/bin/${entry.name ?? "node"}` : "";
+          return `${entry.pid} ${entry.ppid} ${entry.pid} ${entry.uid !== undefined ? entry.uid : ME}${ident}`;
+        });
         return { ok: true, stdout: rows.join("\n"), stderr: "", exitCode: 0 };
       }
       if (file === "ps" && args.includes("pid=,command=")) {
@@ -367,7 +371,22 @@ const server = (overrides: Partial<FakeProcess> = {}): FakeProcess => ({ pid: 10
 
 test("checkAttach passes a loopback server of the person's in the app root", async () => {
   const { result } = await check({ processes: [{ pid: 5, ppid: 1, cwd: "/Users/me" }, server()] });
-  assert.deepEqual(result, { ok: true, pid: 10, ppid: 5, origin: "http://127.0.0.1:5173", held: ["127.0.0.1"], processName: "vite", folder: "apps/web" });
+  assert.deepEqual(result, {
+    ok: true,
+    pid: 10,
+    ppid: 5,
+    ident: "Tue Nov 24 10:00:00 2026 /usr/local/bin/vite",
+    origin: "http://127.0.0.1:5173",
+    held: ["127.0.0.1"],
+    processName: "vite",
+    folder: "apps/web",
+  });
+});
+
+test("checkAttach binds the holder's identity from the same process table, and fails closed without one", async () => {
+  const started = await check({ processes: [server({ started: "Tue Nov 24 11:30:00 2026" })] });
+  assert.equal(started.result.ok && started.result.ident, "Tue Nov 24 11:30:00 2026 /usr/local/bin/vite");
+  assert.deepEqual((await check({ processes: [server({ started: "none" })] })).result, { ok: false, problem: "attach-unreachable" });
 });
 
 test("checkAttach refuses in D8's order", async () => {
@@ -449,8 +468,14 @@ const rebindWorld = (holder: Partial<FakeProcess>, extra: FakeProcess[] = [], sp
 const rebindInput = { ppid: 50, port: 5173, held: ["127.0.0.1"], workspacePath: WORKSPACE, appRoot: "apps/web" };
 
 test("findRebind re-binds a new holder in the app root, and refuses one whose folder is outside it or can't be read", async () => {
-  assert.deepEqual(await findRebind(rebindInput, rebindWorld({}).deps), { ok: true, pid: 61, ppid: 50 });
-  assert.deepEqual(await findRebind(rebindInput, rebindWorld({ cwd: `${WORKSPACE}/apps/web/src` }).deps), { ok: true, pid: 61, ppid: 50 });
+  const found = { ok: true, pid: 61, ppid: 50, ident: "Tue Nov 24 10:00:00 2026 /usr/local/bin/node" };
+  assert.deepEqual(await findRebind(rebindInput, rebindWorld({}).deps), found);
+  assert.deepEqual(await findRebind(rebindInput, rebindWorld({ cwd: `${WORKSPACE}/apps/web/src` }).deps), found);
+  assert.deepEqual(
+    await findRebind(rebindInput, rebindWorld({ started: "none" }).deps),
+    { ok: false, problem: "attach-unreachable" },
+    "a new holder whose identity can't be read",
+  );
   const refused = { ok: false, problem: "attach-not-in-app" };
   assert.deepEqual(await findRebind(rebindInput, rebindWorld({ cwd: "/Users/me/outside" }).deps), refused, "the same parent, a server started elsewhere");
   assert.deepEqual(await findRebind(rebindInput, rebindWorld({ cwd: `${WORKSPACE}/apps/admin` }).deps), refused, "another app of the workspace");

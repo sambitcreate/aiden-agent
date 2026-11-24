@@ -108,7 +108,12 @@ class FakeJobs {
   };
   designTail = (jobId: string) => this.jobs.find((entry) => entry.view.id === jobId)?.tail ?? "";
   /** 2c: the person's processes, for attached servers' subtrees. */
-  procs = new Map<number, { ppid: number; uid: number; sockets: Array<{ address: string; port: number }> }>();
+  /** `ident`: what `ps` shows as the process's identity; `start-<pid>` unless a test changes it (an exec in place). */
+  procs = new Map<number, { ppid: number; uid: number; ident?: string; sockets: Array<{ address: string; port: number }> }>();
+  private row = (member: number) => {
+    const proc = this.procs.get(member)!;
+    return { pid: member, ppid: proc.ppid, pgid: member, uid: proc.uid, ident: proc.ident ?? `start-${member}` };
+  };
   rootCalls: string[][] = [];
   /** Attach roots whose socket read fails; "with-rows" still answers the subtree's rows, as Linux does for an unreadable process (A-m1). */
   rootFails: boolean | "with-rows" = false;
@@ -126,14 +131,14 @@ class FakeJobs {
           for (const [child, proc] of this.procs) if (proc.ppid === next) queue.push(child);
         }
         if (this.rootFails) {
-          const rows = tree.map((member) => ({ pid: member, ppid: this.procs.get(member)!.ppid, pgid: member, uid: this.procs.get(member)!.uid }));
+          const rows = tree.map(this.row);
           answers.set(key, { ok: false, reason: "lsof reported a problem", ...(this.rootFails === "with-rows" ? { rows } : {}) });
           continue;
         }
         answers.set(key, {
           ok: true,
           sockets: tree.flatMap((member) => this.procs.get(member)!.sockets.map((socket) => ({ pid: member, ...socket }))),
-          rows: tree.map((member) => ({ pid: member, ppid: this.procs.get(member)!.ppid, pgid: member, uid: this.procs.get(member)!.uid })),
+          rows: tree.map(this.row),
         });
       }
     }
@@ -303,7 +308,7 @@ function harness(_t: test.TestContext, options: Options = {}) {
   const records = memoryRecords();
   const consent = new DesignAppConsent();
   // 2c: the person's server and the scripted attach code.
-  const holder = { pid: 300, ppid: 30, port: 5173, origin: "http://127.0.0.1:5173", held: ["127.0.0.1"], processName: "vite", folder: "." };
+  const holder = { pid: 300, ppid: 30, ident: "start-300", port: 5173, origin: "http://127.0.0.1:5173", held: ["127.0.0.1"], processName: "vite", folder: "." };
   jobs.procs.set(30, { ppid: 1, uid: 501, sockets: [] });
   jobs.procs.set(300, { ppid: 30, uid: 501, sockets: [{ address: "127.0.0.1", port: 5173 }] });
   const attachCalls = { scans: [] as Array<{ roots: readonly string[]; busyRoots: ReadonlySet<string> }>, checks: [] as Array<{ appRoot: string; port: number; pid?: number }>, rebinds: 0, rebindInputs: [] as Array<Parameters<DesignAppAttachDeps["rebind"]>[0]> };
@@ -1839,7 +1844,7 @@ test("a holder that exits and is replaced under the same parent within 6 s re-bi
   await h.clock.advance(2_000);
   assert.equal(h.latest()?.phase, "running", "waiting for a re-bind");
   h.jobs.procs.set(310, { ppid: 30, uid: 501, sockets: [{ address: "127.0.0.1", port: 5173 }] });
-  h.attachState.rebind = { ok: true, pid: 310, ppid: 30 };
+  h.attachState.rebind = { ok: true, pid: 310, ppid: 30, ident: "start-310" };
   await h.clock.advance(2_000);
   assert.equal(h.latest()?.phase, "running");
   assert.equal(h.latest()?.revision, revision);
@@ -1874,9 +1879,36 @@ test("while a holder is gone and no re-bind has been found, its origin maps to n
   assert.equal(h.servers.appForOrigin("http://127.0.0.1:5173"), undefined, "whatever holds the port now isn't the checked server");
   assert.equal(h.servers.isAppOrigin("http://127.0.0.1:5173"), true, "the origin stays restricted");
   h.jobs.procs.set(310, { ppid: 30, uid: 501, sockets: [{ address: "127.0.0.1", port: 5173 }] });
-  h.attachState.rebind = { ok: true, pid: 310, ppid: 30 };
+  h.attachState.rebind = { ok: true, pid: 310, ppid: 30, ident: "start-310" };
   await h.clock.advance(2_000);
   assert.deepEqual(h.servers.appForOrigin("http://127.0.0.1:5173"), { workspaceId: "ws", appRoot: "." });
+});
+
+test("a holder whose identity changes under the same pid is lost: only the re-bind look, with its folder and job checks, keeps it", async (t) => {
+  // An exec in place, or the pid reused: the pid is still in the table and still holds the port.
+  const refused = harness(t);
+  await refused.connect();
+  refused.jobs.procs.get(300)!.ident = "exec'd";
+  refused.attachState.rebind = { ok: false, problem: "attach-not-in-app" };
+  await refused.clock.advance(2_000);
+  assert.deepEqual(refused.attachCalls.rebindInputs[0], { ppid: 30, port: 5173, held: ["127.0.0.1"], workspacePath: "/w/ws", appRoot: "." });
+  assert.equal(refused.latest()?.phase, "stopped");
+  assert.deepEqual(refused.latest()?.problem, { problem: "attach-not-in-app" });
+  assert.equal(refused.servers.appForOrigin("http://127.0.0.1:5173"), undefined);
+  assert.equal(refused.jobs.stopCalls.length, 0, "nothing is signalled");
+
+  const rebound = harness(t);
+  await rebound.connect();
+  rebound.jobs.procs.get(300)!.ident = "exec'd";
+  rebound.attachState.rebind = { ok: true, pid: 300, ppid: 30, ident: "exec'd" };
+  await rebound.clock.advance(2_000);
+  assert.equal(rebound.latest()?.phase, "running");
+  rebound.attachState.rebind = undefined;
+  const looks = rebound.attachCalls.rebinds;
+  await rebound.clock.advance(10_000);
+  assert.equal(rebound.attachCalls.rebinds, looks, "bound to the new identity, it isn't lost again");
+  assert.equal(rebound.latest()?.phase, "running");
+  assert.deepEqual(rebound.servers.appForOrigin("http://127.0.0.1:5173"), { workspaceId: "ws", appRoot: "." });
 });
 
 test("another user's process in an attached subtree detaches on the first tick even when the read of it failed (Linux)", async (t) => {
@@ -1952,9 +1984,9 @@ test("no job path ever touches an attached server: stop, presence, forget, failu
   await h.connect();
   h.jobs.procs.delete(300);
   h.jobs.procs.set(320, { ppid: 30, uid: 501, sockets: [{ address: "127.0.0.1", port: 5173 }] });
-  h.attachState.rebind = { ok: true, pid: 320, ppid: 30 };
+  h.attachState.rebind = { ok: true, pid: 320, ppid: 30, ident: "start-320" };
   await h.clock.advance(2_000);
-  Object.assign(h.holder, { pid: 320 });
+  Object.assign(h.holder, { pid: 320, ident: "start-320" });
   await h.connect();
   await h.servers.forgetWorkspace("ws");
   assert.deepEqual(h.jobs.stopCalls, []);
@@ -2141,7 +2173,7 @@ test("a Stop pressed while connect's check runs wins: nothing attaches", async (
 
 test("connect refuses a pick whose folder was cut for display, and registers nothing", async (t) => {
   const h = harness(t);
-  h.attachState.check = () => ({ ok: true, pid: 300, ppid: 30, origin: "http://127.0.0.1:5173", held: ["127.0.0.1"], processName: "vite", folder: `${"a".repeat(199)}…` });
+  h.attachState.check = () => ({ ok: true, pid: 300, ppid: 30, ident: "start-300", origin: "http://127.0.0.1:5173", held: ["127.0.0.1"], processName: "vite", folder: `${"a".repeat(199)}…` });
   const status = await h.connect();
   assert.deepEqual(status.problem, { problem: "attach-not-in-app" });
   assert.equal(h.servers.isAppOrigin("http://127.0.0.1:5173"), false);

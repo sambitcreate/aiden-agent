@@ -10,7 +10,8 @@
 // Each carries a marker argument, and every one is killed in `after`.
 import assert from "node:assert/strict";
 import { execFileSync, spawn } from "node:child_process";
-import { lstat, mkdir, mkdtemp, realpath, rm } from "node:fs/promises";
+import { existsSync } from "node:fs";
+import { lstat, mkdir, mkdtemp, realpath, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
@@ -231,11 +232,13 @@ test("with --respawn-child, killing the child leaves a new child under the same 
     if (!read?.ok || !read.rows) return undefined;
     const socketsOf = (pid: number) => read.sockets.filter((socket) => socket.pid === pid);
     const next = rebindHolder(read.rows, socketsOf, { ppid: parent, uid: process.getuid!(), port, held: first.held });
-    return next && next.pid !== first.pid ? next : undefined;
+    const ident = read.rows.find((row) => row.pid === next?.pid)?.ident;
+    return next && next.pid !== first.pid && ident ? { ...next, ident } : undefined;
   }, "a new child to hold the port");
   assert.equal(found.ppid, parent);
   assert.ok(alive(found.pid));
-  // The async helper over a fresh table agrees, and reads the new holder's folder: it's in apps/web.
+  assert.notEqual(found.ident, first.ident, "another process, another identity");
+  // The async helper over a fresh table agrees, binds the identity the watch's look shows, and reads the new holder's folder: it's in apps/web.
   const where = { workspacePath: h.workspace, appRoot: "apps/web" };
   assert.deepEqual(await findRebind({ ppid: parent, port, held: first.held, ...where }, deps()), { ok: true, ...found });
   // For another app root of the same workspace, the same holder is outside it.
@@ -278,3 +281,72 @@ test("a server that a background job started and that left the job's tree with s
   assert.equal(result.servers.some((server) => server.port === port), false);
   assert.deepEqual(await checkAttach({ workspacePath: h.workspace, appRoot: "apps/web", port }, jobDeps), { ok: false, problem: "attach-not-in-app" });
 });
+
+/**
+ * A Python that can keep a listening socket open across an exec. Not one in
+ * /usr/bin on macOS: Apple's platform binaries don't show their environment to
+ * `ps -E`, so the attach check refuses them (as-built #26).
+ */
+const PYTHON = (process.env.PATH ?? "")
+  .split(path.delimiter)
+  .filter((folder) => folder && !(process.platform === "darwin" && folder === "/usr/bin"))
+  .map((folder) => path.join(folder, "python3"))
+  .find((candidate) => existsSync(candidate));
+/**
+ * Listens on 127.0.0.1:<port>, then, once <trigger> exists, execs /bin/sleep in
+ * place: the same pid, still holding the socket, now another program.
+ */
+const EXEC_IN_PLACE = [
+  "import os, socket, sys, time",
+  "port, trigger = int(sys.argv[1]), sys.argv[2]",
+  "s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)",
+  "s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)",
+  's.bind(("127.0.0.1", port))',
+  "s.listen(8)",
+  "s.set_inheritable(True)",
+  "while not os.path.exists(trigger): time.sleep(0.05)",
+  'os.execv("/bin/sleep", ["sleep", "60"])',
+].join("\n");
+
+test(
+  "a holder that execs in place keeps its pid and its socket but not its identity, so the watch's look shows it lost",
+  { skip: skip || (PYTHON ? false : "needs a python3 to exec in place with the socket kept") },
+  async (t) => {
+    const h = await harness(t);
+    const port = await defaultOsPort();
+    const trigger = path.join(h.outside, "exec-now");
+    const marker = `--aiden-attach-test=${path.basename(path.dirname(h.workspace))}`;
+    const line = [PYTHON!, "-c", EXEC_IN_PLACE, String(port), trigger, marker].map(shellQuote).join(" ");
+    // Its shell exits at once, so the holder is no descendant of the test runner (whose tree is Aiden's).
+    const shell = spawn("/bin/sh", ["-c", `${line} >/dev/null 2>&1 & echo $!`], { cwd: h.web, stdio: ["ignore", "pipe", "ignore"] });
+    let out = "";
+    shell.stdout.on("data", (chunk: Buffer) => (out += chunk.toString("utf8")));
+    await new Promise((resolve) => shell.once("exit", resolve));
+    const pid = Number(out.trim());
+    assert.ok(Number.isInteger(pid) && pid > 1, `a pid from the shell: ${out}`);
+    // After the exec its command line no longer carries the marker, so it's killed by pid.
+    t.after(() => {
+      if (alive(pid)) process.kill(pid, "SIGKILL");
+    });
+    const attached = await eventually(async () => {
+      const result = await checkAttach({ workspacePath: h.workspace, appRoot: "apps/web", port, pid }, deps());
+      return result.ok ? result : undefined;
+    }, "the holder to listen and pass the check");
+    const look = async () => (await readJobSockets(new Map(), defaultSocketReaderDeps(), new Map([["attach:web", pid]]))).get("attach:web");
+    const before = await look();
+    assert.ok(before?.ok);
+    assert.equal(before.rows?.find((row) => row.pid === pid)?.ident, attached.ident, "the watch's look sees the checked process while it runs");
+    await writeFile(trigger, "");
+    const after = await eventually(async () => {
+      const read = await look();
+      const row = read?.ok ? read.rows?.find((candidate) => candidate.pid === pid) : undefined;
+      return read?.ok && row && row.ident !== attached.ident ? { read, row } : undefined;
+    }, "the exec to show as another identity");
+    assert.equal(after.row.ppid, attached.ppid, "the same process table entry");
+    assert.equal(
+      after.read.sockets.some((socket) => socket.pid === pid && socket.port === port),
+      true,
+      "the same pid still holds the port, so a pid-only look would keep it attached",
+    );
+  },
+);

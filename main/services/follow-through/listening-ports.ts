@@ -145,6 +145,14 @@ export interface ProcessRow {
   pgid: number;
   /** The owner's user id (2c): a subtree with another user's process can't be confirmed. */
   uid: number;
+  /**
+   * The process's identity (2c), only from `processTable(…, { identity: true })`:
+   * its start time and command name as `ps` printed them, whitespace runs
+   * folded. Compared for equality only, so a pid reused by another process or
+   * an `exec` in place shows as a change while the pid stays the same.
+   * Absent when `ps` printed none.
+   */
+  ident?: string;
 }
 
 export type ExecResult =
@@ -298,18 +306,29 @@ export function parseProcNetTcpSockets(table: string, family: 4 | 6): Map<string
   return listening;
 }
 
-/** One `ps -A -o pid=,ppid=,pgid=,uid=`; fails closed. */
+/**
+ * One `ps -A -o pid=,ppid=,pgid=,uid=`; fails closed. With `identity` (2c)
+ * the same call adds `lstart=,comm=`, the start time and command name, which
+ * become each row's `ident`.
+ */
 export async function processTable(
   deps: SocketReaderDeps = defaultSocketReaderDeps(),
+  options: { identity?: boolean } = {},
 ): Promise<{ ok: true; rows: ProcessRow[] } | { ok: false; reason: string }> {
-  const result = await deps.exec("ps", ["-A", "-o", "pid=,ppid=,pgid=,uid="], { timeoutMs: PS_TIMEOUT_MS, maxBuffer: READER_MAX_BUFFER });
+  const columns = options.identity ? "pid=,ppid=,pgid=,uid=,lstart=,comm=" : "pid=,ppid=,pgid=,uid=";
+  const result = await deps.exec("ps", ["-A", "-o", columns], { timeoutMs: PS_TIMEOUT_MS, maxBuffer: READER_MAX_BUFFER });
   if (!result.ok) return { ok: false, reason: `ps: ${result.reason}` };
   if (result.exitCode !== 0) return { ok: false, reason: `ps exited ${result.exitCode}` };
   const rows: ProcessRow[] = [];
   for (const line of result.stdout.split("\n")) {
-    const fields = line.trim().split(/\s+/u).map(Number);
+    const words = line.trim().split(/\s+/u);
+    const fields = words.slice(0, 4).map(Number);
     if (fields.length !== 4 || !fields.every((value) => Number.isSafeInteger(value) && value >= 0)) continue;
-    rows.push({ pid: fields[0]!, ppid: fields[1]!, pgid: fields[2]!, uid: fields[3]! });
+    if (!options.identity && words.length !== 4) continue;
+    const row: ProcessRow = { pid: fields[0]!, ppid: fields[1]!, pgid: fields[2]!, uid: fields[3]! };
+    // The start time is five words in the C locale and may be more in another; the identity is the whole rest.
+    if (options.identity && words.length > 4) row.ident = words.slice(4).join(" ");
+    rows.push(row);
   }
   if (!rows.length) return { ok: false, reason: "ps listed no processes" };
   return { ok: true, rows };
@@ -504,9 +523,9 @@ async function answerTrees(
  *
  * `roots` (2c) maps a key to an attached server's holder pid. They're
  * answered from the same `ps` (the holder and its descendants, with their
- * rows) but from a separate socket read, so a diagnostic from one side never
- * fails the other. A holder that has left the table answers no sockets and
- * no rows.
+ * rows and each row's identity) but from a separate socket read, so a
+ * diagnostic from one side never fails the other. A holder that has left the
+ * table answers no sockets and no rows.
  */
 export async function readJobSockets(
   groups: ReadonlyMap<string, number>,
@@ -515,7 +534,7 @@ export async function readJobSockets(
 ): Promise<Map<string, JobSockets>> {
   const results = new Map<string, JobSockets>();
   if (!groups.size && !roots?.size) return results;
-  const table = await processTable(deps);
+  const table = await processTable(deps, { identity: !!roots?.size });
   if (!table.ok) {
     for (const key of [...groups.keys(), ...(roots?.keys() ?? [])]) results.set(key, { ok: false, reason: table.reason });
     return results;

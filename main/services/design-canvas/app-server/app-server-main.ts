@@ -203,6 +203,12 @@ interface ServerWatch {
 interface AttachWatch {
   pid: number;
   ppid: number;
+  /**
+   * The holder's identity (`ProcessRow.ident`: start time and command) from
+   * the check or re-bind that bound it. A pid alone isn't the process: an
+   * `exec` in place or a reused pid changes this, and the holder is then lost.
+   */
+  ident: string;
   port: number;
   origin: string;
   held: string[];
@@ -1085,7 +1091,7 @@ export class DesignAppServers {
     const app = detection.apps.find((candidate) => candidate.root === entry.appRoot && candidate.kind === "web");
     entry.meta = { ...(app?.framework ? { framework: app.framework } : {}), frameworkLabel: frameworkLabel(app?.framework), startedBy: by };
     entry.source = "attached";
-    entry.attached = { pid: found.pid, ppid: found.ppid, port, origin: found.origin, held: [...found.held], workspacePath, failedLooks: 0, lostTicks: 0, lost: false };
+    entry.attached = { pid: found.pid, ppid: found.ppid, ident: found.ident, port, origin: found.origin, held: [...found.held], workspacePath, failedLooks: 0, lostTicks: 0, lost: false };
     this.serveAttached(entry, entry.attached);
     const status = this.setPhase(entry, "running", { origin: found.origin, port });
     this.originsChanged();
@@ -1363,8 +1369,11 @@ export class DesignAppServers {
     }
     watch.failedLooks = 0;
     const rows = result.rows ?? [];
-    if (!rows.some((row) => row.pid === watch.pid)) {
-      // The holder is gone (A-M5): a watch-mode restart under the same parent re-binds; otherwise it detaches after three ticks.
+    const holder = rows.find((row) => row.pid === watch.pid);
+    if (!holder || holder.ident === undefined || holder.ident !== watch.ident) {
+      // The holder is gone (A-M5), or its pid now names another process (an exec in place, or the pid reused), or
+      // that can't be told: a watch-mode restart under the same parent re-binds, through every one of the re-bind's
+      // checks (the same pid included); otherwise it detaches after three ticks.
       watch.lost = true;
       const next = await this.deps.attach
         ?.rebind({ ppid: watch.ppid, port: watch.port, held: watch.held, workspacePath: watch.workspacePath, appRoot: entry.appRoot })
@@ -1373,6 +1382,7 @@ export class DesignAppServers {
       if (next?.ok) {
         watch.pid = next.pid;
         watch.ppid = next.ppid;
+        watch.ident = next.ident;
         watch.lostTicks = 0;
         watch.lost = false;
       } else if (next) {
