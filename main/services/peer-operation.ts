@@ -182,9 +182,11 @@ export async function peerOperationResult(
     const page = peerBotSessionPageCompat(value);
     await validatePeerResponse(name, page);
     const parsed = parseAidenRemoteBotSessionEntriesPage(page);
-    // Not part of the wire page: the host's own oldest entry, for the next request.
+    // Not part of the wire page: the host's own oldest entry, for the next request,
+    // and how many entries the host sent, read or not, so paging is counted in its entries.
     const olderCursor = peerBotSessionPageCursor(value);
-    return olderCursor === undefined ? parsed : { ...parsed, olderCursor };
+    const hostCount = (value as { entries: unknown[] }).entries.length;
+    return { ...parsed, ...(olderCursor === undefined ? {} : { olderCursor }), hostCount };
   }
   await validatePeerResponse(name, value);
   if (name === "summaries")

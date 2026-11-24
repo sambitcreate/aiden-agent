@@ -223,7 +223,8 @@ export class RemoteBotSessionFollower {
   /**
    * The host may have rewritten history inside the same epoch (a snapshot
    * also says so), so older entries kept across a snapshot are read again, a
-   * bounded page at a time until all of them are covered, and replaced. A read
+   * bounded page at a time until as many host entries as were kept are read
+   * (at most one more request per 200 kept), and replaced. A read
    * that fails keeps the pages already read (Load older continues from there),
    * or drops the kept entries if none was.
    */
@@ -253,7 +254,9 @@ export class RemoteBotSessionFollower {
           if (!outcome.ok) return settle(pages);
           const page = outcome.value as RemoteBotSessionEntriesPage;
           pages.push(page);
-          const total = read + page.entries.length;
+          // Counted in the host's entries, read or not: entries this Mac leaves out
+          // still use up the kept range, so a newer host's pages never walk past it.
+          const total = read + (page.hostCount ?? page.entries.length);
           const cursor = page.olderCursor ?? page.entries[0]?.id;
           // Every kept entry is covered, or the host has nothing older.
           if (total >= carried || !page.hasOlder || !cursor || cursor === before) return settle(pages);

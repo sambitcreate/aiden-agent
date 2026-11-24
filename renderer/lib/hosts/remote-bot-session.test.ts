@@ -560,6 +560,49 @@ test("loaded history longer than one page survives a same-epoch snapshot whole, 
   follower.stop();
 });
 
+test("re-reading kept history from a newer host counts the entries this Mac leaves out, so it never walks past the kept range", async () => {
+  const message = (id: string, text: string) => ({ type: "message" as const, id, role: "assistant" as const, text });
+  const newest = session({ hasOlder: true, entries: [message("m5", "Five"), message("m6", "Six")] });
+  const fake = fakeTransport([newest]);
+  // The host, newer than this Mac: two entries of a kind this Mac can't show sit just before "Five".
+  const host = ["m1", "m2", "m3", "m4", "u1", "u2"];
+  const asked: Array<[string, number | undefined]> = [];
+  fake.transport.older = async (_hostId, _botId, before, limit) => {
+    asked.push([before, limit]);
+    const end = before === "m5" ? host.length : host.indexOf(before);
+    const start = Math.max(0, end - (limit ?? 2));
+    const sent = host.slice(start, end);
+    return {
+      ok: true,
+      value: {
+        botId: "bot_1", epoch: "e1", hasOlder: start > 0, olderCursor: sent[0], hostCount: sent.length,
+        entries: sent.filter((id) => id.startsWith("m")).map((id) => message(id, id)),
+      },
+    };
+  };
+  const follower = new RemoteBotSessionFollower(fake.transport, "host_a", "bot_1");
+  follower.start();
+  await settle();
+  const ids = () => follower.getState().view!.snapshot.entries.map((entry) => entry.id);
+  // Two Load olders: an all-unknown page, then "m3" and "m4".
+  await follower.loadOlder();
+  assert.deepEqual(ids(), ["m5", "m6"]);
+  await follower.loadOlder();
+  assert.deepEqual(ids(), ["m3", "m4", "m5", "m6"]);
+
+  // A snapshot keeps 2 shown entries; the host's 2 newest older ones are unknown, and re-reading stops there.
+  asked.length = 0;
+  fake.push(event(4, { type: "snapshot", payload: { session: session({ seq: 5, hasOlder: true, entries: [message("m5", "Five"), message("m6", "Six")] }) } }));
+  await settle();
+  assert.deepEqual(asked, [["m5", 2]], "one request, for as many host entries as were kept");
+  assert.deepEqual(ids(), ["m5", "m6"]);
+  assert.equal(follower.getState().view!.hasOlder, true);
+  assert.equal(follower.getState().view!.olderCursor, "u1", "Load older continues past the entries left out");
+  await follower.loadOlder();
+  assert.deepEqual(ids(), ["m3", "m4", "m5", "m6"]);
+  follower.stop();
+});
+
 test("a page whose entries this Mac can't show still moves Load older past them", () => {
   const message = (id: string, text: string) => ({ type: "message" as const, id, role: "assistant" as const, text });
   const view = remoteBotSessionView(session({ hasOlder: true, entries: [message("m5", "Five")] }));
