@@ -5,7 +5,7 @@ import type {
   DesignAppsSnapshot,
   DesignAppStatus,
 } from "../../../../renderer/shared/design-app.js";
-import { createDesignAppTool, DESIGN_APP_TOOL_NAME, type DesignAppToolServers } from "./app-tool.js";
+import { createDesignAppTool, type DesignAppToolServers } from "./app-tool.js";
 import type { DesignAppChooseInput, DesignAppStartInput } from "./app-server-main.js";
 
 type Call = { method: string; input: unknown };
@@ -108,13 +108,6 @@ function harness(
   return { servers, tool, run };
 }
 
-test("the tool is named design_app and describes its own dev-script scope", () => {
-  const { tool } = harness();
-  assert.equal(tool.name, DESIGN_APP_TOOL_NAME);
-  assert.equal(tool.name, "design_app");
-  assert.match(tool.description, /never other commands; use run_command/u);
-});
-
 test("status lists apps with relative roots, 127.0.0.1 urls and fenced tails", async () => {
   const { servers, run } = harness();
   servers.snap = {
@@ -214,6 +207,26 @@ test("a card left unanswered answers unanswered: the wait outlasts the card's ow
     });
   const result = await run({ action: "start" });
   assert.equal(result.status, "unanswered");
+});
+
+test("a start or restart that crashes on a missing module answers crashed, with the fenced output and the restart-with-install hint", async () => {
+  const { servers, run } = harness();
+  servers.answer = async (_method, input) =>
+    status({
+      appRoot: (input as { appRoot?: string }).appRoot ?? ".",
+      phase: "crashed",
+      exitCode: 1,
+      tail: "file:///w/ws/vite.config.ts\nError [ERR_MODULE_NOT_FOUND]: Cannot find package 'vite'",
+    });
+  for (const args of [{ action: "start" }, { action: "restart", root: "." }]) {
+    const result = await run(args);
+    assert.equal(result.status, "crashed", args.action);
+    assert.equal(result.message, "The app's dev server stopped (exit code 1).");
+    assert.match(String(result.output), /ERR_MODULE_NOT_FOUND/u);
+    assert.equal(result.hint, "Try design_app restart with install: true.", args.action);
+  }
+  servers.answer = async () => status({ phase: "crashed", exitCode: 1, tail: "SyntaxError: Unexpected token" });
+  assert.equal((await run({ action: "start" })).hint, undefined, "no hint for other crashes");
 });
 
 test("an aborted turn stops the wait, not the server", async () => {

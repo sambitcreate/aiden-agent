@@ -1221,15 +1221,22 @@ test("choose on a react-nonweb or unknown-framework root is refused with not-web
   assert.equal(h.cards().length, 0);
 });
 
-test("a chat moved to another workspace with design mode on starts nothing there", async (t) => {
+test("a chat moved to another workspace with design mode on starts nothing there; only turning design mode on does", async (t) => {
   const h = harness(t);
   // A move is not a false → true change: only its presence and snapshot reads reach the service.
+  h.views.set("ws", 0);
   h.views.set("other", 1);
   await h.servers.snapshot("other");
   await h.clock.advance(DESIGN_APP_PRESENCE_GRACE_MS);
   assert.equal(h.cards().length, 0);
   assert.equal(h.jobs.jobs.length, 0);
   assert.equal(h.state.calls.fingerprint + h.state.calls.toolchain, 0);
+  // The same workspace's single web app does start on the start path: the move above was the only thing missing.
+  h.servers.designModeEntered({ chatId: "chat-1", workspaceId: "other", owner: h.owner });
+  await settle();
+  assert.deepEqual(h.cards().map((card) => [card.workspaceId, card.appRoot]), [["other", "."]]);
+  await h.answer("allow");
+  assert.deepEqual(h.jobs.jobs.map((job) => [job.input.workspaceId, job.input.cwd]), [["other", "/w/other"]]);
 });
 
 // ── 3a and 2c contract ──
