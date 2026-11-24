@@ -465,7 +465,8 @@
         "renderer/shared/peer-project-clone.test.ts",
         "renderer/main/peer-project-clone-dialog.test.tsx",
         "main/services/storage-usage-core.test.ts",
-        "main/services/storage-usage.test.ts"
+        "main/services/storage-usage.test.ts",
+        "main/services/design-canvas/app-server/app-launch-core.test.ts"
       ],
       "preserved": [
         "browser"
@@ -1583,7 +1584,8 @@
         "renderer/components/bots/plan-card.test.tsx",
         "renderer/shared/bot-plans.test.ts",
         "renderer/shared/bot-messages.test.ts",
-        "renderer/components/settings/storage-settings.test.ts"
+        "renderer/components/settings/storage-settings.test.ts",
+        "renderer/shared/design-app.test.ts"
       ],
       "preserved": [
         "ios-release-policy",

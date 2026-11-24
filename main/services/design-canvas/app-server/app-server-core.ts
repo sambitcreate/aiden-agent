@@ -18,20 +18,9 @@ export type AppReason =
   | "invalid-package-json"
   /** A folder found by its Deno files alone; its manager is reported unsupported. */
   | "no-package-json";
-export type FrameworkId =
-  | "next"
-  | "react-router"
-  | "remix"
-  | "remix-3"
-  | "tanstack-start"
-  | "nuxt"
-  | "angular"
-  | "astro"
-  | "gatsby"
-  | "create-react-app"
-  | "tanstack-router"
-  | "vite";
-export type PackageManagerName = "npm" | "pnpm" | "yarn" | "bun";
+import type { FrameworkId, PackageManagerName } from "../../../../renderer/shared/design-app.js";
+
+export type { FrameworkId, PackageManagerName };
 export type DesktopShell = "electron" | "tauri";
 
 /** A parsed package.json: a plain JSON object, nothing else assumed. */
@@ -203,10 +192,34 @@ function runsViteDev(words: readonly string[]): boolean {
   return words.some((word, i) => word === "vite" && !["build", "preview", "optimize"].includes(words[i + 1] ?? ""));
 }
 
-function runsDevCommand(words: readonly string[], spec: FrameworkSpec): boolean {
-  return spec.devCommands.some((command) =>
+function matchingDevCommand(words: readonly string[], spec: FrameworkSpec): readonly string[] | undefined {
+  return spec.devCommands.find((command) =>
     command.length === 1 && command[0] === "vite" ? runsViteDev(words) : hasSequence(words, command),
   );
+}
+
+function runsDevCommand(words: readonly string[], spec: FrameworkSpec): boolean {
+  return matchingDevCommand(words, spec) !== undefined;
+}
+
+/**
+ * The framework dev command a script's text runs (`["next", "dev"]`), with the
+ * same matcher R3 uses to pick the script; undefined for a script that runs
+ * something else (`node server.mjs`).
+ */
+export function scriptDevCommand(text: string, framework: FrameworkId): readonly string[] | undefined {
+  const words = scriptWords(text);
+  for (const spec of FRAMEWORKS) {
+    if (spec.id !== framework) continue;
+    const command = matchingDevCommand(words, spec);
+    if (command) return command;
+  }
+  return undefined;
+}
+
+/** Script text as shell words, as R3 reads them. */
+export function scriptTextWords(text: string): string[] {
+  return scriptWords(text);
 }
 
 const BUILD_SEQUENCES = [["vite", "build"], ["tsc"], ["tsup"], ["rollup"]];
