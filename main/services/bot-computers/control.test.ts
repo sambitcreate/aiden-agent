@@ -74,6 +74,9 @@ function fakeHost(state: { running: boolean; port: number }) {
       computer: async (botId: string): Promise<BotComputerStatus> => ({
         botId,
         vmName: "aiden-bot-0123456789abcdef",
+        computerId: "aiden-bot-0123456789abcdef",
+        computerName: "Dedicated computer",
+        shared: false,
         state: state.running ? "running" : "stopped",
         baseBuild: "25G83",
         outdated: false,

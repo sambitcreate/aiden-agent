@@ -7,18 +7,24 @@
 
 import type { CuaDriverHostFactory } from "../computer-use/controller.js";
 import type {
+  BotComputerAssignTarget,
   BotComputerSetupState,
   BotComputersSettings,
   BotComputersStatus,
   BotComputerStatus,
+  BotComputerVmStatus,
 } from "../../../renderer/shared/bot-computers.js";
 
 export type {
+  BotComputerAssignTarget,
+  BotComputerDefaultMode,
+  BotComputerKind,
   BotComputerRunState,
   BotComputerSetupState,
   BotComputersSettings,
   BotComputersStatus,
   BotComputerStatus,
+  BotComputerVmStatus,
 } from "../../../renderer/shared/bot-computers.js";
 
 export interface BotComputerConnection {
@@ -58,8 +64,26 @@ export interface BotComputerHost {
    */
   give(botId: string): Promise<BotComputerStatus>;
   reset(botId: string): Promise<BotComputerStatus>;
-  /** Idempotent: a Bot with no computer, or a VM Lume no longer has, counts as success. */
+  /** Idempotent: unassigns the Bot (and deletes its dedicated VM if no other Bot uses it; never deletes `"shared"`). */
   deleteForBot(botId: string): Promise<void>;
+  /** Assign a Bot to `"shared"`, an existing Linux computer, or a newly cloned dedicated Linux computer. */
+  assignComputer(botId: string, target: BotComputerAssignTarget): Promise<BotComputerStatus>;
+  /** Create a new standalone dedicated Linux computer cloned from `aiden-base`. */
+  createComputer(name?: string): Promise<BotComputerVmStatus>;
+  /** Rename an existing Linux computer. */
+  renameComputer(computerId: string, name: string): Promise<BotComputerVmStatus>;
+  /** Delete a Linux computer; refuses while Bots are assigned unless `options.force` is true. */
+  deleteComputer(computerId: string, options?: { force?: boolean }): Promise<void>;
+  /** Stop, delete, and re-clone a Linux computer from the current `aiden-base`. */
+  resetComputer(computerId: string): Promise<BotComputerVmStatus>;
+  /**
+   * Acquire exclusive FIFO turn access to the Bot's assigned computer. Returns
+   * a release function. Cancelling `signal` while queued removes the Bot cleanly.
+   */
+  acquireLease(
+    botId: string,
+    options?: { signal?: AbortSignal; onProgress?(text: string): void },
+  ): Promise<() => void>;
   ensureRunning(
     botId: string,
     options: { reason: BotComputerStartReason; signal?: AbortSignal; onProgress?(text: string): void },

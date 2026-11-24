@@ -21,7 +21,18 @@ beforeEach(() => localStorage.clear());
 afterEach(cleanup);
 
 function computer(overrides: Partial<BotComputerStatus> = {}): BotComputerStatus {
-  return { botId: "bot-1", vmName: VM, state: "stopped", baseBuild: "25G83", outdated: false, controller: "bot", ...overrides };
+  return {
+    botId: "bot-1",
+    vmName: VM,
+    computerId: VM,
+    computerName: "Ada's computer",
+    shared: false,
+    state: "stopped",
+    baseBuild: "25G83",
+    outdated: false,
+    controller: "bot",
+    ...overrides,
+  };
 }
 
 function status(computers: BotComputerStatus[]): BotComputersStatus {
@@ -29,6 +40,7 @@ function status(computers: BotComputerStatus[]): BotComputersStatus {
     setup: { kind: "ready", baseBuild: "25G83", baseVersion: "26.6.2", updateAvailable: false },
     settings: { ...DEFAULT_BOT_COMPUTERS_SETTINGS },
     diskUsedBytes: 0,
+    vms: [],
     computers,
     requirements: {
       downloadBytes: 3_221_225_472,

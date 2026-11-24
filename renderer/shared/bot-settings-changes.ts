@@ -3,11 +3,17 @@
 // its held card ("Update instructions?" with Apply / Edit / Dismiss).
 //
 // The tool changes only what a Bot may say about itself: its name,
-// description, look, instructions, daily check-ins, notifications and model
-// (among providers already connected). It never changes access, tools,
-// credentials, other Bots, Bot messaging, the computer, approvals or hooks:
-// a Bot never widens its own powers from chat.
+// description, look, instructions, daily check-ins, notifications, model
+// (among providers already connected) and Linux computer assignment (always
+// held for the person to apply). It never changes access, tools, credentials,
+// other Bots, Bot messaging, Mac Computer Use (computerMode), approvals or
+// hooks: a Bot never widens its own powers from chat.
 
+import {
+  BOT_COMPUTER_SHARED_DEFAULT_NAME,
+  parseBotComputerAssignTarget,
+  type BotComputerAssignTarget,
+} from "./bot-computers.js";
 import {
   BOT_AVATAR_COLOR_LABELS,
   BOT_AVATAR_COLORS,
@@ -33,6 +39,7 @@ export const BOT_SETTINGS_FIELDS = [
   "dailyCheckIns",
   "notifications",
   "model",
+  "computer",
 ] as const;
 export type BotSettingsField = (typeof BOT_SETTINGS_FIELDS)[number];
 
@@ -51,6 +58,8 @@ export interface BotSettingsValues {
   notifications: BotInterruptions;
   /** Null when the Bot has no model of its own yet. */
   model: BotSettingsModel | null;
+  /** Assigned Linux Bot computer (`"shared"`, existing VM, or newly requested VM), or null when none. */
+  computer?: BotComputerAssignTarget | null;
 }
 
 export type BotSettingsPatch = Partial<BotSettingsValues>;
@@ -71,7 +80,6 @@ export const BOT_SETTINGS_PERSON_ONLY = new Set([
   "files",
   "folders",
   "shell",
-  "computer",
   "computerMode",
   "botMessaging",
   "acceptsBotMessages",
@@ -137,6 +145,7 @@ function quietMinutes(quiet: BotInterruptions["quietHours"]): Set<number> {
  * Those always wait for the person, whoever started the run.
  */
 export function botSettingsPatchWidens(current: BotSettingsValues, patch: BotSettingsPatch): boolean {
+  if (patch.computer !== undefined) return true;
   if (patch.dailyCheckIns === true && !current.dailyCheckIns) return true;
   if (patch.notifications === undefined) return false;
   if (patch.notifications.dailyLimit > current.notifications.dailyLimit) return true;
@@ -238,6 +247,15 @@ export function botSettingsLine(
     }
     case "model":
       return `Model: ${modelLabel(after.model)}`;
+    case "computer": {
+      const target = after.computer;
+      if (!target) return "Computer: None";
+      if (target.kind === "shared") return `Computer: ${BOT_COMPUTER_SHARED_DEFAULT_NAME}`;
+      if (target.kind === "new") {
+        return target.name ? `Computer: New dedicated computer (${target.name})` : "Computer: New dedicated computer";
+      }
+      return `Computer: ${target.computerId}`;
+    }
   }
 }
 
@@ -356,6 +374,22 @@ export function parseBotSettingsArgs(raw: unknown, current: BotSettingsValues): 
       return { ok: false, error: "model takes providerId and modelId, from the models update_bot lists." };
     }
     patch.model = { providerId: model.providerId, modelId: model.modelId };
+  }
+  if (raw.computer !== undefined) {
+    if (raw.computer === "shared") {
+      patch.computer = { kind: "shared" };
+    } else if (raw.computer === "new") {
+      patch.computer = { kind: "new" };
+    } else {
+      try {
+        patch.computer = parseBotComputerAssignTarget(raw.computer);
+      } catch {
+        return {
+          ok: false,
+          error: 'computer takes "shared", "new", or { kind: "shared" | "existing" | "new", ... }.',
+        };
+      }
+    }
   }
   return { ok: true, patch };
 }

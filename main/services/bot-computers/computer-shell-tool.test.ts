@@ -89,7 +89,7 @@ test("a command runs in the Bot's computer within 120 seconds and 64 KiB", async
   const result = await h.run("ls ~");
   assert.equal(result.isError, undefined);
   assert.equal(textOf(result), "Desktop\nShared\n\nwarning: slow disk");
-  assert.equal(h.calls[0]?.command, botComputerShellCommand("ls ~"));
+  assert.equal(h.calls[0]?.command, botComputerShellCommand("ls ~", BOT_COMPUTER_LINUX_SHELL_USER, { botDir: "ada" }));
   assert.equal(h.calls[0]?.timeoutMs, 120_000);
   assert.equal(h.calls[0]?.maxOutputBytes, 64 * 1024);
   assert.deepEqual(h.reasons, ["tool"]);
@@ -211,7 +211,7 @@ test("Linux computer_shell runs commands as the separate aiden-bot user and desc
   const tricky = "printf '%s\\n' 'a'\"b\" && false || echo ok";
   const result = await h.run(tricky);
   assert.equal(result.isError, undefined);
-  assert.equal(h.calls[0]?.command, botComputerShellCommand(tricky));
+  assert.equal(h.calls[0]?.command, botComputerShellCommand(tricky, BOT_COMPUTER_LINUX_SHELL_USER, { botDir: "ada" }));
   assert.match(h.calls[0]!.command, /^cd \/ && exec \/usr\/bin\/sudo -n -H -u 'aiden-bot' -- \/bin\/sh -c /u);
 
   // Quoting keeps shell metacharacters intact inside the inner /bin/sh -c argument.
@@ -219,8 +219,43 @@ test("Linux computer_shell runs commands as the separate aiden-bot user and desc
   const argv = execFileSync("/bin/sh", ["-c", inspectArgv], { encoding: "utf8" }).split("\0").slice(0, -1);
   assert.deepEqual(argv.slice(0, 6), ["-n", "-H", "-u", BOT_COMPUTER_LINUX_SHELL_USER, "--", "/bin/sh"]);
   assert.equal(argv[6], "-c");
-  assert.equal(argv[7], `cd "$HOME" || exit 1\n${tricky}`);
+  assert.equal(argv[7], `d="$HOME/bots/ada"; mkdir -p "$d" 2>/dev/null; cd "$d" 2>/dev/null || cd "$HOME" || exit 1\n${tricky}`);
 
-  // Reject invalid usernames fail-closed.
+  // Reject invalid usernames and unsafe workspace directory names fail-closed.
   assert.throws(() => botComputerShellCommand("id", "aiden-bot; id"), /invalid/iu);
+  assert.throws(() => botComputerShellCommand("id", BOT_COMPUTER_LINUX_SHELL_USER, { botDir: "../escape" }), /invalid/iu);
+  assert.throws(() => botComputerShellCommand("id", BOT_COMPUTER_LINUX_SHELL_USER, { botDir: "a;rm -rf /" }), /invalid/iu);
+});
+
+test("computer_shell acquires and releases the host FIFO lease around command execution", async () => {
+  const control = createBotComputerControl();
+  const events: string[] = [];
+  const tool = createBotComputerShellTool(
+    "ada",
+    {
+      host: {
+        async acquireLease(botId) {
+          events.push(`acquire:${botId}`);
+          return () => events.push(`release:${botId}`);
+        },
+        async ensureRunning() {
+          events.push("ensureRunning");
+          return connection;
+        },
+        async runGuestCommand() {
+          events.push("runGuestCommand");
+          return ok("done");
+        },
+        touch() {
+          events.push("touch");
+        },
+      },
+      control,
+      botName: async () => "Ada",
+    },
+    { routine: false },
+  );
+  const result = (await tool.execute("call-1", { command: "pwd" })) as AgentToolResult<null>;
+  assert.equal(textOf(result), "done");
+  assert.deepEqual(events, ["acquire:ada", "ensureRunning", "runGuestCommand", "release:ada", "touch"]);
 });

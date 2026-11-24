@@ -26,6 +26,7 @@ import {
   type BotComputerHost,
   type BotComputerStartReason,
 } from "./types.js";
+import { botComputerWorkspaceDirName } from "./vm-names.js";
 
 export const BOT_COMPUTER_SHELL_TIMEOUT_MS = 120_000;
 export const BOT_COMPUTER_SHELL_OUTPUT_BYTES = 64 * 1024;
@@ -38,7 +39,7 @@ export const BotComputerShellParameters = Type.Object(
     command: Type.String({
       minLength: 1,
       maxLength: BOT_COMPUTER_SHELL_COMMAND_MAX_CHARS,
-      description: `The command to run in your computer, with /bin/sh as ${BOT_COMPUTER_LINUX_SHELL_USER}, in its home folder.`,
+      description: `The command to run in your computer, with /bin/sh as ${BOT_COMPUTER_LINUX_SHELL_USER}, in your working folder.`,
     }),
     description: Type.Optional(
       Type.String({
@@ -51,40 +52,50 @@ export const BotComputerShellParameters = Type.Object(
 );
 
 export const BOT_COMPUTER_SHELL_TOOL_DESCRIPTION =
-  "Run a shell command inside your own computer (the Linux virtual machine), never on the person's Mac. " +
+  "Run a shell command inside your computer (a Linux virtual machine), never on the person's Mac. " +
   `Use it to install and run tools there. Runs as the separate ${BOT_COMPUTER_LINUX_SHELL_USER} user, without sudo privileges, for up to 120 seconds, with up to 64 KiB of output. ` +
-  "~/Shared is your Computer folder, shared with the person's Files panel.";
+  "Starts in your own Bot working folder under ~/bots/<id> (also ~/Bots/<id>), and ~/Shared is the shared Computer folder visible in the person's Files panel and to other Bots sharing this computer.";
 
 const LINUX_USER_PATTERN = /^[a-z_][a-z0-9_-]{0,31}$/u;
+const SAFE_BOT_DIR_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/u;
 
 /** Shell tool guidance. */
 export function botComputerShellToolDescription(shellUser: string = BOT_COMPUTER_LINUX_SHELL_USER): string {
   return (
-    "Run a shell command inside your own computer (the Linux virtual machine), never on the person's Mac. " +
+    "Run a shell command inside your computer (a Linux virtual machine), never on the person's Mac. " +
     `Use it to install and run tools there. Runs as the separate ${shellUser} user, without sudo privileges, for up to 120 seconds, with up to 64 KiB of output. ` +
-    "~/Shared is your Computer folder, shared with the person's Files panel."
+    "Starts in your own Bot working folder under ~/bots/<id> (also ~/Bots/<id>), and ~/Shared is the shared Computer folder visible in the person's Files panel and to other Bots sharing this computer."
   );
 }
 
 /**
  * Wrap `command` to execute over SSH via `sudo -n -H -u <shellUser>` as the
- * separate unprivileged Bot shell user (`aiden-bot`, plan decision 4a) in its
- * home folder, so the Bot's shell processes are isolated from the desktop
- * sign-in user and can all be terminated during sign-in.
+ * separate unprivileged Bot shell user (`aiden-bot`, plan decision 4a). When
+ * `options.botDir` is provided, defaults cwd to `$HOME/bots/<botDir>` (creating
+ * it if needed and falling back to `$HOME`) so multiple Bots sharing a VM keep
+ * isolated working folders right beside `~/Shared`.
  */
 export function botComputerShellCommand(
   command: string,
   shellUser: string = BOT_COMPUTER_LINUX_SHELL_USER,
+  options?: { botDir?: string },
 ): string {
   if (!LINUX_USER_PATTERN.test(shellUser)) {
     throw new BotComputerError("invalid", "The Bot computer shell user name is invalid.");
   }
-  const inner = `cd "$HOME" || exit 1\n${command}`;
+  const botDir = options?.botDir;
+  if (botDir !== undefined && (!SAFE_BOT_DIR_PATTERN.test(botDir) || botDir.includes(".."))) {
+    throw new BotComputerError("invalid", "The Bot computer workspace folder name is invalid.");
+  }
+  const inner = botDir
+    ? `d="$HOME/bots/${botDir}"; mkdir -p "$d" 2>/dev/null; cd "$d" 2>/dev/null || cd "$HOME" || exit 1\n${command}`
+    : `cd "$HOME" || exit 1\n${command}`;
   return `cd / && exec /usr/bin/sudo -n -H -u ${quoteRemoteArg(shellUser)} -- /bin/sh -c ${quoteRemoteArg(inner)}`;
 }
 
 export interface BotComputerShellDependencies {
-  host: Pick<BotComputerHost, "ensureRunning" | "runGuestCommand" | "touch">;
+  host: Pick<BotComputerHost, "ensureRunning" | "runGuestCommand" | "touch"> &
+    Partial<Pick<BotComputerHost, "acquireLease">>;
   control: Pick<BotComputerControl, "controller" | "run" | "waitForBot">;
   botName(botId: string): Promise<string>;
   /** How long an unattended turn waits for Give back in all (default `BOT_COMPUTER_UNATTENDED_WAIT_MS`). */
@@ -141,12 +152,16 @@ export function createBotComputerShellTool(
         progress(`Waiting for the person to give ${owner}'s computer back.`);
         return waitForBotWithin(deps.control, botId, signal, giveBackBudget);
       };
+      let releaseLease: (() => void) | undefined;
       try {
+        releaseLease = await deps.host.acquireLease?.(botId, { signal, onProgress: progress });
         if (deps.control.controller(botId) === "person" && !(await waitForGiveBack())) {
           return textResult(botComputerUnattendedGaveUp(`${owner}'s`), true);
         }
         await deps.host.ensureRunning(botId, { reason, signal, onProgress: progress });
-        const remoteCommand = botComputerShellCommand(command);
+        const remoteCommand = botComputerShellCommand(command, BOT_COMPUTER_LINUX_SHELL_USER, {
+          botDir: botComputerWorkspaceDirName(botId),
+        });
         const result = await deps.control.run(botId, signal, (actionSignal) =>
           deps.host.runGuestCommand(botId, remoteCommand, {
             timeoutMs: BOT_COMPUTER_SHELL_TIMEOUT_MS,
@@ -166,6 +181,7 @@ export function createBotComputerShellTool(
         if (error instanceof BotComputerError) return textResult(error.message, true);
         return textResult(`Aiden couldn't run the command in ${owner}'s computer. Try again.`, true);
       } finally {
+        releaseLease?.();
         deps.host.touch(botId);
       }
     },

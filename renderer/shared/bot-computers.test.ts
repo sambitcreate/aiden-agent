@@ -6,6 +6,10 @@ import {
   botComputerMaxRunningChoices,
   botComputerSetupSummary,
   botComputersMigrationNoticeText,
+  parseBotComputerAssignTarget,
+  parseBotComputerDeleteOptions,
+  parseBotComputerId,
+  parseBotComputerName,
   parseBotComputerPointer,
   parseBotComputersSettingsPatch,
   parseBotComputersStatus,
@@ -123,4 +127,84 @@ test("settings patch, status parser, setup summary, and migration notice cover L
     botComputersMigrationNoticeText(0),
     "Bot computers now run Linux. Your Mac computers were removed. Set up to continue.",
   );
+});
+
+test("shared/selectable computer parsers validate ids, names, targets, delete options, and VM status", () => {
+  assert.equal(parseBotComputerId("shared"), "shared");
+  assert.equal(parseBotComputerId("vm-123abc"), "vm-123abc");
+  assert.throws(() => parseBotComputerId("../escape"), /Invalid computer id/u);
+  assert.throws(() => parseBotComputerId("UPPER"), /Invalid computer id/u);
+
+  assert.equal(parseBotComputerName("  Research VM  "), "Research VM");
+  assert.throws(() => parseBotComputerName("   "), /1–64/u);
+  assert.throws(() => parseBotComputerName("bad\u0007name"), /control/u);
+
+  assert.deepEqual(parseBotComputerAssignTarget({ kind: "shared" }), { kind: "shared" });
+  assert.deepEqual(parseBotComputerAssignTarget({ kind: "existing", computerId: "vm-abc" }), {
+    kind: "existing",
+    computerId: "vm-abc",
+  });
+  assert.deepEqual(parseBotComputerAssignTarget({ kind: "new" }), { kind: "new" });
+  assert.deepEqual(parseBotComputerAssignTarget({ kind: "new", name: " Lab " }), { kind: "new", name: "Lab" });
+  assert.throws(() => parseBotComputerAssignTarget({ kind: "shared", extra: 1 }));
+  assert.throws(() => parseBotComputerAssignTarget({ kind: "existing", computerId: "../bad" }));
+  assert.throws(() => parseBotComputerAssignTarget({ kind: "other" }));
+
+  assert.deepEqual(parseBotComputerDeleteOptions(undefined), { force: false });
+  assert.deepEqual(parseBotComputerDeleteOptions({ force: true }), { force: true });
+  assert.throws(() => parseBotComputerDeleteOptions({ force: "yes" }));
+
+  assert.deepEqual(parseBotComputersSettingsPatch({ defaultComputerMode: "dedicated" }), {
+    defaultComputerMode: "dedicated",
+  });
+  assert.throws(() => parseBotComputersSettingsPatch({ defaultComputerMode: "other" }));
+
+  const parsed = parseBotComputersStatus({
+    setup: { kind: "ready", baseVersion: "13", baseBuild: "20261123-2671", updateAvailable: false },
+    settings: { maxRunning: 2, idleStopMinutes: 10, defaultComputerMode: "shared" },
+    diskUsedBytes: 1000,
+    vms: [
+      {
+        id: "shared",
+        name: "Shared computer",
+        kind: "shared",
+        vmName: "aiden-vm-shared",
+        state: "running",
+        baseBuild: "20261123-2671",
+        outdated: false,
+        assignedBotIds: ["ada", "ben"],
+        activeBotId: "ada",
+        queuedBotIds: ["ben"],
+        controller: "bot",
+      },
+    ],
+    computers: [
+      {
+        botId: "ben",
+        vmName: "aiden-vm-shared",
+        computerId: "shared",
+        computerName: "Shared computer",
+        shared: true,
+        state: "running",
+        baseBuild: "20261123-2671",
+        outdated: false,
+        controller: "bot",
+        activeBotId: "ada",
+        queuePosition: 1,
+      },
+    ],
+    requirements: {
+      downloadBytes: 3_221_225_472,
+      baseDiskBytes: 8_000_000_000,
+      setupFreeBytes: 24_696_061_952,
+      memoryPerComputerBytes: 4 * 1024 ** 3,
+      baseVersion: "13",
+      maxRunningLimit: 4,
+    },
+  });
+  assert.equal(parsed?.settings.defaultComputerMode, "shared");
+  assert.equal(parsed?.vms.length, 1);
+  assert.deepEqual(parsed?.vms[0]?.queuedBotIds, ["ben"]);
+  assert.equal(parsed?.computers[0]?.queuePosition, 1);
+  assert.equal(parsed?.computers[0]?.shared, true);
 });

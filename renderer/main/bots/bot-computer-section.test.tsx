@@ -19,7 +19,18 @@ const bot = { id: "bot-1", name: "Ada" };
 const READY: BotComputerSetupState = { kind: "ready", baseVersion: "26.6.2", baseBuild: "25G83", updateAvailable: false };
 
 function computer(extra: Partial<BotComputerStatus> = {}): BotComputerStatus {
-  return { botId: bot.id, vmName: "aiden-bot-0123456789abcdef", state: "stopped", baseBuild: "25G83", outdated: false, controller: "bot", ...extra };
+  return {
+    botId: bot.id,
+    vmName: "aiden-bot-0123456789abcdef",
+    computerId: "aiden-bot-0123456789abcdef",
+    computerName: "Ada's computer",
+    shared: false,
+    state: "stopped",
+    baseBuild: "25G83",
+    outdated: false,
+    controller: "bot",
+    ...extra,
+  };
 }
 
 function status(setup: BotComputerSetupState, computers: BotComputerStatus[] = []): BotComputersStatus {
@@ -27,6 +38,7 @@ function status(setup: BotComputerSetupState, computers: BotComputerStatus[] = [
     setup,
     settings: { ...DEFAULT_BOT_COMPUTERS_SETTINGS },
     diskUsedBytes: 0,
+    vms: [],
     computers,
     requirements: {
       downloadBytes: 3_221_225_472,

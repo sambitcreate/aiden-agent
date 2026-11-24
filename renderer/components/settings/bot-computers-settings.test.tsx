@@ -22,6 +22,7 @@ function status(setup: BotComputerSetupState, extra: Partial<BotComputersStatus>
     setup,
     settings: { ...DEFAULT_BOT_COMPUTERS_SETTINGS },
     diskUsedBytes: 0,
+    vms: [],
     computers: [],
     requirements: {
       downloadBytes: 3_221_225_472,
@@ -198,7 +199,17 @@ test("Remove everything asks first with Linux copy, then empties the page back t
       diskUsedBytes: 9_000_000_000,
       freeDiskBytes: 400_000_000_000,
       computers: [
-        { botId: "bot-1", vmName: "aiden-bot-0123456789abcdef", state: "stopped", baseBuild: "20261123-2671", outdated: false, controller: "bot" },
+        {
+          botId: "bot-1",
+          vmName: "aiden-bot-0123456789abcdef",
+          computerId: "aiden-bot-0123456789abcdef",
+          computerName: "Dedicated computer",
+          shared: false,
+          state: "stopped",
+          baseBuild: "20261123-2671",
+          outdated: false,
+          controller: "bot",
+        },
       ],
     }),
   );

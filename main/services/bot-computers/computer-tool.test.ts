@@ -637,3 +637,44 @@ test("Linux computer tool describes Linux/Chromium/LibreOffice and maps Command 
   const clickCall = calls.find((call) => call.name === "click");
   assert.deepEqual(clickCall?.args.modifier, ["ctrl"]);
 });
+
+test("computer tool acquires and releases the host FIFO lease around actions", async () => {
+  const control = createBotComputerControl();
+  const state = createBotComputerToolState(control);
+  const fake = fakeScreen(1280, 720);
+  const events: string[] = [];
+  const tool = createBotComputerTool(
+    "ada",
+    {
+      host: {
+        async acquireLease(botId) {
+          events.push(`acquire:${botId}`);
+          return () => events.push(`release:${botId}`);
+        },
+        async ensureRunning() {
+          events.push("ensureRunning");
+          return connection();
+        },
+        touch() {
+          events.push("touch");
+        },
+      },
+      sessions: {
+        async screen() {
+          events.push("screen");
+          return fake.screen;
+        },
+        recordPointer() {},
+        setActivity() {},
+      },
+      control,
+      state,
+      botName: async () => "Ada",
+      sleep: async () => {},
+    },
+    { routine: false },
+  );
+  const result = (await tool.execute("call-lease", { action: "capture" })) as AgentToolResult<BotComputerResultDetails>;
+  assert.equal(result.isError, undefined);
+  assert.deepEqual(events, ["acquire:ada", "ensureRunning", "screen", "release:ada", "touch"]);
+});

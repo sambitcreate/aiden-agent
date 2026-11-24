@@ -3,6 +3,7 @@
 // stores, and tests inject fakes.
 
 import type { BotAccessUpdate, BotAccessView, BotCapabilityCatalog } from "../../../renderer/shared/bot-capabilities.js";
+import type { BotComputerAssignTarget } from "../../../renderer/shared/bot-computers.js";
 import type { BotSettingsPatch, BotSettingsValues } from "../../../renderer/shared/bot-settings-changes.js";
 import { resolveBotInterruptions, type BotDefinition, type BotUpdateInput } from "../../../renderer/shared/bots.js";
 import { BotCapabilityRevisionConflictError } from "../bot-capability-store-core.js";
@@ -27,6 +28,10 @@ export interface BotSettingsPortDeps {
    */
   updateBot(input: BotUpdateInput): Promise<Pick<BotDefinition, "revision">>;
   cancelWakeUps(botId: string): Promise<void>;
+  readComputer?(botId: string): Promise<BotComputerAssignTarget | null>;
+  listComputers?(): Promise<{ id: string; name: string; kind: "shared" | "dedicated" }[]>;
+  validateComputer?(botId: string, target: BotComputerAssignTarget): Promise<string | undefined>;
+  assignComputer?(botId: string, target: BotComputerAssignTarget): Promise<void>;
   broadcastChanged(botId: string): void;
   appendEntry: BotSettingsPorts["appendEntry"];
 }
@@ -88,6 +93,7 @@ export function createBotSettingsPorts(deps: BotSettingsPortDeps): BotSettingsPo
       const selection = await deps.modelSelection(botId).catch(() => undefined);
       // Unreadable access leaves an empty revision, which no model write matches.
       const access = await deps.getBotAccess(botId).then((view) => view.revision, () => "");
+      const computer = deps.readComputer ? await deps.readComputer(botId).catch(() => null) : undefined;
       const values: BotSettingsValues = {
         name: bot.name,
         description: bot.description ?? "",
@@ -96,6 +102,7 @@ export function createBotSettingsPorts(deps: BotSettingsPortDeps): BotSettingsPo
         dailyCheckIns: bot.selfWakeUps !== false,
         notifications: resolveBotInterruptions(bot.interruptions),
         model: selection ? { providerId: selection.providerId, modelId: selection.modelId } : null,
+        ...(computer !== undefined ? { computer } : {}),
       };
       return { values, revision: joinRevision(bot.revision, access) };
     },
@@ -108,6 +115,9 @@ export function createBotSettingsPorts(deps: BotSettingsPortDeps): BotSettingsPo
           .filter((model) => model.available)
           .map((model): BotSettingsModelOption => ({ providerId: provider.id, modelId: model.id, label: `${model.label} (${provider.label})` })));
     },
+
+    ...(deps.listComputers ? { computers: () => deps.listComputers!() } : {}),
+    ...(deps.validateComputer ? { validateComputer: (botId, target) => deps.validateComputer!(botId, target) } : {}),
 
     async write(botId, patch, expectedRevision) {
       // A Bot's model is never taken away from chat, and Undo never claims it was.
@@ -176,6 +186,11 @@ export function createBotSettingsPorts(deps: BotSettingsPortDeps): BotSettingsPo
           wrote = true;
         }
         if (identity && patch.dailyCheckIns === false) await deps.cancelWakeUps(botId);
+        if (patch.computer) {
+          if (!deps.assignComputer) throw new Error("Bot computers aren't available on this device.");
+          await deps.assignComputer(botId, patch.computer);
+          wrote = true;
+        }
         done = true;
       } finally {
         // Whatever landed is shown, even when a later half was refused.

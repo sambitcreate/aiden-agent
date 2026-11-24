@@ -30,15 +30,58 @@ export type BotComputerSetupState =
 
 export type BotComputerRunState = "stopped" | "starting" | "running" | "stopping" | "waiting_for_slot" | "stale";
 
+export type BotComputerDefaultMode = "shared" | "dedicated";
+export type BotComputerKind = "shared" | "dedicated";
+
+/** Stable id and default display name of the canonical shared Linux computer. */
+export const BOT_COMPUTER_SHARED_ID = "shared";
+export const BOT_COMPUTER_SHARED_DEFAULT_NAME = "Shared computer";
+
+/** Target for assigning a Bot to a Linux computer. */
+export type BotComputerAssignTarget =
+  | { kind: "shared" }
+  | { kind: "existing"; computerId: string }
+  | { kind: "new"; name?: string };
+
+/** First-class Linux computer (shared or dedicated) managed by the host. */
+export interface BotComputerVmStatus {
+  id: string;
+  name: string;
+  kind: BotComputerKind;
+  vmName: string;
+  state: BotComputerRunState;
+  baseBuild: string;
+  outdated: boolean;
+  assignedBotIds: string[];
+  /** Bot currently holding the FIFO turn lease on this computer, if busy. */
+  activeBotId?: string;
+  /** Bots waiting in FIFO order behind `activeBotId`. */
+  queuedBotIds: string[];
+  diskUsedBytes?: number;
+  lastUsedAt?: number;
+  controller: "bot" | "person";
+  activity?: string;
+}
+
 export interface BotComputerStatus {
   botId: string;
   vmName: string;
+  /** ID of the Linux computer this Bot is assigned to (`"shared"` or a dedicated id). */
+  computerId: string;
+  /** Display name of that Linux computer. */
+  computerName: string;
+  /** True when assigned to the shared computer (or a VM shared by multiple Bots). */
+  shared: boolean;
   state: BotComputerRunState;
   baseBuild: string;
   outdated: boolean;
   lastUsedAt?: number;
   controller: "bot" | "person";
   activity?: string;
+  /** Bot currently holding the FIFO lease on this computer, when busy. */
+  activeBotId?: string;
+  /** 1-based position in the FIFO queue if this Bot is waiting for its turn. */
+  queuePosition?: number;
 }
 
 export type BotComputerMaxRunning = 1 | 2 | 3 | 4;
@@ -46,6 +89,7 @@ export type BotComputerMaxRunning = 1 | 2 | 3 | 4;
 export interface BotComputersSettings {
   maxRunning: BotComputerMaxRunning;
   idleStopMinutes: number;
+  defaultComputerMode: BotComputerDefaultMode;
 }
 
 /** What Set up and each start need, stated up front on the Settings page. */
@@ -74,6 +118,8 @@ export interface BotComputersStatus {
   settings: BotComputersSettings;
   diskUsedBytes: number;
   freeDiskBytes?: number;
+  /** First-class Linux computers (shared + dedicated). */
+  vms: BotComputerVmStatus[];
   computers: BotComputerStatus[];
   requirements: BotComputersRequirements;
   /** Present until Set up finishes, Remove everything runs, or the person dismisses it. */
@@ -95,6 +141,12 @@ export const BOT_COMPUTER_CHANNELS = {
   reset: "botComputers:reset", // invoke(botId) → BotComputerStatus
   remove: "botComputers:remove", // invoke(botId) → void
   stop: "botComputers:stop", // invoke(botId) → void
+  // First-class Linux computer management (shared & selectable VMs).
+  assignComputer: "botComputers:assignComputer", // invoke(botId, BotComputerAssignTarget) → BotComputerStatus
+  createComputer: "botComputers:createComputer", // invoke(name?) → BotComputerVmStatus
+  renameComputer: "botComputers:renameComputer", // invoke(computerId, name) → BotComputerVmStatus
+  deleteComputer: "botComputers:deleteComputer", // invoke(computerId, { force? }) → void
+  resetComputer: "botComputers:resetComputer", // invoke(computerId) → BotComputerVmStatus
   // The Computer tab. A grant with `start: true` starts the computer (the
   // person opened the tab); without it a stopped computer is refused.
   viewerGrant: "botComputers:viewerGrant", // invoke(botId, { start }) → BotComputerViewerGrant
@@ -134,14 +186,70 @@ export const BOT_COMPUTERS_CHANGED_CHANNEL = "botComputers:changed";
 
 export const BOT_COMPUTER_MAX_RUNNING_CHOICES = [1, 2, 3, 4] as const;
 export const BOT_COMPUTER_IDLE_STOP_CHOICES = [5, 10, 15, 30, 60] as const;
+export const BOT_COMPUTER_DEFAULT_MODE_CHOICES = ["shared", "dedicated"] as const;
 export const DEFAULT_BOT_COMPUTERS_SETTINGS: BotComputersSettings = Object.freeze({
   maxRunning: 2,
   idleStopMinutes: 10,
+  defaultComputerMode: "shared",
 });
 
 /** Offered "Computers running at once" values up to the host's limit (1–4). */
 export function botComputerMaxRunningChoices(limit: BotComputerMaxRunning = 4): readonly BotComputerMaxRunning[] {
   return BOT_COMPUTER_MAX_RUNNING_CHOICES.slice(0, limit);
+}
+
+const COMPUTER_ID_PATTERN = /^[a-z0-9][a-z0-9_-]{0,63}$/u;
+
+export function parseBotComputerId(value: unknown): string {
+  if (typeof value !== "string" || !COMPUTER_ID_PATTERN.test(value)) {
+    throw new Error("Invalid computer id.");
+  }
+  return value;
+}
+
+export function parseBotComputerName(value: unknown): string {
+  if (typeof value !== "string") throw new Error("Computer name must be a string.");
+  const trimmed = value.trim();
+  if (trimmed.length === 0 || trimmed.length > 64) {
+    throw new Error("Computer name must be 1–64 characters.");
+  }
+  for (const ch of trimmed) {
+    const code = ch.codePointAt(0)!;
+    if (code < 0x20 || code === 0x7f) throw new Error("Computer name cannot contain control characters.");
+  }
+  return trimmed;
+}
+
+export function parseBotComputerAssignTarget(value: unknown): BotComputerAssignTarget {
+  const input = record(value);
+  if (!input) throw new Error("Computer target must be an object.");
+  const keys = Object.keys(input);
+  switch (input.kind) {
+    case "shared":
+      if (keys.some((key) => key !== "kind")) throw new Error("Shared computer target accepts no extra fields.");
+      return { kind: "shared" };
+    case "existing":
+      if (keys.some((key) => key !== "kind" && key !== "computerId")) {
+        throw new Error("Existing computer target accepts only kind and computerId.");
+      }
+      return { kind: "existing", computerId: parseBotComputerId(input.computerId) };
+    case "new":
+      if (keys.some((key) => key !== "kind" && key !== "name")) {
+        throw new Error("New computer target accepts only kind and optional name.");
+      }
+      return input.name === undefined ? { kind: "new" } : { kind: "new", name: parseBotComputerName(input.name) };
+    default:
+      throw new Error('Computer target kind must be "shared", "existing", or "new".');
+  }
+}
+
+export function parseBotComputerDeleteOptions(value: unknown): { force: boolean } {
+  if (value === undefined) return { force: false };
+  const input = record(value);
+  if (!input || Object.keys(input).some((key) => key !== "force") || (input.force !== undefined && typeof input.force !== "boolean")) {
+    throw new Error("Delete computer options must be { force?: boolean }.");
+  }
+  return { force: input.force === true };
 }
 
 /**
@@ -167,6 +275,11 @@ export function parseBotComputersSettingsPatch(
         throw new Error("Choose one of the offered idle stop times.");
       }
       patch.idleStopMinutes = entry as number;
+    } else if (key === "defaultComputerMode") {
+      if (entry !== "shared" && entry !== "dedicated") {
+        throw new Error('Default computer mode must be "shared" or "dedicated".');
+      }
+      patch.defaultComputerMode = entry;
     } else {
       throw new Error(`Unknown Bot computer setting: ${key}`);
     }
@@ -241,6 +354,53 @@ function parseSetup(value: unknown): BotComputerSetupState | undefined {
   }
 }
 
+function stringArray(value: unknown, limit: number): string[] | undefined {
+  if (!Array.isArray(value)) return undefined;
+  const out: string[] = [];
+  for (const item of value) {
+    const parsed = text(item, limit);
+    if (!parsed) return undefined;
+    out.push(parsed);
+  }
+  return out;
+}
+
+export function parseBotComputerVmStatus(value: unknown): BotComputerVmStatus | undefined {
+  const input = record(value);
+  const id = text(input?.id, 64);
+  const name = text(input?.name, 64);
+  const vmName = text(input?.vmName, 64);
+  const baseBuild = typeof input?.baseBuild === "string" && input.baseBuild.length <= 32 ? input.baseBuild : undefined;
+  if (!input || !id || !name || !vmName || baseBuild === undefined) return undefined;
+  if (input.kind !== "shared" && input.kind !== "dedicated") return undefined;
+  if (typeof input.state !== "string" || !RUN_STATES.has(input.state)) return undefined;
+  if (typeof input.outdated !== "boolean") return undefined;
+  if (input.controller !== "bot" && input.controller !== "person") return undefined;
+  const assignedBotIds = stringArray(input.assignedBotIds, 200);
+  const queuedBotIds = stringArray(input.queuedBotIds, 200);
+  if (!assignedBotIds || !queuedBotIds) return undefined;
+  const activeBotId = input.activeBotId === undefined ? undefined : text(input.activeBotId, 200);
+  const diskUsedBytes = count(input.diskUsedBytes);
+  const lastUsedAt = count(input.lastUsedAt);
+  const activity = text(input.activity, 200);
+  return {
+    id,
+    name,
+    kind: input.kind,
+    vmName,
+    state: input.state as BotComputerRunState,
+    baseBuild,
+    outdated: input.outdated,
+    assignedBotIds,
+    ...(activeBotId ? { activeBotId } : {}),
+    queuedBotIds,
+    ...(diskUsedBytes !== undefined ? { diskUsedBytes } : {}),
+    ...(lastUsedAt !== undefined ? { lastUsedAt } : {}),
+    controller: input.controller,
+    ...(activity ? { activity } : {}),
+  };
+}
+
 export function parseBotComputerStatus(value: unknown): BotComputerStatus | undefined {
   const input = record(value);
   const botId = text(input?.botId, 200);
@@ -250,17 +410,30 @@ export function parseBotComputerStatus(value: unknown): BotComputerStatus | unde
   if (typeof input.state !== "string" || !RUN_STATES.has(input.state)) return undefined;
   if (typeof input.outdated !== "boolean") return undefined;
   if (input.controller !== "bot" && input.controller !== "person") return undefined;
+  const computerId = text(input.computerId, 64) ?? vmName;
+  const computerName = text(input.computerName, 64) ?? (computerId === BOT_COMPUTER_SHARED_ID ? BOT_COMPUTER_SHARED_DEFAULT_NAME : "Dedicated computer");
+  const shared = typeof input.shared === "boolean" ? input.shared : computerId === BOT_COMPUTER_SHARED_ID;
   const lastUsedAt = count(input.lastUsedAt);
   const activity = text(input.activity, 200);
+  const activeBotId = input.activeBotId === undefined ? undefined : text(input.activeBotId, 200);
+  const queuePosition =
+    typeof input.queuePosition === "number" && Number.isSafeInteger(input.queuePosition) && input.queuePosition >= 1
+      ? input.queuePosition
+      : undefined;
   return {
     botId,
     vmName,
+    computerId,
+    computerName,
+    shared,
     state: input.state as BotComputerRunState,
     baseBuild,
     outdated: input.outdated,
     ...(lastUsedAt !== undefined ? { lastUsedAt } : {}),
     controller: input.controller,
     ...(activity ? { activity } : {}),
+    ...(activeBotId ? { activeBotId } : {}),
+    ...(queuePosition !== undefined ? { queuePosition } : {}),
   };
 }
 
@@ -289,6 +462,13 @@ export function parseBotComputersStatus(value: unknown): BotComputersStatus | un
   ) {
     return undefined;
   }
+  const defaultComputerMode: BotComputerDefaultMode | null =
+    settings.defaultComputerMode === undefined
+      ? "shared"
+      : settings.defaultComputerMode === "shared" || settings.defaultComputerMode === "dedicated"
+        ? settings.defaultComputerMode
+        : null;
+  if (defaultComputerMode === null) return undefined;
   const idleStopMinutes = count(settings.idleStopMinutes);
   const diskUsedBytes = count(input.diskUsedBytes);
   const freeDiskBytes = count(input.freeDiskBytes);
@@ -320,11 +500,24 @@ export function parseBotComputersStatus(value: unknown): BotComputersStatus | un
     const computer = parseBotComputerStatus(entry);
     if (computer) computers.push(computer);
   }
+  const vms: BotComputerVmStatus[] = [];
+  if (input.vms !== undefined) {
+    if (!Array.isArray(input.vms)) return undefined;
+    for (const entry of input.vms) {
+      const vm = parseBotComputerVmStatus(entry);
+      if (vm) vms.push(vm);
+    }
+  }
   return {
     setup,
-    settings: { maxRunning: settings.maxRunning as BotComputerMaxRunning, idleStopMinutes },
+    settings: {
+      maxRunning: settings.maxRunning as BotComputerMaxRunning,
+      idleStopMinutes,
+      defaultComputerMode,
+    },
     diskUsedBytes,
     ...(freeDiskBytes !== undefined ? { freeDiskBytes } : {}),
+    vms,
     computers,
     requirements: {
       downloadBytes,

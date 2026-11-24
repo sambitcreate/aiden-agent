@@ -4,6 +4,8 @@ import test from "node:test";
 
 import {
   BOT_COMPUTER_CHANNELS,
+  BOT_COMPUTER_SHARED_DEFAULT_NAME,
+  BOT_COMPUTER_SHARED_ID,
   BOT_COMPUTERS_CHANGED_CHANNEL,
   DEFAULT_BOT_COMPUTERS_SETTINGS,
   parseBotComputersStatus,
@@ -12,6 +14,7 @@ import {
   type BotComputerSetupState,
   type BotComputerStatus,
   type BotComputerViewerGrant,
+  type BotComputerVmStatus,
 } from "../../renderer/shared/bot-computers.js";
 import { createBotComputerControl } from "../services/bot-computers/control.js";
 import { BotComputerTakenOverError, type BotComputerPointer } from "../services/bot-computers/types.js";
@@ -35,6 +38,7 @@ function fakeHost(control: ReturnType<typeof createBotComputerControl>) {
       setup,
       settings,
       diskUsedBytes: 0,
+      vms: [],
       computers: [...computers.values()],
       requirements: {
         downloadBytes: 3_221_225_472,
@@ -72,7 +76,17 @@ function fakeHost(control: ReturnType<typeof createBotComputerControl>) {
     },
     give: async (botId) => {
       reached.push(`give:${botId}`);
-      const computer: BotComputerStatus = { botId, vmName: "aiden-bot-0123456789abcdef", state: "stopped", baseBuild: "25G83", outdated: false, controller: "bot" };
+      const computer: BotComputerStatus = {
+        botId,
+        vmName: "aiden-bot-0123456789abcdef",
+        computerId: BOT_COMPUTER_SHARED_ID,
+        computerName: BOT_COMPUTER_SHARED_DEFAULT_NAME,
+        shared: true,
+        state: "stopped",
+        baseBuild: "25G83",
+        outdated: false,
+        controller: "bot",
+      };
       computers.set(botId, computer);
       emit(botId);
       return computer;
@@ -86,6 +100,71 @@ function fakeHost(control: ReturnType<typeof createBotComputerControl>) {
       computers.delete(botId);
     },
     stop: async (botId, options) => void reached.push(`stop:${botId}:${options?.reason ?? ""}`),
+    assignComputer: async (botId, target) => {
+      reached.push(`assign:${botId}:${target.kind}${target.kind === "existing" ? `:${target.computerId}` : target.kind === "new" && target.name ? `:${target.name}` : ""}`);
+      const computerId = target.kind === "shared" ? BOT_COMPUTER_SHARED_ID : target.kind === "existing" ? target.computerId : "vm-new123";
+      const computer: BotComputerStatus = {
+        botId,
+        vmName: target.kind === "shared" ? "aiden-vm-shared" : "aiden-vm-0123456789abcdef",
+        computerId,
+        computerName: target.kind === "new" && target.name ? target.name : BOT_COMPUTER_SHARED_DEFAULT_NAME,
+        shared: target.kind === "shared",
+        state: "stopped",
+        baseBuild: "25G83",
+        outdated: false,
+        controller: "bot",
+      };
+      computers.set(botId, computer);
+      return computer;
+    },
+    createComputer: async (name): Promise<BotComputerVmStatus> => {
+      reached.push(`create:${name ?? ""}`);
+      return {
+        id: "vm-created",
+        name: name ?? "Computer 1",
+        kind: "dedicated",
+        vmName: "aiden-vm-0123456789abcdef",
+        state: "stopped",
+        baseBuild: "25G83",
+        outdated: false,
+        assignedBotIds: [],
+        queuedBotIds: [],
+        controller: "bot",
+      };
+    },
+    renameComputer: async (computerId, name): Promise<BotComputerVmStatus> => {
+      reached.push(`rename:${computerId}:${name}`);
+      return {
+        id: computerId,
+        name,
+        kind: computerId === BOT_COMPUTER_SHARED_ID ? "shared" : "dedicated",
+        vmName: "aiden-vm-shared",
+        state: "stopped",
+        baseBuild: "25G83",
+        outdated: false,
+        assignedBotIds: [],
+        queuedBotIds: [],
+        controller: "bot",
+      };
+    },
+    deleteComputer: async (computerId, options) => {
+      reached.push(`deleteComputer:${computerId}:${options?.force === true}`);
+    },
+    resetComputer: async (computerId): Promise<BotComputerVmStatus> => {
+      reached.push(`resetComputer:${computerId}`);
+      return {
+        id: computerId,
+        name: "Computer 1",
+        kind: computerId === BOT_COMPUTER_SHARED_ID ? "shared" : "dedicated",
+        vmName: "aiden-vm-shared",
+        state: "stopped",
+        baseBuild: "25G83",
+        outdated: false,
+        assignedBotIds: [],
+        queuedBotIds: [],
+        controller: "bot",
+      };
+    },
     // Like the real host, the status says who drives the computer.
     computer: async (botId) => {
       const computer = computers.get(botId);
@@ -199,7 +278,41 @@ test("settings outside the offered choices are refused before they reach the hos
   assert.deepEqual(await invoke(BOT_COMPUTER_CHANNELS.updateSettings, { maxRunning: 1, idleStopMinutes: 30 }), {
     maxRunning: 1,
     idleStopMinutes: 30,
+    defaultComputerMode: "shared",
   });
+  assert.deepEqual(await invoke(BOT_COMPUTER_CHANNELS.updateSettings, { defaultComputerMode: "dedicated" }), {
+    maxRunning: 1,
+    idleStopMinutes: 30,
+    defaultComputerMode: "dedicated",
+  });
+});
+
+test("first-class computer management IPC channels validate inputs and forward to host", async () => {
+  const { invoke, reached } = setup();
+  await assert.rejects(invoke(BOT_COMPUTER_CHANNELS.assignComputer, "bot:ghost", { kind: "shared" }), /no longer exists/u);
+  await assert.rejects(invoke(BOT_COMPUTER_CHANNELS.assignComputer, BOT, { kind: "bogus" }));
+  await assert.rejects(invoke(BOT_COMPUTER_CHANNELS.createComputer, "   "));
+  await assert.rejects(invoke(BOT_COMPUTER_CHANNELS.renameComputer, "../bad", "Lab"));
+  await assert.rejects(invoke(BOT_COMPUTER_CHANNELS.renameComputer, "shared", ""));
+  await assert.rejects(invoke(BOT_COMPUTER_CHANNELS.deleteComputer, "shared", { force: "yes" }));
+  await assert.rejects(invoke(BOT_COMPUTER_CHANNELS.resetComputer, "BAD ID"));
+  assert.deepEqual(reached, []);
+
+  const assigned = (await invoke(BOT_COMPUTER_CHANNELS.assignComputer, BOT, { kind: "new", name: "Research" })) as BotComputerStatus;
+  assert.equal(assigned.computerName, "Research");
+  const created = (await invoke(BOT_COMPUTER_CHANNELS.createComputer, "Sandbox")) as BotComputerVmStatus;
+  assert.equal(created.name, "Sandbox");
+  const renamed = (await invoke(BOT_COMPUTER_CHANNELS.renameComputer, "shared", "Team Linux")) as BotComputerVmStatus;
+  assert.equal(renamed.name, "Team Linux");
+  await invoke(BOT_COMPUTER_CHANNELS.deleteComputer, "vm-created", { force: true });
+  await invoke(BOT_COMPUTER_CHANNELS.resetComputer, "shared");
+  assert.deepEqual(reached, [
+    `assign:${BOT}:new:Research`,
+    "create:Sandbox",
+    "rename:shared:Team Linux",
+    "deleteComputer:vm-created:true",
+    "resetComputer:shared",
+  ]);
 });
 
 test("Remove everything replies with the emptied status", async () => {
@@ -313,5 +426,6 @@ test("Linux host maxRunningLimit up to 4 is honored by updateSettings while valu
   assert.deepEqual(await invoke(BOT_COMPUTER_CHANNELS.updateSettings, { maxRunning: 4 }), {
     maxRunning: 4,
     idleStopMinutes: 10,
+    defaultComputerMode: "shared",
   });
 });

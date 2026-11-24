@@ -46,7 +46,7 @@ async function setup() {
     frameIntervalMs: 10,
   });
   const state: { computer?: BotComputerStatus } = {
-    computer: { botId: BOT, vmName: VM, state: "stopped", baseBuild: "25G83", outdated: false, controller: "bot" },
+    computer: { botId: BOT, vmName: VM, computerId: VM, computerName: "Ada's computer", shared: false, state: "stopped", baseBuild: "25G83", outdated: false, controller: "bot" },
   };
   const listeners = new Set<(botId: string | undefined) => void>();
   const starts: BotComputerStartReason[] = [];
@@ -192,7 +192,7 @@ test("as main wires them, the Bot's screen and the viewer share one VNC connecti
     ssh: { host: "192.168.64.5", user: "lume" },
   });
   const state: { computer: BotComputerStatus } = {
-    computer: { botId: BOT, vmName: VM, state: "stopped", baseBuild: "25G83", outdated: false, controller: "bot" },
+    computer: { botId: BOT, vmName: VM, computerId: VM, computerName: "Ada's computer", shared: false, state: "stopped", baseBuild: "25G83", outdated: false, controller: "bot" },
   };
   const listeners = new Set<(botId: string | undefined) => void>();
   const host = {
@@ -269,7 +269,17 @@ test("a computer that stopped after a status read said it was running is never s
   const starts: BotComputerStartReason[] = [];
   const host = {
     // A status read from just before the stop (Pause, the idle timer) landed: it still says running.
-    computer: async (): Promise<BotComputerStatus> => ({ botId: BOT, vmName: VM, state: "running", baseBuild: "25G83", outdated: false, controller: "bot" }),
+    computer: async (): Promise<BotComputerStatus> => ({
+      botId: BOT,
+      vmName: VM,
+      computerId: VM,
+      computerName: "Ada's computer",
+      shared: false,
+      state: "running",
+      baseBuild: "25G83",
+      outdated: false,
+      controller: "bot",
+    }),
     runningConnection: () => (running ? connection : undefined),
     ensureRunning: async (_botId: string, options: { reason: BotComputerStartReason }) => {
       starts.push(options.reason);

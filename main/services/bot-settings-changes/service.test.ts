@@ -316,3 +316,76 @@ test("two changes to one field: the earlier Undo is refused, the later one resto
   assert.deepEqual(await h.service.respond(BOT, second, "undo"), { ok: true, status: "restored" });
   assert.equal(h.values().name, "Planner");
 });
+
+test("update_bot computer selection always waits for the person to apply, while computerMode stays person-only", async () => {
+  const assigned: unknown[] = [];
+  const profile = mkdtempSync(path.join(os.tmpdir(), "aiden-bot-settings-computer-"));
+  roots.push(profile);
+  let values: BotSettingsValues = {
+    name: "Chief",
+    description: "",
+    look: { color: "lilac", shape: "wisp" },
+    instructions: "Help me plan.",
+    dailyCheckIns: false,
+    notifications: structuredClone(DEFAULT_BOT_INTERRUPTIONS),
+    model: { providerId: "provider:a", modelId: "model:slow" },
+    computer: { kind: "shared" },
+  };
+  let revision = 1;
+  const entries: { kind: string; data: Record<string, unknown> }[] = [];
+  let next = 0;
+  const service = createBotSettingsChangeService({
+    profileDir: () => profile,
+    read: async () => ({ values: structuredClone(values), revision: String(revision) }),
+    models: async () => [{ providerId: "provider:a", modelId: "model:fast", label: "Fast (A)" }],
+    computers: async () => [{ id: "shared", name: "Shared computer", kind: "shared" }],
+    validateComputer: async (_botId, target) =>
+      target.kind === "existing" && target.computerId !== "shared" ? `No Bot computer with id "${target.computerId}" exists.` : undefined,
+    write: async (_botId, patch, expectedRevision) => {
+      if (expectedRevision !== String(revision)) throw new BotSettingsConflictError();
+      if (patch.computer) assigned.push(patch.computer);
+      values = { ...values, ...structuredClone(patch) };
+      revision += 1;
+    },
+    appendEntry: async (_botId, kind, data) => {
+      entries.push({ kind, data });
+    },
+    newId: () => `00000000-0000-4000-8000-${String((next += 1)).padStart(12, "0")}`,
+  });
+
+  // Reading with no fields lists available Linux computers.
+  const readOut = JSON.parse(await service.call(BOT, {}, { owner: true })) as { computers?: unknown[] };
+  assert.deepEqual(readOut.computers, [{ id: "shared", name: "Shared computer", kind: "shared" }]);
+
+  // Host Mac Computer Use remains person-only and is refused immediately.
+  await assert.rejects(() => service.call(BOT, { computerMode: "full" }, { owner: true }), /Only the person/u);
+
+  // Unknown existing VM is refused before posting a held card.
+  await assert.rejects(
+    () => service.call(BOT, { computer: { kind: "existing", computerId: "vm-missing" } }, { owner: true }),
+    /No Bot computer/u,
+  );
+  assert.equal(entries.length, 0);
+
+  // Requesting a new dedicated Linux VM is ALWAYS held (widens), even in an owner-started clean chat.
+  const heldText = await service.call(BOT, { computer: { kind: "new", name: "Research Linux" } }, { owner: true });
+  assert.match(heldText, /waits for them to apply it/u);
+  assert.equal(assigned.length, 0, "never creates or switches a VM until Apply");
+  const held = lastChange(entries);
+  assert.equal(held.mode, "held");
+  assert.equal(held.heldReason, "widens");
+  assert.deepEqual(held.fields, ["computer"]);
+  assert.deepEqual(held.lines, ["Computer: New dedicated computer (Research Linux)"]);
+
+  // Clicking Apply performs the assignment.
+  assert.deepEqual(await service.respond(BOT, held.changeId, "apply"), { ok: true, status: "applied" });
+  assert.deepEqual(assigned, [{ kind: "new", name: "Research Linux" }]);
+
+  // Shorthand string "shared" parses cleanly and is also held.
+  await service.call(BOT, { computer: "shared" }, { owner: true });
+  const sharedHeld = lastChange(entries);
+  assert.equal(sharedHeld.mode, "held");
+  assert.deepEqual(sharedHeld.lines, ["Computer: Shared computer"]);
+  assert.deepEqual(await service.respond(BOT, sharedHeld.changeId, "apply"), { ok: true, status: "applied" });
+  assert.deepEqual(assigned[1], { kind: "shared" });
+});
