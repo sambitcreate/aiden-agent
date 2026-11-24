@@ -28,7 +28,6 @@ import type { ProviderArtwork } from "../../renderer/shared/provider-artwork.js"
 import type { WebSearchSettingsV2 } from "./web-search-provider-registry-core.js";
 import type { WebFetchSettingsV1 } from "../../renderer/shared/web-fetch-settings.js";
 import type { HiddenModelsByProvider } from "../../renderer/shared/model-visibility.js";
-import type { ModelPadMetric, ModelPadPlacements } from "../../renderer/shared/model-pad-preferences.js";
 
 export type ProviderKind = "openai" | "anthropic";
 
@@ -404,23 +403,6 @@ export interface ChatMessage {
   subagents?: SubagentMessageReferenceV1;
 }
 
-/** One of the benchmark scores (defined with the Pad preferences that persist it). */
-export type ModelBenchmarkMetric = ModelPadMetric;
-
-/** Optional, display-only benchmark evidence. It never controls runtime limits or availability. */
-export interface ModelBenchmarkScores {
-  source: "openrouter";
-  datasetSource: "artificial-analysis";
-  sourceLabel: "Artificial Analysis via OpenRouter";
-  sourceUrl: string;
-  citation: string;
-  asOf: string;
-  license: "CC BY 4.0";
-  intelligence?: number;
-  coding?: number;
-  agentic?: number;
-}
-
 /** models.dev list price in USD per 1M tokens; only finite, non-negative fields are kept. */
 export interface ModelCost {
   input?: number;
@@ -460,7 +442,6 @@ export interface ModelInfo {
   /** Training knowledge cutoff (e.g. "2025-05"). */
   knowledge?: string;
   releaseDate?: string;
-  benchmark?: ModelBenchmarkScores;
   /** models.dev list price in USD per 1M tokens. Display-only; never affects limits or routing. */
   cost?: ModelCost;
   /** models.dev canonical model id for the matched row. Display-only. */
@@ -469,31 +450,6 @@ export interface ModelInfo {
   /** True when any trusted metadata source identified the model. */
   matched: boolean;
 }
-
-export interface ModelInsightsStatus {
-  hasKey: boolean;
-  ready: boolean;
-  cachedModelCount: number;
-  /** Benchmark rows the last fetch dropped because they shared a permaslug. */
-  skippedAmbiguousCount: number;
-  fetchedAt?: string;
-  asOf?: string;
-  citation?: string;
-  license?: "CC BY 4.0";
-}
-
-export type ModelInsightsActionErrorCode =
-  | "not_connected"
-  | "invalid_key"
-  | "rate_limited"
-  | "service_unavailable"
-  | "network_error"
-  | "invalid_response"
-  | "local_error";
-
-export type ModelInsightsActionResult =
-  | { ok: true; status: ModelInsightsStatus }
-  | { ok: false; code: ModelInsightsActionErrorCode; message: string };
 
 export interface ChatMeta {
   id: string;
@@ -504,6 +460,12 @@ export interface ChatMeta {
   botId?: string;
   providerId?: string;
   model?: string;
+  /**
+   * This chat's own reasoning effort for its model, set by an Agent Slider
+   * stop. Absent: the per-model saved level applies. Cleared when the model
+   * changes without a level. Never sent to Aiden Remote.
+   */
+  thinkingLevel?: GenerationThinkingLevel;
   /** Bounded last visible message text for list projections; never a full history. */
   preview?: string;
   /**
@@ -910,12 +872,28 @@ export interface AppSettings extends AidenLiveSettingsFields {
   spendingLimits?: import("../../renderer/shared/spending.js").SpendingLimitsSettings;
   lastProviderId?: string;
   lastModel?: string;
+  /**
+   * The reasoning effort picked with the new-chat model, so a new chat lands
+   * on the same Agent Slider stop. Machine-local like `lastModel`; cleared when
+   * the new-chat model changes without a level.
+   */
+  lastThinkingLevel?: GenerationThinkingLevel;
+  /**
+   * Read-only projection of the Agent Slider stored in the portable
+   * config.json (`PortableConfigShape.agentSlider`); settings.json never holds
+   * it. Absent until first seeded. Written only by `setAgentSlider`.
+   */
+  agentSlider?: import("../../renderer/shared/agent-slider.js").AgentSliderSettings;
+  /**
+   * Read-only: config.json holds an `agentSlider` that does not read as a
+   * slider (a malformed hand edit), so `agentSlider` is absent and the
+   * first-run seed refuses to replace it. Only `setAgentSlider` does.
+   */
+  agentSliderUnreadable?: true;
   /** Most recently selected real project workspace ID in the main window (shared with Quick Chat). */
   lastWorkspaceId?: string;
   /** Presentation-only chat models hidden from Mac and paired mobile selection UI. */
   hiddenModelsByProvider?: HiddenModelsByProvider;
-  /** Presentation-only Model Pad positions keyed `provider::model` (at most 2,000). */
-  modelPadPlacements?: ModelPadPlacements;
   /** Presentation-only model-picker pins as distinct `provider::model` values (at most 200). */
   pinnedModels?: string[];
   /**
@@ -923,8 +901,6 @@ export interface AppSettings extends AidenLiveSettingsFields {
    * first (at most 5). Machine-local; never part of the portable config.
    */
   recentModels?: string[];
-  /** Benchmark score that sets Model Pad suggestion height; absent means "coding". */
-  modelPadMetric?: ModelBenchmarkMetric;
   exaEnabled?: boolean;
   /** Versioned Web Search routing/preferences; credentials stay main-owned. */
   webSearch?: WebSearchSettingsV2;

@@ -91,7 +91,10 @@ work while Aiden is in the background.
 | `⌘⌫` | Deny, under the same conditions |
 | `/` | Slash commands in the message box |
 | `@` | Mention a file or folder of the chat's workspace: `↑` / `↓` choose, `↩` or `⇥` adds it as a chip, `Esc` closes; `⌫` at the start of the text removes the last chip |
-| `⇧⌘P` / `⇧⌘A` | In the model picker's List, pin the highlighted model or add it to your Pad (again to undo). The row's pin and Pad icons do the same with the mouse |
+| `⌥⌘[` / `⌥⌘]` | Move this chat one Agent Slider stop down / up, skipping stops that can't run. Rebindable in Settings → Keyboard; does nothing in a Bot's chat or while a reply is running. Works in Quick Chat too |
+| `←` / `→`, `Home` / `End` | On the Agent Slider (the composer's model button opens it), move between stops that can run, or to the first / last one. Typing a letter opens the full model list filtered by it |
+| `⌘L` | In the composer's model popover, open **Other models…** (the full, searchable list). `Esc` in the list goes back to the slider; `Esc` again closes it |
+| `⇧⌘P` | In a model list, pin the highlighted model (again to undo). The row's pin icon does the same with the mouse |
 | `⇧⌘L` | Design mode on / off for this chat (`/design` and `/design off` do the same; gone while `AIDEN_DESIGN_MODE=0` turns design mode off). `Esc` never leaves design mode |
 | `⇧⌘\` | In design mode, expand the canvas (the sidebar folds away and the chat stays on the left) or minimize it again; the same as the **Expand canvas** / **Minimize canvas** button beside Present. Not offered in a window too narrow to keep the sidebar beside the chat |
 

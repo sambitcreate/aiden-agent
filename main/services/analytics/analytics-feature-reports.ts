@@ -8,6 +8,7 @@ import {
   analyticsConnectorPresetId,
   analyticsModelId,
   analyticsProviderId,
+  analyticsSliderStop,
   analyticsThinking,
 } from "./analytics-ids.js";
 import { captureAnalyticsReporter, reportAnalyticsEvent } from "./analytics-report.js";
@@ -22,6 +23,13 @@ export interface ChatMessageSent {
   // Both looked up after the turn has started, so a send never waits for them.
   readonly origin: MessageOrigin | (() => Promise<MessageOrigin>);
   readonly inWorkspace: () => boolean | Promise<boolean>;
+  /**
+   * Desktop sends only: the portable Agent Slider and the chat's own stored
+   * level as the turn read them when it started, so a later Settings edit
+   * cannot change what is counted. Leave it out, or resolve without a slider,
+   * and the event carries no slider properties.
+   */
+  readonly agentSlider?: () => Promise<{ slider: unknown; chatThinkingLevel?: GenerationThinkingLevel } | undefined>;
 }
 
 /** One person's message reached a running turn. Subagent turns never come through here. */
@@ -30,14 +38,27 @@ export function reportChatMessageSent(sent: ChatMessageSent): void {
   void Promise.all([
     Promise.resolve().then(sent.inWorkspace).catch(() => false),
     Promise.resolve().then(() => (typeof sent.origin === "function" ? sent.origin() : sent.origin)),
+    Promise.resolve()
+      .then(() => sent.agentSlider?.())
+      .then((read) =>
+        read
+          ? analyticsSliderStop(read.slider, {
+              providerId: sent.providerId,
+              model: sent.model,
+              thinkingLevel: read.chatThinkingLevel,
+            })
+          : {},
+      )
+      .catch(() => ({})),
   ])
-    .then(([inWorkspace, origin]) =>
+    .then(([inWorkspace, origin, sliderStop]) =>
       report("chat_message_sent", {
         provider_id: analyticsProviderId(sent.providerId),
         model_id: analyticsModelId(sent.providerId, sent.model),
         in_workspace: inWorkspace,
         thinking: analyticsThinking(sent.thinkingLevel),
         origin,
+        ...sliderStop,
       }),
     )
     .catch(() => undefined);

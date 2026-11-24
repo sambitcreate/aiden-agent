@@ -164,16 +164,52 @@ test("headless command output survives a pipe when it exceeds the kernel pipe bu
   assert.equal(parsed.length, 1); assert.equal(parsed[0].preview, preview);
 });
 
-test("insight keys use authenticated file encryption and separate provider names", async (t) => {
+test("stored keys use authenticated file encryption and separate names", async (t) => {
   const dir = temporary(t), credentials = api.insightCredentials(dir);
-  await credentials.write("openrouter", "benchmark-secret");
-  assert.equal(await credentials.read("openrouter"), "benchmark-secret");
-  assert.equal(await credentials.read("aa"), undefined);
-  assert.ok(!readFileSync(join(dir, "credentials", "insights.json"), "utf8").includes("benchmark-secret"));
-  await credentials.delete("openrouter"); assert.equal(await credentials.read("openrouter"), undefined);
+  await credentials.write("telegram", "bot-secret");
+  assert.equal(await credentials.read("telegram"), "bot-secret");
+  assert.equal(await credentials.read("other"), undefined);
+  assert.ok(!readFileSync(join(dir, "credentials", "insights.json"), "utf8").includes("bot-secret"));
+  await credentials.delete("telegram"); assert.equal(await credentials.read("telegram"), undefined);
 });
 
-test("catalog status and insight reads never fetch, and model metadata fetch is fixed and credential-free", async (t) => {
+test("the retired insights keys and caches are deleted, other keys stay, and a second run is harmless", async (t) => {
+  const dir = temporary(t), credentials = api.insightCredentials(dir), original = globalThis.fetch;
+  globalThis.fetch = async () => { throw new Error("the cleanup must not use the network"); };
+  t.after(() => { globalThis.fetch = original; });
+  await credentials.write("aa", "aa-secret");
+  await credentials.write("openrouter", "benchmark-secret");
+  await credentials.write("telegram", "bot-secret");
+  // A retired key that no longer decrypts is still removed.
+  const file = join(dir, "credentials", "insights.json"), stored = JSON.parse(readFileSync(file, "utf8"));
+  stored.entries.aa.ciphertext = Buffer.from("not a valid ciphertext").toString("base64");
+  writeFileSync(file, JSON.stringify(stored));
+  await assert.rejects(credentials.read("aa"));
+  writeFileSync(join(dir, "aa-insights.json"), "null\n");
+  writeFileSync(join(dir, "openrouter-insights.json"), "{}\n");
+  writeFileSync(join(dir, "models-dev.json"), "{}\n");
+  await api.cleanUpRetiredInsights(dir);
+  await api.cleanUpRetiredInsights(dir);
+  assert.deepEqual(await credentials.list(), ["telegram"]);
+  assert.equal(await credentials.read("telegram"), "bot-secret");
+  assert.equal(existsSync(join(dir, "aa-insights.json")), false);
+  assert.equal(existsSync(join(dir, "openrouter-insights.json")), false);
+  assert.equal(existsSync(join(dir, "models-dev.json")), true);
+});
+
+test("`aiden insights` is refused as an unknown command", (t) => {
+  const dir = temporary(t);
+  const result = spawnSync(process.execPath, [join(pkg, "dist", "app", "cli.js"), "insights", "aa", "fetch"], {
+    encoding: "utf8", stdio: "pipe", timeout: 60_000,
+    env: { ...process.env, AIDEN_CODING_AGENT_DIR: dir, PI_OFFLINE: "1", AIDEN_AA_KEY: "aa-secret" },
+  });
+  assert.equal(result.status, 1);
+  assert.equal(result.stdout, "");
+  assert.match(result.stderr, /unknown command "insights"/u);
+  assert.equal(existsSync(join(dir, "aa-insights.json")), false);
+});
+
+test("catalog status never fetches, and model metadata fetch is fixed and credential-free", async (t) => {
   const dir = temporary(t), original = globalThis.fetch; let calls = 0;
   globalThis.fetch = async (url, options) => {
     calls++; assert.equal(url, "https://models.dev/api.json");
@@ -183,7 +219,6 @@ test("catalog status and insight reads never fetch, and model metadata fetch is 
   };
   t.after(() => { globalThis.fetch = original; });
   assert.equal(await api.catalogCommand(dir, ["models-dev", "status"]), null);
-  assert.equal(await api.insightsCommand(dir, ["aa", "show"]), null);
   assert.equal(calls, 0);
   await api.catalogCommand(dir, ["models-dev", "fetch"]); assert.equal(calls, 1);
   assert.ok(readFileSync(join(dir, "models-dev.json"), "utf8").includes('"schemaVersion": 1'));
