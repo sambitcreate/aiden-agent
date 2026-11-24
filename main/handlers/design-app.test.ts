@@ -334,3 +334,22 @@ test("connect and retry pass by person, the sender's document owner and the work
   assert.deepEqual([retry!.method, retry!.input.appRoot, retry!.input.by, retry!.input.permission, retry!.input.owner?.id], ["retry", "apps/web", "person", "ask", 4]);
   assert.deepEqual([running!.method, running!.input.workspaceId, running!.input.permission, running!.input.owner?.documentId], ["running", "site", "ask", documentId]);
 });
+
+test("Enter on Aiden's design-mode card starts no app for a chat the designApp:* channels refuse", async () => {
+  const window = windowContents(6);
+  const owner = rendererDocumentOwner(window.fromMain, () => new Error("x"));
+  const { invoke } = harness();
+  const entered: string[] = [];
+  const enter = createDesignModeCardEnter({
+    // A setDesignMode that lets design mode on for any chat it finds.
+    setDesignMode: async (chatId) => CHATS[chatId] ?? null,
+    broadcastEntered: () => undefined,
+    designApp: { enabled: () => true, entered: (input) => entered.push(input.chatId) },
+  })(owner);
+  for (const chatId of ["site-chat", "bot-chat", "routine-chat"]) {
+    const refused = await Promise.resolve(invoke("designApp:start", window.fromMain, chatId)).then(() => false, () => true);
+    await enter(chatId);
+    assert.equal(entered.includes(chatId), !refused, `${chatId}: Enter starts an app exactly when the channel would`);
+  }
+  assert.deepEqual(entered, ["site-chat"]);
+});

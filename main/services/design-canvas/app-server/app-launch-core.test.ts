@@ -252,6 +252,7 @@ test("lockfileLevelsUp 1 with node_modules is skip, without it is outside-worksp
 
 function surface(overrides: Partial<LaunchSurface> = {}): LaunchSurface {
   return {
+    checkout: "/Users/person/site",
     appRoot: "apps/web",
     installRoot: ".",
     lockfileLevelsUp: 0,
@@ -287,6 +288,7 @@ test("the fingerprint changes when any listed script text, packageManager, devEn
     ["script name", { script: "start" }],
     ["install argv", { installArgv: ["pnpm", "install"] }],
     ["manager", { manager: "npm" }],
+    ["checkout", { checkout: "/Users/person/site-fork" }],
   ];
   for (const [what, change] of changes) assert.notEqual(launchFingerprint(surface(change)), base, what);
 });

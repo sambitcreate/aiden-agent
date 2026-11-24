@@ -77,6 +77,12 @@ export interface LaunchSurfaceRead {
   packageName?: string;
   /** The lockfile's hash, or the install root's package.json hash with no lockfile (D6). */
   lockHash: string;
+  /**
+   * The real app and install folders this read validated and hashed. Spawns
+   * run in these, never in a path rebuilt from the relative roots, which a
+   * link swapped in after the read could point elsewhere.
+   */
+  dirs: { app: string; install: string };
 }
 
 export type LaunchSurfaceProblem = { problem: "launch-file-unreadable"; file: string } | { problem: "script-too-long" };
@@ -206,6 +212,7 @@ async function readSurface(workspaceRoot: string, app: DetectedApp): Promise<Lau
   const install = info.name ? installCommand(info) : null;
   const run = info.name ? runScriptCommand(info, script) : null;
   const surface: LaunchSurface = {
+    checkout: realRoot,
     appRoot: app.root,
     installRoot: app.installRoot,
     lockfileLevelsUp: info.lockfileLevelsUp,
@@ -226,5 +233,6 @@ async function readSurface(workspaceRoot: string, app: DetectedApp): Promise<Lau
     launchFiles: [...new Set(launchFiles)].sort(),
     ...(app.name ? { packageName: app.name } : {}),
     lockHash: lockHash ?? ("hash" in packageJsonHash ? packageJsonHash.hash : "none"),
+    dirs: { app: appDir, install: installDir },
   };
 }

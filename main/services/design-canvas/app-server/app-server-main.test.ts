@@ -293,6 +293,10 @@ function harness(_t: test.TestContext, options: Options = {}) {
     portCalls: [] as Array<{ sticky?: number; fallback: number }>,
     osPorts: 40_000,
     saved: [] as Array<{ root: string; script: string }>,
+    /** The real folder a workspace path resolves to when the surface is read (a link's target). */
+    checkouts: new Map<string, string>(),
+    /** The real folder a relative app or install root resolved to when the surface was read. */
+    realDirs: new Map<string, string>(),
   };
   const records = memoryRecords();
   const consent = new DesignAppConsent();
@@ -328,13 +332,14 @@ function harness(_t: test.TestContext, options: Options = {}) {
       state.calls.toolchain += 1;
       return state.toolchain;
     },
-    fingerprint: async (_root, app): Promise<LaunchSurfaceRead | LaunchSurfaceProblem> => {
+    fingerprint: async (root, app): Promise<LaunchSurfaceRead | LaunchSurfaceProblem> => {
       state.calls.fingerprint += 1;
       if (state.surfaceProblem) return state.surfaceProblem;
       const script = app.script!;
       return {
         fingerprint: state.fingerprints.get(app.root) ?? "F1",
         surface: {
+          checkout: state.checkouts.get(root) ?? root,
           appRoot: app.root,
           installRoot: app.installRoot,
           lockfileLevelsUp: app.packageManager.lockfileLevelsUp,
@@ -351,6 +356,11 @@ function harness(_t: test.TestContext, options: Options = {}) {
         launchFiles: ["vite.config.ts"],
         packageName: app.name,
         lockHash: state.lockHash,
+        dirs: (() => {
+          const checkout = state.checkouts.get(root) ?? root;
+          const under = (relative: string) => (relative === "." ? checkout : `${checkout}/${relative}`);
+          return { app: state.realDirs.get(app.root) ?? under(app.root), install: state.realDirs.get(app.installRoot) ?? under(app.installRoot) };
+        })(),
       };
     },
     records,
@@ -1294,6 +1304,29 @@ test("a described entry naming a non-web root, a missing script or an unsafe nam
   await settle();
   assert.equal(h.cards().length, 0);
   assert.equal(h.jobs.jobs.length, 0);
+});
+
+test("the install and the server run in the checkout the consent covers, even if the workspace link is retargeted after the read", async (t) => {
+  const h = harness(t, { apps: [webApp({ root: "apps/web", installRoot: ".", installed: false })] });
+  // /w/ws is a link to /real/a when the launch surface is read; nothing re-resolves it at spawn.
+  h.state.checkouts.set("/w/ws", "/real/a");
+  void h.servers.start({ ...h.input(), appRoot: "apps/web" });
+  await settle();
+  await h.answer("allow");
+  const install = h.jobs.last();
+  assert.equal(install.input.cwd, "/real/a", "the install runs in the fingerprinted checkout, not the configured path");
+  h.state.apps = [webApp({ root: "apps/web", installRoot: ".", installed: true })];
+  h.jobs.exit(install.view.id, 0);
+  await settle();
+  const server = h.jobs.last();
+  assert.equal(server.input.cwd, "/real/a/apps/web");
+});
+
+test("a nested app root swapped for a link after the read can't redirect the spawn: it runs in the folder the read validated", async (t) => {
+  const h = harness(t, { apps: [webApp({ root: "apps/web", installRoot: "apps/web" })] });
+  h.state.realDirs.set("apps/web", "/w/ws/apps/web-validated");
+  await h.runApp({ appRoot: "apps/web" });
+  assert.equal(h.jobs.last().input.cwd, "/w/ws/apps/web-validated");
 });
 
 test("choose shows a card with reason choose and savesChoice, and Allow calls saveCanvasConfigApp before starting", async (t) => {

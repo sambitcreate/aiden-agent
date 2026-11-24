@@ -225,6 +225,12 @@ export function needsInstall(input: {
 
 /** What a launch consent covers (D5); every value comes from disk and detection, read now. */
 export interface LaunchSurface {
+  /**
+   * The workspace folder's real path: the checkout the consent covers. A
+   * workspace re-pointed at another checkout, or a folder moved, asks again
+   * even when its launch files are identical.
+   */
+  checkout: string;
   appRoot: string;
   installRoot: string;
   lockfileLevelsUp: number;
@@ -261,7 +267,8 @@ const rawJson = (value: unknown) => (value === undefined ? null : JSON.stringify
 /** The canonical object the fingerprint hashes: names sorted, absent values `null`. */
 export function launchFingerprintInput(surface: LaunchSurface): Record<string, unknown> {
   return {
-    v: 2,
+    v: 3,
+    checkout: surface.checkout,
     appRoot: surface.appRoot,
     installRoot: surface.installRoot,
     lockfileLevelsUp: surface.lockfileLevelsUp,
