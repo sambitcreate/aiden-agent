@@ -600,14 +600,18 @@ test("re-reading kept history from a newer host covers the same span, entries th
   assert.deepEqual(ids(), ["m3", "m4", "m5", "m6"]);
   assert.equal(follower.getState().view!.olderCursor, "m3");
 
-  // The host drops "m3", the oldest kept: the re-read is bounded by the span it covered plus a slack.
+  // The host drops "m3", the oldest kept: the re-read is bounded by the span it covered plus a slack,
+  // and cut back to "m4", the earliest kept entry the host still has, so "m1" and "m2" are not added.
   host = host.filter((id) => id !== "m3");
   asked.length = 0;
   snapshot(6);
   await settle();
   assert.deepEqual(asked, [["m5", 4], ["m2", 2]]);
+  assert.deepEqual(ids(), ["m4", "m5", "m6"]);
+  assert.equal(follower.getState().view!.hasOlder, true);
+  assert.equal(follower.getState().view!.olderCursor, "m4", "Load older resumes from an entry the host has");
+  await follower.loadOlder();
   assert.deepEqual(ids(), ["m1", "m2", "m4", "m5", "m6"]);
-  assert.equal(follower.getState().view!.hasOlder, false);
   follower.stop();
 });
 
