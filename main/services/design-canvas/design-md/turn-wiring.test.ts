@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { createDesignNoteOffers, designMdTurnDeps, designOfferable } from "./turn-wiring.js";
+import { designModePromptSection } from "../canvas-tools.js";
+import { createDesignNoteOffers, designMdLive, designMdTurnDeps, designOfferable } from "./turn-wiring.js";
 
 const chat = { bot: false, assistantMode: false, windowless: false, permission: "workspace-write", writeFileExcluded: false };
 
@@ -36,6 +37,17 @@ test("the DESIGN.md turn exists only with the live flag, and carries the turn's 
   assert.equal(deps.reader, services.reader);
   assert.equal(deps.offers, services.offers);
   assert.equal(await deps.stillAvailable!(), true);
+});
+
+test("a turn that excludes design_system gets no DESIGN.md glue and no prompt bullet naming the tool", () => {
+  const excluded = new Set(["design_system"]);
+  assert.equal(designMdLive(true, undefined), true);
+  assert.equal(designMdLive(true, new Set(["write_file"])), true);
+  assert.equal(designMdLive(false, undefined), false);
+  assert.equal(designMdLive(true, excluded), false);
+  // With the tool excluded, the prompt is the flag-off section, which never names it.
+  assert.doesNotMatch(designModePromptSection(designMdLive(true, excluded)), /design_system/u);
+  assert.match(designModePromptSection(designMdLive(true, undefined)), /design_system/u);
 });
 
 function fakes() {

@@ -595,7 +595,7 @@ import {
   recentWrittenPages,
 } from "./design-canvas/main.js";
 import { createDesignMdTurn, withDesignModeSection, type DesignMdTurn } from "./design-canvas/design-md/turn.js";
-import { createDesignNoteOffers, designMdTurnDeps, designOfferable } from "./design-canvas/design-md/turn-wiring.js";
+import { createDesignNoteOffers, designMdLive, designMdTurnDeps, designOfferable } from "./design-canvas/design-md/turn-wiring.js";
 import { reportAnalyticsEvent } from "./analytics/analytics-report.js";
 import { designTurnPages } from "./design-canvas/views.js";
 import {
@@ -2999,6 +2999,8 @@ async function prepareGeneration(
   const designModeOn = async () => (await chatStore.getMeta(params.chatId))?.designMode === true;
   /** DESIGN.md support (spec §6.9), behind its own flag; 2b reuses this read. */
   const designLive = designLiveEnabled();
+  // DESIGN.md (S33) only when the live flag is on and this turn doesn't exclude design_system.
+  const designMdOn = designMdLive(designLive, options.excludeToolNames);
   // The first time design mode is on in a workspace with no design/tokens.css,
   // the note also offers a tokens file and a specimen page built from the
   // workspace's own colours and fonts (see `DesignSystemOffers`): only where
@@ -3023,7 +3025,7 @@ async function prepareGeneration(
       return (await designModeOn()) && current?.folderPath === canvasRoot && current.permission !== "none";
     };
     const mdTurnDeps = designMdTurnDeps({
-      live: designLive,
+      live: designMdOn,
       workspaceRoot: canvasRoot,
       offerable: designSystemOfferable,
       askOffered,
@@ -3116,7 +3118,7 @@ async function prepareGeneration(
       canvasStatusOffered = true;
       generationExtensions.push({
         id: "aiden.design-canvas",
-        systemPrompt: designModePromptSection(designLive),
+        systemPrompt: designModePromptSection(designMdOn),
         tools: [...canvasTools, ...designModeTool],
       });
     } else {
@@ -3243,7 +3245,7 @@ async function prepareGeneration(
    */
   let canvasStatusNoted = false;
   const designNoteOffers = createDesignNoteOffers({
-    live: designLive,
+    live: designMdOn,
     folderPath,
     offerable: designSystemOfferable,
     mdTurn: designMdTurn,
@@ -3281,7 +3283,7 @@ async function prepareGeneration(
     // The prompt is read-only here: the section is patched into the
     // transcript once, as browser discovery and MCP servers do, and again
     // only if the live flag changed its text since.
-    const messages = withDesignModeSection(context.messages, designModePromptSection(designLive), Date.now(), { live: designLive });
+    const messages = withDesignModeSection(context.messages, designModePromptSection(designMdOn), Date.now(), { live: designMdOn });
     if (additions.length === 0 && messages === context.messages) return withCanvasStatus(context);
     return withCanvasStatus({ ...context, messages, tools: [...(context.tools ?? []), ...additions] });
   };

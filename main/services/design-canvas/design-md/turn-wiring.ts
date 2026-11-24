@@ -25,6 +25,16 @@ export function designOfferable(chat: {
   );
 }
 
+/**
+ * Whether this turn gets DESIGN.md at all: the live flag is on and the turn
+ * doesn't exclude `design_system`. When it's false there is no tool, no
+ * status sentence or draft offer, and the prompt section is the flag-off one,
+ * so Aiden is never told to call a tool it doesn't have.
+ */
+export function designMdLive(live: boolean, excludeToolNames: ReadonlySet<string> | undefined): boolean {
+  return live && !excludeToolNames?.has("design_system");
+}
+
 /** The DESIGN.md turn's options, only with the live flag on. */
 export function designMdTurnDeps(input: {
   live: boolean;
