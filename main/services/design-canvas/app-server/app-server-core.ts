@@ -395,16 +395,20 @@ export const DENO_MARKERS: readonly string[] = ["deno.lock", "deno.json", "deno.
 // One semver prerelease identifier: a number without leading zeros, or text.
 const PRERELEASE_ID = String.raw`(?:0|[1-9]\d*|\d*[A-Za-z-][0-9A-Za-z-]*)`;
 const BUILD_ID = String.raw`[0-9A-Za-z-]+`;
+// Corepack's pin: `sha512.<hex>`, or an SRI-style `sha512-<base64>` with `/`, `+` and `=`.
+const COREPACK_HASH = String.raw`sha(?:1|224|256|384|512)(?:\.[0-9a-fA-F]+|-[0-9A-Za-z+/]+={0,2})`;
 const PACKAGE_MANAGER_FIELD = new RegExp(
   String.raw`^([a-z]+)(?:@(0|[1-9]\d*)\.(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)` +
-    String.raw`(?:-${PRERELEASE_ID}(?:\.${PRERELEASE_ID})*)?(?:\+${BUILD_ID}(?:\.${BUILD_ID})*)?)?$`,
+    String.raw`(?:-${PRERELEASE_ID}(?:\.${PRERELEASE_ID})*)?` +
+    String.raw`(?:\+(?:${COREPACK_HASH}|${BUILD_ID}(?:\.${BUILD_ID})*))?)?$`,
   "u",
 );
 
 /**
  * `"pnpm@9.15.0+sha512…"` → `{ name: "pnpm", major: 9 }`. The whole value must
  * be a bare manager or `manager@version` with an exact semver version (as
- * Corepack requires), optionally followed by `+hash`. Anything else, and any
+ * Corepack requires), optionally followed by Corepack's `+sha…` hash or semver
+ * build metadata. Anything else, and any
  * manager but npm, pnpm, yarn or bun, is ignored.
  */
 export function parsePackageManagerField(value: unknown): { name: PackageManagerName; major?: number } | null {

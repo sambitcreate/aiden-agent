@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import test from "node:test";
 import {
   classifyPackage,
@@ -391,6 +392,7 @@ test("an unknown or malformed packageManager field is ignored", () => {
     "pnpm@9.0.0-01",
     "npm@11.0.0+",
     "npm@11.0.0+sha512..ab",
+    "npm@11.0.0+sha512-ab==x",
     "pnpm@09.0.0",
     "pnpm@9",
     "pnpm@9.0",
@@ -400,9 +402,22 @@ test("an unknown or malformed packageManager field is ignored", () => {
   assert.deepEqual(parsePackageManagerField("npm@11.11.0+sha512.3f1c0e9a8b"), { name: "npm", major: 11 });
   assert.deepEqual(parsePackageManagerField("pnpm@10.0.0-rc.1"), { name: "pnpm", major: 10 });
   assert.deepEqual(parsePackageManagerField("yarn@4.0.0-rc.0.x-1+sha224.9f"), { name: "yarn", major: 4 });
+  // Corepack's SRI-style pin carries base64 `/`, `+` and `=`.
+  assert.deepEqual(parsePackageManagerField("pnpm@10.5.2+sha512-82gRxKrh/eY5U+nNorkTF/cw=="), { name: "pnpm", major: 10 });
+  assert.deepEqual(parsePackageManagerField("yarn@4.6.0+sha224.953c8233f7a92884eee2de69a1b92d1f2ec1655e66d08071ba9a02fa"), {
+    name: "yarn",
+    major: 4,
+  });
   assert.equal(decidePackageManager(signals({ field: "pnpm@9.0.0-alpha..1", files: [] })).name, "npm");
   assert.equal(decidePackageManager(signals({ field: "pnpm@junk", files: [] })).name, "npm");
   assert.equal(decidePackageManager(signals({ field: "deno@2", files: ["yarn.lock"] })).name, "yarn");
+});
+
+test("this repository's own Corepack-pinned packageManager is a declaration", () => {
+  const field = (JSON.parse(readFileSync(new URL("../../../../package.json", import.meta.url), "utf8")) as { packageManager: string })
+    .packageManager;
+  assert.match(field, /\+sha512-/u);
+  assert.equal(parsePackageManagerField(field)?.name, "npm");
 });
 
 test("one manager's lockfile decides the manager", () => {
