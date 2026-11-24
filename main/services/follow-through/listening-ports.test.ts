@@ -586,7 +586,7 @@ test("an attach root whose pid is gone answers with no sockets and no rows", asy
   assert.deepEqual(result.get("attach:r"), { ok: true, sockets: [], rows: [] });
 });
 
-test("portHolders on Linux fails closed when an unreadable process is an ancestor of a holder it found", async () => {
+test("portHolders on Linux fails closed when an unreadable process is right above the outermost holder it found", async () => {
   // 40 can't be read and is 10's parent: it may hold the same listening socket (a forked fd), so it may be the outermost holder.
   const deps = linuxDeps({
     exec: async () => ({ ok: true, stdout: "40 1 40 501\n10 40 10 501\n", stderr: "", exitCode: 0 }),
@@ -594,6 +594,21 @@ test("portHolders on Linux fails closed when an unreadable process is an ancesto
     fds: { 10: ["socket:[11]"], 40: denied() },
   });
   assert.equal((await portHolders(5173, 501, deps)).ok, false);
+  // 10 holds it under a readable parent 30 (which doesn't), below an unreadable 40: a session daemon above
+  // everything, such as an sshd session or cua-spacesd. 40 could have handed the socket down only through 30.
+  const below = linuxDeps({
+    exec: async () => ({ ok: true, stdout: "40 1 40 501\n30 40 30 501\n10 30 10 501\n", stderr: "", exitCode: 0 }),
+    tcp: [TCP_HEADER, row("0100007F:1435", "11")].join("\n"),
+    fds: { 10: ["socket:[11]"], 30: [], 40: denied() },
+  });
+  assert.deepEqual(await portHolders(5173, 501, below), { ok: true, pids: [10] });
+  // The same chain where 30 holds the socket too: 40, right above the outermost holder, may hold it as well.
+  const chain = linuxDeps({
+    exec: async () => ({ ok: true, stdout: "40 1 40 501\n30 40 30 501\n10 30 10 501\n", stderr: "", exitCode: 0 }),
+    tcp: [TCP_HEADER, row("0100007F:1435", "11")].join("\n"),
+    fds: { 10: ["socket:[11]"], 30: ["socket:[11]"], 40: denied() },
+  });
+  assert.equal((await portHolders(5173, 501, chain)).ok, false);
 });
 
 test("on Linux, an attach root whose subtree holds another user's unreadable process answers its rows with the failed read", async () => {

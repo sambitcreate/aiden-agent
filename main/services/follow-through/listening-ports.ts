@@ -682,15 +682,21 @@ export async function portHolders(
       for (const inode of mineHere) held.add(inode);
     }
     if (unreadable.size && [...inodes].some((inode) => !held.has(inode))) return { ok: false, reason: `a holder of port ${port} couldn't be read` };
-    // A skipped process above a holder may share its socket (a forked descriptor), and so be the outermost holder (A-m2).
+    // A skipped process right above the outermost holder of a chain may share its socket (a descriptor
+    // handed down by fork), and so be the outermost holder itself (A-m2). One higher up could have handed it
+    // down only through the readable process below it, which doesn't hold it; an unreadable session daemon
+    // above everything (an sshd session, a sandbox agent) is therefore no reason to fail.
     if (unreadable.size) {
       const parent = new Map(table.rows.map((row) => [row.pid, row.ppid]));
+      const holding = new Set(pids);
       for (const pid of pids) {
         const seen = new Set<number>();
-        for (let up = parent.get(pid); up !== undefined && up > 1 && !seen.has(up); up = parent.get(up)) {
-          if (unreadable.has(up)) return { ok: false, reason: `an ancestor of port ${port}'s holder couldn't be read` };
-          seen.add(up);
+        let outermost = pid;
+        while (holding.has(parent.get(outermost) ?? -1) && !seen.has(outermost)) {
+          seen.add(outermost);
+          outermost = parent.get(outermost)!;
         }
+        if (unreadable.has(parent.get(outermost) ?? -1)) return { ok: false, reason: `the process above port ${port}'s holder couldn't be read` };
       }
     }
     return { ok: true, pids };
