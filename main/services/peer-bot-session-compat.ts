@@ -9,8 +9,10 @@ import {
   AIDEN_REMOTE_BOT_SESSION_BLOCKED_REASONS,
   AIDEN_REMOTE_BOT_SESSION_STATES,
   AIDEN_REMOTE_PROTOCOL_VERSION,
+  parseAidenRemoteBotAccessRequest,
   parseAidenRemoteBotApproval,
   parseAidenRemoteBotHandoff,
+  parseAidenRemoteBotPlan,
   parseAidenRemoteBotQuestion,
   parseAidenRemoteBotSessionActivity,
   parseAidenRemoteBotSessionEntry,
@@ -34,6 +36,8 @@ const SESSION_KEYS = [
   "activity",
   "queued",
   "handoff",
+  "accessRequest",
+  "plan",
 ] as const;
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -79,6 +83,13 @@ export function peerBotSessionCompat(value: unknown): unknown {
   // A hand-off this client cannot read is left for the host's own window.
   if (has(session, "handoff") && session.handoff !== null && !parses(parseAidenRemoteBotHandoff, session.handoff)) {
     session.handoff = null;
+  }
+  // A folder request or plan card this client cannot read is answered on the host.
+  for (const [key, parse] of [
+    ["accessRequest", parseAidenRemoteBotAccessRequest],
+    ["plan", parseAidenRemoteBotPlan],
+  ] as const) {
+    if (has(session, key) && session[key] !== null && !parses(parse, session[key])) session[key] = null;
   }
   if (
     has(session, "activity") &&

@@ -452,6 +452,20 @@ test("the host's real Bot session, send receipt and controls pass this Mac's con
   };
   assert.deepEqual([paused.state, paused.handoff], [handoffs.pausedSession.state, handoffs.pausedSession.handoff]);
   assert.equal(paused.state, "paused");
+  // A folder request and a plan reach the paired Mac on a plain read too, not only on the stream.
+  const asking = (await peerOperationResult({ operation: "botSession", resourceId: "bot_1" }, contract.botAccessRequests.session)) as {
+    accessRequest?: unknown;
+  };
+  assert.deepEqual(asking.accessRequest, contract.botAccessRequests.session.accessRequest);
+  const planning = (await peerOperationResult({ operation: "botSession", resourceId: "bot_1" }, contract.botPlans.session)) as {
+    plan?: unknown;
+  };
+  assert.deepEqual(planning.plan, contract.botPlans.session.plan);
+  const unreadable = (await peerOperationResult({ operation: "botSession", resourceId: "bot_1" }, {
+    ...contract.botPlans.session,
+    plan: { ...contract.botPlans.session.plan, status: "reconsidering" },
+  })) as { plan?: unknown };
+  assert.equal(unreadable.plan, null, "a plan this Mac can't read is left for the host");
   assert.deepEqual(
     await peerOperationResult({ operation: "botSend", resourceId: "bot_1" }, fixtures.botSessionSend!.response),
     fixtures.botSessionSend!.response,
