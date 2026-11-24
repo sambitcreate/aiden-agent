@@ -25,12 +25,13 @@ import type { BotToolCallCheck } from "./bot-extension.js";
 import type { BotLiveApproval } from "./bot-tool-assembly.js";
 
 const ELEMENT_CLICKS = new Set(["click", "double_click", "right_click"]);
-/** Roles that take typed text: text fields and areas (secure and search fields among them) and combo boxes. */
-const TEXT_ENTRY_ROLES = ["textfield", "textarea", "searchfield", "combobox", "textbox", "searchbox"];
+/** Roles that take typed text: text fields and areas (secure and search fields among them), AT-SPI text/entry/password roles, and combo boxes. */
+const TEXT_ENTRY_ROLES = ["textfield", "textarea", "searchfield", "combobox", "textbox", "searchbox", "passwordtext"];
+const EXACT_TEXT_ENTRY_ROLES = new Set(["text", "roletext", "entry", "roleentry"]);
 
 function takesText(element: BotComputerElement | undefined): boolean {
   const role = (element?.role ?? "").toLowerCase().replace(/[^a-z]/gu, "");
-  return TEXT_ENTRY_ROLES.some((kind) => role.includes(kind));
+  return EXACT_TEXT_ENTRY_ROLES.has(role) || TEXT_ENTRY_ROLES.some((kind) => role.includes(kind));
 }
 
 /** Whether a `key` chord edits text: a character anywhere, Backspace or Delete only in a text field the Bot is in. */

@@ -250,6 +250,38 @@ test("on the guest driver lane the rules read the clicked element, its app and w
   }
 });
 
+test("Linux AT-SPI password and entry roles keep focus on Backspace and classify password fields as credentials", () => {
+  const passwordFacts = {
+    run: "run-1",
+    epoch: 0,
+    app: "Chromium",
+    windowTitle: "Sign in",
+    focused: { role: "password text", label: "Field 1" },
+  };
+  const backspaceInPassword = botComputerAction(
+    { args: { action: "key", keys: "backspace", intent: "Delete the extra letter" } },
+    passwordFacts,
+  );
+  assert.equal(backspaceInPassword.action?.surface, "computer");
+  assert.equal(backspaceInPassword.action && "action" in backspaceInPassword.action ? backspaceInPassword.action.action : undefined, "key");
+  assert.equal(classifyBotAction(backspaceInPassword.action!, []).classes.has("credentials"), true);
+
+  const entryFacts = {
+    run: "run-1",
+    epoch: 0,
+    app: "Chromium",
+    windowTitle: "Search",
+    focused: { role: "entry", label: "Query" },
+  };
+  const backspaceInEntry = botComputerAction(
+    { args: { action: "key", keys: "backspace", intent: "Delete the extra letter" } },
+    entryFacts,
+  );
+  assert.equal(backspaceInEntry.action && "action" in backspaceInEntry.action ? backspaceInEntry.action.action : undefined, "key");
+  assert.equal(classifyBotAction(backspaceInEntry.action!, []).classes.has("delete"), false);
+  assert.equal(classifyBotAction(backspaceInEntry.action!, []).classes.has("credentials"), false);
+});
+
 /* ------------------------------------------------------------------------- */
 /* Through a real Bot turn                                                    */
 /* ------------------------------------------------------------------------- */

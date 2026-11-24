@@ -2239,3 +2239,15 @@ test("refused ActionResult falls back to 0.38 top-level recovery hint when error
   );
   await controller.close();
 });
+
+test("Linux AT-SPI password text role marks secureFieldInCapture just like AXSecureTextField", async () => {
+  const atSpiForm = [
+    { role: "entry", label: "Username", value: "ada", frame: { x: 110, y: 60, w: 80, h: 20 }, depth: 1 },
+    { role: "password text", label: "Secret", value: "••••••••", frame: { x: 110, y: 90, w: 80, h: 20 }, depth: 1 },
+  ];
+  const { controller } = harness(true, 0, { elements: () => atSpiForm });
+  await capture(controller, "som");
+  const descriptor = await controller.approvalFor({ action: "type", text: "hunter2" });
+  assert.equal(descriptor?.secureFieldInCapture, true);
+  await controller.close();
+});

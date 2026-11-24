@@ -13,9 +13,18 @@ import {
   GUEST_DRIVER_ENABLED_FILE,
   GUEST_DRIVER_SOCKET,
   GUEST_DRIVER_STAGING,
+  LINUX_GUEST_DRIVER_BINARY,
+  LINUX_GUEST_DRIVER_ENABLED_FILE,
+  LINUX_GUEST_DRIVER_NOTICE,
+  LINUX_GUEST_DRIVER_PIN,
+  LINUX_GUEST_DRIVER_SERVICE,
+  LINUX_GUEST_DRIVER_SOCKET,
+  LINUX_GUEST_DRIVER_UNIT,
   guestDriverBridgeScript,
   guestDriverLaunchAgentPlist,
+  guestDriverRestartScript,
   guestDriverSuspendScript,
+  guestDriverSystemdUnit,
   guestDriverVerifyScript,
   guestDriverWaitScript,
   installGuestDriver,
@@ -24,6 +33,7 @@ import {
   type GuestDriverLocation,
   type GuestDriverPin,
 } from "./guest-driver-install.js";
+import { AIDEN_BOT_COMPUTERS_LINUX_ENV } from "./linux-guest-flag.js";
 import { BotComputerError, type BotComputerGuestCommandResult } from "./types.js";
 
 /** A small XML property-list reader (dict, array, string, integer, true, false), independent of the generator. */
@@ -338,4 +348,163 @@ test("suspending removes the enabled file so the agent isn't kept alive, and lea
   const bridge = sh(guestDriverBridgeScript({ home, uid: 501 }, 0.5), home);
   assert.equal(bridge.status, 69, "no daemon is back yet, so the bridge gives up instead of connecting");
   assert.doesNotMatch(bridge.stdout, /connected/u);
+});
+
+/* ------------------------------------------------------------------------- */
+/* Linux guest driver (AIDEN_BOT_COMPUTERS_LINUX=1)                          */
+/* ------------------------------------------------------------------------- */
+
+const LINUX_LOCATION: GuestDriverLocation = { home: "/home/aiden", uid: 1000 };
+const hasSha256sum = existsSync("/usr/bin/sha256sum");
+
+function tempLinuxHome(t: test.TestContext): string {
+  const home = mkdtempSync(path.join(process.platform === "win32" ? tmpdir() : "/tmp", "agd-"));
+  t.after(() => rmSync(home, { recursive: true, force: true }));
+  mkdirSync(path.join(home, path.dirname(LINUX_GUEST_DRIVER_BINARY)), { recursive: true });
+  mkdirSync(path.join(home, path.dirname(LINUX_GUEST_DRIVER_UNIT)), { recursive: true });
+  return home;
+}
+
+test("Linux install locates /home, verifies via sha256sum without codesign, and installs a systemd user unit without a password", async (t) => {
+  const calls: Call[] = [];
+  const steps: string[] = [];
+  const notice = "/Applications/Aiden Agent.app/Contents/Helpers/cua-driver-linux-arm64/LICENSE.cua-driver.md";
+  const location = await installGuestDriver(
+    {
+      guestSsh: async (command, options) => {
+        const call = { command, stdin: options.stdin, stdinFile: options.stdinFile };
+        calls.push(call);
+        if (calls.length === 1) return result(0, "aiden-guest-driver 1000 /home/aiden\n");
+        return result(0);
+      },
+      driverPath: "/Applications/Aiden Agent.app/Contents/Helpers/cua-driver-linux-arm64/cua-driver",
+      noticePath: notice,
+      pin: LINUX_GUEST_DRIVER_PIN,
+      password: "GuestPassword0123456789abcdefgh",
+      guestOs: "linux",
+    },
+    { onStep: (step) => steps.push(step) },
+  );
+
+  assert.deepEqual(location, LINUX_LOCATION);
+  assert.deepEqual(steps, ["locate", "copy", "verify", "notice", "agent", "wait_for_socket"]);
+  // Verify uses sha256sum and never calls codesign.
+  assert.match(calls[2].command, /\/usr\/bin\/sha256sum/u);
+  assert.equal(calls[2].command.includes("codesign"), false);
+  // Notice lands under ~/.local/share/aiden/cua-driver.
+  const home = tempLinuxHome(t);
+  const noticeRun = sh(calls[3].command, home, "MIT License\n");
+  assert.equal(noticeRun.status, 0, noticeRun.stderr);
+  assert.equal(readFileSync(path.join(home, LINUX_GUEST_DRIVER_NOTICE), "utf8"), "MIT License\n");
+  // Agent writes the systemd user unit directly on stdin with no password anywhere.
+  const agent = calls[4];
+  assert.ok(agent.stdin?.startsWith("[Unit]\n"));
+  assert.match(agent.command, /systemctl --user daemon-reload/u);
+  assert.match(agent.command, new RegExp(`systemctl --user enable ${LINUX_GUEST_DRIVER_SERVICE}`, "u"));
+  assert.match(agent.command, new RegExp(`systemctl --user restart ${LINUX_GUEST_DRIVER_SERVICE}`, "u"));
+  for (const call of calls) {
+    assert.equal(call.command.includes("GuestPassword0123456789abcdefgh"), false);
+    assert.equal(call.stdin?.includes("GuestPassword0123456789abcdefgh") ?? false, false);
+  }
+});
+
+test("Linux guest location accepts plain homes under /home and rejects /Users or traversal", () => {
+  assert.deepEqual(parseGuestDriverLocation("aiden-guest-driver 1000 /home/aiden\n", "linux"), LINUX_LOCATION);
+  assert.deepEqual(parseGuestDriverLocation("aiden-guest-driver 1001 /home/ada.lovelace\n", "linux"), {
+    uid: 1001,
+    home: "/home/ada.lovelace",
+  });
+  for (const output of [
+    "aiden-guest-driver 501 /Users/lume",
+    "aiden-guest-driver 0 /root",
+    "aiden-guest-driver 1000 /home/..",
+    "aiden-guest-driver 1000 /home/.",
+    "aiden-guest-driver 1000 /home/a b",
+    "",
+  ]) {
+    assert.throws(() => parseGuestDriverLocation(output, "linux"), BotComputerError);
+  }
+});
+
+test("Linux systemd user unit uses absolute paths, DISPLAY=:0, bus env, and keeps telemetry off", () => {
+  const unit = guestDriverSystemdUnit(LINUX_LOCATION);
+  assert.match(unit, /^ConditionPathExists=\/home\/aiden\/\.local\/share\/aiden\/cua-driver\.enabled$/mu);
+  assert.match(unit, /^After=graphical-session\.target$/mu);
+  assert.match(unit, /^WorkingDirectory=\/home\/aiden$/mu);
+  assert.match(unit, /^Environment="HOME=\/home\/aiden"$/mu);
+  assert.match(unit, /^Environment="DISPLAY=:0"$/mu);
+  assert.match(unit, /^Environment="XDG_RUNTIME_DIR=\/run\/user\/1000"$/mu);
+  assert.match(unit, /^Environment="DBUS_SESSION_BUS_ADDRESS=unix:path=\/run\/user\/1000\/bus"$/mu);
+  assert.match(unit, /^Environment="CUA_DRIVER_RS_TELEMETRY_ENABLED=0"$/mu);
+  assert.match(unit, /^Environment="CUA_DRIVER_DISABLE_RUN_SCRIPT=1"$/mu);
+  assert.match(unit, /^Environment="DO_NOT_TRACK=1"$/mu);
+  assert.match(
+    unit,
+    /^ExecStart=\/home\/aiden\/\.local\/share\/aiden\/cua-driver\/cua-driver serve --socket \/home\/aiden\/\.local\/share\/aiden\/cua-driver\.sock --pid-file \/home\/aiden\/\.local\/share\/aiden\/cua-driver\.pid --no-overlay --no-permissions-gate$/mu,
+  );
+  assert.equal(unit.includes("~"), false);
+  assert.match(guestDriverRestartScript(LINUX_LOCATION, "linux"), /systemctl --user restart cua-driver\.service/u);
+});
+
+test("Linux verify script rejects mismatched SHA-256 and places matching binary without codesign", { skip: !hasSha256sum }, (t) => {
+  const home = tempLinuxHome(t);
+  writeFileSync(path.join(home, GUEST_DRIVER_STAGING), "wrong bytes");
+  const rejected = sh(guestDriverVerifyScript(LINUX_GUEST_DRIVER_PIN, "linux"), home);
+  assert.equal(rejected.status, 70);
+  assert.equal(existsSync(path.join(home, GUEST_DRIVER_STAGING)), false);
+  assert.equal(existsSync(path.join(home, LINUX_GUEST_DRIVER_BINARY)), false);
+
+  const bytes = "#!/bin/sh\necho ok\n";
+  writeFileSync(path.join(home, GUEST_DRIVER_STAGING), bytes);
+  const matchingPin: GuestDriverPin = {
+    version: LINUX_GUEST_DRIVER_PIN.version,
+    binarySha256: createHash("sha256").update(bytes).digest("hex"),
+  };
+  const accepted = sh(guestDriverVerifyScript(matchingPin, "linux"), home);
+  assert.equal(accepted.status, 0, accepted.stderr);
+  assert.equal(existsSync(path.join(home, GUEST_DRIVER_STAGING)), false);
+  assert.equal(readFileSync(path.join(home, LINUX_GUEST_DRIVER_BINARY), "utf8"), bytes);
+});
+
+test("Linux bridge and suspend manage the enabled file, clean environment, and dead socket", async (t) => {
+  const home = tempLinuxHome(t);
+  const location = { home, uid: 1000 };
+  const binary = path.join(home, LINUX_GUEST_DRIVER_BINARY);
+  writeFileSync(binary, '#!/bin/sh\nprintf "ARGS %s\\n" "$*"\n/usr/bin/env\n');
+  chmodSync(binary, 0o755);
+  const socket = path.join(home, LINUX_GUEST_DRIVER_SOCKET);
+  const server = createServer();
+  await new Promise<void>((resolve) => server.listen(socket, resolve));
+  t.after(() => server.close());
+
+  const run = sh(guestDriverBridgeScript(location, 1, "linux"), home, undefined, { AIDEN_SECRET: "provider-key" });
+  assert.equal(run.status, 0, run.stderr);
+  assert.match(run.stdout, new RegExp(`^ARGS mcp --embedded --socket ${socket.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&")}$`, "mu"));
+  assert.match(run.stdout, /^DISPLAY=:0$/mu);
+  assert.match(run.stdout, /^CUA_DRIVER_RS_TELEMETRY_ENABLED=0$/mu);
+  assert.doesNotMatch(run.stdout, /AIDEN_SECRET|provider-key/u);
+  assert.equal(existsSync(path.join(home, LINUX_GUEST_DRIVER_ENABLED_FILE)), true);
+
+  await new Promise<void>((resolve) => server.close(() => resolve()));
+  const suspended = sh(guestDriverSuspendScript("linux"), home);
+  assert.equal(suspended.status, 0, suspended.stderr);
+  assert.equal(existsSync(path.join(home, LINUX_GUEST_DRIVER_ENABLED_FILE)), false);
+  assert.equal(existsSync(socket), false);
+
+  const afterSuspend = sh(guestDriverBridgeScript(location, 0.5, "linux"), home);
+  assert.equal(afterSuspend.status, 69);
+});
+
+test("AIDEN_BOT_COMPUTERS_LINUX=1 switches guest driver defaults from macOS to Linux", () => {
+  const previous = process.env[AIDEN_BOT_COMPUTERS_LINUX_ENV];
+  try {
+    delete process.env[AIDEN_BOT_COMPUTERS_LINUX_ENV];
+    assert.match(guestDriverSuspendScript(), /codesign/u);
+    process.env[AIDEN_BOT_COMPUTERS_LINUX_ENV] = "1";
+    assert.match(guestDriverSuspendScript(), /systemctl --user stop cua-driver\.service/u);
+    assert.equal(guestDriverSuspendScript().includes("codesign"), false);
+  } finally {
+    if (previous === undefined) delete process.env[AIDEN_BOT_COMPUTERS_LINUX_ENV];
+    else process.env[AIDEN_BOT_COMPUTERS_LINUX_ENV] = previous;
+  }
 });

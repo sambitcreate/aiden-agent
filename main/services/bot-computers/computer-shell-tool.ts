@@ -13,8 +13,10 @@
 
 import { Type } from "typebox";
 import type { AgentTool, AgentToolResult } from "@earendil-works/pi-agent-core";
+import { quoteRemoteArg } from "../devices/ssh-device-script.js";
 import { boundedToolOutput } from "../tool-output-context.js";
 import { BOT_COMPUTER_UNATTENDED_WAIT_MS, botComputerUnattendedGaveUp, waitForBotWithin, type BotComputerGiveBackBudget } from "./control.js";
+import { BOT_COMPUTER_LINUX_SHELL_USER, botComputerGuestOs, type BotComputerGuestOs } from "./linux-guest-flag.js";
 import {
   BOT_COMPUTER_SHELL_TOOL_NAME,
   BotComputerError,
@@ -53,6 +55,42 @@ export const BOT_COMPUTER_SHELL_TOOL_DESCRIPTION =
   "Use it to install and run tools there. Runs as the computer's user, without the password sudo asks for, for up to 120 seconds, with up to 64 KiB of output. " +
   "~/Shared (/Volumes/My Shared Files) is your Computer folder, shared with the person's Files panel.";
 
+const LINUX_USER_PATTERN = /^[a-z_][a-z0-9_-]{0,31}$/u;
+
+/** Shell tool guidance for the active guest OS. */
+export function botComputerShellToolDescription(
+  guestOs: BotComputerGuestOs = botComputerGuestOs(),
+  shellUser: string = BOT_COMPUTER_LINUX_SHELL_USER,
+): string {
+  if (guestOs !== "linux") return BOT_COMPUTER_SHELL_TOOL_DESCRIPTION;
+  return (
+    "Run a shell command inside your own computer (the Linux virtual machine), never on the person's Mac. " +
+    `Use it to install and run tools there. Runs as the separate ${shellUser} user, without sudo privileges, for up to 120 seconds, with up to 64 KiB of output. ` +
+    "~/Shared is your Computer folder, shared with the person's Files panel."
+  );
+}
+
+/**
+ * The remote command executed over SSH:
+ * - macOS: the command as given, running as the guest user.
+ * - Linux: executed via `sudo -n -H -u <shellUser>` as the separate Bot shell
+ *   user (`aiden-bot`, plan decision 4a) in that user's home folder, so the
+ *   Bot's shell processes are isolated from the desktop/sign-in user and can
+ *   all be terminated during sign-in.
+ */
+export function botComputerShellCommand(
+  command: string,
+  guestOs: BotComputerGuestOs = botComputerGuestOs(),
+  shellUser: string = BOT_COMPUTER_LINUX_SHELL_USER,
+): string {
+  if (guestOs !== "linux") return command;
+  if (!LINUX_USER_PATTERN.test(shellUser)) {
+    throw new BotComputerError("invalid", "The Bot computer shell user name is invalid.");
+  }
+  const inner = `cd "$HOME" || exit 1\n${command}`;
+  return `cd / && exec /usr/bin/sudo -n -H -u ${quoteRemoteArg(shellUser)} -- /bin/sh -c ${quoteRemoteArg(inner)}`;
+}
+
 export interface BotComputerShellDependencies {
   host: Pick<BotComputerHost, "ensureRunning" | "runGuestCommand" | "touch">;
   control: Pick<BotComputerControl, "controller" | "run" | "waitForBot">;
@@ -67,6 +105,8 @@ export interface BotComputerShellTurn {
   unattended?: boolean;
   /** An unattended turn's wait for Give back, shared with its `computer` (its own otherwise). */
   giveBackBudget?: BotComputerGiveBackBudget;
+  /** Guest OS target; defaults to `botComputerGuestOs()`. */
+  guestOs?: BotComputerGuestOs;
 }
 
 function textResult(value: string, isError = false): AgentToolResult<null> {
@@ -91,6 +131,7 @@ export function createBotComputerShellTool(
   deps: BotComputerShellDependencies,
   turn: BotComputerShellTurn,
 ): AgentTool<typeof BotComputerShellParameters, null> {
+  const guestOs = turn.guestOs ?? botComputerGuestOs();
   const reason: BotComputerStartReason = turn.routine ? "routine" : "tool";
   // Nobody can give the computer back on behalf of a routine or Telegram run: it waits only so long, in all.
   const giveBackBudget =
@@ -100,7 +141,7 @@ export function createBotComputerShellTool(
   return {
     name: BOT_COMPUTER_SHELL_TOOL_NAME,
     label: "Computer shell",
-    description: BOT_COMPUTER_SHELL_TOOL_DESCRIPTION,
+    description: botComputerShellToolDescription(guestOs),
     parameters: BotComputerShellParameters,
     executionMode: "sequential",
     async execute(_toolCallId, params, signal, onUpdate) {
@@ -118,8 +159,9 @@ export function createBotComputerShellTool(
           return textResult(botComputerUnattendedGaveUp(`${owner}'s`), true);
         }
         await deps.host.ensureRunning(botId, { reason, signal, onProgress: progress });
+        const remoteCommand = botComputerShellCommand(command, guestOs);
         const result = await deps.control.run(botId, signal, (actionSignal) =>
-          deps.host.runGuestCommand(botId, command, {
+          deps.host.runGuestCommand(botId, remoteCommand, {
             timeoutMs: BOT_COMPUTER_SHELL_TIMEOUT_MS,
             maxOutputBytes: BOT_COMPUTER_SHELL_OUTPUT_BYTES,
             signal: actionSignal,

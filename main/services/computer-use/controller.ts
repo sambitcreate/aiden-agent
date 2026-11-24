@@ -590,9 +590,11 @@ function normalizeApps(result: ParsedDriverResult): AppRecord[] {
   return apps;
 }
 
-/** `AXSecureTextField`, as a role or a secure text field subrole. */
+/** `AXSecureTextField` (macOS) or AT-SPI `password text` (Linux), as a role or subrole. */
 function isSecureTextRole(role: string | undefined): boolean {
-  return role !== undefined && /secure\s*text\s*field/iu.test(role.replace(/^AX/u, ""));
+  if (role === undefined) return false;
+  const normalized = role.replace(/^AX/u, "");
+  return /secure\s*text\s*field/iu.test(normalized) || /password[\s_-]*text/iu.test(normalized);
 }
 
 /** The innermost captured element whose screenshot frame contains the pixel. */

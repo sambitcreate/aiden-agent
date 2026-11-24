@@ -179,4 +179,14 @@ test("the production bridge is Aiden's own ssh to the guest, ending in the drive
   assert.match(remote, /^perl -e 'alarm \d+; exec @ARGV' \/bin\/sh -c /u);
   assert.match(remote, /mcp --embedded --socket/u);
   assert.deepEqual(Object.keys(bridge.env).sort(), ["HOME", "PATH"]);
+
+  const linuxBridge = guestDriverSshBridge(
+    { host: "192.168.64.8", user: "lume" },
+    { home: "/home/lume", uid: 1000 },
+    { paths, env: { PATH: "/usr/bin:/bin", HOME: paths.home }, guestOs: "linux" },
+  );
+  const linuxRemote = linuxBridge.args[linuxBridge.args.length - 1] ?? "";
+  assert.match(linuxRemote, /systemctl --user start cua-driver\.service/u);
+  assert.match(linuxRemote, /\/home\/lume\/\.local\/share\/aiden\/cua-driver\/cua-driver/u);
+  assert.match(linuxRemote, /mcp --embedded --socket/u);
 });

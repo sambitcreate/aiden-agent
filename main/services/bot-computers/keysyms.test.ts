@@ -2,7 +2,9 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import { hidUsageForCode } from "../../../renderer/lib/device-stream.js";
+import { botComputerModifierKeysyms } from "./computer-keystrokes.js";
 import { characterKey, chordKeyStrokes, keysymForHidUsage, textKeyStrokes, XK } from "./keysyms.js";
+import { AIDEN_BOT_COMPUTERS_LINUX_ENV } from "./linux-guest-flag.js";
 
 const down = (keysym: number) => ({ keysym, down: true });
 const up = (keysym: number) => ({ keysym, down: false });
@@ -100,4 +102,49 @@ test("Computer Use's blocked shortcuts, fn and unknown keys are refused", () => 
   assert.throws(() => chordKeyStrokes("fn+f1"), /can't be sent/u);
   assert.throws(() => chordKeyStrokes("cmd+warp"), /Unknown key/u);
   assert.throws(() => chordKeyStrokes(""), /non-empty/u);
+});
+
+test("on Linux guests, Command key chords and click modifiers map to Ctrl while Super stays Super", () => {
+  assert.deepEqual(chordKeyStrokes("cmd+s", { guestOs: "linux" }), [
+    down(XK.Control_L),
+    down(0x73),
+    up(0x73),
+    up(XK.Control_L),
+  ]);
+  assert.deepEqual(chordKeyStrokes("command+shift+t", { guestOs: "linux" }), [
+    down(XK.Shift_L),
+    down(XK.Control_L),
+    down(0x74),
+    up(0x74),
+    up(XK.Control_L),
+    up(XK.Shift_L),
+  ]);
+  assert.deepEqual(chordKeyStrokes("cmd+ctrl+c", { guestOs: "linux" }), [
+    down(XK.Control_L),
+    down(0x63),
+    up(0x63),
+    up(XK.Control_L),
+  ]);
+  assert.deepEqual(chordKeyStrokes("super+a", { guestOs: "linux" }), [
+    down(XK.Super_L),
+    down(0x61),
+    up(0x61),
+    up(XK.Super_L),
+  ]);
+  assert.throws(() => chordKeyStrokes("cmd+q", { guestOs: "linux" }), /blocked/u);
+
+  assert.deepEqual(botComputerModifierKeysyms(["cmd", "shift"], { guestOs: "macos" }), [XK.Shift_L, XK.Super_L]);
+  assert.deepEqual(botComputerModifierKeysyms(["cmd", "shift"], { guestOs: "linux" }), [XK.Shift_L, XK.Control_L]);
+  assert.deepEqual(botComputerModifierKeysyms(["cmd", "ctrl"], { guestOs: "linux" }), [XK.Control_L]);
+
+  const previous = process.env[AIDEN_BOT_COMPUTERS_LINUX_ENV];
+  try {
+    delete process.env[AIDEN_BOT_COMPUTERS_LINUX_ENV];
+    assert.deepEqual(chordKeyStrokes("cmd+c"), [down(XK.Super_L), down(0x63), up(0x63), up(XK.Super_L)]);
+    process.env[AIDEN_BOT_COMPUTERS_LINUX_ENV] = "1";
+    assert.deepEqual(chordKeyStrokes("cmd+c"), [down(XK.Control_L), down(0x63), up(0x63), up(XK.Control_L)]);
+  } finally {
+    if (previous === undefined) delete process.env[AIDEN_BOT_COMPUTERS_LINUX_ENV];
+    else process.env[AIDEN_BOT_COMPUTERS_LINUX_ENV] = previous;
+  }
 });

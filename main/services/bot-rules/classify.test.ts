@@ -240,3 +240,41 @@ test("hostile input is bounded and never throws", () => {
   );
   assert.equal(malformed.classes.size, 0);
 });
+
+test("Linux AT-SPI password roles classify as credentials like AXSecureTextField", () => {
+  for (const role of ["password text", "password-text", "password_text", "ROLE_PASSWORD_TEXT", "PasswordText"]) {
+    const computer = classifyBotAction(
+      {
+        surface: "computer",
+        action: "type",
+        intent: "Type into the field",
+        app: "Chromium",
+        element: { role, label: "Field 1" },
+      },
+      [],
+    );
+    assert.equal(computer.classes.has("credentials"), true, `computer ${role}`);
+
+    const computerUse = classifyBotAction(
+      {
+        surface: "computer_use",
+        action: "type",
+        app: "Chromium",
+        focusedElement: { role, label: "Field 1" },
+      },
+      [],
+    );
+    assert.equal(computerUse.classes.has("credentials"), true, `computer_use ${role}`);
+  }
+  const regularEntry = classifyBotAction(
+    {
+      surface: "computer",
+      action: "type",
+      intent: "Type the search query",
+      app: "Chromium",
+      element: { role: "entry", label: "Search" },
+    },
+    [],
+  );
+  assert.equal(regularEntry.classes.has("credentials"), false);
+});
