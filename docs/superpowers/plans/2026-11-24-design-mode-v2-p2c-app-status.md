@@ -553,23 +553,23 @@ Renderer components:
 
 ### Task 0: Baseline
 
-- [ ] Branch `t3/design-mode-v2-p2c` from `t3/design-mode-v2-p2b` at `dce8fba39` or its later head (`459ad5258` when this plan was revised). Build the native helpers a fresh worktree needs (`npm run build:native:c`, `npm run build:vcc`).
-- [ ] Confirm every 2b item listed under "Stacking". In particular:
+- [x] Branch `t3/design-mode-v2-p2c` from `t3/design-mode-v2-p2b` at `dce8fba39` or its later head (`459ad5258` when this plan was revised). Build the native helpers a fresh worktree needs (`npm run build:native:c`, `npm run build:vcc`).
+- [x] Confirm every 2b item listed under "Stacking". In particular:
   - `rg -n "run\?: string" renderer/shared/design-app.ts` shows `DesignAppLogs.run`, and `main/handlers/design-app.ts` validates `run`;
   - `rg -n "choice-not-saved" renderer/shared/design-app.ts main/services/design-canvas/app-server/app-server-main.ts` finds the problem, its message and the throw;
   - `rg -n "chooseOverRunning|stops: number" main/services/design-canvas/app-server/app-server-main.ts` finds both;
   - `rg -n "stderr.trim" main/services/follow-through/listening-ports.ts` shows the fail-closed rule in `macSockets`.
 
   These are baseline checks, not tests. If anything differs, update the "What exists today" table and D13 first.
-- [ ] Confirm the browser state isn't in the Remote projection or the native clients: `rg -n "BrowserState|browser:event" main/services/aiden-remote* ios android packages/cli/src` finds nothing that serializes `servers`. If it does, D12 needs a Remote check before Task 9.
-- [ ] Run `npm run test:design-mode`, `npm run test:follow-through`, `npx tsx --test main/services/browser/core.test.ts main/services/terminal.test.ts` and `npx tsc --noEmit -p .`. Expected: PASS. Record failures as pre-existing.
+- [x] Confirm the browser state isn't in the Remote projection or the native clients: `rg -n "BrowserState|browser:event" main/services/aiden-remote* ios android packages/cli/src` finds nothing that serializes `servers`. If it does, D12 needs a Remote check before Task 9.
+- [x] Run `npm run test:design-mode`, `npm run test:follow-through`, `npx tsx --test main/services/browser/core.test.ts main/services/terminal.test.ts` and `npx tsc --noEmit -p .`. Expected: PASS. Record failures as pre-existing.
 
 ### Task 1: The shared contract
 
 **Files:**
 - Modify: `renderer/shared/design-app.ts`, `renderer/shared/design-app.test.ts`
 
-- [ ] **Step 1: Write failing tests** in `design-app.test.ts`:
+- [x] **Step 1: Write failing tests** in `design-app.test.ts`:
   - **`logDisplayChunk` and `logDisplayText`, as a table:**
     - a coloured Vite line loses its CSI codes;
     - an OSC 8 hyperlink keeps only its visible text;
@@ -600,10 +600,10 @@ Renderer components:
   - **`designAppAnnouncement`:** running → crashed and attached running → stopped give their sentences; starting → running, stopped → starting and a revision bump with no phase change give `null`.
   - **`designBrowserServers`:** only running apps, origin plus `/`, the escaped root in the label, attached included.
   - **Messages:** every `DesignAppProblem` still has a message with no log text. `attach-not-loopback` mentions `127.0.0.1` and `--host`; `attach-unreachable` doesn't say anything "answered"; `already-running` and `attach-url-invalid` have their D1 and D7 sentences.
-- [ ] **Step 2:** `npx tsx --test renderer/shared/design-app.test.ts`. Expected: FAIL.
-- [ ] **Step 3: Implement** the Interfaces block. Keep the launch variant byte-for-byte. Add the two problems to every exhaustive switch over `DesignAppProblem` (`npx tsc --noEmit -p .` finds them).
-- [ ] **Step 4:** Rerun, plus `npx tsc --noEmit -p .`. Expected: PASS. 2b's cases in the file are unedited.
-- [ ] **Step 5:** Commit `feat(design): 2c's shared status, attach and log display contract`.
+- [x] **Step 2:** `npx tsx --test renderer/shared/design-app.test.ts`. Expected: FAIL.
+- [x] **Step 3: Implement** the Interfaces block. Keep the launch variant byte-for-byte. Add the two problems to every exhaustive switch over `DesignAppProblem` (`npx tsc --noEmit -p .` finds them).
+- [x] **Step 4:** Rerun, plus `npx tsc --noEmit -p .`. Expected: PASS. 2b's cases in the file are unedited.
+- [x] **Step 5:** Commit `feat(design): 2c's shared status, attach and log display contract`.
 
 ### Task 2: `apps[].url` and the attach record
 
@@ -611,7 +611,7 @@ Renderer components:
 - Create: `main/services/design-canvas/app-server/app-attach.ts` (only `parseAttachUrl`, `attachOrigin` and `attachOrigins` for now), `app-attach.test.ts`
 - Modify: `main/services/design-canvas/canvas-config.ts`, `canvas-config.test.ts`, `app-server/app-records.ts`, `app-records.test.ts`, `package.json` (`test:design-mode`), `scripts/ci-test-registry.json`
 
-- [ ] **Step 1: Write failing tests.**
+- [x] **Step 1: Write failing tests.**
   - **`parseAttachUrl`, as a table:**
     - accepted: `http://localhost:4321`, `http://127.0.0.1:5173/`, `http://[::1]:3000`;
     - refused: `https://localhost:4321`, `ws://localhost:1`, `http://192.168.1.10:3000`, `http://localhost.evil.com:3000`, `http://0.0.0.0:3000`, `http://[::]:3000`, `http://localhost`, `http://u:p@localhost:3000`, `http://localhost:3000/app`, `http://localhost:3000?x=1`, `http://localhost:80`, `http://localhost:70000`, 300 characters, a number, `null`.
@@ -635,18 +635,18 @@ Renderer components:
     - `forgetWorkspace` drops attaches;
     - an invalid `attaches` value, or an entry missing `workspaceReal`, reads as none and keeps the rest;
     - a 17th approved root drops the oldest attach and no consent.
-- [ ] **Step 2:** Run the three files. Expected: FAIL.
-- [ ] **Step 3: Implement.** `canvas-config.ts` imports `parseAttachUrl` from `app-attach.ts` (pure). That keeps DM's file free of a second parser. `app-records.ts` validates `attaches` in `parse` and caps it with `capByAge` on write, like the other maps.
-- [ ] **Step 4: Register** `main/services/design-canvas/app-server/app-attach.test.ts`: append it to `test:design-mode` (union) and add it to the `core-git` lane. Run `npm run test:ci-policy`.
-- [ ] **Step 5:** Rerun, plus `npx tsx --test main/services/design-canvas/design-md/*.test.ts`, since DM reads the same config. Expected: PASS.
-- [ ] **Step 6:** Commit `feat(design): read apps[].url and keep attach approvals`.
+- [x] **Step 2:** Run the three files. Expected: FAIL.
+- [x] **Step 3: Implement.** `canvas-config.ts` imports `parseAttachUrl` from `app-attach.ts` (pure). That keeps DM's file free of a second parser. `app-records.ts` validates `attaches` in `parse` and caps it with `capByAge` on write, like the other maps.
+- [x] **Step 4: Register** `main/services/design-canvas/app-server/app-attach.test.ts`: append it to `test:design-mode` (union) and add it to the `core-git` lane. Run `npm run test:ci-policy`.
+- [x] **Step 5:** Rerun, plus `npx tsx --test main/services/design-canvas/design-md/*.test.ts`, since DM reads the same config. Expected: PASS.
+- [x] **Step 6:** Commit `feat(design): read apps[].url and keep attach approvals`.
 
 ### Task 3: Process readers and the per-tick socket pass
 
 **Files:**
 - Modify: `main/services/follow-through/listening-ports.ts`, `listening-ports.test.ts`, `background-jobs.ts`, `background-jobs.test.ts`
 
-- [ ] **Step 1: Write failing tests** with fake `SocketReaderDeps` that count calls.
+- [x] **Step 1: Write failing tests** with fake `SocketReaderDeps` that count calls.
   - **`processTable`:** parses four columns into `uid`; a line with three columns is skipped. (2b's `processTable` fixtures gain a uid column: D13.)
   - **`processSubtree`:** a pid plus its children and grandchildren; a sibling in the same process group isn't included.
   - **`parseLsofCwd`:**
@@ -675,17 +675,17 @@ Renderer components:
     - a root's answer carries its subtree's rows with `uid`.
   - **`designSockets(jobIds, roots)`:** passes `roots` through. Called with no `roots`, it makes one socket read, exactly as before (2b's cases stay unedited).
   - **`ownedPids(rows)`:** every pid in a running design job's tree, a follow-through job's tree and an adopted group's tree; not a stopped job's; not a stranger's.
-- [ ] **Step 2:** Run `npx tsx --test main/services/follow-through/listening-ports.test.ts main/services/follow-through/background-jobs.test.ts`. Expected: FAIL.
-- [ ] **Step 3: Implement.** Reuse `execBounded` limits: a 2 s timeout and a 4 MiB buffer. `processFolders` on macOS: `lsof -nP -a -d cwd -Fpn -u <uid>`. The jobs' socket look keeps `62a4644c6`'s rule unchanged: any stderr fails it, on exit 0 or 1, and exit 1 with empty stderr is a quiet miss. `portHolders` and the roots' read follow the same rule.
-- [ ] **Step 4:** Rerun, plus `npm run test:follow-through`. Expected: PASS.
-- [ ] **Step 5:** Commit `feat(follow-through): process folders, names and owners; a separate socket read for attached servers`.
+- [x] **Step 2:** Run `npx tsx --test main/services/follow-through/listening-ports.test.ts main/services/follow-through/background-jobs.test.ts`. Expected: FAIL.
+- [x] **Step 3: Implement.** Reuse `execBounded` limits: a 2 s timeout and a 4 MiB buffer. `processFolders` on macOS: `lsof -nP -a -d cwd -Fpn -u <uid>`. The jobs' socket look keeps `62a4644c6`'s rule unchanged: any stderr fails it, on exit 0 or 1, and exit 1 with empty stderr is a quiet miss. `portHolders` and the roots' read follow the same rule.
+- [x] **Step 4:** Rerun, plus `npm run test:follow-through`. Expected: PASS.
+- [x] **Step 5:** Commit `feat(follow-through): process folders, names and owners; a separate socket read for attached servers`.
 
 ### Task 4: The scan and the attach check
 
 **Files:**
 - Modify: `app-server/app-attach.ts`, `app-attach.test.ts`
 
-- [ ] **Step 1: Write failing tests** (fake `AttachScanDeps`; real `path` logic with a fake `realpath` map; a fake process table).
+- [x] **Step 1: Write failing tests** (fake `AttachScanDeps`; real `path` logic with a fake `realpath` map; a fake process table).
   - **Scan:**
     - lists a loopback server whose folder is `apps/web`, under root `apps/web`, with `origin`, `processName`, `folder` and `connectable: true`;
     - a folder of `apps/web2` isn't put under `apps/web`; it's listed with `appRoot: "apps/web2"` (B-M3);
@@ -717,32 +717,32 @@ Renderer components:
     - `127.0.0.2` only gives `attach-unreachable`;
     - `[::1]`-only gives `http://[::1]:<port>` with `held: ["::1"]`;
     - a pass gives the pid, ppid, origin, held addresses, name and folder.
-- [ ] **Step 2:** `npx tsx --test main/services/design-canvas/app-server/app-attach.test.ts`. Expected: FAIL.
-- [ ] **Step 3: Implement** D6 and D8.
-- [ ] **Step 4:** Rerun. Expected: PASS.
-- [ ] **Step 5:** Commit `feat(design): find the person's running servers and check an attach`.
+- [x] **Step 2:** `npx tsx --test main/services/design-canvas/app-server/app-attach.test.ts`. Expected: FAIL.
+- [x] **Step 3: Implement** D6 and D8.
+- [x] **Step 4:** Rerun. Expected: PASS.
+- [x] **Step 5:** Commit `feat(design): find the person's running servers and check an attach`.
 
 ### Task 5: The consent broker takes attach cards
 
 **Files:**
 - Modify: `app-server/app-consent.ts`, `app-consent.test.ts`
 
-- [ ] **Step 1: Write failing tests** (new cases; 2b's stay unedited):
+- [x] **Step 1: Write failing tests** (new cases; 2b's stay unedited):
   - `an attach card is sent with kind attach and its display fields`;
   - `a launch and an attach for one root are two cards`. Different keys; neither joins the other;
   - `Not now on an attach card silences Aiden's next attach for that root, not a launch`;
   - `closeAll for the workspace closes attach cards too`.
-- [ ] **Step 2:** Run. Expected: FAIL.
-- [ ] **Step 3: Implement.** Add `AttachConsentCard = Omit<Extract<DesignAppConsentRequest, { kind: "attach" }>, "requestId">` beside `LaunchConsentCard` (`app-consent.ts:22`) and widen `request` (`:46`). Export `attachConsentKey(workspaceId, appRoot)`, which `DesignAppServers` uses.
-- [ ] **Step 4:** Rerun. Expected: PASS.
-- [ ] **Step 5:** Commit `feat(design): the run-app consent broker also asks before attaching`.
+- [x] **Step 2:** Run. Expected: FAIL.
+- [x] **Step 3: Implement.** Add `AttachConsentCard = Omit<Extract<DesignAppConsentRequest, { kind: "attach" }>, "requestId">` beside `LaunchConsentCard` (`app-consent.ts:22`) and widen `request` (`:46`). Export `attachConsentKey(workspaceId, appRoot)`, which `DesignAppServers` uses.
+- [x] **Step 4:** Rerun. Expected: PASS.
+- [x] **Step 5:** Commit `feat(design): the run-app consent broker also asks before attaching`.
 
 ### Task 6: `DesignAppServers`: attaching, detaching and Retry
 
 **Files:**
 - Modify: `app-server/app-server-main.ts`, `app-server-main.test.ts`
 
-- [ ] **Step 1: Write failing tests** with 2b's fake deps, plus a fake `attach` deps whose scan and check answers are scripted, a fake `designSockets` that takes `roots`, a `clearToolchainCache` spy, a `report` spy, and a kill spy.
+- [x] **Step 1: Write failing tests** with 2b's fake deps, plus a fake `attach` deps whose scan and check answers are scripted, a fake `designSockets` that takes `roots`, a `clearToolchainCache` spy, a `report` spy, and a kill spy.
   - **Connect:**
     - `connect from the person registers 127.0.0.1:<port> as running and attached; appForOrigin, isAppOrigin and onOriginsChanged include it`;
     - `a [::1]-only attachment registers [::1] and localhost, never 127.0.0.1; when it also binds 127.0.0.1 later, the next tick adds it` (B-m6);
@@ -784,8 +784,8 @@ Renderer components:
   - **Scan entry point:**
     - `running() answers the scan with busy roots marked and incomplete passed through, and refuses like connect`;
     - `construction, snapshot, presence and the flag off never call any attach or scan dep` (the deps throw).
-- [ ] **Step 2:** `npx tsx --test main/services/design-canvas/app-server/app-server-main.test.ts`. Expected: FAIL.
-- [ ] **Step 3: Implement** D1, D5 and D7–D10 inside the existing per-key queue:
+- [x] **Step 2:** `npx tsx --test main/services/design-canvas/app-server/app-server-main.test.ts`. Expected: FAIL.
+- [x] **Step 3: Implement** D1, D5 and D7–D10 inside the existing per-key queue:
   - the `Watch` union replaces `ServerWatch` on the entry; `watches()`, `tick` and `checkSockets` branch on `kind`;
   - an attach is an attempt with its own controller and admission, and goes through `begin` like any other; `start`, `restart`, `choose` and `retry` check for a live attachment before `begin` (D1);
   - `tick` builds `roots` from the attached watches and passes them to `designSockets`; `checkAttached(entry, watch, result)` holds D9's rules;
@@ -794,15 +794,15 @@ Renderer components:
   - `entry.lastChoose` is set when a choose attempt ends stopped and cleared when one succeeds;
   - the snapshot adds url roots (`source: "attached"`, `stopped`) and keeps 2b's `candidates` and `chosen`;
   - `toggleRoots` drops `attachRoots`; `designModeEntered` attaches the url roots that aren't attached and skips live attachments.
-- [ ] **Step 4:** Rerun, plus every `app-server/*.test.ts`. Expected: PASS. 2b's cases are unedited, #916's choose and stop-after-choose cases included.
-- [ ] **Step 5:** Commit `feat(design): attach to a person's running server, detach, and retry`.
+- [x] **Step 4:** Rerun, plus every `app-server/*.test.ts`. Expected: PASS. 2b's cases are unedited, #916's choose and stop-after-choose cases included.
+- [x] **Step 5:** Commit `feat(design): attach to a person's running server, detach, and retry`.
 
 ### Task 7: `design_app` on url roots
 
 **Files:**
 - Modify: `app-server/app-tool.ts`, `app-tool.test.ts`
 
-- [ ] **Step 1: Write failing tests:**
+- [x] **Step 1: Write failing tests:**
   - `status lists an attached app with source attached and its url`;
   - `start on a url root returns running attached after the card`;
   - `restart and choose on a live attachment answer already-running with its message`;
@@ -810,17 +810,17 @@ Renderer components:
   - `logs on an attached app is an error result naming why`;
   - `an attach start counts toward the 4-per-turn budget`;
   - `the description names url roots once`. This asserts the tool's returned `description` contains "url", which is the tool's API output, not source text.
-- [ ] **Step 2:** Run. Expected: FAIL.
-- [ ] **Step 3: Implement** D11.
-- [ ] **Step 4:** Rerun. Expected: PASS.
-- [ ] **Step 5:** Commit `feat(design): design_app connects and disconnects url roots`.
+- [x] **Step 2:** Run. Expected: FAIL.
+- [x] **Step 3: Implement** D11.
+- [x] **Step 4:** Rerun. Expected: PASS.
+- [x] **Step 5:** Commit `feat(design): design_app connects and disconnects url roots`.
 
 ### Task 8: IPC and production wiring
 
 **Files:**
 - Modify: `main/handlers/design-app.ts`, `main/handlers/design-app.test.ts`, `main/services/design-canvas/main.ts`, `main/services/terminal.ts`, `main/services/terminal.test.ts`, `renderer/lib/ipc.ts`
 
-- [ ] **Step 1: Write failing tests** (register and invoke, as 2b's):
+- [x] **Step 1: Write failing tests** (register and invoke, as 2b's):
   - In `main/handlers/design-app.test.ts`, add the three channels to `PERSON_CHANNELS` (`:97-110`). This edit is deliberate (D13): the existing first test then asserts the registered set includes them and that each refuses while the flag is off.
   - `running, connect and retry refuse from a subframe, for a Bot chat, a missing chat and a chat whose workspace has no folder`;
   - `connect validates port (an integer 1–65535) and pid (a positive integer) and refuses anything else`, including strings, floats, `0` and `70000`;
@@ -828,8 +828,8 @@ Renderer components:
   - `connect and retry pass by person, the sender's document owner and the workspace permission`;
   - `running passes the sender's owner and the workspace permission and returns the scan`.
   - In `terminal.test.ts`: `shellPids lists each open session's shell pid and drops it when the session closes`.
-- [ ] **Step 2:** Run. Expected: FAIL.
-- [ ] **Step 3: Implement.**
+- [x] **Step 2:** Run. Expected: FAIL.
+- [x] **Step 3: Implement.**
   - Widen `DesignAppHandlerDeps.servers`' `Pick` and register the three handlers.
   - Add `TerminalService.shellPids()`.
   - In `design-canvas/main.ts`, build the real `AttachScanDeps`:
@@ -841,25 +841,25 @@ Renderer components:
     - `terminalShellPids: () => terminalService.shellPids()`.
 
     Then pass `clearToolchainCache: clearAppToolchainCache` and add `designAppApi.running`, `.connect` and `.retry`. Construction still does no I/O.
-- [ ] **Step 4:** Rerun, plus `npx tsx --test main/handlers/design-app.test.ts main/handlers/design-canvas.test.ts main/services/terminal.test.ts`, the IPC channel inventory test, `npx tsc --noEmit -p .` and `npx tsc --noEmit -p main/tsconfig.json`. Expected: PASS.
-- [ ] **Step 5:** Commit `feat(design): running, connect and retry over designApp IPC`.
+- [x] **Step 4:** Rerun, plus `npx tsx --test main/handlers/design-app.test.ts main/handlers/design-canvas.test.ts main/services/terminal.test.ts`, the IPC channel inventory test, `npx tsc --noEmit -p .` and `npx tsc --noEmit -p main/tsconfig.json`. Expected: PASS.
+- [x] **Step 5:** Commit `feat(design): running, connect and retry over designApp IPC`.
 
 ### Task 9: The browser panel lists design apps
 
 **Files:**
 - Modify: `main/services/browser/core.ts`, `core.test.ts`, `main/services/browser/service.ts`, `main/services/design-canvas/main.ts`
 
-- [ ] **Step 1: Write failing tests** in `core.test.ts`:
+- [x] **Step 1: Write failing tests** in `core.test.ts`:
   - `mergeBrowserServers puts design servers first`;
   - `dedupes a URL the terminal also printed, keeping the design label`;
   - `caps at 12`;
   - `a design server that stopped is gone at the next merge while terminal entries stay`.
 
   Also add a service-level case through `BrowserService` with a fake owner, if the existing service test harness allows it; otherwise the core test is the oracle, and Task 14's E2E checks the panel and opens the listed app in it.
-- [ ] **Step 2:** Run. Expected: FAIL.
-- [ ] **Step 3: Implement** D12. `observeTerminalOutput` (`service.ts:631`) merges through the same function. `setDesignServers` emits only when the list changes.
-- [ ] **Step 4:** Rerun, plus `npx tsx --test main/services/browser/*.test.ts`. Expected: PASS.
-- [ ] **Step 5:** Commit `feat(browser): list design-mode apps under Local servers`.
+- [x] **Step 2:** Run. Expected: FAIL.
+- [x] **Step 3: Implement** D12. `observeTerminalOutput` (`service.ts:631`) merges through the same function. `setDesignServers` emits only when the list changes.
+- [x] **Step 4:** Rerun, plus `npx tsx --test main/services/browser/*.test.ts`. Expected: PASS.
+- [x] **Step 5:** Commit `feat(browser): list design-mode apps under Local servers`.
 
 ### Task 10: The Choose and Connect sheets, and the attach card
 
@@ -869,7 +869,7 @@ Before styling, read `GUI.md`, `docs/design-guide.md` (action shapes, Motion, Co
 - Create: `renderer/design/design-app-sheets.tsx`, `design-app-sheets.test.tsx`
 - Modify: `renderer/design/design-app-consent.tsx`, `design-app-consent.test.tsx`, `package.json` (`test:design-mode`), `scripts/ci-test-registry.json`
 
-- [ ] **Step 1: Write failing tests** (Testing Library, a stub `designAppApi`, `designLive` on unless stated).
+- [x] **Step 1: Write failing tests** (Testing Library, a stub `designAppApi`, `designLive` on unless stated).
   - **Choose sheet:**
     - `lists candidates with label, escaped root, package and script`;
     - `Run calls choose for that root`;
@@ -894,8 +894,8 @@ Before styling, read `GUI.md`, `docs/design-guide.md` (action shapes, Motion, Co
     - `launch and attach cards for one chat both show, oldest first`;
     - `attach problems and already-running never toast`, extending 2b's toast-host case;
     - 2b's launch cases are unedited.
-- [ ] **Step 2:** Run both files. Expected: FAIL.
-- [ ] **Step 3: Implement.**
+- [x] **Step 2:** Run both files. Expected: FAIL.
+- [x] **Step 3: Implement.**
   - **The Choose sheet** is a `Dialog` with a short description ("Pick the apps design mode runs. The first run of each asks you on a card.") and a row list with one `Button` each.
   - **The Connect sheet** is a `Dialog`: title "Connect running server", description "Servers you started from this workspace's folder that listen only on this computer."
   - **Each row:** the address in monospace, "<processName> · <folder>" in secondary text, and the app root. A trailing `Button` Connect (secondary). A disabled row keeps its label and gives its reason in text.
@@ -907,9 +907,9 @@ Before styling, read `GUI.md`, `docs/design-guide.md` (action shapes, Motion, Co
 
     The waiting store keeps both kinds by `requestId`.
   - `QUIET_PROBLEMS` (`design-app-consent.tsx:35`) gains the four attach problems and `already-running` (D3).
-- [ ] **Step 4: Register** `renderer/design/design-app-sheets.test.tsx`: append it to `test:design-mode` and add it to the `renderer-other` lane. Run `npm run test:ci-policy`.
-- [ ] **Step 5:** Rerun, plus `npm run test:design-mode` and `npm run check:aiden-rules`. Expected: PASS.
-- [ ] **Step 6:** Commit `feat(design): Choose and Connect sheets, and the attach card`.
+- [x] **Step 4: Register** `renderer/design/design-app-sheets.test.tsx`: append it to `test:design-mode` and add it to the `renderer-other` lane. Run `npm run test:ci-policy`.
+- [x] **Step 5:** Rerun, plus `npm run test:design-mode` and `npm run check:aiden-rules`. Expected: PASS.
+- [x] **Step 6:** Commit `feat(design): Choose and Connect sheets, and the attach card`.
 
 ### Task 11: The status chip and its menu
 
@@ -917,7 +917,7 @@ Before styling, read `GUI.md`, `docs/design-guide.md` (action shapes, Motion, Co
 - Create: `renderer/design/design-app-chip.tsx`, `design-app-chip.test.tsx`
 - Modify: `renderer/design/design-canvas.tsx` (mount in `actions`, `:1307`), `package.json` (`test:design-mode`), `scripts/ci-test-registry.json`
 
-- [ ] **Step 1: Write failing tests** (Testing Library, a stub `designAppApi` whose invokes the test resolves by hand, `designLive` on unless stated).
+- [x] **Step 1: Write failing tests** (Testing Library, a stub `designAppApi` whose invokes the test resolves by hand, `designLive` on unless stated).
   - **Visibility (B-M2):**
     - `no chip while designLive is off, or for target unavailable`;
     - `for target none, a Connect chip whose menu has only Connect running server…`;
@@ -940,13 +940,13 @@ Before styling, read `GUI.md`, `docs/design-guide.md` (action shapes, Motion, Co
     - `Escape closes the menu and focus returns to the chip`;
     - `closing the Connect sheet returns focus to the chip`;
     - `the chip keeps a visible focus-visible ring after keyboard focus`. Assert the computed `outline` under `data-input-modality="keyboard"`, not class strings.
-- [ ] **Step 2:** `npx tsx --test renderer/design/design-app-chip.test.tsx`. Expected: FAIL.
-- [ ] **Step 3: Implement** D2 and D3.
+- [x] **Step 2:** `npx tsx --test renderer/design/design-app-chip.test.tsx`. Expected: FAIL.
+- [x] **Step 3: Implement** D2 and D3.
   - `useDesignApps(chatId)` reads `designAppApi.status` once per mount and subscribes to `onStatus`, filtered by the snapshot's `workspaceId`. It keeps the last snapshot per workspace in module memory, so a chat switch renders at once (cache-first). The optimistic layer sits on top, per `appRoot`, as D2 says.
   - The chip mounts the Choose and Connect sheets from Task 10 and passes itself as `returnFocus`.
-- [ ] **Step 4: Register** `renderer/design/design-app-chip.test.tsx`: append it to `test:design-mode` and add it to the `renderer-other` lane. Run `npm run test:ci-policy`.
-- [ ] **Step 5:** Rerun, plus `npm run test:design-mode` and `npm run check:aiden-rules`. Expected: PASS.
-- [ ] **Step 6:** Commit `feat(design): the live app status chip`.
+- [x] **Step 4: Register** `renderer/design/design-app-chip.test.tsx`: append it to `test:design-mode` and add it to the `renderer-other` lane. Run `npm run test:ci-policy`.
+- [x] **Step 5:** Rerun, plus `npm run test:design-mode` and `npm run check:aiden-rules`. Expected: PASS.
+- [x] **Step 6:** Commit `feat(design): the live app status chip`.
 
 ### Task 12: The logs drawer
 
@@ -954,7 +954,7 @@ Before styling, read `GUI.md`, `docs/design-guide.md` (action shapes, Motion, Co
 - Create: `renderer/design/design-app-logs.tsx`, `design-app-logs.test.tsx`
 - Modify: `renderer/design/design-canvas.tsx` (drawer host), `renderer/design/design-app-chip.tsx` (Show logs opens it), `main/services/follow-through/background-jobs.ts`, `background-jobs.test.ts` (UTF-8 boundaries), `package.json` (`test:design-mode`), `scripts/ci-test-registry.json`
 
-- [ ] **Step 1: Write failing tests.**
+- [x] **Step 1: Write failing tests.**
   - **Main, in `background-jobs.test.ts`:** a running design job whose log ends with the first two bytes of a three-byte character: `readDesignLog` ends `next` before them and the text has no U+FFFD; after the third byte is written, the next read returns the whole character. A read whose `after` lands on a continuation byte starts at the next character. A stopped job whose log ends mid-character returns every byte, so `next` equals `end`.
   - **Drawer**, with fake timers, a stub `logs` that scripts responses, and a stub pane signal:
     - **Reading (B-B2):**
@@ -975,11 +975,11 @@ Before styling, read `GUI.md`, `docs/design-guide.md` (action shapes, Motion, Co
       - `Escape closes it through the layer stack and focus returns to the chip`;
       - `the log region is focusable by keyboard`.
     - **Motion:** `under Reduce Motion it is shown and removed without waiting`. Use `data-reduce-motion="true"` on `:root`.
-- [ ] **Step 2:** Run both files. Expected: FAIL.
-- [ ] **Step 3: Implement** D4: the drawer, and `readDesignLog`'s boundary rule.
-- [ ] **Step 4: Register** `renderer/design/design-app-logs.test.tsx`: append it to `test:design-mode` and add it to the `renderer-other` lane. Run `npm run test:ci-policy`.
-- [ ] **Step 5:** Rerun, plus `npm run test:design-mode` and `npm run test:follow-through`. Expected: PASS.
-- [ ] **Step 6:** Commit `feat(design): a read-only logs drawer for the app's dev server`.
+- [x] **Step 2:** Run both files. Expected: FAIL.
+- [x] **Step 3: Implement** D4: the drawer, and `readDesignLog`'s boundary rule.
+- [x] **Step 4: Register** `renderer/design/design-app-logs.test.tsx`: append it to `test:design-mode` and add it to the `renderer-other` lane. Run `npm run test:ci-policy`.
+- [x] **Step 5:** Rerun, plus `npm run test:design-mode` and `npm run test:follow-through`. Expected: PASS.
+- [x] **Step 6:** Commit `feat(design): a read-only logs drawer for the app's dev server`.
 
 ### Task 13: Real processes on the host
 
@@ -988,7 +988,7 @@ Before styling, read `GUI.md`, `docs/design-guide.md` (action shapes, Motion, Co
 - Modify: `tests/fixtures/design-app-server/server.mjs` only to add `--fake-child-wildcard` (a child that binds `0.0.0.0`) and `--respawn-child` (a parent that runs the server as a child and starts a new child when it exits). It already has `--host`, `--port`, `--fake-wildcard`, `--fake-late-wildcard` and `--fake-crash-after`.
 - Modify: `package.json` (`test:design-mode`), `scripts/ci-test-registry.json`
 
-- [ ] **Step 1: Write the tests** against real processes in a temp workspace:
+- [x] **Step 1: Write the tests** against real processes in a temp workspace:
   - `a server started from apps/web on 127.0.0.1 is listed under apps/web with its real process name`;
   - `the same server started from outside the workspace isn't listed`;
   - `a server on 0.0.0.0 is listed as not connectable`;
@@ -999,9 +999,9 @@ Before styling, read `GUI.md`, `docs/design-guide.md` (action shapes, Motion, Co
   - `with --respawn-child, killing the child leaves a new child under the same parent holding the port, which the re-bind rule accepts` (A-M5, through `readJobSockets` and the pure re-bind helper).
 
   Every spawned process is killed in `after`.
-- [ ] **Step 2: Register** the file: append it to `test:design-mode` and add it to the `macos` lane. Run `npm run test:ci-policy`.
-- [ ] **Step 3:** Run on the host: `npx tsx --test main/services/design-canvas/app-server/app-attach-process.test.ts`. This exercises the darwin `lsof -d cwd` and `-iTCP` branches headlessly; it opens no window. Expected: PASS.
-- [ ] **Step 4:** Commit `test(design): attach scan against real servers`.
+- [x] **Step 2: Register** the file: append it to `test:design-mode` and add it to the `macos` lane. Run `npm run test:ci-policy`.
+- [x] **Step 3:** Run on the host: `npx tsx --test main/services/design-canvas/app-server/app-attach-process.test.ts`. This exercises the darwin `lsof -d cwd` and `-iTCP` branches headlessly; it opens no window. Expected: PASS.
+- [x] **Step 4:** Commit `test(design): attach scan against real servers`.
 
 ### Task 14: E2E and screenshots
 
@@ -1018,7 +1018,7 @@ Before styling, read `GUI.md`, `docs/design-guide.md` (action shapes, Motion, Co
   - `main/services/terminal.ts`;
   - `tests/fixtures/design-app-server/`.
 
-- [ ] **Step 1: Write the spec.** Launch with `AIDEN_EXPERIMENTAL_DESIGN_LIVE=1` and `AIDEN_E2E_DESIGN_APP_GRACE_MS=15000`, using a temp copy of `tests/fixtures/design-app-server/` as in 2b.
+- [x] **Step 1: Write the spec.** Launch with `AIDEN_EXPERIMENTAL_DESIGN_LIVE=1` and `AIDEN_E2E_DESIGN_APP_GRACE_MS=15000`, using a temp copy of `tests/fixtures/design-app-server/` as in 2b.
   - **Chip and logs:** `the chip shows Start; Start shows the card; Allow brings "App · :<port>"; Show logs shows the fixture's printed URL line; Stop returns to Start`.
   - **Crash and Retry:** `a crashing fixture (`--fake-crash-after=<ms>`) shows Crashed with Retry; the menu status shows the fixed message`.
   - **Connect:**
@@ -1037,8 +1037,8 @@ Before styling, read `GUI.md`, `docs/design-guide.md` (action shapes, Motion, Co
     - `design-app-logs`;
     - `design-app-connect`;
     - `design-app-attach-card`.
-- [ ] **Step 2:** Run `npm run test:e2e:space -- tests/e2e/design-app-status.spec.ts`. Then run `npm run test:e2e:space -- tests/e2e/design-app-server.spec.ts` and `npm run test:e2e:space -- tests/e2e/design-canvas.spec.ts`: 2b's spec and design mode with the flag off must be unchanged. Expected: PASS. The darwin `lsof` branches are covered by Task 13 on the host; window-opening tests run only in the Space.
-- [ ] **Step 3:** Commit `test(design): app status chip, logs and attach E2E`.
+- [x] **Step 2:** Run `npm run test:e2e:space -- tests/e2e/design-app-status.spec.ts`. Then run `npm run test:e2e:space -- tests/e2e/design-app-server.spec.ts` and `npm run test:e2e:space -- tests/e2e/design-canvas.spec.ts`: 2b's spec and design mode with the flag off must be unchanged. Expected: PASS. The darwin `lsof` branches are covered by Task 13 on the host; window-opening tests run only in the Space.
+- [x] **Step 3:** Commit `test(design): app status chip, logs and attach E2E`.
 
 ### Task 15: Docs, memory and spec amendments
 
@@ -1046,8 +1046,8 @@ Before styling, read `GUI.md`, `docs/design-guide.md` (action shapes, Motion, Co
 - `docs/design-mode.md`, `docs/plans/README.md`, `docs/superpowers/specs/2026-11-23-design-mode-live-app-design.md`, `.memory/design-mode.md`
 - this plan
 
-- [ ] **Step 1: Check registration.** Every new test file was registered in its task (Tasks 2, 10, 11, 12 and 13). Run `npm run test:ci-policy` once more. Expected: PASS.
-- [ ] **Step 2: `docs/design-mode.md`, Live apps (experimental).** Add:
+- [x] **Step 1: Check registration.** Every new test file was registered in its task (Tasks 2, 10, 11, 12 and 13). Run `npm run test:ci-policy` once more. Expected: PASS.
+- [x] **Step 2: `docs/design-mode.md`, Live apps (experimental).** Add:
   - the chip and its states, the Connect chip in workspaces without a web app;
   - Show logs (plain text, the last 256 KiB);
   - Retry, and that a failed choice is retried as that choice;
@@ -1059,9 +1059,9 @@ Before styling, read `GUI.md`, `docs/design-guide.md` (action shapes, Motion, Co
   - `[::1]` servers;
   - Docker and VM servers can't be connected, because their process isn't in the workspace folder;
   - the browser panel listing.
-- [ ] **Step 3: Spec.** Add "### Phase 2c amendments (2026-11-24)" with S45–S56 (below), and update the status line at the top to name the 2c plan.
-- [ ] **Step 4: Plan index.** Extend the design mode v2 row with "Phase 2c (app status, logs, attaching) planned 2026-11-24, stacked on 2b, plan [p2c](../superpowers/plans/2026-11-24-design-mode-v2-p2c-app-status.md)". Add the PR number when it opens.
-- [ ] **Step 5: Memory.** Add a "v2 Phase 2c: status chip and attaching" section to `.memory/design-mode.md`, covering:
+- [x] **Step 3: Spec.** Add "### Phase 2c amendments (2026-11-24)" with S45–S56 (below), and update the status line at the top to name the 2c plan.
+- [x] **Step 4: Plan index.** Extend the design mode v2 row with "Phase 2c (app status, logs, attaching) planned 2026-11-24, stacked on 2b, plan [p2c](../superpowers/plans/2026-11-24-design-mode-v2-p2c-app-status.md)". Add the PR number when it opens.
+- [x] **Step 5: Memory.** Add a "v2 Phase 2c: status chip and attaching" section to `.memory/design-mode.md`, covering:
   - the files;
   - the attach rules (D6–D10), the separate socket read and the re-bind grace;
   - an attached root never launches; stop means detach;
@@ -1072,12 +1072,12 @@ Before styling, read `GUI.md`, `docs/design-guide.md` (action shapes, Motion, Co
   - the test files and lanes.
 
   Update the v2 summary line.
-- [ ] **Step 6: Stale claims.** Run `rg -n "Connect running server|terminal drawer streams|attach|apps\[\]\.url|Local servers|when its port answers" README.md PRODUCT.md docs .memory packages/cli/README.md` and fix what 2c made wrong. Expected:
+- [x] **Step 6: Stale claims.** Run `rg -n "Connect running server|terminal drawer streams|attach|apps\[\]\.url|Local servers|when its port answers" README.md PRODUCT.md docs .memory packages/cli/README.md` and fix what 2c made wrong. Expected:
   - README and PRODUCT unchanged (flagged);
   - `docs/keyboard.md` has nothing new (no shortcut added);
   - onboarding unchanged (S6: Phase 7);
   - `host-platform-capabilities.ts` unchanged.
-- [ ] **Step 7:** Tick this plan's boxes, add "As built" notes, and commit `docs(design): Phase 2c docs, spec amendments and memory`.
+- [x] **Step 7:** Tick this plan's boxes, add "As built" notes, and commit `docs(design): Phase 2c docs, spec amendments and memory`.
 
 ## Spec amendments S45–S56 (Task 15 writes these)
 
@@ -1218,3 +1218,33 @@ Each has the answer this plan uses. Both reviewers agreed with every one.
 7. **Logs in the terminal drawer instead?** *No* (D4, S46). Untrusted escape sequences must not reach a terminal emulator, and the drawer is built for input.
 8. **The chip with several apps?** *One chip showing "<N> apps"*, with a section per app in the menu, rather than a chip per app crowding the top bar.
 9. **Should the browser listing get its own IPC, as the 2b review suggested?** *No* (D12). The browser state already reaches the panel over `browser:event`. A main-side feed from `onStatus` needs no new channel and no `listDesign` export.
+
+## As built (2026-11-24)
+
+Built on `t3/design-mode-v2-p2c`, stacked on 2b (PR #916), Tasks 0–15 in order. Every security rule in Global Constraints holds as written. Deviations from the plan, each the smallest change that kept the rule:
+
+1. **`already-running` gained `started?: true`.** `connect` on a root Aiden runs answers "Aiden already runs this app. Stop it first, then connect." instead of the attached-root text.
+2. **DM's canvas-config test** now expects `url` on entries (DM owns `canvas-config.ts`, 2c added the field).
+3. **`deps.attach` is a `DesignAppAttachDeps` facade** (`designAppAttachDeps`: scan, check, rebind, realpath) rather than the individual readers, so `DesignAppServers` tests fake one object.
+4. **`entry.attached` is a separate field**, not a `Watch` union on `entry.server`: the job path is untouched and the attach path can't reach a signal.
+5. **`jobProcessTree`'s parameter type was widened** to accept the roots' rows.
+6. **Re-binding** is `rebindHolder` (pure, over rows and sockets) plus `findRebind` (a fresh table and a strict read of the old parent's subtree), retried for 3 ticks (`DESIGN_APP_REBIND_TICKS`, about 6 s).
+7. **Folders over 200 characters** show cut with "…" in the Connect list, and a pick whose folder was cut is refused (`attach-not-in-app`), since a cut folder can't name a root.
+8. **`toggleRoots` doesn't fall back** to the single detected app when the config has url roots, so a url root is never launched by the toggle.
+9. **`connect` is an enqueued action, not an attempt** (`begin` is for launches); url-root attaches do run as attempts inside `runAttempt`.
+10. **2b's consent test** "attach requests are left to 2c" now checks only the other-chat wait, since 2c renders attach cards.
+11. **The chip's focus-ring check moved to E2E** (happy-dom has no computed outline): the spec asserts a 2 px solid outline under `data-input-modality="keyboard"`.
+12. **`connectDesignAppJobs` gained `ownedPids` and `terminalShellPids`**, wired from `main/index.ts`, because `backgroundJobs` and `terminalService` are created there.
+13. **Renderer tests compare booleans, never DOM nodes.** A failing `assert.equal(node, …)` makes Node inspect the happy-dom node's whole object graph, which spins instead of failing; it first looked like `waitFor` hanging. The chip and drawer tests poll with an `act`-wrapped `until` helper; the sheets tests wait on an `onClose` counter.
+14. **The Connect sheet shows a rejected invoke's message inline** on the row, like a refusal, instead of a toast.
+15. **The sheets, chip and drawer were written before their tests** in Tasks 10–12; each test was then checked against the behaviour, and two drawer mutations (no carry across reads, no 256 KiB bound) were confirmed to fail it.
+16. **The drawer takes a `pollMs` prop** (default 1 000 ms), and its tests use real timers with short polls instead of fake timers, which don't reach happy-dom's timers reliably.
+17. **Show logs opens the drawer from the menu's `onCloseAutoFocus`**, after Radix's focus trap is gone, so the drawer's output can take focus; opening it from `onSelect` lost focus to the closing menu (found in E2E).
+18. **`readDesignLog` also ends on a character boundary when a read stops short of `end`** (`maxBytes`), not only while the job runs, and returns the shifted `from` when it skips leading continuation bytes.
+19. **Linux `portHolders` skips an unreadable process of the person only when the readable ones hold every listening socket on the port**; otherwise it still fails closed. Electron's sandboxed helpers run as the person but aren't dumpable, so their `/proc/<pid>/fd` can't be read, and the strict version failed every check while Aiden ran (found in the Space E2E). The macOS `lsof` path is unchanged.
+20. **After Not now, the chip says "Not running"**, not "Start" as Task 14's first line says: a declined card leaves the `consent-declined` problem, and D2 labels a stopped app with a problem "Not running". The E2E asserts that, then Start from the menu.
+21. **The url-root E2E runs with a 2 s grace**, so turning design mode off really ends the attachment and the second turn-on exercises the remembered approval.
+22. **`packages/cli` needed `npm ci`** in this fresh worktree before `npm run cli:build`; nothing in the CLI changed.
+23. **Two E2E tests beyond Task 14's list**: a script that never listens shows "Starting…" and Stop ends it, and a two-app monorepo picked through Choose apps… shows "2 apps". They exercise those chip states and give their screenshots.
+
+E2E runs only in the Linux Cua Space, so the darwin branches of the attach readers are covered by `app-attach-process.test.ts` on the host, not by the E2E.

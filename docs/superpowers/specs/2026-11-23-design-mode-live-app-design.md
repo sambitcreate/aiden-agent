@@ -1,6 +1,6 @@
 # Design mode v2: the live app canvas
 
-Status: approved by the owner, 2026-11-23. Pre-build checks recorded in §11, and the PR split revised in §8. Phase 1a is in progress; its plan is [`2026-11-23-design-mode-v2-p1a-workspace-canvas.md`](../plans/2026-11-23-design-mode-v2-p1a-workspace-canvas.md). Phase 2a (app detection) is built from [`2026-11-24-design-mode-v2-p2a-app-detection.md`](../plans/2026-11-24-design-mode-v2-p2a-app-detection.md); its decisions are S19–S24. Phase DM (DESIGN.md) is built from [`2026-11-24-design-mode-v2-dm-design-md.md`](../plans/2026-11-24-design-mode-v2-dm-design-md.md) behind `AIDEN_EXPERIMENTAL_DESIGN_LIVE`; its decisions are S33–S44. Phase 2b (the dev server process) is built from [`2026-11-24-design-mode-v2-p2b-dev-server.md`](../plans/2026-11-24-design-mode-v2-p2b-dev-server.md) behind the same flag; its decisions are S25–S32. Builds on [Design mode v1](2026-10-31-design-mode-design.md) (P0–P5 shipped, on by default). Project memory: `.memory/design-mode.md`.
+Status: approved by the owner, 2026-11-23. Pre-build checks recorded in §11, and the PR split revised in §8. Phase 1a is in progress; its plan is [`2026-11-23-design-mode-v2-p1a-workspace-canvas.md`](../plans/2026-11-23-design-mode-v2-p1a-workspace-canvas.md). Phase 2a (app detection) is built from [`2026-11-24-design-mode-v2-p2a-app-detection.md`](../plans/2026-11-24-design-mode-v2-p2a-app-detection.md); its decisions are S19–S24. Phase DM (DESIGN.md) is built from [`2026-11-24-design-mode-v2-dm-design-md.md`](../plans/2026-11-24-design-mode-v2-dm-design-md.md) behind `AIDEN_EXPERIMENTAL_DESIGN_LIVE`; its decisions are S33–S44. Phase 2b (the dev server process) is built from [`2026-11-24-design-mode-v2-p2b-dev-server.md`](../plans/2026-11-24-design-mode-v2-p2b-dev-server.md) behind the same flag; its decisions are S25–S32. Phase 2c (app status, logs and attaching) is built from [`2026-11-24-design-mode-v2-p2c-app-status.md`](../plans/2026-11-24-design-mode-v2-p2c-app-status.md) behind the same flag; its decisions are S45–S56. Builds on [Design mode v1](2026-10-31-design-mode-design.md) (P0–P5 shipped, on by default). Project memory: `.memory/design-mode.md`.
 
 ## 1. Intent
 
@@ -202,7 +202,7 @@ Without Node, design mode still opens. Notes, shapes, flows, images and existing
 **6.2.5 UI.** An **app status chip** in the canvas top bar:
 - Running: "Vite · :5173".
 - Other states: Starting…, Installing…, Crashed, Start.
-- Its menu has Start/Stop/Restart, Show logs (the terminal drawer streams the job log read-only) and Choose app… (when several roots exist).
+- Its menu has Start/Stop/Restart, Show logs (the terminal drawer streams the job log read-only) and Choose app… (when several roots exist). *(Amended by S45 and S46: the menu also has Retry, Disconnect, Connect and Connect running server…, and Show logs opens a read-only logs drawer in the canvas, never the terminal drawer.)*
 
 ### 6.3 Live app frames
 
@@ -539,7 +539,7 @@ Each row is one PR that leaves main shippable. A plan is written before each PR'
 - **Injection timing:** the bridge arrives after first paint, so errors thrown during boot are read from the framework overlays rather than `onerror`.
 - **Dev-mode same-site:** in `npm run dev`, `localhost:<app>` and the renderer's `localhost:<vite>` are same-site, which can put them in one process. The bridge stays postMessage-only, and the filter never touches the main frame.
 - **Shared cookie jar:** apps share the default session's cookies by origin with any localhost page the renderer loads. This is acceptable for loopback dev servers and documented.
-- **Ports in use:** a dev server already running outside Aiden is attached when its port answers on the detected origin. Aiden doesn't own it and never stops it.
+- **Ports in use:** a dev server already running outside Aiden is never attached by itself. The person connects it from Connect running server…, or approves an `apps[].url` entry. Aiden reads ownership from the process and socket tables, never by contacting the port, and never stops it. *(Amended by S48.)*
 - **Many live frames:** there is no change to the 6-live cap in v2. Scale work (offscreen pool) is deferred to Phase 6.
 
 ## 10. Builder's choices
@@ -694,3 +694,57 @@ Phase DM (DESIGN.md, plan `docs/superpowers/plans/2026-11-24-design-mode-v2-dm-d
 - **S42. Packaging.** The package's CLI (`dist/index.js`), its top-level `dist/spec.md` and `dist/spec-config.yaml`, `dist/linter/spec.md`, its nested `node_modules/` and the hoisted packages only it reaches (its CLI and MDX/frontmatter parsers; the linter is one bundled file) are left out of the asar. The lint worker is a separate built file, and both package checks look for it.
 - **S43. Events.** `design_md_linted` fires once per new content of a file per run, never for a `content` lint or an IPC read. `design_md_drafted {source: "app"}` fires when a turn ran `draft` and the target file exists at the turn's normal end where it didn't when the draft ran.
 - **S44. The linter runs in a worker.** The worker posts `ready` once the linter is imported; loading has a 10 s limit (then `linter-unavailable`), and the lint itself a 2 s deadline from `ready` (then `timed-out`, cached by content hash). A 64 KiB file cap. The worker's environment drops `DEBUG`, `LOG_STREAM` and `LOG_TOKENS`.
+
+### Phase 2c amendments (2026-11-24)
+
+Phase 2c (app status, logs and attaching, plan `docs/superpowers/plans/2026-11-24-design-mode-v2-p2c-app-status.md`) builds §6.2.5's chip and lets design mode connect to a dev server the person already runs, behind `AIDEN_EXPERIMENTAL_DESIGN_LIVE`.
+
+- **S45. Status chip (2c; details §6.2.5).** One chip per workspace in the canvas's top-right `actions` slot, before the Canvas view tools. It is hidden without the flag or when live apps are `unavailable`; with no web app it is a Connect chip offering only Connect running server…. It summarises several apps as "<N> apps", has no spinner or pulse, and announces only a crash and a disconnect. Its menu has Start, Stop, Restart, Retry, Show logs, Disconnect, Connect, Connect again, Choose apps… and Connect running server…. The actions are optimistic: the invoke's own result settles them, a refusal rolls back with the problem shown inline, and only a newer revision for that app replaces them.
+- **S46. Logs drawer (2c; replaces §6.2.5's terminal drawer).** Logs open in a read-only drawer inside the canvas, never the PTY terminal:
+  - the text is plain, with escape sequences removed (also across reads), lines capped at 4 KiB, and hidden characters shown as escapes;
+  - it starts at the last 256 KiB of the run, polls by run and byte cursor while the canvas is shown, and keeps 256 KiB;
+  - main ends each read on a UTF-8 character boundary while the job runs;
+  - attached servers have no logs.
+- **S47. Retry (2c; S8).** `designApp:retry` clears the toolchain cache, and main decides what runs: a failed choice is replayed as that choice; an install failure or a missing-module crash reinstalls; anything else restarts. Not offered for `exposed` or attached apps.
+- **S48. Connect lists from the process table (2c; amends §6.2.3 and §9).**
+  - §9's "Ports in use" sentence ("a dev server already running outside Aiden is attached when its port answers on the detected origin") is replaced by: "A dev server already running outside Aiden is never attached by itself. The person connects it from Connect running server…, or approves an `apps[].url` entry. Aiden reads ownership from the process and socket tables, never by contacting the port, and never stops it." (A-m5)
+  - The scan runs only on the person's action.
+  - It lists listening sockets of the person's own processes (by uid, read first) whose canonical folder is inside the workspace's `realpath`, each under the deepest app root holding it, or under its own folder when no root holds it.
+  - It excludes every Aiden job tree, every Aiden descendant outside a terminal-drawer shell, ports below 1024, 9222, 9229, 24678 and Aiden's renderer port.
+  - A partial read lists what was read and says some servers may be missing; every pick is re-checked fail-closed.
+  - It makes no HTTP probe and offers no default-port suggestion.
+- **S49. Attached servers (2c; amends S29's "one `lsof` per tick").**
+  - **The check** finds the port's holder first, then its folder, inside `realpath(appRoot)` inside `realpath(workspace)`.
+  - **The origin** comes from sockets: exactly `127.0.0.1` (or `::ffff:127.0.0.1`), else `::1`; never `localhost` and never another loopback address. Aiden serves exactly the origins the subtree holds.
+  - **Ownership and loopback.** Every process in the holder's subtree must be the person's, and every socket loopback. The shared poller re-checks every 2 s, in the same `ps` as jobs but with its own socket read, so one side's failed look never fails the other.
+  - **Re-binding.** A holder that exits may be replaced within 6 s by a same-uid process under the same parent holding the same address and port; anything else detaches.
+  - **Detaching.** An attachment detaches when the holder is gone or stops holding the port (`attach-unreachable`), after three failed looks of its own (`attach-unreachable`), when it binds beyond loopback or another user's process joins (`attach-not-loopback`), on workspace changes, and 60 s after no canvas is visible. Stop means disconnect. Aiden never signals an attached process.
+  - **No launch.** While attached, start and retry answer the attachment, and restart and choose refuse with `already-running`.
+  - **Access.** Read-only and `none` workspaces can't attach.
+- **S50. Attach consent (2c; S15).**
+  - A Connect pick is itself the consent; main re-checks that the picked pid still holds the port.
+  - An `apps[].url` needs the attach card, under its own key. Allow registers only if the re-check finds the same pid, process name and folder the card showed. The record is keyed by the canonical origin, the config text and the workspace's real folder, and the card asks again when any changes.
+  - `design_app` can attach only url roots and has no connect action.
+- **S51. `apps[].url` (2c; §6.3.6's example).**
+  - Accepted: `http:`, a host of `localhost`, `127.0.0.1` or `[::1]`, an explicit port from 1024 to 65535, no credentials, query or fragment, and a path that is empty or `/`.
+  - Anything else is `urlRefused` and shown as `attach-url-invalid`.
+  - A url or refused-url root never launches, even with a `script`.
+- **S52. IPv6 loopback apps (2c → 3a; amends §6.3.2).** An attached app may have the origin `http://[::1]:<port>`, since Vite on macOS often binds `localhost` to `::1` only. 3a adds `http://[::1]:*` to the main window's `frame-src` and treats `[::1]` like `127.0.0.1` in its filter. §6.3.4 already allows it.
+- **S53. Browser listing (2c; §6.2.3).** A main-side feed from `onStatus` into `BrowserService`: running design apps, started and attached, are listed first in Local servers with a "design mode" label. There's no new IPC and no `BrowserServer` type change. 3a's `isAppOrigin` restriction applies to canvas frames only and must not block opening that URL in the browser panel.
+- **S54. 2b contract widenings (2c).** D13's table:
+  - the attach card fields and the two new problems;
+  - `DesignAppConsent.request` for attach;
+  - three channels and the handler `Pick`;
+  - stop on attached, and start, restart, choose and retry on a live attachment;
+  - logs while attached;
+  - attached origins;
+  - `designSockets` roots and their separate socket read;
+  - `ProcessRow.uid` and the partial discovery option;
+  - `readDesignLog`'s UTF-8 boundary;
+  - `CanvasConfigApp.url`;
+  - the records' `attaches`;
+  - the new `attach-not-loopback` and `attach-unreachable` text.
+
+  No 2b field is renamed or retyped.
+- **S55. Aiden's own processes (2c).** Connect never lists, and an attach never accepts, a process in any background job's tree, a descendant of Aiden outside a terminal-drawer shell, or a port Aiden uses for debugging. Servers the person runs in Aiden's terminal drawer are theirs and are listed.
+- **S56. An attached root never launches (2c).** While a root is attached, nothing spawns for it: the toggle starts nothing, start and retry answer the attachment, and restart and choose refuse with `already-running`. The person disconnects first.
