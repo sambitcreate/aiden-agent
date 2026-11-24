@@ -126,7 +126,7 @@ When the paired Mac offers it (contract revision 42, `bot:issues`), a Bot's **Ne
 
 ## Bots waiting on you on the phone
 
-When the paired Mac offers it (contract revision 68, `bot:needs-you`, provisional), a Bot that waits on you there (an approval, a question, a hand-off, an access request, a plan to OK or a Needs you card) reads **Waiting for you** on the Bots list of Aiden On The Go for iPhone and Android, instead of looking busy. An approval the phone can already see in that Bot's chat keeps its own line, such as "Needs your OK". On iPhone the Inbox also lists that Bot under **Needs you**. The phone picks this up whenever it reads the Bots list again. An `aiden serve` host, or a Mac on an older Aiden, doesn't offer it yet, and the list looks as before.
+When the paired Mac offers it (contract revision 68, `bot:needs-you`, provisional), a Bot that waits on you there (an approval, a question, a hand-off, an access request, a plan to OK or a Needs you card) reads **Waiting for you** on the Bots list of Aiden On The Go for iPhone and Android, instead of looking busy. An approval the phone can already see in that Bot's chat keeps its own line, such as "Needs your OK". On iPhone the Inbox also lists that Bot under **Needs you**. The phone picks this up whenever it reads the Bots list again. An `aiden serve` server with durable Bot sessions offers it too, for a Bot waiting on an approval. A Mac on an older Aiden doesn't, and the list looks as before.
 
 ## Bot messaging on the phone
 

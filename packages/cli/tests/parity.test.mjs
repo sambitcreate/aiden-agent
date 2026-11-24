@@ -2396,6 +2396,17 @@ test("durable CLI Bots can message each other", async (t) => {
   assert.equal(capabilities.status, 200);
   assert.equal(capabilities.data.serverCapabilities.includes("bot:allowed"), false, "CLI never advertises desktop remembered approvals");
   assert.equal((await request(modern, `/bots/${bots[0].id}/allowed`)).status, 404, "CLI supplies no remembered-approval endpoint");
+  // Revision 68: this server says which Bots wait on the person, only to a device that asked.
+  assert.ok(capabilities.data.serverCapabilities.includes("bot:needs-you"), "the server offers bot:needs-you");
+  const askedNeedsYou = await request(modern, "/device/capabilities", "POST", { accepts: ["bot:needs-you"] });
+  assert.equal(askedNeedsYou.status, 200, JSON.stringify(askedNeedsYou));
+  const pendingApprovals = host.durable.approvals.pending;
+  host.durable.approvals.pending = (id) => id === bots[0].id ? [{ botId: id }] : [];
+  try {
+    const waiting = await request(modern, "/bots");
+    assert.deepEqual(waiting.data.bots.filter((row) => row.needsYou).map((row) => row.id), [bots[0].id]);
+    assert.equal((await request(older, "/bots")).data.bots.some((row) => "needsYou" in row), false, "a device that didn't ask never sees the key");
+  } finally { host.durable.approvals.pending = pendingApprovals; }
   const list = await request(modern, "/bots");
   assert.equal(list.status, 200); assert.deepEqual(list.data.messaging, { enabled: true });
   assert.equal((await request(older, "/bots")).data.messaging, undefined);
@@ -2537,6 +2548,28 @@ test("durable CLI Bot migration preserves history, dedupes across restart, and f
   const imageData = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aX1sAAAAASUVORK5CYII=";
   const sent = await host.durable.runtime.send(bot.id, { text: "Hello", requestId: "migration-first", attachments: [{ type: "image", mimeType: "image/png", data: imageData }] });
   assert.deepEqual(await host.durable.runtime.awaitReply(bot.id, sent.submissionId, new AbortController().signal), { kind: "completed", text: "Durable answer" });
+  // A paired desktop's Bot row and a phone's Bots list read what this server's own Bot did, as from a Mac.
+  const { signals } = api.createCliRemoteBots(dir, "test-instance", host, daemon, {}, ledger, async () => {});
+  try {
+    const row = (await signals.botSignals([{ id: bot.id }])).get(bot.id);
+    assert.equal(row.preview, "Durable answer");
+    assert.ok(Date.parse(row.lastReplyAt) > 0, JSON.stringify(row));
+    assert.equal(row.needsYou, undefined);
+    assert.equal(row.failed, undefined);
+    assert.deepEqual([...await signals.botNeedsYou([bot.id])], []);
+    let changes = 0;
+    const off = signals.onChange(() => { changes += 1; });
+    const pending = host.durable.approvals.pending;
+    host.durable.approvals.pending = (id) => id === bot.id ? [{ botId: bot.id }] : [];
+    try {
+      assert.deepEqual([...await signals.botNeedsYou([bot.id])], [bot.id], "an approval waiting on the person");
+      assert.equal((await signals.botSignals([{ id: bot.id }])).get(bot.id).needsYou, true);
+    } finally { host.durable.approvals.pending = pending; }
+    await host.command(["pause", bot.id]);
+    await host.command(["unpause", bot.id]);
+    assert.ok(changes > 0, "a pause reaches the host feed");
+    off();
+  } finally { await signals.close(); }
   const durableEntries = (await (await host.durable.runtime.conversation(bot.id)).context(api.BACKGROUND_CONTEXT)).entries;
   const callContext = api.cliDurableBotToolContext([...durableEntries].reverse(), { chatId: legacy.id, botId: bot.id });
   const forkSnapshot = await callContext.loadChat();

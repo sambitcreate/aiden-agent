@@ -12,6 +12,45 @@ import type { AidenIdempotencyLedger, AidenIdempotencySnapshot } from "../../../
 import { CLI_BOT_OWNER_AUDIENCE_ID, type createCliBots } from "./bots.ts";
 import type { createCliRemoteChats } from "./remote-chats.ts";
 import type { createDaemonChats } from "./daemon-chats.ts";
+import { createBotLiveProjection, type BotLiveProjection } from "../../../main/services/bot-runtime/live-projection.js";
+import { hostFeedBotSignals, type AidenRemoteHostFeedBotSignals } from "../../../main/services/aiden-remote-host-feed.js";
+
+/** Four at a time, like the desktop: each read may open a Bot's transcript. */
+async function eachBot<T>(ids: readonly string[], read: (id: string) => Promise<T>): Promise<Array<readonly [string, T]>> {
+  const out: Array<readonly [string, T]> = [];
+  for (let start = 0; start < ids.length; start += 4) {
+    out.push(...await Promise.all(ids.slice(start, start + 4).map(async (id) => [id, await read(id)] as const)));
+  }
+  return out;
+}
+
+/**
+ * The summary this host's Bot rows come from, as on the desktop: what waits on
+ * the person (an approval), the run state, the newest reply and its line. A
+ * Bot's transcript is read again only after its newest entry changes.
+ */
+export function createCliBotSignals(durable: NonNullable<Awaited<ReturnType<typeof createCliBots>>["durable"]>) {
+  const live: BotLiveProjection = createBotLiveProjection({
+    conversation: (botId) => durable.runtime.conversation(botId),
+    state: (botId) => durable.runtime.state(botId),
+    quietInputs: (botId, ids) => durable.runtime.quietInputs(botId, ids),
+    approvalPending: (botId) => durable.approvals.pending(botId).length > 0,
+  });
+  return {
+    /** Host feed Bot rows (revisions 52 and 66): Needs you, Failed, last reply and its line. */
+    botSignals: async (bots: readonly { id: string }[]): Promise<ReadonlyMap<string, AidenRemoteHostFeedBotSignals>> =>
+      new Map(await eachBot(bots.map((bot) => bot.id), async (id) => hostFeedBotSignals(await live.summary(id).catch(() => undefined)))),
+    /** Revision 68 (`bot:needs-you`): which Bots wait on the person, without reading transcripts. */
+    botNeedsYou: async (botIds: readonly string[]): Promise<ReadonlySet<string>> =>
+      new Set((await eachBot(botIds, (id) => live.needsYou(id).catch(() => false))).filter(([, waiting]) => waiting).map(([id]) => id)),
+    /** A Bot's row changed: its state (a turn started or ended, a pause) or an approval. */
+    onChange(listener: () => void): () => void {
+      const detach = [durable.stateChanges(() => listener()), durable.approvals.onChange(() => listener())];
+      return () => { for (const off of detach) off(); };
+    },
+    close: () => live.close(),
+  };
+}
 
 export function createCliRemoteBots(agentDir: string, instanceId: string, runtime: Awaited<ReturnType<typeof createCliBots>>, daemon: ReturnType<typeof createDaemonChats>, chatApi: Awaited<ReturnType<typeof createCliRemoteChats>>,
   idempotency: AidenIdempotencyLedger, persistIdempotency: (value: AidenIdempotencySnapshot) => Promise<void>) {
@@ -48,5 +87,7 @@ export function createCliRemoteBots(agentDir: string, instanceId: string, runtim
     // A pause or unpause from `aiden bots` changes only the state; open phone streams hear it here.
     stateChanges: runtime.durable.stateChanges,
   }) : undefined;
-  return { bots, botFiles, ...(botSessions ? { botSessions } : {}) };
+  const signals = runtime.durable ? createCliBotSignals(runtime.durable) : undefined;
+  // `signals` is for the host feed; the rest are Remote routes.
+  return { bots, botFiles, ...(botSessions ? { botSessions } : {}), ...(signals ? { botNeedsYou: signals.botNeedsYou, signals } : {}) };
 }
