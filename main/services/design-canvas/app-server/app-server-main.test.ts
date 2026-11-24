@@ -110,24 +110,25 @@ class FakeJobs {
   /** 2c: the person's processes, for attached servers' subtrees. */
   procs = new Map<number, { ppid: number; uid: number; sockets: Array<{ address: string; port: number }> }>();
   rootCalls: string[][] = [];
-  /** Attach roots whose socket read fails. */
-  rootFails = false;
+  /** Attach roots whose socket read fails; "with-rows" still answers the subtree's rows, as Linux does for an unreadable process (A-m1). */
+  rootFails: boolean | "with-rows" = false;
   designSockets = async (jobIds: readonly string[], roots?: ReadonlyMap<string, number>) => {
     this.socketCalls.push([...jobIds]);
     const answers = new Map<string, JobSockets>(jobIds.map((id) => [id, this.sockets.get(id) ?? { ok: true as const, sockets: [] }]));
     if (roots) {
       this.rootCalls.push([...roots.keys()]);
       for (const [key, pid] of roots) {
-        if (this.rootFails) {
-          answers.set(key, { ok: false, reason: "lsof reported a problem" });
-          continue;
-        }
         const tree: number[] = [];
         const queue = this.procs.has(pid) ? [pid] : [];
         while (queue.length) {
           const next = queue.shift()!;
           tree.push(next);
           for (const [child, proc] of this.procs) if (proc.ppid === next) queue.push(child);
+        }
+        if (this.rootFails) {
+          const rows = tree.map((member) => ({ pid: member, ppid: this.procs.get(member)!.ppid, pgid: member, uid: this.procs.get(member)!.uid }));
+          answers.set(key, { ok: false, reason: "lsof reported a problem", ...(this.rootFails === "with-rows" ? { rows } : {}) });
+          continue;
         }
         answers.set(key, {
           ok: true,
@@ -299,11 +300,11 @@ function harness(_t: test.TestContext, options: Options = {}) {
   const holder = { pid: 300, ppid: 30, port: 5173, origin: "http://127.0.0.1:5173", held: ["127.0.0.1"], processName: "vite", folder: "." };
   jobs.procs.set(30, { ppid: 1, uid: 501, sockets: [] });
   jobs.procs.set(300, { ppid: 30, uid: 501, sockets: [{ address: "127.0.0.1", port: 5173 }] });
-  const attachCalls = { scans: [] as Array<{ roots: readonly string[]; busyRoots: ReadonlySet<string> }>, checks: [] as Array<{ appRoot: string; port: number; pid?: number }>, rebinds: 0 };
+  const attachCalls = { scans: [] as Array<{ roots: readonly string[]; busyRoots: ReadonlySet<string> }>, checks: [] as Array<{ appRoot: string; port: number; pid?: number }>, rebinds: 0, rebindInputs: [] as Array<Parameters<DesignAppAttachDeps["rebind"]>[0]> };
   const attachState = {
     check: undefined as undefined | ((input: { appRoot: string; port: number; pid?: number }) => AttachCheck),
     scan: { ok: true, incomplete: false, servers: [] } as Awaited<ReturnType<DesignAppAttachDeps["scan"]>>,
-    rebind: undefined as undefined | { pid: number; ppid: number },
+    rebind: undefined as Awaited<ReturnType<DesignAppAttachDeps["rebind"]>>,
     real: new Map<string, string>(),
     clears: 0,
   };
@@ -385,8 +386,9 @@ function harness(_t: test.TestContext, options: Options = {}) {
         const { port: _port, ...rest } = holder;
         return { ok: true, ...rest, held: [...rest.held] };
       },
-      rebind: async () => {
+      rebind: async (input) => {
         attachCalls.rebinds += 1;
+        attachCalls.rebindInputs.push(input);
         return attachState.rebind;
       },
       realpath: async (target) => attachState.real.get(target) ?? target,
@@ -1783,7 +1785,7 @@ test("a holder that exits and is replaced under the same parent within 6 s re-bi
   await h.clock.advance(2_000);
   assert.equal(h.latest()?.phase, "running", "waiting for a re-bind");
   h.jobs.procs.set(310, { ppid: 30, uid: 501, sockets: [{ address: "127.0.0.1", port: 5173 }] });
-  h.attachState.rebind = { pid: 310, ppid: 30 };
+  h.attachState.rebind = { ok: true, pid: 310, ppid: 30 };
   await h.clock.advance(2_000);
   assert.equal(h.latest()?.phase, "running");
   assert.equal(h.latest()?.revision, revision);
@@ -1791,6 +1793,46 @@ test("a holder that exits and is replaced under the same parent within 6 s re-bi
   await h.clock.advance(10_000);
   assert.equal(h.latest()?.phase, "running", "it now watches the new holder");
   assert.equal(h.jobs.stopCalls.length, 0);
+});
+
+test("a re-bind look names the app root and workspace, and a new holder that fails the folder or job check detaches at once", async (t) => {
+  for (const problem of ["attach-not-in-app", "attach-unreachable"] as const) {
+    const h = harness(t);
+    await h.connect();
+    h.jobs.procs.delete(300);
+    h.jobs.procs.set(310, { ppid: 30, uid: 501, sockets: [{ address: "127.0.0.1", port: 5173 }] });
+    h.attachState.rebind = { ok: false, problem };
+    await h.clock.advance(2_000);
+    assert.deepEqual(h.attachCalls.rebindInputs[0], { ppid: 30, port: 5173, held: ["127.0.0.1"], workspacePath: "/w/ws", appRoot: "." });
+    assert.equal(h.latest()?.phase, "stopped", problem);
+    assert.deepEqual(h.latest()?.problem, { problem }, problem);
+    assert.equal(h.servers.appForOrigin("http://127.0.0.1:5173"), undefined);
+    assert.equal(h.jobs.stopCalls.length, 0);
+  }
+});
+
+test("while a holder is gone and no re-bind has been found, its origin maps to no app; a re-bind maps it again", async (t) => {
+  const h = harness(t);
+  await h.connect();
+  h.jobs.procs.delete(300);
+  await h.clock.advance(2_000);
+  assert.equal(h.latest()?.phase, "running", "waiting for a re-bind");
+  assert.equal(h.servers.appForOrigin("http://127.0.0.1:5173"), undefined, "whatever holds the port now isn't the checked server");
+  assert.equal(h.servers.isAppOrigin("http://127.0.0.1:5173"), true, "the origin stays restricted");
+  h.jobs.procs.set(310, { ppid: 30, uid: 501, sockets: [{ address: "127.0.0.1", port: 5173 }] });
+  h.attachState.rebind = { ok: true, pid: 310, ppid: 30 };
+  await h.clock.advance(2_000);
+  assert.deepEqual(h.servers.appForOrigin("http://127.0.0.1:5173"), { workspaceId: "ws", appRoot: "." });
+});
+
+test("another user's process in an attached subtree detaches on the first tick even when the read of it failed (Linux)", async (t) => {
+  const h = harness(t);
+  await h.connect();
+  h.jobs.procs.set(302, { ppid: 300, uid: 0, sockets: [] });
+  h.jobs.rootFails = "with-rows";
+  await h.clock.advance(2_000);
+  assert.equal(h.latest()?.phase, "stopped");
+  assert.deepEqual(h.latest()?.problem, { problem: "attach-not-loopback" });
 });
 
 test("a holder that exits with no re-bind detaches with attach-unreachable after 6 s", async (t) => {
@@ -1856,7 +1898,7 @@ test("no job path ever touches an attached server: stop, presence, forget, failu
   await h.connect();
   h.jobs.procs.delete(300);
   h.jobs.procs.set(320, { ppid: 30, uid: 501, sockets: [{ address: "127.0.0.1", port: 5173 }] });
-  h.attachState.rebind = { pid: 320, ppid: 30 };
+  h.attachState.rebind = { ok: true, pid: 320, ppid: 30 };
   await h.clock.advance(2_000);
   Object.assign(h.holder, { pid: 320 });
   await h.connect();

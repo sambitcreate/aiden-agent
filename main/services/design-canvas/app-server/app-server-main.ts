@@ -208,6 +208,8 @@ interface AttachWatch {
   failedLooks: number;
   /** Ticks the holder has been gone without a re-bind. */
   lostTicks: number;
+  /** The holder is gone and no re-bind was found yet: its origin maps to no app (A-m3). */
+  lost: boolean;
 }
 
 interface Attempt {
@@ -547,7 +549,8 @@ export class DesignAppServers {
     for (const entry of this.entries.values()) {
       const attached = entry.attached;
       if (attached) {
-        if (attached.port !== port) continue;
+        // While the holder is gone, whatever holds the port isn't the server that was checked (A-m3).
+        if (attached.lost || attached.port !== port) continue;
         const exact = host === "127.0.0.1" ? attached.held.some((address) => address === "127.0.0.1" || address === "::ffff:127.0.0.1") : attached.held.includes("::1");
         if (exact) return { workspaceId: entry.workspaceId, appRoot: entry.appRoot };
         continue;
@@ -1070,7 +1073,7 @@ export class DesignAppServers {
     const app = detection.apps.find((candidate) => candidate.root === entry.appRoot && candidate.kind === "web");
     entry.meta = { ...(app?.framework ? { framework: app.framework } : {}), frameworkLabel: frameworkLabel(app?.framework), startedBy: by };
     entry.source = "attached";
-    entry.attached = { pid: found.pid, ppid: found.ppid, port, origin: found.origin, held: [...found.held], workspacePath, failedLooks: 0, lostTicks: 0 };
+    entry.attached = { pid: found.pid, ppid: found.ppid, port, origin: found.origin, held: [...found.held], workspacePath, failedLooks: 0, lostTicks: 0, lost: false };
     this.serveAttached(entry, entry.attached);
     const status = this.setPhase(entry, "running", { origin: found.origin, port });
     this.originsChanged();
@@ -1336,6 +1339,12 @@ export class DesignAppServers {
 
   /** D9's rules for an attached server, each tick. Every way out detaches; nothing is ever signalled. */
   private async checkAttached(entry: Entry, watch: AttachWatch, result: JobSockets): Promise<void> {
+    const uid = this.deps.attach?.uid;
+    // Another user's process in the subtree detaches at once, even when the read of it failed (A-m1).
+    if (uid === undefined || (result.rows ?? []).some((row) => row.uid !== uid)) {
+      this.detach(entry, { problem: { problem: "attach-not-loopback" } });
+      return;
+    }
     if (!result.ok) {
       if (++watch.failedLooks >= DESIGN_APP_EXPOSURE_FAILURES) this.detach(entry, { problem: { problem: "attach-unreachable" } });
       return;
@@ -1344,20 +1353,27 @@ export class DesignAppServers {
     const rows = result.rows ?? [];
     if (!rows.some((row) => row.pid === watch.pid)) {
       // The holder is gone (A-M5): a watch-mode restart under the same parent re-binds; otherwise it detaches after three ticks.
-      const next = await this.deps.attach?.rebind({ ppid: watch.ppid, port: watch.port, held: watch.held }).catch(() => undefined);
+      watch.lost = true;
+      const next = await this.deps.attach
+        ?.rebind({ ppid: watch.ppid, port: watch.port, held: watch.held, workspacePath: watch.workspacePath, appRoot: entry.appRoot })
+        .catch(() => undefined);
       if (entry.attached !== watch) return;
-      if (next) {
+      if (next?.ok) {
         watch.pid = next.pid;
         watch.ppid = next.ppid;
         watch.lostTicks = 0;
+        watch.lost = false;
+      } else if (next) {
+        // The new holder is outside the app, a job's, or unreadable (A-M1, A-M2).
+        this.detach(entry, { problem: { problem: next.problem } });
       } else if (++watch.lostTicks >= DESIGN_APP_REBIND_TICKS) {
         this.detach(entry, { problem: { problem: "attach-unreachable" } });
       }
       return;
     }
     watch.lostTicks = 0;
-    const uid = this.deps.attach?.uid;
-    if (uid === undefined || rows.some((row) => row.uid !== uid) || exposedSockets(result.sockets).length > 0) {
+    watch.lost = false;
+    if (exposedSockets(result.sockets).length > 0) {
       this.detach(entry, { problem: { problem: "attach-not-loopback" } });
       return;
     }
