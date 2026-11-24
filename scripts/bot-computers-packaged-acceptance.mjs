@@ -2,23 +2,24 @@
 // Packaged Bot computers acceptance: owner Mac only (Apple silicon), never in CI.
 //
 //   AIDEN_BOT_COMPUTERS_ACCEPTANCE=1 npm run test:bot-computers:packaged -- \
-//     [--app "release/development/mac-arm64/Aiden Agent.app"] [--restore-image <UniversalMac_…_Restore.ipsw>]
+//     [--app "release/development/mac-arm64/Aiden Agent.app"] [--linux-image <debian-13-arm64.raw>]
 //
 // It launches the packaged app with a fresh userData whose only provider is a
 // loopback OpenAI-compatible model (capability URL, 127.0.0.1 only) scripting
 // the Bot's `computer` and `computer_shell` calls, then walks the operator
-// through the real flow: Set up (the base), Give a computer (a clone), the
-// Bot's turn (run, capture, click), Take over and Give back in the Computer
-// tab, a fresh capture and a shell command whose file must reach the Bot's
-// Computer folder, Pause (the VM stops), Delete Bot (its VM goes, the base
-// stays), Remove everything, and a normal quit. It reads what happened from
-// Lume (the app's own pinned binary, isolated exactly as Aiden runs it), from
-// Aiden's state files and from the process table, and writes an evidence-only
-// receipt to build/bot-computers-acceptance-receipt.json.
+// through the real flow: Set up (the Linux Debian 13 + XFCE base), Give a
+// computer (a clone), the Bot's turn (run, capture, click), Take over and
+// Give back in the Computer tab, a fresh capture and a shell command whose
+// file must reach the Bot's Computer folder, Pause (the VM stops), Delete Bot
+// (its VM goes, the base stays), Remove everything, and a normal quit. It
+// reads what happened from Lume (the app's own pinned binary, isolated exactly
+// as Aiden runs it), from Aiden's state files and from the process table, and
+// writes an evidence-only receipt to build/bot-computers-acceptance-receipt.json.
 //
-// Without --restore-image, Set up downloads macOS (about 20 GB) from Apple's
-// pinned URL. With it, the given file is copied (cloned on APFS) to where Set
-// up looks first; Set up still verifies its size and SHA-256.
+// Without --linux-image, Set up downloads Debian 13 (about 500 MB plus desktop
+// packages) from Debian's pinned URL. With it, the given file is copied
+// (cloned on APFS) to where Set up looks first; Set up still verifies its size
+// and SHA-256.
 
 import { execFile, spawn } from "node:child_process";
 import { randomBytes } from "node:crypto";
@@ -33,7 +34,7 @@ import { BOT_COMPUTER_GIVE_BACK_NOTE } from "../main/services/bot-computers/cont
 import { LUME_PINS, resolveLumeInstallation } from "../main/services/bot-computers/lume-binary.ts";
 import { lumeEnvironment, runLume } from "../main/services/bot-computers/lume-cli.ts";
 import { parseLumeVmList } from "../main/services/bot-computers/lume-output.ts";
-import { BOT_COMPUTER_RESTORE_IMAGE } from "../main/services/bot-computers/release.ts";
+import { BOT_COMPUTER_LINUX_IMAGE } from "../main/services/bot-computers/release.ts";
 import { parseBotComputersState } from "../main/services/bot-computers/store.ts";
 import { BOT_COMPUTER_BASE_VM } from "../main/services/bot-computers/vm-names.ts";
 import { BOT_PAUSES_FILE } from "../main/services/bot-pause-store.ts";
@@ -59,8 +60,8 @@ const executeFile = promisify(execFile);
 const modulePath = fileURLToPath(import.meta.url);
 const repositoryRoot = path.resolve(path.dirname(modulePath), "..");
 const MAX_REQUEST_BYTES = 64 * 1024 * 1024;
-/** Set up can download about 20 GB and install macOS, so the whole run gets four hours. */
-const ACCEPTANCE_TIMEOUT_MS = 4 * 60 * 60 * 1_000;
+/** Set up downloads Debian 13 and installs desktop packages, so the whole run gets two hours. */
+const ACCEPTANCE_TIMEOUT_MS = 2 * 60 * 60 * 1_000;
 const STEP_TIMEOUT_MS = 10 * 60 * 1_000;
 const POLL_MS = 2_000;
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
@@ -198,13 +199,13 @@ async function findSharedFile(directory, fileName, depth = 6) {
   return undefined;
 }
 
-async function preseedRestoreImage(source, imagesDir) {
+async function preseedLinuxImage(source, imagesDir) {
   const info = await stat(source);
-  if (!info.isFile() || info.size !== BOT_COMPUTER_RESTORE_IMAGE.bytes) {
-    throw new Error(`--restore-image must be macOS ${BOT_COMPUTER_RESTORE_IMAGE.version} (${BOT_COMPUTER_RESTORE_IMAGE.build}), ${BOT_COMPUTER_RESTORE_IMAGE.bytes} bytes.`);
+  if (!info.isFile() || info.size !== BOT_COMPUTER_LINUX_IMAGE.bytes) {
+    throw new Error(`--linux-image must be Debian ${BOT_COMPUTER_LINUX_IMAGE.version} (${BOT_COMPUTER_LINUX_IMAGE.build}), ${BOT_COMPUTER_LINUX_IMAGE.bytes} bytes.`);
   }
   await mkdir(imagesDir, { recursive: true, mode: 0o700 });
-  const destination = path.join(imagesDir, `UniversalMac_${BOT_COMPUTER_RESTORE_IMAGE.build}_Restore.ipsw`);
+  const destination = path.join(imagesDir, `debian-${BOT_COMPUTER_LINUX_IMAGE.build}.raw`);
   // An APFS clone is instant; fall back to a full copy across volumes.
   await executeFile("/bin/cp", ["-c", source, destination]).catch(() => copyFile(source, destination));
 }
@@ -264,14 +265,14 @@ async function runAcceptance() {
   }
   if (process.env.AIDEN_BOT_COMPUTERS_ACCEPTANCE !== "1") {
     throw new Error(
-      "This test creates macOS virtual machines and, without --restore-image, downloads about 20 GB from Apple. " +
+      "This test creates Linux virtual machines and, without --linux-image, downloads Debian 13 and desktop packages (about 1 GB). " +
         "Re-run with AIDEN_BOT_COMPUTERS_ACCEPTANCE=1 after reading the checklist at the top of this script.",
     );
   }
   await invalidateBotComputersAcceptanceReceipt(repositoryRoot);
   const receiptPath = resolveBotComputersAcceptanceReceipt(repositoryRoot);
   const appPath = path.resolve(argumentValue("--app") ?? (await discoverPackagedApp(path.join(repositoryRoot, "release", "development"))));
-  const restoreImage = argumentValue("--restore-image");
+  const linuxImage = argumentValue("--linux-image") ?? argumentValue("--restore-image");
   await verifyMacPackage(appPath);
   const artifact = await packagedArtifactIdentity(appPath);
   const executable = path.join(appPath, "Contents", "MacOS", "Aiden Agent");
@@ -329,7 +330,7 @@ async function runAcceptance() {
   };
 
   try {
-    if (restoreImage) await preseedRestoreImage(path.resolve(restoreImage), path.join(root, "restore-images"));
+    if (linuxImage) await preseedLinuxImage(path.resolve(linuxImage), path.join(root, "restore-images"));
     model = await startAcceptanceModel({ capability, context, onTurn });
     const fixture = acceptanceFixture(model.port, capability);
     await mkdir(userData, { recursive: true });
@@ -347,7 +348,7 @@ async function runAcceptance() {
 
     console.log(`\nPackaged Bot computers acceptance is running in ${temporary} (Aiden's log: ${log}).`);
     console.log("1. If onboarding opens, check that its feature tour shows Bot computers, then finish onboarding.");
-    console.log(`2. Settings → Computers & VMs → Bot computers → Set up${restoreImage ? " (the restore image is pre-seeded; Set up verifies it)" : " (downloads about 20 GB)"}. Wait for Ready.`);
+    console.log(`2. Settings → Computers & VMs → Bot computers → Set up${linuxImage ? " (the Debian Linux image is pre-seeded; Set up verifies it)" : " (downloads about 1 GB)"}. Wait for Ready.`);
     console.log(`3. Create a Bot with Full access whose AI model is ${ACCEPTANCE_PROVIDER_LABEL}.`);
     console.log("4. In the Bot's profile, give the Bot a computer.");
     console.log(`5. In the Bot's chat, send exactly: ${ACCEPTANCE_PROMPT}`);
@@ -413,8 +414,8 @@ async function runAcceptance() {
           modelTransport: "capability_authenticated_loopback",
           lume: LUME_PINS.version,
           base: { version: timeline.given.baseVersion ?? null, build: timeline.given.baseBuild },
-          guestMacos: requests.evidence.macosVersion,
-          restoreImage: restoreImage ? "preseeded_and_verified_by_set_up" : "downloaded_by_set_up",
+          guestLinux: requests.evidence.guestLinux,
+          linuxImage: linuxImage ? "preseeded_and_verified_by_set_up" : "downloaded_by_set_up",
           capture: requests.evidence.captureSize,
           interruptedAction: requests.evidence.interrupted,
           checks: [

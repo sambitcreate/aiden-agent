@@ -164,29 +164,21 @@ test("only a recorded pass for the pinned driver opens the driver lane", () => {
   assert.equal(guestDriverReady(undefined), false);
 });
 
-test("the production bridge is Aiden's own ssh to the guest, ending in the driver's MCP proxy", () => {
+test("the production bridge is Aiden's own ssh to the guest, starting systemd cua-driver and ending in the MCP proxy", () => {
   const paths = guestSshPaths("/Users/ada/Library/Application Support/Aiden Agent/bot-computers");
   const bridge = guestDriverSshBridge(
-    { host: "192.168.64.7", user: "lume" },
-    { home: "/Users/lume", uid: 501 },
+    { host: "192.168.64.8", user: "lume" },
+    { home: "/home/lume", uid: 1000 },
     { paths, env: { PATH: "/usr/bin:/bin", HOME: paths.home } },
   );
   assert.equal(bridge.command, "/usr/bin/ssh");
   const separator = bridge.args.indexOf("--");
-  assert.deepEqual(bridge.args.slice(separator, separator + 2), ["--", "192.168.64.7"]);
+  assert.deepEqual(bridge.args.slice(separator, separator + 2), ["--", "192.168.64.8"]);
   assert.ok(bridge.args.includes("BatchMode=yes"));
   const remote = bridge.args[bridge.args.length - 1] ?? "";
   assert.match(remote, /^perl -e 'alarm \d+; exec @ARGV' \/bin\/sh -c /u);
+  assert.match(remote, /systemctl --user start cua-driver\.service/u);
+  assert.match(remote, /\/home\/lume\/\.local\/share\/aiden\/cua-driver\/cua-driver/u);
   assert.match(remote, /mcp --embedded --socket/u);
   assert.deepEqual(Object.keys(bridge.env).sort(), ["HOME", "PATH"]);
-
-  const linuxBridge = guestDriverSshBridge(
-    { host: "192.168.64.8", user: "lume" },
-    { home: "/home/lume", uid: 1000 },
-    { paths, env: { PATH: "/usr/bin:/bin", HOME: paths.home }, guestOs: "linux" },
-  );
-  const linuxRemote = linuxBridge.args[linuxBridge.args.length - 1] ?? "";
-  assert.match(linuxRemote, /systemctl --user start cua-driver\.service/u);
-  assert.match(linuxRemote, /\/home\/lume\/\.local\/share\/aiden\/cua-driver\/cua-driver/u);
-  assert.match(linuxRemote, /mcp --embedded --socket/u);
 });

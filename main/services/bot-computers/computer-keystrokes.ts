@@ -9,22 +9,14 @@
 
 import { parseComputerUseKeyChord } from "../computer-use/safety.js";
 import { chordKeyStrokes, textKeyStrokes, XK, type KeyStroke } from "./keysyms.js";
-import { botComputerGuestOs, type BotComputerGuestOs } from "./linux-guest-flag.js";
 
 export type BotComputerKeyStroke = KeyStroke;
 
-const MACOS_MODIFIER_KEYSYMS: Readonly<Record<string, number>> = {
+const MODIFIER_KEYSYMS: Readonly<Record<string, number>> = {
   ctrl: XK.Control_L,
   option: XK.Alt_L,
   shift: XK.Shift_L,
-  cmd: XK.Super_L,
-  win: XK.Super_L,
-};
-
-const LINUX_MODIFIER_KEYSYMS: Readonly<Record<string, number>> = {
-  ctrl: XK.Control_L,
-  option: XK.Alt_L,
-  shift: XK.Shift_L,
+  /** Command/cmd maps to Ctrl on Linux Bot computers. */
   cmd: XK.Control_L,
   win: XK.Super_L,
 };
@@ -60,17 +52,12 @@ const MODIFIER_ALIASES: Readonly<Record<string, string>> = { command: "cmd", con
 const MODIFIER_ORDER = ["ctrl", "option", "shift", "cmd"];
 
 /** Keysyms to hold for a click or drag's modifiers, in a fixed order. */
-export function botComputerModifierKeysyms(
-  modifiers: readonly string[] | undefined,
-  options: { guestOs?: BotComputerGuestOs } = {},
-): number[] {
+export function botComputerModifierKeysyms(modifiers: readonly string[] | undefined): number[] {
   if (!modifiers || modifiers.length === 0) return [];
-  const guestOs = options.guestOs ?? botComputerGuestOs();
-  const table = guestOs === "linux" ? LINUX_MODIFIER_KEYSYMS : MACOS_MODIFIER_KEYSYMS;
   const names = [...new Set(modifiers.map((raw) => MODIFIER_ALIASES[raw.trim().toLowerCase()] ?? raw.trim().toLowerCase()))];
   names.sort((left, right) => MODIFIER_ORDER.indexOf(left) - MODIFIER_ORDER.indexOf(right));
   const keysyms = names.map((modifier) => {
-    const keysym = table[modifier];
+    const keysym = MODIFIER_KEYSYMS[modifier];
     if (keysym === undefined) throw new BotComputerKeyError(`The ${modifier} key can't be sent to a Bot computer.`);
     return keysym;
   });
@@ -78,16 +65,13 @@ export function botComputerModifierKeysyms(
 }
 
 /**
- * A chord such as `cmd+shift+t` or `return`: modifiers down in order, the
- * key down and up, then the modifiers up in reverse. On Linux guests, Command
- * (`cmd`/`command`) maps to Ctrl.
+ * A chord such as `ctrl+shift+t` or `return`: modifiers down in order, the
+ * key down and up, then the modifiers up in reverse. Command (`cmd`/`command`)
+ * maps to Ctrl on Linux Bot computers.
  */
-export function botComputerChordStrokes(
-  chord: string,
-  options: { guestOs?: BotComputerGuestOs } = {},
-): BotComputerKeyStroke[] {
+export function botComputerChordStrokes(chord: string): BotComputerKeyStroke[] {
   try {
-    return chordKeyStrokes(chord, options);
+    return chordKeyStrokes(chord);
   } catch (error) {
     throw asKeyError(error, "That key chord isn't valid.");
   }

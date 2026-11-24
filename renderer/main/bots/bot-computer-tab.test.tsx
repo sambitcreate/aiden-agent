@@ -31,11 +31,12 @@ function status(computers: BotComputerStatus[]): BotComputersStatus {
     diskUsedBytes: 0,
     computers,
     requirements: {
-      downloadBytes: 19_772_231_540,
-      baseDiskBytes: 50_000_000_000,
-      setupFreeBytes: 84_196_731_252,
-      memoryPerComputerBytes: 8 * 1024 ** 3,
-      baseVersion: "26.6.2",
+      downloadBytes: 3_221_225_472,
+      baseDiskBytes: 8_000_000_000,
+      setupFreeBytes: 24_696_061_952,
+      memoryPerComputerBytes: 4 * 1024 ** 3,
+      baseVersion: "13",
+      maxRunningLimit: 4,
     },
   };
 }

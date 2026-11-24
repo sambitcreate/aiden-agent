@@ -1,5 +1,5 @@
 import * as React from "react";
-import { CheckCircle2, Circle, Download, MousePointerClick, RefreshCw, RotateCcw, SkipForward, Trash2, X } from "lucide-react";
+import { Download, RefreshCw, RotateCcw, Trash2, X } from "lucide-react";
 
 import {
   AlertDialog,
@@ -16,7 +16,6 @@ import {
 } from "../ui";
 import { InfoHint } from "../ui-info-hint";
 import { Progress } from "../ui-primitives";
-import { BotComputerBaseScreen } from "./bot-computer-base-screen";
 import { botComputersApi } from "../../lib/ipc";
 import { userFacingErrorMessage } from "../../lib/ipc-error";
 import { useBotComputersCache, useBotComputersStatus } from "../../lib/use-bot-computers";
@@ -27,30 +26,22 @@ import {
   botComputerSetupBusy,
   botComputerSetupPercent,
   botComputerSetupSummary,
+  botComputersMigrationNoticeText,
   formatBotComputerBytes,
-  type BotComputerGuestPermissions,
   type BotComputerMaxRunning,
   type BotComputersRequirements,
   type BotComputersSettings as BotComputersSettingsValue,
 } from "../../shared/bot-computers";
 
-/** Memory as macOS states it: binary gigabytes ("8 GB"). */
+/** Memory as macOS states it: binary gigabytes ("4 GB"). */
 export function botComputerMemoryLabel(bytes: number): string {
   return `${Math.max(1, Math.round(bytes / 1024 ** 3))} GB`;
 }
 
 /** What Set up downloads, from where and how much space it needs, before the person chooses it. */
 export function botComputersSetupDisclosure(requirements: BotComputersRequirements): string {
-  if (requirements.guestOs === "linux") {
-    return (
-      `Set up downloads Debian ${requirements.baseVersion} (${approximateBotComputerBytes(requirements.downloadBytes)}, plus desktop packages) ` +
-      `and builds a base computer of ${approximateBotComputerBytes(requirements.baseDiskBytes)}. ` +
-      `It needs ${approximateBotComputerBytes(requirements.setupFreeBytes)} free while it works, and the download is deleted once the base is ready. ` +
-      "Nothing is downloaded until you choose Set up."
-    );
-  }
   return (
-    `Set up downloads macOS ${requirements.baseVersion} from Apple (${approximateBotComputerBytes(requirements.downloadBytes)}) ` +
+    `Set up downloads Debian ${requirements.baseVersion} (${approximateBotComputerBytes(requirements.downloadBytes)}, plus desktop packages) ` +
     `and builds a base computer of ${approximateBotComputerBytes(requirements.baseDiskBytes)}. ` +
     `It needs ${approximateBotComputerBytes(requirements.setupFreeBytes)} free while it works, and the download is deleted once the base is ready. ` +
     "Nothing is downloaded until you choose Set up."
@@ -61,71 +52,11 @@ function idleLabel(minutes: number): string {
   return minutes === 60 ? "1 hour" : `${minutes} minutes`;
 }
 
-type Action = "setUp" | "cancel" | "updateBase" | "remove" | "settings" | "elementControl" | "check" | "skip";
-
-/** The guided step's title: what the person allows, and for what. */
-export const BOT_COMPUTER_PERMISSIONS_TITLE = "Allow Accessibility and Screen Recording for cua-driver";
-
-/** One permission's row: its name and whether the base computer has it yet. */
-function PermissionRow({ name, allowed }: { name: string; allowed: boolean }) {
-  const Icon = allowed ? CheckCircle2 : Circle;
-  return (
-    <li className="flex items-center gap-2" data-permission={name} data-allowed={allowed}>
-      <Icon aria-hidden className={allowed ? "size-4 shrink-0 text-status-green" : "size-4 shrink-0 text-tertiary"} />
-      <Text variant="small">{name}</Text>
-      <Text variant="small" color={allowed ? "secondary" : "tertiary"}>
-        {allowed ? "Allowed" : "Not yet"}
-      </Text>
-    </li>
-  );
-}
+type Action = "setUp" | "cancel" | "updateBase" | "remove" | "settings" | "dismissNotice";
 
 /**
- * The guided grant (plan §8.6): the base computer's live screen, where the
- * person turns on cua-driver in Privacy & Security, both permissions'
- * state, Check again, and Skip, which finishes with screen-only Bots.
- */
-function PermissionsStep({
-  permissions,
-  acting,
-  onCheck,
-  onSkip,
-}: {
-  permissions: BotComputerGuestPermissions | undefined;
-  acting: Action | null;
-  onCheck(): void;
-  onSkip(): void;
-}) {
-  return (
-    <Field
-      orientation="vertical"
-      label={BOT_COMPUTER_PERMISSIONS_TITLE}
-      description="In the base computer below, choose Open System Settings on each prompt (or go to Privacy & Security) and turn on cua-driver for both. Every Bot computer made from this base gets the same permissions."
-    >
-      <div className="flex flex-col gap-3">
-        <BotComputerBaseScreen />
-        <div className="flex flex-wrap items-center justify-between gap-3">
-          <ul className="flex flex-wrap gap-x-5 gap-y-1" aria-label="Permissions in the base computer">
-            <PermissionRow name="Accessibility" allowed={permissions?.accessibility === true} />
-            <PermissionRow name="Screen Recording" allowed={permissions?.screenRecording === true} />
-          </ul>
-          <div className="flex flex-wrap justify-end gap-2">
-            <Button size="small" variant="transparent" disabled={acting !== null} onClick={onSkip}>
-              <SkipForward aria-hidden /> Skip
-            </Button>
-            <Button size="small" variant="filled" disabled={acting !== null} onClick={onCheck}>
-              <RefreshCw aria-hidden /> Check again
-            </Button>
-          </div>
-        </div>
-      </div>
-    </Field>
-  );
-}
-
-/**
- * Settings → Computers & VMs → Bot computers (plan §8): the one place the macOS download and the
- * base computer are set up, sized and removed. Nothing is downloaded until the
+ * Settings → Computers & VMs → Bot computers: the one place the Debian Linux
+ * base computer is set up, sized and removed. Nothing is downloaded until the
  * person chooses Set up, and the size and source are stated before that.
  */
 export function BotComputersSettings() {
@@ -201,30 +132,27 @@ export function BotComputersSettings() {
       },
       "Aiden couldn't cancel setup.",
     );
-  const setUpElementControl = () =>
+  const dismissMigrationNotice = () =>
     run(
-      "elementControl",
-      async () => cache.set(await botComputersApi.setUpElementControl()),
-      "Aiden couldn't start setting up element control.",
+      "dismissNotice",
+      async () => {
+        await botComputersApi.dismissMigrationNotice();
+        cache.update((current) => {
+          const next = { ...current };
+          delete next.migrationNotice;
+          return next;
+        });
+      },
+      "Aiden couldn't dismiss this notice.",
     );
-  const checkPermissions = () =>
-    run("check", () => botComputersApi.checkPermissions(), "Aiden couldn't check the permissions.");
-  const skipPermissions = () =>
-    run("skip", () => botComputersApi.skipPermissions(), "Aiden couldn't skip this step.");
-  const guestOs = status.requirements.guestOs ?? "macos";
-  const isLinux = guestOs === "linux";
-  const downloadLabel = isLinux ? "Downloading Debian Linux" : "Downloading macOS";
+  const downloadLabel = "Downloading Debian Linux";
 
   const removeEverything = () =>
     run(
       "remove",
       async () => {
         cache.set(await botComputersApi.removeEverything());
-        toast.success(
-          isLinux
-            ? "Every Bot computer and the Linux download are removed."
-            : "Every Bot computer and the macOS download are removed.",
-        );
+        toast.success("Every Bot computer and the Linux download are removed.");
       },
       "Aiden couldn't remove the Bot computers.",
     );
@@ -250,18 +178,39 @@ export function BotComputersSettings() {
   const unsupported = setup.kind === "unsupported";
   const busy = botComputerSetupBusy(setup);
   const percent = botComputerSetupPercent(setup);
-  const summary = botComputerSetupSummary(setup, guestOs);
+  const summary = botComputerSetupSummary(setup);
   const offerSetUp = setup.kind === "not_set_up" || setup.kind === "failed";
   const hasAnything = setup.kind !== "not_set_up" || status.diskUsedBytes > 0 || status.computers.length > 0;
   const memory = botComputerMemoryLabel(status.requirements.memoryPerComputerBytes);
-  const maxRunningLimit: BotComputerMaxRunning = status.requirements.maxRunningLimit ?? (isLinux ? 4 : 2);
+  const maxRunningLimit: BotComputerMaxRunning = status.requirements.maxRunningLimit ?? 4;
   const maxRunningChoices = botComputerMaxRunningChoices(maxRunningLimit);
   const displayedMaxRunning = Math.min(status.settings.maxRunning, maxRunningLimit);
-  const waitingForPermissions = !isLinux && setup.kind === "building_base" && setup.step === "permissions";
   const computerCount = status.computers.length;
 
   return (
     <>
+      {status.migrationNotice ? (
+        <FieldSet>
+          <Field
+            label="Switched to Linux"
+            description={
+              <span role="status" className="block">
+                {botComputersMigrationNoticeText(status.migrationNotice.freedBytes)}
+              </span>
+            }
+          >
+            <Button
+              size="small"
+              variant="transparent"
+              disabled={acting !== null}
+              onClick={() => void dismissMigrationNotice()}
+            >
+              <X aria-hidden /> Dismiss
+            </Button>
+          </Field>
+        </FieldSet>
+      ) : null}
+
       <FieldSet title="Setup">
         <Field
           label="Base computer"
@@ -308,41 +257,13 @@ export function BotComputersSettings() {
             ) : null}
           </div>
         </Field>
-        {waitingForPermissions ? (
-          <PermissionsStep
-            permissions={setup.permissions}
-            acting={acting}
-            onCheck={() => void checkPermissions()}
-            onSkip={() => void skipPermissions()}
-          />
-        ) : null}
-        {busy && !waitingForPermissions ? (
+        {busy ? (
           <Field orientation="vertical">
             {/* Only the download has a percentage; the other steps are named above. */}
             {percent !== null ? (
               <Progress value={percent} label={downloadLabel} />
             ) : (
               <Progress indeterminate label={summary} />
-            )}
-          </Field>
-        ) : null}
-        {!isLinux && setup.kind === "ready" && setup.elementControl !== undefined ? (
-          <Field
-            label="Element control"
-            description={
-              setup.elementControl
-                ? "On. Bots click apps' buttons and fields by name, as well as acting on the screen."
-                : `${setup.elementControlNote ?? "Off: Bots act on the screen only."} Set it up to let Bots click controls by name. Computers given before then get it after a Reset.`
-            }
-          >
-            {setup.elementControl ? (
-              <Text variant="small" color="secondary" className="justify-self-end">
-                On
-              </Text>
-            ) : (
-              <Button size="small" variant="filled" disabled={acting !== null} onClick={() => void setUpElementControl()}>
-                <MousePointerClick aria-hidden /> Set up element control
-              </Button>
             )}
           </Field>
         ) : null}
@@ -417,11 +338,7 @@ export function BotComputersSettings() {
           </Field>
           <Field
             label="Remove everything"
-            description={
-              isLinux
-                ? "Stops and deletes every Bot computer, the base and the Linux download. Files in each Bot's Computer folder stay."
-                : "Stops and deletes every Bot computer, the base and the macOS download. Files in each Bot's Computer folder stay."
-            }
+            description="Stops and deletes every Bot computer, the base and the Linux download. Files in each Bot's Computer folder stay."
           >
             <Button
               size="small"
@@ -439,11 +356,7 @@ export function BotComputersSettings() {
         open={confirmRemove}
         onOpenChange={setConfirmRemove}
         title="Remove every Bot computer?"
-        description={
-          isLinux
-            ? "Aiden stops and deletes every Bot's computer, the base computer, the Linux download and the keys it uses to reach them. Files in each Bot's Computer folder stay. To use Bot computers again, choose Set up and download Debian Linux again."
-            : "Aiden stops and deletes every Bot's computer, the base computer, the macOS download and the keys it uses to reach them. Files in each Bot's Computer folder stay. To use Bot computers again, choose Set up and download macOS again."
-        }
+        description="Aiden stops and deletes every Bot's computer, the base computer, the Linux download and the keys it uses to reach them. Files in each Bot's Computer folder stay. To use Bot computers again, choose Set up and download Debian Linux again."
         confirmLabel="Remove everything"
         confirmVariant="destructive"
         busy={acting === "remove"}

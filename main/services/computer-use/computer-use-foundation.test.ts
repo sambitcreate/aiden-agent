@@ -15,6 +15,7 @@ import {
   codesignVerifyArguments,
   resolveCuaDriverInstallation,
   resolveVendoredCuaDriverExecutable,
+  resolveVendoredLinuxCuaDriverExecutable,
   vendoredCuaDriverNoticePath,
 } from "./binary.js";
 import {
@@ -469,6 +470,47 @@ test("the driver a Bot computer's guest gets is only the vendored, pinned execut
     assert.equal(
       vendoredCuaDriverNoticePath({ ...options, isPackaged: true, resourcesPath: "/Applications/Aiden Agent.app/Contents/Resources" }),
       "/Applications/Aiden Agent.app/Contents/Helpers/CuaDriver.app/Contents/Resources/LICENSE.cua-driver.md",
+    );
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("the Linux arm64 guest driver resolver enforces platform, non-symlink directory, exact size, ELF aarch64, and cancellation", async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "aiden-cua-linux-guest-copy-"));
+  const options = { appPath: root, isPackaged: false, platform: "darwin" as const, resourcesPath: root };
+  const driverDir = path.join(root, "build", "computer-use", "cua-driver-linux-arm64");
+  const driver = path.join(driverDir, "cua-driver");
+  try {
+    await assert.rejects(
+      resolveVendoredLinuxCuaDriverExecutable(options),
+      (error: unknown) => error instanceof CuaDriverError && error.code === "driver_missing",
+    );
+    await assert.rejects(
+      resolveVendoredLinuxCuaDriverExecutable({ ...options, platform: "linux" }),
+      (error: unknown) => error instanceof CuaDriverError && error.code === "unsupported_platform",
+    );
+
+    await mkdir(driverDir, { recursive: true });
+    await writeFile(driver, "wrong size", { mode: 0o644 });
+    await assert.rejects(
+      resolveVendoredLinuxCuaDriverExecutable(options),
+      (error: unknown) => error instanceof CuaDriverError && error.code === "driver_integrity_failed" && /size/u.test(error.message),
+    );
+
+    const elsewhere = path.join(root, "elsewhere-linux");
+    await rename(driverDir, elsewhere);
+    await symlink(elsewhere, driverDir);
+    await assert.rejects(
+      resolveVendoredLinuxCuaDriverExecutable(options),
+      (error: unknown) => error instanceof CuaDriverError && error.code === "driver_missing",
+    );
+
+    const cancelled = new AbortController();
+    cancelled.abort();
+    await assert.rejects(
+      resolveVendoredLinuxCuaDriverExecutable(options, cancelled.signal),
+      (error: unknown) => error instanceof CuaDriverError && error.code === "cancelled",
     );
   } finally {
     await rm(root, { recursive: true, force: true });

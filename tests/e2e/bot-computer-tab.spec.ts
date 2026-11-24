@@ -56,16 +56,17 @@ test("a computer that fails to start says why in the status red, not in the empt
     ipcMain.handle("bots:pendingApprovals", () => []);
     ipcMain.handle("bots:routines:list", () => []);
     ipcMain.handle("botComputers:status", () => ({
-      setup: { kind: "ready", baseBuild: "25G83", baseVersion: "26.6.2", updateAvailable: false },
+      setup: { kind: "ready", baseBuild: "20261123-2671", baseVersion: "13", updateAvailable: false },
       settings: { maxRunning: 2, idleStopMinutes: 10 },
       diskUsedBytes: 0,
-      computers: [{ botId: bot.id, vmName, state: "stopped", baseBuild: "25G83", outdated: false, controller: "bot" }],
+      computers: [{ botId: bot.id, vmName, state: "stopped", baseBuild: "20261123-2671", outdated: false, controller: "bot" }],
       requirements: {
-        downloadBytes: 19_772_231_540,
-        baseDiskBytes: 50_000_000_000,
-        setupFreeBytes: 84_196_731_252,
-        memoryPerComputerBytes: 8 * 1024 ** 3,
-        baseVersion: "26.6.2",
+        downloadBytes: 3_221_225_472,
+        baseDiskBytes: 8_000_000_000,
+        setupFreeBytes: 24_696_061_952,
+        memoryPerComputerBytes: 4 * 1024 ** 3,
+        baseVersion: "13",
+        maxRunningLimit: 4,
       },
     }));
     ipcMain.handle("botComputers:pointer", () => null);
@@ -136,7 +137,6 @@ test("Settings shows Linux Bot computer sizes, 1-4 running choices, and no macOS
         setupFreeBytes: 20_401_094_656,
         memoryPerComputerBytes: 4 * 1024 ** 3,
         baseVersion: "13",
-        guestOs: "linux",
         maxRunningLimit: 4,
       },
     }));

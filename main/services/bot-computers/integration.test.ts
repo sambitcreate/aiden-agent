@@ -162,12 +162,23 @@ async function world(model: { steps: Parameters<typeof createFauxModels>[0] }) {
           .map((line) => JSON.parse(line) as LumeCall)
       : [];
 
-  // System ssh and ssh-keygen: the guest accepts Aiden's key and every provisioning step.
+  // System ssh, ssh-keygen, and ssh-keyscan: the guest accepts Aiden's key and every provisioning step.
   const runProcess = async (command: string, args: readonly string[], _options: BoundedProcessOptions): Promise<BoundedProcessResult> => {
     if (command.endsWith("ssh-keygen")) {
       const file = args[args.indexOf("-f") + 1] ?? "";
       writeFileSync(file, "PRIVATE", { mode: 0o600 });
       writeFileSync(`${file}.pub`, "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIAidenKeyForBotComputerIntegrationTests0123456 aiden\n");
+    }
+    if (command.endsWith("ssh-keyscan")) {
+      const targetIp = args[args.length - 1] ?? "192.168.64.2";
+      return {
+        exitCode: 0,
+        signal: null,
+        stdout: `${targetIp} ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIKfakeHostKeyForAidenBotComputerTests0123456789\n`,
+        stderr: "",
+        truncated: false,
+        timedOut: false,
+      };
     }
     return { exitCode: 0, signal: null, stdout: "", stderr: "", truncated: false, timedOut: false };
   };

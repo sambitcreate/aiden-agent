@@ -200,7 +200,7 @@ export const SETTINGS_DESTINATIONS: ReadonlyArray<{
   {
     id: "botComputers",
     title: "Bot computers",
-    keywords: ["virtual machine", "vm", "lume", "macos", "bot computer", "disk space", "apple silicon"],
+    keywords: ["virtual machine", "vm", "lume", "linux", "debian", "xfce", "bot computer", "disk space", "apple silicon"],
   },
   {
     id: "simulator",

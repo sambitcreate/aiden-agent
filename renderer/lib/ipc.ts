@@ -1340,6 +1340,7 @@ export const botComputersApi = {
   removeEverything: () => botComputersStatus(BOT_COMPUTER_CHANNELS.removeEverything),
   updateSettings: (patch: Partial<BotComputersSettings>) =>
     invoke<BotComputersSettings>(BOT_COMPUTER_CHANNELS.updateSettings, patch),
+  dismissMigrationNotice: () => botComputersStatus(BOT_COMPUTER_CHANNELS.dismissMigrationNotice),
   give: (botId: string) => botComputer(BOT_COMPUTER_CHANNELS.give, botId),
   reset: (botId: string) => botComputer(BOT_COMPUTER_CHANNELS.reset, botId),
   remove: (botId: string) => invoke<void>(BOT_COMPUTER_CHANNELS.remove, botId),
@@ -1354,16 +1355,6 @@ export const botComputersApi = {
   giveBack: (botId: string) => botComputer(BOT_COMPUTER_CHANNELS.giveBack, botId),
   pointer: async (botId: string): Promise<BotComputerPointer | null> =>
     parseBotComputerPointer(await invoke<unknown>(BOT_COMPUTER_CHANNELS.pointer, botId)),
-  /** Element control (the guest driver lane) on a ready base without it; progress arrives as broadcasts. */
-  setUpElementControl: () => botComputersStatus(BOT_COMPUTER_CHANNELS.setUpElementControl),
-  checkPermissions: () => invoke<void>(BOT_COMPUTER_CHANNELS.checkPermissions),
-  skipPermissions: () => invoke<void>(BOT_COMPUTER_CHANNELS.skipPermissions),
-  /** The base computer's screen while setup waits for the person's grants. */
-  baseViewerGrant: async (): Promise<BotComputerViewerGrant> => {
-    const grant = parseBotComputerViewerGrant(await invoke<unknown>(BOT_COMPUTER_CHANNELS.baseViewerGrant));
-    if (!grant) throw new Error("Aiden returned an invalid viewer grant.");
-    return grant;
-  },
   onChanged: (handler: (status: BotComputersStatus) => void) =>
     onNotification<unknown>(BOT_COMPUTERS_CHANGED_CHANNEL, (payload) => {
       const status = parseBotComputersStatus(payload);

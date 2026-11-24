@@ -20,7 +20,6 @@ function option(args: string[], name: string): string | undefined {
 
 test("every operation names Aiden's storage; clone names it as source and destination", () => {
   const commands: LumeCommand[] = [
-    { op: "create", name: BOT_COMPUTER_BASE_VM, ipsw: "/tmp/restore.ipsw", unattended: "tahoe" },
     { op: "create", os: "linux", name: BOT_COMPUTER_BASE_VM, cpu: 4, memoryGb: 4, diskSizeGb: 24, display: "1280x800" },
     { op: "run", name: botVm, vncPassword: "Zq7Tn2Lw9Rk4Hm6X", sharedDir: "/Users/person/Bots/ada/Computer" },
     { op: "get", name: botVm },
@@ -131,7 +130,6 @@ test("a shared folder with a colon, a relative path or a foreign VM name is refu
   refuse({ op: "get", name: "my-own-vm" });
   // A `name:tag` reaching `lume run` would make it pull from a registry.
   refuse({ op: "run", name: "macos-sequoia:latest", vncPassword: "Zq7Tn2Lw9Rk4Hm6X", sharedDir: "/tmp/x" });
-  refuse({ op: "create", name: BOT_COMPUTER_BASE_VM, ipsw: "latest", unattended: "tahoe" });
   refuse({ op: "create", os: "linux", name: BOT_COMPUTER_BASE_VM, diskSizeGb: 8 });
   refuse({ op: "create", os: "linux", name: BOT_COMPUTER_BASE_VM, memoryGb: 1 });
   refuse({ op: "create", os: "linux", name: BOT_COMPUTER_BASE_VM, display: "wide" });
@@ -223,7 +221,7 @@ test("runLume cp transfers files to a running VM and fails cleanly when the sour
   const opts = { storage: vms, env, timeoutMs: 10_000 };
 
   try {
-    assert.equal((await runLume(invocation, { op: "create", name: BOT_COMPUTER_BASE_VM, ipsw, unattended: "tahoe" }, opts)).exitCode, 0);
+    assert.equal((await runLume(invocation, { op: "create", os: "linux", name: BOT_COMPUTER_BASE_VM }, opts)).exitCode, 0);
     const stopped = await runLume(
       invocation,
       { op: "cp", name: BOT_COMPUTER_BASE_VM, direction: "to_guest", localPath: payload, remotePath: "/tmp/payload.txt" },

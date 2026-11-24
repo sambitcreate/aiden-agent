@@ -10,8 +10,8 @@ import { analyticsSettled, captureAnalyticsEvents } from "../analytics/test-supp
 import type { BoundedProcessOptions, BoundedProcessResult } from "./bounded-process.js";
 import { createGuestCuaDriverHostFactory } from "./guest-driver.js";
 import { createBotComputerHost, type BotComputerHostDependencies } from "./host.js";
-import { BOT_COMPUTER_GUEST_PASSWORD_SECRET, BotComputerError } from "./types.js";
-import { BOT_COMPUTER_BASE_VM, botComputerVmName } from "./vm-names.js";
+import { BOT_COMPUTER_GUEST_PASSWORD_SECRET, BOT_COMPUTER_LINUX_MIGRATION_BOT_NOTE, BotComputerError } from "./types.js";
+import { BOT_COMPUTER_BASE_VM, BOT_COMPUTER_STAGING_BASE_VM, botComputerVmName } from "./vm-names.js";
 
 const last = <T>(items: readonly T[]): T | undefined => items[items.length - 1];
 
@@ -281,6 +281,14 @@ async function setUp(context: Harness): Promise<void> {
   assert.equal((await context.host.status()).setup.kind, "ready");
 }
 
+async function waitFor(check: () => boolean | Promise<boolean>, what: string): Promise<void> {
+  const deadline = Date.now() + 15_000;
+  while (!(await check())) {
+    if (Date.now() > deadline) assert.fail(`timed out waiting for ${what}`);
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+}
+
 test("Set up downloads the pinned image, builds and provisions the base, then deletes the image", async () => {
   await withHost(async (context) => {
     const before = await context.host.status();
@@ -292,22 +300,20 @@ test("Set up downloads the pinned image, builds and provisions the base, then de
     await setUp(context);
     assert.equal(await context.host.baseReady(), true);
     const status = await context.host.status();
-    assert.deepEqual(status.setup, { kind: "ready", baseVersion: "26.6.2", baseBuild: "25G83", updateAvailable: false, elementControl: false });
-    assert.deepEqual(context.fetches, [{ url: "https://updates.cdn-apple.com/test/UniversalMac_26.6.2_25G83_Restore.ipsw", redirect: "error" }]);
+    assert.deepEqual(status.setup, { kind: "ready", baseVersion: "26.6.2", baseBuild: "25G83", updateAvailable: false });
+    assert.deepEqual(context.fetches, [{ url: "https://updates.cdn-apple.com/test/UniversalMac_26.6.2_25G83_Restore.ipsw", redirect: "manual" }]);
     const ops = context.calls().filter((call) => call.kind === "cli").map((call) => call.op);
     assert.ok(ops.indexOf("create") < ops.indexOf("run"));
     assert.equal(last(ops), "stop", "the base is shut down at the end");
     const create = context.calls().find((call) => call.op === "create");
-    assert.equal(create?.args?.[create.args.indexOf("--unattended") + 1], "tahoe");
-    const lumeSsh = context.calls().filter((call) => call.kind === "ssh").map((call) => call.command ?? "");
-    assert.equal(lumeSsh.length, 2);
-    assert.match(lumeSsh[0] ?? "", /authorized_keys/u);
-    assert.equal(context.sshCalls.length, 5, "the rest runs over Aiden's own ssh");
+    assert.equal(create?.args?.[create.args.indexOf("--os") + 1], "linux");
+    assert.equal(context.calls().filter((call) => call.kind === "ssh").length, 0, "Linux provisioning never uses password lume ssh");
+    assert.ok(context.sshCalls.length >= 6, "provisioning runs over Aiden's own ssh");
     const stored = context.secrets.get(BOT_COMPUTER_GUEST_PASSWORD_SECRET);
     assert.match(stored ?? "", /^[A-Za-z0-9]{32}$/u);
     assert.ok(context.sshCalls.every((call) => !call.args.some((arg) => arg.includes(stored ?? "<none>"))));
     assert.equal(readFileSync(path.join(context.root, "known_hosts"), "utf8"), `aiden-bot-computer ${HOST_KEY}\n`);
-    assert.equal(existsSync(path.join(context.root, "restore-images", "UniversalMac_25G83_Restore.ipsw")), false);
+    assert.equal(existsSync(path.join(context.root, "restore-images", "debian-25G83.raw")), false);
     assert.equal(context.vmRunning(BOT_COMPUTER_BASE_VM), false);
     assert.equal(context.events.ready, 1);
   });
@@ -328,7 +334,7 @@ test("Set up with too little disk says so before downloading", async () => {
 
 test("Set up with too little free memory says so before downloading, and again before it boots the base", async () => {
   const plenty = 64 * 1024 ** 3;
-  const short = 2 * 1024 ** 3;
+  const short = 1 * 1024 ** 3;
   let memory = short;
   // What the Mac has free once the download has run, which takes a while.
   let memoryAfterDownload = plenty;
@@ -371,7 +377,7 @@ test("cancelling Set up keeps the partial download, and the next Set up resumes 
   const ranges: (string | null)[] = [];
   await withHost(
     async (context) => {
-      const partial = path.join(context.root, "restore-images", "UniversalMac_25G83_Restore.ipsw.part");
+      const partial = path.join(context.root, "restore-images", "debian-25G83.raw.part");
       const first = context.host.setUp();
       for (let attempt = 0; attempt < 200 && !(existsSync(partial) && statSync(partial).size === half); attempt += 1) {
         await new Promise((resolve) => setTimeout(resolve, 10));
@@ -514,7 +520,7 @@ test("at the cap the least recently used idle computer stops; with none idle, th
     assert.deepEqual(progress, ["Waiting for another Bot's computer", "Starting Ada's computer…"]);
 
     await context.host.updateSettings({ maxRunning: 1 });
-    await assert.rejects(context.host.updateSettings({ maxRunning: 3 as 1 }), /two/u);
+    await assert.rejects(context.host.updateSettings({ maxRunning: 5 as 1 }), /At most 4/u);
   });
 });
 
@@ -1023,11 +1029,11 @@ test("reconcile stops VMs an earlier launch left running and reports stale ones 
 
 test("a base left half-installed by a crash is deleted at the next launch, and Settings says Set up was interrupted", async () => {
   await withHost(async (context) => {
-    // An earlier launch quit while Lume was installing macOS into the base.
+    // An earlier launch quit while Lume was creating the Linux base.
     mkdirSync(path.join(context.root, "vms", BOT_COMPUTER_BASE_VM), { recursive: true });
     writeFileSync(
       path.join(context.root, "vms", ".fake-state.json"),
-      JSON.stringify({ vms: { [BOT_COMPUTER_BASE_VM]: { status: "stopped", ip: "192.168.64.10", mac: "a6:4f:2c:9e:13:10" } } }),
+      JSON.stringify({ vms: { [BOT_COMPUTER_BASE_VM]: { os: "linux", status: "stopped", ip: "192.168.64.10", mac: "a6:4f:2c:9e:13:10" } } }),
     );
     context.config.stale = BOT_COMPUTER_BASE_VM;
     context.writeConfig();
@@ -1055,7 +1061,7 @@ test("Lume's VM-limit failure becomes a clear message, and the slot is released"
     context.writeConfig();
     await assert.rejects(
       context.host.ensureRunning("ben", { reason: "tool" }),
-      (error: unknown) => error instanceof BotComputerError && error.code === "vm_limit" && /two virtual machines/u.test(error.message),
+      (error: unknown) => error instanceof BotComputerError && error.code === "vm_limit" && /available slot/u.test(error.message),
     );
     assert.equal((await context.host.computer("ben"))?.state, "stopped");
   });
@@ -1149,17 +1155,17 @@ test("Update base builds the newer pinned base beside the old one; Bot computers
     // The next Aiden release pins a newer macOS.
     const pin = newerPin(context);
     const host = context.relaunch({ image: pin });
-    assert.deepEqual((await host.status()).setup, { kind: "ready", baseVersion: "26.6.2", baseBuild: "25G83", updateAvailable: true, elementControl: false });
+    assert.deepEqual((await host.status()).setup, { kind: "ready", baseVersion: "26.6.2", baseBuild: "25G83", updateAvailable: true });
     assert.equal((await host.computer("ada"))?.outdated, false);
 
     await host.updateBase();
-    assert.deepEqual((await host.status()).setup, { kind: "ready", baseVersion: "26.7", baseBuild: "25H5", updateAvailable: false, elementControl: false });
+    assert.deepEqual((await host.status()).setup, { kind: "ready", baseVersion: "26.7", baseBuild: "25H5", updateAvailable: false });
     assert.equal(last(context.fetches)?.url, pin.url);
     const installs = context.calls().filter((call) => call.op === "create");
     assert.equal(installs.length, 2);
-    assert.match(installs[1]?.args?.[installs[1].args.indexOf("--ipsw") + 1] ?? "", /25H5/u, "the new base installs the newer image");
+    assert.equal(installs[1]?.args?.[1], BOT_COMPUTER_STAGING_BASE_VM, "the new base is built under the staging name");
     assert.deepEqual(context.vmNames(), [BOT_COMPUTER_BASE_VM, botComputerVmName("ada")].sort(), "the new base is swapped in, nothing left beside it");
-    assert.equal(existsSync(path.join(context.root, "restore-images", "UniversalMac_25H5_Restore.ipsw")), false);
+    assert.equal(existsSync(path.join(context.root, "restore-images", "debian-25H5.raw")), false);
     assert.equal(context.events.ready, 2);
 
     const ada = await host.computer("ada");
@@ -1209,7 +1215,7 @@ test("building a base needs a running place: an idle computer gives up its own, 
     // it never rebuilds, in place, the base the Bots' computers came from.
     await assert.rejects(
       host.setUp(),
-      (error: unknown) => error instanceof BotComputerError && error.code === "vm_limit" && /two virtual machines/u.test(error.message),
+      (error: unknown) => error instanceof BotComputerError && error.code === "vm_limit" && /available slot/u.test(error.message),
     );
     assert.deepEqual(
       context.vmNames().filter((name) => name.startsWith("aiden-base")),
@@ -1540,14 +1546,21 @@ test("Remove everything turns off a computer an earlier launch left running befo
 
 const GUEST_FIXTURE = path.resolve("main/services/bot-computers/fixtures/guest-cua-driver.mjs");
 
-/** A host whose guest sessions run the fake guest driver, with grants read from a file. */
-function guestDriverHarness(options: { grantOnPrompt?: boolean; executable?: () => Promise<string>; hangOn?: string } = {}) {
+/** A host whose guest sessions run the fake Linux guest driver (no macOS permission grants). */
+function guestDriverHarness(options: { executable?: () => Promise<string>; failProbe?: boolean } = {}) {
   const dir = mkdtempSync(path.join(tmpdir(), "p11-guest-"));
   const callLog = path.join(dir, "guest-calls.jsonl");
   const permissions = path.join(dir, "permissions.json");
-  writeFileSync(permissions, JSON.stringify({ accessibility: false, screen_recording: false }));
+  // Linux guests run with --no-permissions-gate so check_permissions reports ready unless testing probe failure.
+  writeFileSync(
+    permissions,
+    JSON.stringify({
+      accessibility: !options.failProbe,
+      screen_recording: !options.failProbe,
+    }),
+  );
   const driverFile = path.join(dir, "cua-driver");
-  writeFileSync(driverFile, "vendored driver bytes");
+  writeFileSync(driverFile, "vendored linux arm64 driver bytes");
   const noticeFile = path.join(dir, "LICENSE.cua-driver.md");
   writeFileSync(noticeFile, "MIT License");
   const bridges: { command: string; args: readonly string[] }[] = [];
@@ -1560,28 +1573,17 @@ function guestDriverHarness(options: { grantOnPrompt?: boolean; executable?: () 
           bridges.push(await bridge());
           return {
             command: process.execPath,
-            args: [
-              GUEST_FIXTURE,
-              "--permissions-file",
-              permissions,
-              "--log",
-              callLog,
-              ...(options.grantOnPrompt ? ["--grant-on-prompt"] : []),
-              ...(options.hangOn ? ["--hang-on", options.hangOn] : []),
-            ],
+            args: [GUEST_FIXTURE, "--permissions-file", permissions, "--log", callLog],
             env: { PATH: "/usr/bin:/bin" },
           };
         },
       }),
-    permissionPollMs: 20,
   };
   return {
     overrides,
     driverFile,
     noticeFile,
     bridges,
-    grant: () => writeFileSync(permissions, JSON.stringify({ accessibility: true, screen_recording: true })),
-    /** The driver tools the guest was asked to run, in order. */
     toolCalls: (): string[] =>
       existsSync(callLog)
         ? readFileSync(callLog, "utf8")
@@ -1593,177 +1595,63 @@ function guestDriverHarness(options: { grantOnPrompt?: boolean; executable?: () 
   };
 }
 
-/** The guest answers the install's location step as a macOS guest would. */
-function answerGuest(context: Harness): void {
-  context.ssh.stdout = (args) => (last(args)?.includes("aiden-guest-driver") ? "aiden-guest-driver 501 /Users/lume\n" : undefined);
+/** The guest answers the install's location step as a Linux guest would. */
+function answerLinuxGuest(context: Harness): void {
+  context.ssh.stdout = (args) => (last(args)?.includes("aiden-guest-driver") ? "aiden-guest-driver 1000 /home/lume\n" : undefined);
 }
 
-async function waitFor(check: () => boolean | Promise<boolean>, what: string): Promise<void> {
-  const deadline = Date.now() + 15_000;
-  while (!(await check())) {
-    if (Date.now() > deadline) assert.fail(`timed out waiting for ${what}`);
-    await new Promise((resolve) => setTimeout(resolve, 10));
-  }
-}
-
-test("Set up installs the guest driver, waits in the base's live view for the grants, and records element control", async () => {
-  const guest = guestDriverHarness();
-  await withHost(async (context) => {
-    answerGuest(context);
-    const setup = context.host.setUp();
-    await waitFor(async () => {
-      const state = (await context.host.status()).setup;
-      return state.kind === "building_base" && state.step === "permissions" && state.permissions !== undefined;
-    }, "the permission step");
-    // While it waits, Settings can show the running base's screen.
-    const view = context.host.baseView();
-    assert.equal(view?.vmName, BOT_COMPUTER_BASE_VM);
-    assert.equal(view?.vnc.host, "127.0.0.1");
-    assert.deepEqual((await context.host.status()).setup, {
-      kind: "building_base",
-      step: "permissions",
-      permissions: { accessibility: false, screenRecording: false },
-    });
-
-    guest.grant();
-    context.host.checkPermissions();
-    await setup;
-    assert.equal(context.host.baseView(), undefined, "the view ends with the step");
-    const status = await context.host.status();
-    assert.equal(status.setup.kind === "ready" && status.setup.elementControl, true);
-
-    // The vendored file, and its licence notice, went over stdin; the password only ever on stdin.
-    const password = context.secrets.get(BOT_COMPUTER_GUEST_PASSWORD_SECRET) ?? "";
-    assert.ok(context.sshCalls.some((call) => call.stdinFile === guest.driverFile));
-    assert.ok(context.sshCalls.some((call) => call.stdinFile === guest.noticeFile && /LICENSE\.cua-driver\.md/u.test(last(call.args) ?? "")));
-    const restart = context.sshCalls.find((call) => last(call.args)?.includes("kickstart -k gui/501/com.aiden.bot-computer.cua-driver"));
-    assert.equal(restart?.stdin, `${password}\n`);
-    for (const call of context.sshCalls) assert.equal(call.args.join(" ").includes(password), false);
-    // Every guest session went over Aiden's own ssh to the base, ending in the driver's MCP proxy.
-    assert.ok(guest.bridges.length >= 2, "one session to wait for the grants, one to probe after the restart");
-    for (const bridge of guest.bridges) {
-      assert.equal(bridge.command, "/usr/bin/ssh");
-      assert.match(last(bridge.args) ?? "", /mcp --embedded --socket/u);
-    }
-
-    // Clones inherit the base's disk, grants and flag; the Bot's computer offers the driver lane.
-    await context.host.give("ada");
-    assert.ok(await context.host.guestDriver("ada"));
-  }, guest.overrides);
-});
-
-test("skipping the grants keeps the screen-only lane, and element control can be set up later on the ready base", async (t) => {
+test("Set up installs the Linux guest driver automatically, probes it with no permission prompts, and clones inherit it", async (t) => {
   const sent = captureAnalyticsEvents(t);
   const guest = guestDriverHarness();
   await withHost(async (context) => {
-    answerGuest(context);
-    const setup = context.host.setUp();
-    await waitFor(async () => {
-      const state = (await context.host.status()).setup;
-      return state.kind === "building_base" && state.step === "permissions";
-    }, "the permission step");
-    context.host.skipPermissions();
-    await setup;
-    const skipped = (await context.host.status()).setup;
-    assert.equal(skipped.kind, "ready");
-    assert.equal(skipped.kind === "ready" && skipped.elementControl, false);
-    assert.match(skipped.kind === "ready" ? (skipped.elementControlNote ?? "") : "", /skipped/u);
-    await context.host.give("ada");
-    assert.equal(await context.host.guestDriver("ada"), undefined, "a computer from that base stays on the VNC lane");
-
-    // Later, from Settings: the base boots once, the person allows them, and it shuts down again.
-    const runsBefore = context.calls().filter((call) => call.kind === "cli" && call.op === "run").length;
-    const later = context.host.setUpElementControl();
-    await waitFor(async () => {
-      const state = (await context.host.status()).setup;
-      return state.kind === "building_base" && state.step === "permissions";
-    }, "the permission step again");
-    await assert.rejects(context.host.give("bea"), (error: unknown) => error instanceof BotComputerError && error.code === "busy");
-    guest.grant();
-    context.host.checkPermissions();
-    await later;
-    const ready = (await context.host.status()).setup;
-    assert.equal(ready.kind === "ready" && ready.elementControl, true);
-    await analyticsSettled();
-    assert.deepEqual(sent.map(({ props }) => props?.element_control), [false, true], "Set up, then element control");
-    const cli = context.calls().filter((call) => call.kind === "cli");
-    assert.equal(cli.filter((call) => call.op === "run").length, runsBefore + 1);
-    assert.equal(last(cli)?.op, "stop", "the base is shut down again");
-    assert.equal(context.vmRunning(BOT_COMPUTER_BASE_VM), false);
-    // Ada's computer predates the grant; a new one gets it.
-    assert.equal(await context.host.guestDriver("ada"), undefined);
-    await context.host.give("bea");
-    assert.ok(await context.host.guestDriver("bea"));
-  }, guest.overrides);
-});
-
-test("Skip ends the permission step at once, even while the guest is still answering the first check", async () => {
-  const guest = guestDriverHarness({ hangOn: "check_permissions" });
-  await withHost(async (context) => {
-    answerGuest(context);
-    const setup = context.host.setUp();
-    await waitFor(() => guest.toolCalls().includes("check_permissions"), "the first permission check");
-    const skippedAt = Date.now();
-    context.host.skipPermissions();
-    await setup;
-    assert.ok(Date.now() - skippedAt < 5_000, "Skip doesn't wait for the guest's answer");
-    const status = (await context.host.status()).setup;
-    assert.equal(status.kind, "ready");
-    assert.equal(status.kind === "ready" && status.elementControl, false);
-    assert.match(status.kind === "ready" ? (status.elementControlNote ?? "") : "", /skipped/u);
-    assert.equal(context.vmRunning(BOT_COMPUTER_BASE_VM), false, "the base is shut down");
-  }, guest.overrides);
-});
-
-test("Skip during the probe after the grants also finishes without element control", async () => {
-  const guest = guestDriverHarness({ grantOnPrompt: true, hangOn: "health_report" });
-  await withHost(async (context) => {
-    answerGuest(context);
-    const setup = context.host.setUp();
-    await waitFor(() => guest.toolCalls().includes("health_report"), "the probe");
-    const skippedAt = Date.now();
-    context.host.skipPermissions();
-    await setup;
-    assert.ok(Date.now() - skippedAt < 5_000, "Skip doesn't wait for the probe's own time limit");
-    const status = (await context.host.status()).setup;
-    assert.equal(status.kind === "ready" && status.elementControl, false);
-    assert.match(status.kind === "ready" ? (status.elementControlNote ?? "") : "", /skipped/u);
-  }, guest.overrides);
-});
-
-test("element control setup waits for a computer still being copied from the base before it boots the base", async () => {
-  await withHost(async (context) => {
+    answerLinuxGuest(context);
     await setUp(context);
-    context.config.cloneDelayMs = 400;
-    context.writeConfig();
-    const giving = context.host.give("ada");
-    await waitFor(() => context.calls().some((call) => call.op === "clone"), "the copy to begin");
-    const elementControl = context.host.setUpElementControl();
-    const given = await giving;
-    await elementControl;
-    assert.equal(given.vmName, botComputerVmName("ada"), "the copy finished whole");
-    const cli = context.calls().filter((call) => call.kind === "cli");
-    const copy = cli.find((call) => call.op === "clone");
-    const boot = cli.find((call) => call.op === "run" && call.args?.includes(BOT_COMPUTER_BASE_VM) && (call.at ?? 0) > (copy?.at ?? 0));
-    assert.ok(copy?.at !== undefined && boot?.at !== undefined, "the copy and then the base's boot both ran");
-    assert.ok(boot.at >= copy.at + 400, "the base boots only once the copy is done");
-  });
+    const status = await context.host.status();
+    assert.equal(status.setup.kind, "ready");
+
+    // The vendored Linux binary and its licence notice went over stdin; no password ever in argv.
+    const password = context.secrets.get(BOT_COMPUTER_GUEST_PASSWORD_SECRET) ?? "";
+    assert.ok(context.sshCalls.some((call) => call.stdinFile === guest.driverFile));
+    assert.ok(context.sshCalls.some((call) => call.stdinFile === guest.noticeFile && /LICENSE\.cua-driver\.md/u.test(last(call.args) ?? "")));
+    for (const call of context.sshCalls) assert.equal(call.args.join(" ").includes(password), false);
+    assert.ok(guest.bridges.length >= 1, "probed the installed driver over ssh");
+    for (const bridge of guest.bridges) {
+      assert.equal(bridge.command, "/usr/bin/ssh");
+      assert.match(last(bridge.args) ?? "", /systemctl --user start cua-driver\.service/u);
+      assert.match(last(bridge.args) ?? "", /mcp --embedded --socket/u);
+    }
+
+    // Clones inherit the base's disk and guest driver record; the Bot's computer offers the driver lane.
+    await context.host.give("ada");
+    assert.ok(await context.host.guestDriver("ada"));
+    await analyticsSettled();
+    assert.deepEqual(sent, [{ event: "bot_computer_set_up", props: { element_control: true } }]);
+  }, guest.overrides);
 });
 
-test("a guest driver that can't be installed leaves a working base that acts on the screen only", async () => {
-  const guest = guestDriverHarness({
+test("a Linux guest driver that can't be installed or fails its probe leaves a working base on the VNC lane", async () => {
+  const missing = guestDriverHarness({
     executable: async () => {
-      throw new Error("The pinned cua-driver has not been vendored.");
+      throw new Error("The pinned Linux arm64 cua-driver has not been vendored.");
     },
   });
   await withHost(async (context) => {
-    answerGuest(context);
+    answerLinuxGuest(context);
     await setUp(context);
-    const status = (await context.host.status()).setup;
-    assert.equal(status.kind === "ready" && status.elementControl, false);
-    assert.match(status.kind === "ready" ? (status.elementControlNote ?? "") : "", /couldn't install its helper/u);
-    assert.equal(guest.bridges.length, 0, "no guest session without a driver");
-  }, guest.overrides);
+    assert.equal((await context.host.status()).setup.kind, "ready");
+    await context.host.give("ada");
+    assert.equal(await context.host.guestDriver("ada"), undefined);
+    assert.equal(missing.bridges.length, 0);
+  }, missing.overrides);
+
+  const probeFailed = guestDriverHarness({ failProbe: true });
+  await withHost(async (context) => {
+    answerLinuxGuest(context);
+    await setUp(context);
+    assert.equal((await context.host.status()).setup.kind, "ready");
+    await context.host.give("ada");
+    assert.equal(await context.host.guestDriver("ada"), undefined);
+  }, probeFailed.overrides);
 });
 
 test("a finished Set up counts once, and one that failed counts nothing", async (t) => {
@@ -1800,7 +1688,6 @@ test("Linux Set up downloads via HTTPS mirror redirect, creates and provisions a
   await withHost(
     async (context) => {
       const before = await context.host.status();
-      assert.equal(before.requirements.guestOs, "linux");
       assert.equal(before.requirements.maxRunningLimit, 4);
       assert.equal(before.requirements.memoryPerComputerBytes, 4 * 1024 ** 3);
       assert.equal(before.requirements.baseDiskBytes, 8_000_000_000);
@@ -1846,14 +1733,9 @@ test("Linux Set up downloads via HTTPS mirror redirect, creates and provisions a
       assert.equal(readFileSync(path.join(context.root, "known_hosts"), "utf8"), `aiden-bot-computer ${HOST_KEY}\n`);
       assert.equal(existsSync(path.join(context.root, "restore-images", "debian-20261123-2671.raw")), false);
       assert.equal(context.vmRunning(BOT_COMPUTER_BASE_VM), false);
-
-      // setUpElementControl is a no-op on Linux (no macOS permission flow).
-      const beforeElementControl = context.calls().length;
-      await context.host.setUpElementControl();
-      assert.equal(context.calls().length, beforeElementControl);
     },
     {
-      env: { LANG: "en_US.UTF-8", AIDEN_BOT_COMPUTERS_LINUX: "1" },
+      env: { LANG: "en_US.UTF-8" },
       image: linuxImage,
       fetchImpl: (async (url: string | URL | Request, init?: RequestInit) => {
         const href = String(url);
@@ -1892,7 +1774,7 @@ test("Linux Update base builds aiden-base-next, swaps cleanly, and marks existin
       await setUp(context);
       await context.host.give("ada");
 
-      const updatedHost = context.relaunch({ linux: true, image: secondImage });
+      const updatedHost = context.relaunch({ image: secondImage });
       const before = await updatedHost.status();
       assert.equal(before.setup.kind === "ready" && before.setup.updateAvailable, true);
 
@@ -1912,7 +1794,7 @@ test("Linux Update base builds aiden-base-next, swaps cleanly, and marks existin
       assert.equal(reset.outdated, false);
       assert.equal(reset.baseBuild, "20261123-2671");
     },
-    { linux: true, image: firstImage },
+    { image: firstImage },
   );
 });
 
@@ -1950,7 +1832,7 @@ test("Linux mode scales maxRunning up to 4 with host free memory and enforces th
       // 10 GiB available → limit drops to 2; setting maxRunning to 3 is refused.
       freeMem = 10 * 1024 ** 3;
       assert.equal((await context.host.status()).requirements.maxRunningLimit, 2);
-      await assert.rejects(context.host.updateSettings({ maxRunning: 3 }), /one or two/u);
+      await assert.rejects(context.host.updateSettings({ maxRunning: 3 }), /At most 2/u);
 
       // 3 GiB available (above 2 GiB minimum, below 4 GiB) → limit is 1 and the first Linux VM still starts.
       freeMem = 3 * 1024 ** 3;
@@ -1967,9 +1849,142 @@ test("Linux mode scales maxRunning up to 4 with host free memory and enforces th
       );
     },
     {
-      linux: true,
       image: linuxImage,
       resources: { freeDiskBytes: async () => 1e13, availableMemoryBytes: async () => freeMem },
     },
   );
+});
+
+test("first-launch macOS cleanup stops and deletes only Aiden's macOS VMs and IPSWs, notifies each Bot once, keeps settings, and auto-clones after Linux setup", async () => {
+  const migratedNotes: Array<{ botId: string; note: string }> = [];
+  await withHost(
+    async (context) => {
+      const vmsDir = path.join(context.root, "vms");
+      const imagesDir = path.join(context.root, "restore-images");
+      mkdirSync(vmsDir, { recursive: true });
+      mkdirSync(imagesDir, { recursive: true });
+
+      const adaVm = botComputerVmName("ada");
+      const beaVm = botComputerVmName("bea");
+      // Spawn a harmless dummy process to play a running macOS VM left over from before the upgrade.
+      const sleeper = spawn(process.execPath, ["-e", "setTimeout(() => {}, 60_000)"], { stdio: "ignore" });
+      assert.ok(sleeper.pid);
+
+      // Seed dummy disk files so freedBytes is measured cleanly.
+      for (const name of [BOT_COMPUTER_BASE_VM, BOT_COMPUTER_STAGING_BASE_VM, adaVm, beaVm, "user-other-macos"]) {
+        mkdirSync(path.join(vmsDir, name), { recursive: true });
+        writeFileSync(path.join(vmsDir, name, "disk.img"), Buffer.alloc(64 * 1024, 1));
+      }
+      const ipswPart = path.join(imagesDir, "UniversalMac_25G83_Restore.ipsw.part");
+      writeFileSync(ipswPart, Buffer.alloc(128 * 1024, 2));
+
+      writeFileSync(
+        path.join(vmsDir, ".fake-state.json"),
+        JSON.stringify({
+          vms: {
+            [BOT_COMPUTER_BASE_VM]: { os: "macOS", status: "stopped", mac: "02:00:00:00:00:01" },
+            [BOT_COMPUTER_STAGING_BASE_VM]: { os: "macOS", status: "stopped", mac: "02:00:00:00:00:02" },
+            [adaVm]: { os: "macOS", status: "running", pid: sleeper.pid, ip: "192.168.64.2", port: 5901, mac: "02:00:00:00:00:03" },
+            [beaVm]: { os: "macOS", status: "stopped", mac: "02:00:00:00:00:04" },
+            "user-other-macos": { os: "macOS", status: "stopped", mac: "02:00:00:00:00:05" },
+          },
+        }),
+      );
+      writeFileSync(
+        path.join(context.root, "state.json"),
+        JSON.stringify({
+          version: 1,
+          settings: { maxRunning: 2, idleStopMinutes: 10 },
+          setup: { baseBuild: "25G83", baseVersion: "26.6.2", ipswPath: ipswPart },
+          computers: {
+            ada: { vmName: adaVm, baseBuild: "25G83", createdAt: 100 },
+            bea: { vmName: beaVm, baseBuild: "25G83", createdAt: 200 },
+          },
+        }),
+      );
+      context.secrets.set(BOT_COMPUTER_GUEST_PASSWORD_SECRET, "OldMacosPassword0123456789abcdef");
+
+      await context.host.reconcile();
+
+      // Running macOS VM stopped; all Aiden macOS VMs + IPSW removed; non-Aiden VM untouched!
+      assert.equal(processRunning(sleeper.pid), false, "running legacy macOS VM was force-stopped");
+      assert.deepEqual(context.vmNames(), ["user-other-macos"], "only non-Aiden VM remains in storage");
+      assert.equal(existsSync(ipswPart), false, "partial Apple IPSW was removed");
+      assert.equal(context.secrets.get(BOT_COMPUTER_GUEST_PASSWORD_SECRET), undefined, "old guest password removed");
+
+      // Setup reset to not_set_up; Settings notice persisted with freed bytes; Bots kept their computer setting.
+      const after = await context.host.status();
+      assert.deepEqual(after.setup, { kind: "not_set_up" });
+      assert.ok((after.migrationNotice?.freedBytes ?? 0) > 0, "migration notice reports freed bytes");
+      assert.deepEqual(after.computers.map((entry) => entry.botId).sort(), ["ada", "bea"]);
+      assert.ok(after.computers.every((entry) => entry.state === "stopped"), "migrated Bots are not marked stale");
+
+      // Each Bot got its one-line Linux migration note exactly once.
+      assert.deepEqual(
+        migratedNotes.sort((a, b) => a.botId.localeCompare(b.botId)),
+        [
+          { botId: "ada", note: BOT_COMPUTER_LINUX_MIGRATION_BOT_NOTE },
+          { botId: "bea", note: BOT_COMPUTER_LINUX_MIGRATION_BOT_NOTE },
+        ],
+      );
+
+      // Second reconcile is idempotent: no duplicate notes, non-Aiden VM still untouched.
+      await context.host.reconcile();
+      assert.equal(migratedNotes.length, 2);
+      assert.deepEqual(context.vmNames(), ["user-other-macos"]);
+
+      // Before Linux Set up, a migrated Bot's computer call asks to set up Linux once for all Bots.
+      await assert.rejects(
+        context.host.ensureRunning("ada", { reason: "tool" }),
+        (error: unknown) => error instanceof BotComputerError && error.code === "not_set_up" && /now run Linux/u.test(error.message),
+      );
+
+      // Dismissing the notice clears it persistently across relaunch.
+      await context.host.dismissMigrationNotice();
+      assert.equal((await context.host.status()).migrationNotice, undefined);
+      const relaunched = context.relaunch({});
+      assert.equal((await relaunched.status()).migrationNotice, undefined);
+
+      // After Linux Set up finishes, the migrated Bot's next start automatically clones a fresh Linux VM and boots it.
+      await setUp(context);
+      const conn = await context.host.ensureRunning("ada", { reason: "tool" });
+      assert.equal(conn.vmName, adaVm);
+      assert.equal((await context.host.computer("ada"))?.state, "running");
+      assert.equal((await context.host.computer("ada"))?.baseBuild, "20261123-2671");
+    },
+    {
+      image: {
+        version: "13",
+        build: "20261123-2671",
+        url: "https://cloud.debian.org/images/debian.raw",
+        bytes: restoreImage.length,
+        sha256: createHash("sha256").update(restoreImage).digest("hex"),
+      },
+      onMacosComputerMigrated: (botId, note) => {
+        migratedNotes.push({ botId, note });
+      },
+    },
+  );
+});
+
+test("reconcile does not migrate or show a notice on a fresh install or an existing Linux base", async () => {
+  // Fresh install (root doesn't exist): runs zero Lume calls and sets no notice.
+  await withHost(async (context) => {
+    await context.host.reconcile();
+    assert.equal(context.calls().length, 0);
+    assert.equal((await context.host.status()).migrationNotice, undefined);
+  });
+
+  // Existing Linux install: reconcile preserves aiden-base and sets no notice.
+  await withHost(async (context) => {
+    await setUp(context);
+    await context.host.give("ada");
+    const relaunched = context.relaunch({});
+    await relaunched.reconcile();
+    const status = await relaunched.status();
+    assert.equal(status.setup.kind, "ready");
+    assert.equal(status.migrationNotice, undefined);
+    assert.ok(context.vmNames().includes(BOT_COMPUTER_BASE_VM));
+    assert.ok(context.vmNames().includes(botComputerVmName("ada")));
+  });
 });

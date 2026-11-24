@@ -11,6 +11,7 @@ test("a running VM reports its IP and loopback VNC endpoint, never its password"
   const info = parseLumeVmInfo(fixture("lume-get-running.json"));
   assert.deepEqual(info, {
     name: "aiden-bot-5d41402abc4b2a76",
+    os: "macOS",
     state: "running",
     ip: "192.168.64.7",
     sshAvailable: true,
@@ -23,9 +24,14 @@ test("a running VM reports its IP and loopback VNC endpoint, never its password"
 test("a stopped VM has no address or screen", () => {
   assert.deepEqual(parseLumeVmInfo(fixture("lume-get-stopped.json")), {
     name: "aiden-bot-5d41402abc4b2a76",
+    os: "macOS",
     state: "stopped",
     diskAllocatedBytes: 31_138_512_896,
   });
+  assert.equal(
+    parseLumeVmInfo(JSON.stringify([{ name: "aiden-base", os: "linux", status: "stopped" }])).os,
+    "linux",
+  );
 });
 
 test("ls lists every VM and marks an interrupted create as stale", () => {

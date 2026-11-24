@@ -58,7 +58,7 @@ test("Bot computers appear only on Apple silicon and are found by VM words", () 
   assert.equal(ids(true).includes("botComputers"), true);
   const destination = SETTINGS_DESTINATIONS.find((entry) => entry.id === "botComputers");
   assert.ok(destination);
-  for (const term of ["virtual machine", "vm", "lume", "macos", "bot computer"]) {
+  for (const term of ["virtual machine", "vm", "lume", "linux", "debian", "bot computer"]) {
     assert.ok(matchesSettingsSearch(destination, term), term);
   }
   assert.equal(parseSettingsSection("botComputers"), "botComputers");

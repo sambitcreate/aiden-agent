@@ -1,7 +1,7 @@
 import "../../main/bots/test-dom";
 import assert from "node:assert/strict";
 import { afterEach, test } from "node:test";
-import { act, cleanup, fireEvent, render, screen, waitFor, waitForElementToBeRemoved, within } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { QueryClientProvider } from "@tanstack/react-query";
 import { emitBotTestNotification, installBotTestIpc } from "../../main/bots/test-dom";
 import { createBotTestQueryClient } from "../../main/bots/test-providers";
@@ -24,19 +24,25 @@ function status(setup: BotComputerSetupState, extra: Partial<BotComputersStatus>
     diskUsedBytes: 0,
     computers: [],
     requirements: {
-      downloadBytes: 19_772_231_540,
-      baseDiskBytes: 50_000_000_000,
-      setupFreeBytes: 84_196_731_252,
-      memoryPerComputerBytes: 8 * 1024 ** 3,
-      baseVersion: "26.6.2",
+      downloadBytes: 3_221_225_472,
+      baseDiskBytes: 8_000_000_000,
+      setupFreeBytes: 24_696_061_952,
+      memoryPerComputerBytes: 4 * 1024 ** 3,
+      baseVersion: "13",
+      maxRunningLimit: 4,
     },
     ...extra,
   };
 }
 
-const READY: BotComputerSetupState = { kind: "ready", baseVersion: "26.6.2", baseBuild: "25G83", updateAvailable: false };
+const READY: BotComputerSetupState = {
+  kind: "ready",
+  baseVersion: "13",
+  baseBuild: "20261123-2671",
+  updateAvailable: false,
+};
 
-/** Main as the page sees it: a status that Set up, Remove everything and settings change. */
+/** Main as the page sees it: a status that Set up, Remove everything, dismiss and settings change. */
 function mount(
   initial: BotComputersStatus,
   options: { botComputers?: boolean; failSettings?: boolean; handlers?: Record<string, (...args: unknown[]) => unknown> } = {},
@@ -56,6 +62,11 @@ function mount(
       current = status({ kind: "not_set_up" });
       return current;
     },
+    "botComputers:dismissMigrationNotice": () => {
+      const next = { ...current };
+      delete next.migrationNotice;
+      current = next;
+    },
     "botComputers:updateSettings": (patch) => {
       if (options.failSettings) throw new Error("Error invoking remote method 'botComputers:updateSettings': Error: The disk is full.");
       current = { ...current, settings: { ...current.settings, ...(patch as object) } };
@@ -73,25 +84,33 @@ function mount(
     </QueryClientProvider>,
   );
   const channels = () => calls.map((call) => call.channel);
-  return { calls, channels, push: (next: BotComputersStatus) => {
-    current = next;
-    emitBotTestNotification(BOT_COMPUTERS_CHANGED_CHANNEL, next);
-  } };
+  return {
+    calls,
+    channels,
+    push: (next: BotComputersStatus) => {
+      current = next;
+      emitBotTestNotification(BOT_COMPUTERS_CHANGED_CHANNEL, next);
+    },
+  };
 }
 
-test("before Set up the page says what is downloaded, from where and how big, and downloads nothing", async () => {
+test("before Set up the page says what Debian image is downloaded and how big, and downloads nothing", async () => {
   const { channels } = mount(status({ kind: "not_set_up" }));
   const setUp = await screen.findByRole("button", { name: "Set up" });
   const page = document.body.textContent ?? "";
-  assert.match(page, /downloads macOS 26\.6\.2 from Apple \(about 20 GB\)/u);
-  assert.match(page, /base computer of about 50 GB/u);
-  assert.match(page, /needs about 84 GB free/u);
+  assert.match(page, /downloads Debian 13 \(about 3 GB, plus desktop packages\)/u);
+  assert.match(page, /base computer of about 8 GB/u);
+  assert.match(page, /needs about 25 GB free/u);
   assert.match(page, /Nothing is downloaded until you choose Set up\./u);
-  assert.match(page, /about 8 GB of memory/u);
+  assert.match(page, /about 4 GB of memory/u);
+  assert.equal(/Apple|macOS 26/u.test(page), false, "Settings does not mention Apple or macOS 26");
   assert.deepEqual(channels(), ["botComputers:status"], "opening the page only reads status");
   fireEvent.click(setUp);
   await flush();
-  assert.deepEqual(channels().filter((channel) => channel !== "botComputers:status"), ["botComputers:setUp"]);
+  assert.deepEqual(
+    channels().filter((channel) => channel !== "botComputers:status"),
+    ["botComputers:setUp"],
+  );
 });
 
 test("the download shows its percentage and Cancel, which takes focus from Set up and reaches main", async () => {
@@ -102,9 +121,11 @@ test("the download shows its percentage and Cancel, which takes focus from Set u
   await flush();
   const cancel = await screen.findByRole("button", { name: "Cancel" });
   assert.equal(document.activeElement, cancel, "focus moves to the control that replaced Set up");
-  act(() => push(status({ kind: "downloading", receivedBytes: 9_886_115_770, totalBytes: 19_772_231_540 })));
-  await waitFor(() => assert.equal(screen.getByRole("progressbar", { name: "Downloading macOS" }).getAttribute("aria-valuenow"), "50"));
-  assert.match(document.body.textContent ?? "", /Downloading macOS 9\.9 GB of 19\.8 GB/u);
+  act(() => push(status({ kind: "downloading", receivedBytes: 1_610_612_736, totalBytes: 3_221_225_472 })));
+  await waitFor(() =>
+    assert.equal(screen.getByRole("progressbar", { name: "Downloading Debian Linux" }).getAttribute("aria-valuenow"), "50"),
+  );
+  assert.match(document.body.textContent ?? "", /Downloading Debian Linux 1\.6 GB of 3\.2 GB/u);
   assert.equal(screen.getByRole("button", { name: "Remove everything" }).hasAttribute("disabled"), true, "Cancel first");
   fireEvent.click(cancel);
   await flush();
@@ -118,219 +139,17 @@ test("a failed setup shows why and offers Try again", async () => {
   assert.match(document.body.textContent ?? "", /The download stalled/u);
 });
 
-test("the running limit shows the memory cost and explains what happens at the limit in a hint", async () => {
+test("the running limit shows the memory cost, offers up to maxRunningLimit, and explains what happens at the limit", async () => {
   mount(status(READY));
   const row = await screen.findByRole("group", { name: "Computers running at once" });
-  assert.match(row.textContent ?? "", /about 8 GB of memory/u);
+  assert.match(row.textContent ?? "", /about 4 GB of memory/u);
   fireEvent.click(within(row).getByRole("button", { name: "About running limit" }));
   assert.match((await screen.findByRole("tooltip")).textContent ?? "", /used longest ago stops/u);
 });
 
-test("changing a setting saves only that choice, and a refused save shows the old choice again", async () => {
+test("changing a setting saves up to 4 computers, and a refused save restores the old choice", async () => {
   const { calls } = mount(status(READY));
   fireEvent.click(await screen.findByRole("combobox", { name: "Computers running at once" }));
-  fireEvent.click(await screen.findByRole("option", { name: "1 computer" }));
-  await flush();
-  assert.deepEqual(
-    calls.filter((call) => call.channel === "botComputers:updateSettings").map((call) => call.args[0]),
-    [{ maxRunning: 1 }],
-  );
-  assert.match(screen.getByRole("combobox", { name: "Computers running at once" }).textContent ?? "", /1 computer/u);
-  cleanup();
-
-  mount(status(READY), { failSettings: true });
-  fireEvent.click(await screen.findByRole("combobox", { name: "Stop when idle" }));
-  fireEvent.click(await screen.findByRole("option", { name: "30 minutes" }));
-  await flush();
-  assert.match(screen.getByRole("combobox", { name: "Stop when idle" }).textContent ?? "", /10 minutes/u);
-});
-
-test("Remove everything asks first, then empties the page back to Set up", async () => {
-  const { channels } = mount(
-    status(READY, {
-      diskUsedBytes: 61_000_000_000,
-      freeDiskBytes: 400_000_000_000,
-      computers: [
-        { botId: "bot-1", vmName: "aiden-bot-0123456789abcdef", state: "stopped", baseBuild: "25G83", outdated: false, controller: "bot" },
-      ],
-    }),
-  );
-  await screen.findByText("61 GB · 400 GB free");
-  assert.ok(screen.getByText("The base computer and 1 Bot computer."));
-  fireEvent.click(screen.getByRole("button", { name: "Remove everything" }));
-  const dialog = await screen.findByRole("alertdialog");
-  assert.match(dialog.textContent ?? "", /Files in each Bot's Computer folder stay/u);
-  assert.equal(channels().includes("botComputers:removeEverything"), false, "nothing is removed before confirming");
-  fireEvent.click(within(dialog).getByRole("button", { name: "Remove everything" }));
-  await screen.findByRole("button", { name: "Set up" });
-  assert.equal(channels().filter((channel) => channel === "botComputers:removeEverything").length, 1);
-});
-
-test("a newer pinned base offers Update base", async () => {
-  const { channels } = mount(status({ ...READY, updateAvailable: true }));
-  fireEvent.click(await screen.findByRole("button", { name: "Update base" }));
-  await flush();
-  assert.ok(channels().includes("botComputers:updateBase"));
-});
-
-test("a Mac older than macOS 26 says why and offers nothing to set up", async () => {
-  mount(status({ kind: "unsupported", reason: "host_os" }));
-  await screen.findByRole("group", { name: "Base computer" });
-  assert.match(document.body.textContent ?? "", /Bot computers need macOS 26 or later on this Mac\./u);
-  assert.equal(screen.queryByRole("button", { name: "Set up" }), null);
-  assert.equal(screen.queryByRole("combobox"), null);
-});
-
-test("without the Bot computers capability the page asks main for nothing", async () => {
-  const { calls } = mount(status({ kind: "not_set_up" }), { botComputers: false });
-  await flush();
-  assert.ok(screen.getByText("Bot computers need a Mac with Apple silicon."));
-  assert.deepEqual(calls, []);
-});
-
-const PERMISSIONS: BotComputerSetupState = {
-  kind: "building_base",
-  step: "permissions",
-  permissions: { accessibility: true, screenRecording: false },
-};
-
-/** The base's screen is lent but never connects in the DOM. */
-const never = () => new Promise<never>(() => undefined);
-
-test("while setup waits for the grants, the page shows the base computer, what is allowed so far, Check again and Skip", async () => {
-  let grants = 0;
-  const { channels, push } = mount(status(PERMISSIONS), {
-    handlers: {
-      // The first grant names the base's screen; the stream's own request for a grant is held,
-      // so no socket connects in the DOM.
-      "botComputers:baseViewerGrant": () =>
-        (grants += 1) === 1
-          ? {
-              hostId: "bot-computers",
-              deviceId: "aiden-bot-computers-base",
-              grant: { origin: "http://127.0.0.1:52100", token: "a".repeat(43), expiresAt: Date.now() + 60_000 },
-            }
-          : never(),
-      "botComputers:checkPermissions": () => undefined,
-      "botComputers:skipPermissions": () => undefined,
-    },
-  });
-  const step = await screen.findByRole("group", { name: "Allow Accessibility and Screen Recording for cua-driver" });
-  await waitFor(() => assert.ok(within(step).getByRole("application", { name: /base computer's screen/u })));
-  const rows = within(step).getByRole("list", { name: "Permissions in the base computer" });
-  assert.deepEqual(
-    within(rows)
-      .getAllByRole("listitem")
-      .map((row) => row.textContent),
-    ["AccessibilityAllowed", "Screen RecordingNot yet"],
-  );
-  assert.equal(screen.queryByRole("progressbar"), null, "no progress bar while setup waits on the person");
-
-  fireEvent.click(within(step).getByRole("button", { name: "Check again" }));
-  await flush();
-  fireEvent.click(within(step).getByRole("button", { name: "Skip" }));
-  await flush();
-  assert.deepEqual(
-    channels().filter((channel) => channel === "botComputers:checkPermissions" || channel === "botComputers:skipPermissions"),
-    ["botComputers:checkPermissions", "botComputers:skipPermissions"],
-  );
-
-  // Once both are on and the probe passes, the step goes and the base is ready with element control.
-  act(() => push(status({ ...READY, elementControl: true })));
-  await waitForElementToBeRemoved(() => screen.queryByRole("group", { name: /Allow Accessibility/u }));
-  assert.ok(screen.getByRole("group", { name: "Element control" }).textContent?.includes("On"));
-});
-
-test("a base the lent screen can't reach says so and offers Try again", async () => {
-  mount(status(PERMISSIONS), {
-    handlers: {
-      "botComputers:baseViewerGrant": () => {
-        throw new Error("Error invoking remote method 'botComputers:baseViewerGrant': Error: The base computer isn't waiting for you.");
-      },
-    },
-  });
-  const alert = await screen.findByRole("alert");
-  assert.match(alert.textContent ?? "", /The base computer isn't waiting for you\./u);
-  assert.ok(screen.getByRole("button", { name: "Try again" }));
-});
-
-test("a ready base without element control says why and offers to set it up", async () => {
-  const { channels } = mount(
-    status({ ...READY, elementControl: false, elementControlNote: "Element control was skipped, so Bots act on the screen only." }),
-    {
-      handlers: {
-        "botComputers:setUpElementControl": () => status({ kind: "building_base", step: "guest_driver" }),
-        "botComputers:baseViewerGrant": never,
-      },
-    },
-  );
-  const row = await screen.findByRole("group", { name: "Element control" });
-  assert.match(row.textContent ?? "", /Element control was skipped, so Bots act on the screen only\./u);
-  assert.match(row.textContent ?? "", /get it after a Reset/u);
-  fireEvent.click(within(row).getByRole("button", { name: "Set up element control" }));
-  await flush();
-  assert.deepEqual(
-    channels().filter((channel) => channel === "botComputers:setUpElementControl"),
-    ["botComputers:setUpElementControl"],
-  );
-  await waitFor(() => assert.match(document.body.textContent ?? "", /Installing Aiden's helper in the base computer/u));
-  assert.equal(screen.queryByRole("group", { name: "Element control" }), null);
-});
-
-function linuxStatus(setup: BotComputerSetupState, extra: Partial<BotComputersStatus> = {}): BotComputersStatus {
-  return {
-    setup,
-    settings: { ...DEFAULT_BOT_COMPUTERS_SETTINGS },
-    diskUsedBytes: 0,
-    computers: [],
-    requirements: {
-      downloadBytes: 3_221_225_472,
-      baseDiskBytes: 8_000_000_000,
-      setupFreeBytes: 20_401_094_656,
-      memoryPerComputerBytes: 4 * 1024 ** 3,
-      baseVersion: "13",
-      guestOs: "linux",
-      maxRunningLimit: 4,
-    },
-    ...extra,
-  };
-}
-
-const LINUX_READY: BotComputerSetupState = {
-  kind: "ready",
-  baseVersion: "13",
-  baseBuild: "20261123-2671",
-  updateAvailable: false,
-};
-
-test("Linux Settings shows Debian sizes and 4 GB memory, omits macOS permissions, and offers up to 4 running computers", async () => {
-  const { calls, push } = mount(linuxStatus({ kind: "not_set_up" }));
-  await screen.findByRole("button", { name: "Set up" });
-  const before = document.body.textContent ?? "";
-  assert.match(before, /downloads Debian 13 \(about 3 GB, plus desktop packages\)/u);
-  assert.match(before, /base computer of about 8 GB/u);
-  assert.match(before, /needs about 20 GB free/u);
-  assert.match(before, /Nothing is downloaded until you choose Set up\./u);
-  assert.match(before, /about 4 GB of memory/u);
-  assert.equal(/Apple|macOS 26/u.test(before), false, "Linux Settings does not mention Apple or macOS 26");
-
-  // Downloading progress bar and summary say Debian Linux.
-  act(() => push(linuxStatus({ kind: "downloading", receivedBytes: 1_610_612_736, totalBytes: 3_221_225_472 })));
-  await waitFor(() =>
-    assert.equal(screen.getByRole("progressbar", { name: "Downloading Debian Linux" }).getAttribute("aria-valuenow"), "50"),
-  );
-
-  // Even if a permissions step were received, Linux never renders macOS Accessibility / Screen Recording grants.
-  act(() => push(linuxStatus(PERMISSIONS)));
-  assert.equal(screen.queryByRole("group", { name: /Allow Accessibility/u }), null);
-
-  // Ready state shows Debian 13 and omits the macOS "Set up element control" button.
-  act(() => push(linuxStatus({ ...LINUX_READY, elementControl: false })));
-  await waitFor(() => assert.match(document.body.textContent ?? "", /Ready \(Debian 13\)\./u));
-  assert.equal(screen.queryByRole("button", { name: "Set up element control" }), null);
-
-  // Running at once offers 1..4 computers when maxRunningLimit is 4.
-  fireEvent.click(screen.getByRole("combobox", { name: "Computers running at once" }));
   const options = await screen.findAllByRole("option");
   assert.deepEqual(
     options.map((option) => option.textContent),
@@ -342,24 +161,25 @@ test("Linux Settings shows Debian sizes and 4 GB memory, omits macOS permissions
     calls.filter((call) => call.channel === "botComputers:updateSettings").map((call) => call.args[0]),
     [{ maxRunning: 4 }],
   );
+  assert.match(screen.getByRole("combobox", { name: "Computers running at once" }).textContent ?? "", /4 computers/u);
+  cleanup();
 
-  // Remove everything confirmation uses Linux copy.
-  fireEvent.click(screen.getByRole("button", { name: "Remove everything" }));
-  const dialog = await screen.findByRole("alertdialog");
-  assert.match(dialog.textContent ?? "", /download Debian Linux again/u);
-  assert.match(dialog.textContent ?? "", /Files in each Bot's Computer folder stay/u);
+  mount(status(READY), { failSettings: true });
+  fireEvent.click(await screen.findByRole("combobox", { name: "Stop when idle" }));
+  fireEvent.click(await screen.findByRole("option", { name: "30 minutes" }));
+  await flush();
+  assert.match(screen.getByRole("combobox", { name: "Stop when idle" }).textContent ?? "", /10 minutes/u);
 });
 
-test("Linux Settings caps running-at-once choices by host memory and requires macOS 14+ when unsupported", async () => {
+test("running-at-once choices are capped by maxRunningLimit from host memory", async () => {
   mount(
-    linuxStatus(LINUX_READY, {
+    status(READY, {
       requirements: {
         downloadBytes: 3_221_225_472,
         baseDiskBytes: 8_000_000_000,
-        setupFreeBytes: 20_401_094_656,
+        setupFreeBytes: 24_696_061_952,
         memoryPerComputerBytes: 4 * 1024 ** 3,
         baseVersion: "13",
-        guestOs: "linux",
         maxRunningLimit: 2,
       },
     }),
@@ -370,10 +190,64 @@ test("Linux Settings caps running-at-once choices by host memory and requires ma
     options.map((option) => option.textContent),
     ["1 computer", "2 computers"],
   );
-  cleanup();
+});
 
-  mount(linuxStatus({ kind: "unsupported", reason: "host_os" }));
+test("Remove everything asks first with Linux copy, then empties the page back to Set up", async () => {
+  const { channels } = mount(
+    status(READY, {
+      diskUsedBytes: 9_000_000_000,
+      freeDiskBytes: 400_000_000_000,
+      computers: [
+        { botId: "bot-1", vmName: "aiden-bot-0123456789abcdef", state: "stopped", baseBuild: "20261123-2671", outdated: false, controller: "bot" },
+      ],
+    }),
+  );
+  await screen.findByText("9 GB · 400 GB free");
+  assert.ok(screen.getByText("The base computer and 1 Bot computer."));
+  fireEvent.click(screen.getByRole("button", { name: "Remove everything" }));
+  const dialog = await screen.findByRole("alertdialog");
+  assert.match(dialog.textContent ?? "", /download Debian Linux again/u);
+  assert.match(dialog.textContent ?? "", /Files in each Bot's Computer folder stay/u);
+  assert.equal(channels().includes("botComputers:removeEverything"), false, "nothing is removed before confirming");
+  fireEvent.click(within(dialog).getByRole("button", { name: "Remove everything" }));
+  await screen.findByRole("button", { name: "Set up" });
+  assert.equal(channels().filter((channel) => channel === "botComputers:removeEverything").length, 1);
+});
+
+test("a newer pinned base offers Update base and omits macOS element-control controls", async () => {
+  const { channels } = mount(status({ ...READY, updateAvailable: true }));
+  fireEvent.click(await screen.findByRole("button", { name: "Update base" }));
+  await flush();
+  assert.ok(channels().includes("botComputers:updateBase"));
+  assert.equal(screen.queryByRole("button", { name: "Set up element control" }), null);
+});
+
+test("a Mac older than macOS 14 says why and offers nothing to set up", async () => {
+  mount(status({ kind: "unsupported", reason: "host_os" }));
   await screen.findByRole("group", { name: "Base computer" });
   assert.match(document.body.textContent ?? "", /Bot computers need macOS 14 or later on this Mac\./u);
   assert.equal(screen.queryByRole("button", { name: "Set up" }), null);
+  assert.equal(screen.queryByRole("combobox"), null);
+});
+
+test("without the Bot computers capability the page asks main for nothing", async () => {
+  const { calls } = mount(status({ kind: "not_set_up" }), { botComputers: false });
+  await flush();
+  assert.ok(screen.getByText("Bot computers need a Mac with Apple silicon."));
+  assert.deepEqual(calls, []);
+});
+
+test("first-launch macOS removal notice displays freed GB and dismisses through IPC", async () => {
+  const { channels } = mount(
+    status({ kind: "not_set_up" }, { migrationNotice: { freedBytes: 58_000_000_000 } }),
+  );
+  const notice = await screen.findByRole("status");
+  assert.equal(
+    notice.textContent,
+    "Bot computers now run Linux. Your Mac computers were removed and freed 58 GB. Set up to continue.",
+  );
+  fireEvent.click(screen.getByRole("button", { name: "Dismiss" }));
+  await flush();
+  assert.ok(channels().includes("botComputers:dismissMigrationNotice"));
+  await waitFor(() => assert.equal(screen.queryByRole("status"), null));
 });

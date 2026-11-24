@@ -9,7 +9,6 @@ import { constants } from "node:fs";
 import { copyFile, lstat, mkdir, rename, rm, truncate } from "node:fs/promises";
 import path from "node:path";
 import { buildCloudInitSeedIso, type CloudInitAptSnapshot, writeCloudInitSeedIso } from "./cloud-init-iso.js";
-import { botComputersLinuxEnabled } from "./linux-feature-flag.js";
 import { runLume, type LumeCommand, type LumeInvocation, type LumeRunResult } from "./lume-cli.js";
 import { classifyLumeError, isLoopbackHost, parseLumeVmInfo, type LumeVmInfo } from "./lume-output.js";
 import {
@@ -103,8 +102,6 @@ export interface HiddenLinuxBaseOptions {
   memoryGb?: number;
   diskSizeGb?: number;
   display?: string;
-  /** Environment checked for `AIDEN_BOT_COMPUTERS_LINUX` (defaults to `process.env`). */
-  featureEnv?: Readonly<Record<string, string | undefined>>;
   pollIntervalMs?: number;
   startTimeoutMs?: number;
   signal?: AbortSignal;
@@ -117,15 +114,6 @@ export interface HiddenLinuxBaseResult {
   diskPath: string;
   seedIsoPath: string;
   seedIsoBytes: number;
-}
-
-function assertLinuxFeatureEnabled(env?: Readonly<Record<string, string | undefined>>): void {
-  if (!botComputersLinuxEnabled(env)) {
-    throw new BotComputerError(
-      "unsupported",
-      "Linux Bot computers are disabled in this build (set AIDEN_BOT_COMPUTERS_LINUX=1 to enable).",
-    );
-  }
 }
 
 async function sleep(ms: number, signal?: AbortSignal): Promise<void> {
@@ -155,7 +143,6 @@ async function sleep(ms: number, signal?: AbortSignal): Promise<void> {
  * 5. Poll `lume get` until the VM is running with an IP, loopback VNC endpoint, and SSH ready.
  */
 export async function createAndBootHiddenLinuxBase(options: HiddenLinuxBaseOptions): Promise<HiddenLinuxBaseResult> {
-  assertLinuxFeatureEnabled(options.featureEnv);
   if (!isLumeVmNameSafe(options.vmName)) {
     throw new BotComputerError("invalid", "That is not one of Aiden's computers.");
   }

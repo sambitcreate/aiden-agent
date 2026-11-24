@@ -17,7 +17,6 @@ import {
   type BotComputerResultDetails,
 } from "./computer-tool.js";
 import { createGuestCuaDriverHostFactory } from "./guest-driver.js";
-import { AIDEN_BOT_COMPUTERS_LINUX_ENV, type BotComputerGuestOs } from "./linux-guest-flag.js";
 import {
   BotComputerError,
   type BotComputerConnection,
@@ -28,7 +27,6 @@ import {
 
 const XK_SHIFT = 0xffe1;
 const XK_CONTROL = 0xffe3;
-const XK_SUPER = 0xffeb;
 
 type ScreenEvent =
   | { kind: "pointer"; x: number; y: number; buttons: number }
@@ -95,7 +93,6 @@ function harness(
     /** The guest driver lane's host, as `host.guestDriver` hands it out. */
     guestDriver?: () => CuaDriverHostFactory | undefined;
     elementControl?: boolean;
-    guestOs?: BotComputerGuestOs;
   } = {},
 ) {
   const control = createBotComputerControl();
@@ -137,7 +134,6 @@ function harness(
     routine: options.routine === true,
     ...(options.unattended === undefined ? {} : { unattended: options.unattended }),
     ...(options.elementControl === undefined ? {} : { elementControl: options.elementControl }),
-    ...(options.guestOs === undefined ? {} : { guestOs: options.guestOs }),
   });
   const call = (args: Record<string, unknown> & { action: string }, signal?: AbortSignal) =>
     tool.execute("call", args as unknown as BotComputerArgs, signal) as Promise<AgentToolResult<BotComputerResultDetails>>;
@@ -388,10 +384,10 @@ test("key chords hold their modifiers around the key; destructive shortcuts are 
   const h = harness();
   await h.call({ action: "key", keys: "cmd+s", intent: "Save the document" });
   assert.deepEqual(h.fake.events, [
-    { kind: "key", keysym: XK_SUPER, down: true },
+    { kind: "key", keysym: XK_CONTROL, down: true },
     { kind: "key", keysym: 0x73, down: true },
     { kind: "key", keysym: 0x73, down: false },
-    { kind: "key", keysym: XK_SUPER, down: false },
+    { kind: "key", keysym: XK_CONTROL, down: false },
   ]);
   h.fake.events.length = 0;
   const quit = await h.call({ action: "key", keys: "cmd+q", intent: "Quit the app" });
@@ -581,19 +577,14 @@ test("element and app only go with the actions that use them", async () => {
 });
 
 test("Linux computer tool describes Linux/Chromium/LibreOffice and maps Command chords and click modifiers to Ctrl", async (t) => {
-  const macDesc = botComputerToolDescription(true, "macos");
-  assert.match(macDesc, /macOS virtual machine/u);
-  assert.match(macDesc, /"Safari"/u);
-  assert.match(macDesc, /\/Volumes\/My Shared Files/u);
-
-  const linuxDesc = botComputerToolDescription(true, "linux");
+  const linuxDesc = botComputerToolDescription(true);
   assert.match(linuxDesc, /Linux virtual machine \(Debian with XFCE\)/u);
   assert.match(linuxDesc, /"Chromium", "Firefox" or "LibreOffice"/u);
   assert.match(linuxDesc, /ctrl\+s/u);
   assert.match(linuxDesc, /~\/Shared/u);
   assert.doesNotMatch(linuxDesc, /macOS|Safari|\/Volumes\/My Shared Files/u);
 
-  const h = harness({ guestOs: "linux", elementControl: true });
+  const h = harness({ elementControl: true });
   assert.equal(h.tool.description, linuxDesc);
   await h.call({ action: "capture" });
   await h.call({ action: "key", keys: "cmd+s", intent: "Save the document" });
@@ -634,7 +625,7 @@ test("Linux computer tool describes Linux/Chromium/LibreOffice and maps Command 
       env: { PATH: "/usr/bin:/bin" },
     }),
   });
-  const linuxLane = harness({ guestOs: "linux", elementControl: true, guestDriver: () => factory });
+  const linuxLane = harness({ elementControl: true, guestDriver: () => factory });
   t.after(() => linuxLane.state.shutdown());
   const shot = await linuxLane.call({ action: "capture", app: "Safari" });
   assert.match(textOf(shot), /^\[0\] password text "Password"$/mu);
@@ -645,16 +636,4 @@ test("Linux computer tool describes Linux/Chromium/LibreOffice and maps Command 
     .map((line) => JSON.parse(line) as { name: string; args: Record<string, unknown> });
   const clickCall = calls.find((call) => call.name === "click");
   assert.deepEqual(clickCall?.args.modifier, ["ctrl"]);
-
-  // Build switch toggles default description.
-  const previous = process.env[AIDEN_BOT_COMPUTERS_LINUX_ENV];
-  try {
-    delete process.env[AIDEN_BOT_COMPUTERS_LINUX_ENV];
-    assert.match(botComputerToolDescription(false), /macOS virtual machine/u);
-    process.env[AIDEN_BOT_COMPUTERS_LINUX_ENV] = "1";
-    assert.match(botComputerToolDescription(false), /Linux virtual machine/u);
-  } finally {
-    if (previous === undefined) delete process.env[AIDEN_BOT_COMPUTERS_LINUX_ENV];
-    else process.env[AIDEN_BOT_COMPUTERS_LINUX_ENV] = previous;
-  }
 });

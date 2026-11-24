@@ -65,7 +65,7 @@ async function loopbackModel() {
   return { port, requests, close: () => new Promise((resolve) => server.close(resolve)) };
 }
 
-/** A guest whose home has a ~/Shared (the Bot's Computer folder) and a `sw_vers`, for the real shell. */
+/** A guest whose home has a ~/Shared (the Bot's Computer folder) and a `uname`, for the real shell. */
 async function guest({ takeOverOnWait, takeOverOnClick = false, captureMimeType = "image/jpeg" } = {}) {
   const root = await mkdtemp(path.join(os.tmpdir(), "aiden-bc-acceptance-"));
   roots.push(root);
@@ -73,8 +73,8 @@ async function guest({ takeOverOnWait, takeOverOnClick = false, captureMimeType 
   const computerFolder = path.join(home, "Shared");
   const bin = path.join(root, "bin");
   await Promise.all([mkdir(computerFolder, { recursive: true }), mkdir(bin)]);
-  await writeFile(path.join(bin, "sw_vers"), "#!/bin/sh\n[ \"$1\" = -productVersion ] && echo 26.6.2\n");
-  await chmod(path.join(bin, "sw_vers"), 0o755);
+  await writeFile(path.join(bin, "uname"), '#!/bin/sh\n[ "$1" = -sm ] && echo "Linux aarch64"\n');
+  await chmod(path.join(bin, "uname"), 0o755);
   let waits = 0;
   return {
     computerFolder,
@@ -176,7 +176,7 @@ test("the scripted Bot captures, clicks the capture's centre, waits for Take ove
     assert.deepEqual(verdict, {
       ok: true,
       failures: [],
-      evidence: { captureSize: { width: 1280, height: 800 }, waits: 2, interrupted: "wait", macosVersion: "26.6.2" },
+      evidence: { captureSize: { width: 1280, height: 800 }, waits: 2, interrupted: "wait", guestLinux: "Linux aarch64" },
     });
   } finally {
     await model.close();

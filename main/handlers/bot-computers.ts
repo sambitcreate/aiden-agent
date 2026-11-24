@@ -49,11 +49,9 @@ export interface BotComputerHandlerDependencies {
     | "stop"
     | "onChange"
     | "computer"
-    | "setUpElementControl"
-    | "checkPermissions"
-    | "skipPermissions"
+    | "dismissMigrationNotice"
   >;
-  viewer: Pick<BotComputerViewer, "grant" | "grantBase">;
+  viewer: Pick<BotComputerViewer, "grant">;
   control: Pick<BotComputerControl, "takeOver" | "giveBack">;
   sessions: Pick<BotComputerSessions, "lastPointer">;
   /** Runs `listener` once the window that invoked goes away; returns the unsubscribe. */
@@ -108,20 +106,10 @@ export function registerBotComputerHandlers(deps: BotComputerHandlerDependencies
     deps.host.cancelSetUp();
   });
 
-  deps.handle(BOT_COMPUTER_CHANNELS.setUpElementControl, async (): Promise<BotComputersStatus> => {
-    start(() => deps.host.setUpElementControl(), "element control setup");
+  deps.handle(BOT_COMPUTER_CHANNELS.dismissMigrationNotice, async (): Promise<BotComputersStatus> => {
+    await deps.host.dismissMigrationNotice();
     return deps.host.status();
   });
-
-  deps.handle(BOT_COMPUTER_CHANNELS.checkPermissions, () => {
-    deps.host.checkPermissions();
-  });
-
-  deps.handle(BOT_COMPUTER_CHANNELS.skipPermissions, () => {
-    deps.host.skipPermissions();
-  });
-
-  deps.handle(BOT_COMPUTER_CHANNELS.baseViewerGrant, (): Promise<BotComputerViewerGrant> => deps.viewer.grantBase());
 
   deps.handle(BOT_COMPUTER_CHANNELS.removeEverything, async (): Promise<BotComputersStatus> => {
     await deps.host.removeEverything();
@@ -129,7 +117,7 @@ export function registerBotComputerHandlers(deps: BotComputerHandlerDependencies
   });
 
   deps.handle(BOT_COMPUTER_CHANNELS.updateSettings, async (_event, patch): Promise<BotComputersSettings> => {
-    const limit = (await deps.host.status()).requirements.maxRunningLimit ?? 2;
+    const limit = (await deps.host.status()).requirements.maxRunningLimit;
     return deps.host.updateSettings(parseBotComputersSettingsPatch(patch, limit));
   });
 

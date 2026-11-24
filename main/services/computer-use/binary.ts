@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import { constants } from "node:fs";
 import { createReadStream } from "node:fs";
-import { access, lstat, realpath } from "node:fs/promises";
+import { access, lstat, open, realpath } from "node:fs/promises";
 import path from "node:path";
 import {
   CUA_DRIVER_BROKER_BUNDLE_ID,
@@ -287,6 +287,90 @@ export async function resolveVendoredCuaDriverExecutable(
       "The cua-driver executable failed its pinned signing requirement.",
     );
   });
+  return resolvedDriver;
+}
+
+function vendoredLinuxDriverDir(options: CuaDriverPathOptions): string {
+  return options.isPackaged
+    ? path.join(options.resourcesPath, "bot-computers", "cua-driver-linux-arm64")
+    : path.join(options.appPath, "build", "computer-use", "cua-driver-linux-arm64");
+}
+
+function isElfAarch64Header(header: Buffer): boolean {
+  return (
+    header.length >= 20 &&
+    header[0] === 0x7f &&
+    header[1] === 0x45 &&
+    header[2] === 0x4c &&
+    header[3] === 0x46 &&
+    header[4] === 2 &&
+    header[5] === 1 &&
+    header.readUInt16LE(18) === 183
+  );
+}
+
+/**
+ * The vendored Linux arm64 `cua-driver` binary for Linux Bot computers,
+ * verified against Aiden's compiled `CUA_DRIVER_LINUX_ARM64_UPSTREAM_PIN`
+ * (regular non-symlink ELF aarch64 file, exact byte length, exact SHA-256).
+ */
+export async function resolveVendoredLinuxCuaDriverExecutable(
+  options: CuaDriverPathOptions,
+  signal?: AbortSignal,
+): Promise<string> {
+  throwIfAborted(signal);
+  if (options.platform !== "darwin") {
+    throw new CuaDriverError("unsupported_platform", "The guest driver is copied only from a Mac.");
+  }
+  const driverDir = vendoredLinuxDriverDir(options);
+  const driverPath = path.join(driverDir, "cua-driver");
+  const missing = options.isPackaged
+    ? "The packaged Linux arm64 cua-driver executable is missing or invalid."
+    : "The pinned Linux arm64 cua-driver has not been vendored.";
+  try {
+    const dirInfo = await lstat(driverDir);
+    throwIfAborted(signal);
+    if (!dirInfo.isDirectory() || dirInfo.isSymbolicLink()) throw new Error("invalid directory");
+    const fileInfo = await lstat(driverPath);
+    throwIfAborted(signal);
+    if (!fileInfo.isFile() || fileInfo.isSymbolicLink()) throw new Error("not a regular file");
+    await access(driverPath, constants.R_OK);
+    throwIfAborted(signal);
+    if (fileInfo.size !== CUA_DRIVER_LINUX_ARM64_UPSTREAM_PIN.binaryBytes) {
+      throw new CuaDriverError(
+        "driver_integrity_failed",
+        `The Linux arm64 cua-driver size does not match Aiden's pinned ${CUA_DRIVER_VERSION} release.`,
+      );
+    }
+  } catch (error) {
+    throwIfAborted(signal);
+    if (error instanceof CuaDriverError) throw error;
+    throw new CuaDriverError("driver_missing", missing);
+  }
+  const resolvedDir = await realpath(driverDir);
+  const resolvedDriver = await realpath(driverPath);
+  if (!resolvedDriver.startsWith(`${resolvedDir}${path.sep}`)) {
+    throw new CuaDriverError("invalid_driver_path", "The Linux arm64 cua-driver escaped its directory.");
+  }
+  const handle = await open(resolvedDriver, "r");
+  try {
+    const header = Buffer.alloc(20);
+    const { bytesRead } = await handle.read(header, 0, header.length, 0);
+    if (!isElfAarch64Header(header.subarray(0, bytesRead))) {
+      throw new CuaDriverError(
+        "driver_integrity_failed",
+        "The vendored Linux arm64 cua-driver is not an aarch64 ELF binary.",
+      );
+    }
+  } finally {
+    await handle.close();
+  }
+  if ((await hashFile(resolvedDriver, signal)) !== CUA_DRIVER_LINUX_ARM64_UPSTREAM_PIN.binarySha256) {
+    throw new CuaDriverError(
+      "driver_integrity_failed",
+      `The Linux arm64 cua-driver does not match Aiden's pinned ${CUA_DRIVER_VERSION} release.`,
+    );
+  }
   return resolvedDriver;
 }
 

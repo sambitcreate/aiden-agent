@@ -1,5 +1,4 @@
 import { Type, type Static } from "typebox";
-import { botComputerGuestOs, type BotComputerGuestOs } from "./linux-guest-flag.js";
 
 /**
  * The `computer` tool's arguments (plan §8.6): a subset of
@@ -53,94 +52,87 @@ const Modifier = Type.Union(
   ["cmd", "command", "shift", "option", "alt", "ctrl", "control"].map((modifier) => Type.Literal(modifier)),
 );
 
-export function botComputerParameters(guestOs: BotComputerGuestOs = botComputerGuestOs()) {
-  const isLinux = guestOs === "linux";
-  return Type.Object(
-    {
-      action: Type.Union(
-        BOT_COMPUTER_ACTIONS.map((action) => Type.Literal(action)),
-        {
-          description:
-            "capture: a screenshot. click, double_click, right_click, drag, scroll: the pointer. type: text. key: one key chord. wait: pause. verify: a fresh screenshot to check the result against expect.",
-        },
-      ),
-      intent: Type.Optional(
-        Type.String({
-          minLength: 1,
-          maxLength: BOT_COMPUTER_INTENT_MAX_CHARS,
-          description:
-            'Required for click, double_click, right_click, drag, scroll, type and key: what this step does, in a few words, e.g. "Click Place order" or "Type the search terms". Never include typed text, passwords or codes.',
-        }),
-      ),
-      app: Type.Optional(
-        Type.String({
-          minLength: 1,
-          maxLength: 256,
-          description: isLinux
-            ? 'capture only, with element control: also list this app\'s numbered elements (its name, such as "Chromium", "Firefox" or "LibreOffice").'
-            : 'capture only, with element control: also list this app\'s numbered elements (its name, such as "Safari", or its bundle id).',
-        }),
-      ),
-      element: Type.Optional(
-        Type.Integer({
-          minimum: 0,
-          maximum: 10_000,
-          description:
-            "click, double_click and right_click only, with element control: an element number from the newest capture with app, in place of coordinate.",
-        }),
-      ),
-      coordinate: Type.Optional(Coordinate),
-      from_coordinate: Type.Optional(Coordinate),
-      to_coordinate: Type.Optional(Coordinate),
-      modifiers: Type.Optional(
-        Type.Array(Modifier, {
-          maxItems: 4,
-          uniqueItems: true,
-          description: "Clicks and drags only: keys held during the action.",
-        }),
-      ),
-      direction: Type.Optional(
-        Type.Union([Type.Literal("up"), Type.Literal("down"), Type.Literal("left"), Type.Literal("right")]),
-      ),
-      amount: Type.Optional(
-        Type.Integer({ minimum: 1, maximum: 50, default: 3, description: "scroll only: wheel steps." }),
-      ),
-      text: Type.Optional(
-        Type.String({
-          minLength: 1,
-          maxLength: BOT_COMPUTER_TEXT_MAX_CHARS,
-          description:
-            "type only: the text to type. It can never contain line breaks or tabs; send Return or Tab with key as its own step.",
-        }),
-      ),
-      keys: Type.Optional(
-        Type.String({
-          minLength: 1,
-          maxLength: 256,
-          description: isLinux
-            ? 'key only: one key with optional modifiers joined by "+", e.g. "return", "tab" or "ctrl+s" (Command/cmd maps to Ctrl).'
-            : 'key only: one key with optional modifiers joined by "+", e.g. "return", "tab" or "cmd+s".',
-        }),
-      ),
-      seconds: Type.Optional(
-        Type.Number({ minimum: 0, maximum: BOT_COMPUTER_WAIT_MAX_SECONDS, default: 1, description: "wait only." }),
-      ),
-      expect: Type.Optional(
-        Type.String({
-          minLength: 1,
-          maxLength: BOT_COMPUTER_EXPECT_MAX_CHARS,
-          description: "verify only: what the screen should now show.",
-        }),
-      ),
-      capture_after: Type.Optional(
-        Type.Boolean({ description: "Return a fresh screenshot after the action." }),
-      ),
-    },
-    { additionalProperties: false },
-  );
-}
-
-export const BotComputerParameters = botComputerParameters("macos");
+export const BotComputerParameters = Type.Object(
+  {
+    action: Type.Union(
+      BOT_COMPUTER_ACTIONS.map((action) => Type.Literal(action)),
+      {
+        description:
+          "capture: a screenshot. click, double_click, right_click, drag, scroll: the pointer. type: text. key: one key chord. wait: pause. verify: a fresh screenshot to check the result against expect.",
+      },
+    ),
+    intent: Type.Optional(
+      Type.String({
+        minLength: 1,
+        maxLength: BOT_COMPUTER_INTENT_MAX_CHARS,
+        description:
+          'Required for click, double_click, right_click, drag, scroll, type and key: what this step does, in a few words, e.g. "Click Place order" or "Type the search terms". Never include typed text, passwords or codes.',
+      }),
+    ),
+    app: Type.Optional(
+      Type.String({
+        minLength: 1,
+        maxLength: 256,
+        description:
+          'capture only, with element control: also list this app\'s numbered elements (its name, such as "Chromium", "Firefox" or "LibreOffice").',
+      }),
+    ),
+    element: Type.Optional(
+      Type.Integer({
+        minimum: 0,
+        maximum: 10_000,
+        description:
+          "click, double_click and right_click only, with element control: an element number from the newest capture with app, in place of coordinate.",
+      }),
+    ),
+    coordinate: Type.Optional(Coordinate),
+    from_coordinate: Type.Optional(Coordinate),
+    to_coordinate: Type.Optional(Coordinate),
+    modifiers: Type.Optional(
+      Type.Array(Modifier, {
+        maxItems: 4,
+        uniqueItems: true,
+        description: "Clicks and drags only: keys held during the action.",
+      }),
+    ),
+    direction: Type.Optional(
+      Type.Union([Type.Literal("up"), Type.Literal("down"), Type.Literal("left"), Type.Literal("right")]),
+    ),
+    amount: Type.Optional(
+      Type.Integer({ minimum: 1, maximum: 50, default: 3, description: "scroll only: wheel steps." }),
+    ),
+    text: Type.Optional(
+      Type.String({
+        minLength: 1,
+        maxLength: BOT_COMPUTER_TEXT_MAX_CHARS,
+        description:
+          "type only: the text to type. It can never contain line breaks or tabs; send Return or Tab with key as its own step.",
+      }),
+    ),
+    keys: Type.Optional(
+      Type.String({
+        minLength: 1,
+        maxLength: 256,
+        description:
+          'key only: one key with optional modifiers joined by "+", e.g. "return", "tab" or "ctrl+s" (Command/cmd maps to Ctrl).',
+      }),
+    ),
+    seconds: Type.Optional(
+      Type.Number({ minimum: 0, maximum: BOT_COMPUTER_WAIT_MAX_SECONDS, default: 1, description: "wait only." }),
+    ),
+    expect: Type.Optional(
+      Type.String({
+        minLength: 1,
+        maxLength: BOT_COMPUTER_EXPECT_MAX_CHARS,
+        description: "verify only: what the screen should now show.",
+      }),
+    ),
+    capture_after: Type.Optional(
+      Type.Boolean({ description: "Return a fresh screenshot after the action." }),
+    ),
+  },
+  { additionalProperties: false },
+);
 
 export type BotComputerArgs = Static<typeof BotComputerParameters>;
 

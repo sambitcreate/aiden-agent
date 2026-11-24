@@ -11,8 +11,12 @@ import {
   botComputerShellToolDescription,
   createBotComputerShellTool,
 } from "./computer-shell-tool.js";
-import { AIDEN_BOT_COMPUTERS_LINUX_ENV, BOT_COMPUTER_LINUX_SHELL_USER, type BotComputerGuestOs } from "./linux-guest-flag.js";
-import type { BotComputerConnection, BotComputerGuestCommandResult, BotComputerStartReason } from "./types.js";
+import {
+  BOT_COMPUTER_LINUX_SHELL_USER,
+  type BotComputerConnection,
+  type BotComputerGuestCommandResult,
+  type BotComputerStartReason,
+} from "./types.js";
 
 const connection: BotComputerConnection = {
   vmName: "aiden-bot-ada",
@@ -30,7 +34,7 @@ interface GuestCall {
 
 function harness(
   respond: (call: GuestCall) => Promise<BotComputerGuestCommandResult>,
-  options: { routine?: boolean; unattended?: boolean; unattendedWaitMs?: number; guestOs?: BotComputerGuestOs } = {},
+  options: { routine?: boolean; unattended?: boolean; unattendedWaitMs?: number } = {},
 ) {
   const control = createBotComputerControl();
   const calls: GuestCall[] = [];
@@ -60,7 +64,6 @@ function harness(
     {
       routine: options.routine === true,
       ...(options.unattended === undefined ? {} : { unattended: options.unattended }),
-      ...(options.guestOs === undefined ? {} : { guestOs: options.guestOs }),
     },
   );
   const run = (command: string, signal?: AbortSignal) =>
@@ -86,7 +89,7 @@ test("a command runs in the Bot's computer within 120 seconds and 64 KiB", async
   const result = await h.run("ls ~");
   assert.equal(result.isError, undefined);
   assert.equal(textOf(result), "Desktop\nShared\n\nwarning: slow disk");
-  assert.equal(h.calls[0]?.command, "ls ~");
+  assert.equal(h.calls[0]?.command, botComputerShellCommand("ls ~"));
   assert.equal(h.calls[0]?.timeoutMs, 120_000);
   assert.equal(h.calls[0]?.maxOutputBytes, 64 * 1024);
   assert.deepEqual(h.reasons, ["tool"]);
@@ -196,19 +199,19 @@ test("on a routine or Telegram turn, a command waits for the person only so long
 });
 
 test("Linux computer_shell runs commands as the separate aiden-bot user and describes Linux", async () => {
-  assert.equal(botComputerShellToolDescription("macos"), BOT_COMPUTER_SHELL_TOOL_DESCRIPTION);
-  const linuxDesc = botComputerShellToolDescription("linux");
+  const linuxDesc = botComputerShellToolDescription();
+  assert.equal(linuxDesc, BOT_COMPUTER_SHELL_TOOL_DESCRIPTION);
   assert.match(linuxDesc, /Linux virtual machine/u);
   assert.match(linuxDesc, new RegExp(`separate ${BOT_COMPUTER_LINUX_SHELL_USER} user`, "u"));
   assert.match(linuxDesc, /~\/Shared/u);
   assert.doesNotMatch(linuxDesc, /macOS|\/Volumes\/My Shared Files/u);
 
-  const h = harness(async () => ok("aiden-bot\n"), { guestOs: "linux" });
+  const h = harness(async () => ok("aiden-bot\n"));
   assert.equal(h.tool.description, linuxDesc);
   const tricky = "printf '%s\\n' 'a'\"b\" && false || echo ok";
   const result = await h.run(tricky);
   assert.equal(result.isError, undefined);
-  assert.equal(h.calls[0]?.command, botComputerShellCommand(tricky, "linux"));
+  assert.equal(h.calls[0]?.command, botComputerShellCommand(tricky));
   assert.match(h.calls[0]!.command, /^cd \/ && exec \/usr\/bin\/sudo -n -H -u 'aiden-bot' -- \/bin\/sh -c /u);
 
   // Quoting keeps shell metacharacters intact inside the inner /bin/sh -c argument.
@@ -219,17 +222,5 @@ test("Linux computer_shell runs commands as the separate aiden-bot user and desc
   assert.equal(argv[7], `cd "$HOME" || exit 1\n${tricky}`);
 
   // Reject invalid usernames fail-closed.
-  assert.throws(() => botComputerShellCommand("id", "linux", "aiden-bot; id"), /invalid/iu);
-
-  // Build switch toggles default behavior.
-  const previous = process.env[AIDEN_BOT_COMPUTERS_LINUX_ENV];
-  try {
-    delete process.env[AIDEN_BOT_COMPUTERS_LINUX_ENV];
-    assert.equal(botComputerShellCommand("ls ~"), "ls ~");
-    process.env[AIDEN_BOT_COMPUTERS_LINUX_ENV] = "1";
-    assert.match(botComputerShellCommand("ls ~"), /sudo -n -H -u 'aiden-bot'/u);
-  } finally {
-    if (previous === undefined) delete process.env[AIDEN_BOT_COMPUTERS_LINUX_ENV];
-    else process.env[AIDEN_BOT_COMPUTERS_LINUX_ENV] = previous;
-  }
+  assert.throws(() => botComputerShellCommand("id", "aiden-bot; id"), /invalid/iu);
 });

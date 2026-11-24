@@ -65,12 +65,24 @@ test("the guest driver flag is kept for a base and its computers only when it is
   const linuxDriver = { version: "0.38.0", home: "/home/lume", uid: 1000 };
   const linuxParsed = parseBotComputersState({
     settings: { maxRunning: 4, idleStopMinutes: 10 },
-    setup: { baseBuild: "20261123-2671", guestDriver: linuxDriver },
+    setup: { guestOs: "linux", baseBuild: "20261123-2671", guestDriver: linuxDriver },
     computers: {
       ada: { vmName: `aiden-bot-${"d".repeat(16)}`, baseBuild: "20261123-2671", createdAt: 4, guestDriver: linuxDriver },
+      migrated: { vmName: `aiden-bot-${"e".repeat(16)}`, baseBuild: "", createdAt: 5, migratedFromMacos: true },
     },
+    macosMigration: { completedAt: 1700000000000, freedBytes: 58_000_000_000, noticeDismissed: false },
   });
   assert.equal(linuxParsed.settings.maxRunning, 4);
+  assert.equal(linuxParsed.setup.guestOs, "linux");
   assert.deepEqual(linuxParsed.setup.guestDriver, linuxDriver);
   assert.deepEqual(linuxParsed.computers.ada?.guestDriver, linuxDriver);
+  assert.equal(linuxParsed.computers.migrated?.migratedFromMacos, true);
+  assert.equal(linuxParsed.computers.migrated?.baseBuild, "");
+  assert.deepEqual(linuxParsed.macosMigration, { completedAt: 1700000000000, freedBytes: 58_000_000_000 });
+
+  const dismissed = parseBotComputersState({
+    macosMigration: { completedAt: 1700000000000, freedBytes: 0, noticeDismissed: true },
+  });
+  assert.deepEqual(dismissed.macosMigration, { completedAt: 1700000000000, freedBytes: 0, noticeDismissed: true });
+  assert.equal(parseBotComputersState({ macosMigration: { completedAt: -1, freedBytes: 0 } }).macosMigration, undefined);
 });

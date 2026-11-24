@@ -13,7 +13,6 @@ import { spawn, type ChildProcess } from "node:child_process";
 import { CuaDriverSession } from "../computer-use/session.js";
 import type { CuaDriverHostFactory, CuaDriverHostLike, CuaDriverSessionLike } from "../computer-use/controller.js";
 import { guestDriverBridgeScript, type GuestDriverLocation } from "./guest-driver-install.js";
-import { botComputerGuestOs, type BotComputerGuestOs } from "./linux-guest-flag.js";
 import { guestRemoteCommand, guestSshArgs, type GuestSshPaths, type GuestSshTarget } from "./ssh.js";
 
 /** One child process that speaks MCP on its stdio. */
@@ -26,18 +25,17 @@ export interface GuestDriverBridgeCommand {
 /** How long one bridge may live: the guest's own alarm ends it after this. */
 export const GUEST_DRIVER_BRIDGE_LIFETIME_MS = 6 * 60 * 60_000;
 
-/** `/usr/bin/ssh <Aiden's options> -l <user> -- <ip> <bridge script>`. */
+/** `/usr/bin/ssh <Aiden's options> -l lume -- <ip> <bridge script>`. */
 export function guestDriverSshBridge(
   target: GuestSshTarget,
   location: GuestDriverLocation,
-  options: { paths: GuestSshPaths; env: Record<string, string>; sshCommand?: string; guestOs?: BotComputerGuestOs },
+  options: { paths: GuestSshPaths; env: Record<string, string>; sshCommand?: string },
 ): GuestDriverBridgeCommand {
-  const guestOs = options.guestOs ?? botComputerGuestOs();
   return {
     command: options.sshCommand ?? "/usr/bin/ssh",
     args: [
       ...guestSshArgs(target, options.paths),
-      guestRemoteCommand(guestDriverBridgeScript(location, undefined, guestOs), GUEST_DRIVER_BRIDGE_LIFETIME_MS),
+      guestRemoteCommand(guestDriverBridgeScript(location), GUEST_DRIVER_BRIDGE_LIFETIME_MS),
     ],
     env: options.env,
   };

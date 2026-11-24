@@ -4,7 +4,7 @@ import { chmod, mkdir, rename, rm, stat } from "node:fs/promises";
 import path from "node:path";
 import { finished } from "node:stream/promises";
 import { formatHarnessBytes } from "../../../renderer/shared/acp-harness.js";
-import { BOT_COMPUTER_BASE_DISK_RESERVE_BYTES, BOT_COMPUTER_RESTORE_IMAGE } from "./release.js";
+import { BOT_COMPUTER_LINUX_BASE_DISK_RESERVE_BYTES, BOT_COMPUTER_LINUX_IMAGE } from "./release.js";
 import { BotComputerError } from "./types.js";
 
 export interface RestoreImagePin {
@@ -84,25 +84,26 @@ async function sha256(file: string, signal: AbortSignal): Promise<string> {
 }
 
 /**
- * The pinned macOS restore image, fetched only from its fixed URL after the
- * person chose Set up or Update base. Redirects are refused, a `.part` file is
- * kept across launches and resumed with `Range`, the size is capped at the
- * pin, and nothing is used before its SHA-256 matches.
+ * The pinned Debian Linux arm64 disk image, fetched only from its fixed URL
+ * (following bounded HTTPS-only mirror redirects) after the person chooses
+ * Set up or Update base. A `.part` file is kept across launches and resumed
+ * with `Range`, the size is capped at the pin, and nothing is used before its
+ * SHA-256 matches.
  */
 export function createRestoreImageDownloader(options: RestoreImageDownloaderOptions): RestoreImageDownloader {
-  const image = options.image ?? BOT_COMPUTER_RESTORE_IMAGE;
+  const image = options.image ?? BOT_COMPUTER_LINUX_IMAGE;
   const fetchImpl = options.fetchImpl ?? fetch;
-  const reserve = options.reserveBytes ?? BOT_COMPUTER_BASE_DISK_RESERVE_BYTES;
+  const reserve = options.reserveBytes ?? BOT_COMPUTER_LINUX_BASE_DISK_RESERVE_BYTES;
   const connectMs = options.connectTimeoutMs ?? 30_000;
   const stallMs = options.stallTimeoutMs ?? 60_000;
   const progressMs = options.progressIntervalMs ?? 250;
-  const label = options.label ?? "macOS";
-  const serverLabel = options.serverLabel ?? "Apple's download server";
-  const allowHttpsRedirects = options.allowHttpsRedirects === true;
+  const label = options.label ?? "Debian Linux";
+  const serverLabel = options.serverLabel ?? "Debian's download server";
+  const allowHttpsRedirects = options.allowHttpsRedirects ?? true;
   if (!/^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/u.test(image.build) || image.build.includes("..")) {
-    throw new Error("The restore image build is malformed.");
+    throw new Error("The disk image build is malformed.");
   }
-  const filename = options.filename ?? `UniversalMac_${image.build}_Restore.ipsw`;
+  const filename = options.filename ?? `debian-${image.build}.raw`;
   if (!/^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/u.test(filename) || filename.includes("..")) {
     throw new Error("The restore image filename is malformed.");
   }

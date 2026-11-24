@@ -5,6 +5,7 @@ import {
   BOT_COMPUTER_VIEWER_HOST_ID,
   botComputerMaxRunningChoices,
   botComputerSetupSummary,
+  botComputersMigrationNoticeText,
   parseBotComputerPointer,
   parseBotComputersSettingsPatch,
   parseBotComputersStatus,
@@ -51,64 +52,75 @@ test("a pointer must sit inside its screen", () => {
   assert.equal(parseBotComputerPointer(null), null);
 });
 
-test("settings patch and status parser support Linux maxRunning up to 4 while keeping macOS capped at 2", () => {
-  assert.deepEqual(botComputerMaxRunningChoices(), [1, 2]);
-  assert.deepEqual(botComputerMaxRunningChoices(4), [1, 2, 3, 4]);
+test("settings patch, status parser, setup summary, and migration notice cover Linux maxRunning 1–4", () => {
+  assert.deepEqual(botComputerMaxRunningChoices(), [1, 2, 3, 4]);
+  assert.deepEqual(botComputerMaxRunningChoices(2), [1, 2]);
   assert.deepEqual(botComputerMaxRunningChoices(1), [1]);
 
-  assert.throws(() => parseBotComputersSettingsPatch({ maxRunning: 3 }), /one or two/u);
+  assert.throws(() => parseBotComputersSettingsPatch({ maxRunning: 5 }), /At most 4/u);
   assert.deepEqual(parseBotComputersSettingsPatch({ maxRunning: 4 }, 4), { maxRunning: 4 });
   assert.throws(() => parseBotComputersSettingsPatch({ maxRunning: 4 }, 3), /At most 3/u);
   assert.throws(() => parseBotComputersSettingsPatch({ maxRunning: 2 }, 1), /At most one/u);
 
-  const macBase = {
-    setup: { kind: "ready", baseVersion: "26.6.2", baseBuild: "25G83", updateAvailable: false },
-    settings: { maxRunning: 3, idleStopMinutes: 10 },
+  const linuxStatus = parseBotComputersStatus({
+    setup: { kind: "ready", baseVersion: "13", baseBuild: "20261123-2671", updateAvailable: false },
+    settings: { maxRunning: 4, idleStopMinutes: 10 },
     diskUsedBytes: 0,
     computers: [],
     requirements: {
-      downloadBytes: 19_772_231_540,
-      baseDiskBytes: 50_000_000_000,
-      setupFreeBytes: 84_196_731_252,
-      memoryPerComputerBytes: 8 * 1024 ** 3,
-      baseVersion: "26.6.2",
-    },
-  };
-  assert.equal(parseBotComputersStatus(macBase), undefined, "macOS status rejects maxRunning > 2");
-
-  const linuxStatus = parseBotComputersStatus({
-    ...macBase,
-    setup: { kind: "ready", baseVersion: "13", baseBuild: "20261123-2671", updateAvailable: false },
-    settings: { maxRunning: 4, idleStopMinutes: 10 },
-    requirements: {
       downloadBytes: 3_221_225_472,
       baseDiskBytes: 8_000_000_000,
-      setupFreeBytes: 20_401_094_656,
+      setupFreeBytes: 24_696_061_952,
       memoryPerComputerBytes: 4 * 1024 ** 3,
       baseVersion: "13",
-      guestOs: "linux",
       maxRunningLimit: 4,
     },
+    migrationNotice: { freedBytes: 58_000_000_000 },
   });
   assert.equal(linuxStatus?.settings.maxRunning, 4);
-  assert.equal(linuxStatus?.requirements.guestOs, "linux");
   assert.equal(linuxStatus?.requirements.maxRunningLimit, 4);
-
-  assert.equal(botComputerSetupSummary({ kind: "unsupported", reason: "host_os" }), "Bot computers need macOS 26 or later on this Mac.");
+  assert.deepEqual(linuxStatus?.migrationNotice, { freedBytes: 58_000_000_000 });
   assert.equal(
-    botComputerSetupSummary({ kind: "unsupported", reason: "host_os" }, "linux"),
+    parseBotComputersStatus({
+      setup: { kind: "not_set_up" },
+      settings: { maxRunning: 5, idleStopMinutes: 10 },
+      diskUsedBytes: 0,
+      computers: [],
+      requirements: {
+        downloadBytes: 3_221_225_472,
+        baseDiskBytes: 8_000_000_000,
+        setupFreeBytes: 24_696_061_952,
+        memoryPerComputerBytes: 4 * 1024 ** 3,
+        baseVersion: "13",
+        maxRunningLimit: 4,
+      },
+    }),
+    undefined,
+    "status rejects maxRunning > 4",
+  );
+
+  assert.equal(
+    botComputerSetupSummary({ kind: "unsupported", reason: "host_os" }),
     "Bot computers need macOS 14 or later on this Mac.",
   );
   assert.equal(
-    botComputerSetupSummary({ kind: "building_base", step: "create" }, "linux"),
+    botComputerSetupSummary({ kind: "building_base", step: "create" }),
     "Setting up Debian Linux on the base computer…",
   );
   assert.equal(
-    botComputerSetupSummary({ kind: "ready", baseVersion: "13", baseBuild: "20261123-2671", updateAvailable: false }, "linux"),
+    botComputerSetupSummary({ kind: "ready", baseVersion: "13", baseBuild: "20261123-2671", updateAvailable: false }),
     "Ready (Debian 13).",
   );
   assert.equal(
-    botComputerSetupSummary({ kind: "ready", baseVersion: "13", baseBuild: "20261123-2671", updateAvailable: true }, "linux"),
+    botComputerSetupSummary({ kind: "ready", baseVersion: "13", baseBuild: "20261123-2671", updateAvailable: true }),
     "Ready. A newer base (Debian 13) is available.",
+  );
+  assert.equal(
+    botComputersMigrationNoticeText(58_000_000_000),
+    "Bot computers now run Linux. Your Mac computers were removed and freed 58 GB. Set up to continue.",
+  );
+  assert.equal(
+    botComputersMigrationNoticeText(0),
+    "Bot computers now run Linux. Your Mac computers were removed. Set up to continue.",
   );
 });

@@ -19,7 +19,6 @@ import {
 import type { BotRuntimeEffectiveAuthority } from "../bot-runtime-authority.js";
 import type { RendererDocumentOwner } from "../renderer-document-owner.js";
 import { createBotComputerControl } from "../bot-computers/control.js";
-import { AIDEN_BOT_COMPUTERS_LINUX_ENV } from "../bot-computers/linux-guest-flag.js";
 import { createBotBrowserHandoffOpener, type BotBrowserHandoffService } from "./bot-browser-handoff.js";
 import { createBotComputerHandoffOpener } from "./bot-computer-handoff.js";
 import { BOT_BROWSER_HELD_TAB_TITLE, createBotBrowser, type BotBrowserService } from "./bot-browser-tools.js";
@@ -544,22 +543,9 @@ test("sign-in is offered only with the Browser in the Bot's access, and refused 
   });
 });
 
-test("sign_in description names Chromium on Linux computers and Safari on macOS computers", () => {
-  assert.match(botSignInDescription({ browser: false, computer: true }, "macos"), /signs in in Safari there/u);
-  assert.match(botSignInDescription({ browser: true, computer: true }, "macos"), /signs in in Safari on it/u);
-  assert.match(botSignInDescription({ browser: false, computer: true }, "linux"), /signs in in Chromium there/u);
-  assert.match(botSignInDescription({ browser: true, computer: true }, "linux"), /signs in in Chromium on it/u);
-  assert.doesNotMatch(botSignInDescription({ browser: false, computer: true }, "linux"), /Safari/u);
-  assert.doesNotMatch(botSignInDescription({ browser: true, computer: true }, "linux"), /Safari/u);
-
-  const previous = process.env[AIDEN_BOT_COMPUTERS_LINUX_ENV];
-  try {
-    delete process.env[AIDEN_BOT_COMPUTERS_LINUX_ENV];
-    assert.match(botSignInDescription({ browser: false, computer: true }), /Safari/u);
-    process.env[AIDEN_BOT_COMPUTERS_LINUX_ENV] = "1";
-    assert.match(botSignInDescription({ browser: false, computer: true }), /Chromium/u);
-  } finally {
-    if (previous === undefined) delete process.env[AIDEN_BOT_COMPUTERS_LINUX_ENV];
-    else process.env[AIDEN_BOT_COMPUTERS_LINUX_ENV] = previous;
-  }
+test("sign_in description names Chromium on Linux computers and never Safari", () => {
+  assert.match(botSignInDescription({ browser: false, computer: true }), /signs in in Chromium there/u);
+  assert.match(botSignInDescription({ browser: true, computer: true }), /signs in in Chromium on it/u);
+  assert.doesNotMatch(botSignInDescription({ browser: false, computer: true }), /Safari/u);
+  assert.doesNotMatch(botSignInDescription({ browser: true, computer: true }), /Safari/u);
 });

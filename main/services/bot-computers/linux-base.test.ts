@@ -5,7 +5,6 @@ import path from "node:path";
 import test from "node:test";
 
 import { createAndBootHiddenLinuxBase, prepareLinuxBaseDisk } from "./linux-base.js";
-import { BOT_COMPUTERS_LINUX_FLAG } from "./linux-feature-flag.js";
 import { lumeEnvironment, runLume } from "./lume-cli.js";
 import { BOT_COMPUTER_LINUX_DISK_BYTES } from "./release.js";
 import { BotComputerError } from "./types.js";
@@ -59,36 +58,6 @@ test("prepareLinuxBaseDisk copies the verified raw image and grows it sparsely t
   );
 });
 
-test("createAndBootHiddenLinuxBase is refused when AIDEN_BOT_COMPUTERS_LINUX is off and runs no Lume", async (t) => {
-  const dir = mkdtempSync(path.join(tmpdir(), "aiden-linux-off-"));
-  t.after(() => rmSync(dir, { recursive: true, force: true }));
-  const logPath = path.join(dir, "lume.jsonl");
-  const configFile = path.join(dir, "fake.json");
-  writeFileSync(configFile, JSON.stringify({ log: logPath }));
-  const rawImage = path.join(dir, "debian.raw");
-  writeFileSync(rawImage, "raw");
-
-  await assert.rejects(
-    createAndBootHiddenLinuxBase({
-      vmName: BOT_COMPUTER_BASE_VM,
-      invocation: { command: process.execPath, prefixArgs: [FAKE_LUME, "--fake-config", configFile] },
-      storage: path.join(dir, "vms"),
-      lumeEnv: lumeEnvironment({}, path.join(dir, "home")),
-      sharedDir: path.join(dir, "shared"),
-      logFile: path.join(dir, "base.log"),
-      sourceImagePath: rawImage,
-      seedIsoPath: path.join(dir, "cidata.iso"),
-      sshAuthorizedKey: TEST_SSH_KEY,
-      password: "GuestPassword1234567890",
-      vncPassword: "Zq7Tn2Lw9Rk4Hm6X",
-      featureEnv: {},
-      pollIntervalMs: 20,
-    }),
-    (error: unknown) => error instanceof BotComputerError && error.code === "unsupported",
-  );
-  assert.equal(readCalls(logPath).length, 0, "no Lume call runs while the build switch is off");
-});
-
 test("createAndBootHiddenLinuxBase creates a Linux VM, grows its disk, mounts CIDATA ISO, and boots with audio/clipboard off", async (t) => {
   const dir = mkdtempSync(path.join(tmpdir(), "aiden-linux-on-"));
   const storage = path.join(dir, "vms");
@@ -121,7 +90,6 @@ test("createAndBootHiddenLinuxBase creates a Linux VM, grows its disk, mounts CI
     sshAuthorizedKey: TEST_SSH_KEY,
     password: "GuestPassword1234567890",
     vncPassword: "Zq7Tn2Lw9Rk4Hm6X",
-    featureEnv: { [BOT_COMPUTERS_LINUX_FLAG]: "1" },
     pollIntervalMs: 20,
     startTimeoutMs: 10_000,
   });
@@ -181,7 +149,6 @@ test("createAndBootHiddenLinuxBase supports --disk-path override and stops the V
       seedIsoPath: path.join(dir, "cidata.iso"),
       sshAuthorizedKey: TEST_SSH_KEY,
       vncPassword: "Zq7Tn2Lw9Rk4Hm6X",
-      featureEnv: { [BOT_COMPUTERS_LINUX_FLAG]: "true" },
       pollIntervalMs: 20,
       startTimeoutMs: 10_000,
     }),
@@ -225,7 +192,6 @@ test("createAndBootHiddenLinuxBase force-stops a VM when aborted while lume run 
     seedIsoPath: path.join(dir, "cidata.iso"),
     sshAuthorizedKey: TEST_SSH_KEY,
     vncPassword: "Zq7Tn2Lw9Rk4Hm6X",
-    featureEnv: { [BOT_COMPUTERS_LINUX_FLAG]: "1" },
     pollIntervalMs: 20,
     startTimeoutMs: 10_000,
     signal: controller.signal,

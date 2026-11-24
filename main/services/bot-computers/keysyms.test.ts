@@ -4,7 +4,6 @@ import test from "node:test";
 import { hidUsageForCode } from "../../../renderer/lib/device-stream.js";
 import { botComputerModifierKeysyms } from "./computer-keystrokes.js";
 import { characterKey, chordKeyStrokes, keysymForHidUsage, textKeyStrokes, XK } from "./keysyms.js";
-import { AIDEN_BOT_COMPUTERS_LINUX_ENV } from "./linux-guest-flag.js";
 
 const down = (keysym: number) => ({ keysym, down: true });
 const up = (keysym: number) => ({ keysym, down: false });
@@ -84,15 +83,15 @@ test("line breaks and tabs are keys, other characters are Unicode keysyms, and c
   assert.throws(() => characterKey("ab"), RangeError);
 });
 
-test("a chord presses modifiers in order, the key, then releases in reverse", () => {
-  assert.deepEqual(chordKeyStrokes("cmd+shift+t"), [down(XK.Shift_L), down(XK.Super_L), down(0x74), up(0x74), up(XK.Super_L), up(XK.Shift_L)]);
+test("a chord presses modifiers in order, mapping Command to Control on Linux, then releases in reverse", () => {
+  assert.deepEqual(chordKeyStrokes("cmd+shift+t"), [down(XK.Shift_L), down(XK.Control_L), down(0x74), up(0x74), up(XK.Control_L), up(XK.Shift_L)]);
   assert.deepEqual(chordKeyStrokes("Return"), [down(XK.Return), up(XK.Return)]);
   assert.deepEqual(chordKeyStrokes("option+left"), [down(XK.Alt_L), down(XK.Left), up(XK.Left), up(XK.Alt_L)]);
   assert.deepEqual(chordKeyStrokes("f5"), [down(0xffc2), up(0xffc2)]);
 });
 
 test("a chord on a shifted symbol adds Shift once", () => {
-  assert.deepEqual(chordKeyStrokes("cmd+?"), [down(XK.Super_L), down(XK.Shift_L), down(0x2f), up(0x2f), up(XK.Shift_L), up(XK.Super_L)]);
+  assert.deepEqual(chordKeyStrokes("cmd+?"), [down(XK.Control_L), down(XK.Shift_L), down(0x2f), up(0x2f), up(XK.Shift_L), up(XK.Control_L)]);
   assert.deepEqual(chordKeyStrokes("shift+?"), [down(XK.Shift_L), down(0x2f), up(0x2f), up(XK.Shift_L)]);
 });
 
@@ -104,14 +103,14 @@ test("Computer Use's blocked shortcuts, fn and unknown keys are refused", () => 
   assert.throws(() => chordKeyStrokes(""), /non-empty/u);
 });
 
-test("on Linux guests, Command key chords and click modifiers map to Ctrl while Super stays Super", () => {
-  assert.deepEqual(chordKeyStrokes("cmd+s", { guestOs: "linux" }), [
+test("Command key chords and click modifiers map to Ctrl while Super stays Super", () => {
+  assert.deepEqual(chordKeyStrokes("cmd+s"), [
     down(XK.Control_L),
     down(0x73),
     up(0x73),
     up(XK.Control_L),
   ]);
-  assert.deepEqual(chordKeyStrokes("command+shift+t", { guestOs: "linux" }), [
+  assert.deepEqual(chordKeyStrokes("command+shift+t"), [
     down(XK.Shift_L),
     down(XK.Control_L),
     down(0x74),
@@ -119,32 +118,19 @@ test("on Linux guests, Command key chords and click modifiers map to Ctrl while 
     up(XK.Control_L),
     up(XK.Shift_L),
   ]);
-  assert.deepEqual(chordKeyStrokes("cmd+ctrl+c", { guestOs: "linux" }), [
+  assert.deepEqual(chordKeyStrokes("cmd+ctrl+c"), [
     down(XK.Control_L),
     down(0x63),
     up(0x63),
     up(XK.Control_L),
   ]);
-  assert.deepEqual(chordKeyStrokes("super+a", { guestOs: "linux" }), [
+  assert.deepEqual(chordKeyStrokes("super+a"), [
     down(XK.Super_L),
     down(0x61),
     up(0x61),
     up(XK.Super_L),
   ]);
-  assert.throws(() => chordKeyStrokes("cmd+q", { guestOs: "linux" }), /blocked/u);
 
-  assert.deepEqual(botComputerModifierKeysyms(["cmd", "shift"], { guestOs: "macos" }), [XK.Shift_L, XK.Super_L]);
-  assert.deepEqual(botComputerModifierKeysyms(["cmd", "shift"], { guestOs: "linux" }), [XK.Shift_L, XK.Control_L]);
-  assert.deepEqual(botComputerModifierKeysyms(["cmd", "ctrl"], { guestOs: "linux" }), [XK.Control_L]);
-
-  const previous = process.env[AIDEN_BOT_COMPUTERS_LINUX_ENV];
-  try {
-    delete process.env[AIDEN_BOT_COMPUTERS_LINUX_ENV];
-    assert.deepEqual(chordKeyStrokes("cmd+c"), [down(XK.Super_L), down(0x63), up(0x63), up(XK.Super_L)]);
-    process.env[AIDEN_BOT_COMPUTERS_LINUX_ENV] = "1";
-    assert.deepEqual(chordKeyStrokes("cmd+c"), [down(XK.Control_L), down(0x63), up(0x63), up(XK.Control_L)]);
-  } finally {
-    if (previous === undefined) delete process.env[AIDEN_BOT_COMPUTERS_LINUX_ENV];
-    else process.env[AIDEN_BOT_COMPUTERS_LINUX_ENV] = previous;
-  }
+  assert.deepEqual(botComputerModifierKeysyms(["cmd", "shift"]), [XK.Shift_L, XK.Control_L]);
+  assert.deepEqual(botComputerModifierKeysyms(["cmd", "ctrl"]), [XK.Control_L]);
 });

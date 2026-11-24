@@ -15,7 +15,6 @@
  */
 
 import { parseComputerUseKeyChord } from "../computer-use/safety.js";
-import { botComputerGuestOs, type BotComputerGuestOs } from "./linux-guest-flag.js";
 
 export const XK = {
   BackSpace: 0xff08,
@@ -132,14 +131,7 @@ const CHORD_MODIFIERS: Readonly<Record<string, number>> = {
   ctrl: XK.Control_L,
   option: XK.Alt_L,
   shift: XK.Shift_L,
-  cmd: XK.Super_L,
-  win: XK.Super_L,
-};
-
-const LINUX_CHORD_MODIFIERS: Readonly<Record<string, number>> = {
-  ctrl: XK.Control_L,
-  option: XK.Alt_L,
-  shift: XK.Shift_L,
+  /** Command/cmd chords map to Ctrl on Linux Bot computers. */
   cmd: XK.Control_L,
   win: XK.Super_L,
 };
@@ -227,12 +219,10 @@ function keyNameKeysym(name: string): { keysym: number; shift: boolean } {
  * The grammar and the blocked destructive shortcuts are Computer Use's;
  * `fn` has no VNC keysym and is refused.
  */
-export function chordKeyStrokes(chord: string, options: { guestOs?: BotComputerGuestOs } = {}): KeyStroke[] {
-  const guestOs = options.guestOs ?? botComputerGuestOs();
-  const table = guestOs === "linux" ? LINUX_CHORD_MODIFIERS : CHORD_MODIFIERS;
+export function chordKeyStrokes(chord: string): KeyStroke[] {
   const parsed = parseComputerUseKeyChord(chord);
   const modifiers = parsed.modifiers.map((modifier) => {
-    const keysym = table[modifier];
+    const keysym = CHORD_MODIFIERS[modifier];
     if (keysym === undefined) throw new RangeError(`The ${modifier} key can't be sent to a Bot computer.`);
     return keysym;
   });

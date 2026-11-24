@@ -9,13 +9,12 @@ import { app, ipcMain, logger, nativeImage } from "../../platform.js";
 import type { NotificationChannel } from "../../../renderer/preload-channels.js";
 import { invalidateBotRuntimeInventoryAuthority } from "../bot-runtime-inventory-lease.js";
 import { hostPlatformCapabilities } from "../host-platform-capabilities.js";
-import { resolveVendoredCuaDriverExecutable, vendoredCuaDriverNoticePath } from "../computer-use/binary.js";
+import { resolveVendoredLinuxCuaDriverExecutable, vendoredCuaDriverNoticePath } from "../computer-use/binary.js";
 import { secrets } from "../secrets.js";
 import { createBotComputerControl, type BotComputerControlRegistry } from "./control.js";
 import { createBotComputerHost } from "./host.js";
-import { botComputersLinuxEnabled } from "./linux-feature-flag.js";
 import { resolveLumeInstallation } from "./lume-binary.js";
-import { hostMacosSupportsBotComputers, hostMacosSupportsLinuxBotComputers } from "./release.js";
+import { hostMacosSupportsBotComputers } from "./release.js";
 import { createRfbScreenFactory, nativeImageEncoder } from "./rfb-screen-main.js";
 import { createBotComputerActivity, createBotComputerSessions, type BotComputerActivity } from "./sessions.js";
 import type { BotComputerHost, BotComputerSessions } from "./types.js";
@@ -53,10 +52,7 @@ async function botComputerDir(botId: string): Promise<string> {
 function hostSupport(): { ok: true } | { ok: false; reason: "platform" | "host_os" } {
   if (!botComputersEnabled()) return { ok: false, reason: "platform" };
   const version = typeof process.getSystemVersion === "function" ? process.getSystemVersion() : undefined;
-  const supported = botComputersLinuxEnabled()
-    ? hostMacosSupportsLinuxBotComputers(version)
-    : hostMacosSupportsBotComputers(version);
-  return supported ? { ok: true } : { ok: false, reason: "host_os" };
+  return hostMacosSupportsBotComputers(version) ? { ok: true } : { ok: false, reason: "host_os" };
 }
 
 /** Where Computer Use's vendored helper bundle lives, whose cua-driver the guest driver lane copies. */
@@ -95,14 +91,18 @@ export function botComputers(): BotComputers {
     },
     control,
     activity,
-    // The guest driver lane copies Aiden's own vendored, pinned cua-driver into the base, with its
-    // licence notice; never a download.
-    guestDriverExecutable: (signal) => resolveVendoredCuaDriverExecutable(helperPaths(), signal),
+    // The guest driver lane copies Aiden's own vendored, pinned Linux arm64 cua-driver into
+    // the base, with its licence notice; never a download.
+    guestDriverExecutable: (signal) => resolveVendoredLinuxCuaDriverExecutable(helperPaths(), signal),
     guestDriverNotice: () => vendoredCuaDriverNoticePath(helperPaths()),
     // A ready base or Remove everything changes what the Bot runtime offers;
     // starting and stopping a computer never does.
     onSetupReady: () => invalidateBotRuntimeInventoryAuthority("inventory_changed"),
     onRemoved: () => invalidateBotRuntimeInventoryAuthority("inventory_changed"),
+    onMacosComputerMigrated: async (botId, note) => {
+      const { botMemory } = await import("../bot-memory/bot-memory-main.js");
+      await botMemory.apply(botId, "memory", [{ action: "add", content: note }], { addOnly: true });
+    },
     log,
   });
   const sessions = createBotComputerSessions({ host, control, activity, botName });
@@ -117,8 +117,7 @@ export function botComputers(): BotComputers {
     log,
   });
   sessions.setScreenFactory(screenFactory);
-  // The base's screen, too, while setup waits for the person's grants (the guest driver lane).
-  const viewer = createBotComputerViewer({ host, sessions, control, baseScreen: screenFactory, botName, log });
+  const viewer = createBotComputerViewer({ host, sessions, control, botName, log });
   singleton = { host, control, activity, sessions, viewer };
   return singleton;
 }

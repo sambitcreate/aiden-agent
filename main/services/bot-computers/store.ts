@@ -22,18 +22,34 @@ export interface BotComputerRecord {
   baseBuild: string;
   createdAt: number;
   lastUsedAt?: number;
-  /** Copied from the base at clone time: this computer's guest driver passed with these grants. */
+  /** Copied from the base at clone time: this computer's guest driver passed its probe. */
   guestDriver?: BotComputerGuestDriverRecord;
+  /**
+   * True when this Bot's legacy macOS computer was removed during the one-time
+   * upgrade to Linux: keeps the Bot's "has a computer" setting so a fresh
+   * Linux VM is cloned once the Linux base is set up.
+   */
+  migratedFromMacos?: boolean;
 }
 
 export interface BotComputersSetupRecord {
-  /** The macOS build the current base was made from; unset until a base is ready. */
+  /** The guest OS of the current base (`"linux"` for Debian 13; omitted on legacy macOS state). */
+  guestOs?: "linux";
+  /** The Debian build the current base was made from; unset until a base is ready. */
   baseBuild?: string;
   baseVersion?: string;
-  /** The verified restore image waiting to become a base, kept so a failed build retries without a download. */
+  /** The verified disk image waiting to become a base, kept so a failed build retries without a download. */
   ipswPath?: string;
   /** Set when the base's guest driver passed its probe; unset keeps every computer on the VNC lane. */
   guestDriver?: BotComputerGuestDriverRecord;
+}
+
+/** Recorded after the one-time first-launch removal of legacy macOS Bot computers. */
+export interface BotComputersMacosMigrationRecord {
+  completedAt: number;
+  freedBytes: number;
+  /** True once the person sets up Linux, removes everything, or dismisses the Settings notice. */
+  noticeDismissed?: boolean;
 }
 
 export interface BotComputersState {
@@ -41,6 +57,7 @@ export interface BotComputersState {
   settings: BotComputersSettings;
   setup: BotComputersSetupRecord;
   computers: Record<string, BotComputerRecord>;
+  macosMigration?: BotComputersMacosMigrationRecord;
 }
 
 export function emptyBotComputersState(): BotComputersState {
@@ -64,6 +81,19 @@ function guestDriver(value: unknown): BotComputerGuestDriverRecord | undefined {
   return { version, home, uid };
 }
 
+function parseMigration(value: unknown): BotComputersMacosMigrationRecord | undefined {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
+  const input = value as Record<string, unknown>;
+  const completedAt = time(input.completedAt);
+  const freedBytes = time(input.freedBytes);
+  if (completedAt === undefined || freedBytes === undefined) return undefined;
+  return {
+    completedAt,
+    freedBytes,
+    ...(input.noticeDismissed === true ? { noticeDismissed: true } : {}),
+  };
+}
+
 /** Read what is valid and drop the rest, so one bad field never strands every computer. */
 export function parseBotComputersState(value: unknown): BotComputersState {
   const state = emptyBotComputersState();
@@ -85,6 +115,7 @@ export function parseBotComputersState(value: unknown): BotComputersState {
   }
   const setup = input.setup as Record<string, unknown> | undefined;
   if (setup && typeof setup === "object") {
+    if (setup.guestOs === "linux") state.setup.guestOs = "linux";
     const baseBuild = text(setup.baseBuild, 32);
     const baseVersion = text(setup.baseVersion, 32);
     const ipswPath = text(setup.ipswPath, 4096);
@@ -111,9 +142,12 @@ export function parseBotComputersState(value: unknown): BotComputersState {
         createdAt,
         ...(lastUsedAt !== undefined ? { lastUsedAt } : {}),
         ...(driver ? { guestDriver: driver } : {}),
+        ...(entry.migratedFromMacos === true ? { migratedFromMacos: true } : {}),
       };
     }
   }
+  const migration = parseMigration(input.macosMigration);
+  if (migration) state.macosMigration = migration;
   return state;
 }
 

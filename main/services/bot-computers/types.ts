@@ -83,18 +83,13 @@ export interface BotComputerHost {
     options: { timeoutMs: number; maxOutputBytes: number; signal?: AbortSignal },
   ): Promise<BotComputerGuestCommandResult>;
   /**
-   * The guest driver lane (plan §8.6) for this Bot's computer: a host factory
-   * for `ComputerUseController`, only when the computer was made from a base
-   * whose guest driver passed its probe for the pinned version.
+   * The guest driver lane for this Bot's computer: a host factory for
+   * `ComputerUseController`, when the computer was made from a base whose
+   * Linux guest driver passed its probe for the pinned version.
    */
   guestDriver(botId: string): Promise<CuaDriverHostFactory | undefined>;
-  /** Element control on a ready base without it: boots the base, installs the driver, waits for the grants. */
-  setUpElementControl(): Promise<void>;
-  /** While setup waits for the grants: check them now, or finish without element control. */
-  checkPermissions(): void;
-  skipPermissions(): void;
-  /** The base computer while setup waits for the person's grants (Settings shows its screen). */
-  baseView(): BotComputerConnection | undefined;
+  /** Dismiss the one-time Settings notice shown after removing old macOS Bot computers. */
+  dismissMigrationNotice(): Promise<void>;
   reconcile(): Promise<void>;
   /**
    * Quit's first step, before anything waits: refuse new starts and end any `lume run` still
@@ -176,6 +171,16 @@ export interface BotComputerSessions {
 /** P10's tool names, fixed here so policy and the catalog agree. */
 export const BOT_COMPUTER_TOOL_NAME = "computer";
 export const BOT_COMPUTER_SHELL_TOOL_NAME = "computer_shell";
+
+/**
+ * Dedicated unprivileged Linux user inside a Bot's computer for `computer_shell`
+ * commands, separate from the logged-in desktop/sign-in user (`lume`).
+ */
+export const BOT_COMPUTER_LINUX_SHELL_USER = "aiden-bot";
+
+/** One-line memory note added to each Bot whose macOS computer was removed during upgrade. */
+export const BOT_COMPUTER_LINUX_MIGRATION_BOT_NOTE =
+  "Your computer was upgraded from macOS to Linux (Debian with XFCE); files and browser sign-ins from your old Mac computer were removed.";
 
 /** Host secret holding the rotated guest password (§2.11). */
 export const BOT_COMPUTER_SECRET_FAMILY = "aiden-internal:bot-computers";
