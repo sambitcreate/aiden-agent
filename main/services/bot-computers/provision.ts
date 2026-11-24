@@ -452,6 +452,7 @@ export const LINUX_BASE_PROVISION_STEPS: readonly LinuxProvisionStep[] = Object.
       ].join("\n");
       const packages = BOT_COMPUTER_LINUX_DESKTOP_PACKAGES.join(" ");
       const script = [
+        "rm -f /etc/apt/sources.list.d/debian.sources /etc/apt/sources.list.d/*.sources",
         `printf '%s\\n' ${quoteRemoteArg(sourcesList)} > /etc/apt/sources.list`,
         'printf \'%s\\n\' \'Acquire::Check-Valid-Until "false";\' > /etc/apt/apt.conf.d/99-aiden-snapshot',
         "export DEBIAN_FRONTEND=noninteractive",

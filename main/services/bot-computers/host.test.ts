@@ -6,6 +6,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import test from "node:test";
 import { analyticsSettled, captureAnalyticsEvents } from "../analytics/test-support.js";
+import { parseBotComputersStatus } from "../../../renderer/shared/bot-computers.js";
 
 import type { BoundedProcessOptions, BoundedProcessResult } from "./bounded-process.js";
 import { createGuestCuaDriverHostFactory } from "./guest-driver.js";
@@ -1965,6 +1966,25 @@ test("Linux mode scales maxRunning up to 4 with host free memory and enforces th
         context.host.ensureRunning("ada", { reason: "tool" }),
         (error: unknown) => error instanceof BotComputerError && error.code === "low_memory",
       );
+
+      // Persisted Linux maxRunning: 4 stays clamped to macOS's 2-VM cap when relaunched with the flag off.
+      freeMem = 64 * 1024 ** 3;
+      const macHost = context.relaunch({ linux: false, env: { LANG: "en_US.UTF-8" } });
+      const macStatus = await macHost.status();
+      assert.equal(macStatus.settings.maxRunning, 2);
+      assert.notEqual(parseBotComputersStatus(macStatus), undefined, "macOS status parses cleanly after Linux maxRunning: 4");
+      assert.equal((await macHost.updateSettings({ idleStopMinutes: 30 })).maxRunning, 2);
+      await macHost.ensureRunning("ada", { reason: "tool" });
+      await macHost.ensureRunning("ben", { reason: "tool" });
+      macHost.touch("ada");
+      macHost.touch("ben");
+      const waiting = macHost.ensureRunning("cyd", { reason: "tool" });
+      await new Promise((resolve) => setTimeout(resolve, 100));
+      assert.equal((await macHost.computer("cyd"))?.state, "waiting_for_slot", "macOS mode still enforces cap 2");
+      await macHost.stop("ben", { reason: "person" });
+      await waiting;
+      await macHost.stop("ada", { reason: "person" });
+      await macHost.stop("cyd", { reason: "person" });
     },
     {
       linux: true,

@@ -234,6 +234,7 @@ test("Linux provisioning pins the host key, configures desktop/aiden-bot/virtiof
   assert.ok(
     sshCommands.some(
       (event) =>
+        event.command?.includes("rm -f /etc/apt/sources.list.d/debian.sources") &&
         event.command?.includes(BOT_COMPUTER_LINUX_APT_SNAPSHOT.archiveUrl) &&
         event.command?.includes("xfce4") &&
         event.command?.includes("chromium") &&

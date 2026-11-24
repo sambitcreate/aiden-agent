@@ -308,13 +308,17 @@ export function createBotComputerHost(deps: BotComputerHostDependencies): BotCom
   };
   const occupied = () =>
     [...runtimes.values()].filter((entry) => SLOT_STATES.has(entry.state)).length + (baseHoldsSlot ? 1 : 0);
+  const runningCount = () => [...runtimes.values()].filter((entry) => entry.state === "running").length;
+  /** When Linux mode is off, never let a previously persisted Linux maxRunning (3|4) exceed macOS's 2-VM cap. */
+  const effectiveMaxRunning = (value: BotComputerMaxRunning): BotComputerMaxRunning =>
+    linux ? value : (Math.min(value, 2) as BotComputerMaxRunning);
 
   /** Upper bound on concurrent Bot computers: 2 on macOS, 1–4 on Linux based on host memory. */
   async function currentMaxRunningLimit(): Promise<BotComputerMaxRunning> {
     if (!linux) return 2;
     try {
       const available = await resources.availableMemoryBytes();
-      const effective = available + occupied() * BOT_COMPUTER_LINUX_MEMORY_BYTES;
+      const effective = available + runningCount() * BOT_COMPUTER_LINUX_MEMORY_BYTES;
       return Math.max(1, Math.min(4, Math.floor(effective / BOT_COMPUTER_LINUX_MEMORY_BYTES))) as BotComputerMaxRunning;
     } catch {
       return 2;
@@ -569,7 +573,7 @@ export function createBotComputerHost(deps: BotComputerHostDependencies): BotCom
       if (signal.aborted) throw new BotComputerError("cancelled", "Starting the computer was cancelled.");
       if (shuttingDown) throw new BotComputerError("busy", "Aiden is quitting.");
       const { settings } = await store.read();
-      const cap = linux ? Math.min(settings.maxRunning, await currentMaxRunningLimit()) : settings.maxRunning;
+      const cap = linux ? Math.min(settings.maxRunning, await currentMaxRunningLimit()) : effectiveMaxRunning(settings.maxRunning);
       if (occupied() < cap) {
         entry.state = "starting";
         return;
@@ -611,7 +615,7 @@ export function createBotComputerHost(deps: BotComputerHostDependencies): BotCom
       if (signal.aborted) throw new BotComputerError("cancelled", "Setting up Bot computers was cancelled.");
       if (shuttingDown) throw new BotComputerError("busy", "Aiden is quitting.");
       const { settings } = await store.read();
-      const cap = linux ? Math.min(settings.maxRunning, await currentMaxRunningLimit()) : settings.maxRunning;
+      const cap = linux ? Math.min(settings.maxRunning, await currentMaxRunningLimit()) : effectiveMaxRunning(settings.maxRunning);
       if (occupied() < cap) {
         baseHoldsSlot = true;
         return;
@@ -1567,7 +1571,7 @@ export function createBotComputerHost(deps: BotComputerHostDependencies): BotCom
       const maxRunningLimit = linux ? await currentMaxRunningLimit() : undefined;
       return {
         setup: currentSetup(state),
-        settings: { ...state.settings },
+        settings: { ...state.settings, maxRunning: effectiveMaxRunning(state.settings.maxRunning) },
         diskUsedBytes: await diskUsed(),
         ...(freeDiskBytes !== undefined ? { freeDiskBytes } : {}),
         computers: Object.entries(state.computers).map(([botId, record]) => computerStatus(botId, record, state)),
@@ -1657,7 +1661,7 @@ export function createBotComputerHost(deps: BotComputerHostDependencies): BotCom
       }
       wakeSlotWaiters();
       emit();
-      return { ...state.settings } satisfies BotComputersSettings;
+      return { ...state.settings, maxRunning: effectiveMaxRunning(state.settings.maxRunning) } satisfies BotComputersSettings;
     },
 
     async give(botId) {
