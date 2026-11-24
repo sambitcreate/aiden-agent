@@ -579,11 +579,16 @@ struct AidenBotSessionChatView: View {
     /// The status line's word while the Bot works, why it can't answer when it
     /// can't, and otherwise what it is for.
     private var titleStatus: AidenChatTitleStatus {
-        let paused = model?.isPaused ?? (bot?.paused == true)
+        if let model {
+            return model.titleStatus(
+                nowMs: Int(Date().timeIntervalSince1970 * 1_000), purpose: bot?.purpose, machine: conversationMachine
+            )
+        }
+        // Before the session loads, the summary's state stands in.
         return .bot(
-            state: paused ? .paused : (model?.state ?? bot?.sessionState),
-            statusWord: model?.statusLine(nowMs: Int(Date().timeIntervalSince1970 * 1_000))?.display.word,
-            waitsForYou: model.map { $0.question != nil || $0.approval != nil || $0.handoff != nil } ?? false,
+            state: bot?.paused == true ? .paused : bot?.sessionState,
+            statusWord: nil,
+            waitsForYou: false,
             purpose: bot?.purpose,
             machine: conversationMachine
         )

@@ -2378,6 +2378,23 @@ final class AidenBotSessionActivityTests: XCTestCase {
         }
     }
 
+    /// A step that waits on the person before its card loads still reads as
+    /// waiting in the chat title: amber, with no typing dots.
+    func testAWaitingStepWithNoCardWarnsInTheChatTitle() async throws {
+        let model = await loaded(FakeBotSessionTransport(), try running(AidenBotSessionActivity(phase: "reading", startedAt: started)))
+        XCTAssertEqual(
+            model.titleStatus(nowMs: started + 1_000, purpose: "Finds the signal", machine: nil),
+            AidenChatTitleStatus("Reading", tone: .accent, isActive: true)
+        )
+        _ = await model.apply(event(seq: 5, .activity(AidenBotSessionActivity(phase: "waiting", startedAt: started))))
+        XCTAssertNil(model.question)
+        XCTAssertNil(model.approval)
+        XCTAssertEqual(
+            model.titleStatus(nowMs: started + 1_000, purpose: "Finds the signal", machine: nil),
+            AidenChatTitleStatus("Waiting for you", tone: .warning)
+        )
+    }
+
     // Test 1
     func testTheLineShowsUntilTheReplyStreamsAndFollowsTheChosenWording() async throws {
         let model = await loaded(FakeBotSessionTransport(), try running(AidenBotSessionActivity(phase: "reading", startedAt: started)))
