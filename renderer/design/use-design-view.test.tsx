@@ -245,7 +245,8 @@ test("the stacked layout reports visible false when the Chat pane is shown and t
   assert.equal(visibleOf(lastReport()), false);
 });
 
-test("a hidden document reports visible false, and becoming visible reports true", async () => {
+test("a document the system reports hidden still reports the shown canvas pane as visible: main judges the window", async () => {
+  // macOS can report an occluded window's document hidden; the dev server must not stop for that.
   let state: DocumentVisibilityState = "hidden";
   const descriptor = Object.getOwnPropertyDescriptor(document, "visibilityState");
   Object.defineProperty(document, "visibilityState", { configurable: true, get: () => state });
@@ -254,7 +255,7 @@ test("a hidden document reports visible false, and becoming visible reports true
     render(<Probe />);
     await settle();
     await tick(DESIGN_VIEW_REPORT_DELAY_MS);
-    assert.equal(visibleOf(lastReport()), false);
+    assert.equal(visibleOf(lastReport()), true);
     state = "visible";
     await act(async () => {
       document.dispatchEvent(new Event("visibilitychange"));

@@ -81,12 +81,6 @@ function shownPageId(doc: DesignCanvas, state: State, chatId: string): string {
   return state.earlier.find(exists) ?? doc.pages[0]!.id;
 }
 
-function subscribeVisibility(onChange: () => void): () => void {
-  document.addEventListener("visibilitychange", onChange);
-  return () => document.removeEventListener("visibilitychange", onChange);
-}
-const documentVisible = () => document.visibilityState !== "hidden";
-
 export function useDesignView(workspaceId: string, chatId: string, doc: DesignCanvas | undefined): DesignViewHandle {
   const [state, setState] = React.useState<State>(EMPTY);
   const stateRef = React.useRef(state);
@@ -98,8 +92,8 @@ export function useDesignView(workspaceId: string, chatId: string, doc: DesignCa
   const docRef = React.useRef(doc);
   docRef.current = doc;
   const { stacked, pane } = useDesignPane();
-  const pageVisible = React.useSyncExternalStore(subscribeVisibility, documentVisible, () => true);
-  const visible = (!stacked || pane === "canvas") && pageVisible;
+  // Only the pane: main adds whether the window is shown, since macOS can report an occluded window's document hidden.
+  const visible = !stacked || pane === "canvas";
   const visibleRef = React.useRef(visible);
   visibleRef.current = visible;
 

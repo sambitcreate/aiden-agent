@@ -359,6 +359,29 @@ test("a stale report still updates visibility, and forgetting a chat or removing
   assert.deepEqual(fired, [["ws-1", 0], ["ws-1", 1], ["ws-1", 0]]);
 });
 
+test("a canvas counts only while its window is shown: minimizing or hiding the window drops it, restoring brings it back", async () => {
+  const views = new DesignCanvasViews();
+  const { fired } = presenceLog(views);
+  const window = { minimized: false, visible: true };
+  const shown = () => window.visible && !window.minimized;
+  await views.report("chat-a", "ws-1", view("page-1"), 0, true, shown);
+  assert.equal(views.visible("ws-1"), 1);
+  window.minimized = true;
+  views.windowChanged();
+  assert.equal(views.visible("ws-1"), 0);
+  window.minimized = false;
+  views.windowChanged();
+  assert.equal(views.visible("ws-1"), 1);
+  window.visible = false;
+  views.windowChanged();
+  views.windowChanged();
+  assert.deepEqual(fired, [["ws-1", 1], ["ws-1", 0], ["ws-1", 1], ["ws-1", 0]], "each change fires once");
+  // The pane must still be shown: a shown window never counts a hidden pane.
+  window.visible = true;
+  await views.report("chat-a", "ws-1", view("page-1"), 0, false, shown);
+  assert.equal(views.visible("ws-1"), 0);
+});
+
 test("the presence listener can unsubscribe, and a throwing one never breaks a report", async () => {
   const views = new DesignCanvasViews({ onError: () => undefined });
   views.onPresence(() => {

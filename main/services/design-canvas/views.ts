@@ -49,8 +49,10 @@ type Entry = {
   /** The latest Aiden page change for this chat; 0 before any. */
   focusId: number;
   mounted: boolean;
-  /** The canvas pane is shown and its window's document is visible (2b's presence). */
+  /** The canvas pane is shown (2b's presence, with `windowShown`). */
   visible: boolean;
+  /** Whether the window that reported the canvas is shown: not minimized or hidden. Absent counts as shown. */
+  windowShown?: () => boolean;
   size?: { w: number; h: number };
 };
 
@@ -99,12 +101,20 @@ export class DesignCanvasViews {
    * change that canvas has seen; a report behind main's is not taken as the
    * view, though it still says the canvas is open.
    */
-  async report(chatId: string, workspaceId: string, view: DesignChatView, focusId: number, visible = false): Promise<void> {
+  async report(
+    chatId: string,
+    workspaceId: string,
+    view: DesignChatView,
+    focusId: number,
+    visible = false,
+    windowShown?: () => boolean,
+  ): Promise<void> {
     const workspace = await this.workspace(workspaceId);
     const entry = workspace.entries.get(chatId);
     if (entry && focusId < entry.focusId) {
       entry.mounted = true;
       entry.visible = visible;
+      if (windowShown) entry.windowShown = windowShown;
       this.announce(workspaceId);
       return;
     }
@@ -114,6 +124,7 @@ export class DesignCanvasViews {
     next.focusId = Math.max(next.focusId, focusId);
     next.mounted = true;
     next.visible = visible;
+    if (windowShown) next.windowShown = windowShown;
     if (view.size) next.size = { ...view.size };
     else delete next.size;
     workspace.entries.set(chatId, next);
@@ -132,11 +143,18 @@ export class DesignCanvasViews {
     }
   }
 
-  /** How many chats show this workspace's canvas right now: mounted, its pane shown and its window visible. */
+  /** How many chats show this workspace's canvas right now: mounted, its pane shown and its window shown. */
   visible(workspaceId: string): number {
     let count = 0;
-    for (const entry of this.workspaces.get(workspaceId)?.entries.values() ?? []) if (entry.mounted && entry.visible) count += 1;
+    for (const entry of this.workspaces.get(workspaceId)?.entries.values() ?? []) {
+      if (entry.mounted && entry.visible && (entry.windowShown?.() ?? true)) count += 1;
+    }
     return count;
+  }
+
+  /** A window was minimized, restored, hidden or shown: every workspace's count is announced again if it changed. */
+  windowChanged(): void {
+    for (const workspaceId of this.workspaces.keys()) this.announce(workspaceId);
   }
 
   /** Hears a workspace's visible count whenever it changes. */

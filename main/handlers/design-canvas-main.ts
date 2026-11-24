@@ -28,6 +28,8 @@ import { createDesignModeCardEnter, registerDesignAppHandlers } from "./design-a
 
 /** Windows whose reload, crash or destruction already unmounts every canvas view. */
 const watchedSenders = new WeakSet<Electron.WebContents>();
+/** Windows whose minimize, restore, hide and show already re-count canvas presence. */
+const watchedWindows = new WeakSet<Electron.BrowserWindow>();
 
 export function registerDesignCanvasIpc(): void {
   // The canvas picture Aiden asked for with canvas_read {snapshot: true}.
@@ -70,6 +72,19 @@ export function registerDesignCanvasIpc(): void {
     getChat: (chatId) => chatStore.getMeta(chatId),
     grants: designGrants,
     views: designCanvasViews,
+    senderWindowShown: (event, changed) => {
+      const window = BrowserWindow.fromWebContents(event.sender);
+      if (!window) return () => false;
+      if (!watchedWindows.has(window)) {
+        watchedWindows.add(window);
+        window.on("minimize", changed);
+        window.on("restore", changed);
+        window.on("hide", changed);
+        window.on("show", changed);
+      }
+      // Electron's own state, not the document's: macOS can report an occluded window's document hidden.
+      return () => !window.isDestroyed() && window.isVisible() && !window.isMinimized();
+    },
     whenSenderResets: (event, reset) => {
       const sender = event.sender;
       if (watchedSenders.has(sender)) return;

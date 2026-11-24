@@ -61,6 +61,7 @@ async function fixture(
     artifactHtml?: Record<string, string>;
     artifactTitles?: Record<string, string>;
     designMd?: Parameters<typeof registerDesignCanvasHandlers>[0]["designMd"];
+    senderWindowShown?: Parameters<typeof registerDesignCanvasHandlers>[0]["senderWindowShown"];
   } = {},
 ) {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-design-canvas-handlers-"));
@@ -109,6 +110,7 @@ async function fixture(
     grants,
     views,
     whenSenderResets: (event, reset) => senderWatches.push({ event, reset }),
+    ...(options.senderWindowShown ? { senderWindowShown: options.senderWindowShown } : {}),
     sendFocus: (event, request) => focusSent.push({ event, request }),
     workspaceRoot:
       options.workspaceRoot ?? (async (chat) => roots[chat.workspaceId ?? ""] ?? null),
@@ -310,6 +312,26 @@ test("designCanvas:view accepts visible true and false, treats a missing visible
     await assert.rejects(invoke("designCanvas:view", "chat-1", report(bad)), /Invalid canvas view/u, JSON.stringify(bad));
   }
   assert.equal(views.mounted("workspace-1"), 1);
+});
+
+test("a shown canvas in a minimized window isn't present, and restoring the window makes it present again", async (t) => {
+  const window = { minimized: false, changed: () => undefined as void };
+  const { invoke, views } = await fixture(t, {
+    senderWindowShown: (_event, changed) => {
+      window.changed = changed;
+      return () => !window.minimized;
+    },
+  });
+  const counts: number[] = [];
+  views.onPresence((_workspaceId, count) => counts.push(count));
+  await invoke("designCanvas:view", "chat-1", { workspaceId: "workspace-1", view: { pageId: "p2", viewport: { x: 0, y: 0, zoom: 1 } }, focusId: 0, visible: true });
+  assert.equal(views.visible("workspace-1"), 1);
+  window.minimized = true;
+  window.changed();
+  assert.equal(views.visible("workspace-1"), 0);
+  window.minimized = false;
+  window.changed();
+  assert.deepEqual(counts, [1, 0, 1]);
 });
 
 test("a canvas's last report and its unmount, sent back to back, leave it counted as closed", async (t) => {
