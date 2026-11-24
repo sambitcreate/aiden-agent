@@ -77,6 +77,9 @@ test("consentDisplayText escapes every class in D5", () => {
     ["a\u{E0100}", "a\\u{E0100}"], // variation selector supplement
     ["a\u{E0041}", "a\\u{E0041}"], // tag character
     ["a\u0085b", "a\\u{85}b"], // next line, a C1 control
+    ["a\u034Fb", "a\\u{34F}b"], // combining grapheme joiner, default-ignorable
+    ["a\u17B4b", "a\\u{17B4}b"], // Khmer inherent vowel, default-ignorable
+    ["a\u180Bb", "a\\u{180B}b"], // Mongolian free variation selector
   ];
   for (const [input, expected] of cases) assert.equal(consentDisplayText(input), expected, JSON.stringify(input));
   assert.equal(consentDisplayText("vite --port 3000\nnext dev"), "vite --port 3000\nnext dev", "plain text and newlines stay");

@@ -257,10 +257,11 @@ export function designAppProblemMessage(problem: DesignAppProblem): string {
 /**
  * Characters that could hide or reorder what the person approves: controls
  * (but `\n`), format characters (bidi overrides, zero-width), line and
- * paragraph separators, Hangul fillers and variation selectors.
+ * paragraph separators, Hangul fillers, variation selectors and every other
+ * default-ignorable code point (combining grapheme joiner, Khmer inherent vowels).
  */
 const HIDDEN_CHARACTERS =
-  /[\p{Cc}\p{Cf}\p{Zl}\p{Zp}\p{Variation_Selector}\u{115F}\u{1160}\u{3164}\u{FFA0}]/gu;
+  /[\p{Cc}\p{Cf}\p{Zl}\p{Zp}\p{Variation_Selector}\p{Default_Ignorable_Code_Point}\u{115F}\u{1160}\u{3164}\u{FFA0}]/gu;
 
 /** Script text, app roots and package names as the card shows them: verbatim, hidden characters as `\u{…}`. */
 export function consentDisplayText(text: string): string {

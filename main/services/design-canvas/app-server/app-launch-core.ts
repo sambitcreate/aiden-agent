@@ -161,13 +161,16 @@ export function launchPlan(
   return { extraArgs, run: runScriptCommand(app.packageManager, script, extraArgs), env: launchEnv };
 }
 
-/** Every provider key variable pi-ai knows that is set in `env`. */
+/** Provider credentials pi-ai reads without listing them as a provider's key. */
+const EXTRA_PROVIDER_KEYS = ["AWS_BEARER_TOKEN_BEDROCK"] as const;
+
+/** Every provider key variable pi-ai knows, and the fixed extras, that is set in `env`. */
 export function providerKeyNames(
   env: NodeJS.ProcessEnv,
   providers: readonly string[],
   findEnvKeys: (provider: string, env: Record<string, string | undefined>) => string[] | undefined,
 ): Set<string> {
-  const names = new Set<string>();
+  const names = new Set<string>(EXTRA_PROVIDER_KEYS.filter((name) => env[name] !== undefined));
   for (const provider of providers) {
     for (const name of findEnvKeys(provider, env) ?? []) names.add(name);
   }
@@ -199,7 +202,7 @@ export interface InstallRecordLike {
 }
 
 /**
- * D6. Never installs in a parent repo. Otherwise installs for a missing
+ * D6. Never installs in a parent repo, and a forced install there is refused. Otherwise installs for a missing
  * `node_modules`, an unfinished or stale Aiden install, or on request; a
  * `node_modules` the person made, with no record, is kept.
  */
@@ -211,7 +214,8 @@ export function needsInstall(input: {
   manager: PackageManagerName;
   forced: boolean;
 }): "install" | "skip" | "outside-workspace" {
-  if (input.lockfileLevelsUp >= 1) return input.installed ? "skip" : "outside-workspace";
+  // An asked-for install can't run here, so it says so rather than skip silently.
+  if (input.lockfileLevelsUp >= 1) return input.installed && !input.forced ? "skip" : "outside-workspace";
   if (input.forced || !input.installed) return "install";
   const record = input.record;
   if (!record) return "skip";

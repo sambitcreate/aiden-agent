@@ -155,6 +155,15 @@ test("the environment scrub", () => {
   assert.equal(env.NODE_ENV, "production", "the input is not changed");
 });
 
+test("the Bedrock bearer token is scrubbed even when pi-ai's key list doesn't name it", () => {
+  const env = { AWS_BEARER_TOKEN_BEDROCK: "secret", AWS_PROFILE: "dev", PATH: "/usr/bin" };
+  const keys = providerKeyNames(env, ["amazon-bedrock"], () => []);
+  const result = launchPlan(app("vite"), { dev: "vite" }, 5173, env, { binDirs: [], providerKeys: keys, platform: "linux" });
+  assert.equal(result.env.AWS_BEARER_TOKEN_BEDROCK, undefined);
+  assert.equal(result.env.AWS_PROFILE, "dev", "tooling configuration stays");
+  assert.equal(providerKeyNames({ PATH: "/usr/bin" }, [], () => []).has("AWS_BEARER_TOKEN_BEDROCK"), false, "only a set variable is named");
+});
+
 test("telemetry variables are set unless the person set them", () => {
   const result = plan(app("next"), "next dev", { PATH: "/usr/bin", NEXT_TELEMETRY_DISABLED: "0" });
   assert.equal(result.env.NEXT_TELEMETRY_DISABLED, "0");
@@ -233,9 +242,9 @@ test("node_modules present and no record is skip", () => {
   assert.equal(install(), "skip");
 });
 
-test("lockfileLevelsUp 1 with node_modules is skip, and without it is outside-workspace, even when forced", () => {
+test("lockfileLevelsUp 1 with node_modules is skip, without it is outside-workspace, and a forced install is always outside-workspace", () => {
   assert.equal(install({ lockfileLevelsUp: 1 }), "skip");
-  assert.equal(install({ lockfileLevelsUp: 1, forced: true }), "skip");
+  assert.equal(install({ lockfileLevelsUp: 1, forced: true }), "outside-workspace", "an asked-for install never silently skips");
   assert.equal(install({ lockfileLevelsUp: 2, installed: false }), "outside-workspace");
   assert.equal(install({ lockfileLevelsUp: 1, installed: false, forced: true }), "outside-workspace");
 });

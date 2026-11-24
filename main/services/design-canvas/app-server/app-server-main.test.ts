@@ -601,12 +601,15 @@ test("node_modules present and no install record skips the install; a started re
   assert.equal((await restarted).phase, "running");
 });
 
-test("an enclosing lockfile never installs: with node_modules it starts, without it ends with install-outside-workspace", async (t) => {
+test("an enclosing lockfile never installs: with node_modules it starts, restart with install and a start without node_modules end with install-outside-workspace", async (t) => {
   const enclosing = { name: "npm" as const, source: "enclosing" as const, lockfile: "package-lock.json", lockfileLevelsUp: 1 };
   const h = harness(t, { apps: [webApp({ packageManager: enclosing, installed: true })] });
   await h.runApp();
   assert.equal(h.jobs.jobs.length, 1);
   assert.notDeepEqual(h.jobs.jobs[0]!.input.argv.args, ["ci"]);
+  const forced = await h.servers.restart({ ...h.input(), install: true });
+  assert.deepEqual(forced.problem, { problem: "install-outside-workspace" }, "an asked-for install says it can't run, not a silent start");
+  assert.equal(h.jobs.jobs.length, 1, "nothing installs or starts");
   await h.servers.stop("ws", ".");
   h.state.apps = [webApp({ packageManager: enclosing, installed: false })];
   const status = await h.servers.start(h.input());
