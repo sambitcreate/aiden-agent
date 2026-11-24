@@ -3,6 +3,7 @@ import test from "node:test";
 import {
   classifyPackage,
   decidePackageManager,
+  designTarget,
   detectFramework,
   installCommand,
   installedMarkerManagers,
@@ -14,6 +15,7 @@ import {
   runScriptCommand,
   safeScriptNames,
   workspacePatterns,
+  type DetectedApp,
   type PackageJson,
   type PackageManagerInfo,
   type PackageManagerSignals,
@@ -523,4 +525,38 @@ test("matchesWorkspacePattern handles exact paths, one-level stars, a star insid
   ];
   for (const [rel, pattern] of yes) assert.equal(matchesWorkspacePattern(rel, pattern), true, `${rel} ~ ${pattern}`);
   for (const [rel, pattern] of no) assert.equal(matchesWorkspacePattern(rel, pattern), false, `${rel} !~ ${pattern}`);
+});
+
+// ---- design target (R8) ----
+
+function detected(root: string, kind: DetectedApp["kind"], reason: DetectedApp["reason"]): DetectedApp {
+  return {
+    root,
+    kind,
+    reason,
+    scripts: [],
+    usesReact: kind === "react-nonweb",
+    packageManager: { name: "npm", source: "none", lockfileLevelsUp: 0 },
+    installRoot: ".",
+    installed: false,
+  };
+}
+
+test("designTarget gives single, choose, react-nonweb or none", () => {
+  const web = detected("apps/web", "web", "ok");
+  const docs = detected("apps/docs", "web", "ok");
+  const ui = detected("packages/ui", "react-nonweb", "no-web-framework");
+  const root = detected(".", "none", "workspace-runner");
+  const custom = detected("tools/server", "none", "unknown-framework");
+
+  // A React package beside one web app doesn't change the target.
+  assert.deepEqual(designTarget({ apps: [root, web, ui], truncated: false }), { kind: "single", app: web });
+  assert.deepEqual(designTarget({ apps: [root, docs, web, ui], truncated: false }), { kind: "choose", apps: [docs, web] });
+  assert.deepEqual(designTarget({ apps: [root, ui], truncated: false }), { kind: "react-nonweb", apps: [ui] });
+  // Every candidate stays visible, so 2c and 3d can tell a workspace runner from an unknown framework.
+  assert.deepEqual(designTarget({ apps: [root, custom], truncated: false }), { kind: "none", apps: [root, custom] });
+  assert.deepEqual(designTarget({ apps: [], truncated: false }), { kind: "none", apps: [] });
+  // A web app with no manager is still web: refusing it is 2b's job.
+  const conflicted = { ...web, packageManager: { name: null, source: "lockfile" as const, lockfileLevelsUp: 0, conflict: ["npm" as const, "yarn" as const] } };
+  assert.deepEqual(designTarget({ apps: [conflicted], truncated: false }), { kind: "single", app: conflicted });
 });

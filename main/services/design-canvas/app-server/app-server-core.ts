@@ -531,3 +531,25 @@ export function matchesWorkspacePattern(relPath: string, pattern: string): boole
   if (!shape.parent.every((segment, i) => segments[i] === segment)) return false;
   return matchesSegment(segments[segments.length - 1], shape.last);
 }
+
+// ---- design target (R8) ----
+
+export type DesignTarget =
+  | { kind: "single"; app: DetectedApp }
+  | { kind: "choose"; apps: DetectedApp[] }
+  | { kind: "react-nonweb"; apps: DetectedApp[] }
+  | { kind: "none"; apps: DetectedApp[] };
+
+/**
+ * What design mode does with a detection: start the one web app, ask which
+ * web apps, offer React mocks, or nothing. A web app with no package manager
+ * is still web, so 2b can say why it won't start it.
+ */
+export function designTarget(detection: WebAppDetection): DesignTarget {
+  const web = detection.apps.filter((candidate) => candidate.kind === "web");
+  if (web.length === 1) return { kind: "single", app: web[0] };
+  if (web.length > 1) return { kind: "choose", apps: web };
+  const nonWeb = detection.apps.filter((candidate) => candidate.kind === "react-nonweb");
+  if (nonWeb.length > 0) return { kind: "react-nonweb", apps: nonWeb };
+  return { kind: "none", apps: [...detection.apps] };
+}
