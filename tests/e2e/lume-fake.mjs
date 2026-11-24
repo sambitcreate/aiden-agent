@@ -109,6 +109,7 @@ const VALUE_OPTIONS = new Set([
   "--dest-storage",
   "--format",
   "-f",
+  "--vnc",
   "--vnc-password",
   "--shared-dir",
   "--log-file",
@@ -210,7 +211,7 @@ function details(storage, name, vm) {
     ...(vm.display !== undefined ? { display: vm.display } : {}),
     status: stale ? "provisioning (stale)" : running ? "running" : "stopped",
     provisioningOperation: stale ? "unattended_setup" : null,
-    vncUrl: running && !stale ? `vnc://:${vm.vncPassword}@${host}:${vm.port}` : null,
+    vncUrl: running && !stale && !vm.vncDisabled && vm.port ? `vnc://:${vm.vncPassword}@${host}:${vm.port}` : null,
     ipAddress: running && !stale ? vm.ip : null,
     sshAvailable: running && !stale ? true : null,
     locationName: storage,
@@ -224,30 +225,35 @@ async function vncChild(storage, name, port) {
   process.on("SIGTERM", () => process.exit(0));
   const bootDelay = Number(process.env.AIDEN_FAKE_LUME_BOOT_DELAY_MS ?? "0");
   if (bootDelay > 0) await sleep(bootDelay);
-  const upstream = Number(process.env.AIDEN_FAKE_LUME_VNC_UPSTREAM ?? "0");
-  const server = createServer((socket) => {
-    socket.on("error", () => undefined);
-    if (!(upstream > 0)) {
-      socket.end("RFB 003.008\n");
-      return;
-    }
-    // The guest's screen is the test's RFB server; the VM going away drops it, as a stopping VM does.
-    const guest = connect({ host: "127.0.0.1", port: upstream });
-    guest.on("error", () => socket.destroy());
-    guest.on("close", () => socket.destroy());
-    socket.on("close", () => guest.destroy());
-    socket.pipe(guest);
-    guest.pipe(socket);
-  });
-  await new Promise((resolve) => server.listen(port, process.env.AIDEN_FAKE_LUME_VNC_BIND ?? "127.0.0.1", resolve));
+  let server;
+  let boundPort;
+  if (port >= 0) {
+    const upstream = Number(process.env.AIDEN_FAKE_LUME_VNC_UPSTREAM ?? "0");
+    server = createServer((socket) => {
+      socket.on("error", () => undefined);
+      if (!(upstream > 0)) {
+        socket.end("RFB 003.008\n");
+        return;
+      }
+      // The guest's screen is the test's RFB server; the VM going away drops it, as a stopping VM does.
+      const guest = connect({ host: "127.0.0.1", port: upstream });
+      guest.on("error", () => socket.destroy());
+      guest.on("close", () => socket.destroy());
+      socket.on("close", () => guest.destroy());
+      socket.pipe(guest);
+      guest.pipe(socket);
+    });
+    await new Promise((resolve) => server.listen(port, process.env.AIDEN_FAKE_LUME_VNC_BIND ?? "127.0.0.1", resolve));
+    boundPort = server.address().port;
+  }
   const state = readState(storage);
   const vm = state.vms[name];
   if (!vm) process.exit(0);
-  vm.port = server.address().port;
+  vm.port = boundPort;
   vm.pid = process.pid;
   vm.status = "running";
   writeState(storage, state);
-  log({ kind: "vnc", name, pid: process.pid, port: vm.port });
+  log({ kind: "vnc", name, pid: process.pid, ...(boundPort !== undefined ? { port: boundPort } : { vncDisabled: true }) });
   const deadline = Date.now() + 10 * 60_000;
   // Exit once stopped or replaced, or after ten minutes, so no test leaves it
   // behind. Like a real detached VM, it keeps running if its storage is
@@ -259,7 +265,7 @@ async function vncChild(storage, name, port) {
     const current = readState(storage).vms[name];
     if (!current || current.pid !== process.pid || current.status !== "running") break;
   }
-  server.close();
+  server?.close();
   process.exit(0);
 }
 
@@ -417,7 +423,16 @@ async function main() {
       if (!shared.endsWith(":rw") || !path.isAbsolute(shared.slice(0, -3)) || !existsSync(shared.slice(0, -3))) {
         fail("shared directory must be an existing absolute path tagged :rw", 76);
       }
-      if (!options["--vnc-password"]) fail("Aiden always sets a VNC password", 77);
+      const vncPolicy = options["--vnc"] ?? "enabled";
+      if (vncPolicy !== "enabled" && vncPolicy !== "disabled") {
+        fail(`Invalid --vnc value: ${vncPolicy}`, 77);
+      }
+      const vncDisabled = vncPolicy === "disabled";
+      if (vncDisabled) {
+        if (options["--vnc-password"]) fail("Aiden does not pass --vnc-password when --vnc disabled", 77);
+      } else if (!options["--vnc-password"]) {
+        fail("Aiden always sets a VNC password", 77);
+      }
       const logFile = options["--log-file"];
       if (isRunning(vm)) fail(`Virtual machine already running: ${name}`);
       if (staleNames().has(name)) fail(`Virtual machine is still being provisioned: ${name}`);
@@ -443,12 +458,13 @@ async function main() {
         process.stdout.write(`Started '${name}' in the background (PID 1).\nLog: ${logFile}\n`);
         return;
       }
-      vm.vncPassword = options["--vnc-password"];
+      vm.vncDisabled = vncDisabled;
+      vm.vncPassword = vncDisabled ? undefined : options["--vnc-password"];
       vm.sharedDir = shared;
       vm.status = "starting";
       vm.pid = undefined;
       writeState(storage, state);
-      const child = spawn(process.execPath, [self, "__vnc", storage, name, "0"], {
+      const child = spawn(process.execPath, [self, "__vnc", storage, name, vncDisabled ? "-1" : "0"], {
         detached: true,
         stdio: "ignore",
         env: process.env,

@@ -254,10 +254,14 @@ Aiden's data folder for owner-Mac debugging. Delete recordings afterwards.
 - **No host audio or clipboard.** Every VM start passes `--no-audio-device` and
   `--no-clipboard-device`, so the guest gets no virtio sound device (no host
   microphone or speaker) and no SPICE clipboard-sharing device.
-- **Screen.** Each start sets a new random screen-sharing password. Aiden uses
-  the computer's screen only if Lume reports it on `127.0.0.1`, and stops the
-  computer if the screen-sharing port also answers on any of the Mac's network
-  addresses.
+- **Screen.** Every VM starts with `--vnc disabled` so Lume never opens a
+  host-wide VNC socket. Inside the guest, `X0tigervnc` (`aiden-vnc.service`)
+  listens only on a mode-0600 Unix socket owned by `lume` (`-rfbport -1`, no
+  guest TCP port, inaccessible to `aiden-bot`), with a fresh per-run VncAuth
+  password written over SSH stdin (never in process arguments). Aiden reaches
+  it through a host-loopback-only SSH tunnel (`127.0.0.1`), verifies the local
+  port does not answer on any of the Mac's network addresses, and tears down
+  the tunnel when the computer stops.
 - **SSH.** Aiden reaches the guest with its own key, kept in Aiden's data
   folder, and the guest's pinned host key (one per base Aiden built; a Bot
   computer presents the key of the base it was copied from). Password login and

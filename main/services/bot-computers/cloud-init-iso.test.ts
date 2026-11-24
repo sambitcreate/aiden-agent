@@ -179,9 +179,14 @@ test("buildCloudInitSeedIso produces a valid CIDATA ISO 9660 + Rock Ridge image 
     files.map((file) => ({ isoId: file.isoId, rr: file.rockRidgeName, mode: file.posixMode })),
     [
       { isoId: "META-DATA;1", rr: "meta-data", mode: 0o100444 },
+      { isoId: "NETWORK-CONFIG;1", rr: "network-config", mode: 0o100444 },
       { isoId: "USER-DATA;1", rr: "user-data", mode: 0o100444 },
     ],
   );
+
+  const networkConfig = parsed.readFile("network-config").toString("utf8");
+  assert.match(networkConfig, /^version: 2$/mu);
+  assert.match(networkConfig, /dhcp-identifier: mac/u);
 
   const metaData = parsed.readFile("meta-data").toString("utf8");
   assert.equal(metaData, renderCloudInitMetaData({ instanceId: "aiden-base-20261123", hostname: "aiden-base" }));

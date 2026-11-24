@@ -146,14 +146,15 @@ async function world(model: { steps: Parameters<typeof createFauxModels>[0] }) {
       return { vms: {} };
     }
   };
-  // The guest's screen. Each connection must answer the password of the run it reached.
-  const rfb = new FakeRfbServer({ ...SCREEN, password: () => fakeState().vms[VM]?.vncPassword ?? "no run yet" });
+  // The guest's screen. Each connection must answer the per-run password written over SSH stdin.
+  let guestVncPassword = "no run yet";
+  const rfb = new FakeRfbServer({ ...SCREEN, password: () => guestVncPassword });
   rfb.paint({ x: 0, y: 0, ...SCREEN }, WALLPAPER);
   const rfbPort = await rfb.listen();
 
   const lumeLog = path.join(dir, "lume-calls.jsonl");
   const configFile = path.join(dir, "fake-lume.json");
-  writeFileSync(configFile, JSON.stringify({ log: lumeLog, vncUpstream: rfbPort }));
+  writeFileSync(configFile, JSON.stringify({ log: lumeLog }));
   const lumeCalls = (): LumeCall[] =>
     existsSync(lumeLog)
       ? readFileSync(lumeLog, "utf8")
@@ -163,7 +164,7 @@ async function world(model: { steps: Parameters<typeof createFauxModels>[0] }) {
       : [];
 
   // System ssh, ssh-keygen, and ssh-keyscan: the guest accepts Aiden's key and every provisioning step.
-  const runProcess = async (command: string, args: readonly string[], _options: BoundedProcessOptions): Promise<BoundedProcessResult> => {
+  const runProcess = async (command: string, args: readonly string[], options: BoundedProcessOptions): Promise<BoundedProcessResult> => {
     if (command.endsWith("ssh-keygen")) {
       const file = args[args.indexOf("-f") + 1] ?? "";
       writeFileSync(file, "PRIVATE", { mode: 0o600 });
@@ -179,6 +180,9 @@ async function world(model: { steps: Parameters<typeof createFauxModels>[0] }) {
         truncated: false,
         timedOut: false,
       };
+    }
+    if (args.some((arg) => arg.includes("tigervncpasswd")) && typeof options.stdin === "string") {
+      guestVncPassword = options.stdin.trim();
     }
     return { exitCode: 0, signal: null, stdout: "", stderr: "", truncated: false, timedOut: false };
   };
@@ -214,6 +218,7 @@ async function world(model: { steps: Parameters<typeof createFauxModels>[0] }) {
     schedule: () => () => undefined,
     pollIntervalMs: 20,
     runProcess,
+    openVncTunnel: async () => ({ host: "127.0.0.1", port: rfbPort, close: async () => undefined }),
     control,
     activity,
   });
@@ -288,6 +293,7 @@ async function world(model: { steps: Parameters<typeof createFauxModels>[0] }) {
     invoke,
     fakeState,
     lumeCalls,
+    guestVncPassword: () => guestVncPassword,
     runsOf: (vmName: string) => lumeCalls().filter((call) => call.kind === "cli" && call.op === "run" && call.args?.[1] === vmName),
     onCleanup: (cleanup: () => unknown) => void cleanups.push(cleanup),
     async cleanup() {
@@ -422,8 +428,10 @@ test(
       assert.ok(runArgs.includes("--no-audio-device"), "the guest gets no host audio device");
       assert.ok(runArgs.includes("--no-clipboard-device"), "the guest gets no host clipboard device");
       assert.equal(runArgs[runArgs.indexOf("--shared-dir") + 1], `${context.computerDir}:rw`, "its Computer folder is shared read-write");
-      const password = runArgs[runArgs.indexOf("--vnc-password") + 1];
-      assert.ok(password && password.length >= 16, "each run gets its own VNC password");
+      assert.equal(runArgs[runArgs.indexOf("--vnc") + 1], "disabled", "Lume runs with --vnc disabled");
+      assert.equal(runArgs.includes("--vnc-password"), false, "no VNC password is passed on Lume's command line");
+      const password = context.guestVncPassword();
+      assert.ok(password.length >= 16, "each run gets its own VNC password over SSH stdin");
       const [connection] = context.rfb.connections;
       assert.equal(context.rfb.connections.length, 1);
       assert.equal(connection!.authenticated, true, "the screen signed in with the run's password");

@@ -28,8 +28,10 @@ import { lumeEnvironment, runLume, type LumeCommand, type LumeInvocation, type L
 import { classifyLumeError, isLoopbackHost, parseLumeVmInfo, parseLumeVmList, type LumeErrorKind, type LumeVmInfo } from "./lume-output.js";
 import {
   BOT_COMPUTER_LINUX_DESKTOP_PACKAGES,
+  BOT_COMPUTER_LINUX_VNC_SOCKET,
   buildLinuxBaseVm,
   generateGuestPassword,
+  linuxGuestVncStartScript,
   type LinuxProvisionContext,
 } from "./provision.js";
 import {
@@ -52,10 +54,12 @@ import {
   ensureKeyPair,
   guestSshEnvironment,
   guestSshPaths,
+  openGuestVncTunnel,
   runGuestCommand as runSshCommand,
   scanGuestHostKey,
   writeKnownHost,
   type GuestSshTarget,
+  type GuestVncTunnel,
   type ProcessRunner,
 } from "./ssh.js";
 import {
@@ -117,6 +121,12 @@ export interface BotComputerHostDependencies {
   keyscanCommand?: string;
   runProcess?: ProcessRunner;
   vncExposed?(port: number): Promise<boolean>;
+  /** Open the host-loopback SSH VNC tunnel for a Linux Bot computer (test seam). */
+  openVncTunnel?(
+    target: GuestSshTarget,
+    remoteSocket: string,
+    options: { signal?: AbortSignal },
+  ): Promise<GuestVncTunnel>;
   control?: BotComputerControlRegistry;
   activity?: BotComputerActivity;
   /**
@@ -153,6 +163,7 @@ interface SharedStart {
 interface Runtime {
   state: BotComputerRunState;
   connection?: BotComputerConnection;
+  vncTunnel?: GuestVncTunnel;
   start?: SharedStart;
   stopping?: Promise<void>;
   cancelIdle?: () => void;
@@ -229,6 +240,14 @@ export function createBotComputerHost(deps: BotComputerHostDependencies): BotCom
   const control = deps.control ?? createBotComputerControl();
   const activity = deps.activity ?? createBotComputerActivity();
   const exposed = deps.vncExposed ?? ((port: number) => vncReachableBeyondLoopback(port));
+  const openVncTunnel =
+    deps.openVncTunnel ??
+    ((target: GuestSshTarget, remoteSocket: string, options: { signal?: AbortSignal }) =>
+      openGuestVncTunnel(target, remoteSocket, options, {
+        paths: sshPaths,
+        env: guestSshEnvironment(deps.env ?? process.env, dirs.home),
+        sshCommand: deps.sshCommand,
+      }));
   const log = deps.log ?? (() => undefined);
   const downloader = createRestoreImageDownloader({
     dir: dirs.images,
@@ -450,11 +469,12 @@ export function createBotComputerHost(deps: BotComputerHostDependencies): BotCom
   }
 
   /**
-   * Start a VM detached and wait for it to be running with an IP and a VNC
-   * endpoint. The endpoint must be loopback (G22) and its port must not answer
-   * on any other interface; otherwise the VM is stopped and refused. A start
-   * that fails or is cancelled once Lume has begun launching the VM turns it
-   * off before it rejects, and `onLeftRunning` hears when Lume still runs it.
+   * Start a VM detached and wait for it to be running with an IP (and, when
+   * Lume's VNC is enabled on macOS, a loopback-only VNC endpoint). When
+   * `vncDisabled` is true (Linux VMs), Lume is started with `--vnc disabled` so
+   * macOS's `_VZVNCServer` never binds a wildcard `*:port` socket on the host.
+   * A start that fails or is cancelled once Lume has begun launching the VM
+   * turns it off before it rejects, and `onLeftRunning` hears when Lume still runs it.
    */
   async function runAndWait(
     vmName: string,
@@ -464,8 +484,9 @@ export function createBotComputerHost(deps: BotComputerHostDependencies): BotCom
     requireSsh: boolean,
     onLeftRunning?: () => void,
     mount?: string,
-  ): Promise<{ info: LumeVmInfo & { ip: string; vnc: { host: string; port: number } }; password: string }> {
-    const password = vncPassword();
+    vncDisabled = false,
+  ): Promise<{ info: LumeVmInfo & { ip: string; vnc?: { host: string; port: number } }; password: string }> {
+    const password = vncDisabled ? "" : vncPassword();
     await mkdir(dirs.logs, { recursive: true, mode: 0o700 });
     const logFile = path.join(dirs.logs, `${vmName}.log`);
     await rm(logFile, { force: true });
@@ -481,7 +502,9 @@ export function createBotComputerHost(deps: BotComputerHostDependencies): BotCom
       // with nobody left to turn it off. A run that fails, times out or is ended by quit may
       // still have launched the VM: the catch turns it off.
       const started = await lume(
-        { op: "run", name: vmName, vncPassword: password, sharedDir, ...(mount ? { mount } : {}), logFile },
+        vncDisabled
+          ? { op: "run", name: vmName, vnc: "disabled", sharedDir, ...(mount ? { mount } : {}), logFile }
+          : { op: "run", name: vmName, vncPassword: password, sharedDir, ...(mount ? { mount } : {}), logFile },
         60_000,
         quitting.signal,
         () => {
@@ -502,14 +525,16 @@ export function createBotComputerHost(deps: BotComputerHostDependencies): BotCom
         const info = await getVm(vmName, signal);
         if (!info) throw startFailure("not_found", owner);
         if (info.stale) throw startFailure("stale", owner);
-        if (info.state === "running" && info.ip && info.vnc && (!requireSsh || info.sshAvailable === true)) {
-          if (!isLoopbackHost(info.vnc.host)) {
-            throw new BotComputerError("vnc_not_loopback", `${owner} computer offered its screen beyond this Mac, so Aiden stopped it.`);
+        if (info.state === "running" && info.ip && (vncDisabled || info.vnc) && (!requireSsh || info.sshAvailable === true)) {
+          if (!vncDisabled) {
+            if (!info.vnc || !isLoopbackHost(info.vnc.host)) {
+              throw new BotComputerError("vnc_not_loopback", `${owner} computer offered its screen beyond this Mac, so Aiden stopped it.`);
+            }
+            if (await exposed(info.vnc.port)) {
+              throw new BotComputerError("vnc_not_loopback", `${owner} computer's screen was reachable from the network, so Aiden stopped it.`);
+            }
           }
-          if (await exposed(info.vnc.port)) {
-            throw new BotComputerError("vnc_not_loopback", `${owner} computer's screen was reachable from the network, so Aiden stopped it.`);
-          }
-          return { info: { ...info, ip: info.ip, vnc: info.vnc }, password };
+          return { info: { ...info, ip: info.ip, ...(info.vnc ? { vnc: info.vnc } : {}) }, password };
         }
         if (info.state !== "running" && polls > 1) {
           const tail = await logTail(logFile);
@@ -700,6 +725,8 @@ export function createBotComputerHost(deps: BotComputerHostDependencies): BotCom
   ): Promise<BotComputerConnection> {
     const owner = await possessive(botId);
     let leftRunning = false;
+    let vmStarted = false;
+    let vncTunnel: GuestVncTunnel | undefined;
     try {
       await acquireSlot(botId, entry, options.signal, options.onProgress);
       emit(botId);
@@ -711,17 +738,51 @@ export function createBotComputerHost(deps: BotComputerHostDependencies): BotCom
       });
       options.onProgress?.(`Starting ${owner} computer…`);
       const sharedDir = await sharedDirFor(botId);
-      const { info, password } = await runAndWait(record.vmName, sharedDir, owner, options.signal, false, () => {
-        leftRunning = true;
-      });
+      const { info } = await runAndWait(
+        record.vmName,
+        sharedDir,
+        owner,
+        options.signal,
+        true,
+        () => {
+          leftRunning = true;
+        },
+        undefined,
+        true,
+      );
+      vmStarted = true;
+      const sshTarget: GuestSshTarget = { host: info.ip, user: BOT_COMPUTER_GUEST_USER };
+      const password = vncPassword();
+      const startedVnc = await runSshCommand(
+        sshTarget,
+        linuxGuestVncStartScript(),
+        { timeoutMs: 60_000, maxOutputBytes: 16 * 1024, signal: options.signal, stdin: `${password}\n` },
+        {
+          paths: sshPaths,
+          env: guestSshEnvironment(deps.env ?? process.env, dirs.home),
+          sshCommand: deps.sshCommand,
+          run: deps.runProcess,
+        },
+      );
+      if (startedVnc.exitCode !== 0 || startedVnc.timedOut) {
+        throw new BotComputerError("start_failed", `${owner} computer's screen service didn't start.`);
+      }
+      vncTunnel = await openVncTunnel(sshTarget, BOT_COMPUTER_LINUX_VNC_SOCKET, { signal: options.signal });
+      if (!isLoopbackHost(vncTunnel.host)) {
+        throw new BotComputerError("vnc_not_loopback", `${owner} computer offered its screen beyond this Mac, so Aiden stopped it.`);
+      }
+      if (await exposed(vncTunnel.port)) {
+        throw new BotComputerError("vnc_not_loopback", `${owner} computer's screen was reachable from the network, so Aiden stopped it.`);
+      }
       const connection: BotComputerConnection = {
         vmName: record.vmName,
         ip: info.ip,
-        vnc: { host: "127.0.0.1", port: info.vnc.port, password },
-        ssh: { host: info.ip, user: BOT_COMPUTER_GUEST_USER },
+        vnc: { host: "127.0.0.1", port: vncTunnel.port, password },
+        ssh: sshTarget,
       };
       entry.state = "running";
       entry.connection = connection;
+      entry.vncTunnel = vncTunnel;
       entry.lastUsedAt = now();
       const state = await store.update((draft) => {
         const current = draft.computers[botId];
@@ -731,8 +792,15 @@ export function createBotComputerHost(deps: BotComputerHostDependencies): BotCom
       emit(botId);
       return connection;
     } catch (error) {
+      if (vncTunnel && entry.vncTunnel !== vncTunnel) {
+        await vncTunnel.close().catch(() => undefined);
+      }
+      if (vmStarted && entry.state !== "running") {
+        if (await stopFailedStart(record.vmName)) leftRunning = true;
+      }
       if (entry.state !== "running") {
         entry.connection = undefined;
+        entry.vncTunnel = undefined;
         if (leftRunning) {
           // Lume couldn't turn off what this start launched. It is shown running, with no
           // connection, and keeps its place (macOS's limit) until a stop works: its idle
@@ -765,6 +833,7 @@ export function createBotComputerHost(deps: BotComputerHostDependencies): BotCom
     if (entry.stopping) return entry.stopping;
     if (entry.state !== "running") return;
     const connection = entry.connection;
+    const tunnel = entry.vncTunnel;
     const vmName = connection?.vmName ?? (await store.read()).computers[botId]?.vmName;
     entry.cancelIdle?.();
     entry.cancelIdle = undefined;
@@ -792,12 +861,15 @@ export function createBotComputerHost(deps: BotComputerHostDependencies): BotCom
           log("A Bot computer did not stop; it is still running.");
           entry.state = "running";
           entry.connection = connection;
+          entry.vncTunnel = tunnel;
           const minutes = await store
             .read()
             .then((state) => state.settings.idleStopMinutes)
             .catch(() => undefined);
           if (minutes !== undefined && entry.state === "running") armIdle(botId, entry, minutes);
         } else {
+          entry.vncTunnel = undefined;
+          await tunnel?.close().catch(() => undefined);
           entry.state = "stopped";
           // What the Bot was doing ended with the run.
           activity.set(botId, undefined);
@@ -1137,7 +1209,7 @@ export function createBotComputerHost(deps: BotComputerHostDependencies): BotCom
         });
       },
       start: async () => {
-        const { info } = await runAndWait(target, dirs.baseShared, "The base", signal, true, undefined, seedIsoPath);
+        const { info } = await runAndWait(target, dirs.baseShared, "The base", signal, true, undefined, seedIsoPath, true);
         return { ip: info.ip };
       },
       provisionContext: (ip): LinuxProvisionContext => ({
@@ -1764,7 +1836,12 @@ export function createBotComputerHost(deps: BotComputerHostDependencies): BotCom
         }),
       ]);
       clearTimeout(timer);
-      for (const entry of runtimes.values()) entry.cancelIdle?.();
+      for (const entry of runtimes.values()) {
+        entry.cancelIdle?.();
+        const tunnel = entry.vncTunnel;
+        entry.vncTunnel = undefined;
+        void tunnel?.close().catch(() => undefined);
+      }
     },
 
     onChange(listener) {

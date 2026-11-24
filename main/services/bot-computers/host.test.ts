@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { createServer } from "node:net";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import test from "node:test";
@@ -10,6 +11,7 @@ import { analyticsSettled, captureAnalyticsEvents } from "../analytics/test-supp
 import type { BoundedProcessOptions, BoundedProcessResult } from "./bounded-process.js";
 import { createGuestCuaDriverHostFactory } from "./guest-driver.js";
 import { createBotComputerHost, type BotComputerHostDependencies } from "./host.js";
+import { BOT_COMPUTER_LINUX_VNC_SOCKET } from "./provision.js";
 import { BOT_COMPUTER_GUEST_PASSWORD_SECRET, BOT_COMPUTER_LINUX_MIGRATION_BOT_NOTE, BotComputerError } from "./types.js";
 import { BOT_COMPUTER_BASE_VM, BOT_COMPUTER_STAGING_BASE_VM, botComputerVmName } from "./vm-names.js";
 
@@ -81,6 +83,7 @@ function harness(overrides: Partial<BotComputerHostDependencies> = {}) {
   writeConfig();
   const secrets = new Map<string, string>();
   const sshCalls: { args: readonly string[]; stdin?: string; stdinFile?: string }[] = [];
+  const vncTunnels: { host: string; remoteSocket: string; port: number; closed: boolean }[] = [];
   const fetches: { url: string; redirect?: RequestRedirect }[] = [];
   const idle: { botId?: string; callback: () => void; ms: number; cancelled: boolean }[] = [];
   let clock = 1_000_000_000;
@@ -89,6 +92,7 @@ function harness(overrides: Partial<BotComputerHostDependencies> = {}) {
   const ssh: {
     fails?: (args: readonly string[]) => boolean;
     stdout?: (args: readonly string[]) => string | undefined;
+    onCall?: (args: readonly string[]) => Promise<void> | void;
   } = {};
   const runProcess = async (command: string, args: readonly string[], options: BoundedProcessOptions): Promise<BoundedProcessResult> => {
     const done = { exitCode: 0, signal: null, stdout: "", stderr: "", truncated: false, timedOut: false };
@@ -104,6 +108,7 @@ function harness(overrides: Partial<BotComputerHostDependencies> = {}) {
       return { ...done, stdout: `${targetIp} ${guest?.hostKey ?? HOST_KEY}\n` };
     }
     sshCalls.push({ args, stdin: options.stdin, stdinFile: options.stdinFile });
+    await ssh.onCall?.(args);
     // As ssh with StrictHostKeyChecking=yes: the guest's own host key must be pinned under the alias.
     const address = args[args.indexOf("--") + 1];
     const guest = Object.values(fakeState().vms).find((vm) => vm.ip === address);
@@ -162,6 +167,23 @@ function harness(overrides: Partial<BotComputerHostDependencies> = {}) {
     startTimeoutMs: 20_000,
     runProcess,
     vncExposed: async () => false,
+    openVncTunnel: async (target, remoteSocket) => {
+      const server = createServer((socket) => socket.end());
+      await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+      const address = server.address();
+      const port = typeof address === "object" && address !== null ? address.port : 0;
+      const record = { host: target.host, remoteSocket, port, closed: false };
+      vncTunnels.push(record);
+      return {
+        host: "127.0.0.1" as const,
+        port,
+        close: async () => {
+          if (record.closed) return;
+          record.closed = true;
+          await new Promise<void>((resolve) => server.close(() => resolve()));
+        },
+      };
+    },
     onSetupReady: () => void (events.ready += 1),
     onRemoved: () => void (events.removed += 1),
     ...overrides,
@@ -208,6 +230,7 @@ function harness(overrides: Partial<BotComputerHostDependencies> = {}) {
     lumeHelper,
     secrets,
     sshCalls,
+    vncTunnels,
     ssh,
     fetches,
     idle,
@@ -1238,18 +1261,25 @@ test("building a base needs a running place: an idle computer gives up its own, 
 });
 
 test("a VNC endpoint off loopback, or one reachable from the network, is refused and the VM stopped", async () => {
-  await withHost(async (context) => {
-    await setUp(context);
-    await context.host.give("ada");
-    context.config.vncHost = "192.168.1.20";
-    context.writeConfig();
-    await assert.rejects(
-      context.host.ensureRunning("ada", { reason: "tool" }),
-      (error: unknown) => error instanceof BotComputerError && error.code === "vnc_not_loopback",
-    );
-    assert.equal(context.vmRunning(botComputerVmName("ada")), false);
-    assert.equal((await context.host.computer("ada"))?.state, "stopped");
-  });
+  await withHost(
+    async (context) => {
+      await setUp(context);
+      await context.host.give("ada");
+      await assert.rejects(
+        context.host.ensureRunning("ada", { reason: "tool" }),
+        (error: unknown) => error instanceof BotComputerError && error.code === "vnc_not_loopback",
+      );
+      assert.equal(context.vmRunning(botComputerVmName("ada")), false);
+      assert.equal((await context.host.computer("ada"))?.state, "stopped");
+    },
+    {
+      openVncTunnel: async () => ({
+        host: "192.168.1.20" as "127.0.0.1",
+        port: 5901,
+        close: async () => undefined,
+      }),
+    },
+  );
   let exposed = false;
   await withHost(
     async (context) => {
@@ -1419,13 +1449,19 @@ test("the startup check never stops a computer that is starting, or the base bei
   const gate = startGate();
   await withHost(
     async (context) => {
-      // Reconcile runs while Set up boots the base to prepare it.
+      // Reconcile runs while Set up boots and provisions the base (base runs with --vnc disabled).
       const building = gate.arm();
+      context.ssh.onCall = async (args) => {
+        if (args.some((arg) => arg.includes("cloud-init status --wait"))) {
+          await gate.vncExposed();
+        }
+      };
       const setup = context.host.setUp();
       await building.atGate;
       await context.host.reconcile();
       building.release();
       await setup;
+      context.ssh.onCall = undefined;
       assert.equal((await context.host.status()).setup.kind, "ready");
 
       // And while a Bot's computer is starting, for example one a routine needs at launch.
@@ -1722,6 +1758,9 @@ test("Linux Set up downloads via HTTPS mirror redirect, creates and provisions a
 
       const runCall = cliCalls.find((call) => call.op === "run");
       assert.ok(runCall?.args?.includes("--mount"), "first Linux boot mounts the CIDATA seed ISO");
+      assert.equal(runCall?.args?.[runCall.args.indexOf("--vnc") + 1], "disabled", "Linux base boot disables Lume's host VNC");
+      assert.equal(runCall?.args?.includes("--vnc-password"), false);
+      assert.equal(context.vncTunnels.length, 0, "base setup opens no SSH VNC tunnel");
       const mountedIso = runCall?.args?.[runCall.args.indexOf("--mount") + 1] ?? "";
       assert.equal(existsSync(mountedIso), false, "temporary CIDATA seed ISO is deleted after base build");
 
@@ -2113,6 +2152,60 @@ test("host.guestDriver resolves the ready Linux base guest driver for a migrated
         bytes: restoreImage.length,
         sha256: createHash("sha256").update(restoreImage).digest("hex"),
       },
+    },
+  );
+});
+
+test("Linux Bot computers disable Lume VNC, tunnel guest X0tigervnc on 127.0.0.1 passing real vncReachableBeyondLoopback, and tear down tunnels on stop or failure", async () => {
+  const linuxRaw = Buffer.from("debian vnc tunnel image\n".repeat(64));
+  const linuxImage = {
+    version: "13",
+    build: "20261123-2671",
+    url: "https://cloud.debian.org/images/debian-vnc.raw",
+    bytes: linuxRaw.length,
+    sha256: createHash("sha256").update(linuxRaw).digest("hex"),
+  };
+
+  await withHost(
+    async (context) => {
+      context.serve(linuxImage.url, linuxRaw);
+      await setUp(context);
+      await context.host.give("ada");
+
+      const beforeSsh = context.sshCalls.length;
+      const conn = await context.host.ensureRunning("ada", { reason: "tool" });
+      const runCall = last(context.calls().filter((c) => c.kind === "cli" && c.op === "run"));
+      assert.equal(runCall?.args?.[runCall.args.indexOf("--vnc") + 1], "disabled", "Linux Bot VM runs with --vnc disabled");
+      assert.equal(runCall?.args?.includes("--vnc-password"), false, "no --vnc-password passed to Lume");
+
+      const vncStartCall = context.sshCalls.slice(beforeSsh).find((c) => c.args.some((a) => a.includes("tigervncpasswd")));
+      assert.ok(vncStartCall, "guest VNC password & service started over SSH");
+      assert.equal(vncStartCall?.stdin, `${conn.vnc.password}\n`, "per-run VNC password passes on stdin, not argv");
+      assert.equal(vncStartCall?.args.some((a) => a.includes(conn.vnc.password)), false);
+
+      assert.equal(context.vncTunnels.length, 1);
+      assert.equal(context.vncTunnels[0]?.remoteSocket, BOT_COMPUTER_LINUX_VNC_SOCKET);
+      assert.equal(context.vncTunnels[0]?.closed, false);
+      assert.equal(conn.vnc.host, "127.0.0.1");
+      assert.equal(conn.vnc.port, context.vncTunnels[0]?.port);
+
+      await context.host.stop("ada", { reason: "person" });
+      assert.equal(context.vncTunnels[0]?.closed, true, "SSH VNC tunnel closes when Bot VM stops");
+
+      // When the G22 check reports exposure, both tunnel and VM are torn down cleanly.
+      const exposedHost = context.relaunch({ image: linuxImage, vncExposed: async () => true });
+      await assert.rejects(
+        exposedHost.ensureRunning("ada", { reason: "tool" }),
+        (error: unknown) => error instanceof BotComputerError && error.code === "vnc_not_loopback",
+      );
+      assert.equal(context.vncTunnels.length, 2);
+      assert.equal(context.vncTunnels[1]?.closed, true, "tunnel closes on vnc_not_loopback rejection");
+      assert.equal(context.vmRunning(botComputerVmName("ada")), false, "VM stops on vnc_not_loopback rejection");
+    },
+    {
+      image: linuxImage,
+      // Explicitly undefined so the REAL unmodified vncReachableBeyondLoopback(port) runs!
+      vncExposed: undefined,
     },
   );
 });
