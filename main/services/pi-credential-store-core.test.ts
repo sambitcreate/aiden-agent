@@ -93,8 +93,8 @@ test("a post-commit directory sync failure warns without rejecting the committed
       onDurabilityWarning: (error) => warnings.push(error),
     },
   );
-  await store.modify("artificial-analysis", async () => ({ type: "api_key", key: "secret" }));
-  assert.deepEqual(await store.read("artificial-analysis"), { type: "api_key", key: "secret" });
+  await store.modify("example-api-key-provider", async () => ({ type: "api_key", key: "secret" }));
+  assert.deepEqual(await store.read("example-api-key-provider"), { type: "api_key", key: "secret" });
   assert.equal(warnings.length, 1);
   assert.match(warnings[0].message, /unsupported/u);
 });
@@ -111,8 +111,8 @@ test("a throwing durability reporter cannot turn a committed credential write in
       },
     },
   );
-  await store.modify("artificial-analysis", async () => ({ type: "api_key", key: "secret" }));
-  assert.deepEqual(await store.read("artificial-analysis"), { type: "api_key", key: "secret" });
+  await store.modify("example-api-key-provider", async () => ({ type: "api_key", key: "secret" }));
+  assert.deepEqual(await store.read("example-api-key-provider"), { type: "api_key", key: "secret" });
 });
 
 test("serializes same-provider refreshes and preserves rotated credentials", async () => {

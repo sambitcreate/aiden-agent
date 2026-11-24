@@ -49,7 +49,7 @@ async function seedChat({ app, page }: AidenE2e): Promise<void> {
 test("core surfaces pass the WCAG A/AA axe gate and keep their accessible structure", async ({
   aiden,
 }) => {
-  const { page } = aiden;
+  const { page, app } = aiden;
   await finishLmStudioOnboarding(page);
   await waitForToastsToClear(page);
   const problems: string[] = [];
@@ -73,12 +73,24 @@ test("core surfaces pass the WCAG A/AA axe gate and keep their accessible struct
 
   await test.step("model picker popover", async () => {
     await page.getByRole("button", { name: /^Selected model:/u }).click();
-    await page.getByRole("tab", { name: "List" }).click();
-    const picker = page
-      .getByRole("dialog")
-      .filter({
-        has: page.getByRole("tablist", { name: "Model picker view" }),
-      });
+    const picker = page.getByRole("dialog", { name: "Choose agent" });
+    await expect(picker.getByRole("slider", { name: "Agent Slider" })).toBeFocused();
+    problems.push(
+      ...(await auditAccessibility(page, {
+        surface: "agent slider",
+        include: "[data-radix-popper-content-wrapper]",
+      })),
+    );
+    await expect(picker).toMatchAriaSnapshot(`
+      - dialog "Choose agent":
+        - button /^Reset to /
+        - slider "Agent Slider"
+        - list "Stops without a model to run"
+        - separator
+        - button /^Other models…/
+        - button "Customize slider…"
+    `);
+    await picker.getByRole("button", { name: /^Other models…/u }).click();
     await expect(
       picker.getByRole("combobox", { name: "Chat model" }),
     ).toBeFocused();
@@ -89,15 +101,17 @@ test("core surfaces pass the WCAG A/AA axe gate and keep their accessible struct
       })),
     );
     await expect(picker).toMatchAriaSnapshot(`
-      - dialog:
-        - tablist "Model picker view":
-          - tab "List" [selected]
-          - tab "Personal Model Pad"
-        - tabpanel "List":
+      - dialog "Choose agent":
+        - button "Back to slider"
+        - heading "Other models" [level=3]
+        - region "Other models":
           - combobox "Chat model" [expanded]
           - listbox "Suggestions":
             - option [selected]
     `);
+    // Escape returns to the slider first, then closes the popover.
+    await page.keyboard.press("Escape");
+    await expect(picker.getByRole("slider", { name: "Agent Slider" })).toBeFocused();
     await page.keyboard.press("Escape");
     await expect(picker).toBeHidden();
   });
@@ -198,6 +212,57 @@ test("core surfaces pass the WCAG A/AA axe gate and keep their accessible struct
         - radiogroup "Themes":
           - radio "Aiden" [checked]
     `);
+  });
+
+  await test.step("settings: Agent Slider editor at narrow and wide widths", async () => {
+    const navigation = page.getByRole("navigation", { name: "Settings" });
+    await navigation
+      .getByRole("button", { name: "Agent Slider", exact: true })
+      .click();
+    for (const [label, width, height] of [
+      ["wide", 1280, 800],
+      ["narrow", 600, 720],
+    ] as const) {
+      await app.evaluate(
+        ({ BrowserWindow }, size) => {
+          BrowserWindow.getAllWindows()[0]?.setSize(size.width, size.height);
+        },
+        { width, height },
+      );
+      await expect(
+        page.getByRole("slider", { name: "Agent Slider" }),
+      ).toBeVisible();
+      problems.push(
+        ...(await auditAccessibility(page, {
+          surface: `settings agent slider (${label})`,
+        })),
+      );
+      // Onboarding seeded Fast / Balanced (the connected model, home) / Smart.
+      await expect(page.getByRole("main")).toMatchAriaSnapshot(`
+        - main:
+          - heading "Agent Slider" [level=1]
+          - heading "Preview" [level=2]
+          - button "Templates"
+          - slider "Agent Slider"
+          - heading "Stops" [level=2]
+          - radiogroup "Home stop":
+            - list "Slider stops, left to right":
+              - listitem:
+                - 'radio "Home stop: Fast"'
+                - textbox "Name of stop 1"
+                - button "Move Fast up"
+                - button "Move Fast down"
+                - button "Remove Fast"
+                - button "Choose a model for Fast"
+              - listitem:
+                - 'radio "Home stop: Balanced" [checked]'
+                - textbox "Name of stop 2"
+              - listitem:
+                - 'radio "Home stop: Smart"'
+                - textbox "Name of stop 3"
+          - button "Add stop"
+      `);
+    }
   });
 
   expect(problems).toEqual([]);
