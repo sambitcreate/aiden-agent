@@ -54,7 +54,7 @@ The flags in `main/index.ts` (`backend:M001`) stay where they are. Each is writt
 |---|---|---|
 | `backend:M112` | `follow-through/background-jobs.ts` | Not audited beyond `recordCheckGroup`. |
 | `backend:M125`, `M126`, `M130`, `M156`, `clients:C43` | Browser, device helper host, terminal, Ghostty | Not audited. |
-| `cli-native:N13`, `O01` | iMCP launcher, bounded-command guard | Not audited. |
-| Rank 13 capture and input owners, including `M131`, `M133`–`M138` | Recording, dictation, speech, TTS | Not audited. Permission and device behavior needs real hardware evidence, which this slice did not gather. |
-| Rank 14 remainder: `M002`–`M004`, `M165`, `M192` | Startup and updater owners | `M002` already has a pure core. The others were not audited. |
-| Shutdown and restart trace across P1 to P4 | All lanes | Needs the P2, P3 and P4 work on one branch, which has not merged. |
+| `cli-native:N13`, `O01` | iMCP launcher (`native/imcp-launcher`), bounded-command guard (`scripts/bounded-command-guard.mjs`) | Not audited. Cross-referenced with `cli-native:N01`–`N04` above (out of bounds for this slice). |
+| Rank 13 capture and input owners: `backend:M131`, `M133`, `M134`–`M137`, `M138` | Recording, dictation, speech, TTS | Not audited (`M134`–`M137` included). Permission and device behavior needs real hardware evidence, which this slice did not gather. |
+| Rank 14 remainder: `backend:M002` (pure core), `M003`, `M004`, `M165`, `M192` | Startup and updater owners | `M002` already has a pure core; `M003`, `M004`, `M165`, and `M192` were not audited. |
+| Shutdown and restart trace across P1 to P4 | All lanes | Not yet run end-to-end across the landed P1–P4 owners (`retained-p1-owners.md`, `state-machine-worksheets-lane-b.md`, `remote-durable-operations.md`). |
