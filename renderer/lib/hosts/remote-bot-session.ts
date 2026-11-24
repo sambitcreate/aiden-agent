@@ -182,11 +182,33 @@ function queued(value: readonly AidenRemoteBotQueuedMessage[] | undefined): BotQ
 }
 
 /**
- * Revision 56 (`bot:plans`): the host's plan as the plan card draws it. Its
- * items carry no ids, so their place stands in; `revision` changes whenever
- * the host sends the plan again, so an updated card replaces the old one.
+ * A plan's revision from what the card shows: the same plan read again (a
+ * reload, a reconnect) keeps it, so the card keeps its busy and error state,
+ * and any change gives a new one, so the updated card replaces the old.
  */
-export function remoteBotPlanView(botId: string, plan: AidenRemoteBotPlan, revision: number): BotPlanView {
+function remoteBotPlanRevision(plan: AidenRemoteBotPlan): number {
+  const shown = JSON.stringify([
+    plan.planId, plan.status, plan.title, plan.why,
+    plan.steps.map((step) => [step.text, step.status]),
+    plan.items.map((item) => [item.line, item.details, item.used ?? null, item.max ?? null]),
+    plan.expiresAt ?? null, plan.from ?? null,
+  ]);
+  // FNV-1a, 32-bit.
+  let hash = 0x811c9dc5;
+  for (let index = 0; index < shown.length; index++) {
+    hash ^= shown.charCodeAt(index);
+    hash = Math.imul(hash, 0x01000193);
+  }
+  return hash >>> 0;
+}
+
+/**
+ * Revision 56 (`bot:plans`): the host's plan as the plan card draws it. Its
+ * items carry no ids, so their place stands in; `revision` follows what the
+ * card shows (`remoteBotPlanRevision`), not the frame that carried it.
+ */
+export function remoteBotPlanView(botId: string, plan: AidenRemoteBotPlan): BotPlanView {
+  const revision = remoteBotPlanRevision(plan);
   const expiresAt = time(plan.expiresAt);
   return {
     planId: plan.planId,
@@ -250,7 +272,7 @@ export function remoteBotSessionView(session: AidenRemoteBotSession): RemoteBotS
       activity: activity(session.activity),
       queued: queued(session.queued),
       accessRequest: session.accessRequest ? remoteBotAccessRequest(session.botId, session.accessRequest) : null,
-      plan: session.plan ? remoteBotPlanView(session.botId, session.plan, session.seq) : null,
+      plan: session.plan ? remoteBotPlanView(session.botId, session.plan) : null,
     },
     approval: session.approval,
     handoff: session.handoff ?? null,
@@ -429,7 +451,7 @@ export function applyRemoteBotSessionEvent(
       return { ...next({}), handoff: event.payload.handoff };
     // Only sent to a Mac holding `bot:plans` or `bot:access-requests`; others read the host's notice line.
     case "plan":
-      return next({ plan: event.payload.plan ? remoteBotPlanView(snapshot.botId, event.payload.plan, event.seq) : null });
+      return next({ plan: event.payload.plan ? remoteBotPlanView(snapshot.botId, event.payload.plan) : null });
     case "access_request":
       return next({
         accessRequest: event.payload.accessRequest ? remoteBotAccessRequest(snapshot.botId, event.payload.accessRequest) : null,

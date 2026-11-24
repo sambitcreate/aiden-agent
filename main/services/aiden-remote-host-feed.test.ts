@@ -4,6 +4,7 @@ import type { ServerResponse } from "node:http";
 import test from "node:test";
 import {
   AidenRemoteHostFeedService,
+  createHostFeedBotSignalsCache,
   hostFeedBotSignals,
   type AidenRemoteHostFeedState,
 } from "./aiden-remote-host-feed.js";
@@ -733,6 +734,58 @@ test("a Bot row's Inbox signals hold only what its live summary says", () => {
   }
   assert.deepEqual(hostFeedBotSignals({ ...idle, lastReplyAt: -1 }), {}, "a negative time is unknown");
   assert.deepEqual(hostFeedBotSignals({ ...idle, lastReplyAt: 1.5 }), {}, "a fractional time is unknown");
+});
+
+test("a refresh reads again only the Bots whose own change arrived, and never keeps a failed or overtaken read", async () => {
+  const reads = new Map<string, number>();
+  const replies = new Map<string, number>([["a", 1_000], ["b", 2_000]]);
+  let failNext: string | undefined;
+  let hold: { botId: string; release: () => void } | undefined;
+  const cache = createHostFeedBotSignalsCache({
+    summary: async (botId) => {
+      reads.set(botId, (reads.get(botId) ?? 0) + 1);
+      if (failNext === botId) {
+        failNext = undefined;
+        throw Object.assign(new Error("busy"), { code: "EBUSY" });
+      }
+      const lastReplyAt = replies.get(botId) ?? null;
+      if (hold?.botId === botId) await new Promise<void>((resolve) => { hold!.release = resolve; });
+      return { state: { kind: "idle" } as BotSessionState, needsYou: false, lastReplyAt };
+    },
+  });
+  const bots = [{ id: "a" }, { id: "b" }];
+  const replyOf = async (botId: string) => (await cache.signals(bots)).get(botId)?.lastReplyAt;
+
+  assert.equal(await replyOf("a"), new Date(1_000).toISOString());
+  await cache.signals(bots);
+  await cache.signals(bots);
+  assert.deepEqual(Object.fromEntries(reads), { a: 1, b: 1 }, "unchanged Bots are not read again");
+
+  replies.set("a", 5_000);
+  assert.equal(await replyOf("a"), new Date(1_000).toISOString(), "kept until the Bot itself changes");
+  cache.invalidate("a");
+  assert.equal(await replyOf("a"), new Date(5_000).toISOString());
+  assert.deepEqual(Object.fromEntries(reads), { a: 2, b: 1 }, "only the changed Bot is read again");
+
+  cache.invalidate();
+  await cache.signals(bots);
+  assert.deepEqual(Object.fromEntries(reads), { a: 3, b: 2 }, "a change naming no Bot reads every Bot");
+
+  cache.invalidate("b");
+  failNext = "b";
+  assert.deepEqual((await cache.signals(bots)).get("b"), {}, "a failed read sends the row without signals");
+  assert.equal(await replyOf("b"), new Date(2_000).toISOString(), "and is read again next refresh");
+
+  cache.invalidate("a");
+  hold = { botId: "a", release: () => undefined };
+  const overtaken = cache.signals(bots);
+  await new Promise((resolve) => setImmediate(resolve));
+  replies.set("a", 9_000);
+  cache.invalidate("a");
+  hold.release();
+  hold = undefined;
+  assert.equal((await overtaken).get("a")?.lastReplyAt, new Date(5_000).toISOString());
+  assert.equal(await replyOf("a"), new Date(9_000).toISOString(), "a read a change overtook is not kept");
 });
 
 test("a Bot row's preview is the host's own row line, as one plain line a paired Mac can trust", async () => {

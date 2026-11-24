@@ -7,6 +7,8 @@
 // behind still gets the right dots. `hostSince` is the newest reply a host's
 // Bots had when this Mac first listed them: those replies start read. A host
 // first listed with Bots but no replies gets 0, so its first reply is unread.
+// Only a revision 66 host reports every Bot's reply, so the baseline waits for
+// a listing that shows it is one.
 
 import * as React from "react";
 import { botLastReplyAt } from "../shared/bot-live";
@@ -61,20 +63,33 @@ export function serializeRemoteBotSeen(seen: RemoteBotSeen): string {
   return JSON.stringify({ version: 2, hostSince: seen.hostSince, seenReplyAt: seen.seenReplyAt });
 }
 
+/** What a listed remote Bot row says about its messages (`RemoteBotChoice`). */
+export interface RemoteBotListedRow {
+  lastReplyAt?: number;
+  preview?: string;
+}
+
 /**
  * The first time this Mac lists a host's Bots, their replies so far start
  * read: the host's newest reply becomes its baseline. Bots with no reply yet
- * get a baseline of 0, so the first reply that arrives later is unread. An
- * empty list sets nothing: the host's Bots may not have arrived yet.
+ * get a baseline of 0, so the first reply that arrives later is unread.
+ *
+ * Nothing is set until the listing shows the host reports every Bot's reply
+ * (revision 66, which also sends each Bot's `preview`; a Bot with a reply
+ * always has one). An older host sends reply times only for Bots whose chat
+ * is open there, so a baseline taken from it would be too low and every
+ * earlier reply would read as new once the host upgrades. An empty list, or
+ * one whose Bots have no messages yet, sets nothing either: the first listing
+ * with a message decides.
  */
 export function withRemoteBotHostListed(
   seen: RemoteBotSeen,
   hostId: string,
-  replyTimes: readonly (number | undefined)[],
+  rows: readonly RemoteBotListedRow[],
 ): RemoteBotSeen {
   if (seen.hostSince[hostId] !== undefined) return seen;
-  if (replyTimes.length === 0) return seen;
-  const known = replyTimes.filter(validTime);
+  if (!rows.some((row) => typeof row.preview === "string" && row.preview.length > 0)) return seen;
+  const known = rows.map((row) => row.lastReplyAt).filter(validTime);
   const since = known.length === 0 ? 0 : Math.max(...known);
   return { ...seen, hostSince: newest({ ...seen.hostSince, [hostId]: since }) };
 }
@@ -163,9 +178,9 @@ export function useRemoteBotSeen(): RemoteBotSeen {
 }
 
 /** Sets a host's baseline the first time its Bots are listed here (`withRemoteBotHostListed`). */
-export function markRemoteBotHostListed(hostId: string, replyTimes: readonly (number | undefined)[]): void {
+export function markRemoteBotHostListed(hostId: string, rows: readonly RemoteBotListedRow[]): void {
   const before = read();
-  const next = withRemoteBotHostListed(before, hostId, replyTimes);
+  const next = withRemoteBotHostListed(before, hostId, rows);
   if (next !== before) write(next);
 }
 
