@@ -1,5 +1,16 @@
 {
   "version": 1,
+  "macos": [
+    "bots-persistence.spec.ts",
+    "environment-devices-agent.spec.ts",
+    "environment-devices-android.spec.ts",
+    "environment-devices-features.spec.ts",
+    "environment-devices-stream.spec.ts",
+    "environment-devices-tab.spec.ts",
+    "guided-setup.spec.ts",
+    "keep-going-goals-computer-use.spec.ts",
+    "settings-simulator-ssh-hosts.spec.ts"
+  ],
   "full": [
     "playwright.config.ts",
     "vite.config.ts",

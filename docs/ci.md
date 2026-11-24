@@ -36,7 +36,9 @@ includes every full main run.
 
 `scripts/ci-required.mjs` lists, per job, either `always` or the areas that select
 it. A job may skip only when every one of its areas is false; any other skip,
-failure, cancellation or missing result fails **CI required**. Branch protection
+failure, cancellation or missing result fails **CI required**. The macOS `e2e`
+job follows the `mac-e2e` plan decision instead of an area (see below), and
+`linux-e2e` follows `desktop` or `linux`. Branch protection
 should require only that check.
 
 PR pushes cancel superseded PR CI. Each main run of `CI` and `Release consumer contract`
@@ -88,7 +90,8 @@ superseded. Runner capacity can still cause queueing.
 - Browser containment, terminal coverage thresholds, Ruby policy, Rust
   formatting/tests/clippy and native helper production/test builds retain their
   execution modes. Registry validation checks both files and these prerequisites.
-- Electron files run across five isolated macOS runners with one worker each and
+- On `main`, merge-group runs and `workflow_dispatch`, Electron files run across
+  five isolated macOS runners with one worker each and
   `--fail-on-flaky-tests`, retaining the 20-minute job limit. File-duration weights
   prefer the median of recent hosted Playwright JSON timings (Actions cache plus
   per-shard artifacts, merged on `main` only; CI never pushes timing files).
@@ -103,8 +106,20 @@ superseded. Runner capacity can still cause queueing.
   remain opt-in; production diagnostics run separately with the production profile.
   Pull requests may run a subset of specs (see below); unused shards still start
   and exit successfully so required check names stay stable.
+- On pull requests, macOS runs only the specs in the spec map's `macos` list
+  (specs that skip or assert less off macOS: the isolated keychain, the iOS
+  Simulator device tabs, guided setup's Computer Use and Apple models, and
+  Computer Use goals) that the PR selected, on one runner named
+  `Electron E2E (1/1)`. When the PR selects none, the job skips and the
+  `changes` job reports `mac-e2e=false`, which is the only way **CI required**
+  accepts that skip. Every other selected spec runs on the Linux shards, so
+  darwin-only branches inside shared specs (such as Meta-modifier shortcuts) are
+  checked at merge rather than on the PR, as with the unit lanes. When you add an
+  E2E spec that only does its work on macOS, add it to `macos` in
+  `scripts/ci-e2e-spec-map.json`.
 - Linux runs the same Electron shards on three Ubuntu runners in `linux-e2e`,
-  beside the packaging job rather than after it. The required `Linux x64` and
+  beside the packaging job rather than after it. Any `desktop` or `linux` change
+  selects it, so a renderer-only PR runs its E2E specs here. The required `Linux x64` and
   `Linux arm64` checks fail if a selected shard does not pass. Each shard builds
   the app itself, because waiting for the macOS `build` artifact would tie Linux
   to the macOS queue.
@@ -218,6 +233,16 @@ began after the page stopped loading, before the person answers, as the
 Bot-browser fixture already does. A person looking at the page answers well after
 that read. The release rule, timeouts, retries and the flaky-test gate are
 unchanged.
+
+On 2026-11-23 the hosted macOS queue was measured across every CI run since
+the self-hosted Mac Studio routing was reverted (#594, 2026-10-28). A full run
+does about 25 minutes of work, but pull-request runs took a median of 2 h 08 m
+and main runs 7 h 05 m, because macOS jobs waited a median of 40 minutes for one
+of the plan's five macOS slots (41% waited over an hour) while Ubuntu jobs
+started at once. All five slots were busy 44% of the time, and Electron E2E used
+45% of all macOS job minutes. Pull requests therefore stopped running the full
+E2E suite on macOS: Linux runs their selected specs and macOS runs only the
+macOS-only ones. Main keeps every spec on macOS.
 
 On 2026-11-22 the macOS Electron E2E jobs outgrew four shards. On `main`
 (run [45019275411](https://github.com/sambitcreate/aiden-agent/actions/runs/45019275411))
