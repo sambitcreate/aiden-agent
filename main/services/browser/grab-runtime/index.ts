@@ -376,9 +376,12 @@ function startSession(options?: GrabStartOptions): boolean {
     event.stopImmediatePropagation();
   };
 
-  // Backstop for frames and shadow roots no observer saw: the pointer crosses
-  // their host, and on entering a frame the frame element, in this document
-  // first, so they are shielded before input can reach the frame.
+  const hitTestAt = (x: number, y: number) =>
+    overlay.hittable(() => frames.hittable(() => deepElementFromPoint(x, y, overlay.host)));
+
+  // Backstop for frames and shadow roots no observer saw: the top-layer overlay
+  // intercepts all pointer input above every frame, and `adopt` also shields any
+  // discovered frame/shadow root for defense-in-depth.
   const onPointerOver = (event: PointerEvent) => {
     frames.adopt(eventTarget(event));
   };
@@ -386,7 +389,7 @@ function startSession(options?: GrabStartOptions): boolean {
   const onPointerMove = (event: PointerEvent) => {
     frames.adopt(eventTarget(event));
     if (session.pausedForCapture) return;
-    const hit = frames.hittable(() => deepElementFromPoint(event.clientX, event.clientY, overlay.host));
+    const hit = hitTestAt(event.clientX, event.clientY);
     if (!hit) {
       overlay.hide();
       return;
@@ -403,11 +406,14 @@ function startSession(options?: GrabStartOptions): boolean {
     event.stopImmediatePropagation();
     if (session.pausedForCapture || event.button !== 0) return;
 
-    let target = stepping.getCurrent();
+    // Preserve explicit ArrowUp keyboard selection; otherwise re-hit-test at the
+    // click point so elements inserted under a stationary pointer are captured accurately.
+    let target = stepping.getDepth() > 0 ? stepping.getCurrent() : null;
     let inIframe = session.lastInIframe;
     if (!target || !target.isConnected) {
-      const hit = frames.hittable(() => deepElementFromPoint(event.clientX, event.clientY, overlay.host));
+      const hit = hitTestAt(event.clientX, event.clientY);
       if (!hit) return;
+      frames.adopt(hit.element);
       target = hit.element;
       inIframe = hit.inIframe;
     }

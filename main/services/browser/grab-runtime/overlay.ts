@@ -71,12 +71,25 @@ export class GrabOverlay {
 
     this.host = document.createElement("div");
     this.host.setAttribute("data-aiden-grab-host", "true");
+    if ("popover" in this.host) {
+      try {
+        (this.host as HTMLElement & { popover: string }).popover = "manual";
+      } catch {
+        // Fall back to fixed z-index layering when Popover API is unavailable.
+      }
+    }
     Object.assign(this.host.style, {
       position: "fixed",
       inset: "0",
-      width: "0",
-      height: "0",
-      pointerEvents: "none",
+      width: "100%",
+      height: "100%",
+      margin: "0",
+      padding: "0",
+      border: "0",
+      background: "transparent",
+      overflow: "visible",
+      pointerEvents: "auto",
+      cursor: "crosshair",
       zIndex: "2147483647",
       contain: "layout style",
     });
@@ -148,6 +161,40 @@ export class GrabOverlay {
     this.pill.append(this.pillLabel, this.pillMeta);
     shadow.append(this.box, this.pill);
     (document.documentElement || document.body).append(this.host);
+    this.promoteToTopLayer();
+  }
+
+  private promoteToTopLayer(): void {
+    const popoverHost = this.host as HTMLElement & { showPopover?: () => void };
+    if (typeof popoverHost.showPopover === "function") {
+      try {
+        popoverHost.showPopover();
+      } catch {
+        // Ignore if already open or unsupported in the current document.
+      }
+    }
+  }
+
+  private demoteFromTopLayer(): void {
+    const popoverHost = this.host as HTMLElement & { hidePopover?: () => void };
+    if (typeof popoverHost.hidePopover === "function") {
+      try {
+        popoverHost.hidePopover();
+      } catch {
+        // Ignore if already closed or disconnected.
+      }
+    }
+  }
+
+  /** Synchronously passes hit-testing through the full-viewport capture shield. */
+  hittable<T>(test: () => T): T {
+    const previous = this.host.style.pointerEvents;
+    this.host.style.pointerEvents = "none";
+    try {
+      return test();
+    } finally {
+      this.host.style.pointerEvents = previous;
+    }
   }
 
   update(next: OverlayUpdate): void {
@@ -221,6 +268,8 @@ export class GrabOverlay {
     }
     this.pendingUpdate = null;
     this.hide();
+    this.demoteFromTopLayer();
+    this.host.style.pointerEvents = "none";
     this.host.style.display = "none";
     if (removeHost) {
       this.host.remove();
@@ -231,9 +280,11 @@ export class GrabOverlay {
 
   showAfterCapture(): void {
     this.host.style.display = "block";
+    this.host.style.pointerEvents = "auto";
     if (!this.host.isConnected) {
       (document.documentElement || document.body)?.append(this.host);
     }
+    this.promoteToTopLayer();
     if (!this.visible) {
       this.box.style.display = "none";
       this.pill.style.display = "none";
@@ -246,6 +297,7 @@ export class GrabOverlay {
       this.rafId = 0;
     }
     this.pendingUpdate = null;
+    this.demoteFromTopLayer();
     this.host.remove();
   }
 }
