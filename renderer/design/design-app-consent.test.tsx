@@ -196,7 +196,7 @@ test("a request for another chat waits until that chat is shown, and attach requ
   installBotTestIpc();
   const view = render(<ChatSlot chatId="chat-1" />);
   ask(launch({ chatId: "chat-2" }));
-  ask({ kind: "attach", requestId: "a1", chatId: "chat-1", workspaceId: "ws", appRoot: ".", url: "http://127.0.0.1:3000" });
+  ask({ kind: "attach", requestId: "a1", chatId: "chat-1", workspaceId: "ws", appRoot: ".", url: "http://127.0.0.1:3000", configUrl: "http://localhost:3000", processName: "node", folder: "." });
   assert.ok(screen.getByText("No card for chat-1"));
   view.rerender(<ChatSlot chatId="chat-2" />);
   assert.ok(await card());
