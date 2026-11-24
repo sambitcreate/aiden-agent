@@ -52,6 +52,13 @@ class AidenBotPeersControllerTest {
             val p=Phone();val c=p.controller();c.load();c.setDraft("Draft")
             p.host.write={if(failure is AidenPeerError)AidenPeerMutationResult(false,code=failure,error="Publication unconfirmed") else throw failure as Exception};c.saveDescription();assertNotNull(c.state.value.pending)
         }
+        // A first 409 revision_conflict proves the description was never written.
+        run {
+            val p=Phone();val c=p.controller();c.load();c.setDraft("Draft")
+            p.host.write={throw AidenRemoteClientException.Server(409,AidenRemoteErrorEnvelope.Body(AidenRemoteErrorCode.REVISION_CONFLICT,"Changed","req",false))}
+            c.saveDescription();assertNull(c.state.value.pending);assertEquals(AidenRoutineControlProblem.FAILED,c.state.value.problem)
+            assertNull("a cleared attempt does not come back after restart",p.controller().state.value.pending)
+        }
         val p=Phone();val c=p.controller();c.load();c.setDraft("Draft");p.host.write={AidenPeerMutationResult(false,code=AidenPeerError.CONFLICT,error="Changed",snapshot=p.host.settings.copy(revision="next"))};c.saveDescription()
         assertNull(c.state.value.pending);assertTrue(c.state.value.needsReview);assertEquals("Draft",c.state.value.draft);assertFalse(c.saveAllowed())
         c.reviewKeepingDraft();assertEquals("next",c.state.value.baseline!!.revision);assertTrue(c.saveAllowed())

@@ -175,12 +175,14 @@ class AidenBotOpenWorkControllerTest {
             assertEquals(listOf(OPEN_NONCE,OPEN_NONCE),host.writes.map{it.mutationId})
         }
 
-        // A first proven before-effect refusal clears pending and reports FAILED.
-        val host=Host();val c=controller(host);c.load();c.begin(host.view.items.single());c.edit{it.copy(title="Refused")}
-        host.answer={throw AidenRemoteClientException.Server(403,AidenRemoteErrorEnvelope.Body(AidenRemoteErrorCode.CAPABILITY_DENIED,"Denied","req_6",false))}
-        c.save()
-        assertNull(c.state.value.pending)
-        assertEquals(AidenOpenWorkProblem.FAILED,c.state.value.problem)
+        // A first proven before-effect refusal, including 409 revision_conflict, clears pending and reports FAILED.
+        for((status,code) in listOf(403 to AidenRemoteErrorCode.CAPABILITY_DENIED,409 to AidenRemoteErrorCode.REVISION_CONFLICT)) {
+            val host=Host();val c=controller(host);c.load();c.begin(host.view.items.single());c.edit{it.copy(title="Refused")}
+            host.answer={throw AidenRemoteClientException.Server(status,AidenRemoteErrorEnvelope.Body(code,"Refused","req_6",false))}
+            c.save()
+            assertNull("$status $code clears pending",c.state.value.pending)
+            assertEquals(AidenOpenWorkProblem.FAILED,c.state.value.problem)
+        }
 
         // If clearing a first definite refusal fails in storage, STORAGE is preserved and further writes stay blocked.
         var failClear=false;var saved:String?=null

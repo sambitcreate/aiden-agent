@@ -10,23 +10,18 @@ import kotlinx.coroutines.CancellationException
  */
 enum class AidenRemoteFailurePolicy {
     /**
-     * Strict before-effect refusal allowlist for Bot control and custom-receipt routes
-     * (`resume`, `open-work`, `peers`, `routine-models`).
+     * Strict before-effect refusal allowlist for Bot control, custom-receipt and revision-checked
+     * routes (`resume`, `open-work`, `peers`, `routine-models`, `watches`, `avatar`).
      *
-     * Only structured 4xx responses (excluding `408`/`429`) whose error code is on
-     * [AidenRemoteFailureClassification.BEFORE_EFFECT_REFUSAL_CODES] prove the request had no
-     * effect. `409 idempotency_in_flight`, `409 internal_error`, unknown `409`s, `400` with
+     * Only structured 4xx responses (excluding `408`/`429`) with a decoded error envelope whose
+     * code is on [AidenRemoteFailureClassification.BEFORE_EFFECT_REFUSAL_CODES] prove the request
+     * had no effect. That list includes `409 revision_conflict`: the host's revision check rejects
+     * a stale write before anything is written, and the ledger replays that same refusal under the
+     * key. `409 idempotency_in_flight`, `409 internal_error`, unknown `409`s, `400` with
      * unrecognized codes, `5xx`, `408`, `429`, unstructured [AidenRemoteClientException.UnexpectedStatus],
      * transport/parse failures, and [CancellationException] are all ambiguous.
      */
     BEFORE_EFFECT_REFUSAL,
-
-    /**
-     * Same strict before-effect refusal allowlist as [BEFORE_EFFECT_REFUSAL], plus
-     * `409 revision_conflict` for routes whose optimistic-concurrency revision check rejects
-     * stale writes before any effect (`watches`, `avatar`).
-     */
-    BEFORE_EFFECT_REFUSAL_WITH_REVISION_CONFLICT,
 
     /**
      * Durable idempotency ledger routes (`executeAidenDurableOperation`) aligned with
@@ -55,10 +50,14 @@ enum class AidenRemoteFailurePolicy {
 
 object AidenRemoteFailureClassification {
     /**
-     * Structured error codes the host returns strictly before any Bot control or custom-receipt
-     * mutation effect can commit.
+     * Structured error codes the host returns strictly before any mutation effect can commit.
+     *
+     * This is the cross-client list: it must equal `recognizedBeforeEffectCodes` in
+     * `protocol/aiden-remote/v1/fixtures/mutation-failure-ambiguity.json` and iOS's
+     * `AidenRemoteFailureClassification.beforeEffectCodes`.
      */
     val BEFORE_EFFECT_REFUSAL_CODES: Set<AidenRemoteErrorCode> = setOf(
+        // Core protocol, auth, admission, and Bot resume before-effect refusals
         AidenRemoteErrorCode.INVALID_REQUEST,
         AidenRemoteErrorCode.PAYLOAD_TOO_LARGE,
         AidenRemoteErrorCode.AUTHENTICATION_REQUIRED,
@@ -71,7 +70,26 @@ object AidenRemoteFailureClassification {
         AidenRemoteErrorCode.BOT_PAUSED,
         AidenRemoteErrorCode.IDEMPOTENCY_CONFLICT,
         AidenRemoteErrorCode.IDEMPOTENCY_CAPACITY,
-        AidenRemoteErrorCode.RATE_LIMITED
+        AidenRemoteErrorCode.RATE_LIMITED,
+        // Domain before-effect CAS, validation, and precondition refusals
+        AidenRemoteErrorCode.REVISION_CONFLICT,
+        AidenRemoteErrorCode.ALREADY_EXISTS,
+        AidenRemoteErrorCode.HANDLE_INVALID,
+        AidenRemoteErrorCode.HANDLE_EXPIRED,
+        AidenRemoteErrorCode.HANDLE_WRONG_DEVICE,
+        AidenRemoteErrorCode.HANDLE_CAPACITY,
+        AidenRemoteErrorCode.APPROVAL_ALREADY_RESOLVED,
+        AidenRemoteErrorCode.APPROVAL_RESOLVED,
+        AidenRemoteErrorCode.APPROVAL_EXPIRED,
+        AidenRemoteErrorCode.QUESTION_ALREADY_RESOLVED,
+        AidenRemoteErrorCode.QUESTION_EXPIRED,
+        AidenRemoteErrorCode.MEMORY_ENTRY_NOT_FOUND,
+        AidenRemoteErrorCode.MEMORY_OVER_BUDGET,
+        AidenRemoteErrorCode.MEMORY_BLOCKED,
+        AidenRemoteErrorCode.ROUTINE_PROPOSAL_NOT_FOUND,
+        AidenRemoteErrorCode.HANDOFF_EXPIRED,
+        AidenRemoteErrorCode.ACCESS_REQUEST_EXPIRED,
+        AidenRemoteErrorCode.PLAN_EXPIRED
     )
 
     private fun isPreSendLocalError(error: Throwable): Boolean = when (error) {
@@ -102,10 +120,7 @@ object AidenRemoteFailureClassification {
         if (error is CancellationException) return true
         if (isPreSendLocalError(error)) return false
         return when (policy) {
-            AidenRemoteFailurePolicy.BEFORE_EFFECT_REFUSAL ->
-                isBeforeEffectAmbiguous(error, allowRevisionConflict = false)
-            AidenRemoteFailurePolicy.BEFORE_EFFECT_REFUSAL_WITH_REVISION_CONFLICT ->
-                isBeforeEffectAmbiguous(error, allowRevisionConflict = true)
+            AidenRemoteFailurePolicy.BEFORE_EFFECT_REFUSAL -> isBeforeEffectAmbiguous(error)
             AidenRemoteFailurePolicy.CACHED_REJECTION_LEDGER ->
                 isCachedRejectionLedgerAmbiguous(error)
             AidenRemoteFailurePolicy.CACHED_REJECTION_LEDGER_STRICT ->
@@ -113,16 +128,12 @@ object AidenRemoteFailureClassification {
         }
     }
 
-    private fun isBeforeEffectAmbiguous(error: Throwable, allowRevisionConflict: Boolean): Boolean = when (error) {
-        is AidenRemoteClientException.Server -> {
-            if (!error.isDecodedEnvelope || isTransientHttpStatus(error.statusCode) || error.statusCode !in 400..499) {
-                true
-            } else {
-                val allowed = error.body.code in BEFORE_EFFECT_REFUSAL_CODES ||
-                    (allowRevisionConflict && error.body.code == AidenRemoteErrorCode.REVISION_CONFLICT)
-                !allowed
-            }
-        }
+    private fun isBeforeEffectAmbiguous(error: Throwable): Boolean = when (error) {
+        is AidenRemoteClientException.Server ->
+            !error.isDecodedEnvelope ||
+                isTransientHttpStatus(error.statusCode) ||
+                error.statusCode !in 400..499 ||
+                error.body.code !in BEFORE_EFFECT_REFUSAL_CODES
         is AidenRemoteClientException.UnexpectedStatus -> true
         else -> true
     }

@@ -943,7 +943,7 @@ class AidenBotSessionControllerTest {
     }
 
     @Test fun legacyFirstTypedUnknownOutcomeKeepsItsUuidAndReconcilesCachedStateWithoutAnotherMutation()=runTest {
-        for(code in listOf("idempotency_in_flight","internal_error","new_resume_recovery","revision_conflict")) {
+        for(code in listOf("idempotency_in_flight","internal_error","new_resume_recovery")) {
             val base=FakeTransport(interruptedSession);val seen=mutableListOf<UUID>();var first=true
             val transport=object:AidenBotSessionTransport by base {
                 override suspend fun resume(botId:String,key:UUID):AidenBotSessionStateView {
@@ -957,6 +957,20 @@ class AidenBotSessionControllerTest {
             assertTrue(controller.resume());assertEquals(2,seen.size);assertEquals(seen[0],seen[1])
             assertEquals(2,base.sessionReads);assertTrue(controller.state.value.isInterrupted);assertTrue(base.sends.isEmpty())
         }
+    }
+
+    @Test fun legacyFirstRevisionConflictIsADefiniteRefusalSoTheNextResumeMintsANewKey()=runTest {
+        val base=FakeTransport(interruptedSession);val seen=mutableListOf<UUID>();var first=true
+        val transport=object:AidenBotSessionTransport by base {
+            override suspend fun resume(botId:String,key:UUID):AidenBotSessionStateView {
+                seen+=key
+                if(first) {first=false;throw AidenRemoteClientException.Server(409,AidenRemoteErrorEnvelope.Body(AidenRemoteErrorCode.REVISION_CONFLICT,"Changed","req",false))}
+                return AidenBotSessionStateView(AidenBotSessionState.RUNNING,false)
+            }
+        }
+        val controller=AidenBotSessionController(interruptedSession.botId,transport,backgroundScope)
+        controller.refetch();assertFalse(controller.resume());assertTrue(controller.state.value.isInterrupted)
+        controller.resume();assertEquals(2,seen.size);assertNotEquals(seen[0],seen[1])
     }
 
     @Test

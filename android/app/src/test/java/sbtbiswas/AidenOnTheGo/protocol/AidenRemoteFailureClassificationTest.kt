@@ -108,6 +108,7 @@ class AidenRemoteFailureClassificationTest {
             server(503, AidenRemoteErrorCode.INTERNAL_ERROR),
             server(408, AidenRemoteErrorCode.INVALID_REQUEST),
             server(429, AidenRemoteErrorCode.RATE_LIMITED),
+            server(503, AidenRemoteErrorCode.REVISION_CONFLICT),
             AidenRemoteClientException.UnexpectedStatus(400),
             AidenRemoteClientException.UnexpectedStatus(409),
             AidenRemoteClientException.InvalidResponse()
@@ -117,27 +118,9 @@ class AidenRemoteFailureClassificationTest {
                 "$error must stay ambiguous under BEFORE_EFFECT_REFUSAL",
                 AidenRemoteFailureClassification.isAmbiguous(error, AidenRemoteFailurePolicy.BEFORE_EFFECT_REFUSAL)
             )
-            assertTrue(
-                "$error must stay ambiguous under BEFORE_EFFECT_REFUSAL_WITH_REVISION_CONFLICT",
-                AidenRemoteFailureClassification.isAmbiguous(
-                    error,
-                    AidenRemoteFailurePolicy.BEFORE_EFFECT_REFUSAL_WITH_REVISION_CONFLICT
-                )
-            )
+            assertTrue("Resume keeps pending on $error", aidenBotResumeFailureIsAmbiguous(error))
+            assertTrue("Avatar keeps pending on $error", aidenBotAvatarMutationFailureIsAmbiguous(error))
         }
-
-        val revisionConflict = server(409, AidenRemoteErrorCode.REVISION_CONFLICT)
-        assertTrue(
-            "Resume does not use revision_conflict as a before-effect refusal",
-            AidenRemoteFailureClassification.isAmbiguous(revisionConflict, AidenRemoteFailurePolicy.BEFORE_EFFECT_REFUSAL)
-        )
-        assertFalse(
-            "Watches and Avatar reject stale If-Match before effect",
-            AidenRemoteFailureClassification.isAmbiguous(
-                revisionConflict,
-                AidenRemoteFailurePolicy.BEFORE_EFFECT_REFUSAL_WITH_REVISION_CONFLICT
-            )
-        )
 
         val definiteRefusals = listOf(
             server(400, AidenRemoteErrorCode.INVALID_REQUEST),
@@ -147,6 +130,8 @@ class AidenRemoteFailureClassificationTest {
             server(409, AidenRemoteErrorCode.OPERATION_STALE),
             server(409, AidenRemoteErrorCode.BOT_PAUSED),
             server(409, AidenRemoteErrorCode.IDEMPOTENCY_CONFLICT),
+            // The host's revision check refuses a stale write before anything is written.
+            server(409, AidenRemoteErrorCode.REVISION_CONFLICT),
             server(413, AidenRemoteErrorCode.PAYLOAD_TOO_LARGE),
             server(422, AidenRemoteErrorCode.INVALID_REQUEST)
         )
@@ -155,11 +140,60 @@ class AidenRemoteFailureClassificationTest {
                 "$error is a proven before-effect refusal",
                 AidenRemoteFailureClassification.isAmbiguous(error, AidenRemoteFailurePolicy.BEFORE_EFFECT_REFUSAL)
             )
-            assertFalse(
-                "$error is a proven before-effect refusal with revision conflict enabled",
+            assertFalse("Resume clears pending on $error", aidenBotResumeFailureIsAmbiguous(error))
+            assertFalse("Avatar clears pending on $error", aidenBotAvatarMutationFailureIsAmbiguous(error))
+        }
+    }
+
+    /**
+     * The cross-client before-effect refusal list. It mirrors `recognizedBeforeEffectCodes` in
+     * `protocol/aiden-remote/v1/fixtures/mutation-failure-ambiguity.json` and iOS's
+     * `AidenRemoteFailureClassification.beforeEffectCodes`; once that fixture is on this branch,
+     * read it here instead of this copy.
+     */
+    private val crossClientBeforeEffectCodes = listOf(
+        "invalid_request", "payload_too_large", "authentication_required", "credential_revoked",
+        "capability_denied", "server_identity_changed", "not_found", "bot_archived",
+        "operation_stale", "bot_paused", "idempotency_conflict", "idempotency_capacity",
+        "rate_limited", "revision_conflict", "already_exists", "handle_invalid", "handle_expired",
+        "handle_wrong_device", "handle_capacity", "approval_already_resolved", "approval_resolved",
+        "approval_expired", "question_already_resolved", "question_expired",
+        "memory_entry_not_found", "memory_over_budget", "memory_blocked",
+        "routine_proposal_not_found", "handoff_expired", "access_request_expired", "plan_expired"
+    )
+
+    @Test
+    fun beforeEffectPolicySettlesExactlyTheCrossClientRefusalCodes() {
+        assertEquals(31, crossClientBeforeEffectCodes.toSet().size)
+        for (raw in crossClientBeforeEffectCodes) {
+            for (status in listOf(400, 403, 404, 409, 410, 422)) {
+                assertFalse(
+                    "$status $raw is a before-effect refusal",
+                    AidenRemoteFailureClassification.isAmbiguous(
+                        server(status, AidenRemoteErrorCode(raw)),
+                        AidenRemoteFailurePolicy.BEFORE_EFFECT_REFUSAL
+                    )
+                )
+            }
+            for (status in listOf(408, 429, 500, 503)) {
+                assertTrue(
+                    "transient $status $raw leaves the outcome unknown",
+                    AidenRemoteFailureClassification.isAmbiguous(
+                        server(status, AidenRemoteErrorCode(raw)),
+                        AidenRemoteFailurePolicy.BEFORE_EFFECT_REFUSAL
+                    )
+                )
+            }
+        }
+        // Every other code the protocol knows stays ambiguous, so the settled set is no wider.
+        val others = AidenRemoteErrorCode.V1_KNOWN.map { it.rawValue } - crossClientBeforeEffectCodes.toSet()
+        assertTrue(others.isNotEmpty())
+        for (raw in others + "future_refusal") {
+            assertTrue(
+                "409 $raw must stay ambiguous",
                 AidenRemoteFailureClassification.isAmbiguous(
-                    error,
-                    AidenRemoteFailurePolicy.BEFORE_EFFECT_REFUSAL_WITH_REVISION_CONFLICT
+                    server(409, AidenRemoteErrorCode(raw)),
+                    AidenRemoteFailurePolicy.BEFORE_EFFECT_REFUSAL
                 )
             )
         }
@@ -243,6 +277,18 @@ class AidenRemoteFailureClassificationTest {
                 previouslyUnknown = false
             )
         )
+
+        // A first 409 revision_conflict is definite, but it cannot settle an attempt whose
+        // earlier try was already unknown.
+        val revisionConflict = server(409, AidenRemoteErrorCode.REVISION_CONFLICT)
+        assertEquals(
+            AidenDurableFailureSettlement.CLEAR_DEFINITE,
+            AidenDurablePendingMutation.settleFailure(revisionConflict, previouslyUnknown = false)
+        )
+        assertEquals(
+            AidenDurableFailureSettlement.RETAIN_UNCERTAIN,
+            AidenDurablePendingMutation.settleFailure(revisionConflict, previouslyUnknown = true)
+        )
     }
 
     @Test
@@ -294,11 +340,10 @@ class AidenRemoteFailureClassificationTest {
             assertEquals("Scheduled run key must be retained on malformed 409 ($raw)", runKey1, runKeys.keyFor("task_1"))
         }
 
-        // Malformed non-409 envelopes also retain keys under BEFORE_EFFECT_REFUSAL*, CACHED_REJECTION_LEDGER, and fork.
+        // Malformed non-409 envelopes also retain keys under BEFORE_EFFECT_REFUSAL, CACHED_REJECTION_LEDGER, and fork.
         val malformed400 = AidenRemoteClient.parseError(400, "not json".toByteArray(Charsets.UTF_8))
         assertFalse(malformed400.isDecodedEnvelope)
         assertTrue(AidenRemoteFailureClassification.isAmbiguous(malformed400, AidenRemoteFailurePolicy.BEFORE_EFFECT_REFUSAL))
-        assertTrue(AidenRemoteFailureClassification.isAmbiguous(malformed400, AidenRemoteFailurePolicy.BEFORE_EFFECT_REFUSAL_WITH_REVISION_CONFLICT))
         assertTrue(AidenRemoteFailureClassification.isAmbiguous(malformed400, AidenRemoteFailurePolicy.CACHED_REJECTION_LEDGER))
         assertTrue(AidenRemoteFailureClassification.isAmbiguous(malformed400, AidenRemoteFailurePolicy.CACHED_REJECTION_LEDGER_STRICT))
         assertTrue(aidenBotMessageFailureIsAmbiguous(malformed400))

@@ -223,7 +223,7 @@ class AidenBotWatchController(private val transport: AidenBotWatchTransport, pri
             val settlement = AidenDurablePendingMutation.settleFailure(
                 error = e,
                 previouslyUnknown = wasPending,
-                policy = AidenRemoteFailurePolicy.BEFORE_EFFECT_REFUSAL_WITH_REVISION_CONFLICT
+                policy = AidenRemoteFailurePolicy.BEFORE_EFFECT_REFUSAL
             )
             val definite = settlement == AidenDurableFailureSettlement.CLEAR_DEFINITE
             val permissionDenied = server?.statusCode in listOf(401, 403)

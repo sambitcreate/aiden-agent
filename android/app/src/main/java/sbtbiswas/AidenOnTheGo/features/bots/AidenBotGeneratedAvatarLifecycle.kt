@@ -66,7 +66,7 @@ fun aidenBotAvatarMutationFailureIsAmbiguous(error: Throwable): Boolean {
     if (error is AidenBotGeneratedAvatarError.Unavailable) return false
     return AidenRemoteFailureClassification.isAmbiguous(
         error,
-        AidenRemoteFailurePolicy.BEFORE_EFFECT_REFUSAL_WITH_REVISION_CONFLICT
+        AidenRemoteFailurePolicy.BEFORE_EFFECT_REFUSAL
     )
 }
 

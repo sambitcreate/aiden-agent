@@ -122,10 +122,12 @@ class AidenBotRoutineModelsControllerTest {
             assertEquals(listOf(MODEL_NONCE,MODEL_NONCE),host.writes.map{it.mutationId})
         }
 
-        val host=Host();val c=controller(host);c.load();c.select(primary,false)
-        host.answer={throw AidenRemoteClientException.Server(403,AidenRemoteErrorEnvelope.Body(AidenRemoteErrorCode.CAPABILITY_DENIED,"Denied","req_4",false))}
-        c.save()
-        assertNull(c.state.value.pending)
-        assertEquals(AidenRoutineControlProblem.FAILED,c.state.value.problem)
+        for((status,code) in listOf(403 to AidenRemoteErrorCode.CAPABILITY_DENIED,409 to AidenRemoteErrorCode.REVISION_CONFLICT)) {
+            val host=Host();val c=controller(host);c.load();c.select(primary,false)
+            host.answer={throw AidenRemoteClientException.Server(status,AidenRemoteErrorEnvelope.Body(code,"Refused","req_4",false))}
+            c.save()
+            assertNull("$status $code clears pending",c.state.value.pending)
+            assertEquals(AidenRoutineControlProblem.FAILED,c.state.value.problem)
+        }
     }
 }
