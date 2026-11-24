@@ -1632,7 +1632,8 @@
         "scripts/bot-inbox-writer.test.mjs",
         "scripts/prepare-macos-dev-runtime.test.mjs",
         "scripts/run-macos-distribution.test.mjs",
-        "scripts/worktree-file-io.test.mjs"
+        "scripts/worktree-file-io.test.mjs",
+        "main/services/design-canvas/app-server/app-server-process.test.ts"
       ],
       "preserved": [
         "terminal-coverage",

@@ -22,7 +22,14 @@ import {
 import { processGroupStillRuns } from "../../shared/process-group.js";
 import { tailText } from "../../../renderer/shared/agent-notices.js";
 import { CheckInterruptedError } from "./done-when.js";
-import { defaultListeningPortsByProcess, readJobSockets, type JobSockets } from "./listening-ports.js";
+import {
+  defaultListeningPortsByProcess,
+  defaultSocketReaderDeps,
+  jobProcessTree,
+  processTable,
+  readJobSockets,
+  type JobSockets,
+} from "./listening-ports.js";
 
 export const MAX_RUNNING_JOBS_PER_CHAT = 10;
 export const MAX_RUNNING_JOBS = 20;
@@ -142,6 +149,8 @@ export interface BackgroundJobsOptions {
   listeningPorts?: ((pids: readonly number[]) => Promise<Map<number, number[]>>) | null;
   /** Each job's listening sockets with addresses, from one look for all of them; fails closed (design jobs). */
   jobSockets?: (groups: ReadonlyMap<string, number>) => Promise<Map<string, JobSockets>>;
+  /** A design job's processes that left its group (a `setsid` child), found by parent pid. */
+  designStrays?: (pgid: number) => Promise<number[]>;
   portScanMs?: number;
   adoptedPollMs?: number;
   adoptSettleMs?: number;
@@ -209,6 +218,8 @@ interface JobRecord {
   adoptedOutput?: { stdout: Readable; stderr: Readable };
   settleExited?: () => void;
   nextPortScanAt?: number;
+  /** A design job's stop: its descendants outside the group are found first, then everything is signalled. */
+  designStop?: Promise<void>;
 }
 
 /** Durable note of running jobs, so a launch after a crash can stop what was left. */
@@ -321,6 +332,22 @@ function groupExists(pid: number): boolean {
   } catch (error) {
     return (error as NodeJS.ErrnoException).code === "EPERM";
   }
+}
+
+function signalPid(pid: number, signal: NodeJS.Signals): void {
+  try {
+    process.kill(pid, signal);
+  } catch {
+    // Already gone.
+  }
+}
+
+/** Descendants of a group leader that are in another process group. */
+async function defaultDesignStrays(pgid: number): Promise<number[]> {
+  const table = await processTable(defaultSocketReaderDeps());
+  if (!table.ok) return [];
+  const groupOf = new Map(table.rows.map((row) => [row.pid, row.pgid]));
+  return jobProcessTree(table.rows, pgid).filter((pid) => pid > 1 && pid !== process.pid && groupOf.get(pid) !== pgid);
 }
 
 function signalGroup(pid: number, signal: NodeJS.Signals): void {
@@ -1014,6 +1041,11 @@ export class BackgroundJobs {
   private stopRecord(job: JobRecord, reason: BackgroundJobEndReason): Promise<void> {
     if (job.view.state !== "running") return job.exited;
     job.stopRequested ??= reason;
+    const designPid = job.child?.pid;
+    if (isDesign(job) && designPid) {
+      job.designStop ??= this.stopDesignProcesses(job, designPid);
+      return job.designStop.then(() => job.exited);
+    }
     if (job.adoptedGroup !== undefined) {
       const stopping = (job.adoptedStop ??= this.stopAdopted(job, job.adoptedGroup));
       // A stop that could not confirm the end leaves the job running.
@@ -1035,6 +1067,28 @@ export class BackgroundJobs {
       job.forceTimer.unref?.();
     }
     return job.exited;
+  }
+
+  /**
+   * A design job's processes are its group plus every descendant by parent
+   * pid (D9), so a `setsid` child, such as a wildcard listener, ends with it.
+   * The descendants are found before anything is signalled, while their
+   * parents still link them to the job.
+   */
+  private async stopDesignProcesses(job: JobRecord, pid: number): Promise<void> {
+    const strays = await (this.options.designStrays ?? defaultDesignStrays)(pid).catch((): number[] => []);
+    signalGroup(pid, "SIGTERM");
+    for (const stray of strays) signalPid(stray, "SIGTERM");
+    job.forceTimer = setTimeout(() => {
+      if (groupExists(pid)) signalGroup(pid, "SIGKILL");
+      for (const stray of strays) signalPid(stray, "SIGKILL");
+      const release = setTimeout(() => {
+        job.child?.stdout?.destroy();
+        job.child?.stderr?.destroy();
+      }, 1_000);
+      release.unref?.();
+    }, this.stopGraceMs);
+    job.forceTimer.unref?.();
   }
 
   /**

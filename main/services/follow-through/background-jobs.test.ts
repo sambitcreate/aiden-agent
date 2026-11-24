@@ -1090,7 +1090,7 @@ test("stopDesign ends the group, children included", { skip }, async (t) => {
   assert.equal((await jobs.stopDesign(job.id)).state, "stopped");
 });
 
-test("a design job's sockets include a listener started by a setsid grandchild, with its address", { skip }, async (t) => {
+test("a design job's sockets include a listener started by a setsid grandchild, with its address, and stopDesign ends it", { skip }, async (t) => {
   const dir = await tempDir();
   const { jobs, startNode } = designHarness(dir);
   t.after(() => cleanUp(jobs, dir));
@@ -1115,9 +1115,13 @@ test("a design job's sockets include a listener started by a setsid grandchild, 
     ["127.0.0.1"],
   );
   assert.deepEqual(await jobs.designSockets(["job_00000000"]), new Map([["job_00000000", { ok: false, reason: "not running" }]]));
-  // The setsid grandchild left the group, so stopping the job does not reach it; end it here.
+  // The setsid grandchild left the group, but it is one of the job's processes: stopping the job ends it too.
   const pid = entry.sockets.find((socket) => socket.port === port)!.pid;
-  process.kill(pid, "SIGKILL");
+  t.after(() => {
+    if (alive(pid)) process.kill(pid, "SIGKILL");
+  });
+  await jobs.stopDesign(job.id);
+  await eventually(() => !alive(pid), "the setsid grandchild to end", 3_000);
 });
 
 

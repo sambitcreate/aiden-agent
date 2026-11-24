@@ -125,11 +125,11 @@ class FakeJobs {
     assert.ok(job, "a job was started");
     return job;
   }
+  /** Like `BackgroundJobs`, output is no change event: readers see it in the view and the tail. */
   output(jobId: string, text: string) {
     const job = this.byId(jobId);
     job.tail += text;
     job.view = { ...job.view, outputBytes: job.view.outputBytes + Buffer.byteLength(text) };
-    this.emit(job);
   }
   exit(jobId: string, code: number | null, signal?: string) {
     const job = this.byId(jobId);
@@ -728,6 +728,8 @@ test("a printed URL on a port the job doesn't own never makes it ready, and 120 
   const job = h.jobs.last();
   h.jobs.output(job.view.id, "Local: http://127.0.0.1:5173/\n");
   h.jobs.sockets.set(job.view.id, { ok: true, sockets: [] });
+  // The next poll sees the output; 120 s of silence count from there.
+  await h.clock.advance(500);
   await h.clock.advance(DESIGN_APP_READY_IDLE_MS - 1);
   assert.equal(h.latest()?.phase, "starting");
   await h.clock.advance(1);

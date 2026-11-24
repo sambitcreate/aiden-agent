@@ -111,6 +111,15 @@ export interface DesignAppServersDeps {
   now?(): number;
   timers?: { set(fn: () => void, ms: number): unknown; clear(handle: unknown): void };
   log?(event: string, detail?: Record<string, unknown>): void;
+  /** Shorter limits, for tests against real processes. */
+  limits?: Partial<DesignAppLimits>;
+}
+
+export interface DesignAppLimits {
+  readyIdleMs: number;
+  readyCapMs: number;
+  graceMs: number;
+  installTimeoutMs: number;
 }
 
 export interface DesignAppStartInput {
@@ -252,10 +261,18 @@ export class DesignAppServers {
   private pollDelay = 0;
   private polling = false;
   private readonly now: () => number;
+  private readonly limits: DesignAppLimits;
   private readonly timers: { set(fn: () => void, ms: number): unknown; clear(handle: unknown): void };
 
   constructor(private readonly deps: DesignAppServersDeps) {
     this.now = deps.now ?? Date.now;
+    this.limits = {
+      readyIdleMs: DESIGN_APP_READY_IDLE_MS,
+      readyCapMs: DESIGN_APP_READY_CAP_MS,
+      graceMs: DESIGN_APP_PRESENCE_GRACE_MS,
+      installTimeoutMs: DESIGN_APP_INSTALL_TIMEOUT_MS,
+      ...deps.limits,
+    };
     this.timers = deps.timers ?? {
       set: (fn, ms) => {
         const handle = setTimeout(fn, ms);
@@ -757,7 +774,7 @@ export class DesignAppServers {
           .stopDesign(jobId)
           .catch(() => undefined)
           .then(() => reject(new End({ problem: "install-timeout" }, "failed")));
-      }, DESIGN_APP_INSTALL_TIMEOUT_MS);
+      }, this.limits.installTimeoutMs);
       this.jobWaiters.set(jobId, (view) => {
         cleanup();
         resolve(view);
@@ -790,7 +807,7 @@ export class DesignAppServers {
         stopTimers();
         resolve(outcome);
       };
-      watch.capTimer = this.timers.set(notReady, DESIGN_APP_READY_CAP_MS);
+      watch.capTimer = this.timers.set(notReady, this.limits.readyCapMs);
       this.armIdle(watch, notReady);
       signal.addEventListener("abort", abort, { once: true });
       this.ensurePoller();
@@ -808,7 +825,7 @@ export class DesignAppServers {
           problem: { problem: "not-ready", tail: lastLines(this.deps.jobs.designTail(watch.jobId), TAIL_LINES, TAIL_CHARS) },
         }));
     this.timers.clear(watch.idleTimer);
-    watch.idleTimer = this.timers.set(notReady, DESIGN_APP_READY_IDLE_MS);
+    watch.idleTimer = this.timers.set(notReady, this.limits.readyIdleMs);
   }
 
   // ── Running ──
@@ -819,10 +836,7 @@ export class DesignAppServers {
     const watch = entry?.server;
     if (!entry || !watch) return;
     if (view.state === "running") {
-      if (!watch.running && view.outputBytes !== watch.outputBytes) {
-        watch.outputBytes = view.outputBytes;
-        if (watch.settle) this.armIdle(watch);
-      }
+      this.noteOutput(watch, view.outputBytes);
       return;
     }
     if (!watch.running) {
@@ -916,7 +930,16 @@ export class DesignAppServers {
     }
   }
 
+  /** New output while starting restarts the inactivity timer (D8): a slow compile that keeps logging isn't stopped. */
+  private noteOutput(watch: ServerWatch, outputBytes: number | undefined): void {
+    if (watch.running || outputBytes === undefined || outputBytes === watch.outputBytes) return;
+    watch.outputBytes = outputBytes;
+    if (watch.settle) this.armIdle(watch);
+  }
+
   private async checkSockets(entry: Entry, watch: ServerWatch, result: JobSockets): Promise<void> {
+    // Output is no job change event, so each tick reads how much there is.
+    this.noteOutput(watch, this.deps.jobs.getDesign(watch.jobId)?.outputBytes);
     if (!result.ok) {
       // A failed read never marks a server ready; three in a row stop a running one.
       if (watch.running && ++watch.failedReads >= DESIGN_APP_EXPOSURE_FAILURES) await this.halt(entry, { problem: { problem: "exposure-unknown" } });
@@ -980,7 +1003,7 @@ export class DesignAppServers {
         for (const entry of [...this.entries.values()]) {
           if (entry.workspaceId === workspaceId && (entry.attempt || entry.server)) void this.stop(workspaceId, entry.appRoot);
         }
-      }, DESIGN_APP_PRESENCE_GRACE_MS),
+      }, this.limits.graceMs),
     );
   }
 
