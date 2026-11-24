@@ -84,7 +84,11 @@ class FakeServers implements DesignAppToolServers {
 const owner = { id: 7, documentId: "doc-a", kind: "window" as const };
 
 function harness(
-  options: { available?: () => Promise<boolean>; waits?: { consentMs: number; settleMs: number }; permission?: "full" | "ask" | "read-only" | "none" } = {},
+  options: {
+    available?: () => Promise<boolean>;
+    waits?: { consentMs: number; settleMs: number; graceMs?: number };
+    permission?: "full" | "ask" | "read-only" | "none";
+  } = {},
 ) {
   const servers = new FakeServers();
   const tool = createDesignAppTool({
@@ -177,7 +181,7 @@ test("start answers declined with a next line telling Aiden not to ask again", a
 });
 
 test("a start still in consent after the wait returns phase consent with its next line", async () => {
-  const { servers, run } = harness({ waits: { consentMs: 60, settleMs: 30 } });
+  const { servers, run } = harness({ waits: { consentMs: 60, settleMs: 30, graceMs: 10 } });
   servers.answer = (_method, input) =>
     new Promise(() => {
       // The card is open: the service reports consent, and the attempt never settles in time.
@@ -197,6 +201,19 @@ test("a start still in consent after the wait returns phase consent with its nex
   assert.equal(starting.status, "starting");
   assert.equal(starting.next, "It is still starting; check with status in a moment.");
   assert.equal(servers.listening, 0);
+});
+
+test("a card left unanswered answers unanswered: the wait outlasts the card's own time", async () => {
+  const { servers, run } = harness({ waits: { consentMs: 60, settleMs: 30 } });
+  servers.answer = (_method, input) =>
+    new Promise((resolve) => {
+      const appRoot = (input as { appRoot?: string }).appRoot ?? ".";
+      setTimeout(() => servers.push([status({ appRoot, phase: "consent", revision: 2 })]), 5);
+      // The broker times the card out at its own time, a little after the tool armed its wait.
+      setTimeout(() => resolve(status({ appRoot, problem: { problem: "consent-unanswered" } })), 5 + 60 + 15);
+    });
+  const result = await run({ action: "start" });
+  assert.equal(result.status, "unanswered");
 });
 
 test("an aborted turn stops the wait, not the server", async () => {

@@ -29,6 +29,8 @@ export const DESIGN_APP_TOOL_NAME = "design_app";
 export const DESIGN_APP_STARTS_PER_TURN = 4;
 /** After the card, how long a start waits for the attempt to settle. */
 export const DESIGN_APP_SETTLE_MS = 90_000;
+/** How long past the card's own time the wait lasts, so an unanswered card answers unanswered, not consent. */
+export const DESIGN_APP_CONSENT_GRACE_MS = 5_000;
 const LOG_LINES_DEFAULT = 50;
 const LOG_LINES_MAX = 200;
 const LOG_CHARS_MAX = 8_000;
@@ -53,8 +55,8 @@ export interface DesignAppToolDeps {
   /** Design mode is still on in this chat, in the same folder, with access, and the flag is on. */
   stillAvailable(): Promise<boolean>;
   servers: DesignAppToolServers;
-  /** For tests: the card's own time and the settle time after it. */
-  waits?: { consentMs: number; settleMs: number };
+  /** For tests: the card's own time, the settle time after it, and the grace past the card's time. */
+  waits?: { consentMs: number; settleMs: number; graceMs?: number };
 }
 
 type Json = Record<string, unknown>;
@@ -145,7 +147,7 @@ function attemptResult(app: DesignAppStatus): Json {
 
 /**
  * Waits for an attempt the way the person would: while a card for this
- * workspace is open, up to the card's own time; otherwise up to the settle
+ * workspace is open, up to the card's own time and a grace; otherwise up to the settle
  * time since the last change. Ends early with null when the turn is aborted.
  */
 function waitForAttempt(
@@ -153,7 +155,7 @@ function waitForAttempt(
   workspaceId: string,
   appRoot: string | undefined,
   attempt: Promise<DesignAppStatus>,
-  waits: { consentMs: number; settleMs: number },
+  waits: { consentMs: number; settleMs: number; graceMs?: number },
   signal: AbortSignal | undefined,
 ): Promise<{ settled: DesignAppStatus } | { latest: DesignAppStatus | undefined } | null> {
   return new Promise((resolve) => {
@@ -181,7 +183,7 @@ function waitForAttempt(
       if (!moving) return;
       const wasCard = latest?.phase === "consent";
       latest = moving;
-      if (card && !wasCard) arm(waits.consentMs);
+      if (card && !wasCard) arm(waits.consentMs + (waits.graceMs ?? DESIGN_APP_CONSENT_GRACE_MS));
       else if (!card && wasCard) arm(waits.settleMs);
     });
     signal?.addEventListener("abort", aborted, { once: true });
