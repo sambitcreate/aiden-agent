@@ -4,6 +4,8 @@
 // properties, and the client's before_send guard re-checks every payload.
 // Renaming an event or a value breaks dashboards, so treat names as stable.
 
+import { FRAMEWORK_IDS } from "../../../renderer/shared/design-app.js";
+
 export type AnalyticsPropSpec =
   | { readonly kind: "enum"; readonly values: readonly string[]; readonly optional?: true }
   | { readonly kind: "boolean"; readonly optional?: true }
@@ -84,6 +86,13 @@ export const ANALYTICS_EVENTS = {
   design_comments_sent: { count_bucket: enumProp(...COUNT_BUCKETS) },
   design_md_linted: { errors_bucket: enumProp(...COUNT_BUCKETS), warnings_bucket: enumProp(...COUNT_BUCKETS) },
   design_md_drafted: { source: enumProp("app") },
+  // A design-mode dev server's attempt settled (2b): which framework and
+  // package manager, and whether it ran. Never the app's root, script or port.
+  design_app_started: {
+    framework: enumProp(...FRAMEWORK_IDS),
+    manager: optional(enumProp("npm", "pnpm", "yarn", "bun")),
+    outcome: enumProp("running", "crashed", "failed"),
+  },
   // Keep-going goals. `rounds` has its own buckets, up to the 50-round limit,
   // because COUNT_BUCKETS stops at 11+ and can't show how often goals hit 50
   // (the same buckets as `goalRoundBucket` in renderer/shared/goal.ts).

@@ -196,3 +196,39 @@ test("design_md_drafted carries only where the draft came from", async (t) => {
     { event: "design_md_drafted", props: undefined },
   ]);
 });
+
+test("design_app_started is sent with framework, manager and outcome", async (t) => {
+  const events = captureAnalyticsEvents(t);
+  reportAnalyticsEvent("design_app_started", { framework: "vite", manager: "pnpm", outcome: "running" });
+  reportAnalyticsEvent("design_app_started", { framework: "next", manager: "npm", outcome: "crashed" });
+  await analyticsSettled();
+  assert.deepEqual(events, [
+    { event: "design_app_started", props: { framework: "vite", manager: "pnpm", outcome: "running" } },
+    { event: "design_app_started", props: { framework: "next", manager: "npm", outcome: "crashed" } },
+  ]);
+});
+
+test("design_app_started is sent without manager", async (t) => {
+  const events = captureAnalyticsEvents(t);
+  reportAnalyticsEvent("design_app_started", { framework: "astro", outcome: "failed" });
+  await analyticsSettled();
+  assert.deepEqual(events, [{ event: "design_app_started", props: { framework: "astro", outcome: "failed" } }]);
+});
+
+test("design_app_started drops an unknown framework, manager or outcome, and any other property", async (t) => {
+  const events = captureAnalyticsEvents(t);
+  // A framework, manager or outcome outside the registry's lists is never kept.
+  reportAnalyticsEvent("design_app_started", { framework: "my-framework", outcome: "running" } as never);
+  reportAnalyticsEvent("design_app_started", { framework: "vite", manager: "deno", outcome: "running" } as never);
+  reportAnalyticsEvent("design_app_started", { framework: "vite", outcome: "stopped" } as never);
+  // An app root, a script or a port is never sent.
+  reportAnalyticsEvent("design_app_started", { framework: "vite", outcome: "running", appRoot: "apps/web", script: "dev", port: 5173 } as never);
+  await analyticsSettled();
+  assert.deepEqual(events, [
+    // A required property out of its list drops the payload; an optional one drops only itself.
+    { event: "design_app_started", props: undefined },
+    { event: "design_app_started", props: { framework: "vite", outcome: "running" } },
+    { event: "design_app_started", props: undefined },
+    { event: "design_app_started", props: { framework: "vite", outcome: "running" } },
+  ]);
+});

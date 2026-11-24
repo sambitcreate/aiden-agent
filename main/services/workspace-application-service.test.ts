@@ -381,6 +381,35 @@ test("removing a workspace ends the design grants on its folder and no others", 
   assert.notEqual(designGrants.resolve(elsewhere), null);
 });
 
+test("removing a workspace forgets its design apps, and a failure there still deletes the canvas", async (t) => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-workspace-remove-apps-"));
+  t.after(() => fs.rm(root, { recursive: true, force: true }));
+  const canvases = path.join(root, "canvases");
+  const store = new DesignCanvasStore({ root: () => canvases });
+  const views = new DesignCanvasViews({ root: () => path.join(root, "views") });
+  await store.save("workspace-1", emptyDesignCanvas(), 0);
+  const forgotten: string[] = [];
+  const application = fixture();
+  (application.deps as { designCanvas?: unknown }).designCanvas = createDesignWorkspaceCleanup({
+    store,
+    views,
+    apps: { forgetWorkspace: async (workspaceId) => void forgotten.push(workspaceId) },
+  });
+  await application.service.remove("workspace-1");
+  assert.deepEqual(forgotten, ["workspace-1"]);
+
+  await store.save("workspace-1", emptyDesignCanvas(), 0);
+  const failing = fixture();
+  (failing.deps as { designCanvas?: unknown }).designCanvas = createDesignWorkspaceCleanup({
+    store,
+    views,
+    apps: { forgetWorkspace: async () => { throw new Error("stop failed"); } },
+  });
+  await failing.service.remove("workspace-1");
+  assert.ok(failing.events.includes("remove-record"));
+  assert.deepEqual((await fs.readdir(canvases)).filter((name) => name.startsWith("workspace")), []);
+});
+
 test("removing a workspace deletes its design canvas, the copies set aside as corrupt, and its chats' views", async (t) => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-workspace-remove-canvas-"));
   t.after(() => fs.rm(root, { recursive: true, force: true }));

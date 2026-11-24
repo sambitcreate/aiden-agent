@@ -14,6 +14,8 @@ import {
   designModeConsent,
   designAppRoots,
   designMdReader,
+  designAppConsent,
+  designAppServers,
 } from "../services/design-canvas/main.js";
 import { chatApplicationService } from "../services/chat-application-service-main.js";
 import { renderDesignFrame } from "../services/design-canvas/frame-render.js";
@@ -22,6 +24,7 @@ import { generativeUiArtifactStore } from "../services/generative-ui-artifact-st
 import { rendererDocumentOwner } from "../services/renderer-document-owner.js";
 import { designLiveEnabled, designModeEnabled } from "../services/studio/feature-flags.js";
 import { registerDesignCanvasHandlers } from "./design-canvas.js";
+import { createDesignModeCardEnter, registerDesignAppHandlers } from "./design-app.js";
 
 /** Windows whose reload, crash or destruction already unmounts every canvas view. */
 const watchedSenders = new WeakSet<Electron.WebContents>();
@@ -33,19 +36,29 @@ export function registerDesignCanvasIpc(): void {
     designCanvasSnapshots.answer(requestId, dataUrl, rendererDocumentOwner(event, () => new Error("Active renderer required."))),
   );
   // The person's answer on Aiden's "Enter design mode?" card. Enter turns
-  // design mode on the way the Design toggle does, then tells every window.
+  // design mode on the way the Design toggle does, then tells every window;
+  // with the live flag on it also starts the workspace's app for this window.
+  const cardEnter = createDesignModeCardEnter({
+    // Waits for the chat's page, so Aiden's first placement after "entered" lands there.
+    setDesignMode: (chatId) => chatApplicationService.setDesignMode(chatId, true, { rejectFeatureOwned: true, awaitEntry: true }),
+    broadcastEntered: (chatId) => ipcMain.broadcast("chats:design-mode-changed", { chatId, designMode: true }),
+    designApp: { enabled: () => designLiveEnabled(), entered: (input) => designAppServers.designModeEntered(input) },
+  });
   ipcMain.handle("designCanvas:consentAnswer", async (event, requestId: unknown, answer: unknown) => {
     if (!designModeEnabled()) return false;
-    return designModeConsent.answer(
-      requestId,
-      answer,
-      rendererDocumentOwner(event, () => new Error("Active renderer required.")),
-      async (chatId) => {
-        // Waits for the chat's page, so Aiden's first placement after "entered" lands there.
-        await chatApplicationService.setDesignMode(chatId, true, { rejectFeatureOwned: true, awaitEntry: true });
-        ipcMain.broadcast("chats:design-mode-changed", { chatId, designMode: true });
-      },
-    );
+    const owner = rendererDocumentOwner(event, () => new Error("Active renderer required."));
+    return designModeConsent.answer(requestId, answer, owner, cardEnter(owner));
+  });
+  // Design mode's live apps: the person's controls and the run-app card's answer.
+  registerDesignAppHandlers<Electron.IpcMainInvokeEvent>({
+    enabled: () => designLiveEnabled(),
+    handle: (channel, handler) => ipcMain.handle(channel, handler),
+    owner: (event) => rendererDocumentOwner(event, () => new Error("Active renderer required.")),
+    // Index metadata only: these checks never need the transcript.
+    getChat: (chatId) => chatStore.getMeta(chatId),
+    workspace: (workspaceId) => configStore.getWorkspace(workspaceId),
+    servers: designAppServers,
+    consent: designAppConsent,
   });
   registerDesignCanvasHandlers<Electron.IpcMainInvokeEvent>({
     enabled: () => designModeEnabled(),

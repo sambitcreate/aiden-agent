@@ -170,7 +170,14 @@ import { EmptyChatMigrationSnapshotError } from "./services/empty-chat-migration
 import { migrateLegacyEmptyWorkspaceChats } from "./services/empty-chat-migration-main.js";
 import { ensureUserDataDir } from "./services/data-store.js";
 import { piCompactionSessionStore } from "./services/pi-compaction-session-store.js";
-import { designCanvasChatCleanup, designCanvasViews, designWorkspaceCanvasStore, removeDesignCanvasWorkspace } from "./services/design-canvas/main.js";
+import {
+  connectDesignAppJobs,
+  designAppRecoveryDone,
+  designCanvasChatCleanup,
+  designCanvasViews,
+  designWorkspaceCanvasStore,
+  removeDesignCanvasWorkspace,
+} from "./services/design-canvas/main.js";
 import { recoverDeletedChatCanvas } from "./services/design-canvas/cleanup.js";
 import {
   reconcileExternalProviderCredentialChanges,
@@ -225,6 +232,7 @@ import { installElectronConnectorWatchTransport } from "./services/bot-routine-e
 import {
   backgroundJobs,
   checkBacks,
+  onDesignJobChange,
   pullRequestFollows,
   reapFollowThroughProcesses,
   shutdownFollowThrough,
@@ -261,6 +269,10 @@ registerCustomSchemes({ studioAssets: studioAssetsEnabled(), designMode: designM
 // person's own binding or leave a saved `disabled` override behind.
 const studio = studioCapabilities();
 setUnavailableCommandCapabilities((["createImages", "designMode"] as const).filter((capability) => !studio[capability]));
+
+// Design mode's live apps run as background jobs; llm-client loads
+// follow-through lazily, so main connects the two here instead of an import.
+connectDesignAppJobs({ jobs: backgroundJobs, onJobChange: onDesignJobChange });
 
 const ownsSingleInstanceLock = app.requestSingleInstanceLock();
 
@@ -2586,6 +2598,8 @@ if (!ownsSingleInstanceLock) {
         logger.warn("background-jobs", "Could not finish recovery of prior-session processes.", error);
         return false;
       });
+      // Design apps start only once the last session's leftovers are reaped.
+      designAppRecoveryDone(processRecoveryReady);
       await reconcilePendingChatDeletions(subagentRunStore, async (chatId) => {
         await toolOutputStore.deleteByChat(chatId);
         if (displayImageArtifactAvailability.available) {

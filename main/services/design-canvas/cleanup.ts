@@ -111,11 +111,17 @@ export interface DesignWorkspaceCleanup {
 export function createDesignWorkspaceCleanup(deps: {
   store: Pick<DesignCanvasStore, "delete">;
   views: Pick<DesignCanvasViews, "removeWorkspace">;
+  /** Design mode's live apps: stops the workspace's dev servers and forgets their records. */
+  apps?: { forgetWorkspace(workspaceId: string): Promise<void> };
 }): DesignWorkspaceCleanup {
   return {
     async removeWorkspace(workspaceId) {
+      // The servers stop while the canvas goes; a failure to stop one never keeps the canvas.
+      const forgotten = deps.apps ? deps.apps.forgetWorkspace(workspaceId).then(() => undefined, (error: unknown) => error) : undefined;
       await deps.views.removeWorkspace(workspaceId);
       await deps.store.delete(workspaceId);
+      const failure = await forgotten;
+      if (failure !== undefined) throw failure;
     },
   };
 }
