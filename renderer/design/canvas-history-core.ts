@@ -1,7 +1,7 @@
 // Undo and redo for the design canvas: whole documents, newest last. Pure, so
 // the hook can keep the history in React state and tests need no DOM.
 
-import type { DesignCanvas, DesignPage } from "../shared/design-canvas/schema";
+import { DESIGN_CANVAS_LIMITS, type DesignCanvas, type DesignPage } from "../shared/design-canvas/schema";
 
 export interface CanvasHistory {
   past: DesignCanvas[];
@@ -121,9 +121,11 @@ export function changesBetween(
   const claimEdit = claimChanges(from.chatPages, to.chatPages);
   return (doc) => {
     if (doc === from) return to;
-    const frames = frameEdit(doc.frames);
     const pages = pageEdit(doc.pages);
     const pageIds = new Set(pages.map((page) => page.id));
+    // A frame left on a page that is gone goes with it, as comments do.
+    const edited = frameEdit(doc.frames);
+    const frames = edited.every((frame) => pageIds.has(frame.pageId)) ? edited : edited.filter((frame) => pageIds.has(frame.pageId));
     const chatPages = claimEdit(doc.chatPages, pageIds, pages[0]!.id);
     const framePages = new Map(frames.map((frame) => [frame.id, frame.pageId]));
     const comments = commentEdit(doc.comments).flatMap((comment) => {
@@ -140,9 +142,10 @@ export function changesBetween(
  * The page edit that turns `from` into `to`, run on another page list: the
  * pages `to` removed go, renames and `namedFor` changes apply, a page `to`
  * added goes after the nearest page before it in `to` that is there (first
- * when none is), and pages only the other list has stay. When the edit
- * reordered pages, the pages both lists share take `to`'s order among the
- * places they hold.
+ * when none is), and pages only the other list has stay. A page's name and
+ * `namedFor` each change only when the edit changed that field. When the
+ * edit reordered pages, the pages both lists share take `to`'s order among
+ * the places they hold. Past the page limit, pages `to` lacks are dropped.
  */
 function pageChanges(from: readonly DesignPage[], to: readonly DesignPage[]): (pages: readonly DesignPage[]) => DesignPage[] {
   const before = new Map(from.map((page) => [page.id, page]));
@@ -150,14 +153,20 @@ function pageChanges(from: readonly DesignPage[], to: readonly DesignPage[]): (p
   const sharedOrder = (list: readonly DesignPage[]) =>
     list.filter((page) => before.has(page.id) && after.has(page.id)).map((page) => page.id);
   const reordered = sharedOrder(from).join("\n") !== sharedOrder(to).join("\n");
-  const differs = (a: DesignPage, b: DesignPage) => a.name !== b.name || a.namedFor !== b.namedFor;
   return (pages) => {
     let next = pages.flatMap((page): DesignPage[] => {
       const was = before.get(page.id);
       if (!was) return [page];
       const now = after.get(page.id);
       if (!now) return [];
-      return [differs(was, now) ? now : page];
+      // Each field the edit changed, and only those, so a step's own rename stays.
+      let changed = page;
+      if (was.name !== now.name) changed = { ...changed, name: now.name };
+      if (was.namedFor !== now.namedFor) {
+        const { namedFor: _namedFor, ...rest } = changed;
+        changed = now.namedFor === undefined ? rest : { ...rest, namedFor: now.namedFor };
+      }
+      return [changed];
     });
     if (reordered) {
       const order = new Map(to.map((page, index) => [page.id, index]));
@@ -177,6 +186,12 @@ function pageChanges(from: readonly DesignPage[], to: readonly DesignPage[]): (p
         }
       }
       next = [...next.slice(0, place), page, ...next.slice(place)];
+    }
+    // Past the page limit, pages only the step has go first, newest first, so
+    // parsing never drops a page someone else added.
+    const inTo = new Set(to.map((page) => page.id));
+    for (let at = next.length - 1; at >= 0 && next.length > DESIGN_CANVAS_LIMITS.pages; at -= 1) {
+      if (!inTo.has(next[at]!.id)) next = [...next.slice(0, at), ...next.slice(at + 1)];
     }
     return next.length > 0 ? next : [...to];
   };

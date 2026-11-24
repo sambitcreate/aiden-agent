@@ -168,7 +168,7 @@ So `canvas_page`'s by-name lookup stays unambiguous for pages Aiden names. Pages
   - `renamePage` (the picker's Rename and Aiden's `canvas_page rename`) clears `namedFor`.
   - Chat delete clears it; moving the chat clears it or deletes the page (Task 9).
   - `duplicatePage` and `appendCanvasPages` never copy it.
-- **Brought back.** A page an undo brings back can keep `namedFor` for a chat deleted since. That is harmless: no title change ever comes for that chat.
+- **Brought back.** A page an undo brings back keeps `namedFor` only for a chat that is live in this workspace: `DesignChatCanvases.save` asks `chatIsLive` for the chats the saved pages are named for before it waits on the store's chain, and passes the answer to the merge.
 - **Not the claim.** It follows `namedFor`, not the claim, so a chat that used another page still renames the page made for it.
 
 **D7. View page versus claimed page.**

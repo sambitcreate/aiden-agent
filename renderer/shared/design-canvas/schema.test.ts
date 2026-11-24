@@ -137,7 +137,8 @@ test("caps pages at 200, frames at 4000 and comments at 2000", () => {
   assert.equal(many.doc.frames.filter((entry) => entry.pageId === "p10").length, 0, "the eleventh page has no room left");
   assert.equal(many.doc.frames.filter((entry) => entry.pageId === "p9").length, 400);
   assert.equal(many.doc.comments.length, 2000);
-  assert.equal(many.dropped, 400 + 5);
+  // Five pages, 400 frames and five comments past the limits.
+  assert.equal(many.dropped, 5 + 400 + 5);
 });
 
 test("a groupId naming a missing group is removed but the frame stays", () => {

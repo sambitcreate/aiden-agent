@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { emptyDesignCanvas, type DesignCanvas } from "../shared/design-canvas/schema";
+import { DESIGN_CANVAS_LIMITS, emptyDesignCanvas, type DesignCanvas } from "../shared/design-canvas/schema";
 import { addPage, deletePage, movePage, renamePage } from "../shared/design-canvas/pages";
 import { changesBetween, keepUnchanged, record, redo, takeIn, undo, type CanvasHistory } from "./canvas-history-core";
 
@@ -188,3 +188,41 @@ test("a fetched canvas keeps the objects of frames that did not change, so undo 
   const carried = changesBetween(local, merged)(withFrames(note("a", 50), note("b")));
   assert.deepEqual(carried.frames.map((frame) => [frame.id, frame.x]), [["a", 50], ["b", 300]]);
 });
+
+test("a carry that only drops namedFor keeps the rename a redo step holds", () => {
+  const base: DesignCanvas = { ...emptyDesignCanvas(), pages: [{ id: "page-1", name: "Page 1" }, { id: "P", name: "Chat A", namedFor: "chat-a" }] };
+  const renamed = renamePage(base, "P", "Bar");
+  const back = undo(record(fresh, base), renamed)!;
+  // The undo's save answers that the store keeps no namedFor on P.
+  const stored: DesignCanvas = { ...base, pages: [base.pages[0]!, { id: "P", name: "Chat A" }] };
+  const history = takeIn(back.history, { before: back.doc, from: back.doc, to: stored });
+  const forward = redo(history, stored)!;
+  assert.deepEqual(forward.doc.pages[1], { id: "P", name: "Bar" });
+});
+
+test("a carry never takes a step past the page limit: pages only the step has go first", () => {
+  let full: DesignCanvas = emptyDesignCanvas();
+  for (let index = 2; index <= DESIGN_CANVAS_LIMITS.pages; index += 1) full = addPage(full, `p${index}`, `P${index}`);
+  const deleted = deletePage(full, "p100");
+  let history = record(fresh, full);
+  // Another chat's reply adds R and makes it that chat's page.
+  const other: DesignCanvas = { ...addPage(deleted, "R", "Roadmap"), chatPages: { "chat-b": "R" } };
+  history = takeIn(history, { before: deleted, from: deleted, to: keepUnchanged(deleted, other) });
+  const back = undo(history, other)!;
+  assert.equal(back.doc.pages.length, DESIGN_CANVAS_LIMITS.pages);
+  assert.ok(back.doc.pages.some((page) => page.id === "R"), "the other chat's page survives the undo");
+  assert.equal(back.doc.chatPages["chat-b"], "R");
+});
+
+test("a frame only an older step has, on a page another writer deleted, does not come back on another page", () => {
+  const two = addPage(emptyDesignCanvas(), "Q", "Q");
+  const withG: DesignCanvas = { ...two, frames: [{ ...note("G"), pageId: "Q" }] };
+  const withoutG: DesignCanvas = { ...two, frames: [] };
+  let history = record(fresh, withG);
+  const other = deletePage(withoutG, "Q");
+  history = takeIn(history, { before: withoutG, from: withoutG, to: keepUnchanged(withoutG, other) });
+  const back = undo(history, other)!;
+  assert.deepEqual(back.doc.pages.map((page) => page.id), ["page-1"]);
+  assert.deepEqual(back.doc.frames, []);
+});
+

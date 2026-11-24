@@ -31,6 +31,10 @@ export const designCanvasStore = new DesignChatCanvases({
     return meta ? persistedChatWorkspaceId(meta.workspaceId) : null;
   },
   workspaceExists: async (workspaceId) => (await configStore.getWorkspace(workspaceId)) !== undefined,
+  chatIsLive: async (chatId, workspaceId) => {
+    const meta = await chatStore.getMeta(chatId);
+    return meta !== null && persistedChatWorkspaceId(meta.workspaceId) === workspaceId;
+  },
 });
 
 /**

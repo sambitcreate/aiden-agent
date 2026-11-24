@@ -128,7 +128,12 @@ export class DesignCanvasStore {
     workspaceId: string,
     doc: DesignCanvas,
     baseRevision: number,
-    options: { undone?: readonly string[]; beforeWrite?: () => Promise<void> | void } = {},
+    options: {
+      undone?: readonly string[];
+      beforeWrite?: () => Promise<void> | void;
+      /** Whether a chat is live in this workspace; a page brought back keeps `namedFor` only for one. */
+      isLive?: (chatId: string) => boolean;
+    } = {},
   ): Promise<DesignCanvasSaveResult> {
     assertDesignCanvasWorkspaceId(workspaceId);
     if (!Number.isSafeInteger(baseRevision) || baseRevision < 0) {
@@ -146,7 +151,7 @@ export class DesignCanvasStore {
       const current = await this.read(workspaceId);
       if (current.revision !== baseRevision) return { ok: false, reason: "conflict", doc: current };
       const revision = baseRevision + 1;
-      const merged = mergeSavedChatPages(current, parsed.doc, this.deletedOf(workspaceId));
+      const merged = mergeSavedChatPages(current, parsed.doc, this.deletedOf(workspaceId), options.isLive);
       // A save comes from the person's canvas: a page they took off is remembered,
       // unless it was their undo that took it off.
       const doc = withRemovedPagePaths(current, { ...merged.doc, revision }, true, new Set(options.undone ?? []));
@@ -155,7 +160,7 @@ export class DesignCanvasStore {
       await options.beforeWrite?.();
       await this.write(workspaceId, doc);
       this.forgetRestored(workspaceId, merged.restored);
-      this.remember(workspaceId, merged.deletedNow);
+      this.remember(workspaceId, removedPageIds(current, doc), merged.deletedNow);
       if (!merged.changed) return { ok: true, revision };
       const namedFor = Object.fromEntries(
         doc.pages.flatMap((page) => (page.namedFor !== undefined ? [[page.id, page.namedFor]] : [])),
@@ -187,7 +192,7 @@ export class DesignCanvasStore {
       if (this.tooLarge(doc)) throw new Error("The canvas is too large to save.");
       await options.beforeWrite?.();
       await this.write(workspaceId, doc);
-      this.remember(workspaceId, deletedClaims(current, doc));
+      this.remember(workspaceId, removedPageIds(current, doc), deletedClaims(current, doc));
       return doc;
     });
   }
@@ -196,7 +201,6 @@ export class DesignCanvasStore {
   async delete(workspaceId: string): Promise<void> {
     assertDesignCanvasWorkspaceId(workspaceId);
     return this.serialize(workspaceId, async () => {
-      this.deletedPages.delete(workspaceId);
       await fs.rm(this.file(workspaceId), { force: true });
       const prefix = `${workspaceId}.json.corrupt-`;
       const names = await fs.readdir(this.root()).catch((error: unknown) => {
@@ -206,6 +210,8 @@ export class DesignCanvasStore {
       for (const name of names) {
         if (name.startsWith(prefix)) await fs.rm(path.join(this.root(), name), { force: true });
       }
+      // Only once the files are gone: a delete that fails leaves the canvas, so undo still needs the record.
+      this.deletedPages.delete(workspaceId);
     });
   }
 
@@ -213,10 +219,17 @@ export class DesignCanvasStore {
     return this.deletedPages.get(workspaceId) ?? new Map();
   }
 
-  /** Records pages a write deleted. A new delete of a page id replaces what an older one recorded. */
-  private remember(workspaceId: string, deleted: ReadonlyMap<string, DeletedPage>): void {
-    if (deleted.size === 0) return;
+  /**
+   * Records pages a write deleted. Every page it removed forgets what an older
+   * delete of that id recorded, even when this delete had nothing to record.
+   */
+  private remember(workspaceId: string, removed: readonly string[], deleted: ReadonlyMap<string, DeletedPage>): void {
     let record = this.deletedPages.get(workspaceId);
+    if (record) for (const pageId of removed) record.delete(pageId);
+    if (deleted.size === 0) {
+      if (record?.size === 0) this.deletedPages.delete(workspaceId);
+      return;
+    }
     if (!record) this.deletedPages.set(workspaceId, (record = new Map()));
     for (const [pageId, entry] of deleted) {
       record.delete(pageId);
@@ -339,6 +352,12 @@ export class DesignCanvasStore {
   }
 }
 
+/** The ids of the pages `before` has and `after` does not. */
+function removedPageIds(before: DesignCanvas, after: DesignCanvas): string[] {
+  const kept = new Set(after.pages.map((page) => page.id));
+  return before.pages.filter((page) => !kept.has(page.id)).map((page) => page.id);
+}
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
@@ -362,6 +381,7 @@ export class DesignChatCanvases {
   private readonly store: Pick<DesignCanvasStore, "get" | "save" | "update">;
   private readonly resolveWorkspace: (chatId: string) => Promise<string | null>;
   private readonly workspaceExists: ((workspaceId: string) => Promise<boolean>) | undefined;
+  private readonly chatIsLive: ((chatId: string, workspaceId: string) => Promise<boolean>) | undefined;
 
   constructor(options: {
     store: Pick<DesignCanvasStore, "get" | "save" | "update">;
@@ -374,10 +394,18 @@ export class DesignChatCanvases {
      * and one queued after finds the record gone and writes nothing.
      */
     workspaceExists?(workspaceId: string): Promise<boolean>;
+    /**
+     * Whether the chat still exists and is in that workspace. A save asks it
+     * for the chats its pages are named for, before it waits on the
+     * workspace's chain, so a page an undo brings back follows only a live
+     * chat. Left out, every chat counts as live.
+     */
+    chatIsLive?(chatId: string, workspaceId: string): Promise<boolean>;
   }) {
     this.store = options.store;
     this.resolveWorkspace = options.workspaceIdOf;
     this.workspaceExists = options.workspaceExists;
+    this.chatIsLive = options.chatIsLive;
   }
 
   /** The chat's workspace id, or null when the chat is gone. */
@@ -398,9 +426,11 @@ export class DesignChatCanvases {
     options: { undone?: readonly string[]; workspaceId?: string } = {},
   ): Promise<DesignChatCanvasSave> {
     const workspaceId = await this.workspaceFor(chatId, options.workspaceId);
+    const isLive = await this.livenessOf(doc, workspaceId);
     const result = await this.store.save(workspaceId, doc, baseRevision, {
       ...(options.undone ? { undone: options.undone } : {}),
       beforeWrite: () => this.assertWorkspaceExists(workspaceId),
+      ...(isLive ? { isLive } : {}),
     });
     return { result, workspaceId };
   }
@@ -419,6 +449,20 @@ export class DesignChatCanvases {
       },
     });
     return { doc, workspaceId };
+  }
+
+  /** Which of the chats `doc`'s pages are named for are live in the workspace, as a synchronous check. */
+  private async livenessOf(doc: DesignCanvas, workspaceId: string): Promise<((chatId: string) => boolean) | undefined> {
+    const ask = this.chatIsLive;
+    if (!ask || !isRecord(doc) || !Array.isArray(doc.pages)) return undefined;
+    const named = new Set<string>();
+    for (const page of doc.pages as unknown[]) {
+      const namedFor = isRecord(page) ? page.namedFor : undefined;
+      if (isDesignChatId(namedFor)) named.add(namedFor);
+    }
+    const live = new Map<string, boolean>();
+    await Promise.all([...named].map(async (chatId) => live.set(chatId, await ask(chatId, workspaceId))));
+    return (chatId) => live.get(chatId) ?? true;
   }
 
   private async workspaceFor(chatId: string, given: string | undefined): Promise<string> {

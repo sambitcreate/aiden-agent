@@ -261,10 +261,10 @@ function createCanvasSync(
           if (result.chatPages) {
             // The store kept its own chats' pages over what was sent: show those, and
             // carry them into every kept step, so no undo brings the sent ones back.
-            const storedClaims = (target: DesignCanvas) => applyStoredClaims(target, result.chatPages!, result.namedFor);
+            // Newer edits take only what the store changed, so a later undo or rename stays.
             const before = local ?? doc;
-            server = storedClaims(server);
-            local = local === doc ? server : storedClaims(before);
+            server = applyStoredClaims(server, result.chatPages, result.namedFor);
+            local = changesBetween(doc, server)(before);
             const change = { before, from: doc, to: server };
             if (unsettled) noteChange({ takenIn: change });
             history = takeIn(history, change);

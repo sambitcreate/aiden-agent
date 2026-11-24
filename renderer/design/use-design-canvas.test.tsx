@@ -3,6 +3,7 @@ import { emitBotTestNotification, installBotTestIpc, type BotTestIpcCall } from 
 import assert from "node:assert/strict";
 import { afterEach, beforeEach, mock, test } from "node:test";
 import { act, cleanup, render } from "@testing-library/react";
+import { deletePage, renamePage } from "../shared/design-canvas/pages";
 import { emptyDesignCanvas, type DesignCanvas, type DesignFrame } from "../shared/design-canvas/schema";
 import { DESIGN_CANVAS_CLOSED_RETRY_MS, useDesignCanvas } from "./use-design-canvas";
 
@@ -29,7 +30,7 @@ const ids = (doc: DesignCanvas | undefined) => doc?.frames.map((frame) => frame.
 
 let calls: BotTestIpcCall[];
 let stored: DesignCanvas;
-let saveReplies: Array<(doc: DesignCanvas, base: number) => SaveReply>;
+let saveReplies: Array<(doc: DesignCanvas, base: number) => SaveReply | Promise<SaveReply>>;
 let controller: Controller;
 let movedTo: string[];
 
@@ -427,6 +428,66 @@ test("undoing a turn that used a page keeps the picker on the stored claim", asy
   assert.deepEqual(controller.doc?.chatPages, { "chat-1": "p2" });
   await tick(800);
   assert.deepEqual(stored.chatPages, { "chat-1": "p2" });
+});
+
+/** A save reply that answers only once `release` is called, as a save still on its way. */
+function heldReply(answer: (doc: DesignCanvas, base: number) => SaveReply) {
+  let release!: () => void;
+  const gate = new Promise<void>((resolve) => (release = resolve));
+  saveReplies.push(async (doc, base) => {
+    await gate;
+    return answer(doc, base);
+  });
+  return () => act(async () => release());
+}
+
+test("a save's stored claims do not undo a second undo made while that save was on its way", async () => {
+  stored = {
+    ...canvas(4, note("a")),
+    pages: [{ id: "page-1", name: "Page 1" }, { id: "p", name: "P" }, { id: "pa", name: "Pa" }],
+    chatPages: { "chat-1": "pa", "chat-b": "p" },
+  };
+  await mount();
+  // The person deletes P, chat-b's page; chat-b moves to Page 1.
+  await act(async () => controller.change((doc) => deletePage(doc, "p")));
+  await tick(800);
+  // This chat's reply makes Page 1 its page.
+  await aidenSaves({ ...stored, revision: 6, chatPages: { "chat-1": "page-1", "chat-b": "page-1" } }, "reply-1");
+
+  // Undoing the reply sends chat-1 back to Pa; the store keeps its claim on Page 1.
+  const release = heldReply((doc, base) => {
+    stored = { ...doc, revision: base + 1, chatPages: { "chat-1": "page-1", "chat-b": "page-1" } };
+    return { ok: true, revision: stored.revision, chatPages: { "chat-1": "page-1", "chat-b": "page-1" }, namedFor: {} };
+  });
+  await act(async () => controller.undo());
+  await tick(800);
+  // Before that save answers, the person undoes the delete: P is back with chat-b on it.
+  await act(async () => controller.undo());
+  assert.equal(controller.doc?.chatPages["chat-b"], "p");
+  await release();
+  await settle();
+  assert.deepEqual(controller.doc?.chatPages, { "chat-1": "page-1", "chat-b": "p" }, "only what the store changed is applied");
+  assert.ok(controller.doc?.pages.some((page) => page.id === "p"));
+});
+
+test("a page renamed while a save was on its way keeps the person's name and does not follow its chat again", async () => {
+  stored = {
+    ...canvas(4, note("a")),
+    pages: [{ id: "page-1", name: "Page 1" }, { id: "P", name: "Chat A", namedFor: "chat-a" }],
+    chatPages: { "chat-a": "page-1" },
+  };
+  await mount();
+  const release = heldReply((doc, base) => {
+    stored = { ...doc, revision: base + 1, chatPages: { "chat-a": "P" } };
+    return { ok: true, revision: stored.revision, chatPages: { "chat-a": "P" }, namedFor: { P: "chat-a" } };
+  });
+  await act(async () => controller.change(moveTo("a", 50)));
+  await tick(800);
+  await act(async () => controller.change((doc) => renamePage(doc, "P", "Bar")));
+  await release();
+  await settle();
+  assert.deepEqual(controller.doc?.pages[1], { id: "P", name: "Bar" });
+  assert.equal(controller.doc?.chatPages["chat-a"], "P");
 });
 
 test("a reply's change the canvas fetched before hearing whose it was still undoes with the rest of that reply", async () => {

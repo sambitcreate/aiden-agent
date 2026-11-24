@@ -374,8 +374,8 @@ export function parseDesignCanvas(value: unknown): DesignCanvasParseResult {
   if (!Array.isArray(value.comments)) issues.push("The canvas comments are not a list.");
   if (issues.length > 0) return { ok: false, issues };
 
-  let dropped = 0;
-  const pages = parsePages(value.pages);
+  const { pages, dropped: droppedPages } = parsePages(value.pages);
+  let dropped = droppedPages;
   const pageIds = new Set(pages.map((page) => page.id));
   const firstPageId = pages[0]!.id;
   const pageOf = (raw: unknown) => {
@@ -488,24 +488,28 @@ export function withRemovedPagePaths<T extends DesignCanvas>(
   return (removedPagePaths.length > 0 ? { ...rest, removedPagePaths } : rest) as T;
 }
 
-/** The pages of a document; never empty, and ids are unique. */
-function parsePages(value: unknown): DesignPage[] {
+/** The pages of a document; never empty, and ids are unique. `dropped` counts pages past the limit. */
+function parsePages(value: unknown): { pages: DesignPage[]; dropped: number } {
   const pages: DesignPage[] = [];
   const ids = new Set<string>();
+  let dropped = 0;
   if (Array.isArray(value)) {
     for (const raw of value) {
-      if (pages.length >= DESIGN_CANVAS_LIMITS.pages) break;
       if (!isRecord(raw)) continue;
       const id = identifier(raw.id);
       if (!id || ids.has(id)) continue;
       ids.add(id);
+      if (pages.length >= DESIGN_CANVAS_LIMITS.pages) {
+        dropped += 1;
+        continue;
+      }
       const page: DesignPage = { id, name: pageName(raw.name, pages.length) };
       if (isDesignChatId(raw.namedFor)) page.namedFor = raw.namedFor;
       pages.push(page);
     }
   }
   if (pages.length === 0) pages.push({ id: DESIGN_FIRST_PAGE_ID, name: "Page 1" });
-  return pages;
+  return { pages, dropped };
 }
 
 function pageName(value: unknown, index: number): string {

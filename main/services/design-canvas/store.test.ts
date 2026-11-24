@@ -423,7 +423,7 @@ async function claimedStore(t: TestContext, ids: string[], chatPages: Record<str
     for (const id of ids) next = addPage(next, id, id);
     return { ...next, chatPages };
   });
-  return { store: real, doc };
+  return { store: real, doc, root };
 }
 
 async function saveOk(store: DesignCanvasStore, doc: DesignCanvas, options: Parameters<DesignCanvasStore["save"]>[3] = {}) {
@@ -556,4 +556,61 @@ test("deleting the same page id twice and undoing restores the claims of the new
   // An undo that claims all three on P2 restores C only: B moved since, and D was not on P2 at this delete.
   await saveOk(store, { ...original, chatPages: { B: "P2", C: "P2", D: "P2" } });
   assert.deepEqual((await store.get("ws-1")).chatPages, { B: "P3", C: "P2", D: "page-1" });
+});
+
+test("a page deleted again with no one on it replaces the older delete's record, so its undo brings no one back", async (t) => {
+  const { store, doc: original } = await claimedStore(t, ["P2", "P3"], { D: "P2" });
+  // The first delete records D on P2.
+  await saveOk(store, deletePage(original, "P2"));
+  // D uses P3, and P2 comes back without D.
+  await store.update("ws-1", (current) => ({ ...current, chatPages: { D: "P3" } }));
+  await saveOk(store, { ...original, chatPages: { D: "P3" } });
+  // P3 goes, so D is back on Page 1, where the first delete moved it.
+  const before = await store.update("ws-1", (current) => deletePage(current, "P3"));
+  assert.deepEqual(before.chatPages, { D: "page-1" });
+  // The second delete of P2 has no one on it; undoing it with D on P2 brings no one back.
+  await saveOk(store, deletePage(before, "P2"));
+  await saveOk(store, { ...before, chatPages: { D: "P2" } });
+  assert.deepEqual((await store.get("ws-1")).chatPages, { D: "page-1" });
+});
+
+test("a workspace delete that fails keeps the delete record", async (t) => {
+  const { store, doc: before, root } = await claimedStore(t, ["P2"], { B: "P2" });
+  const afterDelete = await store.update("ws-1", (current) => deletePage(current, "P2"));
+  // The canvas path is a folder with something in it, so removing it fails.
+  await fs.rm(path.join(root, "ws-1.json"));
+  await fs.mkdir(path.join(root, "ws-1.json"));
+  await fs.writeFile(path.join(root, "ws-1.json", "x"), "");
+  await assert.rejects(store.delete("ws-1"));
+  await fs.rm(path.join(root, "ws-1.json"), { recursive: true });
+  await writeJsonAtomic(path.join(root, "ws-1.json"), afterDelete);
+  // The undo of the page delete still brings B back.
+  await saveOk(store, before);
+  assert.deepEqual((await store.get("ws-1")).chatPages, { B: "P2" });
+});
+
+test("undoing the delete of a page made for a chat that has since moved does not bring back its namedFor", async (t) => {
+  const root = await tempRoot(t);
+  const store = new DesignCanvasStore({ root: () => root });
+  const asked: [string, string][] = [];
+  const chats = new DesignChatCanvases({
+    store,
+    workspaceIdOf: async () => "ws-1",
+    chatIsLive: async (chatId, workspaceId) => {
+      asked.push([chatId, workspaceId]);
+      return chatId !== "A";
+    },
+  });
+  const before = await store.update("ws-1", (current) => addChatPage(addChatPage(current, "A", "Landing", "pa"), "C", "Other", "pc"));
+  const afterDelete = deletePage(deletePage(before, "pa"), "pc");
+  await chats.save("chat-x", afterDelete, before.revision);
+  // A moved away and C stayed; the person undoes both deletes.
+  await store.update("ws-1", (current) => ({ ...current, chatPages: { C: "page-1" } }));
+  const current = await store.get("ws-1");
+  const { result } = await chats.save("chat-x", { ...before, chatPages: { C: "page-1" } }, current.revision);
+  assert.equal(result.ok, true);
+  const stored = await store.get("ws-1");
+  assert.deepEqual(stored.pages.find((page) => page.id === "pa"), { id: "pa", name: "Landing" });
+  assert.equal(stored.pages.find((page) => page.id === "pc")?.namedFor, "C");
+  assert.ok(asked.some(([chatId, workspaceId]) => chatId === "A" && workspaceId === "ws-1"));
 });

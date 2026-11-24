@@ -43,7 +43,12 @@ export interface DesignViewHandle {
 type State = {
   loaded: boolean;
   pageId: string | undefined;
-  /** Pages shown before this one, newest first, so undoing a page's creation goes back to where the person was. */
+  /**
+   * Pages shown before this one, newest first. When the page on screen goes
+   * and the chat has no page of its own that exists, the canvas goes back to
+   * the newest of these, so undoing a page's creation returns to where the
+   * person was.
+   */
   earlier: readonly string[];
   viewports: Readonly<Record<string, DesignViewport>>;
 };
@@ -140,11 +145,7 @@ export function useDesignView(workspaceId: string, chatId: string, doc: DesignCa
     };
   }, [chatId, workspaceId, send]);
 
-  // Once loaded, main hears the canvas is open, and what it shows.
   const hasDoc = doc !== undefined;
-  React.useEffect(() => {
-    if (state.loaded && hasDoc) schedule();
-  }, [state.loaded, hasDoc, schedule]);
 
   const showPage = React.useCallback(
     (pageId: string) => {
@@ -190,12 +191,12 @@ export function useDesignView(workspaceId: string, chatId: string, doc: DesignCa
   );
 
   const pageId = doc ? shownPageId(doc, state, chatId) : (state.pageId ?? "");
-  // A fallback page (the view's page is gone, or there was none) is told to
-  // main, so its kept view matches what is on screen.
-  const fallback = state.loaded && doc !== undefined && pageId !== state.pageId;
+  // Once loaded, main hears the canvas is open and what it shows, and again
+  // whenever the page on screen changes (a fallback, or the view's page coming
+  // back), so its kept view matches the screen.
   React.useEffect(() => {
-    if (fallback) schedule();
-  }, [fallback, pageId, schedule]);
+    if (state.loaded && hasDoc) schedule();
+  }, [state.loaded, hasDoc, pageId, schedule]);
   return {
     loaded: state.loaded,
     pageId,

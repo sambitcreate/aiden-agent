@@ -197,3 +197,21 @@ test("a fallback page is reported to main", async () => {
   ]);
 });
 
+test("when the view's page comes back after a fallback was reported, main hears the page on screen again", async () => {
+  kept = { pageId: "p2", viewport: { x: 0, y: 0, zoom: 1 }, focusId: 0, viewports: {} };
+  const claimed: DesignCanvas = { ...doc, chatPages: { "chat-1": "p3" } };
+  const shown = render(<Probe canvas={claimed} />);
+  await settle();
+  await tick(DESIGN_VIEW_REPORT_DELAY_MS);
+  shown.rerender(<Probe canvas={{ ...claimed, pages: claimed.pages.filter((page) => page.id !== "p2") }} />);
+  await settle();
+  await tick(DESIGN_VIEW_REPORT_DELAY_MS);
+  assert.equal((lastReport()?.[1] as { view: { pageId: string } }).view.pageId, "p3");
+  // An undo elsewhere brings p2 back.
+  shown.rerender(<Probe canvas={claimed} />);
+  await settle();
+  await tick(DESIGN_VIEW_REPORT_DELAY_MS);
+  assert.equal(view.pageId, "p2");
+  assert.equal((lastReport()?.[1] as { view: { pageId: string } }).view.pageId, "p2");
+});
+
