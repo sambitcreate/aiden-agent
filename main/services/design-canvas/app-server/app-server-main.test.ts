@@ -2054,6 +2054,46 @@ test("a root with both url and script attaches and never spawns; a urlRefused ro
   assert.equal(refused.jobs.jobs.length, 0);
 });
 
+test("choose on a url root is refused with not-web, shows no card, saves nothing and spawns nothing", async (t) => {
+  const h = harness(t, { apps: [webApp()], config: { version: 1, apps: [{ root: ".", url: "http://localhost:5173" }] } });
+  const status = await h.servers.choose({ ...h.input(), appRoot: ".", script: "dev" });
+  assert.deepEqual(status.problem, { problem: "not-web" });
+  assert.equal(h.cards().length, 0, "no launch card, nor any other");
+  assert.deepEqual(h.state.saved, []);
+  assert.equal(h.jobs.jobs.length, 0);
+});
+
+test("a Stop pressed while connect's check runs wins: nothing attaches", async (t) => {
+  for (const before of ["no entry yet", "an earlier attachment"] as const) {
+    const h = harness(t);
+    if (before === "an earlier attachment") {
+      await h.connect();
+      await h.servers.stop("ws", ".");
+    }
+    const changes = h.origins.changes;
+    let stopping: Promise<unknown> | undefined;
+    h.attachState.check = (input) => {
+      stopping ??= h.servers.stop("ws", ".");
+      const { port: _port, ...rest } = h.holder;
+      return input.port === h.holder.port ? { ok: true, ...rest, held: [...rest.held] } : { ok: false, problem: "attach-unreachable" };
+    };
+    const status = await h.connect();
+    await stopping;
+    assert.notEqual(status.phase, "running", before);
+    assert.equal(h.servers.appForOrigin("http://127.0.0.1:5173"), undefined, before);
+    assert.equal(h.origins.changes, changes, `${before}: no origin was served`);
+  }
+});
+
+test("connect refuses a pick whose folder was cut for display, and registers nothing", async (t) => {
+  const h = harness(t);
+  h.attachState.check = () => ({ ok: true, pid: 300, ppid: 30, origin: "http://127.0.0.1:5173", held: ["127.0.0.1"], processName: "vite", folder: `${"a".repeat(199)}…` });
+  const status = await h.connect();
+  assert.deepEqual(status.problem, { problem: "attach-not-in-app" });
+  assert.equal(h.servers.isAppOrigin("http://127.0.0.1:5173"), false);
+  assert.equal(h.origins.changes, 0);
+});
+
 // ── 2c: Retry (D5) ──
 
 test("retry after install-failed clears the toolchain cache once and restarts with an install", async (t) => {

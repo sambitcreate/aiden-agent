@@ -314,6 +314,9 @@ function runnable(workspace: DesignWorkspace | undefined): workspace is DesignWo
 
 export class DesignAppServers {
   private readonly entries = new Map<string, Entry>();
+  /** Every stop() counts here, by key, even for a root with no entry yet, so connect can tell one landed during its checks. */
+  private stopTick = 0;
+  private readonly stopTicks = new Map<string, number>();
   private readonly cache = new Map<string, { detection: WebAppDetection; config: CanvasConfig | null }>();
   private readonly served = new Map<string, Set<string>>();
   private readonly presenceTimers = new Map<string, unknown>();
@@ -375,6 +378,7 @@ export class DesignAppServers {
   }
 
   async stop(workspaceId: string, appRoot: string): Promise<DesignAppStatus> {
+    this.stopTicks.set(keyOf(workspaceId, appRoot), ++this.stopTick);
     const entry = this.entries.get(keyOf(workspaceId, appRoot));
     if (!entry) return this.statusWith(workspaceId, appRoot);
     entry.stops += 1;
@@ -459,6 +463,8 @@ export class DesignAppServers {
     const workspace = await this.deps.workspace(input.workspaceId);
     if (!runnable(workspace)) return this.statusWith(input.workspaceId, ".", { problem: "no-access" });
     const workspacePath = workspace.path;
+    // A stop for the root asked for from here on wins, even one that lands while the checks run.
+    const begun = this.stopTick;
     const first = await attach.check({ workspacePath, appRoot: ".", port: input.port, pid: input.pid });
     if (!first.ok) return this.statusWith(input.workspaceId, ".", { problem: first.problem });
     // A folder shortened for display can't name a root.
@@ -468,11 +474,10 @@ export class DesignAppServers {
     const found = appRoot === "." ? first : await attach.check({ workspacePath, appRoot, port: input.port, pid: first.pid });
     if (!found.ok) return this.statusWith(input.workspaceId, appRoot, { problem: found.problem });
     const entry = this.ensure(input.workspaceId, appRoot);
-    const stops = entry.stops;
     return this.enqueue(entry, async () => {
       if (entry.attempt || entry.server) return { ...entry.status, problem: { problem: "already-running", started: true } };
       // A stop asked for while this was checked wins.
-      if (entry.stops !== stops) return { ...entry.status };
+      if ((this.stopTicks.get(entry.key) ?? 0) > begun) return { ...entry.status };
       if (entry.attached) this.detach(entry);
       const current = await this.deps.workspace(input.workspaceId);
       if (!runnable(current)) return this.setPhase(entry, "stopped", { problem: { problem: "no-access" } });
@@ -532,6 +537,7 @@ export class DesignAppServers {
       await this.halt(entry, { quiet: true });
     }
     for (const entry of entries) this.entries.delete(entry.key);
+    for (const key of [...this.stopTicks.keys()]) if (key.startsWith(`${workspaceId}\0`)) this.stopTicks.delete(key);
     this.served.delete(workspaceId);
     this.cache.delete(workspaceId);
     this.deps.consent.closeAll(`${workspaceId}\0`);
@@ -756,7 +762,11 @@ export class DesignAppServers {
         // D7: a url root attaches to the person's server and never launches, even with a script.
         const urlRoot = attachRoots(cached.config).find((root) => root.root === entry.appRoot);
         entry.source = urlRoot ? "attached" : "started";
-        if (urlRoot && !input.choose) return await this.runAttach(entry, input, urlRoot, workspacePath, cached.detection, signal);
+        if (urlRoot) {
+          // Design mode never runs a url root, so it has no script to choose and no launch card (A-m5).
+          if (input.choose) throw new End({ problem: "not-web" });
+          return await this.runAttach(entry, input, urlRoot, workspacePath, cached.detection, signal);
+        }
         const app = this.resolveApp(cached.detection, cached.config, entry.appRoot, input.choose?.script);
         if (!app) throw new End({ problem: "not-web" });
         framework = app.framework;
@@ -860,8 +870,6 @@ export class DesignAppServers {
           }
           saved = true;
         }
-        // A choose on a url root saves its script (2b), and the root still attaches.
-        if (urlRoot) return await this.runAttach(entry, input, urlRoot, workspacePath, cached.detection, signal);
         const { env, providerKeys } = this.deps.launchEnv();
         const binDirs = [path.dirname(toolchain.node), path.dirname(toolchain.manager.path)];
         const keys = [...providerKeys];
