@@ -323,6 +323,42 @@ test("a routine turn shows as its label, and a [SILENT] answer hides the whole t
   }
 });
 
+test("a run that ends while its feed is still opening is reported settled, and never reads running again", async () => {
+  const fauxModels = createFauxModels([fauxAssistantMessage("Done already.")]);
+  let release: (() => void) | undefined;
+  let held = true;
+  const opened = new Promise<void>((resolve) => (release = resolve));
+  const settled: Array<{ botId: string; kind: string }> = [];
+  let service: BotSessionRuntime | undefined;
+  const live = await start(fauxModels, {
+    projection: {
+      // Opening the feed waits until the turn is over.
+      conversation: async (botId) => {
+        if (held) await opened;
+        return service!.conversation(botId);
+      },
+      onRunSettled: (botId, state) => settled.push({ botId, kind: state.kind }),
+    },
+  });
+  service = live.service;
+  try {
+    const sent = await live.service.send("bot:a", { text: "Quick one", requestId: "desk-1" });
+    const outcome = await live.service.awaitReply("bot:a", sent.submissionId, new AbortController().signal);
+    assert.equal(outcome.kind, "completed");
+    assert.deepEqual(settled, [], "nothing is reported before the feed opens");
+    held = false;
+    release!();
+    await waitFor(() => settled.length > 0, { what: "the settled run to be reported" });
+    assert.deepEqual(settled, [{ botId: "bot:a", kind: "idle" }]);
+    const view = await live.projection.subscribe("bot:a", recorder().sink);
+    view.unsubscribe();
+    assert.equal(view.snapshot.state.kind, "idle", "the stale running notice was not applied");
+    assert.deepEqual(visibleText(view.snapshot).slice(-1), ["assistant:Done already."]);
+  } finally {
+    await live.close();
+  }
+});
+
 test("a failed reply is a typed failed turn, and Retry as a new submission answers after it", async () => {
   const failure = fauxAssistantMessage("", { stopReason: "error", errorMessage: "provider is down" });
   const fauxModels = createFauxModels([failure, fauxAssistantMessage("Here it is.")]);

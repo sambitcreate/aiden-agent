@@ -1616,7 +1616,17 @@ export function createBotLiveProjection(deps: BotLiveProjectionDeps): BotLivePro
       const wanted = state.kind === "running" || (subscribers.get(botId)?.size ?? 0) > 0;
       if (!wanted || state.kind === "unavailable") return;
       void openFeed(botId).then(
-        (opened) => enqueueWork(opened, async () => setState(opened, state)),
+        (opened) =>
+          enqueueWork(opened, async () => {
+            // The feed read the state as it opened, after this notice: a run that
+            // ended while it opened is reported settled, never set running again.
+            if (state.kind === "running" && opened.state.kind !== "running" && !opened.runActive) {
+              deps.onRunSettled?.(opened.botId, opened.state);
+              void closeIfUnwatched(opened);
+              return;
+            }
+            setState(opened, state);
+          }),
         (error) => report(botId, error),
       );
     },
