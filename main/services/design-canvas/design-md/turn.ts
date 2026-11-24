@@ -159,11 +159,17 @@ export function createDesignMdTurn(deps: DesignMdTurnDeps): DesignMdTurn {
 
 /**
  * The design-mode prompt as a transcript section, for a chat that entered
- * design mode mid-reply. Appended when absent, and again when the latest one
- * differs (the live flag flipped since the chat's last turn); otherwise the
- * same array, so the prompt cache holds. Pure.
+ * design mode mid-reply. Appended when absent. With the live flag on it's
+ * appended again when the latest one differs (the flag flipped since the
+ * chat's last turn); with it off, any copy already there is kept, exactly as
+ * before the flag. Otherwise the same array, so the prompt cache holds. Pure.
  */
-export function withDesignModeSection(messages: AgentMessage[], text: string, now: number): AgentMessage[] {
+export function withDesignModeSection(
+  messages: AgentMessage[],
+  text: string,
+  now: number,
+  options: { live: boolean },
+): AgentMessage[] {
   let latest: unknown;
   for (const message of messages) {
     const sections = (message as { role?: unknown; sections?: Record<string, unknown> }).sections;
@@ -171,6 +177,6 @@ export function withDesignModeSection(messages: AgentMessage[], text: string, no
       latest = sections[DESIGN_MODE_SECTION];
     }
   }
-  if (latest === text) return messages;
+  if (latest === text || (!options.live && latest !== undefined)) return messages;
   return [...messages, { role: "system", content: "", sections: { [DESIGN_MODE_SECTION]: text }, timestamp: now } as unknown as AgentMessage];
 }

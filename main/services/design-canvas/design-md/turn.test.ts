@@ -238,14 +238,21 @@ test("a reader failure leaves the sentence empty and is logged", async (t) => {
   assert.equal(logged.length, 2);
 });
 
-test("withDesignModeSection appends the section when absent, leaves the same messages when the latest matches, and patches a change", () => {
+test("with the live flag on, withDesignModeSection appends when absent, keeps a match and patches a change", () => {
   const user: AgentMessage = { role: "user", content: "hi", timestamp: 1 };
-  const added = withDesignModeSection([user], "flag off text", 2);
+  const added = withDesignModeSection([user], "flag off text", 2, { live: true });
   assert.equal(added.length, 2);
   assert.deepEqual((added[1] as { sections?: Record<string, string> }).sections, { [DESIGN_MODE_SECTION]: "flag off text" });
-  assert.equal(withDesignModeSection(added, "flag off text", 3), added, "an unchanged section leaves the messages as they are");
-  const patched = withDesignModeSection(added, "flag on text", 4);
+  assert.equal(withDesignModeSection(added, "flag off text", 3, { live: true }), added, "an unchanged section leaves the messages as they are");
+  const patched = withDesignModeSection(added, "flag on text", 4, { live: true });
   assert.equal(patched.length, 3, "a flag flipped since the chat's last turn appends the new text");
   assert.deepEqual((patched[2] as { sections?: Record<string, string> }).sections, { [DESIGN_MODE_SECTION]: "flag on text" });
-  assert.equal(withDesignModeSection(patched, "flag on text", 5), patched, "the latest one counts");
+  assert.equal(withDesignModeSection(patched, "flag on text", 5, { live: true }), patched, "the latest one counts");
+});
+
+test("with the live flag off, any copy of the section already there is kept, as before the flag", () => {
+  const user: AgentMessage = { role: "user", content: "hi", timestamp: 1 };
+  const older = withDesignModeSection([user], "an older section text", 2, { live: false });
+  assert.equal(older.length, 2, "absent, it's appended");
+  assert.equal(withDesignModeSection(older, "today's section text", 3, { live: false }), older, "an older copy isn't replaced");
 });
