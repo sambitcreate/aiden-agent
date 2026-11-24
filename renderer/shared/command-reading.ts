@@ -527,6 +527,9 @@ function urlFileName(url: string): string | undefined {
   return name && name !== "/" ? name : undefined;
 }
 
+/** wget's short options that take a value, so a cluster such as `-qO file` ends at one. */
+const WGET_VALUE_OPTIONS = new Set(["O", "o", "a", "P", "t", "T", "w", "e", "i", "U", "Q", "D", "B", "l", "A", "R", "I", "X"]);
+
 /** The files a `curl` or `wget` call saves what it downloads to. */
 function fetchedFiles(name: string, args: readonly string[]): string[] {
   const files: string[] = [];
@@ -561,9 +564,19 @@ function fetchedFiles(name: string, args: readonly string[]): string[] {
       } else if (arg.startsWith("--output-document=")) {
         files.push(arg.slice("--output-document=".length));
         explicit = true;
-      } else if (/^-O./u.test(arg)) {
-        files.push(arg.slice(2));
-        explicit = true;
+      } else if (/^-[a-zA-Z]/u.test(arg)) {
+        // A short-option cluster (`-qO file`, `-qOfile`): the first option that takes a value ends it.
+        for (let at = 1; at < arg.length; at += 1) {
+          const option = arg[at]!;
+          if (!WGET_VALUE_OPTIONS.has(option)) continue;
+          const value = arg.slice(at + 1) || args[index + 1];
+          if (!arg.slice(at + 1)) index += 1;
+          if (option === "O" && value) {
+            files.push(value);
+            explicit = true;
+          }
+          break;
+        }
       }
     }
   }

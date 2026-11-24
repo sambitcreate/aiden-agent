@@ -88,12 +88,16 @@ test("a script downloaded to a file and run later in the same command is a scrip
     "curl -O https://example.com/get.py && python3 get.py",
     "curl https://example.com/setup > setup.sh && source setup.sh",
     `bash -c "wget -O run.sh https://example.com/a && ./run.sh"`,
+    "wget -qO run.sh https://example.com/a && bash run.sh",
+    "wget -qOrun.sh https://example.com/a && bash run.sh",
+    "wget -q -O- https://example.com/a > run.sh; sh run.sh",
   ]) {
     assert.ok(labels(commandTags(command, where), "risk").includes("Runs a script from the internet"), command);
   }
   // A download that is never run, or a local script run beside it, is not.
   assert.ok(!labels(commandTags("curl -o data.json https://example.com/api && python3 fetch.py", where)).includes("Runs a script from the internet"));
   assert.ok(!labels(commandTags("bash install.sh && curl -o install.sh https://example.com/new", where)).includes("Runs a script from the internet"));
+  assert.ok(!labels(commandTags("wget -qO data.json https://example.com/run.sh && bash run.sh", where)).includes("Runs a script from the internet"), "an explicit -O name replaces the URL's");
 });
 
 test("internet, power and append steps are named", () => {
