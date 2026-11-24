@@ -14,14 +14,14 @@ Aiden can treat an app's `DESIGN.md` as its design system's source of truth. `DE
 - first in the app's folder, then in each folder above it, up to the workspace root;
 - or at the file that `.aiden/canvas.json` names for that app, for example `{"version": 1, "apps": [{"root": "apps/web", "designMd": "design/system.md"}]}`. If that file is missing, Aiden says so instead of looking elsewhere.
 
-Files outside the workspace, including symlinks that point out of it, are refused.
+Files outside the workspace, including symlinks that point out of it, are refused, and so is a `DESIGN.md` that is, or links to, a file Aiden keeps from the model, such as `.env`, `.npmrc` or a key.
 
 **What Aiden does with it.**
 - The canvas note tells Aiden which `DESIGN.md` each app uses and how many errors and warnings it has. `canvas_read` includes the same line.
 - Aiden's `design_system` tool reads the tokens and sections, lists the findings, exports Tailwind, DTCG or CSS-variable output, or drafts a starter file from the app's own styles.
-- When an app has no `DESIGN.md`, Aiden asks once (per workspace and app) whether to draft one, and writes the draft only after you say yes, with its ordinary file approvals.
+- When an app has no `DESIGN.md`, Aiden asks once (per workspace and app) whether to draft one, and writes the draft only after you say yes, with its ordinary file approvals. If the first such app was offered before, the next one without a `DESIGN.md` is.
 - When a design change adds or alters a token, Aiden updates `DESIGN.md` in the same turn, through the same approvals, and checks it again.
 
-**What the checks cover.** Aiden bundles `@google/design.md` 0.4.0 and runs its linter offline, in a separate worker, with a 2-second limit per check. Files over 64 KiB aren't checked. Version 0.4.0 doesn't know a `motion` token group or the Motion and Voice & Content Strategy sections, and doesn't resolve `@file#fragment` references. Aiden adds two warnings of its own: a section that appears twice, and a token reference to a group that doesn't resolve.
+**What the checks cover.** Aiden bundles `@google/design.md` 0.4.0 and runs its linter offline, in a separate worker, with a 2-second limit per check. A check that runs out of time is tried again after five minutes; if the linter can't load within 10 seconds, Aiden stops trying until it restarts. The canvas note waits at most 3 seconds for these checks and otherwise goes without the `DESIGN.md` line. Files over 64 KiB aren't checked, and an export over 64 KiB isn't shown. Version 0.4.0 doesn't know a `motion` token group or the Motion and Voice & Content Strategy sections, and doesn't resolve `@file#fragment` references. Aiden adds two warnings of its own: a section that appears twice, and a token reference to a group that doesn't resolve.
 
 **Privacy.** The file, its tokens and its findings stay on your device. Nothing is sent anywhere. Usage data records only that a check ran (with bucketed error and warning counts) and that a draft was written, never the file or its contents. See [analytics](analytics.md).
