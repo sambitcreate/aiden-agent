@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import test from "node:test";
 import { detectWebApp, readBounded } from "./app-detect.js";
-import { designTarget, type DetectedApp, type WebAppDetection } from "./app-server-core.js";
+import { designTarget, installCommand, type DetectedApp, type WebAppDetection } from "./app-server-core.js";
 
 type TreeValue = string | Record<string, unknown> | { symlink: string } | { dir: true };
 
@@ -275,7 +275,12 @@ test("a Yarn PnP install counts as installed", async () => {
 
 test("a workspace opened inside a pnpm monorepo takes the enclosing lockfile", async () => {
   await withBase(async (base) => {
-    await writeTree(base, { "repo/pnpm-lock.yaml": "", "repo/.git": { dir: true }, "repo/apps/web/package.json": viteReact() });
+    await writeTree(base, {
+      "repo/pnpm-lock.yaml": "",
+      "repo/pnpm-workspace.yaml": "packages:\n  - 'apps/*'\n",
+      "repo/.git": { dir: true },
+      "repo/apps/web/package.json": viteReact(),
+    });
     const web = app(await detect(base, "repo/apps/web"), ".");
     assert.deepEqual(web.packageManager, { name: "pnpm", source: "enclosing", lockfile: "pnpm-lock.yaml", lockfileLevelsUp: 2 });
     assert.equal(web.installRoot, ".");
@@ -295,6 +300,7 @@ test("a symlinked node_modules at the enclosing root counts as installed", async
   await withBase(async (base) => {
     await writeTree(base, {
       "store/node_modules": { dir: true },
+      "repo/package.json": { name: "mono", private: true, workspaces: ["apps/*"] },
       "repo/package-lock.json": "{}",
       "repo/apps/web/package.json": viteReact(),
     });
@@ -307,21 +313,35 @@ test("a symlinked node_modules at the enclosing root counts as installed", async
 
 test("the walk stops at a .git folder and never reads above it", async () => {
   await withBase(async (base) => {
-    await writeTree(base, { "outer/pnpm-lock.yaml": "", "outer/repo/.git": { dir: true }, "outer/repo/apps/web/package.json": viteReact() });
+    await writeTree(base, {
+      "outer/pnpm-lock.yaml": "",
+      "outer/pnpm-workspace.yaml": "packages:\n  - 'repo/apps/*'\n",
+      "outer/repo/.git": { dir: true },
+      "outer/repo/apps/web/package.json": viteReact(),
+    });
     assert.deepEqual(app(await detect(base, "outer/repo/apps/web"), ".").packageManager, { name: "npm", source: "none", lockfileLevelsUp: 0 });
   });
 });
 
 test("the walk never runs when the workspace root holds .git", async () => {
   await withBase(async (base) => {
-    await writeTree(base, { "outer/package-lock.json": "{}", "outer/ws/.git": "gitdir: elsewhere\n", "outer/ws/package.json": viteReact() });
+    await writeTree(base, {
+      "outer/package.json": { name: "mono", private: true, workspaces: ["ws"] },
+      "outer/package-lock.json": "{}",
+      "outer/ws/.git": "gitdir: elsewhere\n",
+      "outer/ws/package.json": viteReact(),
+    });
     assert.deepEqual(app(await detect(base, "outer/ws"), ".").packageManager, { name: "npm", source: "none", lockfileLevelsUp: 0 });
   });
 });
 
 test("the walk never reads stopAt or home, compared after realpath", async () => {
   await withBase(async (base) => {
-    await writeTree(base, { "real/package-lock.json": "{}", "real/ws/package.json": viteReact() });
+    await writeTree(base, {
+      "real/package.json": { name: "mono", private: true, workspaces: ["ws"] },
+      "real/package-lock.json": "{}",
+      "real/ws/package.json": viteReact(),
+    });
     await symlink(path.join(base, "real"), path.join(base, "alias"));
     const root = path.join(base, "real/ws");
     const none = { name: "npm", source: "none", lockfileLevelsUp: 0 };
@@ -332,6 +352,63 @@ test("the walk never reads stopAt or home, compared after realpath", async () =>
     // Without those limits the same lockfile is found, so the limits are what stops it.
     const open = await detectWebApp(root, { stopAt: base, homeDir: base });
     assert.equal(app(open, ".").packageManager.source, "enclosing");
+  });
+});
+
+test("an enclosing lockfile counts only when the workspace is one of that repo's members", async () => {
+  await withBase(async (base) => {
+    const nextApp = { name: "next-app", dependencies: { next: "15.0.0", react: "^19.0.0" }, scripts: { dev: "next dev" } };
+    await writeTree(base, {
+      // A library with an example app it doesn't list as a workspace.
+      "lib/.git": { dir: true },
+      "lib/package.json": { name: "lib" },
+      "lib/package-lock.json": "{}",
+      "lib/examples/next-app/package.json": nextApp,
+      // A pnpm repo whose workspace file lists other folders.
+      "mono/.git": { dir: true },
+      "mono/package.json": { name: "mono", private: true },
+      "mono/pnpm-workspace.yaml": "packages:\n  - 'packages/*'\n",
+      "mono/pnpm-lock.yaml": "",
+      "mono/examples/next-app/package.json": nextApp,
+      // A stray lockfile in a parent folder.
+      "stray/package-lock.json": "{}",
+      "stray/proj/package.json": viteReact(),
+      // An npm repo that does list the folder.
+      "npm-mono/package.json": { name: "npm-mono", private: true, workspaces: ["examples/*"] },
+      "npm-mono/package-lock.json": "{}",
+      "npm-mono/examples/next-app/package.json": nextApp,
+    });
+    for (const rel of ["lib/examples/next-app", "mono/examples/next-app", "stray/proj"]) {
+      const { packageManager } = app(await detect(base, rel), ".");
+      assert.deepEqual(packageManager, { name: "npm", source: "none", lockfileLevelsUp: 0 }, rel);
+      assert.deepEqual(installCommand(packageManager), { command: "npm", args: ["install"] }, rel);
+    }
+    const member = app(await detect(base, "npm-mono/examples/next-app"), ".").packageManager;
+    assert.deepEqual(member, { name: "npm", source: "enclosing", lockfile: "package-lock.json", lockfileLevelsUp: 2 });
+    assert.deepEqual(installCommand(member), { command: "npm", args: ["ci"] });
+  });
+});
+
+test("a workspace root whose script hands off to a member leaves that member the one web app", async () => {
+  await withBase(async (base) => {
+    const member = (name: string) => ({ name, dependencies: { react: "^19.0.0" }, devDependencies: { vite: "^6.0.0" }, scripts: { dev: "vite" } });
+    const roots: Record<string, Record<string, string>> = {
+      npm: { dev: "npm run dev -w apps/web" },
+      yarn: { dev: "yarn workspace web dev" },
+      concurrently: { dev: 'concurrently "npm:dev:*"', "dev:web": "npm --prefix apps/web run dev" },
+      // A root script that isn't the framework's own dev command hands off too.
+      script: { dev: "node scripts/dev.js" },
+    };
+    for (const [name, scripts] of Object.entries(roots)) {
+      await writeTree(base, {
+        [`${name}/package.json`]: { name, private: true, workspaces: ["apps/*"], devDependencies: { vite: "^6.0.0" }, scripts },
+        [`${name}/package-lock.json`]: "{}",
+        [`${name}/apps/web/package.json`]: member("web"),
+      });
+      const detection = await detect(base, name);
+      assert.equal(app(detection, ".").reason, "workspace-runner", name);
+      assert.deepEqual(designTarget(detection), { kind: "single", app: app(detection, "apps/web") }, name);
+    }
   });
 });
 

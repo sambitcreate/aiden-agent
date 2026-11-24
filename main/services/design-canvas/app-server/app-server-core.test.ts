@@ -137,11 +137,27 @@ test("builds, production runs, Storybook and workspace runners are passed over",
     [{ dev: "npm run dev --workspaces" }, true],
     [{ dev: "yarn workspaces foreach run dev" }, true],
     [{ dev: "lerna run dev" }, true],
+    // Root scripts that hand off to one member.
+    [{ dev: "npm run dev -w apps/web" }, true],
+    [{ dev: "npm run dev --workspace web" }, true],
+    [{ dev: "npm run dev --workspace=web" }, true],
+    [{ dev: "yarn workspace web dev" }, true],
+    [{ dev: "npm --prefix apps/web run dev" }, true],
+    [{ dev: "pnpm -C apps/web dev" }, true],
+    [{ dev: "pnpm --dir apps/web dev" }, true],
+    [{ dev: 'concurrently "npm:dev:*"' }, true],
+    [{ dev: "npm-run-all --parallel dev:*" }, true],
+    [{ dev: "run-p dev:*" }, true],
   ];
   for (const [scripts, runner] of skipped) {
     // No framework, so only the skip list decides.
     assert.deepEqual(pickDevScript(pkg({ scripts }), undefined), { script: undefined, hadDevScript: true, skippedRunner: runner }, JSON.stringify(scripts));
   }
+  // Member flags count only next to a package manager: other tools use -w for watch.
+  for (const dev of ["tsc -w", "nodemon -w src server.js"]) {
+    assert.equal(pickDevScript(pkg({ scripts: { dev } }), undefined).skippedRunner, false, dev);
+  }
+  assert.equal(classifyPackage(pkg({ deps: { react: "^19.0.0" }, scripts: { dev: "tsc -w" } }), NO_MARKERS).reason, "no-web-framework");
   // Tokens match only as words.
   assert.equal(pickDevScript(pkg({ scripts: { dev: "tscx serve" } }), undefined).script, "dev");
 });
@@ -562,4 +578,33 @@ test("designTarget gives single, choose, react-nonweb or none", () => {
   // A web app with no manager is still web: refusing it is 2b's job.
   const conflicted = { ...web, packageManager: { name: null, source: "lockfile" as const, lockfileLevelsUp: 0, conflict: ["npm" as const, "yarn" as const] } };
   assert.deepEqual(designTarget({ apps: [conflicted], truncated: false }), { kind: "single", app: conflicted });
+});
+
+test("a workspace root counts as web only when its script runs the framework's own dev command", () => {
+  const root = (dev: string) => pkg({ deps: { react: "^19.0.0" }, devDeps: { vite: "^6.0.0" }, scripts: { dev } });
+  const atRoot = { workspaceRunnerFile: false, workspaceRoot: true };
+  assert.equal(classifyPackage(root("vite"), atRoot).kind, "web");
+  // A script that only reaches the app some other way hands off to a member.
+  assert.deepEqual(
+    [classifyPackage(root("node scripts/dev.js"), atRoot).kind, classifyPackage(root("node scripts/dev.js"), atRoot).reason],
+    ["none", "workspace-runner"],
+  );
+  // The same script in a package that isn't a workspace root is still its app's dev script.
+  assert.equal(classifyPackage(root("node scripts/dev.js"), NO_MARKERS).kind, "web");
+});
+
+test("a framework app whose only scripts are production runs is no-dev-script, not React mocks", () => {
+  for (const scripts of [{ start: "next start" }, { start: "next build && next start", build: "next build" }]) {
+    const result = classifyPackage(pkg({ deps: { next: "15.0.0", react: "^19.0.0" }, scripts }), NO_MARKERS);
+    assert.deepEqual([result.kind, result.reason], ["none", "no-dev-script"], JSON.stringify(scripts));
+  }
+  // A build-only library still goes to React mocks.
+  const library = classifyPackage(pkg({ devDeps: { react: "^19.0.0", vite: "^6.0.0" }, scripts: { dev: "vite build --watch" } }), NO_MARKERS);
+  assert.equal(library.reason, "no-web-framework");
+  // So does a production run next to a Storybook.
+  const stories = classifyPackage(
+    pkg({ devDeps: { react: "^19.0.0", vite: "^6.0.0", storybook: "^8.0.0" }, scripts: { start: "vite preview" } }),
+    NO_MARKERS,
+  );
+  assert.equal(stories.reason, "no-web-framework");
 });

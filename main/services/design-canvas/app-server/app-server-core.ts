@@ -218,25 +218,49 @@ const PRODUCTION_SEQUENCES = [
   ["NODE_ENV=production"],
   ["serve", "-s"],
 ];
-const RUNNER_SEQUENCES = [["turbo"], ["nx"], ["lerna"], ["pnpm", "-r"], ["pnpm", "--recursive"], ["yarn", "workspaces"]];
+const RUNNER_SEQUENCES = [
+  ["turbo"],
+  ["nx"],
+  ["lerna"],
+  ["pnpm", "-r"],
+  ["pnpm", "--recursive"],
+  ["pnpm", "-C"],
+  ["yarn", "workspaces"],
+  ["yarn", "workspace"],
+  ["concurrently"],
+  ["npm-run-all"],
+  ["run-p"],
+];
+const PACKAGE_MANAGER_WORDS = ["npm", "pnpm", "yarn", "bun"];
+/** Flags that point a package manager at one member. Other tools use some of them too (`tsc -w`), so they count only next to a manager. */
+const MEMBER_FLAGS = ["-w", "--workspace", "--prefix", "--dir"];
+
+function flagIn(words: readonly string[], flags: readonly string[]): boolean {
+  return words.some((word) => flags.some((flag) => word === flag || word.startsWith(`${flag}=`)));
+}
 
 function isRunner(words: readonly string[]): boolean {
   return (
     RUNNER_SEQUENCES.some((sequence) => hasSequence(words, sequence)) ||
-    words.some((word) => word === "--filter" || word.startsWith("--filter=") || word === "--workspaces" || word.startsWith("--workspaces="))
+    flagIn(words, ["--filter", "--workspaces"]) ||
+    (words.some((word) => PACKAGE_MANAGER_WORDS.includes(word)) && flagIn(words, MEMBER_FLAGS))
   );
 }
 
-function isSkipped(words: readonly string[]): boolean {
-  const build =
+type SkipKind = "runner" | "storybook" | "production" | "build";
+
+/** Why R3 passes a script over, or null when it is usable. A production run that also builds counts as a production run. */
+function skipKind(words: readonly string[]): SkipKind | null {
+  if (isRunner(words)) return "runner";
+  if (words.includes("storybook")) return "storybook";
+  if (PRODUCTION_SEQUENCES.some((sequence) => hasSequence(words, sequence))) return "production";
+  if (
     BUILD_SEQUENCES.some((sequence) => hasSequence(words, sequence)) ||
-    (hasSequence(words, ["next", "build"]) && !hasSequence(words, ["next", "dev"]));
-  return (
-    build ||
-    PRODUCTION_SEQUENCES.some((sequence) => hasSequence(words, sequence)) ||
-    words.includes("storybook") ||
-    isRunner(words)
-  );
+    (hasSequence(words, ["next", "build"]) && !hasSequence(words, ["next", "dev"]))
+  ) {
+    return "build";
+  }
+  return null;
 }
 
 export interface DevScriptChoice {
@@ -247,25 +271,38 @@ export interface DevScriptChoice {
   skippedRunner: boolean;
 }
 
+interface DevScriptScan extends DevScriptChoice {
+  /** Every dev, start or serve script was passed over as a production run. */
+  onlyProductionRuns: boolean;
+}
+
+function scanDevScripts(pkg: PackageJson, framework: FrameworkId | undefined, workspaceRoot: boolean): DevScriptScan {
+  const scripts = new Map(stringScripts(pkg));
+  const present = DEV_SCRIPT_NAMES.flatMap((name) => {
+    const text = scripts.get(name);
+    return text === undefined ? [] : [{ name, skip: skipKind(scriptWords(text)), words: scriptWords(text) }];
+  });
+  const specs = framework ? FRAMEWORKS.filter((spec) => spec.id === framework) : [];
+  const preferred = present.find(({ words }) => specs.some((spec) => runsDevCommand(words, spec)));
+  const fallback = present.find(({ skip }) => skip === null);
+  // A workspace root's other scripts reach its apps some other way, so they hand off to a member.
+  const handsOff = workspaceRoot && !preferred && fallback !== undefined;
+  return {
+    script: (preferred ?? (workspaceRoot ? undefined : fallback))?.name,
+    hadDevScript: present.length > 0,
+    skippedRunner: handsOff || present.some(({ skip }) => skip === "runner"),
+    onlyProductionRuns: present.length > 0 && present.every(({ skip }) => skip === "production"),
+  };
+}
+
 /**
  * R3: `dev`, `start`, `serve`. The first that runs the framework's dev
  * command wins; otherwise the first that isn't a build, a production run,
  * Storybook or a workspace runner.
  */
 export function pickDevScript(pkg: PackageJson, framework: FrameworkId | undefined): DevScriptChoice {
-  const scripts = new Map(stringScripts(pkg));
-  const present = DEV_SCRIPT_NAMES.flatMap((name) => {
-    const text = scripts.get(name);
-    return text === undefined ? [] : [{ name, words: scriptWords(text) }];
-  });
-  const specs = framework ? FRAMEWORKS.filter((spec) => spec.id === framework) : [];
-  const preferred = present.find(({ words }) => specs.some((spec) => runsDevCommand(words, spec)));
-  const usable = preferred ?? present.find(({ words }) => !isSkipped(words));
-  return {
-    script: usable?.name,
-    hadDevScript: present.length > 0,
-    skippedRunner: present.some(({ words }) => isRunner(words)),
-  };
+  const { script, hadDevScript, skippedRunner } = scanDevScripts(pkg, framework, false);
+  return { script, hadDevScript, skippedRunner };
 }
 
 // ---- kind (R4) ----
@@ -289,13 +326,20 @@ function usesStorybook(deps: Map<string, string>): boolean {
   return [...deps.keys()].some((name) => name === "storybook" || name.startsWith("@storybook/"));
 }
 
-/** R4, in order. `null` is a package.json that couldn't be read or parsed. */
-export function classifyPackage(pkg: PackageJson | null, markers: { workspaceRunnerFile: boolean }): PackageClassification {
+/**
+ * R4, in order. `null` is a package.json that couldn't be read or parsed.
+ * `workspaceRoot` is a root that declares workspaces: it is `web` only when
+ * its script runs the framework's own dev command.
+ */
+export function classifyPackage(
+  pkg: PackageJson | null,
+  markers: { workspaceRunnerFile: boolean; workspaceRoot?: boolean },
+): PackageClassification {
   if (!pkg) return { kind: "none", reason: "invalid-package-json", usesReact: false };
   const deps = dependencies(pkg);
   const usesReact = deps.has("react") || deps.has("react-dom");
   const framework = frameworkSpec(deps)?.id;
-  const choice = pickDevScript(pkg, framework);
+  const choice = scanDevScripts(pkg, framework, markers.workspaceRoot === true);
   const result = (kind: AppKind, reason: AppReason, desktopShell?: DesktopShell): PackageClassification => ({
     kind,
     reason,
@@ -310,7 +354,9 @@ export function classifyPackage(pkg: PackageJson | null, markers: { workspaceRun
   if (framework && choice.script) return result("web", "ok");
   if (choice.skippedRunner || markers.workspaceRunnerFile) return result("none", "workspace-runner");
   if (deps.has("react-native") || deps.has("expo")) return result("react-nonweb", "react-native");
-  if (framework && !choice.hadDevScript && !usesStorybook(deps)) return result("none", "no-dev-script");
+  if (framework && !choice.script && (!choice.hadDevScript || choice.onlyProductionRuns) && !usesStorybook(deps)) {
+    return result("none", "no-dev-script");
+  }
   if (choice.script && !framework) return result("none", "unknown-framework");
   if (usesReact) return result("react-nonweb", "no-web-framework");
   return result("none", "no-web-framework");

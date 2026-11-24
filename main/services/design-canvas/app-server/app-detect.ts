@@ -205,11 +205,24 @@ function isSameOrAncestor(candidate: string, of: string): boolean {
   return rel === "" || (!rel.startsWith("..") && !path.isAbsolute(rel));
 }
 
+/** Whether `rel` (POSIX, relative to `dir`) is one of the workspaces `dir` declares. */
+async function declaresMember(dir: string, rel: string): Promise<boolean> {
+  const patterns = workspacePatterns(await readPackage(dir), await readPnpmWorkspace(dir));
+  return (
+    patterns.include.some((pattern) => matchesWorkspacePattern(rel, pattern)) &&
+    !patterns.exclude.some((pattern) => matchesWorkspacePattern(rel, pattern))
+  );
+}
+
 /**
  * R6: looks above a workspace with no signals of its own for an enclosing
  * repo's lockfile. Stops at the first lockfile or pnpm-workspace.yaml, after
  * a folder holding `.git`, after five levels, and before home, `stopAt` or
- * anything above them. Reads names and the yarn.lock head only.
+ * anything above them. The signal counts only when that folder's
+ * `workspaces` or pnpm-workspace.yaml lists the workspace; otherwise it is a
+ * stray or unrelated lockfile, and the workspace gets npm's plain install.
+ * Reads names, the yarn.lock head, and that folder's package.json and
+ * pnpm-workspace.yaml through the bounded reader.
  */
 async function enclosingSignals(
   root: string,
@@ -227,7 +240,10 @@ async function enclosingSignals(
     dir = parent;
     if (fences.some((fence) => isSameOrAncestor(dir, fence))) return null;
     const signals = await folderSignals(dir, { deno: false });
-    if (hasOwnSignal(signals)) return { signals, levelsUp: level };
+    if (hasOwnSignal(signals)) {
+      const rel = path.relative(dir, realRoot).split(path.sep).join("/");
+      return (await declaresMember(dir, rel)) ? { signals, levelsUp: level } : null;
+    }
     if (signals.git) return null;
   }
   return null;
@@ -256,7 +272,10 @@ async function readPnpmWorkspace(root: string): Promise<unknown> {
 }
 
 /** R1: candidate folders (relative, POSIX) and whether a workspace pattern matched them. */
-async function findCandidates(root: string, rootPkg: PackageJson | null, pnpmWorkspace: unknown): Promise<Map<string, boolean>> {
+async function findCandidates(
+  root: string,
+  patterns: { include: string[]; exclude: string[] },
+): Promise<Map<string, boolean>> {
   const found = new Map<string, boolean>();
   const consider = async (rel: string, viaPattern: boolean) => {
     if (await exists(path.join(toAbsolute(root, rel), "package.json"))) found.set(rel, (found.get(rel) ?? false) || viaPattern);
@@ -271,7 +290,6 @@ async function findCandidates(root: string, rootPkg: PackageJson | null, pnpmWor
     if (await isRealFolderPath(root, [folder])) await consider(folder, false);
   }
 
-  const patterns = workspacePatterns(rootPkg, pnpmWorkspace);
   for (const pattern of patterns.include) {
     const shape = parseWorkspacePattern(pattern);
     if (!shape || !(await isRealFolderPath(root, shape.parent))) continue;
@@ -303,8 +321,8 @@ export async function detectWebApp(root: string, options: { stopAt?: string; hom
     return { apps: [], truncated: false };
   }
   const rootPkg = await readPackage(root);
-  const pnpmWorkspace = await readPnpmWorkspace(root);
-  const found = await findCandidates(root, rootPkg, pnpmWorkspace);
+  const patterns = workspacePatterns(rootPkg, await readPnpmWorkspace(root));
+  const found = await findCandidates(root, patterns);
   const ordered = [...found.keys()].sort((a, b) => (a === "." ? -1 : b === "." ? 1 : a < b ? -1 : a > b ? 1 : 0));
   const truncated = ordered.length > MAX_CANDIDATES;
 
@@ -332,7 +350,10 @@ export async function detectWebApp(root: string, options: { stopAt?: string; hom
       installed ||= enclosing.signals.nodeModules || enclosing.signals.pnp;
     }
 
-    const classification = classifyPackage(pkg, { workspaceRunnerFile: own.runnerFile });
+    const classification = classifyPackage(pkg, {
+      workspaceRunnerFile: own.runnerFile,
+      workspaceRoot: rel === "." && patterns.include.length > 0,
+    });
     const name = packageName(pkg);
     apps.push({
       root: rel,

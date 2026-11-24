@@ -1,10 +1,10 @@
 import assert from "node:assert/strict";
-import { chmod, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { chmod, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import test from "node:test";
-import { createExecutableCache, type ExecutableResolutionDeps } from "../../node-toolchain.js";
-import { defaultAppToolchainDeps, resolveAppToolchain, toolchainProblemMessage } from "./app-toolchain.js";
+import { createExecutableCache, resolveExecutable, type ExecutableResolutionDeps } from "../../node-toolchain.js";
+import { clearAppToolchainCache, defaultAppToolchainDeps, resolveAppToolchain, toolchainProblemMessage } from "./app-toolchain.js";
 import type { PackageManagerInfo } from "./app-server-core.js";
 
 function fakeDeps(executables: string[], options: { PATH?: string; shellAnswer?: () => string | null } = {}): ExecutableResolutionDeps & { calls: number } {
@@ -140,10 +140,42 @@ test("each problem has a message that names what to install or fix", () => {
   const conflict = toolchainProblemMessage({ problem: "manager-conflict", conflict: ["npm", "yarn"] });
   assert.match(conflict, /npm and yarn/u);
   assert.match(conflict, /packageManager/u);
-  assert.match(toolchainProblemMessage({ problem: "manager-conflict", conflict: ["bun", "npm", "yarn"] }), /bun, npm and yarn/u);
+  assert.match(conflict, /Delete the one you don't use/u);
+  assert.equal(
+    toolchainProblemMessage({ problem: "manager-conflict", conflict: ["bun", "npm", "yarn"] }),
+    "This app has lockfiles for bun, npm and yarn. Delete the ones you don't use, or set packageManager in package.json.",
+  );
   assert.equal(
     toolchainProblemMessage({ problem: "manager-conflict", conflict: ["npm", "pnpm"], field: "pnpm" }),
-    "packageManager says pnpm, but the lockfile is npm's.",
+    "packageManager says pnpm, but the lockfile is npm's. Delete the other lockfile or change packageManager.",
+  );
+  assert.equal(
+    toolchainProblemMessage({ problem: "manager-conflict", conflict: ["npm", "pnpm", "yarn"], field: "pnpm" }),
+    "packageManager says pnpm, but the lockfiles are npm's and yarn's. Delete the other lockfiles or change packageManager.",
   );
   assert.match(toolchainProblemMessage({ problem: "unsupported-manager", manager: "deno" }), /Deno/u);
+});
+
+test("the design resolvers keep a login-shell answer until clearAppToolchainCache", async () => {
+  const dir = await mkdtemp(path.join(tmpdir(), "aiden-app-toolchain-cache-"));
+  try {
+    const pnpm = path.join(dir, "pnpm");
+    await writeFile(pnpm, "#!/bin/sh\n");
+    await chmod(pnpm, 0o755);
+    const calls = path.join(dir, "calls");
+    const shell = path.join(dir, "shell");
+    await writeFile(shell, `#!/bin/sh\nprintf 'x' >> '${calls}'\nprintf '%s\\n' '${pnpm}'\n`);
+    await chmod(shell, 0o755);
+    const { manager } = defaultAppToolchainDeps({ PATH: path.join(dir, "empty"), SHELL: shell });
+    const shellRuns = async () => (await readFile(calls, "utf8").catch(() => "")).length;
+
+    assert.equal(await resolveExecutable("pnpm", manager), pnpm);
+    assert.equal(await resolveExecutable("pnpm", manager), pnpm);
+    assert.equal(await shellRuns(), 1);
+    clearAppToolchainCache();
+    assert.equal(await resolveExecutable("pnpm", manager), pnpm);
+    assert.equal(await shellRuns(), 2);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
 });

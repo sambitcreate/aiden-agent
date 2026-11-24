@@ -188,7 +188,8 @@ Notes:
    - a build: `vite build`, `next build` (without `next dev`), `tsc`, `tsup`, `rollup`;
    - a production run: `next start`, `vite preview`, `astro preview`, `gatsby serve`, `remix-serve`, `react-router-serve`, `NODE_ENV=production`, `serve -s`;
    - Storybook: `storybook`;
-   - a workspace runner: `turbo`, `nx ` (word, then a space), `lerna`, `pnpm -r`, `pnpm --recursive`, `--filter`, `--workspaces`, `yarn workspaces`.
+   - a workspace runner: `turbo`, `nx ` (word, then a space), `lerna`, `pnpm -r`, `pnpm --recursive`, `--filter`, `--workspaces`, `yarn workspaces`; and, from the code review, scripts that hand off to one member: `yarn workspace`, `pnpm -C`, `concurrently`, `npm-run-all`, `run-p`, and `-w`, `--workspace`, `--prefix`, `--dir` (with or without `=`). The four flags count only when the script also names `npm`, `pnpm`, `yarn` or `bun`, because other tools use `-w` for watch (`tsc -w`, `rollup -c -w`).
+   - **A workspace root** (a root that declares `workspaces` or has `pnpm-workspace.yaml` patterns) is `web` only through step 1. Any other usable script there hands off to a member and counts as a workspace runner (R4 rule 5).
 3. **Otherwise** there's no script.
 
 The check is word-based, so the tokens match only as words: `tsc` doesn't match `tscx`. The scan also records whether a dev/start/serve script existed at all and whether one was skipped as a workspace runner, for R4. The list of safe script names (at most 50) is returned too, for 2b's `choose`.
@@ -203,7 +204,7 @@ The check is word-based, so the tokens match only as words: `tsc` doesn't match 
 | 4 | a framework (R2) and a dev script (R3) | `web` | `ok` |
 | 5 | a dev/start/serve script was skipped as a workspace runner, or the folder holds `nx.json`, `turbo.json` or `lerna.json` | `none` | `workspace-runner` |
 | 6 | `react-native` or `expo` in deps | `react-nonweb` | `react-native` |
-| 7 | a framework, no dev/start/serve string script at all, and no Storybook (`storybook` or any `@storybook/` dependency) | `none` | `no-dev-script` |
+| 7 | a framework, no usable script, no Storybook (`storybook` or any `@storybook/` dependency), and either no dev/start/serve string script at all or only production runs (a Next app whose only script is `start: "next start"`) | `none` | `no-dev-script` |
 | 8 | a usable (not skipped) dev/start/serve script, and no framework matched | `none` | `unknown-framework` |
 | 9 | React in deps | `react-nonweb` | `no-web-framework` |
 | 10 | anything else | `none` | `no-web-framework` |
@@ -253,7 +254,9 @@ Two files of the same manager (`bun.lock` with `bun.lockb`, `package-lock.json` 
   - never reads the home folder, `stopAt`, anything above them, or past 5 levels. Both `stopAt` and home are compared after `realpath`;
   - a signal found there decides the manager by R5, with `source: "enclosing"` (or `"installed"` after a tie-break) and `lockfileLevelsUp` set to how many folders up it was. `installRoot` stays the candidate's own path, because every manager finds its workspace root from a member folder.
 
-  The walk reads only names and the 512-byte `yarn.lock` head, never returns the enclosing path, and never runs Deno checks. Tests pass `stopAt` to keep it inside the temp folder.
+  - **Membership** (code review): the folder's signal counts only when that folder's `package.json` `workspaces` or `pnpm-workspace.yaml` lists the workspace's path (`matchesWorkspacePattern`, excludes applied). Otherwise the walk stops and the workspace gets npm with `source: "none"` and a plain install. This covers `examples/next-app` under a library root with a `package-lock.json`, a pnpm repo whose workspace file lists other folders, and a stray parent lockfile.
+
+  The walk reads names, the 512-byte `yarn.lock` head, and the found folder's `package.json` and `pnpm-workspace.yaml` through `readBounded`. It never returns the enclosing path and never runs Deno checks. Tests pass `stopAt` to keep it inside the temp folder.
 
 **R7. Install state.** `installed` is true when `node_modules` at the install root `stat`s as a folder, or `.pnp.cjs` exists there (Yarn PnP). For an enclosing signal, `node_modules` at that enclosing folder counts too, since npm and yarn hoist there. `stat` follows symlinks: 3a's E2E fixture symlinks its `node_modules` to the repo root's (§7). A dangling symlink is `installed: false`, not an error. This is a hint only: 2b's install stamp (S8) decides whether to reinstall.
 
@@ -724,9 +727,9 @@ For reviewers to attack:
    - The command is from the fixed union and checked at runtime, so nothing from a package.json reaches the shell.
    - A zsh alias prints a non-absolute line and is ignored. fish supports `command -v`; nushell doesn't, so the lookup fails and Homebrew is tried.
    - Without `maxBuffer`, Node's 1 MiB default applies, and output past it gives `null`.
-4. **The cache.** Only a path that passed `isExecutable` is kept, and it's checked again before every use, so a removed Node or pnpm is noticed. A changed nvm default isn't noticed while the old version still exists. `clear()` is there for 2c's Retry.
-5. **Conflicts block the app.** A repo with a stale `yarn.lock` beside a working `package-lock.json`, and no single install marker, can't start until the person removes one or fixes the `packageManager` field. A wrong frozen install fails, and a wrong plain install writes a new lockfile into their repo. Attack whether the install-marker tie-break can pick wrong: `node_modules` left over from another manager, or an npm `node_modules` made before a switch to yarn.
-6. **The enclosing walk.** It reads names of a few files and the 512-byte `yarn.lock` head in up to 5 parent folders. It never runs from a git root, and it stops at `.git`, home and `stopAt` (compared after `realpath`). A workspace under a folder with a stray lockfile and no `.git` in between picks that lockfile up. A git submodule has a `.git` file, so the walk stops there. Attack an unusual `HOME` on Linux, and macOS privacy prompts for parent folders (Desktop or Documents ancestors are already in the workspace's own scope).
+4. **The cache.** Only a path that passed `isExecutable` is kept, and it's checked again before every use, so a removed Node or pnpm is noticed. A changed nvm default isn't noticed while the old version still exists. `clearAppToolchainCache()` (`app-toolchain.ts`) clears the design resolvers' shared cache; 2c's Retry calls it before resolving again.
+5. **Conflicts block the app.** A repo with a stale `yarn.lock` beside a working `package-lock.json`, and no single install marker, can't start until the person removes one or fixes the `packageManager` field. A wrong frozen install fails, and a wrong plain install writes a new lockfile into their repo. Attack whether the install-marker tie-break can pick wrong: `node_modules` left over from another manager, or an npm `node_modules` made before a switch to yarn. A gitignored leftover lockfile (say a stale `package-lock.json` ignored in a yarn repo) is also a conflict. That's accepted as a refusal: the message names the lockfiles, and deleting the leftover fixes it.
+6. **The enclosing walk.** It reads names of a few files and the 512-byte `yarn.lock` head in up to 5 parent folders. It never runs from a git root, and it stops at `.git`, home and `stopAt` (compared after `realpath`). A stray lockfile above the workspace counts only when its folder lists the workspace as a member (R6), so an unrelated parent lockfile is ignored. A git submodule has a `.git` file, so the walk stops there. Attack an unusual `HOME` on Linux, and macOS privacy prompts for parent folders (Desktop or Documents ancestors are already in the workspace's own scope).
 7. **Install state is a hint.** A killed install leaves `node_modules`, so `installed: true` can be wrong; 2b's stamp (S8) decides. In pnpm workspaces a member's own `node_modules` can be missing while the root's exists, and 2a counts the root's. That's right for hoisting managers and close enough for pnpm, whose frozen install is quick when nothing changed.
 8. **One-level search.** `apps/group/web` is found only when a workspace pattern names it exactly, and `packages/**` searches one level. This follows §6.2.1 and §10; a deeper search can come later.
 9. **Dev-command matching.** It's word matching on script text, not a shell parser.

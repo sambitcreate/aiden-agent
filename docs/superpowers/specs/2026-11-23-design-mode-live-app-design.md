@@ -616,15 +616,15 @@ Phase 2a (app detection, plan `docs/superpowers/plans/2026-11-24-design-mode-v2-
 - **S19. Launch environment in 2b.** The dev-server command environment (`agentShellCommandEnvironment()`, `BROWSER`, `FORCE_COLOR`, `PORT`, S14's host flags) lands in 2b with the process, through `nodeCommandEnvironment(env, binDirs)` and `runScriptCommand(info, script, extraArgs)`. 2b always sets `COREPACK_ENABLE_DOWNLOAD_PROMPT=0`. There's no corepack fallback for a missing manager. Only npm gets `--` before extra arguments: pnpm 12 and Yarn 4 pass a bare `--` through to the script (checked 2026-11-24).
 - **S20. Package manager rules.**
   - The `packageManager` field decides only with no lockfile or its own; otherwise it's a conflict.
-  - A conflict is settled only by a single manager's install marker in `node_modules`; otherwise 2b refuses with a message saying how to fix it.
+  - A conflict is settled only by a single manager's install marker in `node_modules`; otherwise 2b refuses with a message saying how to fix it. A gitignored leftover lockfile is a conflict too; that's accepted, since the message names the file to delete.
   - `pnpm-workspace.yaml` means pnpm.
   - Deno is unsupported.
-  - An enclosing repo's signal counts when the workspace has none of its own and no `.git`. The walk stops at `.git`, home, a caller's `stopAt` and five levels.
+  - An enclosing repo's signal counts when the workspace has none of its own and no `.git`, and only when that repo's `workspaces` or `pnpm-workspace.yaml` lists the workspace; otherwise it's npm with a plain install. The walk stops at `.git`, home, a caller's `stopAt` and five levels.
 - **S21. Kinds and scripts.**
   - Desktop shells (Electron, Tauri) are never `web`.
-  - The dev script prefers the framework's dev command and skips builds, production runs, Storybook and workspace runners.
+  - The dev script prefers the framework's dev command and skips builds, production runs, Storybook and workspace runners, including root scripts that hand off to one member (`-w`, `--workspace`, `--prefix`, `--dir` with a package manager; `yarn workspace`, `pnpm -C`, `concurrently`, `npm-run-all`, `run-p`). A root that declares workspaces is `web` only when its script runs the framework's own dev command.
   - New reasons: `workspace-runner` and `unknown-framework`. 3d never scaffolds for either.
-  - `no-dev-script` is only for a framework app with no dev/start/serve script and no Storybook.
+  - `no-dev-script` is only for a framework app with no Storybook and either no dev/start/serve script or only production runs (`start: "next start"`).
   - React Native or Expo is `react-nonweb`.
   - "React Router v7 framework mode" means `@react-router/dev`.
 - **S22. Frameworks.** The allowlist gains Angular, Nuxt, `@tanstack/start` and Remix 3 (`remix` at major 3 or later; dev command `node --watch`, default port 44100, from the `remix@3.3.0` starter). They run as live frames; source mapping and component cards stay React-only.

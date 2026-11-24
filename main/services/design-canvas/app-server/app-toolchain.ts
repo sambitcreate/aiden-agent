@@ -55,6 +55,11 @@ export async function resolveAppToolchain(app: Pick<DetectedApp, "packageManager
 
 const designExecutableCache = createExecutableCache();
 
+/** Forgets every remembered login-shell answer, for 2c's Retry after the person installs or moves a tool. */
+export function clearAppToolchainCache(): void {
+  designExecutableCache.clear();
+}
+
 /** The design resolvers: one shared cache of validated login-shell answers, Node 22+, a 16 KiB lookup buffer. */
 export function defaultAppToolchainDeps(env: NodeJS.ProcessEnv = process.env): AppToolchainDeps {
   const loginShellLookup = loginShellCommandLookup({ env, maxBuffer: 16_384 });
@@ -84,10 +89,11 @@ export function toolchainProblemMessage(problem: ToolchainProblem): string {
     case "manager-conflict": {
       if (problem.field) {
         const locked = problem.conflict.filter((name) => name !== problem.field).map((name) => `${name}'s`);
-        const noun = locked.length > 1 ? "lockfiles are" : "lockfile is";
-        return `packageManager says ${problem.field}, but the ${noun} ${listNames(locked)}.`;
+        const several = locked.length > 1;
+        return `packageManager says ${problem.field}, but the ${several ? "lockfiles are" : "lockfile is"} ${listNames(locked)}. Delete the other ${several ? "lockfiles" : "lockfile"} or change packageManager.`;
       }
-      return `This app has lockfiles for ${listNames(problem.conflict)}. Delete the one you don't use, or set packageManager in package.json.`;
+      const several = problem.conflict.length > 2;
+      return `This app has lockfiles for ${listNames(problem.conflict)}. Delete the ${several ? "ones" : "one"} you don't use, or set packageManager in package.json.`;
     }
     case "unsupported-manager":
       return "This app uses Deno, which design mode can't run yet.";
