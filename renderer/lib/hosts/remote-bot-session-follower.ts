@@ -224,8 +224,8 @@ export class RemoteBotSessionFollower {
    * The host may have rewritten history inside the same epoch (a snapshot
    * also says so), so older entries kept across a snapshot are read again, a
    * bounded page at a time, and replaced. Reading stops at the oldest kept
-   * entry, or, if the host no longer has it, once as many host entries as the
-   * kept ones spanned (drawn or not) are read. A read that fails keeps the
+   * entry (anything past it is cut off), or, if the host no longer has it, once
+   * the host entries the kept ones spanned, plus a slack, are read. A read that fails keeps the
    * pages already read (Load older continues from there), or drops the kept
    * entries if none was.
    */
@@ -234,7 +234,11 @@ export class RemoteBotSessionFollower {
     if (carried <= 0 || !view) return;
     const own = view.snapshot.entries[carried]?.id;
     const oldest = view.snapshot.entries[0]?.id;
+    // The host entries the kept part spans, as far as this Mac can count them
+    // (a snapshot's own entries are counted as shown), and a slack of the kept
+    // count for entries it couldn't see: a bound for when the oldest is gone.
     const span = Math.max(view.olderHostSpan ?? 0, carried);
+    const bound = span + carried;
     const history = this.history;
     const current = () => !this.stopped && history === this.history && this.state.view !== null;
     const settle = (pages: RemoteBotSessionEntriesPage[]) => {
@@ -251,7 +255,8 @@ export class RemoteBotSessionFollower {
     const pages: RemoteBotSessionEntriesPage[] = [];
     const next = (before: string, read: number): void => {
       if (!transport.older) return settle(pages);
-      transport.older(this.hostId, this.botId, before, Math.min(Math.max(span - read, 1), OLDER_PAGE_MAX)).then(
+      const want = read < span ? span - read : bound - read;
+      transport.older(this.hostId, this.botId, before, Math.min(Math.max(want, 1), OLDER_PAGE_MAX)).then(
         (outcome) => {
           if (!current()) return;
           if (!outcome.ok) return settle(pages);
@@ -261,7 +266,7 @@ export class RemoteBotSessionFollower {
           const total = read + (page.hostCount ?? page.entries.length);
           const cursor = page.olderCursor ?? page.entries[0]?.id;
           const reachedOldest = page.entries.some((entry) => entry.id === oldest);
-          if (reachedOldest || total >= span || !page.hasOlder || !cursor || cursor === before) return settle(pages);
+          if (reachedOldest || total >= bound || !page.hasOlder || !cursor || cursor === before) return settle(pages);
           next(cursor, total);
         },
         () => settle(pages),

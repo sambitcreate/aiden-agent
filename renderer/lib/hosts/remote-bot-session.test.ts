@@ -494,7 +494,7 @@ test("a snapshot that rewrote loaded history replaces it, and a page asked for b
   history = history.filter((entry) => entry.id !== "m4");
   fake.push(event(3, { type: "snapshot", payload: { session: session({ seq: 4, hasOlder: true, entries: [message("m5", "Five"), message("m6", "Six")] }) } }));
   await settle();
-  assert.deepEqual(texts(), ["Two", "Three", "Five", "Six"]);
+  assert.deepEqual(texts(), ["Three", "Five", "Six"], "nothing older than what was shown is added");
   assert.deepEqual(asked[1], ["m5", 2], "the loaded part is read again, as many entries as were kept");
 
   // A Load older that is out when another snapshot arrives belongs to the history before it.
@@ -600,16 +600,54 @@ test("re-reading kept history from a newer host covers the same span, entries th
   assert.deepEqual(ids(), ["m3", "m4", "m5", "m6"]);
   assert.equal(follower.getState().view!.olderCursor, "m3");
 
-  // The host drops "m3": the re-read stops after the same span instead of walking to the start.
+  // The host drops "m3", the oldest kept: the re-read is bounded by the span it covered plus a slack.
   host = host.filter((id) => id !== "m3");
   asked.length = 0;
   snapshot(6);
   await settle();
-  assert.deepEqual(asked, [["m5", 4]]);
-  assert.deepEqual(ids(), ["m2", "m4", "m5", "m6"]);
-  await follower.loadOlder();
+  assert.deepEqual(asked, [["m5", 4], ["m2", 2]]);
   assert.deepEqual(ids(), ["m1", "m2", "m4", "m5", "m6"]);
   assert.equal(follower.getState().view!.hasOlder, false);
+  follower.stop();
+});
+
+test("a same-epoch snapshot that starts inside the loaded history keeps what was shown, and adds nothing older", async () => {
+  const message = (id: string, text: string) => ({ type: "message" as const, id, role: "assistant" as const, text });
+  // The host, newer than this Mac: "u…" entries are of kinds this Mac can't show.
+  const host = ["m1", "m2", "m3", "m4", "u1", "u2", "m5", "u3", "m6", "m7"];
+  const fake = fakeTransport([session({ hasOlder: true, entries: [message("m5", "m5"), message("m6", "m6")] })]);
+  const asked: Array<[string, number | undefined]> = [];
+  fake.transport.older = async (_hostId, _botId, before, limit) => {
+    asked.push([before, limit]);
+    const end = host.indexOf(before);
+    const start = Math.max(0, end - (limit ?? 2));
+    const sent = host.slice(start, end);
+    return {
+      ok: true,
+      value: {
+        botId: "bot_1", epoch: "e1", hasOlder: start > 0, olderCursor: sent[0], hostCount: sent.length,
+        entries: sent.filter((id) => id.startsWith("m")).map((id) => message(id, id)),
+      },
+    };
+  };
+  const follower = new RemoteBotSessionFollower(fake.transport, "host_a", "bot_1");
+  follower.start();
+  await settle();
+  const ids = () => follower.getState().view!.snapshot.entries.map((entry) => entry.id);
+  await follower.loadOlder();
+  await follower.loadOlder();
+  assert.deepEqual(ids(), ["m3", "m4", "m5", "m6"]);
+
+  // A new reply: the snapshot now starts at "m6", so "m5" joins the kept part.
+  asked.length = 0;
+  fake.push(event(4, { type: "snapshot", payload: { session: session({ seq: 5, hasOlder: true, entries: [message("m6", "m6"), message("m7", "m7")] }) } }));
+  await settle();
+  assert.deepEqual(ids(), ["m3", "m4", "m5", "m6", "m7"], "everything shown stays, and m1 and m2 are not added");
+  assert.equal(follower.getState().view!.olderCursor, "m3", "Load older resumes where it was");
+  assert.equal(follower.getState().view!.hasOlder, true);
+  assert.ok(asked.length <= 2 && asked.every(([, limit]) => (limit ?? 0) <= 200), JSON.stringify(asked));
+  await follower.loadOlder();
+  assert.deepEqual(ids(), ["m1", "m2", "m3", "m4", "m5", "m6", "m7"]);
   follower.stop();
 });
 
