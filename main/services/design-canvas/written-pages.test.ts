@@ -563,6 +563,22 @@ test("a written page dedupes only against the chat's view page", () => {
   assert.equal(again.changed, false, "on p2 the page is already there");
 });
 
+test("a written page auto-placed in a turn claims for a chat with none", async (t) => {
+  const { workspaceRoot, canvases } = await workspaceWith(t, ["home.html"]);
+  await canvases.store.update("chat-1", (doc) => ({ ...doc, pages: [...doc.pages, { id: "p2", name: "Pricing" }] }));
+  await canvases.views.report("chat-1", "ws-1", onPage("p2"), 0);
+  await placeWrittenPagesOnCanvas({
+    ...canvases.via("chat-1"),
+    workspaceRoot,
+    paths: ["design/home.html"],
+    broadcast: () => undefined,
+    newId: ids(),
+  });
+  const doc = await canvases.workspaceStore.get("ws-1");
+  assert.equal(doc.revision, 2, "the claim rides on the placement's write");
+  assert.deepEqual(doc.chatPages, { "chat-1": "p2" });
+});
+
 test("a turn's message page beats the chat's kept page for a page written mid-turn", async (t) => {
   const { workspaceRoot, canvases } = await workspaceWith(t, ["home.html"]);
   await canvases.store.update("chat-1", (doc) => ({ ...doc, pages: [...doc.pages, { id: "p2", name: "Pricing" }] }));

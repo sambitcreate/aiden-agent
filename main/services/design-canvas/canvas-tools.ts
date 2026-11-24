@@ -88,6 +88,7 @@ import {
   ChatPagesFullError,
   chatsOnPage,
   claimPage,
+  withLazyClaim,
   withoutGoneClaims,
   type IsChatLive,
 } from "../../../renderer/shared/design-canvas/chat-pages.js";
@@ -242,6 +243,8 @@ export type DesignCanvasToolDeps = {
    * Left out, every chat counts as live.
    */
   isLive?(chatIds: string[], workspaceId: string): Promise<Set<string>>;
+  /** Settles once a design-mode entry running for this chat has claimed its page; writes wait for it. */
+  pendingEntry?(): Promise<void>;
   newId?(): string;
   /**
    * Asks the window showing the chat's canvas to show `pageId` and fit these
@@ -913,7 +916,8 @@ export function createDesignCanvasTools(deps: DesignCanvasToolDeps): AgentTool[]
    * refuse, and gets the turn's view of the document it changes. A frame the
    * person moved since Aiden last saw it keeps the person's box, and the
    * answer says so with its box now. `show` brings a page on screen after
-   * the change has landed.
+   * the change has landed. A chat with no page of its own claims the page
+   * the turn worked on, in the same write, once a pending entry is done.
    */
   const edit = async <T>(
     change: (doc: DesignCanvas, view: DesignChatView) => { doc: DesignCanvas; value: T; show?: { pageId: string; frameIds: string[] } },
@@ -922,11 +926,13 @@ export function createDesignCanvasTools(deps: DesignCanvasToolDeps): AgentTool[]
     let show: { pageId: string; frameIds: string[] } | undefined;
     let report: ReturnType<typeof keepPersonsMoves> | undefined;
     let touched = new Set<string>();
+    await deps.pendingEntry?.();
     const { workspaceId, viewOf } = await turnFor();
     const { doc: saved } = await deps.store.update(
       deps.chatId,
       (doc) => {
-        const next = change(doc, viewOf(doc));
+        const view = viewOf(doc);
+        const next = change(doc, view);
         report = keepPersonsMoves(doc, next.doc, seen);
         const earlier = new Map(doc.frames.map((frame) => [frame.id, JSON.stringify(frame)]));
         touched = new Set(
@@ -934,7 +940,7 @@ export function createDesignCanvasTools(deps: DesignCanvasToolDeps): AgentTool[]
         );
         value = next.value;
         show = next.show;
-        return report.doc;
+        return next.doc === doc ? report.doc : withLazyClaim(report.doc, deps.chatId, view.pageId);
       },
       { workspaceId },
     );

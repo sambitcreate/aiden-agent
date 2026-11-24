@@ -21,6 +21,7 @@ import {
   chatsOnPage,
   ChatPagesFullError,
   claimPage,
+  withLazyClaim,
   withoutGoneClaims,
   type IsChatLive,
 } from "../../../renderer/shared/design-canvas/chat-pages.js";
@@ -356,6 +357,30 @@ export class RecentWrittenPages {
   }
 }
 
+/**
+ * The design-mode entry running for each chat, so a design turn's first
+ * canvas write waits for entry's claim instead of claiming a page first.
+ * Memory only.
+ */
+export class PendingEntries {
+  private readonly byChat = new Map<string, Promise<unknown>>();
+
+  /** Remembers `entry` until it settles, and returns it. */
+  track<T>(chatId: string, entry: Promise<T>): Promise<T> {
+    this.byChat.set(chatId, entry);
+    const clear = () => {
+      if (this.byChat.get(chatId) === entry) this.byChat.delete(chatId);
+    };
+    entry.then(clear, clear);
+    return entry;
+  }
+
+  /** Settles once the chat's running entry has, whether or not it failed. */
+  async wait(chatId: string): Promise<void> {
+    await this.byChat.get(chatId)?.catch(() => undefined);
+  }
+}
+
 const UNCHANGED = Symbol("unchanged");
 
 /** What design mode's entry decides the chat's page by, read before the canvas update. */
@@ -476,6 +501,12 @@ export async function placeWrittenPagesOnCanvas(input: {
   shouldSave?: () => Promise<boolean> | boolean;
   /** Told the pages left off because the person took them off the canvas. */
   onRemoved?: (paths: readonly string[]) => void;
+  /**
+   * Settles once a design-mode entry running for this chat has claimed its
+   * page. A turn's placement waits for it, then claims the turn's page for
+   * a chat with none, in the same write. Not used with `entry`.
+   */
+  pendingEntry?(): Promise<void>;
 }): Promise<{ frameIds: string[]; pageId?: string; focusId?: number }> {
   if (input.limit !== undefined && input.limit <= 0) return { frameIds: [] };
   // A chat deleted meanwhile has no canvas to put them on.
@@ -512,6 +543,7 @@ export async function placeWrittenPagesOnCanvas(input: {
   const showable = newestFirst.reverse();
   // Entry claims a page even when the chat wrote none.
   if (showable.length === 0 && !rules) return { frameIds: [] };
+  if (!rules) await input.pendingEntry?.();
   const viewOf = await input.pages.resolver(workspaceId);
   const shouldSave = input.shouldSave;
   let placedIds: string[] = [];
@@ -547,7 +579,8 @@ export async function placeWrittenPagesOnCanvas(input: {
         removed = placed.removed;
         if (placed.doc === doc) throw UNCHANGED;
         placedIds = placed.placedIds;
-        return placed.doc;
+        // A turn's placement claims the turn's page for a chat with none; entry has claimed already.
+        return rules ? placed.doc : withLazyClaim(placed.doc, input.chatId, view.pageId);
       },
       {
         workspaceId,

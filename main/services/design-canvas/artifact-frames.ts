@@ -3,6 +3,7 @@
 // llm-client runs it once the turn's artifacts are committed.
 
 import { canvasView } from "../../../renderer/shared/design-canvas/canvas-summary.js";
+import { withLazyClaim } from "../../../renderer/shared/design-canvas/chat-pages.js";
 import { placeFrame } from "../../../renderer/shared/design-canvas/placement.js";
 import { DESIGN_CANVAS_LIMITS, type DesignCanvas } from "../../../renderer/shared/design-canvas/schema.js";
 import type { DesignChatView } from "../../../renderer/shared/design-canvas/view.js";
@@ -87,13 +88,17 @@ type CanvasPlacement = {
   pages: Pick<DesignTurnPages, "resolver">;
   broadcast(update: DesignCanvasUpdated): void;
   newId(): string;
+  /** Settles once a design-mode entry running for this chat has claimed its page. */
+  pendingEntry?(): Promise<void>;
 };
 
 /**
  * The chat's workspace, resolved once so the save and the broadcast name the
- * same one, and the turn's view resolver for it.
+ * same one, and the turn's view resolver for it. Waits for a pending entry
+ * first, so a placement's lazy claim never comes before entry's claim.
  */
 async function placementTurn(input: CanvasPlacement): Promise<{ workspaceId: string; viewOf: (doc: DesignCanvas) => DesignChatView }> {
+  await input.pendingEntry?.();
   const workspaceId = await input.store.workspaceIdOf(input.chatId);
   if (workspaceId === null) throw new Error("This chat is no longer available.");
   return { workspaceId, viewOf: await input.pages.resolver(workspaceId) };
@@ -102,7 +107,7 @@ async function placementTurn(input: CanvasPlacement): Promise<{ workspaceId: str
 /**
  * Places the artifacts in the chat's workspace canvas and tells open
  * canvases. Saves nothing (and announces nothing) when every artifact is
- * already there.
+ * already there. A chat with no page of its own claims the turn's page.
  */
 export async function placeArtifactsOnCanvas(input: CanvasPlacement & { artifacts: readonly CanvasArtifact[] }): Promise<boolean> {
   if (input.artifacts.length === 0) return false;
@@ -111,9 +116,10 @@ export async function placeArtifactsOnCanvas(input: CanvasPlacement & { artifact
     const { doc: saved } = await input.store.update(
       input.chatId,
       (doc) => {
-        const placed = placeArtifactFrames(doc, input.artifacts, input.newId, { chatId: input.chatId, view: viewOf(doc) });
+        const view = viewOf(doc);
+        const placed = placeArtifactFrames(doc, input.artifacts, input.newId, { chatId: input.chatId, view });
         if (!placed.changed) throw UNCHANGED;
-        return placed.doc;
+        return withLazyClaim(placed.doc, input.chatId, view.pageId);
       },
       { workspaceId },
     );
@@ -181,7 +187,8 @@ export function placeImageFrames(
 }
 
 /**
- * Places saved images in the chat's workspace canvas and tells open canvases.
+ * Places saved images in the chat's workspace canvas and tells open canvases,
+ * claiming the turn's page for a chat with none.
  * Returns the frames showing them and the page they are on, or null when
  * `shouldSave` refused under the canvas lock (design mode went off, or the
  * workspace changed).
@@ -207,7 +214,7 @@ export async function placeImagesOnCanvas(
         const placed = placeImageFrames(doc, input.images, input.newId, view);
         frameIds = placed.frameIds;
         if (!placed.changed) throw UNCHANGED;
-        return placed.doc;
+        return withLazyClaim(placed.doc, input.chatId, view.pageId);
       },
       {
         workspaceId,

@@ -587,6 +587,7 @@ import {
   designGrants,
   designLiveChats,
   designModeConsent,
+  designPendingEntries,
   designSystemOffers,
   recentWrittenPages,
 } from "./design-canvas/main.js";
@@ -1999,13 +2000,16 @@ async function prepareGeneration(
    * The canvas page this turn works on, one resolver for the whole turn: the
    * canvas tools, pages and images placed by themselves, and the canvas status
    * line all read the page the same way (a page Aiden showed this turn, the
-   * page the message came from, the chat's kept page, the first page).
+   * page the message came from, the chat's kept page, the chat's own page,
+   * the first page).
    */
   const designPages = designTurnPages({
     views: designCanvasViews,
     chatId: params.chatId,
     ...(params.designView ? { message: params.designView } : {}),
   });
+  /** The turn's canvas writes wait for a design-mode entry still claiming this chat's page. */
+  const designPendingEntry = () => designPendingEntries.wait(params.chatId);
   /** Asks the window showing the chat's canvas to show a page and fit these frames. */
   const focusDesignCanvas = (request: { pageId: string; frameIds: readonly string[]; focusId?: number }) => {
     const liveOwner = getOwner();
@@ -2740,6 +2744,7 @@ async function prepareGeneration(
                       pages: designPages,
                       broadcast: announceCanvasChange,
                       newId: randomUUID,
+                      pendingEntry: designPendingEntry,
                     });
                     if (placed === null) return null;
                     if (placed.frameIds.length > 0) focusDesignCanvas(placed);
@@ -2996,6 +3001,7 @@ async function prepareGeneration(
       broadcast: announceCanvasChange,
       pages: designPages,
       isLive: designLiveChats,
+      pendingEntry: designPendingEntry,
       focus: focusDesignCanvas,
       snapshot: async (toolSignal) =>
         supportsImages
@@ -3031,6 +3037,7 @@ async function prepareGeneration(
           pages: designPages,
           broadcast: announceCanvasChange,
           newId: randomUUID,
+          pendingEntry: designPendingEntry,
         });
       };
     }
@@ -3136,6 +3143,7 @@ async function prepareGeneration(
           pages: designPages,
           broadcast: announceCanvasChange,
           newId: randomUUID,
+          pendingEntry: designPendingEntry,
           onRemoved: () => {
             leftOff = true;
           },

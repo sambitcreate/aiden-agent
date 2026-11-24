@@ -17,7 +17,7 @@ import { DESIGN_CANVAS_UPDATED_CHANNEL, DesignCanvasStore, DesignChatCanvases, t
 import { createDesignTitleFollow } from "./title-follow.js";
 import { DesignCanvasViews } from "./views.js";
 import { DESIGN_FILES_CHANGED_CHANNEL, DesignFileWatcher } from "./watch.js";
-import { RecentWrittenPages } from "./written-pages.js";
+import { PendingEntries, RecentWrittenPages } from "./written-pages.js";
 
 /** One canvas file per workspace, under `userData/design-canvases/`. */
 export const designWorkspaceCanvasStore = new DesignCanvasStore({
@@ -129,6 +129,9 @@ export const designModeConsent = new DesignModeConsent();
 
 /** Pending `canvas_read` snapshot requests. Memory only. */
 export const designCanvasSnapshots = new DesignCanvasSnapshots();
+
+/** Each chat's running design-mode entry, which its turn's canvas writes wait for. Memory only. */
+export const designPendingEntries = new PendingEntries();
 
 /** HTML pages each chat's replies wrote in this run, for opening design mode mid-reply. Memory only. */
 export const recentWrittenPages = new RecentWrittenPages();

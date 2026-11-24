@@ -80,6 +80,22 @@ export function claimPage(doc: DesignCanvas, chatId: string, pageId: string, isL
 }
 
 /**
+ * A design turn's write claims the page the turn worked on for a chat with
+ * no claim yet, in the same write. `doc` is the document after the write's
+ * own change, so a claim that change made stays, and a page it deleted is
+ * not claimed. A full `chatPages` skips the claim and leaves the write.
+ */
+export function withLazyClaim(doc: DesignCanvas, chatId: string, pageId: string): DesignCanvas {
+  if (claimOf(doc, chatId) !== undefined || !doc.pages.some((page) => page.id === pageId)) return doc;
+  try {
+    return claimPage(doc, chatId, pageId);
+  } catch (error) {
+    if (error instanceof ChatPagesFullError) return doc;
+    throw error;
+  }
+}
+
+/**
  * Drops the claims of chats `isLive` says are gone, so a chat deleted between
  * its delete and the cleanup that follows it does not keep its page forever.
  */

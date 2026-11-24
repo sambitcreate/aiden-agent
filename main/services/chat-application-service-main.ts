@@ -26,6 +26,7 @@ import {
   designGrants,
   designLiveChats,
   designModeConsent,
+  designPendingEntries,
   designTitleFollow,
   recentWrittenPages,
 } from "./design-canvas/main.js";
@@ -57,7 +58,8 @@ export const chatApplicationService = createChatApplicationService({
   designCanvasCarry,
   designGrants,
   designModeConsent,
-  designPagesOnEntry: async (chat, workspaceRoot) => {
+  // Tracked whichever way design mode turned on, so the chat's canvas writes wait for its claim.
+  designPagesOnEntry: (chat, workspaceRoot) => designPendingEntries.track(chat.id, (async () => {
     const entered = await placeWrittenPagesOnCanvas({
       chatId: chat.id,
       workspaceRoot,
@@ -76,14 +78,14 @@ export const chatApplicationService = createChatApplicationService({
         isLive: designLiveChats,
       },
     });
-    // The title may have changed while entry ran; a page made for the chat follows it.
-    await designTitleFollow.follow(chat.id);
     // The canvas shows that page and fits them once it loads, so the person sees them whole.
     const { frameIds, pageId, focusId } = entered;
     if (pageId && (frameIds.length > 0 || focusId !== undefined)) {
       ipcMain.broadcast("designCanvas:focus", { chatId: chat.id, pageId, frameIds, ...(focusId !== undefined ? { focusId } : {}) });
     }
-  },
+    // The title may have changed while entry ran; a page made for the chat follows it.
+    await designTitleFollow.follow(chat.id);
+  })()),
   visualSnapshots: { cancelChat: cancelVisualSnapshots },
   followThrough: { beginMove: beginFollowThroughMove, deleteChat: deleteChatFollowThrough, restoreChat: restoreChatFollowThrough },
   memoryStore,
