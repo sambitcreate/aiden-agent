@@ -101,6 +101,7 @@ function fixture(
     messaging?: AidenRemoteBotServiceOptions["messaging"];
     sessionStates?: AidenRemoteBotServiceOptions["sessionStates"];
     issues?: AidenRemoteBotServiceOptions["issues"];
+    log?: AidenRemoteBotServiceOptions["log"];
     capabilityCatalog?: (
       audienceId: string,
       botId?: string,
@@ -329,14 +330,41 @@ test("a Bot summary carries issueCount only while it holds open issues, and an u
 
 test("one Bot the Remote contract can't carry is left out of the list, and the others still reach every device", async () => {
   // A clock that went back between creating and editing a Bot, and a name from before today's limit.
+  const logged: string[] = [];
   const app = fixture([
     bot("bot_1"),
     bot("bot_2", { createdAt: 5_000, updatedAt: 4_000 }),
-    bot("bot_3", { name: "N".repeat(200) }),
+    bot("bot_3", { name: `Secret ${"N".repeat(200)}` }),
     bot("bot_4"),
-  ]);
+  ], { log: (message) => logged.push(message) });
   const list = parseAidenRemoteBotList(await app.service.list());
   assert.deepEqual(list.bots.map(({ id }) => id), ["bot_1", "bot_4"]);
+  assert.equal(logged.length, 2, "each Bot left out is logged once");
+  assert.ok(logged.some((line) => line.includes("bot_2")) && logged.some((line) => line.includes("bot_3")));
+  assert.ok(logged.every((line) => !line.includes("Secret")), "the log names the Bot by id, never by its fields");
+});
+
+test("a Bot whose summary can't be read right now fails the list rather than leaving that Bot out", async () => {
+  // A phone or paired Mac drops any Bot a successful list leaves out, but keeps
+  // the Bots it last listed when the list fails, so a passing read error must
+  // never look like a deleted Bot.
+  let failing = true;
+  const logged: string[] = [];
+  const app = fixture([bot("bot_1"), bot("bot_2"), bot("bot_3")], {
+    log: (message) => logged.push(message),
+    sessionStates: async (ids) => {
+      // The batch misses bot_2, whose own read then fails while the store is busy.
+      if (ids.length === 1 && ids[0] === "bot_2" && failing) {
+        throw Object.assign(new Error("resource busy"), { code: "EBUSY" });
+      }
+      return new Map(ids.filter((id) => ids.length === 1 || id !== "bot_2").map((id) => [id, "idle"] as const));
+    },
+  });
+  await assert.rejects(app.service.list(), /resource busy/u);
+  assert.deepEqual(logged, [], "a read failure is not a contract problem");
+  failing = false;
+  const list = parseAidenRemoteBotList(await app.service.list());
+  assert.deepEqual(list.bots.map(({ id }) => id), ["bot_1", "bot_2", "bot_3"]);
 });
 
 test("Remote Bot inbox and avatar adapter stay device-scoped, mutation-gated, and idempotent", async () => {
