@@ -183,6 +183,8 @@ interface Entry {
   lastJobId?: string;
   /** The port the server last ran on, kept by restart. */
   port?: number;
+  /** Counts explicit stops; a deferred choose made before one is dropped. */
+  stops: number;
 }
 
 const STOP = "stop";
@@ -320,6 +322,7 @@ export class DesignAppServers {
   async stop(workspaceId: string, appRoot: string): Promise<DesignAppStatus> {
     const entry = this.entries.get(keyOf(workspaceId, appRoot));
     if (!entry) return this.statusWith(workspaceId, appRoot);
+    entry.stops += 1;
     return this.enqueue(entry, async () => {
       await this.halt(entry);
       return { ...entry.status };
@@ -463,6 +466,7 @@ export class DesignAppServers {
         meta: { frameworkLabel: "App" },
         status: this.blankStatus(workspaceId, appRoot),
         queue: Promise.resolve(),
+        stops: 0,
       };
       this.entries.set(key, entry);
     }
@@ -506,10 +510,15 @@ export class DesignAppServers {
    * choose card, which is what saves the choice.
    */
   private begin(entry: Entry, input: AttemptInput): Promise<DesignAppStatus> {
+    // A stop asked for after this call wins over a choose: the choose is dropped, never run after it.
+    const stops = entry.stops;
     const created = entry.queue.then(() => {
+      if (input.choose && entry.stops !== stops) return { promise: this.afterQueued(entry) };
       if (entry.attempt) {
         const pending = entry.attempt.promise;
-        return { promise: input.choose ? pending.then(() => this.begin(entry, input), () => this.begin(entry, input)) : pending };
+        if (!input.choose) return { promise: pending };
+        const resume = () => (entry.stops === stops ? this.begin(entry, input) : this.afterQueued(entry));
+        return { promise: pending.then(resume, resume) };
       }
       if (entry.server?.running) {
         return { promise: input.choose ? this.chooseOverRunning(entry, input) : Promise.resolve({ ...entry.status }) };
@@ -528,9 +537,18 @@ export class DesignAppServers {
     return created.then(({ promise }) => promise);
   }
 
+  /** The status once everything queued so far (such as a stop) has run. */
+  private afterQueued(entry: Entry): Promise<DesignAppStatus> {
+    return this.enqueue(entry, async () => ({ ...entry.status }));
+  }
+
   private async chooseOverRunning(entry: Entry, input: AttemptInput): Promise<DesignAppStatus> {
     const keepPort = entry.port;
-    await this.stop(entry.workspaceId, entry.appRoot);
+    const stopping = this.stop(entry.workspaceId, entry.appRoot);
+    const stops = entry.stops;
+    await stopping;
+    // A stop asked for meanwhile wins: the app stays stopped.
+    if (entry.stops !== stops) return this.afterQueued(entry);
     return this.begin(entry, { ...input, ...(keepPort !== undefined && input.keepPort === undefined ? { keepPort } : {}) });
   }
 

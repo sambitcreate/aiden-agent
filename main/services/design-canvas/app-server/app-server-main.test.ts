@@ -1228,6 +1228,38 @@ test("choose while a start's card is open waits for it, then still shows its own
   assert.equal(status.script, "start");
 });
 
+test("a stop after a deferred choose cancels the choose: no card reopens and nothing runs", async (t) => {
+  const h = harness(t, { apps: [webApp({ root: "apps/a" }), webApp({ root: "apps/b", scripts: ["dev", "start"] })] });
+  void h.servers.start({ ...h.input(), appRoot: "apps/b" });
+  await settle();
+  assert.equal(h.openCard()?.reason, "first");
+  const chosen = h.servers.choose({ ...h.input(), appRoot: "apps/b", script: "start" });
+  await settle();
+  await h.servers.stop("ws", "apps/b");
+  await settle();
+  const status = await chosen;
+  await settle();
+  assert.equal(h.openCard(), undefined, "no choose card after the stop");
+  assert.equal(status.phase, "stopped");
+  assert.equal(h.jobs.jobs.length, 0);
+  assert.deepEqual(h.state.saved, []);
+});
+
+test("a stop while choose restarts a running app leaves it stopped", async (t) => {
+  const h = harness(t, { apps: [webApp({ root: "apps/a" }), webApp({ root: "apps/b" })] });
+  await h.runApp({ appRoot: "apps/b" });
+  const jobsBefore = h.jobs.jobs.length;
+  const chosen = h.servers.choose({ ...h.input(), appRoot: "apps/b" });
+  const stopped = h.servers.stop("ws", "apps/b");
+  await settle();
+  await stopped;
+  const status = await chosen;
+  await settle();
+  assert.equal(h.openCard(), undefined, "no choose card after the stop");
+  assert.equal(status.phase, "stopped");
+  assert.equal(h.jobs.jobs.length, jobsBefore, "no new server");
+});
+
 test("choose on an app that is already running shows the choose card, saves, and runs it again", async (t) => {
   const h = harness(t, { apps: [webApp({ root: "apps/a" }), webApp({ root: "apps/b" })] });
   await h.runApp({ appRoot: "apps/b" });
