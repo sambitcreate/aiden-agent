@@ -252,7 +252,10 @@ export async function scanRunningServers(
 }
 
 export type AttachCheck =
-  /** `ident`: the holder's identity (`ProcessRow.ident`) from the table these checks read; the watch re-checks it every tick. */
+  /**
+   * `ident`: the holder's identity (`ProcessRow.ident`) from the table these checks read. The watch compares it every
+   * tick to notice a lost holder; the folder and job rules it can't vouch for are re-checked every tick too (`recheckAttached`).
+   */
   | { ok: true; pid: number; ppid: number; ident: string; origin: string; held: string[]; processName: string; folder: string }
   | { ok: false; problem: "attach-not-loopback" | "attach-unreachable" | "attach-not-in-app" };
 
@@ -419,13 +422,65 @@ export async function findRebind(input: RebindInput, deps: AttachScanDeps): Prom
   return { ok: true, ...found, ident };
 }
 
-/** What `DesignAppServers` asks of the attach code: the scan, the check, re-binds and the workspace's real folder. */
+// ── The attached watch's every-tick re-check (D9; Pullfrog r4684345118) ──
+
+export type RecheckInput = { holder: number; subtree: readonly number[]; workspacePath: string; appRoot: string };
+
+/**
+ * What a tick's re-check found: the holder may stay attached; it may not, and
+ * detaches at once with `problem`; or the look failed (`reason`), which the
+ * watch counts toward its three failed looks.
+ */
+export type AttachRecheck =
+  | { ok: true }
+  | { ok: false; problem: "attach-not-in-app" | "attach-unreachable" }
+  | { ok: false; reason: string };
+
+/**
+ * The attach check's folder and job rules, again, for a holder the watch
+ * still has: an `exec` in place that keeps the program's name keeps its pid,
+ * start time and command, so `ProcessRow.ident` can't show it. Runs every
+ * tick, whatever the identity says, over the tick's own subtree. Two
+ * batched reads: one lsof (or /proc) read of the holder's folder, which must
+ * be inside the app root's real folder, itself inside the workspace's; and
+ * one environment read of the subtree, where any background job's marker
+ * refuses and an environment that can't be read fails closed. A member that
+ * exited since the tick's process table runs nothing and is skipped. A failed
+ * read, or a holder that has gone, is a failed look, not a verdict: the next
+ * tick's table decides whether it was lost. Never signals anything.
+ */
+export async function recheckAttached(input: RecheckInput, deps: AttachScanDeps): Promise<AttachRecheck> {
+  const notInApp = { ok: false, problem: "attach-not-in-app" } as const;
+  let workspaceReal: string;
+  try {
+    workspaceReal = await deps.realpath(input.workspacePath);
+  } catch {
+    return notInApp;
+  }
+  const rootReal = await realAppRoot(workspaceReal, input.workspacePath, input.appRoot, deps);
+  if (!rootReal) return notInApp;
+  const folders = await processFolders([input.holder], deps.reader, { uid: deps.uid, maxPids: 1 });
+  if (!folders.ok) return { ok: false, reason: folders.reason };
+  const folder = folders.byPid.get(input.holder);
+  if (folder === undefined) return { ok: false, reason: "the holder's folder wasn't shown" };
+  if (relativeInside(rootReal, folder) === undefined) return notInApp;
+  const subtree = input.subtree.includes(input.holder) ? input.subtree : [input.holder, ...input.subtree];
+  const marks = await processEnvironmentMarks(subtree, JOB_MARKER_PREFIX, deps.reader);
+  if (!marks.ok) return { ok: false, reason: marks.reason };
+  if (subtree.some((pid) => marks.marked.has(pid))) return notInApp;
+  if (marks.gone.has(input.holder)) return { ok: false, reason: "the holder has gone" };
+  if (subtree.some((pid) => marks.unreadable.has(pid) && !marks.gone.has(pid))) return { ok: false, problem: "attach-unreachable" };
+  return { ok: true };
+}
+
+/** What `DesignAppServers` asks of the attach code: the scan, the check, re-binds, each tick's re-check and the workspace's real folder. */
 export interface DesignAppAttachDeps {
   /** The person's uid: every process in an attached subtree must be theirs. */
   uid: number;
   scan(input: { workspacePath: string; roots: readonly string[]; busyRoots: ReadonlySet<string> }): ReturnType<typeof scanRunningServers>;
   check(input: { workspacePath: string; appRoot: string; port: number; pid?: number }): Promise<AttachCheck>;
   rebind(input: RebindInput): Promise<RebindResult>;
+  recheck(input: RecheckInput): Promise<AttachRecheck>;
   realpath(target: string): Promise<string>;
 }
 
@@ -435,6 +490,7 @@ export function designAppAttachDeps(deps: AttachScanDeps): DesignAppAttachDeps {
     scan: (input) => scanRunningServers(input, deps),
     check: (input) => checkAttach(input, deps),
     rebind: (input) => findRebind(input, deps),
+    recheck: (input) => recheckAttached(input, deps),
     realpath: (target) => deps.realpath(target),
   };
 }

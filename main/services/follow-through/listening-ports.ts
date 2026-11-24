@@ -574,9 +574,14 @@ export function parseLsofCwd(output: string): Map<number, string> {
 
 export type ProcessFolders = { ok: true; byPid: Map<number, string>; incomplete: boolean } | { ok: false; reason: string };
 
+/** Pids `processFolders` names to lsof, at most; a longer list reads every process of the uid instead. */
+const MAX_NAMED_FOLDER_PIDS = 256;
+
 /**
  * Each process's working folder. macOS: one `lsof -d cwd` for the uid's
- * processes (its folders are canonical); Linux: `readlink /proc/<pid>/cwd`
+ * processes (its folders are canonical), naming them when there are few, so
+ * an attached server's every-tick look reads one process, not all of the
+ * person's; Linux: `readlink /proc/<pid>/cwd`
  * for exactly these pids, skipping EACCES and ENOENT. A skipped pid or an
  * lsof diagnostic is `incomplete` with `partial` and a failure without; a
  * timeout, an overrun, an exit other than 0 or 1, or more than `maxPids`
@@ -593,7 +598,8 @@ export async function processFolders(
   const byPid = new Map<number, string>();
   if (!wanted.length) return { ok: true, byPid, incomplete: false };
   if (deps.platform === "darwin") {
-    const result = await deps.exec("/usr/sbin/lsof", ["-nP", "-a", "-d", "cwd", "-Fpn", "-u", String(options.uid)], {
+    const named = wanted.length <= MAX_NAMED_FOLDER_PIDS ? ["-p", wanted.join(",")] : [];
+    const result = await deps.exec("/usr/sbin/lsof", ["-nP", "-a", "-d", "cwd", "-Fpn", "-u", String(options.uid), ...named], {
       timeoutMs: LSOF_TIMEOUT_MS,
       maxBuffer: READER_MAX_BUFFER,
     });
@@ -723,8 +729,12 @@ export async function portHolders(
   return { ok: false, reason: "unsupported platform" };
 }
 
-/** What `processEnvironmentMarks` read: the pids whose starting environment carries the prefix, and the ones it couldn't read. */
-export type EnvironmentMarks = { ok: true; marked: Set<number>; unreadable: Set<number> } | { ok: false; reason: string };
+/**
+ * What `processEnvironmentMarks` read: the pids whose starting environment
+ * carries the prefix, and the ones it couldn't read. `gone` are the
+ * unreadable ones that had exited by the end of the read.
+ */
+export type EnvironmentMarks = { ok: true; marked: Set<number>; unreadable: Set<number>; gone: Set<number> } | { ok: false; reason: string };
 
 /**
  * Which of these processes started with an environment entry beginning
@@ -734,13 +744,15 @@ export type EnvironmentMarks = { ok: true; marked: Set<number>; unreadable: Set<
  * pids: `ps -E` appends the environment after the command, except for
  * Apple's platform binaries (and a process with an empty environment), whose
  * two lines then match, so those are unreadable. A process that left between
- * the reads is unreadable too.
+ * the reads is unreadable too, and `gone` when the later, plain `ps` no
+ * longer shows it (Linux: when it no longer exists).
  */
 export async function processEnvironmentMarks(pids: readonly number[], prefix: string, deps: SocketReaderDeps): Promise<EnvironmentMarks> {
   const wanted = [...new Set(pids)].filter((pid) => Number.isSafeInteger(pid) && pid > 1);
   const marked = new Set<number>();
   const unreadable = new Set<number>();
-  if (!wanted.length) return { ok: true, marked, unreadable };
+  const gone = new Set<number>();
+  if (!wanted.length) return { ok: true, marked, unreadable, gone };
   if (wanted.length > MAX_SCAN_PIDS) return { ok: false, reason: "too many processes" };
   if (deps.platform === "linux") {
     for (const pid of wanted) {
@@ -749,9 +761,10 @@ export async function processEnvironmentMarks(pids: readonly number[], prefix: s
         if (environment.split("\0").some((entry) => entry.startsWith(prefix))) marked.add(pid);
       } catch {
         unreadable.add(pid);
+        if (!deps.processExists(pid)) gone.add(pid);
       }
     }
-    return { ok: true, marked, unreadable };
+    return { ok: true, marked, unreadable, gone };
   }
   if (deps.platform === "darwin") {
     const list = wanted.join(",");
@@ -778,12 +791,13 @@ export async function processEnvironmentMarks(pids: readonly number[], prefix: s
       const command = bare.get(pid);
       if (line === undefined || command === undefined || !line.startsWith(command) || line.length === command.length) {
         unreadable.add(pid);
+        if (command === undefined) gone.add(pid);
         continue;
       }
       // Fail closed: an argument that only looks like the entry counts as one.
       if (line.slice(command.length).split(/\s+/u).some((entry) => entry.startsWith(prefix))) marked.add(pid);
     }
-    return { ok: true, marked, unreadable };
+    return { ok: true, marked, unreadable, gone };
   }
   return { ok: false, reason: "unsupported platform" };
 }

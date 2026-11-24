@@ -6,7 +6,17 @@ import net from "node:net";
 import path from "node:path";
 import test from "node:test";
 import type { SocketReaderDeps } from "../../follow-through/listening-ports.js";
-import { attachOrigin, attachOrigins, checkAttach, findRebind, parseAttachUrl, rebindHolder, scanRunningServers, type AttachScanDeps } from "./app-attach.js";
+import {
+  attachOrigin,
+  attachOrigins,
+  checkAttach,
+  findRebind,
+  parseAttachUrl,
+  rebindHolder,
+  recheckAttached,
+  scanRunningServers,
+  type AttachScanDeps,
+} from "./app-attach.js";
 
 test("parseAttachUrl accepts a loopback http origin with an explicit port, as written", () => {
   assert.deepEqual(parseAttachUrl("http://localhost:4321"), { ok: true, url: "http://localhost:4321", port: 4321 });
@@ -88,6 +98,8 @@ interface World {
   socketStderr?: string;
   psFails?: boolean;
   cwdTimeout?: boolean;
+  /** The environment reads (`ps -E` and plain `ps`) time out. */
+  envFails?: boolean;
   holderFails?: boolean;
   owned?: number[];
   shells?: number[];
@@ -131,6 +143,7 @@ function world(spec: World) {
         return { ok: true, stdout: rows.join("\n"), stderr: "", exitCode: 0 };
       }
       if (file === "ps" && args.includes("pid=,command=")) {
+        if (spec.envFails) return { ok: false, reason: "timeout" };
         const pids = args[args.indexOf("-p") + 1]!.split(",").map(Number);
         const lines = pids.flatMap((pid) => {
           const entry = spec.processes.find((candidate) => candidate.pid === pid);
@@ -152,7 +165,10 @@ function world(spec: World) {
       if (args.includes("cwd")) {
         if (spec.cwdTimeout) return { ok: false, reason: "timeout" };
         const uid = Number(args[args.indexOf("-u") + 1]);
-        const lines = spec.processes.filter((entry) => (entry.uid ?? ME) === uid).flatMap((entry) => [`p${entry.pid}`, "fcwd", `n${entry.cwd}`]);
+        const named = args.includes("-p") ? args[args.indexOf("-p") + 1]!.split(",").map(Number) : undefined;
+        const lines = spec.processes
+          .filter((entry) => (entry.uid ?? ME) === uid && (!named || named.includes(entry.pid)))
+          .flatMap((entry) => [`p${entry.pid}`, "fcwd", `n${entry.cwd}`]);
         return { ok: true, stdout: lines.join("\n"), stderr: "", exitCode: 0 };
       }
       const portArg = args.find((arg) => arg.startsWith("-iTCP:"));
@@ -522,4 +538,71 @@ test("an environment that can't be read fails closed: not listed (incomplete), n
     assert.deepEqual((await check({ platform, processes: [hidden] })).result, { ok: false, problem: "attach-unreachable" }, platform);
     assert.deepEqual(await findRebind(rebindInput, rebindWorld({ env: "unreadable" }, [], { platform }).deps), { ok: false, problem: "attach-unreachable" }, platform);
   }
+});
+
+// ── An attached server's folder and job rules, again on every tick (Pullfrog r4684345118) ──
+//
+// An exec in place that keeps the program's name keeps its pid, its start time and its command, so the identity
+// (`ProcessRow.ident`) can't show it. Each tick re-checks the rules the attach check applied, whatever the identity says.
+
+const attachedWorld = (holder: Partial<FakeProcess> = {}, extra: FakeProcess[] = [], spec: Partial<World> = {}) =>
+  world({ ...spec, processes: [{ pid: 5, ppid: 1, cwd: "/Users/me" }, server(holder), ...extra] });
+const recheckInput = { holder: 10, subtree: [10], workspacePath: WORKSPACE, appRoot: "apps/web" };
+
+test("recheckAttached keeps a holder still running in its app root with no job's marker in its subtree", async () => {
+  for (const platform of ["darwin", "linux"] as const) {
+    const child = { pid: 11, ppid: 10, cwd: `${WORKSPACE}/apps/web` };
+    assert.deepEqual(await recheckAttached({ ...recheckInput, subtree: [10, 11] }, attachedWorld({}, [child], { platform }).deps), { ok: true }, platform);
+    assert.deepEqual(await recheckAttached(recheckInput, attachedWorld({ cwd: `${WORKSPACE}/apps/web/src` }, [], { platform }).deps), { ok: true }, platform);
+  }
+});
+
+test("recheckAttached detaches a holder whose folder is now outside its app root, though its identity is unchanged", async () => {
+  const notInApp = { ok: false, problem: "attach-not-in-app" };
+  for (const platform of ["darwin", "linux"] as const) {
+    assert.deepEqual(await recheckAttached(recheckInput, attachedWorld({ cwd: "/Users/me/outside" }, [], { platform }).deps), notInApp, `${platform}: outside`);
+    assert.deepEqual(await recheckAttached(recheckInput, attachedWorld({ cwd: `${WORKSPACE}/apps/admin` }, [], { platform }).deps), notInApp, `${platform}: another app`);
+    assert.deepEqual(await recheckAttached(recheckInput, attachedWorld({ cwd: `${WORKSPACE}/apps/web2` }, [], { platform }).deps), notInApp, `${platform}: a prefix`);
+    assert.deepEqual(
+      await recheckAttached(recheckInput, attachedWorld({ cwd: "/elsewhere/web" }, [], { platform, links: { [`${WORKSPACE}/apps/web`]: "/elsewhere/web" } }).deps),
+      notInApp,
+      `${platform}: an app root that became a link out of the workspace`,
+    );
+  }
+});
+
+test("recheckAttached detaches when a job's marker appears anywhere in the subtree, or an environment there can't be read", async () => {
+  for (const platform of ["darwin", "linux"] as const) {
+    const notInApp = { ok: false, problem: "attach-not-in-app" };
+    assert.deepEqual(await recheckAttached(recheckInput, attachedWorld({ env: MARKED }, [], { platform }).deps), notInApp, `${platform}: the holder`);
+    const markedChild = { pid: 11, ppid: 10, cwd: "/", env: MARKED };
+    assert.deepEqual(await recheckAttached({ ...recheckInput, subtree: [10, 11] }, attachedWorld({}, [markedChild], { platform }).deps), notInApp, `${platform}: a child`);
+    const hiddenChild = { pid: 11, ppid: 10, cwd: "/", env: "unreadable" as const };
+    assert.deepEqual(
+      await recheckAttached({ ...recheckInput, subtree: [10, 11] }, attachedWorld({}, [hiddenChild], { platform }).deps),
+      { ok: false, problem: "attach-unreachable" },
+      `${platform}: an environment that can't be shown fails closed`,
+    );
+    // A child that exited after the tick's process table runs nothing, so it's no reason to detach.
+    assert.deepEqual(await recheckAttached({ ...recheckInput, subtree: [10, 11] }, attachedWorld({}, [], { platform }).deps), { ok: true }, `${platform}: a child gone`);
+  }
+});
+
+test("recheckAttached reports a failed look, which the watch counts toward its strikes, when a read fails or the holder has gone", async () => {
+  const failed = (result: Awaited<ReturnType<typeof recheckAttached>>) => !result.ok && "reason" in result;
+  for (const platform of ["darwin", "linux"] as const) {
+    assert.ok(failed(await recheckAttached(recheckInput, world({ platform, processes: [{ pid: 5, ppid: 1, cwd: "/Users/me" }] }).deps)), `${platform}: holder gone`);
+  }
+  assert.ok(failed(await recheckAttached(recheckInput, attachedWorld({}, [], { cwdTimeout: true }).deps)), "darwin: folder read timed out");
+  assert.ok(failed(await recheckAttached(recheckInput, attachedWorld({}, [], { envFails: true }).deps)), "darwin: environment read timed out");
+});
+
+test("recheckAttached costs one folder read for the holder and one environment read for the subtree, with no ps of the whole table", async () => {
+  const { deps, calls } = attachedWorld({}, [{ pid: 11, ppid: 10, cwd: `${WORKSPACE}/apps/web` }]);
+  assert.deepEqual(await recheckAttached({ ...recheckInput, subtree: [10, 11] }, deps), { ok: true });
+  const lsof = calls.exec.filter(([file]) => file === "/usr/sbin/lsof");
+  assert.equal(lsof.length, 1);
+  assert.equal(lsof[0]![lsof[0]!.indexOf("-p") + 1], "10", "the folder of the holder only");
+  const ps = calls.exec.filter(([file]) => file === "ps");
+  assert.deepEqual(ps.map((call) => call[call.indexOf("-p") + 1]), ["10,11", "10,11"], "ps -E and plain ps over the subtree");
 });
