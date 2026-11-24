@@ -260,7 +260,7 @@ export function designAppProblemMessage(problem: DesignAppProblem): string {
  * paragraph separators, Hangul fillers and variation selectors.
  */
 const HIDDEN_CHARACTERS =
-  /[\p{Cc}\p{Cf}\p{Zl}\p{Zp}ᅟᅠㅤﾠ︀-️\u{E0100}-\u{E01EF}]/gu;
+  /[\p{Cc}\p{Cf}\p{Zl}\p{Zp}\p{Variation_Selector}\u{115F}\u{1160}\u{3164}\u{FFA0}]/gu;
 
 /** Script text, app roots and package names as the card shows them: verbatim, hidden characters as `\u{…}`. */
 export function consentDisplayText(text: string): string {
