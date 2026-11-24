@@ -159,7 +159,8 @@ async function readPinned(joinedPath: string, realPath: string): Promise<string 
   let handle: Awaited<ReturnType<typeof open>> | undefined;
   try {
     handle = await open(realPath, fsConstants.O_RDONLY | fsConstants.O_NOFOLLOW | fsConstants.O_NONBLOCK);
-    const opened = await handle.stat();
+    // BigInt stats: 64-bit device and inode numbers past Number.MAX_SAFE_INTEGER compare exactly.
+    const opened = await handle.stat({ bigint: true });
     if (!opened.isFile()) return null;
     const buffer = Buffer.alloc(DESIGN_MD_MAX_BYTES + 1);
     let length = 0;
@@ -170,7 +171,7 @@ async function readPinned(joinedPath: string, realPath: string): Promise<string 
     }
     if (length > DESIGN_MD_MAX_BYTES) return null;
     if ((await realpath(joinedPath)) !== realPath || (await realpath(realPath)) !== realPath) return null;
-    const current = await stat(realPath);
+    const current = await stat(realPath, { bigint: true });
     if (current.dev !== opened.dev || current.ino !== opened.ino) return null;
     return buffer.subarray(0, length).toString("utf8");
   } catch {
