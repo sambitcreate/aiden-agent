@@ -16,7 +16,7 @@ import { createDesignChatCleanup, createDesignWorkspaceCleanup } from "./cleanup
 import { DesignModeConsent } from "./design-mode-tool.js";
 import { DesignAppConsent } from "./app-server/app-consent.js";
 import { detectWebApp } from "./app-server/app-detect.js";
-import { readLaunchSurface } from "./app-server/app-fingerprint.js";
+import { launchDirsUnchanged, readLaunchSurface } from "./app-server/app-fingerprint.js";
 import { providerKeyNames } from "./app-server/app-launch-core.js";
 import { chooseAppPort, defaultOsPort } from "./app-server/app-ports.js";
 import { createDesignAppRecords } from "./app-server/app-records.js";
@@ -256,6 +256,7 @@ export const designAppServers = new DesignAppServers({
   saveConfigApp: saveCanvasConfigApp,
   toolchain: (detected) => resolveAppToolchain(detected, defaultAppToolchainDeps()),
   fingerprint: readLaunchSurface,
+  dirsUnchanged: launchDirsUnchanged,
   records: createDesignAppRecords(() => path.join(app.getPath("userData"), "design-apps.json")),
   choosePort: (input) => chooseAppPort(input),
   osPort: defaultOsPort,

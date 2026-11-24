@@ -17,7 +17,7 @@ import { WorkspaceMutationGate } from "../../workspace-mutation-gate.js";
 import { readCanvasConfig, saveCanvasConfigApp } from "../canvas-config.js";
 import { DesignAppConsent, type DesignAppConsentOwner } from "./app-consent.js";
 import { detectWebApp } from "./app-detect.js";
-import { readLaunchSurface } from "./app-fingerprint.js";
+import { launchDirsUnchanged, readLaunchSurface } from "./app-fingerprint.js";
 import { chooseAppPort, defaultOsPort } from "./app-ports.js";
 import { createDesignAppRecords } from "./app-records.js";
 import { DesignAppServers, type DesignAppLimits } from "./app-server-main.js";
@@ -115,6 +115,7 @@ async function harness(t: test.TestContext, setup: Setup) {
       ? (app) => resolveAppToolchain(app, defaultAppToolchainDeps())
       : async () => ({ ok: true, node: process.execPath, manager: { name: "npm", path: shim } }),
     fingerprint: readLaunchSurface,
+    dirsUnchanged: launchDirsUnchanged,
     records,
     choosePort: (input) => chooseAppPort(input),
     osPort: defaultOsPort,

@@ -263,6 +263,8 @@ function harness(_t: test.TestContext, options: Options = {}) {
     checkouts: new Map<string, string>(),
     /** The real folder a relative app or install root resolved to when the surface was read. */
     realDirs: new Map<string, string>(),
+    /** A validated folder was renamed and its name reused between the read and the spawn. */
+    dirsSwapped: false,
   };
   const records = memoryRecords();
   const consent = new DesignAppConsent();
@@ -313,10 +315,15 @@ function harness(_t: test.TestContext, options: Options = {}) {
         dirs: (() => {
           const checkout = state.checkouts.get(root) ?? root;
           const under = (relative: string) => (relative === "." ? checkout : `${checkout}/${relative}`);
-          return { app: state.realDirs.get(app.root) ?? under(app.root), install: state.realDirs.get(app.installRoot) ?? under(app.installRoot) };
+          return {
+            app: state.realDirs.get(app.root) ?? under(app.root),
+            install: state.realDirs.get(app.installRoot) ?? under(app.installRoot),
+            ids: { app: "1:1", install: "1:2" },
+          };
         })(),
       };
     },
+    dirsUnchanged: async () => !state.dirsSwapped,
     records,
     choosePort: async (input) => {
       state.portCalls.push(input);
@@ -1106,6 +1113,7 @@ test("constructing the service and restoring views never starts, probes or reads
     saveConfigApp: () => thrower("saveConfigApp"),
     toolchain: () => thrower("toolchain"),
     fingerprint: () => thrower("fingerprint"),
+    dirsUnchanged: () => thrower("dirsUnchanged"),
     records: explode("records") as DesignAppServersDeps["records"],
     choosePort: () => thrower("choosePort"),
     osPort: () => thrower("osPort"),
@@ -1223,6 +1231,19 @@ test("a nested app root swapped for a link after the read can't redirect the spa
   h.state.realDirs.set("apps/web", "/w/ws/apps/web-validated");
   await h.runApp({ appRoot: "apps/web" });
   assert.equal(h.jobs.last().input.cwd, "/w/ws/apps/web-validated");
+});
+
+test("a validated folder swapped out between the read and the spawn stops the attempt before the install or the server runs", async (t) => {
+  for (const installed of [false, true]) {
+    const h = harness(t, { apps: [webApp({ root: "apps/web", installRoot: "apps/web", installed })] });
+    h.state.dirsSwapped = true;
+    const started = h.servers.start({ ...h.input(), appRoot: "apps/web" });
+    await settle();
+    await h.answer("allow");
+    const status = await started;
+    assert.deepEqual(status.problem, { problem: "interrupted" }, `installed: ${installed}`);
+    assert.equal(h.jobs.jobs.length, 0, `installed: ${installed}: nothing ran`);
+  }
 });
 
 test("choose shows a card with reason choose and savesChoice, and Allow calls saveCanvasConfigApp before starting", async (t) => {

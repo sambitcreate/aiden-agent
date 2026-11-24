@@ -94,6 +94,8 @@ export interface DesignAppServersDeps {
   saveConfigApp(workspaceRoot: string, app: { root: string; script: string }, signal?: AbortSignal): Promise<"saved" | "unknown-version">;
   toolchain(app: DetectedApp): Promise<AppToolchain>;
   fingerprint(workspaceRoot: string, app: DetectedApp): Promise<LaunchSurfaceRead | LaunchSurfaceProblem>;
+  /** Whether the folders a surface read validated are still those folders (`launchDirsUnchanged`). */
+  dirsUnchanged(dirs: LaunchSurfaceRead["dirs"]): Promise<boolean>;
   records: DesignAppRecords;
   choosePort(input: { sticky?: number; fallback: number }): Promise<number>;
   osPort(): Promise<number>;
@@ -696,6 +698,8 @@ export class DesignAppServers {
 
         if (willInstall) {
           await race(this.deps.records.markInstall(entry.workspaceId, app.installRoot, { state: "started", manager: toolchain.manager.name, lockHash: surface.lockHash }), signal);
+          // Last thing before the spawn: the folder is still the one this pass's read validated.
+          if (!(await race(this.deps.dirsUnchanged(surface.dirs), signal))) throw new End({ problem: "interrupted" });
           this.setPhase(entry, "installing");
           const command = installCommand(app.packageManager);
           const job = this.spawn(entry, attempt, {
@@ -741,6 +745,8 @@ export class DesignAppServers {
         }
         const script = app.script!;
         const plan = launchPlan(app, { [script]: surface.surface.scripts[`app:${script}`] ?? undefined }, port, env, { binDirs, providerKeys: keys, platform });
+        // Last thing before the spawn: the folder is still the one this pass's read validated.
+        if (!(await race(this.deps.dirsUnchanged(surface.dirs), signal))) throw new End({ problem: "interrupted" });
         this.setPhase(entry, "starting");
         const job = this.spawn(entry, attempt, {
           workspaceId: entry.workspaceId,

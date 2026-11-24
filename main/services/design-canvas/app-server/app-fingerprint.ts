@@ -7,7 +7,7 @@
  */
 import { createHash } from "node:crypto";
 import { constants as fsConstants } from "node:fs";
-import { open, realpath } from "node:fs/promises";
+import { lstat, open, realpath } from "node:fs/promises";
 import path from "node:path";
 import { parse as parseYaml } from "yaml";
 import { MAX_JOB_COMMAND_CHARS } from "../../follow-through/background-jobs.js";
@@ -82,7 +82,38 @@ export interface LaunchSurfaceRead {
    * run in these, never in a path rebuilt from the relative roots, which a
    * link swapped in after the read could point elsewhere.
    */
-  dirs: { app: string; install: string };
+  dirs: LaunchDirs;
+}
+
+/** The real app and install folders a read validated, with each one's device and inode then. */
+export interface LaunchDirs {
+  app: string;
+  install: string;
+  ids: { app: string; install: string };
+}
+
+async function dirId(dir: string): Promise<string> {
+  const info = await lstat(dir);
+  if (!info.isDirectory()) throw new Error("Not a folder.");
+  return `${info.dev}:${info.ino}`;
+}
+
+/**
+ * Whether each folder a read validated is still that folder: its path is
+ * still its real path (no link anywhere on it) and names the same device and
+ * inode. A folder renamed and its name reused, by a link or a new folder,
+ * fails. Checked right before a spawn, which can only name a path.
+ */
+export async function launchDirsUnchanged(dirs: LaunchDirs): Promise<boolean> {
+  try {
+    for (const key of ["app", "install"] as const) {
+      if ((await realpath(dirs[key])) !== dirs[key]) return false;
+      if ((await dirId(dirs[key])) !== dirs.ids[key]) return false;
+    }
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 export type LaunchSurfaceProblem = { problem: "launch-file-unreadable"; file: string } | { problem: "script-too-long" };
@@ -233,6 +264,6 @@ async function readSurface(workspaceRoot: string, app: DetectedApp): Promise<Lau
     launchFiles: [...new Set(launchFiles)].sort(),
     ...(app.name ? { packageName: app.name } : {}),
     lockHash: lockHash ?? ("hash" in packageJsonHash ? packageJsonHash.hash : "none"),
-    dirs: { app: appDir, install: installDir },
+    dirs: { app: appDir, install: installDir, ids: { app: await dirId(appDir), install: await dirId(installDir) } },
   };
 }
