@@ -1052,8 +1052,12 @@ async function runAcceptance() {
     }
     if (!evidence.ok) throw new Error(evidence.failures.join(" "));
     if (!reportEval.ok) {
+      const checkDetails = realDesktopReport.checks
+        .filter((check) => check.status !== "pass")
+        .map((check) => `${check.id} (${check.status}): ${check.detail}`);
+      const reasons = [...checkDetails, ...reportEval.failures];
       throw new Error(
-        `Real-desktop acceptance did not pass (${reportEval.overallStatus}): ${reportEval.failures.join(" ")}`,
+        `Real-desktop acceptance did not pass (${reportEval.overallStatus}): ${reasons.join(" ")}`,
       );
     }
 

@@ -666,6 +666,31 @@ test("two-window isolation check verifies decoy disk/live invariance and unmoved
   assert.equal(moved.status, "failed");
   assert.match(moved.detail, /cursor moved/iu);
 
+  // Missing or empty live decoy capture fails closed (never counts as pass).
+  assert.equal(
+    evaluateTwoWindowsIsolationCheck({
+      ...baseArgs,
+      decoyLiveCaptureText: null,
+    }).status,
+    "failed",
+  );
+  assert.equal(
+    evaluateTwoWindowsIsolationCheck({
+      ...baseArgs,
+      decoyLiveCaptureText: "   ",
+    }).status,
+    "failed",
+  );
+
+  // Target and decoy belonging to different processes -> failed.
+  assert.equal(
+    evaluateTwoWindowsIsolationCheck({
+      ...baseArgs,
+      decoyWindow: { ...decoy, pid: target.pid + 1 },
+    }).status,
+    "failed",
+  );
+
   // Same window ID for target and decoy -> failed.
   assert.equal(
     evaluateTwoWindowsIsolationCheck({

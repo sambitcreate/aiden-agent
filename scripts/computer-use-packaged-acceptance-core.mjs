@@ -523,6 +523,20 @@ export function evaluateTwoWindowsIsolationCheck({
       { targetWindowId: targetWindow?.window_id ?? null, decoyWindowId: decoyWindow?.window_id ?? null },
     );
   }
+  if (
+    (targetWindow?.pid !== undefined || decoyWindow?.pid !== undefined) &&
+    (!Number.isInteger(targetWindow?.pid) ||
+      targetWindow.pid <= 0 ||
+      targetWindow.pid !== decoyWindow?.pid)
+  ) {
+    return makeCheckRow(
+      id,
+      "failed",
+      "Target and decoy windows did not belong to the same disposable TextEdit process.",
+      metadata,
+      { targetPid: targetWindow?.pid ?? null, decoyPid: decoyWindow?.pid ?? null },
+    );
+  }
   if (typeof targetFileText !== "string" || !targetFileText.includes(expectedMarker)) {
     return makeCheckRow(
       id,
@@ -540,7 +554,16 @@ export function evaluateTwoWindowsIsolationCheck({
       { decoyDiskUnchanged: decoyFileAfter === decoyFileBefore },
     );
   }
-  if (typeof decoyLiveCaptureText === "string" && decoyLiveCaptureText.includes(typedToken)) {
+  if (typeof decoyLiveCaptureText !== "string" || decoyLiveCaptureText.trim().length === 0) {
+    return makeCheckRow(
+      id,
+      "failed",
+      "The decoy window's live accessibility capture was missing, so live window isolation could not be verified.",
+      metadata,
+      { decoyLiveUnchanged: null },
+    );
+  }
+  if (decoyLiveCaptureText.includes(typedToken)) {
     return makeCheckRow(
       id,
       "failed",
@@ -577,7 +600,7 @@ export function evaluateTwoWindowsIsolationCheck({
       targetWindowId: targetWindow.window_id,
       decoyWindowId: decoyWindow.window_id,
       decoyDiskUnchanged: true,
-      decoyLiveUnchanged: typeof decoyLiveCaptureText === "string" ? true : null,
+      decoyLiveUnchanged: true,
       cursorBefore,
       cursorAfter,
       distancePx: Number(distancePx.toFixed(2)),
