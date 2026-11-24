@@ -1235,6 +1235,38 @@ final class AidenNativeIntegrationTests: XCTestCase {
         XCTAssertEqual(shown?.currentActivity, "Answered")
     }
 
+    /// A Reply can launch a fresh app process that knows nothing of the
+    /// summary yet; the summary row still stops asking.
+    @MainActor
+    func testAReplyFromAFreshLaunchTakesTheQuestionOffTheSummary() async throws {
+        guard ActivityAuthorizationInfo().areActivitiesEnabled else {
+            throw XCTSkip("Live Activities are disabled on this device.")
+        }
+        let mac = "reply-relaunch-\(UUID().uuidString)"
+        let before = AidenRemoteLiveActivityManager(preferences: { AidenNotificationPreferences() })
+        defer { Task { @MainActor in await before.endAll(forInstanceID: mac) } }
+        await before.start(instanceID: mac, chatID: "c1", title: "Fix login", streamID: "s1", machineName: "Mac")
+        await before.start(instanceID: mac, chatID: "c2", title: "Write docs", streamID: "s2", machineName: "Mac")
+        let summary = try XCTUnwrap(Activity<AidenRunsSummaryActivityAttributes>.activities.first {
+            $0.attributes.instanceID == mac
+        })
+        await before.questionRequired(instanceID: mac, streamID: "s1")
+        let asking = await eventually("s1 to ask") {
+            summary.content.state.rows.first { $0.streamID == "s1" }?.status == .waitingForAnswer
+        }
+        XCTAssertTrue(asking)
+
+        let relaunched = AidenRemoteLiveActivityManager(preferences: { AidenNotificationPreferences() })
+        let perform = AidenBackgroundActionBroker.perform(lookup: { _ in .client(FakeAlertTransport()) }, liveActivities: relaunched)
+        let outcome = await perform(.reply(instanceID: mac, chatID: "c1", promptID: "q1", runID: nil, text: "Yes"))
+        XCTAssertEqual(outcome, .done)
+        let answered = await eventually("s1 to stop asking") {
+            summary.content.state.rows.first { $0.streamID == "s1" }?.status != .waitingForAnswer
+        }
+        XCTAssertTrue(answered)
+        XCTAssertEqual(summary.content.state.rows.count, 2)
+    }
+
     @MainActor
     func testRunsOnDifferentMacsNeverMergeIntoOneSummary() async throws {
         guard ActivityAuthorizationInfo().areActivitiesEnabled else {

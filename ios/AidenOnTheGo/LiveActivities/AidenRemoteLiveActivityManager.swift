@@ -272,6 +272,8 @@ final class AidenRemoteLiveActivityManager {
             currentActivity = activity
             await throttle(for: activity).submitUrgent(updated)
         }
+        // A Reply can launch a fresh process: read the rows off the summary.
+        if let summary = summary(for: instanceID) { rehydrateSummaryRuns(from: summary) }
         for (streamID, run) in summaryRuns[instanceID] ?? [:]
         where run.chatID == chatID && run.state.status == .waitingForAnswer {
             await updateSummaryRun(instanceID: instanceID, streamID: streamID, urgency: .immediate, transform: next)
