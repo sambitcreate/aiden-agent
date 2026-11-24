@@ -33,6 +33,8 @@ export interface AppCapabilities {
   createImages: boolean;
   /** Design mode: a chat column beside a design canvas (on unless `AIDEN_DESIGN_MODE=0`). */
   designMode: boolean;
+  /** Design mode v2's DESIGN.md and live apps (`AIDEN_EXPERIMENTAL_DESIGN_LIVE`). */
+  designLive: boolean;
 }
 
 export const DISABLED_APP_CAPABILITIES: AppCapabilities = Object.freeze({
@@ -59,6 +61,7 @@ export const DISABLED_APP_CAPABILITIES: AppCapabilities = Object.freeze({
   devices: false,
   createImages: false,
   designMode: false,
+  designLive: false,
 });
 
 export function parseAppCapabilities(value: unknown): AppCapabilities {
@@ -91,6 +94,7 @@ export function parseAppCapabilities(value: unknown): AppCapabilities {
     devices: record.devices === true,
     createImages: record.createImages === true,
     designMode: record.designMode === true,
+    designLive: record.designLive === true,
   };
 }
 

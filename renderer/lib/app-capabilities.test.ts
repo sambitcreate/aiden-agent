@@ -19,6 +19,18 @@ test("design mode fails closed until main enables it with a literal true", () =>
   assert.deepEqual(parseAppCapabilities({ designMode: true }), { ...DISABLED_APP_CAPABILITIES, designMode: true });
 });
 
+test("live apps fail closed until main enables them with a literal true", () => {
+  assert.equal(DISABLED_APP_CAPABILITIES.designLive, false);
+  for (const value of ["true", 1, "1", {}, null, undefined]) {
+    assert.equal(parseAppCapabilities({ designLive: value, designMode: true }).designLive, false, JSON.stringify(value));
+  }
+  assert.deepEqual(parseAppCapabilities({ designMode: true, designLive: true }), {
+    ...DISABLED_APP_CAPABILITIES,
+    designMode: true,
+    designLive: true,
+  });
+});
+
 test("a retired Design Studio capability from an older main is dropped", () => {
   assert.deepEqual(parseAppCapabilities({ designStudio: true }), DISABLED_APP_CAPABILITIES);
 });
