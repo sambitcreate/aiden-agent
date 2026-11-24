@@ -8,6 +8,7 @@ import { initLogging } from "../lib/ui-utils";
 import { installRendererDiagnostics, reportRendererDiagnostic } from "../lib/dev-log";
 import { subscribeCodexProviderState } from "../lib/queries";
 import { migrateGoogleProviderPreferences } from "../lib/google-provider-migration";
+import { DesignAppProblemToasts } from "../design/design-app-consent";
 import { appApi, providersApi, type AppInfo } from "../lib/ipc";
 import type { Provider } from "../lib/types";
 import { queryKeys } from "../lib/queries";
@@ -99,6 +100,7 @@ export async function startApp(startup: StartupReads): Promise<void> {
           </TooltipProvider>
         </AppCapabilitiesProvider>
         <Toaster />
+        <DesignAppProblemToasts />
       </QueryClientProvider>
     </React.StrictMode>,
   );

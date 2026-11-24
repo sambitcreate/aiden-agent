@@ -17,6 +17,14 @@ import type {
 } from "../shared/quick-chat";
 import type { SettingsSection } from "../shared/settings-section";
 import type {
+  DesignAppConsentAnswer,
+  DesignAppConsentClosed,
+  DesignAppConsentRequest,
+  DesignAppLogs,
+  DesignAppsSnapshot,
+  DesignAppStatus,
+} from "../shared/design-app";
+import type {
   BufferedGenerationNotification,
   GenerationStreamBuffer,
   GenerationStreamProjection,
@@ -2878,4 +2886,31 @@ export const designCanvasApi = {
   /** A PNG data URL of the canvas region, or null when it is not on screen. */
   answerDesignCanvasSnapshot: (requestId: string, dataUrl: string | null) =>
     invoke<boolean>("designCanvas:snapshotAnswer", requestId, dataUrl),
+};
+
+/** Design mode's live apps (Phase 2b): the dev servers Aiden runs for a chat's workspace. */
+export const designAppApi = {
+  /** Every known server for the chat's workspace, plus its target apps and candidates. */
+  status: (chatId: string) => invoke<DesignAppsSnapshot>("designApp:status:get", chatId),
+  /** Start the target app, or this app root. The run-app card comes to this window first. */
+  start: (chatId: string, appRoot?: string) =>
+    invoke<DesignAppStatus>("designApp:start", ...(appRoot === undefined ? [chatId] : [chatId, appRoot])),
+  stop: (chatId: string, appRoot: string) => invoke<DesignAppStatus>("designApp:stop", chatId, appRoot),
+  restart: (chatId: string, appRoot: string, options: { install?: boolean } = {}) =>
+    invoke<DesignAppStatus>("designApp:restart", chatId, appRoot, options),
+  /** Choose an app root (and its script) in a multi-app workspace; Allow saves it to `.aiden/canvas.json`. */
+  choose: (chatId: string, appRoot: string, script?: string) =>
+    invoke<DesignAppStatus>("designApp:choose", ...(script === undefined ? [chatId, appRoot] : [chatId, appRoot, script])),
+  /** The server's own output from `after`, at most 64 KiB. Untrusted text. */
+  logs: (chatId: string, appRoot: string, options: { after?: number } = {}) =>
+    invoke<DesignAppLogs>("designApp:logs", chatId, appRoot, options),
+  /** The person's answer to a run-app card. False when the card no longer waits. */
+  answerConsent: (requestId: string, answer: DesignAppConsentAnswer) =>
+    invoke<boolean>("designApp:consentAnswer", requestId, answer),
+  onStatus: (handler: (snapshot: DesignAppsSnapshot) => void) =>
+    onNotification<DesignAppsSnapshot>("designApp:status", handler),
+  onConsent: (handler: (request: DesignAppConsentRequest) => void) =>
+    onNotification<DesignAppConsentRequest>("designApp:consent", handler),
+  onConsentClosed: (handler: (closed: DesignAppConsentClosed) => void) =>
+    onNotification<DesignAppConsentClosed>("designApp:consentClosed", handler),
 };
