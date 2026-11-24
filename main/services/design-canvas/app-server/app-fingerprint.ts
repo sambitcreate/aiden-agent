@@ -92,10 +92,15 @@ export interface LaunchDirs {
   ids: { app: string; install: string };
 }
 
-async function dirId(dir: string): Promise<string> {
-  const info = await lstat(dir);
-  if (!info.isDirectory()) throw new Error("Not a folder.");
+/** A folder's identity from `BigIntStats`: exact for 64-bit ids, which numeric `Stats` round past `Number.MAX_SAFE_INTEGER`. */
+export function folderIdentity(info: { dev: bigint; ino: bigint }): string {
   return `${info.dev}:${info.ino}`;
+}
+
+async function dirId(dir: string): Promise<string> {
+  const info = await lstat(dir, { bigint: true });
+  if (!info.isDirectory()) throw new Error("Not a folder.");
+  return folderIdentity(info);
 }
 
 /**
