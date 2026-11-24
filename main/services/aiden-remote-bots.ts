@@ -299,6 +299,11 @@ export interface AidenRemoteBotServiceOptions {
   persistIdempotency?: (snapshot: AidenIdempotencySnapshot) => Promise<void>;
   notifyBotsChanged?: (botId?: string) => void;
   notifyChatsChanged?: (chatId?: string) => void;
+  /**
+   * A fixed diagnostic line and its error, for a Bot left out of the list
+   * because its stored fields don't fit the contract. Never chat content.
+   */
+  log?: (message: string, error: unknown) => void;
 }
 
 export class AidenRemoteBotService {
@@ -446,18 +451,27 @@ export class AidenRemoteBotService {
     }
   }
 
-  private async summary(
+  /** What a summary reads from the host; a failure here is the host's, not the Bot's. */
+  private async summaryInputs(
     bot: BotDefinition,
     projectedHealth?: AidenRemoteBotHealth,
     projectedSession?: AidenRemoteBotSessionStateKind,
-  ): Promise<AidenRemoteBotSummary> {
+  ): Promise<Parameters<typeof projectAidenRemoteBotSummary>> {
     const health = projectedHealth ?? await this.options.health?.(bot.id) ?? "ready";
     const sessionState = projectedSession ??
       (await this.options.sessionStates?.([bot.id]))?.get(bot.id);
     const issueCount = this.options.issues
       ? await this.options.issues.openCount(bot.id).catch(() => 0)
       : undefined;
-    return projectAidenRemoteBotSummary(bot, await this.avatar(bot), health, sessionState, issueCount);
+    return [bot, await this.avatar(bot), health, sessionState, issueCount];
+  }
+
+  private async summary(
+    bot: BotDefinition,
+    projectedHealth?: AidenRemoteBotHealth,
+    projectedSession?: AidenRemoteBotSessionStateKind,
+  ): Promise<AidenRemoteBotSummary> {
+    return projectAidenRemoteBotSummary(...await this.summaryInputs(bot, projectedHealth, projectedSession));
   }
 
   /** The public summary of one live Bot (presets, list rows). */
@@ -502,8 +516,18 @@ export class AidenRemoteBotService {
     ]);
     // One Bot the contract can't carry (a clock that went back, a name from an
     // older limit) is left out, so it never empties every device's Bot list.
-    const summaries = (await mapBounded(bots, 8, (bot) =>
-      this.summary(bot, health?.get(bot.id) ?? "ready", sessions?.get(bot.id)).catch(() => null)))
+    // A read that fails (its session state, say) fails the whole list instead:
+    // phones and paired Macs keep the Bots they last listed after a failed
+    // read, but drop any Bot a successful list leaves out.
+    const summaries = (await mapBounded(bots, 8, async (bot) => {
+      const inputs = await this.summaryInputs(bot, health?.get(bot.id) ?? "ready", sessions?.get(bot.id));
+      try {
+        return projectAidenRemoteBotSummary(...inputs);
+      } catch (error) {
+        this.options.log?.(`Bot ${bot.id} is left out of the Bot list: its stored fields don't fit the contract.`, error);
+        return null;
+      }
+    }))
       .filter((summary): summary is AidenRemoteBotSummary => summary !== null);
     return parseAidenRemoteBotList({ bots: summaries, maxBots: MAX_BOTS, ...(this.options.messaging ? {messaging: {enabled: await this.options.messaging.enabled()}} : {}) });
   }
