@@ -95,6 +95,6 @@ test("plain-words cards round-trip through the strict parsers clients mirror, an
 test("the parsers refuse plain words a client must not trust", () => {
   const fixture = JSON.parse(readFileSync(FIXTURE, "utf8"));
   for (const [name, card] of Object.entries(fixture.rejectedCards)) {
-    assert.throws(() => parseAidenRemoteApprovalCard(card), undefined, name);
+    assert.throws(() => parseAidenRemoteApprovalCard(card), Error, name);
   }
 });
