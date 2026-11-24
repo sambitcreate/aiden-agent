@@ -480,8 +480,10 @@ test("a snapshot that rewrote loaded history replaces it, and a page asked for b
   let hold: (() => void) | null = null;
   fake.transport.older = async (_hostId, _botId, before, limit) => {
     asked.push([before, limit]);
-    if (hold === null && asked.length === 3) await new Promise<void>((resolve) => (hold = resolve));
+    // Holds the second Load older (re-reads always ask for a number of entries).
+    if (hold === null && asked.length > 1 && limit === undefined) await new Promise<void>((resolve) => (hold = resolve));
     const end = before === "m5" ? history.length : history.findIndex((entry) => entry.id === before);
+    if (end < 0) return { ok: false, error: { code: "http_error", status: 409, remoteCode: "operation_stale", message: "This Bot's chat changed. Read it again." } };
     const start = Math.max(0, end - (limit ?? 2));
     return { ok: true, value: { botId: "bot_1", epoch: "e1", entries: history.slice(start, end), hasOlder: start > 0 } };
   };
@@ -522,6 +524,7 @@ test("loaded history longer than one page survives a same-epoch snapshot whole, 
     asked.push([before, limit]);
     if (failAt === asked.length) return { ok: false, error: { code: "failed", message: "Offline.", status: 503 } };
     const end = history.findIndex((entry) => entry.id === before);
+    if (end < 0) return { ok: false, error: { code: "http_error", status: 409, remoteCode: "operation_stale", message: "This Bot's chat changed. Read it again." } };
     const start = Math.max(0, end - (limit ?? 150));
     return { ok: true, value: { botId: "bot_1", epoch: "e1", entries: history.slice(start, end), hasOlder: start > 0 } };
   };
@@ -572,6 +575,7 @@ test("re-reading kept history from a newer host covers the same span, entries th
   fake.transport.older = async (_hostId, _botId, before, limit) => {
     asked.push([before, limit]);
     const end = before === "m5" ? host.length : host.indexOf(before);
+    if (end < 0) return { ok: false, error: { code: "http_error", status: 409, remoteCode: "operation_stale", message: "This Bot's chat changed. Read it again." } };
     const start = Math.max(0, end - (limit ?? 2));
     const sent = host.slice(start, end);
     return {
@@ -626,6 +630,7 @@ test("a same-epoch snapshot that starts inside the loaded history keeps what was
   fake.transport.older = async (_hostId, _botId, before, limit) => {
     asked.push([before, limit]);
     const end = host.indexOf(before);
+    if (end < 0) return { ok: false, error: { code: "http_error", status: 409, remoteCode: "operation_stale", message: "This Bot's chat changed. Read it again." } };
     const start = Math.max(0, end - (limit ?? 2));
     const sent = host.slice(start, end);
     return {
@@ -729,6 +734,37 @@ test("a rewrite that removed every kept entry asks the host about only a few of 
   const ids = follower.getState().view!.snapshot.entries.map((entry) => entry.id);
   assert.ok(!ids.some((id) => id.startsWith("k")), "the removed entries are gone");
   assert.deepEqual(ids.slice(-3), ["m5", "m6", "m7"]);
+  follower.stop();
+});
+
+test("a kept entry the host moved further back than the oldest is still read back", async () => {
+  const message = (id: string) => ({ type: "message" as const, id, role: "assistant" as const, text: id });
+  // The host moved "m4" before "m3", with an entry this Mac can't show between them.
+  const host = ["m1", "m4", "u1", "m3", "m5", "m6", "m7"];
+  const fake = fakeTransport([session({ hasOlder: true, entries: ["m3", "m4", "m5", "m6"].map(message) })]);
+  const asked: Array<[string, number | undefined]> = [];
+  fake.transport.older = async (_hostId, _botId, before, limit) => {
+    asked.push([before, limit]);
+    const end = host.indexOf(before);
+    if (end < 0) return { ok: false, error: { code: "http_error", status: 409, remoteCode: "operation_stale", message: "This Bot's chat changed. Read it again." } };
+    const start = Math.max(0, end - (limit ?? 2));
+    const sent = host.slice(start, end);
+    return {
+      ok: true,
+      value: {
+        botId: "bot_1", epoch: "e1", hasOlder: start > 0, olderCursor: sent[0], hostCount: sent.length,
+        entries: sent.filter((id) => id.startsWith("m")).map(message),
+      },
+    };
+  };
+  const follower = new RemoteBotSessionFollower(fake.transport, "host_a", "bot_1");
+  follower.start();
+  await settle();
+  fake.push(event(4, { type: "snapshot", payload: { session: session({ seq: 5, hasOlder: true, entries: ["m5", "m6", "m7"].map(message) }) } }));
+  await settle();
+  assert.deepEqual(asked[0], ["m5", 2], "the first read reaches m3 but not m4");
+  assert.deepEqual(follower.getState().view!.snapshot.entries.map((entry) => entry.id), ["m4", "m3", "m5", "m6", "m7"]);
+  assert.equal(follower.getState().view!.hasOlder, true);
   follower.stop();
 });
 
