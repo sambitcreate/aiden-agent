@@ -225,7 +225,8 @@ export class RemoteBotSessionFollower {
    * also says so), so older entries kept across a snapshot are read again, a
    * bounded page at a time, and replaced. Reading stops at the oldest kept
    * entry (anything past it is cut off), or, if the host no longer has it, once
-   * the host entries the kept ones spanned, plus a slack, are read. A read that fails keeps the
+   * the host entries the kept ones spanned, plus a slack, are read; then it is
+   * cut back to the earliest kept entry the host still has. A read that fails keeps the
    * pages already read (Load older continues from there), or drops the kept
    * entries if none was.
    */

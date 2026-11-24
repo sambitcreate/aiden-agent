@@ -328,7 +328,8 @@ export function withOlderRemoteBotEntries(
  * host, newest page first, each just older than the one before it, starting
  * just older than the snapshot's own entries. The kept entries are replaced
  * with the pages, so history the host removed or reordered doesn't stay, and
- * cut back to the oldest kept entry when they reach past it. Pages
+ * cut back to the earliest kept entry the host still has when they reach past
+ * it. Pages
  * that stop short of the kept range (a later page failed) leave Load older
  * where the last one ends. Without a page, or with one from another epoch, the
  * kept entries are dropped and the snapshot's own "older" state comes back.
@@ -353,16 +354,20 @@ export function withRereadOlderRemoteBotEntries(
     return { ...own, ...snapshot };
   }
   const reread = pages.reduce(withOlderRemoteBotEntries, own);
-  // Pages that reached past the oldest kept entry are cut back to it, so history
-  // older than what was shown before isn't added; Load older resumes where it was.
-  const oldest = view.snapshot.entries[0]?.id;
-  const at = carried > 0 && oldest !== undefined ? reread.snapshot.entries.findIndex((entry) => entry.id === oldest) : -1;
+  // Pages that reached past the kept entries are cut back to the earliest one
+  // the host still has, so history older than what was shown before isn't
+  // added. At the oldest kept entry Load older resumes where it was; at a later
+  // one (the host removed the older ones), it resumes from that entry.
+  const ids = reread.snapshot.entries.map((entry) => entry.id);
+  const kept = view.snapshot.entries.slice(0, Math.max(0, carried));
+  const boundary = kept.findIndex((entry) => ids.includes(entry.id));
+  const at = boundary < 0 ? -1 : ids.indexOf(kept[boundary]!.id);
   if (at <= 0) return reread;
   return {
     ...reread,
     snapshot: { ...reread.snapshot, entries: reread.snapshot.entries.slice(at) },
-    hasOlder: view.hasOlder,
-    olderCursor: view.olderCursor,
+    hasOlder: boundary === 0 ? view.hasOlder : true,
+    olderCursor: boundary === 0 ? view.olderCursor : kept[boundary]!.id,
     olderLoaded: (reread.olderLoaded ?? 0) - at,
     olderHostSpan: view.olderHostSpan ?? 0,
   };
