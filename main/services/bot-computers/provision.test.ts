@@ -103,19 +103,39 @@ test("Linux provisioning pins the host key, configures desktop/aiden-bot/virtiof
         event.command?.includes("at-spi2-core"),
     ),
   );
-  assert.ok(sshCommands.some((event) => event.command?.includes("autologin-user=lume") && event.command?.includes("sleep.target")));
+  assert.ok(
+    sshCommands.some(
+      (event) =>
+        event.command?.includes("autologin-user=lume") &&
+        event.command?.includes("sleep.target") &&
+        event.command?.includes("/etc/netplan/50-aiden-dhcp.yaml") &&
+        event.command?.includes("99-disable-network-config.cfg") &&
+        event.command?.includes("systemctl restart lightdm") &&
+        event.command?.includes(".Xauthority"),
+    ),
+  );
   assert.ok(
     sshCommands.some(
       (event) =>
         event.command?.includes(`useradd -m -s /bin/bash -U ${BOT_COMPUTER_LINUX_SHELL_USER}`) &&
         event.command?.includes(`/home/${BOT_COMPUTER_LINUX_SHELL_USER}/.ssh/authorized_keys`) &&
-        event.command?.includes("/etc/sudoers.d/90-aiden-bot-shell") &&
+        event.command?.includes("/etc/sudoers.d/99-aiden-bot-shell") &&
         event.command?.includes(`ALL=(${BOT_COMPUTER_LINUX_SHELL_USER}) NOPASSWD: ALL`) &&
         event.command?.includes(`/usr/bin/pkill -KILL -u ${BOT_COMPUTER_LINUX_SHELL_USER}`),
     ),
   );
-  assert.ok(sshCommands.some((event) => event.command?.includes("virtiofs") && event.command?.includes("/mnt/aiden-shared")));
+  assert.ok(
+    sshCommands.some(
+      (event) =>
+        event.command?.includes("com.apple.virtio-fs.automount /mnt/aiden-shared virtiofs") &&
+        event.command?.includes("/mnt/aiden-shared/Computer"),
+    ),
+  );
   assert.equal(events.find((event) => event.channel === "guest_driver")?.value, secret);
+  const stopIndex = events.findIndex((event) => event.channel === "lume");
+  assert.ok(stopIndex > 0, "stopBase runs at shutdown");
+  assert.equal(events[stopIndex - 1]?.channel, "guest_ssh");
+  assert.ok(events[stopIndex - 1]?.command?.includes("sync && sync"), "ext4 dirty pages are flushed right before lume stop");
 });
 
 test("a failing Linux provisioning step stops immediately; buildLinuxBaseVm cleans the seed ISO and keeps the image on failure", async () => {
