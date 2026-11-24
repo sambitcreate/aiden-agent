@@ -180,13 +180,13 @@ final class AidenBotHomeProfileTests: XCTestCase {
     func testHomeRowKeepsTheApprovalLineWhenTheBotAlsoNeedsThePerson() throws {
         let bots = [
             try summary(id: "answerable", name: "A", updatedAt: "2026-08-18T18:00:00.000Z", sessionState: "running", needsYou: true),
-            try summary(id: "mac-only", name: "B", updatedAt: "2026-08-18T17:00:00.000Z", sessionState: "running", needsYou: true),
-            try summary(id: "plain", name: "C", updatedAt: "2026-08-18T16:00:00.000Z", sessionState: "running"),
+            try summary(id: "mac-only", name: "B", updatedAt: "2026-08-18T17:30:00.000Z", sessionState: "running", needsYou: true),
+            try summary(id: "plain", name: "C", updatedAt: "2026-08-18T17:00:00.000Z", sessionState: "running"),
         ]
         let conversations = [
             try conversation(botID: "answerable", preview: "Booking", state: "waiting_for_approval", canRespond: true, updatedAt: "2026-08-18T18:00:00.000Z"),
-            try conversation(botID: "mac-only", preview: "Booking", state: "waiting_for_approval", updatedAt: "2026-08-18T17:00:00.000Z"),
-            try conversation(botID: "plain", preview: "Booking", state: "waiting_for_approval", canRespond: true, updatedAt: "2026-08-18T16:00:00.000Z"),
+            try conversation(botID: "mac-only", preview: "Booking", state: "waiting_for_approval", updatedAt: "2026-08-18T17:30:00.000Z"),
+            try conversation(botID: "plain", preview: "Booking", state: "waiting_for_approval", canRespond: true, updatedAt: "2026-08-18T17:00:00.000Z"),
         ]
         let rows = Dictionary(uniqueKeysWithValues: aidenBotHomeRows(
             bots: bots,
