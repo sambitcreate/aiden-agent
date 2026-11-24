@@ -18,12 +18,12 @@ import { isSafeWorkspaceRelativePath, readCanvasConfig, type CanvasConfig } from
 import { designMdDraftFor } from "./draft.js";
 import type { DesignMdExportFormat } from "./lint-client.js";
 import { createDesignAppRoots, DESIGN_MD_NAME, joinRelative, locateDesignMd, type DesignAppRoots } from "./locate.js";
-import { DESIGN_MD_MAX_BYTES, type DesignMdReader, type DesignMdState } from "./reader.js";
+import { DESIGN_MD_EXPORT_MAX_BYTES, DESIGN_MD_MAX_BYTES, type DesignMdReader, type DesignMdState } from "./reader.js";
 
 export const DESIGN_SYSTEM_CALLS_PER_TURN = 20;
 const MAX_FINDINGS = 50;
 const MAX_SECTIONS = 40;
-const MAX_EXPORT_BYTES = 64 * 1024;
+const MAX_FENCED_BYTES = 64 * 1024;
 const FORMATS = ["css-tailwind", "json-tailwind", "dtcg", "css-vars"] as const satisfies readonly DesignMdExportFormat[];
 const ACTIONS = ["read", "lint", "export", "draft"] as const;
 const NOTHING_WRITTEN =
@@ -101,6 +101,24 @@ const findingsList = (findings: Extract<DesignMdState, { status: "ok" }>["findin
     message: finding.message,
   }));
 
+/**
+ * The JSON of `build(items)` with as many leading items as fit in 64 KiB, so
+ * no fenced answer grows past it however long the file's strings are.
+ */
+function boundedJson<T>(items: readonly T[], build: (kept: readonly T[]) => unknown): { json: string; shown: number; cut: boolean } {
+  const json = (count: number) => JSON.stringify(build(items.slice(0, count)));
+  const fits = (count: number) => Buffer.byteLength(json(count)) <= MAX_FENCED_BYTES;
+  if (fits(items.length)) return { json: json(items.length), shown: items.length, cut: false };
+  let low = 0;
+  let high = items.length - 1;
+  while (low < high) {
+    const middle = Math.ceil((low + high) / 2);
+    if (fits(middle)) low = middle;
+    else high = middle - 1;
+  }
+  return { json: json(low), shown: low, cut: true };
+}
+
 export function createDesignSystemTool(deps: DesignSystemToolDeps): AgentTool {
   const appRoots = deps.appRoots ?? createDesignAppRoots();
   const config = deps.config ?? (() => readCanvasConfig(deps.workspaceRoot));
@@ -162,10 +180,10 @@ export function createDesignSystemTool(deps: DesignSystemToolDeps): AgentTool {
                 message: STATUS_WORDS[state.status],
               });
             }
-            const findings = findingsList(state.findings);
+            const findings = boundedJson(findingsList(state.findings), (kept) => kept);
             return answer(
-              { status: "ok", source: "content", summary: state.summary, findingsShown: findings.length },
-              fenceAsData("Findings for the DESIGN.md text you gave", JSON.stringify(findings)),
+              { status: "ok", source: "content", summary: state.summary, findingsShown: findings.shown, truncated: findings.cut },
+              fenceAsData("Findings for the DESIGN.md text you gave", findings.json),
             );
           }
 
@@ -210,27 +228,28 @@ export function createDesignSystemTool(deps: DesignSystemToolDeps): AgentTool {
               throw new DesignSystemToolError(`format must be one of ${FORMATS.join(", ")}.`);
             }
             const state = await deps.reader.export(deps.workspaceRoot, located, format as DesignMdExportFormat, signal);
+            if (state.status === "oversized") {
+              return answer({
+                status: "too-large",
+                appRoot: root,
+                path: state.path,
+                format,
+                bytes: state.bytes,
+                message: `This export is ${state.bytes} bytes, over the ${DESIGN_MD_EXPORT_MAX_BYTES / 1024} KiB limit, so it isn't shown. Export a smaller format or read the tokens instead.`,
+              });
+            }
             if (state.status === "ok") {
               const bytes = Buffer.byteLength(state.text);
-              if (bytes > MAX_EXPORT_BYTES) {
-                return answer({
-                  status: "too-large",
-                  appRoot: root,
-                  path: state.path,
-                  format,
-                  bytes,
-                  message: `This export is ${bytes} bytes, over the ${MAX_EXPORT_BYTES / 1024} KiB limit, so it isn't shown. Export a smaller format or read the tokens instead.`,
-                });
-              }
               return answer(
                 { status: "ok", appRoot: root, path: state.path, format, bytes },
                 fenceAsData(`${format} export of ${JSON.stringify(state.path)}`, state.text),
               );
             }
             if (state.status === "error") {
+              const errors = boundedJson(state.errors, (kept) => kept);
               return answer(
-                { status: "error", appRoot: root, path: state.path, format, message: "The export failed; the reasons follow." },
-                fenceAsData(`Export errors for ${JSON.stringify(state.path)}`, JSON.stringify(state.errors)),
+                { status: "error", appRoot: root, path: state.path, format, truncated: errors.cut, message: "The export failed; the reasons follow." },
+                fenceAsData(`Export errors for ${JSON.stringify(state.path)}`, errors.json),
               );
             }
             return answer({ ...stateHead(state, root), format });
@@ -239,18 +258,17 @@ export function createDesignSystemTool(deps: DesignSystemToolDeps): AgentTool {
           const state = await deps.reader.read(deps.workspaceRoot, located, { signal });
           if (state.status !== "ok") return answer(stateHead(state, root));
           if (action === "lint") {
-            const findings = findingsList(state.findings);
+            const findings = boundedJson(findingsList(state.findings), (kept) => kept);
             return answer(
-              { ...stateHead(state, root), findingsShown: findings.length },
-              fenceAsData(`DESIGN.md findings for ${JSON.stringify(state.path)}`, JSON.stringify(findings)),
+              { ...stateHead(state, root), findingsShown: findings.shown, truncated: findings.cut },
+              fenceAsData(`DESIGN.md findings for ${JSON.stringify(state.path)}`, findings.json),
             );
           }
+          const sections = state.sections.slice(0, MAX_SECTIONS);
+          const data = boundedJson(state.tokens, (tokens) => ({ sections, omitted: state.omitted, tokens }));
           return answer(
-            { ...stateHead(state, root), truncated: state.truncated, sectionCount: state.sections.length },
-            fenceAsData(
-              `DESIGN.md tokens and sections from ${JSON.stringify(state.path)}`,
-              JSON.stringify({ sections: state.sections.slice(0, MAX_SECTIONS), omitted: state.omitted, tokens: state.tokens }),
-            ),
+            { ...stateHead(state, root), truncated: state.truncated || data.cut, sectionCount: state.sections.length },
+            fenceAsData(`DESIGN.md tokens and sections from ${JSON.stringify(state.path)}`, data.json),
           );
         }),
     },

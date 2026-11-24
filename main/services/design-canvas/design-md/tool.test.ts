@@ -317,3 +317,36 @@ test("onDraft hears the target once per draft", async (t) => {
   await call(designSystem, { action: "read" });
   assert.deepEqual(drafted, ["web/DESIGN.md", "web/DESIGN.md"]);
 });
+
+test("the fenced JSON of read, lint and export errors stays within 64 KiB and says when it was cut", async (t) => {
+  const ws = await withWorkspace(t);
+  await writeFile(path.join(ws, "DESIGN.md"), "# x\n");
+  const long = (index: number) => `${index}`.padEnd(200, "x");
+  const okState = {
+    status: "ok" as const,
+    path: "DESIGN.md",
+    source: "workspace" as const,
+    hash: "0".repeat(64),
+    summary: { errors: 0, warnings: 50, infos: 0 },
+    // A control character is six bytes once JSON escapes it, so 50 findings come to about 110 KiB.
+    findings: Array.from({ length: 50 }, (_, index) => ({ severity: "warning" as const, rule: long(index), path: long(index), message: "\u0001".repeat(300) })),
+    sections: Array.from({ length: 40 }, (_, index) => long(index)),
+    omitted: Array.from({ length: 40 }, (_, index) => ({ section: long(index), reason: long(index) })),
+    tokens: Array.from({ length: 300 }, (_, index) => ({ path: long(index), kind: "value", value: '"'.repeat(200) })),
+    truncated: false,
+  };
+  const reader = {
+    read: async () => okState,
+    lintContent: async () => ({ ...okState }),
+    export: async () => ({ status: "error" as const, path: "DESIGN.md", source: "workspace" as const, errors: Array.from({ length: 500 }, () => "\u0001".repeat(300)) }),
+  } as unknown as Deps["reader"];
+  const designSystem = tool(ws, { reader });
+  for (const params of [{ action: "read" }, { action: "lint" }, { action: "lint", content: "# x" }, { action: "export", format: "css-vars" }]) {
+    const text = await call(designSystem, params);
+    const [block] = fences(text);
+    assert.ok(block, JSON.stringify(params));
+    assert.ok(Buffer.byteLength(block.body) <= 64 * 1024, `${JSON.stringify(params)}: ${Buffer.byteLength(block.body)}`);
+    JSON.parse(block.body);
+    assert.equal(head(text).truncated, true, JSON.stringify(params));
+  }
+});
