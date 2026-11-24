@@ -392,15 +392,24 @@ export const INSTALL_MARKERS: ReadonlyArray<readonly [string, PackageManagerName
 
 export const DENO_MARKERS: readonly string[] = ["deno.lock", "deno.json", "deno.jsonc"];
 
+// One semver prerelease identifier: a number without leading zeros, or text.
+const PRERELEASE_ID = String.raw`(?:0|[1-9]\d*|\d*[A-Za-z-][0-9A-Za-z-]*)`;
+const BUILD_ID = String.raw`[0-9A-Za-z-]+`;
+const PACKAGE_MANAGER_FIELD = new RegExp(
+  String.raw`^([a-z]+)(?:@(0|[1-9]\d*)\.(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)` +
+    String.raw`(?:-${PRERELEASE_ID}(?:\.${PRERELEASE_ID})*)?(?:\+${BUILD_ID}(?:\.${BUILD_ID})*)?)?$`,
+  "u",
+);
+
 /**
  * `"pnpm@9.15.0+sha512…"` → `{ name: "pnpm", major: 9 }`. The whole value must
- * be a bare manager or `manager@version`, the version a number with up to two
- * more parts and an optional prerelease, then an optional `+hash`. Anything
- * else, and any manager but npm, pnpm, yarn or bun, is ignored.
+ * be a bare manager or `manager@version` with an exact semver version (as
+ * Corepack requires), optionally followed by `+hash`. Anything else, and any
+ * manager but npm, pnpm, yarn or bun, is ignored.
  */
 export function parsePackageManagerField(value: unknown): { name: PackageManagerName; major?: number } | null {
   if (typeof value !== "string") return null;
-  const match = /^([a-z]+)(?:@(\d+)(?:\.\d+){0,2}(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.+/=_-]+)?)?$/u.exec(value.trim());
+  const match = PACKAGE_MANAGER_FIELD.exec(value.trim());
   if (!match || !isPackageManagerName(match[1])) return null;
   return match[2] === undefined ? { name: match[1] } : { name: match[1], major: Number(match[2]) };
 }
