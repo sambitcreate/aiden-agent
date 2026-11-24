@@ -197,6 +197,12 @@ function browserEnvironment(profileDir: string): NodeJS.ProcessEnv {
     XDG_CONFIG_HOME: join(profileDir, "config"),
     XDG_CACHE_HOME: join(profileDir, "cache"),
     NO_AT_BRIDGE: "1",
+    // The browser needs no D-Bus. Without an address, libdbus falls back to
+    // the system bus, and Chrome's main thread then waits on calls there
+    // (UPower, NameHasOwner) that held a Linux server's startup for most of
+    // the time limit. An address that cannot be parsed fails every call at once.
+    DBUS_SESSION_BUS_ADDRESS: "disabled:",
+    DBUS_SYSTEM_BUS_ADDRESS: "disabled:",
   };
   for (const name of ["PATH", "LANG", "LC_ALL", "TZ"]) if (process.env[name]) env[name] = process.env[name];
   return env;

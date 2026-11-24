@@ -193,6 +193,7 @@ test("an installed browser draws a chart offline into a picture and leaves no pr
 
 // TEMPORARY CI DIAGNOSTIC: render the same chart five more times and log each duration.
 test("DIAGNOSTIC repeated real-browser renders", { skip: browser.kind !== "found" && "no browser" }, async () => {
+  process.env.AIDEN_CLI_ENTRY = join(pkg, "dist/app/cli.js");
   process.stderr.write(`[visual-diag] browser ${browser.path} cpus ${(await import("node:os")).availableParallelism()} dbus=${process.env.DBUS_SESSION_BUS_ADDRESS ?? "unset"} display=${process.env.DISPLAY ?? "unset"}\n`);
   const html = `<div style="height:240px"><canvas id="c"></canvas></div><script>new Chart(document.getElementById("c"), {type:"bar",data:{labels:["Q1","Q2"],datasets:[{label:"Sales",data:[3,5]}]},options:{animation:false,maintainAspectRatio:false}})</script>`;
   for (let i = 0; i < 5; i++) {
