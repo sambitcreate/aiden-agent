@@ -2551,7 +2551,7 @@ test("durable CLI Bot migration preserves history, dedupes across restart, and f
   const sent = await host.durable.runtime.send(bot.id, { text: "Hello", requestId: "migration-first", attachments: [{ type: "image", mimeType: "image/png", data: imageData }] });
   assert.deepEqual(await host.durable.runtime.awaitReply(bot.id, sent.submissionId, new AbortController().signal), { kind: "completed", text: "Durable answer" });
   // A paired desktop's Bot row and a phone's Bots list read what this server's own Bot did, as from a Mac.
-  const { signals } = api.createCliRemoteBots(dir, "test-instance", host, daemon, {}, ledger, async () => {});
+  const { signals, botSessions } = api.createCliRemoteBots(dir, "test-instance", host, daemon, {}, ledger, async () => {});
   try {
     const row = (await signals.botSignals([{ id: bot.id }])).get(bot.id);
     assert.equal(row.preview, "Durable answer");
@@ -2571,7 +2571,7 @@ test("durable CLI Bot migration preserves history, dedupes across restart, and f
     await host.command(["unpause", bot.id]);
     assert.ok(changes > 0, "a pause reaches the host feed");
     off();
-  } finally { await signals.close(); }
+  } finally { await botSessions?.close(); await signals.close(); }
   const durableEntries = (await (await host.durable.runtime.conversation(bot.id)).context(api.BACKGROUND_CONTEXT)).entries;
   const callContext = api.cliDurableBotToolContext([...durableEntries].reverse(), { chatId: legacy.id, botId: bot.id });
   const forkSnapshot = await callContext.loadChat();
@@ -2584,7 +2584,7 @@ test("durable CLI Bot migration preserves history, dedupes across restart, and f
   assert.equal((await callContext.loadChat()).messages.find((message) => message.role === "user").content, "Hello", "call snapshot cannot be mutated by another consumer");
 
   // A paired desktop's feed re-reads its rows on each change: a turn's end alone brings the row its reply.
-  const { signals: replySignals } = api.createCliRemoteBots(dir, "test-instance", host, daemon, {}, ledger, async () => {});
+  const { signals: replySignals, botSessions: replySessions } = api.createCliRemoteBots(dir, "test-instance", host, daemon, {}, ledger, async () => {});
   const before = Date.parse((await replySignals.botSignals([{ id: bot.id }])).get(bot.id).lastReplyAt);
   const seen = [];
   const offReply = replySignals.onChange(() => { seen.push(replySignals.botSignals([{ id: bot.id }]).then((rows) => rows.get(bot.id))); });
@@ -2604,7 +2604,7 @@ test("durable CLI Bot migration preserves history, dedupes across restart, and f
     }
     assert.ok(settledRow, "the finished turn alone reaches the host feed, with its reply");
     assert.equal(settledRow.preview, "Durable answer");
-  } finally { gate = null; release(); offReply(); replySignals.close(); }
+  } finally { gate = null; release(); offReply(); await replySessions?.close(); await replySignals.close(); }
   assert.equal(readFileSync(join((await host.managedWorkspace.resolve(bot.id)).homePath, "durable.txt"), "utf8"), "Written by the durable Bot");
   // Codemode runs in the bundle: the script's read is a nested call through the Bot's own checks.
   const scriptTurn = await host.durable.runtime.send(bot.id, { text: "Script durable file", requestId: "durable-script-once" });

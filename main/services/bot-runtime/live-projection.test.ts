@@ -7,6 +7,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { after, test } from "node:test";
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
+import type { WatchEnd } from "@earendil-works/chord/watch";
 import { fauxAssistantMessage, fauxText, fauxThinking, fauxToolCall } from "@earendil-works/pi-ai/providers/faux";
 import {
   applyBotLiveEvent,
@@ -464,6 +465,78 @@ test("a Bot paused after its opening feed read the state is still reported pause
     const view = await live.projection.subscribe("bot:a", recorder().sink);
     view.unsubscribe();
     assert.equal(view.snapshot.state.kind, "paused", "the feed shows the pause, not the running state read before it");
+  } finally {
+    await live.close();
+  }
+});
+
+test("a running notice that joins a failed opening behind a notice that wasn't running still reports its run settled", async () => {
+  const fauxModels = createFauxModels([fauxAssistantMessage("unused")]);
+  let endFirstWatch: (() => void) | undefined;
+  const firstWatchEnded = new Promise<WatchEnd>((resolve) => (endFirstWatch = () => resolve({ kind: "ended" })));
+  let failing = false;
+  let failedOpens = 0;
+  let failOpening: (() => void) | undefined;
+  const openingFailed = new Promise<void>((resolve) => (failOpening = resolve));
+  const failure = new Error("the conversation closed while the feed opened");
+  const settled: string[] = [];
+  let reports = 0;
+  let service: BotSessionRuntime | undefined;
+  const live = await start(fauxModels, {
+    // The test sends every state notice itself.
+    service: { onStateChange: () => undefined },
+    projection: {
+      conversation: async (botId) => {
+        if (failing) {
+          failedOpens += 1;
+          await openingFailed;
+          throw failure;
+        }
+        // The first feed follows the real conversation until the test ends its watch.
+        const real = await service!.conversation(botId);
+        return new Proxy(real, {
+          get(target, property) {
+            if (property === "watch") {
+              return async (context: Parameters<typeof real.watch>[0]) => {
+                const watch = await target.watch(context);
+                return new Proxy(watch, {
+                  get(inner, key) {
+                    if (key === "closed") return Promise.race([inner.closed, firstWatchEnded]);
+                    const value = Reflect.get(inner, key, inner) as unknown;
+                    return typeof value === "function" ? value.bind(inner) : value;
+                  },
+                });
+              };
+            }
+            const value = Reflect.get(target, property, target) as unknown;
+            return typeof value === "function" ? value.bind(target) : value;
+          },
+        });
+      },
+      onRunSettled: (_botId, state) => settled.push(state.kind),
+      onError: () => {
+        reports += 1;
+      },
+    },
+  });
+  service = live.service;
+  try {
+    // A window keeps watching the Bot while its feed ends underneath it.
+    const watching = await live.projection.subscribe("bot:a", recorder().sink);
+    endFirstWatch!();
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    // An idle notice reopens the feed for that window; a running notice joins the same opening.
+    failing = true;
+    live.projection.notifyState("bot:a", { kind: "idle" });
+    live.projection.notifyState("bot:a", { kind: "running", submissionId: "sub-joined" });
+    assert.equal(failedOpens, 1, "both notices share one opening");
+    failOpening!();
+    await waitFor(() => settled.length > 0, { what: "the joined running notice's run to be reported" });
+    // Give a second report, if any, time to arrive.
+    await new Promise((resolve) => setTimeout(resolve, 200));
+    assert.deepEqual(settled, ["idle"], "the run the running notice named is reported settled, once");
+    assert.equal(reports, 1, "the failed opening is reported once");
+    watching.unsubscribe();
   } finally {
     await live.close();
   }
