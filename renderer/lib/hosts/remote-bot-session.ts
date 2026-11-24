@@ -257,10 +257,11 @@ export function remoteBotSessionView(session: AidenRemoteBotSession): RemoteBotS
 /**
  * A page of older entries as the host supervisor returns it: the wire page
  * plus `olderCursor`, the oldest entry the host sent (read or not), where the
- * next page starts. Entries this Mac can't read are already left out, so the
- * page's own oldest entry may be newer than that, or missing.
+ * next page starts, and `hostCount`, how many entries the host sent. Entries
+ * this Mac can't read are already left out, so the page's own oldest entry may
+ * be newer than that, or missing, and it may hold fewer than `hostCount`.
  */
-export type RemoteBotSessionEntriesPage = AidenRemoteBotSessionEntriesPage & { olderCursor?: string };
+export type RemoteBotSessionEntriesPage = AidenRemoteBotSessionEntriesPage & { olderCursor?: string; hostCount?: number };
 
 /**
  * A fresh read or a reconnect's snapshot of the same session keeps the older
