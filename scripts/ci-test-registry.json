@@ -477,7 +477,10 @@
         "main/services/design-canvas/app-server/app-attach.test.ts",
         "renderer/shared/design-canvas/app-frame.test.ts",
         "main/services/default-session-web-request.test.ts",
-        "main/services/default-session-permissions.test.ts"
+        "main/services/default-session-permissions.test.ts",
+        "main/services/design-canvas/app-frames/app-network-policy.test.ts",
+        "main/services/design-canvas/app-frames/app-frame-registry.test.ts",
+        "main/services/loopback-ports.test.ts"
       ],
       "preserved": [
         "browser"

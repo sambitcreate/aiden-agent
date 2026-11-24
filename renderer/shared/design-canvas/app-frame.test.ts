@@ -17,6 +17,7 @@ import {
   roundAppScale,
 } from "./app-frame.js";
 import { canDesignGuide, designMinSize, isDesignPrintable } from "./schema.js";
+import { parseDesignAppFrameEvent, parseDesignAppFrameMountResult } from "./app-frame-events.js";
 
 test("isAppRoute accepts paths from the app's own origin and refuses everything else", () => {
   for (const route of ["/", "/pricing", "/blog/hello-world?x=1"]) assert.equal(isAppRoute(route), true, route);
@@ -142,4 +143,40 @@ test("an app frame isn't printable, takes layout guides, and its smallest box is
   assert.equal(isDesignPrintable("app"), false);
   assert.equal(canDesignGuide("app"), true);
   assert.equal(designMinSize("app"), 10);
+});
+
+test("parseDesignAppFrameEvent keeps only well-formed events from main", () => {
+  const key = { frameId: "frame-1", mountToken: "abcdefghijklmnop" };
+  assert.deepEqual(parseDesignAppFrameEvent({ kind: "blocked", ...key, count: 3, hosts: ["example.com", 7, "x".repeat(254)] }), {
+    kind: "blocked",
+    ...key,
+    count: 3,
+    hosts: ["example.com"],
+  });
+  const many = parseDesignAppFrameEvent({ kind: "blocked", ...key, count: 40, hosts: Array.from({ length: 30 }, (_, i) => `h${i}`) });
+  assert.equal(many?.kind === "blocked" && many.hosts.length, 20);
+  assert.equal(parseDesignAppFrameEvent({ kind: "blocked", ...key, count: 0, hosts: [] }), null);
+  assert.equal(parseDesignAppFrameEvent({ kind: "blocked", ...key, count: 1.5, hosts: [] }), null);
+  assert.deepEqual(parseDesignAppFrameEvent({ kind: "navigation-refused", ...key, url: "https://example.com/" }), {
+    kind: "navigation-refused",
+    ...key,
+    url: "https://example.com/",
+  });
+  assert.equal(parseDesignAppFrameEvent({ kind: "navigation-refused", ...key, url: "x".repeat(2049) }), null);
+  assert.deepEqual(parseDesignAppFrameEvent({ kind: "dialog-suppressed", ...key, dialog: "alert" }), { kind: "dialog-suppressed", ...key, dialog: "alert" });
+  assert.equal(parseDesignAppFrameEvent({ kind: "dialog-suppressed", ...key, dialog: "open" }), null);
+  assert.equal(parseDesignAppFrameEvent({ kind: "blocked", frameId: "a b", mountToken: key.mountToken, count: 1, hosts: [] }), null);
+  assert.equal(parseDesignAppFrameEvent({ kind: "blocked", frameId: "a", mountToken: "short", count: 1, hosts: [] }), null);
+  assert.equal(parseDesignAppFrameEvent({ kind: "other", ...key }), null);
+  assert.equal(parseDesignAppFrameEvent(null), null);
+});
+
+test("parseDesignAppFrameMountResult accepts a loopback origin or a known error", () => {
+  assert.deepEqual(parseDesignAppFrameMountResult({ origin: "http://127.0.0.1:5173" }), { origin: "http://127.0.0.1:5173" });
+  assert.deepEqual(parseDesignAppFrameMountResult({ origin: "http://[::1]:5173" }), { origin: "http://[::1]:5173" });
+  assert.deepEqual(parseDesignAppFrameMountResult({ origin: "https://example.com" }), { error: "unavailable" });
+  assert.deepEqual(parseDesignAppFrameMountResult({ origin: "http://127.0.0.1:5173/x" }), { error: "unavailable" });
+  assert.deepEqual(parseDesignAppFrameMountResult({ error: "too-many-frames" }), { error: "too-many-frames" });
+  assert.deepEqual(parseDesignAppFrameMountResult({ error: "nope" }), { error: "unavailable" });
+  assert.deepEqual(parseDesignAppFrameMountResult(undefined), { error: "unavailable" });
 });
