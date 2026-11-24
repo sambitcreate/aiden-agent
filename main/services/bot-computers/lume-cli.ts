@@ -34,7 +34,13 @@ export type LumeCommand =
   | {
       op: "run";
       name: string;
-      vncPassword: string;
+      /**
+       * Lume's built-in VNC policy. `"disabled"` (Linux VMs) passes `--vnc disabled`
+       * so Lume opens no host VNC listener at all (macOS's `_VZVNCServer` binds `*:port`).
+       * Omit or set `"enabled"` (macOS VMs) to pass `--vnc-password`.
+       */
+      vnc?: "enabled" | "disabled";
+      vncPassword?: string;
       sharedDir: string;
       logFile?: string;
       /** For Linux VMs only: read-only disk image / ISO to attach (e.g. cloud-init `cidata` ISO). */
@@ -149,7 +155,12 @@ export function lumeArgs(command: LumeCommand, storage: string): string[] {
       if (sharedDir.includes(":")) {
         throw new BotComputerError("invalid", "The shared folder path can't contain a colon.");
       }
-      if (!/^[A-Za-z0-9-]{8,64}$/u.test(command.vncPassword)) {
+      const vncDisabled = command.vnc === "disabled";
+      if (vncDisabled) {
+        if (command.vncPassword !== undefined) {
+          throw new BotComputerError("invalid", "A VNC password cannot be passed when Lume VNC is disabled.");
+        }
+      } else if (typeof command.vncPassword !== "string" || !/^[A-Za-z0-9-]{8,64}$/u.test(command.vncPassword)) {
         throw new BotComputerError("invalid", "The VNC password has an unexpected shape.");
       }
       const args = [
@@ -160,8 +171,7 @@ export function lumeArgs(command: LumeCommand, storage: string): string[] {
         "none",
         "--no-audio-device",
         "--no-clipboard-device",
-        "--vnc-password",
-        command.vncPassword,
+        ...(vncDisabled ? ["--vnc", "disabled"] : ["--vnc-password", command.vncPassword!]),
         "--shared-dir",
         `${sharedDir}:rw`,
         "--storage",

@@ -137,6 +137,8 @@ test("a shared folder with a colon, a relative path or a foreign VM name is refu
   refuse({ op: "create", os: "linux", name: BOT_COMPUTER_BASE_VM, display: "wide" });
   refuse({ op: "run", name: botVm, vncPassword: "Zq7Tn2Lw9Rk4Hm6X", sharedDir: "/tmp/x", mount: "relative/cidata.iso" });
   refuse({ op: "run", name: botVm, vncPassword: "Zq7Tn2Lw9Rk4Hm6X", sharedDir: "/tmp/x", diskPath: "relative/disk.raw" });
+  refuse({ op: "run", name: botVm, vnc: "disabled", vncPassword: "Zq7Tn2Lw9Rk4Hm6X", sharedDir: "/tmp/shared" });
+  refuse({ op: "run", name: botVm, sharedDir: "/tmp/shared" });
   refuse({ op: "cp", name: botVm, direction: "to_guest", localPath: "relative/file", remotePath: "/tmp/file" });
   refuse({ op: "cp", name: botVm, direction: "to_guest", localPath: "/tmp/file", remotePath: "" });
   refuse({ op: "cp", name: botVm, direction: "to_guest", localPath: "/tmp/file", remotePath: "/tmp/a\nb" });
@@ -333,4 +335,38 @@ test("onSpawn hears that the executable started, and never fires for one that co
     (error: unknown) => error instanceof BotComputerError && error.code === "lume_failed" && /is missing/u.test(error.message),
   );
   assert.equal(spawned, 1, "a missing executable never started");
+});
+
+test("lumeArgs supports --vnc disabled without --vnc-password for Linux VMs and keeps all security flags", () => {
+  const args = lumeArgs(
+    {
+      op: "run",
+      name: botVm,
+      vnc: "disabled",
+      sharedDir: "/Users/a/Bot/Computer",
+      mount: "/Users/a/seed.iso",
+      logFile: "/Users/a/vm.log",
+    },
+    storage,
+  );
+  assert.deepEqual(args, [
+    "run",
+    botVm,
+    "--detach",
+    "--display",
+    "none",
+    "--no-audio-device",
+    "--no-clipboard-device",
+    "--vnc",
+    "disabled",
+    "--shared-dir",
+    "/Users/a/Bot/Computer:rw",
+    "--storage",
+    storage,
+    "--mount",
+    "/Users/a/seed.iso",
+    "--log-file",
+    "/Users/a/vm.log",
+  ]);
+  assert.equal(args.includes("--vnc-password"), false);
 });

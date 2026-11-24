@@ -4,11 +4,16 @@ import test from "node:test";
 import {
   BASE_PROVISION_STEPS,
   BOT_COMPUTER_LINUX_SHELL_USER,
+  BOT_COMPUTER_LINUX_VNC_PASSWD,
+  BOT_COMPUTER_LINUX_VNC_SERVICE,
+  BOT_COMPUTER_LINUX_VNC_SOCKET,
   buildBaseVm,
   buildLinuxBaseVm,
   generateGuestPassword,
   kcpasswordBytes,
   LINUX_BASE_PROVISION_STEPS,
+  linuxGuestVncStartScript,
+  linuxGuestVncUnit,
   provisionBase,
   provisionLinuxBase,
   type LinuxProvisionContext,
@@ -230,13 +235,23 @@ test("Linux provisioning pins the host key, configures desktop/aiden-bot/virtiof
     }
   }
   assert.ok(sshCommands.some((event) => event.command?.includes("cloud-init status --wait")));
-  assert.ok(sshCommands.some((event) => event.command?.includes("PasswordAuthentication no") && event.command?.includes("PermitRootLogin no")));
+  assert.ok(
+    sshCommands.some(
+      (event) =>
+        event.command?.includes("PasswordAuthentication no") &&
+        event.command?.includes("PermitRootLogin no") &&
+        event.command?.includes("AllowStreamLocalForwarding yes") &&
+        event.command?.includes("GatewayPorts no"),
+    ),
+  );
   assert.ok(
     sshCommands.some(
       (event) =>
         event.command?.includes("rm -f /etc/apt/sources.list.d/debian.sources") &&
         event.command?.includes(BOT_COMPUTER_LINUX_APT_SNAPSHOT.archiveUrl) &&
         event.command?.includes("xfce4") &&
+        event.command?.includes("tigervnc-scraping-server") &&
+        event.command?.includes("tigervnc-tools") &&
         event.command?.includes("chromium") &&
         event.command?.includes("firefox-esr") &&
         event.command?.includes("at-spi2-core"),
@@ -247,6 +262,8 @@ test("Linux provisioning pins the host key, configures desktop/aiden-bot/virtiof
       (event) =>
         event.command?.includes("autologin-user=lume") &&
         event.command?.includes("sleep.target") &&
+        event.command?.includes(BOT_COMPUTER_LINUX_VNC_SERVICE) &&
+        event.command?.includes("loginctl enable-linger") &&
         event.command?.includes("/etc/netplan/50-aiden-dhcp.yaml") &&
         event.command?.includes("99-disable-network-config.cfg") &&
         event.command?.includes("systemctl restart lightdm") &&
@@ -313,4 +330,19 @@ test("a failing Linux provisioning step stops immediately; buildLinuxBaseVm clea
   await assert.rejects(buildLinuxBaseVm(make(false)));
   assert.equal(calls.includes("remove-image"), false, "verified Debian image stays for retry");
   assert.deepEqual(calls.slice(-3), ["stop", "delete", "remove-seed"], "half-made VM and temporary seed ISO are cleaned up");
+});
+
+test("Linux guest VNC unit disables TCP (-rfbport -1), binds a mode-0600 Unix socket with VncAuth, and refreshes its password on stdin", () => {
+  const unit = linuxGuestVncUnit();
+  assert.match(unit, /^Environment="DISPLAY=:0"$/mu);
+  assert.match(unit, /^Environment="XAUTHORITY=\/home\/lume\/\.Xauthority"$/mu);
+  assert.match(unit, new RegExp(`-rfbport -1 -rfbunixpath ${BOT_COMPUTER_LINUX_VNC_SOCKET.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&")} -rfbunixmode 0600`, "u"));
+  assert.match(unit, new RegExp(`-SecurityTypes VncAuth -PasswordFile ${BOT_COMPUTER_LINUX_VNC_PASSWD.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&")}`, "u"));
+  assert.equal(unit.includes("SecurityTypes None"), false);
+
+  const startScript = linuxGuestVncStartScript();
+  assert.match(startScript, /^IFS= read -r pw/mu);
+  assert.match(startScript, /\/usr\/bin\/tigervncpasswd -f/u);
+  assert.match(startScript, new RegExp(`systemctl --user restart '${BOT_COMPUTER_LINUX_VNC_SERVICE}'`, "u"));
+  assert.match(startScript, new RegExp(`\\[ -S '${BOT_COMPUTER_LINUX_VNC_SOCKET.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&")}' \\]`, "u"));
 });

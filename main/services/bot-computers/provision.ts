@@ -307,7 +307,70 @@ export const BOT_COMPUTER_LINUX_SHARED_MOUNT = "/mnt/aiden-shared";
 export const BOT_COMPUTER_LINUX_VIRTIOFS_TAG = "com.apple.virtio-fs.automount";
 export const BOT_COMPUTER_LINUX_SHARED_TARGET = `${BOT_COMPUTER_LINUX_SHARED_MOUNT}/Computer`;
 
-/** Desktop, browser, AT-SPI, and font packages installed from the pinned Debian snapshot. */
+/**
+ * Guest-side X11 VNC (`X0tigervnc`) paths for Linux Bot computers.
+ *
+ * Lume runs with `--vnc disabled` so macOS's `_VZVNCServer` never binds a
+ * wildcard `*:port` socket on the host (G22). Instead `X0tigervnc` listens only
+ * on a mode-0600 Unix domain socket owned by `lume` (`-rfbport -1`, no TCP port
+ * inside the guest, inaccessible to `aiden-bot`), protected by a per-run VncAuth
+ * password file written over SSH stdin, and reached from the host exclusively
+ * via a `127.0.0.1` SSH local Unix-socket tunnel.
+ */
+export const BOT_COMPUTER_LINUX_VNC_DIR = `/home/${BOT_COMPUTER_GUEST_USER}/.local/share/aiden`;
+export const BOT_COMPUTER_LINUX_VNC_SOCKET = `${BOT_COMPUTER_LINUX_VNC_DIR}/vnc.sock`;
+export const BOT_COMPUTER_LINUX_VNC_PASSWD = `${BOT_COMPUTER_LINUX_VNC_DIR}/vnc.passwd`;
+export const BOT_COMPUTER_LINUX_VNC_SERVICE = "aiden-vnc.service";
+
+/** `systemd --user` unit for `X0tigervnc` scraping `DISPLAY=:0` over a private Unix socket. */
+export function linuxGuestVncUnit(): string {
+  return [
+    "[Unit]",
+    "Description=Aiden Bot Computer X11 VNC Server",
+    "After=graphical-session.target",
+    "",
+    "[Service]",
+    "Type=simple",
+    'Environment="DISPLAY=:0"',
+    `Environment="XAUTHORITY=/home/${BOT_COMPUTER_GUEST_USER}/.Xauthority"`,
+    `ExecStartPre=/bin/rm -f ${BOT_COMPUTER_LINUX_VNC_SOCKET}`,
+    `ExecStart=/usr/bin/X0tigervnc -display :0 -rfbport -1 -rfbunixpath ${BOT_COMPUTER_LINUX_VNC_SOCKET} -rfbunixmode 0600 -SecurityTypes VncAuth -PasswordFile ${BOT_COMPUTER_LINUX_VNC_PASSWD} -AlwaysShared`,
+    "Restart=on-failure",
+    "RestartSec=1",
+    "StartLimitIntervalSec=0",
+    "",
+    "[Install]",
+    "WantedBy=default.target",
+  ].join("\n");
+}
+
+/**
+ * Guest command (run over SSH as `lume`, reading the per-run VNC password on stdin)
+ * that atomically refreshes the `VncAuth` password file, waits for XFCE/Xorg,
+ * starts `aiden-vnc.service`, and waits until the private Unix socket is ready.
+ */
+export function linuxGuestVncStartScript(): string {
+  const dir = quoteRemoteArg(BOT_COMPUTER_LINUX_VNC_DIR);
+  const passwd = quoteRemoteArg(BOT_COMPUTER_LINUX_VNC_PASSWD);
+  const sock = quoteRemoteArg(BOT_COMPUTER_LINUX_VNC_SOCKET);
+  const service = quoteRemoteArg(BOT_COMPUTER_LINUX_VNC_SERVICE);
+  return [
+    "IFS= read -r pw || exit 64",
+    `umask 077 && mkdir -p ${dir} && chmod 700 ${dir}`,
+    `printf '%s\\n' "$pw" | /usr/bin/tigervncpasswd -f > ${passwd}.tmp || exit 65`,
+    `chmod 600 ${passwd}.tmp && mv -f ${passwd}.tmp ${passwd}`,
+    'u="$(id -un)" && uid="$(id -u)"',
+    'for i in $(seq 1 30); do if [ -s "$HOME/.Xauthority" ] && pgrep -u "$u" xfce4-session >/dev/null 2>&1; then break; fi; sleep 1; done',
+    '[ -s "$HOME/.Xauthority" ] || exit 66',
+    'export XDG_RUNTIME_DIR="/run/user/$uid"',
+    'export DBUS_SESSION_BUS_ADDRESS="unix:path=/run/user/$uid/bus"',
+    `systemctl --user daemon-reload && systemctl --user restart ${service} || exit 67`,
+    `for i in $(seq 1 30); do if systemctl --user is-active --quiet ${service} && [ -S ${sock} ]; then exit 0; fi; sleep 0.5; done`,
+    "exit 68",
+  ].join("\n");
+}
+
+/** Desktop, browser, AT-SPI, VNC, and font packages installed from the pinned Debian snapshot. */
 export const BOT_COMPUTER_LINUX_DESKTOP_PACKAGES: readonly string[] = Object.freeze([
   "openssh-server",
   "xfce4",
@@ -315,6 +378,8 @@ export const BOT_COMPUTER_LINUX_DESKTOP_PACKAGES: readonly string[] = Object.fre
   "lightdm",
   "dbus-x11",
   "xserver-xorg",
+  "tigervnc-scraping-server",
+  "tigervnc-tools",
   "chromium",
   "firefox-esr",
   "at-spi2-core",
@@ -435,6 +500,8 @@ export const LINUX_BASE_PROVISION_STEPS: readonly LinuxProvisionStep[] = Object.
         '"KbdInteractiveAuthentication no" ' +
         '"PermitRootLogin no" ' +
         '"PubkeyAuthentication yes" ' +
+        '"AllowStreamLocalForwarding yes" ' +
+        '"GatewayPorts no" ' +
         `> ${BOT_COMPUTER_SSHD_DROP_IN} && ` +
         "(systemctl reload ssh >/dev/null 2>&1 || systemctl reload sshd >/dev/null 2>&1 || true) && " +
         '/usr/sbin/sshd -T 2>/dev/null | grep -qx "passwordauthentication no"\'';
@@ -525,6 +592,8 @@ export const LINUX_BASE_PROVISION_STEPS: readonly LinuxProvisionStep[] = Object.
         "      dhcp4: true",
         "      dhcp-identifier: mac",
       ].join("\n");
+      const vncUnitDir = `/home/${BOT_COMPUTER_GUEST_USER}/.config/systemd/user`;
+      const vncUnitPath = `${vncUnitDir}/${BOT_COMPUTER_LINUX_VNC_SERVICE}`;
       const waitDesktop =
         `for i in $(seq 1 30); do ` +
         `if [ -s /home/${BOT_COMPUTER_GUEST_USER}/.Xauthority ] && pgrep -u ${BOT_COMPUTER_GUEST_USER} xfce4-session >/dev/null 2>&1; then break; fi; ` +
@@ -539,6 +608,11 @@ export const LINUX_BASE_PROVISION_STEPS: readonly LinuxProvisionStep[] = Object.
         `printf '%s\\n' ${quoteRemoteArg(sessionPrep)} > /usr/local/bin/aiden-session-prep`,
         "chmod 755 /usr/local/bin/aiden-session-prep",
         `printf '%s\\n' ${quoteRemoteArg(desktopEntry)} > /etc/xdg/autostart/aiden-no-lock.desktop`,
+        `install -d -m 700 -o ${BOT_COMPUTER_GUEST_USER} -g ${BOT_COMPUTER_GUEST_USER} ${quoteRemoteArg(BOT_COMPUTER_LINUX_VNC_DIR)}`,
+        `install -d -m 755 -o ${BOT_COMPUTER_GUEST_USER} -g ${BOT_COMPUTER_GUEST_USER} /home/${BOT_COMPUTER_GUEST_USER}/.config /home/${BOT_COMPUTER_GUEST_USER}/.config/systemd ${quoteRemoteArg(vncUnitDir)}`,
+        `printf '%s\\n' ${quoteRemoteArg(linuxGuestVncUnit())} > ${quoteRemoteArg(vncUnitPath)}`,
+        `chown ${BOT_COMPUTER_GUEST_USER}:${BOT_COMPUTER_GUEST_USER} ${quoteRemoteArg(vncUnitPath)} && chmod 644 ${quoteRemoteArg(vncUnitPath)}`,
+        `loginctl enable-linger ${BOT_COMPUTER_GUEST_USER} >/dev/null 2>&1 || true`,
         `printf '%s\\n' ${quoteRemoteArg(disableCloudNet)} > /etc/cloud/cloud.cfg.d/99-disable-network-config.cfg`,
         "rm -f /etc/netplan/50-cloud-init.yaml",
         `printf '%s\\n' ${quoteRemoteArg(netplanDhcp)} > /etc/netplan/50-aiden-dhcp.yaml`,
@@ -638,6 +712,8 @@ export const LINUX_BASE_PROVISION_STEPS: readonly LinuxProvisionStep[] = Object.
     async run(context) {
       const script = [
         "command -v xfce4-session >/dev/null",
+        "command -v X0tigervnc >/dev/null",
+        "command -v tigervncpasswd >/dev/null",
         "command -v chromium >/dev/null",
         "command -v firefox-esr >/dev/null",
         `id -u ${BOT_COMPUTER_LINUX_SHELL_USER} >/dev/null`,

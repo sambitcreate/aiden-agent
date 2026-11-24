@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { mkdtempSync, readFileSync, statSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdtempSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import test from "node:test";
@@ -13,12 +13,15 @@ import {
   guestSshArgs,
   guestSshEnvironment,
   guestSshPaths,
+  guestSshTunnelArgs,
+  openGuestVncTunnel,
   parsePublicKey,
   runGuestCommand,
   scanGuestHostKey,
   writeKnownHost,
 } from "./ssh.js";
 import { BotComputerError } from "./types.js";
+import { vncReachableBeyondLoopback } from "./vnc-exposure.js";
 
 const root = "/Users/person/Library/Application Support/Aiden Agent/bot-computers";
 const paths = guestSshPaths(root);
@@ -171,4 +174,82 @@ test("scanGuestHostKey extracts and validates an ed25519 key from ssh-keyscan an
     }),
     (error: unknown) => error instanceof BotComputerError && error.code === "start_failed",
   );
+});
+
+test("guestSshTunnelArgs keeps every SSH hardening option, disables GatewayPorts, and forwards only on 127.0.0.1", () => {
+  const args = guestSshTunnelArgs(
+    { host: "192.168.64.9", user: "lume" },
+    paths,
+    { localPort: 59123, remoteSocket: "/home/lume/.local/share/aiden/vnc.sock" },
+  );
+  assert.ok(args.includes("StrictHostKeyChecking=yes"));
+  assert.ok(args.includes(`HostKeyAlias=${BOT_COMPUTER_HOST_KEY_ALIAS}`));
+  assert.ok(args.includes("IdentitiesOnly=yes"));
+  assert.ok(args.includes("BatchMode=yes"));
+  assert.ok(args.includes("PasswordAuthentication=no"));
+  assert.ok(args.includes("ForwardAgent=no"));
+  assert.ok(args.includes("ForwardX11=no"));
+  assert.ok(args.includes("GatewayPorts=no"));
+  assert.ok(args.includes("ExitOnForwardFailure=yes"));
+  assert.ok(args.includes("-N"));
+  assert.equal(args[args.indexOf("-L") + 1], "127.0.0.1:59123:/home/lume/.local/share/aiden/vnc.sock");
+  assert.equal(args.includes("ClearAllForwardings=yes"), false);
+
+  assert.throws(
+    () => guestSshTunnelArgs({ host: "192.168.64.9", user: "lume" }, paths, { localPort: 0, remoteSocket: "/tmp/vnc.sock" }),
+    BotComputerError,
+  );
+  assert.throws(
+    () => guestSshTunnelArgs({ host: "192.168.64.9", user: "lume" }, paths, { localPort: 5900, remoteSocket: "relative.sock" }),
+    BotComputerError,
+  );
+  assert.throws(
+    () => guestSshTunnelArgs({ host: "192.168.64.9", user: "lume" }, paths, { localPort: 5900, remoteSocket: "/tmp/bad:path" }),
+    BotComputerError,
+  );
+});
+
+test("openGuestVncTunnel binds only 127.0.0.1 (passing vncReachableBeyondLoopback) and terminates cleanly on close", async () => {
+  const dir = mkdtempSync(path.join(tmpdir(), "p8-ssh-tunnel-"));
+  const pidFile = path.join(dir, "tunnel.pid");
+  const fakeSsh = path.join(dir, "fake-ssh");
+  writeFileSync(
+    fakeSsh,
+    `#!${process.execPath}\n` +
+      `import { writeFileSync } from "node:fs";\n` +
+      `import { createServer } from "node:net";\n` +
+      `const lIdx = process.argv.indexOf("-L");\n` +
+      `const spec = lIdx >= 0 ? process.argv[lIdx + 1] : "";\n` +
+      `const match = /^127\\.0\\.0\\.1:(\\d+):(\\/.+)$/.exec(spec);\n` +
+      `if (!match) { process.stderr.write("bad -L " + spec + "\\n"); process.exit(2); }\n` +
+      `writeFileSync(${JSON.stringify(pidFile)}, String(process.pid));\n` +
+      `const server = createServer((s) => s.end());\n` +
+      `process.on("SIGTERM", () => { server.close(); process.exit(0); });\n` +
+      `server.listen(Number(match[1]), "127.0.0.1");\n`,
+  );
+  chmodSync(fakeSsh, 0o755);
+
+  const local = guestSshPaths(dir);
+  const tunnel = await openGuestVncTunnel(
+    { host: "192.168.64.9", user: "lume" },
+    "/home/lume/.local/share/aiden/vnc.sock",
+    { timeoutMs: 5_000 },
+    { paths: local, env: guestSshEnvironment({}, local.home), sshCommand: fakeSsh },
+  );
+  try {
+    assert.equal(tunnel.host, "127.0.0.1");
+    assert.ok(tunnel.port > 0);
+    assert.equal(await vncReachableBeyondLoopback(tunnel.port), false, "loopback SSH tunnel is never reachable beyond loopback");
+  } finally {
+    await tunnel.close();
+  }
+  const pid = Number(readFileSync(pidFile, "utf8").trim());
+  assert.ok(pid > 0);
+  let alive = true;
+  try {
+    process.kill(pid, 0);
+  } catch {
+    alive = false;
+  }
+  assert.equal(alive, false, "tunnel child exits cleanly on close()");
 });
