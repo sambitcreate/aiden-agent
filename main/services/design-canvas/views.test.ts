@@ -295,3 +295,79 @@ test("a turn without the registry still follows its own shown page", async () =>
   assert.equal(await turn.show("ws-1", "p2"), undefined);
   assert.equal((await turn.view(doc, "ws-1")).pageId, "p2");
 });
+
+// ── Visible presence (2b): a canvas counts only while its pane and window are shown ──
+
+function presenceLog(views: DesignCanvasViews) {
+  const fired: Array<[string, number]> = [];
+  const stop = views.onPresence((workspaceId, count) => fired.push([workspaceId, count]));
+  return { fired, stop };
+}
+
+test("onPresence fires with the workspace's visible count on mount, visibility change, unmount and unmountAll", async () => {
+  const views = new DesignCanvasViews();
+  const { fired } = presenceLog(views);
+  await views.report("chat-a", "ws-1", view("page-1"), 0, true);
+  await views.report("chat-b", "ws-1", view("page-1"), 0, true);
+  assert.equal(views.visible("ws-1"), 2);
+  await views.report("chat-a", "ws-1", view("page-1"), 0, false);
+  views.unmount("chat-b");
+  await views.report("chat-b", "ws-1", view("page-1"), 0, true);
+  views.unmountAll();
+  assert.deepEqual(fired, [
+    ["ws-1", 1],
+    ["ws-1", 2],
+    ["ws-1", 1],
+    ["ws-1", 0],
+    ["ws-1", 1],
+    ["ws-1", 0],
+  ]);
+  assert.equal(views.visible("ws-1"), 0);
+});
+
+test("a hidden mounted canvas doesn't count", async () => {
+  const views = new DesignCanvasViews();
+  await views.report("chat-a", "ws-1", view("page-1"), 0, false);
+  assert.equal(views.mounted("ws-1"), 1);
+  assert.equal(views.visible("ws-1"), 0);
+  // A report without visibility (an older renderer) counts as hidden.
+  await views.report("chat-b", "ws-1", view("page-1"), 0);
+  assert.equal(views.visible("ws-1"), 0);
+});
+
+test("a report that doesn't change visibility doesn't fire", async () => {
+  const views = new DesignCanvasViews();
+  await views.report("chat-a", "ws-1", view("page-1"), 0, true);
+  const { fired } = presenceLog(views);
+  await views.report("chat-a", "ws-1", view("page-1", 40), 0, true);
+  await views.showPage("chat-a", "ws-1", "page-2");
+  // A stale report still says the canvas is open and shown.
+  await views.report("chat-a", "ws-1", view("page-1", 80), 0, true);
+  await views.report("chat-c", "ws-2", view("page-1"), 0, false);
+  assert.deepEqual(fired, []);
+});
+
+test("a stale report still updates visibility, and forgetting a chat or removing a workspace drops its count", async () => {
+  const views = new DesignCanvasViews();
+  await views.report("chat-a", "ws-1", view("page-1"), 0, true);
+  await views.showPage("chat-a", "ws-1", "page-2");
+  const { fired } = presenceLog(views);
+  await views.report("chat-a", "ws-1", view("page-1"), 0, false);
+  assert.equal(views.visible("ws-1"), 0);
+  await views.report("chat-a", "ws-1", view("page-2"), 1, true);
+  await views.forget("chat-a", "ws-1");
+  assert.deepEqual(fired, [["ws-1", 0], ["ws-1", 1], ["ws-1", 0]]);
+});
+
+test("the presence listener can unsubscribe, and a throwing one never breaks a report", async () => {
+  const views = new DesignCanvasViews({ onError: () => undefined });
+  views.onPresence(() => {
+    throw new Error("listener failed");
+  });
+  const { fired, stop } = presenceLog(views);
+  await views.report("chat-a", "ws-1", view("page-1"), 0, true);
+  stop();
+  views.unmount("chat-a");
+  assert.deepEqual(fired, [["ws-1", 1]]);
+  assert.equal(views.mounted("ws-1"), 0);
+});

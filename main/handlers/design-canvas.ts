@@ -247,7 +247,7 @@ function saveOptions(options: unknown): { undone: string[]; workspaceId: string 
 /** A `designCanvas:view` report, checked; anything malformed is refused. */
 function parseViewReport(
   value: unknown,
-): "unmounted" | { workspaceId: string; view: DesignChatView; focusId: number } {
+): "unmounted" | { workspaceId: string; view: DesignChatView; focusId: number; visible: boolean } {
   if (typeof value !== "object" || value === null || Array.isArray(value)) throw new Error("Invalid canvas view.");
   const raw = value as Record<string, unknown>;
   if (raw.mounted === false && Object.keys(raw).length === 1) return "unmounted";
@@ -256,7 +256,9 @@ function parseViewReport(
   if (typeof focusId !== "number" || !Number.isSafeInteger(focusId) || focusId < 0) throw new Error("Invalid canvas view.");
   const view = parseDesignChatView(raw.view);
   if (!view) throw new Error("Invalid canvas view.");
-  return { workspaceId, view, focusId };
+  // A report without `visible` (an older renderer) is a hidden canvas, so it never keeps a live app running.
+  if (raw.visible !== undefined && typeof raw.visible !== "boolean") throw new Error("Invalid canvas view.");
+  return { workspaceId, view, focusId, visible: raw.visible === true };
 }
 
 export function designCanvasWorkspaceOf(chat: Pick<DesignCanvasChat, "workspaceId">): string {
@@ -371,7 +373,7 @@ export function registerDesignCanvasHandlers<Event>(deps: {
       const chat = await requireChat(chatId);
       deps.whenSenderResets?.(event, () => deps.views.unmountAll());
       if (parsed.workspaceId !== designCanvasWorkspaceOf(chat)) return;
-      await deps.views.report(chat.id, parsed.workspaceId, parsed.view, parsed.focusId);
+      await deps.views.report(chat.id, parsed.workspaceId, parsed.view, parsed.focusId, parsed.visible);
     });
   });
 

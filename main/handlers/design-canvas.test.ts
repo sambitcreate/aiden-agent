@@ -291,6 +291,27 @@ test("designCanvas:view stores a parsed view and refuses a malformed one", async
   });
 });
 
+test("designCanvas:view accepts visible true and false, treats a missing visible as false, and refuses a non-boolean", async (t) => {
+  const { invoke, views } = await fixture(t);
+  const report = (visible?: unknown) => ({
+    workspaceId: "workspace-1",
+    view: { pageId: "p2", viewport: { x: 0, y: 0, zoom: 1 } },
+    focusId: 0,
+    ...(visible === undefined ? {} : { visible }),
+  });
+  await invoke("designCanvas:view", "chat-1", report(true));
+  assert.equal(views.visible("workspace-1"), 1);
+  await invoke("designCanvas:view", "chat-1", report(false));
+  assert.equal(views.visible("workspace-1"), 0);
+  await invoke("designCanvas:view", "chat-1", report(true));
+  await invoke("designCanvas:view", "chat-1", report());
+  assert.equal(views.visible("workspace-1"), 0, "an older renderer never keeps a server alive");
+  for (const bad of ["true", 1, null, {}]) {
+    await assert.rejects(invoke("designCanvas:view", "chat-1", report(bad)), /Invalid canvas view/u, JSON.stringify(bad));
+  }
+  assert.equal(views.mounted("workspace-1"), 1);
+});
+
 test("a canvas's last report and its unmount, sent back to back, leave it counted as closed", async (t) => {
   const { invoke, views } = await fixture(t);
   const last = invoke("designCanvas:view", "chat-1", { workspaceId: "workspace-1", view: { pageId: "p2", viewport: { x: 3, y: 0, zoom: 1 } }, focusId: 0 });

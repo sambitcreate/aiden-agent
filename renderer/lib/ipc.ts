@@ -2815,7 +2815,7 @@ export const designCanvasApi = {
    */
   reportDesignCanvasView: (
     chatId: string,
-    report: { workspaceId: string; view: DesignChatView; focusId: number } | { mounted: false },
+    report: { workspaceId: string; view: DesignChatView; focusId: number; visible: boolean } | { mounted: false },
   ) => invoke<void>("designCanvas:view", chatId, report),
   /** The view main keeps for the chat (its page, that page's viewport and newest `focusId`), if any. */
   getDesignCanvasView: (chatId: string) =>

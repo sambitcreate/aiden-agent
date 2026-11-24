@@ -9,11 +9,16 @@
 // one, with the newest `focusId` it has seen: Aiden's page changes carry one,
 // and main ignores a report that has not seen the newest. Unmounting sends the
 // pending report first, then `{ mounted: false }`.
+//
+// Each report also says whether the person can see the canvas now: not while
+// the stacked layout shows the Chat pane, nor while the window's document is
+// hidden. Main keeps a live app's dev server only for a visible canvas.
 
 import * as React from "react";
 import { designCanvasApi } from "../lib/ipc";
 import type { DesignCanvas, DesignViewport } from "../shared/design-canvas/schema";
 import { DESIGN_FRESH_VIEWPORT } from "../shared/design-canvas/view";
+import { useDesignPane } from "./design-pane";
 
 export const DESIGN_VIEW_REPORT_DELAY_MS = 250;
 
@@ -76,6 +81,12 @@ function shownPageId(doc: DesignCanvas, state: State, chatId: string): string {
   return state.earlier.find(exists) ?? doc.pages[0]!.id;
 }
 
+function subscribeVisibility(onChange: () => void): () => void {
+  document.addEventListener("visibilitychange", onChange);
+  return () => document.removeEventListener("visibilitychange", onChange);
+}
+const documentVisible = () => document.visibilityState !== "hidden";
+
 export function useDesignView(workspaceId: string, chatId: string, doc: DesignCanvas | undefined): DesignViewHandle {
   const [state, setState] = React.useState<State>(EMPTY);
   const stateRef = React.useRef(state);
@@ -86,6 +97,11 @@ export function useDesignView(workspaceId: string, chatId: string, doc: DesignCa
   const timer = React.useRef<ReturnType<typeof setTimeout> | null>(null);
   const docRef = React.useRef(doc);
   docRef.current = doc;
+  const { stacked, pane } = useDesignPane();
+  const pageVisible = React.useSyncExternalStore(subscribeVisibility, documentVisible, () => true);
+  const visible = (!stacked || pane === "canvas") && pageVisible;
+  const visibleRef = React.useRef(visible);
+  visibleRef.current = visible;
 
   /** Sends the view as it is now, if the canvas knows its page. */
   const send = React.useCallback(() => {
@@ -99,7 +115,7 @@ export function useDesignView(workspaceId: string, chatId: string, doc: DesignCa
       ...(size.current ? { size: size.current } : {}),
     };
     void designCanvasApi
-      .reportDesignCanvasView(chatId, { workspaceId, view, focusId: focusId.current })
+      .reportDesignCanvasView(chatId, { workspaceId, view, focusId: focusId.current, visible: visibleRef.current })
       .catch(() => undefined);
   }, [chatId, workspaceId]);
   const schedule = React.useCallback(() => {
@@ -193,10 +209,11 @@ export function useDesignView(workspaceId: string, chatId: string, doc: DesignCa
   const pageId = doc ? shownPageId(doc, state, chatId) : (state.pageId ?? "");
   // Once loaded, main hears the canvas is open and what it shows, and again
   // whenever the page on screen changes (a fallback, or the view's page coming
-  // back), so its kept view matches the screen.
+  // back), or the canvas is shown or hidden, so its kept view and presence
+  // match the screen.
   React.useEffect(() => {
     if (state.loaded && hasDoc) schedule();
-  }, [state.loaded, hasDoc, pageId, schedule]);
+  }, [state.loaded, hasDoc, pageId, visible, schedule]);
   return {
     loaded: state.loaded,
     pageId,

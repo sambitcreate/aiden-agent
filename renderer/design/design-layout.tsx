@@ -25,6 +25,7 @@ import { appApi } from "../lib/ipc";
 import { DesignCanvasRegion } from "./design-canvas-region";
 import { DesignChatDivider } from "./design-chat-divider";
 import { DesignExpandContext, type DesignExpandState } from "./design-expand";
+import { DesignPaneContext, useDesignChatBodyHidden, type DesignPane, type DesignPaneState } from "./design-pane";
 
 export const DESIGN_CHAT_WIDTH_STORAGE_KEY = "aiden-agent.design.chat-width";
 /**
@@ -43,32 +44,7 @@ const FALLBACK_SIDEBAR_WIDTH = 272;
 /** Resizes settle (a widen animates) before Aiden asks main again or re-checks the sidebar. */
 const RESIZE_SETTLE_MS = 150;
 
-export type DesignPane = "chat" | "canvas";
-
-/** The stacked layout's one visible pane, for the top bar's Chat | Canvas switch and the chat body. */
-export interface DesignPaneState {
-  /** True while design mode is on and the content is too narrow to split. */
-  stacked: boolean;
-  pane: DesignPane;
-  setPane(pane: DesignPane): void;
-}
-
-const DesignPaneContext = React.createContext<DesignPaneState>({
-  stacked: false,
-  pane: "chat",
-  setPane: () => {},
-});
-
-/** The stacked design layout's visible pane; outside design mode the chat is always shown. */
-export function useDesignPane(): DesignPaneState {
-  return React.useContext(DesignPaneContext);
-}
-
-/** True while the stacked design layout shows the canvas, so the chat's body is hidden. */
-export function useDesignChatBodyHidden(): boolean {
-  const { stacked, pane } = useDesignPane();
-  return stacked && pane === "canvas";
-}
+export { DesignPaneContext, useDesignChatBodyHidden, useDesignPane, type DesignPane, type DesignPaneState } from "./design-pane";
 
 /** The stacked layout's "needs a wider window" banner, which the chat's top bar shows. */
 interface DesignBannerState {
