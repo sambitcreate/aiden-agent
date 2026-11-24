@@ -1,7 +1,8 @@
 /**
- * Design mode's device-local records for live apps (plan 2b D5, D6, D8), in
- * one userData file: the launch consent per app root, Aiden's own install
- * stamp per install root, and the sticky port per app root. Every call is
+ * Design mode's device-local records for live apps (plan 2b D5, D6, D8; 2c
+ * D10), in one userData file: the launch consent per app root, Aiden's own
+ * install stamp per install root, the sticky port per app root, and the
+ * approved attach of an `apps[].url` root. Every call is
  * serialised; writes are atomic with mode 0600. An unreadable or invalid
  * file reads as empty, so it never grants a consent it can't show.
  */
@@ -26,11 +27,23 @@ export interface DesignAppInstallRecord {
   at: number;
 }
 
+/** 2c (D10): the person approved attaching an `apps[].url` root's server. */
+export interface DesignAppAttachRecord {
+  /** The canonical origin the card showed: "http://127.0.0.1:4321" or "http://[::1]:4321". */
+  origin: string;
+  /** `.aiden/canvas.json`'s url as written. */
+  configUrl: string;
+  /** The workspace's realpath at approval. */
+  workspaceReal: string;
+  at: number;
+}
+
 interface WorkspaceRecords {
   at: number;
   consents: Record<string, DesignAppConsentRecord>;
   installs: Record<string, DesignAppInstallRecord>;
   ports: Record<string, { port: number; at: number }>;
+  attaches: Record<string, DesignAppAttachRecord>;
 }
 
 interface RecordsFile {
@@ -52,6 +65,8 @@ export interface DesignAppRecords {
   markInstall(workspaceId: string, installRoot: string, record: Omit<DesignAppInstallRecord, "at">): Promise<void>;
   portOf(workspaceId: string, appRoot: string): Promise<number | undefined>;
   setPort(workspaceId: string, appRoot: string, port: number): Promise<void>;
+  attachOf(workspaceId: string, appRoot: string): Promise<DesignAppAttachRecord | undefined>;
+  approveAttach(workspaceId: string, appRoot: string, record: Omit<DesignAppAttachRecord, "at">): Promise<void>;
   forgetWorkspace(workspaceId: string): Promise<void>;
 }
 
@@ -80,6 +95,10 @@ function validPort(value: unknown): value is { port: number; at: number } {
   return isRecord(value) && Number.isInteger(value.port) && (value.port as number) > 0 && (value.port as number) < 65_536 && isTime(value.at);
 }
 
+function validAttach(value: unknown): value is DesignAppAttachRecord {
+  return isRecord(value) && isString(value.origin) && isString(value.configUrl) && isString(value.workspaceReal) && isTime(value.at);
+}
+
 function entries<T>(value: unknown, valid: (entry: unknown) => entry is T): Record<string, T> {
   if (!isRecord(value)) return {};
   return Object.fromEntries(Object.entries(value).filter((entry): entry is [string, T] => valid(entry[1])));
@@ -102,6 +121,7 @@ function parse(text: string): RecordsFile {
       consents: entries(raw.consents, validConsent),
       installs: entries(raw.installs, validInstall),
       ports: entries(raw.ports, validPort),
+      attaches: entries(raw.attaches, validAttach),
     };
   }
   return { version: 1, workspaces };
@@ -132,12 +152,13 @@ export function createDesignAppRecords(file: () => string, options: { now?: () =
     serial(async () => {
       const data = await load();
       const at = now();
-      const records = data.workspaces[workspaceId] ?? { at, consents: {}, installs: {}, ports: {} };
+      const records = data.workspaces[workspaceId] ?? { at, consents: {}, installs: {}, ports: {}, attaches: {} };
       change(records, at);
       records.at = at;
       records.consents = capByAge(records.consents, DESIGN_APP_RECORD_CAPS.appRoots);
       records.installs = capByAge(records.installs, DESIGN_APP_RECORD_CAPS.appRoots);
       records.ports = capByAge(records.ports, DESIGN_APP_RECORD_CAPS.appRoots);
+      records.attaches = capByAge(records.attaches, DESIGN_APP_RECORD_CAPS.appRoots);
       data.workspaces[workspaceId] = records;
       data.workspaces = capByAge(data.workspaces, DESIGN_APP_RECORD_CAPS.workspaces);
       await writeJsonAtomic(file(), data, { mode: 0o600, space: 2 });
@@ -160,6 +181,11 @@ export function createDesignAppRecords(file: () => string, options: { now?: () =
     setPort: (workspaceId, appRoot, port) =>
       update(workspaceId, (records, at) => {
         records.ports[appRoot] = { port, at };
+      }),
+    attachOf: (workspaceId, appRoot) => read((data) => data.workspaces[workspaceId]?.attaches[appRoot]),
+    approveAttach: (workspaceId, appRoot, record) =>
+      update(workspaceId, (records, at) => {
+        records.attaches[appRoot] = { origin: record.origin, configUrl: record.configUrl, workspaceReal: record.workspaceReal, at };
       }),
     forgetWorkspace: (workspaceId) =>
       serial(async () => {

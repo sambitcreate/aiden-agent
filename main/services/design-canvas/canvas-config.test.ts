@@ -6,6 +6,7 @@ import path from "node:path";
 import test from "node:test";
 import type { AppKind, DetectedApp, WebAppDetection } from "./app-server/app-server-core.js";
 import {
+  attachRoots,
   CANVAS_CONFIG_MAX_BYTES,
   CANVAS_CONFIG_PATH,
   configuredRoots,
@@ -120,7 +121,8 @@ test("fields DM doesn't know are ignored by the parser but kept in the raw objec
   };
   const text = JSON.stringify(raw);
   assert.deepEqual(parseCanvasConfigObject(text), raw);
-  assert.deepEqual(parseCanvasConfig(text), config({ root: "web", script: "dev" }));
+  // 2c reads url (D7); routes, params and mock stay unknown.
+  assert.deepEqual(parseCanvasConfig(text), config({ root: "web", script: "dev", url: "http://localhost:3000" }));
   const inspection = inspectCanvasConfig(text);
   assert.equal(inspection.status, "ok");
   assert.deepEqual((inspection as { raw: unknown }).raw, raw);
@@ -325,4 +327,50 @@ test('root "." round-trips', async (t) => {
   await saveCanvasConfigApp(root, { root: ".", script: "dev" });
   await saveCanvasConfigApp(root, { root: ".", script: "start" });
   assert.deepEqual(await readCanvasConfig(root), { version: 1, apps: [{ root: ".", script: "start" }] });
+});
+
+test("2c: apps[].url is read as display text, and a url that isn't a loopback origin is refused", () => {
+  const parsed = parseCanvasConfig(
+    JSON.stringify({
+      apps: [
+        { root: "docs", url: "http://localhost:4321/" },
+        { root: "site", url: "http://192.168.1.10:3000", script: "dev" },
+        { root: "web", script: "dev" },
+      ],
+    }),
+  );
+  assert.deepEqual(parsed?.apps, [
+    { root: "docs", url: "http://localhost:4321" },
+    { root: "site", script: "dev", urlRefused: true },
+    { root: "web", script: "dev" },
+  ]);
+  assert.deepEqual(attachRoots(parsed), [
+    { root: "docs", url: "http://localhost:4321", refused: false },
+    { root: "site", refused: true },
+  ]);
+  assert.deepEqual(attachRoots(null), []);
+});
+
+test("2c: configuredRoots and describedRoots ignore url", () => {
+  const withUrl = config({ root: "web", script: "dev", url: "http://localhost:3000" }, { root: "docs", url: "http://localhost:4321" });
+  const without = config({ root: "web", script: "dev" }, { root: "docs" });
+  const found = detected(["web", "web"], ["docs", "web"]);
+  assert.deepEqual(configuredRoots(withUrl, found), configuredRoots(without, found));
+  assert.deepEqual(describedRoots(withUrl, found), describedRoots(without, found));
+});
+
+test("2c: saveCanvasConfigApp keeps a url and a refused url byte-for-byte", async (t) => {
+  const root = await configRoot(t);
+  const before = {
+    version: 1,
+    apps: [
+      { root: "docs", url: "http://localhost:4321/" },
+      { root: "site", url: "https://example.com" },
+    ],
+  };
+  await writeSavedConfig(root, before);
+  assert.equal(await saveCanvasConfigApp(root, { root: "docs", script: "dev" }), "saved");
+  const after = (await readJson(root)) as unknown as typeof before;
+  assert.equal(after.apps[0]!.url, "http://localhost:4321/");
+  assert.equal(after.apps[1]!.url, "https://example.com");
 });

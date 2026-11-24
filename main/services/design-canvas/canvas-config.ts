@@ -15,6 +15,7 @@ import { lstat, realpath } from "node:fs/promises";
 import path from "node:path";
 import { isPathInside } from "../../shared/path-containment.js";
 import { writeConfinedWorkspaceText } from "../coding-tools.js";
+import { parseAttachUrl } from "./app-server/app-attach.js";
 import { readBounded } from "./app-server/app-detect.js";
 import { designTarget, isSafeScriptName, type WebAppDetection } from "./app-server/app-server-core.js";
 
@@ -25,7 +26,12 @@ const MAX_APPS = 32;
 const MAX_PATH_LENGTH = 200;
 const SAFE_SEGMENT = /^[A-Za-z0-9._@+-]+$/;
 
-export type CanvasConfigApp = { root: string; script?: string; designMd?: string };
+/**
+ * `url` (2c, D7): a loopback origin of a server the person runs, as display
+ * text; `urlRefused` when the entry has a `url` Aiden won't connect to. Either
+ * makes the root attach-only: it never launches, even with a `script`.
+ */
+export type CanvasConfigApp = { root: string; script?: string; designMd?: string; url?: string; urlRefused?: true };
 export type CanvasConfig = { version: 1; apps: CanvasConfigApp[] };
 export type CanvasConfigInspection =
   | { status: "ok"; config: CanvasConfig; raw: Record<string, unknown> }
@@ -70,6 +76,11 @@ function parseApps(value: unknown): CanvasConfigApp[] {
     const app: CanvasConfigApp = { root: entry.root };
     if (typeof entry.script === "string" && isSafeScriptName(entry.script)) app.script = entry.script;
     if (isSafeWorkspaceRelativePath(entry.designMd, { extension: ".md" })) app.designMd = entry.designMd;
+    if (entry.url !== undefined) {
+      const url = parseAttachUrl(entry.url);
+      if (url.ok) app.url = url.url;
+      else app.urlRefused = true;
+    }
     apps.push(app);
   }
   return apps;
@@ -113,6 +124,20 @@ export function describedRoots(config: CanvasConfig | null, detected: WebAppDete
   if (target.kind === "single") return [target.app.root];
   if (target.kind === "choose") return target.apps.map((app) => app.root);
   return ["."];
+}
+
+/**
+ * The roots `.aiden/canvas.json` gives a `url` (2c, D7), each once in file
+ * order: they attach to a server the person runs and never launch. A refused
+ * url is listed with `refused` so the snapshot can say why.
+ */
+export function attachRoots(config: CanvasConfig | null): Array<{ root: string; url?: string; refused: boolean }> {
+  const roots: Array<{ root: string; url?: string; refused: boolean }> = [];
+  for (const entry of config?.apps ?? []) {
+    if ((entry.url === undefined && !entry.urlRefused) || roots.some((root) => root.root === entry.root)) continue;
+    roots.push(entry.url !== undefined ? { root: entry.root, url: entry.url, refused: false } : { root: entry.root, refused: true });
+  }
+  return roots;
 }
 
 /** Why `.aiden/canvas.json` wasn't read, or its text. */

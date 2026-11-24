@@ -473,7 +473,8 @@
         "main/services/design-canvas/app-server/app-consent.test.ts",
         "main/services/design-canvas/app-server/app-server-main.test.ts",
         "main/services/design-canvas/app-server/app-tool.test.ts",
-        "main/handlers/design-app.test.ts"
+        "main/handlers/design-app.test.ts",
+        "main/services/design-canvas/app-server/app-attach.test.ts"
       ],
       "preserved": [
         "browser"

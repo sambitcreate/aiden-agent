@@ -8,7 +8,7 @@ import type { CanvasConfig } from "../canvas-config.js";
 import { DesignAppConsent, type DesignAppConsentOwner } from "./app-consent.js";
 import type { LaunchSurfaceProblem, LaunchSurfaceRead } from "./app-fingerprint.js";
 import { missingModuleHint } from "./app-launch-core.js";
-import type { DesignAppConsentRecord, DesignAppInstallRecord, DesignAppRecords } from "./app-records.js";
+import type { DesignAppAttachRecord, DesignAppConsentRecord, DesignAppInstallRecord, DesignAppRecords } from "./app-records.js";
 import type { DetectedApp } from "./app-server-core.js";
 import {
   DESIGN_APP_INSTALL_TIMEOUT_MS,
@@ -203,6 +203,7 @@ function memoryRecords(): DesignAppRecords {
   const consents = new Map<string, DesignAppConsentRecord>();
   const installs = new Map<string, DesignAppInstallRecord>();
   const ports = new Map<string, number>();
+  const attaches = new Map<string, DesignAppAttachRecord>();
   const key = (workspaceId: string, root: string) => `${workspaceId}\0${root}`;
   return {
     consentOf: async (workspaceId, appRoot) => consents.get(key(workspaceId, appRoot)),
@@ -219,8 +220,12 @@ function memoryRecords(): DesignAppRecords {
     setPort: async (workspaceId, appRoot, port) => {
       ports.set(key(workspaceId, appRoot), port);
     },
+    attachOf: async (workspaceId, appRoot) => attaches.get(key(workspaceId, appRoot)),
+    approveAttach: async (workspaceId, appRoot, record) => {
+      attaches.set(key(workspaceId, appRoot), { ...record, at: 1 });
+    },
     forgetWorkspace: async (workspaceId) => {
-      for (const map of [consents, installs, ports]) for (const name of [...map.keys()]) if (name.startsWith(`${workspaceId}\0`)) map.delete(name);
+      for (const map of [consents, installs, ports, attaches]) for (const name of [...map.keys()]) if (name.startsWith(`${workspaceId}\0`)) map.delete(name);
     },
   };
 }
