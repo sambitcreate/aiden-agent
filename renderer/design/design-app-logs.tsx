@@ -20,6 +20,7 @@ export const DESIGN_APP_LOGS_KEEP = 256 * 1024;
 const POLL_MS = 1000;
 const DROPPED = "Earlier output was dropped";
 const NEW_RUN = "New run";
+const SKIPPED = "Output was skipped to show the latest";
 
 type Chunk = { id: number; kind: "text"; text: string } | { id: number; kind: "note"; text: string };
 
@@ -56,7 +57,10 @@ function keep(chunks: readonly Chunk[], added: readonly Chunk[]): Chunk[] {
 /**
  * Reads the app's log while `active`: a probe from 0, a start at the last
  * `DESIGN_APP_LOGS_KEEP` bytes, catch-up reads while behind, then one read a
- * second. The cursor and the cleaner's carry survive pauses; a new `appRoot` starts over.
+ * second. The cursor and the cleaner's carry survive pauses; a new `appRoot`
+ * starts over. A read that finds more than `DESIGN_APP_LOGS_KEEP` bytes still
+ * to read (after a pause, or a long new run) drops what the drawer holds and
+ * jumps to the last `DESIGN_APP_LOGS_KEEP` bytes, so catching up is bounded (B2).
  */
 function useDesignAppLog(chatId: string, appRoot: string, active: boolean, pollMs: number): readonly Chunk[] {
   const [chunks, setChunks] = React.useState<readonly Chunk[]>([]);
@@ -103,6 +107,12 @@ function useDesignAppLog(chatId: string, appRoot: string, active: boolean, pollM
       }
       answer = await designAppApi.logs(chatId, appRoot, { run: at.run, after: at.next });
       if (!live || answer.run === undefined) return false;
+      if (answer.end - answer.next > DESIGN_APP_LOGS_KEEP) {
+        carry.current = EMPTY_LOG_CARRY;
+        setChunks([note(SKIPPED)]);
+        cursor.current = { run: answer.run, next: answer.end - DESIGN_APP_LOGS_KEEP };
+        return true;
+      }
       const newRun = answer.run !== at.run;
       if (newRun || answer.truncated) carry.current = EMPTY_LOG_CARRY;
       add([...(newRun ? [note(NEW_RUN)] : answer.truncated ? [note(DROPPED)] : []), ...clean(answer.text)]);

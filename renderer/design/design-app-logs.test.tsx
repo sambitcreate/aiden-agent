@@ -169,6 +169,86 @@ test("past 256 KiB the oldest chunks go, the first kept chunk starts at a line, 
   assert.ok(text.length - "Earlier output was dropped".length <= DESIGN_APP_LOGS_KEEP);
 });
 
+/** A log main serves like `DesignAppServers.logs`: 64 KiB a read from the cursor, a cursor of another run reading the new run from 0. */
+function liveLog(initial: string) {
+  const state = { run: "r1", text: initial };
+  const reads: Array<Options & { at: number }> = [];
+  const handler = (_chatId: unknown, _root: unknown, options: unknown) => {
+    const asked = options as Options;
+    reads.push({ ...asked, at: Date.now() });
+    const otherRun = asked.run !== undefined && asked.run !== state.run;
+    const from = otherRun || (asked.after ?? 0) > state.text.length ? 0 : (asked.after ?? 0);
+    const next = Math.min(state.text.length, from + 64 * KIB);
+    return read({ run: state.run, text: state.text.slice(from, next), from, next, end: state.text.length, truncated: otherRun });
+  };
+  return { state, reads, handler };
+}
+
+const lines = (letter: string, bytes: number) => `${letter.repeat(99)}\n`.repeat(Math.ceil(bytes / 100));
+const SKIPPED = "Output was skipped to show the latest";
+
+test("after the first read, a log that grew is caught up with 64 KiB reads sent back to back, not one a poll", async () => {
+  const log = liveLog("start\n");
+  installBotTestIpc({ "designApp:status:get": () => snapshot(), "designApp:logs": log.handler });
+  render(<Harness pollMs={400} />);
+  await until(() => assert.equal(outputText(), "start\n"));
+  log.state.text += lines("a", 200 * KIB);
+  await until(() => assert.equal(outputText().length, log.state.text.length), 400);
+  const catchUp = log.reads.slice(1);
+  assert.ok(catchUp.length >= 4, `at least four reads, saw ${catchUp.length}`);
+  for (let index = 1; index < catchUp.length; index += 1) {
+    assert.ok(catchUp[index]!.at - catchUp[index - 1]!.at < 200, "the next read went out without the 400 ms wait");
+  }
+});
+
+test("resumed after a pause more than 256 KiB behind, it drops what it held, says output was skipped, and reads from end − 256 KiB", async () => {
+  const log = liveLog("start\n");
+  installBotTestIpc({ "designApp:status:get": () => snapshot(), "designApp:logs": log.handler });
+  const view = render(<Harness pollMs={20} />);
+  await until(() => assert.equal(outputText(), "start\n"));
+  view.rerender(<Harness pollMs={20} pane={{ stacked: true, pane: "chat" }} />);
+  await wait(60);
+  const paused = log.reads.length;
+  log.state.text += lines("b", 1024 * KIB);
+  const end = log.state.text.length;
+  view.rerender(<Harness pollMs={20} pane={{ stacked: false, pane: "canvas" }} />);
+  await until(() => assert.equal(outputText().endsWith(log.state.text.slice(-1000)), true), 400);
+  const text = outputText();
+  assert.equal(text.startsWith(SKIPPED), true, "one line says output was skipped");
+  assert.equal(text.includes("start"), false, "what it held went");
+  assert.equal(log.reads.slice(paused).some((asked) => asked.after === end - DESIGN_APP_LOGS_KEEP), true, "it jumped to end − 256 KiB");
+  assert.ok(log.reads.length - paused <= 8, `a bounded number of reads, saw ${log.reads.length - paused}`);
+  assert.ok(text.length - SKIPPED.length <= DESIGN_APP_LOGS_KEEP);
+});
+
+test("a new run longer than 256 KiB drops the old run's text, says output was skipped, and reads from its end − 256 KiB", async () => {
+  const log = liveLog("old run\n");
+  installBotTestIpc({ "designApp:status:get": () => snapshot(), "designApp:logs": log.handler });
+  render(<Harness pollMs={20} />);
+  await until(() => assert.equal(outputText(), "old run\n"));
+  const before = log.reads.length;
+  log.state.run = "r2";
+  log.state.text = lines("c", 1024 * KIB);
+  const end = log.state.text.length;
+  await until(() => assert.equal(outputText().endsWith(log.state.text.slice(-1000)), true), 400);
+  const text = outputText();
+  assert.equal(text.startsWith(SKIPPED), true);
+  assert.equal(text.includes("old run"), false);
+  assert.equal(log.reads.slice(before).some((asked) => asked.run === "r2" && asked.after === end - DESIGN_APP_LOGS_KEEP), true);
+  assert.ok(log.reads.length - before <= 8, `a bounded number of reads, saw ${log.reads.length - before}`);
+});
+
+test("the cleaner's carry starts over on a new run and on a truncated read, so an escape split across them hides nothing", async () => {
+  for (const second of [read({ run: "r2", text: `le${"\u0007"}visible\n`, next: 10, end: 10, truncated: true }), read({ text: `le${"\u0007"}visible\n`, from: 40, next: 50, end: 50, truncated: true })]) {
+    const logs = scriptLogs([read({ text: "a\u001b]0;tit", next: 8, end: 8 }), second, read({ run: second.run, text: "", from: second.next, next: second.next, end: second.next })]);
+    mount(logs, { pollMs: 20 });
+    await until(() => assert.equal(outputText().includes("visible"), true));
+    assert.equal(outputText().includes("le\\u{7}visible"), true, `the ${second.run === "r2" ? "new run" : "truncated read"} shows from its first byte`);
+    cleanup();
+    resetDesignAppChipForTests();
+  }
+});
+
 test("polling stops when the canvas isn't shown, when the app leaves the snapshot, and when the drawer closes", async () => {
   const quiet = read({ text: "", next: 0, end: 0 });
   const logs = scriptLogs([quiet]);
