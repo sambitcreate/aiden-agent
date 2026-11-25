@@ -628,12 +628,12 @@
     <string name="bot_memory_delete_failed">Aiden couldn’t delete this memory. Try again.</string>
     <string name="bot_memory_load_failed">Aiden couldn’t load this memory. Make sure your Mac is on and nearby.</string>
     <string name="bot_memory_loading">Loading memory</string>
-    <string name="bot_memory_erase">Erase memory</string>
-    <string name="bot_memory_erase_title">Erase everything %1$s remembers?</string>
+    <string name="bot_memory_erase">Forget all</string>
+    <string name="bot_memory_erase_title">Forget everything %1$s remembers?</string>
     <string name="bot_memory_erase_body">This can’t be undone.</string>
-    <string name="bot_memory_erase_failed">Aiden couldn’t erase this memory. Try again.</string>
+    <string name="bot_memory_erase_failed">Memory wasn’t cleared. Please try again.</string>
     <string name="bot_memory_unreadable_title">Memory couldn’t be read</string>
-    <string name="bot_memory_unreadable_body">Its files may be damaged. Erasing starts %1$s’s memory fresh.</string>
+    <string name="bot_memory_unreadable_body">Its files may be damaged. Forget all to start %1$s’s memory fresh.</string>
     <plurals name="bot_memory_count">
         <item quantity="one">%d thing</item>
         <item quantity="other">%d things</item>

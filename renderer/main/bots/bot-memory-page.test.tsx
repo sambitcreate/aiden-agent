@@ -135,7 +135,7 @@ test("an empty memory invites the person to share something and offers nothing t
   memoryIpc(memoryView([], []));
   await mountMemory();
   assert.ok(await screen.findByText("Nothing yet. Tell Planner something to remember, like “I’m vegetarian.”"));
-  assert.equal(screen.queryByRole("button", { name: "Erase memory" }) === null, true);
+  assert.equal(screen.queryByRole("button", { name: "Forget all" }) === null, true);
 });
 
 test("an edit main refuses explains why in the dialog; a valid edit saves and shows the new text", async () => {
@@ -203,26 +203,26 @@ test("Delete hides a memory at once, Undo brings it back untouched, and a kept d
   await waitFor(() => assert.deepEqual(ipc.edits, [{ kind: "remove", target: "user", entryId: KIDS.id }]));
 });
 
-test("Erase memory asks first, then clears both groups", async () => {
+test("Forget all asks first, then clears both groups", async () => {
   const ipc = memoryIpc(memoryView([SHORT], [MEALS]));
   await mountMemory();
-  fireEvent.click(await screen.findByRole("button", { name: "Erase memory" }));
+  fireEvent.click(await screen.findByRole("button", { name: "Forget all" }));
   const confirm = await screen.findByRole("alertdialog");
-  assert.ok(within(confirm).getByRole("heading", { name: "Erase everything Planner remembers?" }));
+  assert.ok(within(confirm).getByRole("heading", { name: "Forget everything Planner remembers?" }));
   assert.ok(within(confirm).getByText("This can’t be undone."));
   fireEvent.click(within(confirm).getByRole("button", { name: "Cancel" }));
   await waitFor(() => assert.equal(document.querySelector("[role=alertdialog]") === null, true));
   assert.deepEqual(ipc.edits, []);
 
-  fireEvent.click(screen.getByRole("button", { name: "Erase memory" }));
-  fireEvent.click(within(await screen.findByRole("alertdialog")).getByRole("button", { name: "Erase memory" }));
+  fireEvent.click(screen.getByRole("button", { name: "Forget all" }));
+  fireEvent.click(within(await screen.findByRole("alertdialog")).getByRole("button", { name: "Forget all" }));
   await waitFor(() => assert.deepEqual(ipc.edits, [{ kind: "clear" }]));
   assert.ok(await screen.findByText("Nothing yet. Tell Planner something to remember, like “I’m vegetarian.”"));
   assert.equal(screen.queryByText(SHORT.text) === null, true);
   assert.equal(screen.queryByText(MEALS.text) === null, true);
 });
 
-test("unreadable memory shows a callout whose only action is Erase", async () => {
+test("unreadable memory shows a callout whose only action is Forget all", async () => {
   const ipc = memoryIpc(memoryView([], [], { readable: false }));
   await mountMemory("/bots/bot-1?page=advanced");
   const row = await screen.findByRole("button", { name: "Memory" });
@@ -236,10 +236,10 @@ test("unreadable memory shows a callout whose only action is Erase", async () =>
   assert.equal(screen.queryAllByRole("meter").length, 0);
   assert.deepEqual(
     within(alert).getAllByRole("button").map((button) => button.textContent),
-    ["Erase memory"],
+    ["Forget all"],
   );
-  fireEvent.click(within(alert).getByRole("button", { name: "Erase memory" }));
-  fireEvent.click(within(await screen.findByRole("alertdialog")).getByRole("button", { name: "Erase memory" }));
+  fireEvent.click(within(alert).getByRole("button", { name: "Forget all" }));
+  fireEvent.click(within(await screen.findByRole("alertdialog")).getByRole("button", { name: "Forget all" }));
   await waitFor(() => assert.deepEqual(ipc.edits, [{ kind: "clear" }]));
   assert.ok(await screen.findByText("Nothing yet. Tell Planner something to remember, like “I’m vegetarian.”"));
 });

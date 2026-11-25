@@ -1141,7 +1141,7 @@ export function BotAdvancedTab({ bot, sectionRequest = null }: { bot: BotDefinit
       {catalog && draft ? <AccessSection catalog={catalog} draft={draft} disabled={saving} onChange={setDraft} /> : null}
       <BotSpendingSection bot={bot} />
       <FieldSet title="Clear">
-        <ChevronRow label="Erase memory" description={`Opens Memory, where you can erase what ${bot.name} remembers.`} onClick={() => panel.show("memory")} />
+        <ChevronRow label="Forget all" description={`Opens Memory, where you can clear everything ${bot.name} remembers.`} onClick={() => panel.show("memory")} />
         <Field label="Delete Bot" description={`${bot.name}, its chat, memory and routines.`}>
           <Button size="small" variant="destructive" onClick={() => setDeleting(true)}>
             Delete Bot…

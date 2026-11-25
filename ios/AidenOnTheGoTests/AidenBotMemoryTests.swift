@@ -268,7 +268,7 @@ final class AidenBotMemoryTests: XCTestCase {
         let erased = await model.erase()
 
         XCTAssertFalse(erased)
-        XCTAssertEqual(model.errorMessage, AidenBotMemoryCopy.notErased)
+        XCTAssertEqual(model.errorMessage, AidenBotMemoryCopy.notCleared)
         XCTAssertEqual(model.memory?.entryCount, 3)
     }
 

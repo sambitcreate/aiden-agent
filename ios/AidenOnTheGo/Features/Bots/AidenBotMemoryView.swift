@@ -5,13 +5,13 @@ import SwiftUI
 enum AidenBotMemoryCopy {
     static let title = "Memory"
     static let aboutYou = "About you"
-    static let eraseMemory = "Erase memory"
+    static let forgetAll = "Forget all"
     static let cantBeUndone = "This can’t be undone."
     static let unreadableTitle = "Memory couldn’t be read"
     static let blocked = "This can’t be saved because it looks like a password or an instruction to the Bot."
     static let entryChanged = "This memory changed since you opened it. Close this and try again."
     static let notSaved = "That change wasn’t saved. Please try again."
-    static let notErased = "Memory wasn’t erased. Please try again."
+    static let notCleared = "Memory wasn’t cleared. Please try again."
     static let couldNotLoad = "Memory couldn’t be loaded."
     static let nothingYetCount = "Nothing yet"
     static let unreadableCount = "Couldn’t be read"
@@ -33,12 +33,12 @@ enum AidenBotMemoryCopy {
         "Nothing yet. \(botName) keeps notes here as it helps you."
     }
 
-    static func eraseConfirmation(botName: String) -> String {
-        "Erase everything \(botName) remembers?"
+    static func forgetConfirmation(botName: String) -> String {
+        "Forget everything \(botName) remembers?"
     }
 
     static func unreadableDetail(botName: String) -> String {
-        "Its files may be damaged. Erasing starts \(botName)’s memory fresh."
+        "Its files may be damaged. Forget all to start \(botName)’s memory fresh."
     }
 
     static func overBudget(group: String) -> String {
@@ -167,7 +167,7 @@ final class AidenBotMemoryModel {
     @discardableResult
     func erase() async -> Bool {
         if await apply(.clear) != nil {
-            errorMessage = AidenBotMemoryCopy.notErased
+            errorMessage = AidenBotMemoryCopy.notCleared
             return false
         }
         return true
@@ -250,7 +250,7 @@ private struct AidenBotMemoryEditTarget: Identifiable {
 }
 
 /// Profile → Memory: "About you" and "{name}'s notes", each with a neutral
-/// usage meter, swipe Edit and Delete, and Erase memory at the foot.
+/// usage meter, swipe Edit and Delete, and Forget all at the foot.
 struct AidenBotMemoryView: View {
     @Bindable var model: AidenBotMemoryModel
     let canWrite: Bool
@@ -269,11 +269,11 @@ struct AidenBotMemoryView: View {
                 AidenBotMemoryEditSheet(model: model, target: target.target, entry: target.entry)
             }
             .confirmationDialog(
-                AidenBotMemoryCopy.eraseConfirmation(botName: model.botName),
+                AidenBotMemoryCopy.forgetConfirmation(botName: model.botName),
                 isPresented: $isConfirmingErase,
                 titleVisibility: .visible
             ) {
-                Button(AidenBotMemoryCopy.eraseMemory, role: .destructive) {
+                Button(AidenBotMemoryCopy.forgetAll, role: .destructive) {
                     Task { await model.erase() }
                 }
                 Button("Cancel", role: .cancel) {}
@@ -310,7 +310,7 @@ struct AidenBotMemoryView: View {
                     unreadable
                 }
                 Section {
-                    Button(AidenBotMemoryCopy.eraseMemory, role: .destructive) {
+                    Button(AidenBotMemoryCopy.forgetAll, role: .destructive) {
                         isConfirmingErase = true
                     }
                     .disabled(!canWrite)
