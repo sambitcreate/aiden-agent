@@ -18,6 +18,7 @@ const firstArgument = (args: readonly unknown[]): unknown => args[0];
 const botIdField = (args: readonly unknown[]): unknown =>
   typeof args[0] === "object" && args[0] !== null ? (args[0] as { botId?: unknown }).botId : undefined;
 
+/** The request names no Bot, so there is nothing to scope (tucking the chat away, an approval nobody waits on). */
 const OPEN_NONE = Symbol("no Bot");
 
 /**
@@ -49,7 +50,10 @@ export const BOT_BUBBLE_OVERLAY_BOT_ARGUMENT: Readonly<Record<string, BotIdOf>> 
   "bots:answerQuestion": botIdField,
   "bots:approve": (args, access) => {
     const waitId = typeof args[0] === "object" && args[0] !== null ? (args[0] as { waitId?: unknown }).waitId : undefined;
-    return typeof waitId === "string" ? access.approvalBotId(waitId) : undefined;
+    if (typeof waitId !== "string") return undefined;
+    // Nothing waits under that id (answered elsewhere a moment ago): the handler
+    // decides nothing and says so, which beats a misleading refusal here.
+    return access.approvalBotId(waitId) ?? OPEN_NONE;
   },
   "bots:bubbles:close": botIdField,
   "bots:bubbles:move": botIdField,

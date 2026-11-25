@@ -51,6 +51,12 @@ test("an overlay may act on a bubbled Bot", async () => {
   assert.equal(calls.length, 7);
 });
 
+test("an approval nobody waits on any more reaches the handler, which decides nothing", async () => {
+  const { invoke, calls } = harness();
+  assert.equal(await invoke("bots:approve", overlay, { waitId: "nothing-waits", decision: "allow" }), "ok");
+  assert.deepEqual(calls, ['bots:approve [{"waitId":"nothing-waits","decision":"allow"}]']);
+});
+
 test("an overlay can't reach a Bot that isn't bubbled", async () => {
   const { invoke, calls } = harness();
   const refused: Array<[string, unknown]> = [
@@ -59,7 +65,6 @@ test("an overlay can't reach a Bot that isn't bubbled", async () => {
     ["bots:live:subscribe", "bot-out"],
     ["bots:answerQuestion", { botId: "bot-out", waitId: "w", answer: {} }],
     ["bots:approve", { waitId: "wait-out", decision: "allow" }],
-    ["bots:approve", { waitId: "nothing-waits", decision: "allow" }],
     ["bots:bubbles:open", { botId: "bot-out" }],
     ["bots:bubbles:open", { botId: "bot-out", ifOpen: "bot-in" }],
     ["bots:bubbles:bringBack", { botId: "bot-out" }],

@@ -9,6 +9,7 @@ import { useBotBubbles, botBubblesApi } from "../lib/bot-bubbles-api";
 import { invalidateForBotsChanged } from "../lib/bot-notifications-sync";
 import { onNotification } from "../lib/ipc-bridge";
 import { queryKeys } from "../lib/queries";
+import { invalidateBotCanonicalPhotos } from "../lib/bot-canonical-photo-cache";
 import { prefersReducedMotion } from "../lib/appearance-runtime";
 import type { BotBubble, BotBubbleOverlayInfo, BotBubbleTransition } from "../shared/bot-bubbles";
 import { BotBubbleHeads } from "./bot-bubble-heads";
@@ -41,6 +42,23 @@ function useOverlayBotSync() {
       stopAttention();
     };
   }, [queryClient]);
+  // This window hears nothing about a Bot while it isn't bubbled, so a Bot that
+  // comes (back) as a head is read afresh: its definition, photo and summary.
+  const bubbledIds = useBotBubbles().bubbles.map((bubble) => bubble.botId).join("\n");
+  const known = React.useRef<ReadonlySet<string> | null>(null);
+  React.useEffect(() => {
+    const ids = new Set(bubbledIds ? bubbledIds.split("\n") : []);
+    const before = known.current;
+    known.current = ids;
+    if (!before) return;
+    const added = [...ids].filter((id) => !before.has(id));
+    if (added.length === 0) return;
+    invalidateBotCanonicalPhotos();
+    for (const id of added) {
+      void queryClient.invalidateQueries({ queryKey: queryKeys.bot(id) });
+      void queryClient.invalidateQueries({ queryKey: queryKeys.botLiveSummary(id) });
+    }
+  }, [bubbledIds, queryClient]);
 }
 
 function cssToken(name: string, fallback: string): string {
