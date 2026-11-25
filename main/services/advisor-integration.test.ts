@@ -42,10 +42,6 @@ test("Advisor no-replay recovery initializes at app handler startup without sett
   const registry = readFileSync(new URL("../handlers/index.ts", import.meta.url), "utf8");
   const runtime = readFileSync(new URL("./advisor-runtime-main.ts", import.meta.url), "utf8");
   const rendererIpc = readFileSync(new URL("../../renderer/lib/ipc.ts", import.meta.url), "utf8");
-  const modelDataSettings = readFileSync(
-    new URL("../../renderer/components/settings/model-data-settings.tsx", import.meta.url),
-    "utf8",
-  );
   const channels = readFileSync(
     new URL("../../renderer/preload-channels.ts", import.meta.url),
     "utf8",
@@ -55,5 +51,4 @@ test("Advisor no-replay recovery initializes at app handler startup without sett
   assert.doesNotMatch(channels, /"advisor:"/u);
   assert.doesNotMatch(registry, /registerAdvisorHandlers/u);
   assert.doesNotMatch(rendererIpc, /advisorApi|advisor:get|advisor:set/u);
-  assert.doesNotMatch(modelDataSettings, /AdvisorSettings|advisor-settings/u);
 });

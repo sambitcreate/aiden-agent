@@ -96,6 +96,30 @@ test("first message publishes a nonempty chat, title, settings, and private dura
   assert.deepEqual((await restart.get(chat.id))?.firstMessageCommit, chat.firstMessageCommit);
 });
 
+test("a new chat's first send saves the new-chat effort on the chat, and only a known level", async (t) => {
+  for (const value of [request({ thinkingLevel: "extreme" }), request({ thinkingLevel: 3 })]) {
+    assert.throws(() => parseChatFirstMessage(value), /Invalid thinking level/u);
+  }
+  // No model, no level: a level only describes the model it was picked with.
+  assert.equal(
+    parseChatFirstMessage(request({ providerId: undefined, model: undefined, thinkingLevel: "high" })).thinkingLevel,
+    undefined,
+  );
+  assert.equal(parseChatFirstMessage(request({ thinkingLevel: null })).thinkingLevel, undefined);
+
+  const f = await fixture(t);
+  const commit = createFirstMessageCommitter(f.deps);
+  const chat = await commit(parseChatFirstMessage(request({ thinkingLevel: "high" })), f.owner);
+  assert.equal(chat.thinkingLevel, "high");
+  // It is the chat's own level from now on: a fresh read and the chat list both carry it.
+  const restart = createChatStore(async () => f.directory);
+  assert.equal((await restart.get(chat.id))?.thinkingLevel, "high");
+  assert.equal((await restart.list()).find((meta) => meta.id === chat.id)?.thinkingLevel, "high");
+
+  const plain = await commit(parseChatFirstMessage(request()), f.owner);
+  assert.equal(plain.thinkingLevel, undefined, "a first send without a level leaves the chat on the model's saved level");
+});
+
 test("attachment-only first send retains attachments and an explicit draft title", async (t) => {
   const f = await fixture(t);
   const attachment = { id: "text-1", name: "notes.txt", kind: "text", mimeType: "text/plain", size: 5, text: "notes" };

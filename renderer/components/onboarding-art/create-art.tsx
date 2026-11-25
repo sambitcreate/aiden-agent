@@ -398,6 +398,9 @@ export function BrowserArt() {
         <span className="oa-br-address">
           <span className="oa-mono">example.com/pricing</span>
         </span>
+        <span className="oa-br-annotate oa-selected">
+          <ArtIcon icon={MousePointer2} />
+        </span>
         <span className="oa-br-annotate">
           <ArtIcon icon={MessageCirclePlus} />
         </span>
@@ -434,11 +437,11 @@ export function BrowserArt() {
       </div>
       <ArtButton
         variant="primary"
-        icon={MessageCirclePlus}
+        icon={MousePointer2}
         className="oa-br-add oa-anim-pop"
-        style={{ left: 104, top: 124, animationDelay: "0.5s" }}
+        style={{ left: 92, top: 124, animationDelay: "0.5s" }}
       >
-        Add to chat
+        <span className="oa-mono">&lt;PricingCard /&gt;</span>
       </ArtButton>
     </ArtWindow>
   );

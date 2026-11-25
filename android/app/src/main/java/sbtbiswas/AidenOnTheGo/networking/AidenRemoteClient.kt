@@ -237,7 +237,7 @@ class AidenRemoteClient(
 
             if (!response.isSuccessful) {
                 val error = parseError(response.code, responseBytes)
-                if (response.code == 400 && error.code == AidenRemoteErrorCode.INVALID_REQUEST) {
+                if (response.code == 400 && error.isDecodedEnvelope && error.body.code == AidenRemoteErrorCode.INVALID_REQUEST) {
                     if (deviceType == AidenDeviceType.ANDROID_PHONE || deviceType == AidenDeviceType.ANDROID_TABLET) {
                         throw AidenPairingBootstrapException.AndroidPairingUnsupported
                     }
@@ -261,13 +261,12 @@ class AidenRemoteClient(
                     val retryResponse = client.newCall(retryRequest).await()
                     val retryBytes = retryResponse.body?.bytes() ?: throw AidenRemoteClientException.InvalidResponse()
                     if (!retryResponse.isSuccessful) {
-                        val retryError = parseError(retryResponse.code, retryBytes)
-                        throw AidenRemoteClientException.Server(retryResponse.code, retryError)
+                        throw parseError(retryResponse.code, retryBytes)
                     }
                     AidenRawJsonDuplicateKeyScanner.validate(retryBytes)
                     return@withContext jsonParser.decodeFromString<AidenPairingExchange>(String(retryBytes, Charsets.UTF_8))
                 }
-                throw AidenRemoteClientException.Server(response.code, error)
+                throw error
             }
 
             AidenRawJsonDuplicateKeyScanner.validate(responseBytes)
@@ -390,17 +389,31 @@ class AidenRemoteClient(
             }
         }
 
-        fun parseError(statusCode: Int, bytes: ByteArray): AidenRemoteErrorEnvelope.Body {
+        fun parseError(
+            statusCode: Int,
+            bytes: ByteArray,
+            retryAfterHeaderSeconds: Int? = null
+        ): AidenRemoteClientException.Server {
             return try {
                 AidenRawJsonDuplicateKeyScanner.validate(bytes)
                 val envelope = jsonParser.decodeFromString<AidenRemoteErrorEnvelope>(String(bytes, Charsets.UTF_8))
-                envelope.error
+                AidenRemoteClientException.Server(
+                    statusCode = statusCode,
+                    body = envelope.error,
+                    retryAfterHeaderSeconds = retryAfterHeaderSeconds,
+                    isDecodedEnvelope = true
+                )
             } catch (_: Exception) {
-                AidenRemoteErrorEnvelope.Body(
-                    code = AidenRemoteErrorCode.INTERNAL_ERROR,
-                    message = "Aiden Agent returned HTTP status $statusCode.",
-                    requestId = "",
-                    retryable = false
+                AidenRemoteClientException.Server(
+                    statusCode = statusCode,
+                    body = AidenRemoteErrorEnvelope.Body(
+                        code = AidenRemoteErrorCode.INTERNAL_ERROR,
+                        message = "Aiden Agent returned HTTP status $statusCode.",
+                        requestId = "",
+                        retryable = false
+                    ),
+                    retryAfterHeaderSeconds = retryAfterHeaderSeconds,
+                    isDecodedEnvelope = false
                 )
             }
         }
@@ -491,14 +504,14 @@ class AidenRemoteClient(
         if (maximumResponseBytes != null && bytes.size > maximumResponseBytes) throw AidenRemoteContractException.PayloadTooLarge
 
         if (!unchanged && !acceptedStatus.contains(response.code)) {
-            val errorBody = parseError(response.code, bytes)
+            val error = parseError(response.code, bytes, AidenRetryAfter.parseHeader(response.retryAfter))
             AidenDiagnostics.record(
                 if (response.code == 401 || response.code == 403) AidenDiagnosticArea.AUTHENTICATION else AidenDiagnosticArea.CONNECTION,
                 AidenDiagnosticEvent.REQUEST_FAILED,
                 AidenDiagnosticOutcome.FAILED,
                 if (response.code == 401 || response.code == 403) AidenDiagnosticCode.UNAUTHORIZED else AidenDiagnosticCode.NETWORK
             )
-            throw AidenRemoteClientException.Server(response.code, errorBody, AidenRetryAfter.parseHeader(response.retryAfter))
+            throw error
         }
 
         try {
@@ -1225,7 +1238,7 @@ class AidenRemoteClient(
                     AidenDiagnosticOutcome.FAILED,
                     if (response.code == 401 || response.code == 403) AidenDiagnosticCode.UNAUTHORIZED else AidenDiagnosticCode.NETWORK
                 )
-                throw AidenRemoteClientException.Server(response.code, parseError(response.code, bytes), AidenRetryAfter.parseHeader(response.header("Retry-After")))
+                throw parseError(response.code, bytes, AidenRetryAfter.parseHeader(response.header("Retry-After")))
             }
             val contentType = response.header("Content-Type")?.split(";")?.firstOrNull()?.trim()?.lowercase()
             if (contentType != "image/jpeg" && contentType != "image/png") {
@@ -1301,7 +1314,7 @@ class AidenRemoteClient(
                     AidenDiagnosticOutcome.FAILED,
                     if (response.code == 401 || response.code == 403) AidenDiagnosticCode.UNAUTHORIZED else AidenDiagnosticCode.NETWORK
                 )
-                throw AidenRemoteClientException.Server(response.code, parseError(response.code, bytes), AidenRetryAfter.parseHeader(response.header("Retry-After")))
+                throw parseError(response.code, bytes, AidenRetryAfter.parseHeader(response.header("Retry-After")))
             }
             val contentType = response.header("Content-Type")?.split(";")?.firstOrNull()?.trim()?.lowercase()
             if (contentType != "text/html") {
@@ -1358,7 +1371,7 @@ class AidenRemoteClient(
                 httpClient.newCall(request).await().use { response ->
                     if (!response.isSuccessful) {
                         val bytes = try { response.body.readBounded(1_048_576) } catch (_: Exception) { ByteArray(0) }
-                        throw AidenRemoteClientException.Server(response.code, parseError(response.code, bytes), AidenRetryAfter.parseHeader(response.header("Retry-After")))
+                        throw parseError(response.code, bytes, AidenRetryAfter.parseHeader(response.header("Retry-After")))
                     }
                     val mimeType = response.header("Content-Type")?.split(";")?.firstOrNull()?.trim()?.lowercase()
                     if (mimeType == null || mimeType !in AidenBrowserRecordingRecap.MIME_TYPES ||
@@ -1708,8 +1721,7 @@ class AidenRemoteClient(
                 call.execute().use { response ->
                     if (!response.isSuccessful) {
                         val bytes = response.body?.bytes() ?: ByteArray(0)
-                        val errorBody = parseError(response.code, bytes)
-                        throw AidenRemoteClientException.Server(response.code, errorBody, AidenRetryAfter.parseHeader(response.header("Retry-After")))
+                        throw parseError(response.code, bytes, AidenRetryAfter.parseHeader(response.header("Retry-After")))
                     }
                     onOpen(response.header("Aiden-Progress-Resumed") == "true")
                     val stream = response.body?.byteStream()
@@ -2758,8 +2770,7 @@ class AidenRemoteClient(
         val response = httpClient.newCall(request).await()
         val bytes = response.body?.bytes() ?: ByteArray(0)
         if (!response.isSuccessful) {
-            val errorBody = parseError(response.code, bytes)
-            throw AidenRemoteClientException.Server(response.code, errorBody, AidenRetryAfter.parseHeader(response.header("Retry-After")))
+            throw parseError(response.code, bytes, AidenRetryAfter.parseHeader(response.header("Retry-After")))
         }
 
         val contentType = response.header("Content-Type")?.split(";")?.firstOrNull()?.trim()?.lowercase()
@@ -2796,7 +2807,7 @@ class AidenRemoteClient(
         httpClient.newCall(request).await().use { response ->
             if (!response.isSuccessful) {
                 val bytes = try { response.body.readBounded(1_048_576) } catch (_: Exception) { ByteArray(0) }
-                throw AidenRemoteClientException.Server(response.code, parseError(response.code, bytes), AidenRetryAfter.parseHeader(response.header("Retry-After")))
+                throw parseError(response.code, bytes, AidenRetryAfter.parseHeader(response.header("Retry-After")))
             }
             val contentType = response.header("Content-Type")?.split(";")?.firstOrNull()?.trim()?.lowercase()
             if (contentType !in AidenBotSessionWire.SHARED_IMAGE_MIME_TYPES ||

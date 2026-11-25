@@ -48,13 +48,126 @@ Everything else stayed as it was. `CuaDriverHost.shutdown()`, `CuaDriverSession`
 
 The flags in `main/index.ts` (`backend:M001`) stay where they are. Each is written in few places and the cancel paths reset them, but they have no Electron-free harness, so moving them would trade a read-checked flow for an untested one.
 
-## Not done in this slice
+## Audited remainder and verification boundaries
 
-| Inventory | Owner | Why |
-|---|---|---|
-| `backend:M112` | `follow-through/background-jobs.ts` | Not audited beyond `recordCheckGroup`. |
-| `backend:M125`, `M126`, `M130`, `M156`, `clients:C43` | Browser, device helper host, terminal, Ghostty | Not audited. |
-| `cli-native:N13`, `O01` | iMCP launcher (`native/imcp-launcher`), bounded-command guard (`scripts/bounded-command-guard.mjs`) | Not audited. Cross-referenced with `cli-native:N01`–`N04` above (out of bounds for this slice). |
-| Rank 13 capture and input owners: `backend:M131`, `M133`, `M134`–`M137`, `M138` | Recording, dictation, speech, TTS | Not audited (`M134`–`M137` included). Permission and device behavior needs real hardware evidence, which this slice did not gather. |
-| Rank 14 remainder: `backend:M002` (pure core), `M003`, `M004`, `M165`, `M192` | Startup and updater owners | `M002` already has a pure core; `M003`, `M004`, `M165`, and `M192` were not audited. |
-| Shutdown and restart trace across P1 to P4 | All lanes | Not yet run end-to-end across the landed P1–P4 owners (`retained-p1-owners.md`, `state-machine-worksheets-lane-b.md`, `remote-durable-operations.md`). |
+Every item previously left open in this slice has now been audited in source and reconciled against its behavioral unit suites. Hardware, OS-permission, and real-device/VM acceptance boundaries are recorded explicitly so static/unit evidence is never overstated as physical acceptance.
+
+### `backend:M112` — Background jobs (`main/services/follow-through/background-jobs.ts`)
+
+**Disposition:** Retain.
+
+- **Ownership & lifecycle:** `BackgroundJobs` owns spawned process-group jobs (`start`), adopted leftover groups (`adopt`), and check-group crash-recovery records (`recordCheckGroup`), serialized onto `<logDir>/running.json` via a chained atomic temp-and-rename writer (`recordWrite`).
+- **Teardown & admission fences:** `shutdown()` sets `closed = true`, clears the port-scan timer, awaits `stopRecord(job, "app-quit")` for all live jobs, and drains `recordWrite`. `start()` throws synchronously once `closed` is true; `adopt()` rechecks `this.closed` before and after `adoptSettleMs` and after `markedMembers()`, so an in-flight adoption cannot register a job after shutdown starts.
+- **Confirmation boundaries:**
+  - `recordCheckGroup` / `releaseCheckGroup` and `stopWorkspace` confirm group exit via `processGroupStillRuns` before dropping the record or allowing workspace removal.
+  - Adopted jobs (`stopAdopted`) signal only processes carrying `AIDEN_BACKGROUND_JOB=<id>` (SIGTERM then up to 3 SIGKILL rounds via `endMarked`). If exit cannot be confirmed or inspection fails, the job stays `running`, stays in `running.json`, is skipped by `stopChat(..., forget = true)`, and causes `stopWorkspace` to reject so a later Stop or `reapPreviousLaunch()` still owns it.
+  - Spawned jobs send SIGTERM then SIGKILL after `stopGraceMs`, destroy pipes 1 s after SIGKILL so detached pipe-holders cannot wedge `close`, and run a final synchronous `signalGroup(pid, "SIGKILL")` inside `finish()` without waiting for post-SIGKILL descendant confirmation before dropping the entry from `running.json`. That bounded-teardown trade-off is retained as designed; `reapPreviousLaunch()` recovers crash leftovers using `processStartTime` and marker checks so reused PIDs are never signalled.
+- **Verification boundary:** Real-process POSIX unit tests in `main/services/follow-through/background-jobs.test.ts` (`npm run test:follow-through`).
+
+### `backend:M125`, `M126`, `M130`, `M156`, `clients:C43` — Browser, device helper host, terminal, Ghostty
+
+**Disposition:** Retain all five owners.
+
+- **`backend:M125` Browser (`main/services/browser/service.ts`, `core.ts`, `private-session.ts`, `files.ts`):**
+  - `BrowserActionQueue` serializes per-tab automation behind `tail`. `interrupt()` increments `epoch`, marks all pending actions cancelled, and aborts the active `AbortController`; `interruptForHumanInput()` cancels only `source === "agent"` work and preserves `"user"` commands both active and queued.
+  - `BrowserPrivateSession` serializes last-tab cleanup (`clearStorageData`, `clearCache`, `clearAuthCache` via `Promise.allSettled`) before allowing a new private tab in `open()`, failing closed on cleanup error until a subsequent `clear()` succeeds.
+  - `close(tab)` is idempotent (`tab.closing`), cancels file consumers and held-field watches, interrupts the queue, detaches debugger/PiP/recording windows (`destroy()`), closes `webContents` without waiting for `beforeunload`, and triggers `privateSession.clear()` on the last incognito tab. `shutdown()` cancels file acquisitions, closes all tabs, drains `this.persistence`, and awaits `browserFileService.shutdown()`.
+  - **Verification boundary:** Pure core/queue/private-session/recording/file unit suites (`npm run test:browser`); live Chromium `WebContentsView` / CDP / Electron window teardown requires Electron E2E, not headless unit tests.
+- **`backend:M126` Device helper host (`main/services/devices/local-device-host.ts`, `device-service.ts`, `ssh-device-host.ts`, `device-recording.ts`):**
+  - `createLocalDeviceHost` fences `expo-device-hub` and `agent-device` startup with a monotonic `generation`, `stopped` flag, and serialized `startLock`. `stop()` bumps `generation`, sets `stopped = true`, aborts any pending readiness probe, sends `SIGTERM` to pending and active hub children once (`WeakSet`), awaits `stopAgent()` (`daemon stop` falling back to `terminateRecordedDaemon` checked by `lstart` and installed daemon path), and removes `hub.json`.
+  - Under quit budget pressure (`SHUTDOWN_BUDGET_MS.devices = 8 s`), `terminateRunningDeviceCommands()` sets `commandsCancelledForQuit = true` and `SIGTERM`s all active helper commands so post-deadline commands cannot spawn or outlive quit.
+  - `createDeviceRecorder` bounds recording stop (`SIGINT` → `SIGKILL` after 15 s) and cleans up Android remote files once per entry; `terminate()` immediately `SIGKILL`s live recorder children.
+  - **Verification boundary:** Fake-process/fake-clock unit tests (`npm run test:devices`); real Xcode `simctl` / Android emulator / SSH host teardown requires macOS hardware/simulator acceptance.
+- **`backend:M130` Terminal (`main/services/terminal.ts`, `terminal-spawn-helper.ts`):**
+  - `create()` revalidates `owner` and `webContentsEpochs` across every async step before spawning, validates `pty.pid > 0` (marking `unverifiableWorkspaces` fail-closed otherwise), records `pty.pid` as the POSIX session ID for worktree cleanup, and registers `onExit` before owner invalidation so a synchronous teardown always settles `exited`.
+  - `terminate()` clears coalesce timers, sends `SIGHUP` to `-pid` + `pty.kill()`, escalates to `SIGKILL` after `killGraceMs` (2 s), and releases `settleExit` after a second grace interval. `closeForWorkspaceAndWait()` waits for pending PTY exits and audits every tracked POSIX session ID via `managedWorktreeSessionHasMembers`, throwing `ManagedWorktreeProcessActiveError` if any process survives or is unverifiable. `flushHistory()` drains debounced scrollback writes during quit (`2 s` budget).
+  - **Verification boundary:** Unit tests with coverage gate (`npm run test:terminal:coverage`).
+- **`backend:M156` & `clients:C43` Ghostty (`renderer/lib/ghostty-terminal/surface.ts`, `runtime.ts`, `core.ts`):**
+  - `GhosttyTerminalSurface.dispose()` is idempotent (`this.disposed = true`), disconnects `ResizeObserver`, removes font/DPR/appearance/DOM listeners, clears selection-scroll, cursor-blink, synchronized-output, composition-suppression, and resize-debounce timers (flushing final grid dimensions once on unmount), cancels `requestAnimationFrame`, disposes `GhosttyTerminalCore` (freeing WASM handles; `runtime.ts` zero-initializes handle slots so partial-init disposal is safe), and removes mounted DOM nodes. All post-dispose callbacks guard on `this.disposed` and monotonic font/copy/paste tokens.
+  - **Verification boundary:** Headless unit/DOM-mock tests (`npm run test:ghostty-terminal`); GPU/canvas presentation and real IME composition require Electron/browser acceptance.
+
+### `cli-native:N13`, `O01` — iMCP launcher and bounded-command guard
+
+**Disposition:** Retain both (read-audited; native/helper boundaries unchanged).
+
+- **`cli-native:N13` (`native/imcp-launcher/main.swift`):** Verifies Apple static code-signing requirements on `iMCP.app` (`co.dododo.iMCP`) and `imcp-server` (`TeamIdentifier TTY35UM57S`, no network access) before spawning with `LaunchCodeRequirement`. Installs a `SIGTERM` `DispatchSource` that `SIGKILL`s `-child.processIdentifier`, and a `terminationHandler` that `SIGKILL`s the child's process group on exit before propagating exit/signal status. **Verification boundary:** Static read audit; code-signature execution requires signed macOS host binary acceptance.
+- **`cli-native:O01` (`scripts/bounded-command-guard.mjs`):** Detached process-group lease wrapper that ignores `SIGTERM`/`SIGINT` itself so it remains the occupied group leader until `terminate` / `release` / IPC `disconnect` runs `terminateGroup(graceMs)` (idempotent `terminating` flag: `SIGTERM` to `-process.pid`, then `SIGKILL` to `-process.pid` after `graceMs`, followed by `process.exit(70)`). **Verification boundary:** Exercised by real-process bounded-shell unit tests (`main/services/bounded-shell-command.test.ts`).
+
+### Rank 13 capture and input owners (`backend:M131`, `M133`–`M138`)
+
+**Disposition:** Retain all owners; static/unit lifecycle verified, physical hardware/OS-permission acceptance not claimed here.
+
+| Inventory | Owner(s) | Lifecycle & Teardown Invariants | Verification Boundary |
+|---|---|---|---|
+| `backend:M131` | `main/services/dictation-coordinator.ts`, `dictation-paste.ts`, `linux-dictation-portal.ts` | Single serialized promise queue (`enqueue`); explicit `DictationStage` (`idle → starting → recording → transcribing → delivering → idle`); operation-ID fencing on `release`/`result`/`error`; audio-scaled transcription watchdog; `dispose()` sets `disposed`, clears hide/release/watchdog timers, ends hold-watch, destroys pill. | Unit/mocked-timer tests (`npm run test:voice`); real macOS Accessibility/Secure Input/hotkey release and Linux xdg-desktop-portal require desktop hardware acceptance. |
+| `backend:M133` | `main/services/gemini-live/service.ts` | `shuttingDown` blocks new sessions and `bindDisplayMedia`; `shutdown()` aborts active sessions, closes protocols, disposes display bindings, and awaits `pendingThreadFinalization` and in-flight starts (bounded by `SHUTDOWN_BUDGET_MS.geminiLive = 3 s`). | Unit tests (`npm run test:gemini-live`); live audio/screen-capture permissions and real Google Live WebSocket require hardware/authorized-packaged acceptance (`test:gemini-live:packaged:authorized`). |
+| `backend:M134`–`M137` | `main/services/local-speech-worker-host.ts`, `local-speech-lane.ts`, `local-speech-process-core.ts`, `local-speech-engine.ts`, `local-speech-downloads.ts` | `LocalSpeechLane` serializes access to the single worker and aborts queued vs active callers cleanly. `LocalSpeechWorkerHost` fences forks with monotonic `generation`, retires workers before replacing models (`retirementsSettled()` guarantees two native models are never resident at once), escalates stubborn workers to `SIGKILL` after `exitWaitMs` (2 s), and `shutDown()` detaches synchronously while still tracking background `SIGKILL` escalation. | Fake-process unit tests (`npm run test:voice`); real sherpa-onnx native memory release and microphone capture require hardware/smoke acceptance (`test:stt-smoke`). |
+| `backend:M138` | `main/services/tts/service.ts`, `audio-store.ts`, `browser/recordings.ts`, `devices/device-recording.ts` | `createTtsService` enforces one active job (`cancelActiveJob`), per-document owner invalidation releasing `audioStore` bytes and cancelling active jobs, pause-wait wakeups on termination, and idempotent start intent keys per document. Recording owners bound duration and clean up temp/remote files on stop/discard/quit. | Unit/loopback tests (`npm run test:tts`, `test:browser`, `test:devices`); real audio output playback and OS screen-recording permissions require hardware acceptance. |
+
+### Rank 14 remainder: startup and updater owners (`backend:M002`–`M004`, `M165`, `M192`)
+
+**Disposition:** Retain all owners.
+
+| Inventory | Owner(s) | Lifecycle & Teardown Invariants | Verification Boundary |
+|---|---|---|---|
+| `backend:M002` | `main/application-lifecycle-core.ts`, `main/services/quit-barrier.ts` | Pure core already extracted: `createLifecycleCheck`, `createUpdateInstallIntent`, `settleUpdateInstallQuit`, `closeRendererBeforeShutdown` (5 s hang deadline → `destroy()`), `withDeadline`, `joinInFlight`, `requireWithinDeadline`. | Unit tests (`main/services/quit-barrier.test.ts`, `main/services/onboarding-reset-lifecycle.test.ts`). |
+| `backend:M003`, `M004` | `main/services/startup-ipc-admission.ts`, `startup-chat-reconciliation.ts`, `renderer-crash-recovery.ts`, `main/index.ts` startup sequence | `installProcessStartupIpcAdmission` holds every `ipcMain.handle` invoke in arrival order until `openProcessStartupIpcAdmission()` runs strictly after all durable reconciliation finishes. `decideRendererRecovery` caps automatic reloads at 3 per 60 s with exponential backoff (`250 ms` → `2 s`). Startup failure destroys an unadmitted window and joins `shutdownAndQuit()` (falling back to `app.exit(1)` if Computer Use persistence refuses quit with no window left). | Unit tests (`npm run test:diagnostics`, `test:chat-visibility`); full Electron cold-start sequence requires Electron E2E. |
+| `backend:M165`, `M192` | `main/services/app-updater-core.ts`, `app-updater.ts`, `app-updater-linux.ts`, `app-updater-linux-package.ts` | `AppUpdateController` owns explicit snapshot phases (`idle → checking → downloading → ready | error`), single-flight `operationPromise`, monotonic progress guard, and `dispose()` that stops future publications while preserving a completed `ready` snapshot for quit-time install handoff. `AppUpdateService` owns 15 s initial / 6 h periodic / backoff retry timers, 2 min download-stall watchdog (`CancellationToken`), `AppUpdateInstallHandoff` (catching synchronous `quitAndInstall` failure), AppImage SHA-512 atomic replacement, and DEB/RPM pre-quit `pkexec` install (`autoInstallOnAppQuit = false`). `dispose()` clears all timers, cancels active download, and detaches updater listeners. | Pure core & Linux installer unit tests (`npm run test:branding`); real Squirrel/macOS code-signed update install and `pkexec` prompt require packaged release acceptance. |
+
+## Cross-lane shutdown and restart trace (P1–P5)
+
+Traced end-to-end across `main/index.ts` (`requestApplicationQuit`, `runShutdownAndQuit`, `cleanupApplication`, and `app.whenReady` startup reconciliation) and the landed P1–P4 owners (`retained-p1-owners.md`, `docs/audits/state-machine-worksheets-lane-b.md`, `.memory/remote-durable-operations.md`):
+
+### Shutdown order (`runShutdownAndQuit`)
+
+1. **Admission & pre-shutdown durability (outside ceiling):**
+   - `createLifecycleCheck` serializes quit against close/reload/onboarding reset; `shutdownAndQuit` uses `joinInFlight` so concurrent callers join one run.
+   - `shutdownStarted = true` and `llmClient.setQuitInProgress(true)` block new owed-turn launches (`P1`).
+   - `prepareComputerUseForQuit()` persists Computer Use state within `PRE_SHUTDOWN_BUDGET_MS.computerUseSettings` (5 s). Failure rolls back `shutdownStarted`, withdraws `updateInstall`, clears `quitInProgress`, and leaves Aiden open.
+   - `armShutdownCeiling()` arms the hard ceiling (`SHUTDOWN_HARD_CEILING_MS`, exiting with code `1` if any step escapes its per-step budget).
+2. **Serial drain of active producers (P1 → P5 → P2/P3):**
+   - `stopKeepAwake()` and `shutdownGoalLoop()` halt new goal rounds synchronously.
+   - `storageUsageService.shutdown()` (6 s) stops storage sweeps before chats/worktrees tear down.
+   - `geminiLiveService.shutdown()` (3 s, Rank 13) closes Live sessions and flushes thread finalization.
+   - `llmClient.abortAll()` + `llmClient.shutdown()` (7 s, `P1` `M005`/`M006`/`M012`/`M177`) aborts active parent generations, drains settlement through `settleGeneration`, and prevents owed turns from starting.
+   - `shutdownFollowThrough()` (6 s, `P5` `M112`) stops background jobs and persists check/follow state.
+   - `modelPaceRecorder.flush()` (1 s).
+   - `subagentRuntimeRegistry.shutdown()` (7 s, `P1`/`P5` `M102`/`M103`/`subagent-shell.ts`) drains child runtimes and shell brokers.
+   - `spending.flush()`, `usageLimits.flush()`, `usageStore.flush()` (1 s); `analyticsService().shutdown()` (2 s, `M166`); optional packaged-soak receipt finalization (exiting `1` on receipt failure).
+   - `stopAidenRemoteServiceAndSettle()` (5 s, `P2`/`P3` `M056`/`M057`/`M178` + streams/idempotency) closes the Remote HTTP/SSE server, revokes/drains in-flight operations, and settles durable operation snapshots.
+3. **Synchronous cut (`cleanupApplication`, idempotent):**
+   - Disposes `appUpdateService`, global shortcuts, dictation (`M131`), quick chat, local speech (`M134`–`M137`), Foundation Models connection, `formFillRuntime`, `computerUseStatus` invalidation, `scheduleService.stop()` (`P6`), `stopScheduledTaskTriggers()`, `telegramService.stop()`, `llmClient.abortAll()`, `subagentRuntimeRegistry.abortAll()`, watchers, and triggers `mcpManager.closeAll({ final: true })`.
+4. **Parallel bounded teardown (P2, P4, P5, P6):**
+   - Provider OAuth sign-in (`2 s`, `M078`); Computer Use host (`5.5 s`, `M116`–`M118`).
+   - Bot ingress stop (`scheduleService.stopAndSettle()` + `telegramService.stopAndSettle()`, `5.5 s`) is requested before `shutdownBotSessionRuntime()` (`5 s`, `M023`/`M024`), reducing the chance of late harness opens while harnesses close and release profile locks. This ordering is **not** a strict ingress settlement fence (see the late-send / 5 s timeout gap below).
+   - `subagentRunStore.flush()` + `close()` (`3 s`); `terminalService.flushHistory()` (`2 s`, `M130`).
+   - `createImagesRuntime.shutdown("app-quit")` (`5 s`) **strictly before** `studioAssetStore.close()` (`2 s`).
+   - `browserService.shutdown()` (`3 s`, `M125`); `shutdownBotComputers(4_000)` (`5 s`, `M121`/`M122`); `shutdownDevices()` (`8 s`, `M126`, calling `terminateDeviceHelperCommands()` on timeout); `settleFoundationModelsHelperStops(1_500)` (`2 s`); `mcpManager.closeAllWithin(2_000)` (`3 s`); `shutdownAntigravity()` (`4 s`, `M089`/`M090`).
+5. **Final diagnostics & exit:**
+   - Flushes subagent diagnostics, diagnostic journal, and diagnostic health (`1 s` each).
+   - Sets `forceAppQuit = true`; if `updateInstall.take()` is armed, hands off to `appUpdateService.installDownloadedUpdateAndRestart()` (disarming ceiling on success), else calls `app.quit()`.
+
+### Restart reconciliation order (`app.whenReady`, before `openProcessStartupIpcAdmission`)
+
+All renderer invokes are held by `startup-ipc-admission.ts` until every recovery step below settles:
+1. Studio assets & `createImagesRuntime.initialize()` restart sweep (before any image run starts).
+2. `displayImageArtifactStore` / `generativeUiArtifactStore` initialization (quarantining corrupt staging or failing closed on chat mutations) and `subagentRunStore.initialize()`.
+3. `reapFollowThroughProcesses()` (`M112` `reapPreviousLaunch()` — **before** chat or worktree deletion so orphaned shells cannot hold files open).
+4. `reconcilePendingChatDeletions()` (`P4` roll-forward across tool outputs, image/HTML artifacts, Pi effects/compaction, design canvas, `chatStore`, inbox state), followed by `sweepOrphanedEphemeralChats()` and `prepareNoWorkspaceChats()`.
+5. Recovery of staged image (`M147`) and HTML artifacts into interrupted assistant messages.
+6. `startBotApplication()` (rolls forward `bot-lifecycle-journal-core` pending create/delete/model ops, `M026`/`M035`; reconciles Bot sessions & pending deletes) and background `reconcileBotComputers()` (`M121`/`M122`).
+7. `migrateLegacyEmptyWorkspaceChats()` (throwing `EmptyChatMigrationSnapshotError` aborts startup rather than admitting writers after an uncertain snapshot), `reconcileChatScopedStores` (Pi effect & compaction stores against full unfiltered `chatStore.list()`), and `reconcilePendingManagedWorktreeDeletions()` (`P4` `git.ts`, blocking each pending workspace via `scheduleService.cancelWorkspace` + `backgroundJobs.stopWorkspace`).
+8. Credential reconciliation: `reconcilePendingProviderCredentialRotation()`, `reconcilePendingMcpCredentialCleanup()`, `cleanupRetiredMcpServerCredentials()`, `sealPlaintextMcpServerFields()`.
+9. Follow-through & goal restoration (`startFollowThrough()`, `startGoalLoop()` — active goals come back paused), `childChatCompletions.recoverOwed()`, `startKeepAwake()`, and `initializeAidenRemoteService()`.
+10. `openProcessStartupIpcAdmission()` — only now do renderer invokes, `scheduleService.start()` (with lock-screen catch-up deferral), `startScheduledTaskTriggers()`, `telegramService.start()`, and `appUpdateService.start()` activate, each guarded by `if (shutdownHasBegun()) return`.
+
+### Cross-lane gaps noted (none silently hidden)
+
+- Every step in `runShutdownAndQuit` is bounded by `settleShutdownStep` so a wedged step cannot hang quit, and `SHUTDOWN_HARD_CEILING_MS` forces `app.exit(1)` as a last resort. When a step times out (e.g., `parentGenerations`, `subagentRuntime`, `botRuntime`, or `mcpServers`), physical cleanup may still be finishing asynchronously or left to next-launch crash recovery (`reapPreviousLaunch()`, `reconcilePendingChatDeletions()`, `reconcilePendingManagedWorktreeDeletions()`, `pending-deletes.json`, `pi-durable` interrupted state).
+- **Bot ingress stop vs. runtime shutdown late-send gap:** Running `scheduleService.stopAndSettle()` before `shutdownBotSessionRuntime()` requests stop first, rather than guaranteeing strict ingress settlement before harnesses close:
+  - `scheduleService.stopAndSettle()` (`main/services/schedule-service-core.ts`) races `cancelAndSettle()` against a 5 s cap and returns with a warning even while `runningTasks` are still live.
+  - In `main/services/scheduled-bot-routines.ts`, `abortable(ports.send(...), signal)` only races cancellation against an already-started `ports.send()` promise without cancelling the underlying `send()` call.
+  - `BotSessionService.send()` and `openBot()` (`main/services/bot-runtime/bot-session-service.ts`) do not check `shuttingDown` (only `appendEntry` checks `shuttingDown`); harness admission closes only once `BotHarnessHost.shutdown()` flips `shutDown = true` and rejects subsequent `host.open()` calls with `BotHarnessHostClosedError`. A late in-flight `send()` can therefore still race into `openBot()` before `host.shutdown()` begins.
+- `aiden serve stop` in `packages/cli` still cannot reap an MCP group whose wrapper exited (documented under MCP stdio servers above).
+- No end-to-end Electron multi-subsystem kill-and-restart harness exists across all P1–P5 lanes simultaneously; verification combines this static trace with per-lane unit/integration suites and the packaged subagent/compaction/diagnostics acceptance scripts.
+

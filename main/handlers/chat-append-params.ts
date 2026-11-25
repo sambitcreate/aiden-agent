@@ -19,8 +19,13 @@ import {
   parseChatInputSourceStrict,
   type ChatInputSourceV1,
 } from "../../renderer/shared/chat-input-source.js";
+import {
+  grabbedElementsRepresentationBytes,
+  parseGrabbedElements,
+  type GrabbedElementContextV1,
+} from "../../renderer/shared/browser-element-grab.js";
 
-const MESSAGE_KEYS = new Set(["attachments", "content", "model", "role"]);
+const MESSAGE_KEYS = new Set(["attachments", "content", "grabbedElements", "model", "role"]);
 const META_KEYS = new Set([
   "autoTitle",
   "inputSource",
@@ -37,6 +42,7 @@ export interface ParsedChatAppend {
   content: string;
   messageModel?: string;
   attachments?: Attachment[];
+  grabbedElements?: GrabbedElementContextV1[];
   providerId?: string;
   metaModel?: string;
   autoTitle: boolean;
@@ -124,6 +130,25 @@ export function parseChatAppend(
     true,
   );
   const attachments = parseAttachments(messageRecord.attachments);
+  const rawGrabbedElements = parseGrabbedElements(
+    messageRecord.grabbedElements,
+    "append",
+  );
+  const imageAttachmentIds = new Set(
+    (attachments ?? [])
+      .filter((attachment) => attachment.kind === "image" && Boolean(attachment.data))
+      .map((attachment) => attachment.id),
+  );
+  const grabbedElements = rawGrabbedElements?.map((element) => {
+    if (
+      element.thumbnailAttachmentId &&
+      !imageAttachmentIds.has(element.thumbnailAttachmentId)
+    ) {
+      const { thumbnailAttachmentId: _dangling, ...withoutThumb } = element;
+      return withoutThumb;
+    }
+    return element;
+  });
 
   const parsedProviderId = boundedString(
     metaRecord.providerId,
@@ -170,6 +195,7 @@ export function parseChatAppend(
   retainedBytes +=
     parsedProviderId.bytes + parsedMetaModel.bytes + parsedTurnId.bytes;
   retainedBytes += attachmentRepresentationBytes(attachments);
+  retainedBytes += grabbedElementsRepresentationBytes(grabbedElements);
   if (skillReference) {
     retainedBytes += Buffer.byteLength(skillReference.invocationId, "utf8");
     retainedBytes += Buffer.byteLength(skillReference.displayName, "utf8");
@@ -184,6 +210,7 @@ export function parseChatAppend(
     content,
     messageModel: parsedMessageModel.value,
     attachments,
+    ...(grabbedElements ? { grabbedElements } : {}),
     providerId: parsedProviderId.value,
     metaModel: parsedMetaModel.value,
     autoTitle: metaRecord.autoTitle === true,

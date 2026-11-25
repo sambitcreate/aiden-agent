@@ -9,15 +9,25 @@ import { isUsable } from "./model-picker-data";
 import type { AppSettings, Provider } from "./types";
 import { onNotification, settingsApi, telegramApi } from "./ipc";
 import { firstVisibleModelForProvider, isModelHidden } from "../shared/model-visibility";
+import { isGenerationThinkingLevel, type GenerationThinkingLevel } from "../shared/generation-thinking";
 
 const PROVIDER_KEY = "aiden-agent.providerId";
 const MODEL_KEY = "aiden-agent.model";
+/** The new-chat model's own reasoning effort; absent: the model's saved level. */
+const THINKING_LEVEL_KEY = "aiden-agent.thinkingLevel";
 const MODEL_SELECTION_CHANGED_EVENT = "aiden:model-selection-changed";
 let modelSelectionRevision = 0;
 
 export interface ModelSelection {
   providerId: string;
   model: string;
+  /** The effort picked with this model (an Agent Slider stop); absent: the model's saved level. */
+  thinkingLevel?: GenerationThinkingLevel;
+}
+
+function readThinkingLevel(): GenerationThinkingLevel | undefined {
+  const stored = localStorage.getItem(THINKING_LEVEL_KEY);
+  return isGenerationThinkingLevel(stored) ? stored : undefined;
 }
 
 /**
@@ -28,9 +38,11 @@ export interface ModelSelection {
  * composer and Aiden dock.
  */
 export function readModelSelection(): ModelSelection {
+  const thinkingLevel = readThinkingLevel();
   return {
     providerId: localStorage.getItem(PROVIDER_KEY) ?? "",
     model: localStorage.getItem(MODEL_KEY) ?? "",
+    ...(thinkingLevel ? { thinkingLevel } : {}),
   };
 }
 
@@ -101,7 +113,12 @@ export function initialVisibleModelSelection(
 export function subscribeModelSelection(listener: (selection: ModelSelection) => void): () => void {
   const sync = () => listener(readModelSelection());
   const syncStorage = (event: StorageEvent) => {
-    if (event.key === PROVIDER_KEY || event.key === MODEL_KEY || event.key === null) {
+    if (
+      event.key === PROVIDER_KEY ||
+      event.key === MODEL_KEY ||
+      event.key === THINKING_LEVEL_KEY ||
+      event.key === null
+    ) {
       modelSelectionRevision += 1;
       sync();
     }
@@ -118,16 +135,21 @@ export function subscribeModelSelection(listener: (selection: ModelSelection) =>
 
 /**
  * The model an open chat answers with. A chat that owns its model (it already
- * has messages) uses the pair stored on it; an empty chat, or one that never
- * recorded a model, follows the app's model for new chats.
+ * has messages) uses the pair, and its own level if it has one, stored on it;
+ * an empty chat, or one that never recorded a model, follows the app's model
+ * for new chats.
  */
 export function chatModelSelection(
-  chat: { providerId?: string; model?: string } | null | undefined,
+  chat: { providerId?: string; model?: string; thinkingLevel?: GenerationThinkingLevel } | null | undefined,
   chatOwnsModel: boolean,
   appSelection: ModelSelection,
 ): ModelSelection {
   if (chatOwnsModel && chat?.providerId && chat.model) {
-    return { providerId: chat.providerId, model: chat.model };
+    return {
+      providerId: chat.providerId,
+      model: chat.model,
+      ...(chat.thinkingLevel ? { thinkingLevel: chat.thinkingLevel } : {}),
+    };
   }
   return appSelection;
 }
@@ -173,19 +195,45 @@ export function useActiveChatModelTarget(): ActiveChatModelTarget | null {
   );
 }
 
-export function persistModelSelection(providerId: string, model: string): void {
+/**
+ * Save the model for new chats. A level picks that model's effort (an Agent
+ * Slider stop); leaving it out clears any level, because a level belongs to
+ * the model it was picked with.
+ */
+export function persistModelSelection(
+  providerId: string,
+  model: string,
+  thinkingLevel?: GenerationThinkingLevel,
+): void {
   const previous = readModelSelection();
   localStorage.setItem(PROVIDER_KEY, providerId);
   localStorage.setItem(MODEL_KEY, model);
+  if (thinkingLevel) localStorage.setItem(THINKING_LEVEL_KEY, thinkingLevel);
+  else localStorage.removeItem(THINKING_LEVEL_KEY);
   modelSelectionRevision += 1;
   window.dispatchEvent(new Event(MODEL_SELECTION_CHANGED_EVENT));
   // Keep the host's copy current so Aiden's "Model for new chats" control and
   // paired phones see the pick at once, not after the next chat starts.
-  if (providerId && model && (previous.providerId !== providerId || previous.model !== model)) {
+  if (
+    providerId &&
+    model &&
+    (previous.providerId !== providerId ||
+      previous.model !== model ||
+      previous.thinkingLevel !== thinkingLevel)
+  ) {
     void Promise.resolve()
-      .then(() => settingsApi.set({ lastProviderId: providerId, lastModel: model }))
+      .then(() => settingsApi.set(hostNewChatPatch({ providerId, model, thinkingLevel })))
       .catch(() => undefined);
   }
+}
+
+/** The host's copy of the new-chat pick; a pick without a level clears the host's. */
+function hostNewChatPatch(selection: ModelSelection) {
+  return {
+    lastProviderId: selection.providerId,
+    lastModel: selection.model,
+    lastThinkingLevel: selection.thinkingLevel ?? null,
+  };
 }
 
 /**
@@ -195,16 +243,26 @@ export function persistModelSelection(providerId: string, model: string): void {
  * apart while the app was closed or before the copy existed.
  */
 export async function mirrorNewChatModelToHost(api: {
-  get(): Promise<Pick<AppSettings, "lastProviderId" | "lastModel">>;
-  set(patch: Pick<AppSettings, "lastProviderId" | "lastModel">): Promise<unknown>;
+  get(): Promise<Pick<AppSettings, "lastProviderId" | "lastModel" | "lastThinkingLevel">>;
+  set(patch: {
+    lastProviderId: string;
+    lastModel: string;
+    lastThinkingLevel: GenerationThinkingLevel | null;
+  }): Promise<unknown>;
 }): Promise<void> {
   const host = await api.get();
   // Read the pick after the host answers: one made while the read was pending
   // is newer than anything captured before it.
   const selection = readModelSelection();
   if (!selection.providerId || !selection.model) return;
-  if (host.lastProviderId === selection.providerId && host.lastModel === selection.model) return;
-  await api.set({ lastProviderId: selection.providerId, lastModel: selection.model });
+  if (
+    host.lastProviderId === selection.providerId &&
+    host.lastModel === selection.model &&
+    host.lastThinkingLevel === selection.thinkingLevel
+  ) {
+    return;
+  }
+  await api.set(hostNewChatPatch(selection));
 }
 
 /** Follow a new-chat model the host changed (Aiden's chat control). */
@@ -230,12 +288,14 @@ export function useModelSelection(
     () => localStorage.getItem(PROVIDER_KEY) ?? "",
   );
   const [model, setModel] = React.useState(() => localStorage.getItem(MODEL_KEY) ?? "");
+  const [thinkingLevel, setThinkingLevel] = React.useState(readThinkingLevel);
 
   React.useEffect(
     () =>
       subscribeModelSelection((selection) => {
         setProviderId(selection.providerId);
         setModel(selection.model);
+        setThinkingLevel(selection.thinkingLevel);
       }),
     [],
   );
@@ -263,15 +323,17 @@ export function useModelSelection(
     if (next) {
       setProviderId(next.providerId);
       setModel(next.model);
+      setThinkingLevel(undefined);
       persistModelSelection(next.providerId, next.model);
     }
   }, [providers, providerId, model, hiddenModelsByProvider, visibilityLoaded]);
 
-  const select = React.useCallback((pid: string, m: string) => {
+  const select = React.useCallback((pid: string, m: string, level?: GenerationThinkingLevel) => {
     setProviderId(pid);
     setModel(m);
-    persistModelSelection(pid, m);
+    setThinkingLevel(level);
+    persistModelSelection(pid, m, level);
   }, []);
 
-  return { providerId, model, select };
+  return { providerId, model, thinkingLevel, select };
 }

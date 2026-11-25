@@ -8,6 +8,7 @@ Landed through #746 and its stack (#747-#754). No serialized format, existing AP
 - A failed outcome write leaves `unknown`: 409 `idempotency_in_flight` until reconciled, never a re-run, past the TTL too. Joins and replays answer the owner's durable result, not the ledger's in-memory one.
 - `AidenOperationNotExecutedError` and `AidenOperationReplaySafeRetryError` both delete the entry and rethrow the cause. The second is for an action with its own receipt (`aiden-remote-bot-session.ts`). If the save after that fails, the caller gets 409 and the disk keeps the admission.
 - Peer hosts: a host's `idempotency_in_flight` counts as `outcome_unknown` on the desktop, so a send stays unresolved under its key.
+- iOS client (#901, `AidenRemoteFailureClassification`): on `cachedRejectionLedger` routes (coordinator, scheduled tasks, workspace git, chat fork, New worktree) a structured `408`, `429` or `5xx` (e.g. `500`, `503`) is ambiguous: the client keeps and reuses its idempotency key, never spends it. Owner decision 2026-11-24, matching `mutation-failure-ambiguity.json` (#904) and Android's `CACHED_REJECTION_LEDGER`. Other structured `4xx` settle the key, including `409 revision_conflict` and `409 internal_error`; `409 idempotency_in_flight` stays ambiguous.
 
 ## Other tables
 - Telegram outbox rows move only through `advance()` and `BOT_REPLY_ROW_TRANSITIONS`. New direct `row.state =` writes are a bug. `delivering` serializes attempts per request.

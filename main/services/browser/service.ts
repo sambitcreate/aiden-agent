@@ -27,6 +27,8 @@ import type {
   BrowserDiagnostic,
   BrowserElement,
   BrowserEvent,
+  BrowserGrabEndReason,
+  BrowserGrabSource,
   BrowserImage,
   BrowserProfile,
   BrowserRecording,
@@ -68,6 +70,15 @@ import {
   validBrowserViewport,
 } from "./preferences.js";
 import { playwrightInjectedSource } from "./playwright-source.generated.js";
+import { browserGrabRuntimeSource } from "./grab-runtime.generated.js";
+import { sanitizeRawGrabPayload } from "./grab-sanitize.js";
+import { computeGrabCropPlan, finalizeGrabThumbnail } from "./grab-thumbnail.js";
+import {
+  resolveGrabAccent,
+  type GrabbedElementAccent,
+  type GrabbedElementBoundingBox,
+  type GrabbedElementThumbnail,
+} from "../../../renderer/shared/browser-element-grab.js";
 import { browserImportSources, importBrowserCookies } from "./import.js";
 import { browserFileService, browserPreviewRequestHeaders, type BrowserFileReservation, type PreparedBrowserFile } from "./files.js";
 import type { BrowserApprovalTarget } from "./approval.js";
@@ -96,7 +107,9 @@ import {
 import {
   scanSensitiveFieldReach,
   scanSensitiveFields,
+  sensitiveFieldBoxes,
   SensitiveFieldMemory,
+  type CssRect,
   type SensitiveFieldReach,
 } from "./credential-fields.js";
 import { configureBrowserPermissionHandlers } from "./permission-policy.js";
@@ -104,6 +117,7 @@ import { loadBrowserUrl } from "./navigation-load.js";
 import { configStore } from "../config-store.js";
 import { browserRecordingBytesMatch, browserRecordingsFolder, findBrowserRecording } from "./recordings.js";
 import { browserRecordingExtension } from "../../../renderer/shared/browser-recording.js";
+import { reportAnalyticsEvent } from "../analytics/analytics-report.js";
 import { writeFileAtomic } from "../durable-fs.js";
 import { projectDiagnosticError } from "../diagnostics-contract.js";
 import { writeDiagnosticEvent } from "../diagnostic-journal.js";
@@ -151,7 +165,7 @@ export interface BrowserHold {
 const HELD_FIELD_SCAN_MS = 500;
 /** Actions a Bot's browser port never runs. */
 const BOUNDARY_REFUSED_ACTIONS: ReadonlySet<string> = new Set([
-  "evaluate", "record_start", "record_stop", "open_file", "annotate", "annotation_preview", "annotation_reset",
+  "evaluate", "record_start", "record_stop", "open_file", "annotate", "grab", "annotation_preview", "annotation_reset",
   "annotation_submit", "screenshot", "devtools",
 ]);
 interface WorkspaceBrowser {
@@ -202,6 +216,8 @@ interface LiveTab {
   closing: boolean;
   expectedInputs: Array<{ type: string; key?: string; button?: string; modifiers?: number; expires: number }>;
   picking?: boolean;
+  /** `pageUrl` is the page's URL when the grab started; payloads are judged against it. */
+  grab?: { token: symbol; accent: GrabbedElementAccent; source: BrowserGrabSource; pageUrl: string };
   crashTimes: number[];
   crashTimer?: ReturnType<typeof setTimeout>;
   pendingNavigationUrl?: string;
@@ -256,7 +272,12 @@ function clone<T>(value: T): T {
   return structuredClone(value);
 }
 function redactBrowserData<T>(value: T): T {
-  const imagePaths = new Set(["image.data", "snapshot.image.data", "annotation.image.data"]);
+  const imagePaths = new Set([
+    "image.data",
+    "snapshot.image.data",
+    "annotation.image.data",
+    "capture.thumbnail.data",
+  ]);
   const visit = (item: unknown, at: string): unknown => {
     if (typeof item === "string") return imagePaths.has(at) ? item : browserFileService.redactText(item);
     if (Array.isArray(item)) return item.map((entry, index) => visit(entry, `${at}.${index}`));
@@ -877,6 +898,7 @@ export class BrowserService {
     wc.on("did-start-navigation", (_event, url, inPlace, isMainFrame) => {
       if (!inPlace) tab.heldFieldWatch?.invalidate();
       if (isMainFrame && !inPlace) {
+        if (tab.grab) void this.stopGrab(tab, "navigation");
         // Capture native state before Electron delivers its queued crash event.
         // Loading alone cannot distinguish a replacement from a current crash.
         navigationSupersededCrash = wc.isCrashed();
@@ -948,6 +970,7 @@ export class BrowserService {
         }
       });
       this.cancelCrashRecovery(tab);
+      if (tab.grab) void this.stopGrab(tab, "crash");
       tab.navigationCommand = undefined;
       tab.queue.interrupt();
       tab.backgroundThrottling.reset();
@@ -991,7 +1014,7 @@ export class BrowserService {
     });
     wc.setIgnoreMenuShortcuts(true);
     const humanInput = (type: string, key?: string, modifiers?: number, button?: string, nativeModifiers?: number) => {
-      if (tab.picking) return true;
+      if (tab.picking || tab.grab) return true;
       tab.expectedInputs = tab.expectedInputs.filter((expected) => expected.expires > Date.now());
       // Pinned Electron 43.1.1 keyboard/generic converter exposes _modifiers:
       // https://github.com/electron/electron/blob/v43.1.1/shell/common/gin_converters/blink_converter.cc
@@ -1016,6 +1039,19 @@ export class BrowserService {
       return false;
     };
     wc.on("before-input-event", (event, input) => {
+      // Unstoppable Escape and Shift+Cmd+G while grabbing: page JS cannot hijack them.
+      if (input.type === "keyDown" && tab.grab) {
+        if (input.key === "Escape") {
+          event.preventDefault();
+          void this.stopGrab(tab, "escape");
+          return;
+        }
+        if ((input.meta || input.control) && input.shift && !input.alt && input.key.toLowerCase() === "g") {
+          event.preventDefault();
+          if (!input.isAutoRepeat) void this.stopGrab(tab, "cancelled");
+          return;
+        }
+      }
       // A repeated physical key is still user control; only debugger-marked
       // echoes may consume expectations, regardless of auto-repeat.
       const modifiers = Number(input.alt) | (Number(input.control) << 1) | (Number(input.meta) << 2) | (Number(input.shift) << 3);
@@ -1026,13 +1062,17 @@ export class BrowserService {
       const shortcut =
         key === "."
           ? "annotate"
-          : key === "l"
-            ? "focus_address"
-            : key === "r"
-              ? input.shift
-                ? "hard_reload"
-                : "reload"
-              : null;
+          : key === "g" && input.shift
+            ? input.isAutoRepeat
+              ? null
+              : "grab"
+            : key === "l"
+              ? "focus_address"
+              : key === "r"
+                ? input.shift
+                  ? "hard_reload"
+                  : "reload"
+                : null;
       if (shortcut) {
         event.preventDefault();
         this.emit(tab.state.workspaceId, {
@@ -1363,6 +1403,7 @@ export class BrowserService {
   }
   private close(tab: LiveTab): void {
     if (tab.closing) return;
+    if (tab.grab) void this.stopGrab(tab, "closed");
     tab.closing = true;
     this.unwatchHeldFields(tab);
     this.finishPreviewNavigation(tab);
@@ -1639,6 +1680,7 @@ export class BrowserService {
     let captureBounds = pageBounds;
     if (bounds) {
       const region = boundedBounds(bounds);
+      // Read the size in Aiden's isolated world so page-defined viewport globals can't skew crops.
       const measured = browserMeasuredViewport(
         await this.evaluate(tab, "({width:innerWidth,height:innerHeight})", signal, true),
       );
@@ -1998,6 +2040,7 @@ export class BrowserService {
     const workspace = this.workspace(tab.state.workspaceId);
     const previous = workspace.state.activeTabId ? this.tabs.get(workspace.state.activeTabId) : undefined;
     if (previous && previous !== tab) {
+      if (previous.grab) void this.stopGrab(previous, "cancelled");
       if (previous.state.floating) {
         this.floating(previous, false, false);
         this.floating(tab, true, false);
@@ -2378,7 +2421,192 @@ export class BrowserService {
       this.emit(tab.state.workspaceId);
     }
   }
+  private async startGrab(
+    tab: LiveTab,
+    accent?: GrabbedElementAccent,
+    source: BrowserGrabSource = "toolbar",
+  ): Promise<void> {
+    const wc = tab.view.webContents;
+    if (tab.closing || wc.isDestroyed()) return;
+    // Mutual exclusion with Annotate picker on this tab.
+    if (tab.picking) {
+      void wc.executeJavaScript("globalThis.__aidenPickerCancel?.()", true).catch(() => {});
+    }
+    // End any active grab session on this workspace's tabs first.
+    for (const candidate of this.tabs.values()) {
+      if (candidate.state.workspaceId === tab.state.workspaceId && candidate.grab) {
+        await this.stopGrab(candidate, "cancelled");
+      }
+    }
+    const resolvedAccent = resolveGrabAccent(accent);
+    const token = Symbol("browser-grab");
+    const grabSource: BrowserGrabSource = source === "shortcut" ? "shortcut" : "toolbar";
+    tab.grab = { token, accent: resolvedAccent, source: grabSource, pageUrl: wc.getURL() };
+    tab.state.grabbing = true;
+    this.emit(tab.state.workspaceId);
+
+    try {
+      const injected = await wc.executeJavaScript("typeof globalThis.__aidenGrabStart === 'function'", true);
+      if (!injected) {
+        await wc.executeJavaScript(browserGrabRuntimeSource, true);
+      }
+      if (tab.grab?.token !== token) return;
+      await wc.executeJavaScript(
+        `globalThis.__aidenGrabStart?.(${JSON.stringify({ accent: resolvedAccent })})`,
+        true,
+      );
+      if (tab.grab?.token !== token) return;
+      wc.focus();
+      void this.runGrabLoop(tab, token);
+    } catch {
+      if (tab.grab?.token === token) {
+        await this.stopGrab(tab, "cancelled");
+      }
+    }
+  }
+
+  private async stopGrab(tab: LiveTab, reason: BrowserGrabEndReason): Promise<void> {
+    if (!tab.grab) return;
+    tab.grab = undefined;
+    tab.state.grabbing = false;
+    const wc = tab.view.webContents;
+    if (!tab.closing && !wc.isDestroyed()) {
+      void wc.executeJavaScript("globalThis.__aidenGrabStop?.()", true).catch(() => {});
+      if ((reason === "picked" || reason === "escape") && wc.isFocused()) {
+        const owner = this.workspaces.get(tab.state.workspaceId)?.owner;
+        if (owner && !owner.isDestroyed()) {
+          const hostWindow = BrowserWindow.getAllWindows().find(
+            (w) => !w.isDestroyed() && w.webContents.id === owner.id,
+          );
+          hostWindow?.webContents.focus();
+        }
+      }
+    }
+    this.emit(tab.state.workspaceId);
+    this.emit(tab.state.workspaceId, {
+      type: "grab-ended",
+      workspaceId: tab.state.workspaceId,
+      tabId: tab.state.id,
+      reason,
+    });
+  }
+
+  private async captureGrabThumbnail(
+    tab: LiveTab,
+    boundingBox: GrabbedElementBoundingBox,
+    measuredViewport: { width: number; height: number } | undefined,
+    domSensitiveRects: readonly CssRect[],
+  ): Promise<GrabbedElementThumbnail | undefined> {
+    const wc = tab.view.webContents;
+    if (tab.closing || wc.isDestroyed()) return undefined;
+    const viewport =
+      measuredViewport ??
+      browserMeasuredViewport(
+        await wc
+          .executeJavaScript("({width:Math.round(innerWidth),height:Math.round(innerHeight)})", true)
+          .catch(() => undefined),
+      );
+    if (!viewport) return undefined;
+    const pageBounds = browserPageCaptureBounds(
+      tab.view.getBounds(),
+      this.presentationViewport(tab),
+    );
+    const plan = computeGrabCropPlan(boundingBox, viewport, pageBounds);
+    if (!plan) return undefined;
+
+    const sensitiveRects: CssRect[] = [...domSensitiveRects];
+    // Combine with CDP sensitive-field detection when DevTools is closed.
+    if (!wc.isDevToolsOpened()) {
+      try {
+        const pid = wc.mainFrame?.processId;
+        const remembered = typeof pid === "number" ? tab.sensitiveFields.of(pid) : undefined;
+        const scan = await sensitiveFieldBoxes(this.cdpPort(tab), viewport, remembered);
+        for (const field of scan.fields) {
+          sensitiveRects.push(field.box);
+        }
+      } catch {
+        // DOM-collected sensitive rects still mask password/credential fields.
+      }
+    }
+
+    const release = tab.backgroundThrottling.acquire();
+    const unhost = this.hostWhileActive(tab);
+    try {
+      const captured = await browserDeadline(wc.capturePage(plan.captureRect), 1_200);
+      return finalizeGrabThumbnail(captured, nativeImage, sensitiveRects, plan.cssCrop);
+    } finally {
+      unhost();
+      release();
+    }
+  }
+
+  private async runGrabLoop(tab: LiveTab, token: symbol): Promise<void> {
+    const wc = tab.view.webContents;
+    while (tab.grab?.token === token && !tab.closing && !wc.isDestroyed()) {
+      let raw: unknown;
+      try {
+        raw = await wc.executeJavaScript("globalThis.__aidenGrabNext?.()", true);
+      } catch {
+        if (tab.grab?.token === token) await this.stopGrab(tab, "cancelled");
+        return;
+      }
+      if (tab.grab?.token !== token) return;
+      if (!raw || typeof raw !== "object" || (raw as { cancelled?: unknown }).cancelled === true) {
+        await this.stopGrab(tab, "cancelled");
+        return;
+      }
+      const grabPageUrl = tab.grab.pageUrl;
+
+      try {
+        const workspace = await configStore.getWorkspace(tab.state.workspaceId).catch(() => undefined);
+        const sanitized = await sanitizeRawGrabPayload(raw, {
+          pageUrl: wc.getURL(),
+          grabPageUrl,
+          pageTitle: wc.getTitle(),
+          workspaceRoot: workspace?.folderPath,
+          zoomFactor: tab.state.zoom,
+        });
+        if (tab.grab?.token !== token) return;
+
+        const thumbnail = await this.captureGrabThumbnail(
+          tab,
+          sanitized.element.boundingBox,
+          sanitized.measuredViewport,
+          sanitized.sensitiveRects,
+        ).catch(() => undefined);
+        if (tab.grab?.token !== token) return;
+
+        const grabSource = tab.grab.source;
+        reportAnalyticsEvent("browser_element_grabbed", {
+          kind: sanitized.element.framework === "dom" ? "dom" : "react",
+          source: grabSource,
+        });
+
+        this.emit(tab.state.workspaceId, {
+          type: "grab",
+          workspaceId: tab.state.workspaceId,
+          tabId: tab.state.id,
+          capture: {
+            element: sanitized.element,
+            ...(thumbnail ? { thumbnail } : {}),
+            keepActive: sanitized.keepActive,
+          },
+        });
+
+        if (!sanitized.keepActive) {
+          await this.stopGrab(tab, "picked");
+          return;
+        }
+        await wc.executeJavaScript("globalThis.__aidenGrabResume?.()", true);
+      } catch {
+        if (tab.grab?.token === token) await this.stopGrab(tab, "cancelled");
+        return;
+      }
+    }
+  }
+
   private async pick(tab: LiveTab, signal?: AbortSignal): Promise<BrowserAnnotation | undefined> {
+    if (tab.grab) await this.stopGrab(tab, "cancelled");
     tab.picking = true;
     try {
       const picked = await browserDeadline(
@@ -2750,10 +2978,15 @@ export class BrowserService {
         // While the person uses a held tab the agent can't read or drive it,
         // snapshots included; it may still open and use other tabs.
         if (context.source === "agent" && tab.hold) throw new Error(BROWSER_HELD_TAB_REFUSED);
+        if (context.source === "agent" && tab.grab)
+          throw new Error("The user is currently selecting an element in this tab.");
         if (context.source === "agent") this.assertHeldFieldsObserved(tab);
-        // Panel cleanup can cancel an already inactive picker. Hiding browser
-        // chrome must not interrupt automation or invalidate pending approval.
+        if (botWorkspace && command.action === "grab")
+          throw new Error("Element grab is unavailable in a Bot browser.");
+        // Panel cleanup can cancel an already inactive picker or grab session. Hiding
+        // browser chrome must not interrupt automation or invalidate pending approval.
         if (command.action === "annotate" && !command.enabled && !tab.picking) break;
+        if (command.action === "grab" && !command.enabled && !tab.grab) break;
         if (context.source === "user" && command.action !== "present") tab.queue.interrupt();
         if (command.action === "present") {
           // A delayed layout report from the old tab must never cover the selected page.
@@ -2770,6 +3003,11 @@ export class BrowserService {
         }
         if (command.action === "close") {
           this.close(tab);
+          break;
+        }
+        if (command.action === "grab") {
+          if (command.enabled) await this.startGrab(tab, command.accent, command.source);
+          else await this.stopGrab(tab, "cancelled");
           break;
         }
         if (command.action === "annotate" && !command.enabled) {

@@ -1,4 +1,4 @@
-// The `/host/events` feed's one transcript-free read, shared by the desktop
+// The `/host/events` feed's one read (no chat transcripts), shared by the desktop
 // host and `aiden serve`: chat summaries, workspaces (with their cached
 // repository identity) and Bot rows in both audience shapes. Each host passes
 // what it owns; a host without live Bot summaries passes no `botSignals`.
