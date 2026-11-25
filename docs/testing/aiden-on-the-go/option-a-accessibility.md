@@ -168,6 +168,7 @@ Other runs:
 | FULL | Aiden Lane text, at `bdba3c86c` | Unit: 2,227 run, 7 skipped, 2,219 passed, 1 failed. UI: 50 run, 3 skipped (including the opt-in capture), 47 passed. |
 | `testADeletedChatLeavesAtOnceOverItsOwnMachine`, the one unit failure | Aiden Lane text, ten times alone, then its class | 9 of 10 alone, the class 86 of 86. It expects the last request to be `GET /workspaces` and sometimes sees a refresh of the kept chat after it: a timing flake in a store test this task doesn't touch. |
 | `npm run test:ios-release` | | 32 of 32 passed |
+| The audit gate with the dock (2026-11-25, Home chrome) | iPhone 17 Pro (iOS 27.0) | Failed on 19 findings, all on the "Still open" list above: the chat title bar ('Fix the flaky upload test', 'Aiden Agent · Studio Mac', 'AA'), the Bot header ('Scout' and its subtitle) and search's "Text clipped on no element", in light and dark. None is on the dock or a list under it: the dock's bar now runs to the window's bottom edge, and its chosen tab's name has its own allowance. |
 
 ### Fix round 1
 

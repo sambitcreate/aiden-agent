@@ -660,6 +660,10 @@ struct AidenAppShellView: View {
         ) { route in
             openFromHome(route)
         }
+        // The dock steps aside while the Home field's keyboard is up, and the
+        // drawer gives the field its focus back when it closes, so a drag down
+        // the list is the way to put the keyboard away and get the tabs back.
+        .scrollDismissesKeyboard(.immediately)
         .safeAreaInset(edge: .top, spacing: 0) {
             AidenConnectionNotice(coordinator: coordinator)
         }

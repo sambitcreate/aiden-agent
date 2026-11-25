@@ -23,5 +23,6 @@ Branch `claude/ios-home-chrome`, stacked on `claude/ios-home-aurora` (#931). Own
 - The dock no longer minimizes on scroll (the old `testTheTabBarMinimizesOnScrollDownAndComesBack` became `testTheDockStaysInReachWhileTheListScrollsUnderIt`).
 - The accessibility audit (`testEveryMainScreenPassesTheAudit`) counts the dock as a bar running from its capsule's top to the window's bottom edge, full width (`AuditFinding.dock`). Rows that scroll under it are bars-touching, and its chosen tab's name has its own allowance (Dynamic Type, one per tab screen).
 - A row XCUITest calls hittable under the dock or running accessory still takes the tap on the bar; drag the list first (`openLongChat`).
-- Closing the drawer gives the Home field its keyboard back; a drag down the list (default `scrollDismissesKeyboard`) puts it away.
+- Closing the drawer gives the Home field its keyboard back. The default `scrollDismissesKeyboard` did not dismiss it, so `chatsList` sets `.scrollDismissesKeyboard(.immediately)`: a drag down the Home list puts the keyboard away and the dock returns.
+- While the Home field has focus the ambient aurora keeps animating, so XCUITest waits 60 s for idle before every action; a keyboard-up UI test takes minutes.
 - `app.cells` includes rows just past the window's edge; filter by `frame.minY < window.maxY` when looking for the last visible row.
