@@ -91,8 +91,11 @@ final class AidenShellUITests: XCTestCase {
         }
         XCTAssertTrue(drawerRow("Computers", in: app).exists, "No Computers in the drawer")
         // The drawer is modal: what's under it is out of reach, to touch and to VoiceOver.
-        XCTAssertFalse(app.navigationBars.buttons["Open menu"].exists, "The bar under the drawer stayed reachable")
-        XCTAssertFalse(app.tabBars.buttons["Inbox"].exists, "The tab bar under the drawer stayed reachable")
+        // The elements can still be listed under the cover; a touch on them lands on the drawer.
+        let menuButton = app.navigationBars.buttons["Open menu"]
+        let inboxTab = app.tabBars.buttons["Inbox"]
+        XCTAssertFalse(menuButton.exists && menuButton.isHittable, "The bar under the drawer stayed reachable")
+        XCTAssertFalse(inboxTab.exists && inboxTab.isHittable, "The tab bar under the drawer stayed reachable")
         AidenStateMatrix.closeDrawer(in: app)
         XCTAssertTrue(app.buttons["Close menu"].waitForNonExistence(timeout: 5), "Close menu left the drawer up")
 
@@ -187,15 +190,19 @@ final class AidenShellUITests: XCTestCase {
         for _ in 0..<4 where unread.frame.maxY > app.frame.height * 0.6 {
             app.swipeUp(velocity: .slow)
         }
-        // A row's label starts with its chat's title.
-        let title = String(unread.label.prefix { $0 != "," })
+        // A row's label is "Title, workspace, machine, …, Unread". Demo machines
+        // reuse titles, so the row is pinned by its title, workspace and machine.
+        let parts = unread.label.components(separatedBy: ", ")
+        let title = parts[0]
+        let stem = parts.prefix(3).joined(separator: ", ")
         let thisRowUnread = app.buttons.matching(
-            NSPredicate(format: "label BEGINSWITH %@ AND label ENDSWITH %@", title, "Unread")
+            NSPredicate(format: "label BEGINSWITH %@ AND label ENDSWITH %@", stem, "Unread")
         ).firstMatch
+        let sameTitle = { app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", title)).allElementsBoundByIndex.map(\.label) }
         let rollback = app.descendants(matching: .any)
             .matching(NSPredicate(format: "label CONTAINS %@", "mark that chat read")).firstMatch
-        // Held as a frame: once read, the row no longer matches the query.
-        let row = unread.frame
+        // Held as a frame, from the row the label names: once read, it no longer matches.
+        let row = thisRowUnread.frame
         // Well clear of the drawer's strip at the screen's edge, and inside the row.
         let edge = max(app.frame.minX + 24, row.minX + 8)
         let origin = app.coordinate(withNormalizedOffset: .zero)
@@ -217,12 +224,15 @@ final class AidenShellUITests: XCTestCase {
         markRead.tap()
         XCTAssertTrue(markRead.waitForNonExistence(timeout: 5), "Mark read left the swipe action open")
         // The demo Mac takes the read, so the dot clears and stays clear.
-        XCTAssertTrue(thisRowUnread.waitForNonExistence(timeout: 5), "Mark read left \(title) unread")
+        XCTAssertTrue(thisRowUnread.waitForNonExistence(timeout: 5), "Mark read left \(stem) unread; rows titled so: \(sameTitle()); rollback banner: \(rollback.exists)")
         XCTAssertFalse(rollback.waitForExistence(timeout: 2), "The demo Mac refused the read of \(title)")
         XCTAssertFalse(thisRowUnread.exists, "\(title) rolled back to unread")
 
         // Found again by title: a read row can sit elsewhere in the Inbox.
-        let readRow = app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", title)).firstMatch
+        // Its status and wait words change once read; its title and workspace don't.
+        let readRow = app.buttons.matching(
+            NSPredicate(format: "label BEGINSWITH %@", parts.prefix(2).joined(separator: ", "))
+        ).firstMatch
         XCTAssertTrue(readRow.waitForExistence(timeout: 5), "\(title) left the Inbox once read")
         if readRow.frame.maxY > app.frame.height * 0.6 { app.swipeUp(velocity: .slow) }
         origin.withOffset(CGVector(dx: max(app.frame.minX + 24, readRow.frame.minX + 8), dy: readRow.frame.midY)).tap()

@@ -164,6 +164,9 @@ struct AidenAppShellView: View {
     @State private var parts = AidenAppShellParts()
     @State private var botSummaries: [AidenHostObjectID: AidenBotSummary] = [:]
     @State private var activeSheet: ShellSheet?
+    /// Add Computer from the drawer: pairing is the shell's sheet, presented
+    /// once the drawer's cover has gone, not in the same update.
+    @State private var pairsAfterDrawer = false
     /// Each list tab's split columns.
     @State private var chatsColumns = AidenSplitColumns()
     @State private var inboxColumns = AidenSplitColumns()
@@ -397,12 +400,30 @@ struct AidenAppShellView: View {
         // accessory) out of VoiceOver's reach. Attached after the `.id`, so
         // it stays open as the display folds. The drawer runs its own slide;
         // the cover comes and goes without the system's.
-        .fullScreenCover(isPresented: Binding(get: { drawerIsOpen }, set: { if !$0 { closeDrawer() } })) {
+        .fullScreenCover(
+            isPresented: Binding(get: { drawerIsOpen }, set: { if !$0 { closeDrawer() } }),
+            onDismiss: {
+                guard pairsAfterDrawer else { return }
+                pairsAfterDrawer = false
+                openAddComputer()
+            }
+        ) {
             drawerOverlay
                 .presentationBackground(.clear)
+                // The shell is presenting the cover, so an error raised while
+                // the drawer is up is shown from the drawer.
+                .alert(
+                    "Aiden On The Go",
+                    isPresented: errorBinding(whileDrawerIsOpen: true)
+                ) {
+                    Button("OK", role: .cancel) { coordinator.presentedError = nil }
+                } message: {
+                    Text(coordinator.presentedError ?? "The operation could not be completed.")
+                }
         }
         .transaction(value: drawerIsOpen) { $0.disablesAnimations = true }
-        .aidenNewWorkPresentation(newWork, coordinator: coordinator)
+        // While the cover is up the drawer presents the flow; the shell can't.
+        .aidenNewWorkPresentation(newWork, coordinator: coordinator, isActive: !drawerIsOpen)
         .sheet(item: $activeSheet) { sheet in
             switch sheet {
             case .runningChats:
@@ -424,10 +445,7 @@ struct AidenAppShellView: View {
         .environment(inboxStore)
         .alert(
             "Aiden On The Go",
-            isPresented: Binding(
-                get: { coordinator.presentedError != nil },
-                set: { if !$0 { coordinator.presentedError = nil } }
-            )
+            isPresented: errorBinding(whileDrawerIsOpen: false)
         ) {
             Button("OK", role: .cancel) { coordinator.presentedError = nil }
         } message: {
@@ -645,7 +663,8 @@ struct AidenAppShellView: View {
         !drawerIsOpen && !navigation.besideList && !showsVerticalBar
             && navigation.path(of: navigation.tab).isEmpty
             // A sheet or alert up over the tab keeps the edge.
-            && activeSheet == nil && !newWork.isChoosingWorkspace && coordinator.presentedError == nil
+            && activeSheet == nil && !newWork.isChoosingWorkspace && !newWork.isNamingWorkspace
+            && coordinator.presentedError == nil
     }
 
     private var drawerOverlay: some View {
@@ -673,8 +692,8 @@ struct AidenAppShellView: View {
                 if hasNoComputers {
                     // Pairing is the shell's sheet, so the drawer goes first.
                     Button {
+                        pairsAfterDrawer = true
                         closeDrawer(refocusingMenu: false)
-                        openAddComputer()
                     } label: {
                         Label("Add Computer", systemImage: "plus")
                     }
@@ -684,8 +703,16 @@ struct AidenAppShellView: View {
             }
             // The compose's workspace choice is a sheet, so it's presented
             // over the drawer while the drawer is up.
-            .aidenNewWorkPresentation(newWork, coordinator: coordinator)
+            .aidenNewWorkPresentation(newWork, coordinator: coordinator, ownsHaptics: false)
         }
+    }
+
+    /// The error alert, from the shell or, while the drawer's cover is up, from the drawer.
+    private func errorBinding(whileDrawerIsOpen: Bool) -> Binding<Bool> {
+        Binding(
+            get: { coordinator.presentedError != nil && drawerIsOpen == whileDrawerIsOpen },
+            set: { if !$0 { coordinator.presentedError = nil } }
+        )
     }
 
     private func openDrawer() {

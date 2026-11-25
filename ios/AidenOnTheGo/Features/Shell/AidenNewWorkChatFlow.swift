@@ -317,26 +317,37 @@ struct AidenNewWorkComposeButton: View {
 private struct AidenNewWorkPresentation: ViewModifier {
     @Bindable var flow: AidenNewWorkChatFlow
     let coordinator: AidenRemoteCoordinator
+    /// Whether this host presents the flow now. The shell and the drawer both
+    /// carry the flow; only one of them, the one on top, presents it.
+    let isActive: Bool
+    /// The shell owns the haptic scope; the drawer's copy comes and goes.
+    let ownsHaptics: Bool
 
     @Environment(\.aidenPalette) private var palette
+
+    private func whileActive(_ value: ReferenceWritableKeyPath<AidenNewWorkChatFlow, Bool>) -> Binding<Bool> {
+        Binding(get: { isActive && flow[keyPath: value] }, set: { flow[keyPath: value] = $0 })
+    }
 
     func body(content: Content) -> some View {
         content
             .overlay {
-                if flow.isCreating {
-                    HStack(spacing: AidenSpacing.s) {
-                        ProgressView().controlSize(.small)
-                        Text(flow.status)
+                if isActive {
+                    if flow.isCreating {
+                        HStack(spacing: AidenSpacing.s) {
+                            ProgressView().controlSize(.small)
+                            Text(flow.status)
+                        }
+                        .font(.callout.weight(.medium))
+                        .padding(.horizontal, AidenSpacing.l)
+                        .frame(height: 48)
+                        .foregroundStyle(palette.foreground)
+                        .glassEffect(.regular, in: .capsule)
+                        .accessibilityElement(children: .combine)
                     }
-                    .font(.callout.weight(.medium))
-                    .padding(.horizontal, AidenSpacing.l)
-                    .frame(height: 48)
-                    .foregroundStyle(palette.foreground)
-                    .glassEffect(.regular, in: .capsule)
-                    .accessibilityElement(children: .combine)
                 }
             }
-            .sheet(isPresented: $flow.isChoosingWorkspace) {
+            .sheet(isPresented: whileActive(\.isChoosingWorkspace)) {
                 NavigationStack {
                     List(flow.existingWorkspaces) { workspace in
                         Button {
@@ -356,7 +367,7 @@ private struct AidenNewWorkPresentation: ViewModifier {
                     }
                 }
             }
-            .alert("New workspace", isPresented: $flow.isNamingWorkspace) {
+            .alert("New workspace", isPresented: whileActive(\.isNamingWorkspace)) {
                 TextField("Workspace name", text: $flow.workspaceName)
                 Button("Cancel", role: .cancel) { flow.workspaceName = "" }
                 Button("Create") {
@@ -368,14 +379,19 @@ private struct AidenNewWorkPresentation: ViewModifier {
             } message: {
                 Text("Aiden will create a reusable workspace, then open a new chat in it.")
             }
-            .onAppear { coordinator.haptics.activate(scope: flow.hapticScope) }
-            .onDisappear { coordinator.haptics.deactivate(scope: flow.hapticScope) }
+            .onAppear { if ownsHaptics { coordinator.haptics.activate(scope: flow.hapticScope) } }
+            .onDisappear { if ownsHaptics { coordinator.haptics.deactivate(scope: flow.hapticScope) } }
     }
 }
 
 extension View {
     /// What a compose button opens, wherever in the shell it was tapped.
-    func aidenNewWorkPresentation(_ flow: AidenNewWorkChatFlow, coordinator: AidenRemoteCoordinator) -> some View {
-        modifier(AidenNewWorkPresentation(flow: flow, coordinator: coordinator))
+    func aidenNewWorkPresentation(
+        _ flow: AidenNewWorkChatFlow,
+        coordinator: AidenRemoteCoordinator,
+        isActive: Bool = true,
+        ownsHaptics: Bool = true
+    ) -> some View {
+        modifier(AidenNewWorkPresentation(flow: flow, coordinator: coordinator, isActive: isActive, ownsHaptics: ownsHaptics))
     }
 }

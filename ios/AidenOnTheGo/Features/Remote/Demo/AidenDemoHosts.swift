@@ -1450,7 +1450,6 @@ enum AidenDemoLongChat {
         return out
     }()
 }
-#endif
 
 /// The chats a demo Mac has been told are read, applied to its summaries.
 private final class AidenDemoReadChats: @unchecked Sendable {
@@ -1483,3 +1482,4 @@ private final class AidenDemoReadChats: @unchecked Sendable {
         return (try? JSONSerialization.data(withJSONObject: object)) ?? base
     }
 }
+#endif
