@@ -270,10 +270,17 @@ test("Linux provisioning pins the host key, configures desktop/aiden-bot/virtiof
         event.command?.includes(".Xauthority"),
     ),
   );
+  const configureCmd = sshCommands.find((event) => event.command?.includes("autologin-user=lume"))?.command ?? "";
+  const localSharePos = configureCmd.indexOf("install -d -m 755 -o lume -g lume /home/lume/.local /home/lume/.local/share");
+  const aidenDirPos = configureCmd.indexOf("install -d -m 700 -o lume -g lume");
+  assert.ok(localSharePos >= 0, "creates /home/lume/.local and .local/share owned by lume");
+  assert.ok(aidenDirPos > localSharePos, "creates lume-owned .local/.local/share before .local/share/aiden");
+  assert.ok(configureCmd.indexOf("/home/lume/.local/share/aiden", aidenDirPos) > aidenDirPos);
   assert.ok(
     sshCommands.some(
       (event) =>
         event.command?.includes(`useradd -m -s /bin/bash -U ${BOT_COMPUTER_LINUX_SHELL_USER}`) &&
+        event.command?.includes(`chmod 700 /home/lume /home/${BOT_COMPUTER_LINUX_SHELL_USER}`) &&
         event.command?.includes(`/home/${BOT_COMPUTER_LINUX_SHELL_USER}/.ssh/authorized_keys`) &&
         event.command?.includes("/etc/sudoers.d/99-aiden-bot-shell") &&
         event.command?.includes(`ALL=(${BOT_COMPUTER_LINUX_SHELL_USER}) NOPASSWD: ALL`) &&

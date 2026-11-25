@@ -223,7 +223,7 @@ test("openGuestVncTunnel binds only 127.0.0.1 (passing vncReachableBeyondLoopbac
       `const match = /^127\\.0\\.0\\.1:(\\d+):(\\/.+)$/.exec(spec);\n` +
       `if (!match) { process.stderr.write("bad -L " + spec + "\\n"); process.exit(2); }\n` +
       `writeFileSync(${JSON.stringify(pidFile)}, String(process.pid));\n` +
-      `const server = createServer((s) => s.end());\n` +
+      `const server = createServer((s) => { s.write("RFB 003.008\\n"); s.end(); });\n` +
       `process.on("SIGTERM", () => { server.close(); process.exit(0); });\n` +
       `server.listen(Number(match[1]), "127.0.0.1");\n`,
   );
@@ -252,4 +252,27 @@ test("openGuestVncTunnel binds only 127.0.0.1 (passing vncReachableBeyondLoopbac
     alive = false;
   }
   assert.equal(alive, false, "tunnel child exits cleanly on close()");
+
+  // A listener that does not emit an RFB protocol banner is rejected rather than accepted.
+  const badSsh = path.join(dir, "bad-ssh.mjs");
+  writeFileSync(
+    badSsh,
+    `#!${process.execPath}\n` +
+      `import { createServer } from "node:net";\n` +
+      `const lIdx = process.argv.indexOf("-L");\n` +
+      `const match = /^127\\.0\\.0\\.1:(\\d+):(\\/.+)$/.exec(process.argv[lIdx + 1] ?? "");\n` +
+      `const server = createServer((s) => { s.write("HTTP/1.1 200 OK\\r\\n\\r\\n"); s.end(); });\n` +
+      `process.on("SIGTERM", () => { server.close(); process.exit(0); });\n` +
+      `server.listen(Number(match[1]), "127.0.0.1");\n`,
+  );
+  chmodSync(badSsh, 0o755);
+  await assert.rejects(
+    openGuestVncTunnel(
+      { host: "192.168.64.9", user: "lume" },
+      "/home/lume/.local/share/aiden/vnc.sock",
+      { timeoutMs: 600 },
+      { paths: local, env: guestSshEnvironment({}, local.home), sshCommand: badSsh },
+    ),
+    /tunnel/iu,
+  );
 });

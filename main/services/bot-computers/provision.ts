@@ -608,6 +608,7 @@ export const LINUX_BASE_PROVISION_STEPS: readonly LinuxProvisionStep[] = Object.
         `printf '%s\\n' ${quoteRemoteArg(sessionPrep)} > /usr/local/bin/aiden-session-prep`,
         "chmod 755 /usr/local/bin/aiden-session-prep",
         `printf '%s\\n' ${quoteRemoteArg(desktopEntry)} > /etc/xdg/autostart/aiden-no-lock.desktop`,
+        `install -d -m 755 -o ${BOT_COMPUTER_GUEST_USER} -g ${BOT_COMPUTER_GUEST_USER} /home/${BOT_COMPUTER_GUEST_USER}/.local /home/${BOT_COMPUTER_GUEST_USER}/.local/share`,
         `install -d -m 700 -o ${BOT_COMPUTER_GUEST_USER} -g ${BOT_COMPUTER_GUEST_USER} ${quoteRemoteArg(BOT_COMPUTER_LINUX_VNC_DIR)}`,
         `install -d -m 755 -o ${BOT_COMPUTER_GUEST_USER} -g ${BOT_COMPUTER_GUEST_USER} /home/${BOT_COMPUTER_GUEST_USER}/.config /home/${BOT_COMPUTER_GUEST_USER}/.config/systemd ${quoteRemoteArg(vncUnitDir)}`,
         `printf '%s\\n' ${quoteRemoteArg(linuxGuestVncUnit())} > ${quoteRemoteArg(vncUnitPath)}`,
@@ -652,6 +653,7 @@ export const LINUX_BASE_PROVISION_STEPS: readonly LinuxProvisionStep[] = Object.
       ].join("\n");
       const script = [
         `if ! id -u ${user} >/dev/null 2>&1; then useradd -m -s /bin/bash -U ${user}; fi`,
+        `chmod 700 /home/${BOT_COMPUTER_GUEST_USER} /home/${user}`,
         `passwd -l ${user} >/dev/null 2>&1 || true`,
         `deluser ${user} sudo >/dev/null 2>&1 || true`,
         `install -d -m 700 -o ${user} -g ${user} /home/${user}/.ssh`,

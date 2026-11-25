@@ -421,19 +421,32 @@ function stopChildProcess(child: ChildProcess): Promise<void> {
   });
 }
 
-function probeLoopbackOpen(port: number, timeoutMs: number): Promise<boolean> {
+/**
+ * Verify that `127.0.0.1:port` is accepting connections AND speaks the RFB
+ * protocol banner (`RFB `), so a local non-VNC port squatter cannot satisfy the
+ * tunnel readiness probe before SSH's `ExitOnForwardFailure` exits.
+ */
+function probeLoopbackRfbBanner(port: number, timeoutMs: number): Promise<boolean> {
   return new Promise((resolve) => {
     const socket = connect({ host: "127.0.0.1", port });
     let settled = false;
-    const done = (open: boolean) => {
+    let received = Buffer.alloc(0);
+    const done = (ok: boolean) => {
       if (settled) return;
       settled = true;
       clearTimeout(timer);
       socket.destroy();
-      resolve(open);
+      resolve(ok);
     };
     const timer = setTimeout(() => done(false), timeoutMs);
-    socket.once("connect", () => done(true));
+    socket.on("data", (chunk: Buffer) => {
+      received = Buffer.concat([received, chunk]);
+      if (received.length >= 4) {
+        done(received.subarray(0, 4).toString("ascii") === "RFB ");
+      }
+    });
+    socket.once("end", () => done(false));
+    socket.once("close", () => done(false));
     socket.once("error", () => done(false));
   });
 }
@@ -494,7 +507,7 @@ export async function openGuestVncTunnel(
         if (options.signal?.aborted) {
           throw new BotComputerError("cancelled", "Starting the computer was cancelled.");
         }
-        if (await probeLoopbackOpen(localPort, 200)) {
+        if ((await probeLoopbackRfbBanner(localPort, 500)) && !exited && child.exitCode === null) {
           let closed = false;
           return {
             host: "127.0.0.1",
