@@ -222,7 +222,8 @@ final class AidenChatViewModel {
             request: attempt.request,
             key: turnAttempts.key(for: attempt.request),
             createdAt: Date(),
-            attachments: attempt.attachments
+            attachments: attempt.attachments,
+            keepsSelection: attempt.keepsSelection
         )
         do {
             try await draftStore.savePendingSend(fresh, session: session)
@@ -1811,8 +1812,12 @@ final class AidenChatViewModel {
         // chat's own, and so does a new chat's first send: the Mac stores no
         // level when it creates a chat, so without it the chat would come back
         // off the stop it started on. Any other send runs at that level for
-        // this turn only.
-        let savesSelection = agentSlider != nil && (hasUnsentModelPick || chat.messages.isEmpty)
+        // this turn only. Decided once, when the send is built: a retry keeps
+        // the answer its first attempt got, even if a refresh has filled the
+        // chat since.
+        let keepsSelection = retryAttempt.map { $0.keepsSelection == true }
+            ?? (!chat.isBotChat && (hasUnsentModelPick || chat.messages.isEmpty))
+        let savesSelection = agentSlider != nil && keepsSelection
         let request = retryAttempt?.request ?? AidenTurnRequestBuilder.make(
             text: text,
             providerId: modelSelection.providerId,
@@ -1866,7 +1871,8 @@ final class AidenChatViewModel {
         chat.updatedAt = now
         streamState = .queued
         let attempt = retryAttempt ?? AidenChatDraftStore.PendingSend(deviceId: context.deviceId, request: request,
-            key: turnAttempts.key(for: request), createdAt: Date(), attachments: submittedAttachments)
+            key: turnAttempts.key(for: request), createdAt: Date(), attachments: submittedAttachments,
+            keepsSelection: keepsSelection)
         let idempotencyKey = attempt.key
         /// Takes the message back out of the chat. A Cancel can come long after
         /// the send (New worktree waits on a fetch), so anything typed meanwhile
@@ -1977,23 +1983,26 @@ final class AidenChatViewModel {
                 )
             }
             // A saved send can't change under its Idempotency-Key (the Mac
-            // refuses a different body for the same key), so a send saved
+            // refuses a different body for the same key), so a send built
             // before the Mac granted the slider goes out without saveSelection
-            // and the Mac keeps no level. Hold the chip's choice as this
-            // chat's unsent pick instead: the chat doesn't fall to Custom, and
-            // the next send asks the Mac to keep it.
-            if savesSelection, request.saveSelection != true, !chat.isBotChat {
+            // and the Mac keeps no level. Hold the stop this turn ran on as
+            // the chat's unsent pick instead, not whatever the chip shows now
+            // (the slider's arrival re-resolves it): the chat doesn't fall to
+            // Custom, and the next send asks the Mac to keep it. A newer pick
+            // made while this send was out wins.
+            if keepsSelection, agentSlider != nil, request.saveSelection != true, !chat.isBotChat,
+               !hasUnsentModelPick, !isRemoved, let providerId = request.providerId, let modelId = request.modelId {
+                let sent = AidenChatModelSelection(providerId: providerId, modelId: modelId, thinkingLevel: request.thinkingLevel)
+                selectedProviderId = sent.providerId
+                selectedModelId = sent.modelId
+                selectedThinkingLevel = sent.thinkingLevel
                 hasExplicitModelSelection = true
                 hasUnsentModelPick = true
-                modelPreferenceStore.rememberChat(
-                    AidenChatModelSelection(
-                        providerId: selectedProviderId,
-                        modelId: selectedModelId,
-                        thinkingLevel: selectedThinkingLevel
-                    ),
-                    for: context.instanceId,
-                    chatID: chat.id
-                )
+                // A Mac forgotten or re-paired while the send was out keeps
+                // nothing here.
+                if coordinator.isRetained(context) {
+                    modelPreferenceStore.rememberChat(sent, for: context.instanceId, chatID: chat.id)
+                }
             }
             guard !isRemoved else { return }
             for reference in submittedAttachments { ownedUploadReferences.removeValue(forKey: reference.id) }

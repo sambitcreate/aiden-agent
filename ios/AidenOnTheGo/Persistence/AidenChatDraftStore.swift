@@ -18,6 +18,12 @@ actor AidenChatDraftStore {
         let attachments: [AidenAttachmentReference]
         var streamId: String? = nil
         var inputMode: AidenStreamInputMode? = nil
+        /// Captured when the send was built: it was a new chat's first send
+        /// or carried an unsent pick, so the Mac should keep its level as the
+        /// chat's own. A retry reads this instead of asking again, since a
+        /// refresh can fill the chat before the retry is accepted. Absent in
+        /// records saved before it existed, which reads as false.
+        var keepsSelection: Bool? = nil
         func canRetry(at now: Date = Date()) -> Bool {
             let age = now.timeIntervalSince(createdAt)
             return age >= 0 && age < 24 * 60 * 60
