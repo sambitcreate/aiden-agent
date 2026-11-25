@@ -1079,8 +1079,6 @@ export interface BotLiveProjection {
   refreshActivity(botId: string): Promise<void>;
   /** Preview, time and state for a list row. */
   summary(botId: string): Promise<BotLiveSummary>;
-  /** Host-feed signals from runtime state and an already-open feed only. */
-  inboxSignals(botId: string): Promise<Pick<BotLiveSummary, "state" | "needsYou" | "lastReplyAt">>;
   /**
    * The summary's `needsYou` alone, without reading the transcript: an open
    * question, hand-off, access request, pending plan, approval or issue, and never for an unavailable Bot
@@ -1688,16 +1686,6 @@ export function createBotLiveProjection(deps: BotLiveProjectionDeps): BotLivePro
         if ((await deps.state(botId)).kind === "unavailable") return false;
       }
       return needsYouNow(botId);
-    },
-
-    async inboxSignals(botId) {
-      const feed = feeds.get(botId);
-      const state = feed && !feed.ended ? feed.state : await deps.state(botId);
-      return {
-        state,
-        needsYou: state.kind !== "unavailable" && await needsYouNow(botId),
-        lastReplyAt: feed && !feed.ended ? botLastReplyAt(feed.entries) : null,
-      };
     },
 
     async summary(botId) {

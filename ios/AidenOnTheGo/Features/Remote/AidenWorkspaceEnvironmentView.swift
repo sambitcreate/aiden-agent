@@ -1155,17 +1155,8 @@ final class AidenWorkspaceGitModel {
         }
     }
 
-    private func shouldRetainForReconciliation(_ error: Error) -> Bool {
-        if error is URLError { return true }
-        guard let clientError = error as? AidenRemoteClientError else { return false }
-        switch clientError {
-        case .invalidResponse, .unexpectedStatus:
-            return true
-        case .server(_, let body):
-            return body.code.rawValue == "idempotency_in_flight" || body.code.rawValue == "internal_error"
-        case .invalidEndpoint, .missingCredential, .missingTrustConfiguration, .installationChanged:
-            return false
-        }
+    func shouldRetainForReconciliation(_ error: Error) -> Bool {
+        AidenRemoteFailureClassification.isAmbiguous(error, policy: .cachedRejectionLedger)
     }
 }
 

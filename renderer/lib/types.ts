@@ -55,7 +55,6 @@ export type {
   WebSearchExistingAuthRendererStatus,
 };
 import type { HiddenModelsByProvider } from "../shared/model-visibility";
-import type { ModelPadMetric, ModelPadPlacements } from "../shared/model-pad-preferences";
 export type { BotDefinition } from "../shared/bots";
 
 export type ProviderKind = "openai" | "anthropic";
@@ -576,22 +575,6 @@ export interface Attachment {
   text?: string;
 }
 
-/** One of the benchmark scores (defined with the Pad preferences that persist it). */
-export type ModelBenchmarkMetric = ModelPadMetric;
-
-export interface ModelBenchmarkScores {
-  source: "openrouter";
-  datasetSource: "artificial-analysis";
-  sourceLabel: "Artificial Analysis via OpenRouter";
-  sourceUrl: string;
-  citation: string;
-  asOf: string;
-  license: "CC BY 4.0";
-  intelligence?: number;
-  coding?: number;
-  agentic?: number;
-}
-
 /** models.dev list price in USD per 1M tokens; only finite, non-negative fields are kept. */
 export interface ModelCost {
   input?: number;
@@ -625,7 +608,6 @@ export interface ModelInfo {
   inputModalities?: string[];
   knowledge?: string;
   releaseDate?: string;
-  benchmark?: ModelBenchmarkScores;
   /** models.dev list price in USD per 1M tokens. Display-only; never affects limits or routing. */
   cost?: ModelCost;
   /** models.dev canonical model id for the matched row. Display-only. */
@@ -633,31 +615,6 @@ export interface ModelInfo {
   metadataSource: ModelMetadataSource;
   matched: boolean;
 }
-
-export interface ModelInsightsStatus {
-  hasKey: boolean;
-  ready: boolean;
-  cachedModelCount: number;
-  /** Benchmark rows the last fetch dropped because they shared a permaslug. */
-  skippedAmbiguousCount: number;
-  fetchedAt?: string;
-  asOf?: string;
-  citation?: string;
-  license?: "CC BY 4.0";
-}
-
-export type ModelInsightsActionErrorCode =
-  | "not_connected"
-  | "invalid_key"
-  | "rate_limited"
-  | "service_unavailable"
-  | "network_error"
-  | "invalid_response"
-  | "local_error";
-
-export type ModelInsightsActionResult =
-  | { ok: true; status: ModelInsightsStatus }
-  | { ok: false; code: ModelInsightsActionErrorCode; message: string };
 
 export interface ChatMessage {
   id: string;
@@ -674,6 +631,7 @@ export interface ChatMessage {
   imagePlacements?: import("../shared/chat-artifacts").ChatImagePlacementV1[];
   uiVisuals?: import("../shared/aiden-ui/types").ChatUiVisualV1[];
   visualSnapshots?: import("../shared/visual-snapshots").VisualSnapshotRefV1[];
+  grabbedElements?: import("../shared/browser-element-grab").GrabbedElementContextV1[];
   skill?: SkillProvenanceV1;
   notice?: import("../shared/agent-notices").AgentNoticeV1;
   /** Aiden Live sent this user message for the person ("By voice"). */
@@ -694,6 +652,8 @@ export interface ChatMeta {
   botId?: string;
   providerId?: string;
   model?: string;
+  /** This chat's own reasoning effort (an Agent Slider stop); absent: the per-model saved level. */
+  thinkingLevel?: GenerationThinkingLevel;
   /** createdAt of the newest assistant output; drives honest unread markers. */
   lastAssistantAt?: number;
   lastAssistantSequence?: number;
@@ -830,6 +790,8 @@ export interface ChatMetadataUpdated {
   title: string;
   updatedAt: number;
   ephemeral?: boolean;
+  /** Main reconciled the chat's own level to the one its model ran; `null` clears it. */
+  thinkingLevel?: GenerationThinkingLevel | null;
 }
 
 /** `chats:design-mode-changed`: one chat's design mode turned on or off. */
@@ -995,11 +957,22 @@ export interface AppSettings extends AidenLiveSettingsFields {
   spendingLimits?: import("../shared/spending").SpendingLimitsSettings;
   lastProviderId?: string;
   lastModel?: string;
+  /** The reasoning effort picked with the new-chat model; machine-local like `lastModel`. */
+  lastThinkingLevel?: GenerationThinkingLevel;
+  /**
+   * The Agent Slider, read from the portable config.json (never settings.json).
+   * Absent until first seeded; change it with `settingsApi.setAgentSlider`.
+   */
+  agentSlider?: import("../shared/agent-slider").AgentSliderSettings;
+  /**
+   * config.json holds an Agent Slider that can't be read (a malformed hand
+   * edit): `agentSlider` is absent, the first-run seed leaves it alone, and
+   * only `settingsApi.setAgentSlider` replaces it.
+   */
+  agentSliderUnreadable?: true;
   /** Most recently selected real project workspace ID in the main window (shared with Quick Chat). */
   lastWorkspaceId?: string;
   hiddenModelsByProvider?: HiddenModelsByProvider;
-  /** Presentation-only Model Pad positions keyed `provider::model` (at most 2,000). */
-  modelPadPlacements?: ModelPadPlacements;
   /** Presentation-only model-picker pins as distinct `provider::model` values (at most 200). */
   pinnedModels?: string[];
   /**
@@ -1007,8 +980,6 @@ export interface AppSettings extends AidenLiveSettingsFields {
    * first (at most 5). Machine-local; never part of the portable config.
    */
   recentModels?: string[];
-  /** Benchmark score that sets Model Pad suggestion height; absent means "coding". */
-  modelPadMetric?: ModelBenchmarkMetric;
   exaEnabled?: boolean;
   /** Versioned Web Search routing/preferences; credentials stay main-owned. */
   webSearch?: WebSearchSettingsV2;

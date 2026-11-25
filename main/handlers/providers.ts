@@ -4,7 +4,8 @@ import { syncQuickChatSettings } from "../windows/quick-chat-window.js";
 import { createPendingLastWorkspaceTracker } from "../windows/quick-chat-window-core.js";
 import { customModelThinkingLevels } from "../../renderer/shared/custom-model-options.js";
 import { isCompactionEngine, parseCompactionModelOverrides } from "../../renderer/shared/compaction.js";
-import { parseModelPadPreferencesPatch } from "../../renderer/shared/model-pad-preferences.js";
+import { parseModelPreferencesPatch } from "../../renderer/shared/model-preferences.js";
+import { parseAgentSliderSettingsPatch } from "../../renderer/shared/agent-slider.js";
 // Provider configuration + API key IPC handlers. Thin — logic lives in services.
 
 import { ipcMain } from "../platform.js";
@@ -379,6 +380,15 @@ export function registerProviderHandlers(): void {
     }
     return configStore.setGeminiUsageScope(scopeValue);
   });
+  // The Agent Slider lives in the portable config.json, so it has its own
+  // call rather than straddling both stores inside settings:set.
+  ipcMain.handle("settings:setAgentSlider", async (_event, slider: unknown) =>
+    configStore.setAgentSlider(slider),
+  );
+  // The first-run seed: writes only when config.json holds no slider at all.
+  ipcMain.handle("settings:seedAgentSlider", async (_event, slider: unknown) =>
+    configStore.seedAgentSlider(slider),
+  );
   ipcMain.handle("settings:set", async (_event, patch: unknown) => {
     if (typeof patch !== "object" || patch === null) throw new Error("Invalid settings patch.");
     const p = patch as Record<string, unknown>;
@@ -393,6 +403,7 @@ export function registerProviderHandlers(): void {
     }
     if (typeof p.lastProviderId === "string") next.lastProviderId = p.lastProviderId;
     if (typeof p.lastModel === "string") next.lastModel = p.lastModel;
+    Object.assign(next, parseAgentSliderSettingsPatch(p));
     if (
       typeof p.lastWorkspaceId === "string" &&
       p.lastWorkspaceId.length <= 256 &&
@@ -491,7 +502,7 @@ export function registerProviderHandlers(): void {
       next.chatTitleProviderId = p.chatTitleProviderId;
     }
     if (p.appearance !== undefined) next.appearance = parseAppearanceConfig(p.appearance);
-    Object.assign(next, parseModelPadPreferencesPatch(p));
+    Object.assign(next, parseModelPreferencesPatch(p));
     const pendingWorkspaceToken =
       next.lastWorkspaceId !== undefined
         ? pendingLastWorkspace.beginWrite(next.lastWorkspaceId)

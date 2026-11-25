@@ -129,7 +129,9 @@ test("Aiden Live appears only where the host has it", () => {
 });
 
 test("accepts known settings deep links and rejects arbitrary search values", () => {
-  assert.equal(parseSettingsSection("modelData"), "modelData");
+  assert.equal(parseSettingsSection("agentSlider"), "agentSlider");
+  // The retired Model Pad section is no longer a destination.
+  assert.equal(parseSettingsSection("modelData"), undefined);
   assert.equal(parseSettingsSection("computerUse"), "computerUse");
   assert.equal(parseSettingsSection("scheduledTasks"), "scheduledTasks");
   assert.equal(parseSettingsSection("geminiLive"), "geminiLive");
@@ -138,9 +140,9 @@ test("accepts known settings deep links and rejects arbitrary search values", ()
   assert.equal(parseSettingsSection("memory"), "memory");
   assert.equal(parseSettingsSection("about"), "about");
   assert.equal(parseSettingsSection("unknown"), undefined);
-  assert.equal(parseSettingsSection(["modelData"]), undefined);
-  assert.deepEqual(parseSettingsSearch({ section: "modelData", ignored: "value" }), {
-    section: "modelData",
+  assert.equal(parseSettingsSection(["agentSlider"]), undefined);
+  assert.deepEqual(parseSettingsSearch({ section: "agentSlider", ignored: "value" }), {
+    section: "agentSlider",
   });
   assert.deepEqual(parseSettingsSearch({ section: "unknown" }), {});
 });

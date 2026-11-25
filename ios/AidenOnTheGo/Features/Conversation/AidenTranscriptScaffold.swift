@@ -7,11 +7,14 @@ import SwiftUI
 struct AidenTranscriptScaffold<Transcript: View>: View {
     private let dock: AidenChatDock
     private let transcript: Transcript
+    /// Off where a title capsule says the machine on its own status line.
+    private let showsMachineSubtitle: Bool
 
     @Environment(\.aidenConversationMachine) private var machine
 
-    init(dock: AidenChatDock, @ViewBuilder transcript: () -> Transcript) {
+    init(dock: AidenChatDock, showsMachineSubtitle: Bool = true, @ViewBuilder transcript: () -> Transcript) {
         self.dock = dock
+        self.showsMachineSubtitle = showsMachineSubtitle
         self.transcript = transcript()
     }
 
@@ -21,7 +24,7 @@ struct AidenTranscriptScaffold<Transcript: View>: View {
             .safeAreaBar(edge: .bottom, spacing: 0) { dock }
             // Always applied: wrapping it in an `if` would rebuild the transcript
             // when a second machine is paired. An empty subtitle draws nothing.
-            .navigationSubtitle(machine ?? "")
+            .navigationSubtitle(showsMachineSubtitle ? (machine ?? "") : "")
     }
 }
 

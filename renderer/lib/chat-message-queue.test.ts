@@ -843,3 +843,29 @@ test("only a run that has not started yet is waited for", async () => {
     assert.equal(attempts, 1);
   }
 });
+
+test("queued messages with grabbed browser elements allow empty text and cannot be steered", () => {
+  const queue = new ChatMessageQueue();
+  const element = {
+    version: 1 as const,
+    id: "el-q1",
+    label: "<NavBar />",
+    framework: "react" as const,
+    tagName: "nav",
+    selector: "header > nav",
+    htmlSnippet: "<nav></nav>",
+    boundingBox: { x: 0, y: 0, width: 400, height: 48 },
+    pageUrl: "http://localhost:3000/",
+    capturedAt: 1,
+  };
+  const item: QueuedChatMessage = {
+    id: "q-grab",
+    text: "",
+    attachments: [],
+    grabbedElements: [element],
+  };
+  queue.add(item);
+  assert.equal(queue.getSnapshot().messages.length, 1);
+  assert.equal(queue.getSnapshot().messages[0]?.grabbedElements?.[0]?.id, "el-q1");
+  assert.equal(canSteerQueuedMessage({ ...item, text: "Update nav" }), false);
+});
