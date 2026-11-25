@@ -1991,8 +1991,7 @@ final class AidenChatViewModel {
             // Custom, and the next send asks the Mac to keep it. A newer pick
             // made while this send was out wins.
             if keepsSelection, agentSlider != nil, request.saveSelection != true, !chat.isBotChat,
-               !hasUnsentModelPick, !isRemoved, let providerId = request.providerId, let modelId = request.modelId {
-                let sent = AidenChatModelSelection(providerId: providerId, modelId: modelId, thinkingLevel: request.thinkingLevel)
+               !hasUnsentModelPick, !isRemoved, let sent = lateGrantedPick(for: request) {
                 selectedProviderId = sent.providerId
                 selectedModelId = sent.modelId
                 selectedThinkingLevel = sent.thinkingLevel
@@ -2971,6 +2970,24 @@ final class AidenChatViewModel {
             }
             coordinator.haptics.play(.error, scope: hapticScope)
         }
+    }
+
+    /// The pick a send accepted after the late slider grant leaves the chat
+    /// on. Normally the provider, model and level the turn ran on. A send
+    /// built before `GET /models` answered names the chat's model with no
+    /// level only because the phone knew none, and the turn ran on the
+    /// model's own setting, which no stop names for a model with levels.
+    /// Holding that would put the chat in Custom and later save no level, so
+    /// such a send holds the stop the chip resolved to from the catalog, and
+    /// nothing in Custom.
+    private func lateGrantedPick(for request: AidenTurnStart) -> AidenChatModelSelection? {
+        guard let providerId = request.providerId, let modelId = request.modelId else { return nil }
+        let model = catalog?.providers.first { $0.id == providerId }?.models.first { $0.id == modelId }
+        if request.thinkingLevel != nil || (model != nil && model?.thinkingLevels?.isEmpty != false) {
+            return AidenChatModelSelection(providerId: providerId, modelId: modelId, thinkingLevel: request.thinkingLevel)
+        }
+        guard agentSliderState?.currentStop != nil else { return nil }
+        return turnModelSelection
     }
 
     /// Re-resolves the chat's selection when the slider comes or goes, for

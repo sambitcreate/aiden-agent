@@ -480,4 +480,29 @@ final class AidenAgentSliderTests: XCTestCase {
         XCTAssertNil(try resolved(level: nil, exact: true).thinkingLevel, "no saved level runs on the model's own setting")
         XCTAssertEqual(try resolved(level: nil, exact: false).thinkingLevel, "high", "the menu shows the model's default")
     }
+
+    /// A saved retry remembers it was a new chat's first send across a
+    /// relaunch: a fresh store over the same files reads the flag back, and a
+    /// send built without it reads back without it.
+    func testASavedRetryKeepsWhetherItAsksTheMacToKeepItsStopAcrossARelaunch() async throws {
+        let root = FileManager.default.temporaryDirectory.appending(path: "agent-slider-retry-\(UUID())")
+        defer { try? FileManager.default.removeItem(at: root) }
+        let request = AidenTurnRequestBuilder.make(
+            text: "Hello", providerId: "acme", modelId: "small", thinkingLevel: "medium",
+            attachments: [], skill: nil, saveSelection: false
+        )
+        for (chatId, keeps) in [("first-send", true), ("later-send", false)] {
+            let pending = AidenChatDraftStore.PendingSend(
+                deviceId: "phone", request: request, key: UUID(), createdAt: Date(), attachments: [], keepsSelection: keeps
+            )
+            let writer = AidenChatDraftStore(root: root)
+            try await writer.savePendingSend(pending, session: await writer.beginSession(instanceId: "mac", chatId: chatId))
+            let relaunched = AidenChatDraftStore(root: root)
+            let restored = try await relaunched.loadPendingSend(
+                session: await relaunched.beginSession(instanceId: "mac", chatId: chatId), deviceId: "phone"
+            )
+            XCTAssertEqual(restored?.keepsSelection, keeps, chatId)
+            XCTAssertEqual(restored?.request, request, chatId)
+        }
+    }
 }
