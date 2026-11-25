@@ -1,4 +1,5 @@
 #if DEBUG
+import SwiftUI
 import XCTest
 @testable import AidenOnTheGo
 
@@ -1813,6 +1814,225 @@ final class AidenAppShellTests: XCTestCase {
         }
         XCTAssertNil(AidenBotsAvailability.available(canWrite: true).tabExplanation)
         XCTAssertNil(AidenBotsAvailability.available(canWrite: false).tabExplanation)
+    }
+
+    // MARK: Workspace Settings
+
+    private func siteWorkspace(name: String = "Site", revision: String = "r1") -> AidenWorkspace {
+        AidenWorkspace(
+            id: "ws_site",
+            name: name,
+            permission: .full,
+            hasFolder: true,
+            isManagedWorktree: false,
+            branchName: nil,
+            repositoryName: nil,
+            git: nil,
+            createdAt: Date(timeIntervalSince1970: 0),
+            updatedAt: Date(timeIntervalSince1970: 0),
+            revision: revision
+        )
+    }
+
+    private let siteOwner = AidenRemoteRequestContext(
+        instanceId: "studio", deviceId: "demo-device", generation: 1, scope: .owner
+    )
+
+    /// A fold, or a rename on the computer, rebuilds the workspace page. The
+    /// rebuilt page reads the shell's sheet afresh, and the computer describes
+    /// the workspace again; neither closes the sheet or drops the edits.
+    func testWorkspaceSettingsKeepTheirEditsThroughARebuildAndANewRevision() throws {
+        let sheet = AidenWorkspaceSettingsSheet()
+        let workspace = siteWorkspace()
+        sheet.present(workspace, id: id("ws_site"), context: siteOwner)
+        let draft = try XCTUnwrap(sheet.draft)
+        draft.name = "Site v2"
+        draft.permission = .ask
+
+        // The rebuilt page: the same workspace, on the same machine, and its
+        // menu's Settings tapped again.
+        sheet.follow(AidenWorkspaceSettingsSource(workspace: workspace, owner: siteOwner))
+        sheet.present(workspace, id: id("ws_site"), context: siteOwner)
+        XCTAssertTrue(sheet.draft === draft, "The sheet that was open is still the one open")
+        XCTAssertEqual(draft.name, "Site v2")
+        XCTAssertEqual(draft.permission, .ask)
+
+        // Memory turned off on the computer: a field left alone follows it.
+        var changed = siteWorkspace(revision: "r2")
+        changed.memoryEnabled = false
+        sheet.follow(AidenWorkspaceSettingsSource(workspace: changed, owner: siteOwner))
+        XCTAssertTrue(sheet.draft === draft)
+        XCTAssertEqual(draft.name, "Site v2")
+        XCTAssertEqual(draft.permission, .ask)
+        XCTAssertFalse(draft.memoryEnabled)
+        XCTAssertEqual(draft.workspace.revision, "r2")
+        XCTAssertNil(draft.changes.memoryEnabled, "Save leaves a field the person didn't touch as it is there")
+        XCTAssertEqual(draft.changes.permission, .ask)
+    }
+
+    func testARenameOnTheComputerKeepsAnEditedNameAndShowsTheirs() throws {
+        let sheet = AidenWorkspaceSettingsSheet()
+        sheet.present(siteWorkspace(), id: id("ws_site"), context: siteOwner)
+        let draft = try XCTUnwrap(sheet.draft)
+        draft.name = "Marketing site"
+
+        sheet.follow(AidenWorkspaceSettingsSource(workspace: siteWorkspace(name: "Website", revision: "r2"), owner: siteOwner))
+
+        XCTAssertEqual(draft.name, "Marketing site", "The person's name stays in the field")
+        XCTAssertEqual(draft.workspace.name, "Website")
+        XCTAssertEqual(draft.nameOnComputer, "Website", "The computer's name is shown beside it")
+        XCTAssertEqual(draft.changes.name, "Marketing site", "Save sends theirs over the computer's")
+        XCTAssertTrue(draft.canSave)
+
+        // Typing the computer's name settles it.
+        draft.name = "Website"
+        XCTAssertNil(draft.nameOnComputer)
+        XCTAssertFalse(draft.canSave)
+    }
+
+    func testARenameOnTheComputerFillsAnUneditedName() throws {
+        let sheet = AidenWorkspaceSettingsSheet()
+        sheet.present(siteWorkspace(), id: id("ws_site"), context: siteOwner)
+        let draft = try XCTUnwrap(sheet.draft)
+
+        sheet.follow(AidenWorkspaceSettingsSource(workspace: siteWorkspace(name: "Website", revision: "r2"), owner: siteOwner))
+
+        XCTAssertEqual(draft.name, "Website")
+        XCTAssertNil(draft.nameOnComputer)
+        XCTAssertFalse(draft.canSave, "Nothing of the person's to save")
+    }
+
+    func testWorkspaceSettingsCloseWhenTheirWorkspaceOrMachineGoes() {
+        let sheet = AidenWorkspaceSettingsSheet()
+        let workspace = siteWorkspace()
+        let cases: [(String, AidenWorkspaceSettingsSource)] = [
+            ("removed or archived", AidenWorkspaceSettingsSource(workspace: nil, owner: siteOwner)),
+            ("unpaired", AidenWorkspaceSettingsSource(workspace: workspace, owner: nil)),
+            ("paired again", AidenWorkspaceSettingsSource(
+                workspace: workspace,
+                owner: AidenRemoteRequestContext(instanceId: "studio", deviceId: "new-device", generation: 2, scope: .owner)
+            )),
+        ]
+        for (what, source) in cases {
+            sheet.present(workspace, id: id("ws_site"), context: siteOwner)
+            sheet.draft?.name = "Edited"
+            sheet.follow(source)
+            XCTAssertNil(sheet.draft, what)
+        }
+
+        sheet.present(workspace, id: id("ws_site"), context: siteOwner)
+        sheet.defaultMachineChanged(from: "laptop")
+        XCTAssertNotNil(sheet.draft, "Another machine stopping being the default leaves it open")
+        sheet.defaultMachineChanged(from: "studio")
+        XCTAssertNil(sheet.draft, "Its own machine stopping being the default closes it, as its Git page follows the default")
+    }
+
+    func testOnlyARouteThatHoldsTheWorkspaceKeepsItsSettings() {
+        let navigation = besideList()
+        navigation.open(.workspace(id("ws_site")))
+        XCTAssertTrue(navigation.holdsWorkspace(id("ws_site")))
+
+        navigation.besideList = false
+        XCTAssertTrue(navigation.holdsWorkspace(id("ws_site")), "Folding hands the page to the stack")
+        navigation.besideList = true
+        XCTAssertTrue(navigation.holdsWorkspace(id("ws_site")), "Unfolding hands it back to the list")
+
+        navigation.leave(.workspace(id("ws_site")))
+        XCTAssertFalse(navigation.holdsWorkspace(id("ws_site")))
+    }
+
+    /// The real presentation over a container that swaps between a split and
+    /// a stack, as the shell's does when an iPhone Duo opens or closes.
+    func testTheSettingsSheetAndItsEditsOutliveTheSplitAndStackSwap() async throws {
+        let coordinator = AidenRemoteCoordinator()
+        let sheet = AidenWorkspaceSettingsSheet()
+        let fold = SettingsFold(source: AidenWorkspaceSettingsSource(workspace: siteWorkspace(), owner: siteOwner))
+        let window = try await show(SettingsFoldingShell(fold: fold, sheet: sheet, coordinator: coordinator))
+        defer { window.isHidden = true; window.rootViewController = nil }
+
+        sheet.present(siteWorkspace(), id: id("ws_site"), context: siteOwner)
+        try await waitUntil("the sheet shows its name") { textField(showing: "Site", in: window) != nil }
+        let shown = window.rootViewController?.presentedViewController
+        let presented = try XCTUnwrap(shown)
+        sheet.draft?.name = "Site v2"
+        try await waitUntil("the field shows the edit") { textField(showing: "Site v2", in: window) != nil }
+
+        for besideList in [true, false] {
+            fold.besideList = besideList
+            try await Task.sleep(for: .milliseconds(300))
+            XCTAssertTrue(window.rootViewController?.presentedViewController === presented, "besideList \(besideList)")
+            XCTAssertNotNil(textField(showing: "Site v2", in: window), "besideList \(besideList)")
+        }
+
+        fold.source = AidenWorkspaceSettingsSource(workspace: siteWorkspace(revision: "r2"), owner: siteOwner)
+        try await Task.sleep(for: .milliseconds(300))
+        XCTAssertTrue(window.rootViewController?.presentedViewController === presented, "A new revision leaves it open")
+        XCTAssertEqual(sheet.draft?.workspace.revision, "r2")
+        XCTAssertNotNil(textField(showing: "Site v2", in: window))
+
+        fold.source = AidenWorkspaceSettingsSource(workspace: nil, owner: siteOwner)
+        try await waitUntil("a removed workspace closes the sheet") {
+            sheet.draft == nil && window.rootViewController?.presentedViewController == nil
+        }
+    }
+
+    private func textField(showing text: String, in window: UIWindow) -> UITextField? {
+        func walk(_ view: UIView) -> UITextField? {
+            if let field = view as? UITextField, field.text == text { return field }
+            for subview in view.subviews {
+                if let found = walk(subview) { return found }
+            }
+            return nil
+        }
+        return walk(window)
+    }
+
+    private func show(_ view: some View) async throws -> UIWindow {
+        func connectedScene() -> UIWindowScene? {
+            UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first
+        }
+        try await waitUntil("a scene connects") { connectedScene() != nil }
+        let scene = connectedScene()
+        let window = UIWindow(windowScene: try XCTUnwrap(scene))
+        window.frame = CGRect(x: 0, y: 0, width: 390, height: 800)
+        window.rootViewController = UIHostingController(rootView: view.environment(AidenHapticCenter()))
+        window.makeKeyAndVisible()
+        return window
+    }
+}
+
+@MainActor
+@Observable
+private final class SettingsFold {
+    var besideList = false
+    var source: AidenWorkspaceSettingsSource
+
+    init(source: AidenWorkspaceSettingsSource) {
+        self.source = source
+    }
+}
+
+/// The shell's shape: a container rebuilt on each fold, and the sheet above it.
+private struct SettingsFoldingShell: View {
+    let fold: SettingsFold
+    let sheet: AidenWorkspaceSettingsSheet
+    let coordinator: AidenRemoteCoordinator
+
+    var body: some View {
+        Group {
+            if fold.besideList {
+                NavigationSplitView { Text("Workspaces") } detail: { Text("Site") }
+            } else {
+                NavigationStack { Text("Site") }
+            }
+        }
+        .id(fold.besideList)
+        .aidenWorkspaceSettingsPresentation(
+            sheet,
+            coordinator: coordinator,
+            source: { _ in fold.source },
+            onRemoved: { _ in }
+        )
     }
 }
 #endif

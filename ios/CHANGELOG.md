@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- **2026-11-24 — Workspace Settings stay open.** Folding or unfolding an iPhone Duo, or resizing an iPad window, with Workspace Settings open keeps the sheet and your unsaved edits. A rename on your computer no longer closes it: a name you haven't touched takes the new name, and a name you changed stays, with the computer's name shown below until you save or cancel. If the workspace is removed or archived, the sheet closes. No Remote wire or revision change.
+
 - **2026-11-22 — Pairing feedback and QR framing.** Add Computer scans for QR codes inside the visible viewfinder. Manual pairing shows what to correct below the address or setup code field. Search keeps Add Computer available until a computer is paired.
 
 - **2026-11-22 — No "Sending…" in Bot chats.** A message you send to a Bot looks sent from the moment you press Send and never gains a "Sending…" caption, however long the Mac takes to take it. The status line ("Getting ready", then "Thinking" once the model starts) shows the wait; Queued and "Couldn’t send · Try again" are unchanged. Paired Macs on the next Aiden release also start a Bot's reply much sooner, because a turn no longer re-reads every provider, connector and skill a dozen times before asking the model. No Remote wire or revision change.

@@ -3,47 +3,31 @@ import SwiftUI
 struct AidenWorkspaceSettingsView: View {
     @Environment(\.dismiss) private var dismiss
     @Bindable var coordinator: AidenRemoteCoordinator
-    let workspace: AidenWorkspace
-    /// The machine this sheet saves on, fixed when it opened
-    /// (`AidenRemoteCoordinator.updateWorkspaceOutcome(_:on:)`).
-    let context: AidenRemoteRequestContext
+    /// The unsaved edits and the workspace they edit, held by the shell
+    /// (`AidenWorkspaceSettingsSheet`) so a fold or a rename on the computer
+    /// keeps them.
+    @Bindable var draft: AidenWorkspaceSettingsDraft
     let onRemoved: () -> Void
 
-    @State private var name: String
-    @State private var permission: AidenWorkspacePermission
-    @State private var memoryEnabled: Bool
     @State private var isConfirmingRemoval = false
     @State private var hapticScope = UUID()
 
-    init(
-        coordinator: AidenRemoteCoordinator,
-        workspace: AidenWorkspace,
-        context: AidenRemoteRequestContext,
-        onRemoved: @escaping () -> Void
-    ) {
-        self.coordinator = coordinator
-        self.workspace = workspace
-        self.context = context
-        self.onRemoved = onRemoved
-        _name = State(initialValue: workspace.name)
-        _permission = State(initialValue: workspace.permission)
-        _memoryEnabled = State(initialValue: workspace.memoryEnabled)
-    }
+    /// The workspace as the computer last described it.
+    private var workspace: AidenWorkspace { draft.workspace }
+    /// The machine this sheet saves on, fixed when it opened
+    /// (`AidenRemoteCoordinator.updateWorkspaceOutcome(_:on:)`).
+    private var context: AidenRemoteRequestContext { draft.context }
 
     /// The workspaces on this sheet's machine, which Remove keeps at least one of.
     private var machineWorkspaceCount: Int {
         coordinator.hosts.connection(for: context.instanceId)?.workspaces.count ?? 0
     }
 
-    private var hasChanges: Bool {
-        name.trimmingCharacters(in: .whitespacesAndNewlines) != workspace.name || permission != workspace.permission || memoryEnabled != workspace.memoryEnabled
-    }
-
     var body: some View {
         NavigationStack {
             Form {
                 Section {
-                    TextField("Name", text: $name)
+                    TextField("Name", text: $draft.name)
                     LabeledContent("Folder", value: workspace.hasFolder ? "Connected" : "None")
                     LabeledContent("Managed worktree", value: workspace.isManagedWorktree ? "Yes" : "No")
                     if let repository = workspace.repositoryName {
@@ -52,11 +36,16 @@ struct AidenWorkspaceSettingsView: View {
                 } header: {
                     Text("Workspace")
                 } footer: {
-                    Text("Renaming updates Aiden Agent and paired clients. It does not rename the folder on disk.")
+                    VStack(alignment: .leading, spacing: 6) {
+                        if let nameOnComputer = draft.nameOnComputer {
+                            Text("Renamed “\(nameOnComputer)” on your computer. Save to use the name above instead.")
+                        }
+                        Text("Renaming updates Aiden Agent and paired clients. It does not rename the folder on disk.")
+                    }
                 }
 
                 Section {
-                    Picker("Permission", selection: $permission) {
+                    Picker("Permission", selection: $draft.permission) {
                         ForEach(AidenWorkspacePermission.allCases, id: \.self) { permission in
                             Text(permission.title).tag(permission)
                         }
@@ -64,11 +53,11 @@ struct AidenWorkspaceSettingsView: View {
                 } header: {
                     Text("Permission")
                 } footer: {
-                    Text("\(permission.detail) This setting overrides the app default for this workspace.")
+                    Text("\(draft.permission.detail) This setting overrides the app default for this workspace.")
                 }
 
                 Section {
-                    Toggle("Use memory", isOn: $memoryEnabled)
+                    Toggle("Use memory", isOn: $draft.memoryEnabled)
                         .aidenSwitchStyle()
                 } header: {
                     Text("Memory")
@@ -119,13 +108,16 @@ struct AidenWorkspaceSettingsView: View {
                 }
                 ToolbarItem(placement: .confirmationAction) {
                     Button("Save") {
-                        let trimmedName = name.trimmingCharacters(in: .whitespacesAndNewlines)
+                        // Against the workspace as the computer last described
+                        // it, so a field the person left alone stays as it is there.
+                        let workspace = self.workspace
+                        let changes = draft.changes
                         Task {
                             let outcome = await coordinator.updateWorkspaceOutcome(
                                 workspace,
-                                name: trimmedName == workspace.name ? nil : trimmedName,
-                                permission: permission == workspace.permission ? nil : permission,
-                                memoryEnabled: memoryEnabled == workspace.memoryEnabled ? nil : memoryEnabled,
+                                name: changes.name,
+                                permission: changes.permission,
+                                memoryEnabled: changes.memoryEnabled,
                                 on: context
                             )
                             if case .success = outcome {
@@ -140,8 +132,7 @@ struct AidenWorkspaceSettingsView: View {
                             }
                         }
                     }
-                    .disabled(!hasChanges || name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-                        || coordinator.isMutating || !coordinator.holds(context))
+                    .disabled(!draft.canSave || coordinator.isMutating || !coordinator.holds(context))
                 }
             }
             .confirmationDialog(
@@ -150,6 +141,7 @@ struct AidenWorkspaceSettingsView: View {
                 titleVisibility: .visible
             ) {
                 Button(workspace.isManagedWorktree ? "Delete Managed Worktree" : "Remove from Aiden Agent", role: .destructive) {
+                    let workspace = self.workspace
                     Task {
                         let outcome = await coordinator.removeWorkspaceOutcome(workspace, on: context)
                         if case .success = outcome {
@@ -186,6 +178,171 @@ struct AidenWorkspaceSettingsView: View {
         }
         .onAppear { coordinator.haptics.activate(scope: hapticScope) }
         .onDisappear { coordinator.haptics.deactivate(scope: hapticScope) }
+    }
+}
+
+/// An open Workspace Settings sheet's unsaved edits, and the workspace they
+/// edit as the computer last described it.
+@MainActor
+@Observable
+final class AidenWorkspaceSettingsDraft: Identifiable {
+    /// The workspace, on its own machine.
+    let id: AidenHostObjectID
+    /// The machine the sheet saves on, fixed when it opened.
+    let context: AidenRemoteRequestContext
+    var name: String
+    var permission: AidenWorkspacePermission
+    var memoryEnabled: Bool
+    /// The workspace as the computer last described it: what Save compares
+    /// against and what the rest of the sheet shows.
+    private(set) var workspace: AidenWorkspace
+    /// The computer renamed the workspace while this sheet's name was edited.
+    private var renamedOnComputer = false
+
+    init(workspace: AidenWorkspace, id: AidenHostObjectID, context: AidenRemoteRequestContext) {
+        self.id = id
+        self.context = context
+        self.workspace = workspace
+        name = workspace.name
+        permission = workspace.permission
+        memoryEnabled = workspace.memoryEnabled
+    }
+
+    var trimmedName: String { name.trimmingCharacters(in: .whitespacesAndNewlines) }
+
+    /// What Save sends: each field the person changed, and nil for the rest.
+    var changes: (name: String?, permission: AidenWorkspacePermission?, memoryEnabled: Bool?) {
+        (
+            trimmedName == workspace.name ? nil : trimmedName,
+            permission == workspace.permission ? nil : permission,
+            memoryEnabled == workspace.memoryEnabled ? nil : memoryEnabled
+        )
+    }
+
+    var canSave: Bool {
+        let changes = changes
+        return !trimmedName.isEmpty && (changes.name != nil || changes.permission != nil || changes.memoryEnabled != nil)
+    }
+
+    /// The name the computer gave the workspace while the person was editing
+    /// theirs. Neither is dropped: the field keeps theirs, and this shows the
+    /// computer's until they save, cancel or type the same.
+    var nameOnComputer: String? {
+        renamedOnComputer && trimmedName != workspace.name ? workspace.name : nil
+    }
+
+    /// The computer described the workspace again (a rename, or any change
+    /// that moves its revision). Fields the person hasn't touched follow it;
+    /// edited ones stay as they typed them.
+    func follow(_ latest: AidenWorkspace) {
+        guard latest != workspace else { return }
+        if trimmedName == workspace.name {
+            name = latest.name
+        } else if latest.name != workspace.name {
+            renamedOnComputer = true
+        }
+        if permission == workspace.permission { permission = latest.permission }
+        if memoryEnabled == workspace.memoryEnabled { memoryEnabled = latest.memoryEnabled }
+        workspace = latest
+    }
+}
+
+/// The Workspace Settings sheet, held by the shell above the split/stack
+/// switch. Opening or closing an iPhone Duo, or a rename on the computer,
+/// rebuilds the workspace page, and the sheet and its edits outlive both.
+@MainActor
+@Observable
+final class AidenWorkspaceSettingsSheet {
+    private(set) var draft: AidenWorkspaceSettingsDraft?
+
+    /// Opens the sheet on a workspace. The one already open on it keeps its edits.
+    func present(_ workspace: AidenWorkspace, id: AidenHostObjectID, context: AidenRemoteRequestContext) {
+        if let draft, draft.id == id, draft.context == context { return }
+        draft = AidenWorkspaceSettingsDraft(workspace: workspace, id: id, context: context)
+    }
+
+    func close() {
+        draft = nil
+    }
+
+    /// What the open sheet's workspace and machine are now. A workspace that
+    /// was removed or archived, or a machine paired again or gone, closes it
+    /// rather than save somewhere else.
+    func follow(_ source: AidenWorkspaceSettingsSource) {
+        guard let draft else { return }
+        guard let latest = source.workspace, latest.id == draft.id.objectId, source.owner == draft.context else {
+            close()
+            return
+        }
+        draft.follow(latest)
+    }
+
+    /// The default machine changed. A sheet open on the old one closes, as
+    /// its Git page follows the default.
+    func defaultMachineChanged(from oldDefault: String?) {
+        if let draft, draft.context.instanceId == oldDefault { close() }
+    }
+}
+
+/// An open Workspace Settings sheet's workspace and machine as they are now,
+/// with nil for either once it's gone.
+struct AidenWorkspaceSettingsSource: Equatable {
+    var workspace: AidenWorkspace?
+    var owner: AidenRemoteRequestContext?
+
+    @MainActor
+    static func current(for id: AidenHostObjectID, on coordinator: AidenRemoteCoordinator) -> Self {
+        AidenWorkspaceSettingsSource(
+            workspace: AidenWorkspaceRoute.workspace(for: id, coordinator: coordinator),
+            owner: try? coordinator.hosts.connection(for: id.instanceId)?.requestContext(scope: .owner)
+        )
+    }
+}
+
+extension EnvironmentValues {
+    /// The shell's Workspace Settings sheet, which a workspace page opens.
+    @Entry var aidenWorkspaceSettings: AidenWorkspaceSettingsSheet?
+}
+
+extension View {
+    /// Presents the shell's Workspace Settings sheet. Applied above the
+    /// split/stack switch (`.id(navigation.besideList)`), so neither that nor
+    /// a workspace page's rebuild closes it.
+    func aidenWorkspaceSettingsPresentation(
+        _ sheet: AidenWorkspaceSettingsSheet,
+        coordinator: AidenRemoteCoordinator,
+        source: @escaping @MainActor (AidenHostObjectID) -> AidenWorkspaceSettingsSource,
+        onRemoved: @escaping @MainActor (AidenHostObjectID) -> Void
+    ) -> some View {
+        modifier(AidenWorkspaceSettingsPresentation(
+            sheet: sheet,
+            coordinator: coordinator,
+            source: source,
+            onRemoved: onRemoved
+        ))
+    }
+}
+
+private struct AidenWorkspaceSettingsPresentation: ViewModifier {
+    let sheet: AidenWorkspaceSettingsSheet
+    let coordinator: AidenRemoteCoordinator
+    let source: @MainActor (AidenHostObjectID) -> AidenWorkspaceSettingsSource
+    let onRemoved: @MainActor (AidenHostObjectID) -> Void
+
+    func body(content: Content) -> some View {
+        content
+            .sheet(item: Binding(get: { sheet.draft }, set: { if $0 == nil { sheet.close() } })) { draft in
+                AidenWorkspaceSettingsView(coordinator: coordinator, draft: draft) {
+                    sheet.close()
+                    onRemoved(draft.id)
+                }
+            }
+            .onChange(of: sheet.draft.map { source($0.id) }) { _, latest in
+                if let latest { sheet.follow(latest) }
+            }
+            .onChange(of: coordinator.defaultInstanceId) { old, _ in
+                sheet.defaultMachineChanged(from: old)
+            }
     }
 }
 
