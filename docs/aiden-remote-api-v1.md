@@ -1535,7 +1535,7 @@ Revision 68 is provisional: it was written when `main` was at 65 and revisions 6
 
 ## Plain-words command approvals, revision 69 (`approval:plain-words`)
 
-Revision 69 was claimed at merge on 2026-11-25, after 66, 67 and 69 (`bot:needs-you`) merged. The host keeps it in one constant (`AIDEN_REMOTE_APPROVAL_PLAIN_WORDS_CONTRACT_REVISION`).
+Revision 69 was claimed at merge on 2026-11-25, after 66, 67 and 68 (`bot:needs-you`) merged. The host keeps it in one constant (`AIDEN_REMOTE_APPROVAL_PLAIN_WORDS_CONTRACT_REVISION`).
 
 **What it is.** `run_command` now requires a `description`: one plain-language sentence, written by the model in the same tool call, saying what the command will do. The approval card opens on that sentence (`explanation`) and keeps the exact command in `body`, one flip away. Beside it the host adds its own `tags`, read from the command text by `renderer/shared/command-reading.ts` without any model: risky steps (`tone: "risk"`: can't read all of the command, runs a script from the internet, deletes files, needs admin rights, uses files outside this project, uses the internet, stops programs, shuts down or restarts the computer) first, then calm ones (`tone: "calm"`: makes a folder, creates, edits or writes a named file, moves, copies, changes permissions, runs a named script). The explanation is display text only: remembered rules still match the exact command, and the tags let the person spot words that don't match what the command does.
 
