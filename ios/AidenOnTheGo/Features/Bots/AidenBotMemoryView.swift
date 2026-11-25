@@ -103,13 +103,18 @@ final class AidenBotMemoryModel {
     var errorMessage: String?
 
     @ObservationIgnored private var retainedEdit: (edit: AidenBotMemoryEdit, key: UUID)?
-    /// The edit going to the Mac now; the next one waits for it.
-    @ObservationIgnored private var lane: Task<Void, Never>?
+    /// The newest edit; the next one waits for it. A sending edit holds the
+    /// model, so the model only goes away between edits.
+    @ObservationIgnored private var lane: Task<String?, Never>?
 
     init(botID: String, botName: String, transport: any AidenBotMemoryTransport) {
         self.botID = botID
         self.botName = botName
         self.transport = transport
+    }
+
+    isolated deinit {
+        lane?.cancel()
     }
 
     func rename(_ name: String) { botName = name }
@@ -181,11 +186,11 @@ final class AidenBotMemoryModel {
         defer { editsInFlight -= 1 }
         let previous = lane
         let job = Task { @MainActor [weak self] () -> String? in
-            await previous?.value
-            guard let self else { return AidenBotMemoryCopy.notSaved }
+            _ = await previous?.value
+            guard let self, !Task.isCancelled else { return AidenBotMemoryCopy.notSaved }
             return await self.send(edit, restoring: before)
         }
-        lane = Task { _ = await job.value }
+        lane = job
         return await job.value
     }
 
