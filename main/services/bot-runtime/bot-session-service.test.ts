@@ -1667,3 +1667,27 @@ test("metadata commits dedupe concurrent issue effects and cannot append after d
     await assert.rejects(service.appendEntry("bot:a", kind, data), /no longer exists/u);
   } finally { await service.shutdown(); }
 });
+
+test("shutdown interrupts in-flight awaitReply for Resume and rejects late appendEntry commits", async () => {
+  const fauxModels = createFauxModels([slowAnswer()], { tokensPerSecond: 40 });
+  const service = await serviceFor(tempProfile(), fauxModels);
+  try {
+    const sent = await service.send("bot:a", { text: "Long work", requestId: "req-shutdown-race" });
+    await waitFor(
+      async () => (await service.state("bot:a")).kind === "running" && fauxModels.calls() === 1,
+      { what: "turn start" },
+    );
+    const replyPromise = service.awaitReply("bot:a", sent.submissionId, new AbortController().signal);
+    // Let awaitReply attach to submission.wait before host shutdown begins.
+    await new Promise((resolve) => setTimeout(resolve, 40));
+    await service.shutdown();
+    const outcome = await replyPromise;
+    assert.deepEqual(outcome, { kind: "interrupted" });
+    await assert.rejects(
+      service.appendEntry("bot:a", BOT_ISSUE_STATUS_ENTRY_KIND, { effectId: "after-shutdown" }),
+      /shut down|shutting down|closed/u,
+    );
+  } finally {
+    await service.shutdown();
+  }
+});

@@ -1,5 +1,5 @@
 import * as React from "react";
-import { useQueries } from "@tanstack/react-query";
+import { skipToken, useQueries, useQuery } from "@tanstack/react-query";
 import type { BotTranscriptEntry } from "../../shared/bot-live";
 import { MAX_INLINE_IMAGE_BYTES } from "../../shared/attachment-contract";
 import type { PeerAttachmentContent } from "../../shared/peer-operation";
@@ -7,6 +7,7 @@ import { peerHostsApi } from "../ipc";
 import { bytesToBase64 } from "../live-pcm-capture";
 import type { Attachment, ChatMessage } from "../types";
 import type { HostChatAdapter, HostChatError, HostChatResult } from "./host-chat-adapter";
+import type { RemoteBotPhotoAsset } from "./remote-bot-photo-asset";
 
 export type { PeerAttachmentContent };
 
@@ -268,4 +269,35 @@ export function useRemoteBotImages(
     () => (entries ? withRemoteBotImages(entries, loaded, gone) : entries),
     [entries, loaded, gone],
   );
+}
+
+/**
+ * A paired host's Bot's photo, as a data URL once read, read once per asset
+ * revision (a new photo has a new revision). Undefined while reading, and for
+ * good when the host can't hand it over: the avatar's shape stays.
+ */
+export function useRemoteBotPhoto(
+  hostId: string,
+  botId: string,
+  asset: RemoteBotPhotoAsset | undefined,
+  enabled = true,
+): string | undefined {
+  const query = useQuery({
+    queryKey: ["host", hostId, "bot", botId, "photo", asset?.assetRevision ?? "", asset?.byteSize ?? 0],
+    queryFn: asset
+      ? () =>
+          limited(hostId, async () => {
+            const result = await peerHostsApi.call(hostId, { operation: "botAvatar", resourceId: botId, itemId: asset.assetRevision });
+            if (!result.ok) throw imageGone(result.error) ? new RemoteImageGone(result.error.message) : new Error(result.error.message);
+            const data = acceptRemoteImage({ mimeType: "image/png", size: asset.byteSize }, peerAttachmentContent(result.value));
+            if (data === null) throw new RemoteImageGone("The other computer sent a different photo.");
+            return `data:image/png;base64,${data}`;
+          })
+      : skipToken,
+    enabled,
+    retry: (failures: number, error: Error) => !(error instanceof RemoteImageGone) && failures < 2,
+    // A revision's bytes never change.
+    staleTime: Infinity,
+  });
+  return asset ? query.data : undefined;
 }
