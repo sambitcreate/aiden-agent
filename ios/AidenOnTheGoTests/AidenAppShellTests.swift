@@ -1755,7 +1755,7 @@ final class AidenAppShellTests: XCTestCase {
         _ coordinator: AidenRemoteCoordinator,
         created: @escaping @MainActor (AidenChat, AidenHostObjectID) -> Void = { _, _ in }
     ) -> AidenNewWorkChatFlow {
-        AidenNewWorkChatFlow(coordinator: coordinator, onCreated: created)
+        AidenNewWorkChatFlow(coordinator: coordinator) { chat, id, _ in created(chat, id) }
     }
 
     private func workspace(_ id: String, in coordinator: AidenRemoteCoordinator) throws -> AidenWorkspace {

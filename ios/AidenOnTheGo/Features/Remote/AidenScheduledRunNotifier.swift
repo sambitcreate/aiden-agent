@@ -1,4 +1,5 @@
 import Foundation
+import Observation
 import UIKit
 import UserNotifications
 
@@ -270,6 +271,198 @@ protocol AidenBotRoutineNotificationTransport: Sendable {
 
 extension AidenRemoteClient: AidenBotRoutineNotificationTransport {}
 
+/// The recent routine feed per machine, shared by the notifier and Home's
+/// "From your Bots" card so a refresh asks each machine once. Recording never
+/// touches the notifier's cursor or delivered ids: Home reading a run never
+/// stops its banner.
+@MainActor
+@Observable
+final class AidenBotRoutineFeedReader {
+    static let shared = AidenBotRoutineFeedReader()
+
+    /// The newest items kept per machine.
+    static let windowSize = 20
+    /// A window younger than this answers Home without asking the machine.
+    static let freshness: Duration = .seconds(60)
+
+    struct Window: Equatable, Sendable {
+        var notifications: [AidenBotRoutineNotification]
+        var recordedAt: ContinuousClock.Instant
+        /// The grants the items were read under. A pairing that later sees
+        /// less starts the window over rather than keep what it can't see.
+        var grants: Set<AidenRemoteCapability>
+        /// The machine's own clock at the reader's last full read, so the next
+        /// read asks only for what's newer. Nil until the reader has read the
+        /// whole window itself (the notifier's pages start from its own cursor).
+        var cursor: String?
+    }
+
+    enum Outcome: Equatable, Sendable {
+        /// The window answers: read just now, fresh, or read by a fetch
+        /// already on its way.
+        case read
+        /// Not asked: the pairing can't read Bots and chats, or the machine
+        /// stopped being current.
+        case skipped
+        /// The machine didn't answer.
+        case failed
+    }
+
+    private(set) var windows: [String: Window] = [:]
+    @ObservationIgnored private var generations: [String: Int] = [:]
+    /// Machines with a feed read on its way, and who waits for it.
+    @ObservationIgnored private var inFlight: [String: [UUID: CheckedContinuation<Void, Never>]] = [:]
+    @ObservationIgnored private let clock = ContinuousClock()
+
+    init() {}
+
+    /// What the machine's window holds that `grants` still allow, newest first.
+    /// Nothing at all once the pairing can't read Bots and chats.
+    func notifications(for instanceId: String, grants: Set<AidenRemoteCapability>) -> [AidenBotRoutineNotification] {
+        guard Self.readGrants.isSubset(of: grants) else { return [] }
+        return notifications(for: instanceId).filter { Self.isVisible($0, grants: grants) }
+    }
+
+    func notifications(for instanceId: String) -> [AidenBotRoutineNotification] {
+        windows[instanceId]?.notifications ?? []
+    }
+
+    /// Merges a fetched page into the machine's window, newest first. `grants`
+    /// are the ones the page was read under; `cursor` is set only by a read
+    /// that covers the whole window.
+    func record(
+        _ notifications: [AidenBotRoutineNotification],
+        instanceId: String,
+        grants: Set<AidenRemoteCapability>,
+        cursor: String? = nil
+    ) {
+        var kept = windows[instanceId]
+        if let window = kept, !window.grants.isSubset(of: grants) { kept = nil }
+        var byId: [String: AidenBotRoutineNotification] = [:]
+        for item in (kept?.notifications ?? []) + notifications { byId[item.id] = item }
+        let merged = byId.values.sorted {
+            $0.finishedAt.date != $1.finishedAt.date ? $0.finishedAt.date > $1.finishedAt.date : $0.id < $1.id
+        }
+        windows[instanceId] = Window(
+            notifications: Array(merged.prefix(Self.windowSize)),
+            recordedAt: clock.now,
+            grants: kept.map { $0.grants.intersection(grants) } ?? grants,
+            cursor: cursor ?? kept?.cursor
+        )
+    }
+
+    /// Forgets a machine that was unpaired, revoked or switched away from, and
+    /// fences any fetch still in flight for it.
+    func forget(instanceId: String) {
+        windows[instanceId] = nil
+        generations[instanceId, default: 0] &+= 1
+    }
+
+    /// True once the reader itself has read the machine's whole window. The
+    /// notifier's pages start from its own cursor, so they add rows but never
+    /// count as Home's read.
+    func hasFullRead(_ instanceId: String) -> Bool { windows[instanceId]?.cursor != nil }
+
+    func isFresh(_ instanceId: String) -> Bool {
+        guard let window = windows[instanceId], window.cursor != nil else { return false }
+        return window.recordedAt.duration(to: clock.now) < Self.freshness
+    }
+
+    /// True while a feed read for the machine is on its way.
+    func isFetching(_ instanceId: String) -> Bool { inFlight[instanceId] != nil }
+
+    /// Marks a feed read for the machine as on its way, so a second reader
+    /// waits for it instead of asking again. False if one already is; the
+    /// caller then must not `endFetch`.
+    func beginFetch(_ instanceId: String) -> Bool {
+        guard inFlight[instanceId] == nil else { return false }
+        inFlight[instanceId] = [:]
+        return true
+    }
+
+    func endFetch(_ instanceId: String) {
+        inFlight.removeValue(forKey: instanceId)?.values.forEach { $0.resume() }
+    }
+
+    /// Waits for the read on its way, or until the waiting task is cancelled.
+    func waitForFetch(_ instanceId: String) async {
+        guard inFlight[instanceId] != nil else { return }
+        let waiter = UUID()
+        await withTaskCancellationHandler {
+            await withCheckedContinuation { continuation in
+                if Task.isCancelled || inFlight[instanceId] == nil {
+                    continuation.resume()
+                } else {
+                    inFlight[instanceId]?[waiter] = continuation
+                }
+            }
+        } onCancel: {
+            Task { @MainActor [weak self] in self?.stopWaiting(waiter, for: instanceId) }
+        }
+    }
+
+    private func stopWaiting(_ waiter: UUID, for instanceId: String) {
+        inFlight[instanceId]?.removeValue(forKey: waiter)?.resume()
+    }
+
+    /// Reads the machine's recent feed unless a fresh window already holds it,
+    /// or waits for a read already on its way (the notifier's, or another
+    /// screen's). `force` reads even a fresh window, for pull to refresh.
+    /// Items the pairing's grants don't cover are left out, and a pairing that
+    /// can no longer read Bots forgets the window. A response that lands after
+    /// the machine stopped being current (`isCurrent`), or after `forget`, is
+    /// dropped, so a switch mid-fetch never writes the old machine's rows.
+    @discardableResult
+    func refreshIfStale(
+        instanceId: String,
+        transport: any AidenBotRoutineNotificationTransport,
+        grants: Set<AidenRemoteCapability>,
+        force: Bool = false,
+        isCurrent: @escaping @MainActor () -> Bool
+    ) async -> Outcome {
+        guard Self.readGrants.isSubset(of: grants) else {
+            if windows[instanceId] != nil { forget(instanceId: instanceId) }
+            return .skipped
+        }
+        if let window = windows[instanceId], !window.grants.isSubset(of: grants) { forget(instanceId: instanceId) }
+        // Wait for any read on its way (the notifier's, or another screen's).
+        // Only a full read answers; the notifier's page from its own cursor
+        // doesn't, so Home then reads the whole window itself.
+        var waited = false
+        while isFetching(instanceId) {
+            await waitForFetch(instanceId)
+            guard !Task.isCancelled else { return .skipped }
+            waited = true
+        }
+        if waited, hasFullRead(instanceId) { return .read }
+        guard force || !isFresh(instanceId) else { return .read }
+        guard isCurrent(), beginFetch(instanceId) else { return .skipped }
+        defer { endFetch(instanceId) }
+        let generation = generations[instanceId, default: 0]
+        let cursor = windows[instanceId]?.cursor
+        guard let feed = try? await transport.botRoutineNotifications(since: cursor) else { return .failed }
+        guard generations[instanceId, default: 0] == generation, isCurrent() else { return .skipped }
+        record(
+            feed.notifications.filter { Self.isVisible($0, grants: grants) },
+            instanceId: instanceId,
+            grants: grants,
+            cursor: feed.now.rawValue
+        )
+        return .read
+    }
+
+    static let readGrants: Set<AidenRemoteCapability> = [.botRead, .chatRead]
+
+    static func isVisible(_ item: AidenBotRoutineNotification, grants: Set<AidenRemoteCapability>) -> Bool {
+        switch item.kind {
+        case .routine: true
+        case .peer: grants.contains(.botPeers)
+        case .message: grants.contains(.botMessaging)
+        case .issue: grants.contains(.botIssues)
+        }
+    }
+}
+
 /// The Bot variant of the scheduled-run feed: `GET /bots/routine-notifications`
 /// turned into local notifications that open the Bot's chat. Polling-only,
 /// like schedules: it runs on app foreground and on Bots home refresh. The
@@ -288,16 +481,19 @@ final class AidenBotRoutineNotifier {
     private let defaults: UserDefaults
     private let center: AidenRunAlertCenter
     private let isEnabled: Bool
+    private let feedReader: AidenBotRoutineFeedReader
     private var polling: Set<String> = []
 
     init(
         isEnabled: Bool = true,
         defaults: UserDefaults = .standard,
-        center: AidenRunAlertCenter = UNUserNotificationCenter.current()
+        center: AidenRunAlertCenter = UNUserNotificationCenter.current(),
+        feedReader: AidenBotRoutineFeedReader? = nil
     ) {
         self.defaults = defaults
         self.center = center
         self.isEnabled = isEnabled
+        self.feedReader = feedReader ?? .shared
     }
 
     static func cursorKey(_ instanceId: String) -> String {
@@ -350,6 +546,12 @@ final class AidenBotRoutineNotifier {
         // does not reveal whether it required access-request visibility.
         let fetchedGrants = currentGrants()
         guard isCurrent(), Set([AidenRemoteCapability.botRead, .chatRead]).isSubset(of: fetchedGrants) else { return }
+        // Home waits for this read rather than ask the same machine again.
+        var claimed = feedReader.beginFetch(instanceId)
+        func finishFetch() {
+            if claimed { claimed = false; feedReader.endFetch(instanceId) }
+        }
+        defer { finishFetch() }
         let feed: AidenBotRoutineNotificationFeed
         do {
             feed = try await transport.botRoutineNotifications(since: cursor)
@@ -368,6 +570,8 @@ final class AidenBotRoutineNotifier {
             }
         }
         guard scopeAllowsProgress() else { return }
+        feedReader.record(feed.notifications, instanceId: instanceId, grants: fetchedGrants)
+        finishFetch()
         var deliveredOrder = defaults.stringArray(forKey: Self.deliveredKey(instanceId)) ?? []
         var delivered = Set(deliveredOrder)
         func markDelivered(_ id: String) {

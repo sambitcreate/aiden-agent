@@ -108,17 +108,26 @@ final class AidenNewWorkChatFlow {
 
     @ObservationIgnored private let coordinator: AidenRemoteCoordinator
     @ObservationIgnored private let readinessWait: Duration
-    @ObservationIgnored private let onCreated: @MainActor (AidenChat, AidenHostObjectID) -> Void
+    /// The new chat, its id, and the message it sends as soon as it opens
+    /// (Home's Send), if any.
+    @ObservationIgnored private let onCreated: @MainActor (AidenChat, AidenHostObjectID, String?) -> Void
     @ObservationIgnored private var latestReceipt: (id: AidenHostObjectID, chat: AidenChat)?
+    @ObservationIgnored private let draftStore: AidenChatDraftStore
+    /// Home's own machine choice: its chip, apart from the New chat button's,
+    /// so opening one never moves the other.
+    let homePicker: AidenNewWorkPicker
 
     init(
         coordinator: AidenRemoteCoordinator,
         preferences: AidenMachinePreferencesStore? = nil,
         readinessWait: Duration = .seconds(30),
-        onCreated: @escaping @MainActor (AidenChat, AidenHostObjectID) -> Void
+        draftStore: AidenChatDraftStore = .shared,
+        onCreated: @escaping @MainActor (AidenChat, AidenHostObjectID, String?) -> Void
     ) {
         self.coordinator = coordinator
+        self.draftStore = draftStore
         picker = AidenNewWorkPicker(coordinator: coordinator, kind: .chat, preferences: preferences)
+        homePicker = AidenNewWorkPicker(coordinator: coordinator, kind: .chat, preferences: preferences)
         self.readinessWait = readinessWait
         self.onCreated = onCreated
     }
@@ -218,14 +227,16 @@ final class AidenNewWorkChatFlow {
 
     /// Holds a compose tapped before the machine is ready, then lets it continue.
     /// False when the machine goes offline, or the wait runs out.
-    private func awaitReady(_ target: AidenNewWorkTarget) async -> Bool {
+    /// `showsStatus` is false for Home's Send, which says where it is itself
+    /// and must not touch the New chat button's status.
+    private func awaitReady(_ target: AidenNewWorkTarget, showsStatus: Bool = true) async -> Bool {
         func state() -> AidenRemoteConnectionState? {
             coordinator.hosts.connection(for: target.instanceId)?.connectionState
         }
         if state() == .connected { return true }
         let resumedStatus = status
-        status = String(localized: "Waiting for your computer…")
-        defer { status = resumedStatus }
+        if showsStatus { status = String(localized: "Waiting for your computer…") }
+        defer { if showsStatus { status = resumedStatus } }
         let deadline = ContinuousClock.now + readinessWait
         while ContinuousClock.now < deadline, !Task.isCancelled {
             switch state() {
@@ -239,10 +250,14 @@ final class AidenNewWorkChatFlow {
     }
 
     private func reportUnavailable(_ target: AidenNewWorkTarget) {
-        let name = picker.machines.first { $0.id == target.instanceId }?.name
-        coordinator.presentedError = name.map { String(localized: "\($0) isn’t reachable right now. Try again once it’s connected.") }
-            ?? AidenNewWorkMachine.noLongerPaired
+        coordinator.presentedError = unavailableMessage(target)
         coordinator.haptics.play(.error, scope: hapticScope)
+    }
+
+    private func unavailableMessage(_ target: AidenNewWorkTarget) -> String {
+        let name = picker.machines.first { $0.id == target.instanceId }?.name
+        return name.map { String(localized: "\($0) isn’t reachable right now. Try again once it’s connected.") }
+            ?? AidenNewWorkMachine.noLongerPaired
     }
 
     private func report(_ error: Error) {
@@ -258,7 +273,7 @@ final class AidenNewWorkChatFlow {
         do {
             guard let created = try await coordinator.createChat(on: target, in: workspace) else { return }
             latestReceipt = (created.id, created.chat)
-            onCreated(created.chat, created.id)
+            onCreated(created.chat, created.id, nil)
             coordinator.haptics.play(
                 feedback,
                 scope: hapticScope,
@@ -271,6 +286,65 @@ final class AidenNewWorkChatFlow {
             report(error)
             await coordinator.refreshWorkspaces(on: target)
         }
+    }
+
+    /// Home's Send: a Just chat on `target` that sends `prompt` as soon as it
+    /// opens. Each call carries its own prompt to its own chat, so a second
+    /// Send while the first is still on its way never reaches the first's
+    /// chat, and nothing here gates the New chat button (`isCreating`).
+    func startChat(sending prompt: String, on target: AidenNewWorkTarget) async -> AidenHomeSendOutcome {
+        guard await awaitReady(target, showsStatus: false) else {
+            return .failed(unavailableMessage(target))
+        }
+        // Unpairing mid-send must not open a chat on a machine that's gone.
+        guard let owner = try? coordinator.ownerContext(for: target.instanceId) else {
+            return .failed(AidenNewWorkMachine.noLongerPaired)
+        }
+        func home() -> AidenWorkspace? {
+            AidenNoWorkspace.home(in: coordinator.hosts.connection(for: target.instanceId)?.workspaces ?? [])
+        }
+        if home() == nil { await coordinator.refreshWorkspaces(on: target) }
+        // A host without the Chats home can't take a Just chat (spec A5).
+        guard let workspace = home() else { return .needsChoice }
+        do {
+            guard let created = try await coordinator.createChat(on: target, in: workspace) else {
+                // The coordinator has already said why.
+                return .failed(nil)
+            }
+            latestReceipt = (created.id, created.chat)
+            // Also the chat's draft, so a launch that ends before it sends
+            // leaves the words in the chat rather than nowhere.
+            _ = await seedComposer(prompt, for: created.id)
+            guard coordinator.isLive(owner) else { return .failed(AidenNewWorkMachine.noLongerPaired) }
+            onCreated(created.chat, created.id, prompt)
+            coordinator.haptics.play(
+                .success,
+                scope: hapticScope,
+                dedupeKey: "new-agent:\(workspace.id):\(created.chat.id):\(created.chat.revision)"
+            )
+            return .started(created.id)
+        } catch let error where aidenIsCancellation(error) {
+            return .failed(nil)
+        } catch {
+            // A mutation is never retried after an uncertain result.
+            await coordinator.refreshWorkspaces(on: target)
+            return .failed(error.localizedDescription)
+        }
+    }
+
+    /// Saves the prompt as the new chat's draft, which its composer loads when
+    /// it opens. Unpairing purges the store and bumps every session, so a save
+    /// racing it is rejected; checked before and after.
+    private func seedComposer(_ text: String, for id: AidenHostObjectID) async -> Bool {
+        guard let context = try? coordinator.ownerContext(for: id.instanceId) else { return false }
+        let session = await draftStore.beginSession(instanceId: id.instanceId, chatId: id.objectId)
+        guard coordinator.isLive(context) else { return false }
+        let saved = (try? await draftStore.save(text, session: session)) ?? false
+        guard coordinator.isLive(context) else {
+            await draftStore.remove(instanceId: id.instanceId, chatId: id.objectId)
+            return false
+        }
+        return saved
     }
 }
 
@@ -394,4 +468,13 @@ extension View {
     ) -> some View {
         modifier(AidenNewWorkPresentation(flow: flow, coordinator: coordinator, isActive: isActive, ownsHaptics: ownsHaptics))
     }
+}
+
+/// What Home's Send became.
+enum AidenHomeSendOutcome: Equatable {
+    case started(AidenHostObjectID)
+    /// The machine has no Chats home, so the person chooses where it runs.
+    case needsChoice
+    /// Nothing was made. The message says why, unless the app already did.
+    case failed(String?)
 }

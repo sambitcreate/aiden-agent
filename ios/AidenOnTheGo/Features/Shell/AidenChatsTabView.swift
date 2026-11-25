@@ -10,6 +10,12 @@ struct AidenChatsTabView: View {
     /// The route the detail beside the list shows, so its row reads as chosen.
     /// Nil on a stack.
     var selection: AidenAppRoute? = nil
+    /// Home's greeting, Bots and digest, above the rows. Nil off Home.
+    var header: AnyView? = nil
+    /// Draws the ambient background behind the list; Home's root only.
+    var showsAmbientBackground = false
+    /// What a pull to refresh reads. Nil reads every machine's lists.
+    var onRefresh: (() async -> Void)? = nil
     let onOpen: (AidenAppRoute) -> Void
 
     @Environment(\.aidenPalette) private var palette
@@ -23,6 +29,17 @@ struct AidenChatsTabView: View {
         let roster = store.roster
         let positions = AidenListCardPosition.positions(entries.map(\.id))
         List {
+            if let header {
+                header
+                // Under Home's header the empty state is a row, so it never
+                // lies over the greeting. Sized to its content: a greedy
+                // ContentUnavailableView in a self-sizing row never settles.
+                emptyState(isEmpty: entries.isEmpty)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .frame(maxWidth: .infinity)
+                    .listRowBackground(Color.clear)
+                    .listRowSeparator(.hidden)
+            }
             if store.listState == .loading, entries.isEmpty, !hasNoComputers {
                 AidenChatListSkeleton(rowCount: 6, accessibilityText: "Loading chats")
                     .listRowInsets(EdgeInsets())
@@ -50,9 +67,12 @@ struct AidenChatsTabView: View {
         .listSectionSpacing(AidenSpacing.l)
         .aidenKeepsListScroll()
         .scrollContentBackground(.hidden)
+        .aidenAmbientAurora(showsAmbientBackground)
         .background(palette.canvas.ignoresSafeArea())
-        .overlay { emptyState(isEmpty: entries.isEmpty) }
-        .refreshable { await store.refreshAll() }
+        .overlay { if header == nil { emptyState(isEmpty: entries.isEmpty) } }
+        .refreshable {
+            if let onRefresh { await onRefresh() } else { await store.refreshAll() }
+        }
         .navigationTitle("Chats")
     }
 

@@ -586,6 +586,167 @@ final class AidenShellUITests: XCTestCase {
         app.terminate()
     }
 
+    /// Home greets the person by the name set on this phone, shows the Bots as
+    /// sprites and at most three "From your Bots" rows above the chats, keeps a
+    /// composer at the bottom, and Settings → Appearance holds the ambient
+    /// background and the name.
+    func testHomeGreetsShowsBotsDigestAndComposer() {
+        let app = AidenStateMatrix.launch(scenario: .full, extraArguments: ["-aiden.home.name", "Sam"])
+        AidenStateMatrix.openArea("Chats", in: app)
+
+        let greeting = app.staticTexts["home.greeting"].firstMatch
+        XCTAssertTrue(greeting.waitForExistence(timeout: 10), "No greeting")
+        XCTAssertTrue(greeting.label.hasSuffix(", Sam"), "The greeting said \(greeting.label)")
+
+        let sprites = app.buttons.matching(identifier: "home.bot")
+        XCTAssertTrue(sprites.firstMatch.waitForExistence(timeout: 10), "No Bot sprites")
+        // The full demo's Courier and Relay are running.
+        XCTAssertTrue(app.buttons.matching(NSPredicate(format: "identifier == 'home.bot' AND label == 'Courier'")).firstMatch.exists)
+
+        let rows = app.buttons.matching(identifier: "home.digest.row")
+        XCTAssertTrue(rows.firstMatch.waitForExistence(timeout: 10), "No digest rows")
+        XCTAssertLessThanOrEqual(rows.count, 3)
+        XCTAssertTrue(app.buttons["home.digest.seeAll"].firstMatch.exists, "No See all")
+
+        let composer = app.descendants(matching: .any).matching(identifier: "home.composer").firstMatch
+        XCTAssertTrue(composer.waitForExistence(timeout: 5), "No Home composer")
+        AidenStateMatrix.capture("home-full", in: self)
+
+        openSettings(in: app)
+        XCTAssertTrue(app.navigationBars["App settings"].waitForExistence(timeout: 10))
+        let appearance = app.buttons["Appearance"].firstMatch
+        XCTAssertTrue(appearance.waitForExistence(timeout: 5), "No Appearance row")
+        appearance.tap()
+        let aurora = app.descendants(matching: .any).matching(identifier: "settings.appearance.aurora").firstMatch
+        XCTAssertTrue(app.navigationBars["Appearance"].waitForExistence(timeout: 10))
+        for _ in 0..<6 where !aurora.exists { app.swipeUp() }
+        XCTAssertTrue(aurora.waitForExistence(timeout: 5), "No Ambient background control")
+        let name = app.textFields["settings.home.name"].firstMatch
+        for _ in 0..<6 where !name.exists { app.swipeUp() }
+        XCTAssertTrue(name.waitForExistence(timeout: 5), "No Home name field")
+        XCTAssertEqual(name.value as? String, "Sam")
+        AidenStateMatrix.capture("home-settings-appearance", in: self)
+        app.terminate()
+    }
+
+    /// Home's ambient background shows the forced phase, and hides when the
+    /// person turns it off.
+    func testHomeAmbientBackgroundShowsItsPhase() {
+        let app = AidenStateMatrix.launch(
+            scenario: .full,
+            extraArguments: ["-AidenAuroraForcePhase", "done", "-aiden.appearance.aurora", "subtle"]
+        )
+        AidenStateMatrix.openArea("Chats", in: app)
+        let marker = app.descendants(matching: .any)["aurora.phase"].firstMatch
+        XCTAssertTrue(marker.waitForExistence(timeout: 10), "No aurora phase marker on Home")
+        XCTAssertEqual(marker.value as? String, "done")
+        app.terminate()
+
+        let off = AidenStateMatrix.launch(
+            scenario: .full,
+            extraArguments: ["-AidenAuroraForcePhase", "done", "-aiden.appearance.aurora", "off"]
+        )
+        AidenStateMatrix.openArea("Chats", in: off)
+        let hidden = off.descendants(matching: .any)["aurora.phase"].firstMatch
+        XCTAssertTrue(hidden.waitForExistence(timeout: 10), "No aurora phase marker on Home")
+        XCTAssertEqual(hidden.value as? String, "hidden")
+        off.terminate()
+    }
+
+    /// Home's Send starts a chat on the chosen computer and opens it with the
+    /// words sent, leaving Home's field empty for the next thought.
+    func testHomeSendStartsAChat() {
+        let app = AidenStateMatrix.launch(scenario: .full)
+        AidenStateMatrix.openArea("Chats", in: app)
+        let home = app.descendants(matching: .any).matching(identifier: "home.composer").firstMatch
+        XCTAssertTrue(home.waitForExistence(timeout: 10), "No Home composer")
+        let field = homeField(in: app)
+        XCTAssertTrue(field.waitForExistence(timeout: 5), "No Home field")
+        field.tap()
+        let prompt = "Plan the launch checklist"
+        field.typeText(prompt)
+        let send = app.buttons["Start chat"].firstMatch
+        XCTAssertTrue(send.waitForExistence(timeout: 5), "No Start chat button")
+        send.tap()
+
+        // One press opens the new chat with the words in its transcript.
+        let sent = app.staticTexts.matching(NSPredicate(format: "label CONTAINS %@", prompt)).firstMatch
+        XCTAssertTrue(sent.waitForExistence(timeout: 15), "The new chat doesn't show the words Home sent")
+        AidenStateMatrix.capture("home-send-opened", in: self)
+        app.terminate()
+    }
+
+    /// Send empties the field at once, even while the computer is still
+    /// connecting; if no chat can start, the words come back with the reason.
+    func testHomeSendEmptiesTheFieldAndGivesTheWordsBackIfNoChatStarts() {
+        let app = AidenStateMatrix.launch(scenario: .full, extraArguments: ["-AidenDemoSlowConnect"])
+        AidenStateMatrix.openArea("Chats", in: app)
+        let field = homeField(in: app)
+        XCTAssertTrue(field.waitForExistence(timeout: 10), "No Home field")
+        field.tap()
+        let prompt = "Draft the release notes"
+        field.typeText(prompt)
+        app.buttons["Start chat"].firstMatch.tap()
+
+        let status = app.descendants(matching: .any)["home.composer.status"].firstMatch
+        XCTAssertTrue(status.waitForExistence(timeout: 5), "No word that the chat is on its way")
+        XCTAssertFalse((field.value as? String ?? "").contains(prompt), "Send left the words in the field")
+        AidenStateMatrix.capture("home-send-starting", in: self)
+
+        // The computer never connects, so after the readiness wait no chat starts.
+        let notice = app.descendants(matching: .any)["home.composer.notice"].firstMatch
+        XCTAssertTrue(notice.waitForExistence(timeout: 45), "No reason the chat didn't start")
+        XCTAssertTrue((field.value as? String ?? "").contains(prompt), "The words didn't come back")
+        app.terminate()
+    }
+
+    private func homeField(in app: XCUIApplication) -> XCUIElement {
+        // The composer is a container, so its field sits inside it.
+        app.descendants(matching: .any).matching(identifier: "home.composer").firstMatch
+            .descendants(matching: .any).matching(NSPredicate(
+                format: "elementType == %d OR elementType == %d",
+                XCUIElement.ElementType.textField.rawValue,
+                XCUIElement.ElementType.textView.rawValue
+            )).firstMatch
+    }
+
+    /// Home never shows an empty "Nothing new" for a state it can explain: a
+    /// machine with no Bots offers the first one, an offline machine says so,
+    /// and a machine still connecting shows skeletons.
+    func testHomeExplainsEmptyOfflineAndLoading() {
+        let empty = AidenStateMatrix.launch(scenario: .empty)
+        AidenStateMatrix.openArea("Chats", in: empty)
+        XCTAssertTrue(empty.buttons["home.bots.first"].firstMatch.waitForExistence(timeout: 10), "No Make your first Bot")
+        XCTAssertFalse(digest(in: empty).exists, "Home showed a news card with no Bots")
+        AidenStateMatrix.capture("home-no-bots", in: self)
+        empty.terminate()
+
+        let offline = AidenStateMatrix.launch(scenario: .one, extraArguments: ["-AidenDemoDefaultOffline"])
+        AidenStateMatrix.openArea("Chats", in: offline)
+        let note = offline.descendants(matching: .any)["home.bots.offline"].firstMatch
+        XCTAssertTrue(note.waitForExistence(timeout: 15), "No offline explanation")
+        XCTAssertFalse(nothingNew(in: offline).exists, "Home said nothing new while offline")
+        AidenStateMatrix.capture("home-offline", in: self)
+        offline.terminate()
+
+        let loading = AidenStateMatrix.launch(scenario: .full, extraArguments: ["-AidenDemoSlowConnect"])
+        AidenStateMatrix.openArea("Chats", in: loading)
+        let skeleton = loading.descendants(matching: .any)["home.bots.loading"].firstMatch
+        XCTAssertTrue(skeleton.waitForExistence(timeout: 10), "No Bot skeletons while connecting")
+        XCTAssertFalse(nothingNew(in: loading).exists, "Home said nothing new while connecting")
+        AidenStateMatrix.capture("home-loading", in: self)
+        loading.terminate()
+    }
+
+    /// Any part of Home's news card, whatever element type it lands as.
+    private func digest(in app: XCUIApplication) -> XCUIElement {
+        app.descendants(matching: .any).matching(NSPredicate(format: "identifier BEGINSWITH %@", "home.digest")).firstMatch
+    }
+
+    private func nothingNew(in app: XCUIApplication) -> XCUIElement {
+        app.descendants(matching: .any)["home.digest.empty"].firstMatch
+    }
+
     /// A row's menu opens with what its swipes offer, and a row waiting on a
     /// decision offers neither Done nor Snooze either way.
     func testRowMenusMatchTheirSwipes() {
@@ -889,6 +1050,7 @@ final class AidenShellUITests: XCTestCase {
                 "-aiden.product-navigation.v1", "reset",
                 "-aiden.product-navigation.v2", "reset",
                 "-aiden.product-navigation.v3", "reset",
+                "-aiden.appearance.aurora", "off",
                 "-AppleLanguages", "(en)",
                 "-AppleLocale", "en_US",
             ]
@@ -935,6 +1097,7 @@ final class AidenShellUITests: XCTestCase {
             "-aiden.product-navigation.v1", "reset",
             "-aiden.product-navigation.v2", "reset",
             "-aiden.product-navigation.v3", "reset",
+            "-aiden.appearance.aurora", "off",
             "-AppleLanguages", "(en)",
             "-AppleLocale", "en_US",
         ]

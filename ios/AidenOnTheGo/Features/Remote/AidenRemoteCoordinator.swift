@@ -1285,6 +1285,8 @@ final class AidenRemoteCoordinator {
         AidenAppNavigationStore().purge(instanceID: installationId)
         AidenDrawerPinsStore.shared.purge(instanceID: installationId)
         AidenChatForkPrefillHandoff.purge(instanceId: installationId)
+        // Home's "From your Bots" card never shows a forgotten machine's feed.
+        AidenBotRoutineFeedReader.shared.forget(instanceId: installationId)
         await AidenBotCache.shared.purge(instanceId: installationId)
         await AidenChatDraftStore.shared.purge(instanceId: installationId)
         AidenBotWatchDraftStore.shared.purge(instanceID: installationId)

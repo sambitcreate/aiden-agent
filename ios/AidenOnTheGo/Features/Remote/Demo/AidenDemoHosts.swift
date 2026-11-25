@@ -261,6 +261,14 @@ final class AidenDemoResponder: @unchecked Sendable {
             deliver(.failure(URLError(code)))
             return {}
         }
+        // The new chat takes a turn: the words sent come back as its first
+        // message, and the run they start stays open (its events are held).
+        if !isProbe, method == "POST", path == "/chats/\(AidenDemoContent.newChatId)/turns",
+           let turn = Self.turnText(of: request) {
+            lock.unlock()
+            deliver(.success(Answer(response: Self.response(url: url, status: 202), data: AidenDemoContent.newChatTurnJSON(text: turn))))
+            return {}
+        }
         let holdsQuery = holds[HoldKey(instanceId: instanceId, path: path, query: url.query)]
         let interactiveHold = isProbe ? nil : interactiveHolds[HoldKey(instanceId: instanceId, path: path)]
         if let hold = holdsQuery ?? holds[HoldKey(instanceId: instanceId, path: path)] ?? interactiveHold, !hold.isReleased {
@@ -318,6 +326,24 @@ final class AidenDemoResponder: @unchecked Sendable {
         case nil:
             return .success(Answer(response: Self.response(url: url, status: 404), data: AidenDemoContent.notFound()))
         }
+    }
+
+    /// The text of a `POST /chats/{id}/turns` body, which a `URLProtocol`
+    /// may only see as a stream.
+    private static func turnText(of request: URLRequest) -> String? {
+        var body = request.httpBody
+        if body == nil, let stream = request.httpBodyStream {
+            stream.open()
+            defer { stream.close() }
+            var data = Data()
+            var buffer = [UInt8](repeating: 0, count: 4096)
+            while case let count = stream.read(&buffer, maxLength: buffer.count), count > 0 {
+                data.append(buffer, count: count)
+            }
+            body = data
+        }
+        guard let body, let turn = try? JSONDecoder().decode(AidenTurnStart.self, from: body) else { return nil }
+        return turn.text
     }
 
     private static func response(url: URL, status: Int) -> HTTPURLResponse {
@@ -760,6 +786,7 @@ enum AidenDemoHosts {
         // Compose, and a fork of each chat.
         responder.reply(instanceId: id, method: "POST", path: "/chats", status: 201, json: AidenDemoContent.newChatJSON())
         responder.reply(instanceId: id, path: "/chats/\(AidenDemoContent.newChatId)", status: 200, json: AidenDemoContent.newChatJSON())
+        _ = responder.hold(instanceId: id, path: "/streams/\(AidenDemoContent.newChatStreamId)/events")
         for (index, row) in rows.enumerated() {
             guard let chatId = row["id"] as? String else { continue }
             let forkId = "\(chatId)_fork"
@@ -982,6 +1009,19 @@ private enum AidenDemoContent {
             "createdAt": now,
             "updatedAt": now,
             "revision": "chat_revision_new",
+        ])
+    }
+
+    static let newChatStreamId = "stream_demo_new"
+
+    /// What `POST /chats/{new}/turns` answers: the turn is running, and `text`
+    /// is its first message.
+    static func newChatTurnJSON(text: String) -> Data {
+        data([
+            "turnId": "turn_demo_new",
+            "streamId": newChatStreamId,
+            "status": "running",
+            "message": ["id": "message_demo_new_user", "role": "user", "text": text, "createdAt": timestamp(Date())],
         ])
     }
 

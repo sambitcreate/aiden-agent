@@ -112,6 +112,8 @@ final class AidenAppShellParts {
         let navigation: AidenAppNavigation
         let newWork: AidenNewWorkChatFlow
         let chatScreens: AidenChatScreens
+        let homeComposer: AidenHomeComposerModel
+        let homeFeed: AidenHomeFeedModel
         let search: AidenSearchModel
         let listScroll: AidenListScrollPlaces
         let offlineNotices: AidenOfflineNoticeDismissals
@@ -163,6 +165,8 @@ struct AidenAppShellView: View {
     /// so building them there read and decoded the saved navigation each time.
     @State private var parts = AidenAppShellParts()
     @State private var botSummaries: [AidenHostObjectID: AidenBotSummary] = [:]
+    /// What Home's ambient background shows, read from the inbox.
+    @State private var ambient = AidenAmbientActivityModel()
     @State private var activeSheet: ShellSheet?
     /// Add Computer from the drawer: pairing is the shell's sheet, presented
     /// once the drawer's cover has gone, not in the same update.
@@ -214,6 +218,8 @@ struct AidenAppShellView: View {
 
     /// Each open chat's screen state, kept while its chat is on a tab.
     private var chatScreens: AidenChatScreens { built.chatScreens }
+    private var homeComposer: AidenHomeComposerModel { built.homeComposer }
+    private var homeFeed: AidenHomeFeedModel { built.homeFeed }
 
     private var built: AidenAppShellParts.Built {
         parts.built { [coordinator, inboxStore, navigationStore, horizontalSizeClass] in
@@ -226,16 +232,30 @@ struct AidenAppShellView: View {
             )
             // Set before any link or request opens a route, which reads it.
             navigation.besideList = horizontalSizeClass == .regular
-            let newWork = AidenNewWorkChatFlow(coordinator: coordinator) { [weak navigation] chat, id in
+            let chatScreens = AidenChatScreens(
+                isOpen: { [weak navigation] id in navigation?.holdsConversation(id) ?? false },
+                isBotOpen: { [weak navigation] id in navigation?.holdsBot(id) ?? false }
+            )
+            let newWork = AidenNewWorkChatFlow(coordinator: coordinator) { [weak navigation, weak chatScreens] chat, id, prompt in
                 let home = inboxStore.homeModel(for: id.instanceId)
                 home?.accept(chat)
                 home?.markViewed(chatID: chat.id)
                 guard let navigation else { return }
+                if let prompt {
+                    // Home's Send: the words go with the chat, and Home decides
+                    // whether to open it (only if the person is still there).
+                    chatScreens?.screen(for: id, receipt: chat).chat.queueLaunchSend(prompt)
+                    return
+                }
                 navigation.openNewChat(id)
             }
-            let chatScreens = AidenChatScreens(
-                isOpen: { [weak navigation] id in navigation?.holdsConversation(id) ?? false },
-                isBotOpen: { [weak navigation] id in navigation?.holdsBot(id) ?? false }
+            let homeComposer = AidenHomeComposerModel()
+            homeComposer.place = AidenHomeSendPlace(
+                isOnHome: { [weak navigation] in
+                    guard let navigation else { return false }
+                    return navigation.tab == .chats && navigation.chatsPath.isEmpty
+                },
+                open: { [weak navigation] id in navigation?.open(.chat(id), on: .chats) }
             )
             let search = AidenSearchModel(
                 chatInput: { AidenSearchChatInput(store: inboxStore) },
@@ -245,6 +265,8 @@ struct AidenAppShellView: View {
                 navigation: navigation,
                 newWork: newWork,
                 chatScreens: chatScreens,
+                homeComposer: homeComposer,
+                homeFeed: AidenHomeFeedModel(),
                 search: search,
                 listScroll: AidenListScrollPlaces(),
                 offlineNotices: AidenOfflineNoticeDismissals()
@@ -451,12 +473,10 @@ struct AidenAppShellView: View {
         } message: {
             Text(coordinator.presentedError ?? "The operation could not be completed.")
         }
+        .modifier(InboxObservers(shell: self))
         .onChange(of: navigation.snapshot) { _, snapshot in
             navigationStore.save(snapshot)
             chatScreens.pathsChanged()
-        }
-        .onChange(of: navigation.showsChatList, initial: true) { _, isOnScreen in
-            inboxStore.setInboxVisible(isOnScreen)
         }
         // Opening or closing an iPhone Duo swaps each list tab's container
         // (`AidenListTab`). The chat screens hear first, so the views the
@@ -469,20 +489,40 @@ struct AidenAppShellView: View {
             chatScreens.rebuilding()
             navigation.besideList = besideList
         }
-        .onChange(of: navigation.inboxOpenChat, initial: true) { _, chat in
-            inboxStore.openChat = chat
-            inboxStore.setFocusedMachine(chat?.instanceId)
-        }
-        .onDisappear {
-            inboxStore.setInboxVisible(false)
-            inboxStore.openChat = nil
-            inboxStore.setFocusedMachine(nil)
-        }
         .onChange(of: coordinator.installationStore.installations) { _, installations in
             navigation.dropRoutes(outside: installations)
         }
         .task(id: archiveSyncID) {
             coordinator.setDeviceArchivedWorkspaceIDs(archiveSyncID.archivedIDs, for: archiveSyncID.instanceID)
+        }
+    }
+
+    /// Keeps the Inbox store and Home's ambient background in step with what's
+    /// on screen. Apart from `body` so its chain type-checks in time.
+    private struct InboxObservers: ViewModifier {
+        let shell: AidenAppShellView
+
+        func body(content: Content) -> some View {
+            let navigation = shell.navigation
+            let inboxStore = shell.inboxStore
+            content
+                // Home, on the Chats tab, reads the same snapshots the Inbox does,
+                // and so does the drawer's recent list while it's open on any tab.
+                .onChange(of: navigation.tab == .inbox || navigation.tab == .chats || navigation.showsChatList, initial: true) { _, isOnScreen in
+                    inboxStore.setInboxVisible(isOnScreen)
+                }
+                .onChange(of: navigation.inboxOpenChat, initial: true) { _, chat in
+                    inboxStore.openChat = chat
+                    inboxStore.setFocusedMachine(chat?.instanceId)
+                }
+                .onChange(of: shell.ambientFocusedChat, initial: true) { shell.updateAmbient() }
+                .onChange(of: inboxStore.snapshots) { shell.updateAmbient() }
+                .onChange(of: inboxStore.hiddenMachines) { shell.updateAmbient() }
+                .onDisappear {
+                    inboxStore.setInboxVisible(false)
+                    inboxStore.openChat = nil
+                    inboxStore.setFocusedMachine(nil)
+                }
         }
     }
 
@@ -561,21 +601,84 @@ struct AidenAppShellView: View {
         .toolbar { composeToolbar }
     }
 
-    /// The Chats list: every chat, newest first.
+    /// Home's "See all": Catch Up when something waits on the person (the
+    /// digest's hidden rows are among it), else every Bot.
+    private func seeAllFromHome() {
+        if catchUpQueue.first != nil {
+            markViewed(navigation.startCatchUp(in: catchUpQueue))
+            hideOverlaidList(on: .inbox)
+        } else {
+            navigation.selectTabRoot(.bots)
+        }
+    }
+
+    /// The Chats list, which is also Home: the greeting, the Bots and their
+    /// news above every chat, newest first, the ambient background behind
+    /// it, and Home's composer below. Beside an open chat the list is just
+    /// a list: one composer on screen, and no background next to the chat.
     private func chatsList(selection: AidenAppRoute?) -> some View {
-        AidenChatsTabView(
+        let showsHome = !navigation.besideList || selection == nil
+        return AidenChatsTabView(
             store: inboxStore,
             hasNoComputers: hasNoComputers,
             onAddComputer: openAddComputer,
-            selection: selection
+            selection: selection,
+            header: AnyView(AidenHomeHeader(
+                coordinator: coordinator,
+                store: inboxStore,
+                feedModel: homeFeed,
+                onOpen: openFromHome,
+                onOpenBots: { navigation.selectTabRoot(.bots) },
+                onSeeAll: seeAllFromHome
+            )),
+            showsAmbientBackground: showsHome,
+            onRefresh: {
+                // A pull reads the Bots' news too, even news read a moment ago.
+                async let lists: Void = inboxStore.refreshAll()
+                async let feed: Void = homeFeed.refresh(
+                    coordinator: coordinator, hiddenMachines: inboxStore.hiddenMachines, force: true
+                )
+                _ = await (lists, feed)
+            }
         ) { route in
-            navigation.pick(route, fromListOf: .chats)
-            hideOverlaidList(on: .chats)
+            openFromHome(route)
         }
         .safeAreaInset(edge: .top, spacing: 0) {
             AidenConnectionNotice(coordinator: coordinator)
         }
+        .safeAreaInset(edge: .bottom, spacing: 0) {
+            if showsHome, !hasNoComputers {
+                AidenHomeComposerSlot(flow: newWork, model: homeComposer)
+                    .padding(.horizontal, AidenSpacing.m)
+                    .padding(.bottom, AidenSpacing.s)
+            }
+        }
+        .environment(\.aidenAmbientActivity, ambient.activity)
+        .environment(\.aidenAmbientMicLevel, ambient.micLevel)
         .toolbar { composeToolbar }
+    }
+
+    /// A row, Bot or chat chosen on Home (the Chats list).
+    private func openFromHome(_ route: AidenAppRoute) {
+        navigation.pick(route, fromListOf: .chats)
+        hideOverlaidList(on: .chats)
+    }
+
+    /// The chat Home's ambient background counts as on screen: the one
+    /// selected beside the Chats list. A chat finishing there is already in
+    /// view, so it doesn't light the background.
+    private var ambientFocusedChat: AidenHostObjectID? {
+        guard navigation.besideList, navigation.tab == .chats else { return nil }
+        return navigation.chatsPath.first?.chatID
+    }
+
+    /// Feeds Home's ambient background from every shown machine.
+    private func updateAmbient() {
+        ambient.update(
+            snapshots: Array(inboxStore.snapshots.values),
+            hiddenMachines: inboxStore.hiddenMachines,
+            focusedChat: ambientFocusedChat
+        )
     }
 
     /// The Bots list. Its own function, as the Inbox's is, so the tab view

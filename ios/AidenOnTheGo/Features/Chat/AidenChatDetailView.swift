@@ -135,6 +135,8 @@ final class AidenChatScreen {
     /// a swap, for the backstop.
     private var heldHide: (@MainActor () -> Void)?
     private var backstop: Task<Void, Never>?
+    /// Home's Send, for the chat's model once a view makes it.
+    private var launchSend: String?
     private let isOpen: @MainActor () -> Bool
     private let onLeft: @MainActor () -> Void
     private let pause: @MainActor (Duration) async -> Void
@@ -162,6 +164,17 @@ final class AidenChatScreen {
         let made = make()
         parts = made
         return made
+    }
+
+    /// Holds `prompt` for this chat to send as soon as it opens.
+    func queueLaunchSend(_ prompt: String) {
+        if let parts { parts.model.queueLaunchSend(prompt) } else { launchSend = prompt }
+    }
+
+    /// The held prompt, once.
+    func takeLaunchSend() -> String? {
+        defer { launchSend = nil }
+        return launchSend
     }
 
     /// The shell is about to swap its containers. A screen on screen now gets
@@ -317,6 +330,7 @@ struct AidenChatDetailView: View {
             )
         }
         let parts = screen?.parts(make) ?? make()
+        if let prompt = screen?.takeLaunchSend() { parts.model.queueLaunchSend(prompt) }
         _parts = State(initialValue: parts)
         _model = State(initialValue: parts.model)
         _composerSession = State(initialValue: parts.composerSession)

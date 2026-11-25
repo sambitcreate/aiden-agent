@@ -191,6 +191,15 @@ final class AidenChatViewModel {
     @ObservationIgnored private var composerGeneration: UInt64 = 0
     @ObservationIgnored private var didConsumeVoiceLaunch = false
     @ObservationIgnored private var didConsumeCameraLaunch = false
+    /// Home's Send, waiting for this chat to be able to send it.
+    @ObservationIgnored private var launchSendPrompt: String?
+    /// Home handed this chat its words to send. They also sit in the stored
+    /// draft (seeded so a launch that ends early keeps them), so the stored
+    /// draft must never come back into the composer over them.
+    @ObservationIgnored private var hasLaunchSend = false
+    /// Home's send, held so it is owned rather than detached. Never cancelled:
+    /// the send outlives the view that started it.
+    @ObservationIgnored private var launchSendTask: Task<Void, Never>?
     @ObservationIgnored private var uploadTask: Task<Int, Never>?
     @ObservationIgnored var ownedUploadReferences: [String: (AidenAttachmentReference, AidenRemoteRequestContext, AidenRemoteClient)] = [:]
     @ObservationIgnored private var attachmentCleanupTasks: [String: Task<Void, Never>] = [:]
@@ -976,7 +985,11 @@ final class AidenChatViewModel {
             guard !isRemoved, coordinator.isLive(context) else { return }
             draftSession = session
             await pendingSendCoordinator.load(session: session, deviceId: context.deviceId)
-            if draft.isEmpty, pendingAttachments.isEmpty, !isPreparingAttachments, !isUploadingAttachment, !isStarting,
+            if hasLaunchSend {
+                // The launch send owns the composer: the stored copy becomes
+                // whatever the composer holds now (empty once it has sent).
+                _ = try? await draftStore.save(draft, session: session)
+            } else if draft.isEmpty, pendingAttachments.isEmpty, !isPreparingAttachments, !isUploadingAttachment, !isStarting,
                let savedDraft = await draftStore.load(session: session) {
                 guard !isRemoved, coordinator.isLive(context), draftSession == session else { return }
                 // Disk access yields the main actor while the composer remains
@@ -2346,6 +2359,28 @@ final class AidenChatViewModel {
         guard !isReadOnlyPresentation, !isRemoved, isConnected, !isStreaming, pendingQuestion == nil,
               liveOwner != nil, !Task.isCancelled else { return }
         await start()
+    }
+
+    /// Home's Send: `prompt` goes in the composer now and is sent once the
+    /// chat can send (`sendForLaunch()`), with no second press.
+    func queueLaunchSend(_ prompt: String) {
+        guard !prompt.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
+        launchSendPrompt = prompt
+        hasLaunchSend = true
+        if draft.isEmpty, pendingAttachments.isEmpty { draft = prompt }
+    }
+
+    /// Sends Home's prompt the first time the chat can. Consumed then, so a
+    /// remount never sends it twice, and only sent while the composer still
+    /// holds exactly it: words the person changed in the meantime stay theirs.
+    func sendForLaunch() {
+        guard let prompt = launchSendPrompt, canSend else { return }
+        launchSendPrompt = nil
+        guard draft.trimmingCharacters(in: .whitespacesAndNewlines)
+                == prompt.trimmingCharacters(in: .whitespacesAndNewlines),
+              pendingAttachments.isEmpty else { return }
+        // Not the composer's task: the send outlives the view that started it.
+        launchSendTask = Task { await self.send() }
     }
 
     /// One-shot launch admission for opening the in-app camera picker from a
