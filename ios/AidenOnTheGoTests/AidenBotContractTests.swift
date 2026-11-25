@@ -1908,7 +1908,14 @@ final class AidenBotContractTests: XCTestCase {
         ))
     }
 
-    func testBotEditorCreateFailureFreezesOnlyAmbiguousOutcomes() {
+    func testBotEditorCreateFailureFreezesOnlyAmbiguousOutcomes() throws {
+        func refusal(_ status: Int, _ code: String) throws -> AidenRemoteClientError {
+            let body = try AidenRemoteJSONDecoder.decode(
+                AidenRemoteErrorEnvelope.Body.self,
+                from: Data(#"{"code":"\#(code)","message":"Refused.","requestId":"req_test_1","retryable":false}"#.utf8)
+            )
+            return .server(statusCode: status, body: body)
+        }
         XCTAssertTrue(
             aidenBotEditorCreateFailureIsAmbiguous(URLError(.networkConnectionLost)),
             "A lost response may follow a committed POST and must retain the exact key."
@@ -1920,13 +1927,29 @@ final class AidenBotContractTests: XCTestCase {
         XCTAssertTrue(
             aidenBotEditorCreateFailureIsAmbiguous(AidenRemoteClientError.unexpectedStatus(503))
         )
-        XCTAssertFalse(
+        XCTAssertTrue(
             aidenBotEditorCreateFailureIsAmbiguous(AidenRemoteClientError.unexpectedStatus(409)),
-            "A definite conflict must unlock the draft for correction."
+            "An unparsed 409 body cannot prove the request did not reach the host."
+        )
+        XCTAssertTrue(
+            aidenBotEditorCreateFailureIsAmbiguous(try refusal(409, "idempotency_in_flight")),
+            "An in-flight conflict must retain the key for replay."
+        )
+        XCTAssertTrue(
+            aidenBotEditorCreateFailureIsAmbiguous(try refusal(500, "internal_error")),
+            "A live 500 internal_error may have committed and must retain the key."
         )
         XCTAssertFalse(
-            aidenBotEditorCreateFailureIsAmbiguous(AidenRemoteClientError.unexpectedStatus(422)),
-            "A validation response must unlock the draft for correction."
+            aidenBotEditorCreateFailureIsAmbiguous(try refusal(409, "internal_error")),
+            "A decoded replayed 409 internal_error is a settled Bot-ledger rejection and must release the key."
+        )
+        XCTAssertFalse(
+            aidenBotEditorCreateFailureIsAmbiguous(try refusal(409, "revision_conflict")),
+            "A definite before-effect conflict must unlock the draft for correction."
+        )
+        XCTAssertFalse(
+            aidenBotEditorCreateFailureIsAmbiguous(try refusal(422, "invalid_request")),
+            "A structured validation refusal must unlock the draft for correction."
         )
     }
 
