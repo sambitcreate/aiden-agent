@@ -444,7 +444,8 @@ fun Flow<AidenBotAvatarState>.aidenBotAvatarSettled(
         rest = launch(start = CoroutineStart.UNDISPATCHED) {
             show(moment)
             delay(restMs)
-            show(AidenBotAvatarState.IDLE)
+            // New work waiting out its debounce takes over from the moment directly, not via idle.
+            if (pending?.isActive != true) show(AidenBotAvatarState.IDLE)
         }
     }
     distinctUntilChanged().collect { target ->
@@ -466,7 +467,7 @@ fun Flow<AidenBotAvatarState>.aidenBotAvatarSettled(
             target.isMoment && current.isActive -> startMoment(target)
             target == AidenBotAvatarState.ERROR && current == AidenBotAvatarState.DONE -> startMoment(target)
             // A done or error moment on screen plays out; otherwise the end is quiet.
-            current.isMoment -> Unit
+            current.isMoment && rest?.isActive == true -> Unit
             else -> show(AidenBotAvatarState.IDLE)
         }
     }

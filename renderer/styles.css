@@ -2813,6 +2813,7 @@ textarea {
 .bot-sprite[data-state="error"] .bs-rig { transform: translateY(1.5px); }
 .bot-sprite[data-state="error"] .bs-row[data-odd] { transform: translateX(1.5px); }
 :root[data-reduce-motion="false"] .bot-avatar[data-live] .bot-sprite[data-state="idle"] .bs-lid { animation: bs-blink 6s steps(1, end) infinite; }
+:root[data-reduce-motion="false"] .bot-avatar[data-live] .bot-sprite[data-state="idle"] .bs-glint { animation: bs-blink-glint 6s steps(1, end) infinite; }
 :root[data-reduce-motion="false"] .bot-avatar[data-live] .bot-sprite[data-state="thinking"] .bs-rig { animation: bs-bob 1.2s steps(1, end) infinite; }
 :root[data-reduce-motion="false"] .bot-avatar[data-live] .bot-sprite[data-state="thinking"] .bs-dot { animation: bs-dot 1.2s steps(1, end) infinite calc(var(--i) * .3s - 1.2s); }
 :root[data-reduce-motion="false"] .bot-avatar[data-live] .bot-sprite[data-state="reading"] .bs-px { animation: bs-scan 1.1s steps(1, end) infinite calc(var(--r) * .11s - 1.1s); }
@@ -2821,12 +2822,15 @@ textarea {
 :root[data-reduce-motion="false"] .bot-avatar[data-live] .bot-sprite[data-state="editing"] .bs-cursor { animation: bs-cursor 1s steps(1, end) infinite; }
 :root[data-reduce-motion="false"] .bot-avatar[data-live] .bot-sprite[data-state="waiting"] .bs-rig { animation: bs-breathe 1.2s steps(1, end) infinite; }
 :root[data-reduce-motion="false"] .bot-avatar[data-live] .bot-sprite[data-state="waiting"] .bs-lid { animation: bs-blink 2.4s steps(1, end) infinite; }
+:root[data-reduce-motion="false"] .bot-avatar[data-live] .bot-sprite[data-state="waiting"] .bs-glint { animation: bs-blink-glint 2.4s steps(1, end) infinite; }
 :root[data-reduce-motion="false"] .bot-avatar[data-live] .bot-sprite[data-state="done"] .bs-rig { animation: bs-hop .6s steps(1, end) 1 both; }
 :root[data-reduce-motion="false"] .bot-avatar[data-live] .bot-sprite[data-state="error"] .bs-rig { animation: bs-drop .52s steps(1, end) 1 both; }
 :root[data-reduce-motion="false"] .bot-avatar[data-live] .bot-sprite[data-state="error"] .bs-row[data-odd] { animation: bs-glitch .52s steps(1, end) 1 both; }
 .bot-avatar[data-offscreen] *,
 :root[data-document-hidden] .bot-avatar * { animation-play-state: paused !important; }
 @keyframes bs-blink { 0%, 94%, 100% { transform: scaleY(1); } 97% { transform: scaleY(.08); } }
+/* The glint shows only while the eyes are open: hidden for the blink's shut frame. */
+@keyframes bs-blink-glint { 0%, 94%, 100% { opacity: 1; } 97% { opacity: 0; } }
 @keyframes bs-bob { 0%, 49% { transform: none; } 50%, 100% { transform: translateY(-1.5px); } }
 @keyframes bs-dot { 0% { opacity: .25; } 50% { opacity: 1; } }
 @keyframes bs-scan { 0%, 100% { opacity: 1; } 12% { opacity: .42; } 24% { opacity: 1; } }

@@ -372,7 +372,8 @@ extension AidenBotAvatarSignal {
             waitingForPerson: waiting,
             lastTurnFailed: failed,
             session: model.state,
-            stopped: model.stopRequestedThisTurn || model.activity?.phase == "stopping"
+            stopped: model.stopRequestedThisTurn || model.activity?.phase == "stopping",
+            runId: model.activity?.startedAt
         )
     }
 }

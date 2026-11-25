@@ -1068,7 +1068,7 @@ struct AidenBotCanonicalAvatarView: View {
             // A photo can't move: a small glance mark in its still pose says the
             // Bot is working (R19). A sprite needs none: even under Reduce Motion
             // or Low Power its still pose shows the state.
-            if working, canonicalImage != nil {
+            if Self.photoShowsActivityMark(working: working, state: state), canonicalImage != nil {
                 AidenActivityMark(mark: .glance, size: size * 0.32, color: palette.foreground)
                     .padding(size * 0.04)
                     .background(palette.canvas, in: Circle())
@@ -1079,6 +1079,13 @@ struct AidenBotCanonicalAvatarView: View {
         .task(id: loadIdentity) {
             await loadCanonicalImage(expected: loadIdentity)
         }
+    }
+
+    /// Whether a loaded photo wears the glance mark: in a running turn, as the
+    /// caller says through `working` or a settled active `state` (the chat
+    /// header passes only the state). Idle, done and error stay unmarked.
+    static func photoShowsActivityMark(working: Bool, state: AidenBotAvatarState?) -> Bool {
+        working || state?.isWorking == true
     }
 
     @MainActor

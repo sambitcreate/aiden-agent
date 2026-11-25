@@ -189,6 +189,10 @@ struct AidenBotAvatarSignal: Equatable, Sendable {
     /// The person stopped the turn. The settler latches it until the next turn
     /// starts, so a stop and the turn's end landing together stay quiet.
     var stopped = false
+    /// The running turn's identity (its activity's `startedAt`), when known. A
+    /// queued turn can follow a stopped one with no idle between them; its new
+    /// identity clears the Stop latch so it can still end with done.
+    var runId: Int?
 }
 
 extension AidenBotAvatarSignal {
@@ -260,6 +264,8 @@ struct AidenBotAvatarStateSettler: Equatable, Sendable {
     private var wasWorking: Bool
     /// The person stopped this turn; cleared when the next turn starts.
     private var stopLatched: Bool
+    /// The newest run identity heard while working.
+    private var runId: Int?
 
     /// Starts on the signal's live state at once: a view that appears mid-turn
     /// shows the turn, and one that appears after it shows idle, never a past
@@ -273,15 +279,18 @@ struct AidenBotAvatarStateSettler: Equatable, Sendable {
         turnRan = signal.working
         wasWorking = signal.working
         stopLatched = signal.stopped
+        runId = signal.working ? signal.runId : nil
     }
 
     mutating func receive(_ signal: AidenBotAvatarSignal, at now: TimeInterval) {
         advance(to: now)
+        let newRun = signal.working && signal.runId != nil && signal.runId != runId
         if signal.stopped {
             stopLatched = true
-        } else if signal.working, !wasWorking {
+        } else if signal.working, !wasWorking || newRun {
             stopLatched = false
         }
+        if signal.working, let id = signal.runId { runId = id }
         if signal.working { turnRan = true }
         wasWorking = signal.working
         let next = aidenBotAvatarState(for: signal)

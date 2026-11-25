@@ -10,7 +10,7 @@ Written 2026-11-24. The owner chose **Sprite · Hi-bit** after a round of avatar
   - Each of the eight existing shapes (`wisp`, `orb`, `drop`, `hex`, `cloud`, `peak`, `squircle`, `capsule`) now names one fixed, curated Hi-bit body.
   - `color` still picks one of the twelve tints.
   - Every saved Bot keeps its identity, and older phones keep reading the same fields.
-- **The canonical photo still wins.** A Bot with a generated or uploaded photo shows the photo, as today. The sprite replaces only the drawn fallback.
+- **The canonical photo still wins.** A Bot with a generated or uploaded photo shows the photo, as today. The sprite replaces only the drawn fallback. A photo can't move, so on phones it wears a small glance mark whenever the settled state is active (working or waiting) and none at idle, done or error.
 - **Sprites stay pixel-exact.** No rotation, no anti-aliased edges, and no smoothing when scaling. Motion moves in multiples of 0.75 units on the 48 viewBox (a quarter cell), or changes opacity. Only the waiting breathe uses −0.75. Rig, row and prop motion otherwise moves in half-cell steps of 1.5. The per-state look offsets below are still glances held for the whole state, not motion.
 
 ## The shared spec: `botAvatarSprite` in `protocol/aiden-remote/v1/fixtures/contract.json`
@@ -55,7 +55,7 @@ The reference prototype generated this section. It is the single source of truth
   - Full size: 5×6 at x + 0.5 in `deep`, with a `light` glint square at the eye's top-left, sized 0.42 × min(w, h).
   - Small cut: 6×6 in `deep`, with a white `#FFFFFF` glint (`smallGlintHex`) at the eye's top-left, sized 0.42 × min(w, h). The glint shows only while the eyes are open.
   - Eyes are `deep` at every size and in every pose. The open poses (idle, thinking, reading, tool, writing, editing, waiting) keep the glint, including the narrowed reading (lid 0.78) and editing (lid 0.5) eyes and the waiting eyes scaled 1.14.
-  - The glint rides with the eye under the lid, so the blink's shut frame (lid scaleY 0.08) closes it too. Happy and wince eyes have no glint.
+  - The glint rides with the eye under the lid and is hidden for the blink's shut frame (lid scaleY 0.08), so a shut eye shows no glint at all, not a squashed stripe. Happy and wince eyes have no glint.
 - Happy eyes (done): a `^` chevron stroke per eye, from `(x + sw/2, y + 0.78h)` to `(cx, y + 0.2h)` to `(x + w − sw/2, y + 0.78h)`.
 - Wince eyes (error): a `>` `<` pair. The left eye points right, the right eye points left: `M x0 (y + sw/2) L x1 (y + h/2) L x0 (y + h − sw/2)`.
 - Stroke width `sw` is 1.6, or 2.4 at the small cut. Strokes use square caps and miter joins in `deep`.
@@ -83,9 +83,9 @@ The reference prototype generated this section. It is the single source of truth
 ### Mapping and endings (all platforms)
 
 - **Phases.** A running turn maps its live phase: preparing, thinking, tidying, resuming, reconnecting and stopping → thinking; reading, photo and searching → reading; command, app, helper, computer, remembering, routine and working → tool; editing → editing; writing → writing; waiting → waiting. A running turn with no known phase (a sidebar row, which only knows the session) is thinking. Anything waiting on the person wins over the phase.
-- **Endings.** A Stop or a pause settles quietly: straight to idle, with no done or error moment. A failed turn, an interrupted session or `needs_model` gives error. Only a turn that finished normally gives done.
+- **Endings.** A Stop or a pause settles quietly: straight to idle, with no done or error moment. A failed turn, an interrupted session or `needs_model` gives error. Only a turn that finished normally gives done. A Stop covers only its own turn: a queued turn that starts straight after it, with no idle between them, is recognized by its new run (`startedAt`) and still ends with done.
 - **Failed and stopped turns on desktop.** The chat pane reads them from the newest transcript entry (`failed_turn`, an aborted reply, or a stopped tool result). Sidebar rows read the same signal from the live summary's `lastTurnEnd`, so they need no transcript. A failure reported just after the turn ended turns the done moment into error, and a session that failed after a Stop still shows its error. The desktop treats `model_error` as a failed session; phones never receive it.
-- **Timing.** Done and error appear at once, with no debounce; only working states wait about 250 ms. A turn that ended before any working pose showed settles quietly, and so does a card the person answered while no turn was running.
+- **Timing.** Done and error appear at once, with no debounce; only working states wait about 250 ms. New work arriving during a done or error hold goes straight from the moment to the working pose once its debounce passes, never through an idle flash. A turn that ended before any working pose showed settles quietly, and so does a card the person answered while no turn was running.
 - **Phones.** Home rows never show done: phones get only the session state, `needsYou` and `lastReplyAt`, so a Stop or a failure can't be told from a normal end without a wire change. A normal end settles to idle quietly, and an `interrupted` or `needs_model` session shows error. An ordinary failed turn also looks like a normal end there, so it settles to idle. Done shows in the phone chat header only.
 - **Idle.** Idle avatars on phones and in the desktop chat header are static, with no blink; the header animates only while its Bot works or has a done, error or waiting moment. Desktop sidebar rows and the pinned card are static at idle too, and blink only while waiting.
 

@@ -382,4 +382,18 @@ class AidenBotSpriteTest {
             settled { emit(S.DONE); delay(1_000); emit(S.ERROR); delay(5_000) }
         )
     }
+
+    @Test
+    fun newWorkInTheLastMomentOfTheRestGoesStraightToWorkWithoutAnIdleFlash() = runTest {
+        // The done hold ends at 2_500; work arriving at 2_400 shows at 2_650 after its debounce.
+        assertEquals(
+            listOf(0L to S.THINKING, 1_000L to S.DONE, 2_650L to S.TOOL),
+            settled { emit(S.THINKING); delay(1_000); emit(S.DONE); delay(1_400); emit(S.TOOL); delay(5_000) }
+        )
+        // If that work ends before it ever showed, the expired moment still settles at idle.
+        assertEquals(
+            listOf(0L to S.THINKING, 1_000L to S.DONE, 2_600L to S.IDLE),
+            settled { emit(S.THINKING); delay(1_000); emit(S.DONE); delay(1_400); emit(S.TOOL); delay(200); emit(S.IDLE); delay(5_000) }
+        )
+    }
 }

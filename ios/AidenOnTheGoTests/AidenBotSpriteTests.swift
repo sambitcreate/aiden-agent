@@ -502,6 +502,17 @@ final class AidenBotSpriteRenderTests: XCTestCase {
         }
     }
 
+    /// A photo can't move, so it wears the activity mark whenever the settled
+    /// state is active, even when the caller passes only the state.
+    func testAPhotoAvatarMarksEveryActiveStateButNotRestOrOutcomes() {
+        for state in AidenBotAvatarState.allCases {
+            let marked = AidenBotCanonicalAvatarView.photoShowsActivityMark(working: false, state: state)
+            XCTAssertEqual(marked, ![.idle, .done, .error].contains(state), "\(state)")
+        }
+        XCTAssertFalse(AidenBotCanonicalAvatarView.photoShowsActivityMark(working: false, state: nil))
+        XCTAssertTrue(AidenBotCanonicalAvatarView.photoShowsActivityMark(working: true, state: nil))
+    }
+
     /// Error's wince eyes are drawn without anti-aliasing too.
     func testStrokedEyesStayCrisp() throws {
         for pixel in try pixels(.error, color: .mint, size: 44, scale: 3) {

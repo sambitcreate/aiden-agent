@@ -3369,6 +3369,27 @@ final class AidenBotSessionOptimisticTests: XCTestCase {
         XCTAssertEqual(settler.shown, .done)
     }
 
+    /// A queued turn that starts straight after a stopped one, with no idle
+    /// between them, is not stopped: it still ends with done.
+    func testAQueuedTurnAfterAStoppedOneWithNoIdleGapStillEndsWithDone() async throws {
+        let transport = FakeBotSessionTransport()
+        let model = await loaded(transport, try session(.running, activity: AidenBotSessionActivity(phase: "reading", startedAt: started)))
+        var settler = AidenBotAvatarStateSettler(signal: AidenBotAvatarSignal(model: model), at: 0)
+        transport.queueStop(.success(try AidenBotSessionStateView(state: .running)))
+        await model.stop()
+        settler.receive(AidenBotAvatarSignal(model: model), at: 1)
+        // The queued follow-up replaces the run while the state stays running.
+        _ = await model.apply(event(seq: 5, .activity(AidenBotSessionActivity(phase: "editing", startedAt: started + 9_000))))
+        XCTAssertFalse(model.stopRequestedThisTurn)
+        settler.receive(AidenBotAvatarSignal(model: model), at: 2)
+        settler.advance(to: 2.25)
+        XCTAssertEqual(settler.shown, .editing)
+        _ = await model.apply(event(seq: 6, .state(try AidenBotSessionStateView(state: .idle))))
+        _ = await model.apply(event(seq: 7, .activity(nil)))
+        settler.receive(AidenBotAvatarSignal(model: model), at: 4)
+        XCTAssertEqual(settler.shown, .done, "the queued turn was never stopped")
+    }
+
     func testAStopPressedAsANewRunStartsLeavesTheNewRunAlone() async throws {
         let transport = FakeBotSessionTransport()
         let model = await loaded(transport, try session(.running, activity: AidenBotSessionActivity(phase: "reading", startedAt: started)))
