@@ -1,4 +1,4 @@
-// Contract revision 68 (`approval:plain-words`, provisional): a typed shell
+// Contract revision 68 (`approval:plain-words`): a typed shell
 // card also carries the command's plain words (`explanation`) and Aiden's own
 // tags. `protocol/aiden-remote/v1/fixtures/approval-plain-words-revision-68.json`
 // is what the host serves; the iOS and Android decoders read the same shapes.
