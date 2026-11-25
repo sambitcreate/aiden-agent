@@ -557,6 +557,10 @@ test("a failed reply is a typed failed turn, and Retry as a new submission answe
     assert.equal(last?.type === "failed_turn" && last.retryText, "Plan dinner");
     assert.equal(last?.type === "failed_turn" && last.errorMessage, "provider is down");
     assert.equal(botRetryableFailedTurn(failed.snapshot.entries), last);
+    // The sidebar row learns the turn failed, though the session itself is idle again.
+    const failedSummary = await live.projection.summary("bot:a");
+    assert.equal(failedSummary.state.kind, "idle");
+    assert.equal(failedSummary.lastTurnEnd, "failed");
 
     // Retry: the same text, a new request id.
     const retry = await live.service.send("bot:a", { text: last.type === "failed_turn" ? last.retryText! : "", requestId: "desk-2" });
@@ -566,6 +570,7 @@ test("a failed reply is a typed failed turn, and Retry as a new submission answe
     after.unsubscribe();
     assert.deepEqual(visibleText(after.snapshot).slice(-2), ["user:Plan dinner", "assistant:Here it is."]);
     assert.equal(botRetryableFailedTurn(after.snapshot.entries), null);
+    assert.equal((await live.projection.summary("bot:a")).lastTurnEnd, undefined);
   } finally {
     await live.close();
   }

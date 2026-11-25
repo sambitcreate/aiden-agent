@@ -100,6 +100,8 @@ struct AidenBotSessionChatView: View {
     @State private var composerSession: AidenComposerSession
     @State private var peerExchangeID: String?
     @State private var isShowingProfile = false
+    /// What the header avatar shows, spoken by the title capsule.
+    @State private var settledAvatar: AidenBotAvatarState = .idle
     /// The profile sheet opens straight to Memory (from "Memory updated").
     @State private var profileOpensMemory = false
     @State private var isShowingAdvanced = false
@@ -569,7 +571,8 @@ struct AidenBotSessionChatView: View {
         AidenChatTitleCapsule(
             title: bot?.name ?? String(localized: "Bot"),
             status: bot == nil ? nil : titleStatus,
-            accessibilityHint: "Opens the Bot’s profile"
+            accessibilityHint: "Opens the Bot’s profile",
+            settledAvatar: bot == nil ? nil : settledAvatar
         ) {
             // Nothing to open until the Bot has loaded.
             if bot != nil { isShowingProfile = true }
@@ -594,21 +597,32 @@ struct AidenBotSessionChatView: View {
         )
     }
 
+    /// The header avatar's signal. Before the model loads, nothing has run, so
+    /// a missing model reads as a quiet stop rather than a turn that finished.
+    private var avatarSignal: AidenBotAvatarSignal {
+        model.map { AidenBotAvatarSignal(model: $0) } ?? AidenBotAvatarSignal(stopped: true)
+    }
+
     /// The Bot's face in the middle of the bar, over its name; like the name,
-    /// it opens the profile.
+    /// it opens the profile. It plays what the turn is doing, while the
+    /// capsule's status line says the same in words for VoiceOver.
     private var avatarHeader: some View {
         AidenChatHeaderAvatar {
             isShowingProfile = true
         } avatar: {
             if let bot {
-                AidenBotCanonicalAvatarView(
-                    coordinator: coordinator,
-                    machine: openedOn,
-                    botID: bot.id,
-                    avatar: bot.avatar,
-                    name: bot.name,
-                    size: AidenChatHeaderAvatar<EmptyView>.size
-                )
+                AidenBotSettledAvatarState(signal: avatarSignal, onShownChange: { settledAvatar = $0 }) { state in
+                    AidenBotCanonicalAvatarView(
+                        coordinator: coordinator,
+                        machine: openedOn,
+                        botID: bot.id,
+                        avatar: bot.avatar,
+                        name: bot.name,
+                        size: AidenChatHeaderAvatar<EmptyView>.size,
+                        // A resting header draws the still sprite, with no animation clock.
+                        state: state == .idle ? nil : state
+                    )
+                }
             } else {
                 Circle().fill(palette.raised)
             }

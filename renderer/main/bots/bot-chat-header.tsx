@@ -1,6 +1,7 @@
 import type * as React from "react";
 import { Ellipsis, PanelRightClose, PanelRightOpen } from "lucide-react";
 import { BotAvatar } from "../../components/bot-avatar";
+import type { BotAvatarState } from "../../shared/bot-sprite";
 import {
   Button,
   DropdownMenu,
@@ -19,13 +20,16 @@ import { BOT_PANEL_ID, useBotPanel } from "./bot-panel-context";
 export function BotChatNamePill({
   bot,
   onOpenProfile,
-  working = false,
+  avatarState = "idle",
 }: {
   bot: Pick<BotDefinition, "id" | "name" | "avatar">;
   /** Opens the side panel on the Advanced tab. */
   onOpenProfile(): void;
-  /** The Bot is in a running turn: its face glances. */
-  working?: boolean;
+  /**
+   * The face's live pose (`useBotAvatarState`): it acts out the running turn and its done or
+   * error moment. At idle the face is a static sprite, with no blink.
+   */
+  avatarState?: BotAvatarState;
 }) {
   return (
     <Button
@@ -38,7 +42,7 @@ export function BotChatNamePill({
       aria-controls={BOT_PANEL_ID}
       onClick={onOpenProfile}
     >
-      <BotAvatar botId={bot.id} avatar={bot.avatar} name={bot.name} photoLoading="immediate" size="small" working={working} />
+      <BotAvatar botId={bot.id} avatar={bot.avatar} name={bot.name} photoLoading="immediate" size="small" state={avatarState === "idle" ? undefined : avatarState} />
       <span className="truncate text-strong font-medium">{bot.name}</span>
     </Button>
   );
