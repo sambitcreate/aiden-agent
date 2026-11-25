@@ -230,6 +230,8 @@ struct AidenChatDetailView: View {
     @Environment(\.aidenPalette) private var palette
     @Environment(\.scenePhase) private var scenePhase
     @State private var model: AidenChatViewModel
+    /// What a Bot chat's header avatar shows, spoken by the title capsule.
+    @State private var settledBotAvatar: AidenBotAvatarState = .idle
     /// Lives here, not in the composer, so a question card taking the composer's
     /// place leaves dictation and attachment preparation running.
     @State private var composerSession: AidenComposerSession
@@ -1268,7 +1270,8 @@ struct AidenChatDetailView: View {
         AidenChatTitleCapsule(
             title: botModel.bot?.name ?? model.chat.title,
             status: legacyBotTitleStatus(botModel.bot),
-            accessibilityHint: "Opens the Bot’s profile"
+            accessibilityHint: "Opens the Bot’s profile",
+            settledAvatar: botModel.bot == nil ? nil : settledBotAvatar
         ) {
             openBotProfile(coordinator: coordinator, model: botModel)
         }
@@ -1308,7 +1311,8 @@ struct AidenChatDetailView: View {
                         stream: model.streamState,
                         isStopping: model.isStopping,
                         awaitingPerson: model.pendingApproval != nil || model.pendingQuestion != nil
-                    )
+                    ),
+                    onShownChange: { settledBotAvatar = $0 }
                 ) { state in
                     AidenBotCanonicalAvatarView(
                         coordinator: coordinator,

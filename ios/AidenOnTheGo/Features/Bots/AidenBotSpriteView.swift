@@ -383,6 +383,8 @@ struct AidenBotSettledAvatarState<Content: View>: View {
     let signal: AidenBotAvatarSignal
     /// Whether a finished turn shows done; the Bots list's rows don't.
     var showsDone = true
+    /// Told each state the avatar shows, so a label elsewhere can speak it.
+    var onShownChange: ((AidenBotAvatarState) -> Void)? = nil
     @ViewBuilder let content: (AidenBotAvatarState) -> Content
 
     @State private var settler: AidenBotAvatarStateSettler
@@ -390,10 +392,12 @@ struct AidenBotSettledAvatarState<Content: View>: View {
     init(
         signal: AidenBotAvatarSignal,
         showsDone: Bool = true,
+        onShownChange: ((AidenBotAvatarState) -> Void)? = nil,
         @ViewBuilder content: @escaping (AidenBotAvatarState) -> Content
     ) {
         self.signal = signal
         self.showsDone = showsDone
+        self.onShownChange = onShownChange
         self.content = content
         _settler = State(initialValue: AidenBotAvatarStateSettler(signal: signal, at: Self.now, showsDone: showsDone))
     }
@@ -406,6 +410,7 @@ struct AidenBotSettledAvatarState<Content: View>: View {
             // never replaying an ending it already showed.
             .onAppear { settler.resync(signal, at: Self.now) }
             .onChange(of: signal) { _, next in settler.receive(next, at: Self.now) }
+            .onChange(of: settler.shown, initial: true) { _, shown in onShownChange?(shown) }
             .task(id: settler) {
                 guard let wake = settler.nextWake else { return }
                 let delay = max(0, wake - Self.now)

@@ -100,6 +100,8 @@ struct AidenBotSessionChatView: View {
     @State private var composerSession: AidenComposerSession
     @State private var peerExchangeID: String?
     @State private var isShowingProfile = false
+    /// What the header avatar shows, spoken by the title capsule.
+    @State private var settledAvatar: AidenBotAvatarState = .idle
     /// The profile sheet opens straight to Memory (from "Memory updated").
     @State private var profileOpensMemory = false
     @State private var isShowingAdvanced = false
@@ -569,7 +571,8 @@ struct AidenBotSessionChatView: View {
         AidenChatTitleCapsule(
             title: bot?.name ?? String(localized: "Bot"),
             status: bot == nil ? nil : titleStatus,
-            accessibilityHint: "Opens the Bot’s profile"
+            accessibilityHint: "Opens the Bot’s profile",
+            settledAvatar: bot == nil ? nil : settledAvatar
         ) {
             // Nothing to open until the Bot has loaded.
             if bot != nil { isShowingProfile = true }
@@ -608,7 +611,7 @@ struct AidenBotSessionChatView: View {
             isShowingProfile = true
         } avatar: {
             if let bot {
-                AidenBotSettledAvatarState(signal: avatarSignal) { state in
+                AidenBotSettledAvatarState(signal: avatarSignal, onShownChange: { settledAvatar = $0 }) { state in
                     AidenBotCanonicalAvatarView(
                         coordinator: coordinator,
                         machine: openedOn,
