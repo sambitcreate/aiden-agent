@@ -3088,7 +3088,7 @@ final class AidenChatTests: XCTestCase {
         XCTAssertNil(afterRemoval.selectedThinkingLevel)
     }
 
-    /// Revision 66: with the Agent Slider a new chat starts on the Mac's last
+    /// Revision 68: with the Agent Slider a new chat starts on the Mac's last
     /// model and level, the stops move the chat's selection, and a turn sends
     /// the stop's provider, model and level exactly, a level-less stop sending
     /// none where the model menu would send the model's default. A new chat's

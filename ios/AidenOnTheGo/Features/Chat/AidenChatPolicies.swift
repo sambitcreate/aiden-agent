@@ -450,7 +450,7 @@ enum AidenChatModelAuthority {
         }
         let model = provider?.models.first { $0.id == modelId }
         if exactLevels {
-            // Revision 66: with the Agent Slider a missing level is a choice,
+            // Revision 68: with the Agent Slider a missing level is a choice,
             // the model's own setting, which a level-less stop matches. A
             // replaced model never inherits the old model's level.
             // Nothing chosen and nothing remembered: a new chat starts on the
@@ -498,7 +498,7 @@ enum AidenChatModelAuthority {
 
     /// The chat's own provider/model pair, when the host still offers it.
     /// Hidden models stay usable here, as they do for existing chats on the Mac.
-    /// With `exactLevels` (revision 66, the Agent Slider) the level is the
+    /// With `exactLevels` (revision 68, the Agent Slider) the level is the
     /// chat's saved one, exactly, so the slider shows the stop the Mac would:
     /// a chat with no saved level runs on the model's own setting.
     static func ownSelection(

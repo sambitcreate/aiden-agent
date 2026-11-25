@@ -382,16 +382,16 @@ export const AIDEN_REMOTE_CONTINUE_IN_NEW_CHAT_CONTRACT_REVISION = 64 as const;
  */
 export const AIDEN_REMOTE_STREAM_SNAPSHOT_REASONS_CONTRACT_REVISION = 65 as const;
 /**
- * Contract revision 66 (claimed when written; recheck against `main` at merge
+ * Contract revision 68 (claimed when written; recheck against `main` at merge
  * by changing only this constant): the Agent Slider on phones. `GET /models`
  * carries an optional `agentSlider` (its stops, the home stop and each stop's
  * availability on this host); chat projections carry the chat's own
  * `thinkingLevel`; and a device holding the opt-in `chat:agent-slider` has
  * each turn's thinking level saved as the chat's own, with its provider and
  * model, in the same write as the turn's message. Both new fields are additive, so closed
- * decoders on revision <= 65 that ignore unknown keys stay valid.
+ * decoders on revision <= 67 that ignore unknown keys stay valid.
  */
-export const AIDEN_REMOTE_AGENT_SLIDER_CONTRACT_REVISION = 66 as const;
+export const AIDEN_REMOTE_AGENT_SLIDER_CONTRACT_REVISION = 68 as const;
 export const AIDEN_REMOTE_CONTRACT_REVISION = AIDEN_REMOTE_AGENT_SLIDER_CONTRACT_REVISION;
 export const AIDEN_REMOTE_BASE_PATH = "/api/aiden/v1" as const;
 export const AIDEN_REMOTE_MAX_SSE_FRAME_BYTES = 1_048_576;
@@ -723,7 +723,7 @@ export const AIDEN_REMOTE_CHAT_CONTINUE_CAPABILITIES = ["chat:continue-in-new-ch
 export const AIDEN_REMOTE_STREAM_SNAPSHOT_REASON_CAPABILITIES = ["stream:snapshot-reasons"] as const;
 
 /**
- * Contract revision 66: a device holding `chat:agent-slider` has each turn's
+ * Contract revision 68: a device holding `chat:agent-slider` has each turn's
  * thinking level saved as the chat's own, with the provider and model every
  * turn already saves, in the same write as the turn's message (so a refused
  * send changes nothing). The chat then stays on the stop the person chose, as
@@ -2464,7 +2464,7 @@ export interface AidenRemoteContractFixture {
   continueInNewChat?: AidenRemoteContinueInNewChatFixture;
   /** Revision 65 (`stream:snapshot-reasons`): reader-local gap snapshot replay, legacy reason-less projection, and provider reset. */
   streamRecovery?: AidenRemoteStreamRecoveryFixture;
-  /** Revision 66 (`chat:agent-slider`): a `/models` slider, the turn a stop sends, and the chat it leaves. */
+  /** Revision 68 (`chat:agent-slider`): a `/models` slider, the turn a stop sends, and the chat it leaves. */
   agentSlider?: AidenRemoteAgentSliderFixture;
   taskProgress: AidenRemoteChatTaskProgress;
   agentRoster: AidenRemoteChatAgentRoster;
@@ -4090,7 +4090,7 @@ export function parseAidenRemoteChatProjection(
   if (hasProviderId !== hasModelId) {
     throw new Error(`${label} providerId and modelId must be supplied together.`);
   }
-  // Revision 66: the chat's own level rides only with its model, and never on a Bot chat.
+  // Revision 68: the chat's own level rides only with its model, and never on a Bot chat.
   const hasThinkingLevel = hasOwn(value, "thinkingLevel");
   if (hasThinkingLevel && (!hasModelId || hasOwn(value, "botId"))) {
     throw new Error(`${label} thinkingLevel needs a model and is regular-chat-only.`);
@@ -8807,7 +8807,7 @@ export interface AidenRemoteAgentSlider {
 }
 
 /**
- * Revision 66: the `agentSlider` of `GET /models`, as a host sends it. Strict:
+ * Revision 68: the `agentSlider` of `GET /models`, as a host sends it. Strict:
  * 3 to 7 stops with unique ids, a home naming one of them, and provider and
  * model ids together and a level only on a `ready` stop. Labels name what a
  * stop is set to in words: never on an `unassigned` or `computer-only` stop,

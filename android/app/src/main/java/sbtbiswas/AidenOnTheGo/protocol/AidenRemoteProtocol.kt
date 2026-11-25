@@ -697,7 +697,7 @@ data class AidenRemoteCapability(val rawValue: String) {
         val STREAM_SNAPSHOT_REASONS = AidenRemoteCapability("stream:snapshot-reasons")
 
         /**
-         * Revision 66: a turn that asks to save its selection keeps its level as the chat's own,
+         * Revision 68: a turn that asks to save its selection keeps its level as the chat's own,
          * with its provider and model, in the same write as the message. The Mac offers it only in
          * `serverCapabilities`. This phone doesn't ask for it yet: its turns don't carry the chat's
          * own level, so saving them would move the chat off the stop chosen on the computer. The

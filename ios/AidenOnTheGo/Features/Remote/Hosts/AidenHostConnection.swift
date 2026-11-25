@@ -608,7 +608,7 @@ final class AidenHostConnection {
     /// `attachments:raw` (revision 50), then `chat:new-worktree` (revision 53),
     /// then `chat:continue-in-new-chat` (revision 64), then
     /// `stream:snapshot-reasons` (revision 65), then `chat:agent-slider`
-    /// (revision 66), then continuity watches, Open work, routine models and peers (revision 59),
+    /// (revision 68), then continuity watches, Open work, routine models and peers (revision 59),
     /// followed by messaging, access requests, plans and allowed lists (revisions 54–57),
     /// then the five revision-61 Bot UX opt-ins, one call each.
     static let capabilitiesAskedForAlone: [[AidenRemoteCapability]] = [

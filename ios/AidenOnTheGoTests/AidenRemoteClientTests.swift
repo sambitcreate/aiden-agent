@@ -1435,7 +1435,7 @@ final class AidenRemoteClientTests: XCTestCase {
         XCTAssertTrue(grants.contains(.chatContinueInNewChat))
     }
 
-    /// Revision 66: the Agent Slider is an opt-in asked for alone, because a Mac
+    /// Revision 68: the Agent Slider is an opt-in asked for alone, because a Mac
     /// saves a sent selection only for a phone that holds it.
     func testAgentSliderIsAnOptInNegotiatedAlone() async throws {
         let section = try XCTUnwrap(

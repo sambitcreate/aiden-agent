@@ -2424,7 +2424,7 @@ struct AidenChat: Codable, Identifiable, Equatable, Sendable {
     var titlePending: Bool? = nil
     /// Additive in contract revision 21: present on a chat created by Fork.
     var forkedFrom: AidenChatForkLineage? = nil
-    /// Additive in contract revision 66: the chat's own thinking level, only
+    /// Additive in contract revision 68: the chat's own thinking level, only
     /// with its model and never on a Bot chat. Nil means the model's own setting.
     var thinkingLevel: String? = nil
 
@@ -2627,7 +2627,7 @@ struct AidenChat: Codable, Identifiable, Equatable, Sendable {
     }
 }
 
-/// Revision 66: the rule a chat's own thinking level is held to. Its value is
+/// Revision 68: the rule a chat's own thinking level is held to. Its value is
 /// only bounded, so a level a later Mac adds never costs the phone the chat.
 enum AidenChatThinkingLevel {
     static func isValid(_ level: String?, modelId: String?, botId: String?) -> Bool {
@@ -3095,7 +3095,7 @@ extension AidenProvider {
 struct AidenModelCatalog: Codable, Equatable, Sendable {
     let providers: [AidenProvider]
     let defaults: [String: String]
-    /// Revision 66: the Mac's Agent Slider. Nil from an older Mac, a Mac with
+    /// Revision 68: the Mac's Agent Slider. Nil from an older Mac, a Mac with
     /// no readable slider, or a slider that breaks the contract; the composer
     /// then offers only the model menu.
     var agentSlider: AidenAgentSlider? = nil
@@ -3121,7 +3121,7 @@ extension AidenModelCatalog {
     }
 }
 
-/// Revision 66: why an Agent Slider stop can or cannot run from this phone.
+/// Revision 68: why an Agent Slider stop can or cannot run from this phone.
 /// The Mac decides; the phone never substitutes another model.
 enum AidenAgentSliderAvailability: String, Codable, Equatable, Sendable {
     case ready
@@ -3143,7 +3143,7 @@ enum AidenAgentSliderAvailability: String, Codable, Equatable, Sendable {
     }
 }
 
-/// Revision 66: one stop of `GET /models` `agentSlider`. Provider and model
+/// Revision 68: one stop of `GET /models` `agentSlider`. Provider and model
 /// come together and only on a stop that can run; a level only with a model.
 /// `providerLabel` and `modelLabel` are the Mac's display names, so the phone
 /// never shows an id. `thinkingLevel` is the level a turn on this stop runs
@@ -3254,7 +3254,7 @@ struct AidenAgentSliderStop: Codable, Equatable, Identifiable, Sendable {
     }
 }
 
-/// Revision 66: the Mac's Agent Slider, 3 to 7 stops left to right, and the
+/// Revision 68: the Mac's Agent Slider, 3 to 7 stops left to right, and the
 /// stop Reset to home returns to.
 struct AidenAgentSlider: Codable, Equatable, Sendable {
     static let minimumStops = 3
@@ -3374,7 +3374,7 @@ struct AidenTurnStart: Codable, Equatable, Sendable {
     let thinkingLevel: String?
     let attachmentIds: [String]?
     let skill: AidenSkillInvocation?
-    /// Revision 66: true when the Mac should keep this provider, model and
+    /// Revision 68: true when the Mac should keep this provider, model and
     /// level as the chat's own: the phone holds the Agent Slider and either
     /// the person picked a stop or model for this chat that hasn't been sent
     /// yet, or this is a new chat's first send. A Mac that offers

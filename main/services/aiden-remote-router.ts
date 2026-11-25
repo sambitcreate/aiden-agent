@@ -1760,7 +1760,7 @@ function streamSnapshotReasonsWired(dependencies: AidenRemoteRouterDependencies)
   return Boolean(dependencies.streams && dependencies.chats);
 }
 
-/** Revision 66: whether a turn can save its selection as the chat's own (`chat:agent-slider`). */
+/** Revision 68: whether a turn can save its selection as the chat's own (`chat:agent-slider`). */
 function agentSliderWired(dependencies: AidenRemoteRouterDependencies): boolean {
   return dependencies.chats?.supportsAgentSlider === true;
 }
@@ -2379,7 +2379,7 @@ function advertisedServerCapabilities(
     ...(continueInNewChatWired(dependencies) ? AIDEN_REMOTE_CHAT_CONTINUE_CAPABILITIES : []),
     // Revision 65: offered while stream event replay is served.
     ...(streamSnapshotReasonsWired(dependencies) ? AIDEN_REMOTE_STREAM_SNAPSHOT_REASON_CAPABILITIES : []),
-    // Revision 66: offered while turns can save the chat's own model selection.
+    // Revision 68: offered while turns can save the chat's own model selection.
     ...(agentSliderWired(dependencies) ? AIDEN_REMOTE_AGENT_SLIDER_CAPABILITIES : []),
     ...(device.acceptsProgressCapabilities === true
       ? AIDEN_REMOTE_PROGRESS_CAPABILITIES.filter((capability) =>
@@ -2893,7 +2893,7 @@ export function createAidenRemoteRequestHandler(
               throw new AidenRemoteServiceError("not_found", "Stream snapshot reasons are unavailable on this Aiden installation.", 404);
             }
           } else if ((AIDEN_REMOTE_AGENT_SLIDER_CAPABILITIES as readonly string[]).includes(capability)) {
-            // Revision 66: offered while turns can save the chat's own model selection.
+            // Revision 68: offered while turns can save the chat's own model selection.
             if (!agentSliderWired(dependencies)) {
               throw new AidenRemoteServiceError("not_found", "The Agent Slider is unavailable on this Aiden installation.", 404);
             }

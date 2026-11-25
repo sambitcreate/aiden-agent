@@ -48,7 +48,7 @@ export interface AidenRemoteProviderProjection {
 }
 
 /**
- * One Agent Slider stop as a paired device sees it (revision 66).
+ * One Agent Slider stop as a paired device sees it (revision 68).
  * `providerId` and `modelId` come together and only on a "ready" stop.
  * `thinkingLevel` (ready stops only) is the level a turn on this stop runs
  * with here: the stop's own level fitted to what its model offers, absent
@@ -83,7 +83,7 @@ export interface AidenRemoteAgentSliderProjection {
 export interface AidenRemoteModelsProjection {
   providers: AidenRemoteProviderProjection[];
   defaults: Record<string, string>;
-  /** Additive (revision 66): absent when the host has no readable Agent Slider. */
+  /** Additive (revision 68): absent when the host has no readable Agent Slider. */
   agentSlider?: AidenRemoteAgentSliderProjection;
 }
 

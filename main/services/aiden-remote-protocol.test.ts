@@ -3619,7 +3619,7 @@ test("revision 56 plans decode strictly, preserve absent versus null, and exclud
   const section = protocol.parseAidenRemoteContractFixture(raw).botPlans!;
   assert.deepEqual(section, raw.botPlans);
   assert.equal(protocol.AIDEN_REMOTE_BOT_PLANS_CONTRACT_REVISION, 56);
-  assert.equal(protocol.AIDEN_REMOTE_CONTRACT_REVISION, 66);
+  assert.equal(protocol.AIDEN_REMOTE_CONTRACT_REVISION, 68);
   assert.equal(section.pending.status, "pending");
   assert.equal(section.active.steps[0].status, "done");
   const parse = protocol.parseAidenRemoteBotPlan;
@@ -3706,7 +3706,7 @@ test("revision 57 allowed fixture is strict and exposes only bounded public list
   const raw = await json("fixtures/contract.json") as Record<string, any>;
   const section = protocol.parseAidenRemoteContractFixture(raw).botAllowed!;
   assert.deepEqual(section, raw.botAllowed);
-  assert.equal(protocol.AIDEN_REMOTE_BOT_ALLOWED_CONTRACT_REVISION, 57); assert.equal(protocol.AIDEN_REMOTE_CONTRACT_REVISION, 66);
+  assert.equal(protocol.AIDEN_REMOTE_BOT_ALLOWED_CONTRACT_REVISION, 57); assert.equal(protocol.AIDEN_REMOTE_CONTRACT_REVISION, 68);
   const all = [...section.paginated.firstPage.entries, ...section.paginated.nextPage.entries];
   assert.equal(all.length, 53); assert.equal(all.filter(e => e.kind === "rule").length, 50); assert.equal(all.filter(e => e.kind === "folder").length, 3);
   assert.equal(new Set(all.map(e => e.id)).size, 53);
@@ -3815,7 +3815,7 @@ test("revision 62 reads only the steps Stop cancelled as stopped, and every othe
   const protocol = await import("./aiden-remote-protocol.js");
   const raw = await json("fixtures/contract.json") as Record<string, any>;
   assert.equal(protocol.AIDEN_REMOTE_STOPPED_BY_USER_CONTRACT_REVISION, 62);
-  assert.equal(protocol.AIDEN_REMOTE_CONTRACT_REVISION, 66);
+  assert.equal(protocol.AIDEN_REMOTE_CONTRACT_REVISION, 68);
   const fixture = protocol.parseAidenRemoteContractFixture(raw).stoppedSteps;
   assert.ok(fixture);
   assert.deepEqual(fixture.stoppedStepIds, ["tool-3"]);
@@ -3923,7 +3923,7 @@ test("revision 65 distinguishes gap recovery snapshots from provider resets and 
   const protocol = await import("./aiden-remote-protocol.js");
   const raw = await json("fixtures/contract.json") as Record<string, any>;
   assert.equal(protocol.AIDEN_REMOTE_STREAM_SNAPSHOT_REASONS_CONTRACT_REVISION, 65);
-  assert.equal(protocol.AIDEN_REMOTE_CONTRACT_REVISION, 66);
+  assert.equal(protocol.AIDEN_REMOTE_CONTRACT_REVISION, 68);
   const parsedFixture = protocol.parseAidenRemoteContractFixture(raw);
   const section = parsedFixture.streamRecovery;
   assert.ok(section);
@@ -4001,11 +4001,11 @@ test("revision 65 distinguishes gap recovery snapshots from provider resets and 
   );
 });
 
-test("revision 66 carries the Agent Slider on /models and the chat's own level, and gates chat:agent-slider", async () => {
+test("revision 68 carries the Agent Slider on /models and the chat's own level, and gates chat:agent-slider", async () => {
   const protocol = await import("./aiden-remote-protocol.js");
   const raw = await json("fixtures/contract.json") as Record<string, any>;
-  assert.equal(protocol.AIDEN_REMOTE_AGENT_SLIDER_CONTRACT_REVISION, 66);
-  assert.equal(protocol.AIDEN_REMOTE_CONTRACT_REVISION, 66);
+  assert.equal(protocol.AIDEN_REMOTE_AGENT_SLIDER_CONTRACT_REVISION, 68);
+  assert.equal(protocol.AIDEN_REMOTE_CONTRACT_REVISION, 68);
   const section = protocol.parseAidenRemoteContractFixture(raw).agentSlider;
   assert.ok(section);
   assert.equal(section.capability, "chat:agent-slider");
@@ -4100,9 +4100,9 @@ test("revision 66 carries the Agent Slider on /models and the chat's own level, 
   assert.equal(protocol.parseAidenRemoteChatProjection(legacyChat).thinkingLevel, undefined);
 
   const older = structuredClone(raw);
-  older.contractRevision = 65;
-  older.hostHealth.contractRevision = 65;
-  assert.throws(() => protocol.parseAidenRemoteContractFixture(older), /revision 66/u);
+  older.contractRevision = 67;
+  older.hostHealth.contractRevision = 67;
+  assert.throws(() => protocol.parseAidenRemoteContractFixture(older), /revision 68/u);
   delete older.agentSlider;
   assert.equal(protocol.parseAidenRemoteContractFixture(older).agentSlider, undefined);
 

@@ -7554,7 +7554,7 @@ test("chat:continue-in-new-chat is offered only while the host can continue a ch
   }
 });
 
-test("revision 66 offers chat:agent-slider only where the host saves a phone's slider selection", async () => {
+test("revision 68 offers chat:agent-slider only where the host saves a phone's slider selection", async () => {
   const headers = { authorization: `Bearer ${"a".repeat(43)}`, "aiden-protocol-version": "1" };
   const negotiate = {
     method: "POST",

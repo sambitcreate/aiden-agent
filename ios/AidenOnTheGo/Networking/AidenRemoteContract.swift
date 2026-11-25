@@ -681,7 +681,7 @@ struct AidenRemoteCapability: RawRepresentable, Codable, Hashable, Sendable {
     /// Contract revision 59 adds `bot:routine-models`, asked for alone.
     /// Contract revision 59 adds `bot:peers`, asked for alone.
     /// Contract revision 64 adds `chat:continue-in-new-chat`, asked for alone.
-    /// Contract revision 66 adds `chat:agent-slider`, asked for alone.
+    /// Contract revision 68 adds `chat:agent-slider`, asked for alone.
 
     /// Contract revision 61 adds `approval:cards`, `approvals:settings`,
     /// `bot:settings-changes`, `bot:suggestions` and `bot:templates`, each alone.
@@ -783,7 +783,7 @@ struct AidenRemoteCapability: RawRepresentable, Codable, Hashable, Sendable {
     /// resets. Asked for alone so older hosts do not reject the progress batch.
     static let streamSnapshotReasons = Self(rawValue: "stream:snapshot-reasons")
 
-    /// Revision 66: a turn this device sends saves its model and thinking level
+    /// Revision 68: a turn this device sends saves its model and thinking level
     /// as the chat's own, as a turn sent from the Mac's composer does, so the
     /// Agent Slider on `GET /models` matches what the next turn runs. Asked for
     /// alone so older hosts do not reject the progress batch.
@@ -3109,7 +3109,7 @@ struct AidenChatMessagesWindow: Decodable, Equatable, Sendable {
         var modelId: String?
         var createdAt: Date
         var updatedAt: Date
-        /// Revision 66: the chat's own thinking level, with its model.
+        /// Revision 68: the chat's own thinking level, with its model.
         var thinkingLevel: String? = nil
     }
 
