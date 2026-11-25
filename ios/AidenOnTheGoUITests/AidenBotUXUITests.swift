@@ -12,13 +12,7 @@ final class AidenBotUXUITests: XCTestCase {
 
     private func walk(_ appearance: AidenStateMatrix.Appearance) {
         func shoot(_ name: String) {
-            let full = "phase6b-\(appearance.rawValue)-\(name)"
-            AidenStateMatrix.capture(full, in: self)
-            // Run with TEST_RUNNER_AIDEN_SCREENSHOT_DIR=<folder> to also get the PNGs on disk.
-            if let folder = ProcessInfo.processInfo.environment["AIDEN_SCREENSHOT_DIR"], !folder.isEmpty {
-                let url = URL(fileURLWithPath: folder).appendingPathComponent("\(full).png")
-                try? XCUIScreen.main.screenshot().pngRepresentation.write(to: url)
-            }
+            AidenStateMatrix.keepScreenshot("phase6b-\(appearance.rawValue)-\(name)", in: self)
         }
 
         // The Bot's chat: the new cards and the typed approval card.

@@ -175,4 +175,16 @@ enum AidenStateMatrix {
         attachment.lifetime = .keepAlways
         testCase.add(attachment)
     }
+
+    /// `capture`, and when the runner has `AIDEN_SCREENSHOT_DIR=<folder>` also
+    /// the PNG in that folder. Set it as `TEST_RUNNER_AIDEN_SCREENSHOT_DIR` on
+    /// the `xcodebuild` command line; xcodebuild drops the prefix on the way
+    /// to the runner.
+    static func keepScreenshot(_ name: String, in testCase: XCTestCase) {
+        capture(name, in: testCase)
+        if let folder = ProcessInfo.processInfo.environment["AIDEN_SCREENSHOT_DIR"], !folder.isEmpty {
+            let url = URL(fileURLWithPath: folder).appendingPathComponent("\(name).png")
+            try? XCUIScreen.main.screenshot().pngRepresentation.write(to: url)
+        }
+    }
 }
