@@ -12,7 +12,7 @@ final class AidenSandboxedHTMLUITests: XCTestCase {
 
     func testATapOnAPreviewLinkAsksFirstAndAScrollNeverDoes() {
         let app = XCUIApplication()
-        app.launchArguments = ["-AidenPreviewFixture", "-AppleLanguages", "(en)", "-AppleLocale", "en_US"]
+        app.launchArguments = ["-AidenPreviewFixture", "-aiden.appearance.aurora", "off", "-AppleLanguages", "(en)", "-AppleLocale", "en_US"]
         app.launch()
 
         let top = app.links["Top link"]

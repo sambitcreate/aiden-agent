@@ -652,6 +652,7 @@ final class AidenShellUITests: XCTestCase {
                 "-aiden.appearance.mode", appearance,
                 "-aiden.product-navigation.v1", "reset",
                 "-aiden.product-navigation.v2", "reset",
+                "-aiden.appearance.aurora", "off",
                 "-AppleLanguages", "(en)",
                 "-AppleLocale", "en_US",
             ]
@@ -697,6 +698,7 @@ final class AidenShellUITests: XCTestCase {
         app.launchArguments = [
             "-aiden.product-navigation.v1", "reset",
             "-aiden.product-navigation.v2", "reset",
+            "-aiden.appearance.aurora", "off",
             "-AppleLanguages", "(en)",
             "-AppleLocale", "en_US",
         ]

@@ -70,6 +70,11 @@ enum AidenStateMatrix {
         if let theme {
             arguments += ["-aiden.appearance.lightPreset", theme, "-aiden.appearance.darkPreset", theme]
         }
+        // The ambient background stays off unless a test turns it on, so
+        // screenshots and element queries are not affected by its motion.
+        if !extraArguments.contains("-aiden.appearance.aurora") {
+            arguments += ["-aiden.appearance.aurora", "off"]
+        }
         app.launchArguments = arguments + extraArguments
         app.launch()
         return app

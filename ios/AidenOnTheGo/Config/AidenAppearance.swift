@@ -275,6 +275,10 @@ struct AidenPalette: Equatable, Sendable {
     let successHex: String
     let warningHex: String
     let dangerHex: String
+    /// The hue of live work (a run, a listening mic) in the ambient background.
+    /// A blue, kept at least 30° of hue away from the status colours so
+    /// "working" never reads as done, waiting or failed.
+    let activityHex: String
     /// Status colours safe for text, worked out once here so rows only read them.
     let successTextHex: String
     let warningTextHex: String
@@ -292,7 +296,8 @@ struct AidenPalette: Equatable, Sendable {
         accentHex: String,
         successHex: String,
         warningHex: String,
-        dangerHex: String
+        dangerHex: String,
+        activityHex: String? = nil
     ) {
         self.canvasHex = canvasHex
         self.sidebarHex = sidebarHex
@@ -303,6 +308,9 @@ struct AidenPalette: Equatable, Sendable {
         self.successHex = successHex
         self.warningHex = warningHex
         self.dangerHex = dangerHex
+        self.activityHex = activityHex ?? (Color.relativeLuminance(canvasHex) > 0.179
+            ? Self.defaultLightActivityHex
+            : Self.defaultDarkActivityHex)
         func grounds(_ statusHex: String) -> [String] {
             Self.statusTextGrounds(statusHex, canvasHex: canvasHex, raisedHex: raisedHex)
         }
@@ -323,6 +331,10 @@ struct AidenPalette: Equatable, Sendable {
     var success: Color { Color(aidenHex: successHex) }
     var warning: Color { Color(aidenHex: warningHex) }
     var danger: Color { Color(aidenHex: dangerHex) }
+    var activity: Color { Color(aidenHex: activityHex) }
+
+    static let defaultLightActivityHex = "#006AD6"
+    static let defaultDarkActivityHex = "#3E97F6"
 
     /// Solid accent fill for labelled controls: send buttons, prominent
     /// buttons, selected chips, accent bubbles, swipe actions.
@@ -656,6 +668,8 @@ final class AidenAppearanceStore {
         static let uiFontSize = "aiden.appearance.uiFontSize"
         static let codeFontSize = "aiden.appearance.codeFontSize"
         static let diffMarkers = "aiden.appearance.diffMarkers"
+        static let aurora = "aiden.appearance.aurora"
+        static let auroraFollowsActivity = "aiden.appearance.auroraFollowsActivity"
     }
 
     private let defaults: UserDefaults
@@ -674,6 +688,10 @@ final class AidenAppearanceStore {
     var uiFontSize: Int { didSet { defaults.set(Self.clamp(uiFontSize, to: 12...18), forKey: Key.uiFontSize) } }
     var codeFontSize: Int { didSet { defaults.set(Self.clamp(codeFontSize, to: 10...18), forKey: Key.codeFontSize) } }
     var diffMarkers: AidenDiffMarkerPreference { didSet { defaults.set(diffMarkers.rawValue, forKey: Key.diffMarkers) } }
+    /// Settings → Appearance → Ambient background. Subtle on a fresh install.
+    var auroraLevel: AidenAuroraLevel { didSet { defaults.set(auroraLevel.rawValue, forKey: Key.aurora) } }
+    /// Off keeps the ambient background idle, except while the mic listens.
+    var auroraFollowsActivity: Bool { didSet { defaults.set(auroraFollowsActivity, forKey: Key.auroraFollowsActivity) } }
 
     init(defaults: UserDefaults = .standard) {
         self.defaults = defaults
@@ -692,6 +710,10 @@ final class AidenAppearanceStore {
         uiFontSize = defaults.object(forKey: Key.uiFontSize) == nil ? AidenSettingsTokens.defaultUIFontSize : Self.clamp(defaults.integer(forKey: Key.uiFontSize), to: 12...18)
         codeFontSize = defaults.object(forKey: Key.codeFontSize) == nil ? 12 : Self.clamp(defaults.integer(forKey: Key.codeFontSize), to: 10...18)
         diffMarkers = AidenDiffMarkerPreference(rawValue: defaults.string(forKey: Key.diffMarkers) ?? "") ?? .symbols
+        auroraLevel = AidenAuroraLevel(rawValue: defaults.string(forKey: Key.aurora) ?? "") ?? .subtle
+        auroraFollowsActivity = defaults.object(forKey: Key.auroraFollowsActivity) == nil
+            ? true
+            : defaults.bool(forKey: Key.auroraFollowsActivity)
     }
 
     func palette(for scheme: ColorScheme, systemHighContrast: Bool = false) -> AidenPalette {
@@ -826,6 +848,8 @@ struct AidenAppearanceRoot<Content: View>: View {
             .environment(\.aidenReduceMotion, appearance.resolvedReduceMotion(system: systemReduceMotion))
             .environment(\.aidenLowPowerMode, lowPowerMode)
             .environment(\.aidenDiffMarkers, appearance.diffMarkers)
+            .environment(\.aidenAuroraLevel, appearance.auroraLevel)
+            .environment(\.aidenAuroraFollowsActivity, appearance.auroraFollowsActivity)
             .environment(\.aidenSidebarTranslucent, appearance.translucentSidebar(for: effectiveScheme))
             .environment(\.aidenCodeTypography, AidenCodeTypography(font: appearance.codeFont(for: effectiveScheme), size: appearance.codeFontSize))
             .environment(\.aidenUIFont, appearance.uiFont(for: effectiveScheme))
@@ -890,6 +914,8 @@ struct AidenAppearanceSettingsView: View {
                 } footer: {
                     Text("Off by default. Live Activities otherwise show only the chat title and bounded status.")
                 }
+
+                AidenAmbientBackgroundSection(appearance: appearance)
             }
             .navigationTitle("Appearance")
             .navigationBarTitleDisplayMode(.inline)
@@ -923,6 +949,39 @@ struct AidenAppearanceSettingsView: View {
         .buttonStyle(.plain)
         .accessibilityLabel(preset.title)
         .accessibilityAddTraits(selected ? [.isButton, .isSelected] : [.isButton])
+    }
+}
+
+/// Settings → Appearance → Ambient background: how strongly Home's ambient
+/// light shows, and whether it follows what the person's work is doing.
+struct AidenAmbientBackgroundSection: View {
+    @Bindable var appearance: AidenAppearanceStore
+    @Environment(\.aidenLowPowerMode) private var lowPowerMode
+
+    var body: some View {
+        Section {
+            AidenPillSegmentedControl(
+                selection: $appearance.auroraLevel,
+                options: AidenAuroraLevel.allCases,
+                accessibilityLabel: "Ambient background"
+            ) { level in
+                LocalizedStringKey(level.title)
+            }
+            .accessibilityIdentifier("settings.appearance.aurora")
+            Toggle("Follow activity", isOn: $appearance.auroraFollowsActivity)
+                .aidenSwitchStyle()
+                .disabled(appearance.auroraLevel == .off)
+                .accessibilityIdentifier("settings.appearance.auroraFollowsActivity")
+        } header: {
+            Text("Ambient background")
+        } footer: {
+            Text(Self.footer(lowPowerMode: lowPowerMode))
+        }
+    }
+
+    static func footer(lowPowerMode: Bool) -> String {
+        let base = "A soft light behind Home that shows when work runs, finishes or needs you. Still with Reduce Motion. Off in Low Power Mode."
+        return lowPowerMode ? base + " Off while Low Power Mode is on." : base
     }
 }
 

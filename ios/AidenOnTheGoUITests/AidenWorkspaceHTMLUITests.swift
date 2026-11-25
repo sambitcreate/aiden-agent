@@ -12,7 +12,7 @@ final class AidenWorkspaceHTMLUITests: XCTestCase {
 
     private func launch(_ fixture: String) -> XCUIApplication {
         let app = XCUIApplication()
-        app.launchArguments = [fixture, "-AppleLanguages", "(en)", "-AppleLocale", "en_US"]
+        app.launchArguments = [fixture, "-aiden.appearance.aurora", "off", "-AppleLanguages", "(en)", "-AppleLocale", "en_US"]
         app.launch()
         return app
     }
