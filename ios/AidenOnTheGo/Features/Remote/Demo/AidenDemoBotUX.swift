@@ -106,7 +106,7 @@ enum AidenDemoBotUX {
                 "kind": "mac", "mac": "shell", "title": "Run on your Mac?",
                 "arguments": [["key": "tool", "value": "Run command"]],
                 "body": ["format": "command", "text": summary],
-                // Revision 68 (`approval:plain-words`): the card opens on these words.
+                // Revision 69 (`approval:plain-words`): the card opens on these words.
                 "explanation": "Runs the upload tests in this project",
                 "buttons": [
                     ["label": "Deny", "decision": "deny", "answered": "Denied"],

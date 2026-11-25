@@ -10250,6 +10250,7 @@
                 "bot:open-work",
                 "bot:routine-models",
                 "bot:peers",
+                "bot:needs-you",
                 "schedule:cards",
                 "chat:jobs",
                 "attachments:raw",
@@ -10312,6 +10313,7 @@
                 "bot:open-work",
                 "bot:routine-models",
                 "bot:peers",
+                "bot:needs-you",
                 "schedule:cards",
                 "chat:jobs",
                 "attachments:raw",
@@ -10477,6 +10479,7 @@
                 "bot:open-work",
                 "bot:routine-models",
                 "bot:peers",
+                "bot:needs-you",
                 "schedule:cards",
                 "chat:jobs",
                 "attachments:raw",
@@ -10548,6 +10551,7 @@
                 "bot:open-work",
                 "bot:routine-models",
                 "bot:peers",
+                "bot:needs-you",
                 "schedule:cards",
                 "chat:jobs",
                 "attachments:raw",
@@ -12880,6 +12884,10 @@
             "type": "integer",
             "minimum": 1,
             "maximum": 8
+          },
+          "needsYou": {
+            "const": true,
+            "description": "Contract revision 68, only on GET /bots for devices holding bot:needs-you: an approval, a question, a hand-off or an open issue waits on the person. Sent only as true."
           }
         },
         "additionalProperties": false

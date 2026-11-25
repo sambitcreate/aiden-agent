@@ -192,7 +192,7 @@ export type RunProjection =
   | "phone-schedule"
   | "phone-cards"
   | "phone-schedule-cards"
-  // Revision 68: a card holder that also reads a shell card's plain words.
+  // Revision 69: a card holder that also reads a shell card's plain words.
   | "phone-cards-words"
   | "phone-schedule-cards-words";
 

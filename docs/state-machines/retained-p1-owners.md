@@ -43,11 +43,11 @@ The P1b work changed no IPC, so these needed no adapter change.
 | Inventory | Owner | Disposition | Why |
 |---|---|---|---|
 | `clients:C02` | `renderer/lib/chat-message-queue.ts` | Retain | `claim`, `settle` and `deliverQueuedMessage` are the only route for delivering a queued message, and `chat-message-queue.test.ts` covers stale chats, drafts and unknown appends. |
-| `clients:C03` | `renderer/main/chat-pane.tsx` | Deferred | The orchestration is spread through a 4,166-line view. Moving it needs a UI test harness first, and it holds no authority of its own: the host decides. |
+| `clients:C03` | `renderer/main/chat-pane.tsx` | Deferred | The orchestration is spread through a 4,961-line view. Moving it needs a UI test harness first, and it holds no authority of its own: the host decides. |
 | `clients:C04` | `renderer/lib/generation-stream.ts` | Retain, one fix | One subscription per stream. The first terminal event now blocks any later terminal event, because listeners stay on while an async `onDone` settles. Disposal runs even if a terminal handler throws. |
 | `clients:C05` | `renderer/lib/chat-terminal-sync.ts` | Retain | Identity-keyed registries with bounded retries, covered by `chat-terminal-sync.test.ts`. Not re-audited beyond the entry points. |
 | `clients:C11` | `renderer/lib/hosts/remote-queue-fence.ts` | Retain | `remoteQueueFenceHolds` is pure and tested. Two overlapping `sendFencedTurn` calls can replace each other's fence. The 120 s stall bounds how long a fence can hold, but not the ordering. Whether two can overlap in practice was not established. |
-| `clients:N15` | iOS `AidenChatFeature.swift` | Unchanged, not audited | No shared contract changed, so nothing here needed native work. That says nothing about how its ownership is structured. |
+| `clients:N15` | iOS `Features/Chat/{AidenChatViewModel,AidenChatDetailView,AidenChatViewModel+ForeignRuns,AidenChatViewModel+Fork}.swift` and `Models/AidenChat.swift` (split from `AidenChatFeature.swift` across `6182b2e30..a9185707a`) | Unchanged, not audited | No shared contract changed, so nothing here needed native work. That says nothing about how its ownership is structured. |
 
 ## Run input transitions
 
@@ -56,10 +56,12 @@ The P1b work changed no IPC, so these needed no adapter change.
 | Identify | Stream is live, chat and owner match, input open | `run_not_active` | Kept |
 | Stop check | No Stop, chat not being deleted | `cancelled` | Kept |
 | Queue probe | Queue would accept | The probe's reason | Kept |
-| Persist | Still the live run and not stopped, checked inside the store write | `cancelled` or `run_not_active` | Kept |
-| Recheck | Still the live run, not stopped | Same reasons, with `committed: true` | Consumed |
-| Queue | Receipt accepted | The receipt's reason, with `committed: true` | Consumed |
+| Hook screen | Optional `inputHooks.screen` for non-notice input; rechecks live stream, Stop/delete, and queue capacity | `run_not_active`, `cancelled`, or probe reason | Kept |
+| Persist | Still the live run and not stopped, checked inside the store write; stamps `fromLeadChat` for non-notice lead inputs and `hookBlockedReason` when refused | `cancelled` or `run_not_active` (or `invalid` with `committed: true` if hook-blocked) | Kept (consumed if hook-blocked) |
+| Post-persist hooks | Non-notice, non-`fromLeadChat` inputs notify `onPersonWrote(chatId)` (non-fatal, ends Inbox snooze); inputs carrying outside content call `generation.outsideInput()`; `fromLeadChat` inputs `await generation.leadChatInput()` (non-fatal, propagates lead taint before queueing) | Never refuses (message is already committed) | Consumed |
+| Recheck | Still the live run (if ended, falls through to `owedTurn` registration when held and not stopped), not stopped | `cancelled`, `run_not_active`, or `follow-up` owed turn, with `committed: true` | Consumed |
+| Queue | Receipt accepted (if `not-active`, tries `owedTurn`); attaches `hookContext` and runs `stopSubagentsForGuidance` on `steer` | The receipt's reason, with `committed: true` | Consumed |
 
 A persist whose outcome is unknown throws `AidenOperationUnknownOutcomeError`, as does a queue call that throws. Once the message is saved it stays saved: a late refusal reports `committed: true` and never replays the input.
 
-The one fix: both the persist and recheck steps now treat a chat deletion that began during the save as a stop. Before, only the first check saw it, so input could reach a run whose chat was being deleted.
+The one fix: both the persist and recheck steps now treat a chat deletion that began during the save as a stop. Before, only the first check saw it, so input could reach a run whose chat was being deleted. PR #879 added the post-persist `onPersonWrote`, `outsideInput()`, and awaited `leadChatInput()` steps between persistence and recheck/queueing, with `fromLeadChat` excluding lead-chat inputs from `onPersonWrote` while propagating taint before the model sees the message.

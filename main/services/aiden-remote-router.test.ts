@@ -26,6 +26,7 @@ import {
   parseAidenRemoteBackgroundJobs,
   parseAidenRemoteChatNewWorktreeResponse,
   parseAidenRemoteBotCreateRequest,
+  parseAidenRemoteBotList,
   parseAidenRemoteStreamEvent,
   type AidenRemoteCapability,
   type AidenRemoteStreamInputResult,
@@ -141,6 +142,8 @@ async function fixture(options: {
   /** With `forks`: the host can continue a chat whose folder is gone in a new chat (revision 64). */
   continueInNewChat?: boolean;
   streamsOverride?: import("./aiden-remote-router.js").AidenRemoteRouterDependencies["streams"];
+  /** Contract revision 68: which Bots wait on the person. */
+  botNeedsYou?: import("./aiden-remote-router.js").AidenRemoteRouterDependencies["botNeedsYou"];
 } = {}) {
   const logs: unknown[] = [];
   const calls: string[] = [];
@@ -314,7 +317,8 @@ async function fixture(options: {
               capability !== "bot:suggestions" &&
               capability !== "bot:templates" &&
               capability !== "chat:continue-in-new-chat" &&
-              capability !== "stream:snapshot-reasons",
+              capability !== "stream:snapshot-reasons" &&
+              capability !== "bot:needs-you",
           )
         ) {
           return null;
@@ -630,6 +634,7 @@ async function fixture(options: {
     ...(options.providers ? { providers: options.providers } : {}),
     ...(options.spending ? { spending: options.spending } : {}),
     ...(options.backgroundJobs ? { backgroundJobs: options.backgroundJobs } : {}),
+    ...(options.botNeedsYou ? { botNeedsYou: options.botNeedsYou } : {}),
     models: {
       list: async () => ({
         providers: [{
@@ -7820,4 +7825,57 @@ test("revision 67: a device pages back through a Bot's chat and takes back a que
     "older:bot-1:entry_9:default:true",
     'withdraw:12345678:bot-1:42:withdraw-key-00000001:{}',
   ]);
+});
+
+test("revision 68: only a device holding bot:needs-you reads needsYou on its Bot list, and only where the host wires it", async () => {
+  const headers = { authorization: `Bearer ${"a".repeat(43)}`, "aiden-protocol-version": "1" };
+  const negotiate = {
+    method: "POST",
+    headers: { ...headers, "content-type": "application/json" },
+    body: JSON.stringify({ accepts: ["bot:needs-you"] }),
+  };
+  const asked: string[][] = [];
+  const waiting = async (botIds: readonly string[]) => {
+    asked.push([...botIds]);
+    return new Set(["bot-1"]);
+  };
+  for (const [label, capabilities, wired, expected] of [
+    ["holder", ["server:read", "bot:read", "bot:needs-you"], true, true],
+    ["older phone", ["server:read", "bot:read"], true, undefined],
+    ["unwired host", ["server:read", "bot:read", "bot:needs-you"], false, undefined],
+  ] as Array<[string, AidenRemoteCapability[], boolean, true | undefined]>) {
+    const app = await fixture({
+      capabilities,
+      acceptsBotCapabilities: true,
+      deviceType: "android",
+      ...(wired ? { botNeedsYou: waiting } : {}),
+    });
+    try {
+      const server = await (await fetch(`${app.base}/server`, { headers })).json();
+      assert.equal(server.serverCapabilities.includes("bot:needs-you"), wired, label);
+      assert.equal((await fetch(`${app.base}/device/capabilities`, negotiate)).status, wired ? 200 : 404, label);
+      const list = await (await fetch(`${app.base}/bots`, { headers })).json();
+      assert.equal(list.bots[0].needsYou, expected, label);
+      // What the device reads still passes the shared parser.
+      parseAidenRemoteBotList(list);
+    } finally {
+      await app.close();
+    }
+  }
+  assert.deepEqual(asked, [["bot-1"]], "only the holder's list asks which Bots wait");
+
+  // A failed read lists the Bots without the signal instead of failing the list.
+  const app = await fixture({
+    capabilities: ["server:read", "bot:read", "bot:needs-you"],
+    acceptsBotCapabilities: true,
+    deviceType: "iphone",
+    botNeedsYou: async () => { throw new Error("projection unavailable"); },
+  });
+  try {
+    const response = await fetch(`${app.base}/bots`, { headers });
+    assert.equal(response.status, 200);
+    assert.equal((await response.json()).bots[0].needsYou, undefined);
+  } finally {
+    await app.close();
+  }
 });

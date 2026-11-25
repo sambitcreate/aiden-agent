@@ -918,7 +918,7 @@ interface Audience {
   allowed: boolean;
   /** `approval:cards`: the typed `card` on the Bot's approval (revision 61). */
   approvalCards: boolean;
-  /** `approval:plain-words`: a shell card's `explanation` and `tags` (revision 68). */
+  /** `approval:plain-words`: a shell card's `explanation` and `tags` (revision 69). */
   approvalPlainWords: boolean;
   /** `bot:settings-changes`: `settings_change` entries (revision 61). */
   settingsChanges: boolean;
@@ -1636,7 +1636,7 @@ function approvalForAudience(approval: AidenRemoteBotApproval | null, allowed: b
   };
 }
 
-/** A shell card's plain words go only to an `approval:plain-words` holder (revision 68). */
+/** A shell card's plain words go only to an `approval:plain-words` holder (revision 69). */
 function withoutPlainWords(card: ApprovalCard, plainWords: boolean): ApprovalCard {
   if (plainWords) return card;
   const { explanation: _explanation, tags: _tags, ...rest } = card;

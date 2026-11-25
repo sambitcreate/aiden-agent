@@ -4819,7 +4819,7 @@ test("revision 61 templates: holders see versions and Open, and a stale version 
   }
 });
 
-test("revision 68: a Bot's command approval carries its plain words only to approval:plain-words holders", async () => {
+test("revision 69: a Bot's command approval carries its plain words only to approval:plain-words holders", async () => {
   const { runtime, service, approvals } = await approvalGatedBot("run_command", { command: "rm -rf build", description: "Deletes the old build folder" }, "Run command: rm -rf build");
   try {
     const sent = await runtime.send(BOT_ID, { text: "go", requestId: "send-request-69" });

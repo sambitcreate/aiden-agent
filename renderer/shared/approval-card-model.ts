@@ -251,7 +251,7 @@ export interface ApprovalCard {
   /**
    * `approval:plain-words` holders only, on a shell card whose body is the
    * command: the model's description of the command, which the card opens on
-   * (contract revision 68). Display-only: the body stays the exact command.
+   * (contract revision 69). Display-only: the body stays the exact command.
    */
   explanation?: string;
   /** `approval:plain-words` holders only: Aiden's own tags read from the command, risky first. */

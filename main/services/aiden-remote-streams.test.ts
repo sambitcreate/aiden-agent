@@ -2894,7 +2894,7 @@ test("a lead chat's started chat keeps approvals and questions open 30 minutes; 
   }
 });
 
-test("revision 68: a phone's stream approval carries the command's plain words only when it holds the opt-in", () => {
+test("revision 69: a phone's stream approval carries the command's plain words only when it holds the opt-in", () => {
   const service = new AidenRemoteStreamService({ now: () => 1_000, cancel: () => true, approve: () => true });
   const owner = service.create("device-1", "stream-1", "chat-1", "turn-1");
   const reading = { explanation: "Deletes the old build folder", tags: [{ label: "Deletes files", tone: "risk" }] };

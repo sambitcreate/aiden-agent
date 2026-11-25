@@ -3622,7 +3622,7 @@ test("revision 56 plans decode strictly, preserve absent versus null, and exclud
   const section = protocol.parseAidenRemoteContractFixture(raw).botPlans!;
   assert.deepEqual(section, raw.botPlans);
   assert.equal(protocol.AIDEN_REMOTE_BOT_PLANS_CONTRACT_REVISION, 56);
-  assert.equal(protocol.AIDEN_REMOTE_CONTRACT_REVISION, 68);
+  assert.equal(protocol.AIDEN_REMOTE_CONTRACT_REVISION, 69);
   assert.equal(section.pending.status, "pending");
   assert.equal(section.active.steps[0].status, "done");
   const parse = protocol.parseAidenRemoteBotPlan;
@@ -3709,7 +3709,7 @@ test("revision 57 allowed fixture is strict and exposes only bounded public list
   const raw = await json("fixtures/contract.json") as Record<string, any>;
   const section = protocol.parseAidenRemoteContractFixture(raw).botAllowed!;
   assert.deepEqual(section, raw.botAllowed);
-  assert.equal(protocol.AIDEN_REMOTE_BOT_ALLOWED_CONTRACT_REVISION, 57); assert.equal(protocol.AIDEN_REMOTE_CONTRACT_REVISION, 68);
+  assert.equal(protocol.AIDEN_REMOTE_BOT_ALLOWED_CONTRACT_REVISION, 57); assert.equal(protocol.AIDEN_REMOTE_CONTRACT_REVISION, 69);
   const all = [...section.paginated.firstPage.entries, ...section.paginated.nextPage.entries];
   assert.equal(all.length, 53); assert.equal(all.filter(e => e.kind === "rule").length, 50); assert.equal(all.filter(e => e.kind === "folder").length, 3);
   assert.equal(new Set(all.map(e => e.id)).size, 53);
@@ -3818,7 +3818,7 @@ test("revision 62 reads only the steps Stop cancelled as stopped, and every othe
   const protocol = await import("./aiden-remote-protocol.js");
   const raw = await json("fixtures/contract.json") as Record<string, any>;
   assert.equal(protocol.AIDEN_REMOTE_STOPPED_BY_USER_CONTRACT_REVISION, 62);
-  assert.equal(protocol.AIDEN_REMOTE_CONTRACT_REVISION, 68);
+  assert.equal(protocol.AIDEN_REMOTE_CONTRACT_REVISION, 69);
   const fixture = protocol.parseAidenRemoteContractFixture(raw).stoppedSteps;
   assert.ok(fixture);
   assert.deepEqual(fixture.stoppedStepIds, ["tool-3"]);
@@ -3926,7 +3926,7 @@ test("revision 65 distinguishes gap recovery snapshots from provider resets and 
   const protocol = await import("./aiden-remote-protocol.js");
   const raw = await json("fixtures/contract.json") as Record<string, any>;
   assert.equal(protocol.AIDEN_REMOTE_STREAM_SNAPSHOT_REASONS_CONTRACT_REVISION, 65);
-  assert.equal(protocol.AIDEN_REMOTE_CONTRACT_REVISION, 68);
+  assert.equal(protocol.AIDEN_REMOTE_CONTRACT_REVISION, 69);
   const parsedFixture = protocol.parseAidenRemoteContractFixture(raw);
   const section = parsedFixture.streamRecovery;
   assert.ok(section);
@@ -4047,7 +4047,7 @@ test("revision 66 host feed Bot rows carry a one-line preview and refuse anythin
 test("revision 67 session pages and queued withdraw receipts decode strictly and match the OpenAPI contract", async () => {
   const protocol = await import("./aiden-remote-protocol.js");
   assert.equal(protocol.AIDEN_REMOTE_BOT_SESSION_PAGES_CONTRACT_REVISION, 67);
-  assert.equal(protocol.AIDEN_REMOTE_CONTRACT_REVISION, 68);
+  assert.equal(protocol.AIDEN_REMOTE_CONTRACT_REVISION, 69);
   const raw = await json("fixtures/contract.json") as Record<string, any>;
   const entries = (raw.botSession.entries as unknown[]).slice(0, 2);
   const page = { botId: raw.botSession.botId, epoch: raw.botSession.epoch, entries, hasOlder: true };
@@ -4073,4 +4073,28 @@ test("revision 67 session pages and queued withdraw receipts decode strictly and
   assert.equal(receiptSchema({ ...receipt, outcome: "cancelled" }), false);
   assert.equal(spec.paths["/bots/{botId}/session/entries"].get.operationId, "getBotSessionEntries");
   assert.equal(spec.paths["/bots/{botId}/queued/{submissionId}/withdraw"].post.operationId, "withdrawBotQueuedMessage");
+});
+
+test("revision 68 Bot summaries carry needsYou only as true, and the opt-in is negotiable", async () => {
+  const protocol = await import("./aiden-remote-protocol.js");
+  assert.equal(protocol.AIDEN_REMOTE_BOT_NEEDS_YOU_CONTRACT_REVISION, 68);
+  assert.equal(protocol.AIDEN_REMOTE_CONTRACT_REVISION, 69);
+  assert.ok((protocol.AIDEN_REMOTE_NEGOTIABLE_CAPABILITIES as readonly string[]).includes("bot:needs-you"));
+  const raw = await json("fixtures/contract.json") as Record<string, any>;
+  const bot = raw.botList.bots[0] as Record<string, unknown>;
+  assert.equal(protocol.parseAidenRemoteBotSummary(bot).needsYou, undefined, "absent unless the host says so");
+  assert.equal(protocol.parseAidenRemoteBotSummary({ ...bot, needsYou: true }).needsYou, true);
+  assert.throws(() => protocol.parseAidenRemoteBotSummary({ ...bot, needsYou: false }), /needsYou/u);
+  assert.throws(() => protocol.parseAidenRemoteBotSummary({ ...bot, needsYou: "yes" }), /needsYou/u);
+
+  const { default: Ajv2020 } = await import("ajv/dist/2020.js");
+  const { default: addFormats } = await import("ajv-formats");
+  const spec = await json("openapi.json") as { components: Record<string, any> };
+  const ajv = new Ajv2020({ strict: false });
+  addFormats(ajv);
+  const summary = ajv.compile({ $ref: "#/components/schemas/BotSummary", components: spec.components });
+  assert.equal(summary({ ...bot, needsYou: true }), true, JSON.stringify(summary.errors));
+  assert.equal(summary({ ...bot, needsYou: false }), false);
+  const update = ajv.compile({ $ref: "#/components/schemas/DeviceCapabilitiesUpdateRequest", components: spec.components });
+  assert.equal(update({ accepts: ["bot:needs-you"] }), true, JSON.stringify(update.errors));
 });

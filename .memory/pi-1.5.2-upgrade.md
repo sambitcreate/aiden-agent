@@ -1,5 +1,7 @@
 # Pi 1.5.2 upgrade (2026-11-11)
 
+> Superseded 2026-11-24: the pins are now 1.6.0; see `pi-1.6.0-upgrade.md`. The behavior notes below still apply unless that file says otherwise.
+
 The live desktop and CLI Pi packages are pinned exactly at 1.5.2, in lockstep. The packages are the same as for 1.4.0: on the root, pi-agent-core, pi-ai, chord, pi-durable, pi-mcp and pi-codemode; on the CLI, pi-coding-agent, pi-ai, pi-agent-core, pi-codemode, pi-mcp, pi-durable and chord. This is W1a of `docs/plans/upstream-week-2026-11-11-plan.md`. The frozen 0.87.1 legacy harness is unchanged. Install with `npx npm@11.11.0 install`.
 
 These were bumped with the pin:

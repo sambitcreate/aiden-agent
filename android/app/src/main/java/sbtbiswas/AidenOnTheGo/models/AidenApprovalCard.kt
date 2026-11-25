@@ -38,7 +38,7 @@ data class AidenApprovalCardArgument(val key: String, val value: String)
 data class AidenApprovalCardRow(val label: String, val value: String)
 
 /**
- * Revision 68 (`approval:plain-words`): one of Aiden's own tags for a shell command, read by the
+ * Revision 69 (`approval:plain-words`): one of Aiden's own tags for a shell command, read by the
  * Mac from the command text without any model. A [RISK] tag (deleting files, the internet, a
  * downloaded script, admin rights, files outside the project, stopping programs) draws in a soft
  * red fill; a [CALM] one in grey.
@@ -79,11 +79,11 @@ data class AidenApprovalCard(
     /** Present exactly when this device may only deny: why, and where to allow it. */
     val allowOnMac: String?,
     /**
-     * Revision 68 (`approval:plain-words`): the model's one-line description of a shell command.
+     * Revision 69 (`approval:plain-words`): the model's one-line description of a shell command.
      * The card opens on it; [body] keeps the exact command one flip away.
      */
     val explanation: String? = null,
-    /** Revision 68: Aiden's own tags for the command, risky ones first. Never empty when sent. */
+    /** Revision 69: Aiden's own tags for the command, risky ones first. Never empty when sent. */
     val tags: List<AidenApprovalCardTag>? = null
 ) {
     val denyButton: AidenApprovalCardButton get() = buttons.first()
@@ -186,7 +186,7 @@ data class AidenApprovalCard(
             if (obj.containsKey("allowOnMac") == allows) throw AidenBotUxContractException("card.allowOnMac")
             val mac = obj["mac"]?.let { BotUxJson.member(it, "card.mac", AidenApprovalCardMac.entries) { m -> m.wire } }
             val body = obj["body"]?.let { parseText(it, "card.body") }
-            // Revision 68: only a shell card with a command carries plain words.
+            // Revision 69: only a shell card with a command carries plain words.
             val plainWords = kind == AidenApprovalCardKind.MAC && mac == AidenApprovalCardMac.SHELL && body?.format == AidenApprovalCardTextFormat.COMMAND
             if (!plainWords && (obj.containsKey("explanation") || obj.containsKey("tags"))) throw AidenBotUxContractException("card.explanation")
             val explanation = obj["explanation"]?.let { raw ->

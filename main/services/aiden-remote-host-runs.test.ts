@@ -768,7 +768,7 @@ test("revision 61: a phone holding approval:cards gets the typed card and may al
   assert.deepEqual(effects.approvals, ["approval-1:allow"]);
 });
 
-test("revision 68: only a phone holding approval:plain-words gets the command's plain words, and no reader sees the raw reading", () => {
+test("revision 69: only a phone holding approval:plain-words gets the command's plain words, and no reader sees the raw reading", () => {
   const { registry, service } = harness();
   const reading = { explanation: "Runs the project's tests", tags: [{ label: "Uses the internet", tone: "risk" }] };
   registry.publish("run-1", "chat:approval", approval("approval-1", { summary: "Run command: npm test", details: undefined, reading }));

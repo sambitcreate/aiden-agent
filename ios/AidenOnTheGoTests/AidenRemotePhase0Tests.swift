@@ -171,7 +171,7 @@ final class AidenRemotePhase0Tests: XCTestCase {
             from: data
         )
 
-        XCTAssertEqual(fixture.contractRevision, 68)
+        XCTAssertEqual(fixture.contractRevision, 69)
         XCTAssertEqual(fixture.streamRecovery?.capability, .streamSnapshotReasons)
         XCTAssertEqual(fixture.streamRecovery?.gapEvents.first?.payload?.reason, .gap)
         XCTAssertNil(fixture.streamRecovery?.legacyGapSnapshot.payload?.reason)
@@ -2017,7 +2017,7 @@ final class AidenRemotePhase0Tests: XCTestCase {
         let url = try XCTUnwrap(sharedContractFixtureURL)
         let data = try Data(contentsOf: url)
         let fixture = try AidenRemoteJSONDecoder.decode(AidenRemoteContractFixture.self, from: data)
-        XCTAssertEqual(fixture.contractRevision, 68)
+        XCTAssertEqual(fixture.contractRevision, 69)
         let recovery = try XCTUnwrap(fixture.streamRecovery)
         XCTAssertEqual(recovery.capability, .streamSnapshotReasons)
         XCTAssertEqual(recovery.gapEvents.map(\.sequence), [4097, 4098, 4099])

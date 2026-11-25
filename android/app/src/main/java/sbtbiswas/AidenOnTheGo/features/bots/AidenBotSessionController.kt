@@ -413,7 +413,7 @@ fun aidenBotSessionFeedGrants(installation: AidenInstallation?): Set<AidenRemote
         AidenRemoteCapability.BOT_ALLOWED,
         // Revision 61: the typed approval card and the settings, suggestion and learning entries.
         AidenRemoteCapability.APPROVAL_CARDS,
-        // Revision 68: the command's plain words on that card.
+        // Revision 69: the command's plain words on that card.
         AidenRemoteCapability.APPROVAL_PLAIN_WORDS,
         AidenRemoteCapability.BOT_SETTINGS_CHANGES,
         AidenRemoteCapability.BOT_SUGGESTIONS
@@ -2412,6 +2412,8 @@ class AidenBotSessionController(
  */
 object AidenBotSessionCopy {
     const val NEEDS_MODEL = "Needs an AI model"
+    /** Revision 68: an approval, a question, a hand-off or an open issue waits on the person. */
+    const val WAITING_FOR_YOU = "Waiting for you"
     /** A reply that stopped before it finished (a quit, a crash, or a lifted pause). */
     const val INTERRUPTED_ROW = "Interrupted — tap to resume"
     /** Revision 37: the person paused the Bot (G2, the same words as iOS and desktop). */

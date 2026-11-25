@@ -3,7 +3,7 @@
 <resources>
     <!-- Typed approval card (`approval:cards`) -->
     <string name="approval_card_previous">Before</string>
-    <!-- Revision 68 (`approval:plain-words`): the command card's plain words and Aiden's tags -->
+    <!-- Revision 69 (`approval:plain-words`): the command card's plain words and Aiden's tags -->
     <string name="approval_card_what_it_will_do">What it will do</string>
     <string name="approval_card_command">Command</string>
     <string name="approval_card_show_command">Show the command</string>

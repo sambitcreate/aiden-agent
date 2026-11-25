@@ -154,7 +154,7 @@ export interface AidenRemotePendingApproval {
   card?: ApprovalCard;
   /** Exact renderer-safe facts are host-only and never enter the mobile wire contract. */
   details?: ToolApprovalDetails;
-  /** Host-only: a command's plain words, which reach a phone only inside its card (revision 68). */
+  /** Host-only: a command's plain words, which reach a phone only inside its card (revision 69). */
   reading?: CommandReading;
 }
 

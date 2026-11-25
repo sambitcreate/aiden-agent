@@ -117,7 +117,7 @@ fun AidenTypedApprovalCardContent(
             if (card.arguments.isNotEmpty()) add { TypedPairs(card.arguments.map { it.key to it.value }) }
             card.body?.let { body ->
                 val explanation = card.explanation
-                // Revision 68: a shell card with plain words opens on them; the command is one flip away.
+                // Revision 69: a shell card with plain words opens on them; the command is one flip away.
                 if (explanation != null) add { TypedPlainWords(explanation = explanation, command = body, resetKey = resetKey) }
                 else add { TypedText(label = null, text = body, resetKey = resetKey) }
             }
@@ -272,7 +272,7 @@ private fun TypedText(label: String?, text: AidenApprovalCardText, resetKey: Any
 }
 
 /**
- * Revision 68: what the command will do, in the model's words, with a flip to the exact command
+ * Revision 69: what the command will do, in the model's words, with a flip to the exact command
  * and back. It always opens on the words; flipping never answers the card.
  */
 @Composable
@@ -306,7 +306,7 @@ private fun TypedPlainWords(explanation: String, command: AidenApprovalCardText,
     }
 }
 
-/** Revision 68: Aiden's own tags for the command, soft red for a risky step and grey for a calm one. */
+/** Revision 69: Aiden's own tags for the command, soft red for a risky step and grey for a calm one. */
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
 private fun TypedTags(tags: List<AidenApprovalCardTag>) {
