@@ -301,7 +301,7 @@ enum AidenTurnRequestBuilder {
     }
 }
 
-struct AidenChatModelSelection: Equatable {
+struct AidenChatModelSelection: Equatable, Codable, Sendable {
     let providerId: String?
     let modelId: String?
     let thinkingLevel: String?

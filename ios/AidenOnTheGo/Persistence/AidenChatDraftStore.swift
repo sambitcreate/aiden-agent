@@ -30,6 +30,14 @@ actor AidenChatDraftStore {
         /// the phone resolves this intent against the catalog once it lands,
         /// never against the chat its optimistic message has since filled.
         var startsWhereNewChatsStart: Bool? = nil
+        /// Captured with `startsWhereNewChatsStart`: the choice new chats on
+        /// this Mac started with on this phone when the send was built, or
+        /// nil when there was none and new chats started on the Mac's own
+        /// `defaults`. The phone resolves the send's intent from this frozen
+        /// choice, never from the remembered one, which a pick in another new
+        /// chat can change while this send waits. Absent in records saved
+        /// before it existed, which reads as no choice.
+        var newChatStart: AidenChatModelSelection? = nil
         func canRetry(at now: Date = Date()) -> Bool {
             let age = now.timeIntervalSince(createdAt)
             return age >= 0 && age < 24 * 60 * 60

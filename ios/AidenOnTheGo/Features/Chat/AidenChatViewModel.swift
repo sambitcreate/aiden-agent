@@ -63,6 +63,11 @@ final class AidenChatViewModel {
     /// Counts the person's model picks in this chat, so a send can tell
     /// whether one was made while it was out.
     @ObservationIgnored private var modelPickGeneration = 0
+    /// The pick count when the saved send with this key was first built, so
+    /// its retry still loses to a pick made while it waited. A send loaded
+    /// from disk has none here and counts as older than every pick made since
+    /// the chat opened.
+    @ObservationIgnored private var sendPickGeneration: (key: UUID, generation: Int)?
     /// The send being built or out right now, from the moment its optimistic
     /// message fills the chat until it returns. A catalog landing meanwhile
     /// resolves the chip from this send's intent, not from that message.
@@ -201,6 +206,9 @@ final class AidenChatViewModel {
             pendingSend = nil
             sendRecoveryError = nil
             turnAttempts.reset()
+            // The chip may have shown what the dismissed send meant to keep;
+            // with it gone the chat follows its own model and level again.
+            resolveModelSelection()
         } catch { presentedError = error.localizedDescription }
     }
 
@@ -231,8 +239,12 @@ final class AidenChatViewModel {
             createdAt: Date(),
             attachments: attempt.attachments,
             keepsSelection: attempt.keepsSelection,
-            startsWhereNewChatsStart: attempt.startsWhereNewChatsStart
+            startsWhereNewChatsStart: attempt.startsWhereNewChatsStart,
+            newChatStart: attempt.newChatStart
         )
+        if let carried = sendPickGeneration, carried.key == attempt.key {
+            sendPickGeneration = (fresh.key, carried.generation)
+        }
         do {
             try await draftStore.savePendingSend(fresh, session: session)
         } catch {
@@ -1832,7 +1844,15 @@ final class AidenChatViewModel {
         // it lands.
         let startsWhereNewChatsStart = retryAttempt.map { $0.startsWhereNewChatsStart == true }
             ?? (keepsSelection && !hasUnsentModelPick)
-        let pickGeneration = modelPickGeneration
+        // Where new chats start, frozen now: a pick in another new chat can
+        // change the remembered choice while this send waits.
+        let newChatStart = retryAttempt.map(\.newChatStart)
+            ?? (startsWhereNewChatsStart && !isReadOnlyFixture ? modelPreferenceStore.selection(for: instanceId) : nil)
+        // A retry counts picks from when its send was first built, so a pick
+        // made while it waited still wins.
+        let pickGeneration = retryAttempt.map { retry in
+            sendPickGeneration.flatMap { $0.key == retry.key ? $0.generation : nil } ?? 0
+        } ?? modelPickGeneration
         let savesSelection = agentSlider != nil && keepsSelection
         let request = retryAttempt?.request ?? AidenTurnRequestBuilder.make(
             text: text,
@@ -1888,7 +1908,9 @@ final class AidenChatViewModel {
         streamState = .queued
         let attempt = retryAttempt ?? AidenChatDraftStore.PendingSend(deviceId: context.deviceId, request: request,
             key: turnAttempts.key(for: request), createdAt: Date(), attachments: submittedAttachments,
-            keepsSelection: keepsSelection, startsWhereNewChatsStart: startsWhereNewChatsStart)
+            keepsSelection: keepsSelection, startsWhereNewChatsStart: startsWhereNewChatsStart,
+            newChatStart: newChatStart)
+        sendPickGeneration = (attempt.key, pickGeneration)
         sendInFlight = attempt
         defer { if sendInFlight?.key == attempt.key { sendInFlight = nil } }
         let idempotencyKey = attempt.key
@@ -2996,9 +3018,12 @@ final class AidenChatViewModel {
     /// named. A send built before `GET /models` answered names the chat's
     /// model with no level only because the phone knew none; if it carried
     /// no pick of the person's, it meant where a new chat starts, so that is
-    /// resolved as it would be for the chat before its first message, never
-    /// from the chat's current state. Nil when that lands on another model or
-    /// on no stop, so nothing in Custom is held.
+    /// resolved as it would be for the chat before its first message, from
+    /// the new-chat choice frozen into the send, never from the chat's current
+    /// state or the remembered choice now. Nil when that lands on another
+    /// model or on no stop, so nothing in Custom is held, and nil once the Mac
+    /// has given the chat a level or moved it to another model: the chat is
+    /// then its own.
     private func keptSelection(for attempt: AidenChatDraftStore.PendingSend) -> AidenChatModelSelection? {
         guard attempt.keepsSelection == true, !chat.isBotChat, let slider = agentSlider, let catalog,
               let providerId = attempt.request.providerId,
@@ -3008,7 +3033,9 @@ final class AidenChatViewModel {
         if sent.thinkingLevel != nil || (model != nil && model?.thinkingLevels?.isEmpty != false) {
             return sent
         }
-        guard attempt.startsWhereNewChatsStart == true else { return nil }
+        guard attempt.startsWhereNewChatsStart == true, chat.thinkingLevel == nil,
+              chat.providerId == nil || chat.providerId == providerId,
+              chat.modelId == nil || chat.modelId == modelId else { return nil }
         var unsent = chat
         unsent.messages = []
         let start = AidenChatModelAuthority.resolvedSelection(
@@ -3017,7 +3044,7 @@ final class AidenChatViewModel {
             selectedProviderId: nil,
             selectedModelId: nil,
             selectedThinkingLevel: nil,
-            remembered: isReadOnlyFixture ? nil : modelPreferenceStore.selection(for: instanceId),
+            remembered: attempt.newChatStart,
             exactLevels: true
         )
         guard start.providerId == providerId, start.modelId == modelId,
@@ -3068,7 +3095,8 @@ final class AidenChatViewModel {
         // A new chat's first send that named no level, out or waiting to
         // retry, keeps its own intent: the chat its optimistic message filled
         // is not one the Mac has given a level yet. A pick the person made
-        // since wins.
+        // since wins, and so does a level or model the Mac has given the chat
+        // since (`keptSelection` then holds nothing).
         if !hasExplicitModelSelection, let attempt = sendInFlight ?? pendingSend,
            attempt.startsWhereNewChatsStart == true, attempt.request.saveSelection != true,
            attempt.request.thinkingLevel == nil, let kept = keptSelection(for: attempt) {

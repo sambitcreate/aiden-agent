@@ -481,9 +481,10 @@ final class AidenAgentSliderTests: XCTestCase {
         XCTAssertEqual(try resolved(level: nil, exact: false).thinkingLevel, "high", "the menu shows the model's default")
     }
 
-    /// A saved retry remembers it was a new chat's first send across a
-    /// relaunch: a fresh store over the same files reads the flag back, and a
-    /// send built without it reads back without it.
+    /// A saved retry remembers it was a new chat's first send, and where new
+    /// chats started when it was built, across a relaunch: a fresh store over
+    /// the same files reads both back, and a send built without them (as an
+    /// earlier build saved it) reads back without them.
     func testASavedRetryKeepsWhetherItAsksTheMacToKeepItsStopAcrossARelaunch() async throws {
         let root = FileManager.default.temporaryDirectory.appending(path: "agent-slider-retry-\(UUID())")
         defer { try? FileManager.default.removeItem(at: root) }
@@ -491,9 +492,11 @@ final class AidenAgentSliderTests: XCTestCase {
             text: "Hello", providerId: "acme", modelId: "small", thinkingLevel: "medium",
             attachments: [], skill: nil, saveSelection: false
         )
+        let start = AidenChatModelSelection(providerId: "acme", modelId: "small", thinkingLevel: "medium")
         for (chatId, keeps) in [("first-send", true), ("later-send", false)] {
             let pending = AidenChatDraftStore.PendingSend(
-                deviceId: "phone", request: request, key: UUID(), createdAt: Date(), attachments: [], keepsSelection: keeps
+                deviceId: "phone", request: request, key: UUID(), createdAt: Date(), attachments: [],
+                keepsSelection: keeps ? true : nil, startsWhereNewChatsStart: keeps ? true : nil, newChatStart: keeps ? start : nil
             )
             let writer = AidenChatDraftStore(root: root)
             try await writer.savePendingSend(pending, session: await writer.beginSession(instanceId: "mac", chatId: chatId))
@@ -501,7 +504,9 @@ final class AidenAgentSliderTests: XCTestCase {
             let restored = try await relaunched.loadPendingSend(
                 session: await relaunched.beginSession(instanceId: "mac", chatId: chatId), deviceId: "phone"
             )
-            XCTAssertEqual(restored?.keepsSelection, keeps, chatId)
+            XCTAssertEqual(restored?.keepsSelection == true, keeps, chatId)
+            XCTAssertEqual(restored?.startsWhereNewChatsStart == true, keeps, chatId)
+            XCTAssertEqual(restored?.newChatStart, keeps ? start : nil, chatId)
             XCTAssertEqual(restored?.request, request, chatId)
         }
     }
