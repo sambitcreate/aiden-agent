@@ -414,10 +414,10 @@ test("Linux provenance policy rejects bypasses, incomplete subjects, and custom 
   ]) assert.throws(() => assertLinuxReleaseProvenance(mutate(workflow)), undefined, name);
 });
 
-test("CI keeps full main commits independent and portable static checks on Linux", async () => {
+test("CI supersedes older PR and main runs, keeps dispatches independent, and keeps portable static checks on Linux", async () => {
   const workflow = parse(await readFile(workflowUrl, "utf8"));
-  assert.equal(workflow.concurrency["cancel-in-progress"], "${{ github.event_name == 'pull_request' }}");
-  assert.equal(workflow.concurrency.group, "ci-${{ github.event_name == 'pull_request' && github.ref || github.run_id }}");
+  assert.equal(workflow.concurrency["cancel-in-progress"], "${{ github.event_name != 'workflow_dispatch' }}");
+  assert.equal(workflow.concurrency.group, "ci-${{ github.event_name == 'workflow_dispatch' && github.run_id || github.ref }}");
   assert.equal(workflow.jobs.static["runs-on"], "ubuntu-24.04");
   assert.ok(workflow.jobs.static.steps.some((step) => step.run?.includes("npm run type-check")));
   assert.ok(workflow.jobs.static.steps.some((step) => step.run === "npm run lint"));

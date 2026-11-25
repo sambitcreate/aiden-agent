@@ -85,6 +85,8 @@ import sbtbiswas.AidenOnTheGo.features.bots.AidenBotDeleter
 import sbtbiswas.AidenOnTheGo.features.bots.AidenBotFilesSheet
 import sbtbiswas.AidenOnTheGo.features.bots.aidenBotChatPlaceholder
 import sbtbiswas.AidenOnTheGo.features.bots.aidenBotDeleteAvailable
+import sbtbiswas.AidenOnTheGo.features.bots.aidenBotStreamAvatarTarget
+import sbtbiswas.AidenOnTheGo.features.bots.rememberAidenBotAvatarState
 import sbtbiswas.AidenOnTheGo.features.bots.rememberAidenBotChatIdentity
 import sbtbiswas.AidenOnTheGo.navigation.LocalAidenIsCommittedDestination
 import sbtbiswas.AidenOnTheGo.navigation.LocalAidenShowsUpNavigation
@@ -186,6 +188,11 @@ fun AidenChatDetailScreen(
     val pendingApproval by viewModel.pendingApproval.collectAsStateWithLifecycle()
     val answeredApproval by viewModel.answeredApproval.collectAsStateWithLifecycle()
     val isStopping by viewModel.isStopping.collectAsStateWithLifecycle()
+    // isStopping clears once the cancel request returns, often before the turn ends, so the
+    // avatar remembers the stop until the next turn starts and lets the stopped turn end quietly.
+    var stopRequestedThisTurn by remember(chatId) { mutableStateOf(false) }
+    LaunchedEffect(isStopping) { if (isStopping) stopRequestedThisTurn = true }
+    LaunchedEffect(isStreaming) { if (isStreaming && !isStopping) stopRequestedThisTurn = false }
     val isSubmittingRunInput by viewModel.isSubmittingRunInput.collectAsStateWithLifecycle()
     val runInputMode by viewModel.runInputMode.collectAsStateWithLifecycle()
     val runInputReceipt by viewModel.runInputReceipt.collectAsStateWithLifecycle()
@@ -551,7 +558,9 @@ fun AidenChatDetailScreen(
                     onOpenProfile = { onNavigateToBotProfile(botId) },
                     onOpenFiles = { showBotFiles = true },
                     canDelete = canDeleteBot,
-                    onDelete = { confirmingBotDelete = true }
+                    onDelete = { confirmingBotDelete = true },
+                    // A legacy Bot chat knows only its reply stream.
+                    avatarState = rememberAidenBotAvatarState(botId, aidenBotStreamAvatarTarget(streamState, stopRequestedThisTurn))
                 )
             } else {
                 TopAppBar(
