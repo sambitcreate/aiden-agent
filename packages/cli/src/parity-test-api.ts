@@ -28,7 +28,7 @@ export { resolveTailscaleBinary } from "../../../main/services/aiden-remote-tail
 export * from "./usage-ledger.ts";
 export * from "./extensions/artifacts.ts";
 export { SessionManager, SettingsManager } from "@earendil-works/pi-coding-agent";
-export { liveMessages } from "./pi-bridge/model-runtime.ts";
+export { liveMessages, resolveRuntimeFromContext } from "./pi-bridge/model-runtime.ts";
 
 export { mcpCommand, mcpLogin, validateMcpServer, createMcpExtension, mcpCredentialId, mcpCredentialSignature, cliMcpOAuthLoopback } from "./mcp.ts";
 export { mcpOAuthBindingForServer } from "../../../main/services/mcp-oauth-identity.js";

@@ -9,7 +9,8 @@ import { createServer } from "node:http";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import test from "node:test";
-import { getCacheWarmingDelayMs } from "@earendil-works/pi-ai";
+import { getCacheWarmingDelayMs, normalizeContext } from "@earendil-works/pi-ai";
+import { ModelRegistry } from "@earendil-works/pi-coding-agent";
 import * as api from "../dist/parity-test-api.js";
 
 const tick = () => new Promise((resolve) => setImmediate(resolve));
@@ -1397,4 +1398,71 @@ test("a serve compaction after a removed fact sends the isolated request", async
   }
   const [stored] = compactionSummaries(f.daemon, "removed");
   assert.match(stored ?? "", /said hello/u, "the isolated summary was stored");
+});
+
+test("CLI bridge runtimes send XHIGH thinkingLevel for Gemini 4 models through resolveRuntimeFromContext", async (t) => {
+  const dir = mkdtempSync(join(tmpdir(), "aiden-cli-google-xhigh-"));
+  t.after(() => rmSync(dir, { recursive: true, force: true }));
+  let requestPath = "";
+  let requestBody = "";
+  const server = createServer((request, response) => {
+    requestPath = request.url ?? "";
+    request.setEncoding("utf-8");
+    request.on("data", (chunkText) => { requestBody += String(chunkText); });
+    request.on("end", () => {
+      response.writeHead(200, { "content-type": "text/event-stream" });
+      response.end(
+        `data: ${JSON.stringify({
+          candidates: [
+            {
+              content: { role: "model", parts: [{ text: "Deep thought", thought: true }, { text: "Done" }] },
+              finishReason: "STOP",
+            },
+          ],
+        })}\n\n`,
+      );
+    });
+  });
+  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+  t.after(() => { server.closeAllConnections(); server.close(); });
+  const baseUrl = `http://127.0.0.1:${server.address().port}/v1beta`;
+  api.atomicJson(join(dir, "models.json"), {
+    providers: {
+      google: {
+        baseUrl,
+        apiKey: "cli-test-key",
+        models: [{
+          id: "gemini-4-hydrogen",
+          name: "Gemini 4 Hydrogen",
+          api: "google-generative-ai",
+          reasoning: true,
+          thinkingLevelMap: { off: null, minimal: null, low: "low", medium: "medium", high: "high", xhigh: "xhigh", max: null },
+          input: ["text"],
+          contextWindow: 1_048_576,
+          maxTokens: 65_536,
+          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        }],
+      },
+    },
+  });
+  const cliRuntime = await api.createCliModelRuntime(dir);
+  const resolved = await api.resolveRuntimeFromContext(
+    { modelRegistry: new ModelRegistry(cliRuntime) },
+    "google",
+    "gemini-4-hydrogen",
+  );
+  const result = await resolved.models
+    .streamSimple(
+      resolved.model,
+      normalizeContext({ messages: [{ role: "user", content: "Solve", timestamp: 1 }] }),
+      { apiKey: resolved.apiKey, maxRetries: 0, reasoning: "xhigh" },
+    )
+    .result();
+  assert.equal(result.stopReason, "stop");
+  assert.match(requestPath, /\/v1beta\/models\/gemini-4-hydrogen:streamGenerateContent/u);
+  const parsed = JSON.parse(requestBody);
+  assert.deepEqual(parsed.generationConfig?.thinkingConfig, {
+    includeThoughts: true,
+    thinkingLevel: "XHIGH",
+  });
 });
