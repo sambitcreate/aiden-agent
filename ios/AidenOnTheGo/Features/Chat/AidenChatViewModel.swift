@@ -3017,13 +3017,13 @@ final class AidenChatViewModel {
     /// phone holds now. Normally the provider, model and level the send
     /// named. A send built before `GET /models` answered names the chat's
     /// model with no level only because the phone knew none; if it carried
-    /// no pick of the person's, it meant where a new chat starts, so that is
-    /// resolved as it would be for the chat before its first message, from
-    /// the new-chat choice frozen into the send, never from the chat's current
-    /// state or the remembered choice now. Nil when that lands on another
-    /// model or on no stop, so nothing in Custom is held, and nil once the Mac
-    /// has given the chat a level or moved it to another model: the chat is
-    /// then its own.
+    /// no pick of the person's, it meant where new chats started on this
+    /// phone, so that is the new-chat choice frozen into the send, never the
+    /// chat's current state, the remembered choice now or the Mac's
+    /// `defaults`. Nil when the send froze no choice, when that choice lands
+    /// on another model or on no stop, so nothing in Custom is held, and once
+    /// the Mac has given the chat a level or moved it to another model: the
+    /// chat is then its own.
     private func keptSelection(for attempt: AidenChatDraftStore.PendingSend) -> AidenChatModelSelection? {
         guard attempt.keepsSelection == true, !chat.isBotChat, let slider = agentSlider, let catalog,
               let providerId = attempt.request.providerId,
@@ -3033,21 +3033,16 @@ final class AidenChatViewModel {
         if sent.thinkingLevel != nil || (model != nil && model?.thinkingLevels?.isEmpty != false) {
             return sent
         }
+        // With no choice of the phone's frozen into the send, the send carried
+        // nothing and the Mac decides the level when it runs the turn, so the
+        // chat's own metadata is the authority: nothing is held, and the
+        // Mac's `defaults`, which can change while the send waits, are never
+        // read here.
         guard attempt.startsWhereNewChatsStart == true, chat.thinkingLevel == nil,
               chat.providerId == nil || chat.providerId == providerId,
-              chat.modelId == nil || chat.modelId == modelId else { return nil }
-        var unsent = chat
-        unsent.messages = []
-        let start = AidenChatModelAuthority.resolvedSelection(
-            chat: unsent,
-            catalog: catalog,
-            selectedProviderId: nil,
-            selectedModelId: nil,
-            selectedThinkingLevel: nil,
-            remembered: attempt.newChatStart,
-            exactLevels: true
-        )
-        guard start.providerId == providerId, start.modelId == modelId,
+              chat.modelId == nil || chat.modelId == modelId,
+              let start = AidenChatModelAuthority.rememberedSelection(attempt.newChatStart, in: catalog, exactLevels: true),
+              start.providerId == providerId, start.modelId == modelId,
               AidenAgentSliderState(slider: slider, catalog: catalog, selection: start).currentStop != nil
         else { return nil }
         return start
@@ -3071,7 +3066,10 @@ final class AidenChatViewModel {
             selectedThinkingLevel = nil
         }
         // An unsent pick made in this chat before it was last closed wins
-        // like a pick made now.
+        // like a pick made now. It counts as a pick, so a saved send waiting
+        // to retry, which counts picks from zero after a reopen, loses to it:
+        // a chat pick only exists once the chat has messages, so it was made
+        // after any first send that kept where new chats start.
         if !hasExplicitModelSelection, !isReadOnlyFixture, !chat.isBotChat, !chat.messages.isEmpty,
            let pick = modelPreferenceStore.chatSelection(for: instanceId, chatID: chat.id) {
             selectedProviderId = pick.providerId
@@ -3079,6 +3077,7 @@ final class AidenChatViewModel {
             selectedThinkingLevel = pick.thinkingLevel
             hasExplicitModelSelection = true
             hasUnsentModelPick = true
+            modelPickGeneration &+= 1
         }
         var selection = AidenChatModelAuthority.resolvedSelection(
             chat: chat,

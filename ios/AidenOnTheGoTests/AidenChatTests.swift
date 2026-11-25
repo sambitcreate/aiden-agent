@@ -3134,6 +3134,9 @@ final class AidenChatTests: XCTestCase {
             let losesReplies = Mutex(false)
             /// While true `GET /models` fails, as before the Mac answers it.
             let catalogFails = Mutex(false)
+            /// The Mac's last model and level when changed on the Mac, as
+            /// the catalog's `defaults` object; nil keeps the fixture's.
+            let macDefaults = Mutex<String?>(nil)
             /// The Mac's idempotency ledger: the key-sorted body each key ran
             /// and the message it made. The same body under a known key
             /// replays that message; a different one is refused.
@@ -3176,7 +3179,10 @@ final class AidenChatTests: XCTestCase {
                     if offer.catalogFails.withLock({ $0 }) {
                         return (503, "application/json", Data(#"{"error":{"code":"internal_error","message":"Try again","requestId":"models-unknown","retryable":true}}"#.utf8))
                     }
-                    let offered = offer.catalogSlider.withLock { $0 } ? catalog : catalogWithoutSlider
+                    var offered = offer.catalogSlider.withLock { $0 } ? catalog : catalogWithoutSlider
+                    if let moved = offer.macDefaults.withLock({ $0 }) {
+                        offered = offered.replacingOccurrences(of: #""defaults":{"providerId":"acme","modelId":"small","thinkingLevel":"low"}"#, with: #""defaults":"# + moved)
+                    }
                     return (200, "application/json", Data(offered.utf8))
                 case ("POST", "/api/aiden/v1/chats/chat-progress-lifecycle/turns"):
                     turns.record(request)
@@ -3405,9 +3411,10 @@ final class AidenChatTests: XCTestCase {
 
         // A new chat's first send goes out before `GET /models` answers, so
         // it names the chat's model with no level and runs on the model's own
-        // setting, which no stop names. Once the catalog and the grant land
-        // the chat keeps the stop the chip resolved to, not a level-less pick
-        // that reads Custom, and the next send asks the Mac to keep a level.
+        // setting, which no stop names. New chats start on Fast on this phone,
+        // so once the catalog and the grant land the chat keeps that stop,
+        // not a level-less pick that reads Custom, and the next send asks the
+        // Mac to keep a level.
         let unlistedChat = try AidenRemoteJSONDecoder.decode(AidenChat.self, from: Data(
             #"{"id":"chat-progress-lifecycle","workspaceId":"workspace-1","title":"Progress lifecycle","providerId":"acme","modelId":"small","messages":[],"createdAt":"2026-09-14T12:00:00Z","updatedAt":"2026-09-14T12:00:01Z","revision":"revision-1"}"#.utf8
         ))
@@ -3415,6 +3422,9 @@ final class AidenChatTests: XCTestCase {
             macOffersSlider: false, catalogAnswers: false, initialChat: unlistedChat
         )
         XCTAssertNil(unlisted.catalog)
+        unlistedPreferences.remember(
+            AidenChatModelSelection(providerId: "acme", modelId: "small", thinkingLevel: "low"), for: "instance-progress-lifecycle"
+        )
         unlistedOffer.failsTurns.withLock { $0 = true }
         unlisted.draft = "Hello"
         await unlisted.send()
@@ -3429,7 +3439,7 @@ final class AidenChatTests: XCTestCase {
         await unlisted.reload(observeProgress: false)
         try await waitUntil { unlisted.agentSlider != nil }
         unlisted.reconcileAgentSliderAvailability()
-        XCTAssertEqual(unlisted.agentSliderState?.currentStop?.id, "fast", "the catalog puts the new chat on the Mac's last stop")
+        XCTAssertEqual(unlisted.agentSliderState?.currentStop?.id, "fast", "the catalog puts the new chat where new chats start")
         unlistedOffer.failsTurns.withLock { $0 = false }
         await unlisted.send(retry: true)
         XCTAssertEqual(unlistedTurns.count, 2)
@@ -3464,6 +3474,9 @@ final class AidenChatTests: XCTestCase {
             macOffersSlider: false, catalogAnswers: false, initialChat: unlistedChat
         )
         XCTAssertNil(racing.catalog)
+        racingPreferences.remember(
+            AidenChatModelSelection(providerId: "acme", modelId: "small", thinkingLevel: "low"), for: "instance-progress-lifecycle"
+        )
         racingOffer.slider.withLock { $0 = true }
         await racing.coordinator.connectActiveInstallation()
         racingOffer.catalogFails.withLock { $0 = false }
@@ -3642,10 +3655,11 @@ final class AidenChatTests: XCTestCase {
         // The same lost reply, and the person picks Small at its own setting,
         // which is what the waiting send named, before tapping Retry. That
         // pick is newer than the send, so the accepted retry keeps it.
-        func lostFirstSend() async throws -> (AidenChatViewModel, AidenRecordedTurnStarts, AidenModelPreferenceStore) {
+        func lostFirstSend() async throws -> (AidenChatViewModel, AidenRecordedTurnStarts, Offer, AidenModelPreferenceStore) {
             let (chat, turns, offer, preferences) = try await launch(
                 macOffersSlider: false, catalogAnswers: false, initialChat: unlistedChat
             )
+            preferences.remember(small("low"), for: "instance-progress-lifecycle")
             offer.failsTurns.withLock { $0 = true }
             offer.losesReplies.withLock { $0 = true }
             chat.draft = "Hello"
@@ -3661,9 +3675,9 @@ final class AidenChatTests: XCTestCase {
             XCTAssertTrue(chat.chat.messages.contains { $0.id == "host-message-1" })
             XCTAssertEqual(chat.agentSliderState?.currentStop?.id, "fast", "the waiting send shows where new chats start")
             offer.failsTurns.withLock { $0 = false }
-            return (chat, turns, preferences)
+            return (chat, turns, offer, preferences)
         }
-        let (picked, pickedTurns, pickedPreferences) = try await lostFirstSend()
+        let (picked, pickedTurns, _, pickedPreferences) = try await lostFirstSend()
         picked.selectModel(providerId: "acme", modelId: "small", thinkingLevel: nil)
         XCTAssertNil(picked.agentSliderState?.currentStop)
         await picked.send(retry: true)
@@ -3679,9 +3693,97 @@ final class AidenChatTests: XCTestCase {
         XCTAssertNil(try sentTurn(pickedTurns).saveSelection)
         picked.stopProgressObservation()
 
+        // The same pick, but the app quits before Retry. The pick comes back
+        // with the chat after the relaunch and is still newer than the send.
+        let (pickedBeforeQuit, _, quitOffer, quitPreferences) = try await lostFirstSend()
+        pickedBeforeQuit.selectModel(providerId: "acme", modelId: "small", thinkingLevel: nil)
+        pickedBeforeQuit.stopProgressObservation()
+        let (reopened, reopenedTurns, _, reopenedPreferences) = try await launch(
+            macOffersSlider: true, initialChat: unlistedChat, relaunching: (quitOffer, quitPreferences)
+        )
+        try await waitUntil { reopened.agentSlider != nil && reopened.pendingSend != nil }
+        _ = await reopened.reconcileChat(context: reopened.owner)
+        XCTAssertNil(reopened.agentSliderState?.currentStop, "the pick made before the relaunch was lost")
+        await reopened.send(retry: true)
+        XCTAssertNil(reopened.pendingSend)
+        XCTAssertNil(reopened.agentSliderState?.currentStop, "the retry's start replaced a pick made before the relaunch")
+        XCTAssertNil(reopenedPreferences.chatSelection(for: "instance-progress-lifecycle", chatID: reopened.chat.id))
+        try await waitUntil { reopened.streamState?.isTerminal != false }
+        reopened.draft = "Again"
+        try await waitUntil { reopened.canSend }
+        await reopened.send()
+        try await waitUntil { reopenedTurns.count == 2 }
+        XCTAssertNil(try sentTurn(reopenedTurns).thinkingLevel, "the retry's start replaced a pick made before the relaunch")
+        XCTAssertNil(try sentTurn(reopenedTurns).saveSelection)
+        reopened.stopProgressObservation()
+
+        // With no pick, a relaunch before Retry still holds where new chats
+        // started when the send was built.
+        let (unpicked, _, unpickedOffer, unpickedPreferences) = try await lostFirstSend()
+        unpicked.stopProgressObservation()
+        let (resumed, resumedTurns, _, resumedPreferences) = try await launch(
+            macOffersSlider: true, initialChat: unlistedChat, relaunching: (unpickedOffer, unpickedPreferences)
+        )
+        try await waitUntil { resumed.agentSlider != nil && resumed.pendingSend != nil }
+        _ = await resumed.reconcileChat(context: resumed.owner)
+        XCTAssertEqual(resumed.agentSliderState?.currentStop?.id, "fast")
+        await resumed.send(retry: true)
+        XCTAssertNil(resumed.pendingSend)
+        XCTAssertEqual(resumed.agentSliderState?.currentStop?.id, "fast", "the relaunch dropped the start the send was built with")
+        XCTAssertEqual(resumedPreferences.chatSelection(for: "instance-progress-lifecycle", chatID: resumed.chat.id), small("low"))
+        try await waitUntil { resumed.streamState?.isTerminal != false }
+        resumed.draft = "Again"
+        try await waitUntil { resumed.canSend }
+        await resumed.send()
+        try await waitUntil { resumedTurns.count == 2 }
+        XCTAssertEqual(try sentTurn(resumedTurns).thinkingLevel, "low")
+        XCTAssertEqual(try sentTurn(resumedTurns).saveSelection, true)
+        resumed.stopProgressObservation()
+
+        // With no choice of this phone's, a first send made before the catalog
+        // carries no level, and the Mac picks one when it runs the turn. The
+        // Mac's last model or level then changes before the catalog arrives.
+        // Nothing is held from the new defaults: the chat follows its own
+        // model and level, and no later send saves a level nobody chose.
+        for moved in [#"{"providerId":"acme","modelId":"small","thinkingLevel":"medium"}"#,
+                      #"{"providerId":"acme","modelId":"large","thinkingLevel":"high"}"#] {
+            let (unchosen, unchosenTurns, unchosenOffer, unchosenPreferences) = try await launch(
+                macOffersSlider: false, catalogAnswers: false, initialChat: unlistedChat
+            )
+            unchosenOffer.failsTurns.withLock { $0 = true }
+            unchosenOffer.losesReplies.withLock { $0 = true }
+            unchosen.draft = "Hello"
+            await unchosen.send()
+            XCTAssertNotNil(unchosen.pendingSend)
+            XCTAssertNil(try sentTurn(unchosenTurns).thinkingLevel)
+            unchosenOffer.macDefaults.withLock { $0 = moved }
+            unchosenOffer.slider.withLock { $0 = true }
+            unchosenOffer.catalogFails.withLock { $0 = false }
+            await unchosen.coordinator.connectActiveInstallation()
+            await unchosen.reload(observeProgress: false)
+            try await waitUntil { unchosen.agentSlider != nil }
+            unchosen.reconcileAgentSliderAvailability()
+            _ = await unchosen.reconcileChat(context: unchosen.owner)
+            XCTAssertNil(unchosen.agentSliderState?.currentStop, "the waiting send took the Mac's new defaults \(moved)")
+            unchosenOffer.failsTurns.withLock { $0 = false }
+            await unchosen.send(retry: true)
+            XCTAssertNil(unchosen.pendingSend)
+            XCTAssertNil(unchosen.agentSliderState?.currentStop, "the accepted send held the Mac's new defaults \(moved)")
+            XCTAssertNil(unchosenPreferences.chatSelection(for: "instance-progress-lifecycle", chatID: unchosen.chat.id))
+            try await waitUntil { unchosen.streamState?.isTerminal != false }
+            unchosen.draft = "Again"
+            try await waitUntil { unchosen.canSend }
+            await unchosen.send()
+            try await waitUntil { unchosenTurns.count == 3 }
+            XCTAssertEqual(try sentTurn(unchosenTurns).modelId, "small")
+            XCTAssertNil(try sentTurn(unchosenTurns).thinkingLevel, "the next send carried a level nobody chose")
+            XCTAssertNil(try sentTurn(unchosenTurns).saveSelection, "the next send saved a level nobody chose")
+            unchosen.stopProgressObservation()
+        }
+
         // The same lost reply, and the person checks the Mac and dismisses
         // the send. The chat then follows its own model and level.
-        let (dismissed, dismissedTurns, _) = try await lostFirstSend()
+        let (dismissed, dismissedTurns, _, _) = try await lostFirstSend()
         await dismissed.discardPendingSend()
         XCTAssertNil(dismissed.pendingSend)
         XCTAssertNil(dismissed.agentSliderState?.currentStop, "the dismissed send still set the chip")
