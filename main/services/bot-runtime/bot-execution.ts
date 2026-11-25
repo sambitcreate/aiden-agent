@@ -113,6 +113,26 @@ export function createBotBackgroundExecutionModels(claim: BotExecutionClaim, exe
   };
   return proxyBound(execution.models, { streamSimple: stream, completeSimple: ((...args) => stream(...args).result()) as Models["completeSimple"], fetchDeferred: async () => { throw new Error("Background reviews do not submit deferred requests."); }, cancelDeferred: async () => { throw new Error("Background reviews have no deferred request to cancel."); } });
 }
+/**
+ * Pi keys per-run state (the provider session set, the close signal) by the
+ * scheduler's own runtime object, so a phase handler must receive that exact
+ * object. Install the overrides on it for the run and return their removal;
+ * `base` reads the values the overrides replaced.
+ */
+function overrideOwn<T extends object>(target: T, build: (base: T) => object): () => void {
+  const replaced = new Map<PropertyKey, PropertyDescriptor | undefined>();
+  const base = new Proxy(target, { get(object, key) {
+    const descriptor = replaced.get(key);
+    const value = !replaced.has(key) ? Reflect.get(object, key, object) as unknown : descriptor?.get ? descriptor.get.call(object) as unknown : descriptor?.value as unknown;
+    return typeof value === "function" ? value.bind(object) : value;
+  } });
+  const overrides = build(base);
+  for (const key of Reflect.ownKeys(overrides)) {
+    replaced.set(key, Object.getOwnPropertyDescriptor(target, key));
+    Object.defineProperty(target, key, { ...Object.getOwnPropertyDescriptor(overrides, key)!, configurable: true, enumerable: true });
+  }
+  return () => { for (const [key, descriptor] of replaced) { if (descriptor) Object.defineProperty(target, key, descriptor); else Reflect.deleteProperty(target, key); } };
+}
 function proxyBound<T extends object>(target: T, overrides: Record<PropertyKey, unknown>): T {
   return new Proxy(target, { get(object, key) { if (key in overrides) return overrides[key]; const value = Reflect.get(object, key, object) as unknown; return typeof value === "function" ? value.bind(object) : value; } });
 }
@@ -331,11 +351,11 @@ export function createBotExecutionRegistry(botId: string, registry: RegistryRead
       let settledTerminal = false, generationEnded = false;
       const verifyCostApproval = port.verifyCostApproval ?? (async () => false);
       const boundModels = executionModels(runtime, execution, claim, original.definition.name, phase, task.state.checkpoint, context, binding.dispatchGeneration ?? 0, responseScopeId, port, block, () => { settledTerminal = true; }, verifyCostApproval);
-      const scoped = proxyBound(runtime, {
-        agent: async (at: Context) => ({ ...await runtime.agent(at), model: { provider: execution.model.provider, modelId: execution.model.id }, thinkingLevel: selected.thinkingLevel }),
+      const restoreRuntime = overrideOwn(runtime, (base) => ({
+        agent: async (at: Context) => ({ ...await base.agent(at), model: { provider: execution.model.provider, modelId: execution.model.id }, thinkingLevel: selected.thinkingLevel }),
         models: boundModels,
-        get settings() { const settings = runtime.settings; return settledTerminal ? { ...settings, retry: { ...settings.retry, enabled: false }, compaction: { ...settings.compaction, enabled: false, modelOverrides: {} } } : settings; },
-        commit: (async (change, at) => { let ends = false; const committed = await runtime.commit(async (tx, current) => {
+        get settings() { const settings = base.settings; return settledTerminal ? { ...settings, retry: { ...settings.retry, enabled: false }, compaction: { ...settings.compaction, enabled: false, modelOverrides: {} } } : settings; },
+        commit: (async (change, at) => { let ends = false; const committed = await base.commit(async (tx, current) => {
           const generations: { id: TaskId; conversationId: typeof runtime.conversationId }[] = [];
           const decorated = proxyBound(tx, { createTask: (async (definition, input, options) => {
             const id = await tx.createTask(definition, input, options), kind = definition.definition.name;
@@ -356,7 +376,7 @@ export function createBotExecutionRegistry(botId: string, registry: RegistryRead
           ends = original.definition.name === GenerationTask.definition.name && !continues && (next as { status?: unknown } | undefined)?.status === "terminal";
           return next;
         }, at); if (ends) generationEnded = true; return committed; }) as TaskRuntime<I, S, R, H>["commit"],
-      });
+      }));
       let active = true;
       const helpers: BotExecutionRuntime[] = [];
       const helperNames = new Set<string>();
@@ -369,12 +389,12 @@ export function createBotExecutionRegistry(botId: string, registry: RegistryRead
         if (!execution.imageInput && original.definition.name === GenerationTask.definition.name && phase === "prepare" && !companionOffered(claim)) {
           for (const id of binding.sourceInputs ?? []) { const source = await (await harness!.submission(id as SubmissionId, context))?.status(context); const entry = source?.entry === undefined ? undefined : await runtime.entry(source.entry, context); if (entry?.model && hasUserImages(entry.model)) return block(new BotExecutionImageError()); }
         }
-        await handler(task, scoped, context);
+        await handler(task, runtime, context);
         if ((phase === "abort" || settledTerminal) && original.definition.name === GenerationTask.definition.name) await port.dismissed?.(botId, claim);
         if (generationEnded) await port.settled?.(botId, claim);
       });
       try { await claimScope(claim, run); }
-      finally { active = false; for (const helper of helpers) helper.release(); execution.release(); }
+      finally { restoreRuntime(); active = false; for (const helper of helpers) helper.release(); execution.release(); }
     }
     const phases = Object.fromEntries(Object.entries(original.definition.phases).map(([phase, handler]) => [phase, (task: Parameters<typeof original.definition.abort>[0], runtime: TaskRuntime<I, S, R, H>, context: Context) => invoke(task, runtime, context, phase, handler as typeof original.definition.abort)])) as typeof original.definition.phases;
     return defineTask({ ...original.definition, phases, abort: async (task, runtime, context) => {
@@ -383,7 +403,9 @@ export function createBotExecutionRegistry(botId: string, registry: RegistryRead
         if (runtime.signal.aborted) throw error;
         // Revoked credentials cannot cancel a provider-side handle. Settle the
         // exact local task without consulting replacement or ambient auth.
-        await original.definition.abort(task, proxyBound(runtime, { models: proxyBound(runtime.models, { getModel: () => undefined }) }), context);
+        const restoreRuntime = overrideOwn(runtime, (base) => ({ models: proxyBound(base.models, { getModel: () => undefined }) }));
+        try { await original.definition.abort(task, runtime, context); }
+        finally { restoreRuntime(); }
         if (original.definition.name === GenerationTask.definition.name) {
           const saved = await runtime.snapshot(BotExecutionDoc, runtime.taskId, context);
           if (saved?.claimId && saved.requestId) { const claim = await port.getClaim(botId, saved.claimId, saved.requestId).catch(() => undefined); if (claim) await port.dismissed?.(botId, claim); }

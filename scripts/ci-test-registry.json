@@ -1267,6 +1267,7 @@
         "renderer/components/subagent-composer-pill.test.tsx",
         "renderer/components/subagent-chips.test.tsx",
         "renderer/components/chat-top-bar-subagents.test.tsx",
+        "renderer/components/chat-top-bar-presence.test.tsx",
         "renderer/lib/subagent-group-visibility.test.ts",
         "renderer/components/environment-panel-focus.test.tsx",
         "renderer/components/quick-view-cards.test.tsx",

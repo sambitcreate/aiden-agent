@@ -312,6 +312,7 @@ import {
 } from "../shared/codex-thinking";
 import {
   GOOGLE_THINKING_LEVELS,
+  googleThinkingLevelsForModel,
   normalizeGoogleThinkingLevel,
   type GoogleThinkingLevel,
 } from "../shared/google-thinking";
@@ -821,7 +822,7 @@ export function ChatPane({ chatId }: { chatId: string }) {
   const thinkingMetadata = model ? selectedProvider?.modelMetadata?.[model] : undefined;
   const googleThinkingLevels = React.useMemo<GoogleThinkingLevel[]>(() => {
     const declared = thinkingMetadata?.thinkingLevels;
-    if (!declared?.length) return [...GOOGLE_THINKING_LEVELS];
+    if (!declared?.length) return googleThinkingLevelsForModel({ reasoning: true });
     const supported = GOOGLE_THINKING_LEVELS.filter((level) => declared.includes(level));
     return supported.includes("off") ? supported : ["off", ...supported];
   }, [thinkingMetadata?.thinkingLevels]);
@@ -4580,12 +4581,14 @@ export function ChatPane({ chatId }: { chatId: string }) {
               {
                 key: "quick-view",
                 placement: "leading",
-                button: <QuickViewToggle disabled={!effectiveWorkspace} />,
+                button: <QuickViewToggle />,
                 label: environmentPanel.quickViewOpen ? "Hide Quick View" : "Show Quick View",
                 icon: QuickViewIcon,
                 onSelect: environmentPanel.toggleQuickView,
-                disabled: !effectiveWorkspace || environmentPanel.gitOperationBusy,
+                disabled: environmentPanel.gitOperationDimmed,
                 active: environmentPanel.quickViewOpen,
+                // A chat with no workspace has nothing for Quick View to show.
+                available: Boolean(effectiveWorkspace),
               },
               {
                 key: "terminal",
@@ -4595,7 +4598,6 @@ export function ChatPane({ chatId }: { chatId: string }) {
                     variant="bar"
                     size="small"
                     onClick={terminal.toggle}
-                    disabled={!effectiveWorkspace?.folderPath || !terminal.canOpen}
                     aria-label={terminal.open ? "Hide terminal" : "Show terminal"}
                     aria-keyshortcuts={ariaKeyShortcut(terminalShortcutBinding)}
                     aria-pressed={terminal.open}
@@ -4608,8 +4610,10 @@ export function ChatPane({ chatId }: { chatId: string }) {
                 label: terminal.open ? "Hide terminal" : "Show terminal",
                 icon: TerminalSquare,
                 onSelect: terminal.toggle,
-                disabled: !effectiveWorkspace?.folderPath || !terminal.canOpen,
                 active: terminal.open,
+                // Left out without a folder or with workspace access off (the
+                // workspace chip says why), unless a terminal is still open to close.
+                available: Boolean(effectiveWorkspace?.folderPath && (terminal.canOpen || terminal.open)),
               },
             ]}
             trailing={

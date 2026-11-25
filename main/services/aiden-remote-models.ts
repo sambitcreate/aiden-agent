@@ -159,8 +159,11 @@ export class AidenRemoteModelService {
         (provider) =>
           provider.id === settings.lastProviderId && provider.models.some((model) => !model.hidden),
       ) ?? providers.find((provider) => provider.models.some((model) => !model.hidden));
+    // A saved model wins; otherwise the provider's own default (Pi's, for built-ins), then its first shown model.
+    const providerDefault = configured.find((entry) => entry.id === selectedProvider?.id)?.defaultModel;
     const selectedModel =
       selectedProvider?.models.find((model) => model.id === settings.lastModel && !model.hidden) ??
+      selectedProvider?.models.find((model) => model.id === providerDefault && !model.hidden) ??
       selectedProvider?.models.find((model) => !model.hidden);
     const projection = {
       providers,

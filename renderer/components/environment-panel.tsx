@@ -139,6 +139,7 @@ import { prefersReducedMotion } from "../lib/appearance-runtime";
 import { usePresence } from "../lib/use-presence";
 import { useLayer } from "../lib/layer-stack";
 import { arrangeByDraft, ReorderAnnouncer, reorderMessage, useReorderDraft } from "../lib/reorder-draft";
+import { useDelayedFlag } from "../lib/use-delayed-flag";
 import {
   DeviceTabContextMenu,
   DeviceTabRenameInput,
@@ -271,7 +272,14 @@ export interface EnvironmentPanelContextValue {
   stopSubagent: (run: SubagentRunSnapshot) => Promise<void>;
   editorState: FilesEditorState;
   agentBusy: boolean;
+  /** A Git operation started from Aiden is running; panel and tool changes wait for it. */
   gitOperationBusy: boolean;
+  /**
+   * The same operation once it has run for `GIT_BUSY_DIM_DELAY_MS`. Header buttons
+   * dim only then, so a quick commit doesn't flash the bar; until then the panel
+   * still refuses their changes.
+   */
+  gitOperationDimmed: boolean;
   gitMutationBlockedReason: string | null;
   reportEditorState: (state: FilesEditorState, options?: FilesEditorStateChangeOptions) => void;
   setAgentBusy: (busy: boolean) => void;
@@ -283,6 +291,12 @@ export interface EnvironmentPanelContextValue {
 }
 
 /** Exported so component tests can render a single surface against a stub panel. */
+/**
+ * How long a Git operation runs before the header buttons dim. A commit or push
+ * that finishes sooner leaves the bar looking as it was.
+ */
+export const GIT_BUSY_DIM_DELAY_MS = 300;
+
 export const EnvironmentPanelContext = React.createContext<EnvironmentPanelContextValue | null>(null);
 
 interface EnvironmentArtifactsContextValue {
@@ -555,6 +569,7 @@ export function EnvironmentPanelProvider({ children }: React.PropsWithChildren) 
   const [subagentDetailAnnouncement, setSubagentDetailAnnouncement] =
     React.useState<SubagentDetailAnnouncementRequest | null>(null);
   const [gitOperationBusy, setGitOperationBusyState] = React.useState(false);
+  const gitOperationDimmed = useDelayedFlag(gitOperationBusy, GIT_BUSY_DIM_DELAY_MS);
   const [createWorktree, setCreateWorktree] = React.useState<
     ((branchName: string) => Promise<void>) | undefined
   >();
@@ -1449,6 +1464,7 @@ export function EnvironmentPanelProvider({ children }: React.PropsWithChildren) 
       editorState: activeEditorState,
       agentBusy,
       gitOperationBusy,
+      gitOperationDimmed,
       gitMutationBlockedReason,
       reportEditorState,
       setAgentBusy,
@@ -1474,6 +1490,7 @@ export function EnvironmentPanelProvider({ children }: React.PropsWithChildren) 
       dockRightInset,
       fileRequest,
       gitOperationBusy,
+      gitOperationDimmed,
       gitMutationBlockedReason,
       openFile,
       openReview,
@@ -2641,7 +2658,7 @@ export function EnvironmentPanelToggle({ disabled = false }: { disabled?: boolea
       variant="bar"
       size="small"
       onClick={panel.toggleTools}
-      disabled={disabled || panel.gitOperationBusy}
+      disabled={disabled || panel.gitOperationDimmed}
       aria-label={active ? "Hide Environment" : "Show Environment"}
       aria-keyshortcuts={ariaKeyShortcut(toggleShortcutBinding)}
       aria-pressed={active}
@@ -2683,7 +2700,7 @@ export function QuickViewToggle({ disabled = false }: { disabled?: boolean }) {
       variant="bar"
       size="small"
       onClick={panel.toggleQuickView}
-      disabled={disabled || panel.gitOperationBusy}
+      disabled={disabled || panel.gitOperationDimmed}
       aria-label={active ? "Hide Quick View" : "Show Quick View"}
       aria-pressed={active}
       aria-controls="quick-view-card"

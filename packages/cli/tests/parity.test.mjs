@@ -2589,6 +2589,17 @@ test("durable CLI Bots can message each other", async (t) => {
   assert.equal(capabilities.status, 200);
   assert.equal(capabilities.data.serverCapabilities.includes("bot:allowed"), false, "CLI never advertises desktop remembered approvals");
   assert.equal((await request(modern, `/bots/${bots[0].id}/allowed`)).status, 404, "CLI supplies no remembered-approval endpoint");
+  // Revision 68: this server says which Bots wait on the person, only to a device that asked.
+  assert.ok(capabilities.data.serverCapabilities.includes("bot:needs-you"), "the server offers bot:needs-you");
+  const askedNeedsYou = await request(modern, "/device/capabilities", "POST", { accepts: ["bot:needs-you"] });
+  assert.equal(askedNeedsYou.status, 200, JSON.stringify(askedNeedsYou));
+  const pendingApprovals = host.durable.approvals.pending;
+  host.durable.approvals.pending = (id) => id === bots[0].id ? [{ botId: id }] : [];
+  try {
+    const waiting = await request(modern, "/bots");
+    assert.deepEqual(waiting.data.bots.filter((row) => row.needsYou).map((row) => row.id), [bots[0].id]);
+    assert.equal((await request(older, "/bots")).data.bots.some((row) => "needsYou" in row), false, "a device that didn't ask never sees the key");
+  } finally { host.durable.approvals.pending = pendingApprovals; }
   const list = await request(modern, "/bots");
   assert.equal(list.status, 200); assert.deepEqual(list.data.messaging, { enabled: true });
   assert.equal((await request(older, "/bots")).data.messaging, undefined);
@@ -2654,9 +2665,10 @@ test("durable CLI Bot migration preserves history, dedupes across restart, and f
   const oldEntry = process.env.AIDEN_CLI_ENTRY;
   process.env.AIDEN_CLI_ENTRY = join(pkg, "dist/app/cli.js");
   t.after(() => { if (oldEntry === undefined) delete process.env.AIDEN_CLI_ENTRY; else process.env.AIDEN_CLI_ENTRY = oldEntry; });
-  let calls = 0, hold = false, scriptResult, scriptTools;
+  let calls = 0, hold = false, gate = null, scriptResult, scriptTools;
   const server = createServer(async (request, response) => {
     let body = ""; for await (const chunk of request) body += chunk;
+    if (gate) await gate.promise;
     const parsed = JSON.parse(body);
     const write = JSON.stringify(parsed.messages).includes("Write durable file") && !parsed.messages.some((message) => message.role === "tool");
     const last = parsed.messages.at(-1);
@@ -2719,6 +2731,7 @@ test("durable CLI Bot migration preserves history, dedupes across restart, and f
   assert.equal(remoteBots.botSessions.supportsAttachments, false);
   assert.equal(remoteBots.botSessions.supportsActivity, false);
   await remoteBots.botSessions.close();
+  remoteBots.signals.close();
   const routine = await host.routines.create({ botId: bot.id, name: "Read update", prompt: "Give a brief update", schedule: { kind: "daily", time: "12:00" }, timezone: "UTC" });
   const routineRun = await scheduler.service.runNow(routine.id, { runId: "stable-routine-fire" });
   assert.equal(routineRun.result, "success");
@@ -2730,6 +2743,29 @@ test("durable CLI Bot migration preserves history, dedupes across restart, and f
   const imageData = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aX1sAAAAASUVORK5CYII=";
   const sent = await host.durable.runtime.send(bot.id, { text: "Hello", requestId: "migration-first", attachments: [{ type: "image", mimeType: "image/png", data: imageData }] });
   assert.deepEqual(await host.durable.runtime.awaitReply(bot.id, sent.submissionId, new AbortController().signal), { kind: "completed", text: "Durable answer" });
+  // A paired desktop's Bot row and a phone's Bots list read what this server's own Bot did, as from a Mac.
+  const { signals, botSessions } = api.createCliRemoteBots(dir, "test-instance", host, daemon, {}, ledger, async () => {});
+  try {
+    const row = (await signals.botSignals([{ id: bot.id }])).get(bot.id);
+    assert.equal(row.preview, "Durable answer");
+    assert.ok(Date.parse(row.lastReplyAt) > 0, JSON.stringify(row));
+    assert.equal(row.summarized, true, "a paired Mac can tell this server reports every Bot's reply");
+    assert.equal(row.needsYou, undefined);
+    assert.equal(row.failed, undefined);
+    assert.deepEqual([...await signals.botNeedsYou([bot.id])], []);
+    let changes = 0;
+    const off = signals.onChange(() => { changes += 1; });
+    const pending = host.durable.approvals.pending;
+    host.durable.approvals.pending = (id) => id === bot.id ? [{ botId: bot.id }] : [];
+    try {
+      assert.deepEqual([...await signals.botNeedsYou([bot.id])], [bot.id], "an approval waiting on the person");
+      assert.equal((await signals.botSignals([{ id: bot.id }])).get(bot.id).needsYou, true);
+    } finally { host.durable.approvals.pending = pending; }
+    await host.command(["pause", bot.id]);
+    await host.command(["unpause", bot.id]);
+    assert.ok(changes > 0, "a pause reaches the host feed");
+    off();
+  } finally { await botSessions?.close(); await signals.close(); }
   const durableEntries = (await (await host.durable.runtime.conversation(bot.id)).context(api.BACKGROUND_CONTEXT)).entries;
   const callContext = api.cliDurableBotToolContext([...durableEntries].reverse(), { chatId: legacy.id, botId: bot.id });
   const forkSnapshot = await callContext.loadChat();
@@ -2741,8 +2777,28 @@ test("durable CLI Bot migration preserves history, dedupes across restart, and f
   forkSnapshot.messages.find((message) => message.role === "user").content = "caller mutated snapshot";
   assert.equal((await callContext.loadChat()).messages.find((message) => message.role === "user").content, "Hello", "call snapshot cannot be mutated by another consumer");
 
+  // A paired desktop's feed re-reads its rows on each change: a turn's end alone brings the row its reply.
+  const { signals: replySignals, botSessions: replySessions } = api.createCliRemoteBots(dir, "test-instance", host, daemon, {}, ledger, async () => {});
+  const before = Date.parse((await replySignals.botSignals([{ id: bot.id }])).get(bot.id).lastReplyAt);
+  const seen = [];
+  const offReply = replySignals.onChange(() => { seen.push(replySignals.botSignals([{ id: bot.id }]).then((rows) => rows.get(bot.id))); });
+  let release;
+  gate = { promise: new Promise((resolve) => { release = resolve; }) };
   const writeTurn = await host.durable.runtime.send(bot.id, { text: "Write durable file", requestId: "durable-write-once" });
-  assert.equal((await host.durable.runtime.awaitReply(bot.id, writeTurn.submissionId, new AbortController().signal)).kind, "completed");
+  try {
+    await Promise.all(seen);
+    const whileRunning = seen.length;
+    gate = null;
+    release();
+    assert.equal((await host.durable.runtime.awaitReply(bot.id, writeTurn.submissionId, new AbortController().signal)).kind, "completed");
+    let settledRow;
+    for (let attempt = 0; attempt < 100 && !settledRow; attempt += 1) {
+      settledRow = (await Promise.all(seen.slice(whileRunning))).find((value) => value?.lastReplyAt && Date.parse(value.lastReplyAt) > before);
+      if (!settledRow) await new Promise((resolve) => setTimeout(resolve, 20));
+    }
+    assert.ok(settledRow, "the finished turn alone reaches the host feed, with its reply");
+    assert.equal(settledRow.preview, "Durable answer");
+  } finally { gate = null; release(); offReply(); await replySessions?.close(); await replySignals.close(); }
   assert.equal(readFileSync(join((await host.managedWorkspace.resolve(bot.id)).homePath, "durable.txt"), "utf8"), "Written by the durable Bot");
   // Codemode runs in the bundle: the script's read is a nested call through the Bot's own checks.
   const scriptTurn = await host.durable.runtime.send(bot.id, { text: "Script durable file", requestId: "durable-script-once" });
@@ -3611,4 +3667,10 @@ test("prompt-cache miss detection agrees with Pi's detectCacheMiss over a mixed 
     );
   }
   assert.ok(compared > 100 && misses > 10, `the sequence exercised misses (${misses} of ${compared})`);
+});
+
+test("Aiden's copy of Pi's per-provider default models matches the pinned pi-coding-agent", async () => {
+  // Pi does not export this table from its package entry, so load the module file directly.
+  const resolver = await import(pathToFileURL(join(pkg, "node_modules/@earendil-works/pi-coding-agent/dist/core/model-resolver.js")).href);
+  assert.deepEqual({ ...api.PI_DEFAULT_MODEL_PER_PROVIDER }, { ...resolver.defaultModelPerProvider });
 });

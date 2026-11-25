@@ -159,6 +159,16 @@ setting is System, so an explicit On or Off wins over the OS.
   change, and listens for `APPEARANCE_CHANGE_EVENT` rather than a media query.
   Only the sandboxed visual viewer, which has no settings, reads the OS query.
 
+**Toolbar presence.** A header control that can't be used in the current
+context is left out, not greyed, unless the reason passes in a moment (a Git
+operation keeps the buttons and dims them after 300ms). Wrap such a control in
+`ToolbarPresence` (`renderer/components/toolbar-presence.tsx`): it widens its
+slot and fades in when the control becomes usable while the same chat is open,
+leaves the same way, hands keyboard focus to the next control, and shows the
+final state at once on a first render, a chat switch or under Reduce Motion.
+A divider belongs to the group after it, so a group that leaves takes its
+divider along.
+
 **Presence.** An element that animates out stays mounted until its exit
 finishes, not for a fixed timer. `usePresence(present, ref)`
 (`renderer/lib/use-presence.ts`) returns `{ rendered, exiting }`: style the exit
