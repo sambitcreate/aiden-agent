@@ -417,6 +417,12 @@ export function botBubbleOverlayAccess(
   };
 }
 
+/** Whether the overlay page with this id draws this Bot's head now (its display's heads). */
+export function botBubbleOverlayDrawsBot(webContentsId: number, botId: string): boolean {
+  const overlay = overlayForWebContents(webContentsId);
+  return overlay !== null && botIdsOnDisplay(overlay.displayId).has(botId);
+}
+
 export function isBotBubbleOverlayEvent(event: IpcMainInvokeEvent): boolean {
   if (overlays.size === 0 || !overlayUrl) return false;
   try {

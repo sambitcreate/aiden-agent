@@ -101,6 +101,24 @@ test("a head inside the Aiden window counts unread replies from the summary with
   assert.equal(calls.filter((call) => call.channel === "bots:live:subscribe").length, 0, "the Aiden window never marks the chat as on screen");
 });
 
+test("a floating head counts a delegated turn as one reply, as the in-window head does", async () => {
+  seenUpTo(5);
+  const entries: BotLiveSnapshot["entries"] = [
+    { id: "person", type: "user", text: "Please check the calendar", imageCount: 0, at: 10 },
+    { id: "ack", type: "assistant", text: "I will ask the calendar Bot", toolCalls: [], stopReason: "toolUse", at: 20 },
+    { id: "sent", type: "peer", exchangeId: "exchange", direction: "sent", peerBotId: "B", peerName: "Calendar", messageKind: "request", at: 25 },
+    { id: "waiting", type: "assistant", text: "Waiting for Calendar", toolCalls: [], stopReason: "stop", at: 30 },
+    { id: "received", type: "peer", exchangeId: "exchange", direction: "received", peerBotId: "B", peerName: "Calendar", messageKind: "result", at: 40 },
+    { id: "answer", type: "assistant", text: "Your meeting starts at 3pm", toolCalls: [], stopReason: "stop", at: 50 },
+    { id: "sealed", type: "peer", exchangeId: "exchange", direction: "received", peerBotId: "B", peerName: "Calendar", messageKind: "result", final: true, at: 60 },
+  ];
+  mount({
+    "bots:live:subscribe": () => snapshot({ entries }),
+    "bots:live:summary": () => summary({ lastReplyAt: 60, recentReplyAt: [60] }),
+  });
+  assert.ok(await head(/^Penny, 1 unread\. Enter opens, Delete closes\.$/u));
+});
+
 test("Delete on a focused head closes its bubble", async () => {
   const calls = mount({ "bots:bubbles:close": () => stateWith({ bubbles: [] }) });
   const button = await head(/^Penny/u);

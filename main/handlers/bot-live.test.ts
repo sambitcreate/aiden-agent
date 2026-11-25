@@ -273,3 +273,24 @@ test("a bubble overlay counts as in front only for its open mini chat's Bot; the
   assert.equal(isBotChatInFront("bot:a", { ...main, minimized: true }), false);
   assert.equal(isBotChatInFront("bot:a", { ...main, visible: false }), false);
 });
+
+test("a bubble overlay stops getting a Bot's events once its head moves to another display, without unsubscribing", async () => {
+  const fake = fakeProjection();
+  const invoke = register(fake.projection);
+  const heads = { left: new Set(["bot:a"]), right: new Set<string>() };
+  const left = Object.assign(new FakeDocument("overlay-left"), { mayFollow: (botId: string) => heads.left.has(botId) });
+  const right = Object.assign(new FakeDocument("overlay-right"), { mayFollow: (botId: string) => heads.right.has(botId) });
+  await invoke("bots:live:subscribe", left, "bot:a");
+  await assert.rejects(Promise.resolve().then(() => invoke("bots:live:subscribe", right, "bot:a")), /no longer shows that Bot/);
+  fake.push("bot:a", 2);
+  // The head is dragged to the right-hand display; the left page never unsubscribes.
+  heads.left.delete("bot:a");
+  heads.right.add("bot:a");
+  await invoke("bots:live:subscribe", right, "bot:a");
+  fake.push("bot:a", 3);
+  await Promise.resolve();
+  fake.push("bot:a", 4);
+  assert.deepEqual(left.received.map(({ event }) => event.seq), [2]);
+  assert.deepEqual(right.received.map(({ event }) => event.seq), [3, 4]);
+  assert.equal(fake.live(), 1, "the left page's feed ended");
+});

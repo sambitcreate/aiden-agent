@@ -6,7 +6,7 @@
 
 import { useBot } from "../lib/queries";
 import { useBotLive } from "../lib/use-bot-live";
-import { botLastReplyAt, botTranscriptPreview, type BotLiveSnapshot, type BotTranscriptEntry } from "../shared/bot-live";
+import { botRecentReplyTimes, botTranscriptPreview, type BotLiveSnapshot } from "../shared/bot-live";
 import type { BotDefinition } from "../shared/bots";
 import { botRowLine, useBotLiveSummary } from "../main/bots/bot-sidebar-rows";
 import { useBotSidebarPreferences } from "../main/bots/use-bot-sidebar-preferences";
@@ -24,17 +24,16 @@ export interface BotHeadStatus {
 }
 
 /**
- * How many replies the person hasn't seen: the replies after the newest one
- * they saw, counted only when the sidebar would call the Bot unread (its newest
- * person-facing reply is newer than the watermark), so the count and the dot agree.
+ * How many replies the person hasn't seen, from person-facing reply times
+ * (newest first, as `botRecentReplyTimes` and the summary's `recentReplyAt`
+ * give them), so floating and in-window heads count by one rule. Counted only
+ * when the newest reply is newer than the watermark, so the count and the
+ * sidebar's dot agree; at most BOT_RECENT_REPLY_LIMIT.
  */
-export function botUnreadReplyCount(entries: readonly BotTranscriptEntry[], seenAt: number): number {
-  const newest = botLastReplyAt(entries);
-  if (newest === null || newest <= seenAt) return 0;
-  const count = entries.filter(
-    (entry) => entry.type === "assistant" && entry.text.trim() !== "" && entry.at !== undefined && entry.at > seenAt,
-  ).length;
-  return Math.max(1, count);
+export function botUnreadReplyCount(replyTimes: readonly number[], seenAt: number): number {
+  const newest = replyTimes[0];
+  if (newest === undefined || newest <= seenAt) return 0;
+  return Math.max(1, replyTimes.filter((at) => at > seenAt).length);
 }
 
 /** Needs you, from what the live feed itself shows (the summary adds tool approvals and issues). */
@@ -66,17 +65,12 @@ export function useBotHeadStatus(botId: string, { live, viewing }: { live: boole
   const seenAt = preferences.seenReplyAt[botId] ?? preferences.since;
   let unreadCount: number | null = 0;
   if (!viewing) {
-    if (snapshot) unreadCount = botUnreadReplyCount(snapshot.entries, seenAt);
+    if (snapshot) unreadCount = botUnreadReplyCount(botRecentReplyTimes(snapshot.entries), seenAt);
     else {
       // No feed (heads in the Aiden window): count from the summary's reply times.
       const lastReplyAt = summary.data?.lastReplyAt ?? null;
       const recent = summary.data?.recentReplyAt;
-      unreadCount =
-        lastReplyAt === null || lastReplyAt <= seenAt
-          ? 0
-          : recent
-            ? Math.max(1, recent.filter((at) => at > seenAt).length)
-            : null;
+      unreadCount = lastReplyAt === null || lastReplyAt <= seenAt ? 0 : recent ? botUnreadReplyCount(recent, seenAt) : null;
     }
   }
   const preview = snapshot ? (botTranscriptPreview(snapshot.entries)?.text ?? null) : (summary.data?.preview ?? null);
@@ -105,8 +99,13 @@ export function useBotHeadStatus(botId: string, { live, viewing }: { live: boole
 /** The head's accessible name, e.g. "Penny, 2 unread, needs you. Enter opens, Delete closes." */
 export function botHeadLabel(status: Pick<BotHeadStatus, "name" | "unread" | "unreadCount" | "needsYou" | "working">): string {
   const parts = [status.name];
-  if (status.unread) parts.push(status.unreadCount === null ? "unread" : `${status.unreadCount} unread`);
+  if (status.unread) parts.push(status.unreadCount === null ? "unread" : `${botUnreadBadge(status.unreadCount)} unread`);
   if (status.needsYou) parts.push("needs you");
   if (status.working) parts.push("working");
   return `${parts.join(", ")}. Enter opens, Delete closes.`;
+}
+
+/** The count as the badge and the head's name say it: "99+" past 99. */
+export function botUnreadBadge(count: number): string {
+  return count > 99 ? "99+" : String(count);
 }

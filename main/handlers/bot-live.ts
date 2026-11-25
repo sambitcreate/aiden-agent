@@ -26,6 +26,13 @@ export interface BotLiveOwner {
    * shows only its open mini chat, so the answer can differ per Bot.
    */
   inFront?(botId: string): boolean;
+  /**
+   * Whether the document may still follow this Bot. Checked before every
+   * event: a bubble overlay loses a Bot when its head leaves that overlay's
+   * display or closes, and its feed ends then even if the page never
+   * unsubscribes. Left out, a document may follow any Bot it subscribed to.
+   */
+  mayFollow?(botId: string): boolean;
 }
 
 /** What decides whether a document shows a Bot's chat in front of the person. */
@@ -66,6 +73,7 @@ export interface BotLiveHandlerDependencies<Event> {
 }
 
 const INACTIVE = "The application document changed.";
+const REVOKED = "This window no longer shows that Bot.";
 
 export function registerBotLiveHandlers<Event>(dependencies: BotLiveHandlerDependencies<Event>): BotLiveHandlers {
   const { handle } = dependencies;
@@ -120,15 +128,32 @@ export function registerBotLiveHandlers<Event>(dependencies: BotLiveHandlerDepen
     let requests = wanted.get(owner.key);
     if (!requests) wanted.set(owner.key, (requests = new Map()));
     requests.set(botId, request);
+    if (owner.mayFollow && !owner.mayFollow(botId)) throw new Error(REVOKED);
+    let revoked = false;
+    let unsubscribeThis: (() => void) | undefined;
     const subscription = await dependencies.projection().subscribe(botId, {
       send: (live) => {
         if (owner.isDestroyed()) throw new Error(INACTIVE);
+        if (revoked) return;
+        if (owner.mayFollow && !owner.mayFollow(botId)) {
+          // Lost this Bot: send nothing more, and end the feed once the projection is done sending.
+          revoked = true;
+          queueMicrotask(() => {
+            if (unsubscribeThis && subscriptions.get(owner.key)?.get(botId) === unsubscribeThis) release(owner.key, botId);
+          });
+          return;
+        }
         owner.send(BOT_LIVE_EVENT_CHANNEL, live);
       },
     });
+    unsubscribeThis = subscription.unsubscribe;
     if (owner.isDestroyed()) {
       subscription.unsubscribe();
       throw new Error(INACTIVE);
+    }
+    if (revoked || (owner.mayFollow && !owner.mayFollow(botId))) {
+      subscription.unsubscribe();
+      throw new Error(REVOKED);
     }
     if (wanted.get(owner.key)?.get(botId) !== request) {
       // Unsubscribed, or superseded by a newer subscribe, while this one opened.

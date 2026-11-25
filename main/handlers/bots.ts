@@ -35,7 +35,7 @@ import {
 } from "../services/aiden-remote-protocol.js";
 import { isBotChatInFront, registerBotLiveHandlers } from "./bot-live.js";
 import { botBubbleOpenBotId } from "../services/bot-bubbles/bot-bubbles-main.js";
-import { botBubbleOverlayAccess, isBotBubbleOverlayWebContents } from "../windows/bot-bubbles-window.js";
+import { botBubbleOverlayAccess, botBubbleOverlayDrawsBot, isBotBubbleOverlayWebContents } from "../windows/bot-bubbles-window.js";
 import { guardBotBubbleOverlayHandlers } from "../windows/bot-bubbles-overlay-access.js";
 import { registerBotPauseHandlers } from "./bot-pause.js";
 import { registerBotQuestionHandlers } from "./bot-questions.js";
@@ -254,6 +254,8 @@ export function registerBotHandlers(): void {
             openBubbleBotId: botBubbleOpenBotId(),
           });
         },
+        // An overlay follows a Bot only while its head is on that overlay's display.
+        mayFollow: (botId) => !isBotBubbleOverlayWebContents(owner.id) || botBubbleOverlayDrawsBot(owner.id, botId),
       };
     },
     projection: botLiveProjection,

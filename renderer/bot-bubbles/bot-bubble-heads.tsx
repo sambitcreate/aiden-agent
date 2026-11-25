@@ -29,7 +29,7 @@ import {
   BOT_BUBBLE_HIT_SELECTOR,
   BotBubbleMiniChat,
 } from "./bot-bubble-mini-chat";
-import { botHeadLabel, useBotHeadStatus } from "./bot-head-status";
+import { botHeadLabel, botUnreadBadge, useBotHeadStatus } from "./bot-head-status";
 import {
   closeTargetCentre,
   isHeadMoveKey,
@@ -617,7 +617,7 @@ function BotBubbleHead(props: BotBubbleHeadProps) {
                 aria-hidden="true"
                 className="bot-bubble-badge bg-fill-accent text-mini font-semibold text-fill-accent-foreground"
               >
-                {count === null ? "" : count > 99 ? "99+" : count}
+                {count === null ? "" : botUnreadBadge(count)}
               </span>
             ) : null}
             {status.needsYou ? (
