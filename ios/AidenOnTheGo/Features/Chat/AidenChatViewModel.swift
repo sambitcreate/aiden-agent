@@ -56,6 +56,10 @@ final class AidenChatViewModel {
     /// Set once the user picks a model in this chat; from then on the
     /// in-session choice wins over the remembered per-host preference.
     @ObservationIgnored private var hasExplicitModelSelection = false
+    /// A pick made on this phone that the Mac hasn't accepted yet. Only then
+    /// does a send ask the Mac to keep its level as the chat's own.
+    @ObservationIgnored private var hasUnsentModelPick = false
+    @ObservationIgnored private var resolvedWithAgentSlider = false
     let hapticScope: UUID
     @ObservationIgnored private var deletionLifetime: AidenChatCache.ChatLifetime?
     // Deterministic test seam immediately before consumer admission.
@@ -427,7 +431,10 @@ final class AidenChatViewModel {
     var selectedThinkingLevel: String?
     /// The Agent Slider sheet. Kept here, with the shell-owned model, so an
     /// iPhone Duo fold that rebuilds the chat's views opens it again.
-    var isAgentSliderPresented = false
+    var agentSliderPresentation = AidenAgentSliderPresentationState()
+    /// The stop the person last put this chat on, by id. Two stops can name
+    /// the same model and level; this keeps the chat on the one they chose.
+    var agentSliderChosenStopId: String?
     var presentedError: String?
 
     var isReadOnlyFixture: Bool {
@@ -1712,6 +1719,7 @@ final class AidenChatViewModel {
     /// the model other chats start with never changes.
     private func rememberExplicitModelSelection() {
         hasExplicitModelSelection = true
+        hasUnsentModelPick = true
         guard !isReadOnlyFixture, !isRemoved, !chat.isBotChat,
               let context = liveOwner else { return }
         let selection = AidenChatModelSelection(
@@ -1799,13 +1807,17 @@ final class AidenChatViewModel {
         let submittedAttachments = retryAttempt?.attachments ?? pendingAttachments
         let submittedSkill = selectedSkill
         let modelSelection = turnModelSelection
+        // Only a pick the person made here asks the Mac to keep the level as
+        // the chat's own; any other send runs at that level for this turn.
+        let savesSelection = agentSlider != nil && hasUnsentModelPick
         let request = retryAttempt?.request ?? AidenTurnRequestBuilder.make(
             text: text,
             providerId: modelSelection.providerId,
             modelId: modelSelection.modelId,
             thinkingLevel: modelSelection.thinkingLevel,
             attachments: submittedAttachments,
-            skill: submittedSkill.map(AidenSkillInvocation.init(entry:))
+            skill: submittedSkill.map(AidenSkillInvocation.init(entry:)),
+            saveSelection: savesSelection
         )
         let makesWorktree = retryAttempt == nil && startsInNewWorktree && offersNewWorktree
         let previousUpdatedAt = chat.updatedAt
@@ -1946,6 +1958,10 @@ final class AidenChatViewModel {
                 idempotencyKey: idempotencyKey
             )
             // The Mac now holds this pick as the chat's own model.
+            if request.providerId == selectedProviderId, request.modelId == selectedModelId,
+               request.thinkingLevel == selectedThinkingLevel {
+                hasUnsentModelPick = false
+            }
             if !chat.isBotChat {
                 modelPreferenceStore.forgetChat(
                     for: context.instanceId,
@@ -2926,6 +2942,21 @@ final class AidenChatViewModel {
         }
     }
 
+    /// Re-resolves the chat's selection when the slider comes or goes, for
+    /// example when `/server` grants `chat:agent-slider` after the catalog
+    /// loaded: with the slider, a chat runs at exactly its own level.
+    func reconcileAgentSliderAvailability() {
+        guard (agentSlider != nil) != resolvedWithAgentSlider else { return }
+        if !hasExplicitModelSelection {
+            // The level the model menu filled in was derived, not chosen:
+            // resolve afresh so the chat lands on the slider's terms.
+            selectedProviderId = nil
+            selectedModelId = nil
+            selectedThinkingLevel = nil
+        }
+        resolveModelSelection()
+    }
+
     private func resolveModelSelection() {
         // An unsent pick made in this chat before it was last closed wins
         // like a pick made now.
@@ -2935,6 +2966,7 @@ final class AidenChatViewModel {
             selectedModelId = pick.modelId
             selectedThinkingLevel = pick.thinkingLevel
             hasExplicitModelSelection = true
+            hasUnsentModelPick = true
         }
         let selection = AidenChatModelAuthority.resolvedSelection(
             chat: chat,
@@ -2946,9 +2978,9 @@ final class AidenChatViewModel {
                 ? nil
                 : modelPreferenceStore.selection(for: instanceId),
             hasExplicitSelection: hasExplicitModelSelection,
-            exactLevels: agentSlider != nil,
-            homeSelection: agentSliderHomeSelection
+            exactLevels: agentSlider != nil
         )
+        resolvedWithAgentSlider = agentSlider != nil
         selectedProviderId = selection.providerId
         selectedModelId = selection.modelId
         selectedThinkingLevel = selection.thinkingLevel

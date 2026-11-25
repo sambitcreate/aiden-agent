@@ -8775,7 +8775,8 @@ export type AidenRemoteAgentSliderAvailability =
   | "provider-missing"
   | "not-signed-in"
   | "model-missing"
-  | "hidden";
+  | "hidden"
+  | "computer-only";
 
 const AIDEN_REMOTE_AGENT_SLIDER_AVAILABILITIES = [
   "ready",
@@ -8784,6 +8785,7 @@ const AIDEN_REMOTE_AGENT_SLIDER_AVAILABILITIES = [
   "not-signed-in",
   "model-missing",
   "hidden",
+  "computer-only",
 ] as const satisfies readonly AidenRemoteAgentSliderAvailability[];
 
 const AIDEN_REMOTE_AGENT_SLIDER_STOP_ID = /^[A-Za-z0-9_-]{1,64}$/u;
@@ -8793,6 +8795,8 @@ export interface AidenRemoteAgentSliderStop {
   label: string;
   providerId?: string;
   modelId?: string;
+  providerLabel?: string;
+  modelLabel?: string;
   thinkingLevel?: GenerationThinkingLevel;
   availability: AidenRemoteAgentSliderAvailability;
 }
@@ -8803,9 +8807,13 @@ export interface AidenRemoteAgentSlider {
 }
 
 /**
- * Revision 66: the `agentSlider` of `GET /models`. Strict: 3 to 7 stops with
- * unique ids, a home naming one of them, paired provider and model, a level
- * only with a model, and a stop without a model is always `unassigned`.
+ * Revision 66: the `agentSlider` of `GET /models`, as a host sends it. Strict:
+ * 3 to 7 stops with unique ids, a home naming one of them, and provider and
+ * model ids together and a level only on a `ready` stop. Labels name what a
+ * stop is set to in words: never on an `unassigned` or `computer-only` stop,
+ * no provider label when the provider is missing, and a model label only on
+ * a ready, not-signed-in or hidden stop. Phones decode more tolerantly: an
+ * unknown availability or level only makes that stop unavailable.
  */
 export function parseAidenRemoteAgentSlider(value: unknown, label = "Agent Slider"): AidenRemoteAgentSlider {
   const record = requiredFixtureRecord(value, label, ["stops", "homeStopId"]);
@@ -8822,6 +8830,8 @@ export function parseAidenRemoteAgentSlider(value: unknown, label = "Agent Slide
     const stop = requiredFixtureRecord(entry, stopLabel, ["id", "label", "availability"], [
       "providerId",
       "modelId",
+      "providerLabel",
+      "modelLabel",
       "thinkingLevel",
     ]);
     if (typeof stop.id !== "string" || !AIDEN_REMOTE_AGENT_SLIDER_STOP_ID.test(stop.id) || ids.has(stop.id)) {
@@ -8836,12 +8846,19 @@ export function parseAidenRemoteAgentSlider(value: unknown, label = "Agent Slide
     if (hasProviderId !== hasModelId) {
       throw new Error(`${stopLabel} providerId and modelId must be supplied together.`);
     }
-    if (hasOwn(stop, "thinkingLevel") && !hasModelId) {
-      throw new Error(`${stopLabel} thinkingLevel needs a model.`);
-    }
     const availability = enumMember(stop.availability, AIDEN_REMOTE_AGENT_SLIDER_AVAILABILITIES, `${stopLabel} availability`);
-    if (hasModelId === (availability === "unassigned")) {
-      throw new Error(`${stopLabel} is unassigned exactly when it names no model.`);
+    if (hasModelId !== (availability === "ready")) {
+      throw new Error(`${stopLabel} names its provider and model exactly when it is ready.`);
+    }
+    if (hasOwn(stop, "thinkingLevel") && availability !== "ready") {
+      throw new Error(`${stopLabel} thinkingLevel goes only with a ready stop.`);
+    }
+    const unnamed = availability === "unassigned" || availability === "computer-only";
+    if (hasOwn(stop, "providerLabel") && (unnamed || availability === "provider-missing")) {
+      throw new Error(`${stopLabel} providerLabel names only a configured provider.`);
+    }
+    if (hasOwn(stop, "modelLabel") && !["ready", "not-signed-in", "hidden"].includes(availability)) {
+      throw new Error(`${stopLabel} modelLabel names only a ready, not-signed-in or hidden model.`);
     }
     return {
       id: stop.id,
@@ -8852,6 +8869,8 @@ export function parseAidenRemoteAgentSlider(value: unknown, label = "Agent Slide
             modelId: boundedText(stop.modelId, `${stopLabel} modelId`, 512),
           }
         : {}),
+      ...(hasOwn(stop, "providerLabel") ? { providerLabel: boundedText(stop.providerLabel, `${stopLabel} providerLabel`, 256) } : {}),
+      ...(hasOwn(stop, "modelLabel") ? { modelLabel: boundedText(stop.modelLabel, `${stopLabel} modelLabel`, 256) } : {}),
       ...(hasOwn(stop, "thinkingLevel")
         ? { thinkingLevel: enumMember(stop.thinkingLevel, GENERATION_THINKING_LEVELS, `${stopLabel} thinkingLevel`) }
         : {}),
@@ -8868,8 +8887,11 @@ export interface AidenRemoteAgentSliderFixture {
   capability: (typeof AIDEN_REMOTE_AGENT_SLIDER_CAPABILITIES)[number];
   /** A `GET /models` body carrying the slider. */
   models: { providers: unknown[]; defaults: Record<string, string>; agentSlider: AidenRemoteAgentSlider };
-  /** The `POST /chats/{chatId}/turns` body a ready stop sends: exactly its provider, model and level. */
-  turnRequest: { text: string; providerId: string; modelId: string; thinkingLevel?: GenerationThinkingLevel };
+  /**
+   * The `POST /chats/{chatId}/turns` body a ready stop sends: exactly its
+   * provider, model and level, with `saveSelection` so the host keeps it.
+   */
+  turnRequest: { text: string; providerId: string; modelId: string; thinkingLevel?: GenerationThinkingLevel; saveSelection: true };
   /** The chat afterwards: the stop's selection saved as the chat's own. */
   chat: AidenRemoteChatProjection;
 }
@@ -8884,9 +8906,10 @@ function parseAgentSliderFixture(value: unknown): AidenRemoteAgentSliderFixture 
     throw new Error("Agent Slider models must carry providers and defaults.");
   }
   const agentSlider = parseAidenRemoteAgentSlider(models.agentSlider, "Agent Slider models agentSlider");
-  const turn = requiredFixtureRecord(section.turnRequest, "Agent Slider turnRequest", ["text", "providerId", "modelId"], [
+  const turn = requiredFixtureRecord(section.turnRequest, "Agent Slider turnRequest", ["text", "providerId", "modelId", "saveSelection"], [
     "thinkingLevel",
   ]);
+  if (turn.saveSelection !== true) throw new Error("Agent Slider turnRequest saves its stop with saveSelection true.");
   const chat = parseAidenRemoteChatProjection(section.chat, "Agent Slider chat");
   const sent = agentSlider.stops.find(
     (stop) =>

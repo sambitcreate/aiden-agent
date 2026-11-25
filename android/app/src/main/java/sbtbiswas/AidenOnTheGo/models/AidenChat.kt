@@ -1616,41 +1616,56 @@ object AidenThinkingLevels {
         level == null || (modelId != null && botId == null && level.isNotEmpty() && level.length <= 32)
 }
 
-/** Revision 66: why an Agent Slider stop can or cannot run from this phone. */
-@Serializable
-enum class AidenAgentSliderAvailability {
-    @SerialName("ready") READY,
-    @SerialName("unassigned") UNASSIGNED,
-    @SerialName("provider-missing") PROVIDER_MISSING,
-    @SerialName("not-signed-in") NOT_SIGNED_IN,
-    @SerialName("model-missing") MODEL_MISSING,
-    @SerialName("hidden") HIDDEN
+/**
+ * Revision 66: why an Agent Slider stop can or cannot run from this phone. [UNKNOWN] stands for a
+ * value a later host adds, or a stop whose level this phone doesn't know: that stop can't be
+ * chosen, and the rest of the slider stays.
+ */
+enum class AidenAgentSliderAvailability(val rawValue: String?) {
+    READY("ready"),
+    UNASSIGNED("unassigned"),
+    PROVIDER_MISSING("provider-missing"),
+    NOT_SIGNED_IN("not-signed-in"),
+    MODEL_MISSING("model-missing"),
+    HIDDEN("hidden"),
+    /** The stop runs on the computer only, such as an agent harness or a model phones aren't sent. */
+    COMPUTER_ONLY("computer-only"),
+    UNKNOWN(null);
+
+    companion object {
+        fun fromRaw(raw: String): AidenAgentSliderAvailability =
+            entries.firstOrNull { it.rawValue == raw } ?: UNKNOWN
+    }
 }
 
 /**
- * Revision 66: one stop of `GET /models` `agentSlider`. Provider and model come together, a level
- * only with a model, and a stop is `unassigned` exactly when it names no model. [thinkingLevel] is
- * the level a turn on this stop runs with on the host, already fitted to the model.
+ * Revision 66: one stop of `GET /models` `agentSlider`. A stop names its provider and model, both
+ * or neither, exactly when it is ready, and a level only then. [thinkingLevel] is the level a turn
+ * on this stop runs with on the host, already fitted to the model. [providerLabel] and
+ * [modelLabel] are display names only, never ids.
  */
-@Serializable
+@Serializable(with = AidenAgentSliderStopSerializer::class)
 data class AidenAgentSliderStop(
     val id: String,
     val label: String,
     val providerId: String? = null,
     val modelId: String? = null,
     val thinkingLevel: String? = null,
-    val availability: AidenAgentSliderAvailability
+    val availability: AidenAgentSliderAvailability,
+    val providerLabel: String? = null,
+    val modelLabel: String? = null
 ) {
     init {
         val labelCodePoints = label.codePointCount(0, label.length)
+        val hasIds = providerId != null
         if (!STOP_ID.matches(id) ||
-            label.trim() != label || labelCodePoints !in 1..LABEL_MAX ||
-            label.codePoints().anyMatch { Character.getType(it) == Character.CONTROL.toInt() } ||
-            (providerId == null) != (modelId == null) ||
+            label.trim() != label || labelCodePoints !in 1..LABEL_MAX || hasControl(label) ||
+            hasIds != (modelId != null) ||
             (providerId != null && (providerId.isEmpty() || providerId.length > 256)) ||
             (modelId != null && (modelId.isEmpty() || modelId.length > 512)) ||
-            (thinkingLevel != null && (modelId == null || thinkingLevel !in AidenThinkingLevels.ALL)) ||
-            (modelId == null) != (availability == AidenAgentSliderAvailability.UNASSIGNED)
+            (availability != AidenAgentSliderAvailability.UNKNOWN && hasIds != (availability == AidenAgentSliderAvailability.READY)) ||
+            (thinkingLevel != null && (availability != AidenAgentSliderAvailability.READY || thinkingLevel !in AidenThinkingLevels.ALL)) ||
+            !isDisplayName(providerLabel) || !isDisplayName(modelLabel)
         ) {
             throw AidenRemoteContractException.InvalidJson("Invalid Agent Slider stop")
         }
@@ -1665,6 +1680,64 @@ data class AidenAgentSliderStop(
     companion object {
         private val STOP_ID = Regex("^[A-Za-z0-9_-]{1,64}$")
         private const val LABEL_MAX = 24
+        private const val DISPLAY_NAME_MAX = 256
+
+        private fun hasControl(text: String): Boolean =
+            text.codePoints().anyMatch { Character.getType(it) == Character.CONTROL.toInt() }
+
+        private fun isDisplayName(text: String?): Boolean =
+            text == null || (text.isNotEmpty() && text.codePointCount(0, text.length) <= DISPLAY_NAME_MAX)
+    }
+}
+
+/** The stop as the host spells it, before an unknown availability or level is read as [AidenAgentSliderAvailability.UNKNOWN]. */
+@Serializable
+private data class AidenAgentSliderStopWire(
+    val id: String,
+    val label: String,
+    val providerId: String? = null,
+    val modelId: String? = null,
+    val thinkingLevel: String? = null,
+    val availability: String,
+    val providerLabel: String? = null,
+    val modelLabel: String? = null
+)
+
+/**
+ * Reads a stop tolerantly: an availability this phone doesn't know, or a level it doesn't know,
+ * leaves the stop's id and label but makes it [AidenAgentSliderAvailability.UNKNOWN] with no level,
+ * so it can't be chosen and the rest of the slider stays.
+ */
+object AidenAgentSliderStopSerializer : KSerializer<AidenAgentSliderStop> {
+    override val descriptor: SerialDescriptor = AidenAgentSliderStopWire.serializer().descriptor
+
+    override fun deserialize(decoder: Decoder): AidenAgentSliderStop {
+        val wire = decoder.decodeSerializableValue(AidenAgentSliderStopWire.serializer())
+        val known = AidenAgentSliderAvailability.fromRaw(wire.availability)
+        val levelKnown = wire.thinkingLevel == null || wire.thinkingLevel in AidenThinkingLevels.ALL
+        val availability = if (levelKnown) known else AidenAgentSliderAvailability.UNKNOWN
+        return AidenAgentSliderStop(
+            id = wire.id,
+            label = wire.label,
+            providerId = wire.providerId,
+            modelId = wire.modelId,
+            thinkingLevel = wire.thinkingLevel.takeIf { availability == AidenAgentSliderAvailability.READY },
+            availability = availability,
+            providerLabel = wire.providerLabel,
+            modelLabel = wire.modelLabel
+        )
+    }
+
+    override fun serialize(encoder: Encoder, value: AidenAgentSliderStop) {
+        val raw = value.availability.rawValue
+            ?: throw SerializationException("An Agent Slider stop of unknown availability is never sent")
+        encoder.encodeSerializableValue(
+            AidenAgentSliderStopWire.serializer(),
+            AidenAgentSliderStopWire(
+                value.id, value.label, value.providerId, value.modelId, value.thinkingLevel, raw,
+                value.providerLabel, value.modelLabel
+            )
+        )
     }
 }
 

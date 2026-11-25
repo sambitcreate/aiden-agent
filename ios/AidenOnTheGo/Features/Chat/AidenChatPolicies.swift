@@ -286,7 +286,8 @@ enum AidenTurnRequestBuilder {
         modelId: String?,
         thinkingLevel: String?,
         attachments: [AidenAttachmentReference],
-        skill: AidenSkillInvocation? = nil
+        skill: AidenSkillInvocation? = nil,
+        saveSelection: Bool = false
     ) -> AidenTurnStart {
         AidenTurnStart(
             text: text,
@@ -294,7 +295,8 @@ enum AidenTurnRequestBuilder {
             modelId: modelId,
             thinkingLevel: thinkingLevel,
             attachmentIds: attachments.isEmpty ? nil : attachments.map(\.id),
-            skill: skill
+            skill: skill,
+            saveSelection: saveSelection
         )
     }
 }
@@ -393,8 +395,7 @@ enum AidenChatModelAuthority {
         selectedThinkingLevel: String?,
         remembered: AidenChatModelSelection? = nil,
         hasExplicitSelection: Bool = false,
-        exactLevels: Bool = false,
-        homeSelection: AidenChatModelSelection? = nil
+        exactLevels: Bool = false
     ) -> AidenChatModelSelection {
         if chat.isBotChat {
             let provider = catalog?.providers.first { $0.id == chat.providerId }
@@ -436,11 +437,6 @@ enum AidenChatModelAuthority {
         if !hasExplicitSelection, let remembered = rememberedSelection(remembered, in: catalog, exactLevels: exactLevels) {
             return remembered
         }
-        // Nothing chosen and nothing remembered: a phone with the Agent Slider
-        // starts on the home stop, as the Mac's first run does.
-        if exactLevels, selectedProviderId == nil, selectedModelId == nil, let homeSelection {
-            return homeSelection
-        }
         var providerId = selectedProviderId
         if providerId == nil || !catalog.providers.contains(where: { $0.id == providerId }) {
             providerId = catalog.defaults["providerId"] ?? catalog.visibleProviders.first?.id
@@ -457,11 +453,18 @@ enum AidenChatModelAuthority {
             // Revision 66: with the Agent Slider a missing level is a choice,
             // the model's own setting, which a level-less stop matches. A
             // replaced model never inherits the old model's level.
+            // Nothing chosen and nothing remembered: a new chat starts on the
+            // Mac's last model and level (`defaults`), as new chats on the Mac
+            // do; the home stop is only what Reset to home returns to.
             let keepsModel = providerId == selectedProviderId && modelId == selectedModelId
+            let isMacDefault = providerId == catalog.defaults["providerId"] && modelId == catalog.defaults["modelId"]
+            let macLevel = catalog.defaults["thinkingLevel"].flatMap { level in
+                model?.thinkingLevels?.contains(level) == true ? level : nil
+            }
             return AidenChatModelSelection(
                 providerId: providerId,
                 modelId: modelId,
-                thinkingLevel: keepsModel ? selectedThinkingLevel : nil
+                thinkingLevel: keepsModel ? selectedThinkingLevel : (isMacDefault ? macLevel : nil)
             )
         }
         return AidenChatModelSelection(

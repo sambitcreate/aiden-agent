@@ -9,7 +9,7 @@ struct AidenAgentSliderStopView: Equatable, Identifiable, Sendable {
     /// The effort in words ("High"); nil when the stop sets no level.
     let effortLabel: String?
     let isAvailable: Bool
-    /// Why the stop can't run, in words ("Sign in to Anthropic").
+    /// Why the stop can't run, in words ("Sign in to Anthropic on your computer").
     let reasonText: String?
 
     var id: String { stop.id }
@@ -40,8 +40,8 @@ struct AidenAgentSliderPosition: Equatable, Sendable {
 }
 
 /// The phone's Agent Slider rules, matching the Mac's composer: the active stop
-/// is derived from the chat's provider, model and level (first exact match),
-/// no match is Custom, and a step skips stops that can't run. Nothing here
+/// is the one the person chose while the chat runs on it, else the first exact
+/// match on the chat's provider, model and level; no match is Custom, and a step skips stops that can't run. Nothing here
 /// substitutes another model for a stop.
 enum AidenAgentSliderResolver {
     /// `BOT_THINKING_LEVEL_LABELS` in `renderer/shared/bot-routine-models.ts`.
@@ -58,37 +58,44 @@ enum AidenAgentSliderResolver {
         }
     }
 
-    /// The reason a stop can't run, as the slider says it.
-    static func reasonText(
-        _ availability: AidenAgentSliderAvailability,
-        providerId: String?,
-        providerLabel: String?
-    ) -> String? {
+    /// The reason a stop can't run, as the slider says it. The slider is
+    /// changed on the computer, so each reason says what to do there; it
+    /// names the provider only by its display name, never its id.
+    static func reasonText(_ availability: AidenAgentSliderAvailability, providerLabel: String?) -> String? {
         switch availability {
         case .ready: nil
-        case .unassigned: String(localized: "Choose a model")
-        case .notSignedIn: String(localized: "Sign in to \(providerLabel ?? providerId ?? String(localized: "the provider"))")
-        case .providerMissing: String(localized: "\(providerLabel ?? providerId ?? String(localized: "The provider")) was removed")
-        case .modelMissing: String(localized: "Model not found")
-        case .hidden: String(localized: "Hidden in Settings")
+        case .unassigned: String(localized: "Choose a model on your computer")
+        case .notSignedIn:
+            if let providerLabel {
+                String(localized: "Sign in to \(providerLabel) on your computer")
+            } else {
+                String(localized: "Sign in on your computer")
+            }
+        case .providerMissing: String(localized: "Its provider was removed on your computer")
+        case .modelMissing: String(localized: "Its model isn't on your computer")
+        case .hidden: String(localized: "Hidden in Settings on your computer")
+        case .computerOnly: String(localized: "Only on your computer")
+        case .unknown: String(localized: "Update Aiden to use this stop")
         }
     }
 
     /// Each stop's words and whether it can run. A stop runs only when the Mac
     /// says it is ready and this phone's catalog lists its model under its
-    /// provider, so a turn can name it; otherwise it reads "Model not found".
+    /// provider, so a turn can name it. Words come from the Mac's display
+    /// names, then this phone's catalog; an id is never shown.
     static func views(for slider: AidenAgentSlider, catalog: AidenModelCatalog) -> [AidenAgentSliderStopView] {
         slider.stops.map { stop in
             let provider = stop.providerId.flatMap { id in catalog.providers.first { $0.id == id } }
             let model = stop.modelId.flatMap { id in provider?.models.first { $0.id == id } }
             var availability = stop.availability
             if availability == .ready, model == nil { availability = .modelMissing }
+            let modelLabel = model?.label ?? stop.modelLabel
             return AidenAgentSliderStopView(
                 stop: stop,
-                modelLabel: stop.modelId.map { model?.label ?? $0 },
+                modelLabel: modelLabel ?? (stop.modelId != nil ? String(localized: "A model on your computer") : nil),
                 effortLabel: effortLabel(stop.thinkingLevel),
                 isAvailable: availability == .ready,
-                reasonText: reasonText(availability, providerId: stop.providerId, providerLabel: provider?.label)
+                reasonText: reasonText(availability, providerLabel: stop.providerLabel ?? provider?.label)
             )
         }
     }
@@ -97,13 +104,24 @@ enum AidenAgentSliderResolver {
         slider.stops.firstIndex { $0.id == slider.homeStopId } ?? (slider.stops.count - 1) / 2
     }
 
-    /// The first stop naming this provider, model and level; an absent level
-    /// matches only an absent level. Nil is Custom.
-    static func activeStopIndex(_ slider: AidenAgentSlider, selection: AidenChatModelSelection) -> Int? {
+    /// The stop the chat sits on. The stop the person chose, by id, while the
+    /// chat still runs on it, so two stops that resolve to the same model and
+    /// level stay apart; otherwise the first stop naming this provider, model
+    /// and level (an absent level matches only an absent level). Nil is Custom.
+    static func activeStopIndex(
+        _ slider: AidenAgentSlider,
+        selection: AidenChatModelSelection,
+        chosenStopId: String? = nil
+    ) -> Int? {
         guard let providerId = selection.providerId, let modelId = selection.modelId else { return nil }
-        return slider.stops.firstIndex { stop in
+        func matches(_ stop: AidenAgentSliderStop) -> Bool {
             stop.providerId == providerId && stop.modelId == modelId && stop.thinkingLevel == selection.thinkingLevel
         }
+        if let chosenStopId, let index = slider.stops.firstIndex(where: { $0.id == chosenStopId }),
+           matches(slider.stops[index]) {
+            return index
+        }
+        return slider.stops.firstIndex(where: matches)
     }
 
     /// Where the chat sits. No matching stop is Custom, and so is a slider on
@@ -111,10 +129,11 @@ enum AidenAgentSliderResolver {
     static func position(
         _ slider: AidenAgentSlider,
         views: [AidenAgentSliderStopView],
-        selection: AidenChatModelSelection
+        selection: AidenChatModelSelection,
+        chosenStopId: String? = nil
     ) -> AidenAgentSliderPosition {
         let home = homeStopIndex(slider)
-        guard let index = activeStopIndex(slider, selection: selection),
+        guard let index = activeStopIndex(slider, selection: selection, chosenStopId: chosenStopId),
               views.contains(where: \.isAvailable) else {
             return AidenAgentSliderPosition(stopIndex: nil, thumbIndex: home)
         }
@@ -166,10 +185,20 @@ struct AidenAgentSliderState: Equatable, Sendable {
     let views: [AidenAgentSliderStopView]
     let position: AidenAgentSliderPosition
 
-    init(slider: AidenAgentSlider, catalog: AidenModelCatalog, selection: AidenChatModelSelection) {
+    init(
+        slider: AidenAgentSlider,
+        catalog: AidenModelCatalog,
+        selection: AidenChatModelSelection,
+        chosenStopId: String? = nil
+    ) {
         self.slider = slider
         views = AidenAgentSliderResolver.views(for: slider, catalog: catalog)
-        position = AidenAgentSliderResolver.position(slider, views: views, selection: selection)
+        position = AidenAgentSliderResolver.position(
+            slider,
+            views: views,
+            selection: selection,
+            chosenStopId: chosenStopId
+        )
     }
 
     var homeIndex: Int { AidenAgentSliderResolver.homeStopIndex(slider) }

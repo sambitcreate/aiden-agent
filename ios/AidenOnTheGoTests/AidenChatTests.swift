@@ -6,6 +6,7 @@ import Photos
 import SwiftUI
 import UIKit
 import UserNotifications
+import Synchronization
 import XCTest
 @testable import AidenOnTheGo
 
@@ -3084,26 +3085,36 @@ final class AidenChatTests: XCTestCase {
         XCTAssertNil(afterRemoval.selectedThinkingLevel)
     }
 
-    /// Revision 66: with the Agent Slider a new chat starts on the home stop,
-    /// the stops move the chat's selection, and a turn sends the stop's
-    /// provider, model and level exactly, a level-less stop sending none where
-    /// the model menu would send the model's default. A Mac that doesn't offer
-    /// the capability keeps the model menu.
+    /// Revision 66: with the Agent Slider a new chat starts on the Mac's last
+    /// model and level, the stops move the chat's selection, and a turn sends
+    /// the stop's provider, model and level exactly, a level-less stop sending
+    /// none where the model menu would send the model's default. Only a stop
+    /// or level the person picked on the phone asks the Mac to keep it. A Mac
+    /// that doesn't offer the capability keeps the model menu, and a grant
+    /// that arrives after the catalog puts the chat on the slider's terms.
     @MainActor
     func testAgentSliderStopIsSentExactlyAndAMacWithoutItKeepsTheModelMenu() async throws {
         defer { AidenChatProgressLifecycleURLProtocol.reset() }
-        let catalog = #"{"providers":[{"id":"acme","label":"Acme","models":[{"id":"small","label":"Small","thinkingLevels":["low","medium","high"],"defaultThinkingLevel":"medium"},{"id":"large","label":"Large","thinkingLevels":["low","high"],"defaultThinkingLevel":"high"}]}],"defaults":{"providerId":"acme","modelId":"small"},"agentSlider":{"stops":[{"id":"fast","label":"Fast","providerId":"acme","modelId":"small","thinkingLevel":"low","availability":"ready"},{"id":"mid","label":"Mid","providerId":"acme","modelId":"small","thinkingLevel":"medium","availability":"ready"},{"id":"big","label":"Big","providerId":"acme","modelId":"large","availability":"ready"}],"homeStopId":"mid"}}"#
-        func launch(macOffersSlider: Bool) async throws -> (AidenChatViewModel, AidenRecordedTurnStarts) {
+        let catalog = #"{"providers":[{"id":"acme","label":"Acme","models":[{"id":"small","label":"Small","thinkingLevels":["low","medium","high"],"defaultThinkingLevel":"medium"},{"id":"large","label":"Large","thinkingLevels":["low","high"],"defaultThinkingLevel":"high"}]}],"defaults":{"providerId":"acme","modelId":"small","thinkingLevel":"low"},"agentSlider":{"stops":[{"id":"fast","label":"Fast","providerId":"acme","modelId":"small","thinkingLevel":"low","availability":"ready"},{"id":"mid","label":"Mid","providerId":"acme","modelId":"small","thinkingLevel":"medium","availability":"ready"},{"id":"big","label":"Big","providerId":"acme","modelId":"large","availability":"ready"}],"homeStopId":"mid"}}"#
+        final class Offer: Sendable {
+            let slider: Mutex<Bool>
+            init(_ value: Bool) { slider = Mutex(value) }
+        }
+        func launch(macOffersSlider: Bool) async throws -> (AidenChatViewModel, AidenRecordedTurnStarts, Offer) {
             let root = FileManager.default.temporaryDirectory.appending(path: "aiden-agent-slider-\(UUID())")
             addTeardownBlock { try? FileManager.default.removeItem(at: root) }
-            let grants = ["server:read", "workspace:read", "chat:read", "chat:write"] + (macOffersSlider ? ["chat:agent-slider"] : [])
-            let grantsJSON = String(decoding: try JSONSerialization.data(withJSONObject: grants), as: UTF8.self)
-            let serverJSON = #"{"protocolVersion":1,"instanceId":"instance-progress-lifecycle","name":"Progress Lifecycle Mac","appVersion":"1.0","capabilities":\#(grantsJSON),"serverCapabilities":\#(grantsJSON),"features":[],"connectionMode":"lan","serverTime":"2026-11-24T12:00:00Z"}"#
+            let offer = Offer(macOffersSlider)
             let turns = AidenRecordedTurnStarts()
+            @Sendable func serverJSON() -> Data {
+                let grants = ["server:read", "workspace:read", "chat:read", "chat:write"]
+                    + (offer.slider.withLock { $0 } ? ["chat:agent-slider"] : [])
+                let grantsJSON = String(decoding: (try? JSONSerialization.data(withJSONObject: grants)) ?? Data(), as: UTF8.self)
+                return Data(#"{"protocolVersion":1,"instanceId":"instance-progress-lifecycle","name":"Progress Lifecycle Mac","appVersion":"1.0","capabilities":\#(grantsJSON),"serverCapabilities":\#(grantsJSON),"features":[],"connectionMode":"lan","serverTime":"2026-11-24T12:00:00Z"}"#.utf8)
+            }
             @Sendable func respond(_ request: URLRequest, fixture: AidenStreamRecoveryFixture?) -> (Int, String, Data)? {
                 switch (request.httpMethod, request.url?.path) {
                 case (_, "/api/aiden/v1/server"):
-                    return (200, "application/json", Data(serverJSON.utf8))
+                    return (200, "application/json", serverJSON())
                 case (_, "/api/aiden/v1/models"):
                     return (200, "application/json", Data(catalog.utf8))
                 case ("POST", "/api/aiden/v1/chats/chat-progress-lifecycle/turns"):
@@ -3124,38 +3135,59 @@ final class AidenChatTests: XCTestCase {
             let fixture = AidenStreamRecoveryFixture(chat: model.chat)
             AidenChatProgressLifecycleURLProtocol.setResponseOverride { respond($0, fixture: fixture) }
             await model.load(observeProgress: false)
-            return (model, turns)
+            return (model, turns, offer)
+        }
+        func sentTurn(_ turns: AidenRecordedTurnStarts) throws -> AidenTurnStart {
+            try JSONDecoder().decode(AidenTurnStart.self, from: XCTUnwrap(turns.values.last?.body))
         }
 
-        let (model, turns) = try await launch(macOffersSlider: true)
-        XCTAssertEqual(model.agentSliderState?.currentStop?.id, "mid", "a new chat starts on the home stop")
-        XCTAssertEqual(model.turnModelSelection, AidenChatModelSelection(providerId: "acme", modelId: "small", thinkingLevel: "medium"))
-        XCTAssertFalse(model.agentSliderState?.canResetToHome ?? true)
+        // Nothing picked: the turn runs on the Mac's last stop and asks it to keep nothing.
+        let (untouched, untouchedTurns, _) = try await launch(macOffersSlider: true)
+        XCTAssertEqual(untouched.agentSliderState?.currentStop?.id, "fast", "a new chat starts on the Mac's last stop, not home")
+        XCTAssertTrue(untouched.agentSliderState?.canResetToHome ?? false)
+        untouched.draft = "Hello"
+        await untouched.send()
+        try await waitUntil { untouchedTurns.count == 1 }
+        let unpicked = try sentTurn(untouchedTurns)
+        XCTAssertEqual(unpicked.thinkingLevel, "low")
+        XCTAssertNil(unpicked.saveSelection, "a send with no pick never changes the chat's saved level")
+        untouched.stopProgressObservation()
 
+        let (model, turns, _) = try await launch(macOffersSlider: true)
+        model.resetAgentSliderToHome()
+        XCTAssertEqual(model.agentSliderState?.currentStop?.id, "mid")
+        XCTAssertFalse(model.agentSliderState?.canResetToHome ?? true)
         model.stepAgentSlider(-1)
         XCTAssertEqual(model.turnModelSelection, AidenChatModelSelection(providerId: "acme", modelId: "small", thinkingLevel: "low"))
         model.stepAgentSlider(-1)
         XCTAssertEqual(model.agentSliderState?.currentStop?.id, "fast", "the left end goes no further")
-        model.resetAgentSliderToHome()
-        XCTAssertEqual(model.agentSliderState?.currentStop?.id, "mid")
 
         model.selectAgentSliderStop(id: "big")
         XCTAssertEqual(model.agentSliderState?.currentStop?.id, "big")
         model.draft = "Hello"
         await model.send()
         try await waitUntil { turns.count == 1 }
-        let sent = try JSONDecoder().decode(AidenTurnStart.self, from: XCTUnwrap(turns.values.first?.body))
+        let sent = try sentTurn(turns)
         XCTAssertEqual(sent.providerId, "acme")
         XCTAssertEqual(sent.modelId, "large")
         XCTAssertNil(sent.thinkingLevel, "Big sets no level, so the turn sends none")
+        XCTAssertEqual(sent.saveSelection, true, "a stop picked on the phone is the chat's from now on")
         model.stopProgressObservation()
 
-        let (older, _) = try await launch(macOffersSlider: false)
+        let (older, _, offer) = try await launch(macOffersSlider: false)
         XCTAssertNil(older.agentSlider)
         XCTAssertNil(older.agentSliderState)
         XCTAssertEqual(older.turnModelSelection, AidenChatModelSelection(providerId: "acme", modelId: "small", thinkingLevel: "medium"))
         older.selectAgentSliderStop(id: "big")
         XCTAssertEqual(older.selectedModelId, "small", "without the slider a stop can't move the chat")
+
+        // The Mac starts offering the slider after the catalog loaded.
+        offer.slider.withLock { $0 = true }
+        await older.coordinator.connectActiveInstallation()
+        try await waitUntil { older.agentSlider != nil }
+        older.reconcileAgentSliderAvailability()
+        XCTAssertEqual(older.agentSliderState?.currentStop?.id, "fast", "a late grant puts the chat on the Mac's last stop")
+        XCTAssertEqual(older.turnModelSelection.thinkingLevel, "low")
         older.stopProgressObservation()
     }
 

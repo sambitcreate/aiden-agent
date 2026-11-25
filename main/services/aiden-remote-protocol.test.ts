@@ -4035,9 +4035,22 @@ test("revision 66 carries the Agent Slider on /models and the chat's own level, 
     ["repeated id", stop(1, { id: slider.stops[0].id })],
     ["home outside the stops", { ...slider, homeStopId: "stop_ffffffff" }],
     ["provider without model", without(1, "modelId")],
-    ["level without model", stop(4, { thinkingLevel: "low" })],
+    ["level without model", stop(5, { thinkingLevel: "low" })],
     ["model on an unassigned stop", stop(1, { availability: "unassigned" })],
-    ["no model but not unassigned", stop(4, { availability: "ready" })],
+    ["ready without a model", stop(5, { availability: "ready" })],
+    ["ids on an unavailable stop", stop(3, { providerId: "provider_fixture_other", modelId: "model_fixture_other" })],
+    ["level on an unavailable stop", stop(3, { thinkingLevel: "max" })],
+    ["ids on a computer-only stop", stop(4, { providerId: "antigravity", modelId: "agent" })],
+    ["labels on a computer-only stop", stop(4, { providerLabel: "Agent Provider" })],
+    ["provider label on an unassigned stop", stop(5, { providerLabel: "Fixture Provider" })],
+    ["model label on a model-missing stop", stop(3, { availability: "model-missing" })],
+    ["provider label on a provider-missing stop", {
+      ...slider,
+      stops: slider.stops.map((entry: Record<string, unknown>, at: number) =>
+        at === 3 ? { id: entry.id, label: entry.label, providerLabel: "Other Provider", availability: "provider-missing" } : entry),
+    }],
+    ["provider label over 256 characters", stop(0, { providerLabel: "x".repeat(257) })],
+    ["empty model label", stop(0, { modelLabel: "" })],
     ["unknown availability", stop(0, { availability: "busy" })],
     ["unknown level", stop(1, { thinkingLevel: "extreme" })],
     ["extra stop field", stop(0, { price: 1 })],
@@ -4055,14 +4068,23 @@ test("revision 66 carries the Agent Slider on /models and the chat's own level, 
     () => protocol.parseAidenRemoteContractFixture(withSection({ turnRequest: { ...raw.agentSlider.turnRequest, thinkingLevel: "low" } })),
     /exactly a ready stop/u,
   );
-  const signedOut = slider.stops[3];
   assert.throws(
     () =>
       protocol.parseAidenRemoteContractFixture(
-        withSection({ turnRequest: { text: "x", providerId: signedOut.providerId, modelId: signedOut.modelId, thinkingLevel: signedOut.thinkingLevel } }),
+        withSection({ turnRequest: { text: "x", providerId: "provider_fixture_other", modelId: "model_fixture_other", saveSelection: true } }),
       ),
     /exactly a ready stop/u,
   );
+  const { saveSelection: _save, ...unsaved } = raw.agentSlider.turnRequest;
+  assert.throws(() => protocol.parseAidenRemoteContractFixture(withSection({ turnRequest: unsaved })), /saveSelection/u);
+  // Unavailable stops name what to fix in words only; a computer-only stop names nothing.
+  const parsedStops = section.models.agentSlider.stops;
+  assert.deepEqual(parsedStops.find((entry) => entry.availability === "not-signed-in"), {
+    id: "stop_3d4e5f6a", label: "Elsewhere", providerLabel: "Other Provider", modelLabel: "Other Model", availability: "not-signed-in",
+  });
+  assert.deepEqual(parsedStops.find((entry) => entry.availability === "computer-only"), {
+    id: "stop_5f6a7b8c", label: "Agent", availability: "computer-only",
+  });
   assert.throws(
     () => protocol.parseAidenRemoteContractFixture(withSection({ chat: { ...raw.agentSlider.chat, thinkingLevel: "medium" } })),
     /sent stop's selection/u,
@@ -4096,9 +4118,12 @@ test("revision 66 carries the Agent Slider on /models and the chat's own level, 
   assert.equal(models(legacyModels), true, "a host without a slider still validates");
   assert.equal(models({ ...raw.agentSlider.models, agentSlider: stop(0, { availability: "busy" }) }), false);
   assert.equal(models({ ...raw.agentSlider.models, agentSlider: without(1, "modelId") }), false);
+  assert.equal(models({ ...raw.agentSlider.models, agentSlider: stop(4, { providerId: "antigravity", modelId: "agent" }) }), false, "ids only on ready stops");
+  assert.equal(models({ ...raw.agentSlider.models, defaults: { ...raw.agentSlider.models.defaults, thinkingLevel: "turbo" } }), false);
   const chatSchema = ajv.compile({ $ref: "#/components/schemas/Chat", components: spec.components });
   assert.equal(chatSchema(chat), true, JSON.stringify(chatSchema.errors));
   assert.equal(chatSchema(modelless), false, "a level without a model is refused");
   const turnSchema = ajv.compile({ $ref: "#/components/schemas/TurnStartRequest", components: spec.components });
   assert.equal(turnSchema(raw.agentSlider.turnRequest), true, JSON.stringify(turnSchema.errors));
+  assert.equal(turnSchema({ ...raw.agentSlider.turnRequest, saveSelection: "yes" }), false);
 });

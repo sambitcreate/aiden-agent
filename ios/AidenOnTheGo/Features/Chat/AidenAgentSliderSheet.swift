@@ -1,7 +1,7 @@
 import SwiftUI
 
 /// The composer's chip while the Agent Slider is on: the stop's name, or
-/// Custom. It opens the slider sheet.
+/// Custom. It opens the slider, which sits with the chip.
 struct AidenAgentSliderChip: View {
     @Bindable var model: AidenChatViewModel
     let state: AidenAgentSliderState
@@ -19,6 +19,7 @@ struct AidenAgentSliderChip: View {
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
+        .modifier(AidenAgentSliderPresenter(model: model))
         .accessibilityLabel("Agent Slider")
         .accessibilityValue(AidenAgentSliderSheet.valueText(state, model: model))
         .accessibilityHint("Opens the Agent Slider")
@@ -26,12 +27,24 @@ struct AidenAgentSliderChip: View {
     }
 }
 
-/// The Agent Slider in a sheet: the stop's name and model, the track, Reset
-/// to home, Other models, and every stop with why one can't run.
+extension EnvironmentValues {
+    /// The chat screen the composer belongs to, so the Agent Slider can tell
+    /// an iPhone Duo fold's rebuild from the person closing it.
+    @Entry var aidenChatScreen: AidenChatScreen?
+}
+
+/// The Agent Slider: the stop's name and model, the track, Reset to home,
+/// Other models, and every stop with why one can't run. A popover beside the
+/// chip at regular width, and a sheet sized to its stops on a phone.
 struct AidenAgentSliderSheet: View {
     @Environment(\.dismiss) private var dismiss
     @Environment(\.aidenPalette) private var palette
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
     @Bindable var model: AidenChatViewModel
+    @State private var contentHeight: CGFloat = 0
+
+    /// The navigation bar and grabber above the content in a sheet.
+    private static let chromeHeight: CGFloat = 72
 
     static func valueText(_ state: AidenAgentSliderState, model: AidenChatViewModel) -> String {
         AidenAgentSliderResolver.valueText(
@@ -48,6 +61,7 @@ struct AidenAgentSliderSheet: View {
                     content(state)
                         .padding(.horizontal, 20)
                         .padding(.bottom, 20)
+                        .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { contentHeight = $0 }
                 }
             }
             .scrollBounceBehavior(.basedOnSize)
@@ -65,8 +79,19 @@ struct AidenAgentSliderSheet: View {
                 }
             }
         }
-        .presentationDetents([.medium, .large])
+        .frame(idealWidth: 400, idealHeight: fittedHeight ?? 560)
+        .presentationDetents(detents)
         .presentationDragIndicator(.visible)
+    }
+
+    /// Every stop and its reason, with the track and actions, in one detent.
+    private var fittedHeight: CGFloat? {
+        contentHeight > 0 ? contentHeight + Self.chromeHeight : nil
+    }
+
+    private var detents: Set<PresentationDetent> {
+        guard let fittedHeight else { return [.medium, .large] }
+        return [.height(fittedHeight), .large]
     }
 
     private func content(_ state: AidenAgentSliderState) -> some View {
@@ -88,24 +113,24 @@ struct AidenAgentSliderSheet: View {
                 onSelect: { model.selectAgentSliderStop(id: $0) },
                 onStep: { model.stepAgentSlider($0) }
             )
-            // A tick each time the chat lands on another stop, by drag, tap or step.
-            .sensoryFeedback(.selection, trigger: state.currentStop?.id)
 
-            HStack(spacing: 10) {
+            let actions = dynamicTypeSize.isAccessibilitySize
+                ? AnyLayout(VStackLayout(alignment: .leading, spacing: 10))
+                : AnyLayout(HStackLayout(spacing: 10))
+            actions {
                 Menu {
                     AidenComposerModelMenuContent(model: model)
                 } label: {
-                    actionLabel("Other models", systemImage: "list.bullet")
+                    actionLabel("Other models", systemImage: "list.bullet", isEnabled: true)
                 }
                 .accessibilityIdentifier("aiden.agentSlider.otherModels")
                 Button {
                     model.resetAgentSliderToHome()
                 } label: {
-                    actionLabel("Reset to home", systemImage: "arrow.counterclockwise")
+                    actionLabel("Reset to home", systemImage: "arrow.counterclockwise", isEnabled: state.canResetToHome)
                 }
                 .buttonStyle(.plain)
                 .disabled(!state.canResetToHome)
-                .opacity(state.canResetToHome ? 1 : 0.5)
                 .accessibilityIdentifier("aiden.agentSlider.reset")
             }
 
@@ -141,10 +166,12 @@ struct AidenAgentSliderSheet: View {
         return [model.selectedModelDisplayLabel, effort].compactMap { $0 }.joined(separator: " · ")
     }
 
-    private func actionLabel(_ title: LocalizedStringKey, systemImage: String) -> some View {
+    /// A plain-style label keeps its own colour when disabled, so a disabled
+    /// action reads in the secondary text token instead.
+    private func actionLabel(_ title: LocalizedStringKey, systemImage: String, isEnabled: Bool) -> some View {
         Label(title, systemImage: systemImage)
             .font(.subheadline.weight(.semibold))
-            .foregroundStyle(palette.foreground)
+            .foregroundStyle(isEnabled ? palette.foreground : palette.secondary)
             .padding(.horizontal, 14)
             .frame(minHeight: 44)
             .background(palette.raised, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
@@ -153,12 +180,17 @@ struct AidenAgentSliderSheet: View {
 }
 
 /// The track: a glyph per stop, filled where a turn can run and faint where
-/// it can't, and the thumb, hollow in Custom. A tap or a drag lands on the
-/// nearest stop that can run; VoiceOver and a keyboard step it.
+/// it can't, and the thumb, dashed in Custom. A tap lands on the nearest stop
+/// that can run. A sideways drag moves the thumb and lands once, where it's
+/// let go; a drag that starts upright is left to the scroll. VoiceOver and a
+/// keyboard step it.
 struct AidenAgentSliderTrack: View {
     @Environment(\.aidenPalette) private var palette
     @Environment(\.aidenReduceMotion) private var reduceMotion
     @FocusState private var isFocused: Bool
+    /// The drag in progress, if any: the stop under it, or that it's the
+    /// scroll's.
+    @State private var drag = AidenAgentSliderDrag()
     let state: AidenAgentSliderState
     let valueText: String
     let onSelect: (String) -> Void
@@ -167,16 +199,19 @@ struct AidenAgentSliderTrack: View {
     private static let inset: CGFloat = 14
     private static let thumbSize: CGFloat = 26
 
+    private var thumbIndex: Int { drag.previewIndex ?? state.position.thumbIndex }
+    private var showsCustom: Bool { drag.previewIndex == nil && state.position.isCustom }
+
     var body: some View {
         GeometryReader { geometry in
             let midY = geometry.size.height / 2
-            let thumbX = x(state.position.thumbIndex, width: geometry.size.width)
+            let thumbX = x(thumbIndex, width: geometry.size.width)
             ZStack(alignment: .topLeading) {
                 Capsule()
                     .fill(palette.foreground.opacity(0.14))
                     .frame(width: max(geometry.size.width - Self.inset * 2, 0), height: 4)
                     .position(x: geometry.size.width / 2, y: midY)
-                if !state.position.isCustom {
+                if !showsCustom {
                     Capsule()
                         .fill(palette.accent)
                         .frame(width: max(thumbX - Self.inset, 0), height: 4)
@@ -190,24 +225,39 @@ struct AidenAgentSliderTrack: View {
                 }
                 thumb
                     .position(x: thumbX, y: midY)
-                    .animation(reduceMotion ? nil : .snappy(duration: 0.2), value: state.position)
+                    .animation(reduceMotion ? nil : .snappy(duration: 0.2), value: thumbIndex)
             }
             .contentShape(Rectangle())
-            .gesture(
-                DragGesture(minimumDistance: 0).onChanged { value in
-                    if let id = nearestAvailableStop(to: value.location.x, width: geometry.size.width) {
-                        onSelect(id)
-                    }
+            .onTapGesture { location in
+                if let index = nearestAvailableStop(to: location.x, width: geometry.size.width) {
+                    onSelect(state.views[index].id)
                 }
+            }
+            // Alongside the sheet's scroll, so an upright drag still scrolls.
+            .simultaneousGesture(
+                DragGesture(minimumDistance: 8)
+                    .onChanged { value in
+                        drag.moved(
+                            translation: value.translation,
+                            to: nearestAvailableStop(to: value.location.x, width: geometry.size.width)
+                        )
+                    }
+                    .onEnded { _ in
+                        if let index = drag.ended(), state.views.indices.contains(index) {
+                            onSelect(state.views[index].id)
+                        }
+                    }
             )
         }
         .frame(height: 44)
         .padding(4)
+        // A tick each time the thumb reaches another stop, by drag, tap or step.
+        .sensoryFeedback(.selection, trigger: showsCustom ? nil : thumbIndex)
         .overlay {
             // The neutral keyboard focus ring, only while the track has focus.
             if isFocused {
                 RoundedRectangle(cornerRadius: 12, style: .continuous)
-                    .stroke(palette.foreground.opacity(0.55), lineWidth: 2)
+                    .stroke(palette.focusRing, lineWidth: 2)
             }
         }
         .focusable()
@@ -229,10 +279,13 @@ struct AidenAgentSliderTrack: View {
 
     @ViewBuilder
     private var thumb: some View {
-        if state.position.isCustom {
+        if showsCustom {
+            // Custom: off every stop, so hollow with a dashed edge.
             Circle()
-                .fill(palette.raised)
-                .overlay { Circle().stroke(palette.foreground.opacity(0.55), lineWidth: 2) }
+                .fill(palette.canvas)
+                .overlay {
+                    Circle().stroke(palette.secondary, style: StrokeStyle(lineWidth: 1.5, dash: [3, 3]))
+                }
                 .frame(width: Self.thumbSize, height: Self.thumbSize)
         } else {
             Circle()
@@ -248,16 +301,56 @@ struct AidenAgentSliderTrack: View {
         return Self.inset + span * CGFloat(index) / CGFloat(count)
     }
 
-    private func nearestAvailableStop(to location: CGFloat, width: CGFloat) -> String? {
-        state.views.indices
-            .filter { state.views[$0].isAvailable }
-            .min { abs(x($0, width: width) - location) < abs(x($1, width: width) - location) }
-            .map { state.views[$0].id }
+    private func nearestAvailableStop(to location: CGFloat, width: CGFloat) -> Int? {
+        AidenAgentSliderDrag.nearestAvailableStop(
+            state.views.map(\.isAvailable),
+            to: location,
+            width: width,
+            inset: Self.inset
+        )
+    }
+}
+
+/// One drag on the slider's track. Sideways from its first movement, it
+/// previews the nearest stop that can run and lands once, where it's let go;
+/// upright from its first movement, it's the scroll's and lands nowhere.
+struct AidenAgentSliderDrag: Equatable, Sendable {
+    /// The stop under a drag that hasn't landed yet.
+    private(set) var previewIndex: Int?
+    /// The drag started upright.
+    private(set) var isIgnored = false
+
+    /// The drag moved by `translation`, over the stop `stop` (nil: none can run).
+    mutating func moved(translation: CGSize, to stop: Int?) {
+        guard !isIgnored else { return }
+        if previewIndex == nil, abs(translation.height) >= abs(translation.width) {
+            isIgnored = true
+            return
+        }
+        previewIndex = stop ?? previewIndex
+    }
+
+    /// The drag ended: the stop it lands on, if any. The next drag starts fresh.
+    mutating func ended() -> Int? {
+        defer { self = Self() }
+        return isIgnored ? nil : previewIndex
+    }
+
+    /// The runnable stop nearest `location` on a track `width` wide whose
+    /// stops are spread evenly between `inset` from each end.
+    static func nearestAvailableStop(_ isAvailable: [Bool], to location: CGFloat, width: CGFloat, inset: CGFloat) -> Int? {
+        let span = max(width - inset * 2, 0)
+        let gaps = CGFloat(max(isAvailable.count - 1, 1))
+        func x(_ index: Int) -> CGFloat { inset + span * CGFloat(index) / gaps }
+        return isAvailable.indices
+            .filter { isAvailable[$0] }
+            .min { abs(x($0) - location) < abs(x($1) - location) }
     }
 }
 
 /// One stop as a row: its place on the slider, its name, and its model and
-/// effort or why it can't run. Shared by the sheet and Settings.
+/// effort or why it can't run. Shared by the sheet and Settings, where no
+/// row is current.
 struct AidenAgentSliderStopRow: View {
     @Environment(\.aidenPalette) private var palette
     let view: AidenAgentSliderStopView
@@ -269,7 +362,7 @@ struct AidenAgentSliderStopRow: View {
     var body: some View {
         HStack(spacing: 12) {
             AidenAgentSliderPlaceGlyph(index: index, count: count)
-                .frame(width: 40)
+                .frame(width: AidenAgentSliderPlaceGlyph.width)
             VStack(alignment: .leading, spacing: 2) {
                 HStack(spacing: 6) {
                     Text(view.label)
@@ -304,116 +397,60 @@ struct AidenAgentSliderStopRow: View {
     }
 }
 
-/// Where a stop sits on the slider, as dots: its own dot larger.
+/// Where a stop sits on the slider, as dots: its own dot larger. Seven stops,
+/// the most a slider has, fit its width.
 struct AidenAgentSliderPlaceGlyph: View {
     @Environment(\.aidenPalette) private var palette
     let index: Int
     let count: Int
 
+    static let width: CGFloat = 40
+    private static let spacing: CGFloat = 2
+
     var body: some View {
-        HStack(spacing: 3) {
+        // 6 pt for this stop, 3 pt for each other, 2 pt apart: 36 pt at seven.
+        HStack(spacing: Self.spacing) {
             ForEach(0..<count, id: \.self) { dot in
                 Circle()
                     .fill(palette.foreground.opacity(dot == index ? 0.85 : 0.35))
                     .frame(width: dot == index ? 6 : 3, height: dot == index ? 6 : 3)
             }
         }
+        .fixedSize()
         .accessibilityHidden(true)
     }
 }
 
-/// Every model the Mac offers, by provider, with each model's levels: the
-/// composer's model menu, and Other models in the slider sheet.
-struct AidenComposerModelMenuContent: View {
-    @Environment(\.aidenPalette) private var palette
+/// Presents the chat's Agent Slider from the model's presentation state, on
+/// the composer's chip: a popover pointing at it at regular width, a sheet on
+/// a phone. The model outlives an iPhone Duo fold, so the slider opens again
+/// on the rebuilt chip; the old chip's close during the fold isn't the person
+/// closing it.
+private struct AidenAgentSliderPresenter: ViewModifier {
     @Bindable var model: AidenChatViewModel
-
-    var body: some View {
-        ForEach(model.visibleProviders) { provider in
-            Section {
-                ForEach(provider.models) { candidate in
-                    if let levels = candidate.thinkingLevels, !levels.isEmpty {
-                        Menu {
-                            ForEach(levels, id: \.self) { level in
-                                Button {
-                                    select(candidate, providerId: provider.id, thinkingLevel: level)
-                                } label: {
-                                    if isSelected(candidate, providerId: provider.id, thinkingLevel: level) {
-                                        Label(candidate.thinkingLabel(for: level), systemImage: "checkmark")
-                                    } else {
-                                        Text(candidate.thinkingLabel(for: level))
-                                    }
-                                }
-                            }
-                        } label: { Text(candidate.label) }
-                    } else {
-                        Button {
-                            select(candidate, providerId: provider.id, thinkingLevel: nil)
-                        } label: {
-                            if isSelected(candidate, providerId: provider.id, thinkingLevel: nil) {
-                                Label(candidate.label, systemImage: "checkmark")
-                            } else {
-                                Text(candidate.label)
-                            }
-                        }
-                    }
-                }
-            } header: {
-                Label {
-                    Text(provider.label)
-                } icon: {
-                    AidenProviderIcon(
-                        providerID: provider.id,
-                        providerLabel: provider.label,
-                        artwork: provider.artwork,
-                        size: 16,
-                        color: palette.secondary
-                    )
-                }
-            }
-        }
-    }
-
-    private func select(_ candidate: AidenModel, providerId: String, thinkingLevel: String?) {
-        model.selectModel(providerId: providerId, modelId: candidate.id, thinkingLevel: thinkingLevel)
-    }
-
-    private func isSelected(_ candidate: AidenModel, providerId: String, thinkingLevel: String?) -> Bool {
-        guard model.selectedProviderId == providerId, model.selectedModelId == candidate.id else { return false }
-        return thinkingLevel == nil || model.selectedThinkingLevel == thinkingLevel
-    }
-}
-
-extension View {
-    /// Presents the chat's Agent Slider sheet from `isAgentSliderPresented`
-    /// on its model. The model outlives an iPhone Duo fold, so the sheet
-    /// opens again on the rebuilt view; the old view's sheet closing during
-    /// the fold isn't the person closing it.
-    func aidenAgentSliderSheet(model: AidenChatViewModel, screen: AidenChatScreen?) -> some View {
-        modifier(AidenAgentSliderPresentation(model: model, screen: screen))
-    }
-}
-
-private struct AidenAgentSliderPresentation: ViewModifier {
-    @Bindable var model: AidenChatViewModel
-    let screen: AidenChatScreen?
-    @State private var isOnScreen = false
+    @Environment(\.aidenChatScreen) private var screen
+    @State private var id = UUID()
 
     func body(content: Content) -> some View {
         content
-            .sheet(isPresented: Binding(
-                get: { isOnScreen && model.isAgentSliderPresented && model.agentSliderState != nil },
-                set: { shown in
-                    if shown {
-                        model.isAgentSliderPresented = true
-                    } else if isOnScreen, screen?.isRebuilding != true {
-                        model.isAgentSliderPresented = false
-                    }
-                }
-            )) {
+            .popover(isPresented: isPresented, arrowEdge: .bottom) {
                 AidenAgentSliderSheet(model: model)
+                    .presentationCompactAdaptation(.sheet)
             }
-            .onAppear { isOnScreen = true }
-            .onDisappear { isOnScreen = false }
+            .onAppear { model.agentSliderPresentation.appeared(id) }
+            .onDisappear { model.agentSliderPresentation.disappeared(id) }
+    }
+
+    private var isPresented: Binding<Bool> {
+        Binding(
+            get: { model.agentSliderPresentation.isShown(by: id) && model.agentSliderState != nil },
+            set: { shown in
+                if shown {
+                    model.agentSliderPresentation.isPresented = true
+                } else {
+                    model.agentSliderPresentation.closed(by: id, whileRebuilding: screen?.isRebuilding == true)
+                }
+            }
+        )
     }
 }

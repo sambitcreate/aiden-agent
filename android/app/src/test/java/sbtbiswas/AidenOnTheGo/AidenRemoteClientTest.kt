@@ -37,9 +37,7 @@ import sbtbiswas.AidenOnTheGo.models.*
 import sbtbiswas.AidenOnTheGo.diagnostics.*
 import sbtbiswas.AidenOnTheGo.features.chat.AidenChatForkErrors
 import sbtbiswas.AidenOnTheGo.features.remote.aidenProgressCapabilitiesToRequest
-import sbtbiswas.AidenOnTheGo.features.remote.aidenRequestChatAgentSlider
 import sbtbiswas.AidenOnTheGo.features.remote.aidenRequestStreamSnapshotReasons
-import sbtbiswas.AidenOnTheGo.features.remote.aidenShouldRequestChatAgentSlider
 import sbtbiswas.AidenOnTheGo.features.remote.aidenShouldRequestStreamSnapshotReasons
 import sbtbiswas.AidenOnTheGo.networking.AidenHostQuery
 import sbtbiswas.AidenOnTheGo.networking.AidenRemoteClient
@@ -1715,17 +1713,27 @@ class AidenRemoteClientTest {
         assertEquals("/api/aiden/v1/models", server.takeRequest().path)
         assertEquals("provider_fixture", catalog.defaults["providerId"])
         assertEquals("model_fixture", catalog.defaults["modelId"])
+        assertEquals("high", catalog.defaults["thinkingLevel"])
         val slider = requireNotNull(catalog.agentSlider)
-        assertEquals(5, slider.stops.size)
+        assertEquals(6, slider.stops.size)
         assertEquals("stop_1b2c3d4e", slider.homeStopId)
         assertEquals("Balanced", slider.homeStop.label)
-        assertEquals(listOf("Instant", "Balanced", "Deep", "Elsewhere", "Choose a model"), slider.stops.map { it.label })
+        assertEquals(listOf("Instant", "Balanced", "Deep", "Elsewhere", "Agent", "Choose a model"), slider.stops.map { it.label })
+        assertEquals("Fixture Provider", slider.stops[2].providerLabel)
+        assertEquals("Fixture Model", slider.stops[2].modelLabel)
 
         val elsewhere = slider.stops[3]
         assertEquals(AidenAgentSliderAvailability.NOT_SIGNED_IN, elsewhere.availability)
-        assertEquals("max", elsewhere.thinkingLevel)
+        assertEquals("Other Provider", elsewhere.providerLabel)
+        assertEquals("Other Model", elsewhere.modelLabel)
+        assertNull("a stop that can't run here names no ids", elsewhere.modelId)
+        assertNull(elsewhere.thinkingLevel)
         assertNull("a stop that can't run here sends nothing", elsewhere.turnSelection)
-        val unassigned = slider.stops[4]
+        val agent = slider.stops[4]
+        assertEquals(AidenAgentSliderAvailability.COMPUTER_ONLY, agent.availability)
+        assertNull(agent.providerLabel)
+        assertNull(agent.turnSelection)
+        val unassigned = slider.stops[5]
         assertEquals(AidenAgentSliderAvailability.UNASSIGNED, unassigned.availability)
         assertNull(unassigned.modelId)
         assertNull(unassigned.turnSelection)
@@ -1736,7 +1744,8 @@ class AidenRemoteClientTest {
         val sent = AidenChatModelSelection(request.providerId, request.modelId, request.thinkingLevel)
         assertEquals(listOf("stop_2c3d4e5f"), slider.stops.filter { it.turnSelection == sent }.map { it.id })
 
-        // The phone sends that turn as the fixture spells it, level included.
+        // The phone sends that turn as the fixture spells it, level included. It doesn't hold
+        // `chat:agent-slider`, so it never asks the host to save the selection.
         val message = Json.parseToJsonElement(fixture.chat.getValue("messages").jsonArray[0].toString())
         server.enqueue(MockResponse().setResponseCode(202).setBody(
             """{"turnId":"turn_slider_01","streamId":"stream_slider_01","status":"running","message":$message}"""
@@ -1746,7 +1755,9 @@ class AidenRemoteClientTest {
         val turn = server.takeRequest()
         assertEquals("/api/aiden/v1/chats/$chatId/turns", turn.path)
         assertEquals(
-            contractFixture().getValue("agentSlider").jsonObject.getValue("turnRequest"),
+            kotlinx.serialization.json.JsonObject(
+                contractFixture().getValue("agentSlider").jsonObject.getValue("turnRequest").jsonObject - "saveSelection"
+            ),
             Json.parseToJsonElement(turn.body.readUtf8())
         )
 
@@ -1766,6 +1777,37 @@ class AidenRemoteClientTest {
     }
 
     @Test
+    fun aStopOfUnknownAvailabilityOrLevelCantBeChosenAndTheRestOfTheSliderStays() = runBlocking {
+        val models = agentSliderFixture().models
+        val slider = models.getValue("agentSlider").jsonObject
+        val stops = slider.getValue("stops").jsonArray.mapIndexed { index, stop ->
+            when (index) {
+                // A level a later host adds: the stop keeps its id and label but can't be chosen.
+                0 -> kotlinx.serialization.json.JsonObject(stop.jsonObject + ("thinkingLevel" to JsonPrimitive("turbo")))
+                // An availability a later host adds.
+                3 -> kotlinx.serialization.json.JsonObject(stop.jsonObject + ("availability" to JsonPrimitive("queued-elsewhere")))
+                else -> stop
+            }
+        }
+        server.enqueue(MockResponse().setResponseCode(200).setBody(
+            kotlinx.serialization.json.JsonObject(
+                models + ("agentSlider" to kotlinx.serialization.json.JsonObject(slider + ("stops" to JsonArray(stops))))
+            ).toString()
+        ))
+        val decoded = requireNotNull(client.modelCatalog().agentSlider)
+        assertEquals(6, decoded.stops.size)
+        val turbo = decoded.stops[0]
+        assertEquals("stop_0a1b2c3d", turbo.id)
+        assertEquals("Instant", turbo.label)
+        assertEquals(AidenAgentSliderAvailability.UNKNOWN, turbo.availability)
+        assertNull("an unknown level is dropped", turbo.thinkingLevel)
+        assertNull(turbo.turnSelection)
+        assertEquals(AidenAgentSliderAvailability.UNKNOWN, decoded.stops[3].availability)
+        assertNull(decoded.stops[3].turnSelection)
+        assertEquals(listOf("stop_1b2c3d4e", "stop_2c3d4e5f"), decoded.stops.filter { it.isReady }.map { it.id })
+    }
+
+    @Test
     fun agentSliderIsNullFromAnOlderHostOrABrokenSliderAndTheModelListSurvives() = runBlocking {
         val models = agentSliderFixture().models
         server.enqueue(MockResponse().setResponseCode(200).setBody(
@@ -1782,6 +1824,15 @@ class AidenRemoteClientTest {
             slider + ("stops" to JsonArray(slider.getValue("stops").jsonArray.mapIndexed { index, stop ->
                 // An assigned stop that claims to be unassigned breaks the contract.
                 if (index == 0) kotlinx.serialization.json.JsonObject(stop.jsonObject + ("availability" to JsonPrimitive("unassigned"))) else stop
+            })),
+            slider + ("stops" to JsonArray(slider.getValue("stops").jsonArray.mapIndexed { index, stop ->
+                // A stop that can't run here never names ids.
+                if (index == 4) kotlinx.serialization.json.JsonObject(
+                    stop.jsonObject + ("providerId" to JsonPrimitive("provider_fixture")) + ("modelId" to JsonPrimitive("model_fixture"))
+                ) else stop
+            })),
+            slider + ("stops" to JsonArray(slider.getValue("stops").jsonArray.mapIndexed { index, stop ->
+                if (index == 2) kotlinx.serialization.json.JsonObject(stop.jsonObject + ("modelLabel" to JsonPrimitive(""))) else stop
             }))
         )
         for (bad in broken) {
@@ -1810,42 +1861,20 @@ class AidenRemoteClientTest {
     }
 
     @Test
-    fun agentSliderCapabilityIsNegotiatedAloneOnlyFromAMacThatOffersIt() = runBlocking {
+    fun agentSliderCapabilityIsNotAskedForEvenFromAMacThatOffersIt() {
         val base = listOf(AidenRemoteCapability.SERVER_READ, AidenRemoteCapability.CHAT_READ, AidenRemoteCapability.CHAT_WRITE)
-        val withSlider = base + AidenRemoteCapability.CHAT_AGENT_SLIDER
-        fun mac(caps: List<AidenRemoteCapability>, offers: List<AidenRemoteCapability>) =
-            AidenServer(instanceId = "inst_66", name = "Mac", capabilities = caps, serverCapabilities = (caps + offers).distinct())
-        fun installation(held: List<AidenRemoteCapability>) = AidenInstallation(
+        val offering = AidenServer(
+            instanceId = "inst_66", name = "Mac", capabilities = base,
+            serverCapabilities = base + AidenRemoteCapability.CHAT_AGENT_SLIDER
+        )
+        val installation = AidenInstallation(
             instanceId = "inst_66", deviceId = "dev_66", name = "Mac",
             endpoint = "https://aiden.test/api/aiden/v1", serverSpkiSha256 = "sha256/test",
-            deviceCapabilities = held, serverCapabilities = held, createdAt = Instant.parse("2026-11-24T12:00:00Z")
+            deviceCapabilities = base, serverCapabilities = base, createdAt = Instant.parse("2026-11-24T12:00:00Z")
         )
-        val offering = mac(base, listOf(AidenRemoteCapability.CHAT_AGENT_SLIDER))
-        assertTrue(aidenShouldRequestChatAgentSlider(offering, installation(base)))
-        assertFalse(aidenProgressCapabilitiesToRequest(offering, installation(base)).contains(AidenRemoteCapability.CHAT_AGENT_SLIDER))
-        assertFalse("a Mac that doesn't offer it is never asked", aidenShouldRequestChatAgentSlider(mac(base, emptyList()), installation(base)))
-        assertFalse(aidenShouldRequestChatAgentSlider(mac(withSlider, emptyList()), installation(withSlider)))
-        assertNull(aidenRequestChatAgentSlider(client, mac(base, emptyList()), installation(base)))
-        assertEquals(0, server.requestCount)
-
-        val listed = JsonArray(withSlider.map { JsonPrimitive(it.rawValue) })
-        server.enqueue(MockResponse().setResponseCode(200).setBody("""{"capabilities":$listed}"""))
-        server.enqueue(MockResponse().setResponseCode(200).setBody(
-            """{"protocolVersion":1,"instanceId":"inst_66","name":"Mac","appVersion":"1.0.0","connectionMode":"lan","serverTime":"2026-11-24T12:00:00.000Z","capabilities":$listed,"serverCapabilities":$listed}"""
-        ))
-        val granted = requireNotNull(aidenRequestChatAgentSlider(client, offering, installation(base)))
-        val ask = server.takeRequest(5, TimeUnit.SECONDS)!!
-        assertEquals("/api/aiden/v1/device/capabilities", ask.path)
-        assertEquals(
-            listOf(agentSliderFixture().capability.rawValue),
-            Json.parseToJsonElement(ask.body.readUtf8()).jsonObject.getValue("accepts").jsonArray.map { it.jsonPrimitive.content }
-        )
-        assertEquals(withSlider, granted.granted)
-        assertEquals("/api/aiden/v1/server", server.takeRequest(5, TimeUnit.SECONDS)!!.path)
-
-        server.enqueue(MockResponse().setResponseCode(400).setBody(
-            """{"error":{"code":"invalid_request","message":"Unknown capability.","requestId":"req_66","retryable":false}}"""
-        ))
-        assertNull("a Mac that refuses the name leaves the pairing as it was", aidenRequestChatAgentSlider(client, offering, installation(base)))
+        // Android turns don't carry the chat's own level yet, so saving them would move the chat
+        // off the stop chosen on the computer.
+        assertFalse(aidenProgressCapabilitiesToRequest(offering, installation).contains(AidenRemoteCapability.CHAT_AGENT_SLIDER))
+        assertFalse(AidenRemoteCapability.NEGOTIABLE.contains(AidenRemoteCapability.CHAT_AGENT_SLIDER))
     }
 }

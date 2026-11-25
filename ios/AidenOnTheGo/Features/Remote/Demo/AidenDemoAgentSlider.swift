@@ -14,29 +14,35 @@ enum AidenDemoAgentSlider {
     }
 
     static let models: [(id: String, label: String)] = [
-        ("claude-haiku-4-5", "Claude Haiku 4.5"),
-        ("claude-sonnet-4-5", "Claude Sonnet 4.5"),
-        ("claude-opus-4-5", "Claude Opus 4.5"),
+        ("demo-small", "Demo Small"),
+        ("demo-medium", "Demo Medium"),
+        ("demo-large", "Demo Large"),
+    ]
+
+    /// The ready stops: label, model and level.
+    static let readyStops: [(id: String, label: String, modelId: String, level: String)] = [
+        ("stop_quick", "Quick", "demo-small", "low"),
+        ("stop_balanced", "Balanced", "demo-medium", "medium"),
+        ("stop_deep", "Deep", "demo-large", "high"),
     ]
 
     /// `GET /models` with the slider: Quick, Balanced (home), Deep, a stop on a
     /// provider this Mac isn't signed in to, and one with no model yet.
     static func modelsJSON() -> Data {
-        let stops: [[String: Any]] = [
-            ["id": "stop_quick", "label": "Quick", "providerId": "anthropic",
-             "modelId": "claude-haiku-4-5", "thinkingLevel": "low", "availability": "ready"],
-            ["id": "stop_balanced", "label": "Balanced", "providerId": "anthropic",
-             "modelId": "claude-sonnet-4-5", "thinkingLevel": "medium", "availability": "ready"],
-            ["id": "stop_deep", "label": "Deep", "providerId": "anthropic",
-             "modelId": "claude-opus-4-5", "thinkingLevel": "high", "availability": "ready"],
-            ["id": "stop_research", "label": "Research", "providerId": "openai",
-             "modelId": "gpt-5", "thinkingLevel": "high", "availability": "not-signed-in"],
-            ["id": "stop_spare", "label": "Spare", "availability": "unassigned"],
-        ]
+        var stops: [[String: Any]] = readyStops.map { stop in
+            [
+                "id": stop.id, "label": stop.label, "providerId": "demo",
+                "modelId": stop.modelId, "modelLabel": models.first { $0.id == stop.modelId }?.label ?? stop.modelId,
+                "providerLabel": "Demo", "thinkingLevel": stop.level, "availability": "ready",
+            ]
+        }
+        stops.append(["id": "stop_research", "label": "Research", "availability": "not-signed-in",
+                      "providerLabel": "Other Provider", "modelLabel": "Other Model", "thinkingLevel": "high"])
+        stops.append(["id": "stop_spare", "label": "Spare", "availability": "unassigned"])
         return json([
             "providers": [[
-                "id": "anthropic",
-                "label": "Anthropic",
+                "id": "demo",
+                "label": "Demo",
                 "models": models.map { model in
                     [
                         "id": model.id,
@@ -46,15 +52,18 @@ enum AidenDemoAgentSlider {
                     ] as [String: Any]
                 },
             ]],
-            "defaults": ["providerId": "anthropic", "modelId": "claude-sonnet-4-5"],
+            "defaults": ["providerId": "demo", "modelId": "demo-medium", "thinkingLevel": "medium"],
             "agentSlider": ["stops": stops, "homeStopId": "stop_balanced"],
         ])
     }
 
-    /// What a reply says for a turn on this model and level.
+    /// What a reply says for a turn on this model and level: the stop it
+    /// matches, so the copy follows the slider rather than a model's name.
     static func replyText(modelId: String?, thinkingLevel: String?) -> String {
-        let model = models.first { $0.id == modelId }?.label ?? modelId ?? "the chat's model"
-        return "Answered on \(model) at \(thinkingLevel ?? "its own") effort."
+        if let stop = readyStops.first(where: { $0.modelId == modelId && $0.level == thinkingLevel }) {
+            return "Answered on the \(stop.label) stop."
+        }
+        return "Answered off the slider."
     }
 
     /// Runs turns in each chat: `POST /chats/{id}/turns`, the turn's stream,
@@ -133,8 +142,16 @@ enum AidenDemoAgentSlider {
     }
 
     private static func chatJSON(base: Data, turns: [Turn]) -> Data {
-        guard var chat = (try? JSONSerialization.jsonObject(with: base)) as? [String: Any],
-              let last = turns.last else { return base }
+        guard var chat = (try? JSONSerialization.jsonObject(with: base)) as? [String: Any] else { return base }
+        guard let last = turns.last else {
+            // Before any phone turn the chat sits on the home stop, as a chat
+            // the Mac last ran there does. A copy this phone cached on an
+            // earlier launch then can't decide the stop.
+            chat["providerId"] = "demo"
+            chat["modelId"] = "demo-medium"
+            chat["thinkingLevel"] = "medium"
+            return json(chat)
+        }
         var messages = chat["messages"] as? [[String: Any]] ?? []
         for turn in turns {
             messages.append(userMessage(turn))

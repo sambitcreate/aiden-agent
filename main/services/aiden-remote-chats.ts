@@ -79,7 +79,7 @@ import {
   assertDurableOperationResult,
   assertRevision,
 } from "./aiden-remote-operation-contract.js";
-import type { AidenRemoteModelService } from "./aiden-remote-models.js";
+import { fittedThinkingLevel, type AidenRemoteModelService } from "./aiden-remote-models.js";
 import type { AidenRemoteStreamService } from "./aiden-remote-streams.js";
 import {
   AidenRemoteAttachmentStore,
@@ -1274,6 +1274,7 @@ function parseTurn(input: unknown): {
   thinkingLevel?: ChatStartParams["thinkingLevel"];
   attachmentIds?: string[];
   skill?: SkillInvocationV1;
+  saveSelection?: true;
 } {
   const record = ownRecord(input);
   const attachmentIds = record?.attachmentIds;
@@ -1285,13 +1286,14 @@ function parseTurn(input: unknown): {
       attachmentIds.every((value) => typeof value === "string"));
   if (
     !record ||
-    !exactKeys(record, ["text"], ["providerId", "modelId", "thinkingLevel", "attachmentIds", "skill"]) ||
+    !exactKeys(record, ["text"], ["providerId", "modelId", "thinkingLevel", "attachmentIds", "skill", "saveSelection"]) ||
     typeof record.text !== "string" ||
     Array.from(record.text).length > 200_000 ||
     (!record.text.trim() && (!Array.isArray(attachmentIds) || attachmentIds.length === 0)) ||
     (record.providerId !== undefined && !boundedString(record.providerId, 256)) ||
     (record.modelId !== undefined && !boundedString(record.modelId, 256)) ||
     (record.thinkingLevel !== undefined && !isGenerationThinkingLevel(record.thinkingLevel)) ||
+    (record.saveSelection !== undefined && typeof record.saveSelection !== "boolean") ||
     !structurallyValidAttachmentIds
   ) {
     throw new AidenRemoteServiceError(
@@ -1321,6 +1323,7 @@ function parseTurn(input: unknown): {
       : {}),
     ...(Array.isArray(attachmentIds) ? { attachmentIds: [...attachmentIds] as string[] } : {}),
     ...(skill ? { skill } : {}),
+    ...(record.saveSelection === true ? { saveSelection: true as const } : {}),
   };
 }
 
@@ -1528,13 +1531,20 @@ export class AidenRemoteChatService {
        */
       deviceSupportsContinueInNewChat?: (deviceId: string) => Promise<boolean>;
       /**
-       * Revision 66: whether a device negotiated `chat:agent-slider`. Only such
-       * a device has its turn's thinking level saved as the chat's own, in the
-       * same write as its message. A host wires this only when its chat store
-       * saves `thinkingLevel` on append; absent, the capability is neither
-       * offered nor served.
+       * Revision 66: whether a device negotiated `chat:agent-slider`. Such a
+       * device's turn level is fitted to the model instead of refused, and a
+       * turn that asks with `saveSelection` (and names its model) has the
+       * level saved as the chat's own, in the same write as its message. A
+       * host wires this only when its chat store saves `thinkingLevel` on
+       * append and it keeps an Agent Slider; absent, the capability is
+       * neither offered nor served.
        */
       deviceSupportsAgentSlider?: (deviceId: string) => Promise<boolean>;
+      /**
+       * Revision 66: whether the host has a readable Agent Slider right now.
+       * A selection is saved only while it does; absent reads as no.
+       */
+      hostHasAgentSlider?: () => Promise<boolean>;
       /**
        * No workspace chats keep a hidden folder each: `target` gives the
        * workspace a new chat that asked for `noWorkspace` goes to, and
@@ -2894,13 +2904,25 @@ export class AidenRemoteChatService {
             });
             supportsCompanionImages = preflightResult?.supportsCompanionImages === true;
           }
+          // Revision 66: a slider device echoes the chat's saved level, which
+          // the desktop may have saved unfitted. It runs at the level the model
+          // offers, as on the desktop; other devices keep the strict check.
+          const holdsAgentSlider = (await this.options.deviceSupportsAgentSlider?.(deviceId)) === true;
           if (
+            !holdsAgentSlider &&
             parsed.thinkingLevel &&
             selection.thinkingLevels.length > 0 &&
             !selection.thinkingLevels.includes(parsed.thinkingLevel)
           ) {
             throw new AidenRemoteServiceError("invalid_request", "That thinking level is unavailable.", 400);
           }
+          const turnThinkingLevel = holdsAgentSlider && parsed.thinkingLevel
+            ? fittedThinkingLevel(
+              selection.providerId,
+              selection.thinkingLevels.filter(isGenerationThinkingLevel),
+              parsed.thinkingLevel,
+            )
+            : parsed.thinkingLevel;
           if (
             this.attachments.requiresImageInput(deviceId, chatId, parsed.attachmentIds) &&
             !selection.supportsImages && !supportsCompanionImages
@@ -2928,7 +2950,7 @@ export class AidenRemoteChatService {
             workspaceId,
             providerId: selection.providerId,
             model: selection.modelId,
-            thinkingLevel: parsed.thinkingLevel,
+            thinkingLevel: turnThinkingLevel,
             ...(authoritative.botId ? { botAudienceId: deviceId } : {}),
             ...(inlineVisuals ? { inlineVisuals } : {}),
             // A lead chat's started chat asks on the desktop card, which always reads questions.
@@ -3058,11 +3080,17 @@ export class AidenRemoteChatService {
               }
             }
             // Revision 66: a phone with the Agent Slider keeps the chat on the
-            // stop it chose, as the desktop composer does. The level is saved
-            // in the message's own write, so a refused send leaves none behind.
+            // stop it chose, as the desktop composer does, only when the turn
+            // asks to and names that stop's model, and the host keeps a slider.
+            // The level that runs is saved in the message's own write, so a
+            // refused send leaves none behind; a model without levels saves none.
             const savesSliderSelection =
+              holdsAgentSlider &&
+              parsed.saveSelection === true &&
+              parsed.providerId !== undefined &&
+              parsed.modelId !== undefined &&
               !authoritative.botId &&
-              (await this.options.deviceSupportsAgentSlider?.(deviceId)) === true;
+              (await this.options.hostHasAgentSlider?.()) === true;
             appendAttempted = true;
             const chat = await appendChatMessageWithReconciliation({
               messageId,
@@ -3083,7 +3111,7 @@ export class AidenRemoteChatService {
                   expectedWorkspaceId: workspaceId,
                   isCurrent: () =>
                     turn.isActive() && workspaceAdmission?.signal.aborted !== true,
-                  ...(savesSliderSelection ? { thinkingLevel: parsed.thinkingLevel ?? null } : {}),
+                  ...(savesSliderSelection ? { thinkingLevel: turnThinkingLevel ?? null } : {}),
                 },
               ),
               recover: () => this.options.chatStore.get(chatId),
@@ -3105,7 +3133,7 @@ export class AidenRemoteChatService {
               reportChatMessageSent({
                 providerId: selection.providerId,
                 model: selection.modelId,
-                thinkingLevel: parsed.thinkingLevel,
+                thinkingLevel: turnThinkingLevel,
                 origin: authoritative.botId
                   ? "bot"
                   : async () => ((await this.options.deviceIsPeer?.(deviceId)) === true ? "peer" : "phone"),

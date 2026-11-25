@@ -292,6 +292,68 @@ enum AidenVoiceCaptureLifecyclePolicy {
 }
 
 /// The face of the model chip: the provider, the model and its thinking level.
+/// Every model the Mac offers, by provider, with each model's levels: the
+/// composer's model menu, and Other models in the slider sheet.
+struct AidenComposerModelMenuContent: View {
+    @Environment(\.aidenPalette) private var palette
+    @Bindable var model: AidenChatViewModel
+
+    var body: some View {
+        ForEach(model.visibleProviders) { provider in
+            Section {
+                ForEach(provider.models) { candidate in
+                    if let levels = candidate.thinkingLevels, !levels.isEmpty {
+                        Menu {
+                            ForEach(levels, id: \.self) { level in
+                                Button {
+                                    select(candidate, providerId: provider.id, thinkingLevel: level)
+                                } label: {
+                                    if isSelected(candidate, providerId: provider.id, thinkingLevel: level) {
+                                        Label(candidate.thinkingLabel(for: level), systemImage: "checkmark")
+                                    } else {
+                                        Text(candidate.thinkingLabel(for: level))
+                                    }
+                                }
+                            }
+                        } label: { Text(candidate.label) }
+                    } else {
+                        Button {
+                            select(candidate, providerId: provider.id, thinkingLevel: nil)
+                        } label: {
+                            if isSelected(candidate, providerId: provider.id, thinkingLevel: nil) {
+                                Label(candidate.label, systemImage: "checkmark")
+                            } else {
+                                Text(candidate.label)
+                            }
+                        }
+                    }
+                }
+            } header: {
+                Label {
+                    Text(provider.label)
+                } icon: {
+                    AidenProviderIcon(
+                        providerID: provider.id,
+                        providerLabel: provider.label,
+                        artwork: provider.artwork,
+                        size: 16,
+                        color: palette.secondary
+                    )
+                }
+            }
+        }
+    }
+
+    private func select(_ candidate: AidenModel, providerId: String, thinkingLevel: String?) {
+        model.selectModel(providerId: providerId, modelId: candidate.id, thinkingLevel: thinkingLevel)
+    }
+
+    private func isSelected(_ candidate: AidenModel, providerId: String, thinkingLevel: String?) -> Bool {
+        guard model.selectedProviderId == providerId, model.selectedModelId == candidate.id else { return false }
+        return thinkingLevel == nil || model.selectedThinkingLevel == thinkingLevel
+    }
+}
+
 struct AidenComposerModelChipLabel: View {
     /// What the chip shows on one line, in the order it tries them.
     enum Fit: CaseIterable {

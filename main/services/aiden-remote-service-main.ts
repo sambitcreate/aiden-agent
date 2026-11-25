@@ -92,7 +92,7 @@ import {
   AidenRemoteChatService,
   type AidenRemoteRetainedBotChatAuthorizationRequest,
 } from "./aiden-remote-chats.js";
-import { AidenRemoteModelService } from "./aiden-remote-models.js";
+import { AidenRemoteModelService, readableAgentSlider } from "./aiden-remote-models.js";
 import {
   AidenRemoteStreamService,
   removeRevokedDeviceStreams,
@@ -735,6 +735,8 @@ async function createRuntime(): Promise<AidenRemoteRuntime> {
               );
               return device?.capabilities.includes("chat:agent-slider") === true;
             },
+            // A selection is saved only while the desktop keeps a readable slider.
+            hostHasAgentSlider: async () => readableAgentSlider(await configStore.getSettings()) !== undefined,
             isFolderWorkspace: async (workspaceId) =>
               analyticsWorkspaceKind(await configStore.getWorkspace(workspaceId)) !== "none",
             deviceIsPeer: async (deviceId) => {

@@ -70,3 +70,10 @@
   - Android decodes the contract and fixtures only; there's no Android UI yet.
   - Demo: `-AidenDemoAgentSlider` (`AidenDemoAgentSlider.swift`) gives every chat five stops, and each reply names the model and level its turn asked for. XCUITest `AidenAgentSliderUITests`.
   - The Duo hinge can't be driven from `simctl` with Xcode 27.1 (no Simulator.app, and `io screenConfig power` doesn't move the scene and crashed SpringBoard once). Closed-Duo shots come from the UI test. The open inner display needs the Device Hub or the Simulator app.
+  - Review fixes (2026-11-24), which replace the earlier bullets where they disagree:
+    - `aiden serve` no longer wires `deviceSupportsAgentSlider`, so it neither offers nor serves `chat:agent-slider` (`packages/cli/tests/workspace-folder-missing.test.mjs` asserts this).
+    - `parseTurn` accepts an optional boolean `saveSelection`. The save in `startTurn` happens only when the device holds the capability, `saveSelection` is true, the turn has both ids, the chat isn't a Bot chat, and `hostHasAgentSlider()` is true. That last check is `readableAgentSlider(settings) !== undefined`, wired on the desktop.
+    - Holders' levels go through `fittedThinkingLevel` (now exported from `aiden-remote-models.ts`), and a model with no levels saves null. Non-holders keep the strict 400.
+    - Stops add `providerLabel` and `modelLabel`, each bounded to 256 characters, and the `computer-only` availability for an ACP harness or a model missing from the phone catalog. Only ready stops carry ids and a level. The protocol parser and the openapi enforce all of this.
+    - `defaults.thinkingLevel` is the fitted `lastThinkingLevel`. It is sent only with a slider, when the default pair equals the last provider and model.
+    - Android dropped `PHONE_CHAT_AGENT_SLIDER` and the coordinator's solo ask, because its turns don't send the chat's own level. Its stop decoder (`AidenAgentSliderStopSerializer`) reads an unknown availability, or an unknown level, as `UNKNOWN`: the stop keeps its id and label, the level is dropped, and the stop can't be chosen.

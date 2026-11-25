@@ -2,24 +2,34 @@ import XCTest
 
 /// Contract revision 66 on a phone (`-AidenDemoAgentSlider`): the composer's
 /// slider chip opens the Agent Slider, a stop moves the chat, and the turn
-/// runs on that stop's model and level. The demo Mac's reply names the model
-/// and level the turn asked for.
+/// runs on that stop's model and level. The demo Mac's reply names the stop
+/// whose model and level the turn asked for.
 final class AidenAgentSliderUITests: XCTestCase {
     override func setUp() {
         continueAfterFailure = false
     }
 
     func testAStopChosenOnTheSliderIsTheModelTheTurnRunsOn() {
-        let app = AidenStateMatrix.launch(scenario: .busy, extraArguments: ["-AidenDemoAgentSlider"])
+        // An earlier run's model picks are remembered on the phone; a string
+        // reads as "nothing saved", so each run starts from the Mac's choice.
+        let app = AidenStateMatrix.launch(
+            scenario: .busy,
+            extraArguments: ["-AidenDemoAgentSlider", "-aiden.model-preference.v1", "reset"]
+        )
         AidenStateMatrix.openArea("Inbox", in: app)
         let chat = app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", "Draft release notes")).firstMatch
         XCTAssertTrue(chat.waitForExistence(timeout: 15), "No idle chat in the Inbox")
         hideOverlaySidebar(in: app)
         chat.tap()
 
-        // A new turn starts on the home stop.
+        // The chat is on its own stop, here the home stop. A copy cached on an
+        // earlier launch can show first, so wait for the Mac's chat.
         let chip = app.buttons["aiden.composer.agentSlider"].firstMatch
         XCTAssertTrue(chip.waitForExistence(timeout: 10), "The composer has no Agent Slider")
+        let deadline = Date().addingTimeInterval(10)
+        while !value(of: chip).contains("Balanced"), Date() < deadline {
+            RunLoop.current.run(until: Date().addingTimeInterval(0.25))
+        }
         XCTAssertTrue(value(of: chip).contains("Balanced"), "The chip read \(value(of: chip))")
         shoot("composer-home")
 
@@ -47,7 +57,7 @@ final class AidenAgentSliderUITests: XCTestCase {
         composer.typeText("Think harder about this.")
         app.buttons["Send message"].firstMatch.tap()
 
-        let reply = app.staticTexts["Answered on Claude Opus 4.5 at high effort."].firstMatch
+        let reply = app.staticTexts["Answered on the Deep stop."].firstMatch
         XCTAssertTrue(reply.waitForExistence(timeout: 15), "The turn didn't run on Deep's model and level")
         XCTAssertTrue(value(of: chip).contains("Deep"), "After the turn the chip read \(value(of: chip))")
         shoot("chat-answered-on-deep")
@@ -72,9 +82,12 @@ final class AidenAgentSliderUITests: XCTestCase {
     /// and takes the next touch.
     private func hideOverlaySidebar(in app: XCUIApplication) {
         let toggle = app.buttons["ToggleSidebar"].firstMatch
-        if toggle.exists, toggle.label == "Hide Sidebar" {
-            toggle.tap()
-            Thread.sleep(forTimeInterval: 0.5)
-        }
+        guard toggle.exists, toggle.label == "Hide Sidebar" else { return }
+        toggle.tap()
+        let shown = XCTNSPredicateExpectation(
+            predicate: NSPredicate(format: "label != %@", "Hide Sidebar"),
+            object: toggle
+        )
+        XCTAssertEqual(XCTWaiter.wait(for: [shown], timeout: 5), .completed, "The sidebar stayed over the page")
     }
 }

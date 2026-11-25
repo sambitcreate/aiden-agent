@@ -48,19 +48,27 @@ export interface AidenRemoteProviderProjection {
 }
 
 /**
- * One Agent Slider stop as a paired device sees it (revision 66). `providerId`
- * and `modelId` come together. `thinkingLevel` is the level a turn on this stop
- * runs with here: the stop's own level fitted to what its model offers, absent
+ * One Agent Slider stop as a paired device sees it (revision 66).
+ * `providerId` and `modelId` come together and only on a "ready" stop.
+ * `thinkingLevel` (ready stops only) is the level a turn on this stop runs
+ * with here: the stop's own level fitted to what its model offers, absent
  * when the stop has none or the model has no levels. `availability` is
- * "ready" or the first reason the stop cannot run from a paired device.
+ * "ready", the first reason the stop cannot run, or "computer-only" for a
+ * stop that runs on the computer but whose provider or model the phone
+ * catalog deliberately leaves out (an agent harness, an id past the length
+ * limit, an embedding model, or one past the size budget); such a stop
+ * carries no ids, labels or level. `providerLabel` is the configured
+ * provider's label and `modelLabel` the model's human name, never an id.
  */
 export interface AidenRemoteAgentSliderStopProjection {
   id: string;
   label: string;
   providerId?: string;
   modelId?: string;
+  providerLabel?: string;
+  modelLabel?: string;
   thinkingLevel?: GenerationThinkingLevel;
-  availability: "ready" | AgentSliderStopUnavailableReason;
+  availability: "ready" | AgentSliderStopUnavailableReason | "computer-only";
 }
 
 export interface AidenRemoteAgentSliderProjection {
@@ -77,8 +85,11 @@ export interface AidenRemoteModelsProjection {
   agentSlider?: AidenRemoteAgentSliderProjection;
 }
 
-/** The level `requested` runs with on a model offering `levels`, as the model defaults are fitted. */
-function fittedThinkingLevel(
+/**
+ * The level `requested` runs with on a model offering `levels`, as the model
+ * defaults are fitted. Undefined when the model offers no levels.
+ */
+export function fittedThinkingLevel(
   providerId: string,
   levels: readonly GenerationThinkingLevel[],
   requested: GenerationThinkingLevel | undefined,
@@ -92,9 +103,9 @@ function fittedThinkingLevel(
 
 /**
  * The host's slider for a paired device. A stop is checked like the desktop
- * checks it, and is also "model-missing" when its model is not in the catalog
- * this device was sent (an agent harness, an embedding model, or one past the
- * size budget), because a turn could not name it. Nothing is substituted.
+ * checks it; one that would run on the computer but whose provider or model
+ * this device's catalog leaves out is "computer-only", because a turn could
+ * not name it. Ids and the level go only with "ready". Nothing is substituted.
  */
 function projectAgentSlider(
   slider: AgentSliderSettings,
@@ -108,21 +119,34 @@ function projectAgentSlider(
   };
   return {
     homeStopId: slider.homeStopId,
-    stops: slider.stops.map((stop) => {
+    stops: slider.stops.map((stop): AidenRemoteAgentSliderStopProjection => {
+      const base = { id: stop.id, label: stop.label };
+      if (!stop.providerId || !stop.model) return { ...base, availability: "unassigned" };
+      if (isAcpHarnessProvider(stop.providerId)) return { ...base, availability: "computer-only" };
       const resolution = resolveAgentSliderStop(stop, inventory);
-      const projected = stop.providerId && stop.model
-        ? providers.find((provider) => provider.id === stop.providerId)?.models.find((model) => model.id === stop.model)
+      const configuredProvider = inventory.providers.find((provider) => provider.id === stop.providerId);
+      const providerLabel = configuredProvider ? { providerLabel: bounded(configuredProvider.label, 256) } : {};
+      if (!resolution.ok) {
+        const name = configuredProvider?.modelMetadata?.[stop.model]?.name;
+        const modelLabel = (resolution.reason === "not-signed-in" || resolution.reason === "hidden") && name
+          ? { modelLabel: bounded(name, 256) }
+          : {};
+        return { ...base, ...providerLabel, ...modelLabel, availability: resolution.reason };
+      }
+      const projectedProvider = providers.find((provider) => provider.id === stop.providerId);
+      const projected = projectedProvider?.models.find((model) => model.id === stop.model);
+      if (!projectedProvider || !projected) return { ...base, availability: "computer-only" };
+      const thinkingLevel = stop.thinkingLevel
+        ? fittedThinkingLevel(stop.providerId, (projected.thinkingLevels ?? []).filter(isGenerationThinkingLevel), stop.thinkingLevel)
         : undefined;
-      const availability = !resolution.ok ? resolution.reason : projected ? "ready" as const : "model-missing" as const;
-      const thinkingLevel = projected && stop.thinkingLevel
-        ? fittedThinkingLevel(stop.providerId!, (projected.thinkingLevels ?? []).filter(isGenerationThinkingLevel), stop.thinkingLevel)
-        : stop.thinkingLevel;
       return {
-        id: stop.id,
-        label: stop.label,
-        ...(stop.providerId && stop.model ? { providerId: stop.providerId, modelId: stop.model } : {}),
+        ...base,
+        providerId: stop.providerId,
+        modelId: stop.model,
+        providerLabel: projectedProvider.label,
+        modelLabel: projected.label,
         ...(thinkingLevel ? { thinkingLevel } : {}),
-        availability,
+        availability: "ready",
       };
     }),
   };
@@ -138,11 +162,19 @@ function agentSliderBytesBound(slider: AgentSliderSettings | undefined): number 
       label: stop.label,
       providerId: stop.providerId ?? "",
       modelId: stop.model ?? "",
+      // Labels are bounded to 256 characters; six bytes each covers any UTF-8 or JSON escape.
+      providerLabel: "x".repeat(256 * 6),
+      modelLabel: "x".repeat(256 * 6),
       thinkingLevel: "medium",
       availability: "provider-missing",
     })),
   };
   return Buffer.byteLength(JSON.stringify(widest), "utf8") + 16;
+}
+
+/** The host's Agent Slider when it has a readable one; what paired devices are shown. */
+export function readableAgentSlider(settings: AppSettings): AgentSliderSettings | undefined {
+  return settings.agentSliderUnreadable === true ? undefined : settings.agentSlider;
 }
 
 function bounded(value: string, maximum: number): string {
@@ -162,7 +194,7 @@ export class AidenRemoteModelService {
       this.options.listProviders(),
       this.options.getSettings(),
     ]);
-    const slider = settings.agentSliderUnreadable === true ? undefined : settings.agentSlider;
+    const slider = readableAgentSlider(settings);
     let serializedBytes = Buffer.byteLength('{"providers":[],"defaults":{}}', "utf8") +
       REMOTE_MODEL_CATALOG_RESERVE_BYTES +
       agentSliderBytesBound(slider);
@@ -263,11 +295,25 @@ export class AidenRemoteModelService {
     const selectedModel =
       selectedProvider?.models.find((model) => model.id === settings.lastModel && !model.hidden) ??
       selectedProvider?.models.find((model) => !model.hidden);
+    // With a slider, a new chat starts on the computer's last stop, level
+    // included, but only when the default is exactly that last model.
+    const lastThinkingLevel = slider &&
+      selectedProvider && selectedModel &&
+      selectedProvider.id === settings.lastProviderId &&
+      selectedModel.id === settings.lastModel &&
+      settings.lastThinkingLevel
+      ? fittedThinkingLevel(
+        selectedProvider.id,
+        (selectedModel.thinkingLevels ?? []).filter(isGenerationThinkingLevel),
+        settings.lastThinkingLevel,
+      )
+      : undefined;
     const projection: AidenRemoteModelsProjection = {
       providers,
       defaults: {
         ...(selectedProvider ? { providerId: selectedProvider.id } : {}),
         ...(selectedModel ? { modelId: selectedModel.id } : {}),
+        ...(lastThinkingLevel ? { thinkingLevel: lastThinkingLevel } : {}),
       },
       ...(slider ? { agentSlider: projectAgentSlider(slider, configured, providers, settings) } : {}),
     };

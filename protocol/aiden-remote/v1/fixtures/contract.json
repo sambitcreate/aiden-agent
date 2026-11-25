@@ -7340,7 +7340,8 @@
       ],
       "defaults": {
         "providerId": "provider_fixture",
-        "modelId": "model_fixture"
+        "modelId": "model_fixture",
+        "thinkingLevel": "high"
       },
       "agentSlider": {
         "stops": [
@@ -7349,6 +7350,8 @@
             "label": "Instant",
             "providerId": "provider_fixture",
             "modelId": "model_fixture_quick",
+            "providerLabel": "Fixture Provider",
+            "modelLabel": "Quick",
             "availability": "ready"
           },
           {
@@ -7356,6 +7359,8 @@
             "label": "Balanced",
             "providerId": "provider_fixture",
             "modelId": "model_fixture",
+            "providerLabel": "Fixture Provider",
+            "modelLabel": "Fixture Model",
             "thinkingLevel": "medium",
             "availability": "ready"
           },
@@ -7364,16 +7369,22 @@
             "label": "Deep",
             "providerId": "provider_fixture",
             "modelId": "model_fixture",
+            "providerLabel": "Fixture Provider",
+            "modelLabel": "Fixture Model",
             "thinkingLevel": "high",
             "availability": "ready"
           },
           {
             "id": "stop_3d4e5f6a",
             "label": "Elsewhere",
-            "providerId": "provider_fixture_other",
-            "modelId": "model_fixture_other",
-            "thinkingLevel": "max",
+            "providerLabel": "Other Provider",
+            "modelLabel": "Other Model",
             "availability": "not-signed-in"
+          },
+          {
+            "id": "stop_5f6a7b8c",
+            "label": "Agent",
+            "availability": "computer-only"
           },
           {
             "id": "stop_4e5f6a7b",
@@ -7388,7 +7399,8 @@
       "text": "Think harder about this.",
       "providerId": "provider_fixture",
       "modelId": "model_fixture",
-      "thinkingLevel": "high"
+      "thinkingLevel": "high",
+      "saveSelection": true
     },
     "chat": {
       "id": "chat_fixture_slider_01",

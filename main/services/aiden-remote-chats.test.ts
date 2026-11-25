@@ -76,6 +76,9 @@ function fixture(
     workspaceFolderRefusal?: ConstructorParameters<typeof AidenRemoteChatService>[0]["workspaceFolderRefusal"];
     deviceSupportsContinueInNewChat?: (deviceId: string) => Promise<boolean>;
     deviceSupportsAgentSlider?: (deviceId: string) => Promise<boolean>;
+    hostHasAgentSlider?: () => Promise<boolean>;
+    /** The levels the resolved model offers; low and high by default. */
+    modelThinkingLevels?: (modelId: string) => string[];
     noWorkspace?: ConstructorParameters<typeof AidenRemoteChatService>[0]["noWorkspace"];
     isFolderWorkspace?: ConstructorParameters<typeof AidenRemoteChatService>[0]["isFolderWorkspace"];
     deviceIsPeer?: ConstructorParameters<typeof AidenRemoteChatService>[0]["deviceIsPeer"];
@@ -115,6 +118,7 @@ function fixture(
   let begins = 0;
   let starts = 0;
   let lastGenerationOptions: Record<string, unknown> | null = null;
+  let lastAppendMeta: Record<string, unknown> | null = null;
   let lastParams: Record<string, unknown> | null = null;
   const preparedInvocations: PreparedSkillInvocation[] = [];
   let botArchived = fixtureOptions.botArchived === true;
@@ -184,6 +188,7 @@ function fixture(
       ...(fixtureOptions.readImage ? { readImage: fixtureOptions.readImage } : {}),
       get: async () => current ? structuredClone(current) : null,
       appendMessage: async (_id, message, meta) => {
+        lastAppendMeta = { ...meta } as Record<string, unknown>;
         if (!current || !meta?.isCurrent?.()) throw new Error("stale");
         appends += 1;
         const stored: ChatMessage = {
@@ -282,7 +287,7 @@ function fixture(
         return {
         providerId: providerId ?? "provider-1",
         modelId: modelId ?? "model-1",
-        thinkingLevels: ["low", "high"],
+        thinkingLevels: fixtureOptions.modelThinkingLevels?.(modelId ?? "model-1") ?? ["low", "high"],
         supportsImages: fixtureOptions.modelSupportsImages?.() ?? true,
         };
       },
@@ -324,6 +329,7 @@ function fixture(
     ...(fixtureOptions.deviceSupportsAgentSlider
       ? { deviceSupportsAgentSlider: fixtureOptions.deviceSupportsAgentSlider }
       : {}),
+    ...(fixtureOptions.hostHasAgentSlider ? { hostHasAgentSlider: fixtureOptions.hostHasAgentSlider } : {}),
     ...(fixtureOptions.attachments ? { attachments: fixtureOptions.attachments } : {}),
     ...(fixtureOptions.isTitlePending ? { isTitlePending: fixtureOptions.isTitlePending } : {}),
     notifyChanged: () => { notifications += 1; },
@@ -358,6 +364,7 @@ function fixture(
     starts: () => starts,
     lastGenerationOptions: () => lastGenerationOptions,
     lastParams: () => lastParams,
+    lastAppendMeta: () => lastAppendMeta,
     preparedInvocations: () => [...preparedInvocations],
     current: () => current ? structuredClone(current) : null,
     setBotArchived: (value: boolean) => { botArchived = value; },
@@ -1786,37 +1793,82 @@ test("remote turn atomically appends once, owns its stream, and replays the acce
   );
 });
 
-test("a slider phone's turn saves its level as the chat's own with the message; other phones and refused sends leave it", async () => {
+test("a slider phone's turn saves the level that runs as the chat's own only when it asks, names its model, and the host keeps a slider", async () => {
   const sliderPhone = async (deviceId: string) => deviceId === "slider-phone";
-  const app = fixture(chat({ thinkingLevel: "low" }), { deviceSupportsAgentSlider: sliderPhone });
+  const app = fixture(chat({ thinkingLevel: "low" }), {
+    deviceSupportsAgentSlider: sliderPhone,
+    hostHasAgentSlider: async () => true,
+    modelThinkingLevels: (modelId) => modelId === "plain-model" ? [] : ["low", "high"],
+  });
   assert.equal(app.service.supportsAgentSlider, true);
   assert.equal((await app.service.get("chat-1")).thinkingLevel, "low", "the chat's own level is projected");
+  let keys = 0;
+  const send = (deviceId: string, body: Record<string, unknown>) =>
+    app.service.startTurn(deviceId, "chat-1", `turn-start-key-slider-${String(keys += 1).padStart(2, "0")}`, {
+      text: "Hello", ...body,
+    } as Parameters<typeof app.service.startTurn>[3]);
 
-  await app.service.startTurn("older-phone", "chat-1", "turn-start-key-slider-01", {
-    text: "Hello", providerId: "provider-1", modelId: "model-1", thinkingLevel: "high",
-  });
+  await send("older-phone", { providerId: "provider-1", modelId: "model-1", thinkingLevel: "high", saveSelection: true });
   assert.equal(app.current()?.thinkingLevel, "low", "a phone without the slider never changes the chat's level");
-
-  // A level the model does not offer is refused before anything is written.
+  // A phone without the slider is still refused a level the model does not offer, before anything is written.
   const appendsBefore = app.appends();
-  await assert.rejects(app.service.startTurn("slider-phone", "chat-1", "turn-start-key-slider-02", {
-    text: "Hello", providerId: "provider-1", modelId: "model-1", thinkingLevel: "medium",
-  }));
+  await assert.rejects(
+    send("older-phone", { providerId: "provider-1", modelId: "model-1", thinkingLevel: "xhigh" }),
+    /That thinking level is unavailable/u,
+  );
   assert.equal(app.appends(), appendsBefore);
-  assert.equal(app.current()?.thinkingLevel, "low");
 
-  await app.service.startTurn("slider-phone", "chat-1", "turn-start-key-slider-03", {
-    text: "Think harder", providerId: "provider-1", modelId: "model-1", thinkingLevel: "high",
-  });
+  // Without saveSelection, or without naming the model, the level runs for this turn only.
+  await send("slider-phone", { providerId: "provider-1", modelId: "model-1", thinkingLevel: "high" });
+  assert.equal(app.lastParams()?.thinkingLevel, "high");
+  assert.equal(app.current()?.thinkingLevel, "low");
+  await send("slider-phone", { thinkingLevel: "high", saveSelection: true });
+  assert.equal(app.current()?.thinkingLevel, "low", "a turn that names no model is not a stop");
+  await send("slider-phone", {});
+  assert.equal(app.current()?.thinkingLevel, "low", "a bare turn never clears the chat's level");
+
+  await send("slider-phone", { text: "Think harder", providerId: "provider-1", modelId: "model-1", thinkingLevel: "high", saveSelection: true });
   const projected = await app.service.get("chat-1");
   assert.equal(projected.thinkingLevel, "high");
   assert.equal(projected.messages[projected.messages.length - 2]?.text, "Think harder", "the level arrived with the message it was sent with");
 
-  // A stop without a level clears the chat's own, so the model's saved level applies again.
-  await app.service.startTurn("slider-phone", "chat-1", "turn-start-key-slider-04", {
-    text: "Quick one", providerId: "provider-1", modelId: "model-1",
-  });
+  // A level the desktop saved unfitted runs, and is saved, at the level the model offers instead of failing the send.
+  await send("slider-phone", { providerId: "provider-1", modelId: "model-1", thinkingLevel: "xhigh", saveSelection: true });
+  assert.equal(app.lastParams()?.thinkingLevel, "high");
+  assert.equal(app.current()?.thinkingLevel, "high");
+
+  // A model with no levels runs with none and saves none.
+  await send("slider-phone", { providerId: "provider-1", modelId: "plain-model", thinkingLevel: "high", saveSelection: true });
+  assert.equal(app.lastParams()?.thinkingLevel, undefined);
   assert.equal("thinkingLevel" in (await app.service.get("chat-1")), false);
+
+  // A chosen stop without a level clears the chat's own, so the model's saved level applies again.
+  await send("slider-phone", { providerId: "provider-1", modelId: "model-1", thinkingLevel: "high", saveSelection: true });
+  await send("slider-phone", { providerId: "provider-1", modelId: "model-1", saveSelection: true });
+  assert.equal("thinkingLevel" in (await app.service.get("chat-1")), false);
+
+  await assert.rejects(send("slider-phone", { saveSelection: "yes" }), /bounded text/u);
+
+  // No readable slider on the host (or no answer), or a Bot chat: the level is never saved.
+  for (const hostHasAgentSlider of [async () => false, undefined]) {
+    const noSlider = fixture(chat({ thinkingLevel: "low" }), {
+      deviceSupportsAgentSlider: sliderPhone,
+      ...(hostHasAgentSlider ? { hostHasAgentSlider } : {}),
+    });
+    await noSlider.service.startTurn("slider-phone", "chat-1", "turn-start-key-no-slider", {
+      text: "Hello", providerId: "provider-1", modelId: "model-1", thinkingLevel: "high", saveSelection: true,
+    } as Parameters<typeof app.service.startTurn>[3]);
+    assert.equal(noSlider.current()?.thinkingLevel, "low");
+    assert.equal(noSlider.lastAppendMeta()?.thinkingLevel, undefined);
+  }
+  const bot = fixture(chat({ botId: "bot-1", providerId: "provider-1", model: "model-1" }), {
+    deviceSupportsAgentSlider: sliderPhone,
+    hostHasAgentSlider: async () => true,
+  });
+  await bot.service.startTurn("slider-phone", "chat-1", "turn-start-key-bot-slider", {
+    text: "Hello", providerId: "provider-1", modelId: "model-1", thinkingLevel: "high", saveSelection: true,
+  } as Parameters<typeof app.service.startTurn>[3]);
+  assert.equal(bot.lastAppendMeta()?.thinkingLevel, undefined, "a Bot chat keeps its own level");
 
   const unwired = fixture(chat({ thinkingLevel: "low" }));
   assert.equal(unwired.service.supportsAgentSlider, false);

@@ -3099,11 +3099,14 @@ struct AidenModelCatalog: Codable, Equatable, Sendable {
     /// no readable slider, or a slider that breaks the contract; the composer
     /// then offers only the model menu.
     var agentSlider: AidenAgentSlider? = nil
+    /// True when the Mac sent a slider this phone couldn't read, so Settings
+    /// says so instead of asking the person to set one up.
+    var agentSliderUnreadable = false
 }
 
 extension AidenModelCatalog {
     private enum CodingKeys: String, CodingKey {
-        case providers, defaults, agentSlider
+        case providers, defaults, agentSlider, agentSliderUnreadable
     }
 
     init(from decoder: Decoder) throws {
@@ -3111,7 +3114,10 @@ extension AidenModelCatalog {
         providers = try values.decode([AidenProvider].self, forKey: .providers)
         defaults = try values.decode([String: String].self, forKey: .defaults)
         // A slider that breaks the contract must not cost the phone its model list.
+        let sent = values.contains(.agentSlider) && (try? values.decodeNil(forKey: .agentSlider)) == false
         agentSlider = try? values.decodeIfPresent(AidenAgentSlider.self, forKey: .agentSlider)
+        agentSliderUnreadable = (sent && agentSlider == nil)
+            || ((try? values.decodeIfPresent(Bool.self, forKey: .agentSliderUnreadable)) ?? nil) == true
     }
 }
 
@@ -3124,12 +3130,24 @@ enum AidenAgentSliderAvailability: String, Codable, Equatable, Sendable {
     case notSignedIn = "not-signed-in"
     case modelMissing = "model-missing"
     case hidden
+    /// The stop runs on the Mac, but on a provider or model the Mac keeps off
+    /// phones (an agent harness, for one). It carries no provider or model.
+    case computerOnly = "computer-only"
+    /// A reason a newer Mac sends, or a level this phone doesn't know: the
+    /// stop can't be chosen here, and the rest of the slider stays.
+    case unknown
+
+    init(from decoder: Decoder) throws {
+        let raw = try decoder.singleValueContainer().decode(String.self)
+        self = Self(rawValue: raw) ?? .unknown
+    }
 }
 
 /// Revision 66: one stop of `GET /models` `agentSlider`. Provider and model
-/// come together, a level only with a model, and a stop is `unassigned`
-/// exactly when it names no model. `thinkingLevel` is the level a turn on this
-/// stop runs with on the Mac, already fitted to the model.
+/// come together and only on a stop that can run; a level only with a model.
+/// `providerLabel` and `modelLabel` are the Mac's display names, so the phone
+/// never shows an id. `thinkingLevel` is the level a turn on this stop runs
+/// with on the Mac, already fitted to the model.
 struct AidenAgentSliderStop: Codable, Equatable, Identifiable, Sendable {
     static let labelMaximum = 24
     /// `GENERATION_THINKING_LEVELS` in `renderer/shared/generation-thinking.ts`.
@@ -3139,6 +3157,10 @@ struct AidenAgentSliderStop: Codable, Equatable, Identifiable, Sendable {
     let label: String
     let providerId: String?
     let modelId: String?
+    /// The provider's display name on the Mac; nil when the Mac doesn't know it.
+    let providerLabel: String?
+    /// The model's display name on the Mac; nil for a stop with no model.
+    let modelLabel: String?
     let thinkingLevel: String?
     let availability: AidenAgentSliderAvailability
 
@@ -3147,6 +3169,8 @@ struct AidenAgentSliderStop: Codable, Equatable, Identifiable, Sendable {
         label: String,
         providerId: String? = nil,
         modelId: String? = nil,
+        providerLabel: String? = nil,
+        modelLabel: String? = nil,
         thinkingLevel: String? = nil,
         availability: AidenAgentSliderAvailability
     ) {
@@ -3154,6 +3178,8 @@ struct AidenAgentSliderStop: Codable, Equatable, Identifiable, Sendable {
         self.label = label
         self.providerId = providerId
         self.modelId = modelId
+        self.providerLabel = providerLabel
+        self.modelLabel = modelLabel
         self.thinkingLevel = thinkingLevel
         self.availability = availability
     }
@@ -3164,25 +3190,43 @@ struct AidenAgentSliderStop: Codable, Equatable, Identifiable, Sendable {
         label = try values.decode(String.self, forKey: .label)
         providerId = try aidenDecodeOptionalNonNull(String.self, from: values, forKey: .providerId)
         modelId = try aidenDecodeOptionalNonNull(String.self, from: values, forKey: .modelId)
-        thinkingLevel = try aidenDecodeOptionalNonNull(String.self, from: values, forKey: .thinkingLevel)
-        availability = try values.decode(AidenAgentSliderAvailability.self, forKey: .availability)
+        // Display names are words only: a bad one is dropped, never the stop.
+        providerLabel = Self.displayName(try? values.decodeIfPresent(String.self, forKey: .providerLabel))
+        modelLabel = Self.displayName(try? values.decodeIfPresent(String.self, forKey: .modelLabel))
+        let level = try aidenDecodeOptionalNonNull(String.self, from: values, forKey: .thinkingLevel)
+        let sent = try values.decode(AidenAgentSliderAvailability.self, forKey: .availability)
         guard Self.isValidID(id),
               Self.isValidLabel(label),
               (providerId == nil) == (modelId == nil),
               providerId.map({ !$0.isEmpty && $0.unicodeScalars.count <= 256 }) ?? true,
               modelId.map({ !$0.isEmpty && $0.unicodeScalars.count <= 512 }) ?? true,
-              thinkingLevel.map({ modelId != nil && Self.thinkingLevels.contains($0) }) ?? true,
-              (modelId == nil) == (availability == .unassigned) else {
+              sent != .ready || modelId != nil,
+              sent != .unassigned || modelId == nil else {
             throw DecodingError.dataCorruptedError(
                 forKey: .id,
                 in: values,
                 debugDescription: "Invalid Agent Slider stop."
             )
         }
+        // A level this phone doesn't know can't be sent as the stop's own, so
+        // the stop can't be chosen here; the rest of the slider stays.
+        if let level, !Self.thinkingLevels.contains(level) {
+            thinkingLevel = nil
+            availability = .unknown
+        } else {
+            thinkingLevel = modelId == nil ? nil : level
+            availability = sent
+        }
     }
 
     private enum CodingKeys: String, CodingKey {
-        case id, label, providerId, modelId, thinkingLevel, availability
+        case id, label, providerId, modelId, providerLabel, modelLabel, thinkingLevel, availability
+    }
+
+    private static func displayName(_ value: String??) -> String? {
+        guard let value = value ?? nil else { return nil }
+        let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.isEmpty || trimmed.unicodeScalars.count > 256 ? nil : trimmed
     }
 
     static func isValidID(_ value: String) -> Bool {
@@ -3328,6 +3372,11 @@ struct AidenTurnStart: Codable, Equatable, Sendable {
     let thinkingLevel: String?
     let attachmentIds: [String]?
     let skill: AidenSkillInvocation?
+    /// Revision 66: true only when the person picked this provider, model and
+    /// level on the phone for this chat (a stop or a model). A Mac that offers
+    /// `chat:agent-slider` then keeps the level as the chat's own; otherwise
+    /// the level is for this turn alone. Absent, never false, on the wire.
+    let saveSelection: Bool?
 
     init(
         text: String,
@@ -3335,7 +3384,8 @@ struct AidenTurnStart: Codable, Equatable, Sendable {
         modelId: String? = nil,
         thinkingLevel: String? = nil,
         attachmentIds: [String]? = nil,
-        skill: AidenSkillInvocation? = nil
+        skill: AidenSkillInvocation? = nil,
+        saveSelection: Bool = false
     ) {
         self.text = text
         self.providerId = providerId
@@ -3343,6 +3393,7 @@ struct AidenTurnStart: Codable, Equatable, Sendable {
         self.thinkingLevel = thinkingLevel
         self.attachmentIds = attachmentIds
         self.skill = skill
+        self.saveSelection = saveSelection && providerId != nil && modelId != nil ? true : nil
     }
 }
 
