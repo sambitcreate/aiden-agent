@@ -342,6 +342,10 @@ export function guestSshTunnelArgs(
     "-o",
     "ExitOnForwardFailure=yes",
     "-o",
+    "PermitLocalCommand=yes",
+    "-o",
+    `LocalCommand=printf '${BOT_COMPUTER_SSH_TUNNEL_READY_MARKER}\\n'`,
+    "-o",
     "UpdateHostKeys=no",
     "-o",
     `ConnectTimeout=${connectTimeoutSeconds}`,
@@ -360,6 +364,8 @@ export function guestSshTunnelArgs(
     target.host,
   ];
 }
+
+export const BOT_COMPUTER_SSH_TUNNEL_READY_MARKER = "AIDEN_TUNNEL_READY";
 
 export interface GuestVncTunnel {
   readonly host: "127.0.0.1";
@@ -477,8 +483,22 @@ export async function openGuestVncTunnel(
       detached: false,
       env: deps.env,
       shell: false,
-      stdio: ["ignore", "ignore", "pipe"],
+      stdio: ["ignore", "pipe", "pipe"],
       windowsHide: true,
+    });
+    let stdout = "";
+    let tunnelReady = false;
+    let resolveReady: (() => void) | undefined;
+    const readyPromise = new Promise<void>((resolve) => {
+      resolveReady = resolve;
+    });
+    child.stdout?.on("data", (chunk: Buffer) => {
+      if (tunnelReady) return;
+      stdout = `${stdout}${chunk.toString("utf8")}`.slice(-4_096);
+      if (stdout.split(/\r?\n/u).includes(BOT_COMPUTER_SSH_TUNNEL_READY_MARKER)) {
+        tunnelReady = true;
+        resolveReady?.();
+      }
     });
     let stderr = "";
     child.stderr?.on("data", (chunk: Buffer) => {
@@ -503,18 +523,58 @@ export async function openGuestVncTunnel(
 
     const deadline = Date.now() + timeoutMs;
     try {
+      // Wait for OpenSSH's LocalCommand readiness marker BEFORE probing the loopback
+      // port: OpenSSH runs LocalCommand strictly after authenticating and binding `-L`
+      // (with `ExitOnForwardFailure=yes`), closing the pre-auth loopback impostor window.
+      while (!tunnelReady && !exited) {
+        if (options.signal?.aborted) {
+          throw new BotComputerError("cancelled", "Starting the computer was cancelled.");
+        }
+        const remaining = deadline - Date.now();
+        if (remaining <= 0) {
+          throw new BotComputerError("start_failed", "The computer's screen tunnel didn't open in time.");
+        }
+        await Promise.race([
+          readyPromise,
+          onExit,
+          new Promise<void>((resolve) => {
+            const onAbort = () => {
+              clearTimeout(timer);
+              resolve();
+            };
+            const timer = setTimeout(() => {
+              options.signal?.removeEventListener("abort", onAbort);
+              resolve();
+            }, Math.min(remaining, 100));
+            options.signal?.addEventListener("abort", onAbort, { once: true });
+          }),
+        ]);
+      }
+      if (exited || !tunnelReady) {
+        throw exitError ?? new BotComputerError("start_failed", "The computer's screen tunnel closed before opening.");
+      }
+
       while (!exited) {
         if (options.signal?.aborted) {
           throw new BotComputerError("cancelled", "Starting the computer was cancelled.");
         }
         if ((await probeLoopbackRfbBanner(localPort, 500)) && !exited && child.exitCode === null) {
           let closed = false;
+          const cleanupStreams = () => {
+            child.stdout?.destroy();
+            child.stderr?.destroy();
+          };
+          child.once("exit", () => {
+            closed = true;
+            cleanupStreams();
+          });
           return {
             host: "127.0.0.1",
             port: localPort,
             close: async () => {
               if (closed) return;
               closed = true;
+              cleanupStreams();
               await stopChildProcess(child);
             },
           };

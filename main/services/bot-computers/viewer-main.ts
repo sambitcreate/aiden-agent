@@ -51,11 +51,18 @@ export function createBotComputerViewer(deps: BotComputerViewerDependencies): Bo
   const log = deps.log ?? (() => undefined);
   const startHub = deps.startHub ?? startBotComputerViewerHub;
   const startProxy = deps.startProxy ?? startDeviceHubProxy;
-  /** VM name → Bot, for computers a grant was lent for. */
-  const vms = new Map<string, string>();
+  /** VM name → set of granted Bots, for computers a grant was lent for. */
+  const vms = new Map<string, Set<string>>();
   let running: Promise<{ hub: BotComputerViewerHub; proxy: DeviceHubProxy }> | undefined;
   let current: { hub: BotComputerViewerHub; proxy: DeviceHubProxy } | undefined;
   let closed = false;
+
+  const firstBotForVm = (vmName: string): string | undefined => {
+    const members = vms.get(vmName);
+    if (!members) return undefined;
+    for (const botId of members) return botId;
+    return undefined;
+  };
 
   const possessive = async (botId: string) => {
     const name = (await deps.botName?.(botId)) ?? "The Bot";
@@ -78,7 +85,8 @@ export function createBotComputerViewer(deps: BotComputerViewerDependencies): Bo
       const key = randomBytes(32).toString("base64url");
       const hub = await startHub({
         key,
-        botForVm: (vmName) => vms.get(vmName),
+        botForVm: (vmName) => firstBotForVm(vmName),
+        botsForVm: (vmName) => vms.get(vmName),
         screen: liveScreen,
         control: deps.control,
         touch: (botId) => deps.host.touch(botId),
@@ -107,22 +115,28 @@ export function createBotComputerViewer(deps: BotComputerViewerDependencies): Bo
     return running;
   };
 
-  // A computer that stops, restarts on another VM or loses its VM ends its viewers; the tab reconnects.
+  // A computer that stops, restarts on another VM or loses all granted Bots ends its viewers; the tab reconnects.
   const unsubscribe = deps.host.onChange((changed) => {
-    for (const [vmName, botId] of [...vms]) {
-      if (changed !== undefined && changed !== botId) continue;
-      void deps.host
-        .computer(botId)
-        .then((computer) => {
-          if (vms.get(vmName) !== botId) return;
-          if (!computer || computer.vmName !== vmName) {
-            vms.delete(vmName);
-            current?.hub.closeVm(vmName);
-          } else if (computer.state !== "running") {
-            current?.hub.closeVm(vmName);
-          }
-        })
-        .catch((error: unknown) => log("Could not check a viewed Bot computer.", error));
+    for (const [vmName, botIds] of [...vms]) {
+      const toCheck = changed !== undefined ? (botIds.has(changed) ? [changed] : []) : [...botIds];
+      for (const botId of toCheck) {
+        void deps.host
+          .computer(botId)
+          .then((computer) => {
+            const members = vms.get(vmName);
+            if (!members || !members.has(botId)) return;
+            if (!computer || computer.vmName !== vmName) {
+              members.delete(botId);
+              if (members.size === 0) {
+                vms.delete(vmName);
+                current?.hub.closeVm(vmName);
+              }
+            } else if (computer.state !== "running") {
+              current?.hub.closeVm(vmName);
+            }
+          })
+          .catch((error: unknown) => log("Could not check a viewed Bot computer.", error));
+      }
     }
   });
 
@@ -137,7 +151,19 @@ export function createBotComputerViewer(deps: BotComputerViewerDependencies): Bo
         throw new BotComputerError("cancelled", `${await possessive(botId)} computer isn't running.`);
       }
       const vmName = (await deps.host.computer(botId))?.vmName ?? computer.vmName;
-      vms.set(vmName, botId);
+      for (const [otherVm, members] of [...vms]) {
+        if (otherVm === vmName || !members.delete(botId)) continue;
+        if (members.size === 0) {
+          vms.delete(otherVm);
+          current?.hub.closeVm(otherVm);
+        }
+      }
+      let members = vms.get(vmName);
+      if (!members) {
+        members = new Set();
+        vms.set(vmName, members);
+      }
+      members.add(botId);
       const { proxy } = await start();
       return { hostId: BOT_COMPUTER_VIEWER_HOST_ID, deviceId: vmName, grant: proxy.mintGrant() };
     },

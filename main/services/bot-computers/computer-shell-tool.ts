@@ -16,14 +16,17 @@ import type { AgentTool, AgentToolResult } from "@earendil-works/pi-agent-core";
 import { quoteRemoteArg } from "../devices/ssh-device-script.js";
 import { boundedToolOutput } from "../tool-output-context.js";
 import { BOT_COMPUTER_UNATTENDED_WAIT_MS, botComputerUnattendedGaveUp, waitForBotWithin, type BotComputerGiveBackBudget } from "./control.js";
+import type { BotComputerToolState } from "./computer-tool.js";
 import {
   BOT_COMPUTER_LINUX_SHELL_USER,
   BOT_COMPUTER_SHELL_TOOL_NAME,
   BotComputerError,
   BotComputerTakenOverError,
+  type BotComputerConnection,
   type BotComputerControl,
   type BotComputerGuestCommandResult,
   type BotComputerHost,
+  type BotComputerLeaseRelease,
   type BotComputerStartReason,
 } from "./types.js";
 import { botComputerWorkspaceDirName } from "./vm-names.js";
@@ -97,6 +100,7 @@ export interface BotComputerShellDependencies {
   host: Pick<BotComputerHost, "ensureRunning" | "runGuestCommand" | "touch"> &
     Partial<Pick<BotComputerHost, "acquireLease">>;
   control: Pick<BotComputerControl, "controller" | "run" | "waitForBot">;
+  state?: Pick<BotComputerToolState, "noteVmMutation">;
   botName(botId: string): Promise<string>;
   /** How long an unattended turn waits for Give back in all (default `BOT_COMPUTER_UNATTENDED_WAIT_MS`). */
   unattendedWaitMs?: number;
@@ -127,6 +131,37 @@ export async function formatBotComputerShellResult(result: BotComputerGuestComma
   return textResult(await boundedToolOutput(`${reason}${combined ? `\n${combined}` : ""}${cut}`, BOT_COMPUTER_SHELL_RESULT_CHARS), true);
 }
 
+function combineAbortSignals(
+  first: AbortSignal | undefined,
+  second: AbortSignal | undefined,
+): { signal: AbortSignal | undefined; dispose(): void } {
+  if (!first) return { signal: second, dispose: () => undefined };
+  if (!second) return { signal: first, dispose: () => undefined };
+  const controller = new AbortController();
+  const forward = (source: AbortSignal) => {
+    if (!controller.signal.aborted) controller.abort(source.reason);
+  };
+  if (first.aborted) {
+    forward(first);
+    return { signal: controller.signal, dispose: () => undefined };
+  }
+  if (second.aborted) {
+    forward(second);
+    return { signal: controller.signal, dispose: () => undefined };
+  }
+  const onFirst = () => forward(first);
+  const onSecond = () => forward(second);
+  first.addEventListener("abort", onFirst, { once: true });
+  second.addEventListener("abort", onSecond, { once: true });
+  return {
+    signal: controller.signal,
+    dispose: () => {
+      first.removeEventListener("abort", onFirst);
+      second.removeEventListener("abort", onSecond);
+    },
+  };
+}
+
 export function createBotComputerShellTool(
   botId: string,
   deps: BotComputerShellDependencies,
@@ -152,8 +187,14 @@ export function createBotComputerShellTool(
         progress(`Waiting for the person to give ${owner}'s computer back.`);
         return waitForBotWithin(deps.control, botId, signal, giveBackBudget);
       };
-      let releaseLease: (() => void) | undefined;
+      let releaseLease: BotComputerLeaseRelease | undefined;
+      let leaseSignal: AbortSignal | undefined;
+      let disposeCombined: (() => void) | undefined;
+      let connection: BotComputerConnection | undefined;
+      let ranCommand = false;
       const releaseNow = () => {
+        disposeCombined?.();
+        disposeCombined = undefined;
         const release = releaseLease;
         releaseLease = undefined;
         release?.();
@@ -166,23 +207,28 @@ export function createBotComputerShellTool(
             return textResult(botComputerUnattendedGaveUp(`${owner}'s`), true);
           }
           releaseLease = await deps.host.acquireLease?.(botId, { signal, onProgress: progress });
+          leaseSignal = releaseLease?.signal;
           if (deps.control.controller(botId) === "person") {
             releaseNow();
             continue;
           }
           break;
         }
-        await deps.host.ensureRunning(botId, { reason, signal, onProgress: progress });
+        const combined = combineAbortSignals(signal, leaseSignal);
+        disposeCombined = combined.dispose;
+        const effectiveSignal = combined.signal;
+        connection = await deps.host.ensureRunning(botId, { reason, signal: effectiveSignal, onProgress: progress });
         const remoteCommand = botComputerShellCommand(command, BOT_COMPUTER_LINUX_SHELL_USER, {
           botDir: botComputerWorkspaceDirName(botId),
         });
-        const result = await deps.control.run(botId, signal, (actionSignal) =>
-          deps.host.runGuestCommand(botId, remoteCommand, {
+        const result = await deps.control.run(botId, effectiveSignal, (actionSignal) => {
+          ranCommand = true;
+          return deps.host.runGuestCommand(botId, remoteCommand, {
             timeoutMs: BOT_COMPUTER_SHELL_TIMEOUT_MS,
             maxOutputBytes: BOT_COMPUTER_SHELL_OUTPUT_BYTES,
             signal: actionSignal,
-          }),
-        );
+          });
+        });
         return await formatBotComputerShellResult(result);
       } catch (error) {
         if (error instanceof BotComputerTakenOverError) {
@@ -193,9 +239,19 @@ export function createBotComputerShellTool(
           return textResult(back ? stopped : `${stopped} ${botComputerUnattendedGaveUp(`${owner}'s`)}`, true);
         }
         if (signal?.aborted) throw signal.reason instanceof Error ? signal.reason : error;
+        if (leaseSignal?.aborted) {
+          const message =
+            leaseSignal.reason instanceof Error
+              ? leaseSignal.reason.message
+              : "The Bot's computer lease ended before the command finished.";
+          return textResult(message, true);
+        }
         if (error instanceof BotComputerError) return textResult(error.message, true);
         return textResult(`Aiden couldn't run the command in ${owner}'s computer. Try again.`, true);
       } finally {
+        if (ranCommand && connection) {
+          deps.state?.noteVmMutation?.(connection.vmName, botId);
+        }
         releaseNow();
         deps.host.touch(botId);
       }

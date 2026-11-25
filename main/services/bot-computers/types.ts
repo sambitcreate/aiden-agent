@@ -36,6 +36,7 @@ export interface BotComputerConnection {
 
 export type BotComputerStartReason = "tool" | "routine" | "viewer";
 export type BotComputerStopReason = "idle" | "pause" | "person" | "quit" | "limit";
+export type BotComputerLeaseRelease = (() => void) & { readonly signal?: AbortSignal };
 
 export interface BotComputerGuestCommandResult {
   exitCode: number | null;
@@ -63,7 +64,7 @@ export interface BotComputerHost {
    * called; Remove everything waits for those called before it, and those called after wait for it.
    */
   give(botId: string): Promise<BotComputerStatus>;
-  reset(botId: string): Promise<BotComputerStatus>;
+  reset(botId: string, options?: { force?: boolean }): Promise<BotComputerStatus>;
   /** Idempotent: unassigns the Bot (and deletes its dedicated VM if no other Bot uses it; never deletes `"shared"`). */
   deleteForBot(botId: string): Promise<void>;
   /** Assign a Bot to `"shared"`, an existing Linux computer, or a newly cloned dedicated Linux computer. */
@@ -75,15 +76,17 @@ export interface BotComputerHost {
   /** Delete a Linux computer; refuses while Bots are assigned unless `options.force` is true. */
   deleteComputer(computerId: string, options?: { force?: boolean }): Promise<void>;
   /** Stop, delete, and re-clone a Linux computer from the current `aiden-base`. */
-  resetComputer(computerId: string): Promise<BotComputerVmStatus>;
+  resetComputer(computerId: string, options?: { force?: boolean }): Promise<BotComputerVmStatus>;
   /**
    * Acquire exclusive FIFO turn access to the Bot's assigned computer. Returns
-   * a release function. Cancelling `signal` while queued removes the Bot cleanly.
+   * a release function carrying an optional `signal` that aborts if the lease is
+   * revoked (e.g. reassignment or forced reset/delete). Cancelling `signal`
+   * while queued removes the Bot cleanly.
    */
   acquireLease(
     botId: string,
     options?: { signal?: AbortSignal; onProgress?(text: string): void },
-  ): Promise<() => void>;
+  ): Promise<BotComputerLeaseRelease>;
   ensureRunning(
     botId: string,
     options: { reason: BotComputerStartReason; signal?: AbortSignal; onProgress?(text: string): void },

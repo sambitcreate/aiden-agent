@@ -5,6 +5,7 @@ import {
   BOT_COMPUTER_SHARED_DEFAULT_NAME,
   BOT_COMPUTER_SHARED_ID,
   DEFAULT_BOT_COMPUTERS_SETTINGS,
+  parseBotComputerName,
   type BotComputerKind,
   type BotComputersSettings,
 } from "../../../renderer/shared/bot-computers.js";
@@ -99,7 +100,17 @@ export function emptyBotComputersState(): BotComputersState {
 }
 
 const COMPUTER_ID_PATTERN = /^[a-z0-9][a-z0-9_-]{0,63}$/u;
-const RESERVED_KEYS = new Set(["__proto__", "constructor", "prototype", "tostring", "valueof", "hasownproperty"]);
+const RESERVED_KEYS = new Set([
+  "__proto__",
+  "constructor",
+  "prototype",
+  "tostring",
+  "tolocalestring",
+  "valueof",
+  "hasownproperty",
+  "isprototypeof",
+  "propertyisenumerable",
+]);
 
 function isSafeRecordKey(key: string): boolean {
   return key.length > 0 && !RESERVED_KEYS.has(key.toLowerCase());
@@ -217,8 +228,14 @@ export function parseBotComputersState(value: unknown): BotComputersState {
       const entry = raw as Record<string, unknown>;
       const vmName = text(entry.vmName);
       const kind = entry.kind === "shared" || entry.kind === "dedicated" ? entry.kind : undefined;
-      const name =
-        text(entry.name, 64) ?? (id === BOT_COMPUTER_SHARED_ID ? BOT_COMPUTER_SHARED_DEFAULT_NAME : "Dedicated computer");
+      let name = id === BOT_COMPUTER_SHARED_ID ? BOT_COMPUTER_SHARED_DEFAULT_NAME : "Dedicated computer";
+      if (entry.name !== undefined) {
+        try {
+          name = parseBotComputerName(entry.name);
+        } catch {
+          // Fall back to safe default name when disk value contains invalid/control/Cf chars.
+        }
+      }
       const baseBuild = typeof entry.baseBuild === "string" && entry.baseBuild.length <= 32 ? entry.baseBuild : undefined;
       const createdAt = time(entry.createdAt);
       if (

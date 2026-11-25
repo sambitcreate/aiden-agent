@@ -19,6 +19,7 @@ function services(options: { guestDriver?: boolean | "unreadable" } = {}) {
       throw new Error("no computer is started while the tools are built");
     },
     touch: () => {},
+    acquireLease: async () => () => {},
     runGuestCommand: async () => {
       throw new Error("no command runs while the tools are built");
     },

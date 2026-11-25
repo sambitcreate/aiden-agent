@@ -447,4 +447,8 @@ test("update_bot scopes listed computers per calling Bot and refuses attaching t
     () => service.call(BOT, { computer: { kind: "existing", computerId: "vm-other" } }, { owner: true }),
     /another Bot's dedicated computer/u,
   );
+
+  // Passing an unchanged computer ("shared" while already on "shared") alongside a rename does NOT widen/hold.
+  const renameOut = await service.call(BOT, { name: "Chief 2", computer: "shared" }, { owner: true });
+  assert.match(renameOut, /Settings updated: Name: Chief → Chief 2/u);
 });

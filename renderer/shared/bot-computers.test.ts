@@ -11,6 +11,7 @@ import {
   parseBotComputerId,
   parseBotComputerName,
   parseBotComputerPointer,
+  parseBotComputerResetOptions,
   parseBotComputersSettingsPatch,
   parseBotComputersStatus,
   parseBotComputerViewerGrant,
@@ -134,7 +135,17 @@ test("shared/selectable computer parsers validate ids, names, targets, delete op
   assert.equal(parseBotComputerId("vm-123abc"), "vm-123abc");
   assert.throws(() => parseBotComputerId("../escape"), /Invalid computer id/u);
   assert.throws(() => parseBotComputerId("UPPER"), /Invalid computer id/u);
-  for (const reserved of ["__proto__", "constructor", "prototype", "tostring", "valueof", "hasownproperty"]) {
+  for (const reserved of [
+    "__proto__",
+    "constructor",
+    "prototype",
+    "tostring",
+    "tolocalestring",
+    "valueof",
+    "hasownproperty",
+    "isprototypeof",
+    "propertyisenumerable",
+  ]) {
     assert.throws(() => parseBotComputerId(reserved), /Invalid computer id/u, reserved);
   }
 
@@ -158,6 +169,10 @@ test("shared/selectable computer parsers validate ids, names, targets, delete op
   assert.deepEqual(parseBotComputerDeleteOptions(undefined), { force: false });
   assert.deepEqual(parseBotComputerDeleteOptions({ force: true }), { force: true });
   assert.throws(() => parseBotComputerDeleteOptions({ force: "yes" }));
+
+  assert.deepEqual(parseBotComputerResetOptions(undefined), { force: false });
+  assert.deepEqual(parseBotComputerResetOptions({ force: true }), { force: true });
+  assert.throws(() => parseBotComputerResetOptions({ force: "yes" }));
 
   assert.deepEqual(parseBotComputersSettingsPatch({ defaultComputerMode: "dedicated" }), {
     defaultComputerMode: "dedicated",

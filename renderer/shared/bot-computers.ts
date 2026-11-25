@@ -199,7 +199,17 @@ export function botComputerMaxRunningChoices(limit: BotComputerMaxRunning = 4): 
 }
 
 const COMPUTER_ID_PATTERN = /^[a-z0-9][a-z0-9_-]{0,63}$/u;
-const RESERVED_COMPUTER_IDS = new Set(["__proto__", "constructor", "prototype", "tostring", "valueof", "hasownproperty"]);
+const RESERVED_COMPUTER_IDS = new Set([
+  "__proto__",
+  "constructor",
+  "prototype",
+  "tostring",
+  "tolocalestring",
+  "valueof",
+  "hasownproperty",
+  "isprototypeof",
+  "propertyisenumerable",
+]);
 const UNICODE_FORMAT_CHAR = /\p{Cf}/u;
 
 export function parseBotComputerId(value: unknown): string {
@@ -253,6 +263,15 @@ export function parseBotComputerDeleteOptions(value: unknown): { force: boolean 
   const input = record(value);
   if (!input || Object.keys(input).some((key) => key !== "force") || (input.force !== undefined && typeof input.force !== "boolean")) {
     throw new Error("Delete computer options must be { force?: boolean }.");
+  }
+  return { force: input.force === true };
+}
+
+export function parseBotComputerResetOptions(value: unknown): { force: boolean } {
+  if (value === undefined) return { force: false };
+  const input = record(value);
+  if (!input || Object.keys(input).some((key) => key !== "force") || (input.force !== undefined && typeof input.force !== "boolean")) {
+    throw new Error("Reset computer options must be { force?: boolean }.");
   }
   return { force: input.force === true };
 }

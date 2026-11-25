@@ -32,6 +32,7 @@ export interface BotSettingsPortDeps {
   listComputers?(botId: string): Promise<{ id: string; name: string; kind: "shared" | "dedicated" }[]>;
   validateComputer?(botId: string, target: BotComputerAssignTarget): Promise<string | undefined>;
   assignComputer?(botId: string, target: BotComputerAssignTarget): Promise<void>;
+  deleteComputer?(computerId: string, options?: { force?: boolean }): Promise<void>;
   broadcastChanged(botId: string): void;
   appendEntry: BotSettingsPorts["appendEntry"];
 }
@@ -139,32 +140,73 @@ export function createBotSettingsPorts(deps: BotSettingsPortDeps): BotSettingsPo
       // can't go first, since a Bot with no model before has nothing to put
       // back. The identity write cannot move the access revision, nor the
       // model write the Bot's, so neither invalidates the other's check.
-      let wrote = false;
+      let computerWrote = false;
+      let identityWrote = false;
+      let modelWrote = false;
       let done = false;
+      let previousComputer: BotComputerAssignTarget | null = null;
+      let createdVmId: string | undefined;
+
+      const rollbackComputer = async (): Promise<void> => {
+        if (!computerWrote) return;
+        let rolledBack = true;
+        if (previousComputer && deps.assignComputer) {
+          await deps.assignComputer(botId, previousComputer).catch(() => {
+            rolledBack = false;
+          });
+        }
+        if (createdVmId && deps.deleteComputer) {
+          await deps.deleteComputer(createdVmId, { force: true }).catch(() => {
+            rolledBack = false;
+          });
+        } else if (!previousComputer) {
+          // Had no computer before and wasn't a newly cloned VM we could delete.
+          rolledBack = false;
+        }
+        if (rolledBack) computerWrote = false;
+      };
+
       try {
         // Assign/clone the Linux computer BEFORE writing identity/model so a
         // failed clone or unavailable VM leaves identity and model untouched.
+        // Snapshot previous assignment and VM IDs so a later identity/model
+        // failure rolls back the assignment and deletes any newly cloned VM.
         if (patch.computer) {
           if (!deps.assignComputer) throw new Error("Bot computers aren't available on this device.");
+          previousComputer = deps.readComputer ? await deps.readComputer(botId).catch(() => null) : null;
+          const beforeVmIds =
+            patch.computer.kind === "new" && deps.listComputers
+              ? new Set((await deps.listComputers(botId).catch(() => [])).map((vm) => vm.id))
+              : undefined;
           await deps.assignComputer(botId, patch.computer);
-          wrote = true;
+          computerWrote = true;
+          if (patch.computer.kind === "new" && deps.readComputer) {
+            const afterComputer = await deps.readComputer(botId).catch(() => null);
+            if (afterComputer?.kind === "existing" && (!beforeVmIds || !beforeVmIds.has(afterComputer.computerId))) {
+              createdVmId = afterComputer.computerId;
+            }
+          }
         }
         let writtenRevision: string | undefined;
         if (identity) {
           const description = patch.description ?? bot.description ?? "";
-          const written = await deps.updateBot({
-            id: botId,
-            expectedRevision: expected.bot,
-            name: patch.name ?? bot.name,
-            ...(description ? { description } : {}),
-            instructions: patch.instructions ?? bot.instructions,
-            avatar: patch.look ? { version: 1, color: patch.look.color, shape: patch.look.shape } : bot.avatar,
-            ...(patch.notifications ? { interruptions: patch.notifications } : {}),
-            ...(patch.dailyCheckIns !== undefined ? { selfWakeUps: patch.dailyCheckIns } : {}),
-          }).catch((error: unknown) => {
+          let written: Pick<BotDefinition, "revision">;
+          try {
+            written = await deps.updateBot({
+              id: botId,
+              expectedRevision: expected.bot,
+              name: patch.name ?? bot.name,
+              ...(description ? { description } : {}),
+              instructions: patch.instructions ?? bot.instructions,
+              avatar: patch.look ? { version: 1, color: patch.look.color, shape: patch.look.shape } : bot.avatar,
+              ...(patch.notifications ? { interruptions: patch.notifications } : {}),
+              ...(patch.dailyCheckIns !== undefined ? { selfWakeUps: patch.dailyCheckIns } : {}),
+            });
+          } catch (error) {
+            await rollbackComputer();
             throw error instanceof BotIdentityRevisionConflictError ? new BotSettingsConflictError() : error;
-          });
-          wrote = true;
+          }
+          identityWrote = true;
           // The revision this write made, not a fresh read: a desktop edit
           // landing after it moves the revision, so the undo below is refused
           // and that edit stands.
@@ -186,17 +228,18 @@ export function createBotSettingsPorts(deps: BotSettingsPortDeps): BotSettingsPo
                 avatar: bot.avatar,
                 interruptions: resolveBotInterruptions(bot.interruptions),
                 selfWakeUps: bot.selfWakeUps !== false,
-              }).then(() => { wrote = false; }, () => undefined);
+              }).then(() => { identityWrote = false; }, () => undefined);
             }
+            await rollbackComputer();
             throw error;
           }
-          wrote = true;
+          modelWrote = true;
         }
         if (identity && patch.dailyCheckIns === false) await deps.cancelWakeUps(botId);
         done = true;
       } finally {
         // Whatever landed is shown, even when a later half was refused.
-        if (done || wrote) deps.broadcastChanged(botId);
+        if (done || computerWrote || identityWrote || modelWrote) deps.broadcastChanged(botId);
       }
     },
 

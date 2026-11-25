@@ -245,13 +245,13 @@ test("Linux open script launches Chromium detached on DISPLAY=:0 with quoted URL
   spawnSync("/bin/mkdir", ["-p", bin]);
   writeFileSync(
     fakeChromium,
-    `#!/bin/sh\nprintf 'DISPLAY=%s\\n' "$DISPLAY" > ${JSON.stringify(out)}\nfor a in "$@"; do printf '%s\\n' "$a" >> ${JSON.stringify(out)}; done\n`,
+    `#!/bin/sh\nprintf 'DISPLAY=%s\\nXAUTHORITY=%s\\nXDG_RUNTIME_DIR=%s\\nDBUS_SESSION_BUS_ADDRESS=%s\\nACCESSIBILITY_ENABLED=%s\\nGNOME_ACCESSIBILITY=%s\\n' "$DISPLAY" "$XAUTHORITY" "$XDG_RUNTIME_DIR" "$DBUS_SESSION_BUS_ADDRESS" "$ACCESSIBILITY_ENABLED" "$GNOME_ACCESSIBILITY" > ${JSON.stringify(out)}\nfor a in "$@"; do printf '%s\\n' "$a" >> ${JSON.stringify(out)}; done\n`,
   );
   chmodSync(fakeChromium, 0o755);
 
   const url = "https://example.com/$(touch pwned)'x";
   const ran = spawnSync("/bin/sh", ["-c", botComputerSignInOpenScript(url)], {
-    env: { PATH: `${bin}:/usr/bin:/bin` },
+    env: { PATH: `${bin}:/usr/bin:/bin`, HOME: "/home/lume" },
     encoding: "utf8",
     timeout: 10_000,
   });
@@ -261,8 +261,18 @@ test("Linux open script launches Chromium detached on DISPLAY=:0 with quoted URL
     await new Promise((resolve) => setTimeout(resolve, 10));
   }
   assert.equal(existsSync(out), true, "fake chromium ran");
+  const uid = String(process.getuid?.() ?? 0);
   const lines = readFileSync(out, "utf8").trimEnd().split("\n");
-  assert.deepEqual(lines, ["DISPLAY=:0", "--new-window", url]);
+  assert.deepEqual(lines, [
+    "DISPLAY=:0",
+    "XAUTHORITY=/home/lume/.Xauthority",
+    `XDG_RUNTIME_DIR=/run/user/${uid}`,
+    `DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/${uid}/bus`,
+    "ACCESSIBILITY_ENABLED=1",
+    "GNOME_ACCESSIBILITY=1",
+    "--new-window",
+    url,
+  ]);
 
   // Without chromium on PATH, the script fails closed with exit 127.
   const missing = spawnSync("/bin/sh", ["-c", botComputerSignInOpenScript(url)], {
@@ -418,4 +428,104 @@ test("reassigning a Bot off a shared VM while its sign-in card is open still rel
   await new Promise((resolve) => setImmediate(resolve));
   assert.equal(control.controllerForScope("shared"), "bot");
   assert.equal(control.controller("bot:ben"), "bot");
+});
+
+test("mid-boot withdrawal never takes over, mid-boot reassignment tracks the new scope, and Open again releases the previous scope", async () => {
+  const assignments = new Map<string, string>([
+    ["bot:ada", "shared"],
+    ["bot:ben", "shared"],
+  ]);
+  const control = createBotComputerControl();
+  control.setScopeResolver(
+    (botId) => assignments.get(botId) ?? botId,
+    (scope) => [...assignments.entries()].filter(([, id]) => id === scope).map(([botId]) => botId),
+  );
+  const handoffs = createBotHandoffs();
+  let duringBoot: (() => void) | undefined;
+  const guestCommands: string[] = [];
+  const open = createBotComputerHandoffOpener({
+    host: {
+      computer: async (botId) => {
+        const computerId = assignments.get(botId) ?? "shared";
+        return {
+          botId,
+          vmName: computerId === "shared" ? "aiden-vm-shared" : `aiden-${computerId}`,
+          computerId,
+          computerName: computerId,
+          shared: computerId === "shared",
+          state: "running",
+          baseBuild: "20261123-2671",
+          outdated: false,
+          controller: control.controller(botId),
+        };
+      },
+      ensureRunning: async () => {
+        const hook = duringBoot;
+        duringBoot = undefined;
+        hook?.();
+        return CONNECTION;
+      },
+      runGuestCommand: async (_botId, command) => {
+        guestCommands.push(command);
+        return ok();
+      },
+    },
+    control,
+    handoffs,
+    enabled: () => true,
+  });
+
+  const requestCard = (waitId: string) => {
+    const controller = new AbortController();
+    const answer = handoffs
+      .request({
+        botId: "bot:ada",
+        waitId,
+        toolCallId: `call-${waitId}`,
+        kind: "sign_in",
+        action: "Sign in to github.com",
+        open: { url: ORIGIN },
+        origin: ORIGIN,
+        target: "computer",
+        source: "tool",
+        signal: controller.signal,
+      })
+      .catch(() => null);
+    return { controller, answer };
+  };
+
+  // 1. Card withdrawn during ensureRunning cold boot -> never takes over or runs guest commands.
+  const withdrawn = requestCard("wait-withdrawn");
+  duringBoot = () => handoffs.answer("bot:ada", "wait-withdrawn", { outcome: "skipped" });
+  assert.equal(await open("bot:ada", "wait-withdrawn", ORIGIN), false);
+  await withdrawn.answer;
+  assert.equal(control.controllerForScope("shared"), "bot");
+  assert.equal(guestCommands.length, 0);
+
+  // 2. Bot reassigned from "shared" -> "vm-2" during ensureRunning -> tracks "vm-2" and releases it on settle.
+  const midBootReassign = requestCard("wait-mid-reassign");
+  duringBoot = () => {
+    assignments.set("bot:ada", "vm-2");
+  };
+  assert.equal(await open("bot:ada", "wait-mid-reassign", ORIGIN), true);
+  assert.equal(control.controllerForScope("shared"), "bot");
+  assert.equal(control.controllerForScope("vm-2"), "person");
+  handoffs.answer("bot:ada", "wait-mid-reassign", { outcome: "done" });
+  await midBootReassign.answer;
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(control.controllerForScope("vm-2"), "bot");
+
+  // 3. "Open again" after reassignment from "shared" -> "vm-3" releases "shared" immediately so Ben isn't wedged.
+  assignments.set("bot:ada", "shared");
+  const openAgain = requestCard("wait-open-again");
+  assert.equal(await open("bot:ada", "wait-open-again", ORIGIN), true);
+  assert.equal(control.controllerForScope("shared"), "person");
+  assignments.set("bot:ada", "vm-3");
+  assert.equal(await open("bot:ada", "wait-open-again", ORIGIN), true);
+  assert.equal(control.controllerForScope("shared"), "bot", "previous scope released on Open again");
+  assert.equal(control.controllerForScope("vm-3"), "person");
+  handoffs.answer("bot:ada", "wait-open-again", { outcome: "done" });
+  await openAgain.answer;
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(control.controllerForScope("vm-3"), "bot");
 });

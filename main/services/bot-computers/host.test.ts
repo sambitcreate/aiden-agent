@@ -2619,3 +2619,141 @@ test("sharedDirForVm refuses symbolic links planted inside the host Computer wor
     }
   });
 });
+
+test("while a shared VM is running, deleteForBot and assignComputer never touch host Computer/bots symlinks and run over guest SSH", async () => {
+  await withHost(async (context) => {
+    await setUp(context, "shared");
+    await context.host.give("ada");
+    await context.host.give("ben");
+    await context.host.ensureRunning("ada", { reason: "tool" });
+
+    const outside = mkdtempSync(path.join(tmpdir(), "aiden-live-virtiofs-target-"));
+    const victimDir = path.join(outside, botComputerWorkspaceDirName("ada"));
+    const victimFile = path.join(victimDir, "keep-me.txt");
+    mkdirSync(victimDir, { recursive: true });
+    writeFileSync(victimFile, "host-secret");
+    try {
+      // Simulate a compromised guest replacing Computer/bots with a symlink to a host directory.
+      const botsRoot = path.join(context.root, "computers", "shared", "Computer", "bots");
+      rmSync(botsRoot, { recursive: true, force: true });
+      symlinkSync(outside, botsRoot);
+
+      // Removing Ada while the VM is running must NEVER follow the symlink on the host;
+      // it runs rm inside the Linux guest over SSH instead.
+      await context.host.deleteForBot("ada");
+      assert.equal(existsSync(victimFile), true, "host file behind guest symlink must never be deleted");
+      assert.ok(
+        context.sshCalls.some(
+          (call) => call.args.join(" ").includes("/mnt/aiden-shared/Computer/bots/ada") && call.args.join(" ").includes("rm -rf"),
+        ),
+        "live workspace deletion runs over guest SSH",
+      );
+
+      // Assigning Cyd while the VM is running must NEVER run host mkdir through the symlink.
+      await context.host.assignComputer("cyd", { kind: "shared" });
+      assert.equal(
+        existsSync(path.join(outside, botComputerWorkspaceDirName("cyd"))),
+        false,
+        "host directory behind guest symlink must never be created",
+      );
+      assert.ok(
+        context.sshCalls.some(
+          (call) => call.args.join(" ").includes("/mnt/aiden-shared/Computer/bots/cyd") && call.args.join(" ").includes("mkdir -p"),
+        ),
+        "live workspace creation runs over guest SSH",
+      );
+    } finally {
+      rmSync(outside, { recursive: true, force: true });
+    }
+  });
+});
+
+test("acquireLease waits for in-flight give/assignComputer, revokes active lease on reassignment, and force reset interrupts active lease", async () => {
+  await withHost(async (context) => {
+    await setUp(context, "shared");
+
+    // 1. acquireLease("ada") racing give("ada") waits for give instead of failing no_computer.
+    const givePromise = context.host.give("ada");
+    const leasePromise = context.host.acquireLease("ada");
+    const [given, releaseAda] = await Promise.all([givePromise, leasePromise]);
+    assert.equal(given.computerId, "shared");
+    assert.equal((await context.host.status()).vms[0]?.activeBotId, "ada");
+    assert.equal(releaseAda.signal?.aborted, false);
+
+    // 2. Ben queues behind Ada on "shared". Reassigning Ada to a new dedicated VM revokes Ada's
+    // active lease signal and hands "shared"'s lease immediately to Ben.
+    await context.host.give("ben");
+    const benLeasePromise = context.host.acquireLease("ben");
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.deepEqual((await context.host.status()).vms[0]?.queuedBotIds, ["ben"]);
+
+    const adaNew = await context.host.assignComputer("ada", { kind: "new", name: "Ada Box" });
+    assert.equal(releaseAda.signal?.aborted, true, "reassignment aborts old active lease signal");
+    const releaseBen = await benLeasePromise;
+    assert.equal((await context.host.status()).vms.find((vm) => vm.id === "shared")?.activeBotId, "ben");
+    assert.equal(adaNew.computerName, "Ada Box");
+
+    // 3. Confirmed UI reset (`{ force: true }`) interrupts Ben's active lease and resets cleanly.
+    const resetRes = await context.host.resetComputer("shared", { force: true });
+    assert.equal(resetRes.id, "shared");
+    assert.equal(releaseBen.signal?.aborted, true, "forced reset aborts active lease signal");
+    assert.equal((await context.host.status()).vms.find((vm) => vm.id === "shared")?.activeBotId, undefined);
+  });
+});
+
+test("unmigrated legacy macOS state never fails open as Ready before reconcile, and Set up preserves partial macOS migration", async () => {
+  await withHost(async (context) => {
+    const vmsDir = path.join(context.root, "vms");
+    mkdirSync(vmsDir, { recursive: true });
+    const adaVm = botComputerVmName("ada");
+    writeFileSync(
+      path.join(vmsDir, ".fake-state.json"),
+      JSON.stringify({ vms: { [adaVm]: { os: "macOS", status: "stopped", mac: "02:00:00:00:00:01" } } }),
+    );
+    writeFileSync(
+      path.join(context.root, "state.json"),
+      JSON.stringify({
+        version: 1,
+        settings: { maxRunning: 2, idleStopMinutes: 10 },
+        setup: { baseBuild: "25D125", baseVersion: "26.3" },
+        computers: { ada: { vmName: adaVm, baseBuild: "25D125", createdAt: 100 } },
+      }),
+    );
+
+    // Before reconcile() runs, unmigrated macOS state must NOT appear Ready and must refuse ensureRunning.
+    assert.equal(await context.host.baseReady(), false);
+    assert.equal((await context.host.status()).setup.kind, "not_set_up");
+    await assert.rejects(
+      context.host.ensureRunning("ada", { reason: "tool" }),
+      (error: unknown) => error instanceof BotComputerError && error.code === "not_set_up",
+    );
+
+    // Seed a partial migration (completedAt unset, freedBytes > 0), then complete Linux Set up:
+    // performSetup must preserve the incomplete migration so the next reconcile() finishes cleanup.
+    writeFileSync(
+      path.join(context.root, "state.json"),
+      JSON.stringify({
+        version: 1,
+        settings: { maxRunning: 2, idleStopMinutes: 10 },
+        setup: {},
+        macosMigration: { freedBytes: 4096 },
+      }),
+    );
+    await setUp(context, "shared");
+    const persisted = JSON.parse(readFileSync(path.join(context.root, "state.json"), "utf8")) as {
+      macosMigration?: { completedAt?: number; freedBytes: number };
+    };
+    assert.equal(persisted.macosMigration?.completedAt, undefined, "partial macOS migration stays incomplete after Set up");
+    assert.equal(persisted.macosMigration?.freedBytes, 4096, "accumulated freedBytes is preserved");
+  });
+});
+
+test("reconcile skips marking a VM stale while its vm turn is active (e.g. concurrent reset)", async () => {
+  await withHost(async (context) => {
+    await setUp(context, "shared");
+    await context.host.give("ada");
+    await Promise.all([context.host.resetComputer("shared"), context.host.reconcile()]);
+    const status = await context.host.computer("ada");
+    assert.equal(status?.state, "stopped", "concurrent reconcile must not mark reset VM stale");
+  });
+});

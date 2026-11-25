@@ -56,6 +56,10 @@ export const botSettingsChanges = createBotSettingsChangeService(createBotSettin
     if (!botComputersEnabled()) throw new Error("Bot computers need a Mac with Apple silicon.");
     await botComputers().host.assignComputer(botId, target);
   },
+  async deleteComputer(computerId, options) {
+    if (!botComputersEnabled()) return;
+    await botComputers().host.deleteComputer(computerId, options);
+  },
   broadcastChanged: (botId) => ipcMain.broadcast("bots:changed", { botId }),
   async appendEntry(botId, kind, data) {
     const { botSessionRuntime } = await import("../bot-runtime/bot-session-main.js");

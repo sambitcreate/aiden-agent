@@ -21,6 +21,7 @@ import {
   parseBotComputerDeleteOptions,
   parseBotComputerId,
   parseBotComputerName,
+  parseBotComputerResetOptions,
   parseBotComputersSettingsPatch,
   parseBotComputerViewerRequest,
   type BotComputerPointer,
@@ -131,8 +132,8 @@ export function registerBotComputerHandlers(deps: BotComputerHandlerDependencies
     deps.host.give(await knownBot(rawBotId)),
   );
 
-  deps.handle(BOT_COMPUTER_CHANNELS.reset, async (_event, rawBotId): Promise<BotComputerStatus> =>
-    deps.host.reset(await knownBot(rawBotId)),
+  deps.handle(BOT_COMPUTER_CHANNELS.reset, async (_event, rawBotId, rawOptions): Promise<BotComputerStatus> =>
+    deps.host.reset(await knownBot(rawBotId), parseBotComputerResetOptions(rawOptions)),
   );
 
   // Removing a computer is allowed for a Bot that is already gone: it is the cleanup.
@@ -171,8 +172,8 @@ export function registerBotComputerHandlers(deps: BotComputerHandlerDependencies
 
   deps.handle(
     BOT_COMPUTER_CHANNELS.resetComputer,
-    async (_event, rawComputerId): Promise<BotComputerVmStatus> =>
-      deps.host.resetComputer(parseBotComputerId(rawComputerId)),
+    async (_event, rawComputerId, rawOptions): Promise<BotComputerVmStatus> =>
+      deps.host.resetComputer(parseBotComputerId(rawComputerId), parseBotComputerResetOptions(rawOptions)),
   );
 
   async function computerOf(botId: string): Promise<BotComputerStatus> {
