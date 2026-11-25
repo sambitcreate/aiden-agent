@@ -194,6 +194,38 @@ test("Bots are grouped by host, without hosts that have none", () => {
   assert.equal(groups[1]?.host.disabledReason, "Spare hasn't allowed this Mac to start Bot chats.");
 });
 
+test("a remote Bot keeps its avatar and says it needs the person, as its own Mac does", () => {
+  const botGrants = [...CHAT_GRANTS, "bot:read", "bot:write"];
+  const avatar = { version: 1, shape: "hex", color: "rose" };
+  const rows = [
+    // Waiting on an approval: the host's session state is still running.
+    { id: "bot-1", name: "Chief of Staff", avatar: { semantic: avatar }, sessionState: "running", needsYou: true },
+    { id: "bot-2", name: "Jester", avatar: { semantic: { version: 9, shape: "hex", color: "rose" } }, sessionState: "running" },
+    { id: "bot-3", name: "Modelless", sessionState: "needs_model", failed: true },
+  ];
+  const [online] = remoteBotGroups(
+    [view("host-b", "Studio", botGrants)],
+    [connected("host-b")],
+    new Map([["host-b", feed("host-b", { bots: rows })]]),
+    "darwin",
+  );
+  assert.deepEqual(online?.bots, [
+    { id: "bot-1", name: "Chief of Staff", avatar, working: true, needsYou: true },
+    { id: "bot-2", name: "Jester", working: true },
+    { id: "bot-3", name: "Modelless", status: "needs_model" },
+  ]);
+
+  // Offline, the last-known rows stay, but no run is claimed for them.
+  const [offline] = remoteBotGroups(
+    [view("host-b", "Studio", botGrants)],
+    [backoff("host-b")],
+    new Map([["host-b", feed("host-b", { stale: true, bots: rows })]]),
+    "darwin",
+  );
+  assert.equal(offline?.bots.some((bot) => bot.working), false);
+  assert.equal(offline?.bots[0]?.needsYou, true);
+});
+
 test("the new remote chat route keeps only a well-formed project identifier", () => {
   assert.deepEqual(parseRemoteNewChatSearch({ workspaceId: "ws_01:abc.def-1" }), { workspaceId: "ws_01:abc.def-1" });
   assert.deepEqual(parseRemoteNewChatSearch({ workspaceId: "../etc/passwd" }), {});
