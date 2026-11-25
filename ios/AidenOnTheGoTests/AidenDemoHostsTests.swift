@@ -309,6 +309,45 @@ final class AidenDemoHostsTests: XCTestCase {
         XCTAssertEqual(model.memory?.entryCount, 0)
     }
 
+    func testDemoBotMemoryEditsChangeOnlyTheEntryTheyName() async throws {
+        let responder = AidenDemoResponder()
+        let coordinator = AidenDemoHosts.coordinator(.one, responder: responder)
+        let installation = try XCTUnwrap(coordinator.installationStore.activeInstallation)
+        let machine = client(for: installation, responder: responder)
+        let bots = try await machine.bots().bots
+        let bot = try XCTUnwrap(bots.first)
+        let model = AidenBotMemoryModel(botID: bot.id, botName: bot.name, transport: machine)
+        _ = await model.load()
+        let start = try XCTUnwrap(model.memory)
+        let removed = try XCTUnwrap(start.user.entries.first)
+        let rewritten = try XCTUnwrap(start.memory.entries.first)
+
+        await model.delete(target: .user, entryId: removed.id)
+        let failure = await model.save(target: .memory, entryId: rewritten.id, text: "Meal plan is vegan on weekdays.")
+
+        XCTAssertNil(model.errorMessage)
+        XCTAssertNil(failure)
+        // A second reader sees the Mac's view, not this page's optimistic one.
+        let reread = try await machine.botMemory(botId: bot.id)
+        XCTAssertEqual(reread.user.entries.map(\.id), start.user.entries.dropFirst().map(\.id))
+        XCTAssertEqual(reread.memory.entries.count, start.memory.entries.count)
+        XCTAssertEqual(reread.memory.entries.first?.text, "Meal plan is vegan on weekdays.")
+        XCTAssertEqual(Array(reread.memory.entries.dropFirst()), Array(start.memory.entries.dropFirst()))
+        XCTAssertNotEqual(reread.revision, start.revision)
+
+        await model.delete(target: .user, entryId: removed.id)
+
+        XCTAssertEqual(model.errorMessage, AidenBotMemoryCopy.entryChanged, "A deleted entry can't be deleted twice")
+        XCTAssertEqual(model.memory, reread)
+
+        let forgot = await model.erase()
+
+        XCTAssertTrue(forgot)
+        let cleared = try await machine.botMemory(botId: bot.id)
+        XCTAssertEqual(cleared.entryCount, 0)
+        XCTAssertEqual(cleared.user.usedChars + cleared.memory.usedChars, 0)
+    }
+
     func testSettingsScreenCanReadMemorySettings() async throws {
         let responder = AidenDemoResponder()
         let coordinator = AidenDemoHosts.coordinator(.one, responder: responder)
