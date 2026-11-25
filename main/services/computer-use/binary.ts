@@ -1,6 +1,5 @@
 import { createHash } from "node:crypto";
-import { constants } from "node:fs";
-import { createReadStream } from "node:fs";
+import { constants, createReadStream, type Stats } from "node:fs";
 import { access, lstat, open, realpath } from "node:fs/promises";
 import path from "node:path";
 import {
@@ -92,7 +91,7 @@ async function verifyRegularExecutable(
   candidate: string,
   message: string,
   signal?: AbortSignal,
-): Promise<void> {
+): Promise<Stats> {
   throwIfAborted(signal);
   try {
     const info = await lstat(candidate);
@@ -100,6 +99,7 @@ async function verifyRegularExecutable(
     if (!info.isFile() || info.isSymbolicLink()) throw new Error("not a regular file");
     await access(candidate, constants.R_OK | constants.X_OK);
     throwIfAborted(signal);
+    return info;
   } catch {
     throwIfAborted(signal);
     throw new CuaDriverError("driver_missing", message);
@@ -268,13 +268,16 @@ export async function resolveVendoredCuaDriverExecutable(
     throwIfAborted(signal);
     throw new CuaDriverError("driver_missing", missing);
   }
-  await verifyRegularExecutable(driverPath, missing, signal);
+  const driverInfo = await verifyRegularExecutable(driverPath, missing, signal);
   const resolvedApp = await realpath(brokerAppPath);
   const resolvedDriver = await realpath(driverPath);
   if (!resolvedDriver.startsWith(`${resolvedApp}${path.sep}Contents${path.sep}MacOS${path.sep}`)) {
     throw new CuaDriverError("invalid_driver_path", "The cua-driver executable escaped its helper bundle.");
   }
-  if ((await hashFile(resolvedDriver, signal)) !== CUA_DRIVER_BINARY_SHA256) {
+  if (
+    driverInfo.size !== CUA_DRIVER_BINARY_BYTES ||
+    (await hashFile(resolvedDriver, signal)) !== CUA_DRIVER_BINARY_SHA256
+  ) {
     throw new CuaDriverError(
       "driver_integrity_failed",
       `The cua-driver executable does not match Aiden's pinned ${CUA_DRIVER_VERSION} release.`,
@@ -410,7 +413,7 @@ export async function resolveCuaDriverInstallation(
     "The Aiden Computer Use broker executable is missing or invalid.",
     signal,
   );
-  await verifyRegularExecutable(
+  const driverInfo = await verifyRegularExecutable(
     driverPath,
     "The pinned cua-driver executable is missing or invalid.",
     signal,
@@ -426,6 +429,12 @@ export async function resolveCuaDriverInstallation(
         "The Computer Use executable escaped its signed helper bundle.",
       );
     }
+  }
+  if (driverInfo.size !== CUA_DRIVER_BINARY_BYTES) {
+    throw new CuaDriverError(
+      "driver_integrity_failed",
+      `The cua-driver executable does not match Aiden's pinned ${CUA_DRIVER_VERSION} release.`,
+    );
   }
 
   const plist = await runCuaDriverCommand(

@@ -2,7 +2,17 @@
 
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
-import { chmod, mkdir, mkdtemp, readFile, readdir, rm, symlink, writeFile } from "node:fs/promises";
+import {
+  chmod,
+  mkdir,
+  mkdtemp,
+  readFile,
+  readdir,
+  rm,
+  symlink,
+  truncate,
+  writeFile,
+} from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
@@ -231,16 +241,30 @@ test("Linux arm64 binary validation requires a regular ELF64 aarch64 file with t
   const root = await mkdtemp(path.join(os.tmpdir(), "aiden-cua-linux-arm64-"));
   try {
     const validFile = path.join(root, "cua-driver");
+    const wrongSize = path.join(root, "cua-driver-small");
     const wrongArch = path.join(root, "cua-driver-x64");
     const linked = path.join(root, "cua-driver-link");
     await writeFile(validFile, elfAarch64);
+    await truncate(validFile, CUA_DRIVER_LINUX_ARM64_ARTIFACT_PROVENANCE.binaryBytes);
+    await writeFile(wrongSize, elfAarch64);
     await writeFile(wrongArch, elfX64);
+    await truncate(wrongArch, CUA_DRIVER_LINUX_ARM64_ARTIFACT_PROVENANCE.binaryBytes);
     await symlink(validFile, linked);
 
     assert.equal(
       await validateVendoredLinuxArm64Binary(validFile, async () => CUA_DRIVER_LINUX_ARM64_SHA256),
       true,
     );
+    // Size check runs unconditionally before hashing, even with a custom hashBinary.
+    let hashCalls = 0;
+    assert.equal(
+      await validateVendoredLinuxArm64Binary(wrongSize, async () => {
+        hashCalls += 1;
+        return CUA_DRIVER_LINUX_ARM64_SHA256;
+      }),
+      false,
+    );
+    assert.equal(hashCalls, 0);
     assert.equal(
       await validateVendoredLinuxArm64Binary(validFile, async () => "0".repeat(64)),
       false,
@@ -254,7 +278,7 @@ test("Linux arm64 binary validation requires a regular ELF64 aarch64 file with t
       false,
     );
     // Real hash path also rejects wrong byte size before/with hash mismatch.
-    assert.equal(await validateVendoredLinuxArm64Binary(validFile), false);
+    assert.equal(await validateVendoredLinuxArm64Binary(wrongSize), false);
   } finally {
     await rm(root, { recursive: true, force: true });
   }
@@ -368,23 +392,32 @@ test("artifact validation rejects drift in every compiled provenance field", asy
   }
 });
 
-test("cached cua-driver validation checks the binary hash before executing it", async () => {
+test("cached cua-driver validation checks the binary size and hash before executing it", async () => {
   const root = await mkdtemp(path.join(os.tmpdir(), "aiden-cua-vendor-hash-"));
   const binary = path.join(root, "cua-driver");
   try {
     await writeFile(binary, "#!/bin/sh\necho fake\n", "utf8");
     await chmod(binary, 0o755);
     let runnerCalls = 0;
+    let hashCalls = 0;
     assert.equal(
-      await validateVendoredBinary(binary, async () => {
-        runnerCalls += 1;
-        return JSON.stringify({
-          schema_version: "1",
-          binary_version: PINNED_VERSION,
-        });
-      }),
+      await validateVendoredBinary(
+        binary,
+        async () => {
+          runnerCalls += 1;
+          return JSON.stringify({
+            schema_version: "1",
+            binary_version: PINNED_VERSION,
+          });
+        },
+        async () => {
+          hashCalls += 1;
+          return CUA_DRIVER_SHA256;
+        },
+      ),
       false,
     );
+    assert.equal(hashCalls, 0);
     assert.equal(runnerCalls, 0);
   } finally {
     await rm(root, { recursive: true, force: true });
@@ -396,6 +429,7 @@ test("cached cua-driver validation checks the pinned signing identity before exe
   const binary = path.join(root, "cua-driver");
   try {
     await writeFile(binary, "not actually signed", "utf8");
+    await truncate(binary, CUA_DRIVER_ARTIFACT_PROVENANCE.binaryBytes);
     await chmod(binary, 0o755);
     const commands = [];
     assert.equal(
@@ -420,6 +454,7 @@ test("cached cua-driver validation requires both signature and manifest pins", a
   const binary = path.join(root, "cua-driver");
   try {
     await writeFile(binary, "simulated pinned binary", "utf8");
+    await truncate(binary, CUA_DRIVER_ARTIFACT_PROVENANCE.binaryBytes);
     await chmod(binary, 0o755);
     const commands = [];
     assert.equal(
@@ -451,6 +486,7 @@ test("cached cua-driver validation rejects a manifest from another release", asy
   const binary = path.join(root, "cua-driver");
   try {
     await writeFile(binary, "simulated pinned binary", "utf8");
+    await truncate(binary, CUA_DRIVER_ARTIFACT_PROVENANCE.binaryBytes);
     for (const manifest of [
       { schema_version: "1", binary_version: "0.8.3" },
       { schema_version: "2", binary_version: PINNED_VERSION },
