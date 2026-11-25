@@ -87,6 +87,7 @@ struct AidenBotSessionChatView: View {
     var initialSummary: AidenBotSummary?
 
     @Environment(\.dismiss) private var dismiss
+    @Environment(\.aidenConversationMachine) private var conversationMachine
     @State private var isChatVisible = false
     @Environment(\.aidenPalette) private var palette
     @Environment(\.scenePhase) private var scenePhase
@@ -257,7 +258,10 @@ struct AidenBotSessionChatView: View {
 
     var body: some View {
         ZStack(alignment: .bottom) {
-            AidenTranscriptScaffold(dock: dock) { transcript }
+            // The title capsule names the machine on its status line.
+            AidenTranscriptScaffold(dock: dock, showsMachineSubtitle: false) { transcript }
+                // The name capsule hangs just under the avatar in the bar.
+                .safeAreaBar(edge: .top, spacing: 0) { AidenChatStackedTitle(capsule: header) }
             if let model, model.attachmentsSupported {
                 attachmentPickerOverlay(model)
             }
@@ -324,7 +328,7 @@ struct AidenBotSessionChatView: View {
         .navigationTitle(bot?.name ?? String(localized: "Bot"))
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
-            ToolbarItem(placement: .principal) { header }
+            ToolbarItem(placement: .principal) { avatarHeader }
             ToolbarItem(placement: .topBarTrailing) { moreMenu }
         }
         .aidenPrefersToolbarItems()
@@ -559,44 +563,69 @@ struct AidenBotSessionChatView: View {
         filesTools = files
     }
 
+    /// Telegram's chat header: the Bot's name over what it is doing on a glass
+    /// capsule. Tapping it opens the Bot's profile.
+    private var header: AidenChatTitleCapsule {
+        AidenChatTitleCapsule(
+            title: bot?.name ?? String(localized: "Bot"),
+            status: bot == nil ? nil : titleStatus,
+            accessibilityHint: "Opens the Bot’s profile"
+        ) {
+            // Nothing to open until the Bot has loaded.
+            if bot != nil { isShowingProfile = true }
+        }
+    }
+
+    /// The status line's word while the Bot works, why it can't answer when it
+    /// can't, and otherwise what it is for.
+    private var titleStatus: AidenChatTitleStatus {
+        if let model {
+            return model.titleStatus(
+                nowMs: Int(Date().timeIntervalSince1970 * 1_000), purpose: bot?.purpose, machine: conversationMachine
+            )
+        }
+        // Before the session loads, the summary's state stands in.
+        return .bot(
+            state: bot?.paused == true ? .paused : bot?.sessionState,
+            statusWord: nil,
+            waitsForYou: false,
+            purpose: bot?.purpose,
+            machine: conversationMachine
+        )
+    }
+
     /// The header avatar's signal. Before the model loads, nothing has run, so
     /// a missing model reads as a quiet stop rather than a turn that finished.
     private var avatarSignal: AidenBotAvatarSignal {
         model.map { AidenBotAvatarSignal(model: $0) } ?? AidenBotAvatarSignal(stopped: true)
     }
 
-    private var header: some View {
-        // The header plays what the turn is doing, from the status line's signal,
-        // and VoiceOver reads the same state as the button's value.
-        AidenBotSettledAvatarState(signal: avatarSignal) { state in
-            Button {
-                isShowingProfile = true
-            } label: {
-                HStack(spacing: 8) {
-                    if let bot {
-                        AidenBotCanonicalAvatarView(
-                            coordinator: coordinator,
-                            machine: openedOn,
-                            botID: bot.id,
-                            avatar: bot.avatar,
-                            name: bot.name,
-                            size: 26,
-                            // A resting header draws the still sprite, with no animation clock.
-                            state: state == .idle ? nil : state
-                        )
-                    }
-                    Text(bot?.name ?? "Bot")
-                        .font(.headline)
-                        .foregroundStyle(palette.foreground)
-                        .lineLimit(1)
+    /// The Bot's face in the middle of the bar, over its name; like the name,
+    /// it opens the profile. It plays what the turn is doing, while the
+    /// capsule's status line says the same in words for VoiceOver.
+    private var avatarHeader: some View {
+        AidenChatHeaderAvatar {
+            isShowingProfile = true
+        } avatar: {
+            if let bot {
+                AidenBotSettledAvatarState(signal: avatarSignal) { state in
+                    AidenBotCanonicalAvatarView(
+                        coordinator: coordinator,
+                        machine: openedOn,
+                        botID: bot.id,
+                        avatar: bot.avatar,
+                        name: bot.name,
+                        size: AidenChatHeaderAvatar<EmptyView>.size,
+                        // A resting header draws the still sprite, with no animation clock.
+                        state: state == .idle ? nil : state
+                    )
                 }
-                .contentShape(Rectangle())
+            } else {
+                Circle().fill(palette.raised)
             }
-            .buttonStyle(.plain)
-            .disabled(bot == nil)
-            .accessibilityValue(state.accessibilityValue ?? "")
-            .accessibilityHint("Opens the Bot’s profile")
         }
+        .disabled(bot == nil)
+        .accessibilityIdentifier("chat-avatar")
     }
 
     /// Never a spinner or a blocking error (R14): the last transcript, or
