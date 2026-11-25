@@ -31,17 +31,24 @@ export const botSettingsChanges = createBotSettingsChangeService(createBotSettin
       ? { kind: "shared" }
       : { kind: "existing", computerId: assigned.computerId };
   },
-  async listComputers() {
+  async listComputers(botId) {
     if (!botComputersEnabled()) return [];
     const { vms } = await botComputers().host.status();
-    return vms.map((vm) => ({ id: vm.id, name: vm.name, kind: vm.kind }));
+    // Never expose another Bot's dedicated VM to a Bot via update_bot.
+    return vms
+      .filter((vm) => vm.kind === "shared" || vm.assignedBotIds.includes(botId))
+      .map((vm) => ({ id: vm.id, name: vm.name, kind: vm.kind }));
   },
-  async validateComputer(_botId, target) {
+  async validateComputer(botId, target) {
     if (!botComputersEnabled()) return "Bot computers need a Mac with Apple silicon.";
     const status = await botComputers().host.status();
     if (status.setup.kind !== "ready") return "Set up Bot computers in Settings first.";
-    if (target.kind === "existing" && !status.vms.some((vm) => vm.id === target.computerId)) {
-      return `No Bot computer with id "${target.computerId}" exists.`;
+    if (target.kind === "existing") {
+      const vm = status.vms.find((entry) => entry.id === target.computerId);
+      if (!vm) return `No Bot computer with id "${target.computerId}" exists.`;
+      if (vm.kind !== "shared" && !vm.assignedBotIds.includes(botId)) {
+        return "You can't attach to another Bot's dedicated computer from chat. Only the person changes that in settings.";
+      }
     }
     return undefined;
   },

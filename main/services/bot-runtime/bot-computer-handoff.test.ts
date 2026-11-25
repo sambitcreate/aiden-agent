@@ -351,3 +351,71 @@ test("two Bots sharing one VM keep person sign-in control until both sign-in car
   assert.equal(control.controller("bot:ada"), "bot");
   assert.equal(control.controller("bot:ben"), "bot");
 });
+
+test("reassigning a Bot off a shared VM while its sign-in card is open still releases the original VM when the card settles", async () => {
+  const assignments = new Map<string, string>([
+    ["bot:ada", "shared"],
+    ["bot:ben", "shared"],
+  ]);
+  const control = createBotComputerControl();
+  control.setScopeResolver(
+    (botId) => assignments.get(botId) ?? botId,
+    (scope) => [...assignments.entries()].filter(([, id]) => id === scope).map(([botId]) => botId),
+  );
+  const handoffs = createBotHandoffs();
+  const open = createBotComputerHandoffOpener({
+    host: {
+      computer: async (botId) => {
+        const computerId = assignments.get(botId) ?? "shared";
+        return {
+          botId,
+          vmName: computerId === "shared" ? "aiden-vm-shared" : "aiden-vm-dedicated",
+          computerId,
+          computerName: computerId === "shared" ? "Shared computer" : "Dedicated",
+          shared: computerId === "shared",
+          state: "running",
+          baseBuild: "20261123-2671",
+          outdated: false,
+          controller: control.controller(botId),
+        };
+      },
+      ensureRunning: async () => CONNECTION,
+      runGuestCommand: async () => ok(),
+    },
+    control,
+    handoffs,
+    enabled: () => true,
+  });
+
+  const controller = new AbortController();
+  const card = handoffs
+    .request({
+      botId: "bot:ada",
+      waitId: "wait-reassign",
+      toolCallId: "call-reassign",
+      kind: "sign_in",
+      action: "Sign in to github.com",
+      open: { url: ORIGIN },
+      origin: ORIGIN,
+      target: "computer",
+      source: "tool",
+      signal: controller.signal,
+    })
+    .catch(() => null);
+
+  assert.equal(await open("bot:ada", "wait-reassign", ORIGIN), true);
+  assert.equal(control.controllerForScope("shared"), "person");
+  assert.equal(control.controller("bot:ben"), "person");
+
+  // Reassign Ada to a dedicated VM before answering the sign-in card.
+  assignments.set("bot:ada", "vm-dedicated");
+  assert.equal(control.controllerForScope("shared"), "person");
+  assert.equal(control.controller("bot:ben"), "person");
+
+  // Settling Ada's sign-in card must release the original "shared" scope, not leave Ben locked out.
+  handoffs.answer("bot:ada", "wait-reassign", { outcome: "done" });
+  await card;
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(control.controllerForScope("shared"), "bot");
+  assert.equal(control.controller("bot:ben"), "bot");
+});

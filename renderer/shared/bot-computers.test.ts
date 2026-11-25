@@ -134,10 +134,15 @@ test("shared/selectable computer parsers validate ids, names, targets, delete op
   assert.equal(parseBotComputerId("vm-123abc"), "vm-123abc");
   assert.throws(() => parseBotComputerId("../escape"), /Invalid computer id/u);
   assert.throws(() => parseBotComputerId("UPPER"), /Invalid computer id/u);
+  for (const reserved of ["__proto__", "constructor", "prototype", "tostring", "valueof", "hasownproperty"]) {
+    assert.throws(() => parseBotComputerId(reserved), /Invalid computer id/u, reserved);
+  }
 
   assert.equal(parseBotComputerName("  Research VM  "), "Research VM");
   assert.throws(() => parseBotComputerName("   "), /1–64/u);
   assert.throws(() => parseBotComputerName("bad\u0007name"), /control/u);
+  assert.throws(() => parseBotComputerName("Safe\u202ename"), /formatting/u);
+  assert.throws(() => parseBotComputerName("Zero\u200bwidth"), /formatting/u);
 
   assert.deepEqual(parseBotComputerAssignTarget({ kind: "shared" }), { kind: "shared" });
   assert.deepEqual(parseBotComputerAssignTarget({ kind: "existing", computerId: "vm-abc" }), {

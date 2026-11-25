@@ -54,7 +54,7 @@ export const BotComputerShellParameters = Type.Object(
 export const BOT_COMPUTER_SHELL_TOOL_DESCRIPTION =
   "Run a shell command inside your computer (a Linux virtual machine), never on the person's Mac. " +
   `Use it to install and run tools there. Runs as the separate ${BOT_COMPUTER_LINUX_SHELL_USER} user, without sudo privileges, for up to 120 seconds, with up to 64 KiB of output. ` +
-  "Starts in your own Bot working folder under ~/bots/<id> (also ~/Bots/<id>), and ~/Shared is the shared Computer folder visible in the person's Files panel and to other Bots sharing this computer.";
+  "Starts in your working folder under ~/bots/<id> (also ~/Bots/<id>), and ~/Shared is the computer's shared folder (shared with any other Bots using the same computer).";
 
 const LINUX_USER_PATTERN = /^[a-z_][a-z0-9_-]{0,31}$/u;
 const SAFE_BOT_DIR_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/u;
@@ -64,7 +64,7 @@ export function botComputerShellToolDescription(shellUser: string = BOT_COMPUTER
   return (
     "Run a shell command inside your computer (a Linux virtual machine), never on the person's Mac. " +
     `Use it to install and run tools there. Runs as the separate ${shellUser} user, without sudo privileges, for up to 120 seconds, with up to 64 KiB of output. ` +
-    "Starts in your own Bot working folder under ~/bots/<id> (also ~/Bots/<id>), and ~/Shared is the shared Computer folder visible in the person's Files panel and to other Bots sharing this computer."
+    "Starts in your working folder under ~/bots/<id> (also ~/Bots/<id>), and ~/Shared is the computer's shared folder (shared with any other Bots using the same computer)."
   );
 }
 
