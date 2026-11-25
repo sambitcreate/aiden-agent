@@ -20,6 +20,7 @@ import {
   acceptanceFixture,
   acceptanceGateEvidence,
   acceptanceToolCall,
+  applyRunGateFailuresToChecks,
   buildUnsupportedRealDesktopReport,
   classifyAcceptanceError,
   evaluateAcceptanceRequests,
@@ -44,6 +45,7 @@ import {
   readHostCursorPosition,
   readHostMacOSVersion,
   readPackagedMetadata,
+  readTextEditDocumentText,
   resolveTextEditExecutable,
   startAcceptanceModel,
   terminateLingeringComputerUseProcesses,
@@ -658,6 +660,43 @@ test("two-window isolation check verifies decoy disk/live invariance and unmoved
     "failed",
   );
 
+  // Partial keystroke prefix leakage into decoy live AX tree -> failed.
+  assert.equal(
+    evaluateTwoWindowsIsolationCheck({
+      ...baseArgs,
+      decoyLiveCaptureText: JSON.stringify({
+        elements: [{ value: `${ACCEPTANCE_DECOY_INITIAL_TEXT}AIDEN_CUA_ACCEPT` }],
+      }),
+    }).status,
+    "failed",
+  );
+
+  // Decoy live capture missing the decoy's initial line -> failed.
+  assert.equal(
+    evaluateTwoWindowsIsolationCheck({
+      ...baseArgs,
+      decoyLiveCaptureText: JSON.stringify({ elements: [{ value: "something completely unrelated" }] }),
+    }).status,
+    "failed",
+  );
+
+  // Cursor probe failure MUST NOT mask a real decoy tampering failure as an environment problem.
+  assert.equal(
+    evaluateTwoWindowsIsolationCheck({
+      ...baseArgs,
+      decoyFileAfter: `${ACCEPTANCE_DECOY_INITIAL_TEXT}tampered`,
+      environmentError: "osascript timed out",
+    }).status,
+    "failed",
+  );
+  assert.equal(
+    evaluateTwoWindowsIsolationCheck({
+      ...baseArgs,
+      environmentError: "osascript timed out",
+    }).status,
+    "environment problem",
+  );
+
   // Host mouse cursor moved during background actions -> failed.
   const moved = evaluateTwoWindowsIsolationCheck({
     ...baseArgs,
@@ -820,6 +859,47 @@ test("denied permission check verifies refusal and zero disk or window changes",
     }).status,
     "failed",
   );
+
+  // Missing correlated tool result or internal error string containing "denied" MUST fail closed.
+  assert.equal(
+    evaluateDeniedPermissionCheck({
+      ...baseArgs,
+      deniedResponseText: "Expected one tool result correlated to aiden-cua-denied-0.",
+    }).status,
+    "failed",
+  );
+  assert.equal(
+    evaluateDeniedPermissionCheck({
+      ...baseArgs,
+      deniedToolResultMissing: true,
+    }).status,
+    "failed",
+  );
+  // Echoing the denied marker (which contains "DENIED") without an actual refusal MUST fail closed.
+  assert.equal(
+    evaluateDeniedPermissionCheck({
+      ...baseArgs,
+      deniedResponseText: `Typed ${ACCEPTANCE_DENIED_TEXT}`,
+    }).status,
+    "failed",
+  );
+
+  // Missing live TextEdit window snapshot before or after denial MUST fail closed.
+  assert.equal(
+    evaluateDeniedPermissionCheck({
+      ...baseArgs,
+      targetWindowTextBefore: null,
+    }).status,
+    "failed",
+  );
+  assert.equal(
+    evaluateDeniedPermissionCheck({
+      ...baseArgs,
+      targetWindowTextAfter: null,
+      windowProbeError: "TextEdit document not found",
+    }).status,
+    "failed",
+  );
 });
 
 test("real-desktop report evaluator fails closed on missing rows, invalid statuses, and version drift", () => {
@@ -897,9 +977,117 @@ test("real-desktop report evaluator fails closed on missing rows, invalid status
 
 test("error classifier separates unsupported hosts, environment problems, and product failures", () => {
   assert.equal(classifyAcceptanceError(new Error("Computer Use requires macOS 14.4 or newer")), "unsupported");
+  assert.equal(classifyAcceptanceError(new Error("Host platform is linux")), "unsupported");
   assert.equal(classifyAcceptanceError(new Error("Quit every running Aiden window before starting")), "environment problem");
   assert.equal(classifyAcceptanceError(new Error("permission_required: Accessibility")), "environment problem");
   assert.equal(classifyAcceptanceError(new Error("Host mouse cursor moved by 24.0 px")), "failed");
+  // Generic driver/product errors must stay "failed", never "unsupported" or "environment problem".
+  assert.equal(classifyAcceptanceError(new Error("cua-driver rejected unsupported action 'foo'")), "failed");
+  assert.equal(classifyAcceptanceError(new Error("Packaged Computer Use acceptance timed out after 15 minutes.")), "failed");
+});
+
+test("run-level gate and evidence failures fold into check rows so the report never prints pass on a failed run", () => {
+  const passingRows = REAL_DESKTOP_CHECK_IDS.map((id) => ({
+    id,
+    status: "pass",
+    detail: "verified",
+    ...sampleMetadata,
+  }));
+  const folded = applyRunGateFailuresToChecks(passingRows, {
+    issuedCallCount: 8,
+    expectedCallCount: ACCEPTANCE_TWO_WINDOW_TOOL_COUNT,
+    gateEvidence: { globalEnabled: true, accessGranted: true },
+    targetMatched: true,
+    evidence: {
+      ok: false,
+      failures: [
+        "Stale element click was not rejected.",
+        "Decoy capture did not retain decoy window.",
+      ],
+    },
+  });
+  const report = { schemaVersion: 1, ...sampleMetadata, checks: folded };
+  const evaluated = evaluateRealDesktopReport(report);
+  assert.equal(evaluated.ok, false);
+  assert.equal(evaluated.overallStatus, "failed");
+  assert.equal(folded.find((row) => row.id === "textedit_saves_marker").status, "failed");
+  assert.equal(folded.find((row) => row.id === "two_windows_isolation_and_cursor").status, "failed");
+  assert.doesNotMatch(renderRealDesktopReport(report), /Overall:\*\* pass/u);
+});
+
+test("TextEdit live document text probe parses JXA output and rejects non-macOS or malformed responses", async () => {
+  const text = await readTextEditDocumentText(["Aiden CUA Target.txt", "Aiden CUA Target"], {
+    platform: "darwin",
+    exec: async (_bin, args) => {
+      assert.ok(args.includes("Aiden CUA Target.txt"));
+      return { stdout: JSON.stringify({ text: ACCEPTANCE_TARGET_INITIAL_TEXT }) };
+    },
+  });
+  assert.equal(text, ACCEPTANCE_TARGET_INITIAL_TEXT);
+
+  await assert.rejects(
+    readTextEditDocumentText(["Aiden CUA Target.txt"], { platform: "linux", exec: async () => ({ stdout: "{}" }) }),
+    /macOS-only/u,
+  );
+  await assert.rejects(
+    readTextEditDocumentText(["Aiden CUA Target.txt"], { platform: "darwin", exec: async () => ({ stdout: "not json" }) }),
+    /parse live TextEdit document text/u,
+  );
+});
+
+test("loopback model marks deniedToolResultMissing when denied turn lacks a correlated tool result", async () => {
+  const capability = "m".repeat(43);
+  const model = await startAcceptanceModel({
+    capability,
+    expectedTitles: [target.title],
+    readGates: async () => ({ globalEnabled: true, accessGranted: true }),
+    readDeniedGates: async () => ({ globalEnabled: true, accessGranted: false }),
+  });
+  const endpoint = `http://127.0.0.1:${model.port}${acceptanceChatCompletionPath(capability)}`;
+  try {
+    const turn0 = await fetch(endpoint, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        model: ACCEPTANCE_DENIED_MODEL,
+        messages: [{ role: "user", content: "Run denied check" }],
+      }),
+    });
+    assert.equal(turn0.status, 200);
+    await turn0.text();
+
+    // Turn 1 arrives with NO correlated tool result for aiden-cua-denied-0.
+    const turn1 = await fetch(endpoint, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        model: ACCEPTANCE_DENIED_MODEL,
+        messages: [{ role: "user", content: "Still no tool result" }],
+      }),
+    });
+    assert.equal(turn1.status, 200);
+    await turn1.text();
+
+    assert.equal(model.deniedToolResultMissing(), true);
+    assert.equal(model.deniedResponseText(), null);
+    assert.equal(
+      evaluateDeniedPermissionCheck({
+        metadata: sampleMetadata,
+        deniedResponseText: model.deniedResponseText(),
+        deniedToolResultMissing: model.deniedToolResultMissing(),
+        accessGranted: false,
+        targetFileBefore: ACCEPTANCE_TARGET_INITIAL_TEXT,
+        targetFileAfter: ACCEPTANCE_TARGET_INITIAL_TEXT,
+        decoyFileBefore: ACCEPTANCE_DECOY_INITIAL_TEXT,
+        decoyFileAfter: ACCEPTANCE_DECOY_INITIAL_TEXT,
+        targetWindowTextBefore: ACCEPTANCE_TARGET_INITIAL_TEXT,
+        targetWindowTextAfter: ACCEPTANCE_TARGET_INITIAL_TEXT,
+      }).status,
+      "failed",
+    );
+  } finally {
+    await model.close();
+  }
 });
 
 test("cursor and metadata probes parse macOS output and reject invalid or non-macOS responses", async () => {

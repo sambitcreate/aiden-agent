@@ -22,6 +22,7 @@ import {
   acceptanceFixture,
   acceptanceGateEvidence,
   acceptanceToolCall,
+  applyRunGateFailuresToChecks,
   buildUnsupportedRealDesktopReport,
   classifyAcceptanceError,
   correlatedToolMessage,
@@ -116,6 +117,42 @@ export async function readHostCursorPosition({
   return { x: parsed.x, y: parsed.y };
 }
 
+export async function readTextEditDocumentText(
+  documentNames,
+  { platform = process.platform, exec = executeFile } = {},
+) {
+  if (platform !== "darwin") {
+    throw new Error(`TextEdit document text probe is macOS-only (host platform is ${platform}).`);
+  }
+  const names = (Array.isArray(documentNames) ? documentNames : [documentNames])
+    .filter((name) => typeof name === "string" && name.trim().length > 0);
+  if (names.length === 0) {
+    throw new Error("At least one TextEdit document name is required.");
+  }
+  const { stdout } = await exec(
+    "/usr/bin/osascript",
+    [
+      "-l",
+      "JavaScript",
+      "-e",
+      'function run(argv) { const app = Application("TextEdit"); const docs = app.documents(); for (let i = 0; i < docs.length; i++) { const docName = String(docs[i].name()); if (argv.indexOf(docName) >= 0) { return JSON.stringify({ text: String(docs[i].text()) }); } } throw new Error("TextEdit document not found: " + argv[0]); }',
+      "--",
+      ...names,
+    ],
+    { encoding: "utf8", timeout: 5_000 },
+  );
+  let parsed;
+  try {
+    parsed = JSON.parse(String(stdout ?? "").trim());
+  } catch {
+    throw new Error(`Could not parse live TextEdit document text for ${names[0]}.`);
+  }
+  if (!parsed || typeof parsed.text !== "string") {
+    throw new Error(`Live TextEdit document text for ${names[0]} was not a string.`);
+  }
+  return parsed.text;
+}
+
 export async function readPackagedMetadata({
   root = repositoryRoot,
   appPath = null,
@@ -202,6 +239,7 @@ export async function startAcceptanceModel({
   let gateEvidence = null;
   let deniedGateEvidence = null;
   let deniedResponseText = null;
+  let deniedToolResultMissing = false;
   let cursorBefore = null;
   let cursorAfter = null;
   let resolveWaitIssued;
@@ -227,9 +265,17 @@ export async function startAcceptanceModel({
         if (deniedTurn === 1) {
           deniedGateEvidence = readDeniedGates ? await readDeniedGates() : null;
           try {
-            deniedResponseText = correlatedToolMessage(body, 0, "aiden-cua-denied").content;
-          } catch (error) {
-            deniedResponseText = error instanceof Error ? error.message : String(error);
+            const toolMessage = correlatedToolMessage(body, 0, "aiden-cua-denied");
+            if (typeof toolMessage?.content === "string") {
+              deniedResponseText = toolMessage.content;
+              deniedToolResultMissing = false;
+            } else {
+              deniedResponseText = null;
+              deniedToolResultMissing = true;
+            }
+          } catch {
+            deniedResponseText = null;
+            deniedToolResultMissing = true;
           }
           if (onDeniedObserved) await onDeniedObserved();
         }
@@ -324,6 +370,7 @@ export async function startAcceptanceModel({
     gateEvidence: () => gateEvidence,
     deniedGateEvidence: () => deniedGateEvidence,
     deniedResponseText: () => deniedResponseText,
+    deniedToolResultMissing: () => deniedToolResultMissing,
     cursorSamples: () => ({ before: cursorBefore, after: cursorAfter }),
     close: () =>
       new Promise((resolve, reject) => {
@@ -853,7 +900,6 @@ async function runAcceptance() {
   if (!support.supported) {
     const unsupportedReport = buildUnsupportedRealDesktopReport(metadata, support.reason);
     console.log(`\n${renderRealDesktopReport(unsupportedReport)}`);
-    await invalidateComputerUseAcceptanceReceipt(repositoryRoot).catch(() => {});
     throw new Error(support.reason);
   }
   if (process.env.AIDEN_COMPUTER_USE_ACCEPTANCE !== "1") {
@@ -890,6 +936,9 @@ async function runAcceptance() {
   let completed = false;
   let realDesktopReport = null;
   let deniedDiskSnapshots = null;
+  let deniedWindowTextBefore = null;
+  let deniedWindowTextAfter = null;
+  let deniedWindowProbeError = null;
   let cursorProbeError = null;
   let stopEvidence = null;
 
@@ -899,6 +948,12 @@ async function runAcceptance() {
       writeFile(decoyFile, ACCEPTANCE_DECOY_INITIAL_TEXT, "utf8"),
     ]);
     textEditProcess = await launchDisposableTextEdit(targetFile, decoyFile);
+    try {
+      deniedWindowTextBefore = await readTextEditDocumentText(expectedTitles);
+    } catch (error) {
+      deniedWindowProbeError = error instanceof Error ? error.message : String(error);
+      deniedWindowTextBefore = null;
+    }
     model = await startAcceptanceModel({
       capability: modelCapability,
       expectedTitles,
@@ -911,6 +966,12 @@ async function runAcceptance() {
           readFile(decoyFile, "utf8"),
         ]);
         deniedDiskSnapshots = { target: targetAfterDenied, decoy: decoyAfterDenied };
+        try {
+          deniedWindowTextAfter = await readTextEditDocumentText(expectedTitles);
+        } catch (error) {
+          deniedWindowProbeError = error instanceof Error ? error.message : String(error);
+          deniedWindowTextAfter = null;
+        }
       },
       onSampleCursor: async () => {
         try {
@@ -988,7 +1049,7 @@ async function runAcceptance() {
     const targetMatched = Boolean(resolvedTarget && resolvedTarget.pid === textEditProcess.pid);
     const { before: cursorBefore, after: cursorAfter } = model.cursorSamples();
 
-    const checkRows = [
+    const rawCheckRows = [
       evaluateTextEditMarkerCheck({
         metadata,
         targetFileText: savedText,
@@ -1019,14 +1080,26 @@ async function runAcceptance() {
       evaluateDeniedPermissionCheck({
         metadata,
         deniedResponseText: model.deniedResponseText(),
+        deniedToolResultMissing: model.deniedToolResultMissing(),
         accessGranted: model.deniedGateEvidence()?.accessGranted ?? false,
         targetFileBefore: ACCEPTANCE_TARGET_INITIAL_TEXT,
         targetFileAfter: deniedDiskSnapshots?.target ?? null,
         decoyFileBefore: ACCEPTANCE_DECOY_INITIAL_TEXT,
         decoyFileAfter: deniedDiskSnapshots?.decoy ?? null,
+        targetWindowTextBefore: deniedWindowTextBefore,
+        targetWindowTextAfter: deniedWindowTextAfter,
+        windowProbeError: deniedWindowProbeError,
         deniedMarker: ACCEPTANCE_DENIED_TEXT,
       }),
     ];
+
+    const checkRows = applyRunGateFailuresToChecks(rawCheckRows, {
+      issuedCallCount: model.issuedCalls.length,
+      expectedCallCount: ACCEPTANCE_TWO_WINDOW_TOOL_COUNT,
+      gateEvidence: model.gateEvidence(),
+      targetMatched,
+      evidence,
+    });
 
     realDesktopReport = {
       schemaVersion: 1,
@@ -1036,21 +1109,6 @@ async function runAcceptance() {
     const reportEval = evaluateRealDesktopReport(realDesktopReport);
     console.log(`\n${renderRealDesktopReport(realDesktopReport)}`);
 
-    if (model.issuedCalls.length !== ACCEPTANCE_TWO_WINDOW_TOOL_COUNT) {
-      throw new Error(`Only ${model.issuedCalls.length} scripted Computer Use calls were issued.`);
-    }
-    const gateEvidence = model.gateEvidence();
-    if (!gateEvidence?.globalEnabled || !gateEvidence?.accessGranted) {
-      throw new Error(
-        "The operator did not turn on Computer Use and allow the acceptance chat.",
-      );
-    }
-    if (!targetMatched) {
-      throw new Error(
-        "Computer Use did not bind to the newly launched disposable TextEdit process.",
-      );
-    }
-    if (!evidence.ok) throw new Error(evidence.failures.join(" "));
     if (!reportEval.ok) {
       const checkDetails = realDesktopReport.checks
         .filter((check) => check.status !== "pass")
@@ -1110,15 +1168,34 @@ async function runAcceptance() {
     if (!realDesktopReport) {
       const status = classifyAcceptanceError(error);
       const detail = error instanceof Error ? error.message : String(error);
+      const abortedDetail = `Run aborted before this check completed: ${detail}`;
       realDesktopReport = {
         schemaVersion: 1,
         ...metadata,
-        checks: REAL_DESKTOP_CHECK_IDS.map((id) => ({
-          id,
-          status,
-          detail,
-          ...metadata,
-        })),
+        checks: REAL_DESKTOP_CHECK_IDS.map((id) => {
+          if (id === "denied_permission_changes_nothing" && model && deniedDiskSnapshots) {
+            return evaluateDeniedPermissionCheck({
+              metadata,
+              deniedResponseText: model.deniedResponseText(),
+              deniedToolResultMissing: model.deniedToolResultMissing(),
+              accessGranted: model.deniedGateEvidence()?.accessGranted ?? false,
+              targetFileBefore: ACCEPTANCE_TARGET_INITIAL_TEXT,
+              targetFileAfter: deniedDiskSnapshots.target,
+              decoyFileBefore: ACCEPTANCE_DECOY_INITIAL_TEXT,
+              decoyFileAfter: deniedDiskSnapshots.decoy,
+              targetWindowTextBefore: deniedWindowTextBefore,
+              targetWindowTextAfter: deniedWindowTextAfter,
+              windowProbeError: deniedWindowProbeError,
+              deniedMarker: ACCEPTANCE_DENIED_TEXT,
+            });
+          }
+          return {
+            id,
+            status,
+            detail: abortedDetail,
+            ...metadata,
+          };
+        }),
       };
       console.log(`\n${renderRealDesktopReport(realDesktopReport)}`);
     }

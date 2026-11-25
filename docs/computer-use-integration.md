@@ -301,22 +301,26 @@ a second artifact:
    capability-authenticated, loopback-only scripted vision/tool model—never a
    privileged test backdoor. It validates and owns the exact system TextEdit
    executable, correlates every result to its tool-call ID and exact PID/window,
-   and verifies four outcome-based real-desktop checks independently of what the
-   tool replied:
+   and verifies four outcome-based real-desktop checks against disk files, live
+   TextEdit document state, host cursor and process probes, and correlated tool
+   responses:
    - `textedit_saves_marker`: the target TextEdit file on disk changed and
-     contains the expected typed and saved marker.
+     contains the expected typed and saved marker, and the scripted call
+     sequence and access gates completed as expected.
    - `two_windows_isolation_and_cursor`: with both target and decoy TextEdit
      windows open, only the target window changed (the decoy is byte-for-byte
-     unchanged on disk and its live accessibility capture holds no target text)
-     and the host mouse cursor position sampled before typing and after saving
-     did not move.
+     unchanged on disk and its live accessibility capture retains its initial
+     line without any target prefix) and the host mouse cursor position sampled
+     before background `type` and after `cmd+s` did not move.
    - `stop_leaves_no_helper`: only the visible Stop control emits the
      content-free explicit user-Stop event (unmount/navigation cleanup cannot
      satisfy it), Stop reaps every package-owned broker and driver process while
      Aiden remains alive, and none remain after a normal app quit.
    - `denied_permission_changes_nothing`: denying Computer Use on the seeded
-     denied chat refuses the call without recording a grant and leaves both the
-     target and decoy files unchanged on disk.
+     denied chat returns Aiden's expected refusal response (failing closed if no
+     correlated tool result arrived), records no grant, and leaves both the live
+     TextEdit target window text (sampled via AppleScript) and the target and
+     decoy files on disk unchanged.
 
    Every check row reports one of four statuses—`pass`, `failed`,
    `environment problem`, or `unsupported`—alongside the app version, pinned
@@ -338,15 +342,18 @@ The acceptance command intentionally stops for visible macOS TCC decisions, one
 **Deny** on the seeded `Computer Use acceptance (denied)` chat, and one
 **Allow in this chat** on `Computer Use acceptance` (keep hands off the mouse
 until the 30-second wait starts so the cursor check measures only background
-Computer Use actions); the type, save-key, stale-click, and decoy capture
+`type` and `cmd+s` actions); the type, save-key, stale-click, and decoy capture
 actions then run without further cards. On success it prints the structured
 real-desktop report and writes an evidence-only receipt (schema version 4,
 carrying the full `realDesktopReport` plus `appVersion`, `driverVersion`, and
 `macOSVersion`) to `build/computer-use-acceptance-receipt.json`, bound to the
-tested app's signed CDHash, app-ASAR hash, bundle ID, and versions. On non-pass
-or unsupported hosts it prints the structured report, keeps
-`real-desktop-report.json` with the temporary evidence, and invalidates any old
-receipt. A new package or acceptance run invalidates the old receipt. TCC grants
+tested app's signed CDHash, app-ASAR hash, bundle ID, and versions. On an
+unsupported host it prints the structured `unsupported` report and exits
+non-zero without modifying any existing receipt or creating a temporary evidence
+directory. On a supported host, a non-pass run prints the structured report,
+keeps `real-desktop-report.json` with the temporary evidence, and invalidates
+any old receipt. A new package or opted-in acceptance run invalidates the old
+receipt. TCC grants
 are persistent macOS state and must be revoked manually in System Settings if no
 longer wanted.
 Distribution uses `npm run dist`; it removes the old canonical output, builds in

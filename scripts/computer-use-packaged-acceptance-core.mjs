@@ -3,6 +3,7 @@ import { Buffer } from "node:buffer";
 export const ACCEPTANCE_TEXT = "AIDEN_CUA_ACCEPTANCE_20260722";
 export const ACCEPTANCE_SAVED_TEXT = `${ACCEPTANCE_TEXT}!`;
 export const ACCEPTANCE_DENIED_TEXT = "AIDEN_CUA_DENIED_MUST_NOT_APPEAR";
+export const ACCEPTANCE_TYPED_PREFIX = "AIDEN_CUA";
 export const ACCEPTANCE_TARGET_INITIAL_TEXT = "Aiden Computer Use disposable acceptance window.\n";
 export const ACCEPTANCE_DECOY_INITIAL_TEXT =
   "Aiden Computer Use decoy window — must stay unchanged.\n";
@@ -29,6 +30,17 @@ export const MIN_SUPPORTED_MACOS_VERSION = Object.freeze({ major: 14, minor: 4 }
 export const DEFAULT_CURSOR_TOLERANCE_PX = 1;
 
 const VALID_STATUS_SET = new Set(ACCEPTANCE_CHECK_STATUSES);
+
+const ACCEPTED_DENIAL_PHRASES = Object.freeze([
+  "The user declined Computer Use in this chat.",
+  "Finish Computer Use setup on your Mac (Accessibility and Screen Recording), then ask again.",
+]);
+
+const ACCEPTED_DENIAL_ERROR_CODES = new Set([
+  "permission_required",
+  "access_denied",
+  "approval_denied",
+]);
 
 function exactTargetFields(target, label = "The disposable TextEdit window") {
   if (!target) throw new Error(`${label} has not been resolved yet.`);
@@ -499,15 +511,13 @@ export function evaluateTwoWindowsIsolationCheck({
   decoyLiveCaptureText = null,
   expectedMarker = ACCEPTANCE_SAVED_TEXT,
   typedToken = ACCEPTANCE_TEXT,
+  typedPrefix = ACCEPTANCE_TYPED_PREFIX,
   cursorBefore,
   cursorAfter,
   cursorTolerancePx = DEFAULT_CURSOR_TOLERANCE_PX,
   environmentError = null,
 }) {
   const id = "two_windows_isolation_and_cursor";
-  if (environmentError) {
-    return makeCheckRow(id, "environment problem", String(environmentError), metadata);
-  }
   const distinctWindows =
     Number.isInteger(targetWindow?.window_id) &&
     targetWindow.window_id > 0 &&
@@ -545,7 +555,12 @@ export function evaluateTwoWindowsIsolationCheck({
       metadata,
     );
   }
-  if (typeof decoyFileAfter !== "string" || decoyFileAfter !== decoyFileBefore || decoyFileAfter.includes(typedToken)) {
+  if (
+    typeof decoyFileAfter !== "string" ||
+    decoyFileAfter !== decoyFileBefore ||
+    decoyFileAfter.includes(typedToken) ||
+    (typedPrefix && decoyFileAfter.includes(typedPrefix))
+  ) {
     return makeCheckRow(
       id,
       "failed",
@@ -563,7 +578,11 @@ export function evaluateTwoWindowsIsolationCheck({
       { decoyLiveUnchanged: null },
     );
   }
-  if (decoyLiveCaptureText.includes(typedToken)) {
+  const expectedDecoyLine = typeof decoyFileBefore === "string" ? decoyFileBefore.trim() : "";
+  if (
+    decoyLiveCaptureText.includes(typedToken) ||
+    (typedPrefix && decoyLiveCaptureText.includes(typedPrefix))
+  ) {
     return makeCheckRow(
       id,
       "failed",
@@ -571,6 +590,23 @@ export function evaluateTwoWindowsIsolationCheck({
       metadata,
       { decoyLiveUnchanged: false },
     );
+  }
+  if (expectedDecoyLine.length > 0 && !decoyLiveCaptureText.includes(expectedDecoyLine)) {
+    return makeCheckRow(
+      id,
+      "failed",
+      "The decoy window's live accessibility capture did not contain its initial text.",
+      metadata,
+      { decoyLiveUnchanged: false },
+    );
+  }
+  if (environmentError) {
+    return makeCheckRow(id, "environment problem", String(environmentError), metadata, {
+      targetWindowId: targetWindow.window_id,
+      decoyWindowId: decoyWindow.window_id,
+      decoyDiskUnchanged: true,
+      decoyLiveUnchanged: true,
+    });
   }
   if (!isFinitePoint(cursorBefore) || !isFinitePoint(cursorAfter)) {
     return makeCheckRow(
@@ -668,6 +704,7 @@ export function evaluateStopCleanupCheck({
 export function evaluateDeniedPermissionCheck({
   metadata,
   deniedResponseText,
+  deniedToolResultMissing = false,
   accessGranted,
   targetFileBefore = ACCEPTANCE_TARGET_INITIAL_TEXT,
   targetFileAfter,
@@ -676,12 +713,11 @@ export function evaluateDeniedPermissionCheck({
   targetWindowTextBefore = null,
   targetWindowTextAfter = null,
   deniedMarker = ACCEPTANCE_DENIED_TEXT,
+  deniedMarkerPrefix = ACCEPTANCE_TYPED_PREFIX,
+  windowProbeError = null,
   environmentError = null,
 }) {
   const id = "denied_permission_changes_nothing";
-  if (environmentError) {
-    return makeCheckRow(id, "environment problem", String(environmentError), metadata);
-  }
   if (accessGranted === true) {
     return makeCheckRow(
       id,
@@ -689,6 +725,61 @@ export function evaluateDeniedPermissionCheck({
       "The denied-permission chat unexpectedly recorded an allowed Computer Use grant.",
       metadata,
       { accessGranted: true },
+    );
+  }
+  if (
+    typeof targetFileAfter === "string" &&
+    (targetFileAfter !== targetFileBefore ||
+      targetFileAfter.includes(deniedMarker) ||
+      (deniedMarkerPrefix && targetFileAfter.includes(deniedMarkerPrefix)))
+  ) {
+    return makeCheckRow(
+      id,
+      "failed",
+      "The target TextEdit file on disk changed after a denied permission.",
+      metadata,
+      { targetDiskUnchanged: false },
+    );
+  }
+  if (
+    typeof decoyFileAfter === "string" &&
+    (decoyFileAfter !== decoyFileBefore ||
+      decoyFileAfter.includes(deniedMarker) ||
+      (deniedMarkerPrefix && decoyFileAfter.includes(deniedMarkerPrefix)))
+  ) {
+    return makeCheckRow(
+      id,
+      "failed",
+      "The decoy TextEdit file on disk changed after a denied permission.",
+      metadata,
+      { decoyDiskUnchanged: false },
+    );
+  }
+  if (
+    typeof targetWindowTextBefore === "string" &&
+    typeof targetWindowTextAfter === "string" &&
+    (targetWindowTextAfter !== targetWindowTextBefore ||
+      targetWindowTextAfter.includes(deniedMarker) ||
+      (deniedMarkerPrefix && targetWindowTextAfter.includes(deniedMarkerPrefix)))
+  ) {
+    return makeCheckRow(
+      id,
+      "failed",
+      "The target TextEdit window content changed after a denied permission.",
+      metadata,
+      { targetWindowUnchanged: false },
+    );
+  }
+  if (environmentError) {
+    return makeCheckRow(id, "environment problem", String(environmentError), metadata);
+  }
+  if (deniedToolResultMissing) {
+    return makeCheckRow(
+      id,
+      "failed",
+      "No correlated tool result was received for the denied-permission attempt.",
+      metadata,
+      { deniedToolResultMissing: true },
     );
   }
   if (typeof deniedResponseText !== "string" || deniedResponseText.trim().length === 0) {
@@ -700,9 +791,14 @@ export function evaluateDeniedPermissionCheck({
     );
   }
   let parsedOk = false;
+  let structuredRefusal = false;
   try {
     const parsed = JSON.parse(deniedResponseText);
     parsedOk = parsed?.ok === true;
+    structuredRefusal =
+      parsed?.ok === false &&
+      typeof parsed?.error?.code === "string" &&
+      ACCEPTED_DENIAL_ERROR_CODES.has(parsed.error.code);
   } catch {
     // Plain-text refusal is expected.
   }
@@ -715,76 +811,136 @@ export function evaluateDeniedPermissionCheck({
       { parsedOk: true },
     );
   }
+  const sanitizedResponse = deniedResponseText
+    .replaceAll(deniedMarker, "")
+    .replaceAll("aiden-cua-denied", "");
   const refusalRecognized =
-    /declined|denied|permission_required|Accessibility|Screen Recording|not allowed|refused|setup/iu.test(
-      deniedResponseText,
-    );
+    structuredRefusal ||
+    ACCEPTED_DENIAL_PHRASES.some((phrase) => sanitizedResponse.includes(phrase)) ||
+    /\b(?:permission_required|access_denied|approval_denied)\b/u.test(sanitizedResponse);
   if (!refusalRecognized) {
     return makeCheckRow(
       id,
       "failed",
-      "The denied-permission tool response did not report a permission or access refusal.",
+      "The denied-permission tool response did not match an expected Aiden Computer Use denial or permission refusal.",
       metadata,
       { refusalRecognized: false },
     );
   }
-  if (typeof targetFileAfter !== "string" || targetFileAfter !== targetFileBefore || targetFileAfter.includes(deniedMarker)) {
+  if (typeof targetFileAfter !== "string") {
     return makeCheckRow(
       id,
       "failed",
-      "The target TextEdit file on disk changed after a denied permission.",
+      "The target TextEdit file on disk was not captured after the denied permission.",
       metadata,
-      { targetDiskUnchanged: targetFileAfter === targetFileBefore },
+      { targetDiskUnchanged: null },
     );
   }
-  if (
-    decoyFileAfter !== null &&
-    (typeof decoyFileAfter !== "string" || decoyFileAfter !== decoyFileBefore || decoyFileAfter.includes(deniedMarker))
-  ) {
+  if (decoyFileAfter !== null && typeof decoyFileAfter !== "string") {
     return makeCheckRow(
       id,
       "failed",
-      "The decoy TextEdit file on disk changed after a denied permission.",
+      "The decoy TextEdit file on disk was not captured after the denied permission.",
       metadata,
-      { decoyDiskUnchanged: decoyFileAfter === decoyFileBefore },
+      { decoyDiskUnchanged: null },
     );
   }
-  if (
-    targetWindowTextBefore !== null &&
-    targetWindowTextAfter !== null &&
-    (targetWindowTextAfter !== targetWindowTextBefore || targetWindowTextAfter.includes(deniedMarker))
-  ) {
+  if (typeof targetWindowTextBefore !== "string" || typeof targetWindowTextAfter !== "string") {
+    const probeNote = windowProbeError ? ` (${windowProbeError})` : "";
     return makeCheckRow(
       id,
       "failed",
-      "The target TextEdit window content changed after a denied permission.",
+      `The target TextEdit window's live text was not captured before and after the denied permission${probeNote}.`,
       metadata,
-      { targetWindowUnchanged: false },
+      { targetWindowUnchanged: null },
     );
   }
   return makeCheckRow(
     id,
     "pass",
-    "Denied permission refused the action and left the target and decoy files unchanged.",
+    "Denied permission refused the action and left the target window and files unchanged.",
     metadata,
     {
       accessGranted: false,
       refusalRecognized: true,
       targetDiskUnchanged: true,
       decoyDiskUnchanged: decoyFileAfter === null ? null : true,
+      targetWindowUnchanged: true,
     },
   );
+}
+
+export function applyRunGateFailuresToChecks(
+  checkRows,
+  {
+    issuedCallCount,
+    expectedCallCount = ACCEPTANCE_TWO_WINDOW_TOOL_COUNT,
+    gateEvidence,
+    targetMatched,
+    evidence,
+  },
+) {
+  const failuresByCheck = new Map([
+    ["textedit_saves_marker", []],
+    ["two_windows_isolation_and_cursor", []],
+  ]);
+
+  if (issuedCallCount !== expectedCallCount) {
+    failuresByCheck
+      .get("textedit_saves_marker")
+      .push(`Only ${issuedCallCount} of ${expectedCallCount} scripted Computer Use calls were issued.`);
+  }
+  if (!gateEvidence?.globalEnabled || !gateEvidence?.accessGranted) {
+    failuresByCheck
+      .get("textedit_saves_marker")
+      .push("The operator did not turn on Computer Use and allow the acceptance chat.");
+  }
+  if (!targetMatched) {
+    failuresByCheck
+      .get("textedit_saves_marker")
+      .push("Computer Use did not bind to the newly launched disposable TextEdit process.");
+  }
+  if (evidence && !evidence.ok && Array.isArray(evidence.failures)) {
+    for (const failure of evidence.failures) {
+      const checkId = /decoy/iu.test(failure)
+        ? "two_windows_isolation_and_cursor"
+        : "textedit_saves_marker";
+      failuresByCheck.get(checkId).push(failure);
+    }
+  }
+
+  return checkRows.map((row) => {
+    const added = failuresByCheck.get(row.id) ?? [];
+    if (added.length === 0) return row;
+    const summary = added.join(" ");
+    if (row.status === "pass") {
+      return {
+        ...row,
+        status: "failed",
+        detail: summary,
+        evidence: { ...(row.evidence ?? {}), gateFailures: added },
+      };
+    }
+    return {
+      ...row,
+      status: "failed",
+      detail: row.detail.includes(summary) ? row.detail : `${row.detail} ${summary}`,
+      evidence: { ...(row.evidence ?? {}), gateFailures: added },
+    };
+  });
 }
 
 export function classifyAcceptanceError(error) {
   const message = error instanceof Error ? error.message : String(error ?? "");
   if (
-    /macOS-only|requires macOS \d+\.\d+|host platform is|unsupported/iu.test(message)
+    /macOS-only|requires macOS \d+\.\d+|host platform is|Could not determine host macOS version/iu.test(
+      message,
+    )
   ) {
     return "unsupported";
   }
   if (
-    /Quit every running Aiden|already running|Could not resolve.*TextEdit|TextEdit process did not start|permission_required|Accessibility and Screen Recording|missing permissions|ENOENT|No packaged app|timed out|Could not (?:parse|sample) host mouse cursor|Host mouse cursor position was not a finite/iu.test(
+    /Quit every running Aiden|already running|Could not resolve.*TextEdit|TextEdit process did not start|permission_required|Accessibility and Screen Recording|missing permissions|ENOENT|No packaged app|Could not (?:parse|sample) host mouse cursor|Host mouse cursor position was not a finite/iu.test(
       message,
     )
   ) {
