@@ -588,11 +588,15 @@ final class AidenHomeComposerModel {
         scheduleSave()
     }
 
-    private func scheduleSave() {
+    /// `immediately` skips the typing debounce: once a chat exists on the Mac
+    /// its words must leave the saved draft at once, so a kill right after
+    /// can't bring them back and start the same chat twice.
+    private func scheduleSave(immediately: Bool = false) {
         let text = durableText
         saving?.cancel()
-        saving = Task { [weak self, saveDelay] in
-            if saveDelay > .zero { try? await Task.sleep(for: saveDelay) }
+        let delay = immediately ? .zero : saveDelay
+        saving = Task { [weak self] in
+            if delay > .zero { try? await Task.sleep(for: delay) }
             guard !Task.isCancelled, let self else { return }
             await self.restoring?.value
             guard !Task.isCancelled, let session = self.storeSession, self.durableText == text else { return }
@@ -657,7 +661,7 @@ final class AidenHomeComposerModel {
         switch outcome {
         case .started(let chat):
             defaults.set(target.instanceId, forKey: Self.lastMachineKey)
-            scheduleSave()
+            scheduleSave(immediately: true)
             if isLatest, place.isOnHome() {
                 place.open(chat)
             } else {

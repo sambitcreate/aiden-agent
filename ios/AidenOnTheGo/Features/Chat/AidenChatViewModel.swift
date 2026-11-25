@@ -262,6 +262,10 @@ final class AidenChatViewModel {
     @ObservationIgnored private var didConsumeCameraLaunch = false
     /// Home's Send, waiting for this chat to be able to send it.
     @ObservationIgnored private var launchSendPrompt: String?
+    /// Home handed this chat its words to send. They also sit in the stored
+    /// draft (seeded so a launch that ends early keeps them), so the stored
+    /// draft must never come back into the composer over them.
+    @ObservationIgnored private var hasLaunchSend = false
     /// Home's send, held so it is owned rather than detached. Never cancelled:
     /// the send outlives the view that started it.
     @ObservationIgnored private var launchSendTask: Task<Void, Never>?
@@ -1068,7 +1072,11 @@ final class AidenChatViewModel {
             isPendingSendRefusedBecauseBusy = false
             do { pendingSend = try await draftStore.loadPendingSend(session: session, deviceId: context.deviceId) }
             catch { sendRecoveryError = "The saved send could not be read. Check the conversation on your computer before dismissing it and sending again." }
-            if draft.isEmpty, pendingAttachments.isEmpty, !isPreparingAttachments, !isUploadingAttachment, !isStarting,
+            if hasLaunchSend {
+                // The launch send owns the composer: the stored copy becomes
+                // whatever the composer holds now (empty once it has sent).
+                _ = try? await draftStore.save(draft, session: session)
+            } else if draft.isEmpty, pendingAttachments.isEmpty, !isPreparingAttachments, !isUploadingAttachment, !isStarting,
                let savedDraft = await draftStore.load(session: session) {
                 guard !isRemoved, coordinator.isLive(context), draftSession == session else { return }
                 // Disk access yields the main actor while the composer remains
@@ -2461,6 +2469,7 @@ final class AidenChatViewModel {
     func queueLaunchSend(_ prompt: String) {
         guard !prompt.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
         launchSendPrompt = prompt
+        hasLaunchSend = true
         if draft.isEmpty, pendingAttachments.isEmpty { draft = prompt }
     }
 
