@@ -1,7 +1,7 @@
 import XCTest
 @testable import AidenOnTheGo
 
-/// Contract revision 68: the phone's Agent Slider. The shared fixture's
+/// Contract revision 69: the phone's Agent Slider. The shared fixture's
 /// slider, the resolver's stop, step and Custom rules (expected values worked
 /// out by hand from the stop lists below), and how a chat's selection lands.
 final class AidenAgentSliderTests: XCTestCase {
@@ -126,7 +126,7 @@ final class AidenAgentSliderTests: XCTestCase {
                 value["stops"] = stops
                 return value
             }),
-            // Revision 68 names a provider, a model and a level only on a stop
+            // Revision 69 names a provider, a model and a level only on a stop
             // that can run, as the Mac and Android parsers require.
             ("a stop that isn't signed in naming its provider and model", { value in
                 var value = value

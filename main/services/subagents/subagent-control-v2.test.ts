@@ -466,3 +466,52 @@ test("only a pristine queued preparation can be unregistered before launch", () 
     /unlaunched queued/u,
   );
 });
+
+test("update rejects direct stopped transitions and treats unknown as terminal", async () => {
+  let revocations = 0;
+  let stops = 0;
+  const registry = new SubagentControlRegistryV2();
+  registry.register(
+    registration(snapshot({ state: "queued", activity: "Waiting for an execution slot" }), {
+      revokeApprovals: () => {
+        revocations += 1;
+      },
+      stop: () => {
+        stops += 1;
+      },
+    }),
+  );
+
+  // Stops must go through registry.stop() so approvals are fenced and cancelled synchronously.
+  assert.throws(
+    () => registry.update(owner, terminal("stopped")),
+    /lifecycle cannot move backward/u,
+  );
+  assert.equal(registry.status(owner, "run-one").state, "queued");
+  assert.equal(revocations, 0);
+
+  // Transitioning to unknown closes the control record as terminal.
+  const unknownSnapshot = snapshot({
+    revision: 2,
+    state: "unknown",
+    activity: undefined,
+    updatedAt: 200,
+    finishedAt: 200,
+    terminalMarkdown: "Outcome unknown.",
+  });
+  registry.update(owner, unknownSnapshot);
+  assert.equal(revocations, 1);
+  assert.equal(registry.stop(owner, "run-one").changed, false);
+  assert.equal(stops, 0);
+  await assert.rejects(registry.steer(owner, "run-one", "late"), /terminal/u);
+  assert.throws(
+    () =>
+      registry.update(owner, {
+        ...terminal("completed"),
+        revision: 3,
+        updatedAt: 300,
+        finishedAt: 300,
+      }),
+    /lifecycle cannot move backward/u,
+  );
+});

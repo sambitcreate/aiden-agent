@@ -255,7 +255,7 @@ export interface AidenRemoteChatProjection {
   title: string;
   providerId?: string;
   modelId?: string;
-  /** Additive (protocol revision 68): the chat's own thinking level, with its model. */
+  /** Additive (protocol revision 69): the chat's own thinking level, with its model. */
   thinkingLevel?: GenerationThinkingLevel;
   messages: AidenRemoteMessageProjection[];
   createdAt: string;
@@ -723,7 +723,7 @@ function projectForkSummary(summary: ChatForkSummaryV1): AidenRemoteChatForkSumm
 }
 
 /**
- * The chat's own model selection. Its thinking level (revision 68) belongs to
+ * The chat's own model selection. Its thinking level (revision 69) belongs to
  * its model, so it is shown only with one, and never for a Bot chat.
  */
 function projectChatModelSelection(
@@ -928,7 +928,7 @@ export interface AidenRemoteChatMessagesWindow {
   title: string;
   providerId?: string;
   modelId?: string;
-  /** Additive (protocol revision 68): the chat's own thinking level, with its model. */
+  /** Additive (protocol revision 69): the chat's own thinking level, with its model. */
   thinkingLevel?: GenerationThinkingLevel;
   createdAt: string;
   updatedAt: string;
@@ -1418,7 +1418,7 @@ export class AidenRemoteChatService {
             model?: string;
             expectedWorkspaceId?: string;
             isCurrent?: () => boolean;
-            /** Revision 68: the chat's own level, saved in the same write as the message. */
+            /** Revision 69: the chat's own level, saved in the same write as the message. */
             thinkingLevel?: GenerationThinkingLevel | null;
           },
         ): Promise<Chat>;
@@ -1531,7 +1531,7 @@ export class AidenRemoteChatService {
        */
       deviceSupportsContinueInNewChat?: (deviceId: string) => Promise<boolean>;
       /**
-       * Revision 68: whether a device negotiated `chat:agent-slider`. Such a
+       * Revision 69: whether a device negotiated `chat:agent-slider`. Such a
        * device's turn level is fitted to the model instead of refused, and a
        * turn that asks with `saveSelection` (and names its model) has the
        * level saved as the chat's own, in the same write as its message. A
@@ -1541,7 +1541,7 @@ export class AidenRemoteChatService {
        */
       deviceSupportsAgentSlider?: (deviceId: string) => Promise<boolean>;
       /**
-       * Revision 68: whether the host has a readable Agent Slider right now.
+       * Revision 69: whether the host has a readable Agent Slider right now.
        * A selection is saved only while it does; absent reads as no.
        */
       hostHasAgentSlider?: () => Promise<boolean>;
@@ -2601,7 +2601,7 @@ export class AidenRemoteChatService {
     return this.options.forks?.service.supportsContinue === true;
   }
 
-  /** Whether a turn can save its selection as the chat's own (revision 68, `chat:agent-slider`). */
+  /** Whether a turn can save its selection as the chat's own (revision 69, `chat:agent-slider`). */
   get supportsAgentSlider(): boolean {
     return this.options.deviceSupportsAgentSlider !== undefined;
   }
@@ -2904,7 +2904,7 @@ export class AidenRemoteChatService {
             });
             supportsCompanionImages = preflightResult?.supportsCompanionImages === true;
           }
-          // Revision 68: a slider device echoes the chat's saved level, which
+          // Revision 69: a slider device echoes the chat's saved level, which
           // the desktop may have saved unfitted. It runs at the level the model
           // offers, as on the desktop; other devices keep the strict check.
           const holdsAgentSlider = (await this.options.deviceSupportsAgentSlider?.(deviceId)) === true;
@@ -3079,7 +3079,7 @@ export class AidenRemoteChatService {
                 throw skillInvocationRemoteError(error);
               }
             }
-            // Revision 68: a phone with the Agent Slider keeps the chat on the
+            // Revision 69: a phone with the Agent Slider keeps the chat on the
             // stop it chose, as the desktop composer does, only when the turn
             // asks to and names that stop's model, and the host keeps a slider.
             // The level that runs is saved in the message's own write, so a

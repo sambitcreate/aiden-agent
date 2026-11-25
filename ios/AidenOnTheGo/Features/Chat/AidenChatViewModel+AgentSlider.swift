@@ -1,7 +1,7 @@
 import Foundation
 
 extension AidenChatViewModel {
-    // MARK: - Agent Slider (contract revision 68)
+    // MARK: - Agent Slider (contract revision 69)
 
     /// The Mac's Agent Slider, when this chat's composer shows it: a chat the
     /// person picks the model for, on a Mac that offers `chat:agent-slider`

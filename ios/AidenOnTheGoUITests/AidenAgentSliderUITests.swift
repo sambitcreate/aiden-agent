@@ -1,6 +1,6 @@
 import XCTest
 
-/// Contract revision 68 on a phone (`-AidenDemoAgentSlider`): the composer's
+/// Contract revision 69 on a phone (`-AidenDemoAgentSlider`): the composer's
 /// slider chip opens the Agent Slider, a stop moves the chat, and the turn
 /// runs on that stop's model and level, and so does a plain follow-up. The
 /// demo Mac's reply names the stop whose model and level the turn asked for.

@@ -2,7 +2,7 @@
 import Foundation
 import Synchronization
 
-/// The demo Mac's Agent Slider (contract revision 68), only with
+/// The demo Mac's Agent Slider (contract revision 69), only with
 /// `-AidenDemoAgentSlider`, so no other launch changes. Every machine then
 /// offers `chat:agent-slider`, this phone holds it, `/models` carries a
 /// five-stop slider, and a chat's turns run: each reply says which model and

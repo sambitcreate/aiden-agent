@@ -475,7 +475,7 @@ enum AidenDemoHosts {
             installation.serverFeatures.append(AidenServer.phoneRunControlFeature)
         }
         if AidenDemoAgentSlider.isRequested {
-            // Revision 68: the Mac offers the Agent Slider and this phone holds it.
+            // Revision 69: the Mac offers the Agent Slider and this phone holds it.
             installation.deviceCapabilities.append(.chatAgentSlider)
             installation.serverCapabilities?.append(.chatAgentSlider)
         }

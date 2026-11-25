@@ -48,7 +48,7 @@ export interface AidenRemoteProviderProjection {
 }
 
 /**
- * One Agent Slider stop as a paired device sees it (revision 68).
+ * One Agent Slider stop as a paired device sees it (revision 69).
  * `providerId` and `modelId` come together and only on a "ready" stop.
  * `thinkingLevel` (ready stops only) is the level a turn on this stop runs
  * with here: the stop's own level fitted to what its model offers, absent
@@ -83,7 +83,7 @@ export interface AidenRemoteAgentSliderProjection {
 export interface AidenRemoteModelsProjection {
   providers: AidenRemoteProviderProjection[];
   defaults: Record<string, string>;
-  /** Additive (revision 68): absent when the host has no readable Agent Slider. */
+  /** Additive (revision 69): absent when the host has no readable Agent Slider. */
   agentSlider?: AidenRemoteAgentSliderProjection;
 }
 
@@ -294,8 +294,11 @@ export class AidenRemoteModelService {
         (provider) =>
           provider.id === settings.lastProviderId && provider.models.some((model) => !model.hidden),
       ) ?? providers.find((provider) => provider.models.some((model) => !model.hidden));
+    // A saved model wins; otherwise the provider's own default (Pi's, for built-ins), then its first shown model.
+    const providerDefault = configured.find((entry) => entry.id === selectedProvider?.id)?.defaultModel;
     const selectedModel =
       selectedProvider?.models.find((model) => model.id === settings.lastModel && !model.hidden) ??
+      selectedProvider?.models.find((model) => model.id === providerDefault && !model.hidden) ??
       selectedProvider?.models.find((model) => !model.hidden);
     // With a slider, a new chat starts on the computer's last stop, level
     // included, but only when the default is exactly that last model.

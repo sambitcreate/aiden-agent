@@ -728,7 +728,7 @@ async function createRuntime(): Promise<AidenRemoteRuntime> {
               );
               return device?.capabilities.includes("chat:continue-in-new-chat") === true;
             },
-            // Revision 68: only a device that negotiated it keeps its turn's selection as the chat's own.
+            // Revision 69: only a device that negotiated it keeps its turn's selection as the chat's own.
             deviceSupportsAgentSlider: async (deviceId) => {
               const device = (await state.snapshot()).devices.find(
                 (candidate) => candidate.id === deviceId && candidate.revokedAt === undefined,
@@ -1360,6 +1360,16 @@ async function createRuntime(): Promise<AidenRemoteRuntime> {
                   botFiles,
                   bots,
                   botSessions,
+                  // Revision 68 (`bot:needs-you`): the same signal this Mac's own Bot rows, the host feed
+                  // and the Dock badge use, read without the transcript.
+                  botNeedsYou: async (botIds: readonly string[]) => {
+                    const { botLiveProjection } = await import("./bot-runtime/bot-session-main.js");
+                    const live = botLiveProjection();
+                    const waiting = await mapWithConcurrency(botIds, 4, async (botId) =>
+                      (await live.needsYou(botId).catch(() => false)) ? botId : null,
+                    );
+                    return new Set(waiting.filter((botId): botId is string => botId !== null));
+                  },
                   botOpenWork: (await import("./bot-open-work/service-main.js")).botOpenWork,
                   botRoutineModels: { ...(await import("./bot-routine-models-main.js")).botRoutineModels, resumeStatus: async (botId: string) => (await (await import("./bot-runtime/bot-session-main.js")).botSessionRuntime()).executionResumeStatus(botId) },
                   botPeers: (await import("./bot-peers/service-main.js")).botPeers,

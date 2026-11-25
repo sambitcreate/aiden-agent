@@ -681,7 +681,8 @@ struct AidenRemoteCapability: RawRepresentable, Codable, Hashable, Sendable {
     /// Contract revision 59 adds `bot:routine-models`, asked for alone.
     /// Contract revision 59 adds `bot:peers`, asked for alone.
     /// Contract revision 64 adds `chat:continue-in-new-chat`, asked for alone.
-    /// Contract revision 68 adds `chat:agent-slider`, asked for alone.
+    /// Contract revision 68 adds `bot:needs-you`, asked for alone.
+    /// Contract revision 69 adds `chat:agent-slider`, asked for alone.
 
     /// Contract revision 61 adds `approval:cards`, `approvals:settings`,
     /// `bot:settings-changes`, `bot:suggestions` and `bot:templates`, each alone.
@@ -699,6 +700,7 @@ struct AidenRemoteCapability: RawRepresentable, Codable, Hashable, Sendable {
         Self(rawValue: "chat:new-worktree"),
         Self(rawValue: "chat:continue-in-new-chat"),
         Self(rawValue: "stream:snapshot-reasons"),
+        Self(rawValue: "bot:needs-you"),
         Self(rawValue: "chat:agent-slider"),
         Self(rawValue: "bot:watches"),
         Self(rawValue: "bot:open-work"),
@@ -783,7 +785,13 @@ struct AidenRemoteCapability: RawRepresentable, Codable, Hashable, Sendable {
     /// resets. Asked for alone so older hosts do not reject the progress batch.
     static let streamSnapshotReasons = Self(rawValue: "stream:snapshot-reasons")
 
-    /// Revision 68: a turn this device sends saves its model and thinking level
+    /// Revision 68: `GET /bots` summaries carry `needsYou: true` for a Bot
+    /// waiting on the person (an approval, a question, a hand-off or an open
+    /// issue). It grants no authority. A Mac on an earlier revision refuses the
+    /// name, so the device asks for it alone.
+    static let botNeedsYou = Self(rawValue: "bot:needs-you")
+
+    /// Revision 69: a turn this device sends saves its model and thinking level
     /// as the chat's own, as a turn sent from the Mac's composer does, so the
     /// Agent Slider on `GET /models` matches what the next turn runs. Asked for
     /// alone so older hosts do not reject the progress batch.
@@ -3109,7 +3117,7 @@ struct AidenChatMessagesWindow: Decodable, Equatable, Sendable {
         var modelId: String?
         var createdAt: Date
         var updatedAt: Date
-        /// Revision 68: the chat's own thinking level, with its model.
+        /// Revision 69: the chat's own thinking level, with its model.
         var thinkingLevel: String? = nil
     }
 

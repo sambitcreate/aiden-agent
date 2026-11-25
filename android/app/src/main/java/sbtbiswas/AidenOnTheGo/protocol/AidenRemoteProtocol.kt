@@ -697,7 +697,14 @@ data class AidenRemoteCapability(val rawValue: String) {
         val STREAM_SNAPSHOT_REASONS = AidenRemoteCapability("stream:snapshot-reasons")
 
         /**
-         * Revision 68: a turn that asks to save its selection keeps its level as the chat's own,
+         * Revision 68: `GET /bots` summaries carry `needsYou: true` for a Bot waiting on the
+         * person (an approval, a question, a hand-off or an open issue). It grants no authority.
+         * A Mac on an earlier revision refuses the name, so it is asked for alone.
+         */
+        val BOT_NEEDS_YOU = AidenRemoteCapability("bot:needs-you")
+
+        /**
+         * Revision 69: a turn that asks to save its selection keeps its level as the chat's own,
          * with its provider and model, in the same write as the message. The Mac offers it only in
          * `serverCapabilities`. This phone doesn't ask for it yet: its turns don't carry the chat's
          * own level, so saving them would move the chat off the stop chosen on the computer. The
@@ -756,11 +763,14 @@ data class AidenRemoteCapability(val rawValue: String) {
         /** Revision 65: negotiable when the Mac lists it in `serverCapabilities`, in its own call. */
         val PHONE_STREAM_SNAPSHOT_REASONS = listOf(STREAM_SNAPSHOT_REASONS)
 
+        /** Revision 68: negotiable when the Mac lists it in `serverCapabilities`, in its own call. */
+        val PHONE_BOT_NEEDS_YOU = listOf(BOT_NEEDS_YOU)
+
         /** Every grant `POST /device/capabilities` may add. */
         val NEGOTIABLE = PROGRESS + PHONE_RUNS + PHONE_SIMULATORS + PHONE_BOT_CARDS + PHONE_BOT_ACTIVITY +
             PHONE_BOT_HANDOFFS + PHONE_SCHEDULE_CARDS + PHONE_BOT_IMAGES + PHONE_BOT_ISSUES + PHONE_CHAT_JOBS +
             PHONE_ATTACHMENTS_RAW + PHONE_CHAT_NEW_WORKTREE + PHONE_CHAT_CONTINUE_IN_NEW_CHAT +
-            PHONE_STREAM_SNAPSHOT_REASONS + PHONE_BOT_MESSAGING +
+            PHONE_STREAM_SNAPSHOT_REASONS + PHONE_BOT_NEEDS_YOU + PHONE_BOT_MESSAGING +
             listOf(BOT_WATCHES, BOT_OPEN_WORK, BOT_ROUTINE_MODELS, BOT_PEERS, BOT_ACCESS_REQUESTS, BOT_PLANS, BOT_ALLOWED) +
             BOT_UX
 
@@ -768,7 +778,7 @@ data class AidenRemoteCapability(val rawValue: String) {
         val PHONE_KNOWN = V1_KNOWN + PHONE_RUNS + PHONE_SIMULATORS + PHONE_BOT_CARDS + PHONE_BOT_ACTIVITY +
             PHONE_BOT_HANDOFFS + PHONE_SCHEDULE_CARDS + PHONE_BOT_IMAGES + PHONE_BOT_ISSUES + PHONE_CHAT_JOBS +
             PHONE_ATTACHMENTS_RAW + PHONE_CHAT_NEW_WORKTREE + PHONE_CHAT_CONTINUE_IN_NEW_CHAT +
-            PHONE_STREAM_SNAPSHOT_REASONS + PHONE_BOT_MESSAGING +
+            PHONE_STREAM_SNAPSHOT_REASONS + PHONE_BOT_NEEDS_YOU + PHONE_BOT_MESSAGING +
             listOf(BOT_WATCHES, BOT_OPEN_WORK, BOT_ROUTINE_MODELS, BOT_PEERS, BOT_ACCESS_REQUESTS, BOT_PLANS, BOT_ALLOWED) +
             BOT_UX
     }

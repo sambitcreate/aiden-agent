@@ -36,7 +36,7 @@ struct AidenAppSettingsView: View {
             && coordinator.installationStore.activeInstallation?.hasNegotiatedAccess(to: .approvalRespond) == true
     }
 
-    /// Revision 68 (`chat:agent-slider`): the Mac's slider stops, read-only.
+    /// Revision 69 (`chat:agent-slider`): the Mac's slider stops, read-only.
     private var offersAgentSlider: Bool {
         coordinator.installationStore.activeInstallation?.hasNegotiatedAccess(to: .chatAgentSlider) == true
     }

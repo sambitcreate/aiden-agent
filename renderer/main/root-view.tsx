@@ -177,8 +177,15 @@ function RootContent() {
 
   useCommandHandler(
     "terminal.toggle",
-    terminal.toggle,
-    workspaceCommands.terminal && (terminal.canOpen || terminal.open),
+    () => {
+      // The header leaves Terminal out while it can't open, so the shortcut says why.
+      if (!terminal.canOpen && !terminal.open) {
+        toast.info(terminal.unavailableReason ?? "The terminal isn't available here.");
+        return;
+      }
+      terminal.toggle();
+    },
+    workspaceCommands.terminal,
   );
   useCommandHandler(
     "environment.toggle",

@@ -10,6 +10,10 @@ import { createModels, type Api, type Model, type Provider } from "@earendil-wor
 import type { ResolvedModelRuntime } from "../../../../main/services/model-runtime-core.js";
 import type { StoredProvider } from "../../../../main/services/types.js";
 import { withoutMessageThreads } from "../../../../main/services/pi-message-threads.js";
+import {
+	adaptGoogleXHighStreamOptions,
+	withAidenPiCompatibility,
+} from "../../../../main/services/pi-provider-compatibility.js";
 
 /** The parts of Pi's ExtensionContext the model bridge reads. */
 export interface ModelRuntimeContext {
@@ -60,7 +64,18 @@ export async function resolveRuntimeFromContext(
 	if (auth.ok === false) throw new Error(`No credentials for ${providerId}.`);
 	const models = createModels();
 	const provider = registry.getProvider?.(providerId);
-	if (provider) models.setProvider(provider);
+	if (provider) {
+		const compatible = withAidenPiCompatibility(provider);
+		models.setProvider({
+			...compatible,
+			streamSimple: (targetModel, context, options) =>
+				compatible.streamSimple(
+					targetModel,
+					context,
+					adaptGoogleXHighStreamOptions(targetModel, options),
+				),
+		});
+	}
 	return {
 		provider: storedProvider(providerId, modelId, model.baseUrl),
 		model: withoutMessageThreads(auth.baseUrl ? { ...model, baseUrl: auth.baseUrl } : model),
