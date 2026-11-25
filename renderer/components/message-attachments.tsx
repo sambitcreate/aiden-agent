@@ -4,6 +4,7 @@ import type { Attachment } from "../lib/types";
 import { cn } from "../lib/ui-utils";
 import { imagePixelSize } from "../shared/image-dimensions";
 import { isCanonicalRasterImageMimeType } from "../shared/attachment-contract";
+import { withoutGrabbedElementThumbnails } from "../shared/browser-element-grab";
 import { chatsApi } from "../lib/ipc";
 import { Button, ContextMenu, ContextMenuContent, ContextMenuItem, ContextMenuTrigger, Dialog, toast } from "./ui";
 
@@ -156,7 +157,7 @@ export function partitionMessageAttachments(
 } {
   const images: Array<{ attachment: Attachment; source: string }> = [];
   const files: Attachment[] = [];
-  for (const attachment of attachments) {
+  for (const attachment of withoutGrabbedElementThumbnails(attachments)) {
     const source = failedImageIds.has(attachment.id) ? undefined : inlineImageSource(attachment);
     if (source) images.push({ attachment, source });
     else files.push(attachment);
@@ -180,8 +181,9 @@ export function MessageAttachments({
   imageActions?: MessageImageActions;
 }) {
   const controller = React.useContext(MessageAttachmentPreviewContext);
-  if (attachments.length === 0) return null;
-  const content = <MessageAttachmentsContent attachments={attachments} role={role} imageActions={imageActions} />;
+  const visible = React.useMemo(() => withoutGrabbedElementThumbnails(attachments), [attachments]);
+  if (visible.length === 0) return null;
+  const content = <MessageAttachmentsContent attachments={visible} role={role} imageActions={imageActions} />;
   if (!controller) return <MessageAttachmentPreviewProvider>{content}</MessageAttachmentPreviewProvider>;
   return content;
 }

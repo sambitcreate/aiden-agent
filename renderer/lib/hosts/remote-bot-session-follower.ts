@@ -149,6 +149,8 @@ export class RemoteBotSessionFollower {
   private receive(message: PeerBotSessionMessage): void {
     if (this.stopped || message.hostId !== this.hostId || message.botId !== this.botId) return;
     if (message.kind === "state") {
+      // A gone stream has ended on the main side; Try again must join a new one.
+      if (message.state === "gone") this.subscriptionId = null;
       this.publish({ stream: message.state, ...(message.state === "gone" ? { gone: true } : {}) });
       return;
     }

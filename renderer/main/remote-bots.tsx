@@ -78,22 +78,31 @@ export function useRemoteBots(): {
     return control;
   };
 
+  // The person's latest pick wins: an earlier open still on its way neither navigates nor clears the spinner.
+  const latestOpen = React.useRef(0);
   const open = async (hostId: string, botId: string) => {
     const view = views.find((entry) => entry.id === hostId);
-    if (!view || opening) return;
+    if (!view) return;
+    const key = `${hostId}/${botId}`;
     if (hostSharesBotSessions(view)) {
+      latestOpen.current += 1;
+      setOpening(null);
       await navigate({ to: "/host/$hostId/bots/$botId/chat", params: { hostId, botId } });
       return;
     }
-    setOpening(`${hostId}/${botId}`);
+    // Picking the Bot already opening leaves that open in charge.
+    if (opening === key) return;
+    const request = ++latestOpen.current;
+    setOpening(key);
     try {
       const control = await controlFor(view);
       const chatId = await control.openBotChat(botId);
+      if (request !== latestOpen.current) return;
       await navigate({ to: "/host/$hostId/chat/$chatId", params: { hostId, chatId } });
     } catch (error) {
-      toast.error(error instanceof Error ? error.message : "That Bot's chat could not be opened.");
+      if (request === latestOpen.current) toast.error(error instanceof Error ? error.message : "That Bot's chat could not be opened.");
     } finally {
-      setOpening(null);
+      if (request === latestOpen.current) setOpening(null);
     }
   };
 

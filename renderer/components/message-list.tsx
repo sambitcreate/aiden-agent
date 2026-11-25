@@ -41,6 +41,7 @@ import { WebExtractRecap } from "./web-extract-recap";
 import { BrowserRecordingCard } from "./browser-recording-card";
 import { reasoningActivityLabel } from "../lib/agent-steps";
 import type { Attachment, ChatMessage } from "../lib/types";
+import type { GrabbedElementContextV1 } from "../shared/browser-element-grab";
 import type { ChatArtifactV1, ChatHtmlArtifactV1, HtmlArtifactLayout } from "../shared/chat-artifacts";
 import { isChatHtmlArtifact, isChatImageArtifact } from "../shared/chat-artifacts";
 import { attachmentsShownWithVisuals } from "../shared/visual-snapshots";
@@ -164,6 +165,8 @@ interface MessageListProps {
    * avoids unmounting and remounting the transcript and first user bubble.
    */
   draftWorktreeSend?: ActiveWorktreeSend;
+  /** Grabbed browser elements captured alongside an active worktree first send. */
+  draftWorktreeGrabbedElements?: readonly GrabbedElementContextV1[];
   /** Compact layout for narrow floating surfaces (omits main-window dock gutter). */
   compact?: boolean;
 }
@@ -616,7 +619,12 @@ const SettledMessageRow = React.memo(function SettledMessageRow({
     [messageAttachments, messageTimeline, storedImagePlacements],
   );
   const contained =
-    deferOffscreenLayout && !visuals?.length && !uiVisuals?.length && !message?.attachments?.length && !message?.appPanels?.length;
+    deferOffscreenLayout &&
+    !visuals?.length &&
+    !uiVisuals?.length &&
+    !message?.attachments?.length &&
+    !message?.grabbedElements?.length &&
+    !message?.appPanels?.length;
   const row = (
     // Hovering anywhere on a reply reveals the action row at its end.
     <div
@@ -668,6 +676,7 @@ const SettledMessageRow = React.memo(function SettledMessageRow({
             role={message.role}
             content={message.content}
             attachments={message.attachments}
+            grabbedElements={message.grabbedElements}
             skill={message.skill}
             inputSource={message.inputSource}
             {...(message.role === "user" && message.fromLeadChat && leadChatLabel ? { fromLeadChat: leadChatLabel } : {})}
@@ -873,6 +882,7 @@ export function MessageList({
   forkBeforeFirstPrompt = true,
   storedImageActions = true,
   draftWorktreeSend,
+  draftWorktreeGrabbedElements,
   compact = false,
 }: MessageListProps) {
   const workDetails = useAppearancePreference("workDetails");
@@ -1220,6 +1230,9 @@ export function MessageList({
       role: "user",
       content: draftWorktreeSend.text,
       attachments: draftWorktreeSend.attachments.length > 0 ? [...draftWorktreeSend.attachments] : undefined,
+      ...(draftWorktreeGrabbedElements?.length
+        ? { grabbedElements: [...draftWorktreeGrabbedElements] }
+        : {}),
       ...(draftWorktreeSend.inputSource ? { inputSource: draftWorktreeSend.inputSource } : {}),
       createdAt: 0,
     };

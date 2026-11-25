@@ -8,6 +8,7 @@ import { useReportGoalView } from "../lib/use-report-goal-view";
 import { skipToken, useQuery } from "@tanstack/react-query";
 import { useNavigate } from "@tanstack/react-router";
 import { Ellipsis, Pause, Play, Square } from "lucide-react";
+import { BotAvatar as BotAvatarMark } from "../components/bot-avatar";
 import { AskUserQuestionComposer } from "../components/ask-user-question-composer";
 import { HandoffCard, handoffNoNoteComposerText } from "../components/bots/handoff-card";
 import { handoffTakenKey, useHandoffTaken } from "../components/bots/handoff-taken";
@@ -29,6 +30,8 @@ import { useAppCapabilities } from "../lib/app-capabilities";
 import { botListLocation } from "../lib/bot-routes";
 import { insertTextIntoTextarea } from "../lib/composer-type-focus";
 import { hostQueryKeys } from "../lib/hosts/host-query-keys";
+import { remoteBotPhotoAsset } from "../lib/hosts/remote-bot-photo-asset";
+import { markRemoteBotSeen, remoteBotShownReplyAt } from "../lib/remote-bot-seen";
 import { hostServesBotHandoffs, hostSharesBotSessions } from "../lib/hosts/remote-bot-session";
 import { useRemoteBotSession } from "../lib/hosts/use-remote-bot-session";
 import { browserApi, peerHostsApi } from "../lib/ipc";
@@ -51,7 +54,7 @@ import { botReplyQuote } from "./bots/bot-message-actions";
 import { BotPausedNotice, botPausedText } from "./bots/bot-paused-card";
 import { BotStatusLine } from "./bots/bot-status-line";
 import { useChatFind } from "../components/chat-find-bar";
-import { useRemoteBotImages } from "../lib/hosts/remote-images";
+import { useRemoteBotImages, useRemoteBotPhoto } from "../lib/hosts/remote-images";
 
 /** Text files ride along in the message, as in a local Bot chat. */
 function attachmentText(attachments: readonly Attachment[]): string {
@@ -67,7 +70,7 @@ function botName(feed: PeerHostFeedSnapshot | null | undefined, botId: string): 
   return name || null;
 }
 
-/** The Bot's character as the host's list draws it, for the hand-off card's tile. */
+/** The Bot's character as the host's list draws it, for the header and the hand-off card's tile. */
 function botAvatar(feed: PeerHostFeedSnapshot | null | undefined, botId: string): BotAvatar {
   const avatar = feed?.bots.find((bot) => bot.id === botId)?.avatar;
   const semantic = avatar && typeof avatar === "object" ? (avatar as { semantic?: unknown }).semantic : undefined;
@@ -136,9 +139,21 @@ export function RemoteBotChatView({ hostId, botId }: { hostId: string; botId: st
   const toolActivitySetting = useAppearancePreference("showToolActivity");
   const localBots = useBots(false, toolActivitySetting === undefined);
   const avatar = botAvatar(feed.data, botId);
+  const row = feed.data?.bots.find((bot) => bot.id === botId);
+  const photoUrl = useRemoteBotPhoto(hostId, botId, row ? remoteBotPhotoAsset(row) : undefined);
   // A host too old to share the conversation is told so below, without asking it.
   const shared = !host || hostSharesBotSessions(host);
   const live = useRemoteBotSession(hostId, botId, shared);
+  // The newest reply the chat shows is not unread when the person leaves. Only
+  // what the session shows counts, never the feed alone (revision 52 hosts send `lastReplyAt`).
+  const feedReplyAt = typeof row?.lastReplyAt === "string" ? Date.parse(row.lastReplyAt) : Number.NaN;
+  const shownReplyAt = remoteBotShownReplyAt(
+    live.view?.snapshot.entries,
+    Number.isFinite(feedReplyAt) ? feedReplyAt : undefined,
+  );
+  React.useEffect(() => {
+    markRemoteBotSeen(`${hostId}/${botId}`, shownReplyAt);
+  }, [hostId, botId, shownReplyAt]);
   const { busy, run } = useBusyOperations();
   const composerRef = React.useRef<HTMLTextAreaElement | null>(null);
   const findBar = useChatFind(`${hostId}/${botId}`);
@@ -214,7 +229,10 @@ export function RemoteBotChatView({ hostId, botId }: { hostId: string; botId: st
       className="h-full min-h-0"
       alignFooterToScrollContent
       title={
-        <span className="flex min-w-0 items-baseline gap-2">
+        <span className="flex min-w-0 items-center gap-2">
+          <span aria-hidden="true" className="shrink-0">
+            <BotAvatarMark avatar={avatar} name={name} size="small" photoUrl={photoUrl} working={running} />
+          </span>
           <span className="truncate">{name}</span>
           <Text as="span" variant="small" color="tertiary" className="truncate">
             on {hostName}
@@ -389,6 +407,8 @@ export function RemoteBotChatView({ hostId, botId }: { hostId: string; botId: st
     }
     try {
       await call({ operation: "botSend", resourceId: botId, idempotencyKey: key, body }, `Aiden couldn’t send to ${name}.`);
+      // While the stream reconnects, read the session so the sent message shows now, as Pause does.
+      if (live.stream !== "streaming") live.reload();
     } catch (error) {
       if ((error as { code?: unknown }).code === "outcome_unknown") {
         unsettledSend.current = { text: fullText, photos: identity, key, body };

@@ -9,6 +9,8 @@ import type { PeerHostView } from "../shared/peer-host";
 import type { PeerOperation } from "../shared/peer-operation";
 import { RemoteBotChatView } from "./remote-bot-chat-view";
 import { clearHandoffTaken } from "../components/bots/handoff-taken";
+import { RemoteBotsSection } from "../components/remote-bots-section";
+import { REMOTE_BOT_SEEN_KEY, resetRemoteBotSeenForTests } from "../lib/remote-bot-seen";
 import {
   AIDEN_CONTENT_REGIONS_SOURCE,
   type AidenContentRegionFacts,
@@ -573,4 +575,55 @@ test("a shared image whose bytes cannot be read from the other computer says wha
   );
   assert.ok(await screen.findByText(/I shared an image: dentist-map\.png\. Open this chat on its computer to see it\./));
   assert.ok(!screen.queryByRole("img", { name: "dentist-map.png" }), "no image drawn");
+});
+
+test("a paired Mac's Bot's dot clears only once its chat shows the new reply", async () => {
+  const before = Date.parse("2026-11-24T08:00:00.000Z");
+  const replyAt = "2026-11-24T09:00:00.000Z";
+  for (const shows of [false, true]) {
+    cleanup();
+    localStorage.clear();
+    resetRemoteBotSeenForTests();
+    // This Mac first listed the host's Bots before the reply came.
+    localStorage.setItem(REMOTE_BOT_SEEN_KEY, JSON.stringify({ version: 2, hostSince: { host_a: before }, seenReplyAt: {} }));
+    const entries = [
+      { type: "message", id: "m1", role: "user", text: "What is on today?", createdAt: "2026-11-24T07:59:00.000Z" },
+      { type: "message", id: "m2", role: "assistant", text: "Two meetings and a dentist.", createdAt: "2026-11-24T08:00:00.000Z" },
+      ...(shows ? [{ type: "message", id: "m3", role: "assistant", text: "The dentist moved to Friday.", createdAt: replyAt }] : []),
+    ];
+    installBotTestIpc({
+      "remote:peerBotSessionSubscribe": () => ({ subscriptionId: "bot_sub_1", state: "streaming" }),
+      "remote:peerBotSessionUnsubscribe": () => true,
+      "remote:peerCall": (_hostId, operation) =>
+        (operation as PeerOperation).operation === "botSession"
+          ? { ok: true, value: { ...SESSION, entries } }
+          : { ok: false, error: { code: "failed", message: "Not in this test." } },
+    });
+    const queryClient = createBotTestQueryClient();
+    queryClient.setQueryData(hostQueryKeys.list(), [HOST]);
+    queryClient.setQueryData(hostQueryKeys.feed("host_a"), {
+      bots: [{ id: "bot_1", name: "Planner", lastReplyAt: replyAt }],
+      chats: [],
+      runs: [],
+    });
+    const groups = [
+      {
+        host: { id: "host_a", label: "Studio", availability: "online" as const },
+        bots: [{ id: "bot_1", name: "Planner", lastReplyAt: Date.parse(replyAt) }],
+      },
+    ];
+    await mountWithBotRouter(<RemoteBotChatView hostId="host_a" botId="bot_1" />, {
+      initialPath: "/bots",
+      queryClient,
+      sidebar: <RemoteBotsSection groups={groups} opening={null} onOpen={() => undefined} />,
+    });
+    await screen.findByText("Two meetings and a dentist.");
+    if (shows) {
+      await screen.findByText("The dentist moved to Friday.");
+      await screen.findByRole("button", { name: "Planner, on Studio" });
+    } else {
+      // An older snapshot of the chat: the reply it doesn't show stays unread.
+      assert.ok(screen.getByRole("button", { name: "Planner, on Studio, unread" }));
+    }
+  }
 });

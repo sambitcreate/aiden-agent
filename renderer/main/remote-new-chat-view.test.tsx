@@ -4,7 +4,11 @@ import type * as React from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { DOMParser } from "@xmldom/xmldom";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { RemoteBotsSection, remoteBotGroupsMatching } from "../components/remote-bots-section";
+import { RemoteBotsSection, remoteBotGroupsMatching, remoteBotLine } from "../components/remote-bots-section";
+
+/** The rows read photos through React Query, as under the app's provider. */
+const renderSection = (element: React.ReactElement) =>
+  renderToStaticMarkup(<QueryClientProvider client={new QueryClient()}>{element}</QueryClientProvider>);
 import { SCRATCH_PROJECT } from "../components/remote-new-chat-pickers";
 import { CommandSystemProvider } from "../lib/command-system";
 import type { HostChatCapability } from "../lib/hosts/host-chat-adapter";
@@ -270,7 +274,7 @@ test("the folder browser lists a host's shared roots, then a folder's subfolders
 test("Bots on paired Macs are grouped by Mac, and a Mac that cannot open them says why", () => {
   const render = (props: Partial<React.ComponentProps<typeof RemoteBotsSection>>) =>
     dom(
-      renderToStaticMarkup(
+      renderSection(
         <RemoteBotsSection
           groups={[
             { host: studio, bots: [{ id: "bot-1", name: "Reviewer", purpose: "Reviews pull requests" }, { id: "bot-2", name: "Scribe" }] },
@@ -284,8 +288,8 @@ test("Bots on paired Macs are grouped by Mac, and a Mac that cannot open them sa
     );
   const view = render({});
   assert.match(view.text, /On Studio/u);
-  assert.match(view.text, /Reviews pull requests/u);
-  assert.match(view.text, /A Bot on Studio\./u);
+  // The description is the Bot's instructions in its own words, not a line to show.
+  assert.doesNotMatch(view.text, /Reviews pull requests/u);
   assert.match(view.text, /On Laptop/u);
   assert.match(view.text, /Laptop is offline\./u);
   assert.equal(view.button(/^Reviewer, on Studio$/u)?.hasAttribute("disabled"), false);
@@ -293,14 +297,15 @@ test("Bots on paired Macs are grouped by Mac, and a Mac that cannot open them sa
 
   const opening = render({ opening: "host-b/bot-1" });
   assert.equal(opening.button(/^Reviewer, on Studio$/u)?.getAttribute("aria-busy"), "true");
-  assert.equal(opening.button(/^Scribe, on Studio$/u)?.hasAttribute("disabled"), true, "one Bot chat opens at a time");
+  assert.equal(opening.button(/^Reviewer, on Studio$/u)?.hasAttribute("disabled"), false, "the opening row keeps its focus");
+  assert.equal(opening.button(/^Scribe, on Studio$/u)?.hasAttribute("disabled"), false, "the other rows stay reachable");
 
-  assert.equal(renderToStaticMarkup(<RemoteBotsSection groups={[]} opening={null} onOpen={noop} />), "");
+  assert.equal(renderSection(<RemoteBotsSection groups={[]} opening={null} onOpen={noop} />), "");
 });
 
-test("a paired Mac's paused or interrupted Bot says so in place of its purpose", () => {
+test("a paired Mac's paused, interrupted or model-less Bot says so, never its purpose", () => {
   const view = dom(
-    renderToStaticMarkup(
+    renderSection(
       <RemoteBotsSection
         groups={[
           {
@@ -309,6 +314,7 @@ test("a paired Mac's paused or interrupted Bot says so in place of its purpose",
               { id: "bot-1", name: "Reviewer", purpose: "Reviews pull requests", status: "paused" },
               { id: "bot-2", name: "Scribe", purpose: "Takes notes", status: "interrupted" },
               { id: "bot-3", name: "Planner", purpose: "Plans the week", working: true },
+              { id: "bot-4", name: "Drafter", purpose: "Drafts replies", status: "needs_model" },
             ],
           },
         ]}
@@ -319,8 +325,9 @@ test("a paired Mac's paused or interrupted Bot says so in place of its purpose",
   );
   assert.equal(view.button(/^Reviewer, on Studio, paused$/u)?.textContent?.includes("Paused"), true);
   assert.equal(view.button(/^Scribe, on Studio, interrupted$/u)?.textContent?.includes("Interrupted — tap to resume"), true);
-  assert.equal(view.button(/^Planner, on Studio, working$/u)?.textContent?.includes("Working…"), true);
-  assert.doesNotMatch(view.text, /Reviews pull requests|Takes notes|Plans the week/u);
+  assert.equal(view.button(/^Planner, on Studio, working$/u)?.textContent?.includes("Thinking…"), true);
+  assert.equal(view.button(/^Drafter, on Studio, needs an AI model$/u)?.textContent?.includes("Needs an AI model"), true);
+  assert.doesNotMatch(view.text, /Reviews pull requests|Takes notes|Plans the week|Drafts replies/u);
   assert.equal(view.button(/^Reviewer, on Studio, paused$/u)?.hasAttribute("disabled"), false, "a paused Bot's chat still opens");
 });
 
@@ -330,10 +337,19 @@ test("search in the Bots sidebar narrows paired Macs' Bots too, and hides a Mac 
     { host: laptop, bots: [{ id: "bot-3", name: "Planner" }] },
   ];
   const shown = (query: string) =>
-    renderToStaticMarkup(<RemoteBotsSection groups={remoteBotGroupsMatching(groups, query)} opening={null} onOpen={noop} />);
+    renderSection(<RemoteBotsSection groups={remoteBotGroupsMatching(groups, query)} opening={null} onOpen={noop} />);
   const searched = dom(shown("pull requests"));
   assert.equal(searched.button(/^Reviewer, on Studio$/u) !== undefined, true);
   assert.equal(searched.button(/^Scribe, on Studio$/u) === undefined, true);
   assert.doesNotMatch(searched.text, /On Laptop/u);
   assert.equal(shown("zebra"), "");
+});
+
+test("a paired Mac's Bot's last message is its line only when nothing more pressing is", () => {
+  const bot = { id: "b1", name: "Scout", preview: "Flights are cheaper on Tuesday" };
+  assert.deepEqual(remoteBotLine(bot), { kind: "preview", text: bot.preview, spoken: bot.preview });
+  assert.equal(remoteBotLine({ ...bot, status: "paused" })?.kind, "status");
+  assert.equal(remoteBotLine({ ...bot, working: true })?.kind, "working");
+  assert.equal(remoteBotLine({ ...bot, working: true, needsYou: true })?.kind, "waiting");
+  assert.equal(remoteBotLine({ id: "b2", name: "Quiet" }), null);
 });
