@@ -4,6 +4,7 @@ import XCTest
 /// slider chip opens the Agent Slider, a stop moves the chat, and the turn
 /// runs on that stop's model and level, and so does a plain follow-up. The
 /// demo Mac's reply names the stop whose model and level the turn asked for.
+/// A new chat stays on the stop it started on.
 final class AidenAgentSliderUITests: XCTestCase {
     override func setUp() {
         continueAfterFailure = false
@@ -71,6 +72,57 @@ final class AidenAgentSliderUITests: XCTestCase {
         let followUp = XCTNSPredicateExpectation(predicate: NSPredicate(format: "count >= 2"), object: replies)
         XCTAssertEqual(XCTWaiter.wait(for: [followUp], timeout: 15), .completed, "The follow-up left Deep's level")
         XCTAssertTrue(value(of: chip).contains("Deep"), "After the follow-up the chip read \(value(of: chip))")
+        app.terminate()
+    }
+
+    /// A new chat's first send, with nothing picked: the Mac stores no level
+    /// when it makes a chat, so the send asks it to keep the stop the chat
+    /// started on, and a plain follow-up still runs there.
+    func testANewChatStaysOnTheStopItStartedOn() {
+        let app = AidenStateMatrix.launch(
+            scenario: .busy,
+            extraArguments: ["-AidenDemoAgentSlider", "-aiden.model-preference.v1", "reset"]
+        )
+        AidenStateMatrix.openArea("Workspaces", in: app)
+        // On a Duo the page's header carries compose rather than the navigation bar.
+        let compose = app.buttons["New chat"].firstMatch
+        XCTAssertTrue(compose.waitForExistence(timeout: 10), "No New chat button")
+        compose.tap()
+        let existing = app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", "Existing Workspace")).firstMatch
+        XCTAssertTrue(existing.waitForExistence(timeout: 5), "No Existing Workspace choice")
+        existing.tap()
+        XCTAssertTrue(app.navigationBars["Choose workspace"].waitForExistence(timeout: 5), "No workspace picker")
+        app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", "Aiden Agent")).firstMatch.tap()
+        // At a wide size the list column is the sidebar, so hide it only
+        // once the chat is open.
+        hideOverlaySidebar(in: app)
+
+        // Nothing saved on the phone, so it starts on the Mac's model and level.
+        let chip = app.buttons["aiden.composer.agentSlider"].firstMatch
+        XCTAssertTrue(chip.waitForExistence(timeout: 10), "The new chat has no Agent Slider")
+        XCTAssertTrue(value(of: chip).contains("Balanced"), "The chip read \(value(of: chip))")
+        shoot("new-chat")
+
+        let composer = app.descendants(matching: .any).matching(NSPredicate(
+            format: "elementType == %d OR elementType == %d",
+            XCUIElement.ElementType.textField.rawValue,
+            XCUIElement.ElementType.textView.rawValue
+        )).firstMatch
+        XCTAssertTrue(composer.waitForExistence(timeout: 5), "No composer")
+        composer.tap()
+        composer.typeText("Start here.")
+        app.buttons["Send message"].firstMatch.tap()
+        let replies = app.staticTexts.matching(NSPredicate(format: "label == %@", "Answered on the Balanced stop."))
+        XCTAssertTrue(replies.firstMatch.waitForExistence(timeout: 15), "The first turn didn't run on Balanced")
+        XCTAssertTrue(value(of: chip).contains("Balanced"), "After the first turn the chip read \(value(of: chip))")
+
+        composer.tap()
+        composer.typeText("And again.")
+        app.buttons["Send message"].firstMatch.tap()
+        let followUp = XCTNSPredicateExpectation(predicate: NSPredicate(format: "count >= 2"), object: replies)
+        XCTAssertEqual(XCTWaiter.wait(for: [followUp], timeout: 15), .completed, "The follow-up left the new chat's stop")
+        XCTAssertTrue(value(of: chip).contains("Balanced"), "After the follow-up the chip read \(value(of: chip))")
+        shoot("new-chat-answered")
         app.terminate()
     }
 

@@ -706,13 +706,6 @@ enum AidenDemoHosts {
                 json: AidenDemoContent.chatJSON(row: row, index: index)
             )
         }
-        if AidenDemoAgentSlider.isRequested {
-            let chats = rows.enumerated().compactMap { index, row -> (id: String, base: Data)? in
-                guard let chatId = row["id"] as? String else { return nil }
-                return (chatId, AidenDemoContent.chatJSON(row: row, index: index))
-            }
-            AidenDemoAgentSlider.register(instanceId: id, chats: chats, responder: responder)
-        }
         if AidenDemoRunOptions.readsAloud {
             for (index, row) in rows.enumerated() {
                 guard let chatId = row["id"] as? String else { continue }
@@ -747,6 +740,16 @@ enum AidenDemoHosts {
         // Compose, and a fork of each chat.
         responder.reply(instanceId: id, method: "POST", path: "/chats", status: 201, json: AidenDemoContent.newChatJSON())
         responder.reply(instanceId: id, path: "/chats/\(AidenDemoContent.newChatId)", status: 200, json: AidenDemoContent.newChatJSON())
+        if AidenDemoAgentSlider.isRequested {
+            // After the plain answers above, so these chats run turns. The new
+            // chat starts with no model, as one the Mac just made does.
+            var chats = rows.enumerated().compactMap { index, row -> AidenDemoAgentSlider.Chat? in
+                guard let chatId = row["id"] as? String else { return nil }
+                return AidenDemoAgentSlider.Chat(id: chatId, base: AidenDemoContent.chatJSON(row: row, index: index), isNew: false)
+            }
+            chats.append(AidenDemoAgentSlider.Chat(id: AidenDemoContent.newChatId, base: AidenDemoContent.newChatJSON(), isNew: true))
+            AidenDemoAgentSlider.register(instanceId: id, chats: chats, responder: responder)
+        }
         for (index, row) in rows.enumerated() {
             guard let chatId = row["id"] as? String else { continue }
             let forkId = "\(chatId)_fork"

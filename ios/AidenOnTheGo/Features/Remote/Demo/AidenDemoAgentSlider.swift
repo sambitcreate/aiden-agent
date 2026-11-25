@@ -68,15 +68,24 @@ enum AidenDemoAgentSlider {
         return "Answered off the slider."
     }
 
+    /// A chat that runs turns. A new one starts with no model or level, as
+    /// a chat the Mac just made does; any other starts on the home stop.
+    struct Chat: Sendable {
+        let id: String
+        let base: Data
+        let isNew: Bool
+    }
+
     /// Runs turns in each chat: `POST /chats/{id}/turns`, the turn's stream,
     /// and the chat itself with the turns and the selection they sent.
-    static func register(instanceId: String, chats: [(id: String, base: Data)], responder: AidenDemoResponder) {
+    static func register(instanceId: String, chats: [Chat], responder: AidenDemoResponder) {
         let log = TurnLog()
         for chat in chats {
             let chatId = chat.id
             let base = chat.base
+            let isNew = chat.isNew
             responder.reply(instanceId: instanceId, path: "/chats/\(chatId)", status: 200) { _ in
-                chatJSON(base: base, turns: log.turns(in: chatId))
+                chatJSON(base: base, isNew: isNew, turns: log.turns(in: chatId))
             }
             responder.reply(
                 instanceId: instanceId,
@@ -148,12 +157,13 @@ enum AidenDemoAgentSlider {
         }
     }
 
-    private static func chatJSON(base: Data, turns: [Turn]) -> Data {
+    private static func chatJSON(base: Data, isNew: Bool, turns: [Turn]) -> Data {
         guard var chat = (try? JSONSerialization.jsonObject(with: base)) as? [String: Any] else { return base }
         // Before any phone turn the chat sits on the home stop, as a chat the
         // Mac last ran there does. A copy this phone cached on an earlier
-        // launch then can't decide the stop.
-        var selection: (providerId: String?, modelId: String?, level: String?) = ("demo", "demo-medium", "medium")
+        // launch then can't decide the stop. A new chat has no level.
+        var selection: (providerId: String?, modelId: String?, level: String?) =
+            isNew ? (nil, nil, nil) : ("demo", "demo-medium", "medium")
         for turn in turns {
             if turn.savesSelection, turn.providerId != nil, turn.modelId != nil {
                 selection = (turn.providerId, turn.modelId, turn.thinkingLevel)

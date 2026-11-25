@@ -11,6 +11,8 @@ struct AidenAgentSliderSettingsView: View {
     @State private var errorMessage: String?
     /// Each Try again reloads once; a newer one cancels the one before.
     @State private var attempt = 0
+    /// The computer `catalog` came from.
+    @State private var loadedInstanceId: String?
 
     private struct LoadKey: Hashable {
         let instanceId: String?
@@ -38,7 +40,7 @@ struct AidenAgentSliderSettingsView: View {
                         .accessibilityIdentifier("aiden.settings.agentSlider.stop.\(view.id)")
                     }
                 } footer: {
-                    Text("New chats start on the stop you last chose on this phone, or else on the model you last used on your computer. Reset to home returns a chat to the home stop. Change the stops on your computer in Settings → Models & Context → Agent Slider.")
+                    Text("New chats start on the stop or model you last chose in a new chat on this phone, or else on the model you last used on your computer. Reset to home returns a chat to the home stop. Change the stops on your computer in Settings → Models & Context → Agent Slider.")
                         .foregroundStyle(palette.secondary)
                 }
             } else if let catalog {
@@ -50,10 +52,17 @@ struct AidenAgentSliderSettingsView: View {
                         .listRowBackground(palette.raised)
                 }
             } else if errorMessage == nil {
+                // Skeleton stops while the computer answers, not a spinner.
                 Section {
-                    ProgressView("Loading the Agent Slider")
-                        .listRowBackground(palette.raised)
+                    ForEach(0..<3, id: \.self) { _ in
+                        AidenAgentSliderSkeletonRow()
+                            .listRowInsets(EdgeInsets(top: 4, leading: 4, bottom: 4, trailing: 12))
+                            .listRowBackground(palette.raised)
+                    }
                 }
+                .accessibilityElement(children: .ignore)
+                .accessibilityLabel("Loading the Agent Slider")
+                .accessibilityIdentifier("aiden.settings.agentSlider.loading")
             }
             if let errorMessage {
                 Section {
@@ -68,7 +77,11 @@ struct AidenAgentSliderSettingsView: View {
         .background(palette.canvas.ignoresSafeArea())
         .navigationTitle("Agent Slider")
         .task(id: LoadKey(instanceId: coordinator.server?.instanceId, attempt: attempt)) {
-            catalog = nil
+            // Try again keeps the stops on screen while it reloads; only
+            // another computer's slider starts from the skeleton.
+            let instanceId = coordinator.server?.instanceId
+            if loadedInstanceId != instanceId { catalog = nil }
+            loadedInstanceId = instanceId
             errorMessage = nil
             await load()
         }
@@ -88,5 +101,26 @@ struct AidenAgentSliderSettingsView: View {
             guard coordinator.isCurrent(context), !Task.isCancelled else { return }
             errorMessage = String(localized: "Couldn't load the Agent Slider from your computer.")
         }
+    }
+}
+
+/// A stop row's shape while the stops load: the place glyph, the name and
+/// the detail line, as soft bars.
+private struct AidenAgentSliderSkeletonRow: View {
+    @Environment(\.aidenPalette) private var palette
+
+    var body: some View {
+        HStack(spacing: 12) {
+            Capsule()
+                .fill(palette.foreground.opacity(0.08))
+                .frame(width: AidenAgentSliderPlaceGlyph.width, height: 8)
+            VStack(alignment: .leading, spacing: 6) {
+                Capsule().fill(palette.foreground.opacity(0.1)).frame(width: 96, height: 12)
+                Capsule().fill(palette.foreground.opacity(0.06)).frame(width: 168, height: 10)
+            }
+            Spacer(minLength: 8)
+        }
+        .padding(.horizontal, 12)
+        .frame(minHeight: 52)
     }
 }

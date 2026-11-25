@@ -42,6 +42,13 @@ struct AidenAgentSliderSheet: View {
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
     @Bindable var model: AidenChatViewModel
     @State private var contentHeight: CGFloat = 0
+    /// The width and text size `contentHeight` was measured at.
+    @State private var measuredLayout: MeasuredLayout?
+
+    private struct MeasuredLayout: Equatable {
+        var width: CGFloat
+        var typeSize: DynamicTypeSize
+    }
 
     /// The navigation bar and grabber above the content in a sheet, taller
     /// with the title at larger text sizes.
@@ -62,11 +69,21 @@ struct AidenAgentSliderSheet: View {
                     content(state)
                         .padding(.horizontal, 20)
                         .padding(.bottom, 20)
-                        .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { height in
-                            // Only ever taller, so stepping to a stop whose
-                            // subtitle is shorter doesn't resize the sheet
-                            // under the person's finger.
-                            contentHeight = max(contentHeight, height)
+                        .onGeometryChange(for: CGSize.self) { $0.size } action: { size in
+                            // A new width (rotation, a Duo fold, a size-class
+                            // change) or text size measures afresh, so the
+                            // sheet can shrink. Otherwise it only grows, so
+                            // stepping to a stop with a shorter subtitle
+                            // doesn't resize the sheet under the person's
+                            // finger. The height never changes the width, so
+                            // this can't loop.
+                            let layout = MeasuredLayout(width: size.width, typeSize: dynamicTypeSize)
+                            if layout != measuredLayout {
+                                measuredLayout = layout
+                                contentHeight = size.height
+                            } else {
+                                contentHeight = max(contentHeight, size.height)
+                            }
                         }
                 }
             }

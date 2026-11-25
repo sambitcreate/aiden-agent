@@ -1976,6 +1976,25 @@ final class AidenChatViewModel {
                     )
                 )
             }
+            // A saved send can't change under its Idempotency-Key (the Mac
+            // refuses a different body for the same key), so a send saved
+            // before the Mac granted the slider goes out without saveSelection
+            // and the Mac keeps no level. Hold the chip's choice as this
+            // chat's unsent pick instead: the chat doesn't fall to Custom, and
+            // the next send asks the Mac to keep it.
+            if savesSelection, request.saveSelection != true, !chat.isBotChat {
+                hasExplicitModelSelection = true
+                hasUnsentModelPick = true
+                modelPreferenceStore.rememberChat(
+                    AidenChatModelSelection(
+                        providerId: selectedProviderId,
+                        modelId: selectedModelId,
+                        thinkingLevel: selectedThinkingLevel
+                    ),
+                    for: context.instanceId,
+                    chatID: chat.id
+                )
+            }
             guard !isRemoved else { return }
             for reference in submittedAttachments { ownedUploadReferences.removeValue(forKey: reference.id) }
             let stream = AidenChatCache.ActiveStream(

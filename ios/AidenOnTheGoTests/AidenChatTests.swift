@@ -3106,6 +3106,8 @@ final class AidenChatTests: XCTestCase {
         final class Offer: Sendable {
             let slider: Mutex<Bool>
             let catalogSlider: Mutex<Bool>
+            /// While true the Mac answers a turn start with a retryable 503.
+            let failsTurns = Mutex(false)
             init(_ value: Bool, catalogSlider: Bool) {
                 slider = Mutex(value)
                 self.catalogSlider = Mutex(catalogSlider)
@@ -3135,6 +3137,9 @@ final class AidenChatTests: XCTestCase {
                     return (200, "application/json", Data(offered.utf8))
                 case ("POST", "/api/aiden/v1/chats/chat-progress-lifecycle/turns"):
                     turns.record(request)
+                    if offer.failsTurns.withLock({ $0 }) {
+                        return (503, "application/json", Data(#"{"error":{"code":"internal_error","message":"Try again","requestId":"send-unknown","retryable":true}}"#.utf8))
+                    }
                     host.accept(turns.values.last?.body)
                     return (202, "application/json", Data(#"{"turnId":"turn-recovery","streamId":"stream-recovery","status":"queued","message":{"id":"accepted-message","role":"user","text":"Hello","createdAt":"2026-11-24T12:00:00Z"}}"#.utf8))
                 case ("GET", "/api/aiden/v1/chats/chat-progress-lifecycle"):
@@ -3224,6 +3229,42 @@ final class AidenChatTests: XCTestCase {
         XCTAssertEqual(older.agentSliderState?.currentStop?.id, "fast", "a late grant puts the chat on the Mac's last stop")
         XCTAssertEqual(older.turnModelSelection.thinkingLevel, "low")
         older.stopProgressObservation()
+
+        // A new chat's first send fails before the grant arrives. Its retry
+        // keeps the saved request and key, so it can't ask the Mac to keep the
+        // stop; the chat still stays on it, and the next send asks instead.
+        let (early, earlyTurns, earlyOffer) = try await launch(macOffersSlider: false)
+        earlyOffer.failsTurns.withLock { $0 = true }
+        early.draft = "Hello"
+        await early.send()
+        XCTAssertEqual(earlyTurns.count, 1)
+        XCTAssertNotNil(early.pendingSend, "a 503 leaves the send to retry")
+        XCTAssertNil(try sentTurn(earlyTurns).saveSelection)
+        earlyOffer.slider.withLock { $0 = true }
+        await early.coordinator.connectActiveInstallation()
+        try await waitUntil { early.agentSlider != nil }
+        early.reconcileAgentSliderAvailability()
+        XCTAssertEqual(early.agentSliderState?.currentStop?.id, "fast")
+        earlyOffer.failsTurns.withLock { $0 = false }
+        await early.send(retry: true)
+        try await waitUntil { earlyTurns.count == 2 }
+        XCTAssertEqual(earlyTurns.values[1].key, earlyTurns.values[0].key, "a retry reuses its Idempotency-Key")
+        // The Mac digests a key-sorted form of the body, so compare the JSON, not its bytes.
+        let bodies = try earlyTurns.values.prefix(2).map { try XCTUnwrap(JSONSerialization.jsonObject(with: XCTUnwrap($0.body)) as? NSDictionary) }
+        XCTAssertEqual(bodies[1], bodies[0], "the Mac refuses a changed body under the same key")
+        let earlyReconciled = await early.reconcileChat(context: early.owner)
+        XCTAssertTrue(earlyReconciled)
+        XCTAssertNil(early.chat.thinkingLevel, "the Mac kept no level from the retry")
+        XCTAssertEqual(early.agentSliderState?.currentStop?.id, "fast", "the accepted retry dropped the chat to Custom")
+        try await waitUntil { early.streamState?.isTerminal != false }
+        early.draft = "Again"
+        try await waitUntil { early.canSend }
+        await early.send()
+        try await waitUntil { earlyTurns.count == 3 }
+        let kept = try sentTurn(earlyTurns)
+        XCTAssertEqual(kept.thinkingLevel, "low")
+        XCTAssertEqual(kept.saveSelection, true, "the next send asks the Mac to keep the stop the chat started on")
+        early.stopProgressObservation()
 
         // The phone holds the slider but the Mac sets one up only later: the
         // catalog refresh that brings it puts the chat on the Mac's last stop,
@@ -17157,7 +17198,6 @@ private final class AidenCacheFirstMemoryKeychain: KeychainStoring {
     }
 }
 
-/// Records each turn start's Idempotency-Key and body.
 /// The Mac's side of one chat for the Agent Slider tests: before any turn the
 /// shared fixture answers; after one, the chat carries the turns and the
 /// selection the Mac keeps. Like the host, it saves a turn's level only when
@@ -17221,6 +17261,7 @@ private final class AidenAgentSliderHostChat: Sendable {
     }
 }
 
+/// Records each turn start's Idempotency-Key and body.
 private final class AidenRecordedTurnStarts: @unchecked Sendable {
     private let lock = NSLock()
     private var recorded: [(key: String?, body: Data?)] = []

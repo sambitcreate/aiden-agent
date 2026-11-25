@@ -3374,10 +3374,12 @@ struct AidenTurnStart: Codable, Equatable, Sendable {
     let thinkingLevel: String?
     let attachmentIds: [String]?
     let skill: AidenSkillInvocation?
-    /// Revision 66: true only when the person picked this provider, model and
-    /// level on the phone for this chat (a stop or a model). A Mac that offers
-    /// `chat:agent-slider` then keeps the level as the chat's own; otherwise
-    /// the level is for this turn alone. Absent, never false, on the wire.
+    /// Revision 66: true when the Mac should keep this provider, model and
+    /// level as the chat's own: the phone holds the Agent Slider and either
+    /// the person picked a stop or model for this chat that hasn't been sent
+    /// yet, or this is a new chat's first send. A Mac that offers
+    /// `chat:agent-slider` then keeps the level; otherwise the level is for
+    /// this turn alone. Absent, never false, on the wire.
     let saveSelection: Bool?
 
     init(
