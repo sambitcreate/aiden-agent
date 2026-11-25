@@ -115,8 +115,10 @@ struct AidenDrawerView<Compose: View>: View {
                     ForEach(pinned) { item in
                         row(
                             item.name,
-                            systemImage: item.pin.kind == .bot ? AidenChromeSymbols.bots : "folder",
-                            detail: item.isOnline ? nil : String(localized: "offline")
+                            systemImage: "folder",
+                            detail: item.isOnline ? nil : String(localized: "offline"),
+                            botAvatar: item.botAvatar,
+                            needsYou: item.needsYou
                         ) { onOpen(item.pin.route) }
                         .contextMenu { AidenDrawerPinButton(pin: item.pin, store: pins) }
                     }
@@ -181,17 +183,31 @@ struct AidenDrawerView<Compose: View>: View {
         _ title: String,
         systemImage: String,
         detail: String? = nil,
+        botAvatar: AidenBotAvatarView? = nil,
+        needsYou: Bool = false,
         action: @escaping () -> Void
     ) -> some View {
         Button(action: action) {
             HStack(spacing: AidenSpacing.m) {
-                Image(systemName: systemImage)
-                    .foregroundStyle(palette.secondary)
-                    .frame(width: 24)
-                    .accessibilityHidden(true)
+                Group {
+                    if let botAvatar {
+                        AidenBotSemanticAvatarView(avatar: botAvatar.semantic, name: title, size: 24)
+                    } else {
+                        Image(systemName: systemImage)
+                            .foregroundStyle(palette.secondary)
+                    }
+                }
+                .frame(width: 24)
+                .accessibilityHidden(true)
                 Text(title)
                     .lineLimit(1)
                 Spacer(minLength: 0)
+                if needsYou {
+                    Circle()
+                        .fill(palette.accent)
+                        .frame(width: 8, height: 8)
+                        .accessibilityLabel("Needs you")
+                }
                 if let detail {
                     Text(detail)
                         .font(.footnote)
@@ -252,12 +268,15 @@ struct AidenDrawerView<Compose: View>: View {
                     Label("Clear search", systemImage: "xmark.circle.fill")
                         .labelStyle(.iconOnly)
                         .foregroundStyle(palette.secondary)
+                        .frame(width: 44, height: 44)
+                        .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
+                .padding(.trailing, -AidenSpacing.m)
             }
         }
         .padding(.horizontal, AidenSpacing.m)
-        .frame(minHeight: 40)
+        .frame(minHeight: 44)
         .background(palette.raised, in: Capsule())
     }
 }
@@ -294,6 +313,7 @@ struct AidenDrawerOverlay<Drawer: View>: View {
     @ViewBuilder let drawer: () -> Drawer
 
     @Environment(\.aidenReduceMotion) private var reduceMotion
+    @Environment(\.aidenPalette) private var palette
 
     static func width(in container: CGFloat) -> CGFloat {
         min(360, (container * 0.85).rounded(.down))
@@ -303,7 +323,7 @@ struct AidenDrawerOverlay<Drawer: View>: View {
         GeometryReader { proxy in
             ZStack(alignment: .leading) {
                 if isOpen {
-                    Color.black.opacity(0.32)
+                    palette.scrim
                         .ignoresSafeArea()
                         .contentShape(Rectangle())
                         .onTapGesture(perform: onClose)
@@ -325,5 +345,46 @@ struct AidenDrawerOverlay<Drawer: View>: View {
         }
         .allowsHitTesting(isOpen)
         .animation(reduceMotion ? .easeInOut(duration: 0.2) : .smooth(duration: 0.3), value: isOpen)
+    }
+}
+
+/// The system's swipe in from the leading screen edge, which opens the
+/// drawer. A screen-edge recogniser, not an invisible strip over the content,
+/// so a tap at the edge and a row's leading swipe that starts inside the
+/// screen still reach what's under them. Off (`isEnabled`), it never begins,
+/// so a pushed screen's own Back swipe keeps the edge.
+struct AidenDrawerEdgeSwipe: UIGestureRecognizerRepresentable {
+    let isEnabled: Bool
+    /// The leading edge, on the screen.
+    let layoutDirection: LayoutDirection
+    let onOpen: () -> Void
+
+    func makeUIGestureRecognizer(context: Context) -> UIScreenEdgePanGestureRecognizer {
+        let recognizer = UIScreenEdgePanGestureRecognizer()
+        recognizer.edges = layoutDirection == .rightToLeft ? .right : .left
+        recognizer.delegate = context.coordinator
+        context.coordinator.isEnabled = isEnabled
+        return recognizer
+    }
+
+    func updateUIGestureRecognizer(_ recognizer: UIScreenEdgePanGestureRecognizer, context: Context) {
+        context.coordinator.isEnabled = isEnabled
+    }
+
+    func handleUIGestureRecognizerAction(_ recognizer: UIScreenEdgePanGestureRecognizer, context: Context) {
+        guard recognizer.state == .ended, isEnabled else { return }
+        let dx = abs(recognizer.translation(in: recognizer.view).x)
+        if dx > 40 { onOpen() }
+    }
+
+    func makeCoordinator(converter: CoordinateSpaceConverter) -> Coordinator { Coordinator() }
+
+    @MainActor
+    final class Coordinator: NSObject, UIGestureRecognizerDelegate {
+        var isEnabled = false
+
+        func gestureRecognizerShouldBegin(_ gestureRecognizer: UIGestureRecognizer) -> Bool {
+            isEnabled
+        }
     }
 }

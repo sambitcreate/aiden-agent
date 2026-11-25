@@ -111,6 +111,99 @@ final class AidenShellIATests: XCTestCase {
         XCTAssertEqual(navigation.inboxPath, [])
     }
 
+    /// A new chat opens on Chats from every tab but Workspaces, where it
+    /// stays so Back returns to the workspace, and it puts the drawer away.
+    func testANewChatOpensOnChatsExceptFromWorkspaces() {
+        for (from, lands) in [(AidenAppTab.inbox, AidenAppTab.chats), (.bots, .chats), (.chats, .chats), (.workspaces, .workspaces)] {
+            let navigation = AidenAppNavigation()
+            navigation.tab = from
+            let dismissals = navigation.drawerDismissals
+
+            navigation.openNewChat(id("new"))
+
+            XCTAssertEqual(navigation.tab, lands, "From \(from)")
+            XCTAssertEqual(navigation.path(of: lands), [.chat(id("new"))], "From \(from)")
+            XCTAssertNotEqual(navigation.drawerDismissals, dismissals, "From \(from) the drawer stayed open")
+        }
+    }
+
+    /// Paths changing under the drawer (a machine forgotten elsewhere, the
+    /// selected machine changing) don't put it away.
+    func testBackgroundPathChangesLeaveTheDrawerOpen() {
+        let navigation = AidenAppNavigation()
+        navigation.open(.settings)
+        navigation.open(.usage)
+        let dismissals = navigation.drawerDismissals
+
+        navigation.leaveSelectedMachineRoutes()
+        navigation.dropRoutes(outside: [])
+
+        XCTAssertEqual(navigation.drawerDismissals, dismissals)
+    }
+
+    /// A drawer page already open on another tab moves to the tab that's
+    /// showing, rather than taking the person to that tab.
+    func testADrawerPageOpenOnAnotherTabMovesToTheShowingOne() {
+        let navigation = AidenAppNavigation()
+        navigation.open(.bot(id("b1")))
+        navigation.open(.settings)
+        navigation.tab = .chats
+
+        navigation.open(.settings)
+
+        XCTAssertEqual(navigation.tab, .chats)
+        XCTAssertEqual(navigation.chatsPath, [.settings])
+        XCTAssertEqual(navigation.botsPath, [.bot(id("b1"))])
+    }
+
+    /// Show all chats keeps the chat selected beside the list, and on a stack
+    /// goes to the list.
+    func testShowAllChatsKeepsTheSelectionBesideTheList() {
+        let split = AidenAppNavigation()
+        split.besideList = true
+        split.pick(.chat(id("c1")), fromListOf: .chats)
+        split.tab = .bots
+
+        split.showAllChats()
+
+        XCTAssertEqual(split.tab, .chats)
+        XCTAssertEqual(split.chatsPath, [.chat(id("c1"))])
+
+        let stack = AidenAppNavigation()
+        stack.open(.chat(id("c1")))
+        stack.tab = .bots
+        stack.showAllChats()
+        XCTAssertEqual(stack.tab, .chats)
+        XCTAssertEqual(stack.chatsPath, [])
+    }
+
+    /// Chats, the Inbox and the open drawer each show a list of chats, which
+    /// the inbox store keeps fresh; Bots and Workspaces alone don't.
+    func testAChatListIsOnScreenOnChatsTheInboxOrInTheDrawer() {
+        let navigation = AidenAppNavigation()
+        for tab in AidenAppTab.allCases {
+            navigation.tab = tab
+            XCTAssertEqual(navigation.showsChatList(drawerIsOpen: false), tab == .chats || tab == .inbox, "\(tab)")
+            XCTAssertTrue(navigation.showsChatList(drawerIsOpen: true), "\(tab) with the drawer open")
+        }
+    }
+
+    /// A notification's chat opens beside Chats' list. With a page pushed over
+    /// it, the Inbox still counts it as open, so its replies aren't news.
+    func testAChatSelectedBesideTheChatsListCountsAsOpenUnderAPage() {
+        let navigation = AidenAppNavigation()
+        navigation.besideList = true
+        navigation.open(.chat(id("c1")))
+        navigation.push(.machines, over: .chat(id("c1")))
+        XCTAssertEqual(navigation.tab, .chats)
+        XCTAssertEqual(navigation.chatsPath.last, .machines)
+
+        XCTAssertEqual(navigation.inboxOpenChat, id("c1"))
+
+        navigation.tab = .bots
+        XCTAssertNil(navigation.inboxOpenChat)
+    }
+
     // MARK: Chats list
 
     private func chat(_ chatID: String, _ title: String, minutesAgo: Double, workspace: String = "default") -> AidenChatSummary {

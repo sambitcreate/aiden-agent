@@ -64,6 +64,8 @@ enum AidenStateMatrix {
             "-aiden.product-navigation.v1", "reset",
             "-aiden.product-navigation.v2", "reset",
             "-aiden.product-navigation.v3", navigationArgument(startingTab: startingTab),
+            // No drawer pins left from an earlier launch: the store reads Data.
+            "-aiden.drawer-pins.v1", "reset",
             // Keep the simulator in the same language as the strings the tests look for.
             "-AppleLanguages", "(en)",
             "-AppleLocale", "en_US",

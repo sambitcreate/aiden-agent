@@ -475,8 +475,8 @@ final class AidenAppShellTests: XCTestCase {
         XCTAssertNil(pushed.chatStartingCamera, "A chat pushed over a workspace kept the camera start")
     }
 
-    /// A new chat from the Inbox's Compose opens on the Inbox, and a link or a
-    /// Shortcut opens its chat on Chats, neither through the list. Beside the
+    /// A chat opened onto the Inbox from outside its list, and a link or a
+    /// Shortcut's chat on Chats, neither through the list. Beside the
     /// list it still becomes the selection, so the highlight follows it and it
     /// has no Back to the chat before. A page from the drawer still goes on top.
     func testAChatOpenedFromOutsideTheListBecomesTheSelection() {

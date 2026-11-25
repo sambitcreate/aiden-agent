@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+- **2026-11-25 — Chats tab and the side drawer (new direction, Phase 1).** No Remote wire or revision change.
+  - The tabs are Chats, Bots, Workspaces and Inbox, and the app opens on Chats, a list of every chat across your computers. Search moved into the drawer.
+  - The menu button at the top of each list, or a swipe in from the screen's leading edge at a list, opens a drawer with search, pinned Bots and workspaces, recent chats, Usage, Computers and Settings. A pinned Bot shows its avatar and a dot when it needs you.
+  - The drawer stays open while chats update in the background and closes when you pick something, tap outside it, or press Escape; focus returns to the menu button.
+  - Reopening the drawer keeps your last search results on screen and refreshes them quietly.
+  - Chats and the drawer stay as current as the Inbox while they are on screen.
+  - Show all chats keeps the chat that is open beside the list on an iPad or an unfolded iPhone Duo.
+
 - **2026-11-22 — Pairing feedback and QR framing.** Add Computer scans for QR codes inside the visible viewfinder. Manual pairing shows what to correct below the address or setup code field. Search keeps Add Computer available until a computer is paired.
 
 - **2026-11-22 — No "Sending…" in Bot chats.** A message you send to a Bot looks sent from the moment you press Send and never gains a "Sending…" caption, however long the Mac takes to take it. The status line ("Getting ready", then "Thinking" once the model starts) shows the wait; Queued and "Couldn’t send · Try again" are unchanged. Paired Macs on the next Aiden release also start a Bot's reply much sooner, because a turn no longer re-reads every provider, connector and skill a dozen times before asking the model. No Remote wire or revision change.

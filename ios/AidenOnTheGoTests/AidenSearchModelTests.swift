@@ -367,6 +367,39 @@ final class AidenSearchModelTests: XCTestCase {
         XCTAssertEqual(model.bots.map(\.title), ["Scout weekly"])
     }
 
+    /// The drawer reopening on an aged answer, or after a machine failed,
+    /// keeps the hits on screen with no skeleton while it asks again, and
+    /// swaps the newer answer in when it lands.
+    func testAskingTheSameQueryAgainKeepsWhatItShowsUntilTheNewAnswerLands() async {
+        machineList = [machine("studio", "Studio Mac"), machine("laptop", "Laptop")]
+        desk.reply("studio", "scout", [conversation("chat_1", title: "Scout digest")])
+        desk.fail("laptop", "scout")
+        let model = makeModel()
+        model.query = "scout"
+        await runToEnd(model)
+        XCTAssertEqual(model.bots.map(\.title), ["Scout digest"])
+
+        desk.reply("studio", "scout", [conversation("chat_3", title: "Scout weekly", minutesAgo: 1)])
+        desk.reply("laptop", "scout", [conversation("chat_2", title: "Laptop notes", minutesAgo: 30)])
+        elapsed = AidenSearchModel.answerLifetime + 1
+        let again = await startRun(model)
+        XCTAssertEqual(model.bots.map(\.title), ["Scout digest"], "Asking again cleared what was shown")
+        XCTAssertFalse(model.isSearchingBots, "Asking again showed the skeleton")
+        XCTAssertEqual(desk.asks.count, 2, "Asked before the debounce")
+        pastDebounce()
+        await again.value
+        XCTAssertEqual(model.bots.map(\.title), ["Scout weekly", "Laptop notes"])
+        XCTAssertEqual(model.unsearchedMachines, [])
+
+        // A different query starts clean.
+        model.query = "deploy"
+        let other = await startRun(model, sleeping: 1)
+        XCTAssertEqual(model.bots, [])
+        XCTAssertTrue(model.isSearchingBots)
+        other.cancel()
+        await other.value
+    }
+
     func testTheDebounceWaitsForTheLastKeystroke() async {
         machineList = [machine("studio", "Studio Mac")]
         let model = makeModel()

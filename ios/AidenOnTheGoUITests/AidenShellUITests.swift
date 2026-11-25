@@ -117,11 +117,56 @@ final class AidenShellUITests: XCTestCase {
         XCTAssertTrue(app.navigationBars["App settings"].waitForExistence(timeout: 10))
         // A swipe during the push's animation is dropped, so let it settle.
         XCTAssertTrue(app.buttons["Close menu"].waitForNonExistence(timeout: 5))
-        sleep(1)
+        let settled = XCTNSPredicateExpectation(
+            predicate: NSPredicate(format: "isHittable == true"),
+            object: app.navigationBars["App settings"].buttons.firstMatch
+        )
+        XCTAssertEqual(XCTWaiter().wait(for: [settled], timeout: 5), .completed, "The push never settled")
 
         edgeSwipe(in: app)
         XCTAssertTrue(app.navigationBars["Inbox"].waitForExistence(timeout: 10), "The edge swipe was not Back")
         XCTAssertFalse(app.buttons["Close menu"].exists, "The drawer opened over a pushed page")
+        app.terminate()
+    }
+
+    /// A Bot pinned from its row's menu shows in the drawer's Pinned and opens
+    /// its chat from there, until it's unpinned from the drawer.
+    func testAPinnedBotOpensFromTheDrawerUntilItIsUnpinned() {
+        let app = AidenStateMatrix.launch(scenario: .busy)
+        XCTAssertTrue(AidenStateMatrix.firstScreen(in: app).waitForExistence(timeout: 10))
+        openDrawer(in: app)
+        XCTAssertFalse(app.staticTexts["Pinned"].exists, "A fresh launch kept an earlier launch's pins")
+
+        AidenStateMatrix.openArea("Bots", in: app)
+        let bot = botRow(in: app)
+        XCTAssertTrue(bot.waitForExistence(timeout: 10))
+        bot.press(forDuration: 1.2)
+        let pin = app.buttons["Pin"].firstMatch
+        XCTAssertTrue(pin.waitForExistence(timeout: 5), "The Bot's menu has no Pin")
+        pin.tap()
+
+        openDrawer(in: app)
+        XCTAssertTrue(app.staticTexts["Pinned"].firstMatch.waitForExistence(timeout: 5), "The pin is not in the drawer")
+        AidenStateMatrix.capture("drawer-open", in: self)
+        let pinned = app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", "Scout")).firstMatch
+        XCTAssertTrue(pinned.exists, "No Scout under Pinned")
+        pinned.tap()
+        XCTAssertTrue(
+            app.staticTexts.matching(NSPredicate(format: "label CONTAINS %@", "first pass at your week")).firstMatch
+                .waitForExistence(timeout: 10),
+            "The pin did not open the Bot's chat"
+        )
+        XCTAssertFalse(app.buttons["Close menu"].exists, "Opening a pin left the drawer up")
+
+        goBack(in: app)
+        openDrawer(in: app)
+        let pinnedAgain = app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", "Scout")).firstMatch
+        XCTAssertTrue(pinnedAgain.waitForExistence(timeout: 5))
+        pinnedAgain.press(forDuration: 1.2)
+        let unpin = app.buttons["Unpin"].firstMatch
+        XCTAssertTrue(unpin.waitForExistence(timeout: 5), "The pin's menu has no Unpin")
+        unpin.tap()
+        XCTAssertTrue(app.staticTexts["Pinned"].waitForNonExistence(timeout: 5), "Unpin left the pin in the drawer")
         app.terminate()
     }
 
@@ -1785,6 +1830,9 @@ final class AidenShellUITests: XCTestCase {
             XCTAssertTrue(note.label.contains(name), "\(name) is missing from: \(note.label)")
         }
         XCTAssertFalse(note.label.contains("Studio Mac"))
+        // The drawer is a modal, which XCUITest lists as an alert, so put it
+        // away first; an app-wide alert would still be up.
+        AidenStateMatrix.closeDrawer(in: app)
         XCTAssertFalse(app.alerts.firstMatch.exists, "A failing machine raised an app-wide alert")
         app.terminate()
     }

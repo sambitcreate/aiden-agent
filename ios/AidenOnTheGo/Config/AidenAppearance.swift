@@ -323,6 +323,9 @@ struct AidenPalette: Equatable, Sendable {
     var success: Color { Color(aidenHex: successHex) }
     var warning: Color { Color(aidenHex: warningHex) }
     var danger: Color { Color(aidenHex: dangerHex) }
+    /// Dims what's under a modal surface that lays over it, such as the
+    /// drawer. The same in every preset, so the surface reads as raised.
+    var scrim: Color { Color.black.opacity(0.32) }
 
     /// Solid accent fill for labelled controls: send buttons, prominent
     /// buttons, selected chips, accent bubbles, swipe actions.

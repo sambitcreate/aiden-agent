@@ -54,6 +54,8 @@ final class AidenSearchModel {
     private var skippedMachines: Set<String> = []
     private var failedMachines: Set<String> = []
     private var hitsByMachine: [String: [AidenSearchBotHit]] = [:]
+    /// The query `hitsByMachine` answers, kept while the same query is asked again.
+    @ObservationIgnored private var shownQuery: String?
 
     @ObservationIgnored private let chatInput: @MainActor () -> AidenSearchChatInput
     @ObservationIgnored private let machines: @MainActor () -> [AidenSearchMachine]
@@ -168,9 +170,16 @@ final class AidenSearchModel {
            now().timeIntervalSince(answered.at) < Self.answerLifetime {
             return
         }
+        // The same query asked again (the drawer reopening after the answer
+        // aged, or after a machine failed) keeps what it shows and swaps in
+        // each machine's newer answer as it lands, with no skeleton.
+        let revalidating = !text.isEmpty && shownQuery == text
         answered = nil
-        hitsByMachine = [:]
-        failedMachines = []
+        if !revalidating {
+            hitsByMachine = [:]
+            failedMachines = []
+        }
+        shownQuery = text.isEmpty ? nil : text
         skippedMachines = []
         guard !text.isEmpty else {
             isSearching = false
@@ -179,8 +188,9 @@ final class AidenSearchModel {
         }
         isSearching = true
         skippedMachines = Self.skipped(in: all)
-        isSearchingBots = all.contains(where: \.canBeAsked)
-        guard isSearchingBots else {
+        let canAsk = all.contains(where: \.canBeAsked)
+        isSearchingBots = canAsk && !revalidating
+        guard canAsk else {
             answered = (text, [], now())
             return
         }
@@ -229,6 +239,7 @@ final class AidenSearchModel {
                 switch outcome.result {
                 case .success(let items):
                     hitsByMachine[outcome.machine.instanceId] = Self.hits(from: items, on: outcome.machine)
+                    failedMachines.remove(outcome.machine.instanceId)
                 case .failure(let error):
                     // Stopping a search isn't a machine failing.
                     guard !aidenIsCancellation(error) else { continue }
