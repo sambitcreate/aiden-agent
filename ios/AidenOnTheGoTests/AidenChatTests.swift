@@ -22,6 +22,9 @@ final class AidenChatTests: XCTestCase {
     override func setUp() {
         super.setUp()
         AidenChatProgressLifecycleURLProtocol.beginTestEpoch()
+        // A test that ended early can leave an armed hold, override, or open
+        // event stream behind; the next test starts without them.
+        AidenChatProgressLifecycleURLProtocol.reset()
         storageRoot = FileManager.default.temporaryDirectory.appending(path: "aiden-chat-tests-\(UUID())")
         preferenceSuite = "AidenChatTests.\(UUID().uuidString)"
         testCache = AidenChatCache(root: storageRoot.appending(path: "cache"))
@@ -2987,6 +2990,27 @@ final class AidenChatTests: XCTestCase {
         XCTAssertEqual(settled?.id, "chat-fork-1")
         XCTAssertEqual(mac.keys.count, 2)
         XCTAssertEqual(Set(mac.keys).count, 1, "The same normalized request keeps its key while its outcome is unknown.")
+    }
+
+    /// A structured 503 does not prove the Mac made no fork, so the retry must
+    /// replay the same key rather than risk a second copy.
+    @MainActor
+    func testForkKeepsItsKeyAfterAStructuredServiceUnavailableAndOpensTheOriginalFork() async throws {
+        let root = FileManager.default.temporaryDirectory.appending(path: "aiden-fork-unavailable-\(UUID())")
+        defer { try? FileManager.default.removeItem(at: root); AidenChatProgressLifecycleURLProtocol.reset() }
+        let mac = AidenForkLedgerMac(plan: [.commitButAnswerUnavailable])
+        let model = try await makeForkLedgerModel(mac: mac, root: root)
+
+        let unavailable = await model.fork(messageId: "message-a1", action: .forkHere)
+        XCTAssertNil(unavailable)
+        XCTAssertNotNil(model.presentedError)
+
+        model.presentedError = nil
+        let retried = await model.fork(messageId: "message-a1", action: .forkHere)
+        XCTAssertEqual(retried?.id, "chat-fork-1", "The retry opens the fork the first request created.")
+        XCTAssertEqual(mac.createdForkIDs, ["chat-fork-1"], "Retrying never makes a second copy.")
+        XCTAssertEqual(mac.keys.count, 2)
+        XCTAssertEqual(Set(mac.keys).count, 1, "The retry replays the same Idempotency-Key.")
     }
 
     @MainActor
@@ -6097,6 +6121,33 @@ final class AidenChatTests: XCTestCase {
     @MainActor
     func testUploadCleanupRevocationDoesNotDeadlockRemoval() async throws {
         try await assertRemovalJoinsUploadCleanup(revokedCleanup: true)
+    }
+
+    /// The fixture's release ends a hold whose request has not arrived yet, as
+    /// when a slow simulator delivers it after the test has moved on.
+    func testAReleasedHoldLetsALateRequestThrough() async throws {
+        let arrived = expectation(description: "the hold callback never runs after release")
+        arrived.isInverted = true
+        AidenChatProgressLifecycleURLProtocol.holdNextRequest(endingIn: "/late-release") { arrived.fulfill() }
+        AidenChatProgressLifecycleURLProtocol.releaseHeldRequest()
+
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.protocolClasses = [AidenChatProgressLifecycleURLProtocol.self]
+        configuration.httpAdditionalHeaders = [
+            AidenChatProgressLifecycleURLProtocol.epochHeader: AidenChatProgressLifecycleURLProtocol.epoch,
+        ]
+        let session = URLSession(configuration: configuration)
+        defer { session.invalidateAndCancel() }
+        let answered = expectation(description: "the late request is answered without a second release")
+        let task = session.dataTask(with: URL(string: "https://aiden.test/api/aiden/v1/late-release")!) { _, response, error in
+            XCTAssertNil(error)
+            XCTAssertEqual((response as? HTTPURLResponse)?.statusCode, 404)
+            answered.fulfill()
+        }
+        task.resume()
+        await fulfillment(of: [answered], timeout: 5)
+        await fulfillment(of: [arrived], timeout: 0.1)
+        XCTAssertTrue(AidenChatProgressLifecycleURLProtocol.heldRequestEpochs.isEmpty, "nothing was held")
     }
 
     @MainActor
@@ -11917,7 +11968,21 @@ private final class AidenChatProgressLifecycleURLProtocol: URLProtocol, @uncheck
         }
     }
 
-    static func releaseHeldRequest() { takeHeldRequest()?() }
+    /// Ends the hold: a request already held completes, and one that has not
+    /// arrived yet is no longer held when it does. Otherwise a request that
+    /// arrives after the test's release, as on a slow simulator, stays parked
+    /// with nobody left to release it, and the test waits on it until the
+    /// session's request timeout.
+    static func releaseHeldRequest() {
+        let completion = lock.withLock {
+            heldPathSuffix = nil
+            onHeldRequest = nil
+            let held = heldCompletion
+            heldCompletion = nil
+            return held
+        }
+        completion?()
+    }
 
     static var progressRequestCount: Int {
         lock.lock()
@@ -15142,6 +15207,8 @@ private final class AidenForkLedgerMac: @unchecked Sendable {
         case inFlight
         /// 409 `operation_in_progress`: a different fork holds the source.
         case busy
+        /// Creates the fork, then answers a structured 503 `internal_error`.
+        case commitButAnswerUnavailable
     }
 
     private let lock = NSLock()
@@ -15171,12 +15238,15 @@ private final class AidenForkLedgerMac: @unchecked Sendable {
                 return (409, "application/json", Self.error(code: "operation_in_progress", message: "Another fork is being created."))
             case .inFlight:
                 return (409, "application/json", Self.error(code: "idempotency_in_flight", message: "This request is still running."))
-            case .commitButLoseResponse, nil:
+            case .commitButLoseResponse, .commitButAnswerUnavailable, nil:
                 let forkID = "chat-fork-\(created.count + 1)"
                 created.append(forkID)
                 ledger[key] = forkID
                 if reply == .commitButLoseResponse {
                     return (AidenChatProgressLifecycleURLProtocol.connectionLostStatus, "", Data())
+                }
+                if reply == .commitButAnswerUnavailable {
+                    return (503, "application/json", Self.error(code: "internal_error", message: "Try again."))
                 }
                 return (201, "application/json", Self.result(forkID: forkID, request: request))
             }

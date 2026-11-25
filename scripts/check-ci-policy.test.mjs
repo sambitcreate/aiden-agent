@@ -7,7 +7,7 @@ import { spawnSync } from "node:child_process";
 import process from "node:process";
 import { fileURLToPath } from "node:url";
 import { AREA_NAMES } from "./ci-changes.mjs";
-import { REQUIRED_JOB_RULES } from "./ci-required.mjs";
+import { PLAN_DECISIONS, REQUIRED_JOB_RULES } from "./ci-required.mjs";
 import { readRegistry } from "./ci-test-registry.mjs";
 
 const workflowUrl = new URL("../.github/workflows/ci.yml", import.meta.url);
@@ -50,8 +50,13 @@ test("CI assigns platform work conservatively and exposes one complete required 
   assert.equal(filter.run, "node scripts/ci-changes.mjs");
   assert.equal(filter.env.FORCE_FULL, "${{ (github.event_name == 'push' || github.event_name == 'merge_group') && 'true' || 'false' }}");
   assert.equal(jobs.changes.steps[0].with["fetch-depth"], 0);
-  assert.deepEqual(Object.keys(jobs.changes.outputs).toSorted(), [...AREA_NAMES, "selection-artifact"].toSorted());
+  assert.deepEqual(
+    Object.keys(jobs.changes.outputs).toSorted(),
+    [...AREA_NAMES, ...PLAN_DECISIONS, "mac-e2e-shards", "selection-artifact"].toSorted(),
+  );
   assert.equal(jobs.changes.outputs["selection-artifact"], "${{ steps.selection.outputs.artifact }}");
+  assert.equal(jobs.changes.outputs["mac-e2e"], "${{ steps.selection.outputs.mac_e2e }}");
+  assert.equal(jobs.changes.outputs["mac-e2e-shards"], "${{ steps.selection.outputs.mac_e2e_shards }}");
   // Linux packaging still follows its own area, but the branch ruleset
   // requires its per-arch checks. A skipped matrix job reports under the
   // unexpanded name, so the job always starts and every step carries the gate.
@@ -199,7 +204,12 @@ test("Linux GUI smokes force teardown without masking startup failures", async (
 
 test("desktop E2E and unit work are sharded with independent Apple and iOS checks", async () => {
   const { jobs } = parse(await readFile(workflowUrl, "utf8"));
-  assert.deepEqual(jobs.e2e.strategy.matrix.shard, [1, 2, 3, 4, 5]);
+  // The changes job plans the macOS shards: all five off pull requests, one or none on them.
+  assert.equal(jobs.e2e.strategy.matrix.shard, "${{ fromJSON(needs.changes.outputs.mac-e2e-shards) }}");
+  assert.equal(jobs.e2e.name, "Electron E2E (${{ matrix.shard }}/${{ strategy.job-total }})");
+  for (const step of jobs.e2e.steps.filter((entry) => String(entry.run ?? "").includes("scripts/ci-e2e-shards.mjs"))) {
+    assert.equal(step.env.AIDEN_E2E_RUNNER, "macos", step.name);
+  }
   assert.equal(jobs.e2e["timeout-minutes"], 20);
   assert.equal(jobs.e2e.strategy["fail-fast"], false);
   assert.equal(jobs.unit.strategy["fail-fast"], false);
@@ -235,7 +245,7 @@ test("desktop E2E and unit work are sharded with independent Apple and iOS check
     });
     assert.equal(result.status, 0, `${lane}: ${result.stderr}`);
   }
-  assert.ok(jobs.e2e.steps.some((step) => step.run === "node scripts/ci-e2e-shards.mjs ${{ matrix.shard }}/5"));
+  assert.ok(jobs.e2e.steps.some((step) => step.run === "node scripts/ci-e2e-shards.mjs ${{ matrix.shard }}/${{ strategy.job-total }}"));
   const receipt = jobs.e2e.steps.find((step) => step.uses?.startsWith("actions/upload-artifact@"));
   assert.ok(receipt.with.name.includes("${{ matrix.shard }}"));
   assert.ok(jobs.apple.steps.some((step) => step.run === "npm run test:native"));
@@ -249,6 +259,13 @@ test("desktop E2E and unit work are sharded with independent Apple and iOS check
   assert.equal(simulatorResults.if, "failure()");
   assert.equal(simulatorResults.uses, "actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02");
   assert.ok(simulatorTest.run.includes("-skip-testing:AidenOnTheGoUITests"), "the unit run must not launch the UI target");
+  for (const job of ["ios", "ios-27"]) {
+    const unitRun = jobs[job].steps.find((step) => step.run?.includes("-skip-testing:AidenOnTheGoUITests"));
+    assert.ok(
+      unitRun?.run.includes("-parallel-testing-enabled NO"),
+      `${job}: simulator clones stall and hang the hosted runner; the unit run uses one simulator`,
+    );
+  }
   const shellSmoke = jobs.ios.steps.find((step) => step.run?.includes("-only-testing:AidenOnTheGoUITests/AidenShellUITests/testShellLaunchesForEveryScenario"));
   assert.ok(shellSmoke, "the shell UI smoke step is missing");
   assert.ok(jobs.ios.steps.indexOf(shellSmoke) > jobs.ios.steps.indexOf(simulatorTest));
@@ -476,6 +493,8 @@ test("Linux required contexts exist for scoped PRs and fail closed", async () =>
     // The linux matrix always starts and skips its steps when unselected, so GitHub reports success.
     ["success", "false", "success", "skipped", 0],
     ["success", "true", "success", "success", 0],
+    // A desktop-only PR runs the Linux E2E shards without packaging.
+    ["success", "false", "success", "success", 0],
     ["success", "true", "failure", "success", 1],
     ["success", "true", "cancelled", "success", 1],
     ["success", "true", "skipped", "success", 1],

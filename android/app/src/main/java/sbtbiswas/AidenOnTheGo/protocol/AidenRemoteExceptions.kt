@@ -70,18 +70,23 @@ sealed class AidenRemoteClientException(message: String, cause: Throwable? = nul
     /**
      * [retryAfterHeaderSeconds] is the response's HTTP `Retry-After`
      * delta-seconds, when it sent a usable one.
+     * [isDecodedEnvelope] is `true` only when [body] was genuinely decoded from a valid
+     * `AidenRemoteErrorEnvelope` JSON payload, and `false` when the error body was malformed,
+     * contained duplicate keys, or failed envelope decoding and had to be synthesized.
      */
     data class Server(
         val statusCode: Int,
         val body: AidenRemoteErrorEnvelope.Body,
         val retryAfterHeaderSeconds: Int? = null,
+        val isDecodedEnvelope: Boolean = true,
     ) : AidenRemoteClientException(body.message) {
         val isCredentialRevoked: Boolean
-            get() = statusCode == 401 || statusCode == 403 || body.code == AidenRemoteErrorCode.CREDENTIAL_REVOKED
+            get() = statusCode == 401 || statusCode == 403 ||
+                (isDecodedEnvelope && body.code == AidenRemoteErrorCode.CREDENTIAL_REVOKED)
 
         /** A 429 the server marked `retryable`: refused before it ran, so it can be sent again. */
         val isRetryableRateLimit: Boolean
-            get() = statusCode == 429 && body.retryable
+            get() = statusCode == 429 && isDecodedEnvelope && body.retryable
 
         /**
          * The wait a 429 asked for: `details.retryAfterSeconds` first, then
@@ -91,7 +96,9 @@ sealed class AidenRemoteClientException(message: String, cause: Throwable? = nul
         val retryAfterSeconds: Int?
             get() {
                 if (statusCode != 429) return null
-                val raw = body.details?.retryAfterSeconds ?: retryAfterHeaderSeconds ?: return null
+                val raw = (if (isDecodedEnvelope) body.details?.retryAfterSeconds else null)
+                    ?: retryAfterHeaderSeconds
+                    ?: return null
                 return raw.coerceIn(AidenRetryAfter.BOUNDS_SECONDS)
             }
     }

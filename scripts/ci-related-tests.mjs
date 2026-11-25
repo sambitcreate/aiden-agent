@@ -73,6 +73,14 @@ export function validateE2ESpecMap(specs, map = readE2ESpecMap(), options = {}) 
   if (unknown.length > 0) {
     throw new Error(`E2E spec-to-source map lists unknown specs ${unknown.join(", ")}`);
   }
+  const macos = map.macos ?? [];
+  if (!Array.isArray(macos) || macos.some((file) => typeof file !== "string") || new Set(macos).size !== macos.length) {
+    throw new Error("E2E spec-to-source map macos list is malformed");
+  }
+  const unknownMacos = macos.filter((file) => !runnable.includes(file));
+  if (unknownMacos.length > 0) {
+    throw new Error(`E2E spec-to-source map macos list names unknown specs ${unknownMacos.join(", ")}`);
+  }
   if (options.requireMatchingFiles) {
     const unmatched = [];
     for (const prefix of map.full) {
@@ -536,4 +544,20 @@ export function selectReachableTests({
     unit: selectRelatedUnitFiles({ changedPaths, testFiles, sourceFiles: sources, readFile: reader }),
     e2e: selectRelatedE2ESpecs({ changedPaths, specs, map }),
   };
+}
+
+// macOS runners are the scarce CI resource, so pull requests run on a Mac only
+// the specs in the map's `macos` list (the ones that skip or assert less off
+// macOS) that the PR selected; Linux shards run every selected spec. Every
+// other event keeps the full suite across E2E_SHARD_COUNT macOS shards.
+export function planMacE2E({ eventName, desktop, e2e, map = readE2ESpecMap(), shardCount } = {}) {
+  if (desktop !== true) return { run: false, scope: "none", shards: [], specs: [] };
+  if (eventName !== "pull_request") {
+    if (!Number.isInteger(shardCount) || shardCount < 1) throw new Error("Invalid macOS E2E shard count");
+    return { run: true, scope: "all", shards: Array.from({ length: shardCount }, (_, index) => index + 1), specs: [] };
+  }
+  const wanted = new Set(Array.isArray(e2e?.specs) ? e2e.specs : []);
+  const specs = (map.macos ?? []).filter((file) => wanted.has(file));
+  if (specs.length === 0) return { run: false, scope: "none", shards: [], specs: [] };
+  return { run: true, scope: "macos", shards: [1], specs };
 }
