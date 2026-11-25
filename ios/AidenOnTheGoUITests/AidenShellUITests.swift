@@ -86,10 +86,11 @@ final class AidenShellUITests: XCTestCase {
         let app = AidenStateMatrix.launch(scenario: .busy, startingTab: nil)
         XCTAssertTrue(app.navigationBars["Chats"].waitForExistence(timeout: 10), "A first launch opens on Chats")
         openDrawer(in: app)
-        for heading in ["Recents", "More"] {
-            XCTAssertTrue(app.staticTexts[heading].firstMatch.exists, "No \(heading) in the drawer")
-        }
+        XCTAssertTrue(app.staticTexts["Recents"].firstMatch.exists, "No Recents in the drawer")
+        // The drawer is a lazy list: on a short display (a closed iPhone Duo's
+        // outer one) More is below the fold until the list scrolls to it.
         XCTAssertTrue(drawerRow("Computers", in: app).exists, "No Computers in the drawer")
+        XCTAssertTrue(app.staticTexts["More"].firstMatch.exists, "No More in the drawer")
         // The drawer is modal: what's under it is out of reach, to touch and to VoiceOver.
         // The elements can still be listed under the cover; a touch on them lands on the drawer.
         let menuButton = app.navigationBars.buttons["Open menu"]
