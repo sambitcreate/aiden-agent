@@ -188,6 +188,20 @@ struct AidenBotHomeRow: Equatable, Identifiable {
     }
 
     var lastActivity: Date { conversation?.updatedAt ?? bot.updatedAt }
+
+    /// What the row's sprite plays, through a settler that never shows done
+    /// (`showsDone: false`). The list knows only that a turn runs or waits for
+    /// an approval, and the session's state, not the turn's phase or how it
+    /// ended: a running Bot thinks, a session left interrupted or needing a
+    /// model shows error, and any other end settles quietly to idle. The done
+    /// moment shows in the Bot's chat header.
+    var avatarSignal: AidenBotAvatarSignal {
+        AidenBotAvatarSignal(
+            working: isWorking,
+            waitingForPerson: conversation?.activityState == .waitingForApproval,
+            session: bot.sessionState
+        )
+    }
 }
 
 /// Builds the Bots home list: the most recent
@@ -755,15 +769,20 @@ struct AidenBotsHomeView: View {
     ) -> some View {
         let stacked = dynamicTypeSize.isAccessibilitySize
         return AidenListRowLayout(isStacked: stacked, hasSummary: true, markStyle: .avatar(avatarSize)) {
-            AidenBotCanonicalAvatarView(
-                coordinator: coordinator,
-                machine: machine,
-                botID: row.bot.id,
-                avatar: row.bot.avatar,
-                name: row.bot.name,
-                size: avatarSize,
-                working: row.isWorking
-            )
+            AidenBotSettledAvatarState(signal: row.avatarSignal, showsDone: false) { state in
+                AidenBotCanonicalAvatarView(
+                    coordinator: coordinator,
+                    machine: machine,
+                    botID: row.bot.id,
+                    avatar: row.bot.avatar,
+                    name: row.bot.name,
+                    size: avatarSize,
+                    // The settled state, so a quick turn doesn't flash the photo's mark either.
+                    working: state.isWorking,
+                    // A resting Bot's card stays still.
+                    state: state == .idle ? nil : state
+                )
+            }
         } title: {
             Text(row.bot.name)
                 .font(.body)

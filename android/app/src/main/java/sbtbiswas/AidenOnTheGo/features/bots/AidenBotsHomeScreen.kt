@@ -681,7 +681,7 @@ private fun AidenBotHomeRowView(
                 )
                 .padding(horizontal = 12.dp, vertical = 12.dp)
         ) {
-            // A working Bot's face glances (or wears the glance badge); the row says "Working".
+            // A working Bot's sprite shows what it does (a photo wears the badge); the row says "Working".
             Box(Modifier.semantics { if (row.isWorking) stateDescription = workingLabel }) {
                 AidenBotCanonicalAvatarView(
                     coordinator = coordinator,
@@ -689,7 +689,7 @@ private fun AidenBotHomeRowView(
                     avatar = row.bot.avatar,
                     name = row.bot.name,
                     size = 52.dp,
-                    working = row.isWorking
+                    state = rememberAidenBotAvatarState(row.bot.id, aidenBotHomeAvatarTarget(row))
                 )
             }
             Spacer(Modifier.width(14.dp))

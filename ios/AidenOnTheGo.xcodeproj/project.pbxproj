@@ -87,6 +87,7 @@
 		D85700000000000000000001 /* AidenBotAllowedTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = D85700000000000000000002 /* AidenBotAllowedTests.swift */; };
 		C85600000000000000000001 /* AidenBotPlanTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = C85600000000000000000002 /* AidenBotPlanTests.swift */; };
 		B6B000000000000000000008 /* AidenBotUXTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B6B100000000000000000008 /* AidenBotUXTests.swift */; };
+		B5A7E0000000000000000003 /* AidenBotSpriteTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B5A7E0000000000000000013 /* AidenBotSpriteTests.swift */; };
 		51A100000000000000000006 /* AidenMJPEGMultipartParser.swift in Sources */ = {isa = PBXBuildFile; fileRef = 51A100000000000000000016 /* AidenMJPEGMultipartParser.swift */; };
 		51A100000000000000000001 /* AidenSimulatorContract.swift in Sources */ = {isa = PBXBuildFile; fileRef = 51A100000000000000000011 /* AidenSimulatorContract.swift */; };
 		51A100000000000000000002 /* AidenSimulatorStream.swift in Sources */ = {isa = PBXBuildFile; fileRef = 51A100000000000000000012 /* AidenSimulatorStream.swift */; };
@@ -244,6 +245,8 @@
 		B07700000000000000000001 /* AidenBotsHomeView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B07700000000000000000011 /* AidenBotsHomeView.swift */; };
 		B07900000000000000000001 /* AidenBotProfileView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B07900000000000000000011 /* AidenBotProfileView.swift */; };
 		B08000000000000000000001 /* AidenBotSemanticAvatarView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B08000000000000000000011 /* AidenBotSemanticAvatarView.swift */; };
+		B5A7E0000000000000000002 /* AidenBotSpriteView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B5A7E0000000000000000012 /* AidenBotSpriteView.swift */; };
+		B5A7E0000000000000000001 /* AidenBotSprite.swift in Sources */ = {isa = PBXBuildFile; fileRef = B5A7E0000000000000000011 /* AidenBotSprite.swift */; };
 		B07A00000000000000000001 /* AidenBotChatToolsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B07A00000000000000000011 /* AidenBotChatToolsView.swift */; };
 		B07B00000000000000000001 /* AidenBotImagePlaygroundView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B07B00000000000000000011 /* AidenBotImagePlaygroundView.swift */; };
 		B07B00000000000000000002 /* AidenBotImagePlaygroundTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B07B00000000000000000012 /* AidenBotImagePlaygroundTests.swift */; };
@@ -419,6 +422,7 @@
 		D85700000000000000000002 /* AidenBotAllowedTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AidenBotAllowedTests.swift; sourceTree = "<group>"; };
 		C85600000000000000000002 /* AidenBotPlanTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AidenBotPlanTests.swift; sourceTree = "<group>"; };
 		B6B100000000000000000008 /* AidenBotUXTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AidenBotUXTests.swift; sourceTree = "<group>"; };
+		B5A7E0000000000000000013 /* AidenBotSpriteTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AidenBotSpriteTests.swift; sourceTree = "<group>"; };
 		51A100000000000000000016 /* AidenMJPEGMultipartParser.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AidenMJPEGMultipartParser.swift; sourceTree = "<group>"; };
 		51A100000000000000000011 /* AidenSimulatorContract.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AidenSimulatorContract.swift; sourceTree = "<group>"; };
 		51A100000000000000000012 /* AidenSimulatorStream.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AidenSimulatorStream.swift; sourceTree = "<group>"; };
@@ -602,6 +606,8 @@
 		B07700000000000000000011 /* AidenBotsHomeView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AidenBotsHomeView.swift; sourceTree = "<group>"; };
 		B07900000000000000000011 /* AidenBotProfileView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AidenBotProfileView.swift; sourceTree = "<group>"; };
 		B08000000000000000000011 /* AidenBotSemanticAvatarView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AidenBotSemanticAvatarView.swift; sourceTree = "<group>"; };
+		B5A7E0000000000000000012 /* AidenBotSpriteView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AidenBotSpriteView.swift; sourceTree = "<group>"; };
+		B5A7E0000000000000000011 /* AidenBotSprite.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AidenBotSprite.swift; sourceTree = "<group>"; };
 		B07A00000000000000000011 /* AidenBotChatToolsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AidenBotChatToolsView.swift; sourceTree = "<group>"; };
 		B07B00000000000000000011 /* AidenBotImagePlaygroundView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AidenBotImagePlaygroundView.swift; sourceTree = "<group>"; };
 		B07B00000000000000000012 /* AidenBotImagePlaygroundTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AidenBotImagePlaygroundTests.swift; sourceTree = "<group>"; };
@@ -740,6 +746,7 @@
 				B0E800000000000000000011 /* AidenBotSessionTests.swift */,
 				C85600000000000000000002 /* AidenBotPlanTests.swift */,
 				B6B100000000000000000008 /* AidenBotUXTests.swift */,
+				B5A7E0000000000000000013 /* AidenBotSpriteTests.swift */,
 				D85700000000000000000002 /* AidenBotAllowedTests.swift */,
 				DE30000000000000000000B2 /* AidenDemoHostsTests.swift */,
 				A0E200000000000000000013 /* AidenHostConnectionTests.swift */,
@@ -936,6 +943,8 @@
 				B07C00000000000000000011 /* AidenBotGeneratedAvatarLifecycle.swift */,
 				B07B00000000000000000011 /* AidenBotImagePlaygroundView.swift */,
 				B08000000000000000000011 /* AidenBotSemanticAvatarView.swift */,
+				B5A7E0000000000000000012 /* AidenBotSpriteView.swift */,
+				B5A7E0000000000000000011 /* AidenBotSprite.swift */,
 				B07900000000000000000011 /* AidenBotProfileView.swift */,
 				B07700000000000000000011 /* AidenBotsHomeView.swift */,
 			);
@@ -1404,6 +1413,8 @@
 				FD1A00000000000000000004 /* AidenDemoFoundationRoutes.swift in Sources */,
 				B5C300000000000000000003 /* AidenPreviewFixtureView.swift in Sources */,
 				B08000000000000000000001 /* AidenBotSemanticAvatarView.swift in Sources */,
+				B5A7E0000000000000000002 /* AidenBotSpriteView.swift in Sources */,
+				B5A7E0000000000000000001 /* AidenBotSprite.swift in Sources */,
 				B07900000000000000000001 /* AidenBotProfileView.swift in Sources */,
 				B07700000000000000000001 /* AidenBotsHomeView.swift in Sources */,
 				B07500000000000000000001 /* AidenBotCache.swift in Sources */,
@@ -1617,6 +1628,7 @@
 				B0E800000000000000000001 /* AidenBotSessionTests.swift in Sources */,
 				C85600000000000000000001 /* AidenBotPlanTests.swift in Sources */,
 				B6B000000000000000000008 /* AidenBotUXTests.swift in Sources */,
+				B5A7E0000000000000000003 /* AidenBotSpriteTests.swift in Sources */,
 				D85700000000000000000001 /* AidenBotAllowedTests.swift in Sources */,
 				DE30000000000000000000B1 /* AidenDemoHostsTests.swift in Sources */,
 				A0E200000000000000000003 /* AidenHostConnectionTests.swift in Sources */,

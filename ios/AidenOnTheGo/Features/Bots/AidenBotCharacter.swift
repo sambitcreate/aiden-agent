@@ -92,7 +92,7 @@ struct AidenBotCharacterCard: View {
                         next.select(shape: shape)
                         onChange(next)
                     } label: {
-                        AidenBotShapeSwatch(shape: shape, color: draft.color.swatch, size: 28)
+                        AidenBotShapeSwatch(shape: shape, color: draft.color, size: 28)
                             .padding(6)
                             .background {
                                 if draft.shape == shape {
