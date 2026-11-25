@@ -27,6 +27,10 @@ struct AidenDrawerPinnedItem: Identifiable, Equatable, Sendable {
     let name: String
     /// False for a machine that is offline; the pin stays, marked offline.
     let isOnline: Bool
+    /// A pinned Bot's own avatar, drawn as the Bots list draws it. Nil for a workspace.
+    var botAvatar: AidenBotAvatarView? = nil
+    /// A pinned Bot that needs the person, by the Inbox's rule (`AidenBotAttention`).
+    var needsYou = false
 
     var id: AidenDrawerPin { pin }
 }
@@ -68,6 +72,13 @@ final class AidenDrawerPinsStore {
         save()
     }
 
+    /// Forgets a pin whose Bot or workspace was deleted.
+    func remove(_ pin: AidenDrawerPin) {
+        guard let index = pins.firstIndex(of: pin) else { return }
+        pins.remove(at: index)
+        save()
+    }
+
     /// Forgets every pin on a machine that was unpaired.
     func purge(instanceID: String) {
         let kept = pins.filter { $0.id.instanceId != instanceID }
@@ -101,13 +112,20 @@ enum AidenDrawerPinned {
                   }),
                   !snapshot.isBlocked
             else { return nil }
-            let name: String?
             switch pin.kind {
-            case .bot: name = snapshot.bots.first { $0.id == pin.id.objectId }?.name
-            case .workspace: name = snapshot.workspaceNames[pin.id.objectId]
+            case .bot:
+                guard let bot = snapshot.bots.first(where: { $0.id == pin.id.objectId }) else { return nil }
+                return AidenDrawerPinnedItem(
+                    pin: pin,
+                    name: bot.name,
+                    isOnline: snapshot.isOnline,
+                    botAvatar: bot.avatar,
+                    needsYou: AidenBotAttention.needsYou(bot)
+                )
+            case .workspace:
+                guard let name = snapshot.workspaceNames[pin.id.objectId] else { return nil }
+                return AidenDrawerPinnedItem(pin: pin, name: name, isOnline: snapshot.isOnline)
             }
-            guard let name else { return nil }
-            return AidenDrawerPinnedItem(pin: pin, name: name, isOnline: snapshot.isOnline)
         }
     }
 }

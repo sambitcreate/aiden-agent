@@ -49,11 +49,19 @@ final class AidenSearchModel {
     static let maxBotQueryScalars = 200
 
     var query = ""
-    private(set) var isSearchingBots = false
     private var isSearching = false
+    /// The query the newest `run()` asked about. Bot state belongs to it; for
+    /// any other query (a keystroke the view hasn't run yet) it is stale.
+    private var runQuery: String?
+    /// Whether `runQuery`'s Bot search has settled: every machine it asked has
+    /// answered or failed, or there was nothing to ask. A run that is stopped
+    /// part way leaves it unsettled, so the next frame reads as searching.
+    private var botsSettled = true
     private var skippedMachines: Set<String> = []
     private var failedMachines: Set<String> = []
     private var hitsByMachine: [String: [AidenSearchBotHit]] = [:]
+    /// The query `hitsByMachine` answers, kept while the same query is asked again.
+    @ObservationIgnored private var shownQuery: String?
 
     @ObservationIgnored private let chatInput: @MainActor () -> AidenSearchChatInput
     @ObservationIgnored private let machines: @MainActor () -> [AidenSearchMachine]
@@ -94,7 +102,8 @@ final class AidenSearchModel {
     /// as they are now, so a machine that was revoked, hidden or forgotten after
     /// its hits landed has none left, without waiting for another keystroke.
     var bots: [AidenSearchBotHit] {
-        guard isSearching else { return [] }
+        // An older query's hits never show under the new one.
+        guard isSearching, runQuery == trimmedQuery else { return [] }
         let current = machines()
         let shown = Set(current.filter { !$0.isBlocked }.map { Self.key($0.instanceId, $0.deviceId) })
         return Self.merged(
@@ -121,6 +130,18 @@ final class AidenSearchModel {
 
     /// False for an empty or blank query, which shows nothing and asks nothing.
     var hasQuery: Bool { !trimmedQuery.isEmpty }
+
+    /// Whether Bot results for the current query are still coming, which shows
+    /// the skeleton. A query that hasn't been asked yet (the first frame after
+    /// a keystroke, or the drawer reopening), or whose search was stopped
+    /// before it settled, reads as searching while a machine can be asked, so
+    /// it never shows "No results" or another query's hits.
+    var isSearchingBots: Bool {
+        let text = trimmedQuery
+        guard !text.isEmpty else { return false }
+        if runQuery == text, botsSettled { return false }
+        return machines().contains(where: \.canBeAsked)
+    }
 
     /// Matching loaded chats, as the Inbox places them. Read from the Inbox's
     /// own input on every call, so it follows the query as it's typed and asks
@@ -168,19 +189,42 @@ final class AidenSearchModel {
            now().timeIntervalSince(answered.at) < Self.answerLifetime {
             return
         }
+        // The same query asked again (the drawer reopening after the answer
+        // aged, or after a machine failed) keeps what it shows and swaps in
+        // each machine's newer answer as it lands. It only counts as shown
+        // once a machine has answered: a run stopped before any answer leaves
+        // the next one on the skeleton, not "No results".
+        let revalidating = !text.isEmpty && shownQuery == text
+        let askableNow = Self.askable(in: all)
         answered = nil
-        hitsByMachine = [:]
-        failedMachines = []
+        if revalidating {
+            // A machine that can't be asked now has nothing current to show.
+            hitsByMachine = hitsByMachine.filter { askableNow.contains($0.key) }
+            failedMachines.formIntersection(askableNow)
+        } else {
+            hitsByMachine = [:]
+            failedMachines = []
+            shownQuery = nil
+        }
         skippedMachines = []
         guard !text.isEmpty else {
             isSearching = false
-            isSearchingBots = false
+            runQuery = nil
+            botsSettled = true
             return
         }
         isSearching = true
+        runQuery = text
         skippedMachines = Self.skipped(in: all)
-        isSearchingBots = all.contains(where: \.canBeAsked)
-        guard isSearchingBots else {
+        let canAsk = !askableNow.isEmpty
+        // The skeleton stays while any machine being asked has neither
+        // answered nor failed: one that hadn't, or that connected since, has
+        // nothing to show yet, and an empty list would read as "No results".
+        let heardFrom = Set(hitsByMachine.keys).union(failedMachines)
+        botsSettled = !(canAsk && (!revalidating || !askableNow.isSubset(of: heardFrom)))
+        guard canAsk else {
+            // Nothing was asked, so nothing is shown yet: a machine that
+            // connects before the query is asked again starts on the skeleton.
             answered = (text, [], now())
             return
         }
@@ -198,7 +242,7 @@ final class AidenSearchModel {
         do {
             try await clock.sleep(for: Self.debounce)
         } catch {
-            if mine == generation { isSearchingBots = false }
+            // Stopped before asking: unsettled, so it still reads as searching.
             return
         }
         guard mine == generation else { return }
@@ -207,7 +251,7 @@ final class AidenSearchModel {
         skippedMachines = Self.skipped(in: all)
         let askable = all.filter(\.canBeAsked)
         guard !askable.isEmpty else {
-            isSearchingBots = false
+            botsSettled = true
             return
         }
         let botQuery = String(String.UnicodeScalarView(text.unicodeScalars.prefix(Self.maxBotQueryScalars)))
@@ -229,18 +273,20 @@ final class AidenSearchModel {
                 switch outcome.result {
                 case .success(let items):
                     hitsByMachine[outcome.machine.instanceId] = Self.hits(from: items, on: outcome.machine)
+                    failedMachines.remove(outcome.machine.instanceId)
                 case .failure(let error):
                     // Stopping a search isn't a machine failing.
                     guard !aidenIsCancellation(error) else { continue }
                     failedMachines.insert(outcome.machine.instanceId)
                 }
+                shownQuery = text
             }
         }
-        guard mine == generation else { return }
-        isSearchingBots = false
-        // A search stopped part way may have missed a machine's reply, and a
-        // machine that failed should be asked again.
-        if !Task.isCancelled, failedMachines.isEmpty {
+        // A search stopped part way may have missed a machine's reply: it
+        // stays unsettled. A machine that failed should be asked again.
+        guard mine == generation, !Task.isCancelled else { return }
+        botsSettled = true
+        if failedMachines.isEmpty {
             answered = (text, Set(askable.map(\.instanceId)), now())
         }
     }

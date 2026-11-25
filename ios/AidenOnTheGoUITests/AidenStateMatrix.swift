@@ -64,6 +64,8 @@ enum AidenStateMatrix {
             "-aiden.product-navigation.v1", "reset",
             "-aiden.product-navigation.v2", "reset",
             "-aiden.product-navigation.v3", navigationArgument(startingTab: startingTab),
+            // No drawer pins left from an earlier launch: the store reads Data.
+            "-aiden.drawer-pins.v1", "reset",
             // Keep the simulator in the same language as the strings the tests look for.
             "-AppleLanguages", "(en)",
             "-AppleLocale", "en_US",
@@ -187,11 +189,9 @@ enum AidenStateMatrix {
     static func openDrawer(in app: XCUIApplication) -> Bool {
         let close = app.buttons["Close menu"].firstMatch
         if close.exists { return true }
-        var menu = app.navigationBars.buttons["Open menu"].firstMatch
-        let showList = app.navigationBars.buttons["Show Sidebar"].firstMatch
+        let menu = app.buttons["Open menu"].firstMatch
+        let showList = app.buttons["Show Sidebar"].firstMatch
         if !menu.waitForExistence(timeout: 3), showList.exists { showList.tap() }
-        // A side rail (a closed Duo) holds the menu button outside any navigation bar.
-        if !menu.exists, app.buttons["Open menu"].firstMatch.exists { menu = app.buttons["Open menu"].firstMatch }
         guard menu.waitForExistence(timeout: 10) else { return false }
         for _ in 0..<2 {
             menu.tap()

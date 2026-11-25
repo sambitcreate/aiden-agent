@@ -396,6 +396,15 @@ final class AidenAppNavigation {
     /// Not saved: a relaunch must not open the microphone or camera.
     private(set) var chatStartingVoice: AidenHostObjectID?
     private(set) var chatStartingCamera: AidenHostObjectID?
+    /// Whether the drawer is open. Not saved. Only what the person did closes
+    /// it (its own rows, a new chat from its compose, a link or a
+    /// notification); paths changing under it in the background never do.
+    var drawerIsOpen = false
+
+    /// Puts the drawer away, if it's open.
+    func dismissDrawer() {
+        drawerIsOpen = false
+    }
     /// The Catch Up under way, while its chat is on top of the Inbox. Not saved:
     /// a relaunch restores the chat, as an ordinary chat.
     private(set) var catchUp: AidenCatchUpRun?
@@ -482,11 +491,22 @@ final class AidenAppNavigation {
 
     /// The chat the Inbox counts as open, which it keeps listed and never calls
     /// news. Beside the list that's also the selected chat under a page pushed
-    /// over it, since its row is still highlighted and it's still the detail.
+    /// over it on Chats or the Inbox, since its row is still highlighted and
+    /// it's still the detail. A notification's chat opens beside Chats' list.
     var inboxOpenChat: AidenHostObjectID? {
         if let openChat { return openChat }
-        guard besideList, tab == .inbox else { return nil }
-        return inboxPath.first?.chatID
+        guard besideList, tab == .inbox || tab == .chats else { return nil }
+        return path(of: tab).first?.chatID
+    }
+
+    /// Whether a list of chats is on screen, which the inbox store refreshes
+    /// at its quicker pace: the drawer's Recents over any tab, or Chats or the
+    /// Inbox with its list showing. On a stack, a chat pushed over the list
+    /// covers it; beside the list it stays in view.
+    var showsChatList: Bool {
+        if drawerIsOpen { return true }
+        guard tab == .chats || tab == .inbox else { return false }
+        return besideList || path(of: tab).isEmpty
     }
 
     /// A chat or a Bot on top of the tab that's showing: either has a composer.
@@ -553,6 +573,15 @@ final class AidenAppNavigation {
     /// and `startsCamera` belong to foreground shortcuts and widget buttons:
     /// the chat starts listening or opens its camera picker when it opens.
     func open(_ route: AidenAppRoute, startsVoice: Bool = false, startsCamera: Bool = false) {
+        if route.ownTab == nil {
+            // Already open on another tab, it moves here rather than taking
+            // the person to that tab.
+            for other in AidenAppTab.allCases where other != tab {
+                var updated = path(of: other)
+                Self.remove(route, from: &updated)
+                if updated != path(of: other) { setPath(updated, of: other) }
+            }
+        }
         open(route, on: route.ownTab ?? tab)
         if case .chat(let id) = route {
             if startsVoice {
@@ -584,6 +613,25 @@ final class AidenAppNavigation {
         case .bots: botsPath = []
         case .workspaces: workspacesPath = []
         }
+    }
+
+    /// A chat the person just started (Compose, or the drawer's New chat).
+    /// Started from Workspaces it stays there, so Back returns to the
+    /// workspace; from anywhere else it opens on Chats. It puts the drawer away.
+    func openNewChat(_ id: AidenHostObjectID) {
+        open(.chat(id), on: tab == .workspaces ? .workspaces : .chats)
+        dismissDrawer()
+    }
+
+    /// The drawer's Show all chats. Beside the list the list is already on
+    /// screen, so the chat selected there stays; on a stack the list is the
+    /// tab's root.
+    func showAllChats() {
+        chatStartingVoice = nil
+        chatStartingCamera = nil
+        tab = .chats
+        guard !besideList, !chatsPath.isEmpty else { return }
+        setPath([], of: .chats)
     }
 
     /// Shows the route on `tab`, which needn't be its own: a chat started from the

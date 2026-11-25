@@ -111,6 +111,118 @@ final class AidenShellIATests: XCTestCase {
         XCTAssertEqual(navigation.inboxPath, [])
     }
 
+    /// A new chat opens on Chats from every tab but Workspaces, where it
+    /// stays so Back returns to the workspace, and it puts the drawer away.
+    func testANewChatOpensOnChatsExceptFromWorkspaces() {
+        for (from, lands) in [(AidenAppTab.inbox, AidenAppTab.chats), (.bots, .chats), (.chats, .chats), (.workspaces, .workspaces)] {
+            let navigation = AidenAppNavigation()
+            navigation.tab = from
+            navigation.drawerIsOpen = true
+
+            navigation.openNewChat(id("new"))
+
+            XCTAssertEqual(navigation.tab, lands, "From \(from)")
+            XCTAssertEqual(navigation.path(of: lands), [.chat(id("new"))], "From \(from)")
+            XCTAssertFalse(navigation.drawerIsOpen, "From \(from) the drawer stayed open")
+        }
+    }
+
+    /// Paths changing under the drawer (a machine forgotten elsewhere, the
+    /// selected machine changing) don't put it away.
+    func testBackgroundPathChangesLeaveTheDrawerOpen() {
+        let navigation = AidenAppNavigation()
+        navigation.open(.settings)
+        navigation.open(.usage)
+        navigation.drawerIsOpen = true
+
+        navigation.leaveSelectedMachineRoutes()
+        navigation.dropRoutes(outside: [])
+        navigation.setPath([.settings], of: navigation.tab)
+
+        XCTAssertTrue(navigation.drawerIsOpen, "A background path change closed the drawer")
+    }
+
+    /// A drawer page already open on another tab moves to the tab that's
+    /// showing, rather than taking the person to that tab.
+    func testADrawerPageOpenOnAnotherTabMovesToTheShowingOne() {
+        let navigation = AidenAppNavigation()
+        navigation.open(.bot(id("b1")))
+        navigation.open(.settings)
+        navigation.tab = .chats
+
+        navigation.open(.settings)
+
+        XCTAssertEqual(navigation.tab, .chats)
+        XCTAssertEqual(navigation.chatsPath, [.settings])
+        XCTAssertEqual(navigation.botsPath, [.bot(id("b1"))])
+    }
+
+    /// Show all chats keeps the chat selected beside the list, and on a stack
+    /// goes to the list.
+    func testShowAllChatsKeepsTheSelectionBesideTheList() {
+        let split = AidenAppNavigation()
+        split.besideList = true
+        split.pick(.chat(id("c1")), fromListOf: .chats)
+        split.tab = .bots
+
+        split.showAllChats()
+
+        XCTAssertEqual(split.tab, .chats)
+        XCTAssertEqual(split.chatsPath, [.chat(id("c1"))])
+
+        let stack = AidenAppNavigation()
+        stack.open(.chat(id("c1")))
+        stack.tab = .bots
+        stack.showAllChats()
+        XCTAssertEqual(stack.tab, .chats)
+        XCTAssertEqual(stack.chatsPath, [])
+    }
+
+    /// Chats, the Inbox and the open drawer each show a list of chats, which
+    /// the inbox store keeps fresh; Bots and Workspaces alone don't, and on a
+    /// stack neither does a chat pushed over the list.
+    func testAChatListIsOnScreenOnChatsTheInboxOrInTheDrawer() {
+        let expected: [AidenAppTab: Bool] = [.chats: true, .inbox: true, .bots: false, .workspaces: false]
+        let navigation = AidenAppNavigation()
+        for (tab, showsList) in expected {
+            navigation.tab = tab
+            navigation.drawerIsOpen = false
+            XCTAssertEqual(navigation.showsChatList, showsList, "\(tab)")
+            navigation.drawerIsOpen = true
+            XCTAssertTrue(navigation.showsChatList, "\(tab) with the drawer open")
+        }
+
+        // iPhone: a chat pushed over Chats covers the list.
+        let stack = AidenAppNavigation()
+        stack.open(.chat(id("c1")))
+        XCTAssertEqual(stack.tab, .chats)
+        XCTAssertFalse(stack.showsChatList, "A chat over the Chats list kept the quick pace")
+        stack.drawerIsOpen = true
+        XCTAssertTrue(stack.showsChatList)
+
+        // Beside the list, the chat sits next to it.
+        let split = AidenAppNavigation()
+        split.besideList = true
+        split.pick(.chat(id("c1")), fromListOf: .chats)
+        XCTAssertTrue(split.showsChatList)
+    }
+
+    /// A notification's chat opens beside Chats' list. With a page pushed over
+    /// it, the Inbox still counts it as open, so its replies aren't news.
+    func testAChatSelectedBesideTheChatsListCountsAsOpenUnderAPage() {
+        let navigation = AidenAppNavigation()
+        navigation.besideList = true
+        navigation.open(.chat(id("c1")))
+        navigation.push(.machines, over: .chat(id("c1")))
+        XCTAssertEqual(navigation.tab, .chats)
+        XCTAssertEqual(navigation.chatsPath.last, .machines)
+
+        XCTAssertEqual(navigation.inboxOpenChat, id("c1"))
+
+        navigation.tab = .bots
+        XCTAssertNil(navigation.inboxOpenChat)
+    }
+
     // MARK: Chats list
 
     private func chat(_ chatID: String, _ title: String, minutesAgo: Double, workspace: String = "default") -> AidenChatSummary {
@@ -239,16 +351,17 @@ final class AidenShellIATests: XCTestCase {
         XCTAssertEqual(AidenDrawerPinsStore(defaults: defaults).pins, [kept])
     }
 
-    private func bot(_ botID: String, name: String) throws -> AidenBotSummary {
+    private func bot(_ botID: String, name: String, extra: [String: Any] = [:]) throws -> AidenBotSummary {
         let formatter = ISO8601DateFormatter()
         formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
-        let object: [String: Any] = [
+        var object: [String: Any] = [
             "id": botID, "name": name, "purpose": "",
             "avatar": ["semantic": ["version": 1, "shape": "orb", "color": "rose"]],
             "health": "ready",
             "createdAt": formatter.string(from: now), "updatedAt": formatter.string(from: now),
             "revision": "bot_revision_\(botID)",
         ]
+        object.merge(extra) { _, new in new }
         return try AidenRemoteJSONDecoder.decode(AidenBotSummary.self, from: JSONSerialization.data(withJSONObject: object))
     }
 
@@ -269,6 +382,26 @@ final class AidenShellIATests: XCTestCase {
         XCTAssertEqual(items.map(\.name), ["Project-laptop", "Scout"])
         XCTAssertEqual(items.map(\.isOnline), [false, true])
         XCTAssertTrue(AidenDrawerPinned.items(pins: pins, snapshots: snapshots, hiddenMachines: ["studio", "laptop"]).isEmpty)
+    }
+
+    /// A pinned Bot's dot follows the Inbox: open cards, an interrupted run
+    /// and a lost model each need the person; a quiet Bot doesn't.
+    func testAPinnedBotNeedsYouWhenTheInboxSaysSo() throws {
+        let names = ["quiet", "cards", "interrupted", "model"]
+        let bots = [
+            try bot("quiet", name: "quiet", extra: ["sessionState": "idle"]),
+            try bot("cards", name: "cards", extra: ["issueCount": 2]),
+            try bot("interrupted", name: "interrupted", extra: ["sessionState": "interrupted"]),
+            try bot("model", name: "model", extra: ["sessionState": "needs_model"]),
+        ]
+        let items = AidenDrawerPinned.items(
+            pins: names.map { AidenDrawerPin(kind: .bot, id: id($0)) },
+            snapshots: [snapshot("studio", bots: bots)],
+            hiddenMachines: []
+        )
+
+        XCTAssertEqual(items.map(\.name), names)
+        XCTAssertEqual(items.map(\.needsYou), [false, true, true, true])
     }
 
     func testAPinOnAnotherPairingOfTheSameMachineIsNotShown() throws {

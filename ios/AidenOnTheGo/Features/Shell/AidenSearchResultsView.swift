@@ -247,8 +247,9 @@ private extension View {
     /// Dragging the results lets go of the search field's focus, which puts the
     /// keyboard away and keeps the query.
     func putsKeyboardAwayOnDrag(searchIsFocused: FocusState<Bool>.Binding) -> some View {
-        onScrollPhaseChange { _, phase in
-            if phase == .interacting { searchIsFocused.wrappedValue = false }
-        }
+        scrollDismissesKeyboard(.immediately)
+            .onScrollPhaseChange { _, phase in
+                if phase == .interacting { searchIsFocused.wrappedValue = false }
+            }
     }
 }

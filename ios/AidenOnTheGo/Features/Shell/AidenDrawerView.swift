@@ -22,6 +22,8 @@ struct AidenDrawerView<Compose: View>: View {
     /// The shell's, so the query and what it found outlive a fold and the
     /// drawer closing.
     let search: AidenSearchModel
+    /// Draws a pinned Bot's avatar as the Bots list does, photo included.
+    let coordinator: AidenRemoteCoordinator
     let inboxStore: AidenUnifiedInboxStore
     let pins: AidenDrawerPinsStore
     let usageUnavailable: Bool
@@ -115,8 +117,10 @@ struct AidenDrawerView<Compose: View>: View {
                     ForEach(pinned) { item in
                         row(
                             item.name,
-                            systemImage: item.pin.kind == .bot ? AidenChromeSymbols.bots : "folder",
-                            detail: item.isOnline ? nil : String(localized: "offline")
+                            systemImage: "folder",
+                            detail: item.isOnline ? nil : String(localized: "offline"),
+                            botAvatar: item.botAvatar.map { ($0, item.pin.id.instanceId, item.pin.id.objectId) },
+                            needsYou: item.needsYou
                         ) { onOpen(item.pin.route) }
                         .contextMenu { AidenDrawerPinButton(pin: item.pin, store: pins) }
                     }
@@ -181,17 +185,39 @@ struct AidenDrawerView<Compose: View>: View {
         _ title: String,
         systemImage: String,
         detail: String? = nil,
+        /// A pinned Bot's avatar, its machine and its id.
+        botAvatar: (avatar: AidenBotAvatarView, machine: String, botID: String)? = nil,
+        needsYou: Bool = false,
         action: @escaping () -> Void
     ) -> some View {
         Button(action: action) {
             HStack(spacing: AidenSpacing.m) {
-                Image(systemName: systemImage)
-                    .foregroundStyle(palette.secondary)
-                    .frame(width: 24)
-                    .accessibilityHidden(true)
+                Group {
+                    if let botAvatar {
+                        AidenBotCanonicalAvatarView(
+                            coordinator: coordinator,
+                            machine: botAvatar.machine,
+                            botID: botAvatar.botID,
+                            avatar: botAvatar.avatar,
+                            name: title,
+                            size: 24
+                        )
+                    } else {
+                        Image(systemName: systemImage)
+                            .foregroundStyle(palette.secondary)
+                    }
+                }
+                .frame(width: 24)
+                .accessibilityHidden(true)
                 Text(title)
                     .lineLimit(1)
                 Spacer(minLength: 0)
+                if needsYou {
+                    Circle()
+                        .fill(palette.accent)
+                        .frame(width: 8, height: 8)
+                        .accessibilityLabel("Needs you")
+                }
                 if let detail {
                     Text(detail)
                         .font(.footnote)
@@ -245,6 +271,7 @@ struct AidenDrawerView<Compose: View>: View {
                 .focused($searchIsFocused)
                 .submitLabel(.search)
                 .autocorrectionDisabled()
+                .frame(maxWidth: .infinity, minHeight: 44)
             if search.hasQuery {
                 Button {
                     search.query = ""
@@ -252,13 +279,20 @@ struct AidenDrawerView<Compose: View>: View {
                     Label("Clear search", systemImage: "xmark.circle.fill")
                         .labelStyle(.iconOnly)
                         .foregroundStyle(palette.secondary)
+                        .frame(width: 44, height: 44)
+                        .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
+                .padding(.trailing, -AidenSpacing.m)
             }
         }
         .padding(.horizontal, AidenSpacing.m)
-        .frame(minHeight: 40)
+        .frame(minHeight: 44)
         .background(palette.raised, in: Capsule())
+        // The whole 44pt capsule focuses the field, and it's the frame
+        // accessibility reports for it (the field alone is one line tall).
+        .contentShape(Capsule())
+        .onTapGesture { searchIsFocused = true }
     }
 }
 
@@ -288,12 +322,33 @@ private struct AidenDrawerIconButtonStyle: ButtonStyle {
 /// Lays the drawer over the content from the leading edge, with a dimmed
 /// scrim behind it, at every width. The scrim, a swipe toward the edge, or
 /// Escape closes it. Reduce Motion fades it in place of the slide.
+///
+/// The shell presents it as a clear full-screen cover with no animation of
+/// its own, so it slides in when it appears and slides out before it asks to
+/// be closed (`onClose`).
 struct AidenDrawerOverlay<Drawer: View>: View {
-    let isOpen: Bool
     let onClose: () -> Void
-    @ViewBuilder let drawer: () -> Drawer
+    /// Gets the overlay's own close, which slides the drawer out first.
+    @ViewBuilder let drawer: (_ close: @escaping () -> Void) -> Drawer
 
     @Environment(\.aidenReduceMotion) private var reduceMotion
+    @Environment(\.aidenPalette) private var palette
+    @State private var isOpen = false
+    @State private var isClosing = false
+
+    private var motion: Animation {
+        reduceMotion ? .easeInOut(duration: 0.2) : .smooth(duration: 0.3)
+    }
+
+    private func close() {
+        guard !isClosing else { return }
+        isClosing = true
+        withAnimation(motion) {
+            isOpen = false
+        } completion: {
+            onClose()
+        }
+    }
 
     static func width(in container: CGFloat) -> CGFloat {
         min(360, (container * 0.85).rounded(.down))
@@ -303,19 +358,19 @@ struct AidenDrawerOverlay<Drawer: View>: View {
         GeometryReader { proxy in
             ZStack(alignment: .leading) {
                 if isOpen {
-                    Color.black.opacity(0.32)
+                    palette.scrim
                         .ignoresSafeArea()
                         .contentShape(Rectangle())
-                        .onTapGesture(perform: onClose)
+                        .onTapGesture(perform: close)
                         .accessibilityHidden(true)
                         .transition(.opacity)
-                    drawer()
+                    drawer(close)
                         .frame(width: Self.width(in: proxy.size.width + proxy.safeAreaInsets.leading))
                         .frame(maxHeight: .infinity)
                         .simultaneousGesture(
                             DragGesture(minimumDistance: 20).onEnded { value in
                                 let dx = value.translation.width
-                                if dx < -60, abs(dx) > abs(value.translation.height) { onClose() }
+                                if dx < -60, abs(dx) > abs(value.translation.height) { close() }
                             }
                         )
                         .transition(reduceMotion ? .opacity : .move(edge: .leading))
@@ -324,6 +379,75 @@ struct AidenDrawerOverlay<Drawer: View>: View {
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .leading)
         }
         .allowsHitTesting(isOpen)
-        .animation(reduceMotion ? .easeInOut(duration: 0.2) : .smooth(duration: 0.3), value: isOpen)
+        .onAppear {
+            withAnimation(motion) { isOpen = true }
+        }
+    }
+}
+
+/// The system's swipe in from the leading screen edge, which opens the
+/// drawer. A screen-edge recogniser, not an invisible strip over the content,
+/// so a tap at the edge and a row's leading swipe that starts inside the
+/// screen still reach what's under them. Off (`isEnabled`), it never begins,
+/// so a pushed screen's own Back swipe keeps the edge.
+struct AidenDrawerEdgeSwipe: UIGestureRecognizerRepresentable {
+    let isEnabled: Bool
+    /// The leading edge, on the screen.
+    let layoutDirection: LayoutDirection
+    let onOpen: () -> Void
+
+    func makeUIGestureRecognizer(context: Context) -> UIScreenEdgePanGestureRecognizer {
+        let recognizer = UIScreenEdgePanGestureRecognizer()
+        recognizer.edges = layoutDirection == .rightToLeft ? .right : .left
+        recognizer.delegate = context.coordinator
+        context.coordinator.isEnabled = isEnabled
+        context.coordinator.isRightToLeft = layoutDirection == .rightToLeft
+        return recognizer
+    }
+
+    func updateUIGestureRecognizer(_ recognizer: UIScreenEdgePanGestureRecognizer, context: Context) {
+        // The layout direction can change while the shell is alive.
+        recognizer.edges = layoutDirection == .rightToLeft ? .right : .left
+        context.coordinator.isEnabled = isEnabled
+        context.coordinator.isRightToLeft = layoutDirection == .rightToLeft
+    }
+
+    /// How far in from the leading screen edge a touch may begin and still
+    /// open the drawer. A swipe that begins further in belongs to what's under
+    /// it, such as a row's leading swipe actions, whatever its speed.
+    static let edgeBand: CGFloat = 10
+
+    /// Whether a touch at `x` in a window `width` wide begins in the band.
+    static func beginsInEdgeBand(x: CGFloat, width: CGFloat, rightToLeft: Bool) -> Bool {
+        let fromEdge = rightToLeft ? width - x : x
+        return fromEdge >= 0 && fromEdge <= edgeBand
+    }
+
+    func handleUIGestureRecognizerAction(_ recognizer: UIScreenEdgePanGestureRecognizer, context: Context) {
+        guard recognizer.state == .ended, isEnabled else { return }
+        let dx = abs(recognizer.translation(in: recognizer.view).x)
+        if dx > 40 { onOpen() }
+    }
+
+    func makeCoordinator(converter: CoordinateSpaceConverter) -> Coordinator { Coordinator() }
+
+    @MainActor
+    final class Coordinator: NSObject, UIGestureRecognizerDelegate {
+        var isEnabled = false
+        var isRightToLeft = false
+        /// Where the touch began, in its window.
+        private var start: (x: CGFloat, width: CGFloat)?
+
+        func gestureRecognizer(_ gestureRecognizer: UIGestureRecognizer, shouldReceive touch: UITouch) -> Bool {
+            if let window = touch.window {
+                start = (touch.location(in: window).x, window.bounds.width)
+            }
+            return true
+        }
+
+        func gestureRecognizerShouldBegin(_ gestureRecognizer: UIGestureRecognizer) -> Bool {
+            guard isEnabled, let start else { return false }
+            return AidenDrawerEdgeSwipe.beginsInEdgeBand(x: start.x, width: start.width, rightToLeft: isRightToLeft)
+        }
     }
 }

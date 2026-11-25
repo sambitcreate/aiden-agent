@@ -730,7 +730,9 @@ enum AidenDemoHosts {
         responder.reply(instanceId: id, path: "/server", status: 200, json: AidenDemoContent.serverJSON(for: installation))
         responder.reply(instanceId: id, path: "/workspaces", status: 200, json: AidenDemoContent.workspacesJSON())
         // Served for old hosts too, but only reached when a host advertises it.
-        responder.reply(instanceId: id, path: "/chat-summaries", status: 200, json: AidenDemoContent.summariesJSON(rows))
+        // Remembers Mark read like a Mac, so a read chat stays read on the next refresh.
+        let readChats = AidenDemoReadChats(summaries: AidenDemoContent.summariesJSON(rows))
+        responder.reply(instanceId: id, path: "/chat-summaries", status: 200) { _ in readChats.summaries() }
         // The Settings screen reads memory settings.
         responder.reply(instanceId: id, path: "/memory/settings", status: 200, json: AidenDemoContent.memorySettingsJSON())
         // The chat composer's model chip reads the catalog.
@@ -744,6 +746,11 @@ enum AidenDemoHosts {
                 status: 200,
                 json: AidenDemoContent.chatJSON(row: row, index: index)
             )
+            // The host advertises `chat-read-state-v1`, so Mark read lands.
+            responder.reply(instanceId: id, method: "POST", path: "/chats/\(chatId)/read", status: 204) { _ in
+                readChats.markRead(chatId)
+                return Data()
+            }
         }
         if AidenDemoRunOptions.readsAloud {
             for (index, row) in rows.enumerated() {
@@ -1482,5 +1489,37 @@ enum AidenDemoLongChat {
         }
         return out
     }()
+}
+
+/// The chats a demo Mac has been told are read, applied to its summaries.
+private final class AidenDemoReadChats: @unchecked Sendable {
+    private let lock = NSLock()
+    private let base: Data
+    private var read: Set<String> = []
+
+    init(summaries: Data) { base = summaries }
+
+    func markRead(_ chatId: String) {
+        lock.lock()
+        read.insert(chatId)
+        lock.unlock()
+    }
+
+    func summaries() -> Data {
+        lock.lock()
+        let read = self.read
+        lock.unlock()
+        guard !read.isEmpty,
+              var object = try? JSONSerialization.jsonObject(with: base) as? [String: Any],
+              let rows = object["summaries"] as? [[String: Any]]
+        else { return base }
+        object["summaries"] = rows.map { row -> [String: Any] in
+            guard let id = row["id"] as? String, read.contains(id) else { return row }
+            var row = row
+            row["unread"] = false
+            return row
+        }
+        return (try? JSONSerialization.data(withJSONObject: object)) ?? base
+    }
 }
 #endif

@@ -336,6 +336,10 @@ struct AidenPalette: Equatable, Sendable {
     static let defaultLightActivityHex = "#006AD6"
     static let defaultDarkActivityHex = "#3E97F6"
 
+    /// Dims what's under a modal surface that lays over it, such as the
+    /// drawer. The same in every preset, so the surface reads as raised.
+    var scrim: Color { Color.black.opacity(0.32) }
+
     /// Solid accent fill for labelled controls: send buttons, prominent
     /// buttons, selected chips, accent bubbles, swipe actions.
     var accentSolidFill: AidenSolidFill { AidenSolidFill(baseHex: accentHex) }
