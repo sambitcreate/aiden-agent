@@ -16,12 +16,24 @@ import {
 } from "./aiden-remote-operation-contract.js";
 import type { AidenRemoteWorkspaceBrowserService } from "./aiden-remote-workspace-browser.js";
 import type { createWorkspaceApplicationService } from "./workspace-application-service.js";
-import type { Workspace, WorkspacePermission } from "./types.js";
+import type { GitInfo, Workspace, WorkspacePermission } from "./types.js";
 import { legacyWorkspaceTier, type ApprovalMode } from "../../renderer/shared/approval-mode.js";
 
 const WORKSPACE_ID_PATTERN = /^[A-Za-z0-9_-]{1,128}$/u;
 const IDEMPOTENCY_KEY_PATTERN = /^[\x21-\x7e]{16,128}$/u;
 const PERMISSIONS: readonly WorkspacePermission[] = ["full", "ask", "none"];
+/**
+ * How long a workspace read waits for every Git summary together. A repository
+ * that has not answered by then is listed without one; the list never waits on Git.
+ */
+export const AIDEN_REMOTE_WORKSPACE_GIT_TIMEOUT_MS = 1_500;
+
+/** The small Git summary a Remote workspace may carry: no paths, remotes or refs beyond the branch name. */
+export interface AidenRemoteWorkspaceGitSummary {
+  isRepo: boolean;
+  branch?: string;
+  uncommitted?: number;
+}
 
 export interface AidenRemoteWorkspaceProjection {
   id: string;
@@ -34,6 +46,8 @@ export interface AidenRemoteWorkspaceProjection {
   noWorkspace?: true;
   branchName?: string;
   repositoryName?: string;
+  /** Filled from the host's cached Git status when it answered in time; absent otherwise. */
+  git?: AidenRemoteWorkspaceGitSummary;
   createdAt: string;
   updatedAt: string;
   revision: string;
@@ -95,13 +109,42 @@ function displayNameFromPath(value: string | undefined): string | undefined {
 }
 
 /**
+ * Reduces a Git status read to the Remote summary: whether the folder is a
+ * repository, its branch name and its count of uncommitted entries. Nothing
+ * else in `GitInfo` (upstream, remotes, default branch) crosses the wire.
+ */
+function hasControlCharacter(value: string): boolean {
+  for (let index = 0; index < value.length; index++) {
+    const code = value.charCodeAt(index);
+    if (code <= 0x1f || code === 0x7f) return true;
+  }
+  return false;
+}
+
+export function projectAidenRemoteWorkspaceGit(info: GitInfo): AidenRemoteWorkspaceGitSummary | undefined {
+  if (typeof info?.isRepo !== "boolean") return undefined;
+  if (!info.isRepo) return { isRepo: false };
+  const branch = typeof info.branch === "string" && info.branch.length > 0 && !hasControlCharacter(info.branch)
+    ? info.branch.slice(0, 255)
+    : undefined;
+  const uncommitted = Number.isSafeInteger(info.uncommitted) && info.uncommitted! >= 0 ? info.uncommitted : undefined;
+  return {
+    isRepo: true,
+    ...(branch ? { branch } : {}),
+    ...(uncommitted !== undefined ? { uncommitted } : {}),
+  };
+}
+
+/**
  * A workspace as a Remote client sees it. Phones know only the access tiers,
  * so `permission` is the tier that never reads narrower than what runs under
- * `globalMode` (`legacyWorkspaceTier`). The revision stays the stored one.
+ * `globalMode` (`legacyWorkspaceTier`). The revision stays the stored one, so
+ * the optional Git summary never changes it.
  */
 export function projectAidenRemoteWorkspace(
   workspace: Workspace,
   globalMode: ApprovalMode = "ask",
+  git?: AidenRemoteWorkspaceGitSummary,
 ): AidenRemoteWorkspaceProjection {
   return {
     id: workspace.id,
@@ -117,6 +160,7 @@ export function projectAidenRemoteWorkspace(
     ...(displayNameFromPath(workspace.managedWorktree?.repositoryPath)
       ? { repositoryName: displayNameFromPath(workspace.managedWorktree?.repositoryPath)! }
       : {}),
+    ...(git ? { git } : {}),
     createdAt: new Date(workspace.createdAt).toISOString(),
     updatedAt: new Date(workspace.updatedAt).toISOString(),
     revision: workspaceRevision(workspace),
@@ -253,6 +297,13 @@ export class AidenRemoteWorkspaceService {
       isWorkspaceHidden?: (workspace: Workspace) => boolean | Promise<boolean>;
       /** Optional batch visibility filter for `list()` so callers avoid N+1 per-workspace lookups. */
       filterVisibleWorkspaces?: (workspaces: readonly Workspace[]) => Workspace[] | Promise<Workspace[]>;
+      /**
+       * The host's cached Git status for a workspace folder (`GitService.info`).
+       * Absent means workspaces carry no `git` summary. A read that fails or
+       * outlasts `gitInfoTimeoutMs` leaves that workspace's summary out.
+       */
+      gitInfo?: (folderPath: string, signal: AbortSignal) => Promise<GitInfo>;
+      gitInfoTimeoutMs?: number;
     },
   ) {
     this.idempotency = options.idempotency ?? new AidenIdempotencyLedger();
@@ -282,6 +333,47 @@ export class AidenRemoteWorkspaceService {
     return (await this.options.approvalMode?.()) ?? "ask";
   }
 
+  /**
+   * Git summaries for the workspaces that have a folder, read together under
+   * one deadline. Whatever has not answered by then, or failed, is left out.
+   */
+  private async gitSummaries(
+    workspaces: readonly Workspace[],
+  ): Promise<ReadonlyMap<string, AidenRemoteWorkspaceGitSummary>> {
+    const read = this.options.gitInfo;
+    const targets = read ? workspaces.filter((workspace) => workspace.folderPath && !workspace.noWorkspace) : [];
+    if (!read || targets.length === 0) return new Map();
+    const summaries = new Map<string, AidenRemoteWorkspaceGitSummary>();
+    const controller = new AbortController();
+    let open = true;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const deadline = new Promise<void>((resolve) => {
+      // Not unref'd: a request awaits this deadline, and it is always cleared below.
+      timer = setTimeout(resolve, this.options.gitInfoTimeoutMs ?? AIDEN_REMOTE_WORKSPACE_GIT_TIMEOUT_MS);
+    });
+    const reads = Promise.all(targets.map(async (workspace) => {
+      try {
+        const summary = projectAidenRemoteWorkspaceGit(await read(workspace.folderPath!, controller.signal));
+        if (summary && open) summaries.set(workspace.id, summary);
+      } catch {
+        // A folder Git cannot read is listed without a summary.
+      }
+    }));
+    try {
+      await Promise.race([reads, deadline]);
+    } finally {
+      open = false;
+      clearTimeout(timer);
+      controller.abort();
+    }
+    return summaries;
+  }
+
+  private async projectWithGit(workspace: Workspace): Promise<AidenRemoteWorkspaceProjection> {
+    const [summaries, globalMode] = await Promise.all([this.gitSummaries([workspace]), this.globalMode()]);
+    return projectAidenRemoteWorkspace(workspace, globalMode, summaries.get(workspace.id));
+  }
+
   async list(): Promise<{ workspaces: AidenRemoteWorkspaceProjection[] }> {
     const [workspaces, mode] = await Promise.all([this.options.application.list(), this.globalMode()]);
     let visible: Workspace[];
@@ -296,7 +388,10 @@ export class AidenRemoteWorkspaceService {
     } else {
       visible = workspaces;
     }
-    return { workspaces: visible.map((workspace) => projectAidenRemoteWorkspace(workspace, mode)) };
+    const git = await this.gitSummaries(visible);
+    return {
+      workspaces: visible.map((workspace) => projectAidenRemoteWorkspace(workspace, mode, git.get(workspace.id))),
+    };
   }
 
   async get(workspaceId: string): Promise<AidenRemoteWorkspaceProjection> {
@@ -304,7 +399,7 @@ export class AidenRemoteWorkspaceService {
     if (!workspace || (this.options.isWorkspaceHidden && (await this.options.isWorkspaceHidden(workspace)))) {
       throw new AidenRemoteServiceError("not_found", "This Aiden workspace no longer exists.", 404);
     }
-    return projectAidenRemoteWorkspace(workspace, await this.globalMode());
+    return this.projectWithGit(workspace);
   }
 
   async create(
@@ -433,7 +528,7 @@ export class AidenRemoteWorkspaceService {
             }
           }
           this.options.notifyChanged?.();
-          return projectAidenRemoteWorkspace(workspace, await this.globalMode());
+          return this.projectWithGit(workspace);
         },
       );
     } catch (error) {
@@ -458,7 +553,7 @@ export class AidenRemoteWorkspaceService {
       assertCurrent: (workspace) => requireWorkspaceRevision(expectedRevision, workspace),
     });
     this.options.notifyChanged?.();
-    return projectAidenRemoteWorkspace(updated, await this.globalMode());
+    return this.projectWithGit(updated);
   }
 
   async remove(workspaceId: string, expectedRevision: string): Promise<void> {

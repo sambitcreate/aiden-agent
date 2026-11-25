@@ -254,7 +254,7 @@ export async function createCliRemote(agentDir: string, chats: ReturnType<typeof
         chats: remoteChats.chats, streams: remoteChats.streams, models: remoteChats.models, hostFeed: feed, hostRuns,
         schedules: new AidenRemoteScheduleService({ application: scheduleApplication, models: remoteChats.models, idempotency, persistIdempotency }),
         workspaceBrowser: browser,
-        workspaces: new AidenRemoteWorkspaceService({ application: workspaces.application, browser, idempotency, persistIdempotency }),
+        workspaces: new AidenRemoteWorkspaceService({ application: workspaces.application, browser, idempotency, persistIdempotency, gitInfo: git.gitInfo }),
         files: new AidenRemoteFileService({ instanceId, application: workspaces.environment, owners }),
         git: new AidenRemoteGitService({ application: workspaces.environment, owners, worktrees: worktreeApplication, listWorkspaces: workspaces.configStore.listWorkspaces, idempotency, persistIdempotency,
           git: { review: git.gitReview, diff: git.gitDiff, branches: git.gitBranches, checkout: git.gitCheckout, createBranch: git.gitCreateBranch, commit: git.gitCommit,

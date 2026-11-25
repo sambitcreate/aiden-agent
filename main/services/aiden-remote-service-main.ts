@@ -137,6 +137,7 @@ import {
   gitComparisonDiff,
   gitCreateBranch,
   gitDiff,
+  gitInfo,
   gitPush,
   gitPushCapability,
   gitReview,
@@ -1368,6 +1369,7 @@ async function createRuntime(): Promise<AidenRemoteRuntime> {
               isWorkspaceHidden: isEphemeralOnlyNoWorkspace,
               filterVisibleWorkspaces: (workspaces) =>
                 filterRemoteVisibleWorkspaces(workspaces, () => chatStore.list()),
+              gitInfo,
             }),
           };
         },
