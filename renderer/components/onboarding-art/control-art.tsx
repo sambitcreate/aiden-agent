@@ -176,7 +176,7 @@ export function BotsArt() {
         <div className="oa-bots-head oa-separator-bottom">
           <span className="oa-bots-name">
             <span className="oa-bots-avatar">
-              <AvatarFace avatar={{ version: 1, shape: "drop", color: "peach" }} />
+              <AvatarFace avatar={{ version: 1, shape: "drop", color: "peach" }} small />
             </span>
             Chief
           </span>
@@ -252,7 +252,7 @@ export function BotComputersArt() {
           </span>
         </div>
         <span className="oa-bc-pointer oa-anim-float" style={{ left: 110, top: 66 }}>
-          <AvatarFace avatar={{ version: 1, shape: "squircle", color: "aqua" }} />
+          <AvatarFace avatar={{ version: 1, shape: "squircle", color: "aqua" }} small />
         </span>
       </div>
     </ArtWindow>

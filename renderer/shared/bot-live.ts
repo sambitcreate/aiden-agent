@@ -265,6 +265,19 @@ export function botRetryableFailedTurn(
   return last?.type === "failed_turn" && last.retryText !== null ? last : null;
 }
 
+/**
+ * How the newest turn ended, read from the newest transcript entry: `failed` when it is a
+ * failed turn (a provider or tool failure; the session itself is idle again), `stopped` when
+ * the person stopped the reply (an aborted answer, or a tool the stop cut short), else null.
+ */
+export function botLastTurnEnd(entries: readonly BotTranscriptEntry[]): "failed" | "stopped" | null {
+  const last = entries[entries.length - 1];
+  if (last?.type === "failed_turn") return "failed";
+  if (last?.type === "assistant" && last.stopReason === "aborted") return "stopped";
+  if (last?.type === "tool_result" && last.status === "stopped") return "stopped";
+  return null;
+}
+
 /** The step behind the current phase, for the Mac's hover peek and Detailed steps. */
 export interface BotLiveActivityStep {
   kind: BotToolPhase;
@@ -342,6 +355,8 @@ export interface BotLiveSummary {
   needsYou: boolean;
   /** When the newest reply with visible text arrived; the sidebar's unread dot compares it with last-viewed. */
   lastReplyAt: number | null;
+  /** How the newest turn ended (`botLastTurnEnd`), when it failed or the person stopped it; the row's face shows error or settles quietly. */
+  lastTurnEnd?: "failed" | "stopped";
 }
 
 /** Peer input and a turn that delegates are quiet until the host seals the root's final marker. */
