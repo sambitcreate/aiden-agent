@@ -163,9 +163,9 @@ struct AidenAppShellView: View {
     /// so building them there read and decoded the saved navigation each time.
     @State private var parts = AidenAppShellParts()
     @State private var botSummaries: [AidenHostObjectID: AidenBotSummary] = [:]
-    @State private var searchText = ""
     @State private var activeSheet: ShellSheet?
     /// Each list tab's split columns.
+    @State private var chatsColumns = AidenSplitColumns()
     @State private var inboxColumns = AidenSplitColumns()
     @State private var botsColumns = AidenSplitColumns()
     @State private var workspacesColumns = AidenSplitColumns()
@@ -174,6 +174,11 @@ struct AidenAppShellView: View {
     @State private var showsVerticalBar = false
     /// The shell's own window, for its orientation.
     @State private var window = AidenWindowReader.Window()
+    /// The drawer over the tabs (`AidenDrawerView`).
+    @State private var drawerIsOpen = false
+    /// VoiceOver goes back to the showing tab's menu button when the drawer
+    /// closes. Keyed by tab because every tab's list keeps its own button.
+    @AccessibilityFocusState private var focusedMenuButton: AidenAppTab?
 
     init(
         coordinator: AidenRemoteCoordinator,
@@ -195,8 +200,9 @@ struct AidenAppShellView: View {
 
     private var navigation: AidenAppNavigation { built.navigation }
 
-    /// Compose in the Inbox and on the Workspaces tab, on a machine the person
-    /// picks. A chat started from Workspaces stays there; anywhere else it's the Inbox's.
+    /// Compose in the Inbox, the Chats tab, the Workspaces tab and the drawer,
+    /// on a machine the person picks. A chat started from Workspaces stays
+    /// there; anywhere else it opens on the Chats tab.
     private var newWork: AidenNewWorkChatFlow { built.newWork }
 
     /// Each open chat's screen state, kept while its chat is on a tab.
@@ -218,7 +224,7 @@ struct AidenAppShellView: View {
                 home?.accept(chat)
                 home?.markViewed(chatID: chat.id)
                 guard let navigation else { return }
-                navigation.open(.chat(id), on: navigation.tab == .workspaces ? .workspaces : .inbox)
+                navigation.open(.chat(id), on: navigation.tab == .workspaces ? .workspaces : .chats)
             }
             let chatScreens = AidenChatScreens(
                 isOpen: { [weak navigation] id in navigation?.holdsConversation(id) ?? false },
@@ -281,18 +287,12 @@ struct AidenAppShellView: View {
     }
 
     var body: some View {
-        TabView(selection: Bindable(navigation).tab) {
-            Tab("Inbox", systemImage: "tray", value: AidenAppTab.inbox) {
-                splitTab(.inbox, columns: inboxColumns, empty: .inbox) { selection in
-                    inboxList(selection: selection)
+        TabView(selection: Binding(get: { navigation.tab }, set: { navigation.tab = $0 })) {
+            Tab("Chats", systemImage: "bubble.left.and.bubble.right", value: AidenAppTab.chats) {
+                splitTab(.chats, columns: chatsColumns, empty: .chats) { selection in
+                    chatsList(selection: selection)
                 }
             }
-            .badge(inboxStore.needsYouCount)
-            // An iPad's tab strip draws the badge without saying it.
-            .accessibilityValue(
-                Text(inboxStore.needsYouCount == 1 ? "1 chat needs you" : "\(inboxStore.needsYouCount) chats need you"),
-                isEnabled: inboxStore.needsYouCount > 0
-            )
 
             Tab("Bots", systemImage: AidenChromeSymbols.bots, value: AidenAppTab.bots) {
                 splitTab(.bots, columns: botsColumns, empty: .bots) { selection in
@@ -306,18 +306,17 @@ struct AidenAppShellView: View {
                 }
             }
 
-            Tab(value: AidenAppTab.search, role: .search) {
-                // The field is on this stack's root view: on the `TabView` it would
-                // sit on every tab.
-                NavigationStack {
-                    AidenSearchTabView(
-                        model: built.search,
-                        inboxStore: inboxStore,
-                        hasNoComputers: hasNoComputers,
-                        onAddComputer: openAddComputer
-                    ) { navigation.open($0) }
+            Tab("Inbox", systemImage: "tray", value: AidenAppTab.inbox) {
+                splitTab(.inbox, columns: inboxColumns, empty: .inbox) { selection in
+                    inboxList(selection: selection)
                 }
             }
+            .badge(inboxStore.needsYouCount)
+            // An iPad's tab strip draws the badge without saying it.
+            .accessibilityValue(
+                Text(inboxStore.needsYouCount == 1 ? "1 chat needs you" : "\(inboxStore.needsYouCount) chats need you"),
+                isEnabled: inboxStore.needsYouCount > 0
+            )
         }
         // The system's own placement: an iPad opens on the tab strip, and the
         // sidebar is a tap away. Asking for the sidebar by default
@@ -332,7 +331,6 @@ struct AidenAppShellView: View {
         .environment(\.aidenTabsInSideRail, showsVerticalBar)
         .environment(\.aidenOfflineNotices, built.offlineNotices)
         .tabBarMinimizeBehavior(horizontalSizeClass == .compact ? .onScrollDown : .automatic)
-        .tabViewSearchActivation(.searchTabSelection)
         // Hiding the tab bar leaves the accessory up, under the composer.
         .aidenRunningAccessory(
             isEnabled: runningHome == .accessory && inboxStore.hasRunningChats && !navigation.showsConversation
@@ -346,6 +344,12 @@ struct AidenAppShellView: View {
         // accessory over a chat (iOS 27.1 simulator). The paths and chats
         // are the shell's, so the new one opens where the old one was.
         .id(navigation.besideList)
+        // The drawer is modal: what's under it is out of VoiceOver's reach.
+        .accessibilityHidden(drawerIsOpen)
+        .overlay(alignment: .leading) {
+            if opensDrawerFromEdge { drawerEdge }
+        }
+        .overlay { drawerOverlay }
         .aidenNewWorkPresentation(newWork, coordinator: coordinator)
         .sheet(item: $activeSheet) { sheet in
             switch sheet {
@@ -380,6 +384,9 @@ struct AidenAppShellView: View {
         .onChange(of: navigation.snapshot) { _, snapshot in
             navigationStore.save(snapshot)
             chatScreens.pathsChanged()
+            // A route opened anywhere (a new chat from the drawer's compose,
+            // a link) puts the drawer away.
+            if drawerIsOpen { closeDrawer(refocusingMenu: false) }
         }
         .onChange(of: navigation.tab == .inbox, initial: true) { _, isOnScreen in
             inboxStore.setInboxVisible(isOnScreen)
@@ -391,7 +398,7 @@ struct AidenAppShellView: View {
         .onChange(of: horizontalSizeClass) { _, sizeClass in
             let besideList = sizeClass == .regular
             guard besideList != navigation.besideList else { return }
-            for columns in [inboxColumns, botsColumns, workspacesColumns] { columns.visibility = .all }
+            for columns in [chatsColumns, inboxColumns, botsColumns, workspacesColumns] { columns.visibility = .all }
             chatScreens.rebuilding()
             navigation.besideList = besideList
         }
@@ -443,9 +450,10 @@ struct AidenAppShellView: View {
 
     private func columns(for tab: AidenAppTab) -> AidenSplitColumns {
         switch tab {
+        case .chats: chatsColumns
         case .bots: botsColumns
         case .workspaces: workspacesColumns
-        case .inbox, .search: inboxColumns
+        case .inbox: inboxColumns
         }
     }
 
@@ -464,7 +472,9 @@ struct AidenAppShellView: View {
             columns: columns,
             window: window,
             empty: empty,
-            list: list,
+            list: { selection in
+                list(selection).toolbar { menuToolbarItem(on: tab) }
+            },
             screen: { route, keepsTabs in AnyView(screen(for: route, keepsTabs: keepsTabs)) }
         )
     }
@@ -502,7 +512,24 @@ struct AidenAppShellView: View {
         .safeAreaInset(edge: .top, spacing: 0) {
             AidenConnectionNotice(coordinator: coordinator)
         }
-        .toolbar { inboxToolbar }
+        .toolbar { composeToolbar }
+    }
+
+    /// The Chats list: every chat, newest first.
+    private func chatsList(selection: AidenAppRoute?) -> some View {
+        AidenChatsTabView(
+            store: inboxStore,
+            hasNoComputers: hasNoComputers,
+            onAddComputer: openAddComputer,
+            selection: selection
+        ) { route in
+            navigation.pick(route, fromListOf: .chats)
+            hideOverlaidList(on: .chats)
+        }
+        .safeAreaInset(edge: .top, spacing: 0) {
+            AidenConnectionNotice(coordinator: coordinator)
+        }
+        .toolbar { composeToolbar }
     }
 
     /// The Bots list. Its own function, as the Inbox's is, so the tab view
@@ -549,29 +576,97 @@ struct AidenAppShellView: View {
         }
     }
 
+    /// Compose, or Add Computer with none paired. Settings, Scheduled and
+    /// Usage moved to the drawer; compose stays here until Home has its own.
     @ToolbarContentBuilder
-    private var inboxToolbar: some ToolbarContent {
+    private var composeToolbar: some ToolbarContent {
         ToolbarItem(placement: .primaryAction) {
-            Menu {
-                Button("Settings", systemImage: "gearshape") { navigation.open(.settings) }
-                Button("Scheduled tasks", systemImage: "calendar.badge.clock") { navigation.open(.scheduled) }
-                Button("Usage", systemImage: "chart.bar.xaxis") { navigation.open(.usage) }
-                    .disabled(usageUnavailable)
-            } label: {
-                Label("Inbox menu", systemImage: AidenChromeSymbols.overflowMenu)
-            }
-        }
-        ToolbarSpacer(.fixed, placement: .primaryAction)
-        ToolbarItem(placement: .primaryAction) {
-            if hasNoComputers {
-                Button(action: openAddComputer) {
-                    Label("Add Computer", systemImage: "plus")
-                }
-            } else {
-                AidenNewWorkComposeButton(flow: newWork)
-            }
+            composeButton
         }
         .aidenKeptLongestInBar()
+    }
+
+    @ViewBuilder
+    private var composeButton: some View {
+        if hasNoComputers {
+            Button(action: openAddComputer) {
+                Label("Add Computer", systemImage: "plus")
+            }
+        } else {
+            AidenNewWorkComposeButton(flow: newWork)
+        }
+    }
+
+    // MARK: Drawer
+
+    /// The menu button on every tab's list, which opens the drawer.
+    @ToolbarContentBuilder
+    private func menuToolbarItem(on tab: AidenAppTab) -> some ToolbarContent {
+        ToolbarItem(placement: .topBarLeading) {
+            Button(action: openDrawer) {
+                Label("Open menu", systemImage: "line.3.horizontal")
+            }
+            .accessibilityFocused($focusedMenuButton, equals: tab)
+        }
+    }
+
+    /// An edge swipe opens the drawer only at a tab's root on a stack. On a
+    /// pushed screen the same swipe is the stack's Back, and beside the list
+    /// or in a side rail the edge belongs to the system's own columns.
+    private var opensDrawerFromEdge: Bool {
+        !drawerIsOpen && !navigation.besideList && !showsVerticalBar
+            && navigation.path(of: navigation.tab).isEmpty
+    }
+
+    private var drawerEdge: some View {
+        Color.clear
+            .frame(width: 16)
+            .frame(maxHeight: .infinity)
+            .contentShape(Rectangle())
+            .gesture(
+                DragGesture(minimumDistance: 10).onEnded { value in
+                    let dx = value.translation.width
+                    if dx > 40, dx > abs(value.translation.height) { openDrawer() }
+                }
+            )
+            .accessibilityHidden(true)
+    }
+
+    private var drawerOverlay: some View {
+        AidenDrawerOverlay(isOpen: drawerIsOpen, onClose: closeDrawer) {
+            AidenDrawerView(
+                search: built.search,
+                inboxStore: inboxStore,
+                pins: .shared,
+                usageUnavailable: usageUnavailable,
+                onOpen: { route in
+                    // VoiceOver follows the page it opens, not the menu button.
+                    closeDrawer(refocusingMenu: false)
+                    navigation.open(route)
+                },
+                onShowAllChats: {
+                    closeDrawer(refocusingMenu: false)
+                    navigation.selectTabRoot(.chats)
+                },
+                onClose: closeDrawer
+            ) {
+                composeButton
+            }
+        }
+    }
+
+    private func openDrawer() {
+        drawerIsOpen = true
+    }
+
+    private func closeDrawer() {
+        closeDrawer(refocusingMenu: true)
+    }
+
+    private func closeDrawer(refocusingMenu: Bool) {
+        guard drawerIsOpen else { return }
+        drawerIsOpen = false
+        if refocusingMenu { focusedMenuButton = navigation.tab }
     }
 
     /// A conversation hides the tabs on a stack, where the composer owns the
@@ -1038,11 +1133,11 @@ final class AidenChatScreens {
 
 /// What a list tab's detail says with nothing selected.
 enum AidenSplitEmptyState {
-    case inbox, bots, workspaces
+    case chats, inbox, bots, workspaces
 
     var title: LocalizedStringKey {
         switch self {
-        case .inbox: "No chat selected"
+        case .chats, .inbox: "No chat selected"
         case .bots: "No Bot selected"
         case .workspaces: "No workspace selected"
         }
@@ -1050,7 +1145,7 @@ enum AidenSplitEmptyState {
 
     var systemImage: String {
         switch self {
-        case .inbox: "bubble.left.and.bubble.right"
+        case .chats, .inbox: "bubble.left.and.bubble.right"
         case .bots: AidenChromeSymbols.bots
         case .workspaces: "folder"
         }
@@ -1058,6 +1153,7 @@ enum AidenSplitEmptyState {
 
     var message: LocalizedStringKey {
         switch self {
+        case .chats: "Pick a chat from the list."
         case .inbox: "Pick a chat from the Inbox."
         case .bots: "Pick a Bot from the list."
         case .workspaces: "Pick a workspace from the list."

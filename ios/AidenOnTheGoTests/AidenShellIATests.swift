@@ -1,0 +1,285 @@
+#if DEBUG
+import XCTest
+@testable import AidenOnTheGo
+
+/// The shell's information architecture: the Chats tab, the drawer's pins and
+/// recents, and the move from the v2 bar (Search) to v3 (Chats).
+@MainActor
+final class AidenShellIATests: XCTestCase {
+    private let studio = AidenDemoHosts.installation(instanceId: "studio", name: "Studio")
+    private let now = Date(timeIntervalSince1970: 1_800_000_000)
+
+    private func id(_ objectId: String, on instanceId: String = "studio", device: String = "demo-device") -> AidenHostObjectID {
+        AidenHostObjectID(instanceId: instanceId, deviceId: device, objectId: objectId)
+    }
+
+    // MARK: Navigation store v2 -> v3
+
+    /// A v2 snapshot written by the Search build: Search was its own tab.
+    private func v2Snapshot(tab: String) throws -> Data {
+        let route = try JSONSerialization.jsonObject(with: JSONEncoder().encode(AidenAppRoute.bot(id("b1"))))
+        let chat = try JSONSerialization.jsonObject(with: JSONEncoder().encode(AidenAppRoute.chat(id("c1"))))
+        return try JSONSerialization.data(withJSONObject: [
+            "tab": tab,
+            "inboxPath": [chat],
+            "botsPath": [route],
+            "workspacesPath": [],
+            "savedPaths": [:],
+        ])
+    }
+
+    func testAV2SnapshotOnSearchOpensOnChatsWithItsPathsKept() throws {
+        let defaults = AidenDemoHosts.isolatedDefaults()
+        defaults.set(try v2Snapshot(tab: "search"), forKey: AidenAppNavigationStore.previousSnapshotKey)
+        let store = AidenAppNavigationStore(defaults: defaults)
+
+        let loaded = store.load()
+
+        XCTAssertEqual(loaded.tab, .chats)
+        XCTAssertEqual(loaded.chatsPath, [])
+        XCTAssertEqual(loaded.inboxPath, [.chat(id("c1"))])
+        XCTAssertEqual(loaded.botsPath, [.bot(id("b1"))])
+        XCTAssertNotNil(defaults.object(forKey: AidenAppNavigationStore.previousSnapshotKey), "A read removed v2")
+        XCTAssertNil(defaults.object(forKey: AidenAppNavigationStore.snapshotKey), "A read wrote v3")
+    }
+
+    func testAV2SnapshotOnAnotherTabKeepsThatTab() throws {
+        let defaults = AidenDemoHosts.isolatedDefaults()
+        defaults.set(try v2Snapshot(tab: "bots"), forKey: AidenAppNavigationStore.previousSnapshotKey)
+
+        XCTAssertEqual(AidenAppNavigationStore(defaults: defaults).load().tab, .bots)
+    }
+
+    func testTheFirstV3WriteRemovesV2AndV3WinsAfterwards() throws {
+        let defaults = AidenDemoHosts.isolatedDefaults()
+        defaults.set(try v2Snapshot(tab: "search"), forKey: AidenAppNavigationStore.previousSnapshotKey)
+        let store = AidenAppNavigationStore(defaults: defaults)
+        let navigation = AidenAppNavigation(restoring: store.load(), installations: [studio])
+        navigation.open(.chat(id("c2")))
+
+        store.save(navigation.snapshot)
+
+        XCTAssertNil(defaults.object(forKey: AidenAppNavigationStore.previousSnapshotKey))
+        let reloaded = store.load()
+        XCTAssertEqual(reloaded.tab, .chats)
+        XCTAssertEqual(reloaded.chatsPath, [.chat(id("c2"))])
+        XCTAssertEqual(reloaded.inboxPath, [.chat(id("c1"))])
+    }
+
+    // MARK: Opening
+
+    /// A Home Screen or widget action that starts a voice chat lands on Chats.
+    func testAHomeActionChatLandsOnChats() {
+        let navigation = AidenAppNavigation()
+        navigation.tab = .inbox
+
+        navigation.open(.chat(id("c1")), startsVoice: true)
+
+        XCTAssertEqual(navigation.tab, .chats)
+        XCTAssertEqual(navigation.chatsPath, [.chat(id("c1"))])
+        XCTAssertEqual(navigation.inboxPath, [])
+        XCTAssertEqual(navigation.chatStartingVoice, id("c1"))
+    }
+
+    /// Settings from the drawer goes on top of the tab that's showing, so Back
+    /// returns there rather than jumping tabs.
+    func testSettingsOpensOverTheTabThatIsShowing() {
+        let navigation = AidenAppNavigation()
+        navigation.open(.bot(id("b1")))
+
+        navigation.open(.settings)
+
+        XCTAssertEqual(navigation.tab, .bots)
+        XCTAssertEqual(navigation.botsPath, [.bot(id("b1")), .settings])
+        XCTAssertEqual(navigation.chatsPath, [])
+        XCTAssertEqual(navigation.inboxPath, [])
+    }
+
+    /// Beside the list, a chat picked from the Chats list replaces the one in
+    /// the detail instead of stacking, and leaves any other tab holding it.
+    func testAChatPickedBesideTheChatsListBecomesItsSelection() {
+        let navigation = AidenAppNavigation()
+        navigation.besideList = true
+        navigation.openInboxRow(.chat(id("c1")))
+        XCTAssertEqual(navigation.inboxPath, [.chat(id("c1"))])
+
+        navigation.pick(.chat(id("c1")), fromListOf: .chats)
+        navigation.pick(.chat(id("c2")), fromListOf: .chats)
+
+        XCTAssertEqual(navigation.tab, .chats)
+        XCTAssertEqual(navigation.chatsPath, [.chat(id("c2"))])
+        XCTAssertEqual(navigation.inboxPath, [])
+    }
+
+    // MARK: Chats list
+
+    private func chat(_ chatID: String, _ title: String, minutesAgo: Double, workspace: String = "default") -> AidenChatSummary {
+        let updated = now.addingTimeInterval(-minutesAgo * 60)
+        return AidenChatSummary(
+            id: chatID, workspaceId: workspace, title: title, titlePending: false,
+            createdAt: updated.addingTimeInterval(-60), updatedAt: updated,
+            revision: "rev-\(chatID)", activity: .idle
+        )
+    }
+
+    private func snapshot(
+        _ instanceId: String,
+        device: String = "demo-device",
+        chats: [AidenChatSummary] = [],
+        bots: [AidenBotSummary] = [],
+        online: Bool = true,
+        blocked: Bool = false
+    ) -> AidenHostInboxSnapshot {
+        AidenHostInboxSnapshot(
+            instanceId: instanceId, deviceId: device, chats: chats,
+            workspaceNames: ["default": "Project-\(instanceId)"], isOnline: online, isBlocked: blocked,
+            fetchedAt: now, bots: bots
+        )
+    }
+
+    func testChatsAreNewestFirstAcrossMachinesWithTheirOwnWorkspaceNames() {
+        let entries = AidenChatsList.entries(
+            snapshots: [
+                snapshot("studio", chats: [chat("a", "Old", minutesAgo: 30), chat("b", "Newest", minutesAgo: 1)]),
+                snapshot("laptop", chats: [chat("a", "Middle", minutesAgo: 10)], online: false),
+            ],
+            hiddenMachines: []
+        )
+
+        XCTAssertEqual(entries.map(\.title), ["Newest", "Middle", "Old"])
+        XCTAssertEqual(entries.map(\.workspaceName), ["Project-studio", "Project-laptop", "Project-studio"])
+        XCTAssertEqual(entries.map(\.isOnline), [true, false, true])
+        XCTAssertEqual(entries[1].route, .chat(id("a", on: "laptop")), "The same chat id on two machines is two chats")
+    }
+
+    func testBlockedAndHiddenMachinesListNoChats() {
+        let entries = AidenChatsList.entries(
+            snapshots: [
+                snapshot("studio", chats: [chat("a", "Kept", minutesAgo: 1)]),
+                snapshot("blocked", chats: [chat("b", "Blocked", minutesAgo: 1)], blocked: true),
+                snapshot("hidden", chats: [chat("c", "Hidden", minutesAgo: 1)]),
+            ],
+            hiddenMachines: ["hidden"]
+        )
+
+        XCTAssertEqual(entries.map(\.title), ["Kept"])
+    }
+
+    func testARepeatedChatIsListedOnceAsItsNewerCopyAndTheOrderIsStable() {
+        let snapshots = [
+            snapshot("studio", chats: [chat("a", "Stale", minutesAgo: 20), chat("a", "Fresh", minutesAgo: 2)]),
+            snapshot("studio", chats: [chat("z", "Second snapshot", minutesAgo: 0), chat("a", "Older again", minutesAgo: 30)]),
+            snapshot("laptop", chats: [chat("t", "Tie one", minutesAgo: 5)]),
+            snapshot("mini", chats: [chat("t", "Tie two", minutesAgo: 5)]),
+        ]
+
+        let forward = AidenChatsList.entries(snapshots: snapshots, hiddenMachines: [])
+        let backward = AidenChatsList.entries(snapshots: snapshots.reversed(), hiddenMachines: [])
+
+        XCTAssertEqual(forward.filter { $0.id.objectId == "a" }.map(\.title), ["Fresh"])
+        XCTAssertEqual(forward.map(\.title), ["Second snapshot", "Fresh", "Tie one", "Tie two"])
+        XCTAssertEqual(forward, backward)
+    }
+
+    func testTheLimitKeepsTheNewest() {
+        let chats = (0..<20).map { chat("c\($0)", "Chat \($0)", minutesAgo: Double($0)) }
+        let entries = AidenChatsList.entries(snapshots: [snapshot("studio", chats: chats)], hiddenMachines: [], limit: 3)
+
+        XCTAssertEqual(entries.map(\.title), ["Chat 0", "Chat 1", "Chat 2"])
+        XCTAssertEqual(AidenChatsList.entries(snapshots: [snapshot("studio", chats: chats)], hiddenMachines: [], limit: -1), [])
+    }
+
+    // MARK: Pins
+
+    func testPinsToggleInOrderAndSurviveARelaunch() {
+        let defaults = AidenDemoHosts.isolatedDefaults()
+        let store = AidenDrawerPinsStore(defaults: defaults)
+        let bot = AidenDrawerPin(kind: .bot, id: id("b1"))
+        let workspace = AidenDrawerPin(kind: .workspace, id: id("w1"))
+
+        store.toggle(bot)
+        store.toggle(workspace)
+        XCTAssertEqual(AidenDrawerPinsStore(defaults: defaults).pins, [bot, workspace])
+
+        store.toggle(bot)
+        XCTAssertFalse(store.isPinned(bot))
+        XCTAssertEqual(AidenDrawerPinsStore(defaults: defaults).pins, [workspace])
+
+        store.toggle(workspace)
+        XCTAssertNil(defaults.object(forKey: AidenDrawerPinsStore.key), "No pins leaves nothing saved")
+    }
+
+    func testABotAndAWorkspaceWithTheSameIdAreTwoPins() {
+        let store = AidenDrawerPinsStore(defaults: AidenDemoHosts.isolatedDefaults())
+        store.toggle(AidenDrawerPin(kind: .bot, id: id("same")))
+        store.toggle(AidenDrawerPin(kind: .workspace, id: id("same")))
+
+        XCTAssertEqual(store.pins.map(\.route), [.bot(id("same")), .workspace(id("same"))])
+    }
+
+    func testSavedDuplicatePinsLoadOnce() throws {
+        let defaults = AidenDemoHosts.isolatedDefaults()
+        let pin = AidenDrawerPin(kind: .bot, id: id("b1"))
+        defaults.set(try JSONEncoder().encode([pin, pin]), forKey: AidenDrawerPinsStore.key)
+
+        XCTAssertEqual(AidenDrawerPinsStore(defaults: defaults).pins, [pin])
+    }
+
+    func testUnpairingAMachinePurgesOnlyItsPins() {
+        let defaults = AidenDemoHosts.isolatedDefaults()
+        let store = AidenDrawerPinsStore(defaults: defaults)
+        let kept = AidenDrawerPin(kind: .bot, id: id("b1", on: "laptop"))
+        store.toggle(AidenDrawerPin(kind: .bot, id: id("b1")))
+        store.toggle(kept)
+        store.toggle(AidenDrawerPin(kind: .workspace, id: id("w1")))
+
+        store.purge(instanceID: "studio")
+
+        XCTAssertEqual(store.pins, [kept])
+        XCTAssertEqual(AidenDrawerPinsStore(defaults: defaults).pins, [kept])
+    }
+
+    private func bot(_ botID: String, name: String) throws -> AidenBotSummary {
+        let formatter = ISO8601DateFormatter()
+        formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        let object: [String: Any] = [
+            "id": botID, "name": name, "purpose": "",
+            "avatar": ["semantic": ["version": 1, "shape": "orb", "color": "rose"]],
+            "health": "ready",
+            "createdAt": formatter.string(from: now), "updatedAt": formatter.string(from: now),
+            "revision": "bot_revision_\(botID)",
+        ]
+        return try AidenRemoteJSONDecoder.decode(AidenBotSummary.self, from: JSONSerialization.data(withJSONObject: object))
+    }
+
+    func testPinnedItemsAreNamedFromTheirOwnMachineAndAMissingOneIsHiddenNotLost() throws {
+        let scout = AidenDrawerPin(kind: .bot, id: id("scout"))
+        let project = AidenDrawerPin(kind: .workspace, id: id("default", on: "laptop"))
+        let gone = AidenDrawerPin(kind: .bot, id: id("deleted"))
+        let elsewhere = AidenDrawerPin(kind: .bot, id: id("scout", on: "unlisted"))
+        let pins = [gone, project, scout, elsewhere]
+        let snapshots = [
+            snapshot("studio", bots: [try bot("scout", name: "Scout")]),
+            snapshot("laptop", online: false),
+        ]
+
+        let items = AidenDrawerPinned.items(pins: pins, snapshots: snapshots, hiddenMachines: [])
+
+        XCTAssertEqual(items.map(\.pin), [project, scout])
+        XCTAssertEqual(items.map(\.name), ["Project-laptop", "Scout"])
+        XCTAssertEqual(items.map(\.isOnline), [false, true])
+        XCTAssertTrue(AidenDrawerPinned.items(pins: pins, snapshots: snapshots, hiddenMachines: ["studio", "laptop"]).isEmpty)
+    }
+
+    func testAPinOnAnotherPairingOfTheSameMachineIsNotShown() throws {
+        let pin = AidenDrawerPin(kind: .bot, id: id("scout", device: "old-phone"))
+        let items = AidenDrawerPinned.items(
+            pins: [pin],
+            snapshots: [snapshot("studio", bots: [try bot("scout", name: "Scout")])],
+            hiddenMachines: []
+        )
+
+        XCTAssertEqual(items, [])
+    }
+}
+#endif

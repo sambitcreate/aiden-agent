@@ -43,12 +43,15 @@ enum AidenStateMatrix {
     }
 
     /// Launches the app. `theme` is a preset id (`aiden`, `slate`, ...) applied
-    /// to both appearances; nil keeps the app default.
+    /// to both appearances; nil keeps the app default. `startingTab` is the
+    /// tab's saved name (`chats`, `inbox`, `bots`, `workspaces`); nil starts
+    /// where a first launch does.
     static func launch(
         scenario: Scenario,
         appearance: Appearance = .light,
         contentSize: ContentSize = .large,
         theme: String? = nil,
+        startingTab: String? = "inbox",
         extraArguments: [String] = []
     ) -> XCUIApplication {
         let app = XCUIApplication()
@@ -60,6 +63,7 @@ enum AidenStateMatrix {
             // saved" and the stored value from an earlier launch is ignored.
             "-aiden.product-navigation.v1", "reset",
             "-aiden.product-navigation.v2", "reset",
+            "-aiden.product-navigation.v3", navigationArgument(startingTab: startingTab),
             // Keep the simulator in the same language as the strings the tests look for.
             "-AppleLanguages", "(en)",
             "-AppleLocale", "en_US",
@@ -73,6 +77,15 @@ enum AidenStateMatrix {
         app.launchArguments = arguments + extraArguments
         app.launch()
         return app
+    }
+
+    /// The saved navigation a launch starts from: only a tab, no chat open.
+    /// Data in a launch argument is written `<hex>`; nil reads as nothing
+    /// saved, as on a first launch.
+    static func navigationArgument(startingTab: String?) -> String {
+        guard let startingTab else { return "reset" }
+        let json = Data("{\"tab\":\"\(startingTab)\"}".utf8)
+        return "<" + json.map { String(format: "%02x", $0) }.joined() + ">"
     }
 
     /// What shows once the first screen is up.
@@ -155,17 +168,42 @@ enum AidenStateMatrix {
         app.buttons["aiden.catch-up"].firstMatch
     }
 
-    /// The Search tab folds the tab bar away while its field is up, and Close
-    /// brings it back.
-    static func leaveSearch(in app: XCUIApplication) {
-        guard app.searchFields.firstMatch.exists else { return }
-        let close = app.buttons["Close"].firstMatch
-        if close.exists { close.tap() }
+    /// The drawer's search field. Only the drawer has one.
+    static func drawerSearchField(in app: XCUIApplication) -> XCUIElement {
+        app.textFields["Search chats and Bots"].firstMatch
+    }
+
+    /// Opens the drawer from the showing tab's menu button, which sits in the
+    /// list's bar. A chat chosen in a list laid over the detail (an iPad in
+    /// portrait) put the list away, and the detail's column toggle brings it
+    /// back. An open sidebar over the page takes the first tap, so a tap that
+    /// doesn't open the drawer is tried once more.
+    @discardableResult
+    static func openDrawer(in app: XCUIApplication) -> Bool {
+        let close = app.buttons["Close menu"].firstMatch
+        if close.exists { return true }
+        let menu = app.navigationBars.buttons["Open menu"].firstMatch
+        let showList = app.navigationBars.buttons["Show Sidebar"].firstMatch
+        if !menu.waitForExistence(timeout: 3), showList.exists { showList.tap() }
+        guard menu.waitForExistence(timeout: 10) else { return false }
+        for _ in 0..<2 {
+            menu.tap()
+            if close.waitForExistence(timeout: 2) { return true }
+        }
+        return close.exists
+    }
+
+    /// Closes the drawer if it's open.
+    static func closeDrawer(in app: XCUIApplication) {
+        let close = app.buttons["Close menu"].firstMatch
+        guard close.exists else { return }
+        close.tap()
+        _ = close.waitForNonExistence(timeout: 3)
     }
 
     /// Switches to a tab.
     static func openArea(_ title: String, in app: XCUIApplication) {
-        leaveSearch(in: app)
+        closeDrawer(in: app)
         let tab = tab(title, in: app)
         if tab.waitForExistence(timeout: 10) { tab.tap() }
     }

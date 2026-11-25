@@ -548,11 +548,11 @@ final class AidenSearchModelTests: XCTestCase {
         XCTAssertEqual(model.bots.first?.route, .bot(laptop("bot_scout")))
 
         let navigation = AidenAppNavigation()
-        navigation.tab = .search
+        navigation.tab = .inbox
         navigation.open(try XCTUnwrap(model.chats.first).route)
-        XCTAssertEqual(navigation.tab, .inbox)
-        XCTAssertEqual(navigation.inboxPath, [.chat(laptop("c1"))])
-        navigation.tab = .search
+        XCTAssertEqual(navigation.tab, .chats)
+        XCTAssertEqual(navigation.chatsPath, [.chat(laptop("c1"))])
+        navigation.tab = .workspaces
         navigation.open(try XCTUnwrap(model.bots.first).route)
         XCTAssertEqual(navigation.tab, .bots)
         XCTAssertEqual(navigation.botsPath, [.bot(laptop("bot_scout"))])

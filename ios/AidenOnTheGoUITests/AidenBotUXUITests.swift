@@ -94,10 +94,7 @@ final class AidenBotUXUITests: XCTestCase {
         // Settings: Approvals and Show tool activity.
         app = AidenStateMatrix.launch(scenario: .one, appearance: appearance, extraArguments: ["-AidenDemoBotUX"])
         AidenStateMatrix.openArea("Inbox", in: app)
-        let menu = app.navigationBars.buttons["Inbox menu"].firstMatch
-        XCTAssertTrue(menu.waitForExistence(timeout: 10), "No Inbox menu")
-        menu.tap()
-        if !app.buttons["Settings"].firstMatch.waitForExistence(timeout: 2) { menu.tap() }
+        XCTAssertTrue(AidenStateMatrix.openDrawer(in: app), "The drawer did not open")
         app.buttons["Settings"].firstMatch.tap()
         XCTAssertTrue(app.navigationBars["App settings"].waitForExistence(timeout: 10))
         let approvals = app.buttons["Approvals"].firstMatch
