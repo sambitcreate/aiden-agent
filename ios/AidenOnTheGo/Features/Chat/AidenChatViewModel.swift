@@ -60,6 +60,13 @@ final class AidenChatViewModel {
     /// does a send ask the Mac to keep its level as the chat's own.
     @ObservationIgnored private var hasUnsentModelPick = false
     @ObservationIgnored private var resolvedWithAgentSlider = false
+    /// Counts the person's model picks in this chat, so a send can tell
+    /// whether one was made while it was out.
+    @ObservationIgnored private var modelPickGeneration = 0
+    /// The send being built or out right now, from the moment its optimistic
+    /// message fills the chat until it returns. A catalog landing meanwhile
+    /// resolves the chip from this send's intent, not from that message.
+    @ObservationIgnored private var sendInFlight: AidenChatDraftStore.PendingSend?
     let hapticScope: UUID
     @ObservationIgnored private var deletionLifetime: AidenChatCache.ChatLifetime?
     // Deterministic test seam immediately before consumer admission.
@@ -223,7 +230,8 @@ final class AidenChatViewModel {
             key: turnAttempts.key(for: attempt.request),
             createdAt: Date(),
             attachments: attempt.attachments,
-            keepsSelection: attempt.keepsSelection
+            keepsSelection: attempt.keepsSelection,
+            startsWhereNewChatsStart: attempt.startsWhereNewChatsStart
         )
         do {
             try await draftStore.savePendingSend(fresh, session: session)
@@ -1719,6 +1727,7 @@ final class AidenChatViewModel {
     /// chat alone until its next send, so reopening the chat still shows it and
     /// the model other chats start with never changes.
     private func rememberExplicitModelSelection() {
+        modelPickGeneration &+= 1
         hasExplicitModelSelection = true
         hasUnsentModelPick = true
         guard !isReadOnlyFixture, !isRemoved, !chat.isBotChat,
@@ -1817,6 +1826,13 @@ final class AidenChatViewModel {
         // chat since.
         let keepsSelection = retryAttempt.map { $0.keepsSelection == true }
             ?? (!chat.isBotChat && (hasUnsentModelPick || chat.messages.isEmpty))
+        // What the send keeps: the pick it carries, or, with no pick made,
+        // where a new chat starts. Captured here, before the optimistic
+        // message fills the chat, and resolved against the catalog whenever
+        // it lands.
+        let startsWhereNewChatsStart = retryAttempt.map { $0.startsWhereNewChatsStart == true }
+            ?? (keepsSelection && !hasUnsentModelPick)
+        let pickGeneration = modelPickGeneration
         let savesSelection = agentSlider != nil && keepsSelection
         let request = retryAttempt?.request ?? AidenTurnRequestBuilder.make(
             text: text,
@@ -1872,7 +1888,9 @@ final class AidenChatViewModel {
         streamState = .queued
         let attempt = retryAttempt ?? AidenChatDraftStore.PendingSend(deviceId: context.deviceId, request: request,
             key: turnAttempts.key(for: request), createdAt: Date(), attachments: submittedAttachments,
-            keepsSelection: keepsSelection)
+            keepsSelection: keepsSelection, startsWhereNewChatsStart: startsWhereNewChatsStart)
+        sendInFlight = attempt
+        defer { if sendInFlight?.key == attempt.key { sendInFlight = nil } }
         let idempotencyKey = attempt.key
         /// Takes the message back out of the chat. A Cancel can come long after
         /// the send (New worktree waits on a fetch), so anything typed meanwhile
@@ -1985,13 +2003,14 @@ final class AidenChatViewModel {
             // A saved send can't change under its Idempotency-Key (the Mac
             // refuses a different body for the same key), so a send built
             // before the Mac granted the slider goes out without saveSelection
-            // and the Mac keeps no level. Hold the stop this turn ran on as
-            // the chat's unsent pick instead, not whatever the chip shows now
-            // (the slider's arrival re-resolves it): the chat doesn't fall to
-            // Custom, and the next send asks the Mac to keep it. A newer pick
-            // made while this send was out wins.
+            // and the Mac keeps no level. Hold what the send meant to keep as
+            // the chat's unsent pick instead, resolved from the send's own
+            // intent, not from the chat or the chip: the chat doesn't fall to
+            // Custom, and the next send asks the Mac to keep it. A pick the
+            // person made while this send was out wins.
             if keepsSelection, agentSlider != nil, request.saveSelection != true, !chat.isBotChat,
-               !hasUnsentModelPick, !isRemoved, let sent = lateGrantedPick(for: request) {
+               !hasUnsentModelPick, modelPickGeneration == pickGeneration, !isRemoved,
+               let sent = keptSelection(for: attempt) {
                 selectedProviderId = sent.providerId
                 selectedModelId = sent.modelId
                 selectedThinkingLevel = sent.thinkingLevel
@@ -2972,22 +2991,39 @@ final class AidenChatViewModel {
         }
     }
 
-    /// The pick a send accepted after the late slider grant leaves the chat
-    /// on. Normally the provider, model and level the turn ran on. A send
-    /// built before `GET /models` answered names the chat's model with no
-    /// level only because the phone knew none, and the turn ran on the
-    /// model's own setting, which no stop names for a model with levels.
-    /// Holding that would put the chat in Custom and later save no level, so
-    /// such a send holds the stop the chip resolved to from the catalog, and
-    /// nothing in Custom.
-    private func lateGrantedPick(for request: AidenTurnStart) -> AidenChatModelSelection? {
-        guard let providerId = request.providerId, let modelId = request.modelId else { return nil }
-        let model = catalog?.providers.first { $0.id == providerId }?.models.first { $0.id == modelId }
-        if request.thinkingLevel != nil || (model != nil && model?.thinkingLevels?.isEmpty != false) {
-            return AidenChatModelSelection(providerId: providerId, modelId: modelId, thinkingLevel: request.thinkingLevel)
+    /// What a send asked the chat to keep, resolved against the catalog the
+    /// phone holds now. Normally the provider, model and level the send
+    /// named. A send built before `GET /models` answered names the chat's
+    /// model with no level only because the phone knew none; if it carried
+    /// no pick of the person's, it meant where a new chat starts, so that is
+    /// resolved as it would be for the chat before its first message, never
+    /// from the chat's current state. Nil when that lands on another model or
+    /// on no stop, so nothing in Custom is held.
+    private func keptSelection(for attempt: AidenChatDraftStore.PendingSend) -> AidenChatModelSelection? {
+        guard attempt.keepsSelection == true, !chat.isBotChat, let slider = agentSlider, let catalog,
+              let providerId = attempt.request.providerId,
+              let modelId = attempt.request.modelId else { return nil }
+        let sent = AidenChatModelSelection(providerId: providerId, modelId: modelId, thinkingLevel: attempt.request.thinkingLevel)
+        let model = catalog.providers.first { $0.id == providerId }?.models.first { $0.id == modelId }
+        if sent.thinkingLevel != nil || (model != nil && model?.thinkingLevels?.isEmpty != false) {
+            return sent
         }
-        guard agentSliderState?.currentStop != nil else { return nil }
-        return turnModelSelection
+        guard attempt.startsWhereNewChatsStart == true else { return nil }
+        var unsent = chat
+        unsent.messages = []
+        let start = AidenChatModelAuthority.resolvedSelection(
+            chat: unsent,
+            catalog: catalog,
+            selectedProviderId: nil,
+            selectedModelId: nil,
+            selectedThinkingLevel: nil,
+            remembered: isReadOnlyFixture ? nil : modelPreferenceStore.selection(for: instanceId),
+            exactLevels: true
+        )
+        guard start.providerId == providerId, start.modelId == modelId,
+              AidenAgentSliderState(slider: slider, catalog: catalog, selection: start).currentStop != nil
+        else { return nil }
+        return start
     }
 
     /// Re-resolves the chat's selection when the slider comes or goes, for
@@ -3017,7 +3053,7 @@ final class AidenChatViewModel {
             hasExplicitModelSelection = true
             hasUnsentModelPick = true
         }
-        let selection = AidenChatModelAuthority.resolvedSelection(
+        var selection = AidenChatModelAuthority.resolvedSelection(
             chat: chat,
             catalog: catalog,
             selectedProviderId: selectedProviderId,
@@ -3029,6 +3065,15 @@ final class AidenChatViewModel {
             hasExplicitSelection: hasExplicitModelSelection,
             exactLevels: agentSlider != nil
         )
+        // A new chat's first send that named no level, out or waiting to
+        // retry, keeps its own intent: the chat its optimistic message filled
+        // is not one the Mac has given a level yet. A pick the person made
+        // since wins.
+        if !hasExplicitModelSelection, let attempt = sendInFlight ?? pendingSend,
+           attempt.startsWhereNewChatsStart == true, attempt.request.saveSelection != true,
+           attempt.request.thinkingLevel == nil, let kept = keptSelection(for: attempt) {
+            selection = kept
+        }
         resolvedWithAgentSlider = agentSlider != nil
         selectedProviderId = selection.providerId
         selectedModelId = selection.modelId

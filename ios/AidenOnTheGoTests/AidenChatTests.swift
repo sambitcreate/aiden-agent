@@ -3447,6 +3447,59 @@ final class AidenChatTests: XCTestCase {
         }
         unlisted.stopProgressObservation()
 
+        // The same first send, but the catalog and the grant land while its
+        // POST is still out, after the optimistic message has filled the
+        // chat. The send still meant "start where a new chat starts", so the
+        // chip resolves to that stop at once and the Mac's acceptance keeps it.
+        let (racing, racingTurns, racingOffer, racingPreferences) = try await launch(
+            macOffersSlider: false, catalogAnswers: false, initialChat: unlistedChat
+        )
+        XCTAssertNil(racing.catalog)
+        racingOffer.slider.withLock { $0 = true }
+        await racing.coordinator.connectActiveInstallation()
+        racingOffer.catalogFails.withLock { $0 = false }
+        let catalogHeld = expectation(description: "catalog held")
+        AidenChatProgressLifecycleURLProtocol.holdNextRequest(endingIn: "/models") { catalogHeld.fulfill() }
+        let reloading = Task { await racing.reload(observeProgress: false) }
+        await fulfillment(of: [catalogHeld], timeout: 3)
+        let releaseCatalog = try XCTUnwrap(AidenChatProgressLifecycleURLProtocol.takeHeldRequest())
+        racing.draft = "Hello"
+        try await waitUntil { racing.canSend }
+        let turnHeld = expectation(description: "first send held")
+        AidenChatProgressLifecycleURLProtocol.holdNextRequest(endingIn: "/turns") { turnHeld.fulfill() }
+        let racingSend = Task { await racing.send() }
+        await fulfillment(of: [turnHeld], timeout: 3)
+        let racingFirst = try sentTurn(racingTurns)
+        XCTAssertNil(racingFirst.thinkingLevel, "with no catalog the phone knows no level to send")
+        XCTAssertNil(racingFirst.saveSelection)
+        releaseCatalog()
+        await reloading.value
+        XCTAssertNotNil(racing.agentSlider)
+        XCTAssertEqual(racing.agentSliderState?.currentStop?.id, "fast", "the catalog read the sending chat's optimistic message as its own")
+        AidenChatProgressLifecycleURLProtocol.releaseHeldRequest()
+        await racingSend.value
+        XCTAssertEqual(racingTurns.count, 1)
+        XCTAssertNil(racing.pendingSend, "the Mac accepted the send")
+        XCTAssertEqual(racing.agentSliderState?.currentStop?.id, "fast", "the accepted send left the chat in Custom")
+        XCTAssertEqual(
+            racingPreferences.chatSelection(for: "instance-progress-lifecycle", chatID: racing.chat.id),
+            AidenChatModelSelection(providerId: "acme", modelId: "small", thinkingLevel: "low"),
+            "the chat's stop wasn't kept to send"
+        )
+        let racingReconciled = await racing.reconcileChat(context: racing.owner)
+        XCTAssertTrue(racingReconciled)
+        XCTAssertEqual(racing.agentSliderState?.currentStop?.id, "fast", "the Mac's level-less chat dropped the chip to Custom")
+        try await waitUntil { racing.streamState?.isTerminal != false }
+        racing.draft = "Again"
+        try await waitUntil { racing.canSend }
+        await racing.send()
+        try await waitUntil { racingTurns.count == 2 }
+        let racingKept = try sentTurn(racingTurns)
+        XCTAssertEqual(racingKept.modelId, "small")
+        XCTAssertEqual(racingKept.thinkingLevel, "low")
+        XCTAssertEqual(racingKept.saveSelection, true, "the next send didn't ask the Mac to keep the stop")
+        racing.stopProgressObservation()
+
         // The phone holds the slider but the Mac sets one up only later: the
         // catalog refresh that brings it puts the chat on the Mac's last stop,
         // not the level the model menu filled in.

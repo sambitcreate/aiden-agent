@@ -24,6 +24,12 @@ actor AidenChatDraftStore {
         /// refresh can fill the chat before the retry is accepted. Absent in
         /// records saved before it existed, which reads as false.
         var keepsSelection: Bool? = nil
+        /// Captured with `keepsSelection`: the send carried no pick of the
+        /// person's, so what it asks the chat to keep is where a new chat
+        /// starts. A send built before `GET /models` answered names no level;
+        /// the phone resolves this intent against the catalog once it lands,
+        /// never against the chat its optimistic message has since filled.
+        var startsWhereNewChatsStart: Bool? = nil
         func canRetry(at now: Date = Date()) -> Bool {
             let age = now.timeIntervalSince(createdAt)
             return age >= 0 && age < 24 * 60 * 60
