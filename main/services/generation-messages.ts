@@ -9,6 +9,11 @@ import { SkillInvocationError } from "../../renderer/shared/slash-commands.js";
 import type { ChatMessage, ChatStartParams } from "./types.js";
 import { visionAttachmentAlias } from "./vision-attachment-reference.js";
 import { withoutVisualSnapshots } from "../../renderer/shared/visual-snapshots.js";
+import {
+  formatGrabbedElementsForPrompt,
+  withoutGrabbedElementThumbnails,
+  type GrabbedElementContextV1,
+} from "../../renderer/shared/browser-element-grab.js";
 
 const ZERO_USAGE = {
   input: 0,
@@ -26,11 +31,16 @@ function userMessage(
   timestamp: number,
   contentFirst = false,
   includeTextAttachments = true,
+  grabbedElements?: readonly GrabbedElementContextV1[],
+  includeGrabbedElements = true,
 ): Message {
-  if (!attachments?.length) return { role: "user", content, timestamp };
+  const hasGrabbedText = includeGrabbedElements && Boolean(grabbedElements?.length);
+  if (!attachments?.length && !hasGrabbedText) return { role: "user", content, timestamp };
+  const attachmentList = attachments ?? [];
+  const nonGrabAttachments = withoutGrabbedElementThumbnails(attachmentList);
   const parts: (TextContent | ImageContent)[] = [];
   const textFiles = includeTextAttachments
-    ? attachments.filter(
+    ? attachmentList.filter(
         (attachment) => attachment.kind === "text" && attachment.text,
       )
     : [];
@@ -40,9 +50,33 @@ function userMessage(
         `Attached file: ${attachment.name}\n\`\`\`\n${attachment.text}\n\`\`\``,
     )
     .join("\n\n");
+  const readableImagesById = new Map(
+    attachmentList
+      .filter((attachment) => attachment.kind === "image" && Boolean(attachment.data))
+      .map((attachment) => [attachment.id, attachment] as const),
+  );
+  const grabbedForPrompt = hasGrabbedText
+    ? grabbedElements!.map((element) => {
+        if (
+          supportsImages &&
+          element.thumbnailAttachmentId &&
+          readableImagesById.has(element.thumbnailAttachmentId)
+        ) {
+          return element;
+        }
+        if (element.thumbnailAttachmentId === undefined) return element;
+        const { thumbnailAttachmentId: _omitted, ...withoutThumb } = element;
+        return withoutThumb;
+      })
+    : undefined;
+  const grabbedText = hasGrabbedText
+    ? formatGrabbedElementsForPrompt(grabbedForPrompt, {
+        includeThumbnailNote: supportsImages,
+      })
+    : "";
   const imageReferences = supportsImages
     ? ""
-    : attachments
+    : nonGrabAttachments
         .filter((attachment) => attachment.kind === "image" && attachment.data)
         .map((attachment) =>
           `Attached image reference: ${visionAttachmentAlias(attachment)} (${attachment.name}).`,
@@ -50,25 +84,39 @@ function userMessage(
         .join("\n");
   // An image whose stored file is gone is named, so the model knows the
   // person shared one even though it can no longer be shown.
-  const unavailableImages = attachments
+  const unavailableImages = nonGrabAttachments
     .filter((attachment) => attachment.kind === "image" && !attachment.data)
     .map((attachment) => `[Image unavailable: ${attachment.name}]`)
     .join("\n");
   const combinedText = (
     contentFirst
-      ? [content, textPrefix, imageReferences, unavailableImages]
-      : [textPrefix, content, imageReferences, unavailableImages]
+      ? [content, textPrefix, grabbedText, imageReferences, unavailableImages]
+      : [textPrefix, grabbedText, content, imageReferences, unavailableImages]
   )
     .filter(Boolean)
     .join("\n\n");
   if (combinedText) parts.push({ type: "text", text: combinedText });
   if (supportsImages) {
-    for (const attachment of attachments) {
+    for (const attachment of nonGrabAttachments) {
       if (attachment.kind === "image" && attachment.data) {
         parts.push({
           type: "image",
           data: attachment.data,
           mimeType: attachment.mimeType,
+        });
+      }
+    }
+    const emittedThumbnails = new Set<string>();
+    for (const element of grabbedElements ?? []) {
+      const thumbId = element.thumbnailAttachmentId;
+      if (!thumbId || emittedThumbnails.has(thumbId)) continue;
+      const thumb = readableImagesById.get(thumbId);
+      if (thumb?.data) {
+        emittedThumbnails.add(thumbId);
+        parts.push({
+          type: "image",
+          data: thumb.data,
+          mimeType: thumb.mimeType,
         });
       }
     }
@@ -81,6 +129,7 @@ export function chatUserTextWithAttachments(
   content: string,
   attachments: ChatStartParams["messages"][number]["attachments"],
   maxBytes = Number.MAX_SAFE_INTEGER,
+  grabbedElements?: readonly GrabbedElementContextV1[],
 ): string {
   const textFiles: string[] = [];
   let totalBytes = Buffer.byteLength(content, "utf8");
@@ -98,6 +147,13 @@ export function chatUserTextWithAttachments(
       textFiles.push(textFile);
     }
   }
+  const grabbedText = formatGrabbedElementsForPrompt(grabbedElements, {
+    includeThumbnailNote: false,
+  });
+  if (grabbedText) {
+    totalBytes += Buffer.byteLength(grabbedText, "utf8");
+    if (textFiles.length > 0 || content) totalBytes += 2;
+  }
   if (totalBytes > maxBytes) {
     throw new SkillInvocationError(
       "instructions_too_large",
@@ -105,7 +161,7 @@ export function chatUserTextWithAttachments(
     );
   }
   const textPrefix = textFiles.join("\n\n");
-  return [textPrefix, content].filter(Boolean).join("\n\n");
+  return [textPrefix, grabbedText, content].filter(Boolean).join("\n\n");
 }
 
 /** Shape a not-yet-sent draft exactly as the next request will carry it. */
@@ -113,8 +169,9 @@ export function draftUserPiMessage(
   content: string,
   attachments: ChatStartParams["messages"][number]["attachments"],
   supportsImages: boolean,
+  grabbedElements?: readonly GrabbedElementContextV1[],
 ): Message {
-  return userMessage(content, attachments, supportsImages, Date.now());
+  return userMessage(content, attachments, supportsImages, Date.now(), false, true, grabbedElements);
 }
 
 /** Rehydrate Aiden chat history using the generation's exact Pi image gate. */
@@ -143,6 +200,9 @@ export function toPiMessages(
       message.attachments,
       supportsImages,
       now,
+      false,
+      true,
+      message.grabbedElements,
     );
   });
 }
@@ -166,6 +226,8 @@ export function chatMessageToPiMessage(
       supportsImages,
       message.createdAt,
       true,
+      false,
+      message.grabbedElements,
       false,
     );
   }
@@ -191,6 +253,9 @@ export function chatMessageToPiMessage(
         role: message.role,
         content,
         attachments: message.attachments,
+        ...(message.role === "user" && message.grabbedElements
+          ? { grabbedElements: message.grabbedElements }
+          : {}),
       },
     ],
   };

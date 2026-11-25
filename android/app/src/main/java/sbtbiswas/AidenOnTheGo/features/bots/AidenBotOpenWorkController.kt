@@ -10,7 +10,7 @@ import kotlinx.coroutines.flow.update
 import kotlinx.serialization.Serializable
 import sbtbiswas.AidenOnTheGo.models.*
 import sbtbiswas.AidenOnTheGo.persistence.AidenBotWatchJournal
-import sbtbiswas.AidenOnTheGo.protocol.AidenRemoteClientException
+import sbtbiswas.AidenOnTheGo.protocol.AidenRemoteFailurePolicy
 import java.util.UUID
 
 interface AidenBotOpenWorkTransport {
@@ -58,7 +58,7 @@ class AidenBotOpenWorkController(private val transport: AidenBotOpenWorkTranspor
         check(journal.replace(persisted, encoded)) { "Another window changed the saved request" }
         persisted = encoded
         true
-    } catch (_: Exception) { _state.update { it.copy(problem = AidenOpenWorkProblem.STORAGE) }; false }
+    } catch (_: Exception) { storageBlocked = true; _state.update { it.copy(problem = AidenOpenWorkProblem.STORAGE) }; false }
     private fun settle(snapshot: AidenOpenWorkSnapshot): Boolean {
         val attempt = _state.value.pending ?: return false
         val mutation = attempt.mutation
@@ -131,7 +131,9 @@ class AidenBotOpenWorkController(private val transport: AidenBotOpenWorkTranspor
         if (_state.value.pending != null || !canWrite() || now() >= option.expiresAt || _state.value.snapshot?.undo?.contains(option) != true || hasPendingStop(option.itemId)) return
         perform(AidenOpenWorkAttempt(AidenOpenWorkMutation(uuid(),AidenOpenWorkAction.UNDO,option.expectedRevision,undoOf=option.mutationId),now()))
     }
-    fun retryAllowed(): Boolean = _state.value.pending?.let { it.mutation.action.isStop || now() - it.startedAt in 0 until 23 * 60 * 60 * 1000L } == true
+    fun retryAllowed(): Boolean = _state.value.pending?.let {
+        AidenDurablePendingMutation.isRetryAllowed(it.startedAt, now(), exempt = it.mutation.action.isStop)
+    } == true
     suspend fun retry() {
         val pending = _state.value.pending ?: return
         if (!retryAllowed()) { _state.update { it.copy(problem = AidenOpenWorkProblem.EXPIRED) }; return }
@@ -170,10 +172,23 @@ class AidenBotOpenWorkController(private val transport: AidenBotOpenWorkTranspor
             }
         } catch (e: CancellationException) { _state.update { it.copy(problem = AidenOpenWorkProblem.UNCERTAIN) }; throw e }
         catch (e: Exception) {
-            val server = e as? AidenRemoteClientException.Server
-            val definite = server?.statusCode in listOf(400,401,403,404,409,422)
-            if (!previous && definite && persist(pending=null)) _state.update { it.copy(pending=null) }
-            _state.update { it.copy(problem = if (it.pending != null) AidenOpenWorkProblem.UNCERTAIN else AidenOpenWorkProblem.FAILED) }
+            val settlement = AidenDurablePendingMutation.settleFailure(
+                error = e,
+                previouslyUnknown = previous,
+                policy = AidenRemoteFailurePolicy.BEFORE_EFFECT_REFUSAL
+            )
+            val definite = settlement == AidenDurableFailureSettlement.CLEAR_DEFINITE
+            val cleared = definite && persist(pending = null)
+            if (cleared) _state.update { it.copy(pending = null) }
+            _state.update {
+                it.copy(
+                    problem = when {
+                        storageBlocked || (definite && !cleared) -> AidenOpenWorkProblem.STORAGE
+                        it.pending != null -> AidenOpenWorkProblem.UNCERTAIN
+                        else -> AidenOpenWorkProblem.FAILED
+                    }
+                )
+            }
         } finally { _state.update { it.copy(busy=false) } }
         load()
     }

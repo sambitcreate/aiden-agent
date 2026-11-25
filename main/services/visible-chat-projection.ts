@@ -9,6 +9,10 @@ import { chatImageUrl } from "./chat-attachment-request-handler.js";
 import { parseChatHtmlArtifacts, parseChatImagePlacements, parseHtmlArtifactPlacements } from "../../renderer/shared/chat-artifacts.js";
 import { parseChatUiVisuals } from "../../renderer/shared/aiden-ui/visual.js";
 import { parseVisualSnapshots } from "../../renderer/shared/visual-snapshots.js";
+import {
+  parseGrabbedElements,
+  type GrabbedElementContextV1,
+} from "../../renderer/shared/browser-element-grab.js";
 import { parseSkillProvenanceV1 } from "../../renderer/shared/slash-commands.js";
 import { parseAgentNoticeV1, type AgentNoticeV1 } from "../../renderer/shared/agent-notices.js";
 import { hookBlockedField, type HookBlockedPromptV1 } from "./hook-blocked-prompt.js";
@@ -42,6 +46,7 @@ export interface VisibleChatMessage {
   createdAt: number;
   model?: string;
   attachments?: Attachment[];
+  grabbedElements?: GrabbedElementContextV1[];
   appPanels?: import("../../renderer/shared/app-controls.js").AppControlPanel[];
   htmlArtifacts?: import("../../renderer/shared/chat-artifacts.js").ChatHtmlArtifactV1[];
   htmlArtifactPlacements?: import("../../renderer/shared/chat-artifacts.js").HtmlArtifactPlacementV1[];
@@ -195,6 +200,10 @@ export function projectVisibleChatMessage(value: unknown): VisibleChatMessage | 
     MAX_MODEL_ID_BYTES,
     true,
   );
+  const grabbedElements =
+    message.role === "user"
+      ? parseGrabbedElements(message.grabbedElements, "stored")
+      : undefined;
   return {
     id,
     role: message.role,
@@ -202,6 +211,7 @@ export function projectVisibleChatMessage(value: unknown): VisibleChatMessage | 
     createdAt: message.createdAt as number,
     model,
     attachments: safeStoredAttachments(message.attachments),
+    ...(grabbedElements ? { grabbedElements } : {}),
     appPanels: message.role === "assistant" ? parseAppControlPanels(message.appPanels) : undefined,
     htmlArtifacts:
       message.role === "assistant"
