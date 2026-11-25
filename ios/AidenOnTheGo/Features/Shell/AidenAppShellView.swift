@@ -147,6 +147,7 @@ struct AidenAppShellView: View {
 
     @Environment(AidenAppearanceStore.self) private var appearance
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
+    @Environment(\.verticalSizeClass) private var verticalSizeClass
     @Environment(\.aidenPalette) private var palette
     private enum ShellSheet: Identifiable {
         case runningChats
@@ -224,7 +225,7 @@ struct AidenAppShellView: View {
     private var homeFeed: AidenHomeFeedModel { built.homeFeed }
 
     private var built: AidenAppShellParts.Built {
-        parts.built { [coordinator, inboxStore, navigationStore, horizontalSizeClass] in
+        parts.built { [coordinator, inboxStore, navigationStore, horizontalSizeClass, verticalSizeClass] in
             let navigation = AidenAppNavigation(
                 restoring: navigationStore.load(
                     installations: coordinator.installationStore.installations,
@@ -233,7 +234,7 @@ struct AidenAppShellView: View {
                 installations: coordinator.installationStore.installations
             )
             // Set before any link or request opens a route, which reads it.
-            navigation.besideList = horizontalSizeClass == .regular
+            navigation.besideList = AidenTabChrome.besideList(horizontal: horizontalSizeClass, vertical: verticalSizeClass)
             let chatScreens = AidenChatScreens(
                 isOpen: { [weak navigation] id in navigation?.holdsConversation(id) ?? false },
                 isBotOpen: { [weak navigation] id in navigation?.holdsBot(id) ?? false }
@@ -297,11 +298,9 @@ struct AidenAppShellView: View {
         !AidenHomeLoadPlan(installation: coordinator.installationStore.activeInstallation).loadsUsage
     }
 
+    /// Follows the layout, as the dock does, so the two never disagree.
     private var runningHome: AidenRunningHome {
-        .resolve(
-            accessoryCanTurnOff: AidenRunningHome.accessoryCanTurnOff,
-            horizontalSizeClass: horizontalSizeClass
-        )
+        .resolve(tabChrome)
     }
 
     /// Read at every step of a run, never kept.
@@ -411,8 +410,12 @@ struct AidenAppShellView: View {
         .environment(\.aidenTabsInSideRail, showsVerticalBar)
         .environment(\.aidenUsesDock, tabChrome == .dock)
         .environment(\.aidenOfflineNotices, built.offlineNotices)
-        .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillShowNotification)) { _ in
-            keyboardIsUp = true
+        // Only a keyboard along the bottom takes the dock's place: not a
+        // hardware keyboard's shortcut bar, nor a floating keyboard.
+        .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillChangeFrameNotification)) { note in
+            guard let frame = note.userInfo?[UIResponder.keyboardFrameEndUserInfoKey] as? CGRect,
+                  let screen = (note.object as? UIScreen) ?? window.scene?.screen else { return }
+            keyboardIsUp = AidenTabChrome.keyboardTakesBottomEdge(keyboard: frame, screen: screen.bounds)
         }
         .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillHideNotification)) { _ in
             keyboardIsUp = false
@@ -490,8 +493,10 @@ struct AidenAppShellView: View {
         // (`AidenListTab`). The chat screens hear first, so the views the
         // swap takes away don't count as the reader leaving; the containers
         // follow `besideList`, so its new value is set before either goes.
-        .onChange(of: horizontalSizeClass) { _, sizeClass in
-            let besideList = sizeClass == .regular
+        // An iPhone turning sideways changes both size classes; only the
+        // pair says whether the layout moves (`AidenTabChrome.besideList`).
+        .onChange(of: SizeClasses(horizontal: horizontalSizeClass, vertical: verticalSizeClass)) { _, sizeClasses in
+            let besideList = AidenTabChrome.besideList(horizontal: sizeClasses.horizontal, vertical: sizeClasses.vertical)
             guard besideList != navigation.besideList else { return }
             for columns in [chatsColumns, inboxColumns, botsColumns, workspacesColumns] { columns.visibility = .all }
             chatScreens.rebuilding()
@@ -896,11 +901,12 @@ struct AidenAppShellView: View {
         if refocusingMenu { focusedMenuButton = navigation.tab }
     }
 
-    /// A conversation hides the tabs on a stack, where the composer owns the
-    /// bottom edge; beside the list it keeps them. Set on each screen, root
-    /// and pushed, because a screen pushed by a stack doesn't read what's set
-    /// on that stack's root. Where the bars sit in a side rail the tabs stay
-    /// whatever this says (`aidenTabsInSideRail`).
+    /// Beside the list a conversation keeps the system tabs, which stay
+    /// reachable from the list. On a stack the dock stands in for them and
+    /// steps aside for the composer itself (`AidenTabChrome.showsDock`), so
+    /// the system bar stays hidden whatever this says (`aidenUsesDock`). Set
+    /// on each screen, root and pushed, because a screen pushed by a stack
+    /// doesn't read what's set on that stack's root.
     private func screen(for route: AidenAppRoute, keepsTabs: Bool) -> some View {
         routeScreen(for: route)
             .environment(\.aidenConversationTabBar, keepsTabs ? .automatic : .hidden)
@@ -1474,6 +1480,7 @@ private struct AidenListTab<List: View>: View {
     let dock: (AidenAppRoute?) -> AnyView
 
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
+    @Environment(\.verticalSizeClass) private var verticalSizeClass
 
     private var path: [AidenAppRoute] { navigation.path(of: tab) }
 
@@ -1486,7 +1493,9 @@ private struct AidenListTab<List: View>: View {
             path,
             of: tab,
             laidOutBesideList: besideList,
-            widthIsRegular: horizontalSizeClass.map { $0 == .regular }
+            widthIsRegular: horizontalSizeClass.map {
+                AidenTabChrome.besideList(horizontal: $0, vertical: verticalSizeClass)
+            }
         )
     }
 
@@ -1809,6 +1818,12 @@ private struct AidenListScrollKeeper: ViewModifier {
         let row = atTop ? nil : AidenListScrollPlaces.topRow(frames: rowFrames.frames, visibleTop: 0)
         places.record(row, of: tab)
     }
+}
+
+/// Both size classes, watched together as an iPhone turns.
+private struct SizeClasses: Equatable {
+    let horizontal: UserInterfaceSizeClass?
+    let vertical: UserInterfaceSizeClass?
 }
 
 /// Reads the shell's own window: its scene, for the orientation, and whether

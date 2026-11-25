@@ -207,21 +207,37 @@ final class AidenShellIATests: XCTestCase {
         XCTAssertTrue(split.showsChatList)
     }
 
-    /// At compact width (an iPhone, the closed iPhone Duo) Aiden draws its
-    /// dock; beside the list (iPad, the open Duo) the system sidebar stays.
-    /// The dock leaves the bottom edge to a conversation's composer and to
-    /// the keyboard.
-    func testTheDockIsForCompactWidthAndStepsAsideForAChatOrTheKeyboard() {
-        XCTAssertEqual(AidenTabChrome.resolve(besideList: false), .dock)
-        XCTAssertEqual(AidenTabChrome.resolve(besideList: true), .system)
+    /// Each device's posture: an iPhone keeps the stack (and the dock) both
+    /// upright and sideways, so a Plus or Pro Max doesn't swap layouts as it
+    /// turns; an iPad and an open iPhone Duo set the list beside its detail.
+    func testOnlyARegularWidthThatIsNotAPhoneOnItsSideSetsTheListBesideItsDetail() {
+        XCTAssertFalse(AidenTabChrome.besideList(horizontal: .compact, vertical: .regular),
+                       "An upright iPhone or the closed Duo")
+        XCTAssertFalse(AidenTabChrome.besideList(horizontal: .regular, vertical: .compact),
+                       "A Plus or Pro Max on its side swapped to the split")
+        XCTAssertFalse(AidenTabChrome.besideList(horizontal: .compact, vertical: .compact),
+                       "A smaller iPhone on its side")
+        XCTAssertTrue(AidenTabChrome.besideList(horizontal: .regular, vertical: .regular),
+                      "An iPad or the open Duo")
+    }
 
-        XCTAssertTrue(AidenTabChrome.showsDock(besideList: false, showsConversation: false, keyboardIsUp: false))
-        XCTAssertFalse(AidenTabChrome.showsDock(besideList: true, showsConversation: false, keyboardIsUp: false),
-                       "The sidebar layout drew the dock too")
-        XCTAssertFalse(AidenTabChrome.showsDock(besideList: false, showsConversation: true, keyboardIsUp: false),
-                       "The dock sat under a conversation's composer")
-        XCTAssertFalse(AidenTabChrome.showsDock(besideList: false, showsConversation: false, keyboardIsUp: true),
-                       "The dock rode up on the keyboard")
+    /// The dock steps aside only for a keyboard docked along the bottom; a
+    /// hardware keyboard's shortcut bar, a floating keyboard or one that has
+    /// slid off the screen leave the tabs where they are.
+    func testOnlyAKeyboardAlongTheBottomEdgeTakesTheDocksPlace() {
+        let screen = CGRect(x: 0, y: 0, width: 402, height: 874)
+
+        XCTAssertTrue(AidenTabChrome.keyboardTakesBottomEdge(
+            keyboard: CGRect(x: 0, y: 874 - 336, width: 402, height: 336), screen: screen))
+        XCTAssertFalse(AidenTabChrome.keyboardTakesBottomEdge(
+            keyboard: CGRect(x: 0, y: 874 - 55, width: 402, height: 55), screen: screen),
+            "A hardware keyboard's shortcut bar hid the dock")
+        XCTAssertFalse(AidenTabChrome.keyboardTakesBottomEdge(
+            keyboard: CGRect(x: 50, y: 300, width: 300, height: 250), screen: screen),
+            "A floating keyboard hid the dock")
+        XCTAssertFalse(AidenTabChrome.keyboardTakesBottomEdge(
+            keyboard: CGRect(x: 0, y: 874, width: 402, height: 336), screen: screen),
+            "A keyboard below the screen hid the dock")
     }
 
     /// Like the system tab bar: another tab keeps where each tab was, and the

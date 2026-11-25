@@ -550,7 +550,8 @@ final class AidenAppNavigation {
     /// write as it tears down, an empty path among them. A write from the
     /// layout that's no longer current is dropped, so the swap keeps the path.
     ///
-    /// `widthIsRegular` is the width the container sees now, nil when it
+    /// `widthIsRegular` is whether the size the container sees now lays it
+    /// out beside the list (`AidenTabChrome.besideList`), nil when it
     /// doesn't know. The container hears the new width an update before the
     /// shell moves `besideList`, so a split collapsing as the display closes
     /// writes while `besideList` still says regular: its own width says it's

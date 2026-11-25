@@ -1,17 +1,12 @@
 import SwiftUI
 
-/// Where running chats show: above the compact dock, or, beside a sidebar,
-/// which has no dock, as the Inbox's first row. iOS 26.0 lists them in the
-/// Inbox too, as it did when the system tab bar carried the accessory.
+/// Where running chats show: above the dock on a stack, or, beside the list,
+/// where the system sidebar has no dock, as the Inbox's first row.
 enum AidenRunningHome: Equatable {
     case accessory, inboxRow
 
-    static func resolve(accessoryCanTurnOff: Bool, horizontalSizeClass: UserInterfaceSizeClass?) -> Self {
-        accessoryCanTurnOff && horizontalSizeClass != .regular ? .accessory : .inboxRow
-    }
-
-    static var accessoryCanTurnOff: Bool {
-        if #available(iOS 26.1, *) { true } else { false }
+    static func resolve(_ chrome: AidenTabChrome) -> Self {
+        chrome == .dock ? .accessory : .inboxRow
     }
 
     /// True when running chats are all the Inbox has and they sit above the
@@ -51,8 +46,7 @@ struct AidenRunningSummary: Equatable {
 }
 
 /// The oldest running chat, plus `+N` for the others: above the compact dock,
-/// or as the Inbox's first row where there is no dock. It still follows
-/// `tabViewBottomAccessoryPlacement` should a system tab bar ever carry it.
+/// or as the Inbox's first row where there is no dock.
 struct AidenRunningAccessory: View {
     private let summary: AidenRunningSummary
     private let onOpen: (AidenAppRoute) -> Void
@@ -61,7 +55,6 @@ struct AidenRunningAccessory: View {
     private let isInBar: Bool
 
     @Environment(\.aidenPalette) private var palette
-    @Environment(\.tabViewBottomAccessoryPlacement) private var placement
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
 
     init(
@@ -76,28 +69,20 @@ struct AidenRunningAccessory: View {
         self.onShowAll = onShowAll
     }
 
-    private var isCompact: Bool { placement == .inline }
-
     /// A bar keeps its height, so there the title stays on one line and a held
-    /// press shows it large. As the Inbox's first row (a sidebar, or iOS 26.0)
-    /// it grows with the text as the rows below it do.
+    /// press shows it large. As the Inbox's first row (beside a sidebar) it
+    /// grows with the text as the rows below it do.
     private var titleLineLimit: Int {
-        placement == nil && !isInBar && dynamicTypeSize.isAccessibilitySize ? 3 : 1
+        !isInBar && dynamicTypeSize.isAccessibilitySize ? 3 : 1
     }
 
     var body: some View {
         if let title = summary.title {
             Button(action: tap) {
                 HStack(spacing: AidenSpacing.s) {
-                    // A ring per placement: the bar swaps the accessory between
-                    // its inline and expanded places in an animation, and one
-                    // ring carried across slid from the old place to the new
-                    // while it turned, so it wandered. A new ring fades in
-                    // where it belongs, as the title does.
-                    AidenWorkingIndicator(size: isCompact ? 12 : 16)
-                        .id(isCompact)
+                    AidenWorkingIndicator(size: 16)
                     Text(title)
-                        .font(isCompact ? .footnote.weight(.medium) : .subheadline.weight(.medium))
+                        .font(.subheadline.weight(.medium))
                         .foregroundStyle(palette.foreground)
                         .lineLimit(titleLineLimit)
                     Spacer(minLength: 0)
@@ -108,7 +93,7 @@ struct AidenRunningAccessory: View {
                             .foregroundStyle(palette.foreground)
                     }
                 }
-                .padding(.horizontal, isCompact ? AidenSpacing.m : AidenSpacing.l)
+                .padding(.horizontal, AidenSpacing.l)
                 .frame(maxWidth: .infinity, minHeight: 44)
                 .contentShape(Rectangle())
             }

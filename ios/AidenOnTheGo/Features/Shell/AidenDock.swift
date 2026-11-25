@@ -1,15 +1,37 @@
 import SwiftUI
 
-/// Which tab chrome the shell draws. At compact width (an iPhone, a closed
-/// iPhone Duo, a narrow iPad window) the system tab bar is hidden and Aiden
-/// draws its own dock; at regular width the system's sidebar-adaptable tab
-/// view stays as it is.
+/// Which tab chrome the shell draws. On a stack (an iPhone in either
+/// orientation, a closed iPhone Duo, a narrow iPad window) the system tab bar
+/// is hidden and Aiden draws its own dock; beside the list (an iPad, an open
+/// iPhone Duo) the system's sidebar-adaptable tab view stays as it is.
 enum AidenTabChrome: Equatable {
     case dock, system
 
     static func resolve(besideList: Bool) -> Self {
         besideList ? .system : .dock
     }
+
+    /// Whether the lists sit beside their detail: at regular width, except
+    /// on an iPhone held sideways. A Plus or Pro Max in landscape is regular
+    /// wide but compact tall; it keeps the stack and the dock it had upright,
+    /// as every smaller iPhone does, instead of swapping layouts as it turns.
+    /// An iPad and an open iPhone Duo are regular both ways.
+    static func besideList(horizontal: UserInterfaceSizeClass?, vertical: UserInterfaceSizeClass?) -> Bool {
+        horizontal == .regular && vertical != .compact
+    }
+
+    /// Whether the keyboard takes the bottom edge, so the dock steps aside:
+    /// a keyboard docked along the bottom of the screen and taller than a
+    /// hardware keyboard's shortcut bar. A floating or undocked keyboard, the
+    /// shortcut bar alone, or a keyboard off screen leave the dock where it is.
+    static func keyboardTakesBottomEdge(keyboard: CGRect, screen: CGRect) -> Bool {
+        let visible = keyboard.intersection(screen)
+        guard !visible.isNull else { return false }
+        return visible.maxY >= screen.maxY - 1 && visible.height >= minimumKeyboardHeight
+    }
+
+    /// Taller than a shortcut or predictive bar, shorter than any on-screen keyboard.
+    static let minimumKeyboardHeight: CGFloat = 120
 
     /// Whether the dock is on screen now. It gives the bottom edge to a
     /// conversation's composer, as the system bar did, and to the keyboard.
@@ -66,8 +88,12 @@ struct AidenDock: View {
 
     @Environment(\.aidenPalette) private var palette
     @Environment(\.aidenReduceMotion) private var reduceMotion
-    @ScaledMetric(relativeTo: .body) private var iconSize: CGFloat = 20
+    @ScaledMetric(relativeTo: .body) private var scaledIconSize: CGFloat = 20
     @Namespace private var pill
+
+    /// The metric reads the text size above the dock, which the dock's own
+    /// clamp doesn't reach, so it stops where the clamp does (xxxLarge).
+    private var iconSize: CGFloat { min(scaledIconSize, 27) }
 
     var body: some View {
         // Past a size where the chosen tab's name fits, the pill alone marks
@@ -131,12 +157,13 @@ struct AidenDock: View {
                 if isSelected {
                     Capsule()
                         .fill(AidenListRowBackground.selectedFill(palette))
-                        .matchedGeometryEffect(id: "pill", in: pill)
+                        // One source per row: ViewThatFits builds both.
+                        .matchedGeometryEffect(id: showsName ? "pill.named" : "pill", in: pill)
                 }
             }
             .contentShape(Capsule())
         }
-        .buttonStyle(.plain)
+        .buttonStyle(AidenDockItemButtonStyle())
         // In a tab bar the tab's value is whether it's chosen, so the Inbox's
         // count rides in its name ("Inbox, 3 chats need you"); Voice Control
         // still answers to the bare name.
@@ -157,13 +184,28 @@ extension AidenDock {
     }
 }
 
+/// A dock tab's press: it dims and settles a little, as a system tab does.
+private struct AidenDockItemButtonStyle: ButtonStyle {
+    @Environment(\.aidenReduceMotion) private var reduceMotion
+
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .opacity(configuration.isPressed ? 0.6 : 1)
+            .scaleEffect(configuration.isPressed && !reduceMotion ? 0.94 : 1)
+            .animation(reduceMotion ? nil : .snappy(duration: 0.2), value: configuration.isPressed)
+    }
+}
+
 /// The round glass buttons of Home's own header: 44 points, the icon in the
 /// foreground colour, on the chrome glass the rest of the bars use.
 struct AidenChromeIconButtonStyle: ButtonStyle {
     @Environment(\.aidenPalette) private var palette
     @Environment(\.aidenReduceMotion) private var reduceMotion
     @Environment(\.isEnabled) private var isEnabled
-    @ScaledMetric(relativeTo: .body) private var iconSize: CGFloat = 17
+    @ScaledMetric(relativeTo: .body) private var scaledIconSize: CGFloat = 17
+
+    /// Fits the 44-point circle at any text size; a held press shows it large.
+    private var iconSize: CGFloat { min(scaledIconSize, 24) }
 
     func makeBody(configuration: Configuration) -> some View {
         configuration.label

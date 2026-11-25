@@ -490,9 +490,10 @@ struct AidenHostStatusItem: View {
 extension EnvironmentValues {
     /// The name a conversation's toolbar shows under its title. Nil says nothing.
     @Entry var aidenConversationMachine: String?
-    /// The tab bar while a conversation is on screen. Hidden on a stack, where the
-    /// composer owns the bottom edge; a list beside its detail keeps it, since
-    /// the list stays up and the tabs must stay reachable from it.
+    /// The system tab bar while a conversation is on screen beside its list,
+    /// which keeps it, since the list stays up and the tabs must stay reachable
+    /// from it. On a stack Aiden's dock stands in (`aidenUsesDock`) and the
+    /// system bar stays hidden whatever this says.
     @Entry var aidenConversationTabBar: Visibility = .hidden
     /// Whether the system puts its bars in a rail at the side, as on a closed
     /// iPhone Duo. Set once by the shell, above every tab's stack.

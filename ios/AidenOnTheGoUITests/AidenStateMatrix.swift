@@ -100,6 +100,21 @@ enum AidenStateMatrix {
         tab("Inbox", in: app)
     }
 
+    /// Chats' root: Home's own header at compact width, where the navigation
+    /// bar is hidden, or the Chats list's navigation bar beside the list.
+    static func homeRoot(in app: XCUIApplication) -> XCUIElement {
+        app.descendants(matching: .any).matching(NSPredicate(
+            format: "identifier == %@ OR (elementType == %d AND identifier == %@)",
+            "aiden.home.menu", XCUIElement.ElementType.navigationBar.rawValue, "Chats"
+        )).firstMatch
+    }
+
+    /// What shows at a tab's root: Home's header for Chats, else the tab's
+    /// navigation bar.
+    static func tabRoot(_ title: String, in app: XCUIApplication) -> XCUIElement {
+        title == "Chats" ? homeRoot(in: app) : app.navigationBars[title]
+    }
+
     /// The compact-width dock Aiden draws in place of the system tab bar.
     static func dock(in app: XCUIApplication) -> XCUIElement {
         app.descendants(matching: .any)["aiden.dock"].firstMatch

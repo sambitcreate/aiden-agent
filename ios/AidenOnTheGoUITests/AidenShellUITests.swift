@@ -70,7 +70,7 @@ final class AidenShellUITests: XCTestCase {
         XCTAssertTrue(openInbox(in: app).waitForExistence(timeout: 10), "No chat rows in the inbox")
         for title in ["Inbox", "Chats", "Bots", "Workspaces"] {
             AidenStateMatrix.openArea(title, in: app)
-            XCTAssertTrue(app.navigationBars[title].waitForExistence(timeout: 10))
+            XCTAssertTrue(AidenStateMatrix.tabRoot(title, in: app).waitForExistence(timeout: 10))
             XCTAssertFalse(app.searchFields.firstMatch.exists, "\(title) has a search field")
             XCTAssertFalse(AidenStateMatrix.drawerSearchField(in: app).exists, "\(title) has a search field")
         }
@@ -84,7 +84,7 @@ final class AidenShellUITests: XCTestCase {
     /// showing, and Close menu puts it away.
     func testTheMenuButtonOpensTheDrawerAndItsPages() {
         let app = AidenStateMatrix.launch(scenario: .busy, startingTab: nil)
-        XCTAssertTrue(app.navigationBars["Chats"].waitForExistence(timeout: 10), "A first launch opens on Chats")
+        XCTAssertTrue(AidenStateMatrix.homeRoot(in: app).waitForExistence(timeout: 10), "A first launch opens on Chats")
         openDrawer(in: app)
         XCTAssertTrue(app.staticTexts["Recents"].firstMatch.exists, "No Recents in the drawer")
         // The drawer is a lazy list: on a short display (a closed iPhone Duo's
@@ -93,7 +93,7 @@ final class AidenShellUITests: XCTestCase {
         XCTAssertTrue(app.staticTexts["More"].firstMatch.exists, "No More in the drawer")
         // The drawer is modal: what's under it is out of reach, to touch and to VoiceOver.
         // The elements can still be listed under the cover; a touch on them lands on the drawer.
-        let menuButton = app.navigationBars.buttons["Open menu"]
+        let menuButton = app.buttons["Open menu"].firstMatch
         let inboxTab = AidenStateMatrix.tab("Inbox", in: app)
         XCTAssertFalse(menuButton.exists && menuButton.isHittable, "The bar under the drawer stayed reachable")
         XCTAssertFalse(inboxTab.exists && inboxTab.isHittable, "The tab bar under the drawer stayed reachable")
@@ -105,7 +105,7 @@ final class AidenShellUITests: XCTestCase {
         XCTAssertTrue(app.navigationBars["Scheduled tasks"].waitForExistence(timeout: 10), "Scheduled tasks did not open")
         XCTAssertTrue(app.buttons["Close menu"].waitForNonExistence(timeout: 5), "Opening a page left the drawer up")
         goBack(in: app)
-        XCTAssertTrue(app.navigationBars["Chats"].waitForExistence(timeout: 10), "Back did not return to Chats")
+        XCTAssertTrue(AidenStateMatrix.homeRoot(in: app).waitForExistence(timeout: 10), "Back did not return to Chats")
         app.terminate()
     }
 
@@ -115,7 +115,7 @@ final class AidenShellUITests: XCTestCase {
     /// away comes back over it.
     func testShowAllChatsPutsTheChatListOnScreen() {
         let app = AidenStateMatrix.launch(scenario: .busy, startingTab: nil)
-        XCTAssertTrue(app.navigationBars["Chats"].waitForExistence(timeout: 10), "A first launch opens on Chats")
+        XCTAssertTrue(AidenStateMatrix.homeRoot(in: app).waitForExistence(timeout: 10), "A first launch opens on Chats")
         let row = app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", "Fix the flaky upload test")).firstMatch
         XCTAssertTrue(row.waitForExistence(timeout: 10), "No chat rows on Chats")
         if AidenStateMatrix.window(of: app).frame.width > AidenStateMatrix.compactWidth {
@@ -128,13 +128,14 @@ final class AidenShellUITests: XCTestCase {
             // On a phone a pushed chat hides the tabs and has Back rather
             // than the menu, so the drawer is opened from another tab.
             XCTAssertTrue(openInbox(in: app).waitForExistence(timeout: 10), "The Inbox did not open")
-            XCTAssertFalse(app.navigationBars["Chats"].exists, "The Inbox left Chats in view")
+            let home = AidenStateMatrix.homeRoot(in: app)
+            XCTAssertFalse(home.exists && home.isHittable, "The Inbox left Chats in view")
         }
 
         openDrawer(in: app)
         drawerRow("Show all chats", in: app).tap()
         XCTAssertTrue(app.buttons["Close menu"].waitForNonExistence(timeout: 5), "Show all chats left the drawer up")
-        XCTAssertTrue(app.navigationBars["Chats"].waitForExistence(timeout: 5), "Show all chats did not land on Chats")
+        XCTAssertTrue(AidenStateMatrix.homeRoot(in: app).waitForExistence(timeout: 5), "Show all chats did not land on Chats")
         let listed = XCTNSPredicateExpectation(predicate: NSPredicate(format: "isHittable == true"), object: row)
         XCTAssertEqual(XCTWaiter().wait(for: [listed], timeout: 5), .completed, "Show all chats left the list off screen")
         app.terminate()
@@ -151,7 +152,7 @@ final class AidenShellUITests: XCTestCase {
         )
         // A closed iPhone Duo puts the bars in a side rail, whose columns own
         // the edge, so there the swipe leaves the drawer shut.
-        if railButton("Open menu", in: app) != nil {
+        if showsSideRail(in: app) {
             edgeSwipe(in: app)
             XCTAssertFalse(
                 app.buttons["Close menu"].waitForExistence(timeout: 3),
@@ -325,10 +326,97 @@ final class AidenShellUITests: XCTestCase {
         app.swipeUp(velocity: .slow)
         AidenStateMatrix.capture("dock-inbox-scrolled", in: self)
         XCTAssertTrue(bots.isHittable, "The dock left as the list scrolled")
+        // At the largest text the dock keeps its size: every tab is still on
+        // the screen and in reach.
+        XCTAssertTrue(inbox.isHittable, "The largest text pushed the Inbox's tab out of reach")
+        let window = AidenStateMatrix.window(of: app).frame
+        XCTAssertTrue(window.contains(AidenStateMatrix.dock(in: app).frame), "The dock overflowed the window")
         bots.tap()
         XCTAssertTrue(app.navigationBars["Bots"].waitForExistence(timeout: 10), "The dock's Bots tab didn't open Bots")
         XCTAssertTrue(bots.isSelected, "Bots' tab isn't the chosen one")
         XCTAssertFalse(inbox.isSelected)
+        app.terminate()
+    }
+
+    /// The list's last row scrolls up clear of the dock and the running
+    /// chats above it, so nothing at the end of a list is left under them.
+    func testTheLastRowScrollsClearOfTheDock() throws {
+        let app = AidenStateMatrix.launch(
+            scenario: .busy,
+            contentSize: .accessibilityExtraExtraExtraLarge
+        )
+        XCTAssertTrue(openInbox(in: app).waitForExistence(timeout: 10), "No chat rows in the inbox")
+        let dock = AidenStateMatrix.dock(in: app)
+        try XCTSkipUnless(dock.exists, "The dock is for compact width")
+
+        func lastRow() -> XCUIElement? {
+            app.cells.allElementsBoundByIndex.filter(\.exists).max { $0.frame.maxY < $1.frame.maxY }
+        }
+        var previous = ""
+        for _ in 0..<8 {
+            app.swipeUp(velocity: .fast)
+            let label = lastRow()?.label ?? ""
+            if label == previous { break }
+            previous = label
+        }
+        // Let the scroll come to rest at the end.
+        Thread.sleep(forTimeInterval: 1)
+        let last = try XCTUnwrap(lastRow(), "No rows in the Inbox")
+        AidenStateMatrix.capture("dock-inbox-end", in: self)
+
+        let accessory = AidenStateMatrix.runningAccessory(in: app)
+        let barTop = accessory.exists ? min(accessory.frame.minY, dock.frame.minY) : dock.frame.minY
+        XCTAssertLessThanOrEqual(last.frame.maxY, barTop + 1, "The last row stayed under the dock")
+        XCTAssertTrue(last.isHittable, "The last row is out of reach")
+        app.terminate()
+    }
+
+    /// The keyboard takes the bottom edge: the dock steps aside while it's up
+    /// and comes back when it goes.
+    func testTheDockStepsAsideForTheKeyboard() throws {
+        let app = AidenStateMatrix.launch(scenario: .full, startingTab: "chats")
+        XCTAssertTrue(AidenStateMatrix.homeRoot(in: app).waitForExistence(timeout: 10), "Home didn't open")
+        let dock = AidenStateMatrix.dock(in: app)
+        try XCTSkipUnless(dock.waitForExistence(timeout: 5), "The dock is for compact width")
+        let field = homeField(in: app)
+        XCTAssertTrue(field.waitForExistence(timeout: 5), "No Home field")
+
+        field.tap()
+        XCTAssertTrue(app.keyboards.firstMatch.waitForExistence(timeout: 5), "The keyboard didn't come up")
+        XCTAssertTrue(dock.waitForNonExistence(timeout: 5), "The dock stayed up with the keyboard")
+        AidenStateMatrix.capture("dock-keyboard", in: self)
+
+        // Home's menu is still in reach; the drawer puts the keyboard away.
+        AidenStateMatrix.homeRoot(in: app).tap()
+        XCTAssertTrue(app.buttons["Close menu"].waitForExistence(timeout: 5), "The drawer didn't open")
+        AidenStateMatrix.closeDrawer(in: app)
+        XCTAssertTrue(app.keyboards.firstMatch.waitForNonExistence(timeout: 5), "The keyboard stayed up")
+        XCTAssertTrue(dock.waitForExistence(timeout: 5), "The dock didn't come back after the keyboard")
+        app.terminate()
+    }
+
+    /// A closed iPhone Duo's side rail carries the tab's bar items down the
+    /// trailing edge, and the dock stays along the bottom, clear of it.
+    func testTheClosedDuosSideRailAndTheDockShareTheScreen() throws {
+        let app = AidenStateMatrix.launch(scenario: .busy)
+        XCTAssertTrue(openInbox(in: app).waitForExistence(timeout: 10), "No chat rows in the inbox")
+        try XCTSkipUnless(showsSideRail(in: app), "Only a closed iPhone Duo has the side rail")
+        let dock = AidenStateMatrix.dock(in: app)
+        XCTAssertTrue(dock.exists, "No dock beside the side rail")
+        let menu = app.buttons.matching(NSPredicate(
+            format: "label == %@ AND identifier != %@", "Open menu", "aiden.home.menu"
+        )).firstMatch
+        XCTAssertFalse(menu.frame.intersects(dock.frame), "The rail's menu sits under the dock")
+        XCTAssertTrue(AidenStateMatrix.dockTab("Inbox", in: app).isHittable, "The dock's tabs are out of reach")
+
+        menu.tap()
+        XCTAssertTrue(app.buttons["Close menu"].waitForExistence(timeout: 5), "The rail's menu didn't open the drawer")
+        AidenStateMatrix.closeDrawer(in: app)
+
+        AidenStateMatrix.dockTab("Chats", in: app).tap()
+        let homeMenu = app.buttons["aiden.home.menu"].firstMatch
+        XCTAssertTrue(homeMenu.waitForExistence(timeout: 10), "No Home header beside the side rail")
+        AidenStateMatrix.capture("duo-rail-home", in: self)
         app.terminate()
     }
 
@@ -819,7 +907,7 @@ final class AidenShellUITests: XCTestCase {
         AidenStateMatrix.capture("tabs-workspaces", in: self)
 
         AidenStateMatrix.openArea("Chats", in: app)
-        XCTAssertTrue(app.navigationBars["Chats"].waitForExistence(timeout: 10))
+        XCTAssertTrue(AidenStateMatrix.homeRoot(in: app).waitForExistence(timeout: 10))
         AidenStateMatrix.capture("tabs-chats", in: self)
 
         openDrawer(in: app)
@@ -1061,7 +1149,7 @@ final class AidenShellUITests: XCTestCase {
             ]
             app.launch()
 
-            XCTAssertTrue(app.navigationBars["Chats"].waitForExistence(timeout: 10), "Unpaired launch should enter the shell")
+            XCTAssertTrue(AidenStateMatrix.homeRoot(in: app).waitForExistence(timeout: 10), "Unpaired launch should enter the shell")
             XCTAssertTrue(app.staticTexts["No computers connected"].waitForExistence(timeout: 5), "Empty state title missing")
             capture("sim_\(appearance)_1_chats")
 
@@ -1108,7 +1196,7 @@ final class AidenShellUITests: XCTestCase {
         ]
         app.launch()
 
-        XCTAssertTrue(app.navigationBars["Chats"].waitForExistence(timeout: 10))
+        XCTAssertTrue(AidenStateMatrix.homeRoot(in: app).waitForExistence(timeout: 10))
         let addComputer = app.buttons["Add Computer"].firstMatch
         XCTAssertTrue(addComputer.waitForExistence(timeout: 10))
         addComputer.tap()
@@ -2923,29 +3011,22 @@ final class AidenShellUITests: XCTestCase {
 
     /// A bar's button. On an iPhone it sits in the navigation bar; on a closed
     /// iPhone Duo the system moves the bar's items into the side rail with
-    /// the tabs, so a button there counts too.
+    /// the tabs (or, with the rail hidden for a pushed chat, shows them on
+    /// their own), outside any navigation bar.
     private func barButton(_ label: String, in app: XCUIApplication) -> XCUIElement {
         let inNavigationBar = app.navigationBars.buttons[label].firstMatch
-        if inNavigationBar.exists { return inNavigationBar }
-        // With the rail hidden (a pushed chat on the closed Duo) the system
-        // still shows the bar's items, outside any navigation bar.
-        return railButton(label, in: app) ?? app.buttons[label].firstMatch
+        return inNavigationBar.exists ? inNavigationBar : app.buttons[label].firstMatch
     }
 
-    /// A button in a closed iPhone Duo's side rail: the system moves the
-    /// navigation bar's items into a narrow column down the trailing edge.
-    /// The dock keeps the tabs along the bottom, so the rail is known by
-    /// where its buttons sit, outside any navigation bar. Nil elsewhere.
-    private func railButton(_ label: String, in app: XCUIApplication) -> XCUIElement? {
-        let window = AidenStateMatrix.window(of: app).frame
-        let railWidth: CGFloat = 56
-        let inNavigationBar = app.navigationBars.buttons.matching(NSPredicate(format: "label == %@", label))
-            .allElementsBoundByIndex.map(\.frame)
-        return app.buttons.matching(NSPredicate(format: "label == %@", label)).allElementsBoundByIndex
-            .first {
-                $0.frame.minX >= window.maxX - railWidth && $0.frame.width < railWidth
-                    && !inNavigationBar.contains($0.frame)
-            }
+    /// Whether a tab's bar items sit in a closed iPhone Duo's side rail. At a
+    /// tab's root other than Home, the menu button belongs to the navigation
+    /// bar on any other device; in the rail it is outside every navigation
+    /// bar. Home's own header menu (`aiden.home.menu`) is not a bar item.
+    private func showsSideRail(in app: XCUIApplication) -> Bool {
+        let menu = app.buttons.matching(NSPredicate(
+            format: "label == %@ AND identifier != %@", "Open menu", "aiden.home.menu"
+        )).firstMatch
+        return menu.waitForExistence(timeout: 5) && !app.navigationBars.buttons["Open menu"].exists
     }
 
     private func openDrawer(in app: XCUIApplication) {

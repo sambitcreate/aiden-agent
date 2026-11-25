@@ -229,6 +229,9 @@ struct AidenHomeHeader: View {
                 Text(AidenGreeting.make(date: context.date, name: AidenHomeName.resolve(host: nil, local: localName)))
                     .aidenType(.statHero)
                     .foregroundStyle(palette.foreground)
+                    // With the nav bar's title gone at Home, the greeting is
+                    // the screen's heading for the rotor.
+                    .accessibilityAddTraits(.isHeader)
                     .accessibilityIdentifier("home.greeting")
                 if away {
                     Text("Your Bots worked while you were away")
