@@ -495,13 +495,7 @@ final class AidenShellUITests: XCTestCase {
         AidenStateMatrix.openArea("Chats", in: app)
         let home = app.descendants(matching: .any).matching(identifier: "home.composer").firstMatch
         XCTAssertTrue(home.waitForExistence(timeout: 10), "No Home composer")
-        let field = app.descendants(matching: .any).matching(NSPredicate(
-            format: "(elementType == %d OR elementType == %d) AND (identifier == %@ OR placeholderValue == %@)",
-            XCUIElement.ElementType.textField.rawValue,
-            XCUIElement.ElementType.textView.rawValue,
-            "home.composer",
-            "Ask anything"
-        )).firstMatch
+        let field = homeField(in: app)
         XCTAssertTrue(field.waitForExistence(timeout: 5), "No Home field")
         field.tap()
         let prompt = "Plan the launch checklist"
@@ -542,13 +536,13 @@ final class AidenShellUITests: XCTestCase {
     }
 
     private func homeField(in app: XCUIApplication) -> XCUIElement {
-        app.descendants(matching: .any).matching(NSPredicate(
-            format: "(elementType == %d OR elementType == %d) AND (identifier == %@ OR placeholderValue == %@)",
-            XCUIElement.ElementType.textField.rawValue,
-            XCUIElement.ElementType.textView.rawValue,
-            "home.composer",
-            "Ask anything"
-        )).firstMatch
+        // The composer is a container, so its field sits inside it.
+        app.descendants(matching: .any).matching(identifier: "home.composer").firstMatch
+            .descendants(matching: .any).matching(NSPredicate(
+                format: "elementType == %d OR elementType == %d",
+                XCUIElement.ElementType.textField.rawValue,
+                XCUIElement.ElementType.textView.rawValue
+            )).firstMatch
     }
 
     /// Home never shows an empty "Nothing new" for a state it can explain: a
