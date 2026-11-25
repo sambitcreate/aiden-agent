@@ -302,6 +302,60 @@ test("a chat's model cannot change mid-reply, for a Bot chat, or with an empty p
   await assert.rejects(f.invoke("chats:setModel", "missing-chat", "anthropic", "model-b"), /not found/u);
 });
 
+test("a chat's own thinking level is set, kept with its model, and cleared with null or a new model", async (t) => {
+  const f = await fixture(t);
+  await f.invoke("chats:appendMessage", ...append("regular-chat", "turn-level"));
+  const level = async () => {
+    const stored = await f.chatStore.get("regular-chat");
+    const listed = (await f.chatStore.list()).find((meta) => meta.id === "regular-chat");
+    assert.equal(listed?.thinkingLevel, stored?.thinkingLevel, "the sidebar index agrees with the chat");
+    return [stored?.providerId, stored?.model, stored?.thinkingLevel];
+  };
+
+  const updated = (await f.invoke("chats:setModel", "regular-chat", "openrouter", "model-a", "high")) as {
+    thinkingLevel?: string;
+  };
+  assert.equal(updated.thinkingLevel, "high");
+  assert.deepEqual(await level(), ["openrouter", "model-a", "high"], "a level-only change on the same model persists");
+
+  await f.invoke("chats:setModel", "regular-chat", "openrouter", "model-a", "low");
+  assert.deepEqual(await level(), ["openrouter", "model-a", "low"]);
+
+  await f.invoke("chats:setModel", "regular-chat", "openrouter", "model-a");
+  assert.deepEqual(await level(), ["openrouter", "model-a", "low"], "picking the same model again keeps its level");
+
+  await f.invoke("chats:setModel", "regular-chat", "openrouter", "model-a", null);
+  assert.deepEqual(await level(), ["openrouter", "model-a", undefined], "null clears the level");
+
+  await f.invoke("chats:setModel", "regular-chat", "openrouter", "model-a", "max");
+  await f.invoke("chats:setModel", "regular-chat", "anthropic", "model-b");
+  assert.deepEqual(await level(), ["anthropic", "model-b", undefined], "another model without a level starts without one");
+
+  await f.invoke("chats:setModel", "regular-chat", "openrouter", "model-a", "medium");
+  await f.invoke("chats:appendMessage", "regular-chat", { role: "user", content: "Next" }, {
+    providerId: "anthropic",
+    model: "model-b",
+    turnId: "turn-other-model",
+  });
+  assert.deepEqual(await level(), ["anthropic", "model-b", undefined], "a send on another model drops the old model's level");
+});
+
+test("an unknown thinking level is refused before anything changes, and a Bot chat takes none", async (t) => {
+  const f = await fixture(t);
+  await f.invoke("chats:appendMessage", ...append("regular-chat", "turn-invalid"));
+  const before = await f.chatStore.get("regular-chat");
+  for (const invalid of ["turbo", 3, "", { level: "high" }]) {
+    await assert.rejects(
+      f.invoke("chats:setModel", "regular-chat", "anthropic", "model-b", invalid),
+      /Invalid thinking level/u,
+    );
+  }
+  assert.deepEqual(await f.chatStore.get("regular-chat"), before);
+  await f.chatStore.create({ id: "bot-chat", botId: "bot-1", providerId: "openrouter", model: "model-a" });
+  await assert.rejects(f.invoke("chats:setModel", "bot-chat", "openrouter", "model-a", "high"), /Bot's settings/u);
+  assert.equal((await f.chatStore.get("bot-chat"))?.thinkingLevel, undefined);
+});
+
 test("dismissing the Computer Use continue callout clears only that chat's marker", async (t) => {
   const f = await fixture(t);
   await f.chatStore.setComputerUsePendingContinue("regular-chat", true);

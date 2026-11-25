@@ -246,11 +246,6 @@ export function assertPackagedModelCatalogEntries(entries) {
   if (!normalized.has("/resources/model-capabilities.json")) {
     throw new Error("Packaged app.asar is missing the models.dev capability snapshot.");
   }
-  if (
-    [...normalized].some((entry) => entry.split("/").at(-1) === "artificial-analysis-models.json")
-  ) {
-    throw new Error("Packaged app.asar contains the obsolete Artificial Analysis snapshot.");
-  }
 }
 
 export async function verifyPackagedModelCatalogResources(appAsar) {

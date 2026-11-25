@@ -30,7 +30,7 @@ autocomplete, themes, hidden `/debug`.
 | Attachments batch caps | `attachments.ts` + `attachment-contract.ts` (pure) | optional `/attach <paths…>` honoring contract caps |
 | Pi remote catalog overlay (hardened) | `pi-remote-catalog.ts`, `pi-models-store.ts` (pure; 4h freshness, ETag, stale pass) | startup revalidation + `/catalog refresh` — stronger than stock pi refresh |
 | models.dev snapshot + model info | `models-catalog-core.ts`, `models-dev-cache-core.ts`, `provider-model-info-core.ts` (pure) | `/model info <id>` |
-| AA + OpenRouter benchmark insights | `artificial-analysis-*-core.ts`, `openrouter-benchmark-catalog-core.ts`, `model-insights-action-core.ts` (pure) | `/insights` (manual fetch; benchmark-only key per network rules) |
+| ~~AA + OpenRouter benchmark insights~~ | Retired 2026-11-23 by the [Agent Slider](agent-slider-plan.md) (PR 4): the modules and `aiden insights` were deleted, and `aiden serve` deletes the keys and caches it left | — |
 | Provider auth flow coordinator | `provider-auth-flow-core.ts` (pure; only injects `shell.openExternal`) | `aiden auth login <provider>` — URL-print or device-code TUI |
 | Codex subscription provider | `codex-provider.ts`, `codex-auth-failure.ts` (pure) | `registerProvider` Phase 2 |
 | Concentrate + custom providers (LM Studio/Ollama/compat) | `concentrate-provider.ts`, `provider-config-migration-core.ts`, `provider-key-policy.ts` (pure) | `registerProvider` custom branch (the CLI's model-runtime bridge covers only the built-in branch today) |
@@ -70,7 +70,7 @@ cross-chat activity coordination (`chat-activity-core.ts`, `chat-deletion-gate.t
 
 Apple Foundation Models provider; on-device Parakeet dictation UX (global hotkey, pill, paste);
 Gemini Live voice mode; computer-use (TCC + Rust broker + GUI session); Bot Face Studio
-(nativeImage raster); Model Pad canvas (benchmark key already ports via `/insights`); command
+(nativeImage raster); Agent Slider editor (the slider itself is `config.json` data); command
 palette, sidebar browser, workspace picker popover, environment/review panels, terminal drawer;
 assistant dock; usage heatmap/share-card visuals; legacy keychain migration; provider artwork;
 update-install flow. (Terminal/serve equivalents noted in the plan where they exist.)
@@ -98,7 +98,7 @@ this plan remains active until the final acceptance checks below are complete.
 | Sessions | Automatic/manual titles, active-branch search/export, bounded attachment batches, portable/desktop journal snapshot import into independent journals |
 | Workspace authority | Registry, scratch directories, full/ask/none gates, daemon-routed mutations and cancellation, shared Git/files/worktree services and native removal |
 | Providers and setup | Native Pi provider APIs including Codex OAuth, Concentrate/custom providers, auth coordinator and key validation, encrypted credential migration, shared onboarding state, thinking metadata |
-| Catalogs | Hardened inference catalog overlay; fixed-endpoint manual models.dev and separate AA/OpenRouter benchmark credentials; display-only offline reads |
+| Catalogs | Hardened inference catalog overlay; fixed-endpoint manual models.dev; display-only offline reads (the AA/OpenRouter benchmark credentials were retired 2026-11-23) |
 | MCP | Explicit SDK adapter (not provided by Pi), stdio/Streamable HTTP (legacy HTTP+SSE removed 2026-10-20; the desktop client moved to Pi's `@earendil-works/pi-mcp`), presets/OAuth, pagination and response/schema budgets, exact schema/configuration checks before effects |
 | Subagents | Shared supervisor, fresh/fork projection, parent-owned tool execution, native private history, one-shot write/shell/outbound/mutation gates and nested capability ceilings |
 | Automation | Shared schedule CRUD, previews, durable runs, selected MCP/web inference and script execution; explicit-owner Telegram polling; settled shutdown |

@@ -171,6 +171,8 @@ export async function serveCommand(agentDir: string, args: string[]): Promise<vo
   let pairing: Promise<unknown> | undefined;
   const onReady = () => {
     analytics.ready();
+    // Delete-only, local and never awaited: the retired `aiden insights` leftovers.
+    void import("./credentials.ts").then(({ cleanUpRetiredInsights }) => cleanUpRetiredInsights(agentDir)).catch(() => undefined);
     if (!flags.remote || flags.pair === "off") return;
     // The QR and manual code carry a single-use secret: show them only to a
     // person at a terminal, never to a log (Docker, systemd, redirected output).

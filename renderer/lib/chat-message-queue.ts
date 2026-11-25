@@ -1,4 +1,5 @@
 import type { Attachment, ChatMessage } from "./types";
+import type { GrabbedElementContextV1 } from "../shared/browser-element-grab";
 import type { SkillInvocationV1 } from "../shared/slash-commands";
 import { MAX_CHAT_MESSAGE_CONTENT_BYTES } from "../shared/chat-message-contract";
 import {
@@ -11,6 +12,7 @@ export interface QueuedChatMessage {
   id: string;
   text: string;
   attachments: Attachment[];
+  grabbedElements?: GrabbedElementContextV1[];
   skillInvocation?: SkillInvocationV1;
   /** inputSource is set only by Aiden Live's chat tools ("By voice"). */
   options?: { visualize?: boolean; inputSource?: import("../shared/chat-input-source").ChatInputSourceV1 };
@@ -67,7 +69,7 @@ export class ChatMessageQueue {
     if (this.listeners.size === 0) this.retention?.unobserved(this);
   }
   private validate(message: QueuedChatMessage) {
-    if (!message.text.trim() && message.attachments.length === 0) {
+    if (!message.text.trim() && message.attachments.length === 0 && !message.grabbedElements?.length) {
       throw new Error("Add a message or an attachment before saving.");
     }
     if (new TextEncoder().encode(message.text).byteLength > MAX_CHAT_MESSAGE_CONTENT_BYTES) {
@@ -296,12 +298,13 @@ export async function deliverQueuedMessage(input: {
   }
 }
 
-/** Steering carries plain text only; attachments, skills and visualize need a full turn. */
+/** Steering carries plain text only; attachments, grabbed elements, skills and visualize need a full turn. */
 export function canSteerQueuedMessage(message: QueuedChatMessage): boolean {
   return (
     message.text.trim().length > 0 &&
     message.text.length <= MAX_RUN_INPUT_TEXT &&
     message.attachments.length === 0 &&
+    !message.grabbedElements?.length &&
     !message.skillInvocation &&
     !message.options?.visualize
   );
