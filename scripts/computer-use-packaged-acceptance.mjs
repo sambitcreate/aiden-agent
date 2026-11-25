@@ -119,10 +119,13 @@ export async function readHostCursorPosition({
 
 export async function readTextEditDocumentText(
   documentNames,
-  { platform = process.platform, exec = executeFile } = {},
+  { pid = null, platform = process.platform, exec = executeFile } = {},
 ) {
   if (platform !== "darwin") {
     throw new Error(`TextEdit document text probe is macOS-only (host platform is ${platform}).`);
+  }
+  if (pid !== null && pid !== undefined && (!Number.isInteger(pid) || pid <= 0)) {
+    throw new Error(`TextEdit PID must be a positive integer (received ${String(pid)}).`);
   }
   const names = (Array.isArray(documentNames) ? documentNames : [documentNames])
     .filter((name) => typeof name === "string" && name.trim().length > 0);
@@ -135,8 +138,9 @@ export async function readTextEditDocumentText(
       "-l",
       "JavaScript",
       "-e",
-      'function run(argv) { const app = Application("TextEdit"); const docs = app.documents(); for (let i = 0; i < docs.length; i++) { const docName = String(docs[i].name()); if (argv.indexOf(docName) >= 0) { return JSON.stringify({ text: String(docs[i].text()) }); } } throw new Error("TextEdit document not found: " + argv[0]); }',
+      'function run(argv) { const pidArg = argv[0]; const names = argv.slice(1); const app = pidArg ? Application(Number(pidArg)) : Application("TextEdit"); const docs = app.documents(); for (let i = 0; i < docs.length; i++) { const docName = String(docs[i].name()); if (names.indexOf(docName) >= 0) { return JSON.stringify({ text: String(docs[i].text()) }); } } throw new Error("TextEdit document not found: " + names[0]); }',
       "--",
+      pid ? String(pid) : "",
       ...names,
     ],
     { encoding: "utf8", timeout: 5_000 },
@@ -151,6 +155,38 @@ export async function readTextEditDocumentText(
     throw new Error(`Live TextEdit document text for ${names[0]} was not a string.`);
   }
   return parsed.text;
+}
+
+export async function waitForTextEditDocumentText(
+  documentNames,
+  {
+    pid = null,
+    platform = process.platform,
+    exec = executeFile,
+    timeoutMs = 10_000,
+    pollMs = 150,
+    sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
+    now = Date.now,
+  } = {},
+) {
+  if (platform !== "darwin") {
+    throw new Error(`TextEdit document text probe is macOS-only (host platform is ${platform}).`);
+  }
+  const deadline = now() + timeoutMs;
+  let lastError = null;
+  while (true) {
+    try {
+      return await readTextEditDocumentText(documentNames, { pid, platform, exec });
+    } catch (error) {
+      lastError = error instanceof Error ? error.message : String(error);
+    }
+    if (now() >= deadline) {
+      throw new Error(
+        `Disposable TextEdit document did not become readable within ${timeoutMs} ms (${lastError}).`,
+      );
+    }
+    await sleep(pollMs);
+  }
 }
 
 export async function readPackagedMetadata({
@@ -948,12 +984,12 @@ async function runAcceptance() {
       writeFile(decoyFile, ACCEPTANCE_DECOY_INITIAL_TEXT, "utf8"),
     ]);
     textEditProcess = await launchDisposableTextEdit(targetFile, decoyFile);
-    try {
-      deniedWindowTextBefore = await readTextEditDocumentText(expectedTitles);
-    } catch (error) {
-      deniedWindowProbeError = error instanceof Error ? error.message : String(error);
-      deniedWindowTextBefore = null;
-    }
+    // The operator runs the denied chat (step 3) before the allowed chat (step 4),
+    // so the disposable target document's initial live text is the pre-denial baseline.
+    // Fail fast here (environment problem) before launching Aiden if Cocoa never opens it.
+    deniedWindowTextBefore = await waitForTextEditDocumentText(expectedTitles, {
+      pid: textEditProcess.pid,
+    });
     model = await startAcceptanceModel({
       capability: modelCapability,
       expectedTitles,
@@ -967,7 +1003,9 @@ async function runAcceptance() {
         ]);
         deniedDiskSnapshots = { target: targetAfterDenied, decoy: decoyAfterDenied };
         try {
-          deniedWindowTextAfter = await readTextEditDocumentText(expectedTitles);
+          deniedWindowTextAfter = await readTextEditDocumentText(expectedTitles, {
+            pid: textEditProcess.pid,
+          });
         } catch (error) {
           deniedWindowProbeError = error instanceof Error ? error.message : String(error);
           deniedWindowTextAfter = null;

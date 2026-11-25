@@ -770,9 +770,6 @@ export function evaluateDeniedPermissionCheck({
       { targetWindowUnchanged: false },
     );
   }
-  if (environmentError) {
-    return makeCheckRow(id, "environment problem", String(environmentError), metadata);
-  }
   if (deniedToolResultMissing) {
     return makeCheckRow(
       id,
@@ -781,6 +778,9 @@ export function evaluateDeniedPermissionCheck({
       metadata,
       { deniedToolResultMissing: true },
     );
+  }
+  if (environmentError) {
+    return makeCheckRow(id, "environment problem", String(environmentError), metadata);
   }
   if (typeof deniedResponseText !== "string" || deniedResponseText.trim().length === 0) {
     return makeCheckRow(
@@ -940,7 +940,7 @@ export function classifyAcceptanceError(error) {
     return "unsupported";
   }
   if (
-    /Quit every running Aiden|already running|Could not resolve.*TextEdit|TextEdit process did not start|permission_required|Accessibility and Screen Recording|missing permissions|ENOENT|No packaged app|Could not (?:parse|sample) host mouse cursor|Host mouse cursor position was not a finite/iu.test(
+    /Quit every running Aiden|already running|Could not resolve.*TextEdit|TextEdit process did not start|Disposable TextEdit document did not become readable|permission_required|Accessibility and Screen Recording|missing permissions|ENOENT|No packaged app|Could not (?:parse|sample) host mouse cursor|Host mouse cursor position was not a finite/iu.test(
       message,
     )
   ) {

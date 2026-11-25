@@ -51,6 +51,7 @@ import {
   terminateLingeringComputerUseProcesses,
   waitForCleanComputerUseExit,
   waitForStopTeardown,
+  waitForTextEditDocumentText,
 } from "./computer-use-packaged-acceptance.mjs";
 import { CUA_DRIVER_ARTIFACT_PROVENANCE } from "./computer-use-signing-pins.mjs";
 
@@ -872,6 +873,7 @@ test("denied permission check verifies refusal and zero disk or window changes",
     evaluateDeniedPermissionCheck({
       ...baseArgs,
       deniedToolResultMissing: true,
+      environmentError: "transient probe error",
     }).status,
     "failed",
   );
@@ -1015,16 +1017,34 @@ test("run-level gate and evidence failures fold into check rows so the report ne
   assert.doesNotMatch(renderRealDesktopReport(report), /Overall:\*\* pass/u);
 });
 
-test("TextEdit live document text probe parses JXA output and rejects non-macOS or malformed responses", async () => {
+test("TextEdit live document text probe targets exact PID, retries startup readiness, and fails fast as environment problem", async () => {
+  const capturedArgs = [];
   const text = await readTextEditDocumentText(["Aiden CUA Target.txt", "Aiden CUA Target"], {
+    pid: 4242,
     platform: "darwin",
     exec: async (_bin, args) => {
-      assert.ok(args.includes("Aiden CUA Target.txt"));
+      capturedArgs.push(args);
       return { stdout: JSON.stringify({ text: ACCEPTANCE_TARGET_INITIAL_TEXT }) };
     },
   });
   assert.equal(text, ACCEPTANCE_TARGET_INITIAL_TEXT);
+  const dashDash = capturedArgs[0].indexOf("--");
+  assert.ok(dashDash > 0);
+  assert.deepEqual(capturedArgs[0].slice(dashDash + 1), [
+    "4242",
+    "Aiden CUA Target.txt",
+    "Aiden CUA Target",
+  ]);
+  assert.match(capturedArgs[0][3], /Application\(Number\(pidArg\)\)/u);
 
+  await assert.rejects(
+    readTextEditDocumentText(["Aiden CUA Target.txt"], {
+      pid: -1,
+      platform: "darwin",
+      exec: async () => ({ stdout: "{}" }),
+    }),
+    /positive integer/u,
+  );
   await assert.rejects(
     readTextEditDocumentText(["Aiden CUA Target.txt"], { platform: "linux", exec: async () => ({ stdout: "{}" }) }),
     /macOS-only/u,
@@ -1033,6 +1053,50 @@ test("TextEdit live document text probe parses JXA output and rejects non-macOS 
     readTextEditDocumentText(["Aiden CUA Target.txt"], { platform: "darwin", exec: async () => ({ stdout: "not json" }) }),
     /parse live TextEdit document text/u,
   );
+
+  // Readiness poller retries transient launch errors until TextEdit populates documents().
+  let attempts = 0;
+  let clock = 0;
+  const readyText = await waitForTextEditDocumentText(["Aiden CUA Target.txt"], {
+    pid: 4242,
+    platform: "darwin",
+    timeoutMs: 1_000,
+    pollMs: 150,
+    now: () => clock,
+    sleep: async (ms) => {
+      clock += ms;
+    },
+    exec: async () => {
+      attempts += 1;
+      if (attempts < 3) throw new Error("TextEdit document not found: Aiden CUA Target.txt");
+      return { stdout: JSON.stringify({ text: ACCEPTANCE_TARGET_INITIAL_TEXT }) };
+    },
+  });
+  assert.equal(readyText, ACCEPTANCE_TARGET_INITIAL_TEXT);
+  assert.equal(attempts, 3);
+
+  // When the document never appears before timeout, fails fast and classifies as "environment problem".
+  clock = 0;
+  let failureError = null;
+  try {
+    await waitForTextEditDocumentText(["Aiden CUA Target.txt"], {
+      pid: 4242,
+      platform: "darwin",
+      timeoutMs: 300,
+      pollMs: 150,
+      now: () => clock,
+      sleep: async (ms) => {
+        clock += ms;
+      },
+      exec: async () => {
+        throw new Error("TextEdit document not found: Aiden CUA Target.txt");
+      },
+    });
+  } catch (error) {
+    failureError = error;
+  }
+  assert.ok(failureError instanceof Error);
+  assert.equal(classifyAcceptanceError(failureError), "environment problem");
 });
 
 test("loopback model marks deniedToolResultMissing when denied turn lacks a correlated tool result", async () => {
