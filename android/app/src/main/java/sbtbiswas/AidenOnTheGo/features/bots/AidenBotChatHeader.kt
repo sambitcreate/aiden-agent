@@ -94,7 +94,9 @@ fun AidenBotChatTopBar(
     /** Null hides Advanced (legacy chats). */
     onOpenAdvanced: (() -> Unit)? = null,
     canDelete: Boolean,
-    onDelete: () -> Unit
+    onDelete: () -> Unit,
+    /** What the Bot is doing, settled ([rememberAidenBotAvatarState]); null shows the idle sprite. */
+    avatarState: AidenBotAvatarState? = null
 ) {
     val palette = AidenTheme.palette
     var menuOpen by remember { mutableStateOf(false) }
@@ -125,7 +127,8 @@ fun AidenBotChatTopBar(
                             botId = identity.botId,
                             avatar = avatar,
                             name = "",
-                            size = 28.dp
+                            size = 28.dp,
+                            state = avatarState
                         )
                         Spacer(Modifier.width(8.dp))
                     } else {

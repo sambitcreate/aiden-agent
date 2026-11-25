@@ -431,7 +431,8 @@ private fun AidenBotSessionContent(
                 onOpenMemory = if (canOpenMemory) ({ onNavigateToBotMemory(botId) }) else null,
                 onOpenAdvanced = ::openAdvanced,
                 canDelete = canDelete,
-                onDelete = { confirmingDelete = true }
+                onDelete = { confirmingDelete = true },
+                avatarState = rememberAidenBotAvatarState(botId, aidenBotAvatarTarget(ui))
             )
         }
     ) { padding ->

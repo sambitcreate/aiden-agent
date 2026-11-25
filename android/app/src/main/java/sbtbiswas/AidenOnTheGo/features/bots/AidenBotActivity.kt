@@ -36,8 +36,6 @@ import sbtbiswas.AidenOnTheGo.config.AidenPalette
 import sbtbiswas.AidenOnTheGo.config.AidenSolidFill
 import sbtbiswas.AidenOnTheGo.features.shared.activitymarks.AidenActivityMark
 import sbtbiswas.AidenOnTheGo.features.shared.activitymarks.AidenActivityMarkKind
-import sbtbiswas.AidenOnTheGo.features.shared.activitymarks.AidenActivityMarkProperty
-import sbtbiswas.AidenOnTheGo.features.shared.activitymarks.spec
 import sbtbiswas.AidenOnTheGo.models.AidenBotChatActivity
 import sbtbiswas.AidenOnTheGo.models.AidenBotChatActivityWording
 import sbtbiswas.AidenOnTheGo.models.AidenBotDetail
@@ -130,18 +128,6 @@ fun aidenBotNextAnnouncement(current: AidenBotAnnouncement?, text: String, nowMs
     if (current != null && current.text == text) return AidenBotAnnouncementStep(current, null)
     if (current == null || nowMs - current.atMs >= gapMs) return AidenBotAnnouncementStep(AidenBotAnnouncement(text, nowMs), null)
     return AidenBotAnnouncementStep(current, gapMs - (nowMs - current.atMs))
-}
-
-/** The canonical face's glance (docs/activity-marks.md `glance`): [dxFraction] of the avatar's size; [blink] scales the eyes. */
-data class AidenBotFaceGlance(val dxFraction: Float, val blink: Float)
-
-private val GLANCE = AidenActivityMarkKind.GLANCE.spec()
-
-fun aidenBotFaceGlance(timeMs: Long): AidenBotFaceGlance {
-    val dx = GLANCE.groups[0].track(AidenActivityMarkProperty.TRANSLATE_X)?.valueAt(timeMs) ?: 0f
-    val blink = GLANCE.shapes[0].track(AidenActivityMarkProperty.SCALE_Y)?.valueAt(timeMs) ?: 1f
-    // The mark's view box is 24 wide.
-    return AidenBotFaceGlance(dx / 24f, blink)
 }
 
 /**
@@ -272,12 +258,11 @@ fun aidenBotBusyMode(current: AidenStreamInputMode, isRunning: Boolean): AidenSt
     if (isRunning) current else AidenStreamInputMode.QUEUE
 
 /**
- * How a Bot's avatar says it is working (R8, R19). A canonical face glances; a photo can't,
- * and a face held still by Reduce Motion or battery saver can't either, so both wear the
- * glance badge instead, which holds its still pose when motion is off. Nothing moves while
- * the app isn't in front.
+ * How a Bot's avatar says it is working (R8, R19). A sprite plays its state's motion; a photo
+ * can't, so it wears the activity badge instead. Reduce Motion and battery saver hold both on
+ * their still pose, and nothing moves while the app isn't in front.
  */
-data class AidenBotFaceMotion(val glances: Boolean, val badge: Boolean, val badgeAnimates: Boolean)
+data class AidenBotFaceMotion(val animates: Boolean, val badge: Boolean, val badgeAnimates: Boolean)
 
 fun aidenBotFaceMotion(
     working: Boolean,
@@ -286,10 +271,9 @@ fun aidenBotFaceMotion(
     powerSave: Boolean,
     resumed: Boolean
 ): AidenBotFaceMotion {
-    if (!working) return AidenBotFaceMotion(glances = false, badge = false, badgeAnimates = false)
-    val still = reduceMotion || powerSave
-    val badge = photo || still
-    return AidenBotFaceMotion(glances = !photo && !still && resumed, badge = badge, badgeAnimates = badge && !still && resumed)
+    if (!working) return AidenBotFaceMotion(animates = false, badge = false, badgeAnimates = false)
+    val moving = !(reduceMotion || powerSave) && resumed
+    return AidenBotFaceMotion(animates = !photo && moving, badge = photo, badgeAnimates = photo && moving)
 }
 
 /** True while the app is in front; marks, faces and shimmers hold still otherwise. */

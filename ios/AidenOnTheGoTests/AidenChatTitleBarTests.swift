@@ -73,6 +73,36 @@ final class AidenChatTitleBarTests: XCTestCase {
         )
     }
 
+    func testVoiceOverHearsAFinishedOrFailedTurnTheHiddenAvatarPlays() {
+        // The header avatar is hidden from VoiceOver; the capsule speaks its ending.
+        let idle = AidenChatTitleStatus.bot(state: .idle, statusWord: nil, waitsForYou: false, purpose: "Finds the signal")
+        let working = AidenBotAvatarSignal(working: true, phase: "thinking")
+
+        var finished = AidenBotAvatarStateSettler(signal: working, at: 0)
+        finished.receive(.init(), at: 5)
+        XCTAssertEqual(
+            AidenChatTitleCapsule.accessibilityValue(status: idle, settledAvatar: finished.shown), "Done",
+            "while the avatar plays done, the purpose line is not what VoiceOver hears"
+        )
+        finished.advance(to: 10)
+        XCTAssertEqual(
+            AidenChatTitleCapsule.accessibilityValue(status: idle, settledAvatar: finished.shown), "Finds the signal",
+            "once the avatar rests, the status line is spoken again"
+        )
+
+        var failed = AidenBotAvatarStateSettler(signal: working, at: 0)
+        failed.receive(.init(lastTurnFailed: true), at: 2)
+        XCTAssertEqual(
+            AidenChatTitleCapsule.accessibilityValue(status: idle, settledAvatar: failed.shown), "Something went wrong"
+        )
+    }
+
+    func testAWorkingAvatarLeavesTheSpokenStatusToTheStatusLine() {
+        let writing = AidenChatTitleStatus.bot(state: .running, statusWord: "Searching the web", waitsForYou: false, purpose: "x")
+        XCTAssertEqual(AidenChatTitleCapsule.accessibilityValue(status: writing, settledAvatar: .tool), "Searching the web")
+        XCTAssertEqual(AidenChatTitleCapsule.accessibilityValue(status: nil, settledAvatar: nil), "")
+    }
+
     func testAWorkingBotSaysWhatItIsDoing() {
         XCTAssertEqual(
             AidenChatTitleStatus.bot(state: .running, statusWord: "Searching the web", waitsForYou: false, purpose: "x"),
