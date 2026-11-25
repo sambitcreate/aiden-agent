@@ -3,10 +3,10 @@
 ## Unreleased
 
 - **2026-11-25 — Home's own header and the dock.** Client-only; no Remote wire or revision change.
-  - Home has no system title bar. A round **Open menu** button sits beside the greeting at the top, and focus returns to it when the drawer closes. Every other screen keeps its usual bar.
-  - On an iPhone and a closed iPhone Duo the tabs are a dock along the bottom: icons on a glass capsule, the chosen tab in a pill with its name, and a dot on Inbox while chats need you. Tapping the chosen tab again goes back to its top.
-  - Lists end above the dock and scroll under it, the ambient light stays behind it, and running chats show just above it. It steps aside in a chat and while the keyboard is up, and it no longer shrinks as you scroll.
-  - VoiceOver reads the dock as a tab bar and says which tab is chosen; the Inbox says how many chats need you. Voice Control answers to each tab's name, and a long press at large text sizes shows the tab's name large.
+  - Home has no system title bar. Round **Open menu** and compose buttons sit above the greeting, focus returns to the menu when the drawer closes, and VoiceOver reads the greeting as the screen's heading. Every other screen keeps its usual bar.
+  - On an iPhone and a closed iPhone Duo the tabs are a dock along the bottom: icons on a glass capsule, the chosen tab in a pill with its name, and a dot on Inbox while chats need you. Tapping the chosen tab again goes back to its top. A Plus or Pro Max turned sideways keeps the dock instead of switching to the sidebar layout.
+  - Lists end above the dock and scroll under it, the ambient light stays behind it, and running chats show just above it. It steps aside in a chat and while the on-screen keyboard is up (a floating keyboard or a hardware keyboard's shortcut bar leaves it), and it no longer shrinks as you scroll. Running chats show above it on iOS 26.0 too.
+  - VoiceOver reads the dock as a tab bar and says which tab is chosen; the Inbox says how many chats need you. Voice Control answers to each tab's name, and a long press at large text sizes shows the tab's name large. The icons stop growing at the dock's largest size, so every tab stays on screen at the accessibility text sizes.
   - An iPad and an unfolded iPhone Duo keep the sidebar.
 
 - **2026-11-25 — Chats tab and the side drawer (new direction, Phase 1).** No Remote wire or revision change.

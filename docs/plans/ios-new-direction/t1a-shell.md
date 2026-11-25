@@ -210,6 +210,7 @@ Shell-level hooks for Aurora (Aurora rendering itself is 4B's job):
 - Live:
   - `AidenRunningAccessory` (`Features/Shell/AidenRunningAccessory.swift:54-132`) above the tab bar on iOS 26.1+, in compact width only (`AidenRunningHome.resolve` `:8-10`), via `aidenRunningAccessory` → `tabViewBottomAccessory(isEnabled:)` (`:217-227`; applied at `AidenAppShellView.swift:337-341`).
   - With several runs, a tap opens `AidenRunningChatsSheet` ("Running chats", medium/large detents, `:148-210`).
+  - Update 2026-11-25 (Home header and dock, PR #934): the accessory no longer uses `tabViewBottomAccessory`. On a stack it sits in the dock's bottom bar above `AidenDock` on every iOS version, 26.0 included; beside the list it is the Inbox's first row (`AidenRunningHome.resolve(_:)`). A dock tab tapped again pops to its root (`AidenAppNavigation.selectFromDock`).
 - Tab reselect today calls `navigation.selectTabRoot` (`AidenAppNavigation.swift:544-554`) only when requested programmatically (`AidenAppShellView.swift:429-435`). A user reselecting the current tab gets the system pop-to-root.
 
 ### 3.2 What's live
