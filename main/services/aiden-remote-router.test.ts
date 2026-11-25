@@ -6079,6 +6079,7 @@ test("a bubble's submissionId reaches only a device holding bot:activity, on a f
       }) as never,
       quietInputs: async () => new Map(),
       placedSubmissions: async () => new Map([["1", "17"]]),
+      withdraw: async () => "gone" as const,
     }),
     turnIntents: createBotTurnIntents(),
   });
@@ -6161,6 +6162,7 @@ test("a send the paused Bot refused is not recorded: once resumed, the same key 
       conversation: async () => { throw new Error("not used"); },
       quietInputs: async () => new Map(),
       placedSubmissions: async () => new Map(),
+      withdraw: async () => "gone" as const,
     }),
   });
   const app = await fixture({
@@ -6603,6 +6605,7 @@ test("a phone answers a real hand-off and pauses its Bot over HTTP, while a lega
       }) as never,
       quietInputs: async () => new Map(),
       placedSubmissions: async () => new Map(),
+      withdraw: async () => "gone" as const,
     }),
   });
   const holder = await fixture({
@@ -7779,4 +7782,69 @@ test("revision 65 advertises stream:snapshot-reasons only when streams are wired
       await serverApp.close();
     }
   }
+});
+
+test("revision 67: a device pages back through a Bot's chat and takes back a queued message, each only with the grants the session needs", async () => {
+  const headers = { authorization: `Bearer ${"a".repeat(43)}`, "aiden-protocol-version": "1" };
+  const seen: string[] = [];
+  const sessions = () => ({
+    ...(recordingRevision27Sessions(seen, { memory: false, proactive: false }) as Record<string, unknown>),
+    supportsActivity: true,
+    olderEntries: async (botId: string, query: { before: string; limit?: number }, options: { activity?: boolean; peers?: boolean } = {}) => {
+      seen.push(`older:${botId}:${query.before}:${query.limit ?? "default"}:${options.activity === true}`);
+      return { botId, epoch: "epoch_1", entries: [], hasOlder: false };
+    },
+    withdrawQueued: async (deviceId: string, botId: string, submissionId: string, key: string, body: unknown) => {
+      seen.push(`withdraw:${deviceId.slice(-8)}:${botId}:${submissionId}:${key}:${JSON.stringify(body)}`);
+      return { submissionId, outcome: "withdrawn" };
+    },
+  }) as unknown as import("./aiden-remote-router.js").AidenRemoteRouterDependencies["botSessions"];
+  const withdraw = (base: string, key = "withdraw-key-00000001") =>
+    fetch(`${base}/bots/bot-1/queued/42/withdraw`, {
+      method: "POST",
+      headers: { ...headers, "content-type": "application/json", "idempotency-key": key },
+      body: "{}",
+    });
+
+  const holder = await fixture({
+    capabilities: ["server:read", "bot:read", "bot:write", "chat:read", "chat:write", "bot:activity"],
+    acceptsBotCapabilities: true,
+    deviceType: "mac",
+    chatActivity: true,
+    botSessions: sessions(),
+  });
+  try {
+    assert.equal((await fetch(`${holder.base}/bots/bot-1/session/entries?before=entry_9&limit=25`, { headers })).status, 200);
+    assert.equal((await fetch(`${holder.base}/bots/bot-1/session/entries?before=entry_9`, { headers })).status, 200);
+    for (const query of ["", "?limit=25", "?before=entry_9&limit=0", "?before=entry_9&limit=201", "?before=a/b", "?before=entry_9&x=1"]) {
+      assert.equal((await fetch(`${holder.base}/bots/bot-1/session/entries${query}`, { headers })).status, 400, query);
+    }
+    const receipt = await withdraw(holder.base);
+    assert.equal(receipt.status, 200);
+    assert.deepEqual(await receipt.json(), { submissionId: "42", outcome: "withdrawn" });
+    const keyless = await fetch(`${holder.base}/bots/bot-1/queued/42/withdraw`, { method: "POST", headers: { ...headers, "content-type": "application/json" }, body: "{}" });
+    assert.equal(keyless.status, 400);
+  } finally {
+    await holder.close();
+  }
+
+  // Without bot:activity the queue is never shown, so nothing in it can be taken back; without chat:read the transcript stays closed.
+  const reader = await fixture({
+    capabilities: ["server:read", "bot:read", "bot:write", "chat:write"],
+    acceptsBotCapabilities: true,
+    deviceType: "mac",
+    chatActivity: true,
+    botSessions: sessions(),
+  });
+  try {
+    assert.equal((await fetch(`${reader.base}/bots/bot-1/session/entries?before=entry_9`, { headers })).status, 403);
+    assert.equal((await withdraw(reader.base)).status, 403);
+  } finally {
+    await reader.close();
+  }
+  assert.deepEqual(seen, [
+    "older:bot-1:entry_9:25:true",
+    "older:bot-1:entry_9:default:true",
+    'withdraw:12345678:bot-1:42:withdraw-key-00000001:{}',
+  ]);
 });

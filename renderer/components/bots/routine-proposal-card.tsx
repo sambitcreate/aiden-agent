@@ -48,6 +48,7 @@ export function RoutineProposalCard({
   supersededBy,
   onRespond,
   onNewLink,
+  declineReasons = true,
 }: {
   proposal: Pick<BotRoutineProposalEntryData, "name" | "label" | "prompt" | "timezone" | "trigger">;
   status: BotRoutineProposalStatus;
@@ -62,6 +63,8 @@ export function RoutineProposalCard({
   ): Promise<BotRoutineProposalRespondResult | null>;
   /** A new link for an added link routine; the old one stops working. */
   onNewLink?(routineId: string): Promise<string | null>;
+  /** After Not now, offer "Why not?". Off where the reason would not be recorded (a paired Mac's Bot). */
+  declineReasons?: boolean;
 }) {
   const { platform } = useAppCapabilities();
   // After Not now here, "Why not?" offers the reasons once; choosing one records it.
@@ -188,7 +191,7 @@ export function RoutineProposalCard({
       adding={busy === "accept"}
       onAdd={() => void respond("accept")}
       onNotNow={() => {
-        void respond("dismiss").then((taken) => taken && setWhyNot("offered"));
+        void respond("dismiss").then((taken) => taken && declineReasons && setWhyNot("offered"));
       }}
     >
       <p className="text-primary">{`${proposal.name} · ${when}`}</p>

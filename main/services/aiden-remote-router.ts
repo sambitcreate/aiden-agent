@@ -52,6 +52,7 @@ import {
   AIDEN_REMOTE_BOT_CONNECTION_REQUESTS_FEATURE,
   AIDEN_REMOTE_BOT_DELETE_FEATURE,
   AIDEN_REMOTE_BOT_DURABLE_SESSION_FEATURE,
+  AIDEN_REMOTE_BOT_SESSION_MAX_ENTRIES,
   AIDEN_REMOTE_BOT_PRESETS_FEATURE,
   AIDEN_REMOTE_BOT_ROUTINES_FEATURE,
   AIDEN_REMOTE_BOT_MEMORY_FEATURE,
@@ -414,6 +415,9 @@ export interface AidenRemoteRouterDependencies {
         | "respondPlan"
         | "supportsAccessRequests"
         | "answerAccessRequest"
+        // Contract revision 67: older transcript pages and taking back a queued message.
+        | "olderEntries"
+        | "withdrawQueued"
         // Contract revision 45 (`bot:images`).
         | "sharedImage"
         | "supportsSharedImages"
@@ -498,6 +502,8 @@ export type AidenRemoteRouteLabel =
   | "botSession"
   | "botAttachment"
   | "botSessionEvents"
+  | "botSessionEntries"
+  | "botQueuedWithdraw"
   | "botSessionImage"
   | "botQuestionAnswer"
   | "botAllowed"
@@ -612,6 +618,8 @@ export const AIDEN_REMOTE_ROUTE_TEMPLATES: Readonly<Record<AidenRemoteRouteLabel
   ],
   botAttachment: ["/bots/:botId/attachments", "/bots/:botId/attachments/:attachmentId"],
   botSessionEvents: ["/bots/:botId/session/events"],
+  botSessionEntries: ["/bots/:botId/session/entries"],
+  botQueuedWithdraw: ["/bots/:botId/queued/:submissionId/withdraw"],
   botSessionImage: ["/bots/:botId/session/images/:entryId"],
   botQuestionAnswer: ["/bots/:botId/questions/:waitId/answer"],
   botAllowed: ["/bots/:botId/allowed"],
@@ -2017,6 +2025,22 @@ function chatMessagesQuery(query: string): { before?: string; limit: number } {
   };
 }
 
+/** `GET /bots/{botId}/session/entries`: `before` is required, `limit` optional (1 to 200). */
+function botSessionPageQuery(query: string): { before: string; limit?: number } {
+  let before: string | undefined;
+  let limit: number | undefined;
+  for (const component of query ? query.split("&") : []) {
+    const separator = component.indexOf("=");
+    const name = separator < 0 ? component : component.slice(0, separator);
+    const value = separator < 0 ? "" : component.slice(separator + 1);
+    if (name === "before" && before === undefined && /^[A-Za-z0-9._:-]{1,128}$/u.test(value)) before = value;
+    else if (name === "limit" && limit === undefined && /^[1-9]\d{0,2}$/u.test(value) && Number(value) <= AIDEN_REMOTE_BOT_SESSION_MAX_ENTRIES) limit = Number(value);
+    else throw new AidenRemoteServiceError("invalid_request", "The session page query is invalid.", 400);
+  }
+  if (before === undefined) throw new AidenRemoteServiceError("invalid_request", "The session page query is invalid.", 400);
+  return { before, ...(limit === undefined ? {} : { limit }) };
+}
+
 /**
  * The host-feed cursor from `?after=` or `Last-Event-ID`. The value is opaque
  * here; the feed answers anything it does not recognise with a snapshot.
@@ -3327,6 +3351,52 @@ export function createAidenRemoteRequestHandler(
             suggestions: holdsBotSuggestions(device, dependencies),
           },
         );
+        return;
+      }
+      const botSessionEntriesMatch = /^\/bots\/([A-Za-z0-9._:-]{1,160})\/session\/entries$/u.exec(path);
+      if (botSessionEntriesMatch && request.method === "GET") {
+        route = "botSessionEntries";
+        const page = botSessionPageQuery(query);
+        const device = await authenticate(request, dependencies.devices, "bot:read");
+        deviceIdSuffix = device.id.slice(-8);
+        // Older entries are the Bot's transcript: reading them is a chat read.
+        requireDeviceCapabilities(device, ["chat:read"]);
+        if (!dependencies.botSessions?.olderEntries) throw new AidenRemoteServiceError("not_found", "This endpoint is unavailable.", 404);
+        // The same projection as the session: a page never shows what the snapshot would hide.
+        writeJson(response, 200, await dependencies.botSessions.olderEntries(botSessionEntriesMatch[1]!, page, {
+          cards: device.capabilities.has("bot:cards"),
+          activity: device.capabilities.has("bot:activity") && botActivityWired(dependencies),
+          handoffs: holdsBotHandoffs(device, dependencies),
+          handoffNotes: holdsBotHandoffNotes(device, dependencies),
+          handoffOnMac: holdsBotHandoffOnMac(device, dependencies),
+          images: holdsBotImages(device, dependencies),
+          issues: holdsBotIssues(device, dependencies),
+          accessRequests: holdsBotAccessRequests(device, dependencies),
+          plans: holdsBotPlans(device, dependencies),
+          allowed: holdsBotAllowed(device, dependencies),
+          peers: holdsBotPeers(device, dependencies),
+          approvalCards: holdsApprovalCards(device),
+          settingsChanges: holdsBotSettingsChanges(device, dependencies),
+          suggestions: holdsBotSuggestions(device, dependencies),
+        }));
+        return;
+      }
+      const botQueuedWithdrawMatch = /^\/bots\/([A-Za-z0-9._:-]{1,160})\/queued\/([A-Za-z0-9._:-]{1,64})\/withdraw$/u.exec(path);
+      if (botQueuedWithdrawMatch && request.method === "POST") {
+        requireNoQuery(query);
+        route = "botQueuedWithdraw";
+        const body = await readJsonBody(request);
+        const device = await authenticate(request, dependencies.devices, "bot:write");
+        deviceIdSuffix = device.id.slice(-8);
+        // Only a device that is shown the queue may take a message back from it.
+        requireDeviceCapabilities(device, ["bot:read", "chat:write", "bot:activity"]);
+        if (!botActivityWired(dependencies) || !dependencies.botSessions?.withdrawQueued) {
+          throw new AidenRemoteServiceError("not_found", "This endpoint is unavailable.", 404);
+        }
+        const key = requiredHeader(request, "idempotency-key", /^[\x21-\x7e]{16,128}$/u);
+        writeJson(response, 200, await dependencies.botSessions.withdrawQueued(
+          device.id, botQueuedWithdrawMatch[1]!, botQueuedWithdrawMatch[2]!, key, body,
+        ));
         return;
       }
       const botSessionImageMatch =

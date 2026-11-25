@@ -2993,6 +2993,27 @@ final class AidenChatTests: XCTestCase {
         XCTAssertEqual(Set(mac.keys).count, 1, "The same normalized request keeps its key while its outcome is unknown.")
     }
 
+    /// A structured 503 does not prove the Mac made no fork, so the retry must
+    /// replay the same key rather than risk a second copy.
+    @MainActor
+    func testForkKeepsItsKeyAfterAStructuredServiceUnavailableAndOpensTheOriginalFork() async throws {
+        let root = FileManager.default.temporaryDirectory.appending(path: "aiden-fork-unavailable-\(UUID())")
+        defer { try? FileManager.default.removeItem(at: root); AidenChatProgressLifecycleURLProtocol.reset() }
+        let mac = AidenForkLedgerMac(plan: [.commitButAnswerUnavailable])
+        let model = try await makeForkLedgerModel(mac: mac, root: root)
+
+        let unavailable = await model.fork(messageId: "message-a1", action: .forkHere)
+        XCTAssertNil(unavailable)
+        XCTAssertNotNil(model.presentedError)
+
+        model.presentedError = nil
+        let retried = await model.fork(messageId: "message-a1", action: .forkHere)
+        XCTAssertEqual(retried?.id, "chat-fork-1", "The retry opens the fork the first request created.")
+        XCTAssertEqual(mac.createdForkIDs, ["chat-fork-1"], "Retrying never makes a second copy.")
+        XCTAssertEqual(mac.keys.count, 2)
+        XCTAssertEqual(Set(mac.keys).count, 1, "The retry replays the same Idempotency-Key.")
+    }
+
     @MainActor
     func testForkMintsAFreshKeyAfterTheMacRejectsItAsBusy() async throws {
         let root = FileManager.default.temporaryDirectory.appending(path: "aiden-fork-busy-\(UUID())")
@@ -15539,6 +15560,8 @@ private final class AidenForkLedgerMac: @unchecked Sendable {
         case inFlight
         /// 409 `operation_in_progress`: a different fork holds the source.
         case busy
+        /// Creates the fork, then answers a structured 503 `internal_error`.
+        case commitButAnswerUnavailable
     }
 
     private let lock = NSLock()
@@ -15568,12 +15591,15 @@ private final class AidenForkLedgerMac: @unchecked Sendable {
                 return (409, "application/json", Self.error(code: "operation_in_progress", message: "Another fork is being created."))
             case .inFlight:
                 return (409, "application/json", Self.error(code: "idempotency_in_flight", message: "This request is still running."))
-            case .commitButLoseResponse, nil:
+            case .commitButLoseResponse, .commitButAnswerUnavailable, nil:
                 let forkID = "chat-fork-\(created.count + 1)"
                 created.append(forkID)
                 ledger[key] = forkID
                 if reply == .commitButLoseResponse {
                     return (AidenChatProgressLifecycleURLProtocol.connectionLostStatus, "", Data())
+                }
+                if reply == .commitButAnswerUnavailable {
+                    return (503, "application/json", Self.error(code: "internal_error", message: "Try again."))
                 }
                 return (201, "application/json", Self.result(forkID: forkID, request: request))
             }

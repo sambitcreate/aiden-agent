@@ -1775,6 +1775,38 @@ final class AidenBotSessionQuestionTests: XCTestCase {
         XCTAssertNil(model.question)
     }
 
+    func testReplayed409InternalErrorAfterLostQuestionAnswerReleasesSettledKeyForFreshAttempt() async throws {
+        func serverError(_ status: Int, _ code: String) throws -> AidenRemoteClientError {
+            let body = try AidenRemoteJSONDecoder.decode(
+                AidenRemoteErrorEnvelope.Body.self,
+                from: Data(#"{"code":"\#(code)","message":"This Bot request cannot be safely repeated.","requestId":"req_question_replay","retryable":false}"#.utf8)
+            )
+            return .server(statusCode: status, body: body)
+        }
+
+        let transport = QuestionTransport(snapshot: try session(question: questionJSON))
+        let model = AidenBotSessionModel(botID: botID, transport: transport, owner: .noMachine)
+        await model.load()
+        let blue = AidenQuestionRespondRequest(cancelled: false, answers: [.option(questionIndex: 0, answer: "Blue")])
+
+        transport.nextAnswerError = URLError(.networkConnectionLost)
+        await model.answerQuestion(blue)
+        transport.nextAnswerError = try serverError(409, "idempotency_in_flight")
+        await model.answerQuestion(blue)
+        transport.nextAnswerError = AidenRemoteClientError.unexpectedStatus(409)
+        await model.answerQuestion(blue)
+        transport.nextAnswerError = try serverError(409, "internal_error")
+        await model.answerQuestion(blue)
+        await model.answerQuestion(blue)
+
+        XCTAssertEqual(transport.answers.count, 5)
+        XCTAssertEqual(transport.answers[0].key, transport.answers[1].key, "Lost response retains key")
+        XCTAssertEqual(transport.answers[1].key, transport.answers[2].key, "409 idempotency_in_flight retains key")
+        XCTAssertEqual(transport.answers[2].key, transport.answers[3].key, "Undecodable 409 retains key")
+        XCTAssertNotEqual(transport.answers[3].key, transport.answers[4].key, "Decoded replayed 409 internal_error releases settled key so fresh attempt mints a new key")
+        XCTAssertNil(model.question)
+    }
+
     func testQuestionEventsShowAndSettleTheWaitingQuestion() async throws {
         let transport = QuestionTransport(snapshot: try session(question: "null"))
         let model = AidenBotSessionModel(botID: botID, transport: transport, owner: .noMachine)
