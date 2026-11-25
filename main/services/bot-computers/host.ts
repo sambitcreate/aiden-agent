@@ -969,15 +969,28 @@ export function createBotComputerHost(deps: BotComputerHostDependencies): BotCom
     }
   }
 
+  const LINUX_BASE_BUILD_PATTERN = /^\d{8}-\d+$/u;
+  function isLinuxBuild(build: string | undefined): boolean {
+    return build !== undefined && LINUX_BASE_BUILD_PATTERN.test(build);
+  }
+  function isLegacyMacosRecord(record: BotComputerRecord, state: BotComputersState): boolean {
+    if (record.migratedFromMacos) return true;
+    if (state.setup.guestOs === "linux") return false;
+    return record.baseBuild.length > 0 && !isLinuxBuild(record.baseBuild);
+  }
+
   function ready(state: BotComputersState): boolean {
-    return state.setup.baseBuild !== undefined;
+    return (
+      state.setup.baseBuild !== undefined &&
+      (state.setup.guestOs === "linux" || isLinuxBuild(state.setup.baseBuild))
+    );
   }
 
   function currentSetup(state: BotComputersState): BotComputerSetupState {
     const support = deps.support();
     if (!support.ok) return { kind: "unsupported", reason: support.reason };
     if (setupState) return setupState;
-    if (state.setup.baseBuild) {
+    if (ready(state) && state.setup.baseBuild) {
       return {
         kind: "ready",
         baseVersion: state.setup.baseVersion ?? image.version,
@@ -992,12 +1005,13 @@ export function createBotComputerHost(deps: BotComputerHostDependencies): BotCom
     const entry = runtimes.get(botId);
     const lastUsedAt = entry?.lastUsedAt ?? record.lastUsedAt;
     const text = activity.get(botId);
+    const legacy = isLegacyMacosRecord(record, state);
     return {
       botId,
       vmName: record.vmName,
       state: stale.has(botId) ? "stale" : (entry?.state ?? "stopped"),
       baseBuild: record.baseBuild,
-      outdated: !record.migratedFromMacos && state.setup.baseBuild !== undefined && record.baseBuild !== state.setup.baseBuild,
+      outdated: !legacy && ready(state) && record.baseBuild !== state.setup.baseBuild,
       ...(lastUsedAt !== undefined ? { lastUsedAt } : {}),
       controller: control.controller(botId),
       ...(text ? { activity: text } : {}),
@@ -1143,7 +1157,7 @@ export function createBotComputerHost(deps: BotComputerHostDependencies): BotCom
       };
       if (draft.macosMigration?.completedAt !== undefined) {
         draft.macosMigration.noticeDismissed = true;
-      } else {
+      } else if (draft.macosMigration === undefined) {
         draft.macosMigration = {
           completedAt: now(),
           freedBytes: 0,
@@ -1506,7 +1520,7 @@ export function createBotComputerHost(deps: BotComputerHostDependencies): BotCom
       const initialState = await store.read();
       let record = initialState.computers[botId];
       if (!record) throw new BotComputerError("no_computer", `${await name(botId)} doesn't have a computer yet.`);
-      if (record.migratedFromMacos) {
+      if (isLegacyMacosRecord(record, initialState)) {
         if (!ready(initialState)) {
           throw new BotComputerError(
             "not_set_up",
@@ -1520,7 +1534,7 @@ export function createBotComputerHost(deps: BotComputerHostDependencies): BotCom
           const latest = await store.read();
           const current = latest.computers[botId];
           if (!current) throw new BotComputerError("no_computer", `${await name(botId)} doesn't have a computer yet.`);
-          if (!current.migratedFromMacos) return current;
+          if (!isLegacyMacosRecord(current, latest)) return current;
           if (!ready(latest)) {
             throw new BotComputerError(
               "not_set_up",
@@ -1633,9 +1647,10 @@ export function createBotComputerHost(deps: BotComputerHostDependencies): BotCom
     async guestDriver(botId) {
       const state = await store.read();
       const record = state.computers[botId];
+      const legacy = record ? isLegacyMacosRecord(record, state) : false;
       const driver =
-        record?.guestDriver ??
-        (record?.migratedFromMacos && ready(state) ? state.setup.guestDriver : undefined);
+        (!legacy ? record?.guestDriver : undefined) ??
+        (legacy && ready(state) ? state.setup.guestDriver : undefined);
       if (!driver || !guestDriverReady(driver)) return undefined;
       const location: GuestDriverLocation = { home: driver.home, uid: driver.uid };
       return guestHostFor(async () => {
@@ -1709,83 +1724,85 @@ export function createBotComputerHost(deps: BotComputerHostDependencies): BotCom
         const hasPendingMigration =
           state.macosMigration !== undefined && state.macosMigration.completedAt === undefined;
         if (macosVms.length > 0 || legacyIpswPaths.length > 0 || hasLegacyState || hasPendingMigration) {
-          let freedThisPass = 0;
-          let allRemoved = true;
-          for (const info of macosVms) {
-            if ((await vmsInUse()).has(info.name)) {
-              allRemoved = false;
-              continue;
-            }
-            const vmDir = path.join(dirs.vms, info.name);
-            const dirBytes = existsSync(vmDir) ? await allocatedBytes(vmDir).catch(() => 0) : 0;
-            const vmBytes = dirBytes > 0 ? dirBytes : (info.diskAllocatedBytes ?? 0);
-            if (info.state === "running") {
-              await stopVm(info.name, true).catch((error: unknown) =>
-                log("Stopping a legacy macOS Bot computer did not finish.", error),
-              );
-            }
-            try {
-              await deleteVm(info.name);
-              freedThisPass += vmBytes;
-              byName.delete(info.name);
-            } catch (error: unknown) {
-              allRemoved = false;
-              log("Deleting a legacy macOS Bot computer did not finish.", error);
-            }
-          }
-          for (const file of legacyIpswPaths) {
-            const alloc = await allocatedBytes(file).catch(() => 0);
-            const size = alloc > 0 ? alloc : await stat(file).then((entry) => entry.size).catch(() => 0);
-            try {
-              await rm(file, { force: true });
-              freedThisPass += size;
-            } catch (error: unknown) {
-              allRemoved = false;
-              log("Deleting a legacy Apple restore image did not finish.", error);
-            }
-          }
-          const clearLegacySetup = state.setup.guestOs !== "linux";
-          if (clearLegacySetup) {
-            await deps.secrets
-              .deleteFamily(BOT_COMPUTER_SECRET_FAMILY)
-              .catch((error: unknown) => log("Removing old guest password did not finish.", error));
-          }
-          const migratedBotIds: string[] = [];
-          state = await store.update((draft) => {
-            if (draft.setup.guestOs !== "linux") {
-              draft.setup = {};
-              for (const [botId, rec] of Object.entries(draft.computers)) {
-                if (rec.migratedFromMacos) continue;
-                migratedBotIds.push(botId);
-                draft.computers[botId] = {
-                  vmName: rec.vmName,
-                  baseBuild: "",
-                  createdAt: rec.createdAt,
-                  ...(rec.lastUsedAt !== undefined ? { lastUsedAt: rec.lastUsedAt } : {}),
-                  migratedFromMacos: true,
-                };
+          await inTurn(undefined, async () => {
+            let freedThisPass = 0;
+            let allRemoved = true;
+            for (const info of macosVms) {
+              if ((await vmsInUse()).has(info.name)) {
+                allRemoved = false;
+                continue;
+              }
+              const vmDir = path.join(dirs.vms, info.name);
+              const dirBytes = existsSync(vmDir) ? await allocatedBytes(vmDir).catch(() => 0) : 0;
+              const vmBytes = dirBytes > 0 ? dirBytes : (info.diskAllocatedBytes ?? 0);
+              if (info.state === "running") {
+                await stopVm(info.name, true).catch((error: unknown) =>
+                  log("Stopping a legacy macOS Bot computer did not finish.", error),
+                );
+              }
+              try {
+                await deleteVm(info.name);
+                freedThisPass += vmBytes;
+                byName.delete(info.name);
+              } catch (error: unknown) {
+                allRemoved = false;
+                log("Deleting a legacy macOS Bot computer did not finish.", error);
               }
             }
-            const totalFreedBytes = (draft.macosMigration?.freedBytes ?? 0) + freedThisPass;
-            draft.macosMigration = allRemoved
-              ? {
-                  completedAt: now(),
-                  freedBytes: totalFreedBytes,
-                  noticeDismissed: false,
+            for (const file of legacyIpswPaths) {
+              const alloc = await allocatedBytes(file).catch(() => 0);
+              const size = alloc > 0 ? alloc : await stat(file).then((entry) => entry.size).catch(() => 0);
+              try {
+                await rm(file, { force: true });
+                freedThisPass += size;
+              } catch (error: unknown) {
+                allRemoved = false;
+                log("Deleting a legacy Apple restore image did not finish.", error);
+              }
+            }
+            const clearLegacySetup = state.setup.guestOs !== "linux";
+            if (clearLegacySetup) {
+              await deps.secrets
+                .deleteFamily(BOT_COMPUTER_SECRET_FAMILY)
+                .catch((error: unknown) => log("Removing old guest password did not finish.", error));
+            }
+            const migratedBotIds: string[] = [];
+            state = await store.update((draft) => {
+              if (draft.setup.guestOs !== "linux") {
+                draft.setup = {};
+                for (const [botId, rec] of Object.entries(draft.computers)) {
+                  if (rec.migratedFromMacos) continue;
+                  migratedBotIds.push(botId);
+                  draft.computers[botId] = {
+                    vmName: rec.vmName,
+                    baseBuild: "",
+                    createdAt: rec.createdAt,
+                    ...(rec.lastUsedAt !== undefined ? { lastUsedAt: rec.lastUsedAt } : {}),
+                    migratedFromMacos: true,
+                  };
                 }
-              : {
-                  freedBytes: totalFreedBytes,
-                };
+              }
+              const totalFreedBytes = (draft.macosMigration?.freedBytes ?? 0) + freedThisPass;
+              draft.macosMigration = allRemoved
+                ? {
+                    completedAt: now(),
+                    freedBytes: totalFreedBytes,
+                    noticeDismissed: false,
+                  }
+                : {
+                    freedBytes: totalFreedBytes,
+                  };
+            });
+            for (const botId of migratedBotIds) {
+              stale.delete(botId);
+              await Promise.resolve(deps.onMacosComputerMigrated?.(botId, BOT_COMPUTER_LINUX_MIGRATION_BOT_NOTE)).catch(
+                (error: unknown) => log("Writing Linux migration note to Bot memory did not finish.", error),
+              );
+            }
+            if (allRemoved || freedThisPass > 0 || migratedBotIds.length > 0) {
+              deps.onRemoved?.();
+            }
           });
-          for (const botId of migratedBotIds) {
-            stale.delete(botId);
-            await Promise.resolve(deps.onMacosComputerMigrated?.(botId, BOT_COMPUTER_LINUX_MIGRATION_BOT_NOTE)).catch(
-              (error: unknown) => log("Writing Linux migration note to Bot memory did not finish.", error),
-            );
-          }
-          if (allRemoved || freedThisPass > 0 || migratedBotIds.length > 0) {
-            deps.onRemoved?.();
-          }
         } else if (state.setup.guestOs === "linux") {
           state = await store.update((draft) => {
             if (!draft.macosMigration?.completedAt) {

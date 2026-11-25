@@ -2286,3 +2286,63 @@ test("missing aiden-base on a Linux install never triggers bogus macOS migration
     { image: linuxImage },
   );
 });
+
+test("unmigrated macOS state fails closed before reconcile and Linux setup preserves partial macosMigration", async () => {
+  const linuxRaw = Buffer.from("debian f4 partial migration image\n".repeat(64));
+  const linuxImage = {
+    version: "13",
+    build: "20261123-2671",
+    url: "https://cloud.debian.org/images/debian-f4-partial.raw",
+    bytes: linuxRaw.length,
+    sha256: createHash("sha256").update(linuxRaw).digest("hex"),
+  };
+  await withHost(
+    async (context) => {
+      context.serve(linuxImage.url, linuxRaw);
+      const adaVm = botComputerVmName("ada");
+      mkdirSync(context.root, { recursive: true });
+      const stateFile = path.join(context.root, "state.json");
+      writeFileSync(
+        stateFile,
+        JSON.stringify({
+          version: 1,
+          settings: { maxRunning: 2, idleStopMinutes: 10 },
+          setup: { baseBuild: "25D125", baseVersion: "26.3" },
+          computers: {
+            ada: { vmName: adaVm, baseBuild: "25D125", createdAt: 100 },
+          },
+        }),
+      );
+
+      // Before reconcile() runs, unmigrated macOS state must never look ready or boot the macOS VM.
+      const before = context.relaunch({ image: linuxImage });
+      assert.equal(await before.baseReady(), false);
+      assert.equal((await before.status()).setup.kind, "not_set_up");
+      await assert.rejects(
+        before.ensureRunning("ada", { reason: "tool" }),
+        (error: unknown) => error instanceof BotComputerError && error.code === "not_set_up",
+      );
+
+      // Seed a partial macosMigration (completedAt unset) and complete Linux Set up:
+      // freedBytes must stay and completedAt must remain unset so a later reconcile finishes cleanup.
+      writeFileSync(
+        stateFile,
+        JSON.stringify({
+          version: 1,
+          settings: { maxRunning: 2, idleStopMinutes: 10 },
+          setup: {},
+          computers: {},
+          macosMigration: { freedBytes: 12345 },
+        }),
+      );
+      const partialHost = context.relaunch({ image: linuxImage });
+      await setUp({ ...context, host: partialHost });
+      const persisted = JSON.parse(readFileSync(stateFile, "utf8")) as {
+        macosMigration?: { completedAt?: number; freedBytes: number };
+      };
+      assert.equal(persisted.macosMigration?.completedAt, undefined);
+      assert.equal(persisted.macosMigration?.freedBytes, 12345);
+    },
+    { image: linuxImage },
+  );
+});
