@@ -56,6 +56,10 @@ struct AidenComposerControls: Equatable {
     /// False while another control takes the mic's place.
     var offersMic = true
     var micIsEnabled = true
+    /// What the mic does when it isn't dictating into the field: Home's
+    /// starts a voice chat instead.
+    var micLabel = String(localized: "Start voice input")
+    var micHint: String? = nil
     var submitsOnReturn = false
 }
 
@@ -337,7 +341,8 @@ struct AidenComposerSurface<
             .frame(width: actionSize, height: actionSize)
         }
         .disabled(!session.isRecording && (!controls.micIsEnabled || session.isVoiceBusy))
-        .accessibilityLabel(session.isRecording ? "Stop voice input" : "Start voice input")
+        .accessibilityLabel(session.isRecording ? String(localized: "Stop voice input") : controls.micLabel)
+        .accessibilityHint(session.isRecording ? "" : controls.micHint ?? "")
     }
 
     /// Dictation ends before Send reads the words, so nothing lands after it.

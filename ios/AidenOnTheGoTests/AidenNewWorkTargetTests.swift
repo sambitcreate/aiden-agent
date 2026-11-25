@@ -56,15 +56,29 @@ final class AidenNewWorkTargetTests: XCTestCase {
     private func flow(
         readinessWait: Duration = .seconds(30),
         draftStore: AidenChatDraftStore = .shared,
-        onCreated: @escaping @MainActor (AidenChat, AidenHostObjectID) -> Void = { _, _ in }
+        onCreated: @escaping @MainActor (AidenChat, AidenHostObjectID) -> Void = { _, _ in },
+        onLaunch: @escaping @MainActor (AidenHostObjectID, String?) -> Void = { _, _ in }
     ) -> AidenNewWorkChatFlow {
         AidenNewWorkChatFlow(
             coordinator: coordinator,
             preferences: preferences,
             readinessWait: readinessWait,
             draftStore: draftStore,
-            onCreated: onCreated
+            onCreated: { chat, id, prompt in
+                onLaunch(id, prompt)
+                onCreated(chat, id)
+            }
         )
+    }
+
+    private func homeComposer(store: AidenChatDraftStore, defaults: UserDefaults) -> AidenHomeComposerModel {
+        AidenHomeComposerModel(store: store, defaults: defaults, saveDelay: .zero)
+    }
+
+    private func refuseNewChat(on instanceId: String) {
+        responder.reply(instanceId: instanceId, method: "POST", path: "/chats", status: 400, json: Data("""
+        {"error":{"code":"invalid_request","message":"No.","requestId":"r1","retryable":false}}
+        """.utf8))
     }
 
     private func temporaryDraftStore() -> AidenChatDraftStore {
@@ -285,44 +299,143 @@ final class AidenNewWorkTargetTests: XCTestCase {
         XCTAssertFalse(flow.isCreating)
     }
 
-    func testHomesPromptIsWaitingInTheNewChatsComposer() async throws {
+    // MARK: Home's Send
+
+    func testHomesSendStartsAChatOnItsMachineThatSendsTheWords() async throws {
         await connectAll()
-        replyToNewChat(on: "laptop")
+        replyToNewChat(on: "laptop", workspaceId: "default")
         let drafts = temporaryDraftStore()
-        var opened = 0
-        let flow = flow(draftStore: drafts) { _, _ in opened += 1 }
+        var launched: [(AidenHostObjectID, String?)] = []
+        let flow = flow(draftStore: drafts, onLaunch: { launched.append(($0, $1)) })
 
-        XCTAssertTrue(flow.picker.pick("laptop"))
-        await flow.select(.existingWorkspace, prompt: "Summarise yesterday's PRs")
-        XCTAssertTrue(flow.isChoosingWorkspace)
-        let workspace = try XCTUnwrap(flow.existingWorkspaces.first)
-        await flow.create(in: workspace)
+        let outcome = await flow.startChat(sending: "Summarise yesterday's PRs", on: AidenNewWorkTarget(instanceId: "laptop"))
 
+        let id = AidenHostObjectID(instanceId: "laptop", deviceId: try connection("laptop").installation.deviceId, objectId: "chat_new_laptop")
+        XCTAssertEqual(outcome, .started(id))
+        XCTAssertEqual(posts("/chats", on: "laptop"), 1)
+        XCTAssertEqual(posts("/chats", on: "studio"), 0)
+        XCTAssertEqual(launched.map(\.0), [id])
+        XCTAssertEqual(launched.map(\.1), ["Summarise yesterday's PRs"], "The chat is told to send, not just to hold the words")
+        // Also its draft, so a launch that ends before sending keeps the words.
         let session = await drafts.beginSession(instanceId: "laptop", chatId: "chat_new_laptop")
         let draft = await drafts.load(session: session)
         XCTAssertEqual(draft, "Summarise yesterday's PRs")
-        XCTAssertEqual(flow.deliveredPromptCount, 1)
-        XCTAssertEqual(opened, 1)
     }
 
-    func testAStartFromTheNewChatButtonCarriesNoEarlierPrompt() async throws {
+    func testTwoHomeSendsEachReachTheirOwnChatAndNeverHoldTheNewChatButton() async throws {
         await connectAll()
-        replyToNewChat(on: "laptop")
-        let drafts = temporaryDraftStore()
-        let flow = flow(draftStore: drafts)
+        replyToNewChat(on: "laptop", workspaceId: "default")
+        replyToNewChat(on: "mini", workspaceId: "default")
+        let release = responder.hold(instanceId: "laptop", path: "/chats")
+        var launched: [String: String?] = [:]
+        let flow = flow(draftStore: temporaryDraftStore(), onLaunch: { launched[$0.instanceId] = $1 })
 
-        XCTAssertTrue(flow.picker.pick("laptop"))
-        // Home asked, then the person dismissed the workspace sheet.
-        await flow.select(.existingWorkspace, prompt: "Left behind")
-        flow.isChoosingWorkspace = false
-        await flow.select(.existingWorkspace)
-        let workspace = try XCTUnwrap(flow.existingWorkspaces.first)
-        await flow.create(in: workspace)
+        let first = Task { await flow.startChat(sending: "First", on: AidenNewWorkTarget(instanceId: "laptop")) }
+        await assertSettles { self.responder.requests(instanceId: "laptop").contains("POST /chats") }
+        XCTAssertFalse(flow.isCreating, "Home's Send leaves the New chat button free")
+        XCTAssertEqual(flow.status, "", "Home's Send says nothing in New chat's status line")
+        let second = await flow.startChat(sending: "Second", on: AidenNewWorkTarget(instanceId: "mini"))
+        release()
+        let firstOutcome = await first.value
 
-        let session = await drafts.beginSession(instanceId: "laptop", chatId: "chat_new_laptop")
-        let draft = await drafts.load(session: session)
-        XCTAssertNil(draft)
-        XCTAssertEqual(flow.deliveredPromptCount, 0)
+        guard case .started = firstOutcome, case .started = second else {
+            return XCTFail("Both sends should start chats: \(firstOutcome), \(second)")
+        }
+        XCTAssertEqual(launched["laptop"], "First")
+        XCTAssertEqual(launched["mini"], "Second")
+    }
+
+    func testHomesSendToAMachineWithoutAChatsHomeAsksWhereItRuns() async throws {
+        await connectAll()
+        responder.reply(instanceId: "laptop", path: "/workspaces", status: 200, json: Data("""
+        {"workspaces":[{"id":"workspace_laptop","name":"Laptop work","permission":"ask","memoryEnabled":true,
+        "hasFolder":true,"isManagedWorktree":false,"createdAt":"2026-08-19T19:00:00.000Z",
+        "updatedAt":"2026-08-19T19:00:00.000Z","revision":"workspace_revision_1"}]}
+        """.utf8))
+        await coordinator.hosts.connection(for: "laptop")?.connect()
+        var launched = 0
+        let flow = flow(draftStore: temporaryDraftStore(), onLaunch: { _, _ in launched += 1 })
+
+        let outcome = await flow.startChat(sending: "Hello", on: AidenNewWorkTarget(instanceId: "laptop"))
+
+        XCTAssertEqual(outcome, .needsChoice)
+        XCTAssertEqual(posts("/chats", on: "laptop"), 0)
+        XCTAssertEqual(launched, 0)
+    }
+
+    func testHomesSendTakesTheWordsAndKeepsWhatIsTypedWhileTheChatStarts() async throws {
+        await connectAll()
+        replyToNewChat(on: "laptop", workspaceId: "default")
+        let release = responder.hold(instanceId: "laptop", path: "/chats")
+        let defaults = AidenDemoHosts.isolatedDefaults()
+        let flow = flow(draftStore: temporaryDraftStore())
+        let home = homeComposer(store: temporaryDraftStore(), defaults: defaults)
+        await home.restored()
+        XCTAssertTrue(flow.homePicker.pick("laptop"))
+
+        home.session.text = "Summarise yesterday's PRs"
+        home.send(using: flow)
+        XCTAssertEqual(home.session.text, "", "Send empties the field at once")
+        XCTAssertEqual(home.status, "Starting a chat on Laptop…")
+        home.session.text = "And then the calendar"
+        release()
+        await assertSettles { home.pendingSends == 0 }
+
+        XCTAssertEqual(home.session.text, "And then the calendar")
+        XCTAssertNil(home.status)
+        XCTAssertNil(home.notice)
+        XCTAssertEqual(home.lastMachine, "laptop")
+    }
+
+    func testAHomeSendThatMakesNoChatGivesTheWordsBackAheadOfNewOnes() async throws {
+        await connectAll()
+        refuseNewChat(on: "laptop")
+        let release = responder.hold(instanceId: "laptop", path: "/chats")
+        var launched = 0
+        let flow = flow(draftStore: temporaryDraftStore(), onLaunch: { _, _ in launched += 1 })
+        let home = homeComposer(store: temporaryDraftStore(), defaults: AidenDemoHosts.isolatedDefaults())
+        await home.restored()
+        XCTAssertTrue(flow.homePicker.pick("laptop"))
+
+        home.session.text = "First thought"
+        home.send(using: flow)
+        home.session.text = "second"
+        release()
+        await assertSettles { home.pendingSends == 0 }
+
+        XCTAssertEqual(home.session.text, "First thought\n\nsecond")
+        XCTAssertEqual(launched, 0)
+        XCTAssertNil(home.lastMachine, "A send that made nothing isn't the last machine used")
+    }
+
+    func testHomeStartsOnTheLastMachineItUsed() async throws {
+        await connectAll()
+        let defaults = AidenDemoHosts.isolatedDefaults()
+        defaults.set("mini", forKey: AidenHomeComposerModel.lastMachineKey)
+        let flow = flow()
+        let home = homeComposer(store: temporaryDraftStore(), defaults: defaults)
+
+        home.aim(flow.homePicker)
+
+        XCTAssertEqual(flow.homePicker.target?.instanceId, "mini")
+        XCTAssertEqual(flow.picker.target?.instanceId, "studio", "Home's chip never moves the New chat button's")
+    }
+
+    func testHomesDraftComesBackInTheNextComposer() async throws {
+        let store = temporaryDraftStore()
+        let defaults = AidenDemoHosts.isolatedDefaults()
+        let first = homeComposer(store: store, defaults: defaults)
+        await first.restored()
+        first.session.text = "Half a thought"
+        first.textChanged()
+        await first.saved()
+
+        // A fold rebuilds the layout and a relaunch rebuilds everything; both
+        // read the same saved draft.
+        let next = homeComposer(store: store, defaults: defaults)
+        await next.restored()
+
+        XCTAssertEqual(next.session.text, "Half a thought")
     }
 
     func testPickingAMachineMidwayDoesNotReaimAChatBeingCreated() async throws {

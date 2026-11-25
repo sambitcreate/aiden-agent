@@ -488,6 +488,63 @@ final class AidenShellUITests: XCTestCase {
         off.terminate()
     }
 
+    /// Home's Send starts a chat on the chosen computer and opens it with the
+    /// words sent, leaving Home's field empty for the next thought.
+    func testHomeSendStartsAChat() {
+        let app = AidenStateMatrix.launch(scenario: .full)
+        AidenStateMatrix.openArea("Chats", in: app)
+        let home = app.descendants(matching: .any).matching(identifier: "home.composer").firstMatch
+        XCTAssertTrue(home.waitForExistence(timeout: 10), "No Home composer")
+        let field = app.descendants(matching: .any).matching(NSPredicate(
+            format: "(elementType == %d OR elementType == %d) AND (identifier == %@ OR placeholderValue == %@)",
+            XCUIElement.ElementType.textField.rawValue,
+            XCUIElement.ElementType.textView.rawValue,
+            "home.composer",
+            "Ask anything"
+        )).firstMatch
+        XCTAssertTrue(field.waitForExistence(timeout: 5), "No Home field")
+        field.tap()
+        let prompt = "Plan the launch checklist"
+        field.typeText(prompt)
+        let send = app.buttons["Start chat"].firstMatch
+        XCTAssertTrue(send.waitForExistence(timeout: 5), "No Start chat button")
+        send.tap()
+
+        // One press opens the new chat with the words in its transcript.
+        let sent = app.staticTexts.matching(NSPredicate(format: "label CONTAINS %@", prompt)).firstMatch
+        XCTAssertTrue(sent.waitForExistence(timeout: 15), "The new chat doesn't show the words Home sent")
+        AidenStateMatrix.capture("home-send-opened", in: self)
+        app.terminate()
+    }
+
+    /// Home never shows an empty "Nothing new" for a state it can explain: a
+    /// machine with no Bots offers the first one, an offline machine says so,
+    /// and a machine still connecting shows skeletons.
+    func testHomeExplainsEmptyOfflineAndLoading() {
+        let empty = AidenStateMatrix.launch(scenario: .empty)
+        AidenStateMatrix.openArea("Chats", in: empty)
+        XCTAssertTrue(empty.buttons["home.bots.first"].firstMatch.waitForExistence(timeout: 10), "No Make your first Bot")
+        XCTAssertFalse(empty.staticTexts["home.digest.empty"].exists, "Home said nothing new with no Bots")
+        AidenStateMatrix.capture("home-no-bots", in: self)
+        empty.terminate()
+
+        let offline = AidenStateMatrix.launch(scenario: .one, extraArguments: ["-AidenDemoDefaultOffline"])
+        AidenStateMatrix.openArea("Chats", in: offline)
+        let note = offline.descendants(matching: .any)["home.bots.offline"].firstMatch
+        XCTAssertTrue(note.waitForExistence(timeout: 15), "No offline explanation")
+        XCTAssertFalse(offline.staticTexts["home.digest.empty"].exists, "Home said nothing new while offline")
+        AidenStateMatrix.capture("home-offline", in: self)
+        offline.terminate()
+
+        let loading = AidenStateMatrix.launch(scenario: .full, extraArguments: ["-AidenDemoSlowConnect"])
+        AidenStateMatrix.openArea("Chats", in: loading)
+        let skeleton = loading.descendants(matching: .any)["home.bots.loading"].firstMatch
+        XCTAssertTrue(skeleton.waitForExistence(timeout: 10), "No Bot skeletons while connecting")
+        XCTAssertFalse(loading.staticTexts["home.digest.empty"].exists, "Home said nothing new while connecting")
+        AidenStateMatrix.capture("home-loading", in: self)
+        loading.terminate()
+    }
+
     /// A row's menu opens with what its swipes offer, and a row waiting on a
     /// decision offers neither Done nor Snooze either way.
     func testRowMenusMatchTheirSwipes() {

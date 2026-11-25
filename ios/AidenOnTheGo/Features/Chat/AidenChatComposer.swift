@@ -67,6 +67,7 @@ struct AidenComposerView: View {
         .task {
             await model.startVoiceForLaunch(if: autoStartVoice) { await toggleVoice() }
         }
+        .task(id: model.canSend) { model.sendForLaunch() }
     }
 
     private var config: AidenComposerConfig {

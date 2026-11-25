@@ -146,6 +146,116 @@ final class AidenHomeDigestTests: XCTestCase {
         XCTAssertEqual(digest.rows[0].preview, "The run failed.")
     }
 
+    func testAResolvedIssueNoLongerHoldsItsBotAtNeedsYou() {
+        // The Mac counts no open issue (it omits the count at zero); the feed still remembers the card.
+        let digest = AidenHomeDigest.make(
+            bots: entries(bot("scout"), bot("ada")),
+            feed: feed(
+                item("i1", bot: "scout", kind: "issue", name: "Approve the deploy", preview: "", minutesAgo: 5),
+                item("r1", bot: "ada", minutesAgo: 1)
+            )
+        )
+
+        XCTAssertFalse(digest.rows.contains { $0.status == .needsYou })
+        XCTAssertFalse(digest.rows.contains { $0.title == "Approve the deploy" })
+        XCTAssertEqual(digest.rows.map(\.bot.id), ["ada"], "A Bot with only a resolved issue has nothing to say")
+    }
+
+    func testAnIssueTitleFromTheFeedIsntReusedForAnotherReasonToNeedYou() {
+        // Stopped mid-run, with an old resolved issue still in the feed.
+        let digest = AidenHomeDigest.make(
+            bots: entries(bot("scout", state: "interrupted")),
+            feed: feed(item("i1", bot: "scout", kind: "issue", name: "Approve the deploy", preview: "Old", minutesAgo: 5))
+        )
+
+        XCTAssertEqual(digest.rows.map(\.status), [.needsYou])
+        XCTAssertNotEqual(digest.rows.first?.title, "Approve the deploy")
+        XCTAssertEqual(digest.rows.first?.preview, "")
+    }
+
+    func testAFailedRunOutranksWorkAndNewerNewsButNotWhatNeedsYou() {
+        let digest = AidenHomeDigest.make(
+            bots: entries(
+                bot("fresh"),
+                bot("busy", state: "running", minutesAgo: 1),
+                bot("broken"),
+                bot("stuck", issues: 1, minutesAgo: 300)
+            ),
+            feed: feed(
+                item("r1", bot: "fresh", minutesAgo: 1),
+                item("r2", bot: "broken", status: "failed", minutesAgo: 240)
+            ),
+            limit: 4
+        )
+
+        XCTAssertEqual(digest.rows.map(\.bot.id), ["stuck", "broken", "busy", "fresh"])
+        XCTAssertEqual(digest.rows.map(\.status), [.needsYou, .failed, .working, .update])
+    }
+
+    func testOldNewsMakesNoRowButWhatNeedsYouOrWorksStillShows() {
+        let digest = AidenHomeDigest.make(
+            bots: entries(bot("old"), bot("stuck", issues: 1, minutesAgo: 3000), bot("busy", state: "running"), bot("new")),
+            feed: feed(
+                item("o", bot: "old", minutesAgo: 2 * 24 * 60),
+                item("b", bot: "busy", name: "Weekly sweep", minutesAgo: 2 * 24 * 60),
+                item("n", bot: "new", minutesAgo: 30)
+            ),
+            since: ago(24 * 60)
+        )
+
+        XCTAssertEqual(digest.rows.map(\.bot.id), ["stuck", "busy", "new"])
+        XCTAssertEqual(digest.rows.first { $0.bot.id == "busy" }?.title, "Working", "A stale run doesn't name today's work")
+    }
+
+    func testHomeSaysTheBotsWorkedOnlyWhenARunFinishedAfterTheLastVisit() {
+        let digest = AidenHomeDigest.make(
+            bots: entries(bot("ada"), bot("bea"), bot("stuck", issues: 1, minutesAgo: 1)),
+            feed: feed(item("a", bot: "ada", minutesAgo: 90), item("b", bot: "bea", status: "failed", minutesAgo: 40))
+        )
+
+        XCTAssertTrue(digest.hasNewSince(ago(60)), "The failed run 40 minutes ago is new since an hour ago")
+        XCTAssertFalse(digest.hasNewSince(ago(30)), "A Bot needing you isn't news of work done")
+        XCTAssertFalse(digest.hasNewSince(nil), "A first visit has nothing to compare with")
+        XCTAssertFalse(AidenHomeDigest.empty.hasNewSince(ago(60)))
+    }
+
+    func testHomeHoldsSkeletonSpritesUntilAMachineThatCanShowBotsAnswers() {
+        typealias Machine = AidenHomeBotsState.Machine
+        let answered = Machine(readsBots: true, isOnline: true, isOffline: false, answered: true)
+        let reading = Machine(readsBots: true, isOnline: true, isOffline: false, answered: false)
+        let connecting = Machine(readsBots: true, isOnline: false, isOffline: false, answered: false)
+        let asleep = Machine(readsBots: true, isOnline: false, isOffline: true, answered: true)
+        let noGrant = Machine(readsBots: false, isOnline: true, isOffline: false, answered: true)
+        var hidden = answered
+        hidden.isHidden = true
+
+        XCTAssertEqual(AidenHomeBotsState.make(hasBots: true, machines: [reading]), .bots)
+        XCTAssertEqual(AidenHomeBotsState.make(hasBots: false, machines: [answered, reading]), .loading)
+        XCTAssertEqual(AidenHomeBotsState.make(hasBots: false, machines: [connecting, asleep]), .loading)
+        XCTAssertEqual(AidenHomeBotsState.make(hasBots: false, machines: [answered, asleep]), .noBots)
+        XCTAssertEqual(AidenHomeBotsState.make(hasBots: false, machines: [asleep]), .offline)
+        XCTAssertEqual(AidenHomeBotsState.make(hasBots: false, machines: [noGrant, hidden]), .none)
+        XCTAssertEqual(AidenHomeBotsState.make(hasBots: false, machines: []), .none)
+
+        XCTAssertTrue(AidenHomeBotsState.isAllOffline([asleep, noGrant]))
+        XCTAssertFalse(AidenHomeBotsState.isAllOffline([asleep, answered]))
+    }
+
+    func testTheCardSaysNothingNewOnlyAfterEveryShownMachineWasRead() {
+        let windows: Set<String> = ["studio"]
+        func state(_ outcomes: [String: AidenBotRoutineFeedReader.Outcome], rows: Bool = false, machines: [String] = ["studio", "mini"]) -> AidenHomeFeedState {
+            AidenHomeFeedState.make(hasRows: rows, machines: machines, outcomes: outcomes) { windows.contains($0) }
+        }
+
+        XCTAssertEqual(state([:]), .loading, "A machine not yet read holds skeletons")
+        XCTAssertEqual(state(["studio": .read]), .loading, "One read machine doesn't speak for one still being read")
+        XCTAssertEqual(state(["studio": .read, "mini": .failed]), .quiet)
+        XCTAssertEqual(state(["mini": .failed], machines: ["mini"]), .failed)
+        XCTAssertEqual(state(["studio": .failed, "mini": .failed]), .quiet, "A window read earlier still answers")
+        XCTAssertEqual(state(["mini": .skipped], machines: ["mini"]), .quiet, "A machine without the feed has nothing to say")
+        XCTAssertEqual(state([:], rows: true), .rows)
+    }
+
     func testNewsFromABotTheRosterDoesntListIsDropped() {
         let digest = AidenHomeDigest.make(
             bots: entries(bot("ada")),
@@ -215,12 +325,12 @@ final class AidenHomeDigestTests: XCTestCase {
 
     func testTheReaderMergesPagesNewestFirstAndKeepsAWindow() {
         let reader = AidenBotRoutineFeedReader()
-        reader.record([item("a", bot: "ada", minutesAgo: 10), item("b", bot: "ada", minutesAgo: 5)], instanceId: "studio")
-        reader.record([item("b", bot: "ada", minutesAgo: 5), item("c", bot: "ada", minutesAgo: 1)], instanceId: "studio")
+        reader.record([item("a", bot: "ada", minutesAgo: 10), item("b", bot: "ada", minutesAgo: 5)], instanceId: "studio", grants: allGrants)
+        reader.record([item("b", bot: "ada", minutesAgo: 5), item("c", bot: "ada", minutesAgo: 1)], instanceId: "studio", grants: allGrants)
         XCTAssertEqual(reader.notifications(for: "studio").map(\.id), ["c", "b", "a"])
         XCTAssertTrue(reader.notifications(for: "laptop").isEmpty)
 
-        reader.record((0..<30).map { item("n\($0)", bot: "ada", minutesAgo: Double($0) + 100) }, instanceId: "studio")
+        reader.record((0..<30).map { item("n\($0)", bot: "ada", minutesAgo: Double($0) + 100) }, instanceId: "studio", grants: allGrants)
         XCTAssertEqual(reader.notifications(for: "studio").count, AidenBotRoutineFeedReader.windowSize)
         XCTAssertEqual(reader.notifications(for: "studio").first?.id, "c")
     }
@@ -256,7 +366,7 @@ final class AidenHomeDigestTests: XCTestCase {
         await transport.waitForCall()
         machine.isCurrent = false
         await transport.release()
-        await fetch.value
+        _ = await fetch.value
 
         XCTAssertTrue(reader.notifications(for: "studio").isEmpty)
     }
@@ -269,9 +379,63 @@ final class AidenHomeDigestTests: XCTestCase {
         await transport.waitForCall()
         reader.forget(instanceId: "studio")
         await transport.release()
-        await fetch.value
+        _ = await fetch.value
 
         XCTAssertTrue(reader.notifications(for: "studio").isEmpty)
+    }
+
+    func testANarrowedPairingStopsShowingWhatItCanNoLongerSee() async {
+        let reader = AidenBotRoutineFeedReader()
+        let transport = HeldFeed(page(
+            wire("r", bot: "ada", minutesAgo: 1),
+            wire("i", bot: "ada", kind: "issue", minutesAgo: 2)
+        ), held: false)
+        await reader.refreshIfStale(instanceId: "studio", transport: transport, grants: allGrants) { true }
+        XCTAssertEqual(reader.notifications(for: "studio", grants: allGrants).map(\.id), ["r", "i"])
+
+        // Issues are no longer granted: the old issue row goes at once, and
+        // the next read starts the window over.
+        let narrowed = allGrants.subtracting([.botIssues])
+        XCTAssertEqual(reader.notifications(for: "studio", grants: narrowed).map(\.id), ["r"])
+        await reader.refreshIfStale(instanceId: "studio", transport: transport, grants: narrowed, force: true) { true }
+        XCTAssertEqual(reader.notifications(for: "studio").map(\.id), ["r"])
+
+        // Bots can't be read at all: everything goes.
+        let outcome = await reader.refreshIfStale(instanceId: "studio", transport: transport, grants: [.chatRead]) { true }
+        XCTAssertEqual(outcome, .skipped)
+        XCTAssertTrue(reader.notifications(for: "studio").isEmpty)
+    }
+
+    func testTheNextReadAsksOnlyForWhatsNewerAndPullToRefreshAsksAgain() async {
+        let reader = AidenBotRoutineFeedReader()
+        let transport = HeldFeed(page(wire("r", bot: "ada", minutesAgo: 1)), held: false)
+        await reader.refreshIfStale(instanceId: "studio", transport: transport, grants: allGrants) { true }
+        await reader.refreshIfStale(instanceId: "studio", transport: transport, grants: allGrants, force: true) { true }
+
+        let sinces = await transport.sinces
+        XCTAssertEqual(sinces, [nil, iso(now)], "The first read takes the window; the next starts at the machine's own clock")
+    }
+
+    func testTwoReadersOfOneMachineShareOneFetch() async {
+        let reader = AidenBotRoutineFeedReader()
+        let transport = HeldFeed(page(wire("r", bot: "ada", minutesAgo: 1)), held: true)
+
+        let first = Task { await reader.refreshIfStale(instanceId: "studio", transport: transport, grants: allGrants) { true } }
+        await transport.waitForCall()
+        let second = Task { await reader.refreshIfStale(instanceId: "studio", transport: transport, grants: allGrants) { true } }
+        await transport.release()
+        let outcomes = [await first.value, await second.value]
+
+        XCTAssertEqual(outcomes, [.read, .read])
+        let calls = await transport.calls
+        XCTAssertEqual(calls, 1)
+    }
+
+    func testAMachineThatDoesntAnswerIsAFailureNotAnEmptyFeed() async {
+        let reader = AidenBotRoutineFeedReader()
+        let outcome = await reader.refreshIfStale(instanceId: "studio", transport: FailingFeed(), grants: allGrants) { true }
+        XCTAssertEqual(outcome, .failed)
+        XCTAssertNil(reader.windows["studio"])
     }
 
     func testThePairingNeedsBotAndChatReadToAskAtAll() async {
@@ -295,6 +459,7 @@ private actor HeldFeed: AidenBotRoutineNotificationTransport {
     private var waiter: CheckedContinuation<Void, Never>?
     private var callWaiters: [CheckedContinuation<Void, Never>] = []
     private(set) var calls = 0
+    private(set) var sinces: [String?] = []
 
     init(_ feed: AidenBotRoutineNotificationFeed, held: Bool) {
         self.feed = feed
@@ -303,6 +468,7 @@ private actor HeldFeed: AidenBotRoutineNotificationTransport {
 
     func botRoutineNotifications(since: String?) async throws -> AidenBotRoutineNotificationFeed {
         calls += 1
+        sinces.append(since)
         callWaiters.forEach { $0.resume() }
         callWaiters = []
         if held { await withCheckedContinuation { waiter = $0 } }
@@ -318,5 +484,11 @@ private actor HeldFeed: AidenBotRoutineNotificationTransport {
         held = false
         waiter?.resume()
         waiter = nil
+    }
+}
+
+private struct FailingFeed: AidenBotRoutineNotificationTransport {
+    func botRoutineNotifications(since: String?) async throws -> AidenBotRoutineNotificationFeed {
+        throw URLError(.notConnectedToInternet)
     }
 }

@@ -70,7 +70,7 @@ The concepts for 05 and 20 are the same feature, so they are planned together. N
 
 ## Prerequisites
 
-1. **#925 (the Hi-bit sprite) merged.** Home, the Bot chat header, the gallery, the hatch and the profile all draw the Hi-bit Bot. It is the only Bot avatar. Never draw a brain icon.
+1. **#925 (the Hi-bit sprite).** Still open on 2026-11-25; Home draws the current sprite until it merges. Once merged, Home, the Bot chat header, the gallery, the hatch and the profile all draw the Hi-bit Bot. It is the only Bot avatar. Never draw a brain icon.
 2. **The design kit (4A, phase 1).** Every restyle builds on it. See [Shared components](#shared-components).
 3. **Demo routes for the screens that cannot be captured today.** Served since Phase 1 step 2 by the `full` demo scenario (see [Phase 1 progress](#phase-1-foundation)). Before it, `AidenDemoHosts.swift` did not serve:
    - `GET /bots/routine-notifications`
@@ -155,7 +155,22 @@ The phases run in order. The screens inside each phase can run in parallel, one 
 - **Aurora renderer and settings (4B steps 3-6).** See [Aurora](#aurora).
 - **Progress (2026-11-24, branch `claude/ios-home-aurora`).**
   - Step 1: `AidenAuroraState`, `AidenAmbientActivityModel`, the renderer and the Ambient background card.
-  - Step 2: Home, mounted on the Inbox root until the tab move puts it on the Chats root, with the Home name setting.
+  - Step 2: Home, first mounted on the Inbox root and now on the Chats root since the foundation merge, with the Home name setting.
+  - Step 2 review fixes (2026-11-25):
+    - Send starts a Just chat on the last-used computer and sends at once, with no second press. Each Send carries its own prompt, and a failure gives the words back ahead of anything typed since.
+    - The Home draft is shell-owned and persisted, so it survives a fold and a relaunch.
+    - Ranking: needs you, failed, working, then news. Resolved issues drop out. News has a 24-hour cutoff and an away subtitle, and fetches pass `since:`.
+    - The routine feed reader dedupes fetches across Home and the notifier, and forgets a computer on unpair or narrowed access.
+    - Loading, failed, quiet, no-Bots and all-offline states, so Home never flashes "Nothing new".
+    - See all shows only above three rows. The feed refreshes every minute while Home shows and on pull to refresh. Machines are read concurrently.
+    - Kit type scale with one heading, wrapping digest rows at accessibility sizes, and a mic labeled "New voice chat".
+  - Deviations and deferrals from the step 2 review:
+    - See all opens Catch Up when something waits and the Bots tab otherwise. iOS Inbox has no Bots filter yet.
+    - "Make your first Bot" opens the Bots tab, because iOS has no Bot-creation route yet.
+    - The greeting is not a heading; the navigation title is the one heading.
+    - The onboarding name field is deferred. The name stays in Settings → Appearance → Home so the first-run flow is not reworked in this lane; onboarding picks it up with the Phase 3 Meet your Bot work.
+    - The spec composer's placeholder and controls (U-m4) wait for `AidenComposerConfig.home()` in the composer work.
+    - Home draws the existing sprite until #925 (Hi-bit) merges, then switches with its waiting, error and thinking states.
   - Step 1 review fixes: per-stop contrast caps, accumulated drift, no live blur, 15/30 fps, the reconnect fence, real finishes only, manual-clock wake tests, Monochrome grey and the `aurora.phase` marker.
   - Not wired yet: nothing calls `setVoice`, so Listening does not show from Home until the voice work lands.
 

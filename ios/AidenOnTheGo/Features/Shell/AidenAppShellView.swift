@@ -112,6 +112,8 @@ final class AidenAppShellParts {
         let navigation: AidenAppNavigation
         let newWork: AidenNewWorkChatFlow
         let chatScreens: AidenChatScreens
+        let homeComposer: AidenHomeComposerModel
+        let homeFeed: AidenHomeFeedModel
         let search: AidenSearchModel
         let listScroll: AidenListScrollPlaces
         let offlineNotices: AidenOfflineNoticeDismissals
@@ -209,6 +211,8 @@ struct AidenAppShellView: View {
 
     /// Each open chat's screen state, kept while its chat is on a tab.
     private var chatScreens: AidenChatScreens { built.chatScreens }
+    private var homeComposer: AidenHomeComposerModel { built.homeComposer }
+    private var homeFeed: AidenHomeFeedModel { built.homeFeed }
 
     private var built: AidenAppShellParts.Built {
         parts.built { [coordinator, inboxStore, navigationStore, horizontalSizeClass] in
@@ -221,17 +225,20 @@ struct AidenAppShellView: View {
             )
             // Set before any link or request opens a route, which reads it.
             navigation.besideList = horizontalSizeClass == .regular
-            let newWork = AidenNewWorkChatFlow(coordinator: coordinator) { [weak navigation] chat, id in
-                let home = inboxStore.homeModel(for: id.instanceId)
-                home?.accept(chat)
-                home?.markViewed(chatID: chat.id)
-                guard let navigation else { return }
-                navigation.open(.chat(id), on: navigation.tab == .workspaces ? .workspaces : .chats)
-            }
             let chatScreens = AidenChatScreens(
                 isOpen: { [weak navigation] id in navigation?.holdsConversation(id) ?? false },
                 isBotOpen: { [weak navigation] id in navigation?.holdsBot(id) ?? false }
             )
+            let newWork = AidenNewWorkChatFlow(coordinator: coordinator) { [weak navigation, weak chatScreens] chat, id, prompt in
+                let home = inboxStore.homeModel(for: id.instanceId)
+                home?.accept(chat)
+                home?.markViewed(chatID: chat.id)
+                guard let navigation else { return }
+                if let prompt {
+                    chatScreens?.screen(for: id, receipt: chat).chat.queueLaunchSend(prompt)
+                }
+                navigation.open(.chat(id), on: navigation.tab == .workspaces ? .workspaces : .chats)
+            }
             let search = AidenSearchModel(
                 chatInput: { AidenSearchChatInput(store: inboxStore) },
                 machines: { AidenSearchMachine.machines(in: coordinator) }
@@ -240,6 +247,8 @@ struct AidenAppShellView: View {
                 navigation: navigation,
                 newWork: newWork,
                 chatScreens: chatScreens,
+                homeComposer: AidenHomeComposerModel(),
+                homeFeed: AidenHomeFeedModel(),
                 search: search,
                 listScroll: AidenListScrollPlaces(),
                 offlineNotices: AidenOfflineNoticeDismissals()
@@ -534,6 +543,17 @@ struct AidenAppShellView: View {
         .toolbar { composeToolbar }
     }
 
+    /// Home's "See all": Catch Up when something waits on the person (the
+    /// digest's hidden rows are among it), else every Bot.
+    private func seeAllFromHome() {
+        if catchUpQueue.first != nil {
+            markViewed(navigation.startCatchUp(in: catchUpQueue))
+            hideOverlaidList(on: .inbox)
+        } else {
+            navigation.selectTabRoot(.bots)
+        }
+    }
+
     /// The Chats list, which is also Home: the greeting, the Bots and their
     /// news above every chat, newest first, the ambient background behind
     /// it, and Home's composer below. Beside an open chat the list is just
@@ -548,10 +568,20 @@ struct AidenAppShellView: View {
             header: AnyView(AidenHomeHeader(
                 coordinator: coordinator,
                 store: inboxStore,
+                feedModel: homeFeed,
                 onOpen: openFromHome,
-                onSeeAllBots: { navigation.selectTabRoot(.bots) }
+                onOpenBots: { navigation.selectTabRoot(.bots) },
+                onSeeAll: seeAllFromHome
             )),
-            showsAmbientBackground: showsHome
+            showsAmbientBackground: showsHome,
+            onRefresh: {
+                // A pull reads the Bots' news too, even news read a moment ago.
+                async let lists: Void = inboxStore.refreshAll()
+                async let feed: Void = homeFeed.refresh(
+                    coordinator: coordinator, hiddenMachines: inboxStore.hiddenMachines, force: true
+                )
+                _ = await (lists, feed)
+            }
         ) { route in
             openFromHome(route)
         }
@@ -560,7 +590,7 @@ struct AidenAppShellView: View {
         }
         .safeAreaInset(edge: .bottom, spacing: 0) {
             if showsHome, !hasNoComputers {
-                AidenHomeComposerSlot(flow: newWork)
+                AidenHomeComposerSlot(flow: newWork, model: homeComposer)
                     .padding(.horizontal, AidenSpacing.m)
                     .padding(.bottom, AidenSpacing.s)
             }

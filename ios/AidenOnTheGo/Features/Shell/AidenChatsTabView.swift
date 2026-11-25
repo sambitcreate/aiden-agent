@@ -14,6 +14,8 @@ struct AidenChatsTabView: View {
     var header: AnyView? = nil
     /// Draws the ambient background behind the list; Home's root only.
     var showsAmbientBackground = false
+    /// What a pull to refresh reads. Nil reads every machine's lists.
+    var onRefresh: (() async -> Void)? = nil
     let onOpen: (AidenAppRoute) -> Void
 
     @Environment(\.aidenPalette) private var palette
@@ -68,7 +70,9 @@ struct AidenChatsTabView: View {
         .aidenAmbientAurora(showsAmbientBackground)
         .background(palette.canvas.ignoresSafeArea())
         .overlay { if header == nil { emptyState(isEmpty: entries.isEmpty) } }
-        .refreshable { await store.refreshAll() }
+        .refreshable {
+            if let onRefresh { await onRefresh() } else { await store.refreshAll() }
+        }
         .navigationTitle("Chats")
     }
 

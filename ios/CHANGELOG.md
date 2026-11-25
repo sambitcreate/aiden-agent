@@ -3,7 +3,11 @@
 ## Unreleased
 
 - **2026-11-24 — Home and the ambient background.** Client-only; no Remote wire or revision change.
-  - The Inbox root opens with Home: a greeting, your Bots as sprites, a "From your Bots" card with at most three rows (needs you, working, failed, then news), and a composer that asks where the chat runs before it starts. It moves to the Chats root with the new tab layout.
+  - The Chats root opens with Home: a greeting, your Bots as sprites, a "From your Bots" card and a composer.
+    - The card ranks needs you, failed, working, then news, at most three rows. A Bot whose issue is resolved drops out of Needs you. News covers the last 24 hours, and "Your Bots worked while you were away" shows when there is news since your last visit. See all shows only above three rows and opens Catch Up, or the Bots tab when nothing waits.
+    - While the feed loads, Home shows skeletons, never "Nothing new". With no Bots it offers "Make your first Bot"; with every computer offline it says why. A failed read says so and pull to refresh tries again.
+    - Send starts a chat on the computer you last used (its chip changes it) and sends the message at once. Text typed after Send stays. The draft survives folding a Duo and relaunching. If the chat can't start, the words come back to Home's composer.
+    - The feed refreshes every minute while Home shows and with pull to refresh. Unpairing a computer or narrowing its access drops its rows at once. The mic says "New voice chat".
   - Settings → Appearance → Home sets the name Home greets you by. It stays on this iPhone; empty gives a plain greeting.
   - Settings → Appearance → Ambient background (Off, Subtle, Vivid; Subtle by default) draws a soft light behind Home's lower 400 pt that shows when work runs, finishes or needs you. Follow activity off keeps it at rest.
   - Done shows only after a run you were not watching really finishes. Archiving or deleting a chat, pausing a Bot, a Bot going unavailable, a computer going offline and a reconnect's first read never show it.
