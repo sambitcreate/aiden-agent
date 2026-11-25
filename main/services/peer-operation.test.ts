@@ -64,6 +64,8 @@ test("expanded peer operations resolve to the contract's routes, not arbitrary U
     [{ operation: "uploadAttachment", resourceId: "chat_1", body: { name: "a.txt" } }, "uploadChatAttachment"],
     [{ operation: "removeAttachment", resourceId: "chat_1", itemId: `att_${"A".repeat(43)}` }, "removeChatAttachment"],
     [{ operation: "botSession", resourceId: "bot_1" }, "getBotSession"],
+    [{ operation: "botSessionEntries", resourceId: "bot_1", before: "entry_7", limit: 50 }, "getBotSessionEntries"],
+    [{ operation: "botWithdrawQueued", resourceId: "bot_1", itemId: "42", idempotencyKey: KEY }, "withdrawBotQueuedMessage"],
     [{ operation: "botSend", resourceId: "bot_1", idempotencyKey: KEY, body: { text: "hi" } }, "sendBotMessage"],
     [{ operation: "botResume", resourceId: "bot_1", idempotencyKey: KEY }, "resumeBotSession"],
     [{ operation: "botDismiss", resourceId: "bot_1", idempotencyKey: KEY }, "dismissBotSession"],
@@ -584,4 +586,44 @@ test("plan, access-card and routine-suggestion answers send what the host's rout
   // A receipt the contract doesn't allow never reaches the chat.
   await assert.rejects(peerOperationResult({ operation: "botRespondPlan" }, { ...plan.response, status: "pending" }));
   await assert.rejects(peerOperationResult({ operation: "botAnswerAccessRequest" }, { answered: false }));
+});
+
+test("a remote Bot chat pages back from its oldest entry and takes back a queued message on the host's own routes", async () => {
+  const page = peerOperationRequest({ operation: "botSessionEntries", resourceId: "bot_1", before: "entry_7", limit: 50 });
+  assert.equal(page.method, "GET");
+  assert.equal(page.path, "/bots/bot_1/session/entries?before=entry_7&limit=50");
+  assert.equal(peerOperationRequest({ operation: "botSessionEntries", resourceId: "bot_1", before: "entry_7" }).path, "/bots/bot_1/session/entries?before=entry_7");
+  for (const bad of [{ before: "a/b" }, {}, { before: "entry_7", limit: 201 }, { before: "entry_7", limit: 0 }]) {
+    assert.throws(() => peerOperationRequest({ operation: "botSessionEntries", resourceId: "bot_1", ...bad }), JSON.stringify(bad));
+  }
+  const withdraw = peerOperationRequest({ operation: "botWithdrawQueued", resourceId: "bot_1", itemId: "42", idempotencyKey: KEY });
+  assert.deepEqual([withdraw.method, withdraw.path, withdraw.body], ["POST", "/bots/bot_1/queued/42/withdraw", {}]);
+  assert.throws(() => peerOperationRequest({ operation: "botWithdrawQueued", resourceId: "bot_1", itemId: "../x", idempotencyKey: KEY }));
+  assert.throws(() => peerOperationRequest({ operation: "botWithdrawQueued", resourceId: "bot_1", itemId: "42", idempotencyKey: KEY, body: { now: true } }));
+
+  // A newer host's page is read as far as this Mac understands it; anything else about it must be exact.
+  const entries = (contract.botSession.entries as unknown[]).slice(0, 2);
+  const read = (await peerOperationResult(
+    { operation: "botSessionEntries", resourceId: "bot_1" },
+    { botId: "bot_1", epoch: "e1", entries: [...entries, { type: "hand_off", id: "h1", text: "Sign in" }], hasOlder: true },
+  )) as { entries: unknown[]; hasOlder: boolean };
+  const oldest = (entries[0] as { id: string }).id;
+  assert.deepEqual(read, { botId: "bot_1", epoch: "e1", entries, hasOlder: true, olderCursor: oldest, hostCount: 3 });
+  // When the oldest entries are of a kind this Mac can't show, the next page still starts at the host's oldest,
+  // so paging moves past them instead of asking for the same page again.
+  const unreadable = { type: "hand_off", id: "h0", text: "Sign in" };
+  assert.deepEqual(
+    await peerOperationResult({ operation: "botSessionEntries", resourceId: "bot_1" }, { botId: "bot_1", epoch: "e1", entries: [unreadable, ...entries], hasOlder: true }),
+    { botId: "bot_1", epoch: "e1", entries, hasOlder: true, olderCursor: "h0", hostCount: 3 },
+  );
+  assert.deepEqual(
+    await peerOperationResult({ operation: "botSessionEntries", resourceId: "bot_1" }, { botId: "bot_1", epoch: "e1", entries: [unreadable], hasOlder: true }),
+    { botId: "bot_1", epoch: "e1", entries: [], hasOlder: true, olderCursor: "h0", hostCount: 1 },
+  );
+  await assert.rejects(peerOperationResult({ operation: "botSessionEntries", resourceId: "bot_1" }, { botId: "bot_1", epoch: "e1", entries }));
+  assert.deepEqual(
+    await peerOperationResult({ operation: "botWithdrawQueued", resourceId: "bot_1" }, { submissionId: "42", outcome: "started" }),
+    { submissionId: "42", outcome: "started" },
+  );
+  await assert.rejects(peerOperationResult({ operation: "botWithdrawQueued", resourceId: "bot_1" }, { submissionId: "42", outcome: "maybe" }));
 });

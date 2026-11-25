@@ -8,6 +8,7 @@ import { detectedKeyboardPlatform } from "../shared/keybindings";
 import type { PeerHostView } from "../shared/peer-host";
 import type { PeerOperation } from "../shared/peer-operation";
 import { RemoteBotChatView } from "./remote-bot-chat-view";
+import { toast } from "../components/ui";
 import { clearHandoffTaken } from "../components/bots/handoff-taken";
 import { RemoteBotsSection } from "../components/remote-bots-section";
 import { REMOTE_BOT_SEEN_KEY, resetRemoteBotSeenForTests } from "../lib/remote-bot-seen";
@@ -771,6 +772,58 @@ test("a send the other computer refuses takes its echo away and keeps the draft"
   fireEvent.click(await screen.findByRole("button", { name: "Send message" }));
   await waitFor(() => assert.equal(box.value, "Move the dentist to Friday"));
   await waitFor(() => assert.equal(document.querySelector("[data-bot-pending-send]"), null));
+});
+
+test("a message waiting for a Bot on another computer can be taken back from here, and an older computer says it can't", async (t) => {
+  const told: unknown[] = [];
+  t.mock.method(toast, "info", (message: unknown) => {
+    told.push(message);
+    return "toast-id";
+  });
+  const running = { ...SESSION, state: "running", activity: null, queued: [{ submissionId: "s9", mode: "queue", text: "and Friday?" }] };
+  let outcome: unknown = { ok: true, value: { submissionId: "s9", outcome: "started" } };
+  const { peerCalls } = await mountCards(running, { botWithdrawQueued: () => outcome });
+  const remove = await screen.findByRole("button", { name: "Remove queued message: and Friday?" });
+  await act(async () => {
+    fireEvent.click(remove);
+  });
+  const withdraw = peerCalls().find((call) => call.operation === "botWithdrawQueued")!;
+  assert.deepEqual([withdraw.resourceId, withdraw.itemId, withdraw.body], ["bot_1", "s9", {}]);
+  assert.ok(withdraw.idempotencyKey);
+  await waitFor(() => assert.deepEqual(told, ["That message already started, so it stays."]));
+
+  outcome = { ok: false, error: { code: "not_found", message: "This Aiden Remote endpoint does not exist.", status: 404 } };
+  await act(async () => {
+    fireEvent.click(screen.getByRole("button", { name: "Remove queued message: and Friday?" }));
+  });
+  await waitFor(() => assert.equal(told[told.length - 1], "Update Aiden on Studio to remove a waiting message from here."));
+});
+
+test("earlier messages of a Bot on another computer load a page at a time above the chat", async () => {
+  const pages: Record<string, unknown> = {
+    m1: { ok: true, value: { botId: "bot_1", epoch: "e1", entries: [{ type: "message", id: "m0", role: "assistant", text: "Morning! Coffee first?" }], hasOlder: false } },
+  };
+  const { peerCalls } = await mountCards({ ...SESSION, hasOlder: true }, { botSessionEntries: (operation) => pages[operation.before!] });
+  await screen.findByText("Two meetings and a dentist.");
+  assert.equal(screen.queryByText("Morning! Coffee first?"), null);
+  await act(async () => {
+    fireEvent.click(screen.getByRole("button", { name: "Load older messages" }));
+  });
+  await screen.findByText("Morning! Coffee first?");
+  assert.equal(peerCalls().find((call) => call.operation === "botSessionEntries")?.before, "m1", "the page ends where the chat began");
+  assert.equal(screen.queryByRole("button", { name: "Load older messages" }), null, "nothing older is left");
+});
+
+test("a computer too old to page back says where the older messages are", async () => {
+  await mountCards({ ...SESSION, hasOlder: true }, {
+    botSessionEntries: () => ({ ok: false, error: { code: "not_found", message: "This Aiden Remote endpoint does not exist.", status: 404 } }),
+  });
+  await screen.findByText("Two meetings and a dentist.");
+  await act(async () => {
+    fireEvent.click(screen.getByRole("button", { name: "Load older messages" }));
+  });
+  await screen.findByText("Older messages are on Studio. Update Aiden there to see them here.");
+  assert.equal(screen.queryByRole("button", { name: "Load older messages" }), null);
 });
 
 test("a paired Mac's Bot's dot clears only once its chat shows the new reply", async () => {

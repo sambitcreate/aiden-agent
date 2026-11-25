@@ -2293,6 +2293,64 @@
         }
       }
     },
+    "/bots/{botId}/session/entries": {
+      "parameters": [
+        {
+          "$ref": "#/components/parameters/BotId"
+        },
+        {
+          "$ref": "#/components/parameters/ProtocolVersion"
+        }
+      ],
+      "get": {
+        "operationId": "getBotSessionEntries",
+        "x-aiden-capability": "bot:read",
+        "x-aiden-capabilities": [
+          "bot:read",
+          "chat:read"
+        ],
+        "description": "Revision 67. The entries just older than `before`, oldest first, projected exactly as this device's session is (the same opt-ins decide what shows). `before` must be an entry the device's current session holds; one it does not (another epoch, or an id it was never sent) is 409 operation_stale, and the client reads the session again. Pages fit the session's byte limit, so a page may hold fewer than `limit` entries; `hasOlder` is truthful. A host older than revision 67 answers 404.",
+        "parameters": [
+          {
+            "name": "before",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128,
+              "pattern": "^[A-Za-z0-9._:-]{1,128}$"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 200,
+              "default": 50
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "One page of older entries",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BotSessionEntriesPage"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
     "/bots/{botId}/session/events": {
       "parameters": [
         {
@@ -2566,6 +2624,71 @@
                 "maxProperties": 0
               }
             }
+          }
+        }
+      }
+    },
+    "/bots/{botId}/queued/{submissionId}/withdraw": {
+      "parameters": [
+        {
+          "$ref": "#/components/parameters/BotId"
+        },
+        {
+          "name": "submissionId",
+          "in": "path",
+          "required": true,
+          "description": "A queued message's submissionId, as the session's queued list names it.",
+          "schema": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 64,
+            "pattern": "^[A-Za-z0-9._:-]+$"
+          }
+        },
+        {
+          "$ref": "#/components/parameters/ProtocolVersion"
+        }
+      ],
+      "post": {
+        "operationId": "withdrawBotQueuedMessage",
+        "x-aiden-capability": "bot:write",
+        "x-aiden-capabilities": [
+          "bot:read",
+          "bot:write",
+          "chat:write",
+          "bot:activity"
+        ],
+        "description": "Revision 67. Take back one of the person's queued messages before its turn starts, as the host's own Remove does. Requires Idempotency-Key; a repeat replays the original receipt. withdrawn: it will not run. started: its turn already began, so it stays in the chat. gone: the host no longer has it, or it is a routine's input or the Bot's self-introduction, which are not the person's to take back. Needs bot:activity, the grant that shows the queue. A host older than revision 67, or one without Bot chat activity, answers 404.",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/IdempotencyKey"
+          }
+        ],
+        "requestBody": {
+          "required": false,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "additionalProperties": false,
+                "maxProperties": 0
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "What became of the queued message",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BotQueuedWithdrawReceipt"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
           }
         }
       }
@@ -25282,6 +25405,63 @@
             "description": "Records the exact earlier durable folder approval, including a replay after removal. It does not confirm current saved access or issue temporary run access."
           }
         }
+      },
+      "BotSessionEntriesPage": {
+        "type": "object",
+        "description": "Revision 67: one page of a Bot session's older entries.",
+        "required": [
+          "botId",
+          "epoch",
+          "entries",
+          "hasOlder"
+        ],
+        "properties": {
+          "botId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 160,
+            "pattern": "^[A-Za-z0-9._:-]+$"
+          },
+          "epoch": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128,
+            "description": "The session the page belongs to. A page from another epoch does not join the transcript the device holds."
+          },
+          "entries": {
+            "type": "array",
+            "maxItems": 200,
+            "items": {
+              "$ref": "#/components/schemas/BotSessionEntry"
+            }
+          },
+          "hasOlder": {
+            "type": "boolean"
+          }
+        },
+        "additionalProperties": false
+      },
+      "BotQueuedWithdrawReceipt": {
+        "type": "object",
+        "description": "Revision 67: what became of a queued message.",
+        "required": [
+          "submissionId",
+          "outcome"
+        ],
+        "properties": {
+          "submissionId": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9._:-]{1,64}$"
+          },
+          "outcome": {
+            "enum": [
+              "withdrawn",
+              "started",
+              "gone"
+            ]
+          }
+        },
+        "additionalProperties": false
       }
     }
   }
