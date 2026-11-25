@@ -120,6 +120,15 @@ The phases run in order. The screens inside each phase can run in parallel, one 
 **Phase 1 progress** (branch `claude/ios-new-direction`):
 
 - Step 1, design kit: landed. `AidenTypeScale` and `AidenSettingsTokens` are in `AidenDesignTokens.swift`. The page, card and rows are in `Config/AidenSettingsKit.swift`; the chip, pill, swatches, stat hero, heatmap and circle button are in `Config/AidenSettingsKitControls.swift`, which keeps each file under 500 lines. The inbox's own `AidenStatusChip` merged into the kit's, so there is one chip. Neutral chips read in the foreground colour and accent chips in a new text-safe `accentTextHex`, because the raw secondary and accent miss 4.5:1 on their own tint in most presets. Type steps follow Dynamic Type and the in-app Text size through `.aidenType(_:)`. No screen uses the kit yet, so the Settings and Appearance matrix captures, and a UI test that card rows are buttons, wait for the first screen that adopts it (Phase 3, 4A P2).
+- Step 2, demo routes: landed. A new `full` demo scenario (`-AidenDemoScenario full`, also in `AidenStateMatrix`) serves every gap under [Prerequisites](#prerequisites) from `Features/Remote/Demo/AidenDemoFoundationRoutes.swift`, on two machines whose usage differs:
+  - a second Bot, Relay, that is running, with a live session and a partial reply;
+  - `/bots/{id}/memory` for both Bots, and `GET /bots/routine-notifications` with one succeeded and one failed routine;
+  - an archived workspace, archived on this device the way the person would archive it;
+  - `/usage` computed per range, with sparse days, server-style streaks and model rows that add up to the totals;
+  - scheduled tasks (an llm task, a running llm task with MCP servers, a paused script task), their runs, the run feed, settings, scripts and MCP servers;
+  - workspace git: review, diff, branches, push capability and worktrees.
+
+  `AidenDemoHostsTests` reads every route through the real `AidenRemoteClient`, so a shape the decoders reject fails the test. The phone's validators are stricter than `protocol/aiden-remote/v1/fixtures/contract.json` in places, and the demo follows the phone: a git `operationId` starts with `op_`, a scheduled-task revision with `rev_`, and a task with MCP servers must be an llm task with full access and no workspace. The contract fixture's Bot memory group also counts one character fewer in `usedChars` than its entries join to. These are fixture drift for the contract owner to reconcile, not demo bugs.
 
 ### Phase 2: Home, composer and Aurora
 

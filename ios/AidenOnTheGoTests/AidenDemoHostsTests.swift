@@ -341,6 +341,140 @@ final class AidenDemoHostsTests: XCTestCase {
         )
         XCTAssertNil(AidenDemoScenario.requested(in: ["Aiden", "-AidenInboxFixture"]))
     }
+
+    // MARK: Full scenario
+
+    /// Every screen the full scenario feeds decodes through the real client
+    /// and its validators, on both machines, and the answers agree with each
+    /// other: a task's script and MCP servers are offered, a diff opens from
+    /// the review's own snapshot, and the archived workspace is listed.
+    func testFullScenarioFeedsEveryScreenThroughTheRealClient() async throws {
+        let responder = AidenDemoResponder()
+        let coordinator = AidenDemoHosts.coordinator(.full, responder: responder)
+        let installations = coordinator.installationStore.installations
+        XCTAssertEqual(installations.count, 2)
+
+        for installation in installations {
+            let label = installation.instanceId
+            let client = client(for: installation, responder: responder)
+
+            let bots = try await client.bots().bots
+            XCTAssertEqual(bots.count, 2, label)
+            let running = try XCTUnwrap(bots.first { $0.sessionState == .running }, "\(label): no running Bot")
+            let detail = try await client.bot(id: running.id)
+            XCTAssertEqual(detail.id, running.id)
+            let session = try await client.botSession(botId: running.id)
+            XCTAssertEqual(session.stateView.state, .running, label)
+            XCTAssertNotNil(session.partial, label)
+            for bot in bots {
+                let memory = try await client.botMemory(botId: bot.id)
+                XCTAssertTrue(memory.readable, label)
+                XCTAssertFalse(memory.memory.entries.isEmpty, "\(label)/\(bot.id)")
+                XCTAssertFalse(memory.memory.overBudget || memory.user.overBudget, "\(label)/\(bot.id)")
+            }
+            let routines = try await client.botRoutineNotifications(since: nil)
+            XCTAssertEqual(Set(routines.notifications.map(\.botId)), Set(bots.map(\.id)), label)
+
+            let workspaces = try await client.workspaces()
+            XCTAssertTrue(workspaces.contains { $0.id == AidenDemoFull.archivedWorkspaceId }, label)
+            XCTAssertTrue(
+                coordinator.workspaceArchiveStore.isArchived(workspaceID: AidenDemoFull.archivedWorkspaceId, instanceID: label),
+                "\(label): the prototype workspace is archived on this device"
+            )
+
+            let tasks = try await client.scheduledTasks()
+            XCTAssertEqual(Set(tasks.map(\.mode)), [.llm, .script], label)
+            let scripts = Set(try await client.scheduledScripts(workspaceId: nil).map(\.id))
+            let servers = Set(try await client.scheduledMcpServers().map(\.id))
+            for task in tasks {
+                let fetched = try await client.scheduledTask(id: task.id)
+                XCTAssertEqual(fetched, task)
+                let runs = try await client.scheduledRuns(taskId: task.id)
+                XCTAssertFalse(runs.isEmpty, "\(label)/\(task.id)")
+                XCTAssertEqual(runs.contains { $0.finishedAt == nil }, task.running, "\(label)/\(task.id): a running task has a run in flight")
+                if let scriptId = task.scriptId { XCTAssertTrue(scripts.contains(scriptId), task.id) }
+                XCTAssertTrue(Set(task.mcpServerIds ?? []).isSubset(of: servers), task.id)
+            }
+            let feed = try await client.scheduledRunNotifications()
+            XCTAssertFalse(feed.notifications.isEmpty, label)
+            XCTAssertTrue(feed.notifications.allSatisfy { item in tasks.contains { $0.id == item.taskId } }, label)
+            let settings = try await client.scheduledSettings()
+            XCTAssertEqual(settings.defaultTimezone, TimeZone.current.identifier)
+
+            let workspace = AidenDemoFull.gitWorkspaceId
+            let review = try await client.gitReview(workspaceId: workspace)
+            guard case .review(let changes) = review.result else { return XCTFail("\(label): no review") }
+            XCTAssertEqual(changes.files.count, changes.uncommitted, label)
+            let first = try XCTUnwrap(changes.files.first)
+            let diff = try await client.gitDiff(
+                workspaceId: workspace,
+                snapshotId: try XCTUnwrap(review.snapshotId),
+                fileId: first.id
+            )
+            guard case .diff(let shown) = diff.result else { return XCTFail("\(label): no diff") }
+            XCTAssertEqual(shown.displayPath, first.displayPath, label)
+            guard case .branches(let branches) = try await client.gitBranches(workspaceId: workspace).result else {
+                return XCTFail("\(label): no branches")
+            }
+            XCTAssertTrue(branches.branches.contains(branches.current), label)
+            XCTAssertEqual(branches.current, changes.branch, label)
+            guard case .pushCapability(let push) = try await client.gitPushCapability(workspaceId: workspace).result else {
+                return XCTFail("\(label): no push capability")
+            }
+            XCTAssertTrue(push.allowed, label)
+            guard case .worktrees(let worktrees) = try await client.gitWorktrees(workspaceId: workspace).result else {
+                return XCTFail("\(label): no worktrees")
+            }
+            XCTAssertTrue(worktrees.worktrees.contains { $0.branch == changes.branch }, label)
+        }
+    }
+
+    /// Usage reads like a real Mac's summary in every range: totals are the
+    /// sum of the listed days and of the models, days are sparse, in order and
+    /// inside the range, and streaks agree with the active days.
+    func testFullScenarioUsageTotalsAgreeWithItsDaysInEveryRange() async throws {
+        let responder = AidenDemoResponder()
+        let coordinator = AidenDemoHosts.coordinator(.full, responder: responder)
+        var requestsByMachine: [String: Int] = [:]
+        for installation in coordinator.installationStore.installations {
+            let client = client(for: installation, responder: responder)
+            var previousDays = 0
+            for range in ["7d", "30d", "90d", "1y", "all"] {
+                let label = "\(installation.instanceId)/\(range)"
+                let usage = try await client.usage(range: range)
+                XCTAssertEqual(usage.range, range, label)
+                let totals = usage.totals
+                XCTAssertEqual(totals.requests, usage.days.reduce(0) { $0 + $1.requests }, label)
+                XCTAssertEqual(totals.tokens.total, usage.days.reduce(0) { $0 + $1.tokens.total }, label)
+                XCTAssertEqual(totals.hostedCostUsd, usage.days.reduce(0) { $0 + $1.hostedCostUsd }, accuracy: 0.0001, label)
+                XCTAssertEqual(totals.requests, usage.models.reduce(0) { $0 + $1.requests }, label)
+                XCTAssertEqual(totals.localRequests, usage.models.filter(\.local).reduce(0) { $0 + $1.requests }, label)
+                XCTAssertEqual(
+                    totals.requests,
+                    totals.completedRequests + totals.failedRequests + totals.cancelledRequests,
+                    label
+                )
+                XCTAssertEqual(totals.activeDays, usage.days.filter { $0.requests > 0 }.count, label)
+                XCTAssertEqual(usage.days.map(\.date), usage.days.map(\.date).sorted(), label)
+                XCTAssertEqual(Set(usage.days.map(\.date)).count, usage.days.count, label)
+                XCTAssertTrue(usage.days.allSatisfy { $0.date >= usage.startDate && $0.date <= usage.endDate }, label)
+                XCTAssertEqual(usage.models.map(\.requests), usage.models.map(\.requests).sorted(by: >), label)
+                XCTAssertGreaterThan(totals.currentStreak, 0, label)
+                XCTAssertGreaterThanOrEqual(totals.longestStreak, totals.currentStreak, label)
+                XCTAssertLessThanOrEqual(totals.longestStreak, totals.activeDays, label)
+                XCTAssertGreaterThanOrEqual(usage.days.count, previousDays, "\(label): a longer range lists fewer days")
+                previousDays = usage.days.count
+                if range == "7d" { XCTAssertLessThanOrEqual(usage.days.count, 7, label) }
+                if range == "all" {
+                    XCTAssertEqual(usage.startDate, usage.days.first?.date, label)
+                    XCTAssertLessThan(usage.days.count, 120, "\(label): the history has gaps")
+                    requestsByMachine[installation.instanceId] = totals.requests
+                }
+            }
+        }
+        XCTAssertEqual(Set(requestsByMachine.values).count, 2, "two machines must not show the same usage")
+    }
+
 }
 
 private final class LockedFlag: @unchecked Sendable {

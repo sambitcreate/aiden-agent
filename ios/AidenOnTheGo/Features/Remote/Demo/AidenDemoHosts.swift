@@ -17,6 +17,9 @@ enum AidenDemoScenario: String, CaseIterable {
     case one, four, empty, busy
     case offlineMix = "offline-mix"
     case oldHost = "old-host"
+    /// Two machines that answer for every screen: two Bots (one running), an
+    /// archived workspace, usage, scheduled tasks, Bot memory and git.
+    case full
 
     static let launchArgument = "-AidenDemoScenario"
 
@@ -407,6 +410,9 @@ enum AidenDemoHosts {
         /// Whether the machine fails when asked for Bot conversations. Online
         /// otherwise, so the Search tab has a machine that errors.
         var botSearchFails = false
+        /// The usage scale of a machine that answers for every screen
+        /// (`AidenDemoFull`), or nil for the standard answers only.
+        var fullScale: Double?
     }
 
     /// A paired machine as the app stores it after pairing and a first `/server`:
@@ -507,6 +513,12 @@ enum AidenDemoHosts {
                 installation: legacyInstallation(installation(instanceId: "studio", name: "Studio Mac")),
                 rowCount: 4
             )]
+        case .full:
+            var fullStudio = studio
+            fullStudio.fullScale = 1
+            var fullLaptop = laptop
+            fullLaptop.fullScale = 0.4
+            machines = [fullStudio, fullLaptop]
         }
         if AidenDemoRunOptions.defaultMachineIsOffline, !machines.isEmpty { machines[0].isOnline = false }
         return makeCoordinator(machines, responder: responder, haptics: haptics, machinePreferences: machinePreferences)
@@ -588,9 +600,13 @@ enum AidenDemoHosts {
         func directory(_ name: String) -> URL {
             cacheRoot.appending(path: name, directoryHint: .isDirectory)
         }
+        let archiveStore = AidenWorkspaceArchiveStore(defaults: defaults)
+        for machine in machines where machine.fullScale != nil && machine.isOnline {
+            archiveStore.archive(workspaceID: AidenDemoFull.archivedWorkspaceId, instanceID: machine.installation.instanceId)
+        }
         return AidenRemoteCoordinator(
             installationStore: store,
-            workspaceArchiveStore: AidenWorkspaceArchiveStore(defaults: defaults),
+            workspaceArchiveStore: archiveStore,
             chatCache: AidenChatCache(root: directory("chats")),
             chatDraftStore: AidenChatDraftStore(root: directory("drafts")),
             scheduledTaskCache: AidenScheduledTaskCache(root: directory("schedules")),
@@ -736,6 +752,16 @@ enum AidenDemoHosts {
         } else {
             responder.reply(instanceId: id, path: "/bots", status: 200, json: AidenDemoContent.emptyBotsJSON())
             responder.reply(instanceId: id, path: "/bot-conversations", status: 200, json: Data(#"{"conversations":[]}"#.utf8))
+        }
+        if let scale = machine.fullScale, machine.hasBot, installation.serverCapabilities != nil {
+            AidenDemoFull.register(
+                instanceId: id,
+                responder: responder,
+                baseBotList: AidenDemoContent.botListJSON(),
+                baseBotDetail: AidenDemoContent.botDetailJSON(),
+                baseWorkspaces: AidenDemoContent.workspacesJSON(),
+                scale: scale
+            )
         }
     }
 

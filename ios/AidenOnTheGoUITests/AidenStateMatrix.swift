@@ -13,6 +13,9 @@ enum AidenStateMatrix {
         case one, four, empty, busy
         case offlineMix = "offline-mix"
         case oldHost = "old-host"
+        /// Every screen has data: two Bots (one running), an archived
+        /// workspace, usage, scheduled tasks, Bot memory and git.
+        case full
     }
 
     enum Appearance: String, CaseIterable {
