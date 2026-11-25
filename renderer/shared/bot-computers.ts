@@ -199,9 +199,11 @@ export function botComputerMaxRunningChoices(limit: BotComputerMaxRunning = 4): 
 }
 
 const COMPUTER_ID_PATTERN = /^[a-z0-9][a-z0-9_-]{0,63}$/u;
+const RESERVED_COMPUTER_IDS = new Set(["__proto__", "constructor", "prototype", "tostring", "valueof", "hasownproperty"]);
+const UNICODE_FORMAT_CHAR = /\p{Cf}/u;
 
 export function parseBotComputerId(value: unknown): string {
-  if (typeof value !== "string" || !COMPUTER_ID_PATTERN.test(value)) {
+  if (typeof value !== "string" || !COMPUTER_ID_PATTERN.test(value) || RESERVED_COMPUTER_IDS.has(value.toLowerCase())) {
     throw new Error("Invalid computer id.");
   }
   return value;
@@ -212,6 +214,9 @@ export function parseBotComputerName(value: unknown): string {
   const trimmed = value.trim();
   if (trimmed.length === 0 || trimmed.length > 64) {
     throw new Error("Computer name must be 1–64 characters.");
+  }
+  if (UNICODE_FORMAT_CHAR.test(trimmed)) {
+    throw new Error("Computer name cannot contain formatting characters.");
   }
   for (const ch of trimmed) {
     const code = ch.codePointAt(0)!;

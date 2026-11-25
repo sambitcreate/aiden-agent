@@ -125,6 +125,8 @@ export interface BotComputerCaptureSpace {
   epoch: number;
   /** The computer run the capture was taken in (main memory only). */
   run: string;
+  /** Set when another Bot mutates the same shared VM after this capture. */
+  staleByOtherBot?: boolean;
 }
 
 /**
@@ -137,6 +139,12 @@ export interface BotComputerToolState {
   lastCapture(botId: string): BotComputerCaptureSpace | undefined;
   setCapture(botId: string, space: BotComputerCaptureSpace): void;
   epoch(botId: string): number;
+  /**
+   * Mark every other Bot's capture and element facts on `vmName` as stale
+   * after `actorBotId` mutates the shared desktop, so interleaved actions
+   * never click stale coordinates.
+   */
+  noteVmMutation?(vmName: string, actorBotId: string): void;
   /** The newest capture with app, while control has not changed hands since. */
   driverFacts(botId: string): BotComputerDriverFacts | undefined;
   setDriverFacts(botId: string, facts: BotComputerDriverFacts | undefined): void;
@@ -168,6 +176,19 @@ export function createBotComputerToolState(control: Pick<BotComputerControl, "on
     lastCapture: (botId) => captures.get(botId),
     setCapture: (botId, space) => void captures.set(botId, { ...space }),
     epoch: (botId) => epochs.get(botId) ?? 0,
+    noteVmMutation(vmName, actorBotId) {
+      const prefix = `${vmName}\u0000`;
+      for (const [otherBotId, space] of captures) {
+        if (otherBotId !== actorBotId && space.run.startsWith(prefix)) {
+          captures.set(otherBotId, { ...space, staleByOtherBot: true });
+        }
+      }
+      for (const [otherBotId, driverFact] of facts) {
+        if (otherBotId !== actorBotId && driverFact.run.startsWith(prefix)) {
+          facts.delete(otherBotId);
+        }
+      }
+    },
     driverFacts(botId) {
       const found = facts.get(botId);
       return found && found.epoch === (epochs.get(botId) ?? 0) ? found : undefined;
@@ -406,6 +427,9 @@ export function createBotComputerTool(
     if (!space) return text("Take a capture first: coordinates are pixels of the newest capture.", details, true);
     if (space.run !== run) return text("The computer restarted since your last capture; take a fresh capture first.", details, true);
     if (space.epoch !== deps.state.epoch(botId)) return text(BOT_COMPUTER_GIVE_BACK_NOTE, { ...details, person: true }, true);
+    if (space.staleByOtherBot) {
+      return text("Another Bot used this shared computer since your last capture; take a fresh capture first.", details, true);
+    }
     return space;
   }
 
@@ -621,6 +645,7 @@ export function createBotComputerTool(
           if (args.element !== undefined) {
             const clicked = await clickElement(action, args.element, args.modifiers, actionSignal);
             if (typeof clicked !== "string") return clicked;
+            deps.state.noteVmMutation?.(connection!.vmName, botId);
             done = clicked;
             if (args.capture_after !== true) return text(done, laneDetails);
             await sleep(300, actionSignal);
@@ -632,6 +657,12 @@ export function createBotComputerTool(
           }
           // Anything that acts ends the element numbers; focus stays only for typing.
           settleDriverFacts(action, args.keys);
+          if (BOT_COMPUTER_MUTATING_ACTIONS.has(action)) {
+            // Validate captureSpace first for coordinate actions so a rejected click doesn't invalidate peers.
+            const needsCapture =
+              action === "click" || action === "double_click" || action === "right_click" || action === "drag" || action === "scroll";
+            if (!needsCapture) deps.state.noteVmMutation?.(connection!.vmName, botId);
+          }
           switch (action) {
             case "click":
             case "double_click":
@@ -715,6 +746,9 @@ export function createBotComputerTool(
               done = `Pressed ${args.keys!.trim()}.`;
               break;
             }
+          }
+          if (BOT_COMPUTER_MUTATING_ACTIONS.has(action)) {
+            deps.state.noteVmMutation?.(connection!.vmName, botId);
           }
           if (args.capture_after !== true) return text(done, details);
           await sleep(300, actionSignal);

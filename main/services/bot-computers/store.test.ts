@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtempSync, readFileSync, statSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import test from "node:test";
@@ -128,4 +128,85 @@ test("the guest driver flag is kept for a base and its computers only when it is
   });
   assert.deepEqual(dismissed.macosMigration, { completedAt: 1700000000000, freedBytes: 0, noticeDismissed: true });
   assert.equal(parseBotComputersState({ macosMigration: { completedAt: -1, freedBytes: 0 } }).macosMigration, undefined);
+});
+
+test("store rejects reserved base VM names and prototype keys, deduplicates legacy VMs, and backs up corrupt JSON", async () => {
+  const parsed = parseBotComputersState({
+    vms: {
+      constructor: {
+        id: "constructor",
+        name: "Evil",
+        kind: "dedicated",
+        vmName: "aiden-vm-0123456789abcdef",
+        baseBuild: "20261123-2671",
+        createdAt: 1,
+      },
+      "vm-base": {
+        id: "vm-base",
+        name: "Base hijack",
+        kind: "dedicated",
+        vmName: "aiden-base",
+        baseBuild: "20261123-2671",
+        createdAt: 1,
+      },
+      "vm-staging": {
+        id: "vm-staging",
+        name: "Staging hijack",
+        kind: "dedicated",
+        vmName: "aiden-base-next",
+        baseBuild: "20261123-2671",
+        createdAt: 1,
+      },
+      shared: {
+        id: "shared",
+        name: "Wrong shared vmName",
+        kind: "shared",
+        vmName: "aiden-vm-0123456789abcdef",
+        baseBuild: "20261123-2671",
+        createdAt: 1,
+      },
+      "vm-good": {
+        id: "vm-good",
+        name: "Good VM",
+        kind: "dedicated",
+        vmName: "aiden-vm-fedcba9876543210",
+        baseBuild: "20261123-2671",
+        createdAt: 2,
+      },
+    },
+    assignments: {
+      ada: "vm-good",
+      ben: "constructor",
+      cyd: "vm-base",
+    },
+  });
+  assert.deepEqual(Object.keys(parsed.vms), ["vm-good"]);
+  assert.deepEqual(parsed.assignments, { ada: "vm-good" });
+
+  // Legacy computers get distinct names and never duplicate the same vmName.
+  const legacy = parseBotComputersState({
+    computers: {
+      ada: { vmName: "aiden-bot-0000000000000001", baseBuild: "20261123-2671", createdAt: 1 },
+      ben: { vmName: "aiden-bot-0000000000000002", baseBuild: "20261123-2671", createdAt: 2 },
+      dup: { vmName: "aiden-bot-0000000000000001", baseBuild: "20261123-2671", createdAt: 3 },
+    },
+  });
+  assert.equal(Object.keys(legacy.vms).length, 2);
+  assert.equal(legacy.vms["aiden-bot-0000000000000001"]?.name, "Dedicated computer");
+  assert.equal(legacy.vms["aiden-bot-0000000000000002"]?.name, "Dedicated computer 2");
+  assert.equal(legacy.vms["aiden-bot-0000000000000001"]?.legacyOwnerBotId, "ada");
+  assert.equal(legacy.assignments.dup, "aiden-bot-0000000000000001");
+
+  // Updating over corrupt state.json preserves a backup copy before overwriting.
+  const dir = mkdtempSync(path.join(tmpdir(), "p8-store-corrupt-backup-"));
+  const file = path.join(dir, "state.json");
+  writeFileSync(file, "{corrupt json!!!");
+  const store = createBotComputersStore(file);
+  await store.update((draft) => {
+    draft.settings.maxRunning = 3;
+  });
+  const backups = readdirSync(dir).filter((name) => name.startsWith("state.json.corrupt-"));
+  assert.equal(backups.length, 1, "corrupt state.json is backed up before overwriting");
+  assert.equal(readFileSync(path.join(dir, backups[0]!), "utf8"), "{corrupt json!!!");
+  assert.equal((await store.read()).settings.maxRunning, 3);
 });

@@ -29,7 +29,7 @@ export interface BotSettingsPortDeps {
   updateBot(input: BotUpdateInput): Promise<Pick<BotDefinition, "revision">>;
   cancelWakeUps(botId: string): Promise<void>;
   readComputer?(botId: string): Promise<BotComputerAssignTarget | null>;
-  listComputers?(): Promise<{ id: string; name: string; kind: "shared" | "dedicated" }[]>;
+  listComputers?(botId: string): Promise<{ id: string; name: string; kind: "shared" | "dedicated" }[]>;
   validateComputer?(botId: string, target: BotComputerAssignTarget): Promise<string | undefined>;
   assignComputer?(botId: string, target: BotComputerAssignTarget): Promise<void>;
   broadcastChanged(botId: string): void;
@@ -116,7 +116,7 @@ export function createBotSettingsPorts(deps: BotSettingsPortDeps): BotSettingsPo
           .map((model): BotSettingsModelOption => ({ providerId: provider.id, modelId: model.id, label: `${model.label} (${provider.label})` })));
     },
 
-    ...(deps.listComputers ? { computers: () => deps.listComputers!() } : {}),
+    ...(deps.listComputers ? { computers: (botId: string) => deps.listComputers!(botId) } : {}),
     ...(deps.validateComputer ? { validateComputer: (botId, target) => deps.validateComputer!(botId, target) } : {}),
 
     async write(botId, patch, expectedRevision) {
@@ -142,6 +142,13 @@ export function createBotSettingsPorts(deps: BotSettingsPortDeps): BotSettingsPo
       let wrote = false;
       let done = false;
       try {
+        // Assign/clone the Linux computer BEFORE writing identity/model so a
+        // failed clone or unavailable VM leaves identity and model untouched.
+        if (patch.computer) {
+          if (!deps.assignComputer) throw new Error("Bot computers aren't available on this device.");
+          await deps.assignComputer(botId, patch.computer);
+          wrote = true;
+        }
         let writtenRevision: string | undefined;
         if (identity) {
           const description = patch.description ?? bot.description ?? "";
@@ -186,11 +193,6 @@ export function createBotSettingsPorts(deps: BotSettingsPortDeps): BotSettingsPo
           wrote = true;
         }
         if (identity && patch.dailyCheckIns === false) await deps.cancelWakeUps(botId);
-        if (patch.computer) {
-          if (!deps.assignComputer) throw new Error("Bot computers aren't available on this device.");
-          await deps.assignComputer(botId, patch.computer);
-          wrote = true;
-        }
         done = true;
       } finally {
         // Whatever landed is shown, even when a later half was refused.

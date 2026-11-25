@@ -68,7 +68,7 @@ export interface BotSettingsPorts {
   /** Optional check before holding or applying a Linux computer assignment request. */
   validateComputer?(botId: string, target: BotComputerAssignTarget): Promise<string | undefined>;
   /** Optional list of available Linux Bot computers shown when `update_bot` is called with no fields. */
-  computers?(): Promise<{ id: string; name: string; kind: "shared" | "dedicated" }[]>;
+  computers?(botId: string): Promise<{ id: string; name: string; kind: "shared" | "dedicated" }[]>;
   /**
    * Writes these values (each field present is set), only while the Bot is
    * still at `expectedRevision`; otherwise throws `BotSettingsConflictError`.
@@ -172,7 +172,7 @@ export function createBotSettingsChangeService(ports: BotSettingsPorts) {
         const isEmpty = raw === undefined || raw === null || (typeof raw === "object" && !Array.isArray(raw) && Object.keys(raw).length === 0);
         if (isEmpty) {
           const models = await ports.models(botId);
-          const computers = ports.computers ? await ports.computers().catch(() => undefined) : undefined;
+          const computers = ports.computers ? await ports.computers(botId).catch(() => undefined) : undefined;
           return JSON.stringify({
             settings: current,
             models,

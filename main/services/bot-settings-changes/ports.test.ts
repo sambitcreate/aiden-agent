@@ -200,3 +200,60 @@ test("a desktop rename landing between the name write and a refused model write 
     assert.deepEqual(after.model, { providerId: "provider:a", modelId: "model:slow" }, mode);
   }
 });
+
+test("a failed computer assignment in a combined settings patch leaves identity and model untouched", async () => {
+  let bot: BotDefinition = {
+    id: BOT,
+    revision: "bot-1",
+    name: "Chief",
+    instructions: "Help me plan.",
+    avatar: { ...DEFAULT_BOT_AVATAR },
+    createdAt: 0,
+    updatedAt: 0,
+  };
+  let model = { providerId: "provider:a", modelId: "model:slow" };
+  let botRevision = 1;
+  let accessRevision = 1;
+  const ports = createBotSettingsPorts({
+    profileDir: () => "/unused",
+    getBot: async () => structuredClone(bot),
+    modelSelection: async () => ({ ...model }),
+    getBotAccess: async () => ({
+      botId: BOT,
+      revision: `access-${accessRevision}`,
+      policyEpoch: "1",
+      summary: "",
+      accessMode: "full",
+    }),
+    capabilityCatalog: async () => ({
+      revision: "catalog-1",
+      providers: [{ id: "provider:a", label: "A", available: true, models: [{ id: "model:fast", label: "Fast", available: true }] }],
+    }),
+    botWebSearchEnabled: async () => false,
+    updateBotAccess: async ({ access }) => {
+      const next = access.accessMode === "full" ? { providerId: access.providerId!, modelId: access.modelId! } : access.custom;
+      model = { providerId: next.providerId, modelId: next.modelId };
+      accessRevision += 1;
+    },
+    updateBot: async (input) => {
+      botRevision += 1;
+      bot = { ...bot, name: input.name, description: input.description, instructions: input.instructions, avatar: input.avatar, revision: `bot-${botRevision}` };
+      return structuredClone(bot);
+    },
+    assignComputer: async () => {
+      throw new Error("lume clone failed: out of disk");
+    },
+    cancelWakeUps: async () => {},
+    broadcastChanged: () => {},
+    appendEntry: async () => {},
+  });
+
+  const { revision } = await ports.read(BOT);
+  await assert.rejects(
+    ports.write(BOT, { name: "Renamed", model: FAST, computer: { kind: "new", name: "Big VM" } }, revision),
+    /out of disk/u,
+  );
+  const after = (await ports.read(BOT)).values;
+  assert.equal(after.name, "Chief");
+  assert.deepEqual(after.model, { providerId: "provider:a", modelId: "model:slow" });
+});

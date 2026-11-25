@@ -72,6 +72,9 @@ export interface BotComputerHandoffDeps {
   host: Pick<BotComputerHost, "computer" | "ensureRunning" | "runGuestCommand">;
   control: Pick<BotComputerControl, "controller" | "takeOver" | "giveBack"> & {
     takenOverBy(botId: string): BotComputerTakeOverSource | undefined;
+    controllerForScope?(scope: string): "bot" | "person";
+    takenOverByScope?(scope: string): BotComputerTakeOverSource | undefined;
+    giveBackScope?(scope: string): void;
   };
   handoffs: Pick<BotHandoffs, "get" | "onSettled">;
   /** Bot computers are on (the platform flag). */
@@ -103,6 +106,13 @@ export function createBotComputerHandoffOpener(deps: BotComputerHandoffDeps): Bo
     // Keep the shared VM with the person while another open sign-in card still holds it.
     for (const activeScope of held.values()) {
       if (activeScope === scopeKey) return;
+    }
+    // Release the exact VM scope captured when the card opened (even if the Bot was reassigned since).
+    if (deps.control.giveBackScope && deps.control.takenOverByScope && deps.control.controllerForScope) {
+      if (deps.control.controllerForScope(scopeKey) === "person" && deps.control.takenOverByScope(scopeKey) === "sign_in") {
+        deps.control.giveBackScope(scopeKey);
+      }
+      return;
     }
     if (deps.control.controller(botId) === "person" && deps.control.takenOverBy(botId) === "sign_in") {
       deps.control.giveBack(botId);

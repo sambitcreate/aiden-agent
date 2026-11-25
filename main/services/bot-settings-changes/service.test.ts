@@ -396,3 +396,55 @@ test("update_bot computer selection always waits for the person to apply, while 
   assert.deepEqual(await service.respond(BOT, sharedHeld.changeId, "apply"), { ok: true, status: "applied" });
   assert.deepEqual(assigned[1], { kind: "shared" });
 });
+
+test("update_bot scopes listed computers per calling Bot and refuses attaching to another Bot's dedicated VM", async () => {
+  const profile = mkdtempSync(path.join(os.tmpdir(), "aiden-bot-settings-computer-scope-"));
+  roots.push(profile);
+  const allVms = [
+    { id: "shared", name: "Shared computer", kind: "shared" as const, assignedBotIds: [BOT, "bot:other"] },
+    { id: "vm-other", name: "Other Bot Box", kind: "dedicated" as const, assignedBotIds: ["bot:other"] },
+  ];
+  const service = createBotSettingsChangeService({
+    profileDir: () => profile,
+    read: async () => ({
+      values: {
+        name: "Chief",
+        description: "",
+        look: { color: "lilac", shape: "wisp" },
+        instructions: "Help me plan.",
+        dailyCheckIns: false,
+        notifications: structuredClone(DEFAULT_BOT_INTERRUPTIONS),
+        model: { providerId: "provider:a", modelId: "model:slow" },
+        computer: { kind: "shared" },
+      },
+      revision: "1",
+    }),
+    models: async () => [{ providerId: "provider:a", modelId: "model:fast", label: "Fast (A)" }],
+    computers: async (botId) =>
+      allVms
+        .filter((vm) => vm.kind === "shared" || vm.assignedBotIds.includes(botId))
+        .map(({ id, name, kind }) => ({ id, name, kind })),
+    validateComputer: async (botId, target) => {
+      if (target.kind !== "existing") return undefined;
+      const vm = allVms.find((entry) => entry.id === target.computerId);
+      if (!vm) return `No Bot computer with id "${target.computerId}" exists.`;
+      if (vm.kind !== "shared" && !vm.assignedBotIds.includes(botId)) {
+        return "You can't attach to another Bot's dedicated computer from chat. Only the person changes that in settings.";
+      }
+      return undefined;
+    },
+    write: async () => {},
+    appendEntry: async () => {},
+    newId: () => "00000000-0000-4000-8000-000000000001",
+  });
+
+  const readOut = JSON.parse(await service.call(BOT, {}, { owner: true })) as { computers?: Array<{ id: string }> };
+  assert.deepEqual(
+    readOut.computers?.map((vm) => vm.id),
+    ["shared"],
+  );
+  await assert.rejects(
+    () => service.call(BOT, { computer: { kind: "existing", computerId: "vm-other" } }, { owner: true }),
+    /another Bot's dedicated computer/u,
+  );
+});
