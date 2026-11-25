@@ -1549,7 +1549,10 @@
         "renderer/components/bots/plan-card.test.tsx",
         "renderer/shared/bot-plans.test.ts",
         "renderer/shared/bot-messages.test.ts",
-        "renderer/components/settings/storage-settings.test.ts"
+        "renderer/components/settings/storage-settings.test.ts",
+        "renderer/shared/browser-element-grab.test.ts",
+        "renderer/components/grabbed-element-chip.test.tsx",
+        "renderer/components/composer-browser-grab.test.tsx"
       ],
       "preserved": [
         "ios-release-policy",

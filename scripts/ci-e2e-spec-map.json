@@ -29,6 +29,7 @@
     "accessibility.spec.ts": [
       "renderer/components/chat-sidebar",
       "renderer/components/composer",
+      "renderer/components/grabbed-element-chip",
       "renderer/components/command-palette",
       "renderer/components/model-picker",
       "renderer/components/ui.tsx",
@@ -150,6 +151,13 @@
     ],
     "browser-cancellation.spec.ts": [
       "renderer/components/browser",
+      "main/services/browser"
+    ],
+    "browser-grab.spec.ts": [
+      "renderer/components/browser",
+      "renderer/components/grabbed-element-chip",
+      "renderer/shared/browser-element-grab.ts",
+      "renderer/lib/browser-element-grab-delivery.ts",
       "main/services/browser"
     ],
     "browser-initial-crash.spec.ts": [

@@ -53,7 +53,8 @@ superseded. Runner capacity can still cause queueing.
 - Apple Foundation Models tests run in their own job. The `ios` job resolves
   Swift packages into a cached directory keyed on `Package.resolved`, builds for
   testing once for the generic device and once for the simulator, then runs
-  `test-without-building` against the shared DerivedData. iOS-only changes also
+  `test-without-building` against the shared DerivedData on one simulator,
+  with parallel clones off. iOS-only changes also
   run shipping and TestFlight policies in that job; full desktop runs execute
   them through the preserved regression lane.
 - Four desktop lanes use `scripts/ci-test-registry.json`. GitHub allows five
@@ -403,6 +404,44 @@ showed `settingsPrepared:false`.
 - When the first window does not open, the fixture's error now lists the
   startup milestones the bootstrap recorded, so a later hang shows how far
   launch got.
+
+On 2026-11-24 the blocking iOS job was failing or hanging on `main` (job
+138014789163) and on PRs that touch no iOS code (#890, #900, #901, #904, #915).
+Different tests failed each time, and every failing test had stalled for
+minutes on a test that takes a fraction of a second locally:
+
+- `AidenSandboxedHTMLTests.testAPreviewPageMakesNoNetworkConnections` ran
+  192 and 345 seconds and missed a 30-second page load (jobs 138345806379,
+  138355678757).
+- `AidenNativeIntegrationTests.testReconcileEndsAnActivityFromAnOlderPairing`
+  ran 128 seconds; its in-memory demo machines took about 95 seconds to
+  connect, past the scheduler's 10-second probe (job 138386215673).
+- `AidenChatTests.testUploadCleanupRevocationDoesNotDeadlockRemoval` ran 228
+  and 596 seconds (job 138014789163, then an `IDERunOperation` crash in
+  xcodebuild, and #904's run 45340108118).
+- #900's run 45336499109 hung after 2,512 passes with both clones silent until
+  the 50-minute limit, and #890's run had a clone time out connecting to
+  `com.apple.instruments.deviceservice.lockdown`.
+
+Two causes were fixed:
+
+- The XCTest step ran two parallel simulator clones on the 3-core, 7 GB hosted
+  runner. The clones took 6 to 9 minutes to boot before any test ran, and
+  then the suite took 1,360 to 1,550 seconds of wall time, more than the 759
+  to 1,032 seconds its tests summed to. One test host grows to about 1.6 GB
+  over a local full run, so two of them plus WebKit content processes left
+  whole test processes stalled. The step now passes
+  `-parallel-testing-enabled NO` and runs one simulator, in both iOS jobs.
+  Local Xcode keeps the scheme's parallel setting. On one simulator the full
+  suite ran in 273 seconds locally (2,569 passed) with the host's load
+  average near 130.
+- `AidenChatProgressLifecycleURLProtocol.releaseHeldRequest()` only completed
+  a request that had already been held. A request that arrived after the
+  test's release was still held, with nobody left to release it, so a test
+  whose request was late waited on it until the session's request timeout
+  instead of failing at its own short wait. Release now ends the hold, and
+  each `AidenChatTests` test starts by resetting the fixture's holds,
+  overrides and open stream.
 
 Release workflows, signing/notarization, publication and repository protection
 settings remain unchanged. The previous draft's release-admission rewrite has

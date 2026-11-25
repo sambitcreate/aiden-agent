@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+- **2026-11-24 — A chat's top bar after Telegram's.** No Remote wire or revision change.
+  - Workspace and Bot chats show the chat's name over one status line on a glass capsule in the middle of the bar.
+  - The status line says where the chat lives at rest (the workspace, then the computer when several are paired, otherwise the branch). For a Bot, it says what the Bot is for.
+  - While the agent or Bot works, the status line shows typing dots and what it is doing. When it needs you ("Waiting for approval", "Waiting for you") or can't answer (Paused, Unavailable, Needs a model, Interrupted), it turns amber.
+  - The computer's name moves from under the bar into the status line.
+  - A Workspace chat shows the workspace's initials on the right. Its name and its initials both open the chat's actions (Rename, Fork, Read response aloud, Files). The separate More button is gone, including in a chat with no workspace.
+  - A Bot chat puts the Bot's face in the middle of the bar with its name tucked under it. Both open the Bot's profile, and More on the right keeps the Bot's actions.
+  - Under Reduce Motion the typing dots hold still. Under Reduce Transparency the capsule is solid.
 - **2026-11-24 — Agent Slider on the phone.** When the paired Mac offers the Agent Slider (Remote contract revision 66, `chat:agent-slider`), a Workspace chat's composer shows a slider chip instead of the model menu. It opens a sheet (a popover at regular width) with the Mac's stops on a track; drag sideways, tap or step to a stop, use Reset to home, or open Other models for the full menu. A new chat starts on the model and thinking level last used on the Mac, and Reset returns it to the home stop. Your message runs on the chosen stop's model and thinking level; the Mac keeps that level with the chat only when you picked a stop or model on the phone, so a plain reply never changes it. Stops the Mac can't run are shown with the reason (sign in on your computer, choose a model on your computer, only on your computer) and can't be chosen. Settings → Agent Slider lists the stops and home stop read-only. The chosen stop and an open sheet survive folding an iPhone Duo. Older Macs keep the model menu.
 
 - **2026-11-22 — Pairing feedback and QR framing.** Add Computer scans for QR codes inside the visible viewfinder. Manual pairing shows what to correct below the address or setup code field. Search keeps Add Computer available until a computer is paired.

@@ -23,6 +23,9 @@ final class AidenChatTests: XCTestCase {
     override func setUp() {
         super.setUp()
         AidenChatProgressLifecycleURLProtocol.beginTestEpoch()
+        // A test that ended early can leave an armed hold, override, or open
+        // event stream behind; the next test starts without them.
+        AidenChatProgressLifecycleURLProtocol.reset()
         storageRoot = FileManager.default.temporaryDirectory.appending(path: "aiden-chat-tests-\(UUID())")
         preferenceSuite = "AidenChatTests.\(UUID().uuidString)"
         testCache = AidenChatCache(root: storageRoot.appending(path: "cache"))
@@ -6206,6 +6209,33 @@ final class AidenChatTests: XCTestCase {
         try await assertRemovalJoinsUploadCleanup(revokedCleanup: true)
     }
 
+    /// The fixture's release ends a hold whose request has not arrived yet, as
+    /// when a slow simulator delivers it after the test has moved on.
+    func testAReleasedHoldLetsALateRequestThrough() async throws {
+        let arrived = expectation(description: "the hold callback never runs after release")
+        arrived.isInverted = true
+        AidenChatProgressLifecycleURLProtocol.holdNextRequest(endingIn: "/late-release") { arrived.fulfill() }
+        AidenChatProgressLifecycleURLProtocol.releaseHeldRequest()
+
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.protocolClasses = [AidenChatProgressLifecycleURLProtocol.self]
+        configuration.httpAdditionalHeaders = [
+            AidenChatProgressLifecycleURLProtocol.epochHeader: AidenChatProgressLifecycleURLProtocol.epoch,
+        ]
+        let session = URLSession(configuration: configuration)
+        defer { session.invalidateAndCancel() }
+        let answered = expectation(description: "the late request is answered without a second release")
+        let task = session.dataTask(with: URL(string: "https://aiden.test/api/aiden/v1/late-release")!) { _, response, error in
+            XCTAssertNil(error)
+            XCTAssertEqual((response as? HTTPURLResponse)?.statusCode, 404)
+            answered.fulfill()
+        }
+        task.resume()
+        await fulfillment(of: [answered], timeout: 5)
+        await fulfillment(of: [arrived], timeout: 0.1)
+        XCTAssertTrue(AidenChatProgressLifecycleURLProtocol.heldRequestEpochs.isEmpty, "nothing was held")
+    }
+
     @MainActor
     private func assertRemovalJoinsUploadCleanup(purging: Bool = false, revokedCleanup: Bool = false) async throws {
         let root = FileManager.default.temporaryDirectory.appending(path: "aiden-removed-upload-\(UUID())")
@@ -12024,7 +12054,21 @@ private final class AidenChatProgressLifecycleURLProtocol: URLProtocol, @uncheck
         }
     }
 
-    static func releaseHeldRequest() { takeHeldRequest()?() }
+    /// Ends the hold: a request already held completes, and one that has not
+    /// arrived yet is no longer held when it does. Otherwise a request that
+    /// arrives after the test's release, as on a slow simulator, stays parked
+    /// with nobody left to release it, and the test waits on it until the
+    /// session's request timeout.
+    static func releaseHeldRequest() {
+        let completion = lock.withLock {
+            heldPathSuffix = nil
+            onHeldRequest = nil
+            let held = heldCompletion
+            heldCompletion = nil
+            return held
+        }
+        completion?()
+    }
 
     static var progressRequestCount: Int {
         lock.lock()

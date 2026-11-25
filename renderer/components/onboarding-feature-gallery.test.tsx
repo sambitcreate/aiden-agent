@@ -152,6 +152,23 @@ test("Mac and Linux tours introduce Apps using Aiden with its local-only switch 
   );
 });
 
+test("the Browser & Annotations tile introduces React/DOM element grabbing with code-drawn art", () => {
+  const { container, unmount } = render(<OnboardingFeatureGallery features={onboardingFeatures} platform="darwin" />);
+  const tile = container.querySelector<HTMLElement>('[data-onboarding-feature="browser"]');
+  assert.ok(tile, "browser tile renders");
+  assert.match(tile.getAttribute("aria-label") ?? "", /grab React or DOM components directly into the composer/u);
+  const art = within(tile);
+  assert.ok(art.getByText("<PricingCard />"), "code-drawn art shows a grabbed component chip");
+  assert.equal(tile.querySelectorAll("img").length, 0, "browser tile art stays code-drawn");
+  for (const element of tile.querySelectorAll<HTMLElement>("[class*='anim']")) {
+    for (const name of element.className.split(/\s+/u).filter((part) => part.includes("anim"))) {
+      assert.match(name, /^oa-anim-[a-z]+$/u);
+    }
+  }
+  unmount();
+  cleanup();
+});
+
 test("the Scheduled Automations tile shows a task's result posted in its chat and the chat's check-back", () => {
   const { container, unmount } = render(<OnboardingFeatureGallery features={onboardingFeatures} platform="darwin" />);
   const tile = container.querySelector<HTMLElement>('[data-onboarding-feature="schedules"]');
