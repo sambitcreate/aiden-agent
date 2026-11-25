@@ -681,6 +681,7 @@ struct AidenRemoteCapability: RawRepresentable, Codable, Hashable, Sendable {
     /// Contract revision 59 adds `bot:routine-models`, asked for alone.
     /// Contract revision 59 adds `bot:peers`, asked for alone.
     /// Contract revision 64 adds `chat:continue-in-new-chat`, asked for alone.
+    /// Contract revision 68 adds `bot:needs-you`, asked for alone.
 
     /// Contract revision 61 adds `approval:cards`, `approvals:settings`,
     /// `bot:settings-changes`, `bot:suggestions` and `bot:templates`, each alone.
@@ -698,6 +699,7 @@ struct AidenRemoteCapability: RawRepresentable, Codable, Hashable, Sendable {
         Self(rawValue: "chat:new-worktree"),
         Self(rawValue: "chat:continue-in-new-chat"),
         Self(rawValue: "stream:snapshot-reasons"),
+        Self(rawValue: "bot:needs-you"),
         Self(rawValue: "bot:watches"),
         Self(rawValue: "bot:open-work"),
         Self(rawValue: "bot:routine-models"),
@@ -780,6 +782,12 @@ struct AidenRemoteCapability: RawRepresentable, Codable, Hashable, Sendable {
     /// `reason` (`gap` | `reset`), distinguishing retention gaps from provider
     /// resets. Asked for alone so older hosts do not reject the progress batch.
     static let streamSnapshotReasons = Self(rawValue: "stream:snapshot-reasons")
+
+    /// Revision 68: `GET /bots` summaries carry `needsYou: true` for a Bot
+    /// waiting on the person (an approval, a question, a hand-off or an open
+    /// issue). It grants no authority. A Mac on an earlier revision refuses the
+    /// name, so the device asks for it alone.
+    static let botNeedsYou = Self(rawValue: "bot:needs-you")
 
     /// Revision 42: the device receives the Bot session `issues` list and
     /// `issues` frames, a summary `issueCount`, and issue items in the routine
