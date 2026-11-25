@@ -5,6 +5,7 @@ import { dirname } from "node:path";
 import { SessionManager } from "@earendil-works/pi-coding-agent";
 import type { Message } from "@earendil-works/pi-ai";
 import { parseAttachments, withReadableImages } from "../../../main/services/attachment-contract.js";
+import { formatGrabbedElementsForPrompt, withoutGrabbedElementThumbnails } from "../../../renderer/shared/browser-element-grab.js";
 import { createChatForkService } from "../../../main/services/chat-fork-service.js";
 import { withoutHookBlockedPrompts } from "../../../main/services/hook-blocked-prompt.js";
 import { workspaceFolderMissing } from "../../../main/services/workspace-folder-presence.js";
@@ -20,9 +21,42 @@ function journalMessage(message: ChatMessage): Message {
       usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } } };
   }
   const attachments = parseAttachments(withReadableImages(message.attachments)) ?? [];
-  return { role: "user", timestamp: message.createdAt, content: [{ type: "text", text: message.content }, ...attachments.map((attachment) => attachment.kind === "image" && attachment.data
-    ? { type: "image" as const, data: attachment.data, mimeType: attachment.mimeType }
-    : { type: "text" as const, text: `Attachment: ${attachment.name}\n${attachment.text ?? ""}` })] };
+  const readableImagesById = new Map(
+    attachments
+      .filter((attachment) => attachment.kind === "image" && Boolean(attachment.data))
+      .map((attachment) => [attachment.id, attachment] as const),
+  );
+  const grabbedForPrompt = message.grabbedElements?.map((element) => {
+    if (element.thumbnailAttachmentId && readableImagesById.has(element.thumbnailAttachmentId)) {
+      return element;
+    }
+    if (element.thumbnailAttachmentId === undefined) return element;
+    const { thumbnailAttachmentId: _omitted, ...withoutThumb } = element;
+    return withoutThumb;
+  });
+  const grabbedText = formatGrabbedElementsForPrompt(grabbedForPrompt, { includeThumbnailNote: true });
+  const textContent = [grabbedText, message.content].filter(Boolean).join("\n\n");
+  const nonGrabAttachments = withoutGrabbedElementThumbnails(attachments);
+  const emittedThumbnails = new Set<string>();
+  const thumbnailParts = (message.grabbedElements ?? []).flatMap((element) => {
+    const thumbId = element.thumbnailAttachmentId;
+    if (!thumbId || emittedThumbnails.has(thumbId)) return [];
+    const thumb = readableImagesById.get(thumbId);
+    if (!thumb?.data) return [];
+    emittedThumbnails.add(thumbId);
+    return [{ type: "image" as const, data: thumb.data, mimeType: thumb.mimeType }];
+  });
+  return {
+    role: "user",
+    timestamp: message.createdAt,
+    content: [
+      { type: "text", text: textContent },
+      ...nonGrabAttachments.map((attachment) => attachment.kind === "image" && attachment.data
+        ? { type: "image" as const, data: attachment.data, mimeType: attachment.mimeType }
+        : { type: "text" as const, text: `Attachment: ${attachment.name}\n${attachment.text ?? ""}` }),
+      ...thumbnailParts,
+    ],
+  };
 }
 
 /**
