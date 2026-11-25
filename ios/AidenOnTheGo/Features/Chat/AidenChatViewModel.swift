@@ -2013,13 +2013,17 @@ final class AidenChatViewModel {
                 request: request,
                 idempotencyKey: idempotencyKey
             )
-            // A pick made after this send was built (counted in this session,
-            // or restored from disk against a send that kept where new chats
-            // start) may name the very level the send carried. If the send
-            // couldn't ask the Mac to keep that level, the pick wasn't
-            // delivered: it stays the chat's unsent pick, so the next send asks.
+            // A pick made after this send was built may name the very level the
+            // send carried. If the send couldn't ask the Mac to keep that
+            // level, the pick wasn't delivered: it stays the chat's unsent
+            // pick, so the next send asks. A pick counted in this session is
+            // newer when the count moved. A pick restored from disk is newer
+            // than a send that carried none of the person's: one that kept
+            // where new chats start, or a plain send that kept nothing. A send
+            // that carried a pick restores that same pick, so it isn't newer.
+            // A record from before `keepsSelection` was saved can't tell.
             let pickPostdatesSend = modelPickGeneration != pickGeneration
-                || (restoredChatPick && attempt.startsWhereNewChatsStart == true)
+                || (restoredChatPick && (attempt.startsWhereNewChatsStart == true || attempt.keepsSelection == false))
             let pickUndelivered = pickPostdatesSend && agentSlider != nil
                 && request.saveSelection != true && request.thinkingLevel != nil
             // Otherwise the Mac now holds this pick as the chat's own model.

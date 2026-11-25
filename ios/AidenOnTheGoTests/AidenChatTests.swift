@@ -3790,10 +3790,11 @@ final class AidenChatTests: XCTestCase {
         // picks another level and then the start's own again, in this session
         // or before a relaunch. That pick is newer than the send, which
         // couldn't ask the Mac to keep its level, so the accepted retry leaves
-        // it unsent and the next send asks the Mac to keep it.
-        for relaunches in [false, true] {
+        // it unsent and the next send asks the Mac to keep it. The same holds
+        // for a plain send in an existing chat, which carried no pick at all.
+        for (relaunches, existing) in [(false, false), (true, false), (false, true), (true, true)] {
             let (built, builtTurns, builtOffer, builtPreferences) = try await launch(
-                macOffersSlider: false, initialChat: unlistedChat
+                macOffersSlider: false, initialChat: existing ? existingChat : unlistedChat
             )
             builtOffer.failsTurns.withLock { $0 = true }
             builtOffer.losesReplies.withLock { $0 = true }
@@ -3803,6 +3804,7 @@ final class AidenChatTests: XCTestCase {
             let start = try sentTurn(builtTurns)
             let level = try XCTUnwrap(start.thinkingLevel, "the catalog gave the first send a level")
             XCTAssertNil(start.saveSelection)
+            XCTAssertEqual(built.pendingSend?.keepsSelection, !existing, "only a new chat's first send keeps where it started")
             _ = await built.reconcileChat(context: built.owner)
             XCTAssertFalse(built.chat.messages.isEmpty)
             built.selectModel(providerId: "acme", modelId: "small", thinkingLevel: "high")
@@ -3812,7 +3814,8 @@ final class AidenChatTests: XCTestCase {
                 built.stopProgressObservation()
                 builtOffer.failsTurns.withLock { $0 = false }
                 (chat, turns, _, preferences) = try await launch(
-                    macOffersSlider: true, initialChat: unlistedChat, relaunching: (builtOffer, builtPreferences)
+                    macOffersSlider: true, initialChat: existing ? existingChat : unlistedChat,
+                    relaunching: (builtOffer, builtPreferences)
                 )
                 try await waitUntil { chat.agentSlider != nil && chat.pendingSend != nil }
                 _ = await chat.reconcileChat(context: chat.owner)
@@ -3827,10 +3830,10 @@ final class AidenChatTests: XCTestCase {
             XCTAssertEqual(chat.turnModelSelection, picked)
             await chat.send(retry: true)
             XCTAssertNil(chat.pendingSend, "the Mac replayed the send it ran")
-            XCTAssertEqual(chat.turnModelSelection, picked, "the accepted retry dropped the newer pick (relaunch: \(relaunches))")
+            XCTAssertEqual(chat.turnModelSelection, picked, "the accepted retry dropped the newer pick (relaunch: \(relaunches), existing chat: \(existing))")
             XCTAssertEqual(
                 preferences.chatSelection(for: "instance-progress-lifecycle", chatID: chat.chat.id), picked,
-                "the accepted retry erased the newer pick (relaunch: \(relaunches))"
+                "the accepted retry erased the newer pick (relaunch: \(relaunches), existing chat: \(existing))"
             )
             try await waitUntil { chat.streamState?.isTerminal != false }
             chat.draft = "Again"
@@ -3838,7 +3841,7 @@ final class AidenChatTests: XCTestCase {
             await chat.send()
             try await waitUntil { turns.count == (relaunches ? 2 : 3) }
             XCTAssertEqual(try sentTurn(turns).thinkingLevel, level)
-            XCTAssertEqual(try sentTurn(turns).saveSelection, true, "the next send didn't ask the Mac to keep the pick (relaunch: \(relaunches))")
+            XCTAssertEqual(try sentTurn(turns).saveSelection, true, "the next send didn't ask the Mac to keep the pick (relaunch: \(relaunches), existing chat: \(existing))")
             chat.stopProgressObservation()
         }
 
