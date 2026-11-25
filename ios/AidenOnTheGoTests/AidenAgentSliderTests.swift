@@ -158,6 +158,9 @@ final class AidenAgentSliderTests: XCTestCase {
             XCTAssertNil(catalog.agentSlider, why)
             XCTAssertTrue(catalog.agentSliderUnreadable, why)
             XCTAssertEqual(catalog.providers.map(\.id), ["provider_fixture"], why)
+            // The saved copy keeps the mark, so a relaunch still says the slider is unreadable.
+            let saved = try JSONDecoder().decode(AidenModelCatalog.self, from: JSONEncoder().encode(catalog))
+            XCTAssertTrue(saved.agentSliderUnreadable, why)
         }
         slider["homeStopId"] = "stop_2c3d4e5f"
         raw["agentSlider"] = slider

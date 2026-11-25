@@ -3119,6 +3119,16 @@ extension AidenModelCatalog {
         agentSliderUnreadable = (sent && agentSlider == nil)
             || ((try? values.decodeIfPresent(Bool.self, forKey: .agentSliderUnreadable)) ?? nil) == true
     }
+
+    /// The saved catalog carries only what the Mac sent, plus the unreadable
+    /// mark when there is one, so a catalog with no slider encodes as before.
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(providers, forKey: .providers)
+        try container.encode(defaults, forKey: .defaults)
+        try container.encodeIfPresent(agentSlider, forKey: .agentSlider)
+        if agentSliderUnreadable { try container.encode(true, forKey: .agentSliderUnreadable) }
+    }
 }
 
 /// Revision 68: why an Agent Slider stop can or cannot run from this phone.
