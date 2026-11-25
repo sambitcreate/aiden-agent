@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { formatListPrice, isOlderThanDays, showsListPrice } from "./model-details";
+import { formatListPrice, showsListPrice } from "./model-details";
 
 test("list prices use cents under a dollar and trim whole and half dollars", () => {
   assert.equal(formatListPrice({ input: 0.15, output: 0.6 }), "$0.15 / $0.60 per 1M");
@@ -33,14 +33,4 @@ test("list price shows only for hosted, per-token, catalog-backed providers", ()
   // Private deployments under a catalog id are not billed at list price either.
   assert.equal(showsListPrice({ providerId: "openai", isLocal: true }), false);
   assert.equal(showsListPrice({ providerId: "constructor", isLocal: false }), false);
-});
-
-test("a date is older than N days only past that many whole days before now", () => {
-  const now = Date.parse("2026-10-09T12:00:00Z");
-  assert.equal(isOlderThanDays("2026-08-10T12:00:00Z", 60, now), false, "exactly 60 days");
-  assert.equal(isOlderThanDays("2026-08-10T11:59:59Z", 60, now), true);
-  assert.equal(isOlderThanDays("2026-10-01", 60, now), false);
-  assert.equal(isOlderThanDays("2025-01-01", 60, now), true);
-  assert.equal(isOlderThanDays("not a date", 60, now), false);
-  assert.equal(isOlderThanDays(undefined, 60, now), false);
 });

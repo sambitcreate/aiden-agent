@@ -35,12 +35,18 @@ test("chat shell keeps local interactions isolated and keyboard-accessible", asy
   const modelPicker = page.getByRole("button", { name: /^Selected model:/u });
   await modelPicker.focus();
   await page.keyboard.press("Enter");
-  await expect(page.getByRole("tablist", { name: "Model picker view" })).toBeVisible();
-  await page.getByRole("tab", { name: "List" }).click();
+  // The popover opens on the Agent Slider, focused on its thumb.
+  const agentSlider = page.getByRole("slider", { name: "Agent Slider" });
+  await expect(agentSlider).toBeFocused();
+  await page.getByRole("button", { name: /^Other models…/u }).click();
   const modelFilter = page.getByRole("combobox", { name: "Chat model" });
   await expect(modelFilter).toBeFocused();
+  // Escape steps back from the list to the slider, then closes the popover.
   await page.keyboard.press("Escape");
   await expect(modelFilter).toBeHidden();
+  await expect(agentSlider).toBeFocused();
+  await page.keyboard.press("Escape");
+  await expect(agentSlider).toBeHidden();
   await expect(modelPicker).toBeFocused();
 
   await composer.fill("/");
@@ -911,15 +917,18 @@ test("holding Command reveals chat shortcuts and typing outside a field lands in
   const modelPicker = page.getByRole("button", { name: /^Selected model:/u });
   await modelPicker.focus();
   await page.keyboard.press("Space");
-  await expect(page.getByRole("tablist", { name: "Model picker view" })).toBeVisible();
-  await page.getByRole("tab", { name: "List" }).click();
+  const agentSlider = page.getByRole("slider", { name: "Agent Slider" });
+  await expect(agentSlider).toBeFocused();
+  // Typing on the slider opens the model list with the key already in its filter.
+  await page.keyboard.type("zz");
   const modelFilter = page.getByRole("combobox", { name: "Chat model" });
   await expect(modelFilter).toBeFocused();
-  await page.keyboard.type("zz");
   await expect(modelFilter).toHaveValue("zz");
   await expect(composer).toHaveValue("hi there");
   await page.keyboard.press("Escape");
   await expect(modelFilter).toBeHidden();
+  await page.keyboard.press("Escape");
+  await expect(agentSlider).toBeHidden();
 
   // Disclosure summaries (activity feed, subagent detail) toggle on Space too.
   await page.evaluate(() => {
@@ -934,6 +943,54 @@ test("holding Command reveals chat shortcuts and typing outside a field lands in
   await page.keyboard.press("Space");
   await expect(disclosure).toHaveAttribute("open", "");
   await expect(composer).toHaveValue("hi there");
+});
+
+test("an Agent Slider stop sets the model the next message runs on", async ({ aiden }) => {
+  const { page, lmStudio } = aiden;
+  await finishLmStudioOnboarding(page);
+  type Ipc = { invoke<T>(channel: string, ...args: unknown[]): Promise<T> };
+  // A second ready model to put on a stop.
+  await page.evaluate(async () => {
+    const ipc = (window as unknown as { aidenAPI: { ipc: Ipc } }).aidenAPI.ipc;
+    const providers = await ipc.invoke<{ id: string; models: string[] }[]>("providers:list");
+    const lmStudioProvider = providers.find((provider) => provider.id === "custom:lmstudio")!;
+    await ipc.invoke("providers:save", {
+      ...lmStudioProvider,
+      models: [...lmStudioProvider.models, "aiden-e2e-second"],
+    });
+  });
+  // The composer read the providers before the save; read them again.
+  await page.reload();
+  await expect(page.locator("textarea")).toBeVisible();
+
+  // Onboarding seeded Fast / Balanced / Smart around the connected model.
+  const modelPicker = page.getByRole("button", { name: /^Selected model:/u });
+  await expect(modelPicker).toHaveAttribute("aria-label", /, Balanced on the Agent Slider\. Choose a model\.$/u);
+  await modelPicker.click();
+  const agentSlider = page.getByRole("slider", { name: "Agent Slider" });
+  await expect(agentSlider).toHaveAttribute("aria-valuenow", "2");
+
+  // Smart has no model yet: choosing it asks for one instead of moving the chat.
+  await page.locator('[data-agent-slider-stop="2"]').click();
+  await expect(page.getByRole("heading", { name: "Choose a model for Smart" })).toBeVisible();
+  await page
+    .getByRole("listbox", { name: "Suggestions" })
+    .getByRole("option")
+    .filter({ hasText: /second/iu })
+    .first()
+    .click();
+  await expect(modelPicker).toHaveAttribute("aria-label", /Smart on the Agent Slider/u);
+
+  const prompt = "Agent Slider test: which model answers this?";
+  const reply = lmStudio.enqueueToolScenario!({ prompt, calls: [], finalText: "The Smart stop's model." });
+  await page.locator("textarea").first().fill(prompt);
+  await page.getByRole("button", { name: "Send message" }).click();
+  await expect.poll(() => reply.completed).toBe(true);
+  const completion = lmStudio.requests
+    .filter((request) => request.method === "POST" && request.url === "/v1/chat/completions")
+    .pop();
+  expect((completion?.body as { model?: string } | null)?.model).toBe("aiden-e2e-second");
+  await expect(modelPicker).toHaveAttribute("aria-label", /Smart on the Agent Slider/u);
 });
 
 test("sent user prompts can be selected with the pointer", async ({ aiden }) => {

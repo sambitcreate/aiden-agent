@@ -35,7 +35,6 @@ import type { ChatPendingAttention } from "../shared/chat-pending-attention";
 import type { SavedChatIntent } from "../shared/chat-intent";
 import type { CompactionEngine } from "../shared/compaction";
 import type { WorkspaceFolderPresenceResult } from "../shared/workspace-folder-presence";
-import type { ModelPaceSummary } from "../shared/model-pace";
 import { KEEP_AWAKE_CHANGED_CHANNEL, parseKeepAwakeStatus, type KeepAwakeStatus } from "../shared/keep-awake";
 import { parseWindowControlsState, type WindowControlsState } from "../shared/window-chrome";
 import {
@@ -138,8 +137,6 @@ import type {
   McpPendingLaunchApproval,
   McpMacAppStatus,
   ModelInfo,
-  ModelInsightsActionResult,
-  ModelInsightsStatus,
   FoundationModelsConnectionStatus,
   Profile,
   Provider,
@@ -624,13 +621,6 @@ export const assistantLiveApi = {
     onNotification<AssistantLiveRendererEvent>("assistant-live:event", handler),
 };
 
-export const modelInsightsApi = {
-  status: () => invoke<ModelInsightsStatus>("modelInsights:status"),
-  connect: (apiKey: string) => invoke<ModelInsightsActionResult>("modelInsights:connect", apiKey),
-  refresh: () => invoke<ModelInsightsActionResult>("modelInsights:refresh"),
-  disconnect: () => invoke<ModelInsightsActionResult>("modelInsights:disconnect"),
-};
-
 /** Settings → Image Generation. Keys go in only; state is redacted. */
 export const imageGenerationApi = {
   state: () => invoke<ImageGenerationState>("imageGeneration:state"),
@@ -652,12 +642,6 @@ export const imageGenerationApi = {
   /** User-initiated only: the one network path on this page. */
   fetchModels: (provider: ImageGenerationProviderId) =>
     invoke<ImageGenerationActionResult>("imageGeneration:fetchModels", { provider }),
-};
-
-/** Device-local measured pace; reads never touch the network. */
-export const modelPaceApi = {
-  summaries: () => invoke<Record<string, ModelPaceSummary>>("modelPace:summaries"),
-  clear: () => invoke<void>("modelPace:clear"),
 };
 
 /** Replies waiting for a provider usage limit to clear, on this Mac. */
@@ -1844,8 +1828,15 @@ export const chatsApi = {
     ephemeral?: true;
     providerId?: string;
     model?: string;
+    /** The new-chat pick's effort (an Agent Slider stop), saved on the chat with its model. */
+    thinkingLevel?: import("../shared/generation-thinking").GenerationThinkingLevel;
     turnId: string;
-    message: { role: "user"; content: string; attachments?: Attachment[] };
+    message: {
+      role: "user";
+      content: string;
+      attachments?: Attachment[];
+      grabbedElements?: import("../shared/browser-element-grab").GrabbedElementContextV1[];
+    };
     skillInvocation?: SkillInvocationV1;
     /** Aiden Live sent this first message for the person ("By voice"). */
     inputSource?: ChatInputSourceV1;
@@ -1863,8 +1854,14 @@ export const chatsApi = {
     workspaceId: string;
     providerId?: string;
     model?: string;
+    thinkingLevel?: import("../shared/generation-thinking").GenerationThinkingLevel;
     turnId: string;
-    message: { role: "user"; content: string; attachments?: Attachment[] };
+    message: {
+      role: "user";
+      content: string;
+      attachments?: Attachment[];
+      grabbedElements?: import("../shared/browser-element-grab").GrabbedElementContextV1[];
+    };
     skillInvocation?: SkillInvocationV1;
     inputSource?: ChatInputSourceV1;
     worktree: FirstMessageWorktreeRequest;
@@ -1875,9 +1872,20 @@ export const chatsApi = {
   rename: (id: string, title: string) => invoke<void>("chats:rename", id, title),
   renameWithFoundationModels: (id: string) =>
     invoke<ChatTitleRenameResult>("chats:renameWithFoundationModels", id),
-  /** Change the model this chat answers with; other chats and new chats keep theirs. */
-  setModel: (id: string, providerId: string, model: string) =>
-    invoke<Chat | null>("chats:setModel", id, providerId, model),
+  /**
+   * Change the model this chat answers with; other chats and new chats keep
+   * theirs. A level sets the chat's own effort and `null` clears it; leaving it
+   * out keeps the chat's level only while the model stays the same.
+   */
+  setModel: (
+    id: string,
+    providerId: string,
+    model: string,
+    thinkingLevel?: import("../shared/generation-thinking").GenerationThinkingLevel | null,
+  ) =>
+    thinkingLevel === undefined
+      ? invoke<Chat | null>("chats:setModel", id, providerId, model)
+      : invoke<Chat | null>("chats:setModel", id, providerId, model, thinkingLevel),
   /** Turn design mode on or off for this chat; every window hears `chats:design-mode-changed`. */
   setDesignMode: (id: string, enabled: boolean, source?: "toggle" | "shortcut" | "slash" | "card") =>
     invoke<Chat | null>("chats:setDesignMode", id, enabled, source),
@@ -1976,6 +1984,7 @@ export const chatsApi = {
       content: string;
       model?: string;
       attachments?: Attachment[];
+      grabbedElements?: import("../shared/browser-element-grab").GrabbedElementContextV1[];
     },
     meta: {
       providerId?: string;
