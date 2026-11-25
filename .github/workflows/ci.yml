@@ -10,9 +10,12 @@ on:
 permissions:
   contents: read
 
-# One group per PR and one for main pushes: a newer push cancels the older
-# queued or running CI for the same ref, so a burst of merges runs the macOS
-# suite once on the newest main commit. Manual dispatches keep their own group.
+# One group per PR and one for main pushes: a run that joins the group cancels
+# the older queued or running CI for the same ref, so a burst of merges runs the
+# macOS suite about once instead of once per merge. GitHub orders the group by
+# when each run starts waiting and does not guarantee that order, so in a burst
+# seconds apart the surviving run may be for an earlier commit; re-run CI on the
+# tip by hand if that happens. Manual dispatches keep their own group.
 concurrency:
   group: ci-${{ github.event_name == 'workflow_dispatch' && github.run_id || github.ref }}
   cancel-in-progress: ${{ github.event_name != 'workflow_dispatch' }}

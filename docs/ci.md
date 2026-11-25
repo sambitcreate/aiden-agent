@@ -42,9 +42,13 @@ job follows the `mac-e2e` plan decision instead of an area (see below), and
 should require only that check.
 
 PR pushes cancel superseded PR CI, and main pushes cancel superseded main CI:
-when several merges land close together, only the newest main commit finishes the
-full suite, and that run covers every earlier commit. A cancelled main run shows
-as cancelled on its commit. Manual `workflow_dispatch` runs keep their own group
+when several merges land close together, the run that joined the concurrency
+group last finishes the full suite, which is normally the newest main commit and
+so covers every earlier one. GitHub orders the group by when each run starts
+waiting and does not guarantee that order, so with merges seconds apart the
+surviving run can be for an earlier commit. If the tip's CI shows cancelled, run
+`gh workflow run CI --ref main` (or re-run its CI) to validate it. A cancelled
+main run shows as cancelled on its commit. Manual `workflow_dispatch` runs keep their own group
 and are never superseded. Each main run of `Release consumer contract` still has
 its own concurrency group. The release workflows (`release.yml`, the TestFlight
 workflows) have their own non-cancelling groups and do not depend on CI, so

@@ -49,7 +49,7 @@ The repo's CI rules from `AGENTS.md` apply to every wake:
 - A PR is mergeable only when CI is green on its exact head commit. After merging `origin/main` in, the new head needs its own green run.
 - Rerun failed jobs at most once (`gh run rerun <run-id> --repo sambitcreate/aiden-agent --failed`). A failure that passes on rerun is still a bug: record the spec, the symptom and the run link in the PR description. Never raise timeouts, add retries or weaken `--fail-on-flaky-tests` to get green.
 - Update a PR branch by merging `origin/main`, never by rebasing or force-pushing. After the merge, recheck the root `package.json` `test` chain (union of both sides) and the Aiden Remote protocol revision.
-- Never cancel CI runs on `main` by hand; CI already supersedes an older main run when a newer merge lands.
+- Never cancel CI runs on `main` by hand; CI already supersedes an older main run when a newer merge lands. If the newest main commit's CI ends up cancelled, start CI on it again.
 
 Stop after about ten tool rounds on one wake and report what you found, what you pushed and what is left.
 
