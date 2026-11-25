@@ -74,4 +74,15 @@ test("accepts only exact model-supported Claude effort selections", () => {
     () => parseAnthropicThinkingSelection("unknown-model", "high"),
     /does not support/u,
   );
+  assert.deepEqual(
+    parseAnthropicThinkingSelection(
+      "claude-future-remote",
+      "xhigh",
+      (modelId) =>
+        modelId === "claude-future-remote"
+          ? { reasoning: true, thinkingLevelMap: { xhigh: "xhigh", max: "max" } }
+          : undefined,
+    ),
+    { modelId: "claude-future-remote", level: "xhigh" },
+  );
 });
