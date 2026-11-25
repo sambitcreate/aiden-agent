@@ -1632,6 +1632,24 @@ final class AidenBotSessionModel {
     /// words are the signal (§5.2), as on the Mac.
     private static let replyPhases: Set<String> = ["writing", "thinking"]
 
+    /// The Bot can't go on without the person: a question, approval or hand-off
+    /// card, or a running step that says it is waiting before any card arrives.
+    var waitsForPerson: Bool {
+        question != nil || approval != nil || handoff != nil || (isRunning && activity?.phase == "waiting")
+    }
+
+    /// The chat title's status line: what the Bot is doing, why it can't answer,
+    /// or what it is for. Waiting on the person is a warning, never typing dots.
+    func titleStatus(nowMs: Int, purpose: String?, machine: String?) -> AidenChatTitleStatus {
+        .bot(
+            state: isPaused ? .paused : state,
+            statusWord: statusLine(nowMs: nowMs)?.display.word,
+            waitsForYou: waitsForPerson,
+            purpose: purpose,
+            machine: machine
+        )
+    }
+
     /// The line can show, so its clock ticks (FR-m1): an idle chat runs no timer.
     var statusLineTicks: Bool { activitySupported && (isRunning || isAwaitingTurn) }
 

@@ -193,9 +193,12 @@ const BOT_RUNTIME_SNAPSHOT_REUSE_MS = 3_000;
 
 // Shared across catalog snapshots so admission and per-effect revalidation do
 // not re-open every MCP server. Any Bot inventory fence (MCP configuration or
-// credential mutation, observed drift) forces fresh inspections.
+// credential mutation, observed drift) forces fresh inspections. A server that
+// failed is skipped and retried in the background, so it cannot hold every Bot
+// turn at the discovery deadline.
 const botMcpScopeCache = createBotMcpScopeCache({
   generation: () => botRuntimeInventoryLeases.revision(),
+  reportFailure: reportBotMcpInspectionFailure,
 });
 
 function reportBotMcpInspectionFailure(report: BotMcpInspectionFailureReport): void {

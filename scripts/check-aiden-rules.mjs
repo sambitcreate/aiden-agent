@@ -180,7 +180,8 @@ function noDialogDomSniff(file, text) {
 }
 
 // network-allowlist — AGENTS.md "Release model metadata" and "Product analytics": these hosts are
-// contacted only by their fixed, manual or consented owners.
+// contacted only by their fixed, manual or consented owners. The retired OpenRouter benchmark and
+// Artificial Analysis endpoints have no owner left, so naming them anywhere fails.
 const NETWORK_HOSTS = [
   /\/\/models\.dev\b/u,
   // PostHog ingestion hosts (us.i, eu.i, app); the user-added PostHog MCP connector is not analytics.

@@ -1,5 +1,16 @@
 {
   "version": 1,
+  "macos": [
+    "bots-persistence.spec.ts",
+    "environment-devices-agent.spec.ts",
+    "environment-devices-android.spec.ts",
+    "environment-devices-features.spec.ts",
+    "environment-devices-stream.spec.ts",
+    "environment-devices-tab.spec.ts",
+    "guided-setup.spec.ts",
+    "keep-going-goals-computer-use.spec.ts",
+    "settings-simulator-ssh-hosts.spec.ts"
+  ],
   "full": [
     "playwright.config.ts",
     "vite.config.ts",
@@ -29,11 +40,22 @@
     "accessibility.spec.ts": [
       "renderer/components/chat-sidebar",
       "renderer/components/composer",
+      "renderer/components/grabbed-element-chip",
       "renderer/components/command-palette",
       "renderer/components/model-picker",
       "renderer/components/ui.tsx",
       "renderer/components/settings/",
       "renderer/main/settings-view.tsx"
+    ],
+    "agent-slider-settings.spec.ts": [
+      "renderer/components/settings/agent-slider-settings",
+      "renderer/components/agent-slider",
+      "renderer/components/agent-model-popover",
+      "renderer/components/model-list-panel",
+      "renderer/lib/agent-slider",
+      "renderer/shared/agent-slider",
+      "main/services/config-store-core",
+      "main/services/portable-config-core"
     ],
     "aiden-mcp-settings.spec.ts": [
       "renderer/components/settings/aiden-mcp-settings",
@@ -140,6 +162,13 @@
     ],
     "browser-cancellation.spec.ts": [
       "renderer/components/browser",
+      "main/services/browser"
+    ],
+    "browser-grab.spec.ts": [
+      "renderer/components/browser",
+      "renderer/components/grabbed-element-chip",
+      "renderer/shared/browser-element-grab.ts",
+      "renderer/lib/browser-element-grab-delivery.ts",
       "main/services/browser"
     ],
     "browser-initial-crash.spec.ts": [
@@ -354,10 +383,6 @@
       "main/services/model-call",
       "main/services/provider-failure",
       "renderer/shared/provider-failure.ts"
-    ],
-    "model-pad-responsive.spec.ts": [
-      "renderer/components/model-pad",
-      "renderer/components/model-picker"
     ],
     "no-workspace-chat.spec.ts": [
       "renderer/components/workspace",

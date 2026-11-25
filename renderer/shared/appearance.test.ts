@@ -538,12 +538,6 @@ test("audited UI components retain semantic typography, radii, colors, and radio
     "components/onboarding-flow.tsx",
     "components/ui.tsx",
     "components/settings/provider-model-visibility.tsx",
-    "components/settings/model-pad/model-pad-settings.tsx",
-    "components/settings/model-pad/model-pad-add-popover.tsx",
-    "components/settings/model-pad/model-pad-arrange-menu.tsx",
-    "components/settings/model-pad/model-pad-canvas.tsx",
-    "components/settings/model-pad/model-pad-data-rows.tsx",
-    "components/settings/model-pad/model-pad-tray.tsx",
     "components/settings/telegram-settings.tsx",
   ].map(readRenderer);
   const radiusSources = [
@@ -552,11 +546,6 @@ test("audited UI components retain semantic typography, radii, colors, and radio
     "components/command-palette.tsx",
     "components/composer-slash-palette.tsx",
     "components/environment-panel.tsx",
-    "components/settings/model-pad/model-pad-add-popover.tsx",
-    "components/settings/model-pad/model-pad-arrange-menu.tsx",
-    "components/settings/model-pad/model-pad-canvas.tsx",
-    "components/settings/model-pad/model-pad-data-rows.tsx",
-    "components/settings/model-pad/model-pad-tray.tsx",
     "components/review-panel.tsx",
     "components/terminal-drawer.tsx",
     "components/ui.tsx",
@@ -705,11 +694,6 @@ test("status primitives keep semantic fills and icons without decorative edges",
     const tokens = resolveThemeTokens(getPresetVariant("aiden", scheme), scheme);
     const start = styles.indexOf(scheme === "light" ? ":root {" : ":root.dark {");
     const fallback = styles.slice(start, styles.indexOf("\n}", start));
-    assert.equal(tokens["--model-pad-knob-foreground"], "#000000");
-    assert.ok(
-      fallback.includes(`--model-pad-knob-foreground: ${tokens["--model-pad-knob-foreground"]};`),
-      `${scheme} fallback Model Pad knob foreground matches the resolver`,
-    );
     for (const [token, value] of Object.entries(tokens).filter(([name]) => ["--status-", "--text-", "--syntax-", "--support-", "--fill-", "--accent-text"].some(prefix => name.startsWith(prefix)))) {
       assert.ok(fallback.includes(`${token}: ${value};`), `${scheme} fallback ${token} matches the resolver`);
     }

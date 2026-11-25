@@ -14,10 +14,11 @@ enum AidenNewWorktreeCopy {
 /// Which key the next New worktree request carries.
 enum AidenNewWorktreeRetry {
     /// The Mac keeps each answer under its key for a day, structured refusals
-    /// included, so a structured server refusal other than `idempotency_in_flight`
-    /// spends the key. Requests with no valid structured refusal (connection loss,
-    /// timeout, Cancel, invalid response, unparsed status, or `idempotency_in_flight`)
-    /// keep their key so replay cannot duplicate the worktree.
+    /// included, so a structured server refusal spends the key unless it is
+    /// `idempotency_in_flight` or carries a transient status (`408`, `429` or
+    /// `5xx`). Requests with no settled structured refusal (connection loss,
+    /// timeout, Cancel, invalid response, unparsed status, `idempotency_in_flight`,
+    /// or a transient status) keep their key so replay cannot duplicate the worktree.
     static func spendsKey(_ error: Error) -> Bool {
         AidenRemoteFailureClassification.spendsDurableKey(error)
     }

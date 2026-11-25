@@ -153,7 +153,8 @@ final class AidenNewWorktreeTests: XCTestCase {
             return .server(statusCode: status, body: body)
         }
         XCTAssertTrue(AidenNewWorktreeRetry.spendsKey(try refusal(409, "git_capability_denied")))
-        XCTAssertTrue(AidenNewWorktreeRetry.spendsKey(try refusal(500, "internal_error")))
+        XCTAssertFalse(AidenNewWorktreeRetry.spendsKey(try refusal(500, "internal_error")), "a host failure may follow a committed worktree")
+        XCTAssertFalse(AidenNewWorktreeRetry.spendsKey(try refusal(503, "internal_error")), "the Mac may not have settled the request")
         XCTAssertFalse(AidenNewWorktreeRetry.spendsKey(AidenRemoteClientError.unexpectedStatus(502)), "an unparsed HTTP status leaves the host ledger outcome unknown")
         XCTAssertFalse(AidenNewWorktreeRetry.spendsKey(AidenRemoteClientError.invalidResponse), "a malformed/truncated response may follow a committed worktree")
         XCTAssertFalse(AidenNewWorktreeRetry.spendsKey(try refusal(409, "idempotency_in_flight")), "the Mac is still on it")

@@ -157,10 +157,11 @@ struct AidenChatForkAttempt: Equatable {
     /// so the key must be kept for the next try. That is the case when no
     /// structured Aiden error response arrived (transport failure, timeout,
     /// lost connection, a cancelled request that may already have been sent,
-    /// an unparsed status, or an invalid response) or when the Mac reports the
-    /// same key still in flight (`409 idempotency_in_flight`). Every other
-    /// structured server error is a definitive rejection cached by the ledger
-    /// for 24 hours.
+    /// an unparsed status, or an invalid response), when the Mac reports the
+    /// same key still in flight (`409 idempotency_in_flight`), or when a
+    /// structured error carries a transient status (`408`, `429` or `5xx`).
+    /// Every other structured server error is a definitive rejection cached by
+    /// the ledger for 24 hours.
     static func outcomeIsUnknown(after error: Error) -> Bool {
         AidenRemoteFailureClassification.isAmbiguous(error, policy: .cachedRejectionLedger)
     }

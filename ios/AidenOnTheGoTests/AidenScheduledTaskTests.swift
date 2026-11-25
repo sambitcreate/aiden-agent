@@ -608,7 +608,7 @@ final class AidenScheduledTaskTests: XCTestCase {
             return .server(statusCode: status, body: body)
         }
 
-        // Unknown / transport / cancellation / in-flight outcomes MUST retain the pending run key.
+        // Unknown / transport / cancellation / in-flight / transient-status outcomes MUST retain the pending run key.
         XCTAssertTrue(AidenScheduledTasksModel.isAmbiguous(CancellationError()))
         XCTAssertTrue(AidenScheduledTasksModel.isAmbiguous(URLError(.timedOut)))
         XCTAssertTrue(AidenScheduledTasksModel.isAmbiguous(UnclassifiedTransportError()))
@@ -616,6 +616,10 @@ final class AidenScheduledTaskTests: XCTestCase {
         XCTAssertTrue(AidenScheduledTasksModel.isAmbiguous(AidenRemoteClientError.unexpectedStatus(502)))
         XCTAssertTrue(AidenScheduledTasksModel.isAmbiguous(AidenRemoteClientError.unexpectedStatus(409)))
         XCTAssertTrue(AidenScheduledTasksModel.isAmbiguous(try serverError(409, "idempotency_in_flight")))
+        XCTAssertTrue(AidenScheduledTasksModel.isAmbiguous(try serverError(408, "internal_error")))
+        XCTAssertTrue(AidenScheduledTasksModel.isAmbiguous(try serverError(429, "rate_limited")))
+        XCTAssertTrue(AidenScheduledTasksModel.isAmbiguous(try serverError(500, "internal_error")))
+        XCTAssertTrue(AidenScheduledTasksModel.isAmbiguous(try serverError(503, "internal_error")))
 
         // Structured rejections cached by executeAidenDurableOperation and client-local errors clear the key.
         XCTAssertFalse(AidenScheduledTasksModel.isAmbiguous(try serverError(400, "invalid_request")))
@@ -623,7 +627,6 @@ final class AidenScheduledTaskTests: XCTestCase {
         XCTAssertFalse(AidenScheduledTasksModel.isAmbiguous(try serverError(404, "not_found")))
         XCTAssertFalse(AidenScheduledTasksModel.isAmbiguous(try serverError(409, "schedule_disabled")))
         XCTAssertFalse(AidenScheduledTasksModel.isAmbiguous(try serverError(409, "revision_conflict")))
-        XCTAssertFalse(AidenScheduledTasksModel.isAmbiguous(try serverError(500, "internal_error")))
         XCTAssertFalse(AidenScheduledTasksModel.isAmbiguous(AidenRemoteClientError.invalidEndpoint))
         XCTAssertFalse(AidenScheduledTasksModel.isAmbiguous(AidenRemoteClientError.missingCredential))
         XCTAssertFalse(AidenScheduledTasksModel.isAmbiguous(AidenRemoteClientError.missingTrustConfiguration))
