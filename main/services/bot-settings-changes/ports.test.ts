@@ -334,3 +334,116 @@ test("a combined computer + identity + model write rolls back the assignment and
   assert.deepEqual(model, { providerId: "provider:a", modelId: "model:slow" });
   assert.equal(broadcasts, 0, "clean full rollback did not need a partial broadcast");
 });
+
+test("rollbackComputer unassigns a previously computer-less Bot and deletes a freshly cloned shared VM on conflict", async () => {
+  const makeCase = (opts: {
+    initialComputer: { kind: "shared" } | { kind: "existing"; computerId: string } | null;
+    initialVms: Array<{ id: string; name: string; kind: "shared" | "dedicated" }>;
+  }) => {
+    const bot: BotDefinition = {
+      id: BOT,
+      revision: "bot-1",
+      name: "Chief",
+      instructions: "Help me plan.",
+      avatar: { ...DEFAULT_BOT_AVATAR },
+      createdAt: 0,
+      updatedAt: 0,
+    };
+    let currentComputer = opts.initialComputer;
+    const vms = opts.initialVms.map((vm) => ({ ...vm }));
+    const unassigned: string[] = [];
+    const deleted: string[] = [];
+    const ports = createBotSettingsPorts({
+      profileDir: () => "/unused",
+      getBot: async () => structuredClone(bot),
+      modelSelection: async () => ({ providerId: "provider:a", modelId: "model:slow" }),
+      getBotAccess: async () => ({
+        botId: BOT,
+        revision: "access-1",
+        policyEpoch: "1",
+        summary: "",
+        accessMode: "full",
+      }),
+      capabilityCatalog: async () => ({
+        revision: "catalog-1",
+        providers: [{ id: "provider:a", label: "A", available: true, models: [{ id: "model:fast", label: "Fast", available: true }] }],
+      }),
+      botWebSearchEnabled: async () => false,
+      readComputer: async () => currentComputer,
+      listComputers: async () => vms.map((vm) => ({ ...vm })),
+      assignComputer: async (_botId, target) => {
+        if (target.kind === "shared") {
+          if (!vms.some((vm) => vm.id === "shared")) {
+            vms.push({ id: "shared", name: "Shared computer", kind: "shared" });
+          }
+          currentComputer = { kind: "shared" };
+        } else if (target.kind === "existing") {
+          currentComputer = target;
+        }
+      },
+      unassignComputer: async (botId) => {
+        unassigned.push(botId);
+        currentComputer = null;
+      },
+      deleteComputer: async (computerId) => {
+        deleted.push(computerId);
+        const idx = vms.findIndex((vm) => vm.id === computerId);
+        if (idx >= 0) vms.splice(idx, 1);
+        if (currentComputer?.kind === "shared" && computerId === "shared") currentComputer = null;
+      },
+      updateBotAccess: async () => {},
+      updateBot: async () => {
+        throw new BotIdentityRevisionConflictError("bot-2");
+      },
+      cancelWakeUps: async () => {},
+      broadcastChanged: () => {},
+      appendEntry: async () => {},
+    });
+    return {
+      ports,
+      currentComputer: () => currentComputer,
+      vms: () => vms,
+      unassigned,
+      deleted,
+    };
+  };
+
+  // Case 1: no prior computer + "shared" already exists -> unassigns Bot without deleting "shared".
+  const existingShared = makeCase({
+    initialComputer: null,
+    initialVms: [{ id: "shared", name: "Shared computer", kind: "shared" }],
+  });
+  const rev1 = (await existingShared.ports.read(BOT)).revision;
+  await assert.rejects(
+    existingShared.ports.write(BOT, { name: "Renamed", computer: { kind: "shared" } }, rev1),
+    BotSettingsConflictError,
+  );
+  assert.deepEqual(existingShared.unassigned, [BOT]);
+  assert.deepEqual(existingShared.deleted, []);
+  assert.equal(existingShared.currentComputer(), null);
+  assert.equal(existingShared.vms().length, 1);
+
+  // Case 2: no prior computer + "shared" did NOT exist -> deletes freshly cloned "shared".
+  const freshShared = makeCase({ initialComputer: null, initialVms: [] });
+  const rev2 = (await freshShared.ports.read(BOT)).revision;
+  await assert.rejects(
+    freshShared.ports.write(BOT, { name: "Renamed", computer: { kind: "shared" } }, rev2),
+    BotSettingsConflictError,
+  );
+  assert.deepEqual(freshShared.deleted, ["shared"]);
+  assert.equal(freshShared.currentComputer(), null);
+  assert.equal(freshShared.vms().length, 0);
+
+  // Case 3: had "vm-old" + "shared" did NOT exist -> restores "vm-old" AND deletes freshly cloned "shared".
+  const hadOld = makeCase({
+    initialComputer: { kind: "existing", computerId: "vm-old" },
+    initialVms: [{ id: "vm-old", name: "Old Box", kind: "dedicated" }],
+  });
+  const rev3 = (await hadOld.ports.read(BOT)).revision;
+  await assert.rejects(
+    hadOld.ports.write(BOT, { name: "Renamed", computer: { kind: "shared" } }, rev3),
+    BotSettingsConflictError,
+  );
+  assert.deepEqual(hadOld.currentComputer(), { kind: "existing", computerId: "vm-old" });
+  assert.deepEqual(hadOld.deleted, ["shared"]);
+});

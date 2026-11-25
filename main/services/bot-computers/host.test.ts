@@ -2757,3 +2757,73 @@ test("reconcile skips marking a VM stale while its vm turn is active (e.g. concu
     assert.equal(status?.state, "stopped", "concurrent reconcile must not mark reset VM stale");
   });
 });
+
+test("acquireLease and ensureRunning re-read assignment after async drift instead of queuing or starting the old VM", async () => {
+  let onAdaName: (() => Promise<void>) | undefined;
+  await withHost(
+    async (context) => {
+      await setUp(context, "shared");
+      await context.host.give("ada");
+      await context.host.give("ben");
+      const dedicated = await context.host.createComputer("Ben Private");
+
+      // 1. acquireLease("ben") sees Ada holds "shared" and awaits botName("ada"); during that await,
+      // Ben is reassigned to `dedicated` -> acquireLease must detect drift and acquire `dedicated`, not queue on "shared".
+      const releaseAda = await context.host.acquireLease("ada");
+      onAdaName = async () => {
+        await context.host.assignComputer("ben", { kind: "existing", computerId: dedicated.id });
+      };
+      const releaseBen = await context.host.acquireLease("ben");
+      const status = await context.host.status();
+      const sharedVm = status.vms.find((vm) => vm.id === "shared");
+      const dedicatedVm = status.vms.find((vm) => vm.id === dedicated.id);
+      assert.deepEqual(sharedVm?.queuedBotIds, [], "Ben did not queue on old shared VM");
+      assert.equal(dedicatedVm?.activeBotId, "ben", "Ben acquired lease on its new dedicated VM");
+      releaseBen();
+      releaseAda();
+
+      // 2. ensureRunning("ben") waiting on `shared` stopping while Ben moves back to `dedicated`
+      // starts `dedicated`, never `shared`.
+      await context.host.assignComputer("ben", { kind: "shared" });
+      await context.host.ensureRunning("ada", { reason: "tool" });
+      const stopping = context.host.stop("ada", { reason: "person" });
+      const [connBen] = await Promise.all([
+        context.host.ensureRunning("ben", { reason: "tool" }),
+        stopping.then(() => undefined),
+        context.host.assignComputer("ben", { kind: "existing", computerId: dedicated.id }),
+      ]);
+      assert.equal(connBen.vmName, dedicated.vmName, "ensureRunning followed Ben's new assignment");
+    },
+    {
+      botName: async (botId) => {
+        if (botId === "ada" && onAdaName) {
+          const hook = onAdaName;
+          onAdaName = undefined;
+          await hook();
+        }
+        return botId.charAt(0).toUpperCase() + botId.slice(1);
+      },
+    },
+  );
+});
+
+test("deleteForBot while a shared VM is stopping waits for the stop and removes the Bot's workspace subfolder on disk", async () => {
+  await withHost(async (context) => {
+    await setUp(context, "shared");
+    await context.host.give("ada");
+    await context.host.give("ben");
+    const adaDir = path.join(context.root, "computers", "shared", "Computer", "bots", botComputerWorkspaceDirName("ada"));
+    const benDir = path.join(context.root, "computers", "shared", "Computer", "bots", botComputerWorkspaceDirName("ben"));
+    assert.equal(existsSync(adaDir), true);
+    assert.equal(existsSync(benDir), true);
+
+    await context.host.ensureRunning("ada", { reason: "tool" });
+    // Start stopping the shared VM, then immediately delete Ada during the stopping transition.
+    const stopPromise = context.host.stop("ben", { reason: "person" });
+    await context.host.deleteForBot("ada");
+    await stopPromise;
+
+    assert.equal(existsSync(adaDir), false, "Ada's workspace folder is removed after waiting for stop");
+    assert.equal(existsSync(benDir), true, "Ben's workspace folder remains untouched");
+  });
+});

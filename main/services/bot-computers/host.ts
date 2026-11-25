@@ -934,35 +934,55 @@ export function createBotComputerHost(deps: BotComputerHostDependencies): BotCom
     if (!isPoolWorkspaceId(computerId)) return;
     const workspaceName = botComputerWorkspaceDirName(botId);
     if (!SAFE_BOT_WORKSPACE_DIR_PATTERN.test(workspaceName) || workspaceName.includes("..")) return;
+    const guestPath = `${GUEST_SHARED_BOTS_MOUNT}/${workspaceName}`;
+    const guestCleanScript = `if [ -d ${quoteRemoteArg(GUEST_SHARED_BOTS_MOUNT)} ] && [ ! -L ${quoteRemoteArg(GUEST_SHARED_BOTS_MOUNT)} ]; then rm -rf -- ${quoteRemoteArg(guestPath)}; fi`;
+    const stillAssigned = () => assignedBotsFromCache(computerId).includes(botId);
+    const cleanOnHost = async (): Promise<void> => {
+      if (stillAssigned() || isVmLive(computerId)) return;
+      const rootDir = path.join(dirs.computers, computerId, "Computer");
+      const botsRoot = path.join(rootDir, "bots");
+      const botDir = path.join(botsRoot, workspaceName);
+      try {
+        const rootInfo = await lstat(rootDir);
+        const botsInfo = await lstat(botsRoot);
+        const botInfo = await lstat(botDir);
+        if (rootInfo.isSymbolicLink() || botsInfo.isSymbolicLink() || botInfo.isSymbolicLink()) return;
+        const realBotsRoot = await realpath(botsRoot);
+        const realBotDir = await realpath(botDir);
+        if (!realBotDir.startsWith(`${realBotsRoot}${path.sep}`)) return;
+        await rm(botDir, { recursive: true, force: true });
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException)?.code !== "ENOENT") {
+          log("Removing Bot workspace folder did not finish.", error);
+        }
+      }
+    };
+    const entry = runtimes.get(computerId);
+    if (entry?.stopping) {
+      await entry.stopping.catch(() => undefined);
+    }
+    if (stillAssigned()) return;
+    const current = runtimes.get(computerId);
+    if (current?.start && !current.connection) {
+      await current.start.promise.then(
+        async () => {
+          if (!stillAssigned()) await runGuestWorkspaceScript(computerId, guestCleanScript);
+        },
+        async () => {
+          await cleanOnHost();
+        },
+      );
+      return;
+    }
     // Never run path-based recursive rm from the Mac host inside a live guest-writable
     // virtiofs mount (a guest symlink swap could escape into macOS /Users). While the VM
     // is running, remove the folder inside the Linux guest over SSH so any symlink resolves
     // strictly inside the guest VFS.
     if (isVmLive(computerId)) {
-      const guestPath = `${GUEST_SHARED_BOTS_MOUNT}/${workspaceName}`;
-      await runGuestWorkspaceScript(
-        computerId,
-        `if [ -d ${quoteRemoteArg(GUEST_SHARED_BOTS_MOUNT)} ] && [ ! -L ${quoteRemoteArg(GUEST_SHARED_BOTS_MOUNT)} ]; then rm -rf -- ${quoteRemoteArg(guestPath)}; fi`,
-      );
+      await runGuestWorkspaceScript(computerId, guestCleanScript);
       return;
     }
-    const rootDir = path.join(dirs.computers, computerId, "Computer");
-    const botsRoot = path.join(rootDir, "bots");
-    const botDir = path.join(botsRoot, workspaceName);
-    try {
-      const rootInfo = await lstat(rootDir);
-      const botsInfo = await lstat(botsRoot);
-      const botInfo = await lstat(botDir);
-      if (rootInfo.isSymbolicLink() || botsInfo.isSymbolicLink() || botInfo.isSymbolicLink()) return;
-      const realBotsRoot = await realpath(botsRoot);
-      const realBotDir = await realpath(botDir);
-      if (!realBotDir.startsWith(`${realBotsRoot}${path.sep}`)) return;
-      await rm(botDir, { recursive: true, force: true });
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException)?.code !== "ENOENT") {
-        log("Removing Bot workspace folder did not finish.", error);
-      }
-    }
+    await cleanOnHost();
   }
 
   /**
@@ -1304,6 +1324,11 @@ export function createBotComputerHost(deps: BotComputerHostDependencies): BotCom
     globalTurn ??
     activeTurnFor(botTurnKey(botId)) ??
     (computerId ? activeTurnFor(vmTurnKey(computerId)) : undefined);
+
+  const assignmentDrifted = (botId: string, computerId: string, entry: Runtime): boolean =>
+    Boolean(startsHeld(botId, computerId)) ||
+    assignmentCache.get(botId) !== computerId ||
+    (runtimes.has(computerId) && runtimes.get(computerId) !== entry);
 
   function untilDone(
     gate: Promise<void>,
@@ -2348,7 +2373,7 @@ export function createBotComputerHost(deps: BotComputerHostDependencies): BotCom
       if (signal?.aborted) {
         throw new BotComputerError("cancelled", "Waiting for the computer was cancelled.");
       }
-      if (startsHeld(botId, computerId)) {
+      if (assignmentDrifted(botId, computerId, entry)) {
         return host.acquireLease(botId, options);
       }
       if (entry.activeBotId === undefined) {
@@ -2456,8 +2481,14 @@ export function createBotComputerHost(deps: BotComputerHostDependencies): BotCom
       const entry = runtime(computerId);
       for (;;) {
         if (entry.stopping) await entry.stopping;
+        if (assignmentDrifted(botId, computerId, entry) || stale.has(computerId)) {
+          return host.ensureRunning(botId, options);
+        }
         if (entry.state === "running" && entry.connection) {
           await sharedDirForVm(vm, assignedBotsInState(initialState, computerId), botId);
+          if (assignmentDrifted(botId, computerId, entry) || stale.has(computerId)) {
+            return host.ensureRunning(botId, options);
+          }
           host.touch(botId);
           return entry.connection;
         }
@@ -2473,7 +2504,9 @@ export function createBotComputerHost(deps: BotComputerHostDependencies): BotCom
         await ending.promise.catch(() => undefined);
       }
       // One of those began while this caller waited above: it starts whatever is there once that is done.
-      if (startsHeld(botId, computerId)) return host.ensureRunning(botId, options);
+      if (assignmentDrifted(botId, computerId, entry) || stale.has(computerId)) {
+        return host.ensureRunning(botId, options);
+      }
       if (!entry.start) {
         const controller = new AbortController();
         const progress = new Set<(text: string) => void>();

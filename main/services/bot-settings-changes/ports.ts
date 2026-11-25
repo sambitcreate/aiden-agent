@@ -3,7 +3,7 @@
 // stores, and tests inject fakes.
 
 import type { BotAccessUpdate, BotAccessView, BotCapabilityCatalog } from "../../../renderer/shared/bot-capabilities.js";
-import type { BotComputerAssignTarget } from "../../../renderer/shared/bot-computers.js";
+import { BOT_COMPUTER_SHARED_ID, type BotComputerAssignTarget } from "../../../renderer/shared/bot-computers.js";
 import type { BotSettingsPatch, BotSettingsValues } from "../../../renderer/shared/bot-settings-changes.js";
 import { resolveBotInterruptions, type BotDefinition, type BotUpdateInput } from "../../../renderer/shared/bots.js";
 import { BotCapabilityRevisionConflictError } from "../bot-capability-store-core.js";
@@ -32,6 +32,7 @@ export interface BotSettingsPortDeps {
   listComputers?(botId: string): Promise<{ id: string; name: string; kind: "shared" | "dedicated" }[]>;
   validateComputer?(botId: string, target: BotComputerAssignTarget): Promise<string | undefined>;
   assignComputer?(botId: string, target: BotComputerAssignTarget): Promise<void>;
+  unassignComputer?(botId: string): Promise<void>;
   deleteComputer?(computerId: string, options?: { force?: boolean }): Promise<void>;
   broadcastChanged(botId: string): void;
   appendEntry: BotSettingsPorts["appendEntry"];
@@ -146,21 +147,42 @@ export function createBotSettingsPorts(deps: BotSettingsPortDeps): BotSettingsPo
       let done = false;
       let previousComputer: BotComputerAssignTarget | null = null;
       let createdVmId: string | undefined;
+      let createdSharedVm = false;
 
       const rollbackComputer = async (): Promise<void> => {
         if (!computerWrote) return;
         let rolledBack = true;
-        if (previousComputer && deps.assignComputer) {
-          await deps.assignComputer(botId, previousComputer).catch(() => {
+        if (previousComputer) {
+          if (deps.assignComputer) {
+            await deps.assignComputer(botId, previousComputer).catch(() => {
+              rolledBack = false;
+            });
+          } else {
             rolledBack = false;
-          });
-        }
-        if (createdVmId && deps.deleteComputer) {
+          }
+          if (createdVmId && deps.deleteComputer) {
+            await deps.deleteComputer(createdVmId, { force: true }).catch(() => {
+              rolledBack = false;
+            });
+          }
+          if (createdSharedVm && deps.deleteComputer) {
+            await deps.deleteComputer(BOT_COMPUTER_SHARED_ID, { force: true }).catch(() => {
+              rolledBack = false;
+            });
+          }
+        } else if (createdVmId && deps.deleteComputer) {
           await deps.deleteComputer(createdVmId, { force: true }).catch(() => {
             rolledBack = false;
           });
-        } else if (!previousComputer) {
-          // Had no computer before and wasn't a newly cloned VM we could delete.
+        } else if (createdSharedVm && deps.deleteComputer) {
+          await deps.deleteComputer(BOT_COMPUTER_SHARED_ID, { force: true }).catch(() => {
+            rolledBack = false;
+          });
+        } else if (deps.unassignComputer) {
+          await deps.unassignComputer(botId).catch(() => {
+            rolledBack = false;
+          });
+        } else {
           rolledBack = false;
         }
         if (rolledBack) computerWrote = false;
@@ -175,11 +197,14 @@ export function createBotSettingsPorts(deps: BotSettingsPortDeps): BotSettingsPo
           if (!deps.assignComputer) throw new Error("Bot computers aren't available on this device.");
           previousComputer = deps.readComputer ? await deps.readComputer(botId).catch(() => null) : null;
           const beforeVmIds =
-            patch.computer.kind === "new" && deps.listComputers
+            (patch.computer.kind === "new" || patch.computer.kind === "shared") && deps.listComputers
               ? new Set((await deps.listComputers(botId).catch(() => [])).map((vm) => vm.id))
               : undefined;
           await deps.assignComputer(botId, patch.computer);
           computerWrote = true;
+          if (patch.computer.kind === "shared" && beforeVmIds !== undefined && !beforeVmIds.has(BOT_COMPUTER_SHARED_ID)) {
+            createdSharedVm = true;
+          }
           if (patch.computer.kind === "new" && deps.readComputer) {
             const afterComputer = await deps.readComputer(botId).catch(() => null);
             if (afterComputer?.kind === "existing" && (!beforeVmIds || !beforeVmIds.has(afterComputer.computerId))) {
