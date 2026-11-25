@@ -117,6 +117,10 @@ The phases run in order. The screens inside each phase can run in parallel, one 
    - Add the `.aidenAmbientBackground {}` slot and the `\.aidenAmbientActivity` environment key.
    - Nothing is drawn yet.
 
+**Phase 1 progress** (branch `claude/ios-new-direction`):
+
+- Step 1, design kit: landed. `AidenTypeScale` and `AidenSettingsTokens` are in `AidenDesignTokens.swift`. The page, card and rows are in `Config/AidenSettingsKit.swift`; the chip, pill, swatches, stat hero, heatmap and circle button are in `Config/AidenSettingsKitControls.swift`, which keeps each file under 500 lines. The inbox's own `AidenStatusChip` merged into the kit's, so there is one chip. Neutral chips read in the foreground colour and accent chips in a new text-safe `accentTextHex`, because the raw secondary and accent miss 4.5:1 on their own tint in most presets. Type steps follow Dynamic Type and the in-app Text size through `.aidenType(_:)`. No screen uses the kit yet, so the Settings and Appearance matrix captures, and a UI test that card rows are buttons, wait for the first screen that adopts it (Phase 3, 4A P2).
+
 ### Phase 2: Home, composer and Aurora
 
 - **Home (01).** The Chats root shows a greeting, the Bot sprites and a "From your Bots" digest. The digest shows at most three rows. It is built on the phone from Bot attention plus `GET /bots/routine-notifications`. The composer slot is `AidenHomeComposerSlot(flow:machine:)`.

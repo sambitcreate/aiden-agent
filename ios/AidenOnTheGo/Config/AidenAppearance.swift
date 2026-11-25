@@ -277,6 +277,9 @@ struct AidenPalette: Equatable, Sendable {
     let successTextHex: String
     let warningTextHex: String
     let dangerTextHex: String
+    /// The accent for text in an accent-tinted chip, where the raw accent can
+    /// miss 4.5:1 on its own tint.
+    let accentTextHex: String
 
     init(
         canvasHex: String,
@@ -304,6 +307,7 @@ struct AidenPalette: Equatable, Sendable {
         successTextHex = Self.textSafeHex(successHex, on: grounds(successHex))
         warningTextHex = Self.textSafeHex(warningHex, on: grounds(warningHex))
         dangerTextHex = Self.textSafeHex(dangerHex, on: grounds(dangerHex))
+        accentTextHex = Self.textSafeHex(accentHex, on: grounds(accentHex))
     }
 
     var canvas: Color { Color(aidenHex: canvasHex) }
@@ -728,6 +732,8 @@ private struct AidenReduceMotionEnvironmentKey: EnvironmentKey { static let defa
 private struct AidenLowPowerModeEnvironmentKey: EnvironmentKey { static let defaultValue = false }
 private struct AidenDiffMarkerEnvironmentKey: EnvironmentKey { static let defaultValue = AidenDiffMarkerPreference.symbols }
 private struct AidenSidebarTranslucencyEnvironmentKey: EnvironmentKey { static let defaultValue = true }
+private struct AidenUIFontEnvironmentKey: EnvironmentKey { static let defaultValue = AidenUIFontID.system }
+private struct AidenUIFontSizeEnvironmentKey: EnvironmentKey { static let defaultValue = AidenSettingsTokens.defaultUIFontSize }
 private struct AidenCodeTypographyEnvironmentKey: EnvironmentKey {
     static let defaultValue = AidenCodeTypography(font: .sfMono, size: 12)
 }
@@ -776,6 +782,18 @@ extension EnvironmentValues {
         set { self[AidenSidebarTranslucencyEnvironmentKey.self] = newValue }
     }
 
+    /// The in-app UI font, for `.aidenType(_:)`.
+    var aidenUIFont: AidenUIFontID {
+        get { self[AidenUIFontEnvironmentKey.self] }
+        set { self[AidenUIFontEnvironmentKey.self] = newValue }
+    }
+
+    /// The in-app Text size (`uiFontSize`), for `.aidenType(_:)`.
+    var aidenUIFontSize: Int {
+        get { self[AidenUIFontSizeEnvironmentKey.self] }
+        set { self[AidenUIFontSizeEnvironmentKey.self] = newValue }
+    }
+
     var aidenCodeTypography: AidenCodeTypography {
         get { self[AidenCodeTypographyEnvironmentKey.self] }
         set { self[AidenCodeTypographyEnvironmentKey.self] = newValue }
@@ -808,6 +826,8 @@ struct AidenAppearanceRoot<Content: View>: View {
             .environment(\.aidenDiffMarkers, appearance.diffMarkers)
             .environment(\.aidenSidebarTranslucent, appearance.translucentSidebar(for: effectiveScheme))
             .environment(\.aidenCodeTypography, AidenCodeTypography(font: appearance.codeFont(for: effectiveScheme), size: appearance.codeFontSize))
+            .environment(\.aidenUIFont, appearance.uiFont(for: effectiveScheme))
+            .environment(\.aidenUIFontSize, appearance.uiFontSize)
             .modifier(AidenUITypographyModifier(font: appearance.uiFont(for: effectiveScheme), size: appearance.uiFontSize))
             .preferredColorScheme(appearance.mode.colorScheme)
             .tint(palette.accent)

@@ -582,7 +582,7 @@ struct AidenInboxBotRowView: View {
             }
             if let reason {
                 if needsYou {
-                    AidenStatusChip(reason, kind: .warning, isDimmed: isDimmed)
+                    AidenStatusChip(reason, tone: .warning, isDimmed: isDimmed)
                         .fixedSize()
                 } else {
                     // Running: no tint to tell apart, so no symbol either.

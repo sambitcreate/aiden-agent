@@ -566,8 +566,8 @@ final class AidenMachineChromeTests: XCTestCase {
     /// Warning and danger chips share a shape. Without colour each gets its own symbol.
     func testWithoutColourStatusChipsCarryASymbolThatTellsThemApart() throws {
         // Dimmed, both take the secondary tint, so only the symbol can differ.
-        let warning = AidenStatusChip("Waiting", kind: .warning, isDimmed: true)
-        let danger = AidenStatusChip("Waiting", kind: .danger, isDimmed: true)
+        let warning = AidenStatusChip("Waiting", tone: .warning, isDimmed: true)
+        let danger = AidenStatusChip("Waiting", tone: .danger, isDimmed: true)
 
         XCTAssertGreaterThan(try drawnWidth(warning, withoutColour: true), try drawnWidth(warning, withoutColour: false))
         XCTAssertNotEqual(
