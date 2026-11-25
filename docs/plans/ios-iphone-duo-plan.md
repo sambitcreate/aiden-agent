@@ -77,6 +77,7 @@ Done in this PR: the fold keeps each chat's and each Bot chat's draft, attachmen
 
 - Check every pose (closed, half open, open, rotated). Keep the transcript, composer, docks and banners clear of the fold and readable: a bounded reading width in the detail column, and `ReservedRegion` only for custom overlays that a system container doesn't move.
 - Sheets on the inner display use the system's placement.
+- Workspace Settings survives a fold. Switching between the split and the stack rebuilds the workspace detail, which closes an open Workspace Settings sheet and drops its unsaved edits. Move the presentation and its draft into shell-owned state, as `AidenOfflineNoticeDismissals` does, and host the sheet above the split/stack switch. The detail's `.id(workspace.revision)` closes the sheet the same way when the workspace is renamed on the computer.
 - Simulator screenshots of each pose (half open and rotated not yet checked).
 - A swipe left open on a list row stays open across navigation (UIKit `swipeActions` behavior); close it when its row leaves the screen.
 - `testEveryMainScreenPassesTheAudit` on an iPad mini in portrait (iOS 27.1). Fixed on 2026-11-22:
