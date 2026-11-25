@@ -64,7 +64,8 @@ export function botComputerStopShellUserScript(shellUser: string = BOT_COMPUTER_
 export function botComputerSignInOpenScript(url: string): string {
   return [
     `b=$(command -v ${BOT_COMPUTER_SIGN_IN_BROWSER} || command -v chromium-browser) || exit 127`,
-    `DISPLAY=:0 nohup "$b" --new-window ${quoteRemoteArg(url)} </dev/null >/dev/null 2>&1 &`,
+    "u=$(/usr/bin/id -u) || exit 1",
+    `DISPLAY=:0 XAUTHORITY="$HOME/.Xauthority" XDG_RUNTIME_DIR="/run/user/$u" DBUS_SESSION_BUS_ADDRESS="unix:path=/run/user/$u/bus" ACCESSIBILITY_ENABLED=1 GNOME_ACCESSIBILITY=1 nohup "$b" --new-window ${quoteRemoteArg(url)} </dev/null >/dev/null 2>&1 &`,
   ].join("\n");
 }
 

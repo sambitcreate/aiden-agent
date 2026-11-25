@@ -1,19 +1,22 @@
-/* global process */
+/* global Buffer, process */
 
 import { createHash } from "node:crypto";
 import { execFile } from "node:child_process";
 import { createReadStream } from "node:fs";
-import { lstat, realpath } from "node:fs/promises";
+import { lstat, open, realpath } from "node:fs/promises";
 import path from "node:path";
 import { promisify } from "node:util";
 import { fileURLToPath } from "node:url";
 import { signAsync } from "@electron/osx-sign";
 import {
+  CUA_DRIVER_LINUX_ARM64_ARTIFACT_PROVENANCE,
+  CUA_DRIVER_LINUX_ARM64_SHA256,
   CUA_DRIVER_SHA256,
   CUA_DRIVER_SIGNING_IDENTIFIER,
   CUA_DRIVER_SIGNING_TEAM_ID,
   appleRequirement,
   packagedComputerUsePaths,
+  packagedLinuxGuestDriverPaths,
 } from "./computer-use-signing-pins.mjs";
 import {
   LUME_ARTIFACT_PROVENANCE,
@@ -110,6 +113,50 @@ export async function verifyPinnedLume(appPath, { hash = sha256, execute = execu
   );
 }
 
+/**
+ * Bot computers ship the pinned Linux arm64 cua-driver ELF binary as a
+ * non-executable resource copied into Debian Linux guests over SSH. It must
+ * never be Mach-O signed by `@electron/osx-sign`, so verify its exact size,
+ * ELF64 aarch64 header, and SHA-256 before and after signing everything else.
+ */
+export async function verifyPinnedLinuxGuestDriver(appPath, { hash = sha256 } = {}) {
+  const { driver } = packagedLinuxGuestDriverPaths(appPath);
+  const info = await lstat(driver);
+  if (!info.isFile() || info.isSymbolicLink() || (await realpath(driver)) !== driver) {
+    throw new Error(`The packaged Linux guest cua-driver is not a regular, non-symlinked file: ${driver}`);
+  }
+  if (info.size !== CUA_DRIVER_LINUX_ARM64_ARTIFACT_PROVENANCE.binaryBytes) {
+    throw new Error(
+      `Packaging changed the pinned Linux guest cua-driver size: expected ${CUA_DRIVER_LINUX_ARM64_ARTIFACT_PROVENANCE.binaryBytes}, received ${info.size}`,
+    );
+  }
+  const handle = await open(driver, "r");
+  try {
+    const header = Buffer.alloc(20);
+    const { bytesRead } = await handle.read(header, 0, header.length, 0);
+    const validElfAarch64 =
+      bytesRead === 20 &&
+      header[0] === 0x7f &&
+      header[1] === 0x45 &&
+      header[2] === 0x4c &&
+      header[3] === 0x46 &&
+      header[4] === 2 &&
+      header[5] === 1 &&
+      header.readUInt16LE(18) === 183;
+    if (!validElfAarch64) {
+      throw new Error(`The packaged Linux guest cua-driver is not a valid ELF64 aarch64 binary: ${driver}`);
+    }
+  } finally {
+    await handle.close();
+  }
+  const actualHash = await hash(driver);
+  if (actualHash !== CUA_DRIVER_LINUX_ARM64_SHA256) {
+    throw new Error(
+      `Packaging changed the pinned Linux guest cua-driver: expected ${CUA_DRIVER_LINUX_ARM64_SHA256}, received ${actualHash}`,
+    );
+  }
+}
+
 function ignoredBy(originalIgnore, file) {
   const matchers = Array.isArray(originalIgnore)
     ? originalIgnore
@@ -126,13 +173,16 @@ function ignoredBy(originalIgnore, file) {
 
 export function createAidenMacSignOptions(options) {
   const paths = packagedComputerUsePaths(options.app);
+  const linuxGuestDriver = packagedLinuxGuestDriverPaths(options.app);
   const minimalHelpers = minimalEntitlementHelperPaths(options.app);
   const originalIgnore = options.ignore;
   const originalOptionsForFile = options.optionsForFile;
   return {
     ...options,
     ignore(file) {
-      if (path.resolve(file) === paths.driver) return true;
+      const resolved = path.resolve(file);
+      if (resolved === paths.driver) return true;
+      if (resolved === linuxGuestDriver.driver) return true;
       if (isPackagedLumePath(options.app, file)) return true;
       return ignoredBy(originalIgnore, file);
     },
@@ -162,9 +212,11 @@ export async function sign(options) {
   const { driver } = packagedComputerUsePaths(options.app);
   await verifyPinnedDriver(driver);
   await verifyPinnedLume(options.app);
+  await verifyPinnedLinuxGuestDriver(options.app);
   await signAsync(createAidenMacSignOptions(options));
   await verifyPinnedDriver(driver);
   await verifyPinnedLume(options.app);
+  await verifyPinnedLinuxGuestDriver(options.app);
 }
 
 export default sign;

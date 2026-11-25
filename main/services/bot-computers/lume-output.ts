@@ -100,11 +100,13 @@ export type LumeErrorKind = "vm_limit" | "low_disk" | "not_found" | "stale" | "n
 
 /**
  * Map Lume's diagnostics to what Aiden does next.
- * - `vm_limit`: Virtualization.framework (VZErrorDomain code 6,
- *   `virtualMachineLimitExceeded`) and Lume 0.7.0+'s own macOS guest limit
- *   refusal (`host limit of N running macOS guests reached`).
- * - `low_disk`: Lume 0.7.1+'s `VMError.insufficientHostSpace` and
- *   `DiskResizeError.insufficientHostSpace` refusals.
+ * - `vm_limit`: Virtualization.framework (`VZErrorDomain` code 6,
+ *   `virtualMachineLimitExceeded`, and macOS's active-VM limit text) plus
+ *   Lume 0.7.0+'s own macOS guest limit refusal (`host limit of N running
+ *   macOS guests reached`).
+ * - `low_disk`: Lume 0.7.1+'s `VMError.insufficientHostSpace`
+ *   (`Not enough free space on host volume…`) plus a defensive match for
+ *   `DiskResizeError.insufficientHostSpace` (`Not enough host free space…`).
  */
 export function classifyLumeError(stderr: string, exitCode: number | null): LumeErrorKind {
   if (exitCode === 0) return "other";
