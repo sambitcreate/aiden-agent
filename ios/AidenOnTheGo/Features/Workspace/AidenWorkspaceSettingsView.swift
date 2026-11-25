@@ -11,8 +11,9 @@ struct AidenWorkspaceSettingsView: View {
     let onRemoved: () -> Void
 
     @State private var isConfirmingRemoval = false
-    /// Why Remove did nothing, shown under its button.
-    @State private var removalNotice: String?
+    /// Why a Save or Remove sent nothing, shown at the top of the sheet,
+    /// which stays open so the person reads it.
+    @State private var refusalNotice: String?
     @State private var hapticScope = UUID()
 
     /// The workspace as the computer last described it.
@@ -20,11 +21,6 @@ struct AidenWorkspaceSettingsView: View {
     /// The machine this sheet saves on, fixed when it opened
     /// (`AidenRemoteCoordinator.updateWorkspaceOutcome(_:on:)`).
     private var context: AidenRemoteRequestContext { draft.context }
-
-    /// True while this workspace's Remove is queued or on its way.
-    private var isRemoving: Bool {
-        coordinator.workspacesBeingRemoved.contains(draft.id)
-    }
 
     /// The workspaces on this sheet's machine, which Remove keeps at least one of.
     private var machineWorkspaceCount: Int {
@@ -34,10 +30,14 @@ struct AidenWorkspaceSettingsView: View {
     var body: some View {
         NavigationStack {
             Form {
-                if let notice = coordinator.workspaceSaveNotices[draft.id] {
+                if let notice = refusalNotice ?? coordinator.workspaceSaveNotices[draft.id] {
                     Section {
                         AidenWorkspaceSaveNoticeRow(message: notice) {
-                            coordinator.dismissWorkspaceSaveNotice(draft.id)
+                            if refusalNotice != nil {
+                                refusalNotice = nil
+                            } else {
+                                coordinator.dismissWorkspaceSaveNotice(draft.id)
+                            }
                         }
                     }
                 }
@@ -112,34 +112,16 @@ struct AidenWorkspaceSettingsView: View {
 
                 if workspace.isManagedWorktree || machineWorkspaceCount > 1 {
                     Section {
-                        if isRemoving {
-                            // Queued behind this phone's saves, or on its way.
-                            HStack(spacing: 10) {
-                                ProgressView()
-                                Text(workspace.isManagedWorktree ? "Deleting…" : "Removing…")
-                                    .foregroundStyle(palette.secondary)
-                            }
-                            .accessibilityElement(children: .combine)
-                            .accessibilityIdentifier("workspace-settings-removing")
-                        } else {
-                            Button(
-                                workspace.isManagedWorktree ? "Delete Managed Worktree" : "Remove from Aiden Agent",
-                                role: .destructive
-                            ) {
-                                isConfirmingRemoval = true
-                            }
+                        Button(
+                            workspace.isManagedWorktree ? "Delete Managed Worktree" : "Remove from Aiden Agent",
+                            role: .destructive
+                        ) {
+                            isConfirmingRemoval = true
                         }
                     } footer: {
-                        VStack(alignment: .leading, spacing: 6) {
-                            if let removalNotice {
-                                Label(removalNotice, systemImage: "exclamationmark.circle")
-                                    .foregroundStyle(palette.warningText)
-                                    .accessibilityIdentifier("workspace-settings-removal-notice")
-                            }
-                            Text(workspace.isManagedWorktree
-                                 ? "Deleting an Aiden-managed worktree removes its checkout and may remove its branch when safe."
-                                 : "Removing unregisters this workspace from Aiden Agent and paired clients. Its folder, files, and chats stay on your computer, but its chats will no longer be listed.")
-                        }
+                        Text(workspace.isManagedWorktree
+                             ? "Deleting an Aiden-managed worktree removes its checkout and may remove its branch when safe."
+                             : "Removing unregisters this workspace from Aiden Agent and paired clients. Its folder, files, and chats stay on your computer, but its chats will no longer be listed.")
                     }
                 }
             }
@@ -161,16 +143,22 @@ struct AidenWorkspaceSettingsView: View {
                         // workspace back with a notice on it.
                         // No dedupe key: each Save is its own edit, even on
                         // the same confirmed copy.
-                        coordinator.haptics.play(.success, scope: hapticScope)
                         // The coordinator keeps the queued save, so closing
                         // the sheet doesn't cancel it.
-                        coordinator.enqueueWorkspaceSave(
+                        let save = coordinator.enqueueWorkspaceSave(
                             workspace,
                             name: changes.name,
                             permission: changes.permission,
                             memoryEnabled: changes.memoryEnabled,
                             on: context
                         )
+                        guard save != nil else {
+                            // Nothing was sent, so the sheet stays and says why.
+                            refusalNotice = Self.refusal(on: coordinator, context: context)
+                            coordinator.haptics.play(.warning, scope: hapticScope)
+                            return
+                        }
+                        coordinator.haptics.play(.success, scope: hapticScope)
                         dismiss()
                     }
                     .disabled(!draft.canSave || !coordinator.holds(context))
@@ -182,24 +170,20 @@ struct AidenWorkspaceSettingsView: View {
                 titleVisibility: .visible
             ) {
                 Button(workspace.isManagedWorktree ? "Delete Managed Worktree" : "Remove from Aiden Agent", role: .destructive) {
-                    let workspace = self.workspace
-                    removalNotice = nil
-                    Task {
-                        let outcome = await coordinator.removeWorkspaceOutcome(workspace, on: context)
-                        if case .busy = outcome {
-                            removalNotice = String(localized: "Another change is still on its way to your computer. Try again in a moment.")
-                            coordinator.haptics.play(.warning, scope: hapticScope)
-                        } else if case .success = outcome {
-                            coordinator.haptics.play(
-                                .success,
-                                scope: hapticScope,
-                                dedupeKey: "workspace-remove:\(workspace.id):\(workspace.revision)"
-                            )
-                            onRemoved()
-                        } else if outcome.isDefinitiveFailure {
-                            coordinator.haptics.play(.error, scope: hapticScope)
-                        }
+                    // The workspace goes from the list at once and the sheet
+                    // closes; the coordinator keeps the queued removal, and a
+                    // refusal brings the workspace back with a notice on it.
+                    guard coordinator.enqueueWorkspaceRemoval(workspace, on: context) != nil else {
+                        refusalNotice = Self.refusal(on: coordinator, context: context)
+                        coordinator.haptics.play(.warning, scope: hapticScope)
+                        return
                     }
+                    coordinator.haptics.play(
+                        .success,
+                        scope: hapticScope,
+                        dedupeKey: "workspace-remove:\(workspace.id):\(workspace.revision)"
+                    )
+                    onRemoved()
                 }
                 Button("Cancel", role: .cancel) {}
             } message: {
@@ -208,8 +192,9 @@ struct AidenWorkspaceSettingsView: View {
                      : "The folder, its files, and chats remain on your computer, but the chats will no longer be listed. Delete the folder separately in your system file manager if you no longer need it.")
             }
         }
-        // The shell's alert sits under this sheet, so a failed Remove says so
-        // here. A failed Save leaves a notice on the workspace instead.
+        // The shell's alert sits under this sheet, so an error from a page
+        // pushed inside it (such as Git) says so here. A refused Save or
+        // Remove leaves a notice on the workspace instead.
         .alert(
             "Aiden On The Go",
             isPresented: Binding(
@@ -223,6 +208,16 @@ struct AidenWorkspaceSettingsView: View {
         }
         .onAppear { coordinator.haptics.activate(scope: hapticScope) }
         .onDisappear { coordinator.haptics.deactivate(scope: hapticScope) }
+    }
+}
+
+extension AidenWorkspaceSettingsView {
+    /// Why a Save or Remove from this sheet sent nothing: its computer was
+    /// paired again or is gone, or the computer no longer has the workspace.
+    static func refusal(on coordinator: AidenRemoteCoordinator, context: AidenRemoteRequestContext) -> String {
+        coordinator.holds(context)
+            ? String(localized: "This workspace is no longer on your computer, so nothing was sent.")
+            : String(localized: "This computer was paired again or removed, so nothing was sent. Close Workspace Settings and open them again.")
     }
 }
 

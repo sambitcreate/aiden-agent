@@ -784,7 +784,8 @@ final class AidenRemoteCoordinator {
 
     /// Shows an owner-context save at once and queues it behind this phone's
     /// earlier saves of the workspace, which go to the machine one at a time
-    /// in the order they were made. Nil when the context no longer holds.
+    /// in the order they were made. Nil, with nothing sent, when the context
+    /// no longer holds or the machine has removed the workspace.
     @discardableResult
     func enqueueWorkspaceSave(
         _ workspace: AidenWorkspace,
@@ -794,7 +795,8 @@ final class AidenRemoteCoordinator {
         on context: AidenRemoteRequestContext
     ) -> Task<AidenRemoteMutationOutcome<AidenWorkspace>, Never>? {
         guard context.scope == .owner, holds(context),
-              let connection = hosts.connection(for: context.instanceId) else { return nil }
+              let connection = hosts.connection(for: context.instanceId),
+              connection.confirmedWorkspaces.contains(where: { $0.id == workspace.id }) else { return nil }
         let lane = workspaceSaveLane(context, workspaceId: workspace.id)
         guard !lane.removed else { return nil }
         let version = connection.addWorkspaceEdit(
@@ -822,14 +824,14 @@ final class AidenRemoteCoordinator {
             versions: [version]
         )
         let previous = lane.tail
+        // The sheet closes at once, so the person may leave the app while the
+        // save waits its turn or is on its way.
+        let backgroundTime = AidenBackgroundTime(named: "Workspace save")
         let task = Task { @MainActor [weak self] () -> AidenRemoteMutationOutcome<AidenWorkspace> in
+            defer { backgroundTime.end() }
             _ = await previous?.value
             if lane.waiting === save { lane.waiting = nil }
             guard let self else { return .stale }
-            // The sheet has closed, so the save may still be on its way when
-            // the person leaves the app.
-            let backgroundTime = AidenBackgroundTime(named: "Workspace save")
-            defer { backgroundTime.end() }
             let outcome = await self.sendWorkspaceSave(save, lane: lane)
             lane.tasks.removeAll { $0 == save.task }
             return outcome
@@ -844,9 +846,21 @@ final class AidenRemoteCoordinator {
     private func workspaceSaveLane(_ context: AidenRemoteRequestContext, workspaceId: String) -> AidenWorkspaceSaveLane {
         let key = Self.workspaceSaveLaneKey(context, workspaceId: workspaceId)
         if let lane = workspaceSaveLanes[key] { return lane }
-        let lane = AidenWorkspaceSaveLane()
+        let lane = AidenWorkspaceSaveLane(workspaceId: workspaceId)
         workspaceSaveLanes[key] = lane
         return lane
+    }
+
+    /// Forgets the lanes of a machine's workspaces its confirmed list no longer
+    /// has once nothing is queued in them, so a workspace the machine creates
+    /// again under the same id starts a fresh lane.
+    private func pruneWorkspaceSaveLanes(of connection: AidenHostConnection) {
+        let prefix = "\(connection.instanceId.utf8.count):\(connection.instanceId):"
+        let listed = Set(connection.confirmedWorkspaces.map(\.id))
+        for (key, lane) in workspaceSaveLanes where key.hasPrefix(prefix)
+            && !listed.contains(lane.workspaceId) && lane.isIdle {
+            workspaceSaveLanes[key] = nil
+        }
     }
 
     /// Sends one queued save and settles its edits: the machine's answer goes
@@ -942,6 +956,7 @@ final class AidenRemoteCoordinator {
     private func cancelWorkspaceSaves(instanceId: String) {
         let prefix = "\(instanceId.utf8.count):\(instanceId):"
         for (key, lane) in workspaceSaveLanes where key.hasPrefix(prefix) {
+            lane.cancelled = true
             lane.tasks.forEach { $0.cancel() }
             lane.removal?.cancel()
             workspaceSaveLanes[key] = nil
@@ -966,31 +981,58 @@ final class AidenRemoteCoordinator {
                 ? await removeManagedWorktreeOutcome(workspace)
                 : await removeWorkspaceOutcome(workspace)
         }
-        // A removal queues behind this phone's saves of the workspace, and a
-        // save made while it waits queues behind it, so the machine never gets
-        // a save and the removal at once. A second Remove joins the first.
+        guard let removal = enqueueWorkspaceRemoval(workspace, on: context) else { return .stale }
+        return await removal.value
+    }
+
+    /// Hides the workspace at once and queues its removal behind this phone's
+    /// saves of it; a save made while it waits queues behind it, so the
+    /// machine never gets a save and the removal at once. A second Remove
+    /// joins the first. A refusal shows the workspace again with a notice on
+    /// it. Nil, with nothing sent, when the context no longer holds or the
+    /// machine has already removed the workspace.
+    @discardableResult
+    func enqueueWorkspaceRemoval(
+        _ workspace: AidenWorkspace,
+        on context: AidenRemoteRequestContext
+    ) -> Task<AidenRemoteMutationOutcome<Void>, Never>? {
+        guard context.scope == .owner, holds(context),
+              let connection = hosts.connection(for: context.instanceId) else { return nil }
         let lane = workspaceSaveLane(context, workspaceId: workspace.id)
-        if let removal = lane.removal { return await removal.value }
+        if let removal = lane.removal { return removal }
+        guard !lane.removed else { return nil }
         let previous = lane.tail
         lane.waiting = nil
         let pending = AidenHostObjectID(instanceId: context.instanceId, deviceId: context.deviceId, objectId: workspace.id)
         workspacesBeingRemoved.insert(pending)
-        presentedError = nil
+        workspaceSaveNotices[pending] = nil
+        connection.hideWorkspace(workspace.id)
+        // The person has left the workspace, so they may leave the app while
+        // the removal waits its turn or is on its way.
+        let backgroundTime = AidenBackgroundTime(named: "Workspace removal")
         let removal = Task { @MainActor [weak self] () -> AidenRemoteMutationOutcome<Void> in
+            defer { backgroundTime.end() }
             _ = await previous?.value
             guard let self else { return .stale }
-            let backgroundTime = AidenBackgroundTime(named: "Workspace removal")
-            defer { backgroundTime.end() }
             let outcome = await self.sendWorkspaceRemoval(workspace, context: context, lane: lane)
-            if lane.removal != nil {
-                lane.removal = nil
-                self.workspacesBeingRemoved.remove(pending)
-            }
+            lane.removal = nil
+            // A pairing that changed meanwhile has dropped this lane, and its
+            // markers belong to the new pairing.
+            guard !lane.cancelled else { return outcome }
+            self.workspacesBeingRemoved.remove(pending)
+            // The machine's own list decides whether a workspace with this id
+            // is back, and a refusal brings this one back.
+            connection.showWorkspace(workspace.id)
+            // Saves queued behind the removal still see it and are never sent,
+            // while a workspace the machine lists again under this id (it
+            // seeds a new "default" when its last one goes) gets a new lane.
+            let key = Self.workspaceSaveLaneKey(context, workspaceId: workspace.id)
+            if lane.removed, self.workspaceSaveLanes[key] === lane { self.workspaceSaveLanes[key] = nil }
             return outcome
         }
         lane.removal = removal
         lane.tail = Task { _ = await removal.value }
-        return await removal.value
+        return removal
     }
 
     /// Sends a queued removal against the revision this phone's saves left.
@@ -1045,10 +1087,19 @@ final class AidenRemoteCoordinator {
                 pendingManagedWorktreeDeletionKeys[scope] = nil
             }
             if await !handleCredentialRevocation(error, context: context), holds(context) {
-                presentedError = Self.workspaceFailure(
+                let notice = Self.workspaceFailure(
                     String(localized: "Couldn’t remove this workspace from \(machineName(of: context.instanceId))."),
                     error
                 )
+                workspaceSaveNotices[AidenHostObjectID(
+                    instanceId: context.instanceId,
+                    deviceId: context.deviceId,
+                    objectId: workspace.id
+                )] = notice
+                haptics.play(.error)
+                // The person has left the workspace, so VoiceOver hears the
+                // notice it shows again with.
+                UIAccessibility.post(notification: .announcement, argument: notice)
             }
             return .failure
         }
@@ -1589,10 +1640,13 @@ extension AidenRemoteCoordinator: AidenHostConnectionDelegate {
         let instanceId = connection.instanceId
         // A hidden No workspace record can't be archived (the Chats group has no Unarchive), so
         // a flag an older build left on one is dropped here and every archive check agrees.
+        // The confirmed list, so a workspace hidden while its removal waits
+        // keeps its flag if the machine refuses.
         workspaceArchiveStore.prune(
             instanceID: instanceId,
-            validWorkspaceIDs: Set(AidenNoWorkspace.choices(connection.workspaces).map(\.id))
+            validWorkspaceIDs: Set(AidenNoWorkspace.choices(connection.confirmedWorkspaces).map(\.id))
         )
+        pruneWorkspaceSaveLanes(of: connection)
         // The revision and the intent catalog describe the selected machine.
         if hostConnectionIsSelected(connection) {
             workspaceSnapshotRevision &+= 1
@@ -1744,6 +1798,8 @@ extension AidenRemoteMutationOutcome: Sendable where Value: Sendable {}
 /// revisions its saves earned stay known.
 @MainActor
 private final class AidenWorkspaceSaveLane {
+    let workspaceId: String
+    init(workspaceId: String) { self.workspaceId = workspaceId }
     /// The save nobody has sent yet, which takes newer edits.
     var waiting: AidenQueuedWorkspaceSave?
     /// The last save or removal queued; the next one waits for it, so a
@@ -1758,6 +1814,11 @@ private final class AidenWorkspaceSaveLane {
     /// The revisions the machine gave this phone's saves, so a later save
     /// chains on them rather than on the copy it was drafted from.
     var ownRevisions: [String] = []
+    /// The pairing changed or ended and the lane was dropped.
+    var cancelled = false
+
+    /// Nothing is queued or on its way.
+    var isIdle: Bool { tasks.isEmpty && removal == nil }
 }
 
 /// A queued save: the fields it changes, the revision it was drafted on, and

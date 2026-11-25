@@ -136,6 +136,10 @@ final class AidenHostConnection {
     /// For each workspace id, revisions this phone's own saves replaced. A list
     /// read before a save landed still carries one; it never undoes the save.
     private var supersededWorkspaceRevisions: [String: Set<String>] = [:]
+    /// Workspaces this phone asked the machine to remove, hidden until the
+    /// machine answers. They stay in the confirmed list, so a refusal shows
+    /// them again as the machine last described them.
+    private var hiddenWorkspaceIds: Set<String> = []
     /// The activation lease every request context carries. A reconnect leaves
     /// it alone, so contexts survive a dropped network. Each arrival of the
     /// selection moves it, so A -> B -> A can't make an old context current
@@ -288,6 +292,7 @@ final class AidenHostConnection {
         server = nil
         workspaceEdits = [:]
         supersededWorkspaceRevisions = [:]
+        hiddenWorkspaceIds = []
         confirmedWorkspaces = []
         workspaces = []
         connectionIssue = nil
@@ -407,7 +412,7 @@ final class AidenHostConnection {
     /// `superseding` is the revision the save replaced.
     /// An answer that arrives after a newer list keeps out of the way: it never
     /// brings back a workspace that list no longer has, or puts an older copy
-    /// over a newer one. Revisions are hashes, so the copies' times decide.
+    /// over a newer one (see `answer(_:replaces:superseded:)`).
     func settleWorkspaceEdits(
         _ versions: Set<Int>,
         workspaceId: String,
@@ -419,11 +424,41 @@ final class AidenHostConnection {
         }
         if let confirmed,
            let current = confirmedWorkspaces.first(where: { $0.id == workspaceId }),
-           current.updatedAt <= confirmed.updatedAt {
+           Self.answer(confirmed, replaces: current, superseded: supersededWorkspaceRevisions[workspaceId] ?? []) {
             confirmedWorkspaces = Self.replacing(confirmed, in: confirmedWorkspaces)
         }
         let remaining = (workspaceEdits[workspaceId] ?? []).filter { !versions.contains($0.version) }
         workspaceEdits[workspaceId] = remaining.isEmpty ? nil : remaining
+        showWorkspaces()
+    }
+
+    /// Whether a save's answer goes over the confirmed copy. The machine
+    /// accepted the save only on the revision it replaced, so a copy at that
+    /// revision, or at one this phone's saves replaced earlier, is older than
+    /// the answer. Any other copy was written after the save landed unless it
+    /// is strictly older: the machine's times are in milliseconds, so two
+    /// writes can share one, and a shared time keeps the confirmed copy.
+    private static func answer(
+        _ answer: AidenWorkspace,
+        replaces current: AidenWorkspace,
+        superseded: Set<String>
+    ) -> Bool {
+        guard !superseded.contains(answer.revision) else { return false }
+        return current.revision == answer.revision
+            || superseded.contains(current.revision)
+            || current.updatedAt < answer.updatedAt
+    }
+
+    /// Hides a workspace this phone asked the machine to remove until
+    /// `showWorkspace` puts it back: on a refusal, or once the machine's list
+    /// has replaced the confirmed one.
+    func hideWorkspace(_ workspaceId: String) {
+        guard hiddenWorkspaceIds.insert(workspaceId).inserted else { return }
+        showWorkspaces()
+    }
+
+    func showWorkspace(_ workspaceId: String) {
+        guard hiddenWorkspaceIds.remove(workspaceId) != nil else { return }
         showWorkspaces()
     }
 
@@ -448,14 +483,23 @@ final class AidenHostConnection {
 
     private func dropWorkspaceEdits() {
         supersededWorkspaceRevisions = [:]
-        guard !workspaceEdits.isEmpty else { return }
+        guard !workspaceEdits.isEmpty || !hiddenWorkspaceIds.isEmpty else { return }
         workspaceEdits = [:]
+        hiddenWorkspaceIds = []
         workspaces = confirmedWorkspaces
     }
 
     private func showWorkspaces() {
-        workspaces = Self.overlaying(workspaceEdits, on: confirmedWorkspaces)
+        workspaces = shown(confirmedWorkspaces)
         delegate?.hostConnectionDidApplyWorkspaceSnapshot(self)
+    }
+
+    /// The confirmed list as this phone shows it: unanswered edits on top, and
+    /// workspaces waiting to be removed left out.
+    private func shown(_ confirmed: [AidenWorkspace]) -> [AidenWorkspace] {
+        let edited = Self.overlaying(workspaceEdits, on: confirmed)
+        guard !hiddenWorkspaceIds.isEmpty else { return edited }
+        return edited.filter { !hiddenWorkspaceIds.contains($0.id) }
     }
 
     private static func overlaying(
@@ -550,12 +594,18 @@ final class AidenHostConnection {
     func adopt(workspaces: [AidenWorkspace]) {
         let shown = Dictionary(self.workspaces.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
         let confirmed = Dictionary(confirmedWorkspaces.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
-        confirmedWorkspaces = workspaces.map { workspace in
+        let listed = Set(workspaces.map(\.id))
+        // A workspace waiting to be removed isn't shown, so the list leaves it
+        // out without the machine having removed it.
+        let waitingRemoval = confirmedWorkspaces.filter { hiddenWorkspaceIds.contains($0.id) && !listed.contains($0.id) }
+        let adopted = workspaces.map { workspace in
             guard workspaceEdits[workspace.id] != nil, shown[workspace.id] == workspace,
                   let original = confirmed[workspace.id] else { return workspace }
             return original
         }
-        self.workspaces = Self.overlaying(workspaceEdits, on: confirmedWorkspaces)
+        confirmedWorkspaces = waitingRemoval.isEmpty ? adopted : (adopted + waitingRemoval)
+            .sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
+        self.workspaces = self.shown(confirmedWorkspaces)
     }
 
     func advanceGeneration() {

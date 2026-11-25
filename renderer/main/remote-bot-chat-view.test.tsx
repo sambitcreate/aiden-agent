@@ -744,7 +744,7 @@ test("a message sent to a Bot on another computer shows at once, before that com
       return { ok: false, error: { code: "failed", message: `unexpected ${operation.operation}` } };
     },
   });
-  const box = await screen.findByPlaceholderText("Ask Planner");
+  const box = await screen.findByPlaceholderText("Message Planner");
   fireEvent.change(box, { target: { value: "Move the dentist to Friday" } });
   fireEvent.click(await screen.findByRole("button", { name: "Send message" }));
   assert.ok(await screen.findByText("Move the dentist to Friday"));
@@ -767,7 +767,7 @@ test("a send the other computer refuses takes its echo away and keeps the draft"
       return { ok: false, error: { code: "failed", message: "Studio is busy." } };
     },
   });
-  const box = (await screen.findByPlaceholderText("Ask Planner")) as HTMLTextAreaElement;
+  const box = (await screen.findByPlaceholderText("Message Planner")) as HTMLTextAreaElement;
   fireEvent.change(box, { target: { value: "Move the dentist to Friday" } });
   fireEvent.click(await screen.findByRole("button", { name: "Send message" }));
   await waitFor(() => assert.equal(box.value, "Move the dentist to Friday"));

@@ -527,8 +527,8 @@ final class AidenOwnerRoutingTests: XCTestCase {
         XCTAssertEqual(try shownDefault()?.name, "Renamed")
     }
 
-    /// Remove waits for a save still on its way, shows as pending meanwhile,
-    /// then removes the workspace as that save left it. The removal carrying
+    /// Remove waits for a save still on its way, hides the workspace
+    /// meanwhile, then removes it as that save left it. The removal carrying
     /// the save's answered revision proves it left after that answer.
     func testRemoveWaitsForASaveOnItsWay() async throws {
         let workspace = try await laptopsDefault()
@@ -544,6 +544,8 @@ final class AidenOwnerRoutingTests: XCTestCase {
         try await waitUntil("the removal shows as pending") {
             coordinator.workspacesBeingRemoved.contains(id("default", on: "laptop"))
         }
+        XCTAssertNil(try shownDefault())
+        XCTAssertEqual(requests("laptop").filter { $0 == "DELETE /workspaces/default" }.count, 0)
 
         release()
         let saveOutcome = await save.value
@@ -572,8 +574,8 @@ final class AidenOwnerRoutingTests: XCTestCase {
         try await waitUntil("the removal is queued") {
             coordinator.workspacesBeingRemoved.contains(id("default", on: "laptop"))
         }
-        let late = try XCTUnwrap(coordinator.enqueueWorkspaceSave(try XCTUnwrap(try shownDefault()), permission: .full, on: owner))
-        XCTAssertEqual(try shownDefault()?.permission, .full)
+        let late = try XCTUnwrap(coordinator.enqueueWorkspaceSave(toRemove, permission: .full, on: owner))
+        XCTAssertNil(try shownDefault())
         // The machine's list after the removal no longer has it.
         listWorkspaces([workspaceObject("other", name: "Other")], on: "laptop")
 
@@ -589,10 +591,39 @@ final class AidenOwnerRoutingTests: XCTestCase {
         ])
         XCTAssertNil(try shownDefault())
         XCTAssertNil(coordinator.workspaceSaveNotices[id("default", on: "laptop")])
+        // A save from a sheet still open on the removed workspace sends nothing.
+        XCTAssertNil(coordinator.enqueueWorkspaceSave(toRemove, name: "Again", on: owner))
+        XCTAssertEqual(requests("laptop").filter { $0 == "PATCH /workspaces/default" }.count, 1)
     }
 
-    /// When the machine refuses the removal, a save made while it waited goes
-    /// after it, on the revision the earlier save got back.
+    /// The machine seeds a new "default" when its last workspace goes. Saves
+    /// to that workspace are sent, though one with its id was just removed.
+    func testAWorkspaceListedAgainAfterItsRemovalTakesSaves() async throws {
+        let workspace = try await laptopsDefault()
+        answerWorkspaceSaves()
+        responder.reply(instanceId: "laptop", method: "DELETE", path: "/workspaces/default", status: 204, json: Data())
+        var reseeded = workspaceObject("default", name: "Default")
+        reseeded["revision"] = "rev_reseeded"
+        listWorkspaces([reseeded], on: "laptop")
+        let owner = try coordinator.ownerContext(for: "laptop")
+
+        guard case .success = await coordinator.removeWorkspaceOutcome(workspace, on: owner) else { return XCTFail("Not removed") }
+        let again = try XCTUnwrap(try shownDefault())
+        XCTAssertEqual(again.revision, "rev_reseeded")
+
+        let save = try XCTUnwrap(coordinator.enqueueWorkspaceSave(again, permission: .full, on: owner))
+        let outcome = await save.value
+        XCTAssertEqual(outcome.value?.permission, .full)
+        XCTAssertEqual(responder.revisionsSent(instanceId: "laptop"), [
+            "DELETE /workspaces/default workspace_revision_7",
+            "PATCH /workspaces/default rev_reseeded",
+        ])
+        XCTAssertEqual(try shownDefault()?.permission, .full)
+    }
+
+    /// When the machine refuses the removal, the workspace comes back with a
+    /// notice and no alert, and a save made while the removal waited goes
+    /// only after the machine's refusal, on the revision the earlier save got back.
     func testASaveMadeWhileRemoveWaitsGoesAfterARefusedRemoval() async throws {
         let workspace = try await laptopsDefault()
         answerWorkspaceSaves()
@@ -606,14 +637,26 @@ final class AidenOwnerRoutingTests: XCTestCase {
         try await waitUntil("the removal is queued") {
             coordinator.workspacesBeingRemoved.contains(id("default", on: "laptop"))
         }
-        let late = try XCTUnwrap(coordinator.enqueueWorkspaceSave(try XCTUnwrap(try shownDefault()), permission: .full, on: owner))
+        let late = try XCTUnwrap(coordinator.enqueueWorkspaceSave(toRemove, permission: .full, on: owner))
+        // The removal's refusal is held back too.
+        let releaseRefusal = responder.hold(instanceId: "laptop", path: "/workspaces/default")
 
         release()
         let firstOutcome = await first.value
         let saved = try XCTUnwrap(firstOutcome.value)
+        try await waitUntil("the removal is on its way") { requests("laptop").contains("DELETE /workspaces/default") }
+        XCTAssertNil(try shownDefault())
+        // Nothing else goes while the removal waits for its answer.
+        try await Task.sleep(for: .milliseconds(100))
+        XCTAssertEqual(requests("laptop").filter { $0 == "PATCH /workspaces/default" }.count, 1)
+
+        releaseRefusal()
         guard case .failure = await removal.value else { return XCTFail("Removed") }
         let lateOutcome = await late.value
         let last = try XCTUnwrap(lateOutcome.value)
+        let notice = try XCTUnwrap(coordinator.workspaceSaveNotices[id("default", on: "laptop")])
+        XCTAssertTrue(notice.hasPrefix("Couldn’t remove this workspace from Laptop."), notice)
+        XCTAssertNil(coordinator.presentedError)
 
         XCTAssertEqual(responder.revisionsSent(instanceId: "laptop"), [
             "PATCH /workspaces/default workspace_revision_7",
@@ -655,6 +698,17 @@ final class AidenOwnerRoutingTests: XCTestCase {
     /// A save's answer that arrives after a newer list doesn't put its older
     /// copy over the newer one.
     func testASaveAnswerArrivingAfterANewerListKeepsTheNewerCopy() async throws {
+        try await assertALateAnswerKeepsTheNewerCopy(writtenAt: "2026-11-05T09:00:05.000Z")
+    }
+
+    /// The machine's times are in milliseconds, so the computer's change can
+    /// share the time of the save it followed. Its copy is still kept.
+    func testASaveAnswerSharingTheNewerCopysTimeKeepsTheNewerCopy() async throws {
+        // The time `answerWorkspaceSaves` gives its answers.
+        try await assertALateAnswerKeepsTheNewerCopy(writtenAt: "2026-11-05T09:00:01.000Z")
+    }
+
+    private func assertALateAnswerKeepsTheNewerCopy(writtenAt updatedAt: String) async throws {
         let workspace = try await laptopsDefault()
         answerWorkspaceSaves()
         let owner = try coordinator.ownerContext(for: "laptop")
@@ -665,7 +719,7 @@ final class AidenOwnerRoutingTests: XCTestCase {
         // phone read that list before the save's answer arrived.
         var newer = workspaceObject("default", name: "Renamed on the computer")
         newer["permission"] = "full"
-        newer["updatedAt"] = "2026-11-05T09:00:05.000Z"
+        newer["updatedAt"] = updatedAt
         newer["revision"] = "rev_newer"
         listWorkspaces([newer], on: "laptop")
         try await connection("laptop").refreshWorkspacesForPoll()
@@ -887,8 +941,12 @@ final class AidenOwnerRoutingTests: XCTestCase {
         let outcome = await coordinator.removeWorkspaceOutcome(workspace, on: try coordinator.ownerContext(for: "laptop"))
 
         guard case .failure = outcome else { return XCTFail("Not a failure: \(outcome)") }
-        let message = try XCTUnwrap(coordinator.presentedError)
+        // A quiet notice on the workspace, which comes back, and no alert.
+        XCTAssertNil(coordinator.presentedError)
+        let message = try XCTUnwrap(coordinator.workspaceSaveNotices[id("default", on: "laptop")])
         XCTAssertTrue(message.hasPrefix("Couldn’t remove this workspace from Laptop."), message)
+        XCTAssertEqual(try shownDefault(), workspace)
+        XCTAssertTrue(coordinator.workspacesBeingRemoved.isEmpty)
     }
 
     // MARK: Bots
