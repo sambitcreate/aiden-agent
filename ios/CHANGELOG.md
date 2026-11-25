@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+- **2026-11-24 — A chat's top bar after Telegram's.** No Remote wire or revision change.
+  - Workspace and Bot chats show the chat's name over one status line on a glass capsule in the middle of the bar.
+  - The status line says where the chat lives at rest (the workspace, then the computer when several are paired, otherwise the branch). For a Bot, it says what the Bot is for.
+  - While the agent or Bot works, the status line shows typing dots and what it is doing. When it needs you ("Waiting for approval", "Waiting for you") or can't answer (Paused, Unavailable, Needs a model, Interrupted), it turns amber.
+  - The computer's name moves from under the bar into the status line.
+  - A Workspace chat shows the workspace's initials on the right. Its name and its initials both open the chat's actions (Rename, Fork, Read response aloud, Files). The separate More button is gone, including in a chat with no workspace.
+  - A Bot chat puts the Bot's face in the middle of the bar with its name tucked under it. Both open the Bot's profile, and More on the right keeps the Bot's actions.
+  - Under Reduce Motion the typing dots hold still. Under Reduce Transparency the capsule is solid.
+
 - **2026-11-24 — Allow and Deny stay after opening from the Live Activity.** Opening the app from a run's Live Activity reloads the chat before the phone is back in touch with the Mac. That first check used to fail and clear the approval or question card, and the run showed as reconciling while the Mac still waited. Now a check the Mac never answered keeps the card. The reload after reconnecting asks the Mac again, so Allow, Deny or Reply stay available. Until then the Live Activity reads "Latest status shown". A summary card does too while any of its runs is marked that way. No Remote wire or revision change.
 
 - **2026-11-23 — Run alerts settle in more cases.** An answer to a run that already finished, or that the Mac no longer has, counts as done instead of opening the chat. A Mac that revoked this phone drops the answer instead of bringing the notification back. Approve is left off an alert whose approval can't be allowed just once. A run that reconnects keeps its row on the summary card instead of going back to "Starting". After a Reply lands, the Live Activity reads "Answered" instead of "Has a question for you". No Remote wire or revision change.
