@@ -39,7 +39,7 @@ enum AidenDemoScenario: String, CaseIterable {
 }
 
 /// Answers every request the demo clients make. Register answers with `reply`,
-/// `fail` and `hold`; an unregistered path is a 404, so no endpoint is invented.
+/// `stream`, `fail` and `hold`; an unregistered path is a 404, so no endpoint is invented.
 /// The last registration for a machine, method and path wins.
 final class AidenDemoResponder: @unchecked Sendable {
     /// Host-name suffix that marks a request as one of ours.
@@ -49,8 +49,19 @@ final class AidenDemoResponder: @unchecked Sendable {
     /// Marks a request from `probeSession`.
     private static let probeHeader = "X-Aiden-Demo-Probe"
 
+    /// One answer: the response, its body, and whether the body is complete.
+    /// An unfinished answer leaves the connection open, the way an event
+    /// stream stays open after its first frame.
+    fileprivate struct Answer: Sendable {
+        let response: HTTPURLResponse
+        let data: Data
+        var finishes = true
+    }
+
     private enum Outcome {
         case reply(status: Int, json: Data)
+        /// A body sent at once, then a connection left open until the client ends it.
+        case stream(status: Int, body: @Sendable () -> Data)
         /// An answer that depends on the request, such as a search.
         case computed(status: Int, json: @Sendable (URL) -> Data)
         case failure(URLError.Code)
@@ -74,13 +85,17 @@ final class AidenDemoResponder: @unchecked Sendable {
 
     private final class Hold {
         var isReleased = false
-        var waiting: [() -> Void] = []
+        /// Keys into `parked`, oldest first.
+        var tickets: [UUID] = []
     }
 
     private let lock = NSLock()
     private var outcomes: [Route: Outcome] = [:]
     private var delays: [HoldKey: @Sendable () -> TimeInterval] = [:]
     private var holds: [HoldKey: Hold] = [:]
+    /// Requests waiting on a hold. A request the client cancels leaves at once,
+    /// so a stream the app opens again and again never piles up here.
+    private var parked: [UUID: () -> Void] = [:]
     /// Parks only the interactive client's requests, the way a session that
     /// waits for connectivity does with no network.
     private var interactiveHolds: [HoldKey: Hold] = [:]
@@ -142,6 +157,14 @@ final class AidenDemoResponder: @unchecked Sendable {
         outcomes[Route(instanceId: instanceId, method: method, path: path)] = .computed(status: status, json: json)
     }
 
+    /// Answers `path` with `body`, then keeps the connection open until the
+    /// client cancels it, like the Mac's event streams after their first frame.
+    func stream(instanceId: String, path: String, status: Int = 200, body: @escaping @Sendable () -> Data) {
+        lock.lock()
+        defer { lock.unlock() }
+        outcomes[Route(instanceId: instanceId, method: "GET", path: path)] = .stream(status: status, body: body)
+    }
+
     /// Fails every method on `path` with a transport error. `path: "*"` takes the
     /// whole machine offline and replaces its earlier answers.
     func fail(instanceId: String, path: String, code: URLError.Code) {
@@ -159,15 +182,7 @@ final class AidenDemoResponder: @unchecked Sendable {
         lock.lock()
         holds[HoldKey(instanceId: instanceId, path: path, query: query)] = hold
         lock.unlock()
-        return { [weak self] in
-            guard let self else { return }
-            self.lock.lock()
-            hold.isReleased = true
-            let waiting = hold.waiting
-            hold.waiting = []
-            self.lock.unlock()
-            waiting.forEach { $0() }
-        }
+        return { [weak self] in self?.release(hold) }
     }
 
     /// A machine with no network as each client meets it: the probe client's
@@ -179,15 +194,22 @@ final class AidenDemoResponder: @unchecked Sendable {
         probeFailures[instanceId] = code
         for path in paths { interactiveHolds[HoldKey(instanceId: instanceId, path: path)] = hold }
         lock.unlock()
-        return { [weak self] in
-            guard let self else { return }
-            self.lock.lock()
-            hold.isReleased = true
-            let waiting = hold.waiting
-            hold.waiting = []
-            self.lock.unlock()
-            waiting.forEach { $0() }
-        }
+        return { [weak self] in self?.release(hold) }
+    }
+
+    private func release(_ hold: Hold) {
+        lock.lock()
+        hold.isReleased = true
+        let waiting = hold.tickets.compactMap { parked.removeValue(forKey: $0) }
+        hold.tickets = []
+        lock.unlock()
+        waiting.forEach { $0() }
+    }
+
+    private func unpark(_ ticket: UUID) {
+        lock.lock()
+        parked[ticket] = nil
+        lock.unlock()
     }
 
     /// Answers each request to `path` once `wait` has passed, which it works
@@ -213,13 +235,16 @@ final class AidenDemoResponder: @unchecked Sendable {
         return keyLog[instanceId] ?? []
     }
 
+    /// Answers `request` through `deliver`. Returns a closure that forgets the
+    /// request if it is still waiting on a hold, for when the client cancels it.
+    @discardableResult
     fileprivate func handle(
         _ request: URLRequest,
-        deliver: @escaping @Sendable (Result<(HTTPURLResponse, Data), URLError>) -> Void
-    ) {
+        deliver: @escaping @Sendable (Result<Answer, URLError>) -> Void
+    ) -> @Sendable () -> Void {
         guard let url = request.url, let host = url.host, host.hasSuffix(Self.hostSuffix) else {
             deliver(.failure(URLError(.badURL)))
-            return
+            return {}
         }
         let instanceId = String(host.dropLast(Self.hostSuffix.count))
         let method = request.httpMethod ?? "GET"
@@ -234,16 +259,20 @@ final class AidenDemoResponder: @unchecked Sendable {
         if isProbe, let code = probeFailures[instanceId] {
             lock.unlock()
             deliver(.failure(URLError(code)))
-            return
+            return {}
         }
         let holdsQuery = holds[HoldKey(instanceId: instanceId, path: path, query: url.query)]
         let interactiveHold = isProbe ? nil : interactiveHolds[HoldKey(instanceId: instanceId, path: path)]
         if let hold = holdsQuery ?? holds[HoldKey(instanceId: instanceId, path: path)] ?? interactiveHold, !hold.isReleased {
-            hold.waiting.append { [self] in
-                deliver(resolve(instanceId: instanceId, method: method, path: path, url: url))
+            let ticket = UUID()
+            hold.tickets.append(ticket)
+            // Weak, so a parked request never keeps the responder alive.
+            parked[ticket] = { [weak self] in
+                guard let self else { return deliver(.failure(URLError(.cancelled))) }
+                deliver(self.resolve(instanceId: instanceId, method: method, path: path, url: url))
             }
             lock.unlock()
-            return
+            return { [weak self] in self?.unpark(ticket) }
         }
         let delay = delays[HoldKey(instanceId: instanceId, path: path)]
         lock.unlock()
@@ -251,9 +280,10 @@ final class AidenDemoResponder: @unchecked Sendable {
             DispatchQueue.global().asyncAfter(deadline: .now() + wait) { [self] in
                 deliver(resolve(instanceId: instanceId, method: method, path: path, url: url))
             }
-            return
+            return {}
         }
         deliver(resolve(instanceId: instanceId, method: method, path: path, url: url))
+        return {}
     }
 
     private func resolve(
@@ -261,11 +291,11 @@ final class AidenDemoResponder: @unchecked Sendable {
         method: String,
         path: String,
         url: URL
-    ) -> Result<(HTTPURLResponse, Data), URLError> {
+    ) -> Result<Answer, URLError> {
         if AidenDemoLongChat.isRequested, method == "GET", instanceId == "studio",
            path == "/chats/\(AidenDemoLongChat.chatId)/messages",
            let page = AidenDemoLongChat.window(for: url) {
-            return .success((Self.response(url: url, status: 200), page))
+            return .success(Answer(response: Self.response(url: url, status: 200), data: page))
         }
         lock.lock()
         let outcome = [
@@ -280,11 +310,13 @@ final class AidenDemoResponder: @unchecked Sendable {
         case .failure(let code):
             return .failure(URLError(code))
         case .reply(let status, let json):
-            return .success((Self.response(url: url, status: status), json))
+            return .success(Answer(response: Self.response(url: url, status: status), data: json))
+        case .stream(let status, let body):
+            return .success(Answer(response: Self.response(url: url, status: status), data: body(), finishes: false))
         case .computed(let status, let json):
-            return .success((Self.response(url: url, status: status), json(url)))
+            return .success(Answer(response: Self.response(url: url, status: status), data: json(url)))
         case nil:
-            return .success((Self.response(url: url, status: 404), AidenDemoContent.notFound()))
+            return .success(Answer(response: Self.response(url: url, status: 404), data: AidenDemoContent.notFound()))
         }
     }
 
@@ -334,6 +366,7 @@ private final class AidenDemoURLProtocol: URLProtocol, @unchecked Sendable {
 
     private let stateLock = NSLock()
     private var isStopped = false
+    private var forget: (@Sendable () -> Void)?
 
     override class func canInit(with request: URLRequest) -> Bool {
         request.url?.host?.hasSuffix(AidenDemoResponder.hostSuffix) == true
@@ -346,23 +379,31 @@ private final class AidenDemoURLProtocol: URLProtocol, @unchecked Sendable {
             client?.urlProtocol(self, didFailWithError: URLError(.cannotConnectToHost))
             return
         }
-        responder.handle(request) { [weak self] result in
+        let forget = responder.handle(request) { [weak self] result in
             guard let self, !self.stopped else { return }
             switch result {
-            case .success(let (response, data)):
-                self.client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
-                self.client?.urlProtocol(self, didLoad: data)
-                self.client?.urlProtocolDidFinishLoading(self)
+            case .success(let answer):
+                self.client?.urlProtocol(self, didReceive: answer.response, cacheStoragePolicy: .notAllowed)
+                self.client?.urlProtocol(self, didLoad: answer.data)
+                if answer.finishes { self.client?.urlProtocolDidFinishLoading(self) }
             case .failure(let error):
                 self.client?.urlProtocol(self, didFailWithError: error)
             }
         }
+        stateLock.lock()
+        let alreadyStopped = isStopped
+        if !alreadyStopped { self.forget = forget }
+        stateLock.unlock()
+        if alreadyStopped { forget() }
     }
 
     override func stopLoading() {
         stateLock.lock()
         isStopped = true
+        let forget = self.forget
+        self.forget = nil
         stateLock.unlock()
+        forget?()
     }
 
     private var stopped: Bool {
@@ -410,9 +451,10 @@ enum AidenDemoHosts {
         /// Whether the machine fails when asked for Bot conversations. Online
         /// otherwise, so the Search tab has a machine that errors.
         var botSearchFails = false
-        /// The usage scale of a machine that answers for every screen
-        /// (`AidenDemoFull`), or nil for the standard answers only.
-        var fullScale: Double?
+        /// What a machine that answers for every screen (`AidenDemoFull`)
+        /// serves: its own Bot, routine, usage and tasks. Nil for the
+        /// standard answers only.
+        var full: AidenDemoFull.Host?
     }
 
     /// A paired machine as the app stores it after pairing and a first `/server`:
@@ -515,9 +557,9 @@ enum AidenDemoHosts {
             )]
         case .full:
             var fullStudio = studio
-            fullStudio.fullScale = 1
+            fullStudio.full = .studio
             var fullLaptop = laptop
-            fullLaptop.fullScale = 0.4
+            fullLaptop.full = .laptop
             machines = [fullStudio, fullLaptop]
         }
         if AidenDemoRunOptions.defaultMachineIsOffline, !machines.isEmpty { machines[0].isOnline = false }
@@ -601,7 +643,7 @@ enum AidenDemoHosts {
             cacheRoot.appending(path: name, directoryHint: .isDirectory)
         }
         let archiveStore = AidenWorkspaceArchiveStore(defaults: defaults)
-        for machine in machines where machine.fullScale != nil && machine.isOnline {
+        for machine in machines where machine.full != nil {
             archiveStore.archive(workspaceID: AidenDemoFull.archivedWorkspaceId, instanceID: machine.installation.instanceId)
         }
         return AidenRemoteCoordinator(
@@ -753,14 +795,15 @@ enum AidenDemoHosts {
             responder.reply(instanceId: id, path: "/bots", status: 200, json: AidenDemoContent.emptyBotsJSON())
             responder.reply(instanceId: id, path: "/bot-conversations", status: 200, json: Data(#"{"conversations":[]}"#.utf8))
         }
-        if let scale = machine.fullScale, machine.hasBot, installation.serverCapabilities != nil {
+        if let host = machine.full, machine.hasBot, installation.serverCapabilities != nil {
             AidenDemoFull.register(
                 instanceId: id,
+                host: host,
                 responder: responder,
                 baseBotList: AidenDemoContent.botListJSON(),
                 baseBotDetail: AidenDemoContent.botDetailJSON(),
                 baseWorkspaces: AidenDemoContent.workspacesJSON(),
-                scale: scale
+                baseConversations: { AidenDemoContent.botConversationsJSON(for: $0) }
             )
         }
     }

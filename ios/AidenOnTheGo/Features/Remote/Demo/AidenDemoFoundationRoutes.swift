@@ -4,94 +4,144 @@ import Foundation
 
 /// The `full` scenario's extra answers: every screen the new direction draws
 /// has data behind it. A second Bot (running), an archived workspace, usage
-/// history, scheduled tasks, Bot memory, routine results and workspace git.
+/// history, scheduled tasks, Bot memory and routines, routine results and
+/// workspace git.
 ///
-/// Shapes follow the iOS decoders and validators, which are stricter than
-/// `protocol/aiden-remote/v1/fixtures/contract.json` in three places: a git
-/// `operationId` starts with `op_`, a scheduled task's revision with `rev_`,
-/// and a task with MCP servers is an llm task with full access and no
-/// workspace. Where the two disagree the demo follows the phone.
+/// Shapes follow what the Mac sends (`main/services/aiden-remote-*.ts`), not
+/// only what the phone's decoders accept: those are looser in places (an
+/// optional git `capability`, an empty routine preview, any scheduled error
+/// code), so passing them is not enough. Where `contract.json` and the phone
+/// disagree, the demo follows the phone: a git `operationId` starts with
+/// `op_`, a scheduled task's revision with `rev_`, and a task with MCP servers
+/// is an llm task with full access and no workspace.
+///
+/// The two machines answer differently (`Host`), so a reply that lands on the
+/// wrong machine shows.
 enum AidenDemoFull {
-    static let relayBotId = "bot_relay"
     static let archivedWorkspaceId = "workspace_prototype"
     static let gitWorkspaceId = "workspace_app"
+    static let worktreeWorkspaceId = "workspace_upload_retry"
+    static let scoutBotId = "bot_scout"
 
-    /// Registers the extra routes for one machine. `baseBotList` and
-    /// `baseWorkspaces` are the standard answers this adds to. `scale` varies
-    /// usage between machines so two hosts don't read the same.
+    /// What one machine has beyond the standard answers.
+    struct Host: Sendable {
+        /// The second Bot, which is running.
+        let botId: String
+        let botName: String
+        let botPurpose: String
+        let botColor: String
+        let routineName: String
+        let routinePreview: String
+        /// Usage volume, so two machines don't read the same.
+        let scale: Double
+        /// Whether the hourly triage task (running, with MCP servers) is here.
+        let triages: Bool
+
+        static let studio = Host(
+            botId: "bot_relay", botName: "Relay", botPurpose: "Keeps the release on track", botColor: "sky",
+            routineName: "Release check", routinePreview: "Two checklist items are still open.",
+            scale: 1, triages: true
+        )
+        static let laptop = Host(
+            botId: "bot_courier", botName: "Courier", botPurpose: "Sorts the travel inbox", botColor: "mint",
+            routineName: "Inbox sweep", routinePreview: "Filed four receipts and one boarding pass.",
+            scale: 0.4, triages: false
+        )
+    }
+
+    /// Registers the extra routes for one machine. `baseBotList`,
+    /// `baseBotDetail`, `baseWorkspaces` and `baseConversations` are the
+    /// standard answers this adds to.
     static func register(
         instanceId id: String,
+        host: Host,
         responder: AidenDemoResponder,
         baseBotList: Data,
         baseBotDetail: Data,
         baseWorkspaces: Data,
-        scale: Double
+        baseConversations: @escaping @Sendable (URL) -> Data
     ) {
-        let now = Date()
-        responder.reply(instanceId: id, path: "/bots", status: 200, json: botList(base: baseBotList))
-        responder.reply(instanceId: id, path: "/bots/\(relayBotId)", status: 200, json: relayDetail(base: baseBotDetail))
-        responder.reply(instanceId: id, path: "/bots/\(relayBotId)/session", status: 200, json: data(relaySession(now: now)))
-        // The running Bot stays live: its event stream never ends.
-        _ = responder.hold(instanceId: id, path: "/bots/\(relayBotId)/session/events")
-        for botId in ["bot_scout", relayBotId] {
-            responder.reply(instanceId: id, path: "/bots/\(botId)/memory", status: 200, json: data(memory(botId: botId, now: now)))
+        // Whole seconds, so a timestamp the phone sends back as a cursor
+        // names a run's time exactly.
+        let now = Date(timeIntervalSince1970: Date().timeIntervalSince1970.rounded(.down))
+        responder.reply(instanceId: id, path: "/bots", status: 200, json: botList(base: baseBotList, host: host, now: now))
+        responder.reply(instanceId: id, path: "/bots/\(host.botId)", status: 200, json: botDetail(base: baseBotDetail, host: host, now: now))
+        let session = runningSession(host: host, now: now)
+        responder.reply(instanceId: id, path: "/bots/\(host.botId)/session", status: 200, json: data(session))
+        // The running Bot stays live: its stream opens with a snapshot frame,
+        // as the Mac's does, and stays open until the phone leaves.
+        let frame = snapshotFrame(session: session)
+        responder.stream(instanceId: id, path: "/bots/\(host.botId)/session/events") { frame }
+        for botId in [scoutBotId, host.botId] {
+            responder.reply(instanceId: id, path: "/bots/\(botId)/memory", status: 200, json: data(memory(botId: botId, host: host, now: now)))
+            responder.reply(instanceId: id, path: "/bots/\(botId)/routines", status: 200, json: data([
+                "routines": routines(host: host, now: now).filter { $0.botId == botId }.map { $0.object(host: host, now: now) },
+            ]))
         }
-        responder.reply(instanceId: id, path: "/bots/routine-notifications", status: 200, json: data(routineFeed(now: now)))
+        responder.reply(instanceId: id, path: "/bot-conversations", status: 200) { url in
+            botConversations(base: baseConversations(url), host: host, url: url, now: now)
+        }
+        responder.reply(instanceId: id, path: "/bots/routine-notifications", status: 200) { url in
+            data(routineFeed(host: host, since: query("since", in: url), now: now, current: Date()))
+        }
+        if AidenDemoBotUX.isRequested {
+            // The revision 61 screens read per-Bot routes for the second Bot too.
+            AidenDemoBotUX.register(instanceId: id, botId: host.botId, responder: responder)
+        }
         responder.reply(instanceId: id, path: "/workspaces", status: 200, json: workspaces(base: baseWorkspaces, now: now))
+        let scale = host.scale
         responder.reply(instanceId: id, path: "/usage", status: 200) { url in
-            let range = URLComponents(url: url, resolvingAgainstBaseURL: false)?
-                .queryItems?.first { $0.name == "range" }?.value ?? "30d"
-            return data(usage(range: range, now: Date(), scale: scale))
+            data(usage(range: query("range", in: url) ?? "30d", now: Date(), scale: scale))
         }
-        registerSchedules(instanceId: id, responder: responder, now: now)
+        registerSchedules(instanceId: id, host: host, responder: responder, now: now)
         registerGit(instanceId: id, responder: responder)
     }
 
     // MARK: Bots
 
-    private static func relaySummary() -> [String: Any] {
+    private static func summary(host: Host, now: Date) -> [String: Any] {
         [
-            "id": relayBotId,
-            "name": "Relay",
-            "purpose": "Keeps the release on track",
-            "avatar": ["semantic": ["version": 1, "shape": "hex", "color": "sky"]],
+            "id": host.botId,
+            "name": host.botName,
+            "purpose": host.botPurpose,
+            "avatar": ["semantic": ["version": 1, "shape": "hex", "color": host.botColor]],
             "health": "ready",
             "sessionState": "running",
-            "createdAt": timestamp(Date().addingTimeInterval(-6 * 86_400)),
-            "updatedAt": timestamp(Date().addingTimeInterval(-120)),
+            "createdAt": timestamp(now.addingTimeInterval(-6 * 86_400)),
+            "updatedAt": timestamp(now.addingTimeInterval(-120)),
             "revision": "bot_revision_4",
         ]
     }
 
-    private static func botList(base: Data) -> Data {
+    private static func botList(base: Data, host: Host, now: Date) -> Data {
         var list = object(base)
-        list["bots"] = (list["bots"] as? [[String: Any]] ?? []) + [relaySummary()]
+        list["bots"] = (list["bots"] as? [[String: Any]] ?? []) + [summary(host: host, now: now)]
         return data(list)
     }
 
-    private static func relayDetail(base: Data) -> Data {
+    private static func botDetail(base: Data, host: Host, now: Date) -> Data {
         var detail = object(base)
-        detail.merge(relaySummary()) { $1 }
-        detail["instructions"] = "Watch the release checklist, chase what is late, and say when something needs a person."
+        detail.merge(summary(host: host, now: now)) { $1 }
+        detail["instructions"] = "\(host.botPurpose). Chase what is late, and say when something needs a person."
         if var access = detail["access"] as? [String: Any] {
-            access["botId"] = relayBotId
+            access["botId"] = host.botId
             detail["access"] = access
         }
         return data(detail)
     }
 
-    private static func relaySession(now: Date) -> [String: Any] {
+    private static func runningSession(host: Host, now: Date) -> [String: Any] {
         [
-            "botId": relayBotId,
+            "botId": host.botId,
             "epoch": "epoch_demo_02",
             "seq": 9,
             "state": "running",
             "interrupted": false,
-            "partial": "Checking which release tasks are still open",
+            "partial": "Checking what is still open",
             "entries": [
                 [
-                    "type": "message", "id": "entry_relay_1", "role": "user",
-                    "text": "What is left before Friday's release?",
+                    "type": "message", "id": "entry_\(host.botId)_1", "role": "user",
+                    "text": "What is left before Friday?",
                     "createdAt": timestamp(now.addingTimeInterval(-90)),
                 ],
             ],
@@ -101,19 +151,120 @@ enum AidenDemoFull {
         ]
     }
 
+    /// The first frame of `GET /bots/{id}/session/events`: the whole session.
+    private static func snapshotFrame(session: [String: Any]) -> Data {
+        let frame: [String: Any] = [
+            "protocolVersion": 1,
+            "botId": session["botId"] as Any,
+            "epoch": session["epoch"] as Any,
+            "seq": session["seq"] as Any,
+            "type": "snapshot",
+            "payload": ["session": session],
+        ]
+        return Data("data: \(String(decoding: data(frame), as: UTF8.self))\n\n".utf8)
+    }
+
+    /// The standard search answer plus the second Bot's chat when it matches.
+    private static func botConversations(base: Data, host: Host, url: URL, now: Date) -> Data {
+        var list = object(base)
+        let search = query("query", in: url)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        let preview = host.routinePreview
+        if search.isEmpty || host.botName.localizedCaseInsensitiveContains(search)
+            || preview.localizedCaseInsensitiveContains(search) {
+            // Newest first: the running Bot's chat moved most recently.
+            let conversation: [String: Any] = [
+                "chatId": "chat_\(host.botId)", "botId": host.botId, "title": host.botName,
+                "preview": preview, "activityState": "running", "canRespondToApproval": false,
+                "createdAt": timestamp(now.addingTimeInterval(-6 * 86_400)),
+                "updatedAt": timestamp(now.addingTimeInterval(-120)),
+                "revision": "bot_conversation_revision_3",
+            ]
+            list["conversations"] = [conversation] + (list["conversations"] as? [[String: Any]] ?? [])
+        }
+        return data(list)
+    }
+
+    // MARK: Routines
+
+    /// A Bot routine and its last run, which the routine-results feed reports.
+    private struct Routine {
+        let id: String
+        let botId: String
+        let name: String
+        let botName: String
+        let time: String
+        let label: String
+        let message: String
+        let ranAgo: TimeInterval
+        let failed: Bool
+        let preview: String
+
+        func object(host: Host, now: Date) -> [String: Any] {
+            var routine: [String: Any] = [
+                "id": id, "botId": botId, "name": name, "message": message,
+                "schedule": ["kind": "daily", "time": time],
+                "timezone": TimeZone.current.identifier, "label": label, "enabled": true,
+                "nextRunAt": timestamp(now.addingTimeInterval(86_400 - ranAgo)),
+                "lastRunAt": timestamp(now.addingTimeInterval(-ranAgo)),
+                "lastResult": failed ? "error" : "success",
+                "updatedAt": timestamp(now.addingTimeInterval(-4 * 86_400)),
+                "revision": "routine_revision_2",
+            ]
+            if failed { routine["lastError"] = "The calendar connection needs signing in again." }
+            return routine
+        }
+    }
+
+    private static func routines(host: Host, now: Date) -> [Routine] {
+        [
+            Routine(
+                id: "routine_\(host.botId)_daily", botId: host.botId, name: host.routineName, botName: host.botName,
+                time: "09:00", label: "Every day at 9:00 AM", message: "Go through today's list and report what is open.",
+                ranAgo: 1_800, failed: false, preview: host.routinePreview
+            ),
+            Routine(
+                id: "routine_morning_brief", botId: scoutBotId, name: "Morning brief", botName: "Scout",
+                time: "08:00", label: "Every day at 8:00 AM", message: "Brief me on yesterday's work.",
+                ranAgo: 10_800, failed: true,
+                // The Mac's text for every failed routine.
+                preview: "I couldn't finish this routine."
+            ),
+        ]
+    }
+
+    /// `GET /bots/routine-notifications?since=`: the routines' last runs that
+    /// finished after `since` (ISO), newest first.
+    private static func routineFeed(host: Host, since: String?, now: Date, current: Date) -> [String: Any] {
+        let cutoff = since.flatMap(date(fromISO:))
+        let items: [[String: Any]] = routines(host: host, now: now)
+            .map { ($0, now.addingTimeInterval(-$0.ranAgo)) }
+            .filter { cutoff == nil || $0.1 > cutoff! }
+            .sorted { $0.1 > $1.1 }
+            .map { routine, finished in
+                [
+                    "id": "run_\(routine.id)_latest", "botId": routine.botId, "botName": routine.botName,
+                    "routineId": routine.id, "routineName": routine.name,
+                    "status": routine.failed ? "failed" : "succeeded",
+                    "finishedAt": timestamp(finished), "preview": routine.preview,
+                ]
+            }
+        return ["notifications": items, "now": timestamp(current)]
+    }
+
     // MARK: Memory
 
     /// `GET /bots/{id}/memory`, built the way the Mac builds it: entry ids from
-    /// the text, `usedChars` over the texts joined with `\n§\n`.
-    static func memory(botId: String, now: Date) -> [String: Any] {
-        let notes: (memory: [String], user: [String]) = botId == relayBotId
-            ? (["Release builds go out on Fridays after the checklist is green."], [])
+    /// the text, `usedChars` in UTF-16 units (JavaScript's `length`) over the
+    /// texts joined with `\n§\n`.
+    static func memory(botId: String, host: Host, now: Date) -> [String: Any] {
+        let notes: (memory: [String], user: [String]) = botId == host.botId
+            ? (["\(host.botName) reports on Fridays after the checklist is green."], [])
             : (
                 ["The upload test is flaky on CI, not locally.", "Weekly review happens on Monday mornings."],
                 ["Prefers short summaries with the decision first."]
             )
         func group(_ target: String, _ texts: [String], limit: Int) -> [String: Any] {
-            let used = texts.joined(separator: "\n§\n").count
+            let used = texts.joined(separator: "\n§\n").utf16.count
             return [
                 "entries": texts.map { ["id": hex16("\(target)\u{0}\($0)"), "text": $0] },
                 "usedChars": used,
@@ -131,31 +282,10 @@ enum AidenDemoFull {
         ]
     }
 
-    // MARK: Routine results
-
-    private static func routineFeed(now: Date) -> [String: Any] {
-        [
-            "notifications": [
-                [
-                    "id": "run_demo_relay_01", "botId": relayBotId, "botName": "Relay",
-                    "routineId": "routine_release_check", "routineName": "Release check",
-                    "status": "succeeded", "finishedAt": timestamp(now.addingTimeInterval(-1_800)),
-                    "preview": "Two checklist items are still open.",
-                ],
-                [
-                    "id": "run_demo_scout_01", "botId": "bot_scout", "botName": "Scout",
-                    "routineId": "routine_morning_brief", "routineName": "Morning brief",
-                    "status": "failed", "finishedAt": timestamp(now.addingTimeInterval(-10_800)),
-                    "preview": "",
-                ],
-            ],
-            "now": timestamp(now),
-        ]
-    }
-
     // MARK: Workspaces
 
-    /// The standard list plus one workspace this device has archived.
+    /// The standard list plus one workspace this device has archived and the
+    /// managed worktree `GET .../git/worktrees` lists.
     private static func workspaces(base: Data, now: Date) -> Data {
         var list = object(base)
         var items = list["workspaces"] as? [[String: Any]] ?? []
@@ -164,6 +294,12 @@ enum AidenDemoFull {
             "id": archivedWorkspaceId, "name": "Prototype", "permission": "ask", "memoryEnabled": true,
             "hasFolder": true, "isManagedWorktree": false,
             "createdAt": created, "updatedAt": created, "revision": "workspace_revision_3",
+        ])
+        items.append([
+            "id": worktreeWorkspaceId, "name": "Upload retry", "permission": "ask", "memoryEnabled": true,
+            "hasFolder": true, "isManagedWorktree": true,
+            "git": ["isRepo": true, "branch": "fix/upload-retry", "uncommitted": 0],
+            "createdAt": created, "updatedAt": created, "revision": "workspace_revision_1",
         ])
         list["workspaces"] = items
         return data(list)
@@ -284,8 +420,61 @@ enum AidenDemoFull {
 
     static let backupScriptId = "script_" + base64url(sha256("demo-backup-notes"))
 
-    private static func registerSchedules(instanceId id: String, responder: AidenDemoResponder, now: Date) {
-        let tasks = scheduledTasks(now: now)
+    /// One stored run, which `/runs`, the notifications feed and the task's
+    /// `lastRunAt` all read, as on the Mac.
+    private struct Run {
+        enum Result { case success, error, silent }
+        let id: String
+        let taskId: String
+        let started: Date
+        let finished: Date
+        let result: Result
+        let output: String?
+        let error: String?
+
+        /// `mapRun` in `aiden-remote-schedules.ts`.
+        var object: [String: Any] {
+            var run: [String: Any] = [
+                "id": id, "taskId": taskId,
+                "status": result == .error ? "failed" : "succeeded",
+                "startedAt": timestamp(started), "finishedAt": timestamp(finished),
+            ]
+            if let summary = error ?? output, !summary.isEmpty { run["summary"] = summary }
+            if result == .error { run["errorCode"] = "execution_failed" }
+            return run
+        }
+    }
+
+    private static func runs(host: Host, now: Date) -> [String: [Run]] {
+        func run(_ taskId: String, _ index: Int, ago: TimeInterval, _ result: Run.Result, output: String? = nil, error: String? = nil) -> Run {
+            let finished = now.addingTimeInterval(-ago)
+            return Run(
+                id: "\(taskId)_run_\(index)", taskId: taskId, started: finished.addingTimeInterval(-95),
+                finished: finished, result: result, output: output, error: error
+            )
+        }
+        var runs = [
+            "task_morning_brief": [
+                run("task_morning_brief", 3, ago: 8 * 3_600, .success, output: "Four commits landed and two reviews are waiting on you."),
+                run("task_morning_brief", 2, ago: 32 * 3_600, .error, error: "The workspace folder could not be read."),
+                run("task_morning_brief", 1, ago: 56 * 3_600, .success, output: "A quiet day: one commit, no reviews."),
+            ],
+            "task_backup_notes": [run("task_backup_notes", 1, ago: 3 * 86_400, .silent)],
+        ]
+        if host.triages {
+            // The task is running again now, but `/runs` lists finished runs only.
+            runs["task_inbox_triage"] = [
+                run("task_inbox_triage", 3, ago: 600, .success, output: "Labelled three new issues; one looks urgent."),
+                run("task_inbox_triage", 2, ago: 4_200, .success, output: "Labelled one new issue."),
+                run("task_inbox_triage", 1, ago: 7_800, .silent),
+            ]
+        }
+        return runs
+    }
+
+    private static func registerSchedules(instanceId id: String, host: Host, responder: AidenDemoResponder, now: Date) {
+        let runs = runs(host: host, now: now)
+        let tasks = scheduledTasks(host: host, runs: runs, now: now)
         responder.reply(instanceId: id, path: "/scheduled-tasks", status: 200, json: data(["tasks": tasks]))
         for task in tasks {
             guard let taskId = task["id"] as? String else { continue }
@@ -294,11 +483,19 @@ enum AidenDemoFull {
                 instanceId: id,
                 path: "/scheduled-tasks/\(taskId)/runs",
                 status: 200,
-                json: data(["runs": scheduledRuns(taskId: taskId, running: task["running"] as? Bool == true, now: now)])
+                json: data(["runs": (runs[taskId] ?? []).map(\.object)])
             )
         }
-        responder.reply(instanceId: id, path: "/scheduled-tasks/notifications", status: 200) { _ in
-            data(scheduledNotifications(now: Date()))
+        let notify = Dictionary(uniqueKeysWithValues: tasks.compactMap { task in
+            (task["id"] as? String).map { ($0, task["notify"] as? Bool ?? false) }
+        })
+        let names = Dictionary(uniqueKeysWithValues: tasks.compactMap { task in
+            (task["id"] as? String).map { ($0, task["name"] as? String ?? "") }
+        })
+        let all = runs.values.flatMap { $0 }
+        responder.reply(instanceId: id, path: "/scheduled-tasks/notifications", status: 200) { url in
+            let since = query("since", in: url).flatMap(Double.init).map { Date(timeIntervalSince1970: $0 / 1_000) }
+            return data(scheduledNotifications(runs: all, since: since, names: names, notify: notify, now: Date()))
         }
         responder.reply(instanceId: id, path: "/scheduled-tasks/settings", status: 200, json: data([
             "revision": "rev_settings_1", "enabled": true, "defaultMode": "llm",
@@ -313,11 +510,11 @@ enum AidenDemoFull {
         ]))
     }
 
-    private static func scheduledTasks(now: Date) -> [[String: Any]] {
+    private static func scheduledTasks(host: Host, runs: [String: [Run]], now: Date) -> [[String: Any]] {
         let created = timestamp(now.addingTimeInterval(-14 * 86_400))
         let updated = timestamp(now.addingTimeInterval(-2 * 86_400))
         let zone = TimeZone.current.identifier
-        return [
+        var tasks: [[String: Any]] = [
             [
                 "id": "task_morning_brief", "revision": "rev_morning_brief_3", "name": "Morning brief",
                 "enabled": true, "schedule": "0 8 * * 1-5", "timezone": zone, "mode": "llm",
@@ -325,18 +522,6 @@ enum AidenDemoFull {
                 "workspaceId": gitWorkspaceId,
                 "prompt": "Summarise yesterday's commits and open reviews.",
                 "nextRunAt": timestamp(now.addingTimeInterval(16 * 3_600)),
-                "lastRunAt": timestamp(now.addingTimeInterval(-8 * 3_600)),
-                "lastResult": "success",
-                "createdAt": created, "updatedAt": updated,
-            ],
-            [
-                "id": "task_inbox_triage", "revision": "rev_inbox_triage_1", "name": "Triage new issues",
-                "enabled": true, "schedule": "0 * * * *", "timezone": zone, "mode": "llm",
-                "permission": "full", "notify": false, "running": true,
-                "mcpServerIds": ["mcp_linear"],
-                "prompt": "Label new issues and flag anything urgent.",
-                "nextRunAt": timestamp(now.addingTimeInterval(3_000)),
-                "lastRunAt": timestamp(now.addingTimeInterval(-600)),
                 "createdAt": created, "updatedAt": updated,
             ],
             [
@@ -344,53 +529,57 @@ enum AidenDemoFull {
                 "enabled": false, "schedule": "30 23 * * *", "timezone": zone, "mode": "script",
                 "permission": "full", "notify": false, "running": false,
                 "workspaceId": "workspace_notes", "scriptId": backupScriptId,
-                "lastRunAt": timestamp(now.addingTimeInterval(-3 * 86_400)),
-                "lastResult": "silent",
                 "createdAt": created, "updatedAt": updated,
             ],
         ]
-    }
-
-    private static func scheduledRuns(taskId: String, running: Bool, now: Date) -> [[String: Any]] {
-        var runs: [[String: Any]] = []
-        if running {
-            runs.append([
-                "id": "\(taskId)_run_live", "taskId": taskId, "status": "running",
-                "startedAt": timestamp(now.addingTimeInterval(-40)),
-            ])
+        if host.triages {
+            tasks.insert([
+                "id": "task_inbox_triage", "revision": "rev_inbox_triage_1", "name": "Triage new issues",
+                "enabled": true, "schedule": "0 * * * *", "timezone": zone, "mode": "llm",
+                "permission": "full", "notify": false, "running": true,
+                "mcpServerIds": ["mcp_linear"],
+                "prompt": "Label new issues and flag anything urgent.",
+                "nextRunAt": timestamp(now.addingTimeInterval(3_000)),
+                "createdAt": created, "updatedAt": updated,
+            ], at: 1)
         }
-        for day in 1...3 {
-            let started = now.addingTimeInterval(-Double(day) * 86_400)
-            let failed = day == 2 && taskId == "task_morning_brief"
-            var run: [String: Any] = [
-                "id": "\(taskId)_run_\(day)", "taskId": taskId,
-                "status": failed ? "failed" : "succeeded",
-                "startedAt": timestamp(started),
-                "finishedAt": timestamp(started.addingTimeInterval(95)),
-            ]
-            if failed {
-                run["errorCode"] = "provider_unavailable"
-            } else {
-                run["summary"] = "Finished with nothing unusual to report."
+        // The last run is the newest stored run, as the Mac records it.
+        return tasks.map { task in
+            var task = task
+            if let id = task["id"] as? String, let last = runs[id]?.max(by: { $0.finished < $1.finished }) {
+                task["lastRunAt"] = timestamp(last.finished)
+                task["lastResult"] = switch last.result {
+                case .success: "success"
+                case .error: "error"
+                case .silent: "silent"
+                }
             }
-            runs.append(run)
+            return task
         }
-        return runs
     }
 
-    private static func scheduledNotifications(now: Date) -> [String: Any] {
-        let started = now.addingTimeInterval(-8 * 3_600)
-        return [
-            "notifications": [
-                [
-                    "id": "task_morning_brief_run_1", "taskId": "task_morning_brief", "taskName": "Morning brief",
-                    "status": "succeeded", "startedAt": timestamp(started),
-                    "finishedAt": timestamp(started.addingTimeInterval(95)),
-                    "summary": "Four commits landed and two reviews are waiting on you.", "notify": true,
-                ],
-            ],
-            "now": Int64(now.timeIntervalSince1970 * 1_000),
-        ]
+    /// `GET /scheduled-tasks/notifications?since=`: every task's runs that
+    /// finished at or after `since`, quiet ones left out, newest first, at
+    /// most 100, as `notifications()` in `aiden-remote-schedules.ts` builds it.
+    private static func scheduledNotifications(
+        runs: [Run],
+        since: Date?,
+        names: [String: String],
+        notify: [String: Bool],
+        now: Date
+    ) -> [String: Any] {
+        let items = runs
+            .filter { run in run.result != .silent && since.map { run.finished >= $0 } != false }
+            .sorted { $0.finished < $1.finished }
+            .prefix(100)
+            .reversed()
+            .map { run in
+                var item = run.object
+                item["taskName"] = names[run.taskId] ?? ""
+                item["notify"] = notify[run.taskId] ?? false
+                return item
+            }
+        return ["notifications": Array(items), "now": Int64(now.timeIntervalSince1970 * 1_000)]
     }
 
     // MARK: Git
@@ -400,8 +589,12 @@ enum AidenDemoFull {
     private static func registerGit(instanceId id: String, responder: AidenDemoResponder) {
         let root = "/workspaces/\(gitWorkspaceId)/git"
         let snapshot = "snap_demo_01"
-        func envelope(_ operation: String, _ result: [String: Any]) -> Data {
-            data(["operationId": "op_\(operation)", "status": "snapshot", "snapshotId": snapshot, "result": result])
+        // Review, branches and push-capability carry the snapshot's capability,
+        // as the Mac sends them; here everything is allowed.
+        func envelope(_ operation: String, _ result: [String: Any], capability: Bool = true) -> Data {
+            var body: [String: Any] = ["operationId": "op_\(operation)", "status": "snapshot", "snapshotId": snapshot, "result": result]
+            if capability { body["capability"] = ["allowed": true] }
+            return data(body)
         }
         responder.reply(instanceId: id, path: "\(root)/review", status: 200, json: envelope("review_01", [
             "kind": "review", "branch": "feature/mobile", "uncommitted": 2,
@@ -422,18 +615,19 @@ enum AidenDemoFull {
         responder.reply(instanceId: id, path: "\(root)/push-capability", status: 200, json: envelope("push_01", [
             "kind": "push-capability", "allowed": true, "remote": "origin", "branch": "feature/mobile",
         ]))
+        // Only worktrees that are registered workspaces, under their workspace ids.
         responder.reply(instanceId: id, path: "\(root)/worktrees", status: 200, json: data([
             "operationId": "op_worktrees_01", "status": "snapshot",
             "result": [
                 "kind": "worktrees",
                 "worktrees": [
-                    ["id": "worktree_main", "name": "Aiden Agent", "branch": "feature/mobile", "managed": false],
-                    ["id": "worktree_retry", "name": "Upload retry", "branch": "fix/upload-retry", "managed": true],
+                    ["id": gitWorkspaceId, "name": "Aiden Agent", "branch": "feature/mobile", "managed": false],
+                    ["id": worktreeWorkspaceId, "name": "Upload retry", "branch": "fix/upload-retry", "managed": true],
                 ],
             ],
         ]))
         // The request body names the file, which a responder can't read, so
-        // every diff shows the first changed file.
+        // every diff shows the first changed file. A diff has no capability.
         responder.reply(instanceId: id, method: "POST", path: "\(root)/diff", status: 200, json: envelope("diff_01", [
             "kind": "diff", "displayPath": "Sources/Upload/Uploader.swift", "truncated": false,
             "diff": """
@@ -448,7 +642,7 @@ enum AidenDemoFull {
             +            }
             +        }
             """,
-        ]))
+        ], capability: false))
     }
 
     // MARK: Helpers
@@ -480,6 +674,18 @@ enum AidenDemoFull {
 
     private static func data(_ value: Any) -> Data {
         (try? JSONSerialization.data(withJSONObject: value, options: [.sortedKeys])) ?? Data("{}".utf8)
+    }
+
+    private static func query(_ name: String, in url: URL) -> String? {
+        URLComponents(url: url, resolvingAgainstBaseURL: false)?.queryItems?.first { $0.name == name }?.value
+    }
+
+    private static func date(fromISO text: String) -> Date? {
+        let formatter = ISO8601DateFormatter()
+        formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        if let date = formatter.date(from: text) { return date }
+        formatter.formatOptions = [.withInternetDateTime]
+        return formatter.date(from: text)
     }
 
     private static func timestamp(_ date: Date) -> String {
