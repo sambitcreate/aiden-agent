@@ -649,7 +649,6 @@ struct AidenAppShellView: View {
             AidenWorkspaceRouteView(
                 coordinator: coordinator,
                 id: id,
-                onRemoved: { navigation.leave(route) },
                 onChatUpdated: { inboxStore.homeModel(for: id.instanceId)?.accept($0) },
                 onChatRemoved: { inboxStore.homeModel(for: id.instanceId)?.removeChat(id: $0) },
                 onOpenChat: { chatID in navigation.push(.chat(chatID), over: route) }

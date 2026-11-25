@@ -49,9 +49,9 @@ final class AidenDemoResponder: Sendable {
 
     private enum Outcome: Sendable {
         case reply(status: Int, json: Data)
-        /// An answer that depends on the request: its URL (a search) or its
-        /// body (an edit).
-        case computed(@Sendable (_ url: URL, _ body: Data?) -> (status: Int, json: Data))
+        /// An answer that depends on the request: its URL (a search), its
+        /// body (an edit) or its `Idempotency-Key` (a retried edit).
+        case computed(@Sendable (_ url: URL, _ body: Data?, _ idempotencyKey: String?) -> (status: Int, json: Data))
         case failure(URLError.Code)
     }
 
@@ -155,6 +155,17 @@ final class AidenDemoResponder: Sendable {
         path: String,
         answering answer: @escaping @Sendable (_ url: URL, _ body: Data?) -> (status: Int, json: Data)
     ) {
+        reply(instanceId: instanceId, method: method, path: path) { url, body, _ in answer(url, body) }
+    }
+
+    /// Answers `path` from the whole request and its `Idempotency-Key`, for a
+    /// route that replays a retried request's first answer.
+    func reply(
+        instanceId: String,
+        method: String = "GET",
+        path: String,
+        answeringKeyed answer: @escaping @Sendable (_ url: URL, _ body: Data?, _ idempotencyKey: String?) -> (status: Int, json: Data)
+    ) {
         let route = Route(instanceId: instanceId, method: method, path: path)
         state.withLock { $0.outcomes[route] = .computed(answer) }
     }
@@ -237,7 +248,9 @@ final class AidenDemoResponder: Sendable {
         // the responder, and its sessions, alive.
         let answer: @Sendable () -> Void = { [weak self] in
             guard let self else { return deliver(.failure(URLError(.cancelled))) }
-            deliver(self.resolve(instanceId: instanceId, method: method, path: path, url: url, body: body))
+            deliver(self.resolve(
+                instanceId: instanceId, method: method, path: path, url: url, body: body, idempotencyKey: idempotencyKey
+            ))
         }
 
         let next: Next = state.withLock { state in
@@ -293,7 +306,8 @@ final class AidenDemoResponder: Sendable {
         method: String,
         path: String,
         url: URL,
-        body: Data?
+        body: Data?,
+        idempotencyKey: String?
     ) -> Result<(HTTPURLResponse, Data), URLError> {
         if AidenDemoLongChat.isRequested, method == "GET", instanceId == "studio",
            path == "/chats/\(AidenDemoLongChat.chatId)/messages",
@@ -319,7 +333,7 @@ final class AidenDemoResponder: Sendable {
         case .reply(let status, let json):
             return .success((Self.response(url: url, status: status), json))
         case .computed(let answer):
-            let (status, json) = answer(url, body)
+            let (status, json) = answer(url, body, idempotencyKey)
             return .success((Self.response(url: url, status: status), json))
         case nil:
             return .success((Self.response(url: url, status: 404), AidenDemoContent.notFound()))
@@ -748,8 +762,8 @@ enum AidenDemoHosts {
             // read, and each edit changes only what it names.
             let memory = AidenDemoBotMemory()
             responder.reply(instanceId: id, path: "\(botPath)/memory", status: 200) { _ in memory.viewJSON() }
-            responder.reply(instanceId: id, method: "POST", path: "\(botPath)/memory/edits") { _, body in
-                memory.apply(body)
+            responder.reply(instanceId: id, method: "POST", path: "\(botPath)/memory/edits") { _, body, key in
+                memory.apply(body, idempotencyKey: key)
             }
             if AidenDemoBotUX.isRequested {
                 AidenDemoBotUX.register(instanceId: id, botId: AidenDemoContent.botId, responder: responder)
@@ -1281,15 +1295,17 @@ private enum AidenDemoContent {
     }
 }
 
-/// A photo already in the composer of every chat, for screens and UI tests that
-/// need one without the photo picker. Only with `-AidenDemoStagedAttachment YES`.
 /// One demo Bot's memory, which edits change the way a Mac's would: a delete
-/// or rewrite touches only the entry it names, and Forget all empties both
-/// groups. It starts from the contract-shaped view each launch.
+/// touches only the entry it names, a rewrite gives that entry a new id, and
+/// Forget all empties both groups. A retried edit (the same `Idempotency-Key`)
+/// gets its first answer again instead of being applied twice. It starts from
+/// the contract-shaped view each launch.
 private final class AidenDemoBotMemory: Sendable {
     private struct State {
         var view: AidenBotMemory
         var edits = 0
+        /// Each successful edit's answer, by `Idempotency-Key`.
+        var answered: [String: Data] = [:]
     }
 
     /// `{ok: true, view}`.
@@ -1311,12 +1327,16 @@ private final class AidenDemoBotMemory: Sendable {
 
     /// `POST /bots/{botId}/memory/edits`: `{ok, view}` after the edit, 404
     /// `memory_entry_not_found` for an entry this view no longer holds, or 422
-    /// for a body that is not an edit.
-    func apply(_ body: Data?) -> (status: Int, json: Data) {
-        guard let body, let request = try? JSONDecoder().decode(AidenBotMemoryEditRequest.self, from: body) else {
-            return (422, AidenDemoContent.errorJSON(code: "invalid_request", message: "That is not a memory edit."))
-        }
-        return state.withLock { state in
+    /// for a body that is not an edit. A key that already succeeded replays
+    /// that answer.
+    func apply(_ body: Data?, idempotencyKey: String?) -> (status: Int, json: Data) {
+        state.withLock { state in
+            if let idempotencyKey, let earlier = state.answered[idempotencyKey] {
+                return (200, earlier)
+            }
+            guard let body, let request = try? JSONDecoder().decode(AidenBotMemoryEditRequest.self, from: body) else {
+                return (422, AidenDemoContent.errorJSON(code: "invalid_request", message: "That is not a memory edit."))
+            }
             guard let edited = state.view.applying(request.edit) else {
                 return (404, AidenDemoContent.errorJSON(
                     code: "memory_entry_not_found",
@@ -1329,15 +1349,42 @@ private final class AidenDemoBotMemory: Sendable {
                 // A new revision per edit, still 16 lowercase hex characters.
                 revision: String(format: "d3e0a1b2%08x", state.edits),
                 readable: edited.readable,
-                memory: edited.memory,
-                user: edited.user,
+                memory: Self.renumbering(request.edit, in: edited.memory, target: .memory, edits: state.edits),
+                user: Self.renumbering(request.edit, in: edited.user, target: .user, edits: state.edits),
                 updatedAt: AidenRemoteTimestamp(rawValue: AidenDemoContent.timestamp(Date())) ?? edited.updatedAt
             )
-            return (200, (try? JSONEncoder().encode(Answer(view: state.view))) ?? Data())
+            let answer = (try? JSONEncoder().encode(Answer(view: state.view))) ?? Data()
+            if let idempotencyKey { state.answered[idempotencyKey] = answer }
+            return (200, answer)
         }
+    }
+
+    /// A Mac's entry id hashes the entry's text, so a rewritten entry comes
+    /// back under a new id; the others keep theirs.
+    private static func renumbering(
+        _ edit: AidenBotMemoryEdit,
+        in group: AidenBotMemoryGroup,
+        target: AidenBotMemoryTarget,
+        edits: Int
+    ) -> AidenBotMemoryGroup {
+        guard case let .replace(editTarget, entryId, _) = edit, editTarget == target else { return group }
+        let entries = group.entries.map { entry in
+            guard entry.id == entryId,
+                  let renamed = try? AidenBotMemoryEntry(id: String(format: "e1d17ed0%08x", edits), text: entry.text)
+            else { return entry }
+            return renamed
+        }
+        return (try? AidenBotMemoryGroup(
+            entries: entries,
+            usedChars: group.usedChars,
+            limitChars: group.limitChars,
+            overBudget: group.overBudget
+        )) ?? group
     }
 }
 
+/// A photo already in the composer of every chat, for screens and UI tests that
+/// need one without the photo picker. Only with `-AidenDemoStagedAttachment YES`.
 enum AidenDemoStagedAttachment {
     static var isRequested: Bool {
         ProcessInfo.processInfo.arguments.contains("-AidenDemoStagedAttachment")

@@ -2,7 +2,7 @@
 
 ## Unreleased
 
-- **2026-11-24 — Workspace Settings stay open.** Folding or unfolding an iPhone Duo, or resizing an iPad window, with Workspace Settings open keeps the sheet and your unsaved edits. A rename on your computer no longer closes it: a name you haven't touched takes the new name, and a name you changed stays, with the computer's name shown below until you save or cancel. If the workspace is removed or archived, the sheet closes. No Remote wire or revision change.
+- **2026-11-24 — Workspace Settings stay open.** Folding or unfolding an iPhone Duo, or resizing an iPad window, with Workspace Settings open keeps the sheet and your unsaved edits. A rename on your computer no longer closes it: a name you haven't touched takes the new name, and a name you changed stays, with the computer's name shown below until you save or cancel. Access and memory work the same way: a choice you changed stays, and the section notes what your computer changed it to. If the workspace is removed or archived, the sheet closes. Save closes the sheet at once and shows the change straight away; it syncs with your computer in the background, waits its turn behind another change still on its way instead of being dropped, and puts the workspace back with a message if your computer refuses it. No Remote wire or revision change.
 
 - **2026-11-22 — Pairing feedback and QR framing.** Add Computer scans for QR codes inside the visible viewfinder. Manual pairing shows what to correct below the address or setup code field. Search keeps Add Computer available until a computer is paired.
 

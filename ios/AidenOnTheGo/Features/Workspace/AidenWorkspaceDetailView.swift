@@ -5,7 +5,6 @@ struct AidenWorkspaceDetailView: View {
     let workspace: AidenWorkspace
     /// The workspace's own machine, which its chats and Settings read and write.
     let owner: AidenRemoteRequestContext
-    let onRemoved: () -> Void
     let onChatUpdated: @MainActor (AidenChat) -> Void
     let onChatRemoved: @MainActor (String) -> Void
     /// Opens a chat the workspace just made, over the workspace.
@@ -15,7 +14,6 @@ struct AidenWorkspaceDetailView: View {
         coordinator: AidenRemoteCoordinator,
         workspace: AidenWorkspace,
         owner: AidenRemoteRequestContext,
-        onRemoved: @escaping () -> Void,
         onChatUpdated: @escaping @MainActor (AidenChat) -> Void = { _ in },
         onChatRemoved: @escaping @MainActor (String) -> Void = { _ in },
         onOpenChat: @escaping @MainActor (AidenHostObjectID) -> Void
@@ -23,7 +21,6 @@ struct AidenWorkspaceDetailView: View {
         self.coordinator = coordinator
         self.workspace = workspace
         self.owner = owner
-        self.onRemoved = onRemoved
         self.onChatUpdated = onChatUpdated
         self.onChatRemoved = onChatRemoved
         self.onOpenChat = onOpenChat

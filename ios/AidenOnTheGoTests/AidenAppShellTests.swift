@@ -1890,6 +1890,41 @@ final class AidenAppShellTests: XCTestCase {
         XCTAssertFalse(draft.canSave)
     }
 
+    /// Permission and memory changed on the computer while the person had
+    /// changed them too: theirs stay, and the computer's show beside them,
+    /// so a stricter permission set there is never replaced unseen.
+    func testAPermissionOrMemoryChangeOnTheComputerKeepsTheirsAndShowsIt() throws {
+        let sheet = AidenWorkspaceSettingsSheet()
+        sheet.present(siteWorkspace(), id: id("ws_site"), context: siteOwner)
+        let draft = try XCTUnwrap(sheet.draft)
+        draft.permission = .ask
+        draft.memoryEnabled = false
+        XCTAssertNil(draft.permissionOnComputer, "Nothing changed there yet")
+        XCTAssertNil(draft.memoryOnComputer)
+
+        var changed = siteWorkspace(revision: "r2")
+        changed.permission = .none
+        changed.memoryEnabled = false
+        sheet.follow(AidenWorkspaceSettingsSource(workspace: changed, owner: siteOwner))
+        XCTAssertEqual(draft.permission, .ask, "Their choice stays")
+        XCTAssertEqual(draft.permissionOnComputer, AidenWorkspacePermission.none, "The computer's is shown")
+        XCTAssertEqual(draft.changes.permission, .ask, "Save sends theirs over the computer's")
+        // Memory went off there too, as they had chosen: nothing to show or send.
+        XCTAssertFalse(draft.memoryEnabled)
+        XCTAssertNil(draft.memoryOnComputer)
+        XCTAssertNil(draft.changes.memoryEnabled)
+
+        // Turning memory back on now differs from the computer's latest choice,
+        // which is shown.
+        draft.memoryEnabled = true
+        XCTAssertEqual(draft.memoryOnComputer, false)
+
+        // Choosing the computer's permission settles it.
+        draft.permission = .none
+        XCTAssertNil(draft.permissionOnComputer)
+        XCTAssertNil(draft.changes.permission)
+    }
+
     func testARenameOnTheComputerFillsAnUneditedName() throws {
         let sheet = AidenWorkspaceSettingsSheet()
         sheet.present(siteWorkspace(), id: id("ws_site"), context: siteOwner)
@@ -1912,6 +1947,10 @@ final class AidenAppShellTests: XCTestCase {
                 workspace: workspace,
                 owner: AidenRemoteRequestContext(instanceId: "studio", deviceId: "new-device", generation: 2, scope: .owner)
             )),
+            ("restarted with a new lease", AidenWorkspaceSettingsSource(
+                workspace: workspace,
+                owner: AidenRemoteRequestContext(instanceId: "studio", deviceId: "demo-device", generation: 1, hostGeneration: 1, scope: .owner)
+            )),
         ]
         for (what, source) in cases {
             sheet.present(workspace, id: id("ws_site"), context: siteOwner)
@@ -1920,7 +1959,18 @@ final class AidenAppShellTests: XCTestCase {
             XCTAssertNil(sheet.draft, what)
         }
 
+        // Its machine becoming the default moves only the activation
+        // generation; the pairing, and where Save goes, are unchanged.
         sheet.present(workspace, id: id("ws_site"), context: siteOwner)
+        let draft = sheet.draft
+        draft?.name = "Edited"
+        let nowTheDefault = AidenRemoteRequestContext(instanceId: "studio", deviceId: "demo-device", generation: 7, scope: .owner)
+        sheet.follow(AidenWorkspaceSettingsSource(workspace: workspace, owner: nowTheDefault))
+        XCTAssertTrue(sheet.draft === draft, "Becoming the default leaves the sheet open")
+        sheet.present(workspace, id: id("ws_site"), context: nowTheDefault)
+        XCTAssertTrue(sheet.draft === draft, "Reopening it then keeps the edits")
+        XCTAssertEqual(sheet.draft?.name, "Edited")
+
         sheet.defaultMachineChanged(from: "laptop")
         XCTAssertNotNil(sheet.draft, "Another machine stopping being the default leaves it open")
         sheet.defaultMachineChanged(from: "studio")

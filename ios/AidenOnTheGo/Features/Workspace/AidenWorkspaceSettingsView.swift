@@ -53,7 +53,12 @@ struct AidenWorkspaceSettingsView: View {
                 } header: {
                     Text("Permission")
                 } footer: {
-                    Text("\(draft.permission.detail) This setting overrides the app default for this workspace.")
+                    VStack(alignment: .leading, spacing: 6) {
+                        if let permissionOnComputer = draft.permissionOnComputer {
+                            Text("Changed to “\(permissionOnComputer.title)” on your computer. Save to use the choice above instead.")
+                        }
+                        Text("\(draft.permission.detail) This setting overrides the app default for this workspace.")
+                    }
                 }
 
                 Section {
@@ -62,7 +67,12 @@ struct AidenWorkspaceSettingsView: View {
                 } header: {
                     Text("Memory")
                 } footer: {
-                    Text("When off, Aiden does not index this workspace or expose memory tools in its chats. Existing memory stays on your computer.")
+                    VStack(alignment: .leading, spacing: 6) {
+                        if let memoryOnComputer = draft.memoryOnComputer {
+                            Text("Memory was turned \(memoryOnComputer ? "on" : "off") on your computer. Save to use the setting above instead.")
+                        }
+                        Text("When off, Aiden does not index this workspace or expose memory tools in its chats. Existing memory stays on your computer.")
+                    }
                 }
 
                 Section("Workspace tools") {
@@ -112,27 +122,27 @@ struct AidenWorkspaceSettingsView: View {
                         // it, so a field the person left alone stays as it is there.
                         let workspace = self.workspace
                         let changes = draft.changes
-                        Task {
-                            let outcome = await coordinator.updateWorkspaceOutcome(
+                        let context = self.context
+                        // The edit shows at once and the sheet closes; the
+                        // computer's answer settles it, and a failure puts the
+                        // workspace back and says so.
+                        coordinator.haptics.play(
+                            .success,
+                            scope: hapticScope,
+                            dedupeKey: "workspace-settings:\(workspace.id):\(workspace.revision)"
+                        )
+                        Task { [coordinator] in
+                            _ = await coordinator.updateWorkspaceOutcome(
                                 workspace,
                                 name: changes.name,
                                 permission: changes.permission,
                                 memoryEnabled: changes.memoryEnabled,
                                 on: context
                             )
-                            if case .success = outcome {
-                                coordinator.haptics.play(
-                                    .success,
-                                    scope: hapticScope,
-                                    dedupeKey: "workspace-settings:\(workspace.id):\(workspace.revision)"
-                                )
-                                dismiss()
-                            } else if outcome.isDefinitiveFailure {
-                                coordinator.haptics.play(.error, scope: hapticScope)
-                            }
                         }
+                        dismiss()
                     }
-                    .disabled(!draft.canSave || coordinator.isMutating || !coordinator.holds(context))
+                    .disabled(!draft.canSave || !coordinator.holds(context))
                 }
             }
             .confirmationDialog(
@@ -198,6 +208,8 @@ final class AidenWorkspaceSettingsDraft: Identifiable {
     private(set) var workspace: AidenWorkspace
     /// The computer renamed the workspace while this sheet's name was edited.
     private var renamedOnComputer = false
+    private var permissionChangedOnComputer = false
+    private var memoryChangedOnComputer = false
 
     init(workspace: AidenWorkspace, id: AidenHostObjectID, context: AidenRemoteRequestContext) {
         self.id = id
@@ -231,9 +243,21 @@ final class AidenWorkspaceSettingsDraft: Identifiable {
         renamedOnComputer && trimmedName != workspace.name ? workspace.name : nil
     }
 
+    /// The permission the computer set while the person had chosen another,
+    /// shown the same way as `nameOnComputer`.
+    var permissionOnComputer: AidenWorkspacePermission? {
+        permissionChangedOnComputer && permission != workspace.permission ? workspace.permission : nil
+    }
+
+    /// The memory setting the computer chose while the person had changed it.
+    var memoryOnComputer: Bool? {
+        memoryChangedOnComputer && memoryEnabled != workspace.memoryEnabled ? workspace.memoryEnabled : nil
+    }
+
     /// The computer described the workspace again (a rename, or any change
     /// that moves its revision). Fields the person hasn't touched follow it;
-    /// edited ones stay as they typed them.
+    /// edited ones stay as they set them, and a field the computer also
+    /// changed shows the computer's value beside theirs.
     func follow(_ latest: AidenWorkspace) {
         guard latest != workspace else { return }
         if trimmedName == workspace.name {
@@ -241,8 +265,16 @@ final class AidenWorkspaceSettingsDraft: Identifiable {
         } else if latest.name != workspace.name {
             renamedOnComputer = true
         }
-        if permission == workspace.permission { permission = latest.permission }
-        if memoryEnabled == workspace.memoryEnabled { memoryEnabled = latest.memoryEnabled }
+        if permission == workspace.permission {
+            permission = latest.permission
+        } else if latest.permission != workspace.permission {
+            permissionChangedOnComputer = true
+        }
+        if memoryEnabled == workspace.memoryEnabled {
+            memoryEnabled = latest.memoryEnabled
+        } else if latest.memoryEnabled != workspace.memoryEnabled {
+            memoryChangedOnComputer = true
+        }
         workspace = latest
     }
 }
@@ -257,7 +289,7 @@ final class AidenWorkspaceSettingsSheet {
 
     /// Opens the sheet on a workspace. The one already open on it keeps its edits.
     func present(_ workspace: AidenWorkspace, id: AidenHostObjectID, context: AidenRemoteRequestContext) {
-        if let draft, draft.id == id, draft.context == context { return }
+        if let draft, draft.id == id, draft.context.sharesLease(with: context) { return }
         draft = AidenWorkspaceSettingsDraft(workspace: workspace, id: id, context: context)
     }
 
@@ -270,7 +302,8 @@ final class AidenWorkspaceSettingsSheet {
     /// rather than save somewhere else.
     func follow(_ source: AidenWorkspaceSettingsSource) {
         guard let draft else { return }
-        guard let latest = source.workspace, latest.id == draft.id.objectId, source.owner == draft.context else {
+        guard let latest = source.workspace, latest.id == draft.id.objectId,
+              let owner = source.owner, owner.sharesLease(with: draft.context) else {
             close()
             return
         }
@@ -281,6 +314,15 @@ final class AidenWorkspaceSettingsSheet {
     /// its Git page follows the default.
     func defaultMachineChanged(from oldDefault: String?) {
         if let draft, draft.context.instanceId == oldDefault { close() }
+    }
+}
+
+private extension AidenRemoteRequestContext {
+    /// The same machine and pairing, as `AidenHostConnection.isLive` judges
+    /// it. `generation` moves whenever a machine becomes the default, which
+    /// changes nothing about where Settings save.
+    func sharesLease(with other: AidenRemoteRequestContext) -> Bool {
+        instanceId == other.instanceId && deviceId == other.deviceId && hostGeneration == other.hostGeneration
     }
 }
 

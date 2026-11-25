@@ -360,6 +360,43 @@ final class AidenOwnerRoutingTests: XCTestCase {
         XCTAssertEqual(coordinator.defaultInstanceId, "studio")
     }
 
+    /// Save shows the edit on the machine's list before the machine answers,
+    /// and a save made while another change is on its way waits its turn
+    /// instead of being dropped.
+    func testAWorkspaceSaveShowsAtOnceAndWaitsBehindAnotherChange() async throws {
+        let workspace = try await laptopsDefault()
+        serveDefaultWorkspaces()
+        try await connection("studio").refreshWorkspacesForPoll()
+        let studios = try XCTUnwrap(try connection("studio").workspaces.first { $0.id == "default" })
+        responder.reply(instanceId: "studio", method: "DELETE", path: "/workspaces/default", status: 204, json: Data())
+        responder.reply(
+            instanceId: "laptop",
+            method: "PATCH",
+            path: "/workspaces/default",
+            status: 200,
+            json: json(workspaceObject("default", name: "Renamed"))
+        )
+        let releaseRemoval = responder.hold(instanceId: "studio", path: "/workspaces/default")
+        let studioOwner = try coordinator.ownerContext(for: "studio")
+        let removal = Task { await coordinator.removeWorkspaceOutcome(studios, on: studioOwner) }
+        try await waitUntil("the removal is on its way") { requests("studio").contains("DELETE /workspaces/default") }
+
+        let laptopOwner = try coordinator.ownerContext(for: "laptop")
+        let save = Task { await coordinator.updateWorkspaceOutcome(workspace, name: "Renamed", on: laptopOwner) }
+        try await waitUntil("the rename shows") {
+            (try? connection("laptop").workspaces.first { $0.id == "default" }?.name) == "Renamed"
+        }
+        XCTAssertFalse(requests("laptop").contains("PATCH /workspaces/default"))
+
+        releaseRemoval()
+        _ = await removal.value
+        let outcome = await save.value
+
+        XCTAssertEqual(outcome.value?.name, "Renamed")
+        XCTAssertEqual(requests("laptop").filter { $0 == "PATCH /workspaces/default" }.count, 1)
+        XCTAssertEqual(try connection("laptop").workspaces.first { $0.id == "default" }?.name, "Renamed")
+    }
+
     func testWorkspaceSettingsRemoveFromTheWorkspacesOwnMachine() async throws {
         let workspace = try await laptopsDefault()
         responder.reply(instanceId: "laptop", method: "DELETE", path: "/workspaces/default", status: 204, json: Data())
@@ -464,6 +501,25 @@ final class AidenOwnerRoutingTests: XCTestCase {
         guard case .failure = outcome else { return XCTFail("Not a failure: \(outcome)") }
         let message = try XCTUnwrap(coordinator.presentedError)
         XCTAssertTrue(message.hasPrefix("Couldn’t save this workspace on Laptop."), message)
+        // The rename that showed at once is gone again.
+        XCTAssertEqual(try connection("laptop").workspaces.first { $0.id == "default" }?.name, "Laptop project")
+    }
+
+    /// A failed save whose machine can't list its workspaces either puts back
+    /// the workspace as it was before the edit showed.
+    func testAFailedWorkspaceSaveWithNoListToSettleOnPutsTheWorkspaceBack() async throws {
+        let workspace = try await laptopsDefault()
+        responder.reply(instanceId: "laptop", method: "PATCH", path: "/workspaces/default", status: 500, json: serverFailure)
+        responder.reply(instanceId: "laptop", path: "/workspaces", status: 500, json: serverFailure)
+
+        let outcome = await coordinator.updateWorkspaceOutcome(
+            workspace,
+            name: "Renamed",
+            on: try coordinator.ownerContext(for: "laptop")
+        )
+
+        guard case .failure = outcome else { return XCTFail("Not a failure: \(outcome)") }
+        XCTAssertEqual(try connection("laptop").workspaces.first { $0.id == "default" }, workspace)
     }
 
     func testAFailedWorkspaceRemoveOnAnotherMachineSaysSo() async throws {

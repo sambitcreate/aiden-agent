@@ -215,6 +215,9 @@ final class AidenRemoteCoordinator {
     }
     private(set) var workspaceSnapshotRevision = 0
     private(set) var isMutating = false
+    /// Each workspace's last save from this phone: the revision it was sent
+    /// against and the one the machine answered with.
+    @ObservationIgnored private var workspaceSaveRevisions: [String: (sent: String, now: String)] = [:]
     var presentedError: String?
     let workspaceArchiveStore: AidenWorkspaceArchiveStore
     let chatCache: AidenChatCache
@@ -748,6 +751,15 @@ final class AidenRemoteCoordinator {
 
     // MARK: Workspace Settings, on the context it opened under
 
+    /// Waits until no other change is on its way, so a queued one goes next.
+    /// False when the waiting task was cancelled.
+    private func waitForMutationSlot() async -> Bool {
+        while isMutating {
+            do { try await Task.sleep(for: .milliseconds(50)) } catch { return false }
+        }
+        return true
+    }
+
     /// Workspace Settings saves through the context it opened under. A `selected`
     /// context writes the selected machine and goes stale once the selection
     /// moves. An `owner` context writes its own machine while it's live. Either
@@ -763,22 +775,47 @@ final class AidenRemoteCoordinator {
         guard context.scope == .owner else {
             return await updateWorkspaceOutcome(workspace, name: name, permission: permission, memoryEnabled: memoryEnabled)
         }
-        guard !isMutating else { return .busy }
         guard let connection = hosts.connection(for: context.instanceId),
               let client = try? remoteClient(for: context) else { return .stale }
+        // The machine's list shows the edit at once; the reply, or the
+        // machine's own list on a failure, then settles it.
+        var optimistic = workspace
+        if let name { optimistic.name = name }
+        if let permission { optimistic.permission = permission }
+        if let memoryEnabled { optimistic.memoryEnabled = memoryEnabled }
+        connection.applyWorkspaceSnapshot(Self.replacing(optimistic, in: connection.workspaces))
+        /// Puts the workspace back unless something newer replaced the edit.
+        func restore() {
+            guard holds(context),
+                  connection.workspaces.first(where: { $0.id == workspace.id }) == optimistic else { return }
+            connection.applyWorkspaceSnapshot(Self.replacing(workspace, in: connection.workspaces))
+        }
+        // A save made while another change is still on its way waits its
+        // turn rather than being dropped.
+        guard await waitForMutationSlot(), holds(context) else {
+            restore()
+            return holds(context) ? .cancelled : .stale
+        }
         isMutating = true
         presentedError = nil
         defer { isMutating = false }
+        // A save made before this phone's previous save of the workspace was
+        // answered carries that save's revision forward, not the one it opened on.
+        let saveKey = "\(context.instanceId):\(workspace.id)"
+        let revision = workspaceSaveRevisions[saveKey].flatMap { $0.sent == workspace.revision ? $0.now : nil }
+            ?? workspace.revision
         do {
             let updated = try await client.updateWorkspace(
                 id: workspace.id,
-                revision: workspace.revision,
+                revision: revision,
                 patch: AidenWorkspacePatch(name: name, permission: permission, memoryEnabled: memoryEnabled)
             )
+            workspaceSaveRevisions[saveKey] = (sent: workspace.revision, now: updated.revision)
             guard holds(context) else { return .stale }
             connection.applyWorkspaceSnapshot(Self.replacing(updated, in: connection.workspaces))
             return .success(updated)
         } catch let error where aidenIsCancellation(error) {
+            restore()
             return holds(context) ? .cancelled : .stale
         } catch {
             guard holds(context) else { return .stale }
@@ -790,6 +827,8 @@ final class AidenRemoteCoordinator {
                    (memoryEnabled == nil || reconciled.memoryEnabled == memoryEnabled) {
                     return .success(reconciled)
                 }
+            } else {
+                restore()
             }
             if await !handleCredentialRevocation(error, context: context), holds(context) {
                 presentedError = Self.workspaceFailure(
