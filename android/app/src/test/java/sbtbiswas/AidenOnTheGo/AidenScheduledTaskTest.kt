@@ -244,11 +244,31 @@ class AidenScheduledTaskTest {
         assertEquals(first, keys.keyFor("task_1"))
         keys.failed("task_1", inFlight)
         assertEquals(first, keys.keyFor("task_1"))
+        keys.failed("task_1", kotlinx.coroutines.CancellationException("cancelled"))
+        assertEquals(first, keys.keyFor("task_1"))
+        keys.failed(
+            "task_1",
+            AidenRemoteClientException.Server(
+                503,
+                AidenRemoteErrorEnvelope.Body(AidenRemoteErrorCode.OPERATION_IN_PROGRESS, "Unavailable", "req_503", true)
+            )
+        )
+        assertEquals(first, keys.keyFor("task_1"))
 
         keys.failed("task_1", rejected)
         assertEquals(second, keys.keyFor("task_1"))
         assertTrue(aidenScheduledRunFailureIsAmbiguous(inFlight))
+        assertTrue(aidenScheduledRunFailureIsAmbiguous(kotlinx.coroutines.CancellationException("cancelled")))
         assertFalse(aidenScheduledRunFailureIsAmbiguous(rejected))
+        assertFalse(
+            "a 409 internal_error replays a settled ledger rejection",
+            aidenScheduledRunFailureIsAmbiguous(
+                AidenRemoteClientException.Server(
+                    409,
+                    AidenRemoteErrorEnvelope.Body(AidenRemoteErrorCode.INTERNAL_ERROR, "Replayed rejection", "req_409", false)
+                )
+            )
+        )
     }
 
     @Test

@@ -6,6 +6,8 @@ import sbtbiswas.AidenOnTheGo.models.AidenChatRole
 import sbtbiswas.AidenOnTheGo.models.AidenGenerationTimelineStatus
 import sbtbiswas.AidenOnTheGo.protocol.AidenRemoteClientException
 import sbtbiswas.AidenOnTheGo.protocol.AidenRemoteErrorCode
+import sbtbiswas.AidenOnTheGo.protocol.AidenRemoteFailureClassification
+import sbtbiswas.AidenOnTheGo.protocol.AidenRemoteFailurePolicy
 
 /**
  * Which messages offer the fork actions. Mirrors the Mac's rules so the menu
@@ -76,14 +78,15 @@ object AidenChatForkErrors {
 
     /**
      * Whether a failed fork may still have been created, so a retry must
-     * replay the same idempotency key. That holds only when no error response
-     * arrived (a lost connection or timeout) or the Mac is still running the
-     * first request. The Mac's idempotency ledger settles every other error
+     * replay the same idempotency key. That holds when no readable error
+     * response arrived (a lost connection, a timeout or an unreadable body),
+     * when the Mac is still running the first request, and on a `5xx`, `408`
+     * or `429`. The Mac's idempotency ledger settles every other error
      * response as a rejection, and replaying its key would only return
      * `internal_error`, so the next attempt needs a fresh key.
      */
     fun isOutcomeUnknown(error: Throwable): Boolean =
-        serverError(error)?.let { it.body.code == AidenRemoteErrorCode.IDEMPOTENCY_IN_FLIGHT } ?: true
+        AidenRemoteFailureClassification.isAmbiguous(error, AidenRemoteFailurePolicy.CACHED_REJECTION_LEDGER)
 
     /** A summary route's 404 or 409 means the summary already changed elsewhere. */
     fun isSummaryMovedOn(error: Throwable): Boolean = isNotFound(error) || isRevisionConflict(error)

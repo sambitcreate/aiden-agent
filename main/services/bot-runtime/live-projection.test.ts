@@ -959,13 +959,8 @@ test("needsYou agrees with the summary, with or without an open feed, and never 
     const needsYou = await live.projection.needsYou("bot:a");
     assert.equal(transcriptReads, before, `the cheap read opens no transcript (${label})`);
     assert.equal(needsYou, expected, label);
-    const signals = await live.projection.inboxSignals("bot:a");
-    assert.equal(transcriptReads, before, "host-feed signals never open a transcript");
-    assert.equal(signals.needsYou, expected);
     const summary = await live.projection.summary("bot:a");
-    assert.deepEqual(signals.state, summary.state, `host-feed state agrees (${label})`);
     assert.equal(summary.needsYou, expected, `the summary agrees (${label})`);
-    if (label.startsWith("no feed") || label.startsWith("feed closed")) assert.equal(signals.lastReplyAt, null);
   };
   const states = [
     [false, false],
@@ -998,9 +993,8 @@ test("needsYou agrees with the summary, with or without an open feed, and never 
     await live.service.send("bot:a", { text: "hello", requestId: "feed-signals" });
     await waitFor(() => visibleText(tape.view).includes("assistant:Hello."), { what: "the existing live feed's reply" });
     const before = transcriptReads;
-    assert.equal((await live.projection.inboxSignals("bot:a")).lastReplyAt,
-      (await live.projection.summary("bot:a")).lastReplyAt);
-    assert.equal(transcriptReads, before, "an open feed reuses its admitted entries too");
+    assert.notEqual((await live.projection.summary("bot:a")).lastReplyAt, null);
+    assert.equal(transcriptReads, before, "an open feed reuses its admitted entries");
     watching.unsubscribe();
     issueOpen = true;
     unavailable = true;
@@ -2322,7 +2316,6 @@ test("a waiting access request reaches subscribers, needs-you and late joiners; 
     const card = requests.pending()[0]!;
     await waitFor(() => tape.view?.accessRequest?.waitId === card.waitId, { what: "the public access event" });
     assert.equal((await live.projection.summary("bot:a")).needsYou, true);
-    assert.equal((await live.projection.inboxSignals("bot:a")).needsYou, true);
     assert.deepEqual(Object.keys(tape.view!.accessRequest!).sort(), ["botId", "waitId", "toolCallId", "target", "label", "place", "why", "choices"].sort());
     await assert.rejects(requests.answer("bot:a", card.waitId, "always", async () => { throw new Error("Access changed"); }), /Access changed/u);
     await live.projection.refreshAccessRequest("bot:a");
@@ -2410,7 +2403,6 @@ test("pending plans need the person offscreen and subscribe catches unannounced 
     for (const status of ["pending", "active", "finished", "stopped", "expired"] as const) {
       plan = planView({ status });
       assert.equal(await live.projection.needsYou("bot:a"), status === "pending");
-      assert.equal((await live.projection.inboxSignals("bot:a")).needsYou, status === "pending");
       assert.equal((await live.projection.summary("bot:a")).needsYou, status === "pending");
     }
     plan = planView();

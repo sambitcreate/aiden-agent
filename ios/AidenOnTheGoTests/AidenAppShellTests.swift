@@ -1584,6 +1584,50 @@ final class AidenAppShellTests: XCTestCase {
         XCTAssertNotEqual(keys[0], keys[1])
     }
 
+    func testReplayed409InternalErrorAfterLostChatStartReleasesSettledKeyWhileMalformed409RetainsKey() async throws {
+        let responder = AidenDemoResponder()
+        let coordinator = try await olderBotMachine(responder: responder)
+        let starter = AidenBotChatStarter(cache: temporaryCache())
+
+        // 1. Lost first rejection: retains key.
+        responder.fail(instanceId: "studio", path: "/bots/bot_scout/chats", code: .networkConnectionLost)
+        let first = await starter.start(botID: "bot_scout", coordinator: coordinator)
+        XCTAssertFalse(first)
+
+        // 2. Malformed HTTP 409 body cannot decode into AidenRemoteErrorEnvelope (.unexpectedStatus(409)): retains key.
+        responder.reply(instanceId: "studio", method: "POST", path: "/bots/bot_scout/chats", status: 409, json: Data("not-json".utf8))
+        let malformed = await starter.start(botID: "bot_scout", coordinator: coordinator)
+        XCTAssertFalse(malformed)
+
+        // 3. 409 idempotency_in_flight: retains key.
+        let inFlight = Data("""
+        {"error":{"code":"idempotency_in_flight","message":"Still running.","requestId":"request-409-inflight","retryable":true}}
+        """.utf8)
+        responder.reply(instanceId: "studio", method: "POST", path: "/bots/bot_scout/chats", status: 409, json: inFlight)
+        let stillRunning = await starter.start(botID: "bot_scout", coordinator: coordinator)
+        XCTAssertFalse(stillRunning)
+
+        // 4. Decoded 409 internal_error (durable Bot-ledger replayed settled rejection): releases key.
+        let replayedRejection = Data("""
+        {"error":{"code":"internal_error","message":"This Bot request cannot be safely repeated.","requestId":"request-409-replay","retryable":false}}
+        """.utf8)
+        responder.reply(instanceId: "studio", method: "POST", path: "/bots/bot_scout/chats", status: 409, json: replayedRejection)
+        let settled = await starter.start(botID: "bot_scout", coordinator: coordinator)
+        XCTAssertFalse(settled)
+
+        // 5. Fresh attempt mints a new key and succeeds.
+        responder.reply(instanceId: "studio", method: "POST", path: "/bots/bot_scout/chats", status: 201, json: try botChatJSON())
+        let fresh = await starter.start(botID: "bot_scout", coordinator: coordinator)
+        XCTAssertTrue(fresh)
+
+        let keys = responder.idempotencyKeys(instanceId: "studio")
+        XCTAssertEqual(keys.count, 5)
+        XCTAssertEqual(keys[0], keys[1], "Lost response retains key")
+        XCTAssertEqual(keys[1], keys[2], "Malformed 409 retains key")
+        XCTAssertEqual(keys[2], keys[3], "409 idempotency_in_flight retains key")
+        XCTAssertNotEqual(keys[3], keys[4], "Decoded replayed 409 internal_error releases settled key so next tap mints a fresh key")
+    }
+
     func testAMachineChangeDropsTheKeptKey() async throws {
         let responder = AidenDemoResponder()
         let coordinator = try await olderBotMachine(responder: responder)
