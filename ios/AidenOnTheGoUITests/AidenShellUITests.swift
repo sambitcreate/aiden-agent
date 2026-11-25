@@ -301,7 +301,7 @@ final class AidenShellUITests: XCTestCase {
     /// A drag from the leading edge across most of the window, at a person's
     /// pace, so the stack's own Back gesture recognizes it as well as ours.
     private func edgeSwipe(in app: XCUIApplication) {
-        let window = AidenStateMatrix.window(of: app)
+        let window = AidenStateMatrix.window(of: app).frame
         let start = window.coordinate(withNormalizedOffset: CGVector(dx: 0, dy: 0.5)).withOffset(CGVector(dx: 4, dy: 0))
         let distance = window.frame.width * 0.75
         start.press(forDuration: 0.1, thenDragTo: start.withOffset(CGVector(dx: distance, dy: 0)), withVelocity: .slow, thenHoldForDuration: 0)
@@ -349,15 +349,24 @@ final class AidenShellUITests: XCTestCase {
         let dock = AidenStateMatrix.dock(in: app)
         try XCTSkipUnless(dock.exists, "The dock is for compact width")
 
+        // A list keeps rows just past the screen's edge, so only rows that
+        // start on screen count.
+        let window = AidenStateMatrix.window(of: app).frame
         func lastRow() -> XCUIElement? {
-            app.cells.allElementsBoundByIndex.filter(\.exists).max { $0.frame.maxY < $1.frame.maxY }
+            app.cells.allElementsBoundByIndex
+                .filter { $0.exists && $0.frame.minY < window.maxY }
+                .max { $0.frame.maxY < $1.frame.maxY }
         }
-        var previous = ""
-        for _ in 0..<8 {
+        // The end is where a swipe moves nothing: the same last row, in the
+        // same place.
+        var previous: (label: String, maxY: CGFloat)?
+        for _ in 0..<20 {
             app.swipeUp(velocity: .fast)
-            let label = lastRow()?.label ?? ""
-            if label == previous { break }
-            previous = label
+            Thread.sleep(forTimeInterval: 0.5)
+            let row = lastRow()
+            let now = (label: row?.label ?? "", maxY: row?.frame.maxY ?? 0)
+            if let previous, previous.label == now.label, abs(previous.maxY - now.maxY) < 1 { break }
+            previous = now
         }
         // Let the scroll come to rest at the end.
         Thread.sleep(forTimeInterval: 1)
@@ -386,11 +395,16 @@ final class AidenShellUITests: XCTestCase {
         XCTAssertTrue(dock.waitForNonExistence(timeout: 5), "The dock stayed up with the keyboard")
         AidenStateMatrix.capture("dock-keyboard", in: self)
 
-        // Home's menu is still in reach; the drawer puts the keyboard away.
+        // Home's menu is still in reach above the keyboard.
         AidenStateMatrix.homeRoot(in: app).tap()
         XCTAssertTrue(app.buttons["Close menu"].waitForExistence(timeout: 5), "The drawer didn't open")
         AidenStateMatrix.closeDrawer(in: app)
-        XCTAssertTrue(app.keyboards.firstMatch.waitForNonExistence(timeout: 5), "The keyboard stayed up")
+
+        // Closing the drawer gives the field its keyboard back; a drag down the
+        // list puts it away.
+        let keyboard = app.keyboards.firstMatch
+        for _ in 0..<2 where keyboard.exists { Self.drag(AidenStateMatrix.window(of: app)) }
+        XCTAssertTrue(keyboard.waitForNonExistence(timeout: 5), "The keyboard stayed up")
         XCTAssertTrue(dock.waitForExistence(timeout: 5), "The dock didn't come back after the keyboard")
         app.terminate()
     }
@@ -2973,17 +2987,21 @@ final class AidenShellUITests: XCTestCase {
         let row = app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", "Rename the onboarding assets")).firstMatch
         for _ in 0..<8 where !row.exists || !row.isHittable { app.swipeUp() }
         XCTAssertTrue(row.waitForExistence(timeout: 10), "No long chat in the inbox")
-        // The list scrolls under the running accessory, and XCUITest calls a row
-        // there hittable, but a tap on it opens the accessory's chat instead. The
-        // accessory is under the list on a phone and beside the tabs at the top
-        // of a regular width.
+        // The list scrolls under the running accessory and the dock, and XCUITest
+        // calls a row there hittable, but a tap on it lands on the bar instead.
+        // The accessory is under the list on a phone and beside the tabs at the
+        // top of a regular width; the dock's bar runs on below its capsule to the
+        // window's bottom edge.
         let accessory = app.buttons["aiden.running-accessory"].firstMatch
-        for _ in 0..<4 where accessory.exists && row.frame.intersects(accessory.frame) {
+        let dock = AidenStateMatrix.dock(in: app)
+        func underABar() -> Bool {
+            (accessory.exists && row.frame.intersects(accessory.frame))
+                || (dock.exists && row.frame.maxY > dock.frame.minY)
+        }
+        for _ in 0..<4 where underABar() {
             dragResults(in: app, from: 0.6, to: 0.4)
         }
-        if accessory.exists {
-            XCTAssertFalse(row.frame.intersects(accessory.frame), "The long chat's row is still under the running accessory")
-        }
+        XCTAssertFalse(underABar(), "The long chat's row is still under the running accessory or the dock")
         hideOverlaySidebar(in: app)
         row.tap()
         XCTAssertTrue(app.buttons["Send message"].firstMatch.waitForExistence(timeout: 10), "The chat did not open")
