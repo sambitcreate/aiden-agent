@@ -19,6 +19,7 @@ import {
 } from "./binary.js";
 import {
   CUA_DRIVER_ALLOWED_TOOLS,
+  CUA_DRIVER_BROKER_EXECUTABLE,
   CuaDriverError,
   buildCuaDriverEnvironment,
   cuaDriverToolDeclaresSession,
@@ -418,6 +419,25 @@ test("driver installation resolution rejects unsupported platforms and symlinked
         resourcesPath: root,
       }),
       (error: unknown) => error instanceof CuaDriverError && error.code === "driver_missing",
+    );
+
+    // A helper bundle with a wrong-sized cua-driver fails the compiled byte-size pin before plutil/hashing.
+    await rm(path.join(helperParent, "CuaDriver.app"));
+    const macosDir = path.join(helperParent, "CuaDriver.app", "Contents", "MacOS");
+    await mkdir(macosDir, { recursive: true });
+    await writeFile(path.join(macosDir, CUA_DRIVER_BROKER_EXECUTABLE), "#!/bin/sh\n", { mode: 0o755 });
+    await writeFile(path.join(macosDir, "cua-driver"), "#!/bin/sh\necho wrong size\n", { mode: 0o755 });
+    await assert.rejects(
+      resolveCuaDriverInstallation({
+        appPath: root,
+        isPackaged: false,
+        platform: "darwin",
+        resourcesPath: root,
+      }),
+      (error: unknown) =>
+        error instanceof CuaDriverError &&
+        error.code === "driver_integrity_failed" &&
+        /pinned 0\.38\.0 release/u.test(error.message),
     );
   } finally {
     await rm(root, { recursive: true, force: true });

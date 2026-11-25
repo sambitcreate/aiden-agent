@@ -204,10 +204,7 @@ export async function validateVendoredLinuxArm64Binary(binaryPath, hashBinary = 
   try {
     const info = await lstat(binaryPath);
     if (!info.isFile() || info.isSymbolicLink()) return false;
-    if (
-      hashBinary === hashFile &&
-      info.size !== CUA_DRIVER_LINUX_ARM64_ARTIFACT_PROVENANCE.binaryBytes
-    ) {
+    if (info.size !== CUA_DRIVER_LINUX_ARM64_ARTIFACT_PROVENANCE.binaryBytes) {
       return false;
     }
     const handle = await open(binaryPath, "r");
@@ -228,7 +225,7 @@ export async function validateVendoredBinary(binaryPath, runner = run, hashBinar
   try {
     const info = await lstat(binaryPath);
     if (!info.isFile() || info.isSymbolicLink()) return false;
-    if (hashBinary === hashFile && info.size !== CUA_DRIVER_ARTIFACT_PROVENANCE.binaryBytes) {
+    if (info.size !== CUA_DRIVER_ARTIFACT_PROVENANCE.binaryBytes) {
       return false;
     }
     if ((await hashBinary(binaryPath)) !== CUA_DRIVER_SHA256) return false;
