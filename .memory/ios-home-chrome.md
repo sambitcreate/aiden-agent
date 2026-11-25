@@ -21,3 +21,7 @@ Branch `claude/ios-home-chrome`, stacked on `claude/ios-home-aurora` (#931). Own
 - Closed Duo: hiding the tab bar leaves the system rail (status bar plus the nav bar's items at the trailing edge, no TabBar element). UI tests detect the rail by posture (`showsSideRail`: a non-Home "Open menu" outside every navigation bar), the dock by `aiden.dock` / `aiden.dock.<tab>` (`AidenStateMatrix.dock/dockTab/bottomTabs`).
 - UI tests wait for Chats' root with `AidenStateMatrix.homeRoot` (`aiden.home.menu`, or the Chats nav bar beside the list) and `tabRoot(_:)`; `navigationBars["Chats"]` does not exist at compact width.
 - The dock no longer minimizes on scroll (the old `testTheTabBarMinimizesOnScrollDownAndComesBack` became `testTheDockStaysInReachWhileTheListScrollsUnderIt`).
+- The accessibility audit (`testEveryMainScreenPassesTheAudit`) counts the dock as a bar running from its capsule's top to the window's bottom edge, full width (`AuditFinding.dock`). Rows that scroll under it are bars-touching, and its chosen tab's name has its own allowance (Dynamic Type, one per tab screen).
+- A row XCUITest calls hittable under the dock or running accessory still takes the tap on the bar; drag the list first (`openLongChat`).
+- Closing the drawer gives the Home field its keyboard back; a drag down the list (default `scrollDismissesKeyboard`) puts it away.
+- `app.cells` includes rows just past the window's edge; filter by `frame.minY < window.maxY` when looking for the last visible row.

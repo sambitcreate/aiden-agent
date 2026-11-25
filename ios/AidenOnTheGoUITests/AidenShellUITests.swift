@@ -301,7 +301,7 @@ final class AidenShellUITests: XCTestCase {
     /// A drag from the leading edge across most of the window, at a person's
     /// pace, so the stack's own Back gesture recognizes it as well as ours.
     private func edgeSwipe(in app: XCUIApplication) {
-        let window = AidenStateMatrix.window(of: app).frame
+        let window = AidenStateMatrix.window(of: app)
         let start = window.coordinate(withNormalizedOffset: CGVector(dx: 0, dy: 0.5)).withOffset(CGVector(dx: 4, dy: 0))
         let distance = window.frame.width * 0.75
         start.press(forDuration: 0.1, thenDragTo: start.withOffset(CGVector(dx: distance, dy: 0)), withVelocity: .slow, thenHoldForDuration: 0)
