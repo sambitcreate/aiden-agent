@@ -289,7 +289,7 @@ const ENUM_STRING_FIELDS: Readonly<Record<string, ReadonlySet<string>>> = {
   transport: new Set(["http", "stdio"]),
   serverHostKind: new Set(MCP_SERVER_HOST_KINDS),
   providerCategory: new Set(["authentication", "quota", "rate_limit", "context_window", "context_management", "output_limit", "interrupted", "timeout", "service_unavailable", "model_unavailable", "network", "invalid_request", "unknown"]),
-  transportCause: new Set(["connection-error", "dns", "connection-reset", "connection-refused", "socket-closed", "fetch-failed", "network-unknown"]),
+  transportCause: new Set(["connection-error", "dns", "connection-reset", "connection-refused", "socket-closed", "websocket-closed", "fetch-failed", "network-unknown"]),
   arch: new Set(["arm64", "ia32", "universal", "unknown", "x64"]),
   failureCategory: new Set(["command-failed", "invalid-response", "timed-out"]),
   origin: new Set(["uncaughtException", "unhandledRejection", "unknown"]),

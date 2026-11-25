@@ -526,7 +526,10 @@ export function createDaemonChats(agentDir: string) {
             send("chat:tool", { streamId, toolName: event.toolName, phase: "call" });
           }
           if (event.type === "tool_execution_end") {
-            timeline.toolFinished(event.toolCallId, event.isError ? "failed" : "completed");
+            // After a stop, Pi ends every unstarted call in the batch with an error result; like the
+            // desktop, show those (and the interrupted call) as stopped rather than failed.
+            const status = entry.stopRequested ? "cancelled" : event.isError ? "failed" : "completed";
+            timeline.toolFinished(event.toolCallId, status, undefined, { stoppedByUser: status === "cancelled" && entry.cancellationOrigin === "user_stop" });
             send("chat:tool", { streamId, toolName: event.toolName, phase: event.isError ? "error" : "result" });
           }
         });
