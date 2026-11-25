@@ -1351,7 +1351,8 @@ export const botComputersApi = {
     invoke<BotComputersSettings>(BOT_COMPUTER_CHANNELS.updateSettings, patch),
   dismissMigrationNotice: () => botComputersStatus(BOT_COMPUTER_CHANNELS.dismissMigrationNotice),
   give: (botId: string) => botComputer(BOT_COMPUTER_CHANNELS.give, botId),
-  reset: (botId: string) => botComputer(BOT_COMPUTER_CHANNELS.reset, botId),
+  reset: (botId: string, options?: { force?: boolean }) =>
+    botComputer(BOT_COMPUTER_CHANNELS.reset, botId, ...(options === undefined ? [] : [options])),
   remove: (botId: string) => invoke<void>(BOT_COMPUTER_CHANNELS.remove, botId),
   stop: (botId: string) => invoke<void>(BOT_COMPUTER_CHANNELS.stop, botId),
   assignComputer: (botId: string, target: BotComputerAssignTarget) =>
@@ -1362,8 +1363,8 @@ export const botComputersApi = {
     botComputerVm(BOT_COMPUTER_CHANNELS.renameComputer, computerId, name),
   deleteComputer: (computerId: string, options?: { force?: boolean }) =>
     invoke<void>(BOT_COMPUTER_CHANNELS.deleteComputer, computerId, options),
-  resetComputer: (computerId: string) =>
-    botComputerVm(BOT_COMPUTER_CHANNELS.resetComputer, computerId),
+  resetComputer: (computerId: string, options?: { force?: boolean }) =>
+    botComputerVm(BOT_COMPUTER_CHANNELS.resetComputer, computerId, ...(options === undefined ? [] : [options])),
   /** The Computer tab's stream target. `start` boots a stopped computer; only a person's switch to the tab passes it. */
   viewerGrant: async (botId: string, options: { start: boolean }): Promise<BotComputerViewerGrant> => {
     const grant = parseBotComputerViewerGrant(await invoke<unknown>(BOT_COMPUTER_CHANNELS.viewerGrant, botId, options));

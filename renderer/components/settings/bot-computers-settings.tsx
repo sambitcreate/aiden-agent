@@ -286,10 +286,13 @@ export function BotComputersSettings() {
     void run(
       "resetVm",
       async () => {
-        const updated = await botComputersApi.resetComputer(liveVm.id);
-        cache.putVm(updated);
-        setPendingFocusTarget(liveVm.id);
-        void cache.refresh();
+        try {
+          const updated = await botComputersApi.resetComputer(liveVm.id, { force: true });
+          cache.putVm(updated);
+          void cache.refresh();
+        } finally {
+          setPendingFocusTarget(liveVm.id);
+        }
       },
       `Aiden couldn't reset ${liveVm.name}.`,
     );
@@ -307,10 +310,15 @@ export function BotComputersSettings() {
     void run(
       "deleteVm",
       async () => {
-        await botComputersApi.deleteComputer(liveVm.id, liveVm.assignedBotIds.length > 0 ? { force: true } : undefined);
-        cache.dropVm(liveVm.id);
-        setPendingFocusTarget(fallbackFocus);
-        void cache.refresh();
+        try {
+          await botComputersApi.deleteComputer(liveVm.id, { force: true });
+          cache.dropVm(liveVm.id);
+          setPendingFocusTarget(fallbackFocus);
+          void cache.refresh();
+        } catch (error) {
+          setPendingFocusTarget(liveVm.id);
+          throw error;
+        }
       },
       `Aiden couldn't delete ${liveVm.name}.`,
     );
@@ -687,9 +695,6 @@ export function BotComputersSettings() {
         confirmLabel="Reset computer"
         confirmVariant="destructive"
         busy={acting === "resetVm"}
-        returnFocus={() =>
-          (resetTargetId ? vmFocusRefs.current.get(resetTargetId) : null) ?? newComputerButtonRef.current
-        }
         onConfirm={() => {
           const id = resetTargetId;
           setResetTargetId(null);
@@ -717,10 +722,6 @@ export function BotComputersSettings() {
         confirmLabel="Delete computer"
         confirmVariant="destructive"
         busy={acting === "deleteVm"}
-        returnFocus={() => {
-          const next = deleteTargetId ? nextFocusAfterDelete(deleteTargetId) : "computers";
-          return (next === "computers" ? null : vmFocusRefs.current.get(next)) ?? newComputerButtonRef.current;
-        }}
         onConfirm={() => {
           const id = deleteTargetId;
           setDeleteTargetId(null);

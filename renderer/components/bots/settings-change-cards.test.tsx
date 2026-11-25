@@ -205,13 +205,13 @@ test("a held computer change matches strictly by VM id (never spoofed display na
   const change = {
     changeId: "c-computer-spoof",
     mode: "held" as const,
-    fields: ["computer" as const],
-    lines: ["Computer: vm-X"],
+    fields: ["name" as const, "computer" as const],
+    lines: ["Name: Chief → Planner", "Computer: vm-X"],
     computer: { kind: "existing" as const, computerId: "vm-X" },
     heldReason: "widens" as const,
   };
 
-  // While computers have not loaded, Apply stays disabled so the person never approves a raw ID.
+  // While computers have not loaded, Apply stays disabled, non-computer diff lines stay visible, and raw ID is hidden.
   const view = render(
     <HeldSettingsCard
       change={change}
@@ -221,6 +221,7 @@ test("a held computer change matches strictly by VM id (never spoofed display na
     />,
   );
   assert.equal((screen.getByRole("button", { name: "Apply" }) as HTMLButtonElement).disabled, true);
+  screen.getByText("Name: Chief → Planner");
   screen.getByText("Loading computer details…");
   assert.equal(screen.queryByText("Computer: vm-X"), null);
 
@@ -236,6 +237,19 @@ test("a held computer change matches strictly by VM id (never spoofed display na
     />,
   );
   assert.equal((screen.getByRole("button", { name: "Apply" }) as HTMLButtonElement).disabled, false);
-  screen.getByText("Computer: Ben's Private Lab (already used by Ben)");
+  screen.getByText("Name: Chief → Planner · Computer: Ben's Private Lab (already used by Ben)");
   screen.getByText("Bots on Ben's Private Lab share one Linux desktop, user (aiden-bot), and Chromium sign-ins.");
+
+  // Unknown co-tenant Bot ID falls back to "another Bot", never raw botId.
+  view.rerender(
+    <HeldSettingsCard
+      change={change}
+      botId="bot-chief"
+      botName="Chief"
+      computers={[spoofedVm, realTargetVm]}
+      botNames={new Map()}
+      onRespond={async () => undefined}
+    />,
+  );
+  screen.getByText("Name: Chief → Planner · Computer: Ben's Private Lab (already used by another Bot)");
 });

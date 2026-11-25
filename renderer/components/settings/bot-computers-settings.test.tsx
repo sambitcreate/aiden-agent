@@ -339,8 +339,8 @@ test("Default for new Bots saves defaultComputerMode and Computers section manag
         currentVms = currentVms.map((vm) => (vm.id === computerId ? next : vm));
         return next;
       },
-      "botComputers:resetComputer": (computerId) => {
-        resetIds.push(computerId);
+      "botComputers:resetComputer": (computerId, opts) => {
+        resetIds.push([computerId, opts]);
         const current = currentVms.find((vm) => vm.id === computerId) ?? dedicatedVm;
         const next = { ...current, outdated: false, baseBuild: "20261123-2671" };
         currentVms = currentVms.map((vm) => (vm.id === computerId ? next : vm));
@@ -382,14 +382,25 @@ test("Default for new Bots saves defaultComputerMode and Computers section manag
   fireEvent.click(within(renameDialog).getByRole("button", { name: "Save name" }));
   await waitFor(() => assert.deepEqual(renamed, [["research", "Lab Linux"]]));
 
-  // Reset confirmation calls resetComputer.
+  // Reset confirmation calls resetComputer with { force: true }.
   fireEvent.click(await screen.findByRole("button", { name: "Reset Lab Linux" }));
   const resetDialog = await screen.findByRole("alertdialog");
   fireEvent.click(within(resetDialog).getByRole("button", { name: "Reset computer" }));
-  await waitFor(() => assert.deepEqual(resetIds, ["research"]));
+  await waitFor(() => assert.deepEqual(resetIds, [["research", { force: true }]]));
+
+  // Wait for Reset's acting state to clear, then verify Cancel restores focus to the triggering Delete button.
+  const deleteSharedBtn = screen.getByRole("button", { name: "Delete Shared computer" }) as HTMLButtonElement;
+  await waitFor(() => assert.equal(deleteSharedBtn.disabled, false));
+  deleteSharedBtn.focus();
+  fireEvent.click(deleteSharedBtn);
+  const cancelDialog = await screen.findByRole("alertdialog");
+  fireEvent.click(within(cancelDialog).getByRole("button", { name: "Cancel" }));
+  await flush();
+  assert.equal(screen.queryByRole("alertdialog"), null);
+  assert.equal(document.activeElement, deleteSharedBtn);
 
   // Deleting an assigned VM confirms, shows active holder, passes { force: true }, and restores focus.
-  fireEvent.click(screen.getByRole("button", { name: "Delete Shared computer" }));
+  fireEvent.click(deleteSharedBtn);
   const deleteDialog = await screen.findByRole("alertdialog");
   assert.match(deleteDialog.textContent ?? "", /In use by Ada/u);
   assert.match(deleteDialog.textContent ?? "", /2 Bots are currently assigned/u);

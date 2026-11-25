@@ -108,7 +108,7 @@ export function BotComputerSection({ bot }: { bot: ComputerBot }) {
     }, `Aiden couldn't update ${bot.name}'s computer.`);
   const reset = () =>
     run(async () => {
-      cache.putComputer(await botComputersApi.reset(bot.id));
+      cache.putComputer(await botComputersApi.reset(bot.id, { force: true }));
       void cache.refresh();
     }, `Aiden couldn't reset ${owner}.`);
   const remove = () =>
@@ -230,7 +230,9 @@ export function BotComputerSection({ bot }: { bot: ComputerBot }) {
         description={
           computer?.activeBotId && computer.activeBotId !== bot.id
             ? `${activeBotName ?? "Another Bot"} is currently using ${computer.computerName}. Stopping it interrupts active work for every Bot assigned to it.`
-            : `${otherAssignedNames.join(", ")} also use ${computer?.computerName ?? owner}. Stopping it turns off the computer for every Bot assigned to it.`
+            : otherAssignedNames.length === 1
+              ? `${otherAssignedNames[0]} also uses ${computer?.computerName ?? owner}. Stopping it turns off the computer for every Bot assigned to it.`
+              : `${otherAssignedNames.join(", ")} also use ${computer?.computerName ?? owner}. Stopping it turns off the computer for every Bot assigned to it.`
         }
         confirmLabel="Stop computer"
         confirmVariant="destructive"
@@ -293,7 +295,9 @@ export function BotComputerSection({ bot }: { bot: ComputerBot }) {
         description={
           isSharedWithOthers
             ? `${bot.name} will stop using ${owner}, while ${owner} stays for other Bots. ${bot.name}'s per-Bot folder on ${owner} is removed (its own Computer folder stays).`
-            : `Aiden stops it and deletes it. Files in ${bot.name}'s Computer folder stay, and you can give ${bot.name} a new computer later.`
+            : computer?.computerId.startsWith("aiden-bot-")
+              ? `Aiden stops it and deletes it. Files in ${bot.name}'s Computer folder stay, and you can give ${bot.name} a new computer later.`
+              : `Aiden stops and deletes this virtual machine and its mounted workspace folder (~/Shared and ~/bots). Files in ${bot.name}'s own Computer folder stay, and you can assign ${bot.name} a new computer later.`
         }
         confirmLabel="Remove computer"
         confirmVariant="destructive"

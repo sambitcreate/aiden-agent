@@ -116,7 +116,7 @@ function resolveHeldComputerTarget(
   }
   const otherNames = matched.assignedBotIds
     .filter((id) => id !== botId)
-    .map((id) => botNames?.get(id) ?? id);
+    .map((id) => botNames?.get(id) ?? "another Bot");
   const text = formatBotSettingsComputerLine(target, () =>
     otherNames.length > 0 ? `${matched.name} (already used by ${otherNames.join(", ")})` : matched.name,
   );
@@ -169,6 +169,7 @@ export function HeldSettingsCard({
   const resolvedComputer = computerTarget
     ? resolveHeldComputerTarget(computerTarget, botId, computers, botNames)
     : undefined;
+  const nonComputerOther = change.lines.filter((line) => line !== "Instructions" && !line.startsWith("Computer: "));
   const other = change.lines
     .filter((line) => line !== "Instructions")
     .map((line) => (line.startsWith("Computer: ") && resolvedComputer ? resolvedComputer.text : line));
@@ -204,9 +205,16 @@ export function HeldSettingsCard({
         {heldReasonText(botName, change.heldReason ?? "not_owner", change.fields)}
       </Text>
       {waitingForComputers ? (
-        <Text as="p" variant="small" color="tertiary">
-          Loading computer details…
-        </Text>
+        <>
+          {nonComputerOther.length > 0 ? (
+            <Text as="p" variant="small" color="secondary">
+              {nonComputerOther.join(" · ")}
+            </Text>
+          ) : null}
+          <Text as="p" variant="small" color="tertiary">
+            Loading computer details…
+          </Text>
+        </>
       ) : other.length > 0 ? (
         <Text as="p" variant="small" color="secondary">
           {other.join(" · ")}

@@ -127,7 +127,7 @@ test("Reset and Remove each ask first, and only the confirmed one reaches main",
   fireEvent.click(screen.getByRole("button", { name: "Reset" }));
   dialog = await screen.findByRole("alertdialog");
   fireEvent.click(within(dialog).getByRole("button", { name: "Reset computer" }));
-  await waitFor(() => assert.deepEqual(ipc.sent("botComputers:reset"), [[bot.id]]));
+  await waitFor(() => assert.deepEqual(ipc.sent("botComputers:reset"), [[bot.id, { force: true }]]));
   // The fresh copy is made from the current base.
   await waitFor(() => assert.equal(screen.queryByText(/Made from an older base/u), null));
 
@@ -299,4 +299,88 @@ test("joining a VM already used by another Bot and stopping an active shared VM 
   assert.deepEqual(assigned, []);
   fireEvent.click(within(assignDialog).getByRole("button", { name: "Switch computer" }));
   await waitFor(() => assert.deepEqual(assigned, [[bot.id, { kind: "existing", computerId: "vm-ben" }]]));
+});
+
+test("sole-assigned pool VM Remove discloses workspace deletion, confirmed Reset passes force: true, and 1 co-tenant Stop uses singular verb", async () => {
+  const resets: unknown[] = [];
+  const poolVm = {
+    id: "vm-solo",
+    name: "Solo Linux",
+    kind: "dedicated" as const,
+    vmName: "aiden-vm-solo",
+    state: "running" as const,
+    baseBuild: "25G83",
+    outdated: false,
+    assignedBotIds: [bot.id],
+    queuedBotIds: [],
+    controller: "bot" as const,
+  };
+  let current: BotComputersStatus = {
+    ...status(READY, [
+      computer({
+        vmName: "aiden-vm-solo",
+        computerId: "vm-solo",
+        computerName: "Solo Linux",
+        shared: false,
+        state: "running",
+      }),
+    ]),
+    vms: [poolVm],
+  };
+  installBotTestIpc({
+    "bots:list": () => [
+      { id: bot.id, name: "Ada" },
+      { id: "bot-2", name: "Ben" },
+    ],
+    "botComputers:status": () => current,
+    "botComputers:reset": (botId, opts) => {
+      resets.push([botId, opts]);
+      return current.computers[0]!;
+    },
+  });
+  await mount();
+
+  // Sole-assigned pool vm-* Remove dialog discloses workspace deletion (~/Shared and ~/bots).
+  fireEvent.click(await screen.findByRole("button", { name: "Remove" }));
+  const removeDialog = await screen.findByRole("alertdialog");
+  assert.match(removeDialog.textContent ?? "", /deletes this virtual machine and its mounted workspace folder \(~\/Shared and ~\/bots\)/u);
+  fireEvent.click(within(removeDialog).getByRole("button", { name: "Cancel" }));
+  await waitFor(() => assert.equal(screen.queryByRole("alertdialog"), null));
+
+  // Confirmed Reset passes { force: true }.
+  fireEvent.click(screen.getByRole("button", { name: "Reset" }));
+  const resetDialog = await screen.findByRole("alertdialog");
+  fireEvent.click(within(resetDialog).getByRole("button", { name: "Reset computer" }));
+  await waitFor(() => assert.deepEqual(resets, [[bot.id, { force: true }]]));
+
+  // Stop dialog with 1 idle co-tenant uses singular "Ben also uses".
+  const sharedVm = {
+    id: "shared",
+    name: "Shared computer",
+    kind: "shared" as const,
+    vmName: "aiden-vm-shared",
+    state: "running" as const,
+    baseBuild: "25G83",
+    outdated: false,
+    assignedBotIds: [bot.id, "bot-2"],
+    queuedBotIds: [],
+    controller: "bot" as const,
+  };
+  current = {
+    ...status(READY, [
+      computer({
+        vmName: "aiden-vm-shared",
+        computerId: "shared",
+        computerName: "Shared computer",
+        shared: true,
+        state: "running",
+      }),
+    ]),
+    vms: [sharedVm],
+  };
+  emitBotTestNotification(BOT_COMPUTERS_CHANGED_CHANNEL, current);
+  await screen.findByText(/Bots on Shared computer share one Linux desktop/u);
+  fireEvent.click(screen.getByRole("button", { name: "Stop" }));
+  const stopDialog = await screen.findByRole("alertdialog");
+  assert.match(stopDialog.textContent ?? "", /Ben also uses Shared computer\./u);
 });

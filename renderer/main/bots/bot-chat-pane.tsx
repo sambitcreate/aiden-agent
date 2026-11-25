@@ -1830,7 +1830,7 @@ export function BotChatPane({ botId }: { botId: string }) {
           botId={current.id}
           botName={current.name}
           currentInstructions={current.instructions}
-          computers={botComputers.data?.vms}
+          computers={!botComputers.supported || botComputers.isError ? [] : botComputers.data?.vms}
           botNames={botNameMap}
           onRespond={async (decision) => {
             await respondToSettings(change.changeId, decision);

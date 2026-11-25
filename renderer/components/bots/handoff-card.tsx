@@ -311,22 +311,22 @@ export function HandoffCard({
         <p className="mt-1 text-tertiary">{`${name} reads any note you send. Enter passwords, codes and card numbers on the page, never in the chat.`}</p>
       ) : null}
       {signIn && !elsewhere ? (
-        <>
-          <p className="mt-1 text-tertiary">
-            {onComputer(handoff)
-              ? sharedComputer
-                ? `Opens on ${sharedComputer.name}, with you in control. ${name} waits until you answer, and never sees your password.`
-                : `Opens on ${name}’s own computer, with you in control. ${name} waits until you answer, and never sees your password.`
-              : `Opens in ${name}’s own browser. ${name} never sees your password.`}
-          </p>
-          {onComputer(handoff) && sharedComputer ? (
-            <p className="mt-1 text-secondary">
-              {sharedOtherBots.length > 0
-                ? `Shared computer: ${sharedOtherBots.join(", ")} also use ${sharedComputer.name} and share its Linux desktop and Chromium sign-ins.`
-                : `Shared computer: other Bots assigned to ${sharedComputer.name} share its Linux desktop and Chromium sign-ins.`}
-            </p>
-          ) : null}
-        </>
+        <p className="mt-1 text-tertiary">
+          {onComputer(handoff)
+            ? sharedComputer
+              ? `Opens on ${sharedComputer.name}, with you in control. ${name} waits until you answer, and never sees your password.`
+              : `Opens on ${name}’s own computer, with you in control. ${name} waits until you answer, and never sees your password.`
+            : `Opens in ${name}’s own browser. ${name} never sees your password.`}
+        </p>
+      ) : null}
+      {handoff.target === "computer" && finishOn === undefined && sharedComputer ? (
+        <p className="mt-1 text-secondary">
+          {sharedOtherBots.length === 1
+            ? `Shared computer: ${sharedOtherBots[0]} also uses ${sharedComputer.name} and shares its Linux desktop and Chromium sign-ins.`
+            : sharedOtherBots.length > 1
+              ? `Shared computer: ${sharedOtherBots.join(", ")} also use ${sharedComputer.name} and share its Linux desktop and Chromium sign-ins.`
+              : `Shared computer: other Bots assigned to ${sharedComputer.name} share its Linux desktop and Chromium sign-ins.`}
+        </p>
       ) : null}
     </BotNoticeCard>
   );

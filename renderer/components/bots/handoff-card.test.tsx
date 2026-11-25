@@ -242,4 +242,19 @@ test("a computer sign-in card on a shared VM warns that other Bots share the des
   );
   screen.getByText("Opens on Shared computer, with you in control. Ada waits until you answer, and never sees your password.");
   screen.getByText("Shared computer: Ben, Clara also use Shared computer and share its Linux desktop and Chromium sign-ins.");
+
+  // Action handoffs on a shared VM also show the disclosure, and 1 co-tenant uses singular verbs.
+  cleanup();
+  render(
+    <Card
+      name="Ada"
+      avatar={DEFAULT_BOT_AVATAR}
+      handoff={{ ...HANDOFF, open: undefined, target: "computer" }}
+      sharedComputer={{ name: "Shared computer", otherBotNames: ["Ben"] }}
+      onOpen={() => undefined}
+      onAnswer={() => undefined}
+    />,
+  );
+  screen.getByText("Opens on Shared computer, with you in control. Ada waits until you answer.");
+  screen.getByText("Shared computer: Ben also uses Shared computer and shares its Linux desktop and Chromium sign-ins.");
 });

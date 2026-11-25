@@ -90,9 +90,13 @@ from the new base automatically.
    - Shuts the base down cleanly, deletes the temporary seed ISO, and deletes
      the verified Debian download. No manual permission prompts are needed.
 4. **Give a Bot a computer.** In the Bot's Advanced tab, **Computer → Give a
-   computer** makes the Bot its own APFS copy-on-write clone of the base
-   (`aiden-bot-<id>`). It stays off until it is needed, and stops again when
-   idle.
+   computer** assigns the Bot according to Settings → Computers & VMs → **Default
+   for new Bots**: by default **Shared computer** (`aiden-vm-shared`, lazily
+   cloned once from the base and shared across Bots through a FIFO queue), or a
+   fresh dedicated APFS copy-on-write clone (`aiden-vm-<id>`) when set to **New
+   computer for each Bot**. You can also switch any Bot between **Shared
+   computer**, another existing Linux VM, or **+ New computer** from the picker.
+   Every VM stays off until it is needed, and stops again when idle.
 
 When an Aiden release pins a newer Debian image or snapshot date, Settings shows
 **Update base**. It downloads the new image and builds `aiden-base-next` beside
@@ -331,14 +335,19 @@ Aiden's data folder for owner-Mac debugging. Delete recordings afterwards.
 ## Removal
 
 - **Remove** in a Bot's Advanced tab disconnects the Bot from the shared
-  computer (leaving the shared VM intact for other Bots) or stops and deletes a
-  dedicated VM that only that Bot uses. Files in the Bot's `<botHome>/Computer`
-  folder stay, and you can assign the Bot a computer later.
+  computer (leaving the shared VM intact for other Bots and removing that Bot's
+  `bots/<botDir>/` subfolder on the shared computer) or stops and deletes a
+  dedicated VM that only that Bot uses. Deleting a sole-assigned pool VM
+  (`vm-*`) also deletes its mounted workspace folder
+  (`bot-computers/computers/<id>/Computer/`, i.e. `~/Shared` and
+  `~/bots/<dir>`); each Bot's own `<botHome>/Computer` folder (used by legacy
+  `aiden-bot-*` VMs) stays, and you can assign the Bot a computer later.
 - **Reset** deletes the VM and makes a fresh copy of the current base. Files in
   the mounted `Computer` folder stay.
 - **Delete Bot** disconnects the Bot from the shared computer (without deleting
-  the shared VM) or stops and deletes a dedicated VM that only that Bot used,
-  then erases the Bot's files, including its `<botHome>/Computer` folder.
+  the shared VM, while removing that Bot's `bots/<botDir>/` subfolder) or stops
+  and deletes a dedicated VM (and its pool workspace folder) that only that Bot
+  used, then erases the Bot's files, including its `<botHome>/Computer` folder.
 - **Remove everything** in Settings → Computers & VMs → Bot computers asks
   first, then stops and deletes every Bot computer (including one an earlier
   launch left running), the base, the Linux download and any partial download,

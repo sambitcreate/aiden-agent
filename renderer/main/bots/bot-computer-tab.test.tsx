@@ -470,6 +470,10 @@ test("a shared computer shows its name badge and a live queue banner when anothe
     return el;
   });
   assert.equal(banner.textContent, "Waiting for Researcher on Shared computer (queue #1)");
+  const readOnlyNotice = panel.querySelector("[data-bot-computer-read-only]");
+  assert.equal(readOnlyNotice?.textContent, "Researcher is using it · Click or type to take over");
+  const screenEl = panel.querySelector("[data-bot-computer-screen]");
+  assert.match(screenEl?.getAttribute("aria-label") ?? "", /Researcher is using it/u);
 
   // Once taken over by the person, the status line names the shared computer.
   act(() =>

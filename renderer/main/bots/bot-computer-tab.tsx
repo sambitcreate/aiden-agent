@@ -194,9 +194,14 @@ function ComputerScreen({ bot, computer, active, variant, onScreen }: ComputerSc
     requestGrant,
   });
   const botDrives = computer.controller === "bot";
+  const otherHolding = Boolean(computer.activeBotId && computer.activeBotId !== bot.id);
+  const botsQuery = useBots(false, otherHolding);
+  const activeUserName = otherHolding
+    ? (botsQuery.data?.find((entry) => entry.id === computer.activeBotId)?.name ?? "Another Bot")
+    : bot.name;
   const pointer = useBotPointer(bot.id, active && botDrives);
   const screenRef = React.useRef<HTMLDivElement | null>(null);
-  const owner = `${bot.name}'s computer`;
+  const owner = computer.shared ? computer.computerName : `${bot.name}'s computer`;
   const screenSize = stream.screen && stream.screen.width > 0 && stream.screen.height > 0 ? stream.screen : null;
   const aspect = (screenSize ?? BOT_COMPUTER_DEFAULT_SCREEN).width / (screenSize ?? BOT_COMPUTER_DEFAULT_SCREEN).height;
   const onScreenRef = React.useRef(onScreen);
@@ -230,7 +235,7 @@ function ComputerScreen({ bot, computer, active, variant, onScreen }: ComputerSc
         aria-roledescription="computer screen"
         aria-label={
           botDrives
-            ? `${owner} screen. ${bot.name} is using it; click or type here to take over.`
+            ? `${owner} screen. ${activeUserName} is using it; click or type here to take over.`
             : `${owner} screen. Click or drag to use the mouse; type to send keys while focused.`
         }
         onPointerDown={stream.pointer("begin")}
@@ -256,7 +261,7 @@ function ComputerScreen({ bot, computer, active, variant, onScreen }: ComputerSc
         ) : null}
         {botDrives && overlays ? (
           <span className="device-viewer-notice" data-bot-computer-read-only>
-            {bot.name} is using it · Click or type to take over
+            {activeUserName} is using it · Click or type to take over
           </span>
         ) : null}
         {stream.status === "error" ? (
@@ -271,7 +276,7 @@ function ComputerScreen({ bot, computer, active, variant, onScreen }: ComputerSc
         ) : null}
       </div>
       <span className="sr-only" role="status" aria-live="polite">
-        {streaming ? (botDrives ? `${bot.name} is using ${owner}` : `You're using ${owner}`) : stream.status === "error" ? "Disconnected" : "Connecting…"}
+        {streaming ? (botDrives ? `${activeUserName} is using ${owner}` : `You're using ${owner}`) : stream.status === "error" ? "Disconnected" : "Connecting…"}
       </span>
     </div>
   );
