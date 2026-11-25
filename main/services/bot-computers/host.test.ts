@@ -2209,3 +2209,80 @@ test("Linux Bot computers disable Lume VNC, tunnel guest X0tigervnc on 127.0.0.1
     },
   );
 });
+
+test("missing aiden-base on a Linux install never triggers bogus macOS migration and recovers from aiden-base-next", async () => {
+  const linuxRaw = Buffer.from("debian f2 recovery image\n".repeat(64));
+  const linuxImage = {
+    version: "13",
+    build: "20261123-2671",
+    url: "https://cloud.debian.org/images/debian-f2.raw",
+    bytes: linuxRaw.length,
+    sha256: createHash("sha256").update(linuxRaw).digest("hex"),
+  };
+  await withHost(
+    async (context) => {
+      const migratedNotes: string[] = [];
+      context.serve(linuxImage.url, linuxRaw);
+      await setUp(context);
+      await context.host.give("ada");
+      const botVm = botComputerVmName("ada");
+      assert.ok(context.vmNames().includes(botVm));
+
+      // Delete aiden-base from Lume storage without a staging copy and strip macosMigration to simulate an older Linux install.
+      const fakeStatePath = path.join(context.root, "vms", ".fake-state.json");
+      const fakeVms = JSON.parse(readFileSync(fakeStatePath, "utf8")) as { vms: Record<string, Record<string, unknown>> };
+      const savedBase = fakeVms.vms[BOT_COMPUTER_BASE_VM];
+      delete fakeVms.vms[BOT_COMPUTER_BASE_VM];
+      writeFileSync(fakeStatePath, JSON.stringify(fakeVms));
+      const stateFile = path.join(context.root, "state.json");
+      const raw = JSON.parse(readFileSync(stateFile, "utf8")) as Record<string, unknown>;
+      delete raw.macosMigration;
+      writeFileSync(stateFile, JSON.stringify(raw));
+
+      // Reconcile twice: guestOs stays "linux", Ada's Linux VM is untouched, and no macOS migration fires.
+      const host1 = context.relaunch({
+        image: linuxImage,
+        onMacosComputerMigrated: (botId) => {
+          migratedNotes.push(botId);
+        },
+      });
+      await host1.reconcile();
+      const host2 = context.relaunch({
+        image: linuxImage,
+        onMacosComputerMigrated: (botId) => {
+          migratedNotes.push(botId);
+        },
+      });
+      await host2.reconcile();
+      assert.deepEqual(migratedNotes, [], "missing Linux base must never trigger macOS migration");
+      assert.ok(context.vmNames().includes(botVm), "Ada's Linux VM disk must survive");
+      const persisted = JSON.parse(readFileSync(stateFile, "utf8")) as {
+        setup?: { guestOs?: string };
+        computers?: Record<string, { migratedFromMacos?: boolean }>;
+      };
+      assert.equal(persisted.setup?.guestOs, "linux");
+      assert.equal(persisted.computers?.ada?.migratedFromMacos, undefined);
+      assert.equal((await host2.status()).migrationNotice, undefined);
+
+      // When a healthy aiden-base-next staging VM exists while aiden-base is missing, reconcile recovers aiden-base.
+      const fakeVms2 = JSON.parse(readFileSync(fakeStatePath, "utf8")) as { vms: Record<string, Record<string, unknown>> };
+      fakeVms2.vms[BOT_COMPUTER_STAGING_BASE_VM] = { ...savedBase, status: "stopped" };
+      writeFileSync(fakeStatePath, JSON.stringify(fakeVms2));
+      const stagedState = JSON.parse(readFileSync(stateFile, "utf8")) as {
+        setup: Record<string, unknown>;
+      };
+      stagedState.setup = {
+        guestOs: "linux",
+        baseBuild: linuxImage.build,
+        baseVersion: linuxImage.version,
+      };
+      writeFileSync(stateFile, JSON.stringify(stagedState));
+      const host3 = context.relaunch({ image: linuxImage });
+      await host3.reconcile();
+      assert.ok(context.vmNames().includes(BOT_COMPUTER_BASE_VM), "aiden-base recovered from healthy aiden-base-next");
+      assert.equal(context.vmNames().includes(BOT_COMPUTER_STAGING_BASE_VM), false);
+      assert.equal((await host3.status()).setup.kind, "ready");
+    },
+    { image: linuxImage },
+  );
+});

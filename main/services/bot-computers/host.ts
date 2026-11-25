@@ -1141,7 +1141,15 @@ export function createBotComputerHost(deps: BotComputerHostDependencies): BotCom
         baseVersion: image.version,
         ...(guestDriver ? { guestDriver } : {}),
       };
-      if (draft.macosMigration?.completedAt !== undefined) draft.macosMigration.noticeDismissed = true;
+      if (draft.macosMigration?.completedAt !== undefined) {
+        draft.macosMigration.noticeDismissed = true;
+      } else {
+        draft.macosMigration = {
+          completedAt: now(),
+          freedBytes: 0,
+          noticeDismissed: true,
+        };
+      }
     });
     setupState = undefined;
     deps.onSetupReady?.();
@@ -1688,13 +1696,16 @@ export function createBotComputerHost(deps: BotComputerHostDependencies): BotCom
         const macosVms = vms.filter(
           (info) =>
             (isAidenVmName(info.name) || info.name === BOT_COMPUTER_STAGING_BASE_VM) &&
-            (info.os === "macOS" || (info.os === undefined && state.setup.guestOs !== "linux")),
+            (info.os === "macOS" ||
+              (info.os === undefined &&
+                state.setup.guestOs !== "linux" &&
+                state.setup.baseBuild !== undefined &&
+                !/^\d{8}-\d+$/u.test(state.setup.baseBuild))),
         );
         const hasLegacyState =
           state.setup.guestOs !== "linux" &&
-          (state.setup.baseBuild !== undefined ||
-            (state.setup.ipswPath !== undefined && /\.ipsw$/iu.test(state.setup.ipswPath)) ||
-            Object.keys(state.computers).length > 0);
+          ((state.setup.ipswPath !== undefined && /\.ipsw$/iu.test(state.setup.ipswPath)) ||
+            (state.setup.baseBuild !== undefined && !/^\d{8}-\d+$/u.test(state.setup.baseBuild)));
         const hasPendingMigration =
           state.macosMigration !== undefined && state.macosMigration.completedAt === undefined;
         if (macosVms.length > 0 || legacyIpswPaths.length > 0 || hasLegacyState || hasPendingMigration) {
@@ -1775,6 +1786,16 @@ export function createBotComputerHost(deps: BotComputerHostDependencies): BotCom
           if (allRemoved || freedThisPass > 0 || migratedBotIds.length > 0) {
             deps.onRemoved?.();
           }
+        } else if (state.setup.guestOs === "linux") {
+          state = await store.update((draft) => {
+            if (!draft.macosMigration?.completedAt) {
+              draft.macosMigration = {
+                completedAt: now(),
+                freedBytes: 0,
+                noticeDismissed: true,
+              };
+            }
+          });
         }
       }
 
@@ -1799,9 +1820,31 @@ export function createBotComputerHost(deps: BotComputerHostDependencies): BotCom
         }
       }
       if (ready(state) && !byName.has(BOT_COMPUTER_BASE_VM) && !setupTask) {
-        await store.update((draft) => {
-          draft.setup = {};
-        });
+        const staging = byName.get(BOT_COMPUTER_STAGING_BASE_VM);
+        let recoveredBase = false;
+        if (staging && staging.state !== "provisioning" && !staging.stale) {
+          try {
+            if (staging.state === "running") await stopVm(BOT_COMPUTER_STAGING_BASE_VM, true);
+            await lumeOrThrow(
+              { op: "clone", source: BOT_COMPUTER_STAGING_BASE_VM, target: BOT_COMPUTER_BASE_VM },
+              600_000,
+              "Aiden couldn't recover the base computer.",
+            );
+            await deleteVm(BOT_COMPUTER_STAGING_BASE_VM).catch((error: unknown) =>
+              log("Deleting recovered staging base did not finish.", error),
+            );
+            byName.delete(BOT_COMPUTER_STAGING_BASE_VM);
+            byName.set(BOT_COMPUTER_BASE_VM, { ...staging, name: BOT_COMPUTER_BASE_VM, state: "stopped" });
+            recoveredBase = true;
+          } catch (error: unknown) {
+            log("Recovering base computer from staging copy did not finish.", error);
+          }
+        }
+        if (!recoveredBase) {
+          state = await store.update((draft) => {
+            draft.setup = draft.setup.guestOs ? { guestOs: draft.setup.guestOs } : {};
+          });
+        }
       }
       for (const [botId, record] of Object.entries(state.computers)) {
         if (record.migratedFromMacos) {
