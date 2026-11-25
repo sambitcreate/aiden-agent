@@ -16,7 +16,7 @@ export interface BotHeadStatus {
   name: string;
   working: boolean;
   needsYou: boolean;
-  /** Replies newer than the seen watermark; null when unread is known but not how many (no live feed). */
+  /** Replies newer than the seen watermark; null when unread is known but not how many (an older summary without reply times). */
   unreadCount: number | null;
   unread: boolean;
   /** One line for the peek: waiting, working, a status, or the latest message. */
@@ -49,9 +49,10 @@ function snapshotNeedsYou(snapshot: BotLiveSnapshot): boolean {
 }
 
 /**
- * One head's status. `live` subscribes to the Bot's feed for an exact unread
- * count; leave it off where a subscription would make main think the chat is
- * on screen (the Aiden window, whose focus counts for every Bot it subscribes to).
+ * One head's status. `live` subscribes to the Bot's feed; leave it off where a
+ * subscription would make main think the chat is on screen (the Aiden window,
+ * whose focus counts for every Bot it subscribes to). Without it the unread
+ * count comes from the summary's recent reply times.
  * `viewing` is set while this Bot's mini chat is open: it has nothing unread.
  */
 export function useBotHeadStatus(botId: string, { live, viewing }: { live: boolean; viewing: boolean }): BotHeadStatus {
@@ -67,8 +68,15 @@ export function useBotHeadStatus(botId: string, { live, viewing }: { live: boole
   if (!viewing) {
     if (snapshot) unreadCount = botUnreadReplyCount(snapshot.entries, seenAt);
     else {
+      // No feed (heads in the Aiden window): count from the summary's reply times.
       const lastReplyAt = summary.data?.lastReplyAt ?? null;
-      unreadCount = lastReplyAt !== null && lastReplyAt > seenAt ? null : 0;
+      const recent = summary.data?.recentReplyAt;
+      unreadCount =
+        lastReplyAt === null || lastReplyAt <= seenAt
+          ? 0
+          : recent
+            ? Math.max(1, recent.filter((at) => at > seenAt).length)
+            : null;
     }
   }
   const preview = snapshot ? (botTranscriptPreview(snapshot.entries)?.text ?? null) : (summary.data?.preview ?? null);

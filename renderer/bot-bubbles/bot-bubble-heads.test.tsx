@@ -88,6 +88,19 @@ test("a closed head says how many replies are unread and that the Bot needs you"
   assert.ok(await head(/^Penny, 2 unread, needs you\. Enter opens, Delete closes\.$/u));
 });
 
+test("a head inside the Aiden window counts unread replies from the summary without subscribing to the chat", async () => {
+  seenUpTo(100);
+  const calls = mount(
+    {
+      "bots:live:summary": () => summary({ lastReplyAt: 130, recentReplyAt: [130, 120, 90] }),
+      "bots:bubbles:state": () => stateWith({ host: "window" }),
+    },
+    { host: "window" },
+  );
+  assert.ok(await head(/^Penny, 2 unread\. Enter opens, Delete closes\.$/u));
+  assert.equal(calls.filter((call) => call.channel === "bots:live:subscribe").length, 0, "the Aiden window never marks the chat as on screen");
+});
+
 test("Delete on a focused head closes its bubble", async () => {
   const calls = mount({ "bots:bubbles:close": () => stateWith({ bubbles: [] }) });
   const button = await head(/^Penny/u);

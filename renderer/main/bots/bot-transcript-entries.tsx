@@ -448,7 +448,7 @@ export function TranscriptEntries({
                 key={row.id}
                 change={row.change}
                 status={row.change.mode === "applied" ? row.status : row.status === "pending" ? "applied" : row.status}
-                onUndo={onUndoSettings ? () => onUndoSettings(row.change.changeId) : () => Promise.reject(new Error("Undo isn’t available here."))}
+                onUndo={onUndoSettings ? () => onUndoSettings(row.change.changeId) : undefined}
               />
             );
         }

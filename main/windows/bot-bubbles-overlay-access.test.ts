@@ -2,8 +2,12 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { guardBotBubbleOverlayHandlers, type BotBubbleOverlayAccess } from "./bot-bubbles-overlay-access.js";
 
-type FakeEvent = { from: "overlay" | "main" };
-const overlay: FakeEvent = { from: "overlay" };
+type FakeEvent = { from: "overlay" | "main"; display?: "left" | "right"; trusted?: boolean };
+// The overlay on the right-hand display draws bot-in; bot-elsewhere's head is on the left one.
+const overlay: FakeEvent = { from: "overlay", display: "right", trusted: true };
+const leftOverlay: FakeEvent = { from: "overlay", display: "left", trusted: true };
+// A subframe, or a page the overlay window navigated to: not the bubble page itself.
+const untrustedOverlay: FakeEvent = { from: "overlay", display: "right", trusted: false };
 const main: FakeEvent = { from: "main" };
 
 function harness() {
@@ -11,8 +15,9 @@ function harness() {
   const calls: string[] = [];
   const access: BotBubbleOverlayAccess<FakeEvent> = {
     isOverlayEvent: (event) => event.from === "overlay",
-    bubbledBotIds: () => new Set(["bot-in"]),
-    approvalBotId: (waitId) => ({ "wait-in": "bot-in", "wait-out": "bot-out" })[waitId] ?? null,
+    isTrustedOverlayEvent: (event) => event.from === "overlay" && event.trusted === true,
+    bubbledBotIds: (event) => new Set(event.display === "left" ? ["bot-elsewhere"] : ["bot-in"]),
+    approvalBotId: (waitId) => ({ "wait-in": "bot-in", "wait-out": "bot-out", "wait-elsewhere": "bot-elsewhere" })[waitId] ?? null,
   };
   const handle = guardBotBubbleOverlayHandlers<FakeEvent>((channel, handler) => handlers.set(channel, handler), access);
   for (const channel of [
@@ -26,13 +31,14 @@ function harness() {
     "bots:delete",
     "bots:live:unsubscribe",
     "bots:bubbles:forgetRecent",
+    "bots:bubbles:state",
   ]) {
     handle(channel, (_event, ...args) => {
       calls.push(`${channel} ${JSON.stringify(args)}`);
       return "ok";
     });
   }
-  handle("bots:list", async () => [{ id: "bot-in" }, { id: "bot-out" }]);
+  handle("bots:list", async () => [{ id: "bot-in" }, { id: "bot-out" }, { id: "bot-elsewhere" }]);
   const invoke = (channel: string, event: FakeEvent, ...args: unknown[]) =>
     Promise.resolve().then(() => handlers.get(channel)!(event, ...args));
   return { invoke, calls };
@@ -95,5 +101,27 @@ test("the main window is unaffected and other channels pass through", async () =
 test("an overlay's Bot list holds only bubbled Bots", async () => {
   const { invoke } = harness();
   assert.deepEqual(await invoke("bots:list", overlay), [{ id: "bot-in" }]);
-  assert.deepEqual(await invoke("bots:list", main), [{ id: "bot-in" }, { id: "bot-out" }]);
+  assert.deepEqual(await invoke("bots:list", main), [{ id: "bot-in" }, { id: "bot-out" }, { id: "bot-elsewhere" }]);
+});
+
+test("an overlay reaches only the heads on its own display", async () => {
+  const { invoke, calls } = harness();
+  await assert.rejects(invoke("bots:send", overlay, { botId: "bot-elsewhere", text: "hi" }), /only on its own Bots/);
+  await assert.rejects(invoke("bots:live:subscribe", overlay, "bot-elsewhere"), /only on its own Bots/);
+  await assert.rejects(invoke("bots:approve", overlay, { waitId: "wait-elsewhere", decision: "allow" }), /only on its own Bots/);
+  assert.deepEqual(await invoke("bots:list", overlay), [{ id: "bot-in" }]);
+  assert.equal(await invoke("bots:send", leftOverlay, { botId: "bot-elsewhere", text: "hi" }), "ok");
+  assert.deepEqual(await invoke("bots:list", leftOverlay), [{ id: "bot-elsewhere" }]);
+  assert.deepEqual(calls, ['bots:send [{"botId":"bot-elsewhere","text":"hi"}]']);
+});
+
+test("a document in an overlay window that isn't the bubble page can't read or act on any Bot", async () => {
+  const { invoke, calls } = harness();
+  await assert.rejects(invoke("bots:send", untrustedOverlay, { botId: "bot-in", text: "hi" }), /Invalid Bot bubble sender/);
+  await assert.rejects(invoke("bots:live:subscribe", untrustedOverlay, "bot-in"), /Invalid Bot bubble sender/);
+  await assert.rejects(invoke("bots:approve", untrustedOverlay, { waitId: "wait-in", decision: "allow" }), /Invalid Bot bubble sender/);
+  await assert.rejects(invoke("bots:list", untrustedOverlay), /Invalid Bot bubble sender/);
+  await assert.rejects(invoke("bots:bubbles:state", untrustedOverlay), /Invalid Bot bubble sender/);
+  assert.equal(await invoke("bots:live:unsubscribe", untrustedOverlay, "bot-in"), "ok", "letting go of a feed stays safe");
+  assert.deepEqual(calls, ['bots:live:unsubscribe ["bot-in"]']);
 });

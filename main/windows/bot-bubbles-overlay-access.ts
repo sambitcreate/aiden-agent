@@ -1,13 +1,15 @@
-// A bubble overlay may act only on Bots that are bubbled now. Main wraps the
-// `handle` that registers the Bot and bubble IPC so every request from an
-// overlay document names one of its heads; requests from other windows pass
-// through untouched. Electron-free so the rule is checked by register-and-invoke.
+// A bubble overlay may act only on the Bots whose heads it draws. Main wraps
+// the `handle` that registers the Bot and bubble IPC so every request from an
+// overlay must come from its trusted main document and name one of that
+// overlay's heads; requests from other windows pass through untouched. Electron-free so the rule is checked by register-and-invoke.
 
 export interface BotBubbleOverlayAccess<Event> {
   /** Whether the request came from a bubble overlay window (any frame: fail closed). */
   isOverlayEvent(event: Event): boolean;
-  /** Bots that have a head out now. */
-  bubbledBotIds(): ReadonlySet<string>;
+  /** Whether it came from that overlay's own main document (the bubble page, not a subframe or another page). */
+  isTrustedOverlayEvent(event: Event): boolean;
+  /** Bots whose heads the sending overlay draws (its display's heads). */
+  bubbledBotIds(event: Event): ReadonlySet<string>;
   /** The Bot a waiting approval belongs to, or null when nothing waits under that id. */
   approvalBotId(waitId: string): string | null;
 }
@@ -65,6 +67,10 @@ export const BOT_BUBBLE_OVERLAY_BOT_ARGUMENT: Readonly<Record<string, BotIdOf>> 
   },
 };
 
+function assertTrustedOverlay<Event>(access: BotBubbleOverlayAccess<Event>, event: Event): void {
+  if (!access.isTrustedOverlayEvent(event)) throw new Error("Invalid Bot bubble sender.");
+}
+
 export function assertBotBubbleOverlayBotAccess<Event>(
   access: BotBubbleOverlayAccess<Event>,
   event: Event,
@@ -73,9 +79,10 @@ export function assertBotBubbleOverlayBotAccess<Event>(
 ): void {
   const botIdOf = BOT_BUBBLE_OVERLAY_BOT_ARGUMENT[channel];
   if (!botIdOf || !access.isOverlayEvent(event)) return;
+  assertTrustedOverlay(access, event);
   const botId = botIdOf(args, access as BotBubbleOverlayAccess<never>);
   if (botId === OPEN_NONE) return;
-  if (typeof botId !== "string" || !access.bubbledBotIds().has(botId)) {
+  if (typeof botId !== "string" || !access.bubbledBotIds(event).has(botId)) {
     throw new Error("A bubble can act only on its own Bots.");
   }
 }
@@ -83,8 +90,9 @@ export function assertBotBubbleOverlayBotAccess<Event>(
 type Handler<Event> = (event: Event, ...args: unknown[]) => unknown;
 
 /**
- * Wrap a `handle` so overlay requests on the channels above must name a
- * bubbled Bot, and an overlay's `bots:list` sees only bubbled Bots.
+ * Wrap a `handle` so overlay requests must come from the overlay's own page
+ * and, on the channels above, name one of its heads; an overlay's `bots:list`
+ * sees only its heads' Bots.
  */
 export function guardBotBubbleOverlayHandlers<Event>(
   handle: (channel: string, handler: Handler<Event>) => void,
@@ -93,18 +101,23 @@ export function guardBotBubbleOverlayHandlers<Event>(
   return (channel, handler) => {
     if (channel === "bots:list") {
       handle(channel, (event, ...args) => {
-        const result = handler(event, ...args);
-        if (!access.isOverlayEvent(event)) return result;
-        return Promise.resolve(result).then((bots) =>
+        if (!access.isOverlayEvent(event)) return handler(event, ...args);
+        assertTrustedOverlay(access, event);
+        const heads = access.bubbledBotIds(event);
+        return Promise.resolve(handler(event, ...args)).then((bots) =>
           Array.isArray(bots)
-            ? bots.filter((bot: { id?: unknown }) => typeof bot?.id === "string" && access.bubbledBotIds().has(bot.id))
+            ? bots.filter((bot: { id?: unknown }) => typeof bot?.id === "string" && heads.has(bot.id))
             : bots,
         );
       });
       return;
     }
     if (OVERLAY_UNSCOPED_CHANNELS.has(channel)) {
-      handle(channel, handler);
+      handle(channel, (event, ...args) => {
+        // Letting go of a feed is always safe; the rest still needs the overlay's own page.
+        if (channel !== "bots:live:unsubscribe" && access.isOverlayEvent(event)) assertTrustedOverlay(access, event);
+        return handler(event, ...args);
+      });
       return;
     }
     if (!(channel in BOT_BUBBLE_OVERLAY_BOT_ARGUMENT)) {

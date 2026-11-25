@@ -86,6 +86,18 @@ function liveDisplays(): OverlayDisplay[] {
   return screen.getAllDisplays().map((display) => ({ id: display.id, workArea: display.workArea }));
 }
 
+/** The Bots whose heads one display's overlay draws. */
+function botIdsOnDisplay(displayId: number): Set<string> {
+  const displays = liveDisplays();
+  const primary = screen.getPrimaryDisplay().id;
+  return new Set(
+    botBubbleService()
+      .current()
+      .bubbles.filter((bubble) => bubbleDisplayId(bubble.placement.displayId, displays, primary) === displayId)
+      .map((bubble) => bubble.botId),
+  );
+}
+
 function overlayForWebContents(id: number): Overlay | null {
   for (const overlay of overlays.values()) {
     if (!overlay.window.isDestroyed() && overlay.window.webContents.id === id) return overlay;
@@ -177,7 +189,7 @@ function createOverlay(display: OverlayDisplay): Overlay {
   markAuxiliaryWindow(window);
   // Bot notifications only for this overlay's heads; appearance and bubble notices always.
   registerBroadcastReceiver(window, BOT_BUBBLES_NOTIFICATION_CHANNELS, (channel, payload) =>
-    botBubbleOverlayHears(channel, payload, new Set(botBubbleService().current().bubbles.map((bubble) => bubble.botId))),
+    botBubbleOverlayHears(channel, payload, botIdsOnDisplay(display.id)),
   );
   // `skipTransformProcessType` keeps Aiden's Dock icon when showing over full-screen Spaces.
   window.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true, skipTransformProcessType: true });
@@ -396,7 +408,11 @@ export function botBubbleOverlayAccess(
 ): BotBubbleOverlayAccess<IpcMainInvokeEvent> {
   return {
     isOverlayEvent: (event) => isBotBubbleOverlayWebContents(event.sender.id),
-    bubbledBotIds: () => new Set(botBubbleService().current().bubbles.map((bubble) => bubble.botId)),
+    isTrustedOverlayEvent: isBotBubbleOverlayEvent,
+    bubbledBotIds: (event) => {
+      const overlay = overlayForWebContents(event.sender.id);
+      return overlay ? botIdsOnDisplay(overlay.displayId) : new Set();
+    },
     approvalBotId,
   };
 }

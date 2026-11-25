@@ -342,7 +342,16 @@ export interface BotLiveSummary {
   needsYou: boolean;
   /** When the newest reply with visible text arrived; the sidebar's unread dot compares it with last-viewed. */
   lastReplyAt: number | null;
+  /**
+   * When the newest person-facing replies arrived, newest first (at most
+   * BOT_RECENT_REPLY_LIMIT), so a surface that doesn't subscribe to the feed
+   * can still count what is unread.
+   */
+  recentReplyAt?: readonly number[];
 }
+
+/** How many reply times a summary carries: enough for a "99+" badge. */
+export const BOT_RECENT_REPLY_LIMIT = 100;
 
 /** Peer input and a turn that delegates are quiet until the host seals the root's final marker. */
 function peerAttention(entries: readonly BotTranscriptEntry[]): { quiet: Set<string>; finals: Map<string, { text: string; at?: number }> } {
@@ -363,6 +372,17 @@ export function botLastReplyAt(entries: readonly BotTranscriptEntry[]): number |
   const attention = peerAttention(entries);
   for (let index = entries.length - 1; index >= 0; index--) { const entry = entries[index]!, final = attention.finals.get(entry.id); if (final?.at !== undefined) return final.at; if (entry.type === "assistant" && !attention.quiet.has(entry.id) && entry.text.trim() && entry.at !== undefined) return entry.at; }
   return null;
+}
+/** When the newest person-facing replies arrived, newest first, by the same rule as botLastReplyAt. */
+export function botRecentReplyTimes(entries: readonly BotTranscriptEntry[], limit = BOT_RECENT_REPLY_LIMIT): number[] {
+  const attention = peerAttention(entries);
+  const times: number[] = [];
+  for (let index = entries.length - 1; index >= 0 && times.length < limit; index--) {
+    const entry = entries[index]!, final = attention.finals.get(entry.id);
+    if (final?.at !== undefined) times.push(final.at);
+    else if (entry.type === "assistant" && !attention.quiet.has(entry.id) && entry.text.trim() && entry.at !== undefined) times.push(entry.at);
+  }
+  return times;
 }
 /** The last thing worth previewing; full quiet text remains available in the transcript. */
 export function botTranscriptPreview(entries: readonly BotTranscriptEntry[]): { text: string; at?: number } | null {
