@@ -2013,12 +2013,21 @@ final class AidenChatViewModel {
                 request: request,
                 idempotencyKey: idempotencyKey
             )
-            // The Mac now holds this pick as the chat's own model.
-            if request.providerId == selectedProviderId, request.modelId == selectedModelId,
+            // A pick made after this send was built (counted in this session,
+            // or restored from disk against a send that kept where new chats
+            // start) may name the very level the send carried. If the send
+            // couldn't ask the Mac to keep that level, the pick wasn't
+            // delivered: it stays the chat's unsent pick, so the next send asks.
+            let pickPostdatesSend = modelPickGeneration != pickGeneration
+                || (restoredChatPick && attempt.startsWhereNewChatsStart == true)
+            let pickUndelivered = pickPostdatesSend && agentSlider != nil
+                && request.saveSelection != true && request.thinkingLevel != nil
+            // Otherwise the Mac now holds this pick as the chat's own model.
+            if !pickUndelivered, request.providerId == selectedProviderId, request.modelId == selectedModelId,
                request.thinkingLevel == selectedThinkingLevel {
                 hasUnsentModelPick = false
             }
-            if !chat.isBotChat {
+            if !chat.isBotChat, !pickUndelivered {
                 modelPreferenceStore.forgetChat(
                     for: context.instanceId,
                     chatID: chat.id,
