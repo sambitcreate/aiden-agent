@@ -45,7 +45,7 @@ Efforts are S (up to a day), M (a few days), L (a week or more) and XL (a projec
 | 07 | Inbox: triage, with All / Needs you / Done | Inbox tab list | 1A | UI + client (Option A) or server (Option B) | L |
 | 13 | New chat sheet | Compose flow | 1B | UI-only | M |
 | 05 / 20 | Agent slider: composer chip, track and Settings page | Model `Menu` with an effort submenu (`AidenChatComposer.swift:197-274`) | 1B | Server contract + UI on iOS and Android | L |
-| 09 | Live voice | Dictation in the composer only | 1B | Client (v1 turn-based voice); true Live is XL | M (v1) |
+| 09 | Live voice: a call relayed through the computer, no screen share | Dictation in the composer only | 1B | Server contract (Live voice relay) + client | XL |
 | 04 | Bot chat: intro header, status chip, suggestion cards, inline actions | Bot chat | 2A | UI + demo; memory text is a server contract | M |
 | 06 | Meet your Bot: a hatch flow of look, then name, then computer | New Bot form | 2A | UI-only (`POST /bots` already takes `avatar`) | M |
 | 10 | Bots gallery grid and templates | Bots list | 2A | UI; "Done" tiles need a server contract | M (M+ with Done) |
@@ -53,7 +53,7 @@ Efforts are S (up to a day), M (a few days), L (a week or more) and XL (a projec
 | 25 | Bot memory | Memory page | 2B | Copy on three platforms + UI | S + M |
 | 26 | Delete Bot | System alert | 2B | UI + client model (optimistic delete) | M |
 | 15 | Workspaces: Active / Archived, "branch · N changes" | Workspaces list | 3A | Server fill (no revision) + UI | S + S/M |
-| 16 | Workspace detail: tiles, mode picker, running row | Workspace detail, plus a **blank-sheet bug** | 3A | UI; mode Option B is a server contract | M |
+| 16 | Workspace detail: Files, Git and Artifacts tiles, mode picker, running row | Workspace detail, plus a **blank-sheet bug** | 3A | UI; Artifacts and mode Option B are server contracts | M + M |
 | 17 | Git review | Git screen with raw `.green` / `.red` / `.orange` (`:1541-1565`) | 3A | UI + demo routes | M |
 | 08 | Workspace run: "Edited N files" card, headline with elapsed time | Run transcript with a duplicate "Worked for" footer | 3A | UI on iOS and Android, no server change | M + M |
 | 14 | Search with All / Chats / Bots scopes | Search tab | 3B | UI-only (Files search deferred) | S–M |
@@ -63,7 +63,7 @@ Efforts are S (up to a day), M (a few days), L (a week or more) and XL (a projec
 | 23 | Pair | Pairing screen | 3B | UI-only | S–M |
 | 19 | Settings | App settings | 4A | UI on the new kit | M |
 | 21 | Appearance | Appearance as a `.sheet` (`AidenAppSettingsView.swift:218-220`) | 4A | UI; accent and app icon need owner calls | M |
-| 24 | Usage: monthly hero, By Bot | Usage view | 4A | UI; the month range and By Bot need a server contract | S–M + M–L |
+| 24 | Usage: monthly hero, By Bot, and a computer dropdown (All computers or one) | Usage view | 4A | UI + client model (sums hosts on the phone); the month range and By Bot need a server contract | M + M–L |
 | — | **Aurora** ambient background | Nothing | 4B | Client-only | M–L |
 
 The concepts for 05 and 20 are the same feature, so they are planned together. Neither has a live capture, and neither does 09.
@@ -139,12 +139,12 @@ The phases run in order. The screens inside each phase can run in parallel, one 
 
 ### Phase 4: server contract batches
 
-Ship the [server batches](#server-contract-batches) one at a time. Each claims the next revision when it merges.
+Ship the [server batches](#server-contract-batches) one at a time. Each claims the next revision when it merges. The Agent slider batch goes first, because the owner asked for the phone slider now.
 
 ### Phase 5: UI that needs the server
 
 - Agent slider UI and a read-only Settings page on iOS and Android (1B phase 3).
-- Voice mode v1 (1B phase 4).
+- Live voice through the computer (1B, after the Live voice relay batch).
 - Usage hero and By Bot (4A P7). Never show "$0.00" as the hero.
 - Bot tiles that show Done, and "active N ago".
 - The Computers sheet platform label and the keep-awake switch.
@@ -162,7 +162,11 @@ Android's navigation is organised around Bots and Workspaces (`AidenProductNavig
 | Bots | `memory_update.text`; `lastTurnEnd` and `lastActiveAt` on `GET /bots` | +1 | 04, 10, 11 |
 | Usage | `range=month` on usage; `GET /spending/bots?period=current` from the spending ledger, never the usage store (it has no Bot ids, `usage-store-core.ts:29-45`) | +1 | 24 |
 | Devices | `host.platform` and `host.kind` on `GET /server`; a remote "Keep this computer awake" switch | +1 | 12, 22 |
-| Optional | An inline-approval summary (07, Option B); a per-workspace approval mode (16, Option B); per-file commit (17); Files search (14); Wake-on-LAN (22); a Terminal route (16) | Each +1 | Only if the owner asks |
+| Live voice relay | A Live session started on the host for a chat; a stream that carries microphone and reply audio plus transcripts; a Live device grant; a feature token | +1 | 09 |
+| Workspace artifacts | `GET /workspaces/{id}/artifacts` and an artifact content route that returns self-contained HTML | +1 | 16 |
+| Optional | An inline-approval summary (07, Option B); a per-workspace approval mode (16, Option B); per-file commit (17); Files search (14); Wake-on-LAN (22) | Each +1 | Only if the owner asks |
+
+The owner dropped the Terminal tile on 2026-11-24, so there is no Terminal route.
 
 Every revision bump updates the iOS client, the Android client, the contract fixtures, `docs/aiden-remote-api-v1.md` and the OpenAPI document in the same PR.
 
@@ -256,9 +260,44 @@ The track reports proposed some components twice under different names. These ar
 - New test files go in the right `package.json` script and in `scripts/ci-test-registry.json` where they apply.
 - Android changes are checked on a headless AVD.
 
+## Owner decisions (2026-11-24)
+
+These answers override the recommendations below where they differ.
+
+- **Order.** Merge #925 (Hi-bit) first, and start this plan in parallel.
+- **Tabs (Q1).** Yes: Chats · Bots · Workspaces · Inbox, with Search and Settings in the drawer.
+- **Agent slider (Q6).** Build the phone slider in this plan. Desktop PRs 0–4 merged (#888, #889, #892, #893, #896); the phone PR was left to the owner and has not been opened, so the slider server batch and the iOS slider UI are scheduled now (1B phases 2–3). Android decodes the new fields and its fixtures move with the revision; its slider UI comes with the later Android pass.
+- **Voice (Q7).** True Gemini Live, relayed through the computer: a live voice call only, with **no screen-share button**. This replaces the turn-based v1. It reuses the desktop's Aiden Live session (`gemini-live-assistant-plan.md`) on the host, and the phone streams microphone audio to it and plays the reply audio. It needs its own design pass and a server contract batch. See [Live voice through the computer](#live-voice-through-the-computer).
+- **Greeting name (Q3).** Use a name the host already sends, if it sends one. It does not today: `GET /server` carries only the computer's display name, and the desktop's `Profile.name` (`main/services/types.ts:1067`), which defaults to the macOS account's full name, is not on the wire, and the DTO allowlist forbids local usernames. So the phone gets an optional, device-local "Call me…" setting, also offered in onboarding, and the greeting is nameless until it is set.
+- **Aurora (Q19–Q20).** Subtle by default, on the Home root only. Needs you outranks Failed.
+- **Android (Q5).** Later. Android gets only the contract work and shared copy for now.
+- **Usage (24).** Keep the new direction, and add a computer dropdown at the top: **All computers** (the default) plus each paired desktop and `aiden serve` host. All computers sums each reachable host's own usage and spending on the phone, so no host ever sees another host's data. A host that is offline or too old to answer is listed with its last cached figures and marked as such, and it is never counted as zero. This builds on the existing multi-host machine list and adds no server route beyond the Usage batch.
+- **Workspace detail (16).** Remove the Terminal tile. The tiles are **Files**, **Git** and **Artifacts**. Artifacts lists the workspace's HTML artifacts and opens one in a locked-down web view on the phone. This needs a new server batch; see [Workspace artifacts](#workspace-artifacts).
+
+### Live voice through the computer
+
+- **Host.** The desktop already runs voice-only Aiden Live with Google's Live API. The phone asks the paired computer to start a Live session tied to a chat. The computer holds the Google credential and the Live socket, and the phone never sees either.
+- **Transport.** Microphone audio goes from the phone to the host, and reply audio and transcripts come back, over the existing authenticated Remote connection as a new stream. The design pass must measure round-trip latency on the LAN and through the relay before committing to the codec and frame size.
+- **Phone UI.** Concept 09's call screen with Mute, End and a transcript, but no screen-share button. It uses `AidenVoiceRings` and `AidenAudioLevelMeter`, and drives Aurora's Listening state.
+- **Gating.** It is shown only when the host advertises the Live feature and the device has a new Live grant. The host's existing Live kill switch (`AIDEN_EXPERIMENTAL_GEMINI_LIVE=0`) turns it off.
+- **Server batch.** Live voice relay (+1 revision, iOS, Android decode and fixtures). `aiden serve` support is a separate decision, because it has no Live session today.
+
+### Workspace artifacts
+
+- **Server batch (+1 revision).** It needs two routes, both scoped to a workspace the device can read and both capped in size:
+  - `GET /workspaces/{id}/artifacts` lists the artifacts by id, title, kind and update time. It never returns a path.
+  - A content route returns one artifact's self-contained HTML.
+- **Phone rendering.** The phone shows the HTML in a `WKWebView` that is locked down:
+  - It uses a non-persistent data store.
+  - It has no network access, enforced by a content rule list that blocks every load except the document itself.
+  - It never runs `file://` loads or app bridges.
+  - Links go out to the system browser only after the person confirms.
+- **Snapshots.** Inline chat visuals keep using their snapshots (`chat-visuals-v1`). The artifact list is for opening an artifact in full.
+- **Before building.** The design pass confirms which desktop store backs workspace artifacts (`main/services/generative-ui-artifact-store.ts` or the design-mode artifacts) and how `aiden serve` answers.
+
 ## Open questions for the owner
 
-Each question has a recommendation, so work can proceed unless the owner says otherwise. The full lists are at the end of each track report.
+The owner answered several of these on 2026-11-24; see [Owner decisions](#owner-decisions-2026-11-24). Each question has a recommendation, so work can proceed unless the owner says otherwise. The full lists are at the end of each track report.
 
 **Shell and navigation**
 1. **Tabs.** Chats · Bots · Workspaces · Inbox, with Search and Settings in the drawer. *Recommend yes.* It loses the iOS 26 search-tab affordance.
