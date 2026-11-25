@@ -3740,13 +3740,59 @@ final class AidenChatTests: XCTestCase {
         XCTAssertEqual(try sentTurn(resumedTurns).saveSelection, true)
         resumed.stopProgressObservation()
 
+        // An existing chat: the person picks Fast on the phone before the grant
+        // reaches it, so the send carries the pick but can't ask the Mac to
+        // keep it. The reply is lost and the app quits before Retry. The pick
+        // that comes back with the chat is the send's own, so the accepted
+        // retry still holds it, and the next send asks the Mac to keep it.
+        let existingChat = try AidenRemoteJSONDecoder.decode(AidenChat.self, from: Data(
+            #"{"id":"chat-progress-lifecycle","workspaceId":"workspace-1","title":"Progress lifecycle","providerId":"acme","modelId":"small","messages":[{"id":"message-u1","role":"user","text":"Review the protocol.","createdAt":"2026-09-14T12:00:00Z"},{"id":"message-a1","role":"assistant","text":"Done.","createdAt":"2026-09-14T12:00:01Z"}],"createdAt":"2026-09-14T12:00:00Z","updatedAt":"2026-09-14T12:00:01Z","revision":"revision-2"}"#.utf8
+        ))
+        let (pickedEarly, pickedEarlyTurns, earlyPickOffer, earlyPickPreferences) = try await launch(
+            macOffersSlider: false, initialChat: existingChat
+        )
+        XCTAssertNil(pickedEarly.agentSlider)
+        XCTAssertEqual(pickedEarly.turnModelSelection, small("medium"), "the chat runs at its model's own level")
+        pickedEarly.selectModel(providerId: "acme", modelId: "small", thinkingLevel: "low")
+        earlyPickOffer.failsTurns.withLock { $0 = true }
+        earlyPickOffer.losesReplies.withLock { $0 = true }
+        pickedEarly.draft = "Hello"
+        await pickedEarly.send()
+        XCTAssertNotNil(pickedEarly.pendingSend)
+        XCTAssertEqual(try sentTurn(pickedEarlyTurns).thinkingLevel, "low")
+        XCTAssertNil(try sentTurn(pickedEarlyTurns).saveSelection, "without the grant a send can't ask the Mac to keep a level")
+        pickedEarly.stopProgressObservation()
+        earlyPickOffer.failsTurns.withLock { $0 = false }
+        let (pickRelaunched, pickRelaunchedTurns, _, pickRelaunchedPreferences) = try await launch(
+            macOffersSlider: true, initialChat: existingChat, relaunching: (earlyPickOffer, earlyPickPreferences)
+        )
+        try await waitUntil { pickRelaunched.agentSlider != nil && pickRelaunched.pendingSend != nil }
+        _ = await pickRelaunched.reconcileChat(context: pickRelaunched.owner)
+        XCTAssertEqual(pickRelaunched.agentSliderState?.currentStop?.id, "fast", "the pick made before the relaunch was lost")
+        await pickRelaunched.send(retry: true)
+        XCTAssertNil(pickRelaunched.pendingSend, "the Mac replayed the send it ran")
+        XCTAssertEqual(pickRelaunched.agentSliderState?.currentStop?.id, "fast", "the relaunch lost the stop the send carried")
+        XCTAssertEqual(
+            pickRelaunchedPreferences.chatSelection(for: "instance-progress-lifecycle", chatID: pickRelaunched.chat.id), small("low"),
+            "the relaunch lost the stop the send carried"
+        )
+        try await waitUntil { pickRelaunched.streamState?.isTerminal != false }
+        pickRelaunched.draft = "Again"
+        try await waitUntil { pickRelaunched.canSend }
+        await pickRelaunched.send()
+        try await waitUntil { pickRelaunchedTurns.count == 2 }
+        XCTAssertEqual(try sentTurn(pickRelaunchedTurns).thinkingLevel, "low")
+        XCTAssertEqual(try sentTurn(pickRelaunchedTurns).saveSelection, true, "the next send didn't ask the Mac to keep the picked stop")
+        pickRelaunched.stopProgressObservation()
+
         // With no choice of this phone's, a first send made before the catalog
         // carries no level, and the Mac picks one when it runs the turn. The
-        // Mac's last model or level then changes before the catalog arrives.
-        // Nothing is held from the new defaults: the chat follows its own
-        // model and level, and no later send saves a level nobody chose.
-        for moved in [#"{"providerId":"acme","modelId":"small","thinkingLevel":"medium"}"#,
-                      #"{"providerId":"acme","modelId":"large","thinkingLevel":"high"}"#] {
+        // Mac's last level then moves to another stop on the same model
+        // before the catalog arrives. Nothing is held from the new defaults:
+        // the chat follows its own model and level, and no later send saves a
+        // level nobody chose.
+        do {
+            let moved = #"{"providerId":"acme","modelId":"small","thinkingLevel":"medium"}"#
             let (unchosen, unchosenTurns, unchosenOffer, unchosenPreferences) = try await launch(
                 macOffersSlider: false, catalogAnswers: false, initialChat: unlistedChat
             )

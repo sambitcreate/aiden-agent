@@ -68,6 +68,13 @@ final class AidenChatViewModel {
     /// from disk has none here and counts as older than every pick made since
     /// the chat opened.
     @ObservationIgnored private var sendPickGeneration: (key: UUID, generation: Int)?
+    /// Whether this chat's unsent pick came back from disk when the chat
+    /// opened. Such a pick postdates any saved send that started where new
+    /// chats start (a chat pick exists only once the chat has messages, and
+    /// that send was built with none of the person's), so it beats that
+    /// send's hold. A send that carried a pick was built after it, and its
+    /// own pick is what comes back, so the hold still keeps it.
+    @ObservationIgnored private var restoredChatPick = false
     /// The send being built or out right now, from the moment its optimistic
     /// message fills the chat until it returns. A catalog landing meanwhile
     /// resolves the chip from this send's intent, not from that message.
@@ -2032,6 +2039,7 @@ final class AidenChatViewModel {
             // person made while this send was out wins.
             if keepsSelection, agentSlider != nil, request.saveSelection != true, !chat.isBotChat,
                !hasUnsentModelPick, modelPickGeneration == pickGeneration, !isRemoved,
+               !(restoredChatPick && attempt.startsWhereNewChatsStart == true),
                let sent = keptSelection(for: attempt) {
                 selectedProviderId = sent.providerId
                 selectedModelId = sent.modelId
@@ -3066,10 +3074,7 @@ final class AidenChatViewModel {
             selectedThinkingLevel = nil
         }
         // An unsent pick made in this chat before it was last closed wins
-        // like a pick made now. It counts as a pick, so a saved send waiting
-        // to retry, which counts picks from zero after a reopen, loses to it:
-        // a chat pick only exists once the chat has messages, so it was made
-        // after any first send that kept where new chats start.
+        // like a pick made now.
         if !hasExplicitModelSelection, !isReadOnlyFixture, !chat.isBotChat, !chat.messages.isEmpty,
            let pick = modelPreferenceStore.chatSelection(for: instanceId, chatID: chat.id) {
             selectedProviderId = pick.providerId
@@ -3077,7 +3082,7 @@ final class AidenChatViewModel {
             selectedThinkingLevel = pick.thinkingLevel
             hasExplicitModelSelection = true
             hasUnsentModelPick = true
-            modelPickGeneration &+= 1
+            restoredChatPick = true
         }
         var selection = AidenChatModelAuthority.resolvedSelection(
             chat: chat,
