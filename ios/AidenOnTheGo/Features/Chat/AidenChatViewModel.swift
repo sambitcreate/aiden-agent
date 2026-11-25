@@ -425,6 +425,9 @@ final class AidenChatViewModel {
     var selectedProviderId: String?
     var selectedModelId: String?
     var selectedThinkingLevel: String?
+    /// The Agent Slider sheet. Kept here, with the shell-owned model, so an
+    /// iPhone Duo fold that rebuilds the chat's views opens it again.
+    var isAgentSliderPresented = false
     var presentedError: String?
 
     var isReadOnlyFixture: Bool {
@@ -898,7 +901,9 @@ final class AidenChatViewModel {
         }
     }
 
-    private var turnModelSelection: AidenChatModelSelection {
+    /// What the next turn sends. `send` reads it once, before any wait, so a
+    /// stop picked while the send is in flight never changes that send.
+    var turnModelSelection: AidenChatModelSelection {
         AidenChatModelAuthority.turnSelection(
             chat: chat,
             selectedProviderId: selectedProviderId,
@@ -2940,7 +2945,9 @@ final class AidenChatViewModel {
             remembered: hasExplicitModelSelection || isReadOnlyFixture || chat.isBotChat
                 ? nil
                 : modelPreferenceStore.selection(for: instanceId),
-            hasExplicitSelection: hasExplicitModelSelection
+            hasExplicitSelection: hasExplicitModelSelection,
+            exactLevels: agentSlider != nil,
+            homeSelection: agentSliderHomeSelection
         )
         selectedProviderId = selection.providerId
         selectedModelId = selection.modelId

@@ -7339,7 +7339,8 @@
         }
       ],
       "defaults": {
-        "provider_fixture": "model_fixture"
+        "providerId": "provider_fixture",
+        "modelId": "model_fixture"
       },
       "agentSlider": {
         "stops": [

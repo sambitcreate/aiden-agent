@@ -2424,6 +2424,9 @@ struct AidenChat: Codable, Identifiable, Equatable, Sendable {
     var titlePending: Bool? = nil
     /// Additive in contract revision 21: present on a chat created by Fork.
     var forkedFrom: AidenChatForkLineage? = nil
+    /// Additive in contract revision 66: the chat's own thinking level, only
+    /// with its model and never on a Bot chat. Nil means the model's own setting.
+    var thinkingLevel: String? = nil
 
     // Presentation-only receipt overlay; excluded from the canonical wire/cache encoding.
     var localTitleOverride: String? = nil
@@ -2444,7 +2447,8 @@ struct AidenChat: Codable, Identifiable, Equatable, Sendable {
         updatedAt: Date,
         revision: String,
         titlePending: Bool? = nil,
-        forkedFrom: AidenChatForkLineage? = nil
+        forkedFrom: AidenChatForkLineage? = nil,
+        thinkingLevel: String? = nil
     ) {
         self.id = id
         self.workspaceId = workspaceId
@@ -2458,6 +2462,7 @@ struct AidenChat: Codable, Identifiable, Equatable, Sendable {
         self.revision = revision
         self.titlePending = titlePending
         self.forkedFrom = forkedFrom
+        self.thinkingLevel = thinkingLevel
     }
 
     init(from decoder: Decoder) throws {
@@ -2482,6 +2487,7 @@ struct AidenChat: Codable, Identifiable, Equatable, Sendable {
         // Additive lineage: absent on older Macs; an invalid value is dropped
         // rather than rejecting the chat.
         forkedFrom = try? values.decodeIfPresent(AidenChatForkLineage.self, forKey: .forkedFrom)
+        thinkingLevel = try aidenDecodeOptionalNonNull(String.self, from: values, forKey: .thinkingLevel)
 
         try Self.requireIdentifier(id, forKey: .id, in: values)
         try Self.requireIdentifier(workspaceId, forKey: .workspaceId, in: values)
@@ -2525,6 +2531,13 @@ struct AidenChat: Codable, Identifiable, Equatable, Sendable {
                 allowEmpty: false,
                 forKey: .modelId,
                 in: values
+            )
+        }
+        guard AidenChatThinkingLevel.isValid(thinkingLevel, modelId: modelId, botId: botId) else {
+            throw DecodingError.dataCorruptedError(
+                forKey: .thinkingLevel,
+                in: values,
+                debugDescription: "A chat's thinking level needs its model and is regular-chat-only."
             )
         }
         guard messages.count <= 10_000 else {
@@ -2610,7 +2623,16 @@ struct AidenChat: Codable, Identifiable, Equatable, Sendable {
 
     private enum CodingKeys: String, CodingKey {
         case id, workspaceId, botId, title, providerId, modelId, messages
-        case createdAt, updatedAt, revision, titlePending, forkedFrom
+        case createdAt, updatedAt, revision, titlePending, forkedFrom, thinkingLevel
+    }
+}
+
+/// Revision 66: the rule a chat's own thinking level is held to. Its value is
+/// only bounded, so a level a later Mac adds never costs the phone the chat.
+enum AidenChatThinkingLevel {
+    static func isValid(_ level: String?, modelId: String?, botId: String?) -> Bool {
+        guard let level else { return true }
+        return modelId != nil && botId == nil && !level.isEmpty && level.unicodeScalars.count <= 32
     }
 }
 
@@ -3073,6 +3095,151 @@ extension AidenProvider {
 struct AidenModelCatalog: Codable, Equatable, Sendable {
     let providers: [AidenProvider]
     let defaults: [String: String]
+    /// Revision 66: the Mac's Agent Slider. Nil from an older Mac, a Mac with
+    /// no readable slider, or a slider that breaks the contract; the composer
+    /// then offers only the model menu.
+    var agentSlider: AidenAgentSlider? = nil
+}
+
+extension AidenModelCatalog {
+    private enum CodingKeys: String, CodingKey {
+        case providers, defaults, agentSlider
+    }
+
+    init(from decoder: Decoder) throws {
+        let values = try decoder.container(keyedBy: CodingKeys.self)
+        providers = try values.decode([AidenProvider].self, forKey: .providers)
+        defaults = try values.decode([String: String].self, forKey: .defaults)
+        // A slider that breaks the contract must not cost the phone its model list.
+        agentSlider = try? values.decodeIfPresent(AidenAgentSlider.self, forKey: .agentSlider)
+    }
+}
+
+/// Revision 66: why an Agent Slider stop can or cannot run from this phone.
+/// The Mac decides; the phone never substitutes another model.
+enum AidenAgentSliderAvailability: String, Codable, Equatable, Sendable {
+    case ready
+    case unassigned
+    case providerMissing = "provider-missing"
+    case notSignedIn = "not-signed-in"
+    case modelMissing = "model-missing"
+    case hidden
+}
+
+/// Revision 66: one stop of `GET /models` `agentSlider`. Provider and model
+/// come together, a level only with a model, and a stop is `unassigned`
+/// exactly when it names no model. `thinkingLevel` is the level a turn on this
+/// stop runs with on the Mac, already fitted to the model.
+struct AidenAgentSliderStop: Codable, Equatable, Identifiable, Sendable {
+    static let labelMaximum = 24
+    /// `GENERATION_THINKING_LEVELS` in `renderer/shared/generation-thinking.ts`.
+    static let thinkingLevels = ["off", "low", "medium", "high", "xhigh", "max"]
+
+    let id: String
+    let label: String
+    let providerId: String?
+    let modelId: String?
+    let thinkingLevel: String?
+    let availability: AidenAgentSliderAvailability
+
+    init(
+        id: String,
+        label: String,
+        providerId: String? = nil,
+        modelId: String? = nil,
+        thinkingLevel: String? = nil,
+        availability: AidenAgentSliderAvailability
+    ) {
+        self.id = id
+        self.label = label
+        self.providerId = providerId
+        self.modelId = modelId
+        self.thinkingLevel = thinkingLevel
+        self.availability = availability
+    }
+
+    init(from decoder: Decoder) throws {
+        let values = try decoder.container(keyedBy: CodingKeys.self)
+        id = try values.decode(String.self, forKey: .id)
+        label = try values.decode(String.self, forKey: .label)
+        providerId = try aidenDecodeOptionalNonNull(String.self, from: values, forKey: .providerId)
+        modelId = try aidenDecodeOptionalNonNull(String.self, from: values, forKey: .modelId)
+        thinkingLevel = try aidenDecodeOptionalNonNull(String.self, from: values, forKey: .thinkingLevel)
+        availability = try values.decode(AidenAgentSliderAvailability.self, forKey: .availability)
+        guard Self.isValidID(id),
+              Self.isValidLabel(label),
+              (providerId == nil) == (modelId == nil),
+              providerId.map({ !$0.isEmpty && $0.unicodeScalars.count <= 256 }) ?? true,
+              modelId.map({ !$0.isEmpty && $0.unicodeScalars.count <= 512 }) ?? true,
+              thinkingLevel.map({ modelId != nil && Self.thinkingLevels.contains($0) }) ?? true,
+              (modelId == nil) == (availability == .unassigned) else {
+            throw DecodingError.dataCorruptedError(
+                forKey: .id,
+                in: values,
+                debugDescription: "Invalid Agent Slider stop."
+            )
+        }
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case id, label, providerId, modelId, thinkingLevel, availability
+    }
+
+    static func isValidID(_ value: String) -> Bool {
+        !value.isEmpty && value.unicodeScalars.count <= 64 && value.unicodeScalars.allSatisfy { scalar in
+            switch scalar.value {
+            case 48...57, 65...90, 97...122, 45, 95: true
+            default: false
+            }
+        }
+    }
+
+    /// The desktop's label rule (`agentSliderLabelProblem`): trimmed, 1 to 24
+    /// code points, and no control, separator or bidi-control characters.
+    static func isValidLabel(_ value: String) -> Bool {
+        let scalars = value.unicodeScalars
+        guard value.trimmingCharacters(in: .whitespacesAndNewlines) == value,
+              (1...labelMaximum).contains(scalars.count) else { return false }
+        return !scalars.contains { scalar in
+            let code = scalar.value
+            return code < 0x20 || (0x7F...0x9F).contains(code) || code == 0x2028 || code == 0x2029
+                || (0x202A...0x202E).contains(code) || (0x2066...0x2069).contains(code)
+        }
+    }
+}
+
+/// Revision 66: the Mac's Agent Slider, 3 to 7 stops left to right, and the
+/// stop Reset to home returns to.
+struct AidenAgentSlider: Codable, Equatable, Sendable {
+    static let minimumStops = 3
+    static let maximumStops = 7
+
+    let stops: [AidenAgentSliderStop]
+    let homeStopId: String
+
+    init(stops: [AidenAgentSliderStop], homeStopId: String) {
+        self.stops = stops
+        self.homeStopId = homeStopId
+    }
+
+    init(from decoder: Decoder) throws {
+        let values = try decoder.container(keyedBy: CodingKeys.self)
+        stops = try values.decode([AidenAgentSliderStop].self, forKey: .stops)
+        homeStopId = try values.decode(String.self, forKey: .homeStopId)
+        guard (Self.minimumStops...Self.maximumStops).contains(stops.count),
+              Set(stops.map(\.id)).count == stops.count,
+              stops.contains(where: { $0.id == homeStopId }) else {
+            throw DecodingError.dataCorruptedError(
+                forKey: .stops,
+                in: values,
+                debugDescription: "Invalid Agent Slider."
+            )
+        }
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case stops, homeStopId
+    }
 }
 
 extension AidenModelCatalog {

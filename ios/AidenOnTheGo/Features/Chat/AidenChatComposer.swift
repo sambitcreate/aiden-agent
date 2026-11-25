@@ -195,55 +195,11 @@ struct AidenComposerView: View {
 
     @ViewBuilder
     private var modelChip: some View {
-        if model.showsComposerModelControl, !model.visibleProviders.isEmpty {
+        if model.showsComposerModelControl, let sliderState = model.agentSliderState {
+            AidenAgentSliderChip(model: model, state: sliderState)
+        } else if model.showsComposerModelControl, !model.visibleProviders.isEmpty {
             Menu {
-                ForEach(model.visibleProviders) { provider in
-                    Section {
-                        ForEach(provider.models) { candidate in
-                            if let levels = candidate.thinkingLevels, !levels.isEmpty {
-                                Menu {
-                                    ForEach(levels, id: \.self) { level in
-                                        Button {
-                                            select(
-                                                candidate,
-                                                providerId: provider.id,
-                                                thinkingLevel: level
-                                            )
-                                        } label: {
-                                            if isSelected(candidate, providerId: provider.id, thinkingLevel: level) {
-                                                Label(candidate.thinkingLabel(for: level), systemImage: "checkmark")
-                                            } else {
-                                                Text(candidate.thinkingLabel(for: level))
-                                            }
-                                        }
-                                    }
-                                } label: { Text(candidate.label) }
-                            } else {
-                                Button {
-                                    select(candidate, providerId: provider.id, thinkingLevel: nil)
-                                } label: {
-                                    if isSelected(candidate, providerId: provider.id, thinkingLevel: nil) {
-                                        Label(candidate.label, systemImage: "checkmark")
-                                    } else {
-                                        Text(candidate.label)
-                                    }
-                                }
-                            }
-                        }
-                    } header: {
-                        Label {
-                            Text(provider.label)
-                        } icon: {
-                            AidenProviderIcon(
-                                providerID: provider.id,
-                                providerLabel: provider.label,
-                                artwork: provider.artwork,
-                                size: 16,
-                                color: palette.secondary
-                            )
-                        }
-                    }
-                }
+                AidenComposerModelMenuContent(model: model)
             } label: {
                 AidenComposerModelChipLabel(
                     provider: model.selectedProvider,
@@ -326,25 +282,6 @@ struct AidenComposerView: View {
               selectedModel.thinkingLevels?.isEmpty == false
         else { return selectedModel.label }
         return "\(selectedModel.label), \(level.capitalized) thinking"
-    }
-
-    private func select(_ candidate: AidenModel, providerId: String, thinkingLevel: String?) {
-        model.selectModel(
-            providerId: providerId,
-            modelId: candidate.id,
-            thinkingLevel: thinkingLevel
-        )
-    }
-
-    private func isSelected(
-        _ candidate: AidenModel,
-        providerId: String,
-        thinkingLevel: String?
-    ) -> Bool {
-        guard model.selectedProviderId == providerId,
-              model.selectedModelId == candidate.id
-        else { return false }
-        return thinkingLevel == nil || model.selectedThinkingLevel == thinkingLevel
     }
 }
 

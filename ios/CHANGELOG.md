@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- **2026-11-24 — Agent Slider on the phone.** When the paired Mac offers the Agent Slider (Remote contract revision 66, `chat:agent-slider`), a Workspace chat's composer shows a slider chip instead of the model menu. It opens a sheet with the Mac's stops on a track; drag, tap or step to a stop, use Reset to home, or open Other models for the full menu. Your message runs on that stop's model and thinking level, and the Mac keeps that level with the chat. Stops the Mac can't run are shown with the reason and can't be chosen. Settings → Agent Slider lists the stops and home stop read-only. The chosen stop and an open sheet survive folding an iPhone Duo. Older Macs keep the model menu.
+
 - **2026-11-22 — Pairing feedback and QR framing.** Add Computer scans for QR codes inside the visible viewfinder. Manual pairing shows what to correct below the address or setup code field. Search keeps Add Computer available until a computer is paired.
 
 - **2026-11-22 — No "Sending…" in Bot chats.** A message you send to a Bot looks sent from the moment you press Send and never gains a "Sending…" caption, however long the Mac takes to take it. The status line ("Getting ready", then "Thinking" once the model starts) shows the wait; Queued and "Couldn’t send · Try again" are unchanged. Paired Macs on the next Aiden release also start a Bot's reply much sooner, because a turn no longer re-reads every provider, connector and skill a dozen times before asking the model. No Remote wire or revision change.
