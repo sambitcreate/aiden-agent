@@ -172,14 +172,21 @@ final class AidenSearchModel {
         }
         // The same query asked again (the drawer reopening after the answer
         // aged, or after a machine failed) keeps what it shows and swaps in
-        // each machine's newer answer as it lands, with no skeleton.
+        // each machine's newer answer as it lands, with no skeleton. It only
+        // counts as shown once a machine has answered: a run stopped before
+        // any answer leaves the next one on the skeleton, not "No results".
         let revalidating = !text.isEmpty && shownQuery == text
         answered = nil
-        if !revalidating {
+        if revalidating {
+            // A machine that can't be asked now has nothing current to show.
+            let askableNow = Self.askable(in: all)
+            hitsByMachine = hitsByMachine.filter { askableNow.contains($0.key) }
+            failedMachines.formIntersection(askableNow)
+        } else {
             hitsByMachine = [:]
             failedMachines = []
+            shownQuery = nil
         }
-        shownQuery = text.isEmpty ? nil : text
         skippedMachines = []
         guard !text.isEmpty else {
             isSearching = false
@@ -192,6 +199,7 @@ final class AidenSearchModel {
         isSearchingBots = canAsk && !revalidating
         guard canAsk else {
             answered = (text, [], now())
+            shownQuery = text
             return
         }
 
@@ -245,6 +253,7 @@ final class AidenSearchModel {
                     guard !aidenIsCancellation(error) else { continue }
                     failedMachines.insert(outcome.machine.instanceId)
                 }
+                shownQuery = text
             }
         }
         guard mine == generation else { return }

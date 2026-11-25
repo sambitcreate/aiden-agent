@@ -400,6 +400,49 @@ final class AidenSearchModelTests: XCTestCase {
         await other.value
     }
 
+    /// The drawer closing before any machine answered, then reopening on the
+    /// same query, still shows the Bots skeleton, not an empty "No results",
+    /// until the answer lands.
+    func testASearchStoppedBeforeAnyAnswerShowsTheSkeletonWhenAskedAgain() async {
+        machineList = [machine("studio", "Studio Mac")]
+        desk.reply("studio", "scout", [conversation("chat_1", title: "Scout digest")])
+        let model = makeModel()
+        model.query = "scout"
+        let first = await startRun(model)
+        first.cancel()
+        await first.value
+        XCTAssertEqual(desk.asks, [], "The stopped run asked anyway")
+
+        let again = await startRun(model)
+        XCTAssertTrue(model.isSearchingBots, "Asking again after no answer showed no skeleton")
+        XCTAssertEqual(model.bots, [])
+        pastDebounce()
+        await again.value
+        XCTAssertFalse(model.isSearchingBots)
+        XCTAssertEqual(model.bots.map(\.title), ["Scout digest"])
+    }
+
+    /// Asking the same query again drops what a machine that can no longer be
+    /// asked had found, rather than keeping hits that open on nothing.
+    func testAskingAgainDropsHitsFromAMachineThatCanNoLongerBeAsked() async {
+        machineList = [machine("studio", "Studio Mac"), machine("laptop", "Laptop")]
+        desk.reply("studio", "scout", [conversation("chat_1", title: "Scout digest")])
+        desk.reply("laptop", "scout", [conversation("chat_2", title: "Laptop notes", minutesAgo: 30)])
+        let model = makeModel()
+        model.query = "scout"
+        await runToEnd(model)
+        XCTAssertEqual(model.bots.map(\.title), ["Scout digest", "Laptop notes"])
+
+        machineList = [machine("studio", "Studio Mac"), machine("laptop", "Laptop", isConnected: false)]
+        elapsed = AidenSearchModel.answerLifetime + 1
+        let again = await startRun(model)
+        XCTAssertEqual(model.bots.map(\.title), ["Scout digest"], "The unreachable machine's hits stayed")
+        XCTAssertFalse(model.isSearchingBots, "Asking again showed the skeleton over kept hits")
+        pastDebounce()
+        await again.value
+        XCTAssertEqual(model.bots.map(\.title), ["Scout digest"])
+    }
+
     func testTheDebounceWaitsForTheLastKeystroke() async {
         machineList = [machine("studio", "Studio Mac")]
         let model = makeModel()

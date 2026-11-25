@@ -27,9 +27,9 @@ struct AidenDrawerPinnedItem: Identifiable, Equatable, Sendable {
     let name: String
     /// False for a machine that is offline; the pin stays, marked offline.
     let isOnline: Bool
-    /// A pinned Bot's own avatar, drawn as its sprite. Nil for a workspace.
+    /// A pinned Bot's own avatar, drawn as the Bots list draws it. Nil for a workspace.
     var botAvatar: AidenBotAvatarView? = nil
-    /// A pinned Bot holding open "Needs you" cards.
+    /// A pinned Bot that needs the person, by the Inbox's rule (`AidenBotAttention`).
     var needsYou = false
 
     var id: AidenDrawerPin { pin }
@@ -113,7 +113,7 @@ enum AidenDrawerPinned {
                     name: bot.name,
                     isOnline: snapshot.isOnline,
                     botAvatar: bot.avatar,
-                    needsYou: (bot.issueCount ?? 0) > 0
+                    needsYou: AidenBotAttention.needsYou(bot)
                 )
             case .workspace:
                 guard let name = snapshot.workspaceNames[pin.id.objectId] else { return nil }

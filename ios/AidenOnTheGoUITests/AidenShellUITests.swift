@@ -111,6 +111,12 @@ final class AidenShellUITests: XCTestCase {
             AidenStateMatrix.window(of: app).frame.width > AidenStateMatrix.compactWidth,
             "Beside the list the edge belongs to the columns"
         )
+        // A closed iPhone Duo puts the bars in a side rail, whose columns own
+        // the edge, so the drawer leaves it alone there.
+        try XCTSkipIf(
+            !app.navigationBars.buttons["Open menu"].exists && app.buttons["Open menu"].exists,
+            "In a side rail the edge belongs to the system's columns"
+        )
         edgeSwipe(in: app)
         XCTAssertTrue(app.buttons["Close menu"].waitForExistence(timeout: 3), "The edge swipe did not open the drawer")
         app.buttons["Settings"].firstMatch.tap()
@@ -126,6 +132,35 @@ final class AidenShellUITests: XCTestCase {
         edgeSwipe(in: app)
         XCTAssertTrue(app.navigationBars["Inbox"].waitForExistence(timeout: 10), "The edge swipe was not Back")
         XCTAssertFalse(app.buttons["Close menu"].exists, "The drawer opened over a pushed page")
+        app.terminate()
+    }
+
+    /// The drawer's swipe leaves the rest of the leading edge to what's under
+    /// it: a row's own leading swipe, started just inside the row, offers Mark
+    /// read, and a tap at the row's leading edge opens the chat.
+    func testARowsLeadingSwipeAndATapAtItsEdgeStillReachTheRow() {
+        let app = AidenStateMatrix.launch(scenario: .busy)
+        XCTAssertTrue(openInbox(in: app).waitForExistence(timeout: 10), "No chat rows in the inbox")
+        let unread = app.buttons.matching(NSPredicate(format: "label ENDSWITH %@", "Unread")).firstMatch
+        XCTAssertTrue(unread.waitForExistence(timeout: 10), "No unread row")
+        // Clear of the running accessory and the tab bar, so the swipe lands on the row.
+        for _ in 0..<4 where unread.frame.maxY > app.frame.height * 0.6 {
+            app.swipeUp(velocity: .slow)
+        }
+        // Held as a frame: once read, the row no longer matches the query.
+        let row = unread.frame
+        let origin = app.coordinate(withNormalizedOffset: .zero)
+        let inside = origin.withOffset(CGVector(dx: row.minX + 12, dy: row.midY))
+        inside.press(forDuration: 0.05, thenDragTo: inside.withOffset(CGVector(dx: 120, dy: 0)))
+        let markRead = app.buttons["Mark read"]
+        XCTAssertTrue(markRead.waitForExistence(timeout: 5), "The row's leading swipe offered no Mark read")
+        XCTAssertFalse(app.buttons["Close menu"].exists, "The row's swipe opened the drawer")
+        markRead.tap()
+        XCTAssertTrue(markRead.waitForNonExistence(timeout: 5), "Mark read left the swipe action open")
+
+        origin.withOffset(CGVector(dx: row.minX + 4, dy: row.midY)).tap()
+        XCTAssertTrue(app.buttons["Send message"].firstMatch.waitForExistence(timeout: 10), "A tap at the row's edge did not open it")
+        XCTAssertFalse(app.buttons["Close menu"].exists, "A tap at the edge opened the drawer")
         app.terminate()
     }
 
@@ -239,7 +274,10 @@ final class AidenShellUITests: XCTestCase {
         let app = AidenStateMatrix.launch(scenario: .four)
         let accessory = AidenStateMatrix.runningAccessory(in: app)
         XCTAssertTrue(accessory.waitForExistence(timeout: 15), "No accessory while chats run")
-        XCTAssertTrue(accessory.label.contains("1 more"), "The accessory said \(accessory.label)")
+        // Each machine's chats land on their own, so the second running chat
+        // can join the count a moment after the accessory first shows.
+        let countsBoth = XCTNSPredicateExpectation(predicate: NSPredicate(format: "label CONTAINS %@", "1 more"), object: accessory)
+        XCTAssertEqual(XCTWaiter.wait(for: [countsBoth], timeout: 10), .completed, "The accessory said \(accessory.label)")
         hideOverlaySidebar(in: app)
 
         accessory.tap()
@@ -2038,9 +2076,15 @@ final class AidenShellUITests: XCTestCase {
         AuditAllowance(
             // Bars keep their height at every text size. The status item and the
             // running accessory offer the Large Content Viewer, the search field
-            // is the system's, and VoiceOver reads each one whole.
+            // is the system's, and VoiceOver reads each one whole. The running
+            // accessory shows on every tab while a chat runs, and its one-line
+            // title truncates as the tab bar's do, so each tab screen counts it
+            // once (the Inbox twice, with its status item). The drawer hides it,
+            // so the search screen's one is the drawer's search field.
             reason: "Text size or clipping of text drawn in a bar (the status item, the Bot's title, the search field)",
-            ceiling: ["inbox": 1, "search": 1, "bot": 1],
+            ceiling: [
+                "inbox": 2, "bots": 1, "machines": 1, "machine editor": 1, "settings": 1, "search": 1, "bot": 1,
+            ],
             ceilingInRegularWidth: ["inbox": 1, "bot": 1],
             matches: { [.dynamicType, .textClipped].contains($0.type) && $0.liesInABar }
         ),
@@ -2081,9 +2125,10 @@ final class AidenShellUITests: XCTestCase {
             // cuts the last row the list scrolls past it, and the audit reads the
             // cut text as low contrast. Only a row's text the edge runs through
             // counts: text wholly on the screen, and controls and graphics
-            // anywhere, must pass.
+            // anywhere, must pass. On a phone, Settings is pushed from the drawer
+            // with the tab bar hidden, so its last row runs past the edge too.
             reason: "A list row's text the window's bottom edge cuts",
-            ceiling: [:],
+            ceiling: ["settings": 1],
             ceilingInRegularWidth: ["inbox": 1],
             matches: { finding in
                 guard finding.type == .contrast, finding.elementType == .staticText,
@@ -2659,7 +2704,7 @@ final class AidenShellUITests: XCTestCase {
     }
 
     private func goBack(in app: XCUIApplication) {
-        let named = app.navigationBars.buttons["BackButton"].firstMatch
+        let named = app.buttons["BackButton"].firstMatch
         let back = named.waitForExistence(timeout: 2) ? named : app.navigationBars.buttons.firstMatch
         if back.waitForExistence(timeout: 5) { back.tap() }
     }

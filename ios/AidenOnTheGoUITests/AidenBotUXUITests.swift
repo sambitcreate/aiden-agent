@@ -161,7 +161,7 @@ final class AidenBotUXUITests: XCTestCase {
     }
 
     private func goBack(in app: XCUIApplication) {
-        let named = app.navigationBars.buttons["BackButton"].firstMatch
+        let named = app.buttons["BackButton"].firstMatch
         let back = named.waitForExistence(timeout: 2) ? named : app.navigationBars.buttons.firstMatch
         if back.waitForExistence(timeout: 5) { back.tap() }
     }

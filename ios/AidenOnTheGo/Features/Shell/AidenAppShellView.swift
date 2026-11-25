@@ -175,7 +175,11 @@ struct AidenAppShellView: View {
     /// The shell's own window, for its orientation.
     @State private var window = AidenWindowReader.Window()
     /// The drawer over the tabs (`AidenDrawerView`).
-    @State private var drawerIsOpen = false
+    @State private var drawerPresence = AidenDrawerPresence()
+    private var drawerIsOpen: Bool {
+        get { drawerPresence.isOpen }
+        nonmutating set { drawerPresence.isOpen = newValue }
+    }
     @Environment(\.layoutDirection) private var layoutDirection
     /// VoiceOver goes back to the showing tab's menu button when the drawer
     /// closes. Keyed by tab because every tab's list keeps its own button.
@@ -380,6 +384,8 @@ struct AidenAppShellView: View {
             isEnabled: runningHome == .accessory && inboxStore.hasRunningChats && !navigation.showsConversation
         ) {
             AidenRunningAccessoryHost(store: inboxStore, onOpen: openRow) { activeSheet = .runningChats }
+                // The bar hosts it apart from the tabs, so it's hidden on its own.
+                .modifier(AidenHiddenUnderDrawer(presence: drawerPresence))
         }
         // A new tab view each time the display opens or closes, as at launch.
         // A closed iPhone Duo's side rail reads the showing tab's Back and
@@ -488,10 +494,19 @@ struct AidenAppShellView: View {
             columns: columns,
             window: window,
             empty: empty,
+            // Each column's content too: the tabs and their columns are hosted
+            // apart, so hiding the tab view, or this tab, leaves the list and
+            // the screen beside it in reach behind the open drawer (iOS 27
+            // simulator's audit read the Inbox's rows through the scrim). The
+            // modifier reads the drawer itself, so each host updates on its own.
             list: { selection in
-                list(selection).toolbar { menuToolbarItem(on: tab) }
+                list(selection)
+                    .modifier(AidenHiddenUnderDrawer(presence: drawerPresence))
+                    .toolbar { menuToolbarItem(on: tab) }
             },
-            screen: { route, keepsTabs in AnyView(screen(for: route, keepsTabs: keepsTabs)) }
+            screen: { route, keepsTabs in
+                AnyView(screen(for: route, keepsTabs: keepsTabs).modifier(AidenHiddenUnderDrawer(presence: drawerPresence)))
+            }
         )
         // Each tab's own too: hiding the tab view leaves the lists inside it
         // in reach, behind the open drawer (iOS 27.1 simulator).
@@ -641,6 +656,7 @@ struct AidenAppShellView: View {
         AidenDrawerOverlay(isOpen: drawerIsOpen, onClose: closeDrawer) {
             AidenDrawerView(
                 search: built.search,
+                coordinator: coordinator,
                 inboxStore: inboxStore,
                 pins: .shared,
                 usageUnavailable: usageUnavailable,
@@ -652,6 +668,9 @@ struct AidenAppShellView: View {
                 onShowAllChats: {
                     closeDrawer(refocusingMenu: false)
                     navigation.showAllChats()
+                    // Beside the list the open chat stays, so an overlaid
+                    // list that its pick put away comes back over it.
+                    if navigation.besideList { chatsColumns.visibility = .all }
                 },
                 onClose: closeDrawer
             ) {
@@ -1651,3 +1670,19 @@ private struct AidenWindowReader: UIViewRepresentable {
     }
 }
 
+
+/// Whether the drawer is open, as an object, so a view hosted apart from the
+/// shell (a tab's column, the bottom accessory) reads it itself and updates.
+@MainActor @Observable
+final class AidenDrawerPresence {
+    var isOpen = false
+}
+
+/// Keeps what's under the open drawer out of VoiceOver's reach.
+private struct AidenHiddenUnderDrawer: ViewModifier {
+    let presence: AidenDrawerPresence
+
+    func body(content: Content) -> some View {
+        content.accessibilityHidden(presence.isOpen)
+    }
+}

@@ -332,16 +332,17 @@ final class AidenShellIATests: XCTestCase {
         XCTAssertEqual(AidenDrawerPinsStore(defaults: defaults).pins, [kept])
     }
 
-    private func bot(_ botID: String, name: String) throws -> AidenBotSummary {
+    private func bot(_ botID: String, name: String, extra: [String: Any] = [:]) throws -> AidenBotSummary {
         let formatter = ISO8601DateFormatter()
         formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
-        let object: [String: Any] = [
+        var object: [String: Any] = [
             "id": botID, "name": name, "purpose": "",
             "avatar": ["semantic": ["version": 1, "shape": "orb", "color": "rose"]],
             "health": "ready",
             "createdAt": formatter.string(from: now), "updatedAt": formatter.string(from: now),
             "revision": "bot_revision_\(botID)",
         ]
+        object.merge(extra) { _, new in new }
         return try AidenRemoteJSONDecoder.decode(AidenBotSummary.self, from: JSONSerialization.data(withJSONObject: object))
     }
 
@@ -362,6 +363,26 @@ final class AidenShellIATests: XCTestCase {
         XCTAssertEqual(items.map(\.name), ["Project-laptop", "Scout"])
         XCTAssertEqual(items.map(\.isOnline), [false, true])
         XCTAssertTrue(AidenDrawerPinned.items(pins: pins, snapshots: snapshots, hiddenMachines: ["studio", "laptop"]).isEmpty)
+    }
+
+    /// A pinned Bot's dot follows the Inbox: open cards, an interrupted run
+    /// and a lost model each need the person; a quiet Bot doesn't.
+    func testAPinnedBotNeedsYouWhenTheInboxSaysSo() throws {
+        let names = ["quiet", "cards", "interrupted", "model"]
+        let bots = [
+            try bot("quiet", name: "quiet", extra: ["sessionState": "idle"]),
+            try bot("cards", name: "cards", extra: ["issueCount": 2]),
+            try bot("interrupted", name: "interrupted", extra: ["sessionState": "interrupted"]),
+            try bot("model", name: "model", extra: ["sessionState": "needs_model"]),
+        ]
+        let items = AidenDrawerPinned.items(
+            pins: names.map { AidenDrawerPin(kind: .bot, id: id($0)) },
+            snapshots: [snapshot("studio", bots: bots)],
+            hiddenMachines: []
+        )
+
+        XCTAssertEqual(items.map(\.name), names)
+        XCTAssertEqual(items.map(\.needsYou), [false, true, true, true])
     }
 
     func testAPinOnAnotherPairingOfTheSameMachineIsNotShown() throws {

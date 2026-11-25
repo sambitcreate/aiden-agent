@@ -22,6 +22,8 @@ struct AidenDrawerView<Compose: View>: View {
     /// The shell's, so the query and what it found outlive a fold and the
     /// drawer closing.
     let search: AidenSearchModel
+    /// Draws a pinned Bot's avatar as the Bots list does, photo included.
+    let coordinator: AidenRemoteCoordinator
     let inboxStore: AidenUnifiedInboxStore
     let pins: AidenDrawerPinsStore
     let usageUnavailable: Bool
@@ -117,7 +119,7 @@ struct AidenDrawerView<Compose: View>: View {
                             item.name,
                             systemImage: "folder",
                             detail: item.isOnline ? nil : String(localized: "offline"),
-                            botAvatar: item.botAvatar,
+                            botAvatar: item.botAvatar.map { ($0, item.pin.id.instanceId, item.pin.id.objectId) },
                             needsYou: item.needsYou
                         ) { onOpen(item.pin.route) }
                         .contextMenu { AidenDrawerPinButton(pin: item.pin, store: pins) }
@@ -183,7 +185,8 @@ struct AidenDrawerView<Compose: View>: View {
         _ title: String,
         systemImage: String,
         detail: String? = nil,
-        botAvatar: AidenBotAvatarView? = nil,
+        /// A pinned Bot's avatar, its machine and its id.
+        botAvatar: (avatar: AidenBotAvatarView, machine: String, botID: String)? = nil,
         needsYou: Bool = false,
         action: @escaping () -> Void
     ) -> some View {
@@ -191,7 +194,14 @@ struct AidenDrawerView<Compose: View>: View {
             HStack(spacing: AidenSpacing.m) {
                 Group {
                     if let botAvatar {
-                        AidenBotSemanticAvatarView(avatar: botAvatar.semantic, name: title, size: 24)
+                        AidenBotCanonicalAvatarView(
+                            coordinator: coordinator,
+                            machine: botAvatar.machine,
+                            botID: botAvatar.botID,
+                            avatar: botAvatar.avatar,
+                            name: title,
+                            size: 24
+                        )
                     } else {
                         Image(systemName: systemImage)
                             .foregroundStyle(palette.secondary)
@@ -261,6 +271,7 @@ struct AidenDrawerView<Compose: View>: View {
                 .focused($searchIsFocused)
                 .submitLabel(.search)
                 .autocorrectionDisabled()
+                .frame(maxWidth: .infinity, minHeight: 44)
             if search.hasQuery {
                 Button {
                     search.query = ""
@@ -278,6 +289,10 @@ struct AidenDrawerView<Compose: View>: View {
         .padding(.horizontal, AidenSpacing.m)
         .frame(minHeight: 44)
         .background(palette.raised, in: Capsule())
+        // The whole 44pt capsule focuses the field, and it's the frame
+        // accessibility reports for it (the field alone is one line tall).
+        .contentShape(Capsule())
+        .onTapGesture { searchIsFocused = true }
     }
 }
 
@@ -368,6 +383,8 @@ struct AidenDrawerEdgeSwipe: UIGestureRecognizerRepresentable {
     }
 
     func updateUIGestureRecognizer(_ recognizer: UIScreenEdgePanGestureRecognizer, context: Context) {
+        // The layout direction can change while the shell is alive.
+        recognizer.edges = layoutDirection == .rightToLeft ? .right : .left
         context.coordinator.isEnabled = isEnabled
     }
 

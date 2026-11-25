@@ -184,8 +184,8 @@ enum AidenStateMatrix {
     static func openDrawer(in app: XCUIApplication) -> Bool {
         let close = app.buttons["Close menu"].firstMatch
         if close.exists { return true }
-        let menu = app.navigationBars.buttons["Open menu"].firstMatch
-        let showList = app.navigationBars.buttons["Show Sidebar"].firstMatch
+        let menu = app.buttons["Open menu"].firstMatch
+        let showList = app.buttons["Show Sidebar"].firstMatch
         if !menu.waitForExistence(timeout: 3), showList.exists { showList.tap() }
         guard menu.waitForExistence(timeout: 10) else { return false }
         for _ in 0..<2 {
