@@ -1472,6 +1472,8 @@
         "renderer/components/bots/wake-up-chip.test.tsx",
         "renderer/shared/bot-connections.test.ts",
         "renderer/shared/bot-presets.test.ts",
+        "renderer/shared/bot-sprite.test.ts",
+        "renderer/components/bot-avatar.test.tsx",
         "renderer/components/aiden-activity-mark.test.tsx",
         "renderer/components/ui-info-hint.test.tsx",
         "renderer/components/model-picker.test.tsx",

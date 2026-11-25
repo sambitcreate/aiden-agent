@@ -3390,6 +3390,55 @@ final class AidenBotSessionOptimisticTests: XCTestCase {
         XCTAssertEqual(model.statusLine(nowMs: started)?.display.word, "Getting ready", "the next turn never starts at Stopping")
     }
 
+    /// The avatar sees a Stop even when the Stop and the turn's end land in one
+    /// update, so the header settles quietly instead of playing done.
+    func testAStoppedTurnsAvatarSettlesQuietlyEvenWhenTheEndLandsWithTheStop() async throws {
+        let transport = FakeBotSessionTransport()
+        let model = await loaded(transport, try session(.running, activity: AidenBotSessionActivity(phase: "reading", startedAt: started)))
+        var settler = AidenBotAvatarStateSettler(signal: AidenBotAvatarSignal(model: model), at: 0)
+        XCTAssertEqual(settler.shown, .reading)
+        transport.queueStop(.success(try AidenBotSessionStateView(state: .running)))
+        await model.stop()
+        _ = await model.apply(event(seq: 5, .state(try AidenBotSessionStateView(state: .idle))))
+        _ = await model.apply(event(seq: 6, .activity(nil)))
+        // The settler hears of it only now, with the turn already over.
+        settler.receive(AidenBotAvatarSignal(model: model), at: 2)
+        XCTAssertEqual(settler.shown, .idle, "a stopped turn shows no done")
+        XCTAssertNil(settler.nextWake)
+
+        // The next turn is not stopped: it ends with done.
+        _ = await model.apply(event(seq: 7, .state(try AidenBotSessionStateView(state: .running))))
+        _ = await model.apply(event(seq: 8, .activity(AidenBotSessionActivity(phase: "reading", startedAt: started + 9_000))))
+        settler.receive(AidenBotAvatarSignal(model: model), at: 3)
+        settler.advance(to: 3.25)
+        XCTAssertEqual(settler.shown, .reading)
+        _ = await model.apply(event(seq: 9, .state(try AidenBotSessionStateView(state: .idle))))
+        _ = await model.apply(event(seq: 10, .activity(nil)))
+        settler.receive(AidenBotAvatarSignal(model: model), at: 5)
+        XCTAssertEqual(settler.shown, .done)
+    }
+
+    /// A queued turn that starts straight after a stopped one, with no idle
+    /// between them, is not stopped: it still ends with done.
+    func testAQueuedTurnAfterAStoppedOneWithNoIdleGapStillEndsWithDone() async throws {
+        let transport = FakeBotSessionTransport()
+        let model = await loaded(transport, try session(.running, activity: AidenBotSessionActivity(phase: "reading", startedAt: started)))
+        var settler = AidenBotAvatarStateSettler(signal: AidenBotAvatarSignal(model: model), at: 0)
+        transport.queueStop(.success(try AidenBotSessionStateView(state: .running)))
+        await model.stop()
+        settler.receive(AidenBotAvatarSignal(model: model), at: 1)
+        // The queued follow-up replaces the run while the state stays running.
+        _ = await model.apply(event(seq: 5, .activity(AidenBotSessionActivity(phase: "editing", startedAt: started + 9_000))))
+        XCTAssertFalse(model.stopRequestedThisTurn)
+        settler.receive(AidenBotAvatarSignal(model: model), at: 2)
+        settler.advance(to: 2.25)
+        XCTAssertEqual(settler.shown, .editing)
+        _ = await model.apply(event(seq: 6, .state(try AidenBotSessionStateView(state: .idle))))
+        _ = await model.apply(event(seq: 7, .activity(nil)))
+        settler.receive(AidenBotAvatarSignal(model: model), at: 4)
+        XCTAssertEqual(settler.shown, .done, "the queued turn was never stopped")
+    }
+
     func testAStopPressedAsANewRunStartsLeavesTheNewRunAlone() async throws {
         let transport = FakeBotSessionTransport()
         let model = await loaded(transport, try session(.running, activity: AidenBotSessionActivity(phase: "reading", startedAt: started)))
@@ -4201,34 +4250,6 @@ final class AidenBotSessionOptimisticTests: XCTestCase {
         XCTAssertFalse(model.hasLoaded)
         XCTAssertNotNil(model.errorMessage)
         transport.sessionGate.releaseAll()
-    }
-}
-
-/// A working Bot's face follows the shared `glance` keyframes (docs/activity-marks.md).
-final class AidenBotFaceGlanceTests: XCTestCase {
-    /// R19: a working Bot always keeps a visible cue, and only a face that may move glances.
-    func testAWorkingBotAlwaysShowsACueAndOnlyAMovingFaceGlances() {
-        XCTAssertEqual(aidenBotWorkingCue(working: true, hasPhoto: false, motionAllowed: true), AidenBotWorkingCue(glances: true, badge: false))
-        XCTAssertEqual(
-            aidenBotWorkingCue(working: true, hasPhoto: false, motionAllowed: false),
-            AidenBotWorkingCue(glances: false, badge: true),
-            "under Reduce Motion or Low Power a face wears the still badge"
-        )
-        XCTAssertEqual(aidenBotWorkingCue(working: true, hasPhoto: true, motionAllowed: true), AidenBotWorkingCue(glances: false, badge: true))
-        XCTAssertEqual(aidenBotWorkingCue(working: true, hasPhoto: true, motionAllowed: false), AidenBotWorkingCue(glances: false, badge: true))
-        XCTAssertEqual(aidenBotWorkingCue(working: false, hasPhoto: false, motionAllowed: true), .none)
-        XCTAssertEqual(aidenBotWorkingCue(working: false, hasPhoto: true, motionAllowed: false), .none)
-    }
-
-    func testTheEyesLookLeftThenRightAndBlinkOnTheGlanceTimeline() {
-        XCTAssertEqual(aidenBotFaceGlancePose(at: 0), .still, "t = 0 is the still pose Reduce Motion shows")
-        // 1.28 s is 32% of the 4 s period: held at translateX −2.6 of 24.
-        XCTAssertEqual(aidenBotFaceGlancePose(at: 1.28).dx, -2.6 / 24, accuracy: 0.0005)
-        // 2.4 s is 60%: held at +2.6.
-        XCTAssertEqual(aidenBotFaceGlancePose(at: 2.4).dx, 2.6 / 24, accuracy: 0.0005)
-        // 3.6 s is 90%: the blink's lowest point.
-        XCTAssertEqual(aidenBotFaceGlancePose(at: 3.6).blink, 0.1, accuracy: 0.0005)
-        XCTAssertEqual(aidenBotFaceGlancePose(at: 4).dx, 0, accuracy: 0.0005, "the timeline loops")
     }
 }
 

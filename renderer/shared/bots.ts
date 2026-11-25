@@ -74,10 +74,16 @@ export const BOT_AVATAR_COLOR_HEX: Record<BotAvatarColor, string> = {
   graphite: "#C5C5CE",
 };
 
-/** The eye mark drawn on every character colour. */
+/**
+ * Dark ink drawn on top of a character colour, such as the colour picker's check mark.
+ * Sprite faces don't use it: their eyes take each tint's own `deep` tone (`BOT_SPRITE_TONES`).
+ */
 export const BOT_AVATAR_FACE_HEX = "#292735";
 
-/** A bounded, theme-safe vector recipe: one colour and one shape, with one fixed eye mark. */
+/**
+ * A bounded, theme-safe avatar recipe: `shape` names one of the eight curated Hi-bit sprite
+ * bodies and `color` one of the twelve tints (`renderer/shared/bot-sprite.ts`).
+ */
 export interface BotAvatarAppearance {
   version: 1;
   shape: BotAvatarShape;

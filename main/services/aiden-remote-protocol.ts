@@ -372,8 +372,7 @@ export const AIDEN_REMOTE_CONTINUE_IN_NEW_CHAT_CONTRACT_REVISION = 64 as const;
  */
 export const AIDEN_REMOTE_STREAM_SNAPSHOT_REASONS_CONTRACT_REVISION = 65 as const;
 /**
- * Contract revision 66 (provisional; re-claim the next revision after
- * `main`'s at merge by changing only this constant): host feed Bot rows may
+ * Contract revision 66 (claimed at merge on 2026-11-25): host feed Bot rows may
  * carry `preview`, the one plain line the host's own Bots list shows under the
  * Bot's name (at most 140 characters), and a host now sends `lastReplyAt` for
  * every Bot rather than only Bots whose chat is open there, marking each row
@@ -383,8 +382,7 @@ export const AIDEN_REMOTE_STREAM_SNAPSHOT_REASONS_CONTRACT_REVISION = 65 as cons
  */
 export const AIDEN_REMOTE_BOT_FEED_PREVIEW_CONTRACT_REVISION = 66 as const;
 /**
- * Contract revision 67 (provisional; re-claim the next revision after
- * `main`'s at merge by changing only this constant): two Bot session routes.
+ * Contract revision 67 (claimed at merge on 2026-11-25): two Bot session routes.
  * `GET /bots/{botId}/session/entries?before=&limit=` pages the transcript
  * back from an entry the device already has, so a chat can show more than the
  * snapshot's window. `POST /bots/{botId}/queued/{submissionId}/withdraw`
@@ -394,7 +392,7 @@ export const AIDEN_REMOTE_BOT_FEED_PREVIEW_CONTRACT_REVISION = 66 as const;
  */
 export const AIDEN_REMOTE_BOT_SESSION_PAGES_CONTRACT_REVISION = 67 as const;
 /**
- * Contract revision 68 (provisional; re-claim the next free number at merge):
+ * Contract revision 68 (claimed at merge on 2026-11-25):
  * the `bot:needs-you` opt-in. A device holding it reads `needsYou: true` on a
  * `GET /bots` summary while an approval, a question, a hand-off or an open
  * issue waits on the person, the same signal the host feed's Bot rows carry
