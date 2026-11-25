@@ -1,7 +1,8 @@
 import SwiftUI
 
-/// Where running chats show. An accessory on iOS 26.0 can't be turned off, and a
-/// sidebar has no bottom accessory, so both of those list them in the Inbox.
+/// Where running chats show: above the compact dock, or, beside a sidebar,
+/// which has no dock, as the Inbox's first row. iOS 26.0 lists them in the
+/// Inbox too, as it did when the system tab bar carried the accessory.
 enum AidenRunningHome: Equatable {
     case accessory, inboxRow
 
@@ -13,8 +14,8 @@ enum AidenRunningHome: Equatable {
         if #available(iOS 26.1, *) { true } else { false }
     }
 
-    /// True when running chats are all the Inbox has and they sit above the tab
-    /// bar, so the list is empty without being caught up.
+    /// True when running chats are all the Inbox has and they sit above the
+    /// dock, so the list is empty without being caught up.
     func leavesListEmpty(_ inbox: AidenUnifiedInbox) -> Bool {
         self == .accessory && !inbox.running.isEmpty
             && inbox.needsYou.isEmpty && inbox.updates.isEmpty && inbox.earlier.isEmpty
@@ -49,12 +50,15 @@ struct AidenRunningSummary: Equatable {
     }
 }
 
-/// The oldest running chat, plus `+N` for the others. Above the tab bar it follows
-/// `tabViewBottomAccessoryPlacement`, and goes compact beside a minimized bar.
+/// The oldest running chat, plus `+N` for the others: above the compact dock,
+/// or as the Inbox's first row where there is no dock. It still follows
+/// `tabViewBottomAccessoryPlacement` should a system tab bar ever carry it.
 struct AidenRunningAccessory: View {
     private let summary: AidenRunningSummary
     private let onOpen: (AidenAppRoute) -> Void
     private let onShowAll: () -> Void
+    /// Above Aiden's own dock, which keeps its height as a system bar does.
+    private let isInBar: Bool
 
     @Environment(\.aidenPalette) private var palette
     @Environment(\.tabViewBottomAccessoryPlacement) private var placement
@@ -62,10 +66,12 @@ struct AidenRunningAccessory: View {
 
     init(
         rows: [AidenUnifiedInboxRow],
+        isInBar: Bool = false,
         onOpen: @escaping (AidenAppRoute) -> Void,
         onShowAll: @escaping () -> Void
     ) {
         summary = AidenRunningSummary(rows: rows)
+        self.isInBar = isInBar
         self.onOpen = onOpen
         self.onShowAll = onShowAll
     }
@@ -76,7 +82,7 @@ struct AidenRunningAccessory: View {
     /// press shows it large. As the Inbox's first row (a sidebar, or iOS 26.0)
     /// it grows with the text as the rows below it do.
     private var titleLineLimit: Int {
-        placement == nil && dynamicTypeSize.isAccessibilitySize ? 3 : 1
+        placement == nil && !isInBar && dynamicTypeSize.isAccessibilitySize ? 3 : 1
     }
 
     var body: some View {
@@ -131,15 +137,20 @@ struct AidenRunningAccessory: View {
     }
 }
 
-/// The accessory on the store's rows. Reading them here keeps a new row from
-/// redrawing the whole shell.
+/// The accessory above the compact dock, on the store's rows and on the same
+/// glass as the rest of the chrome. Reading the rows here keeps a new row
+/// from redrawing the whole shell.
 struct AidenRunningAccessoryHost: View {
     let store: AidenUnifiedInboxStore
     let onOpen: (AidenAppRoute) -> Void
     let onShowAll: () -> Void
 
     var body: some View {
-        AidenRunningAccessory(rows: store.inbox.running, onOpen: onOpen, onShowAll: onShowAll)
+        if store.hasRunningChats {
+            AidenRunningAccessory(rows: store.inbox.running, isInBar: true, onOpen: onOpen, onShowAll: onShowAll)
+                .aidenChromeGlass(isInteractive: true, in: Capsule())
+                .padding(.horizontal, AidenSpacing.m)
+        }
     }
 }
 
@@ -206,22 +217,5 @@ struct AidenRunningChatsSheet: View {
         }
         .buttonStyle(.plain)
         .aidenListCardRow(card)
-    }
-}
-
-extension View {
-    /// The accessory, where the OS can turn it off. The branch is fixed for a run
-    /// of the app, and `isEnabled` does the changing, so the modifier is never
-    /// added or removed under a live `TabView`.
-    @ViewBuilder
-    func aidenRunningAccessory<Content: View>(
-        isEnabled: Bool,
-        @ViewBuilder content: () -> Content
-    ) -> some View {
-        if #available(iOS 26.1, *) {
-            tabViewBottomAccessory(isEnabled: isEnabled) { content() }
-        } else {
-            self
-        }
     }
 }

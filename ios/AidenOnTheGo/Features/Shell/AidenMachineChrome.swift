@@ -497,6 +497,9 @@ extension EnvironmentValues {
     /// Whether the system puts its bars in a rail at the side, as on a closed
     /// iPhone Duo. Set once by the shell, above every tab's stack.
     @Entry var aidenTabsInSideRail = false
+    /// Whether Aiden's own dock stands in for the system tab bar, as at compact
+    /// width. Set once by the shell, above every tab's stack.
+    @Entry var aidenUsesDock = false
 }
 
 extension View {
@@ -504,6 +507,7 @@ extension View {
     /// `aidenConversationTabBar` says. Where the bars sit in a side rail the
     /// tabs stay: they cover nothing there, and with them hidden the rail
     /// turns opaque white or black instead of showing the canvas under it.
+    /// Where the dock stands in for the tab bar the system's stays hidden.
     func aidenConversationTabBar() -> some View {
         modifier(AidenConversationTabBarModifier())
     }
@@ -512,9 +516,10 @@ extension View {
 private struct AidenConversationTabBarModifier: ViewModifier {
     @Environment(\.aidenConversationTabBar) private var tabBar
     @Environment(\.aidenTabsInSideRail) private var tabsInSideRail
+    @Environment(\.aidenUsesDock) private var usesDock
 
     func body(content: Content) -> some View {
-        content.toolbar(tabsInSideRail ? .automatic : tabBar, for: .tabBar)
+        content.toolbar(usesDock ? .hidden : tabsInSideRail ? .automatic : tabBar, for: .tabBar)
     }
 }
 

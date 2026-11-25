@@ -615,6 +615,17 @@ final class AidenAppNavigation {
         }
     }
 
+    /// A tap on the compact dock. Like the system tab bar, choosing another tab
+    /// keeps where each tab was, and choosing the tab already open returns it
+    /// to its root.
+    func selectFromDock(_ tab: AidenAppTab) {
+        if tab == self.tab {
+            selectTabRoot(tab)
+        } else {
+            self.tab = tab
+        }
+    }
+
     /// A chat the person just started (Compose, or the drawer's New chat).
     /// Started from Workspaces it stays there, so Back returns to the
     /// workspace; from anywhere else it opens on Chats. It puts the drawer away.

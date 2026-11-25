@@ -181,6 +181,8 @@ struct AidenAppShellView: View {
     @State private var showsVerticalBar = false
     /// The shell's own window, for its orientation.
     @State private var window = AidenWindowReader.Window()
+    /// Whether the software keyboard is up. The compact dock gives way to it.
+    @State private var keyboardIsUp = false
     /// The drawer over the tabs (`AidenDrawerView`).
     private var drawerIsOpen: Bool {
         get { navigation.drawerIsOpen }
@@ -311,6 +313,12 @@ struct AidenAppShellView: View {
         coordinator.installationStore.installations.isEmpty
     }
 
+    /// Aiden's own dock and Home header at compact width; the system's
+    /// sidebar-adaptable tab view beside a list.
+    private var tabChrome: AidenTabChrome {
+        .resolve(besideList: navigation.besideList)
+    }
+
     private func openAddComputer() {
         activeSheet = .pairing(showsDesktopCheck: hasNoComputers)
     }
@@ -360,25 +368,25 @@ struct AidenAppShellView: View {
 
     private var shellContent: some View {
         TabView(selection: Binding(get: { navigation.tab }, set: { navigation.tab = $0 })) {
-            Tab("Chats", systemImage: "bubble.left.and.bubble.right", value: AidenAppTab.chats) {
+            Tab(AidenAppTab.chats.title, systemImage: "bubble.left.and.bubble.right", value: AidenAppTab.chats) {
                 splitTab(.chats, columns: chatsColumns, empty: .chats) { selection in
                     chatsList(selection: selection)
                 }
             }
 
-            Tab("Bots", systemImage: AidenChromeSymbols.bots, value: AidenAppTab.bots) {
+            Tab(AidenAppTab.bots.title, systemImage: AidenChromeSymbols.bots, value: AidenAppTab.bots) {
                 splitTab(.bots, columns: botsColumns, empty: .bots) { selection in
                     botsList(selection: selection)
                 }
             }
 
-            Tab("Workspaces", systemImage: "folder", value: AidenAppTab.workspaces) {
+            Tab(AidenAppTab.workspaces.title, systemImage: "folder", value: AidenAppTab.workspaces) {
                 splitTab(.workspaces, columns: workspacesColumns, empty: .workspaces) { selection in
                     workspacesList(selection: selection)
                 }
             }
 
-            Tab("Inbox", systemImage: "tray", value: AidenAppTab.inbox) {
+            Tab(AidenAppTab.inbox.title, systemImage: "tray", value: AidenAppTab.inbox) {
                 splitTab(.inbox, columns: inboxColumns, empty: .inbox) { selection in
                     inboxList(selection: selection)
                 }
@@ -386,7 +394,7 @@ struct AidenAppShellView: View {
             .badge(inboxStore.needsYouCount)
             // An iPad's tab strip draws the badge without saying it.
             .accessibilityValue(
-                Text(inboxStore.needsYouCount == 1 ? "1 chat needs you" : "\(inboxStore.needsYouCount) chats need you"),
+                Text(AidenAppTab.inbox.accessibilityCount(needsYou: inboxStore.needsYouCount) ?? ""),
                 isEnabled: inboxStore.needsYouCount > 0
             )
         }
@@ -401,13 +409,13 @@ struct AidenAppShellView: View {
         }
         // Above every tab's stack, so pushed screens read them too.
         .environment(\.aidenTabsInSideRail, showsVerticalBar)
+        .environment(\.aidenUsesDock, tabChrome == .dock)
         .environment(\.aidenOfflineNotices, built.offlineNotices)
-        .tabBarMinimizeBehavior(horizontalSizeClass == .compact ? .onScrollDown : .automatic)
-        // Hiding the tab bar leaves the accessory up, under the composer.
-        .aidenRunningAccessory(
-            isEnabled: runningHome == .accessory && inboxStore.hasRunningChats && !navigation.showsConversation
-        ) {
-            AidenRunningAccessoryHost(store: inboxStore, onOpen: openRow) { activeSheet = .runningChats }
+        .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillShowNotification)) { _ in
+            keyboardIsUp = true
+        }
+        .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillHideNotification)) { _ in
+            keyboardIsUp = false
         }
         // A new tab view each time the display opens or closes, as at launch.
         // A closed iPhone Duo's side rail reads the showing tab's Back and
@@ -557,11 +565,15 @@ struct AidenAppShellView: View {
             // modifier reads the drawer itself, so each host updates on its own.
             list: { selection in
                 list(selection)
-                    .toolbar { menuToolbarItem(on: tab) }
+                    .toolbar {
+                        // Home's header carries its own at compact width.
+                        if tab != .chats || tabChrome == .system { menuToolbarItem(on: tab) }
+                    }
             },
             screen: { route, keepsTabs in
                 AnyView(screen(for: route, keepsTabs: keepsTabs))
-            }
+            },
+            dock: { route in AnyView(dockBar(under: route)) }
         )
     }
 
@@ -646,6 +658,12 @@ struct AidenAppShellView: View {
         .safeAreaInset(edge: .top, spacing: 0) {
             AidenConnectionNotice(coordinator: coordinator)
         }
+        // Above the connection notice: at compact width Home draws its own
+        // header and hides the navigation bar, keeping the title for Back.
+        .safeAreaBar(edge: .top, spacing: 0) {
+            if tabChrome == .dock { homeHeaderBar }
+        }
+        .toolbar(tabChrome == .dock ? .hidden : .automatic, for: .navigationBar)
         .safeAreaInset(edge: .bottom, spacing: 0) {
             if showsHome, !hasNoComputers {
                 AidenHomeComposerSlot(flow: newWork, model: homeComposer)
@@ -655,7 +673,9 @@ struct AidenAppShellView: View {
         }
         .environment(\.aidenAmbientActivity, ambient.activity)
         .environment(\.aidenAmbientMicLevel, ambient.micLevel)
-        .toolbar { composeToolbar }
+        .toolbar {
+            if tabChrome == .system { composeToolbar }
+        }
     }
 
     /// A row, Bot or chat chosen on Home (the Chats list).
@@ -723,6 +743,50 @@ struct AidenAppShellView: View {
                 break
             }
         }
+    }
+
+    // MARK: Compact chrome
+
+    /// The running chats and the dock under a stack's list (`route` nil) or a
+    /// screen pushed over it, at compact width outside a conversation and
+    /// while the keyboard is down.
+    @ViewBuilder
+    private func dockBar(under route: AidenAppRoute?) -> some View {
+        if AidenTabChrome.showsDock(
+            besideList: navigation.besideList,
+            showsConversation: route?.isConversation == true,
+            keyboardIsUp: keyboardIsUp
+        ) {
+            VStack(spacing: AidenSpacing.s) {
+                if runningHome == .accessory {
+                    AidenRunningAccessoryHost(store: inboxStore, onOpen: openRow) { activeSheet = .runningChats }
+                }
+                AidenDock(selection: navigation.tab, needsYouCount: inboxStore.needsYouCount) { tab in
+                    navigation.selectFromDock(tab)
+                }
+            }
+        }
+    }
+
+    /// Home's own header at compact width (concept 01): the menu and compose
+    /// as round glass buttons over the greeting, in place of the navigation
+    /// bar. VoiceOver returns to this menu button as it does to a tab's.
+    private var homeHeaderBar: some View {
+        HStack(spacing: AidenSpacing.m) {
+            Button(action: openDrawer) {
+                Label("Open menu", systemImage: "line.3.horizontal")
+            }
+            .accessibilityFocused($focusedMenuButton, equals: AidenAppTab.chats)
+            .accessibilityShowsLargeContentViewer()
+            .accessibilityIdentifier("aiden.home.menu")
+            Spacer(minLength: 0)
+            composeButton
+                .accessibilityShowsLargeContentViewer()
+        }
+        .buttonStyle(AidenChromeIconButtonStyle())
+        .padding(.horizontal, AidenSpacing.l)
+        .padding(.top, AidenSpacing.xs)
+        .padding(.bottom, AidenSpacing.s)
     }
 
     /// Compose, or Add Computer with none paired. Settings, Scheduled and
@@ -1406,6 +1470,8 @@ private struct AidenListTab<List: View>: View {
     let list: (AidenAppRoute?) -> List
     /// A route's screen, and whether a conversation there keeps the tabs.
     let screen: (AidenAppRoute, Bool) -> AnyView
+    /// The compact dock under the list (nil) or a pushed route.
+    let dock: (AidenAppRoute?) -> AnyView
 
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
 
@@ -1431,9 +1497,25 @@ private struct AidenListTab<List: View>: View {
             get: { path },
             set: { write($0, besideList: false) }
         )) {
+            // The dock stands in for the system tab bar on a stack, on the
+            // list and every screen pushed over it, with the running chats
+            // above it. It's each screen's own bar, inside the stack: an
+            // inset on the stack or the tab view never reached the screens,
+            // so Home's composer sat under the dock (iOS 27 simulator). Its
+            // content keeps clear of it and scrolls under its edge effect.
             list(nil)
                 .environment(\.aidenListScroll, AidenListScrollKeeping(places: scrollPlaces, tab: tab))
-                .navigationDestination(for: AidenAppRoute.self) { screen($0, false) }
+                .toolbar(.hidden, for: .tabBar)
+                .safeAreaBar(edge: .bottom, spacing: 0) { dock(nil) }
+                // A soft edge, as under the system bar: the closed iPhone
+                // Duo otherwise cuts the list hard across the screen.
+                .aidenComposerSoftScrollEdge()
+                .navigationDestination(for: AidenAppRoute.self) { route in
+                    screen(route, false)
+                        .toolbar(.hidden, for: .tabBar)
+                        .safeAreaBar(edge: .bottom, spacing: 0) { dock(route) }
+                        .aidenComposerSoftScrollEdge()
+                }
         }
     }
 
