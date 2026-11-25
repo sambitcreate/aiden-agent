@@ -37,6 +37,11 @@ export const BOT_BUBBLE_CHANNELS = {
   setDragging: "bots:bubbles:setDragging",
   /** Overlay only. invoke() → BotBubbleOverlayInfo for the overlay that asks. */
   overlayInfo: "bots:bubbles:overlayInfo",
+  /**
+   * Overlay only. invoke({ cover }): the still picture of a shrink that named this
+   * `cover` is on screen, so the main window may swap its chat for the card under it.
+   */
+  transitionShown: "bots:bubbles:transitionShown",
   /** notification: BotBubbleState, to every window that shows heads or bubble controls. */
   changed: "bots:bubbles:changed",
   /** notification to an overlay: BotBubbleTransition (the shrink or grow animation). */
@@ -127,6 +132,12 @@ export interface BotBubbleTransition {
   rect: BotBubbleRect;
   /** A PNG data URL of the chat area, when main could capture one. */
   image: string | null;
+  /**
+   * On a shrink sent before its head exists: the overlay shows the picture
+   * over the chat, answers `transitionShown` with this number, and plays the
+   * shrink once the head arrives.
+   */
+  cover?: number;
 }
 
 export interface BotBubbleOverlayInfo {

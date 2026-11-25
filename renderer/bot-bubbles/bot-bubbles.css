@@ -54,6 +54,11 @@
   transition: scale var(--motion-duration) var(--motion-easing);
 }
 
+/* Not yet drawn: its Bot or photo is still being read. It fades in with the head's opacity transition. */
+.bot-bubble-head[data-arriving] {
+  opacity: 0;
+}
+
 .bot-bubble-head[data-magnet] {
   scale: 0.86;
 }
@@ -220,6 +225,19 @@
 
 @keyframes bot-bubble-chat-in {
   from {
+    opacity: 0;
+    scale: 0.96;
+  }
+}
+
+/* Tucked away: the same chat fades back toward its head, then leaves the page. */
+.bot-bubble-chat[data-closing] {
+  pointer-events: none;
+  animation: bot-bubble-chat-out 140ms var(--motion-easing) both;
+}
+
+@keyframes bot-bubble-chat-out {
+  to {
     opacity: 0;
     scale: 0.96;
   }

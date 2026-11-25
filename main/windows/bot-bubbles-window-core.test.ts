@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { EMPTY_BOT_BUBBLE_STATE, type BotBubbleState } from "../../renderer/shared/bot-bubbles.js";
 import {
+  CoverWaits,
   PendingTransitions,
   TRANSITION_STALE_MS,
   allowOverlayRebuild,
@@ -14,6 +15,7 @@ import {
   displaysNeedingOverlay,
   growTargetRect,
   overlayIgnoresMouse,
+  releaseOverlayFocus,
   windowRectToOverlay,
 } from "./bot-bubbles-window-core.js";
 
@@ -109,6 +111,75 @@ test("transitions wait for the page to listen, and stale ones are dropped", () =
   pending.reset();
   assert.equal(pending.offer("after reload", 6_000), null);
   assert.deepEqual(pending.markReady(6_100), ["after reload"]);
+});
+
+test("a transition is sent at once only while the page listens", () => {
+  const pending = new PendingTransitions<string>();
+  assert.equal(pending.listening, false);
+  pending.markReady(0);
+  assert.equal(pending.listening, true);
+  pending.reset();
+  assert.equal(pending.listening, false, "a reloading page isn't asked to cover the chat");
+});
+
+/** A window that is key until something takes the key window away. */
+function fakeOverlayWindow(options: { focused: boolean; passes: boolean | "throws" }) {
+  const log: string[] = [];
+  let focused = options.focused;
+  return {
+    log,
+    port: {
+      isFocused: () => focused,
+      setFocusable: (focusable: boolean) => void log.push(`focusable:${focusable}`),
+      passKeyOn: () => {
+        log.push("pass");
+        if (options.passes === "throws") throw new Error("no window");
+        if (options.passes) focused = false;
+      },
+      blur: () => {
+        log.push("blur");
+        focused = false;
+      },
+    },
+  };
+}
+
+test("closing a mini chat hands the keyboard on without taking the overlay off screen", () => {
+  const key = fakeOverlayWindow({ focused: true, passes: true });
+  assert.equal(releaseOverlayFocus(key.port), "passed");
+  assert.deepEqual(key.log, ["focusable:false", "pass"], "unfocusable first, so the key window can't come back; never blurred");
+
+  const idle = fakeOverlayWindow({ focused: false, passes: true });
+  assert.equal(releaseOverlayFocus(idle.port), "idle");
+  assert.deepEqual(idle.log, ["focusable:false"], "an overlay that isn't key is left alone");
+});
+
+test("an overlay that is still the key window after the hand-over is blurred, so typing never stays in it", () => {
+  for (const passes of [false, "throws"] as const) {
+    const stuck = fakeOverlayWindow({ focused: true, passes });
+    assert.equal(releaseOverlayFocus(stuck.port), "blurred");
+    assert.deepEqual(stuck.log, ["focusable:false", "pass", "blur"]);
+    assert.equal(stuck.port.isFocused(), false);
+  }
+});
+
+test("main waits for the overlay that was asked to show the picture, and never for long", async () => {
+  const waits = new CoverWaits();
+  const order: string[] = [];
+
+  const answered = waits.start(11, 60_000);
+  void answered.shown.then(() => order.push("answered"));
+  waits.settle(answered.cover, 12);
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.deepEqual(order, [], "another page's answer doesn't count");
+  waits.settle(answered.cover, 11);
+  await answered.shown;
+  assert.deepEqual(order, ["answered"]);
+
+  const silent = waits.start(11, 5);
+  assert.notEqual(silent.cover, answered.cover);
+  await silent.shown;
+  waits.settle(silent.cover, 11);
 });
 
 test("overlay sizes and rects are reported in the page's CSS pixels", () => {

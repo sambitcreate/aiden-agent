@@ -76,8 +76,10 @@ Heads floating over other apps never take keyboard focus from the app you are
 using, so there they are reachable by keyboard while a mini chat is open
 (`Tab` moves between the heads and the chat). Heads inside the Aiden window are
 always reachable with `Tab`.
-With **Reduce Motion** on, heads move without the spring and the shrink becomes
-a short fade.
+A tucked-away mini chat fades back toward its head; the heads themselves stay
+put. With **Reduce Motion** on, heads move without the spring, the shrink
+becomes a short fade, the mini chat opens and closes at once, and bringing a
+Bot back to the window plays no grow.
 
 ## Where it works
 

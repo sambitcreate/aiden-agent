@@ -6,6 +6,7 @@ import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testi
 import { QueryClientProvider } from "@tanstack/react-query";
 import { createBotTestQueryClient } from "../main/bots/test-providers";
 import { botFixture } from "../main/bots/test-fixtures";
+import { invalidateBotCanonicalPhotos } from "../lib/bot-canonical-photo-cache";
 import { BOT_SIDEBAR_PREFERENCES_KEY } from "../lib/bot-sidebar-preferences";
 import { EMPTY_BOT_BUBBLE_STATE, type BotBubble, type BotBubbleState } from "../shared/bot-bubbles";
 import type { BotLiveSnapshot, BotLiveSummary } from "../shared/bot-live";
@@ -325,4 +326,121 @@ test("dragging the head of an open chat keeps a half-written message", async () 
   await waitFor(() => assert.ok(calls.some((call) => call.channel === "bots:bubbles:move")));
   const chat = await screen.findByRole("region", { name: "Penny chat" });
   assert.equal((within(chat).getByRole("textbox", { name: "Message Penny" }) as HTMLTextAreaElement).value, "Half a thought");
+});
+
+// Compared as booleans: a failed assertion that prints a DOM node stalls the run.
+const chatElement = () => document.querySelector<HTMLElement>('[data-bubble-chat="bot-1"]');
+
+test("a tucked chat stays where it was, out of reach, until its exit has played; the head is never redrawn", async () => {
+  installBotTestIpc(LAYER_IPC);
+  const view = renderLayer({ openBotId: "bot-1" });
+  await screen.findByRole("textbox", { name: "Message Penny" });
+  const chat = chatElement();
+  const button = screen.getByRole("button", { name: /^Penny/u });
+  assert.ok(chat);
+
+  view.update({ openBotId: null });
+  assert.ok(chatElement() === chat, "the same chat is still on the page while it leaves");
+  assert.equal(screen.queryByRole("region", { name: "Penny chat" }), null, "it is no longer offered as a chat");
+  assert.equal(screen.queryByRole("textbox", { name: "Message Penny" }), null);
+  assert.ok(screen.getByRole("button", { name: /^Penny/u }) === button, "the head is the same element");
+
+  // A message's own animation ending inside the chat is not the chat's exit.
+  fireEvent.animationEnd(chat.querySelector("header")!);
+  assert.ok(chatElement() === chat);
+  fireEvent.animationEnd(chat);
+  await waitFor(() => assert.ok(chatElement() === null));
+});
+
+test("a chat opened again while it leaves is the same chat, with its half-written message", async () => {
+  installBotTestIpc(LAYER_IPC);
+  const view = renderLayer({ openBotId: "bot-1" });
+  const box = await screen.findByRole("textbox", { name: "Message Penny" });
+  fireEvent.change(box, { target: { value: "Half a thought" } });
+  view.update({ openBotId: null });
+  view.update({ openBotId: "bot-1" });
+  const again = await screen.findByRole("textbox", { name: "Message Penny" });
+  assert.ok(again === box);
+  assert.equal((again as HTMLTextAreaElement).value, "Half a thought");
+  await waitFor(() => assert.ok(document.activeElement === again, "the cursor is back in the message box"));
+  // The exit it had started must not take the open chat away later.
+  await new Promise((resolve) => setTimeout(resolve, 450));
+  assert.ok(screen.getByRole("region", { name: "Penny chat" }));
+});
+
+test("a tucked chat leaves by itself where no exit animation runs", async () => {
+  installBotTestIpc(LAYER_IPC);
+  const view = renderLayer({ openBotId: "bot-1" });
+  await screen.findByRole("textbox", { name: "Message Penny" });
+  view.update({ openBotId: null });
+  assert.ok(chatElement());
+  await waitFor(() => assert.ok(chatElement() === null), { timeout: 2_000 });
+});
+
+test("a chat whose head closes goes with it at once, and doesn't come back with a later head", async () => {
+  installBotTestIpc(LAYER_IPC);
+  const view = renderLayer({ openBotId: "bot-1" });
+  await screen.findByRole("textbox", { name: "Message Penny" });
+  view.update({ openBotId: null, bubbles: [] });
+  assert.ok(chatElement() === null);
+  view.update({ openBotId: null, bubbles: [PENNY] });
+  await head(/^Penny/u);
+  assert.ok(chatElement() === null);
+});
+
+test("a head dropped on the × waits there until its bubble is gone, with clicks passing through again", async () => {
+  installBotTestIpc({ ...LAYER_IPC, "bots:bubbles:close": () => stateWith({ bubbles: [] }) });
+  const dragging: boolean[] = [];
+  const view = renderLayer({ onDraggingChange: (value) => dragging.push(value) });
+  const button = await head(/^Penny/u);
+  const atSide = button.style.translate;
+  fireEvent.pointerDown(button, { button: 0, pointerId: 8, clientX: 960, clientY: 400 });
+  fireEvent.pointerMove(button, { pointerId: 8, clientX: 900, clientY: 450 });
+  fireEvent.pointerMove(button, { pointerId: 8, clientX: 526, clientY: 734 });
+  const onTarget = button.style.translate;
+  assert.notEqual(onTarget, atSide);
+  fireEvent.pointerUp(button, { pointerId: 8, clientX: 526, clientY: 734 });
+  assert.equal(button.style.translate, onTarget, "it doesn't spring back to its side before it closes");
+  assert.ok(document.querySelector("[data-bubble-close-target]"));
+  assert.equal(dragging[dragging.length - 1], false, "the drag itself is over");
+  view.update({ bubbles: [] });
+  await waitFor(() => assert.ok(document.querySelector("[data-bubble-close-target]") === null));
+});
+
+test("a head dropped on the × goes back to its side when the bubble couldn't be closed", async () => {
+  mount({
+    "bots:bubbles:close": () => {
+      throw new Error("The list couldn't be saved.");
+    },
+  });
+  const button = await head(/^Penny/u);
+  const atSide = button.style.translate;
+  fireEvent.pointerDown(button, { button: 0, pointerId: 9, clientX: 960, clientY: 400 });
+  fireEvent.pointerMove(button, { pointerId: 9, clientX: 900, clientY: 450 });
+  fireEvent.pointerMove(button, { pointerId: 9, clientX: 526, clientY: 734 });
+  fireEvent.pointerUp(button, { pointerId: 9, clientX: 526, clientY: 734 });
+  await waitFor(() => assert.ok(document.querySelector("[data-bubble-close-target]") === null));
+  assert.equal(screen.getByRole("button", { name: /^Penny/u }).style.translate, atSide);
+});
+
+test("a head keeps its photo while the photo cache reloads for a new head", async () => {
+  let reads = 0;
+  let finishReload: (() => void) | undefined;
+  const photo = { assetRevision: "r1", dataUrl: "data:image/png;base64,AAAA" };
+  mount({
+    "bots:getCanonicalPhoto": () => {
+      reads += 1;
+      if (reads === 1) return photo;
+      return new Promise((resolve) => {
+        finishReload = () => resolve(photo);
+      });
+    },
+  });
+  const button = await head(/^Penny/u);
+  await waitFor(() => assert.ok(button.querySelector("img")));
+  act(() => invalidateBotCanonicalPhotos());
+  await waitFor(() => assert.equal(reads, 2));
+  assert.ok(button.querySelector("img"), "the photo stays on the head while it is read again");
+  await act(async () => finishReload?.());
+  assert.ok(button.querySelector("img"));
 });

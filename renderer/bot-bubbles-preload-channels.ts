@@ -18,6 +18,7 @@ export const BOT_BUBBLES_INVOKE_CHANNELS: ReadonlySet<string> = new Set([
   BOT_BUBBLE_CHANNELS.setInteractive,
   BOT_BUBBLE_CHANNELS.setDragging,
   BOT_BUBBLE_CHANNELS.overlayInfo,
+  BOT_BUBBLE_CHANNELS.transitionShown,
 
   // The mini chat: live feed and the Bot's own read surfaces
   "bots:live:subscribe",

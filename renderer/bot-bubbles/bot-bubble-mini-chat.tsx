@@ -45,6 +45,9 @@ export const BOT_BUBBLE_HIT_SELECTOR = [
   '[role="alertdialog"]',
 ].join(", ");
 
+/** The mini chat's exit is over by now even if no animation end was heard. */
+export const MINI_CHAT_EXIT_FALLBACK_MS = 400;
+
 function rectOf(element: HTMLElement | null) {
   const rect = element?.getBoundingClientRect();
   return rect && rect.width > 0 && rect.height > 0
@@ -60,12 +63,21 @@ export function BotBubbleMiniChat({
   botId,
   placement,
   hidden = false,
+  closing = false,
+  onClosed,
   offerAuto = false,
 }: {
   botId: string;
   placement: MiniChatPlacement;
   /** Kept mounted but out of sight (its head is being dragged), so the draft survives. */
   hidden?: boolean;
+  /**
+   * Tucked away and on its way out: still drawn while its exit plays, but it
+   * takes no clicks, keys or focus and marks nothing seen. `onClosed` says the
+   * exit is over and the chat can go.
+   */
+  closing?: boolean;
+  onClosed?(): void;
   /** Whether repeated approvals may offer switching to Auto (only where settings can change). */
   offerAuto?: boolean;
 }) {
@@ -100,8 +112,8 @@ export function BotBubbleMiniChat({
   const botFound = Boolean(current);
   const { markViewed } = botSidebarPreferenceActions;
   React.useEffect(() => {
-    if (botFound) markViewed(botId, replyAt);
-  }, [botFound, botId, replyAt, markViewed]);
+    if (botFound && !closing) markViewed(botId, replyAt);
+  }, [botFound, closing, botId, replyAt, markViewed]);
 
   const tuck = React.useCallback(() => report(applyBotBubbleChange(botBubblesApi.open(null)), "Aiden couldn’t tuck that chat away."), []);
   const openInAiden = React.useCallback(
@@ -111,16 +123,27 @@ export function BotBubbleMiniChat({
   const closeBubble = () => report(applyBotBubbleChange(botBubblesApi.close(botId)), "Aiden couldn’t close that bubble.");
   // Opening puts the cursor in the message box; closing while the chat held focus gives it back to the head.
   React.useEffect(() => {
-    if (botFound) composerRef.current?.focus({ preventScroll: true });
-  }, [botFound]);
+    if (botFound && !closing) composerRef.current?.focus({ preventScroll: true });
+  }, [botFound, closing]);
+  // The head takes focus the moment the chat starts to leave (or goes at once), not when its exit ends.
   React.useLayoutEffect(() => {
     const chat = chatRef.current;
-    return () => {
+    const giveFocusToHead = () => {
       if (!chat?.contains(document.activeElement)) return;
       document.querySelector<HTMLElement>(`[data-bubble-head="${botId}"]`)?.focus({ preventScroll: true });
     };
-  }, [botId]);
-  useLayer(true, "sheet", {
+    if (closing) giveFocusToHead();
+    return closing ? undefined : giveFocusToHead;
+  }, [botId, closing]);
+  // The exit is a CSS animation; a timer ends it where none runs (the chat is not displayed, or a test DOM).
+  const closed = React.useRef(onClosed);
+  closed.current = onClosed;
+  React.useEffect(() => {
+    if (!closing) return;
+    const timer = setTimeout(() => closed.current?.(), MINI_CHAT_EXIT_FALLBACK_MS);
+    return () => clearTimeout(timer);
+  }, [closing]);
+  useLayer(!closing, "sheet", {
     name: "bot-bubble-chat",
     onEscape: (event) => {
       event.preventDefault();
@@ -271,12 +294,19 @@ export function BotBubbleMiniChat({
   return (
     <section
       ref={chatRef}
-      data-bubble-hit=""
+      data-bubble-hit={closing ? undefined : ""}
       data-bubble-chat={botId}
+      data-closing={closing ? "" : undefined}
       data-side={placement.caretSide}
       hidden={hidden}
+      inert={closing}
+      aria-hidden={closing ? true : undefined}
       aria-label={`${name} chat`}
       className="bot-bubble-chat"
+      onAnimationEnd={(event) => {
+        // Its own animation only: a card or a message inside animates too.
+        if (closing && event.target === event.currentTarget) onClosed?.();
+      }}
       style={{ left: placement.x, top: placement.y, width: placement.width, height: placement.height }}
     >
       <span aria-hidden="true" className="bot-bubble-caret" data-side={placement.caretSide} style={{ top: placement.caretY }} />

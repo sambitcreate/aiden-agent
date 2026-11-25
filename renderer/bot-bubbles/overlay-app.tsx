@@ -66,61 +66,150 @@ function cssToken(name: string, fallback: string): string {
   return value || fallback;
 }
 
-/** A transition with the head it flies to or from, fixed when it arrived. */
-type OverlayTransition = BotBubbleTransition & { key: number; head: HeadPosition | null };
+/** A transition with the head it flies to or from, as known when it arrived. */
+export type OverlayTransition = BotBubbleTransition & { key: number; head: HeadPosition | null };
+
+/** A shrink waits this long for its head before it fades out where it is. */
+export const SHRINK_HEAD_WAIT_MS = 600;
+
+/** Two frames from now: what was just rendered is on screen by then. */
+function afterPaint(run: () => void): () => void {
+  let second = 0;
+  const first = requestAnimationFrame(() => {
+    second = requestAnimationFrame(run);
+  });
+  return () => {
+    cancelAnimationFrame(first);
+    cancelAnimationFrame(second);
+  };
+}
 
 /**
  * The shrink (the captured chat scales and fades into its head) or the grow
- * (the head swells toward the Aiden window's chat, then fades). With Reduce
- * Motion it is a short fade in place. It runs once per transition: re-renders
- * never restart or cut it short.
+ * (the head swells toward the Aiden window's chat, then fades). It runs once
+ * per transition: re-renders never restart or cut it short.
+ *
+ * A shrink draws nothing until its picture is decoded, then shows it still,
+ * says so (`onShown`, which lets the Aiden window swap its chat for the card
+ * underneath) and moves only once its head is there. With Reduce Motion the
+ * shrink is a short fade in place and the grow is skipped.
  */
-function BotBubbleTransitionView({ transition, onDone }: { transition: OverlayTransition; onDone(): void }) {
+export function BotBubbleTransitionView({
+  transition,
+  head,
+  onShown,
+  onDone,
+}: {
+  transition: OverlayTransition;
+  /** Where the head is now; null until it exists. */
+  head: HeadPosition | null;
+  onShown?(): void;
+  onDone(): void;
+}) {
   const ref = React.useRef<HTMLDivElement | null>(null);
-  const done = React.useRef(onDone);
-  done.current = onDone;
+  const imageRef = React.useRef<HTMLImageElement | null>(null);
+  const callbacks = React.useRef({ onShown, onDone });
+  callbacks.current = { onShown, onDone };
+  const { rect, kind, image } = transition;
+  // A grow with nowhere to start, or with Reduce Motion, would only flash a window-sized sheet.
+  const skipped = kind === "grow" && (!head || prefersReducedMotion());
+  const [pictured, setPictured] = React.useState(image === null);
+  const [waitedOut, setWaitedOut] = React.useState(false);
+  const animation = React.useRef<Animation | null>(null);
+
+  React.useEffect(() => {
+    if (skipped) callbacks.current.onDone();
+  }, [skipped]);
+
+  // The picture is decoded before anything shows, so the first frame is never an empty sheet.
+  React.useEffect(() => {
+    if (image === null) return;
+    let active = true;
+    const element = imageRef.current;
+    const ready = () => {
+      if (active) setPictured(true);
+    };
+    if (element && typeof element.decode === "function") void element.decode().then(ready, ready);
+    else ready();
+    return () => {
+      active = false;
+    };
+  }, [image]);
+
+  React.useEffect(() => {
+    if (!pictured || kind !== "shrink") return;
+    const stopShown = afterPaint(() => callbacks.current.onShown?.());
+    const timer = setTimeout(() => setWaitedOut(true), SHRINK_HEAD_WAIT_MS);
+    return () => {
+      stopShown();
+      clearTimeout(timer);
+    };
+  }, [pictured, kind]);
+
+  const headKnown = head !== null;
+  const latestHead = React.useRef(head);
+  latestHead.current = head;
   React.useLayoutEffect(() => {
+    if (skipped || animation.current || !pictured) return;
+    // A shrink holds still until its head exists (or never comes).
+    if (kind === "shrink" && !headKnown && !waitedOut) return;
     const element = ref.current;
     if (!element || typeof element.animate !== "function") {
-      done.current();
+      callbacks.current.onDone();
       return;
     }
-    const { rect, kind, head } = transition;
-    let animation: Animation;
-    if (prefersReducedMotion() || !head) {
-      animation = element.animate(
-        kind === "shrink" ? [{ opacity: 1 }, { opacity: 0 }] : [{ opacity: 0 }, { opacity: 1 }, { opacity: 0 }],
-        { duration: 150, easing: cssToken("--motion-easing", "ease-out"), fill: "forwards" },
-      );
+    const to = latestHead.current;
+    let started: Animation;
+    if (prefersReducedMotion() || !to) {
+      started = element.animate([{ opacity: 1 }, { opacity: 0 }], {
+        duration: 150,
+        easing: cssToken("--motion-easing", "ease-out"),
+        fill: "forwards",
+      });
     } else {
       const scale = HEAD_SIZE / Math.max(1, rect.width);
-      const dx = head.x + HEAD_SIZE / 2 - (rect.x + rect.width / 2);
-      const dy = head.y + HEAD_SIZE / 2 - (rect.y + rect.height / 2);
+      const dx = to.x + HEAD_SIZE / 2 - (rect.x + rect.width / 2);
+      const dy = to.y + HEAD_SIZE / 2 - (rect.y + rect.height / 2);
       const small = { transform: `translate(${dx}px, ${dy}px) scale(${scale})`, borderRadius: `${rect.width / 2}px`, opacity: 0 };
       const big = { transform: "translate(0, 0) scale(1)", borderRadius: "", opacity: 1 };
-      animation = element.animate(
+      started = element.animate(
         kind === "shrink" ? [big, small] : [{ ...small, opacity: 1 }, { ...big, opacity: 0.9 }, { ...big, opacity: 0 }],
         { duration: 340, easing: cssToken("--motion-large-easing", "ease-out"), fill: "forwards" },
       );
     }
-    // Only the animation itself ends the transition; cancelling it here on unmount does not.
-    animation.onfinish = () => done.current();
-    animation.oncancel = () => done.current();
-    return () => {
-      animation.onfinish = null;
-      animation.oncancel = null;
-      animation.cancel();
-    };
-  }, [transition]);
-  const { rect } = transition;
+    animation.current = started;
+    // Only the animation itself ends the transition; cancelling it on unmount does not.
+    started.onfinish = () => callbacks.current.onDone();
+    started.oncancel = () => callbacks.current.onDone();
+  }, [skipped, pictured, kind, headKnown, waitedOut, rect]);
+  React.useEffect(
+    () => () => {
+      const running = animation.current;
+      if (!running) return;
+      running.onfinish = null;
+      running.oncancel = null;
+      running.cancel();
+    },
+    [],
+  );
+
+  if (skipped) return null;
   return (
     <div
       ref={ref}
       aria-hidden="true"
+      data-bubble-transition={kind}
       className="bot-bubble-transition bg-popover"
-      style={{ left: rect.x, top: rect.y, width: rect.width, height: rect.height }}
+      style={{
+        left: rect.x,
+        top: rect.y,
+        width: rect.width,
+        height: rect.height,
+        // Kept in layout while the picture decodes, so it can be decoded and animated.
+        ...(pictured ? {} : { visibility: "hidden" as const }),
+      }}
     >
-      {transition.image ? <img alt="" src={transition.image} draggable={false} /> : null}
+      {image ? <img ref={imageRef} alt="" decoding="sync" src={image} draggable={false} /> : null}
     </div>
   );
 }
@@ -202,8 +291,10 @@ export function BotBubbleOverlayApp() {
     return botBubblesApi.onTransition((transition) => {
       next += 1;
       const { bubbles: shown, area: now } = latest.current;
-      // A shrink lands on its (new) head; a grow leaves from where the closed head last sat.
-      const head = headPosition(shown, transition.botId, now) ?? lastHead.get(transition.botId) ?? null;
+      // A grow leaves from its head, or from where a head main already removed last sat.
+      // A shrink lands on its head, which may not exist yet: it is looked up again as heads change.
+      const head =
+        headPosition(shown, transition.botId, now) ?? (transition.kind === "grow" ? (lastHead.get(transition.botId) ?? null) : null);
       const item: OverlayTransition = { ...transition, key: next, head };
       setTransitions((current) => [...current.filter((other) => other.botId !== transition.botId), item]);
     });
@@ -238,7 +329,15 @@ export function BotBubbleOverlayApp() {
       {transitions.length > 0 ? (
         <div className="bot-bubble-layer">
           {transitions.map((transition) => (
-            <BotBubbleTransitionView key={transition.key} transition={transition} onDone={() => finish(transition.key)} />
+            <BotBubbleTransitionView
+              key={transition.key}
+              transition={transition}
+              head={transition.kind === "shrink" ? headPosition(bubbles, transition.botId, area) : transition.head}
+              onShown={() => {
+                if (transition.cover !== undefined) void botBubblesApi.transitionShown(transition.cover).catch(() => undefined);
+              }}
+              onDone={() => finish(transition.key)}
+            />
           ))}
         </div>
       ) : null}

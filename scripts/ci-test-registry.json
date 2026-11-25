@@ -1563,6 +1563,7 @@
         "renderer/components/composer-browser-grab.test.tsx",
         "renderer/bot-bubbles/head-layout.test.ts",
         "renderer/bot-bubbles/bot-bubble-heads.test.tsx",
+        "renderer/bot-bubbles/overlay-transition.test.tsx",
         "renderer/main/bots/bot-bubble-card.test.tsx",
         "renderer/main/bots/bot-approvals.test.tsx",
         "renderer/components/settings/bot-bubbles-settings.test.tsx"

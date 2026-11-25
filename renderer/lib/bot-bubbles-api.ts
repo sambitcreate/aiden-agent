@@ -40,6 +40,8 @@ export const botBubblesApi = {
   setDragging: (dragging: boolean) => invoke<void>(BOT_BUBBLE_CHANNELS.setDragging, { dragging }),
   /** Overlay only: which display this overlay covers and its size. */
   overlayInfo: () => invoke<BotBubbleOverlayInfo>(BOT_BUBBLE_CHANNELS.overlayInfo),
+  /** Overlay only: a shrink's still picture is on screen (see `BotBubbleTransition.cover`). */
+  transitionShown: (cover: number) => invoke<void>(BOT_BUBBLE_CHANNELS.transitionShown, { cover }),
   onChanged: (handler: (state: BotBubbleState) => void) =>
     onNotification<unknown>(BOT_BUBBLE_CHANNELS.changed, (payload) => handler(parseBotBubbleState(payload))),
   /** Overlay only: the overlay's display changed size or zoom. */

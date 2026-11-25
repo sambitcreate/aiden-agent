@@ -133,6 +133,8 @@ export function BotBubbleHeads({
     undefined,
   );
   const interactive = React.useRef(false);
+  /** Where the pointer last was, to ask again what is under it when a surface goes away. */
+  const pointer = React.useRef<{ x: number; y: number } | null>(null);
   const callbacks = React.useRef({ onInteractiveChange, onDraggingChange });
   callbacks.current = { onInteractiveChange, onDraggingChange };
 
@@ -197,6 +199,7 @@ export function BotBubbleHeads({
   // While a menu is open the whole layer takes clicks, so a click beside the menu closes it.
   React.useEffect(() => {
     const onMove = (event: MouseEvent) => {
+      pointer.current = { x: event.clientX, y: event.clientY };
       if (gesture.current?.moved || document.querySelector('[role="menu"]'))
         return setInteractive(true);
       const target = event.target instanceof Element ? event.target : null;
@@ -332,11 +335,20 @@ export function BotBubbleHeads({
       x: current.origin.x + event.clientX - current.startX,
       y: current.origin.y + event.clientY - current.startY,
     };
-    endDrag();
     if (isOverCloseTarget(position, area)) {
-      closeBubble(bubble.botId);
+      // The head stays on the × until main drops it, rather than springing back to its side first.
+      callbacks.current.onDraggingChange?.(false);
+      void applyBotBubbleChange(botBubblesApi.close(bubble.botId)).catch(
+        (error: unknown) => {
+          setDrag((now) => (now?.botId === bubble.botId ? null : now));
+          toast.error(
+            userFacingErrorMessage(error, "Aiden couldn’t close that bubble."),
+          );
+        },
+      );
       return;
     }
+    endDrag();
     persist(
       bubble,
       placeHeadInStack(
@@ -427,6 +439,51 @@ export function BotBubbleHeads({
     botId: string;
     placement: MiniChatPlacement;
   } | null>(null);
+  // A chat that was just tucked away stays where it was, inert, until its exit
+  // has played; it is the same element all along, so nothing blinks or remounts.
+  const [chats, setChats] = React.useState<{
+    open: string | null;
+    leaving: { botId: string; placement: MiniChatPlacement } | null;
+  }>({ open: openBotId, leaving: null });
+  let leavingChat = chats.leaving;
+  if (chats.open !== openBotId) {
+    const last = lastChatPlacement.current;
+    const wasShown =
+      chats.open !== null &&
+      last?.botId === chats.open &&
+      drag?.botId !== chats.open;
+    leavingChat = wasShown
+      ? last
+      : leavingChat?.botId === openBotId
+        ? null
+        : leavingChat;
+  }
+  // A chat whose head is gone goes with it.
+  const leavingId = leavingChat?.botId;
+  if (
+    leavingId !== undefined &&
+    !bubbles.some((bubble) => bubble.botId === leavingId)
+  )
+    leavingChat = null;
+  if (chats.open !== openBotId || chats.leaving !== leavingChat)
+    setChats({ open: openBotId, leaving: leavingChat });
+  const chatLeft = React.useCallback(
+    (botId: string) =>
+      setChats((now) =>
+        now.leaving?.botId === botId ? { ...now, leaving: null } : now,
+      ),
+    [],
+  );
+  // The pointer may now rest on nothing of ours (Escape closed the chat under it).
+  const leavingBotId = leavingChat?.botId ?? null;
+  React.useEffect(() => {
+    const at = pointer.current;
+    if (!at || gesture.current || typeof document.elementFromPoint !== "function")
+      return;
+    if (document.querySelector('[role="menu"]')) return;
+    const under = document.elementFromPoint(at.x, at.y);
+    setInteractive(Boolean(under?.closest(BOT_BUBBLE_HIT_SELECTOR)));
+  }, [openBotId, leavingBotId, setInteractive]);
   if (openBotId !== null && openPosition)
     lastChatPlacement.current = {
       botId: openBotId,
@@ -516,6 +573,14 @@ export function BotBubbleHeads({
                 hidden={chatHidden}
                 offerAuto={host === "window"}
               />
+            ) : leavingChat?.botId === bubble.botId ? (
+              <BotBubbleMiniChat
+                botId={bubble.botId}
+                placement={leavingChat.placement}
+                closing
+                onClosed={() => chatLeft(bubble.botId)}
+                offerAuto={host === "window"}
+              />
             ) : null}
           </React.Fragment>
         );
@@ -524,16 +589,43 @@ export function BotBubbleHeads({
   );
 }
 
+/** A head waits this long for its Bot's photo before it shows the drawn face instead. */
+const HEAD_PHOTO_WAIT_MS = 600;
+
+type HeadPhoto = ReturnType<typeof useBotCanonicalPhoto>;
+
+/**
+ * The Bot's photo for a head. While the photo cache reloads (it is emptied
+ * whenever a head is added) the photo already on the head stays, so a new
+ * head never makes the others blink to their drawn faces and back. `settled`
+ * is false until the first answer, or until the wait runs out.
+ */
+function useHeadPhoto(botId: string): {
+  photo: NonNullable<HeadPhoto> | null;
+  settled: boolean;
+} {
+  const latest = useBotCanonicalPhoto(botId, true, "selected");
+  const held = React.useRef<HeadPhoto>(undefined);
+  if (latest !== undefined) held.current = latest;
+  const [waitedOut, setWaitedOut] = React.useState(false);
+  const known = held.current !== undefined;
+  React.useEffect(() => {
+    if (known) return;
+    const timer = setTimeout(() => setWaitedOut(true), HEAD_PHOTO_WAIT_MS);
+    return () => clearTimeout(timer);
+  }, [known]);
+  return { photo: held.current ?? null, settled: known || waitedOut };
+}
+
 function HeadFace({
-  botId,
   avatar,
   name,
+  photo,
 }: {
-  botId: string;
   avatar: Parameters<typeof AvatarFace>[0]["avatar"];
   name: string;
+  photo: NonNullable<HeadPhoto> | null;
 }) {
-  const photo = useBotCanonicalPhoto(botId, true, "selected");
   const [failed, setFailed] = React.useState<string>();
   const showPhoto = photo && failed !== photo.assetRevision;
   return (
@@ -543,6 +635,8 @@ function HeadFace({
         <img
           alt=""
           draggable={false}
+          // Decoded with the frame that first shows it, so the drawn face never shows through for a frame.
+          decoding="sync"
           src={photo.dataUrl}
           onError={() => setFailed(photo.assetRevision)}
         />
@@ -576,6 +670,10 @@ interface BotBubbleHeadProps {
 function BotBubbleHead(props: BotBubbleHeadProps) {
   const { botId, position, open, dragging, magnet, live, peek } = props;
   const status = useBotHeadStatus(botId, { live, viewing: open });
+  const { photo, settled } = useHeadPhoto(botId);
+  // Drawn only once its Bot and photo are known, so a new head fades in with
+  // its real face instead of flashing the default one first.
+  const arriving = status.loading || !settled;
   const peekId = `bot-bubble-peek-${botId}`;
   const count = status.unreadCount;
   return (
@@ -591,6 +689,7 @@ function BotBubbleHead(props: BotBubbleHeadProps) {
             aria-expanded={open}
             aria-describedby={props.peekShown ? peekId : undefined}
             className="bot-bubble-head"
+            data-arriving={arriving ? "" : undefined}
             data-dragging={dragging ? "" : undefined}
             data-magnet={magnet ? "" : undefined}
             style={{ translate: `${position.x}px ${position.y}px` }}
@@ -605,9 +704,9 @@ function BotBubbleHead(props: BotBubbleHeadProps) {
             onPointerLeave={() => props.onHover(false)}
           >
             <HeadFace
-              botId={botId}
               avatar={status.bot?.avatar ?? DEFAULT_BOT_AVATAR}
               name={status.name}
+              photo={photo}
             />
             {status.working ? (
               <span aria-hidden="true" className="bot-bubble-ring" />

@@ -20,13 +20,14 @@ import {
 } from "../../renderer/shared/bot-bubbles.js";
 import { BOT_BUBBLES_NOTIFICATION_CHANNELS } from "../../renderer/bot-bubbles-preload-channels.js";
 import type { BotBubbleWindowPort } from "../handlers/bot-bubbles.js";
-import { BrowserWindow, logger, registerBroadcastReceiver, screen } from "../platform.js";
+import { BaseWindow, BrowserWindow, logger, registerBroadcastReceiver, screen } from "../platform.js";
 import { botBubbleService, startBotBubbleService, stopBotBubbleService } from "../services/bot-bubbles/bot-bubbles-main.js";
 import { rendererDocumentOwner } from "../services/renderer-document-owner.js";
 import { markAuxiliaryWindow } from "./auxiliary-windows.js";
 import type { BotBubbleOverlayAccess } from "./bot-bubbles-overlay-access.js";
 import { isBotBubbleOverlayWebContents, registerBotBubbleOverlayWebContents } from "./bot-bubbles-overlay-registry.js";
 import {
+  CoverWaits,
   PendingTransitions,
   allowOverlayRebuild,
   isZoomShortcut,
@@ -38,6 +39,7 @@ import {
   displaysNeedingOverlay,
   growTargetRect,
   overlayIgnoresMouse,
+  releaseOverlayFocus,
   windowRectToOverlay,
   type OverlayDisplay,
 } from "./bot-bubbles-window-core.js";
@@ -81,6 +83,8 @@ let stopListening: (() => void) | null = null;
 /** display id → recent rebuild times, and displays left without an overlay after a crash loop. */
 const rebuilds = new Map<number, number[]>();
 const blockedDisplays = new Set<number>();
+/** Shrinks whose still picture an overlay is putting over the chat (see `coverChat`). */
+const coverWaits = new CoverWaits();
 
 function liveDisplays(): OverlayDisplay[] {
   return screen.getAllDisplays().map((display) => ({ id: display.id, workArea: display.workArea }));
@@ -156,8 +160,55 @@ function applyFocus(overlay: Overlay, state: BotBubbleState): void {
     return;
   }
   overlay.focusedFor = null;
-  if (window.isFocused()) window.blur();
-  window.setFocusable(false);
+  const how = releaseOverlayFocus({
+    isFocused: () => window.isFocused(),
+    setFocusable: (focusable) => window.setFocusable(focusable),
+    passKeyOn: () => passKeyOn(overlay),
+    blur: () => window.blur(),
+  });
+  if (how === "blurred") logger.debug("bot-bubbles", "The overlay kept the keyboard; it was blurred instead.");
+}
+
+/**
+ * Take key-window status off an overlay that stays on screen. Electron's
+ * `blur()` does it on macOS by ordering the window out and back in, which
+ * blinks every head on the display when a mini chat closes. Instead a 1 px,
+ * see-through panel takes the key window and goes away at once: closing a key
+ * panel gives the keyboard back to the app in front, and the overlay (already
+ * unfocusable) is never picked as the next key window. It is not a
+ * BrowserWindow, so it loads nothing and no app-window rule sees it.
+ */
+function passKeyOn(overlay: Overlay): void {
+  if (process.platform !== "darwin") return;
+  const sink = new BaseWindow({
+    x: Math.round(overlay.workArea.x),
+    y: Math.round(overlay.workArea.y),
+    width: 1,
+    height: 1,
+    type: "panel",
+    frame: false,
+    transparent: true,
+    backgroundColor: "#00000000",
+    hasShadow: false,
+    show: false,
+    skipTaskbar: true,
+    hiddenInMissionControl: true,
+    fullscreenable: false,
+    resizable: false,
+    movable: false,
+    minimizable: false,
+    maximizable: false,
+  });
+  try {
+    // Where the overlay is: every Space and over full-screen apps, so showing it never switches Space.
+    sink.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true, skipTransformProcessType: true });
+    sink.setAlwaysOnTop(true, "floating");
+    sink.setIgnoreMouseEvents(true);
+    sink.showInactive();
+    sink.focus();
+  } finally {
+    sink.destroy();
+  }
 }
 
 /** A crashed, hung or failed page: click-through now, then a fresh overlay unless it keeps failing. */
@@ -488,6 +539,27 @@ export const botBubbleWindowPort: BotBubbleWindowPort<IpcMainInvokeEvent> = {
     if (image.isEmpty()) return null;
     // One pixel per point is plenty for a quarter-second shrink.
     return image.resize({ width: area.width }).toDataURL();
+  },
+
+  coverChat(event, botId, rect, image) {
+    const window = BrowserWindow.fromWebContents(event.sender);
+    if (!window || window.isDestroyed()) return Promise.resolve(false);
+    // The new head goes on the display under the main window (`displayIdFor`): its overlay takes the picture.
+    const overlay = overlays.get(screen.getDisplayMatching(window.getBounds()).id);
+    // No overlay there yet, or its page isn't listening: the shrink plays after the bubble instead.
+    if (!overlay || overlay.window.isDestroyed() || !overlay.transitions.listening) return Promise.resolve(false);
+    const contents = overlay.window.webContents;
+    const { cover, shown } = coverWaits.start(contents.id);
+    const target = scaleRect(
+      windowRectToOverlay(rect, window.getContentBounds(), overlay.workArea, event.sender.getZoomFactor()),
+      overlayZoom(overlay),
+    );
+    contents.send(BOT_BUBBLE_CHANNELS.transition, { botId, kind: "shrink", rect: target, image, cover } satisfies BotBubbleTransition);
+    return shown.then(() => true);
+  },
+
+  transitionShown(event, cover) {
+    coverWaits.settle(cover, event.sender.id);
   },
 
   playShrink(event, botId, rect, image) {

@@ -1,7 +1,7 @@
 // Bot bubbles IPC. Who may call what:
 // - state, close, open, move, bringBack, forgetRecent: the main window or a bubble overlay;
 // - bubble: the main window only (a Bot is bubbled from its chat there);
-// - setInteractive, setDragging, overlayInfo: a current bubble overlay only.
+// - setInteractive, setDragging, overlayInfo, transitionShown: a current bubble overlay only.
 // Every Bot id goes through `parseBotId`; any other shape is refused.
 
 import {
@@ -20,7 +20,17 @@ import type { BotBubbleService } from "../services/bot-bubbles/bot-bubbles-servi
 export interface BotBubbleWindowPort<Event> {
   /** A PNG data URL of `rect` (the sender's CSS pixels), or null when it can't be captured. */
   capture(event: Event, rect: BotBubbleRect): Promise<string | null>;
-  /** After a bubble from the main window: play the shrink into the new head. */
+  /**
+   * Before a bubble from the main window: lay the captured chat over the chat
+   * area on that display's overlay and wait (briefly) until it is on screen, so
+   * the window swaps its chat for the card underneath. The overlay then plays
+   * the shrink by itself when the head arrives. False when no overlay could
+   * take it (none on that display yet); `playShrink` is used after the bubble then.
+   */
+  coverChat(event: Event, botId: string, rect: BotBubbleRect, image: string): Promise<boolean>;
+  /** An overlay says the still picture of the shrink that named `cover` is on screen. */
+  transitionShown(event: Event, cover: number): void;
+  /** After a bubble from the main window that nothing covered: play the shrink into the new head. */
   playShrink(event: Event, botId: string, rect: BotBubbleRect, image: string | null): void;
   /**
    * Open in Aiden: plays the grow (overlay host), runs `close`, then shows the
@@ -108,8 +118,10 @@ export function registerBotBubbleHandlers<Event>(deps: BotBubbleHandlerDependenc
     // Capture before the bubble exists: the chat swaps to its "in a bubble" card on the change.
     const before = await service.state();
     const image = sourceRect && before.host === "overlay" ? await windows.capture(event, sourceRect).catch(() => null) : null;
+    // Then the picture goes over the chat first, so the swap to the card is never seen.
+    const covered = sourceRect && image ? await windows.coverChat(event, botId, sourceRect, image).catch(() => false) : false;
     const state = await service.bubble(botId, { ...(side ? { side } : {}), displayId: windows.displayIdFor(event) });
-    if (sourceRect && state.host === "overlay") windows.playShrink(event, botId, sourceRect, image);
+    if (sourceRect && state.host === "overlay" && !covered) windows.playShrink(event, botId, sourceRect, image);
     return state;
   });
 
@@ -152,6 +164,13 @@ export function registerBotBubbleHandlers<Event>(deps: BotBubbleHandlerDependenc
   handle(BOT_BUBBLE_CHANNELS.setDragging, (event, raw) => {
     fromOverlay(event);
     windows.setDragging(event, flag(raw, "dragging"));
+  });
+
+  handle(BOT_BUBBLE_CHANNELS.transitionShown, (event, raw) => {
+    fromOverlay(event);
+    const cover = fields(raw, ["cover"]).cover;
+    if (typeof cover !== "number" || !Number.isSafeInteger(cover)) throw new Error(INVALID);
+    windows.transitionShown(event, cover);
   });
 
   handle(BOT_BUBBLE_CHANNELS.overlayInfo, (event, ...args) => {

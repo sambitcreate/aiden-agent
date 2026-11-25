@@ -10,7 +10,7 @@ import { registerBotBubbleHandlers, type BotBubbleWindowPort } from "./bot-bubbl
 
 type FakeEvent = { sender: { id: number } };
 
-async function harness(platform: NodeJS.Platform = "darwin") {
+async function harness(platform: NodeJS.Platform = "darwin", options: { overlayListens?: boolean } = {}) {
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-bot-bubble-ipc-"));
   const handlers = new Map<string, (event: FakeEvent, ...args: unknown[]) => unknown>();
   const mainEvent: FakeEvent = { sender: { id: 1 } };
@@ -30,6 +30,12 @@ async function harness(platform: NodeJS.Platform = "darwin") {
       log.push(`capture:${rect.width}x${rect.height}`);
       return "data:image/png;base64,AAAA";
     },
+    coverChat: async (_event, botId) => {
+      // What the Aiden window shows while the picture goes up: its chat, so no head yet.
+      log.push(`cover:${botId}:${service.current().bubbles.length} heads`);
+      return options.overlayListens === true;
+    },
+    transitionShown: (_event, cover) => log.push(`shown:${cover}`),
     playShrink: (_event, botId, _rect, image) => log.push(`shrink:${botId}:${image ? "image" : "none"}`),
     bringBack: async (botId, close) => {
       log.push(`grow:${botId}`);
@@ -63,7 +69,29 @@ test("bubbling from the main window captures the chat, adds the head on the wind
     sourceRect: { x: 0, y: 0, width: 400, height: 600 },
   });
   assert.deepEqual(state.bubbles, [{ botId: "bot-a", placement: { side: "left", y: 0.2, displayId: 3 } }]);
-  assert.deepEqual(log, ["capture:400x600", "shrink:bot-a:image"]);
+  assert.deepEqual(log, ["capture:400x600", "cover:bot-a:0 heads", "shrink:bot-a:image"]);
+});
+
+test("with an overlay listening, the chat's picture covers the chat before the head exists and the shrink is not sent again", async () => {
+  const { call, mainEvent, log } = await harness("darwin", { overlayListens: true });
+  const state = await call(BOT_BUBBLE_CHANNELS.bubble, mainEvent, {
+    botId: "bot-a",
+    sourceRect: { x: 0, y: 0, width: 400, height: 600 },
+  });
+  assert.deepEqual(state.bubbles.map((bubble) => bubble.botId), ["bot-a"]);
+  assert.deepEqual(log, ["capture:400x600", "cover:bot-a:0 heads"]);
+});
+
+test("only an overlay may say a shrink's picture is on screen", async () => {
+  const { call, mainEvent, overlayEvent, strangerEvent, log } = await harness();
+  await call(BOT_BUBBLE_CHANNELS.transitionShown, overlayEvent, { cover: 7 });
+  assert.deepEqual(log, ["shown:7"]);
+  await assert.rejects(call(BOT_BUBBLE_CHANNELS.transitionShown, mainEvent, { cover: 7 }), /Untrusted/);
+  await assert.rejects(call(BOT_BUBBLE_CHANNELS.transitionShown, strangerEvent, { cover: 7 }), /Untrusted/);
+  for (const bad of [{}, { cover: "7" }, { cover: 1.5 }, { cover: 7, extra: true }]) {
+    await assert.rejects(call(BOT_BUBBLE_CHANNELS.transitionShown, overlayEvent, bad), /Invalid/);
+  }
+  assert.deepEqual(log, ["shown:7"]);
 });
 
 test("without a float-over-apps host there is no capture or shrink", async () => {

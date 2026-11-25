@@ -13,6 +13,8 @@ import { useBotSidebarPreferences } from "../main/bots/use-bot-sidebar-preferenc
 
 export interface BotHeadStatus {
   bot: BotDefinition | null;
+  /** The Bot's definition is still being read for the first time. */
+  loading: boolean;
   name: string;
   working: boolean;
   needsYou: boolean;
@@ -87,6 +89,7 @@ export function useBotHeadStatus(botId: string, { live, viewing }: { live: boole
     : null;
   return {
     bot: definition,
+    loading: bot.isLoading,
     name: definition?.name ?? "Bot",
     working: state?.kind === "running",
     needsYou,

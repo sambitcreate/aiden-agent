@@ -149,6 +149,11 @@ export class PendingTransitions<T> {
   private queue: Array<{ value: T; at: number }> = [];
   private ready = false;
 
+  /** Whether the page listens now (a transition offered now is sent at once). */
+  get listening(): boolean {
+    return this.ready;
+  }
+
   /** Returns the value when it may be sent now, or null when it was queued. */
   offer(value: T, now: number): T | null {
     if (this.ready) return value;
@@ -185,4 +190,72 @@ export function scaleRect(rect: BotBubbleRect, zoomFactor: number): BotBubbleRec
 /** ⌘/Ctrl with +, -, = or 0: the zoom shortcuts the overlay ignores. */
 export function isZoomShortcut(input: { type: string; key: string; meta: boolean; control: boolean }): boolean {
   return input.type === "keyDown" && (input.meta || input.control) && ["+", "=", "-", "_", "0"].includes(input.key);
+}
+
+/** How an overlay gives up the keyboard. */
+export interface OverlayFocusPort {
+  isFocused(): boolean;
+  setFocusable(focusable: boolean): void;
+  /** Move key-window status off the overlay while it stays on screen; may do nothing. */
+  passKeyOn(): void;
+  /** Electron's `blur()`: on macOS it orders the window out and back in, which blinks everything it draws. */
+  blur(): void;
+}
+
+/**
+ * The open mini chat closed: the overlay stops taking the keyboard. It is made
+ * unfocusable first, so nothing hands the key window back to it, then key
+ * status is passed on without taking the overlay off screen. `blur()` is the
+ * last resort, used only when the overlay is still the key window after that.
+ */
+export function releaseOverlayFocus(port: OverlayFocusPort): "idle" | "passed" | "blurred" {
+  port.setFocusable(false);
+  if (!port.isFocused()) return "idle";
+  try {
+    port.passKeyOn();
+  } catch {
+    // Fall through to the blur.
+  }
+  if (!port.isFocused()) return "passed";
+  port.blur();
+  return "blurred";
+}
+
+/** Main waits this long for an overlay to show a shrink's still picture before bubbling anyway. */
+export const COVER_WAIT_MS = 250;
+
+/**
+ * Shrinks waiting for their overlay to say the still picture is on screen.
+ * Each wait ends when that overlay answers or after `waitMs`, whichever is
+ * first; an answer from any other page is ignored.
+ */
+export class CoverWaits {
+  private next = 0;
+  private readonly waiting = new Map<number, { owner: number; done(): void }>();
+
+  /** A new wait for the overlay page `owner`: the number to send with the transition and the promise that ends the wait. */
+  start(owner: number, waitMs = COVER_WAIT_MS): { cover: number; shown: Promise<void> } {
+    const cover = ++this.next;
+    const shown = new Promise<void>((resolve) => {
+      const timer = setTimeout(() => {
+        this.waiting.delete(cover);
+        resolve();
+      }, waitMs);
+      this.waiting.set(cover, {
+        owner,
+        done: () => {
+          clearTimeout(timer);
+          this.waiting.delete(cover);
+          resolve();
+        },
+      });
+    });
+    return { cover, shown };
+  }
+
+  /** The page `owner` says `cover` is on screen. */
+  settle(cover: number, owner: number): void {
+    const wait = this.waiting.get(cover);
+    if (wait && wait.owner === owner) wait.done();
+  }
 }

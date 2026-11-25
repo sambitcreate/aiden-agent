@@ -33,6 +33,7 @@ const OVERLAY_UNSCOPED_CHANNELS: ReadonlySet<string> = new Set([
   "bots:bubbles:setInteractive",
   "bots:bubbles:setDragging",
   "bots:bubbles:overlayInfo",
+  "bots:bubbles:transitionShown",
   "bots:live:unsubscribe",
 ]);
 
