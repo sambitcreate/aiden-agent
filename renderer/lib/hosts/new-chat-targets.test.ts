@@ -194,6 +194,33 @@ test("Bots are grouped by host, without hosts that have none", () => {
   assert.equal(groups[1]?.host.disabledReason, "Spare hasn't allowed this Mac to start Bot chats.");
 });
 
+test("a Mac paired before it could use another Mac's Bots is told to pair again, instead of seeing nothing", () => {
+  const durable = (id: string, name: string, capabilities: string[]): PeerHostView => ({
+    ...view(id, name, capabilities),
+    features: ["bot-durable-session-v1"],
+  });
+  const groups = remoteBotGroups(
+    [
+      durable("host-b", "Studio", CHAT_GRANTS),
+      // Paired with Bot access, and simply has no Bots.
+      durable("host-c", "Laptop", [...CHAT_GRANTS, "bot:read", "bot:write"]),
+      // Too old to share Bots at all: nothing to pair again for.
+      view("host-d", "Spare", CHAT_GRANTS),
+    ],
+    [connected("host-b"), connected("host-c"), connected("host-d")],
+    new Map([
+      ["host-b", feed("host-b", {})],
+      ["host-c", feed("host-c", {})],
+      ["host-d", feed("host-d", {})],
+    ]),
+    "darwin",
+  );
+  assert.deepEqual(
+    groups.map((group) => [group.host.id, group.host.disabledReason, group.bots]),
+    [["host-b", "To use Studio's Bots here, pair this Mac with it again.", []]],
+  );
+});
+
 test("a remote Bot keeps its avatar and says it needs the person, as its own Mac does", () => {
   const botGrants = [...CHAT_GRANTS, "bot:read", "bot:write"];
   const avatar = { version: 1, shape: "hex", color: "rose" };

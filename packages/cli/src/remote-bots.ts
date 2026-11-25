@@ -24,6 +24,7 @@ export function createCliRemoteBots(agentDir: string, instanceId: string, runtim
     },
   } : undefined;
   const bots = new AidenRemoteBotService({ ...(messaging ? { messaging } : {}), avatar: createCliBotAvatars(agentDir, instanceId), application: runtime.application, ...(runtime.durable ? { deleteBot: runtime.durable.runtime.deleteBot, sessionStates: async (ids: readonly string[]) => new Map(await Promise.all(ids.map(async (id) => [id, projectBotSessionState(await runtime.durable!.runtime.state(id)).state] as const))) } : {}), chatStore: daemon.chatStore, idempotency, persistIdempotency,
+    log: (message, error) => { process.stderr.write(`aiden: ${message} (${error instanceof Error ? error.message : "unknown error"})\n`); },
     inbox: { list: (deviceId, input) => createBotInboxProjectionService({
       listBots: () => runtime.application.list(), listChatMetadata: () => daemon.chatStore.list(),
       projectBatch: async (request) => mergeBotInboxActivityPreviews(request, await chatApi.streams.projectChatActivities(deviceId, request.map(({ chatId }) => chatId))),

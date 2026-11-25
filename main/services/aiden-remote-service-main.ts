@@ -906,6 +906,7 @@ async function createRuntime(): Promise<AidenRemoteRuntime> {
           const bots = botsSupported ? new AidenRemoteBotService({
             application: botApplicationService,
             chatStore,
+            log: (message, error) => logger.warn("aiden-remote", message, error),
             avatar: createMainBotAvatarApplicationAdapter(instanceId),
             inbox: {
               list: (deviceId, input) =>

@@ -54,6 +54,7 @@ const operationIds: Record<PeerOperation["operation"], string> = {
   botSession: "getBotSession",
   botSessionImage: "getBotSessionImage",
   botAvatar: "getBotAvatarContent",
+  botSessionEntries: "getBotSessionEntries",
   botSend: "sendBotMessage",
   botResume: "resumeBotSession",
   botDismiss: "dismissBotSession",
@@ -64,6 +65,10 @@ const operationIds: Record<PeerOperation["operation"], string> = {
   botPause: "pauseBot",
   botUnpause: "unpauseBot",
   botConnectionRequest: "requestBotConnection",
+  botRespondPlan: "respondBotPlan",
+  botAnswerAccessRequest: "answerBotAccessRequest",
+  botRespondRoutineProposal: "respondBotRoutineProposal",
+  botWithdrawQueued: "withdrawBotQueuedMessage",
   uploadBotAttachment: "uploadBotAttachment",
   removeBotAttachment: "removeBotAttachment",
 };

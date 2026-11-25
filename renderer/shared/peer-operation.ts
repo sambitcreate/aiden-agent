@@ -28,7 +28,9 @@ export type PeerReadOperation =
   /** Contract revision 45 (`bot:images`): one shared image's bytes; `itemId` is its entry. */
   | "botSessionImage"
   /** A Bot's photo avatar bytes (`GET /bots/{botId}/avatar/{assetRevision}`); `itemId` is the asset revision. */
-  | "botAvatar";
+  | "botAvatar"
+  /** Contract revision 67: the session entries just older than `before` (`GET /bots/{botId}/session/entries`). */
+  | "botSessionEntries";
 export type PeerWriteOperation =
   | "createChat"
   | "send"
@@ -72,6 +74,14 @@ export type PeerWriteOperation =
   /** Contract revision 37: lift the person's pause (`DELETE /bots/{botId}/pause`). */
   | "botUnpause"
   | "botConnectionRequest"
+  /** Contract revision 56 (`bot:plans`): approve, Not now or Stop a plan; `itemId` is its `planId`. */
+  | "botRespondPlan"
+  /** Contract revision 55 (`bot:access-requests`): answer an access card; `itemId` is its `waitId`. */
+  | "botAnswerAccessRequest"
+  /** Contract revision 27 (`bot:cards`): accept or dismiss a suggested routine; `itemId` is its `proposalId`. */
+  | "botRespondRoutineProposal"
+  /** Contract revision 67 (`bot:activity`): take back a queued message; `itemId` is its `submissionId`. */
+  | "botWithdrawQueued"
   | "uploadBotAttachment"
   /** `itemId` is the staged attachment. */
   | "removeBotAttachment";
@@ -83,7 +93,7 @@ export interface PeerOperation {
   itemId?: string;
   workspaceId?: string;
   cursor?: string;
-  /** `messagesWindow`: the message ID the window ends before. */
+  /** `messagesWindow` and `botSessionEntries`: the message or entry ID the page ends before. */
   before?: string;
   limit?: number;
   /** `botConversations` search text. */

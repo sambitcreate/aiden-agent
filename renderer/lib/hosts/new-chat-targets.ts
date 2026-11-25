@@ -200,8 +200,18 @@ export function remoteBotGroups(
           ...(row.summarized === true ? { summarized: true as const } : {}),
         };
       });
-    if (bots.length === 0) continue;
-    const disabledReason = unavailableReason(host, byId.get(host.id), "botChats", "start Bot chats", platform);
+    const view = byId.get(host.id);
+    if (bots.length === 0) {
+      // A pairing made before this Mac could use another Mac's Bots holds no
+      // Bot grants (they are fixed at pairing), so the feed lists none.
+      if (view && view.features.includes("bot-durable-session-v1") && !view.capabilities.includes("bot:read"))
+        groups.push({
+          host: { ...host, disabledReason: `To use ${host.label}'s Bots here, pair this ${localComputerNoun(platform)} with it again.` },
+          bots: [],
+        });
+      continue;
+    }
+    const disabledReason = unavailableReason(host, view, "botChats", "start Bot chats", platform);
     groups.push({ host: disabledReason ? { ...host, disabledReason } : host, bots });
   }
   return groups;

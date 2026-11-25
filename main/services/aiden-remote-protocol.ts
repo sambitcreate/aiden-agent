@@ -382,7 +382,18 @@ export const AIDEN_REMOTE_STREAM_SNAPSHOT_REASONS_CONTRACT_REVISION = 65 as cons
  * read the host feed.
  */
 export const AIDEN_REMOTE_BOT_FEED_PREVIEW_CONTRACT_REVISION = 66 as const;
-export const AIDEN_REMOTE_CONTRACT_REVISION = AIDEN_REMOTE_BOT_FEED_PREVIEW_CONTRACT_REVISION;
+/**
+ * Contract revision 67 (provisional; re-claim the next revision after
+ * `main`'s at merge by changing only this constant): two Bot session routes.
+ * `GET /bots/{botId}/session/entries?before=&limit=` pages the transcript
+ * back from an entry the device already has, so a chat can show more than the
+ * snapshot's window. `POST /bots/{botId}/queued/{submissionId}/withdraw`
+ * takes back one of the person's queued messages before its turn starts.
+ * Neither has a feature token, since the server feature list is full: a host
+ * older than this revision answers both with 404, and the client says so.
+ */
+export const AIDEN_REMOTE_BOT_SESSION_PAGES_CONTRACT_REVISION = 67 as const;
+export const AIDEN_REMOTE_CONTRACT_REVISION = AIDEN_REMOTE_BOT_SESSION_PAGES_CONTRACT_REVISION;
 export const AIDEN_REMOTE_BASE_PATH = "/api/aiden/v1" as const;
 export const AIDEN_REMOTE_MAX_SSE_FRAME_BYTES = 1_048_576;
 export const AIDEN_REMOTE_MAX_JSON_RESPONSE_BYTES = 1_048_576;
@@ -2120,6 +2131,32 @@ export interface AidenRemoteBotSession extends AidenRemoteBotSessionStateView {
   plan?: AidenRemoteBotPlan | null;
   /** Revision 42, only for `bot:issues` devices: the Bot's issue cards, oldest first. */
   issues?: AidenRemoteBotIssue[];
+}
+
+/**
+ * Revision 67, `GET /bots/{botId}/session/entries?before=&limit=`: the entries
+ * just older than `before`, oldest first, as the device's session shows them.
+ * `epoch` is the session the page belongs to; a page from another epoch does
+ * not join the transcript the device holds.
+ */
+export interface AidenRemoteBotSessionEntriesPage {
+  botId: string;
+  epoch: string;
+  entries: AidenRemoteBotSessionEntry[];
+  hasOlder: boolean;
+}
+
+export const AIDEN_REMOTE_BOT_SESSION_PAGE_DEFAULT_LIMIT = 50;
+
+export const AIDEN_REMOTE_BOT_QUEUED_WITHDRAW_OUTCOMES = ["withdrawn", "started", "gone"] as const;
+/**
+ * Revision 67, `POST /bots/{botId}/queued/{submissionId}/withdraw`: what
+ * became of the queued message. `started` means its turn already began, so it
+ * stays in the chat; `gone` means the host no longer has it to take back.
+ */
+export interface AidenRemoteBotQueuedWithdrawReceipt {
+  submissionId: string;
+  outcome: (typeof AIDEN_REMOTE_BOT_QUEUED_WITHDRAW_OUTCOMES)[number];
 }
 
 export type AidenRemoteBotSessionEventPayload =
@@ -6629,6 +6666,47 @@ export function parseAidenRemoteBotSession(value: unknown): AidenRemoteBotSessio
     ...(hasOwn(value, "issues") ? { issues: parseAidenRemoteBotIssueList(value.issues) } : {}),
     ...(hasOwn(value, "plan") ? { plan: value.plan === null ? null : parseAidenRemoteBotPlan(value.plan) } : {}),
     ...(hasOwn(value, "accessRequest") ? { accessRequest: value.accessRequest === null ? null : parseAidenRemoteBotAccessRequest(value.accessRequest) } : {}),
+  };
+}
+
+export function parseAidenRemoteBotSessionEntriesPage(value: unknown): AidenRemoteBotSessionEntriesPage {
+  if (!isRecord(value)) throw new Error("Bot session page must be an object.");
+  assertExactKeys(value, ["botId", "epoch", "entries", "hasOlder"], "Bot session page");
+  if (!Array.isArray(value.entries) || value.entries.length > AIDEN_REMOTE_BOT_SESSION_MAX_ENTRIES) {
+    throw new Error(`Bot session page entries must contain at most ${AIDEN_REMOTE_BOT_SESSION_MAX_ENTRIES} items.`);
+  }
+  const entries = value.entries.map(parseAidenRemoteBotSessionEntry);
+  if (new Set(entries.map((entry) => entry.id)).size !== entries.length) {
+    throw new Error("Bot session page entry ids must be unique.");
+  }
+  return {
+    botId: boundedBotId(value.botId, "Bot session page botId"),
+    epoch: boundedEpoch(value.epoch, "Bot session page epoch"),
+    entries,
+    hasOlder: requiredBooleanValue(value.hasOlder, "Bot session page hasOlder"),
+  };
+}
+
+/** The `before` cursor of a session page: an entry id the device already holds. */
+export function parseAidenRemoteBotSessionEntryId(value: unknown): string {
+  const id = boundedText(value, "Bot session entry id", 128);
+  if (!BOT_SESSION_ENTRY_ID.test(id)) throw new Error("Bot session entry id is invalid.");
+  return id;
+}
+
+/** A queued message's `submissionId`, as the session's `queued` list names it. */
+export function parseAidenRemoteBotSubmissionId(value: unknown): string {
+  const id = boundedText(value, "Bot submissionId", 64);
+  if (!AIDEN_REMOTE_BOT_SUBMISSION_ID.test(id)) throw new Error("Bot submissionId is invalid.");
+  return id;
+}
+
+export function parseAidenRemoteBotQueuedWithdrawReceipt(value: unknown): AidenRemoteBotQueuedWithdrawReceipt {
+  if (!isRecord(value)) throw new Error("Bot queued withdraw receipt must be an object.");
+  assertExactKeys(value, ["submissionId", "outcome"], "Bot queued withdraw receipt");
+  return {
+    submissionId: parseAidenRemoteBotSubmissionId(value.submissionId),
+    outcome: enumMember(value.outcome, AIDEN_REMOTE_BOT_QUEUED_WITHDRAW_OUTCOMES, "Bot queued withdraw outcome"),
   };
 }
 

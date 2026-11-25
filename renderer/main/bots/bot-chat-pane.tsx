@@ -207,7 +207,7 @@ export function BotModelErrorCard({
  * when the projected entry (or the queued message) with the same words
  * arrives, or when the send fails.
  */
-function BotPendingSendBubble({
+export function BotPendingSendBubble({
   send,
   morphFrom,
   onMorphEnd,
@@ -344,7 +344,7 @@ function useSendMorph(
 }
 
 /** A send shown before main answers; `seen` names what was already on screen when it was made. */
-interface BotPendingSend {
+export interface BotPendingSend {
   requestId: string;
   text: string;
   /** Entry ids and queued submission ids present when the echo was made; a new one with the same text settles it. */
@@ -358,7 +358,7 @@ interface BotPendingSend {
 }
 
 /** The ids of everything a snapshot shows that a pending send could settle into. */
-function botVisibleSendIds(snapshot: BotLiveSnapshot): Set<string> {
+export function botVisibleSendIds(snapshot: BotLiveSnapshot): Set<string> {
   const ids = new Set<string>();
   for (const entry of snapshot.entries) if (entry.type === "user") ids.add(entry.id);
   for (const message of snapshot.queued ?? []) ids.add(`queued:${message.submissionId}`);
@@ -370,7 +370,7 @@ function botVisibleSendIds(snapshot: BotLiveSnapshot): Set<string> {
  * entry, or a queued message, with the same text that was not there when the
  * echo was made. Keyed by request id; the value is the arrival's id.
  */
-function matchBotPendingSends(pending: readonly BotPendingSend[], snapshot: BotLiveSnapshot): Map<string, string> {
+export function matchBotPendingSends(pending: readonly BotPendingSend[], snapshot: BotLiveSnapshot): Map<string, string> {
   const matches = new Map<string, string>();
   if (pending.length === 0) return matches;
   const arrivals = [
@@ -410,7 +410,7 @@ export function settleBotPendingSends(
 }
 
 /** How long an acknowledged send stays as an echo when its entry never shows (a hidden input, a routine). */
-const PENDING_SEND_SETTLE_MS = 4000;
+export const PENDING_SEND_SETTLE_MS = 4000;
 
 
 /**
