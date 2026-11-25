@@ -29,9 +29,10 @@ struct AidenWorkspaceDetailView: View {
         self.onOpenChat = onOpenChat
     }
 
-    @State private var isShowingSettings = false
-    /// What an open Settings sheet saves through, fixed when it opens.
-    @State private var settingsContext: AidenRemoteRequestContext?
+    /// The open Settings sheet and the machine it saves through, fixed when it
+    /// opens. One value drives the sheet, so its content never reads a context
+    /// that has not landed yet (which showed an empty sheet).
+    @State private var settingsPresentation: AidenWorkspaceSettingsPresentation?
 
     var body: some View {
         AidenWorkspaceChatsView(
@@ -48,8 +49,8 @@ struct AidenWorkspaceDetailView: View {
             ToolbarItem(placement: .primaryAction) {
                 Menu {
                     Button {
-                        settingsContext = Self.settingsContext(owner: owner, coordinator: coordinator)
-                        isShowingSettings = settingsContext != nil
+                        settingsPresentation = Self.settingsContext(owner: owner, coordinator: coordinator)
+                            .map(AidenWorkspaceSettingsPresentation.init(context:))
                     } label: {
                         Label("Workspace Settings", systemImage: "gearshape")
                     }
@@ -59,29 +60,32 @@ struct AidenWorkspaceDetailView: View {
                 }
             }
         }
-        .sheet(isPresented: $isShowingSettings) {
-            if let settingsContext {
-                AidenWorkspaceSettingsView(
-                    coordinator: coordinator,
-                    workspace: workspace,
-                    context: settingsContext,
-                    onRemoved: {
-                        isShowingSettings = false
-                        onRemoved()
-                    }
-                )
-            }
+        .sheet(item: $settingsPresentation) { presentation in
+            AidenWorkspaceSettingsView(
+                coordinator: coordinator,
+                workspace: workspace,
+                context: presentation.context,
+                onRemoved: {
+                    settingsPresentation = nil
+                    onRemoved()
+                }
+            )
         }
         // A sheet that opened for another machine, or that follows the default
         // (Git), closes rather than save somewhere new.
-        .onChange(of: owner) { _, _ in isShowingSettings = false }
+        .onChange(of: owner) { _, _ in settingsPresentation = nil }
         .onChange(of: coordinator.defaultInstanceId) { old, _ in
-            guard let settingsContext else { return }
-            if settingsContext.instanceId == old {
-                isShowingSettings = false
+            if settingsPresentation?.context.instanceId == old {
+                settingsPresentation = nil
             }
         }
     }
+}
+
+/// An open Workspace Settings sheet: the machine it saves through.
+private struct AidenWorkspaceSettingsPresentation: Identifiable {
+    let context: AidenRemoteRequestContext
+    var id: AidenRemoteRequestContext { context }
 }
 
 extension AidenWorkspaceDetailView {

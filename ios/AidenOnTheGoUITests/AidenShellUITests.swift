@@ -613,6 +613,51 @@ final class AidenShellUITests: XCTestCase {
         app.terminate()
     }
 
+    /// Workspace Settings opens with its form every time, not as an empty
+    /// sheet, including a second time after Cancel. Runs at either width, so on
+    /// an open iPhone Duo or an iPad it checks the sheet over the split's detail.
+    func testWorkspaceSettingsOpensWithItsFormEveryTime() {
+        let app = AidenStateMatrix.launch(scenario: .busy, extraArguments: ["-AidenDemoBotUX"])
+        AidenStateMatrix.openArea("Workspaces", in: app)
+        let workspace = app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", "Aiden Agent")).firstMatch
+        XCTAssertTrue(workspace.waitForExistence(timeout: 10), "No workspace in the list")
+        workspace.tap()
+        XCTAssertTrue(app.navigationBars["Aiden Agent"].waitForExistence(timeout: 10), "The workspace did not open")
+
+        for attempt in ["first", "again"] {
+            let menu = app.buttons["Workspace menu"].firstMatch
+            XCTAssertTrue(menu.waitForExistence(timeout: 5), "No Workspace menu")
+            menu.tap()
+            let settings = app.buttons["Workspace Settings"].firstMatch
+            XCTAssertTrue(settings.waitForExistence(timeout: 5), "No Workspace Settings in the menu")
+            settings.tap()
+            XCTAssertTrue(
+                app.navigationBars["Workspace Settings"].waitForExistence(timeout: 10),
+                "Workspace Settings opened without its title (\(attempt))"
+            )
+            let name = app.textFields["Name"].firstMatch
+            XCTAssertTrue(name.waitForExistence(timeout: 5), "Workspace Settings opened without its form (\(attempt))")
+            XCTAssertEqual(name.value as? String, "Aiden Agent", "The form is not this workspace's (\(attempt))")
+            Self.keepScreenshot("workspace-settings-\(attempt)", in: self)
+            app.navigationBars["Workspace Settings"].buttons["Cancel"].tap()
+            XCTAssertTrue(
+                app.navigationBars["Workspace Settings"].waitForNonExistence(timeout: 5),
+                "Cancel did not close Workspace Settings (\(attempt))"
+            )
+        }
+        app.terminate()
+    }
+
+    /// Attaches a screenshot, and with `TEST_RUNNER_AIDEN_SCREENSHOT_DIR=<folder>`
+    /// also writes it there as a PNG.
+    private static func keepScreenshot(_ name: String, in testCase: XCTestCase) {
+        AidenStateMatrix.capture(name, in: testCase)
+        if let folder = ProcessInfo.processInfo.environment["AIDEN_SCREENSHOT_DIR"], !folder.isEmpty {
+            let url = URL(fileURLWithPath: folder).appendingPathComponent("\(name).png")
+            try? XCUIScreen.main.screenshot().pngRepresentation.write(to: url)
+        }
+    }
+
     /// Pushed Settings has no sheet of its own for pairing: it asks the shell for one.
     func testPairAMachineOpensFromPushedSettings() {
         let app = AidenStateMatrix.launch(scenario: .busy)
