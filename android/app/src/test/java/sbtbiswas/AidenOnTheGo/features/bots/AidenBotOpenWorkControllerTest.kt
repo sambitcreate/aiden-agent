@@ -148,4 +148,63 @@ class AidenBotOpenWorkControllerTest {
         assertEquals("9007199254740993123456",c.state.value.evidence!!.submissionId)
         c.closeEvidence();assertNull(c.state.value.evidence)
     }
+
+    @Test fun first409InFlightAndUnknown409RetainPendingAcrossRestartWhileDefiniteClears()=runTest {
+        val ambiguousErrors=listOf<Exception>(
+            AidenRemoteClientException.Server(409,AidenRemoteErrorEnvelope.Body(AidenRemoteErrorCode.IDEMPOTENCY_IN_FLIGHT,"The change may have completed.","req_1",false)),
+            AidenRemoteClientException.Server(409,AidenRemoteErrorEnvelope.Body(AidenRemoteErrorCode.IDEMPOTENCY_IN_FLIGHT,"The change may have completed.","req_2",true)),
+            AidenRemoteClientException.Server(409,AidenRemoteErrorEnvelope.Body(AidenRemoteErrorCode.INTERNAL_ERROR,"Unknown conflict","req_3",false)),
+            AidenRemoteClientException.Server(409,AidenRemoteErrorEnvelope.Body(AidenRemoteErrorCode("future_conflict"),"Future conflict","req_4",false)),
+            AidenRemoteClientException.Server(400,AidenRemoteErrorEnvelope.Body(AidenRemoteErrorCode("outcome_unknown"),"Outcome unknown","req_5",false)),
+            AidenRemoteClientException.UnexpectedStatus(400)
+        )
+        for(failure in ambiguousErrors) {
+            val host=Host();val secure=InMemoryAidenSecureStore();val first=controller(host,secure)
+            first.load();first.begin(host.view.items.single());first.edit{it.copy(title="Keep on 409")}
+            host.answer={throw failure}
+            first.save()
+            assertNotNull("must retain pending on $failure",first.state.value.pending)
+            assertEquals(OPEN_NONCE,first.state.value.pending!!.mutation.mutationId)
+            assertEquals(AidenOpenWorkProblem.UNCERTAIN,first.state.value.problem)
+
+            val restored=AidenBotOpenWorkController(host,{true},{true},journal(secure),{error("Must replay original UUID")},{1000L})
+            assertEquals(OPEN_NONCE,restored.state.value.pending!!.mutation.mutationId)
+            host.answer={m->AidenOpenWorkResult(true,m.mutationId,true,m.id,host.view)}
+            restored.retry()
+            assertNull(restored.state.value.pending)
+            assertEquals(listOf(OPEN_NONCE,OPEN_NONCE),host.writes.map{it.mutationId})
+        }
+
+        // A first proven before-effect refusal, including 409 revision_conflict, clears pending and reports FAILED.
+        for((status,code) in listOf(403 to AidenRemoteErrorCode.CAPABILITY_DENIED,409 to AidenRemoteErrorCode.REVISION_CONFLICT)) {
+            val host=Host();val c=controller(host);c.load();c.begin(host.view.items.single());c.edit{it.copy(title="Refused")}
+            host.answer={throw AidenRemoteClientException.Server(status,AidenRemoteErrorEnvelope.Body(code,"Refused","req_6",false))}
+            c.save()
+            assertNull("$status $code clears pending",c.state.value.pending)
+            assertEquals(AidenOpenWorkProblem.FAILED,c.state.value.problem)
+        }
+
+        // If clearing a first definite refusal fails in storage, STORAGE is preserved and further writes stay blocked.
+        var failClear=false;var saved:String?=null
+        val flakyJournal=object:AidenBotWatchJournal {
+            override fun read():String?=saved
+            override fun write(record:String?) {
+                if(failClear) throw IOException("storage locked")
+                saved=record
+            }
+        }
+        val storageHost=Host()
+        val storageController=AidenBotOpenWorkController(storageHost,{true},{true},flakyJournal,{OPEN_NONCE},{1000L})
+        storageController.load();storageController.begin(storageHost.view.items.single());storageController.edit{it.copy(title="Clear fails")}
+        storageHost.answer={
+            failClear=true
+            throw AidenRemoteClientException.Server(403,AidenRemoteErrorEnvelope.Body(AidenRemoteErrorCode.CAPABILITY_DENIED,"Denied","req_7",false))
+        }
+        storageController.save()
+        assertNotNull(storageController.state.value.pending)
+        assertEquals(AidenOpenWorkProblem.STORAGE,storageController.state.value.problem)
+        failClear=false
+        storageController.retry()
+        assertEquals("storage-blocked controller must not transmit again",1,storageHost.writes.size)
+    }
 }

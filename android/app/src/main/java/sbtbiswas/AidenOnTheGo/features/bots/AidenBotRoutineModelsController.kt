@@ -10,6 +10,7 @@ import kotlinx.coroutines.flow.update
 import kotlinx.serialization.Serializable
 import sbtbiswas.AidenOnTheGo.models.*
 import sbtbiswas.AidenOnTheGo.persistence.AidenBotWatchJournal
+import sbtbiswas.AidenOnTheGo.protocol.AidenRemoteFailurePolicy
 import java.util.UUID
 
 interface AidenBotRoutineModelsTransport {
@@ -114,7 +115,7 @@ class AidenBotRoutineModelsController(val botId: String, private val routineId: 
         val attempt=AidenRoutineModelAttempt(AidenRoutineModelSave(botId,routineId,uuid(),ui.baseline!!.revision,ui.catalog!!.revision,ui.draft!!),now())
         if(retain(ui.copy(pending=attempt))) send(attempt,false)
     }
-    fun retryAllowed()=_state.value.pending?.let { now()-it.startedAt in 0 until 23*60*60*1000L }==true
+    fun retryAllowed()=_state.value.pending?.let { AidenDurablePendingMutation.isRetryAllowed(it.startedAt,now()) }==true
     suspend fun retry() {
         val attempt=_state.value.pending ?: return
         if(!retryAllowed()) { _state.update { it.copy(problem=AidenRoutineControlProblem.EXPIRED) }; return }
@@ -143,8 +144,11 @@ class AidenBotRoutineModelsController(val botId: String, private val routineId: 
             }
         } catch(e: CancellationException) { if(current()) _state.update { it.copy(problem=AidenRoutineControlProblem.UNCERTAIN) }; throw e }
         catch(e: Exception) {
-            if(current() && canRead()) retain(_state.value.copy(pending=if(previouslyUnknown || aidenBotMessageFailureIsAmbiguous(e))attempt else null,
-                problem=if(previouslyUnknown || aidenBotMessageFailureIsAmbiguous(e))AidenRoutineControlProblem.UNCERTAIN else AidenRoutineControlProblem.FAILED))
+            if(current() && canRead()) {
+                val keep=AidenDurablePendingMutation.settleFailure(e,previouslyUnknown,AidenRemoteFailurePolicy.BEFORE_EFFECT_REFUSAL)==AidenDurableFailureSettlement.RETAIN_UNCERTAIN
+                retain(_state.value.copy(pending=if(keep)attempt else null,
+                    problem=if(keep)AidenRoutineControlProblem.UNCERTAIN else AidenRoutineControlProblem.FAILED))
+            }
         } finally { _state.update { it.copy(busy=false) } }
     }
 }
