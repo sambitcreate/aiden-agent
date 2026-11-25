@@ -1945,3 +1945,68 @@ test.describe("mentions in a workspace", () => {
     await expect(composer).toHaveValue("see ");
   });
 });
+
+test("↑ in an empty composer shows message history with each previous reply and recalls prompts", async ({ aiden }) => {
+  const { app, page } = aiden;
+  await finishLmStudioOnboarding(page);
+  const workspaceId = await page.evaluate(() => localStorage.getItem("aiden-agent.workspaceId"));
+  expect(workspaceId).toBeTruthy();
+  await app.evaluate(({ ipcMain }, workspaceId) => {
+    const seededChat = {
+      id: "history-chat-1",
+      workspaceId,
+      title: "History demo",
+      createdAt: 1_800_000_000_000,
+      updatedAt: 1_800_000_120_000,
+      messages: [
+        { id: "h-u1", role: "user", content: "Plan the release", createdAt: 1_800_000_000_000 },
+        { id: "h-a1", role: "assistant", content: "First reply with milestones.", createdAt: 1_800_000_010_000 },
+        { id: "h-u2", role: "user", content: "Make it shorter", createdAt: 1_800_000_060_000 },
+        { id: "h-a2", role: "assistant", content: "Compact two-step release summary.", createdAt: 1_800_000_070_000 },
+      ],
+    };
+    ipcMain.removeHandler("chats:list");
+    ipcMain.handle("chats:list", () => [seededChat]);
+    ipcMain.removeHandler("chats:get");
+    ipcMain.handle("chats:get", (_event, id) => ({
+      chat: id === seededChat.id ? seededChat : null,
+      imageArtifactRecoveryPending: false,
+      imageArtifactRecoveryUnavailable: false,
+      reconciliation: null,
+    }));
+  }, workspaceId);
+  await page.reload();
+  const composer = page.locator("textarea");
+  await expect(composer).toBeVisible();
+  await expect(page.getByText("History demo")).toBeVisible();
+  await composer.focus();
+  await page.keyboard.press(`${PRIMARY_MODIFIER}+1`);
+  await expect(page.getByText("Compact two-step release summary.")).toBeVisible();
+
+  await composer.focus();
+  await composer.press("ArrowUp");
+  const history = page.getByRole("listbox", { name: "Message history" });
+  const replyPreview = page.locator("[data-composer-history-reply]");
+  await expect(history).toBeVisible();
+  await expect(composer).toHaveValue("Make it shorter");
+  await expect(replyPreview).toContainText("Previous reply");
+  await expect(replyPreview).toContainText("Compact two-step release summary.");
+
+  // Stepping up moves to the older prompt and updates the paired reply preview.
+  await composer.press("ArrowUp");
+  await expect(composer).toHaveValue("Plan the release");
+  await expect(replyPreview).toContainText("First reply with milestones.");
+
+  // Escape closes history and restores the empty composer.
+  await composer.press("Escape");
+  await expect(history).toBeHidden();
+  await expect(composer).toHaveValue("");
+
+  // Reopen, step to the older prompt, and press Enter to keep it in the composer without sending.
+  await composer.press("ArrowUp");
+  await composer.press("ArrowUp");
+  await composer.press("Enter");
+  await expect(history).toBeHidden();
+  await expect(composer).toHaveValue("Plan the release");
+  await expect(composer).toBeFocused();
+});

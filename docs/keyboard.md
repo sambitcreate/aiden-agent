@@ -85,7 +85,7 @@ work while Aiden is in the background.
 | `⌘.` | Stop the reply (`Esc` also works from the message box) |
 | `⌘U` | Attach files |
 | `⌘F` | Find in this chat: `↩` / `⇧↩` (or `⌘G` / `⇧⌘G`) next / previous match, `Esc` closes |
-| `↑` | In an empty message box, bring back your last message to fix and send again |
+| `↑` / `↓` | In an empty message box, browse your earlier prompts with each paired reply (`↩` keeps it in the box, `Esc` restores, `⌥↩` edits a settled turn in a fork) |
 | `⌥↑` / `⌥↓` | Step to the previous / next reply and its Copy and Fork buttons |
 | `⌘↩` | Allow once, while an approval is waiting and the message box is empty |
 | `⌘⌫` | Deny, under the same conditions |
@@ -131,11 +131,7 @@ entered page edits them: `↩` or **Done** finishes, `Esc` puts them back, and
 `⌘B`, `⌘I` and `⌘U` work while editing. Back on the canvas, `⌘Z` puts the
 page file's old words back and `⇧⌘Z` writes them again.
 
-`↑` works like **Edit in fork**: it forks the chat just before your last
-message and puts that message back in the box, so the original chat stays as
-it was. It needs that message to have a finished reply, and does nothing while
-a reply is coming, in a Bot chat, when the box holds anything, or while voice
-input is recording or waiting for its final transcript. `⌥↑` works
+`↑` in an empty message box opens message history above the composer, fills the box with your latest sent prompt, and shows its paired reply beneath the list. Press `↑` and `↓` to step through earlier prompts (moving `↓` past the latest entry restores the empty box), `↩` or click a row to keep that prompt in the box for editing or sending, `Esc` to close and restore the box, or `⌥↩` (`Alt+Enter` on Linux and Windows) on a settled turn to open **Edit in fork** just before that prompt. Moving the caret or typing detaches history so arrow keys edit normally. It does nothing when the box already holds text, attachments, mentions, or a skill, or while voice input is recording or waiting for its final transcript. `⌥↑` works
 from the conversation or an empty message box; `⌥↓` past the latest reply
 returns to the message box. Find in chat searches the conversation on screen,
 ignoring case, and keeps counting as replies stream in. A word split by

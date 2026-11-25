@@ -1180,6 +1180,7 @@
         "renderer/lib/compaction-command-admission.test.ts",
         "renderer/lib/composer-attach.test.ts",
         "renderer/lib/composer-attachment-operation.test.ts",
+        "renderer/lib/composer-history.test.ts",
         "renderer/lib/composer-placeholder.test.ts",
         "renderer/lib/composer-type-focus.test.ts",
         "renderer/lib/dismiss-key.test.ts",

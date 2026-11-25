@@ -32,6 +32,7 @@ import { useReportGoalView } from "../lib/use-report-goal-view";
 import { committedRunInputNotice, steerQueuedMessage, steerRejectionMessage } from "../lib/chat-message-queue";
 import { useChatMessageQueue } from "../lib/use-chat-message-queue";
 import { forkedFromLabel } from "../lib/chat-copy-view";
+import { composerHistoryFromMessages } from "../lib/composer-history";
 import { saveComposerDraftText } from "../lib/composer-draft-store";
 import { releaseAttachments, type ChatSessionControl, type ChatSessionSnapshot } from "../lib/hosts/chat-session-control";
 import { composerSurfacesFor } from "../lib/hosts/composer-surfaces";
@@ -369,6 +370,10 @@ export function RemoteChatPane({
     snapshot?.chatId ?? "",
     snapshot?.transcript.messages ?? NO_MESSAGES,
     Boolean(snapshot) && host.availability === "online",
+  );
+  const composerHistory = React.useMemo(
+    () => composerHistoryFromMessages(messages),
+    [messages],
   );
   const run = snapshot?.run;
   const row = snapshot ? remoteRunTranscript(snapshot.run, messages) : null;
@@ -907,6 +912,7 @@ export function RemoteChatPane({
                   (unresolved ? "Retry or dismiss the message above before sending another." : (summaryHold ?? undefined))
                 }
                 hasMessages={messages.length > 0}
+                historyEntries={composerHistory}
                 onSend={send}
                 hostSkills={capabilities?.has("skills") ? hostSkills : undefined}
                 onQueue={queueMessage}

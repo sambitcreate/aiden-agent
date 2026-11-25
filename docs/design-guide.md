@@ -526,6 +526,27 @@ once a mention starts.
   whose prompt is sent without the chips. While the files load, Enter waits
   instead of sending the half-typed `@query`. A folder also matches as `dir/`.
 
+## Message history
+
+Pressing `↑` in an empty composer (`renderer/lib/composer-history.ts`,
+`renderer/components/composer-history-popover.tsx`) opens a borderless floating
+popover above the composer listing past user-authored prompts oldest-to-newest
+(newest at the bottom, nearest the input) with a compact **Previous reply**
+preview below an inset separator.
+
+- The textarea keeps focus and owns the listbox through `aria-controls` and
+  `aria-activedescendant`. `↑` live-fills the composer and steps older; `↓`
+  steps newer and restores the empty box past the latest entry. `↩` or clicking
+  a row keeps the prompt in the box without immediately sending. `⌥↩` (`Alt+Enter`
+  off macOS) opens **Edit in fork** on an eligible settled turn.
+- Escape closes through the layer stack (`useLayer("popover")`) and restores
+  the empty box without stopping an active reply. Typing, moving the caret,
+  pasting, or blurring detaches history while keeping the recalled text;
+  opening an approval or dialog dismisses back to the saved draft.
+- Options hold no nested focusable controls, scroll with `revealInList`,
+  prevent blur on pointer interaction, and exclude system notices
+  (`message.notice`) and lead-chat injections (`fromLeadChat`).
+
 ## Collections
 
 A list of rows people move through (the sidebar's chats, the Bot list) is one
