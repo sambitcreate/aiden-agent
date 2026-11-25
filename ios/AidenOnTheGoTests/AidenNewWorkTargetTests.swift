@@ -371,6 +371,8 @@ final class AidenNewWorkTargetTests: XCTestCase {
         let flow = flow(draftStore: temporaryDraftStore())
         let home = homeComposer(store: temporaryDraftStore(), defaults: defaults)
         await home.restored()
+        var opened: [String] = []
+        home.place = AidenHomeSendPlace(isOnHome: { true }, open: { opened.append($0.instanceId) })
         XCTAssertTrue(flow.homePicker.pick("laptop"))
 
         home.session.text = "Summarise yesterday's PRs"
@@ -384,6 +386,7 @@ final class AidenNewWorkTargetTests: XCTestCase {
         XCTAssertEqual(home.session.text, "And then the calendar")
         XCTAssertNil(home.status)
         XCTAssertNil(home.notice)
+        XCTAssertEqual(opened, ["laptop"], "Still on Home, so the chat opens")
         XCTAssertEqual(home.lastMachine, "laptop")
     }
 
@@ -406,6 +409,176 @@ final class AidenNewWorkTargetTests: XCTestCase {
         XCTAssertEqual(home.session.text, "First thought\n\nsecond")
         XCTAssertEqual(launched, 0)
         XCTAssertNil(home.lastMachine, "A send that made nothing isn't the last machine used")
+    }
+
+    func testWordsGivenBackKeepTheirReasonThroughTheFieldsChangeCallback() async throws {
+        await connectAll()
+        refuseNewChat(on: "laptop")
+        try await assertGivenBackWordsKeepTheirReason(on: "laptop")
+    }
+
+    func testWordsGivenBackForAWorkspaceChoiceKeepTheirReason() async throws {
+        await connectAll()
+        responder.reply(instanceId: "mini", path: "/workspaces", status: 200, json: Data("""
+        {"workspaces":[{"id":"workspace_mini","name":"Mini work","permission":"ask","memoryEnabled":true,
+        "hasFolder":true,"isManagedWorktree":false,"createdAt":"2026-08-19T19:00:00.000Z",
+        "updatedAt":"2026-08-19T19:00:00.000Z","revision":"workspace_revision_1"}]}
+        """.utf8))
+        await coordinator.hosts.connection(for: "mini")?.connect()
+        try await assertGivenBackWordsKeepTheirReason(on: "mini")
+    }
+
+    /// The view calls `textChanged()` for every change to the field, the
+    /// model's own included: words coming back must not read as typing.
+    private func assertGivenBackWordsKeepTheirReason(on instanceId: String, line: UInt = #line) async throws {
+        let flow = flow(draftStore: temporaryDraftStore())
+        let home = homeComposer(store: temporaryDraftStore(), defaults: AidenDemoHosts.isolatedDefaults())
+        await home.restored()
+        XCTAssertTrue(flow.homePicker.pick(instanceId), line: line)
+
+        home.session.text = "First thought"
+        home.textChanged()
+        home.send(using: flow)
+        home.textChanged()
+        await assertSettles({ home.pendingSends == 0 }, line: line)
+        home.textChanged()
+
+        XCTAssertEqual(home.session.text, "First thought", line: line)
+        XCTAssertNotNil(home.notice, "The reason stays until the person types", line: line)
+        home.session.text = "First thought, again"
+        home.textChanged()
+        XCTAssertNil(home.notice, line: line)
+    }
+
+    func testOnlyTheNewestHomeSendOpensItsChatAndOnlyWhileHomeShows() async throws {
+        await connectAll()
+        replyToNewChat(on: "laptop", workspaceId: "default")
+        replyToNewChat(on: "mini", workspaceId: "default")
+        let release = responder.hold(instanceId: "laptop", path: "/chats")
+        let flow = flow(draftStore: temporaryDraftStore())
+        let home = homeComposer(store: temporaryDraftStore(), defaults: AidenDemoHosts.isolatedDefaults())
+        await home.restored()
+        var opened: [String] = []
+        home.place = AidenHomeSendPlace(isOnHome: { true }, open: { opened.append($0.instanceId) })
+
+        XCTAssertTrue(flow.homePicker.pick("laptop"))
+        home.session.text = "First"
+        home.send(using: flow)
+        await assertSettles { self.responder.requests(instanceId: "laptop").contains("POST /chats") }
+        XCTAssertTrue(flow.homePicker.pick("mini"))
+        home.session.text = "Second"
+        home.send(using: flow)
+        await assertSettles { home.pendingSends == 1 }
+        XCTAssertEqual(opened, ["mini"])
+
+        release()
+        await assertSettles { home.pendingSends == 0 }
+        XCTAssertEqual(opened, ["mini"], "An older send never takes the person away from a newer one")
+        XCTAssertEqual(home.notice, "Chat started. Tap to open it.")
+
+        home.openReadyChat()
+        XCTAssertEqual(opened, ["mini", "laptop"])
+        XCTAssertNil(home.notice)
+    }
+
+    func testAHomeSendThatLandsAfterThePersonLeftHomeOffersItsChatInstead() async throws {
+        await connectAll()
+        replyToNewChat(on: "laptop", workspaceId: "default")
+        let release = responder.hold(instanceId: "laptop", path: "/chats")
+        let flow = flow(draftStore: temporaryDraftStore())
+        let home = homeComposer(store: temporaryDraftStore(), defaults: AidenDemoHosts.isolatedDefaults())
+        await home.restored()
+        var onHome = true
+        var opened: [String] = []
+        home.place = AidenHomeSendPlace(isOnHome: { onHome }, open: { opened.append($0.instanceId) })
+        XCTAssertTrue(flow.homePicker.pick("laptop"))
+
+        home.session.text = "Summarise"
+        home.send(using: flow)
+        await assertSettles { self.responder.requests(instanceId: "laptop").contains("POST /chats") }
+        onHome = false
+        release()
+        await assertSettles { home.pendingSends == 0 }
+
+        XCTAssertEqual(opened, [])
+        XCTAssertEqual(home.notice, "Chat started. Tap to open it.")
+        home.openReadyChat()
+        XCTAssertEqual(opened, ["laptop"])
+    }
+
+    func testAMachinePickedByHandStaysPickedAndSendGoesThere() async throws {
+        await connectAll()
+        replyToNewChat(on: "laptop", workspaceId: "default")
+        replyToNewChat(on: "mini", workspaceId: "default")
+        let defaults = AidenDemoHosts.isolatedDefaults()
+        defaults.set("mini", forKey: AidenHomeComposerModel.lastMachineKey)
+        let flow = flow(draftStore: temporaryDraftStore())
+        let home = homeComposer(store: temporaryDraftStore(), defaults: defaults)
+        await home.restored()
+
+        home.aim(flow.homePicker)
+        XCTAssertEqual(flow.homePicker.target?.instanceId, "mini")
+        XCTAssertTrue(flow.homePicker.pick("laptop"))
+        // Home aims again whenever it reappears.
+        home.aim(flow.homePicker)
+        XCTAssertEqual(flow.homePicker.target?.instanceId, "laptop")
+
+        home.session.text = "Hello"
+        home.send(using: flow)
+        await assertSettles { home.pendingSends == 0 }
+
+        XCTAssertEqual(posts("/chats", on: "laptop"), 1)
+        XCTAssertEqual(posts("/chats", on: "mini"), 0)
+    }
+
+    func testAHomeSendStillOnItsWayIsBackInTheFieldAfterARelaunch() async throws {
+        await connectAll()
+        replyToNewChat(on: "laptop", workspaceId: "default")
+        let release = responder.hold(instanceId: "laptop", path: "/chats")
+        let store = temporaryDraftStore()
+        let defaults = AidenDemoHosts.isolatedDefaults()
+        let flow = flow(draftStore: temporaryDraftStore())
+        let home = homeComposer(store: store, defaults: defaults)
+        await home.restored()
+        XCTAssertTrue(flow.homePicker.pick("laptop"))
+
+        home.session.text = "Summarise yesterday"
+        home.send(using: flow)
+        home.textChanged()
+        home.session.text = "and the calendar"
+        home.textChanged()
+        await home.saved()
+
+        // The app ends here; the next launch reads the same store.
+        let relaunched = homeComposer(store: store, defaults: defaults)
+        await relaunched.restored()
+        XCTAssertEqual(relaunched.session.text, "Summarise yesterday\n\nand the calendar")
+        release()
+    }
+
+    func testOnceItsChatExistsAHomeSendLeavesTheSavedDraft() async throws {
+        await connectAll()
+        replyToNewChat(on: "laptop", workspaceId: "default")
+        let release = responder.hold(instanceId: "laptop", path: "/chats")
+        let store = temporaryDraftStore()
+        let defaults = AidenDemoHosts.isolatedDefaults()
+        let flow = flow(draftStore: temporaryDraftStore())
+        let home = homeComposer(store: store, defaults: defaults)
+        await home.restored()
+        XCTAssertTrue(flow.homePicker.pick("laptop"))
+
+        home.session.text = "Summarise yesterday"
+        home.send(using: flow)
+        home.textChanged()
+        home.session.text = "and the calendar"
+        home.textChanged()
+        release()
+        await assertSettles { home.pendingSends == 0 }
+        await home.saved()
+
+        let next = homeComposer(store: store, defaults: defaults)
+        await next.restored()
+        XCTAssertEqual(next.session.text, "and the calendar", "The words went to the chat, not back to Home")
     }
 
     func testHomeStartsOnTheLastMachineItUsed() async throws {

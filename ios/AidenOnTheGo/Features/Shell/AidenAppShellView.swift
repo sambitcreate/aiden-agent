@@ -235,10 +235,21 @@ struct AidenAppShellView: View {
                 home?.markViewed(chatID: chat.id)
                 guard let navigation else { return }
                 if let prompt {
+                    // Home's Send: the words go with the chat, and Home decides
+                    // whether to open it (only if the person is still there).
                     chatScreens?.screen(for: id, receipt: chat).chat.queueLaunchSend(prompt)
+                    return
                 }
                 navigation.open(.chat(id), on: navigation.tab == .workspaces ? .workspaces : .chats)
             }
+            let homeComposer = AidenHomeComposerModel()
+            homeComposer.place = AidenHomeSendPlace(
+                isOnHome: { [weak navigation] in
+                    guard let navigation else { return false }
+                    return navigation.tab == .chats && navigation.chatsPath.isEmpty
+                },
+                open: { [weak navigation] id in navigation?.open(.chat(id), on: .chats) }
+            )
             let search = AidenSearchModel(
                 chatInput: { AidenSearchChatInput(store: inboxStore) },
                 machines: { AidenSearchMachine.machines(in: coordinator) }
@@ -247,7 +258,7 @@ struct AidenAppShellView: View {
                 navigation: navigation,
                 newWork: newWork,
                 chatScreens: chatScreens,
-                homeComposer: AidenHomeComposerModel(),
+                homeComposer: homeComposer,
                 homeFeed: AidenHomeFeedModel(),
                 search: search,
                 listScroll: AidenListScrollPlaces(),

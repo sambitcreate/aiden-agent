@@ -307,10 +307,43 @@ struct AidenAuroraDrift: Equatable, Sendable {
     }
 }
 
-/// Holds one mesh's drift across frames without invalidating the view.
+/// Holds one mesh's drift, colours and points across frames without
+/// invalidating the view. The colours are derived again only when the tone or
+/// palette changes, and the points reuse one buffer.
 @MainActor
 private final class AidenAuroraDriftHolder {
     var drift = AidenAuroraDrift()
+    private var colorsKey: (tone: AidenAuroraTone, palette: AidenPalette)?
+    private var cachedColors: [Color] = []
+    private var points: [SIMD2<Float>] = [
+        [0, 0], [0.5, 0], [1, 0],
+        [0, 0.5], [0.5, 0.5], [1, 0.5],
+        [0, 1], [0.5, 1], [1, 1],
+    ]
+
+    func colors(for tone: AidenAuroraTone, in palette: AidenPalette) -> [Color] {
+        if let colorsKey, colorsKey.tone == tone, colorsKey.palette == palette { return cachedColors }
+        let shades = tone.drawnHexes(in: palette)
+        let centre = Color(aidenHex: shades.centre)
+        let lighter = Color(aidenHex: shades.lighter)
+        let darker = Color(aidenHex: shades.darker)
+        cachedColors = [
+            .clear, .clear, .clear,
+            lighter.opacity(0.7), centre, darker.opacity(0.7),
+            darker, centre, lighter,
+        ]
+        colorsKey = (tone, palette)
+        return cachedColors
+    }
+
+    /// The moving points for this frame, written into the one buffer.
+    func points(middleY: Float, edgeShare: Float, centreX: Float, bottomX: Float) -> [SIMD2<Float>] {
+        points[3].y = middleY + edgeShare
+        points[4] = [centreX, middleY]
+        points[5].y = middleY - edgeShare
+        points[7].x = bottomX
+        return points
+    }
 }
 
 /// The 3×3 mesh. The top row is clear; the middle and bottom rows carry the
@@ -319,29 +352,12 @@ private final class AidenAuroraDriftHolder {
 /// band's mask softens the top.
 private struct AidenAuroraMesh: View {
     let tone: AidenAuroraTone
+    let palette: AidenPalette
     let spread: Double
     let animated: Bool
     let paused: Bool
-    /// Built once per tone, not per frame.
-    private let colors: [Color]
 
     @State private var holder = AidenAuroraDriftHolder()
-
-    init(tone: AidenAuroraTone, palette: AidenPalette, spread: Double, animated: Bool, paused: Bool) {
-        self.tone = tone
-        self.spread = spread
-        self.animated = animated
-        self.paused = paused
-        let shades = tone.drawnHexes(in: palette)
-        let centre = Color(aidenHex: shades.centre)
-        let lighter = Color(aidenHex: shades.lighter)
-        let darker = Color(aidenHex: shades.darker)
-        colors = [
-            .clear, .clear, .clear,
-            lighter.opacity(0.7), centre, darker.opacity(0.7),
-            darker, centre, lighter,
-        ]
-    }
 
     var body: some View {
         if animated, tone.speed > 0 {
@@ -357,18 +373,16 @@ private struct AidenAuroraMesh: View {
     private func mesh(phase: Double) -> some View {
         let drift = Float(0.08 * spread)
         let middleY = Float(0.45) + drift * Float(sin(phase)) - Float(0.1 * tone.lift)
-        let centreX = Float(0.5) + drift * Float(cos(phase * 0.8))
-        let bottomX = Float(0.5) + drift * Float(sin(phase * 0.6 + 1))
-        let edgeShare = Float(1 - spread) * 0.25
         return MeshGradient(
             width: 3,
             height: 3,
-            points: [
-                [0, 0], [0.5, 0], [1, 0],
-                [0, middleY + edgeShare], [centreX, middleY], [1, middleY - edgeShare],
-                [0, 1], [bottomX, 1], [1, 1],
-            ],
-            colors: colors
+            points: holder.points(
+                middleY: middleY,
+                edgeShare: Float(1 - spread) * 0.25,
+                centreX: Float(0.5) + drift * Float(cos(phase * 0.8)),
+                bottomX: Float(0.5) + drift * Float(sin(phase * 0.6 + 1))
+            ),
+            colors: holder.colors(for: tone, in: palette)
         )
     }
 }

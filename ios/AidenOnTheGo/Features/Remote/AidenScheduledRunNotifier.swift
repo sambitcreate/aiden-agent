@@ -311,7 +311,7 @@ final class AidenBotRoutineFeedReader {
     private(set) var windows: [String: Window] = [:]
     @ObservationIgnored private var generations: [String: Int] = [:]
     /// Machines with a feed read on its way, and who waits for it.
-    @ObservationIgnored private var inFlight: [String: [CheckedContinuation<Void, Never>]] = [:]
+    @ObservationIgnored private var inFlight: [String: [UUID: CheckedContinuation<Void, Never>]] = [:]
     @ObservationIgnored private let clock = ContinuousClock()
 
     init() {}
@@ -358,8 +358,13 @@ final class AidenBotRoutineFeedReader {
         generations[instanceId, default: 0] &+= 1
     }
 
+    /// True once the reader itself has read the machine's whole window. The
+    /// notifier's pages start from its own cursor, so they add rows but never
+    /// count as Home's read.
+    func hasFullRead(_ instanceId: String) -> Bool { windows[instanceId]?.cursor != nil }
+
     func isFresh(_ instanceId: String) -> Bool {
-        guard let window = windows[instanceId] else { return false }
+        guard let window = windows[instanceId], window.cursor != nil else { return false }
         return window.recordedAt.duration(to: clock.now) < Self.freshness
     }
 
@@ -371,17 +376,33 @@ final class AidenBotRoutineFeedReader {
     /// caller then must not `endFetch`.
     func beginFetch(_ instanceId: String) -> Bool {
         guard inFlight[instanceId] == nil else { return false }
-        inFlight[instanceId] = []
+        inFlight[instanceId] = [:]
         return true
     }
 
     func endFetch(_ instanceId: String) {
-        inFlight.removeValue(forKey: instanceId)?.forEach { $0.resume() }
+        inFlight.removeValue(forKey: instanceId)?.values.forEach { $0.resume() }
     }
 
-    private func waitForFetch(_ instanceId: String) async {
+    /// Waits for the read on its way, or until the waiting task is cancelled.
+    func waitForFetch(_ instanceId: String) async {
         guard inFlight[instanceId] != nil else { return }
-        await withCheckedContinuation { inFlight[instanceId]?.append($0) ?? $0.resume() }
+        let waiter = UUID()
+        await withTaskCancellationHandler {
+            await withCheckedContinuation { continuation in
+                if Task.isCancelled || inFlight[instanceId] == nil {
+                    continuation.resume()
+                } else {
+                    inFlight[instanceId]?[waiter] = continuation
+                }
+            }
+        } onCancel: {
+            Task { @MainActor [weak self] in self?.stopWaiting(waiter, for: instanceId) }
+        }
+    }
+
+    private func stopWaiting(_ waiter: UUID, for instanceId: String) {
+        inFlight[instanceId]?.removeValue(forKey: waiter)?.resume()
     }
 
     /// Reads the machine's recent feed unless a fresh window already holds it,
@@ -404,11 +425,16 @@ final class AidenBotRoutineFeedReader {
             return .skipped
         }
         if let window = windows[instanceId], !window.grants.isSubset(of: grants) { forget(instanceId: instanceId) }
-        if isFetching(instanceId) {
+        // Wait for any read on its way (the notifier's, or another screen's).
+        // Only a full read answers; the notifier's page from its own cursor
+        // doesn't, so Home then reads the whole window itself.
+        var waited = false
+        while isFetching(instanceId) {
             await waitForFetch(instanceId)
-            // That read may have kept nothing (its scope moved); ask once more.
-            if windows[instanceId] != nil { return .read }
+            guard !Task.isCancelled else { return .skipped }
+            waited = true
         }
+        if waited, hasFullRead(instanceId) { return .read }
         guard force || !isFresh(instanceId) else { return .read }
         guard isCurrent(), beginFetch(instanceId) else { return .skipped }
         defer { endFetch(instanceId) }

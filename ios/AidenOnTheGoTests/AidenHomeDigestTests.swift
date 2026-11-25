@@ -242,18 +242,32 @@ final class AidenHomeDigestTests: XCTestCase {
     }
 
     func testTheCardSaysNothingNewOnlyAfterEveryShownMachineWasRead() {
-        let windows: Set<String> = ["studio"]
-        func state(_ outcomes: [String: AidenBotRoutineFeedReader.Outcome], rows: Bool = false, machines: [String] = ["studio", "mini"]) -> AidenHomeFeedState {
-            AidenHomeFeedState.make(hasRows: rows, machines: machines, outcomes: outcomes) { windows.contains($0) }
+        typealias Machine = AidenHomeFeedState.Machine
+        let read: Set<String> = ["studio"]
+        let studio = Machine(id: "studio", isConnected: true, isOffline: false)
+        let mini = Machine(id: "mini", isConnected: true, isOffline: false)
+        let asleep = Machine(id: "mini", isConnected: false, isOffline: true)
+        let joining = Machine(id: "mini", isConnected: false, isOffline: false)
+        func state(
+            _ outcomes: [String: AidenBotRoutineFeedReader.Outcome] = [:],
+            rows: Bool = false,
+            machines: [Machine]
+        ) -> AidenHomeFeedState {
+            AidenHomeFeedState.make(hasRows: rows, machines: machines, outcomes: outcomes) { read.contains($0) }
         }
 
-        XCTAssertEqual(state([:]), .loading, "A machine not yet read holds skeletons")
-        XCTAssertEqual(state(["studio": .read]), .loading, "One read machine doesn't speak for one still being read")
-        XCTAssertEqual(state(["studio": .read, "mini": .failed]), .quiet)
-        XCTAssertEqual(state(["mini": .failed], machines: ["mini"]), .failed)
-        XCTAssertEqual(state(["studio": .failed, "mini": .failed]), .quiet, "A window read earlier still answers")
-        XCTAssertEqual(state(["mini": .skipped], machines: ["mini"]), .quiet, "A machine without the feed has nothing to say")
-        XCTAssertEqual(state([:], rows: true), .rows)
+        XCTAssertEqual(state(machines: [studio]), .quiet)
+        XCTAssertEqual(state(machines: [studio, mini]), .loading, "One read machine doesn't speak for one still being read")
+        XCTAssertEqual(state(["mini": .read], machines: [studio, mini]), .loading, "A read that left no window isn't a read")
+        XCTAssertEqual(state(machines: [studio, joining]), .loading, "A machine still connecting may yet answer")
+        XCTAssertEqual(state(["mini": .failed], machines: [studio, mini]), .partial)
+        XCTAssertEqual(state(["mini": .skipped], machines: [studio, mini]), .partial, "A skipped read isn't a read")
+        XCTAssertEqual(state(machines: [studio, asleep]), .partial)
+        XCTAssertEqual(state(["mini": .failed], machines: [mini]), .failed)
+        XCTAssertEqual(state(["mini": .skipped], machines: [mini]), .failed)
+        XCTAssertEqual(state(machines: [asleep]), .offline, "An offline machine never leaves the card on skeletons")
+        XCTAssertEqual(state(machines: [studio, mini]), .loading)
+        XCTAssertEqual(state(rows: true, machines: [mini]), .rows)
     }
 
     func testNewsFromABotTheRosterDoesntListIsDropped() {
@@ -431,6 +445,54 @@ final class AidenHomeDigestTests: XCTestCase {
         XCTAssertEqual(calls, 1)
     }
 
+    func testTheNotifiersNewsPageIsNotHomesFullRead() async {
+        let reader = AidenBotRoutineFeedReader()
+        let transport = HeldFeed(page(wire("r", bot: "ada", minutesAgo: 1)), held: false)
+        // The notifier fetches only what's new since its last check, and
+        // records that without a cursor.
+        XCTAssertTrue(reader.beginFetch("studio"))
+        let home = Task { await reader.refreshIfStale(instanceId: "studio", transport: transport, grants: allGrants) { true } }
+        for _ in 0..<10 { await Task.yield() }
+        reader.record([item("n", bot: "ada", minutesAgo: 1)], instanceId: "studio", grants: allGrants)
+        XCTAssertFalse(reader.hasFullRead("studio"))
+        reader.endFetch("studio")
+        let outcome = await home.value
+
+        XCTAssertEqual(outcome, .read)
+        let sinces = await transport.sinces
+        XCTAssertEqual(sinces, [nil], "Home still reads the whole window itself")
+        XCTAssertTrue(reader.hasFullRead("studio"))
+    }
+
+    func testAReaderWaitingOnAnotherFetchStopsWhenItsTaskIsCancelled() async {
+        let reader = AidenBotRoutineFeedReader()
+        let transport = HeldFeed(page(wire("r", bot: "ada", minutesAgo: 1)), held: false)
+        XCTAssertTrue(reader.beginFetch("studio"))
+        let waiting = Task { await reader.refreshIfStale(instanceId: "studio", transport: transport, grants: allGrants) { true } }
+        for _ in 0..<10 { await Task.yield() }
+
+        waiting.cancel()
+        let outcome = await waiting.value
+
+        XCTAssertEqual(outcome, .skipped)
+        XCTAssertTrue(reader.isFetching("studio"), "The other fetch goes on")
+        let calls = await transport.calls
+        XCTAssertEqual(calls, 0)
+        reader.endFetch("studio")
+    }
+
+    func testAnOpenHomeReadsAgainEveryMinute() async {
+        let clock = SteppedSleep(steps: 3)
+        let model = AidenHomeFeedModel(reader: AidenBotRoutineFeedReader(), sleep: { try await clock.sleep($0) })
+        var reads = 0
+
+        await model.repeatEveryInterval { reads += 1 }
+
+        XCTAssertEqual(reads, 4, "Once now, then once after each interval")
+        let slept = await clock.slept
+        XCTAssertEqual(slept, [.seconds(60), .seconds(60), .seconds(60), .seconds(60)])
+    }
+
     func testAMachineThatDoesntAnswerIsAFailureNotAnEmptyFeed() async {
         let reader = AidenBotRoutineFeedReader()
         let outcome = await reader.refreshIfStale(instanceId: "studio", transport: FailingFeed(), grants: allGrants) { true }
@@ -484,6 +546,20 @@ private actor HeldFeed: AidenBotRoutineNotificationTransport {
         held = false
         waiter?.resume()
         waiter = nil
+    }
+}
+
+/// A sleep that lets `steps` intervals pass, then stops the loop the way
+/// cancelling Home's task does.
+private actor SteppedSleep {
+    private let steps: Int
+    private(set) var slept: [Duration] = []
+
+    init(steps: Int) { self.steps = steps }
+
+    func sleep(_ duration: Duration) throws {
+        slept.append(duration)
+        if slept.count > steps { throw CancellationError() }
     }
 }
 

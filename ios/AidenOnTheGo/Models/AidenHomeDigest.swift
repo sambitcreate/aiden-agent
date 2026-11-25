@@ -197,26 +197,57 @@ enum AidenHomeBotsState: Equatable, Sendable {
     }
 }
 
-/// What "From your Bots" says when it has no rows. Only a machine that hasn't
-/// answered yet holds skeletons, and only machines that all failed say so;
-/// "Nothing new" is said only after a read.
+/// What "From your Bots" says when it has no rows. A machine still being read
+/// (or still connecting since launch) holds skeletons; "Nothing new" is said
+/// only once every shown machine was read in full. A machine that is offline,
+/// failed or wasn't asked never counts as quiet: the card says it couldn't
+/// hear from it instead, so it never resolves to an endless skeleton either.
 enum AidenHomeFeedState: Equatable, Sendable {
     case rows
     case loading
+    /// No machine could be read, and at least one didn't answer.
     case failed
+    /// No machine could be read, and they're offline.
+    case offline
+    /// Nothing new from the machines read; others couldn't be.
+    case partial
     case quiet
+
+    /// A machine whose Bots Home shows.
+    struct Machine: Equatable, Sendable {
+        var id: String
+        /// Connected now, so Home reads it.
+        var isConnected: Bool
+        /// Known offline, so no read is coming.
+        var isOffline: Bool
+    }
 
     static func make(
         hasRows: Bool,
-        machines: [String],
+        machines: [Machine],
         outcomes: [String: AidenBotRoutineFeedReader.Outcome],
-        hasWindow: (String) -> Bool
+        hasRead: (String) -> Bool
     ) -> Self {
         if hasRows { return .rows }
-        let unread = machines.filter { !hasWindow($0) }
-        if unread.contains(where: { outcomes[$0] == nil }) { return .loading }
-        if !machines.isEmpty, machines.allSatisfy({ !hasWindow($0) && outcomes[$0] == .failed }) { return .failed }
-        return .quiet
+        var read = 0
+        var failed = 0
+        var offline = 0
+        for machine in machines {
+            if hasRead(machine.id) {
+                read += 1
+            } else if machine.isConnected {
+                // `.read` without a full window means it was forgotten since.
+                guard let outcome = outcomes[machine.id], outcome != .read else { return .loading }
+                failed += 1
+            } else if machine.isOffline {
+                offline += 1
+            } else {
+                return .loading
+            }
+        }
+        if failed == 0, offline == 0 { return .quiet }
+        if read > 0 { return .partial }
+        return failed > 0 ? .failed : .offline
     }
 }
 

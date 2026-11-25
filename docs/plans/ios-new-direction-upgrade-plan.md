@@ -161,7 +161,7 @@ The phases run in order. The screens inside each phase can run in parallel, one 
     - The Home draft is shell-owned and persisted, so it survives a fold and a relaunch.
     - Ranking: needs you, failed, working, then news. Resolved issues drop out. News has a 24-hour cutoff and an away subtitle, and fetches pass `since:`.
     - The routine feed reader dedupes fetches across Home and the notifier, and forgets a computer on unpair or narrowed access.
-    - Loading, failed, quiet, no-Bots and all-offline states, so Home never flashes "Nothing new".
+    - Loading, failed, quiet, no-Bots and all-offline states (the verify round below adds offline and partial card states).
     - See all shows only above three rows. The feed refreshes every minute while Home shows and on pull to refresh. Machines are read concurrently.
     - Kit type scale with one heading, wrapping digest rows at accessibility sizes, and a mic labeled "New voice chat".
   - Deviations and deferrals from the step 2 review:
@@ -171,6 +171,19 @@ The phases run in order. The screens inside each phase can run in parallel, one 
     - The onboarding name field is deferred. The name stays in Settings → Appearance → Home so the first-run flow is not reworked in this lane; onboarding picks it up with the Phase 3 Meet your Bot work.
     - The spec composer's placeholder and controls (U-m4) wait for `AidenComposerConfig.home()` in the composer work.
     - Home draws the existing sprite until #925 (Hi-bit) merges, then switches with its waiting, error and thinking states.
+  - Step 2 verify fixes (2026-11-25):
+    - Words Home gives back never count as typing, so the reason stays under the field for a failure and for a workspace choice.
+    - A slow Send opens its chat only if it is the latest Send and the person is still on Home; otherwise Home offers "Chat started. Tap to open it." The shell no longer navigates for Home's sends.
+    - The notifier's delta page no longer counts as Home's read: only Home's own full read (the one that sets the cursor) can lead to "Nothing new". A skipped or failed read never does. New card states: offline (nothing read, computers offline) and partial (some answered, others failed or offline).
+    - Send uses exactly the machine the chip shows; a hand pick survives Home re-aiming.
+    - An offline computer resolves to the offline state instead of skeletons.
+    - Words still on their way to a new chat stay in Home's saved draft until the chat exists, so a relaunch mid-send finds them in the field. If the app ends after the chat was made but before the draft was saved again, the words can show in both places; nothing is lost.
+    - Smaller fixes: a cancelled wait on another fetch returns, the 60 s refresh takes an injected sleep, a Send fences on unpair before opening, the Aurora derives its colours only when the tone or palette changes and reuses one points buffer, and the composer note uses the type scale.
+  - Known follow-ups from the step 2 verify round:
+    - See all opens Catch Up even when what waits there is unrelated chats (m4).
+    - "Your Bots worked while you were away" can vanish after a fold or a tab return (m3).
+    - Widening a pairing's grants doesn't back-fill rows the narrower read left out until the next full read (m2).
+    - The demo host reads a request body under its lock (m9).
   - Step 1 review fixes: per-stop contrast caps, accumulated drift, no live blur, 15/30 fps, the reconnect fence, real finishes only, manual-clock wake tests, Monochrome grey and the `aurora.phase` marker.
   - Not wired yet: nothing calls `setVoice`, so Listening does not show from Home until the voice work lands.
 

@@ -57,9 +57,15 @@ final class AidenHomeFeedModel {
 
     let reader: AidenBotRoutineFeedReader
     private(set) var outcomes: [String: AidenBotRoutineFeedReader.Outcome] = [:]
+    /// Waits out an interval; a test steps it by hand.
+    @ObservationIgnored private let sleep: @Sendable (Duration) async throws -> Void
 
-    init(reader: AidenBotRoutineFeedReader? = nil) {
+    init(
+        reader: AidenBotRoutineFeedReader? = nil,
+        sleep: @escaping @Sendable (Duration) async throws -> Void = { try await Task.sleep(for: $0) }
+    ) {
         self.reader = reader ?? .shared
+        self.sleep = sleep
     }
 
     func refresh(coordinator: AidenRemoteCoordinator, hiddenMachines: Set<String>, force: Bool = false) async {
@@ -79,9 +85,16 @@ final class AidenHomeFeedModel {
 
     /// Reads now, then again every `interval` while Home is on screen.
     func keepReading(coordinator: AidenRemoteCoordinator, hiddenMachines: Set<String>) async {
+        await repeatEveryInterval { [weak self] in
+            await self?.refresh(coordinator: coordinator, hiddenMachines: hiddenMachines)
+        }
+    }
+
+    /// Runs `read` now and again after every `interval`, until cancelled.
+    func repeatEveryInterval(_ read: @MainActor () async -> Void) async {
         while !Task.isCancelled {
-            await refresh(coordinator: coordinator, hiddenMachines: hiddenMachines)
-            try? await Task.sleep(for: Self.interval)
+            await read()
+            do { try await sleep(Self.interval) } catch { return }
         }
     }
 }
@@ -124,6 +137,13 @@ enum AidenHomeBots {
     }
 }
 
+/// What Home's feed reading restarts on: the machines it shows, and which of
+/// them are connected now.
+struct AidenHomeFeedKey: Equatable {
+    var shown: Set<String>
+    var connected: Set<String>
+}
+
 /// The top of Home: the greeting, the Bots as sprites, and "From your Bots".
 /// List content, so the screen it sits on keeps its own list below.
 struct AidenHomeHeader: View {
@@ -158,12 +178,22 @@ struct AidenHomeHeader: View {
         let digest = AidenHomeDigest.make(
             bots: bots, feed: feed, since: Date.now.addingTimeInterval(-AidenHomeDigest.newsWindow)
         )
+        let feedMachines = shown.sorted().map { instanceId in
+            let connection = coordinator.hosts.connection(for: instanceId)
+            return AidenHomeFeedState.Machine(
+                id: instanceId,
+                isConnected: connection?.connectionState == .connected,
+                isOffline: connection.map { $0.isKnownOffline || $0.isRevoked } ?? true
+            )
+        }
         let feedState = AidenHomeFeedState.make(
             hasRows: !digest.rows.isEmpty,
-            machines: shown.sorted(),
+            machines: feedMachines,
             outcomes: feedModel.outcomes,
-            hasWindow: { reader.windows[$0] != nil }
+            hasRead: { reader.hasFullRead($0) }
         )
+        // Read again when a machine connects, not only on the next pass.
+        let readable = AidenHomeFeedKey(shown: shown, connected: Set(feedMachines.filter(\.isConnected).map(\.id)))
         Section {
             greeting(away: digest.hasNewSince(previousVisit))
                 .listRowBackground(Color.clear)
@@ -172,7 +202,7 @@ struct AidenHomeHeader: View {
                 .listRowBackground(Color.clear)
                 .listRowSeparator(.hidden)
         }
-        .task(id: shown) {
+        .task(id: readable) {
             feedModel.keep(only: shown)
             guard !shown.isEmpty else { return }
             await feedModel.keepReading(coordinator: coordinator, hiddenMachines: hidden)
@@ -320,6 +350,18 @@ struct AidenHomeHeader: View {
                     .foregroundStyle(palette.secondary)
                     .listRowBackground(Color.clear)
                     .accessibilityIdentifier("home.digest.failed")
+            case .offline:
+                Text("Your computer is offline. News from your Bots shows up once it’s back.")
+                    .aidenType(.rowValue)
+                    .foregroundStyle(palette.secondary)
+                    .listRowBackground(Color.clear)
+                    .accessibilityIdentifier("home.digest.offline")
+            case .partial:
+                Text("Nothing new from the computers that answered. Pull down to try the others.")
+                    .aidenType(.rowValue)
+                    .foregroundStyle(palette.secondary)
+                    .listRowBackground(Color.clear)
+                    .accessibilityIdentifier("home.digest.partial")
             case .quiet:
                 Text("Nothing new from your Bots today.")
                     .aidenType(.rowValue)
@@ -425,14 +467,27 @@ private struct AidenHomeDigestRow: View {
     }
 }
 
+/// Where Home's Send can take the person once its chat exists: only while
+/// they are still on Home, so a slow send never pulls them off what they
+/// moved on to.
+struct AidenHomeSendPlace {
+    /// True while Home's root is on screen.
+    var isOnHome: @MainActor () -> Bool
+    var open: @MainActor (AidenHostObjectID) -> Void
+
+    static let stays = AidenHomeSendPlace(isOnHome: { false }, open: { _ in })
+}
+
 /// What Home's composer holds, kept by the shell so the words survive the
 /// layout rebuilding (a Duo folding or unfolding) and, saved on this device
 /// like a chat's draft, a relaunch.
 ///
 /// Send starts a chat at once: the words leave the field, a chat is made on
-/// the last machine Home used (or the one its chip picks), and the chat sends
-/// them as soon as it can. Nothing waits on the tap. If no chat can be made,
-/// the words come back quietly, ahead of anything typed since.
+/// the machine the chip shows, and the chat sends them as soon as it can.
+/// Nothing waits on the tap. Until the chat exists the words stay in the
+/// saved draft, so a relaunch mid-send finds them back in the field. If no
+/// chat can be made, the words come back quietly, ahead of anything typed
+/// since, with the reason below the field.
 @MainActor
 @Observable
 final class AidenHomeComposerModel {
@@ -445,8 +500,13 @@ final class AidenHomeComposerModel {
     let session = AidenComposerSession()
     /// "Starting a chat on Studio…" while sends are on their way.
     private(set) var status: String?
-    /// Why the last Send made no chat, until the person types or sends again.
+    /// Why the last Send made no chat, or that it made one the person can
+    /// open, until they type or send again.
     private(set) var notice: String?
+    /// A chat a Send made while the person was elsewhere: the notice opens it.
+    private(set) var readyChat: AidenHostObjectID?
+    /// Where a finished Send may take the person. Set by the shell.
+    var place: AidenHomeSendPlace = .stays
 
     @ObservationIgnored private let store: AidenChatDraftStore
     @ObservationIgnored private let defaults: UserDefaults
@@ -455,12 +515,20 @@ final class AidenHomeComposerModel {
     @ObservationIgnored private var restoring: Task<Void, Never>?
     @ObservationIgnored private var saving: Task<Void, Never>?
     @ObservationIgnored private var sends: [UUID: Task<Void, Never>] = [:]
+    /// The words of sends still on their way, oldest first. They stay in the
+    /// saved draft until their chat exists.
+    @ObservationIgnored private var inFlight: [(id: UUID, prompt: String)] = []
+    /// The newest Send: only it may move the person to its chat.
+    @ObservationIgnored private var latestSend: UUID?
     /// Bumped by every edit, so a restore that lands late never overwrites
     /// words typed meanwhile.
     @ObservationIgnored private var edits: UInt64 = 0
-    /// The chip Home last aimed, so the last machine is offered once per chip
-    /// and a later pick by hand is left alone.
-    @ObservationIgnored private var aimed: ObjectIdentifier?
+    /// Text this model put in the field itself, so the field's change
+    /// callback doesn't take it for the person typing (which clears the notice).
+    @ObservationIgnored private var ownWrite: String?
+    /// The chip as Home last aimed it. A chip showing anything else was picked
+    /// by hand, and is left alone.
+    @ObservationIgnored private var aimed: (picker: ObjectIdentifier, machine: String?)?
 
     init(store: AidenChatDraftStore = .shared, defaults: UserDefaults = .standard, saveDelay: Duration = .milliseconds(250)) {
         self.store = store
@@ -481,59 +549,91 @@ final class AidenHomeComposerModel {
     /// How many sends are still on their way.
     var pendingSends: Int { sends.count }
 
+    /// What the saved draft holds: the words of sends still on their way,
+    /// then the field.
+    private var durableText: String {
+        inFlight.reversed().reduce(session.text) { current, send in
+            AidenDraftSendReconciliation.failedDraft(submitted: send.prompt, current: current)
+        }
+    }
+
     private func restore() async {
         let session = await store.beginSession(instanceId: Self.draftInstanceId, chatId: Self.draftChatId)
         storeSession = session
         let editsBefore = edits
         guard let saved = await store.load(session: session), !saved.isEmpty,
               edits == editsBefore, session == storeSession, self.session.text.isEmpty else { return }
-        self.session.text = saved
+        write(saved)
     }
 
-    /// The field changed: save it shortly.
+    /// The field changed. The person typing clears the notice; either way
+    /// the draft is saved shortly.
     func textChanged() {
+        let typed = ownWrite != session.text
+        ownWrite = nil
+        guard typed else { return }
         edits &+= 1
-        if !session.text.isEmpty { notice = nil }
-        let text = session.text
+        if !session.text.isEmpty {
+            notice = nil
+            readyChat = nil
+        }
+        scheduleSave()
+    }
+
+    /// Puts text in the field on the model's own behalf.
+    private func write(_ text: String) {
+        ownWrite = text == session.text ? nil : text
+        session.text = text
+        edits &+= 1
+        scheduleSave()
+    }
+
+    private func scheduleSave() {
+        let text = durableText
         saving?.cancel()
         saving = Task { [weak self, saveDelay] in
-            try? await Task.sleep(for: saveDelay)
+            if saveDelay > .zero { try? await Task.sleep(for: saveDelay) }
             guard !Task.isCancelled, let self else { return }
             await self.restoring?.value
-            guard !Task.isCancelled, let session = self.storeSession, self.session.text == text else { return }
+            guard !Task.isCancelled, let session = self.storeSession, self.durableText == text else { return }
             _ = try? await self.store.save(text, session: session)
         }
     }
 
     /// The machine Home's chip starts on: the last one Home used while it
-    /// can still take a chat, otherwise the picker's own default.
+    /// can still take a chat, otherwise the picker's own default. A machine
+    /// picked by hand stays picked.
     func aim(_ picker: AidenNewWorkPicker) {
+        let id = ObjectIdentifier(picker)
+        let current = picker.target?.instanceId
+        if let aimed, aimed.picker == id, aimed.machine != current, picker.canStart { return }
         let last = lastMachine.flatMap { id in picker.machines.first { $0.id == id && $0.canBePicked }?.id }
-        // The last machine is offered once, as soon as it can take a chat.
-        if aimed != ObjectIdentifier(picker), let last {
-            aimed = ObjectIdentifier(picker)
+        if let last, current != last {
             picker.pick(last)
-            return
+        } else if !picker.canStart {
+            picker.startOver(preferring: last, offeringHidden: false)
         }
-        guard !picker.canStart else { return }
-        picker.startOver(preferring: last, offeringHidden: false)
+        aimed = (id, picker.target?.instanceId)
     }
 
-    /// Send: hands the field's words to a new chat and empties the field.
+    /// Send: hands the field's words to a new chat on exactly the machine the
+    /// chip shows, and empties the field.
     func send(using flow: AidenNewWorkChatFlow) {
         let prompt = session.text
         guard !prompt.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
         let picker = flow.homePicker
-        aim(picker)
+        if picker.target == nil { aim(picker) }
         guard let target = picker.target else {
             notice = String(localized: "Pair a computer to start a chat.")
             return
         }
         notice = nil
-        session.text = ""
-        textChanged()
+        readyChat = nil
         let name = picker.pickedMachine?.label.name
         let id = UUID()
+        latestSend = id
+        inFlight.append((id, prompt))
+        write("")
         sends[id] = Task { [weak self] in
             let outcome = await flow.startChat(sending: prompt, on: target)
             self?.finish(id, prompt: prompt, target: target, outcome: outcome)
@@ -541,11 +641,29 @@ final class AidenHomeComposerModel {
         updateStatus(machineName: name)
     }
 
+    /// Opens the chat a Send made while the person was elsewhere.
+    func openReadyChat() {
+        guard let readyChat else { return }
+        self.readyChat = nil
+        notice = nil
+        place.open(readyChat)
+    }
+
     private func finish(_ id: UUID, prompt: String, target: AidenNewWorkTarget, outcome: AidenHomeSendOutcome) {
         sends[id] = nil
+        inFlight.removeAll { $0.id == id }
+        let isLatest = latestSend == id
+        if isLatest { latestSend = nil }
         switch outcome {
-        case .started:
+        case .started(let chat):
             defaults.set(target.instanceId, forKey: Self.lastMachineKey)
+            scheduleSave()
+            if isLatest, place.isOnHome() {
+                place.open(chat)
+            } else {
+                readyChat = chat
+                notice = String(localized: "Chat started. Tap to open it.")
+            }
         case .needsChoice:
             giveBack(prompt)
             notice = String(localized: "That computer can’t start a chat on its own yet. Use New chat to choose a workspace.")
@@ -558,10 +676,8 @@ final class AidenHomeComposerModel {
 
     /// The words go back ahead of anything typed since Send.
     private func giveBack(_ prompt: String) {
-        session.text = AidenDraftSendReconciliation.failedDraft(submitted: prompt, current: session.text)
-        let notice = notice
-        textChanged()
-        self.notice = notice
+        readyChat = nil
+        write(AidenDraftSendReconciliation.failedDraft(submitted: prompt, current: session.text))
     }
 
     private func updateStatus(machineName: String?) {
@@ -602,6 +718,9 @@ struct AidenHomeComposerSlot: View {
             onToggleVoice: { AidenForegroundIntentRouter.shared.submit(homeAction: .newChatVoice) },
             accessory: { accessory(picker) }
         )
+        // A container of its own, so the status and notice keep their own
+        // identifiers instead of taking this one.
+        .accessibilityElement(children: .contain)
         .accessibilityIdentifier("home.composer")
         .onChange(of: model.session.text) { model.textChanged() }
         .onAppear { model.aim(picker) }
@@ -616,9 +735,20 @@ struct AidenHomeComposerSlot: View {
         if picker.showsPicker || line != nil {
             VStack(alignment: .leading, spacing: AidenSpacing.xs) {
                 AidenNewWorkMachinePicker(picker: picker)
-                if let line {
+                if model.readyChat != nil, let line {
+                    Button(action: model.openReadyChat) {
+                        Text(line)
+                            .aidenType(.footnote)
+                            .foregroundStyle(palette.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                            .frame(minHeight: 44, alignment: .leading)
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityHint("Opens the chat.")
+                    .accessibilityIdentifier("home.composer.ready")
+                } else if let line {
                     Text(line)
-                        .font(.caption)
+                        .aidenType(.footnote)
                         .foregroundStyle(palette.secondary)
                         .fixedSize(horizontal: false, vertical: true)
                         .accessibilityIdentifier(model.notice != nil ? "home.composer.notice" : "home.composer.status")

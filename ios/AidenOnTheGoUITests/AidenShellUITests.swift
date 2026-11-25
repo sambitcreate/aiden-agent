@@ -517,6 +517,40 @@ final class AidenShellUITests: XCTestCase {
         app.terminate()
     }
 
+    /// Send empties the field at once, even while the computer is still
+    /// connecting; if no chat can start, the words come back with the reason.
+    func testHomeSendEmptiesTheFieldAndGivesTheWordsBackIfNoChatStarts() {
+        let app = AidenStateMatrix.launch(scenario: .full, extraArguments: ["-AidenDemoSlowConnect"])
+        AidenStateMatrix.openArea("Chats", in: app)
+        let field = homeField(in: app)
+        XCTAssertTrue(field.waitForExistence(timeout: 10), "No Home field")
+        field.tap()
+        let prompt = "Draft the release notes"
+        field.typeText(prompt)
+        app.buttons["Start chat"].firstMatch.tap()
+
+        let status = app.descendants(matching: .any)["home.composer.status"].firstMatch
+        XCTAssertTrue(status.waitForExistence(timeout: 5), "No word that the chat is on its way")
+        XCTAssertFalse((field.value as? String ?? "").contains(prompt), "Send left the words in the field")
+        AidenStateMatrix.capture("home-send-starting", in: self)
+
+        // The computer never connects, so after the readiness wait no chat starts.
+        let notice = app.descendants(matching: .any)["home.composer.notice"].firstMatch
+        XCTAssertTrue(notice.waitForExistence(timeout: 45), "No reason the chat didn't start")
+        XCTAssertTrue((field.value as? String ?? "").contains(prompt), "The words didn't come back")
+        app.terminate()
+    }
+
+    private func homeField(in app: XCUIApplication) -> XCUIElement {
+        app.descendants(matching: .any).matching(NSPredicate(
+            format: "(elementType == %d OR elementType == %d) AND (identifier == %@ OR placeholderValue == %@)",
+            XCUIElement.ElementType.textField.rawValue,
+            XCUIElement.ElementType.textView.rawValue,
+            "home.composer",
+            "Ask anything"
+        )).firstMatch
+    }
+
     /// Home never shows an empty "Nothing new" for a state it can explain: a
     /// machine with no Bots offers the first one, an offline machine says so,
     /// and a machine still connecting shows skeletons.
@@ -524,7 +558,7 @@ final class AidenShellUITests: XCTestCase {
         let empty = AidenStateMatrix.launch(scenario: .empty)
         AidenStateMatrix.openArea("Chats", in: empty)
         XCTAssertTrue(empty.buttons["home.bots.first"].firstMatch.waitForExistence(timeout: 10), "No Make your first Bot")
-        XCTAssertFalse(empty.staticTexts["home.digest.empty"].exists, "Home said nothing new with no Bots")
+        XCTAssertFalse(digest(in: empty).exists, "Home showed a news card with no Bots")
         AidenStateMatrix.capture("home-no-bots", in: self)
         empty.terminate()
 
@@ -532,7 +566,7 @@ final class AidenShellUITests: XCTestCase {
         AidenStateMatrix.openArea("Chats", in: offline)
         let note = offline.descendants(matching: .any)["home.bots.offline"].firstMatch
         XCTAssertTrue(note.waitForExistence(timeout: 15), "No offline explanation")
-        XCTAssertFalse(offline.staticTexts["home.digest.empty"].exists, "Home said nothing new while offline")
+        XCTAssertFalse(nothingNew(in: offline).exists, "Home said nothing new while offline")
         AidenStateMatrix.capture("home-offline", in: self)
         offline.terminate()
 
@@ -540,9 +574,18 @@ final class AidenShellUITests: XCTestCase {
         AidenStateMatrix.openArea("Chats", in: loading)
         let skeleton = loading.descendants(matching: .any)["home.bots.loading"].firstMatch
         XCTAssertTrue(skeleton.waitForExistence(timeout: 10), "No Bot skeletons while connecting")
-        XCTAssertFalse(loading.staticTexts["home.digest.empty"].exists, "Home said nothing new while connecting")
+        XCTAssertFalse(nothingNew(in: loading).exists, "Home said nothing new while connecting")
         AidenStateMatrix.capture("home-loading", in: self)
         loading.terminate()
+    }
+
+    /// Any part of Home's news card, whatever element type it lands as.
+    private func digest(in app: XCUIApplication) -> XCUIElement {
+        app.descendants(matching: .any).matching(NSPredicate(format: "identifier BEGINSWITH %@", "home.digest")).firstMatch
+    }
+
+    private func nothingNew(in app: XCUIApplication) -> XCUIElement {
+        app.descendants(matching: .any)["home.digest.empty"].firstMatch
     }
 
     /// A row's menu opens with what its swipes offer, and a row waiting on a

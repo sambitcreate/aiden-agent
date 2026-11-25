@@ -296,6 +296,10 @@ final class AidenNewWorkChatFlow {
         guard await awaitReady(target, showsStatus: false) else {
             return .failed(unavailableMessage(target))
         }
+        // Unpairing mid-send must not open a chat on a machine that's gone.
+        guard let owner = try? coordinator.ownerContext(for: target.instanceId) else {
+            return .failed(AidenNewWorkMachine.noLongerPaired)
+        }
         func home() -> AidenWorkspace? {
             AidenNoWorkspace.home(in: coordinator.hosts.connection(for: target.instanceId)?.workspaces ?? [])
         }
@@ -311,6 +315,7 @@ final class AidenNewWorkChatFlow {
             // Also the chat's draft, so a launch that ends before it sends
             // leaves the words in the chat rather than nowhere.
             _ = await seedComposer(prompt, for: created.id)
+            guard coordinator.isLive(owner) else { return .failed(AidenNewWorkMachine.noLongerPaired) }
             onCreated(created.chat, created.id, prompt)
             coordinator.haptics.play(
                 .success,
