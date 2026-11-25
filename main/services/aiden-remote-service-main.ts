@@ -137,12 +137,13 @@ import {
   gitComparisonDiff,
   gitCreateBranch,
   gitDiff,
-  gitInfo,
   gitPush,
   gitPushCapability,
   gitReview,
   gitWorktrees,
+  gitWorkspaceSummary,
 } from "./git.js";
+import { AidenRemoteWorkspaceGitCache } from "./aiden-remote-workspace-git-cache.js";
 import { AidenRemoteScheduleService } from "./aiden-remote-schedules.js";
 import { usageStore } from "./usage-store.js";
 import { spending } from "./spending-main.js";
@@ -1369,7 +1370,7 @@ async function createRuntime(): Promise<AidenRemoteRuntime> {
               isWorkspaceHidden: isEphemeralOnlyNoWorkspace,
               filterVisibleWorkspaces: (workspaces) =>
                 filterRemoteVisibleWorkspaces(workspaces, () => chatStore.list()),
-              gitInfo,
+              gitSummaries: new AidenRemoteWorkspaceGitCache({ read: gitWorkspaceSummary }),
             }),
           };
         },

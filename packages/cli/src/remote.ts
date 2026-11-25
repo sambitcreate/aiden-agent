@@ -17,6 +17,7 @@ import { AidenRemoteWorkspaceService } from "../../../main/services/aiden-remote
 import { AidenRemoteWorkspaceOwnerRegistry } from "../../../main/services/aiden-remote-workspace-owners.js";
 import { AidenRemoteFileService } from "../../../main/services/aiden-remote-files.js";
 import { AidenRemoteGitService } from "../../../main/services/aiden-remote-git.js";
+import { AidenRemoteWorkspaceGitCache } from "../../../main/services/aiden-remote-workspace-git-cache.js";
 import { AidenRemoteMemorySettingsService } from "../../../main/services/aiden-remote-memory-settings.js";
 import { AidenIdempotencyLedger, type AidenIdempotencySnapshot } from "../../../main/services/aiden-remote-operation-contract.js";
 import * as git from "../../../main/services/git.js";
@@ -254,7 +255,7 @@ export async function createCliRemote(agentDir: string, chats: ReturnType<typeof
         chats: remoteChats.chats, streams: remoteChats.streams, models: remoteChats.models, hostFeed: feed, hostRuns,
         schedules: new AidenRemoteScheduleService({ application: scheduleApplication, models: remoteChats.models, idempotency, persistIdempotency }),
         workspaceBrowser: browser,
-        workspaces: new AidenRemoteWorkspaceService({ application: workspaces.application, browser, idempotency, persistIdempotency, gitInfo: git.gitInfo }),
+        workspaces: new AidenRemoteWorkspaceService({ application: workspaces.application, browser, idempotency, persistIdempotency, gitSummaries: new AidenRemoteWorkspaceGitCache({ read: git.gitWorkspaceSummary }) }),
         files: new AidenRemoteFileService({ instanceId, application: workspaces.environment, owners }),
         git: new AidenRemoteGitService({ application: workspaces.environment, owners, worktrees: worktreeApplication, listWorkspaces: workspaces.configStore.listWorkspaces, idempotency, persistIdempotency,
           git: { review: git.gitReview, diff: git.gitDiff, branches: git.gitBranches, checkout: git.gitCheckout, createBranch: git.gitCreateBranch, commit: git.gitCommit,

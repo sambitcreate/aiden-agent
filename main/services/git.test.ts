@@ -71,6 +71,38 @@ async function createRepository(t: test.TestContext): Promise<string> {
   return repository;
 }
 
+test("a workspace summary names the repository root, and only a clean answer says a folder is not a repository", async (t) => {
+  const service = new GitService({ cacheTtlMs: 0 });
+  const repository = await createRepository(t);
+  const canonicalRepository = await fs.realpath(repository);
+  const subfolder = path.join(repository, "packages", "web");
+  await fs.mkdir(subfolder, { recursive: true });
+  await fs.writeFile(path.join(repository, "NOTES.md"), "draft\n", "utf8");
+
+  const top = await service.workspaceSummary(repository);
+  const nested = await service.workspaceSummary(subfolder);
+  assert.equal(top.root, canonicalRepository);
+  assert.equal(nested.root, canonicalRepository, "folders in one repository share its root");
+  assert.equal(nested.info.isRepo, true);
+  assert.equal(nested.info.branch, "main");
+  assert.equal(nested.info.uncommitted, 1);
+
+  const plain = await temporaryDirectory(t);
+  assert.deepEqual(await service.workspaceSummary(plain), { root: await fs.realpath(plain), info: { isRepo: false } });
+
+  await assert.rejects(service.workspaceSummary(path.join(plain, "missing")), "a missing folder is a failure, not a non-repository");
+
+  const corrupt = path.join(await temporaryDirectory(t), "corrupt");
+  await fs.mkdir(corrupt);
+  await fs.writeFile(path.join(corrupt, ".git"), "gitdir: /nonexistent/aiden-corrupt-repository\n", "utf8");
+  await assert.rejects(service.workspaceSummary(corrupt), "a broken repository is a failure, not a non-repository");
+
+  await git(repository, ["checkout", "--detach"]);
+  const detached = await service.workspaceSummary(repository);
+  assert.equal(detached.info.isRepo, true);
+  assert.equal(detached.info.detached, true);
+});
+
 test("unpushed commits count what no remote holds, and an unreadable branch is never zero", async (t) => {
   const repository = await createRepository(t);
   const service = new GitService({ cacheTtlMs: 0 });

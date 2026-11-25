@@ -83,6 +83,21 @@ export class GitServiceError extends Error {
   }
 }
 
+/** Whether `folder` or any folder above it holds a `.git` file or directory. */
+async function hasGitEntryAtOrAbove(folder: string): Promise<boolean> {
+  for (let current = folder; ; current = path.dirname(current)) {
+    try {
+      await fs.lstat(path.join(current, ".git"));
+      return true;
+    } catch (error) {
+      // An entry Aiden cannot inspect might be a repository; never call it absent.
+      const code = (error as NodeJS.ErrnoException)?.code;
+      if (code !== "ENOENT" && code !== "ENOTDIR") return true;
+    }
+    if (path.dirname(current) === current) return false;
+  }
+}
+
 /** Waits for a queued mutation, but lets a cancelled read leave the queue at once. */
 function waitUnlessAborted(pending: Promise<void>, signal: AbortSignal | undefined): Promise<void> {
   if (!signal) return pending;
@@ -2578,6 +2593,31 @@ export class GitService {
   async info(cwd: string, signal?: AbortSignal): Promise<GitInfo> {
     return this.displayRead(cwd, "info", signal, (repo, owner) =>
       repo ? this.repositoryInfo(repo, owner) : Promise.resolve({ isRepo: false }));
+  }
+
+  /**
+   * The status of a workspace folder together with the repository root it
+   * belongs to, so callers can share one read between folders of the same
+   * repository. Unlike `info`, it reports `isRepo: false` only for a folder Git
+   * says is outside any repository and that has no `.git` entry at or above
+   * it; a missing folder, an unreadable or corrupt repository, or any other
+   * failure throws instead.
+   */
+  async workspaceSummary(cwd: string, signal?: AbortSignal): Promise<{ root: string; info: GitInfo }> {
+    if (signal?.aborted) throw new GitServiceError("aborted", "Git operation was cancelled.");
+    const canonical = await fs.realpath(cwd);
+    const probe = await this.run(canonical, ["rev-parse", "--show-toplevel"], { allowExitCodes: [128], signal });
+    if (probe.exitCode !== 0) {
+      if (/not a git repository/iu.test(probe.stderr) && !(await hasGitEntryAtOrAbove(canonical))) {
+        return { root: canonical, info: { isRepo: false } };
+      }
+      throw new GitServiceError("command_failed", "Git could not read this folder.");
+    }
+    const root = probe.stdout.replace(/\r?\n$/u, "");
+    if (!root) throw new GitServiceError("command_failed", "Git could not read this folder.");
+    const info = await this.info(canonical, signal);
+    if (!info.isRepo) throw new GitServiceError("command_failed", "Git could not read this folder.");
+    return { root, info };
   }
 
   async branches(cwd: string, signal?: AbortSignal): Promise<GitBranches> {
@@ -8686,6 +8726,8 @@ export const gitCachedRepositoryIdentity = (folderPath: string) =>
   gitService.cachedRepositoryIdentity(folderPath);
 export const gitInfo = (folderPath: string, signal?: AbortSignal) =>
   gitService.info(folderPath, signal);
+export const gitWorkspaceSummary = (folderPath: string, signal?: AbortSignal) =>
+  gitService.workspaceSummary(folderPath, signal);
 export const gitBranches = (folderPath: string, signal?: AbortSignal) =>
   gitService.branches(folderPath, signal);
 export const gitReview = (folderPath: string, signal?: AbortSignal) =>
