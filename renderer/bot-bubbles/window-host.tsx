@@ -2,7 +2,6 @@
 // (Linux, or Float over other apps switched off). Mounted once by the main
 // window; it draws nothing unless main says heads live in this window.
 
-import "./bot-bubbles.css";
 import * as React from "react";
 import { useBotBubbles } from "../lib/bot-bubbles-api";
 import { BotBubbleHeads } from "./bot-bubble-heads";
