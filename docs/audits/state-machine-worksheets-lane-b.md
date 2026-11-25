@@ -112,11 +112,25 @@ Fixed defects, reproduced by test:
 
 `bot-questions.ts` keeps one wait per `waitId`, and its `settle` is gated on prompt identity, so a stale abort cannot end the replacement wait. Baselines are in `bot-questions.test.ts`.
 
-### `backend:M028` Bot approval wait registry — deferred
+### `backend:M028` Bot approval wait registry — retained, three fixes
 
-#730 and #727 have landed, and the transition review of the rewritten `bot-approvals.ts` is still to do.
+`bot-approvals.ts` wraps `ToolApprovalCoordinator` with per-`waitId` deduplication (`requests`), live prompt publication (`waiting`), and allow-list release (`releaseFromAllowList`).
 
-The item recorded here while #730 was open is closed: its publish callback still sets `waiting` before calling `options.publish`, but the `finally` in `request` removes that entry and withdraws the prompt as `unavailable` when a publish throws. Read in code, not reproduced by a test.
+| Event | Prior state | Guard | Next state | Effect |
+|---|---|---|---|---|
+| `request` (durable hit) | none | `assertCurrent` passes before and after `lookupDecision`, `id` and `authorizationFingerprint` match | unchanged (never published) | Returns cloned saved `BotApprovalDecision` |
+| `request` (identical join) | `requests` has live entry | Same `(waitId, botId, authorizationFingerprint)` and `!controller.signal.aborted` | unchanged | Joins existing `result` promise without republishing |
+| `request` (new or replacement) | none or mismatched entry | `assertCurrent` and `signal` live | `requests` and `waiting` hold new attempt | Aborts mismatched prior waiter with `The approval was replaced.` (withdrawing it as `cancelled`), then publishes new prompt |
+| `options.publish` throws, unsettled | `publishing` | `!controller.signal.aborted && !source` | removed from `requests` and `waiting` (restoring any enclosing `waiting` entry) | Clears callbacks, withdraws prompt once as `unavailable`, notifies `onChange`, rejects waiter with `unavailable` |
+| `decide` | `waiting` has entry | `!controller.signal.aborted`, unclaimed (or `expiry` + `deny`) | removed by coordinator `withdraw` | Records `source`/`decisionSource` (rolled back if coordinator refuses) and resolves waiter with `allow`, `allow_always` (only if offered), or `deny` |
+| `releaseFromAllowList` | `waiting` has entry | Unclaimed, matching rule key, `assertCurrent` passes before and after `prepareAllowListRelease`, still same `waiting` entry and not aborted | removed by coordinator `withdraw` | Resolves waiter with replacement `allow_list` decision; `finally` clears `claimed` if still waiting |
+| abort / Bot pause | live entry | Signal aborts | removed from `requests` and `waiting` | Withdraws as `cancelled`, rejects waiter; late `decide` and `releaseFromAllowList` return `false` |
+
+Fixed defects, reproduced by test in `main/services/bot-runtime/bot-approvals.test.ts`:
+
+- **Stale `Always` scope leak across `waitId` reuse:** `coordinator.request` keyed `decisionPayloads` by `captured.waitId`, and an abort or replacement between `decide(..., "allow", "always")` and `complete()` resuming threw before `takeDecisionPayload` ran. A subsequent wait reusing the same `(botId, waitId)` with a plain one-shot `allow` (even without `always` offered) read the leaked `{ scope: "always" }` and resolved to `allow_always`. Each attempt now keys its payload by a private monotonic `attemptId` and drains it in `finally`.
+- **Synchronous stale window and re-entrant replacement on publish throw:** `options.publish` throwing left `requests` and `waiting` populated until `complete()`'s microtask `finally` ran (allowing synchronous `pending()`, `releaseFromAllowList`, or retry joins to observe the failed entry), and a re-entrant same-id replacement whose `publish` threw overwrote the enclosing prompt in `waiting` so the enclosing prompt's withdrawal received the replacement's prompt. Unsettled publish throws now clean up `requests` and `waiting` synchronously (restoring any enclosing `waiting` entry) and withdraw once as `unavailable`.
+- **Late `decide` metadata mutation:** `decide` now refuses already-aborted waits and rolls back `claimed`/`source`/`decisionSource` if `coordinator.decideAsHost` returns `false`.
 
 ## P2b: Remote pairing and single-use capabilities
 

@@ -76,6 +76,7 @@ The headless Aiden server lives in `packages/cli` as a self-contained npm packag
 
 ## Pull requests, CI, and branches
 
+- Never wait on CI or PR comments inside your own turn: no `sleep` loops around `gh`, `gh run watch`, `gh pr checks --watch` or repeated status glances. After pushing, turn on auto-merge if asked, hand the wait to a watcher (pr-watchd, the Claude app's Auto-fix or Aiden's `follow_pull_request`), and end the turn. Follow the `aiden-pr-ci` skill in `.agents/skills/` for the details and for what to do when woken about a failure.
 - Update a shared PR branch by merging `origin/main` into it. Do not rebase or force-push a branch that already has a PR, reviews, or CI history.
 - Before requesting bot reviews or waiting on hosted CI, run the narrow suites for the touched surfaces locally. Hosted CI and review bots should not be the first place a failure shows up.
 - Treat a PR as mergeable only when CI is green on its exact head commit. After merging `main` in, wait for the new run; do not merge on an earlier head's result.

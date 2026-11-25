@@ -5,7 +5,9 @@ import { codexThinkingLevelsForModel } from "../../../renderer/shared/codex-thin
 import { join } from "node:path";
 import { ModelRuntime, VERSION } from "@earendil-works/pi-coding-agent";
 import { concentrateProvider } from "../../../main/services/concentrate-provider.js";
+import { adaptGoogleXHighStreamOptions } from "../../../main/services/pi-provider-compatibility.js";
 import { withPiRemoteCatalog, isPiRemoteCatalogProvider } from "../../../main/services/pi-remote-catalog.js";
+import { piDefaultModelFor } from "../../../main/services/pi-default-models.js";
 import { fetchModelsDevCatalog, parseModelsDevCacheDocument } from "../../../main/services/models-dev-cache-core.js";
 import { atomicJson, readJson, JsonStore } from "./state.ts";
 import { rmSync } from "node:fs";
@@ -35,6 +37,9 @@ export async function createCliModelRuntime(agentDir: string) {
     if (isPiRemoteCatalogProvider(provider)) runtime.registerNativeProvider(withPiRemoteCatalog(provider));
   }
   runtime.registerNativeProvider(concentrateProvider());
+  const innerStreamSimple = runtime.streamSimple.bind(runtime);
+  runtime.streamSimple = (model, context, options) =>
+    innerStreamSimple(model, context, adaptGoogleXHighStreamOptions(model, options));
   return runtime;
 }
 
@@ -61,6 +66,7 @@ export async function listCliProviders(agentDir: string): Promise<import("../../
   return runtime.getProviders().map((provider) => {
     const models = available.filter((model) => model.provider === provider.id);
     return { id: provider.id, kind: "openai", label: provider.name, baseUrl: models[0]?.baseUrl ?? "", needsKey: false, hasKey: true, models: models.map((model) => model.id),
+      defaultModel: piDefaultModelFor(provider.id, models.map((model) => model.id)),
       modelMetadata: Object.fromEntries(models.map((model) => [model.id, { name: model.name, source: "provider", type: "llm", vision: model.input.includes("image"), reasoning: model.reasoning, thinkingLevels: cliThinkingLevels(model), contextLength: model.contextWindow }])) };
   });
 }
