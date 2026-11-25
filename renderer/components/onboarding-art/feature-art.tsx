@@ -24,12 +24,11 @@ import {
   WorkspacesArt,
 } from "./create-art";
 import {
+  AgentSliderArt,
   AttachmentsVisionArt,
   McpConnectorsArt,
   ModelFreedomArt,
-  ModelPadArt,
   ReusableSkillsArt,
-  ThinkingControlsArt,
   ToolScriptsArt,
   WebSearchArt,
 } from "./extend-art";
@@ -77,8 +76,7 @@ export const FEATURE_ART = {
   workspaces: { tint: "plum", Art: WorkspacesArt },
   models: { tint: "periwinkle", Art: ModelFreedomArt },
   toolScripts: { tint: "lime", Art: ToolScriptsArt },
-  modelPad: { tint: "sky", Art: ModelPadArt },
-  thinking: { tint: "sun", Art: ThinkingControlsArt },
+  agentSlider: { tint: "sky", Art: AgentSliderArt },
   vision: { tint: "rose", Art: AttachmentsVisionArt },
   webSearch: { tint: "aqua", Art: WebSearchArt },
   skills: { tint: "plum", Art: ReusableSkillsArt },

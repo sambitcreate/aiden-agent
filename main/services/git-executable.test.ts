@@ -1,6 +1,14 @@
 import assert from "node:assert/strict";
+import { execFile } from "node:child_process";
+import * as fs from "node:fs/promises";
+import * as os from "node:os";
+import * as path from "node:path";
 import test from "node:test";
+import { promisify } from "node:util";
+import { GitService } from "./git.js";
 import { createGitExecutableResolver, resolveGitExecutable } from "./git-executable.js";
+
+const execFileAsync = promisify(execFile);
 
 function fixture(paths: Record<string, string>, developerDir?: string) {
   let probes = 0;
@@ -233,3 +241,186 @@ test("memoized resolver on Linux skips a workspace-relative PATH entry", async (
   assert.equal(await resolve("git", "/w", { PATH: ".:/usr/bin" }), "/usr/bin/git");
   assert.ok(!f.inspected.includes("/w/git"));
 });
+
+async function createTempRepoWithWorktree(t: test.TestContext, gitBinary?: string) {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-git-proof-"));
+  t.after(() => fs.rm(root, { recursive: true, force: true }));
+  const repo = path.join(root, "repo");
+  const worktreesRoot = path.join(root, "worktrees");
+  await fs.mkdir(repo, { recursive: true });
+  await fs.mkdir(worktreesRoot, { recursive: true });
+  const runGit = (args: string[]) =>
+    execFileAsync("git", args, {
+      cwd: repo,
+      env: {
+        ...process.env,
+        GIT_AUTHOR_NAME: "Test",
+        GIT_AUTHOR_EMAIL: "test@example.com",
+        GIT_COMMITTER_NAME: "Test",
+        GIT_COMMITTER_EMAIL: "test@example.com",
+      },
+    });
+  await runGit(["init", "-b", "main"]);
+  await fs.writeFile(path.join(repo, "README.md"), "hello\n", "utf8");
+  await runGit(["add", "README.md"]);
+  await runGit(["commit", "-m", "init"]);
+  const service = new GitService(gitBinary ? { gitBinary } : {});
+  const created = await service.createWorktree(repo, worktreesRoot, "proof/test-branch");
+  return { root, repo, service, created };
+}
+
+test(
+  "VerifiedRepoIdentityProof refuses to cache pure-FS admission when repo config uses [include]",
+  { skip: process.platform === "win32" },
+  async (t) => {
+    const { root, repo, service, created } = await createTempRepoWithWorktree(t);
+    const check = () =>
+      service.managedWorktreeUsable(
+        repo,
+        created.path,
+        created.branch,
+        created.worktreeGitDir,
+        created.ownershipToken,
+        created.worktreeDevice,
+        created.worktreeInode,
+      );
+    // First call verifies through Git and caches the VerifiedRepoIdentityProof;
+    // second call hits the pure-FS fast path while signatures match.
+    assert.equal(await check(), true);
+    assert.equal(await check(), true);
+
+    // Add a valid [include] directive to repo/.git/config and re-check.
+    // Because repo/.git/config now has an [include], pureFsAdmissionProof must
+    // refuse to cache a VerifiedRepoIdentityProof for subsequent calls.
+    const extraConfig = path.join(root, "extra.gitconfig");
+    await fs.writeFile(extraConfig, "# included\n", "utf8");
+    const repoConfig = path.join(repo, ".git", "config");
+    const before = await fs.readFile(repoConfig, "utf8");
+    await fs.writeFile(repoConfig, `${before}\n[include]\n\tpath = ${extraConfig}\n`, "utf8");
+    assert.equal(await check(), true);
+
+    // Now break ONLY the included file without modifying repo/.git/config.
+    // A stale pure-FS cache would have returned true; failing closed forces
+    // Git discovery, which rejects the broken included config.
+    await fs.writeFile(extraConfig, "[core\n", "utf8");
+    await assert.rejects(check(), /Git repository|bad config|not_a_repo/u);
+  },
+);
+
+test(
+  "VerifiedRepoIdentityProof refuses to cache pure-FS admission for a shebang wrapper git binary",
+  { skip: process.platform === "win32" },
+  async (t) => {
+    const wrapperDir = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-git-wrap-"));
+    t.after(() => fs.rm(wrapperDir, { recursive: true, force: true }));
+    const wrapperPath = path.join(wrapperDir, "git-wrapper");
+    const countFile = path.join(wrapperDir, "calls.log");
+    const realGit = await resolveGitExecutable("git", wrapperDir, process.env);
+    await fs.writeFile(
+      wrapperPath,
+      `#!/bin/sh\necho call >> "${countFile}"\nexec "${realGit}" "$@"\n`,
+      { mode: 0o755 },
+    );
+
+    const { repo, service, created } = await createTempRepoWithWorktree(t, wrapperPath);
+    const check = () =>
+      service.managedWorktreeUsable(
+        repo,
+        created.path,
+        created.branch,
+        created.worktreeGitDir,
+        created.ownershipToken,
+        created.worktreeDevice,
+        created.worktreeInode,
+      );
+    assert.equal(await check(), true);
+    const callsAfterFirst = (await fs.readFile(countFile, "utf8")).trim().split("\n").length;
+    assert.equal(await check(), true);
+    const callsAfterSecond = (await fs.readFile(countFile, "utf8")).trim().split("\n").length;
+    assert.ok(
+      callsAfterSecond > callsAfterFirst,
+      "wrapper binary must never satisfy the 0-spawn pure-FS admission proof",
+    );
+  },
+);
+
+test(
+  "VerifiedRepoIdentityProof fails closed out of pure-FS fast path when GIT_EXEC_PATH is set",
+  { skip: process.platform === "win32" },
+  async (t) => {
+    const previousExecPath = process.env.GIT_EXEC_PATH;
+    const previousTrace = process.env.GIT_TRACE;
+    const previousGlobalConfig = process.env.GIT_CONFIG_GLOBAL;
+    const previousNoSystem = process.env.GIT_CONFIG_NOSYSTEM;
+    const { root, repo, service, created } = await createTempRepoWithWorktree(t, "/usr/bin/git");
+    const fakeExecDir = path.join(root, "fake-exec");
+    const traceFile = path.join(root, "git-trace.log");
+    await fs.mkdir(fakeExecDir, { recursive: true });
+    t.after(() => {
+      if (previousExecPath === undefined) delete process.env.GIT_EXEC_PATH;
+      else process.env.GIT_EXEC_PATH = previousExecPath;
+      if (previousTrace === undefined) delete process.env.GIT_TRACE;
+      else process.env.GIT_TRACE = previousTrace;
+      if (previousGlobalConfig === undefined) delete process.env.GIT_CONFIG_GLOBAL;
+      else process.env.GIT_CONFIG_GLOBAL = previousGlobalConfig;
+      if (previousNoSystem === undefined) delete process.env.GIT_CONFIG_NOSYSTEM;
+      else process.env.GIT_CONFIG_NOSYSTEM = previousNoSystem;
+    });
+
+    delete process.env.GIT_EXEC_PATH;
+    process.env.GIT_CONFIG_GLOBAL = "/dev/null";
+    process.env.GIT_CONFIG_NOSYSTEM = "1";
+    process.env.GIT_TRACE = traceFile;
+
+    const readTrace = () => fs.readFile(traceFile, "utf8").catch(() => "");
+    const check = () =>
+      service.managedWorktreeUsable(
+        repo,
+        created.path,
+        created.branch,
+        created.worktreeGitDir,
+        created.ownershipToken,
+        created.worktreeDevice,
+        created.worktreeInode,
+      );
+
+    // First call runs Git and caches the VerifiedRepoIdentityProof.
+    assert.equal(await check(), true);
+    const traceAfterFirst = await readTrace();
+    assert.ok(traceAfterFirst.length > 0, "initial check must invoke Git to mint the proof");
+
+    // Second call with identical environment and untouched signed paths must
+    // hit the 0-spawn pure-FS fast path (no new Git trace entries).
+    assert.equal(await check(), true);
+    const traceAfterFastPath = await readTrace();
+    assert.equal(
+      traceAfterFastPath,
+      traceAfterFirst,
+      "unchanged check without GIT_EXEC_PATH must use the 0-spawn pure-FS fast path",
+    );
+
+    // Set GIT_EXEC_PATH while leaving all signed repo and config paths intact.
+    // The environment fence must invalidate the cached proof and invoke Git.
+    process.env.GIT_EXEC_PATH = fakeExecDir;
+    assert.equal(await check(), true);
+    const traceAfterExecPath = await readTrace();
+    assert.ok(
+      traceAfterExecPath.length > traceAfterFastPath.length,
+      "setting GIT_EXEC_PATH must bypass the cached proof and invoke Git",
+    );
+    assert.match(
+      traceAfterExecPath.slice(traceAfterFastPath.length),
+      /rev-parse/u,
+      "Git discovery must run when GIT_EXEC_PATH invalidates the cached proof",
+    );
+
+    // A subsequent call while GIT_EXEC_PATH remains set must still invoke Git
+    // (no new proof may be cached under GIT_EXEC_PATH).
+    assert.equal(await check(), true);
+    const traceAfterRepeatExecPath = await readTrace();
+    assert.ok(
+      traceAfterRepeatExecPath.length > traceAfterExecPath.length,
+      "pure-FS proof must not be re-cached while GIT_EXEC_PATH is set",
+    );
+  },
+);

@@ -537,5 +537,6 @@ Inbox reads carry the displayed reply ID, including reads sent after Done and Sn
 - An iOS detail/view admission keeps its whole-row generation across a later triage edit, so an older in-flight refresh cannot erase the viewed reply or restore its unread marker. A genuinely newer page reply still wins.
 - Phone search offers Mark not done and Unsnooze on held rows through the same swipe and accessibility actions. Undo restores the original Done timestamp with its revision guard.
 - Host-feed Bot attention/state reads remain transcript-free; reply times come only from an already-open live feed, never by opening a closed conversation.
+  - Update (2026-11-24, Remote revision 66): host-feed Bot rows now come from the Bot list's cached summary, so each row carries its last reply time and a one-line preview. A closed Bot's transcript is re-read only when its newest entry changes. See `docs/aiden-remote-api-v1.md`, "Bot row previews".
 
 - Detail-versus-page precedence uses the same identity-aware reply boundary as Mark read: two different reply IDs at the same millisecond do not let an admitted read row replace the incoming unseen reply. Native refresh/cache tests cover tied IDs, strictly newer pages and stale pages.
