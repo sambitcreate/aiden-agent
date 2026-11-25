@@ -133,6 +133,28 @@ test("hidden models are projected for clients, skipped by defaults, and remain r
   });
 });
 
+test("without a saved model, phones start on the provider's default model", async () => {
+  const listProviders = async () => [
+    provider({
+      models: ["first-model", "default-model"],
+      defaultModel: "default-model",
+      modelMetadata: {
+        "first-model": { source: "provider", name: "First", type: "llm" },
+        "default-model": { source: "provider", name: "Default", type: "llm" },
+      },
+    }),
+  ];
+  const fresh = new AidenRemoteModelService({ listProviders, getSettings: async () => ({}) });
+  assert.deepEqual((await fresh.list()).defaults, { providerId: "provider-1", modelId: "default-model" });
+  assert.equal((await fresh.resolve()).modelId, "default-model");
+
+  const saved = new AidenRemoteModelService({
+    listProviders,
+    getSettings: async () => ({ lastProviderId: "provider-1", lastModel: "first-model" }),
+  });
+  assert.deepEqual((await saved.list()).defaults, { providerId: "provider-1", modelId: "first-model" });
+});
+
 test("a provider with every model hidden has no remote default", async () => {
   const service = new AidenRemoteModelService({
     listProviders: async () => [provider({ models: ["chat-model"] })],
