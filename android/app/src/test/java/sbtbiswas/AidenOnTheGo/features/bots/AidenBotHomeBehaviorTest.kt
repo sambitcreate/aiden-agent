@@ -173,6 +173,52 @@ class AidenBotHomeBehaviorTest {
     }
 
     @Test
+    fun aBotRowsAvatarShowsWaitingWorkingOrAnErrorButNeverDone() {
+        val scout = bot("b", "Scout")
+        assertEquals(
+            AidenBotAvatarState.WAITING,
+            aidenBotHomeAvatarTarget(AidenBotHomeRow(scout, chat("c", "b", state = AidenBotConversationActivityState.WAITING_FOR_APPROVAL)))
+        )
+        assertEquals(AidenBotAvatarState.THINKING, aidenBotHomeAvatarTarget(AidenBotHomeRow(scout, chat("c", "b", state = AidenBotConversationActivityState.RUNNING))))
+        assertEquals(
+            AidenBotAvatarState.THINKING,
+            aidenBotHomeAvatarTarget(AidenBotHomeRow(bot("b", "Scout", sessionState = AidenBotSessionState.RUNNING), null))
+        )
+        assertEquals(
+            AidenBotAvatarState.ERROR,
+            aidenBotHomeAvatarTarget(AidenBotHomeRow(bot("b", "Scout", sessionState = AidenBotSessionState.INTERRUPTED), null))
+        )
+        assertEquals(
+            AidenBotAvatarState.ERROR,
+            aidenBotHomeAvatarTarget(AidenBotHomeRow(bot("b", "Scout", sessionState = AidenBotSessionState.NEEDS_MODEL), null))
+        )
+        // A turn that ended normally rests quietly on the home list; done shows only in the chat.
+        assertEquals(
+            AidenBotAvatarState.IDLE,
+            aidenBotHomeAvatarTarget(AidenBotHomeRow(bot("b", "Scout", sessionState = AidenBotSessionState.IDLE), chat("c", "b")))
+        )
+        assertEquals(AidenBotAvatarState.IDLE, aidenBotHomeAvatarTarget(AidenBotHomeRow(scout, chat("c", "b"))))
+        assertEquals(
+            AidenBotAvatarState.IDLE,
+            aidenBotHomeAvatarTarget(AidenBotHomeRow(bot("b", "Scout", sessionState = AidenBotSessionState.UNAVAILABLE), null))
+        )
+        // A paused Bot rests quietly, but a card left up still waits on the person.
+        assertEquals(
+            AidenBotAvatarState.IDLE,
+            aidenBotHomeAvatarTarget(AidenBotHomeRow(bot("b", "Scout", sessionState = AidenBotSessionState.PAUSED), chat("c", "b")))
+        )
+        assertEquals(
+            AidenBotAvatarState.WAITING,
+            aidenBotHomeAvatarTarget(
+                AidenBotHomeRow(
+                    bot("b", "Scout", sessionState = AidenBotSessionState.PAUSED),
+                    chat("c", "b", state = AidenBotConversationActivityState.WAITING_FOR_APPROVAL)
+                )
+            )
+        )
+    }
+
+    @Test
     fun rowTimeIsFriendlyRelativeToToday() {
         val zone = ZoneId.of("UTC")
         val now = Instant.parse("2026-10-07T18:00:00Z") // a Wednesday

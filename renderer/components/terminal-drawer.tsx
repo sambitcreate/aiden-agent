@@ -76,6 +76,8 @@ interface TerminalContextValue {
   activeId: string | undefined;
   layout: Layout;
   canOpen: boolean;
+  /** Why the terminal can't open in this workspace, when it can't; null otherwise. */
+  unavailableReason: string | null;
   toggle: () => void;
   newTerminal: () => Promise<void>;
   split: (direction: Exclude<SplitDirection, "single">) => Promise<void>;
@@ -327,6 +329,11 @@ export function WorkspaceTerminalProvider({ children }: { children: React.ReactN
       activeId,
       layout,
       canOpen: Boolean(active?.folderPath && active.permission !== "none"),
+      unavailableReason: !active?.folderPath
+        ? "Choose a workspace folder to use the terminal."
+        : active.permission === "none"
+          ? "Workspace access is off for this folder, so the terminal can't open."
+          : null,
       toggle,
       newTerminal,
       split,

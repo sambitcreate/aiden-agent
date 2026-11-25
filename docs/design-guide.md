@@ -159,6 +159,16 @@ setting is System, so an explicit On or Off wins over the OS.
   change, and listens for `APPEARANCE_CHANGE_EVENT` rather than a media query.
   Only the sandboxed visual viewer, which has no settings, reads the OS query.
 
+**Toolbar presence.** A header control that can't be used in the current
+context is left out, not greyed, unless the reason passes in a moment (a Git
+operation keeps the buttons and dims them after 300ms). Wrap such a control in
+`ToolbarPresence` (`renderer/components/toolbar-presence.tsx`): it widens its
+slot and fades in when the control becomes usable while the same chat is open,
+leaves the same way, hands keyboard focus to the next control, and shows the
+final state at once on a first render, a chat switch or under Reduce Motion.
+A divider belongs to the group after it, so a group that leaves takes its
+divider along.
+
 **Presence.** An element that animates out stays mounted until its exit
 finishes, not for a fixed timer. `usePresence(present, ref)`
 (`renderer/lib/use-presence.ts`) returns `{ rendered, exiting }`: style the exit
@@ -247,6 +257,8 @@ read the pairing's saved `/server` features until the connection answers.
 ## Activity marks
 
 Show agent activity with the shared activity marks (`AidenActivityMark` on desktop), never with new spinners, canvas loops or shimmering icons. Geometry, timing and the phase mapping live in [`activity-marks.md`](activity-marks.md), and iOS and Android draw the same marks natively. Chat marks use the text colour, and Live uses the accent. Pass `active={false}` for terminal states so the mark freezes on its still pose rather than disappearing.
+
+The documented exception is a Bot's Hi-bit sprite avatar, which acts out its Bot's live state itself; see [Bot avatar states](activity-marks.md#bot-avatar-states-hi-bit-sprites). Its eyes use the tone's `deep` at every size. Faces drawn at 24 px and below add a small white glint while the eyes are open; larger faces keep the tone's `light` glint.
 
 ## Inbox rows
 
