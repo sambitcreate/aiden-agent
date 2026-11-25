@@ -488,49 +488,6 @@ async function main() {
       }
       return;
     }
-    case "cp": {
-      if (positionals.length !== 3) fail("cp needs a source and a destination", 74);
-      const [, rawSource, rawDestination] = positionals;
-      const parseEndpoint = (raw) => {
-        const colon = raw.indexOf(":");
-        if (colon > 0 && !raw.slice(0, colon).includes("/")) {
-          return { kind: "remote", vm: raw.slice(0, colon), path: raw.slice(colon + 1) };
-        }
-        return { kind: "local", path: raw };
-      };
-      const src = parseEndpoint(rawSource);
-      const dst = parseEndpoint(rawDestination);
-      if (src.kind === "local" && dst.kind === "local") {
-        fail("Either the source or the destination must be a VM path (VM:PATH).");
-      }
-      if (src.kind === "remote" && dst.kind === "remote") {
-        fail("Copying directly between two VMs is not supported; one path must be on the host.");
-      }
-      const upload = src.kind === "local";
-      const remote = upload ? dst : src;
-      const local = upload ? src : dst;
-      if (upload && !existsSync(local.path)) {
-        fail(`Source path '${local.path}' does not exist on the host`);
-      }
-      const vm = state.vms[remote.vm];
-      log({
-        kind: "cp",
-        name: remote.vm,
-        direction: upload ? "to_guest" : "from_guest",
-        localPath: local.path,
-        remotePath: remote.path,
-        recursive: flags.has("--recursive") || flags.has("-r"),
-        timeout: options["--timeout"],
-      });
-      if (!vm) fail(`VM '${remote.vm}' not found`);
-      if (!isRunning(vm)) fail(`VM '${remote.vm}' is not running`);
-      if (upload) {
-        process.stdout.write(`Copied ${local.path} to ${remote.vm}:${remote.path}\n`);
-      } else {
-        process.stdout.write(`Copied ${remote.vm}:${remote.path} to ${local.path}\n`);
-      }
-      return;
-    }
     default:
       fail(`fake lume does not know '${op}'`, 79);
   }
