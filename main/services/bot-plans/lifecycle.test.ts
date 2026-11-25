@@ -87,3 +87,57 @@ for (const terminal of ["needs_model", "model_error"] as const) {
     assert.deepEqual(ended, ["b:finished"]);
   });
 }
+
+test("synchronous endRuns throws are reported and still clear observed running state", () => {
+  const boom = new Error("sync failure");
+  const reports: Array<[string, unknown]> = [];
+  let calls = 0;
+  const lifecycle = createBotPlanLifecycle({
+    plans: {
+      endRuns: () => {
+        calls += 1;
+        throw boom;
+      },
+    },
+    onError: (botId, error) => reports.push([botId, error]),
+  });
+  lifecycle.stateChanged("b", { kind: "running" });
+  lifecycle.stateChanged("b", { kind: "idle" });
+  lifecycle.stateChanged("b", { kind: "idle" });
+  assert.equal(calls, 1, "cleared running entry must not re-fire endRuns on repeated idle");
+  assert.deepEqual(reports, [["b", boom]]);
+});
+
+test("forgetBot settles a waiting plan request as ended and clears the visible pending card", async () => {
+  const profileDir = await mkdtemp(path.join(tmpdir(), "plan-forget-waiting-"));
+  const plans = createBotPlans({
+    profileDir,
+    knownBot: async () => true,
+    revalidate: async () => {},
+    revokeAccess: () => {},
+  });
+  try {
+    const proposal = {
+      title: "Delete race",
+      why: "Check forgetBot while waiting",
+      steps: ["Run check"],
+      items: [{ id: "i1", kind: "shell" as const }],
+      authorization: { policyRevision: "policy-1", bindingRevision: "binding-1", proposalFingerprint: "", rules: [] },
+    };
+    proposal.authorization.proposalFingerprint = botPlanProposalFingerprint(proposal);
+    const pending = plans.request({
+      botId: "b",
+      planId: "p-forget",
+      toolCallId: "plan-call",
+      requestIds: ["person-1"],
+      proposal,
+      signal: undefined,
+    });
+    assert.equal((await plans.current("b"))?.status, "pending");
+    await plans.forgetBot("b");
+    assert.deepEqual(await pending, { status: "ended" });
+    assert.equal(await plans.current("b"), null);
+  } finally {
+    await rm(profileDir, { recursive: true, force: true });
+  }
+});
