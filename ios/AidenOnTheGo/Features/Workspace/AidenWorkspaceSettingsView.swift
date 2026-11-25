@@ -2,6 +2,7 @@ import SwiftUI
 
 struct AidenWorkspaceSettingsView: View {
     @Environment(\.dismiss) private var dismiss
+    @Environment(\.aidenPalette) private var palette
     @Bindable var coordinator: AidenRemoteCoordinator
     /// The unsaved edits and the workspace they edit, held by the shell
     /// (`AidenWorkspaceSettingsSheet`) so a fold or a rename on the computer
@@ -10,6 +11,8 @@ struct AidenWorkspaceSettingsView: View {
     let onRemoved: () -> Void
 
     @State private var isConfirmingRemoval = false
+    /// Why Remove did nothing, shown under its button.
+    @State private var removalNotice: String?
     @State private var hapticScope = UUID()
 
     /// The workspace as the computer last described it.
@@ -26,6 +29,13 @@ struct AidenWorkspaceSettingsView: View {
     var body: some View {
         NavigationStack {
             Form {
+                if let notice = coordinator.workspaceSaveNotices[draft.id] {
+                    Section {
+                        AidenWorkspaceSaveNoticeRow(message: notice) {
+                            coordinator.dismissWorkspaceSaveNotice(draft.id)
+                        }
+                    }
+                }
                 Section {
                     TextField("Name", text: $draft.name)
                     LabeledContent("Folder", value: workspace.hasFolder ? "Connected" : "None")
@@ -104,9 +114,16 @@ struct AidenWorkspaceSettingsView: View {
                             isConfirmingRemoval = true
                         }
                     } footer: {
-                        Text(workspace.isManagedWorktree
-                             ? "Deleting an Aiden-managed worktree removes its checkout and may remove its branch when safe."
-                             : "Removing unregisters this workspace from Aiden Agent and paired clients. Its folder, files, and chats stay on your computer, but its chats will no longer be listed.")
+                        VStack(alignment: .leading, spacing: 6) {
+                            if let removalNotice {
+                                Label(removalNotice, systemImage: "exclamationmark.circle")
+                                    .foregroundStyle(palette.warningText)
+                                    .accessibilityIdentifier("workspace-settings-removal-notice")
+                            }
+                            Text(workspace.isManagedWorktree
+                                 ? "Deleting an Aiden-managed worktree removes its checkout and may remove its branch when safe."
+                                 : "Removing unregisters this workspace from Aiden Agent and paired clients. Its folder, files, and chats stay on your computer, but its chats will no longer be listed.")
+                        }
                     }
                 }
             }
@@ -125,21 +142,21 @@ struct AidenWorkspaceSettingsView: View {
                         let context = self.context
                         // The edit shows at once and the sheet closes; the
                         // computer's answer settles it, and a failure puts the
-                        // workspace back and says so.
+                        // workspace back with a notice on it.
                         coordinator.haptics.play(
                             .success,
                             scope: hapticScope,
                             dedupeKey: "workspace-settings:\(workspace.id):\(workspace.revision)"
                         )
-                        Task { [coordinator] in
-                            _ = await coordinator.updateWorkspaceOutcome(
-                                workspace,
-                                name: changes.name,
-                                permission: changes.permission,
-                                memoryEnabled: changes.memoryEnabled,
-                                on: context
-                            )
-                        }
+                        // The coordinator keeps the queued save, so closing
+                        // the sheet doesn't cancel it.
+                        coordinator.enqueueWorkspaceSave(
+                            workspace,
+                            name: changes.name,
+                            permission: changes.permission,
+                            memoryEnabled: changes.memoryEnabled,
+                            on: context
+                        )
                         dismiss()
                     }
                     .disabled(!draft.canSave || !coordinator.holds(context))
@@ -152,9 +169,13 @@ struct AidenWorkspaceSettingsView: View {
             ) {
                 Button(workspace.isManagedWorktree ? "Delete Managed Worktree" : "Remove from Aiden Agent", role: .destructive) {
                     let workspace = self.workspace
+                    removalNotice = nil
                     Task {
                         let outcome = await coordinator.removeWorkspaceOutcome(workspace, on: context)
-                        if case .success = outcome {
+                        if case .busy = outcome {
+                            removalNotice = String(localized: "Another change is still on its way to your computer. Try again in a moment.")
+                            coordinator.haptics.play(.warning, scope: hapticScope)
+                        } else if case .success = outcome {
                             coordinator.haptics.play(
                                 .success,
                                 scope: hapticScope,
@@ -173,8 +194,8 @@ struct AidenWorkspaceSettingsView: View {
                      : "The folder, its files, and chats remain on your computer, but the chats will no longer be listed. Delete the folder separately in your system file manager if you no longer need it.")
             }
         }
-        // The shell's alert sits under this sheet, so a failed Save or Remove says
-        // so here.
+        // The shell's alert sits under this sheet, so a failed Remove says so
+        // here. A failed Save leaves a notice on the workspace instead.
         .alert(
             "Aiden On The Go",
             isPresented: Binding(
@@ -210,11 +231,20 @@ final class AidenWorkspaceSettingsDraft: Identifiable {
     private var renamedOnComputer = false
     private var permissionChangedOnComputer = false
     private var memoryChangedOnComputer = false
+    /// The workspace as the machine itself last confirmed it, without this
+    /// phone's unanswered edits. Nil when the opener didn't know it.
+    private var confirmed: AidenWorkspace?
 
-    init(workspace: AidenWorkspace, id: AidenHostObjectID, context: AidenRemoteRequestContext) {
+    init(
+        workspace: AidenWorkspace,
+        id: AidenHostObjectID,
+        context: AidenRemoteRequestContext,
+        confirmed: AidenWorkspace? = nil
+    ) {
         self.id = id
         self.context = context
         self.workspace = workspace
+        self.confirmed = confirmed
         name = workspace.name
         permission = workspace.permission
         memoryEnabled = workspace.memoryEnabled
@@ -254,25 +284,32 @@ final class AidenWorkspaceSettingsDraft: Identifiable {
         memoryChangedOnComputer && memoryEnabled != workspace.memoryEnabled ? workspace.memoryEnabled : nil
     }
 
-    /// The computer described the workspace again (a rename, or any change
-    /// that moves its revision). Fields the person hasn't touched follow it;
-    /// edited ones stay as they set them, and a field the computer also
-    /// changed shows the computer's value beside theirs.
-    func follow(_ latest: AidenWorkspace) {
+    /// The workspace changed under the sheet (a rename on the computer, or
+    /// this phone's own save settling). Fields the person hasn't touched
+    /// follow it; edited ones stay as they set them. A field shows the
+    /// computer's value beside theirs only when the computer's confirmed copy
+    /// changed it, so this phone's own rollback is never blamed on the computer.
+    func follow(_ latest: AidenWorkspace, confirmed latestConfirmed: AidenWorkspace? = nil) {
+        let previousConfirmed = confirmed
+        if let latestConfirmed { confirmed = latestConfirmed }
         guard latest != workspace else { return }
+        func changedOnComputer<Value: Equatable>(_ field: KeyPath<AidenWorkspace, Value>) -> Bool {
+            guard let previousConfirmed, let latestConfirmed else { return true }
+            return previousConfirmed[keyPath: field] != latestConfirmed[keyPath: field]
+        }
         if trimmedName == workspace.name {
             name = latest.name
-        } else if latest.name != workspace.name {
+        } else if latest.name != workspace.name, changedOnComputer(\.name) {
             renamedOnComputer = true
         }
         if permission == workspace.permission {
             permission = latest.permission
-        } else if latest.permission != workspace.permission {
+        } else if latest.permission != workspace.permission, changedOnComputer(\.permission) {
             permissionChangedOnComputer = true
         }
         if memoryEnabled == workspace.memoryEnabled {
             memoryEnabled = latest.memoryEnabled
-        } else if latest.memoryEnabled != workspace.memoryEnabled {
+        } else if latest.memoryEnabled != workspace.memoryEnabled, changedOnComputer(\.memoryEnabled) {
             memoryChangedOnComputer = true
         }
         workspace = latest
@@ -288,9 +325,14 @@ final class AidenWorkspaceSettingsSheet {
     private(set) var draft: AidenWorkspaceSettingsDraft?
 
     /// Opens the sheet on a workspace. The one already open on it keeps its edits.
-    func present(_ workspace: AidenWorkspace, id: AidenHostObjectID, context: AidenRemoteRequestContext) {
+    func present(
+        _ workspace: AidenWorkspace,
+        id: AidenHostObjectID,
+        context: AidenRemoteRequestContext,
+        confirmed: AidenWorkspace? = nil
+    ) {
         if let draft, draft.id == id, draft.context.sharesLease(with: context) { return }
-        draft = AidenWorkspaceSettingsDraft(workspace: workspace, id: id, context: context)
+        draft = AidenWorkspaceSettingsDraft(workspace: workspace, id: id, context: context, confirmed: confirmed)
     }
 
     func close() {
@@ -307,7 +349,7 @@ final class AidenWorkspaceSettingsSheet {
             close()
             return
         }
-        draft.follow(latest)
+        draft.follow(latest, confirmed: source.confirmed)
     }
 
     /// The default machine changed. A sheet open on the old one closes, as
@@ -331,12 +373,17 @@ private extension AidenRemoteRequestContext {
 struct AidenWorkspaceSettingsSource: Equatable {
     var workspace: AidenWorkspace?
     var owner: AidenRemoteRequestContext?
+    /// The workspace as its machine confirmed it, without this phone's
+    /// unanswered edits.
+    var confirmed: AidenWorkspace?
 
     @MainActor
     static func current(for id: AidenHostObjectID, on coordinator: AidenRemoteCoordinator) -> Self {
-        AidenWorkspaceSettingsSource(
+        let connection = coordinator.hosts.connection(for: id.instanceId)
+        return AidenWorkspaceSettingsSource(
             workspace: AidenWorkspaceRoute.workspace(for: id, coordinator: coordinator),
-            owner: try? coordinator.hosts.connection(for: id.instanceId)?.requestContext(scope: .owner)
+            owner: try? connection?.requestContext(scope: .owner),
+            confirmed: connection?.confirmedWorkspaces.first { $0.id == id.objectId }
         )
     }
 }
@@ -430,5 +477,30 @@ extension AidenWorkspacePermission {
         case .none:
             "Aiden can show existing chats but cannot use workspace tools."
         }
+    }
+}
+
+/// The quiet note a refused Workspace Settings save leaves on its workspace,
+/// on the workspace page and in its Settings, until the person dismisses it.
+struct AidenWorkspaceSaveNoticeRow: View {
+    @Environment(\.aidenPalette) private var palette
+    let message: String
+    let onDismiss: () -> Void
+
+    var body: some View {
+        HStack(alignment: .firstTextBaseline, spacing: 10) {
+            Image(systemName: "exclamationmark.circle")
+                .foregroundStyle(palette.warningText)
+                .accessibilityHidden(true)
+            Text(message)
+                .font(.footnote)
+                .foregroundStyle(palette.secondary)
+                .frame(maxWidth: .infinity, alignment: .leading)
+            Button("Dismiss", action: onDismiss)
+                .font(.footnote.weight(.semibold))
+                .buttonStyle(.borderless)
+        }
+        .accessibilityElement(children: .contain)
+        .accessibilityIdentifier("workspace-save-notice")
     }
 }

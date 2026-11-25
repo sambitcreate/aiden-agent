@@ -86,6 +86,7 @@ final class AidenDemoResponder: Sendable {
         var probeFailures: [String: URLError.Code] = [:]
         var log: [String: [String]] = [:]
         var keyLog: [String: [String]] = [:]
+        var ifMatchLog: [String: [String]] = [:]
     }
 
     /// What `handle` does once it has looked at the state.
@@ -230,6 +231,12 @@ final class AidenDemoResponder: Sendable {
         state.withLock { $0.keyLog[instanceId] ?? [] }
     }
 
+    /// `"METHOD /path If-Match"` for every request that carried a revision,
+    /// oldest first.
+    func revisionsSent(instanceId: String) -> [String] {
+        state.withLock { $0.ifMatchLog[instanceId] ?? [] }
+    }
+
     fileprivate func handle(
         _ request: URLRequest,
         deliver: @escaping @Sendable (Result<(HTTPURLResponse, Data), URLError>) -> Void
@@ -243,6 +250,7 @@ final class AidenDemoResponder: Sendable {
         let path = url.path.hasPrefix(Self.apiRoot) ? String(url.path.dropFirst(Self.apiRoot.count)) : url.path
         let body = Self.body(of: request)
         let idempotencyKey = request.value(forHTTPHeaderField: "Idempotency-Key")
+        let ifMatch = request.value(forHTTPHeaderField: "If-Match")
         let isProbe = request.value(forHTTPHeaderField: Self.probeHeader) != nil
         // Weak, so a request parked behind a hold nobody releases doesn't keep
         // the responder, and its sessions, alive.
@@ -256,6 +264,7 @@ final class AidenDemoResponder: Sendable {
         let next: Next = state.withLock { state in
             state.log[instanceId, default: []].append("\(method) \(path)")
             if let idempotencyKey { state.keyLog[instanceId, default: []].append(idempotencyKey) }
+            if let ifMatch { state.ifMatchLog[instanceId, default: []].append("\(method) \(path) \(ifMatch)") }
             if isProbe, let code = state.probeFailures[instanceId] { return .fail(code) }
             let key = HoldKey(instanceId: instanceId, path: path)
             let hold = state.holds[HoldKey(instanceId: instanceId, path: path, query: url.query)]

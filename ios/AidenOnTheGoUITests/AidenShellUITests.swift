@@ -645,6 +645,19 @@ final class AidenShellUITests: XCTestCase {
                 "Cancel did not close Workspace Settings (\(attempt))"
             )
         }
+
+        // Save closes the sheet straight away; the machine's answer comes later.
+        app.buttons["Workspace menu"].firstMatch.tap()
+        app.buttons["Workspace Settings"].firstMatch.tap()
+        let name = app.textFields["Name"].firstMatch
+        XCTAssertTrue(name.waitForExistence(timeout: 10), "Workspace Settings opened without its form (save)")
+        name.coordinate(withNormalizedOffset: CGVector(dx: 0.98, dy: 0.5)).tap()
+        name.typeText(" Docs")
+        app.navigationBars["Workspace Settings"].buttons["Save"].tap()
+        XCTAssertTrue(
+            app.navigationBars["Workspace Settings"].waitForNonExistence(timeout: 2),
+            "Save did not close Workspace Settings"
+        )
         app.terminate()
     }
 

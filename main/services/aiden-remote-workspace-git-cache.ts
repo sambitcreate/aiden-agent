@@ -129,6 +129,13 @@ export class AidenRemoteWorkspaceGitCache {
   private readonly queue: Job[] = [];
   private readonly queued = new Set<string>();
   private readonly inFlight = new Set<string>();
+  /**
+   * Folders with a read still running, past its deadline or not. A failure
+   * forgets the folder's repository root, so after its back-off the folder is
+   * keyed by its own path; this keeps it from a second read while the first,
+   * still keyed by the root, has not ended.
+   */
+  private readonly inFlightFolders = new Set<string>();
   private active = 0;
   /** Reads past their deadline that gave up their slot and haven't ended yet. */
   private abandoned = 0;
@@ -163,7 +170,7 @@ export class AidenRemoteWorkspaceGitCache {
   }
 
   private enqueue(job: Job): void {
-    if (this.queued.has(job.key) || this.inFlight.has(job.key)) return;
+    if (this.queued.has(job.key) || this.inFlight.has(job.key) || this.inFlightFolders.has(job.folder)) return;
     this.queued.add(job.key);
     this.queue.push(job);
     this.pump();
@@ -174,6 +181,7 @@ export class AidenRemoteWorkspaceGitCache {
       const job = this.queue.shift()!;
       this.queued.delete(job.key);
       this.inFlight.add(job.key);
+      this.inFlightFolders.add(job.folder);
       this.active += 1;
       this.start(job);
     }
@@ -223,6 +231,7 @@ export class AidenRemoteWorkspaceGitCache {
       .then((read) => record(read), () => record(undefined))
       .finally(() => {
         this.inFlight.delete(job.key);
+        this.inFlightFolders.delete(job.folder);
         if (abandoned) this.abandoned -= 1;
         if (slotHeld) releaseSlot();
         else this.pump();

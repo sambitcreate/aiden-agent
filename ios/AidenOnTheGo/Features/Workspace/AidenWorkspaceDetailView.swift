@@ -31,6 +31,10 @@ struct AidenWorkspaceDetailView: View {
     /// its edits.
     @Environment(\.aidenWorkspaceSettings) private var settingsSheet
 
+    private var objectID: AidenHostObjectID {
+        AidenHostObjectID(instanceId: owner.instanceId, deviceId: owner.deviceId, objectId: workspace.id)
+    }
+
     var body: some View {
         AidenWorkspaceChatsView(
             coordinator: coordinator,
@@ -40,6 +44,17 @@ struct AidenWorkspaceDetailView: View {
             onChatRemoved: onChatRemoved,
             onOpenChat: onOpenChat
         )
+        // A save the computer refused says so on the workspace it was for.
+        .safeAreaInset(edge: .top, spacing: 0) {
+            if let notice = coordinator.workspaceSaveNotices[objectID] {
+                AidenWorkspaceSaveNoticeRow(message: notice) {
+                    coordinator.dismissWorkspaceSaveNotice(objectID)
+                }
+                .padding(.horizontal, 20)
+                .padding(.vertical, 10)
+                .background(.bar)
+            }
+        }
         .navigationTitle(workspace.name)
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
@@ -49,8 +64,10 @@ struct AidenWorkspaceDetailView: View {
                         guard let context = Self.settingsContext(owner: owner, coordinator: coordinator) else { return }
                         settingsSheet?.present(
                             workspace,
-                            id: AidenHostObjectID(instanceId: owner.instanceId, deviceId: owner.deviceId, objectId: workspace.id),
-                            context: context
+                            id: objectID,
+                            context: context,
+                            confirmed: coordinator.hosts.connection(for: owner.instanceId)?
+                                .confirmedWorkspaces.first { $0.id == workspace.id }
                         )
                     } label: {
                         Label("Workspace Settings", systemImage: "gearshape")

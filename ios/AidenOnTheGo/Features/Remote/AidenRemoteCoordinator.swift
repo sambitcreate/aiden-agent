@@ -215,9 +215,12 @@ final class AidenRemoteCoordinator {
     }
     private(set) var workspaceSnapshotRevision = 0
     private(set) var isMutating = false
-    /// Each workspace's last save from this phone: the revision it was sent
-    /// against and the one the machine answered with.
-    @ObservationIgnored private var workspaceSaveRevisions: [String: (sent: String, now: String)] = [:]
+    /// Each workspace's queue of Workspace Settings saves, keyed by machine,
+    /// pairing and workspace.
+    @ObservationIgnored private var workspaceSaveLanes: [String: AidenWorkspaceSaveLane] = [:]
+    /// A quiet note on each workspace whose save the machine refused. It stays
+    /// until the person dismisses it; a later save doesn't clear it.
+    private(set) var workspaceSaveNotices: [AidenHostObjectID: String] = [:]
     var presentedError: String?
     let workspaceArchiveStore: AidenWorkspaceArchiveStore
     let chatCache: AidenChatCache
@@ -418,6 +421,7 @@ final class AidenRemoteCoordinator {
         let connection = syncSelectedConnection()
         advanceActivationGeneration()
         connection?.advanceHostGeneration()
+        cancelWorkspaceSaves(instanceId: installation.id)
         advanceConnectionGeneration()
         if let previousDeviceId, previousDeviceId != installation.deviceId {
             await purgeInstallationData(installation.id, knownWorkspaceIds: knownWorkspaceIds)
@@ -751,15 +755,6 @@ final class AidenRemoteCoordinator {
 
     // MARK: Workspace Settings, on the context it opened under
 
-    /// Waits until no other change is on its way, so a queued one goes next.
-    /// False when the waiting task was cancelled.
-    private func waitForMutationSlot() async -> Bool {
-        while isMutating {
-            do { try await Task.sleep(for: .milliseconds(50)) } catch { return false }
-        }
-        return true
-    }
-
     /// Workspace Settings saves through the context it opened under. A `selected`
     /// context writes the selected machine and goes stale once the selection
     /// moves. An `owner` context writes its own machine while it's live. Either
@@ -775,69 +770,168 @@ final class AidenRemoteCoordinator {
         guard context.scope == .owner else {
             return await updateWorkspaceOutcome(workspace, name: name, permission: permission, memoryEnabled: memoryEnabled)
         }
-        guard let connection = hosts.connection(for: context.instanceId),
-              let client = try? remoteClient(for: context) else { return .stale }
-        // The machine's list shows the edit at once; the reply, or the
-        // machine's own list on a failure, then settles it.
-        var optimistic = workspace
-        if let name { optimistic.name = name }
-        if let permission { optimistic.permission = permission }
-        if let memoryEnabled { optimistic.memoryEnabled = memoryEnabled }
-        connection.applyWorkspaceSnapshot(Self.replacing(optimistic, in: connection.workspaces))
-        /// Puts the workspace back unless something newer replaced the edit.
-        func restore() {
-            guard holds(context),
-                  connection.workspaces.first(where: { $0.id == workspace.id }) == optimistic else { return }
-            connection.applyWorkspaceSnapshot(Self.replacing(workspace, in: connection.workspaces))
+        guard let save = enqueueWorkspaceSave(
+            workspace,
+            name: name,
+            permission: permission,
+            memoryEnabled: memoryEnabled,
+            on: context
+        ) else { return .stale }
+        return await save.value
+    }
+
+    /// Shows an owner-context save at once and queues it behind this phone's
+    /// earlier saves of the workspace, which go to the machine one at a time
+    /// in the order they were made. Nil when the context no longer holds.
+    @discardableResult
+    func enqueueWorkspaceSave(
+        _ workspace: AidenWorkspace,
+        name: String? = nil,
+        permission: AidenWorkspacePermission? = nil,
+        memoryEnabled: Bool? = nil,
+        on context: AidenRemoteRequestContext
+    ) -> Task<AidenRemoteMutationOutcome<AidenWorkspace>, Never>? {
+        guard context.scope == .owner, holds(context),
+              let connection = hosts.connection(for: context.instanceId) else { return nil }
+        let version = connection.addWorkspaceEdit(
+            workspaceId: workspace.id,
+            name: name,
+            permission: permission,
+            memoryEnabled: memoryEnabled
+        )
+        let key = Self.workspaceSaveLaneKey(context, workspaceId: workspace.id)
+        let lane = workspaceSaveLanes[key] ?? AidenWorkspaceSaveLane()
+        workspaceSaveLanes[key] = lane
+        // A save nobody has sent yet takes this edit too, latest value winning,
+        // unless the two were made against different copies of the workspace.
+        if let waiting = lane.waiting, waiting.baseRevision == workspace.revision {
+            if let name { waiting.name = name }
+            if let permission { waiting.permission = permission }
+            if let memoryEnabled { waiting.memoryEnabled = memoryEnabled }
+            waiting.versions.insert(version)
+            if let task = waiting.task { return task }
         }
-        // A save made while another change is still on its way waits its
-        // turn rather than being dropped.
-        guard await waitForMutationSlot(), holds(context) else {
-            restore()
+        let save = AidenQueuedWorkspaceSave(
+            context: context,
+            workspaceId: workspace.id,
+            baseRevision: workspace.revision,
+            name: name,
+            permission: permission,
+            memoryEnabled: memoryEnabled,
+            versions: [version]
+        )
+        let previous = lane.tail
+        let task = Task { @MainActor [weak self] () -> AidenRemoteMutationOutcome<AidenWorkspace> in
+            _ = await previous?.value
+            if lane.waiting === save { lane.waiting = nil }
+            guard let self else { return .stale }
+            let outcome = await self.sendWorkspaceSave(save, lane: lane)
+            lane.tasks.removeAll { $0 == save.task }
+            return outcome
+        }
+        save.task = task
+        lane.waiting = save
+        lane.tail = task
+        lane.tasks.append(task)
+        return task
+    }
+
+    /// Sends one queued save and settles its edits: the machine's answer goes
+    /// into the confirmed list, and a failure drops the edits, so the workspace
+    /// falls back to what the machine last confirmed with any newer edits still
+    /// on top, and leaves a notice on the workspace.
+    private func sendWorkspaceSave(
+        _ save: AidenQueuedWorkspaceSave,
+        lane: AidenWorkspaceSaveLane
+    ) async -> AidenRemoteMutationOutcome<AidenWorkspace> {
+        let context = save.context
+        guard let connection = hosts.connection(for: context.instanceId) else { return .stale }
+        func settle(_ confirmed: AidenWorkspace? = nil, superseding revision: String? = nil) {
+            connection.settleWorkspaceEdits(
+                save.versions,
+                workspaceId: save.workspaceId,
+                confirmed: confirmed,
+                superseding: revision
+            )
+        }
+        guard !Task.isCancelled else {
+            settle()
             return holds(context) ? .cancelled : .stale
         }
-        isMutating = true
-        presentedError = nil
-        defer { isMutating = false }
-        // A save made before this phone's previous save of the workspace was
-        // answered carries that save's revision forward, not the one it opened on.
-        let saveKey = "\(context.instanceId):\(workspace.id)"
-        let revision = workspaceSaveRevisions[saveKey].flatMap { $0.sent == workspace.revision ? $0.now : nil }
-            ?? workspace.revision
+        guard holds(context), let client = try? remoteClient(for: context) else {
+            settle()
+            return .stale
+        }
+        // The copy the edit was made on, or the machine's answer to this
+        // phone's own earlier save of it. A copy the computer changed since
+        // keeps the old revision, so the machine refuses the edit instead of
+        // writing it over that change.
+        let revision: String
+        if let confirmed = connection.confirmedWorkspaces.first(where: { $0.id == save.workspaceId }),
+           confirmed.revision == save.baseRevision || lane.ownRevisions.contains(confirmed.revision) {
+            revision = confirmed.revision
+        } else {
+            revision = save.baseRevision
+        }
         do {
             let updated = try await client.updateWorkspace(
-                id: workspace.id,
+                id: save.workspaceId,
                 revision: revision,
-                patch: AidenWorkspacePatch(name: name, permission: permission, memoryEnabled: memoryEnabled)
+                patch: AidenWorkspacePatch(name: save.name, permission: save.permission, memoryEnabled: save.memoryEnabled)
             )
-            workspaceSaveRevisions[saveKey] = (sent: workspace.revision, now: updated.revision)
+            lane.ownRevisions.append(updated.revision)
             guard holds(context) else { return .stale }
-            connection.applyWorkspaceSnapshot(Self.replacing(updated, in: connection.workspaces))
+            settle(updated, superseding: revision)
             return .success(updated)
         } catch let error where aidenIsCancellation(error) {
-            restore()
+            settle()
             return holds(context) ? .cancelled : .stale
         } catch {
             guard holds(context) else { return .stale }
+            // A lost reply may hide a save that landed: the machine's own list says.
             if let canonical = try? await client.workspaces(), holds(context) {
                 connection.applyWorkspaceSnapshot(canonical)
-                if let reconciled = canonical.first(where: { $0.id == workspace.id }),
-                   (name == nil || reconciled.name == name),
-                   (permission == nil || reconciled.permission == permission),
-                   (memoryEnabled == nil || reconciled.memoryEnabled == memoryEnabled) {
+                if let reconciled = canonical.first(where: { $0.id == save.workspaceId }),
+                   save.name == nil || reconciled.name == save.name,
+                   save.permission == nil || reconciled.permission == save.permission,
+                   save.memoryEnabled == nil || reconciled.memoryEnabled == save.memoryEnabled {
+                    lane.ownRevisions.append(reconciled.revision)
+                    settle(reconciled, superseding: revision)
                     return .success(reconciled)
                 }
-            } else {
-                restore()
             }
+            settle()
             if await !handleCredentialRevocation(error, context: context), holds(context) {
-                presentedError = Self.workspaceFailure(
+                workspaceSaveNotices[AidenHostObjectID(
+                    instanceId: context.instanceId,
+                    deviceId: context.deviceId,
+                    objectId: save.workspaceId
+                )] = Self.workspaceFailure(
                     String(localized: "Couldn’t save this workspace on \(machineName(of: context.instanceId))."),
                     error
                 )
+                haptics.play(.error)
             }
             return .failure
         }
+    }
+
+    /// Clears a failed save's notice once the person has read it.
+    func dismissWorkspaceSaveNotice(_ id: AidenHostObjectID) {
+        workspaceSaveNotices[id] = nil
+    }
+
+    /// Stops the queued saves of a machine whose pairing changed.
+    private func cancelWorkspaceSaves(instanceId: String) {
+        let prefix = "\(instanceId.utf8.count):\(instanceId):"
+        for (key, lane) in workspaceSaveLanes where key.hasPrefix(prefix) {
+            lane.tasks.forEach { $0.cancel() }
+            workspaceSaveLanes[key] = nil
+        }
+    }
+
+    private static func workspaceSaveLaneKey(_ context: AidenRemoteRequestContext, workspaceId: String) -> String {
+        "\(context.instanceId.utf8.count):\(context.instanceId):\(context.hostGeneration):\(workspaceId)"
     }
 
     /// Removes the workspace, or deletes a managed worktree, through the context
@@ -852,9 +946,18 @@ final class AidenRemoteCoordinator {
                 ? await removeManagedWorktreeOutcome(workspace)
                 : await removeWorkspaceOutcome(workspace)
         }
+        // A removal waits for this phone's saves of the workspace, then goes
+        // against the revision their answers left.
+        let lane = workspaceSaveLanes[Self.workspaceSaveLaneKey(context, workspaceId: workspace.id)]
+        _ = await lane?.tail?.value
+        let ownRevisions = lane?.ownRevisions ?? []
+        guard holds(context) else { return .stale }
         guard !isMutating else { return .busy }
         guard let connection = hosts.connection(for: context.instanceId),
               let client = try? remoteClient(for: context) else { return .stale }
+        let revision = connection.confirmedWorkspaces
+            .first { $0.id == workspace.id && ownRevisions.contains($0.revision) }?
+            .revision ?? workspace.revision
         isMutating = true
         presentedError = nil
         defer { isMutating = false }
@@ -865,12 +968,12 @@ final class AidenRemoteCoordinator {
                 pendingManagedWorktreeDeletionKeys[scope] = key
                 _ = try await client.deleteManagedGitWorktree(
                     workspaceId: workspace.id,
-                    revision: workspace.revision,
+                    revision: revision,
                     idempotencyKey: key
                 )
                 pendingManagedWorktreeDeletionKeys[scope] = nil
             } else {
-                try await client.removeWorkspace(id: workspace.id, revision: workspace.revision)
+                try await client.removeWorkspace(id: workspace.id, revision: revision)
             }
             guard holds(context) else { return .stale }
             // The machine may seed a replacement for its last workspace, so its own
@@ -1276,7 +1379,7 @@ final class AidenRemoteCoordinator {
 
     private func persistWorkspaces() {
         guard let instanceId = defaultInstanceId else { return }
-        persistWorkspaces(workspaces, instanceId: instanceId)
+        persistWorkspaces(selectedConnection?.confirmedWorkspaces ?? [], instanceId: instanceId)
     }
 
     private func persistWorkspaces(_ snapshot: [AidenWorkspace], instanceId: String) {
@@ -1455,7 +1558,8 @@ extension AidenRemoteCoordinator: AidenHostConnectionDelegate {
             workspaceSnapshotRevision &+= 1
             updateIntentCatalog(for: instanceId)
         }
-        persistWorkspaces(connection.workspaces, instanceId: instanceId)
+        // Only what the machine confirmed is saved, never an unanswered edit.
+        persistWorkspaces(connection.confirmedWorkspaces, instanceId: instanceId)
     }
 
     func hostConnection(_ connection: AidenHostConnection, didFailWith error: Error) {
@@ -1526,6 +1630,7 @@ extension AidenRemoteCoordinator: AidenHostConnectionDelegate {
         try? installationStore.remove(installationId)
         if !installationStore.installations.contains(where: { $0.id == installationId }) {
             connection.markRevoked()
+            cancelWorkspaceSaves(instanceId: installationId)
         }
         syncSelectedConnection()
         if previousInstallationId != defaultInstanceId {
@@ -1587,5 +1692,55 @@ extension AidenRemoteCoordinator: AidenHostConnectionDelegate {
         return (ordered[position...].dropFirst() + ordered[..<position]).first {
             !$0.isRevoked && $0.connectionState != .needsPairing
         }
+    }
+}
+
+extension AidenRemoteMutationOutcome: Sendable where Value: Sendable {}
+
+/// One workspace's Workspace Settings saves from this phone, sent one at a
+/// time in the order they were made. It lasts as long as the pairing, so the
+/// revisions its saves earned stay known.
+@MainActor
+private final class AidenWorkspaceSaveLane {
+    /// The save nobody has sent yet, which takes newer edits.
+    var waiting: AidenQueuedWorkspaceSave?
+    /// The last save queued; the next one waits for it.
+    var tail: Task<AidenRemoteMutationOutcome<AidenWorkspace>, Never>?
+    /// Every save still queued or on its way.
+    var tasks: [Task<AidenRemoteMutationOutcome<AidenWorkspace>, Never>] = []
+    /// The revisions the machine gave this phone's saves, so a later save
+    /// chains on them rather than on the copy it was drafted from.
+    var ownRevisions: [String] = []
+}
+
+/// A queued save: the fields it changes, the revision it was drafted on, and
+/// the shown edits it settles.
+@MainActor
+private final class AidenQueuedWorkspaceSave {
+    let context: AidenRemoteRequestContext
+    let workspaceId: String
+    let baseRevision: String
+    var name: String?
+    var permission: AidenWorkspacePermission?
+    var memoryEnabled: Bool?
+    var versions: Set<Int>
+    var task: Task<AidenRemoteMutationOutcome<AidenWorkspace>, Never>?
+
+    init(
+        context: AidenRemoteRequestContext,
+        workspaceId: String,
+        baseRevision: String,
+        name: String?,
+        permission: AidenWorkspacePermission?,
+        memoryEnabled: Bool?,
+        versions: Set<Int>
+    ) {
+        self.context = context
+        self.workspaceId = workspaceId
+        self.baseRevision = baseRevision
+        self.name = name
+        self.permission = permission
+        self.memoryEnabled = memoryEnabled
+        self.versions = versions
     }
 }

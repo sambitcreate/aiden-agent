@@ -119,7 +119,7 @@ test("the workspace summary reader lets a slow git status finish that an ordinar
       "import { spawnSync } from 'node:child_process';",
       "const args = process.argv.slice(2);",
       "const run = () => {",
-      "  const result = spawnSync('/usr/bin/git', args, { env: process.env, stdio: 'inherit' });",
+      "  const result = spawnSync('git', args, { env: process.env, stdio: 'inherit' });",
       "  if (result.error) throw result.error;",
       "  process.exit(result.status ?? 1);",
       "};",

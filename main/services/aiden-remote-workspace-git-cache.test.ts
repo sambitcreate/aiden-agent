@@ -190,6 +190,28 @@ test("a read that outlasts its deadline is abandoned, gives up its slot, and its
   assert.deepEqual(reader.reads.map((value) => value.folder), ["/fast", "/slow"], "once the old read ends, the folder is read again");
 });
 
+test("a stuck folder inside a repository is not read twice once its back-off ends", async () => {
+  const { time, reader, git } = cache();
+  git.peek("/code/repo/sub");
+  reader.pending("/code/repo/sub").resolve(repo("/code/repo"));
+  await settle();
+
+  time.advance(30_000);
+  git.peek("/code/repo/sub");
+  const stuck = reader.pending("/code/repo/sub");
+  time.advance(15_000);
+  assert.equal(stuck.signal.aborted, true);
+
+  time.advance(10 * 60_000);
+  git.peek("/code/repo/sub");
+  assert.equal(reader.reads.length, 0, "the folder waits for its stuck read to end");
+
+  stuck.reject(new Error("ESTALE"));
+  await settle();
+  git.peek("/code/repo/sub");
+  assert.deepEqual(reader.reads.map((value) => value.folder), ["/code/repo/sub"], "then it is read again");
+});
+
 test("reads that never settle cannot stop other folders from getting a summary", async () => {
   const { time, reader, git } = cache({ concurrency: 3 });
   for (const folder of ["/mnt/a", "/mnt/b", "/mnt/c", "/code/app"]) git.peek(folder);
