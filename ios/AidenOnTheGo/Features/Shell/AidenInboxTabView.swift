@@ -48,6 +48,10 @@ struct AidenInboxTabView: View {
     /// The route the detail beside the list shows, so its row reads as chosen.
     /// Nil on a stack, where the list is never beside a chat.
     var selection: AidenAppRoute? = nil
+    /// Home's greeting, Bots and digest, above the rows. Nil off Home.
+    var header: AnyView? = nil
+    /// Draws the ambient background behind the list; Home's root only.
+    var showsAmbientBackground = false
 
     @Environment(\.aidenPalette) private var palette
     @Environment(\.aidenReduceMotion) private var reduceMotion
@@ -59,6 +63,17 @@ struct AidenInboxTabView: View {
 
     var body: some View {
         List {
+            if let header {
+                header
+                // Under Home's header the empty state is a row, so it never
+                // lies over the greeting. Sized to its content: a greedy
+                // ContentUnavailableView in a self-sizing row never settles.
+                emptyState
+                    .fixedSize(horizontal: false, vertical: true)
+                    .frame(maxWidth: .infinity)
+                    .listRowBackground(Color.clear)
+                    .listRowSeparator(.hidden)
+            }
             machineRows
             if refreshFailed { refreshErrorRow }
             if runningHome == .inboxRow, !inbox.running.isEmpty { runningRow }
@@ -80,8 +95,9 @@ struct AidenInboxTabView: View {
         .listSectionSpacing(AidenSpacing.l)
         .aidenKeepsListScroll()
         .scrollContentBackground(.hidden)
+        .aidenAmbientBackground { if showsAmbientBackground { AidenAmbientAurora() } }
         .background(palette.canvas.ignoresSafeArea())
-        .overlay { emptyState }
+        .overlay { if header == nil { emptyState } }
         .refreshable { await onRefresh() }
         .confirmationDialog(
             "Snooze until",
@@ -427,6 +443,8 @@ struct AidenInboxTabRootView: View {
     var selection: AidenAppRoute? = nil
     /// The machine count in the toolbar.
     var showsMachineStatus = true
+    var header: AnyView? = nil
+    var showsAmbientBackground = false
 
     @Environment(\.accessibilityVoiceOverEnabled) private var voiceOverEnabled
     @Environment(\.aidenPalette) private var palette
@@ -457,7 +475,9 @@ struct AidenInboxTabRootView: View {
             onReconnect: { store.reconnect($0) },
             onCatchUp: onCatchUp,
             onShowRunning: onShowRunning,
-            selection: selection
+            selection: selection,
+            header: header,
+            showsAmbientBackground: showsAmbientBackground
         )
         .navigationTitle("Inbox")
         .toolbar {

@@ -163,6 +163,8 @@ struct AidenAppShellView: View {
     /// so building them there read and decoded the saved navigation each time.
     @State private var parts = AidenAppShellParts()
     @State private var botSummaries: [AidenHostObjectID: AidenBotSummary] = [:]
+    /// What Home's ambient background shows, read from the inbox.
+    @State private var ambient = AidenAmbientActivityModel()
     @State private var searchText = ""
     @State private var activeSheet: ShellSheet?
     /// Each list tab's split columns.
@@ -398,7 +400,10 @@ struct AidenAppShellView: View {
         .onChange(of: navigation.inboxOpenChat, initial: true) { _, chat in
             inboxStore.openChat = chat
             inboxStore.setFocusedMachine(chat?.instanceId)
+            updateAmbient()
         }
+        .onChange(of: inboxStore.snapshots) { updateAmbient() }
+        .onChange(of: inboxStore.hiddenMachines) { updateAmbient() }
         .onDisappear {
             inboxStore.setInboxVisible(false)
             inboxStore.openChat = nil
@@ -497,12 +502,39 @@ struct AidenAppShellView: View {
             selection: selection,
             // In a side rail the system lays the outgoing chip over the
             // incoming chat while it pushes, so it goes with the list.
-            showsMachineStatus: !showsVerticalBar || navigation.besideList || navigation.inboxPath.isEmpty
+            showsMachineStatus: !showsVerticalBar || navigation.besideList || navigation.inboxPath.isEmpty,
+            header: AnyView(AidenHomeHeader(
+                coordinator: coordinator,
+                store: inboxStore,
+                onOpen: openRow,
+                onSeeAllBots: { navigation.selectTabRoot(.bots) }
+            )),
+            showsAmbientBackground: true
         )
         .safeAreaInset(edge: .top, spacing: 0) {
             AidenConnectionNotice(coordinator: coordinator)
         }
+        .safeAreaInset(edge: .bottom, spacing: 0) {
+            if !hasNoComputers {
+                AidenHomeComposerSlot(flow: newWork)
+                    .padding(.horizontal, AidenSpacing.m)
+                    .padding(.bottom, AidenSpacing.s)
+            }
+        }
+        .environment(\.aidenAmbientActivity, ambient.activity)
+        .environment(\.aidenAmbientMicLevel, ambient.micLevel)
         .toolbar { inboxToolbar }
+    }
+
+    /// Feeds Home's ambient background from every shown machine. The chat
+    /// open beside the list finishing is already on screen, so it is passed
+    /// as focused.
+    private func updateAmbient() {
+        ambient.update(
+            snapshots: Array(inboxStore.snapshots.values),
+            hiddenMachines: inboxStore.hiddenMachines,
+            focusedChat: navigation.besideList ? navigation.inboxOpenChat : nil
+        )
     }
 
     /// The Bots list. Its own function, as the Inbox's is, so the tab view

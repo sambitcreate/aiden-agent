@@ -31,6 +31,18 @@ struct AidenComposerConfig: Equatable {
             maxLines: 6
         )
     }
+
+    /// Home's composer starts a new chat: no model to show yet and nothing to
+    /// attach to, and the mic starts a voice chat.
+    static func home() -> Self {
+        Self(
+            placeholder: "Ask anything",
+            showsModelChip: false,
+            showsMic: true,
+            showsAttachments: false,
+            maxLines: 5
+        )
+    }
 }
 
 /// The conversation's current say over the composer's controls.

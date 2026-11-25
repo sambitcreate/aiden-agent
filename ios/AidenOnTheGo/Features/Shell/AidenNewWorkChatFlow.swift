@@ -110,14 +110,23 @@ final class AidenNewWorkChatFlow {
     @ObservationIgnored private let readinessWait: Duration
     @ObservationIgnored private let onCreated: @MainActor (AidenChat, AidenHostObjectID) -> Void
     @ObservationIgnored private var latestReceipt: (id: AidenHostObjectID, chat: AidenChat)?
+    @ObservationIgnored private let draftStore: AidenChatDraftStore
+    /// What Home's composer asked, waiting for the chat it starts. Cleared by
+    /// any start that didn't come from Home.
+    @ObservationIgnored private var pendingPrompt: String?
+    /// Counts prompts handed to a new chat's composer, so Home can clear its
+    /// own field only once the text is safely in the chat.
+    private(set) var deliveredPromptCount = 0
 
     init(
         coordinator: AidenRemoteCoordinator,
         preferences: AidenMachinePreferencesStore? = nil,
         readinessWait: Duration = .seconds(30),
+        draftStore: AidenChatDraftStore = .shared,
         onCreated: @escaping @MainActor (AidenChat, AidenHostObjectID) -> Void
     ) {
         self.coordinator = coordinator
+        self.draftStore = draftStore
         picker = AidenNewWorkPicker(coordinator: coordinator, kind: .chat, preferences: preferences)
         self.readinessWait = readinessWait
         self.onCreated = onCreated
@@ -161,6 +170,13 @@ final class AidenNewWorkChatFlow {
     }
 
     func select(_ choice: AidenNewAgentChoice) async {
+        await select(choice, prompt: nil)
+    }
+
+    /// Starts like `select(_:)`, and puts `prompt` in the new chat's composer
+    /// once the machine has made it, for the person to send.
+    func select(_ choice: AidenNewAgentChoice, prompt: String?) async {
+        pendingPrompt = prompt.flatMap { $0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? nil : $0 }
         switch choice {
         case .noWorkspace:
             // The machine gives the chat a folder of its own if the home already holds one.
@@ -258,6 +274,10 @@ final class AidenNewWorkChatFlow {
         do {
             guard let created = try await coordinator.createChat(on: target, in: workspace) else { return }
             latestReceipt = (created.id, created.chat)
+            if let prompt = pendingPrompt {
+                pendingPrompt = nil
+                if await seedComposer(prompt, for: created.id) { deliveredPromptCount += 1 }
+            }
             onCreated(created.chat, created.id)
             coordinator.haptics.play(
                 feedback,
@@ -271,6 +291,21 @@ final class AidenNewWorkChatFlow {
             report(error)
             await coordinator.refreshWorkspaces(on: target)
         }
+    }
+
+    /// Saves the prompt as the new chat's draft, which its composer loads when
+    /// it opens. Unpairing purges the store and bumps every session, so a save
+    /// racing it is rejected; checked before and after.
+    private func seedComposer(_ text: String, for id: AidenHostObjectID) async -> Bool {
+        guard let context = try? coordinator.ownerContext(for: id.instanceId) else { return false }
+        let session = await draftStore.beginSession(instanceId: id.instanceId, chatId: id.objectId)
+        guard coordinator.isLive(context) else { return false }
+        let saved = (try? await draftStore.save(text, session: session)) ?? false
+        guard coordinator.isLive(context) else {
+            await draftStore.remove(instanceId: id.instanceId, chatId: id.objectId)
+            return false
+        }
+        return saved
     }
 }
 

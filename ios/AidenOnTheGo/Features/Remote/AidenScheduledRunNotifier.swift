@@ -1,4 +1,5 @@
 import Foundation
+import Observation
 import UIKit
 import UserNotifications
 
@@ -270,6 +271,86 @@ protocol AidenBotRoutineNotificationTransport: Sendable {
 
 extension AidenRemoteClient: AidenBotRoutineNotificationTransport {}
 
+/// The recent routine feed per machine, shared by the notifier and Home's
+/// "From your Bots" card so a refresh asks each machine once. Recording never
+/// touches the notifier's cursor or delivered ids: Home reading a run never
+/// stops its banner.
+@MainActor
+@Observable
+final class AidenBotRoutineFeedReader {
+    static let shared = AidenBotRoutineFeedReader()
+
+    /// The newest items kept per machine.
+    static let windowSize = 20
+    /// A window younger than this answers Home without asking the machine.
+    static let freshness: Duration = .seconds(60)
+
+    struct Window: Equatable, Sendable {
+        var notifications: [AidenBotRoutineNotification]
+        var recordedAt: ContinuousClock.Instant
+    }
+
+    private(set) var windows: [String: Window] = [:]
+    @ObservationIgnored private var generations: [String: Int] = [:]
+    @ObservationIgnored private let clock = ContinuousClock()
+
+    init() {}
+
+    func notifications(for instanceId: String) -> [AidenBotRoutineNotification] {
+        windows[instanceId]?.notifications ?? []
+    }
+
+    /// Merges a fetched page into the machine's window, newest first.
+    func record(_ notifications: [AidenBotRoutineNotification], instanceId: String) {
+        var byId: [String: AidenBotRoutineNotification] = [:]
+        for item in (windows[instanceId]?.notifications ?? []) + notifications { byId[item.id] = item }
+        let merged = byId.values.sorted {
+            $0.finishedAt.date != $1.finishedAt.date ? $0.finishedAt.date > $1.finishedAt.date : $0.id < $1.id
+        }
+        windows[instanceId] = Window(notifications: Array(merged.prefix(Self.windowSize)), recordedAt: clock.now)
+    }
+
+    /// Forgets a machine that was unpaired, revoked or switched away from, and
+    /// fences any fetch still in flight for it.
+    func forget(instanceId: String) {
+        windows[instanceId] = nil
+        generations[instanceId, default: 0] &+= 1
+    }
+
+    func isFresh(_ instanceId: String) -> Bool {
+        guard let window = windows[instanceId] else { return false }
+        return window.recordedAt.duration(to: clock.now) < Self.freshness
+    }
+
+    /// Reads the machine's recent feed unless a fresh window already holds it.
+    /// Items the pairing's grants don't cover are left out. A response that
+    /// lands after the machine stopped being current (`isCurrent`), or after
+    /// `forget`, is dropped, so a switch mid-fetch never writes the old
+    /// machine's rows.
+    func refreshIfStale(
+        instanceId: String,
+        transport: any AidenBotRoutineNotificationTransport,
+        grants: Set<AidenRemoteCapability>,
+        isCurrent: @escaping @MainActor () -> Bool
+    ) async {
+        guard !isFresh(instanceId), isCurrent(),
+              Set([AidenRemoteCapability.botRead, .chatRead]).isSubset(of: grants) else { return }
+        let generation = generations[instanceId, default: 0]
+        guard let feed = try? await transport.botRoutineNotifications(since: nil) else { return }
+        guard generations[instanceId, default: 0] == generation, isCurrent() else { return }
+        record(feed.notifications.filter { Self.isVisible($0, grants: grants) }, instanceId: instanceId)
+    }
+
+    static func isVisible(_ item: AidenBotRoutineNotification, grants: Set<AidenRemoteCapability>) -> Bool {
+        switch item.kind {
+        case .routine: true
+        case .peer: grants.contains(.botPeers)
+        case .message: grants.contains(.botMessaging)
+        case .issue: grants.contains(.botIssues)
+        }
+    }
+}
+
 /// The Bot variant of the scheduled-run feed: `GET /bots/routine-notifications`
 /// turned into local notifications that open the Bot's chat. Polling-only,
 /// like schedules: it runs on app foreground and on Bots home refresh. The
@@ -288,16 +369,19 @@ final class AidenBotRoutineNotifier {
     private let defaults: UserDefaults
     private let center: AidenRunAlertCenter
     private let isEnabled: Bool
+    private let feedReader: AidenBotRoutineFeedReader
     private var polling: Set<String> = []
 
     init(
         isEnabled: Bool = true,
         defaults: UserDefaults = .standard,
-        center: AidenRunAlertCenter = UNUserNotificationCenter.current()
+        center: AidenRunAlertCenter = UNUserNotificationCenter.current(),
+        feedReader: AidenBotRoutineFeedReader? = nil
     ) {
         self.defaults = defaults
         self.center = center
         self.isEnabled = isEnabled
+        self.feedReader = feedReader ?? .shared
     }
 
     static func cursorKey(_ instanceId: String) -> String {
@@ -368,6 +452,7 @@ final class AidenBotRoutineNotifier {
             }
         }
         guard scopeAllowsProgress() else { return }
+        feedReader.record(feed.notifications, instanceId: instanceId)
         var deliveredOrder = defaults.stringArray(forKey: Self.deliveredKey(instanceId)) ?? []
         var delivered = Set(deliveredOrder)
         func markDelivered(_ id: String) {

@@ -916,6 +916,7 @@ struct AidenAppearanceSettingsView: View {
                 }
 
                 AidenAmbientBackgroundSection(appearance: appearance)
+                AidenHomeNameSection()
             }
             .navigationTitle("Appearance")
             .navigationBarTitleDisplayMode(.inline)

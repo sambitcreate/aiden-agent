@@ -338,22 +338,73 @@ final class AidenShellUITests: XCTestCase {
         func heading(_ title: String) -> XCUIElement {
             app.staticTexts.matching(NSPredicate(format: "label BEGINSWITH %@", title)).firstMatch
         }
-        let needsYou = heading("Needs you")
-        let updates = heading("Updates")
-        let earlier = heading("Earlier")
-        for section in [needsYou, updates, earlier] {
-            XCTAssertTrue(section.waitForExistence(timeout: 10), "\(section) is missing")
-        }
-
-        XCTAssertLessThan(needsYou.frame.minY, updates.frame.minY)
-        XCTAssertLessThan(updates.frame.minY, earlier.frame.minY)
-
+        XCTAssertTrue(heading("Needs you").waitForExistence(timeout: 10), "Needs you is missing")
+        // Read before scrolling, which shrinks the tab bar.
         // Two prompts and a failed run wait on the person. The running chat doesn't.
         // A tab bar gives the count as a value, and a sidebar row in its label.
         let inbox = AidenStateMatrix.tab("Inbox", in: app)
         let badge = "\(inbox.label) \(inbox.value as? String ?? "")"
         XCTAssertTrue(badge.contains("3"), "The Inbox badge said \(badge)")
+        // Home's header sits above the sections, so scroll down in short steps
+        // and note each heading as it comes on screen, top first.
+        var seen: [String] = []
+        for _ in 0..<8 where seen.count < 3 {
+            let visible = ["Needs you", "Updates", "Earlier"]
+                .filter { !seen.contains($0) && heading($0).exists }
+                .sorted { heading($0).frame.minY < heading($1).frame.minY }
+            seen += visible
+            if seen.count < 3 {
+                let window = app.windows.firstMatch
+                window.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.7))
+                    .press(forDuration: 0.05, thenDragTo: window.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.45)))
+            }
+        }
+        XCTAssertEqual(seen, ["Needs you", "Updates", "Earlier"])
+
         AidenStateMatrix.capture("tabs-inbox-sections", in: self)
+        app.terminate()
+    }
+
+    /// Home greets the person by the name set on this phone, shows the Bots as
+    /// sprites and at most three "From your Bots" rows over the Inbox, keeps a
+    /// composer at the bottom, and Settings → Appearance holds the ambient
+    /// background and the name.
+    func testHomeGreetsShowsBotsDigestAndComposer() {
+        let app = AidenStateMatrix.launch(scenario: .full, extraArguments: ["-aiden.home.name", "Sam"])
+        AidenStateMatrix.openArea("Inbox", in: app)
+
+        let greeting = app.staticTexts["home.greeting"].firstMatch
+        XCTAssertTrue(greeting.waitForExistence(timeout: 10), "No greeting")
+        XCTAssertTrue(greeting.label.hasSuffix(", Sam"), "The greeting said \(greeting.label)")
+
+        let sprites = app.buttons.matching(identifier: "home.bot")
+        XCTAssertTrue(sprites.firstMatch.waitForExistence(timeout: 10), "No Bot sprites")
+        // The full demo's Courier and Relay are running.
+        XCTAssertTrue(app.buttons.matching(NSPredicate(format: "identifier == 'home.bot' AND label == 'Courier'")).firstMatch.exists)
+
+        let rows = app.buttons.matching(identifier: "home.digest.row")
+        XCTAssertTrue(rows.firstMatch.waitForExistence(timeout: 10), "No digest rows")
+        XCTAssertLessThanOrEqual(rows.count, 3)
+        XCTAssertTrue(app.buttons["home.digest.seeAll"].firstMatch.exists, "No See all")
+
+        let composer = app.descendants(matching: .any).matching(identifier: "home.composer").firstMatch
+        XCTAssertTrue(composer.waitForExistence(timeout: 5), "No Home composer")
+        AidenStateMatrix.capture("home-full", in: self)
+
+        openSettings(in: app)
+        XCTAssertTrue(app.navigationBars["App settings"].waitForExistence(timeout: 10))
+        let appearance = app.buttons["Appearance"].firstMatch
+        XCTAssertTrue(appearance.waitForExistence(timeout: 5), "No Appearance row")
+        appearance.tap()
+        let aurora = app.descendants(matching: .any).matching(identifier: "settings.appearance.aurora").firstMatch
+        XCTAssertTrue(app.navigationBars["Appearance"].waitForExistence(timeout: 10))
+        for _ in 0..<6 where !aurora.exists { app.swipeUp() }
+        XCTAssertTrue(aurora.waitForExistence(timeout: 5), "No Ambient background control")
+        let name = app.textFields["settings.home.name"].firstMatch
+        for _ in 0..<6 where !name.exists { app.swipeUp() }
+        XCTAssertTrue(name.waitForExistence(timeout: 5), "No Home name field")
+        XCTAssertEqual(name.value as? String, "Sam")
+        AidenStateMatrix.capture("home-settings-appearance", in: self)
         app.terminate()
     }
 

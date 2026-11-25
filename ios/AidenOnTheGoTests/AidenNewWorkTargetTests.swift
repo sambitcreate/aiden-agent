@@ -55,14 +55,22 @@ final class AidenNewWorkTargetTests: XCTestCase {
 
     private func flow(
         readinessWait: Duration = .seconds(30),
+        draftStore: AidenChatDraftStore = .shared,
         onCreated: @escaping @MainActor (AidenChat, AidenHostObjectID) -> Void = { _, _ in }
     ) -> AidenNewWorkChatFlow {
         AidenNewWorkChatFlow(
             coordinator: coordinator,
             preferences: preferences,
             readinessWait: readinessWait,
+            draftStore: draftStore,
             onCreated: onCreated
         )
+    }
+
+    private func temporaryDraftStore() -> AidenChatDraftStore {
+        let root = FileManager.default.temporaryDirectory.appending(path: "home-prompt-\(UUID().uuidString)", directoryHint: .isDirectory)
+        roots.append(root)
+        return AidenChatDraftStore(root: root)
     }
 
     private func replyToNewChat(on instanceId: String, workspaceId: String = "workspace_app") {
@@ -275,6 +283,46 @@ final class AidenNewWorkTargetTests: XCTestCase {
         XCTAssertEqual(coordinator.defaultInstanceId, "studio", "Picking a machine isn't choosing a new default")
         XCTAssertNil(coordinator.presentedError)
         XCTAssertFalse(flow.isCreating)
+    }
+
+    func testHomesPromptIsWaitingInTheNewChatsComposer() async throws {
+        await connectAll()
+        replyToNewChat(on: "laptop")
+        let drafts = temporaryDraftStore()
+        var opened = 0
+        let flow = flow(draftStore: drafts) { _, _ in opened += 1 }
+
+        XCTAssertTrue(flow.picker.pick("laptop"))
+        await flow.select(.existingWorkspace, prompt: "Summarise yesterday's PRs")
+        XCTAssertTrue(flow.isChoosingWorkspace)
+        let workspace = try XCTUnwrap(flow.existingWorkspaces.first)
+        await flow.create(in: workspace)
+
+        let session = await drafts.beginSession(instanceId: "laptop", chatId: "chat_new_laptop")
+        let draft = await drafts.load(session: session)
+        XCTAssertEqual(draft, "Summarise yesterday's PRs")
+        XCTAssertEqual(flow.deliveredPromptCount, 1)
+        XCTAssertEqual(opened, 1)
+    }
+
+    func testAStartFromTheNewChatButtonCarriesNoEarlierPrompt() async throws {
+        await connectAll()
+        replyToNewChat(on: "laptop")
+        let drafts = temporaryDraftStore()
+        let flow = flow(draftStore: drafts)
+
+        XCTAssertTrue(flow.picker.pick("laptop"))
+        // Home asked, then the person dismissed the workspace sheet.
+        await flow.select(.existingWorkspace, prompt: "Left behind")
+        flow.isChoosingWorkspace = false
+        await flow.select(.existingWorkspace)
+        let workspace = try XCTUnwrap(flow.existingWorkspaces.first)
+        await flow.create(in: workspace)
+
+        let session = await drafts.beginSession(instanceId: "laptop", chatId: "chat_new_laptop")
+        let draft = await drafts.load(session: session)
+        XCTAssertNil(draft)
+        XCTAssertEqual(flow.deliveredPromptCount, 0)
     }
 
     func testPickingAMachineMidwayDoesNotReaimAChatBeingCreated() async throws {
