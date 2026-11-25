@@ -137,14 +137,23 @@ struct AidenDock: View {
             .contentShape(Capsule())
         }
         .buttonStyle(.plain)
-        .accessibilityLabel(Text(tab.title))
-        .accessibilityValue(Text(tab.accessibilityCount(needsYou: needsYouCount) ?? ""))
+        // In a tab bar the tab's value is whether it's chosen, so the Inbox's
+        // count rides in its name ("Inbox, 3 chats need you"); Voice Control
+        // still answers to the bare name.
+        .accessibilityLabel(Text(accessibilityName(of: tab)))
         .accessibilityAddTraits(isSelected ? .isSelected : [])
         .accessibilityInputLabels([Text(tab.title)])
         .accessibilityShowsLargeContentViewer {
             Label(tab.title, systemImage: tab.dockSymbol)
         }
         .accessibilityIdentifier("aiden.dock.\(tab.rawValue)")
+    }
+}
+
+extension AidenDock {
+    func accessibilityName(of tab: AidenAppTab) -> String {
+        guard let count = tab.accessibilityCount(needsYou: needsYouCount) else { return tab.title }
+        return "\(tab.title), \(count)"
     }
 }
 

@@ -100,12 +100,36 @@ enum AidenStateMatrix {
         tab("Inbox", in: app)
     }
 
-    /// A tab, in a bottom bar or a sidebar.
+    /// The compact-width dock Aiden draws in place of the system tab bar.
+    static func dock(in app: XCUIApplication) -> XCUIElement {
+        app.descendants(matching: .any)["aiden.dock"].firstMatch
+    }
+
+    /// A tab in the dock, by its name. Found by identifier, since the Inbox's
+    /// name carries how many chats need the person ("Inbox, 3 chats need you").
+    static func dockTab(_ title: String, in app: XCUIApplication) -> XCUIElement {
+        app.buttons["aiden.dock.\(title.lowercased())"].firstMatch
+    }
+
+    /// The tabs' bar along the bottom: the dock at compact width, else
+    /// whatever system tab bar there is.
+    static func bottomTabs(in app: XCUIApplication) -> XCUIElement {
+        let dock = dock(in: app)
+        return dock.exists ? dock : app.tabBars.firstMatch
+    }
+
+    /// A tab, in the dock, a system bottom bar or a sidebar. Before any of
+    /// them shows, a button that will be the tab once it does.
     static func tab(_ title: String, in app: XCUIApplication) -> XCUIElement {
+        let inDock = dockTab(title, in: app)
+        if inDock.exists { return inDock }
         let inBar = app.tabBars.buttons[title].firstMatch
         if inBar.exists { return inBar }
         let inSidebar = sidebarRow(title, in: app)
-        return inSidebar.exists ? inSidebar : app.buttons[title].firstMatch
+        if inSidebar.exists { return inSidebar }
+        return app.buttons.matching(NSPredicate(
+            format: "identifier == %@ OR label == %@", "aiden.dock.\(title.lowercased())", title
+        )).firstMatch
     }
 
     /// A tab's row in the list a regular-width window shows the tabs in.

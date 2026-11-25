@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+- **2026-11-25 — Home's own header and the dock.** Client-only; no Remote wire or revision change.
+  - Home has no system title bar. A round **Open menu** button sits beside the greeting at the top, and focus returns to it when the drawer closes. Every other screen keeps its usual bar.
+  - On an iPhone and a closed iPhone Duo the tabs are a dock along the bottom: icons on a glass capsule, the chosen tab in a pill with its name, and a dot on Inbox while chats need you. Tapping the chosen tab again goes back to its top.
+  - Lists end above the dock and scroll under it, the ambient light stays behind it, and running chats show just above it. It steps aside in a chat and while the keyboard is up, and it no longer shrinks as you scroll.
+  - VoiceOver reads the dock as a tab bar and says which tab is chosen; the Inbox says how many chats need you. Voice Control answers to each tab's name, and a long press at large text sizes shows the tab's name large.
+  - An iPad and an unfolded iPhone Duo keep the sidebar.
+
 - **2026-11-25 — Chats tab and the side drawer (new direction, Phase 1).** No Remote wire or revision change.
   - The tabs are Chats, Bots, Workspaces and Inbox, and the app opens on Chats, a list of every chat across your computers. Search moved into the drawer.
   - The menu button at the top of each list, or a swipe in from the screen's leading edge at a list, opens a drawer with search, pinned Bots and workspaces, recent chats, Usage, Computers and Settings. A pinned Bot shows its avatar and a dot when it needs you.

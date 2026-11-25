@@ -31,6 +31,7 @@ Make Aiden On The Go feel native on iPhone Duo, using the owner's reference scre
 - The iOS Aiden preset's accent is muted ink (the owner's decision for iOS). The desktop (`renderer/shared/appearance.ts`), Android and the shared `protocol/aiden-appearance-v1.json` keep the blue Aiden accent, so iOS is the one stated exception in its fixture test. Follow-up: decide whether the desktop and Android follow. Links are underlined in the transcript and in HTML previews on every theme, because an ink accent alone sits too close to body text to mark a link (WCAG 1.4.1).
 - Visuals the Mac draws for the phone (`chat-visual-viewer-v1`) still come back blue on the Aiden theme: the request carries only the preset ID ("aiden"), and the Mac resolves that to its own blue palette.
 - The tab view keeps the system's tab bar placement. It isn't forced to a sidebar, because the list column already gives the extra hierarchy level.
+  - 2026-11-25: on the closed Duo (compact width) the system tab bar is now hidden and Aiden's dock draws the tabs along the bottom (`docs/plans/ios-new-direction-upgrade-plan.md`, Phase 2). The rail keeps the status bar and the navigation bar's items. The open Duo is unchanged.
 
 ## Phases
 

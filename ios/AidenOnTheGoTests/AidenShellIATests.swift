@@ -207,6 +207,62 @@ final class AidenShellIATests: XCTestCase {
         XCTAssertTrue(split.showsChatList)
     }
 
+    /// At compact width (an iPhone, the closed iPhone Duo) Aiden draws its
+    /// dock; beside the list (iPad, the open Duo) the system sidebar stays.
+    /// The dock leaves the bottom edge to a conversation's composer and to
+    /// the keyboard.
+    func testTheDockIsForCompactWidthAndStepsAsideForAChatOrTheKeyboard() {
+        XCTAssertEqual(AidenTabChrome.resolve(besideList: false), .dock)
+        XCTAssertEqual(AidenTabChrome.resolve(besideList: true), .system)
+
+        XCTAssertTrue(AidenTabChrome.showsDock(besideList: false, showsConversation: false, keyboardIsUp: false))
+        XCTAssertFalse(AidenTabChrome.showsDock(besideList: true, showsConversation: false, keyboardIsUp: false),
+                       "The sidebar layout drew the dock too")
+        XCTAssertFalse(AidenTabChrome.showsDock(besideList: false, showsConversation: true, keyboardIsUp: false),
+                       "The dock sat under a conversation's composer")
+        XCTAssertFalse(AidenTabChrome.showsDock(besideList: false, showsConversation: false, keyboardIsUp: true),
+                       "The dock rode up on the keyboard")
+    }
+
+    /// Like the system tab bar: another tab keeps where each tab was, and the
+    /// tab already open goes back to its root.
+    func testTheDockKeepsEachTabsPlaceAndAReselectReturnsToTheRoot() {
+        let navigation = AidenAppNavigation()
+        navigation.open(.chat(id("c1")))
+        XCTAssertEqual(navigation.tab, .chats)
+
+        navigation.selectFromDock(.inbox)
+        XCTAssertEqual(navigation.tab, .inbox)
+        XCTAssertEqual(navigation.chatsPath, [.chat(id("c1"))], "Leaving Chats dropped its open chat")
+
+        navigation.selectFromDock(.chats)
+        XCTAssertEqual(navigation.chatsPath, [.chat(id("c1"))], "Coming back to Chats lost its open chat")
+        XCTAssertTrue(navigation.showsConversation)
+
+        navigation.selectFromDock(.chats)
+        XCTAssertEqual(navigation.tab, .chats)
+        XCTAssertEqual(navigation.chatsPath, [], "Choosing the open tab again didn't return to its root")
+        XCTAssertFalse(navigation.showsConversation)
+    }
+
+    /// The Inbox's dot says nothing to VoiceOver, so the tab tells how many
+    /// chats wait on the person; no other tab, and no count of none, adds a value.
+    func testTheInboxTabTellsVoiceOverHowManyChatsNeedThePerson() {
+        XCTAssertNil(AidenAppTab.inbox.accessibilityCount(needsYou: 0))
+        XCTAssertEqual(AidenAppTab.inbox.accessibilityCount(needsYou: 1), "1 chat needs you")
+        XCTAssertEqual(AidenAppTab.inbox.accessibilityCount(needsYou: 4), "4 chats need you")
+        for tab in AidenAppTab.allCases where tab != .inbox {
+            XCTAssertNil(tab.accessibilityCount(needsYou: 4), "\(tab) read the Inbox's count")
+        }
+
+        // In the dock the count rides in the tab's name, since a tab's value
+        // is whether it's chosen.
+        let dock = AidenDock(selection: .chats, needsYouCount: 3, onSelect: { _ in })
+        XCTAssertEqual(dock.accessibilityName(of: .inbox), "Inbox, 3 chats need you")
+        XCTAssertEqual(dock.accessibilityName(of: .bots), "Bots")
+        XCTAssertEqual(AidenDock(selection: .inbox, needsYouCount: 0, onSelect: { _ in }).accessibilityName(of: .inbox), "Inbox")
+    }
+
     /// A notification's chat opens beside Chats' list. With a page pushed over
     /// it, the Inbox still counts it as open, so its replies aren't news.
     func testAChatSelectedBesideTheChatsListCountsAsOpenUnderAPage() {
