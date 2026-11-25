@@ -24,6 +24,7 @@ import {
 } from "./managed-worktree-removal-core.js";
 import type { GitBranches, GitInfo, GitWorktree } from "./types.js";
 import { reportAnalyticsEvent } from "./analytics/analytics-report.js";
+import { AIDEN_REMOTE_WORKSPACE_GIT_READ_TIMEOUT_MS } from "./aiden-remote-workspace-git-cache.js";
 import { resolveGitExecutable, resolveGitExecutableMemoized } from "./git-executable.js";
 import { agentCommandEnvironment } from "./agent-command-environment.js";
 import {
@@ -8726,8 +8727,21 @@ export const gitCachedRepositoryIdentity = (folderPath: string) =>
   gitService.cachedRepositoryIdentity(folderPath);
 export const gitInfo = (folderPath: string, signal?: AbortSignal) =>
   gitService.info(folderPath, signal);
-export const gitWorkspaceSummary = (folderPath: string, signal?: AbortSignal) =>
-  gitService.workspaceSummary(folderPath, signal);
+/**
+ * The Remote workspace Git summary reader. It runs on its own GitService so its
+ * per-command budget is the summary cache's read deadline, not the short
+ * default every interactive read keeps: a large repository whose `git status`
+ * takes longer than that default still gets a summary, and the cache's
+ * deadline signal still stops the whole read.
+ */
+export function createGitWorkspaceSummaryReader(
+  options: Pick<GitServiceOptions, "gitBinary"> = {},
+): (folderPath: string, signal?: AbortSignal) => Promise<{ root: string; info: GitInfo }> {
+  const service = new GitService({ ...options, readTimeoutMs: AIDEN_REMOTE_WORKSPACE_GIT_READ_TIMEOUT_MS });
+  return (folderPath, signal) => service.workspaceSummary(folderPath, signal);
+}
+
+export const gitWorkspaceSummary = createGitWorkspaceSummaryReader();
 export const gitBranches = (folderPath: string, signal?: AbortSignal) =>
   gitService.branches(folderPath, signal);
 export const gitReview = (folderPath: string, signal?: AbortSignal) =>

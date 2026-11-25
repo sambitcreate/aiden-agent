@@ -59,7 +59,7 @@ const repo = (root: string, branch = "main", uncommitted = 0): AidenRemoteWorksp
   info: { isRepo: true, branch, uncommitted },
 });
 
-function cache(options: { concurrency?: number } = {}) {
+function cache(options: { concurrency?: number; maxAbandoned?: number } = {}) {
   const time = manualTime();
   const reader = manualReader();
   const git = new AidenRemoteWorkspaceGitCache({
@@ -70,6 +70,7 @@ function cache(options: { concurrency?: number } = {}) {
     readTimeoutMs: 15_000,
     concurrency: options.concurrency ?? 3,
     backoffMaxMs: 10 * 60_000,
+    maxAbandoned: options.maxAbandoned,
   });
   return { time, reader, git };
 }
@@ -167,7 +168,7 @@ test("a failed read leaves the folder without a summary and backs it off, longer
   assert.equal(reader.reads.length, 1);
 });
 
-test("a read that outlasts its deadline is abandoned, and holds its slot until it actually stops", async () => {
+test("a read that outlasts its deadline is abandoned, gives up its slot, and its folder is not read twice", async () => {
   const { time, reader, git } = cache({ concurrency: 1 });
   git.peek("/slow");
   git.peek("/fast");
@@ -177,13 +178,92 @@ test("a read that outlasts its deadline is abandoned, and holds its slot until i
   time.advance(15_000);
   assert.equal(slow.signal.aborted, true, "the abandoned read is cancelled");
   assert.equal(git.peek("/slow"), undefined);
-  await settle();
-  assert.equal(reader.reads.length, 0, "the slot stays taken until the read settles");
+  assert.deepEqual(reader.reads.map((value) => value.folder), ["/fast"], "the waiting folder gets the slot");
+
+  time.advance(60_000);
+  git.peek("/slow");
+  assert.deepEqual(reader.reads.map((value) => value.folder), ["/fast"], "the folder is not read again while its old read lives");
 
   slow.resolve(repo("/slow", "late", 9));
   await settle();
   assert.equal(git.peek("/slow"), undefined, "an answer after the deadline is ignored");
-  assert.deepEqual(reader.reads.map((value) => value.folder), ["/fast"]);
+  assert.deepEqual(reader.reads.map((value) => value.folder), ["/fast", "/slow"], "once the old read ends, the folder is read again");
+});
+
+test("reads that never settle cannot stop other folders from getting a summary", async () => {
+  const { time, reader, git } = cache({ concurrency: 3 });
+  for (const folder of ["/mnt/a", "/mnt/b", "/mnt/c", "/code/app"]) git.peek(folder);
+  assert.deepEqual(reader.reads.map((value) => value.folder), ["/mnt/a", "/mnt/b", "/mnt/c"]);
+
+  // The three mounts are gone: their reads never answer, even after they are cancelled.
+  time.advance(15_000);
+  assert.equal(reader.reads.length, 4, "the local repository is read once the stuck reads pass their deadline");
+  reader.pending("/code/app").resolve(repo("/code/app", "main", 3));
+  await settle();
+  assert.deepEqual(git.peek("/code/app"), { isRepo: true, branch: "main", uncommitted: 3 });
+
+  // Long after every back-off, the dead mounts still hold one read each and nothing more.
+  time.advance(60 * 60_000);
+  for (const folder of ["/mnt/a", "/mnt/b", "/mnt/c", "/code/app", "/code/other"]) git.peek(folder);
+  assert.deepEqual(
+    reader.reads.map((value) => value.folder).sort(),
+    ["/code/app", "/code/other", "/mnt/a", "/mnt/b", "/mnt/c"],
+  );
+});
+
+test("stuck reads that give up their slot are capped, then hold their slot", async () => {
+  const { time, reader, git } = cache({ concurrency: 1, maxAbandoned: 1 });
+  for (const folder of ["/mnt/a", "/mnt/b", "/code/app"]) git.peek(folder);
+  assert.deepEqual(reader.reads.map((value) => value.folder), ["/mnt/a"]);
+
+  time.advance(15_000);
+  assert.deepEqual(reader.reads.map((value) => value.folder), ["/mnt/a", "/mnt/b"], "the first stuck read gives up its slot");
+  time.advance(15_000);
+  assert.equal(reader.reads.length, 2, "the second stuck read keeps its slot, so no third read starts");
+
+  // The first stuck read ending frees no slot: the second still holds the only one.
+  reader.pending("/mnt/a").reject(new Error("ESTALE"));
+  await settle();
+  assert.deepEqual(reader.reads.map((value) => value.folder), ["/mnt/b"]);
+  reader.pending("/mnt/b").reject(new Error("ESTALE"));
+  await settle();
+  assert.deepEqual(reader.reads.map((value) => value.folder), ["/code/app"], "the slot frees when the read ends");
+});
+
+test("a failure in a repository's root folder leaves its other folders their summary and no back-off", async () => {
+  const { time, reader, git } = cache();
+  git.peek("/code/repo/packages/web");
+  git.peek("/code/repo");
+  reader.pending("/code/repo/packages/web").resolve(repo("/code/repo", "main", 1));
+  await settle();
+  reader.pending("/code/repo").resolve(repo("/code/repo", "main", 1));
+  await settle();
+  assert.deepEqual(git.peek("/code/repo/packages/web"), { isRepo: true, branch: "main", uncommitted: 1 });
+
+  time.advance(30_000);
+  git.peek("/code/repo");
+  reader.pending("/code/repo").reject(new Error("index.lock exists"));
+  await settle();
+  assert.equal(git.peek("/code/repo"), undefined, "the failing folder shows nothing");
+  assert.equal(reader.reads.length, 0, "and is backed off");
+
+  assert.deepEqual(
+    git.peek("/code/repo/packages/web"),
+    { isRepo: true, branch: "main", uncommitted: 1 },
+    "the other folder keeps its summary",
+  );
+  assert.deepEqual(reader.reads.map((value) => value.folder), ["/code/repo/packages/web"], "and reads the repository afresh");
+  reader.pending("/code/repo/packages/web").resolve(repo("/code/repo", "main", 2));
+  await settle();
+  assert.deepEqual(git.peek("/code/repo/packages/web"), { isRepo: true, branch: "main", uncommitted: 2 });
+  assert.equal(git.peek("/code/repo"), undefined, "the failed folder waits for its own retry");
+  assert.equal(reader.reads.length, 0);
+
+  time.advance(60_000);
+  git.peek("/code/repo");
+  reader.pending("/code/repo").resolve(repo("/code/repo", "main", 2));
+  await settle();
+  assert.deepEqual(git.peek("/code/repo"), { isRepo: true, branch: "main", uncommitted: 2 }, "a clean retry restores it");
 });
 
 test("the summary omits a detached HEAD's branch and cuts long names between code points", () => {

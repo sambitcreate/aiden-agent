@@ -60,6 +60,11 @@ export interface AidenRemoteWorkspaceGitCacheOptions {
   backoffMaxMs?: number;
   /** How many repositories and folders are remembered. */
   maxEntries?: number;
+  /**
+   * How many reads past their deadline may give up their slot while they are
+   * still running. Beyond this, a stuck read keeps its slot until it ends.
+   */
+  maxAbandoned?: number;
 }
 
 export const AIDEN_REMOTE_WORKSPACE_GIT_FRESH_MS = 30_000;
@@ -67,16 +72,20 @@ export const AIDEN_REMOTE_WORKSPACE_GIT_READ_TIMEOUT_MS = 15_000;
 export const AIDEN_REMOTE_WORKSPACE_GIT_CONCURRENCY = 3;
 export const AIDEN_REMOTE_WORKSPACE_GIT_BACKOFF_MAX_MS = 30 * 60_000;
 const DEFAULT_MAX_ENTRIES = 1_024;
+export const AIDEN_REMOTE_WORKSPACE_GIT_MAX_ABANDONED = 8;
 
 interface Entry {
   summary?: AidenRemoteWorkspaceGitSummary;
   readAt: number;
-  /** Consecutive failures; zero after a clean read. */
-  failures: number;
-  /** No refresh starts before this time. */
-  retryAt: number;
-  /** The folder the entry was last read through, so a refresh knows where to look. */
+  /** The folder the entry was last read through. */
   folder: string;
+}
+
+/** A folder whose last read failed: it shows no summary and is not read again before `retryAt`. */
+interface Failure {
+  /** Consecutive failures; the record is dropped after a clean read. */
+  failures: number;
+  retryAt: number;
 }
 
 interface Job {
@@ -100,7 +109,11 @@ function unrefSchedule(ms: number, run: () => void): () => void {
  * finishes) and queues a refresh when the entry is missing or stale. Refreshes
  * run under a small concurrency limit, one per key at a time, each under its
  * own deadline. A failed or abandoned read clears that folder's summary and
- * backs the folder off, doubling the wait on each further failure.
+ * backs the folder off, doubling the wait on each further failure; other
+ * folders of the same repository keep their summary and are not backed off.
+ * A read that outlives its deadline gives up its slot, but its key stays taken
+ * until the read really ends, so a folder stuck in the filesystem holds at
+ * most one read and never stops other folders from being read.
  */
 export class AidenRemoteWorkspaceGitCache {
   private readonly now: () => number;
@@ -112,10 +125,14 @@ export class AidenRemoteWorkspaceGitCache {
   private readonly maxEntries: number;
   private readonly roots = new Map<string, string>();
   private readonly entries = new Map<string, Entry>();
+  private readonly failures = new Map<string, Failure>();
   private readonly queue: Job[] = [];
   private readonly queued = new Set<string>();
   private readonly inFlight = new Set<string>();
   private active = 0;
+  /** Reads past their deadline that gave up their slot and haven't ended yet. */
+  private abandoned = 0;
+  private readonly maxAbandoned: number;
 
   constructor(private readonly options: AidenRemoteWorkspaceGitCacheOptions) {
     this.now = options.now ?? Date.now;
@@ -125,14 +142,21 @@ export class AidenRemoteWorkspaceGitCache {
     this.concurrency = Math.max(1, options.concurrency ?? AIDEN_REMOTE_WORKSPACE_GIT_CONCURRENCY);
     this.backoffMaxMs = options.backoffMaxMs ?? AIDEN_REMOTE_WORKSPACE_GIT_BACKOFF_MAX_MS;
     this.maxEntries = Math.max(1, options.maxEntries ?? DEFAULT_MAX_ENTRIES);
+    this.maxAbandoned = Math.max(0, options.maxAbandoned ?? AIDEN_REMOTE_WORKSPACE_GIT_MAX_ABANDONED);
   }
 
   /** The cached summary for a folder, stale or not; queues a background refresh when one is due. Never waits. */
   peek(folderPath: string): AidenRemoteWorkspaceGitSummary | undefined {
     const key = this.roots.get(folderPath) ?? folderPath;
-    const entry = this.entries.get(key);
     const now = this.now();
-    if (!entry || (now - entry.readAt >= this.freshMs && now >= entry.retryAt)) {
+    const failure = this.failures.get(folderPath);
+    if (failure) {
+      // The folder shows nothing until a read through it succeeds again.
+      if (now >= failure.retryAt) this.enqueue({ key, folder: folderPath });
+      return undefined;
+    }
+    const entry = this.entries.get(key);
+    if (!entry || now - entry.readAt >= this.freshMs) {
       this.enqueue({ key, folder: folderPath });
     }
     return entry?.summary;
@@ -158,6 +182,14 @@ export class AidenRemoteWorkspaceGitCache {
   private start(job: Job): void {
     const controller = new AbortController();
     let recorded = false;
+    let slotHeld = true;
+    let abandoned = false;
+    const releaseSlot = () => {
+      if (!slotHeld) return;
+      slotHeld = false;
+      this.active -= 1;
+      this.pump();
+    };
     const record = (read: AidenRemoteWorkspaceGitRead | undefined) => {
       if (recorded) return;
       recorded = true;
@@ -168,6 +200,16 @@ export class AidenRemoteWorkspaceGitCache {
     const cancelDeadline = this.schedule(this.readTimeoutMs, () => {
       controller.abort();
       record(undefined);
+      // A read stuck in an uncancellable filesystem call (a dead network mount)
+      // may never settle. It gives up its slot so other folders keep being read,
+      // but its key stays taken below, so the folder never has a second read.
+      // At most `maxAbandoned` do so at once; past that a stuck read keeps its
+      // slot, so stuck reads never exceed `maxAbandoned + concurrency`.
+      if (slotHeld && this.abandoned < this.maxAbandoned) {
+        this.abandoned += 1;
+        abandoned = true;
+        releaseSlot();
+      }
     });
     let pending: Promise<AidenRemoteWorkspaceGitRead>;
     try {
@@ -175,14 +217,15 @@ export class AidenRemoteWorkspaceGitCache {
     } catch (error) {
       pending = Promise.reject(error);
     }
-    // The slot and the key stay taken until the read itself settles, even past
-    // its deadline, so reads stuck in the filesystem cannot pile up.
+    // The key stays taken until the read itself settles, even past its
+    // deadline, so reads stuck in the filesystem cannot pile up for one folder.
     void pending
       .then((read) => record(read), () => record(undefined))
       .finally(() => {
         this.inFlight.delete(job.key);
-        this.active -= 1;
-        this.pump();
+        if (abandoned) this.abandoned -= 1;
+        if (slotHeld) releaseSlot();
+        else this.pump();
       });
   }
 
@@ -190,30 +233,28 @@ export class AidenRemoteWorkspaceGitCache {
     const root = read.root;
     this.remember(this.roots, job.folder, root);
     if (job.key !== root && job.key === job.folder) this.entries.delete(job.key);
+    this.failures.delete(job.folder);
     this.remember(this.entries, root, {
       summary: projectAidenRemoteWorkspaceGit(read.info),
       readAt: this.now(),
-      failures: 0,
-      retryAt: 0,
       folder: job.folder,
     });
   }
 
   private recordFailure(job: Job): void {
     const now = this.now();
-    // Forget which repository the folder was in: it may have moved or gone. A
-    // shared entry read through this folder is dropped so another folder of
-    // that repository reads it afresh instead of inheriting this failure.
+    // Forget which repository the folder was in: it may have moved or gone.
     this.roots.delete(job.folder);
-    if (job.key !== job.folder && this.entries.get(job.key)?.folder === job.folder) {
-      this.entries.delete(job.key);
-    }
-    const failures = (this.entries.get(job.folder)?.failures ?? 0) + 1;
-    this.remember(this.entries, job.folder, {
-      readAt: now,
+    // The failure is the folder's own, kept apart from the repository's shared
+    // entry. A shared entry read through this folder is marked stale rather
+    // than overwritten, so another folder of that repository keeps its summary
+    // and reads it afresh instead of inheriting this failure and its back-off.
+    const shared = this.entries.get(job.key);
+    if (shared?.folder === job.folder) shared.readAt = Number.NEGATIVE_INFINITY;
+    const failures = (this.failures.get(job.folder)?.failures ?? 0) + 1;
+    this.remember(this.failures, job.folder, {
       failures,
       retryAt: now + Math.min(this.backoffMaxMs, this.freshMs * 2 ** failures),
-      folder: job.folder,
     });
   }
 
