@@ -155,22 +155,33 @@ struct AidenBotHomeRow: Equatable, Identifiable {
 
     var id: String { bot.id }
 
-    /// The durable session state comes first: an interrupted turn, a Bot the
-    /// person paused (revision 37) or a missing model says so; otherwise the
-    /// last message, or a greeting prompt.
+    /// A wait on the person comes first (revision 68: an approval, a question,
+    /// a hand-off or an open issue), then the durable session state: an
+    /// interrupted turn, a Bot the person paused (revision 37) or a missing
+    /// model says so; then an approval this phone can see, which keeps its own
+    /// line as on Android; otherwise the last message, or a greeting prompt.
     var preview: String {
+        let waitsOnApproval = conversation?.activityState == .waitingForApproval
+        if bot.needsYou && !waitsOnApproval { return AidenBotSessionCopy.waitingForYou }
         switch bot.sessionState {
         case .interrupted: return AidenBotSessionCopy.interruptedSubtitle
         case .paused: return AidenBotSessionCopy.pausedSubtitle
         case .needsModel: return AidenBotSessionCopy.needsModel
         default: break
         }
+        if let conversation, waitsOnApproval {
+            return conversation.canRespondToApproval
+                ? AidenBotSessionCopy.needsYourOK
+                : AidenBotSessionCopy.waitingForYourOKOnMac
+        }
         let text = (conversation?.preview ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
         return text.isEmpty ? "Say hello" : text
     }
 
-    /// Shows the small activity dot on the avatar while the Bot is working.
+    /// Shows the small activity dot on the avatar while the Bot is working,
+    /// but not while it waits on the person.
     var isWorking: Bool {
+        if bot.needsYou { return false }
         if let state = bot.sessionState { return state == .running }
         guard let conversation else { return false }
         return conversation.activityState != .idle

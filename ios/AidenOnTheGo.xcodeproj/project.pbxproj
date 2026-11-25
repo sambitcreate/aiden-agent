@@ -7,6 +7,14 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		F6A100000000000000000001 /* AidenHostConnectionLifecycle.swift in Sources */ = {isa = PBXBuildFile; fileRef = F6A100000000000000000101 /* AidenHostConnectionLifecycle.swift */; };
+		F6A100000000000000000002 /* AidenForeignRunObserver.swift in Sources */ = {isa = PBXBuildFile; fileRef = F6A100000000000000000102 /* AidenForeignRunObserver.swift */; };
+		F6A100000000000000000003 /* AidenPendingSendCoordinator.swift in Sources */ = {isa = PBXBuildFile; fileRef = F6A100000000000000000103 /* AidenPendingSendCoordinator.swift */; };
+		F6A100000000000000000004 /* AidenChatMutationSubMachines.swift in Sources */ = {isa = PBXBuildFile; fileRef = F6A100000000000000000104 /* AidenChatMutationSubMachines.swift */; };
+		F6A100000000000000000005 /* AidenForeignRunObserverTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = F6A100000000000000000105 /* AidenForeignRunObserverTests.swift */; };
+		F6A100000000000000000006 /* AidenPendingSendCoordinatorTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = F6A100000000000000000106 /* AidenPendingSendCoordinatorTests.swift */; };
+		F6A100000000000000000007 /* AidenChatMutationSubMachinesTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = F6A100000000000000000107 /* AidenChatMutationSubMachinesTests.swift */; };
+		F6A100000000000000000008 /* ComposerVoiceInputControllerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = F6A100000000000000000108 /* ComposerVoiceInputControllerTests.swift */; };
 		F5A100000000000000000001 /* AidenRemoteFailureClassification.swift in Sources */ = {isa = PBXBuildFile; fileRef = F5A100000000000000000101 /* AidenRemoteFailureClassification.swift */; };
 		F5A100000000000000000002 /* AidenDurablePendingMutation.swift in Sources */ = {isa = PBXBuildFile; fileRef = F5A100000000000000000102 /* AidenDurablePendingMutation.swift */; };
 		F5A100000000000000000003 /* AidenRemoteFailureClassificationTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = F5A100000000000000000103 /* AidenRemoteFailureClassificationTests.swift */; };
@@ -318,6 +326,14 @@
 /* End PBXCopyFilesBuildPhase section */
 
 /* Begin PBXFileReference section */
+		F6A100000000000000000101 /* AidenHostConnectionLifecycle.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AidenHostConnectionLifecycle.swift; sourceTree = "<group>"; };
+		F6A100000000000000000102 /* AidenForeignRunObserver.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AidenForeignRunObserver.swift; sourceTree = "<group>"; };
+		F6A100000000000000000103 /* AidenPendingSendCoordinator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AidenPendingSendCoordinator.swift; sourceTree = "<group>"; };
+		F6A100000000000000000104 /* AidenChatMutationSubMachines.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AidenChatMutationSubMachines.swift; sourceTree = "<group>"; };
+		F6A100000000000000000105 /* AidenForeignRunObserverTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AidenForeignRunObserverTests.swift; sourceTree = "<group>"; };
+		F6A100000000000000000106 /* AidenPendingSendCoordinatorTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AidenPendingSendCoordinatorTests.swift; sourceTree = "<group>"; };
+		F6A100000000000000000107 /* AidenChatMutationSubMachinesTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AidenChatMutationSubMachinesTests.swift; sourceTree = "<group>"; };
+		F6A100000000000000000108 /* ComposerVoiceInputControllerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ComposerVoiceInputControllerTests.swift; sourceTree = "<group>"; };
 		F5A100000000000000000101 /* AidenRemoteFailureClassification.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AidenRemoteFailureClassification.swift; sourceTree = "<group>"; };
 		F5A100000000000000000102 /* AidenDurablePendingMutation.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AidenDurablePendingMutation.swift; sourceTree = "<group>"; };
 		F5A100000000000000000103 /* AidenRemoteFailureClassificationTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AidenRemoteFailureClassificationTests.swift; sourceTree = "<group>"; };
@@ -725,6 +741,10 @@
 				F5A100000000000000000105 /* AidenBotResumeModelTests.swift */,
 				F5A100000000000000000104 /* AidenDurablePendingMutationTests.swift */,
 				F5A100000000000000000103 /* AidenRemoteFailureClassificationTests.swift */,
+				F6A100000000000000000105 /* AidenForeignRunObserverTests.swift */,
+				F6A100000000000000000106 /* AidenPendingSendCoordinatorTests.swift */,
+				F6A100000000000000000107 /* AidenChatMutationSubMachinesTests.swift */,
+				F6A100000000000000000108 /* ComposerVoiceInputControllerTests.swift */,
 				D0A100000000000000000017 /* AidenBotOpenWorkTests.swift */,
 				B0E700000000000000000011 /* AidenRemoteContractFixture.swift */,
 				B07C00000000000000000012 /* AidenBotGeneratedAvatarTests.swift */,
@@ -908,6 +928,7 @@
 			children = (
 				A0E200000000000000000017 /* AidenHostConnectScheduler.swift */,
 				A0E200000000000000000011 /* AidenHostConnection.swift */,
+				F6A100000000000000000101 /* AidenHostConnectionLifecycle.swift */,
 				A0E200000000000000000014 /* AidenHostRegistry.swift */,
 			);
 			path = Hosts;
@@ -1025,6 +1046,9 @@
 				A7C100000000000000000009 /* AidenChatViewModel+Recordings.swift */,
 				A7C10000000000000000000A /* AidenChatViewModel+ComposerPower.swift */,
 				A7C10000000000000000000B /* AidenChatViewModel+ForeignRuns.swift */,
+				F6A100000000000000000102 /* AidenForeignRunObserver.swift */,
+				F6A100000000000000000103 /* AidenPendingSendCoordinator.swift */,
+				F6A100000000000000000104 /* AidenChatMutationSubMachines.swift */,
 				A7C10000000000000000000D /* AidenChatCards.swift */,
 				B6B100000000000000000002 /* AidenTypedApprovalCard.swift */,
 				A7C10000000000000000000E /* AidenChronologicalTranscript.swift */,
@@ -1420,6 +1444,9 @@
 				A7C200000000000000000009 /* AidenChatViewModel+Recordings.swift in Sources */,
 				A7C20000000000000000000A /* AidenChatViewModel+ComposerPower.swift in Sources */,
 				A7C20000000000000000000B /* AidenChatViewModel+ForeignRuns.swift in Sources */,
+				F6A100000000000000000002 /* AidenForeignRunObserver.swift in Sources */,
+				F6A100000000000000000003 /* AidenPendingSendCoordinator.swift in Sources */,
+				F6A100000000000000000004 /* AidenChatMutationSubMachines.swift in Sources */,
 				A7C20000000000000000000D /* AidenChatCards.swift in Sources */,
 				B6B000000000000000000002 /* AidenTypedApprovalCard.swift in Sources */,
 				A7C20000000000000000000E /* AidenChronologicalTranscript.swift in Sources */,
@@ -1511,6 +1538,7 @@
 				A2E000000000000000000005 /* AidenWorkspacesTabView.swift in Sources */,
 				A4B240000000000000000002 /* AidenSearchTabView.swift in Sources */,
 				A0E200000000000000000001 /* AidenHostConnection.swift in Sources */,
+				F6A100000000000000000001 /* AidenHostConnectionLifecycle.swift in Sources */,
 				A0E200000000000000000004 /* AidenHostRegistry.swift in Sources */,
 				1A2B3C4D5E6F700000000001 /* AidenOnTheGoApp.swift in Sources */,
 				1A2B3C4D5E6F700000000002 /* ContentView.swift in Sources */,
@@ -1569,6 +1597,10 @@
 				F5A100000000000000000005 /* AidenBotResumeModelTests.swift in Sources */,
 				F5A100000000000000000004 /* AidenDurablePendingMutationTests.swift in Sources */,
 				F5A100000000000000000003 /* AidenRemoteFailureClassificationTests.swift in Sources */,
+				F6A100000000000000000005 /* AidenForeignRunObserverTests.swift in Sources */,
+				F6A100000000000000000006 /* AidenPendingSendCoordinatorTests.swift in Sources */,
+				F6A100000000000000000007 /* AidenChatMutationSubMachinesTests.swift in Sources */,
+				F6A100000000000000000008 /* ComposerVoiceInputControllerTests.swift in Sources */,
 				D0A100000000000000000007 /* AidenBotOpenWorkTests.swift in Sources */,
 				B0E700000000000000000001 /* AidenRemoteContractFixture.swift in Sources */,
 				A0DB00000000000000000002 /* AidenNativeIntegrationTests.swift in Sources */,

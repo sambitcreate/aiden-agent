@@ -1129,6 +1129,11 @@ interface Feed {
    */
   projectedFrom: readonly EntryRecord[] | undefined;
   runActive: boolean;
+  /**
+   * Whether the current run's end was already reported (`onRunSettled`), so a
+   * frame and the opening reconciliation don't both report it. A new run clears it.
+   */
+  settled: boolean;
   /** Identity of the current run; a follow-up turn replaces the run without a gap. */
   runKey: string | null;
   watch: ActiveConversationWatch;
@@ -1191,6 +1196,12 @@ export function createBotLiveProjection(deps: BotLiveProjectionDeps): BotLivePro
   const lastSeq = new Map<string, number>();
 
   const report = (botId: string, error: unknown) => deps.onError?.(botId, error);
+  /**
+   * Feed openings that failed, by their error (every notice that joined one sees
+   * the same error): reported once, and the run settled once for whichever
+   * joined notice was a running one, whatever order the notices came in.
+   */
+  const failedOpenings = new WeakMap<object, { settling: boolean }>();
   const classifyRetryMs = deps.classifyRetryMs ?? 1_000;
 
   function snapshotOf(feed: Feed): BotLiveSnapshot {
@@ -1386,6 +1397,7 @@ export function createBotLiveProjection(deps: BotLiveProjectionDeps): BotLivePro
       return;
     }
     feed.runActive = runActive;
+    if (runActive) feed.settled = false;
     // The run's end is reported with its new state, so the line never flashes a phase after the reply.
     const state = await deps.state(feed.botId).catch(() => feed.state);
     setState(feed, state);
@@ -1394,7 +1406,10 @@ export function createBotLiveProjection(deps: BotLiveProjectionDeps): BotLivePro
       feed.stopping = false;
       feed.resuming = false;
       resumingBots.delete(feed.botId);
-      deps.onRunSettled?.(feed.botId, state);
+      if (!feed.settled) {
+        feed.settled = true;
+        deps.onRunSettled?.(feed.botId, state);
+      }
       void closeIfUnwatched(feed);
     }
   }
@@ -1403,7 +1418,10 @@ export function createBotLiveProjection(deps: BotLiveProjectionDeps): BotLivePro
     if (JSON.stringify(state) === JSON.stringify(feed.state)) return;
     const wasRunning = feed.state.kind === "running";
     feed.state = state;
-    if (state.kind === "running" && !wasRunning) startRun(feed);
+    if (state.kind === "running" && !wasRunning) {
+      feed.settled = false;
+      startRun(feed);
+    }
     if (state.kind !== "running") {
       feed.stopping = false;
       feed.resuming = false;
@@ -1463,6 +1481,7 @@ export function createBotLiveProjection(deps: BotLiveProjectionDeps): BotLivePro
         frame: { entries: initial.entries, docs: initial.docs },
         projectedFrom: projected.stable ? initial.entries : undefined,
         runActive: liveRunActive(initial.docs),
+        settled: false,
         runKey: liveRunKey(initial.docs),
         watch,
         cancel: () => cancel(new Error("Bot live feed closed.")),
@@ -1474,12 +1493,21 @@ export function createBotLiveProjection(deps: BotLiveProjectionDeps): BotLivePro
       else runStarts.ended(botId);
       feed.activity = computeActivity(feed);
       feed.queued = await queuedFor(feed, initial.docs);
-      feeds.set(botId, feed);
-      watch.start((value) => enqueueWork(feed, () => onFrame(feed, value.entries, value.docs)));
-      void watch.closed.then(() => {
+      const end = () => {
         feed.ended = true;
         if (feeds.get(botId) === feed) feeds.delete(botId);
-      });
+      };
+      feeds.set(botId, feed);
+      void watch.closed.then(end);
+      try {
+        watch.start((value) => enqueueWork(feed, () => onFrame(feed, value.entries, value.docs)));
+      } catch (error) {
+        // The conversation closed while the feed opened (a pause can): this feed
+        // never follows it, so it isn't kept with the state it read.
+        end();
+        feed.cancel();
+        throw error;
+      }
       return feed;
     })();
     opening.set(botId, promise);
@@ -1619,8 +1647,43 @@ export function createBotLiveProjection(deps: BotLiveProjectionDeps): BotLivePro
       const wanted = state.kind === "running" || (subscribers.get(botId)?.size ?? 0) > 0;
       if (!wanted || state.kind === "unavailable") return;
       void openFeed(botId).then(
-        (opened) => enqueueWork(opened, async () => setState(opened, state)),
-        (error) => report(botId, error),
+        (opened) =>
+          enqueueWork(opened, async () => {
+            // A notice that arrived while the feed opened may be older or newer
+            // than the state it read, so neither is trusted: the state is read
+            // again now, after every notice so far. A run that ended (or paused,
+            // or was interrupted) while it opened is reported settled.
+            const latest = await deps.state(botId).catch(() => opened.state);
+            setState(opened, latest);
+            // A run whose last frame is still to come is reported by that frame
+            // or here, whichever is first; a paused run's frame may never come.
+            if (state.kind === "running" && latest.kind !== "running" && !opened.settled) {
+              opened.settled = true;
+              deps.onRunSettled?.(opened.botId, latest);
+              void closeIfUnwatched(opened);
+            }
+          }),
+        (error) => {
+          // Every notice that joined the same opening sees the same error: the
+          // failure is reported once, and a run is settled once if any of them
+          // was a running notice, even one that joined behind an idle or paused one.
+          let failed = typeof error === "object" && error !== null ? failedOpenings.get(error) : undefined;
+          if (!failed) {
+            failed = { settling: false };
+            if (typeof error === "object" && error !== null) failedOpenings.set(error, failed);
+            report(botId, error);
+          }
+          // A pause can stop the conversation's watch while the feed opens, so
+          // the feed never opens; a run that ended meanwhile is still reported.
+          if (state.kind !== "running" || failed.settling) return;
+          failed.settling = true;
+          void deps.state(botId).then(
+            (latest) => {
+              if (latest.kind !== "running") deps.onRunSettled?.(botId, latest);
+            },
+            (stateError) => report(botId, stateError),
+          );
+        },
       );
     },
 
