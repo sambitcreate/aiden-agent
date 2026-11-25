@@ -180,6 +180,9 @@ class BoundedMap<K, V> {
   delete(key: K): void {
     this.map.delete(key);
   }
+  deleteIf(key: K, expected: V): void {
+    if (this.map.get(key) === expected) this.map.delete(key);
+  }
   clear(): void {
     this.map.clear();
   }
@@ -412,10 +415,10 @@ export function createHookDispatcher(options: HookDispatcherOptions): AidenHookD
       try {
         const outcome = await pending;
         // An abandoned run, or hooks that could not load, must be able to run again on replay.
-        if (context.signal?.aborted || uncacheable.has(outcome)) outcomes.delete(key);
+        if (context.signal?.aborted || uncacheable.has(outcome)) outcomes.deleteIf(key, pending);
         return outcome;
       } catch (error) {
-        outcomes.delete(key);
+        outcomes.deleteIf(key, pending);
         throw error;
       }
     },

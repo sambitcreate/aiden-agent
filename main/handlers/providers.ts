@@ -27,7 +27,7 @@ import { providerRegistry } from "../services/provider-registry.js";
 import { projectPiCatalogRefreshErrors } from "../services/pi-catalog-refresh.js";
 import { isCustomProviderId } from "../services/custom-provider-id.js";
 import { GOOGLE_PROVIDER_ID, parseGoogleThinkingSelection } from "../services/google-provider.js";
-import { parseAnthropicThinkingSelection } from "../services/anthropic-provider.js";
+import { ANTHROPIC_PROVIDER_ID, parseAnthropicThinkingSelection } from "../services/anthropic-provider.js";
 import {
   assertMutableProviderId,
   forwardCodexProviderStatusChanges,
@@ -291,7 +291,12 @@ export function registerProviderHandlers(): void {
   ipcMain.handle(
     "settings:setGoogleThinking",
     async (_event, modelIdValue: unknown, levelValue: unknown) => {
-      const selection = parseGoogleThinkingSelection(modelIdValue, levelValue);
+      await providerRegistry.ensureBuiltinCatalogs();
+      const selection = parseGoogleThinkingSelection(
+        modelIdValue,
+        levelValue,
+        (modelId) => providerRegistry.getBuiltinModel(GOOGLE_PROVIDER_ID, modelId),
+      );
       return configStore.setGoogleThinkingLevel(selection.modelId, selection.level);
     },
   );
@@ -314,7 +319,12 @@ export function registerProviderHandlers(): void {
   ipcMain.handle(
     "settings:setAnthropicThinking",
     async (_event, modelIdValue: unknown, levelValue: unknown) => {
-      const selection = parseAnthropicThinkingSelection(modelIdValue, levelValue);
+      await providerRegistry.ensureBuiltinCatalogs();
+      const selection = parseAnthropicThinkingSelection(
+        modelIdValue,
+        levelValue,
+        (modelId) => providerRegistry.getBuiltinModel(ANTHROPIC_PROVIDER_ID, modelId),
+      );
       return configStore.setAnthropicThinkingLevel(selection.modelId, selection.level);
     },
   );
@@ -326,6 +336,7 @@ export function registerProviderHandlers(): void {
       if (modelId.length > MAX_CONFIG_ID_LENGTH || !isGenerationThinkingLevel(levelValue)) {
         throw new Error("Invalid provider thinking selection.");
       }
+      await providerRegistry.ensureBuiltinCatalogs();
       const builtin = providerRegistry.builtinProvider(providerId);
       const custom = builtin ? undefined : await configStore.getProvider(providerId);
       const levels = builtin?.modelMetadata?.[modelId]?.thinkingLevels ??

@@ -125,9 +125,8 @@ test("chat shell keeps local interactions isolated and keyboard-accessible", asy
     BrowserWindow.getAllWindows()[0].setSize(1280, 800);
   });
 
-  const terminal = page.getByRole("button", { name: "Show terminal" });
-  await expect(terminal).toBeDisabled();
-  await expect(terminal).toHaveAttribute("aria-pressed", "false");
+  // Without a folder the header leaves Terminal out; the New tab above still lists it with the reason.
+  await expect(page.getByRole("button", { name: "Show terminal" })).toHaveCount(0);
 
   // A workspace that follows Settings → Approvals shows no approvals chip;
   // the chip's own interactions are covered "with a workspace" below.

@@ -12,9 +12,9 @@ import {
 } from "./google-thinking.js";
 
 test("Google thinking levels stay a small explicit request contract", () => {
-  assert.deepEqual(GOOGLE_THINKING_LEVELS, ["off", "low", "medium", "high"]);
+  assert.deepEqual(GOOGLE_THINKING_LEVELS, ["off", "low", "medium", "high", "xhigh"]);
   assert.equal(DEFAULT_GOOGLE_THINKING_LEVEL, "off");
-  for (const value of ["minimal", "xhigh", "dynamic", "", null, 1]) {
+  for (const value of ["minimal", "max", "dynamic", "", null, 1]) {
     assert.equal(isGoogleThinkingLevel(value), false);
   }
 });
@@ -81,6 +81,36 @@ test("Google thinking choices expose only distinct native outcomes", () => {
       },
     }),
     ["off", "high"],
+  );
+  assert.deepEqual(
+    googleThinkingLevelsForModel({
+      reasoning: true,
+      thinkingLevelMap: {
+        off: null,
+        minimal: null,
+        low: "low",
+        medium: "medium",
+        high: "high",
+        xhigh: "xhigh",
+        max: null,
+      },
+    }),
+    ["off", "low", "medium", "high", "xhigh"],
+  );
+  assert.deepEqual(
+    googleThinkingLevelsForModel({
+      reasoning: true,
+      thinkingLevelMap: {
+        off: null,
+        minimal: null,
+        low: "low",
+        medium: "medium",
+        high: "high",
+        xhigh: null,
+        max: null,
+      },
+    }),
+    ["off", "low", "medium", "high"],
   );
   assert.equal(googleThinkingCanDisable({ reasoning: true }), true);
   assert.equal(

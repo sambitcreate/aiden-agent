@@ -5,6 +5,7 @@ import { codexThinkingLevelsForModel } from "../../../renderer/shared/codex-thin
 import { join } from "node:path";
 import { ModelRuntime, VERSION } from "@earendil-works/pi-coding-agent";
 import { concentrateProvider } from "../../../main/services/concentrate-provider.js";
+import { adaptGoogleXHighStreamOptions } from "../../../main/services/pi-provider-compatibility.js";
 import { withPiRemoteCatalog, isPiRemoteCatalogProvider } from "../../../main/services/pi-remote-catalog.js";
 import { piDefaultModelFor } from "../../../main/services/pi-default-models.js";
 import { fetchModelsDevCatalog, parseModelsDevCacheDocument } from "../../../main/services/models-dev-cache-core.js";
@@ -36,6 +37,9 @@ export async function createCliModelRuntime(agentDir: string) {
     if (isPiRemoteCatalogProvider(provider)) runtime.registerNativeProvider(withPiRemoteCatalog(provider));
   }
   runtime.registerNativeProvider(concentrateProvider());
+  const innerStreamSimple = runtime.streamSimple.bind(runtime);
+  runtime.streamSimple = (model, context, options) =>
+    innerStreamSimple(model, context, adaptGoogleXHighStreamOptions(model, options));
   return runtime;
 }
 
