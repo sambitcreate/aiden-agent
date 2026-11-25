@@ -647,6 +647,121 @@ test("a lead chat's message to a chat it started reaches its run before the queu
   assert.equal((app.appended[1]!.message as { fromLeadChat?: true }).fromLeadChat, undefined);
 });
 
+test("stop, chat deletion, or run end while awaiting leadChatInput prevents queueing and gates owed turns", async () => {
+  // 1. Cancelled while awaiting leadChatInput: committed, cancelled, never queued or owed.
+  for (const kind of ["stop", "delete"] as const) {
+    const app = fixture();
+    const owed = owedTurnStub("accept");
+    app.generation.owedTurn = owed.owedTurn;
+    let release!: () => void;
+    app.generation.leadChatInput = () => new Promise<void>((resolve) => { release = resolve; });
+    const pending = app.admission.admit({
+      streamId: "stream-1",
+      mode: "steer",
+      text: "From the lead",
+      fromLeadChat: true,
+    });
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    if (kind === "stop") app.generation.cancelRequested = true;
+    else app.deleting.add("chat-1");
+    release();
+    assert.deepEqual(
+      await pending,
+      { admitted: false, reason: "cancelled", committed: true, messageId: "message_admitted_1" },
+      kind,
+    );
+    assert.equal(app.appended.length, 1, kind);
+    assert.equal(app.steered.length, 0, kind);
+    assert.deepEqual(owed.registered, [], kind);
+    assert.equal(owed.holdsReleased(), 1, kind);
+  }
+
+  // 2. Run naturally ends (leaves active map) while awaiting leadChatInput: registered as owed turn.
+  {
+    const app = fixture();
+    const owed = owedTurnStub("accept");
+    app.generation.owedTurn = owed.owedTurn;
+    app.generation.leadChatInput = async () => {
+      app.active.delete("stream-1");
+    };
+    const result = await app.admission.admit({
+      streamId: "stream-1",
+      mode: "steer",
+      text: "From the lead",
+      fromLeadChat: true,
+    });
+    assert.deepEqual(result, {
+      admitted: true,
+      queue: "follow-up",
+      committed: true,
+      messageId: "message_admitted_1",
+    });
+    assert.equal(app.steered.length, 0);
+    assert.deepEqual(owed.registered, [{ messageId: "message_admitted_1" }]);
+    assert.equal(owed.holdsReleased(), 1);
+  }
+
+  // 3. Run leaves active AND is cancelled/deleting while awaiting leadChatInput: not owed.
+  for (const kind of ["stop", "delete"] as const) {
+    const app = fixture();
+    const owed = owedTurnStub("accept");
+    app.generation.owedTurn = owed.owedTurn;
+    app.generation.leadChatInput = async () => {
+      if (kind === "stop") app.generation.cancelRequested = true;
+      else app.deleting.add("chat-1");
+      app.active.delete("stream-1");
+    };
+    const result = await app.admission.admit({
+      streamId: "stream-1",
+      mode: "queue",
+      text: "From the lead",
+      fromLeadChat: true,
+    });
+    assert.deepEqual(
+      result,
+      { admitted: false, reason: "run_not_active", committed: true, messageId: "message_admitted_1" },
+      kind,
+    );
+    assert.equal(app.followedUp.length, 0, kind);
+    assert.deepEqual(owed.registered, [], kind);
+    assert.equal(owed.holdsReleased(), 1, kind);
+  }
+
+  // 4. A rejecting leadChatInput still queues while active, but still respects a concurrent stop.
+  {
+    const app = fixture();
+    app.generation.leadChatInput = async () => {
+      throw new Error("link unreadable");
+    };
+    const admitted = await app.admission.admit({
+      streamId: "stream-1",
+      mode: "steer",
+      text: "Still queued",
+      fromLeadChat: true,
+    });
+    assert.equal(admitted.admitted, true);
+    assert.equal(app.steered.length, 1);
+
+    app.generation.leadChatInput = async () => {
+      app.generation.cancelRequested = true;
+      throw new Error("link unreadable");
+    };
+    const cancelled = await app.admission.admit({
+      streamId: "stream-1",
+      mode: "steer",
+      text: "Stopped during rejection",
+      fromLeadChat: true,
+    });
+    assert.deepEqual(cancelled, {
+      admitted: false,
+      reason: "cancelled",
+      committed: true,
+      messageId: "message_admitted_1",
+    });
+    assert.equal(app.steered.length, 1);
+  }
+});
+
 test("a started chat's ending that quotes outside text reaches the run's taint before the queue does; a clean ending, the person's words and plain notices don't", async () => {
   const app = fixture();
   const order: string[] = [];
