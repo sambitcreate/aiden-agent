@@ -15,7 +15,11 @@ import {
   type GenerationThinkingLevel,
 } from "../shared/generation-thinking";
 import { GOOGLE_PROVIDER_ID } from "../shared/google-provider";
-import { GOOGLE_THINKING_LEVELS, normalizeGoogleThinkingLevel } from "../shared/google-thinking";
+import {
+  GOOGLE_THINKING_LEVELS,
+  googleThinkingLevelsForModel,
+  normalizeGoogleThinkingLevel,
+} from "../shared/google-thinking";
 import { normalizeProviderThinkingLevel } from "../shared/provider-thinking";
 import { OPENAI_CODEX_PROVIDER_ID, type Provider } from "./types";
 
@@ -46,7 +50,7 @@ export function composerThinkingLevels(
   if (provider.id === GOOGLE_PROVIDER_ID) {
     const supported = declared?.length
       ? GOOGLE_THINKING_LEVELS.filter((level) => declared.includes(level))
-      : [...GOOGLE_THINKING_LEVELS];
+      : googleThinkingLevelsForModel({ reasoning: true });
     const levels = supported.includes("off") ? supported : (["off", ...supported] as const);
     return { levels: [...levels], defaultLevel: normalizeGoogleThinkingLevel(levels, undefined) };
   }

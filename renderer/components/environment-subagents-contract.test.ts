@@ -177,7 +177,6 @@ test("floating Environment remains non-modal across every app-level interaction 
 
 test("Environment and Quick View have independent toolbar and command routes", () => {
   const environment = source("./environment-panel.tsx");
-  const pane = source("../main/chat-pane.tsx");
   const root = source("../main/root-view.tsx");
 
   assert.match(environment, /export function EnvironmentPanelToggle/u);
@@ -188,8 +187,8 @@ test("Environment and Quick View have independent toolbar and command routes", (
   assert.match(environment, /onClick=\{panel\.toggleQuickView\}/u);
   assert.match(environment, /data-quick-view-toggle/u);
   assert.match(environment, /<circle cx="7" cy="7" r="2\.5"/u);
-  // Folderless launcher availability is exercised in chat-shell-interactions.
-  assert.match(pane, /<QuickViewToggle disabled=\{!effectiveWorkspace\} \/>/u);
+  // Quick View's availability rides on the foldable action's `available`, which
+  // chat-top-bar-presence.test.tsx renders: unavailable tools leave the bar and the ⋯ menu.
   assert.match(root, /"environment\.toggle",[\s\S]*environmentPanel\.toggleTools\(\)/u);
   assert.match(root, /"quick-view\.toggle",[\s\S]*environmentPanel\.toggleQuickView\(\)/u);
 });

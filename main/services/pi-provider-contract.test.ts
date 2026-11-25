@@ -4,6 +4,9 @@ import { builtinModels, builtinProviders } from "@earendil-works/pi-ai/providers
 import { createInitialSystemMessage, normalizeContext } from "@earendil-works/pi-ai";
 import { Type } from "typebox";
 import { openAICompletionsApi } from "@earendil-works/pi-ai/api/openai-completions.lazy";
+import { codexThinkingLevelsForModel } from "../../renderer/shared/codex-thinking.js";
+import { piDefaultModelFor, PI_DEFAULT_MODEL_PER_PROVIDER } from "./pi-default-models.js";
+import { piModelMetadataFor } from "./pi-model-metadata.js";
 
 test("the pinned Pi release exposes native OpenAI Codex OAuth", async () => {
   const providers = builtinProviders();
@@ -45,9 +48,43 @@ test("the pinned Pi release exposes native OpenAI Codex OAuth", async () => {
 
   const codexModels = models.getModels("openai-codex");
   assert.ok(codexModels.some((model) => model.id === "gpt-6.1-sol"));
+  assert.ok(codexModels.some((model) => model.id === "gpt-6.2-sol"));
+  assert.ok(codexModels.some((model) => model.id === "gpt-6.2-astra"));
   assert.ok(codexModels.some((model) => model.id === "gpt-5.6-sol"));
   assert.ok(codexModels.every((model) => model.api === "openai-codex-responses"));
   assert.deepEqual(await models.getAvailable("openai-codex"), []);
+});
+
+test("every provider without a saved model starts on a model the pinned Pi catalog serves", () => {
+  const models = builtinModels();
+  for (const [providerId, modelId] of Object.entries(PI_DEFAULT_MODEL_PER_PROVIDER)) {
+    assert.ok(models.getProvider(providerId), `${providerId} is a pinned Pi provider`);
+    assert.ok(models.getModel(providerId, modelId), `${providerId}/${modelId} is in the pinned catalog`);
+  }
+  for (const providerId of ["openai", "azure", "openai-codex"]) {
+    const ids = models.getModels(providerId).map((model) => model.id);
+    assert.equal(piDefaultModelFor(providerId, ids), "gpt-6.2-sol", providerId);
+  }
+  assert.equal(piDefaultModelFor("custom:local", ["first", "second"]), "first");
+  assert.equal(piDefaultModelFor("openai", []), undefined);
+});
+
+test("GPT-6.2 Astra and Sol never offer thinking off on OpenAI, Azure or Codex", () => {
+  const models = builtinModels();
+  for (const modelId of ["gpt-6.2-sol", "gpt-6.2-astra"]) {
+    for (const providerId of ["openai", "azure"]) {
+      const model = models.getModel(providerId, modelId);
+      assert.ok(model, `${providerId}/${modelId}`);
+      const metadata = piModelMetadataFor(providerId, model);
+      assert.equal(metadata.thinkingCanDisable, false, `${providerId}/${modelId}`);
+      assert.ok(metadata.thinkingLevels?.length, `${providerId}/${modelId} offers thinking`);
+      assert.ok(!metadata.thinkingLevels?.includes("off"), `${providerId}/${modelId}`);
+    }
+    const codex = models.getModel("openai-codex", modelId);
+    assert.ok(codex, `openai-codex/${modelId}`);
+    const codexLevels: readonly string[] = codexThinkingLevelsForModel(codex);
+    assert.ok(codexLevels.length > 0 && !codexLevels.includes("off"), `openai-codex/${modelId}`);
+  }
 });
 
 test("pinned provider streams serialize transcript prompts for thinking and GPT Responses", async () => {

@@ -1,5 +1,8 @@
 package sbtbiswas.AidenOnTheGo.features.bots
 
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.jsonObject
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
@@ -17,7 +20,8 @@ class AidenBotHomeBehaviorTest {
         name: String,
         purpose: String = "",
         updated: Instant = t0,
-        sessionState: AidenBotSessionState? = null
+        sessionState: AidenBotSessionState? = null,
+        needsYou: Boolean = false
     ) = AidenBotSummary(
         id = id,
         name = name,
@@ -28,7 +32,8 @@ class AidenBotHomeBehaviorTest {
         paused = sessionState == AidenBotSessionState.PAUSED,
         createdAt = t0.minusSeconds(86_400),
         updatedAt = updated,
-        revision = "r1"
+        revision = "r1",
+        needsYou = needsYou
     )
 
     private fun chat(
@@ -129,6 +134,33 @@ class AidenBotHomeBehaviorTest {
             "Waiting for your OK on your computer",
             AidenBotHomeRow(scout, chat("c", "b", "old", state = AidenBotConversationActivityState.WAITING_FOR_APPROVAL)).preview
         )
+    }
+
+    @Test
+    fun aRunningBotTheMacSaysWaitsOnThePersonSaysSoInsteadOfLookingBusy() {
+        val waiting = bot("b", "Scout", sessionState = AidenBotSessionState.RUNNING, needsYou = true)
+        val running = AidenBotHomeRow(waiting, chat("c", "b", "Checking the build", state = AidenBotConversationActivityState.RUNNING))
+        assertEquals(AidenBotSessionCopy.WAITING_FOR_YOU, running.preview)
+        assertFalse(running.isWorking)
+        // An approval this phone can answer keeps its own, more useful line.
+        assertEquals(
+            "Needs your OK",
+            AidenBotHomeRow(waiting, chat("c", "b", "old", state = AidenBotConversationActivityState.WAITING_FOR_APPROVAL, canRespond = true)).preview
+        )
+        // Without the flag the same Bot still reads as busy.
+        assertTrue(AidenBotHomeRow(bot("b", "Scout", sessionState = AidenBotSessionState.RUNNING), null).isWorking)
+    }
+
+    @Test
+    fun needsYouDecodesOnlyAsABooleanAndIsNeverWrittenWhenFalse() {
+        val wire = AidenBotWireJson.json
+        val plain = wire.encodeToJsonElement(AidenBotSummary.serializer(), bot("b", "Scout")).jsonObject
+        assertFalse("needsYou" in plain)
+        assertFalse(wire.decodeFromJsonElement(AidenBotSummary.serializer(), plain).needsYou)
+        assertTrue(wire.decodeFromJsonElement(AidenBotSummary.serializer(), JsonObject(plain + ("needsYou" to JsonPrimitive(true)))).needsYou)
+        assertTrue(runCatching {
+            wire.decodeFromJsonElement(AidenBotSummary.serializer(), JsonObject(plain + ("needsYou" to JsonPrimitive("true"))))
+        }.isFailure)
     }
 
     @Test

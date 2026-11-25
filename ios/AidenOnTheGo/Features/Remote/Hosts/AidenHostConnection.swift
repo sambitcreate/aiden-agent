@@ -87,7 +87,7 @@ final class AidenHostConnection {
     /// How an attempt reaches the machine. A person waits on `interactive`, and
     /// its failure is theirs to see. `probe` is a background check: it gives up
     /// rather than waits, and it never touches the app-wide error.
-    enum ConnectRoute {
+    enum ConnectRoute: Equatable, Sendable {
         case interactive
         case probe
     }
@@ -104,23 +104,16 @@ final class AidenHostConnection {
         let client: AidenRemoteClient
     }
 
-    private struct ConnectInFlight {
+    private struct ConnectInFlightTask {
         let attempt: Int
-        let route: ConnectRoute
         let work: Task<Void, Never>
-    }
-
-    /// Where the machine stood before an attempt, so stopping that attempt
-    /// doesn't leave it saying "Connecting".
-    private struct SettledState {
-        let connectionState: AidenRemoteConnectionState
-        let connectionIssue: AidenConnectionIssue?
     }
 
     let instanceId: String
     private(set) var installation: AidenInstallation
-    private(set) var connectionState: AidenRemoteConnectionState = .connecting
-    private(set) var connectionIssue: AidenConnectionIssue?
+    private(set) var lifecycle: AidenHostConnectionLifecycle
+    var connectionState: AidenRemoteConnectionState { lifecycle.connectionState }
+    var connectionIssue: AidenConnectionIssue? { lifecycle.connectionIssue }
     private(set) var server: AidenServer?
     /// The machine's workspaces as this phone shows them: the confirmed list
     /// with this phone's unanswered Workspace Settings edits on top.
@@ -144,18 +137,18 @@ final class AidenHostConnection {
     /// it alone, so contexts survive a dropped network. Each arrival of the
     /// selection moves it, so A -> B -> A can't make an old context current
     /// again.
-    private(set) var generation: Int
+    var generation: Int { lifecycle.generation }
     /// The machine's own lease, which `isLive` compares. Only a re-pairing,
     /// `disconnect()`, or a revocation moves it. The selection never does, so
     /// owner work survives the selection leaving and coming back.
-    private(set) var hostGeneration: Int
+    var hostGeneration: Int { lifecycle.hostGeneration }
     /// Moves on every connect attempt, so a late answer from an earlier attempt
     /// is dropped.
-    private(set) var connectionGeneration: Int
-    private(set) var isRevoked = false
+    var connectionGeneration: Int { lifecycle.connectionGeneration }
+    var isRevoked: Bool { lifecycle.isRevoked }
     /// Revoked with its cached data still in place, because a view is showing
     /// it. `completeRevokedPurge(instanceId:)` ends this.
-    private(set) var isPurgePending = false
+    var isPurgePending: Bool { lifecycle.isPurgePending }
     @ObservationIgnored weak var delegate: (any AidenHostConnectionDelegate)?
 
     private let loadCredential: () throws -> String
@@ -163,8 +156,7 @@ final class AidenHostConnection {
     private let probeClientFactory: AidenRemoteCoordinator.ClientFactory
     private var cachedClient: CachedClient?
     private var cachedProbeClient: CachedClient?
-    private var connectInFlight: ConnectInFlight?
-    private var settledState: SettledState?
+    @ObservationIgnored private var connectInFlightTask: ConnectInFlightTask?
     /// Waits out a connect's `timeout`. A test replaces it to say when the
     /// deadline passes, rather than racing a real one.
     @ObservationIgnored var waitForDeadline: @MainActor (TimeInterval) async -> Void = { timeout in
@@ -187,27 +179,23 @@ final class AidenHostConnection {
         loadCredential = credential
         self.clientFactory = clientFactory
         self.probeClientFactory = probeClientFactory ?? clientFactory
-        self.generation = generation
-        self.hostGeneration = hostGeneration
-        self.connectionGeneration = connectionGeneration
+        self.lifecycle = AidenHostConnectionLifecycle(
+            generation: generation,
+            hostGeneration: hostGeneration,
+            connectionGeneration: connectionGeneration
+        )
     }
 
     /// `timeout` bounds the whole attempt. Past it, a machine that hasn't
     /// answered goes offline and whatever is still running stops.
     func connect(over route: ConnectRoute = .interactive, timeout: TimeInterval? = nil) async {
-        guard !isRevoked else { return }
-        connectionGeneration &+= 1
-        let attempt = connectionGeneration
-        if connectionState != .connecting {
-            settledState = SettledState(connectionState: connectionState, connectionIssue: connectionIssue)
-        }
-        connectionState = .connecting
-        connectionIssue = nil
-        if route == .interactive {
+        guard let started = lifecycle.beginConnect(over: route) else { return }
+        let attempt = started.attempt
+        if started.notifyWillConnect {
             delegate?.hostConnectionWillConnect(self)
         }
         let work = Task { await run(attempt: attempt, over: route) }
-        connectInFlight = ConnectInFlight(attempt: attempt, route: route, work: work)
+        connectInFlightTask = ConnectInFlightTask(attempt: attempt, work: work)
         let waitForDeadline = waitForDeadline
         let deadline = timeout.map { timeout in
             Task {
@@ -225,39 +213,25 @@ final class AidenHostConnection {
             work.cancel()
         }
         deadline?.cancel()
-        if connectInFlight?.attempt == attempt {
-            connectInFlight = nil
+        lifecycle.finishConnect(attempt: attempt)
+        if connectInFlightTask?.attempt == attempt {
+            connectInFlightTask = nil
         }
     }
 
     /// Offline, or checking again after being offline. Each probe passes through
     /// `.connecting`, and that isn't news of the machine coming back.
-    var isKnownOffline: Bool {
-        switch connectionState {
-        case .offline: true
-        case .connecting:
-            if case .offline = settledState?.connectionState { true } else { false }
-        default: false
-        }
-    }
+    var isKnownOffline: Bool { lifecycle.isKnownOffline }
 
     /// Connected, or checking again after being connected. A machine that
     /// hasn't answered since launch isn't known online, whatever its saved rows
     /// say.
-    var isKnownOnline: Bool {
-        switch connectionState {
-        case .connected: true
-        case .connecting: settledState?.connectionState == .connected
-        default: false
-        }
-    }
+    var isKnownOnline: Bool { lifecycle.isKnownOnline }
 
     /// True while the newest attempt is running. `connectionState` can't say:
     /// it starts at `.connecting`, and `disconnect()` returns it there, with
     /// nothing in flight either time.
-    var isConnectInFlight: Bool {
-        connectInFlight?.attempt == connectionGeneration
-    }
+    var isConnectInFlight: Bool { lifecycle.isConnectInFlight }
 
     /// Stops the attempt in flight and puts the machine back where it stood
     /// before it. Only `connectionGeneration` moves, so every live context stays
@@ -269,34 +243,25 @@ final class AidenHostConnection {
     /// `.probe`, so an interactive connect that took over from its probe isn't
     /// cut short by the app leaving the foreground.
     func cancelConnect(over route: ConnectRoute? = nil) {
-        guard isConnectInFlight else { return }
-        if let route, connectInFlight?.route != route { return }
-        connectInFlight?.work.cancel()
-        connectInFlight = nil
-        connectionGeneration &+= 1
-        if connectionState == .connecting, let settledState {
-            connectionState = settledState.connectionState
-            connectionIssue = settledState.connectionIssue
+        guard let cancelled = lifecycle.cancelConnect(over: route) else { return }
+        if connectInFlightTask?.attempt == cancelled.cancelledAttempt {
+            connectInFlightTask?.work.cancel()
+            connectInFlightTask = nil
         }
     }
 
     /// Ends this connection's lease: contexts and answers from before this
     /// call go stale. The state returns to where a new connection starts.
     func disconnect() {
-        generation &+= 1
-        hostGeneration &+= 1
-        connectionGeneration &+= 1
+        lifecycle.disconnect()
         cachedClient = nil
         cachedProbeClient = nil
-        settledState = nil
         server = nil
         workspaceEdits = [:]
         supersededWorkspaceRevisions = [:]
         hiddenWorkspaceIds = []
         confirmedWorkspaces = []
         workspaces = []
-        connectionIssue = nil
-        connectionState = .connecting
     }
 
     func requestContext(
@@ -355,7 +320,7 @@ final class AidenHostConnection {
     /// dropped.
     func handlePollError(_ error: Error, sinceConnect generation: Int) async -> Bool {
         let isRevocation = (error as? AidenRemoteClientError)?.isCredentialRevoked == true
-        guard isRevocation || (connectionGeneration == generation && !isConnectInFlight) else { return false }
+        guard lifecycle.acceptsPollError(sinceConnect: generation, isRevocation: isRevocation) else { return false }
         await record(error, over: .probe)
         return true
     }
@@ -574,15 +539,13 @@ final class AidenHostConnection {
     }
 
     func adopt(connectionState: AidenRemoteConnectionState) {
-        self.connectionState = connectionState
-        settledState = nil
-        if connectionState == .needsPairing {
+        if lifecycle.adopt(connectionState: connectionState) {
             delegate?.hostConnectionNeedsPairing(self)
         }
     }
 
     func adopt(connectionIssue: AidenConnectionIssue?) {
-        self.connectionIssue = connectionIssue
+        lifecycle.adopt(connectionIssue: connectionIssue)
     }
 
     func adopt(server: AidenServer?) {
@@ -613,38 +576,38 @@ final class AidenHostConnection {
     }
 
     func advanceGeneration() {
-        generation &+= 1
+        lifecycle.advanceGeneration()
     }
 
     /// A new pairing replaced the one earlier contexts were issued under.
     func advanceHostGeneration() {
-        hostGeneration &+= 1
+        lifecycle.advanceHostGeneration()
         dropWorkspaceEdits()
     }
 
     func advanceConnectionGeneration() {
-        connectionGeneration &+= 1
+        lifecycle.advanceConnectionGeneration()
     }
 
     /// A revoked connection stays revoked: its credential is gone for good, so
     /// it issues no context or client and never connects again.
     func markRevoked() {
-        isRevoked = true
-        hostGeneration &+= 1
+        lifecycle.markRevoked()
         dropWorkspaceEdits()
     }
 
     /// Revoked, with the purge held back until the views showing this machine
     /// have gone. Nothing here reconnects it, so it stops at `.needsPairing`.
     func markRevokedWithPurgePending() {
-        markRevoked()
-        isPurgePending = true
-        connectionIssue = nil
-        adopt(connectionState: .needsPairing)
+        let firstRevoke = lifecycle.markRevokedWithPurgePending()
+        dropWorkspaceEdits()
+        if firstRevoke {
+            delegate?.hostConnectionNeedsPairing(self)
+        }
     }
 
     func purgeStarted() {
-        isPurgePending = false
+        lifecycle.purgeStarted()
     }
 
     var isSelected: Bool {
@@ -670,7 +633,7 @@ final class AidenHostConnection {
     /// Every attempt lands on this machine's own connection, selected or not.
     /// The selection leaving stops a running attempt through `cancelConnect()`.
     private func isCurrent(attempt: Int) -> Bool {
-        connectionGeneration == attempt
+        lifecycle.isCurrent(attempt: attempt)
     }
 
     private func run(attempt: Int, over route: ConnectRoute) async {
@@ -688,8 +651,7 @@ final class AidenHostConnection {
     }
 
     private func expire(attempt: Int, over route: ConnectRoute) async {
-        guard isCurrent(attempt: attempt), connectionState == .connecting else { return }
-        connectionGeneration &+= 1
+        guard lifecycle.expireConnect(attempt: attempt) else { return }
         await record(URLError(.timedOut), over: route)
     }
 
@@ -702,21 +664,24 @@ final class AidenHostConnection {
                     await delegate.hostConnectionWasRevokedInBackground(self)
                 }
             } else {
-                markRevoked()
-                disconnect()
-                connectionState = .needsPairing
+                lifecycle.revokeStandalone()
+                cachedClient = nil
+                cachedProbeClient = nil
+                server = nil
+                workspaces = []
             }
             return
         }
-        if let clientError = error as? AidenRemoteClientError,
-           case .server = clientError, connectionState != .connecting {
-            connectionIssue = nil
-            connectionState = .connected
+        let isServerError: Bool
+        if let clientError = error as? AidenRemoteClientError, case .server = clientError {
+            isServerError = true
         } else {
-            let issue = AidenConnectionIssue.classify(error)
-            connectionIssue = issue
-            connectionState = .offline(message: issue.message)
+            isServerError = false
         }
+        guard lifecycle.recordNonRevocationFailure(
+            isServerError: isServerError,
+            issue: AidenConnectionIssue.classify(error)
+        ) else { return }
         if route == .interactive {
             delegate?.hostConnection(self, didFailWith: error)
         }
@@ -757,10 +722,9 @@ final class AidenHostConnection {
         }
         guard isCurrent(attempt: attempt) else { return }
         try delegate?.hostConnection(self, didReceive: server)
+        guard lifecycle.markConnected(attempt: attempt) else { return }
         self.server = server
         applyWorkspaceSnapshot(workspaces)
-        connectionIssue = nil
-        connectionState = .connected
         await refreshDeviceIdentity(using: client, currentName: server.deviceName)
         await negotiateProgressCapabilitiesIfNeeded(server: server, client: client, attempt: attempt, over: route)
         for capabilities in Self.capabilitiesAskedForAlone {
@@ -802,6 +766,7 @@ final class AidenHostConnection {
         [.chatNewWorktree],
         [.chatContinueInNewChat],
         [.streamSnapshotReasons],
+        [.botNeedsYou],
         [.botWatches],
         [.botOpenWork],
         [.botRoutineModels],

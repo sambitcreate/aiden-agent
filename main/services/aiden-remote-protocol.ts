@@ -393,7 +393,16 @@ export const AIDEN_REMOTE_BOT_FEED_PREVIEW_CONTRACT_REVISION = 66 as const;
  * older than this revision answers both with 404, and the client says so.
  */
 export const AIDEN_REMOTE_BOT_SESSION_PAGES_CONTRACT_REVISION = 67 as const;
-export const AIDEN_REMOTE_CONTRACT_REVISION = AIDEN_REMOTE_BOT_SESSION_PAGES_CONTRACT_REVISION;
+/**
+ * Contract revision 68 (provisional; re-claim the next free number at merge):
+ * the `bot:needs-you` opt-in. A device holding it reads `needsYou: true` on a
+ * `GET /bots` summary while an approval, a question, a hand-off or an open
+ * issue waits on the person, the same signal the host feed's Bot rows carry
+ * (revision 52). Devices without it keep the summary shape they know, since
+ * Android's Bot decoder refuses unknown keys.
+ */
+export const AIDEN_REMOTE_BOT_NEEDS_YOU_CONTRACT_REVISION = 68 as const;
+export const AIDEN_REMOTE_CONTRACT_REVISION = AIDEN_REMOTE_BOT_NEEDS_YOU_CONTRACT_REVISION;
 export const AIDEN_REMOTE_BASE_PATH = "/api/aiden/v1" as const;
 export const AIDEN_REMOTE_MAX_SSE_FRAME_BYTES = 1_048_576;
 export const AIDEN_REMOTE_MAX_JSON_RESPONSE_BYTES = 1_048_576;
@@ -622,6 +631,12 @@ export const AIDEN_REMOTE_BOT_WATCH_CAPABILITIES = ["bot:watches"] as const;
 export const AIDEN_REMOTE_BOT_OPEN_WORK_CAPABILITIES = ["bot:open-work"] as const;
 export const AIDEN_REMOTE_BOT_ROUTINE_MODEL_CAPABILITIES = ["bot:routine-models"] as const;
 export const AIDEN_REMOTE_BOT_PEER_CAPABILITIES = ["bot:peers"] as const;
+/**
+ * Contract revision 68: a device holding `bot:needs-you` reads `needsYou: true`
+ * on `GET /bots` summaries for a Bot waiting on the person. It grants no
+ * authority; any device type may hold it.
+ */
+export const AIDEN_REMOTE_BOT_NEEDS_YOU_CAPABILITIES = ["bot:needs-you"] as const;
 
 export type AidenRemoteBotIssueCapability = (typeof AIDEN_REMOTE_BOT_ISSUE_CAPABILITIES)[number];
 
@@ -651,6 +666,7 @@ export const AIDEN_REMOTE_BOT_OPT_IN_CAPABILITIES = [
   ...AIDEN_REMOTE_BOT_OPEN_WORK_CAPABILITIES,
   ...AIDEN_REMOTE_BOT_ROUTINE_MODEL_CAPABILITIES,
   ...AIDEN_REMOTE_BOT_PEER_CAPABILITIES,
+  ...AIDEN_REMOTE_BOT_NEEDS_YOU_CAPABILITIES,
   ...AIDEN_REMOTE_BOT_SETTINGS_CHANGE_CAPABILITIES,
   ...AIDEN_REMOTE_BOT_SUGGESTION_CAPABILITIES,
   ...AIDEN_REMOTE_BOT_TEMPLATE_CAPABILITIES,
@@ -764,6 +780,7 @@ export const AIDEN_REMOTE_NEGOTIABLE_CAPABILITIES = [
   ...AIDEN_REMOTE_BOT_OPEN_WORK_CAPABILITIES,
   ...AIDEN_REMOTE_BOT_ROUTINE_MODEL_CAPABILITIES,
   ...AIDEN_REMOTE_BOT_PEER_CAPABILITIES,
+  ...AIDEN_REMOTE_BOT_NEEDS_YOU_CAPABILITIES,
   ...AIDEN_REMOTE_SCHEDULE_CARD_CAPABILITIES,
   ...AIDEN_REMOTE_CHAT_JOB_CAPABILITIES,
   ...AIDEN_REMOTE_RAW_UPLOAD_CAPABILITIES,
@@ -800,6 +817,7 @@ export const AIDEN_REMOTE_CAPABILITIES = [
   ...AIDEN_REMOTE_BOT_OPEN_WORK_CAPABILITIES,
   ...AIDEN_REMOTE_BOT_ROUTINE_MODEL_CAPABILITIES,
   ...AIDEN_REMOTE_BOT_PEER_CAPABILITIES,
+  ...AIDEN_REMOTE_BOT_NEEDS_YOU_CAPABILITIES,
   ...AIDEN_REMOTE_SCHEDULE_CARD_CAPABILITIES,
   ...AIDEN_REMOTE_CHAT_JOB_CAPABILITIES,
   ...AIDEN_REMOTE_RAW_UPLOAD_CAPABILITIES,
@@ -1436,6 +1454,12 @@ export type AidenRemoteBotSummary = AidenRemoteBotSummaryBase & {
    * the Bot's card list holds. Sent only while it is above zero.
    */
   issueCount?: number;
+  /**
+   * Contract revision 68, only on `GET /bots` for `bot:needs-you` devices: an
+   * approval, a question, a hand-off or an open issue waits on the person.
+   * Sent only as `true`.
+   */
+  needsYou?: true;
 };
 
 export interface AidenRemoteBotCustomSelection {
@@ -3439,7 +3463,14 @@ export function parseAidenRemoteBotSummary(value: unknown): AidenRemoteBotSummar
   const issueCount = hasOwn(record, "issueCount")
     ? boundedIntegerValue(record.issueCount, "Bot issueCount", 0, BOT_ISSUE_LIMITS.openPerBot)
     : undefined;
-  const withIssues = issueCount === undefined ? summary : { ...summary, issueCount };
+  if (hasOwn(record, "needsYou") && record.needsYou !== true) {
+    throw new Error("Bot summary needsYou must be true when present.");
+  }
+  const withIssues = {
+    ...summary,
+    ...(issueCount === undefined ? {} : { issueCount }),
+    ...(record.needsYou === true ? { needsYou: true as const } : {}),
+  };
   if (!hasOwn(record, "paused")) {
     assertBotPausedAgreesWithState(summary.sessionState, false, "Bot summary");
     return withIssues;

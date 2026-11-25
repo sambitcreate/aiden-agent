@@ -1144,3 +1144,104 @@ test("assistant and design-project chats answer every chat tool exactly as an un
     await fixture.close();
   }
 });
+
+test("AidenMcpToolRunner releases write authorization on unexpected errors, stops finished runs cleanly, and ends aborted waits", async () => {
+  let releases = 0;
+  const acquired: Array<{ appId: string; tracksMutationDrain: boolean }> = [];
+  const app = {
+    id: "app-1",
+    name: "Codex",
+    capabilities: new Set(["server:read", "chat:read", "chat:write"] as const),
+  };
+  let statusState: "running" | "done" = "running";
+  let watchDetached = false;
+  const runner = new AidenMcpToolRunner({
+    appVersion: "0.69.0",
+    hostName: async () => "Studio Mac",
+    acquireAuthorization: (appId, tracksMutationDrain) => {
+      acquired.push({ appId, tracksMutationDrain });
+      return () => {
+        releases += 1;
+      };
+    },
+    services: async () => ({
+      workspaces: {
+        list: async () => ({ workspaces: WORKSPACES }),
+      },
+      chats: {
+        listSummaries: async () => ({ summaries: [] }),
+        messagesWindow: async () => ({
+          chatId: "chat-1",
+          workspaceId: "ws-1",
+          title: "Test",
+          revision: "rev-1",
+          createdAt: "2026-11-24T00:00:00.000Z",
+          updatedAt: "2026-11-24T00:00:00.000Z",
+          messages: [],
+          hasOlder: false,
+        }),
+        classify: async () => ({ botId: undefined, workspaceId: "ws-1" } as never),
+        isListedChat: async () => true,
+        hasRecordedRequest: () => false,
+        runMutation: async (_appId, _chatId, _c, fn) => fn(),
+        create: async () => {
+          throw new Error("raw internal secret path /tmp/private");
+        },
+        startTurn: async () => ({
+          turnId: "t1",
+          streamId: "run-1",
+          status: "accepted" as const,
+          message: { id: "m1", role: "user" as const, text: "Hello", createdAt: "2026-11-24T00:00:00.000Z" },
+        }),
+      },
+      streams: {
+        status: () => ({ state: statusState, chatId: "chat-1", streamId: "run-1" } as never),
+        pendingApproval: () => null,
+        pendingQuestion: () => null,
+        cancel: async () => ({ ok: true } as never),
+        watch: () => {
+          return () => {
+            watchDetached = true;
+          };
+        },
+      },
+    }),
+  });
+
+  // 1. Unexpected throw inside write handler releases authorization and redacts raw error message.
+  const failedStart = await runner.call(
+    app,
+    "aiden_chat_start",
+    { clientRequestId: "req-boom-0001", workspaceId: "workspace-1", text: "Hello" },
+    new AbortController().signal,
+  );
+  assert.equal(failedStart.isError, true);
+  assert.equal(refusal(failedStart), "Aiden could not complete this request.");
+  assert.equal(releases, 1);
+  assert.deepEqual(acquired[0], { appId: "app-1", tracksMutationDrain: true });
+
+  // 2. Stopping an already-finished run reports stopped: false without invoking cancel().
+  statusState = "done";
+  const stoppedFinished = structured(
+    await runner.call(app, "aiden_chat_stop", { chatId: "chat-1", runId: "run-1" }, new AbortController().signal),
+  );
+  assert.deepEqual(stoppedFinished, { chatId: "chat-1", runId: "run-1", stopped: false, state: "done" });
+  assert.equal(releases, 2);
+
+  // 3. Aborting the request signal during aiden_chat_wait ends the wait cleanly, detaches the watcher, and releases authorization.
+  statusState = "running";
+  const waitAbort = new AbortController();
+  const waiting = runner.call(
+    app,
+    "aiden_chat_wait",
+    { chatId: "chat-1", runId: "run-1", timeoutSeconds: 10 },
+    waitAbort.signal,
+  );
+  await new Promise((resolve) => setTimeout(resolve, 10));
+  waitAbort.abort();
+  const waitResult = await waiting;
+  assert.equal(waitResult.isError, true);
+  assert.equal(refusal(waitResult), "The wait ended because the request closed.");
+  assert.equal(watchDetached, true);
+  assert.equal(releases, 3);
+});

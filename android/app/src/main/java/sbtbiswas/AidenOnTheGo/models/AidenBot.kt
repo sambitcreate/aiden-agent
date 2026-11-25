@@ -298,7 +298,15 @@ data class AidenBotSummary(
     val issueCount: Int? = null,
     @Serializable(with = InstantIso8601Serializer::class) val createdAt: Instant,
     @Serializable(with = InstantIso8601Serializer::class) val updatedAt: Instant,
-    val revision: String
+    val revision: String,
+    /**
+     * Revision 68 (`bot:needs-you` devices only, on `GET /bots`): an approval, a question, a
+     * hand-off or an open issue waits on the person. The Mac sends it only as `true`; a missing
+     * flag reads as false and is never written back.
+     */
+    @OptIn(ExperimentalSerializationApi::class)
+    @EncodeDefault(EncodeDefault.Mode.NEVER)
+    @Serializable(with = AidenStrictBooleanSerializer::class) val needsYou: Boolean = false
 ) {
     init {
         AidenBotWire.validateIdentifier(id, "id", AidenRemoteProtocol.MAX_BOT_IDENTIFIER_LENGTH)

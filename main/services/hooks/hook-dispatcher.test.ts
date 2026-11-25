@@ -148,3 +148,55 @@ test("the turn's own signal stops waited hooks but not background ones", async (
   await dispatcher.whenBackgroundIdle();
   assert.equal(dispatcher.lastRun("bg")?.result, "ok");
 });
+
+test("an aborted idempotent dispatch does not poison replay, and an evicted in-flight abort cannot delete a newer cached entry", async () => {
+  let runs = 0;
+  const releases: Array<(result: HookRawRun) => void> = [];
+  const dispatcher = createHookDispatcher({
+    source: source(() => [hook("guard", {}, "PreToolUse")]),
+    run: (_definition, _payload, runContext) =>
+      new Promise((resolve) => {
+        runs += 1;
+        releases.push(resolve);
+        runContext.signal?.addEventListener("abort", () => resolve(raw({ aborted: true, exitCode: null })), { once: true });
+      }),
+  });
+
+  // 1. First dispatch starts with key "k1", then cache is cleared while it is still running.
+  const firstSignal = new AbortController();
+  const first = dispatcher.dispatch("PreToolUse", preTool, context({ idempotencyKey: "k1", signal: firstSignal.signal }));
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(runs, 1);
+
+  dispatcher.clearIdempotencyCache();
+
+  // 2. Second dispatch with the same key starts and completes cleanly.
+  const second = dispatcher.dispatch("PreToolUse", preTool, context({ idempotencyKey: "k1" }));
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(runs, 2);
+  releases[1]!(raw({ stdout: JSON.stringify({ systemMessage: "fresh" }) }));
+  const secondOutcome = await second;
+  assert.deepEqual(secondOutcome.ranHooks, ["guard"]);
+
+  // 3. Now the stale evicted first dispatch aborts; it must NOT delete the second dispatch's cached outcome.
+  firstSignal.abort();
+  await first;
+
+  const third = await dispatcher.dispatch("PreToolUse", preTool, context({ idempotencyKey: "k1" }));
+  assert.deepEqual(third, secondOutcome);
+  assert.equal(runs, 2, "replay after evicted first abort must hit the second cached result");
+
+  // 4. An ordinary aborted dispatch (without replacement) evicts itself so a later retry runs fresh.
+  const abortOnly = new AbortController();
+  const fourth = dispatcher.dispatch("PreToolUse", preTool, context({ idempotencyKey: "k2", signal: abortOnly.signal }));
+  await new Promise((resolve) => setImmediate(resolve));
+  abortOnly.abort();
+  await fourth;
+
+  const fifth = dispatcher.dispatch("PreToolUse", preTool, context({ idempotencyKey: "k2" }));
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(runs, 4);
+  releases[3]!(raw());
+  const fifthOutcome = await fifth;
+  assert.deepEqual(fifthOutcome.ranHooks, ["guard"]);
+});
