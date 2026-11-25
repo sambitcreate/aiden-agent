@@ -72,6 +72,13 @@ final class AidenDrawerPinsStore {
         save()
     }
 
+    /// Forgets a pin whose Bot or workspace was deleted.
+    func remove(_ pin: AidenDrawerPin) {
+        guard let index = pins.firstIndex(of: pin) else { return }
+        pins.remove(at: index)
+        save()
+    }
+
     /// Forgets every pin on a machine that was unpaired.
     func purge(instanceID: String) {
         let kept = pins.filter { $0.id.instanceId != instanceID }

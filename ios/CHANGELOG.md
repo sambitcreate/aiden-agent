@@ -6,6 +6,8 @@
   - The tabs are Chats, Bots, Workspaces and Inbox, and the app opens on Chats, a list of every chat across your computers. Search moved into the drawer.
   - The menu button at the top of each list, or a swipe in from the screen's leading edge at a list, opens a drawer with search, pinned Bots and workspaces, recent chats, Usage, Computers and Settings. A pinned Bot shows its avatar and a dot when it needs you.
   - The drawer stays open while chats update in the background and closes when you pick something, tap outside it, or press Escape; focus returns to the menu button.
+  - While the drawer is open, VoiceOver reads only the drawer. The swipe that opens it starts at the very edge of the screen, so a row's own swipe just inside the edge still reaches the row, and it doesn't open under a sheet.
+  - Search shows a placeholder until the query you typed has answered, never "No results" or the previous query's hits. Dragging the results puts the keyboard away. Deleting a Bot also removes its drawer pin.
   - Reopening the drawer keeps your last search results on screen and refreshes them quietly.
   - Chats and the drawer stay as current as the Inbox while they are on screen.
   - Show all chats keeps the chat that is open beside the list on an iPad or an unfolded iPhone Duo.

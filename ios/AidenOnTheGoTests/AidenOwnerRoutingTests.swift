@@ -544,9 +544,18 @@ final class AidenOwnerRoutingTests: XCTestCase {
     func testABotsDeleteGoesToItsOwnMachine() async throws {
         responder.reply(instanceId: "laptop", method: "DELETE", path: "/bots/bot_scout", status: 204, json: Data())
         XCTAssertTrue(AidenBotDeletion.isAvailable(coordinator: coordinator, machine: "laptop"))
+        let pins = AidenDrawerPinsStore.shared
+        let laptop = try coordinator.ownerContext(for: "laptop")
+        let studio = try coordinator.ownerContext(for: "studio")
+        let deleted = AidenDrawerPin(kind: .bot, id: AidenHostObjectID(instanceId: "laptop", deviceId: laptop.deviceId, objectId: "bot_scout"))
+        let sameIDElsewhere = AidenDrawerPin(kind: .bot, id: AidenHostObjectID(instanceId: "studio", deviceId: studio.deviceId, objectId: "bot_scout"))
+        for pin in [deleted, sameIDElsewhere] where !pins.isPinned(pin) { pins.toggle(pin) }
+        defer { pins.purge(instanceID: "laptop"); pins.purge(instanceID: "studio") }
 
         try await AidenBotDeletion.deleteListed(botID: "bot_scout", coordinator: coordinator, machine: "laptop")
 
+        XCTAssertFalse(pins.isPinned(deleted), "A deleted Bot kept its drawer pin")
+        XCTAssertTrue(pins.isPinned(sameIDElsewhere), "Another machine's Bot lost its pin")
         XCTAssertTrue(requests("laptop").contains("DELETE /bots/bot_scout"))
         XCTAssertFalse(requests("studio").contains { $0.hasPrefix("DELETE /bots") || $0 == "GET /bots/bot_scout" })
         XCTAssertEqual(coordinator.defaultInstanceId, "studio")

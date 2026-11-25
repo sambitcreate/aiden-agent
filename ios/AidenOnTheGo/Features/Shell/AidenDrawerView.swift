@@ -322,13 +322,33 @@ private struct AidenDrawerIconButtonStyle: ButtonStyle {
 /// Lays the drawer over the content from the leading edge, with a dimmed
 /// scrim behind it, at every width. The scrim, a swipe toward the edge, or
 /// Escape closes it. Reduce Motion fades it in place of the slide.
+///
+/// The shell presents it as a clear full-screen cover with no animation of
+/// its own, so it slides in when it appears and slides out before it asks to
+/// be closed (`onClose`).
 struct AidenDrawerOverlay<Drawer: View>: View {
-    let isOpen: Bool
     let onClose: () -> Void
-    @ViewBuilder let drawer: () -> Drawer
+    /// Gets the overlay's own close, which slides the drawer out first.
+    @ViewBuilder let drawer: (_ close: @escaping () -> Void) -> Drawer
 
     @Environment(\.aidenReduceMotion) private var reduceMotion
     @Environment(\.aidenPalette) private var palette
+    @State private var isOpen = false
+    @State private var isClosing = false
+
+    private var motion: Animation {
+        reduceMotion ? .easeInOut(duration: 0.2) : .smooth(duration: 0.3)
+    }
+
+    private func close() {
+        guard !isClosing else { return }
+        isClosing = true
+        withAnimation(motion) {
+            isOpen = false
+        } completion: {
+            onClose()
+        }
+    }
 
     static func width(in container: CGFloat) -> CGFloat {
         min(360, (container * 0.85).rounded(.down))
@@ -341,16 +361,16 @@ struct AidenDrawerOverlay<Drawer: View>: View {
                     palette.scrim
                         .ignoresSafeArea()
                         .contentShape(Rectangle())
-                        .onTapGesture(perform: onClose)
+                        .onTapGesture(perform: close)
                         .accessibilityHidden(true)
                         .transition(.opacity)
-                    drawer()
+                    drawer(close)
                         .frame(width: Self.width(in: proxy.size.width + proxy.safeAreaInsets.leading))
                         .frame(maxHeight: .infinity)
                         .simultaneousGesture(
                             DragGesture(minimumDistance: 20).onEnded { value in
                                 let dx = value.translation.width
-                                if dx < -60, abs(dx) > abs(value.translation.height) { onClose() }
+                                if dx < -60, abs(dx) > abs(value.translation.height) { close() }
                             }
                         )
                         .transition(reduceMotion ? .opacity : .move(edge: .leading))
@@ -359,7 +379,9 @@ struct AidenDrawerOverlay<Drawer: View>: View {
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .leading)
         }
         .allowsHitTesting(isOpen)
-        .animation(reduceMotion ? .easeInOut(duration: 0.2) : .smooth(duration: 0.3), value: isOpen)
+        .onAppear {
+            withAnimation(motion) { isOpen = true }
+        }
     }
 }
 
@@ -379,6 +401,7 @@ struct AidenDrawerEdgeSwipe: UIGestureRecognizerRepresentable {
         recognizer.edges = layoutDirection == .rightToLeft ? .right : .left
         recognizer.delegate = context.coordinator
         context.coordinator.isEnabled = isEnabled
+        context.coordinator.isRightToLeft = layoutDirection == .rightToLeft
         return recognizer
     }
 
@@ -386,6 +409,18 @@ struct AidenDrawerEdgeSwipe: UIGestureRecognizerRepresentable {
         // The layout direction can change while the shell is alive.
         recognizer.edges = layoutDirection == .rightToLeft ? .right : .left
         context.coordinator.isEnabled = isEnabled
+        context.coordinator.isRightToLeft = layoutDirection == .rightToLeft
+    }
+
+    /// How far in from the leading screen edge a touch may begin and still
+    /// open the drawer. A swipe that begins further in belongs to what's under
+    /// it, such as a row's leading swipe actions, whatever its speed.
+    static let edgeBand: CGFloat = 10
+
+    /// Whether a touch at `x` in a window `width` wide begins in the band.
+    static func beginsInEdgeBand(x: CGFloat, width: CGFloat, rightToLeft: Bool) -> Bool {
+        let fromEdge = rightToLeft ? width - x : x
+        return fromEdge >= 0 && fromEdge <= edgeBand
     }
 
     func handleUIGestureRecognizerAction(_ recognizer: UIScreenEdgePanGestureRecognizer, context: Context) {
@@ -399,9 +434,20 @@ struct AidenDrawerEdgeSwipe: UIGestureRecognizerRepresentable {
     @MainActor
     final class Coordinator: NSObject, UIGestureRecognizerDelegate {
         var isEnabled = false
+        var isRightToLeft = false
+        /// Where the touch began, in its window.
+        private var start: (x: CGFloat, width: CGFloat)?
+
+        func gestureRecognizer(_ gestureRecognizer: UIGestureRecognizer, shouldReceive touch: UITouch) -> Bool {
+            if let window = touch.window {
+                start = (touch.location(in: window).x, window.bounds.width)
+            }
+            return true
+        }
 
         func gestureRecognizerShouldBegin(_ gestureRecognizer: UIGestureRecognizer) -> Bool {
-            isEnabled
+            guard isEnabled, let start else { return false }
+            return AidenDrawerEdgeSwipe.beginsInEdgeBand(x: start.x, width: start.width, rightToLeft: isRightToLeft)
         }
     }
 }

@@ -90,13 +90,16 @@ final class AidenShellUITests: XCTestCase {
             XCTAssertTrue(app.staticTexts[heading].firstMatch.exists, "No \(heading) in the drawer")
         }
         XCTAssertTrue(drawerRow("Computers", in: app).exists, "No Computers in the drawer")
+        // The drawer is modal: what's under it is out of reach, to touch and to VoiceOver.
+        XCTAssertFalse(app.navigationBars.buttons["Open menu"].exists, "The bar under the drawer stayed reachable")
+        XCTAssertFalse(app.tabBars.buttons["Inbox"].exists, "The tab bar under the drawer stayed reachable")
         AidenStateMatrix.closeDrawer(in: app)
-        XCTAssertFalse(app.buttons["Close menu"].exists, "Close menu left the drawer up")
+        XCTAssertTrue(app.buttons["Close menu"].waitForNonExistence(timeout: 5), "Close menu left the drawer up")
 
         openDrawer(in: app)
         drawerRow("Scheduled tasks", in: app).tap()
         XCTAssertTrue(app.navigationBars["Scheduled tasks"].waitForExistence(timeout: 10), "Scheduled tasks did not open")
-        XCTAssertFalse(app.buttons["Close menu"].exists, "Opening a page left the drawer up")
+        XCTAssertTrue(app.buttons["Close menu"].waitForNonExistence(timeout: 5), "Opening a page left the drawer up")
         goBack(in: app)
         XCTAssertTrue(app.navigationBars["Chats"].waitForExistence(timeout: 10), "Back did not return to Chats")
         app.terminate()
@@ -172,9 +175,9 @@ final class AidenShellUITests: XCTestCase {
         app.terminate()
     }
 
-    /// The drawer's swipe leaves the rest of the leading edge to what's under
-    /// it: a row's own leading swipe, started just inside the row, offers Mark
-    /// read, and a tap at the row's leading edge opens the chat.
+    /// The drawer's swipe claims only a thin strip at the leading edge and
+    /// leaves the rest to what's under it: a row's own leading swipe, started
+    /// clear of that strip, offers Mark read, and a tap there opens the chat.
     func testARowsLeadingSwipeAndATapAtItsEdgeStillReachTheRow() {
         let app = AidenStateMatrix.launch(scenario: .busy)
         XCTAssertTrue(openInbox(in: app).waitForExistence(timeout: 10), "No chat rows in the inbox")
@@ -189,31 +192,40 @@ final class AidenShellUITests: XCTestCase {
         let thisRowUnread = app.buttons.matching(
             NSPredicate(format: "label BEGINSWITH %@ AND label ENDSWITH %@", title, "Unread")
         ).firstMatch
+        let rollback = app.descendants(matching: .any)
+            .matching(NSPredicate(format: "label CONTAINS %@", "mark that chat read")).firstMatch
         // Held as a frame: once read, the row no longer matches the query.
         let row = unread.frame
-        // Both start a few points in from the screen's edge, inside the strip
-        // a screen-edge overlay would claim, rather than from the row's inset.
-        let edge = app.frame.minX + 6
+        // Well clear of the drawer's strip at the screen's edge, and inside the row.
+        let edge = max(app.frame.minX + 24, row.minX + 8)
         let origin = app.coordinate(withNormalizedOffset: .zero)
         let start = origin.withOffset(CGVector(dx: edge, dy: row.midY))
-        start.press(forDuration: 0.05, thenDragTo: start.withOffset(CGVector(dx: 140, dy: 0)))
+        // Far enough to reveal the action, short of a full swipe that would act on its own.
+        start.press(
+            forDuration: 0.05,
+            thenDragTo: start.withOffset(CGVector(dx: min(90, row.width * 0.3), dy: 0)),
+            withVelocity: .slow,
+            thenHoldForDuration: 0.2
+        )
         let markRead = app.buttons["Mark read"]
         XCTAssertTrue(markRead.waitForExistence(timeout: 5), "The row's leading swipe offered no Mark read")
         XCTAssertFalse(app.buttons["Close menu"].exists, "The row's swipe opened the drawer")
+        XCTAssertTrue(thisRowUnread.exists, "The swipe itself read \(title), a full swipe")
         // A tap while the action is still sliding out can land beside it.
         let settled = XCTNSPredicateExpectation(predicate: NSPredicate(format: "isHittable == true"), object: markRead)
         XCTAssertEqual(XCTWaiter().wait(for: [settled], timeout: 5), .completed, "Mark read never settled in reach")
         markRead.tap()
         XCTAssertTrue(markRead.waitForNonExistence(timeout: 5), "Mark read left the swipe action open")
-        // The demo Mac takes no read writes, so the row's optimistic read
-        // rolls back with the banner that says so. Only Mark read on an
-        // unread row sends that write, so the banner shows it was this row's.
-        let rollback = app.descendants(matching: .any)
-            .matching(NSPredicate(format: "label CONTAINS %@", "mark that chat read")).firstMatch
-        XCTAssertTrue(rollback.waitForExistence(timeout: 10), "Mark read sent no read write for \(title)")
-        XCTAssertTrue(thisRowUnread.exists, "\(title) read with no write behind it")
+        // The demo Mac takes the read, so the dot clears and stays clear.
+        XCTAssertTrue(thisRowUnread.waitForNonExistence(timeout: 5), "Mark read left \(title) unread")
+        XCTAssertFalse(rollback.waitForExistence(timeout: 2), "The demo Mac refused the read of \(title)")
+        XCTAssertFalse(thisRowUnread.exists, "\(title) rolled back to unread")
 
-        origin.withOffset(CGVector(dx: edge, dy: row.midY)).tap()
+        // Found again by title: a read row can sit elsewhere in the Inbox.
+        let readRow = app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", title)).firstMatch
+        XCTAssertTrue(readRow.waitForExistence(timeout: 5), "\(title) left the Inbox once read")
+        if readRow.frame.maxY > app.frame.height * 0.6 { app.swipeUp(velocity: .slow) }
+        origin.withOffset(CGVector(dx: max(app.frame.minX + 24, readRow.frame.minX + 8), dy: readRow.frame.midY)).tap()
         XCTAssertTrue(app.buttons["Send message"].firstMatch.waitForExistence(timeout: 10), "A tap at the row's edge did not open it")
         XCTAssertTrue(
             app.navigationBars.staticTexts[title].firstMatch.exists || app.staticTexts[title].firstMatch.exists,
@@ -250,7 +262,7 @@ final class AidenShellUITests: XCTestCase {
                 .waitForExistence(timeout: 10),
             "The pin did not open the Bot's chat"
         )
-        XCTAssertFalse(app.buttons["Close menu"].exists, "Opening a pin left the drawer up")
+        XCTAssertTrue(app.buttons["Close menu"].waitForNonExistence(timeout: 5), "Opening a pin left the drawer up")
 
         goBack(in: app)
         openDrawer(in: app)
@@ -1476,9 +1488,20 @@ final class AidenShellUITests: XCTestCase {
         XCTAssertTrue(openInbox(in: app).waitForExistence(timeout: 10), "No chat rows in the inbox")
         search("flaky", in: app, submit: false)
         XCTAssertTrue(searchRow("Fix the flaky upload test", in: app).waitForExistence(timeout: 10))
-        XCTAssertTrue(app.keyboards.firstMatch.exists, "The keyboard was not up to begin with")
+        let keyboard = app.keyboards.firstMatch
+        XCTAssertTrue(keyboard.exists, "The keyboard was not up to begin with")
 
-        dragResults(in: app)
+        // Drag up through the results, which sit above the drawer's bottom
+        // field, so the press never lands on the field or the keyboard,
+        // whatever height the device or the text size gives them.
+        let window = app.windows.firstMatch
+        let field = AidenStateMatrix.drawerSearchField(in: app).frame
+        XCTAssertLessThan(field.maxY, keyboard.frame.minY, "The keyboard covers the search field")
+        XCTAssertGreaterThan(field.minY - window.frame.minY, 160, "No room for results above the field")
+        let origin = window.coordinate(withNormalizedOffset: .zero)
+        let start = origin.withOffset(CGVector(dx: window.frame.midX, dy: field.minY - 24))
+        let end = origin.withOffset(CGVector(dx: window.frame.midX, dy: max(window.frame.minY + 80, field.minY - 224)))
+        start.press(forDuration: 0.05, thenDragTo: end, withVelocity: .slow, thenHoldForDuration: 0.1)
 
         let gone = NSPredicate(format: "exists == false")
         wait(for: [XCTNSPredicateExpectation(predicate: gone, object: app.keyboards.firstMatch)], timeout: 5)

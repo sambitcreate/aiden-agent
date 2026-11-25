@@ -175,10 +175,9 @@ struct AidenAppShellView: View {
     /// The shell's own window, for its orientation.
     @State private var window = AidenWindowReader.Window()
     /// The drawer over the tabs (`AidenDrawerView`).
-    @State private var drawerPresence = AidenDrawerPresence()
     private var drawerIsOpen: Bool {
-        get { drawerPresence.isOpen }
-        nonmutating set { drawerPresence.isOpen = newValue }
+        get { navigation.drawerIsOpen }
+        nonmutating set { navigation.drawerIsOpen = newValue }
     }
     @Environment(\.layoutDirection) private var layoutDirection
     /// VoiceOver goes back to the showing tab's menu button when the drawer
@@ -384,8 +383,6 @@ struct AidenAppShellView: View {
             isEnabled: runningHome == .accessory && inboxStore.hasRunningChats && !navigation.showsConversation
         ) {
             AidenRunningAccessoryHost(store: inboxStore, onOpen: openRow) { activeSheet = .runningChats }
-                // The bar hosts it apart from the tabs, so it's hidden on its own.
-                .modifier(AidenHiddenUnderDrawer(presence: drawerPresence))
         }
         // A new tab view each time the display opens or closes, as at launch.
         // A closed iPhone Duo's side rail reads the showing tab's Back and
@@ -394,10 +391,17 @@ struct AidenAppShellView: View {
         // accessory over a chat (iOS 27.1 simulator). The paths and chats
         // are the shell's, so the new one opens where the old one was.
         .id(navigation.besideList)
-        // The drawer is modal: what's under it is out of VoiceOver's reach.
-        .accessibilityHidden(drawerIsOpen)
         .gesture(AidenDrawerEdgeSwipe(isEnabled: opensDrawerFromEdge, layoutDirection: layoutDirection, onOpen: openDrawer))
-        .overlay { drawerOverlay }
+        // The drawer is modal: a clear full-screen presentation, so UIKit
+        // takes everything under it (the tabs' hosts, bars, side rail and
+        // accessory) out of VoiceOver's reach. Attached after the `.id`, so
+        // it stays open as the display folds. The drawer runs its own slide;
+        // the cover comes and goes without the system's.
+        .fullScreenCover(isPresented: Binding(get: { drawerIsOpen }, set: { if !$0 { closeDrawer() } })) {
+            drawerOverlay
+                .presentationBackground(.clear)
+        }
+        .transaction(value: drawerIsOpen) { $0.disablesAnimations = true }
         .aidenNewWorkPresentation(newWork, coordinator: coordinator)
         .sheet(item: $activeSheet) { sheet in
             switch sheet {
@@ -433,13 +437,7 @@ struct AidenAppShellView: View {
             navigationStore.save(snapshot)
             chatScreens.pathsChanged()
         }
-        // Only what the person did closes the drawer: its own rows, a new
-        // chat from its compose, a link or a notification. A path changing
-        // under it (a machine forgotten elsewhere) leaves it open.
-        .onChange(of: navigation.drawerDismissals) {
-            closeDrawer(refocusingMenu: false)
-        }
-        .onChange(of: navigation.showsChatList(drawerIsOpen: drawerIsOpen), initial: true) { _, isOnScreen in
+        .onChange(of: navigation.showsChatList, initial: true) { _, isOnScreen in
             inboxStore.setInboxVisible(isOnScreen)
         }
         // Opening or closing an iPhone Duo swaps each list tab's container
@@ -501,16 +499,12 @@ struct AidenAppShellView: View {
             // modifier reads the drawer itself, so each host updates on its own.
             list: { selection in
                 list(selection)
-                    .modifier(AidenHiddenUnderDrawer(presence: drawerPresence))
                     .toolbar { menuToolbarItem(on: tab) }
             },
             screen: { route, keepsTabs in
-                AnyView(screen(for: route, keepsTabs: keepsTabs).modifier(AidenHiddenUnderDrawer(presence: drawerPresence)))
+                AnyView(screen(for: route, keepsTabs: keepsTabs))
             }
         )
-        // Each tab's own too: hiding the tab view leaves the lists inside it
-        // in reach, behind the open drawer (iOS 27.1 simulator).
-        .accessibilityHidden(drawerIsOpen)
     }
 
     /// Puts the tab's list away when it's laid over the detail
@@ -650,10 +644,12 @@ struct AidenAppShellView: View {
     private var opensDrawerFromEdge: Bool {
         !drawerIsOpen && !navigation.besideList && !showsVerticalBar
             && navigation.path(of: navigation.tab).isEmpty
+            // A sheet or alert up over the tab keeps the edge.
+            && activeSheet == nil && !newWork.isChoosingWorkspace && coordinator.presentedError == nil
     }
 
     private var drawerOverlay: some View {
-        AidenDrawerOverlay(isOpen: drawerIsOpen, onClose: closeDrawer) {
+        AidenDrawerOverlay(onClose: closeDrawer) { slideOut in
             AidenDrawerView(
                 search: built.search,
                 coordinator: coordinator,
@@ -672,10 +668,23 @@ struct AidenAppShellView: View {
                     // list that its pick put away comes back over it.
                     if navigation.besideList { chatsColumns.visibility = .all }
                 },
-                onClose: closeDrawer
+                onClose: slideOut
             ) {
-                composeButton
+                if hasNoComputers {
+                    // Pairing is the shell's sheet, so the drawer goes first.
+                    Button {
+                        closeDrawer(refocusingMenu: false)
+                        openAddComputer()
+                    } label: {
+                        Label("Add Computer", systemImage: "plus")
+                    }
+                } else {
+                    AidenNewWorkComposeButton(flow: newWork)
+                }
             }
+            // The compose's workspace choice is a sheet, so it's presented
+            // over the drawer while the drawer is up.
+            .aidenNewWorkPresentation(newWork, coordinator: coordinator)
         }
     }
 
@@ -1673,19 +1682,3 @@ private struct AidenWindowReader: UIViewRepresentable {
     }
 }
 
-
-/// Whether the drawer is open, as an object, so a view hosted apart from the
-/// shell (a tab's column, the bottom accessory) reads it itself and updates.
-@MainActor @Observable
-final class AidenDrawerPresence {
-    var isOpen = false
-}
-
-/// Keeps what's under the open drawer out of VoiceOver's reach.
-private struct AidenHiddenUnderDrawer: ViewModifier {
-    let presence: AidenDrawerPresence
-
-    func body(content: Content) -> some View {
-        content.accessibilityHidden(presence.isOpen)
-    }
-}

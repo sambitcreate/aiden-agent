@@ -396,14 +396,14 @@ final class AidenAppNavigation {
     /// Not saved: a relaunch must not open the microphone or camera.
     private(set) var chatStartingVoice: AidenHostObjectID?
     private(set) var chatStartingCamera: AidenHostObjectID?
-    /// Bumped when something the person started outside the drawer's own rows
-    /// opened a screen (a new chat from the drawer's compose), which puts the
-    /// drawer away. Background changes to the paths never bump it.
-    private(set) var drawerDismissals = 0
+    /// Whether the drawer is open. Not saved. Only what the person did closes
+    /// it (its own rows, a new chat from its compose, a link or a
+    /// notification); paths changing under it in the background never do.
+    var drawerIsOpen = false
 
     /// Puts the drawer away, if it's open.
     func dismissDrawer() {
-        drawerDismissals &+= 1
+        drawerIsOpen = false
     }
     /// The Catch Up under way, while its chat is on top of the Inbox. Not saved:
     /// a relaunch restores the chat, as an ordinary chat.
@@ -500,10 +500,13 @@ final class AidenAppNavigation {
     }
 
     /// Whether a list of chats is on screen, which the inbox store refreshes
-    /// at its quicker pace: Chats (and whatever its root shows), the Inbox, or
-    /// the drawer's Recents over any tab.
-    func showsChatList(drawerIsOpen: Bool) -> Bool {
-        drawerIsOpen || tab == .chats || tab == .inbox
+    /// at its quicker pace: the drawer's Recents over any tab, or Chats or the
+    /// Inbox with its list showing. On a stack, a chat pushed over the list
+    /// covers it; beside the list it stays in view.
+    var showsChatList: Bool {
+        if drawerIsOpen { return true }
+        guard tab == .chats || tab == .inbox else { return false }
+        return besideList || path(of: tab).isEmpty
     }
 
     /// A chat or a Bot on top of the tab that's showing: either has a composer.

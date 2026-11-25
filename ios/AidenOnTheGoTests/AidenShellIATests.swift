@@ -117,13 +117,13 @@ final class AidenShellIATests: XCTestCase {
         for (from, lands) in [(AidenAppTab.inbox, AidenAppTab.chats), (.bots, .chats), (.chats, .chats), (.workspaces, .workspaces)] {
             let navigation = AidenAppNavigation()
             navigation.tab = from
-            let dismissals = navigation.drawerDismissals
+            navigation.drawerIsOpen = true
 
             navigation.openNewChat(id("new"))
 
             XCTAssertEqual(navigation.tab, lands, "From \(from)")
             XCTAssertEqual(navigation.path(of: lands), [.chat(id("new"))], "From \(from)")
-            XCTAssertNotEqual(navigation.drawerDismissals, dismissals, "From \(from) the drawer stayed open")
+            XCTAssertFalse(navigation.drawerIsOpen, "From \(from) the drawer stayed open")
         }
     }
 
@@ -133,12 +133,13 @@ final class AidenShellIATests: XCTestCase {
         let navigation = AidenAppNavigation()
         navigation.open(.settings)
         navigation.open(.usage)
-        let dismissals = navigation.drawerDismissals
+        navigation.drawerIsOpen = true
 
         navigation.leaveSelectedMachineRoutes()
         navigation.dropRoutes(outside: [])
+        navigation.setPath([.settings], of: navigation.tab)
 
-        XCTAssertEqual(navigation.drawerDismissals, dismissals)
+        XCTAssertTrue(navigation.drawerIsOpen, "A background path change closed the drawer")
     }
 
     /// A drawer page already open on another tab moves to the tab that's
@@ -178,14 +179,32 @@ final class AidenShellIATests: XCTestCase {
     }
 
     /// Chats, the Inbox and the open drawer each show a list of chats, which
-    /// the inbox store keeps fresh; Bots and Workspaces alone don't.
+    /// the inbox store keeps fresh; Bots and Workspaces alone don't, and on a
+    /// stack neither does a chat pushed over the list.
     func testAChatListIsOnScreenOnChatsTheInboxOrInTheDrawer() {
+        let expected: [AidenAppTab: Bool] = [.chats: true, .inbox: true, .bots: false, .workspaces: false]
         let navigation = AidenAppNavigation()
-        for tab in AidenAppTab.allCases {
+        for (tab, showsList) in expected {
             navigation.tab = tab
-            XCTAssertEqual(navigation.showsChatList(drawerIsOpen: false), tab == .chats || tab == .inbox, "\(tab)")
-            XCTAssertTrue(navigation.showsChatList(drawerIsOpen: true), "\(tab) with the drawer open")
+            navigation.drawerIsOpen = false
+            XCTAssertEqual(navigation.showsChatList, showsList, "\(tab)")
+            navigation.drawerIsOpen = true
+            XCTAssertTrue(navigation.showsChatList, "\(tab) with the drawer open")
         }
+
+        // iPhone: a chat pushed over Chats covers the list.
+        let stack = AidenAppNavigation()
+        stack.open(.chat(id("c1")))
+        XCTAssertEqual(stack.tab, .chats)
+        XCTAssertFalse(stack.showsChatList, "A chat over the Chats list kept the quick pace")
+        stack.drawerIsOpen = true
+        XCTAssertTrue(stack.showsChatList)
+
+        // Beside the list, the chat sits next to it.
+        let split = AidenAppNavigation()
+        split.besideList = true
+        split.pick(.chat(id("c1")), fromListOf: .chats)
+        XCTAssertTrue(split.showsChatList)
     }
 
     /// A notification's chat opens beside Chats' list. With a page pushed over
