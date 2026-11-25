@@ -58,7 +58,7 @@ const STAGED_ATTACHMENT_ID = /^att_[A-Za-z0-9_-]{43}$/u;
 const BOT_WAIT_ID = /^[A-Za-z0-9-]{1,64}$/u;
 
 /** Operations whose answer is bounded image bytes, not JSON. */
-export const PEER_BINARY_OPERATIONS: ReadonlySet<string> = new Set(["attachmentContent", "botSessionImage"]);
+export const PEER_BINARY_OPERATIONS: ReadonlySet<string> = new Set(["attachmentContent", "botSessionImage", "botAvatar"]);
 
 /** Run-control operations reconcile from the host feed's run state. */
 export const PEER_RUN_OPERATIONS: ReadonlySet<string> = new Set([
@@ -382,6 +382,9 @@ export function peerOperationRequest(
       break;
     case "botSessionImage":
       path = `/bots/${id()}/session/images/${item()}`;
+      break;
+    case "botAvatar":
+      path = `/bots/${id()}/avatar/${item()}`;
       break;
     case "createChat":
       path = "/chats";

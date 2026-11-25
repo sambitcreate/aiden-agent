@@ -53,6 +53,7 @@ const operationIds: Record<PeerOperation["operation"], string> = {
   forkSummaryCancel: "chatForkSummaryAction",
   botSession: "getBotSession",
   botSessionImage: "getBotSessionImage",
+  botAvatar: "getBotAvatarContent",
   botSend: "sendBotMessage",
   botResume: "resumeBotSession",
   botDismiss: "dismissBotSession",
