@@ -8,6 +8,7 @@ import { useBotAccessRequestActions } from "./use-bot-access-request-actions";
 // send never doubles. Stop, Resume and Dismiss map to their runtime actions.
 
 import * as React from "react";
+import { useBotAvatarState } from "../../components/bot-avatar";
 import { useNavigate } from "@tanstack/react-router";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { CircleAlert, Hourglass, Pause, Square } from "lucide-react";
@@ -37,7 +38,7 @@ import { botChatActivityOnDevice, showsBotToolActivity } from "../../shared/bots
 import { queryKeys, useBot, useBots } from "../../lib/queries";
 import { useBotLive } from "../../lib/use-bot-live";
 import { prefersReducedMotion } from "../../lib/appearance-runtime";
-import { botLastReplyAt, type BotLiveSnapshot, type BotPendingQuestion } from "../../shared/bot-live";
+import { botLastReplyAt, botLastTurnEnd, type BotLiveSnapshot, type BotPendingQuestion } from "../../shared/bot-live";
 import type { AskUserQuestionResponseV1 } from "../../shared/ask-user-question";
 import {
   BOT_HANDOFF_NOTE_MAX_CHARS,
@@ -577,6 +578,19 @@ export function BotChatPane({ botId }: { botId: string }) {
   const [instructionsEdit, setInstructionsEdit] = React.useState<{ changeId: string; seed: string } | null>(null);
   const accessRequestActions = useBotAccessRequestActions(botId, live.snapshot?.accessRequest?.waitId);
   const handoffActions = useBotHandoffActions(botId, live.snapshot?.handoff?.waitId);
+  // The header face follows the running turn's phase, waits with the person while a card
+  // needs them, and has a done (or error) moment when the turn ends; a turn the person
+  // stopped settles quietly.
+  const lastTurnEnd = snapshot ? botLastTurnEnd(snapshot.entries) : null;
+  const avatarState = useBotAvatarState({
+    session: state?.kind,
+    phase: snapshot?.activity?.phase ?? null,
+    failed: lastTurnEnd === "failed",
+    stopped: lastTurnEnd === "stopped",
+    awaitingPerson:
+      approvals.prompts.length > 0 ||
+      Boolean(snapshot?.question || snapshot?.handoff || snapshot?.accessRequest || snapshot?.plan?.status === "pending"),
+  });
 
   // The Bot's routines, read only when its chat shows a wake-up chip.
   const hasWakeUps = snapshot?.entries.some((entry) => entry.type === "wake_up") ?? false;
@@ -625,7 +639,7 @@ export function BotChatPane({ botId }: { botId: string }) {
         current ? (
           <BotChatNamePill
             bot={current}
-            working={running}
+            avatarState={avatarState}
             onOpenProfile={() => panel.show("advanced", { botId: current.id })}
           />
         ) : bot.isLoading ? (
