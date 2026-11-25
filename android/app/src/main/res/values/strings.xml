@@ -612,7 +612,7 @@
 
     <!-- Bots: memory (copy shared with desktop and iOS) -->
     <string name="bot_memory_title">Memory</string>
-    <string name="bot_memory_description">What %1$s remembers about you and its work. It’s stored on this Mac, and %1$s uses it in every chat.</string>
+    <string name="bot_memory_description">What %1$s remembers about you and its work. It’s stored on your computer, and %1$s uses it in every chat.</string>
     <string name="bot_memory_about_you">About you</string>
     <string name="bot_memory_notes">%1$s’s notes</string>
     <string name="bot_memory_empty_user">Nothing yet. Tell %1$s something to remember, like “I’m vegetarian.”</string>
@@ -626,7 +626,7 @@
     <string name="bot_memory_error_not_found">This memory changed since you opened it. Close this and try again.</string>
     <string name="bot_memory_error_failed">Aiden couldn’t save this memory. Try again.</string>
     <string name="bot_memory_delete_failed">Aiden couldn’t delete this memory. Try again.</string>
-    <string name="bot_memory_load_failed">Aiden couldn’t load this memory. Make sure your Mac is on and nearby.</string>
+    <string name="bot_memory_load_failed">Memory couldn’t be loaded.</string>
     <string name="bot_memory_loading">Loading memory</string>
     <string name="bot_memory_erase">Forget all</string>
     <string name="bot_memory_erase_title">Forget everything %1$s remembers?</string>

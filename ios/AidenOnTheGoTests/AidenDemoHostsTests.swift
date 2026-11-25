@@ -283,6 +283,32 @@ final class AidenDemoHostsTests: XCTestCase {
         XCTAssertFalse(session.entries.isEmpty)
     }
 
+    func testDemoBotMemoryPageLoadsBothGroupsAndForgetAllEmptiesIt() async throws {
+        let responder = AidenDemoResponder()
+        let coordinator = AidenDemoHosts.coordinator(.one, responder: responder)
+        let installation = try XCTUnwrap(coordinator.installationStore.activeInstallation)
+        let machine = client(for: installation, responder: responder)
+        let bots = try await machine.bots().bots
+        let bot = try XCTUnwrap(bots.first)
+        let model = AidenBotMemoryModel(botID: bot.id, botName: bot.name, transport: machine)
+
+        let loaded = await model.load()
+
+        XCTAssertTrue(loaded, "The demo Bot's memory did not decode")
+        let memory = try XCTUnwrap(model.memory)
+        XCTAssertTrue(memory.readable)
+        XCTAssertFalse(memory.user.entries.isEmpty)
+        XCTAssertFalse(memory.memory.entries.isEmpty)
+        let longest = memory.memory.entries.map(\.text.count).max() ?? 0
+        XCTAssertGreaterThan(longest, AidenBotMemoryWire.maxEntryLength * 4 / 5, "No entry near the length limit")
+
+        let forgot = await model.erase()
+
+        XCTAssertTrue(forgot)
+        XCTAssertNil(model.errorMessage)
+        XCTAssertEqual(model.memory?.entryCount, 0)
+    }
+
     func testSettingsScreenCanReadMemorySettings() async throws {
         let responder = AidenDemoResponder()
         let coordinator = AidenDemoHosts.coordinator(.one, responder: responder)

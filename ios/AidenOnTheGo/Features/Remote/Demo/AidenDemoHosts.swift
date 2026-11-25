@@ -721,6 +721,15 @@ enum AidenDemoHosts {
             responder.reply(instanceId: id, path: "/bots", status: 200, json: AidenDemoContent.botListJSON())
             responder.reply(instanceId: id, path: botPath, status: 200, json: AidenDemoContent.botDetailJSON())
             responder.reply(instanceId: id, path: "\(botPath)/session", status: 200, json: AidenDemoContent.botSessionJSON())
+            // `bot-memory-v1` is advertised, so the Memory page has something to read.
+            responder.reply(instanceId: id, path: "\(botPath)/memory", status: 200, json: AidenDemoContent.botMemoryJSON())
+            responder.reply(
+                instanceId: id,
+                method: "POST",
+                path: "\(botPath)/memory/edits",
+                status: 200,
+                json: AidenDemoContent.botMemoryEditJSON()
+            )
             if AidenDemoBotUX.isRequested {
                 AidenDemoBotUX.register(instanceId: id, botId: AidenDemoContent.botId, responder: responder)
             }
@@ -1008,6 +1017,54 @@ private enum AidenDemoContent {
 
     static func botSessionJSON() -> Data {
         data(botSessionObject())
+    }
+
+    /// The longest entry the wire allows is 500 characters; this one is close.
+    static let nearLimitMemoryEntry = "Weekly planning notes: keep Monday mornings for deep work, batch "
+        + "meetings on Tuesday and Thursday afternoons, leave Friday after 3 PM free, flag anything that "
+        + "moves a deadline, and ask before booking travel. Mia has swimming on Wednesdays at 5 PM and "
+        + "Leo's school pickup is at 3:15 PM, so nothing goes in those slots. Prefer one summary on "
+        + "Sunday evening over several small reminders, and keep it under ten lines with the three most "
+        + "important items first."
+
+    /// `GET /bots/{botId}/memory`, in the shape of the contract fixture's
+    /// `botMemory`: both groups, one entry near the length limit. `cleared` is
+    /// the view after Forget all, both groups empty.
+    private static func botMemoryObject(cleared: Bool) -> [String: Any] {
+        func group(_ entries: [(id: String, text: String)], limit: Int) -> [String: Any] {
+            let kept = cleared ? [] : entries
+            return [
+                "entries": kept.map { ["id": $0.id, "text": $0.text] },
+                "usedChars": kept.reduce(0) { $0 + $1.text.count },
+                "limitChars": limit,
+                "overBudget": false,
+            ]
+        }
+        return [
+            "botId": botId,
+            "revision": cleared ? "c1ea4ed000000002" : "d3e0a1b2c3d40001",
+            "readable": true,
+            "memory": group([
+                ("a1b2c3d4e5f60718", "Weekly meal plan is vegetarian except Fridays."),
+                ("b2c3d4e5f6071829", nearLimitMemoryEntry),
+            ], limit: 2_200),
+            "user": group([
+                ("0f1e2d3c4b5a6978", "Prefers short answers."),
+                ("1122334455667788", "Has two kids, Mia (8) and Leo (5)."),
+            ], limit: 1_375),
+            "updatedAt": timestamp(Date().addingTimeInterval(-3_600)),
+        ]
+    }
+
+    static func botMemoryJSON() -> Data {
+        data(botMemoryObject(cleared: false))
+    }
+
+    /// `POST /bots/{botId}/memory/edits`. The demo keeps no state, so every
+    /// edit answers with the cleared view: Forget all shows its empty page, and
+    /// a single edit or delete looks as if the Mac forgot everything.
+    static func botMemoryEditJSON() -> Data {
+        data(["ok": true, "view": botMemoryObject(cleared: true)])
     }
 
     /// One connection of `GET …/session/events`: a snapshot frame, then the end,
