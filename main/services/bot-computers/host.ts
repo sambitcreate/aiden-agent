@@ -1357,8 +1357,8 @@ export function createBotComputerHost(deps: BotComputerHostDependencies): BotCom
     return record;
   }
 
-  /** Lazily clone the canonical `"shared"` Linux VM if it does not exist yet. */
-  async function ensureSharedVm(forBotId: string, parentEpoch?: number): Promise<BotComputerVmRecord> {
+  /** Lazily clone the canonical `"shared"` Linux VM if needed and assign `forBotId` inside the `vm:shared` turn. */
+  async function ensureSharedVmAndAssign(forBotId: string, parentEpoch?: number): Promise<BotComputersState> {
     return inTurn(
       vmTurnKey(BOT_COMPUTER_SHARED_ID),
       async () => {
@@ -1366,7 +1366,9 @@ export function createBotComputerHost(deps: BotComputerHostDependencies): BotCom
         const existing = hasOwn(state.vms, BOT_COMPUTER_SHARED_ID) ? state.vms[BOT_COMPUTER_SHARED_ID] : undefined;
         if (existing && !existing.migratedFromMacos) {
           await sharedDirForVm(existing, [...assignedBotsInState(state, BOT_COMPUTER_SHARED_ID), forBotId], forBotId);
-          return existing;
+          return updateState((draft) => {
+            draft.assignments[forBotId] = BOT_COMPUTER_SHARED_ID;
+          });
         }
         if (!ready(state)) throw new BotComputerError("not_set_up", "Set up Bot computers in Settings first.");
         if (setupTask) throw new BotComputerError("busy", "Wait for the base computer to finish updating.");
@@ -1383,11 +1385,12 @@ export function createBotComputerHost(deps: BotComputerHostDependencies): BotCom
             state,
           ),
         );
-        await updateState((draft) => {
+        const next = await updateState((draft) => {
           draft.vms[BOT_COMPUTER_SHARED_ID] = record;
+          draft.assignments[forBotId] = BOT_COMPUTER_SHARED_ID;
         });
         stale.delete(BOT_COMPUTER_SHARED_ID);
-        return record;
+        return next;
       },
       parentEpoch,
     );
@@ -1910,10 +1913,7 @@ export function createBotComputerHost(deps: BotComputerHostDependencies): BotCom
         if (!ready(state)) throw new BotComputerError("not_set_up", "Set up Bot computers in Settings first.");
         if (setupTask) throw new BotComputerError("busy", "Wait for the base computer to finish updating.");
         if (state.settings.defaultComputerMode === "shared") {
-          await ensureSharedVm(botId, epoch);
-          const next = await updateState((draft) => {
-            draft.assignments[botId] = BOT_COMPUTER_SHARED_ID;
-          });
+          const next = await ensureSharedVmAndAssign(botId, epoch);
           emit();
           return computerStatus(botId, next)!;
         }
@@ -1961,10 +1961,7 @@ export function createBotComputerHost(deps: BotComputerHostDependencies): BotCom
             removeBotFromQueue(oldComputerId, botId);
             control.forget(botId);
           }
-          await ensureSharedVm(botId, epoch);
-          const next = await updateState((draft) => {
-            draft.assignments[botId] = BOT_COMPUTER_SHARED_ID;
-          });
+          const next = await ensureSharedVmAndAssign(botId, epoch);
           if (oldComputerId && oldComputerId !== BOT_COMPUTER_SHARED_ID) {
             releaseOrphanedControlScope(oldComputerId, next);
           }

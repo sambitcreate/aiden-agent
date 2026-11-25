@@ -209,4 +209,23 @@ test("store rejects reserved base VM names and prototype keys, deduplicates lega
   assert.equal(backups.length, 1, "corrupt state.json is backed up before overwriting");
   assert.equal(readFileSync(path.join(dir, backups[0]!), "utf8"), "{corrupt json!!!");
   assert.equal((await store.read()).settings.maxRunning, 3);
+
+  // Downgrade-roundtrip: a state.json carrying only legacy `computers` entries referencing
+  // `aiden-vm-shared` must restore the canonical `"shared"` VM and every Bot's assignment.
+  const downgraded = parseBotComputersState({
+    setup: { guestOs: "linux", baseBuild: "20261123-2671" },
+    computers: {
+      ada: { vmName: "aiden-vm-shared", baseBuild: "20261123-2671", createdAt: 10 },
+      ben: { vmName: "aiden-vm-shared", baseBuild: "20261123-2671", createdAt: 10 },
+      cyd: { vmName: "aiden-bot-0000000000000009", baseBuild: "20261123-2671", createdAt: 20 },
+    },
+  });
+  assert.equal(downgraded.vms.shared?.kind, "shared");
+  assert.equal(downgraded.vms.shared?.name, "Shared computer");
+  assert.equal(downgraded.vms.shared?.vmName, "aiden-vm-shared");
+  assert.equal(downgraded.vms.shared?.legacyOwnerBotId, undefined);
+  assert.equal(downgraded.assignments.ada, "shared");
+  assert.equal(downgraded.assignments.ben, "shared");
+  assert.equal(downgraded.assignments.cyd, "aiden-bot-0000000000000009");
+  assert.equal(downgraded.vms["aiden-bot-0000000000000009"]?.name, "Dedicated computer");
 });

@@ -267,7 +267,9 @@ export function parseBotComputersState(value: unknown): BotComputersState {
       const vmName = text(entry.vmName);
       const baseBuild = typeof entry.baseBuild === "string" && entry.baseBuild.length <= 32 ? entry.baseBuild : undefined;
       const createdAt = time(entry.createdAt);
-      if (!vmName || !isValidBotVmNameForId(vmName, vmName) || baseBuild === undefined || createdAt === undefined) continue;
+      if (!vmName || baseBuild === undefined || createdAt === undefined) continue;
+      const id = vmName === BOT_COMPUTER_SHARED_VM ? BOT_COMPUTER_SHARED_ID : vmName;
+      if (!isValidBotVmNameForId(id, vmName)) continue;
       const existingByVmName = Object.values(state.vms).find((vm) => vm.vmName === vmName);
       if (existingByVmName) {
         state.assignments[botId] = existingByVmName.id;
@@ -275,20 +277,24 @@ export function parseBotComputersState(value: unknown): BotComputersState {
       }
       const lastUsedAt = time(entry.lastUsedAt);
       const driver = guestDriver(entry.guestDriver);
-      const id = vmName;
-      legacyCount += 1;
+      const isShared = id === BOT_COMPUTER_SHARED_ID;
+      if (!isShared) legacyCount += 1;
       seenVmNames.add(vmName);
       state.vms[id] = {
         id,
-        name: legacyCount === 1 ? "Dedicated computer" : `Dedicated computer ${legacyCount}`,
-        kind: "dedicated",
+        name: isShared
+          ? BOT_COMPUTER_SHARED_DEFAULT_NAME
+          : legacyCount === 1
+            ? "Dedicated computer"
+            : `Dedicated computer ${legacyCount}`,
+        kind: isShared ? "shared" : "dedicated",
         vmName,
         baseBuild,
         createdAt,
         ...(lastUsedAt !== undefined ? { lastUsedAt } : {}),
         ...(driver ? { guestDriver: driver } : {}),
         ...(entry.migratedFromMacos === true ? { migratedFromMacos: true } : {}),
-        legacyOwnerBotId: botId,
+        ...(!isShared ? { legacyOwnerBotId: botId } : {}),
       };
       state.assignments[botId] = id;
     }

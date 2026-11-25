@@ -2531,6 +2531,45 @@ test("concurrent deleteComputer and assignComputer serialize cleanly without lea
   });
 });
 
+test("concurrent give/assignComputer('shared') and deleteComputer('shared') serialize cleanly inside vm:shared", async () => {
+  await withHost(async (context) => {
+    await setUp(context, "shared");
+    // Create shared VM, then unassign Ada so deleteComputer("shared") without force is eligible to race.
+    await context.host.give("ada");
+    await context.host.deleteForBot("ada");
+
+    const [giveRes, deleteRes] = await Promise.allSettled([
+      context.host.give("ben"),
+      context.host.deleteComputer("shared"),
+    ]);
+
+    assert.equal(giveRes.status, "fulfilled");
+    assert.ok(giveRes.value && giveRes.value.computerId === "shared", "give('ben') never returns undefined");
+    if (deleteRes.status === "fulfilled") {
+      // Delete ran first, then give("ben") re-cloned and assigned shared cleanly.
+      assert.equal((await context.host.computer("ben"))?.computerId, "shared");
+      assert.ok((await context.host.status()).vms.some((vm) => vm.id === "shared"));
+    } else {
+      // give("ben") ran first and assigned Ben atomically inside vm:shared, so deleteComputer saw busy.
+      assert.ok(deleteRes.reason instanceof BotComputerError && deleteRes.reason.code === "busy");
+      assert.equal((await context.host.computer("ben"))?.computerId, "shared");
+    }
+
+    // Same atomic guarantee for assignComputer("cyd", { kind: "shared" }) racing deleteComputer("shared").
+    await context.host.deleteForBot("ben");
+    const [assignRes, deleteRes2] = await Promise.allSettled([
+      context.host.assignComputer("cyd", { kind: "shared" }),
+      context.host.deleteComputer("shared"),
+    ]);
+    assert.equal(assignRes.status, "fulfilled");
+    assert.ok(assignRes.value && assignRes.value.computerId === "shared");
+    if (deleteRes2.status === "rejected") {
+      assert.ok(deleteRes2.reason instanceof BotComputerError && deleteRes2.reason.code === "busy");
+    }
+    assert.equal((await context.host.computer("cyd"))?.computerId, "shared");
+  });
+});
+
 test("reassigning the last Bot off a VM releases orphaned person Take over, and deletes clean workspace folders", async () => {
   await withHost(async (context) => {
     await setUp(context, "shared");
