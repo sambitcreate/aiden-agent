@@ -89,11 +89,11 @@ final class AidenChatViewModel {
             guard let activeStreamID else { return }
             // This device's own run is accounted for, so the roster announcing
             // its turn later never re-reads the transcript for it.
-            foreignRunAccountedRunId = activeStreamID
+            foreignRunObserver.accountedRunId = activeStreamID
             // An owned stream supersedes observation of a foreign run. Its
             // replay rebuilds the reply, so a live run's copy is dropped.
-            if foreignRunTask != nil || foreignRun != nil {
-                let replacesLiveRun = foreignRunIsLive
+            if foreignRunObserver.isLookingForRun || foreignRunObserver.projection != nil {
+                let replacesLiveRun = foreignRunObserver.isLive
                 stopForeignRunObservation()
                 if replacesLiveRun {
                     replaceLiveText("")
@@ -104,38 +104,24 @@ final class AidenChatViewModel {
             }
         }
     }
-    @ObservationIgnored var foreignRun: AidenForeignRunProjection?
-    @ObservationIgnored var foreignRunIsLive = false
-    @ObservationIgnored var foreignRunTask: Task<Void, Never>?
-    @ObservationIgnored var foreignRunLookupIsProbes = false
-    @ObservationIgnored var foreignRunSettleTask: Task<Void, Never>?
-    @ObservationIgnored var foreignRunGeneration: UInt64 = 0
-    /// Bounded transcript recovery after a foreign run ended but its re-read failed.
-    @ObservationIgnored var foreignRunReconcileTask: Task<Void, Never>?
-    /// The last run this chat showed live or found already finished, so a
-    /// later attach can tell a new run from one the transcript already holds.
-    @ObservationIgnored var foreignRunAccountedRunId: String?
-    /// How many foreign runs went live; the probe resets its backoff on one.
-    @ObservationIgnored var foreignRunsShownLive = 0
+    @ObservationIgnored let foreignRunObserver = AidenForeignRunObserver()
+    var foreignRun: AidenForeignRunProjection? { foreignRunObserver.projection }
+    var foreignRunIsLive: Bool { foreignRunObserver.isLive }
+    var foreignRunTask: Task<Void, Never>? { foreignRunObserver.attachTask }
     /// The newest turn the agent roster has reported for this chat.
     @ObservationIgnored private var lastRosterTurnId: String?
-    /// A turn the roster announced while another lookup was in flight, or
-    /// while this phone restored its own stream. That lookup may have been
-    /// answered before the turn's run registered, so the turn is looked up
-    /// once it, or the restoration, ends.
-    @ObservationIgnored var turnAwaitingLookup: ForeignRunAttachReason?
     /// The turn this phone last streamed itself. The roster announcing it,
     /// even after its stream finished, is not another device's run.
     @ObservationIgnored private var lastLocalTurnId: String?
-    @ObservationIgnored var foreignRunProbeTask: Task<Void, Never>?
-    @ObservationIgnored var foreignRunProbeGeneration: UInt64 = 0
     /// Waits between foreground probes for a foreign run; tests shorten it.
-    @ObservationIgnored var foreignRunProbeSleep: @Sendable (Duration) async throws -> Void = {
-        try await Task.sleep(for: $0)
+    var foreignRunProbeSleep: @Sendable (Duration) async throws -> Void {
+        get { foreignRunObserver.probeSleep }
+        set { foreignRunObserver.probeSleep = newValue }
     }
     /// Waits before looking again for an announced run; tests shorten it.
-    @ObservationIgnored var announcedRunRetrySleep: @Sendable (Duration) async throws -> Void = {
-        try await Task.sleep(for: $0)
+    var announcedRunRetrySleep: @Sendable (Duration) async throws -> Void {
+        get { foreignRunObserver.announcedRunRetrySleep }
+        set { foreignRunObserver.announcedRunRetrySleep = newValue }
     }
     var isRestoringStream = false {
         didSet {
@@ -147,112 +133,57 @@ final class AidenChatViewModel {
     @ObservationIgnored var transcriptGeneration: UInt64 = 0
     @ObservationIgnored private var recoveryWarning: String?
     @ObservationIgnored private let networkPath: AidenNetworkPathSource?
-    @ObservationIgnored private var turnAttempts = AidenTurnAttemptTracker()
-    private(set) var pendingSend: AidenChatDraftStore.PendingSend?
-    private(set) var sendRecoveryError: String?
+    let pendingSendCoordinator: AidenPendingSendCoordinator
+    var pendingSend: AidenChatDraftStore.PendingSend? { pendingSendCoordinator.pendingSend }
+    var sendRecoveryError: String? { pendingSendCoordinator.sendRecoveryError }
     /// A send the Mac refused with a retryable 429 is sent again on its own
     /// after the server's delay, this many times in a row before Retry is
     /// left to the person.
-    static let maxRateLimitedSendRetries = 3
-    @ObservationIgnored private var rateLimitedSendRetries = 0
-    @ObservationIgnored private var rateLimitedSendRetryTask: Task<Void, Never>?
+    static let maxRateLimitedSendRetries = AidenPendingSendCoordinator.maxRateLimitedSendRetries
     /// Waits out a retryable 429 before sending again; tests shorten it.
-    @ObservationIgnored var rateLimitedSendRetrySleep: @Sendable (Duration) async throws -> Void = {
-        try await Task.sleep(for: $0)
+    var rateLimitedSendRetrySleep: @Sendable (Duration) async throws -> Void {
+        get { pendingSendCoordinator.rateLimitedSendRetrySleep }
+        set { pendingSendCoordinator.rateLimitedSendRetrySleep = newValue }
     }
     /// The Mac was busy and the saved send will go out again on its own.
-    private(set) var isWaitingToRetryRateLimitedSend = false
+    var isWaitingToRetryRateLimitedSend: Bool { pendingSendCoordinator.isWaitingToRetryRateLimitedSend }
     /// The Mac kept refusing the saved send with a retryable 429 until the
     /// automatic resends ran out. Nothing was appended, so Retry is safe.
-    private(set) var isPendingSendRefusedBecauseBusy = false
+    var isPendingSendRefusedBecauseBusy: Bool { pendingSendCoordinator.isPendingSendRefusedBecauseBusy }
     var canRetrySend: Bool {
-        pendingSend?.canRetry() == true && isConnected && coordinator.isLive(owner) && !isStarting && !isSubmittingRunInput && !isRestoringStream && (pendingSend?.streamId != nil || (activeStreamID == nil && !isStreaming))
+        pendingSendCoordinator.canRetry(
+            inputs: AidenPendingSendCoordinator.RetryEligibilityInputs(
+                isConnected: isConnected,
+                isOwnerLive: coordinator.isLive(owner),
+                isStarting: isStarting,
+                isSubmittingRunInput: isSubmittingRunInput,
+                isRestoringStream: isRestoringStream,
+                hasActiveStream: activeStreamID != nil,
+                isStreaming: isStreaming
+            )
+        )
     }
     var sendRecoveryMessage: String? {
-        if let sendRecoveryError { return sendRecoveryError }
-        guard let pendingSend, !isStarting, !isSubmittingRunInput else { return nil }
-        if isWaitingToRetryRateLimitedSend {
-            return "Aiden Agent is busy. Your message will be sent again in a moment."
-        }
-        if isPendingSendRefusedBecauseBusy, pendingSend.canRetry() {
-            return "Aiden Agent is still busy. Your message wasn’t sent; try again in a moment."
-        }
-        return pendingSend.canRetry()
-            ? "Couldn’t confirm delivery. Retry uses the same saved request within its safe retry window."
-            : "Couldn’t confirm delivery. The retry window has ended. Check the conversation on your computer before sending another message."
+        pendingSendCoordinator.recoveryMessage(
+            isStarting: isStarting,
+            isSubmittingRunInput: isSubmittingRunInput
+        )
     }
     func discardPendingSend() async {
         guard !isStarting, !isSubmittingRunInput, let session = draftSession else { return }
-        cancelRateLimitedSendRetry()
-        rateLimitedSendRetries = 0
         do {
-            try await draftStore.savePendingSend(nil, session: session)
-            pendingSend = nil
-            sendRecoveryError = nil
-            turnAttempts.reset()
-        } catch { presentedError = error.localizedDescription }
-    }
-
-    private func cancelRateLimitedSendRetry() {
-        rateLimitedSendRetryTask?.cancel()
-        rateLimitedSendRetryTask = nil
-        isWaitingToRetryRateLimitedSend = false
-        isPendingSendRefusedBecauseBusy = false
-    }
-
-    /// The Mac refused `attempt` with a retryable 429 before running it, and
-    /// settled its Idempotency-Key as rejected, so that key cannot be sent
-    /// again. The same request is saved again under a fresh key
-    /// and sent once the server's delay has passed. Returns `false` when the
-    /// fresh attempt could not be saved, leaving the failure terminal.
-    private func scheduleRateLimitedSendRetry(
-        replacing attempt: AidenChatDraftStore.PendingSend,
-        error: AidenRemoteClientError,
-        session: AidenChatDraftStore.Session,
-        context: AidenRemoteRequestContext
-    ) async -> Bool {
-        await draftStore.settlePendingSend(key: attempt.key, session: session)
-        turnAttempts.reset()
-        let fresh = AidenChatDraftStore.PendingSend(
-            deviceId: attempt.deviceId,
-            request: attempt.request,
-            key: turnAttempts.key(for: attempt.request),
-            createdAt: Date(),
-            attachments: attempt.attachments
-        )
-        do {
-            try await draftStore.savePendingSend(fresh, session: session)
+            try await pendingSendCoordinator.discard(session: session)
         } catch {
-            turnAttempts.reset()
-            return false
+            presentedError = error.localizedDescription
         }
-        pendingSend = fresh
-        // The resend belongs to the pairing that authorized this message; a
-        // re-pair while the record was being saved leaves Retry to the person.
-        guard coordinator.isLive(context), rateLimitedSendRetries < Self.maxRateLimitedSendRetries else {
-            isPendingSendRefusedBecauseBusy = true
-            return true
-        }
-        let delay: Duration = error.serverRetryAfterSeconds.map { .seconds($0) }
-            ?? .milliseconds(AidenTerminalReconciliation.retryDelayMilliseconds(attempt: rateLimitedSendRetries))
-        rateLimitedSendRetries += 1
-        rateLimitedSendRetryTask?.cancel()
-        isWaitingToRetryRateLimitedSend = true
-        let sleep = rateLimitedSendRetrySleep
-        let key = fresh.key
-        rateLimitedSendRetryTask = Task { [weak self] in
-            do { try await sleep(delay) } catch { return }
-            guard let self, !Task.isCancelled, self.pendingSend?.key == key else { return }
-            self.rateLimitedSendRetryTask = nil
-            self.isWaitingToRetryRateLimitedSend = false
-            await self.send(retry: true, automatic: true, authority: context)
-        }
-        return true
     }
+    @ObservationIgnored var mutationSubMachines = AidenChatMutationSubMachines()
     /// The fork request whose outcome is still unknown, replayed with the
     /// same Idempotency-Key so a lost response never yields a second fork.
-    @ObservationIgnored var forkAttempt: AidenChatForkAttempt?
-    @ObservationIgnored private var continueInNewChatAttempt: AidenContinueInNewChatAttempt?
+    var forkAttempt: AidenChatForkAttempt? {
+        get { mutationSubMachines.forkAttempt.retained }
+        set { mutationSubMachines.forkAttempt.retained = newValue }
+    }
     @ObservationIgnored private var draftSession: AidenChatDraftStore.Session?
     @ObservationIgnored private var draftPersistenceTask: Task<Void, Never>?
     @ObservationIgnored private var suppressesDraftPersistence = false
@@ -292,16 +223,9 @@ final class AidenChatViewModel {
     /// the Mac. Shown only while `offersNewWorktree`.
     var startsInNewWorktree = false
     /// The Mac is making the worktree; the message waits above a Cancel.
-    private(set) var isSettingUpWorktree = false
+    var isSettingUpWorktree: Bool { mutationSubMachines.worktreeSetup.isSettingUp }
     /// What a `git:read` branch list showed for this chat's workspace, if read.
     private(set) var workspaceHasCommits: Bool?
-    @ObservationIgnored private var worktreeSetupTask: Task<AidenChatNewWorktree, Error>?
-    /// Cancel was pressed during this setup. A task that already finished
-    /// ignores `cancel()`, so the press is kept here too.
-    @ObservationIgnored private var worktreeSetupCanceled = false
-    /// One key per chat and message, so a retry after a lost reply finds the
-    /// worktree the Mac already made instead of failing on the moved chat.
-    @ObservationIgnored private var worktreeAttempt: (text: String, key: UUID)?
     /// The busy send pill's mode. Resets to Queue when the run ends.
     private(set) var runInputMode: AidenStreamInputMode = .queue
     var streamState: AidenStreamState? {
@@ -370,8 +294,6 @@ final class AidenChatViewModel {
     func renderID(forMessageID id: String) -> String {
         messageRenderIDs[id] ?? id
     }
-    private var approvalSnapshotGeneration: UInt64 = 0
-    private var approvalSnapshotInFlight: (streamID: String, context: AidenRemoteRequestContext, approval: AidenPendingApproval?, state: AidenStreamState?)?
     private(set) var isRenaming = false
     var pendingApproval: AidenPendingApproval? {
         // A card back on screen (a refusal, or the next request) replaces the answered line.
@@ -380,7 +302,6 @@ final class AidenChatViewModel {
     /// Revision 61: the tapped button, whose `answered` line shows at once in
     /// the card's place until the Mac confirms or the answer fails.
     private(set) var approvalAnsweredButton: AidenApprovalCardButton?
-    private var questionSnapshotGeneration: UInt64 = 0
     var pendingQuestion: AidenPendingQuestion?
     var isRespondingToQuestion = false
     var isRespondingToApproval = false
@@ -544,6 +465,7 @@ final class AidenChatViewModel {
         self.chat = chat
         self.allowsMutations = allowsMutations
         self.draftStore = draftStore
+        self.pendingSendCoordinator = AidenPendingSendCoordinator(draftStore: draftStore)
         self.visualDocumentCache = visualDocumentCache
         self.modelPreferenceStore = modelPreferenceStore
         self.hapticScope = hapticScope
@@ -575,6 +497,7 @@ final class AidenChatViewModel {
         self.chat = chat
         allowsMutations = false
         draftStore = .shared
+        pendingSendCoordinator = AidenPendingSendCoordinator(draftStore: .shared)
         visualDocumentCache = .shared
         modelPreferenceStore = .shared
         hapticScope = UUID()
@@ -598,12 +521,6 @@ final class AidenChatViewModel {
         attachmentPreparationTask?.cancel()
         runInputReceiptTask?.cancel()
         uploadTask?.cancel()
-        foreignRunTask?.cancel()
-        foreignRunSettleTask?.cancel()
-        foreignRunReconcileTask?.cancel()
-        foreignRunProbeTask?.cancel()
-        rateLimitedSendRetryTask?.cancel()
-        worktreeSetupTask?.cancel()
         skillCatalogTask?.cancel()
         mentionAgentsTask?.cancel()
         mentionFilesTask?.cancel()
@@ -861,9 +778,7 @@ final class AidenChatViewModel {
     /// If the Mac finishes anyway, the chat is in the worktree next time it
     /// loads, still empty.
     func cancelWorktreeSetup() {
-        guard worktreeSetupTask != nil else { return }
-        worktreeSetupCanceled = true
-        worktreeSetupTask?.cancel()
+        mutationSubMachines.worktreeSetup.cancel()
     }
 
     var canSend: Bool {
@@ -1069,9 +984,7 @@ final class AidenChatViewModel {
             let session = await draftStore.beginSession(instanceId: instanceId, chatId: chat.id)
             guard !isRemoved, coordinator.isLive(context) else { return }
             draftSession = session
-            isPendingSendRefusedBecauseBusy = false
-            do { pendingSend = try await draftStore.loadPendingSend(session: session, deviceId: context.deviceId) }
-            catch { sendRecoveryError = "The saved send could not be read. Check the conversation on your computer before dismissing it and sending again." }
+            await pendingSendCoordinator.load(session: session, deviceId: context.deviceId)
             if hasLaunchSend {
                 // The launch send owns the composer: the stored copy becomes
                 // whatever the composer holds now (empty once it has sent).
@@ -1771,8 +1684,7 @@ final class AidenChatViewModel {
     private func send(retry: Bool, automatic: Bool, authority: AidenRemoteRequestContext?) async {
         if !automatic {
             // A person's own send or Retry replaces a scheduled resend.
-            cancelRateLimitedSendRetry()
-            rateLimitedSendRetries = 0
+            pendingSendCoordinator.cancelAutomaticRetryForManualAction()
         }
         if retry, let mode = pendingSend?.inputMode { await submitRunInput(mode, retry: true); return }
         guard !isReadOnlyPresentation else { return }
@@ -1858,8 +1770,11 @@ final class AidenChatViewModel {
         chat.messages.append(optimisticMessage)
         chat.updatedAt = now
         streamState = .queued
-        let attempt = retryAttempt ?? AidenChatDraftStore.PendingSend(deviceId: context.deviceId, request: request,
-            key: turnAttempts.key(for: request), createdAt: Date(), attachments: submittedAttachments)
+        let attempt = retryAttempt ?? pendingSendCoordinator.makeTurnAttempt(
+            deviceId: context.deviceId,
+            request: request,
+            attachments: submittedAttachments
+        )
         let idempotencyKey = attempt.key
         /// Takes the message back out of the chat. A Cancel can come long after
         /// the send (New worktree waits on a fetch), so anything typed meanwhile
@@ -1881,9 +1796,7 @@ final class AidenChatViewModel {
         func returnToRevokedChat(told: Bool = false) async -> Bool {
             guard !isRemoved, coordinator.isRetained(context), told || isOwnerRevoked else { return false }
             restoreFailedSend()
-            if let session = draftSession { await draftStore.settlePendingSend(key: attempt.key, session: session) }
-            pendingSend = nil
-            isPendingSendRefusedBecauseBusy = false
+            await pendingSendCoordinator.clearAfterRevocation(key: attempt.key, session: draftSession)
             presentedError = AidenDockCopy.machineRevoked
             coordinator.haptics.play(.error, scope: hapticScope)
             return true
@@ -1892,47 +1805,31 @@ final class AidenChatViewModel {
             if makesWorktree {
                 // Revision 53: the Mac makes the worktree and moves this empty
                 // chat into it before the message is sent there.
-                let key = worktreeAttempt?.text == text ? worktreeAttempt!.key : UUID()
-                worktreeAttempt = (text, key)
                 let client = try coordinator.remoteClient(for: context)
                 let chatId = chat.id
                 let revision = chat.revision
-                let setup = Task {
-                    try await client.moveChatToNewWorktree(id: chatId, revision: revision, text: text, idempotencyKey: key)
-                }
-                worktreeSetupTask = setup
-                worktreeSetupCanceled = false
-                isSettingUpWorktree = true
-                defer {
-                    isSettingUpWorktree = false
-                    worktreeSetupTask = nil
-                }
-                let moved: AidenChatNewWorktree
-                do {
-                    moved = try await withTaskCancellationHandler {
-                        try await setup.value
-                    } onCancel: {
-                        setup.cancel()
+                let shouldContinue = try await mutationSubMachines.worktreeSetup.execute(
+                    text: text,
+                    operation: { key in
+                        try await client.moveChatToNewWorktree(id: chatId, revision: revision, text: text, idempotencyKey: key)
+                    },
+                    onMoved: { moved in
+                        guard !self.isRemoved, self.coordinator.isLive(context) else {
+                            _ = await returnToRevokedChat()
+                            return false
+                        }
+                        self.chat.workspaceId = moved.chat.workspaceId
+                        self.chat.revision = moved.chat.revision
+                        self.startsInNewWorktree = false
+                        // Only the selected machine's list can refresh. Another machine's
+                        // catches up the next time it is selected.
+                        if self.coordinator.defaultInstanceId == self.instanceId {
+                            Task { [weak self] in await self?.coordinator.refreshWorkspaces() }
+                        }
+                        return true
                     }
-                } catch {
-                    if AidenNewWorktreeRetry.spendsKey(error) { worktreeAttempt = nil }
-                    throw error
-                }
-                guard !isRemoved, coordinator.isLive(context) else {
-                    _ = await returnToRevokedChat()
-                    return
-                }
-                chat.workspaceId = moved.chat.workspaceId
-                chat.revision = moved.chat.revision
-                startsInNewWorktree = false
-                worktreeAttempt = nil
-                // Only the selected machine's list can refresh. Another machine's
-                // catches up the next time it is selected.
-                if coordinator.defaultInstanceId == instanceId {
-                    Task { await coordinator.refreshWorkspaces() }
-                }
-                // Canceled as the worktree arrived: the chat stays there, unsent.
-                if setup.isCancelled || worktreeSetupCanceled { throw CancellationError() }
+                )
+                guard shouldContinue else { return }
             }
             let session: AidenChatDraftStore.Session
             if let existing = draftSession { session = existing }
@@ -1940,13 +1837,12 @@ final class AidenChatViewModel {
                 session = await draftStore.beginSession(instanceId: instanceId, chatId: chat.id)
                 draftSession = session
             }
-            try await draftStore.savePendingSend(attempt, session: session)
+            try await pendingSendCoordinator.persistBeforeSend(attempt, session: session)
             guard !isRemoved, coordinator.isLive(context) else {
                 _ = await returnToRevokedChat()
                 return
             }
-            pendingSend = attempt
-            isPendingSendRefusedBecauseBusy = false
+            pendingSendCoordinator.adoptPersistedAttempt(attempt)
             guard attempt.canRetry(), coordinator.isLive(context) else { throw AidenRemoteClientError.invalidResponse }
             let response = try await coordinator.remoteClient(for: context).startTurn(
                 chatId: chat.id,
@@ -2038,10 +1934,7 @@ final class AidenChatViewModel {
                 return
             }
             guard !isRemoved, coordinator.isLive(context) else { return }
-            pendingSend = nil
-            isPendingSendRefusedBecauseBusy = false
-            turnAttempts.reset()
-            rateLimitedSendRetries = 0
+            pendingSendCoordinator.markAccepted(resetTurnAttempts: true)
             continueInNewChatRefusal = nil
             if chat.messages.contains(where: { $0.id == optimisticID }) {
                 messageRenderIDs[response.message.id] = optimisticID
@@ -2074,18 +1967,22 @@ final class AidenChatViewModel {
             restoreFailedSend()
             if let rateLimit = error as? AidenRemoteClientError, rateLimit.isRetryableRateLimit,
                let session = draftSession,
-               await scheduleRateLimitedSendRetry(replacing: attempt, error: rateLimit, session: session, context: context) {
+               await pendingSendCoordinator.scheduleRateLimitedSendRetry(
+                   replacing: attempt,
+                   error: rateLimit,
+                   session: session,
+                   isContextLive: { self.coordinator.isLive(context) },
+                   onRetry: { [weak self] in
+                       await self?.send(retry: true, automatic: true, authority: context)
+                   }
+               ) {
                 // The Mac was only busy: keep the send and try it again.
                 return
             }
             if case AidenRemoteClientError.server(let status, let body) = error,
                AidenDraftSendReconciliation.refusalSettlesSend(status: status, code: body.code),
                let session = draftSession {
-                await draftStore.settlePendingSend(key: attempt.key, session: session)
-                pendingSend = nil
-                isPendingSendRefusedBecauseBusy = false
-                turnAttempts.reset()
-                rateLimitedSendRetries = 0
+                await pendingSendCoordinator.settleDefinitiveRefusal(key: attempt.key, session: session)
             }
             continueInNewChatRefusal = AidenContinueInNewChatRefusal(error: error)
             if pendingSend == nil { presentedError = error.localizedDescription }
@@ -2614,9 +2511,8 @@ final class AidenChatViewModel {
             else { session = await draftStore.beginSession(instanceId: instanceId, chatId: chat.id); draftSession = session }
             let pending = saved ?? AidenChatDraftStore.PendingSend(deviceId: context.deviceId, request: AidenTurnStart(text: text), key: key,
                 createdAt: Date(), attachments: [], streamId: streamID, inputMode: mode)
-            try await draftStore.savePendingSend(pending, session: session)
-            pendingSend = pending
-            isPendingSendRefusedBecauseBusy = false
+            try await pendingSendCoordinator.persistBeforeSend(pending, session: session)
+            pendingSendCoordinator.adoptPersistedAttempt(pending)
             guard pending.canRetry(), coordinator.isLive(context) else { throw AidenRemoteClientError.invalidResponse }
             let result = try await coordinator.remoteClient(for: context).submitStreamInput(
                 id: streamID,
@@ -2643,8 +2539,7 @@ final class AidenChatViewModel {
                 }
             }
             guard retained, !isRemoved, coordinator.isLive(context) else { return }
-            pendingSend = nil
-            isPendingSendRefusedBecauseBusy = false
+            pendingSendCoordinator.markAccepted(resetTurnAttempts: false)
             if lastRunInputAttempt == attempt { lastRunInputAttempt = nil }
             if AidenRunInputPresentation.consumesDraft(result) {
                 if retry { consumeRunInputDraft(text) } else { persistDraftNow() }
@@ -2673,9 +2568,7 @@ final class AidenChatViewModel {
                 } else {
                     restoreDraft()
                 }
-                if let session = draftSession { await draftStore.settlePendingSend(key: key, session: session) }
-                pendingSend = nil
-                isPendingSendRefusedBecauseBusy = false
+                await pendingSendCoordinator.clearAfterRevocation(key: key, session: draftSession)
                 if lastRunInputAttempt == attempt { lastRunInputAttempt = nil }
                 presentedError = AidenDockCopy.machineRevoked
                 coordinator.haptics.play(.error, scope: hapticScope)
@@ -3545,22 +3438,30 @@ final class AidenChatViewModel {
     ) async {
         guard !isRemoved, coordinator.isLive(context), activeStreamID == streamID,
               streamState?.isTerminal != true else { return }
-        if isFallback, let read = approvalSnapshotInFlight,
-           read.streamID == streamID, coordinator.isLive(read.context),
-           read.approval == pendingApproval, read.state == streamState { return }
-        approvalSnapshotGeneration &+= 1
-        let snapshotGeneration = approvalSnapshotGeneration
-        approvalSnapshotInFlight = (streamID, context, pendingApproval, streamState)
+        let isInFlightContextLive = mutationSubMachines.approvalSnapshots.inFlight.map {
+            coordinator.isLive($0.context)
+        } ?? false
+        guard let token = mutationSubMachines.approvalSnapshots.begin(
+            streamID: streamID,
+            context: context,
+            pendingApproval: pendingApproval,
+            streamState: streamState,
+            isFallback: isFallback,
+            isInFlightContextLive: isInFlightContextLive
+        ) else { return }
         defer {
-            if snapshotGeneration == approvalSnapshotGeneration { approvalSnapshotInFlight = nil }
+            mutationSubMachines.approvalSnapshots.finish(token)
         }
-        let expectedApproval = pendingApproval
-        let expectedState = streamState
         do {
             let snapshot = try await coordinator.remoteClient(for: context).streamApproval(id: streamID)
-            guard !isRemoved, coordinator.isLive(context), activeStreamID == streamID,
-                  snapshotGeneration == approvalSnapshotGeneration,
-                  pendingApproval == expectedApproval, streamState == expectedState else { return }
+            guard mutationSubMachines.approvalSnapshots.accepts(
+                token,
+                activeStreamID: activeStreamID,
+                pendingApproval: pendingApproval,
+                streamState: streamState,
+                isRemoved: isRemoved,
+                isContextLive: coordinator.isLive(context)
+            ) else { return }
             guard let approval = AidenPendingApprovalResolution.resolve(
                 snapshot.approval,
                 streamId: streamID,
@@ -3597,9 +3498,14 @@ final class AidenChatViewModel {
             )
         } catch {
             if await coordinator.handleCredentialRevocation(error, context: context) { return }
-            guard !isRemoved, coordinator.isLive(context), activeStreamID == streamID,
-                  snapshotGeneration == approvalSnapshotGeneration,
-                  pendingApproval == expectedApproval, streamState == expectedState else { return }
+            guard mutationSubMachines.approvalSnapshots.accepts(
+                token,
+                activeStreamID: activeStreamID,
+                pendingApproval: pendingApproval,
+                streamState: streamState,
+                isRemoved: isRemoved,
+                isContextLive: coordinator.isLive(context)
+            ) else { return }
             pendingApproval = nil
             await restorePendingQuestion(
                 streamID: streamID,
@@ -3630,15 +3536,20 @@ final class AidenChatViewModel {
             }
             return
         }
-        questionSnapshotGeneration &+= 1
-        let snapshotGeneration = questionSnapshotGeneration
-        let expectedQuestion = pendingQuestion
-        let expectedState = streamState
+        let token = mutationSubMachines.questionSnapshots.begin(
+            streamID: streamID,
+            pendingQuestion: pendingQuestion,
+            streamState: streamState
+        )
         do {
             let snapshot = try await coordinator.remoteClient(for: context).streamQuestion(id: streamID)
-            guard coordinator.isLive(context), activeStreamID == streamID,
-                  snapshotGeneration == questionSnapshotGeneration,
-                  pendingQuestion == expectedQuestion, streamState == expectedState else { return }
+            guard mutationSubMachines.questionSnapshots.accepts(
+                token,
+                activeStreamID: activeStreamID,
+                pendingQuestion: pendingQuestion,
+                streamState: streamState,
+                isContextLive: coordinator.isLive(context)
+            ) else { return }
             guard let question = AidenPendingQuestionResolution.resolve(
                 snapshot.question,
                 streamId: streamID,
@@ -3673,9 +3584,13 @@ final class AidenChatViewModel {
             }
         } catch {
             if await coordinator.handleCredentialRevocation(error, context: context) { return }
-            guard coordinator.isLive(context), activeStreamID == streamID,
-                  snapshotGeneration == questionSnapshotGeneration,
-                  pendingQuestion == expectedQuestion, streamState == expectedState else { return }
+            guard mutationSubMachines.questionSnapshots.accepts(
+                token,
+                activeStreamID: activeStreamID,
+                pendingQuestion: pendingQuestion,
+                streamState: streamState,
+                isContextLive: coordinator.isLive(context)
+            ) else { return }
             pendingQuestion = nil
             if reconcilesOnNil && pendingApproval == nil {
                 streamState = .reconciling
@@ -4232,20 +4147,12 @@ extension AidenChatViewModel {
         defer { isContinuingInNewChat = false }
         continueInNewChatError = nil
         let source = chat
-        let attempt: AidenContinueInNewChatAttempt
-        if let existing = continueInNewChatAttempt, existing.context == context, existing.chatId == source.id,
-           existing.revision == source.revision, existing.workspaceId == workspaceId {
-            attempt = existing
-        } else {
-            attempt = AidenContinueInNewChatAttempt(
-                context: context,
-                chatId: source.id,
-                revision: source.revision,
-                workspaceId: workspaceId,
-                idempotencyKey: UUID()
-            )
-        }
-        continueInNewChatAttempt = attempt
+        let attempt = mutationSubMachines.continueInNewChatAttempt.begin(
+            context: context,
+            chatId: source.id,
+            revision: source.revision,
+            workspaceId: workspaceId
+        )
         do {
             let result = try await coordinator.remoteClient(for: context).continueChatInNewChat(
                 chatId: attempt.chatId,
@@ -4253,7 +4160,7 @@ extension AidenChatViewModel {
                 workspaceId: attempt.workspaceId,
                 idempotencyKey: attempt.idempotencyKey
             )
-            if continueInNewChatAttempt == attempt { continueInNewChatAttempt = nil }
+            mutationSubMachines.continueInNewChatAttempt.recordSuccess(attempt)
             guard !isRemoved, coordinator.isLive(context) else { return nil }
             let continued = result.chat
             guard !continued.isBotChat else {
@@ -4275,11 +4182,10 @@ extension AidenChatViewModel {
             return continued
         } catch let error where aidenIsCancellation(error) {
             // A cancelled request may already have reached the computer; keep the key.
+            mutationSubMachines.continueInNewChatAttempt.recordFailure(error, for: attempt)
             return nil
         } catch {
-            if continueInNewChatAttempt == attempt, !AidenChatForkAttempt.outcomeIsUnknown(after: error) {
-                continueInNewChatAttempt = nil
-            }
+            mutationSubMachines.continueInNewChatAttempt.recordFailure(error, for: attempt)
             if await coordinator.handleCredentialRevocation(error, context: context) { return nil }
             guard !isRemoved, coordinator.isLive(context) else { return nil }
             if case AidenRemoteClientError.server(_, let body) = error, body.code.rawValue == "revision_conflict" {

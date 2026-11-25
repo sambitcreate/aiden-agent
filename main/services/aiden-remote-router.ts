@@ -72,6 +72,7 @@ import {
   AIDEN_REMOTE_BOT_OPEN_WORK_CAPABILITIES,
   AIDEN_REMOTE_BOT_ROUTINE_MODEL_CAPABILITIES,
   AIDEN_REMOTE_BOT_PEER_CAPABILITIES,
+  AIDEN_REMOTE_BOT_NEEDS_YOU_CAPABILITIES,
   AIDEN_REMOTE_BOT_ACTIVITY_FEATURE,
   AIDEN_REMOTE_BOT_ATTACHMENTS_FEATURE,
   AIDEN_REMOTE_BOT_CARD_CAPABILITIES,
@@ -355,6 +356,12 @@ export interface AidenRemoteRouterDependencies {
     "listConversations" | "putAvatar" | "deleteAvatar" | "avatarContent" | "delete"
     | "supportsChatActivity" | "supportsBotMessaging" | "updateMessaging"
   >>;
+  /**
+   * Contract revision 68 (`bot:needs-you`): which of these Bots wait on the
+   * person (an approval, a question, a hand-off or an open issue). Absent: the
+   * opt-in is never offered and `GET /bots` summaries never carry `needsYou`.
+   */
+  botNeedsYou?: (botIds: readonly string[]) => Promise<ReadonlySet<string>>;
   /**
    * Durable Bot sessions, routines, connection requests and starter presets
    * (contract revision 25). Absent: those routes are `not_found` and their
@@ -2318,6 +2325,25 @@ function botPeersWired(dependencies: AidenRemoteRouterDependencies): boolean {
   return !!port && (port.isReady === undefined || typeof port.isReady === "function" && port.isReady() === true)
     && (["settings", "catalog", "mutate", "exchanges", "exchange", "stop", "evidence"] as const).every((method) => typeof port[method] === "function");
 }
+/** Revision 68: the `needsYou` signal ships only where the host can compute it. */
+function botNeedsYouWired(dependencies: AidenRemoteRouterDependencies): boolean {
+  return typeof dependencies.botNeedsYou === "function" && dependencies.bots !== undefined;
+}
+function holdsBotNeedsYou(device: AidenRemoteRouterAuthenticatedDevice, dependencies: AidenRemoteRouterDependencies): boolean {
+  return device.capabilities.has("bot:needs-you") && botNeedsYouWired(dependencies);
+}
+/** Revision 68: `needsYou: true` on the summaries of Bots waiting on the person, for holders only. */
+async function withBotNeedsYou(
+  summaries: readonly AidenRemoteBotSummary[],
+  device: AidenRemoteRouterAuthenticatedDevice,
+  dependencies: AidenRemoteRouterDependencies,
+): Promise<AidenRemoteBotSummary[]> {
+  const visible = summaries.map(({ needsYou: _hidden, ...summary }) => summary);
+  if (!holdsBotNeedsYou(device, dependencies) || visible.length === 0) return visible;
+  // A failed read leaves the list as it was, without the signal.
+  const waiting = await dependencies.botNeedsYou!(visible.map(({ id }) => id)).catch(() => new Set<string>());
+  return visible.map((summary) => (waiting.has(summary.id) ? { ...summary, needsYou: true as const } : summary));
+}
 function holdsBotPeers(device: AidenRemoteRouterAuthenticatedDevice, dependencies: AidenRemoteRouterDependencies): boolean {
   return device.acceptsBotCapabilities === true && device.capabilities.has("bot:peers") && botPeersWired(dependencies);
 }
@@ -2373,6 +2399,8 @@ function advertisedServerCapabilities(
       : []),
     ...(device.acceptsBotCapabilities === true && botRoutineModelsWired(dependencies) ? AIDEN_REMOTE_BOT_ROUTINE_MODEL_CAPABILITIES : []),
     ...(device.acceptsBotCapabilities === true && botPeersWired(dependencies) ? AIDEN_REMOTE_BOT_PEER_CAPABILITIES : []),
+    // Revision 68: offered only while the host can say which Bots wait on the person.
+    ...(device.acceptsBotCapabilities === true && botNeedsYouWired(dependencies) ? AIDEN_REMOTE_BOT_NEEDS_YOU_CAPABILITIES : []),
     ...(device.acceptsBotCapabilities === true && botOpenWorkWired(dependencies) ? AIDEN_REMOTE_BOT_OPEN_WORK_CAPABILITIES : []),
     ...(device.acceptsBotCapabilities === true && botWatchesWired(dependencies) ? AIDEN_REMOTE_BOT_WATCH_CAPABILITIES : []),
     // Revision 42: offered only while the issue act route is wired.
@@ -2865,6 +2893,9 @@ export function createAidenRemoteRequestHandler(
             if (!botIssuesWired(dependencies)) {
               throw new AidenRemoteServiceError("not_found", "Bot issues are unavailable on this Aiden installation.", 404);
             }
+          } else if ((AIDEN_REMOTE_BOT_NEEDS_YOU_CAPABILITIES as readonly string[]).includes(capability)) {
+            // Revision 68: a display opt-in, offered only while the signal is wired.
+            if (!botNeedsYouWired(dependencies)) throw new AidenRemoteServiceError("not_found", "Bot attention is unavailable on this Aiden installation.", 404);
           } else if ((AIDEN_REMOTE_BOT_MESSAGING_CAPABILITIES as readonly string[]).includes(capability)) {
             if (!botMessagingWired(dependencies)) throw new AidenRemoteServiceError("not_found", "Bot messaging is unavailable on this Aiden installation.", 404);
           } else if ((AIDEN_REMOTE_APPROVAL_CARD_CAPABILITIES as readonly string[]).includes(capability)) {
@@ -2996,7 +3027,11 @@ export function createAidenRemoteRequestHandler(
         writeJson(response, 200, {
           ...list,
           ...(holdsBotMessaging(device, dependencies) && messaging ? {messaging} : {}),
-          bots: await Promise.all(list.bots.map((summary) => botSummaryForAudience(summary, device, dependencies))),
+          bots: await withBotNeedsYou(
+            await Promise.all(list.bots.map((summary) => botSummaryForAudience(summary, device, dependencies))),
+            device,
+            dependencies,
+          ),
         });
         return;
       }

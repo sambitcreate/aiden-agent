@@ -439,8 +439,27 @@ test("rejects stale legacy model selections before reading provider credentials"
 });
 
 
-test("Anthropic requests through a resolved runtime send the whole conversation, never a message thread", async () => {
+/** One Anthropic request with a session, as a chat turn sends it; the first request body Pi would put on the wire. */
+async function sentAnthropicBody(model: Model<Api>, sessionId: string) {
   const { anthropicMessagesApi } = await import("@earendil-works/pi-ai/api/anthropic-messages.lazy");
+  let body: Record<string, unknown> | undefined;
+  let beta: string | null = null;
+  await anthropicMessagesApi().streamSimple(model, normalizeContext({ messages: [
+    { role: "user", content: "Synthetic thread check", timestamp: 1 },
+  ] }), {
+    apiKey: "offline-fixture",
+    sessionId,
+    fetch: async (_url: unknown, init?: RequestInit) => {
+      body ??= JSON.parse(String(init?.body)) as Record<string, unknown>;
+      beta ??= new Headers(init?.headers).get("anthropic-beta");
+      throw new Error("captured before network");
+    },
+  }).result();
+  assert.ok(body, "Pi built a request");
+  return { body, beta: beta ?? "" };
+}
+
+test("Anthropic requests through a resolved runtime send the whole conversation, never a message thread", async () => {
   const { getBuiltinModels } = await import("@earendil-works/pi-ai/providers/all");
   const native = getBuiltinModels("anthropic").find((model) => model.id === "claude-sonnet-4-5") as Model<Api>;
   assert.ok(native, "the fixture uses Pi's own Anthropic model record");
@@ -448,27 +467,8 @@ test("Anthropic requests through a resolved runtime send the whole conversation,
     id: "anthropic", kind: "anthropic", label: "Anthropic", baseUrl: native.baseUrl,
     models: [native.id], needsKey: true, isPreset: true,
   };
-  /** One request with a session, as a chat turn sends it; the first request body Pi would put on the wire. */
-  const sentBody = async (model: Model<Api>) => {
-    let body: Record<string, unknown> | undefined;
-    let beta: string | null = null;
-    await anthropicMessagesApi().streamSimple(model, normalizeContext({ messages: [
-      { role: "user", content: "Synthetic thread check", timestamp: 1 },
-    ] }), {
-      apiKey: "offline-fixture",
-      sessionId: `thread-check-${model.compat === native.compat ? "pi" : "aiden"}`,
-      fetch: async (_url: unknown, init?: RequestInit) => {
-        body ??= JSON.parse(String(init?.body)) as Record<string, unknown>;
-        beta ??= new Headers(init?.headers).get("anthropic-beta");
-        throw new Error("captured before network");
-      },
-    }).result();
-    assert.ok(body, "Pi built a request");
-    return { body, beta: beta ?? "" };
-  };
-
   // Pi's own default for this model would open a thread.
-  const piDefault = await sentBody(native);
+  const piDefault = await sentAnthropicBody(native, "thread-check-pi");
   assert.deepEqual(piDefault.body.thread, { type: "create" });
 
   const runtime = await resolveModelRuntimeWith(
@@ -476,10 +476,33 @@ test("Anthropic requests through a resolved runtime send the whole conversation,
     provider.id,
     native.id,
   );
-  const sent = await sentBody(runtime.model);
+  const sent = await sentAnthropicBody(runtime.model, "thread-check-aiden");
   assert.equal("thread" in sent.body, false);
   assert.doesNotMatch(sent.beta, /message-threads/u);
   assert.equal((sent.body.messages as unknown[]).length, 1);
+});
+
+test("a custom Anthropic connection on api.anthropic.com never opens a message thread", async () => {
+  const provider: StoredProvider = {
+    id: "custom:anthropic-direct", kind: "anthropic", label: "Anthropic direct",
+    baseUrl: "https://api.anthropic.com", models: ["claude-sonnet-4-5"], needsKey: true,
+  };
+  // Pi 1.6.0 turns threads on for any provider whose baseUrl is on api.anthropic.com.
+  const piDefault = await sentAnthropicBody(
+    buildModel(provider, "claude-sonnet-4-5", CONSERVATIVE_RUNTIME_LIMITS),
+    "custom-thread-check-pi",
+  );
+  assert.deepEqual(piDefault.body.thread, { type: "create" });
+  assert.match(piDefault.beta, /message-threads/u);
+
+  const runtime = await resolveModelRuntimeWith(
+    dependencies({ provider, key: "saved-key" }),
+    provider.id,
+    "claude-sonnet-4-5",
+  );
+  const sent = await sentAnthropicBody(runtime.model, "custom-thread-check-aiden");
+  assert.equal("thread" in sent.body, false);
+  assert.doesNotMatch(sent.beta, /message-threads/u);
 });
 
 test("custom effort presets serialize explicit thinking controls through the real Pi transport", async () => {

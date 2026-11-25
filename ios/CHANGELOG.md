@@ -26,6 +26,8 @@
   - The light never blurs live and slows to 15 frames a second for slow states. It is still with Reduce Motion, Reduce Transparency or VoiceOver, capped at half of Subtle with Increase Contrast or Reduce Transparency, and off in Low Power Mode.
   - Its opacity is capped per theme so body and secondary text stay legible over every colour it draws. Monochrome's working light is grey.
 
+- **2026-11-24 — Bots waiting on you (provisional Remote revision 68, `bot:needs-you`).** On a Mac that offers it, the app asks for `bot:needs-you` in a call of its own. A Bot the Mac says waits on the person reads "Waiting for you" on its Bots row and is no longer shown as working, and the Inbox lists it under Needs you with that reason (after an open-issue count). A Bot waiting on an approval the phone can see in its chat reads "Needs your OK" (or "Waiting for your OK on your Mac" when only the Mac may answer) instead, as on Android, with or without this capability. Other Macs look as before.
+
 - **2026-11-24 — A chat's top bar after Telegram's.** No Remote wire or revision change.
   - Workspace and Bot chats show the chat's name over one status line on a glass capsule in the middle of the bar.
   - The status line says where the chat lives at rest (the workspace, then the computer when several are paired, otherwise the branch). For a Bot, it says what the Bot is for.

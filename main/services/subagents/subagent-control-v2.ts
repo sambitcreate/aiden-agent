@@ -1,10 +1,11 @@
 import { randomUUID } from "node:crypto";
 import {
   isSafeSubagentIdentifier,
+  isSubagentRunStateTerminal,
   parseSubagentRunSnapshotV2,
-  subagentProjectionNoticesAreMonotonic,
+  sameSubagentRunSnapshotIdentity,
+  subagentRunSnapshotProgresses,
   type SubagentRunSnapshotV2,
-  type SubagentRunStateV2,
 } from "../../../renderer/shared/subagent-runs.js";
 import {
   parseSubagentManagementRequestV2,
@@ -16,14 +17,6 @@ export const MAX_SUBAGENT_CONTROL_WAITERS_PER_RUN = 32;
 export const MAX_SUBAGENT_CONTROL_STEERING_PER_RUN = 8;
 export const MAX_SUBAGENT_CONTROL_STEERING_CHARS_PER_RUN = 32_000;
 const MAX_IDENTIFIER_ALLOCATION_ATTEMPTS = 128;
-
-const TERMINAL_STATES = new Set<SubagentRunStateV2>([
-  "completed",
-  "failed",
-  "timed_out",
-  "interrupted",
-  "stopped",
-]);
 
 export interface SubagentControlOwnerV2 {
   chatId: string;
@@ -147,58 +140,15 @@ function sameOptional(left: string | undefined, right: string | undefined): bool
   return left === right;
 }
 
-function sameRunIdentity(left: SubagentRunSnapshotV2, right: SubagentRunSnapshotV2): boolean {
-  return (
-    left.runId === right.runId &&
-    left.groupId === right.groupId &&
-    left.generationId === right.generationId &&
-    left.childId === right.childId &&
-    left.chatId === right.chatId &&
-    left.workspaceId === right.workspaceId &&
-    left.role === right.role &&
-    left.label === right.label &&
-    left.taskPreview === right.taskPreview &&
-    left.startedAt === right.startedAt &&
-    left.modelId === right.modelId &&
-    left.providerId === right.providerId &&
-    left.thinkingLevel === right.thinkingLevel &&
-    left.modelSelection === right.modelSelection &&
-    sameOptional(left.parentRunId, right.parentRunId) &&
-    sameOptional(left.retryOfRunId, right.retryOfRunId) &&
-    left.depth === right.depth &&
-    left.execution === right.execution &&
-    left.context === right.context &&
-    left.authorityRevision === right.authorityRevision
-  );
-}
-
-function validStateProgression(current: SubagentRunStateV2, next: SubagentRunStateV2): boolean {
-  if (TERMINAL_STATES.has(current) || next === "stopped") return false;
-  if (current === "queued") return true;
-  if (current === "starting") return next !== "queued";
-  return next !== "queued" && next !== "starting";
-}
-
 function assertMonotonicProgress(
   current: SubagentRunSnapshotV2,
   next: SubagentRunSnapshotV2,
 ): void {
-  const currentMilestones = current.milestones ?? [];
-  const nextMilestones = next.milestones ?? [];
   if (
     next.revision <= current.revision ||
-    next.updatedAt < current.updatedAt ||
-    next.turns < current.turns ||
-    next.tools < current.tools ||
-    next.tokens < current.tokens ||
-    nextMilestones.length < currentMilestones.length ||
-    currentMilestones.some((milestone, index) => nextMilestones[index] !== milestone) ||
-    !subagentProjectionNoticesAreMonotonic(
-      current.projectionNotices,
-      next.projectionNotices,
-      TERMINAL_STATES.has(next.state),
-    ) ||
-    !validStateProgression(current.state, next.state)
+    // Stops must go through `SubagentControlRegistryV2.stop` (`stoppedSnapshot`)
+    // so the control plane synchronously revokes approvals and cancels active work.
+    !subagentRunSnapshotProgresses(current, next, { allowStopped: false })
   ) {
     throw new Error("Subagent control lifecycle cannot move backward.");
   }
@@ -284,7 +234,7 @@ export class SubagentControlRegistryV2 {
       steeringActive: false,
       retryInFlight: false,
     };
-    if (TERMINAL_STATES.has(snapshot.state)) {
+    if (isSubagentRunStateTerminal(snapshot.state)) {
       // Complete the mandatory approval fence before capacity eviction so a
       // rejected terminal admission cannot discard already accepted history.
       record.revokeApprovals();
@@ -294,7 +244,7 @@ export class SubagentControlRegistryV2 {
       throw new Error("The subagent control registry is full.");
     }
     this.records.set(snapshot.runId, record);
-    if (TERMINAL_STATES.has(snapshot.state)) {
+    if (isSubagentRunStateTerminal(snapshot.state)) {
       this.closeTerminalRecord(record);
     }
     return cloneSnapshot(snapshot);
@@ -330,7 +280,7 @@ export class SubagentControlRegistryV2 {
   ): SubagentRunSnapshotV2 {
     const record = this.ownedRecord(owner, candidate.runId);
     const next = parseSubagentRunSnapshotV2(candidate);
-    if (!next || !sameRunIdentity(record.snapshot, next)) {
+    if (!next || !sameSubagentRunSnapshotIdentity(record.snapshot, next)) {
       throw new Error("Subagent control update changed immutable run authority.");
     }
     assertMonotonicProgress(record.snapshot, next);
@@ -351,7 +301,7 @@ export class SubagentControlRegistryV2 {
     });
     if (parsed.action !== "wait") throw new Error("Invalid subagent wait request.");
     const record = this.ownedRecord(owner, parsed.runId);
-    if (TERMINAL_STATES.has(record.snapshot.state)) {
+    if (isSubagentRunStateTerminal(record.snapshot.state)) {
       return { snapshot: cloneSnapshot(record.snapshot), timedOut: false };
     }
     if (parsed.timeoutMs === 0) {
@@ -377,7 +327,7 @@ export class SubagentControlRegistryV2 {
     runId: string,
   ): { snapshot: SubagentRunSnapshotV2; changed: boolean } {
     const record = this.ownedRecord(owner, runId);
-    if (TERMINAL_STATES.has(record.snapshot.state)) {
+    if (isSubagentRunStateTerminal(record.snapshot.state)) {
       return { snapshot: cloneSnapshot(record.snapshot), changed: false };
     }
     const reason = new Error("Subagent run stopped by its owner.");
@@ -404,7 +354,7 @@ export class SubagentControlRegistryV2 {
     });
     if (parsed.action !== "steer") throw new Error("Invalid subagent steer request.");
     const record = this.ownedRecord(owner, parsed.runId);
-    if (TERMINAL_STATES.has(record.snapshot.state)) {
+    if (isSubagentRunStateTerminal(record.snapshot.state)) {
       throw new Error("A terminal subagent cannot be steered.");
     }
     if (!record.steer) throw new Error("Subagent steering is unavailable for this run.");
@@ -428,7 +378,7 @@ export class SubagentControlRegistryV2 {
     runId: string,
   ): Promise<{ sourceSnapshot: SubagentRunSnapshotV2; snapshot: SubagentRunSnapshotV2 }> {
     const sourceRecord = this.ownedRecord(owner, runId);
-    if (!TERMINAL_STATES.has(sourceRecord.snapshot.state)) {
+    if (!isSubagentRunStateTerminal(sourceRecord.snapshot.state)) {
       throw new Error("Only a terminal subagent run can be retried.");
     }
     if (!this.options.prepareRetry) throw new Error("Subagent retry is unavailable.");
@@ -516,12 +466,12 @@ export class SubagentControlRegistryV2 {
   }
 
   private publish(record: ControlRecord, snapshot: SubagentRunSnapshotV2): void {
-    if (TERMINAL_STATES.has(snapshot.state)) record.revokeApprovals();
+    if (isSubagentRunStateTerminal(snapshot.state)) record.revokeApprovals();
     record.snapshot = snapshot;
     if (record.onSnapshot) {
       ignoreControlHookFailure(() => record.onSnapshot?.(cloneSnapshot(snapshot)));
     }
-    if (TERMINAL_STATES.has(snapshot.state)) this.closeTerminalRecord(record);
+    if (isSubagentRunStateTerminal(snapshot.state)) this.closeTerminalRecord(record);
   }
 
   private closeTerminalRecord(record: ControlRecord): void {
@@ -542,7 +492,7 @@ export class SubagentControlRegistryV2 {
 
   private evictOldestTerminalRecord(): void {
     const candidate = [...this.records.entries()]
-      .filter(([, record]) => TERMINAL_STATES.has(record.snapshot.state))
+      .filter(([, record]) => isSubagentRunStateTerminal(record.snapshot.state))
       .sort(
         ([leftId, left], [rightId, right]) =>
           left.snapshot.updatedAt - right.snapshot.updatedAt ||
@@ -552,7 +502,7 @@ export class SubagentControlRegistryV2 {
   }
 
   private pumpSteering(record: ControlRecord): void {
-    if (record.steeringActive || TERMINAL_STATES.has(record.snapshot.state)) return;
+    if (record.steeringActive || isSubagentRunStateTerminal(record.snapshot.state)) return;
     const work = record.steering.shift();
     if (!work || !record.steer) return;
     record.steeringActive = true;
@@ -576,7 +526,7 @@ export class SubagentControlRegistryV2 {
       aborted,
     ])
       .then(() => {
-        if (TERMINAL_STATES.has(record.snapshot.state) || signal.aborted) {
+        if (isSubagentRunStateTerminal(record.snapshot.state) || signal.aborted) {
           throw new Error("The subagent ended before steering was accepted.");
         }
         work.resolve(cloneSnapshot(record.snapshot));
