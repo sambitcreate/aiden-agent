@@ -21,8 +21,8 @@ final class AidenShellUITests: XCTestCase {
         for scenario in AidenStateMatrix.Scenario.allCases {
             let app = AidenStateMatrix.launch(scenario: scenario)
             XCTAssertTrue(AidenStateMatrix.firstScreen(in: app).waitForExistence(timeout: 10), scenario.rawValue)
-            for title in ["Bots", "Workspaces", "Search", "Inbox"] {
-                AidenStateMatrix.leaveSearch(in: app)
+            for title in ["Chats", "Bots", "Workspaces", "Inbox"] {
+                AidenStateMatrix.closeDrawer(in: app)
                 let tab = AidenStateMatrix.tab(title, in: app)
                 XCTAssertTrue(tab.waitForExistence(timeout: 5), "No \(title) tab in \(scenario.rawValue)")
                 tab.tap()
@@ -64,20 +64,84 @@ final class AidenShellUITests: XCTestCase {
         app.terminate()
     }
 
-    func testOnlyTheSearchTabHasASearchField() {
+    /// Search lives in the drawer, not on a tab.
+    func testOnlyTheDrawerHasASearchField() {
         let app = AidenStateMatrix.launch(scenario: .busy)
         XCTAssertTrue(openInbox(in: app).waitForExistence(timeout: 10), "No chat rows in the inbox")
-        XCTAssertFalse(app.searchFields.firstMatch.exists, "Inbox has a search field")
-
-        for title in ["Bots", "Workspaces"] {
+        for title in ["Inbox", "Chats", "Bots", "Workspaces"] {
             AidenStateMatrix.openArea(title, in: app)
             XCTAssertTrue(app.navigationBars[title].waitForExistence(timeout: 10))
             XCTAssertFalse(app.searchFields.firstMatch.exists, "\(title) has a search field")
+            XCTAssertFalse(AidenStateMatrix.drawerSearchField(in: app).exists, "\(title) has a search field")
         }
 
-        AidenStateMatrix.openArea("Search", in: app)
-        XCTAssertTrue(searchField(in: app).exists, "Search has no field")
+        openDrawer(in: app)
+        XCTAssertTrue(searchField(in: app).exists, "The drawer has no search field")
         app.terminate()
+    }
+
+    /// The menu button opens the drawer; its pages open on the tab that's
+    /// showing, and Close menu puts it away.
+    func testTheMenuButtonOpensTheDrawerAndItsPages() {
+        let app = AidenStateMatrix.launch(scenario: .busy, startingTab: nil)
+        XCTAssertTrue(app.navigationBars["Chats"].waitForExistence(timeout: 10), "A first launch opens on Chats")
+        openDrawer(in: app)
+        for heading in ["Recents", "More"] {
+            XCTAssertTrue(app.staticTexts[heading].firstMatch.exists, "No \(heading) in the drawer")
+        }
+        XCTAssertTrue(drawerRow("Computers", in: app).exists, "No Computers in the drawer")
+        AidenStateMatrix.closeDrawer(in: app)
+        XCTAssertFalse(app.buttons["Close menu"].exists, "Close menu left the drawer up")
+
+        openDrawer(in: app)
+        drawerRow("Scheduled tasks", in: app).tap()
+        XCTAssertTrue(app.navigationBars["Scheduled tasks"].waitForExistence(timeout: 10), "Scheduled tasks did not open")
+        XCTAssertFalse(app.buttons["Close menu"].exists, "Opening a page left the drawer up")
+        goBack(in: app)
+        XCTAssertTrue(app.navigationBars["Chats"].waitForExistence(timeout: 10), "Back did not return to Chats")
+        app.terminate()
+    }
+
+    /// A swipe from the leading edge opens the drawer at a tab's root, and on
+    /// a pushed page it's the stack's Back instead.
+    func testAnEdgeSwipeOpensTheDrawerOnlyAtATabsRoot() throws {
+        let app = AidenStateMatrix.launch(scenario: .busy)
+        XCTAssertTrue(openInbox(in: app).waitForExistence(timeout: 10), "No chat rows in the inbox")
+        try XCTSkipIf(
+            AidenStateMatrix.window(of: app).frame.width > AidenStateMatrix.compactWidth,
+            "Beside the list the edge belongs to the columns"
+        )
+        edgeSwipe(in: app)
+        XCTAssertTrue(app.buttons["Close menu"].waitForExistence(timeout: 3), "The edge swipe did not open the drawer")
+        app.buttons["Settings"].firstMatch.tap()
+        XCTAssertTrue(app.navigationBars["App settings"].waitForExistence(timeout: 10))
+        // A swipe during the push's animation is dropped, so let it settle.
+        XCTAssertTrue(app.buttons["Close menu"].waitForNonExistence(timeout: 5))
+        sleep(1)
+
+        edgeSwipe(in: app)
+        XCTAssertTrue(app.navigationBars["Inbox"].waitForExistence(timeout: 10), "The edge swipe was not Back")
+        XCTAssertFalse(app.buttons["Close menu"].exists, "The drawer opened over a pushed page")
+        app.terminate()
+    }
+
+    /// A row in the drawer's More section, scrolled into view below a long
+    /// Recents list.
+    private func drawerRow(_ title: String, in app: XCUIApplication) -> XCUIElement {
+        let row = app.buttons[title].firstMatch
+        for _ in 0..<4 where !(row.exists && row.isHittable) {
+            app.collectionViews.containing(.staticText, identifier: "Recents").firstMatch.swipeUp()
+        }
+        return row
+    }
+
+    /// A drag from the leading edge across most of the window, at a person's
+    /// pace, so the stack's own Back gesture recognizes it as well as ours.
+    private func edgeSwipe(in app: XCUIApplication) {
+        let window = AidenStateMatrix.window(of: app)
+        let start = window.coordinate(withNormalizedOffset: CGVector(dx: 0, dy: 0.5)).withOffset(CGVector(dx: 4, dy: 0))
+        let distance = window.frame.width * 0.75
+        start.press(forDuration: 0.1, thenDragTo: start.withOffset(CGVector(dx: distance, dy: 0)), withVelocity: .slow, thenHoldForDuration: 0)
     }
 
     /// The largest text makes the list taller than the screen, so it can scroll.
@@ -338,40 +402,32 @@ final class AidenShellUITests: XCTestCase {
         func heading(_ title: String) -> XCUIElement {
             app.staticTexts.matching(NSPredicate(format: "label BEGINSWITH %@", title)).firstMatch
         }
-        XCTAssertTrue(heading("Needs you").waitForExistence(timeout: 10), "Needs you is missing")
-        // Read before scrolling, which shrinks the tab bar.
+        let needsYou = heading("Needs you")
+        let updates = heading("Updates")
+        let earlier = heading("Earlier")
+        for section in [needsYou, updates, earlier] {
+            XCTAssertTrue(section.waitForExistence(timeout: 10), "\(section) is missing")
+        }
+
+        XCTAssertLessThan(needsYou.frame.minY, updates.frame.minY)
+        XCTAssertLessThan(updates.frame.minY, earlier.frame.minY)
+
         // Two prompts and a failed run wait on the person. The running chat doesn't.
         // A tab bar gives the count as a value, and a sidebar row in its label.
         let inbox = AidenStateMatrix.tab("Inbox", in: app)
         let badge = "\(inbox.label) \(inbox.value as? String ?? "")"
         XCTAssertTrue(badge.contains("3"), "The Inbox badge said \(badge)")
-        // Home's header sits above the sections, so scroll down in short steps
-        // and note each heading as it comes on screen, top first.
-        var seen: [String] = []
-        for _ in 0..<8 where seen.count < 3 {
-            let visible = ["Needs you", "Updates", "Earlier"]
-                .filter { !seen.contains($0) && heading($0).exists }
-                .sorted { heading($0).frame.minY < heading($1).frame.minY }
-            seen += visible
-            if seen.count < 3 {
-                let window = app.windows.firstMatch
-                window.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.7))
-                    .press(forDuration: 0.05, thenDragTo: window.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.45)))
-            }
-        }
-        XCTAssertEqual(seen, ["Needs you", "Updates", "Earlier"])
-
         AidenStateMatrix.capture("tabs-inbox-sections", in: self)
         app.terminate()
     }
 
     /// Home greets the person by the name set on this phone, shows the Bots as
-    /// sprites and at most three "From your Bots" rows over the Inbox, keeps a
+    /// sprites and at most three "From your Bots" rows above the chats, keeps a
     /// composer at the bottom, and Settings → Appearance holds the ambient
     /// background and the name.
     func testHomeGreetsShowsBotsDigestAndComposer() {
         let app = AidenStateMatrix.launch(scenario: .full, extraArguments: ["-aiden.home.name", "Sam"])
-        AidenStateMatrix.openArea("Inbox", in: app)
+        AidenStateMatrix.openArea("Chats", in: app)
 
         let greeting = app.staticTexts["home.greeting"].firstMatch
         XCTAssertTrue(greeting.waitForExistence(timeout: 10), "No greeting")
@@ -415,7 +471,7 @@ final class AidenShellUITests: XCTestCase {
             scenario: .full,
             extraArguments: ["-AidenAuroraForcePhase", "done", "-aiden.appearance.aurora", "subtle"]
         )
-        AidenStateMatrix.openArea("Inbox", in: app)
+        AidenStateMatrix.openArea("Chats", in: app)
         let marker = app.descendants(matching: .any)["aurora.phase"].firstMatch
         XCTAssertTrue(marker.waitForExistence(timeout: 10), "No aurora phase marker on Home")
         XCTAssertEqual(marker.value as? String, "done")
@@ -425,7 +481,7 @@ final class AidenShellUITests: XCTestCase {
             scenario: .full,
             extraArguments: ["-AidenAuroraForcePhase", "done", "-aiden.appearance.aurora", "off"]
         )
-        AidenStateMatrix.openArea("Inbox", in: off)
+        AidenStateMatrix.openArea("Chats", in: off)
         let hidden = off.descendants(matching: .any)["aurora.phase"].firstMatch
         XCTAssertTrue(hidden.waitForExistence(timeout: 10), "No aurora phase marker on Home")
         XCTAssertEqual(hidden.value as? String, "hidden")
@@ -498,9 +554,14 @@ final class AidenShellUITests: XCTestCase {
         XCTAssertTrue(app.navigationBars["Workspaces"].waitForExistence(timeout: 10))
         AidenStateMatrix.capture("tabs-workspaces", in: self)
 
-        AidenStateMatrix.openArea("Search", in: app)
+        AidenStateMatrix.openArea("Chats", in: app)
+        XCTAssertTrue(app.navigationBars["Chats"].waitForExistence(timeout: 10))
+        AidenStateMatrix.capture("tabs-chats", in: self)
+
+        openDrawer(in: app)
         XCTAssertTrue(searchField(in: app).exists)
-        AidenStateMatrix.capture("tabs-search", in: self)
+        AidenStateMatrix.capture("tabs-drawer", in: self)
+        AidenStateMatrix.closeDrawer(in: app)
         app.terminate()
 
         let oldHost = AidenStateMatrix.launch(scenario: .oldHost)
@@ -519,22 +580,22 @@ final class AidenShellUITests: XCTestCase {
         if UIDevice.current.userInterfaceIdiom == .pad {
             try AidenStateMatrix.widenTheWindow(of: app)
         }
-        openInboxMenu(in: app)
+        openDrawer(in: app)
         XCTAssertTrue(app.buttons["Settings"].firstMatch.waitForExistence(timeout: 5))
-        AidenStateMatrix.capture("tabs-inbox-menu", in: self)
+        AidenStateMatrix.capture("tabs-drawer-menu", in: self)
         app.buttons["Settings"].firstMatch.tap()
         XCTAssertTrue(app.navigationBars["App settings"].waitForExistence(timeout: 10))
         AidenStateMatrix.capture("tabs-settings", in: self)
         goBack(in: app)
 
-        openInboxMenu(in: app)
-        app.buttons["Scheduled tasks"].firstMatch.tap()
+        openDrawer(in: app)
+        drawerRow("Scheduled tasks", in: app).tap()
         XCTAssertTrue(app.navigationBars["Scheduled tasks"].waitForExistence(timeout: 10))
         AidenStateMatrix.capture("tabs-scheduled", in: self)
         goBack(in: app)
 
-        openInboxMenu(in: app)
-        app.buttons["Usage"].firstMatch.tap()
+        openDrawer(in: app)
+        drawerRow("Usage", in: app).tap()
         XCTAssertTrue(app.navigationBars["Usage"].waitForExistence(timeout: 10))
         AidenStateMatrix.capture("tabs-usage", in: self)
         goBack(in: app)
@@ -593,7 +654,7 @@ final class AidenShellUITests: XCTestCase {
 
         let offline = AidenStateMatrix.launch(scenario: .offlineMix)
         XCTAssertTrue(AidenStateMatrix.firstScreen(in: offline).waitForExistence(timeout: 10))
-        openInboxMenu(in: offline)
+        openDrawer(in: offline)
         offline.buttons["Settings"].firstMatch.tap()
         let machines = machinesRow(in: offline)
         XCTAssertTrue(machines.waitForExistence(timeout: 10))
@@ -632,9 +693,9 @@ final class AidenShellUITests: XCTestCase {
         XCTAssertTrue(openInbox(in: app).waitForExistence(timeout: 10), "No chat rows in the inbox")
 
         for (entry, title) in [("Settings", "App settings"), ("Scheduled tasks", "Scheduled tasks"), ("Usage", "Usage")] {
-            openInboxMenu(in: app)
-            let item = app.buttons[entry].firstMatch
-            XCTAssertTrue(item.waitForExistence(timeout: 5), "No \(entry) in the Inbox menu")
+            openDrawer(in: app)
+            let item = drawerRow(entry, in: app)
+            XCTAssertTrue(item.waitForExistence(timeout: 5), "No \(entry) in the drawer")
             item.tap()
             XCTAssertTrue(app.navigationBars[title].waitForExistence(timeout: 10), "\(entry) did not open")
             goBack(in: app)
@@ -692,7 +753,7 @@ final class AidenShellUITests: XCTestCase {
     func testPairAMachineOpensFromPushedSettings() {
         let app = AidenStateMatrix.launch(scenario: .busy)
         XCTAssertTrue(openInbox(in: app).waitForExistence(timeout: 10), "No chat rows in the inbox")
-        openInboxMenu(in: app)
+        openDrawer(in: app)
         app.buttons["Settings"].firstMatch.tap()
         let machines = machinesRow(in: app)
         XCTAssertTrue(machines.waitForExistence(timeout: 10), "No Machines in Settings")
@@ -727,15 +788,16 @@ final class AidenShellUITests: XCTestCase {
                 "-aiden.appearance.mode", appearance,
                 "-aiden.product-navigation.v1", "reset",
                 "-aiden.product-navigation.v2", "reset",
+                "-aiden.product-navigation.v3", "reset",
                 "-aiden.appearance.aurora", "off",
                 "-AppleLanguages", "(en)",
                 "-AppleLocale", "en_US",
             ]
             app.launch()
 
-            XCTAssertTrue(app.navigationBars["Inbox"].waitForExistence(timeout: 10), "Unpaired launch should enter the shell")
+            XCTAssertTrue(app.navigationBars["Chats"].waitForExistence(timeout: 10), "Unpaired launch should enter the shell")
             XCTAssertTrue(app.staticTexts["No computers connected"].waitForExistence(timeout: 5), "Empty state title missing")
-            capture("sim_\(appearance)_1_inbox")
+            capture("sim_\(appearance)_1_chats")
 
             let addComputer = app.buttons["Add Computer"].firstMatch
             XCTAssertTrue(addComputer.waitForExistence(timeout: 5), "Add Computer CTA missing")
@@ -768,22 +830,21 @@ final class AidenShellUITests: XCTestCase {
         }
     }
 
-    func testUnpairedSearchOffersPairingAndExplainsInvalidManualInput() {
+    func testUnpairedChatsOffersPairingAndExplainsInvalidManualInput() {
         let app = XCUIApplication()
         app.launchArguments = [
             "-aiden.product-navigation.v1", "reset",
             "-aiden.product-navigation.v2", "reset",
+            "-aiden.product-navigation.v3", "reset",
             "-aiden.appearance.aurora", "off",
             "-AppleLanguages", "(en)",
             "-AppleLocale", "en_US",
         ]
         app.launch()
 
-        XCTAssertTrue(app.navigationBars["Inbox"].waitForExistence(timeout: 10))
-        AidenStateMatrix.openArea("Search", in: app)
+        XCTAssertTrue(app.navigationBars["Chats"].waitForExistence(timeout: 10))
         let addComputer = app.buttons["Add Computer"].firstMatch
         XCTAssertTrue(addComputer.waitForExistence(timeout: 10))
-        XCTAssertFalse(app.searchFields.firstMatch.exists, "Search requires a paired computer")
         addComputer.tap()
 
         let installed = app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", "Yes")).firstMatch
@@ -815,7 +876,7 @@ final class AidenShellUITests: XCTestCase {
     func testAMachineOpensFromSettingsAndBackRetracesTheWay() {
         let app = AidenStateMatrix.launch(scenario: .four)
         XCTAssertTrue(app.navigationBars["Inbox"].waitForExistence(timeout: 10))
-        openInboxMenu(in: app)
+        openDrawer(in: app)
         app.buttons["Settings"].firstMatch.tap()
         let machines = machinesRow(in: app)
         XCTAssertTrue(machines.waitForExistence(timeout: 10), "No Machines in Settings")
@@ -921,7 +982,7 @@ final class AidenShellUITests: XCTestCase {
         let toggle = app.buttons.matching(NSPredicate(format: "identifier ==[c] %@", "ToggleSidebar")).firstMatch
         XCTAssertTrue(toggle.waitForExistence(timeout: 5), "No sidebar button in a regular width")
         if !AidenStateMatrix.sidebarRow("Inbox", in: app).exists { toggle.tap() }
-        for title in ["Inbox", "Bots", "Workspaces", "Search"] {
+        for title in ["Chats", "Bots", "Workspaces", "Inbox"] {
             XCTAssertTrue(
                 AidenStateMatrix.sidebarRow(title, in: app).waitForExistence(timeout: 10),
                 "\(title) is not in the sidebar"
@@ -943,15 +1004,16 @@ final class AidenShellUITests: XCTestCase {
         app.terminate()
     }
 
-    /// In a regular width, Search with its field up still leaves the way back
-    /// to the other tabs.
-    func testSearchInARegularWidthLeavesAWayBackToTheOtherTabs() throws {
+    /// In a regular width the drawer lays over the columns, and closing it
+    /// leaves the sidebar's way to the other tabs.
+    func testTheDrawerInARegularWidthLeavesAWayBackToTheOtherTabs() throws {
         try XCTSkipUnless(UIDevice.current.userInterfaceIdiom == .pad, "Needs a regular-width window")
         let app = AidenStateMatrix.launch(scenario: .busy)
         XCTAssertTrue(app.navigationBars["Inbox"].waitForExistence(timeout: 10))
         try AidenStateMatrix.widenTheWindow(of: app)
         search("flaky", in: app)
         XCTAssertTrue(searchRow("Fix the flaky upload test", in: app).waitForExistence(timeout: 10), "No Search results")
+        AidenStateMatrix.closeDrawer(in: app)
 
         let row = AidenStateMatrix.sidebarRow("Workspaces", in: app)
         if !row.isHittable {
@@ -962,7 +1024,7 @@ final class AidenShellUITests: XCTestCase {
         XCTAssertTrue(row.waitForExistence(timeout: 5), "The sidebar did not come back")
         AidenStateMatrix.capture("search-ipad-way-back", in: self)
         row.tap()
-        XCTAssertTrue(app.navigationBars["Workspaces"].waitForExistence(timeout: 10), "Workspaces did not open from Search")
+        XCTAssertTrue(app.navigationBars["Workspaces"].waitForExistence(timeout: 10), "Workspaces did not open after the drawer")
         app.terminate()
     }
 
@@ -1248,12 +1310,12 @@ final class AidenShellUITests: XCTestCase {
 
     // MARK: Search
 
-    /// Types into the Search tab's field. The demo machines answer from a
+    /// Types into the drawer's search field. The demo machines answer from a
     /// responder in the app, so this reaches no real machine.
     private func search(_ text: String, in app: XCUIApplication, submit: Bool = true) {
-        AidenStateMatrix.openArea("Search", in: app)
-        let field = app.searchFields.firstMatch
-        XCTAssertTrue(field.waitForExistence(timeout: 10), "Search has no field")
+        openDrawer(in: app)
+        let field = AidenStateMatrix.drawerSearchField(in: app)
+        XCTAssertTrue(field.waitForExistence(timeout: 10), "The drawer has no search field")
         field.tap()
         field.typeText(text)
         // The Search key puts the keyboard away and keeps the query, so the results are in view.
@@ -1339,7 +1401,7 @@ final class AidenShellUITests: XCTestCase {
 
         let gone = NSPredicate(format: "exists == false")
         wait(for: [XCTNSPredicateExpectation(predicate: gone, object: app.keyboards.firstMatch)], timeout: 5)
-        XCTAssertEqual(app.searchFields.firstMatch.value as? String, "flaky", "The query went with the keyboard")
+        XCTAssertEqual(AidenStateMatrix.drawerSearchField(in: app).value as? String, "flaky", "The query went with the keyboard")
         app.terminate()
     }
 
@@ -1349,11 +1411,11 @@ final class AidenShellUITests: XCTestCase {
         search("flaky", in: app, submit: false)
         XCTAssertTrue(app.keyboards.firstMatch.exists, "The keyboard was not up to begin with")
 
-        app.searchFields.firstMatch.typeText("\n")
+        AidenStateMatrix.drawerSearchField(in: app).typeText("\n")
 
         let gone = NSPredicate(format: "exists == false")
         wait(for: [XCTNSPredicateExpectation(predicate: gone, object: app.keyboards.firstMatch)], timeout: 5)
-        XCTAssertEqual(app.searchFields.firstMatch.value as? String, "flaky")
+        XCTAssertEqual(AidenStateMatrix.drawerSearchField(in: app).value as? String, "flaky")
         XCTAssertTrue(searchRow("Fix the flaky upload test", in: app).exists, "The results went with the keyboard")
         app.terminate()
     }
@@ -1766,7 +1828,7 @@ final class AidenShellUITests: XCTestCase {
             for _ in 0..<4 { dragResults(in: app, from: 0.4, to: 0.05) }
             // The field is at the bottom of a compact window and under the title of a
             // regular one. Either way, nothing may sit behind it.
-            let field = app.searchFields.firstMatch
+            let field = AidenStateMatrix.drawerSearchField(in: app)
             XCTAssertFalse(note.frame.intersects(field.frame), "The note sits behind the field (\(size))")
             // Under a regular width's title the field can't cover the note, so the
             // note must also end where it can be read.
@@ -1774,24 +1836,6 @@ final class AidenShellUITests: XCTestCase {
             XCTAssertTrue(window.contains(note.frame), "The note isn't wholly in the window (\(size)): \(note.frame)")
             app.terminate()
         }
-
-        let prompt = AidenStateMatrix.launch(
-            scenario: .one,
-            contentSize: .accessibilityExtraExtraExtraLarge
-        )
-        XCTAssertTrue(openInbox(in: prompt).waitForExistence(timeout: 10))
-        AidenStateMatrix.openArea("Search", in: prompt)
-        let description = prompt.staticTexts.matching(
-            NSPredicate(format: "label CONTAINS %@", "any of your computers")
-        ).firstMatch
-        XCTAssertTrue(description.waitForExistence(timeout: 10), "No prompt")
-        for _ in 0..<4 { dragResults(in: prompt, from: 0.4, to: 0.05) }
-        XCTAssertFalse(description.frame.intersects(prompt.searchFields.firstMatch.frame), "The prompt is cut off by the field")
-        XCTAssertTrue(
-            AidenStateMatrix.window(of: prompt).frame.contains(description.frame),
-            "The prompt isn't wholly in the window: \(description.frame)"
-        )
-        prompt.terminate()
     }
 
     /// Home Mini errors, and Laptop and Build Box are offline. Studio's results stay.
@@ -1827,9 +1871,9 @@ final class AidenShellUITests: XCTestCase {
             let tag = "\(appearance.rawValue)-\(size.label)"
             let app = AidenStateMatrix.launch(scenario: .four, appearance: appearance, contentSize: size)
             XCTAssertTrue(openInbox(in: app).waitForExistence(timeout: 10), "No chat rows in the inbox (\(tag))")
-            AidenStateMatrix.openArea("Search", in: app)
-            XCTAssertTrue(app.searchFields.firstMatch.waitForExistence(timeout: 10), tag)
-            AidenStateMatrix.capture("search-prompt-\(tag)", in: self)
+            openDrawer(in: app)
+            XCTAssertTrue(searchField(in: app).exists, tag)
+            AidenStateMatrix.capture("drawer-\(tag)", in: self)
             search("flaky", in: app)
             XCTAssertTrue(searchRow("Fix the flaky upload test", in: app).waitForExistence(timeout: 10), "No chat result (\(tag))")
             AidenStateMatrix.capture("search-results-\(tag)", in: self)
@@ -1948,7 +1992,7 @@ final class AidenShellUITests: XCTestCase {
     /// sidebar open in its place.
     private static func tabStrip(in app: XCUIApplication) -> CGRect? {
         let window = AidenStateMatrix.window(of: app).frame
-        let tabs = ["Inbox", "Bots", "Workspaces", "Search"]
+        let tabs = ["Chats", "Bots", "Workspaces", "Inbox"]
             .map { app.buttons.matching(NSPredicate(format: "label == %@", $0)).firstMatch }
             .filter { $0.exists && $0.isHittable && $0.frame.maxY < window.minY + 120 }
         guard !tabs.isEmpty else { return nil }
@@ -2360,6 +2404,9 @@ final class AidenShellUITests: XCTestCase {
             openSettings(in: app)
             XCTAssertTrue(app.navigationBars["App settings"].waitForExistence(timeout: 10), "Settings did not open")
             try audit("settings")
+            // Search is in the drawer, which opens from a tab's root.
+            goBack(in: app)
+            XCTAssertTrue(app.navigationBars["Inbox"].waitForExistence(timeout: 10), "Settings did not go back")
 
             // Last, because its field stays up: a screen audited after it would
             // need the way back that `testSearchInARegularWidthLeavesAWayBackToTheOtherTabs`
@@ -2564,23 +2611,14 @@ final class AidenShellUITests: XCTestCase {
         ).firstMatch
     }
 
-    private func openInboxMenu(in app: XCUIApplication) {
-        let menu = app.navigationBars.buttons["Inbox menu"].firstMatch
-        // The menu is in the list's bar. A chat chosen in a list laid over the
-        // detail (an iPad in portrait) put the list away, and the detail's
-        // column toggle brings it back.
-        let showList = app.navigationBars.buttons["Show Sidebar"].firstMatch
-        if !menu.waitForExistence(timeout: 3), showList.exists { showList.tap() }
-        XCTAssertTrue(menu.waitForExistence(timeout: 10), "No Inbox menu")
-        menu.tap()
-        // An open sidebar sits over the page in a narrow window: the first tap closes it.
-        if !app.buttons["Settings"].firstMatch.waitForExistence(timeout: 2) { menu.tap() }
+    private func openDrawer(in app: XCUIApplication) {
+        XCTAssertTrue(AidenStateMatrix.openDrawer(in: app), "The drawer did not open")
     }
 
-    /// Settings from the Inbox menu. On iOS 26 a tap that lands while the menu
-    /// is still opening can do nothing and leave the menu up, so it taps again.
+    /// Settings from the drawer's bottom bar. A tap that lands while the
+    /// drawer is still sliding in can miss, so it taps again.
     private func openSettings(in app: XCUIApplication) {
-        openInboxMenu(in: app)
+        openDrawer(in: app)
         let entry = app.buttons["Settings"].firstMatch
         entry.tap()
         if !app.navigationBars["App settings"].waitForExistence(timeout: 3), entry.exists, entry.isHittable {
@@ -2613,9 +2651,9 @@ final class AidenShellUITests: XCTestCase {
         }
     }
 
-    /// Picking the Search tab brings its field up, at any width.
+    /// The open drawer's search field, at any width.
     private func searchField(in app: XCUIApplication) -> XCUIElement {
-        let field = app.searchFields.firstMatch
+        let field = AidenStateMatrix.drawerSearchField(in: app)
         _ = field.waitForExistence(timeout: 10)
         return field
     }

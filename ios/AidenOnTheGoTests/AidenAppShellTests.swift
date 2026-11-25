@@ -43,12 +43,13 @@ final class AidenAppShellTests: XCTestCase {
 
     func testOpeningAChatRouteSelectsItsTabAndPushes() {
         let navigation = AidenAppNavigation()
-        navigation.tab = .search
+        navigation.tab = .bots
 
         navigation.open(.chat(id("c1")))
 
-        XCTAssertEqual(navigation.tab, .inbox)
-        XCTAssertEqual(navigation.inboxPath, [.chat(id("c1"))])
+        XCTAssertEqual(navigation.tab, .chats)
+        XCTAssertEqual(navigation.chatsPath, [.chat(id("c1"))])
+        XCTAssertEqual(navigation.inboxPath, [])
         XCTAssertEqual(navigation.botsPath, [])
         XCTAssertEqual(navigation.workspacesPath, [])
     }
@@ -60,18 +61,29 @@ final class AidenAppShellTests: XCTestCase {
         XCTAssertEqual(navigation.tab, .bots)
         navigation.open(.workspace(id("w1")))
         XCTAssertEqual(navigation.tab, .workspaces)
-        for route: AidenAppRoute in [.machines, .machine(instanceId: "studio"), .settings, .scheduled, .usage] {
-            navigation.tab = .search
-            navigation.open(route)
-            XCTAssertEqual(navigation.tab, .inbox, "\(route)")
-        }
+        navigation.open(.chat(id("c1")))
+        XCTAssertEqual(navigation.tab, .chats)
 
         XCTAssertEqual(navigation.botsPath, [.bot(id("b1"))])
         XCTAssertEqual(navigation.workspacesPath, [.workspace(id("w1"))])
-        XCTAssertEqual(
-            navigation.inboxPath,
-            [.machines, .machine(instanceId: "studio"), .settings, .scheduled, .usage]
-        )
+        XCTAssertEqual(navigation.chatsPath, [.chat(id("c1"))])
+        XCTAssertEqual(navigation.inboxPath, [])
+    }
+
+    /// The drawer's pages have no tab of their own: each goes on top of the
+    /// tab that's showing, so Back returns to where the drawer was opened.
+    func testDrawerPagesOpenOnTheTabThatIsShowing() {
+        let pages: [AidenAppRoute] = [.machines, .machine(instanceId: "studio"), .settings, .scheduled, .usage]
+        for tab in AidenAppTab.allCases {
+            let navigation = AidenAppNavigation()
+            navigation.tab = tab
+            for page in pages { navigation.open(page) }
+            XCTAssertEqual(navigation.tab, tab)
+            XCTAssertEqual(navigation.path(of: tab), pages, "\(tab)")
+            for other in AidenAppTab.allCases where other != tab {
+                XCTAssertEqual(navigation.path(of: other), [], "\(tab) leaked onto \(other)")
+            }
+        }
     }
 
     func testAChatOnTwoMachinesIsTwoRoutes() {
@@ -80,7 +92,7 @@ final class AidenAppShellTests: XCTestCase {
         navigation.open(.chat(id("c1", on: "studio")))
         navigation.open(.chat(id("c1", on: "laptop")))
 
-        XCTAssertEqual(navigation.inboxPath, [.chat(id("c1", on: "studio")), .chat(id("c1", on: "laptop"))])
+        XCTAssertEqual(navigation.chatsPath, [.chat(id("c1", on: "studio")), .chat(id("c1", on: "laptop"))])
     }
 
     /// Two screens on one chat would mean two live models for it.
@@ -91,10 +103,10 @@ final class AidenAppShellTests: XCTestCase {
         navigation.open(.chat(id("c3")))
 
         navigation.open(.chat(id("c3")))
-        XCTAssertEqual(navigation.inboxPath, [.chat(id("c1")), .chat(id("c2")), .chat(id("c3"))])
+        XCTAssertEqual(navigation.chatsPath, [.chat(id("c1")), .chat(id("c2")), .chat(id("c3"))])
 
         navigation.open(.chat(id("c1")))
-        XCTAssertEqual(navigation.inboxPath, [.chat(id("c1"))])
+        XCTAssertEqual(navigation.chatsPath, [.chat(id("c1"))])
     }
 
     func testALinkOpensOnItsOwnMachine() {
@@ -137,7 +149,7 @@ final class AidenAppShellTests: XCTestCase {
         navigation.replace(.chat(id("c1")), with: .bot(id("b1")))
 
         XCTAssertEqual(navigation.tab, .bots)
-        XCTAssertEqual(navigation.inboxPath, [.settings])
+        XCTAssertEqual(navigation.chatsPath, [.settings])
         XCTAssertEqual(navigation.botsPath, [.bot(id("b1"))])
     }
 
@@ -147,13 +159,14 @@ final class AidenAppShellTests: XCTestCase {
         let chat = AidenAppRoute.chat(id("chat_1"))
         navigation.open(.workspace(id("workspace_app")))
         navigation.open(chat, on: .workspaces)
+        navigation.tab = .chats
         navigation.open(.settings)
 
         navigation.open(chat)
 
         XCTAssertEqual(navigation.tab, .workspaces)
         XCTAssertEqual(navigation.workspacesPath, [.workspace(id("workspace_app")), chat])
-        XCTAssertEqual(navigation.inboxPath, [.settings], "A second screen of the chat opened on the Inbox")
+        XCTAssertEqual(navigation.chatsPath, [.settings], "A second screen of the chat opened on Chats")
     }
 
     func testAChatOpenOnItsOwnTabIsNotOpenedAgainFromAnother() {
@@ -164,8 +177,8 @@ final class AidenAppShellTests: XCTestCase {
 
         navigation.open(chat, on: .workspaces)
 
-        XCTAssertEqual(navigation.tab, .inbox)
-        XCTAssertEqual(navigation.inboxPath, [chat])
+        XCTAssertEqual(navigation.tab, .chats)
+        XCTAssertEqual(navigation.chatsPath, [chat])
         XCTAssertEqual(navigation.workspacesPath, [])
     }
 
@@ -178,12 +191,13 @@ final class AidenAppShellTests: XCTestCase {
 
         navigation.leaveSelectedMachineRoutes()
 
-        XCTAssertEqual(navigation.inboxPath, [.settings], "Usage stayed open on the wrong machine")
+        XCTAssertEqual(navigation.chatsPath, [.settings], "Usage stayed open on the wrong machine")
         XCTAssertEqual(navigation.workspacesPath, [chat], "A chat belongs to its own machine")
 
         navigation.open(.scheduled)
         navigation.leaveSelectedMachineRoutes()
-        XCTAssertEqual(navigation.inboxPath, [.settings])
+        XCTAssertEqual(navigation.chatsPath, [.settings])
+        XCTAssertEqual(navigation.workspacesPath, [chat], "Scheduled tasks stayed open on the wrong machine")
     }
 
     func testAVoiceLinkStartsTheMicOnceAndOnlyOnItsChat() {
@@ -208,6 +222,7 @@ final class AidenAppShellTests: XCTestCase {
         let navigation = AidenAppNavigation()
         navigation.open(.workspace(id("w1")))
         navigation.open(.chat(id("c1")), on: .workspaces)
+        navigation.tab = .inbox
         navigation.open(.scheduled)
 
         navigation.leave(.workspace(id("w1")))
@@ -276,7 +291,7 @@ final class AidenAppShellTests: XCTestCase {
 
         navigation.besideList = true
 
-        XCTAssertEqual(navigation.inboxPath, [.machines, .machine(instanceId: "laptop")])
+        XCTAssertEqual(navigation.chatsPath, [.machines, .machine(instanceId: "laptop")])
     }
 
     func testBackInTheDetailKeepsTheSelection() {
@@ -460,10 +475,10 @@ final class AidenAppShellTests: XCTestCase {
         XCTAssertNil(pushed.chatStartingCamera, "A chat pushed over a workspace kept the camera start")
     }
 
-    /// A new chat from Compose, a Search result, a link or a Shortcut opens on
-    /// the Inbox without going through the list. Beside the list it still
-    /// becomes the selection, so the highlight follows it and it has no Back to
-    /// the chat before. A page from the menu still goes on top.
+    /// A new chat from the Inbox's Compose opens on the Inbox, and a link or a
+    /// Shortcut opens its chat on Chats, neither through the list. Beside the
+    /// list it still becomes the selection, so the highlight follows it and it
+    /// has no Back to the chat before. A page from the drawer still goes on top.
     func testAChatOpenedFromOutsideTheListBecomesTheSelection() {
         let navigation = besideList()
         navigation.openInboxRow(.chat(id("c1")))
@@ -473,18 +488,21 @@ final class AidenAppShellTests: XCTestCase {
         XCTAssertEqual(navigation.inboxPath, [.chat(id("c2"))], "Compose")
 
         navigation.open(.chat(id("c3")), startsVoice: true)
-        XCTAssertEqual(navigation.inboxPath, [.chat(id("c3"))], "A voice link")
+        XCTAssertEqual(navigation.tab, .chats, "A voice link opens on Chats")
+        XCTAssertEqual(navigation.chatsPath, [.chat(id("c3"))], "A voice link")
+        XCTAssertEqual(navigation.inboxPath, [.chat(id("c2"))])
         XCTAssertEqual(navigation.chatStartingVoice, id("c3"))
 
         navigation.open(.usage)
-        XCTAssertEqual(navigation.inboxPath, [.chat(id("c3")), .usage])
+        XCTAssertEqual(navigation.chatsPath, [.chat(id("c3")), .usage])
 
         let stack = AidenAppNavigation()
         stack.openInboxRow(.chat(id("c1")))
         stack.open(.settings)
         stack.open(.chat(id("c2")), on: .inbox)
         stack.open(.chat(id("c3")), startsVoice: true)
-        XCTAssertEqual(stack.inboxPath, [.chat(id("c1")), .settings, .chat(id("c2")), .chat(id("c3"))])
+        XCTAssertEqual(stack.inboxPath, [.chat(id("c1")), .settings, .chat(id("c2"))])
+        XCTAssertEqual(stack.chatsPath, [.chat(id("c3"))])
     }
 
     /// A Bot picked from the Bots list beside the detail opens there, where it
@@ -525,10 +543,11 @@ final class AidenAppShellTests: XCTestCase {
         XCTAssertEqual(navigation.inboxPath, [.chat(id("c1"))], "Going back to the chosen chat pops the detail")
 
         navigation.replace(.chat(id("c1")), with: .chat(id("c3")))
-        XCTAssertEqual(navigation.inboxPath, [.chat(id("c3"))])
+        XCTAssertEqual(navigation.inboxPath, [])
+        XCTAssertEqual(navigation.chatsPath, [.chat(id("c3"))])
 
         navigation.leave(.chat(id("c3")))
-        XCTAssertNil(AidenSplitNavigationPath(navigation.inboxPath).selection)
+        XCTAssertNil(AidenSplitNavigationPath(navigation.chatsPath).selection)
     }
 
     /// The chosen chat stays the Inbox's open chat under a page pushed over it,
@@ -676,7 +695,7 @@ final class AidenAppShellTests: XCTestCase {
         XCTAssertEqual(stack.workspacesPath, [.workspace(id("w1")), .chat(id("c1")), .fork(id("f1"), source: id("c1"))])
 
         stack.push(.fork(id("f9"), source: id("gone")), over: .chat(id("gone")))
-        XCTAssertEqual(stack.inboxPath, [.fork(id("f9"), source: id("gone"))], "With its source gone it opens as a link would")
+        XCTAssertEqual(stack.chatsPath, [.fork(id("f9"), source: id("gone"))], "With its source gone it opens as a link would")
     }
 
     /// A fork stays over its source whatever the layout does: opening the
@@ -752,9 +771,9 @@ final class AidenAppShellTests: XCTestCase {
         XCTAssertEqual(restored.inboxPath, [.chat(id("c0"))])
         XCTAssertEqual(restored.botsPath, [.bot(id("b1"))])
 
-        let fromSearch = AidenAppNavigation(
+        let fromChats = AidenAppNavigation(
             restoring: AidenAppNavigationSnapshot(
-                tab: .search,
+                tab: .chats,
                 inboxPath: [.chat(id("c1")), .fork(id("f1"), source: id("c1"))],
                 botsPath: [],
                 workspacesPath: [.workspace(id("w1")), .chat(id("f1"))],
@@ -762,8 +781,10 @@ final class AidenAppShellTests: XCTestCase {
             ),
             installations: [studio]
         )
-        XCTAssertEqual(fromSearch.inboxPath, [.chat(id("c1")), .fork(id("f1"), source: id("c1"))], "The first tab keeps it")
-        XCTAssertEqual(fromSearch.workspacesPath, [.workspace(id("w1"))])
+        // Chats shows nothing, so the tabs after it in bar order claim first:
+        // Workspaces keeps the fork's screen and the Inbox stops below it.
+        XCTAssertEqual(fromChats.workspacesPath, [.workspace(id("w1")), .chat(id("f1"))], "The first tab keeps it")
+        XCTAssertEqual(fromChats.inboxPath, [.chat(id("c1"))])
     }
 
     /// Opening the display hands every list tab's path to its own list: the
@@ -867,14 +888,14 @@ final class AidenAppShellTests: XCTestCase {
         navigation.open(.chat(id("c1:with:colons")))
         navigation.open(.bot(id("b1")))
         navigation.open(.workspace(id("w1")))
-        navigation.tab = .search
+        navigation.tab = .inbox
 
         store.save(navigation.snapshot)
         let restored = AidenAppNavigation(restoring: store.load(), installations: [studio])
 
         XCTAssertEqual(restored.snapshot, navigation.snapshot)
-        XCTAssertEqual(restored.tab, .search)
-        XCTAssertEqual(restored.inboxPath, [.settings, .chat(id("c1:with:colons"))])
+        XCTAssertEqual(restored.tab, .inbox)
+        XCTAssertEqual(restored.chatsPath, [.settings, .chat(id("c1:with:colons"))])
     }
 
     func testARestoredRouteToARemovedMachineFallsBackToTheScreenBeforeIt() {
@@ -911,7 +932,7 @@ final class AidenAppShellTests: XCTestCase {
 
         navigation.dropRoutes(outside: [studio])
 
-        XCTAssertEqual(navigation.inboxPath, [.machines])
+        XCTAssertEqual(navigation.chatsPath, [.machines])
         XCTAssertEqual(navigation.workspacesPath, [.workspace(id("w1", on: "studio"))])
     }
 
@@ -934,7 +955,7 @@ final class AidenAppShellTests: XCTestCase {
         XCTAssertEqual(navigation.botsPath, [.bot(id("b1", on: "studio"))])
     }
 
-    func testCorruptSavedNavigationStartsAtTheInbox() {
+    func testCorruptSavedNavigationStartsAtChats() {
         let defaults = AidenDemoHosts.isolatedDefaults()
         let store = AidenAppNavigationStore(defaults: defaults)
 
@@ -958,7 +979,7 @@ final class AidenAppShellTests: XCTestCase {
 
         let loaded = store.load()
 
-        XCTAssertEqual(loaded.tab, .inbox)
+        XCTAssertEqual(loaded.tab, .chats)
         XCTAssertEqual(loaded.inboxPath, [])
         XCTAssertEqual(loaded.botsPath, [.bot(id("b1"))])
     }

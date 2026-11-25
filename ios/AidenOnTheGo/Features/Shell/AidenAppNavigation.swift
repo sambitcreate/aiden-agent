@@ -2,17 +2,22 @@ import Foundation
 import Observation
 
 
+/// The shell's four tabs, in bar order. Search and Settings live in the
+/// drawer (`AidenDrawerView`), not on the bar. A saved tab this build doesn't
+/// know, such as v2's `search`, reads as Chats.
 enum AidenAppTab: String, Codable, CaseIterable, Hashable {
-    case inbox, bots, workspaces, search
+    case chats, bots, workspaces, inbox
 
-    /// The tabs drawn as a list beside a detail at regular width.
-    static let listTabs: [AidenAppTab] = [.inbox, .bots, .workspaces]
+    /// The tabs drawn as a list beside a detail at regular width: all four.
+    static let listTabs: [AidenAppTab] = allCases
 
     /// True for a route this tab's list has a row for. Beside the list such a
-    /// route becomes the selection rather than going on top: the Inbox's chats
-    /// and Bots, the Bots tab's Bots and the Workspaces tab's workspaces.
+    /// route becomes the selection rather than going on top: the Chats tab's
+    /// chats, the Inbox's chats and Bots, the Bots tab's Bots and the
+    /// Workspaces tab's workspaces.
     func listsRow(for route: AidenAppRoute) -> Bool {
         switch (self, route) {
+        case (.chats, _): route.chatID != nil
         case (.inbox, _): route.isConversation
         case (.bots, .bot), (.workspaces, .workspace): true
         default: false
@@ -31,12 +36,17 @@ enum AidenAppRoute: Hashable, Codable {
     /// Where a Catch Up run ends. It means nothing after a relaunch, so it's never saved.
     case catchUpFinished(AidenCatchUpEnding)
 
-    /// The tab whose stack holds this route.
-    var tab: AidenAppTab {
+    /// The tab whose stack holds this route when it's opened on its own.
+    /// Nil for a page the drawer opens (Settings, Scheduled tasks, Usage,
+    /// Computers and a computer's page): it goes on top of the tab that's
+    /// showing, so Back returns to where the drawer was opened.
+    var ownTab: AidenAppTab? {
         switch self {
-        case .chat, .fork, .machines, .machine, .settings, .scheduled, .usage, .catchUpFinished: .inbox
+        case .chat, .fork: .chats
         case .bot: .bots
         case .workspace: .workspaces
+        case .catchUpFinished: .inbox
+        case .machines, .machine, .settings, .scheduled, .usage: nil
         }
     }
 
@@ -124,6 +134,7 @@ extension AidenRemoteCoordinator {
 /// The shell's place in the app, as saved between launches.
 struct AidenAppNavigationSnapshot: Codable, Equatable {
     var tab: AidenAppTab
+    var chatsPath: [AidenAppRoute]
     var inboxPath: [AidenAppRoute]
     var botsPath: [AidenAppRoute]
     var workspacesPath: [AidenAppRoute]
@@ -133,13 +144,15 @@ struct AidenAppNavigationSnapshot: Codable, Equatable {
     var savedPaths: [String: [AidenAppRoute]]
 
     init(
-        tab: AidenAppTab = .inbox,
+        tab: AidenAppTab = .chats,
+        chatsPath: [AidenAppRoute] = [],
         inboxPath: [AidenAppRoute] = [],
         botsPath: [AidenAppRoute] = [],
         workspacesPath: [AidenAppRoute] = [],
         savedPaths: [String: [AidenAppRoute]] = [:]
     ) {
         self.tab = tab
+        self.chatsPath = chatsPath
         self.inboxPath = inboxPath
         self.botsPath = botsPath
         self.workspacesPath = workspacesPath
@@ -169,10 +182,12 @@ struct AidenAppNavigationSnapshot: Codable, Equatable {
     }
 
     /// Read per field: a tab or route only a later build knows costs that one
-    /// value, not the whole snapshot.
+    /// value, not the whole snapshot. A v2 snapshot reads the same way: it has
+    /// no Chats path, and its `search` tab, gone from the bar, reads as Chats.
     init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
-        tab = (try? container.decode(AidenAppTab.self, forKey: .tab)) ?? .inbox
+        tab = (try? container.decode(AidenAppTab.self, forKey: .tab)) ?? .chats
+        chatsPath = (try? container.decode([AidenAppRoute].self, forKey: .chatsPath)) ?? []
         inboxPath = (try? container.decode([AidenAppRoute].self, forKey: .inboxPath)) ?? []
         botsPath = (try? container.decode([AidenAppRoute].self, forKey: .botsPath)) ?? []
         workspacesPath = (try? container.decode([AidenAppRoute].self, forKey: .workspacesPath)) ?? []
@@ -187,6 +202,7 @@ struct AidenAppNavigationSnapshot: Codable, Equatable {
         }
         return AidenAppNavigationSnapshot(
             tab: tab,
+            chatsPath: kept(chatsPath),
             inboxPath: kept(inboxPath),
             botsPath: kept(botsPath),
             workspacesPath: kept(workspacesPath),
@@ -195,14 +211,18 @@ struct AidenAppNavigationSnapshot: Codable, Equatable {
     }
 }
 
-/// The tab shell's routes, in `aiden.product-navigation.v2`. A saved v2 stands
-/// for itself, readable or not: only its absence means v1 hasn't moved yet.
+/// The tab shell's routes, in `aiden.product-navigation.v3`. A saved v3 stands
+/// for itself, readable or not. Without one, a saved v2 (the Inbox, Bots,
+/// Workspaces and Search bar) is read in its place, with Search becoming
+/// Chats; only the absence of both means v1 hasn't moved yet.
 ///
 /// `AidenProductNavigationStore` keeps `aiden.product-navigation.v1`: each
 /// machine's last workspace stays there, and the menu shell's per-machine paths
-/// until the first v2 write lands.
+/// until the first write here lands.
 struct AidenAppNavigationStore {
-    static let snapshotKey = "aiden.product-navigation.v2"
+    static let snapshotKey = "aiden.product-navigation.v3"
+    /// The four-tab bar's key before Chats. The first v3 write removes it.
+    static let previousSnapshotKey = "aiden.product-navigation.v2"
     private static let sizeLimit = 1_048_576
 
     private let defaults: UserDefaults
@@ -222,15 +242,19 @@ struct AidenAppNavigationStore {
         installations: [AidenInstallation] = [],
         selected: String? = nil
     ) -> AidenAppNavigationSnapshot {
-        guard defaults.object(forKey: Self.snapshotKey) != nil else {
+        guard let key = [Self.snapshotKey, Self.previousSnapshotKey].first(where: { defaults.object(forKey: $0) != nil }) else {
             return migrated(installations: installations, selected: selected)
         }
-        guard let data = defaults.data(forKey: Self.snapshotKey),
+        guard let data = defaults.data(forKey: key),
               data.count <= Self.sizeLimit,
               let snapshot = try? JSONDecoder().decode(AidenAppNavigationSnapshot.self, from: data) else {
             return AidenAppNavigationSnapshot()
         }
         return snapshot
+    }
+
+    private var hasSaved: Bool {
+        defaults.object(forKey: Self.snapshotKey) != nil || defaults.object(forKey: Self.previousSnapshotKey) != nil
     }
 
     /// The first write to land is the one that replaces v1's paths. One that
@@ -245,7 +269,10 @@ struct AidenAppNavigationStore {
         defaults.set(data, forKey: Self.snapshotKey)
         guard defaults.data(forKey: Self.snapshotKey) == data else { return }
         rememberTheOpenWorkspace(in: snapshot)
-        if isFirstWrite { legacy.forgetCompactPaths() }
+        if isFirstWrite {
+            defaults.removeObject(forKey: Self.previousSnapshotKey)
+            legacy.forgetCompactPaths()
+        }
     }
 
     private func rememberTheOpenWorkspace(in snapshot: AidenAppNavigationSnapshot) {
@@ -258,10 +285,10 @@ struct AidenAppNavigationStore {
         }
     }
 
-    /// Takes a forgotten machine's routes out of what's saved. Before the first
-    /// v2 write there are none, and v1's own purge has its paths.
+    /// Takes a forgotten machine's routes out of what's saved. With neither v3
+    /// nor v2 saved there are none, and v1's own purge has its paths.
     func purge(instanceID: String) {
-        guard defaults.object(forKey: Self.snapshotKey) != nil else { return }
+        guard hasSaved else { return }
         save(load().removing(instanceId: instanceID))
     }
 
@@ -354,10 +381,11 @@ struct AidenSplitNavigationPath: Equatable {
     }
 }
 
-/// Which tab is showing and what each tab has pushed. Search has no path.
+/// Which tab is showing and what each tab has pushed.
 @MainActor @Observable
 final class AidenAppNavigation {
     var tab: AidenAppTab
+    var chatsPath: [AidenAppRoute]
     var inboxPath: [AidenAppRoute] {
         didSet { endCatchUpIfLeft() }
     }
@@ -390,7 +418,8 @@ final class AidenAppNavigation {
     }
 
     init() {
-        tab = .inbox
+        tab = .chats
+        chatsPath = []
         inboxPath = []
         botsPath = []
         workspacesPath = []
@@ -402,7 +431,8 @@ final class AidenAppNavigation {
         // One conversation, one screen, as `setPath` keeps it: the tab that
         // was showing keeps a conversation two tabs held, then the first.
         var paths: [AidenAppTab: [AidenAppRoute]] = [
-            .inbox: snapshot.inboxPath, .bots: snapshot.botsPath, .workspaces: snapshot.workspacesPath,
+            .chats: snapshot.chatsPath, .inbox: snapshot.inboxPath,
+            .bots: snapshot.botsPath, .workspaces: snapshot.workspacesPath,
         ]
         var shown = Set<AidenAppRoute>()
         let showingFirst = AidenAppTab.listTabs.filter { $0 == snapshot.tab } + AidenAppTab.listTabs.filter { $0 != snapshot.tab }
@@ -414,6 +444,7 @@ final class AidenAppNavigation {
             shown.formUnion(path.filter(\.isConversation).map(\.screen))
             paths[tab] = path
         }
+        chatsPath = paths[.chats] ?? []
         inboxPath = paths[.inbox] ?? []
         botsPath = paths[.bots] ?? []
         workspacesPath = paths[.workspaces] ?? []
@@ -436,6 +467,7 @@ final class AidenAppNavigation {
     var snapshot: AidenAppNavigationSnapshot {
         AidenAppNavigationSnapshot(
             tab: tab,
+            chatsPath: chatsPath,
             inboxPath: inboxPath.filter { if case .catchUpFinished = $0 { false } else { true } },
             botsPath: botsPath,
             workspacesPath: workspacesPath,
@@ -462,13 +494,13 @@ final class AidenAppNavigation {
         path(of: tab).last?.isConversation == true
     }
 
-    /// The tab's path. Search has none.
+    /// The tab's path.
     func path(of tab: AidenAppTab) -> [AidenAppRoute] {
         switch tab {
+        case .chats: chatsPath
         case .inbox: inboxPath
         case .bots: botsPath
         case .workspaces: workspacesPath
-        case .search: []
         }
     }
 
@@ -485,10 +517,10 @@ final class AidenAppNavigation {
             }
         }
         switch tab {
+        case .chats: chatsPath = path
         case .inbox: inboxPath = path
         case .bots: botsPath = path
         case .workspaces: workspacesPath = path
-        case .search: break
         }
     }
 
@@ -516,11 +548,12 @@ final class AidenAppNavigation {
     }
 
     /// Selects the route's tab and shows the route there, or goes back to it
-    /// wherever it's already open. `startsVoice` and `startsCamera` belong to
-    /// foreground shortcuts and widget buttons: the chat starts listening or
-    /// opens its camera picker when it opens.
+    /// wherever it's already open. A page with no tab of its own
+    /// (`AidenAppRoute.ownTab`) goes on the tab that's showing. `startsVoice`
+    /// and `startsCamera` belong to foreground shortcuts and widget buttons:
+    /// the chat starts listening or opens its camera picker when it opens.
     func open(_ route: AidenAppRoute, startsVoice: Bool = false, startsCamera: Bool = false) {
-        open(route, on: route.tab)
+        open(route, on: route.ownTab ?? tab)
         if case .chat(let id) = route {
             if startsVoice {
                 chatStartingVoice = id
@@ -546,10 +579,10 @@ final class AidenAppNavigation {
         chatStartingCamera = nil
         self.tab = tab
         switch tab {
+        case .chats: chatsPath = []
         case .inbox: inboxPath = []
         case .bots: botsPath = []
         case .workspaces: workspacesPath = []
-        case .search: break
         }
     }
 
@@ -602,6 +635,7 @@ final class AidenAppNavigation {
     /// Goes back to just below the route, wherever it is. Nothing happens when
     /// it isn't on a path.
     func leave(_ route: AidenAppRoute) {
+        Self.remove(route, from: &chatsPath)
         Self.remove(route, from: &inboxPath)
         Self.remove(route, from: &botsPath)
         Self.remove(route, from: &workspacesPath)
@@ -730,7 +764,7 @@ final class AidenAppNavigation {
 
 /// `aiden.product-navigation.v1`, which builds before the tabs wrote.
 /// What's left in it: each machine's last workspace, which a new-chat link or
-/// Shortcut without one still starts in, and the per-machine paths the first v2
+/// Shortcut without one still starts in, and the per-machine paths the first tab-shell
 /// write moves out (`AidenAppNavigationStore`). Anything else an older build
 /// saved here is dropped on the next write.
 @Observable
@@ -804,7 +838,7 @@ final class AidenProductNavigationStore {
         setPath(path, in: \Snapshot.compactBotPathByInstance, for: instanceID)
     }
 
-    /// v2 has these now. Its first saved write calls this.
+    /// The tab shell has these now. Its first saved write calls this.
     func forgetCompactPaths() {
         guard !snapshot.compactWorkspacePathByInstance.isEmpty || !snapshot.compactBotPathByInstance.isEmpty else { return }
         snapshot.compactWorkspacePathByInstance = [:]

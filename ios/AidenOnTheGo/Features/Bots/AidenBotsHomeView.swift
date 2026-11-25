@@ -724,6 +724,7 @@ struct AidenBotsHomeView: View {
                         .aidenListScrollRow(row.id)
                 }
                 .buttonStyle(.plain)
+                .contextMenu { AidenDrawerPinButton(pin: AidenDrawerPin(kind: .bot, id: row.id)) }
             }
             // Each machine's own switch, so one that's off can be turned back on.
             AidenMachineBotMessagingRow(messaging: AidenMachineBotMessaging(coordinator: coordinator, instanceId: section.instanceId))
@@ -792,6 +793,9 @@ struct AidenBotsHomeView: View {
 
     @ViewBuilder
     private func botContextMenu(_ bot: AidenBotSummary) -> some View {
+        if let id = defaultMachineBotID(bot.id) {
+            AidenDrawerPinButton(pin: AidenDrawerPin(kind: .bot, id: id))
+        }
         Button("Profile", systemImage: "person.crop.circle") {
             presentProfile(bot)
         }

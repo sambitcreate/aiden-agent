@@ -374,6 +374,7 @@ struct AidenWorkspacesDirectoryView: View {
                 scrollRow: AnyHashable(row.id),
                 card: card
             )
+            .contextMenu { AidenDrawerPinButton(pin: AidenDrawerPin(kind: .workspace, id: row.id)) }
         }
     }
 
@@ -527,6 +528,10 @@ private struct AidenWorkspaceInteractiveRow: View {
             .tint(palette.warning)
         }
         .contextMenu {
+            if !isArchived, case .workspace(let id) = tabChrome.route(workspace) {
+                AidenDrawerPinButton(pin: AidenDrawerPin(kind: .workspace, id: id))
+            }
+
             Button(action: onRename) {
                 Label("Rename", systemImage: "pencil")
             }

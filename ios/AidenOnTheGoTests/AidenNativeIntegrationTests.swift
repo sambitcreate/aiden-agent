@@ -1379,13 +1379,14 @@ final class AidenNativeIntegrationTests: XCTestCase {
             navigation.open(queued.route, startsVoice: queued.startsVoice)
         }
 
-        XCTAssertEqual(navigation.inboxPath, [
-            .chat(AidenHostObjectID(instanceId: "laptop", deviceId: device, objectId: "chat_laptop_1")),
-            .machine(instanceId: "laptop"),
-        ])
-        XCTAssertEqual(navigation.botsPath, [
-            .bot(AidenHostObjectID(instanceId: "laptop", deviceId: device, objectId: "bot_fixture_01")),
-        ])
+        // Each conversation opens on its own tab; the machine's page opens over
+        // whichever tab was showing, once.
+        XCTAssertEqual(navigation.chatsPath.first,
+            .chat(AidenHostObjectID(instanceId: "laptop", deviceId: device, objectId: "chat_laptop_1")))
+        XCTAssertEqual(navigation.botsPath.first,
+            .bot(AidenHostObjectID(instanceId: "laptop", deviceId: device, objectId: "bot_fixture_01")))
+        let pages = AidenAppTab.allCases.flatMap { navigation.path(of: $0) }.filter { !$0.isConversation }
+        XCTAssertEqual(pages, [.machine(instanceId: "laptop")])
         XCTAssertEqual(coordinator.defaultInstanceId, "studio")
         XCTAssertNil(coordinator.presentedError)
     }
@@ -1447,7 +1448,7 @@ final class AidenNativeIntegrationTests: XCTestCase {
         for queued in intents.takeRoutes(openableOn: coordinator) {
             navigation.open(queued.route, startsVoice: queued.startsVoice)
         }
-        XCTAssertEqual(navigation.inboxPath, [
+        XCTAssertEqual(navigation.chatsPath, [
             .chat(AidenHostObjectID(instanceId: "studio", deviceId: device, objectId: "chat_new_studio")),
             .chat(AidenHostObjectID(instanceId: "laptop", deviceId: device, objectId: "chat_new_laptop")),
         ])
@@ -1694,7 +1695,7 @@ final class AidenNativeIntegrationTests: XCTestCase {
             navigation.open(queued.route, startsVoice: queued.startsVoice)
         }
 
-        XCTAssertEqual(navigation.inboxPath, [.chat(chat)])
+        XCTAssertEqual(navigation.chatsPath, [.chat(chat)])
         XCTAssertEqual(navigation.chatStartingVoice, chat)
 
         // Saved navigation never carries it: a relaunch must not open the microphone.
@@ -1782,13 +1783,13 @@ final class AidenNativeIntegrationTests: XCTestCase {
         XCTAssertEqual(intents.routes.map(\.route), [early], "Nothing is mounted to take it yet")
 
         let first = try showShell(coordinator, store: store, intents: intents)
-        await waitUntil { store.load().inboxPath == [early] }
-        XCTAssertEqual(store.load().inboxPath, [early])
+        await waitUntil { store.load().chatsPath == [early] }
+        XCTAssertEqual(store.load().chatsPath, [early], "A page opens over the tab the shell shows first")
         XCTAssertEqual(intents.routes, [])
 
         intents.submit(route: late)
-        await waitUntil { store.load().inboxPath == [early, late] }
-        XCTAssertEqual(store.load().inboxPath, [early, late])
+        await waitUntil { store.load().chatsPath == [early, late] }
+        XCTAssertEqual(store.load().chatsPath, [early, late])
         first.isHidden = true
         first.rootViewController = nil
 
@@ -1799,7 +1800,7 @@ final class AidenNativeIntegrationTests: XCTestCase {
             second.rootViewController = nil
         }
         try await Task.sleep(for: .milliseconds(300))
-        XCTAssertEqual(store.load().inboxPath, [early, late])
+        XCTAssertEqual(store.load().chatsPath, [early, late])
     }
 
     @MainActor

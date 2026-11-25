@@ -258,7 +258,7 @@ struct AidenNoComputersEmptyView: View {
         case inbox
         case bots
         case workspaces
-        case search
+        case chats
 
         var description: String {
             switch self {
@@ -268,8 +268,8 @@ struct AidenNoComputersEmptyView: View {
                 String(localized: "Connect a computer running Aiden to see and chat with your Bots.")
             case .workspaces:
                 String(localized: "Connect a computer running Aiden to browse workspaces and start chats.")
-            case .search:
-                String(localized: "Connect a computer running Aiden to search your chats and Bots.")
+            case .chats:
+                String(localized: "Connect a computer running Aiden to see your chats.")
             }
         }
     }

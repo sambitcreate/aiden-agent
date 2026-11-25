@@ -1,70 +1,28 @@
 import SwiftUI
 
-/// The Search tab: loaded chats, matched on the phone, and Bot conversations,
-/// which each connected machine matches itself. Rows are plain list rows.
-struct AidenSearchTabView: View {
+/// What a search found: loaded chats, matched on the phone, and Bot
+/// conversations, which each connected machine matches itself. The drawer
+/// shows it in place of its sections while its search field holds a query;
+/// the field and the search's `.task` are the drawer's.
+struct AidenSearchResultsView: View {
     /// The shell's, so the query and what it found outlive a fold, which
     /// builds this view again.
-    @Bindable var model: AidenSearchModel
+    let model: AidenSearchModel
     let inboxStore: AidenUnifiedInboxStore
-    let hasNoComputers: Bool
-    let onAddComputer: () -> Void
+    /// The drawer's search field. Dragging the results lets go of it.
+    var searchIsFocused: FocusState<Bool>.Binding
     let onOpen: (AidenAppRoute) -> Void
 
-    @FocusState private var searchIsFocused: Bool
-    /// What the last row needs below it so the search field, which grows with the
-    /// text size, never sits on it.
-    @ScaledMetric(relativeTo: .body) private var fieldClearance: CGFloat = 72
     @Environment(\.aidenPalette) private var palette
-    @Environment(\.horizontalSizeClass) private var horizontalSizeClass
-
-    /// A regular-width toolbar folds the field into a button, even with the tab
-    /// picked, so there the field sits under the title, always up.
-    private var fieldPlacement: SearchFieldPlacement {
-        horizontalSizeClass == .regular ? .navigationBarDrawer(displayMode: .always) : .automatic
-    }
 
     var body: some View {
-        if hasNoComputers {
-            AidenNoComputersEmptyView(surface: .search, onAddComputer: onAddComputer)
-                .navigationTitle("Search")
+        let chats = model.chats
+        let bots = model.bots
+        let unsearched = unsearchedNote(model.unsearchedMachines)
+        if chats.isEmpty && bots.isEmpty {
+            emptyResults(note: unsearched)
         } else {
-            searchableContent
-        }
-    }
-
-    private var searchableContent: some View {
-        content
-            .background(palette.canvas.ignoresSafeArea())
-            .navigationTitle("Search")
-            // Each change of the trimmed query searches again.
-            .searchable(text: $model.query, placement: fieldPlacement, prompt: "Chats and Bots")
-            // A regular width's active field otherwise hides the bar, and the
-            // sidebar button with it, which is the only way back to the other tabs.
-            .searchPresentationToolbarBehavior(horizontalSizeClass == .regular ? .avoidHidingContent : .automatic)
-            .searchFocused($searchIsFocused)
-            .task(id: model.trimmedQuery) { await model.run() }
-    }
-
-    @ViewBuilder
-    private var content: some View {
-        if !model.hasQuery {
-            scrolling {
-                ContentUnavailableView(
-                    "Search",
-                    systemImage: "magnifyingglass",
-                    description: Text("Find a chat, or a Bot conversation on any of your computers.")
-                )
-            }
-        } else {
-            let chats = model.chats
-            let bots = model.bots
-            let unsearched = unsearchedNote(model.unsearchedMachines)
-            if chats.isEmpty && bots.isEmpty {
-                emptyResults(note: unsearched)
-            } else {
-                results(chats: chats, bots: bots, note: unsearched)
-            }
+            results(chats: chats, bots: bots, note: unsearched)
         }
     }
 
@@ -74,11 +32,10 @@ struct AidenSearchTabView: View {
         ScrollView {
             content()
                 .frame(maxWidth: .infinity)
-                .padding(.top, AidenSpacing.xxxl)
+                .padding(.top, AidenSpacing.xl)
         }
-        .contentMargins(.bottom, fieldClearance, for: .scrollContent)
         .scrollBounceBehavior(.basedOnSize)
-        .putsKeyboardAwayOnDrag(searchIsFocused: $searchIsFocused)
+        .putsKeyboardAwayOnDrag(searchIsFocused: searchIsFocused)
     }
 
     // MARK: Results
@@ -92,8 +49,9 @@ struct AidenSearchTabView: View {
                 Section {
                     ForEach(chats) { row in
                         Button { open(row.route) } label: {
-                            AidenSearchChatRowView(
-                                row: row,
+                            AidenChatListRowView(
+                                title: row.chatTitle,
+                                isOnline: row.isOnline,
                                 machineName: roster.searchMachineName(for: row.id.instanceId, else: details.machineName(for: row)),
                                 workspaceName: details.workspaceName(for: row),
                                 chip: roster.searchChip(for: row.id.instanceId)
@@ -127,12 +85,8 @@ struct AidenSearchTabView: View {
             if model.isSearchingBots || note != nil {
                 Section {
                     if model.isSearchingBots {
-                        HStack(spacing: AidenSpacing.m) {
-                            ProgressView()
-                            Text("Searching Bots")
-                                .foregroundStyle(palette.secondary)
-                        }
-                        .accessibilityElement(children: .combine)
+                        AidenChatListSkeleton(rowCount: 2, accessibilityText: "Searching Bots")
+                            .listRowInsets(EdgeInsets())
                     }
                     if let note {
                         Text(note)
@@ -146,9 +100,8 @@ struct AidenSearchTabView: View {
         }
         .listStyle(.plain)
         .listSectionSpacing(AidenSpacing.l)
-        .contentMargins(.bottom, fieldClearance, for: .scrollContent)
         .scrollContentBackground(.hidden)
-        .putsKeyboardAwayOnDrag(searchIsFocused: $searchIsFocused)
+        .putsKeyboardAwayOnDrag(searchIsFocused: searchIsFocused)
         .foregroundStyle(palette.foreground)
     }
 
@@ -156,8 +109,9 @@ struct AidenSearchTabView: View {
         scrolling {
             VStack(spacing: AidenSpacing.l) {
                 if model.isSearchingBots {
-                    ProgressView("Searching Bots")
-                        .padding(AidenSpacing.xxl)
+                    // Results to come, not a spinner.
+                    AidenChatListSkeleton(rowCount: 4, accessibilityText: "Searching Bots")
+                        .padding(.horizontal, AidenSpacing.l)
                 } else {
                     ContentUnavailableView(
                         "No results",
@@ -191,24 +145,21 @@ struct AidenSearchTabView: View {
     }
 }
 
-/// A chat found on some machine: its title, then where it lives.
-private struct AidenSearchChatRowView: View {
-    let row: AidenUnifiedInboxRow
+/// A chat on some machine: its title, then where it lives. Search results
+/// and the Chats tab list chats with it.
+struct AidenChatListRowView: View {
+    let title: String
+    let isOnline: Bool
     let machineName: String?
     let workspaceName: String?
     let chip: AidenMachineLabel?
 
     @Environment(\.aidenPalette) private var palette
 
-    private var title: String {
-        guard case .chat(let summary, _) = row.content else { return "" }
-        return summary.title
-    }
-
     private var machine: String { machineName ?? String(localized: "Unknown computer") }
 
     private var subtitle: String {
-        [workspaceName, machine, row.isOnline ? nil : String(localized: "offline")]
+        [workspaceName, machine, isOnline ? nil : String(localized: "offline")]
             .compactMap { $0 }
             .joined(separator: " · ")
     }
@@ -235,10 +186,17 @@ private struct AidenSearchChatRowView: View {
         .accessibilityElement(children: .ignore)
         .accessibilityAddTraits(.isButton)
         .accessibilityLabel(
-            row.isOnline
+            isOnline
                 ? String(localized: "\(title), chat on \(machine)")
                 : String(localized: "\(title), chat on \(machine), offline")
         )
+    }
+}
+
+private extension AidenUnifiedInboxRow {
+    var chatTitle: String {
+        guard case .chat(let summary, _) = content else { return "" }
+        return summary.title
     }
 }
 
@@ -287,8 +245,7 @@ private struct AidenSearchBotRowView: View {
 
 private extension View {
     /// Dragging the results lets go of the search field's focus, which puts the
-    /// keyboard away and keeps the query. `scrollDismissesKeyboard` doesn't reach
-    /// the field of a search tab, so the field's own focus is let go.
+    /// keyboard away and keeps the query.
     func putsKeyboardAwayOnDrag(searchIsFocused: FocusState<Bool>.Binding) -> some View {
         onScrollPhaseChange { _, phase in
             if phase == .interacting { searchIsFocused.wrappedValue = false }

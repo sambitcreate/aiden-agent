@@ -284,3 +284,6 @@ Related: [[chat-row-states]], [[sidebar-chat-row-context]], [[multi-host-control
 - The real iOS Home/cache fixture covers all three admission cases for Done and Snooze in both completion orders. The tied-ID case failed before the correction with stale identity/read state in both visible rows and saved cache; all 35 focused Inbox/model/triage-request tests pass after it. Android's existing `hasNewerOutput` already checks tied IDs; its refresh/read test now covers distinct IDs at equal timestamps and asserts the saved row too (all 10 Home triage tests pass). All 6 host read-marker tests pass.
 
 - 2026-11-19: the sidebar chat list became one keyboard collection with typeahead, multi-select, a bulk Delete bar and focus recovery; see [[sidebar-chat-collection]].
+
+## iOS tab change (2026-11-24, iOS new direction Phase 1 step 3)
+- The iOS Inbox is now the fourth tab (Chats · Bots · Workspaces · Inbox); Chats lists every chat regardless of Inbox placement. The Inbox toolbar menu (Settings, Scheduled, Usage) moved to the leading drawer; Inbox keeps compose and the machine pill. Inbox placement logic (`AidenInbox.placement`, projection) is unchanged.
