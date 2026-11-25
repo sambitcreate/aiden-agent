@@ -8,6 +8,7 @@ import { createServerVisualCollector } from "./server-visuals.ts";
 import { createMcpExtension } from "./mcp.ts";
 import type { InlineExtension } from "@earendil-works/pi-coding-agent";
 import { visionAttachmentAlias } from "../../../main/services/vision-attachment-reference.js";
+import { formatGrabbedElementsForPrompt, withoutGrabbedElementThumbnails } from "../../../renderer/shared/browser-element-grab.js";
 import { withoutMessageThreads } from "../../../main/services/pi-message-threads.js";
 import { daemonSettingsManager, profileKeepsLongPromptCache, profileWarmsCaches } from "./daemon-session-settings.ts";
 import { PiCacheWarmer, settleReplyCacheWarmer } from "../../../main/services/pi-cache-warming.js";
@@ -538,16 +539,40 @@ export function createDaemonChats(agentDir: string) {
         });
         const input = params.messages.at(-1) ?? chat.messages.at(-1);
         if (!input) throw new Error("A user message is required.");
+        const stored = "id" in input && typeof input.id === "string"
+          ? chat.messages.find((message) => message.id === input.id && message.role === "user")
+          : chat.messages.findLast((message) => message.role === "user" && message.content === input.content);
         const attachments = parseAttachments(withReadableImages(input.attachments)) ?? [];
-        const text = [input.content, ...attachments.filter((item) => item.kind === "image" && !model.input.includes("image")).map((item) => `Attached image: ${visionAttachmentAlias(item)} (${item.name}). Use inspect_image to analyze it.`), ...attachments.filter((item) => item.kind === "text").map((item) => `Attachment: ${item.name}\n${item.text ?? ""}`)].join("\n\n");
+        const supportsImages = model.input.includes("image");
+        const grabbedElements = input.role === "user"
+          ? (input.grabbedElements ?? stored?.grabbedElements)
+          : undefined;
+        const readableImagesById = new Map(
+          attachments
+            .filter((item) => item.kind === "image" && Boolean(item.data))
+            .map((item) => [item.id, item] as const),
+        );
+        const grabbedForPrompt = grabbedElements?.map((element) => {
+          if (supportsImages && element.thumbnailAttachmentId && readableImagesById.has(element.thumbnailAttachmentId)) {
+            return element;
+          }
+          if (element.thumbnailAttachmentId === undefined) return element;
+          const { thumbnailAttachmentId: _omitted, ...withoutThumb } = element;
+          return withoutThumb;
+        });
+        const grabbedText = formatGrabbedElementsForPrompt(grabbedForPrompt, { includeThumbnailNote: supportsImages });
+        const nonGrabAttachments = withoutGrabbedElementThumbnails(attachments);
+        const text = [
+          grabbedText,
+          input.content,
+          ...nonGrabAttachments.filter((item) => item.kind === "image" && !supportsImages).map((item) => `Attached image: ${visionAttachmentAlias(item)} (${item.name}). Use inspect_image to analyze it.`),
+          ...attachments.filter((item) => item.kind === "text").map((item) => `Attachment: ${item.name}\n${item.text ?? ""}`),
+        ].filter(Boolean).join("\n\n");
         if (!botAdmission) {
           // SessionStart then UserPromptSubmit, as on the desktop. A SessionStart `continue: false` or a refused
           // prompt throws before the model runs; a refused prompt never reaches the journal, and its stored copy
           // is marked (by id) so forks and summaries never send it later. A retried prompt that goes through now
           // loses the mark.
-          const stored = "id" in input && typeof input.id === "string"
-            ? chat.messages.find((message) => message.id === input.id && message.role === "user")
-            : chat.messages.findLast((message) => message.role === "user" && message.content === input.content);
           turnHookContext = await runPromptIntakeHooks({
             target: hookTarget, dispatch: dispatchHook,
             hasPriorMessages: chat.messages.some((message) => message.role === "assistant"),
@@ -558,7 +583,23 @@ export function createDaemonChats(agentDir: string) {
           });
         }
         await assertAuthority();
-        await session.prompt(text, { expandPromptTemplates: false, preflightResult: (accepted) => { if (accepted) options.onTurnAccepted?.(); }, images: (model.input.includes("image") ? attachments : []).flatMap((item) => item.kind === "image" && item.data ? [{ type: "image" as const, data: item.data, mimeType: item.mimeType }] : []) });
+        const promptImages: Array<{ type: "image"; data: string; mimeType: string }> = [];
+        if (supportsImages) {
+          for (const item of nonGrabAttachments) {
+            if (item.kind === "image" && item.data) promptImages.push({ type: "image", data: item.data, mimeType: item.mimeType });
+          }
+          const emittedThumbnails = new Set<string>();
+          for (const element of grabbedElements ?? []) {
+            const thumbId = element.thumbnailAttachmentId;
+            if (!thumbId || emittedThumbnails.has(thumbId)) continue;
+            const thumb = readableImagesById.get(thumbId);
+            if (thumb?.data) {
+              emittedThumbnails.add(thumbId);
+              promptImages.push({ type: "image", data: thumb.data, mimeType: thumb.mimeType });
+            }
+          }
+        }
+        await session.prompt(text, { expandPromptTemplates: false, preflightResult: (accepted) => { if (accepted) options.onTurnAccepted?.(); }, images: promptImages });
         if (entry.stopRequested) throw new Error("Generation cancelled.");
         // Stop hooks may keep a workspace chat's turn going, at most MAX_STOP_HOOK_CONTINUATIONS times.
         for (let continuation = 0; !botAdmission && hookStop === undefined && continuation < MAX_STOP_HOOK_CONTINUATIONS; continuation += 1) {

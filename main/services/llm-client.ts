@@ -538,6 +538,7 @@ import { chatToolOffers, personWroteChatTurn, offersChildChats, chatTurnArgsTool
 import { createGenerativeUiDraftSession } from "./generative-ui-draft.js";
 import { createUiDraftSession } from "./aiden-ui-draft.js";
 import { withoutVisualSnapshots } from "../../renderer/shared/visual-snapshots.js";
+import { withoutGrabbedElementThumbnails } from "../../renderer/shared/browser-element-grab.js";
 import { displayedAssistantUiCount } from "./aiden-ui-tool.js";
 import { visualSnapshotImages } from "./visual-snapshot-core.js";
 import { enqueueVisualSnapshots } from "./visual-snapshot-service.js";
@@ -1445,7 +1446,9 @@ async function prepareGeneration(
   const generationExtensions: PiAgentRuntimeExtension[] = [];
   const responseImages = () => uniqueResponseImages(sharedImages, displayedImages);
   const modelImageReferences = createPiModelImageReferences({
-    snapshot: chat.messages.flatMap((message) => withoutVisualSnapshots(message.attachments ?? [])),
+    snapshot: chat.messages.flatMap((message) =>
+      withoutGrabbedElementThumbnails(withoutVisualSnapshots(message.attachments ?? [])),
+    ),
     generated: responseImages,
     readCurrent: async (referenceSignal) => {
       signal.throwIfAborted();
@@ -1454,7 +1457,9 @@ async function prepareGeneration(
       signal.throwIfAborted();
       referenceSignal?.throwIfAborted();
       if (!current || persistedChatWorkspaceId(current.workspaceId) !== persistedChatWorkspaceId(params.workspaceId)) throw new Error("The reference image chat is no longer available in this workspace.");
-      return current.messages.flatMap((message) => withoutVisualSnapshots(message.attachments ?? []));
+      return current.messages.flatMap((message) =>
+        withoutGrabbedElementThumbnails(withoutVisualSnapshots(message.attachments ?? [])),
+      );
     },
   });
   const shareImage = (attachment: Attachment, toolCallId: string) => {
@@ -2384,7 +2389,9 @@ async function prepareGeneration(
         botContext && !supportsImages && botContext.admission.authority.visionProvider
           ? createVisionAnalysisTool(
               {
-                attachments: chat.messages.flatMap((message) => withoutVisualSnapshots(message.attachments ?? [])),
+                attachments: chat.messages.flatMap((message) =>
+                  withoutGrabbedElementThumbnails(withoutVisualSnapshots(message.attachments ?? [])),
+                ),
                 authority: {
                   providerId: botContext.admission.authority.visionProvider.sourceProviderId,
                   modelId: botContext.admission.authority.visionProvider.sourceModelId,
@@ -4835,6 +4842,7 @@ export const llmClient = {
                 currentUser.content,
                 currentUser.attachments,
                 SLASH_LIMITS.formattedInvocationBytes,
+                currentUser.grabbedElements,
               ),
               workspaceId!,
               currentUser.id,

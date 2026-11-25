@@ -3,6 +3,14 @@
 ## Unreleased
 
 - **2026-11-24 — Commands in plain words (provisional Remote revision 69).** On a Mac offering `approval:plain-words`, the app asks for it alone after `approval:cards`. A "Run on your Mac?" card then opens on **What it will do**, the one-line description Aiden wrote with the command, and a flip button in the corner turns it to the exact command and back. Under it, Aiden's own tags read from the command: soft red for risky steps (deleting files, the internet, a downloaded script, admin rights, files outside the project, stopping programs), grey for calm ones. While an answer can't be sent, only the buttons dim, so the command can still be checked. Older Macs, and commands sent without a description, show the command as before. Contract-test revision assertions now expect 69.
+- **2026-11-24 — A chat's top bar after Telegram's.** No Remote wire or revision change.
+  - Workspace and Bot chats show the chat's name over one status line on a glass capsule in the middle of the bar.
+  - The status line says where the chat lives at rest (the workspace, then the computer when several are paired, otherwise the branch). For a Bot, it says what the Bot is for.
+  - While the agent or Bot works, the status line shows typing dots and what it is doing. When it needs you ("Waiting for approval", "Waiting for you") or can't answer (Paused, Unavailable, Needs a model, Interrupted), it turns amber.
+  - The computer's name moves from under the bar into the status line.
+  - A Workspace chat shows the workspace's initials on the right. Its name and its initials both open the chat's actions (Rename, Fork, Read response aloud, Files). The separate More button is gone, including in a chat with no workspace.
+  - A Bot chat puts the Bot's face in the middle of the bar with its name tucked under it. Both open the Bot's profile, and More on the right keeps the Bot's actions.
+  - Under Reduce Motion the typing dots hold still. Under Reduce Transparency the capsule is solid.
 
 - **2026-11-22 — Pairing feedback and QR framing.** Add Computer scans for QR codes inside the visible viewfinder. Manual pairing shows what to correct below the address or setup code field. Search keeps Add Computer available until a computer is paired.
 

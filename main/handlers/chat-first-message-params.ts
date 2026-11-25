@@ -68,7 +68,7 @@ export function parseChatFirstMessage(input: unknown): ParsedChatFirstMessage {
     skillInvocation: record.skillInvocation,
     ...(record.inputSource !== undefined ? { inputSource: record.inputSource } : {}),
   });
-  if (!append.content.trim() && !append.attachments?.length) {
+  if (!append.content.trim() && !append.attachments?.length && !append.grabbedElements?.length) {
     throw new Error("Add a message or attachment before sending.");
   }
   // Checked like chats:setModel's level: a known level, or none (undefined or null).

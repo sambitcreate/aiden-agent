@@ -112,6 +112,7 @@ const appSourcePaths = [
   "AidenOnTheGo/Features/Chat/AidenChatDetailView.swift",
   "AidenOnTheGo/Features/Chat/ComposerVoiceInputController.swift",
   "AidenOnTheGo/Features/Conversation/AidenChatDock.swift",
+  "AidenOnTheGo/Features/Conversation/AidenChatTitleBar.swift",
   "AidenOnTheGo/Features/Conversation/AidenComposerSession.swift",
   "AidenOnTheGo/Features/Conversation/AidenComposerSurface.swift",
   "AidenOnTheGo/Features/Conversation/AidenDecisionDock.swift",
@@ -239,6 +240,7 @@ const chatFeatureSourcePaths = [
   "AidenOnTheGo/Features/Chat/AidenChronologicalTranscript.swift",
   "AidenOnTheGo/Features/Chat/AidenChatComposer.swift",
   "AidenOnTheGo/Features/Conversation/AidenChatDock.swift",
+  "AidenOnTheGo/Features/Conversation/AidenChatTitleBar.swift",
   "AidenOnTheGo/Features/Conversation/AidenComposerSession.swift",
   "AidenOnTheGo/Features/Conversation/AidenComposerSurface.swift",
   "AidenOnTheGo/Features/Conversation/AidenDecisionDock.swift",
@@ -318,6 +320,7 @@ const testSources = [
   "AidenBotWatchTests.swift",
   "AidenActivityMarkTests.swift",
   "AidenChatDockTests.swift",
+  "AidenChatTitleBarTests.swift",
   "AidenChatTests.swift",
   "AidenComposerSurfaceTests.swift",
   "AidenInboxTests.swift",
@@ -606,7 +609,7 @@ test("bot-first sources reuse the one reviewed chat implementation", async () =>
   assert.match(chat, /struct AidenBotMessageBubbleShape: Shape/u);
   assert.match(
     chat,
-    /private func botHeaderPill\([\s\S]*?AidenBotCanonicalAvatarView\([\s\S]*?\.aidenBotHeaderNameGlass\(\)/u,
+    /private func botAvatarHeader\([\s\S]*?AidenChatHeaderAvatar \{[\s\S]*?AidenBotCanonicalAvatarView\(/u,
   );
   assert.match(chat, /(?:Image\(systemName:|Label\("More", systemImage:) AidenChromeSymbols\.overflowMenu\)/u);
   assert.match(chat, /buttonBorderShape\(\.circle\)/u);
@@ -888,7 +891,7 @@ test("the Aiden home, onboarding, composer, schedules, and activity retain the r
   assert.doesNotMatch(chat, /Label\("Approval needed", systemImage: "hand\.raised"\)/u);
   assert.doesNotMatch(chat, /Button\("Deny", role: \.destructive\)/u);
   assert.match(chat, /safeAreaBar\(edge: \.bottom, spacing: 0\) \{ dock \}/u);
-  assert.match(chat, /AidenTranscriptScaffold\(dock: dock\)/u);
+  assert.match(chat, /AidenTranscriptScaffold\(dock: dock[,)]/u);
   assert.match(chat, /private var dock: AidenChatDock \{[\s\S]*?composer: \{ config in[\s\S]*?AidenComposerView\(/u);
   assert.match(chat, /glassEffect\(\.regular, in: shape\)/u);
   assert.match(

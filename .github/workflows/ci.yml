@@ -417,6 +417,10 @@ jobs:
           -derivedDataPath '${{ runner.temp }}/AidenOnTheGoDerivedData'
           -clonedSourcePackagesDirPath '${{ runner.temp }}/AidenOnTheGoSourcePackages'
           CODE_SIGNING_ALLOWED=NO
+      # One simulator, no clones. On the 3-core, 7 GB hosted runner two clones
+      # took 6-9 minutes to boot, stalled whole test processes for minutes, and
+      # sometimes never launched, which hung the step until the job timed out.
+      # The suite's summed test time is below what the clones took end to end.
       - name: Run Aiden On The Go XCTest on the simulator
         run: >-
           xcodebuild test-without-building -quiet
@@ -428,6 +432,7 @@ jobs:
           -clonedSourcePackagesDirPath '${{ runner.temp }}/AidenOnTheGoSourcePackages'
           -resultBundlePath '${{ runner.temp }}/AidenOnTheGoSimulator.xcresult'
           -skip-testing:AidenOnTheGoUITests
+          -parallel-testing-enabled NO
           CODE_SIGNING_ALLOWED=NO
 
       # Cover the demo launch matrix and pairing through the unpaired shell.
@@ -539,6 +544,10 @@ jobs:
           -derivedDataPath '${{ runner.temp }}/AidenOnTheGoDerivedData'
           -clonedSourcePackagesDirPath '${{ runner.temp }}/AidenOnTheGoSourcePackages'
           CODE_SIGNING_ALLOWED=NO
+      # One simulator, no clones. On the 3-core, 7 GB hosted runner two clones
+      # took 6-9 minutes to boot, stalled whole test processes for minutes, and
+      # sometimes never launched, which hung the step until the job timed out.
+      # The suite's summed test time is below what the clones took end to end.
       - name: Run Aiden On The Go XCTest on the simulator
         run: >-
           xcodebuild test-without-building -quiet
@@ -550,6 +559,7 @@ jobs:
           -clonedSourcePackagesDirPath '${{ runner.temp }}/AidenOnTheGoSourcePackages'
           -resultBundlePath '${{ runner.temp }}/AidenOnTheGoSimulator.xcresult'
           -skip-testing:AidenOnTheGoUITests
+          -parallel-testing-enabled NO
           CODE_SIGNING_ALLOWED=NO
 
       # Cover the demo launch matrix and pairing through the unpaired shell.

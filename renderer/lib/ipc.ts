@@ -1832,7 +1832,12 @@ export const chatsApi = {
     /** The new-chat pick's effort (an Agent Slider stop), saved on the chat with its model. */
     thinkingLevel?: import("../shared/generation-thinking").GenerationThinkingLevel;
     turnId: string;
-    message: { role: "user"; content: string; attachments?: Attachment[] };
+    message: {
+      role: "user";
+      content: string;
+      attachments?: Attachment[];
+      grabbedElements?: import("../shared/browser-element-grab").GrabbedElementContextV1[];
+    };
     skillInvocation?: SkillInvocationV1;
     /** Aiden Live sent this first message for the person ("By voice"). */
     inputSource?: ChatInputSourceV1;
@@ -1852,7 +1857,12 @@ export const chatsApi = {
     model?: string;
     thinkingLevel?: import("../shared/generation-thinking").GenerationThinkingLevel;
     turnId: string;
-    message: { role: "user"; content: string; attachments?: Attachment[] };
+    message: {
+      role: "user";
+      content: string;
+      attachments?: Attachment[];
+      grabbedElements?: import("../shared/browser-element-grab").GrabbedElementContextV1[];
+    };
     skillInvocation?: SkillInvocationV1;
     inputSource?: ChatInputSourceV1;
     worktree: FirstMessageWorktreeRequest;
@@ -1975,6 +1985,7 @@ export const chatsApi = {
       content: string;
       model?: string;
       attachments?: Attachment[];
+      grabbedElements?: import("../shared/browser-element-grab").GrabbedElementContextV1[];
     },
     meta: {
       providerId?: string;
