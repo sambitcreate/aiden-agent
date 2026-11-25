@@ -4,7 +4,7 @@ A headless Aiden server for macOS and Linux. Run `aiden serve` on a box you reac
 
 There is no interactive terminal app. Since 2026-10-30, `aiden` has only `serve` and short admin commands for setting the server up (see [the serve-only plan](../../docs/plans/completed/aiden-serve-only-cli.md)). Pi's terminal UI, `aiden -p` print mode, `--mode json|rpc`, `--list-models`, slash commands, themes and the first-run tour are gone. Bare `aiden` prints the command list. The old flags (`-p`, `--mode`, `--tui-mode`, `--theme`, `--list-models`, any word starting with `-`), the removed `chat`, `theme`, `reset` and `selfcheck` commands and a bare prompt (`aiden "fix the test"`) exit with an error that points to `aiden serve` and `aiden help`. Any other unknown word exits with `aiden: unknown command "…"`, suggesting the command it most likely meant (`aiden bot` → `aiden bots`).
 
-Built on [pi](https://github.com/earendil-works/pi) (`@earendil-works/pi-coding-agent`, MIT, pinned `1.5.2`, the same line the Aiden desktop app uses). The server uses Pi's SDK for its chat sessions and bundles the desktop's own `main/services` cores for Bots, scheduling, Remote, MCP, memory and web search.
+Built on [pi](https://github.com/earendil-works/pi) (`@earendil-works/pi-coding-agent`, MIT, pinned `1.6.0`, the same line the Aiden desktop app uses). The server uses Pi's SDK for its chat sessions and bundles the desktop's own `main/services` cores for Bots, scheduling, Remote, MCP, memory and web search.
 
 ## Requirements
 

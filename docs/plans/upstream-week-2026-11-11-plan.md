@@ -1,6 +1,6 @@
 # Upstream week of 2026-11-11: integration plan
 
-Status: In progress (2026-11-17). Planned 2026-11-11 against `main` at `6b1ab304e` (0.64.0, Pi 1.4.0). Each workstream's PR is listed in the [plans index](README.md); W3 waits for the next Pi release.
+Status: In progress (2026-11-17). Planned 2026-11-11 against `main` at `6b1ab304e` (0.64.0, Pi 1.4.0). Each workstream's PR is listed in the [plans index](README.md); W3 waits for the next Pi release. Update 2026-11-24: Pi 1.6.0 is pinned (see the [Pi 1.6.0 upgrade](completed/pi-1.6.0-upgrade-plan.md)) and its pi-durable releases signals and tools that park, so W3 is no longer blocked; it has not started.
 
 This plan covers ten upstream items from Pi, T3 Code and OpenCode. Before writing it, four read-only research passes read each upstream PR or commit diff and traced it to the matching Aiden code. Several items turned out smaller than their headlines, and two turned out not to apply. The findings below record why, so the same items are not re-proposed.
 

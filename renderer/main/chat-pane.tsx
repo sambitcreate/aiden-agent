@@ -303,6 +303,7 @@ import {
 } from "../shared/codex-thinking";
 import {
   GOOGLE_THINKING_LEVELS,
+  googleThinkingLevelsForModel,
   normalizeGoogleThinkingLevel,
   type GoogleThinkingLevel,
 } from "../shared/google-thinking";
@@ -792,7 +793,7 @@ export function ChatPane({ chatId }: { chatId: string }) {
   const thinkingMetadata = model ? selectedProvider?.modelMetadata?.[model] : undefined;
   const googleThinkingLevels = React.useMemo<GoogleThinkingLevel[]>(() => {
     const declared = thinkingMetadata?.thinkingLevels;
-    if (!declared?.length) return [...GOOGLE_THINKING_LEVELS];
+    if (!declared?.length) return googleThinkingLevelsForModel({ reasoning: true });
     const supported = GOOGLE_THINKING_LEVELS.filter((level) => declared.includes(level));
     return supported.includes("off") ? supported : ["off", ...supported];
   }, [thinkingMetadata?.thinkingLevels]);
