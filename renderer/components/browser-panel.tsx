@@ -1,18 +1,24 @@
 import * as React from "react";
 import { createPortal } from "react-dom";
-import { ArrowLeft, ArrowRight, ExternalLink, Globe, History, Link2, Loader2, MessageCirclePlus, MoreVertical, PictureInPicture2, Plus, RadioTower, RotateCw, Square, Unlink2, Volume2, VolumeX, X } from "lucide-react";
-import type { BrowserAnnotation, BrowserCommand, BrowserCommandResult, BrowserImage, BrowserSnapshot, BrowserState, BrowserStylePreview, BrowserTab, BrowserViewport } from "../shared/browser";
+import { ArrowLeft, ArrowRight, ExternalLink, Globe, History, Link2, Loader2, MessageCirclePlus, MoreVertical, MousePointer2, PictureInPicture2, Plus, RadioTower, RotateCw, Square, Unlink2, Volume2, VolumeX, X } from "lucide-react";
+import type { BrowserAnnotation, BrowserCommand, BrowserCommandResult, BrowserGrabSource, BrowserImage, BrowserSnapshot, BrowserState, BrowserStylePreview, BrowserTab, BrowserViewport } from "../shared/browser";
+import { resolveGrabAccent, type GrabbedElementAccent } from "../shared/browser-element-grab";
 import { browserApi } from "../lib/ipc";
 import { acceptBrowserState, BROWSER_DEVICE_PRESETS, browserBoundsFromRect, enqueueBrowserPresentation, resizeBrowserViewport, savedBrowserScreenshotPath, validBrowserViewport, visibleBrowserNativeOccluders, browserNativeViewObstructed, browserOcclusionMutated, browserOcclusionScrolled } from "../lib/browser-ui-state";
-import { Button, Input, Text, toast } from "./ui";
+import { Button, Input, Text, TooltipProvider, toast } from "./ui";
+import { Kbd, Tooltip } from "./ui-primitives";
 import { BrowserMenuButton, type BrowserMenuOption } from "./browser-menu-button";
 import { BrowserSettings } from "./browser-settings";
 import { BrowserFloatingFrame } from "./browser-floating-frame";
 import { BrowserAnnotationEditor } from "./browser-annotation-editor";
 import { captureBrowserAnnotation } from "../lib/browser-annotation-capture";
 import { BROWSER_ANNOTATION_UNAVAILABLE, browserAnnotationDelivery } from "../lib/browser-annotation-delivery";
+import { BROWSER_ELEMENT_GRAB_UNAVAILABLE, browserElementGrabDelivery } from "../lib/browser-element-grab-delivery";
 import { BrowserAnnotationPreviewQueue } from "../lib/browser-annotation-preview-queue";
 import { isEscapeKey } from "../lib/dismiss-key";
+import { isMacPlatform } from "../lib/ghostty-terminal/host-platform";
+import { useLayer } from "../lib/layer-stack";
+import { cn } from "../lib/ui-utils";
 
 /* Browser is an extension of the Environment work surface. Compact tab and
  * navigation rows follow the supplied reference; page content owns the area.
@@ -20,6 +26,17 @@ import { isEscapeKey } from "../lib/dismiss-key";
 
 const ZOOM_STEPS = [.25, .33, .5, .67, .75, .8, .9, 1, 1.1, 1.25, 1.5, 1.75, 2, 2.5, 3, 4, 5];
 type RunCommand = (command: BrowserCommand) => Promise<BrowserCommandResult | null>;
+
+function readActiveThemeGrabAccent(): GrabbedElementAccent {
+  if (typeof document === "undefined" || typeof getComputedStyle !== "function") {
+    return resolveGrabAccent();
+  }
+  const styles = getComputedStyle(document.documentElement);
+  return resolveGrabAccent({
+    bg: styles.getPropertyValue("--fill-accent"),
+    fg: styles.getPropertyValue("--fill-accent-foreground"),
+  });
+}
 
 /** `bot`: a Bot's own browser, shown in its panel. */
 export type BrowserPanelVariant = "workspace" | "bot";
@@ -56,6 +73,7 @@ export function BrowserPanel({ workspaceId, active, onDock, integratedTabs = fal
   const panelRef = React.useRef<HTMLDivElement>(null);
   const hostRef = React.useRef<HTMLDivElement>(null);
   const addressRef = React.useRef<HTMLInputElement>(null);
+  const grabButtonRef = React.useRef<HTMLButtonElement>(null);
   const annotateButtonRef = React.useRef<HTMLButtonElement>(null);
   const annotationOpen = Boolean(annotation);
   const annotationWasOpenRef = React.useRef(false);
@@ -82,6 +100,10 @@ export function BrowserPanel({ workspaceId, active, onDock, integratedTabs = fal
   const floatingLayout = React.useCallback(() => { presentationRef.current?.(); }, []);
   tabIdRef.current = tab?.id ?? null;
   const ready = Boolean(tab?.url && tab.url !== "about:blank" && !tab.error && !tab.crashed);
+  const grabActive = !bot && Boolean(tab?.grabbing);
+  const mac = isMacPlatform();
+  const grabShortcutLabel = mac ? "⇧⌘G" : "Ctrl+Shift+G";
+  const grabAriaShortcut = mac ? "Meta+Shift+G" : "Control+Shift+G";
   const cancelAnnotation = React.useCallback(() => {
     const target = annotationTargetRef.current;
     annotationTargetRef.current = null;
@@ -131,21 +153,49 @@ export function BrowserPanel({ workspaceId, active, onDock, integratedTabs = fal
   React.useEffect(() => {
     let cancelled = false;
     setState(null); setError(null); cancelAnnotation(); setPickerActive(false); setAddressFocused(false);
-    const unsubscribe = browserApi.onEvent((event) => { if (event.type === "state") commit(event.state); });
+    const unsubscribe = browserApi.onEvent((event) => {
+      if (event.type === "state") {
+        commit(event.state);
+      } else if (event.type === "grab" && !bot && event.workspaceId === workspaceId) {
+        const recipient = browserElementGrabDelivery.capture(workspaceId);
+        if (!recipient || !recipient.deliver(event.capture)) {
+          setError(BROWSER_ELEMENT_GRAB_UNAVAILABLE);
+        }
+      }
+    });
     void browserApi.getState(workspaceId).then((next) => { if (!cancelled) commit(next); }, (cause) => { if (!cancelled) setError(cause instanceof Error ? cause.message : "Could not open the browser."); });
     return () => { cancelled = true; unsubscribe(); };
-  }, [workspaceId, commit, cancelAnnotation, loadAttempt]);
+  }, [workspaceId, bot, commit, cancelAnnotation, loadAttempt]);
 
   React.useEffect(() => {
     cancelAnnotation(); setAddressFocused(false); setPickerActive(false);
-    return () => { if (tab?.id) void browserApi.command(workspaceId, { action: "annotate", tabId: tab.id, enabled: false }).catch(() => undefined); };
-  }, [workspaceId, tab?.id, cancelAnnotation]);
+    return () => {
+      if (tab?.id) {
+        void browserApi.command(workspaceId, { action: "annotate", tabId: tab.id, enabled: false }).catch(() => undefined);
+        if (!bot) void browserApi.command(workspaceId, { action: "grab", tabId: tab.id, enabled: false }).catch(() => undefined);
+      }
+    };
+  }, [workspaceId, tab?.id, bot, cancelAnnotation]);
 
   React.useEffect(() => {
     if (surfaceActive || !tab?.id) return;
     setPickerActive(false);
     void browserApi.command(workspaceId, { action: "annotate", tabId: tab.id, enabled: false }).catch(() => undefined);
-  }, [surfaceActive, workspaceId, tab?.id]);
+    if (!bot) void browserApi.command(workspaceId, { action: "grab", tabId: tab.id, enabled: false }).catch(() => undefined);
+  }, [surfaceActive, workspaceId, tab?.id, bot]);
+
+  React.useEffect(() => {
+    if (!settingsOpen || !grabActive || !tab?.id || bot) return;
+    void run({ action: "grab", tabId: tab.id, enabled: false });
+  }, [settingsOpen, grabActive, tab?.id, bot, run]);
+
+  useLayer(grabActive, "panel", {
+    name: "browser-grab",
+    onEscape: (event) => {
+      event.preventDefault();
+      if (tab) void run({ action: "grab", tabId: tab.id, enabled: false });
+    },
+  });
 
   // Main-owned page views stay alive while hidden. They must be removed from the
   // native stacking order whenever a renderer menu, dialog or annotation covers them.
@@ -221,8 +271,26 @@ export function BrowserPanel({ workspaceId, active, onDock, integratedTabs = fal
       }
     }
   }, [run, tab]);
+  const toggleGrab = React.useCallback(async (source: BrowserGrabSource = "toolbar") => {
+    if (bot || !tab || !ready) return;
+    if (grabActive) {
+      await run({ action: "grab", tabId: tab.id, enabled: false });
+      return;
+    }
+    if (annotation) cancelAnnotation();
+    if (pickerActive) setPickerActive(false);
+    await run({
+      action: "grab",
+      tabId: tab.id,
+      enabled: true,
+      accent: readActiveThemeGrabAccent(),
+      source,
+    });
+  }, [bot, tab, ready, grabActive, annotation, pickerActive, cancelAnnotation, run]);
+
   const annotate = React.useCallback(async () => {
     if (!tab || !ready) return;
+    if (grabActive) await run({ action: "grab", tabId: tab.id, enabled: false });
     if (annotation) { cancelAnnotation(); return; }
     if (pickerActive) { await run({ action: "annotate", tabId: tab.id, enabled: false }); setPickerActive(false); return; }
     const tabId = tab.id;
@@ -269,10 +337,11 @@ export function BrowserPanel({ workspaceId, active, onDock, integratedTabs = fal
     return browserApi.onEvent((event) => {
       if (event.type !== "shortcut" || event.workspaceId !== workspaceId || event.tabId !== tab?.id) return;
       if (event.shortcut === "annotate") { if (!bot) void annotate(); }
+      else if (event.shortcut === "grab") { if (!bot) void toggleGrab("shortcut"); }
       else if (event.shortcut === "focus_address") { addressRef.current?.focus(); addressRef.current?.select(); }
       else void run({ action: "reload", tabId: event.tabId, ignoreCache: event.shortcut === "hard_reload" });
     });
-  }, [surfaceActive, workspaceId, tab?.id, annotate, run]);
+  }, [surfaceActive, workspaceId, tab?.id, bot, annotate, toggleGrab, run]);
 
   React.useEffect(() => {
     if (!surfaceActive) return;
@@ -282,12 +351,25 @@ export function BrowserPanel({ workspaceId, active, onDock, integratedTabs = fal
       // ⌘. marks up the page only from inside the browser; elsewhere it stops a reply.
       // Window capture runs before the app's command keys, so focus here wins.
       if (key === "." && !bot && panelRef.current?.contains(document.activeElement)) { event.preventDefault(); event.stopPropagation(); void annotate(); }
+      else if (key === "g" && event.shiftKey && !bot && panelRef.current?.contains(document.activeElement)) { event.preventDefault(); event.stopPropagation(); if (!event.repeat) void toggleGrab("shortcut"); }
       else if (key === "l" && panelRef.current?.contains(document.activeElement)) { event.preventDefault(); addressRef.current?.focus(); }
       else if (key === "r" && panelRef.current?.contains(document.activeElement) && tab) { event.preventDefault(); void run({ action: "reload", tabId: tab.id, ignoreCache: event.shiftKey }); }
     };
+    const bubbleKeyboard = (event: KeyboardEvent) => {
+      if (event.defaultPrevented || bot || !ready) return;
+      if (!(event.metaKey || event.ctrlKey) || !event.shiftKey || event.altKey) return;
+      if (event.key.toLowerCase() === "g") {
+        event.preventDefault();
+        if (!event.repeat) void toggleGrab("shortcut");
+      }
+    };
     window.addEventListener("keydown", keyboard, true);
-    return () => window.removeEventListener("keydown", keyboard, true);
-  }, [surfaceActive, annotate, tab, run]);
+    window.addEventListener("keydown", bubbleKeyboard, false);
+    return () => {
+      window.removeEventListener("keydown", keyboard, true);
+      window.removeEventListener("keydown", bubbleKeyboard, false);
+    };
+  }, [surfaceActive, bot, ready, annotate, toggleGrab, tab, run]);
 
   // A menu belongs to the tab and surface that opened it.
   const menuOwner = JSON.stringify([workspaceId, tab?.id, surfaceActive]);
@@ -326,11 +408,51 @@ export function BrowserPanel({ workspaceId, active, onDock, integratedTabs = fal
       <form className="browser-address-form" onSubmit={(event) => { event.preventDefault(); submitAddress(address); }}>
         <Input ref={addressRef} aria-label="Search or enter URL" placeholder="Search or enter URL" spellCheck={false} autoComplete="off" value={addressFocused ? address : tab?.url === "about:blank" ? "" : tab?.url ?? ""} onChange={(event) => setAddress(event.target.value)} onFocus={() => { setAddress(tab?.url === "about:blank" ? "" : tab?.url ?? ""); setAddressFocused(true); queueMicrotask(() => addressRef.current?.select()); }} onBlur={() => setAddressFocused(false)} onKeyDown={(event) => { if (isEscapeKey(event)) { event.stopPropagation(); setAddressFocused(false); event.currentTarget.blur(); } }} />
       </form>
+      {bot ? null : (
+        <TooltipProvider>
+          <Tooltip
+            content={
+              grabActive ? (
+                <span className="inline-flex items-center gap-1.5">
+                  Stop grabbing <Kbd>Esc</Kbd>
+                </span>
+              ) : (
+                <span className="inline-flex items-center gap-1.5">
+                  Grab element <Kbd>{grabShortcutLabel}</Kbd>
+                </span>
+              )
+            }
+          >
+            <Button
+              ref={grabButtonRef}
+              variant="transparent"
+              size="small"
+              iconOnly
+              className={cn(grabActive && "bg-list-selection text-accent-text hover:bg-list-selection")}
+              aria-label={grabActive ? "Stop grabbing" : "Grab element"}
+              aria-pressed={grabActive}
+              aria-keyshortcuts={grabAriaShortcut}
+              disabled={!ready}
+              onClick={() => void toggleGrab("toolbar")}
+            >
+              <MousePointer2 className="size-4" fill={grabActive ? "currentColor" : "none"} />
+            </Button>
+          </Tooltip>
+        </TooltipProvider>
+      )}
       {bot ? null : <Button ref={annotateButtonRef} variant={pickerActive || annotation ? "muted" : "transparent"} size="small" iconOnly aria-label={pickerActive || annotation ? "Cancel annotation" : "Annotate"} aria-pressed={pickerActive || Boolean(annotation)} aria-keyshortcuts="Meta+." title="Annotate ⌘." disabled={!ready} onClick={() => void annotate()}><MessageCirclePlus /></Button>}
       {integratedTabs && tab && (tab.audible || tab.muted) ? <Button variant="transparent" size="small" iconOnly aria-label={tab.muted ? "Unmute tab" : "Mute tab"} onClick={() => void run({ action: "mute", tabId: tab.id, muted: !tab.muted })}>{tab.muted ? <VolumeX /> : <Volume2 />}</Button> : null}
       <BrowserMoreMenu scope={menuOwner} bot={bot} tab={tab} state={visibleState} run={run} onCapture={capture} onSettings={() => setSettingsOpen(true)} onDock={onDock} />
     </div>
     {tab?.viewport.mode === "responsive" ? <BrowserDeviceToolbar tab={tab} run={run} /> : null}
+    {grabActive ? (
+      <div className="browser-picker-status flex items-center justify-between gap-2" role="status">
+        <span>Click an element to grab for chat · ↑↓ parent/child · ⇧Click to add multiple · Esc to cancel</span>
+        <Button variant="transparent" size="small" onClick={() => tab && void run({ action: "grab", tabId: tab.id, enabled: false })}>
+          Cancel
+        </Button>
+      </div>
+    ) : null}
     {pickerActive ? <div className="browser-picker-status" role="status">Select an element or highlighted text. Press Esc to cancel.</div> : null}
     {tab?.agentControlling ? <div className="browser-agent-status" role="status">{agentName ?? "Aiden"} is using this browser</div> : null}
     {bot && tab?.heldForPerson ? <div className="browser-agent-status" role="status">{browserHoldNotice(tab.heldForPerson.reason, agentName)}</div> : null}

@@ -40,7 +40,7 @@ A persistable folder issue can offer **Allow this folder**. That saves access fo
 
 ## Phones and other hosts
 
-Supported iOS and Android clients can answer access cards and folder issues on the paired desktop. The host remains responsible for validating the original card and granting access. An older phone or paired desktop gets a line telling you to answer on the Mac. Access issues and their alerts are shown only to clients that support them; hidden access issues do not increase older clients’ issue counts.
+Supported iOS and Android clients can answer access cards and folder issues on the paired desktop, and a paired Mac can answer access cards in the host Bot's chat. The host remains responsible for validating the original card and granting access. An older phone or paired desktop gets a line telling you to answer on the Mac. Access issues and their alerts are shown only to clients that support them; hidden access issues do not increase older clients’ issue counts.
 
 A folder approved for a Bot does not appear in the phone's file browser or its list of shared folders. Other Custom Bots may list it as an available choice in their access settings, but they receive no grant until you select it for them. Approving the same folder explicitly for phone browsing makes it a normal shared folder. You can also approve a containing folder for phones; the Bot keeps its original narrower selection.
 

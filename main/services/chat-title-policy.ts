@@ -4,6 +4,10 @@
 import type { Attachment, ChatMessage } from "./types.js";
 import { isHookBlockedPrompt } from "./hook-blocked-prompt.js";
 import { chatSurface } from "../../renderer/shared/chat-visibility.js";
+import {
+  withoutGrabbedElementThumbnails,
+  type GrabbedElementContextV1,
+} from "../../renderer/shared/browser-element-grab.js";
 
 /**
  * Renderer-initiated renames refuse feature-owned (Design Studio) chats: the
@@ -63,21 +67,31 @@ function truncateUtf8(value: string, maximumBytes: number): string {
 function titleMessageExcerpt(message: ChatMessage): string {
   const label = message.role === "assistant" ? "Assistant" : "User";
   const content = compact(message.content);
-  const attachments = (message.attachments ?? []).map(
+  const grabbed = (message.grabbedElements ?? []).map(
+    (element) => `Element: ${compact(element.label) || "Element"}`,
+  );
+  const attachments = withoutGrabbedElementThumbnails(message.attachments ?? []).map(
     (attachment) => `${attachment.kind === "image" ? "Image" : "File"}: ${compact(attachment.name)}`,
   );
-  const body = [content, ...attachments].filter(Boolean).join(" | ");
+  const body = [content, ...grabbed, ...attachments].filter(Boolean).join(" | ");
   return body ? `${label}: ${body}` : "";
 }
 
 export function deriveChatTitleSeed(input: {
   content: string;
   attachments?: Attachment[];
+  grabbedElements?: GrabbedElementContextV1[];
 }): string {
   const message = compact(input.content);
   if (message) return truncate(message);
 
-  const firstAttachment = input.attachments?.[0];
+  const firstElement = input.grabbedElements?.[0];
+  if (firstElement) {
+    return truncate(`Element: ${compact(firstElement.label) || "Element"}`);
+  }
+
+  const firstAttachment =
+    withoutGrabbedElementThumbnails(input.attachments ?? [])[0] ?? input.attachments?.[0];
   if (!firstAttachment) return DEFAULT_CHAT_TITLE;
   const prefix = firstAttachment.kind === "image" ? "Image" : "File";
   return truncate(`${prefix}: ${compact(firstAttachment.name) || "Attachment"}`);
@@ -124,10 +138,15 @@ export function sanitizeGeneratedChatTitle(raw: string): string | null {
 export function buildChatTitlePrompt(input: {
   content: string;
   attachments?: Attachment[];
+  grabbedElements?: GrabbedElementContextV1[];
 }): string {
-  const attachmentLines = (input.attachments ?? []).map(
+  const grabbedLines = (input.grabbedElements ?? []).map(
+    (element) => `- Element: ${compact(element.label) || "Element"}`,
+  );
+  const attachmentLines = withoutGrabbedElementThumbnails(input.attachments ?? []).map(
     (attachment) => `- ${attachment.name} (${attachment.mimeType}, ${attachment.size} bytes)`,
   );
+  const metadataLines = [...grabbedLines, ...attachmentLines];
   return [
     "Write a concise title for this coding conversation.",
     "Return only the title, with no JSON, Markdown, quotes, or prefix.",
@@ -139,7 +158,7 @@ export function buildChatTitlePrompt(input: {
     "",
     "User message:",
     input.content.slice(0, 8_000),
-    ...(attachmentLines.length > 0 ? ["", "Attachment metadata:", ...attachmentLines] : []),
+    ...(metadataLines.length > 0 ? ["", "Attachment metadata:", ...metadataLines] : []),
   ].join("\n");
 }
 

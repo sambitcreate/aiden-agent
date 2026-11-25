@@ -1,11 +1,30 @@
+import { emitBotTestNotification, installBotTestIpc } from "../main/bots/test-dom";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
-import test from "node:test";
+import test, { afterEach } from "node:test";
+import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { renderToStaticMarkup } from "react-dom/server";
-import { BrowserDeviceToolbar, BrowserEmptyState } from "./browser-panel.js";
+import { BrowserDeviceToolbar, BrowserEmptyState, BrowserPanel } from "./browser-panel.js";
 import { BrowserAnnotationEditor } from "./browser-annotation-editor.js";
 import { storedEnvironmentPanelTab, reduceEnvironmentSurfaceState } from "../lib/environment-panel-state.js";
-import { DEFAULT_BROWSER_SETTINGS, type BrowserSnapshot, type BrowserTab } from "../shared/browser.js";
+import {
+  BROWSER_ELEMENT_GRAB_UNAVAILABLE,
+  browserElementGrabDelivery,
+} from "../lib/browser-element-grab-delivery.js";
+import {
+  GRABBED_ELEMENT_SCHEMA_VERSION,
+  type GrabbedElementCapture,
+} from "../shared/browser-element-grab.js";
+import {
+  BUILT_IN_BROWSER_PROFILES,
+  DEFAULT_BROWSER_SETTINGS,
+  type BrowserCommand,
+  type BrowserSnapshot,
+  type BrowserState,
+  type BrowserTab,
+} from "../shared/browser.js";
+
+afterEach(cleanup);
 
 const tab: BrowserTab = { id: "tab", workspaceId: "workspace", profileId: "default", url: "http://localhost:3000", title: "App", loading: false, canGoBack: false, canGoForward: false, crashed: false, audible: false, muted: false, viewport: { mode: "responsive", width: 375, height: 667 }, appearance: "system", zoom: 1, recording: false, agentControlling: false, floating: false };
 
@@ -112,4 +131,141 @@ test("a failed first browser state read replaces the endless spinner with Try ag
   assert.doesNotMatch(failed, /Opening browser/u);
   assert.match(failed, /Couldn’t open the browser/u);
   assert.match(failed, />Try again<\/button>/u);
+});
+
+test("Grab toolbar button toggles element grab, shows active status bar, delivers captures to composer, and cancels on Escape", async () => {
+  const commands: BrowserCommand[] = [];
+  let grabbing = false;
+  let revision = 1;
+  const currentState = (): BrowserState => ({
+    workspaceId: "ws-grab",
+    revision,
+    tabs: [{ ...tab, id: "tab-grab", workspaceId: "ws-grab", grabbing }],
+    activeTabId: "tab-grab",
+    profiles: structuredClone(BUILT_IN_BROWSER_PROFILES),
+    defaults: structuredClone(DEFAULT_BROWSER_SETTINGS),
+    agentAccessOverride: "inherit",
+    agentAccessAllowed: true,
+    history: [],
+    servers: [],
+  });
+
+  installBotTestIpc({
+    "browser:get-state": () => currentState(),
+    "browser:command": (_ws: unknown, cmd: unknown) => {
+      const command = cmd as BrowserCommand;
+      commands.push(command);
+      if (command.action === "grab") {
+        grabbing = command.enabled;
+        revision += 1;
+      }
+      return { state: currentState() };
+    },
+  });
+
+  render(<BrowserPanel workspaceId="ws-grab" active />);
+  await screen.findByRole("tab", { name: "App" });
+  const grabButton = screen.getByRole("button", { name: "Grab element" });
+  const annotateButton = screen.getByRole("button", { name: "Annotate" });
+  const addressForm = document.querySelector(".browser-address-form");
+  assert.ok(addressForm, "address form is rendered");
+  // Grab sits immediately right of .browser-address-form, before Annotate.
+  assert.ok(
+    Boolean(addressForm.compareDocumentPosition(grabButton) & Node.DOCUMENT_POSITION_FOLLOWING),
+    "Grab button follows address form",
+  );
+  assert.ok(
+    Boolean(grabButton.compareDocumentPosition(annotateButton) & Node.DOCUMENT_POSITION_FOLLOWING),
+    "Grab button precedes Annotate button",
+  );
+  assert.equal(grabButton.getAttribute("aria-pressed"), "false");
+
+  // Click Grab -> sends grab(enabled: true) with resolved accent and shows status strip.
+  await act(async () => {
+    fireEvent.click(grabButton);
+  });
+  await waitFor(() => {
+    const activeButton = screen.getByRole("button", { name: "Stop grabbing" });
+    assert.equal(activeButton.getAttribute("aria-pressed"), "true");
+  });
+  const grabStart = commands.find((cmd) => cmd.action === "grab" && cmd.enabled);
+  assert.ok(grabStart && grabStart.action === "grab");
+  assert.ok(grabStart.accent?.bg && grabStart.accent?.fg);
+  assert.equal(grabStart.source, "toolbar");
+  assert.ok(screen.getByText(/Click an element to grab for chat/u));
+
+  // Deliver a grabbed capture through browserElementGrabDelivery when composer is registered.
+  const received: GrabbedElementCapture[] = [];
+  const unregister = browserElementGrabDelivery.register({
+    workspaceId: "ws-grab",
+    chatId: "chat-1",
+    available: () => true,
+    receive: (capture) => {
+      received.push(capture);
+      return true;
+    },
+  });
+  const capture: GrabbedElementCapture = {
+    element: {
+      version: GRABBED_ELEMENT_SCHEMA_VERSION,
+      id: "el_grab_1",
+      label: "<HeroCard />",
+      framework: "react",
+      componentName: "HeroCard",
+      tagName: "section",
+      selector: "main > section.hero",
+      htmlSnippet: "<section class=\"hero\">Hello</section>",
+      boundingBox: { x: 10, y: 20, width: 300, height: 150 },
+      pageUrl: "http://localhost:3000/",
+      capturedAt: 1_700_000_000_000,
+    },
+  };
+  await act(async () => {
+    emitBotTestNotification("browser:event", {
+      type: "grab",
+      workspaceId: "ws-grab",
+      tabId: "tab-grab",
+      capture,
+    });
+  });
+  assert.equal(received.length, 1);
+  assert.equal(received[0]?.element.label, "<HeroCard />");
+
+  // When composer is unavailable, shows clear user alert instead of silently dropping.
+  unregister();
+  await act(async () => {
+    emitBotTestNotification("browser:event", {
+      type: "grab",
+      workspaceId: "ws-grab",
+      tabId: "tab-grab",
+      capture,
+    });
+  });
+  assert.ok(await screen.findByText(BROWSER_ELEMENT_GRAB_UNAVAILABLE));
+
+  // Pressing Escape while host has focus cancels grab via useLayer("panel").
+  await act(async () => {
+    fireEvent.keyDown(document, { key: "Escape" });
+  });
+  await waitFor(() => {
+    assert.ok(commands.some((cmd) => cmd.action === "grab" && !cmd.enabled));
+    assert.equal(screen.getByRole("button", { name: "Grab element" }).getAttribute("aria-pressed"), "false");
+  });
+
+  // Shift+Cmd+G shortcut activates grab with source="shortcut" and ignores key auto-repeat.
+  const countBeforeShortcut = commands.filter((cmd) => cmd.action === "grab").length;
+  await act(async () => {
+    fireEvent.keyDown(window, { key: "G", metaKey: true, shiftKey: true, repeat: true });
+  });
+  assert.equal(commands.filter((cmd) => cmd.action === "grab").length, countBeforeShortcut);
+
+  await act(async () => {
+    fireEvent.keyDown(window, { key: "G", metaKey: true, shiftKey: true, repeat: false });
+  });
+  await waitFor(() => {
+    const enabledGrabs = commands.filter((cmd) => cmd.action === "grab" && cmd.enabled);
+    const shortcutGrab = enabledGrabs[enabledGrabs.length - 1];
+    assert.ok(shortcutGrab && shortcutGrab.action === "grab");
+    assert.equal(shortcutGrab.source, "shortcut");
+  });
 });

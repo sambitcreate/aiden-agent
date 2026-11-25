@@ -25,3 +25,10 @@ Branch `feature/bot-message-latency-ef3d2d`. Plan record: `docs/plans/instant-ui
 - `bot-capabilities.json` grows without bound because claims are never pruned. About 50 leftover `.previous` rollback files sit in `bot-service`.
 - Each capability commit spawns `/usr/bin/security` several times for the Keychain rollback anchor.
 - The send POST itself took 2–5 s in prod logs. Prod has not been re-measured since the fix.
+
+## Follow-up: unreachable MCP server (2026-11-23)
+- Second cause found on the owner's machine (v0.68.0 still running): the iMCP stdio server hangs when the iMCP app is not running, and Umbrel returns 401. `createBotMcpScopeCache` never cached a failure, so each snapshot past the 60 s TTL waited the full 10 s inspection deadline again.
+- Fix (`bot-mcp-inventory.ts`): a failure record per server (fingerprint + generation + kind + attempts + retryAt). Backoff starts at 30 s (`BOT_MCP_FAILURE_BACKOFF_MS`), doubles, and is capped at 5 min. While it is active, `inspect()` throws `BotMcpInspectionBackoffError` at once and retries in the background, never awaited. `resolveBotMcpInventory` drops that server without reporting again; background failures are reported once through the cache's `reportFailure` (desktop: `reportBotMcpInspectionFailure`).
+- A generation change makes the retry due at once (still in the background). A changed connection fingerprint inspects synchronously. Only the first inspection of a server ever blocks.
+- Stale-while-revalidate: past the TTL but within the 5 min grace, with the same fingerprint and generation, the cached tools answer at once and a refresh runs behind the turn.
+- Token measurement (owner's live Bot DB): 41 declared tools ≈ 46k chars ≈ 11.6k tokens per step. MCP is only `composio` (702 chars). Built-ins dominate: routines 6.0k, subagent 5.1k, propose_plan 2.6k, update_bot 2.5k, bot_memory 2.2k, codemode 1.9k, ~12 browser_* tools. Deferring MCP behind codemode saves little. Moving rarely used Bot built-ins to on-demand is the bigger, not-yet-done follow-up.

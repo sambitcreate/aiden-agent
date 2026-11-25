@@ -99,7 +99,6 @@ function fixture(options: { fail?: boolean } = {}) {
   const reader = createModelsCatalogReader({
     loadBundled: async () => structuredClone(BUNDLED),
     displayCache: runtime,
-    benchmarks: { catalog: async () => null },
     warn: () => undefined,
   });
   const modelInfo = createProviderModelInfo({
