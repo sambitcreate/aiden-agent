@@ -97,7 +97,7 @@ test("Bot messages name their sender and saved replies stay visible without star
   await expect(conversation.getByText("COS is waiting for you to approve: Create 3 events", { exact: true })).toBeVisible();
   await expect(conversation.getByText("Saved answer while paused", { exact: true })).toBeVisible();
   await expect(page.getByRole("button", { name: /^(Allow once|Approve|Retry)$/u })).toHaveCount(0);
-  await expect(page.getByPlaceholder("Ask Planner")).toBeVisible();
+  await expect(page.getByPlaceholder("Message Planner")).toBeVisible();
   await expect(page.getByText("LM Studio (local) added.", { exact: true })).toBeHidden();
   for (const [scheme, width] of [
     ["light", 1280],

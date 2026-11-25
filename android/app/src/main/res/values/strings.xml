@@ -14,7 +14,7 @@
     <string name="model_picker_recent">Recent</string>
     <string name="model_picker_default">Default</string>
     <string name="model_picker_default_uses">Uses %1$s · %2$s</string>
-    <string name="model_picker_default_unknown">Uses the model set on your Mac</string>
+    <string name="model_picker_default_unknown">Uses the model set on your computer</string>
     <string name="model_picker_mac_default">Mac default</string>
     <string name="model_picker_capability_vision">Vision</string>
     <string name="model_picker_capability_reasoning">Reasoning</string>
@@ -274,7 +274,7 @@
     <string name="workspace_remove">Remove Workspace</string>
     <string name="workspace_delete_worktree_short_title">Delete Worktree?</string>
     <string name="workspace_use_memory">Use memory</string>
-    <string name="workspace_use_memory_body">When off, Aiden does not index this workspace or expose memory tools in its chats. Existing memory stays on your Mac.</string>
+    <string name="workspace_use_memory_body">When off, Aiden does not index this workspace or expose memory tools in its chats. Existing memory stays on your computer.</string>
 
     <!-- Workspaces: chats -->
     <string name="workspace_chats_loading">Loading chats</string>
@@ -368,7 +368,7 @@
     <string name="inbox_notice_undo_conflict">That chat changed since, so Undo left it as it is.</string>
     <string name="inbox_notice_conflict">That chat changed on another device. The Inbox is up to date now.</string>
     <string name="inbox_notice_triage_failed">Couldn’t update that chat. It’s back where it was.</string>
-    <string name="inbox_notice_mark_read_failed">Couldn’t mark that chat read. Try again once your Mac is reachable.</string>
+    <string name="inbox_notice_mark_read_failed">Couldn’t mark that chat read. Try again once your computer is reachable.</string>
     <string name="workspace_home_new_chat">New chat</string>
     <plurals name="workspace_home_show_more">
         <item quantity="one">Show %1$d more</item>
@@ -506,11 +506,11 @@
     <string name="bots_status_working">Working</string>
     <string name="bots_offline">Offline. Showing your saved Bots.</string>
     <string name="bots_load_failed_title">Bots couldn’t load</string>
-    <string name="bots_load_failed_body">Make sure your Mac is on and nearby, then try again.</string>
+    <string name="bots_load_failed_body">Make sure your computer is on and nearby, then try again.</string>
     <string name="bots_empty_title">Make your first Bot</string>
     <string name="bots_empty_offline_title">No saved Bots</string>
     <string name="bots_empty_body">A Bot is a helper with its own chat. Give it a name and tell it what to help with.</string>
-    <string name="bots_empty_offline_body">Connect to your Mac to see your Bots.</string>
+    <string name="bots_empty_offline_body">Connect to your computer to see your Bots.</string>
     <string name="bots_new">New Bot</string>
     <string name="bots_no_results">No Bots match “%1$s”</string>
     <string name="bots_search_placeholder">Search Bots</string>
@@ -525,9 +525,9 @@
     <string name="bot_field_name">Name</string>
     <string name="bot_name_fallback_your_bot">your Bot</string>
     <string name="bot_save_failed">Aiden couldn’t save. Try again.</string>
-    <string name="bot_save_unreachable">Aiden couldn’t reach your Mac to save that. Try again.</string>
+    <string name="bot_save_unreachable">Aiden couldn’t reach your computer to save that. Try again.</string>
     <string name="bot_delete_confirm">Delete Bot</string>
-    <string name="bot_delete_connect">Connect to your Mac to delete this Bot.</string>
+    <string name="bot_delete_connect">Connect to your computer to delete this Bot.</string>
     <string name="bot_delete_failed">Aiden couldn’t delete this Bot. Try again.</string>
 
     <!-- Bots: first run -->
@@ -538,7 +538,7 @@
 
     <!-- Bots: profile -->
     <string name="bot_profile_unavailable_title">Bot unavailable</string>
-    <string name="bot_profile_unavailable_connect">Connect to your Mac to see this Bot.</string>
+    <string name="bot_profile_unavailable_connect">Connect to your computer to see this Bot.</string>
     <string name="bot_profile_unavailable_failed">Aiden couldn’t load this Bot.</string>
     <string name="bot_profile_instructions">Instructions</string>
     <string name="bot_profile_loading">Loading Bot</string>
@@ -626,14 +626,14 @@
     <string name="bot_memory_error_not_found">This memory changed since you opened it. Close this and try again.</string>
     <string name="bot_memory_error_failed">Aiden couldn’t save this memory. Try again.</string>
     <string name="bot_memory_delete_failed">Aiden couldn’t delete this memory. Try again.</string>
-    <string name="bot_memory_load_failed">Memory couldn’t be loaded.</string>
+    <string name="bot_memory_load_failed">Memory couldn’t be loaded. Make sure your computer is on and nearby.</string>
     <string name="bot_memory_loading">Loading memory</string>
     <string name="bot_memory_erase">Forget all</string>
     <string name="bot_memory_erase_title">Forget everything %1$s remembers?</string>
     <string name="bot_memory_erase_body">This can’t be undone.</string>
     <string name="bot_memory_erase_failed">Memory wasn’t cleared. Please try again.</string>
     <string name="bot_memory_unreadable_title">Memory couldn’t be read</string>
-    <string name="bot_memory_unreadable_body">Its files may be damaged. Forget all to start %1$s’s memory fresh.</string>
+    <string name="bot_memory_unreadable_body">Its files may be damaged. Choose Forget all to start %1$s’s memory fresh.</string>
     <plurals name="bot_memory_count">
         <item quantity="one">%d thing</item>
         <item quantity="other">%d things</item>
@@ -649,7 +649,7 @@
     <string name="bot_proposal_not_now">Not now</string>
     <string name="bot_proposal_added">Added ✓ · %1$s</string>
     <string name="bot_proposal_not_added">Not added</string>
-    <string name="bot_proposal_failed">Aiden couldn’t reach your Mac. Try again.</string>
+    <string name="bot_proposal_failed">Aiden couldn’t reach your computer. Try again.</string>
 
     <!-- Bots: routine notifications -->
     <string name="notification_bot_routine_body">%1$s: %2$s</string>
@@ -660,17 +660,17 @@
     <!-- Bots: advanced -->
     <string name="bot_advanced_title">Advanced</string>
     <string name="bot_advanced_loading">Loading settings</string>
-    <string name="bot_advanced_needs_model">Set up an AI model on your Mac first.</string>
+    <string name="bot_advanced_needs_model">Set up an AI model on your computer first.</string>
     <string name="bot_advanced_load_failed">Aiden couldn’t load these settings. Try again.</string>
     <string name="bot_advanced_model">AI model</string>
     <string name="bot_advanced_use_recommended">Use recommended</string>
     <string name="bot_advanced_access">What it can use</string>
-    <string name="bot_advanced_access_full_footer">It can use everything Aiden can on your Mac. It still asks before anything risky.</string>
+    <string name="bot_advanced_access_full_footer">It can use everything Aiden can on your computer. It still asks before anything risky.</string>
     <string name="bot_advanced_access_custom_footer">It can only use what you turn on here.</string>
     <string name="bot_access_choice_full">Everything</string>
     <string name="bot_access_choice_custom">Only what I pick</string>
     <string name="bot_advanced_folders">Folders</string>
-    <string name="bot_advanced_run_commands">Run commands on your Mac</string>
+    <string name="bot_advanced_run_commands">Run commands on your computer</string>
     <string name="bot_advanced_connected_apps">Connected apps</string>
 
     <!-- Bots: chat -->
@@ -716,8 +716,8 @@
     <string name="bot_chat_activity_wording_thinking_detail">One calm word, whatever it’s doing.</string>
     <string name="bot_chat_activity_value">%1$s · %2$s</string>
     <string name="bot_chat_activity_save_failed">Aiden couldn’t save that choice.</string>
-    <string name="bot_chat_activity_save_conflict">This changed on your Mac. Showing what it has now.</string>
-    <string name="bot_chat_activity_save_unreachable">Aiden couldn’t reach your Mac to save that choice.</string>
+    <string name="bot_chat_activity_save_conflict">This changed on your computer. Showing what it has now.</string>
+    <string name="bot_chat_activity_save_unreachable">Aiden couldn’t reach your computer to save that choice.</string>
     <string name="bot_chat_activity_preview">Preview</string>
     <string name="bot_chat_activity_preview_prompt">Plan dinners for this week</string>
     <string name="bot_chat_activity_preview_reply">Here’s a plan for the week.</string>
@@ -738,12 +738,12 @@
     <string name="bot_session_connecting">Connecting…</string>
     <string name="bot_chat_open_profile_cd">Open %1$s’s profile</string>
     <string name="bot_chat_open_failed">Aiden couldn’t open this Bot’s chat. Try again.</string>
-    <string name="bot_session_connect">Connect to your Mac to open this chat.</string>
+    <string name="bot_session_connect">Connect to your computer to open this chat.</string>
     <string name="bot_session_loading">Loading chat</string>
-    <string name="bot_session_missing">This Bot is no longer on your Mac.</string>
-    <string name="bot_session_load_no_access">This phone can’t open this chat. Check its access in Aiden on your Mac.</string>
-    <string name="bot_session_load_failed">Aiden couldn’t load this chat. Make sure your Mac is on and nearby.</string>
-    <string name="bot_session_unreachable">Aiden couldn’t reach your Mac. Try again.</string>
+    <string name="bot_session_missing">This Bot is no longer on your computer.</string>
+    <string name="bot_session_load_no_access">This phone can’t open this chat. Check its access in Aiden on your computer.</string>
+    <string name="bot_session_load_failed">Aiden couldn’t load this chat. Make sure your computer is on and nearby.</string>
+    <string name="bot_session_unreachable">Aiden couldn’t reach your computer. Try again.</string>
     <string name="bot_session_reset">This chat was restarted.</string>
     <string name="bot_session_stopped">Stopped</string>
     <string name="bot_session_interrupted">I got interrupted while working on this.</string>
@@ -755,9 +755,9 @@
     <string name="bot_session_set_up">Set up</string>
     <string name="bot_session_connect_title">Connect %1$s</string>
     <string name="bot_session_connected">Connected ✓</string>
-    <string name="bot_session_finish_read_only">Finish this on your Mac.</string>
-    <string name="bot_session_check_mac">Check your Mac to finish.</string>
-    <string name="bot_session_finish_on_mac">Finish on your Mac</string>
+    <string name="bot_session_finish_read_only">Finish this on your computer.</string>
+    <string name="bot_session_check_mac">Check your computer to finish.</string>
+    <string name="bot_session_finish_on_mac">Finish on your computer</string>
     <string name="bot_session_send">Send</string>
     <!-- Bots: hand-offs and pause (contract revision 37), copy shared with iOS and desktop -->
     <string name="bot_handoff_title">Your turn: %1$s</string>
@@ -766,24 +766,24 @@
     <string name="bot_handoff_open">Open</string>
     <string name="bot_handoff_open_host">Open %1$s</string>
     <string name="bot_handoff_note_placeholder">Add a note and send to mark it done</string>
-    <string name="bot_handoff_sign_in_placeholder">Finish signing in on your Mac, or skip it.</string>
+    <string name="bot_handoff_sign_in_placeholder">Finish signing in on your computer, or skip it.</string>
     <string name="bot_handoff_no_note_placeholder">Enter it yourself, then tap Done.</string>
-    <string name="bot_handoff_mac_opened">Finish signing in on your Mac.</string>
-    <string name="bot_handoff_mac_closed">Open Aiden on your Mac to finish signing in.</string>
-    <string name="bot_handoff_step_mac_opened">Finish this step on your Mac.</string>
-    <string name="bot_handoff_step_mac_closed">Open Aiden on your Mac to finish this step.</string>
-    <string name="bot_handoff_on_mac_detail">This step is on the Bot’s own screen on your Mac.</string>
+    <string name="bot_handoff_mac_opened">Finish signing in on your computer.</string>
+    <string name="bot_handoff_mac_closed">Open Aiden on your computer to finish signing in.</string>
+    <string name="bot_handoff_step_mac_opened">Finish this step on your computer.</string>
+    <string name="bot_handoff_step_mac_closed">Open Aiden on your computer to finish this step.</string>
+    <string name="bot_handoff_on_mac_detail">This step is on the Bot’s own screen on your computer.</string>
     <string name="bot_paused_title">%1$s is paused.</string>
     <string name="bot_paused_detail">%1$s won’t reply or run routines until you resume it.</string>
     <string name="bot_paused_placeholder">%1$s is paused</string>
     <!-- Bots: issues (contract revision 42), copy shared with iOS and desktop -->
     <string name="bot_issue_needs_you">Needs you</string>
-    <string name="bot_issue_open_on_mac">Open on your Mac</string>
+    <string name="bot_issue_open_on_mac">Open on your computer</string>
     <string name="bot_issue_open_chat">Open chat</string>
     <string name="bot_issue_resume_routine">Resume routine</string>
     <string name="bot_issue_stop">Stop</string>
     <string name="bot_issue_keep_waiting">Keep waiting</string>
-    <string name="bot_files_connect">Connect to your Mac to see files.</string>
+    <string name="bot_files_connect">Connect to your computer to see files.</string>
     <string name="bot_files_unavailable">Files aren’t available for this Bot right now.</string>
     <string name="bot_files_loading">Loading files</string>
     <string name="bot_files_back">Back to files</string>
@@ -796,9 +796,9 @@
     <string name="bot_editor_create_failed">Aiden couldn’t create this Bot. Try again.</string>
     <string name="bot_create_failed_title">Couldn’t Create Bot</string>
     <string name="bot_create_interrupted">Aiden closed before the Bot was ready. Try again to finish making it.</string>
-    <string name="bot_create_may_exist">Aiden closed before your Mac answered, so this Bot may already be there. Check your Bots before you create it again.</string>
+    <string name="bot_create_may_exist">Aiden closed before your computer answered, so this Bot may already be there. Check your Bots before you create it again.</string>
     <string name="bot_create_not_kept">Aiden couldn’t save this Bot on your phone, so it wasn’t sent. Try again.</string>
-    <string name="bot_editor_create_unreachable">Aiden couldn’t reach your Mac to create this Bot. Try again.</string>
+    <string name="bot_editor_create_unreachable">Aiden couldn’t reach your computer to create this Bot. Try again.</string>
     <string name="bot_editor_help_label">What should it help with?</string>
     <string name="bot_editor_help_placeholder">Plan my meals and make a grocery list every week</string>
     <string name="bot_editor_model_gone">That model isn’t available any more. Choose another one.</string>
@@ -909,7 +909,7 @@
     <string name="chat_title_fallback">Chat</string>
     <string name="chat_approval_review_only">This paired device can review approvals but cannot respond.</string>
     <string name="chat_approval_schedule_write_required">Schedule write access is required to approve this task.</string>
-    <string name="chat_approval_deny_only">Allow this on your Mac. You can deny it here.</string>
+    <string name="chat_approval_deny_only">Allow this on your computer. You can deny it here.</string>
     <string name="chat_approval_paused_note">Aiden is paused until you choose.</string>
     <string name="chat_approval_automation_note">Check the exact schedule and unattended access before Aiden saves it.</string>
     <string name="chat_approval_confirm_on_desktop">Review the full unattended access scope and confirm in Aiden on your paired desktop. You can deny it here.</string>
@@ -972,13 +972,13 @@
     <string name="chat_browser_recording_meta">%1$s · %2$s</string>
     <string name="chat_browser_recording_play">Play</string>
     <string name="chat_browser_recording_loading">Loading…</string>
-    <string name="chat_browser_recording_on_mac">Watch this recording on your Mac.</string>
+    <string name="chat_browser_recording_on_mac">Watch this recording on your computer.</string>
     <string name="chat_browser_recording_missing">This recording is no longer on the Mac.</string>
     <string name="chat_browser_recording_failed">Couldn’t load this recording. Try again.</string>
     <string name="chat_browser_recording_unplayable">This recording can’t play on this phone.</string>
 
     <!-- Chat: inline visuals (contract revision 28) -->
-    <string name="chat_visual_snapshot_description">Snapshot from your Mac</string>
+    <string name="chat_visual_snapshot_description">Snapshot from your computer</string>
     <string name="chat_visual_snapshot_open">Open snapshot</string>
     <string name="chat_visual_show_more">Show more</string>
     <string name="chat_visual_show_less">Show less</string>
@@ -990,8 +990,8 @@
     <string name="chat_visual_viewer_show_image">Show snapshot image</string>
     <string name="chat_visual_viewer_loading">Loading visual</string>
     <string name="chat_visual_viewer_stale">Showing a saved copy. May be out of date.</string>
-    <string name="chat_visual_viewer_failed">Couldn’t load this visual. Check that your Mac is reachable.</string>
-    <string name="chat_visual_viewer_unavailable">This visual isn’t available on your Mac.</string>
+    <string name="chat_visual_viewer_failed">Couldn’t load this visual. Check that your computer is reachable.</string>
+    <string name="chat_visual_viewer_unavailable">This visual isn’t available on your computer.</string>
     <string name="chat_visual_viewer_stopped">The visual stopped responding.</string>
     <string name="chat_visual_prompt_title">Add to message?</string>
     <string name="chat_visual_prompt_body">The visual suggests this follow-up. It’s added to your message so you can edit it before sending.</string>

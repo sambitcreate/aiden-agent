@@ -166,7 +166,7 @@ enum class AidenBotConnectionHint {
 
 /**
  * The hint to show, or null when connected. While a turn runs the status line already says
- * "Reconnecting to your Mac", so the hint stays out of its way; a Bot gone from the Mac says
+ * "Reconnecting to your computer", so the hint stays out of its way; a Bot gone from the Mac says
  * that instead.
  */
 fun aidenBotConnectionHint(ui: AidenBotSessionUiState, nowMs: Long): AidenBotConnectionHint? {

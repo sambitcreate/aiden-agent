@@ -146,7 +146,7 @@ class AidenBackgroundJobsTest {
         assertEquals("Finished", AidenBackgroundJobCopy.status(job("job_00000001", AidenBackgroundJob.State.EXITED, exitCode = 0), now))
         assertEquals("Ended", AidenBackgroundJobCopy.status(job("job_00000001", AidenBackgroundJob.State.EXITED, fromCommand = true), now))
         assertEquals("Stopped: too much output", AidenBackgroundJobCopy.status(job("job_00000001", AidenBackgroundJob.State.STOPPED, endReason = "output-limit"), now))
-        assertEquals("localhost:5173, localhost:24678 on your Mac", AidenBackgroundJobCopy.addresses(job("job_00000001", ports = listOf(5173, 24678))))
+        assertEquals("localhost:5173, localhost:24678 on your computer", AidenBackgroundJobCopy.addresses(job("job_00000001", ports = listOf(5173, 24678))))
         assertNull(AidenBackgroundJobCopy.chip(0))
         assertEquals("2 in background", AidenBackgroundJobCopy.chip(2))
         assertEquals("1 background job running", AidenBackgroundJobCopy.chipDescription(1))

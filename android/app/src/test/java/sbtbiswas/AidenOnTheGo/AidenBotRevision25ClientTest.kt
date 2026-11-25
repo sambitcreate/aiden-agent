@@ -221,7 +221,7 @@ class AidenBotRevision25ClientTest {
 
         val meaning = aidenBotRoutineWriteFailure(failure, "fallback")
         assertTrue(meaning.reload)
-        assertEquals("This routine changed on your Mac. Check it and try again.", meaning.message)
+        assertEquals("This routine changed on your computer. Check it and try again.", meaning.message)
         // A dropped connection is not a conflict: keep the list and offer a retry.
         val offline = aidenBotRoutineWriteFailure(java.io.IOException("offline"), "fallback")
         assertFalse(offline.reload)

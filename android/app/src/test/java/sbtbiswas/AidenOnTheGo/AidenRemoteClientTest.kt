@@ -1553,10 +1553,10 @@ class AidenRemoteClientTest {
         }.exceptionOrNull()!!
 
         assertFalse(AidenChatForkErrors.isRevisionConflict(busy))
-        assertEquals("This chat is busy on your Mac. Try forking again in a moment.", AidenChatForkErrors.forkMessage(busy))
+        assertEquals("This chat is busy on your computer. Try forking again in a moment.", AidenChatForkErrors.forkMessage(busy))
         assertTrue(AidenChatForkErrors.isRevisionConflict(changed))
         assertEquals(
-            "This chat changed on your Mac. Check the latest messages and try again.",
+            "This chat changed on your computer. Check the latest messages and try again.",
             AidenChatForkErrors.forkMessage(changed)
         )
     }

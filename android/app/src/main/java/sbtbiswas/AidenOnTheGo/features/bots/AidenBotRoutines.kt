@@ -157,9 +157,9 @@ fun aidenBotRoutineWriteFailure(error: Exception, fallback: String): AidenBotRou
     val server = error as? AidenRemoteClientException.Server ?: return AidenBotRoutineWriteFailure(fallback, false)
     return when {
         server.statusCode == 409 && server.body.code == AidenRemoteErrorCode.REVISION_CONFLICT ->
-            AidenBotRoutineWriteFailure("This routine changed on your Mac. Check it and try again.", true)
+            AidenBotRoutineWriteFailure("This routine changed on your computer. Check it and try again.", true)
         server.statusCode == 404 ->
-            AidenBotRoutineWriteFailure("This routine is no longer on your Mac.", true)
+            AidenBotRoutineWriteFailure("This routine is no longer on your computer.", true)
         else -> AidenBotRoutineWriteFailure(fallback, false)
     }
 }

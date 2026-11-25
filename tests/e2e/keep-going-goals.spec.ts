@@ -201,7 +201,7 @@ test("a round on screen stops, pausing the goal as closed, when its window opens
 
   // A Bot's conversation is another chat: the round this window owns stops, and the goal says why.
   await page.getByRole("button", { name: "Bots", exact: true }).click();
-  await expect(page.getByPlaceholder("Ask Planner")).toBeVisible({ timeout: 15_000 });
+  await expect(page.getByPlaceholder("Message Planner")).toBeVisible({ timeout: 15_000 });
   await expect.poll(async () => (await goal())?.status, { timeout: 15_000 }).toBe("paused");
   expect((await goal())?.reason).toBe("The chat was closed");
   lmStudio.releaseCompletions!();

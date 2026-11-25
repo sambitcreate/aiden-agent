@@ -2329,9 +2329,9 @@ object AidenChatModelAuthority {
         val agentLabel = macOnlyAgentProviders[providerId] ?: return null
         if (catalog?.providers?.any { it.id == providerId } == true) return null
         return if (replyModelLabel != null) {
-            "This chat used $agentLabel, which runs only on your Mac. Replies from here use $replyModelLabel."
+            "This chat used $agentLabel, which runs only on your computer. Replies from here use $replyModelLabel."
         } else {
-            "This chat used $agentLabel, which runs only on your Mac. Choose a model for replies from here."
+            "This chat used $agentLabel, which runs only on your computer. Choose a model for replies from here."
         }
     }
 

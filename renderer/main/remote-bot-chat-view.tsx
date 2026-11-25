@@ -680,7 +680,7 @@ export function RemoteBotChatView({ hostId, botId }: { hostId: string; botId: st
           }
           hasMessages={snapshot.entries.length > 0}
           chatId={`remote-bot:${hostId}:${botId}`}
-          placeholder={handoff && !noteRefused ? "Add a note and send to mark it done" : `Ask ${name}`}
+          placeholder={handoff && !noteRefused ? "Add a note and send to mark it done" : `Message ${name}`}
           onSend={(text, attachments) => (handoff ? answerHandoffWithNote(handoff, text, attachments) : send(text, attachments))}
           {...(steerAndQueue && !handoff
             ? {

@@ -120,7 +120,7 @@ object AidenBackgroundJobCopy {
     /** The addresses a running job serves. They are on the Mac, so the phone shows them as text. */
     fun addresses(job: AidenBackgroundJob): String? =
         if (!job.isRunning || job.ports.isEmpty()) null
-        else job.ports.joinToString(", ") { "localhost:$it" } + " on your Mac"
+        else job.ports.joinToString(", ") { "localhost:$it" } + " on your computer"
 
     /** The chip above the composer: shown only while something runs. */
     fun chip(running: Int): String? = if (running > 0) "$running in background" else null
@@ -184,7 +184,7 @@ class AidenBackgroundJobsState {
             }
         } catch (error: Exception) {
             if (error is kotlinx.coroutines.CancellationException) throw error
-            if (this.chatId == chatId) errorMessage = error.message ?: "Couldn't reach your Mac."
+            if (this.chatId == chatId) errorMessage = error.message ?: "Couldn't reach your computer."
         } finally {
             stoppingJobIds = stoppingJobIds - jobId
         }

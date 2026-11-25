@@ -24,7 +24,7 @@ test("onboarding's first Bot greets the person, and a Bot made with New bot answ
   await expect(onboarding.getByRole("region", { name: "Your first Bot" }).getByRole("status")).toHaveText("Chief is ready");
   await onboarding.getByRole("button", { name: "Start using Aiden" }).click();
   await expect(onboarding).toBeHidden();
-  await expect(page.getByPlaceholder("Ask Chief")).toBeVisible();
+  await expect(page.getByPlaceholder("Message Chief")).toBeVisible();
   await expect(transcript().getByText(E2E_ASSISTANT_RESPONSE, { exact: true })).toBeVisible();
 
   // New bot takes only a name.
@@ -35,7 +35,7 @@ test("onboarding's first Bot greets the person, and a Bot made with New bot answ
   await dialog.getByRole("button", { name: "Create", exact: true }).click();
 
   // The create flow's self-intro is the Bot's first real turn.
-  const composer = page.getByPlaceholder("Ask Errand Planner");
+  const composer = page.getByPlaceholder("Message Errand Planner");
   await expect(composer).toBeVisible();
   await expect(transcript().getByText(E2E_ASSISTANT_RESPONSE, { exact: true })).toBeVisible();
 
@@ -49,7 +49,7 @@ test("onboarding's first Bot greets the person, and a Bot made with New bot answ
 
   page = await aiden.relaunch();
   await page.getByRole("button", { name: "Bots", exact: true }).click();
-  await expect(page.getByPlaceholder("Ask Errand Planner")).toBeVisible();
+  await expect(page.getByPlaceholder("Message Errand Planner")).toBeVisible();
   await expect(transcript().getByText(E2E_ASSISTANT_RESPONSE, { exact: true })).toBeVisible();
   await expect(transcript().getByText(question, { exact: true })).toBeVisible();
   await expect(transcript().getByText(answer, { exact: true })).toBeVisible();

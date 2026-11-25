@@ -188,7 +188,7 @@ class AidenBotsViewModel(
      * Returns null on success, or a plain message the screen can show.
      */
     suspend fun deleteBot(botId: String, deleter: AidenBotDeleter): String? {
-        val client = coordinator.client.value ?: return "Reconnect to your Mac to delete this Bot."
+        val client = coordinator.client.value ?: return "Reconnect to your computer to delete this Bot."
         return try {
             coordinator.deleteBot(client,botId,deleter)
             forgetBot(botId)

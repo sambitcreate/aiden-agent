@@ -293,12 +293,12 @@ class AidenApprovalSettingsController(private val scope: CoroutineScope) {
     }
 
     companion object {
-        const val UNREADABLE = "Your approval rules couldn’t be read. Fix them on your Mac first."
+        const val UNREADABLE = "Your approval rules couldn’t be read. Fix them on your computer first."
         const val REFUSED = "That rule couldn’t be changed. Refresh and try again."
         const val GONE = "That rule is no longer there."
         const val ADD_FAILED = "Couldn’t add that rule."
         const val CHANGE_FAILED = "Couldn’t change approvals."
-        const val UNREACHABLE = "Aiden couldn’t reach your Mac. Try again."
+        const val UNREACHABLE = "Aiden couldn’t reach your computer. Try again."
     }
 }
 

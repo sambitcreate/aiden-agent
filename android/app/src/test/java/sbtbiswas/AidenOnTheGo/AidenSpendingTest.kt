@@ -121,7 +121,7 @@ class AidenSpendingTest {
         )
         val reached = AidenSpendingCopy.notice(spending(AidenSpending.State.REACHED, AidenSpending.Period.MONTH, 5.37), "Ada")
         assertEquals("Ada reached its $5.00 spending limit this month.", reached?.title)
-        assertEquals("It has spent $5.37. Allow $5.00 more to keep going, or change the limit on your Mac.", reached?.body)
+        assertEquals("It has spent $5.37. Allow $5.00 more to keep going, or change the limit on your computer.", reached?.body)
         assertEquals("Allow $5.00 more", reached?.allowMore)
         assertEquals("$1,250.00", AidenSpendingCopy.usd(1_250.0))
         assertEquals("less than $0.01", AidenSpendingCopy.usd(0.004))

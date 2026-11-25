@@ -407,7 +407,7 @@ export function BotMemoryContent({
             Memory couldn’t be read
           </Text>
           <Text as="p" variant="small" color="secondary" className="mt-0.5">
-            Its files may be damaged. Forget all to start {bot.name}’s memory fresh.
+            Its files may be damaged. Choose Forget all to start {bot.name}’s memory fresh.
           </Text>
         </div>
         <div>

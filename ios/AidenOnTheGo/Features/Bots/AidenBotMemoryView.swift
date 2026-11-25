@@ -38,7 +38,7 @@ enum AidenBotMemoryCopy {
     }
 
     static func unreadableDetail(botName: String) -> String {
-        "Its files may be damaged. Forget all to start \(botName)’s memory fresh."
+        "Its files may be damaged. Choose Forget all to start \(botName)’s memory fresh."
     }
 
     static func overBudget(group: String) -> String {

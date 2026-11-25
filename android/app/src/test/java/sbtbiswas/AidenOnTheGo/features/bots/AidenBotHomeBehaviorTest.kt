@@ -126,7 +126,7 @@ class AidenBotHomeBehaviorTest {
             AidenBotHomeRow(scout, chat("c", "b", "old", state = AidenBotConversationActivityState.WAITING_FOR_APPROVAL, canRespond = true)).preview
         )
         assertEquals(
-            "Waiting for your OK on your Mac",
+            "Waiting for your OK on your computer",
             AidenBotHomeRow(scout, chat("c", "b", "old", state = AidenBotConversationActivityState.WAITING_FOR_APPROVAL)).preview
         )
     }
@@ -153,9 +153,9 @@ class AidenBotHomeBehaviorTest {
     }
 
     @Test
-    fun chatPlaceholderAsksTheBotByName() {
-        assertEquals("Ask Meal Planner", aidenBotChatPlaceholder("Meal Planner"))
-        assertEquals("Ask your Bot", aidenBotChatPlaceholder("  "))
-        assertEquals("Ask your Bot", aidenBotChatPlaceholder(null))
+    fun chatPlaceholderMessagesTheBotByName() {
+        assertEquals("Message Meal Planner", aidenBotChatPlaceholder("Meal Planner"))
+        assertEquals("Message your Bot", aidenBotChatPlaceholder("  "))
+        assertEquals("Message your Bot", aidenBotChatPlaceholder(null))
     }
 }

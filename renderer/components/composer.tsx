@@ -228,7 +228,7 @@ interface ComposerProps {
   chatId: string;
   /** Initial text for an explicitly seeded renderer-only chat draft. */
   initialText?: string;
-  /** Overrides the prompt hint while the composer is ready (a Bot's "Ask {name}"). */
+  /** Overrides the prompt hint while the composer is ready (a Bot's "Message {name}"). */
   placeholder?: string;
   onSend: (
     text: string,

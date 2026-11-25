@@ -80,7 +80,7 @@ object AidenSpendingCopy {
             )
             AidenSpending.State.REACHED -> Notice(
                 title = "$who reached its ${usd(spending.allowedUsd)} spending limit$period.",
-                body = "It has spent ${usd(spending.spentUsd)}. $allowMore to keep going, or change the limit on your Mac.",
+                body = "It has spent ${usd(spending.spentUsd)}. $allowMore to keep going, or change the limit on your computer.",
                 allowMore = allowMore
             )
         }
@@ -140,7 +140,7 @@ class AidenSpendingNoticeState {
                 errorMessage = error.message
             }
         } catch (error: Exception) {
-            errorMessage = error.message ?: "Couldn't reach your Mac."
+            errorMessage = error.message ?: "Couldn't reach your computer."
         } finally {
             isAllowing = false
         }

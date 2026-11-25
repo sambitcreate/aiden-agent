@@ -36,7 +36,7 @@ class AidenBackgroundJobsSheetUiTest {
 
         compose.onNodeWithText("dev server 0").assertIsDisplayed()
         compose.onNodeWithText("Couldn't reach your Mac.").assertIsDisplayed()
-        compose.onNodeWithText("These run on your Mac. Open an address in a browser there.").assertIsDisplayed()
+        compose.onNodeWithText("These run on your computer. Open an address in a browser there.").assertIsDisplayed()
     }
 
     /** Forty running jobs (the Mac's own maximum), and a Stop that cannot reach the Mac. */
