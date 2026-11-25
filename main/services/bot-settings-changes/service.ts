@@ -230,6 +230,9 @@ export function createBotSettingsChangeService(ports: BotSettingsPorts) {
           ...(reason !== undefined && record.after.instructions !== undefined
             ? { instructions: record.after.instructions, previousInstructions: current.instructions }
             : {}),
+          ...(record.after.computer !== undefined && record.after.computer !== null
+            ? { computer: record.after.computer }
+            : {}),
           ...(reason !== undefined ? { heldReason: reason } : {}),
           ...(record.undoable === false ? { undoable: false as const } : {}),
         };
