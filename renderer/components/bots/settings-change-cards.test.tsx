@@ -142,3 +142,37 @@ test("a held computer change asks Change computer? and explains the Linux comput
   });
   assert.deepEqual(answers, ["apply"]);
 });
+
+test("a held computer change resolves raw computer IDs to VM names, names existing Bots, and discloses shared sessions", () => {
+  render(
+    <HeldSettingsCard
+      change={{
+        changeId: "c-computer-existing",
+        mode: "held",
+        fields: ["computer"],
+        lines: ["Computer: vm-lab"],
+        heldReason: "widens",
+      }}
+      botId="bot-chief"
+      botName="Chief"
+      computers={[
+        {
+          id: "vm-lab",
+          name: "Lab Linux",
+          kind: "dedicated",
+          vmName: "aiden-vm-lab",
+          state: "stopped",
+          baseBuild: "20261123-2671",
+          outdated: false,
+          assignedBotIds: ["bot-ben"],
+          queuedBotIds: [],
+          controller: "bot",
+        },
+      ]}
+      botNames={new Map([["bot-ben", "Ben"]])}
+      onRespond={async () => undefined}
+    />,
+  );
+  screen.getByText("Computer: Lab Linux (already used by Ben)");
+  screen.getByText("Bots on Lab Linux share one Linux desktop, user (aiden-bot), and Chromium sign-ins.");
+});

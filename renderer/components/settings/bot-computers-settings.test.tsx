@@ -388,10 +388,78 @@ test("Default for new Bots saves defaultComputerMode and Computers section manag
   fireEvent.click(within(resetDialog).getByRole("button", { name: "Reset computer" }));
   await waitFor(() => assert.deepEqual(resetIds, ["research"]));
 
-  // Deleting an assigned VM confirms and passes { force: true }.
+  // Deleting an assigned VM confirms, shows active holder, passes { force: true }, and restores focus.
   fireEvent.click(screen.getByRole("button", { name: "Delete Shared computer" }));
   const deleteDialog = await screen.findByRole("alertdialog");
+  assert.match(deleteDialog.textContent ?? "", /In use by Ada/u);
   assert.match(deleteDialog.textContent ?? "", /2 Bots are currently assigned/u);
   fireEvent.click(within(deleteDialog).getByRole("button", { name: "Delete computer" }));
   await waitFor(() => assert.deepEqual(deleted, [["shared", { force: true }]]));
+  await waitFor(() => {
+    const active = document.activeElement;
+    assert.ok(active && active !== document.body, "focus moves to a remaining VM control or New computer");
+  });
+});
+
+test("Computers section disables Reset/Delete while starting and reads live status at Delete confirm time", async () => {
+  const deleted: unknown[] = [];
+  const startingVm: BotComputerVmStatus = {
+    id: "booting",
+    name: "Booting Linux",
+    kind: "dedicated",
+    vmName: "aiden-vm-booting",
+    state: "starting",
+    baseBuild: "20261123-2671",
+    outdated: false,
+    assignedBotIds: [],
+    queuedBotIds: [],
+    controller: "bot",
+  };
+  const idleVm: BotComputerVmStatus = {
+    id: "lab",
+    name: "Lab Linux",
+    kind: "dedicated",
+    vmName: "aiden-vm-lab",
+    state: "stopped",
+    baseBuild: "20261123-2671",
+    outdated: false,
+    assignedBotIds: [],
+    queuedBotIds: [],
+    controller: "bot",
+  };
+  const initial = status(READY, { vms: [startingVm, idleVm] });
+  mount(initial, {
+    handlers: {
+      "bots:list": () => [{ id: "bot-1", name: "Ada" }],
+      "botComputers:deleteComputer": (computerId, opts) => {
+        deleted.push([computerId, opts]);
+      },
+    },
+  });
+
+  // Reset and Delete are disabled while a VM is starting.
+  const resetBooting = await screen.findByRole("button", { name: "Reset Booting Linux" });
+  const deleteBooting = screen.getByRole("button", { name: "Delete Booting Linux" });
+  assert.equal((resetBooting as HTMLButtonElement).disabled, true);
+  assert.equal((deleteBooting as HTMLButtonElement).disabled, true);
+
+  // Open Delete while Lab Linux has 0 Bots assigned, then emit a live status assigning Ada before Confirm.
+  fireEvent.click(screen.getByRole("button", { name: "Delete Lab Linux" }));
+  const dialog = await screen.findByRole("alertdialog");
+  assert.doesNotMatch(dialog.textContent ?? "", /currently assigned/u);
+
+  act(() => {
+    emitBotTestNotification(
+      BOT_COMPUTERS_CHANGED_CHANNEL,
+      status(READY, {
+        vms: [startingVm, { ...idleVm, assignedBotIds: ["bot-1"], activeBotId: "bot-1" }],
+      }),
+    );
+  });
+  await waitFor(() => {
+    assert.match(dialog.textContent ?? "", /In use by Ada/u);
+    assert.match(dialog.textContent ?? "", /1 Bot is currently assigned/u);
+  });
+  fireEvent.click(within(dialog).getByRole("button", { name: "Delete computer" }));
+  await waitFor(() => assert.deepEqual(deleted, [["lab", { force: true }]]));
 });

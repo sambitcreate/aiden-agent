@@ -11,18 +11,19 @@ export const BOT_COMPUTERS_QUERY_KEY = ["bot-computers", "status"] as const;
  * Where the platform has no Bot computers (Linux, Intel Macs) it never asks
  * main and reports `supported: false`.
  */
-export function useBotComputersStatus() {
+export function useBotComputersStatus(enabled = true) {
   const { botComputers: supported } = useAppCapabilities();
+  const active = supported && enabled;
   const queryClient = useQueryClient();
   const query = useQuery({
     queryKey: BOT_COMPUTERS_QUERY_KEY,
     queryFn: () => botComputersApi.status(),
-    enabled: supported,
+    enabled: active,
   });
   React.useEffect(() => {
-    if (!supported) return undefined;
+    if (!active) return undefined;
     return botComputersApi.onChanged((status) => queryClient.setQueryData(BOT_COMPUTERS_QUERY_KEY, status));
-  }, [supported, queryClient]);
+  }, [active, queryClient]);
   return { ...query, supported };
 }
 

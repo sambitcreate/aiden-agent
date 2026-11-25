@@ -11,6 +11,11 @@ import { Button, Text } from "../ui";
 import { BotNoticeCard } from "./bot-notice-card";
 import { ReceiptLine } from "./receipt-line";
 import {
+  BOT_COMPUTER_SHARED_DEFAULT_NAME,
+  BOT_COMPUTER_SHARED_ID,
+  type BotComputerVmStatus,
+} from "../../shared/bot-computers";
+import {
   botInstructionsDiff,
   botSettingsHeldTitle,
   botSettingsReceiptLabel,
@@ -67,17 +72,57 @@ export function SettingsChangeReceipt({
   );
 }
 
+function resolveHeldComputerLine(
+  line: string,
+  botId: string | undefined,
+  computers: readonly BotComputerVmStatus[] | undefined,
+  botNames: ReadonlyMap<string, string> | undefined,
+): { text: string; sharedWarning?: string } {
+  if (!line.startsWith("Computer: ") || !computers || computers.length === 0) {
+    return { text: line };
+  }
+  const raw = line.slice("Computer: ".length).trim();
+  const matched = computers.find(
+    (vm) =>
+      vm.id === raw ||
+      vm.vmName === raw ||
+      vm.name === raw ||
+      (raw === BOT_COMPUTER_SHARED_DEFAULT_NAME && vm.id === BOT_COMPUTER_SHARED_ID),
+  );
+  if (!matched) return { text: line };
+  const otherNames = matched.assignedBotIds
+    .filter((id) => id !== botId)
+    .map((id) => botNames?.get(id) ?? id);
+  const text =
+    otherNames.length > 0
+      ? `Computer: ${matched.name} (already used by ${otherNames.join(", ")})`
+      : `Computer: ${matched.name}`;
+  const sharedWarning =
+    matched.kind === "shared" || otherNames.length > 0
+      ? `Bots on ${matched.name} share one Linux desktop, user (aiden-bot), and Chromium sign-ins.`
+      : undefined;
+  return { text, sharedWarning };
+}
+
 export function HeldSettingsCard({
   change,
+  botId,
   botName,
   currentInstructions,
+  computers,
+  botNames,
   onRespond,
   onEdit,
 }: {
   change: BotSettingsChangeEntryData;
+  botId?: string;
   botName: string;
   /** The Bot's instructions now: what the marks compare against, since the person may have edited them since. */
   currentInstructions?: string;
+  /** Known Linux Bot computers, used to resolve computer IDs to VM names and assigned Bots. */
+  computers?: readonly BotComputerVmStatus[];
+  /** Bot ID -> display name map for showing who is already assigned to a target VM. */
+  botNames?: ReadonlyMap<string, string>;
   onRespond(decision: "apply" | "dismiss"): Promise<void>;
   /** Opens the instructions editor seeded with the proposed text; shown when the change has instructions. */
   onEdit?(instructions: string): void;
@@ -89,7 +134,11 @@ export function HeldSettingsCard({
     setBusy(decision);
     void onRespond(decision).catch(() => undefined).finally(() => setBusy(null));
   };
-  const other = change.lines.filter((line) => line !== "Instructions");
+  const resolvedOther = change.lines
+    .filter((line) => line !== "Instructions")
+    .map((line) => resolveHeldComputerLine(line, botId, computers, botNames));
+  const other = resolvedOther.map((item) => item.text);
+  const sharedWarning = resolvedOther.find((item) => item.sharedWarning)?.sharedWarning;
   return (
     <BotNoticeCard
       label={title}
@@ -118,6 +167,11 @@ export function HeldSettingsCard({
       {other.length > 0 ? (
         <Text as="p" variant="small" color="secondary">
           {other.join(" · ")}
+        </Text>
+      ) : null}
+      {sharedWarning ? (
+        <Text as="p" variant="small" color="secondary">
+          {sharedWarning}
         </Text>
       ) : null}
       {change.instructions !== undefined ? (

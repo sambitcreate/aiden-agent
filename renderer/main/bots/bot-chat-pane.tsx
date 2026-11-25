@@ -42,7 +42,9 @@ import { userFacingErrorMessage } from "../../lib/ipc-error";
 import type { Attachment } from "../../lib/types";
 import { botChatActivityOnDevice, showsBotToolActivity, type BotChatActivityLevel } from "../../shared/bots";
 import { queryKeys, useBot, useBots } from "../../lib/queries";
+import { useBotComputersStatus } from "../../lib/use-bot-computers";
 import { useBotLive } from "../../lib/use-bot-live";
+import { BOT_COMPUTER_SHARED_DEFAULT_NAME } from "../../shared/bot-computers";
 import { prefersReducedMotion } from "../../lib/appearance-runtime";
 import {
   BOT_FAILED_TURN_TEXT,
@@ -1026,10 +1028,27 @@ export function BotChatPane({ botId }: { botId: string }) {
   const navigate = useNavigate();
   const qc = useQueryClient();
   const bot = useBot(botId);
+  const live = useBotLive(botId);
+  const needsComputerInfo = Boolean(
+    live.snapshot?.handoff?.target === "computer" ||
+      live.snapshot?.entries.some(
+        (entry) =>
+          entry.type === "settings_change" &&
+          entry.change.mode === "held" &&
+          entry.status === "pending" &&
+          entry.change.fields.includes("computer"),
+      ),
+  );
+  const botComputers = useBotComputersStatus(needsComputerInfo);
   // Show tool activity is per device (§4.5); until it is set, the Bots' old levels decide.
   const toolActivitySetting = useAppearancePreference("showToolActivity");
-  const otherBots = useBots(false, toolActivitySetting === undefined);
-  const live = useBotLive(botId);
+  const otherBots = useBots(false, toolActivitySetting === undefined || needsComputerInfo);
+  const botNameMap = React.useMemo(() => {
+    const map = new Map<string, string>();
+    for (const entry of otherBots.data ?? []) map.set(entry.id, entry.name);
+    if (bot.data) map.set(bot.data.id, bot.data.name);
+    return map;
+  }, [otherBots.data, bot.data]);
   const [deleteOpen, setDeleteOpen] = React.useState(false);
   const panel = useBotPanelActions();
   // Only the pin is read here, so another Bot's view or pin never redraws the transcript.
@@ -1714,6 +1733,20 @@ export function BotChatPane({ botId }: { botId: string }) {
     }
   };
 
+  const assignedComputer = botComputers.data?.computers.find((entry) => entry.botId === current.id);
+  const assignedVm = botComputers.data?.vms.find((vm) => vm.id === assignedComputer?.computerId);
+  const sharedComputerForHandoff =
+    assignedComputer?.shared ||
+    assignedVm?.kind === "shared" ||
+    (assignedVm !== undefined && assignedVm.assignedBotIds.some((id) => id !== current.id))
+      ? {
+          name: assignedVm?.name ?? assignedComputer?.computerName ?? BOT_COMPUTER_SHARED_DEFAULT_NAME,
+          otherBotNames: (assignedVm?.assignedBotIds ?? [])
+            .filter((id) => id !== current.id)
+            .map((id) => botNameMap.get(id) ?? "another Bot"),
+        }
+      : undefined;
+
   // Everything waiting on the person, one at a time in the Needs-you slot:
   // take control, then the ask cards, then the question (§4.7).
   type SlotItem = NeedsYouItem & { render?(): React.ReactNode };
@@ -1729,6 +1762,7 @@ export function BotChatPane({ botId }: { botId: string }) {
           name={current.name}
           avatar={current.avatar}
           handoff={handoff}
+          sharedComputer={sharedComputerForHandoff}
           busy={handoffActions.busy}
           taken={handoffActions.taken}
           onTake={handoffActions.take}
@@ -1793,8 +1827,11 @@ export function BotChatPane({ botId }: { botId: string }) {
       render: () => (
         <HeldSettingsCard
           change={change}
+          botId={current.id}
           botName={current.name}
           currentInstructions={current.instructions}
+          computers={botComputers.data?.vms}
+          botNames={botNameMap}
           onRespond={async (decision) => {
             await respondToSettings(change.changeId, decision);
           }}

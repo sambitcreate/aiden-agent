@@ -106,14 +106,20 @@ export function BotComputersSettings() {
   const [confirmRemove, setConfirmRemove] = React.useState(false);
   const [createOpen, setCreateOpen] = React.useState(false);
   const [createName, setCreateName] = React.useState("");
-  const [renameTarget, setRenameTarget] = React.useState<BotComputerVmStatus | null>(null);
+  const [renameTargetId, setRenameTargetId] = React.useState<string | null>(null);
   const [renameValue, setRenameValue] = React.useState("");
-  const [resetTarget, setResetTarget] = React.useState<BotComputerVmStatus | null>(null);
-  const [deleteTarget, setDeleteTarget] = React.useState<BotComputerVmStatus | null>(null);
+  const [resetTargetId, setResetTargetId] = React.useState<string | null>(null);
+  const [deleteTargetId, setDeleteTargetId] = React.useState<string | null>(null);
+  const [pendingFocusTarget, setPendingFocusTarget] = React.useState<string | "computers" | null>(null);
   const actionCellRef = React.useRef<HTMLDivElement>(null);
   const focusedInActionRef = React.useRef(false);
+  const newComputerButtonRef = React.useRef<HTMLButtonElement>(null);
+  const vmFocusRefs = React.useRef(new Map<string, HTMLButtonElement | null>());
   const status = query.data;
   const setupKind = status?.setup.kind;
+  const renameTarget = renameTargetId ? (status?.vms.find((vm) => vm.id === renameTargetId) ?? null) : null;
+  const resetTarget = resetTargetId ? (status?.vms.find((vm) => vm.id === resetTargetId) ?? null) : null;
+  const deleteTarget = deleteTargetId ? (status?.vms.find((vm) => vm.id === deleteTargetId) ?? null) : null;
   const needsBotNames = Boolean(
     status &&
       status.setup.kind !== "unsupported" &&
@@ -137,6 +143,19 @@ export function BotComputersSettings() {
     const next = cell.querySelector<HTMLButtonElement>("button:not(:disabled)");
     if (next) next.focus();
   }, [setupKind, acting]);
+
+  // Restore focus cleanly to the next row or the Computers header action after deleting/resetting a VM.
+  React.useEffect(() => {
+    if (!pendingFocusTarget || acting !== null) return;
+    const targetButton =
+      pendingFocusTarget === "computers"
+        ? newComputerButtonRef.current
+        : (vmFocusRefs.current.get(pendingFocusTarget) ?? newComputerButtonRef.current);
+    if (targetButton && !targetButton.disabled) {
+      targetButton.focus();
+    }
+    setPendingFocusTarget(null);
+  }, [pendingFocusTarget, acting, status?.vms]);
 
   if (!query.supported) {
     return (
@@ -255,32 +274,47 @@ export function BotComputersSettings() {
       async () => {
         const vm = await botComputersApi.renameComputer(target.id, trimmed);
         cache.putVm(vm);
-        setRenameTarget(null);
+        setRenameTargetId(null);
         void cache.refresh();
       },
       `Aiden couldn't rename ${target.name}.`,
     );
   };
-  const resetComputer = (vm: BotComputerVmStatus) =>
-    run(
+  const resetComputer = (vmId: string) => {
+    const liveVm = status.vms.find((entry) => entry.id === vmId);
+    if (!liveVm) return;
+    void run(
       "resetVm",
       async () => {
-        const updated = await botComputersApi.resetComputer(vm.id);
+        const updated = await botComputersApi.resetComputer(liveVm.id);
         cache.putVm(updated);
+        setPendingFocusTarget(liveVm.id);
         void cache.refresh();
       },
-      `Aiden couldn't reset ${vm.name}.`,
+      `Aiden couldn't reset ${liveVm.name}.`,
     );
-  const deleteComputer = (vm: BotComputerVmStatus) =>
-    run(
+  };
+  const nextFocusAfterDelete = (vmId: string): string | "computers" => {
+    const index = status.vms.findIndex((entry) => entry.id === vmId);
+    if (index === -1) return "computers";
+    const next = status.vms[index + 1] ?? status.vms[index - 1];
+    return next ? next.id : "computers";
+  };
+  const deleteComputer = (vmId: string) => {
+    const liveVm = status.vms.find((entry) => entry.id === vmId);
+    if (!liveVm) return;
+    const fallbackFocus = nextFocusAfterDelete(liveVm.id);
+    void run(
       "deleteVm",
       async () => {
-        await botComputersApi.deleteComputer(vm.id, vm.assignedBotIds.length > 0 ? { force: true } : undefined);
-        cache.dropVm(vm.id);
+        await botComputersApi.deleteComputer(liveVm.id, liveVm.assignedBotIds.length > 0 ? { force: true } : undefined);
+        cache.dropVm(liveVm.id);
+        setPendingFocusTarget(fallbackFocus);
         void cache.refresh();
       },
-      `Aiden couldn't delete ${vm.name}.`,
+      `Aiden couldn't delete ${liveVm.name}.`,
     );
+  };
 
   const setup = status.setup;
   const unsupported = setup.kind === "unsupported";
@@ -338,7 +372,7 @@ export function BotComputersSettings() {
               {offerSetUp ? <span className="mt-1 block text-tertiary">{botComputersSetupDisclosure(status.requirements)}</span> : null}
               {setup.kind === "ready" ? (
                 <span className="mt-1 block text-tertiary">
-                  Give a Bot its own computer from its profile. Each one starts as a copy of this base.
+                  Assign Bots to the shared computer or a dedicated Linux computer from their profile. Each computer starts as a copy of this base.
                 </span>
               ) : null}
             </>
@@ -396,6 +430,7 @@ export function BotComputersSettings() {
           title="Computers"
           action={
             <Button
+              ref={newComputerButtonRef}
               size="small"
               variant="transparent"
               disabled={setup.kind !== "ready" || busy || acting !== null}
@@ -440,12 +475,16 @@ export function BotComputersSettings() {
                 >
                   <div className="flex flex-wrap justify-end gap-2">
                     <Button
+                      ref={(node) => {
+                        if (node) vmFocusRefs.current.set(vm.id, node);
+                        else vmFocusRefs.current.delete(vm.id);
+                      }}
                       size="small"
                       variant="transparent"
                       aria-label={`Rename ${vm.name}`}
                       disabled={acting !== null}
                       onClick={() => {
-                        setRenameTarget(vm);
+                        setRenameTargetId(vm.id);
                         setRenameValue(vm.name);
                       }}
                     >
@@ -455,8 +494,8 @@ export function BotComputersSettings() {
                       size="small"
                       variant={vm.state === "stale" || vm.outdated ? "filled" : "transparent"}
                       aria-label={`Reset ${vm.name}`}
-                      disabled={acting !== null || vm.state === "stopping"}
-                      onClick={() => setResetTarget(vm)}
+                      disabled={acting !== null || vm.state === "starting" || vm.state === "stopping"}
+                      onClick={() => setResetTargetId(vm.id)}
                     >
                       <RotateCcw aria-hidden /> Reset
                     </Button>
@@ -464,8 +503,8 @@ export function BotComputersSettings() {
                       size="small"
                       variant="transparent"
                       aria-label={`Delete ${vm.name}`}
-                      disabled={acting !== null || vm.state === "stopping"}
-                      onClick={() => setDeleteTarget(vm)}
+                      disabled={acting !== null || vm.state === "starting" || vm.state === "stopping"}
+                      onClick={() => setDeleteTargetId(vm.id)}
                     >
                       <Trash2 aria-hidden /> Delete
                     </Button>
@@ -481,7 +520,7 @@ export function BotComputersSettings() {
         <FieldSet title="Running">
           <Field
             label="Default for new Bots"
-            description="Bots on a shared computer take turns automatically, with a shared folder and their own folders."
+            description="Bots on a shared computer take turns automatically and share one Linux desktop, user (aiden-bot), and Chromium sign-ins, with separate working folders (~/bots/<dir>) beside ~/Shared."
           >
             <Select
               value={status.settings.defaultComputerMode}
@@ -612,7 +651,7 @@ export function BotComputersSettings() {
 
       <Dialog
         open={renameTarget !== null}
-        onOpenChange={(open) => !open && setRenameTarget(null)}
+        onOpenChange={(open) => !open && setRenameTargetId(null)}
         title={renameTarget ? `Rename ${renameTarget.name}` : "Rename computer"}
         confirmLabel="Save name"
         confirmDisabled={renameValue.trim().length === 0}
@@ -630,39 +669,62 @@ export function BotComputersSettings() {
 
       <AlertDialog
         open={resetTarget !== null}
-        onOpenChange={(open) => !open && setResetTarget(null)}
+        onOpenChange={(open) => !open && setResetTargetId(null)}
         title={resetTarget ? `Reset ${resetTarget.name}?` : "Reset computer?"}
         description={
-          resetTarget && resetTarget.assignedBotIds.length > 1
-            ? `Aiden deletes everything on ${resetTarget.name} and clones a fresh copy of the base for all ${resetTarget.assignedBotIds.length} assigned Bots. Files in shared and per-Bot folders stay.`
-            : "Aiden deletes everything on this computer and makes a fresh copy of the base. Files in shared and per-Bot folders stay."
+          resetTarget
+            ? `${
+                resetTarget.activeBotId
+                  ? `In use by ${botNames.get(resetTarget.activeBotId) ?? "a Bot"}. Resetting interrupts active work. `
+                  : ""
+              }${
+                resetTarget.assignedBotIds.length > 1
+                  ? `Aiden deletes everything on ${resetTarget.name} and clones a fresh copy of the base for all ${resetTarget.assignedBotIds.length} assigned Bots. Files in the computer's shared and per-Bot folders stay.`
+                  : "Aiden deletes everything on this computer and makes a fresh copy of the base. Files in the computer's shared and per-Bot folders stay."
+              }`
+            : undefined
         }
         confirmLabel="Reset computer"
         confirmVariant="destructive"
         busy={acting === "resetVm"}
+        returnFocus={() =>
+          (resetTargetId ? vmFocusRefs.current.get(resetTargetId) : null) ?? newComputerButtonRef.current
+        }
         onConfirm={() => {
-          const target = resetTarget;
-          setResetTarget(null);
-          if (target) void resetComputer(target);
+          const id = resetTargetId;
+          setResetTargetId(null);
+          if (id) resetComputer(id);
         }}
       />
 
       <AlertDialog
         open={deleteTarget !== null}
-        onOpenChange={(open) => !open && setDeleteTarget(null)}
+        onOpenChange={(open) => !open && setDeleteTargetId(null)}
         title={deleteTarget ? `Delete ${deleteTarget.name}?` : "Delete computer?"}
         description={
-          deleteTarget && deleteTarget.assignedBotIds.length > 0
-            ? `${deleteTarget.assignedBotIds.length === 1 ? "1 Bot is" : `${deleteTarget.assignedBotIds.length} Bots are`} currently assigned to ${deleteTarget.name}. Deleting it stops and removes the virtual machine and unassigns those Bots. Files in shared and per-Bot folders stay.`
-            : "Aiden stops and deletes this virtual machine. Files in shared and per-Bot folders stay."
+          deleteTarget
+            ? `${
+                deleteTarget.activeBotId
+                  ? `In use by ${botNames.get(deleteTarget.activeBotId) ?? "a Bot"}. Deleting interrupts active work. `
+                  : ""
+              }${
+                deleteTarget.assignedBotIds.length > 0
+                  ? `${deleteTarget.assignedBotIds.length === 1 ? "1 Bot is" : `${deleteTarget.assignedBotIds.length} Bots are`} currently assigned to ${deleteTarget.name}. Deleting stops and removes the virtual machine and its shared workspace folder, and unassigns those Bots (each Bot's own Computer folder stays).`
+                  : "Aiden stops and deletes this virtual machine and its shared workspace folder (each Bot's own Computer folder stays)."
+              }`
+            : undefined
         }
         confirmLabel="Delete computer"
         confirmVariant="destructive"
         busy={acting === "deleteVm"}
+        returnFocus={() => {
+          const next = deleteTargetId ? nextFocusAfterDelete(deleteTargetId) : "computers";
+          return (next === "computers" ? null : vmFocusRefs.current.get(next)) ?? newComputerButtonRef.current;
+        }}
         onConfirm={() => {
-          const target = deleteTarget;
-          setDeleteTarget(null);
-          if (target) void deleteComputer(target);
+          const id = deleteTargetId;
+          setDeleteTargetId(null);
+          if (id) deleteComputer(id);
         }}
       />
     </>

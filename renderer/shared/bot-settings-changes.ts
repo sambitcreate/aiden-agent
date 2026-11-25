@@ -231,6 +231,7 @@ export function botSettingsLine(
   before: BotSettingsValues,
   after: BotSettingsValues,
   modelLabel: (model: BotSettingsModel | null) => string = (model) => model?.modelId ?? "None",
+  computerLabel?: (target: BotComputerAssignTarget) => string,
 ): string {
   switch (field) {
     case "name":
@@ -253,6 +254,7 @@ export function botSettingsLine(
     case "computer": {
       const target = after.computer;
       if (!target) return "Computer: None";
+      if (computerLabel) return `Computer: ${computerLabel(target)}`;
       if (target.kind === "shared") return `Computer: ${BOT_COMPUTER_SHARED_DEFAULT_NAME}`;
       if (target.kind === "new") {
         return target.name ? `Computer: New dedicated computer (${target.name})` : "Computer: New dedicated computer";

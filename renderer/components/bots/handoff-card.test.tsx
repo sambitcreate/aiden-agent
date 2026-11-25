@@ -227,3 +227,19 @@ test("a step on the Bot's screen on another Mac offers Finish there beside Skip 
   assert.equal(finishes, 1);
   assert.deepEqual(answers, ["done"]);
 });
+
+test("a computer sign-in card on a shared VM warns that other Bots share the desktop and Chromium sign-ins", () => {
+  const onComputer: BotPendingHandoff = { ...SIGN_IN, target: "computer" };
+  render(
+    <Card
+      name="Ada"
+      avatar={DEFAULT_BOT_AVATAR}
+      handoff={onComputer}
+      sharedComputer={{ name: "Shared computer", otherBotNames: ["Ben", "Clara"] }}
+      onOpen={() => undefined}
+      onAnswer={() => undefined}
+    />,
+  );
+  screen.getByText("Opens on Shared computer, with you in control. Ada waits until you answer, and never sees your password.");
+  screen.getByText("Shared computer: Ben, Clara also use Shared computer and share its Linux desktop and Chromium sign-ins.");
+});
