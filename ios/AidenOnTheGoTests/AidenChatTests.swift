@@ -3255,11 +3255,12 @@ final class AidenChatTests: XCTestCase {
         XCTAssertEqual(opening.thinkingLevel, "low")
         XCTAssertEqual(opening.saveSelection, true, "a new chat's first send keeps the stop it started on")
         // The Mac's chat comes back: it stays on the stop, and so does the next turn.
+        // Let the turn's stream work end first: its own reconcile supersedes one still in flight.
+        try await waitForStreamWorkToEnd(untouched)
         let reconciled = await untouched.reconcileChat(context: untouched.owner)
         XCTAssertTrue(reconciled)
         XCTAssertEqual(untouched.chat.thinkingLevel, "low")
         XCTAssertEqual(untouched.agentSliderState?.currentStop?.id, "fast", "the Mac's chat moved the chip off its stop")
-        try await waitUntil { untouched.streamState?.isTerminal != false }
         untouched.draft = "Again"
         try await waitUntil { untouched.canSend }
         await untouched.send()
@@ -3333,11 +3334,11 @@ final class AidenChatTests: XCTestCase {
         let bodies = try earlyTurns.values.prefix(2).map { try XCTUnwrap(JSONSerialization.jsonObject(with: XCTUnwrap($0.body)) as? NSDictionary) }
         XCTAssertEqual(bodies[1], bodies[0], "the Mac refuses a changed body under the same key")
         XCTAssertEqual(early.agentSliderState?.currentStop?.id, "mid", "the chat left the stop its first turn ran on")
+        try await waitForStreamWorkToEnd(early)
         let earlyReconciled = await early.reconcileChat(context: early.owner)
         XCTAssertTrue(earlyReconciled)
         XCTAssertNil(early.chat.thinkingLevel, "the Mac kept no level from the retry")
         XCTAssertEqual(early.agentSliderState?.currentStop?.id, "mid", "the accepted retry dropped the chat to Custom")
-        try await waitUntil { early.streamState?.isTerminal != false }
         early.draft = "Again"
         try await waitUntil { early.canSend }
         await early.send()
@@ -3449,10 +3450,10 @@ final class AidenChatTests: XCTestCase {
             unlistedPreferences.chatSelection(for: "instance-progress-lifecycle", chatID: unlisted.chat.id),
             AidenChatModelSelection(providerId: "acme", modelId: "small", thinkingLevel: "low")
         )
+        try await waitForStreamWorkToEnd(unlisted)
         let unlistedReconciled = await unlisted.reconcileChat(context: unlisted.owner)
         XCTAssertTrue(unlistedReconciled)
         XCTAssertEqual(unlisted.agentSliderState?.currentStop?.id, "fast", "the Mac's level-less chat dropped the chip to Custom")
-        try await waitUntil { unlisted.streamState?.isTerminal != false }
         unlisted.draft = "Again"
         try await waitUntil { unlisted.canSend }
         await unlisted.send()
@@ -3508,10 +3509,10 @@ final class AidenChatTests: XCTestCase {
             AidenChatModelSelection(providerId: "acme", modelId: "small", thinkingLevel: "low"),
             "the chat's stop wasn't kept to send"
         )
+        try await waitForStreamWorkToEnd(racing)
         let racingReconciled = await racing.reconcileChat(context: racing.owner)
         XCTAssertTrue(racingReconciled)
         XCTAssertEqual(racing.agentSliderState?.currentStop?.id, "fast", "the Mac's level-less chat dropped the chip to Custom")
-        try await waitUntil { racing.streamState?.isTerminal != false }
         racing.draft = "Again"
         try await waitUntil { racing.canSend }
         await racing.send()
@@ -7433,6 +7434,22 @@ final class AidenChatTests: XCTestCase {
         XCTAssertEqual(model.draft, expected, "Completing the attachment action must not revive the old draft")
         // Cancel the debounce before removing this test's temporary directory.
         model.setAllowsMutations(false)
+    }
+
+    /// Waits for the stream loop and the reconcile that follows it, so a
+    /// test's own reconcile is not superseded by the stream's.
+    @MainActor
+    private func waitForStreamWorkToEnd(
+        _ chat: AidenChatViewModel,
+        file: StaticString = #filePath,
+        line: UInt = #line
+    ) async throws {
+        var ended = false
+        Task { @MainActor in
+            await chat.waitForStreamWork()
+            ended = true
+        }
+        try await waitUntil({ ended }, file: file, line: line)
     }
 
     /// Like `waitForCondition`: the ceiling is wall-clock time, not a count of
