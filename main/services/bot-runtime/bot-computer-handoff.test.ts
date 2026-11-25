@@ -263,13 +263,13 @@ test("Linux open script launches Chromium detached on DISPLAY=:0 with quoted URL
   spawnSync("/bin/mkdir", ["-p", bin]);
   writeFileSync(
     fakeChromium,
-    `#!/bin/sh\nprintf 'DISPLAY=%s\\n' "$DISPLAY" > ${JSON.stringify(out)}\nfor a in "$@"; do printf '%s\\n' "$a" >> ${JSON.stringify(out)}; done\n`,
+    `#!/bin/sh\nprintf 'DISPLAY=%s\\nXAUTHORITY=%s\\nXDG_RUNTIME_DIR=%s\\nDBUS_SESSION_BUS_ADDRESS=%s\\nACCESSIBILITY_ENABLED=%s\\nGNOME_ACCESSIBILITY=%s\\n' "$DISPLAY" "$XAUTHORITY" "$XDG_RUNTIME_DIR" "$DBUS_SESSION_BUS_ADDRESS" "$ACCESSIBILITY_ENABLED" "$GNOME_ACCESSIBILITY" > ${JSON.stringify(out)}\nfor a in "$@"; do printf '%s\\n' "$a" >> ${JSON.stringify(out)}; done\n`,
   );
   chmodSync(fakeChromium, 0o755);
 
   const url = "https://example.com/$(touch pwned)'x";
   const ran = spawnSync("/bin/sh", ["-c", botComputerSignInOpenScript(url, "linux")], {
-    env: { PATH: `${bin}:/usr/bin:/bin` },
+    env: { PATH: `${bin}:/usr/bin:/bin`, HOME: dir },
     encoding: "utf8",
     timeout: 10_000,
   });
@@ -279,8 +279,18 @@ test("Linux open script launches Chromium detached on DISPLAY=:0 with quoted URL
     await new Promise((resolve) => setTimeout(resolve, 10));
   }
   assert.equal(existsSync(out), true, "fake chromium ran");
+  const uid = process.getuid?.();
   const lines = readFileSync(out, "utf8").trimEnd().split("\n");
-  assert.deepEqual(lines, ["DISPLAY=:0", "--new-window", url]);
+  assert.deepEqual(lines, [
+    "DISPLAY=:0",
+    `XAUTHORITY=${path.join(dir, ".Xauthority")}`,
+    `XDG_RUNTIME_DIR=/run/user/${uid}`,
+    `DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/${uid}/bus`,
+    "ACCESSIBILITY_ENABLED=1",
+    "GNOME_ACCESSIBILITY=1",
+    "--new-window",
+    url,
+  ]);
 
   // Without chromium on PATH, the script fails closed with exit 127.
   const missing = spawnSync("/bin/sh", ["-c", botComputerSignInOpenScript(url, "linux")], {
