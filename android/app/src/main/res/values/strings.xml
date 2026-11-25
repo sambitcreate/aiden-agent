@@ -15,7 +15,7 @@
     <string name="model_picker_default">Default</string>
     <string name="model_picker_default_uses">Uses %1$s · %2$s</string>
     <string name="model_picker_default_unknown">Uses the model set on your computer</string>
-    <string name="model_picker_mac_default">Mac default</string>
+    <string name="model_picker_mac_default">Computer default</string>
     <string name="model_picker_capability_vision">Vision</string>
     <string name="model_picker_capability_reasoning">Reasoning</string>
     <string name="model_picker_unavailable">Unavailable</string>
@@ -844,7 +844,7 @@
     <string name="chat_agents_group_finished">Finished</string>
     <string name="chat_agents_none_choose_earlier">No agents in this session. Choose an earlier session above.</string>
     <string name="chat_agents_none">No agents in this session.</string>
-    <string name="chat_tasks_storage_off">Task tracking is off on the Mac</string>
+    <string name="chat_tasks_storage_off">Task tracking is off on your computer</string>
     <string name="chat_tasks_unavailable">Task progress is temporarily unavailable</string>
     <string name="chat_agents_unavailable">Agent progress is temporarily unavailable</string>
     <string name="chat_agent_row_cd">%1$s, %2$s</string>
@@ -867,9 +867,9 @@
     <string name="chat_agent_sub_agents">Sub-agents</string>
     <string name="chat_agent_stopping">Stopping…</string>
     <string name="chat_agent_stop">Stop agent</string>
-    <string name="chat_agent_stop_note">The Mac stops only this agent. The main run and other agents keep going.</string>
+    <string name="chat_agent_stop_note">The computer stops only this agent. The main run and other agents keep going.</string>
     <string name="chat_agent_stop_title">Stop %1$s?</string>
-    <string name="chat_agent_stop_body">The Mac stops this delegated agent. You cannot resume it from here.</string>
+    <string name="chat_agent_stop_body">The computer stops this delegated agent. You cannot resume it from here.</string>
     <string name="chat_agent_keep_running">Keep running</string>
     <string name="chat_agent_role_scout">Scout</string>
     <string name="chat_agent_role_planner">Planner</string>
@@ -973,7 +973,7 @@
     <string name="chat_browser_recording_play">Play</string>
     <string name="chat_browser_recording_loading">Loading…</string>
     <string name="chat_browser_recording_on_mac">Watch this recording on your computer.</string>
-    <string name="chat_browser_recording_missing">This recording is no longer on the Mac.</string>
+    <string name="chat_browser_recording_missing">This recording is no longer on your computer.</string>
     <string name="chat_browser_recording_failed">Couldn’t load this recording. Try again.</string>
     <string name="chat_browser_recording_unplayable">This recording can’t play on this phone.</string>
 

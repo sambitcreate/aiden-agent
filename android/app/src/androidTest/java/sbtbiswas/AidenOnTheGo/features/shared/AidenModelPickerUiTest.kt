@@ -118,9 +118,9 @@ class AidenModelPickerUiTest {
         compose.onNode(row("Default")).assertIsSelected()
         compose.onNodeWithText("Uses Claude Sonnet 4.5 · Anthropic").assertIsDisplayed()
         compose.onAllNodes(isSelectable() and isSelected()).assertCountEquals(1)
-        // The summary names the resolved model as the Mac's default.
+        // The summary names the resolved model as the computer's default.
         compose.onNodeWithTag(AidenModelPickerSummaryTag)
-            .assert(hasText("Claude Sonnet 4.5") and hasText("Mac default"))
+            .assert(hasText("Claude Sonnet 4.5") and hasText("Computer default"))
     }
 
     @Test

@@ -25,7 +25,7 @@
     <string name="approvals_group_allow">Always allow</string>
     <string name="approvals_group_ask">Always ask</string>
     <string name="approvals_group_block">Blocked</string>
-    <string name="approvals_group_mac">Allowed on this Mac</string>
+    <string name="approvals_group_mac">Allowed on this computer</string>
     <string name="approvals_empty_allow">Nothing yet. Choose Always on a card, or add a rule, to stop a question you keep answering.</string>
     <string name="approvals_empty_ask">Add a rule to be asked before something that would otherwise run.</string>
     <string name="approvals_empty_block">Add a rule to stop something in every mode.</string>
