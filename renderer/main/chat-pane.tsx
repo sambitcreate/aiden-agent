@@ -51,12 +51,19 @@ import { adoptWorkspace } from "../lib/use-workspace-path-intake";
 import { workspaceChangeBusyReason } from "../lib/workspace-menu";
 import {
   discardComposerDraft,
+  getActiveWorktreeGrabbedElements,
   loadComposerDraft,
   restoreUnsentMessage,
   saveComposerDraftText,
   seedComposerAttachments,
+  seedComposerGrabbedElements,
+  setActiveWorktreeGrabbedElements,
   stageComposerText,
 } from "../lib/composer-draft-store";
+import {
+  withoutGrabbedElementThumbnails,
+  type GrabbedElementContextV1,
+} from "../shared/browser-element-grab";
 import { attachmentsWithBytes } from "../lib/stored-attachments";
 import { reduceVisualDrafts, type VisualDrafts } from "../lib/html-artifact-transcript";
 import { reduceUiDrafts, reduceUiVisuals, type UiDrafts } from "../lib/ui-visual-transcript";
@@ -161,6 +168,8 @@ import {
 } from "../components/subagent-composer-pill";
 import { BtwCard, reduceBtwView, type BtwLiveView } from "../components/btw-card";
 import { ModelPicker } from "../components/model-picker";
+import { AgentModelPopover } from "../components/agent-model-popover";
+import { agentSliderComposerState, agentSliderStepTarget, agentSliderStopSetsEffort } from "../lib/agent-slider-view";
 import { RemoteMachinePicker } from "../components/remote-new-chat-pickers";
 import { useNewChatMachines } from "../lib/hosts/use-new-chat-machines";
 import {
@@ -251,6 +260,7 @@ import {
   setActiveChatModelTarget,
   useModelSelection,
 } from "../lib/use-model-selection";
+import { turnThinkingLevel } from "../lib/turn-thinking-level";
 import { useActiveWorkspace } from "../lib/workspace-context";
 import { useWorkspaceTerminal } from "../components/terminal-drawer";
 import {
@@ -556,30 +566,57 @@ export function ChatPane({ chatId }: { chatId: string }) {
   // A chat with messages owns its model: picking one here changes this chat
   // only. An empty chat follows, and sets, the app's model for new chats.
   const chatOwnsModel = !draft && hasMessages && !chat.data?.botId;
-  const { providerId, model } = chatModelSelection(chat.data, chatOwnsModel, appModel);
+  const { providerId, model, thinkingLevel: selectionThinkingLevel } = chatModelSelection(
+    chat.data,
+    chatOwnsModel,
+    appModel,
+  );
   const selectAppModel = appModel.select;
   // The latest pick per chat, so an older pick's answer never replaces a newer one.
   const chatModelPicksRef = React.useRef(new Map<string, number>());
+  // `level`: an Agent Slider stop's effort (null or a stop without one clears
+  // the chat's own level); left out, a list pick keeps the level only while
+  // the model stays the same.
   const select = React.useCallback(
-    (nextProviderId: string, nextModel: string) => {
+    (nextProviderId: string, nextModel: string, level?: GenerationThinkingLevel | null) => {
       if (!chatOwnsModel) {
-        selectAppModel(nextProviderId, nextModel);
+        selectAppModel(nextProviderId, nextModel, level ?? undefined);
         return;
       }
       const key = queryKeys.chat(chatId);
       const pick = (chatModelPicksRef.current.get(chatId) ?? 0) + 1;
       chatModelPicksRef.current.set(chatId, pick);
       const isLatestPick = () => chatModelPicksRef.current.get(chatId) === pick;
-      const withModel = (pair: Pick<Chat, "providerId" | "model">) => (current: Chat | null | undefined) =>
-        current ? { ...current, providerId: pair.providerId, model: pair.model } : current;
+      // A chat's own level belongs to its model, so it travels with the pair.
+      const withModel =
+        (pair: Pick<Chat, "providerId" | "model" | "thinkingLevel">) => (current: Chat | null | undefined) => {
+          if (!current) return current;
+          const { thinkingLevel: _replaced, ...rest } = current;
+          return {
+            ...rest,
+            providerId: pair.providerId,
+            model: pair.model,
+            ...(pair.thinkingLevel ? { thinkingLevel: pair.thinkingLevel } : {}),
+          };
+        };
       const previous = qc.getQueryData<Chat | null>(key);
       void (async () => {
         // A read started before this pick must not land on top of it.
         await qc.cancelQueries({ queryKey: key, exact: true });
         if (!isLatestPick()) return;
-        qc.setQueryData<Chat | null>(key, withModel({ providerId: nextProviderId, model: nextModel }));
+        const current = qc.getQueryData<Chat | null>(key);
+        const sameModel = current?.providerId === nextProviderId && current?.model === nextModel;
+        qc.setQueryData<Chat | null>(
+          key,
+          withModel({
+            providerId: nextProviderId,
+            model: nextModel,
+            thinkingLevel:
+              level === undefined ? (sameModel ? current?.thinkingLevel : undefined) : (level ?? undefined),
+          }),
+        );
         try {
-          const saved = await chatsApi.setModel(chatId, nextProviderId, nextModel);
+          const saved = await chatsApi.setModel(chatId, nextProviderId, nextModel, level);
           // A read that overlapped the save may still carry the old model.
           if (saved && isLatestPick()) qc.setQueryData<Chat | null>(key, withModel(saved));
           void qc.invalidateQueries({ queryKey: queryKeys.chats });
@@ -617,6 +654,19 @@ export function ChatPane({ chatId }: { chatId: string }) {
           : (providers.data ?? []),
     [agentBlockedSurface, providers.data, settings.data],
   );
+  // On an Agent Slider stop with its own effort the stop sets it, so the
+  // effort control hides; a stop without one, and Custom, show it as before.
+  const agentSlider = settings.data?.agentSlider;
+  const agentSliderState = React.useMemo(
+    () =>
+      agentSliderComposerState(
+        agentSlider,
+        { providers: pickerProviders, hiddenModelsByProvider: settings.data?.hiddenModelsByProvider },
+        { providerId, model, thinkingLevel: selectionThinkingLevel },
+      ),
+    [agentSlider, pickerProviders, settings.data?.hiddenModelsByProvider, providerId, model, selectionThinkingLevel],
+  );
+  const stopSetsEffort = agentSliderStopSetsEffort(agentSliderState);
   const modelReadinessMessage = React.useMemo(() => {
     if (providers.isLoading) return "Loading chat models…";
     if (!selectedProvider) {
@@ -740,15 +790,27 @@ export function ChatPane({ chatId }: { chatId: string }) {
     },
     [contextFeed],
   );
-  const cloneDraftRef = React.useRef<{ text: string; attachments: Attachment[] }>({ text: "", attachments: [] });
+  const cloneDraftRef = React.useRef<{
+    text: string;
+    attachments: Attachment[];
+    grabbedElements: GrabbedElementContextV1[];
+  }>({ text: "", attachments: [], grabbedElements: [] });
   const onDraftContextChange = React.useCallback(
-    (value: string, draftAttachments: Attachment[]) => {
-      cloneDraftRef.current = { text: value, attachments: draftAttachments };
+    (
+      value: string,
+      draftAttachments: Attachment[],
+      draftGrabbedElements: GrabbedElementContextV1[] = [],
+    ) => {
+      cloneDraftRef.current = {
+        text: value,
+        attachments: draftAttachments,
+        grabbedElements: draftGrabbedElements,
+      };
       const draftText = value.trim() ? value : undefined;
       const attachments = draftAttachments.length ? draftAttachments : undefined;
       contextFeed.draftChanged(draftText || attachments ? { draftText, attachments } : undefined);
       // New-chat entry points reuse only a draft whose composer is empty.
-      setChatDraftHasContent(chatId, Boolean(draftText || attachments));
+      setChatDraftHasContent(chatId, Boolean(draftText || attachments || draftGrabbedElements.length));
     },
     [chatId, contextFeed],
   );
@@ -1299,6 +1361,22 @@ export function ChatPane({ chatId }: { chatId: string }) {
     effectiveWorkspaceId,
     activeChatIds.has(chatId),
   );
+  const modelChangeBlocked = isGenerating || isStartingGeneration || thinkingSaving;
+  // In Custom a chat can still carry its own level; the effort control shows
+  // it while the model's family offers it, since that is what the turn sends.
+  const ownLevelIn = <Level extends GenerationThinkingLevel>(levels: readonly Level[]): Level | undefined =>
+    selectionThinkingLevel && (levels as readonly GenerationThinkingLevel[]).includes(selectionThinkingLevel)
+      ? (selectionThinkingLevel as Level)
+      : undefined;
+  const stepAgentSlider = (direction: 1 | -1) => {
+    if (chat.data?.botId || modelChangeBlocked || getChatDraft(chatId)?.sending) return;
+    const target = agentSliderStepTarget(agentSliderState, direction);
+    if (target?.providerId && target.model) {
+      select(target.providerId, target.model, target.thinkingLevel ?? null);
+    }
+  };
+  useCommandHandler("agentSlider.next", () => stepAgentSlider(1), !chat.data?.botId);
+  useCommandHandler("agentSlider.previous", () => stepAgentSlider(-1), !chat.data?.botId);
   const thinkingDisabledReason =
     isStartingGeneration || isGenerating
       ? "Available after this response"
@@ -1365,7 +1443,11 @@ export function ChatPane({ chatId }: { chatId: string }) {
   const copyChat = React.useCallback(
     async (
       forkAt?: { messageId: string; position: ChatForkPosition },
-      prefill?: { text: string; attachments: readonly Attachment[] },
+      prefill?: {
+        text: string;
+        attachments: readonly Attachment[];
+        grabbedElements?: readonly GrabbedElementContextV1[];
+      },
       summary?: { instructions?: string },
       continueInWorkspaceId?: string,
     ) => {
@@ -1393,6 +1475,9 @@ export function ChatPane({ chatId }: { chatId: string }) {
       if (prefill) {
         saveComposerDraftText(copied.id, prefill.text);
         seedComposerAttachments(copied.id, prefill.attachments);
+        if (prefill.grabbedElements?.length) {
+          seedComposerGrabbedElements(copied.id, prefill.grabbedElements, prefill.attachments);
+        }
       }
       const copiedWorkspaceId = persistedChatWorkspaceId(copied.workspaceId);
       if (copiedWorkspaceId !== effectiveWorkspaceIdRef.current) {
@@ -1459,10 +1544,19 @@ export function ChatPane({ chatId }: { chatId: string }) {
       const queued = chatMessageQueue(chatId).getSnapshot().messages[0];
       const storedText = loadComposerDraft(chatId).text.trim();
       const unsent =
-        draft.text.trim() || draft.attachments.length
-          ? { text: draft.text.trim(), attachments: draft.attachments }
-          : queued && (queued.text.trim() || queued.attachments.length)
-            ? { text: queued.text.trim(), attachments: queued.attachments }
+        draft.text.trim() || draft.attachments.length || draft.grabbedElements.length
+          ? {
+              text: draft.text.trim(),
+              attachments: draft.attachments,
+              grabbedElements: draft.grabbedElements,
+            }
+          : queued &&
+              (queued.text.trim() || queued.attachments.length || queued.grabbedElements?.length)
+            ? {
+                text: queued.text.trim(),
+                attachments: queued.attachments,
+                grabbedElements: queued.grabbedElements,
+              }
             : storedText
               ? { text: storedText, attachments: [] }
               : undefined;
@@ -1529,6 +1623,9 @@ export function ChatPane({ chatId }: { chatId: string }) {
       const prefill = {
         text: message.content,
         attachments: await attachmentsWithBytes(chatId, message.attachments ?? [], chatsApi.imageData),
+        ...(message.grabbedElements?.length
+          ? { grabbedElements: structuredClone(message.grabbedElements) }
+          : {}),
       };
       if (messages.slice(0, index).some((earlier) => earlier.role === "user")) {
         await copyChat({ messageId, position }, prefill, summary);
@@ -1539,6 +1636,9 @@ export function ChatPane({ chatId }: { chatId: string }) {
       const workspaceId = persistedChatWorkspaceId(chat.data?.workspaceId);
       const created = createChatDraft(workspaceId, undefined, prefill.text).chat;
       seedComposerAttachments(created.id, prefill.attachments);
+      if (prefill.grabbedElements?.length) {
+        seedComposerGrabbedElements(created.id, prefill.grabbedElements, prefill.attachments);
+      }
       selectWorkspace(workspaceId);
       try {
         await navigate({ to: "/chat/$chatId", params: { chatId: created.id } });
@@ -2169,15 +2269,12 @@ export function ChatPane({ chatId }: { chatId: string }) {
           ...(visualize ? { visualize: true as const } : {}),
           ...(designView ? { designView } : {}),
           inlineVisuals: readCachedAppearance()?.inlineVisuals ?? "automatic",
-          thinkingLevel: googleThinkingSupported
-            ? googleThinkingLevel
-            : codexThinkingSupported
-              ? codexThinkingLevel
-              : anthropicThinkingSupported
-                ? anthropicThinkingLevel
-                : providerThinkingSupported
-                  ? providerThinkingLevel
-                  : undefined,
+          thinkingLevel: turnThinkingLevel(selectionThinkingLevel, {
+            google: { supported: googleThinkingSupported, level: googleThinkingLevel },
+            codex: { supported: codexThinkingSupported, level: codexThinkingLevel },
+            anthropic: { supported: anthropicThinkingSupported, level: anthropicThinkingLevel },
+            provider: { supported: providerThinkingSupported, level: providerThinkingLevel },
+          }),
         },
         createStreamCallbacks(generationIntent, { providerId }),
         messageTurnId,
@@ -2200,6 +2297,7 @@ export function ChatPane({ chatId }: { chatId: string }) {
       providerId,
       providerThinkingLevel,
       providerThinkingSupported,
+      selectionThinkingLevel,
       model,
     ],
   );
@@ -2228,15 +2326,25 @@ export function ChatPane({ chatId }: { chatId: string }) {
       text: string,
       attachments: Attachment[],
       skillInvocation?: SkillInvocationV1,
-      options?: { visualize?: boolean; btw?: boolean; goal?: string; goalSource?: "slash" | "proposal"; inputSource?: ChatInputSourceV1 },
+      options?: {
+        visualize?: boolean;
+        btw?: boolean;
+        goal?: string;
+        goalSource?: "slash" | "proposal";
+        inputSource?: ChatInputSourceV1;
+        grabbedElements?: GrabbedElementContextV1[];
+      },
     ) => {
       // Only Aiden Live's chat tools set this; the message shows "By voice".
       const inputSource = options?.inputSource;
+      const grabbedElements = options?.grabbedElements?.length
+        ? options.grabbedElements
+        : undefined;
       if (options?.btw) {
         if (getChatDraft(chatId))
           throw new Error("Send the first message before asking a side question.");
-        if (attachments.length > 0 || skillInvocation) {
-          throw new Error("Side questions do not accept attachments or skills.");
+        if (attachments.length > 0 || grabbedElements?.length || skillInvocation) {
+          throw new Error("Side questions do not accept attachments, browser elements, or skills.");
         }
         // A new turn revokes any active read-aloud job for this chat.
         readAloudRef.current?.stop();
@@ -2355,11 +2463,15 @@ export function ChatPane({ chatId }: { chatId: string }) {
                 ...(firstDraft.chat.ephemeral ? { ephemeral: true as const } : {}),
                 providerId,
                 model,
+                // The new-chat pick's stop effort becomes the chat's own level,
+                // so later turns keep it instead of the per-model setting.
+                ...(selectionThinkingLevel ? { thinkingLevel: selectionThinkingLevel } : {}),
                 turnId: messageTurnId,
                 message: {
                   role: "user" as const,
                   content: text,
                   attachments: attachments.length ? attachments : undefined,
+                  ...(grabbedElements ? { grabbedElements } : {}),
                 },
                 skillInvocation,
                 ...(inputSource ? { inputSource } : {}),
@@ -2367,6 +2479,7 @@ export function ChatPane({ chatId }: { chatId: string }) {
             : undefined;
           if (firstMessageInput && worktreeRequest) {
             const visit = chatVisitRef.current;
+            setActiveWorktreeGrabbedElements(chatId, grabbedElements);
             performance.mark?.("aiden:worktree-send:start");
             worktreeSend = startWorktreeFirstSend({
               api: {
@@ -2442,12 +2555,12 @@ export function ChatPane({ chatId }: { chatId: string }) {
                 });
               }
               // The composer that sent this restores its own text; any other
-              // (the user left and came back) gets the text and attachments back.
+              // (the user left and came back) gets the text, attachments, and grabbed elements back.
               if (
                 isWorktreeSendCancelled(error) &&
                 !(mountedRef.current && chatVisitRef.current === visit)
               ) {
-                restoreUnsentMessage(chatId, text, attachments);
+                restoreUnsentMessage(chatId, text, attachments, grabbedElements);
               }
               throw error;
             }
@@ -2460,6 +2573,7 @@ export function ChatPane({ chatId }: { chatId: string }) {
                     role: "user",
                     content: text,
                     attachments: attachments.length ? attachments : undefined,
+                    ...(grabbedElements ? { grabbedElements } : {}),
                   },
                   {
                     providerId,
@@ -2545,6 +2659,7 @@ export function ChatPane({ chatId }: { chatId: string }) {
         if (firstDraft) finishChatDraftSend(chatId, false);
         // The saved chat (or the restored composer text) replaces the progress row.
         worktreeSend?.release();
+        if (worktreeSend) setActiveWorktreeGrabbedElements(chatId, undefined);
         if (
           mountedRef.current &&
           chatIdRef.current === chatId &&
@@ -2561,6 +2676,7 @@ export function ChatPane({ chatId }: { chatId: string }) {
       imageArtifactRecoveryUnavailable,
       providerId,
       model,
+      selectionThinkingLevel,
       qc,
       runGeneration,
       selectWorkspace,
@@ -2661,17 +2777,28 @@ export function ChatPane({ chatId }: { chatId: string }) {
     send: (message) => {
       if (
         visionSupported === false &&
-        message.attachments.some((attachment) => attachment.kind === "image")
+        withoutGrabbedElementThumbnails(message.attachments).some(
+          (attachment) => attachment.kind === "image",
+        )
       ) {
         return Promise.reject(
           new Error("Switch to a vision-capable model before resuming these queued images."),
         );
       }
+      const sendOptions =
+        message.options || message.grabbedElements?.length
+          ? {
+              ...message.options,
+              ...(message.grabbedElements?.length
+                ? { grabbedElements: message.grabbedElements }
+                : {}),
+            }
+          : undefined;
       return handleSend(
         message.text,
         message.attachments,
         message.skillInvocation,
-        message.options,
+        sendOptions,
       );
     },
   });
@@ -2725,7 +2852,13 @@ export function ChatPane({ chatId }: { chatId: string }) {
       text: string,
       attachments: Attachment[],
       skillInvocation?: SkillInvocationV1,
-      options?: { visualize?: boolean; btw?: boolean; goal?: string; inputSource?: ChatInputSourceV1 },
+      options?: {
+        visualize?: boolean;
+        btw?: boolean;
+        goal?: string;
+        inputSource?: ChatInputSourceV1;
+        grabbedElements?: GrabbedElementContextV1[];
+      },
     ) => {
       if (stopRequestedRef.current) {
         throw new Error("Aiden is stopping this response. Send your message after it stops.");
@@ -2734,6 +2867,7 @@ export function ChatPane({ chatId }: { chatId: string }) {
         id: createChatTurnId(),
         text,
         attachments,
+        ...(options?.grabbedElements?.length ? { grabbedElements: options.grabbedElements } : {}),
         skillInvocation,
         options:
           options?.visualize || options?.inputSource
@@ -2773,9 +2907,14 @@ export function ChatPane({ chatId }: { chatId: string }) {
   );
 
   const steerMessage = React.useCallback(
-    async (text: string, attachments: Attachment[], skillInvocation?: SkillInvocationV1) => {
-      if (!text.trim() || attachments.length > 0 || skillInvocation) {
-        throw new Error("Steer requires text without attachments or a skill.");
+    async (
+      text: string,
+      attachments: Attachment[],
+      skillInvocation?: SkillInvocationV1,
+      options?: { grabbedElements?: GrabbedElementContextV1[] },
+    ) => {
+      if (!text.trim() || attachments.length > 0 || options?.grabbedElements?.length || skillInvocation) {
+        throw new Error("Steer requires text without attachments, browser elements, or a skill.");
       }
       if (text.length > MAX_RUN_INPUT_TEXT) {
         throw new Error("Guidance is too long to steer. Queue it as a follow-up instead.");
@@ -3176,6 +3315,13 @@ export function ChatPane({ chatId }: { chatId: string }) {
     ],
   );
 
+  // The composer's effort control saves the model's level. A level the chat
+  // carries itself (from a slider stop, or the new-chat pick) would override
+  // it, so changing the effort in Custom drops that level too.
+  const clearOwnThinkingLevel = React.useCallback(() => {
+    if (selectionThinkingLevel && providerId && model) select(providerId, model, null);
+  }, [model, providerId, select, selectionThinkingLevel]);
+
   const changeGoogleThinking = React.useCallback(
     async (level: GoogleThinkingLevel) => {
       if (
@@ -3191,6 +3337,7 @@ export function ChatPane({ chatId }: { chatId: string }) {
       try {
         const updated = await settingsApi.setGoogleThinking(model, level);
         qc.setQueryData(queryKeys.settings, updated);
+        clearOwnThinkingLevel();
       } catch (changeError) {
         toast.error(
           changeError instanceof Error
@@ -3201,7 +3348,7 @@ export function ChatPane({ chatId }: { chatId: string }) {
         setThinkingSaving(false);
       }
     },
-    [googleThinkingSupported, isGenerating, isStartingGeneration, model, qc, thinkingSaving],
+    [clearOwnThinkingLevel, googleThinkingSupported, isGenerating, isStartingGeneration, model, qc, thinkingSaving],
   );
 
   const changeCodexThinking = React.useCallback(
@@ -3219,6 +3366,7 @@ export function ChatPane({ chatId }: { chatId: string }) {
       try {
         const updated = await settingsApi.setCodexThinking(model, level);
         qc.setQueryData(queryKeys.settings, updated);
+        clearOwnThinkingLevel();
       } catch (changeError) {
         toast.error(
           changeError instanceof Error
@@ -3229,7 +3377,7 @@ export function ChatPane({ chatId }: { chatId: string }) {
         setThinkingSaving(false);
       }
     },
-    [codexThinkingSupported, isGenerating, isStartingGeneration, model, qc, thinkingSaving],
+    [clearOwnThinkingLevel, codexThinkingSupported, isGenerating, isStartingGeneration, model, qc, thinkingSaving],
   );
 
   const changeAnthropicThinking = React.useCallback(
@@ -3247,6 +3395,7 @@ export function ChatPane({ chatId }: { chatId: string }) {
       try {
         const updated = await settingsApi.setAnthropicThinking(model, level);
         qc.setQueryData(queryKeys.settings, updated);
+        clearOwnThinkingLevel();
       } catch (changeError) {
         toast.error(
           changeError instanceof Error
@@ -3257,7 +3406,7 @@ export function ChatPane({ chatId }: { chatId: string }) {
         setThinkingSaving(false);
       }
     },
-    [anthropicThinkingSupported, isGenerating, isStartingGeneration, model, qc, thinkingSaving],
+    [anthropicThinkingSupported, clearOwnThinkingLevel, isGenerating, isStartingGeneration, model, qc, thinkingSaving],
   );
 
   const changeProviderThinking = React.useCallback(
@@ -3274,6 +3423,7 @@ export function ChatPane({ chatId }: { chatId: string }) {
       try {
         const updated = await settingsApi.setProviderThinking(providerId, model, level);
         qc.setQueryData(queryKeys.settings, updated);
+        clearOwnThinkingLevel();
       } catch (changeError) {
         toast.error(
           changeError instanceof Error
@@ -3285,6 +3435,7 @@ export function ChatPane({ chatId }: { chatId: string }) {
       }
     },
     [
+      clearOwnThinkingLevel,
       isGenerating,
       isStartingGeneration,
       model,
@@ -4691,9 +4842,9 @@ export function ChatPane({ chatId }: { chatId: string }) {
                 onSteer={
                   draft || observedRunVisible
                     ? undefined
-                    : (text, attachments, skillInvocation) => {
+                    : (text, attachments, skillInvocation, options) => {
                         setDeniedApprovalChatId(null);
-                        return steerMessage(text, attachments, skillInvocation);
+                        return steerMessage(text, attachments, skillInvocation, options);
                       }
                 }
                 hasQueuedMessages={queuedState.messages.length > 0}
@@ -4810,9 +4961,15 @@ export function ChatPane({ chatId }: { chatId: string }) {
                 onCancelCompact={draft ? undefined : () => chatsApi.cancelCompact(chatId)}
                 onLogoutProvider={logoutProvider}
                 thinkingControl={
-                  googleThinkingSupported ? (
+                  stopSetsEffort && !localReasoningVisibilitySupported ? undefined : stopSetsEffort ? (
+                    <ReasoningVisibilityControl
+                      visible={showLocalModelReasoning}
+                      disabled={thinkingSaving || isStartingGeneration || isGenerating}
+                      onChange={(visible) => void changeLocalReasoningVisibility(visible)}
+                    />
+                  ) : googleThinkingSupported ? (
                     <ThinkingControl
-                      level={googleThinkingLevel}
+                      level={ownLevelIn(googleThinkingLevels) ?? googleThinkingLevel}
                       levels={googleThinkingLevels}
                       canDisable={thinkingMetadata?.thinkingCanDisable !== false}
                       disabled={thinkingSaving || isStartingGeneration || isGenerating}
@@ -4822,7 +4979,7 @@ export function ChatPane({ chatId }: { chatId: string }) {
                   ) : codexThinkingSupported ? (
                     <ThinkingControl
                       providerLabel="Codex"
-                      level={codexThinkingLevel}
+                      level={ownLevelIn(codexThinkingLevels) ?? codexThinkingLevel}
                       levels={codexThinkingLevels}
                       disabled={thinkingSaving || isStartingGeneration || isGenerating}
                       disabledReason={thinkingDisabledReason}
@@ -4831,7 +4988,7 @@ export function ChatPane({ chatId }: { chatId: string }) {
                   ) : anthropicThinkingSupported ? (
                     <ThinkingControl
                       providerLabel="Claude"
-                      level={anthropicThinkingLevel}
+                      level={ownLevelIn(anthropicThinkingLevels) ?? anthropicThinkingLevel}
                       levels={anthropicThinkingLevels}
                       canDisable={thinkingMetadata?.thinkingCanDisable !== false}
                       disabled={thinkingSaving || isStartingGeneration || isGenerating}
@@ -4841,7 +4998,7 @@ export function ChatPane({ chatId }: { chatId: string }) {
                   ) : providerThinkingSupported ? (
                     <ThinkingControl
                       providerLabel={selectedProvider?.label ?? "Model"}
-                      level={providerThinkingLevel}
+                      level={ownLevelIn(providerThinkingLevels) ?? providerThinkingLevel}
                       levels={providerThinkingLevels}
                       canDisable={selectedProvider?.kind === "openai" && customModelThinkingLevels(thinkingMetadata?.overrides)
                         ? providerThinkingLevels.includes("off") : thinkingMetadata?.thinkingCanDisable !== false}
@@ -4880,17 +5037,43 @@ export function ChatPane({ chatId }: { chatId: string }) {
                   draft ? undefined : contextHistory.chatId === chatId ? contextHistory.pressure : null
                 }
                 modelPicker={
-                  <ModelPicker
-                    providers={pickerProviders}
-                    providerId={providerId}
-                    model={model}
-                    onChange={(nextProviderId, nextModel) => {
-                      if (!getChatDraft(chatId)?.sending) select(nextProviderId, nextModel);
-                    }}
-                    disabled={isGenerating || isStartingGeneration || thinkingSaving}
-                    settingsBlockedReason={settingsBlockedReason}
-                    hiddenModelsByProvider={settings.data?.hiddenModelsByProvider}
-                  />
+                  chat.data?.botId ? (
+                    // A Bot's chat keeps the plain list: its model is the Bot's, not a slider stop.
+                    <ModelPicker
+                      providers={pickerProviders}
+                      providerId={providerId}
+                      model={model}
+                      onChange={(nextProviderId, nextModel) => {
+                        if (!getChatDraft(chatId)?.sending) select(nextProviderId, nextModel);
+                      }}
+                      disabled={modelChangeBlocked}
+                      hiddenModelsByProvider={settings.data?.hiddenModelsByProvider}
+                    />
+                  ) : (
+                    <AgentModelPopover
+                      providers={pickerProviders}
+                      providerId={providerId}
+                      model={model}
+                      thinkingLevel={selectionThinkingLevel}
+                      slider={agentSlider}
+                      settingsLoaded={settings.data !== undefined}
+                      seedThinkingLevel={turnThinkingLevel(selectionThinkingLevel, {
+                        google: { supported: googleThinkingSupported, level: googleThinkingLevel },
+                        codex: { supported: codexThinkingSupported, level: codexThinkingLevel },
+                        anthropic: { supported: anthropicThinkingSupported, level: anthropicThinkingLevel },
+                        provider: { supported: providerThinkingSupported, level: providerThinkingLevel },
+                      })}
+                      onChange={(nextProviderId, nextModel) => {
+                        if (!getChatDraft(chatId)?.sending) select(nextProviderId, nextModel);
+                      }}
+                      onSelectStop={(nextProviderId, nextModel, level) => {
+                        if (!getChatDraft(chatId)?.sending) select(nextProviderId, nextModel, level ?? null);
+                      }}
+                      disabled={modelChangeBlocked}
+                      settingsBlockedReason={settingsBlockedReason}
+                      hiddenModelsByProvider={settings.data?.hiddenModelsByProvider}
+                    />
+                  )
                 }
               />
             )}
@@ -4963,6 +5146,7 @@ export function ChatPane({ chatId }: { chatId: string }) {
                 {...(leadChatMessageLabel ? { leadChatLabel: leadChatMessageLabel } : {})}
                 messages={messages}
                 draftWorktreeSend={worktreeSend}
+                draftWorktreeGrabbedElements={getActiveWorktreeGrabbedElements(chatId)}
                 streamingText={displayedStreamingText}
                 streamingReasoning={displayedStreamingReasoning}
                 streamingArtifacts={displayedStreamingArtifacts}

@@ -1,7 +1,6 @@
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import test from "node:test";
-import { buildOpenRouterBenchmarkCache } from "./openrouter-benchmark-catalog-core.js";
 import {
   CONSERVATIVE_RUNTIME_LIMITS,
   createModelCatalogLoader,
@@ -1152,200 +1151,6 @@ test("catalog non-chat types survive a local provider's generic LLM classificati
   );
 });
 
-test("OpenRouter benchmark evidence attaches independently without changing capability authority", () => {
-  const catalog = parseModelCatalog({
-    openai: { models: { "openai/gpt-example": { name: "GPT Example", reasoning: true } } },
-  });
-  const benchmarks = buildOpenRouterBenchmarkCache({
-    data: [
-      {
-        source: "artificial-analysis",
-        model_permaslug: "openai/gpt-example",
-        display_name: "GPT Example",
-        intelligence_index: 70,
-        coding_index: 80,
-        agentic_index: 60,
-      },
-    ],
-    meta: {
-      as_of: "2026-06-03T12:00:00.000Z",
-      version: "v1",
-      source: "artificial-analysis",
-      source_url: "https://artificialanalysis.ai",
-      citation: "Source: Artificial Analysis via OpenRouter.",
-      model_count: 1,
-    },
-  });
-  const info = resolveModelInfo(
-    catalog,
-    { id: "openai", baseUrl: "https://api.openai.com/v1" },
-    "openai/gpt-example",
-    benchmarks,
-  );
-  assert.equal(info.metadataSource, "models-dev");
-  assert.equal(info.reasoning, true);
-  assert.equal(info.benchmark?.coding, 80);
-  assert.equal(info.benchmark?.license, "CC BY 4.0");
-});
-
-test("models.dev normalizes versioned benchmark IDs for direct and catalog-backed gateway models", () => {
-  const catalog = parseModelCatalog({
-    anthropic: {
-      models: {
-        "claude-opus-4-8": { name: "Claude Opus 4.8", reasoning: true },
-      },
-    },
-    moonshotai: {
-      models: {
-        "kimi-k3": { name: "Kimi K3", reasoning: true },
-      },
-    },
-    "opencode-go": {
-      models: {
-        "kimi-k3": { name: "Kimi K3", reasoning: true },
-      },
-    },
-  });
-  const benchmarks = buildOpenRouterBenchmarkCache({
-    data: [
-      {
-        source: "artificial-analysis",
-        model_permaslug: "anthropic/claude-4.8-opus-20260528",
-        display_name: "Claude Opus 4.8 (Adaptive Reasoning, Max Effort)",
-        coding_index: 74.3,
-      },
-      {
-        source: "artificial-analysis",
-        model_permaslug: "moonshotai/kimi-k3-20260715",
-        display_name: "Kimi K3 (max)",
-        coding_index: 76.2,
-      },
-    ],
-    meta: {
-      as_of: "2026-08-26T12:00:00.000Z",
-      version: "v1",
-      source: "artificial-analysis",
-      source_url: "https://artificialanalysis.ai",
-      citation: "Source: Artificial Analysis via OpenRouter.",
-      model_count: 2,
-    },
-  });
-
-  assert.equal(
-    resolveModelInfo(
-      catalog,
-      { id: "anthropic", baseUrl: "https://api.anthropic.com" },
-      "claude-opus-4-8",
-      benchmarks,
-    ).benchmark?.coding,
-    74.3,
-  );
-  assert.equal(
-    resolveModelInfo(
-      catalog,
-      { id: "opencode-go", baseUrl: "https://opencode.ai" },
-      "kimi-k3",
-      benchmarks,
-    ).benchmark?.coding,
-    76.2,
-  );
-  assert.equal(
-    resolveModelInfo(
-      catalog,
-      { id: "custom:untrusted", baseUrl: "https://example.invalid" },
-      "kimi-k3",
-      benchmarks,
-    ).benchmark,
-    undefined,
-  );
-});
-
-test("a direct provider's benchmark author scopes the models.dev name fallback", () => {
-  const catalog = parseModelCatalog({
-    xiaomi: { models: { "mimo-v2-flash": { name: "MiMo V2 Flash" } } },
-  });
-  const benchmarks = buildOpenRouterBenchmarkCache({
-    data: [
-      ["xiaomi/mimo-v2-flash-20251216", "MiMo V2 Flash", 41.5],
-      ["community/mimo-v2-flash", "MiMo V2 Flash (community)", 12],
-    ].map(([model_permaslug, display_name, coding_index]) => ({
-      source: "artificial-analysis",
-      model_permaslug,
-      display_name,
-      coding_index,
-    })),
-    meta: {
-      as_of: "2026-08-26T12:00:00.000Z",
-      version: "v1",
-      source: "artificial-analysis",
-      source_url: "https://artificialanalysis.ai",
-      citation: "Source: Artificial Analysis via OpenRouter.",
-      model_count: 2,
-    },
-  });
-
-  // Unscoped, the name and the stamp-free ID both name two rows; the Xiaomi author picks one.
-  assert.equal(
-    resolveModelInfo(
-      catalog,
-      { id: "xiaomi", baseUrl: "https://api.xiaomimimo.com/v1" },
-      "mimo-v2-flash",
-      benchmarks,
-    ).benchmark?.coding,
-    41.5,
-  );
-});
-
-test("models.dev reasoning flags and thinking IDs pick the matching benchmark variant", () => {
-  const catalog = parseModelCatalog({
-    anthropic: {
-      models: {
-        "claude-sonnet-4-5": { name: "Claude Sonnet 4.5", reasoning: true },
-        "claude-sonnet-4-5-thinking": { name: "Claude Sonnet 4.5", reasoning: false },
-        "claude-haiku-4-5": { name: "Claude Haiku 4.5", reasoning: false },
-        "claude-opus-4-1": { name: "Claude Opus 4.1" },
-      },
-    },
-  });
-  const benchmarks = buildOpenRouterBenchmarkCache({
-    data: [
-      ["anthropic/claude-4.5-sonnet-20250929", "Claude Sonnet 4.5 (Reasoning)", 61],
-      ["anthropic/claude-4.5-sonnet-nr-20250929", "Claude Sonnet 4.5 (Non-reasoning)", 49],
-      ["anthropic/claude-4.5-haiku-20251001", "Claude Haiku 4.5 (Reasoning)", 45],
-      ["anthropic/claude-4.5-haiku-nr-20251001", "Claude Haiku 4.5 (Non-reasoning)", 38],
-      ["anthropic/claude-4.1-opus-20250805", "Claude Opus 4.1 (Reasoning)", 58],
-      ["anthropic/claude-4.1-opus-nr-20250805", "Claude Opus 4.1 (Non-reasoning)", 52],
-    ].map(([model_permaslug, display_name, coding_index]) => ({
-      source: "artificial-analysis",
-      model_permaslug,
-      display_name,
-      coding_index,
-    })),
-    meta: {
-      as_of: "2026-08-26T12:00:00.000Z",
-      version: "v1",
-      source: "artificial-analysis",
-      source_url: "https://artificialanalysis.ai",
-      citation: "Source: Artificial Analysis via OpenRouter.",
-      model_count: 6,
-    },
-  });
-  const coding = (modelId: string) =>
-    resolveModelInfo(
-      catalog,
-      { id: "anthropic", baseUrl: "https://api.anthropic.com" },
-      modelId,
-      benchmarks,
-    ).benchmark?.coding;
-
-  assert.equal(coding("claude-sonnet-4-5"), 61);
-  assert.equal(coding("claude-haiku-4-5"), 38);
-  // The "-thinking" ID marker outranks the row's reasoning flag.
-  assert.equal(coding("claude-sonnet-4-5-thinking"), 61);
-  // Without a reasoning flag there is no way to choose between the variants.
-  assert.equal(coding("claude-opus-4-1"), undefined);
-});
-
 test("runtime metadata stays offline and only models.dev data is packaged", async () => {
   const runtimeSource = await readFile(new URL("./models-catalog.ts", import.meta.url), "utf8");
   assert.doesNotMatch(runtimeSource, /\bfetch\s*\(/u);
@@ -1365,14 +1170,6 @@ test("runtime metadata stays offline and only models.dev data is packaged", asyn
     input: ["text", "image"],
   });
 
-  await assert.rejects(
-    readFile(new URL("../../resources/artificial-analysis-models.json", import.meta.url), "utf8"),
-    (error: unknown) => {
-      assert.equal((error as NodeJS.ErrnoException).code, "ENOENT");
-      return true;
-    },
-  );
-
   const packageJson = JSON.parse(
     await readFile(new URL("../../package.json", import.meta.url), "utf8"),
   ) as {
@@ -1389,10 +1186,6 @@ test("runtime metadata stays offline and only models.dev data is packaged", asyn
     ),
     "the packaged app should include the offline compact model snapshot",
   );
-  assert.equal(
-    packageJson.build?.files?.includes("resources/artificial-analysis-models.json"),
-    false,
-  );
   assert.equal(packageJson.scripts?.["release:update-model-snapshots"], undefined);
   assert.equal(
     packageJson.scripts?.["release:update-model-capabilities"],
@@ -1407,8 +1200,4 @@ test("runtime metadata stays offline and only models.dev data is packaged", asyn
     "utf8",
   );
   assert.match(capabilityUpdater, /https:\/\/models\.dev\/api\.json/u);
-  assert.doesNotMatch(
-    capabilityUpdater,
-    /ARTIFICIAL_ANALYSIS_API_KEY|AA_API_KEY|AA_REDISTRIBUTION_CONFIRMED|x-api-key/u,
-  );
 });

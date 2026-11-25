@@ -16,6 +16,10 @@ import {
 } from "../../renderer/shared/chat-message-contract.js";
 import { persistedChatWorkspaceId } from "../../renderer/shared/chat-workspace.js";
 import {
+  isGenerationThinkingLevel,
+  type GenerationThinkingLevel,
+} from "../../renderer/shared/generation-thinking.js";
+import {
   appendChatMessageWithReconciliation,
   isAppendReconciliationRequiredError,
 } from "../services/chat-append-commit.js";
@@ -28,6 +32,7 @@ import {
   requireSkillInvocationWorkspace,
 } from "../services/skill-invocation-turn.js";
 import { reportAnalyticsEvent } from "../services/analytics/analytics-report.js";
+import { countBucket } from "../services/analytics/analytics-sanitize.js";
 import { chatForRenderer } from "../services/visible-chat-projection.js";
 import type { WorkspaceMutationGate } from "../services/workspace-mutation-gate.js";
 import { parseChatAppend } from "./chat-append-params.js";
@@ -45,6 +50,12 @@ function boundedId(value: unknown, name: string, maxChars: number, maxBytes: num
     throw new Error(`Invalid ${name}.`);
   }
   return text;
+}
+
+/** A level, `null` (clear) or absent (keep while the model stays); anything else is refused. */
+function optionalThinkingLevel(value: unknown): GenerationThinkingLevel | null | undefined {
+  if (value === undefined || value === null || isGenerationThinkingLevel(value)) return value;
+  throw new Error("Invalid thinking level.");
 }
 
 /**
@@ -127,13 +138,24 @@ export function createRendererChatMutationHandlers(deps: RendererChatMutationDep
     renameWithFoundationModels: async (_event: IpcMainInvokeEvent, id: unknown) =>
       chatTitleService.renameWithFoundationModels(asString(id, "id"), { rejectFeatureOwned: true }),
 
-    /** Pick the model this chat answers with; other chats keep theirs. */
-    setModel: async (_event: IpcMainInvokeEvent, id: unknown, providerId: unknown, model: unknown) =>
+    /**
+     * Pick the model this chat answers with; other chats keep theirs. A level
+     * sets the chat's own effort, `null` clears it, and leaving it out keeps
+     * it only while the model stays the same.
+     */
+    setModel: async (
+      _event: IpcMainInvokeEvent,
+      id: unknown,
+      providerId: unknown,
+      model: unknown,
+      thinkingLevel?: unknown,
+    ) =>
       chatApplicationService.setModelSelection(
         asString(id, "id"),
         boundedId(providerId, "providerId", MAX_PROVIDER_ID_CHARS, MAX_PROVIDER_ID_BYTES),
         boundedId(model, "model", MAX_MODEL_ID_CHARS, MAX_MODEL_ID_BYTES),
         { rejectFeatureOwned: true },
+        optionalThinkingLevel(thinkingLevel),
       ),
 
     /** Turn design mode on or off for one chat, then tell every window. */
@@ -183,6 +205,7 @@ export function createRendererChatMutationHandlers(deps: RendererChatMutationDep
         content,
         messageModel,
         attachments,
+        grabbedElements,
         providerId,
         metaModel,
         autoTitle,
@@ -279,6 +302,7 @@ export function createRendererChatMutationHandlers(deps: RendererChatMutationDep
                     content,
                     model: messageModel,
                     attachments,
+                    ...(grabbedElements ? { grabbedElements } : {}),
                     skill: skill?.provenance,
                     ...(inputSource ? { inputSource } : {}),
                     // Reasoning and generation timelines are persisted by the trusted
@@ -305,6 +329,7 @@ export function createRendererChatMutationHandlers(deps: RendererChatMutationDep
                   role,
                   content,
                   attachments,
+                  grabbedElements,
                   workspaceId: skillWorkspaceId!,
                   userMessageId,
                 },
@@ -322,6 +347,12 @@ export function createRendererChatMutationHandlers(deps: RendererChatMutationDep
               )
             : await append();
           appended = true;
+          if (grabbedElements?.length) {
+            reportAnalyticsEvent("browser_grab_sent", {
+              count_bucket: countBucket(grabbedElements.length),
+              with_screenshot: grabbedElements.some((element) => Boolean(element.thumbnailAttachmentId)),
+            });
+          }
           // The person wrote in it, so a snoozed chat is back. Never blocks
           // or fails the send; Pin and Done are left alone.
           if (role === "user") void chatTriage?.wake(chatId).catch(() => undefined);

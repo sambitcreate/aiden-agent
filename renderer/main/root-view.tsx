@@ -675,11 +675,13 @@ function RootContent() {
   }), [queryClient]);
 
   React.useEffect(() => {
-    // ~/.aiden/config.json was edited outside the app. Only the lists sourced
-    // from the portable file are stale; workspaces and UI settings are stored
-    // machine-locally and cannot change behind our back.
+    // ~/.aiden/config.json was edited outside the app. Only what is sourced
+    // from the portable file is stale: its lists, and the Agent Slider that
+    // settings reads project from it. Workspaces and the rest of the UI
+    // settings are stored machine-locally and cannot change behind our back.
     return onNotification("app:config-externally-changed", () => {
       void Promise.all([
+        queryClient.invalidateQueries({ queryKey: queryKeys.settings }),
         queryClient.invalidateQueries({ queryKey: queryKeys.providers }),
         queryClient.invalidateQueries({ queryKey: queryKeys.mcpServers }),
         queryClient.invalidateQueries({ queryKey: queryKeys.mcpPresets }),

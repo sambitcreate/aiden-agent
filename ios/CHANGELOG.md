@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+- **2026-11-24 — A chat's top bar after Telegram's.** No Remote wire or revision change.
+  - Workspace and Bot chats show the chat's name over one status line on a glass capsule in the middle of the bar.
+  - The status line says where the chat lives at rest (the workspace, then the computer when several are paired, otherwise the branch). For a Bot, it says what the Bot is for.
+  - While the agent or Bot works, the status line shows typing dots and what it is doing. When it needs you ("Waiting for approval", "Waiting for you") or can't answer (Paused, Unavailable, Needs a model, Interrupted), it turns amber.
+  - The computer's name moves from under the bar into the status line.
+  - A Workspace chat shows the workspace's initials on the right. Its name and its initials both open the chat's actions (Rename, Fork, Read response aloud, Files). The separate More button is gone, including in a chat with no workspace.
+  - A Bot chat puts the Bot's face in the middle of the bar with its name tucked under it. Both open the Bot's profile, and More on the right keeps the Bot's actions.
+  - Under Reduce Motion the typing dots hold still. Under Reduce Transparency the capsule is solid.
+
 - **2026-11-22 — Pairing feedback and QR framing.** Add Computer scans for QR codes inside the visible viewfinder. Manual pairing shows what to correct below the address or setup code field. Search keeps Add Computer available until a computer is paired.
 
 - **2026-11-22 — No "Sending…" in Bot chats.** A message you send to a Bot looks sent from the moment you press Send and never gains a "Sending…" caption, however long the Mac takes to take it. The status line ("Getting ready", then "Thinking" once the model starts) shows the wait; Queued and "Couldn’t send · Try again" are unchanged. Paired Macs on the next Aiden release also start a Bot's reply much sooner, because a turn no longer re-reads every provider, connector and skill a dozen times before asking the model. No Remote wire or revision change.

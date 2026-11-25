@@ -1,4 +1,5 @@
 import type { Attachment } from "./types";
+import type { GrabbedElementContextV1 } from "../shared/browser-element-grab";
 
 /** Device-local text drafts. Attachment bytes stay in the attachment picker. */
 interface StoredComposerDraft {
@@ -58,12 +59,83 @@ export function settleComposerSubmission(chatId: string, accepted: boolean, curr
 
 export function discardComposerDraft(chatId: string): void {
   attachmentSeeds.delete(chatId);
+  grabbedElementDrafts.delete(chatId);
   try { localStorage.removeItem(key(chatId)); } catch { /* Deletion still proceeds. */ }
 }
 
 // One-shot, in-memory attachment seeds for a composer that is about to open
 // (Edit in fork). Never persisted: attachment bytes stay out of storage.
 const attachmentSeeds = new Map<string, Attachment[]>();
+
+// Per-chat in-memory grabbed browser element drafts (and their linked cropped
+// thumbnails). Never persisted to localStorage.
+const grabbedElementDrafts = new Map<
+  string,
+  { elements: GrabbedElementContextV1[]; thumbnails: Attachment[] }
+>();
+
+// In-memory grabbed elements attached to an in-flight worktree first-send so
+// DraftWorktreeSendView keeps showing them if the user leaves and returns.
+const activeWorktreeGrabbedElements = new Map<string, GrabbedElementContextV1[]>();
+
+export function saveComposerDraftGrabbedElements(
+  chatId: string,
+  elements: readonly GrabbedElementContextV1[],
+  thumbnails: readonly Attachment[] = [],
+): void {
+  if (elements.length === 0) {
+    grabbedElementDrafts.delete(chatId);
+    return;
+  }
+  const thumbnailIds = new Set(
+    elements.map((element) => element.thumbnailAttachmentId).filter((id): id is string => Boolean(id)),
+  );
+  const matchingThumbnails = thumbnails
+    .filter((attachment) => thumbnailIds.has(attachment.id) && Boolean(attachment.data))
+    .map((attachment) => ({ ...attachment }));
+  grabbedElementDrafts.set(chatId, {
+    elements: elements.map((element) => structuredClone(element)),
+    thumbnails: matchingThumbnails,
+  });
+}
+
+export function loadComposerDraftGrabbedElements(chatId: string): GrabbedElementContextV1[] {
+  const entry = grabbedElementDrafts.get(chatId);
+  return entry ? entry.elements.map((element) => structuredClone(element)) : [];
+}
+
+export function loadComposerDraftGrabbedThumbnails(chatId: string): Attachment[] {
+  const entry = grabbedElementDrafts.get(chatId);
+  return entry ? entry.thumbnails.map((attachment) => ({ ...attachment })) : [];
+}
+
+export function seedComposerGrabbedElements(
+  chatId: string,
+  elements: readonly GrabbedElementContextV1[] | undefined,
+  thumbnails?: readonly Attachment[],
+): void {
+  if (!elements || elements.length === 0) {
+    grabbedElementDrafts.delete(chatId);
+    return;
+  }
+  const existingThumbnails = grabbedElementDrafts.get(chatId)?.thumbnails ?? [];
+  saveComposerDraftGrabbedElements(chatId, elements, thumbnails ?? existingThumbnails);
+}
+
+export function setActiveWorktreeGrabbedElements(
+  draftId: string,
+  elements: readonly GrabbedElementContextV1[] | undefined,
+): void {
+  if (!elements || elements.length === 0) activeWorktreeGrabbedElements.delete(draftId);
+  else activeWorktreeGrabbedElements.set(draftId, elements.map((element) => structuredClone(element)));
+}
+
+export function getActiveWorktreeGrabbedElements(
+  draftId: string,
+): GrabbedElementContextV1[] | undefined {
+  const saved = activeWorktreeGrabbedElements.get(draftId);
+  return saved ? saved.map((element) => structuredClone(element)) : undefined;
+}
 
 export function seedComposerAttachments(chatId: string, attachments: readonly Attachment[]): void {
   const usable = attachments.filter((attachment) =>
@@ -204,23 +276,36 @@ export function subscribeGuidanceRestore(
   };
 }
 
-type RestoredMessageListener = (restored: { text: string; attachments: Attachment[] }) => void;
+type RestoredMessageListener = (restored: {
+  text: string;
+  attachments: Attachment[];
+  grabbedElements?: GrabbedElementContextV1[];
+}) => void;
 const restoredMessageListeners = new Map<string, Set<RestoredMessageListener>>();
 
 /**
- * Give an unsent message back to its draft: text and attachments. A mounted
- * composer takes both now; otherwise the text is saved and the attachments
- * are seeded for the composer that opens next.
+ * Give an unsent message back to its draft: text, attachments, and grabbed
+ * browser elements. A mounted composer takes all now; otherwise the text is
+ * saved and attachments / grabbed elements are seeded in memory for the
+ * composer that opens next.
  */
 export function restoreUnsentMessage(
   chatId: string,
   text: string,
   attachments: readonly Attachment[],
+  grabbedElements: readonly GrabbedElementContextV1[] = [],
 ): void {
   const copy = attachments.map((attachment) => ({ ...attachment }));
+  const elementsCopy = grabbedElements.map((element) => structuredClone(element));
   const listeners = restoredMessageListeners.get(chatId);
   if (listeners?.size) {
-    for (const listener of [...listeners]) listener({ text, attachments: copy });
+    for (const listener of [...listeners]) {
+      listener({
+        text,
+        attachments: copy,
+        ...(elementsCopy.length > 0 ? { grabbedElements: elementsCopy } : {}),
+      });
+    }
     return;
   }
   if (text.trim()) {
@@ -229,6 +314,7 @@ export function restoreUnsentMessage(
     write(chatId, { ...record, text: mergeRestoredGuidance(current, [text]) });
   }
   if (copy.length > 0) seedComposerAttachments(chatId, copy);
+  if (elementsCopy.length > 0) saveComposerDraftGrabbedElements(chatId, elementsCopy, copy);
 }
 
 export function subscribeRestoredUnsentMessage(

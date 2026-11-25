@@ -78,7 +78,6 @@ import {
 } from "../renderer/shared/appearance.js";
 import { shutdownProviderAuthFlow } from "./services/provider-auth-flow.js";
 import { llmClient } from "./services/llm-client.js";
-import { modelPaceRecorder } from "./services/model-pace-runtime.js";
 import { spending } from "./services/spending-main.js";
 import { usageLimits } from "./services/usage-limit-main.js";
 import { usageStore } from "./services/usage-store.js";
@@ -181,6 +180,7 @@ import {
   reconcilePendingMcpCredentialCleanup,
   cleanupRetiredMcpServerCredentials,
 } from "./services/mcp-credential-cleanup.js";
+import { cleanUpRetiredModelScoring } from "./services/retired-model-scoring-cleanup.js";
 import { resetOnboardingData } from "./services/onboarding-reset.js";
 import {
   geminiLiveService,
@@ -450,7 +450,6 @@ const SHUTDOWN_BUDGET_MS = {
   // grace; the extra second covers aborting and settling around them.
   parentGenerations: 7_000,
   backgroundJobs: 6_000,
-  modelPace: 1_000,
   subagentRuntime: 7_000,
   // Each helper conversation's last save; slow saves are left to finish or not.
   subagentConversations: 1_000,
@@ -507,7 +506,7 @@ const PRE_SHUTDOWN_BUDGET_MS = {
 const SHUTDOWN_HARD_CEILING_MS = (() => {
   const b = SHUTDOWN_BUDGET_MS;
   const serial =
-    b.storageCleanup + b.geminiLive + b.parentGenerations + b.backgroundJobs + b.modelPace +
+    b.storageCleanup + b.geminiLive + b.parentGenerations + b.backgroundJobs +
     b.subagentRuntime + b.subagentConversations + b.spending + b.analytics + b.soakReceipt + b.remoteAccess;
   const parallel = Math.max(
     b.providerSignIn,
@@ -616,9 +615,6 @@ async function runShutdownAndQuit(settingsPrepared: boolean): Promise<void> {
   // Background jobs and goal checks stop with the app; follows and
   // goals are saved for the next launch. Bounded so a stuck job never holds quit.
   await settleShutdownStep("follow-through", "Background jobs", SHUTDOWN_BUDGET_MS.backgroundJobs, () => shutdownFollowThrough());
-  // Settled generations have recorded their last pace samples; persist the
-  // debounced remainder. Never fatal: it is a regenerable measurement cache.
-  await settleShutdownStep("main", "Model pace samples", SHUTDOWN_BUDGET_MS.modelPace, () => modelPaceRecorder.flush());
   const subagentShutdown = await settleShutdownStep("main", "Subagent runtime", SHUTDOWN_BUDGET_MS.subagentRuntime, () =>
     subagentRuntimeRegistry.shutdown(),
   );
@@ -2446,6 +2442,9 @@ if (!ownsSingleInstanceLock) {
       void prepareLocalSpeechStorage().catch((error: unknown) => {
         logger.warn("local-speech", `Speech storage cleanup failed: ${String(error)}`);
       });
+      // Delete-only: the retired benchmark, Artificial Analysis and pace
+      // leftovers. Local, never awaited, never rejects; retried next launch.
+      void cleanUpRetiredModelScoring();
       const packagedSubagentSoak = await loadSubagentPackagedSoakSession({
         isPackaged: isPackagedRuntime(),
       });
@@ -2488,6 +2487,9 @@ if (!ownsSingleInstanceLock) {
       // registered before the window loads: a page only reaches the schemes handled when it
       // loaded, so the canvas's own <img> frames would otherwise fail with an unknown scheme.
       if (designModeEnabled()) startDesignProtocol();
+      // Stored chat images load via aiden-attachment:// <img> tags in the main window, so the
+      // handler must exist before the document commits (same Electron URLLoaderFactory rule).
+      registerChatAttachmentProtocol();
       initialMainWindow = createMainWindow({ startupAdmissionHeld: true });
       // Observed below after reconciliation; never an unhandled rejection.
       initialMainWindow.catch(() => undefined);
@@ -2526,7 +2528,6 @@ if (!ownsSingleInstanceLock) {
       await displayImageArtifactStore.initialize();
       await generativeUiArtifactStore.initialize();
       registerGenerativeUiProtocol();
-      registerChatAttachmentProtocol();
       // Remove picture files left behind by chats deleted while Aiden was closed.
       chatStore.scheduleImageSweep();
       // Phones and other clients that cannot draw a visual get its snapshot.

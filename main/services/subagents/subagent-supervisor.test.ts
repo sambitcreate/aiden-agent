@@ -3986,3 +3986,149 @@ test("a helper's refused tool shows as blocked and a tool ending during its stop
     await fs.rm(root, { recursive: true, force: true });
   }
 });
+
+
+test("parent cancellation during prepareRun aborts all fulfilled preparations without projecting or charging budget", async () => {
+  const controller = new AbortController();
+  const secondEntered = deferred();
+  const releaseSecond = deferred();
+  const aborted: string[] = [];
+  const stopHooksFired: string[] = [];
+  const projector = new SubagentEventProjector({
+    generationId: "generation-prep-cancel",
+    chatId: TEST_SUPERVISOR_SCOPE.chatId,
+    workspaceId: TEST_SUPERVISOR_SCOPE.workspaceId,
+    modelId: runtime().model.id,
+  });
+  let prepareCalls = 0;
+  const supervisor = new SubagentSupervisor({
+    generationId: "generation-prep-cancel",
+    ...TEST_SUPERVISOR_SCOPE,
+    runtime: runtime(),
+    thinkingLevel: "high",
+    workspaceRoot: "/workspace",
+    permission: "full",
+    inheritedCeiling: SUBAGENT_READ_TOOL_NAMES,
+    projector,
+    stopHooks: {
+      observe: (_event: unknown, payload: unknown) => {
+        stopHooksFired.push(String((payload as { agent_id?: unknown }).agent_id ?? ""));
+      },
+    } as never,
+    prepareRun: async ({ identity, contextRevision }) => {
+      prepareCalls += 1;
+      if (prepareCalls === 2) {
+        secondEntered.resolve();
+        await releaseSecond.promise;
+      }
+      return phase6Prepared(
+        phase6Authority({
+          runId: identity.runId,
+          contextRevision,
+          delegate: false,
+        }),
+        () => {
+          aborted.push(identity.runId);
+        },
+      );
+    },
+    runChild: async () => assert.fail("child must never run after cancellation during preparation"),
+  });
+
+  const pending = supervisor.execute(request(["First", "Second"]), controller.signal);
+  await secondEntered.promise;
+  controller.abort(new Error("parent stopped during prepare"));
+  releaseSecond.resolve();
+
+  await assert.rejects(pending, /parent stopped during prepare/u);
+  assert.equal(aborted.length, 2);
+  assert.deepEqual(projector.snapshot(), []);
+  assert.deepEqual(stopHooksFired, []);
+  assert.equal(supervisor.launchesUsed, 0);
+});
+
+test("nested projector flush failure aborts the tree and completes projected nested runs without duplicate SubagentStop", async () => {
+  const completedNested: string[] = [];
+  const stopHooksFired: string[] = [];
+  const nestedRunIds: string[] = [];
+  let failedNestedFlush = false;
+  const projector = new SubagentEventProjector({
+    generationId: "generation-nested-flush-fail",
+    chatId: TEST_SUPERVISOR_SCOPE.chatId,
+    workspaceId: TEST_SUPERVISOR_SCOPE.workspaceId,
+    modelId: runtime().model.id,
+    onSnapshot: async (snapshot) => {
+      // Fail the nested batch's initial durability flush after depth-1 projected.
+      if (!failedNestedFlush && snapshot.label === "Nested child") {
+        failedNestedFlush = true;
+        throw new Error("nested projection disk full");
+      }
+    },
+  });
+  const supervisor = new SubagentSupervisor({
+    generationId: "generation-nested-flush-fail",
+    ...TEST_SUPERVISOR_SCOPE,
+    runtime: runtime(),
+    thinkingLevel: "high",
+    workspaceRoot: "/workspace",
+    permission: "full",
+    inheritedCeiling: SUBAGENT_READ_TOOL_NAMES,
+    projector,
+    stopHooks: {
+      observe: (_event: unknown, payload: unknown) => {
+        stopHooksFired.push(String((payload as { agent_id?: unknown }).agent_id ?? ""));
+      },
+    } as never,
+    prepareRun: async ({ identity, requestedCapabilities, contextRevision, parentAuthority }) => {
+      const prepared = phase6Prepared(
+        phase6Authority({
+          runId: identity.runId,
+          contextRevision,
+          delegate: requestedCapabilities.delegate === true,
+          parent: parentAuthority,
+        }),
+      );
+      if (!parentAuthority) return prepared;
+      nestedRunIds.push(identity.runId);
+      return {
+        ...prepared,
+        complete: async (result) => {
+          completedNested.push(`${identity.runId}:${result.status}`);
+          return prepared.complete(result);
+        },
+      };
+    },
+    runChild: async (child) => {
+      if (child.v2Authority?.depth === 1) {
+        await assert.rejects(
+          child.executeNested!(
+            { tasks: [{ role: "scout", label: "Nested child", task: "Should not run." }] },
+            child.signal,
+          ),
+          /nested projection disk full/u,
+        );
+        return completed(child.request.label);
+      }
+      return assert.fail("nested child must not execute past a failed flush barrier");
+    },
+  });
+
+  await assert.rejects(
+    supervisor.execute({
+      capabilities: { workspaceRead: true, delegate: true, web: false, mcp: [] },
+      tasks: [{ role: "planner", label: "Depth 1", task: "Spawn nested child." }],
+    }),
+    /nested projection disk full/u,
+  );
+  assert.equal(nestedRunIds.length, 1);
+  const [nestedRunId] = nestedRunIds;
+  assert.equal(completedNested.length, 1);
+  assert.ok(completedNested[0]?.startsWith(`${nestedRunId}:`));
+  assert.deepEqual(
+    stopHooksFired.filter((id) => id === nestedRunId),
+    [nestedRunId],
+  );
+  assert.equal(new Set(stopHooksFired).size, stopHooksFired.length);
+  const nestedSnapshot = projector.snapshot().find((entry) => entry.label === "Nested child");
+  assert.ok(nestedSnapshot && ["failed", "interrupted"].includes(nestedSnapshot.state));
+});

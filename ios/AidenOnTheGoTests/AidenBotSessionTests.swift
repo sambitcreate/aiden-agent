@@ -1775,6 +1775,38 @@ final class AidenBotSessionQuestionTests: XCTestCase {
         XCTAssertNil(model.question)
     }
 
+    func testReplayed409InternalErrorAfterLostQuestionAnswerReleasesSettledKeyForFreshAttempt() async throws {
+        func serverError(_ status: Int, _ code: String) throws -> AidenRemoteClientError {
+            let body = try AidenRemoteJSONDecoder.decode(
+                AidenRemoteErrorEnvelope.Body.self,
+                from: Data(#"{"code":"\#(code)","message":"This Bot request cannot be safely repeated.","requestId":"req_question_replay","retryable":false}"#.utf8)
+            )
+            return .server(statusCode: status, body: body)
+        }
+
+        let transport = QuestionTransport(snapshot: try session(question: questionJSON))
+        let model = AidenBotSessionModel(botID: botID, transport: transport, owner: .noMachine)
+        await model.load()
+        let blue = AidenQuestionRespondRequest(cancelled: false, answers: [.option(questionIndex: 0, answer: "Blue")])
+
+        transport.nextAnswerError = URLError(.networkConnectionLost)
+        await model.answerQuestion(blue)
+        transport.nextAnswerError = try serverError(409, "idempotency_in_flight")
+        await model.answerQuestion(blue)
+        transport.nextAnswerError = AidenRemoteClientError.unexpectedStatus(409)
+        await model.answerQuestion(blue)
+        transport.nextAnswerError = try serverError(409, "internal_error")
+        await model.answerQuestion(blue)
+        await model.answerQuestion(blue)
+
+        XCTAssertEqual(transport.answers.count, 5)
+        XCTAssertEqual(transport.answers[0].key, transport.answers[1].key, "Lost response retains key")
+        XCTAssertEqual(transport.answers[1].key, transport.answers[2].key, "409 idempotency_in_flight retains key")
+        XCTAssertEqual(transport.answers[2].key, transport.answers[3].key, "Undecodable 409 retains key")
+        XCTAssertNotEqual(transport.answers[3].key, transport.answers[4].key, "Decoded replayed 409 internal_error releases settled key so fresh attempt mints a new key")
+        XCTAssertNil(model.question)
+    }
+
     func testQuestionEventsShowAndSettleTheWaitingQuestion() async throws {
         let transport = QuestionTransport(snapshot: try session(question: "null"))
         let model = AidenBotSessionModel(botID: botID, transport: transport, owner: .noMachine)
@@ -2376,6 +2408,23 @@ final class AidenBotSessionActivityTests: XCTestCase {
             guard Date() < deadline else { return XCTFail("Timed out waiting for \(what)") }
             try await Task.sleep(for: .milliseconds(20))
         }
+    }
+
+    /// A step that waits on the person before its card loads still reads as
+    /// waiting in the chat title: amber, with no typing dots.
+    func testAWaitingStepWithNoCardWarnsInTheChatTitle() async throws {
+        let model = await loaded(FakeBotSessionTransport(), try running(AidenBotSessionActivity(phase: "reading", startedAt: started)))
+        XCTAssertEqual(
+            model.titleStatus(nowMs: started + 1_000, purpose: "Finds the signal", machine: nil),
+            AidenChatTitleStatus("Reading", tone: .accent, isActive: true)
+        )
+        _ = await model.apply(event(seq: 5, .activity(AidenBotSessionActivity(phase: "waiting", startedAt: started))))
+        XCTAssertNil(model.question)
+        XCTAssertNil(model.approval)
+        XCTAssertEqual(
+            model.titleStatus(nowMs: started + 1_000, purpose: "Finds the signal", machine: nil),
+            AidenChatTitleStatus("Waiting for you", tone: .warning)
+        )
     }
 
     // Test 1
@@ -5895,7 +5944,7 @@ final class AidenBotAccessRequestsTests: XCTestCase {
     private func section() throws -> [String: Any] {
         let url = try XCTUnwrap(Bundle(for: Self.self).url(forResource: "contract", withExtension: "json"))
         let root = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(contentsOf: url)) as? [String: Any])
-        XCTAssertEqual(root["contractRevision"] as? Int, 65)
+        XCTAssertEqual(root["contractRevision"] as? Int, 67)
         return try XCTUnwrap(root["botAccessRequests"] as? [String: Any])
     }
     private func decode<T: Decodable>(_ type: T.Type, _ object: Any) throws -> T {

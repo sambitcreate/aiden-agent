@@ -336,3 +336,35 @@ test("same browser page compares normalized URLs", () => {
   assert.equal(sameBrowserPage("https://example.com/#x", "https://example.com/#y"), false);
   assert.equal(sameBrowserPage("about:blank", "nope"), false);
 });
+test("human input while a user action runs keeps epoch stable and cancels only queued agent work", async () => {
+  const queue = new BrowserActionQueue();
+  const initialEpoch = queue.epoch;
+  let userStarted!: () => void;
+  let releaseUser!: () => void;
+  const started = new Promise<void>((resolve) => { userStarted = resolve; });
+  const userRun = queue.run(async (check) => {
+    userStarted();
+    await new Promise<void>((resolve) => { releaseUser = resolve; });
+    check();
+    return "user-ok";
+  }, undefined, "user");
+  let queuedAgentRan = false;
+  const queuedAgent = queue.run(async () => {
+    queuedAgentRan = true;
+    return "agent-ran";
+  }, undefined, "agent");
+  await started;
+
+  queue.interruptForHumanInput();
+  assert.equal(queue.epoch, initialEpoch);
+  assert.equal(queue.signal?.aborted, false);
+  releaseUser();
+
+  assert.equal(await userRun, "user-ok");
+  await assert.rejects(queuedAgent, /interrupted/);
+  assert.equal(queuedAgentRan, false);
+
+  queue.interrupt();
+  assert.equal(queue.epoch, initialEpoch + 1);
+  assert.equal(await queue.run(async () => "post-interrupt"), "post-interrupt");
+});

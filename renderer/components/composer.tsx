@@ -69,8 +69,21 @@ import { attachmentsApi, browserApi, chatsApi } from "../lib/ipc";
 import { browserAnnotationAttachments, browserAnnotationContext } from "../lib/browser-annotation-context";
 import { terminalContextAttachment, terminalContextDelivery, type TerminalContextSelection } from "../lib/terminal-context";
 import { browserAnnotationDelivery } from "../lib/browser-annotation-delivery";
+import {
+  browserElementGrabDelivery,
+  materializeGrabbedElementDraft,
+} from "../lib/browser-element-grab-delivery";
 import { composerImageAttach } from "../lib/composer-attach";
 import type { BrowserAnnotation } from "../shared/browser";
+import {
+  grabbedElementDedupKey,
+  grabbedElementThumbnailId,
+  MAX_GRABBED_ELEMENTS_PER_MESSAGE,
+  withoutGrabbedElementThumbnails,
+  type GrabbedElementCapture,
+  type GrabbedElementContextV1,
+} from "../shared/browser-element-grab";
+import { GrabbedElementChips } from "./grabbed-element-chip";
 import { applyDictationDictionary, parseDictationDictionary } from "../shared/dictation-dictionary";
 import { useDiscoveredSkills, useProviders, useSettings, useWorkspaceFileIndex } from "../lib/queries";
 import {
@@ -144,8 +157,11 @@ import { useDesignModeControls } from "../lib/design-mode";
 import { useExpiredCacheReturn } from "../lib/use-expired-cache-return";
 import {
   loadComposerDraft,
+  loadComposerDraftGrabbedElements,
+  loadComposerDraftGrabbedThumbnails,
   markComposerSubmission,
   mergeRestoredGuidance,
+  saveComposerDraftGrabbedElements,
   saveComposerDraftText,
   settleComposerSubmission,
   subscribeGuidanceRestore,
@@ -236,7 +252,12 @@ interface ComposerProps {
     attachments: Attachment[],
     skillInvocation?: SkillInvocationV1,
     /** `goal`: set this chat's keep-going goal once the message is saved, before its answer starts. */
-    options?: { visualize?: boolean; btw?: boolean; goal?: string },
+    options?: {
+      visualize?: boolean;
+      btw?: boolean;
+      goal?: string;
+      grabbedElements?: GrabbedElementContextV1[];
+    },
   ) => Promise<void>;
   onQueue?: ComposerProps["onSend"];
   onSteer?: ComposerProps["onSend"];
@@ -309,7 +330,11 @@ interface ComposerProps {
    */
   contextHistoryPressure?: ChatContextPressureV1 | null;
   /** Draft text/attachment changes so ambient projections (context pressure) can refresh. */
-  onDraftChange?: (text: string, attachments: Attachment[]) => void;
+  onDraftChange?: (
+    text: string,
+    attachments: Attachment[],
+    grabbedElements?: GrabbedElementContextV1[],
+  ) => void;
   currentChatTitle?: string;
   latestAssistantResponse?: string;
   slashNavigationBlockedReason?: string;
@@ -406,6 +431,24 @@ function approvalChoicePatch(choice: ApprovalChoice, chatOnly: boolean): Compose
 function skillSourceLabel(source: SkillSource): string {
   if (source === "builtin") return "Built-in";
   return source === "configured" ? "Configured" : source === "workspace" ? "Workspace" : "Global";
+}
+
+function mergeFailedSendGrabbedElements(
+  submitted: readonly GrabbedElementContextV1[],
+  current: readonly GrabbedElementContextV1[],
+): GrabbedElementContextV1[] {
+  if (submitted.length === 0) return [...current];
+  if (current.length === 0) return [...submitted];
+  const merged: GrabbedElementContextV1[] = [];
+  const seen = new Set<string>();
+  for (const element of [...submitted, ...current]) {
+    const key = grabbedElementDedupKey(element);
+    if (seen.has(key)) continue;
+    seen.add(key);
+    merged.push(element);
+    if (merged.length >= MAX_GRABBED_ELEMENTS_PER_MESSAGE) break;
+  }
+  return merged;
 }
 
 interface ComposerDraftState {
@@ -577,30 +620,71 @@ export function Composer({
     dispatchDraft({ type: "dismiss-slash" });
   }, []);
   const [attachments, setAttachments] = React.useState<Attachment[]>([]);
+  const [grabbedElements, setGrabbedElements] = React.useState<GrabbedElementContextV1[]>(() =>
+    loadComposerDraftGrabbedElements(chatId),
+  );
   // `@` mentions picked into chips above the text; send writes them first, as `@path`.
   const [mentions, setMentions] = React.useState<ComposerMention[]>([]);
   const attachmentsRef = React.useRef<Attachment[]>([]);
+  const grabbedElementsRef = React.useRef<GrabbedElementContextV1[]>(grabbedElements);
+  const grabbedElementsRevisionRef = React.useRef(0);
   const updateAttachments = React.useCallback((value: React.SetStateAction<Attachment[]>) => {
     const next = typeof value === "function" ? value(attachmentsRef.current) : value;
     attachmentsRef.current = next;
     setAttachments(next);
   }, []);
+  const updateGrabbedElements = React.useCallback(
+    (
+      value: React.SetStateAction<GrabbedElementContextV1[]>,
+      thumbnails?: readonly Attachment[],
+    ) => {
+      const next = typeof value === "function" ? value(grabbedElementsRef.current) : value;
+      grabbedElementsRef.current = next;
+      setGrabbedElements(next);
+      saveComposerDraftGrabbedElements(chatId, next, thumbnails ?? attachmentsRef.current);
+    },
+    [chatId],
+  );
+  const visibleAttachments = React.useMemo(
+    () => withoutGrabbedElementThumbnails(attachments),
+    [attachments],
+  );
   React.useEffect(() => {
-    const seed = takeComposerAttachmentSeed(chatId);
-    if (seed) updateAttachments(seed);
+    const seed = takeComposerAttachmentSeed(chatId) ?? [];
+    const savedThumbnails = loadComposerDraftGrabbedThumbnails(chatId);
+    const seedIds = new Set(seed.map((attachment) => attachment.id));
+    const merged = [
+      ...seed,
+      ...savedThumbnails.filter((attachment) => !seedIds.has(attachment.id)),
+    ];
+    if (merged.length > 0) {
+      updateAttachments(merged);
+      if (grabbedElementsRef.current.length > 0) {
+        saveComposerDraftGrabbedElements(chatId, grabbedElementsRef.current, merged);
+      }
+    }
   }, [chatId, updateAttachments]);
   // An unsent message handed back after this composer opened (a cancelled
-  // worktree send the user came back to): its text and its attachments.
+  // worktree send the user came back to): its text, attachments, and grabbed elements.
   React.useEffect(
     () =>
       subscribeRestoredUnsentMessage(chatId, (restored) => {
         setText((current) => failedSendDraft(restored.text, current));
+        let nextAttachments = attachmentsRef.current;
         if (restored.attachments.length > 0) {
           attachmentRevisionRef.current += 1;
-          updateAttachments((current) => failedSendAttachments(restored.attachments, current));
+          nextAttachments = failedSendAttachments(restored.attachments, attachmentsRef.current);
+          updateAttachments(nextAttachments);
+        }
+        if (restored.grabbedElements && restored.grabbedElements.length > 0) {
+          grabbedElementsRevisionRef.current += 1;
+          updateGrabbedElements(
+            (current) => mergeFailedSendGrabbedElements(restored.grabbedElements!, current),
+            nextAttachments,
+          );
         }
       }),
-    [chatId, setText, updateAttachments],
+    [chatId, setText, updateAttachments, updateGrabbedElements],
   );
   // Ambient projections (context pressure) follow the draft on a quiet cadence.
   const onDraftChangeRef = React.useRef(onDraftChange);
@@ -608,20 +692,24 @@ export function Composer({
     onDraftChangeRef.current = onDraftChange;
   }, [onDraftChange]);
   React.useEffect(() => {
-    onDraftChangeRef.current?.(text, attachments);
-  }, [text, attachments]);
+    onDraftChangeRef.current?.(text, attachments, grabbedElements);
+  }, [text, attachments, grabbedElements]);
   const [skillSelection, dispatchSkillSelection] = React.useReducer(selectedSkillComposerReducer, {
     selected: undefined,
     revision: 0,
   });
   const selectedSkill = skillSelection.selected;
-  const busyMode = effectiveBusySendMode(busyChoice ?? busyDefault, Boolean(onSteer) && attachments.length === 0 && !selectedSkill);
+  const busyMode = effectiveBusySendMode(
+    busyChoice ?? busyDefault,
+    Boolean(onSteer) && attachments.length === 0 && grabbedElements.length === 0 && !selectedSkill,
+  );
   // A blocked send explains itself beside the composer, not in a toast, and the
-  // hint lasts only while the draft, attachments, skill, and send mode are unchanged.
+  // hint lasts only while the draft, attachments, grabbed elements, skill, and send mode are unchanged.
   const [blockedSend, setBlockedSend] = React.useState<{
     reason: string;
     text: string;
     attachments: Attachment[];
+    grabbedElements: GrabbedElementContextV1[];
     skill: typeof selectedSkill;
     busyMode: typeof busyMode;
     generating: boolean;
@@ -661,13 +749,56 @@ export function Composer({
       inputRef?.current?.focus({ preventScroll: true });
       return true;
     };
+    const receiveGrabbedElement = (capture: GrabbedElementCapture) => {
+      if (firstSendPendingRef.current || sendPendingRef.current || !available()) return false;
+      const result = materializeGrabbedElementDraft(
+        capture,
+        grabbedElementsRef.current,
+        attachmentsRef.current,
+      );
+      if (!result.accepted) {
+        const message =
+          result.reason === "limit"
+            ? `Up to ${MAX_GRABBED_ELEMENTS_PER_MESSAGE} browser elements per message.`
+            : "This message has reached the browser element data limit.";
+        setAttachmentStatus(message);
+        toast.info(message);
+        return true;
+      }
+      grabbedElementsRevisionRef.current += 1;
+      attachmentRevisionRef.current += 1;
+      updateAttachments(result.attachments);
+      updateGrabbedElements(result.elements, result.attachments);
+      setAttachmentStatus(
+        result.replaced
+          ? `Updated ${result.element.label} in this message.`
+          : result.thumbnailSkipped
+            ? `Added ${result.element.label} without a screenshot because of attachment limits.`
+            : `Added ${result.element.label} to this message.`,
+      );
+      if (!capture.keepActive) {
+        inputRef?.current?.focus({ preventScroll: true });
+      }
+      return true;
+    };
     const unregister = browserAnnotationDelivery.register({ workspaceId: workspace.id, chatId, available, receive });
+    const unregisterGrabbedElement = browserElementGrabDelivery.register({
+      workspaceId: workspace.id,
+      chatId,
+      available,
+      receive: receiveGrabbedElement,
+    });
     const unregisterTerminalContext = terminalContextDelivery.register({ workspaceId: workspace.id, chatId, available, receive: receiveTerminalContext });
     const unsubscribe = browserApi.onEvent((event) => {
       if (event.type === "annotation" && event.workspaceId === workspace.id) receive(event.annotation);
     });
-    return () => { unregister(); unregisterTerminalContext(); unsubscribe(); };
-  }, [workspace?.id, chatId, inputRef, visionSupported, setText, updateAttachments]);
+    return () => {
+      unregister();
+      unregisterGrabbedElement();
+      unregisterTerminalContext();
+      unsubscribe();
+    };
+  }, [workspace?.id, chatId, inputRef, visionSupported, setText, updateAttachments, updateGrabbedElements]);
   const attachmentOperationRef = React.useRef(new ComposerAttachmentOperation());
   const attachmentVisionRef = React.useRef(visionSupported);
   React.useLayoutEffect(() => {
@@ -845,7 +976,11 @@ export function Composer({
   // While live words show, the draft on screen is not the draft that would be
   // sent, so sending waits for the final text.
   const canSend =
-    (text.trim().length > 0 || attachments.length > 0 || mentions.length > 0 || commentTray !== null) &&
+    (text.trim().length > 0 ||
+      attachments.length > 0 ||
+      grabbedElements.length > 0 ||
+      mentions.length > 0 ||
+      commentTray !== null) &&
     submissionAllowed &&
     !composing &&
     !dictationPreviewing &&
@@ -861,6 +996,7 @@ export function Composer({
       draftHasContent:
         text.trim().length > 0 ||
         attachments.length > 0 ||
+        grabbedElements.length > 0 ||
         attaching ||
         commentTray !== null ||
         Boolean(selectedSkill) ||
@@ -1015,14 +1151,19 @@ export function Composer({
         : undefined,
       payloadAfterToken: slashSession
         ? Boolean(
-            consumeSlashToken(text, slashSession).trim() || attachments.length > 0 || selectedSkill,
+            consumeSlashToken(text, slashSession).trim() ||
+              attachments.length > 0 ||
+              grabbedElements.length > 0 ||
+              selectedSkill,
           )
-        : Boolean(text.trim() || attachments.length > 0 || selectedSkill),
-      hasAttachmentsOrSelectedSkill: attachments.length > 0 || Boolean(selectedSkill),
+        : Boolean(text.trim() || attachments.length > 0 || grabbedElements.length > 0 || selectedSkill),
+      hasAttachmentsOrSelectedSkill:
+        attachments.length > 0 || grabbedElements.length > 0 || Boolean(selectedSkill),
       designModeAvailable: designCommandOffered,
     }),
     [
       attachments.length,
+      grabbedElements.length,
       designCommandOffered,
       attaching,
       commandSystem.canExecute,
@@ -1387,6 +1528,7 @@ export function Composer({
       draftText: string;
       sendText: string;
       attachments: Attachment[];
+      grabbedElements?: GrabbedElementContextV1[];
       selectedSkill?: SelectedSkillInvocation;
       skillRevision: number;
       visualize?: boolean;
@@ -1418,10 +1560,14 @@ export function Composer({
       setText("");
       const submittedMentions = payload.mentions ?? [];
       if (submittedMentions.length) setMentions([]);
+      const submittedGrabbedElements = payload.grabbedElements ?? [];
       const optimisticTextRevision = textRevisionRef.current;
       attachmentRevisionRef.current += 1;
       const optimisticAttachmentRevision = attachmentRevisionRef.current;
       updateAttachments([]);
+      grabbedElementsRevisionRef.current += 1;
+      const optimisticGrabbedRevision = grabbedElementsRevisionRef.current;
+      updateGrabbedElements([], []);
       const optimisticSkillRevision = payload.skillRevision + 1;
       dispatchSkillSelection({
         type: "send-started",
@@ -1442,13 +1588,22 @@ export function Composer({
               ? onQueue
               : onSend;
         }
+        const sendOptions =
+          payload.visualize || payload.btw || payload.goal || submittedGrabbedElements.length > 0
+            ? {
+                ...(payload.visualize ? { visualize: payload.visualize } : {}),
+                ...(payload.btw ? { btw: payload.btw } : {}),
+                ...(payload.goal ? { goal: payload.goal } : {}),
+                ...(submittedGrabbedElements.length > 0
+                  ? { grabbedElements: submittedGrabbedElements }
+                  : {}),
+              }
+            : undefined;
         await submit(
           payload.sendText,
           payload.attachments,
           payload.selectedSkill?.invocation,
-          payload.visualize || payload.btw || payload.goal
-            ? { visualize: payload.visualize, btw: payload.btw, ...(payload.goal ? { goal: payload.goal } : {}) }
-            : undefined,
+          sendOptions,
         );
         if (payload.mode === "queue") {
           toast.info(
@@ -1478,12 +1633,28 @@ export function Composer({
           payload.attachments,
           currentAttachments,
         );
+        let finalAttachments = currentAttachments;
         if (
           attachmentRevisionRef.current === optimisticAttachmentRevision ||
           restoredAttachments.length !== currentAttachments.length
         ) {
           attachmentRevisionRef.current += 1;
+          finalAttachments = restoredAttachments;
           updateAttachments(restoredAttachments);
+        }
+        if (submittedGrabbedElements.length > 0) {
+          const currentGrabbed = grabbedElementsRef.current;
+          const restoredGrabbed = mergeFailedSendGrabbedElements(
+            submittedGrabbedElements,
+            currentGrabbed,
+          );
+          if (
+            grabbedElementsRevisionRef.current === optimisticGrabbedRevision ||
+            restoredGrabbed.length !== currentGrabbed.length
+          ) {
+            grabbedElementsRevisionRef.current += 1;
+            updateGrabbedElements(restoredGrabbed, finalAttachments);
+          }
         }
         // Chips, not `@path` text: as text the `@` would reopen the picker.
         if (submittedMentions.length) {
@@ -1503,7 +1674,18 @@ export function Composer({
         setSending(false);
       }
     },
-    [chatId, onSend, onQueue, onSteer, isGenerating, hasQueuedMessages, freezeWhileSending, setText, updateAttachments],
+    [
+      chatId,
+      onSend,
+      onQueue,
+      onSteer,
+      isGenerating,
+      hasQueuedMessages,
+      freezeWhileSending,
+      setText,
+      updateAttachments,
+      updateGrabbedElements,
+    ],
   );
 
   const copyLatestResponse = React.useCallback(async () => {
@@ -1698,8 +1880,8 @@ export function Composer({
             toast.info(missingPromptMessage);
             return false;
           }
-          if (instruction === "btw" && (attachments.length > 0 || selectedSkill)) {
-            toast.info("Remove attachments and the selected skill before asking a side question.");
+          if (instruction === "btw" && (attachments.length > 0 || grabbedElements.length > 0 || selectedSkill)) {
+            toast.info("Remove attachments, browser elements, and the selected skill before asking a side question.");
             return false;
           }
           if (selectedSkillState && selectedSkillState.state !== "valid") {
@@ -1707,12 +1889,14 @@ export function Composer({
             return false;
           }
           const submittedAttachments = attachments;
+          const submittedGrabbedElements = grabbedElements;
           const submittedSkillRevision = skillSelection.revision;
           if (instruction === "visualize") {
             return sendComposerPayload({
               draftText: text,
               sendText: nextPrompt,
               attachments: submittedAttachments,
+              grabbedElements: submittedGrabbedElements,
               selectedSkill,
               skillRevision: submittedSkillRevision,
               visualize: true,
@@ -1722,6 +1906,7 @@ export function Composer({
             draftText: text,
             sendText: nextPrompt,
             attachments: submittedAttachments,
+            grabbedElements: submittedGrabbedElements,
             selectedSkill,
             skillRevision: submittedSkillRevision,
             btw: true,
@@ -1829,6 +2014,7 @@ export function Composer({
       onOpenSettings,
       sendComposerPayload,
       attachments,
+      grabbedElements,
       selectedSkill,
       selectedSkillState,
       skillSelection.revision,
@@ -2176,10 +2362,25 @@ export function Composer({
     updateAttachments((prev) => prev.filter((a) => a.id !== id));
   };
 
+  const removeGrabbedElement = (id: string) => {
+    if (firstSendPendingRef.current) return;
+    const removed = grabbedElementsRef.current.find((element) => element.id === id);
+    if (!removed) return;
+    const thumbId = removed.thumbnailAttachmentId ?? grabbedElementThumbnailId(removed.id);
+    attachmentRevisionRef.current += 1;
+    grabbedElementsRevisionRef.current += 1;
+    const nextAttachments = attachmentsRef.current.filter((attachment) => attachment.id !== thumbId);
+    const nextElements = grabbedElementsRef.current.filter((element) => element.id !== id);
+    updateAttachments(nextAttachments);
+    updateGrabbedElements(nextElements, nextAttachments);
+    setAttachmentStatus(`Removed ${removed.label}.`);
+  };
+
   const sendBlockedReason =
     blockedSend &&
     blockedSend.text === text &&
     blockedSend.attachments === attachments &&
+    blockedSend.grabbedElements === grabbedElements &&
     blockedSend.skill === selectedSkill &&
     blockedSend.busyMode === busyMode &&
     blockedSend.generating === isGenerating &&
@@ -2191,6 +2392,7 @@ export function Composer({
       reason,
       text,
       attachments,
+      grabbedElements,
       skill: selectedSkill,
       busyMode,
       generating: isGenerating,
@@ -2216,7 +2418,12 @@ export function Composer({
       blockSend("Message text exceeds the 1 MB limit.");
       return;
     }
-    if ((!trimmed && attachments.length === 0 && !commentTray) || !submissionAllowed) return;
+    if (
+      (!trimmed && attachments.length === 0 && grabbedElements.length === 0 && !commentTray) ||
+      !submissionAllowed
+    ) {
+      return;
+    }
     // Surfaces without Aiden's slash commands (remote hosts) send the text as written.
     const submittedCommand = surfaces.slashCommands ? parseSubmittedSlashCommand(text, slashCommands) : null;
     if (submittedCommand) {
@@ -2241,8 +2448,8 @@ export function Composer({
       : hasQueuedMessages || queueDuringCompaction || queueForForkSummary
         ? "queue"
         : undefined;
-    if (mode === "steer" && (attachments.length > 0 || selectedSkill)) {
-      blockSend("Steer accepts text only. Remove attachments and the selected skill first.");
+    if (mode === "steer" && (attachments.length > 0 || grabbedElements.length > 0 || selectedSkill)) {
+      blockSend("Steer accepts text only. Remove attachments, browser elements, and the selected skill first.");
       return;
     }
     if (selectedSkillState && selectedSkillState.state !== "valid") {
@@ -2251,7 +2458,7 @@ export function Composer({
     }
     if (
       visionSupported === false &&
-      attachments.some((attachment) => attachment.kind === "image")
+      visibleAttachments.some((attachment) => attachment.kind === "image")
     ) {
       blockSend("Switch to a vision-capable model before sending these images.");
       return;
@@ -2279,7 +2486,7 @@ export function Composer({
             ? "Please make the change in my design comment."
             : "Please make the changes in my design comments.";
       }
-    } else if (!trimmed && attachments.length === 0) {
+    } else if (!trimmed && attachments.length === 0 && grabbedElements.length === 0) {
       return;
     }
     // Marked sent and saved before the message goes, so Aiden's turn finds them sent.
@@ -2301,6 +2508,7 @@ export function Composer({
         draftText: text,
         sendText,
         attachments: sendAttachments,
+        grabbedElements,
         selectedSkill,
         skillRevision: skillSelection.revision,
         mode,
@@ -2320,18 +2528,22 @@ export function Composer({
 
   const handleKeyDown = (event: React.KeyboardEvent<HTMLTextAreaElement>) => {
     const plainKey = !event.altKey && !event.metaKey && !event.ctrlKey && !event.shiftKey;
-    // Backspace at the very start of the text takes the last chip, whole.
+    // Backspace at the very start of the text takes the last chip, whole (mentions first, then grabbed elements).
     if (
       event.key === "Backspace" &&
       plainKey &&
-      mentions.length > 0 &&
+      (mentions.length > 0 || grabbedElements.length > 0) &&
       !isComposingKey(event) &&
       !event.currentTarget.readOnly &&
       event.currentTarget.selectionStart === 0 &&
       event.currentTarget.selectionEnd === 0
     ) {
       event.preventDefault();
-      removeMention(mentions[mentions.length - 1]!.path);
+      if (mentions.length > 0) {
+        removeMention(mentions[mentions.length - 1]!.path);
+      } else {
+        removeGrabbedElement(grabbedElements[grabbedElements.length - 1]!.id);
+      }
       return;
     }
     if (mentionTrigger && !isComposingKey(event)) {
@@ -2428,6 +2640,7 @@ export function Composer({
       !event.nativeEvent.isComposing &&
       text === "" &&
       attachments.length === 0 &&
+      grabbedElements.length === 0 &&
       mentions.length === 0 &&
       !selectedSkill &&
       !isGenerating &&
@@ -2447,7 +2660,12 @@ export function Composer({
         isComposing: event.nativeEvent.isComposing,
         repeat: event.repeat,
         canStop: isGenerating && canStopGeneration,
-        draftEmpty: !text.trim() && attachments.length === 0 && mentions.length === 0 && !selectedSkill,
+        draftEmpty:
+          !text.trim() &&
+          attachments.length === 0 &&
+          grabbedElements.length === 0 &&
+          mentions.length === 0 &&
+          !selectedSkill,
       })
     ) {
       event.preventDefault();
@@ -2804,9 +3022,20 @@ export function Composer({
             <span className="sr-only" role="status" aria-live="polite">
               {mentionAnnouncement}
             </span>
-            {attachments.length > 0 ? (
+            <GrabbedElementChips
+              elements={grabbedElements}
+              attachments={attachments}
+              mode="composer"
+              disabled={composerInputLocked}
+              textOnlyModel={visionSupported === false}
+              onRemove={(id) => {
+                removeGrabbedElement(id);
+                requestAnimationFrame(() => inputRef?.current?.focus({ preventScroll: true }));
+              }}
+            />
+            {visibleAttachments.length > 0 ? (
               <div className="mb-1.5 flex flex-wrap gap-2 px-1.5">
-                {attachments.map((a) => (
+                {visibleAttachments.map((a) => (
                   <div
                     key={a.id}
                     className="group relative flex min-h-10 items-center gap-1.5 rounded-control bg-control pl-1.5 pr-0"
@@ -2838,7 +3067,14 @@ export function Composer({
               ref={inputRef}
               // Approval keys stay off while this holds a draft, wherever focus is; the
               // value marks staged attachments or a skill that the text alone doesn't show.
-              data-message-draft={attachments.length > 0 || mentions.length > 0 || selectedSkill ? "attached" : ""}
+              data-message-draft={
+                attachments.length > 0 ||
+                grabbedElements.length > 0 ||
+                mentions.length > 0 ||
+                selectedSkill
+                  ? "attached"
+                  : ""
+              }
               data-focus-region-entry
               value={composerValue}
               readOnly={composerInputLocked || firstSendPending || dictationPreviewing}
@@ -3220,7 +3456,12 @@ export function Composer({
                   <BusySendButton
                     mode={busyMode}
                     canSubmit={canSend}
-                    steerAvailable={Boolean(onSteer) && attachments.length === 0 && !selectedSkill}
+                    steerAvailable={
+                      Boolean(onSteer) &&
+                      attachments.length === 0 &&
+                      grabbedElements.length === 0 &&
+                      !selectedSkill
+                    }
                     onModeChange={setBusyMode}
                     onSubmit={(mode) => void submit(mode)}
                   />
