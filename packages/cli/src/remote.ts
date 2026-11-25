@@ -196,6 +196,7 @@ export async function createCliRemote(agentDir: string, chats: ReturnType<typeof
     settingsPatch: (input) => scheduledSettingsPatch(input, validateTimezone), notifyChanged: () => {},
   });
   let botSessions: import("../../../main/services/aiden-remote-bot-session.js").AidenRemoteBotSessionService | undefined;
+  let botSignals: ReturnType<typeof import("./remote-bots.ts").createCliBotSignals> | undefined;
   let chatApi: Awaited<ReturnType<typeof createCliRemoteChats>> | undefined;
   // One chat runtime for Remote and the MCP server, whichever asks first.
   let chatApiLoad: Promise<Awaited<ReturnType<typeof createCliRemoteChats>>> | undefined;
@@ -217,8 +218,10 @@ export async function createCliRemote(agentDir: string, chats: ReturnType<typeof
       const browser = new AidenRemoteWorkspaceBrowserService({ instanceId, state, approvalStore: agentDir });
       const remoteChats = await loadChatApi();
       await botSessions?.close();
-      const botApi = createCliRemoteBots(agentDir, instanceId, bots, chats, remoteChats, idempotency, persistIdempotency);
+      await botSignals?.close();
+      const { signals, ...botApi } = createCliRemoteBots(agentDir, instanceId, bots, chats, remoteChats, idempotency, persistIdempotency);
       botSessions = botApi.botSessions;
+      botSignals = signals;
       const api = remoteChats;
       hostRuns = new AidenRemoteHostRunService({ registry: chats.runs, now: Date.now, controls: {
         cancel: (runId) => chats.llmClient.cancelRun(runId),
@@ -236,9 +239,10 @@ export async function createCliRemote(agentDir: string, chats: ReturnType<typeof
       const feed = new AidenRemoteHostFeedService({ now: Date.now,
         attentionSummary: (runId) => { const run = chats.runs.summary(runId); return run ? liveRunAttention(run.chatId, chats.runs)?.summary : undefined; },
         liveRuns: () => chats.runs.list(),
-        // No live Bot summaries on this host, so Bot rows carry no Needs you, Failed or last reply.
+        // Bot rows carry Needs you, Failed, the last reply and its line from the same live summary the desktop uses.
         source: createAidenRemoteHostFeedSource({ chats: api.chats, listWorkspaces: () => workspaces.application.list(),
-          repositoryIdentity: git.gitCachedRepositoryIdentity, listBots: () => botApi.bots.list() }),
+          repositoryIdentity: git.gitCachedRepositoryIdentity, listBots: () => botApi.bots.list(),
+          ...(signals ? { botSignals: signals.botSignals } : {}) }),
       });
       hostFeed = feed;
       const detachers = [
@@ -247,6 +251,8 @@ export async function createCliRemote(agentDir: string, chats: ReturnType<typeof
         api.onInboxChanged(() => feed.invalidate()),
         workspaces.configStore.onWorkspacesChanged(() => feed.invalidate()),
         chats.runs.onChange((summary, removed) => feed.noteRun(summary, removed)),
+        // A turn started or ended (a new reply), a pause, or an approval opened or settled.
+        ...(signals ? [signals.onChange(() => feed.invalidate())] : []),
       ];
       detachHostFeed = () => { for (const detach of detachers) detach(); };
       return {
@@ -300,7 +306,7 @@ export async function createCliRemote(agentDir: string, chats: ReturnType<typeof
     },
     apps: (args: string[]) => cliAppsCommand(mcp, args),
     // The MCP listener closes first, so no outside app starts a turn while the rest stops.
-    async stop() { await mcp.stop(); closeHostFeed(); chatApi?.stopInbox(); await botSessions?.close(); await chats.stop(); await service.stopAndSettle(); await speech.stop(); await scheduledMcp.close(); if (!options.bots) await bots.stop(); },
+    async stop() { await mcp.stop(); closeHostFeed(); chatApi?.stopInbox(); await botSessions?.close(); await botSignals?.close(); await chats.stop(); await service.stopAndSettle(); await speech.stop(); await scheduledMcp.close(); if (!options.bots) await bots.stop(); },
     async command(args: string[]) {
       const [action = "status", value] = args;
       switch (action) {
