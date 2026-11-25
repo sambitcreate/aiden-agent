@@ -975,6 +975,10 @@ export interface AppSettings extends AidenLiveSettingsFields {
   quickChatDefaultPersistence?: import("../../renderer/shared/quick-chat.js").QuickChatDefaultPersistence;
   /** Keep the floating Quick Chat mini-modal open when clicking outside. Omitted means true (stays pinned). */
   quickChatKeepOpenOnBlur?: boolean;
+  /** Settings → Bots → Bubbles → Allow bubbles. Omitted means on; off hides every head and the bubble button. */
+  botBubblesEnabled?: boolean;
+  /** Settings → Bots → Bubbles → Float over other apps (macOS only). Omitted means on. */
+  botBubblesFloatOverApps?: boolean;
   /** On-device Form Fill Specialist; gated on Computer Use plus a verified local model package. Default off. */
   formFillSpecialistEnabled?: boolean;
   /** Global scheduler gate. Turning it off pauses jobs without deleting them. */

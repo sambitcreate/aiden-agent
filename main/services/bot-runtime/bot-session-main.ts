@@ -29,7 +29,8 @@ import { createBotPlanLifecycle } from "../bot-plans/lifecycle.js";
 // schedules the background review, and compaction flushes memory and steers
 // its summary.
 
-import { app, BrowserWindow, ipcMain, logger, Notification, powerMonitor } from "../../platform.js";
+import { app, ipcMain, logger, Notification, powerMonitor } from "../../platform.js";
+import { isAidenAppWindowFocused } from "../../windows/bot-bubbles-overlay-registry.js";
 import { requestAppPath } from "../app-navigation.js";
 import { setBotFileToolProtectedRoots, setBotFileToolTemporaryPrivateRoots } from "../bot-file-tool-router.js";
 import { botAccessPrivateRoots, resolveBotAccessTarget } from "./bot-access-target.js";
@@ -948,7 +949,8 @@ const planLifecycle = createBotPlanLifecycle({
 // A card that opens while no Aiden window is focused also says so in a Mac
 // notification ("Ada needs you to: …"); clicking it opens the Bot's chat.
 const handoffNotifier = createBotHandoffNotifier({
-  isAppFocused: () => BrowserWindow.getFocusedWindow() !== null,
+  // A focused bubble mini chat isn't the app in front: the main window may be hidden.
+  isAppFocused: isAidenAppWindowFocused,
   show: ({ title, body, onClick }) => {
     if (!Notification.isSupported()) return;
     const notification = new Notification({ title, body });
@@ -965,7 +967,8 @@ const handoffNotifier = createBotHandoffNotifier({
 watchBotHandoffs(botHandoffs, handoffNotifier);
 
 const accessRequestNotifier = createBotHandoffNotifier({
-  isAppFocused: () => BrowserWindow.getFocusedWindow() !== null,
+  // A focused bubble mini chat isn't the app in front: the main window may be hidden.
+  isAppFocused: isAidenAppWindowFocused,
   show: ({ title, body, onClick }) => {
     if (!Notification.isSupported()) return;
     const notification = new Notification({ title, body });

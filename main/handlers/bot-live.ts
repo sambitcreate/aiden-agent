@@ -20,8 +20,36 @@ export interface BotLiveOwner {
   isDestroyed(): boolean;
   onInvalidated(listener: () => void): () => void;
   send(channel: typeof BOT_LIVE_EVENT_CHANNEL, event: BotLiveEvent): void;
-  /** The document's window is focused and the person is at the Mac. */
-  inFront?(): boolean;
+  /**
+   * The document shows this Bot's chat in front of the person: its window is
+   * focused and they are at the Mac. A bubble overlay holds several Bots but
+   * shows only its open mini chat, so the answer can differ per Bot.
+   */
+  inFront?(botId: string): boolean;
+}
+
+/** What decides whether a document shows a Bot's chat in front of the person. */
+export interface BotChatFrontInput {
+  /** The focused window's page, or null when no Aiden window is focused. */
+  focusedWebContentsId: number | null;
+  /** The page asking. */
+  ownerWebContentsId: number;
+  visible: boolean;
+  minimized: boolean;
+  /** `powerMonitor.getSystemIdleState` for the away threshold. */
+  idleState: string;
+  /** The page is a bubble overlay, which shows only its open mini chat. */
+  isBubbleOverlay: boolean;
+  /** The bubble whose mini chat is open. */
+  openBubbleBotId: string | null;
+}
+
+/** Focused, on screen, someone used the Mac recently, and for an overlay, this Bot's mini chat is the open one. */
+export function isBotChatInFront(botId: string, input: BotChatFrontInput): boolean {
+  if (input.focusedWebContentsId === null || input.focusedWebContentsId !== input.ownerWebContentsId) return false;
+  if (!input.visible || input.minimized) return false;
+  if (input.isBubbleOverlay && input.openBubbleBotId !== botId) return false;
+  return input.idleState === "active";
 }
 
 export interface BotLiveHandlers {
@@ -133,7 +161,7 @@ export function registerBotLiveHandlers<Event>(dependencies: BotLiveHandlerDepen
         const owner = owners.get(key);
         if (!owner || owner.isDestroyed()) continue;
         try {
-          if (owner.inFront?.() === true) return true;
+          if (owner.inFront?.(botId) === true) return true;
         } catch {
           // A window that can't say is not in front.
         }

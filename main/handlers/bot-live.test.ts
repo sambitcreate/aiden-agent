@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import type { BotLiveEvent, BotLiveSnapshot } from "../../renderer/shared/bot-live.js";
 import type { BotLiveProjection, BotLiveSink } from "../services/bot-runtime/live-projection.js";
-import { registerBotLiveHandlers, type BotLiveOwner } from "./bot-live.js";
+import { isBotChatInFront, registerBotLiveHandlers, type BotChatFrontInput, type BotLiveOwner } from "./bot-live.js";
 
 class FakeDocument implements BotLiveOwner {
   readonly received: Array<{ channel: string; event: BotLiveEvent }> = [];
@@ -11,7 +11,7 @@ class FakeDocument implements BotLiveOwner {
   /** Whether this document's window is focused with the person at the Mac. */
   focused = false;
   constructor(readonly key: string) {}
-  inFront = () => this.focused;
+  inFront = (_botId: string): boolean => this.focused;
   isDestroyed = () => this.destroyed;
   onInvalidated = (listener: () => void) => {
     this.listeners.add(listener);
@@ -234,4 +234,42 @@ test("a Bot's chat is in front only while a focused document is subscribed to th
   await invoke("bots:live:subscribe", front, "bot:a");
   front.reload();
   assert.equal(live.shownInFront("bot:a"), false, "a reloaded document no longer shows it");
+});
+
+test("a document holding several Bots is in front only for the Bot it says it shows", async () => {
+  // A bubble overlay subscribes to every head's Bot but shows one open mini chat.
+  const fake = fakeProjection();
+  const { live, invoke } = registerWithProbe(fake.projection);
+  const overlay = new FakeDocument("overlay-1");
+  let openBotId: string | null = "bot:b";
+  overlay.inFront = (botId) => openBotId === botId;
+  await invoke("bots:live:subscribe", overlay, "bot:a");
+  await invoke("bots:live:subscribe", overlay, "bot:b");
+  assert.equal(live.shownInFront("bot:b"), true);
+  assert.equal(live.shownInFront("bot:a"), false, "a closed head's Bot still pings");
+  openBotId = null;
+  assert.equal(live.shownInFront("bot:b"), false, "the mini chat was tucked away");
+});
+
+test("a bubble overlay counts as in front only for its open mini chat's Bot; the main window for any Bot it shows", () => {
+  const focusedOverlay: BotChatFrontInput = {
+    focusedWebContentsId: 7,
+    ownerWebContentsId: 7,
+    visible: true,
+    minimized: false,
+    idleState: "active",
+    isBubbleOverlay: true,
+    openBubbleBotId: "bot:b",
+  };
+  assert.equal(isBotChatInFront("bot:b", focusedOverlay), true);
+  assert.equal(isBotChatInFront("bot:a", focusedOverlay), false, "a closed head");
+  assert.equal(isBotChatInFront("bot:b", { ...focusedOverlay, openBubbleBotId: null }), false, "chat tucked away");
+  assert.equal(isBotChatInFront("bot:b", { ...focusedOverlay, focusedWebContentsId: 1 }), false, "another app window is focused");
+  assert.equal(isBotChatInFront("bot:b", { ...focusedOverlay, focusedWebContentsId: null }), false, "another app is focused");
+  assert.equal(isBotChatInFront("bot:b", { ...focusedOverlay, idleState: "idle" }), false, "the person is away");
+
+  const main: BotChatFrontInput = { ...focusedOverlay, isBubbleOverlay: false, openBubbleBotId: null };
+  assert.equal(isBotChatInFront("bot:a", main), true, "the main window's rule is unchanged");
+  assert.equal(isBotChatInFront("bot:a", { ...main, minimized: true }), false);
+  assert.equal(isBotChatInFront("bot:a", { ...main, visible: false }), false);
 });

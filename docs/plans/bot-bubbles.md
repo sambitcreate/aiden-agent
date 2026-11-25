@@ -27,7 +27,7 @@ Also decided: heads never bounce (a reply only changes the count); a head shows 
 - **Mini chat:** opens beside its head with a pointer to it; click the head again, Esc or click elsewhere tucks it away. Shows transcript, status line, approval and question cards, compact composer. Header: Open in Aiden, Shrink, Close bubble. One mini chat open at a time; opening it clears that Bot's unread count.
 - **Main window:** a bubbled Bot's chat shows the "in a bubble" card instead of the chat (one home at a time). The sidebar row shows a small Bubble label.
 - **Settings → Bots → Bubbles:** Allow bubbles (default on; off hides every head and the bubble button), Float over other apps (default on; macOS only).
-- **Keyboard and motion:** Tab reaches each head; Enter opens, Delete closes, arrows move, Esc tucks the chat away; focus rings stay visible. Reduce Motion: heads move without the spring and the shrink becomes a short fade.
+- **Keyboard and motion:** Tab reaches each head (in the floating overlay, only while a mini chat is open, because the overlay never takes focus otherwise); Enter opens, Delete closes, arrows move, Esc tucks the chat away; focus rings stay visible. Reduce Motion: heads move without the spring and the shrink becomes a short fade.
 - **Deleted Bot:** its head disappears. **Paused Bot:** unchanged; its chat shows the paused state.
 
 ## Implementation contract
@@ -50,7 +50,7 @@ Shared types and channels: `renderer/shared/bot-bubbles.ts`. Renderer client and
 
 - macOS only. One overlay per display that has heads, sized to the display work area; set up like Quick Chat (`type: "panel"`, frameless, transparent, no shadow, always on top at "floating"/"pop-up-menu" level, visible on all workspaces and over full-screen apps with `skipTransformProcessType`, skip taskbar, hidden in Mission Control, not resizable/movable, auxiliary window, sandboxed, `backgroundThrottling: false`).
 - Clicks pass through (`setIgnoreMouseEvents(true, { forward: true })`) except when the renderer says the pointer is over a head, the peek, the × target, a menu or the open chat (`setInteractive`).
-- Heads never take focus; only opening the mini chat focuses the overlay (`focus()` on open, `blur` back when it closes).
+- Overlays are created non-focusable; opening a mini chat makes the overlay focusable and focuses it, and closing the chat makes it non-focusable again. A crashed or reloaded overlay renderer resets to click-through and is rebuilt (with a crash-loop guard).
 - Overlays exist only while at least one head is out on their display; display removal moves heads to the primary display.
 - Shrink across windows: on `bubble` with `sourceRect`, main captures that rect of the main window (`webContents.capturePage`) and sends the overlay a `BotBubbleTransition` in overlay-local coordinates; `bringBack` sends `kind: "grow"` toward the main window's content bounds before showing the main window.
 - Least-privilege bridge with its own invoke and notification allowlists (mirrors Quick Chat): live chat (`bots:live:*`), Bot read (`bots:get`, `bots:list`, `bots:getCanonicalPhoto`), send/stop/resume/dismiss/withdraw, approvals and questions (`bots:approve`, `bots:pendingApprovals`, `bots:answerQuestion`), the `bots:bubbles:*` channels, read-only settings/appearance, `app:getInfo`. No settings changes, terminal, browser, files, screen capture or native dialogs.
@@ -67,5 +67,6 @@ Header button, ••• and sidebar menu items, `bots.bubble` command, "in a bu
 
 ## Done
 
-- Behaviour tests (service fixtures, IPC register-and-invoke, preload allowlists, layout math, rendered components), Playwright for in-window heads, a hands-on check of the overlay on a Mac.
+- Behaviour tests (service fixtures, IPC register-and-invoke, preload allowlists, layout math, rendered components) and a hands-on check of the overlay on a Mac.
+- No Playwright spec: the bubble service checks that a Bot exists through the Bot store in main, which the E2E profile can't open (the existing Bot specs mock the Bot IPC), and adding a production test seam for it isn't worth it. Rendered component tests cover the in-window heads instead.
 - Docs: README.md, PRODUCT.md, docs/bot-bubbles.md, shortcut lists, docs/plans/README.md. Onboarding Bots tile shows a head with an unread count.

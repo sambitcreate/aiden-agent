@@ -33,7 +33,10 @@ import {
   parseAidenRemoteBotAvatarUploadRequest,
   type AidenRemoteBotAvatarUploadRequest,
 } from "../services/aiden-remote-protocol.js";
-import { registerBotLiveHandlers } from "./bot-live.js";
+import { isBotChatInFront, registerBotLiveHandlers } from "./bot-live.js";
+import { botBubbleOpenBotId } from "../services/bot-bubbles/bot-bubbles-main.js";
+import { botBubbleOverlayAccess, isBotBubbleOverlayWebContents } from "../windows/bot-bubbles-window.js";
+import { guardBotBubbleOverlayHandlers } from "../windows/bot-bubbles-overlay-access.js";
 import { registerBotPauseHandlers } from "./bot-pause.js";
 import { registerBotQuestionHandlers } from "./bot-questions.js";
 import { registerBotHandoffHandlers } from "./bot-handoffs.js";
@@ -119,9 +122,14 @@ async function removeBotPhoto(botId: string): Promise<void> {
 const BOT_CHAT_AWAY_IDLE_SECONDS = 120;
 
 export function registerBotHandlers(): void {
+  // A bubble overlay may reach only the Bots it has heads for; other windows are unaffected.
+  const handle = guardBotBubbleOverlayHandlers<Electron.IpcMainInvokeEvent>(
+    (channel, handler) => ipcMain.handle(channel, handler),
+    botBubbleOverlayAccess((waitId) => botApprovals.pending().find((prompt) => prompt.waitId === waitId)?.botId ?? null),
+  );
   const desktopAudienceId = BOT_DESKTOP_AUDIENCE_ID;
   registerBotAccessHandlers<Electron.IpcMainInvokeEvent>({
-    handle: (channel, handler) => ipcMain.handle(channel, handler),
+    handle: (channel, handler) => handle(channel, handler),
     service: botApplicationService,
     desktopAudienceId,
     documentOwner: (event) =>
@@ -133,11 +141,11 @@ export function registerBotHandlers(): void {
     warn: (message, error) => logger.warn("bots", message, error),
   });
   // Bots are deleted, never archived; a legacy include-archived flag is ignored.
-  ipcMain.handle("bots:list", async () => botApplicationService.list());
-  ipcMain.handle("bots:get", async (_event, id: unknown) =>
+  handle("bots:list", async () => botApplicationService.list());
+  handle("bots:get", async (_event, id: unknown) =>
     botApplicationService.get(parseBotId(id)),
   );
-  ipcMain.handle("bots:getCanonicalPhoto", async (_event, id: unknown) => {
+  handle("bots:getCanonicalPhoto", async (_event, id: unknown) => {
     const botId = parseBotId(id);
     const instanceId = (await (await getAidenRemoteRuntime()).state.snapshot()).instanceId;
     return projectBotAvatarForRenderer(botId, {
@@ -145,37 +153,37 @@ export function registerBotHandlers(): void {
       avatar: createMainBotAvatarApplicationAdapter(instanceId),
     });
   });
-  ipcMain.handle("bots:sessionState", async (_event, id: unknown) =>
+  handle("bots:sessionState", async (_event, id: unknown) =>
     (await botSessionRuntime()).state(parseBotId(id)),
   );
-  ipcMain.handle("bots:send", async (_event, input: unknown) => {
+  handle("bots:send", async (_event, input: unknown) => {
     const { botId, ...message } = parseBotSend(input);
     return (await botSessionRuntime()).send(botId, message);
   });
-  ipcMain.handle("bots:resume", async (_event, input: unknown) => {
+  handle("bots:resume", async (_event, input: unknown) => {
     const { botId, requestId, acknowledgeUnknownCost, expectedSubmissionId, expectedCostReceiptId } = parseBotSessionAction(input, "resume");
     return (await botSessionRuntime()).resume(botId, requestId, { acknowledgeUnknownCost, expectedSubmissionId, expectedCostReceiptId });
   });
-  ipcMain.handle("bots:dismiss", async (_event, input: unknown) => {
+  handle("bots:dismiss", async (_event, input: unknown) => {
     const { botId, requestId } = parseBotSessionAction(input, "dismiss");
     return (await botSessionRuntime()).dismiss(botId, requestId);
   });
   // Pause / Resume (plan §7): the pause is the Mac's, and survives a restart.
   registerBotPauseHandlers({
-    handle: (channel, handler) => ipcMain.handle(channel, handler),
+    handle: (channel, handler) => handle(channel, handler),
     runtime: botSessionRuntime,
     getBot: (botId) => botApplicationService.get(botId),
   });
-  ipcMain.handle("bots:withdraw", async (_event, input: unknown) => {
+  handle("bots:withdraw", async (_event, input: unknown) => {
     const { botId, submissionId } = parseBotWithdraw(input);
     return (await botSessionRuntime()).withdraw(botId, submissionId);
   });
-  ipcMain.handle("bots:stop", async (_event, id: unknown) => {
+  handle("bots:stop", async (_event, id: unknown) => {
     const botId = parseBotId(id);
     // "Stopping" in every open chat, on the Mac and on phones; taken back if the Stop fails.
     return stopWithIntents(botTurnIntents, botId, async () => (await botSessionRuntime()).stop(botId));
   });
-  ipcMain.handle("bots:createFromPreset", async (_event, input: unknown) => {
+  handle("bots:createFromPreset", async (_event, input: unknown) => {
     const { presetId, version, access } = parseBotCreateFromPreset(input);
     // The chat opens as soon as the Bot exists; its self-intro arrives in that chat.
     const starter = botStarter();
@@ -190,40 +198,40 @@ export function registerBotHandlers(): void {
   // Onboarding's silent first Bot (plan §4.1): made once, a repeat returns it.
   // It introduces itself only after the person presses Start using Aiden,
   // which accepts its Full access (`bots:introduce`).
-  ipcMain.handle("bots:createFirst", async (_event, input: unknown) => {
+  handle("bots:createFirst", async (_event, input: unknown) => {
     if (input !== undefined) throw new Error("Invalid first Bot request.");
     const { bot, created } = await botStarter().startFirst({ introduce: false });
     return { bot, created };
   });
   // Templates: which ones already made a Bot, so their detail offers Open.
-  ipcMain.handle("bots:presetBots", async () => botStarter().presetBots());
-  ipcMain.handle("bots:introduce", async (_event, id: unknown) => {
+  handle("bots:presetBots", async () => botStarter().presetBots());
+  handle("bots:introduce", async (_event, id: unknown) => {
     // The create flow's one-time self-intro; deduped per Bot by the runtime.
     return botStarter().introduce(parseBotId(id));
   });
-  ipcMain.handle("bots:connections:grant", async (_event, rawBotId: unknown, rawPluginId: unknown) => {
+  handle("bots:connections:grant", async (_event, rawBotId: unknown, rawPluginId: unknown) => {
     const botId = parseBotId(rawBotId);
     const pluginId = parseConnectionPluginId(rawPluginId);
     await grantBotConnection(botId, pluginId);
   });
-  ipcMain.handle("bots:connections:dismiss", async (_event, rawBotId: unknown, rawPluginId: unknown) => {
+  handle("bots:connections:dismiss", async (_event, rawBotId: unknown, rawPluginId: unknown) => {
     const botId = parseBotId(rawBotId);
     const pluginId = parseConnectionPluginId(rawPluginId);
     await dismissBotConnection(botId, pluginId);
   });
-  ipcMain.handle("bots:photo:set", async (_event, rawBotId: unknown, rawUpload: unknown) => {
+  handle("bots:photo:set", async (_event, rawBotId: unknown, rawUpload: unknown) => {
     const botId = parseBotId(rawBotId);
     const upload = parseAidenRemoteBotAvatarUploadRequest(rawUpload);
     await setBotPhoto(botId, upload);
     ipcMain.broadcast("bots:changed", { botId });
   });
-  ipcMain.handle("bots:photo:remove", async (_event, rawBotId: unknown) => {
+  handle("bots:photo:remove", async (_event, rawBotId: unknown) => {
     const botId = parseBotId(rawBotId);
     await removeBotPhoto(botId);
     ipcMain.broadcast("bots:changed", { botId });
   });
   const botLive = registerBotLiveHandlers<Electron.IpcMainInvokeEvent>({
-    handle: (channel, handler) => ipcMain.handle(channel, handler),
+    handle: (channel, handler) => handle(channel, handler),
     owner: (event) => {
       const owner = rendererDocumentOwner(event, () => new Error("Bot chats require the active application document."));
       return {
@@ -232,11 +240,19 @@ export function registerBotHandlers(): void {
         onInvalidated: owner.onInvalidated,
         send: (channel, payload) => owner.send(channel, payload),
         // Focused, on screen, and someone used the Mac in the last two minutes.
-        inFront: () => {
+        // A bubble overlay counts only for the Bot whose mini chat is open.
+        inFront: (botId) => {
           const focused = BrowserWindow.getFocusedWindow();
-          if (!focused || focused.isDestroyed() || focused.webContents.id !== owner.id) return false;
-          if (!focused.isVisible() || focused.isMinimized()) return false;
-          return powerMonitor.getSystemIdleState(BOT_CHAT_AWAY_IDLE_SECONDS) === "active";
+          if (!focused || focused.isDestroyed()) return false;
+          return isBotChatInFront(botId, {
+            focusedWebContentsId: focused.webContents.id,
+            ownerWebContentsId: owner.id,
+            visible: focused.isVisible(),
+            minimized: focused.isMinimized(),
+            idleState: powerMonitor.getSystemIdleState(BOT_CHAT_AWAY_IDLE_SECONDS),
+            isBubbleOverlay: isBotBubbleOverlayWebContents(owner.id),
+            openBubbleBotId: botBubbleOpenBotId(),
+          });
         },
       };
     },
@@ -246,23 +262,23 @@ export function registerBotHandlers(): void {
   // A Bot message that arrives while its chat is in front of the person pings nothing.
   setBotChatInFrontProbe((botId) => botLive.shownInFront(botId));
   // Bot tool approvals: any desktop window may answer; the first answer wins.
-  registerBotApprovalDecisionHandler({ handle: (channel, handler) => ipcMain.handle(channel, handler), approvals: botApprovals });
+  registerBotApprovalDecisionHandler({ handle: (channel, handler) => handle(channel, handler), approvals: botApprovals });
   registerBotAllowedHandlers({
-    handle: (channel, handler) => ipcMain.handle(channel, handler),
+    handle: (channel, handler) => handle(channel, handler),
     allowed: botAllowList,
     onChange: listener => botAllowList.onChange(listener),
     botExists: botExistsIn(botApplicationService),
     broadcast: (channel, payload) => ipcMain.broadcast(channel, payload),
   });
-  ipcMain.handle("bots:pendingApprovals", async (_event, id: unknown) => botApprovals.pending(parseBotId(id)).map(publicBotApprovalPrompt));
+  handle("bots:pendingApprovals", async (_event, id: unknown) => botApprovals.pending(parseBotId(id)).map(publicBotApprovalPrompt));
   // Bot quick-reply questions: any desktop window may answer; the first answer wins.
-  registerBotQuestionHandlers({ handle: (channel, handler) => ipcMain.handle(channel, handler), questions: botQuestions });
+  registerBotQuestionHandlers({ handle: (channel, handler) => handle(channel, handler), questions: botQuestions });
   // Access decisions go through the host authorizer; no renderer grants access.
-  registerBotAccessRequestHandlers({ handle: (channel, handler) => ipcMain.handle(channel, handler), answer: answerBotAccessRequest });
-  registerBotPlanHandlers({ handle: (channel, handler) => ipcMain.handle(channel, handler), plans: botPlans });
+  registerBotAccessRequestHandlers({ handle: (channel, handler) => handle(channel, handler), answer: answerBotAccessRequest });
+  registerBotPlanHandlers({ handle: (channel, handler) => handle(channel, handler), plans: botPlans });
   // Bot hand-off cards: any desktop window may answer; the first answer wins. Open needs the app's own document.
   registerBotHandoffHandlers<Electron.IpcMainInvokeEvent>({
-    handle: (channel, handler) => ipcMain.handle(channel, handler),
+    handle: (channel, handler) => handle(channel, handler),
     handoffs: botHandoffs,
     open: async (botId, waitId, event) => {
       const owner = rendererDocumentOwner(event, () => new Error("Opening a hand-off requires the active application document."));
@@ -272,39 +288,39 @@ export function registerBotHandlers(): void {
   });
   // "Needs you" issues: the card's actions and the Bot's open list.
   registerBotIssueHandlers<Electron.IpcMainInvokeEvent>({
-    handle: (channel, handler) => ipcMain.handle(channel, handler),
+    handle: (channel, handler) => handle(channel, handler),
     issues: botIssues,
   });
   registerBotConnectorWatchHandlers<Electron.IpcMainInvokeEvent>({
-    handle: (channel, handler) => ipcMain.handle(channel, handler),
+    handle: (channel, handler) => handle(channel, handler),
     owner: (event) => rendererDocumentOwner(event, () => new Error("This watch request came from an inactive renderer.")),
     service: async () => (await import("../services/bot-routine-events/sources-main.js")).botConnectorWatches,
   });
   registerBotOpenWorkHandlers<Electron.IpcMainInvokeEvent>({
-    handle: (channel, handler) => ipcMain.handle(channel, handler),
+    handle: (channel, handler) => handle(channel, handler),
     owner: (event) => rendererDocumentOwner(event, () => new Error("This Open work request came from an inactive application document.")),
     service: async () => (await import("../services/bot-open-work/service-main.js")).botOpenWork,
   });
   registerBotPendingChangeCleanup<Electron.IpcMainInvokeEvent>({
-    handle: (channel, handler) => ipcMain.handle(channel, handler),
+    handle: (channel, handler) => handle(channel, handler),
     owner: (event) => rendererDocumentOwner(event, () => new Error("Saved changes belong to the active application document.")),
     initialize: () => botApplicationService.initialize(),
     storedIds: async () => (await import("../services/bot-store.js")).botStore.storedIds(),
     absentAuthorities: async (ids) => (await import("../services/bot-capability-services-main.js")).botCapabilityStore.absentBotAuthorities(ids),
   });
   registerBotRoutineModels<Electron.IpcMainInvokeEvent>({
-    handle: (channel, handler) => ipcMain.handle(channel, handler),
+    handle: (channel, handler) => handle(channel, handler),
     owner: (event) => rendererDocumentOwner(event, () => new Error("This model request came from an inactive application document.")),
     service: async () => ({ ...(await import("../services/bot-routine-models-main.js")).botRoutineModels, resumeStatus: async (botId: string) => (await botSessionRuntime()).executionResumeStatus(botId) }),
   });
   registerBotPeerHandlers<Electron.IpcMainInvokeEvent>({
-    handle: (channel, handler) => ipcMain.handle(channel, handler),
+    handle: (channel, handler) => handle(channel, handler),
     owner: (event) => rendererDocumentOwner(event, () => new Error("This Bot messaging request came from an inactive application document.")),
     service: async () => (await import("../services/bot-peers/service-main.js")).botPeers,
   });
   // Profile → When something happens: event routines and their links.
   registerBotEventRoutineHandlers<Electron.IpcMainInvokeEvent>({
-    handle: (channel, handler) => ipcMain.handle(channel, handler),
+    handle: (channel, handler) => handle(channel, handler),
     store: {
       list: async (botId) => (await import("../services/bot-routine-events/sources-main.js")).botEventRoutines.list(botId).then((rows) => rows.filter((row) => !row.connector)),
       create: async (botId, input) => (await import("../services/bot-routine-events/sources-main.js")).botEventRoutines.create(botId, input),
@@ -323,7 +339,7 @@ export function registerBotHandlers(): void {
     },
   });
   // Skill cards: Add writes and approves the exact content; Not now leaves it unused.
-  ipcMain.handle("bots:skillProposals:respond", async (_event, input: unknown) => {
+  handle("bots:skillProposals:respond", async (_event, input: unknown) => {
     if (!input || typeof input !== "object" || Array.isArray(input)) throw new Error("Invalid skill response.");
     const fields = input as Record<string, unknown>;
     if (Object.keys(fields).some((key) => key !== "botId" && key !== "proposalId" && key !== "decision")) throw new Error("Invalid skill response.");
@@ -333,7 +349,7 @@ export function registerBotHandlers(): void {
     return botSkillProposals.respond({ botId: parseBotId(fields.botId), proposalId: fields.proposalId, decision: fields.decision });
   });
   // Settings from chat (§4.6): Undo a receipt, or Apply / Edit / Dismiss a held change.
-  ipcMain.handle("bots:settingsChanges:respond", async (_event, input: unknown) => {
+  handle("bots:settingsChanges:respond", async (_event, input: unknown) => {
     const { botId, changeId, decision } = parseBotSettingsChangeResponse(input);
     const { botSettingsChanges } = await import("../services/bot-settings-changes/service-main.js");
     return botSettingsChanges.respond(botId, changeId, decision);
@@ -341,7 +357,7 @@ export function registerBotHandlers(): void {
   // Profile → What I've learned, and the chat's lesson cards and Undo lines.
   const learning = () => import("../services/bot-learning/learning-main.js");
   registerBotLearningHandlers<Electron.IpcMainInvokeEvent>({
-    handle: (channel, handler) => ipcMain.handle(channel, handler),
+    handle: (channel, handler) => handle(channel, handler),
     overview: async (botId) => (await learning()).botLearningOverview(botId),
     undo: async (botId, changeId) => (await learning()).undoBotLearning(botId, changeId),
     undoLesson: async (botId, lessonId) => {
@@ -354,7 +370,7 @@ export function registerBotHandlers(): void {
   });
   // Profile → Health: the newest check, and Check now.
   registerBotHealthHandlers<Electron.IpcMainInvokeEvent>({
-    handle: (channel, handler) => ipcMain.handle(channel, handler),
+    handle: (channel, handler) => handle(channel, handler),
     report: (botId) => botHealthReports.get(botId),
     check: async (botId) => (await import("../services/bot-health/health-main.js")).checkBotHealth(botId, "manual"),
   });
@@ -362,32 +378,32 @@ export function registerBotHandlers(): void {
   const botExists = botExistsIn(botApplicationService);
   // Profile → Memory: view, edit, delete and erase what the Bot remembers.
   registerBotMemoryHandlers({
-    handle: (channel, handler) => ipcMain.handle(channel, handler),
+    handle: (channel, handler) => handle(channel, handler),
     memory: botMemoryService,
     botExists,
   });
   // Profile → Rules: what the Bot must ask about or hand to the person.
   registerBotRuleHandlers({
-    handle: (channel, handler) => ipcMain.handle(channel, handler),
+    handle: (channel, handler) => handle(channel, handler),
     rules: botRules,
     botExists,
   });
   // Read-only Files: the Bot's own folder.
   registerBotFileHandlers({
-    handle: (channel, handler) => ipcMain.handle(channel, handler),
+    handle: (channel, handler) => handle(channel, handler),
     homePath: async (botId) => (await botApplicationService.resolveManagedWorkspace(botId)).homePath,
     list: listWorkspaceFiles,
     read: readWorkspaceFile,
   });
   // The Bot's own browser, watched and driven in its panel's Browser tab.
   registerBotBrowserHandlers({
-    handle: (channel, handler) => ipcMain.handle(channel, handler),
+    handle: (channel, handler) => handle(channel, handler),
     workspace: botBrowserWorkspace,
   });
-  ipcMain.handle("bots:delete", async (_event, id: unknown) => {
+  handle("bots:delete", async (_event, id: unknown) => {
     await (await botSessionRuntime()).deleteBot(parseBotId(id));
   });
-  ipcMain.handle("bots:update", async (_event, raw: unknown) => {
+  handle("bots:update", async (_event, raw: unknown) => {
     const input = parseBotUpdate(raw);
     const updated = await botApplicationService.updateBot(input);
     // Turning "Let <Bot> set its own wake-ups" off also cancels the ones still pending.
@@ -398,7 +414,7 @@ export function registerBotHandlers(): void {
     return updated;
   });
   registerBotTelegramHandlers<Electron.IpcMainInvokeEvent>({
-    handle: (channel, handler) => ipcMain.handle(channel, handler),
+    handle: (channel, handler) => handle(channel, handler),
     service: botApplicationService,
     telegram: {
       listProfiles: () => telegramService.listProfiles(),

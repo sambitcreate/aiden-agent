@@ -1,0 +1,300 @@
+/* Bot bubbles (Edge heads): heads, the × target, the peek and the mini chat.
+ * Shared by the overlay window and the in-window host. Colours come from
+ * Aiden's semantic tokens; geometry follows the owner's playground (idea A).
+ */
+
+:root {
+  /* A head settles with a small overshoot, like a chat head let go. */
+  --ease-bot-bubble-spring: cubic-bezier(0.3, 1.35, 0.5, 1);
+  --motion-bot-bubble-duration: 480ms;
+}
+
+.bot-bubble-layer {
+  position: fixed;
+  inset: 0;
+  overflow: hidden;
+  pointer-events: none;
+}
+
+/* Inside the Aiden window: over the app's content, under menus, dialogs and toasts (z-50). */
+.bot-bubble-layer[data-host="window"] {
+  z-index: 46;
+}
+
+.bot-bubble-head {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 52px;
+  height: 52px;
+  padding: 0;
+  border: 0;
+  border-radius: 50%;
+  background: var(--surface-popover);
+  box-shadow: var(--elevation-popover);
+  cursor: default;
+  pointer-events: auto;
+  touch-action: none;
+  user-select: none;
+  -webkit-user-select: none;
+  transition:
+    translate var(--motion-bot-bubble-duration) var(--ease-bot-bubble-spring),
+    scale var(--motion-duration) var(--motion-easing),
+    opacity var(--motion-duration) var(--motion-easing);
+}
+
+/* The shared action rule (`:root :is(button, …)`) gives buttons a squircle;
+   this selector outranks it so a head stays a circle. */
+:root .bot-bubble-layer .bot-bubble-head {
+  corner-shape: round;
+  border-radius: 50%;
+}
+
+.bot-bubble-head[data-dragging] {
+  transition: scale var(--motion-duration) var(--motion-easing);
+}
+
+.bot-bubble-head[data-magnet] {
+  scale: 0.86;
+}
+
+.bot-bubble-head:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 3px;
+}
+
+:root[data-reduce-motion="true"] .bot-bubble-head {
+  transition: opacity 150ms var(--motion-easing);
+}
+
+.bot-bubble-face {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  overflow: hidden;
+  padding: 9px;
+  border-radius: 50%;
+  background: var(--surface-control);
+}
+
+.bot-bubble-face > svg {
+  width: 100%;
+  height: 100%;
+}
+
+.bot-bubble-face > img {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+/* Working: an accent arc turning round the head, masked to a 2.5px ring. */
+.bot-bubble-ring {
+  position: absolute;
+  inset: -4px;
+  border-radius: 50%;
+  background: conic-gradient(from 0deg, transparent 0 30%, var(--accent));
+  -webkit-mask: radial-gradient(farthest-side, transparent calc(100% - 2.5px), black calc(100% - 2.5px));
+  mask: radial-gradient(farthest-side, transparent calc(100% - 2.5px), black calc(100% - 2.5px));
+  pointer-events: none;
+  animation: bot-bubble-ring-turn 1.1s linear infinite;
+}
+
+@keyframes bot-bubble-ring-turn {
+  to {
+    rotate: 1turn;
+  }
+}
+
+.bot-bubble-badge {
+  position: absolute;
+  top: -3px;
+  right: -3px;
+  display: inline-grid;
+  place-items: center;
+  min-width: 19px;
+  height: 19px;
+  padding: 0 5px;
+  border-radius: var(--radius-pill);
+  box-shadow: 0 0 0 2px var(--surface-popover);
+  font-variant-numeric: tabular-nums;
+  line-height: 1;
+  pointer-events: none;
+}
+
+.bot-bubble-needs {
+  position: absolute;
+  right: -3px;
+  bottom: -3px;
+  display: grid;
+  place-items: center;
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  background: var(--surface-popover);
+  pointer-events: none;
+}
+
+.bot-bubble-needs > span {
+  display: grid;
+  place-items: center;
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+}
+
+.bot-bubble-close-target {
+  position: absolute;
+  display: grid;
+  place-items: center;
+  width: 58px;
+  height: 58px;
+  border-radius: 50%;
+  background: var(--surface-popover);
+  box-shadow: var(--elevation-popover);
+  color: var(--text-secondary);
+  translate: -50% -50%;
+  pointer-events: auto;
+  transition:
+    scale var(--motion-duration) var(--motion-easing),
+    background-color var(--motion-duration) var(--motion-easing),
+    color var(--motion-duration) var(--motion-easing);
+  animation: bot-bubble-target-in var(--motion-duration) var(--motion-easing) both;
+}
+
+.bot-bubble-close-target[data-hot] {
+  scale: 1.36;
+  background: var(--status-red-surface);
+  color: var(--status-red);
+}
+
+@keyframes bot-bubble-target-in {
+  from {
+    opacity: 0;
+    translate: -50% 0;
+  }
+}
+
+.bot-bubble-peek {
+  position: absolute;
+  translate: 0 -50%;
+  padding: 6px 10px;
+  border-radius: var(--radius-menu);
+  background: var(--surface-popover);
+  box-shadow: var(--elevation-popover);
+  color: var(--text-primary);
+  pointer-events: auto;
+  animation: aiden-popover-in var(--motion-duration) var(--motion-decelerate-easing) both;
+}
+
+.bot-bubble-peek[data-side="right"] {
+  translate: -100% -50%;
+}
+
+.bot-bubble-chat {
+  position: absolute;
+  display: flex;
+  flex-direction: column;
+  border-radius: var(--radius-card);
+  background: var(--surface-popover);
+  box-shadow: var(--elevation-popover);
+  color: var(--text-primary);
+  pointer-events: auto;
+  animation: bot-bubble-chat-in var(--motion-duration) var(--motion-easing) both;
+}
+
+.bot-bubble-chat[hidden] {
+  display: none;
+}
+
+.bot-bubble-chat[data-side="right"] {
+  transform-origin: right top;
+}
+
+.bot-bubble-chat[data-side="left"] {
+  transform-origin: left top;
+}
+
+@keyframes bot-bubble-chat-in {
+  from {
+    opacity: 0;
+    scale: 0.96;
+  }
+}
+
+/* The pointer from the chat to its head: a 14px square turned 45°, half hidden behind the chat. */
+.bot-bubble-caret {
+  position: absolute;
+  width: 14px;
+  height: 14px;
+  background: var(--surface-popover);
+  rotate: 45deg;
+  translate: 0 -50%;
+  pointer-events: none;
+}
+
+.bot-bubble-caret[data-side="right"] {
+  right: -6px;
+}
+
+.bot-bubble-caret[data-side="left"] {
+  left: -6px;
+}
+
+.bot-bubble-chat-body {
+  position: relative;
+  z-index: 1;
+  display: flex;
+  min-height: 0;
+  flex: 1;
+  flex-direction: column;
+  overflow: hidden;
+  border-radius: inherit;
+  background: var(--surface-popover);
+}
+
+/* The mini composer's text box keeps no ring or border on focus; the pill's fill carries it. */
+.bot-bubble-textarea {
+  resize: none;
+  border: 0;
+  outline: none;
+  box-shadow: none;
+  background: transparent;
+}
+
+.bot-bubble-textarea:focus,
+.bot-bubble-textarea:focus-visible {
+  outline: none;
+  box-shadow: none;
+}
+
+/* The shrink and grow between the Aiden window's chat and a head (overlay only). */
+.bot-bubble-transition {
+  position: absolute;
+  overflow: hidden;
+  border-radius: var(--radius-card);
+  box-shadow: var(--elevation-popover);
+  pointer-events: none;
+}
+
+.bot-bubble-transition > img {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+/* The overlay window is see-through: no page background, no scrollbars. */
+:root[data-bot-bubble-overlay],
+:root[data-bot-bubble-overlay] body,
+:root[data-bot-bubble-overlay] #root {
+  width: 100%;
+  height: 100%;
+  margin: 0;
+  padding: 0;
+  overflow: hidden;
+  background: transparent;
+}

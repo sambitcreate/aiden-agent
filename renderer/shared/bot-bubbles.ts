@@ -20,7 +20,7 @@ export const BOT_BUBBLE_CHANNELS = {
   bubble: "bots:bubbles:bubble",
   /** invoke({ botId }) → BotBubbleState. Main window or bubble window. */
   close: "bots:bubbles:close",
-  /** invoke({ botId: string | null }) → BotBubbleState: which head's mini chat is open. */
+  /** invoke(BotBubbleOpenRequest) → BotBubbleState: which head's mini chat is open. */
   open: "bots:bubbles:open",
   /** invoke({ botId, placement }) → BotBubbleState. */
   move: "bots:bubbles:move",
@@ -41,6 +41,8 @@ export const BOT_BUBBLE_CHANNELS = {
   changed: "bots:bubbles:changed",
   /** notification to an overlay: BotBubbleTransition (the shrink or grow animation). */
   transition: "bots:bubbles:transition",
+  /** notification to an overlay: BotBubbleOverlayInfo, after its display's work area or zoom changed. */
+  overlayInfoChanged: "bots:bubbles:overlayInfoChanged",
   /** notification to the main window: { botId } — show this Bot's chat (Open in Aiden). */
   showChat: "bots:bubbles:showChat",
 } as const;
@@ -98,6 +100,17 @@ export interface BotBubbleRect {
   height: number;
 }
 
+export interface BotBubbleOpenRequest {
+  /** The head whose mini chat opens; null tucks the open one away. */
+  botId: string | null;
+  /**
+   * Only if this head's chat is the open one; otherwise nothing changes. An
+   * overlay tucking its chat away on blur sends it, so a late tuck can't close
+   * a chat another display opened meanwhile.
+   */
+  ifOpen?: string;
+}
+
 export interface BotBubbleRequest {
   botId: string;
   /** The chat area in the sender window's CSS pixels, for the shrink animation. */
@@ -121,6 +134,11 @@ export interface BotBubbleOverlayInfo {
   /** The overlay's area in its own CSS pixels (the display's work area, from 0,0). */
   width: number;
   height: number;
+  /**
+   * Whether this overlay is on the primary display, where heads with a null
+   * `displayId` sit. Left out, the overlay treats itself as primary.
+   */
+  primary?: boolean;
 }
 
 export const DEFAULT_BOT_BUBBLE_SETTINGS: BotBubbleSettings = { enabled: true, floatOverApps: true };

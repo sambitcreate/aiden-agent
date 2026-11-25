@@ -1673,3 +1673,12 @@ test("runtime settings preserve valid Quick Chat preferences and drop invalid va
   assert.equal(invalid.quickChatDefaultPersistence, undefined);
   assert.equal(invalid.quickChatKeepOpenOnBlur, undefined);
 });
+
+test("runtime settings keep the Bot bubble switches only when they are booleans", () => {
+  const off = runtimeSettingsFrom({ botBubblesEnabled: false, botBubblesFloatOverApps: false } as never);
+  assert.equal(off.botBubblesEnabled, false);
+  assert.equal(off.botBubblesFloatOverApps, false);
+  const handEdited = runtimeSettingsFrom({ botBubblesEnabled: "no", botBubblesFloatOverApps: 0 } as never);
+  assert.equal(handEdited.botBubblesEnabled, undefined, "a non-boolean reads as unset, which means on");
+  assert.equal(handEdited.botBubblesFloatOverApps, undefined);
+});
