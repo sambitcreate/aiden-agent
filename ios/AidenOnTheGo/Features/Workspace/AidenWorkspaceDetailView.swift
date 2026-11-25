@@ -44,8 +44,9 @@ struct AidenWorkspaceDetailView: View {
             onChatRemoved: onChatRemoved,
             onOpenChat: onOpenChat
         )
-        // A save the computer refused says so on the workspace it was for.
-        .safeAreaInset(edge: .top, spacing: 0) {
+        // A save the computer refused says so on the workspace it was for,
+        // over the page so the list doesn't jump when it comes and goes.
+        .overlay(alignment: .top) {
             if let notice = coordinator.workspaceSaveNotices[objectID] {
                 AidenWorkspaceSaveNoticeRow(message: notice) {
                     coordinator.dismissWorkspaceSaveNotice(objectID)

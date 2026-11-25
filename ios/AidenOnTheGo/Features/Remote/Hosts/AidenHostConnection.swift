@@ -405,6 +405,9 @@ final class AidenHostConnection {
     /// puts the machine's answer for the workspace into the confirmed list.
     /// Newer edits of the workspace stay on top.
     /// `superseding` is the revision the save replaced.
+    /// An answer that arrives after a newer list keeps out of the way: it never
+    /// brings back a workspace that list no longer has, or puts an older copy
+    /// over a newer one. Revisions are hashes, so the copies' times decide.
     func settleWorkspaceEdits(
         _ versions: Set<Int>,
         workspaceId: String,
@@ -414,7 +417,9 @@ final class AidenHostConnection {
         if let revision, revision != confirmed?.revision {
             supersededWorkspaceRevisions[workspaceId, default: []].insert(revision)
         }
-        if let confirmed {
+        if let confirmed,
+           let current = confirmedWorkspaces.first(where: { $0.id == workspaceId }),
+           current.updatedAt <= confirmed.updatedAt {
             confirmedWorkspaces = Self.replacing(confirmed, in: confirmedWorkspaces)
         }
         let remaining = (workspaceEdits[workspaceId] ?? []).filter { !versions.contains($0.version) }

@@ -21,6 +21,11 @@ struct AidenWorkspaceSettingsView: View {
     /// (`AidenRemoteCoordinator.updateWorkspaceOutcome(_:on:)`).
     private var context: AidenRemoteRequestContext { draft.context }
 
+    /// True while this workspace's Remove is queued or on its way.
+    private var isRemoving: Bool {
+        coordinator.workspacesBeingRemoved.contains(draft.id)
+    }
+
     /// The workspaces on this sheet's machine, which Remove keeps at least one of.
     private var machineWorkspaceCount: Int {
         coordinator.hosts.connection(for: context.instanceId)?.workspaces.count ?? 0
@@ -107,11 +112,22 @@ struct AidenWorkspaceSettingsView: View {
 
                 if workspace.isManagedWorktree || machineWorkspaceCount > 1 {
                     Section {
-                        Button(
-                            workspace.isManagedWorktree ? "Delete Managed Worktree" : "Remove from Aiden Agent",
-                            role: .destructive
-                        ) {
-                            isConfirmingRemoval = true
+                        if isRemoving {
+                            // Queued behind this phone's saves, or on its way.
+                            HStack(spacing: 10) {
+                                ProgressView()
+                                Text(workspace.isManagedWorktree ? "Deleting…" : "Removing…")
+                                    .foregroundStyle(palette.secondary)
+                            }
+                            .accessibilityElement(children: .combine)
+                            .accessibilityIdentifier("workspace-settings-removing")
+                        } else {
+                            Button(
+                                workspace.isManagedWorktree ? "Delete Managed Worktree" : "Remove from Aiden Agent",
+                                role: .destructive
+                            ) {
+                                isConfirmingRemoval = true
+                            }
                         }
                     } footer: {
                         VStack(alignment: .leading, spacing: 6) {
@@ -143,11 +159,9 @@ struct AidenWorkspaceSettingsView: View {
                         // The edit shows at once and the sheet closes; the
                         // computer's answer settles it, and a failure puts the
                         // workspace back with a notice on it.
-                        coordinator.haptics.play(
-                            .success,
-                            scope: hapticScope,
-                            dedupeKey: "workspace-settings:\(workspace.id):\(workspace.revision)"
-                        )
+                        // No dedupe key: each Save is its own edit, even on
+                        // the same confirmed copy.
+                        coordinator.haptics.play(.success, scope: hapticScope)
                         // The coordinator keeps the queued save, so closing
                         // the sheet doesn't cancel it.
                         coordinator.enqueueWorkspaceSave(
@@ -496,9 +510,13 @@ struct AidenWorkspaceSaveNoticeRow: View {
                 .font(.footnote)
                 .foregroundStyle(palette.secondary)
                 .frame(maxWidth: .infinity, alignment: .leading)
-            Button("Dismiss", action: onDismiss)
-                .font(.footnote.weight(.semibold))
-                .buttonStyle(.borderless)
+            Button(action: onDismiss) {
+                Text("Dismiss")
+                    .font(.footnote.weight(.semibold))
+                    .frame(minWidth: 44, minHeight: 44)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.borderless)
         }
         .accessibilityElement(children: .contain)
         .accessibilityIdentifier("workspace-save-notice")
