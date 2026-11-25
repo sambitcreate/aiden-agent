@@ -1,8 +1,11 @@
 // Anthropic message threads stay off in Aiden.
 //
 // Since pi-ai 1.5.1 an Anthropic request with a session ID continues a
-// server-side thread and sends only the new messages, on by default for the
-// `anthropic` provider on api.anthropic.com. Aiden keeps 1.4.0's behavior, a
+// server-side thread and sends only the new messages. 1.5.1 turned this on for
+// the `anthropic` provider; since 1.6.0 it is on for any provider, custom
+// connections included, whose baseUrl is on api.anthropic.com. This helper
+// keys on the Anthropic Messages API, not the provider, so it covers every
+// such connection. Aiden keeps 1.4.0's behavior, a
 // full request every time, until threads are evaluated against its replay
 // gate: every request then carries the whole transcript Aiden assembled, and
 // no server-side thread state outlives the chat that made it.
