@@ -2322,6 +2322,10 @@ final class AidenShellUITests: XCTestCase {
         /// iPad's floating tab strip at the top of a regular-width window, when it
         /// shows. It is glass too, so it is also one of `bars`.
         let tabStrip: CGRect?
+        /// Aiden's dock at compact width, from the top of its capsule to the
+        /// window's bottom edge, when it shows. It is glass too, so it is also
+        /// one of `bars`.
+        let dock: CGRect?
         /// The app's window, whose bottom edge cuts a row scrolled partly past it.
         let window: CGRect
         /// The list rows the window's bottom edge runs through.
@@ -2451,6 +2455,20 @@ final class AidenShellUITests: XCTestCase {
             }
         ),
         AuditAllowance(
+            // The dock names its chosen tab beside the icon, and keeps its
+            // height as the system tab bar did: its text stops growing at
+            // xxxLarge, past which the name gives way to the pill alone, and a
+            // held press shows the tab in the Large Content Viewer. VoiceOver
+            // reads every tab whole. Only one of the four names, inside the dock.
+            reason: "Text size of the dock's chosen tab name",
+            ceiling: ["inbox": 1, "bots": 1, "machines": 1, "machine editor": 1, "settings": 1],
+            matches: { finding in
+                guard finding.type == .dynamicType, let frame = finding.frame,
+                      let dock = finding.dock, dock.contains(frame) else { return false }
+                return ["Chats", "Bots", "Workspaces", "Inbox"].contains(finding.label)
+            }
+        ),
+        AuditAllowance(
             // "Nearly passed" is 3:1 or better, short of 4.5:1. Settings, Machines
             // and the machine editor are Forms drawn in the system's own
             // secondary label colour (headers, footers, a row's second line),
@@ -2487,10 +2505,11 @@ final class AidenShellUITests: XCTestCase {
             // cuts the last row the list scrolls past it, and the audit reads the
             // cut text as low contrast. Only a row's text the edge runs through
             // counts: text wholly on the screen, and controls and graphics
-            // anywhere, must pass. On a phone, Settings is pushed from the drawer
-            // with the tab bar hidden, so its last row runs past the edge too.
+            // anywhere, must pass. On a phone the lists scroll under the dock to
+            // the window's edge, so the last row Settings or the computer editor
+            // shows runs past it too.
             reason: "A list row's text the window's bottom edge cuts",
-            ceiling: ["settings": 1],
+            ceiling: ["settings": 1, "machine editor": 1],
             ceilingInRegularWidth: ["inbox": 1],
             matches: { finding in
                 guard finding.type == .contrast, finding.elementType == .staticText,
@@ -2679,9 +2698,18 @@ final class AidenShellUITests: XCTestCase {
                 AidenStateMatrix.capture("audit-\(screen)-\(appearance.rawValue)", in: self)
                 let navigationBar = app.navigationBars.firstMatch
                 let bottomBars = [AidenStateMatrix.bottomTabs(in: app), AidenStateMatrix.runningAccessory(in: app)].filter(\.exists)
+                let window = AidenStateMatrix.window(of: app).frame
+                // The dock's capsule sits in a bar that runs to the window's bottom
+                // edge across its width, as the system tab bar did, and the list
+                // scrolls under that bar's soft edge below the capsule as well.
+                let dockElement = AidenStateMatrix.dock(in: app)
+                let dock = dockElement.exists
+                    ? CGRect(x: window.minX, y: dockElement.frame.minY,
+                             width: window.width, height: max(window.maxY - dockElement.frame.minY, dockElement.frame.height))
+                    : nil
                 let bars = ([navigationBar] + bottomBars + [
                     app.searchFields.firstMatch, app.otherElements["aiden.connection-hint"].firstMatch,
-                ]).filter(\.exists).map(\.frame) + [tabStrip].compactMap { $0 }
+                ]).filter(\.exists).map(\.frame) + [tabStrip, dock].compactMap { $0 }
                 let band = Self.scrollEdgeBand
                 let fadedEdges = band == 0 ? [] : (navigationBar.exists
                     ? [CGRect(x: navigationBar.frame.minX, y: navigationBar.frame.maxY, width: navigationBar.frame.width, height: band)]
@@ -2693,7 +2721,6 @@ final class AidenShellUITests: XCTestCase {
                 let stripContainer = app.descendants(matching: .any)
                     .matching(NSPredicate(format: "label == %@", "Filter by computer")).firstMatch
                 let stripVisible = stripContainer.exists ? stripContainer.frame : nil
-                let window = AidenStateMatrix.window(of: app).frame
                 let cutRows = ((try? app.snapshot()).map(Self.cells) ?? [])
                     .filter { $0.minY < window.maxY && $0.maxY > window.maxY }
                 var excused: [String: Int] = [:]
@@ -2717,6 +2744,7 @@ final class AidenShellUITests: XCTestCase {
                             strip: strip,
                             stripVisible: stripVisible,
                             tabStrip: tabStrip,
+                            dock: dock,
                             window: window,
                             cutRows: cutRows
                         )
