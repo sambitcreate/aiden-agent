@@ -2293,6 +2293,64 @@
         }
       }
     },
+    "/bots/{botId}/session/entries": {
+      "parameters": [
+        {
+          "$ref": "#/components/parameters/BotId"
+        },
+        {
+          "$ref": "#/components/parameters/ProtocolVersion"
+        }
+      ],
+      "get": {
+        "operationId": "getBotSessionEntries",
+        "x-aiden-capability": "bot:read",
+        "x-aiden-capabilities": [
+          "bot:read",
+          "chat:read"
+        ],
+        "description": "Revision 67. The entries just older than `before`, oldest first, projected exactly as this device's session is (the same opt-ins decide what shows). `before` must be an entry the device's current session holds; one it does not (another epoch, or an id it was never sent) is 409 operation_stale, and the client reads the session again. Pages fit the session's byte limit, so a page may hold fewer than `limit` entries; `hasOlder` is truthful. A host older than revision 67 answers 404.",
+        "parameters": [
+          {
+            "name": "before",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128,
+              "pattern": "^[A-Za-z0-9._:-]{1,128}$"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 200,
+              "default": 50
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "One page of older entries",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BotSessionEntriesPage"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
     "/bots/{botId}/session/events": {
       "parameters": [
         {
@@ -2566,6 +2624,71 @@
                 "maxProperties": 0
               }
             }
+          }
+        }
+      }
+    },
+    "/bots/{botId}/queued/{submissionId}/withdraw": {
+      "parameters": [
+        {
+          "$ref": "#/components/parameters/BotId"
+        },
+        {
+          "name": "submissionId",
+          "in": "path",
+          "required": true,
+          "description": "A queued message's submissionId, as the session's queued list names it.",
+          "schema": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 64,
+            "pattern": "^[A-Za-z0-9._:-]+$"
+          }
+        },
+        {
+          "$ref": "#/components/parameters/ProtocolVersion"
+        }
+      ],
+      "post": {
+        "operationId": "withdrawBotQueuedMessage",
+        "x-aiden-capability": "bot:write",
+        "x-aiden-capabilities": [
+          "bot:read",
+          "bot:write",
+          "chat:write",
+          "bot:activity"
+        ],
+        "description": "Revision 67. Take back one of the person's queued messages before its turn starts, as the host's own Remove does. Requires Idempotency-Key; a repeat replays the original receipt. withdrawn: it will not run. started: its turn already began, so it stays in the chat. gone: the host no longer has it, or it is a routine's input or the Bot's self-introduction, which are not the person's to take back. Needs bot:activity, the grant that shows the queue. A host older than revision 67, or one without Bot chat activity, answers 404.",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/IdempotencyKey"
+          }
+        ],
+        "requestBody": {
+          "required": false,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "additionalProperties": false,
+                "maxProperties": 0
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "What became of the queued message",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BotQueuedWithdrawReceipt"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
           }
         }
       }
@@ -5561,7 +5684,7 @@
             "name": "since",
             "in": "query",
             "required": false,
-            "description": "Epoch-milliseconds cursor; runs finished at or after it are returned (inclusive — clients dedupe by run id).",
+            "description": "Epoch-milliseconds cursor; runs finished at or after it are returned (inclusive \u2014 clients dedupe by run id).",
             "schema": {
               "type": "integer",
               "minimum": 0
@@ -5588,7 +5711,7 @@
                     },
                     "now": {
                       "type": "integer",
-                      "description": "Server epoch-milliseconds clock — clients baseline first-poll cursors to this rather than the device clock."
+                      "description": "Server epoch-milliseconds clock \u2014 clients baseline first-poll cursors to this rather than the device clock."
                     }
                   },
                   "additionalProperties": false
@@ -6545,7 +6668,10 @@
             "name": "Aiden-Run-Checkpoint",
             "in": "header",
             "description": "Revision 58. Set to 1 to accept a bounded snapshot of an active run at its current sequence. Older hosts ignore this header.",
-            "schema": { "type": "string", "const": "1" }
+            "schema": {
+              "type": "string",
+              "const": "1"
+            }
           },
           {
             "$ref": "#/components/parameters/ChatId"
@@ -6587,7 +6713,10 @@
             "name": "Aiden-Run-Checkpoint",
             "in": "header",
             "description": "Revision 58. Set to 1 to accept a bounded snapshot of an active run at its current sequence. Older hosts ignore this header.",
-            "schema": { "type": "string", "const": "1" }
+            "schema": {
+              "type": "string",
+              "const": "1"
+            }
           },
           {
             "name": "runId",
@@ -12552,7 +12681,9 @@
           },
           "inputSource": {
             "type": "string",
-            "enum": ["voice"],
+            "enum": [
+              "voice"
+            ],
             "description": "Additive in contract revision 60, user messages only: Aiden Live sent this message for the person on the Mac. Clients show a small \"By voice\" label; they ignore the key on assistant messages and any value they do not know."
           },
           "createdAt": {
@@ -18183,6 +18314,96 @@
         },
         "additionalProperties": false
       },
+      "HostFeedBot": {
+        "type": "object",
+        "description": "A host feed Bot row: a BotSummary (without issueCount, which only phones read) plus the Inbox signals of contract revision 52 and the preview of revision 66. Each optional field is present only when it holds.",
+        "x-aiden-updated-at-not-before-created-at": true,
+        "required": [
+          "id",
+          "name",
+          "purpose",
+          "avatar",
+          "health",
+          "createdAt",
+          "updatedAt",
+          "revision"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 160,
+            "pattern": "^[A-Za-z0-9._:-]+$"
+          },
+          "name": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 80
+          },
+          "purpose": {
+            "type": "string",
+            "maxLength": 280
+          },
+          "avatar": {
+            "$ref": "#/components/schemas/BotAvatarView"
+          },
+          "health": {
+            "$ref": "#/components/schemas/BotHealth"
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "updatedAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "revision": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          },
+          "sessionState": {
+            "description": "Contract revision 37: paused reaches only devices holding bot:handoffs; every other device sees a paused Bot as unavailable.",
+            "enum": [
+              "idle",
+              "running",
+              "interrupted",
+              "needs_model",
+              "unavailable",
+              "paused"
+            ]
+          },
+          "paused": {
+            "description": "Contract revision 37, only for devices holding bot:handoffs and only while the person paused the Bot (sessionState is then paused).",
+            "const": true
+          },
+          "needsYou": {
+            "description": "Contract revision 52: an approval, a question, a hand-off or an open issue waits on the person.",
+            "const": true
+          },
+          "failed": {
+            "description": "Contract revision 52: the Bot's last turn was cut short, or its model cannot be used.",
+            "const": true
+          },
+          "lastReplyAt": {
+            "description": "Contract revision 52: when the Bot's newest reply with visible text arrived. Since revision 66 a host sends it for every Bot, not only Bots whose chat is open there.",
+            "type": "string",
+            "format": "date-time"
+          },
+          "preview": {
+            "description": "Contract revision 66: the one plain line the host's own Bots list shows under the Bot's name (its newest reply, else the person's newest message). No line breaks or control characters.",
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 140
+          },
+          "summarized": {
+            "description": "Contract revision 66: the row's preview and lastReplyAt come from the Bot's summary, so a row with this and neither of them is a Bot with no message yet. Absent when the host could not read the summary, and on hosts before revision 66.",
+            "const": true
+          }
+        },
+        "additionalProperties": false
+      },
       "HostFeedSnapshot": {
         "type": "object",
         "required": [
@@ -18218,7 +18439,7 @@
             "type": "array",
             "description": "Empty for devices without bot:read.",
             "items": {
-              "$ref": "#/components/schemas/BotSummary"
+              "$ref": "#/components/schemas/HostFeedBot"
             }
           },
           "partial": {
@@ -18385,7 +18606,7 @@
             "then": {
               "properties": {
                 "payload": {
-                  "$ref": "#/components/schemas/BotSummary"
+                  "$ref": "#/components/schemas/HostFeedBot"
                 }
               }
             }
@@ -19194,7 +19415,7 @@
                 "type": "string",
                 "minLength": 1,
                 "maxLength": 120,
-                "description": "When the routine runs, ready to show: a schedule with its timezone (\"Every day at 9:00 AM · Pacific Time\"), or what starts an event routine (\"When this routine's link is called\"). A card the Bot replaced with a revised one is omitted; the revised card follows as a new entry."
+                "description": "When the routine runs, ready to show: a schedule with its timezone (\"Every day at 9:00 AM \u00b7 Pacific Time\"), or what starts an event routine (\"When this routine's link is called\"). A card the Bot replaced with a revised one is omitted; the revised card follows as a new entry."
               },
               "status": {
                 "enum": [
@@ -25188,6 +25409,63 @@
             "description": "Records the exact earlier durable folder approval, including a replay after removal. It does not confirm current saved access or issue temporary run access."
           }
         }
+      },
+      "BotSessionEntriesPage": {
+        "type": "object",
+        "description": "Revision 67: one page of a Bot session's older entries.",
+        "required": [
+          "botId",
+          "epoch",
+          "entries",
+          "hasOlder"
+        ],
+        "properties": {
+          "botId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 160,
+            "pattern": "^[A-Za-z0-9._:-]+$"
+          },
+          "epoch": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128,
+            "description": "The session the page belongs to. A page from another epoch does not join the transcript the device holds."
+          },
+          "entries": {
+            "type": "array",
+            "maxItems": 200,
+            "items": {
+              "$ref": "#/components/schemas/BotSessionEntry"
+            }
+          },
+          "hasOlder": {
+            "type": "boolean"
+          }
+        },
+        "additionalProperties": false
+      },
+      "BotQueuedWithdrawReceipt": {
+        "type": "object",
+        "description": "Revision 67: what became of a queued message.",
+        "required": [
+          "submissionId",
+          "outcome"
+        ],
+        "properties": {
+          "submissionId": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9._:-]{1,64}$"
+          },
+          "outcome": {
+            "enum": [
+              "withdrawn",
+              "started",
+              "gone"
+            ]
+          }
+        },
+        "additionalProperties": false
       }
     }
   }

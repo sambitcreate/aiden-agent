@@ -23,15 +23,15 @@ import sbtbiswas.AidenOnTheGo.networking.AidenRemoteClient
 import sbtbiswas.AidenOnTheGo.protocol.AidenRemoteCapability
 
 /**
- * Contract revision 69 (provisional, `approval:plain-words`): a typed shell card carries the
+ * Contract revision 68 (`approval:plain-words`): a typed shell card carries the
  * command's plain words and Aiden's own tags. Every sample in the shared
- * `approval-plain-words-revision-69.json` decodes through the app's parser, and every card the
+ * `approval-plain-words-revision-68.json` decodes through the app's parser, and every card the
  * Mac's parser refuses is refused here too.
  */
 class AidenApprovalPlainWordsContractTest {
     private val fixture: JsonObject by lazy {
-        val text = requireNotNull(javaClass.classLoader?.getResourceAsStream("approval-plain-words-revision-69.json")) {
-            "approval-plain-words-revision-69.json"
+        val text = requireNotNull(javaClass.classLoader?.getResourceAsStream("approval-plain-words-revision-68.json")) {
+            "approval-plain-words-revision-68.json"
         }.bufferedReader().use { it.readText() }
         Json.parseToJsonElement(text).jsonObject
     }
@@ -95,7 +95,7 @@ class AidenApprovalPlainWordsContractTest {
     fun aStreamApprovalCarriesThePlainWordsOnItsCard() {
         val approval = fixture.getValue("streamApprovals").jsonObject.getValue("words").jsonObject
         server.enqueue(MockResponse().setResponseCode(200).setBody(JsonObject(mapOf("approval" to approval)).toString()))
-        val read = runBlocking { client.streamApproval("stream_fixture_69") }
+        val read = runBlocking { client.streamApproval("stream_fixture_68") }
         server.takeRequest()
         val card = requireNotNull(read.approval?.card)
         assertTrue(card.explanation!!.startsWith("Clears the app's cache"))

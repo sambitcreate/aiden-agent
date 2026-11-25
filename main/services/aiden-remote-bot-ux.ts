@@ -123,7 +123,7 @@ export function parseAidenRemoteApprovalCard(value: unknown): ApprovalCard {
       return { key: text(entry.key, "Approval card argument key", APPROVAL_CARD_LIMITS.key), value: text(entry.value, "Approval card argument value", APPROVAL_CARD_LIMITS.value) };
     }),
     ...(has(value, "body") ? { body: parseCardText(value.body, "Approval card body") } : {}),
-    // Revision 69 (`approval:plain-words`): a shell card's plain words, beside its command.
+    // Revision 68 (`approval:plain-words`): a shell card's plain words, beside its command.
     ...(has(value, "explanation") ? { explanation: parseCardExplanation(value) } : {}),
     ...(has(value, "tags") ? { tags: parseCardTags(value) } : {}),
     ...(has(value, "previous") ? { previous: parseCardText(value.previous, "Approval card previous") } : {}),

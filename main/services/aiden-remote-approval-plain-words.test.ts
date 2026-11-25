@@ -1,6 +1,6 @@
-// Contract revision 69 (`approval:plain-words`, provisional): a typed shell
+// Contract revision 68 (`approval:plain-words`, provisional): a typed shell
 // card also carries the command's plain words (`explanation`) and Aiden's own
-// tags. `protocol/aiden-remote/v1/fixtures/approval-plain-words-revision-69.json`
+// tags. `protocol/aiden-remote/v1/fixtures/approval-plain-words-revision-68.json`
 // is what the host serves; the iOS and Android decoders read the same shapes.
 // Regenerate it with `AIDEN_WRITE_FIXTURES=1`.
 import assert from "node:assert/strict";
@@ -12,7 +12,7 @@ import { parseAidenRemoteApprovalCard } from "./aiden-remote-bot-ux.ts";
 import { parseAidenRemotePhoneStreamApproval } from "./aiden-remote-protocol.ts";
 import { projectPhoneStreamApproval } from "./aiden-remote-streams.ts";
 
-const FIXTURE = new URL("../../protocol/aiden-remote/v1/fixtures/approval-plain-words-revision-69.json", import.meta.url);
+const FIXTURE = new URL("../../protocol/aiden-remote/v1/fixtures/approval-plain-words-revision-68.json", import.meta.url);
 const WHERE = { workspaceRoot: "/Users/me/project", home: "/Users/me" };
 
 function build() {
@@ -25,7 +25,7 @@ function build() {
   const words = card(command, risky, ["chat"]);
   const shell = (overrides: Record<string, unknown>) => ({ ...JSON.parse(JSON.stringify(words)), ...overrides });
   return {
-    contractRevision: 69,
+    contractRevision: 68,
     capability: "approval:plain-words",
     approvalCards: {
       riskyCommand: words,
@@ -36,11 +36,11 @@ function build() {
     streamApprovals: {
       words: projectPhoneStreamApproval(
         {
-          approvalId: "approval_fixture_69",
-          streamId: "stream_fixture_69",
-          chatId: "chat_fixture_69",
+          approvalId: "approval_fixture_68",
+          streamId: "stream_fixture_68",
+          chatId: "chat_fixture_68",
           summary: `Run command: ${command}`,
-          toolCallId: "call_fixture_69",
+          toolCallId: "call_fixture_68",
           toolName: "run_command",
           expiresAt: "2026-11-24T09:05:00.000Z",
           canAllow: true,
@@ -66,7 +66,7 @@ function build() {
   };
 }
 
-test("the shared revision-69 fixture is exactly what the host's serializers produce", () => {
+test("the shared revision-68 fixture is exactly what the host's serializers produce", () => {
   const built = JSON.parse(JSON.stringify(build()));
   if (process.env.AIDEN_WRITE_FIXTURES === "1") writeFileSync(FIXTURE, `${JSON.stringify(built, null, 2)}\n`);
   assert.deepEqual(JSON.parse(readFileSync(FIXTURE, "utf8")), built);

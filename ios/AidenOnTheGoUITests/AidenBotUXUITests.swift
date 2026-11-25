@@ -129,7 +129,7 @@ final class AidenBotUXUITests: XCTestCase {
             chat.tap()
             if app.staticTexts["Run on your Mac?"].firstMatch.waitForExistence(timeout: 20) {
                 shoot("chat-approval-card")
-                // Revision 69: the card opens on plain words and flips to the command.
+                // Revision 68: the card opens on plain words and flips to the command.
                 let flip = app.buttons["aiden.approval-flip"].firstMatch
                 if flip.waitForExistence(timeout: 5) {
                     XCTAssertTrue(app.staticTexts["What it will do"].firstMatch.exists, "The card did not open on its words")

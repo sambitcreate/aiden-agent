@@ -43,19 +43,19 @@ function stripFormatCharacters(text: string): string {
 }
 
 /**
- * One line, at most 200 characters, ending in an ellipsis when cut. Line
- * breaks become spaces; other control and invisible formatting characters
- * (bidi overrides, zero-width spaces, stray tag characters) are dropped so a
- * tooltip shows the text as it reads.
+ * One line, at most `max` characters (200 by default), ending in an ellipsis
+ * when cut. Line breaks become spaces; other control and invisible formatting
+ * characters (bidi overrides, zero-width spaces, stray tag characters) are
+ * dropped so a tooltip or a row shows the text as it reads.
  */
-export function clipPendingAttentionSummary(text: unknown): string {
+export function clipPendingAttentionSummary(text: unknown, max: number = CHAT_PENDING_ATTENTION_SUMMARY_MAX): string {
   if (typeof text !== "string") return "";
   const oneLine = stripFormatCharacters(text.replace(/\s+/gu, " "))
     .replace(/ {2,}/gu, " ")
     .trim();
   const characters = Array.from(oneLine);
-  return characters.length <= CHAT_PENDING_ATTENTION_SUMMARY_MAX
+  return characters.length <= max
     ? characters.join("")
     // A cut through a flag leaves its tag characters stray; strip them again.
-    : `${stripFormatCharacters(characters.slice(0, CHAT_PENDING_ATTENTION_SUMMARY_MAX - 1).join(""))}…`;
+    : `${stripFormatCharacters(characters.slice(0, max - 1).join(""))}…`;
 }

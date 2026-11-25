@@ -372,17 +372,39 @@ export const AIDEN_REMOTE_CONTINUE_IN_NEW_CHAT_CONTRACT_REVISION = 64 as const;
  */
 export const AIDEN_REMOTE_STREAM_SNAPSHOT_REASONS_CONTRACT_REVISION = 65 as const;
 /**
- * Contract revision 69 (provisional; re-claim the next revision after
- * `main`'s at merge by changing only this constant): plain-words command
- * approvals (`approval:plain-words`, an opt-in that needs `approval:cards`).
+ * Contract revision 66 (provisional; re-claim the next revision after
+ * `main`'s at merge by changing only this constant): host feed Bot rows may
+ * carry `preview`, the one plain line the host's own Bots list shows under the
+ * Bot's name (at most 140 characters), and a host now sends `lastReplyAt` for
+ * every Bot rather than only Bots whose chat is open there, marking each row
+ * whose summary it read `summarized: true`. Display-only, no
+ * capability or feature token; older desktops ignore the key, and phones don't
+ * read the host feed.
+ */
+export const AIDEN_REMOTE_BOT_FEED_PREVIEW_CONTRACT_REVISION = 66 as const;
+/**
+ * Contract revision 67 (provisional; re-claim the next revision after
+ * `main`'s at merge by changing only this constant): two Bot session routes.
+ * `GET /bots/{botId}/session/entries?before=&limit=` pages the transcript
+ * back from an entry the device already has, so a chat can show more than the
+ * snapshot's window. `POST /bots/{botId}/queued/{submissionId}/withdraw`
+ * takes back one of the person's queued messages before its turn starts.
+ * Neither has a feature token, since the server feature list is full: a host
+ * older than this revision answers both with 404, and the client says so.
+ */
+export const AIDEN_REMOTE_BOT_SESSION_PAGES_CONTRACT_REVISION = 67 as const;
+/**
+ * Contract revision 68 (written as 69, re-claimed at merge on 2026-11-25):
+ * plain-words command approvals (`approval:plain-words`, an opt-in that
+ * needs `approval:cards`).
  * A holder's shell card (`kind: "mac"`, `mac: "shell"`, a `command` body) may
  * carry `explanation`, the model's one-line description of the command, and
  * `tags`, Aiden's own reading of the command text (`{label, tone: "calm" |
  * "risk"}`, risky first). Display-only: the body stays the exact command,
- * buttons and `canAllow` are unchanged, and closed revision-68 decoders never
+ * buttons and `canAllow` are unchanged, and closed revision-67 decoders never
  * see the two keys.
  */
-export const AIDEN_REMOTE_APPROVAL_PLAIN_WORDS_CONTRACT_REVISION = 69 as const;
+export const AIDEN_REMOTE_APPROVAL_PLAIN_WORDS_CONTRACT_REVISION = 68 as const;
 export const AIDEN_REMOTE_CONTRACT_REVISION = AIDEN_REMOTE_APPROVAL_PLAIN_WORDS_CONTRACT_REVISION;
 export const AIDEN_REMOTE_BASE_PATH = "/api/aiden/v1" as const;
 export const AIDEN_REMOTE_MAX_SSE_FRAME_BYTES = 1_048_576;
@@ -714,7 +736,7 @@ export const AIDEN_REMOTE_CHAT_CONTINUE_CAPABILITIES = ["chat:continue-in-new-ch
 export const AIDEN_REMOTE_STREAM_SNAPSHOT_REASON_CAPABILITIES = ["stream:snapshot-reasons"] as const;
 
 /**
- * Contract revision 69: a device holding `approval:plain-words` (with
+ * Contract revision 68: a device holding `approval:plain-words` (with
  * `approval:cards`) receives `explanation` and `tags` on shell approval cards.
  * Display-only, no authority of its own.
  */
@@ -2133,6 +2155,32 @@ export interface AidenRemoteBotSession extends AidenRemoteBotSessionStateView {
   issues?: AidenRemoteBotIssue[];
 }
 
+/**
+ * Revision 67, `GET /bots/{botId}/session/entries?before=&limit=`: the entries
+ * just older than `before`, oldest first, as the device's session shows them.
+ * `epoch` is the session the page belongs to; a page from another epoch does
+ * not join the transcript the device holds.
+ */
+export interface AidenRemoteBotSessionEntriesPage {
+  botId: string;
+  epoch: string;
+  entries: AidenRemoteBotSessionEntry[];
+  hasOlder: boolean;
+}
+
+export const AIDEN_REMOTE_BOT_SESSION_PAGE_DEFAULT_LIMIT = 50;
+
+export const AIDEN_REMOTE_BOT_QUEUED_WITHDRAW_OUTCOMES = ["withdrawn", "started", "gone"] as const;
+/**
+ * Revision 67, `POST /bots/{botId}/queued/{submissionId}/withdraw`: what
+ * became of the queued message. `started` means its turn already began, so it
+ * stays in the chat; `gone` means the host no longer has it to take back.
+ */
+export interface AidenRemoteBotQueuedWithdrawReceipt {
+  submissionId: string;
+  outcome: (typeof AIDEN_REMOTE_BOT_QUEUED_WITHDRAW_OUTCOMES)[number];
+}
+
 export type AidenRemoteBotSessionEventPayload =
   | { type: "snapshot"; payload: { session: AidenRemoteBotSession } }
   | { type: "partial"; payload: { text: string } }
@@ -3473,6 +3521,37 @@ function parseBotSummaryFields(value: unknown): AidenRemoteBotSummary {
         }
       : {}),
   };
+}
+
+/** The longest `preview` a host feed Bot row carries (revision 66). */
+export const AIDEN_REMOTE_HOST_FEED_BOT_PREVIEW_MAX = 140;
+
+/**
+ * A host feed Bot row: a Bot summary without `issueCount` (a phone shape),
+ * plus revision 52's `needsYou`, `failed` and `lastReplyAt` and revision 66's
+ * `preview`, one trimmed plain line, and `summarized`.
+ */
+export function parseAidenRemoteHostFeedBot(value: unknown, label = "Host feed Bot"): Record<string, unknown> {
+  if (!isRecord(value)) throw new Error(`${label} must be an object.`);
+  if (hasOwn(value, "issueCount")) throw new Error(`${label} carries no issueCount.`);
+  const { needsYou, failed, lastReplyAt, preview, summarized, ...summary } = value;
+  parseAidenRemoteBotSummary(summary);
+  assertExactKeys(
+    summary,
+    ["id", "name", "purpose", "avatar", "health", "createdAt", "updatedAt", "revision", "sessionState", "paused"],
+    label,
+  );
+  if (needsYou !== undefined && needsYou !== true) throw new Error(`${label} needsYou must be true when present.`);
+  if (failed !== undefined && failed !== true) throw new Error(`${label} failed must be true when present.`);
+  if (summarized !== undefined && summarized !== true) throw new Error(`${label} summarized must be true when present.`);
+  if (lastReplyAt !== undefined) dateTimeValue(lastReplyAt, `${label} lastReplyAt`);
+  if (preview !== undefined) {
+    const text = boundedText(preview, `${label} preview`, AIDEN_REMOTE_HOST_FEED_BOT_PREVIEW_MAX);
+    if (text.trim() !== text || /[\p{Cc}\p{Cf}\u2028\u2029]/u.test(text.replace(/[\u200C\u200D]/gu, ""))) {
+      throw new Error(`${label} preview must be one trimmed plain line.`);
+    }
+  }
+  return value;
 }
 
 export function parseAidenRemoteBotList(value: unknown): AidenRemoteBotList {
@@ -6609,6 +6688,47 @@ export function parseAidenRemoteBotSession(value: unknown): AidenRemoteBotSessio
     ...(hasOwn(value, "issues") ? { issues: parseAidenRemoteBotIssueList(value.issues) } : {}),
     ...(hasOwn(value, "plan") ? { plan: value.plan === null ? null : parseAidenRemoteBotPlan(value.plan) } : {}),
     ...(hasOwn(value, "accessRequest") ? { accessRequest: value.accessRequest === null ? null : parseAidenRemoteBotAccessRequest(value.accessRequest) } : {}),
+  };
+}
+
+export function parseAidenRemoteBotSessionEntriesPage(value: unknown): AidenRemoteBotSessionEntriesPage {
+  if (!isRecord(value)) throw new Error("Bot session page must be an object.");
+  assertExactKeys(value, ["botId", "epoch", "entries", "hasOlder"], "Bot session page");
+  if (!Array.isArray(value.entries) || value.entries.length > AIDEN_REMOTE_BOT_SESSION_MAX_ENTRIES) {
+    throw new Error(`Bot session page entries must contain at most ${AIDEN_REMOTE_BOT_SESSION_MAX_ENTRIES} items.`);
+  }
+  const entries = value.entries.map(parseAidenRemoteBotSessionEntry);
+  if (new Set(entries.map((entry) => entry.id)).size !== entries.length) {
+    throw new Error("Bot session page entry ids must be unique.");
+  }
+  return {
+    botId: boundedBotId(value.botId, "Bot session page botId"),
+    epoch: boundedEpoch(value.epoch, "Bot session page epoch"),
+    entries,
+    hasOlder: requiredBooleanValue(value.hasOlder, "Bot session page hasOlder"),
+  };
+}
+
+/** The `before` cursor of a session page: an entry id the device already holds. */
+export function parseAidenRemoteBotSessionEntryId(value: unknown): string {
+  const id = boundedText(value, "Bot session entry id", 128);
+  if (!BOT_SESSION_ENTRY_ID.test(id)) throw new Error("Bot session entry id is invalid.");
+  return id;
+}
+
+/** A queued message's `submissionId`, as the session's `queued` list names it. */
+export function parseAidenRemoteBotSubmissionId(value: unknown): string {
+  const id = boundedText(value, "Bot submissionId", 64);
+  if (!AIDEN_REMOTE_BOT_SUBMISSION_ID.test(id)) throw new Error("Bot submissionId is invalid.");
+  return id;
+}
+
+export function parseAidenRemoteBotQueuedWithdrawReceipt(value: unknown): AidenRemoteBotQueuedWithdrawReceipt {
+  if (!isRecord(value)) throw new Error("Bot queued withdraw receipt must be an object.");
+  assertExactKeys(value, ["submissionId", "outcome"], "Bot queued withdraw receipt");
+  return {
+    submissionId: parseAidenRemoteBotSubmissionId(value.submissionId),
+    outcome: enumMember(value.outcome, AIDEN_REMOTE_BOT_QUEUED_WITHDRAW_OUTCOMES, "Bot queued withdraw outcome"),
   };
 }
 
@@ -9957,8 +10077,11 @@ function parseRevision19Fixture(
         throw new Error("Host feed snapshot lists must be arrays.");
       }
       event.payload.workspaces.forEach((workspace) => parseHostFeedWorkspaceRepository(workspace, "Host feed workspace"));
+      event.payload.bots.forEach((bot) => parseAidenRemoteHostFeedBot(bot));
     } else if (event.type === "workspace.upsert") {
       parseHostFeedWorkspaceRepository(event.payload, "Host feed workspace");
+    } else if (event.type === "bot.upsert") {
+      parseAidenRemoteHostFeedBot(event.payload);
     } else if (event.type === "run.state") {
       assertExactKeys(
         event.payload,

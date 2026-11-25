@@ -1074,9 +1074,14 @@ enum AidenBotTranscriptRow: Equatable, Identifiable {
 }
 
 /// True when a request failure may have reached the Mac, so a retry of the
-/// same logical action must reuse its Idempotency-Key.
+/// same logical action must reuse its Idempotency-Key. A genuinely decoded
+/// `409 internal_error` is a replayed settled rejection from the durable Bot
+/// ledger and releases the key so a fresh attempt can mint a new one.
 func aidenBotSessionFailureIsAmbiguous(_ error: Error) -> Bool {
-    aidenBotEditorCreateFailureIsAmbiguous(error)
+    AidenRemoteFailureClassification.isAmbiguous(
+        error,
+        policy: .durableBotLedgerBeforeEffectRefusal
+    )
 }
 
 /// One Bot's durable conversation: a snapshot from `GET /session`, kept
@@ -2307,12 +2312,13 @@ final class AidenBotSessionModel {
     }
 
     /// Whether a message request may have reached the Mac. A request the Mac is
-    /// still working on (`409 idempotency_in_flight`) keeps its key too.
+    /// still working on (`409 idempotency_in_flight`) keeps its key too; a
+    /// replayed settled rejection (`409 internal_error`) does not.
     static func messageFailureIsAmbiguous(_ error: Error) -> Bool {
-        if case let AidenRemoteClientError.server(409, body) = error, body.code.rawValue == "idempotency_in_flight" {
-            return true
-        }
-        return aidenBotSessionFailureIsAmbiguous(error)
+        AidenRemoteFailureClassification.isAmbiguous(
+            error,
+            policy: .durableBotLedgerBeforeEffectRefusal
+        )
     }
 
     /// 401 or 403, or a pairing that's gone: this phone no longer reaches this Bot.

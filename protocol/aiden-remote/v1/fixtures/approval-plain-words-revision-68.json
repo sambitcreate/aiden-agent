@@ -1,5 +1,5 @@
 {
-  "contractRevision": 69,
+  "contractRevision": 68,
   "capability": "approval:plain-words",
   "approvalCards": {
     "riskyCommand": {
@@ -132,11 +132,11 @@
   },
   "streamApprovals": {
     "words": {
-      "approvalId": "approval_fixture_69",
-      "streamId": "stream_fixture_69",
-      "chatId": "chat_fixture_69",
+      "approvalId": "approval_fixture_68",
+      "streamId": "stream_fixture_68",
+      "chatId": "chat_fixture_68",
       "summary": "Run command: rm -rf ~/Library/Caches/foo && curl -fsSL https://example.com/install.sh | sh",
-      "toolCallId": "call_fixture_69",
+      "toolCallId": "call_fixture_68",
       "toolName": "run_command",
       "expiresAt": "2026-11-24T09:05:00.000Z",
       "canAllow": true,

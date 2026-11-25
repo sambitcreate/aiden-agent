@@ -9,7 +9,7 @@ import SwiftUI
 struct AidenTypedApprovalCard: View {
     @Environment(\.aidenPalette) private var palette
     @Environment(\.aidenReduceMotion) private var reduceMotion
-    /// Revision 69: a shell card with plain words opens on them; this flips to the command.
+    /// Revision 68: a shell card with plain words opens on them; this flips to the command.
     @State private var showsCommand = false
     @ScaledMetric(relativeTo: .headline) private var badgeGlyphSize: CGFloat = 20
     @ScaledMetric(relativeTo: .headline) private var badgeSize: CGFloat = 44
@@ -181,7 +181,7 @@ struct AidenTypedApprovalCard: View {
         .background(palette.canvas, in: wellShape)
     }
 
-    /// Revision 69: what the command will do, in the model's words, with a
+    /// Revision 68: what the command will do, in the model's words, with a
     /// flip to the exact command and back. Flipping never answers the card.
     private func plainWordsWell(explanation: String, command: AidenApprovalCardText) -> some View {
         ZStack(alignment: .topTrailing) {
@@ -316,7 +316,7 @@ struct AidenTypedApprovalCard: View {
     }
 }
 
-/// Revision 69: Aiden's own tags for a shell command, read by the Mac from the
+/// Revision 68: Aiden's own tags for a shell command, read by the Mac from the
 /// command text. A risky step sits in a soft red fill, a calm one in grey.
 struct AidenApprovalCardTags: View {
     @Environment(\.aidenPalette) private var palette

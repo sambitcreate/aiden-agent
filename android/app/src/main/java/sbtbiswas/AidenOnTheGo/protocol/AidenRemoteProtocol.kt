@@ -621,7 +621,7 @@ data class AidenRemoteCapability(val rawValue: String) {
         /** Revision 61: each is asked for in a call of its own, so a refusal leaves the rest. */
         val BOT_UX = listOf(APPROVAL_CARDS, APPROVALS_SETTINGS, BOT_SETTINGS_CHANGES, BOT_SUGGESTIONS, BOT_TEMPLATES)
         /**
-         * Revision 69 (provisional): a typed shell card also carries the command's plain words
+         * Revision 68: a typed shell card also carries the command's plain words
          * (`explanation`) and Aiden's own tags. The Mac sends them only beside [APPROVAL_CARDS].
          * Negotiated alone, after the revision-61 opt-ins.
          */
@@ -753,7 +753,7 @@ data class AidenRemoteCapability(val rawValue: String) {
         /** Revision 65: negotiable when the Mac lists it in `serverCapabilities`, in its own call. */
         val PHONE_STREAM_SNAPSHOT_REASONS = listOf(STREAM_SNAPSHOT_REASONS)
 
-        /** Revision 69: negotiable when the Mac lists it in `serverCapabilities`, in its own call. */
+        /** Revision 68: negotiable when the Mac lists it in `serverCapabilities`, in its own call. */
         val PHONE_APPROVAL_PLAIN_WORDS = listOf(APPROVAL_PLAIN_WORDS)
 
         /** Every grant `POST /device/capabilities` may add. */

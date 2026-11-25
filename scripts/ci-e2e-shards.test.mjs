@@ -4,7 +4,8 @@ import { spawnSync } from "node:child_process";
 import process from "node:process";
 import test from "node:test";
 import { URL, fileURLToPath } from "node:url";
-import { E2E_SHARD_COUNT, discoverSpecs, planShards, shardArguments } from "./ci-e2e-shards.mjs";
+import { E2E_SHARD_COUNT, discoverSpecs, planShards, shardArguments, specsForRunner } from "./ci-e2e-shards.mjs";
+import { readE2ESpecMap } from "./ci-related-tests.mjs";
 
 test("every deterministic spec belongs to exactly one shard, including unweighted new files", () => {
   const specs = [...discoverSpecs(), "future/new-flow.spec.ts"];
@@ -102,4 +103,28 @@ test("related E2E selection may leave unused shards empty without dropping the s
   assert.deepEqual(unused.shard.files, []);
   assert.equal(unused.empty, true);
   assert.deepEqual(unused.args, []);
+});
+
+test("a pull request's macOS runner runs only its planned macOS-only specs", () => {
+  const discovered = ["a.spec.ts", "b.spec.ts", "c.spec.ts", "d.spec.ts"];
+  const selection = {
+    e2e: { mode: "related", specs: ["a.spec.ts", "b.spec.ts", "c.spec.ts"] },
+    macE2E: { scope: "macos", shards: [1], specs: ["b.spec.ts"] },
+  };
+  assert.deepEqual(specsForRunner(discovered, selection, "macos"), ["b.spec.ts"]);
+  assert.deepEqual(specsForRunner(discovered, selection, undefined), ["a.spec.ts", "b.spec.ts", "c.spec.ts"]);
+  // Main's full plan, a missing plan, or one naming an unknown spec keeps the ordinary selection.
+  const full = { ...selection, macE2E: { scope: "all", shards: [1, 2, 3, 4, 5], specs: [] } };
+  assert.deepEqual(specsForRunner(discovered, full, "macos"), ["a.spec.ts", "b.spec.ts", "c.spec.ts"]);
+  assert.deepEqual(specsForRunner(discovered, { e2e: selection.e2e }, "macos"), ["a.spec.ts", "b.spec.ts", "c.spec.ts"]);
+  const unknown = { ...selection, macE2E: { scope: "macos", shards: [1], specs: ["gone.spec.ts"] } };
+  assert.deepEqual(specsForRunner(discovered, unknown, "macos"), ["a.spec.ts", "b.spec.ts", "c.spec.ts"]);
+});
+
+test("every macOS-only spec fits one pull-request runner inside the E2E job budget", () => {
+  const fixture = JSON.parse(readFileSync(new URL("./fixtures/ci-e2e-2026-11-04-timings.json", import.meta.url), "utf8"));
+  const { jobSeconds, setupAndCleanupReserveSeconds, minimumHeadroomSeconds } = fixture.budget;
+  const [shard] = planShards(readE2ESpecMap().macos, 1);
+  assert.equal(shard.files.length, readE2ESpecMap().macos.length);
+  assert.ok(shard.seconds + setupAndCleanupReserveSeconds <= jobSeconds - minimumHeadroomSeconds, `${shard.seconds}s`);
 });

@@ -685,7 +685,7 @@ struct AidenRemoteCapability: RawRepresentable, Codable, Hashable, Sendable {
     /// Contract revision 61 adds `approval:cards`, `approvals:settings`,
     /// `bot:settings-changes`, `bot:suggestions` and `bot:templates`, each alone.
     /// Contract revision 54 adds `bot:messaging`, also asked for alone.
-    /// Contract revision 69 adds `approval:plain-words`, asked for alone after `approval:cards`.
+    /// Contract revision 68 adds `approval:plain-words`, asked for alone after `approval:cards`.
     static let phoneNegotiable: [Self] = v1Known + [
         Self(rawValue: "runs:observe"), Self(rawValue: "runs:control"),
         Self(rawValue: "simulators:mobile"), Self(rawValue: "bot:cards"),

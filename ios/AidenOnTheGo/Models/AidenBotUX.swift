@@ -18,7 +18,7 @@ enum AidenBotUXWire {
     static let cardButtonsMax = 5
     static let cardButtonLabelMax = 80
     static let cardAllowOnMacMax = 120
-    /// Revision 69 (`approval:plain-words`): the command's plain words and Aiden's tags.
+    /// Revision 68 (`approval:plain-words`): the command's plain words and Aiden's tags.
     static let cardExplanationMax = 400
     static let cardTagsMax = 8
     static let cardTagLabelMax = 80
@@ -138,7 +138,7 @@ struct AidenApprovalCardRow: Codable, Equatable, Sendable {
     private enum CodingKeys: String, CodingKey { case label, value }
 }
 
-/// Revision 69 (`approval:plain-words`): one of Aiden's own tags, read by the
+/// Revision 68 (`approval:plain-words`): one of Aiden's own tags, read by the
 /// Mac from the command text without any model. `risk` steps (deleting files,
 /// the internet, a downloaded script, admin rights, files outside the project,
 /// stopping programs) draw in a soft red fill; `calm` ones in grey.
@@ -206,11 +206,11 @@ struct AidenApprovalCardModel: Codable, Equatable, Sendable {
     let title: String
     let arguments: [AidenApprovalCardArgument]
     let body: AidenApprovalCardText?
-    /// Revision 69 (`approval:plain-words`): the model's one-line description
+    /// Revision 68 (`approval:plain-words`): the model's one-line description
     /// of a shell command. The card opens on it; `body` keeps the exact command
     /// one flip away. Only a Mac shell card with a command body carries it.
     let explanation: String?
-    /// Revision 69: Aiden's own tags for the command, risky ones first. Never empty when sent.
+    /// Revision 68: Aiden's own tags for the command, risky ones first. Never empty when sent.
     let tags: [AidenApprovalCardTag]?
     let previous: AidenApprovalCardText?
     let rows: [AidenApprovalCardRow]?
@@ -850,7 +850,7 @@ extension AidenRemoteCapability {
     /// Revision 61: template versions, Open, the stale check and one-field create.
     static let botTemplates = Self(rawValue: "bot:templates")
 
-    /// Revision 69: the command's plain words and Aiden's tags on a typed shell
+    /// Revision 68: the command's plain words and Aiden's tags on a typed shell
     /// card. Asked for alone, after `approval:cards`, which it needs.
     static let approvalPlainWords = Self(rawValue: "approval:plain-words")
 

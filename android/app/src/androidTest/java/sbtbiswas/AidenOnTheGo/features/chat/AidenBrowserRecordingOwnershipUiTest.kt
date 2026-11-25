@@ -1,6 +1,8 @@
 package sbtbiswas.AidenOnTheGo.features.chat
 
 import android.content.Context
+import android.os.Handler
+import android.os.Looper
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -43,6 +45,10 @@ import java.util.concurrent.CopyOnWriteArrayList
 import java.util.concurrent.Executors
 import java.util.concurrent.LinkedBlockingQueue
 import java.util.concurrent.TimeUnit
+import kotlin.coroutines.intrinsics.COROUTINE_SUSPENDED
+import kotlin.coroutines.intrinsics.intercepted
+import kotlin.coroutines.intrinsics.suspendCoroutineUninterceptedOrReturn
+import kotlin.coroutines.resume
 import javax.net.ssl.KeyManagerFactory
 import javax.net.ssl.SSLContext
 import sbtbiswas.AidenOnTheGo.auth.InMemoryAidenSecureStore
@@ -58,6 +64,7 @@ class AidenBrowserRecordingOwnershipUiTest {
     @get:Rule
     val compose = createComposeRule()
     private val instrumentation get() = InstrumentationRegistry.getInstrumentation()
+    private val mainThread = Handler(Looper.getMainLooper())
     private val visible = mutableStateOf(true)
     private val releaseFiles = CopyOnWriteArrayList<File>()
     private val requested = CountDownLatch(1)
@@ -144,6 +151,7 @@ class AidenBrowserRecordingOwnershipUiTest {
                             // transfers a real file; the disposed owner must reject it.
                             withContext(NonCancellable) { model.browserRecording(recording) }
                         } else model.browserRecording(recording)
+                        continueOnMainThread()
                         resultFile = (loaded as? AidenBrowserRecordingLoad.Ready)?.recording
                         delivered.add(loaded)
                         loaded
@@ -186,6 +194,23 @@ class AidenBrowserRecordingOwnershipUiTest {
             } else out.write(body)
             out.flush()
         }
+    }
+
+    /**
+     * The test composition's dispatcher is unconfined, so the card would otherwise adopt its
+     * file on the download thread, racing its main-thread disposal and finishing after
+     * [finishWithoutFrame]'s main-thread sync. On a device the card resumes on the main thread.
+     * Ignores cancellation, so a late delivery still reaches the disposed owner.
+     *
+     * This always suspends and is always resumed by the posted main-thread task. A
+     * `withContext(Dispatchers.Main) {}` hop is not enough: when its empty block finishes before
+     * the caller suspends, the caller keeps the result and carries on on the download thread.
+     * Resuming from main while the download thread is still returning COROUTINE_SUSPENDED is the
+     * ordinary dispatcher handoff; nothing runs on that thread after the return.
+     */
+    private suspend fun continueOnMainThread(): Unit = suspendCoroutineUninterceptedOrReturn { continuation ->
+        mainThread.post { continuation.intercepted().resume(Unit) }
+        COROUTINE_SUSPENDED
     }
 
     private fun startPaused() {

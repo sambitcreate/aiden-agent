@@ -1618,7 +1618,7 @@ class AidenRemoteClientTest {
     @Test
     fun streamSnapshotReasonsDecodeSharedFixtureRejectInvalidReasonsAndNegotiateSolo() = runBlocking {
         val fixture = contractFixture()
-        assertEquals(69, fixture.getValue("contractRevision").jsonPrimitive.int)
+        assertEquals(68, fixture.getValue("contractRevision").jsonPrimitive.int)
         val section = fixture.getValue("streamRecovery").jsonObject
         assertEquals("stream:snapshot-reasons", section.getValue("capability").jsonPrimitive.content)
 

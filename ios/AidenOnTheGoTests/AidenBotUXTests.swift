@@ -123,12 +123,12 @@ final class AidenBotUXTests: XCTestCase {
         }
     }
 
-    // MARK: Revision 69 plain words (`approval:plain-words`)
+    // MARK: Revision 68 plain words (`approval:plain-words`)
 
     func plainWordsFixture() throws -> [String: Any] {
-        let url = try XCTUnwrap(Bundle(for: Self.self).url(forResource: "approval-plain-words-revision-69", withExtension: "json"))
+        let url = try XCTUnwrap(Bundle(for: Self.self).url(forResource: "approval-plain-words-revision-68", withExtension: "json"))
         let root = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(contentsOf: url)) as? [String: Any])
-        XCTAssertEqual(root["contractRevision"] as? Int, 69)
+        XCTAssertEqual(root["contractRevision"] as? Int, 68)
         XCTAssertEqual(root["capability"] as? String, AidenRemoteCapability.approvalPlainWords.rawValue)
         return root
     }

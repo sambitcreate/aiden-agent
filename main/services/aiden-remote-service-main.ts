@@ -212,7 +212,7 @@ import {
 import { hostPlatformCapabilities } from "./host-platform-capabilities.js";
 import { electronConnectorWatchRemotePorts } from "./bot-routine-events/connector-watch-startup.js";
 import { AidenRemoteHostRunService } from "./aiden-remote-host-runs.js";
-import { AidenRemoteHostFeedService, hostFeedBotSignals } from "./aiden-remote-host-feed.js";
+import { AidenRemoteHostFeedService, createHostFeedBotSignalsCache } from "./aiden-remote-host-feed.js";
 import { createAidenRemoteHostFeedSource } from "./aiden-remote-host-feed-source.js";
 import { hostRunRegistry } from "./host-runs-main.js";
 import { liveRunAttention } from "./chat-pending-attention.js";
@@ -906,6 +906,7 @@ async function createRuntime(): Promise<AidenRemoteRuntime> {
           const bots = botsSupported ? new AidenRemoteBotService({
             application: botApplicationService,
             chatStore,
+            log: (message, error) => logger.warn("aiden-remote", message, error),
             avatar: createMainBotAvatarApplicationAdapter(instanceId),
             inbox: {
               list: (deviceId, input) =>
@@ -1222,6 +1223,12 @@ async function createRuntime(): Promise<AidenRemoteRuntime> {
               await workspaceApplicationService.list(),
               () => chatStore.list(),
             );
+          const botSignalsCache = createHostFeedBotSignalsCache({
+            summary: async (botId) => {
+              const { botLiveProjection } = await import("./bot-runtime/bot-session-main.js");
+              return botLiveProjection().summary(botId);
+            },
+          });
           const hostFeed = new AidenRemoteHostFeedService({
             now: Date.now,
             attentionSummary: (runId) => {
@@ -1235,15 +1242,10 @@ async function createRuntime(): Promise<AidenRemoteRuntime> {
               approvalMode: async () => effectiveApprovalMode(await configStore.getSettings(), true),
               repositoryIdentity: gitCachedRepositoryIdentity,
               ...(bots ? { listBots: () => bots.list() } : {}),
-              // Read runtime signals without opening conversation entries or context.
-              // Reply times are available only from an already-open live feed.
-              botSignals: async (botRows) => {
-                const { botLiveProjection } = await import("./bot-runtime/bot-session-main.js");
-                const live = botLiveProjection();
-                return new Map(await mapWithConcurrency(botRows, 4, async (bot) =>
-                  [bot.id, hostFeedBotSignals(await live.inboxSignals(bot.id).catch(() => undefined))] as const,
-                ));
-              },
+              // The same summary this Mac's own Bots list reads (revision 66), kept per
+              // Bot until that Bot's own `bots:changed` or `bots:attention` arrives, so
+              // a chat or workspace change opens no Bot conversation.
+              botSignals: (botRows) => botSignalsCache.signals(botRows),
             }),
           });
           activeHostFeed = hostFeed;
@@ -1260,7 +1262,8 @@ async function createRuntime(): Promise<AidenRemoteRuntime> {
             "bots:attention",
           ]);
           const detachers = [
-            onBroadcast((channel) => {
+            onBroadcast((channel, botId) => {
+              if (channel === "bots:changed" || channel === "bots:attention") botSignalsCache.invalidate(botId);
               if (hostFeedChannels.has(channel)) hostFeed.invalidate();
             }),
             chatStore.onIndexChanged(() => hostFeed.invalidate()),

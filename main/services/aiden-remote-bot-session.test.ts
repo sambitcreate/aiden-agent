@@ -181,6 +181,9 @@ function fakeRuntime(initial: BotSessionState) {
     async placedSubmissions() {
       return new Map();
     },
+    async withdraw() {
+      return "gone";
+    },
   };
   return {
     runtime,
@@ -4816,7 +4819,7 @@ test("revision 61 templates: holders see versions and Open, and a stale version 
   }
 });
 
-test("revision 69: a Bot's command approval carries its plain words only to approval:plain-words holders", async () => {
+test("revision 68: a Bot's command approval carries its plain words only to approval:plain-words holders", async () => {
   const { runtime, service, approvals } = await approvalGatedBot("run_command", { command: "rm -rf build", description: "Deletes the old build folder" }, "Run command: rm -rf build");
   try {
     const sent = await runtime.send(BOT_ID, { text: "go", requestId: "send-request-69" });
@@ -4864,5 +4867,126 @@ test("revision 61: a Bot approval carries the typed card only for approval:cards
       await service.close();
       await runtime.shutdown();
     }
+  }
+});
+
+test("a device pages back from the oldest entry it holds to the start of the chat, in order and without repeats", async () => {
+  const history = Array.from({ length: 260 }, (_, index) => user(index + 1, `Message ${index + 1}`));
+  const driven = drivenConversation(history);
+  const fake = fakeRuntime({ kind: "idle" });
+  const service = new AidenRemoteBotSessionService({
+    bots: botService(),
+    runtime: async () => ({ ...fake.runtime, conversation: async () => driven.conversation as never }),
+  });
+  try {
+    const session = await service.session(BOT_ID);
+    assert.equal(session.hasOlder, true);
+    let texts = session.entries.map((entry: any) => entry.text as string);
+    let before = session.entries[0]!.id;
+    let hasOlder = true;
+    let pages = 0;
+    while (hasOlder) {
+      const page = await service.olderEntries(BOT_ID, { before, limit: 25 });
+      assert.equal(page.epoch, session.epoch, "a page names the session it belongs to");
+      assert.ok(page.entries.length > 0 && page.entries.length <= 25);
+      texts = [...page.entries.map((entry: any) => entry.text as string), ...texts];
+      before = page.entries[0]!.id;
+      hasOlder = page.hasOlder;
+      pages += 1;
+    }
+    assert.ok(pages >= 3);
+    assert.deepEqual(texts, history.map((_, index) => `Message ${index + 1}`));
+    await assert.rejects(service.olderEntries(BOT_ID, { before: "entry_this_device_never_saw" }), { code: "operation_stale" });
+    await assert.rejects(service.olderEntries(BOT_ID, { before, limit: 0 }), { code: "invalid_request" });
+  } finally {
+    await service.close();
+  }
+});
+
+test("the person takes back a queued message before its turn: it never runs, and a routine's input is not theirs to take", async () => {
+  const profileDir = mkdtempSync(path.join(os.tmpdir(), "aiden-remote-bot-withdraw-"));
+  durableRoots.push(profileDir);
+  const releases: Array<() => void> = [];
+  const command = countingTool("run_command", () => new Promise<string>((resolve) => releases.push(() => resolve("done"))));
+  const fauxModels = createFauxModels([
+    fauxAssistantMessage([fauxToolCall("run_command", { text: "tidy" })], { stopReason: "toolUse" }),
+    fauxAssistantMessage("Tidied."),
+    fauxAssistantMessage("Inbox is quiet."),
+  ]);
+  const runtime = await createBotSessionService({
+    profileDir,
+    models: fauxModels.models,
+    extension: recordingDeps({ tools: [{ tool: command, replay: "unsafe" }] }),
+    resolveModel: async () => FAUX_MODEL_REF,
+    knownBotIds: async () => new Set([BOT_ID]),
+  });
+  const service = new AidenRemoteBotSessionService({ bots: activityBots(), runtime: async () => runtime, turnIntents: createBotTurnIntents() });
+  const holder = await openAudienceStream(service, { activity: true });
+  const queuedNow = () => {
+    const frames = holder.frames.filter((frame) => frame.type === "queued" || frame.type === "snapshot");
+    const last = frames[frames.length - 1];
+    return ((last?.type === "queued" ? last.payload.queued : last?.payload.session.queued) ?? []) as Array<{ submissionId: string }>;
+  };
+  try {
+    await holder.until(() => holder.frames.length >= 1, "the first snapshot");
+    await service.send(DEVICE_ID, BOT_ID, "send-request-withdraw-00001", { text: "Tidy my notes" });
+    await waitFor(() => command.executions.length === 1, { what: "the first turn to work" });
+    const queued = await service.send(DEVICE_ID, BOT_ID, "send-request-withdraw-00002", { text: "Then forget it", whenBusy: "queue" });
+    await holder.until(() => queuedNow().some((message) => message.submissionId === queued.submissionId), "the queued message");
+
+    const receipt = await service.withdrawQueued(DEVICE_ID, BOT_ID, queued.submissionId, "withdraw-request-0000001", {});
+    assert.deepEqual(receipt, { submissionId: queued.submissionId, outcome: "withdrawn" });
+    await holder.until(() => queuedNow().length === 0, "the queue to empty");
+    assert.deepEqual(
+      await service.withdrawQueued(DEVICE_ID, BOT_ID, queued.submissionId, "withdraw-request-0000001", {}),
+      receipt,
+      "a retried request replays its receipt",
+    );
+    assert.equal(
+      (await service.withdrawQueued(DEVICE_ID, BOT_ID, queued.submissionId, "withdraw-request-0000002", {})).outcome,
+      "gone",
+    );
+
+    const routine = await runtime.send(BOT_ID, { text: "Check my inbox.", requestId: "routine:task_1:1", label: "Morning brief" });
+    // A request that raced the routine's send could only have looked before the
+    // id existed, when nothing marked it as a routine's. Whose message it is must
+    // be decided with the abort, so even that request leaves the routine queued.
+    const lookedTooEarly = new Proxy(runtime, {
+      get: (target, property, receiver) =>
+        property === "quietInputs"
+          ? async (_botId: string, ids: readonly string[]) => new Map(ids.map((id) => [id, false]))
+          : Reflect.get(target, property, receiver),
+    });
+    const raced = new AidenRemoteBotSessionService({ bots: activityBots(), runtime: async () => lookedTooEarly, turnIntents: createBotTurnIntents() });
+    try {
+      assert.equal(
+        (await raced.withdrawQueued(DEVICE_ID, BOT_ID, routine.submissionId, "withdraw-request-0000003", {})).outcome,
+        "gone",
+        "a routine's input stays queued",
+      );
+      assert.equal(
+        (await raced.withdrawQueued(DEVICE_ID, BOT_ID, String(Number(routine.submissionId) + 1000), "withdraw-request-0000005", {})).outcome,
+        "gone",
+        "an id the Bot doesn't hold is gone",
+      );
+    } finally {
+      await raced.close();
+    }
+    await assert.rejects(service.withdrawQueued(DEVICE_ID, BOT_ID, "not a submission", "withdraw-request-0000004", {}), { code: "invalid_request" });
+
+    releases.shift()!();
+    await holder.until(
+      () => holder.frames.some((frame) => frame.type === "entry" && frame.payload.entry.text === "Inbox is quiet."),
+      "the routine's reply",
+    );
+    await waitFor(async () => (await runtime.state(BOT_ID)).kind === "idle", { what: "the turns to end" });
+    const texts = (await service.session(BOT_ID)).entries.map((entry: any) => entry.text);
+    assert.equal(texts.includes("Then forget it"), false, "the withdrawn message never joined the chat");
+    assert.ok(texts.includes("Check my inbox."));
+  } finally {
+    for (const release of releases) release();
+    await holder.close();
+    await service.close();
+    await runtime.shutdown();
   }
 });

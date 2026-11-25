@@ -609,7 +609,7 @@ final class AidenHostConnection {
     /// then `chat:continue-in-new-chat` (revision 64), then continuity watches, Open work, routine models and peers (revision 59),
     /// followed by messaging, access requests, plans and allowed lists (revisions 54–57),
     /// then the five revision-61 Bot UX opt-ins, one call each, then
-    /// `approval:plain-words` (revision 69), which needs `approval:cards`.
+    /// `approval:plain-words` (revision 68), which needs `approval:cards`.
     static let capabilitiesAskedForAlone: [[AidenRemoteCapability]] = [
         [.botHandoffs, .botHandoffNotes, .botHandoffOnMac],
         [.scheduleCards],
