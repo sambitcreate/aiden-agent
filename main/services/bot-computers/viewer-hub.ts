@@ -70,6 +70,8 @@ export interface BotComputerViewerHubOptions {
   key: string;
   /** The Bot a VM belongs to, while the person may view it; undefined otherwise. */
   botForVm(vmName: string): string | undefined;
+  /** Optional full set of Bots currently granted to view `vmName` (for shared VMs). */
+  botsForVm?(vmName: string): ReadonlySet<string> | undefined;
   /** The running computer's live screen. It must never start a computer. */
   screen(botId: string, signal: AbortSignal): Promise<BotComputerLiveScreen>;
   control: Pick<BotComputerControl, "controller" | "takeOver" | "onChange">;
@@ -231,19 +233,39 @@ export async function startBotComputerViewerHub(options: BotComputerViewerHubOpt
   let port = 0;
   let closed = false;
 
+  const deviceMatchesBot = (target: Device, botId: string): boolean => {
+    const members = options.botsForVm?.(target.vmName);
+    if (members && members.has(botId)) return true;
+    return target.botId === botId || options.botForVm(target.vmName) === botId;
+  };
+
+  const activeBotFor = (target: Device): string => {
+    const members = options.botsForVm?.(target.vmName);
+    if (members && members.has(target.botId)) return target.botId;
+    const currentBot = options.botForVm(target.vmName);
+    if (currentBot) target.botId = currentBot;
+    return target.botId;
+  };
+
   const unsubscribeControl = options.control.onChange((botId) => {
     if (options.control.controller(botId) !== "bot") return;
     // Give back: nothing the person still holds may stay pressed for the Bot.
-    for (const device of devices.values()) {
-      if (device.botId !== botId) continue;
-      for (const input of device.inputs) releaseHeld(device, input);
+    for (const target of devices.values()) {
+      if (!deviceMatchesBot(target, botId)) continue;
+      for (const input of target.inputs) releaseHeld(target, input);
     }
   });
 
   const device = (vmName: string, botId: string): Device => {
     const existing = devices.get(vmName);
-    if (existing && existing.botId === botId) return existing;
-    if (existing) closeVm(vmName);
+    if (existing) {
+      // Shared VMs can be viewed by multiple Bots concurrently without tearing down
+      // active streams/sockets when another Bot sharing the same VM connects.
+      if (!options.botsForVm?.(vmName)?.has(existing.botId)) {
+        existing.botId = botId;
+      }
+      return existing;
+    }
     const created: Device = {
       vmName,
       botId,
@@ -266,7 +288,7 @@ export async function startBotComputerViewerHub(options: BotComputerViewerHubOpt
 
   const openScreen = (target: Device): Promise<BotComputerLiveScreen> => {
     if (!target.screen) {
-      const opening = options.screen(target.botId, target.abort.signal).then((screen) => {
+      const opening = options.screen(activeBotFor(target), target.abort.signal).then((screen) => {
         // The run this screen belonged to ended (the computer stopped or restarted): start over.
         if (screen.closed()) {
           endDevice(target);
@@ -293,8 +315,8 @@ export async function startBotComputerViewerHub(options: BotComputerViewerHubOpt
   const viewersChanged = (target: Device) => {
     if (viewerCount(target) > 0) {
       if (!target.keepAlive) {
-        options.touch(target.botId);
-        target.keepAlive = setInterval(() => options.touch(target.botId), keepAliveMs);
+        options.touch(activeBotFor(target));
+        target.keepAlive = setInterval(() => options.touch(activeBotFor(target)), keepAliveMs);
         target.keepAlive.unref?.();
       }
       return;
@@ -307,7 +329,7 @@ export async function startBotComputerViewerHub(options: BotComputerViewerHubOpt
     target.unwatch = undefined;
     target.latest = undefined;
     target.dirty = true;
-    options.touch(target.botId);
+    options.touch(activeBotFor(target));
   };
 
   const sendPart = (target: Device, client: MjpegClient) => {
@@ -457,8 +479,9 @@ export async function startBotComputerViewerHub(options: BotComputerViewerHubOpt
 
   /** True when this input goes to the computer; false when it took over (or the Bot still drives). */
   const personDrives = (target: Device): boolean => {
-    if (options.control.controller(target.botId) === "person") return true;
-    options.control.takeOver(target.botId, "input");
+    const botId = activeBotFor(target);
+    if (options.control.controller(botId) === "person") return true;
+    options.control.takeOver(botId, "input");
     return false;
   };
 
@@ -466,7 +489,7 @@ export async function startBotComputerViewerHub(options: BotComputerViewerHubOpt
     const at = now();
     if (at - target.lastInputTouchAt < inputTouchMs) return;
     target.lastInputTouchAt = at;
-    options.touch(target.botId);
+    options.touch(activeBotFor(target));
   };
 
   function handleMessage(target: Device, input: InputClient, payload: Buffer) {
@@ -493,7 +516,7 @@ export async function startBotComputerViewerHub(options: BotComputerViewerHubOpt
       } else if (input.swallowTouch) {
         if (phase === "end") input.swallowTouch = false;
         return;
-      } else if (!input.touching || options.control.controller(target.botId) !== "person") {
+      } else if (!input.touching || options.control.controller(activeBotFor(target)) !== "person") {
         // A move or release whose press never reached the computer, or one the Bot got back during.
         input.touching = false;
         return;
@@ -624,7 +647,7 @@ export async function startBotComputerViewerHub(options: BotComputerViewerHubOpt
       if (!target.inputs.delete(input)) return;
       // Only the person's own presses are lifted (while the Bot drives they never reached the
       // computer), and only on a run that is still current.
-      if (devices.get(target.vmName) === target && options.control.controller(target.botId) === "person") {
+      if (devices.get(target.vmName) === target && options.control.controller(activeBotFor(target)) === "person") {
         releaseHeld(target, input);
       }
       viewersChanged(target);
@@ -700,7 +723,8 @@ export async function startBotComputerViewerHub(options: BotComputerViewerHubOpt
 
   return {
     origin: `http://127.0.0.1:${port}`,
-    viewers: (botId) => [...devices.values()].filter((target) => target.botId === botId).reduce((sum, target) => sum + viewerCount(target), 0),
+    viewers: (botId) =>
+      [...devices.values()].filter((target) => deviceMatchesBot(target, botId)).reduce((sum, target) => sum + viewerCount(target), 0),
     closeVm,
     close: () =>
       new Promise<void>((resolve) => {

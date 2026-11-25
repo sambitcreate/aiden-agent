@@ -228,4 +228,33 @@ test("store rejects reserved base VM names and prototype keys, deduplicates lega
   assert.equal(downgraded.assignments.ben, "shared");
   assert.equal(downgraded.assignments.cyd, "aiden-bot-0000000000000009");
   assert.equal(downgraded.vms["aiden-bot-0000000000000009"]?.name, "Dedicated computer");
+
+  // Disk VM names with control/bidi formatting chars fall back to the safe default, and extra prototype keys are dropped.
+  const sanitized = parseBotComputersState({
+    vms: {
+      "vm-bidi": {
+        id: "vm-bidi",
+        name: "Evil\u202eVM",
+        kind: "dedicated",
+        vmName: "aiden-vm-1111111111111111",
+        baseBuild: "20261123-2671",
+        createdAt: 1,
+      },
+      tolocalestring: {
+        id: "tolocalestring",
+        name: "Bad",
+        kind: "dedicated",
+        vmName: "aiden-vm-2222222222222222",
+        baseBuild: "20261123-2671",
+        createdAt: 2,
+      },
+    },
+    assignments: {
+      toLocaleString: "vm-bidi",
+      ada: "vm-bidi",
+    },
+  });
+  assert.equal(sanitized.vms["vm-bidi"]?.name, "Dedicated computer");
+  assert.deepEqual(Object.keys(sanitized.vms), ["vm-bidi"]);
+  assert.deepEqual(Object.keys(sanitized.assignments), ["ada"]);
 });

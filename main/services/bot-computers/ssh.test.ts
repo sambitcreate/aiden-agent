@@ -225,7 +225,7 @@ test("openGuestVncTunnel binds only 127.0.0.1 (passing vncReachableBeyondLoopbac
       `writeFileSync(${JSON.stringify(pidFile)}, String(process.pid));\n` +
       `const server = createServer((s) => { s.write("RFB 003.008\\n"); s.end(); });\n` +
       `process.on("SIGTERM", () => { server.close(); process.exit(0); });\n` +
-      `server.listen(Number(match[1]), "127.0.0.1");\n`,
+      `server.listen(Number(match[1]), "127.0.0.1", () => { process.stdout.write("AIDEN_TUNNEL_READY\\n"); });\n`,
   );
   chmodSync(fakeSsh, 0o755);
 
@@ -263,7 +263,7 @@ test("openGuestVncTunnel binds only 127.0.0.1 (passing vncReachableBeyondLoopbac
       `const match = /^127\\.0\\.0\\.1:(\\d+):(\\/.+)$/.exec(process.argv[lIdx + 1] ?? "");\n` +
       `const server = createServer((s) => { s.write("HTTP/1.1 200 OK\\r\\n\\r\\n"); s.end(); });\n` +
       `process.on("SIGTERM", () => { server.close(); process.exit(0); });\n` +
-      `server.listen(Number(match[1]), "127.0.0.1");\n`,
+      `server.listen(Number(match[1]), "127.0.0.1", () => { process.stdout.write("AIDEN_TUNNEL_READY\\n"); });\n`,
   );
   chmodSync(badSsh, 0o755);
   await assert.rejects(
@@ -272,6 +272,32 @@ test("openGuestVncTunnel binds only 127.0.0.1 (passing vncReachableBeyondLoopbac
       "/home/lume/.local/share/aiden/vnc.sock",
       { timeoutMs: 600 },
       { paths: local, env: guestSshEnvironment({}, local.home), sshCommand: badSsh },
+    ),
+    /tunnel/iu,
+  );
+
+  // A pre-auth loopback RFB impostor listening before SSH emits AIDEN_TUNNEL_READY is rejected.
+  const impostorSsh = path.join(dir, "impostor-ssh.mjs");
+  writeFileSync(
+    impostorSsh,
+    `#!${process.execPath}\n` +
+      `import { createServer } from "node:net";\n` +
+      `const lIdx = process.argv.indexOf("-L");\n` +
+      `const match = /^127\\.0\\.0\\.1:(\\d+):(\\/.+)$/.exec(process.argv[lIdx + 1] ?? "");\n` +
+      `const server = createServer((s) => { s.write("RFB 003.008\\n"); s.end(); });\n` +
+      `process.on("SIGTERM", () => { server.close(); process.exit(0); });\n` +
+      `server.listen(Number(match[1]), "127.0.0.1", () => {\n` +
+      `  // Simulate ssh failing ExitOnForwardFailure after pre-auth window without emitting AIDEN_TUNNEL_READY.\n` +
+      `  setTimeout(() => { server.close(); process.exit(255); }, 150);\n` +
+      `});\n`,
+  );
+  chmodSync(impostorSsh, 0o755);
+  await assert.rejects(
+    openGuestVncTunnel(
+      { host: "192.168.64.9", user: "lume" },
+      "/home/lume/.local/share/aiden/vnc.sock",
+      { timeoutMs: 2_000 },
+      { paths: local, env: guestSshEnvironment({}, local.home), sshCommand: impostorSsh },
     ),
     /tunnel/iu,
   );

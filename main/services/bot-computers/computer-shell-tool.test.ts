@@ -13,6 +13,7 @@ import {
 } from "./computer-shell-tool.js";
 import {
   BOT_COMPUTER_LINUX_SHELL_USER,
+  BotComputerError,
   type BotComputerConnection,
   type BotComputerGuestCommandResult,
   type BotComputerStartReason,
@@ -340,4 +341,56 @@ test("waiting for human Give back releases the FIFO lease so unattended Bots tim
   assert.equal(reassignedResult.isError, true);
   assert.match(textOf(reassignedResult), /changed or removed/u);
   assert.equal(ranCommands, beforeCalls, "command never ran after reassignment");
+});
+
+test("computer_shell marks co-tenant captures stale via state.noteVmMutation and aborts when its lease is revoked", async () => {
+  const control = createBotComputerControl();
+  const mutated: Array<{ vmName: string; botId: string }> = [];
+  const leaseAbort = new AbortController();
+  let runSignal: AbortSignal | undefined;
+  const tool = createBotComputerShellTool(
+    "ben",
+    {
+      host: {
+        async acquireLease() {
+          return Object.assign(() => undefined, { signal: leaseAbort.signal });
+        },
+        async ensureRunning() {
+          return { ...connection, vmName: "aiden-vm-shared" };
+        },
+        async runGuestCommand(_botId, command, opts) {
+          runSignal = opts.signal;
+          if (command.includes("block")) {
+            return await new Promise<BotComputerGuestCommandResult>((_resolve, reject) => {
+              opts.signal?.addEventListener("abort", () => reject(opts.signal?.reason), { once: true });
+            });
+          }
+          return ok("ok");
+        },
+        touch() {},
+      },
+      control,
+      state: {
+        noteVmMutation(vmName, actorBotId) {
+          mutated.push({ vmName, botId: actorBotId });
+        },
+      },
+      botName: async () => "Ben",
+    },
+    { routine: false },
+  );
+
+  const ran = (await tool.execute("shell-mutate", { command: "echo hi" })) as AgentToolResult<null>;
+  assert.equal(ran.isError, undefined);
+  assert.deepEqual(mutated, [{ vmName: "aiden-vm-shared", botId: "ben" }]);
+
+  // Revoking the active lease signal aborts the in-flight command and returns an error tool result.
+  const pending = tool.execute("shell-revoke", { command: "block" }) as Promise<AgentToolResult<null>>;
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(runSignal?.aborted, false);
+  leaseAbort.abort(new BotComputerError("cancelled", "The Bot was reassigned to another computer."));
+  const revoked = await pending;
+  assert.equal(runSignal?.aborted, true);
+  assert.equal(revoked.isError, true);
+  assert.match(textOf(revoked), /reassigned/u);
 });

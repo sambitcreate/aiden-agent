@@ -29,7 +29,7 @@ import type { BotComputerControl, BotComputerHost } from "../bot-computers/types
 
 /** The Bot computer services a turn's tools run on. */
 export interface BotComputerToolServices {
-  host: Pick<BotComputerHost, "computer" | "ensureRunning" | "touch" | "runGuestCommand" | "guestDriver">;
+  host: Pick<BotComputerHost, "computer" | "ensureRunning" | "touch" | "runGuestCommand" | "guestDriver" | "acquireLease">;
   sessions: BotComputerToolDependencies["sessions"];
   /** `onChange` keeps the tool state's capture epochs. */
   control: BotComputerToolDependencies["control"] & Pick<BotComputerControl, "onChange">;
@@ -103,7 +103,7 @@ export async function botComputerCandidates(botId: string, input: BotComputerCan
 
   const computerFor = (turn: Turn) =>
     createBotComputerTool(botId, { host, sessions, control, state, botName: input.botName }, { ...turn, elementControl });
-  const shellFor = (turn: Turn) => createBotComputerShellTool(botId, { host, control, botName: input.botName }, turn);
+  const shellFor = (turn: Turn) => createBotComputerShellTool(botId, { host, control, state, botName: input.botName }, turn);
   const offeredTurn = turnOf(input.routine, input.telegram);
   const candidates: BotToolCandidate[] = [];
   if (input.supportsImages) {

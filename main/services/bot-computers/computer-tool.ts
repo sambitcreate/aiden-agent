@@ -483,22 +483,61 @@ export function createBotComputerTool(
       }
 
       let connection: BotComputerConnection | undefined;
-      let releaseLease: (() => void) | undefined;
+      let releaseLease: ((() => void) & { readonly signal?: AbortSignal }) | undefined;
+      let leaseSignal: AbortSignal | undefined;
+      let disposeCombined: (() => void) | undefined;
       const releaseNow = () => {
+        disposeCombined?.();
+        disposeCombined = undefined;
         const release = releaseLease;
         releaseLease = undefined;
         release?.();
       };
       try {
         releaseLease = await deps.host.acquireLease?.(botId, { signal, onProgress: progress });
+        leaseSignal = releaseLease?.signal;
         if (deps.control.controller(botId) === "person") {
           releaseNow();
           return await waitForGiveBack();
         }
-        connection = await deps.host.ensureRunning(botId, { reason, signal, onProgress: progress });
+        const combined = (() => {
+          if (!signal) return { signal: leaseSignal, dispose: () => undefined };
+          if (!leaseSignal) return { signal, dispose: () => undefined };
+          const controller = new AbortController();
+          const forward = (source: AbortSignal) => {
+            if (!controller.signal.aborted) controller.abort(source.reason);
+          };
+          if (signal.aborted) {
+            forward(signal);
+            return { signal: controller.signal, dispose: () => undefined };
+          }
+          if (leaseSignal.aborted) {
+            forward(leaseSignal);
+            return { signal: controller.signal, dispose: () => undefined };
+          }
+          const onCaller = () => forward(signal);
+          const onLease = () => forward(leaseSignal!);
+          signal.addEventListener("abort", onCaller, { once: true });
+          leaseSignal.addEventListener("abort", onLease, { once: true });
+          return {
+            signal: controller.signal,
+            dispose: () => {
+              signal.removeEventListener("abort", onCaller);
+              leaseSignal!.removeEventListener("abort", onLease);
+            },
+          };
+        })();
+        disposeCombined = combined.dispose;
+        const effectiveSignal = combined.signal;
+        connection = await deps.host.ensureRunning(botId, { reason, signal: effectiveSignal, onProgress: progress });
         const runKey = `${connection.vmName}\u0000${connection.vnc.port}\u0000${connection.vnc.password}`;
         if (deps.state.driverFacts(botId)?.run !== runKey) deps.state.setDriverFacts(botId, undefined);
         const lane = await driverLane();
+        if (effectiveSignal?.aborted) {
+          throw effectiveSignal.reason instanceof Error
+            ? effectiveSignal.reason
+            : new BotComputerError("cancelled", "The Bot's computer lease ended.");
+        }
         const epoch = deps.state.epoch(botId);
         const driver = lane
           ? () =>
@@ -760,7 +799,7 @@ export function createBotComputerTool(
         };
 
         try {
-          return await deps.control.run(botId, signal, run);
+          return await deps.control.run(botId, effectiveSignal, run);
         } finally {
           // Nothing stays held in the guest after an interrupted action. Best
           // effort and without the aborted signal: the action already ended.
@@ -777,6 +816,13 @@ export function createBotComputerTool(
           return await waitForGiveBack();
         }
         if (signal?.aborted) throw signal.reason instanceof Error ? signal.reason : error;
+        if (leaseSignal?.aborted) {
+          const message =
+            leaseSignal.reason instanceof Error
+              ? leaseSignal.reason.message
+              : "The Bot's computer lease ended before the action finished.";
+          return text(redact(message, connection ? [connection.vnc.password] : []), details, true);
+        }
         if (error instanceof BotComputerArgumentError || error instanceof BotComputerKeyError) {
           return text(error.message, details, true);
         }

@@ -306,3 +306,105 @@ test("a computer that stopped after a status read said it was running is never s
     await server.close();
   }
 });
+
+test("two Bots viewing one shared VM keep both streams alive without ping-ponging, and unassigning one keeps the other live", async () => {
+  const SHARED_VM = "aiden-vm-shared";
+  const server = new FakeRfbServer({ width: 32, height: 24, password: "run-pass-1" });
+  const port = await server.listen();
+  const screen = await createRfbScreen({
+    connect: (signal) => connectRfb(connect({ host: "127.0.0.1", port }), { password: "run-pass-1", signal }),
+    encode: async (_bgra, width, height) => ({ image: Buffer.from("JPEG"), width, height }),
+    frameIntervalMs: 10,
+  });
+  const assignments = new Map<string, BotComputerStatus>([
+    [
+      "bot-ada",
+      {
+        botId: "bot-ada",
+        vmName: SHARED_VM,
+        computerId: "shared",
+        computerName: "Shared computer",
+        shared: true,
+        state: "running",
+        baseBuild: "20261123-2671",
+        outdated: false,
+        controller: "bot",
+      },
+    ],
+    [
+      "bot-ben",
+      {
+        botId: "bot-ben",
+        vmName: SHARED_VM,
+        computerId: "shared",
+        computerName: "Shared computer",
+        shared: true,
+        state: "running",
+        baseBuild: "20261123-2671",
+        outdated: false,
+        controller: "bot",
+      },
+    ],
+  ]);
+  const listeners = new Set<(botId: string | undefined) => void>();
+  const control = createBotComputerControl();
+  control.setScopeResolver(
+    (botId) => (assignments.has(botId) ? "shared" : botId),
+    (scope) => (scope === "shared" ? [...assignments.keys()] : []),
+  );
+  const viewer = createBotComputerViewer({
+    host: {
+      computer: async (botId) => {
+        const hit = assignments.get(botId);
+        return hit ? { ...hit } : undefined;
+      },
+      ensureRunning: async () => ({
+        vmName: SHARED_VM,
+        ip: "192.168.64.5",
+        vnc: { host: "127.0.0.1", port, password: "run-pass-1" },
+        ssh: { host: "192.168.64.5", user: "lume" },
+      }),
+      touch: () => undefined,
+      onChange: (listener) => {
+        listeners.add(listener);
+        return () => void listeners.delete(listener);
+      },
+    },
+    sessions: { runningScreen: async () => screen },
+    control,
+    botName: (botId) => (botId === "bot-ada" ? "Ada" : "Ben"),
+    allowedOrigins: ["file://"],
+  });
+  try {
+    const adaGrant = await viewer.grant("bot-ada", { start: false });
+    const adaStream = await get(streamUrl(adaGrant));
+    assert.equal(adaStream.response.statusCode, 200);
+    await until(() => adaStream.body().includes("--frame\r\nContent-Type: image/jpeg"));
+    let adaClosed = false;
+    adaStream.response.once("close", () => {
+      adaClosed = true;
+    });
+
+    // Opening Ben's view of the same shared VM must NOT tear down Ada's stream.
+    const benGrant = await viewer.grant("bot-ben", { start: false });
+    const benStream = await get(streamUrl(benGrant));
+    assert.equal(benStream.response.statusCode, 200);
+    await until(() => benStream.body().includes("--frame\r\nContent-Type: image/jpeg"));
+    assert.equal(adaClosed, false, "granting Ben on the shared VM must not close Ada's stream");
+    assert.equal(viewer.viewers("bot-ada"), 2);
+    assert.equal(viewer.viewers("bot-ben"), 2);
+
+    // Unassigning Ben while Ada remains on the shared VM must NOT close Ada's stream.
+    assignments.delete("bot-ben");
+    for (const listener of listeners) listener("bot-ben");
+    await new Promise((resolve) => setTimeout(resolve, 40));
+    assert.equal(adaClosed, false, "unassigning Ben must keep Ada's shared stream open");
+
+    adaStream.response.destroy();
+    benStream.response.destroy();
+  } finally {
+    await viewer.close();
+    await (screen as BotComputerLiveScreen).close();
+    await server.close();
+  }
+});

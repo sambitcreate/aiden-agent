@@ -257,3 +257,80 @@ test("a failed computer assignment in a combined settings patch leaves identity 
   assert.equal(after.name, "Chief");
   assert.deepEqual(after.model, { providerId: "provider:a", modelId: "model:slow" });
 });
+
+test("a combined computer + identity + model write rolls back the assignment and deletes a newly cloned VM when identity or model fails", async () => {
+  let bot: BotDefinition = {
+    id: BOT,
+    revision: "bot-1",
+    name: "Chief",
+    instructions: "Help me plan.",
+    avatar: { ...DEFAULT_BOT_AVATAR },
+    createdAt: 0,
+    updatedAt: 0,
+  };
+  let model = { providerId: "provider:a", modelId: "model:slow" };
+  let botRevision = 1;
+  let accessRevision = 1;
+  let currentComputer: { kind: "shared" } | { kind: "existing"; computerId: string } = { kind: "shared" };
+  const vms = [{ id: "shared", name: "Shared computer", kind: "shared" as const }];
+  const deletedVms: string[] = [];
+  let broadcasts = 0;
+
+  const ports = createBotSettingsPorts({
+    profileDir: () => "/unused",
+    getBot: async () => structuredClone(bot),
+    modelSelection: async () => ({ ...model }),
+    getBotAccess: async () => ({
+      botId: BOT,
+      revision: `access-${accessRevision}`,
+      policyEpoch: "1",
+      summary: "",
+      accessMode: "full",
+    }),
+    capabilityCatalog: async () => ({
+      revision: "catalog-1",
+      providers: [{ id: "provider:a", label: "A", available: true, models: [{ id: "model:fast", label: "Fast", available: true }] }],
+    }),
+    botWebSearchEnabled: async () => false,
+    readComputer: async () => currentComputer,
+    listComputers: async () => vms.map((vm) => ({ ...vm })),
+    assignComputer: async (_botId, target) => {
+      if (target.kind === "new") {
+        const createdId = "vm-leaked-1";
+        vms.push({ id: createdId, name: target.name ?? "New", kind: "dedicated" as never });
+        currentComputer = { kind: "existing", computerId: createdId };
+      } else {
+        currentComputer = target;
+      }
+    },
+    deleteComputer: async (computerId) => {
+      deletedVms.push(computerId);
+      const idx = vms.findIndex((vm) => vm.id === computerId);
+      if (idx >= 0) vms.splice(idx, 1);
+    },
+    updateBotAccess: async () => {
+      throw new BotCapabilityRevisionConflictError("access-2");
+    },
+    updateBot: async (input) => {
+      botRevision += 1;
+      bot = { ...bot, name: input.name, description: input.description, instructions: input.instructions, avatar: input.avatar, revision: `bot-${botRevision}` };
+      return structuredClone(bot);
+    },
+    cancelWakeUps: async () => {},
+    broadcastChanged: () => {
+      broadcasts += 1;
+    },
+    appendEntry: async () => {},
+  });
+
+  const { revision } = await ports.read(BOT);
+  await assert.rejects(
+    ports.write(BOT, { name: "Planner", model: FAST, computer: { kind: "new", name: "Big Box" } }, revision),
+    BotSettingsConflictError,
+  );
+  assert.deepEqual(currentComputer, { kind: "shared" }, "assignment rolled back to shared");
+  assert.deepEqual(deletedVms, ["vm-leaked-1"], "newly cloned VM was deleted instead of leaked");
+  assert.equal(bot.name, "Chief", "identity write was undone");
+  assert.deepEqual(model, { providerId: "provider:a", modelId: "model:slow" });
+  assert.equal(broadcasts, 0, "clean full rollback did not need a partial broadcast");
+});

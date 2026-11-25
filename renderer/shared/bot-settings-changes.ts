@@ -148,7 +148,9 @@ function quietMinutes(quiet: BotInterruptions["quietHours"]): Set<number> {
  * Those always wait for the person, whoever started the run.
  */
 export function botSettingsPatchWidens(current: BotSettingsValues, patch: BotSettingsPatch): boolean {
-  if (patch.computer !== undefined) return true;
+  if (patch.computer !== undefined && !sameBotSettingsValue("computer", current, { ...current, computer: patch.computer })) {
+    return true;
+  }
   if (patch.dailyCheckIns === true && !current.dailyCheckIns) return true;
   if (patch.notifications === undefined) return false;
   if (patch.notifications.dailyLimit > current.notifications.dailyLimit) return true;
