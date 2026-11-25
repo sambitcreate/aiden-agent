@@ -47,8 +47,9 @@ group last finishes the full suite, which is normally the newest main commit and
 so covers every earlier one. GitHub orders the group by when each run starts
 waiting and does not guarantee that order, so with merges seconds apart the
 surviving run can be for an earlier commit. If the tip's CI shows cancelled, run
-`gh workflow run CI --ref main` (or re-run its CI) to validate it. A cancelled
-main run shows as cancelled on its commit. Manual `workflow_dispatch` runs keep their own group
+`gh workflow run CI --ref main` (or re-run its CI) to validate it. A superseded
+main run shows its jobs as cancelled, and its `CI required`, `Linux x64` and
+`Linux arm64` gates as failed, because those gates fail closed on cancelled jobs. Manual `workflow_dispatch` runs keep their own group
 and are never superseded. Each main run of `Release consumer contract` still has
 its own concurrency group. The release workflows (`release.yml`, the TestFlight
 workflows) have their own non-cancelling groups and do not depend on CI, so
