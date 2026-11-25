@@ -27,7 +27,7 @@ import sbtbiswas.AidenOnTheGo.ui.theme.AidenTheme
 import sbtbiswas.AidenOnTheGo.ui.theme.AidenTonalButton
 import sbtbiswas.AidenOnTheGo.ui.theme.AidenUi
 
-/** Empty Bots home: a paged carousel of starter Bots with Start Chat and Create My Own. */
+/** Empty Bots home: a paged carousel of starter Bots with Start chat and Create my own. */
 @Composable
 fun AidenMeetYourFirstBot(
     presets: List<AidenBotPreset>,

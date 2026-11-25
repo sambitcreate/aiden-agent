@@ -214,7 +214,7 @@ class AidenBotsViewModel(
     }
 
     private val _presets = MutableStateFlow<List<AidenBotPreset>>(emptyList())
-    /** Starter Bots for the empty home ("Meet Your First Bot"), when the Mac serves them. */
+    /** Starter Bots for the empty home ("Meet your first Bot"), when the Mac serves them. */
     val presets: StateFlow<List<AidenBotPreset>> = _presets.asStateFlow()
     private var presetsClient: AidenRemoteClient? = null
     private val _presetNotice = MutableStateFlow<String?>(null)

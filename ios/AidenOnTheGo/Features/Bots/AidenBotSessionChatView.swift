@@ -1365,7 +1365,7 @@ struct AidenBotSessionChatView: View {
                 ? AidenBotSessionCopy.handoffNoNotePlaceholder
                 : AidenBotSessionCopy.handoffNotePlaceholder
         case .signIn: return AidenBotSessionCopy.signInPlaceholder
-        case nil: return "Message"
+        case nil: return bot.map { AidenBotSessionCopy.composerPlaceholder(name: $0.name) } ?? "Message"
         }
     }
 

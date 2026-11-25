@@ -531,9 +531,9 @@
     <string name="bot_delete_failed">Aiden couldn’t delete this Bot. Try again.</string>
 
     <!-- Bots: first run -->
-    <string name="bot_presets_title">Meet Your First Bot</string>
-    <string name="bot_presets_start_chat">Start Chat</string>
-    <string name="bot_presets_create_my_own">Create My Own</string>
+    <string name="bot_presets_title">Meet your first Bot</string>
+    <string name="bot_presets_start_chat">Start chat</string>
+    <string name="bot_presets_create_my_own">Create my own</string>
     <string name="bot_presets_routine">%1$s · %2$s</string>
 
     <!-- Bots: profile -->
