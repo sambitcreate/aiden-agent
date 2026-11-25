@@ -95,7 +95,7 @@ struct AidenInboxTabView: View {
         .listSectionSpacing(AidenSpacing.l)
         .aidenKeepsListScroll()
         .scrollContentBackground(.hidden)
-        .aidenAmbientBackground { if showsAmbientBackground { AidenAmbientAurora() } }
+        .aidenAmbientAurora(showsAmbientBackground)
         .background(palette.canvas.ignoresSafeArea())
         .overlay { if header == nil { emptyState } }
         .refreshable { await onRefresh() }

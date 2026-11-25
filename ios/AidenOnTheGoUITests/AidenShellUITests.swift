@@ -408,6 +408,30 @@ final class AidenShellUITests: XCTestCase {
         app.terminate()
     }
 
+    /// Home's ambient background shows the forced phase, and hides when the
+    /// person turns it off.
+    func testHomeAmbientBackgroundShowsItsPhase() {
+        let app = AidenStateMatrix.launch(
+            scenario: .full,
+            extraArguments: ["-AidenAuroraForcePhase", "done", "-aiden.appearance.aurora", "subtle"]
+        )
+        AidenStateMatrix.openArea("Inbox", in: app)
+        let marker = app.descendants(matching: .any)["aurora.phase"].firstMatch
+        XCTAssertTrue(marker.waitForExistence(timeout: 10), "No aurora phase marker on Home")
+        XCTAssertEqual(marker.value as? String, "done")
+        app.terminate()
+
+        let off = AidenStateMatrix.launch(
+            scenario: .full,
+            extraArguments: ["-AidenAuroraForcePhase", "done", "-aiden.appearance.aurora", "off"]
+        )
+        AidenStateMatrix.openArea("Inbox", in: off)
+        let hidden = off.descendants(matching: .any)["aurora.phase"].firstMatch
+        XCTAssertTrue(hidden.waitForExistence(timeout: 10), "No aurora phase marker on Home")
+        XCTAssertEqual(hidden.value as? String, "hidden")
+        off.terminate()
+    }
+
     /// A row's menu opens with what its swipes offer, and a row waiting on a
     /// decision offers neither Done nor Snooze either way.
     func testRowMenusMatchTheirSwipes() {

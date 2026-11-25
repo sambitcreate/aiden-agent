@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+- **2026-11-24 — Home and the ambient background.** Client-only; no Remote wire or revision change.
+  - The Inbox root opens with Home: a greeting, your Bots as sprites, a "From your Bots" card with at most three rows (needs you, working, failed, then news), and a composer that asks where the chat runs before it starts. It moves to the Chats root with the new tab layout.
+  - Settings → Appearance → Home sets the name Home greets you by. It stays on this iPhone; empty gives a plain greeting.
+  - Settings → Appearance → Ambient background (Off, Subtle, Vivid; Subtle by default) draws a soft light behind Home's lower 400 pt that shows when work runs, finishes or needs you. Follow activity off keeps it at rest.
+  - Done shows only after a run you were not watching really finishes. Archiving or deleting a chat, pausing a Bot, a Bot going unavailable, a computer going offline and a reconnect's first read never show it.
+  - The light never blurs live and slows to 15 frames a second for slow states. It is still with Reduce Motion, Reduce Transparency or VoiceOver, capped at half of Subtle with Increase Contrast or Reduce Transparency, and off in Low Power Mode.
+  - Its opacity is capped per theme so body and secondary text stay legible over every colour it draws. Monochrome's working light is grey.
+
 - **2026-11-22 — Pairing feedback and QR framing.** Add Computer scans for QR codes inside the visible viewfinder. Manual pairing shows what to correct below the address or setup code field. Search keeps Add Computer available until a computer is paired.
 
 - **2026-11-22 — No "Sending…" in Bot chats.** A message you send to a Bot looks sent from the moment you press Send and never gains a "Sending…" caption, however long the Mac takes to take it. The status line ("Getting ready", then "Thinking" once the model starts) shows the wait; Queued and "Couldn’t send · Try again" are unchanged. Paired Macs on the next Aiden release also start a Bot's reply much sooner, because a turn no longer re-reads every provider, connector and skill a dozen times before asking the model. No Remote wire or revision change.

@@ -141,6 +141,11 @@ The phases run in order. The screens inside each phase can run in parallel, one 
   - Add `AidenComposerConfig.home()`.
   - Add the New chat sheet, built from `AidenRadioListRow`, `AidenSummaryChip` and the machine line.
 - **Aurora renderer and settings (4B steps 3-6).** See [Aurora](#aurora).
+- **Progress (2026-11-24, branch `claude/ios-home-aurora`).**
+  - Step 1: `AidenAuroraState`, `AidenAmbientActivityModel`, the renderer and the Ambient background card.
+  - Step 2: Home, mounted on the Inbox root until the tab move puts it on the Chats root, with the Home name setting.
+  - Step 1 review fixes: per-stop contrast caps, accumulated drift, no live blur, 15/30 fps, the reconnect fence, real finishes only, manual-clock wake tests, Monochrome grey and the `aurora.phase` marker.
+  - Not wired yet: nothing calls `setVoice`, so Listening does not show from Home until the voice work lands.
 
 ### Phase 3: screen lanes (parallel)
 
@@ -199,26 +204,29 @@ Aurora is a soft gradient behind the Home root that shows what Aiden is doing. F
 | Failed | danger | 0.42 | 0.1× | An unread failed run |
 
 **Layout and motion**
-- It covers the bottom 400 pt, blurred, and fades out by 45% of the screen height.
+- It covers the bottom 400 pt (or the whole view when shorter) and fades out by 45% of the view height. There is no live blur: the mesh is soft on its own.
 - States cross-fade over 600 ms.
 
 **Accessibility and power**
-- Reduce Motion shows a still gradient.
+- Reduce Motion, Reduce Transparency and VoiceOver show a still gradient. A still gradient is dimmed to 60%, except under Reduce Transparency, which is already capped.
+- Increase Contrast and Reduce Transparency cap it at half of Subtle.
 - Low Power Mode turns it off.
-- It is `accessibilityHidden`.
-- A contrast test caps its opacity for each preset.
+- It is `accessibilityHidden`. Debug builds forced with `-AidenAuroraForcePhase` expose the shown phase as an `aurora.phase` element beside it for UI tests.
+- Contrast: over every colour the mesh draws (each state's centre and its ±16% lighter and darker stops), body text keeps 4.5:1 and secondary text 3:1 against the canvas (the rule in `t4b-aurora.md`, Accessibility). Vivid is the highest opacity that holds for the preset, capped at 0.6; Subtle is Vivid × 0.35 / 0.6, rounded down. An independent oracle in `AidenAuroraStateTests` checks every preset and rejects the earlier fixed 0.28 cap.
+- Monochrome's working colour is its secondary grey, so the theme stays colourless.
 
 **How the state is chosen**
 - Priority: listening > needs you > failed > done > working > idle.
 - A 600 ms debounce stops Working from flickering to Idle.
-- Done is inferred from a working → idle edge (`Models/AidenChat.swift:2701-2707`), never on first load or a reconnect.
+- Done is inferred from a working → idle edge (`Models/AidenChat.swift:2701-2707`), never on first load or a reconnect. Only an item that comes to rest counts: a chat that leaves the list (archive, delete), a Bot that pauses or goes unavailable, and a machine going offline do not. After a reconnect, rows older than the machine's fresh read are fenced off until it arrives. The person's own open chat beside the list never shows Done.
+- Done's hold extends to the latest finish rather than restarting. One wake task, retained and cancelled on each new read, moves Done to Idle; nothing polls.
 - v1 relies on the inbox poll, every 15–60 s (`AidenInboxPollPolicy.swift:24-38`). v2 gets Done faster from the open run's stream.
 - The reducer sits next to `AidenUnifiedInbox.make` (`Models/AidenUnifiedInbox.swift:112-254`).
 
 **Rendering and settings**
-- `AidenAuroraView` is a `MeshGradient` at 30 fps. It is gated the same way as `AidenBotSemanticAvatarView.swift:128-170`, through a shared `AidenAmbientGate`.
+- `AidenAuroraView` is a `MeshGradient` in a `TimelineView` at 30 fps, or 15 fps for slow states (speed under 0.2×). Its colours are worked out once per state, not per frame, and its drift phase accumulates so a state change never jumps. Listening holds the mesh still and lifts its centre with the mic level; a level change redraws only the level. It is gated the same way as `AidenBotSemanticAvatarView.swift:128-170`, through a shared `AidenAmbientGate`.
 - Settings → Appearance gets an "Ambient background" card with:
-  - Off / Subtle / Vivid, stored in `aiden.appearance.aurora`, default Subtle.
+  - Off / Subtle / Vivid as a system segmented picker, stored in `aiden.appearance.aurora`, default Subtle. A change applies at once.
   - "Follow activity", stored in `aiden.appearance.auroraFollowsActivity`.
 - Working blue is a new `AidenPalette.activity` token per preset, defaulting to `#006AD6` light and `#3E97F6` dark. The iOS accent is ink (`#1F2228`), so it cannot be used.
 

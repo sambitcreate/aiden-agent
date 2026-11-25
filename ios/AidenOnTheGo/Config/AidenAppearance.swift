@@ -628,8 +628,8 @@ enum AidenThemeCatalog {
             .init(canvasHex: "#141826", sidebarHex: "#1B2133", raisedHex: "#262D42", foregroundHex: "#D2D8E6", secondaryHex: "#94A0BC", accentHex: "#7FA0F0", successHex: "#32D17A", warningHex: "#FFB020", dangerHex: "#FF5E57"),
         ],
         .monochrome: [
-            .init(canvasHex: "#FFFFFF", sidebarHex: "#F5F5F5", raisedHex: "#FFFFFF", foregroundHex: "#000000", secondaryHex: "#525252", accentHex: "#000000", successHex: "#00906C", warningHex: "#B58A00", dangerHex: "#D70022"),
-            .init(canvasHex: "#0A0A0A", sidebarHex: "#141414", raisedHex: "#1F1F1F", foregroundHex: "#FFFFFF", secondaryHex: "#A3A3A3", accentHex: "#FFFFFF", successHex: "#2FBF8F", warningHex: "#FFD60A", dangerHex: "#FF4D5E"),
+            .init(canvasHex: "#FFFFFF", sidebarHex: "#F5F5F5", raisedHex: "#FFFFFF", foregroundHex: "#000000", secondaryHex: "#525252", accentHex: "#000000", successHex: "#00906C", warningHex: "#B58A00", dangerHex: "#D70022", activityHex: "#525252"),
+            .init(canvasHex: "#0A0A0A", sidebarHex: "#141414", raisedHex: "#1F1F1F", foregroundHex: "#FFFFFF", secondaryHex: "#A3A3A3", accentHex: "#FFFFFF", successHex: "#2FBF8F", warningHex: "#FFD60A", dangerHex: "#FF4D5E", activityHex: "#A3A3A3"),
         ],
     ]
 }
@@ -961,13 +961,12 @@ struct AidenAmbientBackgroundSection: View {
 
     var body: some View {
         Section {
-            AidenPillSegmentedControl(
-                selection: $appearance.auroraLevel,
-                options: AidenAuroraLevel.allCases,
-                accessibilityLabel: "Ambient background"
-            ) { level in
-                LocalizedStringKey(level.title)
+            Picker("Ambient background", selection: $appearance.auroraLevel) {
+                ForEach(AidenAuroraLevel.allCases) { level in
+                    Text(LocalizedStringKey(level.title)).tag(level)
+                }
             }
+            .pickerStyle(.segmented)
             .accessibilityIdentifier("settings.appearance.aurora")
             Toggle("Follow activity", isOn: $appearance.auroraFollowsActivity)
                 .aidenSwitchStyle()
@@ -981,8 +980,8 @@ struct AidenAmbientBackgroundSection: View {
     }
 
     static func footer(lowPowerMode: Bool) -> String {
-        let base = "A soft light behind Home that shows when work runs, finishes or needs you. Still with Reduce Motion. Off in Low Power Mode."
-        return lowPowerMode ? base + " Off while Low Power Mode is on." : base
+        let base = "A soft light behind Home that shows when work runs, finishes or needs you. Still with Reduce Motion, Reduce Transparency or VoiceOver."
+        return base + (lowPowerMode ? " Off now, while Low Power Mode is on." : " Off in Low Power Mode.")
     }
 }
 
