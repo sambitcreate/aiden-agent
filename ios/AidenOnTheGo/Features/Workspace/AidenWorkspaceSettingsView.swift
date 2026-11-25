@@ -154,8 +154,7 @@ struct AidenWorkspaceSettingsView: View {
                         )
                         guard save != nil else {
                             // Nothing was sent, so the sheet stays and says why.
-                            refusalNotice = Self.refusal(on: coordinator, context: context)
-                            coordinator.haptics.play(.warning, scope: hapticScope)
+                            refuse(Self.refusal(on: coordinator, context: context))
                             return
                         }
                         coordinator.haptics.play(.success, scope: hapticScope)
@@ -174,8 +173,7 @@ struct AidenWorkspaceSettingsView: View {
                     // closes; the coordinator keeps the queued removal, and a
                     // refusal brings the workspace back with a notice on it.
                     guard coordinator.enqueueWorkspaceRemoval(workspace, on: context) != nil else {
-                        refusalNotice = Self.refusal(on: coordinator, context: context)
-                        coordinator.haptics.play(.warning, scope: hapticScope)
+                        refuse(Self.refusal(on: coordinator, context: context))
                         return
                     }
                     coordinator.haptics.play(
@@ -212,6 +210,14 @@ struct AidenWorkspaceSettingsView: View {
 }
 
 extension AidenWorkspaceSettingsView {
+    /// Shows why a tap sent nothing, with a warning haptic, and reads it to
+    /// VoiceOver, since focus stays on the button the person pressed.
+    private func refuse(_ notice: String) {
+        refusalNotice = notice
+        coordinator.haptics.play(.warning, scope: hapticScope)
+        UIAccessibility.post(notification: .announcement, argument: notice)
+    }
+
     /// Why a Save or Remove from this sheet sent nothing: its computer was
     /// paired again or is gone, or the computer no longer has the workspace.
     static func refusal(on coordinator: AidenRemoteCoordinator, context: AidenRemoteRequestContext) -> String {

@@ -125,6 +125,14 @@ struct AidenWorkspacesDirectoryView: View {
 
     private static let refusal = String(localized: "Nothing was sent: this workspace or its computer changed. Pull to refresh and try again.")
 
+    /// Shows why a tap sent nothing, with a warning haptic, and reads it to
+    /// VoiceOver, since focus stays on the row the person acted on.
+    private func refuse(_ notice: String) {
+        refusalNotice = notice
+        coordinator.haptics.play(.warning, scope: hapticScope)
+        UIAccessibility.post(notification: .announcement, argument: notice)
+    }
+
     var body: some View {
         List {
             if let notice = listNotice {
@@ -300,8 +308,7 @@ struct AidenWorkspacesDirectoryView: View {
                 // back with a notice, and the typed name stays for a retry.
                 guard let context = ownerContext,
                       let save = coordinator.enqueueWorkspaceSave(workspace, name: trimmedName, on: context) else {
-                    refusalNotice = Self.refusal
-                    coordinator.haptics.play(.warning, scope: hapticScope)
+                    refuse(Self.refusal)
                     return
                 }
                 coordinator.haptics.play(.success, scope: hapticScope, dedupeKey: "workspace-rename:\(workspace.id):\(trimmedName)")
@@ -353,8 +360,7 @@ struct AidenWorkspacesDirectoryView: View {
                 // the row back with a notice.
                 guard let context = ownerContext,
                       let removal = coordinator.enqueueWorkspaceRemoval(workspace, on: context) else {
-                    refusalNotice = Self.refusal
-                    coordinator.haptics.play(.warning, scope: hapticScope)
+                    refuse(Self.refusal)
                     return
                 }
                 coordinator.haptics.play(.success, scope: hapticScope, dedupeKey: "workspace-remove:\(workspace.id):\(workspace.revision)")
@@ -518,8 +524,10 @@ private struct AidenWorkspaceInteractiveRow: View {
     let onToggleArchive: () -> Void
     let onRemove: (() -> Void)?
 
+    // Rename and Remove queue behind this phone's other changes, so a request
+    // already on its way never greys them out.
     private var serverMutationDisabled: Bool {
-        coordinator.connectionState != .connected || coordinator.isMutating
+        coordinator.connectionState != .connected
     }
 
     var body: some View {

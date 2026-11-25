@@ -1065,11 +1065,15 @@ final class AidenRemoteCoordinator {
             lane.removed = true
             guard holds(context) else { return .stale }
             // The machine may seed a replacement for its last workspace, so its own
-            // list is read back. Without it the removed one goes from the
-            // confirmed list, and other workspaces' unanswered edits stay on top.
+            // list is read back. Without it only the copy this removal named goes
+            // from the confirmed list: a replacement a list read installed in the
+            // meantime has the same id under a new revision and stays. Other
+            // workspaces' unanswered edits stay on top.
             let canonical = try? await client.workspaces()
             guard holds(context) else { return .stale }
-            connection.applyWorkspaceSnapshot(canonical ?? connection.confirmedWorkspaces.filter { $0.id != workspace.id })
+            connection.applyWorkspaceSnapshot(canonical ?? connection.confirmedWorkspaces.filter {
+                !($0.id == workspace.id && $0.revision == revision)
+            })
             return .success(())
         } catch let error where aidenIsCancellation(error) {
             return holds(context) ? .cancelled : .stale

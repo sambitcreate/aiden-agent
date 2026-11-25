@@ -596,8 +596,12 @@ final class AidenHostConnection {
         let confirmed = Dictionary(confirmedWorkspaces.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
         let listed = Set(workspaces.map(\.id))
         // A workspace waiting to be removed isn't shown, so the list leaves it
-        // out without the machine having removed it.
-        let waitingRemoval = confirmedWorkspaces.filter { hiddenWorkspaceIds.contains($0.id) && !listed.contains($0.id) }
+        // out without the machine having removed it. A list cleared while the
+        // machine connects keeps nothing, so a removal that fails can't show
+        // that workspace alone on it; the hidden mark stays until it settles.
+        let waitingRemoval = workspaces.isEmpty ? [] : confirmedWorkspaces.filter {
+            hiddenWorkspaceIds.contains($0.id) && !listed.contains($0.id)
+        }
         let adopted = workspaces.map { workspace in
             guard workspaceEdits[workspace.id] != nil, shown[workspace.id] == workspace,
                   let original = confirmed[workspace.id] else { return workspace }

@@ -1,4 +1,5 @@
 #if DEBUG
+import os
 import XCTest
 @testable import AidenOnTheGo
 
@@ -621,13 +622,52 @@ final class AidenOwnerRoutingTests: XCTestCase {
         XCTAssertEqual(try shownDefault()?.permission, .full)
     }
 
+    /// A list read while the removal waits can already hold the machine's
+    /// new "default". When the list can't be read back after the removal, that
+    /// new copy stays, because only the copy the removal named is gone.
+    func testARemovalWithoutAListKeepsAReplacementAListReadInstalled() async throws {
+        let workspace = try await laptopsDefault()
+        answerWorkspaceSaves()
+        responder.reply(instanceId: "laptop", method: "DELETE", path: "/workspaces/default", status: 204, json: Data())
+        let owner = try coordinator.ownerContext(for: "laptop")
+        let release = responder.hold(instanceId: "laptop", path: "/workspaces/default")
+        let removal = Task { await coordinator.removeWorkspaceOutcome(workspace, on: owner) }
+        try await waitUntil("the removal is on its way") { requests("laptop").contains("DELETE /workspaces/default") }
+
+        var reseeded = workspaceObject("default", name: "Default")
+        reseeded["revision"] = "rev_reseeded"
+        listWorkspaces([reseeded], on: "laptop")
+        try await connection("laptop").refreshWorkspacesForPoll()
+        responder.reply(instanceId: "laptop", path: "/workspaces", status: 500, json: serverFailure)
+
+        release()
+        guard case .success = await removal.value else { return XCTFail("Not removed") }
+        let again = try XCTUnwrap(try shownDefault())
+        XCTAssertEqual(again.revision, "rev_reseeded")
+
+        let save = try XCTUnwrap(coordinator.enqueueWorkspaceSave(again, permission: .full, on: owner))
+        let outcome = await save.value
+        XCTAssertEqual(outcome.value?.permission, .full)
+        XCTAssertEqual(responder.revisionsSent(instanceId: "laptop"), [
+            "DELETE /workspaces/default workspace_revision_7",
+            "PATCH /workspaces/default rev_reseeded",
+        ])
+    }
+
     /// When the machine refuses the removal, the workspace comes back with a
     /// notice and no alert, and a save made while the removal waited goes
     /// only after the machine's refusal, on the revision the earlier save got back.
     func testASaveMadeWhileRemoveWaitsGoesAfterARefusedRemoval() async throws {
         let workspace = try await laptopsDefault()
         answerWorkspaceSaves()
-        responder.reply(instanceId: "laptop", method: "DELETE", path: "/workspaces/default", status: 500, json: serverFailure)
+        // The PATCHes the machine had received when it answered the removal.
+        let patchesBeforeTheRefusal = OSAllocatedUnfairLock<Int?>(initialState: nil)
+        let refusal = serverFailure
+        responder.reply(instanceId: "laptop", method: "DELETE", path: "/workspaces/default", answering: { [responder] _, _ in
+            let patches = responder.requests(instanceId: "laptop").filter { $0 == "PATCH /workspaces/default" }.count
+            patchesBeforeTheRefusal.withLock { $0 = patches }
+            return (500, refusal)
+        })
         let owner = try coordinator.ownerContext(for: "laptop")
         let release = responder.hold(instanceId: "laptop", path: "/workspaces/default")
         let first = try XCTUnwrap(coordinator.enqueueWorkspaceSave(workspace, name: "Renamed", on: owner))
@@ -646,12 +686,11 @@ final class AidenOwnerRoutingTests: XCTestCase {
         let saved = try XCTUnwrap(firstOutcome.value)
         try await waitUntil("the removal is on its way") { requests("laptop").contains("DELETE /workspaces/default") }
         XCTAssertNil(try shownDefault())
-        // Nothing else goes while the removal waits for its answer.
-        try await Task.sleep(for: .milliseconds(100))
-        XCTAssertEqual(requests("laptop").filter { $0 == "PATCH /workspaces/default" }.count, 1)
 
         releaseRefusal()
         guard case .failure = await removal.value else { return XCTFail("Removed") }
+        // Only the first save had gone when the machine refused the removal.
+        XCTAssertEqual(patchesBeforeTheRefusal.withLock { $0 }, 1)
         let lateOutcome = await late.value
         let last = try XCTUnwrap(lateOutcome.value)
         let notice = try XCTUnwrap(coordinator.workspaceSaveNotices[id("default", on: "laptop")])
