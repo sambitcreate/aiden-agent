@@ -341,6 +341,189 @@ final class AidenDemoHostsTests: XCTestCase {
         )
         XCTAssertNil(AidenDemoScenario.requested(in: ["Aiden", "-AidenInboxFixture"]))
     }
+
+    // MARK: Full scenario
+
+    /// Every screen the full scenario feeds decodes through the real client
+    /// and its validators, on both machines, and the answers agree with each
+    /// other the way one Mac's would: a routine the feed reports opens in its
+    /// Bot's routines, a run alert is the same run as in the task's history,
+    /// a task's script and MCP servers are offered, a diff opens from the
+    /// review's own snapshot, and every worktree is a listed workspace.
+    func testFullScenarioFeedsEveryScreenThroughTheRealClient() async throws {
+        let responder = AidenDemoResponder()
+        let coordinator = AidenDemoHosts.coordinator(.full, responder: responder)
+        let installations = coordinator.installationStore.installations
+        XCTAssertEqual(installations.count, 2)
+        var runningBotNames: Set<String> = []
+
+        for installation in installations {
+            let label = installation.instanceId
+            let client = client(for: installation, responder: responder)
+
+            let bots = try await client.bots().bots
+            XCTAssertEqual(bots.count, 2, label)
+            let running = try XCTUnwrap(bots.first { $0.sessionState == .running }, "\(label): no running Bot")
+            runningBotNames.insert(running.name)
+            for bot in bots {
+                let detail = try await client.bot(id: bot.id)
+                XCTAssertEqual(detail.id, bot.id, label)
+                let memory = try await client.botMemory(botId: bot.id)
+                XCTAssertTrue(memory.readable, label)
+                XCTAssertFalse(memory.memory.entries.isEmpty, "\(label)/\(bot.id)")
+                XCTAssertFalse(memory.memory.overBudget || memory.user.overBudget, "\(label)/\(bot.id)")
+            }
+            let session = try await client.botSession(botId: running.id)
+            XCTAssertEqual(session.stateView.state, .running, label)
+            XCTAssertNotNil(session.partial, label)
+            let conversations = try await client.botConversations().conversations
+            XCTAssertTrue(Set(bots.map(\.id)).isSubset(of: Set(conversations.map(\.botId))), "\(label): every Bot has a chat")
+
+            // The running Bot's stream opens with a snapshot and stays open.
+            let events = EventLog()
+            let watch = Task {
+                for try await event in client.botSessionEvents(botId: running.id) { await events.append(event.kind) }
+            }
+            let deadline = Date().addingTimeInterval(30)
+            while await events.kinds.isEmpty, Date() < deadline { try await Task.sleep(nanoseconds: 10_000_000) }
+            try await Task.sleep(nanoseconds: 300_000_000)
+            let kinds = await events.kinds
+            watch.cancel()
+            XCTAssertEqual(kinds.count, 1, "\(label): one snapshot, then the stream stays open with no reconnect")
+            guard case .snapshot(let snapshot)? = kinds.first else { return XCTFail("\(label): first frame is not a snapshot") }
+            XCTAssertEqual(snapshot.stateView.state, .running, label)
+
+            // A routine the feed reports opens in its Bot's routines.
+            let feed = try await client.botRoutineNotifications(since: nil).notifications
+            XCTAssertEqual(Set(feed.map(\.botId)), Set(bots.map(\.id)), label)
+            XCTAssertTrue(feed.allSatisfy { !$0.preview.isEmpty }, "\(label): every routine result has a preview")
+            for item in feed {
+                let routines = try await client.botRoutines(botId: item.botId)
+                XCTAssertTrue(routines.contains { $0.id == item.routineId }, "\(label)/\(item.id)")
+            }
+            let oldest = try XCTUnwrap(feed.min { $0.finishedAt.date < $1.finishedAt.date })
+            let newer = try await client.botRoutineNotifications(since: oldest.finishedAt.rawValue).notifications
+            XCTAssertEqual(Set(newer.map(\.id)), Set(feed.filter { $0.finishedAt.date > oldest.finishedAt.date }.map(\.id)), label)
+
+            let workspaces = try await client.workspaces()
+            XCTAssertTrue(workspaces.contains { $0.id == AidenDemoFull.archivedWorkspaceId }, label)
+
+            let tasks = try await client.scheduledTasks()
+            XCTAssertEqual(Set(tasks.map(\.mode)), [.llm, .script], label)
+            let scripts = Set(try await client.scheduledScripts(workspaceId: nil).map(\.id))
+            let servers = Set(try await client.scheduledMcpServers().map(\.id))
+            var runsById: [String: AidenScheduledRun] = [:]
+            for task in tasks {
+                let fetched = try await client.scheduledTask(id: task.id)
+                XCTAssertEqual(fetched, task)
+                let runs = try await client.scheduledRuns(taskId: task.id)
+                XCTAssertFalse(runs.isEmpty, "\(label)/\(task.id)")
+                XCTAssertTrue(runs.allSatisfy { $0.finishedAt != nil }, "\(label)/\(task.id): the history lists finished runs only")
+                XCTAssertEqual(task.lastRunAt, runs.compactMap(\.finishedAt).max(), "\(label)/\(task.id): the last run is in the history")
+                for run in runs { runsById[run.id] = run }
+                if let scriptId = task.scriptId { XCTAssertTrue(scripts.contains(scriptId), task.id) }
+                XCTAssertTrue(Set(task.mcpServerIds ?? []).isSubset(of: servers), task.id)
+            }
+            let alerts = try await client.scheduledRunNotifications().notifications
+            XCTAssertFalse(alerts.isEmpty, label)
+            for alert in alerts {
+                let run = try XCTUnwrap(runsById[alert.id], "\(label)/\(alert.id): an alert is a run in its task's history")
+                XCTAssertEqual(run.taskId, alert.taskId, alert.id)
+                XCTAssertEqual(run.finishedAt, alert.finishedAt, alert.id)
+                XCTAssertEqual(run.summary, alert.summary, alert.id)
+                XCTAssertEqual(alert.taskName, tasks.first { $0.id == alert.taskId }?.name, alert.id)
+            }
+            let middle = alerts[alerts.count / 2].finishedAt
+            let sinceMiddle = try await client.scheduledRunNotifications(since: middle).notifications
+            XCTAssertEqual(Set(sinceMiddle.map(\.id)), Set(alerts.filter { $0.finishedAt >= middle }.map(\.id)), label)
+            let settings = try await client.scheduledSettings()
+            XCTAssertNotNil(TimeZone(identifier: settings.defaultTimezone), label)
+
+            let workspace = AidenDemoFull.gitWorkspaceId
+            let review = try await client.gitReview(workspaceId: workspace)
+            XCTAssertEqual(review.capability?.allowed, true, "\(label): the review's changes can be committed")
+            guard case .review(let changes) = review.result else { return XCTFail("\(label): no review") }
+            XCTAssertEqual(changes.files.count, changes.uncommitted, label)
+            let first = try XCTUnwrap(changes.files.first)
+            let diff = try await client.gitDiff(
+                workspaceId: workspace,
+                snapshotId: try XCTUnwrap(review.snapshotId),
+                fileId: first.id
+            )
+            guard case .diff(let shown) = diff.result else { return XCTFail("\(label): no diff") }
+            XCTAssertEqual(shown.displayPath, first.displayPath, label)
+            let branchResult = try await client.gitBranches(workspaceId: workspace)
+            XCTAssertEqual(branchResult.capability?.allowed, true, label)
+            guard case .branches(let branches) = branchResult.result else { return XCTFail("\(label): no branches") }
+            XCTAssertTrue(branches.branches.contains(branches.current), label)
+            XCTAssertEqual(branches.current, changes.branch, label)
+            guard case .pushCapability(let push) = try await client.gitPushCapability(workspaceId: workspace).result else {
+                return XCTFail("\(label): no push capability")
+            }
+            XCTAssertTrue(push.allowed, label)
+            guard case .worktrees(let worktrees) = try await client.gitWorktrees(workspaceId: workspace).result else {
+                return XCTFail("\(label): no worktrees")
+            }
+            XCTAssertTrue(worktrees.worktrees.contains { $0.branch == changes.branch }, label)
+            for worktree in worktrees.worktrees {
+                XCTAssertTrue(workspaces.contains { $0.id == worktree.id }, "\(label)/\(worktree.id): a worktree opens as a workspace")
+            }
+        }
+        XCTAssertEqual(runningBotNames.count, installations.count, "Each machine runs its own Bot, so a wrong-host answer shows")
+    }
+
+    /// Usage reads like a real Mac's summary in every range: totals are the
+    /// sum of the listed days and of the models, days are sparse, in order and
+    /// inside the range, and streaks agree with the active days.
+    func testFullScenarioUsageTotalsAgreeWithItsDaysInEveryRange() async throws {
+        let responder = AidenDemoResponder()
+        let coordinator = AidenDemoHosts.coordinator(.full, responder: responder)
+        var requestsByMachine: [String: Int] = [:]
+        for installation in coordinator.installationStore.installations {
+            let client = client(for: installation, responder: responder)
+            var previousDays = 0
+            for range in ["7d", "30d", "90d", "1y", "all"] {
+                let label = "\(installation.instanceId)/\(range)"
+                let usage = try await client.usage(range: range)
+                XCTAssertEqual(usage.range, range, label)
+                let totals = usage.totals
+                XCTAssertEqual(totals.requests, usage.days.reduce(0) { $0 + $1.requests }, label)
+                XCTAssertEqual(totals.tokens.total, usage.days.reduce(0) { $0 + $1.tokens.total }, label)
+                XCTAssertEqual(totals.hostedCostUsd, usage.days.reduce(0) { $0 + $1.hostedCostUsd }, accuracy: 0.0001, label)
+                XCTAssertEqual(totals.requests, usage.models.reduce(0) { $0 + $1.requests }, label)
+                XCTAssertEqual(totals.localRequests, usage.models.filter(\.local).reduce(0) { $0 + $1.requests }, label)
+                XCTAssertEqual(
+                    totals.requests,
+                    totals.completedRequests + totals.failedRequests + totals.cancelledRequests,
+                    label
+                )
+                XCTAssertEqual(totals.activeDays, usage.days.filter { $0.requests > 0 }.count, label)
+                XCTAssertEqual(usage.days.map(\.date), usage.days.map(\.date).sorted(), label)
+                XCTAssertEqual(Set(usage.days.map(\.date)).count, usage.days.count, label)
+                XCTAssertTrue(usage.days.allSatisfy { $0.date >= usage.startDate && $0.date <= usage.endDate }, label)
+                XCTAssertEqual(usage.models.map(\.requests), usage.models.map(\.requests).sorted(by: >), label)
+                XCTAssertGreaterThan(totals.currentStreak, 0, label)
+                XCTAssertGreaterThanOrEqual(totals.longestStreak, totals.currentStreak, label)
+                XCTAssertLessThanOrEqual(totals.longestStreak, totals.activeDays, label)
+                XCTAssertGreaterThanOrEqual(usage.days.count, previousDays, "\(label): a longer range lists fewer days")
+                previousDays = usage.days.count
+                if range == "7d" { XCTAssertLessThanOrEqual(usage.days.count, 7, label) }
+                if range == "all" {
+                    XCTAssertEqual(usage.startDate, usage.days.first?.date, label)
+                    XCTAssertLessThan(usage.days.count, 120, "\(label): the history has gaps")
+                    requestsByMachine[installation.instanceId] = totals.requests
+                }
+            }
+        }
+        XCTAssertEqual(Set(requestsByMachine.values).count, 2, "two machines must not show the same usage")
+    }
+
+}
+
+private actor EventLog {
+    private(set) var kinds: [AidenBotSessionEvent.Kind] = []
+
+    func append(_ kind: AidenBotSessionEvent.Kind) { kinds.append(kind) }
 }
 
 private final class LockedFlag: @unchecked Sendable {

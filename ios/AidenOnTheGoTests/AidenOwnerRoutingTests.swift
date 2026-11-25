@@ -544,9 +544,18 @@ final class AidenOwnerRoutingTests: XCTestCase {
     func testABotsDeleteGoesToItsOwnMachine() async throws {
         responder.reply(instanceId: "laptop", method: "DELETE", path: "/bots/bot_scout", status: 204, json: Data())
         XCTAssertTrue(AidenBotDeletion.isAvailable(coordinator: coordinator, machine: "laptop"))
+        let pins = AidenDrawerPinsStore.shared
+        let laptop = try coordinator.ownerContext(for: "laptop")
+        let studio = try coordinator.ownerContext(for: "studio")
+        let deleted = AidenDrawerPin(kind: .bot, id: AidenHostObjectID(instanceId: "laptop", deviceId: laptop.deviceId, objectId: "bot_scout"))
+        let sameIDElsewhere = AidenDrawerPin(kind: .bot, id: AidenHostObjectID(instanceId: "studio", deviceId: studio.deviceId, objectId: "bot_scout"))
+        for pin in [deleted, sameIDElsewhere] where !pins.isPinned(pin) { pins.toggle(pin) }
+        defer { pins.purge(instanceID: "laptop"); pins.purge(instanceID: "studio") }
 
         try await AidenBotDeletion.deleteListed(botID: "bot_scout", coordinator: coordinator, machine: "laptop")
 
+        XCTAssertFalse(pins.isPinned(deleted), "A deleted Bot kept its drawer pin")
+        XCTAssertTrue(pins.isPinned(sameIDElsewhere), "Another machine's Bot lost its pin")
         XCTAssertTrue(requests("laptop").contains("DELETE /bots/bot_scout"))
         XCTAssertFalse(requests("studio").contains { $0.hasPrefix("DELETE /bots") || $0 == "GET /bots/bot_scout" })
         XCTAssertEqual(coordinator.defaultInstanceId, "studio")
@@ -659,7 +668,7 @@ final class AidenOwnerRoutingTests: XCTestCase {
         }
         XCTAssertEqual(chat.messages.map(\.text), ["from laptop"])
         XCTAssertEqual(owner.instanceId, "laptop")
-        XCTAssertEqual(navigation.inboxPath, [.chat(id())])
+        XCTAssertEqual(navigation.chatsPath, [.chat(id())])
         XCTAssertEqual(coordinator.defaultInstanceId, "studio")
         XCTAssertEqual(requests("studio"), studioRequestsBefore, "The selected machine was asked about another's chat")
     }
@@ -832,7 +841,8 @@ final class AidenOwnerRoutingTests: XCTestCase {
 
         let loaded = store.load(installations: [studio, laptop], selected: "studio")
 
-        XCTAssertEqual(loaded.tab, .inbox)
+        XCTAssertEqual(loaded.tab, .chats)
+        XCTAssertEqual(loaded.chatsPath, [])
         XCTAssertEqual(loaded.inboxPath, [])
         XCTAssertEqual(loaded.workspacesPath, [.workspace(id("workspace_app", on: "studio"))])
         XCTAssertEqual(loaded.botsPath, [.bot(id("bot_1", on: "studio"))])
@@ -926,17 +936,19 @@ final class AidenOwnerRoutingTests: XCTestCase {
         XCTAssertEqual(legacy.compactBotPath(for: "studio"), ["chat_9"], "Only the write that moved the paths may take them")
     }
 
-    func testACorruptV2FallsBackToTheInbox() {
-        let (store, legacy, defaults) = routeStores()
-        legacy.setCompactWorkspacePath(["workspace_app"], for: "studio")
-        defaults.set(Data("not json".utf8), forKey: AidenAppNavigationStore.snapshotKey)
+    func testACorruptSavedSnapshotFallsBackToChats() {
+        for key in [AidenAppNavigationStore.snapshotKey, AidenAppNavigationStore.previousSnapshotKey] {
+            let (store, legacy, defaults) = routeStores()
+            legacy.setCompactWorkspacePath(["workspace_app"], for: "studio")
+            defaults.set(Data("not json".utf8), forKey: key)
 
-        let loaded = store.load(installations: [studio, laptop], selected: "studio")
+            let loaded = store.load(installations: [studio, laptop], selected: "studio")
 
-        XCTAssertEqual(loaded, AidenAppNavigationSnapshot(), "A saved v2 has replaced v1, readable or not")
-        let navigation = AidenAppNavigation(restoring: loaded, installations: [studio, laptop])
-        XCTAssertEqual(navigation.tab, .inbox)
-        XCTAssertEqual(navigation.inboxPath, [])
+            XCTAssertEqual(loaded, AidenAppNavigationSnapshot(), "A saved \(key) has replaced v1, readable or not")
+            let navigation = AidenAppNavigation(restoring: loaded, installations: [studio, laptop])
+            XCTAssertEqual(navigation.tab, .chats, key)
+            XCTAssertEqual(AidenAppTab.allCases.flatMap { navigation.path(of: $0) }, [], key)
+        }
     }
 
     func testAMachineThatLeavesTakesItsSavedPathsWithIt() {

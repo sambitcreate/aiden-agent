@@ -2,6 +2,17 @@
 
 ## Unreleased
 
+- **2026-11-25 — Chats tab and the side drawer (new direction, Phase 1).** No Remote wire or revision change.
+  - The tabs are Chats, Bots, Workspaces and Inbox, and the app opens on Chats, a list of every chat across your computers. Search moved into the drawer.
+  - The menu button at the top of each list, or a swipe in from the screen's leading edge at a list, opens a drawer with search, pinned Bots and workspaces, recent chats, Usage, Computers and Settings. A pinned Bot shows its avatar and a dot when it needs you.
+  - The drawer stays open while chats update in the background and closes when you pick something, tap outside it, or press Escape; focus returns to the menu button.
+  - While the drawer is open, VoiceOver reads only the drawer. The swipe that opens it starts at the very edge of the screen, so a row's own swipe just inside the edge still reaches the row, and it doesn't open under a sheet.
+  - Search shows a placeholder until the query you typed has answered, never "No results" or the previous query's hits. Dragging the results puts the keyboard away. Deleting a Bot also removes its drawer pin.
+  - An error raised while the drawer is open shows over the drawer, Add Computer from the drawer opens pairing once the drawer has gone, and new-chat haptics keep working after the drawer closes.
+  - Reopening the drawer keeps your last search results on screen and refreshes them quietly.
+  - Chats and the drawer stay as current as the Inbox while they are on screen.
+  - Show all chats keeps the chat that is open beside the list on an iPad or an unfolded iPhone Duo.
+
 - **2026-11-24 — Bots waiting on you (provisional Remote revision 68, `bot:needs-you`).** On a Mac that offers it, the app asks for `bot:needs-you` in a call of its own. A Bot the Mac says waits on the person reads "Waiting for you" on its Bots row and is no longer shown as working, and the Inbox lists it under Needs you with that reason (after an open-issue count). A Bot waiting on an approval the phone can see in its chat reads "Needs your OK" (or "Waiting for your OK on your Mac" when only the Mac may answer) instead, as on Android, with or without this capability. Other Macs look as before.
 
 - **2026-11-24 — A chat's top bar after Telegram's.** No Remote wire or revision change.

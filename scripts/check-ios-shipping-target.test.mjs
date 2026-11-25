@@ -49,6 +49,8 @@ const appSourcePaths = [
   "AidenOnTheGo/Config/AidenAppearance.swift",
   "AidenOnTheGo/Config/AidenChromeGlass.swift",
   "AidenOnTheGo/Config/AidenDesignTokens.swift",
+  "AidenOnTheGo/Config/AidenSettingsKit.swift",
+  "AidenOnTheGo/Config/AidenSettingsKitControls.swift",
   "AidenOnTheGo/Config/AidenVoiceInput.swift",
   "AidenOnTheGo/Config/AppConfig.swift",
   "AidenOnTheGo/ContentView.swift",
@@ -145,12 +147,15 @@ const appSourcePaths = [
   "AidenOnTheGo/Features/Remote/AidenBotChatToolsView.swift",
   "AidenOnTheGo/Features/Remote/Demo/AidenDemoHosts.swift",
   "AidenOnTheGo/Features/Remote/Demo/AidenDemoBotUX.swift",
+  "AidenOnTheGo/Features/Remote/Demo/AidenDemoFoundationRoutes.swift",
   "AidenOnTheGo/Features/Remote/Demo/AidenPreviewFixtureView.swift",
   "AidenOnTheGo/Features/Remote/Hosts/AidenHostConnectScheduler.swift",
   "AidenOnTheGo/Features/Shell/AidenAppNavigation.swift",
   "AidenOnTheGo/Features/Shell/AidenAppShellView.swift",
   "AidenOnTheGo/Features/Shell/AidenBotsTabView.swift",
-  "AidenOnTheGo/Features/Shell/AidenSearchTabView.swift",
+  "AidenOnTheGo/Features/Shell/AidenSearchResultsView.swift",
+  "AidenOnTheGo/Features/Shell/AidenDrawerView.swift",
+  "AidenOnTheGo/Features/Shell/AidenChatsTabView.swift",
   "AidenOnTheGo/Features/Shell/AidenWorkspacesTabView.swift",
   "AidenOnTheGo/Features/Remote/Hosts/AidenHostConnection.swift",
   "AidenOnTheGo/Features/Remote/Hosts/AidenHostConnectionLifecycle.swift",
@@ -206,6 +211,8 @@ const appSourcePaths = [
   "AidenOnTheGo/Models/AidenUnifiedInbox.swift",
   "AidenOnTheGo/Models/AidenCatchUpQueue.swift",
   "AidenOnTheGo/Models/AidenSearchModel.swift",
+  "AidenOnTheGo/Models/AidenChatsList.swift",
+  "AidenOnTheGo/Models/AidenDrawerModel.swift",
   "AidenOnTheGo/Models/AidenScheduledTask.swift",
   "AidenOnTheGo/Models/AidenWorkspaceEnvironment.swift",
   "AidenOnTheGo/Networking/AidenMJPEGMultipartParser.swift",
@@ -275,7 +282,7 @@ const workspaceShellSourcePaths = [
   "AidenOnTheGo/Features/Shell/AidenInboxTabView.swift",
   "AidenOnTheGo/Features/Shell/AidenWorkspacesTabView.swift",
   "AidenOnTheGo/Features/Shell/AidenBotsTabView.swift",
-  "AidenOnTheGo/Features/Shell/AidenSearchTabView.swift",
+  "AidenOnTheGo/Features/Shell/AidenSearchResultsView.swift",
   "AidenOnTheGo/Features/Shell/AidenNewWorkChatFlow.swift",
   "AidenOnTheGo/Features/Shell/AidenUnifiedInboxStore.swift",
   "AidenOnTheGo/Features/Workspace/AidenRelativeTimestamp.swift",
@@ -304,11 +311,13 @@ const testSources = [
   "AidenDemoHostsTests.swift",
   "AidenHostConnectionTests.swift",
   "AidenAppShellTests.swift",
+  "AidenShellIATests.swift",
   "AidenSearchModelTests.swift",
   "AidenHostConnectSchedulerTests.swift",
   "AidenHostRegistryTests.swift",
   "AidenOwnerScopeTests.swift",
   "AidenDesignTokenTests.swift",
+  "AidenSettingsKitTests.swift",
   "AidenMachinePreferencesTests.swift",
   "AidenUnifiedInboxTests.swift",
   "AidenUnifiedInboxStoreTests.swift",
@@ -435,12 +444,15 @@ test("the iOS tree contains no orphan imported Swift sources", async () => {
 test("the demo machines stay out of Release builds", async () => {
   // The demo can run, pause and grant on its own pretend machines. A Release
   // build must never compile it, or a launch argument could reach it.
-  const demoPath = "AidenOnTheGo/Features/Remote/Demo/AidenDemoHosts.swift";
-  const demo = await readFile(`${iosRoot}${demoPath}`, "utf8");
-  assert.match(demo, /^#if DEBUG\n/u);
-  assert.match(demo, /\n#endif\n?$/u);
+  const demoPaths = appSourcePaths.filter((path) => path.includes("/Features/Remote/Demo/"));
+  assert.ok(demoPaths.length > 0, "The demo has moved; this check reads nothing");
+  for (const demoPath of demoPaths) {
+    const demo = await readFile(`${iosRoot}${demoPath}`, "utf8");
+    assert.match(demo, /^#if DEBUG\n/u, `${demoPath} must be DEBUG-only`);
+    assert.match(demo, /\n#endif\n?$/u, `${demoPath} must be DEBUG-only`);
+  }
 
-  const references = /\bAidenDemo(?:Hosts|Scenario)\./u;
+  const references = /\bAidenDemo(?:Hosts|Scenario|Full|BotUX)\./u;
   const sources = appSourcePaths.filter((path) => !path.includes("/Demo/"));
   const texts = await Promise.all(sources.map((path) => readFile(`${iosRoot}${path}`, "utf8")));
   let checked = 0;

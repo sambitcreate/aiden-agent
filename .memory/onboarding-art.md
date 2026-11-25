@@ -86,7 +86,7 @@ Paused tiles are out of view, so nothing visible changes. Covered by `renderer/c
 iOS moved to shell-first launch (`AidenAppShellView` renders immediately with zero-computer empty states across all four tabs) and an inline frosted-cutout QR + unified manual entry sheet (`AidenPairingView`), with a first-time desktop check and Mac (`https://chatwithaiden.com/`) / Linux & Server (`https://github.com/sambitcreate/aiden-agent`) download + ShareLink sheet. `AidenOnboardingArtwork.swift`, `AidenOnboardingVignettes.swift`, and `AidenOnboardingArtTests.swift` were removed from the iOS target. Desktop's Snapshot feature tour is unchanged.
 
 ## iOS pairing follow-up (2026-11-22)
-The inline scanner uses the same cutout geometry for the mask, AVFoundation's capture region, and acceptance of detections in preview coordinates. Manual submission validates the address and setup code before sending a request and focuses the field that needs correction. The Search tab offers Add Computer until the first pairing. The CLI prints Add Computer guidance for iPhone and iPad alongside platform-neutral manual entry instructions.
+The inline scanner uses the same cutout geometry for the mask, AVFoundation's capture region, and acceptance of detections in preview coordinates. Manual submission validates the address and setup code before sending a request and focuses the field that needs correction. The Chats tab offers Add Computer until the first pairing (the Search tab before the 2026-11 new direction). The CLI prints Add Computer guidance for iPhone and iPad alongside platform-neutral manual entry instructions.
 
 ## Hi-bit sprite avatars (2026-11-24)
 The Bots and Bot computers tiles (`control-art.tsx`) draw Bot faces with `AvatarFace ... small`, the Hi-bit

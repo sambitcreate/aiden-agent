@@ -45,6 +45,7 @@ Make Aiden On The Go feel native on iPhone Duo, using the owner's reference scre
 
 - The same treatment for the Bots tab (Bot list | Bot chat) and the Workspaces tab (workspace list | workspace, then its chats in the detail stack).
 - Search stays a single stack. Its results open on their own tab as today.
+- Superseded (2026-11-24, iOS new direction Phase 1 step 3): the Search tab is gone. The tabs are Chats, Bots, Workspaces and Inbox, and Chats is a list and detail at regular width like the others. Search, pins, recents and the pages with no tab live in a leading drawer that overlays the content at every width, including the open iPhone Duo; the drawer holds no path, closes only on the person's actions, and its query lives in the shell's `AidenSearchModel`, so a fold keeps it.
 
 ### Phase 3: Bars ready for the vertical rail
 

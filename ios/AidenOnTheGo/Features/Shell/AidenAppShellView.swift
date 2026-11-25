@@ -163,9 +163,12 @@ struct AidenAppShellView: View {
     /// so building them there read and decoded the saved navigation each time.
     @State private var parts = AidenAppShellParts()
     @State private var botSummaries: [AidenHostObjectID: AidenBotSummary] = [:]
-    @State private var searchText = ""
     @State private var activeSheet: ShellSheet?
+    /// Add Computer from the drawer: pairing is the shell's sheet, presented
+    /// once the drawer's cover has gone, not in the same update.
+    @State private var pairsAfterDrawer = false
     /// Each list tab's split columns.
+    @State private var chatsColumns = AidenSplitColumns()
     @State private var inboxColumns = AidenSplitColumns()
     @State private var botsColumns = AidenSplitColumns()
     @State private var workspacesColumns = AidenSplitColumns()
@@ -174,6 +177,15 @@ struct AidenAppShellView: View {
     @State private var showsVerticalBar = false
     /// The shell's own window, for its orientation.
     @State private var window = AidenWindowReader.Window()
+    /// The drawer over the tabs (`AidenDrawerView`).
+    private var drawerIsOpen: Bool {
+        get { navigation.drawerIsOpen }
+        nonmutating set { navigation.drawerIsOpen = newValue }
+    }
+    @Environment(\.layoutDirection) private var layoutDirection
+    /// VoiceOver goes back to the showing tab's menu button when the drawer
+    /// closes. Keyed by tab because every tab's list keeps its own button.
+    @AccessibilityFocusState private var focusedMenuButton: AidenAppTab?
 
     init(
         coordinator: AidenRemoteCoordinator,
@@ -195,8 +207,9 @@ struct AidenAppShellView: View {
 
     private var navigation: AidenAppNavigation { built.navigation }
 
-    /// Compose in the Inbox and on the Workspaces tab, on a machine the person
-    /// picks. A chat started from Workspaces stays there; anywhere else it's the Inbox's.
+    /// Compose in the Inbox, the Chats tab, the Workspaces tab and the drawer,
+    /// on a machine the person picks. A chat started from Workspaces stays
+    /// there; anywhere else it opens on the Chats tab.
     private var newWork: AidenNewWorkChatFlow { built.newWork }
 
     /// Each open chat's screen state, kept while its chat is on a tab.
@@ -218,7 +231,7 @@ struct AidenAppShellView: View {
                 home?.accept(chat)
                 home?.markViewed(chatID: chat.id)
                 guard let navigation else { return }
-                navigation.open(.chat(id), on: navigation.tab == .workspaces ? .workspaces : .inbox)
+                navigation.openNewChat(id)
             }
             let chatScreens = AidenChatScreens(
                 isOpen: { [weak navigation] id in navigation?.holdsConversation(id) ?? false },
@@ -281,18 +294,55 @@ struct AidenAppShellView: View {
     }
 
     var body: some View {
-        TabView(selection: Bindable(navigation).tab) {
-            Tab("Inbox", systemImage: "tray", value: AidenAppTab.inbox) {
-                splitTab(.inbox, columns: inboxColumns, empty: .inbox) { selection in
-                    inboxList(selection: selection)
+        handlingRequests(shellContent)
+    }
+
+    /// Links, notifications, Shortcuts and Quick Actions, each of which puts
+    /// the drawer away. Apart from the body so it type-checks in time.
+    private func handlingRequests(_ content: some View) -> some View {
+        content
+        .onChange(of: navigationRequest, initial: true) { _, request in
+            guard let request else { return }
+            navigationRequest = nil
+            closeDrawer(refocusingMenu: false)
+            open(request)
+        }
+        .onChange(of: routeRequest, initial: true) { _, route in
+            guard let route else { return }
+            routeRequest = nil
+            closeDrawer(refocusingMenu: false)
+            navigation.open(route)
+        }
+        .onChange(of: intents.routes, initial: true) {
+            for queued in intents.takeRoutes(openableOn: coordinator) {
+                closeDrawer(refocusingMenu: false)
+                navigation.open(
+                    queued.route,
+                    startsVoice: queued.startsVoice,
+                    startsCamera: queued.startsCamera
+                )
+            }
+        }
+        .onChange(of: tabRequest, initial: true) { _, tab in
+            guard let tab else { return }
+            tabRequest = nil
+            closeDrawer(refocusingMenu: false)
+            // Pairing stays open: leaving it mid-scan would lose the person's place.
+            if case .runningChats? = activeSheet { activeSheet = nil }
+            navigation.selectTabRoot(tab)
+        }
+        .onChange(of: coordinator.defaultInstanceId) { _, _ in
+            navigation.leaveSelectedMachineRoutes()
+        }
+    }
+
+    private var shellContent: some View {
+        TabView(selection: Binding(get: { navigation.tab }, set: { navigation.tab = $0 })) {
+            Tab("Chats", systemImage: "bubble.left.and.bubble.right", value: AidenAppTab.chats) {
+                splitTab(.chats, columns: chatsColumns, empty: .chats) { selection in
+                    chatsList(selection: selection)
                 }
             }
-            .badge(inboxStore.needsYouCount)
-            // An iPad's tab strip draws the badge without saying it.
-            .accessibilityValue(
-                Text(inboxStore.needsYouCount == 1 ? "1 chat needs you" : "\(inboxStore.needsYouCount) chats need you"),
-                isEnabled: inboxStore.needsYouCount > 0
-            )
 
             Tab("Bots", systemImage: AidenChromeSymbols.bots, value: AidenAppTab.bots) {
                 splitTab(.bots, columns: botsColumns, empty: .bots) { selection in
@@ -306,18 +356,17 @@ struct AidenAppShellView: View {
                 }
             }
 
-            Tab(value: AidenAppTab.search, role: .search) {
-                // The field is on this stack's root view: on the `TabView` it would
-                // sit on every tab.
-                NavigationStack {
-                    AidenSearchTabView(
-                        model: built.search,
-                        inboxStore: inboxStore,
-                        hasNoComputers: hasNoComputers,
-                        onAddComputer: openAddComputer
-                    ) { navigation.open($0) }
+            Tab("Inbox", systemImage: "tray", value: AidenAppTab.inbox) {
+                splitTab(.inbox, columns: inboxColumns, empty: .inbox) { selection in
+                    inboxList(selection: selection)
                 }
             }
+            .badge(inboxStore.needsYouCount)
+            // An iPad's tab strip draws the badge without saying it.
+            .accessibilityValue(
+                Text(inboxStore.needsYouCount == 1 ? "1 chat needs you" : "\(inboxStore.needsYouCount) chats need you"),
+                isEnabled: inboxStore.needsYouCount > 0
+            )
         }
         // The system's own placement: an iPad opens on the tab strip, and the
         // sidebar is a tap away. Asking for the sidebar by default
@@ -332,7 +381,6 @@ struct AidenAppShellView: View {
         .environment(\.aidenTabsInSideRail, showsVerticalBar)
         .environment(\.aidenOfflineNotices, built.offlineNotices)
         .tabBarMinimizeBehavior(horizontalSizeClass == .compact ? .onScrollDown : .automatic)
-        .tabViewSearchActivation(.searchTabSelection)
         // Hiding the tab bar leaves the accessory up, under the composer.
         .aidenRunningAccessory(
             isEnabled: runningHome == .accessory && inboxStore.hasRunningChats && !navigation.showsConversation
@@ -346,7 +394,36 @@ struct AidenAppShellView: View {
         // accessory over a chat (iOS 27.1 simulator). The paths and chats
         // are the shell's, so the new one opens where the old one was.
         .id(navigation.besideList)
-        .aidenNewWorkPresentation(newWork, coordinator: coordinator)
+        .gesture(AidenDrawerEdgeSwipe(isEnabled: opensDrawerFromEdge, layoutDirection: layoutDirection, onOpen: openDrawer))
+        // The drawer is modal: a clear full-screen presentation, so UIKit
+        // takes everything under it (the tabs' hosts, bars, side rail and
+        // accessory) out of VoiceOver's reach. Attached after the `.id`, so
+        // it stays open as the display folds. The drawer runs its own slide;
+        // the cover comes and goes without the system's.
+        .fullScreenCover(
+            isPresented: Binding(get: { drawerIsOpen }, set: { if !$0 { closeDrawer() } }),
+            onDismiss: {
+                guard pairsAfterDrawer else { return }
+                pairsAfterDrawer = false
+                openAddComputer()
+            }
+        ) {
+            drawerOverlay
+                .presentationBackground(.clear)
+                // The shell is presenting the cover, so an error raised while
+                // the drawer is up is shown from the drawer.
+                .alert(
+                    "Aiden On The Go",
+                    isPresented: errorBinding(whileDrawerIsOpen: true)
+                ) {
+                    Button("OK", role: .cancel) { coordinator.presentedError = nil }
+                } message: {
+                    Text(coordinator.presentedError ?? "The operation could not be completed.")
+                }
+        }
+        .transaction(value: drawerIsOpen) { $0.disablesAnimations = true }
+        // While the cover is up the drawer presents the flow; the shell can't.
+        .aidenNewWorkPresentation(newWork, coordinator: coordinator, isActive: !drawerIsOpen)
         .sheet(item: $activeSheet) { sheet in
             switch sheet {
             case .runningChats:
@@ -368,10 +445,7 @@ struct AidenAppShellView: View {
         .environment(inboxStore)
         .alert(
             "Aiden On The Go",
-            isPresented: Binding(
-                get: { coordinator.presentedError != nil },
-                set: { if !$0 { coordinator.presentedError = nil } }
-            )
+            isPresented: errorBinding(whileDrawerIsOpen: false)
         ) {
             Button("OK", role: .cancel) { coordinator.presentedError = nil }
         } message: {
@@ -381,7 +455,7 @@ struct AidenAppShellView: View {
             navigationStore.save(snapshot)
             chatScreens.pathsChanged()
         }
-        .onChange(of: navigation.tab == .inbox, initial: true) { _, isOnScreen in
+        .onChange(of: navigation.showsChatList, initial: true) { _, isOnScreen in
             inboxStore.setInboxVisible(isOnScreen)
         }
         // Opening or closing an iPhone Duo swaps each list tab's container
@@ -391,7 +465,7 @@ struct AidenAppShellView: View {
         .onChange(of: horizontalSizeClass) { _, sizeClass in
             let besideList = sizeClass == .regular
             guard besideList != navigation.besideList else { return }
-            for columns in [inboxColumns, botsColumns, workspacesColumns] { columns.visibility = .all }
+            for columns in [chatsColumns, inboxColumns, botsColumns, workspacesColumns] { columns.visibility = .all }
             chatScreens.rebuilding()
             navigation.besideList = besideList
         }
@@ -407,35 +481,6 @@ struct AidenAppShellView: View {
         .onChange(of: coordinator.installationStore.installations) { _, installations in
             navigation.dropRoutes(outside: installations)
         }
-        .onChange(of: navigationRequest, initial: true) { _, request in
-            guard let request else { return }
-            navigationRequest = nil
-            open(request)
-        }
-        .onChange(of: routeRequest, initial: true) { _, route in
-            guard let route else { return }
-            routeRequest = nil
-            navigation.open(route)
-        }
-        .onChange(of: intents.routes, initial: true) {
-            for queued in intents.takeRoutes(openableOn: coordinator) {
-                navigation.open(
-                    queued.route,
-                    startsVoice: queued.startsVoice,
-                    startsCamera: queued.startsCamera
-                )
-            }
-        }
-        .onChange(of: tabRequest, initial: true) { _, tab in
-            guard let tab else { return }
-            tabRequest = nil
-            // Pairing stays open: leaving it mid-scan would lose the person's place.
-            if case .runningChats? = activeSheet { activeSheet = nil }
-            navigation.selectTabRoot(tab)
-        }
-        .onChange(of: coordinator.defaultInstanceId) { _, _ in
-            navigation.leaveSelectedMachineRoutes()
-        }
         .task(id: archiveSyncID) {
             coordinator.setDeviceArchivedWorkspaceIDs(archiveSyncID.archivedIDs, for: archiveSyncID.instanceID)
         }
@@ -443,9 +488,10 @@ struct AidenAppShellView: View {
 
     private func columns(for tab: AidenAppTab) -> AidenSplitColumns {
         switch tab {
+        case .chats: chatsColumns
         case .bots: botsColumns
         case .workspaces: workspacesColumns
-        case .inbox, .search: inboxColumns
+        case .inbox: inboxColumns
         }
     }
 
@@ -464,8 +510,18 @@ struct AidenAppShellView: View {
             columns: columns,
             window: window,
             empty: empty,
-            list: list,
-            screen: { route, keepsTabs in AnyView(screen(for: route, keepsTabs: keepsTabs)) }
+            // Each column's content too: the tabs and their columns are hosted
+            // apart, so hiding the tab view, or this tab, leaves the list and
+            // the screen beside it in reach behind the open drawer (iOS 27
+            // simulator's audit read the Inbox's rows through the scrim). The
+            // modifier reads the drawer itself, so each host updates on its own.
+            list: { selection in
+                list(selection)
+                    .toolbar { menuToolbarItem(on: tab) }
+            },
+            screen: { route, keepsTabs in
+                AnyView(screen(for: route, keepsTabs: keepsTabs))
+            }
         )
     }
 
@@ -502,7 +558,24 @@ struct AidenAppShellView: View {
         .safeAreaInset(edge: .top, spacing: 0) {
             AidenConnectionNotice(coordinator: coordinator)
         }
-        .toolbar { inboxToolbar }
+        .toolbar { composeToolbar }
+    }
+
+    /// The Chats list: every chat, newest first.
+    private func chatsList(selection: AidenAppRoute?) -> some View {
+        AidenChatsTabView(
+            store: inboxStore,
+            hasNoComputers: hasNoComputers,
+            onAddComputer: openAddComputer,
+            selection: selection
+        ) { route in
+            navigation.pick(route, fromListOf: .chats)
+            hideOverlaidList(on: .chats)
+        }
+        .safeAreaInset(edge: .top, spacing: 0) {
+            AidenConnectionNotice(coordinator: coordinator)
+        }
+        .toolbar { composeToolbar }
     }
 
     /// The Bots list. Its own function, as the Inbox's is, so the tab view
@@ -549,29 +622,111 @@ struct AidenAppShellView: View {
         }
     }
 
+    /// Compose, or Add Computer with none paired. Settings, Scheduled and
+    /// Usage moved to the drawer; compose stays here until Home has its own.
     @ToolbarContentBuilder
-    private var inboxToolbar: some ToolbarContent {
+    private var composeToolbar: some ToolbarContent {
         ToolbarItem(placement: .primaryAction) {
-            Menu {
-                Button("Settings", systemImage: "gearshape") { navigation.open(.settings) }
-                Button("Scheduled tasks", systemImage: "calendar.badge.clock") { navigation.open(.scheduled) }
-                Button("Usage", systemImage: "chart.bar.xaxis") { navigation.open(.usage) }
-                    .disabled(usageUnavailable)
-            } label: {
-                Label("Inbox menu", systemImage: AidenChromeSymbols.overflowMenu)
-            }
-        }
-        ToolbarSpacer(.fixed, placement: .primaryAction)
-        ToolbarItem(placement: .primaryAction) {
-            if hasNoComputers {
-                Button(action: openAddComputer) {
-                    Label("Add Computer", systemImage: "plus")
-                }
-            } else {
-                AidenNewWorkComposeButton(flow: newWork)
-            }
+            composeButton
         }
         .aidenKeptLongestInBar()
+    }
+
+    @ViewBuilder
+    private var composeButton: some View {
+        if hasNoComputers {
+            Button(action: openAddComputer) {
+                Label("Add Computer", systemImage: "plus")
+            }
+        } else {
+            AidenNewWorkComposeButton(flow: newWork)
+        }
+    }
+
+    // MARK: Drawer
+
+    /// The menu button on every tab's list, which opens the drawer.
+    @ToolbarContentBuilder
+    private func menuToolbarItem(on tab: AidenAppTab) -> some ToolbarContent {
+        ToolbarItem(placement: .topBarLeading) {
+            Button(action: openDrawer) {
+                Label("Open menu", systemImage: "line.3.horizontal")
+            }
+            .accessibilityFocused($focusedMenuButton, equals: tab)
+        }
+    }
+
+    /// An edge swipe opens the drawer only at a tab's root on a stack. On a
+    /// pushed screen the same swipe is the stack's Back, and beside the list
+    /// or in a side rail the edge belongs to the system's own columns.
+    private var opensDrawerFromEdge: Bool {
+        !drawerIsOpen && !navigation.besideList && !showsVerticalBar
+            && navigation.path(of: navigation.tab).isEmpty
+            // A sheet or alert up over the tab keeps the edge.
+            && activeSheet == nil && !newWork.isChoosingWorkspace && !newWork.isNamingWorkspace
+            && coordinator.presentedError == nil
+    }
+
+    private var drawerOverlay: some View {
+        AidenDrawerOverlay(onClose: closeDrawer) { slideOut in
+            AidenDrawerView(
+                search: built.search,
+                coordinator: coordinator,
+                inboxStore: inboxStore,
+                pins: .shared,
+                usageUnavailable: usageUnavailable,
+                onOpen: { route in
+                    // VoiceOver follows the page it opens, not the menu button.
+                    closeDrawer(refocusingMenu: false)
+                    navigation.open(route)
+                },
+                onShowAllChats: {
+                    closeDrawer(refocusingMenu: false)
+                    navigation.showAllChats()
+                    // Beside the list the open chat stays, so an overlaid
+                    // list that its pick put away comes back over it.
+                    if navigation.besideList { chatsColumns.visibility = .all }
+                },
+                onClose: slideOut
+            ) {
+                if hasNoComputers {
+                    // Pairing is the shell's sheet, so the drawer goes first.
+                    Button {
+                        pairsAfterDrawer = true
+                        closeDrawer(refocusingMenu: false)
+                    } label: {
+                        Label("Add Computer", systemImage: "plus")
+                    }
+                } else {
+                    AidenNewWorkComposeButton(flow: newWork)
+                }
+            }
+            // The compose's workspace choice is a sheet, so it's presented
+            // over the drawer while the drawer is up.
+            .aidenNewWorkPresentation(newWork, coordinator: coordinator, ownsHaptics: false)
+        }
+    }
+
+    /// The error alert, from the shell or, while the drawer's cover is up, from the drawer.
+    private func errorBinding(whileDrawerIsOpen: Bool) -> Binding<Bool> {
+        Binding(
+            get: { coordinator.presentedError != nil && drawerIsOpen == whileDrawerIsOpen },
+            set: { if !$0 { coordinator.presentedError = nil } }
+        )
+    }
+
+    private func openDrawer() {
+        drawerIsOpen = true
+    }
+
+    private func closeDrawer() {
+        closeDrawer(refocusingMenu: true)
+    }
+
+    private func closeDrawer(refocusingMenu: Bool) {
+        guard drawerIsOpen else { return }
+        drawerIsOpen = false
+        if refocusingMenu { focusedMenuButton = navigation.tab }
     }
 
     /// A conversation hides the tabs on a stack, where the composer owns the
@@ -1038,11 +1193,11 @@ final class AidenChatScreens {
 
 /// What a list tab's detail says with nothing selected.
 enum AidenSplitEmptyState {
-    case inbox, bots, workspaces
+    case chats, inbox, bots, workspaces
 
     var title: LocalizedStringKey {
         switch self {
-        case .inbox: "No chat selected"
+        case .chats, .inbox: "No chat selected"
         case .bots: "No Bot selected"
         case .workspaces: "No workspace selected"
         }
@@ -1050,7 +1205,7 @@ enum AidenSplitEmptyState {
 
     var systemImage: String {
         switch self {
-        case .inbox: "bubble.left.and.bubble.right"
+        case .chats, .inbox: "bubble.left.and.bubble.right"
         case .bots: AidenChromeSymbols.bots
         case .workspaces: "folder"
         }
@@ -1058,6 +1213,7 @@ enum AidenSplitEmptyState {
 
     var message: LocalizedStringKey {
         switch self {
+        case .chats: "Pick a chat from the list."
         case .inbox: "Pick a chat from the Inbox."
         case .bots: "Pick a Bot from the list."
         case .workspaces: "Pick a workspace from the list."
@@ -1215,6 +1371,9 @@ private struct AidenListTab<List: View>: View {
         }
         // The system hides the list of a tab first shown in portrait on an
         // iPad (iOS 27.1 simulator), which left "No Bot selected" alone.
+        // With a row chosen (an iPhone Duo opened in portrait on a chat) the
+        // chat stays in view, as after a pick, and the bar's sidebar button
+        // or the drawer's Show all chats brings the list over it.
         .onChange(of: columns.visibility) {
             columns.showListIfNothingChosen(
                 besideList: true,

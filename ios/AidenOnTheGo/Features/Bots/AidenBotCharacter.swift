@@ -206,6 +206,11 @@ enum AidenBotDeletion {
         guard coordinator.holds(context) else { return }
         AidenBotRoutineControlStore.shared.purge(instanceID: context.instanceId, deviceID: context.deviceId, botID: botID)
         AidenBotPeerControlStore.shared.purge(instanceID: context.instanceId, deviceID: context.deviceId, botID: botID)
+        // A deleted Bot has no row left to unpin it from.
+        AidenDrawerPinsStore.shared.remove(AidenDrawerPin(
+            kind: .bot,
+            id: AidenHostObjectID(instanceId: context.instanceId, deviceId: context.deviceId, objectId: botID)
+        ))
         _ = await coordinator.withRetainedInstallationData(for: context) {
             _ = try? await AidenBotCache.shared.removeBotAndStore(
                 botId: botID,
