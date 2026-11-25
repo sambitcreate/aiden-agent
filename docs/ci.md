@@ -148,20 +148,26 @@ hosted prerequisites are present.
 
 ## Measurement and rollout
 
-An advisory report (`scripts/ci-timings.mjs`) fetches every job page for the
-current workflow attempt and summarizes execution, **Queue** (runner wait from
+An advisory report (`scripts/ci-timings.mjs`, running in `timings` after both
+`required` and `linux-required` settle) fetches every job page for the current
+workflow attempt and summarizes execution, **Queue** (runner wait from
 `job.created_at` to `job.started_at`), **Waiting on jobs** (dependency wait from
 attempt start to `job.created_at`), per-platform runner-minutes and slow steps.
 Timing rows, elapsed time and runner-minute totals stay isolated to the current
 attempt.
 
 When any attempt in the workflow run failed, the summary opens with a **First
-failure** block naming the earliest failing blocking job (preferring validation
-jobs over aggregate gates such as `CI required` and over non-blocking jobs), its
-failed step, the first failed test extracted from its job log, and a direct link
-to the failing job and step. On reruns (`GITHUB_RUN_ATTEMPT > 1`), the report
-scans earlier attempts first so the original failure stays visible at the top of
-the summary even when the rerun later passed.
+failure** block (or **Non-blocking failure** when required gates passed and only
+a non-blocking job such as `ios-27` failed) naming the earliest failing blocking
+job (preferring validation jobs over aggregate gates such as `CI required` and
+over non-blocking jobs), its failed step, the first failed test extracted from
+its job log (including `##[error]` runner lines and workflow `::error`
+annotations as fallbacks), and a direct link to the failing job and step. If the
+current attempt itself has a blocking failure, that current failure is reported
+so a rerun-passed job from an earlier attempt never hides why the latest attempt
+is red; when the current attempt passes after a rerun (`GITHUB_RUN_ATTEMPT > 1`),
+the report scans earlier attempts (bounded by a shared API budget and at most 5
+prior attempts) so the original failure stays visible at the top of the summary.
 
 Named `[phase]` timings identify where a slow or stalled run stopped:
 

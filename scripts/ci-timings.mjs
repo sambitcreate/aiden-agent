@@ -6,9 +6,12 @@ import process from "node:process";
 
 const FAILURE_CONCLUSIONS = new Set(["failure", "timed_out", "startup_failure", "cancelled"]);
 const STEP_FAILURE_CONCLUSIONS = new Set(["failure", "timed_out", "cancelled"]);
-const MAX_PRIOR_ATTEMPTS = 20;
+const MAX_PRIOR_ATTEMPTS = 5;
+const COLLECT_BUDGET_MS = 180_000;
+const MAX_LOG_LINE_LENGTH = 4096;
 const MAX_FAILED_TEST_LENGTH = 200;
 const ANSI_ESCAPE = new RegExp(`${String.fromCharCode(0x1b)}\\[[0-9;?]*[ -/]*[@-~]`, "gu");
+const GENERIC_ANNOTATION = /^(?:Process completed with exit code\b|Error$)/iu;
 
 function seconds(start, end) {
   const value = (Date.parse(end) - Date.parse(start)) / 1000;
@@ -48,17 +51,60 @@ function stepUrl(jobUrl, step) {
   return jobUrl;
 }
 
+function stripPlaywrightSuffixes(value) {
+  let text = String(value).trimEnd();
+  // Strip trailing duration (e.g. "(2.3s)", "(450ms)") and/or "(retry #N)" in either order.
+  for (let pass = 0; pass < 3; pass += 1) {
+    const next = text
+      .replace(/\s+\(\d+(?:\.\d+)?\s*(?:ms|s|m)\)$/iu, "")
+      .replace(/\s+\(retry #\d+\)$/iu, "")
+      .trimEnd();
+    if (next === text) break;
+    text = next;
+  }
+  return text;
+}
+
+function extractAnnotationFallback(line) {
+  const runnerError = /^##\[error\](.+)$/u.exec(line);
+  if (runnerError) {
+    const text = runnerError[1].trim();
+    return text && !GENERIC_ANNOTATION.test(text) ? sanitizeInline(text) : null;
+  }
+  const commandError = /^::error(?:\s+([^:]*))?::(.*)$/u.exec(line);
+  if (commandError) {
+    const props = commandError[1] ?? "";
+    const titleMatch = /(?:^|,)title=([^,]+)/u.exec(props);
+    const candidate = (titleMatch ? titleMatch[1] : commandError[2]).trim();
+    return candidate && !GENERIC_ANNOTATION.test(candidate) ? sanitizeInline(candidate) : null;
+  }
+  return null;
+}
+
 export function extractFirstFailedTest(log) {
   if (typeof log !== "string" || !log) return null;
-  const lines = log.split(/\r?\n/u).map(cleanLogLine);
+  const rawLines = log.split(/\r?\n/u);
+  const lines = [];
+  for (const rawLine of rawLines) {
+    if (rawLine.length > MAX_LOG_LINE_LENGTH) {
+      lines.push(null);
+      continue;
+    }
+    const cleaned = cleanLogLine(rawLine);
+    lines.push(cleaned.length > MAX_LOG_LINE_LENGTH ? null : cleaned);
+  }
 
   // Prefer Aiden's unit failure digest when present: it skips parent suite wrappers and includes file:line.
   for (let index = 0; index < lines.length; index += 1) {
-    if (!/^Failed tests in .+:/u.test(lines[index])) continue;
+    const line = lines[index];
+    if (line === null || !/^Failed tests in .+:/u.test(line)) continue;
     for (let cursor = index + 1; cursor < lines.length; cursor += 1) {
-      const match = /^not ok (.+)$/u.exec(lines[cursor]);
+      const candidate = lines[cursor];
+      if (candidate === null) continue;
+      const match = /^not ok (.+)$/u.exec(candidate);
       if (!match) continue;
-      const where = /^\s+at (.+)$/u.exec(lines[cursor + 1] ?? "");
+      const nextLine = lines[cursor + 1];
+      const where = typeof nextLine === "string" ? /^\s+at (.+)$/u.exec(nextLine) : null;
       return sanitizeInline(where ? `${match[1]} (${where[1]})` : match[1]);
     }
   }
@@ -68,6 +114,10 @@ export function extractFirstFailedTest(log) {
   let annotationFallback = null;
 
   for (const line of lines) {
+    if (line === null) {
+      afterRubyFailure = false;
+      continue;
+    }
     if (/^\s*\d+\s+(?:failed|flaky|timed out)\b/iu.test(line)) {
       inPlaywrightSummary = true;
       continue;
@@ -87,14 +137,14 @@ export function extractFirstFailedTest(log) {
     }
 
     const playwrightNumbered = /^\s*\d+\)\s+(?:\[[^\]]+\]\s+›\s+)?(\S+\.(?:spec|test)\.[cm]?[jt]sx?:\d+(?::\d+)?\s+›\s+.+?)(?:\s+─+)?\s*$/u.exec(line);
-    if (playwrightNumbered) return sanitizeInline(playwrightNumbered[1]);
+    if (playwrightNumbered) return sanitizeInline(stripPlaywrightSuffixes(playwrightNumbered[1]));
 
-    const playwrightMark = /^\s*[✘×]\s+(?:\d+\s+)?(?:\[[^\]]+\]\s+›\s+)?(\S+\.(?:spec|test)\.[cm]?[jt]sx?:\d+(?::\d+)?\s+›\s+.+?)(?:\s+\([^)]+\))?\s*$/u.exec(line);
-    if (playwrightMark) return sanitizeInline(playwrightMark[1]);
+    const playwrightMark = /^\s*[✘×]\s+(?:\d+\s+)?(?:\[[^\]]+\]\s+›\s+)?(\S+\.(?:spec|test)\.[cm]?[jt]sx?:\d+(?::\d+)?\s+›\s+.+?)\s*$/u.exec(line);
+    if (playwrightMark) return sanitizeInline(stripPlaywrightSuffixes(playwrightMark[1]));
 
     if (inPlaywrightSummary) {
       const playwrightSummary = /^\s+(?:\[[^\]]+\]\s+›\s+)?(\S+\.(?:spec|test)\.[cm]?[jt]sx?:\d+(?::\d+)?\s+›\s+.+?)\s*$/u.exec(line);
-      if (playwrightSummary) return sanitizeInline(playwrightSummary[1]);
+      if (playwrightSummary) return sanitizeInline(stripPlaywrightSuffixes(playwrightSummary[1]));
     }
 
     const xctest = /Test [Cc]ase '([^']+)' failed\b/u.exec(line);
@@ -103,8 +153,12 @@ export function extractFirstFailedTest(log) {
     const swiftTesting = /^\s*[✘×]\s+Test "([^"]+)" failed\b/u.exec(line);
     if (swiftTesting) return sanitizeInline(swiftTesting[1]);
 
-    const gradle = /^\s*([A-Za-z0-9_.$]+\s+>\s+.+?)\s+FAILED\s*$/u.exec(line);
-    if (gradle) return sanitizeInline(gradle[1]);
+    const trimmedEnd = line.trimEnd();
+    if (trimmedEnd.endsWith(" FAILED")) {
+      const beforeFailed = trimmedEnd.slice(0, -" FAILED".length).trimEnd();
+      const gradle = /^\s*([A-Za-z0-9_.$]+\s+>\s+.+)$/u.exec(beforeFailed);
+      if (gradle) return sanitizeInline(gradle[1]);
+    }
 
     const cargo = /^test\s+(\S+)\s+\.\.\.\s+FAILED\s*$/u.exec(line);
     if (cargo) return sanitizeInline(cargo[1]);
@@ -121,10 +175,7 @@ export function extractFirstFailedTest(log) {
     }
 
     if (!annotationFallback) {
-      const annotation = /^::error\s+title=([^:]+)::/u.exec(line);
-      if (annotation && !/^(?:Process completed with exit code\b|Error$)/iu.test(annotation[1].trim())) {
-        annotationFallback = sanitizeInline(annotation[1]);
-      }
+      annotationFallback = extractAnnotationFallback(line);
     }
   }
 
@@ -135,6 +186,7 @@ export function extractPhaseTimings(log) {
   if (typeof log !== "string" || !log) return [];
   const entries = [];
   for (const rawLine of log.split(/\r?\n/u)) {
+    if (rawLine.length > MAX_LOG_LINE_LENGTH) continue;
     const line = cleanLogLine(rawLine).trim().replace(/^(?:(?!\[phase\])\[[\w-]+\]\s+|#\s+)/u, "");
     const started = /^\[phase\]\s+(.+?)\s*\/\s*(.+?):\s+started$/u.exec(line);
     if (started) {
@@ -195,16 +247,26 @@ export function findFirstFailure(attempts, options = {}) {
   }
   if (candidates.length === 0) return null;
 
-  candidates.sort(
+  const currentBlocking = candidates.filter((candidate) => candidate.attempt === currentAttempt && candidate.tier < 2);
+  const priorBlocking = candidates.filter((candidate) => candidate.attempt < currentAttempt && candidate.tier < 2);
+  const currentNonBlocking = candidates.filter((candidate) => candidate.attempt === currentAttempt && candidate.tier >= 2);
+  const priorNonBlocking = candidates.filter((candidate) => candidate.attempt < currentAttempt && candidate.tier >= 2);
+
+  const pool = currentBlocking.length > 0
+    ? currentBlocking
+    : priorBlocking.length > 0
+      ? priorBlocking
+      : currentNonBlocking.length > 0
+        ? currentNonBlocking
+        : priorNonBlocking;
+
+  pool.sort(
     (a, b) => a.tier - b.tier || a.attempt - b.attempt || a.failedAt - b.failedAt || a.index - b.index,
   );
-  const { attempt, job, step } = candidates[0];
+  const { attempt, tier, job, step } = pool[0];
+  const nonBlocking = tier >= 2;
   const log = getLog(job);
-  const currentBlockingFailures = currentJobs.some(
-    (candidate) => candidate.status === "completed"
-      && FAILURE_CONCLUSIONS.has(candidate.conclusion)
-      && failureTier(candidate.name) < 2,
-  );
+  const currentBlockingFailures = currentBlocking.length > 0;
   const sameJobFailedAgain = currentJobs.some(
     (candidate) => candidate.status === "completed"
       && candidate.name === job.name
@@ -219,6 +281,7 @@ export function findFirstFailure(attempts, options = {}) {
     attempt,
     currentAttempt,
     rerunPassed,
+    nonBlocking,
     job: job.name,
     jobId: job.id ?? null,
     conclusion: job.conclusion,
@@ -288,13 +351,14 @@ function formatPhaseEntry(entry) {
 
 function renderFirstFailure(failure) {
   if (!failure) return [];
+  const heading = failure.nonBlocking ? "### Non-blocking failure" : "### First failure";
   const attemptNote = failure.rerunPassed
     ? `attempt ${failure.attempt} — rerun passed on attempt ${failure.currentAttempt}`
     : failure.currentAttempt > 1
       ? `attempt ${failure.attempt} of ${failure.currentAttempt}`
       : `attempt ${failure.attempt}`;
   const lines = [
-    "### First failure",
+    heading,
     "",
     `- **Job:** ${safeLink(failure.job, failure.url)} (${inlineCode(failure.conclusion)}, ${attemptNote})`,
     `- **Step:** ${failure.step ? cell(failure.step) : "unavailable"}`,
@@ -340,19 +404,28 @@ export function renderSummary(summary) {
   return lines.join("\n");
 }
 
-export function collectReport(env = process.env, execute = execFileSync) {
+export function collectReport(env = process.env, execute = execFileSync, options = {}) {
   const { GITHUB_REPOSITORY: repository, GITHUB_RUN_ID: run, GITHUB_RUN_ATTEMPT: attempt } = env;
   if (!/^[\w.-]+\/[\w.-]+$/u.test(repository ?? "") || !/^\d+$/u.test(run ?? "") || !/^[1-9]\d*$/u.test(attempt ?? "")) {
     throw new Error("Invalid timing API coordinates");
   }
-  const api = (endpoint, paginate = false) => JSON.parse(execute("gh", ["api", ...(paginate ? ["--paginate", "--slurp"] : []), endpoint], {
-    encoding: "utf8", timeout: 60_000, maxBuffer: 8 * 1024 * 1024,
-  }));
+  const now = options.now ?? Date.now;
+  const deadline = now() + (options.budgetMs ?? COLLECT_BUDGET_MS);
+  const remainingTimeout = () => Math.max(0, Math.min(60_000, deadline - now()));
+  const api = (endpoint, paginate = false) => {
+    const timeout = remainingTimeout();
+    if (timeout <= 0) throw new Error("CI timing API budget exhausted");
+    return JSON.parse(execute("gh", ["api", ...(paginate ? ["--paginate", "--slurp"] : []), endpoint], {
+      encoding: "utf8", timeout, maxBuffer: 8 * 1024 * 1024,
+    }));
+  };
   const fetchLog = (jobId) => {
     if (!Number.isInteger(jobId) || jobId <= 0) return null;
+    const timeout = remainingTimeout();
+    if (timeout <= 0) return null;
     try {
       return execute("gh", ["api", `repos/${repository}/actions/jobs/${jobId}/logs`], {
-        encoding: "utf8", timeout: 60_000, maxBuffer: 32 * 1024 * 1024,
+        encoding: "utf8", timeout, maxBuffer: 32 * 1024 * 1024,
       });
     } catch {
       return null;
@@ -365,18 +438,24 @@ export function collectReport(env = process.env, execute = execFileSync) {
   const pages = api(`${prefix}/jobs?per_page=100`, true);
   const jobs = pages.flatMap((page) => page.jobs);
 
+  const hasCurrentBlockingFailure = jobs.some(
+    (job) => job.status === "completed" && FAILURE_CONCLUSIONS.has(job.conclusion) && failureTier(job.name) < 2,
+  );
   const attempts = [];
-  const maxPrior = Math.min(attemptNumber - 1, MAX_PRIOR_ATTEMPTS);
-  for (let prior = 1; prior <= maxPrior; prior += 1) {
-    try {
-      const priorPages = api(`${runPrefix}/attempts/${prior}/jobs?per_page=100`, true);
-      const priorJobs = priorPages.flatMap((page) => page.jobs);
-      attempts.push({ attempt: prior, jobs: priorJobs });
-      if (priorJobs.some((job) => job.status === "completed" && FAILURE_CONCLUSIONS.has(job.conclusion) && failureTier(job.name) === 0)) {
-        break;
+  if (!hasCurrentBlockingFailure) {
+    const maxPrior = Math.min(attemptNumber - 1, MAX_PRIOR_ATTEMPTS);
+    for (let prior = 1; prior <= maxPrior; prior += 1) {
+      if (remainingTimeout() <= 0) break;
+      try {
+        const priorPages = api(`${runPrefix}/attempts/${prior}/jobs?per_page=100`, true);
+        const priorJobs = priorPages.flatMap((page) => page.jobs);
+        attempts.push({ attempt: prior, jobs: priorJobs });
+        if (priorJobs.some((job) => job.status === "completed" && FAILURE_CONCLUSIONS.has(job.conclusion) && failureTier(job.name) === 0)) {
+          break;
+        }
+      } catch {
+        // Keep generating the report even if an earlier attempt's jobs cannot be read.
       }
-    } catch {
-      // Keep generating the report even if an earlier attempt's jobs cannot be read.
     }
   }
   attempts.push({ attempt: attemptNumber, jobs });

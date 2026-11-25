@@ -418,3 +418,161 @@ test("extractPhaseTimings parses chart test phases and identifies stalled iOS si
   const markdown = renderSummary(summarizeJobs([stalledIosJob], attemptStart, { firstFailure: first }));
   assert.match(markdown, /\*\*Phases:\*\* ios \/ build \(device\) 95s \(ok\) → ios \/ build \(simulator\) 110s \(ok\) → ios \/ simulator boot \*\*stalled\*\*/u);
 });
+
+test("current-attempt blocking failure takes precedence over an earlier attempt's rerun-passed failure", () => {
+  const attempt1JobA = makeJob({
+    id: 6101,
+    name: "Electron E2E (1/5)",
+    conclusion: "failure",
+    completed_at: "2026-11-24T10:10:00Z",
+    html_url: "https://github.com/owner/repo/actions/runs/950/job/6101",
+    steps: [{ number: 9, name: "Run deterministic Electron E2E shard", conclusion: "failure", completed_at: "2026-11-24T10:09:58Z" }],
+  });
+  const attempt2JobA = makeJob({
+    id: 6201,
+    name: "Electron E2E (1/5)",
+    conclusion: "success",
+    completed_at: "2026-11-24T10:25:00Z",
+    html_url: "https://github.com/owner/repo/actions/runs/950/job/6201",
+  });
+  const attempt2JobB = makeJob({
+    id: 6202,
+    name: "Desktop tests (core-git)",
+    conclusion: "failure",
+    completed_at: "2026-11-24T10:26:00Z",
+    html_url: "https://github.com/owner/repo/actions/runs/950/job/6202",
+    labels: ["ubuntu-24.04"],
+    steps: [{ number: 7, name: "Run assigned regression tests and prerequisites", conclusion: "failure", completed_at: "2026-11-24T10:25:58Z" }],
+  });
+
+  const first = findFirstFailure(
+    [
+      { attempt: 1, jobs: [attempt1JobA] },
+      { attempt: 2, jobs: [attempt2JobA, attempt2JobB] },
+    ],
+    {
+      currentAttempt: 2,
+      currentJobs: [attempt2JobA, attempt2JobB],
+      logsByJobId: { 6202: "not ok 1 - fails on current attempt\n" },
+    },
+  );
+  assert.equal(first.job, "Desktop tests (core-git)");
+  assert.equal(first.attempt, 2);
+  assert.equal(first.rerunPassed, false);
+  assert.equal(first.nonBlocking, false);
+  assert.equal(first.failedTest, "fails on current attempt");
+
+  // collectReport should also skip prior-attempt API calls when attempt 2 already has a blocking failure.
+  const calls = [];
+  const execute = (_command, args) => {
+    const endpoint = args.at(-1);
+    calls.push(endpoint);
+    if (endpoint === "repos/owner/repo/actions/runs/950/attempts/2") {
+      return JSON.stringify({ run_started_at: "2026-11-24T10:20:00Z" });
+    }
+    if (endpoint === "repos/owner/repo/actions/runs/950/attempts/2/jobs?per_page=100") {
+      return JSON.stringify([{ jobs: [attempt2JobA, attempt2JobB] }]);
+    }
+    if (endpoint === "repos/owner/repo/actions/jobs/6202/logs") {
+      return "not ok 1 - fails on current attempt\n";
+    }
+    throw new Error(`Unexpected endpoint: ${endpoint}`);
+  };
+  const report = collectReport(
+    { GITHUB_REPOSITORY: "owner/repo", GITHUB_RUN_ID: "950", GITHUB_RUN_ATTEMPT: "2" },
+    execute,
+  );
+  assert.match(report, /### First failure/u);
+  assert.match(report, /Desktop tests \(core-git\)/u);
+  assert.ok(!calls.some((endpoint) => endpoint.includes("/attempts/1/")));
+});
+
+test("green run with only a non-blocking failure renders under Non-blocking failure heading", () => {
+  const requiredPassed = makeJob({
+    id: 7001,
+    name: "CI required",
+    conclusion: "success",
+    labels: ["ubuntu-24.04"],
+  });
+  const previewFailed = makeJob({
+    id: 7002,
+    name: "iOS build and simulator tests (Xcode 27, non-blocking)",
+    conclusion: "failure",
+    html_url: "https://github.com/owner/repo/actions/runs/960/job/7002",
+    steps: [{ number: 8, name: "Run Aiden On The Go XCTest on the simulator", conclusion: "failure", completed_at: "2026-11-24T10:08:00Z" }],
+  });
+  const first = findFirstFailure([{ attempt: 1, jobs: [requiredPassed, previewFailed] }]);
+  assert.equal(first.nonBlocking, true);
+  assert.equal(first.job, "iOS build and simulator tests (Xcode 27, non-blocking)");
+
+  const markdown = renderSummary(summarizeJobs([requiredPassed, previewFailed], attemptStart, { firstFailure: first }));
+  assert.match(markdown, /### Non-blocking failure/u);
+  assert.doesNotMatch(markdown, /### First failure/u);
+});
+
+test("extractFirstFailedTest handles ##[error], non-first title= annotations, Playwright retry suffixes, and pathological long lines in linear time", () => {
+  assert.equal(
+    extractFirstFailedTest(
+      "2026-11-24T10:05:00Z ##[error]Process completed with exit code 1.\n2026-11-24T10:05:01Z ##[error]The job running on runner GitHub Actions 4 has exceeded the maximum execution time of 20 minutes.\n",
+    ),
+    "The job running on runner GitHub Actions 4 has exceeded the maximum execution time of 20 minutes.",
+  );
+  assert.equal(
+    extractFirstFailedTest("::error file=ios/Tests.swift,line=42,title=AidenShellUITests/testBoot::Timed out\n"),
+    "AidenShellUITests/testBoot",
+  );
+  assert.equal(
+    extractFirstFailedTest("  ✘  1 [chromium] › tests/e2e/bot-plans.spec.ts:15:5 › keeps focus (retry #1) (2.3s)\n"),
+    "tests/e2e/bot-plans.spec.ts:15:5 › keeps focus",
+  );
+  // Pathological ReDoS input for the old Gradle regex must complete in milliseconds without hanging.
+  const pathological = `a > ${" ".repeat(20_000)}x\ncom.aiden.app.ChatScreenTest > rendersReply FAILED\n`;
+  const started = Date.now();
+  const extracted = extractFirstFailedTest(pathological);
+  const elapsedMs = Date.now() - started;
+  assert.equal(extracted, "com.aiden.app.ChatScreenTest > rendersReply");
+  assert.ok(elapsedMs < 200, `Expected linear-time parsing (<200ms), took ${elapsedMs}ms`);
+});
+
+test("collectReport caps prior attempt scans and respects the shared API time budget", () => {
+  const calls = [];
+  let clock = 0;
+  const execute = (_command, args) => {
+    const endpoint = args.at(-1);
+    calls.push(endpoint);
+    if (endpoint === "repos/owner/repo/actions/runs/970/attempts/12") {
+      return JSON.stringify({ run_started_at: attemptStart });
+    }
+    if (endpoint.endsWith("/jobs?per_page=100")) {
+      return JSON.stringify([{ jobs: [makeJob({ id: 8000, conclusion: "success" })] }]);
+    }
+    throw new Error(`Unexpected endpoint: ${endpoint}`);
+  };
+  collectReport(
+    { GITHUB_REPOSITORY: "owner/repo", GITHUB_RUN_ID: "970", GITHUB_RUN_ATTEMPT: "12" },
+    execute,
+    { now: () => clock, budgetMs: 180_000 },
+  );
+  const priorCalls = calls.filter((endpoint) => /\/attempts\/([1-9]|1[01])\/jobs/u.test(endpoint));
+  assert.equal(priorCalls.length, 5);
+
+  // When the shared budget is exhausted mid-scan, prior scanning stops without failing the report.
+  const budgetedCalls = [];
+  clock = 0;
+  const budgetedReport = collectReport(
+    { GITHUB_REPOSITORY: "owner/repo", GITHUB_RUN_ID: "970", GITHUB_RUN_ATTEMPT: "6" },
+    (_command, args) => {
+      const endpoint = args.at(-1);
+      budgetedCalls.push(endpoint);
+      clock += 60_000;
+      if (endpoint === "repos/owner/repo/actions/runs/970/attempts/6") {
+        return JSON.stringify({ run_started_at: attemptStart });
+      }
+      return JSON.stringify([{ jobs: [makeJob({ id: 8001, conclusion: "success" })] }]);
+    },
+    { now: () => clock, budgetMs: 180_000 },
+  );
+  assert.match(budgetedReport, /## CI execution timings/u);
+  assert.equal(budgetedCalls.filter((endpoint) => endpoint.includes("/attempts/1/")).length, 1);
+  assert.equal(budgetedCalls.filter((endpoint) => endpoint.includes("/attempts/2/")).length, 0);
+});
