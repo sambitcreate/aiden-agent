@@ -17,6 +17,16 @@ import {
   type AidenRemoteApprovalSchedule,
 } from "./aiden-remote-approval-schedule.js";
 import { parseGenerationTimeline, type GenerationTimeline } from "../../renderer/shared/generation-timeline.js";
+import {
+  GENERATION_THINKING_LEVELS,
+  type GenerationThinkingLevel,
+} from "../../renderer/shared/generation-thinking.js";
+import {
+  AGENT_SLIDER_LABEL_MAX,
+  AGENT_SLIDER_MAX_STOPS,
+  AGENT_SLIDER_MIN_STOPS,
+  agentSliderLabelProblem,
+} from "../../renderer/shared/agent-slider.js";
 import type {
   ChatRunInputMode,
   ChatRunInputRejectionReason,
@@ -371,7 +381,18 @@ export const AIDEN_REMOTE_CONTINUE_IN_NEW_CHAT_CONTRACT_REVISION = 64 as const;
  * payload so closed decoders on revision <= 64 stay valid.
  */
 export const AIDEN_REMOTE_STREAM_SNAPSHOT_REASONS_CONTRACT_REVISION = 65 as const;
-export const AIDEN_REMOTE_CONTRACT_REVISION = AIDEN_REMOTE_STREAM_SNAPSHOT_REASONS_CONTRACT_REVISION;
+/**
+ * Contract revision 66 (claimed when written; recheck against `main` at merge
+ * by changing only this constant): the Agent Slider on phones. `GET /models`
+ * carries an optional `agentSlider` (its stops, the home stop and each stop's
+ * availability on this host); chat projections carry the chat's own
+ * `thinkingLevel`; and a device holding the opt-in `chat:agent-slider` has
+ * each turn's thinking level saved as the chat's own, with its provider and
+ * model, in the same write as the turn's message. Both new fields are additive, so closed
+ * decoders on revision <= 65 that ignore unknown keys stay valid.
+ */
+export const AIDEN_REMOTE_AGENT_SLIDER_CONTRACT_REVISION = 66 as const;
+export const AIDEN_REMOTE_CONTRACT_REVISION = AIDEN_REMOTE_AGENT_SLIDER_CONTRACT_REVISION;
 export const AIDEN_REMOTE_BASE_PATH = "/api/aiden/v1" as const;
 export const AIDEN_REMOTE_MAX_SSE_FRAME_BYTES = 1_048_576;
 export const AIDEN_REMOTE_MAX_JSON_RESPONSE_BYTES = 1_048_576;
@@ -702,6 +723,17 @@ export const AIDEN_REMOTE_CHAT_CONTINUE_CAPABILITIES = ["chat:continue-in-new-ch
 export const AIDEN_REMOTE_STREAM_SNAPSHOT_REASON_CAPABILITIES = ["stream:snapshot-reasons"] as const;
 
 /**
+ * Contract revision 66: a device holding `chat:agent-slider` has each turn's
+ * thinking level saved as the chat's own, with the provider and model every
+ * turn already saves, in the same write as the turn's message (so a refused
+ * send changes nothing). The chat then stays on the stop the person chose, as
+ * on the desktop. A turn that names no level clears the chat's own level.
+ * Offered while the host saves a chat's own level; it needs `chat:write` like any
+ * turn and widens nothing that grant allows.
+ */
+export const AIDEN_REMOTE_AGENT_SLIDER_CAPABILITIES = ["chat:agent-slider"] as const;
+
+/**
  * Every opt-in a paired device may persist. Each changes what a device is
  * shown; `chat:jobs` also opens its two routes, which still need the chat
  * grant (`chat:read`, `chat:write`); `attachments:raw` opens a second body
@@ -721,6 +753,7 @@ export const AIDEN_REMOTE_OPT_IN_CAPABILITIES = [
   ...AIDEN_REMOTE_APPROVAL_SETTINGS_CAPABILITIES,
   ...AIDEN_REMOTE_CHAT_CONTINUE_CAPABILITIES,
   ...AIDEN_REMOTE_STREAM_SNAPSHOT_REASON_CAPABILITIES,
+  ...AIDEN_REMOTE_AGENT_SLIDER_CAPABILITIES,
 ] as const;
 
 /** Vocabulary a paired device may add after pairing through `POST /device/capabilities`. */
@@ -753,6 +786,7 @@ export const AIDEN_REMOTE_NEGOTIABLE_CAPABILITIES = [
   ...AIDEN_REMOTE_APPROVAL_SETTINGS_CAPABILITIES,
   ...AIDEN_REMOTE_CHAT_CONTINUE_CAPABILITIES,
   ...AIDEN_REMOTE_STREAM_SNAPSHOT_REASON_CAPABILITIES,
+  ...AIDEN_REMOTE_AGENT_SLIDER_CAPABILITIES,
 ] as const;
 
 export type AidenRemoteNegotiableCapability =
@@ -789,6 +823,7 @@ export const AIDEN_REMOTE_CAPABILITIES = [
   ...AIDEN_REMOTE_APPROVAL_SETTINGS_CAPABILITIES,
   ...AIDEN_REMOTE_CHAT_CONTINUE_CAPABILITIES,
   ...AIDEN_REMOTE_STREAM_SNAPSHOT_REASON_CAPABILITIES,
+  ...AIDEN_REMOTE_AGENT_SLIDER_CAPABILITIES,
 ] as const;
 
 export type AidenRemoteCapability = (typeof AIDEN_REMOTE_CAPABILITIES)[number];
@@ -2429,6 +2464,8 @@ export interface AidenRemoteContractFixture {
   continueInNewChat?: AidenRemoteContinueInNewChatFixture;
   /** Revision 65 (`stream:snapshot-reasons`): reader-local gap snapshot replay, legacy reason-less projection, and provider reset. */
   streamRecovery?: AidenRemoteStreamRecoveryFixture;
+  /** Revision 66 (`chat:agent-slider`): a `/models` slider, the turn a stop sends, and the chat it leaves. */
+  agentSlider?: AidenRemoteAgentSliderFixture;
   taskProgress: AidenRemoteChatTaskProgress;
   agentRoster: AidenRemoteChatAgentRoster;
   agentInterrupt: AidenRemoteChatAgentInterruptFixture;
@@ -4053,6 +4090,11 @@ export function parseAidenRemoteChatProjection(
   if (hasProviderId !== hasModelId) {
     throw new Error(`${label} providerId and modelId must be supplied together.`);
   }
+  // Revision 66: the chat's own level rides only with its model, and never on a Bot chat.
+  const hasThinkingLevel = hasOwn(value, "thinkingLevel");
+  if (hasThinkingLevel && (!hasModelId || hasOwn(value, "botId"))) {
+    throw new Error(`${label} thinkingLevel needs a model and is regular-chat-only.`);
+  }
   return {
     id: boundedText(value.id, `${label} id`, 128),
     workspaceId: boundedText(value.workspaceId, `${label} workspaceId`, 128),
@@ -4069,6 +4111,9 @@ export function parseAidenRemoteChatProjection(
       : {}),
     ...(hasModelId
       ? { modelId: boundedText(value.modelId, `${label} modelId`, 512) }
+      : {}),
+    ...(hasThinkingLevel
+      ? { thinkingLevel: enumMember(value.thinkingLevel, GENERATION_THINKING_LEVELS, `${label} thinkingLevel`) }
       : {}),
     ...(hasOwn(value, "titlePending")
       ? value.titlePending === true
@@ -8561,6 +8606,13 @@ export function parseAidenRemoteContractFixture(value: unknown): AidenRemoteCont
     }
     streamRecovery = parseStreamRecoveryFixture(value.streamRecovery);
   }
+  let agentSlider: AidenRemoteAgentSliderFixture | undefined;
+  if (value.agentSlider !== undefined) {
+    if (contractRevision < AIDEN_REMOTE_AGENT_SLIDER_CONTRACT_REVISION) {
+      throw new Error(`Agent Slider fixtures require contract revision ${AIDEN_REMOTE_AGENT_SLIDER_CONTRACT_REVISION}.`);
+    }
+    agentSlider = parseAgentSliderFixture(value.agentSlider);
+  }
   let voiceInput: AidenRemoteVoiceInputFixture | undefined;
   if (value.voiceInput !== undefined) {
     if (contractRevision < AIDEN_REMOTE_VOICE_INPUT_CONTRACT_REVISION) {
@@ -8713,6 +8765,145 @@ export function parseAidenRemoteContractFixture(value: unknown): AidenRemoteCont
     ...(backgroundJobsChatSettled ? { backgroundJobsChatSettled } : {}),
     ...(continueInNewChat ? { continueInNewChat } : {}),
     ...(streamRecovery ? { streamRecovery } : {}),
+    ...(agentSlider ? { agentSlider } : {}),
+  };
+}
+
+export type AidenRemoteAgentSliderAvailability =
+  | "ready"
+  | "unassigned"
+  | "provider-missing"
+  | "not-signed-in"
+  | "model-missing"
+  | "hidden";
+
+const AIDEN_REMOTE_AGENT_SLIDER_AVAILABILITIES = [
+  "ready",
+  "unassigned",
+  "provider-missing",
+  "not-signed-in",
+  "model-missing",
+  "hidden",
+] as const satisfies readonly AidenRemoteAgentSliderAvailability[];
+
+const AIDEN_REMOTE_AGENT_SLIDER_STOP_ID = /^[A-Za-z0-9_-]{1,64}$/u;
+
+export interface AidenRemoteAgentSliderStop {
+  id: string;
+  label: string;
+  providerId?: string;
+  modelId?: string;
+  thinkingLevel?: GenerationThinkingLevel;
+  availability: AidenRemoteAgentSliderAvailability;
+}
+
+export interface AidenRemoteAgentSlider {
+  stops: AidenRemoteAgentSliderStop[];
+  homeStopId: string;
+}
+
+/**
+ * Revision 66: the `agentSlider` of `GET /models`. Strict: 3 to 7 stops with
+ * unique ids, a home naming one of them, paired provider and model, a level
+ * only with a model, and a stop without a model is always `unassigned`.
+ */
+export function parseAidenRemoteAgentSlider(value: unknown, label = "Agent Slider"): AidenRemoteAgentSlider {
+  const record = requiredFixtureRecord(value, label, ["stops", "homeStopId"]);
+  if (
+    !Array.isArray(record.stops) ||
+    record.stops.length < AGENT_SLIDER_MIN_STOPS ||
+    record.stops.length > AGENT_SLIDER_MAX_STOPS
+  ) {
+    throw new Error(`${label} must hold ${AGENT_SLIDER_MIN_STOPS} to ${AGENT_SLIDER_MAX_STOPS} stops.`);
+  }
+  const ids = new Set<string>();
+  const stops = record.stops.map((entry, index): AidenRemoteAgentSliderStop => {
+    const stopLabel = `${label} stop ${index}`;
+    const stop = requiredFixtureRecord(entry, stopLabel, ["id", "label", "availability"], [
+      "providerId",
+      "modelId",
+      "thinkingLevel",
+    ]);
+    if (typeof stop.id !== "string" || !AIDEN_REMOTE_AGENT_SLIDER_STOP_ID.test(stop.id) || ids.has(stop.id)) {
+      throw new Error(`${stopLabel} id is invalid or repeated.`);
+    }
+    ids.add(stop.id);
+    if (typeof stop.label !== "string" || stop.label.trim() !== stop.label || agentSliderLabelProblem(stop.label)) {
+      throw new Error(`${stopLabel} label must be 1 to ${AGENT_SLIDER_LABEL_MAX} characters without controls.`);
+    }
+    const hasProviderId = hasOwn(stop, "providerId");
+    const hasModelId = hasOwn(stop, "modelId");
+    if (hasProviderId !== hasModelId) {
+      throw new Error(`${stopLabel} providerId and modelId must be supplied together.`);
+    }
+    if (hasOwn(stop, "thinkingLevel") && !hasModelId) {
+      throw new Error(`${stopLabel} thinkingLevel needs a model.`);
+    }
+    const availability = enumMember(stop.availability, AIDEN_REMOTE_AGENT_SLIDER_AVAILABILITIES, `${stopLabel} availability`);
+    if (hasModelId === (availability === "unassigned")) {
+      throw new Error(`${stopLabel} is unassigned exactly when it names no model.`);
+    }
+    return {
+      id: stop.id,
+      label: stop.label,
+      ...(hasProviderId
+        ? {
+            providerId: boundedText(stop.providerId, `${stopLabel} providerId`, 256),
+            modelId: boundedText(stop.modelId, `${stopLabel} modelId`, 512),
+          }
+        : {}),
+      ...(hasOwn(stop, "thinkingLevel")
+        ? { thinkingLevel: enumMember(stop.thinkingLevel, GENERATION_THINKING_LEVELS, `${stopLabel} thinkingLevel`) }
+        : {}),
+      availability,
+    };
+  });
+  if (typeof record.homeStopId !== "string" || !ids.has(record.homeStopId)) {
+    throw new Error(`${label} homeStopId must name one of its stops.`);
+  }
+  return { stops, homeStopId: record.homeStopId };
+}
+
+export interface AidenRemoteAgentSliderFixture {
+  capability: (typeof AIDEN_REMOTE_AGENT_SLIDER_CAPABILITIES)[number];
+  /** A `GET /models` body carrying the slider. */
+  models: { providers: unknown[]; defaults: Record<string, string>; agentSlider: AidenRemoteAgentSlider };
+  /** The `POST /chats/{chatId}/turns` body a ready stop sends: exactly its provider, model and level. */
+  turnRequest: { text: string; providerId: string; modelId: string; thinkingLevel?: GenerationThinkingLevel };
+  /** The chat afterwards: the stop's selection saved as the chat's own. */
+  chat: AidenRemoteChatProjection;
+}
+
+function parseAgentSliderFixture(value: unknown): AidenRemoteAgentSliderFixture {
+  const section = requiredFixtureRecord(value, "Agent Slider fixture", ["capability", "models", "turnRequest", "chat"]);
+  if (section.capability !== AIDEN_REMOTE_AGENT_SLIDER_CAPABILITIES[0]) {
+    throw new Error("Agent Slider fixture must name chat:agent-slider.");
+  }
+  const models = requiredFixtureRecord(section.models, "Agent Slider models", ["providers", "defaults", "agentSlider"]);
+  if (!Array.isArray(models.providers) || !isRecord(models.defaults)) {
+    throw new Error("Agent Slider models must carry providers and defaults.");
+  }
+  const agentSlider = parseAidenRemoteAgentSlider(models.agentSlider, "Agent Slider models agentSlider");
+  const turn = requiredFixtureRecord(section.turnRequest, "Agent Slider turnRequest", ["text", "providerId", "modelId"], [
+    "thinkingLevel",
+  ]);
+  const chat = parseAidenRemoteChatProjection(section.chat, "Agent Slider chat");
+  const sent = agentSlider.stops.find(
+    (stop) =>
+      stop.availability === "ready" &&
+      stop.providerId === turn.providerId &&
+      stop.modelId === turn.modelId &&
+      stop.thinkingLevel === turn.thinkingLevel,
+  );
+  if (!sent) throw new Error("Agent Slider turnRequest must send exactly a ready stop's selection.");
+  if (chat.providerId !== sent.providerId || chat.modelId !== sent.modelId || chat.thinkingLevel !== sent.thinkingLevel) {
+    throw new Error("Agent Slider chat must carry the sent stop's selection.");
+  }
+  return {
+    capability: AIDEN_REMOTE_AGENT_SLIDER_CAPABILITIES[0],
+    models: models as AidenRemoteAgentSliderFixture["models"],
+    turnRequest: turn as AidenRemoteAgentSliderFixture["turnRequest"],
+    chat,
   };
 }
 
@@ -9887,7 +10078,7 @@ function parseRunEventSequence(value: unknown, label: string, projection: "host"
   if (!runEnded) throw new Error("A run stream fixture ends with run.ended.");
 }
 const AIDEN_REMOTE_MESSAGES_WINDOW_METADATA_KEYS = [
-  "workspaceId", "botId", "title", "providerId", "modelId", "createdAt", "updatedAt", "titlePending",
+  "workspaceId", "botId", "title", "providerId", "modelId", "thinkingLevel", "createdAt", "updatedAt", "titlePending",
 ] as const;
 
 function parseRevision19Fixture(

@@ -363,3 +363,65 @@ test("phones never see agent-backed providers and cannot start turns on them", a
   assert.notEqual(catalog.defaults.providerId, "antigravity");
   await assert.rejects(service.resolve("antigravity", "chat-model"), /runs only in chats you have open on this computer/u);
 });
+
+test("the Agent Slider reaches phones with each stop's availability and a level its model offers", async () => {
+  const stops = [
+    { id: "ready", label: "Deep", providerId: "provider-1", model: "chat-model", thinkingLevel: "high" as const },
+    { id: "fitted", label: "Middle", providerId: "provider-1", model: "chat-model", thinkingLevel: "medium" as const },
+    { id: "unassigned", label: "Choose a model" },
+    { id: "gone", label: "Gone", providerId: "removed", model: "chat-model" },
+    { id: "signed-out", label: "Signed out", providerId: "no-key", model: "chat-model", thinkingLevel: "low" as const },
+    { id: "missing", label: "Missing", providerId: "provider-1", model: "retired-model" },
+    { id: "embedding", label: "Embedding", providerId: "provider-1", model: "embedding-model" },
+  ];
+  const settings = {
+    lastProviderId: "provider-1",
+    lastModel: "chat-model",
+    agentSlider: { version: 1 as const, stops, homeStopId: "ready" },
+  };
+  const service = new AidenRemoteModelService({
+    listProviders: async () => [provider(), provider({ id: "no-key", hasKey: false })],
+    getSettings: async () => settings,
+  });
+  const projection = await service.list();
+  const slider = projection.agentSlider;
+  assert.ok(slider);
+  assert.equal(slider.homeStopId, "ready");
+  assert.deepEqual(slider.stops.map((stop) => stop.id), stops.map((stop) => stop.id), "order and every stop survive");
+  const byId = new Map(slider.stops.map((stop) => [stop.id, stop]));
+  assert.deepEqual(byId.get("ready"), {
+    id: "ready", label: "Deep", providerId: "provider-1", modelId: "chat-model", thinkingLevel: "high", availability: "ready",
+  });
+  // The model offers low and high only, so a phone is told a level it can actually send.
+  const offered = projection.providers[0]?.models.find((model) => model.id === "chat-model")?.thinkingLevels ?? [];
+  const fitted = byId.get("fitted");
+  assert.equal(fitted?.availability, "ready");
+  assert.ok(fitted?.thinkingLevel && offered.includes(fitted.thinkingLevel), `fitted level ${fitted?.thinkingLevel} is offered`);
+  assert.deepEqual(byId.get("unassigned"), { id: "unassigned", label: "Choose a model", availability: "unassigned" });
+  assert.equal(byId.get("gone")?.availability, "provider-missing");
+  assert.equal(byId.get("signed-out")?.availability, "not-signed-in");
+  assert.equal(byId.get("missing")?.availability, "model-missing");
+  assert.equal(byId.get("embedding")?.availability, "model-missing", "a model the phone cannot pick is not ready");
+  // Nothing is substituted: an unavailable stop still names what it was set to.
+  assert.equal(byId.get("missing")?.modelId, "retired-model");
+
+  const hidden = new AidenRemoteModelService({
+    listProviders: async () => [provider()],
+    getSettings: async () => ({ ...settings, hiddenModelsByProvider: { "provider-1": ["chat-model"] } }),
+  });
+  assert.equal((await hidden.list()).agentSlider?.stops[0]?.availability, "hidden");
+
+  const harness = new AidenRemoteModelService({
+    listProviders: async () => [provider({ id: "antigravity" }), provider()],
+    getSettings: async () => ({
+      ...settings,
+      agentSlider: { ...settings.agentSlider, stops: [{ ...stops[0], providerId: "antigravity" }, ...stops.slice(1)] },
+    }),
+  });
+  assert.notEqual((await harness.list()).agentSlider?.stops[0]?.availability, "ready", "phones cannot run agent harness stops");
+
+  for (const without of [{ lastProviderId: "provider-1" }, { ...settings, agentSliderUnreadable: true as const }]) {
+    const service = new AidenRemoteModelService({ listProviders: async () => [provider()], getSettings: async () => without });
+    assert.equal("agentSlider" in (await service.list()), false);
+  }
+});

@@ -1,5 +1,5 @@
 {
-  "contractRevision": 65,
+  "contractRevision": 66,
   "peerRouteAdvertisement": {
     "feature": "peer-routes-v1",
     "routes": [
@@ -2299,7 +2299,7 @@
     "instanceId": "instance_fixture_01",
     "displayName": "Fixture Aiden",
     "platform": "mac",
-    "contractRevision": 65,
+    "contractRevision": 66,
     "pairingRequests": true
   },
   "hostFeedEvents": [
@@ -7314,5 +7314,99 @@
         }
       }
     ]
+  },
+  "agentSlider": {
+    "capability": "chat:agent-slider",
+    "models": {
+      "providers": [
+        {
+          "id": "provider_fixture",
+          "label": "Fixture Provider",
+          "models": [
+            {
+              "id": "model_fixture_quick",
+              "label": "Quick",
+              "supportsImages": false
+            },
+            {
+              "id": "model_fixture",
+              "label": "Fixture Model",
+              "supportsImages": true,
+              "thinkingLevels": ["low", "medium", "high"],
+              "defaultThinkingLevel": "medium"
+            }
+          ]
+        }
+      ],
+      "defaults": {
+        "provider_fixture": "model_fixture"
+      },
+      "agentSlider": {
+        "stops": [
+          {
+            "id": "stop_0a1b2c3d",
+            "label": "Instant",
+            "providerId": "provider_fixture",
+            "modelId": "model_fixture_quick",
+            "availability": "ready"
+          },
+          {
+            "id": "stop_1b2c3d4e",
+            "label": "Balanced",
+            "providerId": "provider_fixture",
+            "modelId": "model_fixture",
+            "thinkingLevel": "medium",
+            "availability": "ready"
+          },
+          {
+            "id": "stop_2c3d4e5f",
+            "label": "Deep",
+            "providerId": "provider_fixture",
+            "modelId": "model_fixture",
+            "thinkingLevel": "high",
+            "availability": "ready"
+          },
+          {
+            "id": "stop_3d4e5f6a",
+            "label": "Elsewhere",
+            "providerId": "provider_fixture_other",
+            "modelId": "model_fixture_other",
+            "thinkingLevel": "max",
+            "availability": "not-signed-in"
+          },
+          {
+            "id": "stop_4e5f6a7b",
+            "label": "Choose a model",
+            "availability": "unassigned"
+          }
+        ],
+        "homeStopId": "stop_1b2c3d4e"
+      }
+    },
+    "turnRequest": {
+      "text": "Think harder about this.",
+      "providerId": "provider_fixture",
+      "modelId": "model_fixture",
+      "thinkingLevel": "high"
+    },
+    "chat": {
+      "id": "chat_fixture_slider_01",
+      "workspaceId": "workspace_fixture_01",
+      "title": "Slider fixture chat",
+      "providerId": "provider_fixture",
+      "modelId": "model_fixture",
+      "thinkingLevel": "high",
+      "messages": [
+        {
+          "id": "message_fixture_slider_01",
+          "role": "user",
+          "text": "Think harder about this.",
+          "createdAt": "2026-11-24T12:00:00.000Z"
+        }
+      ],
+      "createdAt": "2026-11-24T12:00:00.000Z",
+      "updatedAt": "2026-11-24T12:00:00.000Z",
+      "revision": "chat_revision_slider_1"
+    }
   }
 }

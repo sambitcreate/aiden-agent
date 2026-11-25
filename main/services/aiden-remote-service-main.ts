@@ -728,6 +728,13 @@ async function createRuntime(): Promise<AidenRemoteRuntime> {
               );
               return device?.capabilities.includes("chat:continue-in-new-chat") === true;
             },
+            // Revision 66: only a device that negotiated it keeps its turn's selection as the chat's own.
+            deviceSupportsAgentSlider: async (deviceId) => {
+              const device = (await state.snapshot()).devices.find(
+                (candidate) => candidate.id === deviceId && candidate.revokedAt === undefined,
+              );
+              return device?.capabilities.includes("chat:agent-slider") === true;
+            },
             isFolderWorkspace: async (workspaceId) =>
               analyticsWorkspaceKind(await configStore.getWorkspace(workspaceId)) !== "none",
             deviceIsPeer: async (deviceId) => {

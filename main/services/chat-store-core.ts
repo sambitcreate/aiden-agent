@@ -2398,8 +2398,22 @@ export function createChatStore(
          * message itself, so a renderer append can't set it.
          */
         hookBlockedReason?: string;
+        /**
+         * Saves the chat's own thinking level with the model in this same
+         * write (a paired phone's Agent Slider stop); `null` clears it. Left
+         * out, a level stays only while the model does. Bot chats never take
+         * a level.
+         */
+        thinkingLevel?: GenerationThinkingLevel | null;
       },
     ): Promise<Chat> {
+      if (
+        meta?.thinkingLevel !== undefined &&
+        meta.thinkingLevel !== null &&
+        !isGenerationThinkingLevel(meta.thinkingLevel)
+      ) {
+        throw new Error("Invalid thinking level.");
+      }
       return withImageData(await shared([id], true, async () => {
         const chat = await readChat(id, "owner");
         if (!chat) throw new Error(`Chat ${id} not found`);
@@ -2500,6 +2514,10 @@ export function createChatStore(
         }
         if (meta?.providerId) chat.providerId = meta.providerId;
         if (meta?.model) chat.model = meta.model;
+        if (meta?.thinkingLevel !== undefined && !chat.botId && chat.providerId && chat.model) {
+          if (meta.thinkingLevel) chat.thinkingLevel = meta.thinkingLevel;
+          else delete chat.thinkingLevel;
+        }
         if (
           meta?.autoTitle &&
           isFirstUserMessage &&

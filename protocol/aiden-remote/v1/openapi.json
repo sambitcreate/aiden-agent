@@ -4328,6 +4328,9 @@
                       "additionalProperties": {
                         "type": "string"
                       }
+                    },
+                    "agentSlider": {
+                      "$ref": "#/components/schemas/AgentSlider"
                     }
                   },
                   "additionalProperties": false
@@ -10131,7 +10134,8 @@
                 "approval:cards",
                 "approvals:settings",
                 "chat:continue-in-new-chat",
-                "stream:snapshot-reasons"
+                "stream:snapshot-reasons",
+                "chat:agent-slider"
               ]
             },
             "uniqueItems": true
@@ -10192,7 +10196,8 @@
                 "approval:cards",
                 "approvals:settings",
                 "chat:continue-in-new-chat",
-                "stream:snapshot-reasons"
+                "stream:snapshot-reasons",
+                "chat:agent-slider"
               ]
             },
             "uniqueItems": true
@@ -10356,7 +10361,8 @@
                 "approval:cards",
                 "approvals:settings",
                 "chat:continue-in-new-chat",
-                "stream:snapshot-reasons"
+                "stream:snapshot-reasons",
+                "chat:agent-slider"
               ]
             },
             "uniqueItems": true
@@ -10426,7 +10432,8 @@
                 "approval:cards",
                 "approvals:settings",
                 "chat:continue-in-new-chat",
-                "stream:snapshot-reasons"
+                "stream:snapshot-reasons",
+                "chat:agent-slider"
               ]
             },
             "uniqueItems": true
@@ -13583,6 +13590,9 @@
           "providerId": [
             "modelId"
           ],
+          "thinkingLevel": [
+            "modelId"
+          ],
           "modelId": [
             "providerId"
           ]
@@ -13640,6 +13650,18 @@
             "type": "string",
             "minLength": 1,
             "maxLength": 512
+          },
+          "thinkingLevel": {
+            "type": "string",
+            "enum": [
+              "off",
+              "low",
+              "medium",
+              "high",
+              "xhigh",
+              "max"
+            ],
+            "description": "Contract revision 66: the chat's own thinking level (an Agent Slider stop), present only with providerId and modelId and never on a Bot chat. Absent: the model's saved level applies."
           },
           "messages": {
             "type": "array",
@@ -18855,12 +18877,102 @@
         },
         "additionalProperties": false
       },
+      "AgentSlider": {
+        "type": "object",
+        "description": "Contract revision 66: the host's Agent Slider, absent when the host has none or cannot read it. Stops run left to right; homeStopId names the stop Reset to home returns to. A stop is never substituted: availability is ready or the first reason it cannot run from this device.",
+        "required": [
+          "stops",
+          "homeStopId"
+        ],
+        "properties": {
+          "stops": {
+            "type": "array",
+            "minItems": 3,
+            "maxItems": 7,
+            "items": {
+              "$ref": "#/components/schemas/AgentSliderStop"
+            }
+          },
+          "homeStopId": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9_-]{1,64}$"
+          }
+        },
+        "additionalProperties": false
+      },
+      "AgentSliderStop": {
+        "type": "object",
+        "dependentRequired": {
+          "providerId": [
+            "modelId"
+          ],
+          "modelId": [
+            "providerId"
+          ],
+          "thinkingLevel": [
+            "modelId"
+          ]
+        },
+        "required": [
+          "id",
+          "label",
+          "availability"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9_-]{1,64}$"
+          },
+          "label": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 24
+          },
+          "providerId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 256
+          },
+          "modelId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 512
+          },
+          "thinkingLevel": {
+            "type": "string",
+            "enum": [
+              "off",
+              "low",
+              "medium",
+              "high",
+              "xhigh",
+              "max"
+            ],
+            "description": "The level a turn on this stop runs with on this host: the stop's own level fitted to its model's levels. Absent when the stop has none or the model has no levels."
+          },
+          "availability": {
+            "type": "string",
+            "enum": [
+              "ready",
+              "unassigned",
+              "provider-missing",
+              "not-signed-in",
+              "model-missing",
+              "hidden"
+            ]
+          }
+        },
+        "additionalProperties": false
+      },
       "ChatMessagesWindow": {
         "type": "object",
         "description": "Contract revision 23 (chat-messages-window-metadata-v1) adds the chat metadata a whole-chat read returns: workspaceId, botId, title, titlePending, providerId/modelId, createdAt and updatedAt. A host advertising chat-messages-window-metadata-v1 always includes workspaceId, title, createdAt and updatedAt; a client that refreshes from a window falls back to GET /chats/{chatId} when they are absent.",
         "x-aiden-max-json-response-bytes": 1048576,
         "dependentRequired": {
           "providerId": [
+            "modelId"
+          ],
+          "thinkingLevel": [
             "modelId"
           ],
           "modelId": [
@@ -18925,6 +19037,18 @@
             "type": "string",
             "minLength": 1,
             "maxLength": 512
+          },
+          "thinkingLevel": {
+            "type": "string",
+            "enum": [
+              "off",
+              "low",
+              "medium",
+              "high",
+              "xhigh",
+              "max"
+            ],
+            "description": "Contract revision 66: the chat's own thinking level (an Agent Slider stop), present only with providerId and modelId and never on a Bot chat. Absent: the model's saved level applies."
           },
           "createdAt": {
             "type": "string",

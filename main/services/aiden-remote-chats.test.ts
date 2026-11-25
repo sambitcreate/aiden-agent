@@ -75,6 +75,7 @@ function fixture(
     spendingRefusal?: (chat: { id: string; botId?: string }) => Promise<string | undefined>;
     workspaceFolderRefusal?: ConstructorParameters<typeof AidenRemoteChatService>[0]["workspaceFolderRefusal"];
     deviceSupportsContinueInNewChat?: (deviceId: string) => Promise<boolean>;
+    deviceSupportsAgentSlider?: (deviceId: string) => Promise<boolean>;
     noWorkspace?: ConstructorParameters<typeof AidenRemoteChatService>[0]["noWorkspace"];
     isFolderWorkspace?: ConstructorParameters<typeof AidenRemoteChatService>[0]["isFolderWorkspace"];
     deviceIsPeer?: ConstructorParameters<typeof AidenRemoteChatService>[0]["deviceIsPeer"];
@@ -197,6 +198,11 @@ function fixture(
         current.messages.push(stored);
         current.providerId = meta.providerId;
         current.model = meta.model;
+        // As the chat store does: the level is saved in this same write, and null clears it.
+        if (meta.thinkingLevel !== undefined && !current.botId) {
+          if (meta.thinkingLevel) current.thinkingLevel = meta.thinkingLevel;
+          else delete current.thinkingLevel;
+        }
         current.updatedAt += 1;
         return structuredClone(current);
       },
@@ -314,6 +320,9 @@ function fixture(
       : {}),
     ...(fixtureOptions.deviceSupportsContinueInNewChat
       ? { deviceSupportsContinueInNewChat: fixtureOptions.deviceSupportsContinueInNewChat }
+      : {}),
+    ...(fixtureOptions.deviceSupportsAgentSlider
+      ? { deviceSupportsAgentSlider: fixtureOptions.deviceSupportsAgentSlider }
       : {}),
     ...(fixtureOptions.attachments ? { attachments: fixtureOptions.attachments } : {}),
     ...(fixtureOptions.isTitlePending ? { isTitlePending: fixtureOptions.isTitlePending } : {}),
@@ -1775,6 +1784,42 @@ test("remote turn atomically appends once, owns its stream, and replays the acce
     () => app.streams.status("device-2", first.streamId),
     (error: unknown) => (error as { code?: string }).code === "not_found",
   );
+});
+
+test("a slider phone's turn saves its level as the chat's own with the message; other phones and refused sends leave it", async () => {
+  const sliderPhone = async (deviceId: string) => deviceId === "slider-phone";
+  const app = fixture(chat({ thinkingLevel: "low" }), { deviceSupportsAgentSlider: sliderPhone });
+  assert.equal(app.service.supportsAgentSlider, true);
+  assert.equal((await app.service.get("chat-1")).thinkingLevel, "low", "the chat's own level is projected");
+
+  await app.service.startTurn("older-phone", "chat-1", "turn-start-key-slider-01", {
+    text: "Hello", providerId: "provider-1", modelId: "model-1", thinkingLevel: "high",
+  });
+  assert.equal(app.current()?.thinkingLevel, "low", "a phone without the slider never changes the chat's level");
+
+  // A level the model does not offer is refused before anything is written.
+  const appendsBefore = app.appends();
+  await assert.rejects(app.service.startTurn("slider-phone", "chat-1", "turn-start-key-slider-02", {
+    text: "Hello", providerId: "provider-1", modelId: "model-1", thinkingLevel: "medium",
+  }));
+  assert.equal(app.appends(), appendsBefore);
+  assert.equal(app.current()?.thinkingLevel, "low");
+
+  await app.service.startTurn("slider-phone", "chat-1", "turn-start-key-slider-03", {
+    text: "Think harder", providerId: "provider-1", modelId: "model-1", thinkingLevel: "high",
+  });
+  const projected = await app.service.get("chat-1");
+  assert.equal(projected.thinkingLevel, "high");
+  assert.equal(projected.messages[projected.messages.length - 2]?.text, "Think harder", "the level arrived with the message it was sent with");
+
+  // A stop without a level clears the chat's own, so the model's saved level applies again.
+  await app.service.startTurn("slider-phone", "chat-1", "turn-start-key-slider-04", {
+    text: "Quick one", providerId: "provider-1", modelId: "model-1",
+  });
+  assert.equal("thinkingLevel" in (await app.service.get("chat-1")), false);
+
+  const unwired = fixture(chat({ thinkingLevel: "low" }));
+  assert.equal(unwired.service.supportsAgentSlider, false);
 });
 
 test("a remote turn brings a snoozed chat back once, keeps Done, and writes nothing for an unsnoozed chat", async (t) => {

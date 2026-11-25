@@ -19,6 +19,12 @@ import { isGenerationThinkingLevel } from "../../renderer/shared/generation-thin
 import { canUseGeminiChatModel } from "../../renderer/shared/gemini-usage-scope.js";
 import { acpHarnessUnavailableReason, isAcpHarnessProvider } from "../../renderer/shared/acp-harness.js";
 import { customModelThinkingLevels } from "../../renderer/shared/custom-model-options.js";
+import {
+  resolveAgentSliderStop,
+  type AgentSliderSettings,
+  type AgentSliderStopUnavailableReason,
+} from "../../renderer/shared/agent-slider.js";
+import type { GenerationThinkingLevel } from "../../renderer/shared/generation-thinking.js";
 
 const MAX_REMOTE_MODEL_ID_LENGTH = 256;
 const MAX_REMOTE_MODEL_CATALOG_BYTES = 900 * 1024;
@@ -41,9 +47,102 @@ export interface AidenRemoteProviderProjection {
   models: AidenRemoteModelProjection[];
 }
 
+/**
+ * One Agent Slider stop as a paired device sees it (revision 66). `providerId`
+ * and `modelId` come together. `thinkingLevel` is the level a turn on this stop
+ * runs with here: the stop's own level fitted to what its model offers, absent
+ * when the stop has none or the model has no levels. `availability` is
+ * "ready" or the first reason the stop cannot run from a paired device.
+ */
+export interface AidenRemoteAgentSliderStopProjection {
+  id: string;
+  label: string;
+  providerId?: string;
+  modelId?: string;
+  thinkingLevel?: GenerationThinkingLevel;
+  availability: "ready" | AgentSliderStopUnavailableReason;
+}
+
+export interface AidenRemoteAgentSliderProjection {
+  /** Left to right. */
+  stops: AidenRemoteAgentSliderStopProjection[];
+  /** The stop Reset to home returns to. */
+  homeStopId: string;
+}
+
 export interface AidenRemoteModelsProjection {
   providers: AidenRemoteProviderProjection[];
   defaults: Record<string, string>;
+  /** Additive (revision 66): absent when the host has no readable Agent Slider. */
+  agentSlider?: AidenRemoteAgentSliderProjection;
+}
+
+/** The level `requested` runs with on a model offering `levels`, as the model defaults are fitted. */
+function fittedThinkingLevel(
+  providerId: string,
+  levels: readonly GenerationThinkingLevel[],
+  requested: GenerationThinkingLevel | undefined,
+): GenerationThinkingLevel | undefined {
+  if (levels.length === 0) return undefined;
+  if (providerId === "google") return normalizeGoogleThinkingLevel(levels.filter(isGoogleThinkingLevel), requested);
+  if (providerId === "openai-codex") return normalizeCodexThinkingLevel(levels.filter(isCodexThinkingLevel), requested);
+  if (providerId === "anthropic") return normalizeAnthropicThinkingLevel(levels.filter(isAnthropicThinkingLevel), requested);
+  return normalizeProviderThinkingLevel(levels, requested);
+}
+
+/**
+ * The host's slider for a paired device. A stop is checked like the desktop
+ * checks it, and is also "model-missing" when its model is not in the catalog
+ * this device was sent (an agent harness, an embedding model, or one past the
+ * size budget), because a turn could not name it. Nothing is substituted.
+ */
+function projectAgentSlider(
+  slider: AgentSliderSettings,
+  configured: readonly Provider[],
+  providers: readonly AidenRemoteProviderProjection[],
+  settings: AppSettings,
+): AidenRemoteAgentSliderProjection {
+  const inventory = {
+    providers: configured.filter((provider) => !isAcpHarnessProvider(provider.id)),
+    hiddenModelsByProvider: settings.hiddenModelsByProvider,
+  };
+  return {
+    homeStopId: slider.homeStopId,
+    stops: slider.stops.map((stop) => {
+      const resolution = resolveAgentSliderStop(stop, inventory);
+      const projected = stop.providerId && stop.model
+        ? providers.find((provider) => provider.id === stop.providerId)?.models.find((model) => model.id === stop.model)
+        : undefined;
+      const availability = !resolution.ok ? resolution.reason : projected ? "ready" as const : "model-missing" as const;
+      const thinkingLevel = projected && stop.thinkingLevel
+        ? fittedThinkingLevel(stop.providerId!, (projected.thinkingLevels ?? []).filter(isGenerationThinkingLevel), stop.thinkingLevel)
+        : stop.thinkingLevel;
+      return {
+        id: stop.id,
+        label: stop.label,
+        ...(stop.providerId && stop.model ? { providerId: stop.providerId, modelId: stop.model } : {}),
+        ...(thinkingLevel ? { thinkingLevel } : {}),
+        availability,
+      };
+    }),
+  };
+}
+
+/** An upper bound on the projected slider's size, so the provider budget leaves room for it. */
+function agentSliderBytesBound(slider: AgentSliderSettings | undefined): number {
+  if (!slider) return 0;
+  const widest = {
+    homeStopId: slider.homeStopId,
+    stops: slider.stops.map((stop) => ({
+      id: stop.id,
+      label: stop.label,
+      providerId: stop.providerId ?? "",
+      modelId: stop.model ?? "",
+      thinkingLevel: "medium",
+      availability: "provider-missing",
+    })),
+  };
+  return Buffer.byteLength(JSON.stringify(widest), "utf8") + 16;
 }
 
 function bounded(value: string, maximum: number): string {
@@ -63,8 +162,10 @@ export class AidenRemoteModelService {
       this.options.listProviders(),
       this.options.getSettings(),
     ]);
+    const slider = settings.agentSliderUnreadable === true ? undefined : settings.agentSlider;
     let serializedBytes = Buffer.byteLength('{"providers":[],"defaults":{}}', "utf8") +
-      REMOTE_MODEL_CATALOG_RESERVE_BYTES;
+      REMOTE_MODEL_CATALOG_RESERVE_BYTES +
+      agentSliderBytesBound(slider);
     const providers: AidenRemoteProviderProjection[] = [];
     for (const provider of configured) {
       if (
@@ -162,12 +263,13 @@ export class AidenRemoteModelService {
     const selectedModel =
       selectedProvider?.models.find((model) => model.id === settings.lastModel && !model.hidden) ??
       selectedProvider?.models.find((model) => !model.hidden);
-    const projection = {
+    const projection: AidenRemoteModelsProjection = {
       providers,
       defaults: {
         ...(selectedProvider ? { providerId: selectedProvider.id } : {}),
         ...(selectedModel ? { modelId: selectedModel.id } : {}),
       },
+      ...(slider ? { agentSlider: projectAgentSlider(slider, configured, providers, settings) } : {}),
     };
     if (Buffer.byteLength(JSON.stringify(projection), "utf8") > MAX_REMOTE_MODEL_CATALOG_BYTES) {
       throw new AidenRemoteServiceError(
