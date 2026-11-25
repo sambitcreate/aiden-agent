@@ -172,14 +172,14 @@ final class AidenSearchModel {
         }
         // The same query asked again (the drawer reopening after the answer
         // aged, or after a machine failed) keeps what it shows and swaps in
-        // each machine's newer answer as it lands, with no skeleton. It only
-        // counts as shown once a machine has answered: a run stopped before
-        // any answer leaves the next one on the skeleton, not "No results".
+        // each machine's newer answer as it lands. It only counts as shown
+        // once a machine has answered: a run stopped before any answer leaves
+        // the next one on the skeleton, not "No results".
         let revalidating = !text.isEmpty && shownQuery == text
+        let askableNow = Self.askable(in: all)
         answered = nil
         if revalidating {
             // A machine that can't be asked now has nothing current to show.
-            let askableNow = Self.askable(in: all)
             hitsByMachine = hitsByMachine.filter { askableNow.contains($0.key) }
             failedMachines.formIntersection(askableNow)
         } else {
@@ -195,11 +195,16 @@ final class AidenSearchModel {
         }
         isSearching = true
         skippedMachines = Self.skipped(in: all)
-        let canAsk = all.contains(where: \.canBeAsked)
-        isSearchingBots = canAsk && !revalidating
+        let canAsk = !askableNow.isEmpty
+        // The skeleton stays while any machine being asked has neither
+        // answered nor failed: one that hadn't, or that connected since, has
+        // nothing to show yet, and an empty list would read as "No results".
+        let heardFrom = Set(hitsByMachine.keys).union(failedMachines)
+        isSearchingBots = canAsk && (!revalidating || !askableNow.isSubset(of: heardFrom))
         guard canAsk else {
+            // Nothing was asked, so nothing is shown yet: a machine that
+            // connects before the query is asked again starts on the skeleton.
             answered = (text, [], now())
-            shownQuery = text
             return
         }
 

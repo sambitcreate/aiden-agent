@@ -102,6 +102,37 @@ final class AidenShellUITests: XCTestCase {
         app.terminate()
     }
 
+    /// Show all chats puts the chat list on screen. On a phone, opened from
+    /// another tab, it lands on Chats' list. Beside the list, a list laid over the
+    /// chat (an iPad, or an open iPhone Duo, in portrait) that the pick put
+    /// away comes back over it.
+    func testShowAllChatsPutsTheChatListOnScreen() {
+        let app = AidenStateMatrix.launch(scenario: .busy, startingTab: nil)
+        XCTAssertTrue(app.navigationBars["Chats"].waitForExistence(timeout: 10), "A first launch opens on Chats")
+        let row = app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", "Fix the flaky upload test")).firstMatch
+        XCTAssertTrue(row.waitForExistence(timeout: 10), "No chat rows on Chats")
+        if AidenStateMatrix.window(of: app).frame.width > AidenStateMatrix.compactWidth {
+            // Beside the list: a pick puts an overlaid list away, and Show
+            // all chats brings it back over the open chat.
+            row.tap()
+            XCTAssertTrue(app.buttons["Send message"].firstMatch.waitForExistence(timeout: 10), "The chat did not open")
+            waitForTheListToMoveAside(from: row, in: app)
+        } else {
+            // On a phone a pushed chat hides the tabs and has Back rather
+            // than the menu, so the drawer is opened from another tab.
+            XCTAssertTrue(openInbox(in: app).waitForExistence(timeout: 10), "The Inbox did not open")
+            XCTAssertFalse(app.navigationBars["Chats"].exists, "The Inbox left Chats in view")
+        }
+
+        openDrawer(in: app)
+        drawerRow("Show all chats", in: app).tap()
+        XCTAssertTrue(app.buttons["Close menu"].waitForNonExistence(timeout: 5), "Show all chats left the drawer up")
+        XCTAssertTrue(app.navigationBars["Chats"].waitForExistence(timeout: 5), "Show all chats did not land on Chats")
+        let listed = XCTNSPredicateExpectation(predicate: NSPredicate(format: "isHittable == true"), object: row)
+        XCTAssertEqual(XCTWaiter().wait(for: [listed], timeout: 5), .completed, "Show all chats left the list off screen")
+        app.terminate()
+    }
+
     /// A swipe from the leading edge opens the drawer at a tab's root, and on
     /// a pushed page it's the stack's Back instead.
     func testAnEdgeSwipeOpensTheDrawerOnlyAtATabsRoot() throws {
@@ -112,11 +143,17 @@ final class AidenShellUITests: XCTestCase {
             "Beside the list the edge belongs to the columns"
         )
         // A closed iPhone Duo puts the bars in a side rail, whose columns own
-        // the edge, so the drawer leaves it alone there.
-        try XCTSkipIf(
-            !app.navigationBars.buttons["Open menu"].exists && app.buttons["Open menu"].exists,
-            "In a side rail the edge belongs to the system's columns"
-        )
+        // the edge, so there the swipe leaves the drawer shut.
+        if railButton("Open menu", in: app) != nil {
+            edgeSwipe(in: app)
+            XCTAssertFalse(
+                app.buttons["Close menu"].waitForExistence(timeout: 3),
+                "An edge swipe opened the drawer beside the side rail"
+            )
+            XCTAssertTrue(openInbox(in: app).exists, "The edge swipe left the Inbox")
+            app.terminate()
+            return
+        }
         edgeSwipe(in: app)
         XCTAssertTrue(app.buttons["Close menu"].waitForExistence(timeout: 3), "The edge swipe did not open the drawer")
         app.buttons["Settings"].firstMatch.tap()
@@ -147,19 +184,41 @@ final class AidenShellUITests: XCTestCase {
         for _ in 0..<4 where unread.frame.maxY > app.frame.height * 0.6 {
             app.swipeUp(velocity: .slow)
         }
+        // A row's label starts with its chat's title.
+        let title = String(unread.label.prefix { $0 != "," })
+        let thisRowUnread = app.buttons.matching(
+            NSPredicate(format: "label BEGINSWITH %@ AND label ENDSWITH %@", title, "Unread")
+        ).firstMatch
         // Held as a frame: once read, the row no longer matches the query.
         let row = unread.frame
+        // Both start a few points in from the screen's edge, inside the strip
+        // a screen-edge overlay would claim, rather than from the row's inset.
+        let edge = app.frame.minX + 6
         let origin = app.coordinate(withNormalizedOffset: .zero)
-        let inside = origin.withOffset(CGVector(dx: row.minX + 12, dy: row.midY))
-        inside.press(forDuration: 0.05, thenDragTo: inside.withOffset(CGVector(dx: 120, dy: 0)))
+        let start = origin.withOffset(CGVector(dx: edge, dy: row.midY))
+        start.press(forDuration: 0.05, thenDragTo: start.withOffset(CGVector(dx: 140, dy: 0)))
         let markRead = app.buttons["Mark read"]
         XCTAssertTrue(markRead.waitForExistence(timeout: 5), "The row's leading swipe offered no Mark read")
         XCTAssertFalse(app.buttons["Close menu"].exists, "The row's swipe opened the drawer")
+        // A tap while the action is still sliding out can land beside it.
+        let settled = XCTNSPredicateExpectation(predicate: NSPredicate(format: "isHittable == true"), object: markRead)
+        XCTAssertEqual(XCTWaiter().wait(for: [settled], timeout: 5), .completed, "Mark read never settled in reach")
         markRead.tap()
         XCTAssertTrue(markRead.waitForNonExistence(timeout: 5), "Mark read left the swipe action open")
+        // The demo Mac takes no read writes, so the row's optimistic read
+        // rolls back with the banner that says so. Only Mark read on an
+        // unread row sends that write, so the banner shows it was this row's.
+        let rollback = app.descendants(matching: .any)
+            .matching(NSPredicate(format: "label CONTAINS %@", "mark that chat read")).firstMatch
+        XCTAssertTrue(rollback.waitForExistence(timeout: 10), "Mark read sent no read write for \(title)")
+        XCTAssertTrue(thisRowUnread.exists, "\(title) read with no write behind it")
 
-        origin.withOffset(CGVector(dx: row.minX + 4, dy: row.midY)).tap()
+        origin.withOffset(CGVector(dx: edge, dy: row.midY)).tap()
         XCTAssertTrue(app.buttons["Send message"].firstMatch.waitForExistence(timeout: 10), "A tap at the row's edge did not open it")
+        XCTAssertTrue(
+            app.navigationBars.staticTexts[title].firstMatch.exists || app.staticTexts[title].firstMatch.exists,
+            "The tap at the edge opened a chat other than \(title)"
+        )
         XCTAssertFalse(app.buttons["Close menu"].exists, "A tap at the edge opened the drawer")
         app.terminate()
     }
@@ -617,7 +676,9 @@ final class AidenShellUITests: XCTestCase {
         goBack(in: app)
 
         XCTAssertTrue(app.navigationBars["Inbox"].waitForExistence(timeout: 10))
-        app.navigationBars.buttons["New chat"].firstMatch.tap()
+        let newChat = barButton("New chat", in: app)
+        XCTAssertTrue(newChat.exists, "No New chat in the Inbox's bar")
+        newChat.tap()
         XCTAssertTrue(
             app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", "Existing Workspace")).firstMatch
                 .waitForExistence(timeout: 5)
@@ -642,7 +703,7 @@ final class AidenShellUITests: XCTestCase {
         XCTAssertFalse(app.tabBars.firstMatch.isHittable, "The tab bar stayed over a workspace's chat")
         AidenStateMatrix.capture("tabs-workspace-chat", in: self)
 
-        app.navigationBars.buttons["More"].firstMatch.tap()
+        barButton("More", in: app).tap()
         let fork = app.buttons["Fork"].firstMatch
         XCTAssertTrue(fork.waitForExistence(timeout: 5), "No Fork in the chat's menu")
         fork.tap()
@@ -1054,8 +1115,11 @@ final class AidenShellUITests: XCTestCase {
         }
 
         XCTAssertTrue(app.tabBars.firstMatch.waitForExistence(timeout: 10), "No tab bar at compact width")
-        for title in ["Inbox", "Bots", "Workspaces"] {
-            XCTAssertTrue(app.tabBars.buttons[title].firstMatch.exists, "No \(title) tab at compact width")
+        for title in ["Chats", "Inbox", "Bots", "Workspaces"] {
+            // Along the bottom the tabs are the tab bar's buttons; in a
+            // closed iPhone Duo's side rail they lie within its frame.
+            let tab = app.tabBars.buttons[title].firstMatch
+            XCTAssertTrue(tab.exists || railButton(title, in: app) != nil, "No \(title) tab at compact width")
         }
         XCTAssertFalse(AidenStateMatrix.sidebarRow("Bots", in: app).exists, "A sidebar showed at compact width")
         app.terminate()
@@ -2086,7 +2150,16 @@ final class AidenShellUITests: XCTestCase {
                 "inbox": 2, "bots": 1, "machines": 1, "machine editor": 1, "settings": 1, "search": 1, "bot": 1,
             ],
             ceilingInRegularWidth: ["inbox": 1, "bot": 1],
-            matches: { [.dynamicType, .textClipped].contains($0.type) && $0.liesInABar }
+            // Only those elements, so a new bar label that truncates still fails.
+            matches: { finding in
+                guard [.dynamicType, .textClipped].contains(finding.type), finding.liesInABar else { return false }
+                let isStatusItem = finding.label.range(of: #"^\d+ of \d+$"#, options: .regularExpression) != nil
+                let isRunningChat = finding.label == "Plan the Q3 roadmap"
+                let isBotTitle = finding.screen == "bot" && finding.label == "Scout"
+                let isSearchField = finding.screen == "search"
+                    && (finding.elementType.map { [.searchField, .textField].contains($0) } ?? false)
+                return isStatusItem || isRunningChat || isBotTitle || isSearchField
+            }
         ),
         AuditAllowance(
             // "Nearly passed" is 3:1 or better, short of 4.5:1. Settings, Machines
@@ -2630,9 +2703,43 @@ final class AidenShellUITests: XCTestCase {
     /// Opens the Inbox and returns the first chat row.
     private func openInbox(in app: XCUIApplication) -> XCUIElement {
         AidenStateMatrix.openArea("Inbox", in: app)
-        return app.buttons.matching(
+        let row = app.buttons.matching(
             NSPredicate(format: "label BEGINSWITH %@", "Fix the flaky upload test")
         ).firstMatch
+        // At the largest text on a short display (a closed iPhone Duo) the
+        // computers strip, an offline notice and Catch Up fill the first
+        // page, so the row is further down. If it isn't there it scrolls
+        // down to the row.
+        if !row.waitForExistence(timeout: 6) {
+            let window = app.windows.firstMatch
+            for _ in 0..<5 where !row.waitForExistence(timeout: 1.5) {
+                window.coordinate(withNormalizedOffset: CGVector(dx: 0.4, dy: 0.7))
+                    .press(forDuration: 0.05, thenDragTo: window.coordinate(withNormalizedOffset: CGVector(dx: 0.4, dy: 0.35)))
+            }
+        }
+        return row
+    }
+
+    /// A bar's button. On an iPhone it sits in the navigation bar; on a closed
+    /// iPhone Duo the system moves the bar's items into the side rail with
+    /// the tabs, so a button there counts too.
+    private func barButton(_ label: String, in app: XCUIApplication) -> XCUIElement {
+        let inNavigationBar = app.navigationBars.buttons[label].firstMatch
+        if inNavigationBar.exists { return inNavigationBar }
+        // With the rail hidden (a pushed chat on the closed Duo) the system
+        // still shows the bar's items, outside any navigation bar.
+        return railButton(label, in: app) ?? app.buttons[label].firstMatch
+    }
+
+    /// A button in a closed iPhone Duo's side rail: the tab bar runs down the
+    /// trailing edge, and its tabs and the bar's items lie within its frame.
+    /// Nil where the tab bar is along the bottom.
+    private func railButton(_ label: String, in app: XCUIApplication) -> XCUIElement? {
+        let rail = app.tabBars.firstMatch
+        guard rail.exists, rail.frame.height > rail.frame.width else { return nil }
+        let band = rail.frame.insetBy(dx: -4, dy: 0)
+        return app.buttons.matching(NSPredicate(format: "label == %@", label)).allElementsBoundByIndex
+            .first { band.contains(CGPoint(x: $0.frame.midX, y: $0.frame.midY)) }
     }
 
     private func openDrawer(in app: XCUIApplication) {

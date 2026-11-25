@@ -1335,6 +1335,9 @@ private struct AidenListTab<List: View>: View {
         }
         // The system hides the list of a tab first shown in portrait on an
         // iPad (iOS 27.1 simulator), which left "No Bot selected" alone.
+        // With a row chosen (an iPhone Duo opened in portrait on a chat) the
+        // chat stays in view, as after a pick, and the bar's sidebar button
+        // or the drawer's Show all chats brings the list over it.
         .onChange(of: columns.visibility) {
             columns.showListIfNothingChosen(
                 besideList: true,
