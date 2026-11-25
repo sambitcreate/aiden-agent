@@ -1495,6 +1495,69 @@ test("the chat header's face works only while the Bot works, and a photo gets a 
   assert.equal(face.querySelector('[data-aiden-mark="glance"]'), null);
 });
 
+test("the chat header's sprite acts out the live tool phase, then shows done when the turn ends", async () => {
+  await mountChat({
+    "bots:live:subscribe": () =>
+      snapshot({ state: { kind: "running", submissionId: "s1" }, activity: { phase: "command", startedAt: Date.now() } }),
+  });
+  const pill = await screen.findByRole("button", { name: "Planner settings" });
+  const face = within(pill).getByTitle("Planner");
+  await waitFor(() => {
+    assert.equal(face.dataset.state, "tool");
+    assert.ok(face.querySelector('[data-sprite-prop="plug"]'));
+  });
+  act(() => emitBotTestNotification("bots:live:event", {
+    botId: "bot-1",
+    epoch: "epoch-1",
+    seq: 1,
+    type: "state",
+    state: { kind: "idle" },
+  }));
+  await waitFor(() => assert.equal(face.dataset.state, "done"));
+  assert.equal(face.querySelector("[data-sprite-prop]"), null);
+});
+
+test("the chat header's face is static at rest, and a stopped turn settles to idle without a done moment", async () => {
+  await mountChat({
+    "bots:live:subscribe": () =>
+      snapshot({ state: { kind: "running", submissionId: "s1" }, activity: { phase: "command", startedAt: Date.now() } }),
+  });
+  const pill = await screen.findByRole("button", { name: "Planner settings" });
+  const face = within(pill).getByTitle("Planner");
+  await waitFor(() => assert.equal(face.dataset.state, "tool"));
+  const seen: string[] = [];
+  const observer = new MutationObserver(() => seen.push(face.dataset.state ?? ""));
+  observer.observe(face, { attributes: true, attributeFilter: ["data-state"] });
+  act(() => emitBotTestNotification("bots:live:event", {
+    botId: "bot-1",
+    epoch: "epoch-1",
+    seq: 1,
+    type: "activity",
+    activity: { phase: "stopping", startedAt: Date.now() },
+  }));
+  act(() => emitBotTestNotification("bots:live:event", {
+    botId: "bot-1",
+    epoch: "epoch-1",
+    seq: 2,
+    type: "activity",
+    activity: null,
+  }));
+  act(() => emitBotTestNotification("bots:live:event", {
+    botId: "bot-1",
+    epoch: "epoch-1",
+    seq: 3,
+    type: "state",
+    state: { kind: "idle" },
+  }));
+  await waitFor(() => assert.equal(face.dataset.state, "idle"));
+  // Past the length of a done moment, it never showed.
+  await new Promise((resolve) => setTimeout(resolve, 1_700));
+  observer.disconnect();
+  assert.ok(!seen.includes("done"), `states: ${seen.join(" → ")}`);
+  assert.equal(face.dataset.state, "idle");
+  assert.equal(face.hasAttribute("data-live"), false, "the resting header face does not blink");
+});
+
 test("an open chat keeps its Bot read: a reply that finishes while it is open is seen, and leaving records the visit", async () => {
   const stored = () => parseBotSidebarPreferences(localStorage.getItem(BOT_SIDEBAR_PREFERENCES_KEY), Date.now());
   installBotTestIpc({

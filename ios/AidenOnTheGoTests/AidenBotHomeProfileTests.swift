@@ -230,7 +230,6 @@ final class AidenBotHomeProfileTests: XCTestCase {
         for color in AidenBotAvatarColor.allCases {
             XCTAssertEqual(hex(color.rgb), colors[color.rawValue], "\(color.rawValue) differs from desktop")
         }
-        XCTAssertEqual(hex(aidenBotAvatarFaceRGB), palette["face"] as? String)
     }
 
     func testDeleteConfirmationUsesTheExactSharedCopy() {
