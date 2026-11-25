@@ -41,9 +41,14 @@ job follows the `mac-e2e` plan decision instead of an area (see below), and
 `linux-e2e` follows `desktop` or `linux`. Branch protection
 should require only that check.
 
-PR pushes cancel superseded PR CI. Each main run of `CI` and `Release consumer contract`
-has its own concurrency group, so neither running nor pending main validation is
-superseded. Runner capacity can still cause queueing.
+PR pushes cancel superseded PR CI, and main pushes cancel superseded main CI:
+when several merges land close together, only the newest main commit finishes the
+full suite, and that run covers every earlier commit. A cancelled main run shows
+as cancelled on its commit. Manual `workflow_dispatch` runs keep their own group
+and are never superseded. Each main run of `Release consumer contract` still has
+its own concurrency group. The release workflows (`release.yml`, the TestFlight
+workflows) have their own non-cancelling groups and do not depend on CI, so
+cancelling CI never cancels a release. Runner capacity can still cause queueing.
 
 ## Execution and coverage
 
