@@ -83,6 +83,7 @@ const appSourcePaths = [
   "AidenOnTheGo/Features/Bots/AidenBotWatchModel.swift",
   "AidenOnTheGo/Features/Bots/AidenBotWatchesView.swift",
   "AidenOnTheGo/Features/Bots/AidenBotsHomeView.swift",
+  "AidenOnTheGo/Features/Bots/AidenDurablePendingMutation.swift",
   "AidenOnTheGo/Features/Chat/AidenAttachmentCamera.swift",
   "AidenOnTheGo/Features/Chat/AidenAttachmentPicker.swift",
   "AidenOnTheGo/Features/Chat/AidenChatFork.swift",
@@ -114,6 +115,7 @@ const appSourcePaths = [
   "AidenOnTheGo/Features/Chat/AidenChatDetailView.swift",
   "AidenOnTheGo/Features/Chat/ComposerVoiceInputController.swift",
   "AidenOnTheGo/Features/Conversation/AidenChatDock.swift",
+  "AidenOnTheGo/Features/Conversation/AidenChatTitleBar.swift",
   "AidenOnTheGo/Features/Conversation/AidenComposerSession.swift",
   "AidenOnTheGo/Features/Conversation/AidenComposerSurface.swift",
   "AidenOnTheGo/Features/Conversation/AidenDecisionDock.swift",
@@ -211,6 +213,7 @@ const appSourcePaths = [
   "AidenOnTheGo/Networking/AidenNetworkPath.swift",
   "AidenOnTheGo/Networking/AidenRemoteClient.swift",
   "AidenOnTheGo/Networking/AidenRemoteContract.swift",
+  "AidenOnTheGo/Networking/AidenRemoteFailureClassification.swift",
   "AidenOnTheGo/Networking/AidenSSEParser.swift",
   "AidenOnTheGo/Networking/AidenServerTrust.swift",
   "AidenOnTheGo/Networking/AidenSimulatorContract.swift",
@@ -246,6 +249,7 @@ const chatFeatureSourcePaths = [
   "AidenOnTheGo/Features/Chat/AidenChronologicalTranscript.swift",
   "AidenOnTheGo/Features/Chat/AidenChatComposer.swift",
   "AidenOnTheGo/Features/Conversation/AidenChatDock.swift",
+  "AidenOnTheGo/Features/Conversation/AidenChatTitleBar.swift",
   "AidenOnTheGo/Features/Conversation/AidenComposerSession.swift",
   "AidenOnTheGo/Features/Conversation/AidenComposerSurface.swift",
   "AidenOnTheGo/Features/Conversation/AidenDecisionDock.swift",
@@ -322,11 +326,14 @@ const testSources = [
   "AidenBotPeersTests.swift",
   "AidenBotUXTests.swift",
   "AidenBotRoutineModelsTests.swift",
+  "AidenBotResumeModelTests.swift",
+  "AidenDurablePendingMutationTests.swift",
   "AidenBotPlanTests.swift",
   "AidenBotSessionTests.swift",
   "AidenBotWatchTests.swift",
   "AidenActivityMarkTests.swift",
   "AidenChatDockTests.swift",
+  "AidenChatTitleBarTests.swift",
   "AidenChatTests.swift",
   "AidenComposerSurfaceTests.swift",
   "AidenInboxTests.swift",
@@ -336,6 +343,7 @@ const testSources = [
   "AidenAppShellTests+Bots.swift",
   "AidenRemoteClientTests.swift",
   "AidenRemoteContractFixture.swift",
+  "AidenRemoteFailureClassificationTests.swift",
   "AidenRemotePhase0Tests.swift",
   "AidenScheduledTaskTests.swift",
   "AidenSimulatorViewerTests.swift",
@@ -618,7 +626,7 @@ test("bot-first sources reuse the one reviewed chat implementation", async () =>
   assert.match(chat, /struct AidenBotMessageBubbleShape: Shape/u);
   assert.match(
     chat,
-    /private func botHeaderPill\([\s\S]*?AidenBotCanonicalAvatarView\([\s\S]*?\.aidenBotHeaderNameGlass\(\)/u,
+    /private func botAvatarHeader\([\s\S]*?AidenChatHeaderAvatar \{[\s\S]*?AidenBotCanonicalAvatarView\(/u,
   );
   assert.match(chat, /(?:Image\(systemName:|Label\("More", systemImage:) AidenChromeSymbols\.overflowMenu\)/u);
   assert.match(chat, /buttonBorderShape\(\.circle\)/u);
@@ -900,7 +908,7 @@ test("the Aiden home, onboarding, composer, schedules, and activity retain the r
   assert.doesNotMatch(chat, /Label\("Approval needed", systemImage: "hand\.raised"\)/u);
   assert.doesNotMatch(chat, /Button\("Deny", role: \.destructive\)/u);
   assert.match(chat, /safeAreaBar\(edge: \.bottom, spacing: 0\) \{ dock \}/u);
-  assert.match(chat, /AidenTranscriptScaffold\(dock: dock\)/u);
+  assert.match(chat, /AidenTranscriptScaffold\(dock: dock[,)]/u);
   assert.match(chat, /private var dock: AidenChatDock \{[\s\S]*?composer: \{ config in[\s\S]*?AidenComposerView\(/u);
   assert.match(chat, /glassEffect\(\.regular, in: shape\)/u);
   assert.match(

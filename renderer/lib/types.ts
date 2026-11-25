@@ -631,6 +631,7 @@ export interface ChatMessage {
   imagePlacements?: import("../shared/chat-artifacts").ChatImagePlacementV1[];
   uiVisuals?: import("../shared/aiden-ui/types").ChatUiVisualV1[];
   visualSnapshots?: import("../shared/visual-snapshots").VisualSnapshotRefV1[];
+  grabbedElements?: import("../shared/browser-element-grab").GrabbedElementContextV1[];
   skill?: SkillProvenanceV1;
   notice?: import("../shared/agent-notices").AgentNoticeV1;
   /** Aiden Live sent this user message for the person ("By voice"). */

@@ -13,9 +13,13 @@ import {
 import { RemoteBotSessionFollower, type RemoteBotSessionTransport } from "./remote-bot-session-follower";
 import {
   applyRemoteBotSessionEvent,
+  carryOlderRemoteBotEntries,
   hostServesBotHandoffs,
   hostSharesBotSessions,
+  remoteBotPlanView,
   remoteBotSessionView,
+  withOlderRemoteBotEntries,
+  withRereadOlderRemoteBotEntries,
   type RemoteBotSessionView,
 } from "./remote-bot-session";
 
@@ -228,6 +232,27 @@ test("Try again after the stream could not be joined joins it again", async () =
   assert.deepEqual(fake.unsubscribed, ["sub_2"]);
 });
 
+test("Try again after the host ended the stream as gone joins a new stream", async () => {
+  const fake = fakeTransport([session()]);
+  let joins = 0;
+  fake.transport.subscribe = async () => {
+    joins += 1;
+    return { subscriptionId: `sub_${joins}`, state: "streaming" };
+  };
+  const follower = new RemoteBotSessionFollower(fake.transport, "host_a", "bot_1");
+  follower.start();
+  await settle();
+  fake.state("gone");
+  assert.equal(follower.getState().gone, true);
+  follower.reload();
+  await settle();
+  assert.equal(joins, 2, "the ended stream is not counted as joined");
+  assert.equal(follower.getState().gone, false);
+  fake.state("streaming");
+  fake.push(event(5, { type: "partial", payload: { text: "live again" } }));
+  assert.equal(follower.getState().view?.snapshot.partial, "live again");
+});
+
 test("only hosts that serve durable Bot sessions to this Mac get the Bot conversation", () => {
   const grants = ["bot:read", "bot:write", "chat:read", "chat:write"];
   assert.equal(hostSharesBotSessions({ features: ["bot-durable-session-v1"], capabilities: grants }), true);
@@ -340,22 +365,469 @@ test("a burst of unreadable frames during a read becomes one follow-up read, and
   follower.stop();
 });
 
-test("paired desktops advance access request frames without exposing a phone card", () => {
+test("a host's access card reaches this Mac's chat as the card it answers by wait id, and a cleared frame takes it away", () => {
   const card = { waitId: "access-55", target: "folder" as const, label: "Reports", place: "~/Reports", why: "Summarize reports.", choices: ["not_now", "once"] as Array<"not_now" | "once"> };
   const view = remoteBotSessionView(session({ accessRequest: card }));
-  assert.equal(view.snapshot.accessRequest, undefined);
-  const next = applyRemoteBotSessionEvent(view, event(5, { type: "access_request", payload: { accessRequest: card } }));
-  assert.equal(next?.snapshot.seq, 5);
-  assert.equal(next?.snapshot.accessRequest, undefined);
-  assert.deepEqual(next?.snapshot.entries, view.snapshot.entries);
+  assert.deepEqual(view.snapshot.accessRequest, {
+    botId: "bot_1", waitId: "access-55", toolCallId: "access-55", target: "folder", label: "Reports", place: "~/Reports",
+    why: "Summarize reports.", choices: ["not_now", "once"],
+  });
+  const cleared = applyRemoteBotSessionEvent(view, event(5, { type: "access_request", payload: { accessRequest: null } }));
+  assert.equal(cleared?.snapshot.seq, 5);
+  assert.equal(cleared?.snapshot.accessRequest, null);
+  assert.deepEqual(cleared?.snapshot.entries, view.snapshot.entries);
 });
 
-test("paired desktops advance plan frames without exposing a phone plan card", () => {
+test("a host's plan reaches this Mac's chat as the plan card, and every change to it is a new revision", () => {
+  const plan = parseAidenRemoteBotSession(contract.botPlans.session).plan!;
   const before = remoteBotSessionView(session());
-  const frame = event(5, { type: "plan", payload: { plan: parseAidenRemoteBotSession(contract.botPlans.session).plan! } });
-  const after = applyRemoteBotSessionEvent(before, frame);
-  assert.ok(after);
-  assert.equal(after.snapshot.seq, 5);
-  assert.deepEqual(after.snapshot, { ...before.snapshot, seq: 5 });
-  assert.equal(Object.prototype.hasOwnProperty.call(after.snapshot, "plan"), false);
+  assert.equal(before.snapshot.plan, null);
+  const after = applyRemoteBotSessionEvent(before, event(5, { type: "plan", payload: { plan } }));
+  const shown = after?.snapshot.plan;
+  assert.ok(shown);
+  assert.equal(shown.planId, plan.planId);
+  assert.equal(shown.botId, "bot_1");
+  assert.equal(shown.status, plan.status);
+  assert.deepEqual(shown.steps, plan.steps);
+  assert.deepEqual(shown.items.map(({ line, details }) => ({ line, details })), plan.items.map(({ line, details }) => ({ line, details })));
+  assert.equal(new Set(shown.items.map(({ id }) => id)).size, plan.items.length, "each item has its own key");
+  // Reading the session again (a reload, a reconnect) shows the same card, so
+  // it keeps its revision, its key, and with them its busy and error state.
+  const reread = remoteBotSessionView(session({ seq: 9, plan }));
+  assert.equal(reread.snapshot.plan?.revision, shown.revision);
+  const again = applyRemoteBotSessionEvent(after!, event(6, { type: "plan", payload: { plan: { ...plan, status: "active" } } }));
+  assert.notEqual(again?.snapshot.plan?.revision, shown.revision);
+  const stepDone = { ...plan, steps: plan.steps.map((step, index) => (index === 0 ? { ...step, status: "done" as const } : step)) };
+  assert.notEqual(remoteBotPlanView("bot_1", stepDone).revision, shown.revision, "a step finishing is a change too");
+  assert.equal(applyRemoteBotSessionEvent(again!, event(7, { type: "plan", payload: { plan: null } }))?.snapshot.plan, null);
+});
+
+test("a host's memory line and routine suggestion become this Mac's own transcript rows", () => {
+  const view = remoteBotSessionView(
+    session({
+      entries: [
+        { type: "memory_update", id: "mem-1", createdAt: "2026-11-24T08:00:00.000Z" },
+        {
+          type: "routine_proposal", id: "rp-1", proposalId: "4b1f8a52-7f0e-4b8e-9d55-3f2c1a6b7e10", name: "Morning brief",
+          prompt: "Summarize my day.", label: "Weekdays at 8:00 AM", status: "accepted", routineId: "routine-9",
+        },
+      ],
+    }),
+  );
+  const [memory, routine] = view.snapshot.entries;
+  assert.equal(memory?.type, "memory_update");
+  assert.equal(memory?.at, Date.parse("2026-11-24T08:00:00.000Z"));
+  assert.ok(routine?.type === "routine_proposal");
+  assert.equal(routine.status, "accepted");
+  assert.equal(routine.routineId, "routine-9");
+  assert.deepEqual(
+    { proposalId: routine.proposal.proposalId, name: routine.proposal.name, label: routine.proposal.label },
+    { proposalId: "4b1f8a52-7f0e-4b8e-9d55-3f2c1a6b7e10", name: "Morning brief", label: "Weekdays at 8:00 AM" },
+  );
+});
+
+test("Load older places the host's earlier page before what is shown, keeps it across a reconnect, and tells an older host apart", async () => {
+  const message = (id: string, text: string) => ({ type: "message" as const, id, role: "assistant" as const, text });
+  const newest = session({ hasOlder: true, entries: [message("m5", "Five"), message("m6", "Six")] });
+  const fake = fakeTransport([newest, newest]);
+  const asked: string[] = [];
+  const pages: Record<string, PeerOperationOutcome> = {
+    m5: { ok: true, value: { botId: "bot_1", epoch: "e1", entries: [message("m3", "Three"), message("m4", "Four")], hasOlder: true } },
+    m3: { ok: true, value: { botId: "bot_1", epoch: "e1", entries: [message("m1", "One"), message("m2", "Two")], hasOlder: false } },
+  };
+  fake.transport.older = async (_hostId, _botId, before) => {
+    asked.push(before);
+    return pages[before]!;
+  };
+  const follower = new RemoteBotSessionFollower(fake.transport, "host_a", "bot_1");
+  follower.start();
+  await settle();
+  const texts = () => follower.getState().view!.snapshot.entries.map((entry) => (entry as { text?: string }).text);
+  assert.deepEqual(await follower.loadOlder(), { kind: "loaded" });
+  assert.deepEqual(texts(), ["Three", "Four", "Five", "Six"]);
+  assert.equal(follower.getState().view!.hasOlder, true);
+
+  // A reconnect's snapshot of the same session keeps what was loaded, read again from the host.
+  fake.push(event(4, { type: "snapshot", payload: { session: session({ seq: 5, hasOlder: true, entries: [message("m5", "Five"), message("m6", "Six"), message("m7", "Seven")] }) } }));
+  assert.deepEqual(texts(), ["Three", "Four", "Five", "Six", "Seven"]);
+  await settle();
+  assert.deepEqual(texts(), ["Three", "Four", "Five", "Six", "Seven"]);
+
+  await follower.loadOlder();
+  assert.deepEqual(texts(), ["One", "Two", "Three", "Four", "Five", "Six", "Seven"]);
+  assert.equal(follower.getState().view!.hasOlder, false);
+  assert.deepEqual(asked, ["m5", "m5", "m3"], "each page ends where the last began");
+
+  // A new epoch is another transcript: the loaded pages go.
+  fake.push(event(0, { type: "snapshot", payload: { session: session({ epoch: "e2", seq: 0, hasOlder: true, entries: [message("n1", "New")] }) } }, "e2"));
+  assert.deepEqual(texts(), ["New"]);
+  follower.stop();
+
+  // A host older than revision 67 has no such route; one that moved on is read again.
+  const old = fakeTransport([newest, newest]);
+  old.transport.older = async () => ({ ok: false, error: { code: "not_found", message: "This Aiden Remote endpoint does not exist.", status: 404 } });
+  const legacy = new RemoteBotSessionFollower(old.transport, "host_a", "bot_1");
+  legacy.start();
+  await settle();
+  assert.deepEqual(await legacy.loadOlder(), { kind: "unsupported" });
+  old.transport.older = async () => ({ ok: false, error: { code: "operation_stale", message: "This Bot's chat changed.", status: 409 } });
+  assert.deepEqual(await legacy.loadOlder(), { kind: "loaded" });
+  await settle();
+  assert.equal(old.reads(), 2, "the session is read again");
+  legacy.stop();
+});
+
+test("a snapshot that rewrote loaded history replaces it, and a page asked for before the snapshot is never placed", async () => {
+  const message = (id: string, text: string) => ({ type: "message" as const, id, role: "assistant" as const, text });
+  const newest = session({ hasOlder: true, entries: [message("m5", "Five"), message("m6", "Six")] });
+  const fake = fakeTransport([newest]);
+  // The host's history: "Four" is a routine's input that a later [SILENT] turn hides.
+  let history = [message("m1", "One"), message("m2", "Two"), message("m3", "Three"), message("m4", "Four")];
+  const asked: Array<[string, number | undefined]> = [];
+  let hold: (() => void) | null = null;
+  fake.transport.older = async (_hostId, _botId, before, limit) => {
+    asked.push([before, limit]);
+    // Holds the second Load older (re-reads always ask for a number of entries).
+    if (hold === null && asked.length > 1 && limit === undefined) await new Promise<void>((resolve) => (hold = resolve));
+    const end = before === "m5" ? history.length : history.findIndex((entry) => entry.id === before);
+    if (end < 0) return { ok: false, error: { code: "http_error", status: 409, remoteCode: "operation_stale", message: "This Bot's chat changed. Read it again." } };
+    const start = Math.max(0, end - (limit ?? 2));
+    return { ok: true, value: { botId: "bot_1", epoch: "e1", entries: history.slice(start, end), hasOlder: start > 0 } };
+  };
+  const follower = new RemoteBotSessionFollower(fake.transport, "host_a", "bot_1");
+  follower.start();
+  await settle();
+  const texts = () => follower.getState().view!.snapshot.entries.map((entry) => (entry as { text?: string }).text);
+  await follower.loadOlder();
+  assert.deepEqual(texts(), ["Three", "Four", "Five", "Six"]);
+
+  // The host hides "Four" and sends a snapshot of the same epoch: it is gone once the loaded part is read again.
+  history = history.filter((entry) => entry.id !== "m4");
+  fake.push(event(3, { type: "snapshot", payload: { session: session({ seq: 4, hasOlder: true, entries: [message("m5", "Five"), message("m6", "Six")] }) } }));
+  await settle();
+  assert.deepEqual(texts(), ["Three", "Five", "Six"], "nothing older than what was shown is added");
+  assert.deepEqual(asked[1], ["m5", 2], "the loaded part is read again, as many entries as were kept");
+
+  // A Load older that is out when another snapshot arrives belongs to the history before it.
+  const pending = follower.loadOlder();
+  await settle();
+  fake.push(event(5, { type: "snapshot", payload: { session: session({ seq: 6, hasOlder: true, entries: [message("m5", "Five"), message("m6", "Six")] }) } }));
+  await settle();
+  hold!();
+  assert.deepEqual(await pending, { kind: "loaded" });
+  await settle();
+  assert.equal(texts().includes("One"), false, "the page asked for before the snapshot was not placed");
+  follower.stop();
+});
+
+test("loaded history longer than one page survives a same-epoch snapshot whole, and a rewrite in its oldest page still shows", async () => {
+  const message = (id: string, text: string) => ({ type: "message" as const, id, role: "assistant" as const, text });
+  let history = Array.from({ length: 450 }, (_, index) => message(`h${index}`, `Message ${index}`));
+  const newest = () => session({ seq: 4, hasOlder: true, entries: history.slice(-2) });
+  const fake = fakeTransport([newest()]);
+  const asked: Array<[string, number | undefined]> = [];
+  let failAt: number | null = null;
+  fake.transport.older = async (_hostId, _botId, before, limit) => {
+    asked.push([before, limit]);
+    if (failAt === asked.length) return { ok: false, error: { code: "failed", message: "Offline.", status: 503 } };
+    const end = history.findIndex((entry) => entry.id === before);
+    if (end < 0) return { ok: false, error: { code: "http_error", status: 409, remoteCode: "operation_stale", message: "This Bot's chat changed. Read it again." } };
+    const start = Math.max(0, end - (limit ?? 150));
+    return { ok: true, value: { botId: "bot_1", epoch: "e1", entries: history.slice(start, end), hasOlder: start > 0 } };
+  };
+  const follower = new RemoteBotSessionFollower(fake.transport, "host_a", "bot_1");
+  follower.start();
+  await settle();
+  const ids = () => follower.getState().view!.snapshot.entries.map((entry) => entry.id);
+  await follower.loadOlder();
+  await follower.loadOlder();
+  const loaded = history.slice(-302).map((entry) => entry.id);
+  assert.deepEqual(ids(), loaded);
+
+  // Nothing changed on the host: every one of the 300 loaded entries stays.
+  asked.length = 0;
+  fake.push(event(4, { type: "snapshot", payload: { session: newest() } }));
+  await settle();
+  assert.deepEqual(ids(), loaded);
+  assert.equal(follower.getState().view!.olderCursor, loaded[0]);
+  assert.ok(asked.every(([, limit]) => limit !== undefined && limit <= 200), "each read is a bounded page");
+
+  // The host hides the oldest loaded entry: it goes, and the rest stays.
+  history = history.filter((entry) => entry.id !== loaded[0]);
+  fake.push(event(4, { type: "snapshot", payload: { session: newest() } }));
+  await settle();
+  assert.equal(ids().includes(loaded[0]!), false);
+  assert.deepEqual(ids().slice(-301), loaded.slice(1));
+
+  // A later page that fails keeps the pages already read, and Load older continues from there.
+  asked.length = 0;
+  failAt = 2;
+  fake.push(event(4, { type: "snapshot", payload: { session: newest() } }));
+  await settle();
+  const kept = ids();
+  assert.equal(kept.length, 202);
+  assert.deepEqual(kept, loaded.slice(-202));
+  assert.equal(follower.getState().view!.hasOlder, true);
+  assert.equal(follower.getState().view!.olderCursor, kept[0]);
+  follower.stop();
+});
+
+test("re-reading kept history from a newer host covers the same span, entries this Mac leaves out included, and no further", async () => {
+  const message = (id: string, text: string) => ({ type: "message" as const, id, role: "assistant" as const, text });
+  const newest = session({ hasOlder: true, entries: [message("m5", "Five"), message("m6", "Six")] });
+  const fake = fakeTransport([newest]);
+  // The host, newer than this Mac: two entries of a kind this Mac can't show sit just before "Five".
+  let host = ["m1", "m2", "m3", "m4", "u1", "u2"];
+  const asked: Array<[string, number | undefined]> = [];
+  fake.transport.older = async (_hostId, _botId, before, limit) => {
+    asked.push([before, limit]);
+    const end = before === "m5" ? host.length : host.indexOf(before);
+    if (end < 0) return { ok: false, error: { code: "http_error", status: 409, remoteCode: "operation_stale", message: "This Bot's chat changed. Read it again." } };
+    const start = Math.max(0, end - (limit ?? 2));
+    const sent = host.slice(start, end);
+    return {
+      ok: true,
+      value: {
+        botId: "bot_1", epoch: "e1", hasOlder: start > 0, olderCursor: sent[0], hostCount: sent.length,
+        entries: sent.filter((id) => id.startsWith("m")).map((id) => message(id, id)),
+      },
+    };
+  };
+  const follower = new RemoteBotSessionFollower(fake.transport, "host_a", "bot_1");
+  follower.start();
+  await settle();
+  const ids = () => follower.getState().view!.snapshot.entries.map((entry) => entry.id);
+  const snapshot = (seq: number) =>
+    fake.push(event(seq, { type: "snapshot", payload: { session: session({ seq: seq + 1, hasOlder: true, entries: [message("m5", "Five"), message("m6", "Six")] }) } }));
+  // Two Load olders: an all-unknown page, then "m3" and "m4".
+  await follower.loadOlder();
+  assert.deepEqual(ids(), ["m5", "m6"]);
+  await follower.loadOlder();
+  assert.deepEqual(ids(), ["m3", "m4", "m5", "m6"]);
+
+  // Unchanged history: the re-read spans the four host entries loaded, so "m3" and "m4" stay.
+  asked.length = 0;
+  snapshot(4);
+  await settle();
+  assert.deepEqual(asked, [["m5", 4]], "one request, for the host entries the loaded pages spanned");
+  assert.deepEqual(ids(), ["m3", "m4", "m5", "m6"]);
+  assert.equal(follower.getState().view!.olderCursor, "m3");
+
+  // The host drops "m3", the oldest kept: the re-read is bounded by the span it covered plus a slack,
+  // and cut back to "m4", the earliest kept entry the host still has, so "m1" and "m2" are not added.
+  host = host.filter((id) => id !== "m3");
+  asked.length = 0;
+  snapshot(6);
+  await settle();
+  assert.deepEqual(asked, [["m5", 4], ["m2", 2]]);
+  assert.deepEqual(ids(), ["m4", "m5", "m6"]);
+  assert.equal(follower.getState().view!.hasOlder, true);
+  assert.equal(follower.getState().view!.olderCursor, "m4", "Load older resumes from an entry the host has");
+  await follower.loadOlder();
+  assert.deepEqual(ids(), ["m1", "m2", "m4", "m5", "m6"]);
+  follower.stop();
+});
+
+test("a same-epoch snapshot that starts inside the loaded history keeps what was shown, and adds nothing older", async () => {
+  const message = (id: string, text: string) => ({ type: "message" as const, id, role: "assistant" as const, text });
+  // The host, newer than this Mac: "u…" entries are of kinds this Mac can't show.
+  const host = ["m1", "m2", "m3", "m4", "u1", "u2", "m5", "u3", "m6", "m7"];
+  const fake = fakeTransport([session({ hasOlder: true, entries: [message("m5", "m5"), message("m6", "m6")] })]);
+  const asked: Array<[string, number | undefined]> = [];
+  fake.transport.older = async (_hostId, _botId, before, limit) => {
+    asked.push([before, limit]);
+    const end = host.indexOf(before);
+    if (end < 0) return { ok: false, error: { code: "http_error", status: 409, remoteCode: "operation_stale", message: "This Bot's chat changed. Read it again." } };
+    const start = Math.max(0, end - (limit ?? 2));
+    const sent = host.slice(start, end);
+    return {
+      ok: true,
+      value: {
+        botId: "bot_1", epoch: "e1", hasOlder: start > 0, olderCursor: sent[0], hostCount: sent.length,
+        entries: sent.filter((id) => id.startsWith("m")).map((id) => message(id, id)),
+      },
+    };
+  };
+  const follower = new RemoteBotSessionFollower(fake.transport, "host_a", "bot_1");
+  follower.start();
+  await settle();
+  const ids = () => follower.getState().view!.snapshot.entries.map((entry) => entry.id);
+  await follower.loadOlder();
+  await follower.loadOlder();
+  assert.deepEqual(ids(), ["m3", "m4", "m5", "m6"]);
+
+  // A new reply: the snapshot now starts at "m6", so "m5" joins the kept part.
+  asked.length = 0;
+  fake.push(event(4, { type: "snapshot", payload: { session: session({ seq: 5, hasOlder: true, entries: [message("m6", "m6"), message("m7", "m7")] }) } }));
+  await settle();
+  assert.deepEqual(ids(), ["m3", "m4", "m5", "m6", "m7"], "everything shown stays, and m1 and m2 are not added");
+  assert.equal(follower.getState().view!.olderCursor, "m3", "Load older resumes where it was");
+  assert.equal(follower.getState().view!.hasOlder, true);
+  assert.ok(asked.length <= 2 && asked.every(([, limit]) => (limit ?? 0) <= 200), JSON.stringify(asked));
+  await follower.loadOlder();
+  assert.deepEqual(ids(), ["m1", "m2", "m3", "m4", "m5", "m6", "m7"]);
+  follower.stop();
+});
+
+test("a shifted snapshot keeps every kept entry the host still has, however many unshown entries sit between them", async () => {
+  const message = (id: string, text: string) => ({ type: "message" as const, id, role: "assistant" as const, text });
+  // The host, newer than this Mac: five "u…" entries this Mac can't show sit between "m3" and "m4",
+  // more than the two entries this Mac keeps across the snapshot.
+  let host = ["m1", "m2", "m3", "u1", "u2", "u3", "u4", "u5", "m4", "m5", "m6", "m7"];
+  const fake = fakeTransport([session({ hasOlder: true, entries: [message("m3", "m3"), message("m4", "m4"), message("m5", "m5")] })]);
+  const asked: Array<[string, number | undefined]> = [];
+  fake.transport.older = async (_hostId, _botId, before, limit) => {
+    asked.push([before, limit]);
+    const end = host.indexOf(before);
+    if (end < 0) return { ok: false, error: { code: "http_error", status: 409, remoteCode: "operation_stale", message: "This Bot's chat changed. Read it again." } };
+    const start = Math.max(0, end - (limit ?? 2));
+    const sent = host.slice(start, end);
+    return {
+      ok: true,
+      value: {
+        botId: "bot_1", epoch: "e1", hasOlder: start > 0, olderCursor: sent[0], hostCount: sent.length,
+        entries: sent.filter((id) => id.startsWith("m")).map((id) => message(id, id)),
+      },
+    };
+  };
+  const follower = new RemoteBotSessionFollower(fake.transport, "host_a", "bot_1");
+  follower.start();
+  await settle();
+  const ids = () => follower.getState().view!.snapshot.entries.map((entry) => entry.id);
+  const snapshot = (seq: number, entries: string[]) =>
+    fake.push(event(seq, { type: "snapshot", payload: { session: session({ seq: seq + 1, hasOlder: true, entries: entries.map((id) => message(id, id)) }) } }));
+
+  // The snapshot now starts at "m5": "m3" and "m4" are kept, and both are read back.
+  snapshot(4, ["m5", "m6"]);
+  await settle();
+  assert.deepEqual(ids(), ["m3", "m4", "m5", "m6"], "nothing shown is lost, and m1 and m2 are not added");
+  assert.equal(follower.getState().view!.hasOlder, true);
+  assert.ok(asked.every(([, limit]) => (limit ?? 0) <= 200), JSON.stringify(asked));
+
+  // The host drops "m3": the re-read stops at "m4", the earliest kept entry it still has.
+  host = host.filter((id) => id !== "m3");
+  snapshot(6, ["m6", "m7"]);
+  await settle();
+  assert.deepEqual(ids(), ["m4", "m5", "m6", "m7"]);
+  assert.ok(host.includes(follower.getState().view!.olderCursor ?? ""), "Load older starts from an entry the host has");
+  await follower.loadOlder();
+  assert.deepEqual(ids(), ["m2", "m4", "m5", "m6", "m7"], "Load older goes on from an entry the host has");
+  follower.stop();
+});
+
+test("a rewrite that removed every kept entry asks the host about only a few of them", async () => {
+  const message = (id: string) => ({ type: "message" as const, id, role: "assistant" as const, text: id });
+  const keptIds = Array.from({ length: 30 }, (_, index) => `k${index + 1}`);
+  // The host rewrote its history: none of the kept entries is left.
+  const host = [...Array.from({ length: 80 }, (_, index) => `h${index + 1}`), "m5", "m6", "m7"];
+  const fake = fakeTransport([session({ hasOlder: true, entries: [...keptIds, "m5", "m6"].map(message) })]);
+  const asked: Array<[string, number | undefined]> = [];
+  fake.transport.older = async (_hostId, _botId, before, limit) => {
+    asked.push([before, limit]);
+    const end = host.indexOf(before);
+    if (end < 0) return { ok: false, error: { code: "http_error", status: 409, remoteCode: "operation_stale", message: "This Bot's chat changed. Read it again." } };
+    const start = Math.max(0, end - (limit ?? 2));
+    const sent = host.slice(start, end);
+    return { ok: true, value: { botId: "bot_1", epoch: "e1", hasOlder: start > 0, olderCursor: sent[0], hostCount: sent.length, entries: sent.map(message) } };
+  };
+  const follower = new RemoteBotSessionFollower(fake.transport, "host_a", "bot_1");
+  follower.start();
+  await settle();
+  fake.push(event(4, { type: "snapshot", payload: { session: session({ seq: 5, hasOlder: true, entries: ["m5", "m6", "m7"].map(message) }) } }));
+  await settle();
+  const probes = asked.filter(([before]) => before.startsWith("k"));
+  assert.ok(probes.length > 0 && probes.length <= 8, JSON.stringify(probes));
+  assert.ok(asked.length <= probes.length + 2, JSON.stringify(asked));
+  // Kept entries were left unasked, so the loaded part is dropped and Load older starts again.
+  assert.deepEqual(follower.getState().view!.snapshot.entries.map((entry) => entry.id), ["m5", "m6", "m7"]);
+  assert.equal(follower.getState().view!.hasOlder, true);
+  follower.stop();
+});
+
+test("running out of questions drops the loaded part rather than show a partial re-read as it", async () => {
+  const message = (id: string) => ({ type: "message" as const, id, role: "assistant" as const, text: id });
+  const keptIds = Array.from({ length: 12 }, (_, index) => `k${index + 1}`);
+  // The host removed the first ten kept entries; "k11" and "k12" remain, far back behind entries this Mac
+  // can't show, and two new entries sit where the bounded re-read reaches.
+  const host = ["k11", "k12", ...Array.from({ length: 60 }, (_, index) => `u${index + 1}`), "o1", "o2", "m5", "m6", "m7"];
+  const fake = fakeTransport([session({ hasOlder: true, entries: [...keptIds, "m5", "m6"].map(message) })]);
+  const asked: Array<[string, number | undefined]> = [];
+  fake.transport.older = async (_hostId, _botId, before, limit) => {
+    asked.push([before, limit]);
+    const end = host.indexOf(before);
+    if (end < 0) return { ok: false, error: { code: "http_error", status: 409, remoteCode: "operation_stale", message: "This Bot's chat changed. Read it again." } };
+    const start = Math.max(0, end - (limit ?? 2));
+    const sent = host.slice(start, end);
+    return {
+      ok: true,
+      value: {
+        botId: "bot_1", epoch: "e1", hasOlder: start > 0, olderCursor: sent[0], hostCount: sent.length,
+        entries: sent.filter((id) => !id.startsWith("u")).map(message),
+      },
+    };
+  };
+  const follower = new RemoteBotSessionFollower(fake.transport, "host_a", "bot_1");
+  follower.start();
+  await settle();
+  fake.push(event(4, { type: "snapshot", payload: { session: session({ seq: 5, hasOlder: true, entries: ["m5", "m6", "m7"].map(message) }) } }));
+  await settle();
+  assert.ok(asked.filter(([before]) => before.startsWith("k")).length <= 8, JSON.stringify(asked));
+  const ids = follower.getState().view!.snapshot.entries.map((entry) => entry.id);
+  assert.deepEqual(ids, ["m5", "m6", "m7"], "a partial re-read missing k11 and k12 is not shown as the loaded part");
+  assert.equal(follower.getState().view!.hasOlder, true);
+  follower.stop();
+});
+
+test("a kept entry the host moved further back than the oldest is still read back", async () => {
+  const message = (id: string) => ({ type: "message" as const, id, role: "assistant" as const, text: id });
+  // The host moved "m4" before "m3", with an entry this Mac can't show between them.
+  const host = ["m1", "m4", "u1", "m3", "m5", "m6", "m7"];
+  const fake = fakeTransport([session({ hasOlder: true, entries: ["m3", "m4", "m5", "m6"].map(message) })]);
+  const asked: Array<[string, number | undefined]> = [];
+  fake.transport.older = async (_hostId, _botId, before, limit) => {
+    asked.push([before, limit]);
+    const end = host.indexOf(before);
+    if (end < 0) return { ok: false, error: { code: "http_error", status: 409, remoteCode: "operation_stale", message: "This Bot's chat changed. Read it again." } };
+    const start = Math.max(0, end - (limit ?? 2));
+    const sent = host.slice(start, end);
+    return {
+      ok: true,
+      value: {
+        botId: "bot_1", epoch: "e1", hasOlder: start > 0, olderCursor: sent[0], hostCount: sent.length,
+        entries: sent.filter((id) => id.startsWith("m")).map(message),
+      },
+    };
+  };
+  const follower = new RemoteBotSessionFollower(fake.transport, "host_a", "bot_1");
+  follower.start();
+  await settle();
+  fake.push(event(4, { type: "snapshot", payload: { session: session({ seq: 5, hasOlder: true, entries: ["m5", "m6", "m7"].map(message) }) } }));
+  await settle();
+  assert.deepEqual(asked[0], ["m5", 2], "the first read reaches m3 but not m4");
+  assert.deepEqual(follower.getState().view!.snapshot.entries.map((entry) => entry.id), ["m4", "m3", "m5", "m6", "m7"]);
+  assert.equal(follower.getState().view!.hasOlder, true);
+  follower.stop();
+});
+
+test("a host that reorders kept entries keeps every one the re-read finds, in the host's order", () => {
+  const message = (id: string) => ({ type: "message" as const, id, role: "assistant" as const, text: id });
+  const shown = remoteBotSessionView(session({ hasOlder: true, entries: ["m3", "m4", "m5", "m6"].map(message) }));
+  const fresh = remoteBotSessionView(session({ seq: 6, hasOlder: true, entries: ["m5", "m6"].map(message) }));
+  const kept = carryOlderRemoteBotEntries(shown, fresh);
+  assert.deepEqual(kept.snapshot.entries.map((entry) => entry.id), ["m3", "m4", "m5", "m6"]);
+  // The host now has "m4" before "m3".
+  const reread = withRereadOlderRemoteBotEntries(kept, 2, fresh, [
+    { botId: "bot_1", epoch: "e1", entries: ["m1", "m4", "m3"].map(message), hasOlder: false },
+  ]);
+  assert.deepEqual(reread.snapshot.entries.map((entry) => entry.id), ["m4", "m3", "m5", "m6"], "m1 is not added and m4 stays");
+  assert.equal(reread.hasOlder, true);
+  assert.equal(reread.olderCursor, "m4");
+});
+
+test("a page whose entries this Mac can't show still moves Load older past them", () => {
+  const message = (id: string, text: string) => ({ type: "message" as const, id, role: "assistant" as const, text });
+  const view = remoteBotSessionView(session({ hasOlder: true, entries: [message("m5", "Five")] }));
+  const skipped = withOlderRemoteBotEntries(view, { botId: "bot_1", epoch: "e1", entries: [], hasOlder: true, olderCursor: "h3" });
+  assert.equal(skipped.olderCursor, "h3", "the next page starts before the entries left out");
+  assert.equal(skipped.hasOlder, true);
 });
