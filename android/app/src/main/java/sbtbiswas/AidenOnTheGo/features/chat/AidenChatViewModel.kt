@@ -1871,7 +1871,7 @@ class AidenChatViewModel(
                         scheduleRateLimitedSendRetry(attempt, e, session)) {
                         // The Mac was only busy: keep the send and try it again.
                     } else {
-                        if (e is AidenRemoteClientException.Server && AidenDraftSendReconciliation.refusalSettlesSend(e.statusCode, e.body.code)) {
+                        if (e is AidenRemoteClientException.Server && e.isDecodedEnvelope && AidenDraftSendReconciliation.refusalSettlesSend(e.statusCode, e.body.code)) {
                             session?.let { withContext(ioDispatcher) { draftStore.settlePendingSend(attempt.key, it) } }
                             _pendingSend.value = null
                             _isPendingSendRefusedBecauseBusy.value = false

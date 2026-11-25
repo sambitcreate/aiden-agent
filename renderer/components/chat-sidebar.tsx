@@ -178,7 +178,11 @@ import {
   type RemoteSidebarProject,
   type SidebarProjectEntry,
 } from "../lib/sidebar-remote-groups";
-import { useLocalRepositoryIdentities, usePeerHostSidebar } from "../lib/hosts/use-peer-host-sidebar";
+import {
+  useLocalRepositoryIdentities,
+  usePeerHostSidebar,
+  type PeerHostSidebarData,
+} from "../lib/hosts/use-peer-host-sidebar";
 import {
   MachineBadges,
   MachineFilterChip,
@@ -470,12 +474,16 @@ export function ChatSidebar(props: ChatSidebarProps) {
   const { view } = useSidebarView();
   const inboxView = view === "inbox";
   const showsBotList = useRouterState({ select: (state) => sidebarShowsBotList(state.location, inboxView) });
+  // Paired hosts' rows stay live whichever list shows: the Bot list and a
+  // paired Mac's Bot chat read the same host caches this keeps current.
+  const peerHosts = usePeerHostSidebar();
   return capabilities.bots && showsBotList
     ? <BotSidebar />
-    : <WorkspaceChatSidebar {...props} />;
+    : <WorkspaceChatSidebar {...props} peerHosts={peerHosts} />;
 }
 
 function WorkspaceChatSidebar({
+  peerHosts,
   activeChatId,
   activeRemoteChat = null,
   titleReveal,
@@ -483,7 +491,7 @@ function WorkspaceChatSidebar({
   onClearScope,
   restorableScopeWorkspaceId = null,
   onRestoreScope,
-}: ChatSidebarProps) {
+}: ChatSidebarProps & { peerHosts: PeerHostSidebarData }) {
   const pathPreferences = useWorkspacePathPreferences();
   const navigate = useNavigate();
   const capabilities = useAppCapabilities();
@@ -552,7 +560,6 @@ function WorkspaceChatSidebar({
   const [projectGrouping, setProjectGrouping] = React.useState<SidebarProjectGrouping>(
     initialPreferences.projectGrouping,
   );
-  const peerHosts = usePeerHostSidebar();
   const hasHosts = peerHosts.hosts.length > 0;
   const remoteCapabilities = React.useMemo(
     () =>

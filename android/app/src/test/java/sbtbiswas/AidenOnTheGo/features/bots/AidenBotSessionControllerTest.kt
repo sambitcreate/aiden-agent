@@ -32,6 +32,7 @@ import org.junit.Test
 import org.junit.rules.TemporaryFolder
 import sbtbiswas.AidenOnTheGo.features.shared.activitymarks.AidenActivityMarkKind
 import sbtbiswas.AidenOnTheGo.models.*
+import sbtbiswas.AidenOnTheGo.networking.AidenRemoteClient
 import sbtbiswas.AidenOnTheGo.peerFixture
 import sbtbiswas.AidenOnTheGo.protocol.AidenRemoteCapability
 import java.time.Instant
@@ -86,7 +87,13 @@ class AidenBotSessionControllerTest {
     @Test fun sameChoiceUncertainRetryReusesBodyAndKey() = runTest {
         val body = json.decodeFromJsonElement(AidenRemoteErrorEnvelope.serializer(), accessSection().getValue("expired")).error
             .copy(code = AidenRemoteErrorCode.INTERNAL_ERROR)
-        for (failure in listOf(IOException("lost"), AidenRemoteClientException.Server(503, body))) {
+        val inFlightBody = body.copy(code = AidenRemoteErrorCode.IDEMPOTENCY_IN_FLIGHT)
+        for (failure in listOf(
+            IOException("lost"),
+            AidenRemoteClientException.Server(503, body),
+            AidenRemoteClientException.Server(409, inFlightBody),
+            AidenRemoteClientException.Server(429, body.copy(code = AidenRemoteErrorCode.RATE_LIMITED))
+        )) {
             val transport = FakeTransport(accessSession())
             val controller = AidenBotSessionController("bot_fixture_01", transport, backgroundScope)
             controller.refetch()
@@ -215,7 +222,12 @@ class AidenBotSessionControllerTest {
         controller.stopFollowing()
     }
     @Test fun sameDecisionUnknownRetryKeepsKeyAndDifferentDecisionSendsNewBody() = runTest {
-        for (failure in listOf(IOException("lost"), planError(503))) {
+        val inFlight409 = AidenRemoteClientException.Server(
+            409,
+            AidenRemoteErrorEnvelope.Body(AidenRemoteErrorCode.IDEMPOTENCY_IN_FLIGHT, "In flight", "req_in_flight", true)
+        )
+        val malformed409 = AidenRemoteClient.parseError(409, "{\"error\":{\"code\":\"idempotency_in_flight\"".toByteArray(Charsets.UTF_8))
+        for (failure in listOf(IOException("lost"), planError(503), inFlight409, malformed409)) {
             val initial = planSession(); val transport = FakeTransport(initial)
             val controller = AidenBotSessionController(initial.botId, transport, backgroundScope, plansSupported = true)
             controller.refetch(); transport.planFailure = failure
@@ -931,7 +943,7 @@ class AidenBotSessionControllerTest {
     }
 
     @Test fun legacyFirstTypedUnknownOutcomeKeepsItsUuidAndReconcilesCachedStateWithoutAnotherMutation()=runTest {
-        for(code in listOf("idempotency_in_flight","internal_error","new_resume_recovery","revision_conflict")) {
+        for(code in listOf("idempotency_in_flight","internal_error","new_resume_recovery")) {
             val base=FakeTransport(interruptedSession);val seen=mutableListOf<UUID>();var first=true
             val transport=object:AidenBotSessionTransport by base {
                 override suspend fun resume(botId:String,key:UUID):AidenBotSessionStateView {
@@ -945,6 +957,20 @@ class AidenBotSessionControllerTest {
             assertTrue(controller.resume());assertEquals(2,seen.size);assertEquals(seen[0],seen[1])
             assertEquals(2,base.sessionReads);assertTrue(controller.state.value.isInterrupted);assertTrue(base.sends.isEmpty())
         }
+    }
+
+    @Test fun legacyFirstRevisionConflictIsADefiniteRefusalSoTheNextResumeMintsANewKey()=runTest {
+        val base=FakeTransport(interruptedSession);val seen=mutableListOf<UUID>();var first=true
+        val transport=object:AidenBotSessionTransport by base {
+            override suspend fun resume(botId:String,key:UUID):AidenBotSessionStateView {
+                seen+=key
+                if(first) {first=false;throw AidenRemoteClientException.Server(409,AidenRemoteErrorEnvelope.Body(AidenRemoteErrorCode.REVISION_CONFLICT,"Changed","req",false))}
+                return AidenBotSessionStateView(AidenBotSessionState.RUNNING,false)
+            }
+        }
+        val controller=AidenBotSessionController(interruptedSession.botId,transport,backgroundScope)
+        controller.refetch();assertFalse(controller.resume());assertTrue(controller.state.value.isInterrupted)
+        controller.resume();assertEquals(2,seen.size);assertNotEquals(seen[0],seen[1])
     }
 
     @Test

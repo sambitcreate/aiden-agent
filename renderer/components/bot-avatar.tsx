@@ -206,6 +206,7 @@ export function BotAvatar({
   botId,
   name,
   photoLoading = "none",
+  photoUrl,
   size = "medium",
   state,
   working = false,
@@ -213,6 +214,8 @@ export function BotAvatar({
   avatar: BotAvatarValue;
   botId?: string;
   name: string;
+  /** A photo read elsewhere (a paired Mac's Bot), drawn over the shape like this Mac's own Bots' photos. */
+  photoUrl?: string;
   photoLoading?: "none" | "visible" | "immediate";
   size?: BotAvatarSize;
   /**
@@ -255,7 +258,8 @@ export function BotAvatar({
     photoLoading === "immediate" ? "selected" : "visible",
   );
   const [failedRevision, setFailedRevision] = React.useState<string>();
-  const showPhoto = photo && failedRevision !== photo.assetRevision;
+  const shown = photoUrl ? { dataUrl: photoUrl, assetRevision: photoUrl } : photo;
+  const showPhoto = shown && failedRevision !== shown.assetRevision;
   React.useEffect(() => {
     const node = avatarRef.current;
     if (!live || !node) return;
@@ -287,8 +291,8 @@ export function BotAvatar({
           alt=""
           className="absolute inset-0 size-full object-cover"
           draggable={false}
-          src={photo.dataUrl}
-          onError={() => setFailedRevision(photo.assetRevision)}
+          src={shown.dataUrl}
+          onError={() => setFailedRevision(shown.assetRevision)}
         />
       ) : null}
       {showPhoto && busy ? (

@@ -241,8 +241,11 @@ export interface BotSessionService {
   /**
    * Withdraw one queued message before its turn starts (Pi's
    * `abortSubmission`). A message already placed in a turn keeps running.
+   * `personOnly`: only the person's own message may be taken back; a routine's
+   * input, the self-intro or an id this Bot doesn't hold is `gone`. That check
+   * runs in the Bot's lane, so a send that allocates the id first is seen.
    */
-  withdraw(botId: string, submissionId: string): Promise<BotWithdrawResult>;
+  withdraw(botId: string, submissionId: string, options?: { personOnly?: boolean }): Promise<BotWithdrawResult>;
   state(botId: string): Promise<BotSessionState>;
   deleteBot(botId: string): Promise<void>;
   /**
@@ -1116,13 +1119,17 @@ export async function createBotSessionService(deps: BotSessionServiceDeps): Prom
       });
     },
 
-    withdraw(botId, submissionId) {
+    withdraw(botId, submissionId, options = {}) {
       return serialize(botId, async () => {
         const id = Number(submissionId);
         // A rounded id could name a different submission.
         if (!Number.isSafeInteger(id)) return "gone";
         await openBot(botId);
         const opened = await requireHost().open(botId);
+        if (options.personOnly) {
+          const record = (await requireHost().inspect(botId)).submissions.find((candidate) => Number(candidate.id) === id);
+          if (record === undefined || isQuietSubmission(record)) return "gone";
+        }
         const result = await opened.harness.abortSubmission(
           id as SubmissionId,
           ctx,

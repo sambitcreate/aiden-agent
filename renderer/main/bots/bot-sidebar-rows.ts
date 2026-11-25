@@ -25,8 +25,10 @@ export interface BotSidebarRow {
   lastTurnEnd?: "failed" | "stopped";
 }
 
-const BOT_WORKING_LINE = "Thinking…";
-const BOT_WAITING_LINE = "Waiting for you";
+/** A Bot row's line while its turn runs; paired Macs' Bots use it too. */
+export const BOT_WORKING_LINE = "Thinking…";
+/** A Bot row's line while it waits on the person; paired Macs' Bots use it too. */
+export const BOT_WAITING_LINE = "Waiting for you";
 
 function botSidebarRows(
   bots: readonly BotDefinition[],

@@ -819,6 +819,46 @@ final class AidenBotInstantEditTests: XCTestCase {
         XCTAssertNotEqual(mac.creates[2].key, mac.creates[3].key)
     }
 
+    func testReplayed409InternalErrorAfterLostCreateReleasesSettledKeyForFreshAttempt() async throws {
+        func serverError(_ status: Int, _ code: String) throws -> AidenRemoteClientError {
+            let body = try AidenRemoteJSONDecoder.decode(
+                AidenRemoteErrorEnvelope.Body.self,
+                from: Data(#"{"code":"\#(code)","message":"This Bot request cannot be safely repeated.","requestId":"req_create_replay","retryable":false}"#.utf8)
+            )
+            return .server(statusCode: status, body: body)
+        }
+
+        let mac = CreateMac()
+        let flow = createFlow()
+        var created = 0
+
+        // 1. First rejection response is lost: key is retained.
+        // 2. Same-key retry hits 409 idempotency_in_flight: key is still retained.
+        // 3. Same-key retry hits undecodable 409 (.unexpectedStatus(409)): key is still retained.
+        // 4. Same-key retry receives decoded 409 internal_error (settled replay): key is released.
+        // 5. Next Try Again mints a fresh key and succeeds.
+        mac.createErrors = [
+            URLError(.networkConnectionLost),
+            try serverError(409, "idempotency_in_flight"),
+            AidenRemoteClientError.unexpectedStatus(409),
+            try serverError(409, "internal_error"),
+        ]
+
+        await flow.submit(input, operations: try createOperations(mac)) { _ in created += 1 }
+        await flow.submit(try XCTUnwrap(flow.failure).input, operations: try createOperations(mac)) { _ in created += 1 }
+        await flow.submit(try XCTUnwrap(flow.failure).input, operations: try createOperations(mac)) { _ in created += 1 }
+        await flow.submit(try XCTUnwrap(flow.failure).input, operations: try createOperations(mac)) { _ in created += 1 }
+        let settledFailure = try XCTUnwrap(flow.failure)
+        await flow.submit(settledFailure.input, operations: try createOperations(mac)) { _ in created += 1 }
+
+        XCTAssertEqual(mac.creates.count, 5)
+        XCTAssertEqual(mac.creates[0].key, mac.creates[1].key, "Lost response keeps key")
+        XCTAssertEqual(mac.creates[1].key, mac.creates[2].key, "409 idempotency_in_flight keeps key")
+        XCTAssertEqual(mac.creates[2].key, mac.creates[3].key, "Undecodable 409 keeps key")
+        XCTAssertNotEqual(mac.creates[3].key, mac.creates[4].key, "Replayed 409 internal_error releases settled key so fresh attempt mints a new key")
+        XCTAssertEqual(created, 1)
+    }
+
     func testTryAgainAfterALostCreateReplaysTheSameRequestThroughACatalogChange() async throws {
         let mac = CreateMac()
         mac.createErrors = [URLError(.networkConnectionLost)]

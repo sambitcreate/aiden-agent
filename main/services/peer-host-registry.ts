@@ -142,6 +142,10 @@ export interface PeerClient {
  * 43) when a step is on the Bot's own screen there. `bot:images` (revision 45)
  * sends a Bot's shared images as entries whose bytes this Mac reads on demand,
  * instead of the line that tells the person to open the chat on the host.
+ * `bot:cards` (revision 27), `bot:access-requests` (revision 55) and
+ * `bot:plans` (revision 56) send the routine suggestions and memory lines,
+ * folder access cards and plans this Mac answers, instead of the host's
+ * "open it on that Mac" notice.
  */
 const NEGOTIATED_GRANTS: ReadonlyArray<readonly [grant: string, feature: string | null, call?: "own_call"]> = [
   ["tasks:read", AIDEN_REMOTE_CHAT_TASKS_FEATURE],
@@ -156,6 +160,10 @@ const NEGOTIATED_GRANTS: ReadonlyArray<readonly [grant: string, feature: string 
   ["bot:handoff-notes", AIDEN_REMOTE_BOT_DURABLE_SESSION_FEATURE, "own_call"],
   ["bot:handoff-on-mac", AIDEN_REMOTE_BOT_DURABLE_SESSION_FEATURE, "own_call"],
   ["bot:images", AIDEN_REMOTE_BOT_DURABLE_SESSION_FEATURE, "own_call"],
+  // The cards the Bot waits on or offers, answered here as on its own Mac.
+  ["bot:cards", AIDEN_REMOTE_BOT_DURABLE_SESSION_FEATURE, "own_call"],
+  ["bot:access-requests", AIDEN_REMOTE_BOT_DURABLE_SESSION_FEATURE, "own_call"],
+  ["bot:plans", AIDEN_REMOTE_BOT_DURABLE_SESSION_FEATURE, "own_call"],
   // Revision 50: no feature token; the host's own list is the whole signal.
   ["attachments:raw", null, "own_call"],
 ];
