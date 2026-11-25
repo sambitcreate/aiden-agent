@@ -74,6 +74,12 @@ test("expanded peer operations resolve to the contract's routes, not arbitrary U
     [{ operation: "botPause", resourceId: "bot_1", idempotencyKey: KEY }, "pauseBot"],
     [{ operation: "botUnpause", resourceId: "bot_1", idempotencyKey: KEY }, "unpauseBot"],
     [{ operation: "botConnectionRequest", resourceId: "bot_1", idempotencyKey: KEY, body: { pluginId: "notion" } }, "requestBotConnection"],
+    [{ operation: "botRespondPlan", resourceId: "bot_1", itemId: "plan-1", idempotencyKey: KEY, body: { decision: "approve" } }, "respondBotPlan"],
+    [{ operation: "botAnswerAccessRequest", resourceId: "bot_1", itemId: "wait-1", idempotencyKey: KEY, body: { choice: "once" } }, "answerBotAccessRequest"],
+    [
+      { operation: "botRespondRoutineProposal", resourceId: "bot_1", itemId: "4b1f8a52-7f0e-4b8e-9d55-3f2c1a6b7e10", idempotencyKey: KEY, body: { decision: "accept" } },
+      "respondBotRoutineProposal",
+    ],
     [{ operation: "uploadBotAttachment", resourceId: "bot_1", body: { name: "a.png" } }, "uploadBotAttachment"],
     [{ operation: "removeBotAttachment", resourceId: "bot_1", itemId: `att_${"A".repeat(43)}` }, "removeBotAttachment"],
   ];
@@ -119,6 +125,9 @@ test("expanded peer mutations demand a client-minted key and reject malformed pa
     "botPause",
     "botUnpause",
     "botConnectionRequest",
+    "botRespondPlan",
+    "botAnswerAccessRequest",
+    "botRespondRoutineProposal",
   ])
     assert.throws(
       () =>
@@ -146,6 +155,12 @@ test("expanded peer mutations demand a client-minted key and reject malformed pa
     { operation: "botAnswerHandoff", resourceId: "bot_1", itemId: "wait-1", idempotencyKey: KEY },
     { operation: "botHandoffOpenOnMac", resourceId: "bot_1", itemId: "wait-1", idempotencyKey: KEY, body: { url: "https://x" } },
     { operation: "botPause", resourceId: "bot_1", idempotencyKey: KEY, body: { by: "mac" } },
+    { operation: "botRespondPlan", resourceId: "bot_1", itemId: "plan/1", idempotencyKey: KEY, body: { decision: "approve" } },
+    { operation: "botRespondPlan", resourceId: "bot_1", itemId: "plan-1", idempotencyKey: KEY, body: { decision: "always" } },
+    { operation: "botAnswerAccessRequest", resourceId: "bot_1", itemId: "wait-1", idempotencyKey: KEY, body: { choice: "forever" } },
+    { operation: "botAnswerAccessRequest", resourceId: "bot_1", itemId: "wait-1", idempotencyKey: KEY, body: { choice: "once", path: "/" } },
+    { operation: "botRespondRoutineProposal", resourceId: "bot_1", itemId: "not-a-proposal", idempotencyKey: KEY, body: { decision: "accept" } },
+    { operation: "botRespondRoutineProposal", resourceId: "bot_1", itemId: "4b1f8a52-7f0e-4b8e-9d55-3f2c1a6b7e10", idempotencyKey: KEY, body: { decision: "accept", reason: "other" } },
     { operation: "runCancel", resourceId: "../../server", idempotencyKey: KEY },
     { operation: "bots", url: "https://elsewhere" },
     { operation: "removeAttachment", resourceId: "chat_1", itemId: "att_short" },
@@ -437,6 +452,20 @@ test("the host's real Bot session, send receipt and controls pass this Mac's con
   };
   assert.deepEqual([paused.state, paused.handoff], [handoffs.pausedSession.state, handoffs.pausedSession.handoff]);
   assert.equal(paused.state, "paused");
+  // A folder request and a plan reach the paired Mac on a plain read too, not only on the stream.
+  const asking = (await peerOperationResult({ operation: "botSession", resourceId: "bot_1" }, contract.botAccessRequests.session)) as {
+    accessRequest?: unknown;
+  };
+  assert.deepEqual(asking.accessRequest, contract.botAccessRequests.session.accessRequest);
+  const planning = (await peerOperationResult({ operation: "botSession", resourceId: "bot_1" }, contract.botPlans.session)) as {
+    plan?: unknown;
+  };
+  assert.deepEqual(planning.plan, contract.botPlans.session.plan);
+  const unreadable = (await peerOperationResult({ operation: "botSession", resourceId: "bot_1" }, {
+    ...contract.botPlans.session,
+    plan: { ...contract.botPlans.session.plan, status: "reconsidering" },
+  })) as { plan?: unknown };
+  assert.equal(unreadable.plan, null, "a plan this Mac can't read is left for the host");
   assert.deepEqual(
     await peerOperationResult({ operation: "botSend", resourceId: "bot_1" }, fixtures.botSessionSend!.response),
     fixtures.botSessionSend!.response,
@@ -535,4 +564,24 @@ test("an unknown Inbox placement falls back without rejecting the paired host's 
   assert.equal(result.summaries[0]?.inboxBucket, undefined);
   assert.equal(result.summaries[0]?.inboxSortAt, undefined);
   await assert.rejects(async () => peerOperationResult({ operation: "summaries" }, { summaries: [{ ...row, unread: "yes" }] }));
+});
+
+test("plan, access-card and routine-suggestion answers send what the host's routes take, and read their receipts", async () => {
+  const plan = contract.botPlans.respond;
+  const access = contract.botAccessRequests.answer;
+  const routine = contract.botRoutineProposalRespond;
+  assert.deepEqual(
+    peerOperationRequest({ operation: "botRespondPlan", resourceId: "bot_1", itemId: plan.response.planId, idempotencyKey: KEY, body: plan.request }).body,
+    plan.request,
+  );
+  assert.deepEqual(await peerOperationResult({ operation: "botRespondPlan" }, plan.response), plan.response);
+  assert.deepEqual(
+    peerOperationRequest({ operation: "botAnswerAccessRequest", resourceId: "bot_1", itemId: "wait-1", idempotencyKey: KEY, body: access.request }).body,
+    access.request,
+  );
+  assert.deepEqual(await peerOperationResult({ operation: "botAnswerAccessRequest" }, access.response), access.response);
+  assert.deepEqual(await peerOperationResult({ operation: "botRespondRoutineProposal" }, routine.response), routine.response);
+  // A receipt the contract doesn't allow never reaches the chat.
+  await assert.rejects(peerOperationResult({ operation: "botRespondPlan" }, { ...plan.response, status: "pending" }));
+  await assert.rejects(peerOperationResult({ operation: "botAnswerAccessRequest" }, { answered: false }));
 });

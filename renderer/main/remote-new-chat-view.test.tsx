@@ -353,3 +353,13 @@ test("a paired Mac's Bot's last message is its line only when nothing more press
   assert.equal(remoteBotLine({ ...bot, working: true, needsYou: true })?.kind, "waiting");
   assert.equal(remoteBotLine({ id: "b2", name: "Quiet" }), null);
 });
+
+test("a paired Mac that lists no Bots for a reason says it under its name, until the person searches", () => {
+  const groups = [{ host: { ...laptop, disabledReason: "To use Laptop's Bots here, pair this Mac with it again." }, bots: [] }];
+  const shown = (query: string) =>
+    renderSection(<RemoteBotsSection groups={remoteBotGroupsMatching(groups, query)} opening={null} onOpen={noop} />);
+  const view = dom(shown(""));
+  assert.match(view.text, /On Laptop/u);
+  assert.match(view.text, /pair this Mac with it again/u);
+  assert.equal(shown("planner"), "");
+});

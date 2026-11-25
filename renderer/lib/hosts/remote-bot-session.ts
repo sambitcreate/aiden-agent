@@ -4,11 +4,16 @@
 // transcript rows, cards and composer draw it.
 
 import { BOT_ACTIVITY_PHASES, type BotActivityPhase } from "../../shared/bot-activity";
+import type { BotPendingAccessRequest } from "../../shared/bot-access-requests";
 import type { BotLiveSnapshot, BotQueuedMessage, BotSessionState, BotTranscriptEntry } from "../../shared/bot-live";
+import type { BotPlanView } from "../../shared/bot-plans";
+import type { BotRoutineProposalEntryData } from "../../shared/bot-routine-proposals";
 import type { PeerHostView } from "../../shared/peer-host";
 import type {
+  AidenRemoteBotAccessRequest,
   AidenRemoteBotApproval,
   AidenRemoteBotHandoff,
+  AidenRemoteBotPlan,
   AidenRemoteBotQueuedMessage,
   AidenRemoteBotSession,
   AidenRemoteBotSessionActivity,
@@ -92,10 +97,23 @@ export function remoteBotTranscriptEntry(entry: AidenRemoteBotSessionEntry): Bot
     // (`useRemoteBotImages`); empty `data` marks an image not read yet.
     case "shared_image":
       return { id: entry.id, type: "shared_image", name: entry.name, mimeType: entry.mimeType, size: entry.size, data: "" };
-    // Cards this Mac does not opt into (`bot:cards`, and the revision-61
-    // `bot:settings-changes` and `bot:suggestions`); the host never sends them here.
+    // Revision 27 (`bot:cards`): the host names neither what changed nor why, so the line only says so.
     case "memory_update":
+      return withTime({ id: entry.id, type: "memory_update" as const, targets: [], source: "turn" as const }, entry.createdAt);
     case "routine_proposal":
+      return withTime(
+        {
+          id: entry.id,
+          type: "routine_proposal" as const,
+          // The host's own label already says when it runs; its schedule and timezone stay on the host.
+          proposal: { proposalId: entry.proposalId, name: entry.name, prompt: entry.prompt, label: entry.label } as BotRoutineProposalEntryData,
+          status: entry.status,
+          ...(entry.routineId ? { routineId: entry.routineId } : {}),
+        },
+        entry.createdAt,
+      );
+    // Cards this Mac does not opt into (the revision-61 `bot:settings-changes`
+    // and `bot:suggestions`); the host never sends them here.
     case "settings_change":
     case "skill_proposal":
     case "lesson":
@@ -151,6 +169,73 @@ function queued(value: readonly AidenRemoteBotQueuedMessage[] | undefined): BotQ
   }));
 }
 
+/**
+ * A plan's revision from what the card shows: the same plan read again (a
+ * reload, a reconnect) keeps it, so the card keeps its busy and error state,
+ * and any change gives a new one, so the updated card replaces the old.
+ */
+function remoteBotPlanRevision(plan: AidenRemoteBotPlan): number {
+  const shown = JSON.stringify([
+    plan.planId, plan.status, plan.title, plan.why,
+    plan.steps.map((step) => [step.text, step.status]),
+    plan.items.map((item) => [item.line, item.details, item.used ?? null, item.max ?? null]),
+    plan.expiresAt ?? null, plan.from ?? null,
+  ]);
+  // FNV-1a, 32-bit.
+  let hash = 0x811c9dc5;
+  for (let index = 0; index < shown.length; index++) {
+    hash ^= shown.charCodeAt(index);
+    hash = Math.imul(hash, 0x01000193);
+  }
+  return hash >>> 0;
+}
+
+/**
+ * Revision 56 (`bot:plans`): the host's plan as the plan card draws it. Its
+ * items carry no ids, so their place stands in; `revision` follows what the
+ * card shows (`remoteBotPlanRevision`), not the frame that carried it.
+ */
+export function remoteBotPlanView(botId: string, plan: AidenRemoteBotPlan): BotPlanView {
+  const revision = remoteBotPlanRevision(plan);
+  const expiresAt = time(plan.expiresAt);
+  return {
+    planId: plan.planId,
+    botId,
+    status: plan.status,
+    title: plan.title,
+    why: plan.why,
+    steps: plan.steps.map((step) => ({ text: step.text, status: step.status })),
+    items: plan.items.map((item, index) => ({
+      id: `item-${index}`,
+      line: item.line,
+      details: [...item.details],
+      ...(item.used !== undefined ? { used: item.used } : {}),
+      ...(item.max !== undefined ? { max: item.max } : {}),
+    })),
+    ...(expiresAt !== undefined ? { expiresAt } : {}),
+    revision,
+    ...(plan.from !== undefined ? { from: plan.from } : {}),
+  };
+}
+
+/**
+ * Revision 55 (`bot:access-requests`): the folder or whole-computer access
+ * the Bot is waiting on. The host keeps the tool call; `waitId` answers it.
+ */
+export function remoteBotAccessRequest(botId: string, request: AidenRemoteBotAccessRequest): BotPendingAccessRequest {
+  return {
+    botId,
+    waitId: request.waitId,
+    toolCallId: request.waitId,
+    target: request.target,
+    label: request.label,
+    ...(request.place !== undefined ? { place: request.place } : {}),
+    why: request.why,
+    choices: [...request.choices],
+    ...(request.approvalCount !== undefined ? { approvalCount: request.approvalCount } : {}),
+  };
+}
+
 function entries(value: readonly AidenRemoteBotSessionEntry[]): BotTranscriptEntry[] {
   return value.map(remoteBotTranscriptEntry).filter((entry): entry is BotTranscriptEntry => entry !== null);
 }
@@ -174,6 +259,8 @@ export function remoteBotSessionView(session: AidenRemoteBotSession): RemoteBotS
         : null,
       activity: activity(session.activity),
       queued: queued(session.queued),
+      accessRequest: session.accessRequest ? remoteBotAccessRequest(session.botId, session.accessRequest) : null,
+      plan: session.plan ? remoteBotPlanView(session.botId, session.plan) : null,
     },
     approval: session.approval,
     handoff: session.handoff ?? null,
@@ -233,10 +320,13 @@ export function applyRemoteBotSessionEvent(
       return next({});
     case "handoff":
       return { ...next({}), handoff: event.payload.handoff };
+    // Only sent to a Mac holding `bot:plans` or `bot:access-requests`; others read the host's notice line.
     case "plan":
+      return next({ plan: event.payload.plan ? remoteBotPlanView(snapshot.botId, event.payload.plan) : null });
     case "access_request":
-      // Paired desktops remain a legacy audience and use the host notice line.
-      return next({});
+      return next({
+        accessRequest: event.payload.accessRequest ? remoteBotAccessRequest(snapshot.botId, event.payload.accessRequest) : null,
+      });
     case "issues":
       // Contract revision 42: Bot issue cards are a phone surface in this
       // revision; the Mac reads the same cards from its own Bot transcript.

@@ -72,6 +72,12 @@ export type PeerWriteOperation =
   /** Contract revision 37: lift the person's pause (`DELETE /bots/{botId}/pause`). */
   | "botUnpause"
   | "botConnectionRequest"
+  /** Contract revision 56 (`bot:plans`): approve, Not now or Stop a plan; `itemId` is its `planId`. */
+  | "botRespondPlan"
+  /** Contract revision 55 (`bot:access-requests`): answer an access card; `itemId` is its `waitId`. */
+  | "botAnswerAccessRequest"
+  /** Contract revision 27 (`bot:cards`): accept or dismiss a suggested routine; `itemId` is its `proposalId`. */
+  | "botRespondRoutineProposal"
   | "uploadBotAttachment"
   /** `itemId` is the staged attachment. */
   | "removeBotAttachment";

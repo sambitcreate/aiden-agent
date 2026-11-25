@@ -16,12 +16,19 @@ import {
   AIDEN_REMOTE_CONTEXT_MODEL_ID,
   AIDEN_REMOTE_MAX_ENCODED_ATTACHMENT_NAME,
   encodeAidenRemoteAttachmentName,
+  parseAidenRemoteBotAccessAnswerReceipt,
+  parseAidenRemoteBotAccessAnswerRequest,
   parseAidenRemoteBotConnectionRequestReceipt,
   parseAidenRemoteBotHandoffAnswerReceipt,
   parseAidenRemoteBotHandoffAnswerRequest,
   parseAidenRemoteBotHandoffOpenOnMacReceipt,
   parseAidenRemoteBotMessageReceipt,
+  parseAidenRemoteBotPlanRespondReceipt,
+  parseAidenRemoteBotPlanRespondRequest,
   parseAidenRemoteBotQuestionAnswerReceipt,
+  parseAidenRemoteBotRoutineProposalId,
+  parseAidenRemoteBotRoutineProposalRespondRequest,
+  parseAidenRemoteBotRoutineProposalRespondResult,
   parseAidenRemoteBotSession,
   parseAidenRemoteBotSessionStateView,
   parseAidenRemoteChatContextPressure,
@@ -91,6 +98,9 @@ export const PEER_BOT_SESSION_MUTATIONS: ReadonlySet<string> = new Set([
   "botAnswerHandoff",
   "botPause",
   "botUnpause",
+  "botRespondPlan",
+  "botAnswerAccessRequest",
+  "botRespondRoutineProposal",
 ]);
 
 /** A fork names one message to cut at and, optionally, a summary of what followed. */
@@ -184,6 +194,9 @@ export async function peerOperationResult(
   if (name === "botAnswerHandoff") return parseAidenRemoteBotHandoffAnswerReceipt(value);
   if (name === "botHandoffOpenOnMac") return parseAidenRemoteBotHandoffOpenOnMacReceipt(value);
   if (name === "botConnectionRequest") return parseAidenRemoteBotConnectionRequestReceipt(value);
+  if (name === "botRespondPlan") return parseAidenRemoteBotPlanRespondReceipt(value);
+  if (name === "botAnswerAccessRequest") return parseAidenRemoteBotAccessAnswerReceipt(value);
+  if (name === "botRespondRoutineProposal") return parseAidenRemoteBotRoutineProposalRespondResult(value);
   return value;
 }
 
@@ -558,6 +571,25 @@ export function peerOperationRequest(
       path = `/bots/${id()}/connection-requests`;
       method = "POST";
       needsKey = true;
+      break;
+    case "botRespondPlan":
+      path = `/bots/${id()}/plans/${pattern(input.itemId, BOT_WAIT_ID)}/respond`;
+      method = "POST";
+      needsKey = true;
+      // Only `{ decision }` with a known decision reaches the host.
+      body = parseAidenRemoteBotPlanRespondRequest(input.body);
+      break;
+    case "botAnswerAccessRequest":
+      path = `/bots/${id()}/access-requests/${pattern(input.itemId, BOT_WAIT_ID)}/answer`;
+      method = "POST";
+      needsKey = true;
+      body = parseAidenRemoteBotAccessAnswerRequest(input.body);
+      break;
+    case "botRespondRoutineProposal":
+      path = `/bots/${id()}/routine-proposals/${parseAidenRemoteBotRoutineProposalId(input.itemId)}/respond`;
+      method = "POST";
+      needsKey = true;
+      body = parseAidenRemoteBotRoutineProposalRespondRequest(input.body);
       break;
     case "uploadBotAttachment":
       // Not keyed, like a chat upload: an unused staged upload expires on the host.
