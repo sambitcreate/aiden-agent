@@ -13,12 +13,14 @@ import { ReceiptLine } from "./receipt-line";
 import {
   BOT_COMPUTER_SHARED_DEFAULT_NAME,
   BOT_COMPUTER_SHARED_ID,
+  type BotComputerAssignTarget,
   type BotComputerVmStatus,
 } from "../../shared/bot-computers";
 import {
   botInstructionsDiff,
   botSettingsHeldTitle,
   botSettingsReceiptLabel,
+  formatBotSettingsComputerLine,
   type BotSettingsChangeEntryData,
   type BotSettingsChangeStatus,
   type BotSettingsField,
@@ -72,31 +74,52 @@ export function SettingsChangeReceipt({
   );
 }
 
-function resolveHeldComputerLine(
-  line: string,
+function targetFromLegacyComputerLine(line: string): BotComputerAssignTarget | undefined {
+  if (!line.startsWith("Computer: ")) return undefined;
+  const raw = line.slice("Computer: ".length).trim();
+  if (!raw || raw === "None") return undefined;
+  if (raw === BOT_COMPUTER_SHARED_DEFAULT_NAME || raw === BOT_COMPUTER_SHARED_ID) {
+    return { kind: "shared" };
+  }
+  if (raw === "New dedicated computer") return { kind: "new" };
+  const newNamed = /^New dedicated computer \((.+)\)$/u.exec(raw);
+  if (newNamed) return { kind: "new", name: newNamed[1] };
+  return { kind: "existing", computerId: raw };
+}
+
+function resolveHeldComputerTarget(
+  target: BotComputerAssignTarget,
   botId: string | undefined,
   computers: readonly BotComputerVmStatus[] | undefined,
   botNames: ReadonlyMap<string, string> | undefined,
 ): { text: string; sharedWarning?: string } {
-  if (!line.startsWith("Computer: ") || !computers || computers.length === 0) {
-    return { text: line };
+  if (target.kind === "new") {
+    return { text: formatBotSettingsComputerLine(target) };
   }
-  const raw = line.slice("Computer: ".length).trim();
-  const matched = computers.find(
-    (vm) =>
-      vm.id === raw ||
-      vm.vmName === raw ||
-      vm.name === raw ||
-      (raw === BOT_COMPUTER_SHARED_DEFAULT_NAME && vm.id === BOT_COMPUTER_SHARED_ID),
-  );
-  if (!matched) return { text: line };
+  const targetId = target.kind === "shared" ? BOT_COMPUTER_SHARED_ID : target.computerId;
+  // Match strictly by exact VM id — never by display name, which can be user/Bot-chosen and collide with another VM's id.
+  const matched = computers?.find((vm) => vm.id === targetId);
+  if (!matched) {
+    return {
+      text: formatBotSettingsComputerLine(target, (entry) =>
+        entry.kind === "shared"
+          ? BOT_COMPUTER_SHARED_DEFAULT_NAME
+          : entry.kind === "existing"
+            ? entry.computerId
+            : "New dedicated computer",
+      ),
+      sharedWarning:
+        target.kind === "shared"
+          ? `Bots on ${BOT_COMPUTER_SHARED_DEFAULT_NAME} share one Linux desktop, user (aiden-bot), and Chromium sign-ins.`
+          : undefined,
+    };
+  }
   const otherNames = matched.assignedBotIds
     .filter((id) => id !== botId)
     .map((id) => botNames?.get(id) ?? id);
-  const text =
-    otherNames.length > 0
-      ? `Computer: ${matched.name} (already used by ${otherNames.join(", ")})`
-      : `Computer: ${matched.name}`;
+  const text = formatBotSettingsComputerLine(target, () =>
+    otherNames.length > 0 ? `${matched.name} (already used by ${otherNames.join(", ")})` : matched.name,
+  );
   const sharedWarning =
     matched.kind === "shared" || otherNames.length > 0
       ? `Bots on ${matched.name} share one Linux desktop, user (aiden-bot), and Chromium sign-ins.`
@@ -134,11 +157,22 @@ export function HeldSettingsCard({
     setBusy(decision);
     void onRespond(decision).catch(() => undefined).finally(() => setBusy(null));
   };
-  const resolvedOther = change.lines
+  const computerTarget =
+    change.computer ??
+    (change.fields.includes("computer")
+      ? change.lines.map(targetFromLegacyComputerLine).find((target) => target !== undefined)
+      : undefined);
+  const needsComputersLoaded = Boolean(
+    change.fields.includes("computer") && computerTarget !== undefined && computerTarget.kind !== "new",
+  );
+  const waitingForComputers = needsComputersLoaded && computers === undefined;
+  const resolvedComputer = computerTarget
+    ? resolveHeldComputerTarget(computerTarget, botId, computers, botNames)
+    : undefined;
+  const other = change.lines
     .filter((line) => line !== "Instructions")
-    .map((line) => resolveHeldComputerLine(line, botId, computers, botNames));
-  const other = resolvedOther.map((item) => item.text);
-  const sharedWarning = resolvedOther.find((item) => item.sharedWarning)?.sharedWarning;
+    .map((line) => (line.startsWith("Computer: ") && resolvedComputer ? resolvedComputer.text : line));
+  const sharedWarning = resolvedComputer?.sharedWarning;
   return (
     <BotNoticeCard
       label={title}
@@ -155,7 +189,12 @@ export function HeldSettingsCard({
               Edit
             </Button>
           ) : null}
-          <Button variant="accent" size="small" disabled={busy !== null} onClick={() => respond("apply")}>
+          <Button
+            variant="accent"
+            size="small"
+            disabled={busy !== null || waitingForComputers}
+            onClick={() => respond("apply")}
+          >
             {busy === "apply" ? "Applying…" : "Apply"}
           </Button>
         </>
@@ -164,12 +203,16 @@ export function HeldSettingsCard({
       <Text as="p" variant="small" color="secondary">
         {heldReasonText(botName, change.heldReason ?? "not_owner", change.fields)}
       </Text>
-      {other.length > 0 ? (
+      {waitingForComputers ? (
+        <Text as="p" variant="small" color="tertiary">
+          Loading computer details…
+        </Text>
+      ) : other.length > 0 ? (
         <Text as="p" variant="small" color="secondary">
           {other.join(" · ")}
         </Text>
       ) : null}
-      {sharedWarning ? (
+      {!waitingForComputers && sharedWarning ? (
         <Text as="p" variant="small" color="secondary">
           {sharedWarning}
         </Text>

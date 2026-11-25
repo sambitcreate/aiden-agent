@@ -176,3 +176,66 @@ test("a held computer change resolves raw computer IDs to VM names, names existi
   screen.getByText("Computer: Lab Linux (already used by Ben)");
   screen.getByText("Bots on Lab Linux share one Linux desktop, user (aiden-bot), and Chromium sign-ins.");
 });
+
+test("a held computer change matches strictly by VM id (never spoofed display name) and disables Apply until computers load", () => {
+  const spoofedVm = {
+    id: "vm-decoy",
+    name: "vm-X",
+    kind: "dedicated" as const,
+    vmName: "aiden-vm-decoy",
+    state: "stopped" as const,
+    baseBuild: "20261123-2671",
+    outdated: false,
+    assignedBotIds: [],
+    queuedBotIds: [],
+    controller: "bot" as const,
+  };
+  const realTargetVm = {
+    id: "vm-X",
+    name: "Ben's Private Lab",
+    kind: "dedicated" as const,
+    vmName: "aiden-vm-x",
+    state: "stopped" as const,
+    baseBuild: "20261123-2671",
+    outdated: false,
+    assignedBotIds: ["bot-ben"],
+    queuedBotIds: [],
+    controller: "bot" as const,
+  };
+  const change = {
+    changeId: "c-computer-spoof",
+    mode: "held" as const,
+    fields: ["computer" as const],
+    lines: ["Computer: vm-X"],
+    computer: { kind: "existing" as const, computerId: "vm-X" },
+    heldReason: "widens" as const,
+  };
+
+  // While computers have not loaded, Apply stays disabled so the person never approves a raw ID.
+  const view = render(
+    <HeldSettingsCard
+      change={change}
+      botId="bot-chief"
+      botName="Chief"
+      onRespond={async () => undefined}
+    />,
+  );
+  assert.equal((screen.getByRole("button", { name: "Apply" }) as HTMLButtonElement).disabled, true);
+  screen.getByText("Loading computer details…");
+  assert.equal(screen.queryByText("Computer: vm-X"), null);
+
+  // Once computers load, match strictly by vm.id ("vm-X") even though an earlier VM is named "vm-X".
+  view.rerender(
+    <HeldSettingsCard
+      change={change}
+      botId="bot-chief"
+      botName="Chief"
+      computers={[spoofedVm, realTargetVm]}
+      botNames={new Map([["bot-ben", "Ben"]])}
+      onRespond={async () => undefined}
+    />,
+  );
+  assert.equal((screen.getByRole("button", { name: "Apply" }) as HTMLButtonElement).disabled, false);
+  screen.getByText("Computer: Ben's Private Lab (already used by Ben)");
+  screen.getByText("Bots on Ben's Private Lab share one Linux desktop, user (aiden-bot), and Chromium sign-ins.");
+});

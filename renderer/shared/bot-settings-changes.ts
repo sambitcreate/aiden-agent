@@ -121,6 +121,8 @@ export interface BotSettingsChangeEntryData {
   instructions?: string;
   /** The instructions when the held change was proposed, so the card can mark what changes. */
   previousInstructions?: string;
+  /** Proposed Linux computer target when `fields` includes `"computer"`. */
+  computer?: BotComputerAssignTarget;
   /** Why a held change waits; absent on older entries, which were all `not_owner`. */
   heldReason?: BotSettingsHeldReason;
   /** False when Undo can't put this change back (the Bot had no model of its own before). */
@@ -225,6 +227,20 @@ export function botSettingsHeldTitle(fields: readonly BotSettingsField[]): strin
   return "Update settings?";
 }
 
+/** Format a structured `computer` assignment target into its `Computer: ...` summary line. */
+export function formatBotSettingsComputerLine(
+  target: BotComputerAssignTarget | null | undefined,
+  computerLabel?: (target: BotComputerAssignTarget) => string,
+): string {
+  if (!target) return "Computer: None";
+  if (computerLabel) return `Computer: ${computerLabel(target)}`;
+  if (target.kind === "shared") return `Computer: ${BOT_COMPUTER_SHARED_DEFAULT_NAME}`;
+  if (target.kind === "new") {
+    return target.name ? `Computer: New dedicated computer (${target.name})` : "Computer: New dedicated computer";
+  }
+  return `Computer: ${target.computerId}`;
+}
+
 /** One readable line for a changed field. `modelLabel` names a model. */
 export function botSettingsLine(
   field: BotSettingsField,
@@ -251,16 +267,8 @@ export function botSettingsLine(
     }
     case "model":
       return `Model: ${modelLabel(after.model)}`;
-    case "computer": {
-      const target = after.computer;
-      if (!target) return "Computer: None";
-      if (computerLabel) return `Computer: ${computerLabel(target)}`;
-      if (target.kind === "shared") return `Computer: ${BOT_COMPUTER_SHARED_DEFAULT_NAME}`;
-      if (target.kind === "new") {
-        return target.name ? `Computer: New dedicated computer (${target.name})` : "Computer: New dedicated computer";
-      }
-      return `Computer: ${target.computerId}`;
-    }
+    case "computer":
+      return formatBotSettingsComputerLine(after.computer, computerLabel);
   }
 }
 
@@ -419,6 +427,18 @@ export function botSettingsChangeOf(data: unknown): BotSettingsChangeEntryData |
   if (data.previousInstructions !== undefined && typeof data.previousInstructions !== "string") return undefined;
   if (data.heldReason !== undefined && !HELD_REASONS.includes(data.heldReason as BotSettingsHeldReason)) return undefined;
   if (data.undoable !== undefined && data.undoable !== false) return undefined;
+  let computer: BotComputerAssignTarget | undefined;
+  if (data.computer !== undefined) {
+    try {
+      const parsed = parseBotComputerAssignTarget(data.computer);
+      computer =
+        parsed.kind === "existing" && parsed.computerId === BOT_COMPUTER_SHARED_ID
+          ? { kind: "shared" }
+          : parsed;
+    } catch {
+      return undefined;
+    }
+  }
   return {
     changeId: data.changeId,
     mode: data.mode,
@@ -426,6 +446,7 @@ export function botSettingsChangeOf(data: unknown): BotSettingsChangeEntryData |
     lines: data.lines as string[],
     ...(typeof data.instructions === "string" ? { instructions: data.instructions } : {}),
     ...(typeof data.previousInstructions === "string" ? { previousInstructions: data.previousInstructions } : {}),
+    ...(computer !== undefined ? { computer } : {}),
     ...(data.heldReason !== undefined ? { heldReason: data.heldReason as BotSettingsHeldReason } : {}),
     ...(data.undoable === false ? { undoable: false as const } : {}),
   };
