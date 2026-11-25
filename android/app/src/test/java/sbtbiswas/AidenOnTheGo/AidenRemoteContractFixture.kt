@@ -170,6 +170,19 @@ data class AidenStreamRecoveryFixture(
     val resetEvents: List<JsonObject>
 )
 
+/**
+ * Revision 66 (`chat:agent-slider`): a `GET /models` body carrying the slider, the turn a ready
+ * stop sends, and the chat it leaves. The models body and chat stay raw so tests decode them
+ * through the client, as the live routes are.
+ */
+@Serializable
+data class AidenAgentSliderFixture(
+    val capability: AidenRemoteCapability,
+    val models: JsonObject,
+    val turnRequest: AidenTurnStart,
+    val chat: JsonObject
+)
+
 @Serializable
 data class AidenRemoteContractFixture(
     val contractRevision: Int,
@@ -220,6 +233,7 @@ data class AidenRemoteContractFixture(
     val streamInput: AidenStreamInputFixture? = null,
     val streamStatus: AidenStreamStatus? = null,
     val streamRecovery: AidenStreamRecoveryFixture? = null,
+    val agentSlider: AidenAgentSliderFixture? = null,
     val question: AidenQuestionFixture? = null,
     /** Raw catalog wire object; tests decode it through the strict codec so
      * the shared fixture exercises the same bounds as the live route. */

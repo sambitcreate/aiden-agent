@@ -37,7 +37,9 @@ import sbtbiswas.AidenOnTheGo.models.*
 import sbtbiswas.AidenOnTheGo.diagnostics.*
 import sbtbiswas.AidenOnTheGo.features.chat.AidenChatForkErrors
 import sbtbiswas.AidenOnTheGo.features.remote.aidenProgressCapabilitiesToRequest
+import sbtbiswas.AidenOnTheGo.features.remote.aidenRequestChatAgentSlider
 import sbtbiswas.AidenOnTheGo.features.remote.aidenRequestStreamSnapshotReasons
+import sbtbiswas.AidenOnTheGo.features.remote.aidenShouldRequestChatAgentSlider
 import sbtbiswas.AidenOnTheGo.features.remote.aidenShouldRequestStreamSnapshotReasons
 import sbtbiswas.AidenOnTheGo.networking.AidenHostQuery
 import sbtbiswas.AidenOnTheGo.networking.AidenRemoteClient
@@ -1700,4 +1702,149 @@ class AidenRemoteClientTest {
         assertNull(aidenRequestStreamSnapshotReasons(client, offering, installation(base)))
     }
 
+    private fun agentSliderFixture(): AidenAgentSliderFixture =
+        Json { ignoreUnknownKeys = true }.decodeFromJsonElement(contractFixture().getValue("agentSlider"))
+
+    @Test
+    fun agentSliderModelsTurnAndChatDecodeTheSharedFixtureThroughTheClient() = runBlocking {
+        val fixture = agentSliderFixture()
+        assertEquals(AidenRemoteCapability.CHAT_AGENT_SLIDER, fixture.capability)
+
+        server.enqueue(MockResponse().setResponseCode(200).setBody(fixture.models.toString()))
+        val catalog = client.modelCatalog()
+        assertEquals("/api/aiden/v1/models", server.takeRequest().path)
+        assertEquals("model_fixture", catalog.defaults["provider_fixture"])
+        val slider = requireNotNull(catalog.agentSlider)
+        assertEquals(5, slider.stops.size)
+        assertEquals("stop_1b2c3d4e", slider.homeStopId)
+        assertEquals("Balanced", slider.homeStop.label)
+        assertEquals(listOf("Instant", "Balanced", "Deep", "Elsewhere", "Choose a model"), slider.stops.map { it.label })
+
+        val elsewhere = slider.stops[3]
+        assertEquals(AidenAgentSliderAvailability.NOT_SIGNED_IN, elsewhere.availability)
+        assertEquals("max", elsewhere.thinkingLevel)
+        assertNull("a stop that can't run here sends nothing", elsewhere.turnSelection)
+        val unassigned = slider.stops[4]
+        assertEquals(AidenAgentSliderAvailability.UNASSIGNED, unassigned.availability)
+        assertNull(unassigned.modelId)
+        assertNull(unassigned.turnSelection)
+        assertNull("the quick stop has no level of its own", slider.stops[0].thinkingLevel)
+
+        // The fixture's turn is exactly one ready stop's selection.
+        val request = fixture.turnRequest
+        val sent = AidenChatModelSelection(request.providerId, request.modelId, request.thinkingLevel)
+        assertEquals(listOf("stop_2c3d4e5f"), slider.stops.filter { it.turnSelection == sent }.map { it.id })
+
+        // The phone sends that turn as the fixture spells it, level included.
+        val message = Json.parseToJsonElement(fixture.chat.getValue("messages").jsonArray[0].toString())
+        server.enqueue(MockResponse().setResponseCode(202).setBody(
+            """{"turnId":"turn_slider_01","streamId":"stream_slider_01","status":"running","message":$message}"""
+        ))
+        val chatId = fixture.chat.getValue("id").jsonPrimitive.content
+        client.startTurn(chatId, request)
+        val turn = server.takeRequest()
+        assertEquals("/api/aiden/v1/chats/$chatId/turns", turn.path)
+        assertEquals(
+            contractFixture().getValue("agentSlider").jsonObject.getValue("turnRequest"),
+            Json.parseToJsonElement(turn.body.readUtf8())
+        )
+
+        // The chat afterwards carries the stop's level as its own.
+        server.enqueue(MockResponse().setResponseCode(200).setBody(fixture.chat.toString()))
+        val chat = client.chat(chatId)
+        assertEquals("high", chat.thinkingLevel)
+        assertEquals(sent, AidenChatModelSelection(chat.providerId, chat.modelId, chat.thinkingLevel))
+
+        // A messages page carries the same level in its revision-23 metadata.
+        val window = kotlinx.serialization.json.JsonObject(
+            fixture.chat.filterKeys { it != "id" } +
+                ("chatId" to JsonPrimitive(chatId)) + ("hasOlder" to JsonPrimitive(false))
+        )
+        server.enqueue(MockResponse().setResponseCode(200).setBody(window.toString()))
+        assertEquals("high", client.messagesWindow(chatId).chat()?.thinkingLevel)
+    }
+
+    @Test
+    fun agentSliderIsNullFromAnOlderHostOrABrokenSliderAndTheModelListSurvives() = runBlocking {
+        val models = agentSliderFixture().models
+        server.enqueue(MockResponse().setResponseCode(200).setBody(
+            kotlinx.serialization.json.JsonObject(models - "agentSlider").toString()
+        ))
+        val older = client.modelCatalog()
+        assertNull(older.agentSlider)
+        assertEquals(listOf("model_fixture_quick", "model_fixture"), older.providers.single().models.map { it.id })
+
+        val slider = models.getValue("agentSlider").jsonObject
+        val broken = listOf(
+            slider + ("homeStopId" to JsonPrimitive("stop_missing")),
+            slider + ("stops" to JsonArray(slider.getValue("stops").jsonArray.take(2))),
+            slider + ("stops" to JsonArray(slider.getValue("stops").jsonArray.mapIndexed { index, stop ->
+                // An assigned stop that claims to be unassigned breaks the contract.
+                if (index == 0) kotlinx.serialization.json.JsonObject(stop.jsonObject + ("availability" to JsonPrimitive("unassigned"))) else stop
+            }))
+        )
+        for (bad in broken) {
+            server.enqueue(MockResponse().setResponseCode(200).setBody(
+                kotlinx.serialization.json.JsonObject(models + ("agentSlider" to kotlinx.serialization.json.JsonObject(bad))).toString()
+            ))
+            val catalog = client.modelCatalog()
+            assertNull(catalog.agentSlider)
+            assertEquals(2, catalog.providers.single().models.size)
+        }
+    }
+
+    @Test
+    fun aChatsOwnThinkingLevelNeedsItsModelAndOlderChatsStillRead() = runBlocking {
+        val chat = agentSliderFixture().chat
+        val withoutModel = kotlinx.serialization.json.JsonObject(chat - "providerId" - "modelId")
+        server.enqueue(MockResponse().setResponseCode(200).setBody(withoutModel.toString()))
+        val failure = runCatching { client.chat(chat.getValue("id").jsonPrimitive.content) }.exceptionOrNull()
+        assertTrue("a level without its model fails closed, got $failure", failure is AidenRemoteContractException)
+
+        val older = kotlinx.serialization.json.JsonObject(chat - "thinkingLevel")
+        server.enqueue(MockResponse().setResponseCode(200).setBody(older.toString()))
+        val decoded = client.chat(chat.getValue("id").jsonPrimitive.content)
+        assertNull(decoded.thinkingLevel)
+        assertEquals("model_fixture", decoded.modelId)
+    }
+
+    @Test
+    fun agentSliderCapabilityIsNegotiatedAloneOnlyFromAMacThatOffersIt() = runBlocking {
+        val base = listOf(AidenRemoteCapability.SERVER_READ, AidenRemoteCapability.CHAT_READ, AidenRemoteCapability.CHAT_WRITE)
+        val withSlider = base + AidenRemoteCapability.CHAT_AGENT_SLIDER
+        fun mac(caps: List<AidenRemoteCapability>, offers: List<AidenRemoteCapability>) =
+            AidenServer(instanceId = "inst_66", name = "Mac", capabilities = caps, serverCapabilities = (caps + offers).distinct())
+        fun installation(held: List<AidenRemoteCapability>) = AidenInstallation(
+            instanceId = "inst_66", deviceId = "dev_66", name = "Mac",
+            endpoint = "https://aiden.test/api/aiden/v1", serverSpkiSha256 = "sha256/test",
+            deviceCapabilities = held, serverCapabilities = held, createdAt = Instant.parse("2026-11-24T12:00:00Z")
+        )
+        val offering = mac(base, listOf(AidenRemoteCapability.CHAT_AGENT_SLIDER))
+        assertTrue(aidenShouldRequestChatAgentSlider(offering, installation(base)))
+        assertFalse(aidenProgressCapabilitiesToRequest(offering, installation(base)).contains(AidenRemoteCapability.CHAT_AGENT_SLIDER))
+        assertFalse("a Mac that doesn't offer it is never asked", aidenShouldRequestChatAgentSlider(mac(base, emptyList()), installation(base)))
+        assertFalse(aidenShouldRequestChatAgentSlider(mac(withSlider, emptyList()), installation(withSlider)))
+        assertNull(aidenRequestChatAgentSlider(client, mac(base, emptyList()), installation(base)))
+        assertEquals(0, server.requestCount)
+
+        val listed = JsonArray(withSlider.map { JsonPrimitive(it.rawValue) })
+        server.enqueue(MockResponse().setResponseCode(200).setBody("""{"capabilities":$listed}"""))
+        server.enqueue(MockResponse().setResponseCode(200).setBody(
+            """{"protocolVersion":1,"instanceId":"inst_66","name":"Mac","appVersion":"1.0.0","connectionMode":"lan","serverTime":"2026-11-24T12:00:00.000Z","capabilities":$listed,"serverCapabilities":$listed}"""
+        ))
+        val granted = requireNotNull(aidenRequestChatAgentSlider(client, offering, installation(base)))
+        val ask = server.takeRequest(5, TimeUnit.SECONDS)!!
+        assertEquals("/api/aiden/v1/device/capabilities", ask.path)
+        assertEquals(
+            listOf(agentSliderFixture().capability.rawValue),
+            Json.parseToJsonElement(ask.body.readUtf8()).jsonObject.getValue("accepts").jsonArray.map { it.jsonPrimitive.content }
+        )
+        assertEquals(withSlider, granted.granted)
+        assertEquals("/api/aiden/v1/server", server.takeRequest(5, TimeUnit.SECONDS)!!.path)
+
+        server.enqueue(MockResponse().setResponseCode(400).setBody(
+            """{"error":{"code":"invalid_request","message":"Unknown capability.","requestId":"req_66","retryable":false}}"""
+        ))
+        assertNull("a Mac that refuses the name leaves the pairing as it was", aidenRequestChatAgentSlider(client, offering, installation(base)))
+    }
 }

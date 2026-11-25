@@ -1253,7 +1253,12 @@ data class AidenChat(
     var revision: String,
     var titlePending: Boolean? = null,
     /** Set when the chat was created by Fork (revision 21). */
-    val forkedFrom: AidenChatForkLineage? = null
+    val forkedFrom: AidenChatForkLineage? = null,
+    /**
+     * Revision 66: the chat's own thinking level, sent only with its model and never on a Bot
+     * chat. Older hosts never send it.
+     */
+    var thinkingLevel: String? = null
 ) {
     val isBotChat: Boolean get() = botId != null
     val lastViewedMessageId: String? get() = messages.lastOrNull()?.id
@@ -1271,7 +1276,8 @@ data class AidenChat(
             messages.size > 10_000 ||
             !messages.all { it.isWireSafe } ||
             titlePending == false ||
-            updatedAt.isBefore(createdAt)
+            updatedAt.isBefore(createdAt) ||
+            !AidenThinkingLevels.isValidChatLevel(thinkingLevel, modelId, botId)
         ) {
             throw AidenRemoteContractException.InvalidJson("Invalid Chat model")
         }
@@ -1308,7 +1314,9 @@ data class AidenChatMessagesWindow(
     @Serializable(with = InstantIso8601Serializer::class) val createdAt: Instant? = null,
     @Serializable(with = InstantIso8601Serializer::class) val updatedAt: Instant? = null,
     /** Fork lineage (revision 21), on a fork's pages as on its whole-chat read. */
-    val forkedFrom: AidenChatForkLineage? = null
+    val forkedFrom: AidenChatForkLineage? = null,
+    /** Revision 66: the chat's own thinking level, with its model, as on a whole-chat read. */
+    val thinkingLevel: String? = null
 ) {
     init {
         if (chatId.isEmpty() || chatId.length > AidenRemoteProtocol.MAX_IDENTIFIER_LENGTH ||
@@ -1322,7 +1330,7 @@ data class AidenChatMessagesWindow(
         // Revision-23 metadata is all-or-nothing and held to the chat
         // projection's rules: a partial set fails closed rather than leaving a
         // refresh to mix the page's title with a stale model.
-        val hasAnyMetadata = listOf(workspaceId, botId, title, titlePending, providerId, modelId, createdAt, updatedAt)
+        val hasAnyMetadata = listOf(workspaceId, botId, title, titlePending, providerId, modelId, createdAt, updatedAt, thinkingLevel)
             .any { it != null }
         if (hasAnyMetadata) chat() ?: throw AidenRemoteContractException.InvalidJson("Invalid messages window metadata")
     }
@@ -1348,7 +1356,8 @@ data class AidenChatMessagesWindow(
             updatedAt = updatedAt,
             revision = revision,
             titlePending = titlePending,
-            forkedFrom = forkedFrom
+            forkedFrom = forkedFrom,
+            thinkingLevel = thinkingLevel
         )
     }
 
@@ -1580,13 +1589,132 @@ data class AidenProvider(
 @Serializable
 data class AidenModelCatalog(
     val providers: List<AidenProvider>,
-    val defaults: Map<String, String> = emptyMap()
+    val defaults: Map<String, String> = emptyMap(),
+    /**
+     * Revision 66: the host's Agent Slider. Null from an older host, a host without a readable
+     * slider, or a slider that breaks the contract; the phone then offers only the model list.
+     */
+    @Serializable(with = AidenAgentSliderTolerantSerializer::class)
+    val agentSlider: AidenAgentSlider? = null
 ) {
     val visibleProviders: List<AidenProvider>
         get() = providers.mapNotNull { p ->
             val v = p.visibleModels
             if (v.isEmpty()) null else p.copy(models = v)
         }
+}
+
+/** The generation thinking levels (`GENERATION_THINKING_LEVELS` in `renderer/shared/generation-thinking.ts`). */
+object AidenThinkingLevels {
+    val ALL: List<String> = listOf("off", "low", "medium", "high", "xhigh", "max")
+
+    /**
+     * Revision 66: a chat's own level needs its model and is regular-chat-only. Its value is only
+     * bounded, so a level a later host adds never costs the phone the whole chat.
+     */
+    internal fun isValidChatLevel(level: String?, modelId: String?, botId: String?): Boolean =
+        level == null || (modelId != null && botId == null && level.isNotEmpty() && level.length <= 32)
+}
+
+/** Revision 66: why an Agent Slider stop can or cannot run from this phone. */
+@Serializable
+enum class AidenAgentSliderAvailability {
+    @SerialName("ready") READY,
+    @SerialName("unassigned") UNASSIGNED,
+    @SerialName("provider-missing") PROVIDER_MISSING,
+    @SerialName("not-signed-in") NOT_SIGNED_IN,
+    @SerialName("model-missing") MODEL_MISSING,
+    @SerialName("hidden") HIDDEN
+}
+
+/**
+ * Revision 66: one stop of `GET /models` `agentSlider`. Provider and model come together, a level
+ * only with a model, and a stop is `unassigned` exactly when it names no model. [thinkingLevel] is
+ * the level a turn on this stop runs with on the host, already fitted to the model.
+ */
+@Serializable
+data class AidenAgentSliderStop(
+    val id: String,
+    val label: String,
+    val providerId: String? = null,
+    val modelId: String? = null,
+    val thinkingLevel: String? = null,
+    val availability: AidenAgentSliderAvailability
+) {
+    init {
+        val labelCodePoints = label.codePointCount(0, label.length)
+        if (!STOP_ID.matches(id) ||
+            label.trim() != label || labelCodePoints !in 1..LABEL_MAX ||
+            label.codePoints().anyMatch { Character.getType(it) == Character.CONTROL.toInt() } ||
+            (providerId == null) != (modelId == null) ||
+            (providerId != null && (providerId.isEmpty() || providerId.length > 256)) ||
+            (modelId != null && (modelId.isEmpty() || modelId.length > 512)) ||
+            (thinkingLevel != null && (modelId == null || thinkingLevel !in AidenThinkingLevels.ALL)) ||
+            (modelId == null) != (availability == AidenAgentSliderAvailability.UNASSIGNED)
+        ) {
+            throw AidenRemoteContractException.InvalidJson("Invalid Agent Slider stop")
+        }
+    }
+
+    val isReady: Boolean get() = availability == AidenAgentSliderAvailability.READY
+
+    /** What a turn sent from this stop names: exactly its provider, model and level. Null unless ready. */
+    val turnSelection: AidenChatModelSelection?
+        get() = if (isReady) AidenChatModelSelection(providerId, modelId, thinkingLevel) else null
+
+    companion object {
+        private val STOP_ID = Regex("^[A-Za-z0-9_-]{1,64}$")
+        private const val LABEL_MAX = 24
+    }
+}
+
+/** Revision 66: the host's Agent Slider, 3 to 7 stops left to right, and the Reset to home stop. */
+@Serializable
+data class AidenAgentSlider(
+    val stops: List<AidenAgentSliderStop>,
+    val homeStopId: String
+) {
+    init {
+        if (stops.size !in MIN_STOPS..MAX_STOPS ||
+            stops.map { it.id }.toSet().size != stops.size ||
+            stops.none { it.id == homeStopId }
+        ) {
+            throw AidenRemoteContractException.InvalidJson("Invalid Agent Slider")
+        }
+    }
+
+    val homeStop: AidenAgentSliderStop get() = stops.first { it.id == homeStopId }
+
+    companion object {
+        const val MIN_STOPS = 3
+        const val MAX_STOPS = 7
+    }
+}
+
+/**
+ * Reads `agentSlider` without letting it cost the phone its model list: a slider that breaks the
+ * contract reads as null, as if the host had none.
+ */
+object AidenAgentSliderTolerantSerializer : KSerializer<AidenAgentSlider?> {
+    override val descriptor: SerialDescriptor = JsonElement.serializer().descriptor.nullable
+
+    override fun deserialize(decoder: Decoder): AidenAgentSlider? {
+        val json = decoder as? JsonDecoder ?: return decoder.decodeSerializableValue(AidenAgentSlider.serializer())
+        val element = json.decodeJsonElement()
+        return try {
+            json.json.decodeFromJsonElement(AidenAgentSlider.serializer(), element)
+        } catch (_: SerializationException) {
+            null
+        } catch (_: IllegalArgumentException) {
+            null
+        } catch (_: AidenRemoteContractException) {
+            null
+        }
+    }
+
+    override fun serialize(encoder: Encoder, value: AidenAgentSlider?) {
+        if (value == null) encoder.encodeNull() else encoder.encodeSerializableValue(AidenAgentSlider.serializer(), value)
+    }
 }
 
 @Serializable

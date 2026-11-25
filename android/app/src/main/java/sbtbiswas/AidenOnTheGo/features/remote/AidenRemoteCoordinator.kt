@@ -212,6 +212,13 @@ internal fun aidenShouldRequestChatContinueInNewChat(server: AidenServer, instal
 internal fun aidenShouldRequestStreamSnapshotReasons(server: AidenServer, installation: AidenInstallation): Boolean =
     aidenShouldRequestSoloCapability(AidenRemoteCapability.STREAM_SNAPSHOT_REASONS, server, installation)
 
+/**
+ * Revision 66: a Mac that offers `chat:agent-slider` in `serverCapabilities` is asked for it alone
+ * after `stream:snapshot-reasons`, unless [installation] already holds it.
+ */
+internal fun aidenShouldRequestChatAgentSlider(server: AidenServer, installation: AidenInstallation): Boolean =
+    aidenShouldRequestSoloCapability(AidenRemoteCapability.CHAT_AGENT_SLIDER, server, installation)
+
 private fun aidenShouldRequestSoloCapability(
     capability: AidenRemoteCapability,
     server: AidenServer,
@@ -399,6 +406,24 @@ internal suspend fun aidenRequestStreamSnapshotReasons(
     aidenRequestCapabilitiesAlone(
         if (aidenShouldRequestStreamSnapshotReasons(server, installation)) {
             listOf(AidenRemoteCapability.STREAM_SNAPSHOT_REASONS)
+        } else emptyList(),
+        client,
+        stillCurrent
+    )
+
+/**
+ * Revision 66: asks [server] for `chat:agent-slider` alone. A Mac that refuses it (400 or 404)
+ * leaves the pairing as it was; turns from this phone then leave the chat's own level unchanged.
+ */
+internal suspend fun aidenRequestChatAgentSlider(
+    client: AidenRemoteClient,
+    server: AidenServer,
+    installation: AidenInstallation,
+    stillCurrent: () -> Boolean = { true }
+): AidenSoloCapabilityNegotiation? =
+    aidenRequestCapabilitiesAlone(
+        if (aidenShouldRequestChatAgentSlider(server, installation)) {
+            listOf(AidenRemoteCapability.CHAT_AGENT_SLIDER)
         } else emptyList(),
         client,
         stillCurrent
@@ -828,10 +853,18 @@ class AidenRemoteCoordinator(
                     server = continueServer,
                     request = ::aidenRequestStreamSnapshotReasons
                 )
+                // Revision 66: `chat:agent-slider` goes alone too.
+                val agentSliderServer = negotiateSoloCapability(
+                    generation = generation,
+                    installation = installation,
+                    client = newClient,
+                    server = snapshotReasonsServer,
+                    request = ::aidenRequestChatAgentSlider
+                )
                 // Revision 59: `bot:watches` goes alone, without another feature token.
                 val watchesServer = negotiateSoloCapability(
                     generation = generation, installation = installation, client = newClient,
-                    server = snapshotReasonsServer, request = ::aidenRequestBotWatches
+                    server = agentSliderServer, request = ::aidenRequestBotWatches
                 )
                 val openWorkServer = negotiateSoloCapability(generation = generation, installation = installation,
                     client = newClient, server = watchesServer, request = ::aidenRequestBotOpenWork)
