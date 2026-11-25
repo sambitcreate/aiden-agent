@@ -476,7 +476,10 @@ test.describe("folder workspaces", () => {
     await expect(page.getByRole("button", { name: /^Approvals: Chat only\./u })).toBeVisible();
 
     await expect(page.locator('[data-workspace-tool="review"]')).toHaveCount(0);
-    await expect(page.locator('[data-workspace-tool="files"]')).toBeDisabled();
+    // Tools that need folder access are left out rather than greyed; the chip says why.
+    await expect(page.locator('[data-workspace-tool="files"]')).toHaveCount(0);
+    await expect(page.locator("[data-terminal-toggle]")).toHaveCount(0);
+    await expect(page.locator('[data-workspace-tool="browser"]')).toBeVisible();
     const menu = await openChipMenu(page);
     await expect(menu.locator("[data-workspace-chip-status]")).toHaveText("Workspace access is off");
     await expect(menu.getByRole("menuitem", { name: /Show in Finder|Open folder/u })).toHaveCount(0);
@@ -617,6 +620,7 @@ test("a workspace without a folder keeps only folder-free tools", async ({ aiden
   await startPersistedChat(page, () => chooseFolderlessWorkspace(page));
   await expect(page.locator('[data-workspace-tool="review"]')).toHaveCount(0);
   await expect(page.locator('[data-workspace-tool="files"]')).toHaveCount(0);
+  await expect(page.locator("[data-terminal-toggle]")).toHaveCount(0);
   await expect(page.locator('[data-workspace-tool="browser"]')).toBeVisible();
   // Nothing to act on without a folder, so the chip is a plain label, not a menu.
   const chip = page.locator("[data-workspace-chip]");

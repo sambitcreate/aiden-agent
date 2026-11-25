@@ -1914,6 +1914,45 @@ textarea {
   pointer-events: none;
 }
 
+/* Header controls that come and go (ToolbarPresence). The slot's one grid column
+   widens from 0 while the control fades and settles from the popup scale, so the
+   neighbours glide instead of jumping. The negative end margin cancels the bar's
+   2px gap while collapsed. The clip keeps a sliding control inside its slot and
+   leaves room for the 2px focus ring at its 2px offset. Reduce Motion zeroes the
+   duration tokens, so everything lands at once. */
+.toolbar-presence {
+  display: grid;
+  flex-shrink: 0;
+  grid-template-columns: 1fr;
+  clip-path: inset(-4px);
+  transition:
+    grid-template-columns var(--motion-duration) var(--motion-easing),
+    margin-inline-end var(--motion-duration) var(--motion-easing),
+    opacity var(--motion-duration) var(--motion-easing),
+    scale var(--motion-duration) var(--motion-easing);
+}
+
+.toolbar-presence > * {
+  min-width: 0;
+}
+
+.toolbar-presence[data-presence="exiting"] {
+  grid-template-columns: 0fr;
+  margin-inline-end: -2px;
+  opacity: 0;
+  scale: var(--motion-popup-scale);
+  pointer-events: none;
+}
+
+@starting-style {
+  .toolbar-presence[data-enter="animate"] {
+    grid-template-columns: 0fr;
+    margin-inline-end: -2px;
+    opacity: 0;
+    scale: var(--motion-popup-scale);
+  }
+}
+
 :root[data-reduce-motion="false"] .activity-feed-stack > .activity-feed-row {
   animation: aiden-activity-row-in 120ms ease-out both;
 }

@@ -107,3 +107,42 @@ test("corrupt messaging storage is reported without rejecting Bot startup or alt
   assert.equal(await readFile(file, "utf8"), "broken");
   await service.dispose();
 });
+
+test("disposing before start fences post and forgetBot without instantiating the courier until start()", async () => {
+  let factories = 0;
+  let forgotten: string[] = [];
+  const service = createBotMessageLifecycle({
+    report: () => assert.fail("unexpected startup failure"),
+    create: (): BotMessageCourier => {
+      factories += 1;
+      return {
+        start: async () => {},
+        post: async () => ({ status: "sent", deliveryId: "d1", to: { id: "B", name: "B" } }),
+        dispose: async () => {},
+        forgetBot: async (id) => {
+          forgotten.push(id);
+        },
+        announceWaiting: async () => undefined,
+      };
+    },
+  });
+
+  await service.dispose();
+  assert.equal(factories, 0);
+  const refused = await service.post({
+    fromBotId: "A",
+    target: "B",
+    message: "hello",
+    deliveryId: "d1",
+    runRequestIds: [undefined],
+  });
+  assert.equal(refused.status, "refused");
+  assert.throws(() => service.forgetBot("A"), /shut down/u);
+  assert.equal(factories, 0, "closed lifecycle must never construct the courier lazily");
+
+  await service.start();
+  await service.forgetBot("A");
+  assert.equal(factories, 1);
+  assert.deepEqual(forgotten, ["A"]);
+  await service.dispose();
+});
