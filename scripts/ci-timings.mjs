@@ -8,6 +8,7 @@ const FAILURE_CONCLUSIONS = new Set(["failure", "timed_out", "startup_failure", 
 const STEP_FAILURE_CONCLUSIONS = new Set(["failure", "timed_out", "cancelled"]);
 const MAX_PRIOR_ATTEMPTS = 5;
 const COLLECT_BUDGET_MS = 180_000;
+const MAX_CLOCK_SKEW_SECONDS = 5;
 const MAX_LOG_LINE_LENGTH = 4096;
 const MAX_FAILED_TEST_LENGTH = 200;
 const ANSI_ESCAPE = new RegExp(`${String.fromCharCode(0x1b)}\\[[0-9;?]*[ -/]*[@-~]`, "gu");
@@ -16,6 +17,13 @@ const GENERIC_ANNOTATION = /^(?:Process completed with exit code\b|Error$)/iu;
 function seconds(start, end) {
   const value = (Date.parse(end) - Date.parse(start)) / 1000;
   return Number.isFinite(value) && value >= 0 ? value : null;
+}
+
+function secondsAllowingSmallSkew(start, end, maxSkewSeconds = MAX_CLOCK_SKEW_SECONDS) {
+  const value = (Date.parse(end) - Date.parse(start)) / 1000;
+  if (!Number.isFinite(value)) return null;
+  if (value >= 0) return value;
+  return value >= -maxSkewSeconds ? 0 : null;
 }
 
 function timestampMs(value) {
@@ -65,18 +73,35 @@ function stripPlaywrightSuffixes(value) {
   return text;
 }
 
+function unescapeAnnotationProperty(value) {
+  return String(value).replace(/%(3A|2C|0D|0A|25)/giu, (match, hex) => {
+    switch (hex.toUpperCase()) {
+      case "3A": return ":";
+      case "2C": return ",";
+      case "0D": return "\r";
+      case "0A": return "\n";
+      case "25": return "%";
+      default: return match;
+    }
+  });
+}
+
 function extractAnnotationFallback(line) {
   const runnerError = /^##\[error\](.+)$/u.exec(line);
   if (runnerError) {
     const text = runnerError[1].trim();
     return text && !GENERIC_ANNOTATION.test(text) ? sanitizeInline(text) : null;
   }
-  const commandError = /^::error(?:\s+([^:]*))?::(.*)$/u.exec(line);
-  if (commandError) {
-    const props = commandError[1] ?? "";
-    const titleMatch = /(?:^|,)title=([^,]+)/u.exec(props);
-    const candidate = (titleMatch ? titleMatch[1] : commandError[2]).trim();
-    return candidate && !GENERIC_ANNOTATION.test(candidate) ? sanitizeInline(candidate) : null;
+  if (line.startsWith("::error::") || /^::error\s/u.test(line)) {
+    const sep = line.indexOf("::", 7);
+    if (sep >= 7) {
+      const props = line.slice(7, sep).trim();
+      const message = unescapeAnnotationProperty(line.slice(sep + 2)).trim();
+      const titleMatch = /(?:^|,)title=([^,]*)/u.exec(props);
+      const title = titleMatch ? unescapeAnnotationProperty(titleMatch[1]).trim() : "";
+      if (title && !GENERIC_ANNOTATION.test(title)) return sanitizeInline(title);
+      if (message && !GENERIC_ANNOTATION.test(message)) return sanitizeInline(message);
+    }
   }
   return null;
 }
@@ -231,7 +256,7 @@ export function findFirstFailure(attempts, options = {}) {
   const candidates = [];
   for (const entry of ordered) {
     const failedJobs = (entry.jobs ?? [])
-      .filter((job) => job.status === "completed" && FAILURE_CONCLUSIONS.has(job.conclusion));
+      .filter((job) => (job.run_attempt === undefined || job.run_attempt === entry.attempt) && job.status === "completed" && FAILURE_CONCLUSIONS.has(job.conclusion));
     for (const [index, job] of failedJobs.entries()) {
       const step = (job.steps ?? []).find((candidate) => STEP_FAILURE_CONCLUSIONS.has(candidate.conclusion)) ?? null;
       const failedAt = timestampMs(step?.completed_at ?? step?.started_at ?? job.completed_at ?? job.started_at);
@@ -294,15 +319,19 @@ export function findFirstFailure(attempts, options = {}) {
 }
 
 export function summarizeJobs(jobs, createdAt, options = {}) {
-  const completed = jobs.filter((job) => job.status === "completed" && job.conclusion !== "skipped");
+  const currentAttempt = Number.isInteger(options.currentAttempt) ? options.currentAttempt : null;
+  const attemptJobs = currentAttempt === null
+    ? jobs
+    : jobs.filter((job) => job.run_attempt === undefined || job.run_attempt === currentAttempt);
+  const completed = attemptJobs.filter((job) => job.status === "completed" && job.conclusion !== "skipped");
   const rows = completed.map((job) => ({
     name: job.name,
     result: job.conclusion,
     seconds: seconds(job.started_at, job.completed_at),
     queueSeconds: seconds(job.created_at, job.started_at),
-    waitSeconds: seconds(createdAt, job.created_at),
+    waitSeconds: secondsAllowingSmallSkew(createdAt, job.created_at),
     // Total wait before execution (waiting on jobs + runner queue).
-    startOffset: seconds(createdAt, job.started_at),
+    startOffset: secondsAllowingSmallSkew(createdAt, job.started_at),
     platform: (job.labels ?? []).find((label) => /^(macos|ubuntu|windows)-/u.test(label)) ?? "unknown",
     steps: (job.steps ?? []).filter((step) => step.conclusion !== "skipped").map((step) => ({
       name: step.name,
@@ -311,10 +340,10 @@ export function summarizeJobs(jobs, createdAt, options = {}) {
   }));
   const totals = {};
   for (const row of rows) if (row.seconds !== null) totals[row.platform] = (totals[row.platform] ?? 0) + row.seconds;
-  const elapsed = completed.map((job) => seconds(createdAt, job.completed_at)).filter((value) => value !== null);
+  const elapsed = completed.map((job) => secondsAllowingSmallSkew(createdAt, job.completed_at)).filter((value) => value !== null);
   const firstFailure = options.firstFailure !== undefined
     ? options.firstFailure
-    : findFirstFailure([{ attempt: 1, jobs }], { currentAttempt: 1, currentJobs: jobs });
+    : findFirstFailure([{ attempt: currentAttempt ?? 1, jobs }], { currentAttempt: currentAttempt ?? 1, currentJobs: jobs });
   const phaseTimings = options.phaseTimings ?? [];
   return {
     rows,
@@ -439,7 +468,10 @@ export function collectReport(env = process.env, execute = execFileSync, options
   const jobs = pages.flatMap((page) => page.jobs);
 
   const hasCurrentBlockingFailure = jobs.some(
-    (job) => job.status === "completed" && FAILURE_CONCLUSIONS.has(job.conclusion) && failureTier(job.name) < 2,
+    (job) => (job.run_attempt === undefined || job.run_attempt === attemptNumber)
+      && job.status === "completed"
+      && FAILURE_CONCLUSIONS.has(job.conclusion)
+      && failureTier(job.name) < 2,
   );
   const attempts = [];
   if (!hasCurrentBlockingFailure) {
@@ -466,7 +498,12 @@ export function collectReport(env = process.env, execute = execFileSync, options
     logsByJobId: (job) => fetchLog(job.id),
   });
 
-  return renderSummary(summarizeJobs(jobs, metadata.run_started_at ?? metadata.created_at, { firstFailure }));
+  return renderSummary(
+    summarizeJobs(jobs, metadata.run_started_at ?? metadata.created_at, {
+      firstFailure,
+      currentAttempt: attemptNumber,
+    }),
+  );
 }
 
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {

@@ -576,3 +576,108 @@ test("collectReport caps prior attempt scans and respects the shared API time bu
   assert.equal(budgetedCalls.filter((endpoint) => endpoint.includes("/attempts/1/")).length, 1);
   assert.equal(budgetedCalls.filter((endpoint) => endpoint.includes("/attempts/2/")).length, 0);
 });
+
+test("partial rerun filters carried-over run_attempt jobs out of attempt totals/steps and clamps small clock skew to 0s", () => {
+  const attempt2Start = "2026-11-24T10:30:00Z";
+  // Carried-over attempt 1 job returned by GitHub's /attempts/2/jobs on "Re-run failed jobs".
+  const carriedOverJob = makeJob({
+    id: 9101,
+    run_attempt: 1,
+    name: "Desktop production build",
+    conclusion: "success",
+    created_at: "2026-11-24T10:00:25Z",
+    started_at: "2026-11-24T10:01:25Z",
+    completed_at: "2026-11-24T10:11:25Z",
+    labels: ["macos-26"],
+    steps: [{ name: "Build desktop app", conclusion: "success", started_at: "2026-11-24T10:02:00Z", completed_at: "2026-11-24T10:11:00Z" }],
+  });
+  const attempt1FailedJob = makeJob({
+    id: 9102,
+    run_attempt: 1,
+    name: "Electron E2E (3/5)",
+    conclusion: "failure",
+    created_at: "2026-11-24T10:05:00Z",
+    started_at: "2026-11-24T10:06:00Z",
+    completed_at: "2026-11-24T10:14:00Z",
+    html_url: "https://github.com/owner/repo/actions/runs/980/job/9102",
+    labels: ["macos-26"],
+    steps: [{ number: 10, name: "Run deterministic Electron E2E shard", conclusion: "failure", completed_at: "2026-11-24T10:13:58Z" }],
+  });
+  // Root rerun job stamped 1 second BEFORE metadata.run_started_at due to whole-second clock skew.
+  const rerunPassedJob = makeJob({
+    id: 9202,
+    run_attempt: 2,
+    name: "Electron E2E (3/5)",
+    conclusion: "success",
+    created_at: "2026-11-24T10:29:59Z",
+    started_at: "2026-11-24T10:30:20Z",
+    completed_at: "2026-11-24T10:34:20Z",
+    html_url: "https://github.com/owner/repo/actions/runs/980/job/9202",
+    labels: ["macos-26"],
+    steps: [{ name: "Run deterministic Electron E2E shard", conclusion: "success", started_at: "2026-11-24T10:30:30Z", completed_at: "2026-11-24T10:34:10Z" }],
+  });
+
+  const summary = summarizeJobs([carriedOverJob, rerunPassedJob], attempt2Start, { currentAttempt: 2 });
+  assert.equal(summary.rows.length, 1);
+  assert.equal(summary.rows[0].name, "Electron E2E (3/5)");
+  assert.equal(summary.rows[0].waitSeconds, 0);
+  assert.equal(summary.rows[0].queueSeconds, 21);
+  assert.equal(summary.rows[0].seconds, 240);
+  assert.equal(summary.totals["macos-26"], 240);
+  assert.equal(summary.elapsed, 260);
+
+  // Also verify through collectReport that attempt 1's failure stays visible while carried-over job is excluded from attempt 2 table/steps.
+  const execute = (_command, args) => {
+    const endpoint = args.at(-1);
+    if (endpoint === "repos/owner/repo/actions/runs/980/attempts/2") {
+      return JSON.stringify({ run_started_at: attempt2Start });
+    }
+    if (endpoint === "repos/owner/repo/actions/runs/980/attempts/2/jobs?per_page=100") {
+      return JSON.stringify([{ jobs: [carriedOverJob, rerunPassedJob] }]);
+    }
+    if (endpoint === "repos/owner/repo/actions/runs/980/attempts/1/jobs?per_page=100") {
+      return JSON.stringify([{ jobs: [carriedOverJob, attempt1FailedJob] }]);
+    }
+    if (endpoint === "repos/owner/repo/actions/jobs/9102/logs") {
+      return "not ok 1 - flaky viewport check\n";
+    }
+    throw new Error(`Unexpected endpoint: ${endpoint}`);
+  };
+  const report = collectReport(
+    { GITHUB_REPOSITORY: "owner/repo", GITHUB_RUN_ID: "980", GITHUB_RUN_ATTEMPT: "2" },
+    execute,
+  );
+  assert.match(report, /### First failure/u);
+  assert.match(report, /attempt 1 — rerun passed on attempt 2/u);
+  assert.match(report, /\| Electron E2E \(3\/5\) \| success \| 240s \| 21s \| 0s \| macos-26 \|/u);
+  assert.match(report, /- macos-26: 4\.00 runner-minutes/u);
+  assert.doesNotMatch(report, /Desktop production build/u);
+  assert.doesNotMatch(report, /Build desktop app/u);
+});
+
+test("extractFirstFailedTest parses colons and escapes in ::error properties and falls back to message when title is generic", () => {
+  assert.equal(
+    extractFirstFailedTest("::error file=ios/Tests.swift,title=AidenShellUITests:testLaunch::Timed out\n"),
+    "AidenShellUITests:testLaunch",
+  );
+  assert.equal(
+    extractFirstFailedTest("::error file=C:\\repo\\spec.ts,title=tests/e2e/foo.spec.ts%3A12%3A5%2C retry::Failed assertion\n"),
+    "tests/e2e/foo.spec.ts:12:5, retry",
+  );
+  assert.equal(
+    extractFirstFailedTest("::error title=Error::Simulator failed to boot\n"),
+    "Simulator failed to boot",
+  );
+  assert.equal(
+    extractFirstFailedTest("::error title=Process completed with exit code 1.::Actual crash message\n"),
+    "Actual crash message",
+  );
+  assert.equal(
+    extractFirstFailedTest("::error title=::Message with empty title\n"),
+    "Message with empty title",
+  );
+  assert.equal(
+    extractFirstFailedTest("::error::Bare workflow error message\n"),
+    "Bare workflow error message",
+  );
+});
