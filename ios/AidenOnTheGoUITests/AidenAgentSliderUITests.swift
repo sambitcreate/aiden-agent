@@ -2,8 +2,8 @@ import XCTest
 
 /// Contract revision 66 on a phone (`-AidenDemoAgentSlider`): the composer's
 /// slider chip opens the Agent Slider, a stop moves the chat, and the turn
-/// runs on that stop's model and level. The demo Mac's reply names the stop
-/// whose model and level the turn asked for.
+/// runs on that stop's model and level, and so does a plain follow-up. The
+/// demo Mac's reply names the stop whose model and level the turn asked for.
 final class AidenAgentSliderUITests: XCTestCase {
     override func setUp() {
         continueAfterFailure = false
@@ -61,6 +61,16 @@ final class AidenAgentSliderUITests: XCTestCase {
         XCTAssertTrue(reply.waitForExistence(timeout: 15), "The turn didn't run on Deep's model and level")
         XCTAssertTrue(value(of: chip).contains("Deep"), "After the turn the chip read \(value(of: chip))")
         shoot("chat-answered-on-deep")
+
+        // The pick asked the Mac to keep Deep's level as the chat's own, so a
+        // plain follow-up still runs there.
+        composer.tap()
+        composer.typeText("And once more.")
+        app.buttons["Send message"].firstMatch.tap()
+        let replies = app.staticTexts.matching(NSPredicate(format: "label == %@", "Answered on the Deep stop."))
+        let followUp = XCTNSPredicateExpectation(predicate: NSPredicate(format: "count >= 2"), object: replies)
+        XCTAssertEqual(XCTWaiter.wait(for: [followUp], timeout: 15), .completed, "The follow-up left Deep's level")
+        XCTAssertTrue(value(of: chip).contains("Deep"), "After the follow-up the chip read \(value(of: chip))")
         app.terminate()
     }
 

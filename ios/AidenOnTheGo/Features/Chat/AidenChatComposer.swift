@@ -291,7 +291,6 @@ enum AidenVoiceCaptureLifecyclePolicy {
     }
 }
 
-/// The face of the model chip: the provider, the model and its thinking level.
 /// Every model the Mac offers, by provider, with each model's levels: the
 /// composer's model menu, and Other models in the slider sheet.
 struct AidenComposerModelMenuContent: View {
@@ -354,6 +353,7 @@ struct AidenComposerModelMenuContent: View {
     }
 }
 
+/// The face of the model chip: the provider, the model and its thinking level.
 struct AidenComposerModelChipLabel: View {
     /// What the chip shows on one line, in the order it tries them.
     enum Fit: CaseIterable {

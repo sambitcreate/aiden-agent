@@ -58,7 +58,9 @@ export interface AidenRemoteProviderProjection {
  * catalog deliberately leaves out (an agent harness, an id past the length
  * limit, an embedding model, or one past the size budget); such a stop
  * carries no ids, labels or level. `providerLabel` is the configured
- * provider's label and `modelLabel` the model's human name, never an id.
+ * provider's label and `modelLabel` the model's catalog label: its human
+ * name, or its id when the provider's catalog has no name for it. A stop
+ * that cannot run carries a modelLabel only when there is a real name.
  */
 export interface AidenRemoteAgentSliderStopProjection {
   id: string;

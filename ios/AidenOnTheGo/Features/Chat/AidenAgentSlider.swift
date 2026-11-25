@@ -41,8 +41,9 @@ struct AidenAgentSliderPosition: Equatable, Sendable {
 
 /// The phone's Agent Slider rules, matching the Mac's composer: the active stop
 /// is the one the person chose while the chat runs on it, else the first exact
-/// match on the chat's provider, model and level; no match is Custom, and a step skips stops that can't run. Nothing here
-/// substitutes another model for a stop.
+/// match on the chat's provider, model and level. No match is Custom, and a
+/// step skips stops that can't run. Nothing here substitutes another model for
+/// a stop.
 enum AidenAgentSliderResolver {
     /// `BOT_THINKING_LEVEL_LABELS` in `renderer/shared/bot-routine-models.ts`.
     static func effortLabel(_ level: String?) -> String? {

@@ -3091,23 +3091,35 @@ final class AidenChatTests: XCTestCase {
     /// Revision 66: with the Agent Slider a new chat starts on the Mac's last
     /// model and level, the stops move the chat's selection, and a turn sends
     /// the stop's provider, model and level exactly, a level-less stop sending
-    /// none where the model menu would send the model's default. Only a stop
-    /// or level the person picked on the phone asks the Mac to keep it. A Mac
-    /// that doesn't offer the capability keeps the model menu, and a grant
-    /// that arrives after the catalog puts the chat on the slider's terms.
+    /// none where the model menu would send the model's default. A new chat's
+    /// first send, and a stop or level the person picked on the phone, ask the
+    /// Mac to keep it, so the chat the Mac sends back stays on its stop. A Mac
+    /// that doesn't offer the capability keeps the model menu, and a grant or
+    /// a slider that arrives after the catalog puts the chat on the slider's
+    /// terms.
     @MainActor
     func testAgentSliderStopIsSentExactlyAndAMacWithoutItKeepsTheModelMenu() async throws {
         defer { AidenChatProgressLifecycleURLProtocol.reset() }
-        let catalog = #"{"providers":[{"id":"acme","label":"Acme","models":[{"id":"small","label":"Small","thinkingLevels":["low","medium","high"],"defaultThinkingLevel":"medium"},{"id":"large","label":"Large","thinkingLevels":["low","high"],"defaultThinkingLevel":"high"}]}],"defaults":{"providerId":"acme","modelId":"small","thinkingLevel":"low"},"agentSlider":{"stops":[{"id":"fast","label":"Fast","providerId":"acme","modelId":"small","thinkingLevel":"low","availability":"ready"},{"id":"mid","label":"Mid","providerId":"acme","modelId":"small","thinkingLevel":"medium","availability":"ready"},{"id":"big","label":"Big","providerId":"acme","modelId":"large","availability":"ready"}],"homeStopId":"mid"}}"#
+        let models = #""providers":[{"id":"acme","label":"Acme","models":[{"id":"small","label":"Small","thinkingLevels":["low","medium","high"],"defaultThinkingLevel":"medium"},{"id":"large","label":"Large","thinkingLevels":["low","high"],"defaultThinkingLevel":"high"}]}],"defaults":{"providerId":"acme","modelId":"small","thinkingLevel":"low"}"#
+        let catalog = #"{\#(models),"agentSlider":{"stops":[{"id":"fast","label":"Fast","providerId":"acme","modelId":"small","thinkingLevel":"low","availability":"ready"},{"id":"mid","label":"Mid","providerId":"acme","modelId":"small","thinkingLevel":"medium","availability":"ready"},{"id":"big","label":"Big","providerId":"acme","modelId":"large","availability":"ready"}],"homeStopId":"mid"}}"#
+        let catalogWithoutSlider = "{\(models)}"
         final class Offer: Sendable {
             let slider: Mutex<Bool>
-            init(_ value: Bool) { slider = Mutex(value) }
+            let catalogSlider: Mutex<Bool>
+            init(_ value: Bool, catalogSlider: Bool) {
+                slider = Mutex(value)
+                self.catalogSlider = Mutex(catalogSlider)
+            }
         }
-        func launch(macOffersSlider: Bool) async throws -> (AidenChatViewModel, AidenRecordedTurnStarts, Offer) {
+        func launch(
+            macOffersSlider: Bool,
+            catalogHasSlider: Bool = true
+        ) async throws -> (AidenChatViewModel, AidenRecordedTurnStarts, Offer) {
             let root = FileManager.default.temporaryDirectory.appending(path: "aiden-agent-slider-\(UUID())")
             addTeardownBlock { try? FileManager.default.removeItem(at: root) }
-            let offer = Offer(macOffersSlider)
+            let offer = Offer(macOffersSlider, catalogSlider: catalogHasSlider)
             let turns = AidenRecordedTurnStarts()
+            let host = AidenAgentSliderHostChat()
             @Sendable func serverJSON() -> Data {
                 let grants = ["server:read", "workspace:read", "chat:read", "chat:write"]
                     + (offer.slider.withLock { $0 } ? ["chat:agent-slider"] : [])
@@ -3119,10 +3131,14 @@ final class AidenChatTests: XCTestCase {
                 case (_, "/api/aiden/v1/server"):
                     return (200, "application/json", serverJSON())
                 case (_, "/api/aiden/v1/models"):
-                    return (200, "application/json", Data(catalog.utf8))
+                    let offered = offer.catalogSlider.withLock { $0 } ? catalog : catalogWithoutSlider
+                    return (200, "application/json", Data(offered.utf8))
                 case ("POST", "/api/aiden/v1/chats/chat-progress-lifecycle/turns"):
                     turns.record(request)
+                    host.accept(turns.values.last?.body)
                     return (202, "application/json", Data(#"{"turnId":"turn-recovery","streamId":"stream-recovery","status":"queued","message":{"id":"accepted-message","role":"user","text":"Hello","createdAt":"2026-11-24T12:00:00Z"}}"#.utf8))
+                case ("GET", "/api/aiden/v1/chats/chat-progress-lifecycle"):
+                    return host.chatJSON().map { (200, "application/json", $0) } ?? fixture?.response(request)
                 default:
                     return fixture?.response(request)
                 }
@@ -3136,6 +3152,7 @@ final class AidenChatTests: XCTestCase {
                 extraCapabilities: [.chatAgentSlider]
             )
             let fixture = AidenStreamRecoveryFixture(chat: model.chat)
+            host.start(from: model.chat)
             AidenChatProgressLifecycleURLProtocol.setResponseOverride { respond($0, fixture: fixture) }
             await model.load(observeProgress: false)
             return (model, turns, offer)
@@ -3144,16 +3161,31 @@ final class AidenChatTests: XCTestCase {
             try JSONDecoder().decode(AidenTurnStart.self, from: XCTUnwrap(turns.values.last?.body))
         }
 
-        // Nothing picked: the turn runs on the Mac's last stop and asks it to keep nothing.
+        // Nothing picked: the turn runs on the Mac's last stop. The Mac stores
+        // no level when it makes a chat, so the first send asks it to keep it.
         let (untouched, untouchedTurns, _) = try await launch(macOffersSlider: true)
         XCTAssertEqual(untouched.agentSliderState?.currentStop?.id, "fast", "a new chat starts on the Mac's last stop, not home")
         XCTAssertTrue(untouched.agentSliderState?.canResetToHome ?? false)
         untouched.draft = "Hello"
         await untouched.send()
         try await waitUntil { untouchedTurns.count == 1 }
-        let unpicked = try sentTurn(untouchedTurns)
-        XCTAssertEqual(unpicked.thinkingLevel, "low")
-        XCTAssertNil(unpicked.saveSelection, "a send with no pick never changes the chat's saved level")
+        let opening = try sentTurn(untouchedTurns)
+        XCTAssertEqual(opening.thinkingLevel, "low")
+        XCTAssertEqual(opening.saveSelection, true, "a new chat's first send keeps the stop it started on")
+        // The Mac's chat comes back: it stays on the stop, and so does the next turn.
+        let reconciled = await untouched.reconcileChat(context: untouched.owner)
+        XCTAssertTrue(reconciled)
+        XCTAssertEqual(untouched.chat.thinkingLevel, "low")
+        XCTAssertEqual(untouched.agentSliderState?.currentStop?.id, "fast", "the Mac's chat moved the chip off its stop")
+        try await waitUntil { untouched.streamState?.isTerminal != false }
+        untouched.draft = "Again"
+        try await waitUntil { untouched.canSend }
+        await untouched.send()
+        try await waitUntil { untouchedTurns.count == 2 }
+        let reply = try sentTurn(untouchedTurns)
+        XCTAssertEqual(reply.modelId, "small")
+        XCTAssertEqual(reply.thinkingLevel, "low", "the second turn left the stop")
+        XCTAssertNil(reply.saveSelection, "a later send with no pick never changes the chat's saved level")
         untouched.stopProgressObservation()
 
         let (model, turns, _) = try await launch(macOffersSlider: true)
@@ -3192,6 +3224,19 @@ final class AidenChatTests: XCTestCase {
         XCTAssertEqual(older.agentSliderState?.currentStop?.id, "fast", "a late grant puts the chat on the Mac's last stop")
         XCTAssertEqual(older.turnModelSelection.thinkingLevel, "low")
         older.stopProgressObservation()
+
+        // The phone holds the slider but the Mac sets one up only later: the
+        // catalog refresh that brings it puts the chat on the Mac's last stop,
+        // not the level the model menu filled in.
+        let (later, _, laterOffer) = try await launch(macOffersSlider: true, catalogHasSlider: false)
+        XCTAssertNil(later.agentSlider)
+        XCTAssertEqual(later.turnModelSelection.thinkingLevel, "medium")
+        laterOffer.catalogSlider.withLock { $0 = true }
+        await later.reload(observeProgress: false)
+        XCTAssertNotNil(later.agentSlider)
+        XCTAssertEqual(later.agentSliderState?.currentStop?.id, "fast", "the refreshed catalog's slider kept the derived level")
+        XCTAssertEqual(later.turnModelSelection.thinkingLevel, "low")
+        later.stopProgressObservation()
     }
 
     @MainActor
@@ -17113,6 +17158,69 @@ private final class AidenCacheFirstMemoryKeychain: KeychainStoring {
 }
 
 /// Records each turn start's Idempotency-Key and body.
+/// The Mac's side of one chat for the Agent Slider tests: before any turn the
+/// shared fixture answers; after one, the chat carries the turns and the
+/// selection the Mac keeps. Like the host, it saves a turn's level only when
+/// the turn asks with `saveSelection` and names both ids. Otherwise it keeps
+/// the turn's model, and the chat's level only while the model is unchanged.
+private final class AidenAgentSliderHostChat: Sendable {
+    private struct State {
+        var base: [String: Any]?
+        var turns = 0
+        var providerId: String?
+        var modelId: String?
+        var thinkingLevel: String?
+        var messages: [[String: Any]] = []
+    }
+    private let state = Mutex<State?>(nil)
+
+    func start(from chat: AidenChat) {
+        let encoder = JSONEncoder()
+        encoder.dateEncodingStrategy = .iso8601
+        let base = (try? encoder.encode(chat)).flatMap { try? JSONSerialization.jsonObject(with: $0) } as? [String: Any]
+        state.withLock {
+            $0 = State(base: base, providerId: chat.providerId, modelId: chat.modelId, thinkingLevel: chat.thinkingLevel)
+        }
+    }
+
+    func accept(_ body: Data?) {
+        let turn = body.flatMap { try? JSONSerialization.jsonObject(with: $0) } as? [String: Any] ?? [:]
+        let providerId = turn["providerId"] as? String
+        let modelId = turn["modelId"] as? String
+        state.withLock { state in
+            guard var current = state else { return }
+            current.turns += 1
+            if turn["saveSelection"] as? Bool == true, let providerId, let modelId {
+                current.providerId = providerId
+                current.modelId = modelId
+                current.thinkingLevel = turn["thinkingLevel"] as? String
+            } else if let providerId, let modelId {
+                if providerId != current.providerId || modelId != current.modelId { current.thinkingLevel = nil }
+                current.providerId = providerId
+                current.modelId = modelId
+            }
+            current.messages.append([
+                "id": "host-message-\(current.turns)", "role": "user",
+                "text": turn["text"] as? String ?? "", "createdAt": "2026-11-24T12:00:0\(current.turns)Z",
+            ])
+            state = current
+        }
+    }
+
+    func chatJSON() -> Data? {
+        state.withLock { state in
+            guard let state, state.turns > 0, var chat = state.base else { return nil }
+            chat["messages"] = state.messages
+            chat["providerId"] = state.providerId
+            chat["modelId"] = state.modelId
+            chat["thinkingLevel"] = state.thinkingLevel
+            chat["revision"] = "host-revision-\(state.turns)"
+            chat["updatedAt"] = "2026-11-24T12:00:0\(state.turns)Z"
+            return try? JSONSerialization.data(withJSONObject: chat)
+        }
+    }
+}
+
 private final class AidenRecordedTurnStarts: @unchecked Sendable {
     private let lock = NSLock()
     private var recorded: [(key: String?, body: Data?)] = []

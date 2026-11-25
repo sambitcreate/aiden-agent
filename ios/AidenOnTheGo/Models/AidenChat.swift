@@ -3201,7 +3201,9 @@ struct AidenAgentSliderStop: Codable, Equatable, Identifiable, Sendable {
               providerId.map({ !$0.isEmpty && $0.unicodeScalars.count <= 256 }) ?? true,
               modelId.map({ !$0.isEmpty && $0.unicodeScalars.count <= 512 }) ?? true,
               sent != .ready || modelId != nil,
-              sent != .unassigned || modelId == nil else {
+              // Ids and a level go only with a ready stop. A reason this phone
+              // doesn't know is left to the Mac's newer contract.
+              sent == .ready || sent == .unknown || (modelId == nil && level == nil) else {
             throw DecodingError.dataCorruptedError(
                 forKey: .id,
                 in: values,

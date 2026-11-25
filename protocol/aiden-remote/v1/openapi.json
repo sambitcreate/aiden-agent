@@ -13600,6 +13600,12 @@
         "type": "object",
         "x-aiden-max-json-response-bytes": 1048576,
         "x-aiden-updated-at-not-before-created-at": true,
+        "not": {
+          "required": [
+            "botId",
+            "thinkingLevel"
+          ]
+        },
         "dependentRequired": {
           "providerId": [
             "modelId"
@@ -19033,6 +19039,12 @@
       "ChatMessagesWindow": {
         "type": "object",
         "description": "Contract revision 23 (chat-messages-window-metadata-v1) adds the chat metadata a whole-chat read returns: workspaceId, botId, title, titlePending, providerId/modelId, createdAt and updatedAt. A host advertising chat-messages-window-metadata-v1 always includes workspaceId, title, createdAt and updatedAt; a client that refreshes from a window falls back to GET /chats/{chatId} when they are absent.",
+        "not": {
+          "required": [
+            "botId",
+            "thinkingLevel"
+          ]
+        },
         "x-aiden-max-json-response-bytes": 1048576,
         "dependentRequired": {
           "providerId": [

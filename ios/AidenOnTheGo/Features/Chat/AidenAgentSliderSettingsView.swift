@@ -38,7 +38,7 @@ struct AidenAgentSliderSettingsView: View {
                         .accessibilityIdentifier("aiden.settings.agentSlider.stop.\(view.id)")
                     }
                 } footer: {
-                    Text("New chats start on the model you last used on your computer. Reset to home returns a chat to the home stop. Change the stops on your computer in Settings → Models & Context → Agent Slider.")
+                    Text("New chats start on the stop you last chose on this phone, or else on the model you last used on your computer. Reset to home returns a chat to the home stop. Change the stops on your computer in Settings → Models & Context → Agent Slider.")
                         .foregroundStyle(palette.secondary)
                 }
             } else if let catalog {

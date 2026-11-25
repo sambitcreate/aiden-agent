@@ -4123,6 +4123,15 @@ test("revision 66 carries the Agent Slider on /models and the chat's own level, 
   const chatSchema = ajv.compile({ $ref: "#/components/schemas/Chat", components: spec.components });
   assert.equal(chatSchema(chat), true, JSON.stringify(chatSchema.errors));
   assert.equal(chatSchema(modelless), false, "a level without a model is refused");
+  assert.equal(chatSchema({ ...chat, botId: "bot_fixture_01" }), false, "a Bot chat carries no level");
+  assert.equal(chatSchema({ ...legacyChat, botId: "bot_fixture_01" }), true, JSON.stringify(chatSchema.errors));
+  const windowSchema = ajv.compile({ $ref: "#/components/schemas/ChatMessagesWindow", components: spec.components });
+  const { id: chatId, messages: windowMessages, workspaceId, title, providerId, modelId, thinkingLevel, createdAt, updatedAt, revision } = chat;
+  const window = { chatId, revision, messages: windowMessages, hasOlder: false, workspaceId, title, providerId, modelId, thinkingLevel, createdAt, updatedAt };
+  assert.equal(windowSchema(window), true, JSON.stringify(windowSchema.errors));
+  assert.equal(windowSchema({ ...window, botId: "bot_fixture_01" }), false, "a Bot chat's window carries no level");
+  const { thinkingLevel: _windowLevel, ...levellessWindow } = window;
+  assert.equal(windowSchema({ ...levellessWindow, botId: "bot_fixture_01" }), true, JSON.stringify(windowSchema.errors));
   const turnSchema = ajv.compile({ $ref: "#/components/schemas/TurnStartRequest", components: spec.components });
   assert.equal(turnSchema(raw.agentSlider.turnRequest), true, JSON.stringify(turnSchema.errors));
   assert.equal(turnSchema({ ...raw.agentSlider.turnRequest, saveSelection: "yes" }), false);

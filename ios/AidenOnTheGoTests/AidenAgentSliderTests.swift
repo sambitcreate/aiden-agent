@@ -126,6 +126,31 @@ final class AidenAgentSliderTests: XCTestCase {
                 value["stops"] = stops
                 return value
             }),
+            // Revision 66 names a provider, a model and a level only on a stop
+            // that can run, as the Mac and Android parsers require.
+            ("a stop that isn't signed in naming its provider and model", { value in
+                var value = value
+                var stops = value["stops"] as? [[String: Any]] ?? []
+                stops[3]["providerId"] = "provider_fixture"
+                stops[3]["modelId"] = "model_fixture"
+                value["stops"] = stops
+                return value
+            }),
+            ("a level on a stop that isn't signed in", { value in
+                var value = value
+                var stops = value["stops"] as? [[String: Any]] ?? []
+                stops[3]["thinkingLevel"] = "high"
+                value["stops"] = stops
+                return value
+            }),
+            ("a computer-only stop naming its provider and model", { value in
+                var value = value
+                var stops = value["stops"] as? [[String: Any]] ?? []
+                stops[4]["providerId"] = "provider_fixture"
+                stops[4]["modelId"] = "model_fixture"
+                value["stops"] = stops
+                return value
+            }),
         ]
         for (why, breakSlider) in broken {
             raw["agentSlider"] = breakSlider(slider)

@@ -1807,9 +1807,12 @@ final class AidenChatViewModel {
         let submittedAttachments = retryAttempt?.attachments ?? pendingAttachments
         let submittedSkill = selectedSkill
         let modelSelection = turnModelSelection
-        // Only a pick the person made here asks the Mac to keep the level as
-        // the chat's own; any other send runs at that level for this turn.
-        let savesSelection = agentSlider != nil && hasUnsentModelPick
+        // A pick the person made here asks the Mac to keep the level as the
+        // chat's own, and so does a new chat's first send: the Mac stores no
+        // level when it creates a chat, so without it the chat would come back
+        // off the stop it started on. Any other send runs at that level for
+        // this turn only.
+        let savesSelection = agentSlider != nil && (hasUnsentModelPick || chat.messages.isEmpty)
         let request = retryAttempt?.request ?? AidenTurnRequestBuilder.make(
             text: text,
             providerId: modelSelection.providerId,
@@ -2947,17 +2950,18 @@ final class AidenChatViewModel {
     /// loaded: with the slider, a chat runs at exactly its own level.
     func reconcileAgentSliderAvailability() {
         guard (agentSlider != nil) != resolvedWithAgentSlider else { return }
-        if !hasExplicitModelSelection {
-            // The level the model menu filled in was derived, not chosen:
-            // resolve afresh so the chat lands on the slider's terms.
-            selectedProviderId = nil
-            selectedModelId = nil
-            selectedThinkingLevel = nil
-        }
         resolveModelSelection()
     }
 
     private func resolveModelSelection() {
+        // The slider came or went since the last resolution, whichever refresh
+        // brought it. The level the model menu filled in was derived, not
+        // chosen: resolve afresh so the chat lands on the slider's terms.
+        if catalog != nil, (agentSlider != nil) != resolvedWithAgentSlider, !hasExplicitModelSelection {
+            selectedProviderId = nil
+            selectedModelId = nil
+            selectedThinkingLevel = nil
+        }
         // An unsent pick made in this chat before it was last closed wins
         // like a pick made now.
         if !hasExplicitModelSelection, !isReadOnlyFixture, !chat.isBotChat, !chat.messages.isEmpty,

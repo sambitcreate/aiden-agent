@@ -43,8 +43,9 @@ struct AidenAgentSliderSheet: View {
     @Bindable var model: AidenChatViewModel
     @State private var contentHeight: CGFloat = 0
 
-    /// The navigation bar and grabber above the content in a sheet.
-    private static let chromeHeight: CGFloat = 72
+    /// The navigation bar and grabber above the content in a sheet, taller
+    /// with the title at larger text sizes.
+    @ScaledMetric(relativeTo: .headline) private var chromeHeight: CGFloat = 72
 
     static func valueText(_ state: AidenAgentSliderState, model: AidenChatViewModel) -> String {
         AidenAgentSliderResolver.valueText(
@@ -61,7 +62,12 @@ struct AidenAgentSliderSheet: View {
                     content(state)
                         .padding(.horizontal, 20)
                         .padding(.bottom, 20)
-                        .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { contentHeight = $0 }
+                        .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { height in
+                            // Only ever taller, so stepping to a stop whose
+                            // subtitle is shorter doesn't resize the sheet
+                            // under the person's finger.
+                            contentHeight = max(contentHeight, height)
+                        }
                 }
             }
             .scrollBounceBehavior(.basedOnSize)
@@ -86,7 +92,7 @@ struct AidenAgentSliderSheet: View {
 
     /// Every stop and its reason, with the track and actions, in one detent.
     private var fittedHeight: CGFloat? {
-        contentHeight > 0 ? contentHeight + Self.chromeHeight : nil
+        contentHeight > 0 ? contentHeight + chromeHeight : nil
     }
 
     private var detents: Set<PresentationDetent> {
