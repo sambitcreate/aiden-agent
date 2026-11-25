@@ -175,8 +175,13 @@ struct AidenUsageView: View {
         AidenUsagePresentation.heatmapDays(for: usage)
     }
 
-    private var maximumDailyTokens: Int {
-        max(heatmapDays.map(\.tokens).max() ?? 0, 1)
+    /// What VoiceOver reads for the heatmap: active days and the busiest one.
+    private var heatmapSummary: LocalizedStringKey {
+        let active = heatmapDays.filter { $0.tokens > 0 }
+        guard let busiest = active.max(by: { $0.tokens < $1.tokens }) else {
+            return "No token activity in the last \(heatmapDays.count) days"
+        }
+        return "Active on \(active.count) of the last \(heatmapDays.count) days; busiest \(busiest.date), \(busiest.tokens.formatted()) tokens"
     }
 
     private var completionRate: Double {
@@ -324,30 +329,11 @@ struct AidenUsageView: View {
                         .background(palette.sidebar, in: Capsule())
                 }
 
-                LazyVGrid(
-                    columns: Array(repeating: GridItem(.flexible(), spacing: AidenSpacing.xs), count: 10),
-                    spacing: AidenSpacing.xs
-                ) {
-                    ForEach(heatmapDays) { day in
-                        RoundedRectangle(cornerRadius: 5, style: .continuous)
-                            .fill(activityColor(tokens: day.tokens))
-                            .aspectRatio(1, contentMode: .fit)
-                            .accessibilityElement()
-                            .accessibilityLabel("\(day.date), \(day.tokens.formatted()) tokens")
-                    }
-                }
-
-                HStack(spacing: AidenSpacing.xs) {
-                    Text("Less")
-                    ForEach(0..<5, id: \.self) { level in
-                        RoundedRectangle(cornerRadius: 3, style: .continuous)
-                            .fill(activityColor(level: level))
-                            .frame(width: 14, height: 14)
-                    }
-                    Text("More")
-                }
-                .font(.caption2)
-                .foregroundStyle(palette.secondary)
+                AidenHeatmap(
+                    days: heatmapDays,
+                    value: { Double($0.tokens) },
+                    accessibilitySummary: heatmapSummary
+                )
 
                 Divider().overlay(palette.secondary.opacity(0.18))
 
@@ -500,16 +486,6 @@ struct AidenUsageView: View {
         Divider().overlay(palette.secondary.opacity(0.18))
     }
 
-    private func activityColor(tokens: Int) -> Color {
-        guard tokens > 0 else { return palette.sidebar }
-        let normalized = min(Double(tokens) / Double(maximumDailyTokens), 1)
-        return palette.accent.opacity(0.22 + (0.78 * normalized.squareRoot()))
-    }
-
-    private func activityColor(level: Int) -> Color {
-        guard level > 0 else { return palette.sidebar }
-        return palette.accent.opacity(0.18 + (Double(level) * 0.205))
-    }
 }
 
 struct AidenUsageHeatmapDay: Identifiable, Equatable {

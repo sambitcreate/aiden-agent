@@ -358,7 +358,7 @@ struct AidenInboxRowView: View {
     private func statusLabel(_ label: String, tone: AidenInboxRowStatus.Tone) -> some View {
         switch tone {
         case .warning, .danger:
-            AidenStatusChip(label, tone: tone == .danger ? .danger : .warning, isDimmed: isDimmed)
+            AidenStatusChip("\(label)", tone: tone == .danger ? .danger : .warning, isDimmed: isDimmed)
         case .working, .plain:
             Text(label)
                 .font(.caption)

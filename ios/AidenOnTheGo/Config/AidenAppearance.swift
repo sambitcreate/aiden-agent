@@ -205,11 +205,13 @@ enum AidenUIFontID: String, CaseIterable, Identifiable, Codable, Sendable {
         }
     }
 
+    /// The font at exactly `size`, at every Dynamic Type size. Callers scale
+    /// `size` first (`@ScaledMetric`), so a custom face must not scale again.
     func font(size: CGFloat) -> Font {
         switch self {
         case .system: .system(size: size)
         case .rounded: .system(size: size, design: .rounded)
-        case .humanist: .custom("Avenir Next", size: size)
+        case .humanist: .custom("Avenir Next", fixedSize: size)
         }
     }
 }
@@ -687,7 +689,7 @@ final class AidenAppearanceStore {
         lightTranslucentSidebar = defaults.object(forKey: Key.lightTranslucentSidebar) == nil ? true : defaults.bool(forKey: Key.lightTranslucentSidebar)
         darkTranslucentSidebar = defaults.object(forKey: Key.darkTranslucentSidebar) == nil ? true : defaults.bool(forKey: Key.darkTranslucentSidebar)
         reduceMotion = AidenReduceMotionPreference(rawValue: defaults.string(forKey: Key.reduceMotion) ?? "") ?? .system
-        uiFontSize = defaults.object(forKey: Key.uiFontSize) == nil ? 14 : Self.clamp(defaults.integer(forKey: Key.uiFontSize), to: 12...18)
+        uiFontSize = defaults.object(forKey: Key.uiFontSize) == nil ? AidenSettingsTokens.defaultUIFontSize : Self.clamp(defaults.integer(forKey: Key.uiFontSize), to: 12...18)
         codeFontSize = defaults.object(forKey: Key.codeFontSize) == nil ? 12 : Self.clamp(defaults.integer(forKey: Key.codeFontSize), to: 10...18)
         diffMarkers = AidenDiffMarkerPreference(rawValue: defaults.string(forKey: Key.diffMarkers) ?? "") ?? .symbols
     }

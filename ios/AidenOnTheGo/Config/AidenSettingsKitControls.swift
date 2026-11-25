@@ -44,7 +44,7 @@ enum AidenStatusTone: Sendable, CaseIterable {
 /// colour, so with Differentiate Without Colour on each carries its own
 /// symbol. Dimmed, a chip takes the secondary tint (a row whose machine is away).
 struct AidenStatusChip: View {
-    private let text: String
+    private let text: LocalizedStringKey
     private let tone: AidenStatusTone
     private let symbol: String?
     private let isDimmed: Bool
@@ -52,7 +52,7 @@ struct AidenStatusChip: View {
     @Environment(\.aidenPalette) private var palette
     @Environment(\.accessibilityDifferentiateWithoutColor) private var differentiateWithoutColor
 
-    init(_ text: String, tone: AidenStatusTone = .neutral, symbol: String? = nil, isDimmed: Bool = false) {
+    init(_ text: LocalizedStringKey, tone: AidenStatusTone = .neutral, symbol: String? = nil, isDimmed: Bool = false) {
         self.text = text
         self.tone = tone
         self.symbol = symbol
@@ -76,11 +76,11 @@ struct AidenStatusChip: View {
             }
             Text(text)
         }
-        .font(.caption.weight(.semibold))
+        .aidenType(.chipLabel)
         .foregroundStyle(Color(aidenHex: isDimmed ? palette.secondaryHex : tone.textHex(palette)))
         .lineLimit(1)
-        .padding(.horizontal, 7)
-        .padding(.vertical, 2)
+        .padding(.horizontal, AidenSettingsTokens.chipHPadding)
+        .padding(.vertical, AidenSettingsTokens.chipVPadding)
         .background(
             Color(aidenHex: isDimmed ? palette.secondaryHex : tone.fillHex(palette))
                 .opacity(AidenPalette.statusChipFillOpacity),
@@ -91,24 +91,27 @@ struct AidenStatusChip: View {
 
 // MARK: - Pill segmented control
 
-/// A capsule track with a raised thumb under the chosen option, for two to
-/// four short choices (Daily / Weekly / Monthly). VoiceOver reads it as one
-/// adjustable control: swipe up or down to move the choice.
+/// A track with a solid thumb under the chosen option, for two to four short
+/// choices (Daily / Weekly / Monthly). Each option is a 44pt button that
+/// VoiceOver reads with the selected trait, and swiping up or down on any of
+/// them moves the choice. At accessibility text sizes the options stack, so
+/// no label is cut short.
 struct AidenPillSegmentedControl<Value: Hashable>: View {
     @Binding var selection: Value
     let options: [Value]
-    let accessibilityLabel: String
-    let label: (Value) -> String
+    let accessibilityLabel: LocalizedStringKey
+    let label: (Value) -> LocalizedStringKey
 
     @Environment(\.aidenPalette) private var palette
     @Environment(\.aidenReduceMotion) private var reduceMotion
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
     @Namespace private var thumb
 
     init(
         selection: Binding<Value>,
         options: [Value],
-        accessibilityLabel: String,
-        label: @escaping (Value) -> String
+        accessibilityLabel: LocalizedStringKey,
+        label: @escaping (Value) -> LocalizedStringKey
     ) {
         _selection = selection
         self.options = options
@@ -118,43 +121,52 @@ struct AidenPillSegmentedControl<Value: Hashable>: View {
 
     /// The option `offset` steps from `current`, held at the ends. An unknown
     /// current value starts from the first option.
-    static func step(from current: Value, by offset: Int, in options: [Value]) -> Value? {
+    nonisolated static func step(from current: Value, by offset: Int, in options: [Value]) -> Value? {
         guard !options.isEmpty else { return nil }
         let index = options.firstIndex(of: current) ?? 0
         return options[min(max(index + offset, 0), options.count - 1)]
     }
 
     var body: some View {
-        HStack(spacing: 0) {
+        let layout = dynamicTypeSize.isAccessibilitySize
+            ? AnyLayout(VStackLayout(spacing: 0))
+            : AnyLayout(HStackLayout(spacing: 0))
+        layout {
             ForEach(options, id: \.self) { option in
-                Button {
-                    choose(option)
-                } label: {
-                    Text(label(option))
-                        .aidenType(.rowValue)
-                        .fontWeight(option == selection ? .semibold : .regular)
-                        .foregroundStyle(option == selection ? palette.foreground : palette.secondary)
-                        .lineLimit(1)
-                        .frame(maxWidth: .infinity, minHeight: 32)
-                        .padding(.horizontal, AidenSpacing.s)
-                        .background {
-                            if option == selection {
-                                Capsule()
-                                    .fill(palette.raised)
-                                    .shadow(color: .black.opacity(0.08), radius: 2, y: 1)
-                                    .matchedGeometryEffect(id: "thumb", in: thumb)
-                            }
-                        }
-                        .contentShape(Capsule())
-                }
-                .buttonStyle(.plain)
+                segment(option)
             }
         }
-        .padding(AidenSpacing.xs)
-        .background(palette.sidebar, in: Capsule())
-        .accessibilityElement(children: .ignore)
+        .background(palette.sidebar, in: RoundedRectangle(cornerRadius: AidenSettingsTokens.minimumHitSize / 2, style: .continuous))
+        .animation(reduceMotion ? nil : .snappy(duration: 0.25), value: selection)
+        .accessibilityElement(children: .contain)
         .accessibilityLabel(accessibilityLabel)
-        .accessibilityValue(label(selection))
+    }
+
+    private func segment(_ option: Value) -> some View {
+        let isSelected = option == selection
+        return Button {
+            selection = option
+        } label: {
+            Text(label(option))
+                .aidenType(.rowValue)
+                .fontWeight(isSelected ? .semibold : .regular)
+                .foregroundStyle(isSelected ? palette.onFillAccent : palette.foreground)
+                .multilineTextAlignment(.center)
+                .frame(maxWidth: .infinity, minHeight: AidenSettingsTokens.minimumHitSize - 2 * AidenSpacing.xs)
+                .padding(.horizontal, AidenSpacing.s)
+                .background {
+                    if isSelected {
+                        Capsule()
+                            .fill(palette.fillAccent)
+                            .matchedGeometryEffect(id: "thumb", in: thumb)
+                    }
+                }
+                .padding(AidenSpacing.xs)
+                .frame(minHeight: AidenSettingsTokens.minimumHitSize)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityAddTraits(isSelected ? .isSelected : [])
         .accessibilityAdjustableAction { direction in
             switch direction {
             case .increment: move(by: 1)
@@ -164,13 +176,11 @@ struct AidenPillSegmentedControl<Value: Hashable>: View {
         }
     }
 
-    private func move(by offset: Int) {
-        if let next = Self.step(from: selection, by: offset, in: options) { choose(next) }
-    }
-
-    private func choose(_ option: Value) {
-        guard option != selection else { return }
-        withAnimation(reduceMotion ? nil : .snappy(duration: 0.25)) { selection = option }
+    /// Moves the choice `offset` options along, as VoiceOver's swipe does.
+    func move(by offset: Int) {
+        if let next = Self.step(from: selection, by: offset, in: options), next != selection {
+            selection = next
+        }
     }
 }
 
@@ -182,7 +192,7 @@ struct AidenSwatch: View {
     let fill: Color
     var ring: Color?
     let isSelected: Bool
-    let label: String
+    let label: LocalizedStringKey
     var size: CGFloat = 36
     @Environment(\.aidenPalette) private var palette
 
@@ -213,7 +223,7 @@ struct AidenSwatch: View {
 struct AidenSwatchStyle {
     let fill: Color
     var ring: Color?
-    let label: String
+    let label: LocalizedStringKey
 }
 
 /// Swatches in rows of `columns`; tapping one chooses it.
@@ -246,11 +256,12 @@ struct AidenSwatchGrid<Item: Identifiable>: View {
 /// One large figure with its caption, and an optional mark beside it.
 struct AidenStatHero<Accessory: View>: View {
     let value: String
-    let caption: String
+    let caption: LocalizedStringKey
     @ViewBuilder let accessory: () -> Accessory
     @Environment(\.aidenPalette) private var palette
 
-    init(value: String, caption: String, @ViewBuilder accessory: @escaping () -> Accessory) {
+    /// `value` is a figure and draws as it is; `caption` is looked up.
+    init(value: String, caption: LocalizedStringKey, @ViewBuilder accessory: @escaping () -> Accessory) {
         self.value = value
         self.caption = caption
         self.accessory = accessory
@@ -259,7 +270,7 @@ struct AidenStatHero<Accessory: View>: View {
     var body: some View {
         HStack(alignment: .firstTextBaseline, spacing: AidenSpacing.s) {
             VStack(alignment: .leading, spacing: 2) {
-                Text(value)
+                Text(verbatim: value)
                     .aidenType(.statHero)
                     .monospacedDigit()
                     .foregroundStyle(palette.foreground)
@@ -277,28 +288,32 @@ struct AidenStatHero<Accessory: View>: View {
 }
 
 extension AidenStatHero where Accessory == EmptyView {
-    init(value: String, caption: String) {
+    init(value: String, caption: LocalizedStringKey) {
         self.init(value: value, caption: caption) { EmptyView() }
     }
 }
 
 // MARK: - Heatmap
 
-/// Days as squares in rows of `columns`, darker accent for busier days, with
-/// a Less/More legend. Each square says its own label to VoiceOver.
+/// Days as squares in rows of `columns`, a deeper accent for busier days and
+/// a small dot for a day with nothing, with a Less/More legend. VoiceOver
+/// reads it as one element: the caller's summary of the period.
 struct AidenHeatmap<Day: Identifiable>: View {
     let days: [Day]
     var columns: Int = 10
     let value: (Day) -> Double
-    let label: (Day) -> String
+    let accessibilitySummary: LocalizedStringKey
     @Environment(\.aidenPalette) private var palette
 
     /// How strongly a day is tinted, 0...1, or nil for a day with nothing.
     /// It grows with the square root, so a quiet day next to a busy one still shows.
-    static func intensity(_ value: Double, maximum: Double) -> Double? {
+    nonisolated static func intensity(_ value: Double, maximum: Double) -> Double? {
         guard value > 0, maximum > 0 else { return nil }
         return 0.22 + 0.78 * min(value / maximum, 1).squareRoot()
     }
+
+    /// The share of a square an empty day's dot fills.
+    static var emptyDotScale: CGFloat { 0.3 }
 
     var body: some View {
         let maximum = days.map(value).max() ?? 0
@@ -308,31 +323,41 @@ struct AidenHeatmap<Day: Identifiable>: View {
                 spacing: AidenSpacing.xs
             ) {
                 ForEach(days) { day in
-                    RoundedRectangle(cornerRadius: 5, style: .continuous)
-                        .fill(cellColor(Self.intensity(value(day), maximum: maximum)))
+                    cell(Self.intensity(value(day), maximum: maximum), cornerRadius: 5)
                         .aspectRatio(1, contentMode: .fit)
-                        .accessibilityElement()
-                        .accessibilityLabel(label(day))
                 }
             }
             HStack(spacing: AidenSpacing.xs) {
                 Text("Less")
                 ForEach(0..<5, id: \.self) { level in
-                    RoundedRectangle(cornerRadius: 3, style: .continuous)
-                        .fill(cellColor(level == 0 ? nil : 0.22 + 0.78 * (Double(level) / 4)))
+                    cell(level == 0 ? nil : Self.intensity(Double(level), maximum: 4), cornerRadius: 3)
                         .frame(width: 14, height: 14)
                 }
                 Text("More")
             }
             .aidenType(.statCaption)
             .foregroundStyle(palette.secondary)
-            .accessibilityHidden(true)
         }
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(accessibilitySummary)
     }
 
-    private func cellColor(_ intensity: Double?) -> Color {
-        guard let intensity else { return palette.sidebar }
-        return palette.accent.opacity(intensity)
+    /// A tinted square, or for an empty day a secondary-ink dot, which holds
+    /// 3:1 on the card where a faint square would vanish.
+    @ViewBuilder
+    private func cell(_ intensity: Double?, cornerRadius: CGFloat) -> some View {
+        if let intensity {
+            RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+                .fill(palette.accent.opacity(intensity))
+        } else {
+            GeometryReader { proxy in
+                let side = min(proxy.size.width, proxy.size.height) * Self.emptyDotScale
+                Circle()
+                    .fill(palette.secondary)
+                    .frame(width: side, height: side)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+            }
+        }
     }
 }
 
@@ -342,7 +367,7 @@ struct AidenHeatmap<Day: Identifiable>: View {
 /// on the palette's solid fill, and the hit area stays 44pt.
 struct AidenCircleIconButton: View {
     let symbol: String
-    let label: String
+    let label: LocalizedStringKey
     var tone: AidenSolidFillTone = .accent
     var diameter: CGFloat = 36
     let action: () -> Void

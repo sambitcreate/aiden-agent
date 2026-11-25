@@ -5,78 +5,60 @@ import SwiftUI
 // (docs/settings-design-system.md). Pages are large titles over borderless
 // raised cards; rows put their control at the trailing edge; status shows
 // in soft fills, never a coloured border.
+//
+// Every piece of text the kit draws is a `LocalizedStringKey`: a literal is
+// looked up in the strings table, and a runtime value goes in as `"\(value)"`,
+// which draws as it is.
 
 extension View {
     /// Sets a step of the grouped-page type scale, at the phone's text size
-    /// and the in-app Text size.
+    /// and the in-app Text size and font.
     func aidenType(_ step: AidenTypeScale) -> some View {
         modifier(AidenTypeModifier(step: step))
     }
+
+    /// Where the separator under this row of an `AidenGroupedCard` starts.
+    /// Kit rows set their own; anything else gets the text-row inset.
+    func aidenSeparatorInset(_ inset: CGFloat) -> some View {
+        containerValue(\.aidenSeparatorInset, inset)
+    }
+}
+
+extension ContainerValues {
+    @Entry var aidenSeparatorInset: CGFloat = AidenSettingsTokens.textRowSeparatorInset
 }
 
 private struct AidenTypeModifier: ViewModifier {
     let step: AidenTypeScale
     @Environment(\.aidenUIFont) private var uiFont
     @Environment(\.aidenUIFontSize) private var uiFontSize
-    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
+    /// The phone's text size against the default, in percent, for this step's style.
+    @ScaledMetric private var percent: CGFloat
+
+    init(step: AidenTypeScale) {
+        self.step = step
+        _percent = ScaledMetric(wrappedValue: 100, relativeTo: step.textStyle)
+    }
 
     func body(content: Content) -> some View {
-        let size = UIFontMetrics(forTextStyle: step.textStyle.uiTextStyle)
-            .scaledValue(for: step.pointSize(uiFontSize: uiFontSize), compatibleWith: dynamicTypeSize.traitCollection)
+        let size = step.pointSize(uiFontSize: uiFontSize) * percent / 100
         content.font(uiFont.font(size: size).weight(step.weight))
-    }
-}
-
-private extension Font.TextStyle {
-    var uiTextStyle: UIFont.TextStyle {
-        switch self {
-        case .largeTitle: .largeTitle
-        case .title: .title1
-        case .title2: .title2
-        case .title3: .title3
-        case .headline: .headline
-        case .subheadline: .subheadline
-        case .callout: .callout
-        case .footnote: .footnote
-        case .caption: .caption1
-        case .caption2: .caption2
-        default: .body
-        }
-    }
-}
-
-private extension DynamicTypeSize {
-    var traitCollection: UITraitCollection {
-        let category: UIContentSizeCategory = switch self {
-        case .xSmall: .extraSmall
-        case .small: .small
-        case .medium: .medium
-        case .large: .large
-        case .xLarge: .extraLarge
-        case .xxLarge: .extraExtraLarge
-        case .xxxLarge: .extraExtraExtraLarge
-        case .accessibility1: .accessibilityMedium
-        case .accessibility2: .accessibilityLarge
-        case .accessibility3: .accessibilityExtraLarge
-        case .accessibility4: .accessibilityExtraExtraLarge
-        case .accessibility5: .accessibilityExtraExtraExtraLarge
-        @unknown default: .large
-        }
-        return UITraitCollection(preferredContentSizeCategory: category)
     }
 }
 
 // MARK: - Page
 
-/// A grouped page: a large title, an optional line under it, and its cards
-/// and captions stacked on the canvas.
+/// A grouped page: the system large title, an optional line under it, and
+/// its sections stacked on the page background. The title is the navigation
+/// bar's own (HIG), so it follows Dynamic Type but not the in-app Text size.
+/// In a wide detail pane the column stops at a readable width.
 struct AidenLargeTitlePage<Content: View>: View {
     let title: LocalizedStringKey
-    var subtitle: String?
+    var subtitle: LocalizedStringKey?
     @ViewBuilder let content: () -> Content
     @Environment(\.aidenPalette) private var palette
 
-    init(_ title: LocalizedStringKey, subtitle: String? = nil, @ViewBuilder content: @escaping () -> Content) {
+    init(_ title: LocalizedStringKey, subtitle: LocalizedStringKey? = nil, @ViewBuilder content: @escaping () -> Content) {
         self.title = title
         self.subtitle = subtitle
         self.content = content
@@ -89,12 +71,15 @@ struct AidenLargeTitlePage<Content: View>: View {
                     Text(subtitle)
                         .aidenType(.footnote)
                         .foregroundStyle(palette.secondary)
+                        .padding(.horizontal, AidenSettingsTokens.rowHPadding)
                         .frame(maxWidth: .infinity, alignment: .leading)
                 }
                 content()
             }
             .padding(.horizontal, AidenSpacing.l)
             .padding(.vertical, AidenSpacing.m)
+            .frame(maxWidth: AidenSettingsTokens.readableWidth)
+            .frame(maxWidth: .infinity)
         }
         .scrollContentBackground(.hidden)
         .background(AidenSettingsTokens.pageBackground(palette).ignoresSafeArea())
@@ -103,7 +88,45 @@ struct AidenLargeTitlePage<Content: View>: View {
     }
 }
 
+/// A section of a grouped page: its caption, its card and the card's
+/// footnote, held close together. The page spaces sections apart.
+struct AidenSettingsSection<Content: View, Trailing: View>: View {
+    var caption: LocalizedStringKey?
+    var footer: LocalizedStringKey?
+    @ViewBuilder let content: () -> Content
+    @ViewBuilder let trailing: () -> Trailing
+
+    init(
+        _ caption: LocalizedStringKey? = nil,
+        footer: LocalizedStringKey? = nil,
+        @ViewBuilder content: @escaping () -> Content,
+        @ViewBuilder trailing: @escaping () -> Trailing
+    ) {
+        self.caption = caption
+        self.footer = footer
+        self.content = content
+        self.trailing = trailing
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: AidenSpacing.s) {
+            if let caption {
+                AidenSectionCaption(caption, trailing: trailing)
+            }
+            AidenGroupedCard(footer: footer, content: content)
+        }
+    }
+}
+
+extension AidenSettingsSection where Trailing == EmptyView {
+    init(_ caption: LocalizedStringKey? = nil, footer: LocalizedStringKey? = nil, @ViewBuilder content: @escaping () -> Content) {
+        self.init(caption, footer: footer, content: content) { EmptyView() }
+    }
+}
+
 /// The secondary heading above a card, with an optional control at its end.
+/// Like Android's group title it is inset by the row padding, inside the
+/// page padding, so it lines up with a text row's title.
 struct AidenSectionCaption<Trailing: View>: View {
     let title: LocalizedStringKey
     @ViewBuilder let trailing: () -> Trailing
@@ -123,7 +146,7 @@ struct AidenSectionCaption<Trailing: View>: View {
             Spacer(minLength: AidenSpacing.s)
             trailing()
         }
-        .padding(.horizontal, AidenSpacing.l)
+        .padding(.horizontal, AidenSettingsTokens.rowHPadding)
     }
 }
 
@@ -135,22 +158,17 @@ extension AidenSectionCaption where Trailing == EmptyView {
 
 // MARK: - Card
 
-/// A borderless raised card that draws an inset separator between each pair
-/// of its rows, and an optional footnote under it.
+/// A borderless raised card that draws an inset separator under each row but
+/// the last, starting where that row asks (`aidenSeparatorInset`), and an
+/// optional footnote under it.
 struct AidenGroupedCard<Content: View>: View {
     var footer: LocalizedStringKey?
-    var separatorInset: CGFloat = AidenSettingsTokens.separatorLeadingInset
     @ViewBuilder let content: () -> Content
     @Environment(\.aidenPalette) private var palette
     @Environment(\.displayScale) private var displayScale
 
-    init(
-        footer: LocalizedStringKey? = nil,
-        separatorInset: CGFloat = AidenSettingsTokens.separatorLeadingInset,
-        @ViewBuilder content: @escaping () -> Content
-    ) {
+    init(footer: LocalizedStringKey? = nil, @ViewBuilder content: @escaping () -> Content) {
         self.footer = footer
-        self.separatorInset = separatorInset
         self.content = content
     }
 
@@ -158,13 +176,13 @@ struct AidenGroupedCard<Content: View>: View {
         VStack(alignment: .leading, spacing: AidenSpacing.s) {
             Group(subviews: content()) { rows in
                 VStack(spacing: 0) {
-                    ForEach(rows.indices, id: \.self) { index in
-                        rows[index]
-                        if index < rows.count - 1 {
+                    ForEach(rows) { row in
+                        row
+                        if row.id != rows.last?.id {
                             Rectangle()
-                                .fill(palette.secondary.opacity(AidenSettingsTokens.separatorOpacity))
+                                .fill(AidenSettingsTokens.separator(palette))
                                 .frame(height: 1 / displayScale)
-                                .padding(.leading, separatorInset)
+                                .padding(.leading, row.containerValues.aidenSeparatorInset)
                                 .accessibilityHidden(true)
                         }
                     }
@@ -176,7 +194,7 @@ struct AidenGroupedCard<Content: View>: View {
                 Text(footer)
                     .aidenType(.footnote)
                     .foregroundStyle(palette.secondary)
-                    .padding(.horizontal, AidenSpacing.l)
+                    .padding(.horizontal, AidenSettingsTokens.rowHPadding)
             }
         }
     }
@@ -184,37 +202,69 @@ struct AidenGroupedCard<Content: View>: View {
 
 // MARK: - Rows
 
-/// What a row shows at its trailing edge.
+/// What a row shows at its trailing edge. A row with its own trailing view
+/// passes it to `AidenSettingsRow(…) { … }` instead.
 enum AidenSettingsAccessory {
     case none
-    case value(String)
+    case value(LocalizedStringKey)
     case chevron
-    case valueChevron(String)
+    case valueChevron(LocalizedStringKey)
+    /// A switch; the whole row flips it, and the row's `action` is not used.
     case toggle(Binding<Bool>)
-    case chip(String, tone: AidenStatusTone)
-    case custom(AnyView)
+    /// A switch whose state isn't known yet (its host hasn't answered): a
+    /// spinner in its place, and nothing to flip.
+    case loadingToggle
+    case chip(LocalizedStringKey, tone: AidenStatusTone)
+
+    var showsChevron: Bool {
+        switch self {
+        case .chevron, .valueChevron: true
+        default: false
+        }
+    }
+}
+
+extension AidenSettingsTokens {
+    /// The icon column at a text size: 28pt by default, growing with the
+    /// symbol so a large glyph never runs into its title.
+    static func iconColumnWidth(uiFontSize: Int, percent: CGFloat) -> CGFloat {
+        let scaled = iconColumnWidth * CGFloat(uiFontSize) / CGFloat(defaultUIFontSize) * percent / 100
+        return max(iconColumnWidth, scaled.rounded(.up))
+    }
+
+    /// Where the separator under a row starts: at its title.
+    static func separatorInset(iconColumn: CGFloat?) -> CGFloat {
+        guard let iconColumn else { return textRowSeparatorInset }
+        return rowHPadding + iconColumn + AidenSpacing.m
+    }
 }
 
 /// A settings row: a plain leading symbol (never on a tile), a title, an
 /// optional line under it, and its control at the end. With an action it is
 /// a button, so it keeps the keyboard focus ring; a toggle row flips its
 /// switch from anywhere on the row. A disabled reason dims the row and says
-/// why under the title.
-struct AidenSettingsRow: View {
+/// why under the title. A trailing view must not be a control of its own in
+/// a row with an action: the whole row is already the button.
+struct AidenSettingsRow<Trailing: View>: View {
     var icon: String?
-    let title: String
-    var subtitle: String?
-    var accessory: AidenSettingsAccessory = .none
-    var disabledReason: String?
+    let title: LocalizedStringKey
+    var subtitle: LocalizedStringKey?
+    var accessory: AidenSettingsAccessory
+    var disabledReason: LocalizedStringKey?
     var action: (() -> Void)?
+    @ViewBuilder let trailing: () -> Trailing
+
+    @Environment(\.aidenUIFontSize) private var uiFontSize
+    @ScaledMetric(relativeTo: .body) private var iconPercent: CGFloat = 100
 
     init(
         icon: String? = nil,
-        title: String,
-        subtitle: String? = nil,
+        title: LocalizedStringKey,
+        subtitle: LocalizedStringKey? = nil,
         accessory: AidenSettingsAccessory = .none,
-        disabledReason: String? = nil,
-        action: (() -> Void)? = nil
+        disabledReason: LocalizedStringKey? = nil,
+        action: (() -> Void)? = nil,
+        @ViewBuilder trailing: @escaping () -> Trailing
     ) {
         self.icon = icon
         self.title = title
@@ -222,18 +272,37 @@ struct AidenSettingsRow: View {
         self.accessory = accessory
         self.disabledReason = disabledReason
         self.action = action
+        self.trailing = trailing
     }
 
     var body: some View {
+        let column = AidenSettingsTokens.iconColumnWidth(uiFontSize: uiFontSize, percent: iconPercent)
         AidenSettingsRowShell(
             title: title,
             subtitle: subtitle,
             accessory: accessory,
             disabledReason: disabledReason,
-            action: action
-        ) {
-            if let icon { AidenSettingsRowIcon(symbol: icon) }
-        }
+            action: action,
+            leading: { if let icon { AidenSettingsRowIcon(symbol: icon, width: column) } },
+            trailing: trailing
+        )
+        .aidenSeparatorInset(AidenSettingsTokens.separatorInset(iconColumn: icon == nil ? nil : column))
+    }
+}
+
+extension AidenSettingsRow where Trailing == EmptyView {
+    init(
+        icon: String? = nil,
+        title: LocalizedStringKey,
+        subtitle: LocalizedStringKey? = nil,
+        accessory: AidenSettingsAccessory = .none,
+        disabledReason: LocalizedStringKey? = nil,
+        action: (() -> Void)? = nil
+    ) {
+        self.init(
+            icon: icon, title: title, subtitle: subtitle, accessory: accessory,
+            disabledReason: disabledReason, action: action
+        ) { EmptyView() }
     }
 }
 
@@ -241,22 +310,27 @@ struct AidenSettingsRow: View {
 struct AidenNavigationRow: View {
     let route: AidenAppRoute
     var icon: String?
-    let title: String
-    var subtitle: String?
-    var value: String?
+    let title: LocalizedStringKey
+    var subtitle: LocalizedStringKey?
+    var value: LocalizedStringKey?
+
+    @Environment(\.aidenUIFontSize) private var uiFontSize
+    @ScaledMetric(relativeTo: .body) private var iconPercent: CGFloat = 100
 
     var body: some View {
+        let column = AidenSettingsTokens.iconColumnWidth(uiFontSize: uiFontSize, percent: iconPercent)
         NavigationLink(value: route) {
             AidenSettingsRowLabel(
                 title: title,
                 subtitle: subtitle,
                 accessory: value.map { .valueChevron($0) } ?? .chevron,
-                disabledReason: nil
-            ) {
-                if let icon { AidenSettingsRowIcon(symbol: icon) }
-            }
+                disabledReason: nil,
+                leading: { if let icon { AidenSettingsRowIcon(symbol: icon, width: column) } },
+                trailing: { EmptyView() }
+            )
         }
         .buttonStyle(AidenSettingsRowButtonStyle())
+        .aidenSeparatorInset(AidenSettingsTokens.separatorInset(iconColumn: icon == nil ? nil : column))
     }
 }
 
@@ -264,51 +338,61 @@ struct AidenNavigationRow: View {
 struct AidenAvatarValueRow: View {
     let avatar: AidenBotSemanticAvatar
     let name: String
-    var subtitle: String?
-    var value: String?
+    var subtitle: LocalizedStringKey?
+    var value: LocalizedStringKey?
     var action: (() -> Void)?
 
     var body: some View {
         AidenSettingsRowShell(
-            title: name,
+            title: "\(name)",
             subtitle: subtitle,
             accessory: value.map { action == nil ? .value($0) : .valueChevron($0) } ?? (action == nil ? .none : .chevron),
             disabledReason: nil,
-            action: action
-        ) {
-            AidenBotSemanticAvatarView(avatar: avatar, name: name, size: 28)
-                .frame(width: AidenSettingsTokens.iconColumnWidth)
-        }
+            action: action,
+            leading: {
+                AidenBotSemanticAvatarView(avatar: avatar, name: name, size: 28)
+                    .frame(width: AidenSettingsTokens.iconColumnWidth)
+            },
+            trailing: { EmptyView() }
+        )
+        .aidenSeparatorInset(AidenSettingsTokens.separatorLeadingInset)
     }
 }
 
 private struct AidenSettingsRowIcon: View {
     let symbol: String
+    let width: CGFloat
     @Environment(\.aidenPalette) private var palette
 
     var body: some View {
         Image(systemName: symbol)
             .aidenType(.rowTitle)
             .foregroundStyle(palette.secondary)
-            .frame(width: AidenSettingsTokens.iconColumnWidth)
+            .frame(width: width)
             .accessibilityHidden(true)
     }
 }
 
 /// Wraps a row's label in what makes it interactive: a switch, a button or nothing.
-private struct AidenSettingsRowShell<Leading: View>: View {
-    let title: String
-    let subtitle: String?
+private struct AidenSettingsRowShell<Leading: View, Trailing: View>: View {
+    let title: LocalizedStringKey
+    let subtitle: LocalizedStringKey?
     let accessory: AidenSettingsAccessory
-    let disabledReason: String?
+    let disabledReason: LocalizedStringKey?
     let action: (() -> Void)?
     @ViewBuilder let leading: () -> Leading
+    @ViewBuilder let trailing: () -> Trailing
 
     var body: some View {
         Group {
             if case .toggle(let isOn) = accessory {
                 Toggle(isOn: isOn) { label(showsControl: false) }
                     .toggleStyle(AidenSettingsRowToggleStyle())
+            } else if case .loadingToggle = accessory {
+                label(showsControl: true)
+                    .accessibilityElement(children: .combine)
+                    .accessibilityAddTraits(.isToggle)
+                    .accessibilityValue(Text("Loading"))
             } else if let action {
                 Button(action: action) { label(showsControl: true) }
                     .buttonStyle(AidenSettingsRowButtonStyle())
@@ -320,47 +404,54 @@ private struct AidenSettingsRowShell<Leading: View>: View {
         .disabled(disabledReason != nil)
     }
 
-    private func label(showsControl: Bool) -> AidenSettingsRowLabel<Leading> {
+    private func label(showsControl: Bool) -> AidenSettingsRowLabel<Leading, Trailing> {
         AidenSettingsRowLabel(
             title: title,
             subtitle: subtitle,
             accessory: showsControl ? accessory : .none,
             disabledReason: disabledReason,
-            leading: leading
+            leading: leading,
+            trailing: trailing
         )
     }
 }
 
-/// A row's layout: leading mark, text, trailing control.
-private struct AidenSettingsRowLabel<Leading: View>: View {
-    let title: String
-    let subtitle: String?
+/// A row's layout: leading mark, text, trailing control. At accessibility
+/// text sizes the value moves under the title and wraps instead of
+/// truncating; the chevron stays at the end.
+private struct AidenSettingsRowLabel<Leading: View, Trailing: View>: View {
+    let title: LocalizedStringKey
+    let subtitle: LocalizedStringKey?
     let accessory: AidenSettingsAccessory
-    let disabledReason: String?
+    let disabledReason: LocalizedStringKey?
     @ViewBuilder let leading: () -> Leading
+    @ViewBuilder let trailing: () -> Trailing
     @Environment(\.aidenPalette) private var palette
     @Environment(\.isEnabled) private var isEnabled
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
 
     var body: some View {
-        HStack(spacing: AidenSpacing.m) {
+        let stacked = dynamicTypeSize.isAccessibilitySize
+        let content = stacked
+            ? AnyLayout(VStackLayout(alignment: .leading, spacing: AidenSpacing.xs))
+            : AnyLayout(HStackLayout(spacing: AidenSpacing.m))
+        HStack(alignment: stacked ? .firstTextBaseline : .center, spacing: AidenSpacing.m) {
             leading()
-            VStack(alignment: .leading, spacing: 2) {
-                Text(title)
-                    .aidenType(.rowTitle)
-                    .foregroundStyle(isEnabled ? palette.foreground : palette.secondary)
-                if let subtitle {
-                    Text(subtitle)
-                        .aidenType(.footnote)
-                        .foregroundStyle(palette.secondary)
+            content {
+                // The title is offered its width first; the value takes what
+                // is left and truncates, or wraps under it when stacked.
+                text
+                    .frame(maxWidth: stacked ? .infinity : nil, alignment: .leading)
+                    .layoutPriority(1)
+                if !stacked {
+                    Spacer(minLength: 0)
                 }
-                if let disabledReason {
-                    Text(disabledReason)
-                        .aidenType(.footnote)
-                        .foregroundStyle(palette.secondary)
-                }
+                control(stacked: stacked)
+                trailing()
             }
-            .frame(maxWidth: .infinity, alignment: .leading)
-            trailing
+            if accessory.showsChevron {
+                chevron
+            }
         }
         .padding(.horizontal, AidenSettingsTokens.rowHPadding)
         .padding(.vertical, AidenSettingsTokens.rowVPadding)
@@ -368,39 +459,52 @@ private struct AidenSettingsRowLabel<Leading: View>: View {
         .contentShape(Rectangle())
     }
 
-    @ViewBuilder
-    private var trailing: some View {
-        switch accessory {
-        case .none, .toggle:
-            EmptyView()
-        case .value(let value):
-            valueText(value)
-        case .chevron:
-            chevron
-        case .valueChevron(let value):
-            HStack(spacing: AidenSpacing.s) {
-                valueText(value)
-                chevron
+    /// Title, subtitle and reason. Disabled, the title steps back and the
+    /// reason, the line that matters, keeps the foreground ink.
+    private var text: some View {
+        VStack(alignment: .leading, spacing: 2) {
+            Text(title)
+                .aidenType(.rowTitle)
+                .foregroundStyle(isEnabled ? palette.foreground : palette.secondary)
+            if let subtitle {
+                Text(subtitle)
+                    .aidenType(.footnote)
+                    .foregroundStyle(palette.secondary)
             }
-        case .chip(let text, let tone):
-            AidenStatusChip(text, tone: tone)
-        case .custom(let view):
-            view
+            if let disabledReason {
+                Text(disabledReason)
+                    .aidenType(.footnote)
+                    .foregroundStyle(palette.foreground)
+            }
         }
     }
 
-    private func valueText(_ value: String) -> some View {
-        Text(value)
-            .aidenType(.rowValue)
-            .foregroundStyle(palette.secondary)
-            .lineLimit(1)
+    @ViewBuilder
+    private func control(stacked: Bool) -> some View {
+        switch accessory {
+        case .none, .chevron, .toggle:
+            EmptyView()
+        case .loadingToggle:
+            ProgressView()
+                .controlSize(.small)
+                .accessibilityHidden(true)
+        case .value(let value), .valueChevron(let value):
+            Text(value)
+                .aidenType(.rowValue)
+                .foregroundStyle(palette.secondary)
+                .lineLimit(stacked ? nil : 1)
+                .multilineTextAlignment(stacked ? .leading : .trailing)
+                .fixedSize(horizontal: false, vertical: stacked)
+        case .chip(let text, let tone):
+            AidenStatusChip(text, tone: tone)
+        }
     }
 
     private var chevron: some View {
         Image(systemName: "chevron.right")
             .aidenType(.footnote)
             .fontWeight(.semibold)
-            .foregroundStyle(palette.secondary.opacity(0.7))
+            .foregroundStyle(AidenSettingsTokens.chevron(palette))
             .accessibilityHidden(true)
     }
 }
@@ -411,7 +515,7 @@ struct AidenSettingsRowButtonStyle: ButtonStyle {
 
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
-            .background(configuration.isPressed ? palette.foreground.opacity(0.08) : .clear)
+            .background(configuration.isPressed ? AidenSettingsTokens.pressedFill(palette) : .clear)
     }
 }
 
