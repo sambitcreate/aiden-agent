@@ -51,12 +51,19 @@ import { adoptWorkspace } from "../lib/use-workspace-path-intake";
 import { workspaceChangeBusyReason } from "../lib/workspace-menu";
 import {
   discardComposerDraft,
+  getActiveWorktreeGrabbedElements,
   loadComposerDraft,
   restoreUnsentMessage,
   saveComposerDraftText,
   seedComposerAttachments,
+  seedComposerGrabbedElements,
+  setActiveWorktreeGrabbedElements,
   stageComposerText,
 } from "../lib/composer-draft-store";
+import {
+  withoutGrabbedElementThumbnails,
+  type GrabbedElementContextV1,
+} from "../shared/browser-element-grab";
 import { attachmentsWithBytes } from "../lib/stored-attachments";
 import { reduceVisualDrafts, type VisualDrafts } from "../lib/html-artifact-transcript";
 import { reduceUiDrafts, reduceUiVisuals, type UiDrafts } from "../lib/ui-visual-transcript";
@@ -755,15 +762,27 @@ export function ChatPane({ chatId }: { chatId: string }) {
     },
     [contextFeed],
   );
-  const cloneDraftRef = React.useRef<{ text: string; attachments: Attachment[] }>({ text: "", attachments: [] });
+  const cloneDraftRef = React.useRef<{
+    text: string;
+    attachments: Attachment[];
+    grabbedElements: GrabbedElementContextV1[];
+  }>({ text: "", attachments: [], grabbedElements: [] });
   const onDraftContextChange = React.useCallback(
-    (value: string, draftAttachments: Attachment[]) => {
-      cloneDraftRef.current = { text: value, attachments: draftAttachments };
+    (
+      value: string,
+      draftAttachments: Attachment[],
+      draftGrabbedElements: GrabbedElementContextV1[] = [],
+    ) => {
+      cloneDraftRef.current = {
+        text: value,
+        attachments: draftAttachments,
+        grabbedElements: draftGrabbedElements,
+      };
       const draftText = value.trim() ? value : undefined;
       const attachments = draftAttachments.length ? draftAttachments : undefined;
       contextFeed.draftChanged(draftText || attachments ? { draftText, attachments } : undefined);
       // New-chat entry points reuse only a draft whose composer is empty.
-      setChatDraftHasContent(chatId, Boolean(draftText || attachments));
+      setChatDraftHasContent(chatId, Boolean(draftText || attachments || draftGrabbedElements.length));
     },
     [chatId, contextFeed],
   );
@@ -1367,7 +1386,11 @@ export function ChatPane({ chatId }: { chatId: string }) {
   const copyChat = React.useCallback(
     async (
       forkAt?: { messageId: string; position: ChatForkPosition },
-      prefill?: { text: string; attachments: readonly Attachment[] },
+      prefill?: {
+        text: string;
+        attachments: readonly Attachment[];
+        grabbedElements?: readonly GrabbedElementContextV1[];
+      },
       summary?: { instructions?: string },
       continueInWorkspaceId?: string,
     ) => {
@@ -1395,6 +1418,9 @@ export function ChatPane({ chatId }: { chatId: string }) {
       if (prefill) {
         saveComposerDraftText(copied.id, prefill.text);
         seedComposerAttachments(copied.id, prefill.attachments);
+        if (prefill.grabbedElements?.length) {
+          seedComposerGrabbedElements(copied.id, prefill.grabbedElements, prefill.attachments);
+        }
       }
       const copiedWorkspaceId = persistedChatWorkspaceId(copied.workspaceId);
       if (copiedWorkspaceId !== effectiveWorkspaceIdRef.current) {
@@ -1461,10 +1487,19 @@ export function ChatPane({ chatId }: { chatId: string }) {
       const queued = chatMessageQueue(chatId).getSnapshot().messages[0];
       const storedText = loadComposerDraft(chatId).text.trim();
       const unsent =
-        draft.text.trim() || draft.attachments.length
-          ? { text: draft.text.trim(), attachments: draft.attachments }
-          : queued && (queued.text.trim() || queued.attachments.length)
-            ? { text: queued.text.trim(), attachments: queued.attachments }
+        draft.text.trim() || draft.attachments.length || draft.grabbedElements.length
+          ? {
+              text: draft.text.trim(),
+              attachments: draft.attachments,
+              grabbedElements: draft.grabbedElements,
+            }
+          : queued &&
+              (queued.text.trim() || queued.attachments.length || queued.grabbedElements?.length)
+            ? {
+                text: queued.text.trim(),
+                attachments: queued.attachments,
+                grabbedElements: queued.grabbedElements,
+              }
             : storedText
               ? { text: storedText, attachments: [] }
               : undefined;
@@ -1531,6 +1566,9 @@ export function ChatPane({ chatId }: { chatId: string }) {
       const prefill = {
         text: message.content,
         attachments: await attachmentsWithBytes(chatId, message.attachments ?? [], chatsApi.imageData),
+        ...(message.grabbedElements?.length
+          ? { grabbedElements: structuredClone(message.grabbedElements) }
+          : {}),
       };
       if (messages.slice(0, index).some((earlier) => earlier.role === "user")) {
         await copyChat({ messageId, position }, prefill, summary);
@@ -1541,6 +1579,9 @@ export function ChatPane({ chatId }: { chatId: string }) {
       const workspaceId = persistedChatWorkspaceId(chat.data?.workspaceId);
       const created = createChatDraft(workspaceId, undefined, prefill.text).chat;
       seedComposerAttachments(created.id, prefill.attachments);
+      if (prefill.grabbedElements?.length) {
+        seedComposerGrabbedElements(created.id, prefill.grabbedElements, prefill.attachments);
+      }
       selectWorkspace(workspaceId);
       try {
         await navigate({ to: "/chat/$chatId", params: { chatId: created.id } });
@@ -2213,15 +2254,25 @@ export function ChatPane({ chatId }: { chatId: string }) {
       text: string,
       attachments: Attachment[],
       skillInvocation?: SkillInvocationV1,
-      options?: { visualize?: boolean; btw?: boolean; goal?: string; goalSource?: "slash" | "proposal"; inputSource?: ChatInputSourceV1 },
+      options?: {
+        visualize?: boolean;
+        btw?: boolean;
+        goal?: string;
+        goalSource?: "slash" | "proposal";
+        inputSource?: ChatInputSourceV1;
+        grabbedElements?: GrabbedElementContextV1[];
+      },
     ) => {
       // Only Aiden Live's chat tools set this; the message shows "By voice".
       const inputSource = options?.inputSource;
+      const grabbedElements = options?.grabbedElements?.length
+        ? options.grabbedElements
+        : undefined;
       if (options?.btw) {
         if (getChatDraft(chatId))
           throw new Error("Send the first message before asking a side question.");
-        if (attachments.length > 0 || skillInvocation) {
-          throw new Error("Side questions do not accept attachments or skills.");
+        if (attachments.length > 0 || grabbedElements?.length || skillInvocation) {
+          throw new Error("Side questions do not accept attachments, browser elements, or skills.");
         }
         // A new turn revokes any active read-aloud job for this chat.
         readAloudRef.current?.stop();
@@ -2348,6 +2399,7 @@ export function ChatPane({ chatId }: { chatId: string }) {
                   role: "user" as const,
                   content: text,
                   attachments: attachments.length ? attachments : undefined,
+                  ...(grabbedElements ? { grabbedElements } : {}),
                 },
                 skillInvocation,
                 ...(inputSource ? { inputSource } : {}),
@@ -2355,6 +2407,7 @@ export function ChatPane({ chatId }: { chatId: string }) {
             : undefined;
           if (firstMessageInput && worktreeRequest) {
             const visit = chatVisitRef.current;
+            setActiveWorktreeGrabbedElements(chatId, grabbedElements);
             performance.mark?.("aiden:worktree-send:start");
             worktreeSend = startWorktreeFirstSend({
               api: {
@@ -2430,12 +2483,12 @@ export function ChatPane({ chatId }: { chatId: string }) {
                 });
               }
               // The composer that sent this restores its own text; any other
-              // (the user left and came back) gets the text and attachments back.
+              // (the user left and came back) gets the text, attachments, and grabbed elements back.
               if (
                 isWorktreeSendCancelled(error) &&
                 !(mountedRef.current && chatVisitRef.current === visit)
               ) {
-                restoreUnsentMessage(chatId, text, attachments);
+                restoreUnsentMessage(chatId, text, attachments, grabbedElements);
               }
               throw error;
             }
@@ -2448,6 +2501,7 @@ export function ChatPane({ chatId }: { chatId: string }) {
                     role: "user",
                     content: text,
                     attachments: attachments.length ? attachments : undefined,
+                    ...(grabbedElements ? { grabbedElements } : {}),
                   },
                   {
                     providerId,
@@ -2533,6 +2587,7 @@ export function ChatPane({ chatId }: { chatId: string }) {
         if (firstDraft) finishChatDraftSend(chatId, false);
         // The saved chat (or the restored composer text) replaces the progress row.
         worktreeSend?.release();
+        if (worktreeSend) setActiveWorktreeGrabbedElements(chatId, undefined);
         if (
           mountedRef.current &&
           chatIdRef.current === chatId &&
@@ -2650,17 +2705,28 @@ export function ChatPane({ chatId }: { chatId: string }) {
     send: (message) => {
       if (
         visionSupported === false &&
-        message.attachments.some((attachment) => attachment.kind === "image")
+        withoutGrabbedElementThumbnails(message.attachments).some(
+          (attachment) => attachment.kind === "image",
+        )
       ) {
         return Promise.reject(
           new Error("Switch to a vision-capable model before resuming these queued images."),
         );
       }
+      const sendOptions =
+        message.options || message.grabbedElements?.length
+          ? {
+              ...message.options,
+              ...(message.grabbedElements?.length
+                ? { grabbedElements: message.grabbedElements }
+                : {}),
+            }
+          : undefined;
       return handleSend(
         message.text,
         message.attachments,
         message.skillInvocation,
-        message.options,
+        sendOptions,
       );
     },
   });
@@ -2714,7 +2780,13 @@ export function ChatPane({ chatId }: { chatId: string }) {
       text: string,
       attachments: Attachment[],
       skillInvocation?: SkillInvocationV1,
-      options?: { visualize?: boolean; btw?: boolean; goal?: string; inputSource?: ChatInputSourceV1 },
+      options?: {
+        visualize?: boolean;
+        btw?: boolean;
+        goal?: string;
+        inputSource?: ChatInputSourceV1;
+        grabbedElements?: GrabbedElementContextV1[];
+      },
     ) => {
       if (stopRequestedRef.current) {
         throw new Error("Aiden is stopping this response. Send your message after it stops.");
@@ -2723,6 +2795,7 @@ export function ChatPane({ chatId }: { chatId: string }) {
         id: createChatTurnId(),
         text,
         attachments,
+        ...(options?.grabbedElements?.length ? { grabbedElements: options.grabbedElements } : {}),
         skillInvocation,
         options:
           options?.visualize || options?.inputSource
@@ -2762,9 +2835,14 @@ export function ChatPane({ chatId }: { chatId: string }) {
   );
 
   const steerMessage = React.useCallback(
-    async (text: string, attachments: Attachment[], skillInvocation?: SkillInvocationV1) => {
-      if (!text.trim() || attachments.length > 0 || skillInvocation) {
-        throw new Error("Steer requires text without attachments or a skill.");
+    async (
+      text: string,
+      attachments: Attachment[],
+      skillInvocation?: SkillInvocationV1,
+      options?: { grabbedElements?: GrabbedElementContextV1[] },
+    ) => {
+      if (!text.trim() || attachments.length > 0 || options?.grabbedElements?.length || skillInvocation) {
+        throw new Error("Steer requires text without attachments, browser elements, or a skill.");
       }
       if (text.length > MAX_RUN_INPUT_TEXT) {
         throw new Error("Guidance is too long to steer. Queue it as a follow-up instead.");
@@ -4649,9 +4727,9 @@ export function ChatPane({ chatId }: { chatId: string }) {
                 onSteer={
                   draft || observedRunVisible
                     ? undefined
-                    : (text, attachments, skillInvocation) => {
+                    : (text, attachments, skillInvocation, options) => {
                         setDeniedApprovalChatId(null);
-                        return steerMessage(text, attachments, skillInvocation);
+                        return steerMessage(text, attachments, skillInvocation, options);
                       }
                 }
                 hasQueuedMessages={queuedState.messages.length > 0}
@@ -4949,6 +5027,7 @@ export function ChatPane({ chatId }: { chatId: string }) {
               {...(leadChatMessageLabel ? { leadChatLabel: leadChatMessageLabel } : {})}
               messages={messages}
               draftWorktreeSend={worktreeSend}
+              draftWorktreeGrabbedElements={getActiveWorktreeGrabbedElements(chatId)}
               streamingText={displayedStreamingText}
               streamingReasoning={displayedStreamingReasoning}
               streamingArtifacts={displayedStreamingArtifacts}

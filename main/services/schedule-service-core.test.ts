@@ -66,7 +66,11 @@ function harness(globallyEnabled: () => Promise<boolean> = async () => true) {
     },
     cancelAll: () => {
       cancelAllCalls += 1;
-      for (const [taskId, resolve] of pending) {
+      for (const [taskId, resolve] of [...pending]) {
+        if (deferCancellations) {
+          deferredCancellations.add(taskId);
+          continue;
+        }
         resolve({
           id: `run-${taskId}`,
           taskId,
@@ -76,8 +80,8 @@ function harness(globallyEnabled: () => Promise<boolean> = async () => true) {
           output: "",
           error: "cancelled",
         });
+        pending.delete(taskId);
       }
-      pending.clear();
     },
   };
   const service = createScheduleServiceCore({
@@ -1532,4 +1536,63 @@ test("turning a chat task off and on by hand starts a new count of failed runs",
   await fireNext();
   assert.equal((await late.store.get(task.id))?.enabled, true, "the failure after turning it back on is the first of a new count");
   assert.deepEqual(late.cards, []);
+});
+
+test("stopAndSettle cancels active runs and clears deferred catch-up so reevaluateCatchUp cannot dispatch after stop", async (t) => {
+  const h = harness();
+  t.after(() => h.service.stop());
+  let deferred = true;
+  h.service.setCatchUpDeferPolicy(() => deferred);
+  const task1 = await addTask(h.store);
+  const task2 = await h.store.save({
+    name: "Second brief",
+    mode: "llm",
+    cron: "0 9 * * *",
+    timezone: "UTC",
+    prompt: "Summarize more changes.",
+  });
+  await h.store.updateRuntime(task2.id, { nextRunAt: Date.now() - 60_000 });
+  await h.service.start();
+
+  // Start task1 manually and hold its cancellation until we explicitly release it.
+  h.holdCancellations();
+  const manualRun = h.service.runNow(task1.id);
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(h.service.isRunning(task1.id), true);
+
+  let settled = false;
+  const stopping = h.service.stopAndSettle().then(() => { settled = true; });
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(settled, false);
+  assert.equal(h.hasDeferredCancellation(task1.id), true);
+
+  h.releaseCancellation(task1.id);
+  await stopping;
+  await manualRun;
+  assert.equal(h.service.isActive(), false);
+  assert.equal(h.service.isRunning(task1.id), false);
+
+  // Unblocking deferral after shutdown must not dispatch the cleared catch-up entry.
+  deferred = false;
+  h.service.reevaluateCatchUp();
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(h.hasPending(task2.id), false);
+});
+
+test("pause rolls back durable pause and rearms the cron job when caller aborts after pauseWithRollback commits", async (t) => {
+  const h = harness();
+  t.after(() => h.service.stop());
+  const task = await addTask(h.store);
+  await h.service.start();
+  const controller = new AbortController();
+  const originalPauseWithRollback = h.store.pauseWithRollback.bind(h.store);
+  h.store.pauseWithRollback = async (id: string) => {
+    const result = await originalPauseWithRollback(id);
+    controller.abort();
+    return result;
+  };
+
+  await assert.rejects(h.service.pause(task.id, { signal: controller.signal }), /cancelled/u);
+  assert.equal((await h.store.get(task.id))?.enabled, true);
+  assert.ok(scheduledJobs.some((job) => job.name === `scheduled:${task.id}`));
 });

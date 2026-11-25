@@ -1303,6 +1303,7 @@
         "renderer/lib/profile-share-data.test.ts",
         "renderer/lib/query-client.test.ts",
         "renderer/lib/remote-approval.test.ts",
+        "renderer/lib/remote-bot-seen.test.ts",
         "renderer/lib/remote-connection-status.test.ts",
         "renderer/lib/remote-pairing-lifecycle.test.ts",
         "renderer/lib/remote-settings-polling.test.ts",
@@ -1549,7 +1550,10 @@
         "renderer/components/bots/plan-card.test.tsx",
         "renderer/shared/bot-plans.test.ts",
         "renderer/shared/bot-messages.test.ts",
-        "renderer/components/settings/storage-settings.test.ts"
+        "renderer/components/settings/storage-settings.test.ts",
+        "renderer/shared/browser-element-grab.test.ts",
+        "renderer/components/grabbed-element-chip.test.tsx",
+        "renderer/components/composer-browser-grab.test.tsx"
       ],
       "preserved": [
         "ios-release-policy",

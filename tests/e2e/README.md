@@ -33,7 +33,9 @@ the macOS CI gate). On Linux, follow CI's Linux E2E step: its apt packages,
 `xvfb-run --auto-servernum npm run test:e2e`.
 
 Hosted CI splits deterministic spec files across five isolated macOS runners (`e2e`)
-and three Ubuntu runners (`linux-e2e`), each with one Playwright worker. macOS shards reuse the
+and three Ubuntu runners (`linux-e2e`), each with one Playwright worker. On pull
+requests the macOS job runs only the selected specs from the spec map's `macos`
+list, on one runner, and Linux runs the rest; see `docs/ci.md`. macOS shards reuse the
 `build` job's output; each Ubuntu shard builds the app itself and runs under `xvfb-run`.
 `scripts/ci-e2e-shards.mjs` balances files using recorded hosted durations when
 the Actions cache is present, otherwise the conservative `FILE_SECONDS` table,

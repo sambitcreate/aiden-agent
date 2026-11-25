@@ -608,12 +608,14 @@ test("OpenAPI freezes every planned route under authenticated Aiden v1 semantics
     "/bot-presets",
     "/bots/from-preset",
     "/bots/{botId}/session",
+    "/bots/{botId}/session/entries",
     "/bots/{botId}/session/events",
     "/bots/{botId}/messages",
     "/bots/{botId}/attachments",
     "/bots/{botId}/attachments/{attachmentId}",
     "/bots/{botId}/resume",
     "/bots/{botId}/dismiss",
+    "/bots/{botId}/queued/{submissionId}/withdraw",
     "/bots/{botId}/stop",
     "/bots/{botId}/questions/{waitId}/answer",
     "/bots/{botId}/handoffs/{waitId}/answer",
@@ -1371,10 +1373,12 @@ test("Bot OpenAPI freezes bounded DTOs, conjunctive grants, and privacy-safe rou
     ["/bot-presets", "get", "200", "BotPresetList"],
     ["/bots/from-preset", "post", "201", "BotPresetCreateResult"],
     ["/bots/{botId}/session", "get", "200", "BotSession"],
+    ["/bots/{botId}/session/entries", "get", "200", "BotSessionEntriesPage"],
     ["/bots/{botId}/messages", "post", "200", "BotMessageReceipt"],
     ["/bots/{botId}/attachments", "post", "201", "AttachmentReference"],
     ["/bots/{botId}/resume", "post", "200", "BotSessionState"],
     ["/bots/{botId}/dismiss", "post", "200", "BotSessionState"],
+    ["/bots/{botId}/queued/{submissionId}/withdraw", "post", "200", "BotQueuedWithdrawReceipt"],
     ["/bots/{botId}/stop", "post", "200", "BotSessionState"],
     ["/bots/{botId}/questions/{waitId}/answer", "post", "200", "BotQuestionAnswerReceipt"],
     ["/bots/{botId}/handoffs/{waitId}/answer", "post", "200", "BotHandoffAnswerReceipt"],
@@ -3618,7 +3622,7 @@ test("revision 56 plans decode strictly, preserve absent versus null, and exclud
   const section = protocol.parseAidenRemoteContractFixture(raw).botPlans!;
   assert.deepEqual(section, raw.botPlans);
   assert.equal(protocol.AIDEN_REMOTE_BOT_PLANS_CONTRACT_REVISION, 56);
-  assert.equal(protocol.AIDEN_REMOTE_CONTRACT_REVISION, 65);
+  assert.equal(protocol.AIDEN_REMOTE_CONTRACT_REVISION, 67);
   assert.equal(section.pending.status, "pending");
   assert.equal(section.active.steps[0].status, "done");
   const parse = protocol.parseAidenRemoteBotPlan;
@@ -3705,7 +3709,7 @@ test("revision 57 allowed fixture is strict and exposes only bounded public list
   const raw = await json("fixtures/contract.json") as Record<string, any>;
   const section = protocol.parseAidenRemoteContractFixture(raw).botAllowed!;
   assert.deepEqual(section, raw.botAllowed);
-  assert.equal(protocol.AIDEN_REMOTE_BOT_ALLOWED_CONTRACT_REVISION, 57); assert.equal(protocol.AIDEN_REMOTE_CONTRACT_REVISION, 65);
+  assert.equal(protocol.AIDEN_REMOTE_BOT_ALLOWED_CONTRACT_REVISION, 57); assert.equal(protocol.AIDEN_REMOTE_CONTRACT_REVISION, 67);
   const all = [...section.paginated.firstPage.entries, ...section.paginated.nextPage.entries];
   assert.equal(all.length, 53); assert.equal(all.filter(e => e.kind === "rule").length, 50); assert.equal(all.filter(e => e.kind === "folder").length, 3);
   assert.equal(new Set(all.map(e => e.id)).size, 53);
@@ -3814,7 +3818,7 @@ test("revision 62 reads only the steps Stop cancelled as stopped, and every othe
   const protocol = await import("./aiden-remote-protocol.js");
   const raw = await json("fixtures/contract.json") as Record<string, any>;
   assert.equal(protocol.AIDEN_REMOTE_STOPPED_BY_USER_CONTRACT_REVISION, 62);
-  assert.equal(protocol.AIDEN_REMOTE_CONTRACT_REVISION, 65);
+  assert.equal(protocol.AIDEN_REMOTE_CONTRACT_REVISION, 67);
   const fixture = protocol.parseAidenRemoteContractFixture(raw).stoppedSteps;
   assert.ok(fixture);
   assert.deepEqual(fixture.stoppedStepIds, ["tool-3"]);
@@ -3922,7 +3926,7 @@ test("revision 65 distinguishes gap recovery snapshots from provider resets and 
   const protocol = await import("./aiden-remote-protocol.js");
   const raw = await json("fixtures/contract.json") as Record<string, any>;
   assert.equal(protocol.AIDEN_REMOTE_STREAM_SNAPSHOT_REASONS_CONTRACT_REVISION, 65);
-  assert.equal(protocol.AIDEN_REMOTE_CONTRACT_REVISION, 65);
+  assert.equal(protocol.AIDEN_REMOTE_CONTRACT_REVISION, 67);
   const parsedFixture = protocol.parseAidenRemoteContractFixture(raw);
   const section = parsedFixture.streamRecovery;
   assert.ok(section);
@@ -3998,4 +4002,75 @@ test("revision 65 distinguishes gap recovery snapshots from provider resets and 
     }),
     false,
   );
+});
+
+test("revision 66 host feed Bot rows carry a one-line preview and refuse anything else", async () => {
+  const protocol = await import("./aiden-remote-protocol.js");
+  const raw = await json("fixtures/contract.json") as Record<string, any>;
+  assert.equal(protocol.AIDEN_REMOTE_BOT_FEED_PREVIEW_CONTRACT_REVISION, 66);
+  const fixture = protocol.parseAidenRemoteContractFixture(raw);
+  const upsert = fixture.hostFeedEvents?.find((event) => event.type === "bot.upsert");
+  assert.ok(upsert, "the fixture sends a Bot row");
+  assert.equal(typeof upsert.payload.preview, "string");
+  assert.equal(upsert.payload.needsYou, true);
+  assert.equal(upsert.payload.summarized, true);
+
+  const row = (raw.hostFeedEvents as { type: string; payload: Record<string, unknown> }[])
+    .find((event) => event.type === "bot.upsert")!.payload;
+  const parse = (change: Record<string, unknown>) => () => protocol.parseAidenRemoteHostFeedBot({ ...row, ...change });
+  assert.doesNotThrow(parse({ preview: "😀".repeat(140) }), "the limit counts characters, not UTF-16 units");
+  assert.throws(parse({ preview: "x".repeat(141) }));
+  assert.throws(parse({ preview: "" }));
+  assert.throws(parse({ preview: " leading space" }), /one trimmed plain line/u);
+  assert.throws(parse({ preview: "two\nlines" }), /one trimmed plain line/u);
+  assert.throws(parse({ preview: "hidden\u202Eoverride" }), /one trimmed plain line/u);
+  assert.doesNotThrow(parse({ preview: "family 👨\u200D👩\u200D👧" }), "emoji joiners stay");
+  assert.throws(parse({ needsYou: false }), /needsYou/u);
+  assert.throws(parse({ failed: "yes" }), /failed/u);
+  assert.throws(parse({ summarized: false }), /summarized/u);
+  assert.throws(parse({ lastReplyAt: "yesterday" }));
+  assert.throws(parse({ issueCount: 2 }), /issueCount/u);
+  assert.throws(parse({ secret: "x" }), /unsupported field/u);
+
+  // The OpenAPI contract describes the same row.
+  const { default: Ajv2020 } = await import("ajv/dist/2020.js");
+  const { default: addFormats } = await import("ajv-formats");
+  const spec = await json("openapi.json") as { components: object };
+  const ajv = new Ajv2020({ strict: false });
+  addFormats(ajv);
+  const feedBot = ajv.compile({ $ref: "#/components/schemas/HostFeedBot", components: spec.components });
+  assert.equal(feedBot(row), true, JSON.stringify(feedBot.errors));
+  assert.equal(feedBot({ ...row, preview: "x".repeat(141) }), false);
+  assert.equal(feedBot({ ...row, summarized: false }), false);
+});
+
+test("revision 67 session pages and queued withdraw receipts decode strictly and match the OpenAPI contract", async () => {
+  const protocol = await import("./aiden-remote-protocol.js");
+  assert.equal(protocol.AIDEN_REMOTE_BOT_SESSION_PAGES_CONTRACT_REVISION, 67);
+  assert.equal(protocol.AIDEN_REMOTE_CONTRACT_REVISION, 67);
+  const raw = await json("fixtures/contract.json") as Record<string, any>;
+  const entries = (raw.botSession.entries as unknown[]).slice(0, 2);
+  const page = { botId: raw.botSession.botId, epoch: raw.botSession.epoch, entries, hasOlder: true };
+  assert.deepEqual(protocol.parseAidenRemoteBotSessionEntriesPage(page), page);
+  assert.throws(() => protocol.parseAidenRemoteBotSessionEntriesPage({ ...page, seq: 3 }), /unsupported field/u);
+  assert.throws(() => protocol.parseAidenRemoteBotSessionEntriesPage({ ...page, entries: [entries[0], entries[0]] }), /unique/u);
+  assert.throws(() => protocol.parseAidenRemoteBotSessionEntriesPage({ ...page, hasOlder: undefined }));
+  const receipt = { submissionId: "42", outcome: "started" };
+  assert.deepEqual(protocol.parseAidenRemoteBotQueuedWithdrawReceipt(receipt), receipt);
+  assert.throws(() => protocol.parseAidenRemoteBotQueuedWithdrawReceipt({ ...receipt, outcome: "cancelled" }));
+  assert.throws(() => protocol.parseAidenRemoteBotQueuedWithdrawReceipt({ ...receipt, submissionId: "a/b" }));
+
+  const { default: Ajv2020 } = await import("ajv/dist/2020.js");
+  const { default: addFormats } = await import("ajv-formats");
+  const spec = await json("openapi.json") as { components: object; paths: Record<string, any> };
+  const ajv = new Ajv2020({ strict: false });
+  addFormats(ajv);
+  const pageSchema = ajv.compile({ $ref: "#/components/schemas/BotSessionEntriesPage", components: spec.components });
+  assert.equal(pageSchema(page), true, JSON.stringify(pageSchema.errors));
+  assert.equal(pageSchema({ ...page, seq: 3 }), false);
+  const receiptSchema = ajv.compile({ $ref: "#/components/schemas/BotQueuedWithdrawReceipt", components: spec.components });
+  assert.equal(receiptSchema(receipt), true);
+  assert.equal(receiptSchema({ ...receipt, outcome: "cancelled" }), false);
+  assert.equal(spec.paths["/bots/{botId}/session/entries"].get.operationId, "getBotSessionEntries");
+  assert.equal(spec.paths["/bots/{botId}/queued/{submissionId}/withdraw"].post.operationId, "withdrawBotQueuedMessage");
 });

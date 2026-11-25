@@ -7,9 +7,9 @@ import * as React from "react";
 import { useNavigate, useRouter, useRouterState } from "@tanstack/react-router";
 import { ChevronLeft, Plug, RotateCcw, Search, Star, UserRound, X } from "lucide-react";
 import { BotAvatar } from "../../components/bot-avatar";
+import { BotNeedsYouBadge } from "../../components/bot-needs-you-badge";
 import { HistoryNavButtons } from "../../components/history-nav";
 import {
-  Badge,
   Button,
   EmptyState,
   Input,
@@ -25,6 +25,7 @@ import { useProfile } from "../../lib/queries";
 import { cn } from "../../lib/ui-utils";
 import type { BotDefinition } from "../../shared/bots";
 import { RemoteBotsSection, remoteBotGroupsMatching } from "../../components/remote-bots-section";
+import { BotUnreadDot } from "../../components/bot-unread-dot";
 import { useRemoteBots } from "../remote-bots";
 import { BotCreateMenu, useBotCreateDialogs } from "./bot-create-menu";
 import { BotDeleteDialog } from "./bot-delete-dialog";
@@ -86,12 +87,6 @@ function sameRowProps(previous: RowProps, next: RowProps): boolean {
   );
 }
 
-/** The unread dot, inline after the name: it takes room only when it is there. */
-function UnreadDot() {
-  return (
-    <span role="img" aria-label="Unread" title="New reply" className="inline-flex size-2 shrink-0 rounded-full bg-accent" />
-  );
-}
 
 /** The row's ⌘ number while ⌘ is held, where its ••• button sits. */
 function ShortcutHint({ binding, className }: { binding: string; className: string }) {
@@ -109,11 +104,6 @@ function ShortcutHint({ binding, className }: { binding: string; className: stri
   );
 }
 
-const NeedsYouBadge = () => (
-  <Badge color="warning" className="h-5 shrink-0 px-1.5 text-mini">
-    Needs you
-  </Badge>
-);
 
 const BotRow = React.memo(function BotRow({
   row,
@@ -165,11 +155,11 @@ const BotRow = React.memo(function BotRow({
             <span className="flex min-w-0 items-center gap-1.5">
               <span className="truncate text-regular font-medium text-primary">{row.bot.name}</span>
               {/* "Needs you" outranks the dot; the row still says "Unread" to a screen reader. */}
-              {unread && !row.needsYou ? <UnreadDot /> : null}
+              {unread && !row.needsYou ? <BotUnreadDot /> : null}
             </span>
             {line || row.needsYou ? (
               <span className="mt-0.5 flex min-w-0 items-center gap-1.5">
-                {row.needsYou ? <NeedsYouBadge /> : null}
+                {row.needsYou ? <BotNeedsYouBadge /> : null}
                 {row.needsYou && unread ? <span className="sr-only">Unread</span> : null}
                 {line ? (
                   // Read as the row's description, so its name stays the Bot's name and status.
@@ -250,7 +240,7 @@ const PinnedBot = React.memo(function PinnedBot({
           </span>
           <span className="flex max-w-full min-w-0 items-center gap-1.5">
             <span className="truncate text-strong font-medium text-primary">{row.bot.name}</span>
-            {row.needsYou ? <NeedsYouBadge /> : unread ? <UnreadDot /> : null}
+            {row.needsYou ? <BotNeedsYouBadge /> : unread ? <BotUnreadDot /> : null}
             {row.needsYou && unread ? <span className="sr-only">Unread</span> : null}
           </span>
           {description ? (
@@ -568,6 +558,7 @@ export function BotSidebar() {
           {list}
           <RemoteBotsSection
             groups={remoteShown}
+            listed={remote.groups}
             opening={remote.opening}
             selected={hostBotChatRouteKey(pathname)}
             onOpen={remote.open}

@@ -1,3 +1,6 @@
+import { createServer } from "node:http";
+import type { AddressInfo } from "node:net";
+import type { BrowserCommand, BrowserCommandResult, BrowserState } from "../../renderer/shared/browser";
 import { auditAccessibility } from "./axe-gate";
 import {
   expect,
@@ -166,6 +169,118 @@ test("core surfaces pass the WCAG A/AA axe gate and keep their accessible struct
     `);
     await page.keyboard.press("Escape");
     await expect(confirm).toBeHidden();
+  });
+
+  await test.step("browser grab chip & inspection popover", async () => {
+    const workspaceId = await page.evaluate(() =>
+      localStorage.getItem("aiden-agent.workspaceId"),
+    );
+    expect(workspaceId).toBeTruthy();
+    const server = createServer((_request, response) => {
+      response.writeHead(200, { "content-type": "text/html; charset=utf-8" });
+      response.end(
+        `<!doctype html><html><head><title>Grab a11y fixture</title></head><body style="padding:24px;font:16px system-ui"><button id="hero-btn" type="button" style="padding:10px 16px">Launch</button><script>function HeroBanner(){}const btn=document.getElementById('hero-btn');btn['__reactFiber$a11y']={tag:5,type:'button',stateNode:btn,return:{tag:0,type:HeroBanner,_debugSource:{fileName:'/src/HeroBanner.tsx',lineNumber:10,columnNumber:2},return:null}};</script></body></html>`,
+      );
+    });
+    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+    const url = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+    type BrowserTestWindow = Window & {
+      aidenAPI: { ipc: { invoke<T>(channel: string, ...args: unknown[]): Promise<T> } };
+    };
+    const browserCommand = (input: BrowserCommand) =>
+      page.evaluate(
+        ({ id, cmd }) =>
+          (window as unknown as BrowserTestWindow).aidenAPI.ipc.invoke<BrowserCommandResult>(
+            "browser:command",
+            id,
+            cmd,
+          ),
+        { id: workspaceId!, cmd: input },
+      );
+    const browserState = () =>
+      page.evaluate(
+        (id) =>
+          (window as unknown as BrowserTestWindow).aidenAPI.ipc.invoke<BrowserState>(
+            "browser:get-state",
+            id,
+          ),
+        workspaceId!,
+      );
+    let tabId: string | undefined;
+    try {
+      await page.getByRole("button", { name: "Show Environment" }).click();
+      const surface = page.getByRole("complementary", { name: "Environment work surface" });
+      await surface.getByRole("button", { name: "Browser", exact: true }).click();
+      const opened = await browserCommand({ action: "create", url });
+      tabId = opened.state.activeTabId!;
+      await expect
+        .poll(async () => (await browserState()).tabs.find((tab) => tab.id === tabId)?.title)
+        .toBe("Grab a11y fixture");
+      await expect
+        .poll(async () => (await browserState()).tabs.find((tab) => tab.id === tabId)?.visible)
+        .toBe(true);
+
+      await surface.getByRole("button", { name: "Grab element", exact: true }).click();
+      await expect
+        .poll(async () => (await browserState()).tabs.find((tab) => tab.id === tabId)?.grabbing)
+        .toBe(true);
+      await aiden.app.evaluate(async ({ webContents }, guestUrl) => {
+        const guest = webContents
+          .getAllWebContents()
+          .find((contents) => contents.getURL().startsWith(guestUrl));
+        if (!guest) throw new Error("Browser guest missing");
+        const point = (await guest.executeJavaScript(
+          "(() => { const r = document.getElementById('hero-btn').getBoundingClientRect(); return { x: Math.round(r.x + r.width / 2), y: Math.round(r.y + r.height / 2) }; })()",
+        )) as { x: number; y: number };
+        guest.focus();
+        guest.sendInputEvent({ type: "mouseMove", ...point });
+        await new Promise((resolve) => setTimeout(resolve, 40));
+        guest.sendInputEvent({ type: "mouseDown", button: "left", clickCount: 1, ...point });
+        guest.sendInputEvent({ type: "mouseUp", button: "left", clickCount: 1, ...point });
+      }, url);
+      await expect
+        .poll(async () => (await browserState()).tabs.find((tab) => tab.id === tabId)?.grabbing)
+        .toBe(false);
+      await page.getByRole("button", { name: "Close environment panel", exact: true }).click();
+      await expect(surface).toBeHidden();
+
+      const trigger = page.locator("[data-grabbed-element-trigger]").first();
+      await expect(trigger).toBeVisible();
+      problems.push(
+        ...(await auditAccessibility(page, {
+          surface: "browser grab chip",
+          include: "[data-grabbed-element-chip]",
+        })),
+      );
+
+      await trigger.click();
+      const popover = page.getByRole("dialog", { name: "Included with your message" });
+      await expect(popover).toBeVisible();
+      await popover.locator("[data-grabbed-element-details-toggle]").click();
+      await expect(
+        popover.locator("[data-grabbed-element-details-toggle]"),
+      ).toHaveAttribute("aria-expanded", "true");
+      problems.push(
+        ...(await auditAccessibility(page, {
+          surface: "browser grab inspection popover",
+          include: "[data-grabbed-element-popover]",
+        })),
+      );
+      await expect(popover).toMatchAriaSnapshot(`
+        - dialog "Included with your message":
+          - button "Copy element context"
+          - button "Hide details" [expanded]
+      `);
+
+      await page.keyboard.press("Escape");
+      await expect(popover).toBeHidden();
+      await page.locator("[data-grabbed-element-remove]").first().click();
+      await expect(page.locator("[data-grabbed-element-chip]")).toHaveCount(0);
+    } finally {
+      if (tabId) await browserCommand({ action: "close", tabId }).catch(() => undefined);
+      server.closeAllConnections();
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+    }
   });
 
   await test.step("settings: Providers and Appearance", async () => {
