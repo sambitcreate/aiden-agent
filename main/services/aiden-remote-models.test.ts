@@ -223,6 +223,39 @@ test("OpenCode Go projects remotely refreshed Ox Alpha metadata and thinking cho
   }]);
 });
 
+test("Google Gemini 4 models project xhigh and saved thinking preferences to paired devices", async () => {
+  const service = new AidenRemoteModelService({
+    listProviders: async () => [provider({
+      id: "google",
+      label: "Google Gemini",
+      models: ["gemini-4-hydrogen"],
+      defaultModel: "gemini-4-hydrogen",
+      modelMetadata: {
+        "gemini-4-hydrogen": {
+          source: "provider",
+          name: "Gemini 4 Hydrogen",
+          type: "llm",
+          vision: true,
+          reasoning: true,
+          thinkingLevels: ["off", "low", "medium", "high", "xhigh"],
+          thinkingCanDisable: false,
+        },
+      },
+    })],
+    getSettings: async () => ({
+      googleThinkingByModel: { "gemini-4-hydrogen": "xhigh" },
+    }),
+  });
+  assert.deepEqual((await service.list()).providers[0]?.models, [{
+    id: "gemini-4-hydrogen",
+    label: "Gemini 4 Hydrogen",
+    supportsImages: true,
+    thinkingLevels: ["off", "low", "medium", "high", "xhigh"],
+    defaultThinkingLevel: "xhigh",
+    thinkingCanDisable: false,
+  }]);
+});
+
 test("desktop local classifier opt-in does not alter the native chat catalog contract", async () => {
   const saved = provider({ id: "custom:llama", baseUrl: "http://localhost:8080/v1", deployment: "local", llamaCppClassifierEnabled: true });
   const service = new AidenRemoteModelService({ listProviders: async () => [saved], getSettings: async () => ({}) });
