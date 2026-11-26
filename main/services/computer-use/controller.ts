@@ -435,10 +435,14 @@ function parseDriverResult(raw: unknown): ParsedDriverResult {
     const structured = asRecord(parsed.structuredContent);
     const effect = identifier(structured?.effect);
     const reason = identifier(structured?.reason);
+    const hint = refusalHint(structured);
+    const boundedText = text.trim().slice(0, hint ? 1_000 : 2_000);
+    const detail =
+      hint && boundedText && !boundedText.includes(hint)
+        ? `${boundedText} — ${hint}`
+        : boundedText || hint;
     throw new ComputerUseDriverActionError(
-      text.trim()
-        ? `cua-driver rejected the action: ${text.trim().slice(0, 2_000)}`
-        : "cua-driver rejected the action.",
+      detail ? `cua-driver rejected the action: ${detail}` : "cua-driver rejected the action.",
       false,
       refusalCode(structured),
       // tool.rs / mcp_result.rs: output-contract failures after dispatch.
@@ -459,6 +463,16 @@ function refusalCode(structured: Record<string, unknown> | null): string | undef
   return identifier(
     structured.code ?? asRecord(structured.refusal)?.code ?? asRecord(structured.error)?.code,
   );
+}
+
+/** Bounded recovery hint from `error.hint`, `refusal.hint`, or top-level 0.38 `hint`. */
+function refusalHint(structured: Record<string, unknown> | null): string | undefined {
+  if (!structured) return undefined;
+  const raw =
+    safeString(asRecord(structured.error)?.hint, 1_000)?.trim() ||
+    safeString(asRecord(structured.refusal)?.hint, 1_000)?.trim() ||
+    safeString(structured.hint, 1_000)?.trim();
+  return raw || undefined;
 }
 
 /** A driver machine identifier (`code`, `effect`, `reason`), or undefined. */
@@ -485,8 +499,7 @@ function parseActionResult(structured: Record<string, unknown> | null): DriverAc
     );
   }
   if (effect === "refused") {
-    const error = asRecord(structured.error);
-    const hint = safeString(error?.hint, 1_000) ?? safeString(structured.hint, 1_000);
+    const hint = refusalHint(structured);
     throw new ComputerUseDriverActionError(
       hint ? `cua-driver refused the action: ${hint}` : "cua-driver refused the action.",
       false,
