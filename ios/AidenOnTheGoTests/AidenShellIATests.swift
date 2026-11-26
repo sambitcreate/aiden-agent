@@ -441,6 +441,27 @@ final class AidenShellIATests: XCTestCase {
         XCTAssertEqual(AidenDrawerGeometry.progress(start: 0, translation: 165, width: width, rightToLeft: true), 0)
     }
 
+    func testMeasuringTheDrawersOwnScreenMidSwipeKeepsHomeWhereItIs() {
+        let reveal = AidenDrawerReveal()
+        // A closed Duo: the shell sees the whole screen, the drawer's cover a
+        // narrower one beside the system rail.
+        reveal.measure(screen: .init(width: 402, leadingInset: 0))
+        reveal.progress = 0.5
+        let before = AidenDrawerGeometry.contentOffset(progress: reveal.progress, travel: reveal.travel, reduceMotion: false)
+        XCTAssertEqual(before, 165)
+        reveal.measure(drawer: .init(width: 360, leadingInset: 0))
+        XCTAssertNotEqual(reveal.travel, 330)
+        let after = AidenDrawerGeometry.contentOffset(progress: reveal.progress, travel: reveal.travel, reduceMotion: false)
+        XCTAssertEqual(after, before, accuracy: 0.001)
+        // Shut stays shut and open stays open, at the new width.
+        reveal.progress = 1
+        reveal.measure(drawer: nil)
+        XCTAssertEqual(reveal.progress, 1)
+        reveal.progress = 0
+        reveal.measure(drawer: .init(width: 360, leadingInset: 0))
+        XCTAssertEqual(reveal.progress, 0)
+    }
+
     func testLettingGoSettlesByPositionUnlessItWasAFlick() {
         let width: CGFloat = 330
         // Slow: whichever side of halfway it would coast to.

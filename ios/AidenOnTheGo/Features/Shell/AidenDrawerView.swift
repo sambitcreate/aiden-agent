@@ -328,12 +328,12 @@ final class AidenDrawerReveal {
         var leadingInset: CGFloat
     }
     /// The pushed screen's space, from the shell, used until the drawer is up.
-    var screenSpace = Space(width: 0, leadingInset: 0)
+    private(set) var screenSpace = Space(width: 0, leadingInset: 0)
     /// The drawer's own space while it's up. It wins: the closed iPhone Duo
     /// keeps a system rail at the trailing edge that the screen's safe area
     /// doesn't report but the drawer's cover spans, so only this one matches
     /// the column the drawer draws.
-    var drawerSpace: Space?
+    private(set) var drawerSpace: Space?
     /// A finger on the screen's edge is opening it, so the drawer doesn't run
     /// its own slide in when it appears.
     var isTracking = false
@@ -346,6 +346,28 @@ final class AidenDrawerReveal {
     var travel: CGFloat {
         let space = drawerSpace ?? screenSpace
         return AidenDrawerGeometry.travel(in: space.width, leadingInset: space.leadingInset)
+    }
+
+    /// Records the pushed screen's space.
+    func measure(screen space: Space) {
+        keepingTheScreenInPlace { screenSpace = space }
+    }
+
+    /// Records the drawer's own space, or forgets it as the drawer goes.
+    func measure(drawer space: Space?) {
+        keepingTheScreenInPlace { drawerSpace = space }
+    }
+
+    /// A new measurement changes `travel`, so a part-open drawer (a finger
+    /// dragging, or one that came up mid-swipe) takes the progress that keeps
+    /// the screen where it is, rather than jumping. Shut stays shut and open
+    /// stays open, at the new width.
+    private func keepingTheScreenInPlace(_ change: () -> Void) {
+        let before = travel
+        change()
+        let after = travel
+        guard progress > 0, progress < 1, before > 0, after > 0, before != after else { return }
+        progress = min(1, progress * before / after)
     }
 
     static func motion(reduceMotion: Bool) -> Animation {
@@ -387,7 +409,7 @@ struct AidenDrawerPush: ViewModifier {
                 let insets = proxy.safeAreaInsets
                 return .init(width: proxy.size.width + insets.leading + insets.trailing, leadingInset: insets.leading)
             } action: { space in
-                reveal.screenSpace = space
+                reveal.measure(screen: space)
             }
             // Rounded only while it's moved; at rest nothing is clipped, so
             // what draws into the safe area keeps doing so.
@@ -480,9 +502,9 @@ struct AidenDrawerOverlay<Drawer: View>: View {
             let insets = proxy.safeAreaInsets
             return .init(width: proxy.size.width + insets.leading + insets.trailing, leadingInset: insets.leading)
         } action: { space in
-            reveal.drawerSpace = space
+            reveal.measure(drawer: space)
         }
-        .onDisappear { reveal.drawerSpace = nil }
+        .onDisappear { reveal.measure(drawer: nil) }
         .onAppear {
             guard !reveal.isTracking, reveal.progress < 1 else { return }
             reveal.settle(open: true, reduceMotion: reduceMotion)

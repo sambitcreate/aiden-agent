@@ -192,6 +192,10 @@ struct AidenAppShellView: View {
         get { navigation.drawerIsOpen }
         nonmutating set { navigation.drawerIsOpen = newValue }
     }
+    /// Whether the drawer's cover is up. It outlasts `drawerIsOpen` while the
+    /// drawer slides shut, so the drawer stays under the returning tabs
+    /// however it was put away.
+    @State private var drawerCoverIsUp = false
     @Environment(\.layoutDirection) private var layoutDirection
     /// VoiceOver goes back to the showing tab's menu button when the drawer
     /// closes. Keyed by tab because every tab's list keeps its own button.
@@ -450,7 +454,7 @@ struct AidenAppShellView: View {
         // it stays open as the display folds. The drawer runs its own slide;
         // the cover comes and goes without the system's.
         .fullScreenCover(
-            isPresented: Binding(get: { drawerIsOpen }, set: { if !$0 { closeDrawer() } }),
+            isPresented: Binding(get: { drawerCoverIsUp }, set: { if !$0 { closeDrawer() } }),
             onDismiss: {
                 guard pairsAfterDrawer else { return }
                 pairsAfterDrawer = false
@@ -470,16 +474,23 @@ struct AidenAppShellView: View {
                     Text(coordinator.presentedError ?? "The operation could not be completed.")
                 }
         }
-        .transaction(value: drawerIsOpen) { $0.disablesAnimations = true }
+        .transaction(value: drawerCoverIsUp) { $0.disablesAnimations = true }
         // Something other than the drawer's own close put it away (a route
-        // the navigation opened): the tabs slide back.
+        // the navigation opened): the tabs slide back over it, then the
+        // cover goes.
         .onChange(of: drawerIsOpen) { _, isOpen in
-            guard !isOpen, drawerReveal.progress > 0 else { return }
+            guard !isOpen, drawerCoverIsUp else { return }
             drawerReveal.isTracking = false
-            drawerReveal.settle(open: false, reduceMotion: reduceMotion)
+            guard drawerReveal.progress > 0 else {
+                drawerCoverIsUp = false
+                return
+            }
+            drawerReveal.settle(open: false, reduceMotion: reduceMotion) {
+                drawerCoverIsUp = false
+            }
         }
         // While the cover is up the drawer presents the flow; the shell can't.
-        .aidenNewWorkPresentation(newWork, coordinator: coordinator, isActive: !drawerIsOpen)
+        .aidenNewWorkPresentation(newWork, coordinator: coordinator, isActive: !drawerCoverIsUp)
         .sheet(item: $activeSheet) { sheet in
             switch sheet {
             case .runningChats:
@@ -864,7 +875,7 @@ struct AidenAppShellView: View {
     /// pushed screen the same swipe is the stack's Back, and beside the list
     /// or in a side rail the edge belongs to the system's own columns.
     private var opensDrawerFromEdge: Bool {
-        !drawerIsOpen && !navigation.besideList && !showsVerticalBar
+        !drawerCoverIsUp && !navigation.besideList && !showsVerticalBar
             && navigation.path(of: navigation.tab).isEmpty
             // A sheet or alert up over the tab keeps the edge.
             && activeSheet == nil && !newWork.isChoosingWorkspace && !newWork.isNamingWorkspace
@@ -918,19 +929,20 @@ struct AidenAppShellView: View {
     /// The error alert, from the shell or, while the drawer's cover is up, from the drawer.
     private func errorBinding(whileDrawerIsOpen: Bool) -> Binding<Bool> {
         Binding(
-            get: { coordinator.presentedError != nil && drawerIsOpen == whileDrawerIsOpen },
+            get: { coordinator.presentedError != nil && drawerCoverIsUp == whileDrawerIsOpen },
             set: { if !$0 { coordinator.presentedError = nil } }
         )
     }
 
     private func openDrawer() {
         drawerReveal.isTracking = false
-        if drawerIsOpen {
+        drawerIsOpen = true
+        if drawerCoverIsUp {
             // Reopened while it was sliding shut.
             drawerReveal.settle(open: true, reduceMotion: reduceMotion)
         } else {
             // The cover slides the drawer in once it's up.
-            drawerIsOpen = true
+            drawerCoverIsUp = true
         }
     }
 
@@ -945,6 +957,7 @@ struct AidenAppShellView: View {
         drawerReveal.isTracking = false
         drawerReveal.settle(open: false, reduceMotion: reduceMotion) {
             drawerIsOpen = false
+            drawerCoverIsUp = false
             if refocusingMenu { focusedMenuButton = navigation.tab }
         }
     }
@@ -954,6 +967,7 @@ struct AidenAppShellView: View {
         drawerReveal.isTracking = true
         drawerReveal.progress = 0
         drawerIsOpen = true
+        drawerCoverIsUp = true
     }
 
     private func trackDrawerSwipe(_ movement: AidenDrawerEdgeSwipe.Movement) {

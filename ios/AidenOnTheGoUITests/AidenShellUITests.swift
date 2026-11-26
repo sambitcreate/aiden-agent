@@ -145,6 +145,41 @@ final class AidenShellUITests: XCTestCase {
         app.terminate()
     }
 
+    /// Right to left the drawer lies under Home's right side: Home slides
+    /// left to show it, and the slice of Home left in view runs from the
+    /// window's left edge.
+    func testRightToLeftHomeSlidesTheOtherWayForTheDrawer() throws {
+        let app = AidenStateMatrix.launch(
+            scenario: .busy, startingTab: nil,
+            extraArguments: ["-AppleTextDirection", "YES", "-NSForceRightToLeftWritingDirection", "YES"]
+        )
+        XCTAssertTrue(AidenStateMatrix.homeRoot(in: app).waitForExistence(timeout: 10), "A first launch opens on Chats")
+        let window = AidenStateMatrix.window(of: app)
+        try XCTSkipIf(window.frame.width > AidenStateMatrix.compactWidth, "Beside the list the drawer lays over the columns")
+        let menu = app.buttons["Open menu"].firstMatch
+        XCTAssertTrue(menu.waitForExistence(timeout: 10), "No menu button")
+        XCTAssertGreaterThan(menu.frame.midX, window.frame.midX, "The screen is not laid out right to left")
+        let restingX = menu.frame.maxX
+
+        openDrawer(in: app)
+        XCTAssertTrue(
+            waitUntil(timeout: 5) { menu.frame.maxX < restingX - window.frame.width * 0.5 },
+            "Home did not slide left for the drawer"
+        )
+        let slice = app.buttons["Close menu"].firstMatch
+        XCTAssertTrue(slice.waitForExistence(timeout: 5), "The drawer did not open")
+        XCTAssertEqual(slice.frame.minX, window.frame.minX, accuracy: 1, "The close target stops short of the window's left edge")
+        XCTAssertTrue(
+            waitUntil(timeout: 3) { abs((window.frame.maxX - slice.frame.maxX) - (restingX - menu.frame.maxX)) <= 1 },
+            "The close target is not Home's slice: slice ends at \(slice.frame.maxX), Home moved \(restingX - menu.frame.maxX)"
+        )
+
+        slice.tap()
+        XCTAssertTrue(slice.waitForNonExistence(timeout: 5), "A tap on Home's slice left the drawer up")
+        XCTAssertTrue(waitUntil(timeout: 3) { abs(menu.frame.maxX - restingX) <= 1 }, "Home did not slide back")
+        app.terminate()
+    }
+
     /// Held sideways the drawer's column starts past the camera's inset, and
     /// Home moves past both, so nothing of the drawer's bar sits under Home's
     /// slice: compose is still there to tap.
