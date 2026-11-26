@@ -11,9 +11,22 @@
  *
  * Electron reports a cancelled provisional navigation without `did-fail-load`,
  * so before this navigation commits, a main-frame ERR_ABORTED and a finished
- * load can only belong to the replaced document. Every other rule matches
- * Electron's: a later cross-document start aborts this load, a failure is
- * reported when loading ends, and destruction fails it.
+ * load can only belong to the replaced document.
+ *
+ * The navigation does not always start inside `loadURL`: Chromium defers it
+ * while the current page runs its `beforeunload` handler. If the replaced
+ * document's main frame was still loading when the call began, its own
+ * `did-finish-load`, or a `did-fail-load` for a URL other than the requested
+ * one, can arrive in that gap, and Electron would settle the new load on it
+ * before the requested page exists. Until this navigation starts, those events
+ * and Electron's promise, which they drive, describe the replaced document. A
+ * failure for the requested URL is this load's and rejects at once, even when
+ * the replaced document had the same URL. `did-stop-loading` is different: Chromium
+ * counts the pending request as loading, so a stop before the start means this
+ * navigation itself was cancelled or dropped, and it still fails the load.
+ *
+ * Every other rule matches Electron's: a later cross-document start aborts this
+ * load, a failure is reported when loading ends, and destruction fails it.
  */
 
 const ERR_ABORTED = -3;
@@ -24,6 +37,7 @@ export interface BrowserLoadTarget {
   on(event: string, listener: (...args: any[]) => void): unknown;
   removeListener(event: string, listener: (...args: any[]) => void): unknown;
   loadURL(url: string): Promise<void>;
+  isLoadingMainFrame(): boolean;
 }
 
 type LoadFailure = { errorCode: number; errorDescription: string; url: string };
@@ -44,6 +58,15 @@ export function loadBrowserUrl(contents: BrowserLoadTarget, url: string): Promis
     let sameDocument = false;
     let committed = false;
     let failure: LoadFailure | undefined;
+    // The replaced document's main frame was still loading; it can finish or fail before this navigation starts.
+    const replacedLoading = contents.isLoadingMainFrame();
+    // Electron's promise settled on the replaced document's completion.
+    let replacedSettledNative = false;
+    const replacedCompletion = () => {
+      if (started || !replacedLoading) return false;
+      replacedSettledNative = true;
+      return true;
+    };
     const listeners: Array<[string, (...args: any[]) => void]> = [];
     const listen = (event: string, listener: (...args: any[]) => void) => {
       listeners.push([event, listener]);
@@ -60,7 +83,7 @@ export function loadBrowserUrl(contents: BrowserLoadTarget, url: string): Promis
     listen("did-start-navigation", (_event, startedUrl: string, isSameDocument: boolean, isMainFrame: boolean) => {
       if (!isMainFrame) return;
       if (!started) {
-        // loadURL starts its own navigation synchronously, before any other.
+        // This call's own navigation is the first main-frame start after it.
         started = true;
         sameDocument = isSameDocument;
       } else if (!isSameDocument) {
@@ -74,13 +97,14 @@ export function loadBrowserUrl(contents: BrowserLoadTarget, url: string): Promis
       if (started && sameDocument) finish();
     });
     listen("did-fail-load", (_event, errorCode: number, errorDescription: string, validatedUrl: string, isMainFrame: boolean) => {
-      if (!isMainFrame) return;
+      if (!isMainFrame || (validatedUrl !== url && replacedCompletion())) return;
       // The replaced document's load abort, delivered after this navigation began.
       if (started && !sameDocument && !committed && errorCode === ERR_ABORTED) return;
       failure ??= { errorCode, errorDescription, url: validatedUrl };
       if (!started) finish();
     });
     listen("did-finish-load", () => {
+      if (replacedCompletion()) return;
       // Before this navigation commits, a finished load is the replaced document's.
       if (started && !sameDocument && !committed && !failure) return;
       finish();
@@ -95,7 +119,7 @@ export function loadBrowserUrl(contents: BrowserLoadTarget, url: string): Promis
       // Electron's own promise carries only failures that precede any navigation
       // (for example, a rejected URL); after one starts, the listeners above decide.
       contents.loadURL(url).catch((error: unknown) => {
-        if (!started) settle(error);
+        if (!started && !replacedSettledNative) settle(error);
       });
     } catch (error) {
       settle(error);
