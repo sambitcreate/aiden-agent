@@ -28,7 +28,7 @@ import { WorkspaceTerminalProvider, useWorkspaceTerminal } from "../components/t
 import { EnvironmentPanelProvider, useEnvironmentPanelCore } from "../components/environment-panel";
 import { toast } from "../components/ui";
 import { RoutedBotPanelProvider, useBotPanelActions } from "./bots/bot-panel-context";
-import { botListLocation, environmentToggleTarget, isBotsPath } from "../lib/bot-routes";
+import { botChatPath, botChatRouteBotId, botListLocation, environmentToggleTarget, isBotsPath } from "../lib/bot-routes";
 import { AssistantDock } from "../components/assistant/assistant-dock";
 import { LiveAppControlLayer } from "../components/assistant/live-app-control-layer";
 import { queryKeys, upsertCreatedWorkspaceInCache } from "../lib/queries";
@@ -50,6 +50,10 @@ import { KeyboardShortcutsDialog } from "../components/keyboard-shortcuts-dialog
 import { WorkspaceSettingsDialog } from "../components/workspace-settings-dialog";
 import { OnboardingFlow, waitForOnboardingActiveCheck } from "../components/onboarding-flow";
 import { BotConnectionSetupHost } from "./bots/bot-connection-setup-host";
+import { BotBubbleWindowHost } from "../bot-bubbles/window-host";
+import { botBubblesApi, useBotBubbles } from "../lib/bot-bubbles-api";
+import { isBotBubbled } from "../shared/bot-bubbles";
+import { botChatSourceRect, bubbleBot } from "./bots/bot-menu";
 import { workspaceCommandVisibility } from "../lib/command-system-core";
 import { useAppCapabilities } from "../lib/app-capabilities";
 import { useDesignModeBroadcasts } from "../lib/design-mode";
@@ -845,7 +849,50 @@ function RootContent() {
         <WorkspaceSettingsDialog />
         <PairingRequestSheet />
         {capabilities.bots ? <BotConnectionSetupHost /> : null}
+        {capabilities.bots ? (
+          <BotBubbleRoot pathname={pathname} navigationBlockedReason={navigationBlockedReason} />
+        ) : null}
       </div>
     </NewChatActionsProvider>
   );
+}
+
+/**
+ * Bot bubbles in the main window (docs/bot-bubbles.md): `bots.bubble` (⌥⌘B)
+ * shrinks the open Bot chat into a head, "Open in Aiden" from a head opens its
+ * chat here, and heads draw inside this window when they can't float over
+ * other apps. Its own component, so a bubble change redraws only this.
+ */
+function BotBubbleRoot({
+  pathname,
+  navigationBlockedReason,
+}: {
+  pathname: string;
+  navigationBlockedReason: string | null;
+}) {
+  const navigate = useNavigate();
+  const bubbles = useBotBubbles();
+  const openBotId = botChatRouteBotId(pathname);
+  useCommandHandler(
+    "bots.bubble",
+    () => {
+      if (!openBotId) return;
+      void bubbleBot({ id: openBotId, name: "this Bot" }, botChatSourceRect());
+    },
+    openBotId !== null && bubbles.host !== "off" && !isBotBubbled(bubbles, openBotId),
+  );
+  const blockedRef = React.useRef(navigationBlockedReason);
+  blockedRef.current = navigationBlockedReason;
+  React.useEffect(
+    () =>
+      botBubblesApi.onShowChat((botId) => {
+        if (blockedRef.current) {
+          toast.info(blockedRef.current);
+          return;
+        }
+        void navigate(botChatPath(botId));
+      }),
+    [navigate],
+  );
+  return <BotBubbleWindowHost />;
 }

@@ -688,6 +688,8 @@ function normalizeSettingsShape(value: unknown): SettingsShape {
     "aidenLiveEnabled",
     "aidenLiveButtonVisible",
     "quickChatKeepOpenOnBlur",
+    "botBubblesEnabled",
+    "botBubblesFloatOverApps",
     "aidenLiveChatAccess",
     "aidenLiveChatAccessNoticeShown",
     "aidenLiveVoiceApprovals",
@@ -818,6 +820,9 @@ export function runtimeSettingsFrom(settings: AppSettings): AppSettings {
     typeof settings.quickChatKeepOpenOnBlur !== "boolean"
   ) {
     delete runtime.quickChatKeepOpenOnBlur;
+  }
+  for (const key of ["botBubblesEnabled", "botBubblesFloatOverApps"] as const) {
+    if (settings[key] !== undefined && typeof settings[key] !== "boolean") delete runtime[key];
   }
   if (settings.webSearch !== undefined) {
     const webSearch = parseWebSearchSettings(settings.webSearch);

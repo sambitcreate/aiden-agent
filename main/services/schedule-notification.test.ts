@@ -262,6 +262,8 @@ async function executionHarness(
   // external relative specifier as written, so both spellings reach one port.
   ports["../../platform.js"] = ports["../platform.js"];
   ports["../app-navigation.js"] = ports["./app-navigation.js"];
+  // Whether Aiden is in front: no Aiden window has focus in these runs.
+  ports["../../windows/bot-bubbles-overlay-registry.js"] = { isAidenAppWindowFocused: () => false };
   // The delivery gate reads the Bot's interruption settings; quiet hours off
   // and a high limit keep these tests independent of the time of day.
   ports["../bot-store.js"] = {
@@ -351,7 +353,10 @@ async function executionHarness(
             }
             if (
               args.importer.endsWith("/bot-delivery/funnel-main.ts") &&
-              (args.path === "../../platform.js" || args.path === "../app-navigation.js" || args.path === "../bot-store.js")
+              (args.path === "../../platform.js" ||
+                args.path === "../../windows/bot-bubbles-overlay-registry.js" ||
+                args.path === "../app-navigation.js" ||
+                args.path === "../bot-store.js")
             ) {
               return { path: args.path, external: true };
             }

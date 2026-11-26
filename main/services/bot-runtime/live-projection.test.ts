@@ -12,6 +12,7 @@ import { fauxAssistantMessage, fauxText, fauxThinking, fauxToolCall } from "@ear
 import {
   applyBotLiveEvent,
   botLastReplyAt,
+  botRecentReplyTimes,
   botRetryableFailedTurn,
   botTranscriptPreview,
   type BotLiveEvent,
@@ -2332,6 +2333,20 @@ test("the last reply time falls back past a reply that has no time", () => {
     ]),
     10,
   );
+});
+
+test("recent reply times list person-facing replies newest first, agreeing with the last reply time", () => {
+  const entries: import("../../../renderer/shared/bot-live.js").BotTranscriptEntry[] = [
+    { id: "a1", type: "assistant", text: "First.", toolCalls: [], stopReason: "stop", at: 10 },
+    { id: "a2", type: "assistant", text: "  ", toolCalls: [], stopReason: "toolUse", at: 20 },
+    { id: "u1", type: "user", text: "More?", imageCount: 0, at: 30 },
+    { id: "a3", type: "assistant", text: "Second.", toolCalls: [], stopReason: "stop", at: 40 },
+    { id: "a4", type: "assistant", text: "Third.", toolCalls: [], stopReason: "stop", at: 50 },
+  ];
+  assert.deepEqual(botRecentReplyTimes(entries), [50, 40, 10]);
+  assert.equal(botRecentReplyTimes(entries)[0], botLastReplyAt(entries));
+  assert.deepEqual(botRecentReplyTimes(entries, 2), [50, 40]);
+  assert.deepEqual(botRecentReplyTimes([]), []);
 });
 
 test("a Bot held by another process is never reported as needing the person", async () => {
