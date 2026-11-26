@@ -27,6 +27,7 @@ import { HandoffCard, handoffNoNoteComposerText, handoffSignInComposerText } fro
 import { NeedsYouAnnouncer, NeedsYouFocusScope, NeedsYouHeader, needsYouSlotState, type NeedsYouItem } from "../../components/bots/needs-you-slot";
 import { PlanCard } from "../../components/bots/plan-card";
 import { MemoryCardIcon } from "../../components/memory-card-icon";
+import { parseCommandReading } from "../../shared/command-reading";
 import { ApprovalStatusLine, ChatApprovalCard } from "../../components/chat-approval-card";
 import { useApprovalStatusLine } from "../../lib/use-approval-status-line";
 import { SafeMessageBubble } from "../../components/message-bubble";
@@ -262,6 +263,10 @@ export function BotApprovalCard({
         toolName: prompt.toolName,
         summary: prompt.summary,
         ...(prompt.always ? { scopes: ["once", "always"] } : {}),
+        ...(() => {
+          const reading = parseCommandReading(prompt.reading);
+          return reading ? { reading } : {};
+        })(),
       }}
       deciding={busy}
       onDecide={(decision, options) => void respond(decision, options?.scope === "always" ? "always" : undefined)}

@@ -22,6 +22,7 @@
 		F5A100000000000000000005 /* AidenBotResumeModelTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = F5A100000000000000000105 /* AidenBotResumeModelTests.swift */; };
 		F0A100000000000000000006 /* bot-peers.json in Resources */ = {isa = PBXBuildFile; fileRef = F0A100000000000000000106 /* bot-peers.json */; };
 		B6B000000000000000000004 /* bot-ux-revision-61.json in Resources */ = {isa = PBXBuildFile; fileRef = B6B100000000000000000004 /* bot-ux-revision-61.json */; };
+		B6B000000000000000000069 /* approval-plain-words-revision-69.json in Resources */ = {isa = PBXBuildFile; fileRef = B6B100000000000000000069 /* approval-plain-words-revision-69.json */; };
 		F0A100000000000000000005 /* AidenBotPeersTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = F0A100000000000000000105 /* AidenBotPeersTests.swift */; };
 		F0A100000000000000000004 /* AidenBotPeersView.swift in Sources */ = {isa = PBXBuildFile; fileRef = F0A100000000000000000104 /* AidenBotPeersView.swift */; };
 		F0A100000000000000000003 /* AidenBotPeersModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = F0A100000000000000000103 /* AidenBotPeersModel.swift */; };
@@ -350,6 +351,7 @@
 		F5A100000000000000000105 /* AidenBotResumeModelTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AidenBotResumeModelTests.swift; sourceTree = "<group>"; };
 		F0A100000000000000000106 /* bot-peers.json */ = {isa = PBXFileReference; lastKnownFileType = text.json; path = ../protocol/aiden-remote/v1/fixtures/bot-peers.json; sourceTree = SOURCE_ROOT; };
 		B6B100000000000000000004 /* bot-ux-revision-61.json */ = {isa = PBXFileReference; lastKnownFileType = text.json; path = ../protocol/aiden-remote/v1/fixtures/bot-ux-revision-61.json; sourceTree = SOURCE_ROOT; };
+		B6B100000000000000000069 /* approval-plain-words-revision-69.json */ = {isa = PBXFileReference; lastKnownFileType = text.json; path = ../protocol/aiden-remote/v1/fixtures/approval-plain-words-revision-69.json; sourceTree = SOURCE_ROOT; };
 		F0A100000000000000000105 /* AidenBotPeersTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AidenBotPeersTests.swift; sourceTree = "<group>"; };
 		F0A100000000000000000104 /* AidenBotPeersView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AidenBotPeersView.swift; sourceTree = "<group>"; };
 		F0A100000000000000000103 /* AidenBotPeersModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AidenBotPeersModel.swift; sourceTree = "<group>"; };
@@ -796,6 +798,7 @@
 				C0A100000000000000000016 /* bot-watches.json */,
 				F0A100000000000000000106 /* bot-peers.json */,
 				B6B100000000000000000004 /* bot-ux-revision-61.json */,
+				B6B100000000000000000069 /* approval-plain-words-revision-69.json */,
 				E0A100000000000000000107 /* bot-routine-models.json */,
 				D0A100000000000000000018 /* bot-open-work.json */,
 				A0D000000000000000000015 /* AidenManualPairingVectorV1.json */,
@@ -1347,6 +1350,7 @@
 				C0A100000000000000000006 /* bot-watches.json in Resources */,
 				F0A100000000000000000006 /* bot-peers.json in Resources */,
 				B6B000000000000000000004 /* bot-ux-revision-61.json in Resources */,
+				B6B000000000000000000069 /* approval-plain-words-revision-69.json in Resources */,
 				E0A100000000000000000007 /* bot-routine-models.json in Resources */,
 				D0A100000000000000000008 /* bot-open-work.json in Resources */,
 				A0D000000000000000000005 /* AidenManualPairingVectorV1.json in Resources */,

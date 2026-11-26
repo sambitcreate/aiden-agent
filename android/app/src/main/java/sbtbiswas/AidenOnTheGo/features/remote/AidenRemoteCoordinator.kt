@@ -163,6 +163,21 @@ internal suspend fun aidenRequestBotUxCapability(
     )
 }
 
+/**
+ * Revision 69: `approval:plain-words`, asked for alone after the revision-61
+ * opt-ins when the Mac lists it. The Mac adds the words only beside `approval:cards`, so a refusal
+ * leaves the typed card as it was.
+ */
+internal suspend fun aidenRequestApprovalPlainWords(
+    client: AidenRemoteClient, server: AidenServer, installation: AidenInstallation,
+    stillCurrent: () -> Boolean = { true }
+): AidenSoloCapabilityNegotiation? = aidenRequestCapabilitiesAlone(
+    if (aidenShouldRequestSoloCapability(AidenRemoteCapability.APPROVAL_PLAIN_WORDS, server, installation)) {
+        listOf(AidenRemoteCapability.APPROVAL_PLAIN_WORDS)
+    } else emptyList(),
+    client, stillCurrent
+)
+
 internal fun aidenShouldRequestBotAccessRequests(server: AidenServer, installation: AidenInstallation): Boolean =
     aidenShouldRequestSoloCapability(AidenRemoteCapability.BOT_ACCESS_REQUESTS, server, installation)
 
@@ -886,6 +901,8 @@ class AidenRemoteCoordinator(
                         aidenRequestBotUxCapability(capability, c, s, i, current)
                     }
                 }
+                // Revision 69: the command's plain words, alone, after the card itself.
+                negotiatedServer = negotiateSoloCapability(generation, installation, newClient, negotiatedServer, ::aidenRequestApprovalPlainWords)
                 if (!isCurrent(generation, installation.id, newClient)) return@launch
                 installationStore.updateServerCapabilities(
                     instanceId = installation.instanceId,

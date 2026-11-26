@@ -311,6 +311,7 @@ async function fixture(options: {
               capability !== "attachments:raw" &&
               capability !== "chat:new-worktree" &&
               capability !== "approval:cards" &&
+              capability !== "approval:plain-words" &&
               capability !== "approvals:settings" &&
               capability !== "bot:settings-changes" &&
               capability !== "bot:suggestions" &&
@@ -2010,6 +2011,7 @@ test("progress support is advertised and upgraded only when the Mac can serve it
       "schedule:write",
       "schedule:cards",
       "approval:cards",
+      "approval:plain-words",
       "attachments:raw",
       "stream:snapshot-reasons",
       "skills:invoke",

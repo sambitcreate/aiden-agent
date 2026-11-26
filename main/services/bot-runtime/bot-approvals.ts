@@ -1,6 +1,7 @@
 // Profile-owned approval waits. Durable identity and provenance stay in main;
 // only the explicitly copied public card fields cross IPC.
 import { botApprovalRuleKey } from "../../../renderer/shared/tool-approval-scope.js";
+import type { CommandReading } from "../../../renderer/shared/command-reading.js";
 import { ApprovalAnalytics } from "../approval-gate/approval-analytics.js";
 import { ToolApprovalCoordinator, type ToolApprovalOutcome } from "../tool-approval.js";
 import type { BotApprovalDecision, BotApprovalOwner, BotApprovalRequest, BotAllowListRelease } from "./bot-extension.js";
@@ -23,10 +24,13 @@ export interface BotApprovalPrompt {
   /** One-way hashes (see `BotApprovalRequest`): the desktop card groups only waits that match on both. */
   argumentsHash?: string;
   runHash?: string;
+  /** A command in plain words and Aiden's own tags; display-only, never part of the decision. */
+  reading?: CommandReading;
 }
-export function publicBotApprovalPrompt(prompt: BotApprovalPrompt): Pick<BotApprovalPrompt, "botId" | "waitId" | "toolCallId" | "toolName" | "summary" | "always" | "autoWouldJudge" | "argumentsHash" | "runHash"> {
+export function publicBotApprovalPrompt(prompt: BotApprovalPrompt): Pick<BotApprovalPrompt, "botId" | "waitId" | "toolCallId" | "toolName" | "summary" | "always" | "autoWouldJudge" | "argumentsHash" | "runHash" | "reading"> {
   return { botId: prompt.botId, waitId: prompt.waitId, toolCallId: prompt.toolCallId, toolName: prompt.toolName, summary: prompt.summary,
     ...(prompt.always ? { always: { key: prompt.always.key, count: prompt.always.count } } : {}),
+    ...(prompt.reading ? { reading: structuredClone(prompt.reading) } : {}),
     ...(prompt.autoWouldJudge ? { autoWouldJudge: true as const } : {}),
     ...(prompt.argumentsHash ? { argumentsHash: prompt.argumentsHash } : {}), ...(prompt.runHash ? { runHash: prompt.runHash } : {}) };
 }
@@ -73,6 +77,7 @@ export function createBotApprovals(options: BotApprovalsOptions): BotApprovals {
       ...(request.argumentsHash ? { argumentsHash: request.argumentsHash } : {}), ...(request.runHash ? { runHash: request.runHash } : {}),
       ...(request.owner ? { owner: structuredClone(request.owner) } : {}), ...(request.always ? { always: { ...request.always } } : {}),
       ...(request.autoWouldJudge ? { autoWouldJudge: true as const } : {}),
+      ...(request.reading ? { reading: structuredClone(request.reading) } : {}),
       ...(request.allowList ? { allowList: structuredClone(request.allowList) } : {}) };
     const previousWaiting = waiting.get(request.waitId);
     state.prompt = published; waiting.set(request.waitId, state);

@@ -251,11 +251,11 @@ struct AidenLiveResponseView: View {
                         hasRequiredWriteCapability: approval.hasRequiredWriteCapability,
                         canAllow: card.canAllow
                     )?.text,
+                    answersEnabled: !(!model.isConnected || model.isReadOnlyPresentation || model.isRespondingToApproval || model.isStopping),
                     onAnswer: { button in
                         Task { await model.respondToApproval(button: button, approvalID: approval.id) }
                     }
                 )
-                .disabled(!model.isConnected || model.isReadOnlyPresentation || model.isRespondingToApproval || model.isStopping)
                 .id(approval.id)
             } else if model.pendingApproval == nil, let answered = model.approvalAnsweredButton {
                 AidenApprovalAnsweredLine(button: answered)

@@ -253,6 +253,8 @@ import {
 import { formFillTurnNote } from "./form-fill/tool.js";
 import { FORM_FILL_MUTATION_AVAILABLE } from "../../renderer/shared/form-fill-availability.js";
 import { toolApprovalPreview, type ToolApprovalPreview } from "../../renderer/shared/tool-approval-preview.js";
+import { commandReadingForCall } from "../../renderer/shared/command-reading.js";
+import { homedir } from "node:os";
 import { formFillArtifacts, formFillRuntime } from "./form-fill/artifacts.js";
 import {
   EDIT_AUTOMATION_TOOL_NAME,
@@ -5878,6 +5880,16 @@ export const llmClient = {
                     ? undefined
                     : (artifactApprovalPreview ?? toolApprovalPreview(context.toolCall.name, context.args));
                   return preview ? { preview } : {};
+                })(),
+                // A command in plain words, with Aiden's own tags (plain cards only).
+                ...(() => {
+                  const reading = approvalDetails
+                    ? undefined
+                    : commandReadingForCall(context.toolCall.name, context.args, {
+                        ...(folderPath && !noWorkspace ? { workspaceRoot: folderPath } : {}),
+                        home: homedir(),
+                      });
+                  return reading ? { reading } : {};
                 })(),
                 ...(scopedRuleTarget ? { scopes: SCOPED_APPROVAL_OFFER } : {}),
                 ...(macGrantOffer ? { scopes: MAC_GRANT_OFFER } : {}),

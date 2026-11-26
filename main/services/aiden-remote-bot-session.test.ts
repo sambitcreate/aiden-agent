@@ -1134,18 +1134,18 @@ test("deleting a durable Bot while a phone streams its chat closes the stream", 
 });
 
 /** A durable Bot whose `send_note` tool needs approval, watched by phones through the real Bot approval bridge. */
-async function approvalGatedBot(toolName = "send_note") {
+async function approvalGatedBot(toolName = "send_note", extraArgs: Record<string, unknown> = {}, summary = "Send a note: lunch on Friday") {
   const profileDir = mkdtempSync(path.join(os.tmpdir(), "aiden-remote-bot-approval-"));
   durableRoots.push(profileDir);
   const approvals = createBotApprovals({ publish: () => {} });
   const note = countingTool(toolName);
   const fauxModels = createFauxModels([
-    fauxAssistantMessage([fauxToolCall(toolName, { text: "lunch on Friday" })], { stopReason: "toolUse" }),
+    fauxAssistantMessage([fauxToolCall(toolName, { text: "lunch on Friday", ...extraArgs })], { stopReason: "toolUse" }),
     fauxAssistantMessage("Sent."),
   ]);
   const extension = recordingDeps({
     tools: [{ tool: note, replay: "unsafe" }],
-    policy: (name) => (name === toolName ? { allowed: true, approval: { summary: "Send a note: lunch on Friday" } } : { allowed: true }),
+    policy: (name) => (name === toolName ? { allowed: true, approval: { summary } } : { allowed: true }),
   });
   extension.requestApproval = (request) => approvals.request(request);
   const runtime = await createBotSessionService({
@@ -4816,6 +4816,33 @@ test("revision 61 templates: holders see versions and Open, and a stale version 
     assert.deepEqual(created.map((entry) => (entry as { version?: number }).version), [preset.version + 1, preset.version]);
   } finally {
     await service.close();
+  }
+});
+
+test("revision 69: a Bot's command approval carries its plain words only to approval:plain-words holders", async () => {
+  const { runtime, service, approvals } = await approvalGatedBot("run_command", { command: "rm -rf build", description: "Deletes the old build folder" }, "Run command: rm -rf build");
+  try {
+    const sent = await runtime.send(BOT_ID, { text: "go", requestId: "send-request-69" });
+    await waitFor(() => approvals.pending(BOT_ID).length === 1, { what: "the approval prompt" });
+    const words = (await service.session(BOT_ID, { approvalCards: true, approvalPlainWords: true })).approval!;
+    assert.equal(words.card?.explanation, "Deletes the old build folder");
+    assert.deepEqual(words.card?.tags, [{ label: "Deletes files", tone: "risk" }]);
+    const session = await service.session(BOT_ID, { approvalCards: true, approvalPlainWords: true });
+    assert.deepEqual(parseAidenRemoteBotSession(session), session, "the card decodes under the shipped contract");
+
+    const cards = (await service.session(BOT_ID, { approvalCards: true })).approval!;
+    assert.ok(cards.card, "a cards holder still gets the card");
+    assert.equal("explanation" in cards.card!, false);
+    assert.equal("tags" in cards.card!, false);
+    const unopted = (await service.session(BOT_ID, { approvalPlainWords: true })).approval!;
+    assert.equal("card" in unopted, false, "plain words never come without the typed card");
+    for (const approval of [words, cards, unopted]) assert.equal("reading" in approval, false);
+
+    await service.respondApproval(DEVICE_ID, words.waitId, "deny", "approve-request-69");
+    await runtime.awaitReply(BOT_ID, sent.submissionId, new AbortController().signal);
+  } finally {
+    await service.close();
+    await runtime.shutdown();
   }
 });
 

@@ -1,4 +1,6 @@
 import { botMessageTurnOf, isBotMessageRequestId } from "../../../renderer/shared/bot-messages.js";
+import { homedir } from "node:os";
+import { commandReadingForCall, type CommandReading } from "../../../renderer/shared/command-reading.js";
 import { BOT_MESSAGE_INPUT_KIND, type BotMessageInputMetadata } from "./bot-input-entry.js";
 import { BOT_ROUTINE_INPUT_KIND } from "./bot-input-entry.js";
 import { ownerRequestOf, type BotRunInputForJudge } from "./bot-owner-request.js";
@@ -394,6 +396,8 @@ export interface BotApprovalRequest {
    */
   argumentsHash?: string;
   runHash?: string;
+  /** A command in plain words (the model's description) and Aiden's own tags, for the card only. */
+  reading?: CommandReading;
   /** Aborted when the turn is stopped; the approval prompt should be withdrawn. */
   signal: AbortSignal | undefined;
 }
@@ -1154,8 +1158,15 @@ export function createBotRegistry(botId: string, deps: BotExtensionDeps): BotReg
     let preparedRelease: { approval: BotApprovalRequirement; memo: ApprovalMemo; grant: BotAllowListRelease } | undefined;
     const capturedRequirements = approval.requirements ? structuredClone(approval.requirements) : undefined;
     const capturedRemember = approval.remember ? structuredClone(approval.remember) : undefined;
+    // The card's plain words: the model's description and Aiden's tags, read
+    // against the Bot's own folder when its hooks know it.
+    const reading = commandReadingForCall(call.name, call.arguments, {
+      ...(await deps.hooks?.cwd(botId).then((root) => ({ workspaceRoot: root }), () => ({})) ?? {}),
+      home: homedir(),
+    });
     const request: BotApprovalRequest = {
       botId, waitId: memo.waitId, toolCallId: memo.toolCallId, toolName: call.name, summary: approval.summary,
+      ...(reading ? { reading } : {}),
       argumentsHash: approvalHash({ toolName: call.name, args: call.arguments ?? null }), runHash: approvalHash(declineRun),
       authorizationFingerprint: fingerprint, owner, signal: context.abortSignal, assertCurrent: () => assertLive(api, context, owner),
       ...(capturedRemember?.offer && !approval.rule ? { always: { key: botApprovalRuleKey(capturedRemember.target), count: capturedRemember.offer.count } } : {}),
