@@ -4,15 +4,29 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import test from "node:test";
 
+import type { BoundedProcessOptions, BoundedProcessResult } from "./bounded-process.js";
 import { createAndBootHiddenLinuxBase, prepareLinuxBaseDisk } from "./linux-base.js";
 import { BOT_COMPUTERS_LINUX_FLAG } from "./linux-feature-flag.js";
 import { lumeEnvironment, runLume } from "./lume-cli.js";
 import { BOT_COMPUTER_LINUX_DISK_BYTES } from "./release.js";
+import { guestSshEnvironment, guestSshPaths } from "./ssh.js";
 import { BotComputerError } from "./types.js";
 import { BOT_COMPUTER_BASE_VM } from "./vm-names.js";
 
 const FAKE_LUME = path.resolve("tests/e2e/lume-fake.mjs");
 const TEST_SSH_KEY = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIAidenKeyForBotComputerLinuxBaseTests0123456789";
+const TEST_HOST_KEY = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIKfakeHostKeyForAidenBotComputerTests0123456789";
+
+function fakeSshRunner(
+  calls: { command: string; args: readonly string[]; options: BoundedProcessOptions }[],
+  exitCode = 0,
+  stderr = "",
+) {
+  return async (command: string, args: readonly string[], options: BoundedProcessOptions): Promise<BoundedProcessResult> => {
+    calls.push({ command, args, options });
+    return { exitCode, signal: null, stdout: "", stderr, truncated: false, timedOut: false };
+  };
+}
 
 interface LoggedCall {
   kind: string;
@@ -109,6 +123,9 @@ test("createAndBootHiddenLinuxBase creates a Linux VM, grows its disk, mounts CI
     rmSync(dir, { recursive: true, force: true });
   });
 
+  const sshCalls: { command: string; args: readonly string[]; options: BoundedProcessOptions }[] = [];
+  const sshPaths = guestSshPaths(dir);
+  const sshEnv = guestSshEnvironment({}, sshPaths.home);
   const booted = await createAndBootHiddenLinuxBase({
     vmName: BOT_COMPUTER_BASE_VM,
     invocation,
@@ -122,6 +139,10 @@ test("createAndBootHiddenLinuxBase creates a Linux VM, grows its disk, mounts CI
     password: "GuestPassword1234567890",
     vncPassword: "Zq7Tn2Lw9Rk4Hm6X",
     featureEnv: { [BOT_COMPUTERS_LINUX_FLAG]: "1" },
+    sshPaths,
+    sshEnv,
+    hostPublicKey: TEST_HOST_KEY,
+    runProcess: fakeSshRunner(sshCalls),
     pollIntervalMs: 20,
     startTimeoutMs: 10_000,
   });
@@ -131,6 +152,15 @@ test("createAndBootHiddenLinuxBase creates a Linux VM, grows its disk, mounts CI
   assert.ok(booted.vnc.port > 0);
   assert.equal(statSync(booted.diskPath).size, BOT_COMPUTER_LINUX_DISK_BYTES);
   assert.equal(statSync(seedIsoPath).size, booted.seedIsoBytes);
+
+  assert.equal(sshCalls.length, 1);
+  assert.equal(sshCalls[0]?.command, "/usr/bin/ssh");
+  assert.ok(sshCalls[0]?.args.includes("StrictHostKeyChecking=yes"));
+  assert.ok(sshCalls[0]?.args.includes("PasswordAuthentication=no"));
+  const remoteCmd = sshCalls[0]?.args[sshCalls[0].args.length - 1] ?? "";
+  assert.match(remoteCmd, /cloud-init status --wait/u);
+  assert.match(remoteCmd, /xfce4-session/u);
+  assert.match(remoteCmd, /systemctl is-active --quiet lightdm/u);
 
   const calls = readCalls(logPath).filter((entry) => entry.kind === "cli");
   const createCall = calls.find((entry) => entry.op === "create");
@@ -242,4 +272,115 @@ test("createAndBootHiddenLinuxBase force-stops a VM when aborted while lume run 
 
   const calls = readCalls(logPath).filter((entry) => entry.kind === "cli");
   assert.ok(calls.some((entry) => entry.op === "stop" && entry.args?.includes("--force")), "aborted mid-run launch still force-stops the VM");
+  assert.ok(calls.some((entry) => entry.op === "delete" && entry.args?.includes("--force")), "aborted mid-run launch deletes the half-made VM");
+});
+
+test("createAndBootHiddenLinuxBase removes stale same-name VMs, cleans up failed attempts, and fails when cloud-init or LightDM fails", async (t) => {
+  const dir = mkdtempSync(path.join(tmpdir(), "aiden-linux-retry-"));
+  const storage = path.join(dir, "vms");
+  const home = path.join(dir, "home");
+  const logPath = path.join(dir, "lume.jsonl");
+  const configFile = path.join(dir, "fake.json");
+  writeFileSync(configFile, JSON.stringify({ log: logPath }));
+  const rawImage = path.join(dir, "debian.raw");
+  writeFileSync(rawImage, "debian-13-generic-arm64");
+  const missingImage = path.join(dir, "missing.raw");
+  const seedIsoPath = path.join(dir, "cidata.iso");
+  const invocation = { command: process.execPath, prefixArgs: [FAKE_LUME, "--fake-config", configFile] };
+  const env = lumeEnvironment({}, home);
+  const sshPaths = guestSshPaths(dir);
+  const sshEnv = guestSshEnvironment({}, sshPaths.home);
+
+  t.after(async () => {
+    await runLume(invocation, { op: "stop", name: BOT_COMPUTER_BASE_VM, force: true }, { storage, env, timeoutMs: 10_000 }).catch(
+      () => undefined,
+    );
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  // Pre-seed a stale same-name VM to simulate an interrupted prior attempt.
+  const staleCreate = await runLume(
+    invocation,
+    { op: "create", os: "linux", name: BOT_COMPUTER_BASE_VM, cpu: 4, memoryGb: 4, diskSizeGb: 24, display: "1280x800" },
+    { storage, env, timeoutMs: 30_000 },
+  );
+  assert.equal(staleCreate.exitCode, 0);
+
+  // Failing after `create` (missing raw image) must delete the half-made VM instead of leaving it behind.
+  await assert.rejects(
+    createAndBootHiddenLinuxBase({
+      vmName: BOT_COMPUTER_BASE_VM,
+      invocation,
+      storage,
+      lumeEnv: env,
+      sharedDir: path.join(dir, "shared"),
+      logFile: path.join(dir, "base.log"),
+      sourceImagePath: missingImage,
+      seedIsoPath,
+      sshAuthorizedKey: TEST_SSH_KEY,
+      vncPassword: "Zq7Tn2Lw9Rk4Hm6X",
+      featureEnv: { [BOT_COMPUTERS_LINUX_FLAG]: "1" },
+      sshPaths,
+      sshEnv,
+      hostPublicKey: TEST_HOST_KEY,
+      runProcess: fakeSshRunner([]),
+      pollIntervalMs: 20,
+      startTimeoutMs: 10_000,
+    }),
+    (error: unknown) => error instanceof BotComputerError && error.code === "invalid",
+  );
+  const afterDiskFailure = await runLume(invocation, { op: "get", name: BOT_COMPUTER_BASE_VM }, { storage, env, timeoutMs: 10_000 });
+  assert.notEqual(afterDiskFailure.exitCode, 0, "failed creation cleans up the partial VM");
+
+  // If cloud-init status --wait exits non-zero (e.g. exit 2 recoverable package failure), fail closed and delete VM.
+  const failedSshCalls: { command: string; args: readonly string[]; options: BoundedProcessOptions }[] = [];
+  await assert.rejects(
+    createAndBootHiddenLinuxBase({
+      vmName: BOT_COMPUTER_BASE_VM,
+      invocation,
+      storage,
+      lumeEnv: env,
+      sharedDir: path.join(dir, "shared"),
+      logFile: path.join(dir, "base.log"),
+      sourceImagePath: rawImage,
+      seedIsoPath,
+      sshAuthorizedKey: TEST_SSH_KEY,
+      vncPassword: "Zq7Tn2Lw9Rk4Hm6X",
+      featureEnv: { [BOT_COMPUTERS_LINUX_FLAG]: "1" },
+      sshPaths,
+      sshEnv,
+      hostPublicKey: TEST_HOST_KEY,
+      runProcess: fakeSshRunner(failedSshCalls, 2, "cloud-init error"),
+      pollIntervalMs: 20,
+      startTimeoutMs: 10_000,
+    }),
+    (error: unknown) => error instanceof BotComputerError && error.code === "start_failed",
+  );
+  assert.equal(failedSshCalls.length, 1);
+  const afterCloudInitFailure = await runLume(invocation, { op: "get", name: BOT_COMPUTER_BASE_VM }, { storage, env, timeoutMs: 10_000 });
+  assert.notEqual(afterCloudInitFailure.exitCode, 0, "cloud-init failure stops and deletes the half-made VM");
+
+  // Subsequent retry succeeds cleanly.
+  const retrySshCalls: { command: string; args: readonly string[]; options: BoundedProcessOptions }[] = [];
+  const retried = await createAndBootHiddenLinuxBase({
+    vmName: BOT_COMPUTER_BASE_VM,
+    invocation,
+    storage,
+    lumeEnv: env,
+    sharedDir: path.join(dir, "shared"),
+    logFile: path.join(dir, "base.log"),
+    sourceImagePath: rawImage,
+    seedIsoPath,
+    sshAuthorizedKey: TEST_SSH_KEY,
+    vncPassword: "Zq7Tn2Lw9Rk4Hm6X",
+    featureEnv: { [BOT_COMPUTERS_LINUX_FLAG]: "1" },
+    sshPaths,
+    sshEnv,
+    hostPublicKey: TEST_HOST_KEY,
+    runProcess: fakeSshRunner(retrySshCalls, 0),
+    pollIntervalMs: 20,
+    startTimeoutMs: 10_000,
+  });
+  assert.equal(retried.vmName, BOT_COMPUTER_BASE_VM);
+  assert.equal(retrySshCalls.length, 1);
 });

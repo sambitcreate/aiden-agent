@@ -8,6 +8,7 @@
 import { constants } from "node:fs";
 import { copyFile, lstat, mkdir, rename, rm, truncate } from "node:fs/promises";
 import path from "node:path";
+import { runBoundedProcess } from "./bounded-process.js";
 import { buildCloudInitSeedIso, type CloudInitAptSnapshot, writeCloudInitSeedIso } from "./cloud-init-iso.js";
 import { botComputersLinuxEnabled } from "./linux-feature-flag.js";
 import { runLume, type LumeCommand, type LumeInvocation, type LumeRunResult } from "./lume-cli.js";
@@ -19,6 +20,16 @@ import {
   BOT_COMPUTER_LINUX_DISPLAY,
   BOT_COMPUTER_LINUX_MEMORY_GB,
 } from "./release.js";
+import {
+  BOT_COMPUTER_GUEST_USER,
+  guestSshEnvironment,
+  guestSshPaths,
+  parsePublicKey,
+  runGuestCommand,
+  writeKnownHost,
+  type GuestSshPaths,
+  type ProcessRunner,
+} from "./ssh.js";
 import { BotComputerError } from "./types.js";
 import { isLumeVmNameSafe } from "./vm-names.js";
 
@@ -105,6 +116,20 @@ export interface HiddenLinuxBaseOptions {
   display?: string;
   /** Environment checked for `AIDEN_BOT_COMPUTERS_LINUX` (defaults to `process.env`). */
   featureEnv?: Readonly<Record<string, string | undefined>>;
+  /** Authenticated guest SSH paths (defaults to `guestSshPaths(path.dirname(storage))`). */
+  sshPaths?: GuestSshPaths;
+  /** Allowlisted guest SSH environment (defaults to `guestSshEnvironment(process.env, sshPaths.home)`). */
+  sshEnv?: Record<string, string>;
+  /** Override `/usr/bin/ssh` for tests. */
+  sshCommand?: string;
+  /** Override `/usr/bin/ssh-keyscan` for tests. */
+  keyscanCommand?: string;
+  /** Override process runner for guest SSH / keyscan in tests. */
+  runProcess?: ProcessRunner;
+  /** Pre-known guest SSH host public key (when omitted, scanned via `ssh-keyscan`). */
+  hostPublicKey?: string;
+  /** Timeout for `cloud-init status --wait` and XFCE/LightDM verification (defaults to 15 min). */
+  provisionTimeoutMs?: number;
   pollIntervalMs?: number;
   startTimeoutMs?: number;
   signal?: AbortSignal;
@@ -146,13 +171,52 @@ async function sleep(ms: number, signal?: AbortSignal): Promise<void> {
   });
 }
 
+async function scanGuestEd25519HostKey(
+  host: string,
+  options: {
+    env: Record<string, string>;
+    keyscanCommand?: string;
+    run?: ProcessRunner;
+    signal?: AbortSignal;
+  },
+): Promise<string> {
+  const run = options.run ?? runBoundedProcess;
+  const result = await run(options.keyscanCommand ?? "/usr/bin/ssh-keyscan", ["-t", "ed25519", "-T", "10", host], {
+    env: options.env,
+    signal: options.signal,
+    timeoutMs: 15_000,
+    maxStdoutBytes: 16 * 1024,
+    maxStderrBytes: 16 * 1024,
+    overflow: "fail",
+  });
+  if (result.exitCode !== 0 || result.timedOut) {
+    throw new BotComputerError("start_failed", "The Linux base computer did not report its SSH host key.");
+  }
+  for (const rawLine of result.stdout.split(/\r?\n/u)) {
+    const trimmed = rawLine.trim();
+    if (!trimmed || trimmed.startsWith("#")) continue;
+    const match = /^\S+\s+(ssh-ed25519\s+\S+(?:\s+[\x20-\x7e]{0,100})?)$/u.exec(trimmed);
+    if (match?.[1]) return parsePublicKey(match[1]);
+  }
+  throw new BotComputerError("start_failed", "The Linux base computer did not report its SSH host key.");
+}
+
+const LINUX_BASE_VERIFY_COMMAND = [
+  "cloud-init status --wait",
+  "command -v xfce4-session >/dev/null",
+  "command -v lightdm >/dev/null",
+  "systemctl is-active --quiet lightdm",
+].join(" && ");
+
 /**
  * Create and boot a hidden Linux base VM behind `AIDEN_BOT_COMPUTERS_LINUX`:
- * 1. `lume create <vmName> --os linux --cpu 4 --memory 4GB --disk-size 24GB --display 1280x800 --storage <storage>`
- * 2. Place the verified Debian raw image into the VM's disk and grow it sparsely to 24 GB
- * 3. Write the NoCloud `CIDATA` seed ISO (`meta-data` + `user-data`)
- * 4. `lume run <vmName> --detach --display none --no-audio-device --no-clipboard-device --mount <seedIso> [--disk-path <override>] ...`
- * 5. Poll `lume get` until the VM is running with an IP, loopback VNC endpoint, and SSH ready.
+ * 1. Remove any stale same-name VM so retries start cleanly
+ * 2. `lume create <vmName> --os linux --cpu 4 --memory 4GB --disk-size 24GB --display 1280x800 --storage <storage>`
+ * 3. Place the verified Debian raw image into the VM's disk and grow it sparsely to 24 GB
+ * 4. Write the NoCloud `CIDATA` seed ISO (`meta-data` + `user-data`)
+ * 5. `lume run <vmName> --detach --display none --no-audio-device --no-clipboard-device --mount <seedIso> [--disk-path <override>] ...`
+ * 6. Poll `lume get` until the VM is running with an IP, loopback VNC endpoint, and SSH ready
+ * 7. Pin the guest host key and run `cloud-init status --wait` + LightDM/XFCE readiness checks over authenticated SSH.
  */
 export async function createAndBootHiddenLinuxBase(options: HiddenLinuxBaseOptions): Promise<HiddenLinuxBaseResult> {
   assertLinuxFeatureEnabled(options.featureEnv);
@@ -167,6 +231,9 @@ export async function createAndBootHiddenLinuxBase(options: HiddenLinuxBaseOptio
   const targetDiskPath = options.diskPathOverride ?? path.join(options.storage, options.vmName, "disk.img");
   const pollMs = options.pollIntervalMs ?? 500;
   const startTimeoutMs = options.startTimeoutMs ?? 240_000;
+  const provisionTimeoutMs = options.provisionTimeoutMs ?? 15 * 60_000;
+  const sshPaths = options.sshPaths ?? guestSshPaths(path.dirname(options.storage));
+  const sshEnv = options.sshEnv ?? guestSshEnvironment(process.env, sshPaths.home);
 
   const execLume = (command: LumeCommand, timeoutMs: number, onSpawn?: () => void): Promise<LumeRunResult> =>
     runLume(options.invocation, command, {
@@ -180,24 +247,33 @@ export async function createAndBootHiddenLinuxBase(options: HiddenLinuxBaseOptio
   await mkdir(options.storage, { recursive: true, mode: 0o700 });
   await mkdir(options.sharedDir, { recursive: true, mode: 0o700 });
   await mkdir(path.dirname(options.logFile), { recursive: true, mode: 0o700 });
+  await mkdir(sshPaths.home, { recursive: true, mode: 0o700 });
 
-  const created = await execLume(
-    { op: "create", os: "linux", name: options.vmName, cpu, memoryGb, diskSizeGb, display },
-    120_000,
-  );
-  if (created.exitCode !== 0) {
-    const kind = classifyLumeError(`${created.stderr}\n${created.stdout}`, created.exitCode);
-    if (kind === "low_disk") {
-      throw new BotComputerError(
-        "low_disk",
-        "The Linux base computer couldn't be created because this Mac doesn't have enough free disk space. Free up space and try again.",
-      );
+  const existing = await execLume({ op: "get", name: options.vmName }, 30_000);
+  if (existing.exitCode === 0) {
+    await execLume({ op: "stop", name: options.vmName, force: true, timeoutSeconds: 0 }, 30_000).catch(() => undefined);
+    const removed = await execLume({ op: "delete", name: options.vmName }, 60_000);
+    if (removed.exitCode !== 0) {
+      throw new BotComputerError("lume_failed", "Removing the stale Linux base computer failed.");
     }
-    throw new BotComputerError("lume_failed", "Creating the Linux base computer failed.");
   }
 
-  let launched = false;
   try {
+    const created = await execLume(
+      { op: "create", os: "linux", name: options.vmName, cpu, memoryGb, diskSizeGb, display },
+      120_000,
+    );
+    if (created.exitCode !== 0) {
+      const kind = classifyLumeError(`${created.stderr}\n${created.stdout}`, created.exitCode);
+      if (kind === "low_disk") {
+        throw new BotComputerError(
+          "low_disk",
+          "The Linux base computer couldn't be created because this Mac doesn't have enough free disk space. Free up space and try again.",
+        );
+      }
+      throw new BotComputerError("lume_failed", "Creating the Linux base computer failed.");
+    }
+
     await prepareLinuxBaseDisk({
       sourceImagePath: options.sourceImagePath,
       targetDiskPath,
@@ -225,9 +301,6 @@ export async function createAndBootHiddenLinuxBase(options: HiddenLinuxBaseOptio
         logFile: options.logFile,
       },
       60_000,
-      () => {
-        launched = true;
-      },
     );
     if (started.exitCode !== 0) {
       const kind = classifyLumeError(`${started.stderr}\n${started.stdout}`, started.exitCode);
@@ -241,6 +314,7 @@ export async function createAndBootHiddenLinuxBase(options: HiddenLinuxBaseOptio
     }
 
     const deadline = Date.now() + startTimeoutMs;
+    let readyInfo: LumeVmInfo | undefined;
     for (;;) {
       const result = await execLume({ op: "get", name: options.vmName }, 30_000);
       if (result.exitCode === 0) {
@@ -252,14 +326,8 @@ export async function createAndBootHiddenLinuxBase(options: HiddenLinuxBaseOptio
               "The Linux base computer offered its screen beyond this Mac, so Aiden stopped it.",
             );
           }
-          return {
-            vmName: options.vmName,
-            ip: info.ip,
-            vnc: info.vnc,
-            diskPath: targetDiskPath,
-            seedIsoPath: options.seedIsoPath,
-            seedIsoBytes: isoBytes.length,
-          };
+          readyInfo = info;
+          break;
         }
       }
       if (Date.now() > deadline) {
@@ -267,14 +335,51 @@ export async function createAndBootHiddenLinuxBase(options: HiddenLinuxBaseOptio
       }
       await sleep(pollMs, options.signal);
     }
-  } catch (error) {
-    if (launched) {
-      await runLume(
-        options.invocation,
-        { op: "stop", name: options.vmName, force: true, timeoutSeconds: 0 },
-        { storage: options.storage, env: options.lumeEnv, timeoutMs: 30_000 },
-      ).catch(() => undefined);
+
+    const hostKey =
+      options.hostPublicKey ??
+      (await scanGuestEd25519HostKey(readyInfo.ip!, {
+        env: sshEnv,
+        keyscanCommand: options.keyscanCommand,
+        run: options.runProcess,
+        signal: options.signal,
+      }));
+    await writeKnownHost(sshPaths, hostKey);
+
+    const provisionResult = await runGuestCommand(
+      { host: readyInfo.ip!, user: BOT_COMPUTER_GUEST_USER },
+      LINUX_BASE_VERIFY_COMMAND,
+      { timeoutMs: provisionTimeoutMs, maxOutputBytes: 64 * 1024, signal: options.signal },
+      { paths: sshPaths, env: sshEnv, sshCommand: options.sshCommand, run: options.runProcess },
+    );
+    if (provisionResult.timedOut || provisionResult.exitCode !== 0) {
+      throw new BotComputerError(
+        "start_failed",
+        provisionResult.timedOut
+          ? "Linux desktop setup inside the base computer timed out."
+          : "Linux desktop setup inside the base computer failed.",
+      );
     }
+
+    return {
+      vmName: options.vmName,
+      ip: readyInfo.ip!,
+      vnc: readyInfo.vnc!,
+      diskPath: targetDiskPath,
+      seedIsoPath: options.seedIsoPath,
+      seedIsoBytes: isoBytes.length,
+    };
+  } catch (error) {
+    await runLume(
+      options.invocation,
+      { op: "stop", name: options.vmName, force: true, timeoutSeconds: 0 },
+      { storage: options.storage, env: options.lumeEnv, timeoutMs: 30_000 },
+    ).catch(() => undefined);
+    await runLume(
+      options.invocation,
+      { op: "delete", name: options.vmName },
+      { storage: options.storage, env: options.lumeEnv, timeoutMs: 60_000 },
+    ).catch(() => undefined);
     throw error;
   }
 }
