@@ -541,6 +541,9 @@ struct AidenChatDetailView: View {
                 onChoose: performContinueInNewChat(workspaceID:)
             )
         }
+        .environment(\.aidenChatScreen, screen)
+        // `/server` can grant the slider after the catalog loaded.
+        .onChange(of: model.agentSlider != nil) { model.reconcileAgentSliderAvailability() }
         .aidenBotDeleteConfirmation(
             isPresented: $isConfirmingBotDelete,
             botName: botToolsModel?.bot?.name ?? model.chat.title
@@ -602,6 +605,8 @@ struct AidenChatDetailView: View {
             let hidden = { [model, composerSession] in
                 Task { await model.saveDraftNow() }
                 model.setViewPresent(false)
+                // A real leave closes the slider; a Duo fold keeps it open.
+                model.isAgentSliderPresented = false
                 model.readAloud.stop()
                 model.setHapticsActive(false)
                 model.setChatForegrounded(false)

@@ -113,6 +113,10 @@ const appSourcePaths = [
   "AidenOnTheGo/Features/Chat/AidenChatComposer.swift",
   "AidenOnTheGo/Features/Chat/AidenChatRows.swift",
   "AidenOnTheGo/Features/Chat/AidenActivityFeed.swift",
+  "AidenOnTheGo/Features/Chat/AidenAgentSlider.swift",
+  "AidenOnTheGo/Features/Chat/AidenAgentSliderSettingsView.swift",
+  "AidenOnTheGo/Features/Chat/AidenAgentSliderSheet.swift",
+  "AidenOnTheGo/Features/Chat/AidenChatViewModel+AgentSlider.swift",
   "AidenOnTheGo/Features/Chat/AidenWorkspaceChatsModel.swift",
   "AidenOnTheGo/Features/Chat/AidenChatsView.swift",
   "AidenOnTheGo/Features/Chat/AidenChatDetailView.swift",
@@ -146,6 +150,7 @@ const appSourcePaths = [
   "AidenOnTheGo/Features/Remote/AidenBotChatToolsView.swift",
   "AidenOnTheGo/Features/Remote/Demo/AidenDemoHosts.swift",
   "AidenOnTheGo/Features/Remote/Demo/AidenDemoBotUX.swift",
+  "AidenOnTheGo/Features/Remote/Demo/AidenDemoAgentSlider.swift",
   "AidenOnTheGo/Features/Remote/Demo/AidenPreviewFixtureView.swift",
   "AidenOnTheGo/Features/Remote/Hosts/AidenHostConnectScheduler.swift",
   "AidenOnTheGo/Features/Shell/AidenAppNavigation.swift",
@@ -369,6 +374,7 @@ const testSources = [
   "AidenVisualViewerTests.swift",
   "AidenSandboxedHTMLTests.swift",
   "AidenWorkspaceEnvironmentTests.swift",
+  "AidenAgentSliderTests.swift",
 ];
 
 // UI tests never ship. They launch the Debug app against demo machines.
@@ -377,6 +383,7 @@ const uiTestSources = [
   "AidenBotUXUITests.swift",
   "AidenSandboxedHTMLUITests.swift",
   "AidenWorkspaceHTMLUITests.swift",
+  "AidenAgentSliderUITests.swift",
   "AidenStateMatrix.swift",
 ];
 

@@ -50,6 +50,8 @@ final class AidenDemoResponder: @unchecked Sendable {
         case reply(status: Int, json: Data)
         /// An answer that depends on the request, such as a search.
         case computed(status: Int, json: @Sendable (URL) -> Data)
+        /// An answer that reads the request's body, such as a turn.
+        case answered(status: Int, json: @Sendable (URL, Data) -> Data)
         case failure(URLError.Code)
     }
 
@@ -139,6 +141,19 @@ final class AidenDemoResponder: @unchecked Sendable {
         outcomes[Route(instanceId: instanceId, method: method, path: path)] = .computed(status: status, json: json)
     }
 
+    /// Answers `path` from the request's URL and body.
+    func reply(
+        instanceId: String,
+        method: String,
+        path: String,
+        status: Int,
+        answer: @escaping @Sendable (URL, Data) -> Data
+    ) {
+        lock.lock()
+        defer { lock.unlock() }
+        outcomes[Route(instanceId: instanceId, method: method, path: path)] = .answered(status: status, json: answer)
+    }
+
     /// Fails every method on `path` with a transport error. `path: "*"` takes the
     /// whole machine offline and replaces its earlier answers.
     func fail(instanceId: String, path: String, code: URLError.Code) {
@@ -221,6 +236,7 @@ final class AidenDemoResponder: @unchecked Sendable {
         let instanceId = String(host.dropLast(Self.hostSuffix.count))
         let method = request.httpMethod ?? "GET"
         let path = url.path.hasPrefix(Self.apiRoot) ? String(url.path.dropFirst(Self.apiRoot.count)) : url.path
+        let body = Self.body(of: request)
 
         lock.lock()
         log[instanceId, default: []].append("\(method) \(path)")
@@ -237,7 +253,7 @@ final class AidenDemoResponder: @unchecked Sendable {
         let interactiveHold = isProbe ? nil : interactiveHolds[HoldKey(instanceId: instanceId, path: path)]
         if let hold = holdsQuery ?? holds[HoldKey(instanceId: instanceId, path: path)] ?? interactiveHold, !hold.isReleased {
             hold.waiting.append { [self] in
-                deliver(resolve(instanceId: instanceId, method: method, path: path, url: url))
+                deliver(resolve(instanceId: instanceId, method: method, path: path, url: url, body: body))
             }
             lock.unlock()
             return
@@ -246,18 +262,19 @@ final class AidenDemoResponder: @unchecked Sendable {
         lock.unlock()
         if let wait = delay?(), wait > 0 {
             DispatchQueue.global().asyncAfter(deadline: .now() + wait) { [self] in
-                deliver(resolve(instanceId: instanceId, method: method, path: path, url: url))
+                deliver(resolve(instanceId: instanceId, method: method, path: path, url: url, body: body))
             }
             return
         }
-        deliver(resolve(instanceId: instanceId, method: method, path: path, url: url))
+        deliver(resolve(instanceId: instanceId, method: method, path: path, url: url, body: body))
     }
 
     private func resolve(
         instanceId: String,
         method: String,
         path: String,
-        url: URL
+        url: URL,
+        body: Data
     ) -> Result<(HTTPURLResponse, Data), URLError> {
         if AidenDemoLongChat.isRequested, method == "GET", instanceId == "studio",
            path == "/chats/\(AidenDemoLongChat.chatId)/messages",
@@ -280,9 +297,27 @@ final class AidenDemoResponder: @unchecked Sendable {
             return .success((Self.response(url: url, status: status), json))
         case .computed(let status, let json):
             return .success((Self.response(url: url, status: status), json(url)))
+        case .answered(let status, let json):
+            return .success((Self.response(url: url, status: status), json(url, body)))
         case nil:
             return .success((Self.response(url: url, status: 404), AidenDemoContent.notFound()))
         }
+    }
+
+    /// A request's body. `URLProtocol` usually sees it as a stream.
+    private static func body(of request: URLRequest) -> Data {
+        if let body = request.httpBody { return body }
+        guard let stream = request.httpBodyStream else { return Data() }
+        stream.open()
+        defer { stream.close() }
+        var body = Data()
+        var buffer = [UInt8](repeating: 0, count: 16_384)
+        while true {
+            let count = stream.read(&buffer, maxLength: buffer.count)
+            guard count > 0 else { break }
+            body.append(buffer, count: count)
+        }
+        return body
     }
 
     private static func response(url: URL, status: Int) -> HTTPURLResponse {
@@ -438,6 +473,11 @@ enum AidenDemoHosts {
             installation.deviceCapabilities += [.runsObserve, .runsControl]
             installation.serverCapabilities? += [.runsObserve, .runsControl]
             installation.serverFeatures.append(AidenServer.phoneRunControlFeature)
+        }
+        if AidenDemoAgentSlider.isRequested {
+            // Revision 70: the Mac offers the Agent Slider and this phone holds it.
+            installation.deviceCapabilities.append(.chatAgentSlider)
+            installation.serverCapabilities?.append(.chatAgentSlider)
         }
         if AidenDemoBotUX.isRequested {
             // Revision 61: the Mac offers the five opt-ins and this phone holds them.
@@ -651,7 +691,12 @@ enum AidenDemoHosts {
         // The Settings screen reads memory settings.
         responder.reply(instanceId: id, path: "/memory/settings", status: 200, json: AidenDemoContent.memorySettingsJSON())
         // The chat composer's model chip reads the catalog.
-        responder.reply(instanceId: id, path: "/models", status: 200, json: AidenDemoContent.modelsJSON())
+        responder.reply(
+            instanceId: id,
+            path: "/models",
+            status: 200,
+            json: AidenDemoAgentSlider.isRequested ? AidenDemoAgentSlider.modelsJSON() : AidenDemoContent.modelsJSON()
+        )
         // Opening a row reads the whole chat.
         for (index, row) in rows.enumerated() {
             guard let chatId = row["id"] as? String else { continue }
@@ -696,6 +741,16 @@ enum AidenDemoHosts {
         // Compose, and a fork of each chat.
         responder.reply(instanceId: id, method: "POST", path: "/chats", status: 201, json: AidenDemoContent.newChatJSON())
         responder.reply(instanceId: id, path: "/chats/\(AidenDemoContent.newChatId)", status: 200, json: AidenDemoContent.newChatJSON())
+        if AidenDemoAgentSlider.isRequested {
+            // After the plain answers above, so these chats run turns. The new
+            // chat starts with no model, as one the Mac just made does.
+            var chats = rows.enumerated().compactMap { index, row -> AidenDemoAgentSlider.Chat? in
+                guard let chatId = row["id"] as? String else { return nil }
+                return AidenDemoAgentSlider.Chat(id: chatId, base: AidenDemoContent.chatJSON(row: row, index: index), isNew: false)
+            }
+            chats.append(AidenDemoAgentSlider.Chat(id: AidenDemoContent.newChatId, base: AidenDemoContent.newChatJSON(), isNew: true))
+            AidenDemoAgentSlider.register(instanceId: id, chats: chats, responder: responder)
+        }
         for (index, row) in rows.enumerated() {
             guard let chatId = row["id"] as? String else { continue }
             let forkId = "\(chatId)_fork"
@@ -745,7 +800,7 @@ enum AidenDemoHosts {
         var legacy = installation
         legacy.serverCapabilities = nil
         legacy.serverFeatures = []
-        legacy.deviceCapabilities.removeAll { $0 == .botRead || $0 == .botWrite }
+        legacy.deviceCapabilities.removeAll { $0 == .botRead || $0 == .botWrite || $0 == .chatAgentSlider }
         return legacy
     }
 

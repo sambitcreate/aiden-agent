@@ -317,6 +317,9 @@ struct AidenPalette: Equatable, Sendable {
     var success: Color { Color(aidenHex: successHex) }
     var warning: Color { Color(aidenHex: warningHex) }
     var danger: Color { Color(aidenHex: dangerHex) }
+    /// The neutral keyboard focus ring for non-text controls, as the desktop's
+    /// `--focus-ring` (primary text). Never an accent, and never on text entry.
+    var focusRing: Color { foreground }
 
     /// Solid accent fill for labelled controls: send buttons, prominent
     /// buttons, selected chips, accent bubbles, swipe actions.

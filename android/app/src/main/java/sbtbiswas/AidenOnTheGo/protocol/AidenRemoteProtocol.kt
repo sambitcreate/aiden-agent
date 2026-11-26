@@ -709,6 +709,15 @@ data class AidenRemoteCapability(val rawValue: String) {
          */
         val BOT_NEEDS_YOU = AidenRemoteCapability("bot:needs-you")
 
+        /**
+         * Revision 70: a turn that asks to save its selection keeps its level as the chat's own,
+         * with its provider and model, in the same write as the message. The Mac offers it only in
+         * `serverCapabilities`. This phone doesn't ask for it yet: its turns don't carry the chat's
+         * own level, so saving them would move the chat off the stop chosen on the computer. The
+         * slider in `GET /models` and a chat's level are still read.
+         */
+        val CHAT_AGENT_SLIDER = AidenRemoteCapability("chat:agent-slider")
+
         val V1_KNOWN = listOf(
             SERVER_READ, CHAT_READ, CHAT_WRITE, APPROVAL_RESPOND,
             WORKSPACE_READ, WORKSPACE_BROWSE, WORKSPACE_MANAGE,

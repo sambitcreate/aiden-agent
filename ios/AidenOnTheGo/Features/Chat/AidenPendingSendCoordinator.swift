@@ -117,11 +117,15 @@ final class AidenPendingSendCoordinator {
         }
     }
 
-    /// Mints or reuses a stable `Idempotency-Key` for a fresh turn send.
+    /// Mints or reuses a stable `Idempotency-Key` for a fresh turn send. The
+    /// Agent Slider fields record, once, what the send asks the chat to keep.
     func makeTurnAttempt(
         deviceId: String,
         request: AidenTurnStart,
         attachments: [AidenAttachmentReference],
+        keepsSelection: Bool? = nil,
+        startsWhereNewChatsStart: Bool? = nil,
+        newChatStart: AidenChatModelSelection? = nil,
         now: Date = Date()
     ) -> AidenChatDraftStore.PendingSend {
         AidenChatDraftStore.PendingSend(
@@ -129,7 +133,10 @@ final class AidenPendingSendCoordinator {
             request: request,
             key: turnAttempts.key(for: request),
             createdAt: now,
-            attachments: attachments
+            attachments: attachments,
+            keepsSelection: keepsSelection,
+            startsWhereNewChatsStart: startsWhereNewChatsStart,
+            newChatStart: newChatStart
         )
     }
 
@@ -216,15 +223,18 @@ final class AidenPendingSendCoordinator {
 
     /// The Mac refused `attempt` with a retryable 429 before running it, and
     /// settled its Idempotency-Key as rejected, so that key cannot be sent
-    /// again. The same request is saved again under a fresh key and sent once
-    /// the server's delay has passed. Returns `false` when the fresh attempt
-    /// could not be saved, leaving the failure terminal.
+    /// again. The same request is saved again under a fresh key, keeping what
+    /// the send asked the chat to keep, and sent once the server's delay has
+    /// passed. `onReplaced` hears the fresh key as soon as it is minted.
+    /// Returns `false` when the fresh attempt could not be saved, leaving the
+    /// failure terminal.
     func scheduleRateLimitedSendRetry(
         replacing attempt: AidenChatDraftStore.PendingSend,
         error: AidenRemoteClientError,
         session: AidenChatDraftStore.Session,
         isContextLive: @MainActor () -> Bool,
         now: Date = Date(),
+        onReplaced: @MainActor (_ freshKey: UUID) -> Void = { _ in },
         onRetry: @escaping @MainActor () async -> Void
     ) async -> Bool {
         await draftStore.settlePendingSend(key: attempt.key, session: session)
@@ -234,8 +244,12 @@ final class AidenPendingSendCoordinator {
             request: attempt.request,
             key: turnAttempts.key(for: attempt.request),
             createdAt: now,
-            attachments: attempt.attachments
+            attachments: attempt.attachments,
+            keepsSelection: attempt.keepsSelection,
+            startsWhereNewChatsStart: attempt.startsWhereNewChatsStart,
+            newChatStart: attempt.newChatStart
         )
+        onReplaced(fresh.key)
         do {
             try await draftStore.savePendingSend(fresh, session: session)
         } catch {

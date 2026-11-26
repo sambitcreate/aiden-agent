@@ -2344,3 +2344,43 @@ test("a started chat keeps who started it across a restart, and a damaged record
   assert.equal(damaged?.title, "Run the tests");
   assert.equal("startedBy" in damaged!, false);
 });
+
+test("a turn's thinking level is saved in the same write as its message, survives restart, and only on a regular chat with a model", async (t) => {
+  const directory = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-chat-thinking-level-"));
+  t.after(() => fs.rm(directory, { recursive: true, force: true }));
+  const first = createChatStore(async () => directory);
+  const chat = await first.create({ workspaceId: "workspace", providerId: "openai", model: "model-a" });
+
+  const saved = await first.appendMessage(chat.id, { role: "user", content: "Think harder" }, {
+    providerId: "openai", model: "model-b", thinkingLevel: "high",
+  });
+  assert.equal(saved.model, "model-b");
+  assert.equal(saved.thinkingLevel, "high");
+  const restored = await createChatStore(async () => directory).get(chat.id);
+  assert.equal(restored?.thinkingLevel, "high");
+  assert.equal(restored?.messages[restored.messages.length - 1]?.content, "Think harder");
+
+  // An invalid level writes nothing at all, not even the message.
+  await assert.rejects(
+    first.appendMessage(chat.id, { role: "user", content: "Never stored" }, {
+      providerId: "openai", model: "model-b", thinkingLevel: "extreme" as never,
+    }),
+    /Invalid thinking level/u,
+  );
+  const afterRefusal = await createChatStore(async () => directory).get(chat.id);
+  assert.equal(afterRefusal?.messages.length, 1);
+  assert.equal(afterRefusal?.thinkingLevel, "high");
+
+  // Omitted leaves the level; null clears it.
+  assert.equal((await first.appendMessage(chat.id, { role: "user", content: "Same" })).thinkingLevel, "high");
+  const cleared = await first.appendMessage(chat.id, { role: "user", content: "Default" }, {
+    providerId: "openai", model: "model-b", thinkingLevel: null,
+  });
+  assert.equal("thinkingLevel" in cleared, false);
+
+  const bot = await first.create({ botId: "bot:level-owner", providerId: "openai", model: "model-a" });
+  const botSaved = await first.appendMessage(bot.id, { role: "user", content: "Hi" }, {
+    providerId: "openai", model: "model-a", thinkingLevel: "high",
+  });
+  assert.equal("thinkingLevel" in botSaved, false, "a Bot chat never takes a chat level");
+});

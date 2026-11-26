@@ -682,6 +682,7 @@ struct AidenRemoteCapability: RawRepresentable, Codable, Hashable, Sendable {
     /// Contract revision 59 adds `bot:peers`, asked for alone.
     /// Contract revision 64 adds `chat:continue-in-new-chat`, asked for alone.
     /// Contract revision 68 adds `bot:needs-you`, asked for alone.
+    /// Contract revision 70 adds `chat:agent-slider`, asked for alone.
 
     /// Contract revision 61 adds `approval:cards`, `approvals:settings`,
     /// `bot:settings-changes`, `bot:suggestions` and `bot:templates`, each alone.
@@ -701,6 +702,7 @@ struct AidenRemoteCapability: RawRepresentable, Codable, Hashable, Sendable {
         Self(rawValue: "chat:continue-in-new-chat"),
         Self(rawValue: "stream:snapshot-reasons"),
         Self(rawValue: "bot:needs-you"),
+        Self(rawValue: "chat:agent-slider"),
         Self(rawValue: "bot:watches"),
         Self(rawValue: "bot:open-work"),
         Self(rawValue: "bot:routine-models"),
@@ -790,6 +792,12 @@ struct AidenRemoteCapability: RawRepresentable, Codable, Hashable, Sendable {
     /// issue). It grants no authority. A Mac on an earlier revision refuses the
     /// name, so the device asks for it alone.
     static let botNeedsYou = Self(rawValue: "bot:needs-you")
+
+    /// Revision 70: a turn this device sends saves its model and thinking level
+    /// as the chat's own, as a turn sent from the Mac's composer does, so the
+    /// Agent Slider on `GET /models` matches what the next turn runs. Asked for
+    /// alone so older hosts do not reject the progress batch.
+    static let chatAgentSlider = Self(rawValue: "chat:agent-slider")
 
     /// Revision 42: the device receives the Bot session `issues` list and
     /// `issues` frames, a summary `issueCount`, and issue items in the routine
@@ -3111,6 +3119,8 @@ struct AidenChatMessagesWindow: Decodable, Equatable, Sendable {
         var modelId: String?
         var createdAt: Date
         var updatedAt: Date
+        /// Revision 70: the chat's own thinking level, with its model.
+        var thinkingLevel: String? = nil
     }
 
     let chatId: String
@@ -3155,7 +3165,8 @@ struct AidenChatMessagesWindow: Decodable, Equatable, Sendable {
             updatedAt: metadata.updatedAt,
             revision: revision,
             titlePending: metadata.titlePending,
-            forkedFrom: forkedFrom
+            forkedFrom: forkedFrom,
+            thinkingLevel: metadata.thinkingLevel
         )
     }
 
@@ -3187,6 +3198,7 @@ struct AidenChatMessagesWindow: Decodable, Equatable, Sendable {
 
     private static let metadataKeys: [CodingKeys] = [
         .workspaceId, .botId, .title, .titlePending, .providerId, .modelId, .createdAt, .updatedAt,
+        .thinkingLevel,
     ]
 
     /// Revision-23 metadata is all-or-nothing and held to the chat
@@ -3231,6 +3243,10 @@ struct AidenChatMessagesWindow: Decodable, Equatable, Sendable {
         guard AidenRemoteTimestamp.isOrdered(createdAt: createdAt, updatedAt: updatedAt) else {
             throw invalid(.updatedAt, "updatedAt cannot precede createdAt.")
         }
+        let thinkingLevel = try aidenDecodeOptionalNonNull(String.self, from: values, forKey: .thinkingLevel)
+        guard AidenChatThinkingLevel.isValid(thinkingLevel, modelId: modelId, botId: botId) else {
+            throw invalid(.thinkingLevel, "A chat's thinking level needs its model and is regular-chat-only.")
+        }
         return Metadata(
             workspaceId: workspaceId,
             botId: botId,
@@ -3239,13 +3255,15 @@ struct AidenChatMessagesWindow: Decodable, Equatable, Sendable {
             providerId: providerId,
             modelId: modelId,
             createdAt: createdAt.date,
-            updatedAt: updatedAt.date
+            updatedAt: updatedAt.date,
+            thinkingLevel: thinkingLevel
         )
     }
 
     private enum CodingKeys: String, CodingKey {
         case chatId, revision, messages, hasOlder
         case workspaceId, botId, title, titlePending, providerId, modelId, createdAt, updatedAt
+        case thinkingLevel
         case forkedFrom
     }
 }
