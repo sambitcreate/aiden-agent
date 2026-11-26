@@ -316,14 +316,17 @@ test("Linux AT-SPI password and editable entry/text roles keep text-edit behavio
     }
   }
 
-  // End-to-end guest driver capture carries editability into focused facts for key classification.
+  // End-to-end guest driver capture derives editability from real cua-driver 0.38.0 fields into focused facts without leaking value.
   const dir = tempHome();
   const elements = path.join(dir, "atspi-elements.json");
   writeFileSync(
     elements,
     JSON.stringify([
-      { role: "entry", label: "Message row", editable: false, frame: { x: 10, y: 10, w: 120, h: 24 }, depth: 1 },
-      { role: "text", label: "Reply box", states: ["focusable", "ATSPI_STATE_EDITABLE"], frame: { x: 10, y: 40, w: 120, h: 24 }, depth: 1 },
+      { role: "text", label: "Message row", frame: { x: 10, y: 10, w: 120, h: 24 }, depth: 1 },
+      { role: "text", label: "Reply box", value: "secret draft", frame: { x: 10, y: 40, w: 120, h: 24 }, depth: 1 },
+      { role: "entry", label: "Disabled search", enabled: false, frame: { x: 10, y: 70, w: 120, h: 24 }, depth: 1 },
+      { role: "entry", label: "Selectable entry", selected: false, frame: { x: 10, y: 100, w: 120, h: 24 }, depth: 1 },
+      { role: "entry", label: "Compose subject", frame: { x: 10, y: 130, w: 120, h: 24 }, depth: 1 },
     ]),
   );
   const fixture = fileURLToPath(new URL("../bot-computers/fixtures/guest-cua-driver.mjs", import.meta.url));
@@ -376,12 +379,42 @@ test("Linux AT-SPI password and editable entry/text roles keep text-edit behavio
 
     await run("cap-2", { action: "capture", app: "Safari" });
     await run("click-ed", { action: "click", element: 1, intent: "Focus the reply box" });
+    const focusedEditableText = state.driverFacts(BOT)?.focused;
+    assert.equal(focusedEditableText?.editable, true);
+    assert.equal("value" in (focusedEditableText ?? {}), false);
     const edBackspace = botComputerAction(
       { args: { action: "key", keys: "backspace", intent: "Delete the extra letter" } },
       state.driverFacts(BOT),
     );
     assert.equal(edBackspace.action && "action" in edBackspace.action ? edBackspace.action.action : undefined, "key");
     assert.equal(classifyBotAction(edBackspace.action!, []).classes.has("delete"), false);
+
+    await run("cap-3", { action: "capture", app: "Safari" });
+    await run("click-disabled-entry", { action: "click", element: 2, intent: "Select the disabled field" });
+    const disabledDelete = botComputerAction(
+      { args: { action: "key", keys: "Delete", intent: "Delete the selected row" } },
+      state.driverFacts(BOT),
+    );
+    assert.equal(disabledDelete.action && "action" in disabledDelete.action ? disabledDelete.action.action : undefined, "press");
+    assert.equal(classifyBotAction(disabledDelete.action!, []).classes.has("delete"), true);
+
+    await run("cap-4", { action: "capture", app: "Safari" });
+    await run("click-selected-entry", { action: "click", element: 3, intent: "Select the selectable entry" });
+    const selectedDelete = botComputerAction(
+      { args: { action: "key", keys: "Delete", intent: "Delete the selected row" } },
+      state.driverFacts(BOT),
+    );
+    assert.equal(selectedDelete.action && "action" in selectedDelete.action ? selectedDelete.action.action : undefined, "press");
+    assert.equal(classifyBotAction(selectedDelete.action!, []).classes.has("delete"), true);
+
+    await run("cap-5", { action: "capture", app: "Safari" });
+    await run("click-entry", { action: "click", element: 4, intent: "Focus the compose subject" });
+    const entryBackspace = botComputerAction(
+      { args: { action: "key", keys: "backspace", intent: "Delete the extra letter" } },
+      state.driverFacts(BOT),
+    );
+    assert.equal(entryBackspace.action && "action" in entryBackspace.action ? entryBackspace.action.action : undefined, "key");
+    assert.equal(classifyBotAction(entryBackspace.action!, []).classes.has("delete"), false);
   } finally {
     await state.shutdown();
   }

@@ -4,13 +4,12 @@
 // value, so nothing typed into a field (a password among them) is read back.
 
 import type { AgentToolResult } from "@earendil-works/pi-agent-core";
-import { parseElementEditable } from "../computer-use/controller.js";
 
 /** An element as the model and the rules classifier see it. */
 export interface BotComputerElement {
   role?: string;
   label?: string;
-  /** Whether the driver marked the element editable (e.g. `ATSPI_STATE_EDITABLE`). */
+  /** Whether the element accepts text input, derived from cua-driver 0.38.0 role/enabled/selected/value fields. */
   editable?: boolean;
 }
 
@@ -56,6 +55,23 @@ export interface BotComputerElementCapture {
   elements: Map<number, BotComputerElement>;
 }
 
+/**
+ * Derive editability solely from fields cua-driver 0.38.0 emits (`role`, `enabled`, `selected`, `value`).
+ * For AT-SPI `text` nodes without a Value interface, 0.38.0 emits `value` only when `Interface::EditableText`
+ * is present and non-empty text exists; `value` itself is never kept on `BotComputerElement`.
+ */
+function deriveElementEditable(element: Record<string, unknown>, role: string | undefined): boolean | undefined {
+  if (element.enabled === false || typeof element.selected === "boolean") return false;
+  const normalizedRole = (role ?? "").toLowerCase().replace(/[^a-z]/gu, "");
+  if (normalizedRole === "text" || normalizedRole === "roletext") {
+    return typeof element.value === "string" && element.value.length > 0;
+  }
+  if (normalizedRole === "entry" || normalizedRole === "roleentry") {
+    return true;
+  }
+  return undefined;
+}
+
 /** Reads a `ComputerUseController` capture result: its target and numbered elements. */
 export function parseBotComputerElementCapture(result: AgentToolResult<unknown>): BotComputerElementCapture {
   const first = result.content.find((part) => part.type === "text");
@@ -74,7 +90,7 @@ export function parseBotComputerElementCapture(result: AgentToolResult<unknown>)
     if (typeof index !== "number" || !Number.isInteger(index) || index < 0) continue;
     const role = clean(element?.role, 64);
     const label = clean(element?.label, LABEL_MAX_CHARS);
-    const editable = element ? parseElementEditable(element) : undefined;
+    const editable = element ? deriveElementEditable(element, role) : undefined;
     elements.set(index, {
       ...(role ? { role } : {}),
       ...(label ? { label } : {}),

@@ -27,6 +27,8 @@ const ACTION_TIMEOUT_MS = 30_000;
 export const COMPUTER_USE_DISCOVERY_TIMEOUT_MS = 120_000;
 const CAPTURE_TIMEOUT_MS = 60_000;
 const MAX_DRIVER_TEXT_CHARS = 96_000;
+const REFUSAL_DETAIL_MAX_CHARS = 1_000;
+const DRIVER_REJECTED_PREFIX = "cua-driver rejected the action: ";
 const MAX_IMAGE_BASE64_CHARS = 60 * 1024 * 1024;
 const DESKTOP_NAMES = new Set(["screen", "desktop"]);
 /** get_window_state's own default AX walk cap (`get_window_state.rs`). */
@@ -158,8 +160,6 @@ interface ElementRecord {
   enabled?: boolean;
   /** Actions the control advertises (e.g. AXPress). */
   actions?: string[];
-  /** Whether the control accepts text input (`ATSPI_STATE_EDITABLE` / driver `editable`). */
-  editable?: boolean;
   /** Screen-point rectangle. */
   frame?: Bounds;
   /** The same rectangle in pixels of this capture's screenshot. */
@@ -438,13 +438,26 @@ function parseDriverResult(raw: unknown): ParsedDriverResult {
     const effect = identifier(structured?.effect);
     const reason = identifier(structured?.reason);
     const hint = refusalHint(structured);
-    const boundedText = text.trim().slice(0, hint ? 1_000 : 2_000);
-    const detail =
-      hint && boundedText && !boundedText.includes(hint)
-        ? `${boundedText} — ${hint}`
-        : boundedText || hint;
+    const rawText = text.trim();
+    const maxDetailChars = REFUSAL_DETAIL_MAX_CHARS - DRIVER_REJECTED_PREFIX.length;
+    let detail: string | undefined;
+    if (hint) {
+      const separator = " — ";
+      const cappedText = rawText.slice(0, maxDetailChars);
+      if (cappedText.includes(hint)) {
+        detail = cappedText;
+      } else {
+        const textBudget = maxDetailChars - hint.length - separator.length;
+        const boundedText = textBudget > 0 ? rawText.slice(0, textBudget).trimEnd() : "";
+        detail = boundedText
+          ? `${boundedText}${separator}${hint}`
+          : hint.slice(0, maxDetailChars);
+      }
+    } else {
+      detail = rawText.slice(0, 2_000) || undefined;
+    }
     throw new ComputerUseDriverActionError(
-      detail ? `cua-driver rejected the action: ${detail}` : "cua-driver rejected the action.",
+      detail ? `${DRIVER_REJECTED_PREFIX}${detail}` : "cua-driver rejected the action.",
       false,
       refusalCode(structured),
       // tool.rs / mcp_result.rs: output-contract failures after dispatch.
@@ -630,15 +643,6 @@ function elementAt(target: ActiveTarget, coordinate: readonly number[]): Element
   return best;
 }
 
-/** Extract an element's explicit editability from `editable` or AT-SPI `states` when reported. */
-export function parseElementEditable(element: Record<string, unknown>): boolean | undefined {
-  if (typeof element.editable === "boolean") return element.editable;
-  if (!Array.isArray(element.states)) return undefined;
-  const states = element.states.filter((value): value is string => typeof value === "string");
-  if (states.length === 0 && element.states.length > 0) return undefined;
-  return states.some((state) => /^(?:atspi_state_|state_)?editable$/iu.test(state.trim()));
-}
-
 function normalizeElements(result: ParsedDriverResult, maximum: number): ElementRecord[] {
   const raw = result.structured?.elements;
   if (!Array.isArray(raw)) return [];
@@ -651,7 +655,6 @@ function normalizeElements(result: ParsedDriverResult, maximum: number): Element
     const rawActions = Array.isArray(element.actions) ? element.actions : undefined;
     const role = safeString(element.role, 256);
     const selected = typeof element.selected === "boolean" ? element.selected : undefined;
-    const editable = parseElementEditable(element);
     const toggle = role !== undefined && /checkbox|radiobutton/iu.test(role);
     const token = safeString(element.element_token, 512);
     const normalized: ElementRecord = {
@@ -663,7 +666,6 @@ function normalizeElements(result: ParsedDriverResult, maximum: number): Element
       checked: toggle ? selected : undefined,
       selected,
       enabled: typeof element.enabled === "boolean" ? element.enabled : undefined,
-      ...(typeof editable === "boolean" ? { editable } : {}),
       actions: rawActions
         ?.map((action) => safeString(action, 128))
         .filter((action): action is string => action !== undefined)
@@ -708,7 +710,6 @@ function publicElement(element: ElementRecord): Record<string, unknown> {
     ...(element.value ? { value: element.value } : {}),
     ...(typeof element.selected === "boolean" ? { selected: element.selected } : {}),
     ...(element.enabled === false ? { enabled: false } : {}),
-    ...(typeof element.editable === "boolean" ? { editable: element.editable } : {}),
     ...(element.actions?.length ? { actions: element.actions } : {}),
     ...(element.frame ? { frame: element.frame } : {}),
     ...(element.parentIndex !== undefined ? { parent_index: element.parentIndex } : {}),
@@ -1135,7 +1136,7 @@ export class ComputerUseController {
    * invalidate the capture and ask for a fresh look before any retry.
    */
   private refusalError(error: ComputerUseDriverActionError): Error {
-    const detail = error.message.slice(0, 1_000);
+    const detail = error.message.slice(0, REFUSAL_DETAIL_MAX_CHARS);
     const { effect, reason } = error.envelope;
     // foreground_partial_unknown: the foreground route may have delivered part of the input.
     if (error.executionUnknown || error.code === "foreground_partial_unknown") {
