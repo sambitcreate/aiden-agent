@@ -218,7 +218,9 @@ export function revealFutureProviderModels(
   let changed = false;
   for (const [providerId, rule] of Object.entries(next ?? {})) {
     const models = modelsByProvider.get(providerId);
-    if (rule.defaultVisibility !== "hidden" || !models) continue;
+    // An empty list (a provider whose models aren't loaded yet) can't say
+    // what the rule hides today, so it keeps the rule until a later launch.
+    if (rule.defaultVisibility !== "hidden" || !models?.length) continue;
     const shown = new Set(rule.exceptions);
     const listed = hiddenListRule(
       next,

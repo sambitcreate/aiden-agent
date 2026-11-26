@@ -120,6 +120,7 @@ test("an earlier hide all keeps today's choices and lets later models show", () 
     google: { defaultVisibility: "hidden" as const, exceptions: ["gemini-pro"] },
     anthropic: { defaultVisibility: "shown" as const, exceptions: ["claude-old"] },
     removed: { defaultVisibility: "hidden" as const, exceptions: [] },
+    loading: { defaultVisibility: "hidden" as const, exceptions: [] },
   };
   assert.equal(hidesFutureModels(earlier), true);
   const next = revealFutureProviderModels(
@@ -127,6 +128,7 @@ test("an earlier hide all keeps today's choices and lets later models show", () 
     new Map([
       ["google", ["gemini-pro", "gemini-flash", "gemini-lite"]],
       ["anthropic", ["claude-old", "claude-new"]],
+      ["loading", []],
     ]),
   );
   for (const [providerId, modelId, hiddenNow] of [
@@ -142,6 +144,8 @@ test("an earlier hide all keeps today's choices and lets later models show", () 
   assert.equal(isModelHidden(next, "google", "gemini-next"), false);
   // With no current list, a provider keeps its rule.
   assert.equal(isModelHidden(next, "removed", "anything"), true);
+  // An empty list can't show what is hidden today, so nothing is revealed.
+  assert.equal(isModelHidden(next, "loading", "anything"), true);
   // Nothing left to change: no write.
   assert.equal(
     revealFutureProviderModels(
