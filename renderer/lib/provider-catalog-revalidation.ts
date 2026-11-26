@@ -1,10 +1,12 @@
-// While the main window stays open, ask main every few hours to revalidate the
+// While the main window stays open, ask main every hour to revalidate the
 // built-in providers' model lists, so a model released while Aiden runs (a new
 // Gemini, say) shows up without a restart. Main refreshes only lists older than
-// its 4-hour freshness window, from pi.dev, and never contacts models.dev.
+// its 4-hour freshness window (PI_REMOTE_CATALOG_REFRESH_INTERVAL_MS), from
+// pi.dev, and never contacts models.dev; a check with every list fresh stays
+// local. Checking hourly rather than every 4 hours keeps a tick that lands just
+// before a list goes stale from pushing its refresh out to 8 hours.
 
-/** Matches main's PI_REMOTE_CATALOG_REFRESH_INTERVAL_MS. */
-export const PROVIDER_CATALOG_REVALIDATE_MS = 4 * 60 * 60 * 1000;
+export const PROVIDER_CATALOG_REVALIDATE_MS = 60 * 60 * 1000;
 
 export interface ProviderCatalogRevalidation<Providers> {
   refresh: () => Promise<{ providers: Providers }>;

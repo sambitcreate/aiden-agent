@@ -78,8 +78,9 @@ export async function startApp(startup: StartupReads): Promise<void> {
         }
       })
       .catch(() => undefined);
-    // Then again every 4 hours while the window stays open, quietly, so models
-    // released while Aiden runs show up without a restart.
+    // Then check hourly while the window stays open, quietly, so models
+    // released while Aiden runs show up without a restart; main refreshes only
+    // lists older than 4 hours.
     startProviderCatalogRevalidation({
       refresh: () => providersApi.refreshIfStale(),
       onProviders: (providers) => queryClient.setQueryData(queryKeys.providers, providers),

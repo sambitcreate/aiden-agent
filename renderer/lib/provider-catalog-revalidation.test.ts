@@ -32,7 +32,9 @@ test("each tick revalidates the lists and hands the new providers on; nothing ru
     onProviders: (providers) => seen.push(providers),
     ...timer,
   });
-  assert.equal(timer.interval(), 4 * 60 * 60 * 1000);
+  // Shorter than main's 4-hour freshness window, so a list that goes stale
+  // just after a tick waits at most an hour more, not another 4 hours.
+  assert.ok(timer.interval()! < 4 * 60 * 60 * 1000);
   assert.equal(calls, 0, "the launch refresh already ran; the timer waits a full interval");
   timer.tick();
   await settle();

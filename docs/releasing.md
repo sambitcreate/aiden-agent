@@ -32,8 +32,8 @@ authority. Ordinary model reads and application startup remain offline.
 
 The models each built-in provider offers come from the pinned Pi catalog, plus a live overlay the app
 reads from pi.dev (`https://pi.dev/api/models/providers/<id>`, no credentials). The app revalidates
-that overlay at launch and then every 4 hours while the main window stays open, refreshing only
-lists older than 4 hours. A model a provider releases between Aiden releases therefore appears without
+that overlay at launch and then checks hourly while the main window stays open, refreshing only
+lists older than 4 hours (a check with every list fresh stays local). A model a provider releases between Aiden releases therefore appears without
 a restart, and it starts shown even after an earlier **Hide all** for that provider.
 
 `npm run models:check` compares each provider's pinned list with pi.dev's live list and prints the
