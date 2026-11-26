@@ -2336,3 +2336,68 @@ test("refused ActionResult falls back to 0.38 top-level recovery hint when error
   );
   await controller.close();
 });
+
+test("mapped isError refusal preserves full recovery hint even when driver text exceeds 1,200 chars", async () => {
+  const { controller, session } = harness(false);
+  await capture(controller, "ax");
+  const hint = "Choose the option with set_value instead.";
+  const longDriverText = "Driver diagnostic detail. ".repeat(55); // > 1,300 chars
+  assert.ok(longDriverText.length > 1_200);
+
+  session.handler = (call) =>
+    call.name === "click"
+      ? {
+          isError: true,
+          content: [{ type: "text", text: longDriverText }],
+          structuredContent: {
+            effect: "refused",
+            route: "accessibility",
+            error: { code: "select_menu_would_raise_window" },
+            hint,
+          },
+        }
+      : fakeResponse(call, session.driver);
+
+  await assert.rejects(
+    () => approved(controller, "mapped-long-text-hint", { action: "click", element: 0 }),
+    (error: Error & { code?: string }) => {
+      assert.equal(error.code, "select_menu_would_raise_window");
+      assert.ok(
+        error.message.includes(hint),
+        `Expected full hint to survive refusalError slicing, got: ${error.message}`,
+      );
+      return true;
+    },
+  );
+
+  // Also when rawText includes the hint only beyond maxDetailChars (968), it must not be dropped.
+  const trailingHintText = `${"Driver diagnostic detail. ".repeat(50)}${hint}`;
+  assert.ok(trailingHintText.length > 1_200);
+  session.handler = (call) =>
+    call.name === "click"
+      ? {
+          isError: true,
+          content: [{ type: "text", text: trailingHintText }],
+          structuredContent: {
+            effect: "refused",
+            route: "accessibility",
+            error: { code: "select_menu_would_raise_window" },
+            hint,
+          },
+        }
+      : fakeResponse(call, session.driver);
+
+  await assert.rejects(
+    () => approved(controller, "mapped-trailing-hint", { action: "click", element: 0 }),
+    (error: Error & { code?: string }) => {
+      assert.equal(error.code, "select_menu_would_raise_window");
+      assert.ok(
+        error.message.includes(hint),
+        `Expected full hint to survive when rawText includes hint past 968 chars, got: ${error.message}`,
+      );
+      return true;
+    },
+  );
+
+  await controller.close();
+});

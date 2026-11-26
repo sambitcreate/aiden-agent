@@ -27,6 +27,8 @@ const ACTION_TIMEOUT_MS = 30_000;
 export const COMPUTER_USE_DISCOVERY_TIMEOUT_MS = 120_000;
 const CAPTURE_TIMEOUT_MS = 60_000;
 const MAX_DRIVER_TEXT_CHARS = 96_000;
+const REFUSAL_DETAIL_MAX_CHARS = 1_000;
+const DRIVER_REJECTED_PREFIX = "cua-driver rejected the action: ";
 const MAX_IMAGE_BASE64_CHARS = 60 * 1024 * 1024;
 const DESKTOP_NAMES = new Set(["screen", "desktop"]);
 /** get_window_state's own default AX walk cap (`get_window_state.rs`). */
@@ -436,13 +438,26 @@ function parseDriverResult(raw: unknown): ParsedDriverResult {
     const effect = identifier(structured?.effect);
     const reason = identifier(structured?.reason);
     const hint = refusalHint(structured);
-    const boundedText = text.trim().slice(0, hint ? 1_000 : 2_000);
-    const detail =
-      hint && boundedText && !boundedText.includes(hint)
-        ? `${boundedText} — ${hint}`
-        : boundedText || hint;
+    const rawText = text.trim();
+    const maxDetailChars = REFUSAL_DETAIL_MAX_CHARS - DRIVER_REJECTED_PREFIX.length;
+    let detail: string | undefined;
+    if (hint) {
+      const separator = " — ";
+      const cappedText = rawText.slice(0, maxDetailChars);
+      if (cappedText.includes(hint)) {
+        detail = cappedText;
+      } else {
+        const textBudget = maxDetailChars - hint.length - separator.length;
+        const boundedText = textBudget > 0 ? rawText.slice(0, textBudget).trimEnd() : "";
+        detail = boundedText
+          ? `${boundedText}${separator}${hint}`
+          : hint.slice(0, maxDetailChars);
+      }
+    } else {
+      detail = rawText.slice(0, 2_000) || undefined;
+    }
     throw new ComputerUseDriverActionError(
-      detail ? `cua-driver rejected the action: ${detail}` : "cua-driver rejected the action.",
+      detail ? `${DRIVER_REJECTED_PREFIX}${detail}` : "cua-driver rejected the action.",
       false,
       refusalCode(structured),
       // tool.rs / mcp_result.rs: output-contract failures after dispatch.
@@ -1119,7 +1134,7 @@ export class ComputerUseController {
    * invalidate the capture and ask for a fresh look before any retry.
    */
   private refusalError(error: ComputerUseDriverActionError): Error {
-    const detail = error.message.slice(0, 1_000);
+    const detail = error.message.slice(0, REFUSAL_DETAIL_MAX_CHARS);
     const { effect, reason } = error.envelope;
     // foreground_partial_unknown: the foreground route may have delivered part of the input.
     if (error.executionUnknown || error.code === "foreground_partial_unknown") {
