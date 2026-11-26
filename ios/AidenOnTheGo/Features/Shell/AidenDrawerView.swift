@@ -321,10 +321,19 @@ private struct AidenDrawerIconButtonStyle: ButtonStyle {
 final class AidenDrawerReveal {
     /// 0 shut, 1 open.
     var progress: CGFloat = 0
-    /// The window's width and its leading safe-area inset, from the shell, so
-    /// the screen and the drawer agree on the column (`AidenDrawerGeometry`).
-    var containerWidth: CGFloat = 0
-    var leadingInset: CGFloat = 0
+    /// A width and leading safe-area inset to size the column from
+    /// (`AidenDrawerGeometry`).
+    struct Space: Equatable {
+        var width: CGFloat
+        var leadingInset: CGFloat
+    }
+    /// The pushed screen's space, from the shell, used until the drawer is up.
+    var screenSpace = Space(width: 0, leadingInset: 0)
+    /// The drawer's own space while it's up. It wins: the closed iPhone Duo
+    /// keeps a system rail at the trailing edge that the screen's safe area
+    /// doesn't report but the drawer's cover spans, so only this one matches
+    /// the column the drawer draws.
+    var drawerSpace: Space?
     /// A finger on the screen's edge is opening it, so the drawer doesn't run
     /// its own slide in when it appears.
     var isTracking = false
@@ -334,7 +343,10 @@ final class AidenDrawerReveal {
 
     /// How far the pushed screen moves for the whole drawer, and so how far
     /// a finger drags to open or close it.
-    var travel: CGFloat { AidenDrawerGeometry.travel(in: containerWidth, leadingInset: leadingInset) }
+    var travel: CGFloat {
+        let space = drawerSpace ?? screenSpace
+        return AidenDrawerGeometry.travel(in: space.width, leadingInset: space.leadingInset)
+    }
 
     static func motion(reduceMotion: Bool) -> Animation {
         reduceMotion ? .easeInOut(duration: 0.2) : .smooth(duration: 0.32)
@@ -365,23 +377,17 @@ struct AidenDrawerPush: ViewModifier {
 
     static let cornerRadius: CGFloat = 40
 
-    private struct Window: Equatable {
-        var width: CGFloat
-        var leadingInset: CGFloat
-    }
-
     func body(content: Content) -> some View {
         let progress = isEnabled ? reveal.progress : 0
         let offset = AidenDrawerGeometry.contentOffset(
             progress: progress, travel: reveal.travel, reduceMotion: reduceMotion
         )
         content
-            .onGeometryChange(for: Window.self) { proxy in
+            .onGeometryChange(for: AidenDrawerReveal.Space.self) { proxy in
                 let insets = proxy.safeAreaInsets
-                return Window(width: proxy.size.width + insets.leading + insets.trailing, leadingInset: insets.leading)
-            } action: { window in
-                reveal.containerWidth = window.width
-                reveal.leadingInset = window.leadingInset
+                return .init(width: proxy.size.width + insets.leading + insets.trailing, leadingInset: insets.leading)
+            } action: { space in
+                reveal.screenSpace = space
             }
             // Rounded only while it's moved; at rest nothing is clipped, so
             // what draws into the safe area keeps doing so.
@@ -469,6 +475,14 @@ struct AidenDrawerOverlay<Drawer: View>: View {
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .leading)
             .simultaneousGesture(dragToClose(travel: travel))
         }
+        // The screen under the cover moves by the same travel as this column.
+        .onGeometryChange(for: AidenDrawerReveal.Space.self) { proxy in
+            let insets = proxy.safeAreaInsets
+            return .init(width: proxy.size.width + insets.leading + insets.trailing, leadingInset: insets.leading)
+        } action: { space in
+            reveal.drawerSpace = space
+        }
+        .onDisappear { reveal.drawerSpace = nil }
         .onAppear {
             guard !reveal.isTracking, reveal.progress < 1 else { return }
             reveal.settle(open: true, reduceMotion: reduceMotion)
