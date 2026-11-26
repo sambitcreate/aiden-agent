@@ -129,7 +129,9 @@ test("Aiden Live appears only where the host has it", () => {
 });
 
 test("accepts known settings deep links and rejects arbitrary search values", () => {
-  assert.equal(parseSettingsSection("modelData"), "modelData");
+  assert.equal(parseSettingsSection("agentSlider"), "agentSlider");
+  // The retired Model Pad section is no longer a destination.
+  assert.equal(parseSettingsSection("modelData"), undefined);
   assert.equal(parseSettingsSection("computerUse"), "computerUse");
   assert.equal(parseSettingsSection("scheduledTasks"), "scheduledTasks");
   assert.equal(parseSettingsSection("geminiLive"), "geminiLive");
@@ -138,9 +140,9 @@ test("accepts known settings deep links and rejects arbitrary search values", ()
   assert.equal(parseSettingsSection("memory"), "memory");
   assert.equal(parseSettingsSection("about"), "about");
   assert.equal(parseSettingsSection("unknown"), undefined);
-  assert.equal(parseSettingsSection(["modelData"]), undefined);
-  assert.deepEqual(parseSettingsSearch({ section: "modelData", ignored: "value" }), {
-    section: "modelData",
+  assert.equal(parseSettingsSection(["agentSlider"]), undefined);
+  assert.deepEqual(parseSettingsSearch({ section: "agentSlider", ignored: "value" }), {
+    section: "agentSlider",
   });
   assert.deepEqual(parseSettingsSearch({ section: "unknown" }), {});
 });
@@ -394,4 +396,18 @@ test("sleep words find the keep-awake row on Scheduled tasks", () => {
   for (const term of ["awake", "sleep", "caffeinate", "keep awake"]) {
     assert.deepEqual(searchSidebar(term), [{ page: "scheduledTasks", target: "scheduledTasks" }], term);
   }
+});
+
+test("Bots → Bubbles is its own page under Autonomy & Devices, found by bubble words, and only where Bots run", () => {
+  const page = availableSettingsPages(LINUX).find((entry) => entry.id === "botBubbles");
+  assert.equal(page?.title, "Bots");
+  assert.equal(page?.group, "Autonomy & Devices");
+  assert.deepEqual(page?.tabs, ["botBubbles"]);
+  for (const term of ["bubbles", "chat heads", "float over apps"]) {
+    assert.deepEqual(searchSidebar(term, LINUX), [{ page: "botBubbles", target: "botBubbles" }], term);
+  }
+  assert.equal(parseSettingsSection("botBubbles"), "botBubbles");
+  const noBots = { ...LINUX, bots: false };
+  assert.equal(availableSettingsPages(noBots).some((entry) => entry.id === "botBubbles"), false);
+  assert.equal(resolveSettingsSection("botBubbles", noBots), "providers");
 });

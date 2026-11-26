@@ -12,6 +12,7 @@ import {
   parseProviderFailureV1,
   providerFailurePresentation,
 } from "../../renderer/shared/provider-failure.js";
+import { normalizeDiagnosticFields } from "./diagnostics-contract.js";
 
 const PRIVATE_CANARY = "PRIVATE_PROVIDER_DETAIL_7dbfe9";
 
@@ -45,6 +46,13 @@ test("main-only provider diagnostics distinguish model availability without pers
   });
   assert.equal(hangUp.providerCategory, "network");
   assert.equal(hangUp.transportCause, "socket-closed");
+  const codexLimit = providerFailureDiagnosticFields({
+    kind: "provider_failed", reason: "request-failed", attempts: 1,
+    finalMessage: { errorMessage: `Responses websocket connection limit reached ${PRIVATE_CANARY}` },
+  });
+  assert.equal(codexLimit.providerCategory, "network");
+  assert.equal(codexLimit.transportCause, "websocket-closed");
+  assert.equal(normalizeDiagnosticFields(codexLimit)?.transportCause, "websocket-closed");
 });
 
 function classify(
@@ -68,6 +76,10 @@ test("provider failures map to a closed privacy-safe category", () => {
   > = [
     ["request-failed", `Connection error. ${PRIVATE_CANARY}`, "network"],
     ["request-failed", `request timed out ${PRIVATE_CANARY}`, "timeout"],
+    // Codex closes its WebSocket after 60 minutes; Pi 1.6 retries it, and a
+    // failure that outlasts the retries is a dropped connection, not "unknown".
+    ["request-failed", `Responses websocket connection limit reached ${PRIVATE_CANARY}`, "network"],
+    ["request-failed", `websocket_connection_limit_reached ${PRIVATE_CANARY}`, "network"],
     ["request-failed", `503 service unavailable ${PRIVATE_CANARY}`, "service_unavailable"],
     ["request-failed", `503 model service unavailable ${PRIVATE_CANARY}`, "service_unavailable"],
     ["request-failed", `404 model gemini-old is not found or unavailable ${PRIVATE_CANARY}`, "invalid_request"],

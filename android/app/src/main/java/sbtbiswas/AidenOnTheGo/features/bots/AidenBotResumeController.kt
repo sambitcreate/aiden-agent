@@ -7,7 +7,8 @@ import kotlinx.coroutines.flow.update
 import kotlinx.serialization.Serializable
 import sbtbiswas.AidenOnTheGo.models.*
 import sbtbiswas.AidenOnTheGo.persistence.AidenBotWatchJournal
-import sbtbiswas.AidenOnTheGo.protocol.AidenRemoteClientException
+import sbtbiswas.AidenOnTheGo.protocol.AidenRemoteFailureClassification
+import sbtbiswas.AidenOnTheGo.protocol.AidenRemoteFailurePolicy
 import java.util.UUID
 
 interface AidenBotResumeTransport {
@@ -15,16 +16,8 @@ interface AidenBotResumeTransport {
     suspend fun resume(key: UUID, request: AidenBotResumeRequest): AidenBotSessionStateView
 }
 /** A status or retryable flag alone cannot prove that Resume had no effect. */
-internal fun aidenBotResumeFailureIsAmbiguous(error: Exception): Boolean {
-    if(error is AidenRemoteClientException.Server) {
-        val beforeEffectCodes=setOf("invalid_request","payload_too_large","authentication_required","credential_revoked",
-            "capability_denied","server_identity_changed","not_found","bot_archived","operation_stale","bot_paused",
-            "idempotency_conflict","idempotency_capacity","rate_limited")
-        if(error.body.code.rawValue !in beforeEffectCodes) return true
-    }
-    if(error is AidenRemoteClientException.UnexpectedStatus) return true
-    return aidenBotMessageFailureIsAmbiguous(error)
-}
+internal fun aidenBotResumeFailureIsAmbiguous(error: Throwable): Boolean =
+    AidenRemoteFailureClassification.isAmbiguous(error, AidenRemoteFailurePolicy.BEFORE_EFFECT_REFUSAL)
 @Serializable data class AidenBotResumeAttempt(val key: String, val request: AidenBotResumeRequest, val startedAt: Long) {
     init { AidenOpenWorkWire.uuid(key); check(startedAt>=0) }
 }
@@ -86,7 +79,7 @@ class AidenBotResumeController(private val transport: AidenBotResumeTransport, p
         if(attempt.request.acknowledgeUnknownCost==true && !supportsPreflight()) {
             _state.update{it.copy(problem=AidenRoutineControlProblem.UNCERTAIN)};return null
         }
-        if(now()-attempt.startedAt !in 0 until 23*60*60*1000L) { _state.update { it.copy(problem=AidenRoutineControlProblem.EXPIRED) }; return null }
+        if(!AidenDurablePendingMutation.isRetryAllowed(attempt.startedAt,now())) { _state.update { it.copy(problem=AidenRoutineControlProblem.EXPIRED) }; return null }
         if(previouslyUnknown && !retain(attempt)) return null
         _state.update { it.copy(busy=true,problem=null) }
         try {
@@ -96,7 +89,7 @@ class AidenBotResumeController(private val transport: AidenBotResumeTransport, p
         } catch(e: CancellationException) { if(current()) _state.update { it.copy(problem=AidenRoutineControlProblem.UNCERTAIN) }; throw e }
         catch(e: Exception) {
             if(!current()) return null
-            val unknown=previouslyUnknown || aidenBotResumeFailureIsAmbiguous(e)
+            val unknown=AidenDurablePendingMutation.settleFailure(e,previouslyUnknown,AidenRemoteFailurePolicy.BEFORE_EFFECT_REFUSAL)==AidenDurableFailureSettlement.RETAIN_UNCERTAIN
             if(!unknown) retain(null)
             _state.update { it.copy(problem=if(storageBlocked)AidenRoutineControlProblem.STORAGE else if(unknown)AidenRoutineControlProblem.UNCERTAIN else AidenRoutineControlProblem.FAILED) }
         } finally { _state.update { it.copy(busy=false) } }

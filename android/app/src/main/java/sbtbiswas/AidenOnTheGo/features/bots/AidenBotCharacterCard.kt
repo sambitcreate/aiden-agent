@@ -1,6 +1,5 @@
 package sbtbiswas.AidenOnTheGo.features.bots
 
-import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
@@ -197,7 +196,7 @@ fun AidenBotCharacterCard(
                     AidenBotCharacter.SHAPES.forEach { shape ->
                         AidenBotShapeChoice(
                             shape = shape,
-                            color = AidenBotAvatarColors.swatch(recipe.color),
+                            tint = recipe.color,
                             selected = recipe.shape == shape,
                             enabled = enabled,
                             onClick = { onChange(AidenBotCharacter.withShape(recipe, shape)) }
@@ -253,11 +252,11 @@ fun AidenBotColorSwatch(
     }
 }
 
-/** One shape choice drawn in the current colour, selected with a soft tonal tile. */
+/** One shape choice: the sprite body in the current tint, selected with a soft tonal tile. */
 @Composable
 fun AidenBotShapeChoice(
     shape: AidenBotAvatarShape,
-    color: Color,
+    tint: AidenBotAvatarColor,
     selected: Boolean,
     onClick: () -> Unit,
     modifier: Modifier = Modifier,
@@ -283,8 +282,6 @@ fun AidenBotShapeChoice(
             )
             .semantics { contentDescription = label }
     ) {
-        Canvas(modifier = Modifier.size(30.dp)) {
-            drawPath(aidenBotShapePath(shape, size.width, size.height), color = color)
-        }
+        AidenBotSpriteBody(shape = shape, color = tint, size = 30.dp)
     }
 }

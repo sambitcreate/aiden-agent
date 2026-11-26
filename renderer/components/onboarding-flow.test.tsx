@@ -167,15 +167,14 @@ test("the final step is a complete grouped bento gallery with hover descriptions
   for (const title of [
     "Workspace Agent",
     "Computer Use",
-    "Native Subagents",
+    "Helpers",
     "Files & Text Editor",
     "Review & Diffs",
     "Integrated Terminal",
     "Git Workflows",
     "Workspaces & Worktrees",
     "Model Freedom",
-    "Personal Model Pad",
-    "Thinking Controls",
+    "Agent Slider",
     "Attachments & Vision",
     "Web Search",
     "Reusable Skills",
@@ -206,10 +205,6 @@ test("the final step is a complete grouped bento gallery with hover descriptions
   assert.match(
     featurePresentation,
     /Ask Aiden in any chat to schedule recurring work, review its unattended access/u,
-  );
-  assert.match(
-    featurePresentation,
-    /benchmark-only OpenRouter key never imports its model catalog/u,
   );
   assert.match(featurePresentation, /Live catalog checks happen only when you choose/u);
   assert.match(featurePresentation, /ordinary browsing stays offline/u);

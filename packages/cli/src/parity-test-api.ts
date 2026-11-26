@@ -27,8 +27,9 @@ export { renderPairingTerminal, renderQrRows } from "./pairing-display.ts";
 export { resolveTailscaleBinary } from "../../../main/services/aiden-remote-tailscale.js";
 export * from "./usage-ledger.ts";
 export * from "./extensions/artifacts.ts";
+export { PI_DEFAULT_MODEL_PER_PROVIDER } from "../../../main/services/pi-default-models.js";
 export { SessionManager, SettingsManager } from "@earendil-works/pi-coding-agent";
-export { liveMessages } from "./pi-bridge/model-runtime.ts";
+export { liveMessages, resolveRuntimeFromContext } from "./pi-bridge/model-runtime.ts";
 
 export { mcpCommand, mcpLogin, validateMcpServer, createMcpExtension, mcpCredentialId, mcpCredentialSignature, cliMcpOAuthLoopback } from "./mcp.ts";
 export { mcpOAuthBindingForServer } from "../../../main/services/mcp-oauth-identity.js";
@@ -41,6 +42,7 @@ export { createCurrentPiSessionRepository } from "../../../main/services/pi-sess
 export * from "./bots.ts";
 
 export { runCliSubagent } from "./subagent-process.ts";
+export { SubagentTranscriptRecorder } from "../../../main/services/subagents/subagent-transcript-recorder.js";
 export { createCliAuthCoordinator } from "./auth.ts";
 
 export { createCliBotAvatars } from "./bot-avatars.ts";
@@ -52,6 +54,7 @@ export { createCliProviderCredentials } from "./provider-credentials.ts";
 export { createReplyMeter, runScheduledInference } from "./scheduled-inference.ts";
 
 export { createBotSubagentTool } from "./bot-subagents.ts";
+export { BOT_SUBAGENT_LIMIT_REACHED_RESULT } from "../../../main/services/subagents/subagent-supervisor-core.js";
 
 export * from "./app-controls.ts";
 export { readAidenHelp } from "../../../main/services/aiden-app-knowledge.js";

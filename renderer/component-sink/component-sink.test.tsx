@@ -23,6 +23,8 @@ const NOT_IN_SINK: Record<string, string> = {
   ScrollAreaFooterStack: "part of the chat scroller",
   ErrorBoundary: "a wrapper; its fallback, ErrorBoundaryView, is shown",
   SettingsAnchorContext: "a React context, not a component",
+  SurfaceCovered: "a context wrapper that renders no element; it hides hover cards under an expanded helper chat",
+  DismissHoverSurfaces: "a context wrapper that renders no element; it closes hover cards when a side panel opens",
 };
 
 const MODULES: Record<string, unknown>[] = [ui, uiPrimitives, infoHint, settingsPage];

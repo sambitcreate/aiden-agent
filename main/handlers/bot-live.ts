@@ -20,8 +20,43 @@ export interface BotLiveOwner {
   isDestroyed(): boolean;
   onInvalidated(listener: () => void): () => void;
   send(channel: typeof BOT_LIVE_EVENT_CHANNEL, event: BotLiveEvent): void;
-  /** The document's window is focused and the person is at the Mac. */
-  inFront?(): boolean;
+  /**
+   * The document shows this Bot's chat in front of the person: its window is
+   * focused and they are at the Mac. A bubble overlay holds several Bots but
+   * shows only its open mini chat, so the answer can differ per Bot.
+   */
+  inFront?(botId: string): boolean;
+  /**
+   * Whether the document may still follow this Bot. Checked before every
+   * event: a bubble overlay loses a Bot when its head leaves that overlay's
+   * display or closes, and its feed ends then even if the page never
+   * unsubscribes. Left out, a document may follow any Bot it subscribed to.
+   */
+  mayFollow?(botId: string): boolean;
+}
+
+/** What decides whether a document shows a Bot's chat in front of the person. */
+export interface BotChatFrontInput {
+  /** The focused window's page, or null when no Aiden window is focused. */
+  focusedWebContentsId: number | null;
+  /** The page asking. */
+  ownerWebContentsId: number;
+  visible: boolean;
+  minimized: boolean;
+  /** `powerMonitor.getSystemIdleState` for the away threshold. */
+  idleState: string;
+  /** The page is a bubble overlay, which shows only its open mini chat. */
+  isBubbleOverlay: boolean;
+  /** The bubble whose mini chat is open. */
+  openBubbleBotId: string | null;
+}
+
+/** Focused, on screen, someone used the Mac recently, and for an overlay, this Bot's mini chat is the open one. */
+export function isBotChatInFront(botId: string, input: BotChatFrontInput): boolean {
+  if (input.focusedWebContentsId === null || input.focusedWebContentsId !== input.ownerWebContentsId) return false;
+  if (!input.visible || input.minimized) return false;
+  if (input.isBubbleOverlay && input.openBubbleBotId !== botId) return false;
+  return input.idleState === "active";
 }
 
 export interface BotLiveHandlers {
@@ -38,6 +73,7 @@ export interface BotLiveHandlerDependencies<Event> {
 }
 
 const INACTIVE = "The application document changed.";
+const REVOKED = "This window no longer shows that Bot.";
 
 export function registerBotLiveHandlers<Event>(dependencies: BotLiveHandlerDependencies<Event>): BotLiveHandlers {
   const { handle } = dependencies;
@@ -92,15 +128,32 @@ export function registerBotLiveHandlers<Event>(dependencies: BotLiveHandlerDepen
     let requests = wanted.get(owner.key);
     if (!requests) wanted.set(owner.key, (requests = new Map()));
     requests.set(botId, request);
+    if (owner.mayFollow && !owner.mayFollow(botId)) throw new Error(REVOKED);
+    let revoked = false;
+    let unsubscribeThis: (() => void) | undefined;
     const subscription = await dependencies.projection().subscribe(botId, {
       send: (live) => {
         if (owner.isDestroyed()) throw new Error(INACTIVE);
+        if (revoked) return;
+        if (owner.mayFollow && !owner.mayFollow(botId)) {
+          // Lost this Bot: send nothing more, and end the feed once the projection is done sending.
+          revoked = true;
+          queueMicrotask(() => {
+            if (unsubscribeThis && subscriptions.get(owner.key)?.get(botId) === unsubscribeThis) release(owner.key, botId);
+          });
+          return;
+        }
         owner.send(BOT_LIVE_EVENT_CHANNEL, live);
       },
     });
+    unsubscribeThis = subscription.unsubscribe;
     if (owner.isDestroyed()) {
       subscription.unsubscribe();
       throw new Error(INACTIVE);
+    }
+    if (revoked || (owner.mayFollow && !owner.mayFollow(botId))) {
+      subscription.unsubscribe();
+      throw new Error(REVOKED);
     }
     if (wanted.get(owner.key)?.get(botId) !== request) {
       // Unsubscribed, or superseded by a newer subscribe, while this one opened.
@@ -133,7 +186,7 @@ export function registerBotLiveHandlers<Event>(dependencies: BotLiveHandlerDepen
         const owner = owners.get(key);
         if (!owner || owner.isDestroyed()) continue;
         try {
-          if (owner.inFront?.() === true) return true;
+          if (owner.inFront?.(botId) === true) return true;
         } catch {
           // A window that can't say is not in front.
         }

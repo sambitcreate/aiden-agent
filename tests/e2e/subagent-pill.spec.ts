@@ -64,7 +64,7 @@ test("one subagent indicator at a time: the card while it is on screen, the pill
   await scrollTranscriptToTop(page, "[data-subagent-group]");
   await expect(page.getByText("Paragraph 1 of the earlier note.")).toBeInViewport();
   await expect(pill).toHaveCount(1);
-  await expect(pill).toContainText(/working|starting|queued/u);
+  await expect(pill).toContainText(/running|queued/u);
 
   // Show in chat brings the card back, and the pill steps aside again.
   await pill.getByRole("button", { name: /subagent details/u }).click();

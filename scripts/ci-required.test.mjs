@@ -8,7 +8,7 @@ import {
   parseChangedAreaDecisions,
 } from "./ci-required.mjs";
 
-const allTrue = { android: true, apple: true, catalog: true, cli: true, desktop: true, ios: true, linux: true };
+const allTrue = { android: true, apple: true, catalog: true, cli: true, desktop: true, ios: true, linux: true, "mac-e2e": true };
 
 function needsFor(decisions = allTrue, overrides = {}) {
   const needs = {
@@ -20,6 +20,7 @@ function needsFor(decisions = allTrue, overrides = {}) {
     "cli-linux": { result: "success" },
     e2e: { result: "success" },
     ios: { result: "success" },
+    "linux-e2e": { result: "success" },
     policy: { result: "success" },
     static: { result: "success" },
     unit: { result: "success" },
@@ -37,7 +38,7 @@ test("the aggregate gate accepts successful required jobs", () => {
 });
 
 test("a conditional job may be skipped only for its explicitly false area", () => {
-  const decisions = { ...allTrue, desktop: false, android: false, catalog: false };
+  const decisions = { ...allTrue, desktop: false, android: false, catalog: false, "mac-e2e": false };
   const { needs } = needsFor(decisions, {
     android: { result: "skipped" },
     build: { result: "skipped" },
@@ -56,7 +57,7 @@ test("a conditional job may be skipped only for its explicitly false area", () =
 
 test("a job selected by several areas may skip only when all of them are false", () => {
   // Static checks lint the CLI packages, so a CLI-only change keeps them.
-  const cliOnly = { ...allTrue, desktop: false, apple: false, ios: false, android: false, linux: false, catalog: false };
+  const cliOnly = { ...allTrue, desktop: false, apple: false, ios: false, android: false, linux: false, catalog: false, "mac-e2e": false };
   const { needs: cliNeeds } = needsFor(cliOnly, {
     android: { result: "skipped" },
     apple: { result: "skipped" },
@@ -82,6 +83,36 @@ test("a job selected by several areas may skip only when all of them are false",
   assert.deepEqual(missingCatalog.failures, [{ job: "catalog", reason: "unexpected-skip" }]);
   const missingUnit = evaluateRequiredGate(needsFor(catalogOnly, { ...skipped, unit: { result: "skipped" } }).needs, catalogOnly);
   assert.deepEqual(missingUnit.failures, [{ job: "unit", reason: "unexpected-skip" }]);
+});
+
+test("a desktop PR without macOS-only specs skips macOS E2E but still needs the Linux shards", () => {
+  // A renderer-only PR: desktop selected, Linux packaging not, no macOS-only spec.
+  const rendererPr = { ...allTrue, apple: false, ios: false, android: false, cli: false, linux: false, catalog: false, "mac-e2e": false };
+  const skippedPlatforms = {
+    android: { result: "skipped" },
+    apple: { result: "skipped" },
+    catalog: { result: "skipped" },
+    "cli-linux": { result: "skipped" },
+    e2e: { result: "skipped" },
+    ios: { result: "skipped" },
+  };
+  assert.equal(evaluateRequiredGate(needsFor(rendererPr, skippedPlatforms).needs, rendererPr).ok, true);
+
+  const linuxSkipped = evaluateRequiredGate(
+    needsFor(rendererPr, { ...skippedPlatforms, "linux-e2e": { result: "skipped" } }).needs,
+    rendererPr,
+  );
+  assert.deepEqual(linuxSkipped.failures, [{ job: "linux-e2e", reason: "unexpected-skip" }]);
+  const linuxFailed = evaluateRequiredGate(
+    needsFor(rendererPr, { ...skippedPlatforms, "linux-e2e": { result: "failure" } }).needs,
+    rendererPr,
+  );
+  assert.deepEqual(linuxFailed.failures, [{ job: "linux-e2e", reason: "result-failure" }]);
+
+  // When the plan selects macOS E2E (main, or a PR touching a macOS-only spec), its skip fails.
+  const planned = { ...rendererPr, "mac-e2e": true };
+  const macSkipped = evaluateRequiredGate(needsFor(planned, skippedPlatforms).needs, planned);
+  assert.deepEqual(macSkipped.failures, [{ job: "e2e", reason: "unexpected-skip" }]);
 });
 
 test("failed, canceled, unknown, and missing results fail the aggregate", () => {
@@ -126,9 +157,14 @@ test("malformed needs entries fail closed instead of authorizing a skip", () => 
 test("changes decisions reject malformed or incomplete values", () => {
   assert.deepEqual(
     parseChangedAreaDecisions({
-      outputs: { desktop: "true", apple: "false", ios: true, android: false, cli: "true", linux: "false", catalog: "true" },
+      outputs: { desktop: "true", apple: "false", ios: true, android: false, cli: "true", linux: "false", catalog: "true", "mac-e2e": "false" },
     }),
-    { desktop: true, apple: false, ios: true, android: false, cli: true, linux: false, catalog: true },
+    { desktop: true, apple: false, ios: true, android: false, cli: true, linux: false, catalog: true, "mac-e2e": false },
+  );
+  // A detector that does not report the macOS E2E plan cannot authorize its skip.
+  assert.throws(
+    () => parseChangedAreaDecisions({ desktop: true, apple: true, ios: true, android: true, cli: true, linux: true, catalog: true }),
+    /changes-invalid/u,
   );
   assert.throws(() => parseChangedAreaDecisions({ desktop: "maybe" }), /changes-invalid/u);
   assert.throws(() => parseChangedAreaDecisions({ desktop: true, apple: true, ios: true }), /changes-invalid/u);

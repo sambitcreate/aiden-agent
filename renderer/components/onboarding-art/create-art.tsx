@@ -316,7 +316,8 @@ export function ComputerUseArt() {
 
 export function NativeSubagentsArt() {
   return (
-    <ArtWindow className="oa-sub-window" style={{ left: 10, top: 10, width: 200, height: 250 }}>
+    <div className="oa-sub-stage">
+    <ArtWindow className="oa-sub-window" style={{ left: 10, top: 10, width: 150, height: 250 }}>
       <div className="oa-sub-heading">Active · 2</div>
       <div className="oa-sub-row oa-selected">
         <span className="oa-sub-twisty">
@@ -327,7 +328,7 @@ export function NativeSubagentsArt() {
           <Bar width="70%" tone="ink" />
           <span>Implementer</span>
         </span>
-        <span className="oa-sub-state">Working</span>
+        <span className="oa-sub-state">Running</span>
       </div>
       <div className="oa-sub-row" data-level="2" data-dim="">
         <span className="oa-sub-twisty" />
@@ -348,7 +349,7 @@ export function NativeSubagentsArt() {
           <Bar width="64%" tone="ink" />
           <span>Reviewer</span>
         </span>
-        <span className="oa-sub-state">Finished</span>
+        <span className="oa-sub-state">Done</span>
       </div>
       <div className="oa-sub-row">
         <span className="oa-sub-twisty" />
@@ -359,7 +360,7 @@ export function NativeSubagentsArt() {
           <Bar width="52%" tone="ink" />
           <span>Planner</span>
         </span>
-        <span className="oa-sub-state">Finished</span>
+        <span className="oa-sub-state">Done</span>
       </div>
       <div className="oa-sub-row">
         <span className="oa-sub-twisty" />
@@ -370,9 +371,50 @@ export function NativeSubagentsArt() {
           <Bar width="46%" tone="ink" />
           <span>Scout</span>
         </span>
-        <span className="oa-sub-state">Finished</span>
+        <span className="oa-sub-state">Done</span>
       </div>
     </ArtWindow>
+    {/*
+      The selected helper's own chat: its task, its steps, and its reply.
+      Below the one-column width it opens under the selected row, across the
+      list, and runs off the right edge (create-art.css), so the row it opens
+      from stays readable and no list words are left cut off beside it.
+    */}
+    <ArtWindow raised className="oa-sub-chat">
+      <div role="group" aria-label="Implementer's chat" className="oa-stack" style={{ gap: 5, padding: "6px 7px" }}>
+        <div className="oa-row" style={{ gap: 4, height: 10 }}>
+          <i className="oa-sub-live-dot" />
+          <span className="oa-strong">Implementer</span>
+          <span className="oa-grow" />
+          <span className="oa-sub-twisty oa-sub-more">
+            <ArtIcon icon={MoreHorizontal} />
+          </span>
+        </div>
+        <div role="group" aria-label="Task" className="oa-ws-bubble" style={{ gap: 3, padding: "4px 6px", borderRadius: 7 }}>
+          <Bar width="100%" style={{ height: 4 }} />
+          <Bar width="58%" style={{ height: 4 }} />
+        </div>
+        <ul aria-label="Steps" className="oa-stack" style={{ gap: 3, margin: 0, padding: 0, listStyle: "none" }}>
+          <li className="oa-row" style={{ height: 9 }}>
+            <span className="oa-sub-twisty">
+              <ArtIcon icon={FileText} />
+            </span>
+            <Bar width="56%" tone="soft" style={{ height: 4 }} />
+          </li>
+          <li className="oa-row oa-anim-pop" style={{ height: 9, animationDelay: "0.3s" }}>
+            <span className="oa-sub-twisty">
+              <ArtIcon icon={SquareTerminal} />
+            </span>
+            <Bar width="44%" tone="soft" style={{ height: 4 }} />
+          </li>
+        </ul>
+        <div role="group" aria-label="Reply" className="oa-stack" style={{ gap: 3 }}>
+          <Bar width="92%" className="oa-anim-type" style={{ height: 4, animationDelay: "0.6s" }} />
+          <Bar width="70%" className="oa-anim-type" style={{ height: 4, animationDelay: "0.78s" }} />
+        </div>
+      </div>
+    </ArtWindow>
+    </div>
   );
 }
 
@@ -397,6 +439,9 @@ export function BrowserArt() {
         <ArtIcon icon={RotateCw} />
         <span className="oa-br-address">
           <span className="oa-mono">example.com/pricing</span>
+        </span>
+        <span className="oa-br-annotate oa-selected">
+          <ArtIcon icon={MousePointer2} />
         </span>
         <span className="oa-br-annotate">
           <ArtIcon icon={MessageCirclePlus} />
@@ -434,11 +479,11 @@ export function BrowserArt() {
       </div>
       <ArtButton
         variant="primary"
-        icon={MessageCirclePlus}
+        icon={MousePointer2}
         className="oa-br-add oa-anim-pop"
-        style={{ left: 104, top: 124, animationDelay: "0.5s" }}
+        style={{ left: 92, top: 124, animationDelay: "0.5s" }}
       >
-        Add to chat
+        <span className="oa-mono">&lt;PricingCard /&gt;</span>
       </ArtButton>
     </ArtWindow>
   );

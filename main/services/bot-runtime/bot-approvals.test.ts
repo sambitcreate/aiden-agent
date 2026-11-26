@@ -196,3 +196,186 @@ for (const prepared of [false, true]) {
     assert.equal(await releasing, false);
   });
 }
+
+test("bridge: publish throw after waiting registration withdraws once as unavailable and leaves no synchronous window", async () => {
+  const withdrawn: Array<[string, string]> = [];
+  const changes: string[] = [];
+  let prepared = 0;
+  let shouldThrow = true;
+  const bridge = createBotApprovals({
+    publish() {
+      if (shouldThrow) throw new Error("window gone");
+    },
+    withdraw(prompt, outcome) {
+      withdrawn.push([prompt.waitId, outcome]);
+    },
+  });
+  bridge.onChange((botId) => changes.push(botId));
+  const pending = bridge.request({
+    ...rememberedRequest(),
+    prepareAllowListRelease: async () => {
+      prepared++;
+      return { id: "auto", authorizationFingerprint: "auto-fp", answer: "allow", source: "allow_list" };
+    },
+  });
+  // Before awaiting rejection, waiting/requests must already be cleared.
+  assert.deepEqual(bridge.pending(), []);
+  assert.equal(bridge.decide("w1", "allow"), false);
+  assert.equal(await bridge.releaseFromAllowList("w1", grant), false);
+  assert.equal(prepared, 0);
+  await assert.rejects(pending, /unavailable/u);
+  assert.deepEqual(withdrawn, [["w1", "unavailable"]]);
+  assert.deepEqual(changes, ["bot-1"]);
+
+  // A subsequent retry with the same key starts cleanly rather than joining the failed attempt.
+  shouldThrow = false;
+  const retry = bridge.request(request());
+  assert.equal(bridge.pending().length, 1);
+  assert.equal(bridge.decide("w1", "allow"), true);
+  assert.equal((await retry).answer, "allow");
+  assert.deepEqual(withdrawn, [["w1", "unavailable"], ["w1", "allowed"]]);
+});
+
+test("bridge: re-entrant replacement that fails to publish still withdraws the shown original with its own prompt", async () => {
+  const withdrawn: Array<[string | undefined, string]> = [];
+  let replacement: Promise<BotApprovalDecision> | undefined;
+  const bridge = createBotApprovals({
+    publish(prompt) {
+      if (prompt.authorizationFingerprint === "fp-second") throw new Error("surface gone");
+      replacement = bridge.request({ ...request(), authorizationFingerprint: "fp-second" });
+    },
+    withdraw(prompt, outcome) {
+      withdrawn.push([prompt.authorizationFingerprint, outcome]);
+    },
+  });
+  const first = bridge.request({ ...request(), authorizationFingerprint: "fp-first" });
+  await assert.rejects(first, /The approval was replaced\./u);
+  await assert.rejects(replacement!, /unavailable/u);
+  assert.deepEqual(bridge.pending(), []);
+  assert.deepEqual(withdrawn, [["fp-second", "unavailable"], ["fp-first", "cancelled"]]);
+});
+
+test("bridge: identical waitId, botId, and fingerprint join one card; different fingerprint or botId replaces it", async () => {
+  const published: Array<[string, string | undefined]> = [];
+  const withdrawn: Array<[string, string | undefined, string]> = [];
+  const bridge = createBotApprovals({
+    publish(prompt) {
+      published.push([prompt.botId, prompt.authorizationFingerprint]);
+    },
+    withdraw(prompt, outcome) {
+      withdrawn.push([prompt.botId, prompt.authorizationFingerprint, outcome]);
+    },
+  });
+  const first = bridge.request(request("w1"));
+  const joined = bridge.request(request("w1"));
+  assert.deepEqual(published, [["bot-1", "fp-w1"]]);
+  assert.equal(bridge.pending().length, 1);
+  assert.equal(bridge.decide("w1", "allow"), true);
+  assert.deepEqual(await Promise.all([first, joined]), [
+    { id: "w1", authorizationFingerprint: "fp-w1", answer: "allow", source: "person" },
+    { id: "w1", authorizationFingerprint: "fp-w1", answer: "allow", source: "person" },
+  ]);
+
+  const original = bridge.request(request("w2"));
+  const diffFp = bridge.request({ ...request("w2"), authorizationFingerprint: "fp-w2-v2" });
+  await assert.rejects(original, /The approval was replaced\./u);
+  assert.equal(bridge.pending().length, 1);
+  assert.equal(bridge.pending()[0]?.authorizationFingerprint, "fp-w2-v2");
+
+  const diffBot = bridge.request({ ...request("w2"), botId: "bot-2", authorizationFingerprint: "fp-w2-v2" });
+  await assert.rejects(diffFp, /The approval was replaced\./u);
+  assert.equal(bridge.pending("bot-1").length, 0);
+  assert.equal(bridge.pending("bot-2").length, 1);
+  assert.equal(bridge.decide("w2", "deny"), true);
+  assert.deepEqual(await diffBot, { id: "w2", authorizationFingerprint: "fp-w2-v2", answer: "deny", source: "person" });
+  assert.deepEqual(withdrawn, [
+    ["bot-1", "fp-w1", "allowed"],
+    ["bot-1", "fp-w2", "cancelled"],
+    ["bot-1", "fp-w2-v2", "cancelled"],
+    ["bot-2", "fp-w2-v2", "denied"],
+  ]);
+});
+
+test("bridge: late answers after abort, replacement, or Bot pause are rejected and cannot leak an Always scope", async () => {
+  const withdrawn: Array<[string | undefined, string, string | undefined]> = [];
+  let paused = false;
+  const bridge = createBotApprovals({
+    publish() {},
+    withdraw(prompt, outcome) {
+      withdrawn.push([prompt.authorizationFingerprint, outcome, prompt.decisionSource]);
+    },
+  });
+
+  // Abort after an Always answer before settlement bookkeeping finishes must not leak scope onto a reused waitId.
+  const firstAbort = new AbortController();
+  const first = bridge.request({
+    ...request("w-leak"),
+    authorizationFingerprint: "fp-1",
+    always: { key: "k", count: 3 },
+    signal: firstAbort.signal,
+  });
+  assert.equal(bridge.decide("w-leak", "allow", "always"), true);
+  firstAbort.abort(new Error("bot paused"));
+  await assert.rejects(first, /bot paused/u);
+  assert.equal(bridge.decide("w-leak", "allow"), false);
+
+  const reused = bridge.request({ ...request("w-leak"), authorizationFingerprint: "fp-2" });
+  assert.equal(bridge.decide("w-leak", "allow"), true);
+  assert.deepEqual(await reused, {
+    id: "w-leak",
+    authorizationFingerprint: "fp-2",
+    answer: "allow",
+    source: "person",
+  });
+
+  // Replacement after a synchronous Always answer also must not leak scope onto the replacement.
+  const replaced = bridge.request({
+    ...request("w-rep"),
+    authorizationFingerprint: "fp-a",
+    always: { key: "k", count: 3 },
+  });
+  assert.equal(bridge.decide("w-rep", "allow", "always"), true);
+  const replacement = bridge.request({ ...request("w-rep"), authorizationFingerprint: "fp-b" });
+  await assert.rejects(replaced, /The approval was replaced\./u);
+  assert.equal(bridge.decide("w-rep", "allow"), true);
+  assert.deepEqual(await replacement, {
+    id: "w-rep",
+    authorizationFingerprint: "fp-b",
+    answer: "allow",
+    source: "person",
+  });
+  assert.equal(bridge.decide("w-rep", "deny"), false);
+
+  // Bot pause aborts the wait signal and fails assertCurrent; late decide and allow-list release both fail.
+  const pauseAbort = new AbortController();
+  const waitingWhilePaused = bridge.request({
+    ...rememberedRequest("w-pause"),
+    signal: pauseAbort.signal,
+    assertCurrent: async () => {
+      if (paused) throw new Error("Bot is paused.");
+    },
+    prepareAllowListRelease: async () => ({
+      id: "auto",
+      authorizationFingerprint: "auto-fp",
+      answer: "allow",
+      source: "allow_list",
+    }),
+  });
+  await waitFor(() => bridge.pending().some((prompt) => prompt.waitId === "w-pause"));
+  paused = true;
+  pauseAbort.abort(new Error("Bot paused"));
+  assert.equal(bridge.decide("w-pause", "allow"), false);
+  assert.equal(await bridge.releaseFromAllowList("w-pause", grant), false);
+  await assert.rejects(waitingWhilePaused, /Bot paused/u);
+  await assert.rejects(
+    bridge.request({
+      ...rememberedRequest("w-pause"),
+      assertCurrent: async () => {
+        if (paused) throw new Error("Bot is paused.");
+      },
+    }),
+    /Bot is paused\./u,
+  );
+  assert.deepEqual(bridge.pending(), []);
+  assert.deepEqual(withdrawn[withdrawn.length - 1], ["fp-w-pause", "cancelled", undefined]);
+});

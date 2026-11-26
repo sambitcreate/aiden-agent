@@ -1,4 +1,5 @@
 import type { Attachment } from "./types.js";
+import { isGrabbedElementThumbnailId } from "../../renderer/shared/browser-element-grab.js";
 import {
   resolvePiModelImageInputs,
   type PiModelToolsHost,
@@ -49,6 +50,7 @@ export function createPiModelImageReferences(options: {
         typeof item.id !== "string" ||
         !item.id ||
         item.id.length > 128 ||
+        Boolean(isGrabbedElementThumbnailId(item.id)) ||
         !Number.isSafeInteger(item.size) ||
         item.size < 1 ||
         item.size > 8 * 1024 * 1024

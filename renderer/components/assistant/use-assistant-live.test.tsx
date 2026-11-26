@@ -72,6 +72,28 @@ async function settle(): Promise<void> {
   await new Promise<void>((resolve) => setImmediate(resolve));
 }
 
+/**
+ * Settles one macrotask at a time until `condition` holds. Updates made outside
+ * `flushSync` render on React's scheduler, which yields after about 5 ms, so on
+ * a busy runner the render and its effects can take more ticks than a fixed
+ * number of `settle()` calls allows.
+ */
+async function settleUntil(condition: () => boolean, waitingFor: string, timeoutMs = 2_000): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  while (!condition()) {
+    if (Date.now() > deadline) throw new Error(`Timed out waiting for ${waitingFor}.`);
+    await settle();
+  }
+}
+
+/** start() does nothing until the mount-time Live status and microphone checks land. */
+async function settleUntilReadyToStart(fixture: { controller: () => AssistantLiveController }): Promise<void> {
+  await settleUntil(
+    () => fixture.controller().available && fixture.controller().microphonePermission === "granted",
+    "Live to be ready to start",
+  );
+}
+
 class FakeAudioNode {
   disconnected = false;
   connect<T>(destination: T): T {
@@ -353,13 +375,14 @@ test("connection cues wait for microphone readiness, deduplicate resume, and sou
     playConnectionCue: async (cue) => { cues.push(cue); },
   });
   try {
+    await settleUntilReadyToStart(fixture);
     const starting = fixture.controller().start();
     await settle();
     assert.deepEqual(cues, []);
     media.resolve({ getTracks: () => [new FakeTrack()] } as unknown as MediaStream);
     await starting;
-    await settle();
-    await settle();
+    assert.equal(fixture.startCalls(), 1);
+    await settleUntil(() => cues.length > 0, "the connected cue");
     assert.deepEqual(cues, ["connected"]);
     for (const state of ["resuming", "open", "open"] as const) {
       fixture.emit({ type: "snapshot", snapshot: { available: true, reason: "available", sessionId: "session-1", state } });
@@ -367,8 +390,7 @@ test("connection cues wait for microphone readiness, deduplicate resume, and sou
     }
     assert.deepEqual(cues, ["connected"]);
     await fixture.controller().stop();
-    await settle();
-    await settle();
+    await settleUntil(() => cues.length > 1, "the disconnected cue");
     assert.deepEqual(cues, ["connected", "disconnected"]);
   } finally { await fixture.unmount(); }
 });
@@ -380,8 +402,9 @@ test("unexpected disconnect sounds once even if cue playback fails", async () =>
     throw new Error("audio unavailable");
   } });
   try {
+    await settleUntilReadyToStart(fixture);
     await fixture.controller().start();
-    await settle();
+    await settleUntil(() => cues.length > 0, "the connected cue");
     fixture.emit({ type: "snapshot", snapshot: { available: true, reason: "available", sessionId: "session-1", state: "disconnected" } });
     await settle();
     fixture.emit({ type: "snapshot", snapshot: { available: true, reason: "available", state: "disconnected" } });
