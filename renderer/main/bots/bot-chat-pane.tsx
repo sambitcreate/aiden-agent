@@ -26,6 +26,7 @@ import { useApprovalStatusLine } from "../../lib/use-approval-status-line";
 import { SafeMessageBubble } from "../../components/message-bubble";
 import { MessageAttachmentPreviewProvider } from "../../components/message-attachments";
 import { insertTextIntoTextarea } from "../../lib/composer-type-focus";
+import { composerHistoryFromBotEntries } from "../../lib/composer-history";
 import { AlertDialog, Button, Callout, EmptyState, ScrollArea, Text, toast } from "../../components/ui";
 import { BotNoticeCard } from "../../components/bots/bot-notice-card";
 import { botListLocation } from "../../lib/bot-routes";
@@ -504,6 +505,11 @@ export function BotChatPane({ botId }: { botId: string }) {
   const [statusLayout, setStatusLayout] = React.useState("");
   const composerRef = React.useRef<HTMLTextAreaElement | null>(null);
   const snapshot = live.snapshot;
+  const snapshotEntries = snapshot?.entries;
+  const composerHistory = React.useMemo(
+    () => (snapshotEntries ? composerHistoryFromBotEntries(snapshotEntries) : []),
+    [snapshotEntries],
+  );
   const quietSince = useLastProgressAt(snapshot?.seq ?? 0, snapshot?.partial ?? null);
   const latestSnapshot = React.useRef(snapshot);
   React.useLayoutEffect(() => { latestSnapshot.current = snapshot; }, [snapshot]);
@@ -1336,6 +1342,7 @@ export function BotChatPane({ botId }: { botId: string }) {
                     : spendingReached
           }
           hasMessages={snapshot.entries.length > 0}
+          historyEntries={composerHistory}
           chatId={`bot:${current.id}`}
           placeholder={handoff && !noteRefused ? "Add a note and send to mark it done" : `Ask ${current.name}`}
           onSend={(text, attachments) =>

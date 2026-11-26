@@ -95,13 +95,33 @@ import {
   type ComposerMention,
   type MentionCandidate,
 } from "../lib/composer-mentions";
-import { useLayer } from "../lib/layer-stack";
+import { hasOpenLayer, isOverlayLayer, useLayer } from "../lib/layer-stack";
 import {
   COMPOSER_MENTION_PICKER_ID,
   ComposerMentionChips,
   ComposerMentionPicker,
   mentionOptionId,
 } from "./composer-mention-picker";
+import {
+  CLOSED_COMPOSER_HISTORY,
+  composerHistoryFromMessages,
+  detachComposerHistory,
+  dismissComposerHistory,
+  openComposerHistory,
+  reconcileComposerHistory,
+  resolveComposerHistoryIndex,
+  selectComposerHistoryEntry,
+  stepComposerHistoryDown,
+  stepComposerHistoryUp,
+  type ComposerHistoryEntry,
+  type ComposerHistoryState,
+} from "../lib/composer-history";
+import {
+  COMPOSER_HISTORY_POPOVER_ID,
+  ComposerHistoryPopover,
+  ComposerHistoryPopoverPresence,
+  historyOptionId,
+} from "./composer-history-popover";
 import { isUsable } from "../lib/model-picker-data";
 import { openWorkspaceSettings } from "./workspace-settings-dialog";
 import { aidenLivePreferences } from "../shared/aiden-live-settings";
@@ -387,6 +407,11 @@ interface ComposerProps {
   machinePicker?: React.ReactNode;
   /** The context bar for a chat whose project lives on another Mac. */
   remoteContext?: React.ReactNode;
+  /**
+   * Past user prompts paired with their replies (oldest → newest) for ↑ history.
+   * When omitted, derived from `sessionChat.messages`.
+   */
+  historyEntries?: readonly ComposerHistoryEntry[];
 }
 
 /** A skill catalog the composer offers after `$`, scoped to one chat or project. */
@@ -556,8 +581,11 @@ export function Composer({
   hostSkills,
   machinePicker,
   remoteContext,
+  historyEntries,
 }: ComposerProps) {
   const { platform } = useAppCapabilities();
+  const fallbackInputRef = React.useRef<HTMLTextAreaElement | null>(null);
+  const resolvedInputRef = inputRef ?? fallbackInputRef;
   const restoredText = React.useMemo(
     () => initialText || loadComposerDraft(chatId).text,
     [chatId, initialText],
@@ -586,39 +614,80 @@ export function Composer({
   const markSlashInteraction = React.useCallback(() => {
     slashInteractionRevisionRef.current += 1;
   }, []);
-  const setText = React.useCallback((value: React.SetStateAction<string>) => {
-    const current = draftRef.current;
-    const text = typeof value === "function" ? value(current.text) : value;
-    draftRef.current = {
-      text,
-      slashTracker: updateSlashSessionTracker(current.slashTracker, text),
-    };
-    slashInteractionRevisionRef.current += 1;
-    textRevisionRef.current += 1;
-    dispatchDraft({ type: "update", value: text });
-    saveComposerDraftText(chatId, text);
-  }, [chatId]);
+  const setText = React.useCallback(
+    (value: React.SetStateAction<string>, options?: { persist?: boolean }) => {
+      const current = draftRef.current;
+      const text = typeof value === "function" ? value(current.text) : value;
+      draftRef.current = {
+        text,
+        slashTracker: updateSlashSessionTracker(current.slashTracker, text),
+      };
+      slashInteractionRevisionRef.current += 1;
+      textRevisionRef.current += 1;
+      dispatchDraft({ type: "update", value: text });
+      if (options?.persist !== false) saveComposerDraftText(chatId, text);
+    },
+    [chatId],
+  );
+  const [historyState, setHistoryState] = React.useState<ComposerHistoryState>(
+    CLOSED_COMPOSER_HISTORY,
+  );
+  const historyStateRef = React.useRef<ComposerHistoryState>(CLOSED_COMPOSER_HISTORY);
+  const historyCaretRafRef = React.useRef<number | null>(null);
+  const cancelHistoryCaretRaf = React.useCallback(() => {
+    if (historyCaretRafRef.current !== null) {
+      cancelAnimationFrame(historyCaretRafRef.current);
+      historyCaretRafRef.current = null;
+    }
+  }, []);
+  React.useEffect(() => cancelHistoryCaretRaf, [cancelHistoryCaretRaf]);
+  const updateHistoryState = React.useCallback((next: ComposerHistoryState) => {
+    historyStateRef.current = next;
+    setHistoryState(next);
+  }, []);
+  const closeHistoryForExternalUpdate = React.useCallback((): string | null => {
+    if (!historyStateRef.current.open) return null;
+    cancelHistoryCaretRaf();
+    const restored = historyStateRef.current.savedDraft;
+    updateHistoryState(CLOSED_COMPOSER_HISTORY);
+    return restored;
+  }, [cancelHistoryCaretRaf, updateHistoryState]);
+  // The `@` whose picker Escape or a blur closed; typing on in that token keeps it closed.
+  const [mentionDismissedAt, setMentionDismissedAt] = React.useState<number | null>(null);
   React.useEffect(
     () =>
       subscribeStagedComposerText(chatId, (staged, { notice, once }) => {
-        setText((current) => mergeStagedComposerText(current, staged, once));
+        const base = closeHistoryForExternalUpdate();
+        setText((current) => mergeStagedComposerText(base ?? current, staged, once));
         const message = notice === undefined ? "A visual added a follow-up to your draft." : notice;
         if (message) toast.info(message);
       }),
-    [chatId, setText],
+    [chatId, closeHistoryForExternalUpdate, setText],
   );
   React.useEffect(
     () =>
       subscribeGuidanceRestore(chatId, (guidance) => {
-        setText((current) => mergeRestoredGuidance(current, guidance));
+        const base = closeHistoryForExternalUpdate();
+        setText((draft) => {
+          const current = base ?? draft;
+          return mergeRestoredGuidance(current, guidance);
+        });
         toast.info("The response ended before Aiden read your guidance. It's back in your draft.");
       }),
-    [chatId, setText],
+    [chatId, closeHistoryForExternalUpdate, setText],
   );
   const dismissSlash = React.useCallback(() => {
     slashInteractionRevisionRef.current += 1;
     dispatchDraft({ type: "dismiss-slash" });
   }, []);
+  const dismissActiveTriggersFor = React.useCallback(
+    (nextText: string, caret: number) => {
+      dismissSlash();
+      const trigger = findMentionTrigger(nextText, caret);
+      if (trigger) setMentionDismissedAt(trigger.start);
+    },
+    [dismissSlash],
+  );
   const [attachments, setAttachments] = React.useState<Attachment[]>([]);
   const [grabbedElements, setGrabbedElements] = React.useState<GrabbedElementContextV1[]>(() =>
     loadComposerDraftGrabbedElements(chatId),
@@ -669,7 +738,8 @@ export function Composer({
   React.useEffect(
     () =>
       subscribeRestoredUnsentMessage(chatId, (restored) => {
-        setText((current) => failedSendDraft(restored.text, current));
+        const base = closeHistoryForExternalUpdate();
+        setText((current) => failedSendDraft(restored.text, base ?? current));
         let nextAttachments = attachmentsRef.current;
         if (restored.attachments.length > 0) {
           attachmentRevisionRef.current += 1;
@@ -684,7 +754,7 @@ export function Composer({
           );
         }
       }),
-    [chatId, setText, updateAttachments, updateGrabbedElements],
+    [chatId, closeHistoryForExternalUpdate, setText, updateAttachments, updateGrabbedElements],
   );
   // Ambient projections (context pressure) follow the draft on a quiet cadence.
   const onDraftChangeRef = React.useRef(onDraftChange);
@@ -730,7 +800,8 @@ export function Composer({
       const comment = annotation.comment.trim();
       const fallback = result.attachments.some((item) => item.kind === "text") ? "" : browserAnnotationContext(annotation);
       const addition = [comment || "Use this browser annotation as context.", fallback].filter(Boolean).join("\n\n");
-      setText((current) => [current.trimEnd(), addition].filter(Boolean).join("\n\n"));
+      const base = closeHistoryForExternalUpdate();
+      setText((current) => [(base ?? current).trimEnd(), addition].filter(Boolean).join("\n\n"));
       if (result.attachments.length) {
         attachmentRevisionRef.current += 1;
         updateAttachments((current) => [...current, ...result.attachments]);
@@ -798,7 +869,7 @@ export function Composer({
       unregisterTerminalContext();
       unsubscribe();
     };
-  }, [workspace?.id, chatId, inputRef, visionSupported, setText, updateAttachments, updateGrabbedElements]);
+  }, [workspace?.id, chatId, inputRef, visionSupported, closeHistoryForExternalUpdate, setText, updateAttachments, updateGrabbedElements]);
   const attachmentOperationRef = React.useRef(new ComposerAttachmentOperation());
   const attachmentVisionRef = React.useRef(visionSupported);
   React.useLayoutEffect(() => {
@@ -1022,13 +1093,117 @@ export function Composer({
     return forkTurnEligibility(sessionChat.messages, { editInFork: !sessionChat.botId });
   }, [sessionChat]);
   const completedForkTurns = forkEligibility.turns;
-  // The latest prompt, when it has a finished reply and can be edited in a fork.
-  const lastPromptForkId = React.useMemo(() => {
-    if (!onForkChat || !sessionChat) return null;
-    const lastPrompt = [...sessionChat.messages].reverse().find((message) => message.role === "user");
-    const lastTurn = completedForkTurns[completedForkTurns.length - 1];
-    return lastPrompt && lastTurn?.userMessageId === lastPrompt.id ? lastPrompt.id : null;
+  const forkableUserIds = React.useMemo(() => {
+    if (!onForkChat || !sessionChat) return undefined;
+    const ids = new Set<string>();
+    for (const turn of completedForkTurns) {
+      if (turn.userMessageId) ids.add(turn.userMessageId);
+    }
+    return ids;
   }, [completedForkTurns, onForkChat, sessionChat]);
+  const effectiveHistoryEntries = React.useMemo(
+    () =>
+      historyEntries ??
+      (sessionChat ? composerHistoryFromMessages(sessionChat.messages, forkableUserIds) : []),
+    [forkableUserIds, historyEntries, sessionChat],
+  );
+  const reconciledHistory = React.useMemo(
+    () => reconcileComposerHistory(effectiveHistoryEntries, historyState),
+    [effectiveHistoryEntries, historyState],
+  );
+  React.useLayoutEffect(() => {
+    historyStateRef.current = reconciledHistory;
+  }, [reconciledHistory]);
+  const historyOpen = reconciledHistory.open;
+  const activeHistoryIndex = resolveComposerHistoryIndex(
+    effectiveHistoryEntries,
+    reconciledHistory,
+  );
+  const activeHistoryEntry =
+    activeHistoryIndex >= 0 ? effectiveHistoryEntries[activeHistoryIndex] : undefined;
+  const canForkActiveHistory = Boolean(
+    onForkChat &&
+      !isGenerating &&
+      !sending &&
+      !sessionCommandBusy &&
+      !attaching &&
+      !forkEligibility.cloneBlocked &&
+      !slashSessionBlockedReason &&
+      activeHistoryEntry?.forkMessageId,
+  );
+  const applyHistoryText = React.useCallback(
+    (nextText: string, options?: { persist?: boolean; focus?: boolean }) => {
+      cancelHistoryCaretRaf();
+      setText(nextText, { persist: options?.persist ?? false });
+      const caret = nextText.length;
+      setSelection({ start: caret, end: caret });
+      historyCaretRafRef.current = requestAnimationFrame(() => {
+        historyCaretRafRef.current = null;
+        const textarea = resolvedInputRef.current;
+        if (!textarea) return;
+        if (options?.focus) textarea.focus({ preventScroll: true });
+        if (document.activeElement !== textarea) return;
+        textarea.setSelectionRange(caret, caret);
+      });
+    },
+    [cancelHistoryCaretRaf, resolvedInputRef, setText],
+  );
+  const detachHistory = React.useCallback(
+    (caret: number, persistText = true) => {
+      cancelHistoryCaretRaf();
+      updateHistoryState(detachComposerHistory());
+      const currentText = draftRef.current.text;
+      if (persistText) saveComposerDraftText(chatId, currentText);
+      dismissActiveTriggersFor(currentText, caret);
+    },
+    [cancelHistoryCaretRaf, chatId, dismissActiveTriggersFor, updateHistoryState],
+  );
+  React.useEffect(() => {
+    if (!historyState.open) return;
+    if (!reconciledHistory.open) {
+      const dismissed = dismissComposerHistory(historyState);
+      updateHistoryState(dismissed.state);
+      applyHistoryText(dismissed.text, { persist: false });
+      return;
+    }
+    if (reconciledHistory.activeId !== historyState.activeId) {
+      updateHistoryState(reconciledHistory);
+      const next = effectiveHistoryEntries.find(
+        (entry) => entry.id === reconciledHistory.activeId,
+      );
+      if (next) applyHistoryText(next.prompt, { persist: false });
+    }
+  }, [applyHistoryText, effectiveHistoryEntries, historyState, reconciledHistory, updateHistoryState]);
+  const historyBlocked =
+    slashPaletteBlocked ||
+    composerInputLocked ||
+    firstSendPending ||
+    dictationPreviewing ||
+    voice.recording ||
+    voice.transcribing ||
+    renameDialogOpen ||
+    forkDialogOpen ||
+    sessionDialogOpen ||
+    logoutChooserOpen ||
+    logoutConfirmOpen ||
+    permissionMenuOpen;
+  React.useEffect(() => {
+    if (historyState.open && historyBlocked) {
+      const dismissed = dismissComposerHistory(reconciledHistory);
+      updateHistoryState(dismissed.state);
+      applyHistoryText(dismissed.text, { persist: false });
+    }
+  }, [applyHistoryText, historyBlocked, historyState.open, reconciledHistory, updateHistoryState]);
+  useLayer(historyOpen, "popover", {
+    name: "composer-history",
+    onEscape: (event) => {
+      if (!reconciledHistory.open) return;
+      event.preventDefault();
+      const dismissed = dismissComposerHistory(reconciledHistory);
+      updateHistoryState(dismissed.state);
+      applyHistoryText(dismissed.text, { persist: false });
+    },
+  });
   const forkSummaryTurnIds = React.useMemo(
     () => (sessionChat && onForkWithSummary ? forkSummaryRows(sessionChat.messages) : null),
     [onForkWithSummary, sessionChat],
@@ -1040,6 +1215,7 @@ export function Composer({
   const slashSession = React.useMemo(() => {
     const session =
       !skillsOffered ||
+      historyOpen ||
       slashPaletteBlocked ||
       renameDialogOpen ||
       forkDialogOpen ||
@@ -1062,6 +1238,7 @@ export function Composer({
       surfaces.slashCommands,
       composing,
       forkDialogOpen,
+      historyOpen,
       logoutChooserOpen,
       logoutConfirmOpen,
       permissionMenuOpen,
@@ -1233,13 +1410,12 @@ export function Composer({
   React.useEffect(() => {
     setMentions((current) => (current.length ? [] : current));
   }, [mentionWorkspaceId]);
-  // The `@` whose picker Escape or a blur closed; typing on in that token keeps it closed.
-  const [mentionDismissedAt, setMentionDismissedAt] = React.useState<number | null>(null);
   const [activeMentionIndex, setActiveMentionIndex] = React.useState(0);
   const [mentionAnnouncement, setMentionAnnouncement] = React.useState("");
   const mentionTrigger = React.useMemo(() => {
     if (
       !mentionWorkspaceId ||
+      historyOpen ||
       slashSession ||
       slashPaletteBlocked ||
       composing ||
@@ -1256,6 +1432,7 @@ export function Composer({
     composerInputLocked,
     composing,
     dictationPreviewing,
+    historyOpen,
     mentionDismissedAt,
     mentionWorkspaceId,
     selection.end,
@@ -1445,11 +1622,12 @@ export function Composer({
   settleExpiredCacheRef.current = expiredCacheReturn.settle;
   const typedRef = React.useRef(false);
   React.useEffect(() => {
-    // Starting to type is a return too, unless it is a slash command.
+    // Starting to type is a return too, unless it is a slash command or transient history browsing.
+    if (historyOpen) return;
     const typed = text.trim().length > 0;
     if (typed && !typedRef.current && !text.trimStart().startsWith("/")) expiredCacheReturn.markReturned();
     typedRef.current = typed;
-  }, [expiredCacheReturn.markReturned, text]);
+  }, [expiredCacheReturn.markReturned, historyOpen, text]);
 
   const createWorktreeFromSlash = React.useCallback(
     async (branchName?: string) => {
@@ -2329,6 +2507,9 @@ export function Composer({
 
   const handlePaste = (event: React.ClipboardEvent<HTMLTextAreaElement>) => {
     if (firstSendPendingRef.current) { event.preventDefault(); return; }
+    if (historyOpen) {
+      detachHistory(event.currentTarget.selectionStart ?? text.length);
+    }
     // Without attachments, a paste is plain text only.
     if (!surfaces.attachments) return;
     const images = Array.from(event.clipboardData.items).flatMap((item) => {
@@ -2400,6 +2581,10 @@ export function Composer({
     });
 
   const submit = async (busyModeOverride?: BusySendMode) => {
+    if (historyOpen) {
+      cancelHistoryCaretRaf();
+      updateHistoryState(detachComposerHistory());
+    }
     if (sendPendingRef.current || commentSendPendingRef.current || composing) return;
     if (dictationPreviewing) {
       blockSend("Wait for dictation to finish before sending.");
@@ -2629,28 +2814,94 @@ export function Composer({
         }
       }
     }
-    // ↑ in an empty message box brings the last prompt back in a fork, to fix and send again.
+    // Active composer history: ↑/↓ browse & live-fill, ↩ commits to the box,
+    // ⌥↩ edits the highlighted turn in a fork, caret-movement keys detach for editing.
+    if (historyOpen && !isComposingKey(event)) {
+      if (event.key === "ArrowUp" && plainKey) {
+        event.preventDefault();
+        const stepped = stepComposerHistoryUp(effectiveHistoryEntries, reconciledHistory);
+        if (stepped) {
+          updateHistoryState(stepped.state);
+          applyHistoryText(stepped.text, { persist: false });
+        }
+        return;
+      }
+      if (event.key === "ArrowDown" && plainKey) {
+        event.preventDefault();
+        const stepped = stepComposerHistoryDown(effectiveHistoryEntries, reconciledHistory);
+        if (stepped) {
+          updateHistoryState(stepped.state);
+          applyHistoryText(stepped.text, { persist: false });
+        }
+        return;
+      }
+      if (event.key === "Enter" && plainKey) {
+        event.preventDefault();
+        event.stopPropagation();
+        const committedText = activeHistoryEntry ? activeHistoryEntry.prompt : text;
+        cancelHistoryCaretRaf();
+        updateHistoryState(detachComposerHistory());
+        if (committedText !== text) {
+          applyHistoryText(committedText, { persist: true });
+        } else {
+          saveComposerDraftText(chatId, committedText);
+        }
+        dismissActiveTriggersFor(committedText, committedText.length);
+        return;
+      }
+      if (
+        event.key === "Enter" &&
+        event.altKey &&
+        !event.metaKey &&
+        !event.ctrlKey &&
+        !event.shiftKey
+      ) {
+        event.preventDefault();
+        event.stopPropagation();
+        if (canForkActiveHistory && activeHistoryEntry?.forkMessageId) {
+          const dismissed = dismissComposerHistory(reconciledHistory);
+          updateHistoryState(dismissed.state);
+          applyHistoryText(dismissed.text, { persist: false });
+          void forkFromTurn(activeHistoryEntry.forkMessageId, "before");
+        }
+        return;
+      }
+      if (
+        event.key === "ArrowLeft" ||
+        event.key === "ArrowRight" ||
+        event.key === "Home" ||
+        event.key === "End" ||
+        event.key === "PageUp" ||
+        event.key === "PageDown" ||
+        ((event.key === "ArrowUp" || event.key === "ArrowDown") && !plainKey)
+      ) {
+        detachHistory(event.currentTarget.selectionStart ?? text.length);
+      }
+    }
+    // ↑ in an empty message box opens sent-message history and shows its paired reply.
     if (
+      !historyOpen &&
       event.key === "ArrowUp" &&
-      !event.altKey &&
-      !event.metaKey &&
-      !event.ctrlKey &&
-      !event.shiftKey &&
+      plainKey &&
       !event.repeat &&
-      !event.nativeEvent.isComposing &&
+      !isComposingKey(event) &&
+      !event.currentTarget.readOnly &&
+      !historyBlocked &&
+      !hasOpenLayer(isOverlayLayer) &&
       text === "" &&
       attachments.length === 0 &&
       grabbedElements.length === 0 &&
       mentions.length === 0 &&
       !selectedSkill &&
-      !isGenerating &&
-      // Capture and its final decode own words that have not reached `text` yet.
-      !voice.recording &&
-      !voice.transcribing &&
-      lastPromptForkId
+      commentTray === null &&
+      effectiveHistoryEntries.length > 0
     ) {
       event.preventDefault();
-      void forkFromTurn(lastPromptForkId, "before");
+      const opened = openComposerHistory(effectiveHistoryEntries, text);
+      if (opened) {
+        updateHistoryState(opened.state);
+        applyHistoryText(opened.text, { persist: false });
+      }
       return;
     }
     if (
@@ -2659,7 +2910,7 @@ export function Composer({
         defaultPrevented: event.defaultPrevented,
         isComposing: event.nativeEvent.isComposing,
         repeat: event.repeat,
-        canStop: isGenerating && canStopGeneration,
+        canStop: isGenerating && canStopGeneration && !historyOpen,
         draftEmpty:
           !text.trim() &&
           attachments.length === 0 &&
@@ -2807,6 +3058,27 @@ export function Composer({
               onPick={pickMention}
             />
           ) : null}
+          <ComposerHistoryPopoverPresence
+            present={historyOpen}
+            immediate={historyBlocked}
+          >
+            {historyOpen ? (
+              <ComposerHistoryPopover
+                entries={effectiveHistoryEntries}
+                activeIndex={activeHistoryIndex}
+                canForkActive={canForkActiveHistory}
+                useShortcutLabel={prettyAccelerator("Return")}
+                forkShortcutLabel={prettyAccelerator("Alt+Return")}
+                onSelect={(entry) => {
+                  const picked = selectComposerHistoryEntry(effectiveHistoryEntries, entry.id);
+                  if (!picked) return;
+                  updateHistoryState(picked.state);
+                  applyHistoryText(picked.text, { persist: true, focus: true });
+                  dismissActiveTriggersFor(picked.text, picked.text.length);
+                }}
+              />
+            ) : null}
+          </ComposerHistoryPopoverPresence>
           {queuedMessages}
           {commentTray ? (
             <DesignCommentTray tray={commentTray} disabled={sending || !submissionAllowed} onSend={() => void submit()} />
@@ -3064,7 +3336,7 @@ export function Composer({
               </div>
             ) : null}
             <Textarea
-              ref={inputRef}
+              ref={resolvedInputRef}
               // Approval keys stay off while this holds a draft, wherever focus is; the
               // value marks staged attachments or a skill that the text alone doesn't show.
               data-message-draft={
@@ -3081,14 +3353,26 @@ export function Composer({
               aria-busy={composerInputLocked || firstSendPending || dictationPreviewing || undefined}
               onChange={(event) => {
                 if (firstSendPendingRef.current || dictationPreviewing) return;
+                const detachingHistory = historyOpen;
+                if (detachingHistory) {
+                  cancelHistoryCaretRaf();
+                  updateHistoryState(detachComposerHistory());
+                }
                 setText(event.target.value);
                 updateSelection({
                   start: event.target.selectionStart,
                   end: event.target.selectionEnd,
                 });
+                // A recalled `/command`, `$skill` or `@mention` stays plain text on the first edit.
+                if (detachingHistory) dismissActiveTriggersFor(event.target.value, event.target.selectionStart);
                 // Until live words appear, dictation follows the caret.
                 if (dictationAnchorRef.current) {
                   setDictationAnchor({ start: event.target.selectionStart, end: event.target.selectionEnd });
+                }
+              }}
+              onPointerDown={(event) => {
+                if (historyOpen) {
+                  detachHistory(event.currentTarget.selectionStart ?? text.length);
                 }
               }}
               onKeyDown={handleKeyDown}
@@ -3104,8 +3388,11 @@ export function Composer({
                   setDictationAnchor({ start: event.currentTarget.selectionStart, end: event.currentTarget.selectionEnd });
                 }
               }}
-              onCompositionStart={() => {
+              onCompositionStart={(event) => {
                 markSlashInteraction();
+                if (historyOpen) {
+                  detachHistory(event.currentTarget.selectionStart ?? text.length);
+                }
                 setComposing(true);
               }}
               onCompositionEnd={(event) => {
@@ -3116,29 +3403,40 @@ export function Composer({
                   end: event.currentTarget.selectionEnd,
                 });
               }}
-              onBlur={() => {
+              onBlur={(event) => {
                 if (slashSession && !sessionCommandBusyRef.current) dismissSlash();
                 if (mentionTrigger) setMentionDismissedAt(mentionTrigger.start);
+                if (historyOpen) {
+                  detachHistory(event.currentTarget.selectionStart ?? text.length);
+                }
               }}
               onFocus={() => {
                 markSlashInteraction();
                 setMentionDismissedAt(null);
               }}
-              aria-autocomplete={slashSession || mentionTrigger ? "list" : undefined}
+              aria-autocomplete={slashSession || mentionTrigger || historyOpen ? "list" : undefined}
               aria-describedby={
                 [surfaces.attachments ? attachmentDescriptionId : null, sendBlockedReason ? sendBlockedId : null]
                   .filter(Boolean)
                   .join(" ") || undefined
               }
               aria-controls={
-                slashSession ? COMPOSER_SLASH_PALETTE_ID : mentionTrigger ? COMPOSER_MENTION_PICKER_ID : undefined
+                slashSession
+                  ? COMPOSER_SLASH_PALETTE_ID
+                  : mentionTrigger
+                    ? COMPOSER_MENTION_PICKER_ID
+                    : historyOpen
+                      ? COMPOSER_HISTORY_POPOVER_ID
+                      : undefined
               }
               aria-activedescendant={
                 slashSession
                   ? effectiveActiveSlashId
                   : mentionTrigger && activeMention
                     ? mentionOptionId(effectiveMentionIndex)
-                    : undefined
+                    : historyOpen && activeHistoryIndex >= 0
+                      ? historyOptionId(activeHistoryIndex)
+                      : undefined
               }
               placeholder={
                 ready && placeholder

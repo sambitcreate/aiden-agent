@@ -31,6 +31,7 @@ import {
 import { useAppCapabilities } from "../lib/app-capabilities";
 import { botListLocation } from "../lib/bot-routes";
 import { insertTextIntoTextarea } from "../lib/composer-type-focus";
+import { composerHistoryFromBotEntries } from "../lib/composer-history";
 import { hostQueryKeys } from "../lib/hosts/host-query-keys";
 import { remoteBotPhotoAsset } from "../lib/hosts/remote-bot-photo-asset";
 import { markRemoteBotSeen, remoteBotShownReplyAt } from "../lib/remote-bot-seen";
@@ -202,6 +203,11 @@ export function RemoteBotChatView({ hostId, botId }: { hostId: string; botId: st
 
   const view = live.view;
   const snapshot = view?.snapshot ?? null;
+  const snapshotEntries = snapshot?.entries;
+  const composerHistory = React.useMemo(
+    () => (snapshotEntries ? composerHistoryFromBotEntries(snapshotEntries) : []),
+    [snapshotEntries],
+  );
   // What the person just sent shows at once, before the host has it, as in a local Bot chat.
   const [pendingSends, setPendingSends] = React.useState<readonly BotPendingSend[]>([]);
   React.useEffect(() => {
@@ -906,6 +912,7 @@ export function RemoteBotChatView({ hostId, botId }: { hostId: string; botId: st
                     : undefined
           }
           hasMessages={snapshot.entries.length > 0}
+          historyEntries={composerHistory}
           chatId={`remote-bot:${hostId}:${botId}`}
           placeholder={handoff && !noteRefused ? "Add a note and send to mark it done" : `Ask ${name}`}
           onSend={(text, attachments) => (handoff ? answerHandoffWithNote(handoff, text, attachments) : send(text, attachments))}
