@@ -23,6 +23,12 @@ export interface SubagentRunStoreDispatcherOptions {
   prepareV2?: () => Promise<void>;
   /** Required for V2: fresh-reads V1 and advances V2's source checkpoint. */
   checkpointV1Mutation?: () => Promise<void>;
+  /**
+   * Removes the chat's saved helper conversations. Tried once the deletion
+   * tombstone is durable, and required before it is cleared, so a crash in
+   * between leaves the tombstone for the startup retry.
+   */
+  deleteChatTranscripts?: (chatId: string) => Promise<void>;
   v1: Pick<
     SubagentRunStore,
     | "initialize"
@@ -84,6 +90,12 @@ export function createSubagentRunStoreDispatcher(
 
   function requireInitialized(): void {
     if (!initialized) throw new Error("Subagent run-store dispatcher is not initialized.");
+  }
+
+  // The durable tombstone already guarantees removal: completeChatDeletion
+  // repeats this and must succeed. Removing early just frees the space now.
+  async function removeTranscriptsEarly(chatId: string): Promise<void> {
+    await options.deleteChatTranscripts?.(chatId).catch(() => undefined);
   }
 
   return {
@@ -196,6 +208,7 @@ export function createSubagentRunStoreDispatcher(
       requireInitialized();
       if (options.selection === "v1") {
         await options.v1.deleteChat(chatId);
+        await removeTranscriptsEarly(chatId);
         return;
       }
       // A rollback process only understands V1, so its durable deletion marker
@@ -207,6 +220,7 @@ export function createSubagentRunStoreDispatcher(
       await options.v1.deleteChat(chatId);
       await options.v2.deleteChat(chatId);
       await options.checkpointV1Mutation!();
+      await removeTranscriptsEarly(chatId);
     },
 
     async pendingChatDeletions(): Promise<string[]> {
@@ -221,6 +235,9 @@ export function createSubagentRunStoreDispatcher(
 
     async completeChatDeletion(chatId: string): Promise<void> {
       requireInitialized();
+      // Helper conversations go before any tombstone is cleared; a failure
+      // keeps the tombstone so startup tries again.
+      await options.deleteChatTranscripts?.(chatId);
       if (options.selection === "v1") {
         await options.v1.completeChatDeletion(chatId);
         return;

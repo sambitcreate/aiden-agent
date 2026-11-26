@@ -37,8 +37,7 @@ extension AidenChatViewModel {
         isForking = true
         defer { isForking = false }
         let source = chat
-        let attempt = AidenChatForkAttempt.retaining(
-            forkAttempt,
+        let attempt = mutationSubMachines.forkAttempt.begin(
             context: context,
             request: .init(
                 chatId: source.id,
@@ -48,7 +47,6 @@ extension AidenChatViewModel {
                 summaryFocus: action == .forkWithSummary ? summaryFocus : nil
             )
         )
-        forkAttempt = attempt
         do {
             let result = try await coordinator.remoteClient(for: context).forkChat(
                 chatId: attempt.request.chatId,
@@ -59,7 +57,7 @@ extension AidenChatViewModel {
                 idempotencyKey: attempt.idempotencyKey
             )
             // The Mac answered: the next fork is a new request.
-            if forkAttempt == attempt { forkAttempt = nil }
+            mutationSubMachines.forkAttempt.recordSuccess(attempt)
             guard !isRemoved, coordinator.isLive(context) else { return nil }
             let forked = result.chat
             guard !forked.isBotChat,
@@ -87,11 +85,10 @@ extension AidenChatViewModel {
             return forked
         } catch let error where aidenIsCancellation(error) {
             // A cancelled request may already have reached the Mac; keep the key.
+            mutationSubMachines.forkAttempt.recordFailure(error, for: attempt)
             return nil
         } catch {
-            if forkAttempt == attempt, !AidenChatForkAttempt.outcomeIsUnknown(after: error) {
-                forkAttempt = nil
-            }
+            mutationSubMachines.forkAttempt.recordFailure(error, for: attempt)
             if await coordinator.handleCredentialRevocation(error, context: context) { return nil }
             guard !isRemoved, coordinator.isLive(context) else { return nil }
             if case AidenRemoteClientError.server(_, let body) = error, body.code.rawValue == "revision_conflict" {

@@ -3,6 +3,7 @@ import { randomBytes } from "node:crypto";
 import {
   AIDEN_REMOTE_HOST_FEED_MAX_BYTES,
   AIDEN_REMOTE_HOST_FEED_MAX_EVENTS,
+  AIDEN_REMOTE_HOST_FEED_BOT_PREVIEW_MAX,
   AIDEN_REMOTE_HOST_FEED_SNAPSHOT_CHUNK_BYTES,
   AIDEN_REMOTE_PROTOCOL_VERSION,
   type AidenRemoteCapability,
@@ -34,7 +35,7 @@ export interface AidenRemoteHostFeedBot {
   [key: string]: unknown;
 }
 
-/** A Bot row's revision-50 Inbox signals; each is present only when it holds. */
+/** A Bot row's revision-50 Inbox signals and revision-66 preview; each is present only when it holds. */
 export interface AidenRemoteHostFeedBotSignals {
   /** An approval, a question, a hand-off or an open issue waits on the person. */
   needsYou?: true;
@@ -42,25 +43,111 @@ export interface AidenRemoteHostFeedBotSignals {
   failed?: true;
   /** When the Bot's newest reply with visible text arrived, RFC 3339. */
   lastReplyAt?: string;
+  /**
+   * Revision 66: the line the host's own Bots list shows under the Bot's name
+   * (its newest reply, else the person's newest message), one plain line of at
+   * most `AIDEN_REMOTE_HOST_FEED_BOT_PREVIEW_MAX` characters.
+   */
+  preview?: string;
+  /**
+   * Revision 66: `preview` and `lastReplyAt` come from the Bot's summary, so
+   * their absence means the Bot has none. A paired Mac waits for it before
+   * setting a host's unread baseline (`withRemoteBotHostListed`).
+   */
+  summarized?: true;
 }
 
-/** The Inbox signals of one Bot from its live summary; none when the summary is unknown. */
+/** The Inbox signals and preview of one Bot from its live summary; none when the summary is unknown. */
 export function hostFeedBotSignals(
-  live: Pick<BotLiveSummary, "state" | "needsYou" | "lastReplyAt"> | undefined,
+  live: (Pick<BotLiveSummary, "state" | "needsYou" | "lastReplyAt"> & Partial<Pick<BotLiveSummary, "preview">>) | undefined,
 ): AidenRemoteHostFeedBotSignals {
   if (!live) return {};
   const failed = isFailedBotSession(live.state);
   const replied = live.lastReplyAt !== null && Number.isSafeInteger(live.lastReplyAt) && live.lastReplyAt >= 0
     ? new Date(live.lastReplyAt)
     : undefined;
+  const preview = clipPendingAttentionSummary(live.preview, AIDEN_REMOTE_HOST_FEED_BOT_PREVIEW_MAX);
   return {
     ...(live.needsYou ? { needsYou: true as const } : {}),
     ...(failed ? { failed: true as const } : {}),
     ...(replied && Number.isFinite(replied.getTime()) ? { lastReplyAt: replied.toISOString() } : {}),
+    ...(preview ? { preview } : {}),
+    summarized: true,
   };
 }
 
-/** One transcript-free read of everything the feed projects. */
+export interface HostFeedBotSignalsCache {
+  /** Each listed Bot's signals: kept ones as they are, the rest read again. */
+  signals(bots: readonly { id: string }[]): Promise<ReadonlyMap<string, AidenRemoteHostFeedBotSignals>>;
+  /** That Bot changed (`bots:changed`, `bots:attention`); with no Bot, every Bot did. */
+  invalidate(botId?: string): void;
+}
+
+/**
+ * Each Bot's host-feed signals, kept until that Bot itself changes. A closed
+ * Bot's live summary opens its conversation, and the feed refreshes on every
+ * chat, workspace or Bot change, so a refresh reads again only the Bots whose
+ * own change arrived since: the same events this Mac's Bots list re-reads a
+ * row on. A failed read is not kept, and a read a change overtook is not kept.
+ */
+export function createHostFeedBotSignalsCache(deps: {
+  summary(botId: string): Promise<Parameters<typeof hostFeedBotSignals>[0]>;
+  /** At most this many summaries read at once (default 4). */
+  concurrency?: number;
+}): HostFeedBotSignalsCache {
+  const concurrency = Math.max(1, deps.concurrency ?? 4);
+  const kept = new Map<string, AidenRemoteHostFeedBotSignals>();
+  // Change counts only rise, so a read a change overtook never matches again.
+  let changes = 0;
+  let everyBot = 0;
+  const generations = new Map<string, number>();
+  const generationOf = (botId: string) => `${everyBot}:${generations.get(botId) ?? 0}`;
+
+  async function read(botId: string): Promise<AidenRemoteHostFeedBotSignals> {
+    const hit = kept.get(botId);
+    if (hit) return hit;
+    const generation = generationOf(botId);
+    let live: Parameters<typeof hostFeedBotSignals>[0];
+    try {
+      live = await deps.summary(botId);
+    } catch {
+      return {};
+    }
+    const signals = hostFeedBotSignals(live);
+    if (generationOf(botId) === generation) kept.set(botId, signals);
+    return signals;
+  }
+
+  return {
+    async signals(bots) {
+      const listed = new Set(bots.map((bot) => bot.id));
+      for (const botId of [...kept.keys()]) if (!listed.has(botId)) kept.delete(botId);
+      for (const botId of [...generations.keys()]) if (!listed.has(botId)) generations.delete(botId);
+      const results = new Map<string, AidenRemoteHostFeedBotSignals>();
+      const ids = [...listed];
+      let next = 0;
+      await Promise.all(Array.from({ length: Math.min(concurrency, ids.length) }, async () => {
+        while (next < ids.length) {
+          const botId = ids[next++]!;
+          results.set(botId, await read(botId));
+        }
+      }));
+      return results;
+    },
+    invalidate(botId) {
+      changes += 1;
+      if (botId === undefined) {
+        everyBot = changes;
+        kept.clear();
+        return;
+      }
+      generations.set(botId, changes);
+      kept.delete(botId);
+    },
+  };
+}
+
+/** One read of everything the feed projects; it opens no chat transcript (Bot previews come from cached summaries). */
 export interface AidenRemoteHostFeedState {
   /** Non-Bot chat summaries, exactly as `/chat-summaries` projects them. */
   summaries: readonly AidenRemoteChatSummaryProjection[];
@@ -167,7 +254,7 @@ const DEFAULT_DEBOUNCE_MS = 50;
 
 /**
  * Host-wide change feed for paired desktop controllers. It never scans
- * transcripts: every refresh is one transcript-free `source.read()` diffed
+ * chat transcripts: every refresh is one `source.read()` diffed
  * against the previous read, and run states come from HostRunRegistry
  * change notifications. The journal is the only queue; a reader that falls
  * behind retention, or presents a cursor from another epoch, gets a fresh

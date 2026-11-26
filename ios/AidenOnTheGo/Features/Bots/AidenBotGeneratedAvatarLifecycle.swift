@@ -66,19 +66,10 @@ func aidenBotAvatarExpectedRevision(_ detail: AidenBotDetail) -> String {
 }
 
 func aidenBotAvatarMutationFailureIsAmbiguous(_ error: Error) -> Bool {
-    if error is CancellationError || error is URLError { return true }
-    guard let remoteError = error as? AidenRemoteClientError else { return true }
-    switch remoteError {
-    case .invalidResponse:
-        return true
-    case let .server(statusCode, _), let .unexpectedStatus(statusCode):
-        return (200..<300).contains(statusCode)
-            || statusCode == 408
-            || statusCode == 429
-            || statusCode >= 500
-    case .invalidEndpoint, .missingCredential, .missingTrustConfiguration, .installationChanged:
-        return false
-    }
+    AidenRemoteFailureClassification.isAmbiguous(
+        error,
+        policy: .durableBotLedgerBeforeEffectRefusal
+    )
 }
 
 /// Bounded, metadata-free normalization shared by candidate admission and
@@ -1026,23 +1017,16 @@ struct AidenBotCanonicalAvatarView: View {
     let name: String
     let size: CGFloat
     var isDecorative = true
-    /// The Bot is in a running turn: the face glances, or a photo wears a glance mark.
+    /// The Bot is in a running turn. A photo can't play it, so it wears a
+    /// glance mark; a sprite shows the turn through `state` instead.
     var working = false
+    /// The sprite's live state, where the caller knows it (the Bot's chat
+    /// header, a Bots list row). Nil leaves a resting avatar still.
+    var state: AidenBotAvatarState?
 
     @Environment(\.aidenPalette) private var palette
-    @Environment(\.accessibilityReduceMotion) private var systemReduceMotion
-    @Environment(\.aidenReduceMotion) private var appReduceMotion
-    @Environment(\.aidenLowPowerMode) private var lowPowerMode
     @State private var canonicalImage: UIImage?
     @State private var loadedCacheKey: AidenBotCanonicalAvatarCacheKey?
-
-    private var cue: AidenBotWorkingCue {
-        aidenBotWorkingCue(
-            working: working,
-            hasPhoto: canonicalImage != nil,
-            motionAllowed: !systemReduceMotion && !appReduceMotion && !lowPowerMode
-        )
-    }
 
     private var loadIdentity: AidenBotCanonicalAvatarLoadIdentity {
         AidenBotCanonicalAvatarLoadIdentity(
@@ -1060,7 +1044,8 @@ struct AidenBotCanonicalAvatarView: View {
                 name: name,
                 size: size,
                 isDecorative: isDecorative,
-                working: cue.glances
+                // Under a photo the sprite stays still: nothing would see it move.
+                state: canonicalImage == nil ? state : nil
             )
             if let canonicalImage {
                 Image(uiImage: canonicalImage)
@@ -1071,9 +1056,10 @@ struct AidenBotCanonicalAvatarView: View {
                     .accessibilityHidden(isDecorative)
                     .accessibilityLabel(isDecorative ? "" : "\(name) Bot photo")
             }
-            // A photo can't glance, and a face holds still under Reduce Motion or Low
-            // Power: a small glance mark in its still pose says the Bot is working (R19).
-            if cue.badge {
+            // A photo can't move: a small glance mark in its still pose says the
+            // Bot is working (R19). A sprite needs none: even under Reduce Motion
+            // or Low Power its still pose shows the state.
+            if Self.photoShowsActivityMark(working: working, state: state), canonicalImage != nil {
                 AidenActivityMark(mark: .glance, size: size * 0.32, color: palette.foreground)
                     .padding(size * 0.04)
                     .background(palette.canvas, in: Circle())
@@ -1084,6 +1070,13 @@ struct AidenBotCanonicalAvatarView: View {
         .task(id: loadIdentity) {
             await loadCanonicalImage(expected: loadIdentity)
         }
+    }
+
+    /// Whether a loaded photo wears the glance mark: in a running turn, as the
+    /// caller says through `working` or a settled active `state` (the chat
+    /// header passes only the state). Idle, done and error stay unmarked.
+    static func photoShowsActivityMark(working: Bool, state: AidenBotAvatarState?) -> Bool {
+        working || state?.isWorking == true
     }
 
     @MainActor

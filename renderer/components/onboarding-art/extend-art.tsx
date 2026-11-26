@@ -2,7 +2,6 @@ import {
   ArrowUp,
   Check,
   ChevronDown,
-  Cloud,
   Eye,
   FileText,
   FolderGit2,
@@ -15,12 +14,12 @@ import {
   Plus,
   Search,
   ShieldQuestion,
+  SlidersHorizontal,
   SquareTerminal,
   Wrench,
   X,
   Zap,
 } from "lucide-react";
-import { AidenActivityMark } from "../aiden-activity-mark";
 import { AidenIcon } from "../aiden-icon";
 import { ProviderIcon } from "../provider-icon";
 import { McpPresetIcon } from "../settings/mcp-preset-icons";
@@ -36,120 +35,61 @@ import {
 
 /* Art for the "Choose and extend" tiles. */
 
-/** Grid cells (column·row) holding a favorite model; the knob visits three of them. */
-const PAD_MODELS = new Set(["5·1", "3·3", "4·6", "7·0", "1·7", "6·4", "2·1"]);
+/** Five stops; the thumb rests on the third (home), so the fill runs to it. */
+const SLIDER_STOPS = 5;
+const SLIDER_ON = 2;
 
-export function ModelPadArt() {
-  const cells = [];
-  for (let row = 0; row < 9; row++) {
-    for (let column = 0; column < 8; column++) {
-      const model = PAD_MODELS.has(`${column}·${row}`);
-      cells.push(
-        <i
-          key={`${column}·${row}`}
-          className="oa-pad-dot"
-          data-model={model || undefined}
-        />,
-      );
-    }
-  }
+/**
+ * The composer's model popover with the Agent Slider on top: the stop's name
+ * and model over the track, its accent fill, stop dots and white thumb, and
+ * the "Other models…" row under it.
+ */
+export function AgentSliderArt() {
+  const fraction = SLIDER_ON / (SLIDER_STOPS - 1);
   return (
     <>
-      <ArtWindow
-        className="oa-pad-window"
-        style={{
-          left: 14,
-          top: 14,
-          width: 150,
-          height: "calc(100% - 22px)",
-          minHeight: 190,
-        }}
-      >
-        <div className="oa-segmented">
-          <span>List</span>
-          <span data-on="">Pad</span>
-        </div>
-        <div className="oa-pad">
-          {cells}
-          <i className="oa-pad-glow" />
-          <i className="oa-pad-knob" />
-        </div>
-      </ArtWindow>
       <ArtWindow
         raised
-        className="oa-pad-info"
-        style={{ left: 104, top: 112, width: 82 }}
+        className="oa-slider-popover oa-anim-float"
+        style={{ left: 14, top: 16, width: 168 }}
       >
-        <div className="oa-row" style={{ marginBottom: 2 }}>
-          <ArtIcon icon={Cloud} />
-          <Bar width="64%" tone="ink" />
+        <div className="oa-slider-head">
+          <ArtIcon icon={Zap} />
+          <span className="oa-slider-name oa-anim-pop">Balanced</span>
+          <Bar width="58%" tone="soft" className="oa-slider-detail" />
         </div>
-        {[
-          ["38%", "22%"],
-          ["44%", "16%"],
-          ["30%", "26%"],
-        ].map(([label, value]) => (
-          <div
-            key={label}
-            className="oa-row"
-            style={{ justifyContent: "space-between" }}
-          >
-            <Bar width={label} tone="soft" />
-            <Bar width={value} />
-          </div>
-        ))}
+        <div className="oa-slider-track">
+          <i
+            className="oa-slider-fill"
+            style={{ width: `calc(14px + (100% - 14px) * ${fraction})` }}
+          />
+          {Array.from({ length: SLIDER_STOPS }, (_, index) => (
+            <i
+              key={index}
+              className="oa-slider-dot"
+              data-lit={index <= SLIDER_ON || undefined}
+              style={{ left: `calc(7px + (100% - 14px) * ${index / (SLIDER_STOPS - 1)})` }}
+            />
+          ))}
+          <i
+            className="oa-slider-thumb"
+            style={{ left: `calc(1px + (100% - 14px) * ${fraction})` }}
+          />
+        </div>
+        <div className="oa-slider-row" data-first="">
+          <ArtIcon icon={Search} />
+          <Bar width="46%" />
+        </div>
+        <div className="oa-slider-row">
+          <ArtIcon icon={SlidersHorizontal} />
+          <Bar width="54%" tone="soft" />
+        </div>
       </ArtWindow>
-    </>
-  );
-}
-
-export function ThinkingControlsArt() {
-  return (
-    <>
-      <div style={{ position: "absolute", left: 12, top: 13, width: 98 }}>
-        <div className="oa-think-head">
-          <AidenActivityMark mark="tri-step" size={12} />
-          Thinking
-          <ArtIcon icon={ChevronDown} />
-        </div>
-        <div className="oa-think-lines">
-          <Bar width="92%" className="oa-anim-type" />
-          <Bar
-            width="70%"
-            className="oa-anim-type"
-            style={{ animationDelay: "0.5s" }}
-          />
-          <Bar
-            width="82%"
-            className="oa-anim-type"
-            style={{ animationDelay: "1s" }}
-          />
-          <Bar width="64%" tone="soft" />
-          <Bar width="88%" tone="soft" />
-          <Bar width="52%" tone="soft" />
-          <Bar width="76%" tone="soft" />
-          <Bar width="60%" tone="soft" />
-        </div>
-        <div className="oa-stack" style={{ width: 168, marginTop: 14 }}>
-          {["96%", "100%", "88%", "62%", "", "92%", "100%", "74%"].map((width, index) =>
-            width ? <Bar key={index} width={width} /> : <i key={index} style={{ height: 4 }} />,
-          )}
-        </div>
+      <div className="oa-stack" style={{ position: "absolute", left: 22, top: 150, width: 150 }}>
+        <Bar width="92%" tone="soft" className="oa-anim-type" />
+        <Bar width="74%" tone="soft" className="oa-anim-type" style={{ animationDelay: "0.5s" }} />
+        <Bar width="84%" tone="soft" className="oa-anim-type" style={{ animationDelay: "1s" }} />
       </div>
-      <ArtWindow
-        raised
-        className="oa-effort"
-        style={{ left: 114, top: 6, width: 70 }}
-      >
-        <span>Off</span>
-        <span>Low</span>
-        <span>Med</span>
-        <span className="oa-selected">
-          High
-          <ArtIcon icon={Check} />
-        </span>
-        <span>Max</span>
-      </ArtWindow>
     </>
   );
 }
@@ -269,10 +209,6 @@ export function ModelFreedomArt() {
         className="oa-models-picker"
         style={{ left: 160, top: 8, width: 212 }}
       >
-        <div className="oa-segmented">
-          <span data-on="">List</span>
-          <span>Pad</span>
-        </div>
         <div className="oa-models-filter oa-separator-bottom">
           <ArtIcon icon={Search} />
           Filter models…

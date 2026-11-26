@@ -286,7 +286,8 @@ enum AidenTurnRequestBuilder {
         modelId: String?,
         thinkingLevel: String?,
         attachments: [AidenAttachmentReference],
-        skill: AidenSkillInvocation? = nil
+        skill: AidenSkillInvocation? = nil,
+        saveSelection: Bool = false
     ) -> AidenTurnStart {
         AidenTurnStart(
             text: text,
@@ -294,12 +295,13 @@ enum AidenTurnRequestBuilder {
             modelId: modelId,
             thinkingLevel: thinkingLevel,
             attachmentIds: attachments.isEmpty ? nil : attachments.map(\.id),
-            skill: skill
+            skill: skill,
+            saveSelection: saveSelection
         )
     }
 }
 
-struct AidenChatModelSelection: Equatable {
+struct AidenChatModelSelection: Equatable, Codable, Sendable {
     let providerId: String?
     let modelId: String?
     let thinkingLevel: String?
@@ -392,7 +394,8 @@ enum AidenChatModelAuthority {
         selectedModelId: String?,
         selectedThinkingLevel: String?,
         remembered: AidenChatModelSelection? = nil,
-        hasExplicitSelection: Bool = false
+        hasExplicitSelection: Bool = false,
+        exactLevels: Bool = false
     ) -> AidenChatModelSelection {
         if chat.isBotChat {
             let provider = catalog?.providers.first { $0.id == chat.providerId }
@@ -426,11 +429,12 @@ enum AidenChatModelAuthority {
             catalog: catalog,
             selectedProviderId: selectedProviderId,
             selectedModelId: selectedModelId,
-            selectedThinkingLevel: selectedThinkingLevel
+            selectedThinkingLevel: selectedThinkingLevel,
+            exactLevels: exactLevels
         ) {
             return own
         }
-        if !hasExplicitSelection, let remembered = rememberedSelection(remembered, in: catalog) {
+        if !hasExplicitSelection, let remembered = rememberedSelection(remembered, in: catalog, exactLevels: exactLevels) {
             return remembered
         }
         var providerId = selectedProviderId
@@ -445,6 +449,24 @@ enum AidenChatModelAuthority {
             } ?? provider?.visibleModels.first?.id
         }
         let model = provider?.models.first { $0.id == modelId }
+        if exactLevels {
+            // Revision 70: with the Agent Slider a missing level is a choice,
+            // the model's own setting, which a level-less stop matches. A
+            // replaced model never inherits the old model's level.
+            // Nothing chosen and nothing remembered: a new chat starts on the
+            // Mac's last model and level (`defaults`), as new chats on the Mac
+            // do; the home stop is only what Reset to home returns to.
+            let keepsModel = providerId == selectedProviderId && modelId == selectedModelId
+            let isMacDefault = providerId == catalog.defaults["providerId"] && modelId == catalog.defaults["modelId"]
+            let macLevel = catalog.defaults["thinkingLevel"].flatMap { level in
+                model?.thinkingLevels?.contains(level) == true ? level : nil
+            }
+            return AidenChatModelSelection(
+                providerId: providerId,
+                modelId: modelId,
+                thinkingLevel: keepsModel ? selectedThinkingLevel : (isMacDefault ? macLevel : nil)
+            )
+        }
         return AidenChatModelSelection(
             providerId: providerId,
             modelId: modelId,
@@ -476,17 +498,24 @@ enum AidenChatModelAuthority {
 
     /// The chat's own provider/model pair, when the host still offers it.
     /// Hidden models stay usable here, as they do for existing chats on the Mac.
+    /// With `exactLevels` (revision 70, the Agent Slider) the level is the
+    /// chat's saved one, exactly, so the slider shows the stop the Mac would:
+    /// a chat with no saved level runs on the model's own setting.
     static func ownSelection(
         chat: AidenChat,
         catalog: AidenModelCatalog,
         selectedProviderId: String?,
         selectedModelId: String?,
-        selectedThinkingLevel: String?
+        selectedThinkingLevel: String?,
+        exactLevels: Bool = false
     ) -> AidenChatModelSelection? {
         guard let providerId = chat.providerId,
               let modelId = chat.modelId,
               let provider = catalog.providers.first(where: { $0.id == providerId }),
               let model = provider.models.first(where: { $0.id == modelId }) else { return nil }
+        if exactLevels {
+            return AidenChatModelSelection(providerId: providerId, modelId: modelId, thinkingLevel: chat.thinkingLevel)
+        }
         let keepsLevel = selectedProviderId == providerId && selectedModelId == modelId
         let thinkingLevel = (keepsLevel ? selectedThinkingLevel : nil).flatMap { level in
             model.thinkingLevels?.contains(level) == true ? level : nil
@@ -501,7 +530,8 @@ enum AidenChatModelAuthority {
     /// model's own default rather than sending an unsupported level.
     static func rememberedSelection(
         _ remembered: AidenChatModelSelection?,
-        in catalog: AidenModelCatalog
+        in catalog: AidenModelCatalog,
+        exactLevels: Bool = false
     ) -> AidenChatModelSelection? {
         guard let providerId = remembered?.providerId,
               let modelId = remembered?.modelId,
@@ -509,7 +539,7 @@ enum AidenChatModelAuthority {
               let model = provider.visibleModels.first(where: { $0.id == modelId }) else { return nil }
         let thinkingLevel = remembered?.thinkingLevel.flatMap { level in
             model.thinkingLevels?.contains(level) == true ? level : nil
-        } ?? model.effectiveThinkingLevel
+        } ?? (exactLevels ? nil : model.effectiveThinkingLevel)
         return AidenChatModelSelection(providerId: providerId, modelId: modelId, thinkingLevel: thinkingLevel)
     }
 

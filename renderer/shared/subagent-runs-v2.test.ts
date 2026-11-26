@@ -3,16 +3,20 @@ import test from "node:test";
 import {
   adaptSubagentRunSnapshotV1ToV2,
   adaptSubagentRunSnapshotV2ToV1,
+  isSubagentRunStateTerminal,
   MAX_SUBAGENT_ACTIVITY_CHARS,
   SUBAGENT_NEEDS_ATTENTION_FALLBACK_ACTIVITY,
   subagentPendingQuestion,
   subagentPendingQuestionActivity,
+  subagentRunSnapshotUpdateIsMonotonic,
+  subagentRunStateProgresses,
   parseSubagentHistoryDetailV1,
   parseSubagentRunSnapshot,
   parseSubagentRunSnapshotV1,
   parseSubagentRunSnapshotV2,
   type SubagentRunSnapshotV1,
   type SubagentRunSnapshotV2,
+  type SubagentRunStateV2,
 } from "./subagent-runs.js";
 
 function v1(state: SubagentRunSnapshotV1["state"] = "completed"): SubagentRunSnapshotV1 {
@@ -285,4 +289,153 @@ test("pending questions redact control-split credentials before flattening", () 
     assert.doesNotMatch(activity, /abcdefghijklmnopqrstuvwxyz0123456789/u);
     assert.ok(parseSubagentRunSnapshotV2({ ...v2("needs_attention"), activity }));
   }
+});
+
+test("subagentRunStateProgresses enforces the exhaustive transition matrix for allowStopped true and false", () => {
+  const allStates: readonly SubagentRunStateV2[] = [
+    "queued",
+    "starting",
+    "running",
+    "needs_attention",
+    "completed",
+    "failed",
+    "timed_out",
+    "interrupted",
+    "stopped",
+    "unknown",
+  ];
+
+  // Explicit oracle table of allowed target states per source state (with allowStopped: true).
+  const expectedAllowStoppedTrue: Record<SubagentRunStateV2, ReadonlySet<SubagentRunStateV2>> = {
+    queued: new Set([
+      "queued",
+      "starting",
+      "running",
+      "needs_attention",
+      "completed",
+      "failed",
+      "timed_out",
+      "interrupted",
+      "stopped",
+      "unknown",
+    ]),
+    starting: new Set([
+      "starting",
+      "running",
+      "needs_attention",
+      "completed",
+      "failed",
+      "timed_out",
+      "interrupted",
+      "stopped",
+      "unknown",
+    ]),
+    running: new Set([
+      "running",
+      "needs_attention",
+      "completed",
+      "failed",
+      "timed_out",
+      "interrupted",
+      "stopped",
+      "unknown",
+    ]),
+    needs_attention: new Set([
+      "running",
+      "needs_attention",
+      "completed",
+      "failed",
+      "timed_out",
+      "interrupted",
+      "stopped",
+      "unknown",
+    ]),
+    completed: new Set(),
+    failed: new Set(),
+    timed_out: new Set(),
+    interrupted: new Set(),
+    stopped: new Set(),
+    unknown: new Set(),
+  };
+
+  for (const current of allStates) {
+    assert.equal(
+      isSubagentRunStateTerminal(current),
+      expectedAllowStoppedTrue[current].size === 0,
+      `terminal classification for ${current}`,
+    );
+    for (const next of allStates) {
+      const allowedWithStopped = expectedAllowStoppedTrue[current].has(next);
+      assert.equal(
+        subagentRunStateProgresses(current, next),
+        allowedWithStopped,
+        `default progression ${current} -> ${next}`,
+      );
+      assert.equal(
+        subagentRunStateProgresses(current, next, { allowStopped: true }),
+        allowedWithStopped,
+        `allowStopped:true progression ${current} -> ${next}`,
+      );
+      assert.equal(
+        subagentRunStateProgresses(current, next, { allowStopped: false }),
+        allowedWithStopped && next !== "stopped",
+        `allowStopped:false progression ${current} -> ${next}`,
+      );
+    }
+  }
+
+  // Unrecognized states at runtime are rejected rather than falling through.
+  assert.equal(
+    subagentRunStateProgresses("bogus" as SubagentRunStateV2, "running"),
+    false,
+  );
+  assert.equal(
+    subagentRunStateProgresses("queued", "bogus" as SubagentRunStateV2),
+    false,
+  );
+});
+
+test("subagentRunSnapshotUpdateIsMonotonic enforces state, identity, and exact-replay rules", () => {
+  const queued = v2("queued");
+  const running: SubagentRunSnapshotV2 = {
+    ...v2("running"),
+    revision: 2,
+    updatedAt: 2_500,
+    turns: 3,
+    tools: 4,
+    tokens: 150,
+    milestones: ["reading"],
+  };
+  const attention: SubagentRunSnapshotV2 = {
+    ...v2("needs_attention"),
+    revision: 3,
+    updatedAt: 2_600,
+    turns: 3,
+    tools: 4,
+    tokens: 150,
+    milestones: ["reading"],
+  };
+  const stopped: SubagentRunSnapshotV2 = {
+    ...v2("stopped"),
+    revision: 4,
+    updatedAt: 2_700,
+    finishedAt: 2_700,
+    turns: 3,
+    tools: 4,
+    tokens: 150,
+    milestones: ["reading"],
+  };
+
+  assert.equal(subagentRunSnapshotUpdateIsMonotonic(queued, running), true);
+  assert.equal(subagentRunSnapshotUpdateIsMonotonic(running, attention), true);
+  assert.equal(subagentRunSnapshotUpdateIsMonotonic(attention, { ...running, revision: 4, updatedAt: 2_650 }), true);
+  assert.equal(subagentRunSnapshotUpdateIsMonotonic(attention, stopped), true);
+  assert.equal(subagentRunSnapshotUpdateIsMonotonic(stopped, { ...running, revision: 5, updatedAt: 2_800 }), false);
+  assert.equal(subagentRunSnapshotUpdateIsMonotonic(running, { ...queued, revision: 3, updatedAt: 2_600 }), false);
+  assert.equal(subagentRunSnapshotUpdateIsMonotonic(running, running), false);
+  assert.equal(subagentRunSnapshotUpdateIsMonotonic(running, running, { allowExactReplay: true }), true);
+  assert.equal(
+    subagentRunSnapshotUpdateIsMonotonic(queued, { ...running, label: "Renamed" }),
+    false,
+  );
 });

@@ -28,7 +28,6 @@ test("every operation names Aiden's storage; clone names it as source and destin
     { op: "stop", name: botVm },
     { op: "delete", name: botVm },
     { op: "ssh", name: BOT_COMPUTER_BASE_VM, command: "uname -a" },
-    { op: "cp", name: BOT_COMPUTER_BASE_VM, direction: "to_guest", localPath: "/tmp/setup.sh", remotePath: "/tmp/setup.sh" },
   ];
   for (const command of commands) {
     const args = lumeArgs(command, storage);
@@ -97,30 +96,11 @@ test("Linux create omits macOS-only flags and run accepts --mount and --disk-pat
   assert.equal(option(run, "--log-file"), "/tmp/base.log");
 });
 
-test("delete always passes --force, ssh puts its options before the VM name, and cp formats endpoints with no password on argv", () => {
+test("delete always passes --force and ssh puts its options before the VM name", () => {
   assert.ok(lumeArgs({ op: "delete", name: botVm }, storage).includes("--force"));
   const ssh = lumeArgs({ op: "ssh", name: botVm, command: "echo hi; ls ~", timeoutSeconds: 20 }, storage);
   assert.deepEqual(ssh.slice(-2), [botVm, "echo hi; ls ~"], "the remote command is one argv element after the name");
   assert.equal(option(ssh, "--timeout"), "20");
-
-  const upload = lumeArgs(
-    { op: "cp", name: BOT_COMPUTER_BASE_VM, direction: "to_guest", localPath: "/tmp/payload.bin", remotePath: "/tmp/payload.bin", timeoutSeconds: 120 },
-    storage,
-  );
-  assert.equal(upload[0], "cp");
-  assert.equal(option(upload, "--storage"), storage);
-  assert.equal(option(upload, "--timeout"), "120");
-  assert.equal(upload.includes("--recursive"), false);
-  assert.equal(upload.includes("--password"), false);
-  assert.deepEqual(upload.slice(-2), ["/tmp/payload.bin", `${BOT_COMPUTER_BASE_VM}:/tmp/payload.bin`]);
-
-  const download = lumeArgs(
-    { op: "cp", name: botVm, direction: "from_guest", localPath: "/tmp/out", remotePath: "/tmp/logs", recursive: true },
-    storage,
-  );
-  assert.ok(download.includes("--recursive"));
-  assert.equal(option(download, "--timeout"), "600");
-  assert.deepEqual(download.slice(-2), [`${botVm}:/tmp/logs`, "/tmp/out"]);
 });
 
 test("a shared folder with a colon, a relative path or a foreign VM name is refused", () => {
@@ -137,12 +117,9 @@ test("a shared folder with a colon, a relative path or a foreign VM name is refu
   refuse({ op: "create", os: "linux", name: BOT_COMPUTER_BASE_VM, display: "wide" });
   refuse({ op: "run", name: botVm, vncPassword: "Zq7Tn2Lw9Rk4Hm6X", sharedDir: "/tmp/x", mount: "relative/cidata.iso" });
   refuse({ op: "run", name: botVm, vncPassword: "Zq7Tn2Lw9Rk4Hm6X", sharedDir: "/tmp/x", diskPath: "relative/disk.raw" });
-  refuse({ op: "cp", name: botVm, direction: "to_guest", localPath: "relative/file", remotePath: "/tmp/file" });
-  refuse({ op: "cp", name: botVm, direction: "to_guest", localPath: "/tmp/file", remotePath: "" });
-  refuse({ op: "cp", name: botVm, direction: "to_guest", localPath: "/tmp/file", remotePath: "/tmp/a\nb" });
-  refuse({ op: "cp", name: "my-own-vm", direction: "to_guest", localPath: "/tmp/file", remotePath: "/tmp/file" });
   refuse({ op: "list" }, "relative/vms");
   refuse({ op: "serve" } as unknown as LumeCommand);
+  refuse({ op: "cp" } as unknown as LumeCommand);
 });
 
 test("VM names hash the Bot id and never carry it", () => {
@@ -205,62 +182,6 @@ test("runLume spawns the fixed invocation and returns a failing exit as a result
     }),
     /telemetry/u,
   );
-});
-
-test("runLume cp transfers files to a running VM and fails cleanly when the source or VM is unavailable", async () => {
-  const dir = mkdtempSync(path.join(tmpdir(), "p8-lume-cp-"));
-  const vms = path.join(dir, "vms");
-  const shared = path.join(dir, "shared");
-  const logFile = path.join(dir, "calls.jsonl");
-  const ipsw = path.join(dir, "restore.ipsw");
-  const payload = path.join(dir, "payload.txt");
-  writeFileSync(ipsw, "ipsw");
-  writeFileSync(payload, "hello");
-  const { mkdirSync } = await import("node:fs");
-  mkdirSync(shared, { recursive: true });
-  const env = { ...lumeEnvironment({}, path.join(dir, "home")), AIDEN_E2E_FAKE_LUME_LOG: logFile };
-  const invocation = { command: process.execPath, prefixArgs: [fake] };
-  const opts = { storage: vms, env, timeoutMs: 10_000 };
-
-  try {
-    assert.equal((await runLume(invocation, { op: "create", name: BOT_COMPUTER_BASE_VM, ipsw, unattended: "tahoe" }, opts)).exitCode, 0);
-    const stopped = await runLume(
-      invocation,
-      { op: "cp", name: BOT_COMPUTER_BASE_VM, direction: "to_guest", localPath: payload, remotePath: "/tmp/payload.txt" },
-      opts,
-    );
-    assert.equal(stopped.exitCode, 1);
-    assert.match(stopped.stderr, /is not running/u);
-
-    assert.equal(
-      (
-        await runLume(
-          invocation,
-          { op: "run", name: BOT_COMPUTER_BASE_VM, vncPassword: "Zq7Tn2Lw9Rk4Hm6X", sharedDir: shared, logFile: path.join(dir, "vm.log") },
-          opts,
-        )
-      ).exitCode,
-      0,
-    );
-
-    const copied = await runLume(
-      invocation,
-      { op: "cp", name: BOT_COMPUTER_BASE_VM, direction: "to_guest", localPath: payload, remotePath: "/tmp/payload.txt", timeoutSeconds: 90 },
-      opts,
-    );
-    assert.equal(copied.exitCode, 0);
-    assert.equal(copied.stdout, `Copied ${payload} to ${BOT_COMPUTER_BASE_VM}:/tmp/payload.txt\n`);
-
-    const missingSource = await runLume(
-      invocation,
-      { op: "cp", name: BOT_COMPUTER_BASE_VM, direction: "to_guest", localPath: path.join(dir, "missing.txt"), remotePath: "/tmp/missing.txt" },
-      opts,
-    );
-    assert.equal(missingSource.exitCode, 1);
-    assert.match(missingSource.stderr, /does not exist on the host/u);
-  } finally {
-    await runLume(invocation, { op: "stop", name: BOT_COMPUTER_BASE_VM, force: true }, opts).catch(() => undefined);
-  }
 });
 
 test("output past the cap ends the child, and a hung child is killed at its timeout", async () => {

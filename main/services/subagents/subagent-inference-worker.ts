@@ -2,6 +2,7 @@ import { anthropicMessagesApi, openAICompletionsApi } from "@earendil-works/pi-a
 import { builtinModels } from "@earendil-works/pi-ai/providers/all";
 import { normalizeContext } from "@earendil-works/pi-ai";
 import { isCodexAuthenticationFailure } from "../codex-auth-failure.js";
+import { withAidenPiCompatibility } from "../pi-provider-compatibility.js";
 import { providerFailureFromTerminalOutcome } from "../provider-failure.js";
 import { classifyUsageLimit, usageLimitSafeErrorText, type ProviderResponseObservation } from "../usage-limit-core.js";
 import { usageLimitObservedOptions } from "../usage-limit-stream.js";
@@ -114,7 +115,8 @@ parentPort.on("message", (messageEvent) => {
             payload,
           });
         });
-      const builtIn = builtinModels().getProvider(message.model.provider);
+      const rawBuiltIn = builtinModels().getProvider(message.model.provider);
+      const builtIn = rawBuiltIn ? withAidenPiCompatibility(rawBuiltIn) : undefined;
       const compatibility =
         message.model.api === "anthropic-messages"
           ? anthropicMessagesApi()

@@ -1,9 +1,7 @@
 // Electron-free assembly of the model-info reader. Capability metadata comes
-// from the packaged models.dev snapshot (optionally overlaid by the validated
-// device-local display cache); benchmark evidence comes from the device-local
-// OpenRouter cache. Nothing here performs a network request.
+// from the packaged models.dev snapshot, optionally overlaid by the validated
+// device-local display cache. Nothing here performs a network request.
 
-import type { OpenRouterBenchmarkCache } from "./openrouter-benchmark-catalog-core.js";
 import {
   createModelCatalogLoader,
   lookupCatalogModelInfo,
@@ -21,7 +19,6 @@ export interface ModelsCatalogReaderDependencies {
   loadBundled: () => Promise<unknown>;
   /** Device-local display cache: returns its catalog, or `fallback` when absent. */
   displayCache: { catalog(fallback: ModelCatalog): Promise<ModelCatalog> };
-  benchmarks: { catalog(): Promise<OpenRouterBenchmarkCache | null> };
   warn: (message: string, error: unknown) => void;
 }
 
@@ -44,17 +41,6 @@ export function createModelsCatalogReader(deps: ModelsCatalogReaderDependencies)
     }
   }
 
-  async function loadOpenRouterBenchmarks() {
-    try {
-      return await deps.benchmarks.catalog();
-    } catch (error) {
-      deps.warn("Could not read the device-local OpenRouter benchmark cache.", {
-        error: errorMessage(error),
-      });
-      return null;
-    }
-  }
-
   return {
     /** Request-time model limits from Pi-exact metadata and the bundled offline snapshot only. */
     async runtimeLimits(
@@ -72,11 +58,7 @@ export function createModelsCatalogReader(deps: ModelsCatalogReaderDependencies)
 
     /** Capability info for one model. */
     async info(provider: ModelCatalogProvider, modelId: string): Promise<ModelInfo> {
-      const [modelsDev, openRouterBenchmarks] = await Promise.all([
-        getDisplayModelsDev(),
-        loadOpenRouterBenchmarks(),
-      ]);
-      return resolveModelInfo(modelsDev, provider, modelId, openRouterBenchmarks);
+      return resolveModelInfo(await getDisplayModelsDev(), provider, modelId);
     },
 
     /** Capability info for many models under one provider. */
@@ -84,13 +66,8 @@ export function createModelsCatalogReader(deps: ModelsCatalogReaderDependencies)
       provider: ModelCatalogProvider,
       modelIds: string[],
     ): Promise<Record<string, ModelInfo>> {
-      const [modelsDev, openRouterBenchmarks] = await Promise.all([
-        getDisplayModelsDev(),
-        loadOpenRouterBenchmarks(),
-      ]);
-      return Object.fromEntries(
-        modelIds.map((id) => [id, resolveModelInfo(modelsDev, provider, id, openRouterBenchmarks)]),
-      );
+      const modelsDev = await getDisplayModelsDev();
+      return Object.fromEntries(modelIds.map((id) => [id, resolveModelInfo(modelsDev, provider, id)]));
     },
   };
 }

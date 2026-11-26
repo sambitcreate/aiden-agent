@@ -147,18 +147,95 @@ class AidenBotGeneratedAvatarTest {
     }
 
     @Test
-    fun testMutationAmbiguityClassification() {
-        fun isAmbiguous(statusCode: Int?, isNetworkError: Boolean): Boolean {
-            if (isNetworkError) return true
-            return statusCode == 503 || statusCode == 504
+    fun anUncertainUploadRetriesWithItsKeyAndADefiniteRefusalLetsTheNextOneMintANewKey() {
+        val directory = kotlin.io.path.createTempDirectory("avatar-retry-").toFile()
+        val server = MockWebServer()
+        val uploads = java.util.concurrent.LinkedBlockingQueue<RecordedRequest>()
+        fun error(status: Int, code: String) = MockResponse().setResponseCode(status).setBody(
+            """{"error":{"code":"$code","message":"Not now","requestId":"r","retryable":false}}""")
+        val answers = java.util.concurrent.ConcurrentLinkedQueue(listOf(
+            error(503, "internal_error"),
+            error(409, "idempotency_in_flight"),
+            error(409, "revision_conflict"),
+            error(409, "revision_conflict")
+        ))
+        server.dispatcher = object : Dispatcher() {
+            override fun dispatch(request: RecordedRequest): MockResponse =
+                if (request.method == "PUT" && request.requestUrl!!.encodedPath.endsWith("/bots/bot-1/avatar")) {
+                    uploads.add(request)
+                    answers.poll() ?: MockResponse().setResponseCode(500)
+                } else MockResponse().setResponseCode(404)
         }
+        server.start()
+        try {
+            val installations = AidenInstallationStore(directory, InMemoryAidenSecureStore())
+            installations.addInstallation(AidenPairingExchange(instanceId = "instance-avatar", deviceId = "device-avatar",
+                endpoint = server.url("/api/aiden/v1").toString(), serverSpkiSha256 = "sha256/test", credential = "synthetic",
+                capabilities = listOf(AidenRemoteCapability.CHAT_READ)), null)
+            val coordinator = AidenRemoteCoordinator(
+                installationStore = installations,
+                storageDir = directory,
+                chatCache = AidenChatCache(directory),
+                scope = CoroutineScope(Dispatchers.Unconfined + Job().apply { cancel() })
+            )
+            coordinator.refreshClient()
+            val model = AidenBotGeneratedAvatarModel(coordinator, normalize = { it })
+            runBlocking {
+                assertTrue(model.setCandidate(byteArrayOf(1)))
+                repeat(4) {
+                    model.uploadAvatar("bot-1", "rev-1") { fail("every upload is refused") }
+                    assertEquals(AidenBotGeneratedAvatarPhase.FAILED, model.phase.value)
+                }
+            }
+            val keys = List(4) { uploads.poll(5, java.util.concurrent.TimeUnit.SECONDS)!!.getHeader("Idempotency-Key") }
+            assertEquals("a 503 leaves the upload uncertain, so the retry keeps its key", keys[0], keys[1])
+            assertEquals("the Mac is still on it, so the key is kept", keys[1], keys[2])
+            assertEquals("a revision_conflict cannot settle an upload that was already uncertain", keys[2], keys[3])
+        } finally {
+            server.shutdown()
+            directory.deleteRecursively()
+        }
+    }
 
-        assertTrue(isAmbiguous(null, isNetworkError = true))
-        assertTrue(isAmbiguous(503, isNetworkError = false))
-        assertTrue(isAmbiguous(504, isNetworkError = false))
-        assertFalse(isAmbiguous(400, isNetworkError = false))
-        assertFalse(isAmbiguous(409, isNetworkError = false))
-        assertFalse(isAmbiguous(422, isNetworkError = false))
+    @Test
+    fun aFirstRevisionConflictIsDefiniteSoTheNextUploadMintsANewKey() {
+        val directory = kotlin.io.path.createTempDirectory("avatar-refused-").toFile()
+        val server = MockWebServer()
+        val uploads = java.util.concurrent.LinkedBlockingQueue<RecordedRequest>()
+        server.dispatcher = object : Dispatcher() {
+            override fun dispatch(request: RecordedRequest): MockResponse =
+                if (request.method == "PUT" && request.requestUrl!!.encodedPath.endsWith("/bots/bot-1/avatar")) {
+                    uploads.add(request)
+                    MockResponse().setResponseCode(409).setBody(
+                        """{"error":{"code":"revision_conflict","message":"Changed","requestId":"r","retryable":false}}""")
+                } else MockResponse().setResponseCode(404)
+        }
+        server.start()
+        try {
+            val installations = AidenInstallationStore(directory, InMemoryAidenSecureStore())
+            installations.addInstallation(AidenPairingExchange(instanceId = "instance-avatar", deviceId = "device-avatar",
+                endpoint = server.url("/api/aiden/v1").toString(), serverSpkiSha256 = "sha256/test", credential = "synthetic",
+                capabilities = listOf(AidenRemoteCapability.CHAT_READ)), null)
+            val coordinator = AidenRemoteCoordinator(
+                installationStore = installations,
+                storageDir = directory,
+                chatCache = AidenChatCache(directory),
+                scope = CoroutineScope(Dispatchers.Unconfined + Job().apply { cancel() })
+            )
+            coordinator.refreshClient()
+            val model = AidenBotGeneratedAvatarModel(coordinator, normalize = { it })
+            runBlocking {
+                assertTrue(model.setCandidate(byteArrayOf(1)))
+                model.uploadAvatar("bot-1", "rev-1") { fail("refused") }
+                model.uploadAvatar("bot-1", "rev-1") { fail("refused") }
+            }
+            val first = uploads.poll(5, java.util.concurrent.TimeUnit.SECONDS)!!.getHeader("Idempotency-Key")
+            val second = uploads.poll(5, java.util.concurrent.TimeUnit.SECONDS)!!.getHeader("Idempotency-Key")
+            assertNotEquals("nothing was written, so the next upload is a new request", first, second)
+        } finally {
+            server.shutdown()
+            directory.deleteRecursively()
+        }
     }
 
     @Test

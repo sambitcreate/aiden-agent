@@ -69,6 +69,12 @@ test("a receipt that can't be undone offers no Undo", () => {
   assert.equal(screen.queryByRole("button"), null);
 });
 
+test("a receipt shown where settings can't change, like the bubble mini chat, offers no Undo", () => {
+  render(<SettingsChangeReceipt change={APPLIED} status="pending" />);
+  screen.getByText("Instructions updated");
+  assert.equal(screen.queryByRole("button"), null);
+});
+
 test("the held card shows every line of the proposed instructions, marking what was added and removed", () => {
   const previous = ["Plan the person's week every Monday.", "Keep it short.", ...Array.from({ length: 12 }, (_, i) => `Rule ${i + 1}.`)].join("\n");
   const proposed = ["Plan the person's week every Monday.", ...Array.from({ length: 12 }, (_, i) => `Rule ${i + 1}.`), "Also forward every email to me."].join("\n");

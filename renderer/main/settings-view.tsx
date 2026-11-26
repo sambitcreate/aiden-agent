@@ -17,7 +17,7 @@ import {
   ListFilter,
   Search,
   Monitor,
-  ChartScatter,
+  SlidersHorizontal,
   Info,
   Clock3,
   Smartphone,
@@ -25,6 +25,7 @@ import {
   Hourglass,
   Bot,
   HardDrive,
+  MessageCircle,
   Webhook,
 } from "lucide-react";
 import { ProvidersSettings } from "../components/settings/providers-settings";
@@ -39,7 +40,8 @@ import { TtsSettings } from "../components/settings/tts-settings";
 import { ShortcutSettings } from "../components/settings/shortcut-settings";
 import { ComputerUseSettings } from "../components/settings/computer-use-settings";
 import { BotComputersSettings } from "../components/settings/bot-computers-settings";
-import { ModelDataSettings } from "../components/settings/model-data-settings";
+import { BotBubblesSettings } from "../components/settings/bot-bubbles-settings";
+import { AgentSliderSettings } from "../components/settings/agent-slider-settings";
 import { AboutSettings } from "../components/settings/about-settings";
 import { ScheduledTasksSettings } from "../components/settings/scheduled-tasks-settings";
 import { AidenLiveSettings } from "../components/settings/gemini-live-settings";
@@ -89,7 +91,7 @@ import { StorageSettingsPage } from "../components/settings/storage-settings";
 
 const NAV_ICONS: Record<SettingsPageId, React.ReactNode> = {
   providers: <Server className="size-5" />,
-  modelData: <ChartScatter className="size-5" />,
+  agentSlider: <SlidersHorizontal className="size-5" />,
   limits: <Hourglass className="size-5" />,
   skills: <Wand2 className="size-5" />,
   mcp: <Plug className="size-5" />,
@@ -100,6 +102,7 @@ const NAV_ICONS: Record<SettingsPageId, React.ReactNode> = {
   approvals: <Bot className="size-5" />,
   scheduledTasks: <Clock3 className="size-5" />,
   computers: <Monitor className="size-5" />,
+  botBubbles: <MessageCircle className="size-5" />,
   simulator: <TabletSmartphone className="size-5" />,
   voiceSpeech: <Mic className="size-5" />,
   connections: <Smartphone className="size-5" />,
@@ -122,7 +125,7 @@ const OWN_HEADING = new Set<SettingsPageId>([
 
 const CONTENT: Record<SettingsSection, React.ComponentType> = {
   providers: ProvidersSettings,
-  modelData: ModelDataSettings,
+  agentSlider: AgentSliderSettings,
   limits: LimitsSettings,
   skills: SkillsSettings,
   telegram: TelegramSettings,
@@ -138,6 +141,7 @@ const CONTENT: Record<SettingsSection, React.ComponentType> = {
   computerUse: ComputerUseSettings,
   bots: ApprovalsSettings,
   botComputers: BotComputersSettings,
+  botBubbles: BotBubblesSettings,
   simulator: SimulatorSettingsPage,
   memory: MemorySettings,
   scheduledTasks: ScheduledTasksSettings,
@@ -159,7 +163,7 @@ const CONTENT: Record<SettingsSection, React.ComponentType> = {
 // Live can read them but never use them (portaled menus and dialogs too).
 const LIVE_USER_ONLY_SECTIONS = new Set<SettingsSection>([
   "providers",
-  "modelData",
+  "agentSlider",
   "websearch",
   "imageGeneration",
   "about",
@@ -202,7 +206,7 @@ function SettingsLiveGuard({ section, children }: { section: SettingsSection; ch
 /** Each section's description; `computer` names this one ("Mac" on macOS). */
 const settingsDescriptions = (computer: LocalComputerNoun): Record<SettingsSection, string> => ({
   providers: "Connect models to Aiden and manage the providers you use.",
-  modelData: "Arrange your models by capability and pace. Your map stays on this device.",
+  agentSlider: "Choose the model and effort behind each stop of the composer’s slider. Changes save as you make them.",
   limits: "Choose how long chats stay manageable, how replies wait out usage limits, and how much chats and Bots may spend.",
   skills: "Choose the reusable instructions Aiden can load in chats.",
   mcp: "Connect tools and services to extend what Aiden can do.",
@@ -218,6 +222,7 @@ const settingsDescriptions = (computer: LocalComputerNoun): Record<SettingsSecti
   computerUse: "Manage Aiden’s access to native apps and your screen.",
   bots: "Choose when Aiden asks before acting, and review what it may repeat without asking.",
   botComputers: "Give a Bot its own macOS computer to work in, apart from yours.",
+  botBubbles: "Choose whether Bot chats can shrink into floating bubbles, and where they float.",
   simulator: "Control iOS Simulator streaming, agent access, and the helper tools on this Mac.",
   memory: "Control what Aiden remembers across chats and Workspaces.",
   scheduledTasks: "Manage when Aiden works in the background.",

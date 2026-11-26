@@ -11,6 +11,7 @@ import {
 import { createBotCapabilityIncarnationStore } from "./bot-capability-incarnation-store.js";
 import { createBotCapabilityStore } from "./bot-capability-store.js";
 import {
+  BotMcpInspectionBackoffError,
   createBotMcpScopeCache,
   resolveBotMcpConnectionIdentities,
   resolveBotMcpInventory,
@@ -329,14 +330,22 @@ test("repeated Bot snapshots inspect each MCP server once within the TTL and aga
   assert.deepEqual(Object.fromEntries(inspections), { alpha: 4, beta: 3 });
 });
 
+/** Lets background inspections (each bounded by a 20 ms deadline) finish. */
+const settle = () => new Promise<void>((resolve) => setTimeout(resolve, 60));
+
+const reportRows = (reports: readonly BotMcpInspectionFailureReport[]) =>
+  reports.map(({ server, kind, keptLastGood }) => [server.id, kind, keptLastGood]).sort();
+
 test("a slow or failing MCP server drops only its own Bot scope and keeps its last good scope briefly", async () => {
   let clock = 1_000;
+  const backgroundReports: BotMcpInspectionFailureReport[] = [];
   const cache = createBotMcpScopeCache({
     now: () => clock,
     ttlMs: 1,
     graceMs: 120_000,
     // A hung inspection is shared by later callers only until its own deadline.
     inspectionDeadlineMs: 20,
+    reportFailure: (report) => backgroundReports.push(report),
   });
   let servers = [stdioServer("fast"), stdioServer("slow"), stdioServer("broken")];
   let hangSlow = false;
@@ -361,33 +370,207 @@ test("a slow or failing MCP server drops only its own Bot scope and keeps its la
   const healthy = await snapshot();
   assert.deepEqual(ids(healthy), ["broken", "fast", "slow"]);
 
-  // Transient trouble: the finished server is kept and the others keep their
-  // last verified scope, so the catalog revision does not flap.
+  // Transient trouble past the TTL: every server keeps its last verified scope
+  // while it is refreshed behind the turn, so the catalog revision does not flap
+  // and the turn never waits on the hung server.
   clock += 10;
   hangSlow = true;
   breakBroken = true;
   assert.deepEqual(await snapshot(), healthy);
-  assert.deepEqual(
-    reports.map(({ server, kind, keptLastGood }) => [server.id, kind, keptLastGood]).sort(),
-    [["broken", "failed", true], ["slow", "timed_out", true]],
-  );
+  assert.deepEqual(reports, [], "no turn waited on a failing refresh");
+  await settle();
+  assert.deepEqual(reportRows(backgroundReports), [["broken", "failed", true], ["slow", "timed_out", true]]);
 
   // Past the grace window only the server that answered remains.
   clock += 120_000;
   assert.deepEqual(ids(await snapshot()), ["fast"]);
+  await settle();
 
   // A configuration change never inherits the old connection's scope.
   hangSlow = false;
   breakBroken = false;
+  cache.clear();
   await snapshot();
   clock += 10;
   servers = [stdioServer("fast"), stdioServer("slow", { command: "mcp-other" }), stdioServer("broken")];
   hangSlow = true;
+  reports.length = 0;
   assert.deepEqual(ids(await snapshot()), ["broken", "fast"]);
+  assert.deepEqual(reportRows(reports), [["slow", "timed_out", false]], "a new connection is inspected while the turn waits");
   // Nor does a disabled one.
   hangSlow = false;
   servers = [stdioServer("fast"), stdioServer("slow"), stdioServer("broken", { enabled: false })];
   assert.deepEqual(ids(await snapshot()), ["fast", "slow"]);
+});
+
+test("an unreachable MCP server delays one Bot snapshot, then is skipped and retried in the background", async () => {
+  let clock = 1_000;
+  let generation = 1;
+  const backgroundReports: BotMcpInspectionFailureReport[] = [];
+  const cache = createBotMcpScopeCache({
+    now: () => clock,
+    generation: () => generation,
+    inspectionDeadlineMs: 20,
+    failureBackoffMs: 1_000,
+    failureBackoffMaxMs: 4_000,
+    reportFailure: (report) => backgroundReports.push(report),
+  });
+  let servers = [stdioServer("up"), stdioServer("down")];
+  let unreachable = true;
+  let downInspections = 0;
+  const reports: BotMcpInspectionFailureReport[] = [];
+  const snapshot = () => resolveBotMcpInventory(new AbortController().signal, {
+    listServers: async () => servers,
+    credentialSignature: async (server: McpServer) => hash(`credential:${server.id}`),
+    inspectTools: async (server: McpServer) => {
+      if (server.id !== "down") return [readTool("up_read")];
+      downInspections++;
+      // Like a stdio server whose host app is not running: it never answers.
+      if (unreachable) return new Promise<never>(() => undefined);
+      return [readTool("down_read")];
+    },
+    incarnations: fixedIncarnations,
+    scopeCache: cache,
+    reportFailure: (report: BotMcpInspectionFailureReport) => reports.push(report),
+    deadlineMs: 30,
+  });
+  const ids = (scopes: Awaited<ReturnType<typeof snapshot>>) => scopes.map(({ serverId }) => serverId);
+
+  // The first snapshot waits for the server and reports it once.
+  assert.deepEqual(ids(await snapshot()), ["up"]);
+  assert.deepEqual(reportRows(reports), [["down", "timed_out", false]]);
+  assert.equal(downInspections, 1);
+
+  // Within the backoff, Bot turns neither wait for it nor report it again.
+  for (let index = 0; index < 5; index++) assert.deepEqual(ids(await snapshot()), ["up"]);
+  await settle();
+  assert.equal(downInspections, 1);
+  assert.equal(reports.length, 1);
+  assert.deepEqual(backgroundReports, []);
+
+  // When the backoff ends, a retry starts behind the turn and its failure is
+  // reported once; the next wait is twice as long.
+  clock += 1_000;
+  assert.deepEqual(ids(await snapshot()), ["up"]);
+  await settle();
+  assert.equal(downInspections, 2);
+  assert.deepEqual(reportRows(backgroundReports), [["down", "timed_out", false]]);
+  clock += 1_000;
+  await snapshot();
+  await settle();
+  assert.equal(downInspections, 2, "the second backoff is 2 s");
+  clock += 1_000;
+  await snapshot();
+  await settle();
+  assert.equal(downInspections, 3);
+  assert.equal(reports.length, 1, "no Bot snapshot reported or waited on the retries");
+
+  // A configuration fence makes a retry due at once, still behind the turn.
+  generation += 1;
+  assert.deepEqual(ids(await snapshot()), ["up"]);
+  await settle();
+  assert.equal(downInspections, 4);
+  assert.equal(reports.length, 1);
+
+  // Once the server answers a retry, the next snapshot offers its tools.
+  unreachable = false;
+  clock += 4_000;
+  await snapshot();
+  await settle();
+  assert.deepEqual(ids(await snapshot()), ["down", "up"]);
+
+  // A changed connection is never held back by the old connection's failures.
+  unreachable = true;
+  cache.clear();
+  await snapshot();
+  reports.length = 0;
+  servers = [stdioServer("up"), stdioServer("down", { command: "mcp-down-v2" })];
+  unreachable = false;
+  assert.deepEqual(ids(await snapshot()), ["down", "up"]);
+  assert.deepEqual(reports, []);
+});
+
+test("a stale Bot MCP scope answers at once and is refreshed behind the turn", async () => {
+  let clock = 1_000;
+  const cache = createBotMcpScopeCache({ now: () => clock, ttlMs: 100, graceMs: 10_000, inspectionDeadlineMs: 1_000 });
+  let toolName = "v1_read";
+  let release: (() => void) | undefined;
+  let inspections = 0;
+  const snapshot = () => resolveBotMcpInventory(new AbortController().signal, {
+    listServers: async () => [stdioServer("notes")],
+    credentialSignature: async () => hash("credential"),
+    inspectTools: async () => {
+      inspections++;
+      if (inspections > 1) await new Promise<void>((resolve) => { release = resolve; });
+      return [readTool(toolName)];
+    },
+    incarnations: fixedIncarnations,
+    scopeCache: cache,
+  });
+  const names = (scopes: Awaited<ReturnType<typeof snapshot>>) => scopes.flatMap((scope) => scope.tools.map((tool) => tool.toolName));
+
+  assert.deepEqual(names(await snapshot()), ["v1_read"]);
+  clock += 200;
+  toolName = "v2_read";
+  // The refresh is blocked until released, so this snapshot cannot have waited on it.
+  assert.deepEqual(names(await snapshot()), ["v1_read"]);
+  assert.deepEqual(names(await snapshot()), ["v1_read"], "callers join the one refresh in flight");
+  assert.equal(inspections, 2);
+  release?.();
+  await settle();
+  assert.deepEqual(names(await snapshot()), ["v2_read"]);
+  assert.equal(inspections, 2);
+});
+
+test("an inspection from before a configuration fence never replaces the newer generation's result", async () => {
+  let generation = 1;
+  const cache = createBotMcpScopeCache({ generation: () => generation, inspectionDeadlineMs: 1_000 });
+  const server = stdioServer("notes");
+  const fingerprint = hash("connection");
+  const held: Array<{ resolve: (tools: SubagentMcpRemoteTool[]) => void; reject: (error: Error) => void }> = [];
+  let inspections = 0;
+  const inspect = () => {
+    inspections++;
+    return new Promise<SubagentMcpRemoteTool[]>((resolve, reject) => held.push({ resolve, reject }));
+  };
+  const names = (tools: Awaited<ReturnType<typeof cache.inspect>>) => tools.map((tool) => tool.toolName);
+  const signal = new AbortController().signal;
+
+  // Generation 1 and generation 2 inspections overlap; the newer one finishes first.
+  const older = cache.inspect(server, fingerprint, signal, inspect);
+  await Promise.resolve();
+  generation = 2;
+  const newer = cache.inspect(server, fingerprint, signal, inspect);
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(held.length, 2);
+  held[1]!.resolve([readTool("v2_read")]);
+  assert.deepEqual(names(await newer), ["v2_read"]);
+  held[0]!.resolve([readTool("v1_read")]);
+  assert.deepEqual(names(await older), ["v1_read"], "the older caller still gets its own answer");
+
+  // The cached scope is still generation 2's: reused without another inspection.
+  assert.deepEqual(names(await cache.inspect(server, fingerprint, signal, inspect)), ["v2_read"]);
+  assert.equal(inspections, 2);
+
+  // Likewise a late success from an obsolete generation does not clear a newer failure.
+  cache.clear();
+  held.length = 0;
+  const stale = cache.inspect(server, fingerprint, signal, inspect);
+  await Promise.resolve();
+  generation = 3;
+  const current = cache.inspect(server, fingerprint, signal, inspect);
+  await new Promise((resolve) => setImmediate(resolve));
+  held[1]!.reject(new Error("connect ECONNREFUSED"));
+  await assert.rejects(current, /ECONNREFUSED/);
+  held[0]!.resolve([readTool("v2_read")]);
+  await stale;
+  const before = inspections;
+  await assert.rejects(
+    cache.inspect(server, fingerprint, signal, inspect),
+    BotMcpInspectionBackoffError,
+    "the server stays in backoff instead of blocking on a fresh foreground inspection",
+  );
+  assert.equal(inspections, before);
 });
 
 test("Bot MCP grant identity ignores display fields but not connection settings", async () => {

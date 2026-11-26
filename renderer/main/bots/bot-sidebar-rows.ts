@@ -21,10 +21,14 @@ export interface BotSidebarRow {
   activityAt: number;
   needsYou: boolean;
   lastReplyAt: number | null;
+  /** How the newest turn ended, when it failed or the person stopped it. */
+  lastTurnEnd?: "failed" | "stopped";
 }
 
-const BOT_WORKING_LINE = "Thinking…";
-const BOT_WAITING_LINE = "Waiting for you";
+/** A Bot row's line while its turn runs; paired Macs' Bots use it too. */
+export const BOT_WORKING_LINE = "Thinking…";
+/** A Bot row's line while it waits on the person; paired Macs' Bots use it too. */
+export const BOT_WAITING_LINE = "Waiting for you";
 
 function botSidebarRows(
   bots: readonly BotDefinition[],
@@ -40,6 +44,7 @@ function botSidebarRows(
         activityAt: summary?.updatedAt ?? bot.updatedAt,
         needsYou: summary?.needsYou ?? false,
         lastReplyAt: summary?.lastReplyAt ?? null,
+        ...(summary?.lastTurnEnd ? { lastTurnEnd: summary.lastTurnEnd } : {}),
       };
     })
     .sort((left, right) => right.activityAt - left.activityAt || left.bot.name.localeCompare(right.bot.name));

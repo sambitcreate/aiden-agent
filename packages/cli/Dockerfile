@@ -1,7 +1,8 @@
 FROM mirror.gcr.io/library/node:22-bookworm AS build
 ENV ELECTRON_SKIP_BINARY_DOWNLOAD=1 PI_TELEMETRY=0 PI_OFFLINE=1
 WORKDIR /build
-RUN apt-get update -qq && apt-get install -y --no-install-recommends libssl-dev ca-certificates openssl && rm -rf /var/lib/apt/lists/*
+# iproute2 (`ss`) verifies inherited Linux AF_UNIX stdio socketpairs for MCP orphan cleanup.
+RUN apt-get update -qq && apt-get install -y --no-install-recommends libssl-dev ca-certificates openssl iproute2 && rm -rf /var/lib/apt/lists/*
 COPY package.json package-lock.json ./
 RUN --mount=type=cache,target=/root/.npm npm ci --ignore-scripts
 COPY packages/cli/package.json packages/cli/package-lock.json ./packages/cli/
@@ -30,7 +31,8 @@ COPY packages/cli/package.json packages/cli/package-lock.json ./
 RUN --mount=type=cache,target=/root/.npm npm ci --omit=dev
 
 FROM mirror.gcr.io/library/node:22-bookworm-slim
-RUN apt-get update -qq && apt-get install -y --no-install-recommends git openssl ca-certificates libssl3 avahi-utils bzip2 && rm -rf /var/lib/apt/lists/*
+# iproute2 (`ss`) verifies inherited Linux AF_UNIX stdio socketpairs for MCP orphan cleanup.
+RUN apt-get update -qq && apt-get install -y --no-install-recommends git openssl ca-certificates libssl3 avahi-utils bzip2 iproute2 && rm -rf /var/lib/apt/lists/*
 COPY --from=runtime-deps --chown=node:node /deps/node_modules /opt/aiden/node_modules
 COPY --from=build --chown=node:node /build/packages/cli/package.json /opt/aiden/package.json
 COPY --from=build --chown=node:node /build/packages/cli/dist/app /opt/aiden/dist/app

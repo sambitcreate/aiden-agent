@@ -1,6 +1,7 @@
 // Profile-owned approval waits. Durable identity and provenance stay in main;
 // only the explicitly copied public card fields cross IPC.
 import { botApprovalRuleKey } from "../../../renderer/shared/tool-approval-scope.js";
+import type { CommandReading } from "../../../renderer/shared/command-reading.js";
 import { ApprovalAnalytics } from "../approval-gate/approval-analytics.js";
 import { ToolApprovalCoordinator, type ToolApprovalOutcome } from "../tool-approval.js";
 import type { BotApprovalDecision, BotApprovalOwner, BotApprovalRequest, BotAllowListRelease } from "./bot-extension.js";
@@ -23,10 +24,13 @@ export interface BotApprovalPrompt {
   /** One-way hashes (see `BotApprovalRequest`): the desktop card groups only waits that match on both. */
   argumentsHash?: string;
   runHash?: string;
+  /** A command in plain words and Aiden's own tags; display-only, never part of the decision. */
+  reading?: CommandReading;
 }
-export function publicBotApprovalPrompt(prompt: BotApprovalPrompt): Pick<BotApprovalPrompt, "botId" | "waitId" | "toolCallId" | "toolName" | "summary" | "always" | "autoWouldJudge" | "argumentsHash" | "runHash"> {
+export function publicBotApprovalPrompt(prompt: BotApprovalPrompt): Pick<BotApprovalPrompt, "botId" | "waitId" | "toolCallId" | "toolName" | "summary" | "always" | "autoWouldJudge" | "argumentsHash" | "runHash" | "reading"> {
   return { botId: prompt.botId, waitId: prompt.waitId, toolCallId: prompt.toolCallId, toolName: prompt.toolName, summary: prompt.summary,
     ...(prompt.always ? { always: { key: prompt.always.key, count: prompt.always.count } } : {}),
+    ...(prompt.reading ? { reading: structuredClone(prompt.reading) } : {}),
     ...(prompt.autoWouldJudge ? { autoWouldJudge: true as const } : {}),
     ...(prompt.argumentsHash ? { argumentsHash: prompt.argumentsHash } : {}), ...(prompt.runHash ? { runHash: prompt.runHash } : {}) };
 }
@@ -62,6 +66,7 @@ function clearCallbacks(state: Waiting) {
 export function createBotApprovals(options: BotApprovalsOptions): BotApprovals {
   const requests = new Map<string, Waiting>(), waiting = new Map<string, Waiting>();
   const listeners = new Set<(botId: string) => void>();
+  let attemptSequence = 0;
   const changed = (botId: string) => { for (const listener of listeners) listener(botId); };
   const coordinator = new ToolApprovalCoordinator(prompt => {
     const state = requests.get(prompt.approvalId);
@@ -72,9 +77,27 @@ export function createBotApprovals(options: BotApprovalsOptions): BotApprovals {
       ...(request.argumentsHash ? { argumentsHash: request.argumentsHash } : {}), ...(request.runHash ? { runHash: request.runHash } : {}),
       ...(request.owner ? { owner: structuredClone(request.owner) } : {}), ...(request.always ? { always: { ...request.always } } : {}),
       ...(request.autoWouldJudge ? { autoWouldJudge: true as const } : {}),
+      ...(request.reading ? { reading: structuredClone(request.reading) } : {}),
       ...(request.allowList ? { allowList: structuredClone(request.allowList) } : {}) };
+    const previousWaiting = waiting.get(request.waitId);
     state.prompt = published; waiting.set(request.waitId, state);
-    options.publish(published); changed(request.botId);
+    try {
+      options.publish(published);
+    } catch (error) {
+      if (!state.controller.signal.aborted && !state.source) {
+        if (requests.get(request.waitId) === state) requests.delete(request.waitId);
+        if (waiting.get(request.waitId) === state) {
+          if (previousWaiting && previousWaiting !== state) waiting.set(request.waitId, previousWaiting);
+          else waiting.delete(request.waitId);
+          clearCallbacks(state);
+          try { options.withdraw?.(published, "unavailable"); }
+          catch { /* Presentation failure cannot retain an authorization capability. */ }
+          changed(request.botId);
+        }
+      }
+      throw error;
+    }
+    changed(request.botId);
   }, (id, outcome) => {
     const state = waiting.get(id); waiting.delete(id);
     if (state?.prompt) {
@@ -110,20 +133,22 @@ export function createBotApprovals(options: BotApprovalsOptions): BotApprovals {
     if (input.signal?.aborted) abort();
     requests.set(captured.waitId, state);
     const complete = async (): Promise<BotApprovalDecision> => {
+      const streamId = `${STREAM_PREFIX}${captured.botId}`;
+      const attemptId = `${captured.waitId}:${++attemptSequence}`;
       try {
-        const streamId = `${STREAM_PREFIX}${captured.botId}`;
         const outcome = await coordinator.request({
           streamId,
           approvalId: captured.waitId,
-          // Payloads are keyed by this private attempt ID, not a reused provider call ID.
-          toolCallId: captured.waitId,
+          // Payloads are keyed by this unique attempt ID, so a cancelled or
+          // replaced wait cannot leak its scope onto a later attempt.
+          toolCallId: attemptId,
           toolName: captured.toolName,
           summary: captured.summary,
           ...(captured.always ? { scopes: ["once", "always"] as const } : {}),
         }, state.controller.signal);
         state.controller.signal.throwIfAborted();
         assertActive(captured);
-        const payload = coordinator.takeDecisionPayload(streamId, captured.waitId);
+        const payload = coordinator.takeDecisionPayload(streamId, attemptId);
         if (state.replacement) return state.replacement;
         if ((outcome !== "allowed" && outcome !== "denied") || !state.source) {
           throw new Error("The approval was withdrawn or unavailable.");
@@ -136,6 +161,7 @@ export function createBotApprovals(options: BotApprovalsOptions): BotApprovals {
         };
       } finally {
         clearCallbacks(state);
+        coordinator.takeDecisionPayload(streamId, attemptId);
         input.signal?.removeEventListener("abort", abort);
         if (requests.get(captured.waitId) === state) requests.delete(captured.waitId);
         if (waiting.get(captured.waitId) === state) {
@@ -156,10 +182,16 @@ export function createBotApprovals(options: BotApprovalsOptions): BotApprovals {
     decide(id, decision, scope, source = "person") {
       const state = waiting.get(id);
       // Expiry grants nothing and must be able to withdraw a release held across an await.
-      if (!state || (state.claimed && !(source === "expiry" && decision === "deny"))) return false;
+      if (!state || state.controller.signal.aborted || (state.claimed && !(source === "expiry" && decision === "deny"))) return false;
+      const previousClaimed = state.claimed, previousSource = state.source, previousPromptSource = state.prompt?.decisionSource;
       state.claimed = true; state.source = source;
       if (state.prompt) state.prompt.decisionSource = source;
-      return coordinator.decideAsHost(id, decision === "allow", scope ? { scope } : undefined, source === "person");
+      const settled = coordinator.decideAsHost(id, decision === "allow", scope ? { scope } : undefined, source === "person");
+      if (!settled) {
+        state.claimed = previousClaimed; state.source = previousSource;
+        if (state.prompt) state.prompt.decisionSource = previousPromptSource;
+      }
+      return settled;
     },
     async releaseFromAllowList(id, input) {
       const state = waiting.get(id), grant = structuredClone(input);
