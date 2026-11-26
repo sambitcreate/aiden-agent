@@ -35,16 +35,19 @@ test("every operation names Aiden's storage; clone names it as source and destin
   const clone = lumeArgs({ op: "clone", source: BOT_COMPUTER_BASE_VM, target: botVm }, storage);
   assert.equal(option(clone, "--source-storage"), storage);
   assert.equal(option(clone, "--dest-storage"), storage);
-  assert.equal(clone.includes("--storage"), false, "clone has no --storage flag in Lume 0.6.1");
+  assert.equal(clone.includes("--storage"), false, "clone has no --storage flag in Lume 0.8.0");
 });
 
-test("run is detached and headless with the shared folder tagged read-write", () => {
+test("run is detached and headless without host audio or clipboard devices, with the shared folder tagged read-write", () => {
   const args = lumeArgs(
     { op: "run", name: botVm, vncPassword: "Zq7Tn2Lw9Rk4Hm6X", sharedDir: "/Users/person/Bots/ada/Computer", logFile: "/tmp/ada.log" },
     storage,
   );
   assert.ok(args.includes("--detach"));
   assert.equal(option(args, "--display"), "none");
+  assert.ok(args.includes("--no-audio-device"));
+  assert.ok(args.includes("--no-clipboard-device"));
+  assert.equal(args.includes("--clipboard"), false);
   assert.equal(option(args, "--shared-dir"), "/Users/person/Bots/ada/Computer:rw");
   assert.equal(option(args, "--log-file"), "/tmp/ada.log");
 });
@@ -67,6 +70,7 @@ test("a shared folder with a colon, a relative path or a foreign VM name is refu
   refuse({ op: "create", name: BOT_COMPUTER_BASE_VM, ipsw: "latest", unattended: "tahoe" });
   refuse({ op: "list" }, "relative/vms");
   refuse({ op: "serve" } as unknown as LumeCommand);
+  refuse({ op: "cp" } as unknown as LumeCommand);
 });
 
 test("VM names hash the Bot id and never carry it", () => {

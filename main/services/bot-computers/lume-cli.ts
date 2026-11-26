@@ -13,6 +13,13 @@ export interface LumeInvocation {
  * Every Lume operation Aiden runs. There is deliberately no `serve` (an
  * unauthenticated HTTP API on localhost:7777), `pull`, `update`, `push`,
  * `ipsw` or `setup`: none of them can be expressed.
+ *
+ * `ssh` uses Lume's default preset credentials without ever placing a rotated
+ * secret on argv, so it applies only before guest SSH hardening turns off
+ * password login; post-hardening commands and file transfers use Aiden's own
+ * key-authenticated, host-key-pinned `/usr/bin/ssh` or the shared folder.
+ * `lume cp` is deliberately omitted because Aiden has no caller for it and
+ * post-hardening copies never use Lume's preset SSH password.
  */
 export type LumeCommand =
   | { op: "create"; name: string; ipsw: string; unattended: "tahoe" }
@@ -95,6 +102,8 @@ export function lumeArgs(command: LumeCommand, storage: string): string[] {
         "--detach",
         "--display",
         "none",
+        "--no-audio-device",
+        "--no-clipboard-device",
         "--vnc-password",
         command.vncPassword,
         "--shared-dir",

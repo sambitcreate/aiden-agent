@@ -408,6 +408,8 @@ test(
       assert.ok(run, "the capture started the computer");
       assert.equal(context.runsOf(VM).length, 1);
       const runArgs = run.args ?? [];
+      assert.ok(runArgs.includes("--no-audio-device"), "the guest gets no host audio device");
+      assert.ok(runArgs.includes("--no-clipboard-device"), "the guest gets no host clipboard device");
       assert.equal(runArgs[runArgs.indexOf("--shared-dir") + 1], `${context.computerDir}:rw`, "its Computer folder is shared read-write");
       const password = runArgs[runArgs.indexOf("--vnc-password") + 1];
       assert.ok(password && password.length >= 16, "each run gets its own VNC password");

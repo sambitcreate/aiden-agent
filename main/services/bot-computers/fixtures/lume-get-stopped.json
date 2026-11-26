@@ -19,6 +19,7 @@
     "networkMode" : "nat",
     "downloadProgress" : null,
     "machineIdentifier" : "YnBsaXN0MDDRAQJURUNJRBMAKDBQ3/M+cAgLEAAAAAAAAAEBAAAAAAAAAAMAAAAAAAAAAAAAAAAAAAAZ",
-    "macAddress" : "a6:4f:2c:9e:13:71"
+    "macAddress" : "a6:4f:2c:9e:13:71",
+    "savedState" : false
   }
 ]
