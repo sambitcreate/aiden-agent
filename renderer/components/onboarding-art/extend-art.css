@@ -3,7 +3,6 @@
 /* Agent Slider: the composer's model popover, slider on top */
 .oa-slider-popover { display: grid; gap: 6px; padding: 8px 8px 4px; }
 .oa-slider-head { display: grid; justify-items: center; gap: 3px; }
-.oa-slider-head .oa-icon { width: 8px; height: 8px; color: var(--text-tertiary); }
 .oa-slider-name { color: var(--text-primary); font-size: 10px; font-weight: 600; }
 .oa-slider-detail { height: 4px; }
 .oa-slider-track { position: relative; height: 14px; margin: 2px 1px 0; border-radius: var(--radius-pill); background: var(--oa-fill); }

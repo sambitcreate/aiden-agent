@@ -74,6 +74,14 @@ jobs:
         if: ${{ steps.version.outputs.publish == 'true' }}
         run: npx playwright install chromium
 
+      # Advisory: lists models pi.dev offers that the pinned Pi catalog doesn't
+      # bundle, in the job summary and as warnings. It never blocks a release.
+      - name: Check built-in model lists against the live catalogs
+        if: ${{ steps.version.outputs.publish == 'true' }}
+        continue-on-error: true
+        timeout-minutes: 3
+        run: npm run models:check
+
       - name: Verify Homebrew and website release consumers
         if: ${{ steps.version.outputs.publish == 'true' }}
         run: npm run release:check-consumers

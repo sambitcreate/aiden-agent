@@ -28,6 +28,20 @@ same-app-version, device-local display cache. It cannot add selectable models or
 context windows, output limits, or active turns. Provider inventory remains a separate Pi/provider
 authority. Ordinary model reads and application startup remain offline.
 
+### Built-in model lists
+
+The models each built-in provider offers come from the pinned Pi catalog, plus a live overlay the app
+reads from pi.dev (`https://pi.dev/api/models/providers/<id>`, no credentials). The app revalidates
+that overlay at launch and then checks hourly while the main window stays open, refreshing only
+lists older than 4 hours (a check with every list fresh stays local). A model a provider releases between Aiden releases therefore appears without
+a restart, and it starts shown even after an earlier **Hide all** for that provider.
+
+`npm run models:check` compares each provider's pinned list with pi.dev's live list and prints the
+models missing from Aiden (and, folded away, built-in models pi.dev no longer lists). The release
+workflow runs it before building, puts the table in the job summary and raises one warning per
+provider that is behind. It is advisory and never blocks a release: the fix is a Pi upgrade, which
+goes through its own pull request and replay evaluation. It contacts only pi.dev, never models.dev.
+
 ## Release behavior
 
 - `.github/workflows/ci.yml` verifies pull requests and pushes on GitHub-hosted `macos-26` and `ubuntu-24.04` runners (see [continuous integration](ci.md)).

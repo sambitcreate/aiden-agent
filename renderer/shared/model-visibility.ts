@@ -10,8 +10,10 @@ export type HiddenModelsByProvider = Record<string, ProviderModelVisibilityRule 
 export type NormalizedHiddenModelsByProvider = Record<string, ProviderModelVisibilityRule>;
 
 export const MAX_HIDDEN_MODEL_PROVIDERS = 128;
-export const MAX_HIDDEN_MODELS_PER_PROVIDER = 512;
-export const MAX_HIDDEN_MODELS_TOTAL = 4_096;
+// Hide all lists every model a provider has, so the ceilings fit the largest
+// built-in catalogs (OpenRouter lists about 420 chat models) with room to grow.
+export const MAX_HIDDEN_MODELS_PER_PROVIDER = 2_048;
+export const MAX_HIDDEN_MODELS_TOTAL = 16_384;
 export const MAX_MODEL_IDENTITY_LENGTH = 256;
 
 function validIdentity(value: unknown): value is string {
@@ -144,18 +146,100 @@ export function withModelVisibility(
   return writeRule(normalized, providerId, { ...rule, exceptions: [...exceptions] });
 }
 
+/** Hidden ids other providers' rules already hold, toward the total ceiling. */
+function exceptionsOutside(
+  rules: NormalizedHiddenModelsByProvider | undefined,
+  providerId: string,
+): number {
+  return Object.entries(rules ?? {}).reduce(
+    (total, [id, rule]) => (id === providerId ? total : total + rule.exceptions.length),
+    0,
+  );
+}
+
+/**
+ * A rule that hides exactly `modelIds` and lets every other model show, so a
+ * model the provider adds later starts visible. Undefined when the list can't
+ * fit under the ceilings.
+ */
+function hiddenListRule(
+  rules: NormalizedHiddenModelsByProvider | undefined,
+  providerId: string,
+  modelIds: Iterable<string>,
+  policyHidden: boolean | undefined,
+): ProviderModelVisibilityRule | undefined {
+  const exceptions = [...new Set([...modelIds].filter((id) => validIdentity(id) && id !== "*"))];
+  if (
+    exceptions.length > MAX_HIDDEN_MODELS_PER_PROVIDER ||
+    exceptions.length + exceptionsOutside(rules, providerId) > MAX_HIDDEN_MODELS_TOTAL
+  ) {
+    return undefined;
+  }
+  return { defaultVisibility: "shown", exceptions, ...(policyHidden ? { policyHidden: true } : {}) };
+}
+
+/**
+ * Hide every model the provider lists now (`modelIds`). Models it adds later
+ * start shown, so a new release is never hidden by an older choice. A catalog
+ * too large to list under the ceilings falls back to hiding by default, which
+ * hides later models too.
+ */
 export function hideAllProviderModels(
   current: HiddenModelsByProvider | undefined,
   providerId: string,
+  modelIds: readonly string[],
 ): HiddenModelsByProvider | undefined {
   if (!validIdentity(providerId)) throw new Error("Invalid provider identity.");
   const normalized = normalizeHiddenModelsByProvider(current);
   const rule = normalizedRule(normalized, providerId);
-  return writeRule(normalized, providerId, {
-    defaultVisibility: "hidden",
-    exceptions: [],
-    ...(rule.policyHidden ? { policyHidden: true } : {}),
-  });
+  return writeRule(
+    normalized,
+    providerId,
+    hiddenListRule(normalized, providerId, modelIds, rule.policyHidden) ?? {
+      defaultVisibility: "hidden",
+      exceptions: [],
+      ...(rule.policyHidden ? { policyHidden: true } : {}),
+    },
+  );
+}
+
+/**
+ * Turn each "hidden by default" rule (an earlier Hide all) into a list of the
+ * models it hides today, given each provider's current models. Every model
+ * that is hidden now stays hidden, and models the provider adds later show.
+ * A provider missing from `modelsByProvider`, or too large to list, keeps its
+ * rule. Returns undefined when nothing changes.
+ */
+export function revealFutureProviderModels(
+  current: HiddenModelsByProvider | undefined,
+  modelsByProvider: ReadonlyMap<string, readonly string[]>,
+): HiddenModelsByProvider | undefined {
+  let next = normalizeHiddenModelsByProvider(current);
+  let changed = false;
+  for (const [providerId, rule] of Object.entries(next ?? {})) {
+    const models = modelsByProvider.get(providerId);
+    // An empty list (a provider whose models aren't loaded yet) can't say
+    // what the rule hides today, so it keeps the rule until a later launch.
+    if (rule.defaultVisibility !== "hidden" || !models?.length) continue;
+    const shown = new Set(rule.exceptions);
+    const listed = hiddenListRule(
+      next,
+      providerId,
+      models.filter((id) => !shown.has(id)),
+      rule.policyHidden,
+    );
+    if (!listed) continue;
+    next = writeRule(next, providerId, listed) as NormalizedHiddenModelsByProvider | undefined;
+    changed = true;
+  }
+  return changed ? next : undefined;
+}
+
+/** True while any provider still hides models it adds later. */
+export function hidesFutureModels(current: HiddenModelsByProvider | undefined): boolean {
+  return Object.values(normalizeHiddenModelsByProvider(current) ?? {}).some(
+    (rule) => rule.defaultVisibility === "hidden",
+  );
 }
 
 export function withProviderPolicyHidden(

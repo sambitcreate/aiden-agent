@@ -364,7 +364,12 @@ export function registerProviderHandlers(): void {
     return configStore.showAllProviderModels(asProviderId(providerIdValue));
   });
   ipcMain.handle("settings:hideAllProviderModels", async (_event, providerIdValue: unknown) => {
-    return configStore.hideAllProviderModels(asProviderId(providerIdValue));
+    const providerId = asProviderId(providerIdValue);
+    // Hide what the provider lists now, read here rather than from the renderer;
+    // models it adds later start shown.
+    const provider = (await listProviders()).find((candidate) => candidate.id === providerId);
+    if (!provider) throw new Error("This provider is no longer set up.");
+    return configStore.hideAllProviderModels(providerId, provider.models);
   });
   ipcMain.handle(
     "settings:setGeminiVoiceSetup",

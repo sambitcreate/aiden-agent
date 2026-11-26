@@ -222,6 +222,30 @@ test("clicking a stop that can run moves the chat; one that can't asks for a mod
   assert.equal(server.calls.filter((call) => call.channel === "settings:setAgentSlider").length, 0);
 });
 
+test("a drag snaps the thumb from stop to stop and moves the chat once, where it is let go", async () => {
+  const { stops } = await openPopover({ agentSlider: slider });
+  await screen.findByRole("slider");
+  const track = document.querySelector<HTMLElement>("[data-agent-slider-track]");
+  assert.ok(track);
+  // 432px wide: with the 28px thumb and 2px insets, the five stops sit 100px apart from x=16.
+  track.getBoundingClientRect = () =>
+    ({ left: 0, top: 0, right: 432, bottom: 32, width: 432, height: 32, x: 0, y: 0, toJSON: () => ({}) }) as DOMRect;
+  const pointer = { pointerId: 1, button: 0 };
+
+  fireEvent.pointerDown(track, { ...pointer, clientX: 116 });
+  // Between Smart (316) and the empty stop (416), nearer Smart.
+  fireEvent.pointerMove(track, { ...pointer, clientX: 340 });
+  assert.equal(thumb().getAttribute("aria-valuetext"), "Smart, Smart Model, High");
+  const whileDragging = thumb().style.left;
+  assert.equal(stops.length, 0, "a drag moves the chat only when it is let go");
+
+  fireEvent.pointerUp(track, { ...pointer, clientX: 340 });
+  assert.deepEqual(stops, [{ providerId: "acme", model: "smart-model", thinkingLevel: "high" }]);
+  assert.equal(thumb().getAttribute("aria-valuenow"), "4");
+  // Mid-drag the thumb already sat exactly where it rests on Smart, not under the pointer.
+  assert.equal(thumb().style.left, whileDragging);
+});
+
 test("choosing a model for an unavailable stop saves it on the stop and moves the chat there", async () => {
   const { stops, picks, server } = await openPopover({ agentSlider: slider });
   await screen.findByRole("slider");

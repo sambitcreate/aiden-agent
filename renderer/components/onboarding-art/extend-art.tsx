@@ -54,7 +54,6 @@ export function AgentSliderArt() {
         style={{ left: 14, top: 16, width: 168 }}
       >
         <div className="oa-slider-head">
-          <ArtIcon icon={Zap} />
           <span className="oa-slider-name oa-anim-pop">Balanced</span>
           <Bar width="58%" tone="soft" className="oa-slider-detail" />
         </div>

@@ -70,6 +70,8 @@ interface ProviderModelVisibilityRule {
 - **Show all** removes the provider rule.
 - Newly discovered models follow the provider default. After **Hide all**, a catalog refresh therefore does not unexpectedly expose a new model.
 
+> **Update 2026-11-26 (owner decision):** new models now start shown. **Hide all** writes `{ defaultVisibility: "shown", exceptions: <every model the provider lists now> }`, read by main from the provider itself, so a model the provider adds later (a new Gemini release, say) appears in the pickers and can be hidden from Settings → Providers. The bounds rose to 2,048 hidden models per provider and 16,384 in total; a catalog too large to list falls back to `defaultVisibility: "hidden"`, which still hides later models. At startup, `revealFutureProviderModels` (`main/services/model-visibility-migration.ts`) turns each existing hidden-by-default rule into the list of models it hides that day, so nothing hidden today becomes visible and later models show.
+
 Keep the Google transcription-only policy separate from user visibility and evaluate it first. Migrate legacy arrays as follows:
 
 - ordinary ID arrays → `defaultVisibility: "shown"` with those IDs as hidden exceptions;

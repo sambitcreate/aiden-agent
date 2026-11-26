@@ -21,9 +21,12 @@ import type { Provider } from "./types";
 import {
   firstVisibleModelForProvider,
   hideAllProviderModels,
+  hidesFutureModels,
   isModelHidden,
+  MAX_HIDDEN_MODELS_PER_PROVIDER,
   normalizeHiddenModelsByProvider,
   remapHiddenModelProvider,
+  revealFutureProviderModels,
   withModelVisibility,
   withoutProviderVisibility,
 } from "../shared/model-visibility";
@@ -88,16 +91,69 @@ test("model visibility toggles one model without dropping other preferences", ()
   assert.equal(isModelHidden(hidden, "anthropic", "claude-sonnet"), true);
 });
 
-test("hide all covers future models while explicit shown exceptions remain reversible", () => {
-  let hidden = hideAllProviderModels(undefined, "google");
-  assert.equal(isModelHidden(hidden, "google", "future-model"), true);
+test("hide all hides the provider's models today; a model it adds later shows", () => {
+  let hidden = hideAllProviderModels(undefined, "google", ["gemini-pro", "gemini-flash"]);
+  assert.equal(isModelHidden(hidden, "google", "gemini-pro"), true);
+  assert.equal(isModelHidden(hidden, "google", "gemini-flash"), true);
+  assert.equal(isModelHidden(hidden, "google", "gemini-new"), false);
+  assert.equal(hidesFutureModels(hidden), false);
+  // Showing one and hiding it again stays reversible.
   hidden = withModelVisibility(hidden, "google", "gemini-pro", false);
   assert.equal(isModelHidden(hidden, "google", "gemini-pro"), false);
-  assert.equal(isModelHidden(hidden, "google", "future-model"), true);
+  assert.equal(isModelHidden(hidden, "google", "gemini-flash"), true);
   hidden = withModelVisibility(hidden, "google", "gemini-pro", true);
-  assert.deepEqual(hidden, {
-    google: { defaultVisibility: "hidden", exceptions: [] },
-  });
+  assert.equal(isModelHidden(hidden, "google", "gemini-pro"), true);
+  assert.equal(isModelHidden(hidden, "google", "gemini-new"), false);
+});
+
+test("hide all on a catalog too large to list hides later models too", () => {
+  const models = Array.from({ length: MAX_HIDDEN_MODELS_PER_PROVIDER + 1 }, (_, index) => `model-${index}`);
+  const hidden = hideAllProviderModels(undefined, "gateway", models);
+  assert.equal(isModelHidden(hidden, "gateway", "model-0"), true);
+  assert.equal(isModelHidden(hidden, "gateway", "model-later"), true);
+  assert.equal(hidesFutureModels(hidden), true);
+});
+
+test("an earlier hide all keeps today's choices and lets later models show", () => {
+  // The old rule: hide everything Google lists, apart from one shown model.
+  const earlier = {
+    google: { defaultVisibility: "hidden" as const, exceptions: ["gemini-pro"] },
+    anthropic: { defaultVisibility: "shown" as const, exceptions: ["claude-old"] },
+    removed: { defaultVisibility: "hidden" as const, exceptions: [] },
+    loading: { defaultVisibility: "hidden" as const, exceptions: [] },
+  };
+  assert.equal(hidesFutureModels(earlier), true);
+  const next = revealFutureProviderModels(
+    earlier,
+    new Map([
+      ["google", ["gemini-pro", "gemini-flash", "gemini-lite"]],
+      ["anthropic", ["claude-old", "claude-new"]],
+      ["loading", []],
+    ]),
+  );
+  for (const [providerId, modelId, hiddenNow] of [
+    ["google", "gemini-pro", false],
+    ["google", "gemini-flash", true],
+    ["google", "gemini-lite", true],
+    ["anthropic", "claude-old", true],
+    ["anthropic", "claude-new", false],
+  ] as const) {
+    assert.equal(isModelHidden(next, providerId, modelId), hiddenNow, `${providerId}/${modelId} as before`);
+  }
+  // A model Google adds after the change shows.
+  assert.equal(isModelHidden(next, "google", "gemini-next"), false);
+  // With no current list, a provider keeps its rule.
+  assert.equal(isModelHidden(next, "removed", "anything"), true);
+  // An empty list can't show what is hidden today, so nothing is revealed.
+  assert.equal(isModelHidden(next, "loading", "anything"), true);
+  // Nothing left to change: no write.
+  assert.equal(
+    revealFutureProviderModels(
+      { google: { defaultVisibility: "shown", exceptions: ["gemini-flash"] } },
+      new Map([["google", ["gemini-flash"]]]),
+    ),
+    undefined,
+  );
 });
 
 test("provider removal and identity migration keep visibility scoped correctly", () => {

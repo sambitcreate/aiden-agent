@@ -9,6 +9,7 @@ import { installRendererDiagnostics, reportRendererDiagnostic } from "../lib/dev
 import { subscribeCodexProviderState } from "../lib/queries";
 import { migrateGoogleProviderPreferences } from "../lib/google-provider-migration";
 import { appApi, providersApi, type AppInfo } from "../lib/ipc";
+import { startProviderCatalogRevalidation } from "../lib/provider-catalog-revalidation";
 import type { Provider } from "../lib/types";
 import { queryKeys } from "../lib/queries";
 import {
@@ -77,6 +78,13 @@ export async function startApp(startup: StartupReads): Promise<void> {
         }
       })
       .catch(() => undefined);
+    // Then check hourly while the window stays open, quietly, so models
+    // released while Aiden runs show up without a restart; main refreshes only
+    // lists older than 4 hours.
+    startProviderCatalogRevalidation({
+      refresh: () => providersApi.refreshIfStale(),
+      onProviders: (providers) => queryClient.setQueryData(queryKeys.providers, providers),
+    });
   } catch {
     // Provider Settings will surface an actionable main-process error after render.
   }

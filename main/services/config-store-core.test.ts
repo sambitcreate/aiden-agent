@@ -290,16 +290,17 @@ test("model visibility updates are atomic and provider-scoped", async (t) => {
     anthropic: { defaultVisibility: "shown", exceptions: ["claude-sonnet"] },
   });
 
-  await h.store.hideAllProviderModels("google");
+  await h.store.hideAllProviderModels("google", ["gemini-pro", "gemini-flash"]);
   assert.deepEqual((await h.store.getSettings()).hiddenModelsByProvider?.google, {
-    defaultVisibility: "hidden",
-    exceptions: [],
+    defaultVisibility: "shown",
+    exceptions: ["gemini-flash", "gemini-pro"],
   });
   await h.store.setModelVisibility("google", "gemini-pro", false);
   assert.deepEqual((await h.store.getSettings()).hiddenModelsByProvider?.google, {
-    defaultVisibility: "hidden",
-    exceptions: ["gemini-pro"],
+    defaultVisibility: "shown",
+    exceptions: ["gemini-flash"],
   });
+  assert.equal(await h.store.hidesFutureModels(), false);
 });
 
 test("Gemini voice setup atomically selects voice and gates every Google chat model", async (t) => {
