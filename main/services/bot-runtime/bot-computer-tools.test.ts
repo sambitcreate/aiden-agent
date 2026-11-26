@@ -465,6 +465,9 @@ function fakeComputer() {
       return connection;
     },
     touch() {},
+    async acquireLease() {
+      return () => {};
+    },
     async runGuestCommand() {
       return { exitCode: 0, stdout: "ok", stderr: "", truncated: false, timedOut: false };
     },

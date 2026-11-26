@@ -81,14 +81,34 @@ export function createBotComputerSessions(
   deps: BotComputerSessionsDependencies,
 ): BotComputerSessions & { screen(botId: string, signal?: AbortSignal, options?: { reason?: BotComputerStartReason }): Promise<BotComputerScreen> } {
   let factory: BotComputerScreenFactory | undefined;
+  /** Screens keyed by VM name so multiple Bots sharing a VM reuse one RFB connection. */
   const screens = new Map<string, CachedScreen>();
+  /** Tracks which Bots last opened each VM name, for clean teardown on VM stop. */
+  const botToVm = new Map<string, string>();
+  const vmBots = new Map<string, Set<string>>();
   const pointers = new Map<string, BotComputerPointer>();
   const activity = deps.activity ?? createBotComputerActivity();
 
-  const drop = (botId: string) => {
-    const cached = screens.get(botId);
+  const trackBotVm = (botId: string, vmName: string) => {
+    const previous = botToVm.get(botId);
+    if (previous && previous !== vmName) {
+      const oldSet = vmBots.get(previous);
+      oldSet?.delete(botId);
+      if (oldSet && oldSet.size === 0) vmBots.delete(previous);
+    }
+    botToVm.set(botId, vmName);
+    let set = vmBots.get(vmName);
+    if (!set) {
+      set = new Set();
+      vmBots.set(vmName, set);
+    }
+    set.add(botId);
+  };
+
+  const drop = (vmName: string) => {
+    const cached = screens.get(vmName);
     if (!cached) return;
-    screens.delete(botId);
+    screens.delete(vmName);
     void cached.screen.then((screen) => screen.close()).catch(() => undefined);
   };
 
@@ -98,7 +118,7 @@ export function createBotComputerSessions(
    * others (the Bot's `computer` call); it is cancelled only once every caller
    * that was waiting has gone.
    */
-  const join = (botId: string, cached: CachedScreen, signal?: AbortSignal): Promise<BotComputerScreen> => {
+  const join = (vmName: string, cached: CachedScreen, signal?: AbortSignal): Promise<BotComputerScreen> => {
     if (cached.settled) return cached.screen;
     if (!signal) {
       cached.waiters = Number.POSITIVE_INFINITY;
@@ -112,7 +132,7 @@ export function createBotComputerSessions(
         if (!cached.settled && cached.waiters <= 0) {
           cached.abandoned = true;
           cached.cancel.abort();
-          if (screens.get(botId) === cached) screens.delete(botId);
+          if (screens.get(vmName) === cached) screens.delete(vmName);
         }
         reject(screenOpenCancelled());
       };
@@ -137,15 +157,17 @@ export function createBotComputerSessions(
     connection: BotComputerConnection,
     signal?: AbortSignal,
   ): Promise<BotComputerScreen> => {
+    const vmName = connection.vmName;
+    trackBotVm(botId, vmName);
     const key = connectionKey(connection);
-    const cached = screens.get(botId);
-    if (cached?.key === key) return join(botId, cached, signal);
-    if (cached) drop(botId);
+    const cached = screens.get(vmName);
+    if (cached?.key === key) return join(vmName, cached, signal);
+    if (cached) drop(vmName);
     if (signal?.aborted) return Promise.reject(screenOpenCancelled());
     const cancel = new AbortController();
     const opening = open(connection, cancel.signal);
     const entry: CachedScreen = { key, screen: opening, cancel, waiters: 0, settled: false, abandoned: false };
-    screens.set(botId, entry);
+    screens.set(vmName, entry);
     opening.then(
       (screen) => {
         entry.settled = true;
@@ -154,10 +176,10 @@ export function createBotComputerSessions(
       },
       () => {
         entry.settled = true;
-        if (screens.get(botId) === entry) screens.delete(botId);
+        if (screens.get(vmName) === entry) screens.delete(vmName);
       },
     );
-    return join(botId, entry, signal);
+    return join(vmName, entry, signal);
   };
 
   const opener = async (botId: string) => {
@@ -169,18 +191,50 @@ export function createBotComputerSessions(
     return (connection: BotComputerConnection, signal?: AbortSignal) => openFor(open, botId, connection, signal);
   };
 
+  const checkVmScreen = async (vmName: string) => {
+    const bots = [...(vmBots.get(vmName) ?? [])];
+    if (bots.length === 0) {
+      drop(vmName);
+      return;
+    }
+    let anyRunning = false;
+    for (const id of bots) {
+      const computer = await deps.host.computer(id).catch(() => undefined);
+      if (!computer || computer.state !== "running") {
+        pointers.delete(id);
+      }
+      if (computer && computer.vmName === vmName && computer.state === "running") {
+        anyRunning = true;
+      }
+    }
+    if (!anyRunning) drop(vmName);
+  };
+
   deps.host.onChange((botId) => {
-    const ids = botId === undefined ? [...screens.keys()] : [botId];
-    for (const id of ids) {
+    if (botId === undefined) {
+      for (const vmName of [...screens.keys()]) void checkVmScreen(vmName);
+      for (const id of [...pointers.keys()]) {
+        if (!botToVm.has(id)) {
+          void deps.host
+            .computer(id)
+            .then((computer) => {
+              if (!computer || computer.state !== "running") pointers.delete(id);
+            })
+            .catch(() => pointers.delete(id));
+        }
+      }
+      return;
+    }
+    const vmName = botToVm.get(botId);
+    if (vmName) {
+      void checkVmScreen(vmName);
+    } else {
       void deps.host
-        .computer(id)
+        .computer(botId)
         .then((computer) => {
-          if (!computer || computer.state !== "running") {
-            drop(id);
-            pointers.delete(id);
-          }
+          if (!computer || computer.state !== "running") pointers.delete(botId);
         })
-        .catch(() => drop(id));
+        .catch(() => pointers.delete(botId));
     }
   });
 
@@ -189,7 +243,7 @@ export function createBotComputerSessions(
 
     setScreenFactory(next) {
       factory = next;
-      for (const botId of [...screens.keys()]) drop(botId);
+      for (const vmName of [...screens.keys()]) drop(vmName);
     },
 
     async screen(botId: string, signal?: AbortSignal, options: { reason?: BotComputerStartReason } = {}) {

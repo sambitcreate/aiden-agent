@@ -1,12 +1,18 @@
-import { readFile } from "node:fs/promises";
+import { copyFile, readFile } from "node:fs/promises";
 import path from "node:path";
 import {
   BOT_COMPUTER_IDLE_STOP_CHOICES,
+  BOT_COMPUTER_SHARED_DEFAULT_NAME,
+  BOT_COMPUTER_SHARED_ID,
   DEFAULT_BOT_COMPUTERS_SETTINGS,
+  parseBotComputerName,
+  type BotComputerKind,
   type BotComputersSettings,
 } from "../../../renderer/shared/bot-computers.js";
 import { writeJsonAtomic } from "../durable-fs.js";
-import { isAidenVmName } from "./vm-names.js";
+import { BOT_COMPUTER_BASE_VM, BOT_COMPUTER_SHARED_VM, BOT_COMPUTER_STAGING_BASE_VM, isAidenVmName } from "./vm-names.js";
+
+const hasOwn = (record: object, key: string): boolean => Object.prototype.hasOwnProperty.call(record, key);
 
 /** The guest driver a base passed its readiness probe with (and so every computer made from it). */
 export interface BotComputerGuestDriverRecord {
@@ -16,8 +22,11 @@ export interface BotComputerGuestDriverRecord {
   uid: number;
 }
 
-/** One Bot's computer: its VM, the base it was cloned from and when it was last used. */
-export interface BotComputerRecord {
+/** One first-class Linux computer (shared or dedicated). */
+export interface BotComputerVmRecord {
+  id: string;
+  name: string;
+  kind: BotComputerKind;
   vmName: string;
   baseBuild: string;
   createdAt: number;
@@ -25,13 +34,24 @@ export interface BotComputerRecord {
   /** Copied from the base at clone time: this computer's guest driver passed its probe. */
   guestDriver?: BotComputerGuestDriverRecord;
   /**
-   * True when this Bot's legacy macOS computer was removed during the one-time
+   * True when this computer's legacy macOS VM was removed during the one-time
    * upgrade to Linux: keeps the Bot's "has a computer" setting so a fresh
    * Linux VM is cloned once the Linux base is set up.
    */
   migratedFromMacos?: boolean;
-  /** True while the one-time Linux migration note still needs to be written to this Bot's memory. */
-  pendingMigrationNote?: boolean;
+  /** Original owner Bot id for legacy `aiden-bot-*` VMs so host folder mount never flips. */
+  legacyOwnerBotId?: string;
+}
+
+/** One Bot's computer projection (kept mirrored for backward compatibility). */
+export interface BotComputerRecord {
+  vmName: string;
+  baseBuild: string;
+  createdAt: number;
+  lastUsedAt?: number;
+  /** Copied from the base at clone time: this computer's guest driver passed its probe. */
+  guestDriver?: BotComputerGuestDriverRecord;
+  migratedFromMacos?: boolean;
 }
 
 export interface BotComputersSetupRecord {
@@ -55,18 +75,88 @@ export interface BotComputersMacosMigrationRecord {
   noticeDismissed?: boolean;
   /** True when clearing the legacy macOS guest password secret failed and must be retried or rotated. */
   pendingSecretCleanup?: boolean;
+  /** Bot ids whose one-time Linux migration note still needs to be written to Bot memory. */
+  pendingMigrationNotes?: string[];
 }
 
 export interface BotComputersState {
   version: 1;
   settings: BotComputersSettings;
   setup: BotComputersSetupRecord;
+  /** First-class Linux computers keyed by `computerId` (`"shared"` or a dedicated id). */
+  vms: Record<string, BotComputerVmRecord>;
+  /** Bot -> assigned `computerId`. */
+  assignments: Record<string, string>;
+  /** Legacy/compat per-Bot view mirrored from `assignments` + `vms`. */
   computers: Record<string, BotComputerRecord>;
   macosMigration?: BotComputersMacosMigrationRecord;
 }
 
 export function emptyBotComputersState(): BotComputersState {
-  return { version: 1, settings: { ...DEFAULT_BOT_COMPUTERS_SETTINGS }, setup: {}, computers: {} };
+  return {
+    version: 1,
+    settings: { ...DEFAULT_BOT_COMPUTERS_SETTINGS },
+    setup: {},
+    vms: {},
+    assignments: {},
+    computers: {},
+  };
+}
+
+const COMPUTER_ID_PATTERN = /^[a-z0-9][a-z0-9_-]{0,63}$/u;
+const RESERVED_KEYS = new Set([
+  "__proto__",
+  "constructor",
+  "prototype",
+  "tostring",
+  "tolocalestring",
+  "valueof",
+  "hasownproperty",
+  "isprototypeof",
+  "propertyisenumerable",
+]);
+
+function isSafeRecordKey(key: string): boolean {
+  return key.length > 0 && !RESERVED_KEYS.has(key.toLowerCase());
+}
+
+/** Whether `vmName` is valid for a Bot computer with `id` (never the base/staging VM). */
+function isValidBotVmNameForId(id: string, vmName: string): boolean {
+  if (!isAidenVmName(vmName) || vmName === BOT_COMPUTER_BASE_VM || vmName === BOT_COMPUTER_STAGING_BASE_VM) {
+    return false;
+  }
+  if (id === BOT_COMPUTER_SHARED_ID) return vmName === BOT_COMPUTER_SHARED_VM;
+  if (vmName === BOT_COMPUTER_SHARED_VM) return false;
+  return true;
+}
+
+function vmRecordToComputerRecord(vm: BotComputerVmRecord): BotComputerRecord {
+  return {
+    vmName: vm.vmName,
+    baseBuild: vm.baseBuild,
+    createdAt: vm.createdAt,
+    ...(vm.lastUsedAt !== undefined ? { lastUsedAt: vm.lastUsedAt } : {}),
+    ...(vm.guestDriver ? { guestDriver: { ...vm.guestDriver } } : {}),
+    ...(vm.migratedFromMacos === true ? { migratedFromMacos: true } : {}),
+  };
+}
+
+/** Rebuild the mirrored `computers` map from `assignments` and `vms` (dropping dangling assignments). */
+export function syncBotComputersProjection(state: BotComputersState): void {
+  const nextComputers: Record<string, BotComputerRecord> = {};
+  for (const [botId, computerId] of Object.entries(state.assignments)) {
+    if (!isSafeRecordKey(botId) || !isSafeRecordKey(computerId) || !hasOwn(state.vms, computerId)) {
+      delete state.assignments[botId];
+      continue;
+    }
+    const vm = state.vms[computerId];
+    if (!vm) {
+      delete state.assignments[botId];
+      continue;
+    }
+    nextComputers[botId] = vmRecordToComputerRecord(vm);
+  }
+  state.computers = nextComputers;
 }
 
 function text(value: unknown, limit = 64): string | undefined {
@@ -93,11 +183,22 @@ function parseMigration(value: unknown): BotComputersMacosMigrationRecord | unde
   if (freedBytes === undefined) return undefined;
   const completedAt = input.completedAt === undefined ? undefined : time(input.completedAt);
   if (input.completedAt !== undefined && completedAt === undefined) return undefined;
+  const pendingMigrationNotes = Array.isArray(input.pendingMigrationNotes)
+    ? [
+        ...new Set(
+          input.pendingMigrationNotes.filter(
+            (entry): entry is string =>
+              typeof entry === "string" && entry.length > 0 && entry.length <= 200 && isSafeRecordKey(entry),
+          ),
+        ),
+      ]
+    : undefined;
   return {
     ...(completedAt !== undefined ? { completedAt } : {}),
     freedBytes,
     ...(input.noticeDismissed === true ? { noticeDismissed: true } : {}),
     ...(input.pendingSecretCleanup === true ? { pendingSecretCleanup: true } : {}),
+    ...(pendingMigrationNotes && pendingMigrationNotes.length > 0 ? { pendingMigrationNotes } : {}),
   };
 }
 
@@ -119,6 +220,9 @@ export function parseBotComputersState(value: unknown): BotComputersState {
     if ((BOT_COMPUTER_IDLE_STOP_CHOICES as readonly unknown[]).includes(settings.idleStopMinutes)) {
       state.settings.idleStopMinutes = settings.idleStopMinutes as number;
     }
+    if (settings.defaultComputerMode === "shared" || settings.defaultComputerMode === "dedicated") {
+      state.settings.defaultComputerMode = settings.defaultComputerMode;
+    }
   }
   const setup = input.setup as Record<string, unknown> | undefined;
   if (setup && typeof setup === "object") {
@@ -132,28 +236,103 @@ export function parseBotComputersState(value: unknown): BotComputersState {
     const driver = guestDriver(setup.guestDriver);
     if (driver && baseBuild) state.setup.guestDriver = driver;
   }
-  const computers = input.computers as Record<string, unknown> | undefined;
-  if (computers && typeof computers === "object" && !Array.isArray(computers)) {
-    for (const [botId, raw] of Object.entries(computers)) {
-      if (!raw || typeof raw !== "object" || botId.length === 0 || botId.length > 200) continue;
+  const rawVms = input.vms as Record<string, unknown> | undefined;
+  const seenVmNames = new Set<string>();
+  if (rawVms && typeof rawVms === "object" && !Array.isArray(rawVms)) {
+    for (const [id, raw] of Object.entries(rawVms)) {
+      if (!raw || typeof raw !== "object" || !COMPUTER_ID_PATTERN.test(id) || !isSafeRecordKey(id)) continue;
       const entry = raw as Record<string, unknown>;
       const vmName = text(entry.vmName);
+      const kind = entry.kind === "shared" || entry.kind === "dedicated" ? entry.kind : undefined;
+      let name = id === BOT_COMPUTER_SHARED_ID ? BOT_COMPUTER_SHARED_DEFAULT_NAME : "Dedicated computer";
+      if (entry.name !== undefined) {
+        try {
+          name = parseBotComputerName(entry.name);
+        } catch {
+          // Fall back to safe default name when disk value contains invalid/control/Cf chars.
+        }
+      }
       const baseBuild = typeof entry.baseBuild === "string" && entry.baseBuild.length <= 32 ? entry.baseBuild : undefined;
       const createdAt = time(entry.createdAt);
-      if (!vmName || !isAidenVmName(vmName) || baseBuild === undefined || createdAt === undefined) continue;
+      if (
+        !vmName ||
+        !isValidBotVmNameForId(id, vmName) ||
+        seenVmNames.has(vmName) ||
+        !kind ||
+        baseBuild === undefined ||
+        createdAt === undefined
+      ) {
+        continue;
+      }
       const lastUsedAt = time(entry.lastUsedAt);
       const driver = guestDriver(entry.guestDriver);
-      state.computers[botId] = {
+      const legacyOwnerBotId = text(entry.legacyOwnerBotId, 200);
+      seenVmNames.add(vmName);
+      state.vms[id] = {
+        id,
+        name,
+        kind: id === BOT_COMPUTER_SHARED_ID ? "shared" : kind,
         vmName,
         baseBuild,
         createdAt,
         ...(lastUsedAt !== undefined ? { lastUsedAt } : {}),
         ...(driver ? { guestDriver: driver } : {}),
         ...(entry.migratedFromMacos === true ? { migratedFromMacos: true } : {}),
-        ...(entry.pendingMigrationNote === true ? { pendingMigrationNote: true } : {}),
+        ...(legacyOwnerBotId && isSafeRecordKey(legacyOwnerBotId) ? { legacyOwnerBotId } : {}),
       };
     }
   }
+  const rawAssignments = input.assignments as Record<string, unknown> | undefined;
+  if (rawAssignments && typeof rawAssignments === "object" && !Array.isArray(rawAssignments)) {
+    for (const [botId, computerId] of Object.entries(rawAssignments)) {
+      if (botId.length === 0 || botId.length > 200 || !isSafeRecordKey(botId) || typeof computerId !== "string") continue;
+      if (isSafeRecordKey(computerId) && hasOwn(state.vms, computerId)) state.assignments[botId] = computerId;
+    }
+  }
+  // Backward-compatible migration of legacy `computers[botId]` entries into dedicated VMs + assignments.
+  const computers = input.computers as Record<string, unknown> | undefined;
+  if (computers && typeof computers === "object" && !Array.isArray(computers)) {
+    let legacyCount = 0;
+    for (const [botId, raw] of Object.entries(computers)) {
+      if (!raw || typeof raw !== "object" || botId.length === 0 || botId.length > 200 || !isSafeRecordKey(botId)) continue;
+      if (hasOwn(state.assignments, botId)) continue;
+      const entry = raw as Record<string, unknown>;
+      const vmName = text(entry.vmName);
+      const baseBuild = typeof entry.baseBuild === "string" && entry.baseBuild.length <= 32 ? entry.baseBuild : undefined;
+      const createdAt = time(entry.createdAt);
+      if (!vmName || baseBuild === undefined || createdAt === undefined) continue;
+      const id = vmName === BOT_COMPUTER_SHARED_VM ? BOT_COMPUTER_SHARED_ID : vmName;
+      if (!isValidBotVmNameForId(id, vmName)) continue;
+      const existingByVmName = Object.values(state.vms).find((vm) => vm.vmName === vmName);
+      if (existingByVmName) {
+        state.assignments[botId] = existingByVmName.id;
+        continue;
+      }
+      const lastUsedAt = time(entry.lastUsedAt);
+      const driver = guestDriver(entry.guestDriver);
+      const isShared = id === BOT_COMPUTER_SHARED_ID;
+      if (!isShared) legacyCount += 1;
+      seenVmNames.add(vmName);
+      state.vms[id] = {
+        id,
+        name: isShared
+          ? BOT_COMPUTER_SHARED_DEFAULT_NAME
+          : legacyCount === 1
+            ? "Dedicated computer"
+            : `Dedicated computer ${legacyCount}`,
+        kind: isShared ? "shared" : "dedicated",
+        vmName,
+        baseBuild,
+        createdAt,
+        ...(lastUsedAt !== undefined ? { lastUsedAt } : {}),
+        ...(driver ? { guestDriver: driver } : {}),
+        ...(entry.migratedFromMacos === true ? { migratedFromMacos: true } : {}),
+        ...(!isShared ? { legacyOwnerBotId: botId } : {}),
+      };
+      state.assignments[botId] = id;
+    }
+  }
+  syncBotComputersProjection(state);
   const migration = parseMigration(input.macosMigration);
   if (migration) state.macosMigration = migration;
   return state;
@@ -175,11 +354,17 @@ export function createBotComputersStore(file: string): BotComputersStore {
     queue = next.catch(() => undefined);
     return next;
   };
-  async function load(): Promise<BotComputersState> {
+  async function load(backupCorrupt = false): Promise<BotComputersState> {
     try {
       return parseBotComputersState(JSON.parse(await readFile(file, "utf8")) as unknown);
     } catch (error) {
-      if ((error as NodeJS.ErrnoException).code === "ENOENT" || error instanceof SyntaxError) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+        return emptyBotComputersState();
+      }
+      if (error instanceof SyntaxError) {
+        if (backupCorrupt) {
+          await copyFile(file, `${file}.corrupt-${Date.now()}`).catch(() => undefined);
+        }
         return emptyBotComputersState();
       }
       throw error;
@@ -189,11 +374,12 @@ export function createBotComputersStore(file: string): BotComputersStore {
     await writeJsonAtomic(file, state, { mode: 0o600, mkdirMode: 0o700, space: 2, trailingNewline: true });
   }
   return {
-    read: () => serialize(load),
+    read: () => serialize(() => load(false)),
     update: (change) =>
       serialize(async () => {
-        const state = await load();
+        const state = await load(true);
         change(state);
+        syncBotComputersProjection(state);
         await save(state);
         return parseBotComputersState(state);
       }),

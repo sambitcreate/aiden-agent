@@ -112,6 +112,14 @@ Every PR that changes what you see (F2, F3, F4: Settings, the Computer tab, the 
 - Extend the existing packaged Computer Use acceptance with checks that look at the result, not the tool's reply: TextEdit saves a marker file with the right text; with two windows, only the target window changes and your mouse doesn't move; Stop leaves no helper running; a denied permission changes nothing.
 - Each check reports `pass`, `failed`, `environment problem` or `unsupported`, with the app version, driver version and macOS version. A missing row never counts as a pass.
 
+### 9. F5: shared & selectable Linux Bot computers
+
+- First-class Linux computers (`vms` + `assignments`) with one canonical **Shared computer** (`aiden-vm-shared`, lazily cloned from `aiden-base`) plus on-demand dedicated VMs (`aiden-vm-<id>`), backward-compatible with legacy per-Bot `state.json` records.
+- **Default mode**: `defaultComputerMode: "shared" | "dedicated"` (default `"shared"`) in Settings → Computers & VMs → Bot computers, alongside a **Computers** management section (**New computer**, **Rename**, **Reset**, **Delete**).
+- **Concurrency**: FIFO per-VM lease queue for `computer` and `computer_shell` with clean `AbortSignal` dequeue, live `activeBotId` / `queuedBotIds` / `queuePosition` status in the Computer tab and Bot Advanced tab, and VM-scoped human Take over / sign-in handoff blocking all Bots sharing that VM. `maxRunning` and idle-stop count distinct running VMs.
+- **Filesystem**: host `virtiofs` folder per VM (`bot-computers/computers/<computerId>/Computer/` for shared/pool VMs, `<botHome>/Computer/` for legacy per-Bot VMs) mounted directly at `/mnt/aiden-shared/Computer` (`~/Shared`) with per-Bot subfolders inside it (`bots/<botDir>/`, linked at `~/Bots/<botDir>` for `lume` and `~/bots/<botDir>` for `aiden-bot`), and `computer_shell` defaulting its working directory to the calling Bot's own `~/bots/<botDir>` folder.
+- **Selection & Bot requests**: Bot Advanced tab **Computer** picker (`Off`, `Shared computer`, any existing VM, `+ New computer`), and `update_bot` `computer` requests always held for approval (**Change computer?**) while `computerMode` stays person-only.
+
 ## Removing the macOS computers
 
 The release with F4 removes every macOS Bot computer the first time it starts. Anything a Bot saved inside its Mac computer (files, browser sign-ins) is lost, so the release notes say so in the first line.
@@ -140,6 +148,10 @@ Recommended option chosen on all six:
 | 4 | Sign-in privacy | The Bot's shell runs as a separate Linux user, and all of its programs end while you sign in |
 | 5 | Running at once | 2 by default, up to 4 when the Mac has the memory |
 | 6 | Where E runs | On your real Mac, through the existing acceptance command |
+| 7 | F5 concurrency | FIFO queue when two Bots share a Linux VM, with live active/queued status and `AbortSignal` cancel |
+| 8 | F5 scope | Linux VMs only (Mac Computer Use stays separate) |
+| 9 | F5 filesystem | Both a shared folder (`~/Shared`) and per-Bot working folders (`bots/<botDir>/`) over `virtiofs`; `computer_shell` defaults cwd to the Bot's own folder |
+| 10 | F5 default | Shared computer by default (`defaultComputerMode: "shared"`), with per-Bot selection of existing VMs or **+ New computer** |
 
 ## Risks
 

@@ -233,6 +233,7 @@ export function HandoffCard({
   name,
   avatar,
   handoff,
+  sharedComputer,
   busy = false,
   finishOn,
   taken,
@@ -246,6 +247,8 @@ export function HandoffCard({
   name: string;
   avatar: BotAvatarValue;
   handoff: ShownHandoff;
+  /** Set when the Bot uses a shared Linux computer (or a VM shared with other Bots). */
+  sharedComputer?: { name: string; otherBotNames?: readonly string[] };
   /** An answer or Open is on its way: the buttons wait for it. */
   busy?: boolean;
   /** The other Mac the Bot lives on, by name: a sign-in is finished there. */
@@ -261,6 +264,7 @@ export function HandoffCard({
   const signIn = handoff.kind === "sign_in";
   const elsewhere = signIn && finishOn !== undefined;
   const host = handoff.open && !signIn ? linkHost(handoff.open.url) : undefined;
+  const sharedOtherBots = sharedComputer?.otherBotNames?.filter((botName) => botName.trim().length > 0) ?? [];
   return (
     <BotNoticeCard
       label={`${name} needs you`}
@@ -294,7 +298,9 @@ export function HandoffCard({
       {onBotScreen(handoff) && finishOn === undefined && handoff.target !== undefined ? (
         <p className="mt-1 text-tertiary">
           {handoff.target === "computer"
-            ? `Opens on ${name}’s own computer, with you in control. ${name} waits until you answer.`
+            ? sharedComputer
+              ? `Opens on ${sharedComputer.name}, with you in control. ${name} waits until you answer.`
+              : `Opens on ${name}’s own computer, with you in control. ${name} waits until you answer.`
             : `Opens in ${name}’s own browser${host ? ` at ${host}` : ""}, not in yours.`}
         </p>
       ) : null}
@@ -307,8 +313,19 @@ export function HandoffCard({
       {signIn && !elsewhere ? (
         <p className="mt-1 text-tertiary">
           {onComputer(handoff)
-            ? `Opens on ${name}’s own computer, with you in control. ${name} waits until you answer, and never sees your password.`
+            ? sharedComputer
+              ? `Opens on ${sharedComputer.name}, with you in control. ${name} waits until you answer, and never sees your password.`
+              : `Opens on ${name}’s own computer, with you in control. ${name} waits until you answer, and never sees your password.`
             : `Opens in ${name}’s own browser. ${name} never sees your password.`}
+        </p>
+      ) : null}
+      {handoff.target === "computer" && finishOn === undefined && sharedComputer ? (
+        <p className="mt-1 text-secondary">
+          {sharedOtherBots.length === 1
+            ? `Shared computer: ${sharedOtherBots[0]} also uses ${sharedComputer.name} and shares its Linux desktop and Chromium sign-ins.`
+            : sharedOtherBots.length > 1
+              ? `Shared computer: ${sharedOtherBots.join(", ")} also use ${sharedComputer.name} and share its Linux desktop and Chromium sign-ins.`
+              : `Shared computer: other Bots assigned to ${sharedComputer.name} share its Linux desktop and Chromium sign-ins.`}
         </p>
       ) : null}
     </BotNoticeCard>

@@ -17,6 +17,11 @@
 import {
   BOT_COMPUTER_CHANNELS,
   BOT_COMPUTERS_CHANGED_CHANNEL,
+  parseBotComputerAssignTarget,
+  parseBotComputerDeleteOptions,
+  parseBotComputerId,
+  parseBotComputerName,
+  parseBotComputerResetOptions,
   parseBotComputersSettingsPatch,
   parseBotComputerViewerRequest,
   type BotComputerPointer,
@@ -24,6 +29,7 @@ import {
   type BotComputersStatus,
   type BotComputerStatus,
   type BotComputerViewerGrant,
+  type BotComputerVmStatus,
 } from "../../renderer/shared/bot-computers.js";
 import type { BotComputerControl, BotComputerHost, BotComputerSessions } from "../services/bot-computers/types.js";
 import type { BotComputerViewer } from "../services/bot-computers/viewer-main.js";
@@ -43,6 +49,11 @@ export interface BotComputerHandlerDependencies {
     | "reset"
     | "deleteForBot"
     | "stop"
+    | "assignComputer"
+    | "createComputer"
+    | "renameComputer"
+    | "deleteComputer"
+    | "resetComputer"
     | "onChange"
     | "computer"
     | "dismissMigrationNotice"
@@ -121,8 +132,8 @@ export function registerBotComputerHandlers(deps: BotComputerHandlerDependencies
     deps.host.give(await knownBot(rawBotId)),
   );
 
-  deps.handle(BOT_COMPUTER_CHANNELS.reset, async (_event, rawBotId): Promise<BotComputerStatus> =>
-    deps.host.reset(await knownBot(rawBotId)),
+  deps.handle(BOT_COMPUTER_CHANNELS.reset, async (_event, rawBotId, rawOptions): Promise<BotComputerStatus> =>
+    deps.host.reset(await knownBot(rawBotId), parseBotComputerResetOptions(rawOptions)),
   );
 
   // Removing a computer is allowed for a Bot that is already gone: it is the cleanup.
@@ -133,6 +144,37 @@ export function registerBotComputerHandlers(deps: BotComputerHandlerDependencies
   deps.handle(BOT_COMPUTER_CHANNELS.stop, async (_event, rawBotId): Promise<void> => {
     await deps.host.stop(parseBotId(rawBotId), { reason: "person" });
   });
+
+  deps.handle(
+    BOT_COMPUTER_CHANNELS.assignComputer,
+    async (_event, rawBotId, rawTarget): Promise<BotComputerStatus> =>
+      deps.host.assignComputer(await knownBot(rawBotId), parseBotComputerAssignTarget(rawTarget)),
+  );
+
+  deps.handle(
+    BOT_COMPUTER_CHANNELS.createComputer,
+    async (_event, rawName): Promise<BotComputerVmStatus> =>
+      deps.host.createComputer(rawName === undefined ? undefined : parseBotComputerName(rawName)),
+  );
+
+  deps.handle(
+    BOT_COMPUTER_CHANNELS.renameComputer,
+    async (_event, rawComputerId, rawName): Promise<BotComputerVmStatus> =>
+      deps.host.renameComputer(parseBotComputerId(rawComputerId), parseBotComputerName(rawName)),
+  );
+
+  deps.handle(
+    BOT_COMPUTER_CHANNELS.deleteComputer,
+    async (_event, rawComputerId, rawOptions): Promise<void> => {
+      await deps.host.deleteComputer(parseBotComputerId(rawComputerId), parseBotComputerDeleteOptions(rawOptions));
+    },
+  );
+
+  deps.handle(
+    BOT_COMPUTER_CHANNELS.resetComputer,
+    async (_event, rawComputerId, rawOptions): Promise<BotComputerVmStatus> =>
+      deps.host.resetComputer(parseBotComputerId(rawComputerId), parseBotComputerResetOptions(rawOptions)),
+  );
 
   async function computerOf(botId: string): Promise<BotComputerStatus> {
     const computer = await deps.host.computer(botId);

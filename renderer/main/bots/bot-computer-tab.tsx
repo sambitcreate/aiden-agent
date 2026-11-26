@@ -18,10 +18,11 @@ import { AidenActivityMark } from "../../components/aiden-activity-mark";
 import { BotAvatar } from "../../components/bot-avatar";
 import { DeviceFloatingPlaceholder } from "../../components/device-floating-placeholder";
 import { useDocumentVisible } from "../../components/device-mini-player";
-import { Button, Text, toast } from "../../components/ui";
+import { Badge, Button, Text, toast } from "../../components/ui";
 import { DEVICE_SCREEN_CONTAINER_STYLE, fittedScreenStyle } from "../../lib/device-display-rotation";
 import { botComputersApi } from "../../lib/ipc";
 import { userFacingErrorMessage } from "../../lib/ipc-error";
+import { useBots } from "../../lib/queries";
 import { useBotComputersCache, useBotComputersStatus } from "../../lib/use-bot-computers";
 import { useBotLive } from "../../lib/use-bot-live";
 import { useDeviceScreenWheel } from "../../lib/use-device-screen-wheel";
@@ -193,9 +194,14 @@ function ComputerScreen({ bot, computer, active, variant, onScreen }: ComputerSc
     requestGrant,
   });
   const botDrives = computer.controller === "bot";
+  const otherHolding = Boolean(computer.activeBotId && computer.activeBotId !== bot.id);
+  const botsQuery = useBots(false, otherHolding);
+  const activeUserName = otherHolding
+    ? (botsQuery.data?.find((entry) => entry.id === computer.activeBotId)?.name ?? "Another Bot")
+    : bot.name;
   const pointer = useBotPointer(bot.id, active && botDrives);
   const screenRef = React.useRef<HTMLDivElement | null>(null);
-  const owner = `${bot.name}'s computer`;
+  const owner = computer.shared ? computer.computerName : `${bot.name}'s computer`;
   const screenSize = stream.screen && stream.screen.width > 0 && stream.screen.height > 0 ? stream.screen : null;
   const aspect = (screenSize ?? BOT_COMPUTER_DEFAULT_SCREEN).width / (screenSize ?? BOT_COMPUTER_DEFAULT_SCREEN).height;
   const onScreenRef = React.useRef(onScreen);
@@ -229,7 +235,7 @@ function ComputerScreen({ bot, computer, active, variant, onScreen }: ComputerSc
         aria-roledescription="computer screen"
         aria-label={
           botDrives
-            ? `${owner} screen. ${bot.name} is using it; click or type here to take over.`
+            ? `${owner} screen. ${activeUserName} is using it; click or type here to take over.`
             : `${owner} screen. Click or drag to use the mouse; type to send keys while focused.`
         }
         onPointerDown={stream.pointer("begin")}
@@ -255,7 +261,7 @@ function ComputerScreen({ bot, computer, active, variant, onScreen }: ComputerSc
         ) : null}
         {botDrives && overlays ? (
           <span className="device-viewer-notice" data-bot-computer-read-only>
-            {bot.name} is using it · Click or type to take over
+            {activeUserName} is using it · Click or type to take over
           </span>
         ) : null}
         {stream.status === "error" ? (
@@ -270,7 +276,7 @@ function ComputerScreen({ bot, computer, active, variant, onScreen }: ComputerSc
         ) : null}
       </div>
       <span className="sr-only" role="status" aria-live="polite">
-        {streaming ? (botDrives ? `${bot.name} is using ${owner}` : `You're using ${owner}`) : stream.status === "error" ? "Disconnected" : "Connecting…"}
+        {streaming ? (botDrives ? `${activeUserName} is using ${owner}` : `You're using ${owner}`) : stream.status === "error" ? "Disconnected" : "Connecting…"}
       </span>
     </div>
   );
@@ -291,6 +297,9 @@ function ComputerState({ bot, computer, start }: { bot: ComputerBot; computer: B
   }
   return (
     <section aria-labelledby={`bot-computer-${bot.id}-state`} className="browser-empty h-full min-h-0">
+      <Badge color={computer.shared ? "blue" : "gray"} data-bot-computer-name>
+        {computer.computerName}
+      </Badge>
       <Text id={`bot-computer-${bot.id}-state`} variant="strong">
         {computer.state === "stale" ? `${bot.name}'s computer didn't finish being made` : `${bot.name}'s computer is off`}
       </Text>
@@ -370,21 +379,55 @@ export function BotComputerControlButton({
 /** The status line: what the Bot is doing, or that the person has the computer. */
 function ComputerStatusLine({ bot, computer }: { bot: ComputerBot; computer: BotComputerStatus }) {
   if (computer.state !== "running") return null;
+  const labelBadge = (
+    <Badge color={computer.shared ? "blue" : "gray"} className="shrink-0" data-bot-computer-name>
+      {computer.computerName}
+    </Badge>
+  );
   if (computer.controller === "person") {
     return (
-      <Text variant="small" color="secondary" className="min-w-0 flex-1 truncate">
-        You're using {bot.name}'s computer
-      </Text>
+      <span className="flex min-w-0 flex-1 items-center gap-2">
+        {labelBadge}
+        <Text variant="small" color="secondary" className="min-w-0 truncate">
+          {computer.shared ? `You're using ${computer.computerName}` : `You're using ${bot.name}'s computer`}
+        </Text>
+      </span>
     );
   }
   const text = computer.activity ?? `${bot.name}'s computer is running`;
   return (
     <span className="flex min-w-0 flex-1 items-center gap-2" data-bot-computer-activity>
+      {labelBadge}
       <AidenActivityMark mark="quad-shuffle" size={16} active={Boolean(computer.activity)} className="shrink-0 text-primary" />
       <Text variant="small" color="secondary" className="min-w-0 truncate">
         {text}
       </Text>
     </span>
+  );
+}
+
+function SharedComputerQueueBanner({ bot, computer }: { bot: ComputerBot; computer: BotComputerStatus }) {
+  const otherHolding = Boolean(computer.activeBotId && computer.activeBotId !== bot.id);
+  const queued = computer.queuePosition !== undefined;
+  const botsQuery = useBots(false, otherHolding);
+  if (!otherHolding && !queued) return null;
+  const holderName = computer.activeBotId
+    ? (botsQuery.data?.find((entry) => entry.id === computer.activeBotId)?.name ?? "another Bot")
+    : undefined;
+  const message = queued
+    ? holderName
+      ? `Waiting for ${holderName} on ${computer.computerName} (queue #${computer.queuePosition})`
+      : `Queued on ${computer.computerName} (#${computer.queuePosition})`
+    : `${holderName ?? "Another Bot"} is using ${computer.computerName}`;
+  return (
+    <div
+      role="status"
+      aria-live="polite"
+      data-bot-computer-queue
+      className="mx-3 mb-2 rounded-card bg-status-accent-surface px-3 py-2 text-small text-status-accent"
+    >
+      {message}
+    </div>
   );
 }
 
@@ -412,7 +455,7 @@ export function BotComputerTab({
   start: BotComputerStart;
 }) {
   const visible = useDocumentVisible();
-  if (floating) return <DeviceFloatingPlaceholder name={`${bot.name}'s computer`} onDock={onDock} />;
+  if (floating) return <DeviceFloatingPlaceholder name={computer.shared ? computer.computerName : `${bot.name}'s computer`} onDock={onDock} />;
   return (
     <div className="flex h-full min-h-0 flex-col" data-bot-computer-tab={bot.id}>
       {computer.state === "running" ? (
@@ -424,6 +467,7 @@ export function BotComputerTab({
           </Button>
         </div>
       ) : null}
+      <SharedComputerQueueBanner bot={bot} computer={computer} />
       <BotComputerView bot={bot} computer={computer} active={active && visible} variant="tab" start={start} />
     </div>
   );

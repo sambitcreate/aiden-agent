@@ -48,9 +48,9 @@ export async function updateBotReadOutside(call: Pick<BotToolCall, "entries">): 
 const DESCRIPTION = [
   "Read or change your own settings. Call with no fields to read them, with the models you can switch to.",
   "Change a setting only when the person asked for it in this chat, or when you have no job yet and the person just told you what to do (then write yourself a short description and first instructions).",
-  "You can change: name, description, look (color, shape), instructions, dailyCheckIns, notifications (perDay, quietHours) and model (only one of the connected models this tool lists).",
-  "You can't change access, tools, connections, other Bots, Bot messaging, the computer, approvals, hooks or spending: the person changes those in your settings.",
-  "The change waits on a card for the person to apply when they didn't start this run, when this chat has read content from outside it (a page, a search, an app's data), or when it turns daily check-ins on or raises notifications a day.",
+  'You can change: name, description, look (color, shape), instructions, dailyCheckIns, notifications (perDay, quietHours), model (only one of the connected models this tool lists), and computer ("shared", "new", or { kind: "shared" | "existing" | "new", ... } for a Linux Bot computer).',
+  "You can't change access, tools, connections, other Bots, Bot messaging, Mac Computer Use (computerMode), approvals, hooks or spending: the person changes those in your settings.",
+  "The change waits on a card for the person to apply when they didn't start this run, when this chat has read content from outside it (a page, a search, an app's data), when it requests or switches a Linux computer, or when it turns daily check-ins on or raises notifications a day.",
 ].join(" ");
 
 export function updateBotCandidate(
@@ -86,6 +86,15 @@ export function updateBotCandidate(
           }, { additionalProperties: false })),
         }, { additionalProperties: false })),
         model: Type.Optional(Type.Object({ providerId: Type.String(), modelId: Type.String() }, { additionalProperties: false })),
+        computer: Type.Optional(
+          Type.Union([
+            Type.Literal("shared"),
+            Type.Literal("new"),
+            Type.Object({ kind: Type.Literal("shared") }, { additionalProperties: false }),
+            Type.Object({ kind: Type.Literal("existing"), computerId: Type.String() }, { additionalProperties: false }),
+            Type.Object({ kind: Type.Literal("new"), name: Type.Optional(Type.String()) }, { additionalProperties: false }),
+          ]),
+        ),
       },
       { additionalProperties: false },
     ),

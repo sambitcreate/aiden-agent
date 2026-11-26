@@ -7,18 +7,24 @@
 
 import type { CuaDriverHostFactory } from "../computer-use/controller.js";
 import type {
+  BotComputerAssignTarget,
   BotComputerSetupState,
   BotComputersSettings,
   BotComputersStatus,
   BotComputerStatus,
+  BotComputerVmStatus,
 } from "../../../renderer/shared/bot-computers.js";
 
 export type {
+  BotComputerAssignTarget,
+  BotComputerDefaultMode,
+  BotComputerKind,
   BotComputerRunState,
   BotComputerSetupState,
   BotComputersSettings,
   BotComputersStatus,
   BotComputerStatus,
+  BotComputerVmStatus,
 } from "../../../renderer/shared/bot-computers.js";
 
 export interface BotComputerConnection {
@@ -30,6 +36,7 @@ export interface BotComputerConnection {
 
 export type BotComputerStartReason = "tool" | "routine" | "viewer";
 export type BotComputerStopReason = "idle" | "pause" | "person" | "quit" | "limit";
+export type BotComputerLeaseRelease = (() => void) & { readonly signal?: AbortSignal };
 
 export interface BotComputerGuestCommandResult {
   exitCode: number | null;
@@ -37,6 +44,11 @@ export interface BotComputerGuestCommandResult {
   stderr: string;
   truncated: boolean;
   timedOut: boolean;
+}
+
+export interface BotComputerAssignResult {
+  status: BotComputerStatus;
+  createdComputer?: { computerId: string; creationToken: string };
 }
 
 export interface BotComputerHost {
@@ -57,9 +69,31 @@ export interface BotComputerHost {
    * called; Remove everything waits for those called before it, and those called after wait for it.
    */
   give(botId: string): Promise<BotComputerStatus>;
-  reset(botId: string): Promise<BotComputerStatus>;
-  /** Idempotent: a Bot with no computer, or a VM Lume no longer has, counts as success. */
+  reset(botId: string, options?: { force?: boolean }): Promise<BotComputerStatus>;
+  /** Idempotent: unassigns the Bot (and deletes its dedicated VM if no other Bot uses it; never deletes `"shared"`). */
   deleteForBot(botId: string): Promise<void>;
+  /** Assign a Bot to `"shared"`, an existing Linux computer, or a newly cloned dedicated Linux computer. */
+  assignComputer(botId: string, target: BotComputerAssignTarget): Promise<BotComputerStatus>;
+  /** Same as `assignComputer`, also returning creation provenance if this call cloned a VM. */
+  assignComputerWithProvenance(botId: string, target: BotComputerAssignTarget): Promise<BotComputerAssignResult>;
+  /** Create a new standalone dedicated Linux computer cloned from `aiden-base`. */
+  createComputer(name?: string): Promise<BotComputerVmStatus>;
+  /** Rename an existing Linux computer. */
+  renameComputer(computerId: string, name: string): Promise<BotComputerVmStatus>;
+  /** Delete a Linux computer; refuses while Bots are assigned or active unless `options.force` is true. */
+  deleteComputer(computerId: string, options?: { force?: boolean; creationToken?: string }): Promise<void>;
+  /** Stop, delete, and re-clone a Linux computer from the current `aiden-base`. */
+  resetComputer(computerId: string, options?: { force?: boolean }): Promise<BotComputerVmStatus>;
+  /**
+   * Acquire exclusive FIFO turn access to the Bot's assigned computer. Returns
+   * a release function carrying an optional `signal` that aborts if the lease is
+   * revoked (e.g. reassignment or forced reset/delete). Cancelling `signal`
+   * while queued removes the Bot cleanly.
+   */
+  acquireLease(
+    botId: string,
+    options?: { signal?: AbortSignal; onProgress?(text: string): void },
+  ): Promise<BotComputerLeaseRelease>;
   ensureRunning(
     botId: string,
     options: { reason: BotComputerStartReason; signal?: AbortSignal; onProgress?(text: string): void },

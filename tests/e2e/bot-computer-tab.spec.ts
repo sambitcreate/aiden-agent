@@ -57,9 +57,35 @@ test("a computer that fails to start says why in the status red, not in the empt
     ipcMain.handle("bots:routines:list", () => []);
     ipcMain.handle("botComputers:status", () => ({
       setup: { kind: "ready", baseBuild: "20261123-2671", baseVersion: "13", updateAvailable: false },
-      settings: { maxRunning: 2, idleStopMinutes: 10 },
+      settings: { maxRunning: 2, idleStopMinutes: 10, defaultComputerMode: "shared" },
       diskUsedBytes: 0,
-      computers: [{ botId: bot.id, vmName, state: "stopped", baseBuild: "20261123-2671", outdated: false, controller: "bot" }],
+      vms: [
+        {
+          id: "shared",
+          name: "Shared computer",
+          kind: "shared",
+          vmName,
+          state: "stopped",
+          baseBuild: "20261123-2671",
+          outdated: false,
+          assignedBotIds: [bot.id],
+          queuedBotIds: [],
+          controller: "bot",
+        },
+      ],
+      computers: [
+        {
+          botId: bot.id,
+          vmName,
+          computerId: "shared",
+          computerName: "Shared computer",
+          shared: true,
+          state: "stopped",
+          baseBuild: "20261123-2671",
+          outdated: false,
+          controller: "bot",
+        },
+      ],
       requirements: {
         downloadBytes: 3_221_225_472,
         baseDiskBytes: 8_000_000_000,
@@ -115,7 +141,7 @@ test("Settings shows Linux Bot computer sizes, 1-4 running choices, and no macOS
   await finishLmStudioOnboarding(page);
 
   await aiden.app.evaluate(({ ipcMain }) => {
-    let settings = { maxRunning: 2, idleStopMinutes: 10 };
+    let settings = { maxRunning: 2, idleStopMinutes: 10, defaultComputerMode: "shared" };
     for (const channel of ["app:getInfo", "botComputers:status", "botComputers:updateSettings"]) {
       ipcMain.removeHandler(channel);
     }
@@ -130,6 +156,7 @@ test("Settings shows Linux Bot computer sizes, 1-4 running choices, and no macOS
       settings,
       diskUsedBytes: 0,
       freeDiskBytes: 200_000_000_000,
+      vms: [],
       computers: [],
       requirements: {
         downloadBytes: 3_221_225_472,
@@ -158,6 +185,12 @@ test("Settings shows Linux Bot computer sizes, 1-4 running choices, and no macOS
   await expect(page.getByText(/needs about 20 GB free/u)).toBeVisible();
   await expect(page.getByText(/about 4 GB of memory/u)).toBeVisible();
   await expect(page.getByRole("button", { name: "Set up element control" })).toHaveCount(0);
+
+  const defaultMode = page.getByRole("combobox", { name: "Default for new Bots" });
+  await expect(defaultMode).toContainText("Shared computer");
+  await defaultMode.click();
+  await page.getByRole("option", { name: "New computer for each Bot", exact: true }).click();
+  await expect(defaultMode).toContainText("New computer for each Bot");
 
   const runningLimit = page.getByRole("combobox", { name: "Computers running at once" });
   await runningLimit.click();

@@ -24,6 +24,7 @@ export const BOT_COMPUTER_LINUX_SHARED_MOUNT = "/mnt/aiden-shared";
  */
 export const BOT_COMPUTER_LINUX_VIRTIOFS_TAG = "com.apple.virtio-fs.automount";
 export const BOT_COMPUTER_LINUX_SHARED_TARGET = `${BOT_COMPUTER_LINUX_SHARED_MOUNT}/Computer`;
+export const BOT_COMPUTER_LINUX_BOTS_TARGET = `${BOT_COMPUTER_LINUX_SHARED_TARGET}/bots`;
 
 const PASSWORD_ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz23456789";
 const SUDO = "/usr/bin/sudo -S -p ''";
@@ -409,9 +410,11 @@ export const LINUX_BASE_PROVISION_STEPS: readonly LinuxProvisionStep[] = Object.
     },
   },
   {
-    // `<botHome>/Computer` is shared read-write over virtiofs under Apple's
-    // `com.apple.virtio-fs.automount` share, appearing at `/mnt/aiden-shared/Computer`;
-    // expose `~/Shared` directly to that directory for both `lume` and `aiden-bot`
+    // `<botHome>/Computer` (or `<root>/computers/<id>/Computer` for shared VMs) is
+    // shared read-write over virtiofs under Apple's `com.apple.virtio-fs.automount`
+    // share, appearing at `/mnt/aiden-shared/Computer`. Expose `~/Shared` directly
+    // to that directory and `~/Bots` (plus `~/bots` for `aiden-bot`) to its `bots/`
+    // subdirectory so multiple Bots on a shared VM have both shared and per-Bot folders,
     // and prove both users can read host files and write guest files back.
     id: "shared_folder",
     channel: "guest_ssh",
@@ -453,6 +456,8 @@ export const LINUX_BASE_PROVISION_STEPS: readonly LinuxProvisionStep[] = Object.
           `mountpoint -q ${quoteRemoteArg(BOT_COMPUTER_LINUX_SHARED_MOUNT)}`,
           `[ -d ${quoteRemoteArg(BOT_COMPUTER_LINUX_SHARED_TARGET)} ]`,
           `for u in ${users.join(" ")}; do s="/home/$u/Shared"; if [ -L "$s" ] || [ ! -e "$s" ]; then ln -sfn ${quoteRemoteArg(BOT_COMPUTER_LINUX_SHARED_TARGET)} "$s" && chown -h "$u:$u" "$s"; else exit 65; fi; done`,
+          `for u in ${users.join(" ")}; do b="/home/$u/Bots"; if [ -L "$b" ] || [ ! -e "$b" ]; then ln -sfn ${quoteRemoteArg(BOT_COMPUTER_LINUX_BOTS_TARGET)} "$b" && chown -h "$u:$u" "$b"; else exit 65; fi; done`,
+          `b="/home/${BOT_COMPUTER_LINUX_SHELL_USER}/bots"; if [ -L "$b" ] || [ ! -e "$b" ]; then ln -sfn ${quoteRemoteArg(BOT_COMPUTER_LINUX_BOTS_TARGET)} "$b" && chown -h "${BOT_COMPUTER_LINUX_SHELL_USER}:${BOT_COMPUTER_LINUX_SHELL_USER}" "$b"; else exit 65; fi`,
           ...userChecks,
         ].join(" && ");
         checkLinuxStep(

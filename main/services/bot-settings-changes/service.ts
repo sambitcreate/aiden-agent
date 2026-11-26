@@ -14,6 +14,7 @@
 import { randomUUID } from "node:crypto";
 import { promises as fs } from "node:fs";
 import path from "node:path";
+import type { BotComputerAssignTarget } from "../../../renderer/shared/bot-computers.js";
 import {
   BOT_SETTINGS_CHANGE_ENTRY_KIND,
   BOT_SETTINGS_CHANGE_STATUS_ENTRY_KIND,
@@ -64,6 +65,10 @@ export interface BotSettingsPorts {
   read(botId: string): Promise<{ values: BotSettingsValues; revision: string }>;
   /** Models from providers already connected on this device. */
   models(botId: string): Promise<BotSettingsModelOption[]>;
+  /** Optional check before holding or applying a Linux computer assignment request. */
+  validateComputer?(botId: string, target: BotComputerAssignTarget): Promise<string | undefined>;
+  /** Optional list of available Linux Bot computers shown when `update_bot` is called with no fields. */
+  computers?(botId: string): Promise<{ id: string; name: string; kind: "shared" | "dedicated" }[]>;
   /**
    * Writes these values (each field present is set), only while the Bot is
    * still at `expectedRevision`; otherwise throws `BotSettingsConflictError`.
@@ -167,17 +172,23 @@ export function createBotSettingsChangeService(ports: BotSettingsPorts) {
         const isEmpty = raw === undefined || raw === null || (typeof raw === "object" && !Array.isArray(raw) && Object.keys(raw).length === 0);
         if (isEmpty) {
           const models = await ports.models(botId);
+          const computers = ports.computers ? await ports.computers(botId).catch(() => undefined) : undefined;
           return JSON.stringify({
             settings: current,
             models,
+            ...(computers !== undefined ? { computers } : {}),
             changes: [...BOT_SETTINGS_FIELDS],
-            note: "Change only what the person asked for. Access, tools, connections, other Bots, Bot messaging, the computer, approvals and spending are the person's to change in this Bot's settings.",
+            note: "Change only what the person asked for. Access, tools, connections, other Bots, Bot messaging, Mac Computer Use (computerMode), approvals and spending are the person's to change in this Bot's settings.",
           });
         }
         const parsed = parseBotSettingsArgs(raw, current);
         if (!parsed.ok) throw new Error(parsed.error);
         const refusal = await modelAllowed(botId, parsed.patch.model);
         if (refusal) throw new Error(refusal);
+        if (parsed.patch.computer) {
+          const computerRefusal = await ports.validateComputer?.(botId, parsed.patch.computer);
+          if (computerRefusal) throw new Error(computerRefusal);
+        }
         const fields = changedBotSettingsFields(current, parsed.patch);
         if (fields.length === 0) return "Nothing changed: those are already this Bot's settings.";
         const next: BotSettingsValues = { ...current, ...parsed.patch };
@@ -219,6 +230,9 @@ export function createBotSettingsChangeService(ports: BotSettingsPorts) {
           ...(reason !== undefined && record.after.instructions !== undefined
             ? { instructions: record.after.instructions, previousInstructions: current.instructions }
             : {}),
+          ...(record.after.computer !== undefined && record.after.computer !== null
+            ? { computer: record.after.computer }
+            : {}),
           ...(reason !== undefined ? { heldReason: reason } : {}),
           ...(record.undoable === false ? { undoable: false as const } : {}),
         };
@@ -230,7 +244,8 @@ export function createBotSettingsChangeService(ports: BotSettingsPorts) {
         }
         const why = reason === "not_owner" ? "This run wasn't started by the person"
           : reason === "outside_content" ? "This conversation has read content from outside the chat"
-            : "Reaching out more on your own is the person's call";
+            : fields.includes("computer") ? "Changing this Bot's computer is the person's call"
+              : "Reaching out more on your own is the person's call";
         return `${botSettingsHeldTitle(fields)} ${why}, so the change waits for them to apply it: ${lines.join("; ")}.`;
       });
     },
@@ -291,6 +306,10 @@ export function createBotSettingsChangeService(ports: BotSettingsPorts) {
         }
         const refusal = await modelAllowed(botId, patch.model);
         if (refusal) return { ok: false, message: "That model isn't connected any more." };
+        if (patch.computer) {
+          const computerRefusal = await ports.validateComputer?.(botId, patch.computer);
+          if (computerRefusal) return { ok: false, message: computerRefusal };
+        }
         try {
           await ports.write(botId, patch, revision);
         } catch (error) {

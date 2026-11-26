@@ -3,8 +3,10 @@
 // stores, and tests inject fakes.
 
 import type { BotAccessUpdate, BotAccessView, BotCapabilityCatalog } from "../../../renderer/shared/bot-capabilities.js";
+import { BOT_COMPUTER_SHARED_ID, type BotComputerAssignTarget } from "../../../renderer/shared/bot-computers.js";
 import type { BotSettingsPatch, BotSettingsValues } from "../../../renderer/shared/bot-settings-changes.js";
 import { resolveBotInterruptions, type BotDefinition, type BotUpdateInput } from "../../../renderer/shared/bots.js";
+import { BotComputerError } from "../bot-computers/types.js";
 import { BotCapabilityRevisionConflictError } from "../bot-capability-store-core.js";
 import { BotIdentityRevisionConflictError } from "../bot-store-core.js";
 import { BotSettingsConflictError, type BotSettingsModelOption, type BotSettingsPorts } from "./service.js";
@@ -27,6 +29,15 @@ export interface BotSettingsPortDeps {
    */
   updateBot(input: BotUpdateInput): Promise<Pick<BotDefinition, "revision">>;
   cancelWakeUps(botId: string): Promise<void>;
+  readComputer?(botId: string): Promise<BotComputerAssignTarget | null>;
+  listComputers?(botId: string): Promise<{ id: string; name: string; kind: "shared" | "dedicated" }[]>;
+  validateComputer?(botId: string, target: BotComputerAssignTarget): Promise<string | undefined>;
+  assignComputer?(
+    botId: string,
+    target: BotComputerAssignTarget,
+  ): Promise<void | { createdComputer?: { computerId: string; creationToken: string } }>;
+  unassignComputer?(botId: string): Promise<void>;
+  deleteComputer?(computerId: string, options?: { force?: boolean; creationToken?: string }): Promise<void>;
   broadcastChanged(botId: string): void;
   appendEntry: BotSettingsPorts["appendEntry"];
 }
@@ -47,6 +58,10 @@ function splitRevision(revision: string): { bot: string; access: string } {
     // Not one of ours: nothing matches it.
   }
   return { bot: "", access: "" };
+}
+
+function isSafeDeleteRollbackSkip(error: unknown): boolean {
+  return error instanceof BotComputerError && (error.code === "no_computer" || error.code === "busy");
 }
 
 export function createBotSettingsPorts(deps: BotSettingsPortDeps): BotSettingsPorts {
@@ -88,6 +103,7 @@ export function createBotSettingsPorts(deps: BotSettingsPortDeps): BotSettingsPo
       const selection = await deps.modelSelection(botId).catch(() => undefined);
       // Unreadable access leaves an empty revision, which no model write matches.
       const access = await deps.getBotAccess(botId).then((view) => view.revision, () => "");
+      const computer = deps.readComputer ? await deps.readComputer(botId).catch(() => null) : undefined;
       const values: BotSettingsValues = {
         name: bot.name,
         description: bot.description ?? "",
@@ -96,6 +112,7 @@ export function createBotSettingsPorts(deps: BotSettingsPortDeps): BotSettingsPo
         dailyCheckIns: bot.selfWakeUps !== false,
         notifications: resolveBotInterruptions(bot.interruptions),
         model: selection ? { providerId: selection.providerId, modelId: selection.modelId } : null,
+        ...(computer !== undefined ? { computer } : {}),
       };
       return { values, revision: joinRevision(bot.revision, access) };
     },
@@ -108,6 +125,9 @@ export function createBotSettingsPorts(deps: BotSettingsPortDeps): BotSettingsPo
           .filter((model) => model.available)
           .map((model): BotSettingsModelOption => ({ providerId: provider.id, modelId: model.id, label: `${model.label} (${provider.label})` })));
     },
+
+    ...(deps.listComputers ? { computers: (botId: string) => deps.listComputers!(botId) } : {}),
+    ...(deps.validateComputer ? { validateComputer: (botId, target) => deps.validateComputer!(botId, target) } : {}),
 
     async write(botId, patch, expectedRevision) {
       // A Bot's model is never taken away from chat, and Undo never claims it was.
@@ -129,25 +149,97 @@ export function createBotSettingsPorts(deps: BotSettingsPortDeps): BotSettingsPo
       // can't go first, since a Bot with no model before has nothing to put
       // back. The identity write cannot move the access revision, nor the
       // model write the Bot's, so neither invalidates the other's check.
-      let wrote = false;
+      let computerWrote = false;
+      let identityWrote = false;
+      let modelWrote = false;
       let done = false;
+      let previousComputer: BotComputerAssignTarget | null = null;
+      let createdComputer: { computerId: string; creationToken?: string } | undefined;
+
+      const rollbackComputer = async (): Promise<void> => {
+        if (!computerWrote) return;
+        let rolledBack = true;
+        // Restore this Bot's prior assignment before attempting to delete any
+        // VM created for this write, and never force-delete so another Bot
+        // that attached to or started the VM in the meantime keeps it.
+        if (previousComputer) {
+          if (deps.assignComputer) {
+            await deps.assignComputer(botId, previousComputer).catch(() => {
+              rolledBack = false;
+            });
+          } else {
+            rolledBack = false;
+          }
+        } else if (deps.unassignComputer) {
+          await deps.unassignComputer(botId).catch(() => {
+            rolledBack = false;
+          });
+        } else if (!createdComputer) {
+          rolledBack = false;
+        }
+        if (createdComputer && deps.deleteComputer) {
+          await deps
+            .deleteComputer(createdComputer.computerId, {
+              force: false,
+              ...(createdComputer.creationToken ? { creationToken: createdComputer.creationToken } : {}),
+            })
+            .catch((error: unknown) => {
+              if (isSafeDeleteRollbackSkip(error)) return;
+              rolledBack = false;
+            });
+        }
+        if (rolledBack) computerWrote = false;
+      };
+
       try {
+        // Assign/clone the Linux computer BEFORE writing identity/model so a
+        // failed clone or unavailable VM leaves identity and model untouched.
+        // Snapshot previous assignment and VM IDs so a later identity/model
+        // failure rolls back the assignment and deletes any newly cloned VM.
+        if (patch.computer) {
+          if (!deps.assignComputer) throw new Error("Bot computers aren't available on this device.");
+          previousComputer = deps.readComputer ? await deps.readComputer(botId) : null;
+          const beforeVmIds =
+            (patch.computer.kind === "new" || patch.computer.kind === "shared") && deps.listComputers
+              ? new Set((await deps.listComputers(botId)).map((vm) => vm.id))
+              : undefined;
+          const assignResult = await deps.assignComputer(botId, patch.computer);
+          computerWrote = true;
+          if (assignResult && typeof assignResult === "object" && assignResult.createdComputer) {
+            createdComputer = assignResult.createdComputer;
+          } else if (
+            patch.computer.kind === "shared" &&
+            beforeVmIds !== undefined &&
+            !beforeVmIds.has(BOT_COMPUTER_SHARED_ID)
+          ) {
+            createdComputer = { computerId: BOT_COMPUTER_SHARED_ID };
+          } else if (patch.computer.kind === "new" && deps.readComputer) {
+            const afterComputer = await deps.readComputer(botId);
+            if (afterComputer?.kind === "existing" && (!beforeVmIds || !beforeVmIds.has(afterComputer.computerId))) {
+              createdComputer = { computerId: afterComputer.computerId };
+            }
+          }
+        }
         let writtenRevision: string | undefined;
         if (identity) {
           const description = patch.description ?? bot.description ?? "";
-          const written = await deps.updateBot({
-            id: botId,
-            expectedRevision: expected.bot,
-            name: patch.name ?? bot.name,
-            ...(description ? { description } : {}),
-            instructions: patch.instructions ?? bot.instructions,
-            avatar: patch.look ? { version: 1, color: patch.look.color, shape: patch.look.shape } : bot.avatar,
-            ...(patch.notifications ? { interruptions: patch.notifications } : {}),
-            ...(patch.dailyCheckIns !== undefined ? { selfWakeUps: patch.dailyCheckIns } : {}),
-          }).catch((error: unknown) => {
+          let written: Pick<BotDefinition, "revision">;
+          try {
+            written = await deps.updateBot({
+              id: botId,
+              expectedRevision: expected.bot,
+              name: patch.name ?? bot.name,
+              ...(description ? { description } : {}),
+              instructions: patch.instructions ?? bot.instructions,
+              avatar: patch.look ? { version: 1, color: patch.look.color, shape: patch.look.shape } : bot.avatar,
+              ...(patch.notifications ? { interruptions: patch.notifications } : {}),
+              ...(patch.dailyCheckIns !== undefined ? { selfWakeUps: patch.dailyCheckIns } : {}),
+            });
+          } catch (error) {
+            await rollbackComputer();
             throw error instanceof BotIdentityRevisionConflictError ? new BotSettingsConflictError() : error;
-          });
-          wrote = true;
+          }
+          identityWrote = true;
           // The revision this write made, not a fresh read: a desktop edit
           // landing after it moves the revision, so the undo below is refused
           // and that edit stands.
@@ -169,17 +261,18 @@ export function createBotSettingsPorts(deps: BotSettingsPortDeps): BotSettingsPo
                 avatar: bot.avatar,
                 interruptions: resolveBotInterruptions(bot.interruptions),
                 selfWakeUps: bot.selfWakeUps !== false,
-              }).then(() => { wrote = false; }, () => undefined);
+              }).then(() => { identityWrote = false; }, () => undefined);
             }
+            await rollbackComputer();
             throw error;
           }
-          wrote = true;
+          modelWrote = true;
         }
         if (identity && patch.dailyCheckIns === false) await deps.cancelWakeUps(botId);
         done = true;
       } finally {
         // Whatever landed is shown, even when a later half was refused.
-        if (done || wrote) deps.broadcastChanged(botId);
+        if (done || computerWrote || identityWrote || modelWrote) deps.broadcastChanged(botId);
       }
     },
 

@@ -422,6 +422,7 @@ test(
       // Settings → Computers & VMs → Bot computers → Set up, then the Bot profile's Give Ada a computer.
       await context.host.setUp();
       assert.equal((await context.host.status()).setup.kind, "ready");
+      await context.host.updateSettings({ defaultComputerMode: "dedicated" });
       const given = await context.invoke<BotComputerStatus>(BOT_COMPUTER_CHANNELS.give, BOT);
       assert.equal(given.vmName, VM);
       assert.equal(given.state, "stopped");

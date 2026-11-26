@@ -19,7 +19,18 @@ const bot = { id: "bot-1", name: "Ada" };
 const READY: BotComputerSetupState = { kind: "ready", baseVersion: "26.6.2", baseBuild: "25G83", updateAvailable: false };
 
 function computer(extra: Partial<BotComputerStatus> = {}): BotComputerStatus {
-  return { botId: bot.id, vmName: "aiden-bot-0123456789abcdef", state: "stopped", baseBuild: "25G83", outdated: false, controller: "bot", ...extra };
+  return {
+    botId: bot.id,
+    vmName: "aiden-bot-0123456789abcdef",
+    computerId: "aiden-bot-0123456789abcdef",
+    computerName: "Ada's computer",
+    shared: false,
+    state: "stopped",
+    baseBuild: "25G83",
+    outdated: false,
+    controller: "bot",
+    ...extra,
+  };
 }
 
 function status(setup: BotComputerSetupState, computers: BotComputerStatus[] = []): BotComputersStatus {
@@ -27,6 +38,7 @@ function status(setup: BotComputerSetupState, computers: BotComputerStatus[] = [
     setup,
     settings: { ...DEFAULT_BOT_COMPUTERS_SETTINGS },
     diskUsedBytes: 0,
+    vms: [],
     computers,
     requirements: {
       downloadBytes: 3_221_225_472,
@@ -115,7 +127,7 @@ test("Reset and Remove each ask first, and only the confirmed one reaches main",
   fireEvent.click(screen.getByRole("button", { name: "Reset" }));
   dialog = await screen.findByRole("alertdialog");
   fireEvent.click(within(dialog).getByRole("button", { name: "Reset computer" }));
-  await waitFor(() => assert.deepEqual(ipc.sent("botComputers:reset"), [[bot.id]]));
+  await waitFor(() => assert.deepEqual(ipc.sent("botComputers:reset"), [[bot.id, { force: true }]]));
   // The fresh copy is made from the current base.
   await waitFor(() => assert.equal(screen.queryByText(/Made from an older base/u), null));
 
@@ -139,4 +151,236 @@ test("without the Bot computers capability there is no Computer section and no I
   await mount(false);
   assert.equal(screen.queryByText("Computer"), null);
   assert.deepEqual(ipc.calls.filter((call) => call.channel.startsWith("botComputers:")), []);
+});
+
+test("Linux computer picker switches between Shared computer, existing VMs, and + New computer, and shows queue status", async () => {
+  const assigned: unknown[] = [];
+  const sharedVm = {
+    id: "shared",
+    name: "Shared computer",
+    kind: "shared" as const,
+    vmName: "aiden-vm-shared",
+    state: "running" as const,
+    baseBuild: "25G83",
+    outdated: false,
+    assignedBotIds: [bot.id, "bot-2"],
+    activeBotId: "bot-2",
+    queuedBotIds: [bot.id],
+    controller: "bot" as const,
+  };
+  const researchVm = {
+    id: "research",
+    name: "Research Linux",
+    kind: "dedicated" as const,
+    vmName: "aiden-vm-research",
+    state: "stopped" as const,
+    baseBuild: "25G83",
+    outdated: false,
+    assignedBotIds: [],
+    queuedBotIds: [],
+    controller: "bot" as const,
+  };
+  let current: BotComputersStatus = {
+    ...status(READY, [
+      computer({
+        vmName: "aiden-vm-shared",
+        computerId: "shared",
+        computerName: "Shared computer",
+        shared: true,
+        state: "running",
+        activeBotId: "bot-2",
+        queuePosition: 1,
+      }),
+    ]),
+    vms: [sharedVm, researchVm],
+  };
+  installBotTestIpc({
+    "bots:list": () => [
+      { id: bot.id, name: "Ada" },
+      { id: "bot-2", name: "Ben" },
+    ],
+    "botComputers:status": () => current,
+    "botComputers:assignComputer": (botId, target) => {
+      assigned.push([botId, target]);
+      const next =
+        (target as { kind: string }).kind === "new"
+          ? computer({ vmName: "aiden-vm-new-1", computerId: "new-1", computerName: "Ada's Linux", shared: false })
+          : computer({ vmName: "aiden-vm-research", computerId: "research", computerName: "Research Linux", shared: false });
+      current = { ...current, computers: [next] };
+      return next;
+    },
+  });
+  await mount();
+
+  await screen.findByText(/Waiting for Ben on Shared computer \(queue #1\)/u);
+
+  const picker = screen.getByRole("combobox", { name: "Linux computer" });
+  fireEvent.click(picker);
+  fireEvent.click(await screen.findByRole("option", { name: "Research Linux" }));
+  await waitFor(() => assert.deepEqual(assigned[0], [bot.id, { kind: "existing", computerId: "research" }]));
+
+  fireEvent.click(screen.getByRole("combobox", { name: "Linux computer" }));
+  fireEvent.click(await screen.findByRole("option", { name: "+ New computer" }));
+  await waitFor(() => assert.deepEqual(assigned[1], [bot.id, { kind: "new" }]));
+});
+
+test("joining a VM already used by another Bot and stopping an active shared VM both ask for confirmation first", async () => {
+  const assigned: unknown[] = [];
+  const stopped: unknown[] = [];
+  const sharedVm = {
+    id: "shared",
+    name: "Shared computer",
+    kind: "shared" as const,
+    vmName: "aiden-vm-shared",
+    state: "running" as const,
+    baseBuild: "25G83",
+    outdated: false,
+    assignedBotIds: [bot.id, "bot-2"],
+    activeBotId: "bot-2",
+    queuedBotIds: [],
+    controller: "bot" as const,
+  };
+  const bensVm = {
+    id: "vm-ben",
+    name: "Ben's Lab",
+    kind: "dedicated" as const,
+    vmName: "aiden-vm-ben",
+    state: "stopped" as const,
+    baseBuild: "25G83",
+    outdated: false,
+    assignedBotIds: ["bot-2"],
+    queuedBotIds: [],
+    controller: "bot" as const,
+  };
+  const current: BotComputersStatus = {
+    ...status(READY, [
+      computer({
+        vmName: "aiden-vm-shared",
+        computerId: "shared",
+        computerName: "Shared computer",
+        shared: true,
+        state: "running",
+        activeBotId: "bot-2",
+      }),
+    ]),
+    vms: [sharedVm, bensVm],
+  };
+  installBotTestIpc({
+    "bots:list": () => [
+      { id: bot.id, name: "Ada" },
+      { id: "bot-2", name: "Ben" },
+    ],
+    "botComputers:status": () => current,
+    "botComputers:assignComputer": (botId, target) => {
+      assigned.push([botId, target]);
+      return computer({ vmName: "aiden-vm-ben", computerId: "vm-ben", computerName: "Ben's Lab", shared: false });
+    },
+    "botComputers:stop": (botId) => {
+      stopped.push(botId);
+    },
+  });
+  await mount();
+  await screen.findByText(/Ben is currently using Shared computer/u);
+
+  // Stop on an active shared VM warns before stopping.
+  fireEvent.click(screen.getByRole("button", { name: "Stop" }));
+  const stopDialog = await screen.findByRole("alertdialog");
+  assert.match(stopDialog.textContent ?? "", /Ben is currently using Shared computer/u);
+  assert.deepEqual(stopped, []);
+  fireEvent.click(within(stopDialog).getByRole("button", { name: "Stop computer" }));
+  await waitFor(() => assert.deepEqual(stopped, [bot.id]));
+
+  // Switching onto another Bot's dedicated VM confirms before assigning.
+  fireEvent.click(screen.getByRole("combobox", { name: "Linux computer" }));
+  fireEvent.click(await screen.findByRole("option", { name: "Ben's Lab" }));
+  const assignDialog = await screen.findByRole("alertdialog");
+  assert.match(assignDialog.textContent ?? "", /already used by Ben/u);
+  assert.match(assignDialog.textContent ?? "", /share one Linux desktop, user \(aiden-bot\), and Chromium sign-ins/u);
+  assert.deepEqual(assigned, []);
+  fireEvent.click(within(assignDialog).getByRole("button", { name: "Switch computer" }));
+  await waitFor(() => assert.deepEqual(assigned, [[bot.id, { kind: "existing", computerId: "vm-ben" }]]));
+});
+
+test("sole-assigned pool VM Remove discloses workspace deletion, confirmed Reset passes force: true, and 1 co-tenant Stop uses singular verb", async () => {
+  const resets: unknown[] = [];
+  const poolVm = {
+    id: "vm-solo",
+    name: "Solo Linux",
+    kind: "dedicated" as const,
+    vmName: "aiden-vm-solo",
+    state: "running" as const,
+    baseBuild: "25G83",
+    outdated: false,
+    assignedBotIds: [bot.id],
+    queuedBotIds: [],
+    controller: "bot" as const,
+  };
+  let current: BotComputersStatus = {
+    ...status(READY, [
+      computer({
+        vmName: "aiden-vm-solo",
+        computerId: "vm-solo",
+        computerName: "Solo Linux",
+        shared: false,
+        state: "running",
+      }),
+    ]),
+    vms: [poolVm],
+  };
+  installBotTestIpc({
+    "bots:list": () => [
+      { id: bot.id, name: "Ada" },
+      { id: "bot-2", name: "Ben" },
+    ],
+    "botComputers:status": () => current,
+    "botComputers:reset": (botId, opts) => {
+      resets.push([botId, opts]);
+      return current.computers[0]!;
+    },
+  });
+  await mount();
+
+  // Sole-assigned pool vm-* Remove dialog discloses workspace deletion (~/Shared and ~/bots).
+  fireEvent.click(await screen.findByRole("button", { name: "Remove" }));
+  const removeDialog = await screen.findByRole("alertdialog");
+  assert.match(removeDialog.textContent ?? "", /deletes this virtual machine and its mounted workspace folder \(~\/Shared and ~\/bots\)/u);
+  fireEvent.click(within(removeDialog).getByRole("button", { name: "Cancel" }));
+  await waitFor(() => assert.equal(screen.queryByRole("alertdialog"), null));
+
+  // Confirmed Reset passes { force: true }.
+  fireEvent.click(screen.getByRole("button", { name: "Reset" }));
+  const resetDialog = await screen.findByRole("alertdialog");
+  fireEvent.click(within(resetDialog).getByRole("button", { name: "Reset computer" }));
+  await waitFor(() => assert.deepEqual(resets, [[bot.id, { force: true }]]));
+
+  // Stop dialog with 1 idle co-tenant uses singular "Ben also uses".
+  const sharedVm = {
+    id: "shared",
+    name: "Shared computer",
+    kind: "shared" as const,
+    vmName: "aiden-vm-shared",
+    state: "running" as const,
+    baseBuild: "25G83",
+    outdated: false,
+    assignedBotIds: [bot.id, "bot-2"],
+    queuedBotIds: [],
+    controller: "bot" as const,
+  };
+  current = {
+    ...status(READY, [
+      computer({
+        vmName: "aiden-vm-shared",
+        computerId: "shared",
+        computerName: "Shared computer",
+        shared: true,
+        state: "running",
+      }),
+    ]),
+    vms: [sharedVm],
+  };
+  emitBotTestNotification(BOT_COMPUTERS_CHANGED_CHANNEL, current);
+  await screen.findByText(/Bots on Shared computer share one Linux desktop/u);
+  fireEvent.click(screen.getByRole("button", { name: "Stop" }));
+  const stopDialog = await screen.findByRole("alertdialog");
+  assert.match(stopDialog.textContent ?? "", /Ben also uses Shared computer\./u);
 });

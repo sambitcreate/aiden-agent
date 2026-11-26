@@ -3,11 +3,18 @@
 // its held card ("Update instructions?" with Apply / Edit / Dismiss).
 //
 // The tool changes only what a Bot may say about itself: its name,
-// description, look, instructions, daily check-ins, notifications and model
-// (among providers already connected). It never changes access, tools,
-// credentials, other Bots, Bot messaging, the computer, approvals or hooks:
-// a Bot never widens its own powers from chat.
+// description, look, instructions, daily check-ins, notifications, model
+// (among providers already connected) and Linux computer assignment (always
+// held for the person to apply). It never changes access, tools, credentials,
+// other Bots, Bot messaging, Mac Computer Use (computerMode), approvals or
+// hooks: a Bot never widens its own powers from chat.
 
+import {
+  BOT_COMPUTER_SHARED_DEFAULT_NAME,
+  BOT_COMPUTER_SHARED_ID,
+  parseBotComputerAssignTarget,
+  type BotComputerAssignTarget,
+} from "./bot-computers.js";
 import {
   BOT_AVATAR_COLOR_LABELS,
   BOT_AVATAR_COLORS,
@@ -33,6 +40,7 @@ export const BOT_SETTINGS_FIELDS = [
   "dailyCheckIns",
   "notifications",
   "model",
+  "computer",
 ] as const;
 export type BotSettingsField = (typeof BOT_SETTINGS_FIELDS)[number];
 
@@ -51,6 +59,8 @@ export interface BotSettingsValues {
   notifications: BotInterruptions;
   /** Null when the Bot has no model of its own yet. */
   model: BotSettingsModel | null;
+  /** Assigned Linux Bot computer (`"shared"`, existing VM, or newly requested VM), or null when none. */
+  computer?: BotComputerAssignTarget | null;
 }
 
 export type BotSettingsPatch = Partial<BotSettingsValues>;
@@ -71,7 +81,6 @@ export const BOT_SETTINGS_PERSON_ONLY = new Set([
   "files",
   "folders",
   "shell",
-  "computer",
   "computerMode",
   "botMessaging",
   "acceptsBotMessages",
@@ -112,6 +121,8 @@ export interface BotSettingsChangeEntryData {
   instructions?: string;
   /** The instructions when the held change was proposed, so the card can mark what changes. */
   previousInstructions?: string;
+  /** Proposed Linux computer target when `fields` includes `"computer"`. */
+  computer?: BotComputerAssignTarget;
   /** Why a held change waits; absent on older entries, which were all `not_owner`. */
   heldReason?: BotSettingsHeldReason;
   /** False when Undo can't put this change back (the Bot had no model of its own before). */
@@ -137,6 +148,9 @@ function quietMinutes(quiet: BotInterruptions["quietHours"]): Set<number> {
  * Those always wait for the person, whoever started the run.
  */
 export function botSettingsPatchWidens(current: BotSettingsValues, patch: BotSettingsPatch): boolean {
+  if (patch.computer !== undefined && !sameBotSettingsValue("computer", current, { ...current, computer: patch.computer })) {
+    return true;
+  }
   if (patch.dailyCheckIns === true && !current.dailyCheckIns) return true;
   if (patch.notifications === undefined) return false;
   if (patch.notifications.dailyLimit > current.notifications.dailyLimit) return true;
@@ -208,9 +222,25 @@ export function botSettingsReceiptLabel(fields: readonly BotSettingsField[]): st
   return fields.length === 1 && fields[0] === "instructions" ? "Instructions updated" : "Settings updated";
 }
 
-/** "Update instructions?" when the held change touches the instructions, else "Update settings?". */
+/** "Update instructions?" for instructions, "Change computer?" for computer-only, else "Update settings?". */
 export function botSettingsHeldTitle(fields: readonly BotSettingsField[]): string {
-  return fields.includes("instructions") ? "Update instructions?" : "Update settings?";
+  if (fields.includes("instructions")) return "Update instructions?";
+  if (fields.length === 1 && fields[0] === "computer") return "Change computer?";
+  return "Update settings?";
+}
+
+/** Format a structured `computer` assignment target into its `Computer: ...` summary line. */
+export function formatBotSettingsComputerLine(
+  target: BotComputerAssignTarget | null | undefined,
+  computerLabel?: (target: BotComputerAssignTarget) => string,
+): string {
+  if (!target) return "Computer: None";
+  if (computerLabel) return `Computer: ${computerLabel(target)}`;
+  if (target.kind === "shared") return `Computer: ${BOT_COMPUTER_SHARED_DEFAULT_NAME}`;
+  if (target.kind === "new") {
+    return target.name ? `Computer: New dedicated computer (${target.name})` : "Computer: New dedicated computer";
+  }
+  return `Computer: ${target.computerId}`;
 }
 
 /** One readable line for a changed field. `modelLabel` names a model. */
@@ -219,6 +249,7 @@ export function botSettingsLine(
   before: BotSettingsValues,
   after: BotSettingsValues,
   modelLabel: (model: BotSettingsModel | null) => string = (model) => model?.modelId ?? "None",
+  computerLabel?: (target: BotComputerAssignTarget) => string,
 ): string {
   switch (field) {
     case "name":
@@ -238,6 +269,8 @@ export function botSettingsLine(
     }
     case "model":
       return `Model: ${modelLabel(after.model)}`;
+    case "computer":
+      return formatBotSettingsComputerLine(after.computer, computerLabel);
   }
 }
 
@@ -357,6 +390,26 @@ export function parseBotSettingsArgs(raw: unknown, current: BotSettingsValues): 
     }
     patch.model = { providerId: model.providerId, modelId: model.modelId };
   }
+  if (raw.computer !== undefined) {
+    if (raw.computer === "shared") {
+      patch.computer = { kind: "shared" };
+    } else if (raw.computer === "new") {
+      patch.computer = { kind: "new" };
+    } else {
+      try {
+        const parsed = parseBotComputerAssignTarget(raw.computer);
+        patch.computer =
+          parsed.kind === "existing" && parsed.computerId === BOT_COMPUTER_SHARED_ID
+            ? { kind: "shared" }
+            : parsed;
+      } catch {
+        return {
+          ok: false,
+          error: 'computer takes "shared", "new", or { kind: "shared" | "existing" | "new", ... }.',
+        };
+      }
+    }
+  }
   return { ok: true, patch };
 }
 
@@ -376,6 +429,18 @@ export function botSettingsChangeOf(data: unknown): BotSettingsChangeEntryData |
   if (data.previousInstructions !== undefined && typeof data.previousInstructions !== "string") return undefined;
   if (data.heldReason !== undefined && !HELD_REASONS.includes(data.heldReason as BotSettingsHeldReason)) return undefined;
   if (data.undoable !== undefined && data.undoable !== false) return undefined;
+  let computer: BotComputerAssignTarget | undefined;
+  if (data.computer !== undefined) {
+    try {
+      const parsed = parseBotComputerAssignTarget(data.computer);
+      computer =
+        parsed.kind === "existing" && parsed.computerId === BOT_COMPUTER_SHARED_ID
+          ? { kind: "shared" }
+          : parsed;
+    } catch {
+      return undefined;
+    }
+  }
   return {
     changeId: data.changeId,
     mode: data.mode,
@@ -383,6 +448,7 @@ export function botSettingsChangeOf(data: unknown): BotSettingsChangeEntryData |
     lines: data.lines as string[],
     ...(typeof data.instructions === "string" ? { instructions: data.instructions } : {}),
     ...(typeof data.previousInstructions === "string" ? { previousInstructions: data.previousInstructions } : {}),
+    ...(computer !== undefined ? { computer } : {}),
     ...(data.heldReason !== undefined ? { heldReason: data.heldReason as BotSettingsHeldReason } : {}),
     ...(data.undoable === false ? { undoable: false as const } : {}),
   };

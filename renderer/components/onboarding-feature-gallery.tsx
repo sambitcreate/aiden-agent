@@ -267,7 +267,7 @@ export const onboardingFeatures: OnboardingFeature[] = [
     group: "control",
     title: "Bot computers",
     description:
-      "Give a Bot its own Linux virtual machine (Debian with XFCE), apart from your Mac. Watch it work in the Bot's Computer tab and take over anytime. Set it up in Settings → Computers & VMs → Bot computers; nothing downloads until you choose Set up.",
+      "Give Bots a shared or dedicated Linux virtual machine (Debian with XFCE), apart from your Mac. Watch them work in the Computer tab and take over anytime. Set it up in Settings → Computers & VMs → Bot computers; nothing downloads until you choose Set up.",
     icon: Monitor,
     size: "standard",
   },

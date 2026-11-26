@@ -122,3 +122,140 @@ test("the held card marks changes against the instructions as they are now, and 
   assert.equal(kind("List travel first."), "same");
   assert.equal(kind("Book window seats."), "removed", "the person's own line that Apply would drop is shown");
 });
+
+test("a held computer change asks Change computer? and explains the Linux computer request", async () => {
+  const answers: string[] = [];
+  render(
+    <HeldSettingsCard
+      change={{
+        changeId: "c-computer",
+        mode: "held",
+        fields: ["computer"],
+        lines: ["Computer: New dedicated computer (Research Linux)"],
+        heldReason: "widens",
+      }}
+      botName="Chief"
+      onRespond={async (decision) => {
+        answers.push(decision);
+      }}
+    />,
+  );
+  screen.getByRole("group", { name: "Change computer?" });
+  screen.getByText("Chief asked to change its Linux computer.");
+  screen.getByText("Computer: New dedicated computer (Research Linux)");
+  await act(async () => {
+    fireEvent.click(screen.getByRole("button", { name: "Apply" }));
+  });
+  assert.deepEqual(answers, ["apply"]);
+});
+
+test("a held computer change resolves raw computer IDs to VM names, names existing Bots, and discloses shared sessions", () => {
+  render(
+    <HeldSettingsCard
+      change={{
+        changeId: "c-computer-existing",
+        mode: "held",
+        fields: ["computer"],
+        lines: ["Computer: vm-lab"],
+        heldReason: "widens",
+      }}
+      botId="bot-chief"
+      botName="Chief"
+      computers={[
+        {
+          id: "vm-lab",
+          name: "Lab Linux",
+          kind: "dedicated",
+          vmName: "aiden-vm-lab",
+          state: "stopped",
+          baseBuild: "20261123-2671",
+          outdated: false,
+          assignedBotIds: ["bot-ben"],
+          queuedBotIds: [],
+          controller: "bot",
+        },
+      ]}
+      botNames={new Map([["bot-ben", "Ben"]])}
+      onRespond={async () => undefined}
+    />,
+  );
+  screen.getByText("Computer: Lab Linux (already used by Ben)");
+  screen.getByText("Bots on Lab Linux share one Linux desktop, user (aiden-bot), and Chromium sign-ins.");
+});
+
+test("a held computer change matches strictly by VM id (never spoofed display name) and disables Apply until computers load", () => {
+  const spoofedVm = {
+    id: "vm-decoy",
+    name: "vm-X",
+    kind: "dedicated" as const,
+    vmName: "aiden-vm-decoy",
+    state: "stopped" as const,
+    baseBuild: "20261123-2671",
+    outdated: false,
+    assignedBotIds: [],
+    queuedBotIds: [],
+    controller: "bot" as const,
+  };
+  const realTargetVm = {
+    id: "vm-X",
+    name: "Ben's Private Lab",
+    kind: "dedicated" as const,
+    vmName: "aiden-vm-x",
+    state: "stopped" as const,
+    baseBuild: "20261123-2671",
+    outdated: false,
+    assignedBotIds: ["bot-ben"],
+    queuedBotIds: [],
+    controller: "bot" as const,
+  };
+  const change = {
+    changeId: "c-computer-spoof",
+    mode: "held" as const,
+    fields: ["name" as const, "computer" as const],
+    lines: ["Name: Chief → Planner", "Computer: vm-X"],
+    computer: { kind: "existing" as const, computerId: "vm-X" },
+    heldReason: "widens" as const,
+  };
+
+  // While computers have not loaded, Apply stays disabled, non-computer diff lines stay visible, and raw ID is hidden.
+  const view = render(
+    <HeldSettingsCard
+      change={change}
+      botId="bot-chief"
+      botName="Chief"
+      onRespond={async () => undefined}
+    />,
+  );
+  assert.equal((screen.getByRole("button", { name: "Apply" }) as HTMLButtonElement).disabled, true);
+  screen.getByText("Name: Chief → Planner");
+  screen.getByText("Loading computer details…");
+  assert.equal(screen.queryByText("Computer: vm-X"), null);
+
+  // Once computers load, match strictly by vm.id ("vm-X") even though an earlier VM is named "vm-X".
+  view.rerender(
+    <HeldSettingsCard
+      change={change}
+      botId="bot-chief"
+      botName="Chief"
+      computers={[spoofedVm, realTargetVm]}
+      botNames={new Map([["bot-ben", "Ben"]])}
+      onRespond={async () => undefined}
+    />,
+  );
+  assert.equal((screen.getByRole("button", { name: "Apply" }) as HTMLButtonElement).disabled, false);
+  screen.getByText("Name: Chief → Planner · Computer: Ben's Private Lab (already used by Ben)");
+  screen.getByText("Bots on Ben's Private Lab share one Linux desktop, user (aiden-bot), and Chromium sign-ins.");
+
+  // Unknown co-tenant Bot ID falls back to "another Bot", never raw botId.
+  view.rerender(
+    <HeldSettingsCard
+      change={change}
+      botId="bot-chief"
+      botName="Chief"
+      computers={[spoofedVm, realTargetVm]}
+      botNames={new Map()}
+      onRespond={async () => undefined}
+    />,
+  );
+  screen.getByText("Name: Chief → Planner · Computer: Ben's Private Lab (already used by another Bot)");
+});

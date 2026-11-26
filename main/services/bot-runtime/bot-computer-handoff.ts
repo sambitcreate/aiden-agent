@@ -73,6 +73,9 @@ export interface BotComputerHandoffDeps {
   host: Pick<BotComputerHost, "computer" | "ensureRunning" | "runGuestCommand">;
   control: Pick<BotComputerControl, "controller" | "takeOver" | "giveBack"> & {
     takenOverBy(botId: string): BotComputerTakeOverSource | undefined;
+    controllerForScope?(scope: string): "bot" | "person";
+    takenOverByScope?(scope: string): BotComputerTakeOverSource | undefined;
+    giveBackScope?(scope: string): void;
   };
   handoffs: Pick<BotHandoffs, "get" | "onSettled">;
   /** Bot computers are on (the platform flag). */
@@ -93,14 +96,32 @@ function heldKey(botId: string, waitId: string): string {
 }
 
 export function createBotComputerHandoffOpener(deps: BotComputerHandoffDeps): BotComputerHandoffOpener {
-  /** The cards whose Open took the computer over. */
-  const held = new Set<string>();
+  /** Open sign-in cards holding each VM (`botId\0waitId` -> VM scope key). */
+  const held = new Map<string, string>();
+
+  const releaseScopeIfUnused = (scopeKey: string, fallbackBotId: string): void => {
+    // Keep the shared VM with the person while another open sign-in card still holds it.
+    for (const activeScope of held.values()) {
+      if (activeScope === scopeKey) return;
+    }
+    // Release the exact VM scope captured when the card opened (even if the Bot was reassigned since).
+    if (deps.control.giveBackScope && deps.control.takenOverByScope && deps.control.controllerForScope) {
+      if (deps.control.controllerForScope(scopeKey) === "person" && deps.control.takenOverByScope(scopeKey) === "sign_in") {
+        deps.control.giveBackScope(scopeKey);
+      }
+      return;
+    }
+    if (deps.control.controller(fallbackBotId) === "person" && deps.control.takenOverBy(fallbackBotId) === "sign_in") {
+      deps.control.giveBack(fallbackBotId);
+    }
+  };
 
   const release = (botId: string, waitId: string): void => {
-    if (!held.delete(heldKey(botId, waitId))) return;
-    if (deps.control.controller(botId) === "person" && deps.control.takenOverBy(botId) === "sign_in") {
-      deps.control.giveBack(botId);
-    }
+    const key = heldKey(botId, waitId);
+    const scopeKey = held.get(key);
+    if (scopeKey === undefined) return;
+    held.delete(key);
+    releaseScopeIfUnused(scopeKey, botId);
   };
 
   deps.handoffs.onSettled((prompt) => {
@@ -119,16 +140,33 @@ export function createBotComputerHandoffOpener(deps: BotComputerHandoffDeps): Bo
 
   return async (botId, waitId, url) => {
     if (!deps.enabled() || deps.handoffs.get(botId, waitId) === undefined) return false;
+    let scopeKey: string;
     try {
-      if ((await deps.host.computer(botId)) === undefined) return false;
+      const computer = await deps.host.computer(botId);
+      if (computer === undefined) return false;
       await deps.host.ensureRunning(botId, { reason: "viewer" });
+      // Re-verify after a potentially long cold boot: the card may have been
+      // withdrawn or the Bot reassigned to another VM while starting.
+      if (deps.handoffs.get(botId, waitId) === undefined) return false;
+      const latestComputer = await deps.host.computer(botId);
+      if (latestComputer === undefined) return false;
+      scopeKey = latestComputer.computerId ?? latestComputer.vmName ?? botId;
     } catch (error) {
       deps.onError?.(error);
       return false;
     }
+    const key = heldKey(botId, waitId);
+    const prevScope = held.get(key);
     if (deps.control.controller(botId) !== "person") {
       deps.control.takeOver(botId, "sign_in");
-      held.add(heldKey(botId, waitId));
+      held.set(key, scopeKey);
+    } else if (deps.control.takenOverBy(botId) === "sign_in") {
+      // Another sign-in card already holds this shared VM; track this card too so
+      // settling the first card never returns the VM while the person finishes this one.
+      held.set(key, scopeKey);
+    }
+    if (prevScope !== undefined && prevScope !== scopeKey) {
+      releaseScopeIfUnused(prevScope, botId);
     }
     try {
       await run(botId, guestDriverSuspendScript(), "stop its screen helper");

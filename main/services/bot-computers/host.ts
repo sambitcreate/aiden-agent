@@ -1,8 +1,13 @@
-import { randomInt } from "node:crypto";
+import { randomBytes, randomInt } from "node:crypto";
 import { existsSync } from "node:fs";
-import { chmod, mkdir, open, readdir, rm, stat, type FileHandle } from "node:fs/promises";
+import { chmod, lstat, mkdir, open, readdir, realpath, rm, stat, type FileHandle } from "node:fs/promises";
 import path from "node:path";
 import {
+  BOT_COMPUTER_SHARED_DEFAULT_NAME,
+  BOT_COMPUTER_SHARED_ID,
+  parseBotComputerAssignTarget,
+  parseBotComputerId,
+  parseBotComputerName,
   parseBotComputersSettingsPatch,
   type BotComputerMaxRunning,
   type BotComputerRunState,
@@ -10,8 +15,10 @@ import {
   type BotComputersSettings,
   type BotComputersStatus,
   type BotComputerStatus,
+  type BotComputerVmStatus,
 } from "../../../renderer/shared/bot-computers.js";
 import { reportAnalyticsEvent } from "../analytics/analytics-report.js";
+import { quoteRemoteArg } from "../devices/ssh-device-script.js";
 import { CUA_DRIVER_VERSION } from "../computer-use/contract.js";
 import type { CuaDriverHostFactory, CuaDriverSessionLike } from "../computer-use/controller.js";
 import { writeCloudInitSeedIso } from "./cloud-init-iso.js";
@@ -65,7 +72,7 @@ import {
 import {
   createBotComputersStore,
   type BotComputerGuestDriverRecord,
-  type BotComputerRecord,
+  type BotComputerVmRecord,
   type BotComputersState,
 } from "./store.js";
 import {
@@ -76,11 +83,20 @@ import {
   type BotComputerConnection,
   type BotComputerGuestCommandResult,
   type BotComputerHost,
+  type BotComputerLeaseRelease,
   type BotComputerStartReason,
   type BotComputerStopReason,
 } from "./types.js";
 import { vncReachableBeyondLoopback } from "./vnc-exposure.js";
-import { BOT_COMPUTER_BASE_VM, BOT_COMPUTER_STAGING_BASE_VM, botComputerVmName, isAidenVmName } from "./vm-names.js";
+import {
+  BOT_COMPUTER_BASE_VM,
+  BOT_COMPUTER_SHARED_VM,
+  BOT_COMPUTER_STAGING_BASE_VM,
+  botComputerPoolVmName,
+  botComputerVmName,
+  botComputerWorkspaceDirName,
+  isAidenVmName,
+} from "./vm-names.js";
 
 export interface BotComputerSecrets {
   /** The stored value, or null when there is none. Throws when the store can't be read. */
@@ -160,6 +176,14 @@ interface SharedStart {
   progress: Set<(text: string) => void>;
 }
 
+interface QueueWaiter {
+  botId: string;
+  resolve(release: BotComputerLeaseRelease): void;
+  reject(error: unknown): void;
+  cleanup(): void;
+}
+
+/** Per-VM runtime state keyed by `computerId` (`"shared"` or a dedicated id). */
 interface Runtime {
   state: BotComputerRunState;
   connection?: BotComputerConnection;
@@ -169,6 +193,35 @@ interface Runtime {
   cancelIdle?: () => void;
   lastUsedAt?: number;
   leases: number;
+  /** Bot currently holding the FIFO turn lease on this computer. */
+  activeBotId?: string;
+  /** Re-entrant hold depth for `activeBotId`. */
+  activeCount: number;
+  /** AbortController aborted if the active lease is revoked (reassignment, forced reset/delete). */
+  activeLeaseAbort?: AbortController;
+  /** Monotonic generation bumped when an active lease is forcibly cleared (delete/remove/shutdown). */
+  leaseEpoch: number;
+  /** Bots queued behind `activeBotId` in FIFO order. */
+  waiters: QueueWaiter[];
+}
+
+const hasOwn = (record: object, key: string): boolean => Object.prototype.hasOwnProperty.call(record, key);
+const LINUX_BASE_BUILD_PATTERN = /^\d{8}-\d+$/u;
+const SAFE_BOT_WORKSPACE_DIR_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/u;
+const GUEST_SHARED_BOTS_MOUNT = "/mnt/aiden-shared/Computer/bots";
+
+function assignedComputerId(state: BotComputersState, botId: string): string | undefined {
+  return hasOwn(state.assignments, botId) ? state.assignments[botId] : undefined;
+}
+
+function isLinuxBuild(build: string | undefined): boolean {
+  return build !== undefined && LINUX_BASE_BUILD_PATTERN.test(build);
+}
+
+function isLegacyMacosVmRecord(vm: BotComputerVmRecord, state: BotComputersState): boolean {
+  if (vm.migratedFromMacos) return true;
+  if (state.setup.guestOs === "linux") return false;
+  return vm.baseBuild.length > 0 && !isLinuxBuild(vm.baseBuild);
 }
 
 const SLOT_STATES: ReadonlySet<BotComputerRunState> = new Set(["starting", "running", "stopping"]);
@@ -217,6 +270,7 @@ export function createBotComputerHost(deps: BotComputerHostDependencies): BotCom
   const root = deps.root;
   const dirs = {
     vms: path.join(root, "vms"),
+    computers: path.join(root, "computers"),
     home: path.join(root, "home"),
     logs: path.join(root, "logs"),
     images: path.join(root, "restore-images"),
@@ -262,8 +316,39 @@ export function createBotComputerHost(deps: BotComputerHostDependencies): BotCom
     reserveBytes: BOT_COMPUTER_LINUX_BASE_DISK_RESERVE_BYTES,
   });
 
+  /** Per-VM runtimes keyed by `computerId`. */
   const runtimes = new Map<string, Runtime>();
+  /** Per-VM stale set keyed by `computerId`. */
   const stale = new Set<string>();
+  /** In-process creation nonces keyed by `computerId`, used by settings rollback. */
+  const vmCreationTokens = new Map<string, string>();
+  /** Mirror of `state.assignments` (`botId -> computerId`) for synchronous control/connection lookups. */
+  const assignmentCache = new Map<string, string>();
+  const syncAssignmentCache = (state: BotComputersState): BotComputersState => {
+    assignmentCache.clear();
+    for (const [botId, computerId] of Object.entries(state.assignments)) {
+      assignmentCache.set(botId, computerId);
+    }
+    return state;
+  };
+  const readState = async (): Promise<BotComputersState> => syncAssignmentCache(await store.read());
+  const updateState = async (change: (draft: BotComputersState) => void): Promise<BotComputersState> =>
+    syncAssignmentCache(await store.update(change));
+  const assignedBotsFromCache = (computerId: string): string[] => {
+    const out: string[] = [];
+    for (const [botId, assignedId] of assignmentCache) {
+      if (assignedId === computerId) out.push(botId);
+    }
+    return out;
+  };
+  const assignedBotsInState = (state: BotComputersState, computerId: string): string[] =>
+    Object.entries(state.assignments)
+      .filter(([, assignedId]) => assignedId === computerId)
+      .map(([botId]) => botId);
+  control.setScopeResolver(
+    (botId) => assignmentCache.get(botId) ?? botId,
+    (scope) => assignedBotsFromCache(scope),
+  );
   const listeners = new Set<(botId: string | undefined) => void>();
   const slotWaiters = new Set<() => void>();
   let setupState: BotComputerSetupState | undefined;
@@ -272,7 +357,7 @@ export function createBotComputerHost(deps: BotComputerHostDependencies): BotCom
   let shuttingDown = false;
   /** Aborted first when Aiden quits: it ends any `lume run` still launching, at once. */
   const quitting = new AbortController();
-  let diskCache: { at: number; bytes: number } | undefined;
+  let diskCache: { at: number; bytes: number; vmBytes: Map<string, number> } | undefined;
   /** A base being built boots as a VM too, so it holds one of the running places. */
   let baseHoldsSlot = false;
   /**
@@ -294,14 +379,19 @@ export function createBotComputerHost(deps: BotComputerHostDependencies): BotCom
       }
     }
   };
+  const emitVm = (computerId: string) => {
+    const members = assignedBotsFromCache(computerId);
+    if (members.length === 1) emit(members[0]);
+    else emit();
+  };
   control.onChange((botId) => emit(botId));
   activity.onChange((botId) => emit(botId));
 
-  const runtime = (botId: string): Runtime => {
-    let found = runtimes.get(botId);
+  const runtime = (computerId: string): Runtime => {
+    let found = runtimes.get(computerId);
     if (!found) {
-      found = { state: "stopped", leases: 0 };
-      runtimes.set(botId, found);
+      found = { state: "stopped", leases: 0, activeCount: 0, leaseEpoch: 0, waiters: [] };
+      runtimes.set(computerId, found);
     }
     return found;
   };
@@ -555,37 +645,46 @@ export function createBotComputerHost(deps: BotComputerHostDependencies): BotCom
     }
   }
 
-  function idleCandidate(except?: string): string | undefined {
-    let candidate: { botId: string; lastUsedAt: number } | undefined;
-    const current = now();
-    for (const [botId, entry] of runtimes) {
-      if (botId === except || entry.state !== "running" || entry.leases > 0) continue;
-      if (control.controller(botId) === "person" || control.activeActions(botId) > 0) continue;
-      const lastUsedAt = entry.lastUsedAt ?? 0;
-      if (current - lastUsedAt < ACTIVE_USE_MS) continue;
-      if (!candidate || lastUsedAt < candidate.lastUsedAt) candidate = { botId, lastUsedAt };
-    }
-    return candidate?.botId;
+  function isVmBusy(computerId: string, entry: Runtime): boolean {
+    return (
+      entry.leases > 0 ||
+      entry.activeBotId !== undefined ||
+      entry.waiters.length > 0 ||
+      control.controllerForScope(computerId) === "person" ||
+      control.activeActionsForScope(computerId) > 0
+    );
   }
 
-  async function acquireSlot(botId: string, entry: Runtime, signal: AbortSignal, onProgress?: (text: string) => void): Promise<void> {
+  function idleCandidate(exceptComputerId?: string): string | undefined {
+    let candidate: { computerId: string; lastUsedAt: number } | undefined;
+    const current = now();
+    for (const [computerId, entry] of runtimes) {
+      if (computerId === exceptComputerId || entry.state !== "running" || isVmBusy(computerId, entry)) continue;
+      const lastUsedAt = entry.lastUsedAt ?? 0;
+      if (current - lastUsedAt < ACTIVE_USE_MS) continue;
+      if (!candidate || lastUsedAt < candidate.lastUsedAt) candidate = { computerId, lastUsedAt };
+    }
+    return candidate?.computerId;
+  }
+
+  async function acquireSlot(computerId: string, entry: Runtime, signal: AbortSignal, onProgress?: (text: string) => void): Promise<void> {
     for (;;) {
       if (signal.aborted) throw new BotComputerError("cancelled", "Starting the computer was cancelled.");
       if (shuttingDown) throw new BotComputerError("busy", "Aiden is quitting.");
-      const { settings } = await store.read();
+      const { settings } = await readState();
       const cap = Math.min(settings.maxRunning, await currentMaxRunningLimit());
       if (occupied() < cap) {
         entry.state = "starting";
         return;
       }
-      const idle = idleCandidate(botId);
+      const idle = idleCandidate(computerId);
       if (idle) {
-        await stopComputer(idle, "limit");
+        await stopVmRuntime(idle, "limit");
         continue;
       }
       if (entry.state !== "waiting_for_slot") {
         entry.state = "waiting_for_slot";
-        emit(botId);
+        emitVm(computerId);
       }
       onProgress?.("Waiting for another Bot's computer");
       await new Promise<void>((resolve, reject) => {
@@ -614,7 +713,7 @@ export function createBotComputerHost(deps: BotComputerHostDependencies): BotCom
     for (;;) {
       if (signal.aborted) throw new BotComputerError("cancelled", "Setting up Bot computers was cancelled.");
       if (shuttingDown) throw new BotComputerError("busy", "Aiden is quitting.");
-      const { settings } = await store.read();
+      const { settings } = await readState();
       const cap = Math.min(settings.maxRunning, await currentMaxRunningLimit());
       if (occupied() < cap) {
         baseHoldsSlot = true;
@@ -627,7 +726,7 @@ export function createBotComputerHost(deps: BotComputerHostDependencies): BotCom
           "Building the base computer needs one of the places Bot computers run in, and they're all in use. Stop a Bot's computer in its profile, then try again.",
         );
       }
-      await stopComputer(idle, "limit");
+      await stopVmRuntime(idle, "limit");
     }
   }
 
@@ -687,31 +786,241 @@ export function createBotComputerHost(deps: BotComputerHostDependencies): BotCom
       names.add(BOT_COMPUTER_BASE_VM);
       names.add(BOT_COMPUTER_STAGING_BASE_VM);
     }
-    const { computers } = await store.read();
-    for (const [botId, entry] of runtimes) {
+    const { vms } = await readState();
+    for (const [computerId, entry] of runtimes) {
       if (entry.state === "stopped" && !entry.start && !entry.stopping) continue;
-      const vmName = entry.connection?.vmName ?? computers[botId]?.vmName;
+      const vmName = entry.connection?.vmName ?? vms[computerId]?.vmName;
       if (vmName) names.add(vmName);
     }
     return names;
   }
 
-  function armIdle(botId: string, entry: Runtime, minutes: number): void {
+  function armIdle(computerId: string, entry: Runtime, minutes: number): void {
     entry.cancelIdle?.();
     entry.cancelIdle = schedule(() => {
       entry.cancelIdle = undefined;
       if (entry.state !== "running") return;
-      if (entry.leases > 0 || control.controller(botId) === "person" || control.activeActions(botId) > 0) {
-        armIdle(botId, entry, minutes);
+      if (isVmBusy(computerId, entry)) {
+        armIdle(computerId, entry, minutes);
         return;
       }
-      void stopComputer(botId, "idle").catch((error: unknown) => log("Idle stop did not finish.", error));
+      void stopVmRuntime(computerId, "idle").catch((error: unknown) => log("Idle stop did not finish.", error));
     }, minutes * 60_000);
   }
 
+  function removeBotFromQueue(computerId: string, botId: string): void {
+    const entry = runtimes.get(computerId);
+    if (!entry) return;
+    let changed = false;
+    const remaining: QueueWaiter[] = [];
+    for (const waiter of entry.waiters) {
+      if (waiter.botId === botId) {
+        waiter.cleanup();
+        waiter.reject(new BotComputerError("cancelled", "Waiting for the computer was cancelled."));
+        changed = true;
+      } else {
+        remaining.push(waiter);
+      }
+    }
+    entry.waiters = remaining;
+    if (changed) emitVm(computerId);
+  }
+
+  function clearQueue(computerId: string, message: string, options?: { forceActive?: boolean }): void {
+    const entry = runtimes.get(computerId);
+    if (!entry) return;
+    const waiters = entry.waiters.splice(0);
+    for (const waiter of waiters) {
+      waiter.cleanup();
+      waiter.reject(new BotComputerError("cancelled", message));
+    }
+    if (options?.forceActive) {
+      entry.leaseEpoch += 1;
+      const abort = entry.activeLeaseAbort;
+      entry.activeLeaseAbort = undefined;
+      entry.activeBotId = undefined;
+      entry.activeCount = 0;
+      abort?.abort(new BotComputerError("cancelled", message));
+    }
+  }
+
+  function revokeBotLease(
+    computerId: string,
+    botId: string,
+    reason = "The Bot was reassigned to another computer.",
+  ): void {
+    removeBotFromQueue(computerId, botId);
+    const entry = runtimes.get(computerId);
+    if (!entry || entry.activeBotId !== botId) return;
+    entry.leaseEpoch += 1;
+    const abort = entry.activeLeaseAbort;
+    const next = entry.waiters.shift();
+    if (next) {
+      next.cleanup();
+      entry.activeBotId = next.botId;
+      entry.activeCount = 1;
+      entry.activeLeaseAbort = new AbortController();
+      emitVm(computerId);
+      next.resolve(makeLeaseRelease(computerId, entry, next.botId, entry.leaseEpoch, entry.activeLeaseAbort.signal));
+    } else {
+      entry.activeBotId = undefined;
+      entry.activeCount = 0;
+      entry.activeLeaseAbort = undefined;
+      emitVm(computerId);
+    }
+    abort?.abort(new BotComputerError("cancelled", reason));
+  }
+
+  function releaseOrphanedControlScope(computerId: string, state: BotComputersState): void {
+    if (assignedBotsInState(state, computerId).length > 0) return;
+    if (control.controllerForScope(computerId) === "person" && control.takenOverByScope(computerId) !== "sign_in") {
+      control.giveBackScope(computerId);
+    }
+  }
+
+  async function assertNotSymlinkDir(target: string): Promise<void> {
+    try {
+      const info = await lstat(target);
+      if (info.isSymbolicLink() || !info.isDirectory()) {
+        throw new BotComputerError("invalid", "The Bot's Computer folder contains an unsafe symbolic link or non-directory.");
+      }
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException)?.code === "ENOENT") return;
+      throw error;
+    }
+  }
+
+  function isPoolWorkspaceId(computerId: string): boolean {
+    return (
+      computerId === BOT_COMPUTER_SHARED_ID ||
+      computerId.startsWith("vm-") ||
+      computerId.startsWith("aiden-vm-")
+    );
+  }
+
+  function isVmLive(computerId: string): boolean {
+    const entry = runtimes.get(computerId);
+    return entry !== undefined && (SLOT_STATES.has(entry.state) || entry.start !== undefined || entry.stopping !== undefined);
+  }
+
+  async function runGuestWorkspaceScript(computerId: string, script: string): Promise<void> {
+    const connection = runtimes.get(computerId)?.connection;
+    if (!connection) return;
+    await runSshCommand(
+      connection.ssh,
+      script,
+      { timeoutMs: 15_000, maxOutputBytes: 4_096 },
+      {
+        paths: sshPaths,
+        env: guestSshEnvironment(deps.env ?? process.env, dirs.home),
+        sshCommand: deps.sshCommand,
+        run: deps.runProcess,
+      },
+    ).catch((error: unknown) => log("Updating guest Bot workspace folder did not finish.", error));
+  }
+
+  async function removeComputerWorkspace(computerId: string): Promise<void> {
+    if (!isPoolWorkspaceId(computerId)) return;
+    const dir = path.join(dirs.computers, computerId);
+    try {
+      const info = await lstat(dir);
+      if (info.isSymbolicLink()) return;
+      await rm(dir, { recursive: true, force: true });
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException)?.code !== "ENOENT") {
+        log("Removing computer workspace folder did not finish.", error);
+      }
+    }
+  }
+
+  async function removeBotWorkspaceSubfolder(computerId: string, botId: string): Promise<void> {
+    if (!isPoolWorkspaceId(computerId)) return;
+    const workspaceName = botComputerWorkspaceDirName(botId);
+    if (!SAFE_BOT_WORKSPACE_DIR_PATTERN.test(workspaceName) || workspaceName.includes("..")) return;
+    const guestPath = `${GUEST_SHARED_BOTS_MOUNT}/${workspaceName}`;
+    const guestCleanScript = `if [ -d ${quoteRemoteArg(GUEST_SHARED_BOTS_MOUNT)} ] && [ ! -L ${quoteRemoteArg(GUEST_SHARED_BOTS_MOUNT)} ]; then rm -rf -- ${quoteRemoteArg(guestPath)}; fi`;
+    const stillAssigned = () => assignedBotsFromCache(computerId).includes(botId);
+    const cleanOnHost = async (): Promise<void> => {
+      if (stillAssigned() || isVmLive(computerId)) return;
+      const rootDir = path.join(dirs.computers, computerId, "Computer");
+      const botsRoot = path.join(rootDir, "bots");
+      const botDir = path.join(botsRoot, workspaceName);
+      try {
+        const rootInfo = await lstat(rootDir);
+        const botsInfo = await lstat(botsRoot);
+        const botInfo = await lstat(botDir);
+        if (rootInfo.isSymbolicLink() || botsInfo.isSymbolicLink() || botInfo.isSymbolicLink()) return;
+        const realBotsRoot = await realpath(botsRoot);
+        const realBotDir = await realpath(botDir);
+        if (!realBotDir.startsWith(`${realBotsRoot}${path.sep}`)) return;
+        await rm(botDir, { recursive: true, force: true });
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException)?.code !== "ENOENT") {
+          log("Removing Bot workspace folder did not finish.", error);
+        }
+      }
+    };
+    const entry = runtimes.get(computerId);
+    if (entry?.stopping) {
+      await entry.stopping.catch(() => undefined);
+    }
+    if (stillAssigned()) return;
+    const current = runtimes.get(computerId);
+    if (current?.start && !current.connection) {
+      await current.start.promise.then(
+        async () => {
+          if (!stillAssigned()) await runGuestWorkspaceScript(computerId, guestCleanScript);
+        },
+        async () => {
+          await cleanOnHost();
+        },
+      );
+      return;
+    }
+    // Never run path-based recursive rm from the Mac host inside a live guest-writable
+    // virtiofs mount (a guest symlink swap could escape into macOS /Users). While the VM
+    // is running, remove the folder inside the Linux guest over SSH so any symlink resolves
+    // strictly inside the guest VFS.
+    if (isVmLive(computerId)) {
+      await runGuestWorkspaceScript(computerId, guestCleanScript);
+      return;
+    }
+    await cleanOnHost();
+  }
+
+  /**
+   * After reassigning `botId` away from `oldComputerId`, remove `botId`'s
+   * per-Bot subfolder when the old VM stays live for other Bots (`shared` or
+   * another assignee remains on a dedicated VM). An empty sole dedicated VM keeps
+   * its workspace intact on disk until explicitly deleted.
+   */
+  async function cleanupDepartedWorkspace(
+    oldComputerId: string | undefined,
+    botId: string,
+    parentEpoch: number,
+  ): Promise<void> {
+    if (!oldComputerId || !isPoolWorkspaceId(oldComputerId)) return;
+    await inTurn(
+      vmTurnKey(oldComputerId),
+      async () => {
+        const latest = await readState();
+        const oldVm = hasOwn(latest.vms, oldComputerId) ? latest.vms[oldComputerId] : undefined;
+        if (!oldVm) return;
+        if (assignedComputerId(latest, botId) === oldComputerId) return;
+        const remaining = assignedBotsInState(latest, oldComputerId);
+        if (oldVm.kind === "shared" || remaining.length > 0) {
+          await removeBotWorkspaceSubfolder(oldComputerId, botId);
+        }
+      },
+      parentEpoch,
+    );
+  }
+
   async function ensureSharedDirectory(dir: string): Promise<string> {
+    await assertNotSymlinkDir(dir);
     await mkdir(dir, { recursive: true, mode: 0o777 });
-    await chmod(dir, 0o777);
+    const realDir = await realpath(dir);
+    await chmod(realDir, 0o777);
     return dir;
   }
 
@@ -721,36 +1030,102 @@ export function createBotComputerHost(deps: BotComputerHostDependencies): BotCom
     return ensureSharedDirectory(dirs.baseShared);
   }
 
-  async function sharedDirFor(botId: string): Promise<string> {
-    const dir = await deps.botComputerDir(botId);
+  /**
+   * Resolve and ensure the host shared directory mounted via `virtiofs` at
+   * `/mnt/aiden-shared/Computer`.
+   * - Legacy per-Bot VMs (`aiden-bot-*`) mount `<botHome>/Computer`.
+   * - Shared (`shared`) and pool VMs (`vm-*`) mount `<root>/computers/<id>/Computer`.
+   * Subdirectories under `bots/<dir>` are created from the host ONLY when the VM
+   * is stopped (zero guest writers); while a VM is live, subdirectory creation runs
+   * inside the Linux guest over SSH so a guest-planted symlink can never escape to
+   * the macOS host filesystem.
+   */
+  async function sharedDirForVm(
+    vm: BotComputerVmRecord,
+    assignedBotIds: readonly string[],
+    primaryBotId?: string,
+    options?: { vmStopped?: boolean },
+  ): Promise<string> {
+    let dir: string;
+    if (vm.kind === "dedicated" && vm.id.startsWith("aiden-bot-")) {
+      const ownerBot =
+        vm.legacyOwnerBotId ??
+        assignedBotIds.find((id) => botComputerVmName(id) === vm.id) ??
+        (primaryBotId && botComputerVmName(primaryBotId) === vm.id ? primaryBotId : undefined) ??
+        primaryBotId ??
+        assignedBotIds[0];
+      dir = ownerBot ? await deps.botComputerDir(ownerBot) : path.join(dirs.computers, vm.id, "Computer");
+    } else {
+      dir = path.join(dirs.computers, vm.id, "Computer");
+    }
     if (!path.isAbsolute(dir) || dir.includes(":")) {
       throw new BotComputerError("invalid", "The Bot's Computer folder path can't contain a colon.");
     }
+    await assertNotSymlinkDir(dir);
     await mkdir(path.dirname(dir), { recursive: true, mode: 0o700 });
-    return ensureSharedDirectory(dir);
+    await mkdir(dir, { recursive: true, mode: 0o777 });
+    const botDirs = new Set(assignedBotIds);
+    if (primaryBotId) botDirs.add(primaryBotId);
+    const live = !options?.vmStopped && isVmLive(vm.id);
+    if (live) {
+      const dirsToCreate = [...botDirs]
+        .map((botId) => botComputerWorkspaceDirName(botId))
+        .filter((entry) => SAFE_BOT_WORKSPACE_DIR_PATTERN.test(entry) && !entry.includes(".."));
+      if (dirsToCreate.length > 0 && runtimes.get(vm.id)?.state === "running") {
+        const quoted = dirsToCreate.map((entry) => quoteRemoteArg(`${GUEST_SHARED_BOTS_MOUNT}/${entry}`)).join(" ");
+        await runGuestWorkspaceScript(
+          vm.id,
+          `if [ ! -L ${quoteRemoteArg(GUEST_SHARED_BOTS_MOUNT)} ]; then mkdir -p -- ${quoted} && chmod 777 -- ${quoteRemoteArg(GUEST_SHARED_BOTS_MOUNT)} ${quoted}; fi`,
+        );
+      }
+      return dir;
+    }
+    const realDir = await realpath(dir);
+    await chmod(realDir, 0o777);
+    const botsRoot = path.join(dir, "bots");
+    await assertNotSymlinkDir(botsRoot);
+    await mkdir(botsRoot, { recursive: true, mode: 0o777 });
+    const realBotsRoot = await realpath(botsRoot);
+    if (!realBotsRoot.startsWith(`${realDir}${path.sep}`)) {
+      throw new BotComputerError("invalid", "The Bot's Computer folder escaped its root directory.");
+    }
+    await chmod(realBotsRoot, 0o777);
+    for (const botId of botDirs) {
+      const botDir = path.join(botsRoot, botComputerWorkspaceDirName(botId));
+      await assertNotSymlinkDir(botDir);
+      await mkdir(botDir, { recursive: true, mode: 0o777 });
+      const realBotDir = await realpath(botDir);
+      if (!realBotDir.startsWith(`${realBotsRoot}${path.sep}`)) {
+        throw new BotComputerError("invalid", "The Bot's workspace folder escaped its root directory.");
+      }
+      await chmod(realBotDir, 0o777);
+    }
+    return dir;
   }
 
-  async function startComputer(
-    botId: string,
-    record: BotComputerRecord,
+  async function startVmRuntime(
+    computerId: string,
+    record: BotComputerVmRecord,
     entry: Runtime,
-    options: { reason: BotComputerStartReason; signal: AbortSignal; onProgress?(text: string): void },
+    options: { reason: BotComputerStartReason; signal: AbortSignal; onProgress?(text: string): void; botId?: string },
   ): Promise<BotComputerConnection> {
-    const owner = await possessive(botId);
+    const owner = options.botId ? await possessive(options.botId) : `${record.name}'s`;
     let leftRunning = false;
     let vmStarted = false;
     let vncTunnel: GuestVncTunnel | undefined;
     try {
-      await acquireSlot(botId, entry, options.signal, options.onProgress);
-      emit(botId);
+      await acquireSlot(computerId, entry, options.signal, options.onProgress);
+      emitVm(computerId);
       await requireResources(resources, {
         dir: root,
         diskBytes: START_DISK_BYTES,
         memoryBytes: occupied() <= 1 ? BOT_COMPUTER_LINUX_MIN_MEMORY_BYTES : BOT_COMPUTER_LINUX_MEMORY_BYTES,
         signal: options.signal,
       });
-      options.onProgress?.(`Starting ${owner} computer…`);
-      const sharedDir = await sharedDirFor(botId);
+      options.onProgress?.(`Starting ${record.kind === "shared" ? record.name : `${owner} computer`}…`);
+      const latestState = await readState();
+      const assigned = assignedBotsInState(latestState, computerId);
+      const sharedDir = await sharedDirForVm(record, assigned, options.botId, { vmStopped: true });
       const { info } = await runAndWait(
         record.vmName,
         sharedDir,
@@ -787,8 +1162,8 @@ export function createBotComputerHost(deps: BotComputerHostDependencies): BotCom
         log("A Bot computer's screen tunnel closed.");
         entry.connection = undefined;
         entry.vncTunnel = undefined;
-        emit(botId);
-        void stopComputer(botId, "person").catch((error: unknown) =>
+        emitVm(computerId);
+        void stopVmRuntime(computerId, "person", options.botId).catch((error: unknown) =>
           log("Stopping a computer after its screen tunnel closed did not finish.", error),
         );
       };
@@ -818,12 +1193,12 @@ export function createBotComputerHost(deps: BotComputerHostDependencies): BotCom
       entry.connection = connection;
       entry.vncTunnel = vncTunnel;
       entry.lastUsedAt = now();
-      const state = await store.update((draft) => {
-        const current = draft.computers[botId];
+      const state = await updateState((draft) => {
+        const current = draft.vms[computerId];
         if (current) current.lastUsedAt = entry.lastUsedAt;
       });
-      armIdle(botId, entry, state.settings.idleStopMinutes);
-      emit(botId);
+      armIdle(computerId, entry, state.settings.idleStopMinutes);
+      emitVm(computerId);
       return connection;
     } catch (error) {
       if (vncTunnel && entry.vncTunnel !== vncTunnel) {
@@ -836,28 +1211,24 @@ export function createBotComputerHost(deps: BotComputerHostDependencies): BotCom
         entry.connection = undefined;
         entry.vncTunnel = undefined;
         if (leftRunning) {
-          // Lume couldn't turn off what this start launched. It is shown running, with no
-          // connection, and keeps its place (macOS's limit) until a stop works: its idle
-          // timer, Stop, Pause, quit, or the next start, which turns it off first.
           log("A Bot computer whose start failed did not stop; it is still running.");
           entry.state = "running";
-          const minutes = await store
-            .read()
+          const minutes = await readState()
             .then((state) => state.settings.idleStopMinutes)
             .catch(() => undefined);
-          if (minutes !== undefined && entry.state === "running") armIdle(botId, entry, minutes);
+          if (minutes !== undefined && entry.state === "running") armIdle(computerId, entry, minutes);
         } else {
           entry.state = "stopped";
           wakeSlotWaiters();
         }
-        emit(botId);
+        emitVm(computerId);
       }
       throw error;
     }
   }
 
-  async function stopComputer(botId: string, reason: BotComputerStopReason): Promise<void> {
-    const entry = runtimes.get(botId);
+  async function stopVmRuntime(computerId: string, reason: BotComputerStopReason, botIdForLabel?: string): Promise<void> {
+    const entry = runtimes.get(computerId);
     if (!entry) return;
     if (entry.start) {
       const start = entry.start;
@@ -868,25 +1239,23 @@ export function createBotComputerHost(deps: BotComputerHostDependencies): BotCom
     if (entry.state !== "running") return;
     const connection = entry.connection;
     const tunnel = entry.vncTunnel;
-    const vmName = connection?.vmName ?? (await store.read()).computers[botId]?.vmName;
+    const vmName = connection?.vmName ?? (await readState()).vms[computerId]?.vmName;
     entry.cancelIdle?.();
     entry.cancelIdle = undefined;
     entry.state = "stopping";
     entry.connection = undefined;
-    emit(botId);
+    emitVm(computerId);
     entry.stopping = (async () => {
       let stillRunning = false;
       try {
-        // One with no connection is a failed start Lume couldn't turn off: nobody used it, so it is forced.
         if (vmName) await stopVm(vmName, reason === "quit" || connection === undefined);
       } catch (error) {
-        // Even a forced stop failed: count the computer as off only if Lume says it is. One
-        // that is still on keeps its place (macOS's limit) and its connection, and its idle
-        // timer tries again; an unreadable state counts as on.
         stillRunning = vmName !== undefined && (await getVm(vmName).then((info) => info?.state === "running", () => true));
-        // Named only on failure: the name waits on the Bot store, and almost every stop succeeds.
         if (error instanceof BotComputerError && error.code === "lume_failed") {
-          throw new BotComputerError("lume_failed", `Aiden couldn't stop ${await possessive(botId)} computer.`);
+          const assigned = assignedBotsFromCache(computerId);
+          const ownerBot = botIdForLabel ?? (assigned.length === 1 ? assigned[0] : undefined);
+          const label = ownerBot ? `${await possessive(ownerBot)} computer` : "the computer";
+          throw new BotComputerError("lume_failed", `Aiden couldn't stop ${label}.`);
         }
         throw error;
       } finally {
@@ -896,33 +1265,30 @@ export function createBotComputerHost(deps: BotComputerHostDependencies): BotCom
           entry.state = "running";
           entry.connection = connection;
           entry.vncTunnel = tunnel;
-          const minutes = await store
-            .read()
+          const minutes = await readState()
             .then((state) => state.settings.idleStopMinutes)
             .catch(() => undefined);
-          if (minutes !== undefined && entry.state === "running") armIdle(botId, entry, minutes);
+          if (minutes !== undefined && entry.state === "running") armIdle(computerId, entry, minutes);
         } else {
           entry.vncTunnel = undefined;
           await tunnel?.close().catch(() => undefined);
           entry.state = "stopped";
-          // What the Bot was doing ended with the run.
-          activity.set(botId, undefined);
-          // Nobody uses a computer that is off. Control goes back to the Bot, so its next call
-          // doesn't wait for a Give back the tab can't offer and a later run idles out as usual.
-          // A sign-in card's hold lasts until the card settles or is withdrawn.
-          if (control.controller(botId) === "person" && control.takenOverBy(botId) !== "sign_in") control.giveBack(botId);
+          for (const member of assignedBotsFromCache(computerId)) {
+            activity.set(member, undefined);
+          }
+          if (control.controllerForScope(computerId) === "person" && control.takenOverByScope(computerId) !== "sign_in") {
+            control.giveBackScope(computerId);
+          }
           if (entry.lastUsedAt !== undefined) {
             const lastUsedAt = entry.lastUsedAt;
-            await store
-              .update((draft) => {
-                const current = draft.computers[botId];
-                if (current) current.lastUsedAt = lastUsedAt;
-              })
-              .catch(() => undefined);
+            await updateState((draft) => {
+              const current = draft.vms[computerId];
+              if (current) current.lastUsedAt = lastUsedAt;
+            }).catch(() => undefined);
           }
           wakeSlotWaiters();
         }
-        emit(botId);
+        emitVm(computerId);
       }
     })();
     return entry.stopping;
@@ -943,42 +1309,105 @@ export function createBotComputerHost(deps: BotComputerHostDependencies): BotCom
   }
 
   /**
-   * Give, Reset and Delete of one Bot's computer take turns in the order they were asked for.
-   * Remove everything (the `undefined` key) waits for every one asked before it, and every later
-   * one waits for it. Each reads the computer's record only once it has its turn, so work asked
-   * for earlier never undoes a later one, such as a Reset bringing back a computer that was
-   * deleted while it copied the base.
+   * Per-Bot (`bot:<id>`) and per-VM (`vm:<id>`) lifecycle ops take turns in the
+   * order asked for within an epoch. Remove everything (`undefined`) advances
+   * the epoch, waits for every earlier op in the previous epoch, and blocks
+   * every later top-level op until it finishes. Nested `bot:*` -> `vm:*` calls
+   * pass their enclosing `parentEpoch` so they serialize with same-epoch VM
+   * ops without ever waiting on a newer `removeEverything` barrier (avoiding
+   * `bot:*` -> `undefined` -> `bot:*` deadlocks).
    */
-  const turns = new Map<string | undefined, Promise<void>>();
+  let turnEpoch = 0;
+  let globalTurn: Promise<void> | undefined;
+  const epochTurns = new Map<number, Map<string, Promise<void>>>();
+  const botTurnKey = (botId: string) => `bot:${botId}`;
+  const vmTurnKey = (computerId: string) => `vm:${computerId}`;
 
-  function inTurn<T>(botId: string | undefined, work: () => Promise<T>): Promise<T> {
-    const before = botId === undefined ? [...turns.values()] : [turns.get(undefined), turns.get(botId)];
-    const result = Promise.all(before).then(work);
+  function getEpochMap(epoch: number): Map<string, Promise<void>> {
+    let map = epochTurns.get(epoch);
+    if (!map) {
+      map = new Map();
+      epochTurns.set(epoch, map);
+    }
+    return map;
+  }
+
+  function hasActiveTurn(key: string | undefined): boolean {
+    if (key === undefined) return globalTurn !== undefined;
+    for (const map of epochTurns.values()) {
+      if (map.has(key)) return true;
+    }
+    return false;
+  }
+
+  function activeTurnFor(key: string): Promise<void> | undefined {
+    let latest: Promise<void> | undefined;
+    for (const map of epochTurns.values()) {
+      const hit = map.get(key);
+      if (hit) latest = hit;
+    }
+    return latest;
+  }
+
+  function inTurn<T>(key: string | undefined, work: (epoch: number) => Promise<T>, parentEpoch?: number): Promise<T> {
+    if (key === undefined) {
+      const prevEpoch = turnEpoch;
+      turnEpoch += 1;
+      const myEpoch = turnEpoch;
+      const prevMap = epochTurns.get(prevEpoch);
+      const before: Array<Promise<void> | undefined> = [globalTurn, ...(prevMap ? prevMap.values() : [])];
+      const result = Promise.all(before).then(() => work(myEpoch));
+      const done = result.then(
+        () => undefined,
+        () => undefined,
+      );
+      globalTurn = done;
+      void done.then(() => {
+        if (globalTurn === done) globalTurn = undefined;
+      });
+      return result;
+    }
+    const myEpoch = parentEpoch ?? turnEpoch;
+    const map = getEpochMap(myEpoch);
+    const before: Array<Promise<void> | undefined> =
+      parentEpoch !== undefined ? [map.get(key)] : [globalTurn, map.get(key)];
+    const result = Promise.all(before).then(() => work(myEpoch));
     const done = result.then(
       () => undefined,
       () => undefined,
     );
-    // Remove everything's turn waits for every earlier one, so it stands for them all.
-    if (botId === undefined) turns.clear();
-    turns.set(botId, done);
+    map.set(key, done);
     void done.then(() => {
-      if (turns.get(botId) === done) turns.delete(botId);
+      if (map.get(key) === done) {
+        map.delete(key);
+        if (map.size === 0) epochTurns.delete(myEpoch);
+      }
     });
     return result;
   }
 
   /**
-   * What a start of this computer waits for first: Remove everything, or a Give, Reset or Delete
-   * of it. Their stop gives a computer the person held back to the Bot, so a call that waited for
-   * Give back goes on at once: it must not start the old VM while that is deleted or copied over,
-   * only the computer that is there afterwards.
+   * What a start of this computer waits for first: Remove everything, or a Give, Assign,
+   * Reset or Delete of the Bot or its assigned VM.
    */
-  const startsHeld = (botId: string): Promise<void> | undefined => turns.get(undefined) ?? turns.get(botId);
+  const startsHeld = (botId: string, computerId?: string): Promise<void> | undefined =>
+    globalTurn ??
+    activeTurnFor(botTurnKey(botId)) ??
+    (computerId ? activeTurnFor(vmTurnKey(computerId)) : undefined);
 
-  function untilDone(gate: Promise<void>, signal?: AbortSignal): Promise<void> {
+  const assignmentDrifted = (botId: string, computerId: string, entry: Runtime): boolean =>
+    Boolean(startsHeld(botId, computerId)) ||
+    assignmentCache.get(botId) !== computerId ||
+    (runtimes.has(computerId) && runtimes.get(computerId) !== entry);
+
+  function untilDone(
+    gate: Promise<void>,
+    signal?: AbortSignal,
+    cancelMessage = "Starting the computer was cancelled.",
+  ): Promise<void> {
     if (!signal) return gate;
     return new Promise<void>((resolve, reject) => {
-      const cancel = () => reject(new BotComputerError("cancelled", "Starting the computer was cancelled."));
+      const cancel = () => reject(new BotComputerError("cancelled", cancelMessage));
       if (signal.aborted) {
         cancel();
         return;
@@ -1003,16 +1432,6 @@ export function createBotComputerHost(deps: BotComputerHostDependencies): BotCom
     }
   }
 
-  const LINUX_BASE_BUILD_PATTERN = /^\d{8}-\d+$/u;
-  function isLinuxBuild(build: string | undefined): boolean {
-    return build !== undefined && LINUX_BASE_BUILD_PATTERN.test(build);
-  }
-  function isLegacyMacosRecord(record: BotComputerRecord, state: BotComputersState): boolean {
-    if (record.migratedFromMacos) return true;
-    if (state.setup.guestOs === "linux") return false;
-    return record.baseBuild.length > 0 && !isLinuxBuild(record.baseBuild);
-  }
-
   function ready(state: BotComputersState): boolean {
     return (
       state.setup.baseBuild !== undefined &&
@@ -1035,36 +1454,204 @@ export function createBotComputerHost(deps: BotComputerHostDependencies): BotCom
     return { kind: "not_set_up" };
   }
 
-  function computerStatus(botId: string, record: BotComputerRecord, state: BotComputersState): BotComputerStatus {
-    const entry = runtimes.get(botId);
-    const lastUsedAt = entry?.lastUsedAt ?? record.lastUsedAt;
-    const text = activity.get(botId);
-    const legacy = isLegacyMacosRecord(record, state);
+  function vmStatus(vm: BotComputerVmRecord, state: BotComputersState, diskUsedBytes?: number): BotComputerVmStatus {
+    const entry = runtimes.get(vm.id);
+    const assignedBotIds = assignedBotsInState(state, vm.id);
+    const queuedBotIds = entry ? entry.waiters.map((waiter) => waiter.botId) : [];
+    const activeBotId = entry?.activeBotId;
+    const lastUsedAt = entry?.lastUsedAt ?? vm.lastUsedAt;
+    const activeActivity =
+      (activeBotId ? activity.get(activeBotId) : undefined) ??
+      assignedBotIds.map((botId) => activity.get(botId)).find((text) => text !== undefined);
+    const legacy = isLegacyMacosVmRecord(vm, state);
     return {
-      botId,
-      vmName: record.vmName,
-      state: stale.has(botId) ? "stale" : (entry?.state ?? "stopped"),
-      baseBuild: record.baseBuild,
-      outdated: !legacy && ready(state) && record.baseBuild !== state.setup.baseBuild,
+      id: vm.id,
+      name: vm.name,
+      kind: vm.kind,
+      vmName: vm.vmName,
+      state: stale.has(vm.id) ? "stale" : (entry?.state ?? "stopped"),
+      baseBuild: vm.baseBuild,
+      outdated: !legacy && ready(state) && vm.baseBuild !== state.setup.baseBuild,
+      assignedBotIds,
+      ...(activeBotId ? { activeBotId } : {}),
+      queuedBotIds,
+      ...(diskUsedBytes !== undefined ? { diskUsedBytes } : {}),
       ...(lastUsedAt !== undefined ? { lastUsedAt } : {}),
-      controller: control.controller(botId),
-      ...(text ? { activity: text } : {}),
+      controller: control.controllerForScope(vm.id),
+      ...(activeActivity ? { activity: activeActivity } : {}),
     };
   }
 
-  async function cloneFromBase(botId: string, state: BotComputersState): Promise<BotComputerRecord> {
-    const vmName = botComputerVmName(botId);
-    await sharedDirFor(botId);
-    await deleteVm(vmName);
-    await lumeOrThrow({ op: "clone", source: BOT_COMPUTER_BASE_VM, target: vmName }, 600_000, "Aiden couldn't make the computer from the base. Try again.");
-    // The clone is a copy of the base's disk, its Linux guest driver with it.
-    const guestDriver = state.setup.guestDriver;
+  function computerStatus(botId: string, state: BotComputersState): BotComputerStatus | undefined {
+    const computerId = assignedComputerId(state, botId);
+    if (!computerId || !hasOwn(state.vms, computerId)) return undefined;
+    const vm = state.vms[computerId];
+    if (!vm) return undefined;
+    const entry = runtimes.get(computerId);
+    const assigned = assignedBotsInState(state, computerId);
+    const shared = vm.kind === "shared" || assigned.length > 1;
+    const queueIndex = entry ? entry.waiters.findIndex((waiter) => waiter.botId === botId) : -1;
+    const queuePosition = queueIndex >= 0 ? queueIndex + 1 : undefined;
+    const activeBotId = entry?.activeBotId;
+    const lastUsedAt = entry?.lastUsedAt ?? vm.lastUsedAt;
+    const text = activity.get(botId) ?? (activeBotId ? activity.get(activeBotId) : undefined);
+    const legacy = isLegacyMacosVmRecord(vm, state);
     return {
+      botId,
+      vmName: vm.vmName,
+      computerId: vm.id,
+      computerName: vm.name,
+      shared,
+      state: stale.has(vm.id) ? "stale" : (entry?.state ?? "stopped"),
+      baseBuild: vm.baseBuild,
+      outdated: !legacy && ready(state) && vm.baseBuild !== state.setup.baseBuild,
+      ...(lastUsedAt !== undefined ? { lastUsedAt } : {}),
+      controller: control.controllerForScope(vm.id),
+      ...(text ? { activity: text } : {}),
+      ...(activeBotId ? { activeBotId } : {}),
+      ...(queuePosition !== undefined ? { queuePosition } : {}),
+    };
+  }
+
+  function createDedicatedVmId(existingVms: Record<string, BotComputerVmRecord>): string {
+    for (;;) {
+      const candidate = `vm-${randomBytes(6).toString("hex")}`;
+      if (!hasOwn(existingVms, candidate)) return candidate;
+    }
+  }
+
+  function nextDedicatedComputerName(state: BotComputersState, preferredBotName?: string): string {
+    const existing = new Set(Object.values(state.vms).map((vm) => vm.name.toLowerCase()));
+    if (preferredBotName && preferredBotName.trim().length > 0) {
+      const base = `${preferredBotName.trim()}'s computer`.slice(0, 64);
+      if (!existing.has(base.toLowerCase())) return base;
+      for (let index = 2; index < 1000; index += 1) {
+        const suffix = ` ${index}`;
+        const candidate = `${base.slice(0, 64 - suffix.length)}${suffix}`;
+        if (!existing.has(candidate.toLowerCase())) return candidate;
+      }
+    }
+    for (let index = 1; index < 10_000; index += 1) {
+      const candidate = `Computer ${index}`;
+      if (!existing.has(candidate.toLowerCase())) return candidate;
+    }
+    return `Computer ${now()}`;
+  }
+
+  async function cloneVmFromBase(
+    spec: {
+      id: string;
+      name: string;
+      kind: "shared" | "dedicated";
+      vmName?: string;
+      legacyOwnerBotId?: string;
+      assignedBotIds?: readonly string[];
+      primaryBotId?: string;
+    },
+    state: BotComputersState,
+  ): Promise<BotComputerVmRecord> {
+    const vmName = spec.vmName ?? botComputerPoolVmName(spec.id);
+    const guestDriver = state.setup.guestDriver;
+    const record: BotComputerVmRecord = {
+      id: spec.id,
+      name: spec.name,
+      kind: spec.kind,
       vmName,
       baseBuild: state.setup.baseBuild ?? image.build,
       createdAt: now(),
+      ...(spec.legacyOwnerBotId ? { legacyOwnerBotId: spec.legacyOwnerBotId } : {}),
       ...(guestDriver ? { guestDriver: { ...guestDriver } } : {}),
     };
+    await sharedDirForVm(record, spec.assignedBotIds ?? [], spec.primaryBotId, { vmStopped: true });
+    await deleteVm(vmName);
+    await lumeOrThrow(
+      { op: "clone", source: BOT_COMPUTER_BASE_VM, target: vmName },
+      600_000,
+      "Aiden couldn't make the computer from the base. Try again.",
+    );
+    return record;
+  }
+
+  /** Lazily clone the canonical `"shared"` Linux VM if needed and assign `forBotId` inside the `vm:shared` turn. */
+  async function ensureSharedVmAndAssign(
+    forBotId: string,
+    parentEpoch?: number,
+  ): Promise<{ state: BotComputersState; createdComputer?: { computerId: string; creationToken: string } }> {
+    return inTurn(
+      vmTurnKey(BOT_COMPUTER_SHARED_ID),
+      async () => {
+        const state = await readState();
+        const existing = hasOwn(state.vms, BOT_COMPUTER_SHARED_ID) ? state.vms[BOT_COMPUTER_SHARED_ID] : undefined;
+        if (existing && !existing.migratedFromMacos) {
+          await sharedDirForVm(existing, [...assignedBotsInState(state, BOT_COMPUTER_SHARED_ID), forBotId], forBotId);
+          return {
+            state: await updateState((draft) => {
+              draft.assignments[forBotId] = BOT_COMPUTER_SHARED_ID;
+            }),
+          };
+        }
+        if (!ready(state)) throw new BotComputerError("not_set_up", "Set up Bot computers in Settings first.");
+        if (setupTask) throw new BotComputerError("busy", "Wait for the base computer to finish updating.");
+        const record = await copyingBase(
+          cloneVmFromBase(
+            {
+              id: BOT_COMPUTER_SHARED_ID,
+              name: existing?.name ?? BOT_COMPUTER_SHARED_DEFAULT_NAME,
+              kind: "shared",
+              vmName: BOT_COMPUTER_SHARED_VM,
+              assignedBotIds: [...assignedBotsInState(state, BOT_COMPUTER_SHARED_ID), forBotId],
+              primaryBotId: forBotId,
+            },
+            state,
+          ),
+        );
+        const creationToken = randomBytes(16).toString("hex");
+        const next = await updateState((draft) => {
+          draft.vms[BOT_COMPUTER_SHARED_ID] = record;
+          draft.assignments[forBotId] = BOT_COMPUTER_SHARED_ID;
+        });
+        vmCreationTokens.set(BOT_COMPUTER_SHARED_ID, creationToken);
+        stale.delete(BOT_COMPUTER_SHARED_ID);
+        return {
+          state: next,
+          createdComputer: { computerId: BOT_COMPUTER_SHARED_ID, creationToken },
+        };
+      },
+      parentEpoch,
+    );
+  }
+
+  function makeLeaseRelease(
+    computerId: string,
+    entry: Runtime,
+    botId: string,
+    leaseEpoch: number,
+    signal?: AbortSignal,
+  ): BotComputerLeaseRelease {
+    let released = false;
+    const release = () => {
+      if (released) return;
+      released = true;
+      if (entry.leaseEpoch !== leaseEpoch || entry.activeBotId !== botId) return;
+      entry.activeCount = Math.max(0, entry.activeCount - 1);
+      if (entry.activeCount > 0) return;
+      const next = entry.waiters.shift();
+      if (next) {
+        next.cleanup();
+        entry.activeBotId = next.botId;
+        entry.activeCount = 1;
+        entry.activeLeaseAbort = new AbortController();
+        emitVm(computerId);
+        next.resolve(makeLeaseRelease(computerId, entry, next.botId, entry.leaseEpoch, entry.activeLeaseAbort.signal));
+      } else {
+        entry.activeBotId = undefined;
+        entry.activeCount = 0;
+        entry.activeLeaseAbort = undefined;
+        emitVm(computerId);
+        host.touch(botId);
+      }
+    };
+    return Object.assign(release, signal ? { signal } : {});
   }
 
   /** A clean guest shutdown, so the disk every clone copies is consistent. */
@@ -1171,7 +1758,7 @@ export function createBotComputerHost(deps: BotComputerHostDependencies): BotCom
       },
     });
     if (signal.aborted) throw setupCancelled();
-    await store.update((draft) => {
+    await updateState((draft) => {
       draft.setup.ipswPath = downloadedImage;
     });
     await acquireBaseSlot(signal);
@@ -1182,7 +1769,7 @@ export function createBotComputerHost(deps: BotComputerHostDependencies): BotCom
     } finally {
       releaseBaseSlot();
     }
-    await store.update((draft) => {
+    await updateState((draft) => {
       draft.setup = {
         guestOs: "linux",
         baseBuild: image.build,
@@ -1341,7 +1928,7 @@ export function createBotComputerHost(deps: BotComputerHostDependencies): BotCom
         await performSetup(mode, controller.signal);
         if (mode === "setup") {
           // In the background: a failed read must not turn a finished setup into a failure.
-          void store.read().then(
+          void readState().then(
             ({ setup }) => reportAnalyticsEvent("bot_computer_set_up", { element_control: guestDriverReady(setup.guestDriver) }),
             () => undefined,
           );
@@ -1349,7 +1936,7 @@ export function createBotComputerHost(deps: BotComputerHostDependencies): BotCom
       } catch (error) {
         const resumable = (await downloader.partialBytes()) > 0 || existsSync(downloader.paths().final);
         const cancelled = error instanceof BotComputerError && error.code === "cancelled";
-        const state = await store.read();
+        const state = await readState();
         if (cancelled && (ready(state) || !resumable)) setupState = undefined;
         else {
           setupState = {
@@ -1370,11 +1957,73 @@ export function createBotComputerHost(deps: BotComputerHostDependencies): BotCom
     return task;
   }
 
-  async function diskUsed(): Promise<number> {
-    if (diskCache && now() - diskCache.at < 30_000) return diskCache.bytes;
-    const bytes = existsSync(root) ? await allocatedBytes(root) : 0;
-    diskCache = { at: now(), bytes };
-    return bytes;
+  async function diskUsage(state: BotComputersState): Promise<{ totalBytes: number; vmBytes: Map<string, number> }> {
+    if (diskCache && now() - diskCache.at < 30_000) {
+      return { totalBytes: diskCache.bytes, vmBytes: diskCache.vmBytes };
+    }
+    const totalBytes = existsSync(root) ? await allocatedBytes(root) : 0;
+    const vmBytes = new Map<string, number>();
+    for (const vm of Object.values(state.vms)) {
+      const vmDir = path.join(dirs.vms, vm.vmName);
+      if (existsSync(vmDir)) {
+        const bytes = await allocatedBytes(vmDir).catch(() => 0);
+        vmBytes.set(vm.id, bytes);
+      }
+    }
+    diskCache = { at: now(), bytes: totalBytes, vmBytes };
+    return { totalBytes, vmBytes };
+  }
+
+  async function resetComputerInner(
+    computerId: string,
+    options?: { force?: boolean },
+    parentEpoch?: number,
+  ): Promise<BotComputerVmStatus> {
+    ensureSupported();
+    const id = parseBotComputerId(computerId);
+    const force = options?.force === true;
+    return inTurn(
+      vmTurnKey(id),
+      async () => {
+        const state = await readState();
+        const vm = hasOwn(state.vms, id) ? state.vms[id] : undefined;
+        if (!vm) throw new BotComputerError("no_computer", "That computer doesn't exist.");
+        if (!ready(state)) throw new BotComputerError("not_set_up", "Set up Bot computers in Settings first.");
+        if (setupTask) throw new BotComputerError("busy", "Wait for the base computer to finish updating.");
+        if (runtimes.get(id)?.activeBotId !== undefined && !force) {
+          throw new BotComputerError("busy", `${vm.name} is currently in use. Wait for the Bot to finish before resetting it.`);
+        }
+        const assigned = assignedBotsInState(state, id);
+        const fresh = await copyingBase(
+          (async () => {
+            clearQueue(id, `${vm.name} is being reset.`, { forceActive: force });
+            if (force) control.forgetScope(id);
+            await stopVmRuntime(id, "person");
+            await deleteVm(vm.vmName);
+            return cloneVmFromBase(
+              {
+                id: vm.id,
+                name: vm.name,
+                kind: vm.kind,
+                vmName: vm.vmName,
+                ...(vm.legacyOwnerBotId ? { legacyOwnerBotId: vm.legacyOwnerBotId } : {}),
+                assignedBotIds: assigned,
+                primaryBotId: assigned[0],
+              },
+              state,
+            );
+          })(),
+        );
+        const next = await updateState((draft) => {
+          if (hasOwn(draft.vms, id)) draft.vms[id] = fresh;
+        });
+        vmCreationTokens.delete(id);
+        stale.delete(id);
+        emitVm(id);
+        return vmStatus(fresh, next);
+      },
+      parentEpoch,
+    );
   }
 
   const host: BotComputerHost & { readonly control: BotComputerControlRegistry; readonly activity: BotComputerActivity } = {
@@ -1382,19 +2031,31 @@ export function createBotComputerHost(deps: BotComputerHostDependencies): BotCom
     activity,
 
     async status(): Promise<BotComputersStatus> {
-      const state = await store.read();
+      const state = await readState();
       const freeDiskBytes = await resources.freeDiskBytes(root).catch(() => undefined);
       const maxRunningLimit = await currentMaxRunningLimit();
+      const { totalBytes, vmBytes } = await diskUsage(state);
       const migrationNotice =
         state.macosMigration?.completedAt !== undefined && !state.macosMigration.noticeDismissed
           ? { freedBytes: state.macosMigration.freedBytes }
           : undefined;
+      const sortedVms = Object.values(state.vms).sort((left, right) => {
+        if (left.id === BOT_COMPUTER_SHARED_ID) return -1;
+        if (right.id === BOT_COMPUTER_SHARED_ID) return 1;
+        return left.createdAt - right.createdAt;
+      });
+      const computers: BotComputerStatus[] = [];
+      for (const botId of Object.keys(state.assignments)) {
+        const status = computerStatus(botId, state);
+        if (status) computers.push(status);
+      }
       return {
         setup: currentSetup(state),
         settings: { ...state.settings },
-        diskUsedBytes: await diskUsed(),
+        diskUsedBytes: totalBytes,
         ...(freeDiskBytes !== undefined ? { freeDiskBytes } : {}),
-        computers: Object.entries(state.computers).map(([botId, record]) => computerStatus(botId, record, state)),
+        vms: sortedVms.map((vm) => vmStatus(vm, state, vmBytes.get(vm.id))),
+        computers,
         requirements: {
           downloadBytes: image.bytes,
           baseDiskBytes: BOT_COMPUTER_LINUX_BASE_SIZE_BYTES,
@@ -1408,20 +2069,19 @@ export function createBotComputerHost(deps: BotComputerHostDependencies): BotCom
     },
 
     async baseReady() {
-      return deps.support().ok && ready(await store.read());
+      return deps.support().ok && ready(await readState());
     },
 
     async computer(botId) {
-      const state = await store.read();
-      const record = state.computers[botId];
-      return record ? computerStatus(botId, record, state) : undefined;
+      const state = await readState();
+      return computerStatus(botId, state);
     },
 
     async setUp() {
       // With a working base, Set up (which is also Settings' "Try again" after a
       // failed update) retries the update beside it. It never rebuilds, in place,
       // the base the Bots' computers came from.
-      if (!setupTask && ready(await store.read())) return host.updateBase();
+      if (!setupTask && ready(await readState())) return host.updateBase();
       return startSetup("setup");
     },
 
@@ -1431,20 +2091,23 @@ export function createBotComputerHost(deps: BotComputerHostDependencies): BotCom
     },
 
     async updateBase() {
-      const state = await store.read();
+      const state = await readState();
       if (!ready(state)) return startSetup("setup");
       if (state.setup.baseBuild === image.build) return;
       return startSetup("update");
     },
 
     removeEverything: () =>
-      // Every Give, Reset and Delete asked for first finishes, and no start may begin while the
-      // files go; a call that waited finds no computer afterwards.
+      // Every Give, Assign, Reset and Delete asked for first finishes, and no start may begin while
+      // the files go; a call that waited finds no computer afterwards.
       inTurn(undefined, async () => {
         host.cancelSetUp();
         await setupTask?.catch(() => undefined);
+        const stateBeforeClear = await readState().catch(() => undefined);
         const ids = [...runtimes.keys()];
-        await Promise.all(ids.map((botId) => stopComputer(botId, "quit").catch(() => undefined)));
+        const allVmIds = new Set([...ids, ...(stateBeforeClear ? Object.keys(stateBeforeClear.vms) : [])]);
+        for (const id of ids) clearQueue(id, "Bot computers were removed.", { forceActive: true });
+        await Promise.all(ids.map((computerId) => stopVmRuntime(computerId, "quit").catch(() => undefined)));
         if (existsSync(dirs.vms)) {
           try {
             const listed = await lume({ op: "list" }, 30_000);
@@ -1463,10 +2126,18 @@ export function createBotComputerHost(deps: BotComputerHostDependencies): BotCom
         for (const dir of Object.values(dirs)) await rm(dir, { recursive: true, force: true });
         for (const file of [sshPaths.privateKey, sshPaths.publicKey, sshPaths.knownHosts]) await rm(file, { force: true });
         await deps.secrets.deleteFamily(BOT_COMPUTER_SECRET_FAMILY);
+        const previousBots = [...assignmentCache.keys()];
+        // Clear control/scopes BEFORE clearing assignmentCache so resolveScope sees every Bot's old scope.
+        for (const computerId of allVmIds) control.forgetScope(computerId);
+        for (const botId of previousBots) {
+          control.forget(botId);
+          activity.set(botId, undefined);
+        }
         await store.clear();
-        for (const botId of ids) control.forget(botId);
+        assignmentCache.clear();
         runtimes.clear();
         stale.clear();
+        vmCreationTokens.clear();
         setupState = undefined;
         emit();
         deps.onRemoved?.();
@@ -1474,11 +2145,13 @@ export function createBotComputerHost(deps: BotComputerHostDependencies): BotCom
 
     async updateSettings(patch) {
       const parsed = parseBotComputersSettingsPatch(patch, await currentMaxRunningLimit());
-      const state = await store.update((draft) => {
+      const state = await updateState((draft) => {
         Object.assign(draft.settings, parsed);
       });
       if (parsed.idleStopMinutes !== undefined) {
-        for (const [botId, entry] of runtimes) if (entry.state === "running") armIdle(botId, entry, state.settings.idleStopMinutes);
+        for (const [computerId, entry] of runtimes) {
+          if (entry.state === "running") armIdle(computerId, entry, state.settings.idleStopMinutes);
+        }
       }
       wakeSlotWaiters();
       emit();
@@ -1487,84 +2160,432 @@ export function createBotComputerHost(deps: BotComputerHostDependencies): BotCom
 
     async give(botId) {
       ensureSupported();
-      return inTurn(botId, async () => {
-        const state = await store.read();
-        const existing = state.computers[botId];
-        if (existing) return computerStatus(botId, existing, state);
+      return inTurn(botTurnKey(botId), async (epoch) => {
+        const state = await readState();
+        const existing = computerStatus(botId, state);
+        if (existing) return existing;
         if (!ready(state)) throw new BotComputerError("not_set_up", "Set up Bot computers in Settings first.");
         if (setupTask) throw new BotComputerError("busy", "Wait for the base computer to finish updating.");
-        const record = await copyingBase(cloneFromBase(botId, state));
-        const next = await store.update((draft) => {
-          draft.computers[botId] = record;
-        });
-        stale.delete(botId);
-        emit(botId);
-        return computerStatus(botId, record, next);
-      });
-    },
-
-    async reset(botId) {
-      ensureSupported();
-      return inTurn(botId, async () => {
-        // Read in its turn: a Delete or Remove everything asked for first has already finished.
-        const state = await store.read();
-        const record = state.computers[botId];
-        if (!record) throw new BotComputerError("no_computer", `${await name(botId)} doesn't have a computer yet.`);
-        if (!ready(state)) throw new BotComputerError("not_set_up", "Set up Bot computers in Settings first.");
-        if (setupTask) throw new BotComputerError("busy", "Wait for the base computer to finish updating.");
-        const fresh = await copyingBase(
-          (async () => {
-            await stopComputer(botId, "person");
-            await deleteVm(record.vmName);
-            return cloneFromBase(botId, state);
-          })(),
+        if (state.settings.defaultComputerMode === "shared") {
+          const { state: next } = await ensureSharedVmAndAssign(botId, epoch);
+          emit();
+          return computerStatus(botId, next)!;
+        }
+        const legacyId = botComputerVmName(botId);
+        const id = hasOwn(state.vms, legacyId) ? createDedicatedVmId(state.vms) : legacyId;
+        const vmName = id === legacyId ? legacyId : botComputerPoolVmName(id);
+        const label = nextDedicatedComputerName(state, await deps.botName?.(botId));
+        const record = await copyingBase(
+          cloneVmFromBase(
+            {
+              id,
+              name: label,
+              kind: "dedicated",
+              vmName,
+              ...(id === legacyId ? { legacyOwnerBotId: botId } : {}),
+              assignedBotIds: [botId],
+              primaryBotId: botId,
+            },
+            state,
+          ),
         );
-        const next = await store.update((draft) => {
-          draft.computers[botId] = fresh;
+        const next = await updateState((draft) => {
+          draft.vms[id] = record;
+          draft.assignments[botId] = id;
         });
-        stale.delete(botId);
+        stale.delete(id);
         emit(botId);
-        return computerStatus(botId, fresh, next);
+        return computerStatus(botId, next)!;
       });
     },
 
-    deleteForBot: (botId) =>
-      inTurn(botId, async () => {
-        await stopComputer(botId, "quit").catch((error: unknown) => log("Stopping a deleted Bot's computer did not finish.", error));
-        const record = (await store.read()).computers[botId];
-        if (record) await deleteVm(record.vmName);
-        else {
+    async assignComputer(botId, target) {
+      return (await host.assignComputerWithProvenance(botId, target)).status;
+    },
+
+    async assignComputerWithProvenance(botId, target) {
+      ensureSupported();
+      const parsed = parseBotComputerAssignTarget(target);
+      return inTurn(botTurnKey(botId), async (epoch) => {
+        const state = await readState();
+        const oldComputerId = assignedComputerId(state, botId);
+        const confirmSurvivingAssignment = async (
+          targetId: string,
+          created?: { computerId: string; creationToken: string },
+        ) => {
+          const confirmedState = await inTurn(vmTurnKey(targetId), async () => readState(), epoch);
+          const status = computerStatus(botId, confirmedState);
+          if (!status || status.computerId !== targetId) {
+            throw new BotComputerError("no_computer", "That computer was deleted.");
+          }
+          const validCreated =
+            created && vmCreationTokens.get(created.computerId) === created.creationToken ? created : undefined;
+          emit();
+          return {
+            status,
+            ...(validCreated ? { createdComputer: validCreated } : {}),
+          };
+        };
+
+        if (parsed.kind === "shared") {
+          if (oldComputerId === BOT_COMPUTER_SHARED_ID && hasOwn(state.vms, BOT_COMPUTER_SHARED_ID)) {
+            return { status: computerStatus(botId, state)! };
+          }
+          if (!ready(state)) throw new BotComputerError("not_set_up", "Set up Bot computers in Settings first.");
+          if (setupTask) throw new BotComputerError("busy", "Wait for the base computer to finish updating.");
+          if (oldComputerId) {
+            revokeBotLease(oldComputerId, botId);
+            control.forget(botId);
+          }
+          const { state: next, createdComputer } = await ensureSharedVmAndAssign(botId, epoch);
+          if (oldComputerId && oldComputerId !== BOT_COMPUTER_SHARED_ID) {
+            releaseOrphanedControlScope(oldComputerId, next);
+            await cleanupDepartedWorkspace(oldComputerId, botId, epoch);
+          }
+          return confirmSurvivingAssignment(BOT_COMPUTER_SHARED_ID, createdComputer);
+        }
+        if (parsed.kind === "existing") {
+          const targetId = parsed.computerId;
+          let departedComputerId: string | undefined;
+          await inTurn(
+            vmTurnKey(targetId),
+            async () => {
+              const latest = await readState();
+              const targetVm = hasOwn(latest.vms, targetId) ? latest.vms[targetId] : undefined;
+              if (!targetVm) throw new BotComputerError("no_computer", "That computer doesn't exist.");
+              const currentOldId = assignedComputerId(latest, botId);
+              if (currentOldId === targetVm.id) return latest;
+              if (currentOldId) {
+                revokeBotLease(currentOldId, botId);
+                control.forget(botId);
+              }
+              await sharedDirForVm(targetVm, [...assignedBotsInState(latest, targetVm.id), botId], botId);
+              const updated = await updateState((draft) => {
+                draft.assignments[botId] = targetVm.id;
+              });
+              if (currentOldId) {
+                releaseOrphanedControlScope(currentOldId, updated);
+                departedComputerId = currentOldId;
+              }
+              return updated;
+            },
+            epoch,
+          );
+          if (departedComputerId) {
+            await cleanupDepartedWorkspace(departedComputerId, botId, epoch);
+          }
+          return confirmSurvivingAssignment(targetId);
+        }
+        // parsed.kind === "new"
+        if (!ready(state)) throw new BotComputerError("not_set_up", "Set up Bot computers in Settings first.");
+        if (setupTask) throw new BotComputerError("busy", "Wait for the base computer to finish updating.");
+        if (oldComputerId) {
+          revokeBotLease(oldComputerId, botId);
+          control.forget(botId);
+        }
+        const id = createDedicatedVmId(state.vms);
+        const label = parsed.name ?? nextDedicatedComputerName(state, await deps.botName?.(botId));
+        const record = await copyingBase(
+          cloneVmFromBase({ id, name: label, kind: "dedicated", assignedBotIds: [botId], primaryBotId: botId }, state),
+        );
+        const creationToken = randomBytes(16).toString("hex");
+        const next = await updateState((draft) => {
+          draft.vms[id] = record;
+          draft.assignments[botId] = id;
+        });
+        vmCreationTokens.set(id, creationToken);
+        stale.delete(id);
+        if (oldComputerId) {
+          releaseOrphanedControlScope(oldComputerId, next);
+          await cleanupDepartedWorkspace(oldComputerId, botId, epoch);
+        }
+        return confirmSurvivingAssignment(id, { computerId: id, creationToken });
+      });
+    },
+
+    async createComputer(computerName) {
+      ensureSupported();
+      const parsedName = computerName === undefined ? undefined : parseBotComputerName(computerName);
+      const initial = await readState();
+      const id = createDedicatedVmId(initial.vms);
+      return inTurn(vmTurnKey(id), async () => {
+        const state = await readState();
+        if (!ready(state)) throw new BotComputerError("not_set_up", "Set up Bot computers in Settings first.");
+        if (setupTask) throw new BotComputerError("busy", "Wait for the base computer to finish updating.");
+        const label = parsedName ?? nextDedicatedComputerName(state);
+        const record = await copyingBase(cloneVmFromBase({ id, name: label, kind: "dedicated" }, state));
+        const next = await updateState((draft) => {
+          draft.vms[id] = record;
+        });
+        stale.delete(id);
+        emit();
+        return vmStatus(record, next);
+      });
+    },
+
+    async renameComputer(computerId, computerName) {
+      const id = parseBotComputerId(computerId);
+      const label = parseBotComputerName(computerName);
+      return inTurn(vmTurnKey(id), async () => {
+        const state = await readState();
+        if (!hasOwn(state.vms, id)) throw new BotComputerError("no_computer", "That computer doesn't exist.");
+        const next = await updateState((draft) => {
+          if (hasOwn(draft.vms, id) && draft.vms[id]) draft.vms[id].name = label;
+        });
+        emit();
+        return vmStatus(next.vms[id]!, next);
+      });
+    },
+
+    async deleteComputer(computerId, options) {
+      const id = parseBotComputerId(computerId);
+      return inTurn(vmTurnKey(id), async () => {
+        const state = await readState();
+        const vm = hasOwn(state.vms, id) ? state.vms[id] : undefined;
+        if (!vm) throw new BotComputerError("no_computer", "That computer doesn't exist.");
+        if (options?.creationToken !== undefined && vmCreationTokens.get(id) !== options.creationToken) {
+          throw new BotComputerError("busy", `${vm.name} was not created by this change.`);
+        }
+        const assigned = assignedBotsInState(state, id);
+        if (assigned.length > 0 && !options?.force) {
+          throw new BotComputerError(
+            "busy",
+            `${vm.name} is still assigned to ${assigned.length === 1 ? "1 Bot" : `${assigned.length} Bots`}. Reassign or confirm deletion first.`,
+          );
+        }
+        const runtimeEntry = runtimes.get(id);
+        if (
+          !options?.force &&
+          runtimeEntry &&
+          (runtimeEntry.activeBotId !== undefined ||
+            runtimeEntry.start !== undefined ||
+            runtimeEntry.waiters.length > 0)
+        ) {
+          throw new BotComputerError(
+            "busy",
+            `${vm.name} is currently in use. Wait for the Bot to finish or confirm deletion.`,
+          );
+        }
+        clearQueue(id, `${vm.name} was deleted.`, { forceActive: true });
+        await stopVmRuntime(id, "person");
+        await deleteVm(vm.vmName);
+        await removeComputerWorkspace(id);
+        await updateState((draft) => {
+          delete draft.vms[id];
+          for (const botId of Object.keys(draft.assignments)) {
+            if (draft.assignments[botId] === id) delete draft.assignments[botId];
+          }
+        });
+        vmCreationTokens.delete(id);
+        runtimes.get(id)?.cancelIdle?.();
+        runtimes.delete(id);
+        stale.delete(id);
+        control.forgetScope(id);
+        for (const botId of assigned) activity.set(botId, undefined);
+        emit();
+      });
+    },
+
+    async resetComputer(computerId, options) {
+      return resetComputerInner(computerId, options);
+    },
+
+    async reset(botId, options) {
+      ensureSupported();
+      return inTurn(botTurnKey(botId), async (epoch) => {
+        // Read in its turn: a Delete or Remove everything asked for first has already finished.
+        const state = await readState();
+        const computerId = assignedComputerId(state, botId);
+        if (!computerId || !hasOwn(state.vms, computerId)) {
+          throw new BotComputerError("no_computer", `${await name(botId)} doesn't have a computer yet.`);
+        }
+        await resetComputerInner(computerId, options, epoch);
+        const next = await readState();
+        const status = computerStatus(botId, next);
+        if (!status) throw new BotComputerError("no_computer", `${await name(botId)} doesn't have a computer yet.`);
+        return status;
+      });
+    },
+
+    deleteForBot: (botId) => {
+      const clearPendingNote = (draft: BotComputersState) => {
+        if (!draft.macosMigration?.pendingMigrationNotes) return;
+        const remaining = draft.macosMigration.pendingMigrationNotes.filter((id) => id !== botId);
+        if (remaining.length > 0) draft.macosMigration.pendingMigrationNotes = remaining;
+        else delete draft.macosMigration.pendingMigrationNotes;
+      };
+      return inTurn(botTurnKey(botId), async (epoch) => {
+        const state = await readState();
+        const computerId = assignedComputerId(state, botId);
+        const initialVm = computerId && hasOwn(state.vms, computerId) ? state.vms[computerId] : undefined;
+        if (!computerId || !initialVm) {
           // A clone that never reached the store can still exist, so the derived
           // name is tried too; that guess never holds up deleting a Bot that had
           // no computer, even when Lume can't run.
           await deleteVm(botComputerVmName(botId)).catch((error: unknown) =>
             log("Deleting a VM no record names did not finish.", error),
           );
+          if (state.macosMigration?.pendingMigrationNotes?.includes(botId)) {
+            await updateState(clearPendingNote);
+          }
+          control.forget(botId);
+          activity.set(botId, undefined);
+          emit(botId);
+          return;
         }
-        // Deleting a Bot that never had a computer must not create Aiden's Bot-computer folder.
-        if (record) {
-          await store.update((draft) => {
-            delete draft.computers[botId];
-          });
-        }
-        runtimes.get(botId)?.cancelIdle?.();
-        runtimes.delete(botId);
-        stale.delete(botId);
-        control.forget(botId);
+        await inTurn(
+          vmTurnKey(computerId),
+          async () => {
+            const latest = await readState();
+            const currentId = assignedComputerId(latest, botId);
+            const vm = currentId && hasOwn(latest.vms, currentId) ? latest.vms[currentId] : undefined;
+            if (!currentId || !vm) {
+              control.forget(botId);
+              return;
+            }
+            const otherAssigned = assignedBotsInState(latest, currentId).filter((id) => id !== botId);
+            if (vm.kind === "dedicated" && otherAssigned.length === 0) {
+              clearQueue(currentId, `${vm.name} was deleted.`, { forceActive: true });
+              await stopVmRuntime(currentId, "quit", botId).catch((error: unknown) =>
+                log("Stopping a deleted Bot's computer did not finish.", error),
+              );
+              await deleteVm(vm.vmName);
+              await removeComputerWorkspace(currentId);
+              await updateState((draft) => {
+                delete draft.assignments[botId];
+                delete draft.vms[currentId];
+                clearPendingNote(draft);
+              });
+              runtimes.get(currentId)?.cancelIdle?.();
+              runtimes.delete(currentId);
+              vmCreationTokens.delete(currentId);
+              stale.delete(currentId);
+              control.forgetScope(currentId);
+            } else {
+              // Shared computer or another Bot still uses this VM: unassign only.
+              revokeBotLease(currentId, botId, "The Bot was removed from this computer.");
+              control.forget(botId);
+              const updated = await updateState((draft) => {
+                delete draft.assignments[botId];
+                clearPendingNote(draft);
+              });
+              releaseOrphanedControlScope(currentId, updated);
+              await removeBotWorkspaceSubfolder(currentId, botId);
+            }
+          },
+          epoch,
+        );
         activity.set(botId, undefined);
-        emit(botId);
-      }),
+        emit();
+      });
+    },
+
+    async acquireLease(botId, options) {
+      const signal = options?.signal;
+      for (
+        let held = startsHeld(botId, assignmentCache.get(botId));
+        held;
+        held = startsHeld(botId, assignmentCache.get(botId))
+      ) {
+        await untilDone(held, signal, "Waiting for the computer was cancelled.");
+      }
+      if (shuttingDown) throw new BotComputerError("busy", "Aiden is quitting.");
+      const state = await readState();
+      const computerId = assignedComputerId(state, botId);
+      const vm = computerId && hasOwn(state.vms, computerId) ? state.vms[computerId] : undefined;
+      if (!computerId || !vm) {
+        throw new BotComputerError("no_computer", `${await name(botId)} doesn't have a computer yet.`);
+      }
+      const heldForVm = startsHeld(botId, computerId);
+      if (heldForVm) {
+        await untilDone(heldForVm, signal, "Waiting for the computer was cancelled.");
+        return host.acquireLease(botId, options);
+      }
+      const entry = runtime(computerId);
+      if (entry.activeBotId === undefined) {
+        entry.activeBotId = botId;
+        entry.activeCount = 1;
+        entry.activeLeaseAbort = new AbortController();
+        emitVm(computerId);
+        return makeLeaseRelease(computerId, entry, botId, entry.leaseEpoch, entry.activeLeaseAbort.signal);
+      }
+      if (entry.activeBotId === botId) {
+        entry.activeCount += 1;
+        return makeLeaseRelease(computerId, entry, botId, entry.leaseEpoch, entry.activeLeaseAbort?.signal);
+      }
+      if (signal?.aborted) {
+        throw new BotComputerError("cancelled", "Waiting for the computer was cancelled.");
+      }
+      const activeLabel = await name(entry.activeBotId);
+      if (signal?.aborted) {
+        throw new BotComputerError("cancelled", "Waiting for the computer was cancelled.");
+      }
+      if (assignmentDrifted(botId, computerId, entry)) {
+        return host.acquireLease(botId, options);
+      }
+      if (entry.activeBotId === undefined) {
+        entry.activeBotId = botId;
+        entry.activeCount = 1;
+        entry.activeLeaseAbort = new AbortController();
+        emitVm(computerId);
+        return makeLeaseRelease(computerId, entry, botId, entry.leaseEpoch, entry.activeLeaseAbort.signal);
+      }
+      if (entry.activeBotId === botId) {
+        entry.activeCount += 1;
+        return makeLeaseRelease(computerId, entry, botId, entry.leaseEpoch, entry.activeLeaseAbort?.signal);
+      }
+      return new Promise<BotComputerLeaseRelease>((resolve, reject) => {
+        const onAbort = () => {
+          const index = entry.waiters.indexOf(waiter);
+          if (index >= 0) {
+            entry.waiters.splice(index, 1);
+            emitVm(computerId);
+          }
+          waiter.cleanup();
+          reject(new BotComputerError("cancelled", "Waiting for the computer was cancelled."));
+        };
+        const waiter: QueueWaiter = {
+          botId,
+          resolve,
+          reject,
+          cleanup: () => {
+            signal?.removeEventListener("abort", onAbort);
+          },
+        };
+        entry.waiters.push(waiter);
+        signal?.addEventListener("abort", onAbort, { once: true });
+        const position = entry.waiters.length;
+        options?.onProgress?.(
+          position === 1
+            ? `Waiting for ${activeLabel} to finish using ${vm.name}…`
+            : `Waiting in queue (#${position}) for ${vm.name}…`,
+        );
+        emitVm(computerId);
+      });
+    },
 
     async ensureRunning(botId, options) {
-      // Remove everything, or a Give, Reset or Delete of this computer, finishes first.
-      for (let held = startsHeld(botId); held; held = startsHeld(botId)) await untilDone(held, options.signal);
+      // Remove everything, or a Give, Assign, Reset or Delete of this Bot or VM, finishes first.
+      for (let held = startsHeld(botId, assignmentCache.get(botId)); held; held = startsHeld(botId, assignmentCache.get(botId))) {
+        await untilDone(held, options.signal);
+      }
       if (shuttingDown) throw new BotComputerError("busy", "Aiden is quitting.");
       ensureSupported();
-      const initialState = await store.read();
-      let record = initialState.computers[botId];
-      if (!record) throw new BotComputerError("no_computer", `${await name(botId)} doesn't have a computer yet.`);
-      if (isLegacyMacosRecord(record, initialState)) {
-        if (!ready(initialState)) {
+      const initialState = await readState();
+      const computerId = assignedComputerId(initialState, botId);
+      let vm = computerId && hasOwn(initialState.vms, computerId) ? initialState.vms[computerId] : undefined;
+      if (!computerId || !vm) throw new BotComputerError("no_computer", `${await name(botId)} doesn't have a computer yet.`);
+      for (let held = startsHeld(botId, computerId); held; held = startsHeld(botId, computerId)) {
+        await untilDone(held, options.signal);
+      }
+      const postWaitState = await readState();
+      if (assignedComputerId(postWaitState, botId) !== computerId) {
+        return host.ensureRunning(botId, options);
+      }
+      vm = hasOwn(postWaitState.vms, computerId) ? postWaitState.vms[computerId] : undefined;
+      if (!vm) throw new BotComputerError("no_computer", `${await name(botId)} doesn't have a computer yet.`);
+      if (isLegacyMacosVmRecord(vm, postWaitState)) {
+        if (!ready(postWaitState)) {
           throw new BotComputerError(
             "not_set_up",
             "Bot computers now run Linux. Set up Bot computers in Settings → Computers & VMs to continue.",
@@ -1573,40 +2594,75 @@ export function createBotComputerHost(deps: BotComputerHostDependencies): BotCom
         if (setupTask) throw new BotComputerError("busy", "Wait for the base computer to finish updating.");
         // Automatically clone a fresh Linux VM from the newly set-up base so each migrated
         // Bot keeps its "has a computer" setting without manual Reset.
-        record = await inTurn(botId, async () => {
-          const latest = await store.read();
-          const current = latest.computers[botId];
+        let driftedDuringLegacyUpgrade = false;
+        const upgraded = await inTurn(vmTurnKey(computerId), async () => {
+          const latest = await readState();
+          if (assignedComputerId(latest, botId) !== computerId) {
+            driftedDuringLegacyUpgrade = true;
+            return undefined;
+          }
+          const current = hasOwn(latest.vms, computerId) ? latest.vms[computerId] : undefined;
           if (!current) throw new BotComputerError("no_computer", `${await name(botId)} doesn't have a computer yet.`);
-          if (!isLegacyMacosRecord(current, latest)) return current;
+          if (!isLegacyMacosVmRecord(current, latest)) return current;
           if (!ready(latest)) {
             throw new BotComputerError(
               "not_set_up",
               "Bot computers now run Linux. Set up Bot computers in Settings → Computers & VMs to continue.",
             );
           }
-          const cloned = await copyingBase(cloneFromBase(botId, latest));
-          await store.update((draft) => {
-            if (draft.computers[botId]) draft.computers[botId] = cloned;
+          const assigned = assignedBotsInState(latest, computerId);
+          const cloned = await copyingBase(
+            cloneVmFromBase(
+              {
+                id: current.id,
+                name: current.name,
+                kind: current.kind,
+                vmName: current.vmName,
+                ...(current.legacyOwnerBotId ? { legacyOwnerBotId: current.legacyOwnerBotId } : {}),
+                assignedBotIds: assigned,
+                primaryBotId: botId,
+              },
+              latest,
+            ),
+          );
+          await updateState((draft) => {
+            if (hasOwn(draft.vms, computerId)) draft.vms[computerId] = cloned;
           });
-          stale.delete(botId);
-          emit(botId);
+          stale.delete(computerId);
+          emitVm(computerId);
           return cloned;
         });
+        if (driftedDuringLegacyUpgrade || !upgraded) {
+          return host.ensureRunning(botId, options);
+        }
+        vm = upgraded;
       }
-      if (stale.has(botId)) {
+      if (stale.has(computerId)) {
         throw new BotComputerError("stale", `${await possessive(botId)} computer didn't finish being made. Reset it in the Bot's profile.`);
       }
-      const entry = runtime(botId);
+      const entry = runtime(computerId);
       for (;;) {
         if (entry.stopping) await entry.stopping;
+        if (assignmentDrifted(botId, computerId, entry) || stale.has(computerId)) {
+          return host.ensureRunning(botId, options);
+        }
         if (entry.state === "running" && entry.connection) {
+          const latestState = await readState();
+          const currentVm = hasOwn(latestState.vms, computerId) ? latestState.vms[computerId] : undefined;
+          if (assignedComputerId(latestState, botId) !== computerId || !currentVm || stale.has(computerId)) {
+            return host.ensureRunning(botId, options);
+          }
+          await sharedDirForVm(currentVm, assignedBotsInState(latestState, computerId), botId);
+          if (assignmentDrifted(botId, computerId, entry) || stale.has(computerId)) {
+            return host.ensureRunning(botId, options);
+          }
           host.touch(botId);
           return entry.connection;
         }
         // Running with no connection: a failed start Lume couldn't turn off. It is turned off
         // first; a stop that fails again rejects, and the computer keeps its place.
         if (entry.state === "running") {
-          await stopComputer(botId, "person");
+          await stopVmRuntime(computerId, "person", botId);
           continue;
         }
         // A start every earlier caller gave up on is ending; this caller starts afresh once it has.
@@ -1615,7 +2671,9 @@ export function createBotComputerHost(deps: BotComputerHostDependencies): BotCom
         await ending.promise.catch(() => undefined);
       }
       // One of those began while this caller waited above: it starts whatever is there once that is done.
-      if (startsHeld(botId)) return host.ensureRunning(botId, options);
+      if (assignmentDrifted(botId, computerId, entry) || stale.has(computerId)) {
+        return host.ensureRunning(botId, options);
+      }
       if (!entry.start) {
         const controller = new AbortController();
         const progress = new Set<(text: string) => void>();
@@ -1623,9 +2681,10 @@ export function createBotComputerHost(deps: BotComputerHostDependencies): BotCom
           controller,
           progress,
           callers: 0,
-          promise: startComputer(botId, record, entry, {
+          promise: startVmRuntime(computerId, vm, entry, {
             reason: options.reason,
             signal: controller.signal,
+            botId,
             onProgress: (text) => {
               for (const listener of [...progress]) {
                 try {
@@ -1644,31 +2703,44 @@ export function createBotComputerHost(deps: BotComputerHostDependencies): BotCom
       return joinStart(entry.start, options);
     },
 
-    stop(botId, options) {
-      return stopComputer(botId, options?.reason ?? "person");
+    async stop(botId, options) {
+      const reason = options?.reason ?? "person";
+      const state = await readState();
+      const computerId = assignedComputerId(state, botId);
+      if (!computerId) return;
+      removeBotFromQueue(computerId, botId);
+      if (reason === "pause") {
+        const otherAssigned = assignedBotsInState(state, computerId).some((id) => id !== botId);
+        if (otherAssigned) return;
+      }
+      return stopVmRuntime(computerId, reason, botId);
     },
 
     runningConnection(botId) {
-      const entry = runtimes.get(botId);
+      const computerId = assignmentCache.get(botId);
+      if (!computerId) return undefined;
+      const entry = runtimes.get(computerId);
       return entry?.state === "running" && entry.connection ? entry.connection : undefined;
     },
 
     touch(botId) {
-      const entry = runtimes.get(botId);
+      const computerId = assignmentCache.get(botId);
+      if (!computerId) return;
+      const entry = runtimes.get(computerId);
       if (!entry || entry.state !== "running") return;
       entry.lastUsedAt = now();
-      void store
-        .read()
+      void readState()
         .then((state) => {
-          if (entry.state === "running") armIdle(botId, entry, state.settings.idleStopMinutes);
+          if (entry.state === "running") armIdle(computerId, entry, state.settings.idleStopMinutes);
         })
         .catch(() => undefined);
     },
 
     async runGuestCommand(botId, command, options) {
       const connection = await host.ensureRunning(botId, { reason: "tool", signal: options.signal });
-      const entry = runtime(botId);
-      entry.leases += 1;
+      const computerId = assignmentCache.get(botId) ?? assignedComputerId(await readState(), botId);
+      const entry = computerId ? runtime(computerId) : undefined;
+      if (entry) entry.leases += 1;
       try {
         return await runSshCommand(
           connection.ssh,
@@ -1682,18 +2754,18 @@ export function createBotComputerHost(deps: BotComputerHostDependencies): BotCom
           },
         );
       } finally {
-        entry.leases -= 1;
+        if (entry) entry.leases -= 1;
         host.touch(botId);
       }
     },
 
     async guestDriver(botId) {
-      const state = await store.read();
-      const record = state.computers[botId];
-      const legacy = record ? isLegacyMacosRecord(record, state) : false;
+      const state = await readState();
+      const computerId = assignedComputerId(state, botId);
+      const vm = computerId && hasOwn(state.vms, computerId) ? state.vms[computerId] : undefined;
+      const legacy = vm ? isLegacyMacosVmRecord(vm, state) : false;
       const driver =
-        (!legacy ? record?.guestDriver : undefined) ??
-        (legacy && ready(state) ? state.setup.guestDriver : undefined);
+        (!legacy ? vm?.guestDriver : undefined) ?? (legacy && ready(state) ? state.setup.guestDriver : undefined);
       if (!driver || !guestDriverReady(driver)) return undefined;
       const location: GuestDriverLocation = { home: driver.home, uid: driver.uid };
       return guestHostFor(async () => {
@@ -1707,9 +2779,9 @@ export function createBotComputerHost(deps: BotComputerHostDependencies): BotCom
     },
 
     async dismissMigrationNotice() {
-      const state = await store.read();
+      const state = await readState();
       if (state.macosMigration?.completedAt === undefined || state.macosMigration.noticeDismissed) return;
-      await store.update((draft) => {
+      await updateState((draft) => {
         if (draft.macosMigration?.completedAt !== undefined) draft.macosMigration.noticeDismissed = true;
       });
       emit();
@@ -1717,7 +2789,7 @@ export function createBotComputerHost(deps: BotComputerHostDependencies): BotCom
 
     async reconcile() {
       if (!deps.support().ok || !existsSync(root)) return;
-      let state = await store.read();
+      let state = await readState();
       const hasVmsDir = existsSync(dirs.vms);
       let vms: LumeVmInfo[] = [];
       let lumeListed = false;
@@ -1735,16 +2807,15 @@ export function createBotComputerHost(deps: BotComputerHostDependencies): BotCom
       const deliverPendingMigrationNotes = async () => {
         if (!deps.onMacosComputerMigrated) return;
         const latest = await store.read();
-        const pendingBots = Object.entries(latest.computers)
-          .filter(([, rec]) => rec.pendingMigrationNote === true)
-          .map(([botId]) => botId);
+        const pendingBots = latest.macosMigration?.pendingMigrationNotes ?? [];
         for (const botId of pendingBots) {
-          stale.delete(botId);
           try {
             await Promise.resolve(deps.onMacosComputerMigrated(botId, BOT_COMPUTER_LINUX_MIGRATION_BOT_NOTE));
-            await store.update((draft) => {
-              const current = draft.computers[botId];
-              if (current) delete current.pendingMigrationNote;
+            await updateState((draft) => {
+              if (!draft.macosMigration?.pendingMigrationNotes) return;
+              const remaining = draft.macosMigration.pendingMigrationNotes.filter((id) => id !== botId);
+              if (remaining.length > 0) draft.macosMigration.pendingMigrationNotes = remaining;
+              else delete draft.macosMigration.pendingMigrationNotes;
             });
           } catch (error: unknown) {
             log("Writing Linux migration note to Bot memory did not finish.", error);
@@ -1824,7 +2895,10 @@ export function createBotComputerHost(deps: BotComputerHostDependencies): BotCom
                 log("Deleting a legacy Apple restore image did not finish.", error);
               }
             }
-            const clearLegacySetup = state.setup.guestOs !== "linux" || state.macosMigration?.pendingSecretCleanup === true;
+            const latestBeforeClear = await readState();
+            const clearLegacySetup =
+              latestBeforeClear.setup.guestOs !== "linux" ||
+              latestBeforeClear.macosMigration?.pendingSecretCleanup === true;
             let secretCleared = true;
             if (clearLegacySetup) {
               try {
@@ -1836,48 +2910,60 @@ export function createBotComputerHost(deps: BotComputerHostDependencies): BotCom
               }
             }
             const migratedBotIds: string[] = [];
-            state = await store.update((draft) => {
+            const migratedVmIds: string[] = [];
+            state = await updateState((draft) => {
               if (draft.setup.guestOs !== "linux") {
                 draft.setup = {};
-                for (const [botId, rec] of Object.entries(draft.computers)) {
+                for (const [computerId, rec] of Object.entries(draft.vms)) {
                   if (rec.migratedFromMacos) continue;
-                  migratedBotIds.push(botId);
-                  draft.computers[botId] = {
+                  migratedVmIds.push(computerId);
+                  draft.vms[computerId] = {
+                    id: rec.id,
+                    name: rec.name,
+                    kind: rec.kind,
                     vmName: rec.vmName,
                     baseBuild: "",
                     createdAt: rec.createdAt,
                     ...(rec.lastUsedAt !== undefined ? { lastUsedAt: rec.lastUsedAt } : {}),
+                    ...(rec.legacyOwnerBotId ? { legacyOwnerBotId: rec.legacyOwnerBotId } : {}),
                     migratedFromMacos: true,
-                    ...(deps.onMacosComputerMigrated ? { pendingMigrationNote: true } : {}),
                   };
+                  for (const botId of assignedBotsInState(draft, computerId)) {
+                    migratedBotIds.push(botId);
+                  }
                 }
               }
+              const pendingNotes = deps.onMacosComputerMigrated
+                ? [...new Set([...(draft.macosMigration?.pendingMigrationNotes ?? []), ...migratedBotIds])]
+                : draft.macosMigration?.pendingMigrationNotes;
               const totalFreedBytes = (draft.macosMigration?.freedBytes ?? 0) + freedThisPass;
               draft.macosMigration = allRemoved
                 ? {
                     completedAt: now(),
                     freedBytes: totalFreedBytes,
                     noticeDismissed: false,
+                    ...(pendingNotes && pendingNotes.length > 0 ? { pendingMigrationNotes: pendingNotes } : {}),
                   }
                 : {
                     freedBytes: totalFreedBytes,
                     ...(secretCleared ? {} : { pendingSecretCleanup: true }),
+                    ...(pendingNotes && pendingNotes.length > 0 ? { pendingMigrationNotes: pendingNotes } : {}),
                   };
             });
-            for (const botId of migratedBotIds) {
-              stale.delete(botId);
-            }
+            for (const computerId of migratedVmIds) stale.delete(computerId);
             if (allRemoved || freedThisPass > 0 || migratedBotIds.length > 0) {
               deps.onRemoved?.();
             }
           });
         } else if (state.setup.guestOs === "linux") {
-          state = await store.update((draft) => {
+          state = await updateState((draft) => {
             if (!draft.macosMigration?.completedAt) {
+              const pendingNotes = draft.macosMigration?.pendingMigrationNotes;
               draft.macosMigration = {
                 completedAt: now(),
                 freedBytes: 0,
                 noticeDismissed: true,
+                ...(pendingNotes && pendingNotes.length > 0 ? { pendingMigrationNotes: pendingNotes } : {}),
               };
             }
           });
@@ -1892,15 +2978,21 @@ export function createBotComputerHost(deps: BotComputerHostDependencies): BotCom
         return;
       }
 
+      const vmNameToComputerId = new Map(Object.values(state.vms).map((vm) => [vm.vmName, vm.id]));
       for (const info of byName.values()) {
         if (!(isAidenVmName(info.name) || info.name === BOT_COMPUTER_STAGING_BASE_VM)) continue;
-        // Checked per VM, after the listing: a start or a base build may have begun meanwhile.
-        if ((await vmsInUse()).has(info.name)) continue;
+        const computerId = vmNameToComputerId.get(info.name);
+        const turnBusy = () =>
+          hasActiveTurn(undefined) || (computerId !== undefined && hasActiveTurn(vmTurnKey(computerId)));
+        // Checked per VM, after the listing: a start, lifecycle op, or base build may have begun meanwhile.
+        if (turnBusy() || (await vmsInUse()).has(info.name)) continue;
         if (info.state === "running") {
+          if (turnBusy() || (await vmsInUse()).has(info.name)) continue;
           // Left running by an earlier Aiden that quit or crashed.
           await stopVm(info.name, true).catch((error: unknown) => log("Stopping an orphaned VM did not finish.", error));
         }
         if (info.state === "provisioning" && info.stale && (info.name === BOT_COMPUTER_BASE_VM || info.name === BOT_COMPUTER_STAGING_BASE_VM)) {
+          if (turnBusy() || (await vmsInUse()).has(info.name)) continue;
           await deleteVm(info.name).catch((error: unknown) => log("Deleting an interrupted base did not finish.", error));
           if (info.name === BOT_COMPUTER_BASE_VM && !ready(state)) {
             setupState = { kind: "failed", message: "Set up was interrupted. Choose Set up to try again.", resumable: true };
@@ -1929,19 +3021,20 @@ export function createBotComputerHost(deps: BotComputerHostDependencies): BotCom
           }
         }
         if (!recoveredBase) {
-          state = await store.update((draft) => {
+          state = await updateState((draft) => {
             draft.setup = draft.setup.guestOs ? { guestOs: draft.setup.guestOs } : {};
           });
         }
       }
-      for (const [botId, record] of Object.entries(state.computers)) {
+      for (const [computerId, record] of Object.entries(state.vms)) {
+        if (hasActiveTurn(undefined) || hasActiveTurn(vmTurnKey(computerId))) continue;
         if (record.migratedFromMacos) {
-          stale.delete(botId);
+          stale.delete(computerId);
           continue;
         }
         const info = byName.get(record.vmName);
-        if (!info || (info.state === "provisioning" && info.stale)) stale.add(botId);
-        else stale.delete(botId);
+        if (!info || (info.state === "provisioning" && info.stale)) stale.add(computerId);
+        else stale.delete(computerId);
       }
       emit();
     },
@@ -1957,7 +3050,8 @@ export function createBotComputerHost(deps: BotComputerHostDependencies): BotCom
       host.beginQuit();
       host.cancelSetUp();
       for (const wake of [...slotWaiters]) wake();
-      const stops = [...runtimes.keys()].map((botId) => stopComputer(botId, "quit").catch(() => undefined));
+      for (const computerId of runtimes.keys()) clearQueue(computerId, "Aiden is quitting.", { forceActive: true });
+      const stops = [...runtimes.keys()].map((computerId) => stopVmRuntime(computerId, "quit").catch(() => undefined));
       let timer: NodeJS.Timeout | undefined;
       await Promise.race([
         Promise.all([...stops, setupTask?.catch(() => undefined)]),

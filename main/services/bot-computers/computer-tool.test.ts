@@ -637,3 +637,113 @@ test("Linux computer tool describes Linux/Chromium/LibreOffice and maps Command 
   const clickCall = calls.find((call) => call.name === "click");
   assert.deepEqual(clickCall?.args.modifier, ["ctrl"]);
 });
+
+test("computer tool acquires and releases the host FIFO lease around actions", async () => {
+  const control = createBotComputerControl();
+  const state = createBotComputerToolState(control);
+  const fake = fakeScreen(1280, 720);
+  const events: string[] = [];
+  const tool = createBotComputerTool(
+    "ada",
+    {
+      host: {
+        async acquireLease(botId) {
+          events.push(`acquire:${botId}`);
+          return () => events.push(`release:${botId}`);
+        },
+        async ensureRunning() {
+          events.push("ensureRunning");
+          return connection();
+        },
+        touch() {
+          events.push("touch");
+        },
+      },
+      sessions: {
+        async screen() {
+          events.push("screen");
+          return fake.screen;
+        },
+        recordPointer() {},
+        setActivity() {},
+      },
+      control,
+      state,
+      botName: async () => "Ada",
+      sleep: async () => {},
+    },
+    { routine: false },
+  );
+  const result = (await tool.execute("call-lease", { action: "capture" })) as AgentToolResult<BotComputerResultDetails>;
+  assert.equal(result.isError, undefined);
+  assert.deepEqual(events, ["acquire:ada", "ensureRunning", "screen", "release:ada", "touch"]);
+});
+
+test("another Bot mutating a shared VM invalidates the first Bot's cached capture coordinates", async () => {
+  const control = createBotComputerControl();
+  const state = createBotComputerToolState(control);
+  const fake = fakeScreen(1280, 720);
+  const sharedConnection: BotComputerConnection = {
+    vmName: "aiden-vm-shared",
+    ip: "192.168.64.5",
+    vnc: { host: "127.0.0.1", port: 5900, password: "secret" },
+    ssh: { host: "192.168.64.5", user: "lume" },
+  };
+  const makeTool = (botId: string, label: string) =>
+    createBotComputerTool(
+      botId,
+      {
+        host: {
+          async ensureRunning() {
+            return sharedConnection;
+          },
+          touch() {},
+        },
+        sessions: {
+          async screen() {
+            return fake.screen;
+          },
+          recordPointer() {},
+          setActivity() {},
+        },
+        control,
+        state,
+        botName: async () => label,
+        sleep: async () => {},
+      },
+      { routine: false },
+    );
+
+  const ada = makeTool("ada", "Ada");
+  const ben = makeTool("ben", "Ben");
+
+  // Ada captures, then Ben captures and clicks on the same shared VM.
+  assert.equal(((await ada.execute("a1", { action: "capture" })) as AgentToolResult<BotComputerResultDetails>).isError, undefined);
+  assert.equal(((await ben.execute("b1", { action: "capture" })) as AgentToolResult<BotComputerResultDetails>).isError, undefined);
+  assert.equal(
+    ((await ben.execute("b2", { action: "click", coordinate: [200, 200], intent: "Ben clicks" })) as AgentToolResult<BotComputerResultDetails>)
+      .isError,
+    undefined,
+  );
+  const eventsBeforeAda = fake.events.length;
+
+  // Ada's click using its pre-Ben capture must be refused without sending any pointer event.
+  const staleClick = (await ada.execute("a2", {
+    action: "click",
+    coordinate: [100, 100],
+    intent: "Ada clicks stale coordinates",
+  })) as AgentToolResult<BotComputerResultDetails>;
+  assert.equal(staleClick.isError, true);
+  assert.match(textOf(staleClick), /Another Bot used this shared computer since your last capture/u);
+  assert.equal(fake.events.length, eventsBeforeAda);
+
+  // Taking a fresh capture clears the stale flag so Ada can click again.
+  assert.equal(((await ada.execute("a3", { action: "capture" })) as AgentToolResult<BotComputerResultDetails>).isError, undefined);
+  const freshClick = (await ada.execute("a4", {
+    action: "click",
+    coordinate: [100, 100],
+    intent: "Ada clicks fresh coordinates",
+  })) as AgentToolResult<BotComputerResultDetails>;
+  assert.equal(freshClick.isError, undefined);
+  assert.ok(fake.events.length > eventsBeforeAda);
+});

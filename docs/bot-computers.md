@@ -1,9 +1,12 @@
 # Bot computers
 
-A Bot computer is a Linux virtual machine (Debian 13 with XFCE) that belongs to
-one Bot, so the Bot can work in apps and a browser without touching the
-person's own desktop. Bot computers are opt-in, run only on a Mac with Apple
-silicon, and are built and managed with
+A Bot computer is a Linux virtual machine (Debian 13 with XFCE) where one or
+more Bots can work in apps and a browser without touching the person's own
+desktop. By default, Bots share one **Shared computer** (`aiden-vm-shared`),
+taking turns through a FIFO queue with both a shared folder and their own
+per-Bot working folders; you can also assign any Bot to another existing Linux
+VM or create a fresh dedicated Linux computer at any time. Bot computers are
+opt-in, run only on a Mac with Apple silicon, and are built and managed with
 [Lume](https://github.com/trycua/cua/tree/lume-v0.8.0/libs/lume) 0.8.0, which
 ships inside Aiden.
 
@@ -77,17 +80,23 @@ from the new base automatically.
    - Creates the unprivileged `aiden-bot` user (no sudo privileges) for
      `computer_shell` isolation, with narrowly scoped sudoers rules for
      `lume` to run commands as `aiden-bot` and stop its processes during sign-in,
-   - Mounts `<botHome>/Computer` over `virtiofs` at `/mnt/aiden-shared` and
-     links `~/Shared` for both `lume` and `aiden-bot`,
+   - Mounts the VM's `Computer` folder over `virtiofs` at
+     `/mnt/aiden-shared/Computer`, linking `~/Shared` for both `lume` and
+     `aiden-bot` and `~/Bots` (`lume`) / `~/bots` (`aiden-bot`) to its `bots/`
+     subfolder,
    - Starts LightDM, copies Aiden's pinned Linux arm64 `cua-driver` binary and
      MIT notice over SSH, verifies its SHA-256 against Aiden's compiled pin,
      starts it as a `systemd --user` service, and probes element control,
    - Shuts the base down cleanly, deletes the temporary seed ISO, and deletes
      the verified Debian download. No manual permission prompts are needed.
 4. **Give a Bot a computer.** In the Bot's Advanced tab, **Computer → Give a
-   computer** makes the Bot its own APFS copy-on-write clone of the base
-   (`aiden-bot-<id>`). It stays off until it is needed, and stops again when
-   idle.
+   computer** assigns the Bot according to Settings → Computers & VMs → **Default
+   for new Bots**: by default **Shared computer** (`aiden-vm-shared`, lazily
+   cloned once from the base and shared across Bots through a FIFO queue), or a
+   fresh dedicated APFS copy-on-write clone (`aiden-vm-<id>`) when set to **New
+   computer for each Bot**. You can also switch any Bot between **Shared
+   computer**, another existing Linux VM, or **+ New computer** from the picker.
+   Every VM stays off until it is needed, and stops again when idle.
 
 When an Aiden release pins a newer Debian image or snapshot date, Settings shows
 **Update base**. It downloads the new image and builds `aiden-base-next` beside
@@ -123,14 +132,59 @@ interrupted while it was being made is marked for **Reset**.
   refuses to start a writable disk when the host volume is low on free space;
   Aiden maps that refusal to a free-space message as well.
 
+## Shared and selectable computers
+
+- **Shared by default.** Settings → Computers & VMs → Bot computers → **Default
+  for new Bots** defaults to **Shared computer** (`defaultComputerMode: "shared"`),
+  or can be switched to **New computer for each Bot** (`"dedicated"`). Multiple
+  Bots assigned to **Shared computer** share a single running Linux VM (so five
+  Bots on the shared computer count as one running VM toward your running limit).
+- **Selecting or creating a computer.** In a Bot's Advanced tab → **Computer**,
+  pick **Off**, **Shared computer**, any existing Linux VM, or **+ New computer**
+  to clone a fresh dedicated VM from the base. Switching a Bot onto a VM that
+  already has other Bots asks for confirmation first, and switching away from a
+  dedicated VM keeps the old VM in **Settings → Computers** until you delete it
+  there. Settings → Computers & VMs → **Computers** lists every Linux VM with
+  its Shared/Dedicated badge, run state, assigned Bots, disk usage, and **New
+  computer**, **Rename**, **Reset**, and **Delete** actions (Reset and Delete
+  are disabled while a VM is starting or stopping and show when a Bot holds the
+  VM). A Bot can also propose switching computers or requesting a new dedicated
+  VM via `update_bot`; computer changes are always held on an approval card
+  (**Change computer?**) showing the computer name and any Bots already on it.
+- **FIFO turn queue & human takeover.** When two Bots share a Linux VM and both
+  try to act at once, Aiden serializes their `computer` and `computer_shell`
+  calls through a FIFO queue. The Computer tab displays the assigned computer
+  name and a status banner when another Bot holds the VM or is waiting in line;
+  cancelling a queued Bot removes it cleanly from the queue. Stopping a shared
+  VM from a Bot's profile warns when other Bots use it or hold the lease. Taking
+  over the screen or opening a sign-in handoff on a shared VM blocks all Bots
+  assigned to it and stops `aiden-bot` processes before handing you the desktop.
+- **Shared desktop, sessions, and folders.** Bots assigned to the same Linux VM
+  share one Linux desktop (`lume`), the same unprivileged shell user
+  (`aiden-bot`), and the same Chromium sign-ins; per-Bot folders under
+  `bots/<botDir>/` organize each Bot's working files but are **not** isolated or
+  private from other Bots on the same VM. Use a dedicated VM when a Bot needs
+  isolated files or browser sessions.
+  - Shared (`shared`) and pool (`vm-*`) Linux VMs mount
+    `bot-computers/computers/<computerId>/Computer/` under Aiden's data folder
+    directly over `virtiofs` at `/mnt/aiden-shared/Computer` (`~/Shared`), with
+    per-Bot subfolders at `bots/<botDir>/` (`~/Bots/<botDir>` for `lume` and
+    `~/bots/<botDir>` for `aiden-bot`). Note that this VM-level directory is
+    separate from each Bot's `<botHome>/Computer/` folder and is not shown in
+    the Bot's Files panel.
+  - Legacy per-Bot VMs (`aiden-bot-*`) mount `<botHome>/Computer/` the same way.
+  - `computer_shell` starts in the calling Bot's own `~/bots/<botDir>` folder by
+    default while `~/Shared` sits right beside it. Deleting a Bot disconnects it
+    from the shared computer without deleting the shared VM.
+
 ## Limits
 
-- **Running at once:** 1 to 4 computers (default 2), bounded by the Mac's
-  available memory (4 GB per running computer). At the limit, the computer used
-  longest ago stops if it is idle. A computer is idle when nothing is using it,
-  the person is not controlling it, and it has not been used for a minute. If
-  none is idle, the next Bot waits, and its computer shows "Waiting for another
-  Bot's computer".
+- **Running at once:** 1 to 4 distinct running computers (default 2), bounded by
+  the Mac's available memory (4 GB per running computer). At the limit, the
+  computer used longest ago stops if it is idle. A computer is idle when nothing
+  is using it, the person is not controlling it, and it has not been used for a
+  minute. If none is idle, the next Bot waits, and its computer shows "Waiting
+  for another Bot's computer".
 - **Building the base** (Set up or Update base) runs it as a computer, so it
   takes one of those places while Debian installs and Aiden prepares it. An idle
   computer stops to make room. If every running computer is in use, Update base
@@ -268,29 +322,40 @@ Aiden's data folder for owner-Mac debugging. Delete recordings afterwards.
   root login are turned off in the guest, agent and X11 forwarding are off, and
   nothing from the person's `~/.ssh` is used. The guest's account password is
   random and kept in Aiden's encrypted secret store.
-- **Shared folder.** Only the Bot's `Computer` folder (inside its Aiden home)
-  is shared into its computer, read-write over `virtiofs` at
-  `/mnt/aiden-shared`, where it appears as `~/Shared` for both `lume` and
-  `aiden-bot`.
+- **Shared folder.** Only the VM's `Computer` folder is shared into the guest,
+  read-write over `virtiofs` at `/mnt/aiden-shared/Computer` (`~/Shared` for both
+  `lume` and `aiden-bot`, with per-Bot subfolders under `bots/<botDir>/` linked
+  at `~/Bots/<botDir>` for `lume` and `~/bots/<botDir>` for `aiden-bot`):
+  `bot-computers/computers/<computerId>/Computer/` for the shared computer and
+  pool VMs, and `<botHome>/Computer/` for legacy per-Bot VMs.
 - **Guest network.** Bot computers use Lume's default shared (NAT) network, so
   a guest can reach the internet and, like any NAT guest, services that listen
   on this Mac.
 
 ## Removal
 
-- **Remove** in a Bot's Advanced tab stops and deletes that Bot's computer.
-  Files in the Bot's `Computer` folder stay, and you can give the Bot a new
-  computer later.
-- **Reset** deletes the Bot's computer and makes a fresh copy of the current
-  base. Files in the `Computer` folder stay.
-- **Delete Bot** stops and deletes its computer, then erases the Bot's files,
-  including its `Computer` folder.
+- **Remove** in a Bot's Advanced tab disconnects the Bot from the shared
+  computer (leaving the shared VM intact for other Bots and removing that Bot's
+  `bots/<botDir>/` subfolder on the shared computer) or stops and deletes a
+  dedicated VM that only that Bot uses. Deleting a sole-assigned pool VM
+  (`vm-*`) also deletes its mounted workspace folder
+  (`bot-computers/computers/<id>/Computer/`, i.e. `~/Shared` and
+  `~/bots/<dir>`); each Bot's own `<botHome>/Computer` folder (used by legacy
+  `aiden-bot-*` VMs) stays, and you can assign the Bot a computer later.
+- **Reset** deletes the VM and makes a fresh copy of the current base. Files in
+  the mounted `Computer` folder stay.
+- **Delete Bot** disconnects the Bot from the shared computer (without deleting
+  the shared VM, while removing that Bot's `bots/<botDir>/` subfolder) or stops
+  and deletes a dedicated VM (and its pool workspace folder) that only that Bot
+  used, then erases the Bot's files, including its `<botHome>/Computer` folder.
 - **Remove everything** in Settings → Computers & VMs → Bot computers asks
   first, then stops and deletes every Bot computer (including one an earlier
   launch left running), the base, the Linux download and any partial download,
-  Aiden's SSH key and pinned host key, the guest password, and the Bot-computer
-  settings. Files in each Bot's `Computer` folder stay. To use Bot computers
-  again, choose Set up, which downloads Debian Linux again.
+  Aiden's SSH key and pinned host key, the guest password, the Bot-computer
+  settings, and everything under `bot-computers/` (including
+  `bot-computers/computers/` for shared and pool VMs). Each Bot's own
+  `<botHome>/Computer` folder stays. To use Bot computers again, choose Set up,
+  which downloads Debian Linux again.
 - **One at a time, in order:** Give, Reset, Remove and Delete Bot for the same
   Bot wait for each other and run in the order you chose them. Remove
   everything waits for any already chosen, and anything chosen after it waits
@@ -329,9 +394,11 @@ Everything lives under `bot-computers/` in Aiden's data folder
 - **`computer_shell`** runs one command with `/bin/sh` inside the Linux
   computer over SSH as the separate unprivileged `aiden-bot` user (never
   `lume`, and without sudo privileges), for up to 120 seconds and 64 KiB of
-  output, shown like `run_command`'s output. `~/Shared` links to the Bot's
-  `Computer` folder. The model never sees the guest password or the
-  screen-sharing password.
+  output, shown like `run_command`'s output. It starts in `~/bots/<botDir>` with
+  `~/Shared` linked to the VM's mounted `Computer` folder
+  (`bot-computers/computers/<computerId>/Computer/` for shared/pool VMs, or
+  `<botHome>/Computer/` for legacy per-Bot VMs). The model never sees the guest
+  password or the screen-sharing password.
 - **Starting and idle.** Either tool starts the computer when it isn't running,
   with "Starting Ada's computer…" as the step's progress, and each call
   restarts the idle timer. A routine's call starts it for the routine.
@@ -395,9 +462,11 @@ A Bot with a computer can ask the person to sign in to a site there: the
 by default; one with the Browser too gets the Browser by default). It needs
 Bot computers on this Mac, a computer given to the Bot, and an attended turn.
 
-- **The card.** The sign-in card reads **Open Ada's computer** and says the
-  page opens on Ada's own computer with you in control, that Ada waits until
-  you answer, and never sees your password.
+- **The card.** The sign-in card reads **Take control** and says the page opens
+  on the computer with you in control, that the Bot waits until you answer, and
+  never sees your password. When the Bot uses a shared computer (or any VM
+  assigned to multiple Bots), the card explicitly warns that other Bots on that
+  computer share its Linux desktop and Chromium sign-ins.
 - **Open.** Aiden starts the computer if it is stopped, takes it over for you
   before anything shows on its screen, ends every process owned by the Bot's
   separate shell user (`sudo -n /usr/bin/pkill -KILL -u aiden-bot`), stops the

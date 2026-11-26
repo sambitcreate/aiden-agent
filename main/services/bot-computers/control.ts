@@ -61,8 +61,8 @@ export async function waitForBotWithin(
 interface ControlEntry {
   controller: "bot" | "person";
   by?: BotComputerTakeOverSource;
-  actions: Set<AbortController>;
-  waiters: Set<() => void>;
+  actions: Set<{ botId: string; controller: AbortController }>;
+  waiters: Set<{ botId: string; resolve(): void; reject(error: unknown): void }>;
 }
 
 /**
@@ -75,61 +75,114 @@ export function createBotComputerControl(): BotComputerControl & {
   takenOverBy(botId: string): BotComputerTakeOverSource | undefined;
   /** In-flight Bot actions; a computer with any is never idle. */
   activeActions(botId: string): number;
+  /** In-flight Bot actions for a specific VM scope. */
+  activeActionsForScope(scope: string): number;
+  /** Controller for a specific VM scope (`"bot"` or `"person"`). */
+  controllerForScope(scope: string): "bot" | "person";
+  /** Who took over a specific VM scope. */
+  takenOverByScope(scope: string): BotComputerTakeOverSource | undefined;
+  /** Give a specific VM scope back to Bots. */
+  giveBackScope(scope: string): void;
+  /**
+   * Map a `botId` to its shared/dedicated VM scope so Take over and sign-in
+   * handoff on a shared VM block every Bot assigned to that VM together.
+   */
+  setScopeResolver(
+    resolveScope: (botId: string) => string,
+    membersForScope?: (scope: string) => readonly string[],
+  ): void;
   forget(botId: string): void;
+  forgetScope(scope: string): void;
 } {
   const entries = new Map<string, ControlEntry>();
   const listeners = new Set<(botId: string) => void>();
-  const entry = (botId: string): ControlEntry => {
-    let found = entries.get(botId);
+  let resolveScope: (botId: string) => string = (botId) => botId;
+  let membersForScope: (scope: string) => readonly string[] = () => [];
+  const entry = (scope: string): ControlEntry => {
+    let found = entries.get(scope);
     if (!found) {
       found = { controller: "bot", actions: new Set(), waiters: new Set() };
-      entries.set(botId, found);
+      entries.set(scope, found);
     }
     return found;
   };
-  const emit = (botId: string) => {
-    for (const listener of listeners) {
-      try {
-        listener(botId);
-      } catch {
-        // A failing listener never blocks Take over.
+  const emitScope = (scope: string, originBotId?: string) => {
+    const targets = new Set<string>(membersForScope(scope));
+    if (originBotId) targets.add(originBotId);
+    if (targets.size === 0) targets.add(scope);
+    for (const botId of targets) {
+      for (const listener of listeners) {
+        try {
+          listener(botId);
+        } catch {
+          // A failing listener never blocks Take over.
+        }
       }
     }
   };
 
+  const giveBackScope = (scope: string, originBotId?: string) => {
+    const current = entries.get(scope);
+    if (!current || current.controller === "bot") return;
+    current.controller = "bot";
+    current.by = undefined;
+    const waiters = [...current.waiters];
+    current.waiters.clear();
+    for (const waiter of waiters) waiter.resolve();
+    emitScope(scope, originBotId);
+  };
+
+  const forgetScope = (scope: string) => {
+    const current = entries.get(scope);
+    if (!current) return;
+    const cancelled = new BotComputerError("cancelled", "The Bot's computer was removed.");
+    for (const action of current.actions) action.controller.abort(cancelled);
+    for (const waiter of current.waiters) waiter.reject(cancelled);
+    entries.delete(scope);
+  };
+
   return {
-    controller: (botId) => entries.get(botId)?.controller ?? "bot",
-    takenOverBy: (botId) => (entries.get(botId)?.controller === "person" ? entries.get(botId)?.by : undefined),
-    activeActions: (botId) => entries.get(botId)?.actions.size ?? 0,
+    controller: (botId) => entries.get(resolveScope(botId))?.controller ?? "bot",
+    takenOverBy: (botId) => {
+      const current = entries.get(resolveScope(botId));
+      return current?.controller === "person" ? current.by : undefined;
+    },
+    activeActions: (botId) => entries.get(resolveScope(botId))?.actions.size ?? 0,
+    activeActionsForScope: (scope) => entries.get(scope)?.actions.size ?? 0,
+    controllerForScope: (scope) => entries.get(scope)?.controller ?? "bot",
+    takenOverByScope: (scope) => {
+      const current = entries.get(scope);
+      return current?.controller === "person" ? current.by : undefined;
+    },
+    giveBackScope: (scope) => giveBackScope(scope),
+    setScopeResolver(nextResolve, nextMembers) {
+      resolveScope = nextResolve;
+      membersForScope = nextMembers ?? (() => []);
+    },
 
     takeOver(botId, by) {
-      const current = entry(botId);
+      const scope = resolveScope(botId);
+      const current = entry(scope);
       const changed = current.controller !== "person";
       current.controller = "person";
       current.by = by;
-      for (const action of current.actions) action.abort(new BotComputerTakenOverError());
-      if (changed) emit(botId);
+      for (const action of current.actions) action.controller.abort(new BotComputerTakenOverError());
+      if (changed) emitScope(scope, botId);
     },
 
     giveBack(botId) {
-      const current = entries.get(botId);
-      if (!current || current.controller === "bot") return;
-      current.controller = "bot";
-      current.by = undefined;
-      const waiters = [...current.waiters];
-      current.waiters.clear();
-      for (const resolve of waiters) resolve();
-      emit(botId);
+      giveBackScope(resolveScope(botId), botId);
     },
 
     async run(botId, signal, action) {
-      const current = entry(botId);
+      const current = entry(resolveScope(botId));
       if (current.controller === "person") throw new BotComputerTakenOverError();
       if (signal?.aborted) throw new BotComputerError("cancelled", "The computer action was cancelled.");
       const controller = new AbortController();
       const forward = () => controller.abort(signal?.reason);
       signal?.addEventListener("abort", forward, { once: true });
-      current.actions.add(controller);
+      const tracked = { botId, controller };
+      current.actions.add(tracked);
       try {
         const result = await action(controller.signal);
         if (controller.signal.reason instanceof BotComputerTakenOverError) throw controller.signal.reason;
@@ -138,25 +191,32 @@ export function createBotComputerControl(): BotComputerControl & {
         if (controller.signal.reason instanceof BotComputerTakenOverError) throw controller.signal.reason;
         throw error;
       } finally {
-        current.actions.delete(controller);
+        current.actions.delete(tracked);
         signal?.removeEventListener("abort", forward);
       }
     },
 
     waitForBot(botId, signal) {
-      const current = entry(botId);
+      const current = entry(resolveScope(botId));
       if (current.controller === "bot") return Promise.resolve();
       if (signal?.aborted) return Promise.reject(new BotComputerError("cancelled", "Waiting for the computer was cancelled."));
       return new Promise<void>((resolve, reject) => {
-        const done = () => {
-          signal?.removeEventListener("abort", abort);
-          resolve();
+        const waiter = {
+          botId,
+          resolve: () => {
+            signal?.removeEventListener("abort", abort);
+            resolve();
+          },
+          reject: (error: unknown) => {
+            signal?.removeEventListener("abort", abort);
+            reject(error);
+          },
         };
         const abort = () => {
-          current.waiters.delete(done);
+          current.waiters.delete(waiter);
           reject(new BotComputerError("cancelled", "Waiting for the computer was cancelled."));
         };
-        current.waiters.add(done);
+        current.waiters.add(waiter);
         signal?.addEventListener("abort", abort, { once: true });
       });
     },
@@ -167,12 +227,29 @@ export function createBotComputerControl(): BotComputerControl & {
     },
 
     forget(botId) {
-      const current = entries.get(botId);
+      const scope = resolveScope(botId);
+      if (scope === botId) {
+        forgetScope(scope);
+        return;
+      }
+      const current = entries.get(scope);
       if (!current) return;
-      for (const action of current.actions) action.abort(new BotComputerError("cancelled", "The Bot's computer was removed."));
-      for (const resolve of current.waiters) resolve();
-      entries.delete(botId);
+      const cancelled = new BotComputerError("cancelled", "The Bot's computer was changed or removed.");
+      for (const action of [...current.actions]) {
+        if (action.botId === botId) {
+          current.actions.delete(action);
+          action.controller.abort(cancelled);
+        }
+      }
+      for (const waiter of [...current.waiters]) {
+        if (waiter.botId === botId) {
+          current.waiters.delete(waiter);
+          waiter.reject(cancelled);
+        }
+      }
     },
+
+    forgetScope,
   };
 }
 

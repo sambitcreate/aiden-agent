@@ -251,7 +251,7 @@ test("Linux open script launches Chromium detached on DISPLAY=:0 with quoted URL
 
   const url = "https://example.com/$(touch pwned)'x";
   const ran = spawnSync("/bin/sh", ["-c", botComputerSignInOpenScript(url)], {
-    env: { PATH: `${bin}:/usr/bin:/bin`, HOME: dir },
+    env: { PATH: `${bin}:/usr/bin:/bin`, HOME: "/home/lume" },
     encoding: "utf8",
     timeout: 10_000,
   });
@@ -261,11 +261,11 @@ test("Linux open script launches Chromium detached on DISPLAY=:0 with quoted URL
     await new Promise((resolve) => setTimeout(resolve, 10));
   }
   assert.equal(existsSync(out), true, "fake chromium ran");
-  const uid = process.getuid?.();
+  const uid = String(process.getuid?.() ?? 0);
   const lines = readFileSync(out, "utf8").trimEnd().split("\n");
   assert.deepEqual(lines, [
     "DISPLAY=:0",
-    `XAUTHORITY=${path.join(dir, ".Xauthority")}`,
+    "XAUTHORITY=/home/lume/.Xauthority",
     `XDG_RUNTIME_DIR=/run/user/${uid}`,
     `DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/${uid}/bus`,
     "ACCESSIBILITY_ENABLED=1",
@@ -290,4 +290,242 @@ test("Linux open script launches Chromium detached on DISPLAY=:0 with quoted URL
   });
   assert.equal(nonexistent.status, 76);
   assert.throws(() => botComputerStopShellUserScript("bad;user"), /Invalid Linux shell user/u);
+});
+
+test("two Bots sharing one VM keep person sign-in control until both sign-in cards settle", async () => {
+  const control = createBotComputerControl();
+  control.setScopeResolver(
+    (botId) => (botId === "bot:ada" || botId === "bot:ben" ? "shared" : botId),
+    (scope) => (scope === "shared" ? ["bot:ada", "bot:ben"] : []),
+  );
+  const handoffs = createBotHandoffs();
+  const open = createBotComputerHandoffOpener({
+    host: {
+      computer: async (botId) =>
+        ({
+          botId,
+          vmName: "aiden-vm-shared",
+          computerId: "shared",
+          computerName: "Shared computer",
+          shared: true,
+          state: "running",
+          baseBuild: "20261123-2671",
+          outdated: false,
+          controller: control.controller(botId),
+        }),
+      ensureRunning: async () => CONNECTION,
+      runGuestCommand: async () => ok(),
+    },
+    control,
+    handoffs,
+    enabled: () => true,
+  });
+  const askFor = (botId: string, waitId: string) => {
+    const controller = new AbortController();
+    const answer = handoffs
+      .request({
+        botId,
+        waitId,
+        toolCallId: `call-${waitId}`,
+        kind: "sign_in",
+        action: "Sign in to github.com",
+        open: { url: ORIGIN },
+        origin: ORIGIN,
+        target: "computer",
+        source: "tool",
+        signal: controller.signal,
+      })
+      .catch(() => null);
+    return { controller, answer };
+  };
+
+  const adaCard = askFor("bot:ada", "wait-ada");
+  const benCard = askFor("bot:ben", "wait-ben");
+  assert.equal(await open("bot:ada", "wait-ada", ORIGIN), true);
+  assert.equal(await open("bot:ben", "wait-ben", ORIGIN), true);
+  assert.equal(control.controller("bot:ada"), "person");
+  assert.equal(control.controller("bot:ben"), "person");
+
+  // Settling Ada's sign-in card must NOT give back the shared VM while Ben's card is still open.
+  handoffs.answer("bot:ada", "wait-ada", { outcome: "done" });
+  await adaCard.answer;
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(control.controller("bot:ada"), "person");
+  assert.equal(control.controller("bot:ben"), "person");
+  assert.equal(control.takenOverBy("bot:ben"), "sign_in");
+
+  // Settling Ben's card releases the shared VM back to both Bots.
+  handoffs.answer("bot:ben", "wait-ben", { outcome: "done" });
+  await benCard.answer;
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(control.controller("bot:ada"), "bot");
+  assert.equal(control.controller("bot:ben"), "bot");
+});
+
+test("reassigning a Bot off a shared VM while its sign-in card is open still releases the original VM when the card settles", async () => {
+  const assignments = new Map<string, string>([
+    ["bot:ada", "shared"],
+    ["bot:ben", "shared"],
+  ]);
+  const control = createBotComputerControl();
+  control.setScopeResolver(
+    (botId) => assignments.get(botId) ?? botId,
+    (scope) => [...assignments.entries()].filter(([, id]) => id === scope).map(([botId]) => botId),
+  );
+  const handoffs = createBotHandoffs();
+  const open = createBotComputerHandoffOpener({
+    host: {
+      computer: async (botId) => {
+        const computerId = assignments.get(botId) ?? "shared";
+        return {
+          botId,
+          vmName: computerId === "shared" ? "aiden-vm-shared" : "aiden-vm-dedicated",
+          computerId,
+          computerName: computerId === "shared" ? "Shared computer" : "Dedicated",
+          shared: computerId === "shared",
+          state: "running",
+          baseBuild: "20261123-2671",
+          outdated: false,
+          controller: control.controller(botId),
+        };
+      },
+      ensureRunning: async () => CONNECTION,
+      runGuestCommand: async () => ok(),
+    },
+    control,
+    handoffs,
+    enabled: () => true,
+  });
+
+  const controller = new AbortController();
+  const card = handoffs
+    .request({
+      botId: "bot:ada",
+      waitId: "wait-reassign",
+      toolCallId: "call-reassign",
+      kind: "sign_in",
+      action: "Sign in to github.com",
+      open: { url: ORIGIN },
+      origin: ORIGIN,
+      target: "computer",
+      source: "tool",
+      signal: controller.signal,
+    })
+    .catch(() => null);
+
+  assert.equal(await open("bot:ada", "wait-reassign", ORIGIN), true);
+  assert.equal(control.controllerForScope("shared"), "person");
+  assert.equal(control.controller("bot:ben"), "person");
+
+  // Reassign Ada to a dedicated VM before answering the sign-in card.
+  assignments.set("bot:ada", "vm-dedicated");
+  assert.equal(control.controllerForScope("shared"), "person");
+  assert.equal(control.controller("bot:ben"), "person");
+
+  // Settling Ada's sign-in card must release the original "shared" scope, not leave Ben locked out.
+  handoffs.answer("bot:ada", "wait-reassign", { outcome: "done" });
+  await card;
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(control.controllerForScope("shared"), "bot");
+  assert.equal(control.controller("bot:ben"), "bot");
+});
+
+test("mid-boot withdrawal never takes over, mid-boot reassignment tracks the new scope, and Open again releases the previous scope", async () => {
+  const assignments = new Map<string, string>([
+    ["bot:ada", "shared"],
+    ["bot:ben", "shared"],
+  ]);
+  const control = createBotComputerControl();
+  control.setScopeResolver(
+    (botId) => assignments.get(botId) ?? botId,
+    (scope) => [...assignments.entries()].filter(([, id]) => id === scope).map(([botId]) => botId),
+  );
+  const handoffs = createBotHandoffs();
+  let duringBoot: (() => void) | undefined;
+  const guestCommands: string[] = [];
+  const open = createBotComputerHandoffOpener({
+    host: {
+      computer: async (botId) => {
+        const computerId = assignments.get(botId) ?? "shared";
+        return {
+          botId,
+          vmName: computerId === "shared" ? "aiden-vm-shared" : `aiden-${computerId}`,
+          computerId,
+          computerName: computerId,
+          shared: computerId === "shared",
+          state: "running",
+          baseBuild: "20261123-2671",
+          outdated: false,
+          controller: control.controller(botId),
+        };
+      },
+      ensureRunning: async () => {
+        const hook = duringBoot;
+        duringBoot = undefined;
+        hook?.();
+        return CONNECTION;
+      },
+      runGuestCommand: async (_botId, command) => {
+        guestCommands.push(command);
+        return ok();
+      },
+    },
+    control,
+    handoffs,
+    enabled: () => true,
+  });
+
+  const requestCard = (waitId: string) => {
+    const controller = new AbortController();
+    const answer = handoffs
+      .request({
+        botId: "bot:ada",
+        waitId,
+        toolCallId: `call-${waitId}`,
+        kind: "sign_in",
+        action: "Sign in to github.com",
+        open: { url: ORIGIN },
+        origin: ORIGIN,
+        target: "computer",
+        source: "tool",
+        signal: controller.signal,
+      })
+      .catch(() => null);
+    return { controller, answer };
+  };
+
+  // 1. Card withdrawn during ensureRunning cold boot -> never takes over or runs guest commands.
+  const withdrawn = requestCard("wait-withdrawn");
+  duringBoot = () => handoffs.answer("bot:ada", "wait-withdrawn", { outcome: "skipped" });
+  assert.equal(await open("bot:ada", "wait-withdrawn", ORIGIN), false);
+  await withdrawn.answer;
+  assert.equal(control.controllerForScope("shared"), "bot");
+  assert.equal(guestCommands.length, 0);
+
+  // 2. Bot reassigned from "shared" -> "vm-2" during ensureRunning -> tracks "vm-2" and releases it on settle.
+  const midBootReassign = requestCard("wait-mid-reassign");
+  duringBoot = () => {
+    assignments.set("bot:ada", "vm-2");
+  };
+  assert.equal(await open("bot:ada", "wait-mid-reassign", ORIGIN), true);
+  assert.equal(control.controllerForScope("shared"), "bot");
+  assert.equal(control.controllerForScope("vm-2"), "person");
+  handoffs.answer("bot:ada", "wait-mid-reassign", { outcome: "done" });
+  await midBootReassign.answer;
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(control.controllerForScope("vm-2"), "bot");
+
+  // 3. "Open again" after reassignment from "shared" -> "vm-3" releases "shared" immediately so Ben isn't wedged.
+  assignments.set("bot:ada", "shared");
+  const openAgain = requestCard("wait-open-again");
+  assert.equal(await open("bot:ada", "wait-open-again", ORIGIN), true);
+  assert.equal(control.controllerForScope("shared"), "person");
+  assignments.set("bot:ada", "vm-3");
+  assert.equal(await open("bot:ada", "wait-open-again", ORIGIN), true);
+  assert.equal(control.controllerForScope("shared"), "bot", "previous scope released on Open again");
+  assert.equal(control.controllerForScope("vm-3"), "person");
+  handoffs.answer("bot:ada", "wait-open-again", { outcome: "done" });
+  await openAgain.answer;
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(control.controllerForScope("vm-3"), "bot");
 });
