@@ -15,7 +15,7 @@ const NEW = "http://127.0.0.1:4000/held";
 class FakeGuest extends EventEmitter {
   loading = false;
   defersStart = false;
-  isLoading() { return this.loading; }
+  isLoadingMainFrame() { return this.loading; }
   loadURL(url: string, startsNavigation = !this.defersStart): Promise<void> {
     const native = new Promise<void>((resolve, reject) => {
       this.once("did-finish-load", () => resolve());
@@ -55,17 +55,25 @@ test("replacing a still-loading document waits for the requested page, not the r
   assert.equal(await outcome(load), "loaded");
 });
 
-test("a still-loading document that completes before a deferred start cannot settle the new load", async () => {
-  for (const completion of ["finish", "fail", "stop"] as const) {
-    const guest = new FakeGuest();
-    guest.loading = true;
-    guest.defersStart = true; // beforeunload runs before the navigation starts
-    const load = loadBrowserUrl(guest, NEW);
-    if (completion === "finish") guest.finish();
-    if (completion === "fail") guest.fail(-102, "ERR_CONNECTION_REFUSED", OLD);
-    guest.stopLoading();
+// Chromium counts a navigation waiting on beforeunload as loading, so the
+// replaced document can finish or fail meanwhile, but the tab stops loading
+// only when that navigation starts and ends, or is cancelled.
+const deferredLoad = () => {
+  const guest = new FakeGuest();
+  guest.loading = true;
+  guest.defersStart = true;
+  return { guest, load: loadBrowserUrl(guest, NEW) };
+};
+const replacedCompletes = (guest: FakeGuest, completion: "finish" | "fail") => {
+  if (completion === "finish") guest.finish();
+  else guest.fail(-102, "ERR_CONNECTION_REFUSED", OLD);
+};
+
+test("a still-loading document that finishes or fails before a deferred start cannot settle the new load", async () => {
+  for (const completion of ["finish", "fail"] as const) {
+    const { guest, load } = deferredLoad();
+    replacedCompletes(guest, completion);
     assert.equal(await outcome(load), "pending", completion);
-    guest.loading = true;
     guest.emit("did-start-navigation", {}, NEW, false, true);
     guest.commit();
     guest.finish();
@@ -73,22 +81,22 @@ test("a still-loading document that completes before a deferred start cannot set
   }
 });
 
-test("a deferred load still fails on its own stop, and on a stop with nothing else loading", async () => {
-  const guest = new FakeGuest();
-  guest.loading = true;
-  guest.defersStart = true;
-  const load = loadBrowserUrl(guest, NEW);
-  guest.stopLoading(); // the replaced document's
-  guest.loading = true;
-  guest.emit("did-start-navigation", {}, NEW, false, true);
-  guest.stopLoading(); // this load's, before it committed
-  assert.equal(await outcome(load), `Error: ERR_FAILED (-2) loading '${NEW}'`);
+test("a deferred navigation cancelled after the replaced document completes still fails and stops observing", async () => {
+  for (const completion of ["finish", "fail"] as const) {
+    const { guest, load } = deferredLoad();
+    replacedCompletes(guest, completion);
+    guest.stopLoading(); // beforeunload cancelled it; nothing is loading now
+    assert.equal(await outcome(load), `Error: ERR_FAILED (-2) loading '${NEW}'`, completion);
+    // Only the loader observes these, so none left means it let go of the guest.
+    for (const event of ["did-start-navigation", "did-navigate", "destroyed"])
+      assert.equal(guest.listenerCount(event), 0, `${completion}: ${event}`);
+  }
+});
 
-  const idle = new FakeGuest();
-  idle.defersStart = true;
-  const stopped = loadBrowserUrl(idle, NEW);
-  idle.stopLoading();
-  assert.equal(await outcome(stopped), `Error: ERR_FAILED (-2) loading '${NEW}'`);
+test("a failure of the requested URL before a deferred start rejects at once while the replaced document loads", async () => {
+  const { guest, load } = deferredLoad();
+  guest.fail(-21, "ERR_NETWORK_CHANGED", NEW);
+  assert.equal(await outcome(load), `Error: ERR_NETWORK_CHANGED (-21) loading '${NEW}'`);
 });
 
 test("the requested page's own failures still reject", async () => {

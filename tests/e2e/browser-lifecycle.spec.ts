@@ -707,17 +707,8 @@ async function holdNavigationDeadline(aiden: { app: import("@playwright/test").E
 for (const replacement of ["different-URL renderer", "same-URL renderer", "same-URL popup", "same-URL user"] as const) {
   test(`delayed command start cannot stop a newer ${replacement} navigation`, async ({ aiden }) => {
     let heldRequests = 0;
-    let originalRequests = 0;
-    let finishOriginal: (() => void) | undefined;
     const server = createServer((request, response) => {
       if (request.url === "/held" && ++heldRequests === 1) return;
-      if (request.url === "/original" && ++originalRequests === 1) {
-        // The original document is still loading when the command begins; its
-        // own late completion must not settle the command that replaces it.
-        response.write("<!doctype html><title>Original document</title>");
-        finishOriginal = () => response.end();
-        return;
-      }
       response.end(`<!doctype html><title>${request.url === "/held" ? "Recovered newer target" : "Original document"}</title>`);
     });
     await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
@@ -727,6 +718,10 @@ for (const replacement of ["different-URL renderer", "same-URL renderer", "same-
       const opened = await command(aiden.page, { action: "create", url: `${base}/original` });
       await expect.poll(() => aiden.app.evaluate(({ webContents }, url) => webContents.getAllWebContents().some((guest) => guest.getURL() === url && guest.getTitle() === "Original document"), `${base}/original`)).toBe(true);
       const id = await aiden.app.evaluate(({ webContents }, url) => webContents.getAllWebContents().find((guest) => guest.getURL() === url)!.id, `${base}/original`);
+      // The stubbed loadURL below creates no pending request, which Chromium would
+      // count as loading. A stop still due from the original document would then
+      // read as the command's own navigation ending, so let that document stop first.
+      await expect.poll(() => aiden.app.evaluate(({ webContents }, id) => webContents.fromId(id)!.isLoading(), id)).toBe(false);
       await installNativeCrashProbe(aiden, id);
       await holdNavigationDeadline(aiden);
       await aiden.app.evaluate(({ webContents }, { id, target, replacement }) => {
@@ -751,11 +746,8 @@ for (const replacement of ["different-URL renderer", "same-URL renderer", "same-
         };
       }, { id, target: `${base}/held`, replacement });
       const older = expect(command(aiden.page, { action: "navigate", tabId: opened.tabId!, url: `${base}/${replacement.startsWith("same-URL") ? "held" : "older"}`, timeoutMs: 12345 })).rejects.toThrow(replacement === "same-URL user" ? /interrupted/ : /Browser action timed out/);
-      await expect.poll(() => aiden.app.evaluate(() => (globalThis as typeof globalThis & { __navigationAbortProbe: { started: boolean } }).__navigationAbortProbe.started)).toBe(true);
-      finishOriginal!();
       if (replacement === "same-URL user") {
-        // The original document's finish and stop have reached main before the newer navigation.
-        await expect.poll(() => aiden.app.evaluate(({ webContents }, id) => webContents.fromId(id)!.isLoading(), id)).toBe(false);
+        await expect.poll(() => aiden.app.evaluate(() => (globalThis as typeof globalThis & { __navigationAbortProbe: { started: boolean } }).__navigationAbortProbe.started)).toBe(true);
         await command(aiden.page, { action: "navigate", tabId: opened.tabId!, url: `${base}/held`, readiness: "none" });
         await expect.poll(() => heldRequests).toBe(1);
       }
@@ -787,7 +779,6 @@ for (const replacement of ["different-URL renderer", "same-URL renderer", "same-
         expect(heldRequests).toBe(1); // Still no new requests to "/held" on the original tab
       }
     } finally {
-      finishOriginal?.();
       await aiden.app.evaluate(() => {
         (globalThis as NavigationDeadlineGlobal).__navigationDeadline?.restore();
         (globalThis as typeof globalThis & { __navigationAbortProbe?: { restore(): void } }).__navigationAbortProbe?.restore();
