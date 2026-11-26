@@ -81,22 +81,31 @@ test("a still-loading document that finishes or fails before a deferred start ca
   }
 });
 
-test("a deferred navigation cancelled after the replaced document completes still fails and stops observing", async () => {
-  for (const completion of ["finish", "fail"] as const) {
-    const { guest, load } = deferredLoad();
-    replacedCompletes(guest, completion);
-    guest.stopLoading(); // beforeunload cancelled it; nothing is loading now
-    assert.equal(await outcome(load), `Error: ERR_FAILED (-2) loading '${NEW}'`, completion);
-    // Only the loader observes these, so none left means it let go of the guest.
-    for (const event of ["did-start-navigation", "did-navigate", "destroyed"])
-      assert.equal(guest.listenerCount(event), 0, `${completion}: ${event}`);
-  }
+test("a replaced same-URL load that fails before the deferred start does not reject the replacement", async () => {
+  const { guest, load } = deferredLoad();
+  guest.fail(-2, "ERR_FAILED", NEW); // the replaced document was loading NEW too
+  assert.equal(await outcome(load), "pending");
+  guest.emit("did-start-navigation", {}, NEW, false, true);
+  guest.commit();
+  guest.finish();
+  assert.equal(await outcome(load), "loaded");
 });
 
-test("a failure of the requested URL before a deferred start rejects at once while the replaced document loads", async () => {
-  const { guest, load } = deferredLoad();
-  guest.fail(-21, "ERR_NETWORK_CHANGED", NEW);
-  assert.equal(await outcome(load), `Error: ERR_NETWORK_CHANGED (-21) loading '${NEW}'`);
+test("a deferred navigation that ends before it starts rejects on its stop and stops observing", async () => {
+  const cases = [
+    { name: "cancelled after the replaced document finished", before: (guest: FakeGuest) => guest.finish(), error: `Error: ERR_FAILED (-2) loading '${NEW}'` },
+    { name: "the requested URL failed", before: (guest: FakeGuest) => guest.fail(-21, "ERR_NETWORK_CHANGED", NEW), error: `Error: ERR_NETWORK_CHANGED (-21) loading '${NEW}'` },
+  ];
+  for (const { name, before, error } of cases) {
+    const { guest, load } = deferredLoad();
+    before(guest);
+    assert.equal(await outcome(load), "pending", name);
+    guest.stopLoading(); // nothing is loading now, this request included
+    assert.equal(await outcome(load), error, name);
+    // Only the loader observes these, so none left means it let go of the guest.
+    for (const event of ["did-start-navigation", "did-navigate", "destroyed"])
+      assert.equal(guest.listenerCount(event), 0, `${name}: ${event}`);
+  }
 });
 
 test("the requested page's own failures still reject", async () => {
