@@ -25,9 +25,10 @@ struct AidenHostInboxSnapshot: Equatable, Sendable {
 /// exist, so a Bot is listed only while it needs the person, and shown in the
 /// accessory while it runs.
 enum AidenBotAttention {
-    /// Open "Needs you" cards, or a session that stopped and waits on the person.
+    /// Open "Needs you" cards, a wait the Mac reports (revision 68: an approval,
+    /// a question or a hand-off), or a session that stopped and waits on the person.
     static func needsYou(_ bot: AidenBotSummary) -> Bool {
-        (bot.issueCount ?? 0) > 0 || bot.sessionState == .interrupted || bot.sessionState == .needsModel
+        (bot.issueCount ?? 0) > 0 || bot.needsYou || bot.sessionState == .interrupted || bot.sessionState == .needsModel
     }
 
     static func isRunning(_ bot: AidenBotSummary) -> Bool {
@@ -39,6 +40,8 @@ enum AidenBotAttention {
         if let issues = bot.issueCount, issues > 0 {
             return issues == 1 ? String(localized: "1 thing needs you") : String(localized: "\(issues) things need you")
         }
+        // Before Working: a running turn that waits on the person is waiting, not working.
+        if bot.needsYou { return String(localized: "Waiting for you") }
         switch bot.sessionState {
         case .interrupted: return String(localized: "Interrupted")
         case .needsModel: return String(localized: "Needs an AI model")

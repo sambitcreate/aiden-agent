@@ -7,7 +7,7 @@ final class AidenBotPlanTests: XCTestCase {
     func section() throws -> [String: Any] {
         let url = try XCTUnwrap(Bundle(for: Self.self).url(forResource: "contract", withExtension: "json"))
         let root = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(contentsOf: url)) as? [String: Any])
-        XCTAssertEqual(root["contractRevision"] as? Int, 65)
+        XCTAssertEqual(root["contractRevision"] as? Int, 70)
         return try XCTUnwrap(root["botPlans"] as? [String: Any])
     }
     func decode<T: Decodable>(_ type: T.Type, _ value: Any) throws -> T {
@@ -80,6 +80,7 @@ extension AidenBotPlanTests {
         XCTAssertEqual(model.plan, try plan())
         assertHostFolderReview(try XCTUnwrap(model.plan))
         XCTAssertTrue(model.composerHeldForPlan)
+        XCTAssertEqual(aidenBotAvatarState(for: AidenBotAvatarSignal(model: model)), .waiting, "a pending plan waits on the person")
         let sent = await model.send("Keep this draft")
         XCTAssertFalse(sent)
         let events = try XCTUnwrap(section()["events"] as? [Any])
@@ -88,6 +89,7 @@ extension AidenBotPlanTests {
         assertHostFolderReview(try XCTUnwrap(model.plan))
         XCTAssertEqual(model.plan?.completedSteps, 1)
         XCTAssertFalse(model.composerHeldForPlan)
+        XCTAssertNotEqual(aidenBotAvatarState(for: AidenBotAvatarSignal(model: model)), .waiting, "an approved plan no longer waits")
         _ = await model.apply(try decode(AidenBotSessionEvent.self, events[2]))
         XCTAssertNil(model.plan)
         let legacy = try XCTUnwrap(section()["legacy"] as? [String: Any])

@@ -16,7 +16,7 @@ function migrateProviderId(
 
 /**
  * Run before React reads the remembered provider. Safe to repeat on every
- * launch. Model Pad placements and pins live in main-process settings, which
+ * launch. Model pins and recent models live in main-process settings, which
  * re-homes them with the provider-id migration itself.
  */
 export function migrateGoogleProviderPreferences(

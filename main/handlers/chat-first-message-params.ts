@@ -1,4 +1,8 @@
 import { isDraftChatId } from "../../renderer/shared/chat-identity.js";
+import {
+  isGenerationThinkingLevel,
+  type GenerationThinkingLevel,
+} from "../../renderer/shared/generation-thinking.js";
 import { parseChatAppend, type ParsedChatAppend } from "./chat-append-params.js";
 import { parseChatCreate } from "./chat-create-params.js";
 import { ASSISTANT_WORKSPACE_ID } from "../../renderer/shared/assistant.js";
@@ -10,6 +14,7 @@ import {
 const KEYS = new Set([
   "draftId", "workspaceId", "providerId", "model", "title",
   "turnId", "message", "skillInvocation", "worktree", "inputSource", "ephemeral",
+  "thinkingLevel",
 ]);
 
 export interface ParsedChatFirstMessage extends ParsedChatAppend {
@@ -17,6 +22,11 @@ export interface ParsedChatFirstMessage extends ParsedChatAppend {
   workspaceId: string;
   /** Temporary floating chat hidden until promoted or attached to a workspace. */
   ephemeral?: true;
+  /**
+   * The new chat's own reasoning effort (the new-chat pick's Agent Slider
+   * stop), saved on the chat with its model. Absent without a model.
+   */
+  thinkingLevel?: GenerationThinkingLevel;
   /** Create a managed worktree from the draft's workspace and save the chat there. */
   worktree?: FirstMessageWorktreeRequest;
   /**
@@ -58,8 +68,13 @@ export function parseChatFirstMessage(input: unknown): ParsedChatFirstMessage {
     skillInvocation: record.skillInvocation,
     ...(record.inputSource !== undefined ? { inputSource: record.inputSource } : {}),
   });
-  if (!append.content.trim() && !append.attachments?.length) {
+  if (!append.content.trim() && !append.attachments?.length && !append.grabbedElements?.length) {
     throw new Error("Add a message or attachment before sending.");
+  }
+  // Checked like chats:setModel's level: a known level, or none (undefined or null).
+  const thinkingLevel = record.thinkingLevel;
+  if (thinkingLevel !== undefined && thinkingLevel !== null && !isGenerationThinkingLevel(thinkingLevel)) {
+    throw new Error("Invalid thinking level.");
   }
   let ephemeral: true | undefined;
   if (record.ephemeral !== undefined) {
@@ -86,6 +101,8 @@ export function parseChatFirstMessage(input: unknown): ParsedChatFirstMessage {
     title: create.title,
     workspaceId: create.workspaceId,
     ...(ephemeral ? { ephemeral } : {}),
+    // A level belongs to a model: without one it would describe nothing.
+    ...(thinkingLevel && create.providerId && create.model ? { thinkingLevel } : {}),
     ...(worktree ? { worktree } : {}),
     // The small, bounded worktree request is left out so the chat commit that
     // follows it fingerprints the same message whatever base was chosen.

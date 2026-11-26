@@ -87,3 +87,8 @@ iOS moved to shell-first launch (`AidenAppShellView` renders immediately with ze
 
 ## iOS pairing follow-up (2026-11-22)
 The inline scanner uses the same cutout geometry for the mask, AVFoundation's capture region, and acceptance of detections in preview coordinates. Manual submission validates the address and setup code before sending a request and focuses the field that needs correction. The Search tab offers Add Computer until the first pairing. The CLI prints Add Computer guidance for iPhone and iPad alongside platform-neutral manual entry instructions.
+
+## Hi-bit sprite avatars (2026-11-24)
+The Bots and Bot computers tiles (`control-art.tsx`) draw Bot faces with `AvatarFace ... small`, the Hi-bit
+sprite's small cut (they render at 12–15 px). Those sprites are static idle poses: only a `BotAvatar` given a
+`state` animates, so the art still moves only through the shared `oa-anim-*` classes.

@@ -5,7 +5,7 @@ import type { ResolvedModelRuntime } from "../model-runtime-core.js";
 import { SUBAGENT_READ_TOOL_NAMES } from "./capability-profile.js";
 import type { SubagentTaskResult } from "./contracts.js";
 import { SubagentEventProjector } from "./subagent-event-projector.js";
-import { SubagentSupervisor, type PreparedSubagentRun } from "./subagent-supervisor.js";
+import { SubagentReplyClock, SubagentSupervisor, type PreparedSubagentRun } from "./subagent-supervisor.js";
 
 function runtime(): ResolvedModelRuntime {
   return {
@@ -270,10 +270,13 @@ test("expired V2 admission creates no unprepared renderer or control record", as
   let now = 0;
   let preparations = 0;
   let projections = 0;
+  // The reply's clock starts at its first launch; an earlier call started it.
+  const replyClock = new SubagentReplyClock();
+  replyClock.start(0);
   const supervisor = new SubagentSupervisor({
     ...supervisorInput(),
     now: () => now,
-    policy: { treeDeadlineMs: 10 },
+    policy: { treeDeadlineMs: 10, replyClock },
     projector: new SubagentEventProjector({
       generationId: "generation-fork-supervisor",
       chatId: "chat-fork-supervisor",

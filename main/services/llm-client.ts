@@ -16,8 +16,6 @@ import type { AppControlPanel } from "../../renderer/shared/app-controls.js";
 import { canUseProviderAuthenticatedMcp } from "./mcp-provider-auth-core.js";
 import { providerRegistry } from "./provider-registry.js";
 import { adoptChatCacheWarmer, canWarmForegroundChat, PiCacheWarmer, settleReplyCacheWarmer, stopAllPiCacheWarmers, withPiCacheWarming } from "./pi-cache-warming.js";
-import { createModelPaceMeasurement } from "./model-pace-core.js";
-import { modelPaceRecorder } from "./model-pace-runtime.js";
 import { usageLimits } from "./usage-limit-main.js";
 import { withUsageLimitWait } from "./usage-limit-stream.js";
 import { spending } from "./spending-main.js";
@@ -101,6 +99,7 @@ import {
 import { generationGitContext } from "./generation-git-context.js";
 import { configStore } from "./config-store.js";
 import { chatStore } from "./chat-store.js";
+import { reconcileTurnThinkingLevel } from "./chat-thinking-level-reconcile.js";
 import { generationModelMeta } from "./chat-model-selection-meta.js";
 import { botStore } from "./bot-store.js";
 import {
@@ -254,6 +253,8 @@ import {
 import { formFillTurnNote } from "./form-fill/tool.js";
 import { FORM_FILL_MUTATION_AVAILABLE } from "../../renderer/shared/form-fill-availability.js";
 import { toolApprovalPreview, type ToolApprovalPreview } from "../../renderer/shared/tool-approval-preview.js";
+import { commandReadingForCall } from "../../renderer/shared/command-reading.js";
+import { homedir } from "node:os";
 import { formFillArtifacts, formFillRuntime } from "./form-fill/artifacts.js";
 import {
   EDIT_AUTOMATION_TOOL_NAME,
@@ -363,7 +364,7 @@ import { endRunAfterIgnoredToolRecovery } from "./assistant/tool-loop-guard.js";
 import type { ToolApprovalDetails } from "../../renderer/shared/assistant.js";
 import { DEFAULT_SUBAGENT_CANCELLATION_GRACE_MS } from "./subagents/subagent-child-runner.js";
 import { assistantSettingsPages } from "../../renderer/lib/settings-section.js";
-import { SubagentSupervisor } from "./subagents/subagent-supervisor.js";
+import { SUBAGENT_TRANSCRIPT_TURN_END_WAIT_MS, SubagentSupervisor } from "./subagents/subagent-supervisor.js";
 import { chatActivityRegistry } from "./chat-activity.js";
 import { interruptedWaits } from "./interrupted-waits-main.js";
 import { clipInterruptedWaitSummary } from "./interrupted-reply.js";
@@ -394,7 +395,9 @@ import {
 } from "./subagents/feature-flag.js";
 import { inheritedSubagentReadToolCeiling } from "./subagents/capability-profile.js";
 import { SubagentEventProjector } from "./subagents/subagent-event-projector.js";
-import { subagentRunStore } from "./subagents/subagent-run-store.js";
+import { subagentRunStore, subagentTranscriptStore } from "./subagents/subagent-run-store.js";
+import { createSubagentTranscriptFactory } from "./subagents/subagent-transcript-store.js";
+import type { SubagentTranscriptUpdateV1 } from "../../renderer/shared/subagent-transcript.js";
 import { createForegroundSubagentPersistenceV2 } from "./subagents/subagent-foreground-persistence-v2.js";
 import { subagentHealthMetrics } from "./subagents/subagent-health-metrics.js";
 import { subagentRuntimeRegistry } from "./subagents/child-agent-runtime.js";
@@ -537,6 +540,7 @@ import { chatToolOffers, personWroteChatTurn, offersChildChats, chatTurnArgsTool
 import { createGenerativeUiDraftSession } from "./generative-ui-draft.js";
 import { createUiDraftSession } from "./aiden-ui-draft.js";
 import { withoutVisualSnapshots } from "../../renderer/shared/visual-snapshots.js";
+import { withoutGrabbedElementThumbnails } from "../../renderer/shared/browser-element-grab.js";
 import { displayedAssistantUiCount } from "./aiden-ui-tool.js";
 import { visualSnapshotImages } from "./visual-snapshot-core.js";
 import { enqueueVisualSnapshots } from "./visual-snapshot-service.js";
@@ -678,6 +682,13 @@ function uniqueResponseImages(
 }
 
 
+/** What a turn read when it started: the portable Agent Slider and its chat's own level. */
+export interface TurnSettingsSnapshot {
+  readonly agentSlider: unknown;
+  readonly chatThinkingLevel?: Chat["thinkingLevel"];
+  readonly botId?: string;
+}
+
 export interface GenerationExecutionOptions {
   /** Main-owned Telegram queue provenance, resolved freshly at generation. */
   telegramSkillInvocation?: import("./telegram/telegram-queue.js").TelegramSkillInvocation;
@@ -703,6 +714,12 @@ export interface GenerationExecutionOptions {
   turnId?: string;
   /** Fires once the persisted turn has synchronously transferred to generation ownership. */
   onTurnAccepted?: () => void;
+  /**
+   * Main-owned: receives the settings and chat this turn resolved its model
+   * and level from, so a send is counted against that state and not a later
+   * Settings edit.
+   */
+  onTurnSettings?: (snapshot: TurnSettingsSnapshot) => void;
   /** Main-owned interactive delivery surface; renderer starts cannot set this. */
   interactionSurface?: "telegram";
   /** Main-owned: a paired device sent this turn and sees visuals as snapshots. */
@@ -1146,6 +1163,24 @@ function settleGeneration<Entry extends GenerationOwnershipEntry>(
   });
 }
 
+/**
+ * Helper conversation updates go only to the window that owns the stream.
+ * They are not journaled: each one is already saved, and a window that joins
+ * later reads the saved copy. Paired devices get nothing until the Remote
+ * protocol carries helper conversations.
+ */
+function sendSubagentTranscript(streamId: string, update: SubagentTranscriptUpdateV1): void {
+  const owner = ownerForStream(streamId);
+  if (!owner || owner.isDestroyed() || owner.kind === "remote") return;
+  // Keep the order with the text and reasoning batches sent before it.
+  deltaCoalescer.flush(streamId);
+  try {
+    owner.send("chat:subagent-transcript", { streamId, update });
+  } catch {
+    // A closed window reads the saved copy when it opens the helper.
+  }
+}
+
 function sendGeneration(streamId: string, channel: NotificationChannel, payload: unknown): boolean {
   const entry = active.get(streamId) ?? initializing.get(streamId);
   const chatId = entry?.chatId;
@@ -1431,7 +1466,9 @@ async function prepareGeneration(
   const generationExtensions: PiAgentRuntimeExtension[] = [];
   const responseImages = () => uniqueResponseImages(sharedImages, displayedImages);
   const modelImageReferences = createPiModelImageReferences({
-    snapshot: chat.messages.flatMap((message) => withoutVisualSnapshots(message.attachments ?? [])),
+    snapshot: chat.messages.flatMap((message) =>
+      withoutGrabbedElementThumbnails(withoutVisualSnapshots(message.attachments ?? [])),
+    ),
     generated: responseImages,
     readCurrent: async (referenceSignal) => {
       signal.throwIfAborted();
@@ -1440,7 +1477,9 @@ async function prepareGeneration(
       signal.throwIfAborted();
       referenceSignal?.throwIfAborted();
       if (!current || persistedChatWorkspaceId(current.workspaceId) !== persistedChatWorkspaceId(params.workspaceId)) throw new Error("The reference image chat is no longer available in this workspace.");
-      return current.messages.flatMap((message) => withoutVisualSnapshots(message.attachments ?? []));
+      return current.messages.flatMap((message) =>
+        withoutGrabbedElementThumbnails(withoutVisualSnapshots(message.attachments ?? [])),
+      );
     },
   });
   const shareImage = (attachment: Attachment, toolCallId: string) => {
@@ -1634,11 +1673,37 @@ async function prepareGeneration(
   };
   const supportsImages = runtimeSupportsImages(model);
   const settings = await configStore.getSettings();
+  try {
+    options.onTurnSettings?.({
+      agentSlider: settings.agentSlider,
+      chatThinkingLevel: chat.thinkingLevel,
+      botId: chat.botId,
+    });
+  } catch (error) {
+    logger.debug("chat", "Could not record the settings this turn started with.", error);
+  }
   const savedThinkingLevel = savedGenerationThinkingLevel(settings, params.providerId, params.model, runtime.provider);
   const thinkingLevel = resolveGenerationThinkingLevel(
     params.providerId,
     model,
     params.thinkingLevel ?? savedThinkingLevel,
+  );
+  // A chat's own level (an Agent Slider stop) the model no longer supports was
+  // just clamped; record the level that runs so the chat says what was sent.
+  await reconcileTurnThinkingLevel(
+    {
+      chatStore,
+      broadcast: (update) => ipcMain.broadcast("chats:metadata-updated", update),
+    },
+    {
+      chat,
+      providerId: params.providerId,
+      model: params.model,
+      requested: params.thinkingLevel,
+      resolved: thinkingLevel,
+    },
+  ).catch((error: unknown) =>
+    logger.warn("chat", "Could not record the thinking level this chat's turn ran with.", error),
   );
   // With the beta on, the model always gets the tool on a build and OS that
   // can run it (a cheap static check; no driver probe here). Access is asked
@@ -1914,6 +1979,10 @@ async function prepareGeneration(
       ? new SubagentSupervisor({
           compactionEngine: compactionEngineFrom(settings.compactionEngine),
           compactionModelOverrides: settings.compactionModelOverrides,
+          transcripts: createSubagentTranscriptFactory(subagentTranscriptStore, {
+            publish: (update) => sendSubagentTranscript(streamId, update),
+            onError: (error) => logger.warn("subagents", "Could not save a helper conversation.", error),
+          }),
           generationId: streamId,
           chatId: params.chatId,
           workspaceId: workspace.id,
@@ -1955,6 +2024,9 @@ async function prepareGeneration(
             : undefined,
           modelOptions: subagentModelOptions,
           healthMetrics: subagentHealthMetrics,
+          // One supervisor per reply: a Bot reply's helpers get 60 minutes from
+          // the first launch; a chat's helpers have only the 24-hour safety net.
+          policy: { timeLimit: botContext ? "bot" : "chat" },
           projector: subagentProjector,
           // SubagentStop for the chats whose own turns run hooks.
           ...(subagentRunsChatHooks
@@ -2344,7 +2416,9 @@ async function prepareGeneration(
         botContext && !supportsImages && botContext.admission.authority.visionProvider
           ? createVisionAnalysisTool(
               {
-                attachments: chat.messages.flatMap((message) => withoutVisualSnapshots(message.attachments ?? [])),
+                attachments: chat.messages.flatMap((message) =>
+                  withoutGrabbedElementThumbnails(withoutVisualSnapshots(message.attachments ?? [])),
+                ),
                 authority: {
                   providerId: botContext.admission.authority.visionProvider.sourceProviderId,
                   modelId: botContext.admission.authority.visionProvider.sourceModelId,
@@ -4036,8 +4110,9 @@ export const llmClient = {
       }
       try {
         // The inspector store is authoritative. Never announce terminal chat
-        // completion before every accepted child snapshot is durable.
-        await subagentSupervisor?.flush();
+        // completion before every accepted child snapshot is durable. Helper
+        // conversations get a short wait only; their saves finish behind it.
+        await subagentSupervisor?.flush({ transcriptWaitMs: SUBAGENT_TRANSCRIPT_TURN_END_WAIT_MS });
         const chat = await chatStore.appendMessage(
           params.chatId,
           {
@@ -4795,6 +4870,7 @@ export const llmClient = {
                 currentUser.content,
                 currentUser.attachments,
                 SLASH_LIMITS.formattedInvocationBytes,
+                currentUser.grabbedElements,
               ),
               workspaceId!,
               currentUser.id,
@@ -5040,22 +5116,12 @@ export const llmClient = {
           })
         : measuredStream;
       const warmedStream = cacheWarmer ? withPiCacheWarming(prefixedStream, cacheWarmer) : prefixedStream;
-      // Device-local pace: Pi calls the stream function once per model
-      // response, right before the provider request, so the wrapper marks
-      // each response's request start (see ModelPaceTimer for what TTFT covers).
-      const pace = createModelPaceMeasurement({
-        providerId: runtime.provider.id,
-        agentHarness: harnessProvider,
-        record: (key, sample) => modelPaceRecorder.record(key, sample),
-        onError: (error) =>
-          logger.debug("model-pace", `Could not measure pace for stream ${streamId}.`, error),
-      });
       // A retry can wait while the chat's balance or limit changes. Check it
       // again at dispatch, after waiting and before starting the provider call.
       const observedStream: typeof realStream = harnessProvider
-        ? pace.wrap(warmedStream)
+        ? warmedStream
         : spendingMeter.wrap(
-            withUsageLimitWait(pace.wrap(warmedStream), {
+            withUsageLimitWait(warmedStream, {
               ...usageLimits.streamOptions({ kind: "chat", id: params.chatId }, runtime.provider.label),
               beforeSendRefusal: async () => {
                 await spendingMeter.settled();
@@ -5843,6 +5909,16 @@ export const llmClient = {
                     : (artifactApprovalPreview ?? toolApprovalPreview(context.toolCall.name, context.args));
                   return preview ? { preview } : {};
                 })(),
+                // A command in plain words, with Aiden's own tags (plain cards only).
+                ...(() => {
+                  const reading = approvalDetails
+                    ? undefined
+                    : commandReadingForCall(context.toolCall.name, context.args, {
+                        ...(folderPath && !noWorkspace ? { workspaceRoot: folderPath } : {}),
+                        home: homedir(),
+                      });
+                  return reading ? { reading } : {};
+                })(),
                 ...(scopedRuleTarget ? { scopes: SCOPED_APPROVAL_OFFER } : {}),
                 ...(macGrantOffer ? { scopes: MAC_GRANT_OFFER } : {}),
                 ...(autoWouldJudge ? { autoWouldJudge: true as const } : {}),
@@ -5962,7 +6038,6 @@ export const llmClient = {
       });
 
       candidate.subscribe(async (event) => {
-        pace.observe(event);
         switch (event.type) {
           case "agent_end":
             // The warmer settles or ends once the reply is saved (the run's finally).

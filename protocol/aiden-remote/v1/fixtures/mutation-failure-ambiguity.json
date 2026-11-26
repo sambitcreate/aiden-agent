@@ -1,0 +1,275 @@
+{
+  "version": 1,
+  "scope": "host-durable-operation-contract",
+  "enforcedBy": [
+    "main/services/aiden-remote-durable-operation.test.ts"
+  ],
+  "consumerAdoption": "Host/desktop durable-operation and error-contract matrix verified by main/services/aiden-remote-durable-operation.test.ts and cross-checked against bot-outbox-delivery.json. Both native clients have adopted it in their own suites (iOS #901, Android #902): each ships one shared before-effect allowlist for every strict before-effect route (Resume, Open work, Peers, Routine models, Watches, generated avatar) that equals recognizedBeforeEffectCodes, so a first 409 revision_conflict is a definite before-effect refusal that clears the pending attempt, while on cachedRejectionLedger routes 408, 429 and 5xx stay ambiguous and keep the key (iOS AidenRemoteFailureClassification.beforeEffectCodes, Android AidenRemoteFailureClassification; checked by AidenRemoteFailureClassificationTests.swift and AidenRemoteFailureClassificationTest.kt, which mirror this list). This fixture's own test checks only the host. Both clients keep an attempt uncertain once an earlier try of it was ambiguous, whatever a later response to that attempt says.",
+  "description": "Host/desktop durable-operation and error-classification failure-ambiguity matrix for Aiden Remote idempotent mutations, verified by main/services/aiden-remote-durable-operation.test.ts. Compares beforeEffectRefusal (fail-closed pre-effect refusal codes proven before any side effect, including 409 revision_conflict, which assertRevision raises before any write, but excluding replayed 409 internal_error) against cachedRejectionLedger (executeAidenDurableOperation routes backed by AidenIdempotencyLedger where settled rejections are cached for 24h and unrecorded/unknown outcomes return 409 idempotency_in_flight).",
+  "policies": {
+    "beforeEffectRefusal": "Only a structured non-transient 4xx response (400-499 excluding 408 and 429) whose error code is on recognizedBeforeEffectCodes proves no side effect occurred on a non-ledger before-effect route. 409 revision_conflict is a recognized refusal: assertRevision rejects a stale revision before the action writes anything, and the ledger replays that same refusal under the key. 409 idempotency_in_flight (including post-effect authorization loss on Bot peers and open-work), 409 internal_error, unknown codes, 408/429/5xx, unparsed HTTP responses, transport losses, and cancellations remain ambiguous.",
+    "cachedRejectionLedger": "Backed by executeAidenDurableOperation and AidenIdempotencyLedger. Structured non-transient 4xx responses (including replayed settled rejections such as 409 revision_conflict, 409 internal_error, and 409 idempotency_conflict) settle the attempt; 409 idempotency_in_flight, 408/429/5xx, unparsed HTTP responses, transport losses, and cancellations remain ambiguous so the caller retains its idempotency key."
+  },
+  "recognizedBeforeEffectCodes": [
+    "invalid_request",
+    "payload_too_large",
+    "authentication_required",
+    "credential_revoked",
+    "capability_denied",
+    "server_identity_changed",
+    "not_found",
+    "bot_archived",
+    "operation_stale",
+    "bot_paused",
+    "idempotency_conflict",
+    "idempotency_capacity",
+    "rate_limited",
+    "revision_conflict",
+    "already_exists",
+    "handle_invalid",
+    "handle_expired",
+    "handle_wrong_device",
+    "handle_capacity",
+    "approval_already_resolved",
+    "approval_resolved",
+    "approval_expired",
+    "question_already_resolved",
+    "question_expired",
+    "memory_entry_not_found",
+    "memory_over_budget",
+    "memory_blocked",
+    "routine_proposal_not_found",
+    "handoff_expired",
+    "access_request_expired",
+    "plan_expired"
+  ],
+  "cases": [
+    {
+      "name": "outcome unrecorded or post-effect authorization lost",
+      "kind": "server",
+      "status": 409,
+      "code": "idempotency_in_flight",
+      "beforeEffectRefusal": { "ambiguous": true },
+      "cachedRejectionLedger": { "ambiguous": true },
+      "serverScenario": "outcome_unrecorded"
+    },
+    {
+      "name": "crashed in-flight entry restored on restart",
+      "kind": "server",
+      "status": 409,
+      "code": "idempotency_in_flight",
+      "beforeEffectRefusal": { "ambiguous": true },
+      "cachedRejectionLedger": { "ambiguous": true },
+      "serverScenario": "restored_in_flight"
+    },
+    {
+      "name": "revision_conflict refused before any write and replayed from ledger",
+      "kind": "server",
+      "status": 409,
+      "code": "revision_conflict",
+      "beforeEffectRefusal": { "ambiguous": false },
+      "cachedRejectionLedger": { "ambiguous": false },
+      "serverScenario": "replayed_revision_conflict"
+    },
+    {
+      "name": "replayed settled internal_error rejection from ledger",
+      "kind": "server",
+      "status": 409,
+      "code": "internal_error",
+      "beforeEffectRefusal": { "ambiguous": true },
+      "cachedRejectionLedger": { "ambiguous": false },
+      "serverScenario": "replayed_internal_error"
+    },
+    {
+      "name": "idempotency key reused with a different request body",
+      "kind": "server",
+      "status": 409,
+      "code": "idempotency_conflict",
+      "beforeEffectRefusal": { "ambiguous": false },
+      "cachedRejectionLedger": { "ambiguous": false },
+      "serverScenario": "body_mismatch_conflict"
+    },
+    {
+      "name": "recognized 400 validation refusal",
+      "kind": "server",
+      "status": 400,
+      "code": "invalid_request",
+      "beforeEffectRefusal": { "ambiguous": false },
+      "cachedRejectionLedger": { "ambiguous": false },
+      "serverScenario": "not_executed_invalid_request"
+    },
+    {
+      "name": "recognized 403 authorization refusal",
+      "kind": "server",
+      "status": 403,
+      "code": "capability_denied",
+      "beforeEffectRefusal": { "ambiguous": false },
+      "cachedRejectionLedger": { "ambiguous": false },
+      "serverScenario": "not_executed_capability_denied"
+    },
+    {
+      "name": "recognized 404 missing resource refusal",
+      "kind": "server",
+      "status": 404,
+      "code": "not_found",
+      "beforeEffectRefusal": { "ambiguous": false },
+      "cachedRejectionLedger": { "ambiguous": false },
+      "serverScenario": "not_executed_not_found"
+    },
+    {
+      "name": "recognized 409 pre-effect state refusal",
+      "kind": "server",
+      "status": 409,
+      "code": "bot_paused",
+      "beforeEffectRefusal": { "ambiguous": false },
+      "cachedRejectionLedger": { "ambiguous": false },
+      "serverScenario": "not_executed_bot_paused"
+    },
+    {
+      "name": "recognized 422 domain validation refusal",
+      "kind": "server",
+      "status": 422,
+      "code": "memory_over_budget",
+      "beforeEffectRefusal": { "ambiguous": false },
+      "cachedRejectionLedger": { "ambiguous": false },
+      "serverScenario": "not_executed_unprocessable"
+    },
+    {
+      "name": "unrecognized 400 error code fails closed on before-effect routes",
+      "kind": "server",
+      "status": 400,
+      "code": "unknown_validation_code",
+      "beforeEffectRefusal": { "ambiguous": true },
+      "cachedRejectionLedger": { "ambiguous": false }
+    },
+    {
+      "name": "unrecognized 404 error code fails closed on before-effect routes",
+      "kind": "server",
+      "status": 404,
+      "code": "unknown_missing_code",
+      "beforeEffectRefusal": { "ambiguous": true },
+      "cachedRejectionLedger": { "ambiguous": false }
+    },
+    {
+      "name": "unrecognized 422 error code fails closed on before-effect routes",
+      "kind": "server",
+      "status": 422,
+      "code": "unknown_unprocessable_code",
+      "beforeEffectRefusal": { "ambiguous": true },
+      "cachedRejectionLedger": { "ambiguous": false }
+    },
+    {
+      "name": "unrecognized 409 error code fails closed on before-effect routes",
+      "kind": "server",
+      "status": 409,
+      "code": "unknown_conflict_code",
+      "beforeEffectRefusal": { "ambiguous": true },
+      "cachedRejectionLedger": { "ambiguous": false }
+    },
+    {
+      "name": "operation_in_progress does not prove before-effect refusal",
+      "kind": "server",
+      "status": 400,
+      "code": "operation_in_progress",
+      "beforeEffectRefusal": { "ambiguous": true },
+      "cachedRejectionLedger": { "ambiguous": false }
+    },
+    {
+      "name": "server_interrupted does not prove before-effect refusal",
+      "kind": "server",
+      "status": 409,
+      "code": "server_interrupted",
+      "beforeEffectRefusal": { "ambiguous": true },
+      "cachedRejectionLedger": { "ambiguous": false }
+    },
+    {
+      "name": "request timeout (408)",
+      "kind": "server",
+      "status": 408,
+      "code": "internal_error",
+      "beforeEffectRefusal": { "ambiguous": true },
+      "cachedRejectionLedger": { "ambiguous": true }
+    },
+    {
+      "name": "rate limited (429)",
+      "kind": "server",
+      "status": 429,
+      "code": "rate_limited",
+      "beforeEffectRefusal": { "ambiguous": true },
+      "cachedRejectionLedger": { "ambiguous": true }
+    },
+    {
+      "name": "idempotency ledger at capacity (429)",
+      "kind": "server",
+      "status": 429,
+      "code": "idempotency_capacity",
+      "beforeEffectRefusal": { "ambiguous": true },
+      "cachedRejectionLedger": { "ambiguous": true },
+      "serverScenario": "admission_capacity"
+    },
+    {
+      "name": "host failed to admit request (500 internal_error)",
+      "kind": "server",
+      "status": 500,
+      "code": "internal_error",
+      "beforeEffectRefusal": { "ambiguous": true },
+      "cachedRejectionLedger": { "ambiguous": true },
+      "serverScenario": "admission_persist_failed"
+    },
+    {
+      "name": "unclassified server exception normalized to 500 internal_error",
+      "kind": "server",
+      "status": 500,
+      "code": "internal_error",
+      "beforeEffectRefusal": { "ambiguous": true },
+      "cachedRejectionLedger": { "ambiguous": true },
+      "serverScenario": "unclassified_server_error"
+    },
+    {
+      "name": "host unavailable (503 internal_error)",
+      "kind": "server",
+      "status": 503,
+      "code": "internal_error",
+      "beforeEffectRefusal": { "ambiguous": true },
+      "cachedRejectionLedger": { "ambiguous": true }
+    },
+    {
+      "name": "unparsed gateway error (502)",
+      "kind": "unexpected_status",
+      "status": 502,
+      "beforeEffectRefusal": { "ambiguous": true },
+      "cachedRejectionLedger": { "ambiguous": true }
+    },
+    {
+      "name": "unparsed gateway timeout (504)",
+      "kind": "unexpected_status",
+      "status": 504,
+      "beforeEffectRefusal": { "ambiguous": true },
+      "cachedRejectionLedger": { "ambiguous": true }
+    },
+    {
+      "name": "corrupt or unreadable server response body",
+      "kind": "invalid_response",
+      "beforeEffectRefusal": { "ambiguous": true },
+      "cachedRejectionLedger": { "ambiguous": true }
+    },
+    {
+      "name": "network transport loss",
+      "kind": "transport",
+      "beforeEffectRefusal": { "ambiguous": true },
+      "cachedRejectionLedger": { "ambiguous": true }
+    },
+    {
+      "name": "client request cancelled after dispatch",
+      "kind": "cancelled",
+      "beforeEffectRefusal": { "ambiguous": true },
+      "cachedRejectionLedger": { "ambiguous": true }
+    },
+    {
+      "name": "client-local pre-send failure never reached host",
+      "kind": "pre_send_local",
+      "beforeEffectRefusal": { "ambiguous": false },
+      "cachedRejectionLedger": { "ambiguous": false }
+    }
+  ]
+}

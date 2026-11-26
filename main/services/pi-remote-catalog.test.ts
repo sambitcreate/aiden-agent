@@ -1511,3 +1511,51 @@ test("Azure cached catalogs migrate on disk and deletion cannot resurrect the ol
   await backing.delete("azure");
   assert.equal(await createPiModelsBackingStore(makeDisk()).read("azure"), undefined);
 });
+
+test("piModelMetadataFor projects Gemini 4 xhigh on google and google-vertex while keeping carbon capped at high", () => {
+  const base = oxAlphaModel();
+  const hydrogen = {
+    ...base,
+    id: "gemini-4-hydrogen",
+    name: "Gemini 4 Hydrogen",
+    api: "google-generative-ai" as const,
+    provider: "google",
+    reasoning: true,
+    thinkingLevelMap: {
+      off: null,
+      minimal: null,
+      low: "low",
+      medium: "medium",
+      high: "high",
+      xhigh: "xhigh",
+      max: null,
+    },
+  };
+  const carbon = {
+    ...hydrogen,
+    id: "gemini-4-carbon",
+    name: "Gemini 4 Carbon",
+    thinkingLevelMap: {
+      ...hydrogen.thinkingLevelMap,
+      xhigh: null,
+    },
+  };
+  assert.deepEqual(piModelMetadataFor("google", hydrogen).thinkingLevels, [
+    "off",
+    "low",
+    "medium",
+    "high",
+    "xhigh",
+  ]);
+  assert.equal(piModelMetadataFor("google", hydrogen).thinkingCanDisable, false);
+  assert.deepEqual(piModelMetadataFor("google", carbon).thinkingLevels, [
+    "off",
+    "low",
+    "medium",
+    "high",
+  ]);
+  assert.deepEqual(
+    piModelMetadataFor("google-vertex", { ...hydrogen, api: "google-vertex", provider: "google-vertex" }).thinkingLevels,
+    ["low", "medium", "high", "xhigh"],
+  );
+});

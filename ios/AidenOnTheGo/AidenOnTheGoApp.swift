@@ -1,6 +1,7 @@
 import SwiftUI
 import MetricKit
 import OSLog
+import UserNotifications
 
 enum AidenDiagnosticArea: String, CaseIterable {
     case connection, authentication, contract, cache, stream, speech
@@ -83,6 +84,8 @@ struct AidenOnTheGoApp: App {
     /// Built here because an app's `init` runs once.
     @State private var inboxStore: AidenUnifiedInboxStore
     @State private var appearance = AidenAppearanceStore()
+    @State private var backgroundGrace: AidenBackgroundGrace
+    @Environment(\.scenePhase) private var scenePhase
 
     init() {
         AidenHomeActionDispatch.install { action in
@@ -117,6 +120,28 @@ struct AidenOnTheGoApp: App {
         _inboxStore = State(initialValue: AidenUnifiedInboxStore(coordinator: coordinator))
         // A tap can launch the app, so this can't wait for `ContentView`.
         AidenNotificationPresentationDelegate.openTap = { $0.open(coordinator: coordinator) }
+        // Deny on a Live Activity (and notification actions) can launch the
+        // app in the background, so this can't wait for `ContentView` either.
+        AidenBackgroundActionBroker.shared.perform = AidenBackgroundActionBroker.perform(
+            coordinator: coordinator,
+            liveActivities: .shared
+        )
+        AidenBackgroundActionBroker.shared.onCardActionUnanswered = { action, link in
+            await AidenUnansweredCardAction.post(action, link: link, center: UNUserNotificationCenter.current())
+        }
+        // A run still going when the app leaves the screen gets a little
+        // more time, so it can still update its card and alert when it ends.
+        let grace = AidenBackgroundGrace(host: AidenApplicationBackgroundTaskHost())
+        _backgroundGrace = State(initialValue: grace)
+        AidenRemoteLiveActivityManager.shared.onLiveRunsChange = { hasLiveRuns in
+            guard !hasLiveRuns else { return }
+            // The finished run's alert is posted from its own task; give it a
+            // moment to land before iOS may suspend the app.
+            Task { @MainActor in
+                try? await Task.sleep(for: .seconds(3))
+                grace.liveRunsDidChange(hasLiveRuns: AidenRemoteLiveActivityManager.shared.hasLiveRuns)
+            }
+        }
         // The unit-test host never touches the device's notifications.
         if ProcessInfo.processInfo.environment["XCTestConfigurationFilePath"] == nil {
             Task { await AidenNotificationIdentifierMigration.runOnce() }
@@ -147,6 +172,18 @@ struct AidenOnTheGoApp: App {
             }
             .environment(haptics)
             .aidenHapticHost(haptics)
+            .onChange(of: scenePhase) { _, phase in
+                switch phase {
+                case .background:
+                    backgroundGrace.appDidEnterBackground(
+                        hasLiveRuns: AidenRemoteLiveActivityManager.shared.hasLiveRuns
+                    )
+                case .active:
+                    backgroundGrace.appWillEnterForeground()
+                default:
+                    break
+                }
+            }
         }
     }
 }

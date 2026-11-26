@@ -57,7 +57,18 @@ exact command, but a file rule covers any later edit (or write) to that file,
 whatever it changes, so the line says so. The Computer Use card's primary is
 **Allow in this chat**, with **Always allow** (every chat) in the menu. A file
 change shows removed and added lines on the soft red and green status fills,
-with screen-reader labels instead of relying on color. Specialized approvals
+with screen-reader labels instead of relying on color. A command card opens on
+**What it will do**: the model's one-line description of the command (now
+required on `run_command`), with a quiet icon-only flip button in the well's
+corner that turns to the exact command (with Copy) and back; it always opens on
+the words, the flip is a short tilt that Reduce Motion turns off, and flipping
+never answers the card. Under the well, Aiden's own tags read from the command
+text: soft red `Badge` fills with a warning icon for risky steps (deleting
+files, the internet, a downloaded script, admin rights, files outside the
+project, stopping programs) and quiet grey ones for calm steps, listed as
+"What Aiden sees in this command". A call with no description shows the command
+as before, with the tags. iPhone and Android draw the same flip and tags.
+Specialized approvals
 (scheduled tasks, subagent grants, form fills, classifiers, hook proposals)
 keep their own review bodies inside the same card.
 
@@ -159,6 +170,16 @@ setting is System, so an explicit On or Off wins over the OS.
   change, and listens for `APPEARANCE_CHANGE_EVENT` rather than a media query.
   Only the sandboxed visual viewer, which has no settings, reads the OS query.
 
+**Toolbar presence.** A header control that can't be used in the current
+context is left out, not greyed, unless the reason passes in a moment (a Git
+operation keeps the buttons and dims them after 300ms). Wrap such a control in
+`ToolbarPresence` (`renderer/components/toolbar-presence.tsx`): it widens its
+slot and fades in when the control becomes usable while the same chat is open,
+leaves the same way, hands keyboard focus to the next control, and shows the
+final state at once on a first render, a chat switch or under Reduce Motion.
+A divider belongs to the group after it, so a group that leaves takes its
+divider along.
+
 **Presence.** An element that animates out stays mounted until its exit
 finishes, not for a fixed timer. `usePresence(present, ref)`
 (`renderer/lib/use-presence.ts`) returns `{ rendered, exiting }`: style the exit
@@ -247,6 +268,8 @@ read the pairing's saved `/server` features until the connection answers.
 ## Activity marks
 
 Show agent activity with the shared activity marks (`AidenActivityMark` on desktop), never with new spinners, canvas loops or shimmering icons. Geometry, timing and the phase mapping live in [`activity-marks.md`](activity-marks.md), and iOS and Android draw the same marks natively. Chat marks use the text colour, and Live uses the accent. Pass `active={false}` for terminal states so the mark freezes on its still pose rather than disappearing.
+
+The documented exception is a Bot's Hi-bit sprite avatar, which acts out its Bot's live state itself; see [Bot avatar states](activity-marks.md#bot-avatar-states-hi-bit-sprites). Its eyes use the tone's `deep` at every size. Faces drawn at 24 px and below add a small white glint while the eyes are open; larger faces keep the tone's `light` glint.
 
 ## Inbox rows
 
@@ -402,11 +425,11 @@ chats) renders one page and a **Show N more** row, through
 - An option holds no focusable control (axe `nested-interactive`). A row's
   secondary actions are `aria-hidden` mouse targets with a `title`, and the
   keyboard gets a shortcut on the highlighted row, named in its description
-  and `aria-keyshortcuts` (the model picker: ⇧⌘P pins, ⇧⌘A adds to the Pad).
+  and `aria-keyshortcuts` (the model list: ⇧⌘P pins).
 
 ## Accessibility gate
 
-`tests/e2e/accessibility.spec.ts` opens Aiden's core surfaces (the chat window and composer, the model picker, the command palette, a confirm dialog, Settings) and runs axe with the WCAG 2.x A and AA tags through `auditAccessibility` in `tests/e2e/axe-gate.ts`. Each surface also gets one small `toMatchAriaSnapshot`. To add a surface, open it in a new `test.step`, call `auditAccessibility(page, { surface, include })` with its root selector, and snapshot only its stable structure: roles, names and states, with no model lists, dates or platform shortcut text. Fix violations in the component. When a fix is out of scope, add an `AXE_EXCLUSIONS` entry keyed by surface, rule id and target selector, with a reason. An entry that stops matching fails the gate until it is deleted, so the list only shrinks.
+`tests/e2e/accessibility.spec.ts` opens Aiden's core surfaces (the chat window and composer, the composer's model popover with its Agent Slider and model list, the command palette, a confirm dialog, Settings) and runs axe with the WCAG 2.x A and AA tags through `auditAccessibility` in `tests/e2e/axe-gate.ts`. Each surface also gets one small `toMatchAriaSnapshot`. To add a surface, open it in a new `test.step`, call `auditAccessibility(page, { surface, include })` with its root selector, and snapshot only its stable structure: roles, names and states, with no model lists, dates or platform shortcut text. Fix violations in the component. When a fix is out of scope, add an `AXE_EXCLUSIONS` entry keyed by surface, rule id and target selector, with a reason. An entry that stops matching fails the gate until it is deleted, so the list only shrinks.
 
 ## Component sink
 
@@ -516,6 +539,27 @@ once a mention starts.
   whose prompt is sent without the chips. While the files load, Enter waits
   instead of sending the half-typed `@query`. A folder also matches as `dir/`.
 
+## Message history
+
+Pressing `↑` in an empty composer (`renderer/lib/composer-history.ts`,
+`renderer/components/composer-history-popover.tsx`) opens a borderless floating
+popover above the composer listing past user-authored prompts oldest-to-newest
+(newest at the bottom, nearest the input) with a compact **Previous reply**
+preview below an inset separator.
+
+- The textarea keeps focus and owns the listbox through `aria-controls` and
+  `aria-activedescendant`. `↑` live-fills the composer and steps older; `↓`
+  steps newer and restores the empty box past the latest entry. `↩` or clicking
+  a row keeps the prompt in the box without immediately sending. `⌥↩` (`Alt+Enter`
+  off macOS) opens **Edit in fork** on an eligible settled turn.
+- Escape closes through the layer stack (`useLayer("popover")`) and restores
+  the empty box without stopping an active reply. Typing, moving the caret,
+  pasting, or blurring detaches history while keeping the recalled text;
+  opening an approval or dialog dismisses back to the saved draft.
+- Options hold no nested focusable controls, scroll with `revealInList`,
+  prevent blur on pointer interaction, and exclude system notices
+  (`message.notice`) and lead-chat injections (`fromLeadChat`).
+
 ## Collections
 
 A list of rows people move through (the sidebar's chats, the Bot list) is one
@@ -569,10 +613,11 @@ script can check and prints `file:line rule message` for each hit:
   Checkbox, radio and other non-text inputs keep their rings.
 - `no-dialog-dom-sniff`: no selector strings that look for an open dialog, menu
   or popover in the DOM; ask the layer stack instead.
-- `network-allowlist`: the models.dev, PostHog ingestion, fal, Replicate,
-  OpenRouter models/benchmarks and Artificial Analysis endpoints appear only in
-  the modules that own them (AGENTS.md "Release model metadata" and "Product
-  analytics"). Tests, docs and `.memory` are not checked.
+- `network-allowlist`: the models.dev, PostHog ingestion, fal, Replicate and
+  OpenRouter models endpoints appear only in the modules that own them
+  (AGENTS.md "Release model metadata" and "Product analytics"). The retired
+  OpenRouter benchmarks and Artificial Analysis endpoints have no owner, so
+  they may not appear at all. Tests, docs and `.memory` are not checked.
 - `no-source-grep-test`: a test may not read a production `.ts`, `.tsx` or `.css`
   file and `match`, `doesNotMatch` or `includes` against it.
 - `literal-motion`: no literal `cubic-bezier(` in renderer CSS or code outside a

@@ -1,0 +1,817 @@
+<title>Aiden iOS Alerts Plan</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600;700&family=Geist+Mono:wght@400;500&display=swap">
+<style>
+/* Layout: one reading column (~1080px) with full-bleed mockup rows; phones are self-contained dark device surfaces in both themes. */
+:root {
+  --bg: #f4f5f7;
+  --surface: #ffffff;
+  --sunk: #eceef2;
+  --fg: #14161c;
+  --muted: #5a606d;
+  --faint: #8a909c;
+  --line: #dfe2e8;
+  --accent: #128a66;
+  --accent-soft: #dff3ec;
+  --good: #16794f; --good-soft: #e1f3e9;
+  --warn: #9a5b00; --warn-soft: #fbefd9;
+  --bad: #b3261e; --bad-soft: #fbe5e3;
+  --info: #2f5fb3; --info-soft: #e3ecfa;
+  --font: "Geist", ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+  --mono: "Geist Mono", ui-monospace, "SF Mono", Menlo, monospace;
+  --ios: -apple-system, "SF Pro Text", "SF Pro Display", system-ui, "Helvetica Neue", sans-serif;
+}
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) {
+  --bg: #0f1114; --surface: #171a1f; --sunk: #1d2127; --fg: #eceef2; --muted: #a3a9b5; --faint: #747b88; --line: #2a2f37;
+  --accent: #4fd6a8; --accent-soft: #15322a;
+  --good: #63d69a; --good-soft: #15301f; --warn: #f2b15c; --warn-soft: #33260f; --bad: #ff8a80; --bad-soft: #3a1714; --info: #8db4ff; --info-soft: #172540;
+  color-scheme: dark;
+} }
+:root[data-theme="dark"] {
+  --bg: #0f1114; --surface: #171a1f; --sunk: #1d2127; --fg: #eceef2; --muted: #a3a9b5; --faint: #747b88; --line: #2a2f37;
+  --accent: #4fd6a8; --accent-soft: #15322a;
+  --good: #63d69a; --good-soft: #15301f; --warn: #f2b15c; --warn-soft: #33260f; --bad: #ff8a80; --bad-soft: #3a1714; --info: #8db4ff; --info-soft: #172540;
+  color-scheme: dark;
+}
+* { box-sizing: border-box; }
+body { background: var(--bg); color: var(--fg); font-family: var(--font); font-size: 15px; line-height: 1.55; -webkit-font-smoothing: antialiased; }
+.wrap { max-width: 1120px; margin: 0 auto; padding-left: max(16px, env(safe-area-inset-left, 0px)); padding-right: max(16px, env(safe-area-inset-right, 0px)); padding-block: 40px 80px; display: grid; gap: 72px; }
+h1, h2, h3 { text-wrap: balance; margin: 0; letter-spacing: -0.02em; }
+h1 { font-size: clamp(30px, 5vw, 48px); line-height: 1.05; font-weight: 650; max-width: 18ch; }
+h2 { font-size: clamp(22px, 3vw, 30px); line-height: 1.15; font-weight: 640; }
+h3 { font-size: 16px; font-weight: 620; letter-spacing: -0.01em; }
+p { margin: 0; max-width: 68ch; }
+.eyebrow { font-family: var(--mono); font-size: 12px; letter-spacing: 0.08em; text-transform: uppercase; color: var(--accent); }
+.muted { color: var(--muted); }
+.small { font-size: 13px; }
+code, .mono { font-family: var(--mono); font-size: 0.88em; }
+code { background: var(--sunk); padding: 1px 5px; border-radius: 5px; }
+section { display: grid; gap: 24px; }
+.sec-head { display: grid; gap: 8px; }
+
+/* hero */
+.hero { display: grid; grid-template-columns: minmax(0, 1.1fr) minmax(0, 0.9fr); gap: 48px; align-items: center; }
+.hero-copy { display: grid; gap: 20px; }
+.lede { font-size: 18px; color: var(--muted); }
+.facts { display: flex; flex-wrap: wrap; gap: 8px; }
+.fact { font-size: 13px; padding: 6px 10px; border-radius: 999px; background: var(--surface); border: 1px solid var(--line); }
+.fact b { font-weight: 600; }
+.hero-phone { display: grid; justify-items: center; gap: 14px; }
+.seg { display: inline-flex; background: var(--sunk); border-radius: 10px; padding: 3px; gap: 2px; }
+.seg button { font: inherit; font-size: 13px; font-weight: 550; border: 0; background: transparent; color: var(--muted); padding: 6px 14px; border-radius: 8px; cursor: pointer; }
+.seg button[aria-pressed="true"] { background: var(--surface); color: var(--fg); box-shadow: 0 1px 2px rgba(0,0,0,.12); }
+.seg button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.caption { font-size: 13px; color: var(--muted); text-align: center; max-width: 34ch; min-height: 3em; }
+
+/* timeline */
+.today { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 32px; align-items: start; }
+.timeline { list-style: none; margin: 0; padding: 0; display: grid; gap: 0; }
+.timeline li { display: grid; grid-template-columns: 64px 1fr; gap: 14px; padding: 14px 0; border-top: 1px solid var(--line); }
+.timeline li:first-child { border-top: 0; }
+.t { font-family: var(--mono); font-size: 13px; color: var(--faint); padding-top: 1px; font-variant-numeric: tabular-nums; }
+.timeline .what { display: grid; gap: 4px; }
+.timeline .phone-sees { font-size: 13px; color: var(--muted); }
+.tag { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; font-weight: 560; padding: 2px 8px; border-radius: 999px; width: fit-content; }
+.tag.bad { background: var(--bad-soft); color: var(--bad); }
+.tag.warn { background: var(--warn-soft); color: var(--warn); }
+.tag.good { background: var(--good-soft); color: var(--good); }
+.tag.info { background: var(--info-soft); color: var(--info); }
+
+.inventory { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; }
+.panel { background: var(--surface); border: 1px solid var(--line); border-radius: 14px; padding: 20px; display: grid; gap: 12px; align-content: start; }
+.panel ul { margin: 0; padding: 0; list-style: none; display: grid; gap: 9px; }
+.panel li { display: grid; grid-template-columns: 18px 1fr; gap: 8px; font-size: 14px; }
+.panel li .ic { font-weight: 700; }
+.panel.have .ic { color: var(--good); }
+.panel.miss .ic { color: var(--bad); }
+.panel li small { display: block; color: var(--muted); font-size: 12.5px; }
+
+/* matrix */
+.table-scroll { overflow-x: auto; border: 1px solid var(--line); border-radius: 14px; background: var(--surface); }
+table { border-collapse: collapse; width: 100%; min-width: 820px; font-size: 13.5px; }
+th, td { text-align: left; padding: 11px 14px; border-bottom: 1px solid var(--line); vertical-align: top; }
+thead th { font-size: 12px; font-weight: 600; color: var(--muted); text-transform: uppercase; letter-spacing: 0.05em; background: var(--sunk); position: sticky; top: 0; }
+tbody tr:last-child td { border-bottom: 0; }
+td:first-child { font-weight: 560; width: 24%; }
+td.proposed, th.proposed { background: var(--accent-soft); }
+.y, .n, .p { font-weight: 650; margin-right: 4px; }
+.y { color: var(--good); } .n { color: var(--bad); } .p { color: var(--warn); }
+td .note { color: var(--muted); }
+
+/* mockup gallery */
+.gallery { display: grid; grid-template-columns: repeat(auto-fit, minmax(290px, 1fr)); gap: 28px 24px; }
+.mock { display: grid; gap: 12px; align-content: start; justify-items: center; }
+.mock-copy { display: grid; gap: 4px; max-width: 320px; justify-self: center; width: 100%; }
+.mock-copy p { font-size: 13.5px; color: var(--muted); }
+.mock-copy .from { font-family: var(--mono); font-size: 11.5px; color: var(--faint); }
+
+/* ===== Device surfaces (fixed dark look, both themes) ===== */
+.phone { width: 280px; max-width: 100%; aspect-ratio: 280 / 590; border-radius: 48px; padding: 9px; background: #0a0b0e; box-shadow: 0 0 0 1px #2b2e35, 0 24px 48px -20px rgba(0,0,0,.45); }
+.screen { position: relative; height: 100%; border-radius: 40px; overflow: hidden; color: #fff; font-family: var(--ios);
+  background: radial-gradient(120% 70% at 20% 10%, #31507a 0%, transparent 60%), radial-gradient(90% 60% at 90% 80%, #3b2c5a 0%, transparent 60%), linear-gradient(180deg, #1a2433, #0d1119); }
+.screen.settings-bg { background: #000; }
+.island { position: absolute; top: 10px; left: 50%; transform: translateX(-50%); width: 92px; height: 27px; background: #000; border-radius: 20px; z-index: 3; }
+.status-bar { display: flex; justify-content: space-between; padding: 14px 26px 0; font-size: 13px; font-weight: 600; }
+.ls-date { text-align: center; margin-top: 26px; font-size: 15px; font-weight: 500; opacity: .85; }
+.ls-time { text-align: center; font-size: 72px; font-weight: 700; line-height: 1; letter-spacing: -0.02em; margin-top: 2px; opacity: .95; }
+.ls-stack { position: absolute; left: 10px; right: 10px; bottom: 54px; display: grid; gap: 8px; }
+.ls-bottom { position: absolute; bottom: 14px; left: 0; right: 0; display: flex; justify-content: space-between; padding: 0 34px; }
+.ls-bottom span { width: 40px; height: 40px; border-radius: 50%; background: rgba(255,255,255,.14); }
+
+/* Live Activity card, matching AgentRunLockScreenView */
+.la { background: rgba(6,7,10,.94); border-radius: 22px; padding: 12px 13px; display: grid; gap: 9px; }
+.la-head { display: grid; grid-template-columns: 30px 1fr auto; gap: 9px; align-items: center; }
+.dot { width: 30px; height: 30px; border-radius: 50%; display: grid; place-items: center; }
+.dot i { width: 11px; height: 11px; border-radius: 50%; display: block; }
+.la-eyebrow { display: flex; align-items: center; gap: 5px; font-size: 9.5px; font-weight: 700; letter-spacing: .05em; color: rgba(255,255,255,.68); text-transform: uppercase; flex-wrap: wrap; }
+.chip { font-size: 9px; font-weight: 600; letter-spacing: 0; text-transform: none; padding: 1px 6px; border-radius: 999px; background: rgba(255,255,255,.08); color: rgba(255,255,255,.75); }
+.chip.stale { color: #ffc773; background: rgba(255,199,115,.12); }
+.la-title { font-size: 14.5px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.pill { font-size: 11px; font-weight: 600; font-variant-numeric: tabular-nums; padding: 4px 8px; border-radius: 999px; background: rgba(255,255,255,.08); }
+.la-row { display: flex; align-items: center; gap: 8px; }
+.la-row b { font-size: 12.5px; font-weight: 600; flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.rail { width: 84px; height: 4px; border-radius: 4px; background: rgba(255,255,255,.14); overflow: hidden; }
+.rail i { display: block; height: 100%; border-radius: 4px; }
+.excerpt { font-size: 11px; color: rgba(255,255,255,.68); padding: 7px 10px; border-radius: 8px; border: 1px solid rgba(255,255,255,.13); line-height: 1.35; }
+.excerpt strong { color: #fff; font-weight: 600; display: block; }
+.la-actions { display: grid; grid-template-columns: 1fr 1fr; gap: 7px; }
+.la-actions span { text-align: center; font-size: 12px; font-weight: 600; padding: 8px 0; border-radius: 12px; background: rgba(255,255,255,.12); }
+.la-actions span.primary { background: #ff943d; color: #1a0e02; }
+.la-actions span.danger { color: #ff8a80; }
+
+/* status colors from AgentRunStatusStyle */
+.s-think { --c: #ffd12e; } .s-tool { --c: #80b8ff; } .s-cmd { --c: #c28cff; } .s-wait { --c: #ff943d; } .s-done { --c: #59f28c; } .s-fail { --c: #ff5252; } .s-stale { --c: rgba(255,255,255,.52); }
+.dot { background: color-mix(in srgb, var(--c) 18%, transparent); } .dot i { background: var(--c); }
+.rail i { background: var(--c); }
+.excerpt.tinted { background: color-mix(in srgb, var(--c) 14%, transparent); }
+
+/* proposed: text only on a clean background */
+.la-clean { background: #141416; border-radius: 22px; padding: 14px 16px; display: grid; gap: 2px; font-family: var(--ios); color: #fff; text-align: left; }
+.lc-top { display: flex; justify-content: space-between; align-items: baseline; gap: 12px; }
+.lc-title { font-size: 15px; font-weight: 600; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.lc-time { font-size: 13px; color: rgba(255,255,255,.5); font-variant-numeric: tabular-nums; flex: none; }
+.lc-status { font-size: 13.5px; color: rgba(255,255,255,.68); }
+.lc-actions { display: flex; gap: 22px; margin-top: 10px; font-size: 14px; font-weight: 600; }
+.lc-actions .quiet { color: rgba(255,255,255,.5); }
+.lc-rows { display: grid; gap: 6px; margin-top: 8px; }
+.lc-row { display: flex; justify-content: space-between; gap: 12px; font-size: 13px; }
+.lc-row span:first-child { min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.lc-row span:last-child { color: rgba(255,255,255,.55); flex: none; }
+.di-plain { display: flex; justify-content: space-between; align-items: center; width: 230px; max-width: 100%; height: 34px; padding: 0 16px; background: #000; border-radius: 20px; font-size: 12px; font-weight: 600; font-family: var(--ios); }
+.di-plain span:last-child { color: rgba(255,255,255,.55); font-variant-numeric: tabular-nums; }
+.di-plain-expanded { width: 100%; background: #000; border-radius: 38px; padding: 18px 22px 16px; }
+.di-plain-expanded .la-clean { background: transparent; padding: 0; }
+
+/* notification banners */
+.note-card { background: rgba(240,241,245,.82); color: #111; border-radius: 20px; padding: 10px 12px; display: grid; grid-template-columns: 34px 1fr; gap: 10px; -webkit-backdrop-filter: blur(20px); backdrop-filter: blur(20px); }
+.app-ic { width: 34px; height: 34px; border-radius: 9px; background: linear-gradient(160deg, #1d2430, #06070a); display: grid; place-items: center; color: #59f2b3; font-weight: 800; font-size: 16px; font-family: var(--font); }
+.note-top { display: flex; justify-content: space-between; gap: 8px; font-size: 12.5px; font-weight: 600; }
+.note-top span:last-child { font-weight: 400; color: #6b6e76; font-size: 11.5px; white-space: nowrap; }
+.note-body { font-size: 12.5px; line-height: 1.35; color: #222; }
+.note-body .sub { font-weight: 600; display: block; }
+.ts { font-size: 10px; font-weight: 700; color: #b35a00; letter-spacing: .03em; text-transform: uppercase; }
+.actions-menu { background: rgba(240,241,245,.82); color: #111; border-radius: 16px; overflow: hidden; -webkit-backdrop-filter: blur(20px); backdrop-filter: blur(20px); }
+.actions-menu div { display: flex; justify-content: space-between; align-items: center; padding: 10px 14px; font-size: 13.5px; border-top: 1px solid rgba(0,0,0,.08); }
+.actions-menu div:first-child { border-top: 0; }
+.actions-menu .red { color: #d1271c; }
+.actions-menu small { color: #6b6e76; font-size: 11px; }
+.reply-field { background: rgba(255,255,255,.92); color: #111; border-radius: 18px; padding: 8px 8px 8px 14px; font-size: 13px; display: flex; justify-content: space-between; align-items: center; }
+.reply-field .send { width: 26px; height: 26px; border-radius: 50%; background: #128a66; color: #fff; display: grid; place-items: center; font-size: 13px; font-weight: 700; }
+.dim::after { content: ""; position: absolute; inset: 0; background: rgba(0,0,0,.42); -webkit-backdrop-filter: blur(6px); backdrop-filter: blur(6px); z-index: 1; }
+.dim .ls-stack { z-index: 2; }
+
+/* dynamic island standalone */
+.islands { display: grid; gap: 12px; justify-items: center; width: 100%; max-width: 320px; padding: 20px 12px; border-radius: 24px; background: linear-gradient(180deg, #1a2433, #0d1119); font-family: var(--ios); color: #fff; }
+.di-compact { display: flex; align-items: center; justify-content: space-between; width: 230px; max-width: 100%; height: 34px; padding: 0 12px 0 8px; background: #000; border-radius: 20px; font-size: 11.5px; font-weight: 600; }
+.di-compact .mk { width: 18px; height: 18px; border-radius: 50%; background: color-mix(in srgb, var(--c) 22%, transparent); display: grid; place-items: center; }
+.di-compact .mk i { width: 7px; height: 7px; border-radius: 50%; background: var(--c); display: block; }
+.di-compact .word { color: var(--c); }
+.di-label { font-size: 10.5px; color: rgba(255,255,255,.55); letter-spacing: .02em; }
+.di-expanded { width: 100%; background: #000; border-radius: 38px; padding: 16px 18px 14px; display: grid; gap: 10px; box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--c) 45%, transparent); }
+.di-top { display: flex; justify-content: space-between; align-items: center; font-size: 12px; font-weight: 600; }
+.di-top .badge { display: flex; align-items: center; gap: 6px; }
+
+/* summary rows */
+.sum-row { display: grid; grid-template-columns: 10px 1fr auto; gap: 8px; align-items: center; font-size: 11.5px; }
+.sum-row i { width: 8px; height: 8px; border-radius: 50%; background: var(--c); display: block; }
+.sum-row span { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.sum-row em { font-style: normal; color: var(--c); font-weight: 600; font-size: 11px; }
+
+/* settings mock */
+.set { position: absolute; inset: 44px 0 0; overflow: hidden; padding: 4px 12px 12px; display: grid; gap: 6px; align-content: start; }
+.set h4 { margin: 4px 4px 6px; font-size: 24px; font-weight: 700; }
+.set .grp-label { font-size: 10.5px; text-transform: uppercase; color: rgba(255,255,255,.5); margin: 8px 6px 2px; letter-spacing: .02em; }
+.set .grp { background: #1c1c1e; border-radius: 12px; overflow: hidden; }
+.set .row { display: flex; justify-content: space-between; align-items: center; gap: 8px; padding: 8px 12px; font-size: 12.5px; border-top: 0.5px solid rgba(255,255,255,.1); }
+.set .row:first-child { border-top: 0; }
+.set .row small { color: rgba(255,255,255,.5); font-size: 11px; }
+.tog { width: 34px; height: 20px; border-radius: 999px; background: #34c759; position: relative; flex: none; }
+.tog::after { content: ""; position: absolute; top: 2px; right: 2px; width: 16px; height: 16px; border-radius: 50%; background: #fff; }
+.tog.off { background: rgba(120,120,128,.36); }
+.tog.off::after { right: auto; left: 2px; }
+.set .foot { font-size: 10px; color: rgba(255,255,255,.45); margin: 3px 8px 0; line-height: 1.35; }
+.set .link { color: #4fd6a8; }
+
+/* architecture */
+.flow { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 0; align-items: stretch; }
+.node { position: relative; background: var(--surface); border: 1px solid var(--line); border-radius: 14px; padding: 16px; display: grid; gap: 8px; align-content: start; margin-right: 28px; }
+.node:last-child { margin-right: 0; }
+.node:not(:last-child)::after { content: "→"; position: absolute; right: -24px; top: 50%; transform: translateY(-50%); color: var(--faint); font-size: 18px; }
+.node .who { font-family: var(--mono); font-size: 11px; color: var(--faint); text-transform: uppercase; letter-spacing: .06em; }
+.node p { font-size: 13px; color: var(--muted); }
+.node .sees { font-size: 12.5px; border-top: 1px dashed var(--line); padding-top: 8px; }
+.node .sees b { font-weight: 600; color: var(--fg); }
+.node.key { border-color: var(--accent); }
+.payloads { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; }
+pre { margin: 0; font-family: var(--mono); font-size: 12px; line-height: 1.55; background: var(--sunk); border-radius: 10px; padding: 14px; overflow-x: auto; color: var(--fg); }
+pre .c { color: var(--faint); }
+.options { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 16px; }
+.opt { background: var(--surface); border: 1px solid var(--line); border-radius: 14px; padding: 18px; display: grid; gap: 8px; align-content: start; }
+.opt p { font-size: 13.5px; color: var(--muted); }
+.opt.rec { border-color: var(--accent); }
+
+/* roadmap */
+.phases { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 14px; }
+.phase { background: var(--surface); border: 1px solid var(--line); border-radius: 14px; padding: 18px; display: grid; gap: 10px; align-content: start; }
+.phase .num { font-family: var(--mono); font-size: 12px; color: var(--accent); }
+.phase ul { margin: 0; padding-left: 16px; display: grid; gap: 6px; font-size: 13.5px; }
+.phase ul li::marker { color: var(--faint); }
+.phase .needs { font-size: 12px; color: var(--muted); border-top: 1px solid var(--line); padding-top: 10px; }
+
+.decisions { display: grid; gap: 12px; }
+.dec { background: var(--surface); border: 1px solid var(--line); border-radius: 14px; padding: 18px 20px; display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.3fr); gap: 20px; }
+.dec .rec { font-size: 13.5px; }
+.dec .rec b { color: var(--accent); font-weight: 600; }
+.sources { font-size: 12.5px; color: var(--muted); display: grid; gap: 4px; }
+.sources code { font-size: 11.5px; }
+
+@media (max-width: 900px) {
+  .hero, .today { grid-template-columns: 1fr; }
+  .flow { grid-template-columns: 1fr; gap: 28px; }
+  .node { margin-right: 0; }
+  .node:not(:last-child)::after { content: "↓"; right: auto; left: 50%; top: auto; bottom: -26px; transform: translateX(-50%); }
+  .phases { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .options, .payloads { grid-template-columns: 1fr; }
+  .dec { grid-template-columns: 1fr; gap: 10px; }
+}
+@media (max-width: 600px) {
+  .inventory, .phases { grid-template-columns: 1fr; }
+}
+@media (prefers-reduced-motion: no-preference) {
+  .rail.live i { animation: pulse 1.6s ease-in-out infinite; }
+  @keyframes pulse { 0%, 100% { opacity: .55; } 50% { opacity: 1; } }
+}
+</style>
+
+<div class="wrap">
+
+<header class="hero">
+  <div class="hero-copy">
+    <span class="eyebrow">Aiden On The Go · iOS</span>
+    <h1>Hear from Aiden after you lock your phone</h1>
+    <p class="lede">The Live Activity and run alerts already look good. They stop working shortly after the phone locks, because both are driven by the app, and iOS suspends the app. Hermex and T3 Code fix this with a small push relay. This plan does the same, keeps the privacy model Aiden already has, and adds lock-screen answers, which neither of them offers.</p>
+    <div class="facts">
+      <span class="fact"><b>0</b> push paths today (<code>pushType: nil</code>)</span>
+      <span class="fact"><b>0</b> notification actions</span>
+      <span class="fact"><b>0</b> notification settings</span>
+      <span class="fact">Scheduled-task alerts arrive <b>only when you open the app</b></span>
+    </div>
+  </div>
+  <div class="hero-phone">
+    <div class="seg" role="group" aria-label="Lock Screen state">
+      <button type="button" id="seg-today" aria-pressed="true">Today, 11 min in</button>
+      <button type="button" id="seg-prop" aria-pressed="false">Proposed</button>
+    </div>
+    <div class="phone" aria-label="iPhone Lock Screen mockup">
+      <div class="screen">
+        <div class="island"></div>
+        <div class="status-bar"><span>9:52</span><span>5G ▮▮▮</span></div>
+        <div class="ls-date">Sunday, November 22</div>
+        <div class="ls-time">9:52</div>
+        <div class="ls-stack">
+          <div id="la-today" class="la s-stale">
+            <div class="la-head">
+              <div class="dot"><i></i></div>
+              <div>
+                <div class="la-eyebrow">Aiden <span class="chip">4 tools</span><span class="chip stale">Updated 11m ago</span></div>
+                <div class="la-title">Fix flaky login test</div>
+              </div>
+              <span class="pill">Latest</span>
+            </div>
+            <div class="la-row"><b>Latest status shown</b><span class="rail"><i style="width:40%"></i></span></div>
+            <div class="excerpt">Reading files · <span style="opacity:.8">the agent has actually been waiting for your approval for 8 minutes.</span></div>
+          </div>
+          <div id="la-prop" class="la-clean" hidden>
+            <div class="lc-top"><span class="lc-title">Fix flaky login test</span><span class="lc-time">3:12</span></div>
+            <div class="lc-status">Needs your approval to run a command</div>
+            <div class="lc-actions"><span>Review</span><span class="quiet">Deny</span></div>
+          </div>
+          <div id="note-prop" class="note-card" hidden>
+            <div class="app-ic">A</div>
+            <div>
+              <div class="note-top"><span>Fix flaky login test</span><span>now</span></div>
+              <div class="note-body">Wants to run npm run test:e2e</div>
+            </div>
+          </div>
+        </div>
+        <div class="ls-bottom"><span></span><span></span></div>
+      </div>
+    </div>
+    <p class="caption" id="hero-caption" aria-live="polite">Frozen at the last update the app saw before iOS suspended it. The approval never reached the phone.</p>
+  </div>
+</header>
+
+<section>
+  <div class="sec-head">
+    <span class="eyebrow">01 · What happens today</span>
+    <h2>One run, start to finish, with the phone locked</h2>
+    <p class="muted">The phone gets updates only while Aiden is running in the foreground. It has no background mode, no push token and no Notification Service Extension. The stream to the Mac stops when iOS suspends the app.</p>
+  </div>
+  <div class="today">
+    <ol class="timeline">
+      <li><span class="t">0:00</span><div class="what"><b>You send “fix the flaky login test” and lock the phone.</b><span class="phone-sees">Live Activity starts: <em>Thinking</em>, timer running.</span><span class="tag good">Works</span></div></li>
+      <li><span class="t">~0:10</span><div class="what"><b>iOS suspends Aiden.</b><span class="phone-sees">The stream to the Mac closes. The card stays on its last state (<em>Reading files</em>), and the system-drawn “Updated … ago” keeps ticking.</span><span class="tag warn">Silent freeze</span></div></li>
+      <li><span class="t">3:10</span><div class="what"><b>The agent asks to run <code>npm run test:e2e</code>.</b><span class="phone-sees">Nothing on the phone. <code>AidenRunAlertNotifier</code> would post a Time Sensitive alert, but it runs inside the suspended app.</span><span class="tag bad">Missed</span></div></li>
+      <li><span class="t">5:00</span><div class="what"><b>The stale date passes.</b><span class="phone-sees">The card greys out: “Latest status shown”. It still doesn't know an approval is waiting, so it can't say “Open to answer”.</span><span class="tag warn">Stale</span></div></li>
+      <li><span class="t">11:00</span><div class="what"><b>You glance at the phone, then open Aiden.</b><span class="phone-sees">The app reconnects and shows the approval card. The agent has been blocked for 8 minutes.</span><span class="tag bad">8 min lost</span></div></li>
+      <li><span class="t">7:00 am</span><div class="what"><b>A scheduled task or Bot routine finishes overnight.</b><span class="phone-sees">The feed is polled “while the app is foregrounded” (<code>AidenScheduledRunNotifier</code>), so you hear about it when you next open the app.</span><span class="tag bad">Late</span></div></li>
+    </ol>
+    <div class="inventory">
+      <div class="panel have">
+        <h3>Already built well</h3>
+        <ul>
+          <li><span class="ic">✓</span><span>Lock Screen + Dynamic Island card with 12 statuses<small>Status colors, timer pill, progress rail, tool count</small></span></li>
+          <li><span class="ic">✓</span><span>Freshness and stale copy<small>“Updated … ago”; stale approval says “Open to answer”</small></span></li>
+          <li><span class="ic">✓</span><span>Sanitized text and old-payload decoding<small>Title, activity and excerpt are capped; new fields decode as optional</small></span></li>
+          <li><span class="ic">✓</span><span>Leftover cards reconciled on relaunch<small>Cards for a run that already ended are closed</small></span></li>
+          <li><span class="ic">✓</span><span>Run alerts with good manners<small>Time Sensitive for asks, quiet while you're in that chat, one alert per prompt</small></span></li>
+          <li><span class="ic">✓</span><span>Permission asked after the first finished run<small>Never at launch, never for a failure</small></span></li>
+          <li><span class="ic">✓</span><span>Taps open the right chat on the right Mac<small><code>aiden-otg://</code> links, grouped per chat</small></span></li>
+        </ul>
+      </div>
+      <div class="panel miss">
+        <h3>Missing</h3>
+        <ul>
+          <li><span class="ic">✕</span><span>No push of any kind<small>No APNs token; the card can't change while the app is suspended</small></span></li>
+          <li><span class="ic">✕</span><span>Alerts need the app alive<small>Approvals, answers, Bot handoffs, failures</small></span></li>
+          <li><span class="ic">✕</span><span>Scheduled and Bot routine alerts are polled<small>Delivered only when the app is opened</small></span></li>
+          <li><span class="ic">✕</span><span>No actions on alerts or the card<small>A tap only opens the app, even to say no</small></span></li>
+          <li><span class="ic">✕</span><span>Fixed copy only<small>“Needs your approval”, with no idea what for</small></span></li>
+          <li><span class="ic">✕</span><span>No notification settings<small>Every alert is on or off together at the system level</small></span></li>
+          <li><span class="ic">✕</span><span>One card per run<small>Three runs at once means three stacked cards</small></span></li>
+          <li><span class="ic">✕</span><span>No Watch, CarPlay or Always-On layout<small>No <code>supplementalActivityFamilies</code>, no reduced-luminance styling</small></span></li>
+        </ul>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section>
+  <div class="sec-head">
+    <span class="eyebrow">02 · Hermex and T3 Code</span>
+    <h2>How Hermex and T3 Code handle it</h2>
+    <p class="muted">Both apps route through a Cloudflare Worker that holds the APNs key. Hermex encrypts message text end to end. T3 Code shows all of your agents on one card. Neither one lets you answer from the lock screen, and both dropped push-to-start.</p>
+  </div>
+  <div class="table-scroll">
+    <table>
+      <thead><tr><th>Capability</th><th>Aiden today</th><th>Hermex</th><th>T3 Code</th><th class="proposed">Aiden, proposed</th></tr></thead>
+      <tbody>
+        <tr><td>Card keeps updating while the phone sleeps</td><td><span class="n">✕</span><span class="note">Local only</span></td><td><span class="y">✓</span><span class="note">APNs token per card, relay pushes</span></td><td><span class="y">✓</span><span class="note">Relay sends every update</span></td><td class="proposed"><span class="y">✓</span>Push token per card</td></tr>
+        <tr><td>Alert when the app is closed</td><td><span class="n">✕</span></td><td><span class="y">✓</span></td><td><span class="y">✓</span></td><td class="proposed"><span class="y">✓</span></td></tr>
+        <tr><td>Scheduled task and Bot routine alerts</td><td><span class="p">~</span><span class="note">Polled on open</span></td><td><span class="y">✓</span><span class="note">Pushed</span></td><td><span class="note">No equivalent</span></td><td class="proposed"><span class="y">✓</span>Pushed when they happen</td></tr>
+        <tr><td>What the banner says</td><td><span class="note">Fixed copy</span></td><td><span class="y">✓</span><span class="note">Real text, AES-GCM sealed, opened in a service extension</span></td><td><span class="p">~</span><span class="note">Real text, readable by the relay</span></td><td class="proposed"><span class="y">✓</span>Sealed text (Hermex model)</td></tr>
+        <tr><td>Answer from the banner or the card</td><td><span class="n">✕</span></td><td><span class="n">✕</span><span class="note">Deliberately never</span></td><td><span class="n">✕</span></td><td class="proposed"><span class="y">✓</span>Deny anywhere, Approve with Face ID, Reply inline</td></tr>
+        <tr><td>Several runs at once</td><td><span class="note">One card each</span></td><td><span class="note">One card; older ones end</span></td><td><span class="y">✓</span><span class="note">One summary card, attention first</span></td><td class="proposed"><span class="y">✓</span>Summary card from 2 runs up</td></tr>
+        <tr><td>Time Sensitive for asks</td><td><span class="y">✓</span></td><td><span class="y">✓</span></td><td><span class="n">✕</span></td><td class="proposed"><span class="y">✓</span></td></tr>
+        <tr><td>No duplicate alert when the card already shows it</td><td><span class="note">No push, so no duplicates</span></td><td><span class="y">✓</span></td><td><span class="y">✓</span><span class="note">Alert sent inside the card update</span></td><td class="proposed"><span class="y">✓</span></td></tr>
+        <tr><td>Quiet while you're in that chat</td><td><span class="y">✓</span></td><td><span class="y">✓</span><span class="note">Toggle</span></td><td><span class="y">✓</span></td><td class="proposed"><span class="y">✓</span>Toggle</td></tr>
+        <tr><td>Notification settings</td><td><span class="n">✕</span></td><td><span class="y">✓</span><span class="note">Per server: reply, subagent, previews, test send</span></td><td><span class="p">~</span><span class="note">Two switches</span></td><td class="proposed"><span class="y">✓</span>Per event, previews, test send</td></tr>
+        <tr><td>Watch / CarPlay small layout</td><td><span class="n">✕</span></td><td><span class="y">✓</span></td><td><span class="y">✓</span></td><td class="proposed"><span class="y">✓</span></td></tr>
+        <tr><td>Always-On and Liquid Glass styling</td><td><span class="n">✕</span></td><td><span class="note">Not found</span></td><td><span class="y">✓</span></td><td class="proposed"><span class="y">✓</span></td></tr>
+        <tr><td>Push-to-start (card appears for runs started elsewhere)</td><td><span class="n">✕</span></td><td><span class="n">✕</span></td><td><span class="n">✕</span><span class="note">Removed as unreliable</span></td><td class="proposed"><span class="note">Later</span></td></tr>
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<section>
+  <div class="sec-head">
+    <span class="eyebrow">03 · Proposal</span>
+    <h2>What you'd see</h2>
+    <p class="muted">Plain text on a clean background. The status dot, progress rail, timer pill, chips, status colors and tinted panels are all gone: the status is a word and the time is plain text. New: actions, message text, a summary card and a settings page.</p>
+  </div>
+  <div class="gallery">
+
+    <div class="mock">
+      <div class="phone"><div class="screen dim">
+        <div class="island"></div>
+        <div class="status-bar"><span>9:41</span><span>5G ▮▮▮</span></div>
+        <div class="ls-stack" style="bottom: 40px;">
+          <div class="note-card">
+            <div class="app-ic">A</div>
+            <div>
+              <div class="note-top"><span>Fix flaky login test</span><span>now</span></div>
+              <div class="note-body">Wants to run npm run test:e2e</div>
+            </div>
+          </div>
+          <div class="actions-menu">
+            <div><span>Approve</span><small>Face ID</small></div>
+            <div class="red"><span>Deny</span><span>✕</span></div>
+            <div><span>Open chat</span><span>↗</span></div>
+          </div>
+        </div>
+      </div></div>
+      <div class="mock-copy">
+        <h3>Approvals from the banner</h3>
+        <p>Title and one line, nothing else. Long-press shows the system action menu. Approve requires unlock (<code>.authenticationRequired</code>); Deny always works. The answer goes over the existing paired connection. If the Mac can't be reached, the action opens the app instead.</p>
+        <span class="from">New · neither app has this</span>
+      </div>
+    </div>
+
+    <div class="mock">
+      <div class="phone"><div class="screen dim">
+        <div class="island"></div>
+        <div class="status-bar"><span>9:41</span><span>5G ▮▮▮</span></div>
+        <div class="ls-stack" style="bottom: 40px;">
+          <div class="note-card">
+            <div class="app-ic">A</div>
+            <div>
+              <div class="note-top"><span>Release notes 0.69</span><span>2m ago</span></div>
+              <div class="note-body">Should the iOS notes mention TestFlight build 46, or just the App Store version?</div>
+            </div>
+          </div>
+          <div class="reply-field"><span style="color:#6b6e76">Just the App Store ver|</span><span class="send">↑</span></div>
+        </div>
+      </div></div>
+      <div class="mock-copy">
+        <h3>Answer questions inline</h3>
+        <p><code>ask_user_question</code> gets a Reply text field (<code>UNTextInputNotificationAction</code>). A multiple-choice question opens the app, because notification categories have to be registered ahead of time.</p>
+        <span class="from">New · neither app has this</span>
+      </div>
+    </div>
+
+    <div class="mock">
+      <div class="islands s-wait">
+        <span class="di-label">Compact · working</span>
+        <div class="di-plain"><span>Thinking</span><span>2:41</span></div>
+        <span class="di-label">Compact · needs you</span>
+        <div class="di-plain"><span>Needs you</span><span>3:12</span></div>
+        <span class="di-label">Expanded</span>
+        <div class="di-plain-expanded">
+          <div class="la-clean">
+            <div class="lc-top"><span class="lc-title">Fix flaky login test</span><span class="lc-time">3:12</span></div>
+            <div class="lc-status">Needs your approval to run a command</div>
+            <div class="lc-actions"><span>Review</span><span class="quiet">Deny</span></div>
+          </div>
+        </div>
+      </div>
+      <div class="mock-copy">
+        <h3>Dynamic Island, text only</h3>
+        <p>Text only: a status word and the elapsed time, with no marks or colors. Review and Deny are plain text buttons (<code>Button(intent:)</code> with a <code>LiveActivityIntent</code>). Deny runs in place. Review opens the approval sheet, because a card updated by push carries no command text.</p>
+        <span class="from">New: buttons</span>
+      </div>
+    </div>
+
+    <div class="mock">
+      <div class="phone"><div class="screen">
+        <div class="island"></div>
+        <div class="status-bar"><span>9:41</span><span>5G ▮▮▮</span></div>
+        <div class="ls-date">Sunday, November 22</div>
+        <div class="ls-time">9:41</div>
+        <div class="ls-stack">
+          <div class="la-clean">
+            <div class="lc-top"><span class="lc-title">3 runs on MacBook Pro</span><span class="lc-time">1 needs you</span></div>
+            <div class="lc-rows">
+              <div class="lc-row"><span>Fix flaky login test</span><span>Needs approval</span></div>
+              <div class="lc-row"><span>Morning brief</span><span>Running a command</span></div>
+              <div class="lc-row"><span>Release notes 0.69</span><span>Done</span></div>
+            </div>
+          </div>
+        </div>
+        <div class="ls-bottom"><span></span><span></span></div>
+      </div></div>
+      <div class="mock-copy">
+        <h3>One card for several runs</h3>
+        <p>When a second run starts, its card merges into one summary sorted by urgency: needs you, then failed, then running, then done. A tap opens the most urgent row. With a single run you get the full card shown at the top of this page.</p>
+        <span class="from">From T3 Code: summary card</span>
+      </div>
+    </div>
+
+    <div class="mock">
+      <div class="phone"><div class="screen settings-bg">
+        <div class="island"></div>
+        <div class="status-bar"><span>9:41</span><span>5G ▮▮▮</span></div>
+        <div class="set">
+          <h4>Notifications</h4>
+          <div class="grp">
+            <div class="row"><span>Push from MacBook Pro<br><small>Connected · via Aiden relay</small></span><span class="link">Test</span></div>
+          </div>
+          <div class="grp-label">Tell me when</div>
+          <div class="grp">
+            <div class="row"><span>Aiden needs an answer</span><span class="tog"></span></div>
+            <div class="row"><span>A response is ready</span><span class="tog"></span></div>
+            <div class="row"><span>A run fails</span><span class="tog"></span></div>
+            <div class="row"><span>A Bot needs me</span><span class="tog"></span></div>
+            <div class="row"><span>Scheduled tasks</span><small>Per task ›</small></div>
+          </div>
+          <div class="grp-label">Privacy</div>
+          <div class="grp">
+            <div class="row"><span>Show message text</span><span class="tog"></span></div>
+            <div class="row"><span>Reply text on Lock Screen</span><span class="tog off"></span></div>
+            <div class="row"><span>Quiet in the open chat</span><span class="tog"></span></div>
+          </div>
+          <p class="foot">Message text is sealed on your Mac. The relay only sees that something happened.</p>
+        </div>
+      </div></div>
+      <div class="mock-copy">
+        <h3>A notifications page</h3>
+        <p>Follows the settings design system. Choices sync to each Mac, so it never sends what you turned off. Includes a test send and a clear per-Mac connection status.</p>
+        <span class="from">From Hermex: per-server toggles, test send</span>
+      </div>
+    </div>
+
+    <div class="mock">
+      <div class="islands" style="gap:14px">
+        <span class="di-label">Apple Watch Smart Stack · small family</span>
+        <div class="la-clean" style="width:184px;background:#000;padding:12px 14px">
+          <div class="lc-title" style="font-size:13px">Fix flaky login test</div>
+          <div class="lc-status" style="font-size:12px">Needs you</div>
+        </div>
+        <span class="di-label">Always-On · reduced luminance</span>
+        <div class="la-clean" style="width:100%;background:#000;opacity:.8">
+          <div class="lc-top"><span class="lc-title" style="color:rgba(255,255,255,.75)">Fix flaky login test</span><span class="lc-time">Needs you</span></div>
+        </div>
+      </div>
+      <div class="mock-copy">
+        <h3>Watch, CarPlay, Always-On</h3>
+        <p>The same two lines of text everywhere. Add <code>.supplementalActivityFamilies([.small])</code> and dim the text under <code>isLuminanceReduced</code>.</p>
+        <span class="from">From Hermex + T3 Code</span>
+      </div>
+    </div>
+
+  </div>
+</section>
+
+<section>
+  <div class="sec-head">
+    <span class="eyebrow">04 · Delivery</span>
+    <h2>How a push gets from your Mac to the phone</h2>
+    <p class="muted">Today Aiden has no cloud servers: phones reach the Mac directly over the local network or Tailscale. Push can't work that way, because APNs only accepts messages signed with Aiden's Apple key, and that key can't ship on every Mac. So the one new piece is a small relay that holds the key and forwards sealed messages.</p>
+  </div>
+  <div class="flow">
+    <div class="node">
+      <span class="who">Your Mac / aiden serve</span>
+      <h3>Seals and sends</h3>
+      <p>On a status change, it seals the preview with a key shared during QR pairing and posts to the relay. The same code goes into the CLI bundle.</p>
+      <div class="sees"><b>Knows:</b> everything, as today</div>
+    </div>
+    <div class="node key">
+      <span class="who">Aiden push relay</span>
+      <h3>Forwards to APNs</h3>
+      <p>A Cloudflare Worker you run, holding Aiden's APNs and FCM keys. Stateless: no database, nothing logged.</p>
+      <div class="sees"><b>Sees:</b> event kind, random ids, push token, timing. <b>Never</b> chat text, titles or the Mac's address.</div>
+    </div>
+    <div class="node">
+      <span class="who">Apple APNs</span>
+      <h3>Delivers</h3>
+      <p>Alerts go out as <code>mutable-content</code> banners. Card updates use the <code>liveactivity</code> push type, priority 10 for a status change and 5 for progress.</p>
+      <div class="sees"><b>Sees:</b> the same as the relay</div>
+    </div>
+    <div class="node">
+      <span class="who">iPhone</span>
+      <h3>Opens and shows</h3>
+      <p>A new Notification Service Extension opens the sealed text and falls back to fixed copy if it can't. The card gets only statuses and counts; its title was stored on the phone when the run started.</p>
+      <div class="sees"><b>Shows:</b> real text, actions, a live card</div>
+    </div>
+  </div>
+  <div class="payloads">
+    <div class="panel">
+      <h3>Alert push, as the relay sees it</h3>
+<pre>{
+  "aps": { "alert": { "title": "Aiden", "body": "New activity" },
+           "mutable-content": 1, "interruption-level": "time-sensitive",
+           "category": "AIDEN_APPROVAL", "thread-id": "c9f2…" },
+  "kind": "approval", "pairing": "7ab1…",
+  "sealed": "base64(AES-256-GCM(title, body, deep link))"
+}
+<span class="c">// the service extension replaces title/body; on any failure the fixed copy stays</span></pre>
+    </div>
+    <div class="panel">
+      <h3>Card update push (content state)</h3>
+<pre>{
+  "aps": { "event": "update", "timestamp": 1795327931,
+           "stale-date": 1795328831,
+           "content-state": { "v": 2, "status": "waiting_for_approval",
+             "tool_calls": 4, "started_at": 1795327740,
+             "updated_at": 1795327931 } }
+}
+<span class="c">// widgets can't decrypt, so no text is sent; the title is already on the phone</span></pre>
+    </div>
+  </div>
+  <div class="options">
+    <div class="opt rec">
+      <span class="tag good">Recommended</span>
+      <h3>A. Aiden relay</h3>
+      <p>The approach Hermex and T3 Code both ship. A small Worker, the APNs key in its secrets, sealed messages only. It needs a policy section in <code>AGENTS.md</code> like the analytics one: a fixed host, opt-in, and a list of what's sent.</p>
+    </div>
+    <div class="opt">
+      <span class="tag bad">Not viable</span>
+      <h3>B. Mac sends straight to APNs</h3>
+      <p>Every Mac would need Aiden's APNs signing key. Anyone could extract it and send pushes to any Aiden user.</p>
+    </div>
+    <div class="opt">
+      <span class="tag warn">Fallback only</span>
+      <h3>C. Background App Refresh</h3>
+      <p>iOS decides when it runs, often hours apart, and never in Low Power Mode. Good for catching up the scheduled-task feed, useless for an approval.</p>
+    </div>
+  </div>
+</section>
+
+<section id="relay">
+  <div class="sec-head">
+    <span class="eyebrow">05 · The relay decision</span>
+    <h2>What the relay is, who runs it, and what it keeps</h2>
+    <p class="muted">Only Aiden's Apple push key can reach the App Store build, and only Aiden's Firebase project can reach the Play build. So whoever runs the relay holds those keys, and users can't bring their own. The real choices are who operates it, whether it stores anything, and how it gets turned on.</p>
+  </div>
+
+  <div class="options">
+    <div class="opt rec">
+      <span class="tag good">Recommended</span>
+      <h3>You run a Cloudflare Worker</h3>
+      <p>About 300 lines in the repo. The APNs key and FCM service account live in Worker secrets. Cloudflare's free plan allows 100,000 requests a day, and the $5 paid plan covers 10 million a month. APNs and FCM are free.</p>
+    </div>
+    <div class="opt">
+      <span class="tag warn">Possible</span>
+      <h3>A push vendor</h3>
+      <p>OneSignal, Firebase for iOS too, or Expo. Less code, but a third company sees every device token and event, and most ask for an SDK inside the app. That goes against Aiden's no-SDK, fixed-host rules.</p>
+    </div>
+    <div class="opt">
+      <span class="tag bad">Gives up the goal</span>
+      <h3>No relay</h3>
+      <p>Ship phase 1 only. Alerts get better while the app is alive, but approvals are still missed once the phone is locked.</p>
+    </div>
+  </div>
+
+  <div class="table-scroll">
+    <table>
+      <thead><tr><th>Relay design</th><th class="proposed">Stateless forwarder (recommended)</th><th>Token registry (Hermex, T3 Code)</th></tr></thead>
+      <tbody>
+        <tr><td>Who keeps the phone's push token</td><td class="proposed">Each paired Mac, received over the existing encrypted pairing connection</td><td>The relay, in a database of installs → devices</td></tr>
+        <tr><td>What a send looks like</td><td class="proposed">Mac posts <code>{token, kind, pairing, sealed}</code>; relay signs and forwards it</td><td>Mac posts <code>{install, kind, sealed}</code>; relay looks up tokens and fans out</td></tr>
+        <tr><td>What the relay stores</td><td class="proposed"><span class="y">✓</span>Nothing. No database, no request logs.</td><td><span class="n">✕</span>Every device, its pairings and its preferences</td></tr>
+        <tr><td>Dead tokens</td><td class="proposed">Relay passes APNs 410 back; the Mac forgets that token</td><td>Relay deletes the row</td></tr>
+        <tr><td>Unpairing</td><td class="proposed">The phone tells the Mac to drop its token; the Mac forgets everything</td><td>Phone or Mac must also call the relay</td></tr>
+        <tr><td>Server-side jobs (e.g. ending idle cards)</td><td class="proposed"><span class="p">~</span>Done by the Mac, which already knows when a run ends</td><td><span class="y">✓</span>Relay cron (T3 Code runs one every 5 min)</td></tr>
+        <tr><td>Linux <code>aiden serve</code></td><td class="proposed">Same client code in <code>main/services</code>, bundled into the CLI</td><td>Same</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <div class="payloads">
+    <div class="panel">
+      <h3>Abuse guards with no database</h3>
+      <ul>
+        <li><span class="ic" style="color:var(--good)">✓</span><span>The relay builds the visible banner itself from a fixed template per <code>kind</code><small>A forged request can show at most “Aiden needs you”. Real text only comes from the sealed blob, which only the phone can open.</small></span></li>
+        <li><span class="ic" style="color:var(--good)">✓</span><span>Tokens can't be guessed and are only given to paired Macs<small>Being able to send pushes to a phone already means having been paired with it.</small></span></li>
+        <li><span class="ic" style="color:var(--good)">✓</span><span>Cloudflare rate limits per IP and per token, a size cap and an allow-list of kinds</span></li>
+        <li><span class="ic" style="color:var(--good)">✓</span><span>The relay code lives in this repo<small>Anyone can read what it does with a request.</small></span></li>
+      </ul>
+    </div>
+    <div class="panel">
+      <h3>Request from the Mac to the relay</h3>
+<pre>POST https://push.&lt;aiden domain&gt;/v1/send
+{
+  "platform": "ios",               <span class="c">// or "android" → FCM</span>
+  "token": "a1b2…",                <span class="c">// from the phone, over pairing</span>
+  "kind": "approval",              <span class="c">// fixed list</span>
+  "thread": "c9f2…",               <span class="c">// random per chat</span>
+  "pairing": "7ab1…",              <span class="c">// tells the extension which key</span>
+  "sealed": "base64(AES-256-GCM)"
+}
+<span class="c">// 200 sent · 410 forget this token · 429 slow down</span></pre>
+    </div>
+  </div>
+
+  <div class="inventory">
+    <div class="panel">
+      <h3>How it gets turned on</h3>
+      <ul>
+        <li><span class="ic" style="color:var(--accent)">1</span><span>After pairing or the first finished run, the phone asks: “Get alerts when your phone is locked?”<small>Off until you choose. Each Mac is chosen separately.</small></span></li>
+        <li><span class="ic" style="color:var(--accent)">2</span><span>Yes: iOS permission, then the token and a new preview key go to that Mac</span></li>
+        <li><span class="ic" style="color:var(--accent)">3</span><span>The Mac lists “Phones with push” in Connections, with Turn off</span></li>
+        <li><span class="ic" style="color:var(--accent)">4</span><span>The Mac contacts the relay only for a phone that turned push on, and only with the fields above<small>Written into AGENTS.md as a network rule, like analytics</small></span></li>
+      </ul>
+    </div>
+    <div class="panel">
+      <h3>Setup only you can do</h3>
+      <ul>
+        <li><span class="ic">□</span><span>Apple Developer → Keys: create an APNs auth key (.p8)</span></li>
+        <li><span class="ic">□</span><span>Add Push Notifications to the app ID<small>The app has the Time Sensitive entitlement and an app group already; <code>aps-environment</code> is missing</small></span></li>
+        <li><span class="ic">□</span><span>Cloudflare account, plus a domain or subdomain for the relay</span></li>
+        <li><span class="ic">□</span><span>Firebase project and service account for Android<small>The Android app has no FCM yet. Phones without Google Play services would stay app-only.</small></span></li>
+        <li><span class="ic">□</span><span>App Store privacy label: declare the device ID used for push</span></li>
+      </ul>
+    </div>
+  </div>
+</section>
+
+<section>
+  <div class="sec-head">
+    <span class="eyebrow">06 · Order of work</span>
+    <h2>Four phases; the first ships without a server change</h2>
+  </div>
+  <div class="phases">
+    <div class="phase">
+      <span class="num">Phase 1 · app only</span>
+      <h3>Better while the app is alive</h3>
+      <ul>
+        <li>Restyle the card and island as plain text: no dot, rail, pill, chips or tints</li>
+        <li>Settings → Notifications page</li>
+        <li>Approve / Deny / Reply on today's local alerts</li>
+        <li>Deny + Review buttons on the card</li>
+        <li>Summary card from 2 runs up</li>
+        <li>Watch / CarPlay small family, Always-On styling</li>
+        <li>Short background task so a run that's about to finish can still alert</li>
+      </ul>
+      <p class="needs">iOS only. No contract change.</p>
+    </div>
+    <div class="phase">
+      <span class="num">Phase 2 · relay + alerts</span>
+      <h3>Alerts with the phone locked</h3>
+      <ul>
+        <li>Relay Worker + APNs key</li>
+        <li>Preview key exchanged at pairing</li>
+        <li>Device token registered per Mac</li>
+        <li>Service extension opens the sealed text</li>
+        <li>Asks, results, failures, Bot handoffs, Bot needs-you, scheduled runs</li>
+        <li>Per-event choices sync to the Mac</li>
+      </ul>
+      <p class="needs">Next Remote protocol revision; Android (FCM) in the same revision; network policy in AGENTS.md; docs.</p>
+    </div>
+    <div class="phase">
+      <span class="num">Phase 3 · card over push</span>
+      <h3>A card that stays live</h3>
+      <ul>
+        <li><code>pushType: .token</code>, token sent to the Mac</li>
+        <li>Mac pushes status changes (p10) and progress (p5, throttled)</li>
+        <li>Final update carries the alert, so there's no second banner</li>
+        <li>Stale after 15 min when push drives the card</li>
+      </ul>
+      <p class="needs">Builds on phase 2. Card state decoding stays backward compatible.</p>
+    </div>
+    <div class="phase">
+      <span class="num">Phase 4 · later</span>
+      <h3>Nice to have</h3>
+      <ul>
+        <li>Push-to-start for runs begun on the Mac or by Bots</li>
+        <li>App badge = open asks</li>
+        <li>Control Center “New chat” control</li>
+        <li>Quiet hours</li>
+      </ul>
+      <p class="needs">Both other apps skipped push-to-start. Try it again against iOS 27.</p>
+    </div>
+  </div>
+</section>
+
+<section>
+  <div class="sec-head">
+    <span class="eyebrow">07 · Your call</span>
+    <h2>Three decisions before building</h2>
+  </div>
+  <div class="decisions">
+    <div class="dec"><h3>Who runs the relay?</h3><p class="rec"><b>Decided 22 Nov 2026:</b> you run a stateless Cloudflare Worker that stores nothing. Push is opt-in for each Mac. Android gets FCM in the same protocol revision as iOS. See section 05.</p></div>
+    <div class="dec"><h3>Approve from the lock screen?</h3><p class="rec"><b>Recommend:</b> Deny from anywhere. Approve only from the banner after Face ID, where the command text is visible. The card only offers Review, because its pushed state has no text. Hermex chose “never answer from a banner”; this is a middle ground.</p></div>
+    <div class="dec"><h3>Message text on by default?</h3><p class="rec"><b>Recommend:</b> On for banners, because it's sealed end to end. Off for reply text on the Lock Screen card, matching Hermex. Bot handoff steps keep fixed copy whatever the setting, as they do today.</p></div>
+  </div>
+</section>
+
+<footer class="sources">
+  <span><b>Aiden:</b> <code>ios/AidenOnTheGo/LiveActivities/AidenRemoteLiveActivityManager.swift</code> (<code>pushType: nil</code>), <code>ios/AidenLiveActivityWidget/AgentRunLiveActivityWidget.swift</code>, <code>ios/AidenOnTheGo/Features/Remote/AidenScheduledRunNotifier.swift</code> (run alerts, polling feed)</span>
+  <span><b>Hermex:</b> <code>HermesMobile/Push/*</code>, <code>HermesNotificationService/NotificationService.swift</code>, <code>docs/agents/push.md</code></span>
+  <span><b>T3 Code:</b> <code>apps/mobile/src/widgets/AgentActivity.tsx</code>, <code>apps/mobile/src/features/agent-awareness/remoteRegistration.ts</code>, <code>infra/relay/src/agentActivity/*</code></span>
+  <span>Surveyed 22 November 2026. Mockups are illustrations, not screenshots.</span>
+</footer>
+
+</div>
+
+<script>
+(function () {
+  var t = document.getElementById('seg-today'), p = document.getElementById('seg-prop');
+  var laT = document.getElementById('la-today'), laP = document.getElementById('la-prop'), nP = document.getElementById('note-prop');
+  var cap = document.getElementById('hero-caption');
+  var copy = {
+    today: 'Frozen at the last update the app saw before iOS suspended it. The approval never reached the phone.',
+    prop: 'The Mac pushes the approval through the relay. The card says so in plain text, and a banner names the command.'
+  };
+  function set(which) {
+    var prop = which === 'prop';
+    t.setAttribute('aria-pressed', String(!prop));
+    p.setAttribute('aria-pressed', String(prop));
+    laT.hidden = prop; laP.hidden = !prop; nP.hidden = !prop;
+    cap.textContent = prop ? copy.prop : copy.today;
+  }
+  t.addEventListener('click', function () { set('today'); });
+  p.addEventListener('click', function () { set('prop'); });
+})();
+</script>

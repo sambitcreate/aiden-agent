@@ -13,6 +13,11 @@ import type { ChatUiVisualV1 } from "../shared/aiden-ui/types";
 import { reduceUiVisuals } from "./ui-visual-transcript";
 import { mergeSubagentSnapshots } from "./subagent-view-state";
 import {
+  foldLiveSubagentTranscript,
+  parseSubagentTranscriptNotification,
+  type LiveSubagentTranscripts,
+} from "../shared/subagent-transcript";
+import {
   restoreUndeliveredGuidance,
   undeliveredGuidanceFromTerminal,
 } from "./composer-draft-store";
@@ -70,6 +75,8 @@ export interface DetachedLifecycleProjection extends DetachedLifecycleStreamOwne
   /** Native (render_ui) visuals, kept beside the artifacts. */
   uiVisuals?: readonly ChatUiVisualV1[];
   subagents: readonly SubagentRunSnapshot[];
+  /** Live helper conversation updates, by run id; the saved copy fills gaps. */
+  subagentTranscripts?: LiveSubagentTranscripts;
   /**
    * Mirrored from this Mac's run journal for a run this window did not start.
    * Stop uses host authority; Steer is not offered because run input is owner-checked.
@@ -128,6 +135,7 @@ type Subscribe = (
     | "chat:timeline"
     | "chat:artifact"
     | "chat:subagents"
+    | "chat:subagent-transcript"
     | "chat:done"
     | "chat:error",
   handler: (payload: unknown) => void,
@@ -413,6 +421,7 @@ export function rememberDetachedLifecycleStream(
     artifacts: (seed?.artifacts ?? []).slice(0, MAX_DETACHED_ARTIFACTS),
     uiVisuals: (seed?.uiVisuals ?? []).slice(0, MAX_DETACHED_ARTIFACTS),
     subagents: mergeSubagentSnapshots([], seed?.subagents ?? [], owner),
+    ...(seed?.subagentTranscripts ? { subagentTranscripts: seed.subagentTranscripts } : {}),
   });
   while (detachedLifecycleStreams.size > MAX_DETACHED_STREAMS) {
     const oldest = detachedLifecycleStreams.values().next().value;
@@ -1010,6 +1019,19 @@ export function subscribeDetachedTerminalChats(
       }),
     }));
   });
+  const unsubscribeSubagentTranscripts = subscribe("chat:subagent-transcript", (payload) => {
+    const notification = parseSubagentTranscriptNotification(payload);
+    if (!notification) return;
+    updateDetachedProjection(notification.streamId, (current) => {
+      const subagentTranscripts = foldLiveSubagentTranscript(
+        current.subagentTranscripts,
+        notification.update,
+      );
+      return subagentTranscripts === current.subagentTranscripts
+        ? current
+        : { ...current, subagentTranscripts };
+    }, "frame");
+  });
   const handle = (payload: unknown) => {
     const terminal = parseTerminalChatNotification(payload);
     if (!terminal) {
@@ -1082,5 +1104,6 @@ export function subscribeDetachedTerminalChats(
     unsubscribeTimeline();
     unsubscribeArtifact();
     unsubscribeSubagents();
+    unsubscribeSubagentTranscripts();
   };
 }

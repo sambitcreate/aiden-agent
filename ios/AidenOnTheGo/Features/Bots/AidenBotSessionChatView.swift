@@ -87,6 +87,7 @@ struct AidenBotSessionChatView: View {
     var initialSummary: AidenBotSummary?
 
     @Environment(\.dismiss) private var dismiss
+    @Environment(\.aidenConversationMachine) private var conversationMachine
     @State private var isChatVisible = false
     @Environment(\.aidenPalette) private var palette
     @Environment(\.scenePhase) private var scenePhase
@@ -99,6 +100,8 @@ struct AidenBotSessionChatView: View {
     @State private var composerSession: AidenComposerSession
     @State private var peerExchangeID: String?
     @State private var isShowingProfile = false
+    /// What the header avatar shows, spoken by the title capsule.
+    @State private var settledAvatar: AidenBotAvatarState = .idle
     /// The profile sheet opens straight to Memory (from "Memory updated").
     @State private var profileOpensMemory = false
     @State private var isShowingAdvanced = false
@@ -257,7 +260,10 @@ struct AidenBotSessionChatView: View {
 
     var body: some View {
         ZStack(alignment: .bottom) {
-            AidenTranscriptScaffold(dock: dock) { transcript }
+            // The title capsule names the machine on its status line.
+            AidenTranscriptScaffold(dock: dock, showsMachineSubtitle: false) { transcript }
+                // The name capsule hangs just under the avatar in the bar.
+                .safeAreaBar(edge: .top, spacing: 0) { AidenChatStackedTitle(capsule: header) }
             if let model, model.attachmentsSupported {
                 attachmentPickerOverlay(model)
             }
@@ -324,7 +330,7 @@ struct AidenBotSessionChatView: View {
         .navigationTitle(bot?.name ?? String(localized: "Bot"))
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
-            ToolbarItem(placement: .principal) { header }
+            ToolbarItem(placement: .principal) { avatarHeader }
             ToolbarItem(placement: .topBarTrailing) { moreMenu }
         }
         .aidenPrefersToolbarItems()
@@ -559,31 +565,70 @@ struct AidenBotSessionChatView: View {
         filesTools = files
     }
 
-    private var header: some View {
-        Button {
+    /// Telegram's chat header: the Bot's name over what it is doing on a glass
+    /// capsule. Tapping it opens the Bot's profile.
+    private var header: AidenChatTitleCapsule {
+        AidenChatTitleCapsule(
+            title: bot?.name ?? String(localized: "Bot"),
+            status: bot == nil ? nil : titleStatus,
+            accessibilityHint: "Opens the Bot’s profile",
+            settledAvatar: bot == nil ? nil : settledAvatar
+        ) {
+            // Nothing to open until the Bot has loaded.
+            if bot != nil { isShowingProfile = true }
+        }
+    }
+
+    /// The status line's word while the Bot works, why it can't answer when it
+    /// can't, and otherwise what it is for.
+    private var titleStatus: AidenChatTitleStatus {
+        if let model {
+            return model.titleStatus(
+                nowMs: Int(Date().timeIntervalSince1970 * 1_000), purpose: bot?.purpose, machine: conversationMachine
+            )
+        }
+        // Before the session loads, the summary's state stands in.
+        return .bot(
+            state: bot?.paused == true ? .paused : bot?.sessionState,
+            statusWord: nil,
+            waitsForYou: false,
+            purpose: bot?.purpose,
+            machine: conversationMachine
+        )
+    }
+
+    /// The header avatar's signal. Before the model loads, nothing has run, so
+    /// a missing model reads as a quiet stop rather than a turn that finished.
+    private var avatarSignal: AidenBotAvatarSignal {
+        model.map { AidenBotAvatarSignal(model: $0) } ?? AidenBotAvatarSignal(stopped: true)
+    }
+
+    /// The Bot's face in the middle of the bar, over its name; like the name,
+    /// it opens the profile. It plays what the turn is doing, while the
+    /// capsule's status line says the same in words for VoiceOver.
+    private var avatarHeader: some View {
+        AidenChatHeaderAvatar {
             isShowingProfile = true
-        } label: {
-            HStack(spacing: 8) {
-                if let bot {
+        } avatar: {
+            if let bot {
+                AidenBotSettledAvatarState(signal: avatarSignal, onShownChange: { settledAvatar = $0 }) { state in
                     AidenBotCanonicalAvatarView(
                         coordinator: coordinator,
                         machine: openedOn,
                         botID: bot.id,
                         avatar: bot.avatar,
                         name: bot.name,
-                        size: 26
+                        size: AidenChatHeaderAvatar<EmptyView>.size,
+                        // A resting header draws the still sprite, with no animation clock.
+                        state: state == .idle ? nil : state
                     )
                 }
-                Text(bot?.name ?? "Bot")
-                    .font(.headline)
-                    .foregroundStyle(palette.foreground)
-                    .lineLimit(1)
+            } else {
+                Circle().fill(palette.raised)
             }
-            .contentShape(Rectangle())
         }
-        .buttonStyle(.plain)
         .disabled(bot == nil)
-        .accessibilityHint("Opens the Bot’s profile")
+        .accessibilityIdentifier("chat-avatar")
     }
 
     /// Never a spinner or a blocking error (R14): the last transcript, or
@@ -1096,10 +1141,14 @@ struct AidenBotSessionChatView: View {
     private func approvalCard(_ approval: AidenRemoteBotApproval, model: AidenBotSessionModel) -> some View {
         if let card = approval.card {
             // Revision 61: the Mac's card, with Always among its own buttons.
-            AidenTypedApprovalCard(card: card, canRespond: canRespondToApprovals, sendableScopes: model.sendableScopes(for: approval)) { button in
+            AidenTypedApprovalCard(
+                card: card,
+                canRespond: canRespondToApprovals,
+                sendableScopes: model.sendableScopes(for: approval),
+                answersEnabled: canRespondToApprovals && model.canAnswerApproval
+            ) { button in
                 Task { await model.answerApproval(button: button) }
             }
-            .disabled(!canRespondToApprovals || !model.canAnswerApproval)
             .id(approval.waitId)
         } else {
             legacyApprovalCard(approval, model: model)

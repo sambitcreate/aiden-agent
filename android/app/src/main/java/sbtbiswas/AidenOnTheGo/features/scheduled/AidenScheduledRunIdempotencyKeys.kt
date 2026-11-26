@@ -1,10 +1,7 @@
 package sbtbiswas.AidenOnTheGo.features.scheduled
 
-import kotlinx.serialization.SerializationException
-import sbtbiswas.AidenOnTheGo.protocol.AidenRemoteClientException
-import sbtbiswas.AidenOnTheGo.protocol.AidenRemoteContractException
-import sbtbiswas.AidenOnTheGo.protocol.AidenRemoteErrorCode
-import java.io.IOException
+import sbtbiswas.AidenOnTheGo.protocol.AidenRemoteFailureClassification
+import sbtbiswas.AidenOnTheGo.protocol.AidenRemoteFailurePolicy
 import java.util.UUID
 
 /**
@@ -30,17 +27,5 @@ class AidenScheduledRunIdempotencyKeys(
 fun aidenScheduledOperationCanClear(activeRequestId: UUID?, completedRequestId: UUID): Boolean =
     activeRequestId == completedRequestId
 
-fun aidenScheduledRunFailureIsAmbiguous(error: Throwable): Boolean = when (error) {
-    is IOException,
-    is SerializationException,
-    is AidenRemoteContractException,
-    is AidenRemoteClientException.InvalidResponse,
-    is AidenRemoteClientException.Disconnected,
-    is AidenRemoteClientException.UnexpectedStatus -> true
-
-    is AidenRemoteClientException.Server ->
-        error.body.code == AidenRemoteErrorCode.IDEMPOTENCY_IN_FLIGHT ||
-                error.body.code == AidenRemoteErrorCode.INTERNAL_ERROR
-
-    else -> false
-}
+fun aidenScheduledRunFailureIsAmbiguous(error: Throwable): Boolean =
+    AidenRemoteFailureClassification.isAmbiguous(error, AidenRemoteFailurePolicy.CACHED_REJECTION_LEDGER)
