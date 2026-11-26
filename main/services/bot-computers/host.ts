@@ -2209,6 +2209,24 @@ export function createBotComputerHost(deps: BotComputerHostDependencies): BotCom
       return inTurn(botTurnKey(botId), async (epoch) => {
         const state = await readState();
         const oldComputerId = assignedComputerId(state, botId);
+        const confirmSurvivingAssignment = async (
+          targetId: string,
+          created?: { computerId: string; creationToken: string },
+        ) => {
+          const confirmedState = await inTurn(vmTurnKey(targetId), async () => readState(), epoch);
+          const status = computerStatus(botId, confirmedState);
+          if (!status || status.computerId !== targetId) {
+            throw new BotComputerError("no_computer", "That computer was deleted.");
+          }
+          const validCreated =
+            created && vmCreationTokens.get(created.computerId) === created.creationToken ? created : undefined;
+          emit();
+          return {
+            status,
+            ...(validCreated ? { createdComputer: validCreated } : {}),
+          };
+        };
+
         if (parsed.kind === "shared") {
           if (oldComputerId === BOT_COMPUTER_SHARED_ID && hasOwn(state.vms, BOT_COMPUTER_SHARED_ID)) {
             return { status: computerStatus(botId, state)! };
@@ -2224,16 +2242,12 @@ export function createBotComputerHost(deps: BotComputerHostDependencies): BotCom
             releaseOrphanedControlScope(oldComputerId, next);
             await cleanupDepartedWorkspace(oldComputerId, botId, epoch);
           }
-          emit();
-          return {
-            status: computerStatus(botId, next)!,
-            ...(createdComputer ? { createdComputer } : {}),
-          };
+          return confirmSurvivingAssignment(BOT_COMPUTER_SHARED_ID, createdComputer);
         }
         if (parsed.kind === "existing") {
           const targetId = parsed.computerId;
           let departedComputerId: string | undefined;
-          const next = await inTurn(
+          await inTurn(
             vmTurnKey(targetId),
             async () => {
               const latest = await readState();
@@ -2260,8 +2274,7 @@ export function createBotComputerHost(deps: BotComputerHostDependencies): BotCom
           if (departedComputerId) {
             await cleanupDepartedWorkspace(departedComputerId, botId, epoch);
           }
-          emit();
-          return { status: computerStatus(botId, next)! };
+          return confirmSurvivingAssignment(targetId);
         }
         // parsed.kind === "new"
         if (!ready(state)) throw new BotComputerError("not_set_up", "Set up Bot computers in Settings first.");
@@ -2281,16 +2294,12 @@ export function createBotComputerHost(deps: BotComputerHostDependencies): BotCom
           draft.assignments[botId] = id;
         });
         vmCreationTokens.set(id, creationToken);
+        stale.delete(id);
         if (oldComputerId) {
           releaseOrphanedControlScope(oldComputerId, next);
           await cleanupDepartedWorkspace(oldComputerId, botId, epoch);
         }
-        stale.delete(id);
-        emit();
-        return {
-          status: computerStatus(botId, next)!,
-          createdComputer: { computerId: id, creationToken },
-        };
+        return confirmSurvivingAssignment(id, { computerId: id, creationToken });
       });
     },
 

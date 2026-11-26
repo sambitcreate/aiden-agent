@@ -3285,3 +3285,45 @@ test("Linux screen startup rejects and tears down cleanly when the SSH tunnel ex
     },
   );
 });
+
+test("assignComputerWithProvenance rejects instead of returning stale status when target VM is force-deleted during old-workspace cleanup", async () => {
+  await withHost(async (context) => {
+    await setUp(context, "shared");
+    await context.host.give("ada");
+    await context.host.give("ben");
+    await context.host.ensureRunning("ada", { reason: "tool" });
+
+    let markCleanupEntered!: () => void;
+    const cleanupEntered = new Promise<void>((resolve) => {
+      markCleanupEntered = resolve;
+    });
+    let releaseCleanup!: () => void;
+    const cleanupGate = new Promise<void>((resolve) => {
+      releaseCleanup = resolve;
+    });
+    context.ssh.onCall = async (args) => {
+      const cmd = args[args.length - 1] ?? "";
+      if (cmd.includes("rm -rf --") && cmd.includes(botComputerWorkspaceDirName("ada"))) {
+        markCleanupEntered();
+        await cleanupGate;
+      }
+    };
+
+    const assignPromise = context.host.assignComputerWithProvenance("ada", { kind: "new", name: "Race Target" });
+    await cleanupEntered;
+
+    const midStatus = await context.host.status();
+    const targetVm = midStatus.vms.find((vm) => vm.id !== "shared");
+    assert.ok(targetVm, "target VM exists before confirmed delete");
+    await context.host.deleteComputer(targetVm.id, { force: true });
+
+    releaseCleanup();
+    await assert.rejects(
+      assignPromise,
+      (error: unknown) => error instanceof BotComputerError && error.code === "no_computer",
+      "must not return stale success/provenance after target VM deletion",
+    );
+    assert.equal(await context.host.computer("ada"), undefined);
+    await context.host.stop("ben", { reason: "person" });
+  });
+});
