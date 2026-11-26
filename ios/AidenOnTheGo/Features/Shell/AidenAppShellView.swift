@@ -670,11 +670,10 @@ struct AidenAppShellView: View {
         // the list, or a drag down it, puts the keyboard away and brings the
         // tabs back. A short list doesn't scroll, so the tap is the way out.
         // It sits under the composer's inset: a tap on the composer keeps the
-        // keyboard. Simultaneous, so the tapped row or button still answers.
+        // keyboard. A UIKit tap, as in a chat: a SwiftUI one on a scroll view
+        // never fires on iOS 26, and this one lets the tapped row still open.
         .scrollDismissesKeyboard(.immediately)
-        .simultaneousGesture(TapGesture().onEnded {
-            if keyboardIsUp { homeComposer.session.putAwayKeyboard() }
-        })
+        .gesture(AidenTranscriptTap { homeComposer.session.putAwayKeyboard() })
         .safeAreaInset(edge: .top, spacing: 0) {
             AidenConnectionNotice(coordinator: coordinator)
         }
