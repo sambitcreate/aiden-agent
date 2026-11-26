@@ -1,6 +1,6 @@
 import { randomBytes, randomInt } from "node:crypto";
 import { existsSync } from "node:fs";
-import { lstat, mkdir, open, readdir, realpath, rm, stat, type FileHandle } from "node:fs/promises";
+import { chmod, lstat, mkdir, open, readdir, realpath, rm, stat, type FileHandle } from "node:fs/promises";
 import path from "node:path";
 import {
   BOT_COMPUTER_SHARED_DEFAULT_NAME,
@@ -141,7 +141,7 @@ export interface BotComputerHostDependencies {
   openVncTunnel?(
     target: GuestSshTarget,
     remoteSocket: string,
-    options: { signal?: AbortSignal },
+    options: { timeoutMs?: number; signal?: AbortSignal; onExit?: () => void },
   ): Promise<GuestVncTunnel>;
   control?: BotComputerControlRegistry;
   activity?: BotComputerActivity;
@@ -274,7 +274,8 @@ export function createBotComputerHost(deps: BotComputerHostDependencies): BotCom
     home: path.join(root, "home"),
     logs: path.join(root, "logs"),
     images: path.join(root, "restore-images"),
-    baseShared: path.join(root, "base-shared"),
+    baseSharedRoot: path.join(root, "base-shared"),
+    baseShared: path.join(root, "base-shared", "Computer"),
   };
   const sshPaths = guestSshPaths(root);
   const image = deps.image ?? BOT_COMPUTER_LINUX_IMAGE;
@@ -296,7 +297,7 @@ export function createBotComputerHost(deps: BotComputerHostDependencies): BotCom
   const exposed = deps.vncExposed ?? ((port: number) => vncReachableBeyondLoopback(port));
   const openVncTunnel =
     deps.openVncTunnel ??
-    ((target: GuestSshTarget, remoteSocket: string, options: { signal?: AbortSignal }) =>
+    ((target: GuestSshTarget, remoteSocket: string, options: { timeoutMs?: number; signal?: AbortSignal; onExit?: () => void }) =>
       openGuestVncTunnel(target, remoteSocket, options, {
         paths: sshPaths,
         env: guestSshEnvironment(deps.env ?? process.env, dirs.home),
@@ -985,6 +986,20 @@ export function createBotComputerHost(deps: BotComputerHostDependencies): BotCom
     await cleanOnHost();
   }
 
+  async function ensureSharedDirectory(dir: string): Promise<string> {
+    await assertNotSymlinkDir(dir);
+    await mkdir(dir, { recursive: true, mode: 0o777 });
+    const realDir = await realpath(dir);
+    await chmod(realDir, 0o777);
+    return dir;
+  }
+
+  async function ensureBaseSharedDir(): Promise<string> {
+    await mkdir(dirs.baseSharedRoot, { recursive: true, mode: 0o700 });
+    await chmod(dirs.baseSharedRoot, 0o700);
+    return ensureSharedDirectory(dirs.baseShared);
+  }
+
   /**
    * Resolve and ensure the host shared directory mounted via `virtiofs` at
    * `/mnt/aiden-shared/Computer`.
@@ -1017,7 +1032,8 @@ export function createBotComputerHost(deps: BotComputerHostDependencies): BotCom
       throw new BotComputerError("invalid", "The Bot's Computer folder path can't contain a colon.");
     }
     await assertNotSymlinkDir(dir);
-    await mkdir(dir, { recursive: true, mode: 0o700 });
+    await mkdir(path.dirname(dir), { recursive: true, mode: 0o700 });
+    await mkdir(dir, { recursive: true, mode: 0o777 });
     const botDirs = new Set(assignedBotIds);
     if (primaryBotId) botDirs.add(primaryBotId);
     const live = !options?.vmStopped && isVmLive(vm.id);
@@ -1029,27 +1045,30 @@ export function createBotComputerHost(deps: BotComputerHostDependencies): BotCom
         const quoted = dirsToCreate.map((entry) => quoteRemoteArg(`${GUEST_SHARED_BOTS_MOUNT}/${entry}`)).join(" ");
         await runGuestWorkspaceScript(
           vm.id,
-          `if [ ! -L ${quoteRemoteArg(GUEST_SHARED_BOTS_MOUNT)} ]; then mkdir -p -- ${quoted}; fi`,
+          `if [ ! -L ${quoteRemoteArg(GUEST_SHARED_BOTS_MOUNT)} ]; then mkdir -p -- ${quoted} && chmod 777 -- ${quoteRemoteArg(GUEST_SHARED_BOTS_MOUNT)} ${quoted}; fi`,
         );
       }
       return dir;
     }
     const realDir = await realpath(dir);
+    await chmod(realDir, 0o777);
     const botsRoot = path.join(dir, "bots");
     await assertNotSymlinkDir(botsRoot);
-    await mkdir(botsRoot, { recursive: true, mode: 0o700 });
+    await mkdir(botsRoot, { recursive: true, mode: 0o777 });
     const realBotsRoot = await realpath(botsRoot);
     if (!realBotsRoot.startsWith(`${realDir}${path.sep}`)) {
       throw new BotComputerError("invalid", "The Bot's Computer folder escaped its root directory.");
     }
+    await chmod(realBotsRoot, 0o777);
     for (const botId of botDirs) {
       const botDir = path.join(botsRoot, botComputerWorkspaceDirName(botId));
       await assertNotSymlinkDir(botDir);
-      await mkdir(botDir, { recursive: true, mode: 0o700 });
+      await mkdir(botDir, { recursive: true, mode: 0o777 });
       const realBotDir = await realpath(botDir);
       if (!realBotDir.startsWith(`${realBotsRoot}${path.sep}`)) {
         throw new BotComputerError("invalid", "The Bot's workspace folder escaped its root directory.");
       }
+      await chmod(realBotDir, 0o777);
     }
     return dir;
   }
@@ -1106,7 +1125,25 @@ export function createBotComputerHost(deps: BotComputerHostDependencies): BotCom
       if (startedVnc.exitCode !== 0 || startedVnc.timedOut) {
         throw new BotComputerError("start_failed", `${owner} computer's screen service didn't start.`);
       }
-      vncTunnel = await openVncTunnel(sshTarget, BOT_COMPUTER_LINUX_VNC_SOCKET, { signal: options.signal });
+      let tunnelExited = false;
+      const onTunnelExit = () => {
+        tunnelExited = true;
+        if (!vncTunnel || entry.vncTunnel !== vncTunnel || entry.state !== "running") return;
+        log("A Bot computer's screen tunnel closed.");
+        entry.connection = undefined;
+        entry.vncTunnel = undefined;
+        emitVm(computerId);
+        void stopVmRuntime(computerId, "person", options.botId).catch((error: unknown) =>
+          log("Stopping a computer after its screen tunnel closed did not finish.", error),
+        );
+      };
+      vncTunnel = await openVncTunnel(sshTarget, BOT_COMPUTER_LINUX_VNC_SOCKET, {
+        signal: options.signal,
+        onExit: onTunnelExit,
+      });
+      if (tunnelExited) {
+        throw new BotComputerError("start_failed", `${owner} computer's screen tunnel closed.`);
+      }
       if (!isLoopbackHost(vncTunnel.host)) {
         throw new BotComputerError("vnc_not_loopback", `${owner} computer offered its screen beyond this Mac, so Aiden stopped it.`);
       }
@@ -1727,10 +1764,18 @@ export function createBotComputerHost(deps: BotComputerHostDependencies): BotCom
       keygenCommand: deps.keygenCommand,
       signal,
     });
-    await mkdir(dirs.baseShared, { recursive: true, mode: 0o700 });
-    const stored = await deps.secrets.get(BOT_COMPUTER_GUEST_PASSWORD_SECRET);
+    await ensureBaseSharedDir();
+    const currentState = await store.read();
+    const stored = currentState.macosMigration?.pendingSecretCleanup
+      ? null
+      : await deps.secrets.get(BOT_COMPUTER_GUEST_PASSWORD_SECRET);
     const guestPassword = stored !== null && /^[A-Za-z0-9]{16,128}$/u.test(stored) ? stored : generateGuestPassword();
     await deps.secrets.set(BOT_COMPUTER_GUEST_PASSWORD_SECRET, guestPassword);
+    if (currentState.macosMigration?.pendingSecretCleanup) {
+      await store.update((draft) => {
+        if (draft.macosMigration) delete draft.macosMigration.pendingSecretCleanup;
+      });
+    }
     const seedIsoPath = path.join(dirs.images, `${target}-cidata.iso`);
     const targetDiskPath = path.join(dirs.vms, target, "disk.img");
     let guestDriverRecord: BotComputerGuestDriverRecord | undefined;
@@ -1779,6 +1824,7 @@ export function createBotComputerHost(deps: BotComputerHostDependencies): BotCom
         signal,
         publicKey,
         password: guestPassword,
+        sharedDir: dirs.baseShared,
         scanHostKey: () =>
           scanGuestHostKey(ip, {
             env: sshEnv,
@@ -2273,8 +2319,14 @@ export function createBotComputerHost(deps: BotComputerHostDependencies): BotCom
       });
     },
 
-    deleteForBot: (botId) =>
-      inTurn(botTurnKey(botId), async (epoch) => {
+    deleteForBot: (botId) => {
+      const clearPendingNote = (draft: BotComputersState) => {
+        if (!draft.macosMigration?.pendingMigrationNotes) return;
+        const remaining = draft.macosMigration.pendingMigrationNotes.filter((id) => id !== botId);
+        if (remaining.length > 0) draft.macosMigration.pendingMigrationNotes = remaining;
+        else delete draft.macosMigration.pendingMigrationNotes;
+      };
+      return inTurn(botTurnKey(botId), async (epoch) => {
         const state = await readState();
         const computerId = assignedComputerId(state, botId);
         const initialVm = computerId && hasOwn(state.vms, computerId) ? state.vms[computerId] : undefined;
@@ -2285,6 +2337,9 @@ export function createBotComputerHost(deps: BotComputerHostDependencies): BotCom
           await deleteVm(botComputerVmName(botId)).catch((error: unknown) =>
             log("Deleting a VM no record names did not finish.", error),
           );
+          if (state.macosMigration?.pendingMigrationNotes?.includes(botId)) {
+            await updateState(clearPendingNote);
+          }
           control.forget(botId);
           activity.set(botId, undefined);
           emit(botId);
@@ -2311,6 +2366,7 @@ export function createBotComputerHost(deps: BotComputerHostDependencies): BotCom
               await updateState((draft) => {
                 delete draft.assignments[botId];
                 delete draft.vms[currentId];
+                clearPendingNote(draft);
               });
               runtimes.get(currentId)?.cancelIdle?.();
               runtimes.delete(currentId);
@@ -2322,6 +2378,7 @@ export function createBotComputerHost(deps: BotComputerHostDependencies): BotCom
               control.forget(botId);
               const updated = await updateState((draft) => {
                 delete draft.assignments[botId];
+                clearPendingNote(draft);
               });
               releaseOrphanedControlScope(currentId, updated);
               await removeBotWorkspaceSubfolder(currentId, botId);
@@ -2331,7 +2388,8 @@ export function createBotComputerHost(deps: BotComputerHostDependencies): BotCom
         );
         activity.set(botId, undefined);
         emit();
-      }),
+      });
+    },
 
     async acquireLease(botId, options) {
       const signal = options?.signal;
@@ -2637,6 +2695,25 @@ export function createBotComputerHost(deps: BotComputerHostDependencies): BotCom
       }
       const byName = new Map(vms.map((info) => [info.name, info]));
 
+      const deliverPendingMigrationNotes = async () => {
+        if (!deps.onMacosComputerMigrated) return;
+        const latest = await store.read();
+        const pendingBots = latest.macosMigration?.pendingMigrationNotes ?? [];
+        for (const botId of pendingBots) {
+          try {
+            await Promise.resolve(deps.onMacosComputerMigrated(botId, BOT_COMPUTER_LINUX_MIGRATION_BOT_NOTE));
+            await updateState((draft) => {
+              if (!draft.macosMigration?.pendingMigrationNotes) return;
+              const remaining = draft.macosMigration.pendingMigrationNotes.filter((id) => id !== botId);
+              if (remaining.length > 0) draft.macosMigration.pendingMigrationNotes = remaining;
+              else delete draft.macosMigration.pendingMigrationNotes;
+            });
+          } catch (error: unknown) {
+            log("Writing Linux migration note to Bot memory did not finish.", error);
+          }
+        }
+      };
+
       // One-time first-launch migration from legacy macOS Bot computers to Linux:
       // stop & delete Aiden's own macOS VMs and any Apple .ipsw files, clear the
       // old guest password, reset setup to "not set up", keep every Bot's
@@ -2646,6 +2723,7 @@ export function createBotComputerHost(deps: BotComputerHostDependencies): BotCom
         // Do not mark migration complete if dirs.vms exists and Lume could not
         // list VMs; retry cleanly on the next reconcile().
         if (hasVmsDir && !lumeListed) {
+          await deliverPendingMigrationNotes();
           emit();
           return;
         }
@@ -2709,11 +2787,18 @@ export function createBotComputerHost(deps: BotComputerHostDependencies): BotCom
               }
             }
             const latestBeforeClear = await readState();
-            const clearLegacySetup = latestBeforeClear.setup.guestOs !== "linux";
+            const clearLegacySetup =
+              latestBeforeClear.setup.guestOs !== "linux" ||
+              latestBeforeClear.macosMigration?.pendingSecretCleanup === true;
+            let secretCleared = true;
             if (clearLegacySetup) {
-              await deps.secrets
-                .deleteFamily(BOT_COMPUTER_SECRET_FAMILY)
-                .catch((error: unknown) => log("Removing old guest password did not finish.", error));
+              try {
+                await deps.secrets.deleteFamily(BOT_COMPUTER_SECRET_FAMILY);
+              } catch (error: unknown) {
+                secretCleared = false;
+                allRemoved = false;
+                log("Removing old guest password did not finish.", error);
+              }
             }
             const migratedBotIds: string[] = [];
             const migratedVmIds: string[] = [];
@@ -2731,6 +2816,7 @@ export function createBotComputerHost(deps: BotComputerHostDependencies): BotCom
                     baseBuild: "",
                     createdAt: rec.createdAt,
                     ...(rec.lastUsedAt !== undefined ? { lastUsedAt: rec.lastUsedAt } : {}),
+                    ...(rec.legacyOwnerBotId ? { legacyOwnerBotId: rec.legacyOwnerBotId } : {}),
                     migratedFromMacos: true,
                   };
                   for (const botId of assignedBotsInState(draft, computerId)) {
@@ -2738,23 +2824,24 @@ export function createBotComputerHost(deps: BotComputerHostDependencies): BotCom
                   }
                 }
               }
+              const pendingNotes = deps.onMacosComputerMigrated
+                ? [...new Set([...(draft.macosMigration?.pendingMigrationNotes ?? []), ...migratedBotIds])]
+                : draft.macosMigration?.pendingMigrationNotes;
               const totalFreedBytes = (draft.macosMigration?.freedBytes ?? 0) + freedThisPass;
               draft.macosMigration = allRemoved
                 ? {
                     completedAt: now(),
                     freedBytes: totalFreedBytes,
                     noticeDismissed: false,
+                    ...(pendingNotes && pendingNotes.length > 0 ? { pendingMigrationNotes: pendingNotes } : {}),
                   }
                 : {
                     freedBytes: totalFreedBytes,
+                    ...(secretCleared ? {} : { pendingSecretCleanup: true }),
+                    ...(pendingNotes && pendingNotes.length > 0 ? { pendingMigrationNotes: pendingNotes } : {}),
                   };
             });
             for (const computerId of migratedVmIds) stale.delete(computerId);
-            for (const botId of migratedBotIds) {
-              await Promise.resolve(deps.onMacosComputerMigrated?.(botId, BOT_COMPUTER_LINUX_MIGRATION_BOT_NOTE)).catch(
-                (error: unknown) => log("Writing Linux migration note to Bot memory did not finish.", error),
-              );
-            }
             if (allRemoved || freedThisPass > 0 || migratedBotIds.length > 0) {
               deps.onRemoved?.();
             }
@@ -2762,15 +2849,20 @@ export function createBotComputerHost(deps: BotComputerHostDependencies): BotCom
         } else if (state.setup.guestOs === "linux") {
           state = await updateState((draft) => {
             if (!draft.macosMigration?.completedAt) {
+              const pendingNotes = draft.macosMigration?.pendingMigrationNotes;
               draft.macosMigration = {
                 completedAt: now(),
                 freedBytes: 0,
                 noticeDismissed: true,
+                ...(pendingNotes && pendingNotes.length > 0 ? { pendingMigrationNotes: pendingNotes } : {}),
               };
             }
           });
         }
       }
+
+      await deliverPendingMigrationNotes();
+      state = await store.read();
 
       if (!lumeListed) {
         emit();

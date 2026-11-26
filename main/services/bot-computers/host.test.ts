@@ -1,8 +1,8 @@
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import { createHash } from "node:crypto";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
-import { createServer } from "node:net";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
+import { connect, createServer } from "node:net";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import test from "node:test";
@@ -12,6 +12,7 @@ import type { BoundedProcessOptions, BoundedProcessResult } from "./bounded-proc
 import { createGuestCuaDriverHostFactory } from "./guest-driver.js";
 import { createBotComputerHost, type BotComputerHostDependencies } from "./host.js";
 import { BOT_COMPUTER_LINUX_VNC_SOCKET } from "./provision.js";
+import { createBotComputerSessions } from "./sessions.js";
 import {
   BOT_COMPUTER_GUEST_PASSWORD_SECRET,
   BOT_COMPUTER_LINUX_MIGRATION_BOT_NOTE,
@@ -129,6 +130,18 @@ function harness(overrides: Partial<BotComputerHostDependencies> = {}) {
       return { ...done, exitCode: 255, stderr: "Host key verification failed.\n" };
     }
     if (ssh.fails?.(args)) return { ...done, exitCode: 1, stderr: "the guest step failed\n" };
+    const remoteCmd = args[args.length - 1] ?? "";
+    const hostProbeMatch = /\.aiden-shared-host-([0-9a-f]+)/u.exec(remoteCmd);
+    if (hostProbeMatch?.[1]) {
+      const nonce = hostProbeMatch[1];
+      const baseShared = path.join(root, "base-shared", "Computer");
+      const hostProbe = path.join(baseShared, `.aiden-shared-host-${nonce}`);
+      const token = readFileSync(hostProbe, "utf8").trim();
+      assert.equal(token, `aiden-host-${nonce}`);
+      for (const user of ["lume", "aiden-bot"]) {
+        writeFileSync(path.join(baseShared, `.aiden-shared-guest-${user}-${nonce}`), `aiden-guest-${user}-${nonce}\n`, { mode: 0o644 });
+      }
+    }
     return { ...done, stdout: ssh.stdout?.(args) ?? "guest says hi\n" };
   };
   // Restore images by URL; anything else gets the default pin's bytes.
@@ -2215,6 +2228,12 @@ test("Linux Bot computers disable Lume VNC, tunnel guest X0tigervnc on 127.0.0.1
       assert.equal(context.vncTunnels.length, 2);
       assert.equal(context.vncTunnels[1]?.closed, true, "tunnel closes on vnc_not_loopback rejection");
       assert.equal(context.vmRunning(botComputerVmName("ada")), false, "VM stops on vnc_not_loopback rejection");
+
+      const botShared = path.join(context.dir, "bots", "ada", "Computer");
+      assert.equal(statSync(path.dirname(botShared)).mode & 0o777, 0o700, "Bot home parent keeps 0700 privacy");
+      assert.equal(statSync(botShared).mode & 0o777, 0o777, "exported Computer directory is traversable/writable by guest UIDs");
+      assert.equal(statSync(path.join(context.root, "base-shared")).mode & 0o777, 0o700, "base-shared parent keeps 0700 privacy");
+      assert.equal(statSync(path.join(context.root, "base-shared", "Computer")).mode & 0o777, 0o777);
     },
     {
       image: linuxImage,
@@ -2826,4 +2845,195 @@ test("deleteForBot while a shared VM is stopping waits for the stop and removes 
     assert.equal(existsSync(adaDir), false, "Ada's workspace folder is removed after waiting for stop");
     assert.equal(existsSync(benDir), true, "Ben's workspace folder remains untouched");
   });
+});
+
+test("Linux screen session recovers cleanly after post-start SSH tunnel child exit without retrying the dead port", async () => {
+  const linuxRaw = Buffer.from("debian tunnel recovery image\n".repeat(64));
+  const linuxImage = {
+    version: "13",
+    build: "20261123-2671",
+    url: "https://cloud.debian.org/images/debian-tunnel-recovery.raw",
+    bytes: linuxRaw.length,
+    sha256: createHash("sha256").update(linuxRaw).digest("hex"),
+  };
+
+  await withHost(
+    async (context) => {
+      context.serve(linuxImage.url, linuxRaw);
+      await setUp(context);
+      await context.host.give("ada");
+
+      const pidFile = path.join(context.dir, "tunnel-child.pid");
+      const fakeSsh = path.join(context.dir, "fake-ssh-tunnel");
+      writeFileSync(
+        fakeSsh,
+        `#!${process.execPath}\n` +
+          `import { writeFileSync } from "node:fs";\n` +
+          `import { createServer } from "node:net";\n` +
+          `const lIdx = process.argv.indexOf("-L");\n` +
+          `const spec = lIdx >= 0 ? process.argv[lIdx + 1] : "";\n` +
+          `const match = /^127\\.0\\.0\\.1:(\\d+):(\\/.+)$/.exec(spec);\n` +
+          `if (!match) process.exit(2);\n` +
+          `writeFileSync(${JSON.stringify(pidFile)}, String(process.pid));\n` +
+          `const server = createServer((s) => { s.write("RFB 003.008\\n"); s.end(); });\n` +
+          `process.on("SIGTERM", () => { server.close(); process.exit(0); });\n` +
+          `server.listen(Number(match[1]), "127.0.0.1", () => { process.stdout.write("AIDEN_TUNNEL_READY\\n"); });\n`,
+      );
+      chmodSync(fakeSsh, 0o755);
+
+      const recoveringHost = context.relaunch({
+        image: linuxImage,
+        sshCommand: fakeSsh,
+        openVncTunnel: undefined,
+        vncExposed: undefined,
+      });
+      const sessions = createBotComputerSessions({ host: recoveringHost, control: recoveringHost.control });
+      const attemptedPorts: number[] = [];
+      let closes = 0;
+      sessions.setScreenFactory(async (connection) => {
+        attemptedPorts.push(connection.vnc.port);
+        // Probe the tunnel endpoint to prove the published loopback port actually accepts RFB.
+        const banner = await new Promise<string>((resolve, reject) => {
+          const socket = connect({ host: connection.vnc.host, port: connection.vnc.port });
+          socket.once("data", (chunk: Buffer) => {
+            socket.destroy();
+            resolve(chunk.toString("ascii"));
+          });
+          socket.once("error", reject);
+        });
+        assert.match(banner, /^RFB /u);
+        return {
+          capture: async () => ({ image: Buffer.from("png"), mimeType: "image/png", width: 1280, height: 800, framebufferWidth: 1280, framebufferHeight: 800 }),
+          pointer: async () => undefined,
+          key: async () => undefined,
+          close: async () => {
+            closes += 1;
+          },
+        };
+      });
+
+      const firstScreen = await sessions.screen("ada");
+      const firstPort = attemptedPorts[0];
+      assert.ok(firstPort && firstPort > 0);
+      const firstPid = Number(readFileSync(pidFile, "utf8").trim());
+
+      // Kill the SSH tunnel child after openGuestVncTunnel() succeeded, while the VM stays running.
+      process.kill(firstPid, "SIGKILL");
+      for (let attempt = 0; attempt < 100; attempt += 1) {
+        if ((await recoveringHost.computer("ada"))?.state === "stopped") break;
+        await new Promise((resolve) => setTimeout(resolve, 25));
+      }
+      assert.equal((await recoveringHost.computer("ada"))?.state, "stopped", "tunnel drop invalidates and stops the run");
+      assert.equal(closes, 1, "stale cached screen is closed on state transition");
+      assert.equal(recoveringHost.runningConnection("ada"), undefined);
+
+      // Next screen action starts a clean run with a fresh loopback port instead of retrying the dead port.
+      const secondScreen = await sessions.screen("ada");
+      assert.notEqual(secondScreen, firstScreen);
+      assert.equal(attemptedPorts.length, 2);
+      assert.notEqual(attemptedPorts[1], firstPort, "subsequent screen action opens a fresh tunnel port instead of retrying the dead port");
+      await recoveringHost.stop("ada", { reason: "person" });
+    },
+    {
+      image: linuxImage,
+      vncExposed: undefined,
+    },
+  );
+});
+
+test("macOS migration retries failed secret cleanup and Bot memory notes without duplicating delivered notes", async () => {
+  const linuxRaw = Buffer.from("debian migration retry image\n".repeat(64));
+  const linuxImage = {
+    version: "13",
+    build: "20261123-2671",
+    url: "https://cloud.debian.org/images/debian-migration-retry.raw",
+    bytes: linuxRaw.length,
+    sha256: createHash("sha256").update(linuxRaw).digest("hex"),
+  };
+
+  await withHost(
+    async (context) => {
+      context.serve(linuxImage.url, linuxRaw);
+      mkdirSync(context.root, { recursive: true });
+      const legacySecret = "LegacyMacosGuestPassword12345678";
+      context.secrets.set(BOT_COMPUTER_GUEST_PASSWORD_SECRET, legacySecret);
+
+      const stateFile = path.join(context.root, "state.json");
+      writeFileSync(
+        stateFile,
+        JSON.stringify({
+          version: 1,
+          settings: { maxRunning: 2, idleStopMinutes: 10 },
+          setup: { baseBuild: "25D125", baseVersion: "26.3" },
+          computers: {
+            ada: { vmName: botComputerVmName("ada"), baseBuild: "25D125", createdAt: 100 },
+            ben: { vmName: botComputerVmName("ben"), baseBuild: "25D125", createdAt: 101 },
+          },
+        }),
+      );
+
+      let failDeleteFamily = true;
+      let failBenNote = true;
+      const delivered: string[] = [];
+      const retryingHost = context.relaunch({
+        image: linuxImage,
+        secrets: {
+          get: async (name) => context.secrets.get(name) ?? null,
+          set: async (name, value) => void context.secrets.set(name, value),
+          deleteFamily: async (prefix) => {
+            if (failDeleteFamily) throw new Error("Keychain busy");
+            for (const key of [...context.secrets.keys()]) {
+              if (key === prefix || key.startsWith(`${prefix}:`)) context.secrets.delete(key);
+            }
+          },
+        },
+        onMacosComputerMigrated: async (botId) => {
+          if (botId === "ben" && failBenNote) throw new Error("Bot memory temporarily locked");
+          delivered.push(botId);
+        },
+      });
+
+      // Pass 1: secret cleanup fails, ada's note succeeds, ben's note rejects.
+      await retryingHost.reconcile();
+      assert.equal(context.secrets.get(BOT_COMPUTER_GUEST_PASSWORD_SECRET), legacySecret);
+      const afterPass1 = JSON.parse(readFileSync(stateFile, "utf8")) as {
+        macosMigration?: { completedAt?: number; pendingSecretCleanup?: boolean; pendingMigrationNotes?: string[] };
+        computers?: Record<string, { migratedFromMacos?: boolean }>;
+      };
+      assert.equal(afterPass1.macosMigration?.completedAt, undefined, "migration stays pending when deleteFamily fails");
+      assert.equal(afterPass1.macosMigration?.pendingSecretCleanup, true);
+      assert.deepEqual(delivered, ["ada"]);
+      assert.equal(afterPass1.computers?.ada?.migratedFromMacos, true);
+      assert.equal(afterPass1.computers?.ben?.migratedFromMacos, true);
+      assert.deepEqual(afterPass1.macosMigration?.pendingMigrationNotes, ["ben"]);
+
+      // Even before a second reconcile, Linux Set up must rotate rather than reuse the surviving legacy secret.
+      // (Test rotation in a separate check below; first verify reconcile pass 2 completes cleanup + note retry.)
+      failDeleteFamily = false;
+      failBenNote = false;
+      await retryingHost.reconcile();
+      assert.equal(context.secrets.get(BOT_COMPUTER_GUEST_PASSWORD_SECRET), undefined, "legacy secret is removed on retry");
+      const afterPass2 = JSON.parse(readFileSync(stateFile, "utf8")) as {
+        macosMigration?: { completedAt?: number; pendingSecretCleanup?: boolean; pendingMigrationNotes?: string[] };
+      };
+      assert.ok(typeof afterPass2.macosMigration?.completedAt === "number", "migration completes once secret cleanup succeeds");
+      assert.equal(afterPass2.macosMigration?.pendingSecretCleanup, undefined);
+      assert.deepEqual(delivered, ["ada", "ben"], "ben's note is retried without duplicating ada's");
+      assert.equal(afterPass2.macosMigration?.pendingMigrationNotes, undefined);
+
+      // Pass 3: no duplicate notes.
+      await retryingHost.reconcile();
+      assert.deepEqual(delivered, ["ada", "ben"]);
+
+      // Also verify Linux Set up rotates away from a surviving secret if pendingSecretCleanup is true.
+      context.secrets.set(BOT_COMPUTER_GUEST_PASSWORD_SECRET, legacySecret);
+      const pendingRaw = JSON.parse(readFileSync(stateFile, "utf8")) as Record<string, unknown>;
+      pendingRaw.macosMigration = { freedBytes: 0, pendingSecretCleanup: true };
+      writeFileSync(stateFile, JSON.stringify(pendingRaw));
+      await setUp({ ...context, host: retryingHost });
+      const rotated = context.secrets.get(BOT_COMPUTER_GUEST_PASSWORD_SECRET);
+      assert.ok(rotated && rotated !== legacySecret, "Linux setup forces fresh password rotation when legacy cleanup was pending");
+    },
+    { image: linuxImage },
+  );
 });

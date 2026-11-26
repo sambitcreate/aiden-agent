@@ -4,11 +4,14 @@
 // value, so nothing typed into a field (a password among them) is read back.
 
 import type { AgentToolResult } from "@earendil-works/pi-agent-core";
+import { parseElementEditable } from "../computer-use/controller.js";
 
 /** An element as the model and the rules classifier see it. */
 export interface BotComputerElement {
   role?: string;
   label?: string;
+  /** Whether the driver marked the element editable (e.g. `ATSPI_STATE_EDITABLE`). */
+  editable?: boolean;
 }
 
 /**
@@ -71,7 +74,12 @@ export function parseBotComputerElementCapture(result: AgentToolResult<unknown>)
     if (typeof index !== "number" || !Number.isInteger(index) || index < 0) continue;
     const role = clean(element?.role, 64);
     const label = clean(element?.label, LABEL_MAX_CHARS);
-    elements.set(index, { ...(role ? { role } : {}), ...(label ? { label } : {}) });
+    const editable = element ? parseElementEditable(element) : undefined;
+    elements.set(index, {
+      ...(role ? { role } : {}),
+      ...(label ? { label } : {}),
+      ...(typeof editable === "boolean" ? { editable } : {}),
+    });
   }
   const app = clean(target?.app, 120);
   const windowTitle = clean(target?.title, LABEL_MAX_CHARS);

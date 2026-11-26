@@ -73,7 +73,7 @@ Every PR that changes what you see (F2, F3, F4: Settings, the Computer tab, the 
 ### 2. A1: Lume 0.6.1 to 0.8.0
 
 - Re-pin in `scripts/bot-computers-lume-pins.mjs`, `resources/bot-computers/lume-artifact.json` and `lume-binary.ts` (URL, SHA-256, signing team).
-- Use what's new: Lume's own low-disk and VM-limit refusals mapped to Aiden's messages; `--no-audio-device` and `--no-clipboard-device` on every start; `lume cp` for copying files in.
+- Use what's new: Lume's own low-disk and VM-limit refusals mapped to Aiden's messages; `--no-audio-device` and `--no-clipboard-device` on every start; post-hardening file transfers use Aiden's key-authenticated, host-key-pinned `/usr/bin/ssh` (`ssh.ts` stdin/command stream) or the shared folder rather than `lume cp` (omitted because it uses preset password auth and disables host-key checking).
 - Update the fake Lume (`tests/e2e/lume-fake.mjs`) for the new flags and output. Docs: `docs/bot-computers.md`, `AGENTS.md` pin line.
 
 ### 3. A2: `cua-driver` 0.36.0 to one chosen version

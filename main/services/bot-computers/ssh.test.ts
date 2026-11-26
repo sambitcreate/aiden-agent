@@ -301,4 +301,45 @@ test("openGuestVncTunnel binds only 127.0.0.1 (passing vncReachableBeyondLoopbac
     ),
     /tunnel/iu,
   );
+
+  // Killing the SSH child after openGuestVncTunnel succeeds notifies onExit; explicit close() does not.
+  let unexpectedExits = 0;
+  let resolveExit: (() => void) | undefined;
+  const exited = new Promise<void>((resolve) => {
+    resolveExit = resolve;
+  });
+  const droppedTunnel = await openGuestVncTunnel(
+    { host: "192.168.64.9", user: "lume" },
+    "/home/lume/.local/share/aiden/vnc.sock",
+    {
+      timeoutMs: 5_000,
+      onExit: () => {
+        unexpectedExits += 1;
+        resolveExit?.();
+      },
+    },
+    { paths: local, env: guestSshEnvironment({}, local.home), sshCommand: fakeSsh },
+  );
+  const droppedPid = Number(readFileSync(pidFile, "utf8").trim());
+  process.kill(droppedPid, "SIGKILL");
+  await exited;
+  assert.equal(unexpectedExits, 1, "unexpected post-start SSH child exit notifies owner once");
+  await droppedTunnel.close();
+  assert.equal(unexpectedExits, 1);
+
+  let cleanExits = 0;
+  const closedTunnel = await openGuestVncTunnel(
+    { host: "192.168.64.9", user: "lume" },
+    "/home/lume/.local/share/aiden/vnc.sock",
+    {
+      timeoutMs: 5_000,
+      onExit: () => {
+        cleanExits += 1;
+      },
+    },
+    { paths: local, env: guestSshEnvironment({}, local.home), sshCommand: fakeSsh },
+  );
+  await closedTunnel.close();
+  await new Promise((resolve) => setTimeout(resolve, 50));
+  assert.equal(cleanExits, 0, "intentional close() does not invoke onExit");
 });

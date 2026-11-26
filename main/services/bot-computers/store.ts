@@ -68,11 +68,15 @@ export interface BotComputersSetupRecord {
 
 /** Recorded during and after the one-time first-launch removal of legacy macOS Bot computers. */
 export interface BotComputersMacosMigrationRecord {
-  /** Set only once every targeted legacy macOS VM and .ipsw file has been removed. */
+  /** Set only once every targeted legacy macOS VM, .ipsw file, and legacy secret has been removed. */
   completedAt?: number;
   freedBytes: number;
   /** True once the person sets up Linux, removes everything, or dismisses the Settings notice. */
   noticeDismissed?: boolean;
+  /** True when clearing the legacy macOS guest password secret failed and must be retried or rotated. */
+  pendingSecretCleanup?: boolean;
+  /** Bot ids whose one-time Linux migration note still needs to be written to Bot memory. */
+  pendingMigrationNotes?: string[];
 }
 
 export interface BotComputersState {
@@ -179,10 +183,22 @@ function parseMigration(value: unknown): BotComputersMacosMigrationRecord | unde
   if (freedBytes === undefined) return undefined;
   const completedAt = input.completedAt === undefined ? undefined : time(input.completedAt);
   if (input.completedAt !== undefined && completedAt === undefined) return undefined;
+  const pendingMigrationNotes = Array.isArray(input.pendingMigrationNotes)
+    ? [
+        ...new Set(
+          input.pendingMigrationNotes.filter(
+            (entry): entry is string =>
+              typeof entry === "string" && entry.length > 0 && entry.length <= 200 && isSafeRecordKey(entry),
+          ),
+        ),
+      ]
+    : undefined;
   return {
     ...(completedAt !== undefined ? { completedAt } : {}),
     freedBytes,
     ...(input.noticeDismissed === true ? { noticeDismissed: true } : {}),
+    ...(input.pendingSecretCleanup === true ? { pendingSecretCleanup: true } : {}),
+    ...(pendingMigrationNotes && pendingMigrationNotes.length > 0 ? { pendingMigrationNotes } : {}),
   };
 }
 

@@ -1,4 +1,6 @@
-import { randomInt } from "node:crypto";
+import { randomBytes, randomInt } from "node:crypto";
+import { readFile, rm, writeFile } from "node:fs/promises";
+import path from "node:path";
 import { quoteRemoteArg } from "../devices/ssh-device-script.js";
 import { BOT_COMPUTER_LINUX_APT_SNAPSHOT, BOT_COMPUTER_LINUX_IMAGE } from "./release.js";
 import { BOT_COMPUTER_GUEST_USER, BOT_COMPUTER_HOST_KEY_ALIAS } from "./ssh.js";
@@ -144,6 +146,8 @@ export interface LinuxProvisionContext {
   password: string;
   /** Optional Debian APT snapshot override (defaults to `BOT_COMPUTER_LINUX_APT_SNAPSHOT`). */
   snapshot?: { codename: string; archiveUrl: string; securityUrl: string };
+  /** Host-side path of the mounted `Computer` share for VirtioFS round-trip verification. */
+  sharedDir?: string;
   /** Optional Linux guest driver install hook (no macOS permissions step on Linux). */
   guestDriver?: {
     install(password: string): Promise<void>;
@@ -410,26 +414,73 @@ export const LINUX_BASE_PROVISION_STEPS: readonly LinuxProvisionStep[] = Object.
     // shared read-write over virtiofs under Apple's `com.apple.virtio-fs.automount`
     // share, appearing at `/mnt/aiden-shared/Computer`. Expose `~/Shared` directly
     // to that directory and `~/Bots` (plus `~/bots` for `aiden-bot`) to its `bots/`
-    // subdirectory so multiple Bots on a shared VM have both shared and per-Bot folders.
+    // subdirectory so multiple Bots on a shared VM have both shared and per-Bot folders,
+    // and prove both users can read host files and write guest files back.
     id: "shared_folder",
     channel: "guest_ssh",
     async run(context) {
       const fstabLine = `${BOT_COMPUTER_LINUX_VIRTIOFS_TAG} ${BOT_COMPUTER_LINUX_SHARED_MOUNT} virtiofs rw,nofail,x-systemd.automount 0 0`;
-      const script = [
-        `mkdir -p ${quoteRemoteArg(BOT_COMPUTER_LINUX_SHARED_MOUNT)}`,
-        `(grep -qxF ${quoteRemoteArg(fstabLine)} /etc/fstab || printf '%s\\n' ${quoteRemoteArg(fstabLine)} >> /etc/fstab)`,
-        `mount ${quoteRemoteArg(BOT_COMPUTER_LINUX_SHARED_MOUNT)} >/dev/null 2>&1 || true`,
-        `for u in ${BOT_COMPUTER_GUEST_USER} ${BOT_COMPUTER_LINUX_SHELL_USER}; do s="/home/$u/Shared"; if [ -L "$s" ] || [ ! -e "$s" ]; then ln -sfn ${quoteRemoteArg(BOT_COMPUTER_LINUX_SHARED_TARGET)} "$s" && chown -h "$u:$u" "$s"; else exit 65; fi; done`,
-        `for u in ${BOT_COMPUTER_GUEST_USER} ${BOT_COMPUTER_LINUX_SHELL_USER}; do b="/home/$u/Bots"; if [ -L "$b" ] || [ ! -e "$b" ]; then ln -sfn ${quoteRemoteArg(BOT_COMPUTER_LINUX_BOTS_TARGET)} "$b" && chown -h "$u:$u" "$b"; else exit 65; fi; done`,
-        `b="/home/${BOT_COMPUTER_LINUX_SHELL_USER}/bots"; if [ -L "$b" ] || [ ! -e "$b" ]; then ln -sfn ${quoteRemoteArg(BOT_COMPUTER_LINUX_BOTS_TARGET)} "$b" && chown -h "${BOT_COMPUTER_LINUX_SHELL_USER}:${BOT_COMPUTER_LINUX_SHELL_USER}" "$b"; else exit 65; fi`,
-      ].join(" && ");
-      checkLinuxStep(
-        "shared_folder",
-        await context.guestSsh(`${SUDO} /bin/sh -c ${quoteRemoteArg(script)}`, {
-          stdin: `${context.password}\n`,
-          timeoutMs: 60_000,
-        }),
-      );
+      const users = [BOT_COMPUTER_GUEST_USER, BOT_COMPUTER_LINUX_SHELL_USER];
+      const nonce = randomBytes(8).toString("hex");
+      const hostProbeName = `.aiden-shared-host-${nonce}`;
+      const hostToken = `aiden-host-${nonce}`;
+      const guestProbes = users.map((user) => ({
+        user,
+        fileName: `.aiden-shared-guest-${user}-${nonce}`,
+        token: `aiden-guest-${user}-${nonce}`,
+      }));
+
+      const sharedDir = context.sharedDir;
+      const cleanupPaths = sharedDir
+        ? [path.join(sharedDir, hostProbeName), ...guestProbes.map((entry) => path.join(sharedDir, entry.fileName))]
+        : [];
+      try {
+        if (sharedDir) {
+          await writeFile(path.join(sharedDir, hostProbeName), `${hostToken}\n`, { mode: 0o644 });
+        }
+        const userChecks = guestProbes.map(({ user, fileName, token }) => {
+          const shareDir = `/home/${user}/Shared`;
+          if (sharedDir) {
+            const readCmd = `[ "$(cat ${quoteRemoteArg(`${shareDir}/${hostProbeName}`)})" = ${quoteRemoteArg(hostToken)} ]`;
+            const writeCmd = `printf '%s\\n' ${quoteRemoteArg(token)} > ${quoteRemoteArg(`${shareDir}/${fileName}`)} && chmod 644 ${quoteRemoteArg(`${shareDir}/${fileName}`)}`;
+            return `su -s /bin/sh ${user} -c ${quoteRemoteArg(`${readCmd} && ${writeCmd}`)}`;
+          }
+          const scratch = `${shareDir}/.aiden-probe-${user}-${nonce}`;
+          const writeCmd = `printf '%s\\n' ${quoteRemoteArg(token)} > ${quoteRemoteArg(scratch)} && [ "$(cat ${quoteRemoteArg(scratch)})" = ${quoteRemoteArg(token)} ] && rm -f ${quoteRemoteArg(scratch)}`;
+          return `su -s /bin/sh ${user} -c ${quoteRemoteArg(writeCmd)}`;
+        });
+        const script = [
+          `mkdir -p ${quoteRemoteArg(BOT_COMPUTER_LINUX_SHARED_MOUNT)}`,
+          `(grep -qxF ${quoteRemoteArg(fstabLine)} /etc/fstab || printf '%s\\n' ${quoteRemoteArg(fstabLine)} >> /etc/fstab)`,
+          `(mountpoint -q ${quoteRemoteArg(BOT_COMPUTER_LINUX_SHARED_MOUNT)} || mount ${quoteRemoteArg(BOT_COMPUTER_LINUX_SHARED_MOUNT)})`,
+          `mountpoint -q ${quoteRemoteArg(BOT_COMPUTER_LINUX_SHARED_MOUNT)}`,
+          `[ -d ${quoteRemoteArg(BOT_COMPUTER_LINUX_SHARED_TARGET)} ]`,
+          `for u in ${users.join(" ")}; do s="/home/$u/Shared"; if [ -L "$s" ] || [ ! -e "$s" ]; then ln -sfn ${quoteRemoteArg(BOT_COMPUTER_LINUX_SHARED_TARGET)} "$s" && chown -h "$u:$u" "$s"; else exit 65; fi; done`,
+          `for u in ${users.join(" ")}; do b="/home/$u/Bots"; if [ -L "$b" ] || [ ! -e "$b" ]; then ln -sfn ${quoteRemoteArg(BOT_COMPUTER_LINUX_BOTS_TARGET)} "$b" && chown -h "$u:$u" "$b"; else exit 65; fi; done`,
+          `b="/home/${BOT_COMPUTER_LINUX_SHELL_USER}/bots"; if [ -L "$b" ] || [ ! -e "$b" ]; then ln -sfn ${quoteRemoteArg(BOT_COMPUTER_LINUX_BOTS_TARGET)} "$b" && chown -h "${BOT_COMPUTER_LINUX_SHELL_USER}:${BOT_COMPUTER_LINUX_SHELL_USER}" "$b"; else exit 65; fi`,
+          ...userChecks,
+        ].join(" && ");
+        checkLinuxStep(
+          "shared_folder",
+          await context.guestSsh(`${SUDO} /bin/sh -c ${quoteRemoteArg(script)}`, {
+            stdin: `${context.password}\n`,
+            timeoutMs: 60_000,
+          }),
+        );
+        if (sharedDir) {
+          for (const { user, fileName, token } of guestProbes) {
+            const actual = await readFile(path.join(sharedDir, fileName), "utf8").catch(() => null);
+            if (actual?.trim() !== token) {
+              throw new BotComputerError(
+                "start_failed",
+                `Preparing the base computer failed at "shared_folder" (${user} guest-to-host file was unreadable).`,
+              );
+            }
+          }
+        }
+      } finally {
+        await Promise.all(cleanupPaths.map((target) => rm(target, { force: true }).catch(() => undefined)));
+      }
     },
   },
   {
