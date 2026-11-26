@@ -475,6 +475,30 @@ test("recalling a /command or @mention prompt suppresses both palettes during br
   assert.equal(historyListbox(), null);
   assert.equal(box().value, "/compact");
   assert.equal(screen.queryByRole("listbox", { name: "Slash commands" }), null);
+
+  // The first typed edit of a recalled `/compact` leaves history and keeps the slash palette closed.
+  await change(box(), "");
+  await act(async () => {
+    box().focus();
+  });
+  await press(box(), "ArrowUp");
+  await press(box(), "ArrowUp");
+  assert.equal(box().value, "/compact");
+  await change(box(), "/compac");
+  await settle();
+  assert.equal(historyListbox(), null);
+  assert.equal(box().value, "/compac");
+  assert.equal(screen.queryByRole("listbox", { name: "Slash commands" }), null);
+
+  // The same holds for a recalled `@READ` mention.
+  await change(box(), "");
+  await press(box(), "ArrowUp");
+  assert.equal(box().value, "check @READ");
+  await change(box(), "check @REA");
+  await settle();
+  assert.equal(historyListbox(), null);
+  assert.equal(box().value, "check @REA");
+  assert.equal(screen.queryByRole("listbox", { name: "Workspace files" }), null);
 });
 
 test("external staged text and slashPaletteBlocked cleanly unwind transient history browsing", async () => {

@@ -136,12 +136,21 @@ export function composerHistoryFromMessages(
         if (nonText) lastNonTextPreview = nonText;
       }
 
-      if (lastAssistant?.providerFailure) {
+      const timelineStatus = lastAssistant?.timeline?.status;
+      if (lastAssistant && timelineStatus === "cancelled") {
+        replyStatus = "stopped";
+        const partial = lastNonEmptyAssistantContent
+          ? formatHistoryReplyPreview(lastNonEmptyAssistantContent)
+          : lastNonTextPreview;
+        if (partial) replyPreview = partial;
+      } else if (lastAssistant && (lastAssistant.providerFailure || timelineStatus === "failed")) {
         replyStatus = "failed";
         const source =
           lastAssistant.content.trim().length > 0
             ? lastAssistant.content
-            : providerFailurePresentation(lastAssistant.providerFailure).description;
+            : lastAssistant.providerFailure
+              ? providerFailurePresentation(lastAssistant.providerFailure).description
+              : "";
         const formatted = formatHistoryReplyPreview(source);
         if (formatted) replyPreview = formatted;
       } else if (lastNonEmptyAssistantContent) {

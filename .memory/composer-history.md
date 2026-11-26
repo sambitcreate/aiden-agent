@@ -15,7 +15,7 @@
 
 ## Architecture & Scope
 - Pure logic: `renderer/lib/composer-history.ts`
-  - `composerHistoryFromMessages`: extracts user-authored messages (`role === "user" && !notice && !fromLeadChat` with non-empty `content.trim()`), paired with the following assistant reply before the next `role === "user"` message, classifying `answered` / `failed` / `blocked` / `pending`.
+  - `composerHistoryFromMessages`: extracts user-authored messages (`role === "user" && !notice && !fromLeadChat` with non-empty `content.trim()`), paired with the following assistant reply before the next `role === "user"` message, classifying `answered` / `failed` / `blocked` / `stopped` / `pending` / `none`. A persisted `timeline.status` of `cancelled` reads as `stopped` (partial text kept as the preview) and `failed` reads as `failed` even without `providerFailure`, matching `liveChatEnding`. The first typed edit of a recalled prompt dismisses slash/skill/mention triggers like the other history-detach paths.
   - `composerHistoryFromBotEntries`: extracts `type === "user"` entries from `BotTranscriptEntry[]` paired with the following `type === "assistant"` entry.
   - Pure state transitions (`openComposerHistory`, `stepComposerHistoryUp`, `stepComposerHistoryDown`, `previewComposerHistoryEntry`, `selectComposerHistoryEntry`, `dismissComposerHistory`, `detachComposerHistory`, `reconcileComposerHistory`).
 - Popover UI: `renderer/components/composer-history-popover.tsx`

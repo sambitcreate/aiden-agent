@@ -134,6 +134,30 @@ test("composerHistoryFromMessages distinguishes non-latest unanswered ('none'), 
   );
 });
 
+test("composerHistoryFromMessages reports timeline-only cancelled turns as stopped and failed turns as failed", () => {
+  const timeline = (status: string) =>
+    ({ version: 1, generationId: `g-${status}`, status, startedAt: 1000, steps: [] }) as unknown as ChatMessage["timeline"];
+  const messages: ChatMessage[] = [
+    msg("u1", "user", "Write the summary"),
+    msg("a1", "assistant", "Partial **summary** so", { timeline: timeline("cancelled") }),
+    msg("u2", "user", "Try once more"),
+    msg("a2", "assistant", "", { timeline: timeline("cancelled") }),
+    msg("u3", "user", "And again"),
+    msg("a3", "assistant", "Half an answer", { timeline: timeline("failed") }),
+    msg("u4", "user", "Last try"),
+    msg("a4", "assistant", "", { timeline: timeline("failed") }),
+  ];
+  assert.deepEqual(
+    composerHistoryFromMessages(messages).map((e) => [e.id, e.replyStatus, e.replyPreview]),
+    [
+      ["u1", "stopped", "Partial summary so"],
+      ["u2", "stopped", undefined],
+      ["u3", "failed", "Half an answer"],
+      ["u4", "failed", undefined],
+    ],
+  );
+});
+
 test("composerHistoryFromBotEntries handles failed_turn, silent replies, stopped turns, non-text outputs, and turn boundaries", () => {
   const botEntries: BotTranscriptEntry[] = [
     { id: "r1", type: "routine", label: "Morning check", text: "Check inbox", at: 10 },

@@ -3353,7 +3353,8 @@ export function Composer({
               aria-busy={composerInputLocked || firstSendPending || dictationPreviewing || undefined}
               onChange={(event) => {
                 if (firstSendPendingRef.current || dictationPreviewing) return;
-                if (historyOpen) {
+                const detachingHistory = historyOpen;
+                if (detachingHistory) {
                   cancelHistoryCaretRaf();
                   updateHistoryState(detachComposerHistory());
                 }
@@ -3362,6 +3363,8 @@ export function Composer({
                   start: event.target.selectionStart,
                   end: event.target.selectionEnd,
                 });
+                // A recalled `/command`, `$skill` or `@mention` stays plain text on the first edit.
+                if (detachingHistory) dismissActiveTriggersFor(event.target.value, event.target.selectionStart);
                 // Until live words appear, dictation follows the caret.
                 if (dictationAnchorRef.current) {
                   setDictationAnchor({ start: event.target.selectionStart, end: event.target.selectionEnd });
