@@ -1180,6 +1180,9 @@ export function createBotComputerHost(deps: BotComputerHostDependencies): BotCom
       if (await exposed(vncTunnel.port)) {
         throw new BotComputerError("vnc_not_loopback", `${owner} computer's screen was reachable from the network, so Aiden stopped it.`);
       }
+      if (tunnelExited) {
+        throw new BotComputerError("start_failed", `${owner} computer's screen tunnel closed.`);
+      }
       const connection: BotComputerConnection = {
         vmName: record.vmName,
         ip: info.ip,
