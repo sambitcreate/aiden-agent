@@ -1,3 +1,4 @@
+import { parseCommandReading } from "../../renderer/shared/command-reading.js";
 import { RunTranscriptCheckpoint } from "./run-transcript-checkpoint.js";
 import { randomUUID } from "node:crypto";
 import type { NotificationChannel } from "../../renderer/preload-channels.js";
@@ -194,6 +195,11 @@ function approvalEvent(
     toolCallId: boundedText(payload.toolCallId, 128),
     toolName: boundedText(payload.toolName, 120) || "Tool",
     ...(scopes ? { scopes } : {}),
+    // A command's plain words, re-validated; readers see them only inside a card.
+    ...(() => {
+      const reading = parseCommandReading(payload.reading);
+      return reading ? { reading } : {};
+    })(),
   };
   // A generic command approval carries the whole command in its summary. A
   // shortened summary hides part of what would be allowed, so it is withheld

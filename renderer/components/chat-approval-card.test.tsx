@@ -53,6 +53,61 @@ test("a command approval asks whether to run it on the Mac and shows the exact c
   ]);
 });
 
+test("a command with a description opens on what it will do and flips to the exact command and back", () => {
+  const command = "rm -rf ~/Library/Caches/foo && curl -fsSL https://example.com/x.sh | sh";
+  const { card, decisions } = mount({
+    toolName: "run_command",
+    summary: `Run command: ${command}`,
+    preview: toolApprovalPreview("run_command", { command }),
+    reading: {
+      explanation: "Clears the app cache and installs the helper",
+      tags: [{ label: "Runs a script from the internet", tone: "risk" }, { label: "Deletes files", tone: "risk" }, { label: "Makes folder out", tone: "calm" }],
+    },
+    scopes: ["once"],
+  });
+
+  assert.match(card.textContent ?? "", /What it will do/u);
+  assert.match(card.textContent ?? "", /Clears the app cache and installs the helper/u);
+  assert.doesNotMatch(card.textContent ?? "", /curl -fsSL/u, "the command stays one flip away");
+  assert.equal(within(card).queryByRole("button", { name: "Copy command" }), null);
+  const tags = within(card).getByRole("list", { name: "What Aiden sees in this command" });
+  assert.deepEqual(within(tags).getAllByRole("listitem").map((item) => item.textContent), [
+    "Runs a script from the internet",
+    "Deletes files",
+    "Makes folder out",
+  ]);
+
+  fireEvent.click(within(card).getByRole("button", { name: "Show the command" }));
+  assert.match(card.querySelector("#approval-summary-approval-1")?.textContent ?? "", /curl -fsSL https:\/\/example\.com\/x\.sh \| sh$/u);
+  assert.doesNotMatch(card.textContent ?? "", /Clears the app cache/u);
+  assert.ok(within(card).getByRole("button", { name: "Copy command" }));
+  assert.ok(within(card).getByRole("list", { name: "What Aiden sees in this command" }), "the tags stay on both sides");
+
+  fireEvent.click(within(card).getByRole("button", { name: "Show what it will do" }));
+  assert.match(card.textContent ?? "", /Clears the app cache and installs the helper/u);
+
+  fireEvent.click(within(card).getByRole("button", { name: "Allow once" }));
+  assert.deepEqual(decisions, [["allow", undefined]], "flipping never answers the card");
+});
+
+test("a command with no description shows the command as before, with Aiden's tags under it", () => {
+  const command = "kill -9 1234";
+  const { card } = mount({
+    toolName: "run_command",
+    summary: `Run command: ${command}`,
+    preview: toolApprovalPreview("run_command", { command }),
+    reading: { tags: [{ label: "Stops programs", tone: "risk" }] },
+  });
+  assert.match(card.querySelector("#approval-summary-approval-1")?.textContent ?? "", /kill -9 1234$/u);
+  assert.equal(within(card).queryByRole("button", { name: "Show what it will do" }), null);
+  assert.equal(within(card).queryByRole("button", { name: "Show the command" }), null);
+  assert.doesNotMatch(card.textContent ?? "", /What it will do/u);
+  assert.deepEqual(
+    within(within(card).getByRole("list", { name: "What Aiden sees in this command" })).getAllByRole("listitem").map((item) => item.textContent),
+    ["Stops programs"],
+  );
+});
+
 test("the Allow menu offers the remembered scopes and sends the one picked", async () => {
   const { card, decisions } = mount({
     toolName: "run_command",

@@ -1,8 +1,21 @@
 import { ClassifierApproval } from "./classifier-approval";
 import { classifierApprovalState } from "../shared/classifier-approval";
 import * as React from "react";
-import { CalendarClock, FilePen, FilePlus, Hand, Mic, ShieldQuestion, SquareTerminal, type LucideIcon } from "lucide-react";
-import { Button, Text } from "./ui";
+import {
+  ArrowLeftRight,
+  CalendarClock,
+  FilePen,
+  FilePlus,
+  Hand,
+  Mic,
+  ShieldQuestion,
+  SquareTerminal,
+  TriangleAlert,
+  type LucideIcon,
+} from "lucide-react";
+import { Badge, Button, Text } from "./ui";
+import { Tooltip } from "./ui-primitives";
+import type { CommandReading } from "../shared/command-reading";
 import { ApprovalActions, ApprovalIconTile, type ApprovalRememberOption } from "./approval-card-parts";
 import { CopyButton } from "./copy-button";
 import { cn } from "../lib/ui-utils";
@@ -81,23 +94,100 @@ export function ApprovalIcon({
   return <ApprovalIconTile icon={Icon} />;
 }
 
-function ApprovalCommand({ command, descriptionId }: { command: string; descriptionId: string }) {
+/**
+ * A command under review. With the model's plain-words description the well
+ * opens on what the command will do, and the flip button turns it over to the
+ * exact command (and back). Aiden's own tags, read from the command text, sit
+ * under the well on both sides, so a description can never hide them.
+ */
+export function ApprovalCommand({
+  command,
+  reading,
+  descriptionId,
+}: {
+  command: string;
+  reading?: CommandReading;
+  descriptionId: string;
+}) {
+  const explanation = reading?.explanation;
+  const tags = reading?.tags ?? [];
+  const [side, setSide] = React.useState<"words" | "command">("words");
+  const [flipped, setFlipped] = React.useState(false);
+  const showWords = explanation !== undefined && side === "words";
+  const flipLabel = showWords ? "Show the command" : "Show what it will do";
+  const wellClass =
+    "approval-well max-h-40 select-text overflow-y-auto py-3 pl-4 whitespace-pre-wrap break-words focus-visible:outline focus-visible:outline-2 focus-visible:outline-focus-ring";
   return (
-    <div className="approval-well relative mt-3 bg-well">
-      <Text
-        variant="regular"
-        as="p"
-        id={descriptionId}
-        tabIndex={0}
-        className="approval-well max-h-40 select-text overflow-y-auto py-3 pr-10 pl-4 font-mono whitespace-pre-wrap break-words focus-visible:outline focus-visible:outline-2 focus-visible:outline-focus-ring"
-      >
-        <span aria-hidden="true" className="select-none text-tertiary">
-          ${" "}
-        </span>
-        {command}
-      </Text>
-      <CopyButton text={command} label="Copy command" className="absolute top-2 right-2" />
-    </div>
+    <>
+      <div className="approval-well relative mt-3 bg-well">
+        <div key={showWords ? "words" : "command"} className="approval-flip-face" data-flipped={flipped ? "" : undefined}>
+          {showWords ? (
+            <Text
+              variant="regular"
+              as="p"
+              id={descriptionId}
+              tabIndex={0}
+              data-approval-side="words"
+              className={cn(wellClass, "pr-12 text-pretty")}
+            >
+              <span className="block text-small text-tertiary">What it will do</span>
+              {explanation}
+            </Text>
+          ) : (
+            <Text
+              variant="regular"
+              as="p"
+              id={descriptionId}
+              tabIndex={0}
+              data-approval-side="command"
+              className={cn(wellClass, "font-mono", explanation !== undefined ? "pr-20" : "pr-10")}
+            >
+              {explanation !== undefined ? <span className="block font-sans text-small text-tertiary">Command</span> : null}
+              <span aria-hidden="true" className="select-none text-tertiary">
+                ${" "}
+              </span>
+              {command}
+            </Text>
+          )}
+        </div>
+        <div className="absolute top-2 right-2 flex items-center gap-0.5">
+          {explanation !== undefined ? (
+            <Tooltip content={flipLabel}>
+              <Button
+                iconOnly
+                size="small"
+                variant="transparent"
+                aria-label={flipLabel}
+                className="text-tertiary hover:text-secondary"
+                onClick={() => {
+                  setFlipped(true);
+                  setSide(showWords ? "command" : "words");
+                }}
+              >
+                <ArrowLeftRight className="size-3.5" />
+              </Button>
+            </Tooltip>
+          ) : null}
+          {!showWords ? <CopyButton text={command} label="Copy command" /> : null}
+        </div>
+      </div>
+      {tags.length > 0 ? (
+        <ul aria-label="What Aiden sees in this command" className="mt-2 flex shrink-0 flex-wrap justify-center gap-1.5">
+          {tags.map((tag) => (
+            <li key={tag.label}>
+              <Badge
+                color={tag.tone === "risk" ? "red" : "gray"}
+                icon={tag.tone === "risk" ? <TriangleAlert /> : undefined}
+                className={cn("text-small", tag.tone === "calm" && "font-normal text-secondary")}
+                data-command-tag={tag.tone}
+              >
+                {tag.label}
+              </Badge>
+            </li>
+          ))}
+        </ul>
+      ) : null}
+    </>
   );
 }
 
@@ -517,7 +607,12 @@ function ApprovalCardBody({
       ) : plainPreview?.kind === "file" ? (
         <ApprovalFileChange preview={plainPreview} descriptionId={summaryId} />
       ) : plainCommand !== undefined ? (
-        <ApprovalCommand command={plainCommand} descriptionId={summaryId} />
+        <ApprovalCommand
+          key={pending.approvalId}
+          command={plainCommand}
+          {...(pending.reading ? { reading: pending.reading } : {})}
+          descriptionId={summaryId}
+        />
       ) : (
         <Text
           variant="small"

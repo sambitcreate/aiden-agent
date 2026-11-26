@@ -33,6 +33,7 @@ export default defineConfig(({ command }) => {
           "main-window": resolve(import.meta.dirname, "main-window.html"),
           pill: resolve(import.meta.dirname, "pill.html"),
           "quick-chat": resolve(import.meta.dirname, "quick-chat.html"),
+          "bot-bubbles": resolve(import.meta.dirname, "bot-bubbles.html"),
           "visual-snapshot": resolve(import.meta.dirname, "visual-snapshot.html"),
         },
       },

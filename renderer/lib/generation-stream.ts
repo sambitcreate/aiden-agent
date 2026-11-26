@@ -17,6 +17,7 @@ import {
 } from "../shared/subagent-transcript";
 import { parseToolApprovalScope } from "../shared/tool-approval-scope";
 import { parseToolApprovalPreview } from "../shared/tool-approval-preview";
+import { parseCommandReading } from "../shared/command-reading";
 import { parseTodoSnapshotView } from "../shared/todo";
 import { restoreUndeliveredGuidance, undeliveredGuidanceFromTerminal } from "./composer-draft-store";
 import type { ApprovalPrompt, ChatStatusPhase, StreamCallbacks, ToolPhase } from "./ipc";
@@ -400,6 +401,10 @@ export function subscribeGenerationStream(
         ...(() => {
           const preview = parseToolApprovalPreview(p.preview);
           return preview ? { preview } : {};
+        })(),
+        ...(() => {
+          const reading = parseCommandReading(p.reading);
+          return reading ? { reading } : {};
         })(),
         // Offered allow scopes ("this chat", "always"); absent means once only.
         ...(Array.isArray(p.scopes) ? { scopes: p.scopes.filter((entry) => parseToolApprovalScope(entry)) } : {}),

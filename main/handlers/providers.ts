@@ -8,7 +8,8 @@ import { parseModelPreferencesPatch } from "../../renderer/shared/model-preferen
 import { parseAgentSliderSettingsPatch } from "../../renderer/shared/agent-slider.js";
 // Provider configuration + API key IPC handlers. Thin — logic lives in services.
 
-import { ipcMain } from "../platform.js";
+import { ipcMain, logger } from "../platform.js";
+import { hostPlatformCapabilities } from "../services/host-platform-capabilities.js";
 import { activeLinuxDictationHoldShortcut, bindLinuxDictationHoldShortcut, disableLinuxDictationHoldShortcut } from "../services/shortcut.js";
 import { DictationHoldSettingsTransaction } from "../services/dictation-hold-settings.js";
 import { configStore } from "../services/config-store.js";
@@ -498,6 +499,11 @@ export function registerProviderHandlers(): void {
       }
       next.quickChatKeepOpenOnBlur = p.quickChatKeepOpenOnBlur;
     }
+    for (const key of ["botBubblesEnabled", "botBubblesFloatOverApps"] as const) {
+      if (p[key] === undefined) continue;
+      if (typeof p[key] !== "boolean") throw new Error("Invalid Bot bubbles setting.");
+      next[key] = p[key];
+    }
     Object.assign(next, parseAidenLiveSettingsPatch(p as Record<string, unknown>));
     if (p.skillsEnabled !== undefined) {
       if (typeof p.skillsEnabled !== "boolean") throw new Error("Invalid skills enabled setting.");
@@ -533,6 +539,12 @@ export function registerProviderHandlers(): void {
     }
     await applySettingsEffects(saved, next);
     if (next.quickChatKeepOpenOnBlur !== undefined) syncQuickChatSettings(saved);
+    if ((next.botBubblesEnabled !== undefined || next.botBubblesFloatOverApps !== undefined) && hostPlatformCapabilities().bots) {
+      // Loaded on demand: the bubble service pulls in the Bot application service.
+      void import("../services/bot-bubbles/bot-bubbles-main.js")
+        .then(({ botBubbleService }) => botBubbleService().syncSettings(saved))
+        .catch((error: unknown) => logger.warn("bot-bubbles", "Could not apply the Bot bubble settings.", error));
+    }
     if (next.quickChatDefaultPersistence !== undefined) {
       ipcMain.broadcast("settings:controls-changed", {});
     }

@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { AidenRemoteModelService } from "./aiden-remote-models.js";
+import { parseAidenRemoteAgentSlider, type AidenRemoteAgentSlider } from "./aiden-remote-protocol.js";
 import type { Provider } from "./types.js";
 import { builtinProviders } from "@earendil-works/pi-ai/providers/all";
 import { withPiRemoteCatalog } from "./pi-remote-catalog.js";
@@ -417,4 +418,138 @@ test("phones never see agent-backed providers and cannot start turns on them", a
   assert.deepEqual(catalog.providers.map((entry) => entry.id), ["provider-1"]);
   assert.notEqual(catalog.defaults.providerId, "antigravity");
   await assert.rejects(service.resolve("antigravity", "chat-model"), /runs only in chats you have open on this computer/u);
+});
+
+test("the Agent Slider reaches phones with each stop's availability and a level its model offers", async () => {
+  const longModel = "x".repeat(300);
+  const stops = [
+    { id: "ready", label: "Deep", providerId: "provider-1", model: "chat-model", thinkingLevel: "high" as const },
+    { id: "fitted", label: "Middle", providerId: "provider-1", model: "chat-model", thinkingLevel: "medium" as const },
+    { id: "unassigned", label: "Choose a model" },
+    { id: "gone", label: "Gone", providerId: "removed", model: "chat-model" },
+    { id: "signed-out", label: "Signed out", providerId: "no-key", model: "chat-model", thinkingLevel: "low" as const },
+    { id: "signed-out-unnamed", label: "Signed out, unnamed", providerId: "no-key", model: "unnamed-model" },
+    { id: "missing", label: "Missing", providerId: "provider-1", model: "retired-model" },
+    { id: "embedding", label: "Embedding", providerId: "provider-1", model: "embedding-model" },
+    { id: "long", label: "Long", providerId: "provider-1", model: longModel, thinkingLevel: "high" as const },
+  ];
+  const settings = {
+    lastProviderId: "provider-1",
+    lastModel: "chat-model",
+    agentSlider: { version: 1 as const, stops, homeStopId: "ready" },
+  };
+  const service = new AidenRemoteModelService({
+    listProviders: async () => [
+      provider({ models: ["chat-model", "embedding-model", longModel] }),
+      provider({ id: "no-key", label: "Keyless Co", hasKey: false, models: ["chat-model", "unnamed-model"] }),
+    ],
+    getSettings: async () => settings,
+  });
+  const projection = await service.list();
+  const slider = projection.agentSlider;
+  assert.ok(slider);
+  assert.equal(slider.homeStopId, "ready");
+  assert.deepEqual(slider.stops.map((stop) => stop.id), stops.map((stop) => stop.id), "order and every stop survive");
+  const byId = new Map(slider.stops.map((stop) => [stop.id, stop]));
+  assert.deepEqual(byId.get("ready"), {
+    id: "ready",
+    label: "Deep",
+    providerId: "provider-1",
+    modelId: "chat-model",
+    providerLabel: "Provider",
+    modelLabel: "Chat Model",
+    thinkingLevel: "high",
+    availability: "ready",
+  });
+  // The model offers low and high only, so a phone is told a level it can actually send.
+  const offered = projection.providers[0]?.models.find((model) => model.id === "chat-model")?.thinkingLevels ?? [];
+  const fitted = byId.get("fitted");
+  assert.equal(fitted?.availability, "ready");
+  assert.ok(fitted?.thinkingLevel && offered.includes(fitted.thinkingLevel), `fitted level ${fitted?.thinkingLevel} is offered`);
+  assert.deepEqual(byId.get("unassigned"), { id: "unassigned", label: "Choose a model", availability: "unassigned" });
+  // Unavailable stops name what to fix in words, never by id, and carry no level.
+  assert.deepEqual(byId.get("gone"), { id: "gone", label: "Gone", availability: "provider-missing" });
+  assert.deepEqual(byId.get("signed-out"), {
+    id: "signed-out", label: "Signed out", providerLabel: "Keyless Co", modelLabel: "Chat Model", availability: "not-signed-in",
+  });
+  assert.deepEqual(byId.get("signed-out-unnamed"), {
+    id: "signed-out-unnamed", label: "Signed out, unnamed", providerLabel: "Keyless Co", availability: "not-signed-in",
+  }, "a model known only by its id gets no label");
+  assert.deepEqual(byId.get("missing"), { id: "missing", label: "Missing", providerLabel: "Provider", availability: "model-missing" });
+  // Runs on the computer, but the phone catalog leaves the model out: nothing about it is sent.
+  assert.deepEqual(byId.get("embedding"), { id: "embedding", label: "Embedding", availability: "computer-only" });
+  assert.deepEqual(byId.get("long"), { id: "long", label: "Long", availability: "computer-only" });
+  // Every stop the host sends meets the published contract (in slider-sized groups of three).
+  for (let at = 0; at < slider.stops.length; at += 3) {
+    const group: AidenRemoteAgentSlider = { stops: slider.stops.slice(at, at + 3), homeStopId: slider.stops[at]!.id };
+    assert.deepEqual(parseAidenRemoteAgentSlider(group), group);
+  }
+  for (const stop of slider.stops) {
+    const source = stops.find((candidate) => candidate.id === stop.id)!;
+    assert.equal(stop.providerId !== undefined, stop.availability === "ready", `${stop.id}: ids only when ready`);
+    assert.equal(stop.thinkingLevel === undefined || stop.availability === "ready", true, `${stop.id}: level only when ready`);
+    if (source.model) assert.notEqual(stop.modelLabel, source.model, `${stop.id}: model label is never the id`);
+    if (source.providerId) assert.notEqual(stop.providerLabel, source.providerId, `${stop.id}: provider label is never the id`);
+  }
+
+  const hidden = new AidenRemoteModelService({
+    listProviders: async () => [provider()],
+    getSettings: async () => ({ ...settings, hiddenModelsByProvider: { "provider-1": ["chat-model"] } }),
+  });
+  assert.deepEqual((await hidden.list()).agentSlider?.stops[0], {
+    id: "ready", label: "Deep", providerLabel: "Provider", modelLabel: "Chat Model", availability: "hidden",
+  });
+
+  const harness = new AidenRemoteModelService({
+    listProviders: async () => [provider({ id: "antigravity", label: "Google Antigravity" }), provider()],
+    getSettings: async () => ({
+      ...settings,
+      agentSlider: { ...settings.agentSlider, stops: [{ ...stops[0], providerId: "antigravity" }, ...stops.slice(1)] },
+    }),
+  });
+  assert.deepEqual((await harness.list()).agentSlider?.stops[0], {
+    id: "ready", label: "Deep", availability: "computer-only",
+  }, "agent harness stops stay on the computer and phones never learn the provider");
+
+  for (const without of [{ lastProviderId: "provider-1" }, { ...settings, agentSliderUnreadable: true as const }]) {
+    const service = new AidenRemoteModelService({ listProviders: async () => [provider()], getSettings: async () => without });
+    assert.equal("agentSlider" in (await service.list()), false);
+  }
+});
+
+test("with a slider, new chats default to the computer's last stop level, fitted, only when the default is that last model", async () => {
+  const agentSlider = {
+    version: 1 as const,
+    stops: [{ id: "deep", label: "Deep", providerId: "provider-1", model: "chat-model", thinkingLevel: "high" as const }],
+    homeStopId: "deep",
+  };
+  const list = async (settings: Record<string, unknown>, providers = [provider()]) =>
+    (await new AidenRemoteModelService({ listProviders: async () => providers, getSettings: async () => settings }).list()).defaults;
+
+  assert.deepEqual(
+    await list({ lastProviderId: "provider-1", lastModel: "chat-model", lastThinkingLevel: "high", agentSlider }),
+    { providerId: "provider-1", modelId: "chat-model", thinkingLevel: "high" },
+  );
+  // The model offers low and high only: an xhigh last level runs, and starts, at a level it offers.
+  const fitted = await list({ lastProviderId: "provider-1", lastModel: "chat-model", lastThinkingLevel: "xhigh", agentSlider });
+  assert.ok(["low", "high"].includes(fitted.thinkingLevel ?? ""), `fitted ${fitted.thinkingLevel}`);
+  // The last model is gone, so the default falls back to another model: no level from the old one.
+  assert.deepEqual(
+    await list({ lastProviderId: "provider-1", lastModel: "retired-model", lastThinkingLevel: "high", agentSlider }),
+    { providerId: "provider-1", modelId: "chat-model" },
+  );
+  // A model with no levels takes no level.
+  assert.deepEqual(
+    await list(
+      { lastProviderId: "provider-1", lastModel: "chat-model", lastThinkingLevel: "high", agentSlider },
+      [provider({ modelMetadata: { "chat-model": { source: "provider", name: "Chat Model", type: "llm" } } })],
+    ),
+    { providerId: "provider-1", modelId: "chat-model" },
+  );
+  for (const withoutSlider of [
+    { lastProviderId: "provider-1", lastModel: "chat-model", lastThinkingLevel: "high" },
+    { lastProviderId: "provider-1", lastModel: "chat-model", lastThinkingLevel: "high", agentSlider, agentSliderUnreadable: true },
+  ]) {
+    assert.deepEqual(await list(withoutSlider), { providerId: "provider-1", modelId: "chat-model" }, "no slider, no level");
+  }
 });

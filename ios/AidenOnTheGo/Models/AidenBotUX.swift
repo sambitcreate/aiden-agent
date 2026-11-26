@@ -18,6 +18,10 @@ enum AidenBotUXWire {
     static let cardButtonsMax = 5
     static let cardButtonLabelMax = 80
     static let cardAllowOnMacMax = 120
+    /// Revision 69 (`approval:plain-words`): the command's plain words and Aiden's tags.
+    static let cardExplanationMax = 400
+    static let cardTagsMax = 8
+    static let cardTagLabelMax = 80
     static let instructionsMax = 32_000
     static let diffLinesMax = 2_000
     static let skillPreviewMax = 16_000
@@ -38,6 +42,19 @@ enum AidenBotUXWire {
         _ values: KeyedDecodingContainer<Key>, _ key: Key, max: Int, blank: Bool = false
     ) throws -> String {
         try text(try values.decode(String.self, forKey: key), field: key.stringValue, max: max, blank: blank)
+    }
+
+    /// One trimmed line with single spaces and no control, zero-width or
+    /// direction-changing characters, as the host's `commandExplanation` makes it.
+    static func isPlainLine(_ value: String) -> Bool {
+        guard value == value.trimmingCharacters(in: .whitespaces), !value.contains("  ") else { return false }
+        return value.unicodeScalars.allSatisfy { scalar in
+            let v = scalar.value
+            if v == 0x20 { return true }
+            if scalar.properties.isWhitespace { return false }
+            return !(v <= 0x1F || (0x7F...0x9F).contains(v) || (0x200B...0x200F).contains(v)
+                || (0x2028...0x202E).contains(v) || (0x2060...0x2069).contains(v) || v == 0xFEFF)
+        }
     }
 
     static func optionalText<Key: CodingKey>(
@@ -121,6 +138,30 @@ struct AidenApprovalCardRow: Codable, Equatable, Sendable {
     private enum CodingKeys: String, CodingKey { case label, value }
 }
 
+/// Revision 69 (`approval:plain-words`): one of Aiden's own tags, read by the
+/// Mac from the command text without any model. `risk` steps (deleting files,
+/// the internet, a downloaded script, admin rights, files outside the project,
+/// stopping programs) draw in a soft red fill; `calm` ones in grey.
+struct AidenApprovalCardTag: Codable, Equatable, Hashable, Sendable {
+    enum Tone: String, Codable, Sendable { case calm, risk }
+    let label: String
+    let tone: Tone
+
+    init(label: String, tone: Tone) {
+        self.label = label
+        self.tone = tone
+    }
+
+    init(from decoder: Decoder) throws {
+        try AidenBotWire.requireOnlyKeys(decoder, allowed: ["label", "tone"])
+        let values = try decoder.container(keyedBy: CodingKeys.self)
+        label = try AidenBotUXWire.text(values, .label, max: AidenBotUXWire.cardTagLabelMax)
+        tone = try values.decode(Tone.self, forKey: .tone)
+    }
+
+    private enum CodingKeys: String, CodingKey { case label, tone }
+}
+
 /// One button. Pressing it sends exactly its `decision` and `scope` to the
 /// approval's existing respond route, and `answered` is the line shown after.
 struct AidenApprovalCardButton: Codable, Equatable, Hashable, Sendable {
@@ -165,6 +206,12 @@ struct AidenApprovalCardModel: Codable, Equatable, Sendable {
     let title: String
     let arguments: [AidenApprovalCardArgument]
     let body: AidenApprovalCardText?
+    /// Revision 69 (`approval:plain-words`): the model's one-line description
+    /// of a shell command. The card opens on it; `body` keeps the exact command
+    /// one flip away. Only a Mac shell card with a command body carries it.
+    let explanation: String?
+    /// Revision 69: Aiden's own tags for the command, risky ones first. Never empty when sent.
+    let tags: [AidenApprovalCardTag]?
     let previous: AidenApprovalCardText?
     let rows: [AidenApprovalCardRow]?
     let notes: [String]?
@@ -175,7 +222,7 @@ struct AidenApprovalCardModel: Codable, Equatable, Sendable {
     init(from decoder: Decoder) throws {
         try AidenBotWire.requireOnlyKeys(
             decoder,
-            allowed: ["kind", "mac", "title", "arguments", "body", "previous", "rows", "notes", "buttons", "allowOnMac"]
+            allowed: ["kind", "mac", "title", "arguments", "body", "explanation", "tags", "previous", "rows", "notes", "buttons", "allowOnMac"]
         )
         let values = try decoder.container(keyedBy: CodingKeys.self)
         kind = try values.decode(AidenApprovalCardKind.self, forKey: .kind)
@@ -195,6 +242,18 @@ struct AidenApprovalCardModel: Codable, Equatable, Sendable {
         arguments = try values.decode([AidenApprovalCardArgument].self, forKey: .arguments)
         guard arguments.count <= AidenBotUXWire.cardArgumentsMax else { throw AidenBotContractError.invalidField("arguments") }
         body = try AidenBotWire.optional(AidenApprovalCardText.self, from: values, forKey: .body)
+        let plainWords = kind == .mac && mac == .shell && body?.format == .command
+        guard plainWords || !(values.contains(.explanation) || values.contains(.tags)) else {
+            throw AidenBotContractError.invalidCombination("only a shell card with a command carries plain words")
+        }
+        explanation = try AidenBotUXWire.optionalText(values, .explanation, max: AidenBotUXWire.cardExplanationMax)
+        if let explanation, !AidenBotUXWire.isPlainLine(explanation) {
+            throw AidenBotContractError.invalidField("explanation")
+        }
+        tags = try AidenBotWire.optional([AidenApprovalCardTag].self, from: values, forKey: .tags)
+        if let tags, tags.isEmpty || tags.count > AidenBotUXWire.cardTagsMax {
+            throw AidenBotContractError.invalidField("tags")
+        }
         previous = try AidenBotWire.optional(AidenApprovalCardText.self, from: values, forKey: .previous)
         rows = try AidenBotWire.optional([AidenApprovalCardRow].self, from: values, forKey: .rows)
         guard (rows?.count ?? 0) <= AidenBotUXWire.cardRowsMax else { throw AidenBotContractError.invalidField("rows") }
@@ -240,7 +299,7 @@ struct AidenApprovalCardModel: Codable, Equatable, Sendable {
     }
 
     private enum CodingKeys: String, CodingKey {
-        case kind, mac, title, arguments, body, previous, rows, notes, buttons, allowOnMac
+        case kind, mac, title, arguments, body, explanation, tags, previous, rows, notes, buttons, allowOnMac
     }
 }
 
@@ -790,6 +849,10 @@ extension AidenRemoteCapability {
     static let botSuggestions = Self(rawValue: "bot:suggestions")
     /// Revision 61: template versions, Open, the stale check and one-field create.
     static let botTemplates = Self(rawValue: "bot:templates")
+
+    /// Revision 69: the command's plain words and Aiden's tags on a typed shell
+    /// card. Asked for alone, after `approval:cards`, which it needs.
+    static let approvalPlainWords = Self(rawValue: "approval:plain-words")
 
     /// The five revision-61 opt-ins, each negotiated in a call of its own.
     static let botUX: [Self] = [.approvalCards, .approvalsSettings, .botSettingsChanges, .botSuggestions, .botTemplates]

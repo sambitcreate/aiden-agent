@@ -220,6 +220,7 @@ import {
   prepareQuickChat,
   toggleQuickChat,
 } from "./windows/quick-chat-window.js";
+import { destroyBotBubbleOverlays, releaseBotBubbleOverlays, startBotBubbles } from "./windows/bot-bubbles-window.js";
 import { hostPlatformCapabilities } from "./services/host-platform-capabilities.js";
 import { installElectronConnectorWatchTransport } from "./services/bot-routine-events/connector-watch-startup.js";
 import {
@@ -417,6 +418,7 @@ function cleanupApplication(): void {
   disposeShortcut();
   disposeDictation();
   destroyQuickChat();
+  destroyBotBubbleOverlays();
   disposeLocalSpeech();
   disposeFoundationModelsConnection();
   formFillRuntime.dispose();
@@ -2297,6 +2299,7 @@ if (!ownsSingleInstanceLock) {
         disposeVisualSnapshots();
         destroyPill();
         destroyQuickChat();
+        releaseBotBubbleOverlays();
       }
     });
   });
@@ -2866,6 +2869,23 @@ if (!ownsSingleInstanceLock) {
         );
       }
       refreshFoundationModelsStatus();
+      // Bot bubbles: the saved heads come back on the same side and height.
+      if (hostPlatformCapabilities().bots) {
+        startBotBubbles({
+          current: () => (mainWindow && !mainWindow.isDestroyed() ? mainWindow : null),
+          reveal: async () => {
+            await createMainWindow();
+            if (!(await waitForRendererReady())) return null;
+            const window = mainWindow;
+            if (!window || window.isDestroyed()) return null;
+            if (window.isMinimized()) window.restore();
+            window.show();
+            window.focus();
+            return window;
+          },
+          openExternal: openExternalUrl,
+        });
+      }
       // Voice warm-up, a few seconds after launch so it never competes with the
       // first window: the hidden dictation pill and the on-device voice model.
       setTimeout(() => {

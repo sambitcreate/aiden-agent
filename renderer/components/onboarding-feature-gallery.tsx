@@ -258,7 +258,7 @@ export const onboardingFeatures: OnboardingFeature[] = [
     group: "control",
     title: "Meet your Bots",
     description:
-      "Your first Bot asks what you need and sets itself up. Bots remember, ask each other for help, run routines, and hand steps back to you. Approve a whole plan in Aiden Agent or on your phone, follow its checklist, or stop it. Approval covers only listed actions within the Bot's access and limits, for this run and up to 60 minutes.",
+      "Your first Bot asks what you need and sets itself up. Bots remember, ask each other for help, run routines, hand steps back to you, and shrink into floating bubbles. Approve a whole plan in Aiden Agent or on your phone, follow its checklist, or stop it. Approval covers only listed actions within the Bot's access and limits, for this run and up to 60 minutes.",
     icon: Bot,
     size: "standard",
   },

@@ -10,6 +10,7 @@ import { BotAvatar, useBotAvatarState } from "../../components/bot-avatar";
 import { BotNeedsYouBadge } from "../../components/bot-needs-you-badge";
 import { HistoryNavButtons } from "../../components/history-nav";
 import {
+  Badge,
   Button,
   EmptyState,
   Input,
@@ -44,6 +45,8 @@ import {
 import { useHeldModifierReveal } from "../../lib/use-held-modifier-reveal";
 import { ariaKeyShortcut, prettyAccelerator, type CommandId } from "../../shared/keybindings";
 import { isEscapeKey } from "../../lib/dismiss-key";
+import { useBotBubbles } from "../../lib/bot-bubbles-api";
+import { isBotBubbled } from "../../shared/bot-bubbles";
 
 /**
  * A sidebar Bot's face: static while the Bot rests, acting out its turn while it runs
@@ -130,6 +133,18 @@ function ShortcutHint({ binding, className }: { binding: string; className: stri
 }
 
 
+/** "Bubble" on the row of a Bot whose chat is a floating head now (docs/bot-bubbles.md). */
+function BotBubbleChip({ botId }: { botId: string }) {
+  const bubbles = useBotBubbles();
+  // With bubbles turned off the heads are hidden, so the row doesn't say Bubble.
+  if (bubbles.host === "off" || !isBotBubbled(bubbles, botId)) return null;
+  return (
+    <Badge color="blue" className="h-5 shrink-0 px-1.5 text-mini font-semibold">
+      Bubble
+    </Badge>
+  );
+}
+
 const BotRow = React.memo(function BotRow({
   row,
   selected,
@@ -172,6 +187,7 @@ const BotRow = React.memo(function BotRow({
           <span className="min-w-0 flex-1">
             <span className="flex min-w-0 items-center gap-1.5">
               <span className="truncate text-regular font-medium text-primary">{row.bot.name}</span>
+              <BotBubbleChip botId={row.bot.id} />
               {/* "Needs you" outranks the dot; the row still says "Unread" to a screen reader. */}
               {unread && !row.needsYou ? <BotUnreadDot /> : null}
             </span>
@@ -251,6 +267,7 @@ const PinnedBot = React.memo(function PinnedBot({
           </span>
           <span className="flex max-w-full min-w-0 items-center gap-1.5">
             <span className="truncate text-strong font-medium text-primary">{row.bot.name}</span>
+            <BotBubbleChip botId={row.bot.id} />
             {row.needsYou ? <BotNeedsYouBadge /> : unread ? <BotUnreadDot /> : null}
             {row.needsYou && unread ? <span className="sr-only">Unread</span> : null}
           </span>

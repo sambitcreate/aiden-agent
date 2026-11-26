@@ -1,4 +1,5 @@
 import {
+  BaseWindow,
   BrowserWindow,
   Notification,
   ShareMenu,
@@ -224,6 +225,7 @@ export function registerNativeHandlers(): void {
 
 export {
   app,
+  BaseWindow,
   BrowserWindow,
   Notification,
   ShareMenu,
