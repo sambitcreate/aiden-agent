@@ -361,7 +361,7 @@ test("Linux AT-SPI password and editable entry/text roles keep text-edit behavio
       botName: async () => "Ada",
       sleep: async () => undefined,
     },
-    { routine: false, elementControl: true, guestOs: "linux" },
+    { routine: false, elementControl: true },
   );
   try {
     const run = (id: string, args: Record<string, unknown>) => tool.execute(id, args as unknown as BotComputerArgs);
