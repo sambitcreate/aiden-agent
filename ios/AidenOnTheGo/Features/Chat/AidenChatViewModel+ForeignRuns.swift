@@ -199,10 +199,15 @@ extension AidenChatViewModel {
             deviceID: context.deviceId,
             chatID: chat.id,
             title: chat.displayTitle,
-            streamID: projection.runId
+            streamID: projection.runId,
+            machineName: ownerMachineName
         )
-        if projection.pendingApproval != nil {
-            await liveActivities.approvalRequired(instanceID: instanceId, streamID: projection.runId)
+        if let approval = projection.pendingApproval {
+            await liveActivities.approvalRequired(
+                instanceID: instanceId,
+                streamID: projection.runId,
+                target: foreignApprovalTarget(approvalID: approval.approvalId, runID: projection.runId, context: context)
+            )
         } else if let state = streamState {
             await publishLiveActivityStatus(streamID: projection.runId, state: state)
         }
@@ -284,6 +289,17 @@ extension AidenChatViewModel {
         )
     }
 
+    /// The card offers Deny on a run from the Mac only when this phone may
+    /// answer it there; otherwise it offers Review alone.
+    private func foreignApprovalTarget(
+        approvalID: String,
+        runID: String,
+        context: AidenRemoteRequestContext
+    ) -> AgentRunApprovalTarget? {
+        guard foreignApprovalCapabilities(context: context).canRespond else { return nil }
+        return AgentRunApprovalTarget(approvalID: approvalID, runID: runID)
+    }
+
     private func canRespondToForeignQuestions(context: AidenRemoteRequestContext) -> Bool {
         canRespondToQuestions(for: context) && hasForeignRunControl(context: context)
     }
@@ -316,7 +332,11 @@ extension AidenChatViewModel {
             if ambient { await liveActivities.toolFinished(instanceID: instanceId, streamID: runId) }
         case let .approvalRequired(id):
             coordinator.haptics.play(.warning, scope: hapticScope, dedupeKey: "approval-required:\(id)")
-            await liveActivities.approvalRequired(instanceID: instanceId, streamID: runId)
+            await liveActivities.approvalRequired(
+                instanceID: instanceId,
+                streamID: runId,
+                target: foreignApprovalTarget(approvalID: id, runID: runId, context: context)
+            )
         case let .questionRequired(id):
             coordinator.haptics.play(.warning, scope: hapticScope, dedupeKey: "question-required:\(id)")
             await publishLiveActivityStatus(streamID: runId, state: .waitingForApproval)

@@ -125,6 +125,10 @@ test("daemon approval summaries read like the desktop's without hiding any argum
   assert.equal(api.daemonApprovalSummary("run_command", { command: "npm test" }), "Run command: npm test");
   assert.equal(api.daemonApprovalSummary("read_file", { path: "src/a.ts" }), "Read file: src/a.ts");
   assert.equal(api.daemonApprovalSummary("list_dir", { path: "src" }), "List folder: src");
+  // The model's plain words ride beside the command (the card shows them); they never replace it.
+  assert.equal(api.daemonApprovalSummary("run_command", { command: "npm test", description: "Runs the tests" }), "Run command: npm test");
+  assert.equal(api.daemonApprovalSummary("run_command", { command: "npm test", description: 7 }), 'run_command: {"command":"npm test","description":7}');
+  assert.equal(api.daemonApprovalSummary("read_file", { path: "a.ts", description: "x" }), 'read_file: {"path":"a.ts","description":"x"}');
   // Any other argument, tool or shape keeps the exact request.
   assert.equal(api.daemonApprovalSummary("run_command", { command: "sleep 9", timeout: 5 }), 'run_command: {"command":"sleep 9","timeout":5}');
   assert.equal(api.daemonApprovalSummary("read_file", { path: "a.ts", offset: 40 }), 'read_file: {"path":"a.ts","offset":40}');

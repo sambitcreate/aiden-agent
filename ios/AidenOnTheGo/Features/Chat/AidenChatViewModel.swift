@@ -400,6 +400,11 @@ final class AidenChatViewModel {
         isReadOnlyFixture ? nil : coordinator.hosts.connection(for: owner.instanceId)
     }
 
+    /// The owner Mac's name, as a summary Live Activity names it.
+    var ownerMachineName: String {
+        ownerConnection?.installation.name ?? String(localized: "your computer")
+    }
+
     /// The owner's `/server` answer. Nil until that machine has connected,
     /// which a machine that isn't selected may not have done yet.
     var ownerServer: AidenServer? { ownerConnection?.server }
@@ -909,7 +914,7 @@ final class AidenChatViewModel {
 
     /// Local run alert while the user is away; the notifier owns dedupe,
     /// permission timing, and the inactive-only / Quiet Open Chat policy.
-    private func alertRun(_ kind: AidenRunAlertKind, id: String) {
+    private func alertRun(_ kind: AidenRunAlertKind, id: String, detail: AidenRunAlertDetail? = nil) {
         let instanceID = instanceId
         let chatID = chat.id
         let title = chat.title
@@ -921,7 +926,8 @@ final class AidenChatViewModel {
                 instanceID: instanceID,
                 chatID: chatID,
                 chatTitle: title,
-                isChatOnScreen: isChatOnScreen
+                isChatOnScreen: isChatOnScreen,
+                detail: detail
             )
         }
     }
@@ -1905,7 +1911,8 @@ final class AidenChatViewModel {
                     deviceID: context.deviceId,
                     chatID: chat.id,
                     title: chat.displayTitle,
-                    streamID: response.streamId
+                    streamID: response.streamId,
+                    machineName: ownerMachineName
                 )
             }
             accepted = accepted && cache.isChatWriteRetained(acceptedWriteToken, instanceId: instanceId, chatId: chat.id)
@@ -2878,7 +2885,8 @@ final class AidenChatViewModel {
                     deviceID: context.deviceId,
                     chatID: chat.id,
                     title: chat.displayTitle,
-                    streamID: stream.streamId
+                    streamID: stream.streamId,
+                    machineName: ownerMachineName
                 )
             }
             guard !isRemoved, activeStreamID == stream.streamId else {
@@ -3445,7 +3453,17 @@ final class AidenChatViewModel {
             }
             pendingApproval = approval
             streamState = .waitingForApproval
-            alertRun(.needsApproval, id: approval.id)
+            alertRun(
+                .needsApproval,
+                id: approval.id,
+                detail: approval.canRespond
+                    ? .approval(
+                        target: AgentRunApprovalTarget(approvalID: approval.id, runID: nil),
+                        summary: approval.summary,
+                        canAllow: approval.alertCanAllow
+                    )
+                    : nil
+            )
             if announce {
                 coordinator.haptics.play(
                     .warning,
@@ -3453,7 +3471,11 @@ final class AidenChatViewModel {
                     dedupeKey: "approval-required:\(approval.id)"
                 )
             }
-            await liveActivities.approvalRequired(instanceID: instanceId, streamID: streamID)
+            await liveActivities.approvalRequired(
+                instanceID: instanceId,
+                streamID: streamID,
+                target: approval.canRespond ? AgentRunApprovalTarget(approvalID: approval.id, runID: nil) : nil
+            )
             // A question prompt may be pending alongside the approval; a nil
             // snapshot simply clears stale card state without touching status.
             await restorePendingQuestion(
@@ -3471,6 +3493,14 @@ final class AidenChatViewModel {
                 isRemoved: isRemoved,
                 isContextLive: coordinator.isLive(context)
             ) else { return }
+            if error is URLError {
+                // The Mac never answered, as when the app opens from its Live
+                // Activity before the link is back. The run may still be
+                // waiting, so the card and its state stay for the next
+                // reload to ask again, and the Live Activity reads as old.
+                await liveActivities.markStale(instanceID: instanceId, streamID: streamID)
+                return
+            }
             pendingApproval = nil
             await restorePendingQuestion(
                 streamID: streamID,
@@ -3538,7 +3568,18 @@ final class AidenChatViewModel {
                 hasPendingQuestion: true
             ) == .waitingForAnswer {
                 await liveActivities.questionRequired(instanceID: instanceId, streamID: streamID)
-                alertRun(.needsAnswer, id: question.id)
+                alertRun(
+                    .needsAnswer,
+                    id: question.id,
+                    detail: question.canRespond
+                        ? .question(
+                            promptID: question.id,
+                            runID: nil,
+                            text: question.questions.first?.question ?? "",
+                            acceptsReply: question.questions.count == 1
+                        )
+                        : nil
+                )
             }
             if announce {
                 coordinator.haptics.play(
@@ -3556,6 +3597,12 @@ final class AidenChatViewModel {
                 streamState: streamState,
                 isContextLive: coordinator.isLive(context)
             ) else { return }
+            if error is URLError {
+                // The Mac never answered; as for an approval, the question
+                // and its state stay for the next reload to ask again.
+                await liveActivities.markStale(instanceID: instanceId, streamID: streamID)
+                return
+            }
             pendingQuestion = nil
             if reconcilesOnNil && pendingApproval == nil {
                 streamState = .reconciling

@@ -8,6 +8,7 @@ import { ChatApprovalCard } from "../../components/chat-approval-card";
 import { botsApi } from "../../lib/ipc";
 import { userFacingErrorMessage } from "../../lib/ipc-error";
 import { switchToAutoSuggestion, useSwitchToAutoOffer, type SwitchToAutoOffer } from "../../lib/switch-to-auto";
+import { parseCommandReading } from "../../shared/command-reading";
 import { BOT_APPROVAL_REPEAT_COUNT, botAlwaysAllowLabel } from "../../shared/tool-approval-scope";
 import type { BotPendingQuestion } from "../../shared/bot-live";
 import type { AskUserQuestionPromptV1 } from "../../shared/ask-user-question";
@@ -159,6 +160,10 @@ function BotApprovalCardView({
         toolName: prompt.toolName,
         summary: prompt.summary,
         ...(prompt.always ? { scopes: ["once", "always"] } : {}),
+        ...(() => {
+          const reading = parseCommandReading(prompt.reading);
+          return reading ? { reading } : {};
+        })(),
       }}
       deciding={busy}
       onDecide={(decision, options) => void respond(decision, options?.scope === "always" ? "always" : undefined)}

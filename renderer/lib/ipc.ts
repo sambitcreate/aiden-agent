@@ -227,6 +227,7 @@ import type {
 import type { ToolApprovalDetails } from "../shared/assistant";
 import type { ToolApprovalRuleView, ToolApprovalScope } from "../shared/tool-approval-scope";
 import type { ToolApprovalPreview } from "../shared/tool-approval-preview";
+import type { CommandReading } from "../shared/command-reading";
 import {
   parseSubagentHistoryDetailV1,
   type SubagentHistoryDetailV1,
@@ -2360,6 +2361,8 @@ export interface ApprovalPrompt {
   details?: ToolApprovalDetails;
   /** The exact command or file change, sent only to the desktop that owns the chat. */
   preview?: ToolApprovalPreview;
+  /** A command in plain words (the model's description) and Aiden's own tags for it. */
+  reading?: CommandReading;
   canAllow?: boolean;
   /** Allow scopes offered for this call; absent means allow once only. */
   scopes?: ToolApprovalScope[];
@@ -2379,6 +2382,8 @@ export interface RemoteApprovalPrompt {
   canAllow: boolean;
   scopes?: ToolApprovalScope[];
   details?: ToolApprovalDetails;
+  /** A command's plain words and Aiden's tags (the Mac's own view only). */
+  reading?: CommandReading;
 }
 
 export interface GenerationHandle {

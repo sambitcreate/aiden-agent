@@ -67,7 +67,8 @@ Initial capability IDs:
 | `attachments:raw` | Opt-in, no authority of its own (contract revision 50). Lets `POST /chats/{chatId}/attachments` and `POST /bots/{botId}/attachments` take one picture as its raw `image/png` or `image/jpeg` bytes instead of the JSON envelope. Each upload still needs that route's own grants. Negotiable post-pairing by any device type through `POST /device/capabilities` while the host lists it in `serverCapabilities` (any host that serves chat or Bot uploads), never issued by pairing. There is no `/server` feature token for it. A host before revision 50 refuses the name, so devices ask for it in a call of their own. See "Raw picture uploads, revision 50". |
 | `chat:continue-in-new-chat` | Opt-in, no authority of its own (contract revision 64). Delivers the `workspace_unavailable` refusal's `details` and opens the `continueIn` body of `POST /chats/{chatId}/fork`, which still needs `chat:write`. Negotiable post-pairing by any device type through `POST /device/capabilities` while the host lists it in `serverCapabilities` (the host lists it only where it can fork chats), never issued by pairing. There is no `/server` feature token for it. A host before revision 64 refuses the name, so devices ask for it in a call of their own. See "Continue in a new chat, revision 64". |
 | `stream:snapshot-reasons` | Opt-in, no authority of its own (contract revision 65). Delivers `reason` (`gap` \| `reset`) on `GET /streams/{streamId}/events` `snapshot` payloads so a client can tell a retention-gap recovery boundary apart from a provider stream reset; nonholders receive the legacy `{chatId, turnId, nextSequence}` payload. Negotiable post-pairing by any device type through `POST /device/capabilities` while the host lists it in `serverCapabilities` (`404 not_found` on a host without turn streams), never issued by pairing. There is no `/server` feature token for it. A host before revision 65 refuses the name, so devices ask for it in a call of their own. See "Stream lagging-cursor recovery and snapshot reasons, revision 65". |
-| `bot:needs-you` | Opt-in, no authority of its own (contract revision 68, provisional). Delivers `needsYou: true` on `GET /bots` summaries for a Bot the person owes an answer (an approval, a question, a hand-off, an access request, a pending plan or an open issue); nonholders receive the summary without the key. Negotiable post-pairing by any device type through `POST /device/capabilities` while the host lists it in `serverCapabilities` (`404 not_found` on a host that cannot tell), never issued by pairing. There is no `/server` feature token for it. A host before revision 68 refuses the name, so devices ask for it in a call of their own. See "Bots that need you on phones, revision 68". |
+| `bot:needs-you` | Opt-in, no authority of its own (contract revision 68). Delivers `needsYou: true` on `GET /bots` summaries for a Bot the person owes an answer (an approval, a question, a hand-off, an access request, a pending plan or an open issue); nonholders receive the summary without the key. Negotiable post-pairing by any device type through `POST /device/capabilities` while the host lists it in `serverCapabilities` (`404 not_found` on a host that cannot tell), never issued by pairing. There is no `/server` feature token for it. A host before revision 68 refuses the name, so devices ask for it in a call of their own. See "Bots that need you on phones, revision 68". |
+| `approval:plain-words` | Opt-in, no authority of its own, contract revision 69. Adds the command's plain words (`explanation`) and Aiden's own tags (`tags`) to a typed shell `card`, so it needs `approval:cards` too: the host sends them only to a device holding both. Offered wherever `approval:cards` is (desktop and `aiden serve`), negotiated through `POST /device/capabilities` in a call of its own (`404 not_found` where approval cards are not wired), never issued at pairing, no `/server` feature token. See "Plain-words command approvals, revision 69". |
 | `chat:new-worktree` | Opt-in (contract revision 53, provisional). Opens `POST /chats/{chatId}/worktree`, which also needs `chat:write` and `git:write`. The opt-in only says the device can show the step; making the worktree is a Git write. Negotiable post-pairing by any device type through `POST /device/capabilities` while the host lists it in `serverCapabilities` (the host lists it only where it can make worktrees), never issued by pairing. There is no `/server` feature token for it. A host before revision 53 refuses the name, so devices ask for it in a call of their own. See "New worktree from a phone, revision 53". |
 | `tasks:read` | Read the bounded chat task-progress projection and receive `task_update` events. Granted only after explicit client negotiation at pairing or post-pairing. |
 | `agents:read` | Read the bounded delegated-agent roster projection and receive `agents_update` events. Granted only after explicit client negotiation at pairing or post-pairing. |
@@ -1496,9 +1497,9 @@ Revision 65 was claimed on 2026-11-18, when `main` was at 64. The host keeps it 
 
 **Fixtures.** `protocol/aiden-remote/v1/fixtures/contract.json` holds `streamRecovery`: `capability`, `gapEvents`, `legacyGapSnapshot` and `resetEvents`.
 
-## Bot row previews, revision 66 (provisional)
+## Bot row previews, revision 66
 
-Revision 66 is provisional: it was written when `main` was at 65, and the host keeps it in one constant (`AIDEN_REMOTE_BOT_FEED_PREVIEW_CONTRACT_REVISION`), so claiming the next free number at merge changes only that constant. It needs no capability or feature token.
+Revision 66 was claimed at merge on 2026-11-25 and lives in one constant (`AIDEN_REMOTE_BOT_FEED_PREVIEW_CONTRACT_REVISION`). It needs no capability or feature token.
 
 **Host feed.** Host feed Bot rows (`snapshot.bots`, `bot.upsert`, schema `HostFeedBot`) may carry `preview`: the line the host's own Bots list shows under the Bot's name. That is its newest reply, else the person's newest message ("Photo" for a picture alone), a routine's name or a hand-off's answer. It is one plain line: whitespace collapsed, control and invisible formatting characters dropped (emoji joiners stay), trimmed, and at most 140 characters, cut with "…". A Bot with nothing to show sends no key. The host now also sends `lastReplyAt` for every Bot, not only Bots whose chat is open there. Both come from the same summary the host's own Bots list reads, and a row whose summary the host read carries `summarized: true`, so a summarized row without `preview` or `lastReplyAt` is a Bot with none yet. A row whose summary read failed carries none of the three. The feed keeps each Bot's summary until that Bot itself changes (a state change, a wait beginning or ending, or an edit: the same events the host's own Bots list re-reads a row on), so a chat or workspace change re-reads no Bot, and for a Bot whose chat is closed the host reads the transcript again only after its newest entry changes. A Bot's state change at the end of a turn already refreshes the feed, so a new reply reaches paired desktops with it. The schema also lists revision 52's `needsYou`, `failed` and `lastReplyAt`, which the host has sent since then.
 
@@ -1506,9 +1507,9 @@ Revision 66 is provisional: it was written when `main` was at 65, and the host k
 
 **Fixtures.** `protocol/aiden-remote/v1/fixtures/contract.json` adds a `bot.upsert` host feed event with `needsYou`, `lastReplyAt`, `preview` and `summarized`. The desktop parser checks every snapshot and `bot.upsert` Bot row against the same rules (no `issueCount`, `needsYou`, `failed` and `summarized` only `true`, a date-time `lastReplyAt`, a trimmed one-line `preview` of at most 140 characters).
 
-## Bot chat pages and queued messages, revision 67 (provisional)
+## Bot chat pages and queued messages, revision 67
 
-Revision 67 is provisional: it was written when `main` was at 65 and revision 66 was still open, and the host keeps it in one constant (`AIDEN_REMOTE_BOT_SESSION_PAGES_CONTRACT_REVISION`), so claiming the next free number at merge changes only that constant. It adds two Bot session routes and no capability or feature token: the server feature list is already at its 32-token limit, so a client tells an older host apart by its 404.
+Revision 67 was claimed at merge on 2026-11-25 and lives in one constant (`AIDEN_REMOTE_BOT_SESSION_PAGES_CONTRACT_REVISION`). It adds two Bot session routes and no capability or feature token: the server feature list is already at its 32-token limit, so a client tells an older host apart by its 404.
 
 **Older entries.** `GET /bots/{botId}/session/entries?before={entryId}&limit={n}` (`getBotSessionEntries`; `bot:read` and `chat:read`, like the session) returns `{ botId, epoch, entries, hasOlder }`: up to `limit` entries (1 to 200, default 50) just older than `before`, oldest first. `before` is required and must be an entry the device's current session holds, usually its oldest. The page is projected exactly as the device's session and stream are (the same opt-ins decide which entries show and what they carry) and fits the session's byte limit, so it may hold fewer than `limit` entries; `hasOlder` is truthful. An entry id the session does not hold (another epoch, a rewritten history, an id the device was never sent) is `409 operation_stale`, and the client reads the session again. A client places a page only onto the same `epoch`.
 
@@ -1518,9 +1519,9 @@ Revision 67 is provisional: it was written when `main` was at 65 and revision 66
 
 **Fixtures.** The fixture carries only the new `contractRevision`; the protocol test checks both shapes against the parser and the OpenAPI schemas (`BotSessionEntriesPage`, `BotQueuedWithdrawReceipt`).
 
-## Bots that need you on phones, revision 68 (`bot:needs-you`, provisional)
+## Bots that need you on phones, revision 68 (`bot:needs-you`)
 
-Revision 68 is provisional: it was written when `main` was at 65 and revisions 66 and 67 were still open, and the host keeps it in one constant (`AIDEN_REMOTE_BOT_NEEDS_YOU_CONTRACT_REVISION`), so claiming the next free number at merge changes only that constant.
+Revision 68 was claimed at merge on 2026-11-25 and lives in one constant (`AIDEN_REMOTE_BOT_NEEDS_YOU_CONTRACT_REVISION`).
 
 **Negotiation.** The host lists `bot:needs-you` in `serverCapabilities` to a device that may hold Bot opt-ins, whenever it can tell which Bots wait on the person: the desktop app, and `aiden serve` with durable Bot sessions on (there an approval is the only wait, since its Bots ask no questions and take no hand-offs). A device asks for it with `POST /device/capabilities {accepts: ["bot:needs-you"]}` in a call of its **own**: a host older than revision 68 refuses the unknown name with `400 invalid_request`, and a host that cannot tell answers `404 not_found`. Pairing never issues it, and there is no `/server` feature token (the list is at its 32-token limit).
 
@@ -1532,3 +1533,40 @@ Revision 68 is provisional: it was written when `main` was at 65 and revisions 6
 
 **Fixtures.** The fixture carries only the new `contractRevision`; the protocol test checks that `needsYou` parses only as `true`, and the router test checks who receives it.
 
+## Plain-words command approvals, revision 69 (`approval:plain-words`)
+
+Revision 69 was claimed at merge on 2026-11-25, after 66, 67 and 68 (`bot:needs-you`) merged. The host keeps it in one constant (`AIDEN_REMOTE_APPROVAL_PLAIN_WORDS_CONTRACT_REVISION`).
+
+**What it is.** `run_command` now requires a `description`: one plain-language sentence, written by the model in the same tool call, saying what the command will do. The approval card opens on that sentence (`explanation`) and keeps the exact command in `body`, one flip away. Beside it the host adds its own `tags`, read from the command text by `renderer/shared/command-reading.ts` without any model: risky steps (`tone: "risk"`: can't read all of the command, runs a script from the internet, deletes files, needs admin rights, uses files outside this project, uses the internet, stops programs, shuts down or restarts the computer) first, then calm ones (`tone: "calm"`: makes a folder, creates, edits or writes a named file, moves, copies, changes permissions, runs a named script). The explanation is display text only: remembered rules still match the exact command, and the tags let the person spot words that don't match what the command does.
+
+**Negotiation.** The host lists `approval:plain-words` in `serverCapabilities` wherever it lists `approval:cards`. A device asks for it with `POST /device/capabilities {accepts: ["approval:plain-words"]}` in a call of its own, after `approval:cards`: a host before revision 69 refuses the unknown name with `400 invalid_request`. Pairing never issues it.
+
+**Shape.** Only a `kind: "mac"`, `mac: "shell"` card whose `body.format` is `"command"` carries the two keys, and only for a device holding both `approval:cards` and `approval:plain-words`, on every surface the card rides on (stream approvals, a phone's run `approval_required` events and gap snapshots, Bot session approvals):
+
+```json
+{
+  "kind": "mac",
+  "mac": "shell",
+  "title": "Run on your Mac?",
+  "arguments": [{ "key": "tool", "value": "Run command" }],
+  "body": { "format": "command", "text": "mkdir -p bf-out && python3 fetch.py" },
+  "explanation": "Makes a bf-out folder and runs fetch.py",
+  "tags": [
+    { "label": "Makes folder bf-out", "tone": "calm" },
+    { "label": "Runs fetch.py with Python", "tone": "calm" }
+  ],
+  "buttons": [
+    { "label": "Deny", "decision": "deny", "answered": "Denied" },
+    { "label": "Allow once", "decision": "allow", "answered": "Allowed once" }
+  ]
+}
+```
+
+- `explanation` is optional (a call that still has no description leaves it out, and the card shows the command as before). When sent it is one trimmed line of at most 400 code points, with single spaces and no control, zero-width or direction-changing characters.
+- `tags` is optional and, when sent, holds 1 to 8 `{label, tone}` objects with labels of at most 80 code points. Risky tags are never dropped for room.
+- Either key on any other card, an empty `tags`, an unknown `tone` or an extra key is a contract error, on the host and on both phones.
+- Devices without the opt-in receive the revision-61 card unchanged. The reading the host keeps for its own card (`reading` on the desktop approval prompt) never reaches a device.
+
+**Clients.** The Mac's own card, Bot chats and the phones open on the words with a flip button in the corner of the command well, show the command (with Copy on the desktop) on the other side, and list the tags under it, soft red for risky and grey for calm. iOS and Android negotiate the opt-in alone after the revision-61 opt-ins. A paired Mac viewing another host's chat, sub-agent shells, Bot computer shells and background jobs still show the command alone.
+
+**Fixtures.** `protocol/aiden-remote/v1/fixtures/approval-plain-words-revision-69.json` holds `approvalCards` (risky, calm and tags-only), `streamApprovals.words`, and `rejectedCards`, which every parser must refuse. The host builds it in `main/services/aiden-remote-approval-plain-words.test.ts` (`AIDEN_WRITE_FIXTURES=1` regenerates it); iOS (`AidenBotUXTests`) and Android (`AidenApprovalPlainWordsContractTest`) read the same file.

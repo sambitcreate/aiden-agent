@@ -372,8 +372,7 @@ export const AIDEN_REMOTE_CONTINUE_IN_NEW_CHAT_CONTRACT_REVISION = 64 as const;
  */
 export const AIDEN_REMOTE_STREAM_SNAPSHOT_REASONS_CONTRACT_REVISION = 65 as const;
 /**
- * Contract revision 66 (provisional; re-claim the next revision after
- * `main`'s at merge by changing only this constant): host feed Bot rows may
+ * Contract revision 66 (claimed at merge on 2026-11-25): host feed Bot rows may
  * carry `preview`, the one plain line the host's own Bots list shows under the
  * Bot's name (at most 140 characters), and a host now sends `lastReplyAt` for
  * every Bot rather than only Bots whose chat is open there, marking each row
@@ -383,8 +382,7 @@ export const AIDEN_REMOTE_STREAM_SNAPSHOT_REASONS_CONTRACT_REVISION = 65 as cons
  */
 export const AIDEN_REMOTE_BOT_FEED_PREVIEW_CONTRACT_REVISION = 66 as const;
 /**
- * Contract revision 67 (provisional; re-claim the next revision after
- * `main`'s at merge by changing only this constant): two Bot session routes.
+ * Contract revision 67 (claimed at merge on 2026-11-25): two Bot session routes.
  * `GET /bots/{botId}/session/entries?before=&limit=` pages the transcript
  * back from an entry the device already has, so a chat can show more than the
  * snapshot's window. `POST /bots/{botId}/queued/{submissionId}/withdraw`
@@ -394,7 +392,7 @@ export const AIDEN_REMOTE_BOT_FEED_PREVIEW_CONTRACT_REVISION = 66 as const;
  */
 export const AIDEN_REMOTE_BOT_SESSION_PAGES_CONTRACT_REVISION = 67 as const;
 /**
- * Contract revision 68 (provisional; re-claim the next free number at merge):
+ * Contract revision 68 (claimed at merge on 2026-11-25):
  * the `bot:needs-you` opt-in. A device holding it reads `needsYou: true` on a
  * `GET /bots` summary while an approval, a question, a hand-off or an open
  * issue waits on the person, the same signal the host feed's Bot rows carry
@@ -402,7 +400,20 @@ export const AIDEN_REMOTE_BOT_SESSION_PAGES_CONTRACT_REVISION = 67 as const;
  * Android's Bot decoder refuses unknown keys.
  */
 export const AIDEN_REMOTE_BOT_NEEDS_YOU_CONTRACT_REVISION = 68 as const;
-export const AIDEN_REMOTE_CONTRACT_REVISION = AIDEN_REMOTE_BOT_NEEDS_YOU_CONTRACT_REVISION;
+/**
+ * Contract revision 69 (claimed at merge on 2026-11-25, after `bot:needs-you`
+ * took 68):
+ * plain-words command approvals (`approval:plain-words`, an opt-in that
+ * needs `approval:cards`).
+ * A holder's shell card (`kind: "mac"`, `mac: "shell"`, a `command` body) may
+ * carry `explanation`, the model's one-line description of the command, and
+ * `tags`, Aiden's own reading of the command text (`{label, tone: "calm" |
+ * "risk"}`, risky first). Display-only: the body stays the exact command,
+ * buttons and `canAllow` are unchanged, and closed revision-69 decoders never
+ * see the two keys.
+ */
+export const AIDEN_REMOTE_APPROVAL_PLAIN_WORDS_CONTRACT_REVISION = 69 as const;
+export const AIDEN_REMOTE_CONTRACT_REVISION = AIDEN_REMOTE_APPROVAL_PLAIN_WORDS_CONTRACT_REVISION;
 export const AIDEN_REMOTE_BASE_PATH = "/api/aiden/v1" as const;
 export const AIDEN_REMOTE_MAX_SSE_FRAME_BYTES = 1_048_576;
 export const AIDEN_REMOTE_MAX_JSON_RESPONSE_BYTES = 1_048_576;
@@ -740,6 +751,13 @@ export const AIDEN_REMOTE_CHAT_CONTINUE_CAPABILITIES = ["chat:continue-in-new-ch
 export const AIDEN_REMOTE_STREAM_SNAPSHOT_REASON_CAPABILITIES = ["stream:snapshot-reasons"] as const;
 
 /**
+ * Contract revision 69: a device holding `approval:plain-words` (with
+ * `approval:cards`) receives `explanation` and `tags` on shell approval cards.
+ * Display-only, no authority of its own.
+ */
+export const AIDEN_REMOTE_APPROVAL_PLAIN_WORDS_CAPABILITIES = ["approval:plain-words"] as const;
+
+/**
  * Every opt-in a paired device may persist. Each changes what a device is
  * shown; `chat:jobs` also opens its two routes, which still need the chat
  * grant (`chat:read`, `chat:write`); `attachments:raw` opens a second body
@@ -759,6 +777,7 @@ export const AIDEN_REMOTE_OPT_IN_CAPABILITIES = [
   ...AIDEN_REMOTE_APPROVAL_SETTINGS_CAPABILITIES,
   ...AIDEN_REMOTE_CHAT_CONTINUE_CAPABILITIES,
   ...AIDEN_REMOTE_STREAM_SNAPSHOT_REASON_CAPABILITIES,
+  ...AIDEN_REMOTE_APPROVAL_PLAIN_WORDS_CAPABILITIES,
 ] as const;
 
 /** Vocabulary a paired device may add after pairing through `POST /device/capabilities`. */
@@ -792,6 +811,7 @@ export const AIDEN_REMOTE_NEGOTIABLE_CAPABILITIES = [
   ...AIDEN_REMOTE_APPROVAL_SETTINGS_CAPABILITIES,
   ...AIDEN_REMOTE_CHAT_CONTINUE_CAPABILITIES,
   ...AIDEN_REMOTE_STREAM_SNAPSHOT_REASON_CAPABILITIES,
+  ...AIDEN_REMOTE_APPROVAL_PLAIN_WORDS_CAPABILITIES,
 ] as const;
 
 export type AidenRemoteNegotiableCapability =
@@ -829,6 +849,7 @@ export const AIDEN_REMOTE_CAPABILITIES = [
   ...AIDEN_REMOTE_APPROVAL_SETTINGS_CAPABILITIES,
   ...AIDEN_REMOTE_CHAT_CONTINUE_CAPABILITIES,
   ...AIDEN_REMOTE_STREAM_SNAPSHOT_REASON_CAPABILITIES,
+  ...AIDEN_REMOTE_APPROVAL_PLAIN_WORDS_CAPABILITIES,
 ] as const;
 
 export type AidenRemoteCapability = (typeof AIDEN_REMOTE_CAPABILITIES)[number];
