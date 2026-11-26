@@ -2558,3 +2558,127 @@ test("macOS migration retries failed secret cleanup and Bot memory notes without
     { image: linuxImage },
   );
 });
+
+test("Linux screen startup rejects and tears down cleanly when the SSH tunnel exits while vncExposed is pending", async () => {
+  const linuxRaw = Buffer.from("debian tunnel startup exit image\n".repeat(64));
+  const linuxImage = {
+    version: "13",
+    build: "20261123-2672",
+    url: "https://cloud.debian.org/images/debian-tunnel-startup-exit.raw",
+    bytes: linuxRaw.length,
+    sha256: createHash("sha256").update(linuxRaw).digest("hex"),
+  };
+
+  await withHost(
+    async (context) => {
+      context.serve(linuxImage.url, linuxRaw);
+      await setUp(context);
+      await context.host.give("ada");
+
+      const pidFile = path.join(context.dir, "startup-tunnel-child.pid");
+      const fakeSsh = path.join(context.dir, "fake-ssh-startup-tunnel");
+      writeFileSync(
+        fakeSsh,
+        `#!${process.execPath}\n` +
+          `import { writeFileSync } from "node:fs";\n` +
+          `import { createServer } from "node:net";\n` +
+          `const lIdx = process.argv.indexOf("-L");\n` +
+          `const spec = lIdx >= 0 ? process.argv[lIdx + 1] : "";\n` +
+          `const match = /^127\\.0\\.0\\.1:(\\d+):(\\/.+)$/.exec(spec);\n` +
+          `if (!match) process.exit(2);\n` +
+          `writeFileSync(${JSON.stringify(pidFile)}, String(process.pid));\n` +
+          `const server = createServer((s) => { s.write("RFB 003.008\\n"); s.end(); });\n` +
+          `process.on("SIGTERM", () => { server.close(); process.exit(0); });\n` +
+          `server.listen(Number(match[1]), "127.0.0.1", () => { process.stdout.write("AIDEN_TUNNEL_READY\\n"); });\n`,
+      );
+      chmodSync(fakeSsh, 0o755);
+
+      let exposedCalls = 0;
+      let firstPort: number | undefined;
+      let markExposedEntered!: () => void;
+      const exposedEntered = new Promise<void>((resolve) => {
+        markExposedEntered = resolve;
+      });
+      let releaseExposed!: (exposed: boolean) => void;
+      const firstExposedGate = new Promise<boolean>((resolve) => {
+        releaseExposed = resolve;
+      });
+
+      const testHost = context.relaunch({
+        image: linuxImage,
+        sshCommand: fakeSsh,
+        openVncTunnel: undefined,
+        vncExposed: async (port) => {
+          exposedCalls += 1;
+          if (exposedCalls === 1) {
+            firstPort = port;
+            markExposedEntered();
+            return firstExposedGate;
+          }
+          return false;
+        },
+      });
+      const sessions = createBotComputerSessions({ host: testHost, control: testHost.control });
+      const attemptedPorts: number[] = [];
+      sessions.setScreenFactory(async (connection) => {
+        attemptedPorts.push(connection.vnc.port);
+        const banner = await new Promise<string>((resolve, reject) => {
+          const socket = connect({ host: connection.vnc.host, port: connection.vnc.port });
+          socket.once("data", (chunk: Buffer) => {
+            socket.destroy();
+            resolve(chunk.toString("ascii"));
+          });
+          socket.once("error", reject);
+        });
+        assert.match(banner, /^RFB /u);
+        return {
+          capture: async () => ({ image: Buffer.from("png"), mimeType: "image/png", width: 1280, height: 800, framebufferWidth: 1280, framebufferHeight: 800 }),
+          pointer: async () => undefined,
+          key: async () => undefined,
+          close: async () => undefined,
+        };
+      });
+
+      const pendingScreen = assert.rejects(
+        sessions.screen("ada"),
+        (error: unknown) => error instanceof BotComputerError && error.code === "start_failed",
+      );
+      await exposedEntered;
+
+      const firstPid = Number(readFileSync(pidFile, "utf8").trim());
+      process.kill(firstPid, "SIGKILL");
+      for (let attempt = 0; attempt < 100; attempt += 1) {
+        let alive = true;
+        try {
+          process.kill(firstPid, 0);
+        } catch {
+          alive = false;
+        }
+        if (!alive) break;
+        await new Promise((resolve) => setTimeout(resolve, 25));
+      }
+      await new Promise<void>((resolve) => setImmediate(resolve));
+
+      releaseExposed(false);
+      await pendingScreen;
+
+      assert.equal(attemptedPorts.length, 0, "dead startup tunnel port is never published to screen sessions");
+      assert.equal((await testHost.computer("ada"))?.state, "stopped");
+      assert.equal(testHost.runningConnection("ada"), undefined);
+      assert.equal(context.vmRunning(botComputerVmName("ada")), false, "VM stops when tunnel exits during startup");
+
+      const secondScreen = await sessions.screen("ada");
+      assert.ok(secondScreen);
+      assert.equal(attemptedPorts.length, 1);
+      assert.ok(firstPort && firstPort > 0);
+      assert.notEqual(attemptedPorts[0], firstPort, "subsequent call starts cleanly on a fresh tunnel port");
+      assert.equal((await testHost.computer("ada"))?.state, "running");
+      assert.equal(testHost.runningConnection("ada")?.vnc.port, attemptedPorts[0]);
+      await testHost.stop("ada", { reason: "person" });
+    },
+    {
+      image: linuxImage,
+      vncExposed: undefined,
+    },
+  );
+});
