@@ -1362,61 +1362,102 @@ test("settings persistence preserves future assistant fields and values", async 
   assert.equal(saved.settings.profileName, "After");
 });
 
-test("Model Pad placements, pins, recent models and metric survive a settings.json load and reload into a fresh store with invalid entries dropped", async (t) => {
+test("pins and recent models survive a settings.json load and reload into a fresh store with invalid entries dropped", async (t) => {
   const r = await roots(t);
-  const placement = { x: 0.25, y: 0.75, xSource: "user", ySource: "benchmark", yMetric: "intelligence" };
-  const measured = { x: 0, y: 0.5, xSource: "measured", ySource: "user" };
   await fs.writeFile(
     r.settingsFile,
     JSON.stringify({
       settings: {
-        modelPadPlacements: {
-          "openai::gpt": placement,
-          "openai::fast": measured,
-          "openai::measured-height": { ...placement, ySource: "measured" },
-          "openai::out-of-range": { ...placement, x: 1.5 },
-          "openai::legacy": { x: 0.5, y: 0.5, source: "user" },
-          "not-a-model-key": placement,
-        },
         pinnedModels: ["openai::gpt", "openai::gpt", 42, "bare-model", "google::gemini"],
         recentModels: ["google::gemini", "bare-model", "google::gemini", "p::1", "p::2", "p::3", "p::4"],
-        modelPadMetric: "agentic",
       },
     }),
     "utf-8",
   );
 
   const loaded = await stores(r).settings.load();
-  assert.deepEqual(loaded.settings.modelPadPlacements, {
-    "openai::gpt": placement,
-    "openai::fast": measured,
-  });
   assert.deepEqual(loaded.settings.pinnedModels, ["openai::gpt", "google::gemini"]);
   assert.deepEqual(loaded.settings.recentModels, ["google::gemini", "p::1", "p::2", "p::3", "p::4"]);
-  assert.equal(loaded.settings.modelPadMetric, "agentic");
 
   // Write the loaded document into a fresh store's settings.json and read it back.
   const target = await roots(t);
   await fs.writeFile(target.settingsFile, JSON.stringify(loaded), "utf-8");
   const reloaded = runtimeSettingsFrom((await stores(target).settings.load()).settings);
-  assert.deepEqual(reloaded.modelPadPlacements, {
-    "openai::gpt": placement,
-    "openai::fast": measured,
-  });
   assert.deepEqual(reloaded.pinnedModels, ["openai::gpt", "google::gemini"]);
   assert.deepEqual(reloaded.recentModels, ["google::gemini", "p::1", "p::2", "p::3", "p::4"]);
-  assert.equal(reloaded.modelPadMetric, "agentic");
 
   const wrongShapes = runtimeSettingsFrom({
-    modelPadPlacements: ["openai::gpt"],
     pinnedModels: { "openai::gpt": true },
     recentModels: "openai::gpt",
-    modelPadMetric: "speed",
   } as never);
-  assert.equal(wrongShapes.modelPadPlacements, undefined);
   assert.equal(wrongShapes.pinnedModels, undefined);
   assert.equal(wrongShapes.recentModels, undefined);
-  assert.equal(wrongShapes.modelPadMetric, undefined);
+});
+
+test("leftover Model Pad keys in settings.json load cleanly and are gone after the next save", async (t) => {
+  const r = await roots(t);
+  await fs.writeFile(
+    r.settingsFile,
+    JSON.stringify({
+      settings: {
+        profileName: "Before",
+        pinnedModels: ["openai::gpt"],
+        modelPadPlacements: {
+          "openai::gpt": { x: 0.25, y: 0.75, xSource: "user", ySource: "benchmark", yMetric: "coding" },
+          "not-a-model-key": "anything",
+        },
+        modelPadMetric: "agentic",
+      },
+    }),
+    "utf-8",
+  );
+
+  const bundle = stores(r);
+  const loaded = (await bundle.settings.load()).settings as Record<string, unknown>;
+  assert.equal("modelPadPlacements" in loaded, false);
+  assert.equal("modelPadMetric" in loaded, false);
+  assert.deepEqual(loaded.pinnedModels, ["openai::gpt"]);
+  assert.equal(loaded.profileName, "Before");
+  const runtime = runtimeSettingsFrom({ modelPadPlacements: [], modelPadMetric: 7 } as never);
+  assert.equal("modelPadPlacements" in runtime, false);
+  assert.equal("modelPadMetric" in runtime, false);
+
+  await bundle.settings.update((document) => {
+    document.settings.profileName = "After";
+  });
+  const saved = await readJson<{ settings: Record<string, unknown> }>(r.settingsFile);
+  assert.equal("modelPadPlacements" in saved.settings, false);
+  assert.equal("modelPadMetric" in saved.settings, false);
+  assert.equal(saved.settings.profileName, "After");
+  assert.deepEqual(saved.settings.pinnedModels, ["openai::gpt"]);
+});
+
+test("settings.json keeps a known new-chat level and drops an unknown one and any stray Agent Slider", async (t) => {
+  const r = await roots(t);
+  const slider = {
+    version: 1,
+    stops: [{ id: "a", label: "A" }, { id: "b", label: "B" }, { id: "c", label: "C" }],
+    homeStopId: "b",
+  };
+  await fs.writeFile(
+    r.settingsFile,
+    JSON.stringify({ settings: { lastModel: "gpt", lastThinkingLevel: "xhigh", agentSlider: slider } }),
+    "utf-8",
+  );
+  const loaded = await stores(r).settings.load();
+  assert.equal(loaded.settings.lastThinkingLevel, "xhigh");
+  assert.equal("agentSlider" in loaded.settings, false, "the slider's only home is the portable config");
+  assert.equal(runtimeSettingsFrom({ ...loaded.settings, agentSlider: slider } as never).agentSlider, undefined);
+
+  const target = await roots(t);
+  await fs.writeFile(
+    target.settingsFile,
+    JSON.stringify({ settings: { lastModel: "gpt", lastThinkingLevel: "turbo" } }),
+    "utf-8",
+  );
+  const unknown = await stores(target).settings.load();
+  assert.equal(unknown.settings.lastThinkingLevel, undefined);
+  assert.equal(unknown.settings.lastModel, "gpt");
 });
 
 test("a post-startup unsafe local edit cannot be erased by a workspace write", async (t) => {
@@ -1631,4 +1672,13 @@ test("runtime settings preserve valid Quick Chat preferences and drop invalid va
   } as never);
   assert.equal(invalid.quickChatDefaultPersistence, undefined);
   assert.equal(invalid.quickChatKeepOpenOnBlur, undefined);
+});
+
+test("runtime settings keep the Bot bubble switches only when they are booleans", () => {
+  const off = runtimeSettingsFrom({ botBubblesEnabled: false, botBubblesFloatOverApps: false } as never);
+  assert.equal(off.botBubblesEnabled, false);
+  assert.equal(off.botBubblesFloatOverApps, false);
+  const handEdited = runtimeSettingsFrom({ botBubblesEnabled: "no", botBubblesFloatOverApps: 0 } as never);
+  assert.equal(handEdited.botBubblesEnabled, undefined, "a non-boolean reads as unset, which means on");
+  assert.equal(handEdited.botBubblesFloatOverApps, undefined);
 });

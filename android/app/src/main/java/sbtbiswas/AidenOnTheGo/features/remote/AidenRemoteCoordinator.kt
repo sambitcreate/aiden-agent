@@ -163,6 +163,21 @@ internal suspend fun aidenRequestBotUxCapability(
     )
 }
 
+/**
+ * Revision 69: `approval:plain-words`, asked for alone after the revision-61
+ * opt-ins when the Mac lists it. The Mac adds the words only beside `approval:cards`, so a refusal
+ * leaves the typed card as it was.
+ */
+internal suspend fun aidenRequestApprovalPlainWords(
+    client: AidenRemoteClient, server: AidenServer, installation: AidenInstallation,
+    stillCurrent: () -> Boolean = { true }
+): AidenSoloCapabilityNegotiation? = aidenRequestCapabilitiesAlone(
+    if (aidenShouldRequestSoloCapability(AidenRemoteCapability.APPROVAL_PLAIN_WORDS, server, installation)) {
+        listOf(AidenRemoteCapability.APPROVAL_PLAIN_WORDS)
+    } else emptyList(),
+    client, stillCurrent
+)
+
 internal fun aidenShouldRequestBotAccessRequests(server: AidenServer, installation: AidenInstallation): Boolean =
     aidenShouldRequestSoloCapability(AidenRemoteCapability.BOT_ACCESS_REQUESTS, server, installation)
 
@@ -211,6 +226,13 @@ internal fun aidenShouldRequestChatContinueInNewChat(server: AidenServer, instal
  */
 internal fun aidenShouldRequestStreamSnapshotReasons(server: AidenServer, installation: AidenInstallation): Boolean =
     aidenShouldRequestSoloCapability(AidenRemoteCapability.STREAM_SNAPSHOT_REASONS, server, installation)
+
+/**
+ * Revision 68: a Mac that offers `bot:needs-you` in `serverCapabilities` is asked for it alone
+ * after `stream:snapshot-reasons`, unless [installation] already holds it.
+ */
+internal fun aidenShouldRequestBotNeedsYou(server: AidenServer, installation: AidenInstallation): Boolean =
+    aidenShouldRequestSoloCapability(AidenRemoteCapability.BOT_NEEDS_YOU, server, installation)
 
 private fun aidenShouldRequestSoloCapability(
     capability: AidenRemoteCapability,
@@ -399,6 +421,24 @@ internal suspend fun aidenRequestStreamSnapshotReasons(
     aidenRequestCapabilitiesAlone(
         if (aidenShouldRequestStreamSnapshotReasons(server, installation)) {
             listOf(AidenRemoteCapability.STREAM_SNAPSHOT_REASONS)
+        } else emptyList(),
+        client,
+        stillCurrent
+    )
+
+/**
+ * Revision 68: asks [server] for `bot:needs-you` alone. A Mac that refuses it (400 or 404) leaves
+ * the pairing as it was; its Bot list then never says a Bot needs the person.
+ */
+internal suspend fun aidenRequestBotNeedsYou(
+    client: AidenRemoteClient,
+    server: AidenServer,
+    installation: AidenInstallation,
+    stillCurrent: () -> Boolean = { true }
+): AidenSoloCapabilityNegotiation? =
+    aidenRequestCapabilitiesAlone(
+        if (aidenShouldRequestBotNeedsYou(server, installation)) {
+            listOf(AidenRemoteCapability.BOT_NEEDS_YOU)
         } else emptyList(),
         client,
         stillCurrent
@@ -828,10 +868,18 @@ class AidenRemoteCoordinator(
                     server = continueServer,
                     request = ::aidenRequestStreamSnapshotReasons
                 )
+                // Revision 68: `bot:needs-you` goes alone too.
+                val needsYouServer = negotiateSoloCapability(
+                    generation = generation,
+                    installation = installation,
+                    client = newClient,
+                    server = snapshotReasonsServer,
+                    request = ::aidenRequestBotNeedsYou
+                )
                 // Revision 59: `bot:watches` goes alone, without another feature token.
                 val watchesServer = negotiateSoloCapability(
                     generation = generation, installation = installation, client = newClient,
-                    server = snapshotReasonsServer, request = ::aidenRequestBotWatches
+                    server = needsYouServer, request = ::aidenRequestBotWatches
                 )
                 val openWorkServer = negotiateSoloCapability(generation = generation, installation = installation,
                     client = newClient, server = watchesServer, request = ::aidenRequestBotOpenWork)
@@ -853,6 +901,8 @@ class AidenRemoteCoordinator(
                         aidenRequestBotUxCapability(capability, c, s, i, current)
                     }
                 }
+                // Revision 69: the command's plain words, alone, after the card itself.
+                negotiatedServer = negotiateSoloCapability(generation, installation, newClient, negotiatedServer, ::aidenRequestApprovalPlainWords)
                 if (!isCurrent(generation, installation.id, newClient)) return@launch
                 installationStore.updateServerCapabilities(
                     instanceId = installation.instanceId,

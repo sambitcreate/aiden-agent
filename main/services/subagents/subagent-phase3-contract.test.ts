@@ -35,7 +35,7 @@ test("live child snapshots are durable before owner-bound renderer delivery", as
   assert.ok(prepare >= 0);
   assert.ok(persist >= 0);
   assert.ok(notify > persist);
-  assert.match(llm, /await subagentSupervisor\?\.flush\(\);[\s\S]{0,500}chatStore\.appendMessage/u);
+  assert.match(llm, /await subagentSupervisor\?\.flush\([^)]*\);[\s\S]{0,500}chatStore\.appendMessage/u);
 });
 
 test("historical inspector reads require a live document and matching chat owner", async () => {

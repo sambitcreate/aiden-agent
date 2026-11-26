@@ -25,7 +25,6 @@ import type { ModelInfo } from "./types.js";
 export const OPENAI_CODEX_PROVIDER_ID = "openai-codex";
 export const OPENAI_CODEX_PROVIDER_LABEL = "ChatGPT / Codex";
 export const OPENAI_CODEX_BASE_URL = "https://chatgpt.com/backend-api";
-export const OPENAI_CODEX_DEFAULT_MODEL = "gpt-5.4";
 
 export type CodexRuntimeErrorCode =
   | "model_unavailable"

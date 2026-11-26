@@ -33,6 +33,7 @@ import { BotPanelActivity } from "./bot-panel-activity";
 import { BOT_PANEL_ID, BOT_PANEL_TABS, BOT_PANEL_WIDTH_KEY, useBotPanel, type BotPanelTab } from "./bot-panel-context";
 import { BotPanelFiles } from "./bot-panel-files";
 import { BotPanelHandoff } from "./bot-panel-handoff";
+import { useBotChatHome } from "./bot-bubble-card";
 import { BotRoutines } from "./bot-routines";
 import { BotOpenWorkPanelRow } from "./bot-open-work-page";
 
@@ -58,8 +59,9 @@ const NO_ENTRIES: readonly BotTranscriptEntry[] = [];
  * re-renders this subtree and not the rest of the panel. It shares the Bot's
  * one live subscription with the chat beside it.
  */
-function ActivityTab({ botId, botName }: { botId: string; botName: string }) {
-  const live = useBotLive(botId);
+function ActivityTab({ botId, botName, liveHere }: { botId: string; botName: string; liveHere: boolean }) {
+  // A bubbled Bot's feed belongs to its bubble: this window must not subscribe.
+  const live = useBotLive(liveHere ? botId : undefined);
   // Always the full log: Show tool activity (Appearance) shapes only the in-chat
   // recap, and opening this tab is the person asking to see every step.
   return (
@@ -69,7 +71,7 @@ function ActivityTab({ botId, botName }: { botId: string; botName: string }) {
       botName={botName}
       entries={live.snapshot?.entries ?? NO_ENTRIES}
       running={live.snapshot?.state.kind === "running"}
-      loading={live.snapshot === null && !live.failed}
+      loading={liveHere && live.snapshot === null && !live.failed}
       failed={live.snapshot === null && live.failed}
       onRetry={live.reload}
     />
@@ -84,6 +86,8 @@ function ActivityTab({ botId, botName }: { botId: string; botName: string }) {
 export function BotWorkbench({ botId, children }: React.PropsWithChildren<{ botId: string }>) {
   const { open, tab: storedTab, fileRequest, sectionRequest, focusRequest, close, consumeFocusRequest, setTab, reveal, show } = useBotPanel();
   const bot = useBot(botId).data ?? null;
+  // While the Bot is bubbled its chat lives in the bubble: nothing here reads its live feed.
+  const { liveHere } = useBotChatHome(botId);
   const revealBrowser = React.useCallback(() => reveal("browser"), [reveal]);
   const revealComputer = React.useCallback(() => reveal("computer"), [reveal]);
   const browser = useBotBrowserPresence(botId, revealBrowser);
@@ -168,7 +172,7 @@ export function BotWorkbench({ botId, children }: React.PropsWithChildren<{ botI
     if (!bot) return null;
     switch (id) {
       case "activity":
-        return <ActivityTab botId={bot.id} botName={bot.name} />;
+        return <ActivityTab botId={bot.id} botName={bot.name} liveHere={liveHere} />;
       case "files":
         return <BotPanelFiles botId={bot.id} botName={bot.name} active={active} request={fileRequest} />;
       case "memory":
@@ -236,7 +240,7 @@ export function BotWorkbench({ botId, children }: React.PropsWithChildren<{ botI
 
   return (
     <div ref={containerRef} className="relative flex h-full min-h-0 w-full flex-1 overflow-clip">
-      {computer.computer ? (
+      {computer.computer && liveHere ? (
         // A computer sign-in the person holds (from a phone's Finish on your Mac, too) shows the computer,
         // unless it already floats over the chat.
         <BotComputerSignInReveal
@@ -272,7 +276,7 @@ export function BotWorkbench({ botId, children }: React.PropsWithChildren<{ botI
         views={views}
         selectedViewId={tab}
         // Floating, the panel covers the hand-off card above the composer; it carries the card's buttons instead.
-        notice={open && !inline && bot ? <BotPanelHandoff botId={bot.id} name={bot.name} avatar={bot.avatar} /> : null}
+        notice={open && !inline && bot && liveHere ? <BotPanelHandoff botId={bot.id} name={bot.name} avatar={bot.avatar} /> : null}
         activeTabRef={activeTabRef}
         tabs={tabs}
         idPrefix={BOT_PANEL_ID}

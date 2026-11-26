@@ -16,6 +16,7 @@ import kotlinx.coroutines.flow.update
 import sbtbiswas.AidenOnTheGo.models.*
 import sbtbiswas.AidenOnTheGo.protocol.AidenRemoteClientException
 import sbtbiswas.AidenOnTheGo.protocol.AidenRemoteErrorCode
+import sbtbiswas.AidenOnTheGo.protocol.AidenRemoteFailurePolicy
 import java.util.UUID
 
 interface AidenBotWatchTransport {
@@ -219,11 +220,15 @@ class AidenBotWatchController(private val transport: AidenBotWatchTransport, pri
         } catch (e: Exception) {
             val server = e as? AidenRemoteClientException.Server
             val conflict = server?.body?.code == AidenRemoteErrorCode.REVISION_CONFLICT
-            val definite = conflict || (server != null && server.statusCode in listOf(400, 401, 403, 404, 422) &&
-                server.body.code !in listOf(AidenRemoteErrorCode.IDEMPOTENCY_IN_FLIGHT, AidenRemoteErrorCode.IDEMPOTENCY_CONFLICT))
+            val settlement = AidenDurablePendingMutation.settleFailure(
+                error = e,
+                previouslyUnknown = wasPending,
+                policy = AidenRemoteFailurePolicy.BEFORE_EFFECT_REFUSAL
+            )
+            val definite = settlement == AidenDurableFailureSettlement.CLEAR_DEFINITE
             val permissionDenied = server?.statusCode in listOf(401, 403)
             // A later guard failure cannot establish whether the original lost request ran.
-            val cleared = !wasPending && definite && persist(attempt = null)
+            val cleared = definite && persist(attempt = null)
             if (cleared) pending = null
             _state.update { it.copy(pending = pending != null, error = when {
                 permissionDenied -> AidenBotWatchError.PERMISSION

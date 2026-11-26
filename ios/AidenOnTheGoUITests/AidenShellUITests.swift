@@ -1069,9 +1069,12 @@ final class AidenShellUITests: XCTestCase {
         row.tap()
         XCTAssertTrue(app.buttons["Send message"].firstMatch.waitForExistence(timeout: 10), "The chat did not open")
 
+        // The title capsule's status line names it.
+        let title = app.buttons["chat-title-capsule"].firstMatch
+        XCTAssertTrue(title.waitForExistence(timeout: 5), "No title capsule")
         XCTAssertTrue(
-            app.navigationBars.staticTexts["Studio Mac"].waitForExistence(timeout: 5),
-            "The toolbar doesn't name the machine"
+            (title.value as? String)?.contains("Studio Mac") == true,
+            "The toolbar doesn't name the machine: \(String(describing: title.value))"
         )
     }
 

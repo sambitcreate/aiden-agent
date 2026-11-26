@@ -56,6 +56,29 @@ final class AidenChatViewModel {
     /// Set once the user picks a model in this chat; from then on the
     /// in-session choice wins over the remembered per-host preference.
     @ObservationIgnored private var hasExplicitModelSelection = false
+    /// A pick made on this phone that the Mac hasn't accepted yet. Only then
+    /// does a send ask the Mac to keep its level as the chat's own.
+    @ObservationIgnored private var hasUnsentModelPick = false
+    @ObservationIgnored private var resolvedWithAgentSlider = false
+    /// Counts the person's model picks in this chat, so a send can tell
+    /// whether one was made while it was out.
+    @ObservationIgnored private var modelPickGeneration = 0
+    /// The pick count when the saved send with this key was first built, so
+    /// its retry still loses to a pick made while it waited. A send loaded
+    /// from disk has none here and counts as older than every pick made since
+    /// the chat opened.
+    @ObservationIgnored private var sendPickGeneration: (key: UUID, generation: Int)?
+    /// Whether this chat's unsent pick came back from disk when the chat
+    /// opened. Such a pick postdates any saved send that started where new
+    /// chats start (a chat pick exists only once the chat has messages, and
+    /// that send was built with none of the person's), so it beats that
+    /// send's hold. A send that carried a pick was built after it, and its
+    /// own pick is what comes back, so the hold still keeps it.
+    @ObservationIgnored private var restoredChatPick = false
+    /// The send being built or out right now, from the moment its optimistic
+    /// message fills the chat until it returns. A catalog landing meanwhile
+    /// resolves the chip from this send's intent, not from that message.
+    @ObservationIgnored private var sendInFlight: AidenChatDraftStore.PendingSend?
     let hapticScope: UUID
     @ObservationIgnored private var deletionLifetime: AidenChatCache.ChatLifetime?
     // Deterministic test seam immediately before consumer admission.
@@ -89,11 +112,11 @@ final class AidenChatViewModel {
             guard let activeStreamID else { return }
             // This device's own run is accounted for, so the roster announcing
             // its turn later never re-reads the transcript for it.
-            foreignRunAccountedRunId = activeStreamID
+            foreignRunObserver.accountedRunId = activeStreamID
             // An owned stream supersedes observation of a foreign run. Its
             // replay rebuilds the reply, so a live run's copy is dropped.
-            if foreignRunTask != nil || foreignRun != nil {
-                let replacesLiveRun = foreignRunIsLive
+            if foreignRunObserver.isLookingForRun || foreignRunObserver.projection != nil {
+                let replacesLiveRun = foreignRunObserver.isLive
                 stopForeignRunObservation()
                 if replacesLiveRun {
                     replaceLiveText("")
@@ -104,38 +127,24 @@ final class AidenChatViewModel {
             }
         }
     }
-    @ObservationIgnored var foreignRun: AidenForeignRunProjection?
-    @ObservationIgnored var foreignRunIsLive = false
-    @ObservationIgnored var foreignRunTask: Task<Void, Never>?
-    @ObservationIgnored var foreignRunLookupIsProbes = false
-    @ObservationIgnored var foreignRunSettleTask: Task<Void, Never>?
-    @ObservationIgnored var foreignRunGeneration: UInt64 = 0
-    /// Bounded transcript recovery after a foreign run ended but its re-read failed.
-    @ObservationIgnored var foreignRunReconcileTask: Task<Void, Never>?
-    /// The last run this chat showed live or found already finished, so a
-    /// later attach can tell a new run from one the transcript already holds.
-    @ObservationIgnored var foreignRunAccountedRunId: String?
-    /// How many foreign runs went live; the probe resets its backoff on one.
-    @ObservationIgnored var foreignRunsShownLive = 0
+    @ObservationIgnored let foreignRunObserver = AidenForeignRunObserver()
+    var foreignRun: AidenForeignRunProjection? { foreignRunObserver.projection }
+    var foreignRunIsLive: Bool { foreignRunObserver.isLive }
+    var foreignRunTask: Task<Void, Never>? { foreignRunObserver.attachTask }
     /// The newest turn the agent roster has reported for this chat.
     @ObservationIgnored private var lastRosterTurnId: String?
-    /// A turn the roster announced while another lookup was in flight, or
-    /// while this phone restored its own stream. That lookup may have been
-    /// answered before the turn's run registered, so the turn is looked up
-    /// once it, or the restoration, ends.
-    @ObservationIgnored var turnAwaitingLookup: ForeignRunAttachReason?
     /// The turn this phone last streamed itself. The roster announcing it,
     /// even after its stream finished, is not another device's run.
     @ObservationIgnored private var lastLocalTurnId: String?
-    @ObservationIgnored var foreignRunProbeTask: Task<Void, Never>?
-    @ObservationIgnored var foreignRunProbeGeneration: UInt64 = 0
     /// Waits between foreground probes for a foreign run; tests shorten it.
-    @ObservationIgnored var foreignRunProbeSleep: @Sendable (Duration) async throws -> Void = {
-        try await Task.sleep(for: $0)
+    var foreignRunProbeSleep: @Sendable (Duration) async throws -> Void {
+        get { foreignRunObserver.probeSleep }
+        set { foreignRunObserver.probeSleep = newValue }
     }
     /// Waits before looking again for an announced run; tests shorten it.
-    @ObservationIgnored var announcedRunRetrySleep: @Sendable (Duration) async throws -> Void = {
-        try await Task.sleep(for: $0)
+    var announcedRunRetrySleep: @Sendable (Duration) async throws -> Void {
+        get { foreignRunObserver.announcedRunRetrySleep }
+        set { foreignRunObserver.announcedRunRetrySleep = newValue }
     }
     var isRestoringStream = false {
         didSet {
@@ -147,112 +156,60 @@ final class AidenChatViewModel {
     @ObservationIgnored var transcriptGeneration: UInt64 = 0
     @ObservationIgnored private var recoveryWarning: String?
     @ObservationIgnored private let networkPath: AidenNetworkPathSource?
-    @ObservationIgnored private var turnAttempts = AidenTurnAttemptTracker()
-    private(set) var pendingSend: AidenChatDraftStore.PendingSend?
-    private(set) var sendRecoveryError: String?
+    let pendingSendCoordinator: AidenPendingSendCoordinator
+    var pendingSend: AidenChatDraftStore.PendingSend? { pendingSendCoordinator.pendingSend }
+    var sendRecoveryError: String? { pendingSendCoordinator.sendRecoveryError }
     /// A send the Mac refused with a retryable 429 is sent again on its own
     /// after the server's delay, this many times in a row before Retry is
     /// left to the person.
-    static let maxRateLimitedSendRetries = 3
-    @ObservationIgnored private var rateLimitedSendRetries = 0
-    @ObservationIgnored private var rateLimitedSendRetryTask: Task<Void, Never>?
+    static let maxRateLimitedSendRetries = AidenPendingSendCoordinator.maxRateLimitedSendRetries
     /// Waits out a retryable 429 before sending again; tests shorten it.
-    @ObservationIgnored var rateLimitedSendRetrySleep: @Sendable (Duration) async throws -> Void = {
-        try await Task.sleep(for: $0)
+    var rateLimitedSendRetrySleep: @Sendable (Duration) async throws -> Void {
+        get { pendingSendCoordinator.rateLimitedSendRetrySleep }
+        set { pendingSendCoordinator.rateLimitedSendRetrySleep = newValue }
     }
     /// The Mac was busy and the saved send will go out again on its own.
-    private(set) var isWaitingToRetryRateLimitedSend = false
+    var isWaitingToRetryRateLimitedSend: Bool { pendingSendCoordinator.isWaitingToRetryRateLimitedSend }
     /// The Mac kept refusing the saved send with a retryable 429 until the
     /// automatic resends ran out. Nothing was appended, so Retry is safe.
-    private(set) var isPendingSendRefusedBecauseBusy = false
+    var isPendingSendRefusedBecauseBusy: Bool { pendingSendCoordinator.isPendingSendRefusedBecauseBusy }
     var canRetrySend: Bool {
-        pendingSend?.canRetry() == true && isConnected && coordinator.isLive(owner) && !isStarting && !isSubmittingRunInput && !isRestoringStream && (pendingSend?.streamId != nil || (activeStreamID == nil && !isStreaming))
+        pendingSendCoordinator.canRetry(
+            inputs: AidenPendingSendCoordinator.RetryEligibilityInputs(
+                isConnected: isConnected,
+                isOwnerLive: coordinator.isLive(owner),
+                isStarting: isStarting,
+                isSubmittingRunInput: isSubmittingRunInput,
+                isRestoringStream: isRestoringStream,
+                hasActiveStream: activeStreamID != nil,
+                isStreaming: isStreaming
+            )
+        )
     }
     var sendRecoveryMessage: String? {
-        if let sendRecoveryError { return sendRecoveryError }
-        guard let pendingSend, !isStarting, !isSubmittingRunInput else { return nil }
-        if isWaitingToRetryRateLimitedSend {
-            return "Aiden Agent is busy. Your message will be sent again in a moment."
-        }
-        if isPendingSendRefusedBecauseBusy, pendingSend.canRetry() {
-            return "Aiden Agent is still busy. Your message wasn’t sent; try again in a moment."
-        }
-        return pendingSend.canRetry()
-            ? "Couldn’t confirm delivery. Retry uses the same saved request within its safe retry window."
-            : "Couldn’t confirm delivery. The retry window has ended. Check the conversation on your computer before sending another message."
+        pendingSendCoordinator.recoveryMessage(
+            isStarting: isStarting,
+            isSubmittingRunInput: isSubmittingRunInput
+        )
     }
     func discardPendingSend() async {
         guard !isStarting, !isSubmittingRunInput, let session = draftSession else { return }
-        cancelRateLimitedSendRetry()
-        rateLimitedSendRetries = 0
         do {
-            try await draftStore.savePendingSend(nil, session: session)
-            pendingSend = nil
-            sendRecoveryError = nil
-            turnAttempts.reset()
-        } catch { presentedError = error.localizedDescription }
-    }
-
-    private func cancelRateLimitedSendRetry() {
-        rateLimitedSendRetryTask?.cancel()
-        rateLimitedSendRetryTask = nil
-        isWaitingToRetryRateLimitedSend = false
-        isPendingSendRefusedBecauseBusy = false
-    }
-
-    /// The Mac refused `attempt` with a retryable 429 before running it, and
-    /// settled its Idempotency-Key as rejected, so that key cannot be sent
-    /// again. The same request is saved again under a fresh key
-    /// and sent once the server's delay has passed. Returns `false` when the
-    /// fresh attempt could not be saved, leaving the failure terminal.
-    private func scheduleRateLimitedSendRetry(
-        replacing attempt: AidenChatDraftStore.PendingSend,
-        error: AidenRemoteClientError,
-        session: AidenChatDraftStore.Session,
-        context: AidenRemoteRequestContext
-    ) async -> Bool {
-        await draftStore.settlePendingSend(key: attempt.key, session: session)
-        turnAttempts.reset()
-        let fresh = AidenChatDraftStore.PendingSend(
-            deviceId: attempt.deviceId,
-            request: attempt.request,
-            key: turnAttempts.key(for: attempt.request),
-            createdAt: Date(),
-            attachments: attempt.attachments
-        )
-        do {
-            try await draftStore.savePendingSend(fresh, session: session)
+            try await pendingSendCoordinator.discard(session: session)
+            // The chip may have shown what the dismissed send meant to keep;
+            // with it gone the chat follows its own model and level again.
+            resolveModelSelection()
         } catch {
-            turnAttempts.reset()
-            return false
+            presentedError = error.localizedDescription
         }
-        pendingSend = fresh
-        // The resend belongs to the pairing that authorized this message; a
-        // re-pair while the record was being saved leaves Retry to the person.
-        guard coordinator.isLive(context), rateLimitedSendRetries < Self.maxRateLimitedSendRetries else {
-            isPendingSendRefusedBecauseBusy = true
-            return true
-        }
-        let delay: Duration = error.serverRetryAfterSeconds.map { .seconds($0) }
-            ?? .milliseconds(AidenTerminalReconciliation.retryDelayMilliseconds(attempt: rateLimitedSendRetries))
-        rateLimitedSendRetries += 1
-        rateLimitedSendRetryTask?.cancel()
-        isWaitingToRetryRateLimitedSend = true
-        let sleep = rateLimitedSendRetrySleep
-        let key = fresh.key
-        rateLimitedSendRetryTask = Task { [weak self] in
-            do { try await sleep(delay) } catch { return }
-            guard let self, !Task.isCancelled, self.pendingSend?.key == key else { return }
-            self.rateLimitedSendRetryTask = nil
-            self.isWaitingToRetryRateLimitedSend = false
-            await self.send(retry: true, automatic: true, authority: context)
-        }
-        return true
     }
+    @ObservationIgnored var mutationSubMachines = AidenChatMutationSubMachines()
     /// The fork request whose outcome is still unknown, replayed with the
     /// same Idempotency-Key so a lost response never yields a second fork.
-    @ObservationIgnored var forkAttempt: AidenChatForkAttempt?
-    @ObservationIgnored private var continueInNewChatAttempt: AidenContinueInNewChatAttempt?
+    var forkAttempt: AidenChatForkAttempt? {
+        get { mutationSubMachines.forkAttempt.retained }
+        set { mutationSubMachines.forkAttempt.retained = newValue }
+    }
     @ObservationIgnored private var draftSession: AidenChatDraftStore.Session?
     @ObservationIgnored private var draftPersistenceTask: Task<Void, Never>?
     @ObservationIgnored private var suppressesDraftPersistence = false
@@ -283,16 +240,9 @@ final class AidenChatViewModel {
     /// the Mac. Shown only while `offersNewWorktree`.
     var startsInNewWorktree = false
     /// The Mac is making the worktree; the message waits above a Cancel.
-    private(set) var isSettingUpWorktree = false
+    var isSettingUpWorktree: Bool { mutationSubMachines.worktreeSetup.isSettingUp }
     /// What a `git:read` branch list showed for this chat's workspace, if read.
     private(set) var workspaceHasCommits: Bool?
-    @ObservationIgnored private var worktreeSetupTask: Task<AidenChatNewWorktree, Error>?
-    /// Cancel was pressed during this setup. A task that already finished
-    /// ignores `cancel()`, so the press is kept here too.
-    @ObservationIgnored private var worktreeSetupCanceled = false
-    /// One key per chat and message, so a retry after a lost reply finds the
-    /// worktree the Mac already made instead of failing on the moved chat.
-    @ObservationIgnored private var worktreeAttempt: (text: String, key: UUID)?
     /// The busy send pill's mode. Resets to Queue when the run ends.
     private(set) var runInputMode: AidenStreamInputMode = .queue
     var streamState: AidenStreamState? {
@@ -361,8 +311,6 @@ final class AidenChatViewModel {
     func renderID(forMessageID id: String) -> String {
         messageRenderIDs[id] ?? id
     }
-    private var approvalSnapshotGeneration: UInt64 = 0
-    private var approvalSnapshotInFlight: (streamID: String, context: AidenRemoteRequestContext, approval: AidenPendingApproval?, state: AidenStreamState?)?
     private(set) var isRenaming = false
     var pendingApproval: AidenPendingApproval? {
         // A card back on screen (a refusal, or the next request) replaces the answered line.
@@ -371,7 +319,6 @@ final class AidenChatViewModel {
     /// Revision 61: the tapped button, whose `answered` line shows at once in
     /// the card's place until the Mac confirms or the answer fails.
     private(set) var approvalAnsweredButton: AidenApprovalCardButton?
-    private var questionSnapshotGeneration: UInt64 = 0
     var pendingQuestion: AidenPendingQuestion?
     var isRespondingToQuestion = false
     var isRespondingToApproval = false
@@ -425,6 +372,12 @@ final class AidenChatViewModel {
     var selectedProviderId: String?
     var selectedModelId: String?
     var selectedThinkingLevel: String?
+    /// The Agent Slider sheet. Kept here, with the shell-owned model, so an
+    /// iPhone Duo fold that rebuilds the chat's views opens it again.
+    var agentSliderPresentation = AidenAgentSliderPresentationState()
+    /// The stop the person last put this chat on, by id. Two stops can name
+    /// the same model and level; this keeps the chat on the one they chose.
+    var agentSliderChosenStopId: String?
     var presentedError: String?
 
     var isReadOnlyFixture: Bool {
@@ -477,6 +430,11 @@ final class AidenChatViewModel {
 
     private var ownerConnection: AidenHostConnection? {
         isReadOnlyFixture ? nil : coordinator.hosts.connection(for: owner.instanceId)
+    }
+
+    /// The owner Mac's name, as a summary Live Activity names it.
+    var ownerMachineName: String {
+        ownerConnection?.installation.name ?? String(localized: "your computer")
     }
 
     /// The owner's `/server` answer. Nil until that machine has connected,
@@ -535,6 +493,7 @@ final class AidenChatViewModel {
         self.chat = chat
         self.allowsMutations = allowsMutations
         self.draftStore = draftStore
+        self.pendingSendCoordinator = AidenPendingSendCoordinator(draftStore: draftStore)
         self.visualDocumentCache = visualDocumentCache
         self.modelPreferenceStore = modelPreferenceStore
         self.hapticScope = hapticScope
@@ -566,6 +525,7 @@ final class AidenChatViewModel {
         self.chat = chat
         allowsMutations = false
         draftStore = .shared
+        pendingSendCoordinator = AidenPendingSendCoordinator(draftStore: .shared)
         visualDocumentCache = .shared
         modelPreferenceStore = .shared
         hapticScope = UUID()
@@ -589,12 +549,6 @@ final class AidenChatViewModel {
         attachmentPreparationTask?.cancel()
         runInputReceiptTask?.cancel()
         uploadTask?.cancel()
-        foreignRunTask?.cancel()
-        foreignRunSettleTask?.cancel()
-        foreignRunReconcileTask?.cancel()
-        foreignRunProbeTask?.cancel()
-        rateLimitedSendRetryTask?.cancel()
-        worktreeSetupTask?.cancel()
         skillCatalogTask?.cancel()
         mentionAgentsTask?.cancel()
         mentionFilesTask?.cancel()
@@ -852,9 +806,7 @@ final class AidenChatViewModel {
     /// If the Mac finishes anyway, the chat is in the worktree next time it
     /// loads, still empty.
     func cancelWorktreeSetup() {
-        guard worktreeSetupTask != nil else { return }
-        worktreeSetupCanceled = true
-        worktreeSetupTask?.cancel()
+        mutationSubMachines.worktreeSetup.cancel()
     }
 
     var canSend: Bool {
@@ -898,7 +850,9 @@ final class AidenChatViewModel {
         }
     }
 
-    private var turnModelSelection: AidenChatModelSelection {
+    /// What the next turn sends. `send` reads it once, before any wait, so a
+    /// stop picked while the send is in flight never changes that send.
+    var turnModelSelection: AidenChatModelSelection {
         AidenChatModelAuthority.turnSelection(
             chat: chat,
             selectedProviderId: selectedProviderId,
@@ -994,7 +948,7 @@ final class AidenChatViewModel {
 
     /// Local run alert while the user is away; the notifier owns dedupe,
     /// permission timing, and the inactive-only / Quiet Open Chat policy.
-    private func alertRun(_ kind: AidenRunAlertKind, id: String) {
+    private func alertRun(_ kind: AidenRunAlertKind, id: String, detail: AidenRunAlertDetail? = nil) {
         let instanceID = instanceId
         let chatID = chat.id
         let title = chat.title
@@ -1006,7 +960,8 @@ final class AidenChatViewModel {
                 instanceID: instanceID,
                 chatID: chatID,
                 chatTitle: title,
-                isChatOnScreen: isChatOnScreen
+                isChatOnScreen: isChatOnScreen,
+                detail: detail
             )
         }
     }
@@ -1060,9 +1015,7 @@ final class AidenChatViewModel {
             let session = await draftStore.beginSession(instanceId: instanceId, chatId: chat.id)
             guard !isRemoved, coordinator.isLive(context) else { return }
             draftSession = session
-            isPendingSendRefusedBecauseBusy = false
-            do { pendingSend = try await draftStore.loadPendingSend(session: session, deviceId: context.deviceId) }
-            catch { sendRecoveryError = "The saved send could not be read. Check the conversation on your computer before dismissing it and sending again." }
+            await pendingSendCoordinator.load(session: session, deviceId: context.deviceId)
             if draft.isEmpty, pendingAttachments.isEmpty, !isPreparingAttachments, !isUploadingAttachment, !isStarting,
                let savedDraft = await draftStore.load(session: session) {
                 guard !isRemoved, coordinator.isLive(context), draftSession == session else { return }
@@ -1706,7 +1659,9 @@ final class AidenChatViewModel {
     /// chat alone until its next send, so reopening the chat still shows it and
     /// the model other chats start with never changes.
     private func rememberExplicitModelSelection() {
+        modelPickGeneration &+= 1
         hasExplicitModelSelection = true
+        hasUnsentModelPick = true
         guard !isReadOnlyFixture, !isRemoved, !chat.isBotChat,
               let context = liveOwner else { return }
         let selection = AidenChatModelSelection(
@@ -1758,8 +1713,7 @@ final class AidenChatViewModel {
     private func send(retry: Bool, automatic: Bool, authority: AidenRemoteRequestContext?) async {
         if !automatic {
             // A person's own send or Retry replaces a scheduled resend.
-            cancelRateLimitedSendRetry()
-            rateLimitedSendRetries = 0
+            pendingSendCoordinator.cancelAutomaticRetryForManualAction()
         }
         if retry, let mode = pendingSend?.inputMode { await submitRunInput(mode, retry: true); return }
         guard !isReadOnlyPresentation else { return }
@@ -1794,13 +1748,39 @@ final class AidenChatViewModel {
         let submittedAttachments = retryAttempt?.attachments ?? pendingAttachments
         let submittedSkill = selectedSkill
         let modelSelection = turnModelSelection
+        // A pick the person made here asks the Mac to keep the level as the
+        // chat's own, and so does a new chat's first send: the Mac stores no
+        // level when it creates a chat, so without it the chat would come back
+        // off the stop it started on. Any other send runs at that level for
+        // this turn only. Decided once, when the send is built: a retry keeps
+        // the answer its first attempt got, even if a refresh has filled the
+        // chat since.
+        let keepsSelection = retryAttempt.map { $0.keepsSelection == true }
+            ?? (!chat.isBotChat && (hasUnsentModelPick || chat.messages.isEmpty))
+        // What the send keeps: the pick it carries, or, with no pick made,
+        // where a new chat starts. Captured here, before the optimistic
+        // message fills the chat, and resolved against the catalog whenever
+        // it lands.
+        let startsWhereNewChatsStart = retryAttempt.map { $0.startsWhereNewChatsStart == true }
+            ?? (keepsSelection && !hasUnsentModelPick)
+        // Where new chats start, frozen now: a pick in another new chat can
+        // change the remembered choice while this send waits.
+        let newChatStart = retryAttempt.map(\.newChatStart)
+            ?? (startsWhereNewChatsStart && !isReadOnlyFixture ? modelPreferenceStore.selection(for: instanceId) : nil)
+        // A retry counts picks from when its send was first built, so a pick
+        // made while it waited still wins.
+        let pickGeneration = retryAttempt.map { retry in
+            sendPickGeneration.flatMap { $0.key == retry.key ? $0.generation : nil } ?? 0
+        } ?? modelPickGeneration
+        let savesSelection = agentSlider != nil && keepsSelection
         let request = retryAttempt?.request ?? AidenTurnRequestBuilder.make(
             text: text,
             providerId: modelSelection.providerId,
             modelId: modelSelection.modelId,
             thinkingLevel: modelSelection.thinkingLevel,
             attachments: submittedAttachments,
-            skill: submittedSkill.map(AidenSkillInvocation.init(entry:))
+            skill: submittedSkill.map(AidenSkillInvocation.init(entry:)),
+            saveSelection: savesSelection
         )
         let makesWorktree = retryAttempt == nil && startsInNewWorktree && offersNewWorktree
         let previousUpdatedAt = chat.updatedAt
@@ -1845,8 +1825,17 @@ final class AidenChatViewModel {
         chat.messages.append(optimisticMessage)
         chat.updatedAt = now
         streamState = .queued
-        let attempt = retryAttempt ?? AidenChatDraftStore.PendingSend(deviceId: context.deviceId, request: request,
-            key: turnAttempts.key(for: request), createdAt: Date(), attachments: submittedAttachments)
+        let attempt = retryAttempt ?? pendingSendCoordinator.makeTurnAttempt(
+            deviceId: context.deviceId,
+            request: request,
+            attachments: submittedAttachments,
+            keepsSelection: keepsSelection,
+            startsWhereNewChatsStart: startsWhereNewChatsStart,
+            newChatStart: newChatStart
+        )
+        sendPickGeneration = (attempt.key, pickGeneration)
+        sendInFlight = attempt
+        defer { if sendInFlight?.key == attempt.key { sendInFlight = nil } }
         let idempotencyKey = attempt.key
         /// Takes the message back out of the chat. A Cancel can come long after
         /// the send (New worktree waits on a fetch), so anything typed meanwhile
@@ -1868,9 +1857,7 @@ final class AidenChatViewModel {
         func returnToRevokedChat(told: Bool = false) async -> Bool {
             guard !isRemoved, coordinator.isRetained(context), told || isOwnerRevoked else { return false }
             restoreFailedSend()
-            if let session = draftSession { await draftStore.settlePendingSend(key: attempt.key, session: session) }
-            pendingSend = nil
-            isPendingSendRefusedBecauseBusy = false
+            await pendingSendCoordinator.clearAfterRevocation(key: attempt.key, session: draftSession)
             presentedError = AidenDockCopy.machineRevoked
             coordinator.haptics.play(.error, scope: hapticScope)
             return true
@@ -1879,47 +1866,31 @@ final class AidenChatViewModel {
             if makesWorktree {
                 // Revision 53: the Mac makes the worktree and moves this empty
                 // chat into it before the message is sent there.
-                let key = worktreeAttempt?.text == text ? worktreeAttempt!.key : UUID()
-                worktreeAttempt = (text, key)
                 let client = try coordinator.remoteClient(for: context)
                 let chatId = chat.id
                 let revision = chat.revision
-                let setup = Task {
-                    try await client.moveChatToNewWorktree(id: chatId, revision: revision, text: text, idempotencyKey: key)
-                }
-                worktreeSetupTask = setup
-                worktreeSetupCanceled = false
-                isSettingUpWorktree = true
-                defer {
-                    isSettingUpWorktree = false
-                    worktreeSetupTask = nil
-                }
-                let moved: AidenChatNewWorktree
-                do {
-                    moved = try await withTaskCancellationHandler {
-                        try await setup.value
-                    } onCancel: {
-                        setup.cancel()
+                let shouldContinue = try await mutationSubMachines.worktreeSetup.execute(
+                    text: text,
+                    operation: { key in
+                        try await client.moveChatToNewWorktree(id: chatId, revision: revision, text: text, idempotencyKey: key)
+                    },
+                    onMoved: { moved in
+                        guard !self.isRemoved, self.coordinator.isLive(context) else {
+                            _ = await returnToRevokedChat()
+                            return false
+                        }
+                        self.chat.workspaceId = moved.chat.workspaceId
+                        self.chat.revision = moved.chat.revision
+                        self.startsInNewWorktree = false
+                        // Only the selected machine's list can refresh. Another machine's
+                        // catches up the next time it is selected.
+                        if self.coordinator.defaultInstanceId == self.instanceId {
+                            Task { [weak self] in await self?.coordinator.refreshWorkspaces() }
+                        }
+                        return true
                     }
-                } catch {
-                    if AidenNewWorktreeRetry.spendsKey(error) { worktreeAttempt = nil }
-                    throw error
-                }
-                guard !isRemoved, coordinator.isLive(context) else {
-                    _ = await returnToRevokedChat()
-                    return
-                }
-                chat.workspaceId = moved.chat.workspaceId
-                chat.revision = moved.chat.revision
-                startsInNewWorktree = false
-                worktreeAttempt = nil
-                // Only the selected machine's list can refresh. Another machine's
-                // catches up the next time it is selected.
-                if coordinator.defaultInstanceId == instanceId {
-                    Task { await coordinator.refreshWorkspaces() }
-                }
-                // Canceled as the worktree arrived: the chat stays there, unsent.
-                if setup.isCancelled || worktreeSetupCanceled { throw CancellationError() }
+                )
+                guard shouldContinue else { return }
             }
             let session: AidenChatDraftStore.Session
             if let existing = draftSession { session = existing }
@@ -1927,21 +1898,37 @@ final class AidenChatViewModel {
                 session = await draftStore.beginSession(instanceId: instanceId, chatId: chat.id)
                 draftSession = session
             }
-            try await draftStore.savePendingSend(attempt, session: session)
+            try await pendingSendCoordinator.persistBeforeSend(attempt, session: session)
             guard !isRemoved, coordinator.isLive(context) else {
                 _ = await returnToRevokedChat()
                 return
             }
-            pendingSend = attempt
-            isPendingSendRefusedBecauseBusy = false
+            pendingSendCoordinator.adoptPersistedAttempt(attempt)
             guard attempt.canRetry(), coordinator.isLive(context) else { throw AidenRemoteClientError.invalidResponse }
             let response = try await coordinator.remoteClient(for: context).startTurn(
                 chatId: chat.id,
                 request: request,
                 idempotencyKey: idempotencyKey
             )
-            // The Mac now holds this pick as the chat's own model.
-            if !chat.isBotChat {
+            // A pick made after this send was built may name the very level the
+            // send carried. If the send couldn't ask the Mac to keep that
+            // level, the pick wasn't delivered: it stays the chat's unsent
+            // pick, so the next send asks. A pick counted in this session is
+            // newer when the count moved. A pick restored from disk is newer
+            // than a send that carried none of the person's: one that kept
+            // where new chats start, or a plain send that kept nothing. A send
+            // that carried a pick restores that same pick, so it isn't newer.
+            // A record from before `keepsSelection` was saved can't tell.
+            let pickPostdatesSend = modelPickGeneration != pickGeneration
+                || (restoredChatPick && (attempt.startsWhereNewChatsStart == true || attempt.keepsSelection == false))
+            let pickUndelivered = pickPostdatesSend && agentSlider != nil
+                && request.saveSelection != true && request.thinkingLevel != nil
+            // Otherwise the Mac now holds this pick as the chat's own model.
+            if !pickUndelivered, request.providerId == selectedProviderId, request.modelId == selectedModelId,
+               request.thinkingLevel == selectedThinkingLevel {
+                hasUnsentModelPick = false
+            }
+            if !chat.isBotChat, !pickUndelivered {
                 modelPreferenceStore.forgetChat(
                     for: context.instanceId,
                     chatID: chat.id,
@@ -1951,6 +1938,29 @@ final class AidenChatViewModel {
                         thinkingLevel: request.thinkingLevel
                     )
                 )
+            }
+            // A saved send can't change under its Idempotency-Key (the Mac
+            // refuses a different body for the same key), so a send built
+            // before the Mac granted the slider goes out without saveSelection
+            // and the Mac keeps no level. Hold what the send meant to keep as
+            // the chat's unsent pick instead, resolved from the send's own
+            // intent, not from the chat or the chip: the chat doesn't fall to
+            // Custom, and the next send asks the Mac to keep it. A pick the
+            // person made while this send was out wins.
+            if keepsSelection, agentSlider != nil, request.saveSelection != true, !chat.isBotChat,
+               !hasUnsentModelPick, modelPickGeneration == pickGeneration, !isRemoved,
+               !(restoredChatPick && attempt.startsWhereNewChatsStart == true),
+               let sent = keptSelection(for: attempt) {
+                selectedProviderId = sent.providerId
+                selectedModelId = sent.modelId
+                selectedThinkingLevel = sent.thinkingLevel
+                hasExplicitModelSelection = true
+                hasUnsentModelPick = true
+                // A Mac forgotten or re-paired while the send was out keeps
+                // nothing here.
+                if coordinator.isRetained(context) {
+                    modelPreferenceStore.rememberChat(sent, for: context.instanceId, chatID: chat.id)
+                }
             }
             guard !isRemoved else { return }
             for reference in submittedAttachments { ownedUploadReferences.removeValue(forKey: reference.id) }
@@ -2009,7 +2019,8 @@ final class AidenChatViewModel {
                     deviceID: context.deviceId,
                     chatID: chat.id,
                     title: chat.displayTitle,
-                    streamID: response.streamId
+                    streamID: response.streamId,
+                    machineName: ownerMachineName
                 )
             }
             accepted = accepted && cache.isChatWriteRetained(acceptedWriteToken, instanceId: instanceId, chatId: chat.id)
@@ -2025,10 +2036,7 @@ final class AidenChatViewModel {
                 return
             }
             guard !isRemoved, coordinator.isLive(context) else { return }
-            pendingSend = nil
-            isPendingSendRefusedBecauseBusy = false
-            turnAttempts.reset()
-            rateLimitedSendRetries = 0
+            pendingSendCoordinator.markAccepted(resetTurnAttempts: true)
             continueInNewChatRefusal = nil
             if chat.messages.contains(where: { $0.id == optimisticID }) {
                 messageRenderIDs[response.message.id] = optimisticID
@@ -2061,18 +2069,28 @@ final class AidenChatViewModel {
             restoreFailedSend()
             if let rateLimit = error as? AidenRemoteClientError, rateLimit.isRetryableRateLimit,
                let session = draftSession,
-               await scheduleRateLimitedSendRetry(replacing: attempt, error: rateLimit, session: session, context: context) {
+               await pendingSendCoordinator.scheduleRateLimitedSendRetry(
+                   replacing: attempt,
+                   error: rateLimit,
+                   session: session,
+                   isContextLive: { self.coordinator.isLive(context) },
+                   onReplaced: { freshKey in
+                       // The resend still loses to a pick made while it waited.
+                       if let carried = self.sendPickGeneration, carried.key == attempt.key {
+                           self.sendPickGeneration = (freshKey, carried.generation)
+                       }
+                   },
+                   onRetry: { [weak self] in
+                       await self?.send(retry: true, automatic: true, authority: context)
+                   }
+               ) {
                 // The Mac was only busy: keep the send and try it again.
                 return
             }
             if case AidenRemoteClientError.server(let status, let body) = error,
                AidenDraftSendReconciliation.refusalSettlesSend(status: status, code: body.code),
                let session = draftSession {
-                await draftStore.settlePendingSend(key: attempt.key, session: session)
-                pendingSend = nil
-                isPendingSendRefusedBecauseBusy = false
-                turnAttempts.reset()
-                rateLimitedSendRetries = 0
+                await pendingSendCoordinator.settleDefinitiveRefusal(key: attempt.key, session: session)
             }
             continueInNewChatRefusal = AidenContinueInNewChatRefusal(error: error)
             if pendingSend == nil { presentedError = error.localizedDescription }
@@ -2579,9 +2597,8 @@ final class AidenChatViewModel {
             else { session = await draftStore.beginSession(instanceId: instanceId, chatId: chat.id); draftSession = session }
             let pending = saved ?? AidenChatDraftStore.PendingSend(deviceId: context.deviceId, request: AidenTurnStart(text: text), key: key,
                 createdAt: Date(), attachments: [], streamId: streamID, inputMode: mode)
-            try await draftStore.savePendingSend(pending, session: session)
-            pendingSend = pending
-            isPendingSendRefusedBecauseBusy = false
+            try await pendingSendCoordinator.persistBeforeSend(pending, session: session)
+            pendingSendCoordinator.adoptPersistedAttempt(pending)
             guard pending.canRetry(), coordinator.isLive(context) else { throw AidenRemoteClientError.invalidResponse }
             let result = try await coordinator.remoteClient(for: context).submitStreamInput(
                 id: streamID,
@@ -2608,8 +2625,7 @@ final class AidenChatViewModel {
                 }
             }
             guard retained, !isRemoved, coordinator.isLive(context) else { return }
-            pendingSend = nil
-            isPendingSendRefusedBecauseBusy = false
+            pendingSendCoordinator.markAccepted(resetTurnAttempts: false)
             if lastRunInputAttempt == attempt { lastRunInputAttempt = nil }
             if AidenRunInputPresentation.consumesDraft(result) {
                 if retry { consumeRunInputDraft(text) } else { persistDraftNow() }
@@ -2638,9 +2654,7 @@ final class AidenChatViewModel {
                 } else {
                     restoreDraft()
                 }
-                if let session = draftSession { await draftStore.settlePendingSend(key: key, session: session) }
-                pendingSend = nil
-                isPendingSendRefusedBecauseBusy = false
+                await pendingSendCoordinator.clearAfterRevocation(key: key, session: draftSession)
                 if lastRunInputAttempt == attempt { lastRunInputAttempt = nil }
                 presentedError = AidenDockCopy.machineRevoked
                 coordinator.haptics.play(.error, scope: hapticScope)
@@ -2921,7 +2935,58 @@ final class AidenChatViewModel {
         }
     }
 
+    /// What a send asked the chat to keep, resolved against the catalog the
+    /// phone holds now. Normally the provider, model and level the send
+    /// named. A send built before `GET /models` answered names the chat's
+    /// model with no level only because the phone knew none; if it carried
+    /// no pick of the person's, it meant where new chats started on this
+    /// phone, so that is the new-chat choice frozen into the send, never the
+    /// chat's current state, the remembered choice now or the Mac's
+    /// `defaults`. Nil when the send froze no choice, when that choice lands
+    /// on another model or on no stop, so nothing in Custom is held, and once
+    /// the Mac has given the chat a level or moved it to another model: the
+    /// chat is then its own.
+    private func keptSelection(for attempt: AidenChatDraftStore.PendingSend) -> AidenChatModelSelection? {
+        guard attempt.keepsSelection == true, !chat.isBotChat, let slider = agentSlider, let catalog,
+              let providerId = attempt.request.providerId,
+              let modelId = attempt.request.modelId else { return nil }
+        let sent = AidenChatModelSelection(providerId: providerId, modelId: modelId, thinkingLevel: attempt.request.thinkingLevel)
+        let model = catalog.providers.first { $0.id == providerId }?.models.first { $0.id == modelId }
+        if sent.thinkingLevel != nil || (model != nil && model?.thinkingLevels?.isEmpty != false) {
+            return sent
+        }
+        // With no choice of the phone's frozen into the send, the send carried
+        // nothing and the Mac decides the level when it runs the turn, so the
+        // chat's own metadata is the authority: nothing is held, and the
+        // Mac's `defaults`, which can change while the send waits, are never
+        // read here.
+        guard attempt.startsWhereNewChatsStart == true, chat.thinkingLevel == nil,
+              chat.providerId == nil || chat.providerId == providerId,
+              chat.modelId == nil || chat.modelId == modelId,
+              let start = AidenChatModelAuthority.rememberedSelection(attempt.newChatStart, in: catalog, exactLevels: true),
+              start.providerId == providerId, start.modelId == modelId,
+              AidenAgentSliderState(slider: slider, catalog: catalog, selection: start).currentStop != nil
+        else { return nil }
+        return start
+    }
+
+    /// Re-resolves the chat's selection when the slider comes or goes, for
+    /// example when `/server` grants `chat:agent-slider` after the catalog
+    /// loaded: with the slider, a chat runs at exactly its own level.
+    func reconcileAgentSliderAvailability() {
+        guard (agentSlider != nil) != resolvedWithAgentSlider else { return }
+        resolveModelSelection()
+    }
+
     private func resolveModelSelection() {
+        // The slider came or went since the last resolution, whichever refresh
+        // brought it. The level the model menu filled in was derived, not
+        // chosen: resolve afresh so the chat lands on the slider's terms.
+        if catalog != nil, (agentSlider != nil) != resolvedWithAgentSlider, !hasExplicitModelSelection {
+            selectedProviderId = nil
+            selectedModelId = nil
+            selectedThinkingLevel = nil
+        }
         // An unsent pick made in this chat before it was last closed wins
         // like a pick made now.
         if !hasExplicitModelSelection, !isReadOnlyFixture, !chat.isBotChat, !chat.messages.isEmpty,
@@ -2930,8 +2995,10 @@ final class AidenChatViewModel {
             selectedModelId = pick.modelId
             selectedThinkingLevel = pick.thinkingLevel
             hasExplicitModelSelection = true
+            hasUnsentModelPick = true
+            restoredChatPick = true
         }
-        let selection = AidenChatModelAuthority.resolvedSelection(
+        var selection = AidenChatModelAuthority.resolvedSelection(
             chat: chat,
             catalog: catalog,
             selectedProviderId: selectedProviderId,
@@ -2940,8 +3007,20 @@ final class AidenChatViewModel {
             remembered: hasExplicitModelSelection || isReadOnlyFixture || chat.isBotChat
                 ? nil
                 : modelPreferenceStore.selection(for: instanceId),
-            hasExplicitSelection: hasExplicitModelSelection
+            hasExplicitSelection: hasExplicitModelSelection,
+            exactLevels: agentSlider != nil
         )
+        // A new chat's first send that named no level, out or waiting to
+        // retry, keeps its own intent: the chat its optimistic message filled
+        // is not one the Mac has given a level yet. A pick the person made
+        // since wins, and so does a level or model the Mac has given the chat
+        // since (`keptSelection` then holds nothing).
+        if !hasExplicitModelSelection, let attempt = sendInFlight ?? pendingSend,
+           attempt.startsWhereNewChatsStart == true, attempt.request.saveSelection != true,
+           attempt.request.thinkingLevel == nil, let kept = keptSelection(for: attempt) {
+            selection = kept
+        }
+        resolvedWithAgentSlider = agentSlider != nil
         selectedProviderId = selection.providerId
         selectedModelId = selection.modelId
         selectedThinkingLevel = selection.thinkingLevel
@@ -2985,7 +3064,8 @@ final class AidenChatViewModel {
                     deviceID: context.deviceId,
                     chatID: chat.id,
                     title: chat.displayTitle,
-                    streamID: stream.streamId
+                    streamID: stream.streamId,
+                    machineName: ownerMachineName
                 )
             }
             guard !isRemoved, activeStreamID == stream.streamId else {
@@ -3510,22 +3590,30 @@ final class AidenChatViewModel {
     ) async {
         guard !isRemoved, coordinator.isLive(context), activeStreamID == streamID,
               streamState?.isTerminal != true else { return }
-        if isFallback, let read = approvalSnapshotInFlight,
-           read.streamID == streamID, coordinator.isLive(read.context),
-           read.approval == pendingApproval, read.state == streamState { return }
-        approvalSnapshotGeneration &+= 1
-        let snapshotGeneration = approvalSnapshotGeneration
-        approvalSnapshotInFlight = (streamID, context, pendingApproval, streamState)
+        let isInFlightContextLive = mutationSubMachines.approvalSnapshots.inFlight.map {
+            coordinator.isLive($0.context)
+        } ?? false
+        guard let token = mutationSubMachines.approvalSnapshots.begin(
+            streamID: streamID,
+            context: context,
+            pendingApproval: pendingApproval,
+            streamState: streamState,
+            isFallback: isFallback,
+            isInFlightContextLive: isInFlightContextLive
+        ) else { return }
         defer {
-            if snapshotGeneration == approvalSnapshotGeneration { approvalSnapshotInFlight = nil }
+            mutationSubMachines.approvalSnapshots.finish(token)
         }
-        let expectedApproval = pendingApproval
-        let expectedState = streamState
         do {
             let snapshot = try await coordinator.remoteClient(for: context).streamApproval(id: streamID)
-            guard !isRemoved, coordinator.isLive(context), activeStreamID == streamID,
-                  snapshotGeneration == approvalSnapshotGeneration,
-                  pendingApproval == expectedApproval, streamState == expectedState else { return }
+            guard mutationSubMachines.approvalSnapshots.accepts(
+                token,
+                activeStreamID: activeStreamID,
+                pendingApproval: pendingApproval,
+                streamState: streamState,
+                isRemoved: isRemoved,
+                isContextLive: coordinator.isLive(context)
+            ) else { return }
             guard let approval = AidenPendingApprovalResolution.resolve(
                 snapshot.approval,
                 streamId: streamID,
@@ -3544,7 +3632,17 @@ final class AidenChatViewModel {
             }
             pendingApproval = approval
             streamState = .waitingForApproval
-            alertRun(.needsApproval, id: approval.id)
+            alertRun(
+                .needsApproval,
+                id: approval.id,
+                detail: approval.canRespond
+                    ? .approval(
+                        target: AgentRunApprovalTarget(approvalID: approval.id, runID: nil),
+                        summary: approval.summary,
+                        canAllow: approval.alertCanAllow
+                    )
+                    : nil
+            )
             if announce {
                 coordinator.haptics.play(
                     .warning,
@@ -3552,7 +3650,11 @@ final class AidenChatViewModel {
                     dedupeKey: "approval-required:\(approval.id)"
                 )
             }
-            await liveActivities.approvalRequired(instanceID: instanceId, streamID: streamID)
+            await liveActivities.approvalRequired(
+                instanceID: instanceId,
+                streamID: streamID,
+                target: approval.canRespond ? AgentRunApprovalTarget(approvalID: approval.id, runID: nil) : nil
+            )
             // A question prompt may be pending alongside the approval; a nil
             // snapshot simply clears stale card state without touching status.
             await restorePendingQuestion(
@@ -3562,9 +3664,22 @@ final class AidenChatViewModel {
             )
         } catch {
             if await coordinator.handleCredentialRevocation(error, context: context) { return }
-            guard !isRemoved, coordinator.isLive(context), activeStreamID == streamID,
-                  snapshotGeneration == approvalSnapshotGeneration,
-                  pendingApproval == expectedApproval, streamState == expectedState else { return }
+            guard mutationSubMachines.approvalSnapshots.accepts(
+                token,
+                activeStreamID: activeStreamID,
+                pendingApproval: pendingApproval,
+                streamState: streamState,
+                isRemoved: isRemoved,
+                isContextLive: coordinator.isLive(context)
+            ) else { return }
+            if error is URLError {
+                // The Mac never answered, as when the app opens from its Live
+                // Activity before the link is back. The run may still be
+                // waiting, so the card and its state stay for the next
+                // reload to ask again, and the Live Activity reads as old.
+                await liveActivities.markStale(instanceID: instanceId, streamID: streamID)
+                return
+            }
             pendingApproval = nil
             await restorePendingQuestion(
                 streamID: streamID,
@@ -3595,15 +3710,20 @@ final class AidenChatViewModel {
             }
             return
         }
-        questionSnapshotGeneration &+= 1
-        let snapshotGeneration = questionSnapshotGeneration
-        let expectedQuestion = pendingQuestion
-        let expectedState = streamState
+        let token = mutationSubMachines.questionSnapshots.begin(
+            streamID: streamID,
+            pendingQuestion: pendingQuestion,
+            streamState: streamState
+        )
         do {
             let snapshot = try await coordinator.remoteClient(for: context).streamQuestion(id: streamID)
-            guard coordinator.isLive(context), activeStreamID == streamID,
-                  snapshotGeneration == questionSnapshotGeneration,
-                  pendingQuestion == expectedQuestion, streamState == expectedState else { return }
+            guard mutationSubMachines.questionSnapshots.accepts(
+                token,
+                activeStreamID: activeStreamID,
+                pendingQuestion: pendingQuestion,
+                streamState: streamState,
+                isContextLive: coordinator.isLive(context)
+            ) else { return }
             guard let question = AidenPendingQuestionResolution.resolve(
                 snapshot.question,
                 streamId: streamID,
@@ -3627,7 +3747,18 @@ final class AidenChatViewModel {
                 hasPendingQuestion: true
             ) == .waitingForAnswer {
                 await liveActivities.questionRequired(instanceID: instanceId, streamID: streamID)
-                alertRun(.needsAnswer, id: question.id)
+                alertRun(
+                    .needsAnswer,
+                    id: question.id,
+                    detail: question.canRespond
+                        ? .question(
+                            promptID: question.id,
+                            runID: nil,
+                            text: question.questions.first?.question ?? "",
+                            acceptsReply: question.questions.count == 1
+                        )
+                        : nil
+                )
             }
             if announce {
                 coordinator.haptics.play(
@@ -3638,9 +3769,19 @@ final class AidenChatViewModel {
             }
         } catch {
             if await coordinator.handleCredentialRevocation(error, context: context) { return }
-            guard coordinator.isLive(context), activeStreamID == streamID,
-                  snapshotGeneration == questionSnapshotGeneration,
-                  pendingQuestion == expectedQuestion, streamState == expectedState else { return }
+            guard mutationSubMachines.questionSnapshots.accepts(
+                token,
+                activeStreamID: activeStreamID,
+                pendingQuestion: pendingQuestion,
+                streamState: streamState,
+                isContextLive: coordinator.isLive(context)
+            ) else { return }
+            if error is URLError {
+                // The Mac never answered; as for an approval, the question
+                // and its state stay for the next reload to ask again.
+                await liveActivities.markStale(instanceID: instanceId, streamID: streamID)
+                return
+            }
             pendingQuestion = nil
             if reconcilesOnNil && pendingApproval == nil {
                 streamState = .reconciling
@@ -4197,20 +4338,12 @@ extension AidenChatViewModel {
         defer { isContinuingInNewChat = false }
         continueInNewChatError = nil
         let source = chat
-        let attempt: AidenContinueInNewChatAttempt
-        if let existing = continueInNewChatAttempt, existing.context == context, existing.chatId == source.id,
-           existing.revision == source.revision, existing.workspaceId == workspaceId {
-            attempt = existing
-        } else {
-            attempt = AidenContinueInNewChatAttempt(
-                context: context,
-                chatId: source.id,
-                revision: source.revision,
-                workspaceId: workspaceId,
-                idempotencyKey: UUID()
-            )
-        }
-        continueInNewChatAttempt = attempt
+        let attempt = mutationSubMachines.continueInNewChatAttempt.begin(
+            context: context,
+            chatId: source.id,
+            revision: source.revision,
+            workspaceId: workspaceId
+        )
         do {
             let result = try await coordinator.remoteClient(for: context).continueChatInNewChat(
                 chatId: attempt.chatId,
@@ -4218,7 +4351,7 @@ extension AidenChatViewModel {
                 workspaceId: attempt.workspaceId,
                 idempotencyKey: attempt.idempotencyKey
             )
-            if continueInNewChatAttempt == attempt { continueInNewChatAttempt = nil }
+            mutationSubMachines.continueInNewChatAttempt.recordSuccess(attempt)
             guard !isRemoved, coordinator.isLive(context) else { return nil }
             let continued = result.chat
             guard !continued.isBotChat else {
@@ -4240,11 +4373,10 @@ extension AidenChatViewModel {
             return continued
         } catch let error where aidenIsCancellation(error) {
             // A cancelled request may already have reached the computer; keep the key.
+            mutationSubMachines.continueInNewChatAttempt.recordFailure(error, for: attempt)
             return nil
         } catch {
-            if continueInNewChatAttempt == attempt, !AidenChatForkAttempt.outcomeIsUnknown(after: error) {
-                continueInNewChatAttempt = nil
-            }
+            mutationSubMachines.continueInNewChatAttempt.recordFailure(error, for: attempt)
             if await coordinator.handleCredentialRevocation(error, context: context) { return nil }
             guard !isRemoved, coordinator.isLive(context) else { return nil }
             if case AidenRemoteClientError.server(_, let body) = error, body.code.rawValue == "revision_conflict" {

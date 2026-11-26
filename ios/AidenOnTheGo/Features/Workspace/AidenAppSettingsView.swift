@@ -36,6 +36,11 @@ struct AidenAppSettingsView: View {
             && coordinator.installationStore.activeInstallation?.hasNegotiatedAccess(to: .approvalRespond) == true
     }
 
+    /// Revision 70 (`chat:agent-slider`): the Mac's slider stops, read-only.
+    private var offersAgentSlider: Bool {
+        coordinator.installationStore.activeInstallation?.hasNegotiatedAccess(to: .chatAgentSlider) == true
+    }
+
     /// Revision 61: the Mac offers the new cards, so Show tool activity applies.
     private var offersBotUX: Bool {
         coordinator.installationStore.activeInstallation?.offersBotUX == true
@@ -108,8 +113,20 @@ struct AidenAppSettingsView: View {
             }
 
             Section {
+                NavigationLink { AidenNotificationSettingsView() } label: {
+                    Label("Notifications", systemImage: "bell")
+                }
+            } footer: { Text("What this iPhone tells you about chats, and what shows on the Lock Screen.") }
+
+            Section {
                 NavigationLink { AidenProvidersView(coordinator: coordinator) } label: {
                     Label("Providers", systemImage: "server.rack")
+                }
+                if offersAgentSlider {
+                    NavigationLink { AidenAgentSliderSettingsView(coordinator: coordinator) } label: {
+                        Label("Agent Slider", systemImage: "slider.horizontal.below.rectangle")
+                    }
+                    .accessibilityIdentifier("aiden.settings.agentSlider")
                 }
             } footer: { Text("Manage model connections on your paired computer.") }
 

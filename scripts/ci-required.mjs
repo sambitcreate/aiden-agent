@@ -14,7 +14,11 @@ export const REQUIRED_JOB_RULES = Object.freeze({
   verify: Object.freeze({ areas: Object.freeze(["desktop"]) }),
   catalog: Object.freeze({ areas: Object.freeze(["catalog"]) }),
   unit: Object.freeze({ areas: Object.freeze(["desktop", "catalog"]) }),
-  e2e: Object.freeze({ areas: Object.freeze(["desktop"]) }),
+  // macOS E2E follows its own plan: every desktop run outside pull requests,
+  // and on a pull request only when it selected a macOS-only spec.
+  e2e: Object.freeze({ areas: Object.freeze(["mac-e2e"]) }),
+  // Linux shards run every selected spec, so a desktop PR depends on them.
+  "linux-e2e": Object.freeze({ areas: Object.freeze(["desktop", "linux"]) }),
   apple: Object.freeze({ areas: Object.freeze(["apple"]) }),
   ios: Object.freeze({ areas: Object.freeze(["ios"]) }),
   android: Object.freeze({ areas: Object.freeze(["android"]) }),
@@ -22,7 +26,10 @@ export const REQUIRED_JOB_RULES = Object.freeze({
 });
 
 const REQUIRED_JOB_NAMES = Object.freeze(Object.keys(REQUIRED_JOB_RULES));
-const AREAS = AREA_NAMES;
+// Decisions the changes job reports beside the areas. The macOS E2E plan is
+// false whenever desktop is false.
+export const PLAN_DECISIONS = Object.freeze(["mac-e2e"]);
+const AREAS = Object.freeze([...AREA_NAMES, ...PLAN_DECISIONS]);
 const ACCEPTED_RESULTS = Object.freeze(new Set(["success", "skipped"]));
 
 function isRecord(value) {

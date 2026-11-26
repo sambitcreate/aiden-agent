@@ -621,6 +621,12 @@ data class AidenRemoteCapability(val rawValue: String) {
         /** Revision 61: each is asked for in a call of its own, so a refusal leaves the rest. */
         val BOT_UX = listOf(APPROVAL_CARDS, APPROVALS_SETTINGS, BOT_SETTINGS_CHANGES, BOT_SUGGESTIONS, BOT_TEMPLATES)
         /**
+         * Revision 69: a typed shell card also carries the command's plain words
+         * (`explanation`) and Aiden's own tags. The Mac sends them only beside [APPROVAL_CARDS].
+         * Negotiated alone, after the revision-61 opt-ins.
+         */
+        val APPROVAL_PLAIN_WORDS = AidenRemoteCapability("approval:plain-words")
+        /**
          * Contract revision 40: a hand-off card that takes no note says so (`takesNote`). It
          * grants no authority. A Mac on an earlier revision refuses the name, so this phone asks
          * for it only from a Mac that offers it, in the hand-offs call.
@@ -696,6 +702,22 @@ data class AidenRemoteCapability(val rawValue: String) {
          */
         val STREAM_SNAPSHOT_REASONS = AidenRemoteCapability("stream:snapshot-reasons")
 
+        /**
+         * Revision 68: `GET /bots` summaries carry `needsYou: true` for a Bot waiting on the
+         * person (an approval, a question, a hand-off or an open issue). It grants no authority.
+         * A Mac on an earlier revision refuses the name, so it is asked for alone.
+         */
+        val BOT_NEEDS_YOU = AidenRemoteCapability("bot:needs-you")
+
+        /**
+         * Revision 70: a turn that asks to save its selection keeps its level as the chat's own,
+         * with its provider and model, in the same write as the message. The Mac offers it only in
+         * `serverCapabilities`. This phone doesn't ask for it yet: its turns don't carry the chat's
+         * own level, so saving them would move the chat off the stop chosen on the computer. The
+         * slider in `GET /models` and a chat's level are still read.
+         */
+        val CHAT_AGENT_SLIDER = AidenRemoteCapability("chat:agent-slider")
+
         val V1_KNOWN = listOf(
             SERVER_READ, CHAT_READ, CHAT_WRITE, APPROVAL_RESPOND,
             WORKSPACE_READ, WORKSPACE_BROWSE, WORKSPACE_MANAGE,
@@ -747,21 +769,27 @@ data class AidenRemoteCapability(val rawValue: String) {
         /** Revision 65: negotiable when the Mac lists it in `serverCapabilities`, in its own call. */
         val PHONE_STREAM_SNAPSHOT_REASONS = listOf(STREAM_SNAPSHOT_REASONS)
 
+        /** Revision 68: negotiable when the Mac lists it in `serverCapabilities`, in its own call. */
+        val PHONE_BOT_NEEDS_YOU = listOf(BOT_NEEDS_YOU)
+
+        /** Revision 69: negotiable when the Mac lists it in `serverCapabilities`, in its own call. */
+        val PHONE_APPROVAL_PLAIN_WORDS = listOf(APPROVAL_PLAIN_WORDS)
+
         /** Every grant `POST /device/capabilities` may add. */
         val NEGOTIABLE = PROGRESS + PHONE_RUNS + PHONE_SIMULATORS + PHONE_BOT_CARDS + PHONE_BOT_ACTIVITY +
             PHONE_BOT_HANDOFFS + PHONE_SCHEDULE_CARDS + PHONE_BOT_IMAGES + PHONE_BOT_ISSUES + PHONE_CHAT_JOBS +
             PHONE_ATTACHMENTS_RAW + PHONE_CHAT_NEW_WORKTREE + PHONE_CHAT_CONTINUE_IN_NEW_CHAT +
-            PHONE_STREAM_SNAPSHOT_REASONS + PHONE_BOT_MESSAGING +
+            PHONE_STREAM_SNAPSHOT_REASONS + PHONE_BOT_NEEDS_YOU + PHONE_BOT_MESSAGING +
             listOf(BOT_WATCHES, BOT_OPEN_WORK, BOT_ROUTINE_MODELS, BOT_PEERS, BOT_ACCESS_REQUESTS, BOT_PLANS, BOT_ALLOWED) +
-            BOT_UX
+            BOT_UX + PHONE_APPROVAL_PLAIN_WORDS
 
         /** The pairing vocabulary plus the negotiable phone-scoped subsets. */
         val PHONE_KNOWN = V1_KNOWN + PHONE_RUNS + PHONE_SIMULATORS + PHONE_BOT_CARDS + PHONE_BOT_ACTIVITY +
             PHONE_BOT_HANDOFFS + PHONE_SCHEDULE_CARDS + PHONE_BOT_IMAGES + PHONE_BOT_ISSUES + PHONE_CHAT_JOBS +
             PHONE_ATTACHMENTS_RAW + PHONE_CHAT_NEW_WORKTREE + PHONE_CHAT_CONTINUE_IN_NEW_CHAT +
-            PHONE_STREAM_SNAPSHOT_REASONS + PHONE_BOT_MESSAGING +
+            PHONE_STREAM_SNAPSHOT_REASONS + PHONE_BOT_NEEDS_YOU + PHONE_BOT_MESSAGING +
             listOf(BOT_WATCHES, BOT_OPEN_WORK, BOT_ROUTINE_MODELS, BOT_PEERS, BOT_ACCESS_REQUESTS, BOT_PLANS, BOT_ALLOWED) +
-            BOT_UX
+            BOT_UX + PHONE_APPROVAL_PLAIN_WORDS
     }
 }
 
