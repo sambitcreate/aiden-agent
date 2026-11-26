@@ -22,6 +22,7 @@ import {
 } from "../components/ui";
 import { applyBotBubbleChange, botBubblesApi } from "../lib/bot-bubbles-api";
 import { useBotCanonicalPhoto } from "../lib/bot-canonical-photo-cache";
+import { pauseWhenUnseen } from "../lib/offscreen-pause";
 import { userFacingErrorMessage } from "../lib/ipc-error";
 import { DEFAULT_BOT_AVATAR } from "../shared/bots";
 import type { BotBubble, BotBubbleState } from "../shared/bot-bubbles";
@@ -617,20 +618,36 @@ function useHeadPhoto(botId: string): {
   return { photo: held.current ?? null, settled: known || waitedOut };
 }
 
+/**
+ * The head's face: the Bot's photo, or its drawn face. While the Bot works the
+ * face is a live `.bot-avatar` in the thinking pose, so the shared sprite
+ * motion glances it (and pauses it off screen) as it does every live avatar.
+ */
 function HeadFace({
   avatar,
   name,
   photo,
+  working,
 }: {
   avatar: Parameters<typeof AvatarFace>[0]["avatar"];
   name: string;
   photo: NonNullable<HeadPhoto> | null;
+  working: boolean;
 }) {
   const [failed, setFailed] = React.useState<string>();
   const showPhoto = photo && failed !== photo.assetRevision;
+  const pose = working ? "thinking" : undefined;
   return (
-    <span className="bot-bubble-face" aria-hidden="true" title={name}>
-      <AvatarFace avatar={avatar} />
+    <span
+      ref={working ? pauseWhenUnseen : undefined}
+      className="bot-bubble-face bot-avatar"
+      aria-hidden="true"
+      title={name}
+      data-live={working ? "" : undefined}
+      data-working={working ? "" : undefined}
+      data-state={pose ?? "idle"}
+    >
+      <AvatarFace avatar={avatar} state={pose} />
       {showPhoto ? (
         <img
           alt=""
@@ -707,6 +724,7 @@ function BotBubbleHead(props: BotBubbleHeadProps) {
               avatar={status.bot?.avatar ?? DEFAULT_BOT_AVATAR}
               name={status.name}
               photo={photo}
+              working={status.working}
             />
             {status.working ? (
               <span aria-hidden="true" className="bot-bubble-ring" />

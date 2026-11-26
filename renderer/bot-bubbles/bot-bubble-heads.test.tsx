@@ -89,6 +89,26 @@ test("a closed head says how many replies are unread and that the Bot needs you"
   assert.ok(await head(/^Penny, 2 unread, needs you\. Enter opens, Delete closes\.$/u));
 });
 
+test("a working head's drawn face is a live avatar in the thinking pose", async () => {
+  mount({
+    "bots:live:summary": () => summary({ state: { kind: "running" } as BotLiveSummary["state"] }),
+    "bots:live:subscribe": () => snapshot({ state: { kind: "running" } as BotLiveSnapshot["state"] }),
+  });
+  const working = await head(/^Penny, working\./u);
+  await waitFor(() => {
+    const sprite = working.querySelector(".bot-sprite");
+    assert.equal(sprite?.getAttribute("data-state"), "thinking");
+    assert.ok(sprite?.closest(".bot-avatar[data-live]"), "the sprite motion only runs inside a live .bot-avatar");
+  });
+});
+
+test("an idle head's drawn face is a still idle sprite", async () => {
+  mount({});
+  const idle = await head(/^Penny\. Enter opens/u);
+  await waitFor(() => assert.equal(idle.querySelector(".bot-sprite")?.getAttribute("data-state"), "idle"));
+  assert.equal(idle.querySelector(".bot-avatar[data-live]"), null);
+});
+
 test("a head inside the Aiden window counts unread replies from the summary without subscribing to the chat", async () => {
   seenUpTo(100);
   const calls = mount(
