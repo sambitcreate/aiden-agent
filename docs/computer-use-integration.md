@@ -17,18 +17,27 @@ fit a signed desktop product.
 
 ## Driver release policy
 
-Aiden pins the macOS universal `cua-driver` 0.36.0 artifact from tag
-`cua-driver-rs-v0.36.0` and source commit
-`6d6c734c127025fb39ad5d585a10382808b39dc1` (upgraded from 0.34.1 on 2026-10-19,
+Aiden pins both the macOS universal `cua-driver` 0.38.0 artifact (for Computer
+Use on macOS) and the Linux arm64 `cua-driver` 0.38.0 artifact (for Linux Bot
+computers in Lume) from tag `cua-driver-rs-v0.38.0` (published 2026-10-21) and
+source commit `85e2b1318bd77ccf3cfa88ccdf875a4bb7eaed19` (upgraded from 0.36.0
+on 2026-11-24; 0.38.0 is the newest release with at least 7 quiet days before
+the next upstream tag — 16.3 days until 0.39.0 on 2026-11-06 — avoiding the
+multi-release-per-day 0.39–0.61 burst; 0.36.0 replaced 0.34.1 on 2026-10-19,
 see [the 0.36 upgrade plan](plans/cua-driver-0-36-upgrade-plan.md); 0.34.1
-replaced 0.8.3 on 2026-10-09, see [the 0.34 plan](plans/cua-driver-0-34-upgrade-plan.md)). Both the archive
-and extracted binary SHA-256 values are recorded in
-`resources/computer-use/cua-driver-artifact.json`. The release archive now holds
-five signed files (CLI, cursor theme, SDK dylib, Node runtime, C header); Aiden
-vendors only the `cua-driver` executable and rejects any other staged entry. The security-critical binary
-hash, Cua signing identifier, and Cua Team ID are also compiled into Aiden and
-the broker rather than trusted from that mutable metadata. Driver updates
-happen only in reviewed Aiden releases.
+replaced 0.8.3 on 2026-10-09, see [the 0.34 plan](plans/cua-driver-0-34-upgrade-plan.md)).
+The exact URL, archive byte size, archive SHA-256, extracted binary byte size,
+and binary SHA-256 are recorded in `resources/computer-use/cua-driver-artifact.json`
+(macOS universal) and `resources/computer-use/cua-driver-linux-arm64-artifact.json`
+(Linux arm64). The macOS release archive holds five signed files (CLI, cursor
+theme, SDK dylib, Node runtime, C header), and the Linux arm64 release archive
+holds the five Linux counterparts plus `wayland-helper/`; Aiden vendors only
+the top-level `cua-driver` executable and rejects any other staged entry. The
+security-critical binary hashes, sizes, Cua signing identifier, and Cua Team ID
+are also compiled into Aiden (`scripts/computer-use-signing-pins.mjs`,
+`main/services/computer-use/binary.ts`) and the Rust broker rather than trusted
+from those mutable JSON files. Driver updates happen only in reviewed Aiden
+releases.
 
 The runtime never executes Cua's moving installer, never resolves a production
 driver from `PATH`, never follows an executable path returned by the driver's
@@ -36,19 +45,31 @@ manifest, and never invokes its self-updater. Upstream telemetry and update
 checks are disabled in every child process, including upstream's
 `DO_NOT_TRACK=1` opt-out, which takes precedence over persisted driver
 configuration. The broker also starts the driver with
-`CUA_DRIVER_DISABLE_RUN_SCRIPT=1`, so 0.36's on-by-default `run_script`
-(sandboxed JavaScript that drives the driver's own tools) is not offered; it
-and the `run_steps` batch tool (with its `run_actions` alias) and `get_guide`
-are also denied by the broker and filtered from the catalog the model sees.
-The MIT notice ships beside the helper.
+`CUA_DRIVER_DISABLE_RUN_SCRIPT=1`, so 0.35+'s on-by-default `run_script`
+(sandboxed JavaScript that drives the driver's own tools) is not offered; it,
+the `run_steps` batch tool (with its `run_actions` alias), 0.37's `get_guide`
+skill-pack reader, and 0.37's `browser_select` are also denied by the broker
+and filtered from the catalog the model sees. The broker's environment allowlist
+never forwards `CUA_DRIVER_ALLOW_BRIEF_FOREGROUND` (0.37's daemon-level
+brief-foreground drag auto-escalation, off by default), preserving Aiden's
+explicit foreground approval. 0.37's `PreventUserIdleDisplaySleep` guard
+(`CUA_DRIVER_KEEP_DISPLAY_AWAKE`, default 600 s idle window after tool calls)
+stays at its upstream default: it only defers idle display sleep while an agent
+is actively working and never wakes a sleeping display or bypasses a lock.
+No CLI flags used by Aiden (`mcp --embedded --direct --host-bundle-id`,
+`mcp --embedded --socket`, `serve --socket --pid-file --no-overlay
+--no-permissions-gate`) were removed between 0.36.0 and 0.38.0. The MIT notice
+ships beside the helper.
 
 Since 0.36 the driver caps screenshots at 1366 px on the long edge by default
 (0.34 used 1568); Aiden passes `max_image_dimension` only when the model asks
-for a different cap. Captures request `tree_format: "elements"` for `som` and
-`ax` (0.36 returns a lean markdown tree otherwise) and `"markdown"` for
+for a different cap. Since 0.37 macOS window screenshots also exclude the
+user's pointer (#5480), and Electron background drags deliver through the main
+process (#5351). Captures request `tree_format: "elements"` for `som` and
+`ax` (0.35+ returns a lean markdown tree otherwise) and `"markdown"` for
 `vision`; items of a closed menu are not in a capture, so the model opens menu
 items with the `menu` action and a path. `type` refuses text that contains a
-line break or tab, because 0.36 sends those as Return and Tab; the model sends
+line break or tab, because 0.35+ sends those as Return and Tab; the model sends
 Return or Tab with the `key` action as its own step. Capture by app sends
 `list_windows({app})`, which the driver filters by app-name substring or exact
 bundle identifier. An optional `changes_only` capture (not with `vision`) sends
@@ -57,10 +78,18 @@ or `no_change` without element numbers. Either way the previous numbers are
 cleared and the model takes a full capture before acting by number, because
 upstream prunes unrendered echo text rows while keeping their indices and its
 `no_change` ignores reindexing, so indices can shift under `no_change`. On
-`no_change` the driver's `focused_element` row is passed through. Of the 0.36
-refusal codes, the macOS 0.36.0 driver sends `write_not_applied` (the control
-read back unchanged, so choose another route), `window_not_key` (focus not
-confirmed), `desktop_coordinate_scope_required` and
+`no_change` the driver's `focused_element` row is passed through. On macOS
+0.38.0, refusal codes actively emitted by the driver include:
+`write_not_applied` (the control read back unchanged, so choose another route),
+`window_not_key` (focus or document menu context not confirmed, including
+0.37's sibling-window `invoke_menu` guard #5520), `target_focus_unconfirmed`
+(0.37's `press_key` target-focus check #5372, mapped alongside `window_not_key`
+to `focus_unconfirmed`), `screen_locked` (0.37's locked-screen / screen-saver
+refusal #5483, which invalidates the capture and asks the user to unlock
+without offering a foreground retry, since foreground input would reach the
+lock screen), `select_menu_would_raise_window` (0.37's background web
+`<select>` click refusal #5353, which keeps the capture and steers the model to
+`set_value`), `desktop_coordinate_scope_required` and
 `element_bounds_unavailable` (window target refusals), and
 `background_unavailable`. Aiden reads `background_unavailable` by its
 `reason` and `effect`: reason `windowserver_connection_invalid` (a daemon with
@@ -70,9 +99,10 @@ no valid WindowServer connection; nothing was sent) is reported as
 posted and released at once) and any other effect besides `refused` invalidate
 the capture and ask the model to capture and check before any foreground retry
 (`drag_released`, or `execution_unknown` for a non-drag action); anything else
-offers the approved foreground retry. The remaining mappings are
-forward-compatible and not sent by the macOS 0.36.0 driver:
-`target_focus_unconfirmed` (focus not confirmed, added upstream after 0.36),
+offers the approved foreground retry. On refused `ActionResult` payloads Aiden
+also reads 0.37's top-level recovery `hint` (#5493) when `error.hint` is
+omitted, while omitting raw driver `next_call` tool names from the consolidated
+`computer_use` surface. The remaining mappings stay forward-compatible:
 `windowserver_connection_invalid`, `permission_required` and
 `direct_capture_consent_required` as codes (reported as
 `permission_required`), `electron_main_process_unavailable` (foreground
@@ -91,7 +121,7 @@ length and SHA-256 pinned in `driver.rs` afterwards). The generator uses Apple's
 LightweightCodeRequirements encoder and reproduces the former 0.8.3 bytes
 exactly.
 
-Every upstream `cua-driver-rs` release, including the pinned 0.36.0, is marked pre-release. Aiden treats
+Every upstream `cua-driver-rs` release, including the pinned 0.38.0, is marked pre-release. Aiden treats
 Computer Use as a gated beta until the real-driver smoke matrix and release
 signing checks in Phase 4 pass. The bare universal asset carries Cua's valid
 Developer ID signature (`YCK386LBJ7`) but Gatekeeper does not accept it as an
@@ -170,7 +200,7 @@ user's window (#5352), and a bundle-identifier approval counts as that consent
 (#5402). Whether the consent now appears during **Request access** in Aiden,
 given the status-only rewrite, is unverified until packaged acceptance; if it
 appears over the first capture instead, Aiden's fallback is unverified: the
-macOS 0.36.0 driver does not send a `direct_capture_consent_required` code, so
+macOS 0.38.0 driver does not send a `direct_capture_consent_required` code, so
 the mapping that reports it as `permission_required` with the setup text is
 forward-compatible only (Aiden does not yet reopen the readiness checklist
 mid-chat). Readiness therefore rests on the
@@ -235,9 +265,11 @@ Use unavailable.
 ## Guest lane in Bot computers
 
 Bot computers (`docs/bot-computers.md`, "Guest driver lane") run the same
-pinned `cua-driver` 0.36.0 inside a Bot's own macOS virtual machine, for
-element reads and element clicks there. It is the same executable and pin, not
-a second artifact:
+pinned `cua-driver` 0.38.0 inside a Bot's own virtual machine, for element
+reads and element clicks there (the macOS universal binary for macOS guests,
+and the pinned Linux arm64 binary in
+`resources/computer-use/cua-driver-linux-arm64-artifact.json` for upcoming
+Linux guests):
 
 - Set up and Update base copy only the upstream-signed `cua-driver`
   executable from the vendored helper into the base over Aiden's SSH, with the
@@ -256,7 +288,7 @@ a second artifact:
   Recording are made by the person in the base's live view and copied into
   every Bot computer made from it.
 - Each session is one SSH child running `cua-driver mcp --embedded --socket
-  <guest socket>`. `CuaDriverSession` checks the exact 0.36.0 catalog,
+  <guest socket>`. `CuaDriverSession` checks the exact 0.38.0 catalog,
   Aiden's allowlist and every required tool before any call, and
   `ComputerUseController` keeps the same denied tools, safety refusals and
   element-token binding as on the Mac. Its per-action access cards don't
@@ -380,16 +412,17 @@ Computer Use smoke is accepted until its identity-bound receipt exists.
 
 - Hermes: `tools/computer_use/schema.py`, `tool.py`, `cua_backend.py`,
   `permissions.py`, and multimodal routing in `run_agent.py`.
-- Cua: the 0.8.3, 0.34.1 and 0.36.0 release checksums, `Skills/cua-driver/EMBEDDING.md`,
+- Cua: the 0.8.3, 0.34.1, 0.36.0 and 0.38.0 release checksums, `Skills/cua-driver/EMBEDDING.md`,
   `WORKFLOW.md` and `MACOS.md` (0.34.1), the action-result contract, telemetry
   documentation, platform support, installer scripts, and release workflow.
-  Re-audited for 0.36.0 (tag `cua-driver-rs-v0.36.0`):
-  `libs/cua/skills/cua-driver/{SKILL,WORKFLOW,MACOS}.md`, the macOS tool
-  descriptions in `libs/cua-driver/rust/crates/platform-macos/src/tools/`
-  (`get_window_state`, `click`, `type_text`, `drag`, `invoke_menu`,
-  `set_value`), `libs/cua-driver/contract/manifest.json`,
-  `libs/cua-driver/rust/CHANGELOG.md`, `list_windows.rs`,
-  `window_state_view.rs`, `action_target.rs` and `script_tool.rs`.
+  Re-audited for 0.38.0 (tag `cua-driver-rs-v0.38.0`, commit
+  `85e2b1318bd77ccf3cfa88ccdf875a4bb7eaed19`): macOS universal and Linux arm64
+  release tarballs, `SHA256SUMS`, `release-manifest.json`, Sigstore bundles,
+  Mach-O CodeDirectory CDHashes, `scripts/docs-generators/cli-specs/cua-driver-mcp-{macos,linux}.json`,
+  `libs/cua-driver/contract/manifest.json`, `libs/cua-driver/rust/CHANGELOG.md`,
+  `cua-driver-core/src/{background_input,delivery,recovery_hint,tool}.rs`,
+  `platform-macos/src/{display_awake,tools/{click,drag,get_window_state,hotkey,invoke_menu,press_key,type_text}}.rs`,
+  `platform-linux/src/tools/impl_.rs`, and `crates/cua-driver/src/{cli,main,serve}.rs`.
 - Aiden: Pi agent/tool types, `llm-client.ts`, generic MCP manager, approval UI,
   config/chat persistence, Electron lifecycle, preload allowlists, and packaging.
 

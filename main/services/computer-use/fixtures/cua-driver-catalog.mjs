@@ -1,14 +1,14 @@
 /* global Buffer, structuredClone */
 
 /**
- * The macOS tools/list surface of cua-driver-rs-v0.36.0 for the tools Aiden's
- * broker allowlists, plus the upstream-only batch and script tools the broker
- * filters out (`UNFORWARDED_TOOLS`), the driver's argument boundary and result
- * shapes. Shared by the stdio fake driver and the in-memory test sessions so
- * both reject exactly what the pinned driver rejects. Hand-maintained from the
- * upstream sources below; there is no generator.
+ * The macOS tools/list surface of cua-driver-rs-v0.38.0 for the tools Aiden's
+ * broker allowlists, plus the upstream-only batch, script, guide, and browser
+ * tools the broker filters out (`UNFORWARDED_TOOLS`), the driver's argument
+ * boundary and result shapes. Shared by the stdio fake driver and the in-memory
+ * test sessions so both reject exactly what the pinned driver rejects.
+ * Hand-maintained from the upstream sources below; there is no generator.
  *
- * Sources (all at tag cua-driver-rs-v0.36.0, libs/cua-driver/):
+ * Sources (all at tag cua-driver-rs-v0.38.0, libs/cua-driver/):
  * - input schemas: rust/crates/platform-macos/src/tools/*.rs `def()` (and
  *   cua-driver-core/src/window_state_view.rs::schema_properties for the
  *   get_window_state view options), with the advertised `session` (closed
@@ -17,14 +17,17 @@
  *   tools (verify_state, invoke_menu, set_window_frame, sessions) and the
  *   `target` field from contract/manifest.json, which 0.35 made
  *   Vertex-compatible (no type arrays, oneOf, const, or nullable defaults);
- *   run_steps from cua-driver-core/src/batch_tools.rs and run_script from
- *   cua-driver-core/src/script_tool.rs. Descriptions are omitted.
+ *   run_steps from cua-driver-core/src/batch_tools.rs, run_script from
+ *   cua-driver-core/src/script_tool.rs, get_guide from
+ *   cua-driver-core/src/guide.rs (#5491), and browser_select from
+ *   cua-driver-core/src/browser/tools.rs (#5232). Descriptions are omitted.
  * - capabilities: the manifest's per-tool capabilities, else
  *   cua-driver-core/src/tool.rs::default_capabilities_for, plus the
  *   schema-derived `input.delivery_mode` and `input.scroll.coordinates`.
  * - unknown arguments: tool.rs::unknown_argument -> protected_refusal
  *   `{status:"refused", refusal:{code:"invalid_arguments"}}`.
- * - action results: cua-driver-contract/src/outputs.rs::ActionResult.
+ * - action results: cua-driver-contract/src/outputs.rs::ActionResult (with
+ *   0.37/0.38 optional `hint` and `next_call` from recovery_hint.rs).
  * - stale tokens / missing screenshot: cua-driver-core/src/snapshot_store.rs.
  */
 
@@ -540,16 +543,43 @@ export const TOOL_DEFINITIONS = {
     ),
     capabilities: ["input.script"],
   },
+  get_guide: {
+    inputSchema: open({
+      session: string,
+      topic: string,
+    }),
+    capabilities: [],
+  },
+  browser_select: {
+    inputSchema: closed(
+      {
+        target_id: string,
+        tab_id: string,
+        ref: string,
+        label: string,
+        value: string,
+      },
+      ["target_id", "tab_id", "ref"],
+    ),
+    capabilities: [],
+  },
 };
 
 /**
- * Tools 0.36.0 lists that Aiden's broker allowlist drops from tools/list and
- * refuses on tools/call: one call would run many actions (or arbitrary
- * script) past Aiden's per-action approval. The broker also starts the driver
- * with CUA_DRIVER_DISABLE_RUN_SCRIPT=1, so a live driver omits run_script.
- * `run_actions` is run_steps' hidden alias and is never listed.
+ * Tools 0.38.0 lists that Aiden's broker allowlist drops from tools/list and
+ * refuses on tools/call: batch/script tools would run many actions past Aiden's
+ * per-action approval; `get_guide` is replaced by Aiden's own guidance; and
+ * `browser_select` stays off the desktop allowlist. The broker also starts the
+ * driver with CUA_DRIVER_DISABLE_RUN_SCRIPT=1, so a live driver omits
+ * run_script. `run_actions` is run_steps' hidden alias and is never listed.
  */
-export const UNFORWARDED_TOOLS = new Set(["run_steps", "run_actions", "run_script"]);
+export const UNFORWARDED_TOOLS = new Set([
+  "run_steps",
+  "run_actions",
+  "run_script",
+  "get_guide",
+  "browser_select",
+]);
 
 const ACTION_RESULT_OUTPUT_SCHEMA = {
   type: "object",
@@ -568,6 +598,8 @@ const ACTION_RESULT_OUTPUT_SCHEMA = {
         escalation: { type: "object" },
         summary: string,
         error: { type: "object" },
+        hint: string,
+        next_call: { type: "object" },
       },
       required: ["effect", "route"],
     },
@@ -579,7 +611,7 @@ const ACTION_RESULT_OUTPUT_SCHEMA = {
   ],
 };
 
-/** tools/list entries in the 0.36.0 wire shape for the given tool names. */
+/** tools/list entries in the 0.38.0 wire shape for the given tool names. */
 export function toolListEntries(names) {
   return names.map((name) => {
     const definition = TOOL_DEFINITIONS[name];
@@ -605,7 +637,7 @@ export function toolListEntries(names) {
   });
 }
 
-/** The full 0.36.0 tools/list result for the given tool names. */
+/** The full 0.38.0 tools/list result for the given tool names. */
 export function toolListResult(names) {
   return {
     tools: toolListEntries(names),
@@ -916,7 +948,7 @@ export const ECHO_ROW_ELEMENTS = [
 export const ECHO_ROW_PRUNED_ELEMENTS = ECHO_ROW_ELEMENTS.filter((row) => row.echo !== true);
 
 /**
- * Stateful 0.36.0 driver behaviour for Aiden's allowlisted tools: closed
+ * Stateful 0.38.0 driver behaviour for Aiden's allowlisted tools: closed
  * argument schemas, per-window snapshot tokens that the next capture stales,
  * same-session screenshot context for pixels, background drag, and
  * the closed ActionResult on success. Its get_window_state is lean by default
@@ -1072,11 +1104,11 @@ export class FakeCuaDriver {
     const names = ["binary_version", "platform_supported", "session_active"];
     const include = Array.isArray(args.include) ? new Set(args.include) : null;
     return {
-      content: [{ type: "text", text: "cua-driver 0.36.0 on darwin — ok" }],
+      content: [{ type: "text", text: "cua-driver 0.38.0 on darwin — ok" }],
       structuredContent: {
         schema_version: "1",
         platform: "darwin",
-        driver_version: "0.36.0",
+        driver_version: "0.38.0",
         overall: "ok",
         checks: names.map((check) =>
           include && !include.has(check)

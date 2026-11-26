@@ -159,8 +159,8 @@ test("asking for the grants prompts in the guest; checking never does", async (t
 });
 
 test("only a recorded pass for the pinned driver opens the driver lane", () => {
-  assert.equal(guestDriverReady({ version: "0.36.0" }), true);
-  assert.equal(guestDriverReady({ version: "0.34.1" }), false);
+  assert.equal(guestDriverReady({ version: "0.38.0" }), true);
+  assert.equal(guestDriverReady({ version: "0.36.0" }), false);
   assert.equal(guestDriverReady(undefined), false);
 });
 

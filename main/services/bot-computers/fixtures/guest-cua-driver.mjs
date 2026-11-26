@@ -1,7 +1,7 @@
 /* global process */
 
 // A stand-in for the guest side of the driver bridge (`ssh … -- cua-driver mcp
-// --embedded --socket …`): MCP JSON-RPC on stdio over the shared fake 0.36.0
+// --embedded --socket …`): MCP JSON-RPC on stdio over the shared fake 0.38.0
 // driver. Unlike Aiden's native bridge on the Mac, the guest's MCP proxy
 // forwards every upstream tool, so this lists them all, including the ones
 // Aiden's allowlist must drop.
@@ -11,7 +11,7 @@
 //   --permissions-file <file>     JSON {accessibility, screen_recording}, read on every check
 //   --grant-on-prompt             a prompting check_permissions grants both (the person allowed them)
 //   --schema-version <v>          tools/list schema_version (default "1")
-//   --driver-version <v>          health_report driver_version (default "0.36.0")
+//   --driver-version <v>          health_report driver_version (default "0.38.0")
 //   --exit <code>                 exit at once with this code (the daemon never came up)
 //   --elements <file>             JSON array of AX rows every window shows (default: the shared fake's)
 //   --exit-on <tool>              log a call to this tool, then exit without answering (the bridge
@@ -31,7 +31,7 @@ const option = (name) => {
 const logPath = option("--log");
 const permissionsFile = option("--permissions-file");
 const schemaVersion = option("--schema-version") ?? "1";
-const driverVersion = option("--driver-version") ?? "0.36.0";
+const driverVersion = option("--driver-version") ?? "0.38.0";
 const grantOnPrompt = argv.includes("--grant-on-prompt");
 const exitCode = option("--exit");
 const elementsFile = option("--elements");

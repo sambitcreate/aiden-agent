@@ -10,6 +10,8 @@ import { PassThrough, Writable } from "node:stream";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
 import {
+  CUA_DRIVER_LINUX_ARM64_UPSTREAM_PIN,
+  CUA_DRIVER_UPSTREAM_PIN,
   codesignVerifyArguments,
   resolveCuaDriverInstallation,
   resolveVendoredCuaDriverExecutable,
@@ -17,6 +19,7 @@ import {
 } from "./binary.js";
 import {
   CUA_DRIVER_ALLOWED_TOOLS,
+  CUA_DRIVER_BROKER_EXECUTABLE,
   CuaDriverError,
   buildCuaDriverEnvironment,
   cuaDriverToolDeclaresSession,
@@ -105,7 +108,7 @@ function fragmentedImageBridge(imageBytes: number, fragmentBytes: number): {
           result: {
             protocolVersion: message.params?.protocolVersion ?? "2024-11-05",
             capabilities: { tools: {} },
-            serverInfo: { name: "fragmented-image-bridge", version: "0.36.0" },
+            serverInfo: { name: "fragmented-image-bridge", version: "0.38.0" },
           },
         });
       } else if (message.method === "tools/list") {
@@ -266,15 +269,17 @@ test("buildCuaDriverEnvironment strips secrets and disables telemetry and update
 });
 
 test("tool catalog parsing retains pinned versions, exact schemas, and capabilities", () => {
-  // The unfiltered 0.36.0 tools/list wire shape, including fields Aiden
+  // The unfiltered 0.38.0 tools/list wire shape, including fields Aiden
   // ignores (`enforcement_adapters`, per-tool `risk` and `outputSchema`) and
-  // the batch/script tools the broker would drop.
+  // the batch, script, guide, and browser tools the broker would drop.
   const listing = toolListResult(Object.keys(TOOL_DEFINITIONS)) as {
     tools: Array<Record<string, unknown>>;
   };
   const tools = listing.tools;
   assert.ok(tools.some((tool) => tool.name === "run_steps"));
   assert.ok(tools.some((tool) => tool.name === "run_script"));
+  assert.ok(tools.some((tool) => tool.name === "get_guide"));
+  assert.ok(tools.some((tool) => tool.name === "browser_select"));
   const forbiddenTools = ["launch_app", "kill_app", "move_cursor", "get_desktop_state"].map(
     (name) => ({
       name,
@@ -415,6 +420,25 @@ test("driver installation resolution rejects unsupported platforms and symlinked
       }),
       (error: unknown) => error instanceof CuaDriverError && error.code === "driver_missing",
     );
+
+    // A helper bundle with a wrong-sized cua-driver fails the compiled byte-size pin before plutil/hashing.
+    await rm(path.join(helperParent, "CuaDriver.app"));
+    const macosDir = path.join(helperParent, "CuaDriver.app", "Contents", "MacOS");
+    await mkdir(macosDir, { recursive: true });
+    await writeFile(path.join(macosDir, CUA_DRIVER_BROKER_EXECUTABLE), "#!/bin/sh\n", { mode: 0o755 });
+    await writeFile(path.join(macosDir, "cua-driver"), "#!/bin/sh\necho wrong size\n", { mode: 0o755 });
+    await assert.rejects(
+      resolveCuaDriverInstallation({
+        appPath: root,
+        isPackaged: false,
+        platform: "darwin",
+        resourcesPath: root,
+      }),
+      (error: unknown) =>
+        error instanceof CuaDriverError &&
+        error.code === "driver_integrity_failed" &&
+        /pinned 0\.38\.0 release/u.test(error.message),
+    );
   } finally {
     await rm(root, { recursive: true, force: true });
   }
@@ -442,7 +466,7 @@ test("the driver a Bot computer's guest gets is only the vendored, pinned execut
     await assert.rejects(
       resolveVendoredCuaDriverExecutable(options),
       (error: unknown) =>
-        error instanceof CuaDriverError && error.code === "driver_integrity_failed" && /pinned 0\.36\.0 release/u.test(error.message),
+        error instanceof CuaDriverError && error.code === "driver_integrity_failed" && /pinned 0\.38\.0 release/u.test(error.message),
     );
 
     // A helper bundle that is a symlink to another folder is never the vendored one.
@@ -851,7 +875,38 @@ test("session rejects non-allowlisted tools and private broker arguments", async
   await rm(root, { recursive: true, force: true });
 });
 
-test("schema-driven session injection binds every 0.36.0 tool call to Aiden's session", async () => {
+test("runtime macOS and Linux arm64 upstream pins stay aligned with the checked-in provenance", async () => {
+  const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../..");
+  const macProvenance = JSON.parse(
+    await readFile(path.join(repoRoot, "resources/computer-use/cua-driver-artifact.json"), "utf8"),
+  ) as { version: string; binaryBytes: number; binarySha256: string };
+  const linuxProvenance = JSON.parse(
+    await readFile(
+      path.join(repoRoot, "resources/computer-use/cua-driver-linux-arm64-artifact.json"),
+      "utf8",
+    ),
+  ) as {
+    version: string;
+    tag: string;
+    url: string;
+    archiveBytes: number;
+    sha256: string;
+    binaryBytes: number;
+    binarySha256: string;
+  };
+  assert.equal(CUA_DRIVER_UPSTREAM_PIN.version, macProvenance.version);
+  assert.equal(CUA_DRIVER_UPSTREAM_PIN.binaryBytes, macProvenance.binaryBytes);
+  assert.equal(CUA_DRIVER_UPSTREAM_PIN.binarySha256, macProvenance.binarySha256);
+  assert.equal(CUA_DRIVER_LINUX_ARM64_UPSTREAM_PIN.version, linuxProvenance.version);
+  assert.equal(CUA_DRIVER_LINUX_ARM64_UPSTREAM_PIN.tag, linuxProvenance.tag);
+  assert.equal(CUA_DRIVER_LINUX_ARM64_UPSTREAM_PIN.url, linuxProvenance.url);
+  assert.equal(CUA_DRIVER_LINUX_ARM64_UPSTREAM_PIN.archiveBytes, linuxProvenance.archiveBytes);
+  assert.equal(CUA_DRIVER_LINUX_ARM64_UPSTREAM_PIN.archiveSha256, linuxProvenance.sha256);
+  assert.equal(CUA_DRIVER_LINUX_ARM64_UPSTREAM_PIN.binaryBytes, linuxProvenance.binaryBytes);
+  assert.equal(CUA_DRIVER_LINUX_ARM64_UPSTREAM_PIN.binarySha256, linuxProvenance.binarySha256);
+});
+
+test("schema-driven session injection binds every 0.38.0 tool call to Aiden's session", async () => {
   const root = await mkdtemp(path.join(os.tmpdir(), "acu-session-schema-"));
   const logPath = path.join(root, "events.jsonl");
   const host = fakeHost(root, logPath);
@@ -860,7 +915,7 @@ test("schema-driven session injection binds every 0.36.0 tool call to Aiden's se
   try {
     const session = await host.createSession();
     sessionId = session.id;
-    // 0.36.0 admits `session` on every closed schema, so each call carries it.
+    // 0.38.0 admits `session` on every closed schema, so each call carries it.
     const calls: Array<[string, Record<string, unknown>]> = [
       ["health_report", { include: ["binary_version"] }],
       ["check_permissions", { prompt: false }],
@@ -892,12 +947,12 @@ test("schema-driven session injection binds every 0.36.0 tool call to Aiden's se
   assert.equal(
     events.some((event) => event.event === "driver-refused-arguments"),
     false,
-    "all calls must satisfy the strict 0.36.0 schemas",
+    "all calls must satisfy the strict 0.38.0 schemas",
   );
   await rm(root, { recursive: true, force: true });
 });
 
-test("the 0.36.0 fake refuses the removed element_index and unknown arguments as invalid_arguments", async () => {
+test("the 0.38.0 fake refuses the removed element_index and unknown arguments as invalid_arguments", async () => {
   const root = await mkdtemp(path.join(os.tmpdir(), "acu-closed-schema-"));
   const logPath = path.join(root, "events.jsonl");
   const host = fakeHost(root, logPath);

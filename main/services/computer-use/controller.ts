@@ -27,6 +27,8 @@ const ACTION_TIMEOUT_MS = 30_000;
 export const COMPUTER_USE_DISCOVERY_TIMEOUT_MS = 120_000;
 const CAPTURE_TIMEOUT_MS = 60_000;
 const MAX_DRIVER_TEXT_CHARS = 96_000;
+const REFUSAL_DETAIL_MAX_CHARS = 1_000;
+const DRIVER_REJECTED_PREFIX = "cua-driver rejected the action: ";
 const MAX_IMAGE_BASE64_CHARS = 60 * 1024 * 1024;
 const DESKTOP_NAMES = new Set(["screen", "desktop"]);
 /** get_window_state's own default AX walk cap (`get_window_state.rs`). */
@@ -241,16 +243,15 @@ const WINDOW_TARGET_REFUSALS = new Set([
   "element_bounds_unavailable",
 ]);
 /**
- * Refusals proving the target lacked keyboard focus; nothing was sent. The
- * macOS 0.36.0 driver sends window_not_key; target_focus_unconfirmed is a
- * forward-compatible mapping for later releases.
+ * Refusals proving the target lacked keyboard focus or document menu context;
+ * nothing was sent. Since 0.37/0.38 macOS sends both `window_not_key` (including
+ * sibling-window `invoke_menu`) and `target_focus_unconfirmed` (`press_key`).
  */
 const FOCUS_REFUSALS = new Set(["window_not_key", "target_focus_unconfirmed"]);
 /**
- * Refusals only macOS setup can clear. The macOS 0.36.0 driver sends none of
- * these as a `code` (it reports windowserver_connection_invalid as a `reason`
- * under background_unavailable, handled in refusalError); they are
- * forward-compatible mappings.
+ * Refusals only macOS setup can clear. The macOS 0.38.0 driver reports
+ * windowserver_connection_invalid as a `reason` under background_unavailable
+ * (handled in refusalError); the direct codes stay mapped forward-compatibly.
  */
 const READINESS_REFUSALS = new Set([
   "windowserver_connection_invalid",
@@ -258,7 +259,7 @@ const READINESS_REFUSALS = new Set([
   "direct_capture_consent_required",
 ]);
 /**
- * Refusals a visible foreground retry can satisfy. The macOS 0.36.0 driver
+ * Refusals a visible foreground retry can satisfy. The macOS 0.38.0 driver
  * sends background_unavailable; electron_main_process_unavailable is a
  * forward-compatible mapping.
  */
@@ -436,10 +437,27 @@ function parseDriverResult(raw: unknown): ParsedDriverResult {
     const structured = asRecord(parsed.structuredContent);
     const effect = identifier(structured?.effect);
     const reason = identifier(structured?.reason);
+    const hint = refusalHint(structured);
+    const rawText = text.trim();
+    const maxDetailChars = REFUSAL_DETAIL_MAX_CHARS - DRIVER_REJECTED_PREFIX.length;
+    let detail: string | undefined;
+    if (hint) {
+      const separator = " — ";
+      const cappedText = rawText.slice(0, maxDetailChars);
+      if (cappedText.includes(hint)) {
+        detail = cappedText;
+      } else {
+        const textBudget = maxDetailChars - hint.length - separator.length;
+        const boundedText = textBudget > 0 ? rawText.slice(0, textBudget).trimEnd() : "";
+        detail = boundedText
+          ? `${boundedText}${separator}${hint}`
+          : hint.slice(0, maxDetailChars);
+      }
+    } else {
+      detail = rawText.slice(0, 2_000) || undefined;
+    }
     throw new ComputerUseDriverActionError(
-      text.trim()
-        ? `cua-driver rejected the action: ${text.trim().slice(0, 2_000)}`
-        : "cua-driver rejected the action.",
+      detail ? `${DRIVER_REJECTED_PREFIX}${detail}` : "cua-driver rejected the action.",
       false,
       refusalCode(structured),
       // tool.rs / mcp_result.rs: output-contract failures after dispatch.
@@ -460,6 +478,16 @@ function refusalCode(structured: Record<string, unknown> | null): string | undef
   return identifier(
     structured.code ?? asRecord(structured.refusal)?.code ?? asRecord(structured.error)?.code,
   );
+}
+
+/** Bounded recovery hint from `error.hint`, `refusal.hint`, or top-level 0.38 `hint`. */
+function refusalHint(structured: Record<string, unknown> | null): string | undefined {
+  if (!structured) return undefined;
+  const raw =
+    safeString(asRecord(structured.error)?.hint, 1_000)?.trim() ||
+    safeString(asRecord(structured.refusal)?.hint, 1_000)?.trim() ||
+    safeString(structured.hint, 1_000)?.trim();
+  return raw || undefined;
 }
 
 /** A driver machine identifier (`code`, `effect`, `reason`), or undefined. */
@@ -486,8 +514,7 @@ function parseActionResult(structured: Record<string, unknown> | null): DriverAc
     );
   }
   if (effect === "refused") {
-    const error = asRecord(structured.error);
-    const hint = safeString(error?.hint, 1_000);
+    const hint = refusalHint(structured);
     throw new ComputerUseDriverActionError(
       hint ? `cua-driver refused the action: ${hint}` : "cua-driver refused the action.",
       false,
@@ -1107,7 +1134,7 @@ export class ComputerUseController {
    * invalidate the capture and ask for a fresh look before any retry.
    */
   private refusalError(error: ComputerUseDriverActionError): Error {
-    const detail = error.message.slice(0, 1_000);
+    const detail = error.message.slice(0, REFUSAL_DETAIL_MAX_CHARS);
     const { effect, reason } = error.envelope;
     // foreground_partial_unknown: the foreground route may have delivered part of the input.
     if (error.executionUnknown || error.code === "foreground_partial_unknown") {
@@ -1146,13 +1173,32 @@ export class ComputerUseController {
         `cua-driver read the control back and the value did not change. Capture the window again and choose another route (an element click or the key action) instead of repeating set_value. (${detail})`,
       );
     }
+    if (error.code === "screen_locked") {
+      // background_input.rs (0.37/0.38): display sleep, screen saver, or lock
+      // hides every app's AX windows and foreground input would reach the lock
+      // screen, so never suggest a foreground retry.
+      if (this.target) this.invalidateTargetSnapshot(this.target);
+      return new ComputerUseSafetyError(
+        "screen_locked",
+        `The screen is locked or showing the screen saver, so cua-driver refused to send input. Wake and unlock the Mac, then capture the window again before acting; do not retry in the foreground while locked. (${detail})`,
+      );
+    }
+    if (error.code === "select_menu_would_raise_window") {
+      // click.rs (0.37/0.38): clicking a background web <select> would raise
+      // the browser window; nothing was sent, and set_value chooses an option
+      // in the background.
+      return new ComputerUseSafetyError(
+        "select_menu_would_raise_window",
+        `Opening a web <select> menu in the background would raise the window, so nothing was sent. Choose the option with action "set_value" on that element instead, or retry with delivery_mode "foreground" if you need to open the menu visibly. (${detail})`,
+      );
+    }
     if (error.code && FOCUS_REFUSALS.has(error.code)) {
       return new ComputerUseSafetyError(
         "focus_unconfirmed",
         `The target did not have keyboard focus, so nothing was sent. Click the element first or capture again. (${detail})`,
       );
     }
-    // tools/mod.rs: the 0.36.0 driver reports an invalid WindowServer
+    // tools/mod.rs: the 0.38.0 driver reports an invalid WindowServer
     // connection as a reason under background_unavailable. Foreground input
     // would not fix the daemon, so it is setup, not a foreground retry.
     const readiness =

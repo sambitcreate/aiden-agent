@@ -40,7 +40,7 @@ const Modifier = Type.Union([
   Type.Literal("meta"),
 ]);
 
-/** One verify_state predicate: exactly one of element or window (cua-driver 0.36.0). */
+/** One verify_state predicate: exactly one of element or window (cua-driver 0.38.0). */
 const VerifyPredicate = Type.Object(
   {
     element: Type.Optional(

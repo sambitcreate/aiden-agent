@@ -39,7 +39,8 @@ const command = argv.includes("--bridge")
     : argv.find((value) => explicitCommands.has(value)) ?? "unknown";
 
 // The native bridge forwards only Aiden's allowlist, so the fake lists exactly
-// those tools in their 0.36.0 shapes and drops the upstream-only batch tools.
+// those tools in their 0.38.0 shapes and drops the upstream-only batch/script/
+// guide/browser tools.
 const ALLOWED_TOOLS = Object.keys(TOOL_DEFINITIONS).filter(
   (name) => !UNFORWARDED_TOOLS.has(name),
 );
@@ -283,7 +284,7 @@ if (command === "hold-stdio") {
           result: {
             protocolVersion: message.params?.protocolVersion ?? "2024-11-05",
             capabilities: { tools: {} },
-            serverInfo: { name: "fake-aiden-cua-bridge", version: "0.36.0" },
+            serverInfo: { name: "fake-aiden-cua-bridge", version: "0.38.0" },
           },
         });
       } else if (message.method === "notifications/initialized") {

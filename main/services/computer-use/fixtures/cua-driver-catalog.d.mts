@@ -1,4 +1,4 @@
-// Types for the shared 0.36.0 fake driver used by the TypeScript tests.
+// Types for the shared 0.38.0 fake driver used by the TypeScript tests.
 
 export interface FakeToolResult {
   content: Array<Record<string, unknown>>;
