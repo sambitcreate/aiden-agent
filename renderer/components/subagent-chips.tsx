@@ -2,13 +2,17 @@ import * as React from "react";
 import { flushSync } from "react-dom";
 import { ChevronDown } from "lucide-react";
 import { subagentModelDisplay, subagentRunProgressLabel } from "../lib/subagent-panel-state";
+import { subagentModelLine, subagentModelName, useSubagentModelCatalog } from "../lib/subagent-model-name";
 import {
   formatSubagentElapsed,
   isSubagentRunViewStateActive,
   longestSubagentElapsedLabel,
   subagentRoleLabel,
   subagentSnapshotElapsedMilliseconds,
+  subagentStatusCounts,
+  subagentStatusLabel as subagentViewStatusLabel,
   type SubagentRunViewRole,
+  type SubagentStatusWord,
   type SubagentRunViewState,
 } from "../lib/subagent-view-state";
 import { cn } from "../lib/ui-utils";
@@ -40,7 +44,8 @@ export function subagentActivityMark(
   if (/^(?:Reading|Listing|Matching|Searching)\b/u.test(activity ?? ""))
     return "scan-grid";
   if (activity === "Reviewing workspace context") return "tri-step";
-  if (activity === "Writing a bounded report") return "compose";
+  // Older saved runs say "Writing a bounded report".
+  if (activity === "Writing its report" || activity === "Writing a bounded report") return "compose";
   return fallbackMarkForRole(role);
 }
 
@@ -51,17 +56,7 @@ function isActiveState(state: SubagentRunViewState | "finished"): boolean {
 export function subagentStateLabel(
   state: SubagentRunViewState | "finished",
 ): string {
-  if (state === "queued") return "Queued";
-  if (state === "starting") return "Starting";
-  if (state === "running") return "Working";
-  if (state === "completed") return "Finished";
-  if (state === "failed") return "Failed";
-  if (state === "timed_out") return "Timed out";
-  if (state === "interrupted") return "Interrupted";
-  if (state === "needs_attention") return "Needs attention";
-  if (state === "stopped") return "Stopped";
-  if (state === "unknown") return "Outcome unknown";
-  return "Finished";
+  return state === "finished" ? "Done" : subagentViewStatusLabel(state);
 }
 
 export function subagentStatusLabel(
@@ -197,32 +192,16 @@ export interface SubagentChipsProps {
   className?: string;
 }
 
-const SUMMARY_ORDER: ReadonlyArray<readonly [SubagentRunViewState | "finished", string]> = [
-  ["needs_attention", "needs attention"],
-  ["running", "working"],
-  ["starting", "starting"],
-  ["queued", "queued"],
-  ["failed", "failed"],
-  ["timed_out", "timed out"],
-  ["interrupted", "interrupted"],
-  ["unknown", "outcome unknown"],
-  ["stopped", "stopped"],
-  ["completed", "completed"],
-  ["finished", "finished"],
-];
-
 function subagentGroupSummaryParts(
   states: readonly (SubagentRunViewState | "finished")[],
-): { state: SubagentRunViewState | "finished"; text: string }[] {
-  const counts = new Map<SubagentRunViewState | "finished", number>();
-  for (const state of states) counts.set(state, (counts.get(state) ?? 0) + 1);
-  return SUMMARY_ORDER.filter(([state]) => counts.has(state)).map(([state, text]) => ({
-    state,
-    text: `${counts.get(state)} ${text}`,
+): { word: SubagentStatusWord; text: string }[] {
+  return subagentStatusCounts(states).map(({ word, count }) => ({
+    word,
+    text: `${count} ${word.toLowerCase()}`,
   }));
 }
 
-/** "1 needs attention · 2 working · 1 completed", most urgent first. */
+/** "1 waiting on you · 2 running · 1 done", most urgent first. */
 export function subagentGroupSummary(states: readonly (SubagentRunViewState | "finished")[]): string {
   return subagentGroupSummaryParts(states)
     .map((part) => part.text)
@@ -367,13 +346,12 @@ export function SubagentChips({
             )}
           >
             {summaryParts.map((part, index) => (
-              <React.Fragment key={part.state}>
+              <React.Fragment key={part.word}>
                 {index > 0 ? " · " : null}
                 {/* Once settled, only the failures stand out. */}
                 <span
                   className={cn(
-                    !active && part.state === "failed" && "text-red",
-                    !active && part.state === "timed_out" && "text-support-warning",
+                    !active && part.word === "Failed" && "text-red",
                   )}
                 >
                   {part.text}
@@ -437,8 +415,11 @@ function SubagentGroupRow({
   const { runId, label, role, state, run } = item;
   const status = subagentStatusLabel(state, run?.activity);
   const model = run ? subagentModelDisplay(run) : undefined;
+  const catalog = useSubagentModelCatalog();
+  const modelName = run ? subagentModelName(run, catalog) : undefined;
   // Older snapshots never recorded a model choice; their label stays unchanged.
-  const recordedModel = run?.modelSelection !== undefined ? model : undefined;
+  const spokenModel =
+    run && run.modelSelection !== undefined ? `Model ${subagentModelLine(run, catalog)}` : undefined;
   const elapsedMs = run ? subagentSnapshotElapsedMilliseconds(run, now) : undefined;
   const roleName = showRole ? subagentRoleLabel(role) : null;
   // One line per run: name, what it is doing, and how long it has run.
@@ -447,7 +428,7 @@ function SubagentGroupRow({
       type="button"
       data-subagent-chip-run-id={runId}
       className="flex min-h-9 w-full min-w-0 items-center gap-2.5 rounded-control px-2 py-1 text-left transition-colors [--keyboard-focus-offset:-2px] duration-150 ease-out hover:bg-list-hover active:bg-list-selection motion-reduce:transition-none"
-      aria-label={`Open ${label}. Status: ${status}.${recordedModel ? ` ${recordedModel.spoken}.` : ""}`}
+      aria-label={`Open ${label}. Status: ${status}.${spokenModel ? ` ${spokenModel}.` : ""}`}
       onClick={(event) => onOpen(runId, event.currentTarget)}
     >
       <SubagentMark role={role} state={state} activity={run?.activity} size={16} />
@@ -484,8 +465,10 @@ function SubagentGroupRow({
           <p className="truncate text-small font-medium text-primary">{label}</p>
           <dl className="mt-1.5 grid grid-cols-[auto_minmax(0,1fr)] gap-x-3 gap-y-1 text-mini">
             <dt className="text-tertiary">Model</dt>
-            <dd className="break-words text-secondary [overflow-wrap:anywhere]">{model.model}</dd>
-            {model.effort ? (
+            <dd className="break-words text-secondary [overflow-wrap:anywhere]" title={model.model}>
+              {modelName}
+            </dd>
+            {model.effort && run?.thinkingLevel !== "off" ? (
               <>
                 <dt className="text-tertiary">Effort</dt>
                 <dd className="text-secondary">{model.effort}</dd>
@@ -493,7 +476,7 @@ function SubagentGroupRow({
             ) : null}
             {model.selection ? (
               <>
-                <dt className="text-tertiary">Choice</dt>
+                <dt className="text-tertiary">Model choice</dt>
                 <dd className="text-secondary">{model.selection}</dd>
               </>
             ) : null}

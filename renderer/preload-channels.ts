@@ -86,6 +86,8 @@ export const NOTIFICATION_CHANNEL_VALUES = [
   "chat:reasoning-delta",
   "chat:status",
   "chat:subagent-context",
+  /** One helper's conversation changed: `{streamId, update}` (see `subagent-transcript.ts`). */
+  "chat:subagent-transcript",
   "chat:subagents",
   "chat:timeline",
   "chat:todo",

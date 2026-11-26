@@ -16,6 +16,7 @@ import { BOT_PRESETS } from "../../../renderer/shared/bot-presets.js";
 import { createBotStarter } from "../../../main/services/bot-runtime/bot-starter.js";
 import { createBotCreationKeyStore } from "../../../main/services/bot-creation-keys.js";
 import { newBotId } from "../../../main/services/bot-application-service.js";
+import { SubagentReplyClock } from "../../../main/services/subagents/subagent-supervisor-core.js";
 /** Node host for the shared durable Bot core. No Electron singleton imports. */
 import { lazyStream } from "@earendil-works/pi-ai";
 import { CodemodeSandbox, loadQuickJSWasm } from "@earendil-works/pi-codemode";
@@ -64,6 +65,8 @@ export interface CliDurableBotPorts {
 export interface CliDurableBotToolContext {
   attachments: Attachment[];
   loadChat(): Promise<Chat | null>;
+  /** The reply's helper clock: every subagent call in one Bot turn shares it. */
+  replyClock?: SubagentReplyClock;
 }
 
 /** Immutable visible transcript snapshot for this exact durable tool call. */
@@ -131,9 +134,9 @@ export async function createCliDurableBots(profileDir: string, ports: CliDurable
   async function currentTools(botId: string) {
     return admitted(botId, (lease) => ports.tools(lease, { attachments: [], loadChat: async () => null }));
   }
-  function bindTool(botId: string, tool: AgentTool, call: BotToolCall): AgentTool {
+  function bindTool(botId: string, tool: AgentTool, call: BotToolCall, replyClock: SubagentReplyClock): AgentTool {
     return { ...tool, execute: (callId, args, signal, onUpdate) => admitted(botId, async (lease) => {
-      const context = cliDurableBotToolContext(await call.entries(), lease.authority);
+      const context = { ...cliDurableBotToolContext(await call.entries(), lease.authority), replyClock };
       const live = (await ports.tools(lease, context)).find((candidate) => candidate.name === tool.name);
       if (!live) throw new Error("This Bot tool is no longer available.");
       const expected = mcpAgentToolDescriptor(tool), actual = mcpAgentToolDescriptor(live);
@@ -183,10 +186,12 @@ export async function createCliDurableBots(profileDir: string, ports: CliDurable
           messagingEnabled: () => ports.messagingEnabled?.() ?? Promise.resolve(true),
           bot: async () => bot, roster, post: (input) => messages.post(input),
         });
+        // One clock per turn: the next refresh builds new tools and drops it.
+        const replyClock = new SubagentReplyClock();
         return [
           ...(await currentTools(bot.id)).map((tool) => ({
             tool: { ...tool, execute: async () => { throw new Error("A durable Bot tool requires its calling conversation."); } },
-            bind: (call: BotToolCall) => bindTool(bot.id, tool, call),
+            bind: (call: BotToolCall) => bindTool(bot.id, tool, call, replyClock),
             replay: "unsafe" as const, ...(mcpAgentToolDescriptor(tool) ? { mcp: true } : {}),
           })),
           botMemoryToolEntry(bot.id, memory, {

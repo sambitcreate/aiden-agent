@@ -663,7 +663,7 @@ test("a tool call that needs approval asks in the chat and answers by wait id", 
     toolName: "send_email",
     summary: "Send the weekly update to the team.",
   }));
-  const card = await screen.findByRole("region", { name: "Review before Send email" });
+  const card = await screen.findByRole("region", { name: "Request from Planner: Review before Send email" });
   assert.ok(within(card).getByText("Send the weekly update to the team."));
   assert.ok(within(card).getByText("Planner is paused until you choose."));
   fireEvent.click(within(card).getByRole("button", { name: "Allow once" }));
@@ -671,7 +671,7 @@ test("a tool call that needs approval asks in the chat and answers by wait id", 
   assert.deepEqual(calls.find((call) => call.channel === "bots:approve")?.args, [
     { waitId: "wait-7", decision: "allow" },
   ]);
-  await waitFor(() => assert.equal(screen.queryByRole("region", { name: "Review before Send email" }), null));
+  await waitFor(() => assert.equal(screen.queryByRole("region", { name: "Request from Planner: Review before Send email" }), null));
   // The answered card collapses to its status line.
   assert.equal((await screen.findByText("Allowed once")).closest("[role='status']")?.getAttribute("data-approval-status"), "allow");
 });
@@ -691,7 +691,7 @@ test("identical waiting calls share one card, which answers every one of them", 
     emitBotTestNotification("bots:approval", { ...same, runHash: "run-2", waitId: "wait-4", toolCallId: "call-4" });
     emitBotTestNotification("bots:approval", { botId: "bot-1", toolName: "send_email", summary: "send_email", waitId: "wait-5", toolCallId: "call-5" });
   });
-  const card = await screen.findByRole("region", { name: "Review before Send email" });
+  const card = await screen.findByRole("region", { name: "Request from Planner: Review before Send email" });
   assert.equal(slotPosition(), "1 of 4", "the Needs-you slot counts the cards");
   fireEvent.click(within(card).getByRole("button", { name: "Deny" }));
   await waitFor(() => assert.equal(calls.filter((call) => call.channel === "bots:approve").length, 2));
@@ -715,7 +715,7 @@ test("a shared card's answer removes only the waits it reached", async () => {
     emitBotTestNotification("bots:approval", { ...same, waitId: "wait-1", toolCallId: "call-1" });
     emitBotTestNotification("bots:approval", { ...same, waitId: "wait-2", toolCallId: "call-2" });
   });
-  const card = await screen.findByRole("region", { name: "Review before Send email" });
+  const card = await screen.findByRole("region", { name: "Request from Planner: Review before Send email" });
   fireEvent.click(within(card).getByRole("button", { name: "Allow once" }));
   await waitFor(() => assert.deepEqual(approved(), ["wait-1", "wait-2"]));
   // The second wait was allowed although the first was not: no error.
@@ -742,11 +742,11 @@ test("a shared card whose answer reached none of its waits says so and stays", a
     emitBotTestNotification("bots:approval", { ...same, waitId: "wait-1", toolCallId: "call-1" });
     emitBotTestNotification("bots:approval", { ...same, waitId: "wait-2", toolCallId: "call-2" });
   });
-  const card = await screen.findByRole("region", { name: "Review before Send email" });
+  const card = await screen.findByRole("region", { name: "Request from Planner: Review before Send email" });
   fireEvent.click(within(card).getByRole("button", { name: "Allow once" }));
   assert.equal((await within(card).findByRole("alert")).textContent, "The approval could not be sent.");
   assert.equal(screen.queryByText("Allowed once"), null);
-  assert.ok(screen.getByRole("region", { name: "Review before Send email" }), "neither wait was removed");
+  assert.ok(screen.getByRole("region", { name: "Request from Planner: Review before Send email" }), "neither wait was removed");
 });
 
 test("a card answered on another device collapses to No longer active, and a deny here to Denied", async () => {
@@ -757,13 +757,13 @@ test("a card answered on another device collapses to No longer active, and a den
   });
   const prompt = { botId: "bot-1", waitId: "wait-9", toolCallId: "call-9", toolName: "send_email", summary: "Send it." };
   act(() => emitBotTestNotification("bots:approval", prompt));
-  await screen.findByRole("region", { name: "Review before Send email" });
+  await screen.findByRole("region", { name: "Request from Planner: Review before Send email" });
   act(() => emitBotTestNotification("bots:approval-settled", { botId: "bot-1", waitId: "wait-9", outcome: "allowed" }));
   assert.ok(await screen.findByText("No longer active"));
-  assert.equal(screen.queryByRole("region", { name: "Review before Send email" }), null);
+  assert.equal(screen.queryByRole("region", { name: "Request from Planner: Review before Send email" }), null);
 
   act(() => emitBotTestNotification("bots:approval", { ...prompt, waitId: "wait-10" }));
-  const card = await screen.findByRole("region", { name: "Review before Send email" });
+  const card = await screen.findByRole("region", { name: "Request from Planner: Review before Send email" });
   fireEvent.click(within(card).getByRole("button", { name: "Deny" }));
   // The device's own answer is never reported as stale, even when the settlement arrives first.
   act(() => emitBotTestNotification("bots:approval-settled", { botId: "bot-1", waitId: "wait-10", outcome: "denied" }));
@@ -807,7 +807,7 @@ test("an approval whose answer fails to send comes back so it can be answered ag
     toolName: "share_image",
     summary: "Share the chart.",
   }));
-  const card = await screen.findByRole("region", { name: "Review before Share image" });
+  const card = await screen.findByRole("region", { name: "Request from Planner: Review before Share image" });
   fireEvent.click(within(card).getByRole("button", { name: "Allow once" }));
   assert.equal((await within(card).findByRole("alert")).textContent, "The approval could not be sent.");
   await waitFor(() => assert.equal((within(card).getByRole("button", { name: "Allow once" }) as HTMLButtonElement).disabled, false));
@@ -2356,7 +2356,7 @@ test("a pile-up waits in one Needs-you slot: take control first, then each ask c
   // Next walks the ask cards in order: the approval, the folder request, the plan.
   const header = screen.getByRole("navigation", { name: "Needs you" });
   fireEvent.click(within(header).getByRole("button", { name: "Next" }));
-  assert.ok(await within(slot()).findByRole("region", { name: "Review before Shell" }));
+  assert.ok(await within(slot()).findByRole("region", { name: "Request from Planner: Review before Shell" }));
   assert.equal(slotPosition(), "2 of 5");
   assert.equal(within(slot()).queryByRole("group", { name: "Planner needs you" }), null);
   fireEvent.click(within(header).getByRole("button", { name: "Next" }));
@@ -2455,7 +2455,7 @@ test("when the card on show is answered, the slot goes back to the first item st
   });
   await waitFor(() => assert.equal(slotPosition(), "1 of 2"));
   fireEvent.click(within(screen.getByRole("navigation", { name: "Needs you" })).getByRole("button", { name: "Next" }));
-  await screen.findByRole("region", { name: "Review before Shell" });
+  await screen.findByRole("region", { name: "Request from Planner: Review before Shell" });
   assert.equal(
     screen.getAllByRole("status").find((node) => node.hasAttribute("data-needs-you-announcement"))?.textContent,
     "Needs you, 2 of 2",
@@ -2549,7 +2549,7 @@ test("a repeated approval requests Always truthfully, preserves the draft and Ma
   const box = await screen.findByPlaceholderText("Ask Planner") as HTMLTextAreaElement;
   fireEvent.change(box, { target: { value: "Keep this draft" } });
   act(() => emitBotTestNotification("bots:approval", { botId: "bot-1", waitId: "always-1", toolCallId: "call-a", toolName: "send_email", summary: "Send the update.", always: { key: "k", count: 3 } }));
-  const card = await screen.findByRole("region", { name: "Review before Send email" });
+  const card = await screen.findByRole("region", { name: "Request from Planner: Review before Send email" });
   within(card).getByText("You’ve allowed this 3 times in the last 2 weeks.");
   const buttons = within(card).getAllByRole("button");
   assert.deepEqual(
@@ -2581,7 +2581,7 @@ test("the first approval card already offers Always allow, without a repeat note
     "settings:get": () => ({ approvalMode: "ask" }), "providers:list": () => USABLE,
   });
   act(() => emitBotTestNotification("bots:approval", { botId: "bot-1", waitId: "first-1", toolCallId: "call-a", toolName: "composio", summary: "Composio · Gmail: Send email", always: { key: "k", count: 0 }, autoWouldJudge: true }));
-  const card = await screen.findByRole("region", { name: /^Review before/u });
+  const card = await screen.findByRole("region", { name: /^Request from Planner: Review before /u });
   within(card).getByText("Composio · Gmail: Send email");
   await act(async () => { await new Promise((resolve) => setTimeout(resolve, 20)); });
   assert.equal(within(card).queryByText(/You’ve allowed this/u), null);
@@ -2600,7 +2600,7 @@ test("in Ask, a repeated approval also offers Auto, which saves the Mac's mode t
     "providers:list": () => USABLE,
   });
   act(() => emitBotTestNotification("bots:approval", { botId: "bot-1", waitId: "w-1", toolCallId: "call-a", toolName: "send_email", summary: "Send the update.", always: { key: "k", count: 3 }, autoWouldJudge: true }));
-  const card = await screen.findByRole("region", { name: "Review before Send email" });
+  const card = await screen.findByRole("region", { name: "Request from Planner: Review before Send email" });
   const offer = await within(card).findByRole("button", { name: "Switch to Auto" });
   await act(async () => fireEvent.click(offer));
   assert.deepEqual(saved, { approvalMode: "auto" });
@@ -2629,7 +2629,7 @@ test("Auto is offered only for a repeat, only in Ask, only where Auto would judg
     });
     act(() => emitBotTestNotification("bots:approval", { botId: "bot-1", waitId: `wait-${index}`, toolCallId: "call-a", toolName: "send_email", summary: "Send the update.",
       ...(setup.always ? { always: { key: "k", count: 3 } } : {}), ...(setup.autoWouldJudge === false ? {} : { autoWouldJudge: true }) }));
-    const card = await screen.findByRole("region", { name: "Review before Send email" });
+    const card = await screen.findByRole("region", { name: "Request from Planner: Review before Send email" });
     // Give settings and providers a chance to land before checking it stayed out.
     await act(async () => { await new Promise((resolve) => setTimeout(resolve, 20)); });
     assert.equal(within(card).queryByRole("button", { name: "Switch to Auto" }), null, name);
@@ -2645,7 +2645,7 @@ test("Always errors keep the card retryable; a settled old card never returns af
   });
   const prompt = { botId: "bot-1", waitId: "always-old", toolCallId: "call-a", toolName: "send_email", summary: "Old update", always: { key: "k", count: 3 } };
   act(() => emitBotTestNotification("bots:approval", prompt));
-  const card = await screen.findByRole("region", { name: "Review before Send email" });
+  const card = await screen.findByRole("region", { name: "Request from Planner: Review before Send email" });
   await chooseBotAlways(card);
   await act(async () => reject(new Error("Could not send this answer.")));
   assert.equal((await screen.findByRole("alert")).textContent, "Could not send this answer.");
@@ -2667,7 +2667,7 @@ test("Always errors keep the card retryable; a settled old card never returns af
 test("an unoffered approval has no Always button and Allow sends no scope property", async () => {
   const calls = await mountChat({ "bots:live:subscribe": () => snapshot(), "bots:pendingApprovals": () => [], "bots:approve": () => ({ decided: true }) });
   act(() => emitBotTestNotification("bots:approval", { botId: "bot-1", waitId: "once-1", toolCallId: "c", toolName: "send_email", summary: "Once only" }));
-  const card = await screen.findByRole("region", { name: "Review before Send email" });
+  const card = await screen.findByRole("region", { name: "Request from Planner: Review before Send email" });
   assert.ok(!within(card).queryByRole("button", { name: "More ways to allow" }));
   await act(async () => fireEvent.click(within(card).getByRole("button", { name: "Allow once" })));
   assert.deepEqual(calls.find((call) => call.channel === "bots:approve")!.args, [{ waitId: "once-1", decision: "allow" }]);
@@ -2681,7 +2681,7 @@ test("a declined bridge ACK never claims Always was requested and keeps the card
     "bots:approve": () => ({ decided: false }),
   });
   act(() => emitBotTestNotification("bots:approval", { botId: "bot-1", waitId: "gone-1", toolCallId: "c", toolName: "send_email", summary: "Changed approval", always: { key: "k", count: 3 } }));
-  const card = await screen.findByRole("region", { name: "Review before Send email" });
+  const card = await screen.findByRole("region", { name: "Request from Planner: Review before Send email" });
   await chooseBotAlways(card);
   assert.equal((await screen.findByRole("alert")).textContent, "That approval was already answered or closed.");
   await waitFor(() => assert.equal((within(card).getByRole("button", { name: "More ways to allow" }) as HTMLButtonElement).disabled, false));
@@ -2695,7 +2695,7 @@ test("the approval keyboard shortcut stays one-time on an offered card, respects
     "bots:approve": () => new Promise((resolve) => { release = resolve; }),
   });
   act(() => emitBotTestNotification("bots:approval", { botId: "bot-1", waitId: "keys-1", toolCallId: "c", toolName: "send_email", summary: "An offered approval", always: { key: "k", count: 3 } }));
-  const card = await screen.findByRole("region", { name: "Review before Send email" });
+  const card = await screen.findByRole("region", { name: "Request from Planner: Review before Send email" });
   const allow = within(card).getByRole("button", { name: "Allow once" });
   const key = { key: "Enter", ...(allow.getAttribute("aria-keyshortcuts")?.startsWith("Meta") ? { metaKey: true } : { ctrlKey: true }) };
   const box = screen.getByPlaceholderText("Ask Planner");

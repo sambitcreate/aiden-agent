@@ -10,6 +10,11 @@ import { parseChatContextPressureNotification } from "../shared/context-pressure
 import { parseModelCallRetryView } from "../shared/model-call-retry";
 import type { ChatTimelineNotification, GenerationTimeline } from "../shared/generation-timeline";
 import { parseSubagentRunSnapshot, type SubagentRunSnapshot } from "../shared/subagent-runs";
+import {
+  foldLiveSubagentTranscript,
+  parseSubagentTranscriptNotification,
+  type LiveSubagentTranscripts,
+} from "../shared/subagent-transcript";
 import { parseToolApprovalScope } from "../shared/tool-approval-scope";
 import { parseToolApprovalPreview } from "../shared/tool-approval-preview";
 import { parseCommandReading } from "../shared/command-reading";
@@ -104,6 +109,8 @@ export interface GenerationStreamProjection {
   /** Native (render_ui) visuals presented so far. */
   uiVisuals?: ChatUiVisualV1[];
   subagents: SubagentRunSnapshot[];
+  /** Live helper conversation updates folded so far, by run id. */
+  subagentTranscripts?: LiveSubagentTranscripts;
 }
 
 export interface GenerationStreamSubscription {
@@ -125,6 +132,7 @@ export type GenerationStreamChannel =
   | "chat:timeline"
   | "chat:artifact"
   | "chat:subagents"
+  | "chat:subagent-transcript"
   | "chat:tool"
   | "chat:approval"
   | "chat:questionnaire"
@@ -168,6 +176,7 @@ export function createGenerationStreamBuffer(): GenerationStreamBuffer {
     onNotification<unknown>("chat:timeline", capture("chat:timeline")),
     onNotification<unknown>("chat:artifact", capture("chat:artifact")),
     onNotification<unknown>("chat:subagents", capture("chat:subagents")),
+    onNotification<unknown>("chat:subagent-transcript", capture("chat:subagent-transcript")),
     onNotification<unknown>("chat:tool", capture("chat:tool")),
     onNotification<unknown>("chat:approval", capture("chat:approval")),
     onNotification<unknown>("chat:questionnaire", capture("chat:questionnaire")),
@@ -205,6 +214,8 @@ export function subscribeGenerationStream(
   let projectedArtifacts: ChatArtifactV1[] = initialProjection?.artifacts ? [...initialProjection.artifacts] : [];
   let projectedUiVisuals: ChatUiVisualV1[] = initialProjection?.uiVisuals ? [...initialProjection.uiVisuals] : [];
   let projectedSubagents: SubagentRunSnapshot[] = initialProjection?.subagents ? [...initialProjection.subagents] : [];
+  // Folding never mutates a map, so the handed-over one can seed this as is.
+  let projectedSubagentTranscripts: LiveSubagentTranscripts | undefined = initialProjection?.subagentTranscripts;
   const unsubs: Array<() => void> = [];
   const handlers = new Map<GenerationStreamChannel, (payload: unknown) => void>();
   let disposed = false;
@@ -357,6 +368,23 @@ export function subscribeGenerationStream(
     };
     register("chat:subagents", onSubagents, onNotification<ChatSubagents>("chat:subagents", onSubagents));
   }
+  // Folded whenever helpers are shown, so a detached run hands them over.
+  if (callbacks.onSubagents || callbacks.onSubagentTranscript) {
+    const onSubagentTranscript = (payload: unknown) => {
+      const notification = parseSubagentTranscriptNotification(payload);
+      if (!notification || notification.streamId !== streamId) return;
+      projectedSubagentTranscripts = foldLiveSubagentTranscript(
+        projectedSubagentTranscripts,
+        notification.update,
+      );
+      callbacks.onSubagentTranscript?.(notification.update);
+    };
+    register(
+      "chat:subagent-transcript",
+      onSubagentTranscript,
+      onNotification<unknown>("chat:subagent-transcript", onSubagentTranscript),
+    );
+  }
   const onTool = (p: ChatTool) => {
     if (p.streamId === streamId) callbacks.onTool?.(p.phase, p.toolName);
   };
@@ -428,6 +456,7 @@ export function subscribeGenerationStream(
       artifacts: projectedArtifacts,
       uiVisuals: projectedUiVisuals,
       subagents: projectedSubagents,
+      ...(projectedSubagentTranscripts ? { subagentTranscripts: projectedSubagentTranscripts } : {}),
     }),
   };
 }

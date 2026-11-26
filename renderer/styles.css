@@ -700,6 +700,26 @@ body {
   background-color: color-mix(in srgb, var(--surface-popover) 98%, var(--text-primary));
 }
 
+/* Go to approval: a brief accent tint that fades back, so a pointer user (no
+   focus ring) sees where they landed. Under Reduce Motion the same tint holds
+   still for as long, then goes, with no fade. `revealApprovalCard` removes the
+   attribute after 1.2 s. */
+@keyframes approval-arrival {
+  from {
+    background-color: var(--approval-arrival-tint);
+  }
+}
+
+[data-approval-arrival] {
+  --approval-arrival-tint: color-mix(in srgb, var(--surface-popover) 88%, var(--status-accent));
+  animation: approval-arrival 1200ms var(--motion-decelerate-easing);
+}
+
+:root[data-reduce-motion="true"] [data-approval-arrival] {
+  animation: none;
+  background-color: var(--approval-arrival-tint);
+}
+
 .ask-user-question-shell {
   animation: ask-user-question-in var(--motion-duration) var(--motion-easing) both;
 }
@@ -1082,6 +1102,15 @@ textarea {
 
 .transcript-sticky-header:focus-visible {
   --transcript-sticky-state: var(--color-list-selection);
+}
+
+/* The side panel's helper chat sits on the popover surface, so its stuck step
+   headers use that base instead of the main pane's background. */
+[data-subagent-helper-chat]:not([data-subagent-helper-expanded]) .transcript-sticky-header {
+  background:
+    linear-gradient(var(--transcript-sticky-state), var(--transcript-sticky-state)),
+    linear-gradient(var(--transcript-sticky-surface), var(--transcript-sticky-surface)),
+    var(--color-popover);
 }
 
 /* A collapse from a stuck header brings its section back into view below the

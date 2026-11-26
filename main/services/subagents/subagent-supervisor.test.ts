@@ -22,10 +22,22 @@ import {
   subagentsAllowedForGeneration,
   subagentWorkspaceWriteAllowedForGeneration,
 } from "./eligibility.js";
-import { projectSubagentCompletedSummary, runSubagentChild } from "./subagent-child-runner.js";
-import { SubagentRuntimeRegistry, type SubagentRuntimeChild } from "./child-agent-runtime.js";
-import { SubagentSupervisor, type PreparedSubagentRun } from "./subagent-supervisor.js";
+import {
+  projectSubagentCompletedSummary,
+  runSubagentChild,
+  subagentPartialWorkNotes,
+} from "./subagent-child-runner.js";
+import { SubagentRuntimeRegistry, type SubagentChildSpec, type SubagentRuntimeChild } from "./child-agent-runtime.js";
+import {
+  BOT_SUBAGENT_LIMIT_REACHED_RESULT,
+  flushPendingSubagentTranscripts,
+  SubagentReplyClock,
+  SubagentSupervisor,
+  type PreparedSubagentRun,
+} from "./subagent-supervisor.js";
 import { chatSurfaceHooks } from "../agent-surface-hooks.js";
+import { SubagentTranscriptRecorder } from "./subagent-transcript-recorder.js";
+import type { SubagentTranscriptMessageEntry, SubagentTranscriptV1 } from "../../../renderer/shared/subagent-transcript.js";
 import { createForegroundSubagentPersistenceV2 } from "./subagent-foreground-persistence-v2.js";
 import type { ProductionSubagentRunStore } from "./subagent-run-store-production.js";
 import { createSubagentTool } from "./subagent-tool.js";
@@ -447,6 +459,9 @@ test("an expired tree deadline launches no children and returns ordered timeouts
   let now = 0;
   let launches = 0;
   const health = healthProbe();
+  // The reply's first helper launch happened at 0 (a shared reply clock).
+  const replyClock = new SubagentReplyClock();
+  replyClock.start(0);
   const supervisor = new SubagentSupervisor({
     generationId: "tree-deadline",
     ...TEST_SUPERVISOR_SCOPE,
@@ -457,7 +472,7 @@ test("an expired tree deadline launches no children and returns ordered timeouts
     inheritedCeiling: SUBAGENT_READ_TOOL_NAMES,
     healthMetrics: health.sink,
     now: () => now,
-    policy: { treeDeadlineMs: 50 },
+    policy: { treeDeadlineMs: 50, replyClock },
     runChild: async ({ request: task }) => {
       launches += 1;
       return completed(task.label);
@@ -630,8 +645,11 @@ test("V2 web siblings each spend their own network operation, in every batch of 
 test("V2 authority admission floors a high-resolution remaining deadline", async () => {
   let now = 1_000.25;
   const preparedDeadlines: number[] = [];
+  const replyClock = new SubagentReplyClock();
+  replyClock.start(now);
   const supervisor = new SubagentSupervisor({
     generationId: "fractional-deadline",
+    policy: { replyClock },
     ...TEST_SUPERVISOR_SCOPE,
     runtime: runtime(),
     thinkingLevel: "high",
@@ -658,7 +676,7 @@ test("V2 authority admission floors a high-resolution remaining deadline", async
 
   const result = await supervisor.execute(request(["Cat", "Moon"]));
 
-  assert.deepEqual(preparedDeadlines, [599_999, 599_999]);
+  assert.deepEqual(preparedDeadlines, [86_399_999, 86_399_999]);
   assert.match(result, /## 1\. Cat[\s\S]*Status: completed/u);
   assert.match(result, /## 2\. Moon[\s\S]*Status: completed/u);
 });
@@ -1244,6 +1262,290 @@ test("stopping one queued V2 child preserves its running siblings and ordered re
   assert.match(result, /## 1\. First[\s\S]*Status: completed/u);
   assert.match(result, /## 2\. Second[\s\S]*Status: completed/u);
   assert.match(result, /## 3\. Third[\s\S]*Status: interrupted/u);
+});
+
+test("a queued chat helper still finishes after the first two take 15 minutes", async () => {
+  let now = 0;
+  const childDeadlines: Array<number | undefined> = [];
+  const supervisor = new SubagentSupervisor({
+    generationId: "generation-phase6b",
+    ...TEST_SUPERVISOR_SCOPE,
+    runtime: runtime(),
+    thinkingLevel: "high",
+    workspaceRoot: "/workspace",
+    permission: "full",
+    inheritedCeiling: SUBAGENT_READ_TOOL_NAMES,
+    now: () => now,
+    prepareRun: async ({ identity, contextRevision, deadlineMs }) =>
+      phase6Prepared(
+        phase6Authority({ runId: identity.runId, contextRevision, delegate: false, deadlineMs }),
+      ),
+    runChild: async ({ request: task, policy }) => {
+      childDeadlines.push(policy?.deadlineMs);
+      // The first two helpers fill both slots and each takes 15 minutes.
+      if (task.label !== "Third") now += 15 * 60_000;
+      return completed(task.label);
+    },
+  });
+
+  const result = await supervisor.execute(request(["First", "Second", "Third"]));
+
+  assert.match(result, /## 1\. First[\s\S]*Status: completed/u);
+  assert.match(result, /## 2\. Second[\s\S]*Status: completed/u);
+  assert.match(result, /## 3\. Third[\s\S]*Status: completed/u);
+  assert.deepEqual(childDeadlines, [24 * 60 * 60_000, 24 * 60 * 60_000, 24 * 60 * 60_000]);
+});
+
+test("a queued Bot helper gets only what is left of the reply, so its report fits inside the limit", async () => {
+  let now = 0;
+  const dispatches: Array<{ label: string; deadlineMs: number | undefined; at: number }> = [];
+  const supervisor = new SubagentSupervisor({
+    generationId: "generation-bot-queue",
+    ...TEST_SUPERVISOR_SCOPE,
+    runtime: runtime(),
+    thinkingLevel: "high",
+    workspaceRoot: "/workspace",
+    permission: "full",
+    inheritedCeiling: SUBAGENT_READ_TOOL_NAMES,
+    now: () => now,
+    policy: { timeLimit: "bot", replyClock: new SubagentReplyClock() },
+    prepareRun: async ({ identity, contextRevision, deadlineMs }) =>
+      phase6Prepared(
+        phase6Authority({ runId: identity.runId, contextRevision, delegate: false, deadlineMs }),
+      ),
+    runChild: async ({ request: task, policy }) => {
+      dispatches.push({ label: task.label, deadlineMs: policy?.deadlineMs, at: now });
+      if (task.label !== "Third") now += 15 * 60_000;
+      return completed(task.label);
+    },
+  });
+
+  const result = await supervisor.execute(request(["First", "Second", "Third"]));
+
+  assert.match(result, /## 3\. Third[\s\S]*Status: completed/u);
+  const third = dispatches.find(({ label }) => label === "Third")!;
+  assert.ok(third.at >= 15 * 60_000, "the third helper waited for a free slot");
+  for (const dispatch of dispatches) {
+    assert.equal(dispatch.at + dispatch.deadlineMs!, 60 * 60_000, dispatch.label);
+  }
+});
+
+test("a Bot helper that finishes as the reply limit passes keeps its completed result", async () => {
+  let now = 0;
+  const supervisor = new SubagentSupervisor({
+    generationId: "generation-bot-finish-at-limit",
+    ...TEST_SUPERVISOR_SCOPE,
+    runtime: runtime(),
+    thinkingLevel: "high",
+    workspaceRoot: "/workspace",
+    permission: "full",
+    inheritedCeiling: SUBAGENT_READ_TOOL_NAMES,
+    now: () => now,
+    policy: { timeLimit: "bot", replyClock: new SubagentReplyClock() },
+    runChild: async ({ request: task }) => {
+      now = 60 * 60_000;
+      return completed(task.label, "Every recipe now has a cooking time.");
+    },
+  });
+
+  const result = await supervisor.execute(request(["Cookbook"]));
+
+  assert.match(result, /## 1\. Cookbook[\s\S]*Status: completed/u);
+  assert.match(result, /Every recipe now has a cooking time\./u);
+  assert.doesNotMatch(result, /partial findings/u);
+});
+
+test("a Bot reply stops its helpers at the limit and refuses every later launch", async () => {
+  const replyClock = new SubagentReplyClock();
+  let launches = 0;
+  let prepared = 0;
+  const botSupervisor = (treeDeadlineMs?: number, now?: () => number) =>
+    new SubagentSupervisor({
+      generationId: "bot-reply",
+      ...TEST_SUPERVISOR_SCOPE,
+      runtime: runtime(),
+      thinkingLevel: "high",
+      workspaceRoot: "/workspace",
+      permission: "full",
+      inheritedCeiling: SUBAGENT_READ_TOOL_NAMES,
+      ...(now ? { now } : {}),
+      policy: { timeLimit: "bot", replyClock, ...(treeDeadlineMs ? { treeDeadlineMs } : {}) },
+      runChild: async ({ request: task, signal }) => {
+        launches += 1;
+        await new Promise<never>((_resolve, reject) => {
+          signal?.addEventListener("abort", () => reject(new Error("Parent generation cancelled.")), { once: true });
+        });
+        return completed(task.label);
+      },
+    });
+
+  // A short limit stands in for the 60 minutes so the real timer fires.
+  const stopped = await botSupervisor(50).execute(request(["Survey"]));
+  assert.equal(launches, 1);
+  assert.match(stopped, /## 1\. Survey[\s\S]*Status: timed_out/u);
+  assert.match(stopped, /Stopped at the 60-minute limit for Bot replies\./u);
+
+  // Each later call in the reply builds its own supervisor on the same clock.
+  for (const labels of [["Retry"], ["Again", "Once more"]]) {
+    const refused = await botSupervisor().execute(request(labels));
+    assert.equal(
+      refused,
+      "Helpers can't start again in this reply because the 60-minute limit for Bot replies was reached. Finish the work yourself or tell the person.",
+    );
+  }
+  assert.equal(launches, 1);
+
+  // The default Bot limit is 60 minutes from the reply's first launch.
+  let now = 0;
+  const lateClock = new SubagentReplyClock();
+  const late = (deadlines: Array<number | undefined>) =>
+    new SubagentSupervisor({
+      generationId: "bot-reply-late",
+      ...TEST_SUPERVISOR_SCOPE,
+      runtime: runtime(),
+      thinkingLevel: "high",
+      workspaceRoot: "/workspace",
+      permission: "full",
+      inheritedCeiling: SUBAGENT_READ_TOOL_NAMES,
+      now: () => now,
+      policy: { timeLimit: "bot", replyClock: lateClock },
+      prepareRun: async () => {
+        prepared += 1;
+        throw new Error("No run may be prepared after the limit.");
+      },
+      runChild: async ({ request: task, policy }) => {
+        deadlines.push(policy?.deadlineMs);
+        return completed(task.label);
+      },
+    });
+  lateClock.start(0);
+  now = 59 * 60_000;
+  const deadlines: Array<number | undefined> = [];
+  const lastMinute = new SubagentSupervisor({
+    generationId: "bot-reply-last-minute",
+    ...TEST_SUPERVISOR_SCOPE,
+    runtime: runtime(),
+    thinkingLevel: "high",
+    workspaceRoot: "/workspace",
+    permission: "full",
+    inheritedCeiling: SUBAGENT_READ_TOOL_NAMES,
+    now: () => now,
+    policy: { timeLimit: "bot", replyClock: lateClock },
+    runChild: async ({ request: task, policy }) => {
+      deadlines.push(policy?.deadlineMs);
+      return completed(task.label);
+    },
+  });
+  assert.match(await lastMinute.execute(request(["Last"])), /Status: completed/u);
+  assert.deepEqual(deadlines, [60_000]);
+  now = 60 * 60_000;
+  assert.equal(await late([]).execute(request(["Late"])), BOT_SUBAGENT_LIMIT_REACHED_RESULT);
+  assert.equal(prepared, 0);
+});
+
+for (const drains of [false, true]) {
+test(`stopping a helper that edited a file hands the parent its last message and changed files (${drains ? "clean stop" : "stop not finished"})`, async () => {
+  const stops: Array<(reason?: Error) => void> = [];
+  const wrote = deferred<void>();
+  let finishStopping = (): void => undefined;
+  let tools: AgentTool[] = [];
+  const control = fakeChild(async ({ emit }) => {
+    const write = tools.find((tool) => tool.name === "write_file")!;
+    await write.execute("write-1", { path: "cookbook.html", content: "<h1>Soup</h1>" });
+    const message = assistant("Added the soup section to cookbook.html; the salad section is next.");
+    await emit({ type: "message_start", message } as AgentEvent);
+    await emit({ type: "message_end", message: { ...message, stopReason: "toolUse" } } as AgentEvent);
+    wrote.resolve();
+    await new Promise<void>((resolve) => {
+      finishStopping = resolve;
+    });
+  }, () => {
+    if (drains) finishStopping();
+  });
+  const supervisor = new SubagentSupervisor({
+    generationId: "generation-phase6b",
+    ...TEST_SUPERVISOR_SCOPE,
+    runtime: runtime(),
+    thinkingLevel: "high",
+    workspaceRoot: "/workspace",
+    permission: "full",
+    inheritedCeiling: SUBAGENT_READ_TOOL_NAMES,
+    policy: { cancellationGraceMs: 10 },
+    prepareRun: async ({ identity, contextRevision, stop }) => {
+      stops.push(stop);
+      return phase6Prepared(
+        phase6Authority({ runId: identity.runId, contextRevision, delegate: false }),
+      );
+    },
+    runChild: (input) =>
+      runSubagentChild({
+        ...input,
+        onCleanupFailure: () => {},
+        prepareWorkspaceWriteApproval: () => ({
+          beforeToolCall: async () => undefined,
+          execute: async () => ({
+            content: [{ type: "text", text: "The approved workspace file change was committed." }],
+            details: null,
+          }),
+          shutdown: async () => {},
+        }),
+        dependencies: {
+          buildTools: async () => ({
+            tools: [
+              {
+                name: "write_file",
+                label: "Write File",
+                description: "Attended write.",
+                parameters: { type: "object" },
+                execute: async () => ({ content: [], details: null }),
+              } as unknown as AgentTool,
+            ],
+            outboundApprovalBindings: [],
+            workspaceWriteApprovalBindings: [
+              { toolName: "write_file" as const, operation: "write" as const },
+            ],
+            mcpMutationApprovalBindings: [],
+            shellApprovalBindings: [],
+          }),
+          createChild: (spec) => {
+            tools = spec.tools;
+            return control.child;
+          },
+          recordUsage: async () => {},
+        },
+      }),
+  });
+
+  const execution = supervisor.execute(request(["Cookbook"]));
+  await wrote.promise;
+  stops[0]?.(new Error("The person stopped this helper."));
+  const result = await execution;
+
+  assert.match(result, /## 1\. Cookbook[\s\S]*Status: interrupted/u);
+  assert.match(result, /Added the soup section to cookbook\.html; the salad section is next\./u);
+  assert.match(result, /Files it changed:\n> - cookbook\.html\n/u);
+  if (drains) {
+    // A helper that finished stopping cannot add a write, so its list is complete.
+    assert.doesNotMatch(result, /may be incomplete/u);
+  } else {
+    // This child never finishes stopping, so a gated write could still land.
+    assert.match(result, /- cookbook\.html\n> The helper had not finished stopping, so this list may be incomplete\./u);
+  }
+  assert.doesNotMatch(result, /ran commands/u);
+  assert.match(result, /incomplete, unverified partial findings/u);
+});
+}
+
+test("changed-file notes keep each path whole even when names contain list separators", () => {
+  const paths = ["notes, drafts.md", "salt and pepper.html", ...Array.from({ length: 21 }, (_v, i) => `page-${i}.html`)];
+  const [files] = subagentPartialWorkNotes(paths, 2, false);
+  const lines = files!.split("\n");
+  assert.equal(lines[0], "Files it changed:");
+  assert.ok(lines.includes("- notes, drafts.md"));
+  assert.ok(lines.includes("- salt and pepper.html"));
+  // 20 listed paths, then the 3 unlisted paths plus 2 untracked ones.
+  assert.equal(lines.filter((line) => line.startsWith("- ") && !line.startsWith("- and ")).length, 20);
+  assert.equal(lines[lines.length - 1], "- and 5 more");
 });
 
 test("Phase 6B runs fresh depth-2 children without exposing delegation to descendants", async () => {
@@ -1842,6 +2144,41 @@ test("guidance settles a running and a capacity-queued V2 child as interrupted",
       { label: "Queued", state: "interrupted" },
     ],
   );
+});
+
+test("guidance that stops a helper with partial work still tells the parent to read the guidance", async () => {
+  const started = deferred();
+  const supervisor = new SubagentSupervisor({
+    generationId: "generation-guidance-partial",
+    ...TEST_SUPERVISOR_SCOPE,
+    runtime: runtime(),
+    thinkingLevel: "high",
+    workspaceRoot: "/workspace",
+    permission: "full",
+    inheritedCeiling: SUBAGENT_READ_TOOL_NAMES,
+    runChild: async ({ request: task, signal }) => {
+      started.resolve();
+      await new Promise<void>((resolve) => signal?.addEventListener("abort", () => resolve(), { once: true }));
+      // The runner hands over settled work under a generic interrupted result.
+      return {
+        role: task.role,
+        label: task.label,
+        status: "interrupted",
+        summary: "Read the soup and salad sections.",
+        warning: "The child was interrupted before completion. These are incomplete, unverified partial findings.",
+      };
+    },
+  });
+
+  const running = supervisor.execute(request(["Cookbook"]));
+  await started.promise;
+  supervisor.stopLiveChildrenForGuidance();
+  const result = await running;
+
+  assert.match(result, /Status: interrupted/u);
+  assert.match(result, /Read the soup and salad sections\./u);
+  assert.match(result, /user sent new guidance\. Read it before relaunching this task\./u);
+  assert.match(result, /incomplete, unverified partial findings/u);
 });
 
 test("parent-first shutdown projects running and queued local children as interrupted", async () => {
@@ -3459,6 +3796,197 @@ test("each foreground subagent counts once, and a batch over budget counts nothi
   await assert.rejects(supervisor.execute(request(["3"])), /launch budget exceeded/i);
   assert.deepEqual(sent, []);
 });
+
+/** A transcript sink; with `holdFinal`, the final save waits until `releaseFinal()`. */
+function transcriptSaves(options: { holdFinal?: boolean } = {}) {
+  const saved: Array<{ transcript: SubagentTranscriptV1; final: boolean }> = [];
+  let releaseFinal = () => {};
+  const finalGate = options.holdFinal
+    ? new Promise<void>((resolve) => { releaseFinal = resolve; })
+    : Promise.resolve();
+  return {
+    saved,
+    finals: () => saved.filter((entry) => entry.final),
+    releaseFinal: () => releaseFinal(),
+    sink: {
+      async persist(transcript: SubagentTranscriptV1, final: boolean) {
+        if (final) await finalGate;
+        saved.push({ transcript, final });
+      },
+    },
+  };
+}
+
+function transcriptMessages(transcript: SubagentTranscriptV1): SubagentTranscriptMessageEntry[] {
+  return transcript.entries.filter((entry): entry is SubagentTranscriptMessageEntry => entry.kind === "message");
+}
+
+function toolStatuses(transcript: SubagentTranscriptV1): Array<[string | undefined, string]> {
+  return transcriptMessages(transcript).flatMap((message) =>
+    message.steps.flatMap((step) => (step.kind === "tool" ? [[step.target, step.status] as [string | undefined, string]] : [])));
+}
+
+for (const hangs of [false, true]) {
+  test(`a timed-out helper's result does not wait for its conversation's slow final save (${hangs ? "runner never returns" : "runner hands over partial work"})`, async (t) => {
+    const saves = transcriptSaves({ holdFinal: true });
+    // The held save and the supervisor's unref'd timers would otherwise let
+    // the event loop end mid-test.
+    const keepAlive = setInterval(() => {}, 1_000);
+    t.after(() => clearInterval(keepAlive));
+    const supervisor = new SubagentSupervisor({
+      generationId: `transcript-timeout-${hangs ? "hung" : "partial"}`,
+      ...TEST_SUPERVISOR_SCOPE,
+      runtime: runtime(),
+      thinkingLevel: "high",
+      workspaceRoot: "/workspace",
+      permission: "full",
+      inheritedCeiling: SUBAGENT_READ_TOOL_NAMES,
+      policy: { treeDeadlineMs: 100, cancellationGraceMs: 10 },
+      transcripts: ({ runId, task }) => new SubagentTranscriptRecorder({ runId, task, sink: saves.sink }),
+      runChild: async ({ request: task, signal, transcript }) => {
+        const message = assistant("Read the soup section.");
+        transcript?.observe({ type: "message_start", message } as AgentEvent);
+        transcript?.observe({
+          type: "message_update",
+          message,
+          assistantMessageEvent: { type: "text_delta", contentIndex: 0, delta: "Read the soup section. ", partial: message },
+        } as AgentEvent);
+        transcript?.observe({ type: "tool_execution_start", toolCallId: "read-1", toolName: "read_file", args: { path: "salad.md" } } as AgentEvent);
+        await new Promise<void>((resolve) => signal?.addEventListener("abort", () => resolve(), { once: true }));
+        // This runner ignores the stop past its grace period and never returns.
+        if (hangs) return await new Promise<SubagentTaskResult>(() => {});
+        return {
+          role: task.role,
+          label: task.label,
+          status: "interrupted",
+          summary: "Read the soup section.",
+          warning: "The child was interrupted before completion.",
+        };
+      },
+    });
+
+    const result = await supervisor.execute(request(["Cookbook"]));
+    assert.match(result, /Status: timed_out/u);
+    if (!hangs) assert.match(result, /Read the soup section\./u, "the partial work is handed over");
+    assert.equal(saves.finals().length, 0, "the result did not wait for the final save");
+
+    // Finishing a chat turn waits only briefly for the conversation.
+    await supervisor.flush({ transcriptWaitMs: 20 });
+    assert.equal(saves.finals().length, 0, "the capped wait returns before the slow save");
+
+    let flushed = false, quitWaitDone = false;
+    const fullFlush = supervisor.flush().then(() => { flushed = true; });
+    // Quitting waits for every chat's helper conversations, not one supervisor's.
+    const quitWait = flushPendingSubagentTranscripts().then(() => { quitWaitDone = true; });
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    assert.equal(flushed, false, "a full flush waits while the final save is held");
+    assert.equal(quitWaitDone, false, "the quit wait waits while the final save is held");
+    assert.equal(saves.finals().length, 0);
+    saves.releaseFinal();
+    await Promise.all([fullFlush, quitWait]);
+    const [final] = saves.finals();
+    assert.ok(final, "a full flush waits for the final save");
+    assert.equal(transcriptMessages(final.transcript)[0]?.text, "Read the soup section.");
+    assert.deepEqual(toolStatuses(final.transcript), [["salad.md", "cancelled"]]);
+  });
+}
+
+test("a chat turn's capped wait for helper conversations still waits for the run store", async () => {
+  let releaseRunStore = () => {};
+  const runStoreGate = new Promise<void>((resolve) => { releaseRunStore = resolve; });
+  const supervisor = new SubagentSupervisor({
+    generationId: "transcript-run-store-gate",
+    ...TEST_SUPERVISOR_SCOPE,
+    runtime: runtime(),
+    thinkingLevel: "high",
+    workspaceRoot: "/workspace",
+    permission: "full",
+    inheritedCeiling: SUBAGENT_READ_TOOL_NAMES,
+    projector: { flush: () => runStoreGate, snapshot: () => [] } as unknown as SubagentEventProjector,
+  });
+  let flushed = false;
+  const turnEnd = supervisor.flush({ transcriptWaitMs: 1 }).then(() => { flushed = true; });
+  await new Promise((resolve) => setTimeout(resolve, 30));
+  assert.equal(flushed, false, "the capped wait applies to conversations only");
+  releaseRunStore();
+  await turnEnd;
+  assert.equal(flushed, true);
+});
+
+test("a helper's refused tool shows as blocked and a tool ending during its stop as cancelled", async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-subagent-transcript-"));
+  try {
+    const saves = transcriptSaves();
+    const recorder = new SubagentTranscriptRecorder({ runId: "run-refused", task: "Edit the cookbook.", sink: saves.sink });
+    const parent = new AbortController();
+    let spec: SubagentChildSpec | undefined;
+    const control = fakeChild(async ({ emit }) => {
+      const message = assistant("Editing the cookbook.");
+      await emit({ type: "message_start", message } as AgentEvent);
+      await emit({ type: "message_end", message } as AgentEvent);
+      const toolCall = { type: "toolCall" as const, id: "write-1", name: "write_file", arguments: { path: "cookbook.html" } };
+      // Pi announces the call, then asks the child's gate; a refused call
+      // still ends with an error result.
+      await emit({ type: "tool_execution_start", toolCallId: "write-1", toolName: "write_file", args: toolCall.arguments } as AgentEvent);
+      const decision = await spec!.beforeToolCall!(
+        { toolCall, args: toolCall.arguments, assistantMessage: message, context: { systemPrompt: "", messages: [], tools: [] } } as never,
+        undefined,
+      );
+      assert.equal(decision?.block, true);
+      await emit({ type: "tool_execution_end", toolCallId: "write-1", toolName: "write_file", isError: true, result: { content: [] } } as AgentEvent);
+      await emit({ type: "tool_execution_start", toolCallId: "read-1", toolName: "read_file", args: { path: "salad.md" } } as AgentEvent);
+      parent.abort(new Error("The person stopped the chat."));
+      await emit({ type: "tool_execution_end", toolCallId: "read-1", toolName: "read_file", isError: true, result: { content: [] } } as AgentEvent);
+    });
+    await runSubagentChild({
+      authority: TEST_CHILD_AUTHORITY,
+      context: TEST_CHILD_CONTEXT,
+      groupId: "transcript-refused",
+      runtime: runtime(),
+      thinkingLevel: "high",
+      workspaceRoot: root,
+      permission: "ask",
+      inheritedCeiling: SUBAGENT_READ_TOOL_NAMES,
+      request: { role: "scout", label: "Cookbook", task: "Edit the cookbook." },
+      signal: parent.signal,
+      transcript: recorder,
+      onCleanupFailure: () => {},
+      prepareWorkspaceWriteApproval: () => ({
+        beforeToolCall: async () => ({ block: true, reason: "The person declined this change." }),
+        execute: async () => ({ content: [], details: null }),
+        shutdown: async () => {},
+      }),
+      dependencies: {
+        buildTools: async () => ({
+          tools: [
+            {
+              name: "write_file",
+              label: "Write File",
+              description: "Attended write.",
+              parameters: { type: "object" },
+              execute: async () => ({ content: [], details: null }),
+            } as unknown as AgentTool,
+          ],
+          outboundApprovalBindings: [],
+          workspaceWriteApprovalBindings: [{ toolName: "write_file" as const, operation: "write" as const }],
+          mcpMutationApprovalBindings: [],
+          shellApprovalBindings: [],
+        }),
+        createChild: (childSpec) => {
+          spec = childSpec;
+          return control.child;
+        },
+        recordUsage: async () => {},
+      },
+    }).catch(() => undefined);
+    await recorder.finish("cancelled");
+    const final = saves.finals()[0]!.transcript;
+    assert.deepEqual(toolStatuses(final), [["cookbook.html", "blocked"], ["salad.md", "cancelled"]]);
+  } finally {
+    await fs.rm(root, { recursive: true, force: true });
+  }
+});
+
 
 test("parent cancellation during prepareRun aborts all fulfilled preparations without projecting or charging budget", async () => {
   const controller = new AbortController();

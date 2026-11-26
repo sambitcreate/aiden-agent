@@ -539,18 +539,46 @@ export function resolveSubagentSelection(
     : unique[0]?.runId;
 }
 
+/**
+ * The six status words a person sees for a helper everywhere: the chat card,
+ * the Subagents list and the helper chat. Rarer outcomes fold into the closest
+ * word; the helper chat's problem box explains the specific reason.
+ */
 const STATUS_LABELS: Record<SubagentRunViewState, string> = {
   queued: "Queued",
-  starting: "Starting",
-  running: "Working",
+  starting: "Queued",
+  running: "Running",
   completed: "Done",
   failed: "Failed",
-  timed_out: "Timed out",
-  interrupted: "Interrupted",
-  needs_attention: "Needs attention",
+  timed_out: "Failed",
+  interrupted: "Stopped",
+  needs_attention: "Waiting on you",
   stopped: "Stopped",
-  unknown: "Outcome unknown",
+  unknown: "Stopped",
 };
+
+/** The six words in the order a summary lists them, most urgent first. */
+const STATUS_SUMMARY_ORDER = ["Waiting on you", "Running", "Queued", "Failed", "Stopped", "Done"] as const;
+export type SubagentStatusWord = (typeof STATUS_SUMMARY_ORDER)[number];
+
+/**
+ * How many helpers show each status word, most urgent first, for summaries
+ * such as "1 waiting on you · 2 running". A settled run with no recorded state
+ * ("finished") counts as Done.
+ */
+export function subagentStatusCounts(
+  states: readonly (SubagentRunViewState | "finished")[],
+): Array<{ word: SubagentStatusWord; count: number }> {
+  const counts = new Map<string, number>();
+  for (const state of states) {
+    const word = state === "finished" ? "Done" : STATUS_LABELS[state];
+    counts.set(word, (counts.get(word) ?? 0) + 1);
+  }
+  return STATUS_SUMMARY_ORDER.flatMap((word) => {
+    const count = counts.get(word);
+    return count ? [{ word, count }] : [];
+  });
+}
 
 // Keep an adversarially large injected clock from producing unbounded status
 // copy while preserving the useful age unit for ordinary runs.
@@ -561,10 +589,9 @@ export function subagentStatusLabel(state: SubagentRunViewState): string {
 }
 
 function staleActiveLead(state: SubagentRunViewState): string {
-  if (state === "running") return "Still working";
-  if (state === "queued") return "Still queued";
-  if (state === "starting") return "Still starting";
-  return "Needs attention";
+  if (state === "running") return "Still running";
+  if (state === "queued" || state === "starting") return "Still queued";
+  return "Waiting on you";
 }
 
 function pendingHandoffLabel(snapshot: SubagentRunSnapshot, delayed: boolean): string {

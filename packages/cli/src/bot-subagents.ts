@@ -7,11 +7,12 @@ import type { BotRuntimeAuthorityAdmission } from "../../../main/services/bot-ru
 import type { Chat } from "../../../main/services/types.js";
 import { ModelRegistry } from "@earendil-works/pi-coding-agent";
 import { createSubagentTool } from "../../../main/services/subagents/subagent-tool.js";
-import { SubagentSupervisor } from "../../../main/services/subagents/subagent-supervisor-core.js";
+import { SubagentReplyClock, SubagentSupervisor } from "../../../main/services/subagents/subagent-supervisor-core.js";
 import { botSurfaceHooks } from "../../../main/services/agent-surface-hooks.js";
 import { SubagentEventProjector } from "../../../main/services/subagents/subagent-event-projector.js";
 import { createSubagentRunStore } from "../../../main/services/subagents/subagent-run-store-core.js";
 import { createNativeSubagentRunStoreStorage } from "../../../main/services/subagents/subagent-run-store-io.js";
+import { createSubagentTranscriptFactory, createSubagentTranscriptStore } from "../../../main/services/subagents/subagent-transcript-store.js";
 import { SUBAGENT_READ_TOOL_NAMES } from "../../../main/services/subagents/capability-profile.js";
 import { createCliModelRuntime } from "./providers.ts";
 import { resolveRuntimeFromContext } from "./pi-bridge/model-runtime.ts";
@@ -19,9 +20,12 @@ import { runCliSubagent } from "./subagent-process.ts";
 import { acquireLease } from "./state.ts";
 
 /** Bot investigations inherit exact admitted file tools; they cannot expand into host tools. */
-export function createBotSubagentTool(agentDir: string, admission: BotRuntimeAuthorityAdmission, parentTools: AgentTool[], loadChat: () => Promise<Chat | null>) {
+export function createBotSubagentTool(agentDir: string, admission: BotRuntimeAuthorityAdmission, parentTools: AgentTool[], loadChat: () => Promise<Chat | null>,
+  replyClock: SubagentReplyClock = new SubagentReplyClock()) {
   const authority = admission.authority;
   const reads = parentTools.filter((tool) => (SUBAGENT_READ_TOOL_NAMES as readonly string[]).includes(tool.name));
+  // Helpers in one Bot reply share 60 minutes from the first launch. The durable
+  // runtime builds this tool for every call, so it passes the turn's clock in.
   return createSubagentTool({ async execute(params, signal) {
     await admission.revalidateBeforeEffect();
     const combined = signal ? AbortSignal.any([signal, admission.signal]) : admission.signal;
@@ -38,8 +42,12 @@ export function createBotSubagentTool(agentDir: string, admission: BotRuntimeAut
       const projector = new SubagentEventProjector({ generationId, chatId: cliSubagentIdentity(authority.chatId), workspaceId: cliSubagentIdentity(authority.managedHome.workspaceId), modelId: runtime.model.id,
         onSnapshot: async (snapshot) => { await store.upsert(snapshot); } });
       supervisor = new SubagentSupervisor({ generationId, chatId: cliSubagentIdentity(authority.chatId), workspaceId: cliSubagentIdentity(authority.managedHome.workspaceId),
-        workspaceRoot: authority.workingDirectory, runtime, thinkingLevel: "off", permission: "full", inheritedCeiling: SUBAGENT_READ_TOOL_NAMES.filter((name) => reads.some((tool) => tool.name === name)),
-        loadPersistedChatForFork: loadChat, projector, stopHooks: botSurfaceHooks(authority.botId, authority.workingDirectory, undefined, {
+        workspaceRoot: authority.workingDirectory, runtime, thinkingLevel: "off", policy: { timeLimit: "bot", replyClock }, permission: "full", inheritedCeiling: SUBAGENT_READ_TOOL_NAMES.filter((name) => reads.some((tool) => tool.name === name)),
+        loadPersistedChatForFork: loadChat, projector,
+        // Each helper's conversation is saved beside its record; phones get nothing yet.
+        transcripts: createSubagentTranscriptFactory(createSubagentTranscriptStore(async () => root), {
+          onError: () => process.stderr.write(`aiden: Bot ${authority.botId} could not save a helper conversation.\n`) }),
+        stopHooks: botSurfaceHooks(authority.botId, authority.workingDirectory, undefined, {
           report: (lines) => { for (const line of lines) process.stderr.write(`aiden: Bot ${authority.botId} hook: ${line.replace(/[\r\n]+/gu, " ").slice(0, 500)}\n`); } }),
         runChild: (input) => runCliSubagent(agentDir, input, reads, async () => { combined.throwIfAborted(); await admission.revalidateBeforeEffect(); }),
       });
@@ -57,6 +65,8 @@ export async function deleteCliBotSubagentHistory(agentDir: string, chatId: stri
   const release = acquireLease(root);
   const binary = join(dirname(process.env.AIDEN_CLI_ENTRY!), "native/aiden-subagent-run-store");
   const store = createSubagentRunStore(async () => root, { storageFactory: (directory) => createNativeSubagentRunStoreStorage(directory, binary) });
-  try { await store.deleteChat(cliSubagentIdentity(chatId)); }
-  finally { try { await store.close(); } finally { release(); } }
+  try {
+    await store.deleteChat(cliSubagentIdentity(chatId));
+    await createSubagentTranscriptStore(async () => root).deleteChat(cliSubagentIdentity(chatId));
+  } finally { try { await store.close(); } finally { release(); } }
 }

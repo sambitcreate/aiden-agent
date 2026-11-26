@@ -442,6 +442,15 @@
       "renderer/canvas/studio",
       "main/services/studio"
     ],
+    "subagent-helper-chat.spec.ts": [
+      "renderer/components/subagent-helper-chat",
+      "renderer/components/subagents-panel",
+      "renderer/components/subagent-chips",
+      "renderer/lib/subagent-helper-chat-store",
+      "renderer/lib/subagent-panel-state",
+      "main/services/subagents/subagent-transcript",
+      "renderer/shared/subagent-transcript"
+    ],
     "subagent-pill.spec.ts": [
       "renderer/components/chat-top-bar",
       "renderer/components/message-list",
