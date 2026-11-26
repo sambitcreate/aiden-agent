@@ -820,7 +820,7 @@ jobs:
 
   timings:
     name: CI timing report
-    needs: [required, linux-required]
+    needs: [required, linux-required, ios-27]
     if: ${{ always() }}
     runs-on: ubuntu-24.04
     timeout-minutes: 5

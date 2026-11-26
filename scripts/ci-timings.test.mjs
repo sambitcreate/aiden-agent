@@ -577,19 +577,44 @@ test("collectReport caps prior attempt scans and respects the shared API time bu
   assert.equal(budgetedCalls.filter((endpoint) => endpoint.includes("/attempts/2/")).length, 0);
 });
 
-test("partial rerun filters carried-over run_attempt jobs out of attempt totals/steps and clamps small clock skew to 0s", () => {
+test("partial rerun filters copied jobs (including rewritten run_attempt) out of attempt totals/steps and clamps small clock skew to 0s", () => {
   const attempt2Start = "2026-11-24T10:30:00Z";
-  // Carried-over attempt 1 job returned by GitHub's /attempts/2/jobs on "Re-run failed jobs".
-  const carriedOverJob = makeJob({
+  // Copied attempt 1 job returned by GitHub's /attempts/2/jobs on "Re-run failed jobs":
+  // GitHub rewrites run_attempt to 2 and created_at to attempt 2's creation time, while
+  // keeping attempt 1's started_at and completed_at before attempt 2's run_started_at.
+  const copiedRewrittenJob = makeJob({
     id: 9101,
-    run_attempt: 1,
+    run_attempt: 2,
     name: "Desktop production build",
     conclusion: "success",
-    created_at: "2026-11-24T10:00:25Z",
+    created_at: "2026-11-24T10:30:01Z",
     started_at: "2026-11-24T10:01:25Z",
     completed_at: "2026-11-24T10:11:25Z",
     labels: ["macos-26"],
     steps: [{ name: "Build desktop app", conclusion: "success", started_at: "2026-11-24T10:02:00Z", completed_at: "2026-11-24T10:11:00Z" }],
+  });
+  // Copied job that completed just 2 seconds before attempt2Start (within skew window, still before run_started_at).
+  const copiedLateJob = makeJob({
+    id: 9103,
+    run_attempt: 2,
+    name: "Detect changed areas",
+    conclusion: "success",
+    created_at: "2026-11-24T10:30:01Z",
+    started_at: "2026-11-24T10:29:40Z",
+    completed_at: "2026-11-24T10:29:58Z",
+    labels: ["ubuntu-24.04"],
+    steps: [{ name: "Detect shared and platform changes", conclusion: "success", started_at: "2026-11-24T10:29:42Z", completed_at: "2026-11-24T10:29:57Z" }],
+  });
+  const legacyAttemptJob = makeJob({
+    id: 9104,
+    run_attempt: 1,
+    name: "Model catalog contracts",
+    conclusion: "success",
+    created_at: "2026-11-24T10:00:25Z",
+    started_at: "2026-11-24T10:00:30Z",
+    completed_at: "2026-11-24T10:01:30Z",
+    labels: ["ubuntu-24.04"],
+    steps: [{ name: "Verify model catalog", conclusion: "success", started_at: "2026-11-24T10:00:35Z", completed_at: "2026-11-24T10:01:25Z" }],
   });
   const attempt1FailedJob = makeJob({
     id: 9102,
@@ -617,26 +642,33 @@ test("partial rerun filters carried-over run_attempt jobs out of attempt totals/
     steps: [{ name: "Run deterministic Electron E2E shard", conclusion: "success", started_at: "2026-11-24T10:30:30Z", completed_at: "2026-11-24T10:34:10Z" }],
   });
 
-  const summary = summarizeJobs([carriedOverJob, rerunPassedJob], attempt2Start, { currentAttempt: 2 });
+  const summary = summarizeJobs([copiedRewrittenJob, copiedLateJob, legacyAttemptJob, rerunPassedJob], attempt2Start, { currentAttempt: 2 });
   assert.equal(summary.rows.length, 1);
   assert.equal(summary.rows[0].name, "Electron E2E (3/5)");
   assert.equal(summary.rows[0].waitSeconds, 0);
   assert.equal(summary.rows[0].queueSeconds, 21);
   assert.equal(summary.rows[0].seconds, 240);
   assert.equal(summary.totals["macos-26"], 240);
+  assert.equal(summary.totals["ubuntu-24.04"], undefined);
   assert.equal(summary.elapsed, 260);
 
-  // Also verify through collectReport that attempt 1's failure stays visible while carried-over job is excluded from attempt 2 table/steps.
+  // Also verify through collectReport that attempt 1's failure stays visible while copied jobs (even with run_attempt: 2) are excluded from attempt 2 table/totals/steps.
   const execute = (_command, args) => {
     const endpoint = args.at(-1);
     if (endpoint === "repos/owner/repo/actions/runs/980/attempts/2") {
       return JSON.stringify({ run_started_at: attempt2Start });
     }
     if (endpoint === "repos/owner/repo/actions/runs/980/attempts/2/jobs?per_page=100") {
-      return JSON.stringify([{ jobs: [carriedOverJob, rerunPassedJob] }]);
+      return JSON.stringify([{ jobs: [copiedRewrittenJob, copiedLateJob, rerunPassedJob] }]);
     }
     if (endpoint === "repos/owner/repo/actions/runs/980/attempts/1/jobs?per_page=100") {
-      return JSON.stringify([{ jobs: [carriedOverJob, attempt1FailedJob] }]);
+      return JSON.stringify([{
+        jobs: [
+          { ...copiedRewrittenJob, run_attempt: 1, created_at: "2026-11-24T10:00:25Z" },
+          { ...copiedLateJob, run_attempt: 1, created_at: "2026-11-24T10:29:35Z" },
+          attempt1FailedJob,
+        ],
+      }]);
     }
     if (endpoint === "repos/owner/repo/actions/jobs/9102/logs") {
       return "not ok 1 - flaky viewport check\n";
@@ -653,6 +685,33 @@ test("partial rerun filters carried-over run_attempt jobs out of attempt totals/
   assert.match(report, /- macos-26: 4\.00 runner-minutes/u);
   assert.doesNotMatch(report, /Desktop production build/u);
   assert.doesNotMatch(report, /Build desktop app/u);
+  assert.doesNotMatch(report, /Detect changed areas/u);
+  assert.doesNotMatch(report, /Detect shared and platform changes/u);
+  assert.doesNotMatch(report, /ubuntu-24\.04/u);
+
+  // If a copied failed job from attempt 1 survives into attempt 2's payload with run_attempt: 2,
+  // collectReport must still scan attempt 1 and report attempt 1 rather than misattributing it to attempt 2.
+  const copiedAttempt1Failure = { ...attempt1FailedJob, run_attempt: 2, created_at: "2026-11-24T10:30:01Z" };
+  const singleJobRerunReport = collectReport(
+    { GITHUB_REPOSITORY: "owner/repo", GITHUB_RUN_ID: "980", GITHUB_RUN_ATTEMPT: "2" },
+    (_command, args) => {
+      const endpoint = args.at(-1);
+      if (endpoint === "repos/owner/repo/actions/runs/980/attempts/2") {
+        return JSON.stringify({ run_started_at: attempt2Start });
+      }
+      if (endpoint === "repos/owner/repo/actions/runs/980/attempts/2/jobs?per_page=100") {
+        return JSON.stringify([{ jobs: [copiedRewrittenJob, copiedAttempt1Failure, rerunPassedJob] }]);
+      }
+      if (endpoint === "repos/owner/repo/actions/runs/980/attempts/1/jobs?per_page=100") {
+        return JSON.stringify([{ jobs: [attempt1FailedJob] }]);
+      }
+      if (endpoint === "repos/owner/repo/actions/jobs/9102/logs") {
+        return "not ok 1 - flaky viewport check\n";
+      }
+      throw new Error(`Unexpected endpoint: ${endpoint}`);
+    },
+  );
+  assert.match(singleJobRerunReport, /attempt 1 — rerun passed on attempt 2/u);
 });
 
 test("extractFirstFailedTest parses colons and escapes in ::error properties and falls back to message when title is generic", () => {

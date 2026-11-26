@@ -173,8 +173,8 @@ hosted prerequisites are present.
 
 ## Measurement and rollout
 
-An advisory report (`scripts/ci-timings.mjs`, running in `timings` after both
-`required` and `linux-required` settle) fetches every job page for the current
+An advisory report (`scripts/ci-timings.mjs`, running in `timings` after
+`required`, `linux-required`, and `ios-27` settle) fetches every job page for the current
 workflow attempt and summarizes execution, **Queue** (runner wait from
 `job.created_at` to `job.started_at`), **Waiting on jobs** (dependency wait from
 attempt start to `job.created_at`), per-platform runner-minutes and slow steps.

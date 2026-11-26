@@ -424,6 +424,7 @@ test("CI supersedes older PR and main runs, keeps dispatches independent, and ke
   for (const [name, job] of Object.entries(workflow.jobs)) assert.ok(job["timeout-minutes"] > 0, name);
   assert.equal(workflow.jobs.timings["continue-on-error"], true);
   assert.equal(workflow.jobs.timings.permissions.actions, "read");
+  assert.deepEqual(workflow.jobs.timings.needs, ["required", "linux-required", "ios-27"]);
 });
 
 test("iOS-only PRs retain shipping and TestFlight policy checks when desktop lanes skip", async () => {

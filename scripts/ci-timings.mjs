@@ -31,6 +31,21 @@ function timestampMs(value) {
   return Number.isFinite(parsed) ? parsed : Number.POSITIVE_INFINITY;
 }
 
+function belongsToAttempt(job, attemptNumber, attemptStart = null) {
+  if (attemptNumber !== null && job.run_attempt !== undefined && job.run_attempt !== attemptNumber) {
+    return false;
+  }
+  const attemptStartMs = Date.parse(attemptStart ?? "");
+  if (!Number.isFinite(attemptStartMs)) return true;
+  // GitHub rewrites run_attempt and created_at on copied jobs during partial reruns,
+  // while leaving completed_at at the earlier attempt's completion time.
+  const completedMs = Date.parse(job.completed_at ?? "");
+  if (Number.isFinite(completedMs) && completedMs < attemptStartMs) {
+    return false;
+  }
+  return true;
+}
+
 function cleanLogLine(line) {
   return line
     .replace(/\r$/u, "")
@@ -248,15 +263,17 @@ export function extractPhaseTimings(log) {
 export function findFirstFailure(attempts, options = {}) {
   const ordered = [...attempts].sort((a, b) => a.attempt - b.attempt);
   const currentAttempt = options.currentAttempt ?? (ordered.at(-1)?.attempt ?? 1);
-  const currentJobs = options.currentJobs ?? (ordered.find((entry) => entry.attempt === currentAttempt)?.jobs ?? []);
+  const rawCurrentJobs = options.currentJobs ?? (ordered.find((entry) => entry.attempt === currentAttempt)?.jobs ?? []);
+  const currentJobs = rawCurrentJobs.filter((job) => belongsToAttempt(job, currentAttempt, options.currentAttemptStart ?? null));
   const getLog = typeof options.logsByJobId === "function"
     ? options.logsByJobId
     : (job) => (options.logsByJobId && job?.id !== undefined ? options.logsByJobId[job.id] ?? null : null);
 
   const candidates = [];
   for (const entry of ordered) {
+    const attemptStart = entry.runStartedAt ?? (entry.attempt === currentAttempt ? options.currentAttemptStart ?? null : null);
     const failedJobs = (entry.jobs ?? [])
-      .filter((job) => (job.run_attempt === undefined || job.run_attempt === entry.attempt) && job.status === "completed" && FAILURE_CONCLUSIONS.has(job.conclusion));
+      .filter((job) => belongsToAttempt(job, entry.attempt, attemptStart) && job.status === "completed" && FAILURE_CONCLUSIONS.has(job.conclusion));
     for (const [index, job] of failedJobs.entries()) {
       const step = (job.steps ?? []).find((candidate) => STEP_FAILURE_CONCLUSIONS.has(candidate.conclusion)) ?? null;
       const failedAt = timestampMs(step?.completed_at ?? step?.started_at ?? job.completed_at ?? job.started_at);
@@ -320,9 +337,7 @@ export function findFirstFailure(attempts, options = {}) {
 
 export function summarizeJobs(jobs, createdAt, options = {}) {
   const currentAttempt = Number.isInteger(options.currentAttempt) ? options.currentAttempt : null;
-  const attemptJobs = currentAttempt === null
-    ? jobs
-    : jobs.filter((job) => job.run_attempt === undefined || job.run_attempt === currentAttempt);
+  const attemptJobs = jobs.filter((job) => belongsToAttempt(job, currentAttempt, createdAt));
   const completed = attemptJobs.filter((job) => job.status === "completed" && job.conclusion !== "skipped");
   const rows = completed.map((job) => ({
     name: job.name,
@@ -343,7 +358,10 @@ export function summarizeJobs(jobs, createdAt, options = {}) {
   const elapsed = completed.map((job) => secondsAllowingSmallSkew(createdAt, job.completed_at)).filter((value) => value !== null);
   const firstFailure = options.firstFailure !== undefined
     ? options.firstFailure
-    : findFirstFailure([{ attempt: currentAttempt ?? 1, jobs }], { currentAttempt: currentAttempt ?? 1, currentJobs: jobs });
+    : findFirstFailure(
+        [{ attempt: currentAttempt ?? 1, jobs: attemptJobs, runStartedAt: createdAt }],
+        { currentAttempt: currentAttempt ?? 1, currentJobs: attemptJobs, currentAttemptStart: createdAt },
+      );
   const phaseTimings = options.phaseTimings ?? [];
   return {
     rows,
@@ -464,12 +482,13 @@ export function collectReport(env = process.env, execute = execFileSync, options
   const runPrefix = `repos/${repository}/actions/runs/${run}`;
   const prefix = `${runPrefix}/attempts/${attempt}`;
   const metadata = api(prefix);
+  const attemptStart = metadata.run_started_at ?? metadata.created_at;
   const pages = api(`${prefix}/jobs?per_page=100`, true);
   const jobs = pages.flatMap((page) => page.jobs);
+  const currentAttemptJobs = jobs.filter((job) => belongsToAttempt(job, attemptNumber, attemptStart));
 
-  const hasCurrentBlockingFailure = jobs.some(
-    (job) => (job.run_attempt === undefined || job.run_attempt === attemptNumber)
-      && job.status === "completed"
+  const hasCurrentBlockingFailure = currentAttemptJobs.some(
+    (job) => job.status === "completed"
       && FAILURE_CONCLUSIONS.has(job.conclusion)
       && failureTier(job.name) < 2,
   );
@@ -490,16 +509,17 @@ export function collectReport(env = process.env, execute = execFileSync, options
       }
     }
   }
-  attempts.push({ attempt: attemptNumber, jobs });
+  attempts.push({ attempt: attemptNumber, jobs: currentAttemptJobs, runStartedAt: attemptStart });
 
   const firstFailure = findFirstFailure(attempts, {
     currentAttempt: attemptNumber,
-    currentJobs: jobs,
+    currentJobs: currentAttemptJobs,
+    currentAttemptStart: attemptStart,
     logsByJobId: (job) => fetchLog(job.id),
   });
 
   return renderSummary(
-    summarizeJobs(jobs, metadata.run_started_at ?? metadata.created_at, {
+    summarizeJobs(jobs, attemptStart, {
       firstFailure,
       currentAttempt: attemptNumber,
     }),
