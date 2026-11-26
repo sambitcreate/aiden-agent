@@ -371,6 +371,8 @@ export interface GuestVncTunnel {
   readonly host: "127.0.0.1";
   readonly port: number;
   close(): Promise<void>;
+  /** Called once if the SSH tunnel child exits unexpectedly after opening. */
+  onExit?(listener: () => void): () => void;
 }
 
 export interface OpenGuestVncTunnelDependencies {
@@ -465,7 +467,7 @@ function probeLoopbackRfbBanner(port: number, timeoutMs: number): Promise<boolea
 export async function openGuestVncTunnel(
   target: GuestSshTarget,
   remoteSocket: string,
-  options: { timeoutMs?: number; signal?: AbortSignal } = {},
+  options: { timeoutMs?: number; signal?: AbortSignal; onExit?: () => void } = {},
   deps: OpenGuestVncTunnelDependencies,
 ): Promise<GuestVncTunnel> {
   const timeoutMs = options.timeoutMs ?? 15_000;
@@ -560,22 +562,44 @@ export async function openGuestVncTunnel(
         }
         if ((await probeLoopbackRfbBanner(localPort, 500)) && !exited && child.exitCode === null) {
           let closed = false;
+          const exitListeners = new Set<() => void>();
+          if (options.onExit) exitListeners.add(options.onExit);
           const cleanupStreams = () => {
             child.stdout?.destroy();
             child.stderr?.destroy();
           };
-          child.once("exit", () => {
+          const handlePostStartExit = () => {
+            if (closed) return;
             closed = true;
             cleanupStreams();
-          });
+            for (const listener of [...exitListeners]) {
+              try {
+                listener();
+              } catch {
+                // Advisory.
+              }
+            }
+            exitListeners.clear();
+          };
+          child.once("exit", handlePostStartExit);
+          child.once("error", handlePostStartExit);
           return {
             host: "127.0.0.1",
             port: localPort,
             close: async () => {
               if (closed) return;
               closed = true;
+              exitListeners.clear();
               cleanupStreams();
               await stopChildProcess(child);
+            },
+            onExit: (listener) => {
+              if (closed) {
+                queueMicrotask(listener);
+                return () => undefined;
+              }
+              exitListeners.add(listener);
+              return () => void exitListeners.delete(listener);
             },
           };
         }

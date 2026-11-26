@@ -1,4 +1,7 @@
 import assert from "node:assert/strict";
+import { chmodSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import path from "node:path";
 import test from "node:test";
 
 import {
@@ -20,6 +23,7 @@ import {
   type ProvisionContext,
 } from "./provision.js";
 import { BOT_COMPUTER_LINUX_APT_SNAPSHOT } from "./release.js";
+import { BotComputerError } from "./types.js";
 import type { BotComputerGuestCommandResult } from "./types.js";
 
 const HOST_KEY = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIKfakeHostKeyForAidenBotComputerTests0123456789 root@guest";
@@ -352,4 +356,79 @@ test("Linux guest VNC unit disables TCP (-rfbport -1), binds a mode-0600 Unix so
   assert.match(startScript, /\/usr\/bin\/tigervncpasswd -f/u);
   assert.match(startScript, new RegExp(`systemctl --user restart '${BOT_COMPUTER_LINUX_VNC_SERVICE}'`, "u"));
   assert.match(startScript, new RegExp(`\\[ -S '${BOT_COMPUTER_LINUX_VNC_SOCKET.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&")}' \\]`, "u"));
+});
+
+test("Linux shared_folder verifies VirtioFS host-to-guest and guest-to-host file round trips for both users and fails on 0700 or failed mount", async (t) => {
+  const dir = mkdtempSync(path.join(tmpdir(), "aiden-linux-shared-rt-"));
+  t.after(() => rmSync(dir, { recursive: true, force: true }));
+  const parentDir = path.join(dir, "bot-home");
+  const computerDir = path.join(parentDir, "Computer");
+  mkdirSync(parentDir, { recursive: true, mode: 0o700 });
+  mkdirSync(computerDir, { recursive: true, mode: 0o777 });
+  chmodSync(parentDir, 0o700);
+  chmodSync(computerDir, 0o777);
+
+  const sharedStep = LINUX_BASE_PROVISION_STEPS.find((step) => step.id === "shared_folder");
+  assert.ok(sharedStep);
+
+  // Model VZSharedDirectory without UID translation: guest users (lume/aiden-bot) rely on world rwx on Computer/.
+  const simulateGuestRoundTrip = async (command: string, mountFails = false): Promise<BotComputerGuestCommandResult> => {
+    assert.equal(command.includes("|| true"), false, "mount failures must not be ignored");
+    assert.match(command, /mountpoint -q/u);
+    assert.match(command, /\/mnt\/aiden-shared\/Computer/u);
+    if (mountFails) {
+      return { exitCode: 32, stdout: "", stderr: "mount: /mnt/aiden-shared: special device not found\n", truncated: false, timedOut: false };
+    }
+    const dirMode = statSync(computerDir).mode & 0o777;
+    if ((dirMode & 0o007) !== 0o007) {
+      return { exitCode: 1, stdout: "", stderr: "sh: cannot access /home/lume/Shared: Permission denied\n", truncated: false, timedOut: false };
+    }
+    const hostMatch = /\.aiden-shared-host-([0-9a-f]+)/u.exec(command);
+    if (!hostMatch?.[1]) {
+      return { exitCode: 1, stdout: "", stderr: "missing host probe name\n", truncated: false, timedOut: false };
+    }
+    const nonce = hostMatch[1];
+    const hostContent = readFileSync(path.join(computerDir, `.aiden-shared-host-${nonce}`), "utf8").trim();
+    assert.equal(hostContent, `aiden-host-${nonce}`);
+    for (const user of ["lume", "aiden-bot"]) {
+      writeFileSync(path.join(computerDir, `.aiden-shared-guest-${user}-${nonce}`), `aiden-guest-${user}-${nonce}\n`, { mode: 0o644 });
+    }
+    return ok;
+  };
+
+  // Succeeds when Computer/ is 0777 (inside 0700 parent) and mount works, cleaning up probe files.
+  await sharedStep.run(
+    linuxContext([], {
+      sharedDir: computerDir,
+      guestSsh: async (command) => simulateGuestRoundTrip(command, false),
+    }),
+  );
+  assert.deepEqual(readdirSync(computerDir), [], "round-trip probe files are cleaned up");
+  assert.equal(statSync(parentDir).mode & 0o777, 0o700, "host parent retains 0700 privacy");
+
+  // Fails closed if host directory is 0700 (inaccessible to guest UIDs), cleaning up host probe file.
+  chmodSync(computerDir, 0o700);
+  await assert.rejects(
+    sharedStep.run(
+      linuxContext([], {
+        sharedDir: computerDir,
+        guestSsh: async (command) => simulateGuestRoundTrip(command, false),
+      }),
+    ),
+    (error: unknown) => error instanceof BotComputerError && error.code === "start_failed",
+  );
+  assert.deepEqual(readdirSync(computerDir), [], "probe files cleaned up on permission failure");
+
+  // Fails closed if VirtioFS mount fails.
+  chmodSync(computerDir, 0o777);
+  await assert.rejects(
+    sharedStep.run(
+      linuxContext([], {
+        sharedDir: computerDir,
+        guestSsh: async (command) => simulateGuestRoundTrip(command, true),
+      }),
+    ),
+    (error: unknown) => error instanceof BotComputerError && error.code === "start_failed",
+  );
+  assert.deepEqual(readdirSync(computerDir), [], "probe files cleaned up on mount failure");
 });
