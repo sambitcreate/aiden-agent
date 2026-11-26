@@ -582,13 +582,34 @@ export function renderCloudInitUserData(options: Omit<CloudInitSeedOptions, "ins
 
 export const CLOUD_INIT_VOLUME_LABEL = "CIDATA";
 
+/**
+ * Cloud-init NoCloud `network-config` (Netplan v2) so Debian 13 sends its raw
+ * Ethernet MAC address (`dhcp-identifier: mac`) on first boot instead of an
+ * RFC 4361 DUID, allowing macOS's `bootpd` lease table and `lume get` to
+ * resolve the VM's IP deterministically without waiting for ARP.
+ */
+export function renderCloudInitNetworkConfig(): string {
+  return [
+    "version: 2",
+    "ethernets:",
+    "  aiden-virtio:",
+    "    match:",
+    '      name: "en*"',
+    "    dhcp4: true",
+    "    dhcp-identifier: mac",
+    "",
+  ].join("\n");
+}
+
 export function buildCloudInitSeedIso(options: CloudInitSeedOptions): Buffer {
   const metaData = renderCloudInitMetaData({ instanceId: options.instanceId, hostname: options.hostname });
   const userData = renderCloudInitUserData(options);
+  const networkConfig = renderCloudInitNetworkConfig();
   return buildIso9660Image({
     volumeLabel: CLOUD_INIT_VOLUME_LABEL,
     files: [
       { name: "meta-data", content: metaData },
+      { name: "network-config", content: networkConfig },
       { name: "user-data", content: userData },
     ],
     timestamp: options.timestamp,

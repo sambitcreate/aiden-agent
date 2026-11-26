@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { mkdtempSync, readFileSync, statSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdtempSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import test from "node:test";
@@ -13,11 +13,15 @@ import {
   guestSshArgs,
   guestSshEnvironment,
   guestSshPaths,
+  guestSshTunnelArgs,
+  openGuestVncTunnel,
   parsePublicKey,
   runGuestCommand,
+  scanGuestHostKey,
   writeKnownHost,
 } from "./ssh.js";
 import { BotComputerError } from "./types.js";
+import { vncReachableBeyondLoopback } from "./vnc-exposure.js";
 
 const root = "/Users/person/Library/Application Support/Aiden Agent/bot-computers";
 const paths = guestSshPaths(root);
@@ -138,4 +142,204 @@ test("the key pair is made once with ssh-keygen and kept owner-only", async () =
   assert.equal(readFileSync(local.knownHosts, "utf8"), `${BOT_COMPUTER_HOST_KEY_ALIAS} ${KEY}\n`);
   assert.equal(statSync(local.knownHosts).mode & 0o777, 0o600);
   assert.throws(() => parsePublicKey("ssh-rsa AAAA"), BotComputerError);
+});
+
+test("scanGuestHostKey extracts and validates an ed25519 key from ssh-keyscan and refuses bad hosts or output", async () => {
+  const seen: { command: string; args: readonly string[] }[] = [];
+  const scanned = await scanGuestHostKey("192.168.64.22", {
+    env: { PATH: "/usr/bin" },
+    run: async (command, args) => {
+      seen.push({ command, args });
+      return {
+        exitCode: 0,
+        signal: null,
+        stdout: `# 192.168.64.22:22 SSH-2.0-OpenSSH_9.9p2 Debian-2\n192.168.64.22 ${KEY}\n`,
+        stderr: "",
+        truncated: false,
+        timedOut: false,
+      };
+    },
+  });
+  assert.equal(scanned, KEY);
+  assert.deepEqual(seen, [{ command: "/usr/bin/ssh-keyscan", args: ["-t", "ed25519", "-T", "10", "192.168.64.22"] }]);
+
+  await assert.rejects(
+    scanGuestHostKey("evil.example", { env: {}, run: async () => ({ exitCode: 0, signal: null, stdout: "", stderr: "", truncated: false, timedOut: false }) }),
+    (error: unknown) => error instanceof BotComputerError && error.code === "invalid",
+  );
+  await assert.rejects(
+    scanGuestHostKey("192.168.64.22", {
+      env: {},
+      run: async () => ({ exitCode: 0, signal: null, stdout: "192.168.64.22 ssh-rsa AAAA\n", stderr: "", truncated: false, timedOut: false }),
+    }),
+    (error: unknown) => error instanceof BotComputerError && error.code === "start_failed",
+  );
+});
+
+test("guestSshTunnelArgs keeps every SSH hardening option, disables GatewayPorts, and forwards only on 127.0.0.1", () => {
+  const args = guestSshTunnelArgs(
+    { host: "192.168.64.9", user: "lume" },
+    paths,
+    { localPort: 59123, remoteSocket: "/home/lume/.local/share/aiden/vnc.sock" },
+  );
+  assert.ok(args.includes("StrictHostKeyChecking=yes"));
+  assert.ok(args.includes(`HostKeyAlias=${BOT_COMPUTER_HOST_KEY_ALIAS}`));
+  assert.ok(args.includes("IdentitiesOnly=yes"));
+  assert.ok(args.includes("BatchMode=yes"));
+  assert.ok(args.includes("PasswordAuthentication=no"));
+  assert.ok(args.includes("ForwardAgent=no"));
+  assert.ok(args.includes("ForwardX11=no"));
+  assert.ok(args.includes("GatewayPorts=no"));
+  assert.ok(args.includes("ExitOnForwardFailure=yes"));
+  assert.ok(args.includes("-N"));
+  assert.equal(args[args.indexOf("-L") + 1], "127.0.0.1:59123:/home/lume/.local/share/aiden/vnc.sock");
+  assert.equal(args.includes("ClearAllForwardings=yes"), false);
+
+  assert.throws(
+    () => guestSshTunnelArgs({ host: "192.168.64.9", user: "lume" }, paths, { localPort: 0, remoteSocket: "/tmp/vnc.sock" }),
+    BotComputerError,
+  );
+  assert.throws(
+    () => guestSshTunnelArgs({ host: "192.168.64.9", user: "lume" }, paths, { localPort: 5900, remoteSocket: "relative.sock" }),
+    BotComputerError,
+  );
+  assert.throws(
+    () => guestSshTunnelArgs({ host: "192.168.64.9", user: "lume" }, paths, { localPort: 5900, remoteSocket: "/tmp/bad:path" }),
+    BotComputerError,
+  );
+});
+
+test("openGuestVncTunnel binds only 127.0.0.1 (passing vncReachableBeyondLoopback) and terminates cleanly on close", async () => {
+  const dir = mkdtempSync(path.join(tmpdir(), "p8-ssh-tunnel-"));
+  const pidFile = path.join(dir, "tunnel.pid");
+  const fakeSsh = path.join(dir, "fake-ssh");
+  writeFileSync(
+    fakeSsh,
+    `#!${process.execPath}\n` +
+      `import { writeFileSync } from "node:fs";\n` +
+      `import { createServer } from "node:net";\n` +
+      `const lIdx = process.argv.indexOf("-L");\n` +
+      `const spec = lIdx >= 0 ? process.argv[lIdx + 1] : "";\n` +
+      `const match = /^127\\.0\\.0\\.1:(\\d+):(\\/.+)$/.exec(spec);\n` +
+      `if (!match) { process.stderr.write("bad -L " + spec + "\\n"); process.exit(2); }\n` +
+      `writeFileSync(${JSON.stringify(pidFile)}, String(process.pid));\n` +
+      `const server = createServer((s) => { s.write("RFB 003.008\\n"); s.end(); });\n` +
+      `process.on("SIGTERM", () => { server.close(); process.exit(0); });\n` +
+      `server.listen(Number(match[1]), "127.0.0.1", () => { process.stdout.write("AIDEN_TUNNEL_READY\\n"); });\n`,
+  );
+  chmodSync(fakeSsh, 0o755);
+
+  const local = guestSshPaths(dir);
+  const tunnel = await openGuestVncTunnel(
+    { host: "192.168.64.9", user: "lume" },
+    "/home/lume/.local/share/aiden/vnc.sock",
+    { timeoutMs: 5_000 },
+    { paths: local, env: guestSshEnvironment({}, local.home), sshCommand: fakeSsh },
+  );
+  try {
+    assert.equal(tunnel.host, "127.0.0.1");
+    assert.ok(tunnel.port > 0);
+    assert.equal(await vncReachableBeyondLoopback(tunnel.port), false, "loopback SSH tunnel is never reachable beyond loopback");
+  } finally {
+    await tunnel.close();
+  }
+  const pid = Number(readFileSync(pidFile, "utf8").trim());
+  assert.ok(pid > 0);
+  let alive = true;
+  try {
+    process.kill(pid, 0);
+  } catch {
+    alive = false;
+  }
+  assert.equal(alive, false, "tunnel child exits cleanly on close()");
+
+  // A listener that does not emit an RFB protocol banner is rejected rather than accepted.
+  const badSsh = path.join(dir, "bad-ssh.mjs");
+  writeFileSync(
+    badSsh,
+    `#!${process.execPath}\n` +
+      `import { createServer } from "node:net";\n` +
+      `const lIdx = process.argv.indexOf("-L");\n` +
+      `const match = /^127\\.0\\.0\\.1:(\\d+):(\\/.+)$/.exec(process.argv[lIdx + 1] ?? "");\n` +
+      `const server = createServer((s) => { s.write("HTTP/1.1 200 OK\\r\\n\\r\\n"); s.end(); });\n` +
+      `process.on("SIGTERM", () => { server.close(); process.exit(0); });\n` +
+      `server.listen(Number(match[1]), "127.0.0.1", () => { process.stdout.write("AIDEN_TUNNEL_READY\\n"); });\n`,
+  );
+  chmodSync(badSsh, 0o755);
+  await assert.rejects(
+    openGuestVncTunnel(
+      { host: "192.168.64.9", user: "lume" },
+      "/home/lume/.local/share/aiden/vnc.sock",
+      { timeoutMs: 600 },
+      { paths: local, env: guestSshEnvironment({}, local.home), sshCommand: badSsh },
+    ),
+    /tunnel/iu,
+  );
+
+  // A pre-auth loopback RFB impostor listening before SSH emits AIDEN_TUNNEL_READY is rejected.
+  const impostorSsh = path.join(dir, "impostor-ssh.mjs");
+  writeFileSync(
+    impostorSsh,
+    `#!${process.execPath}\n` +
+      `import { createServer } from "node:net";\n` +
+      `const lIdx = process.argv.indexOf("-L");\n` +
+      `const match = /^127\\.0\\.0\\.1:(\\d+):(\\/.+)$/.exec(process.argv[lIdx + 1] ?? "");\n` +
+      `const server = createServer((s) => { s.write("RFB 003.008\\n"); s.end(); });\n` +
+      `process.on("SIGTERM", () => { server.close(); process.exit(0); });\n` +
+      `server.listen(Number(match[1]), "127.0.0.1", () => {\n` +
+      `  // Simulate ssh failing ExitOnForwardFailure after pre-auth window without emitting AIDEN_TUNNEL_READY.\n` +
+      `  setTimeout(() => { server.close(); process.exit(255); }, 150);\n` +
+      `});\n`,
+  );
+  chmodSync(impostorSsh, 0o755);
+  await assert.rejects(
+    openGuestVncTunnel(
+      { host: "192.168.64.9", user: "lume" },
+      "/home/lume/.local/share/aiden/vnc.sock",
+      { timeoutMs: 2_000 },
+      { paths: local, env: guestSshEnvironment({}, local.home), sshCommand: impostorSsh },
+    ),
+    /tunnel/iu,
+  );
+
+  // Killing the SSH child after openGuestVncTunnel succeeds notifies onExit; explicit close() does not.
+  let unexpectedExits = 0;
+  let resolveExit: (() => void) | undefined;
+  const exited = new Promise<void>((resolve) => {
+    resolveExit = resolve;
+  });
+  const droppedTunnel = await openGuestVncTunnel(
+    { host: "192.168.64.9", user: "lume" },
+    "/home/lume/.local/share/aiden/vnc.sock",
+    {
+      timeoutMs: 5_000,
+      onExit: () => {
+        unexpectedExits += 1;
+        resolveExit?.();
+      },
+    },
+    { paths: local, env: guestSshEnvironment({}, local.home), sshCommand: fakeSsh },
+  );
+  const droppedPid = Number(readFileSync(pidFile, "utf8").trim());
+  process.kill(droppedPid, "SIGKILL");
+  await exited;
+  assert.equal(unexpectedExits, 1, "unexpected post-start SSH child exit notifies owner once");
+  await droppedTunnel.close();
+  assert.equal(unexpectedExits, 1);
+
+  let cleanExits = 0;
+  const closedTunnel = await openGuestVncTunnel(
+    { host: "192.168.64.9", user: "lume" },
+    "/home/lume/.local/share/aiden/vnc.sock",
+    {
+      timeoutMs: 5_000,
+      onExit: () => {
+        cleanExits += 1;
+      },
+    },
+    { paths: local, env: guestSshEnvironment({}, local.home), sshCommand: fakeSsh },
+  );
+  await closedTunnel.close();
+  await new Promise((resolve) => setTimeout(resolve, 50));
+  assert.equal(cleanExits, 0, "intentional close() does not invoke onExit");
 });

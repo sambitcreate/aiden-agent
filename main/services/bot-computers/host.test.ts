@@ -1,15 +1,19 @@
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import { createHash } from "node:crypto";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, statSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, statSync, writeFileSync } from "node:fs";
+import { connect, createServer } from "node:net";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import test from "node:test";
 import { analyticsSettled, captureAnalyticsEvents } from "../analytics/test-support.js";
+import { parseBotComputersStatus } from "../../../renderer/shared/bot-computers.js";
 
 import type { BoundedProcessOptions, BoundedProcessResult } from "./bounded-process.js";
 import { createGuestCuaDriverHostFactory } from "./guest-driver.js";
 import { createBotComputerHost, type BotComputerHostDependencies } from "./host.js";
+import { BOT_COMPUTER_LINUX_VNC_SOCKET } from "./provision.js";
+import { createBotComputerSessions } from "./sessions.js";
 import { BOT_COMPUTER_GUEST_PASSWORD_SECRET, BotComputerError } from "./types.js";
 import { BOT_COMPUTER_BASE_VM, botComputerVmName } from "./vm-names.js";
 
@@ -81,6 +85,7 @@ function harness(overrides: Partial<BotComputerHostDependencies> = {}) {
   writeConfig();
   const secrets = new Map<string, string>();
   const sshCalls: { args: readonly string[]; stdin?: string; stdinFile?: string }[] = [];
+  const vncTunnels: { host: string; remoteSocket: string; port: number; closed: boolean }[] = [];
   const fetches: { url: string; redirect?: RequestRedirect }[] = [];
   const idle: { botId?: string; callback: () => void; ms: number; cancelled: boolean }[] = [];
   let clock = 1_000_000_000;
@@ -98,6 +103,11 @@ function harness(overrides: Partial<BotComputerHostDependencies> = {}) {
       writeFileSync(`${file}.pub`, "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIAidenKeyForBotComputerProvisioningTests012345678 aiden\n");
       return done;
     }
+    if (command.endsWith("ssh-keyscan")) {
+      const targetIp = args[args.length - 1] ?? "";
+      const guest = Object.values(fakeState().vms).find((vm) => vm.ip === targetIp);
+      return { ...done, stdout: `${targetIp} ${guest?.hostKey ?? HOST_KEY}\n` };
+    }
     sshCalls.push({ args, stdin: options.stdin, stdinFile: options.stdinFile });
     // As ssh with StrictHostKeyChecking=yes: the guest's own host key must be pinned under the alias.
     const address = args[args.indexOf("--") + 1];
@@ -108,6 +118,18 @@ function harness(overrides: Partial<BotComputerHostDependencies> = {}) {
       return { ...done, exitCode: 255, stderr: "Host key verification failed.\n" };
     }
     if (ssh.fails?.(args)) return { ...done, exitCode: 1, stderr: "the guest step failed\n" };
+    const remoteCmd = args[args.length - 1] ?? "";
+    const hostProbeMatch = /\.aiden-shared-host-([0-9a-f]+)/u.exec(remoteCmd);
+    if (hostProbeMatch?.[1]) {
+      const nonce = hostProbeMatch[1];
+      const baseShared = path.join(root, "base-shared", "Computer");
+      const hostProbe = path.join(baseShared, `.aiden-shared-host-${nonce}`);
+      const token = readFileSync(hostProbe, "utf8").trim();
+      assert.equal(token, `aiden-host-${nonce}`);
+      for (const user of ["lume", "aiden-bot"]) {
+        writeFileSync(path.join(baseShared, `.aiden-shared-guest-${user}-${nonce}`), `aiden-guest-${user}-${nonce}\n`, { mode: 0o644 });
+      }
+    }
     return { ...done, stdout: ssh.stdout?.(args) ?? "guest says hi\n" };
   };
   // Restore images by URL; anything else gets the default pin's bytes.
@@ -157,6 +179,23 @@ function harness(overrides: Partial<BotComputerHostDependencies> = {}) {
     startTimeoutMs: 20_000,
     runProcess,
     vncExposed: async () => false,
+    openVncTunnel: async (target, remoteSocket) => {
+      const server = createServer((socket) => socket.end());
+      await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+      const address = server.address();
+      const port = typeof address === "object" && address !== null ? address.port : 0;
+      const record = { host: target.host, remoteSocket, port, closed: false };
+      vncTunnels.push(record);
+      return {
+        host: "127.0.0.1" as const,
+        port,
+        close: async () => {
+          if (record.closed) return;
+          record.closed = true;
+          await new Promise<void>((resolve) => server.close(() => resolve()));
+        },
+      };
+    },
     onSetupReady: () => void (events.ready += 1),
     onRemoved: () => void (events.removed += 1),
     ...overrides,
@@ -203,6 +242,7 @@ function harness(overrides: Partial<BotComputerHostDependencies> = {}) {
     lumeHelper,
     secrets,
     sshCalls,
+    vncTunnels,
     ssh,
     fetches,
     idle,
@@ -1777,4 +1817,499 @@ test("a finished Set up counts once, and one that failed counts nothing", async 
     await analyticsSettled();
     assert.deepEqual(sent, [{ event: "bot_computer_set_up", props: { element_control: false } }]);
   });
+});
+
+test("Linux Set up downloads via HTTPS mirror redirect, creates and provisions a Linux base with no permissions step, and cleans up", async () => {
+  const linuxRaw = Buffer.from("fake Debian 13 generic arm64 raw disk image\n".repeat(64));
+  const linuxImage = {
+    version: "13",
+    build: "20261123-2671",
+    url: "https://cloud.debian.org/images/cloud/trixie/20261123-2671/debian-13-generic-arm64-20261123-2671.raw",
+    bytes: linuxRaw.length,
+    sha256: createHash("sha256").update(linuxRaw).digest("hex"),
+  };
+  const mirrorUrl = "https://mirror.debian.org/images/debian-13-generic-arm64-20261123-2671.raw";
+  const observedSteps: string[] = [];
+  const fetched: { url: string; redirect?: RequestRedirect }[] = [];
+
+  await withHost(
+    async (context) => {
+      const before = await context.host.status();
+      assert.equal(before.requirements.guestOs, "linux");
+      assert.equal(before.requirements.maxRunningLimit, 4);
+      assert.equal(before.requirements.memoryPerComputerBytes, 4 * 1024 ** 3);
+      assert.equal(before.requirements.baseDiskBytes, 8_000_000_000);
+
+      context.host.onChange(() => {
+        void context.host.status().then((next) => {
+          if (next.setup.kind === "building_base") observedSteps.push(next.setup.step);
+        });
+      });
+
+      await setUp(context);
+      const status = await context.host.status();
+      assert.deepEqual(status.setup, {
+        kind: "ready",
+        baseVersion: "13",
+        baseBuild: "20261123-2671",
+        updateAvailable: false,
+      });
+      assert.equal(observedSteps.includes("permissions"), false, "Linux setup has no macOS permissions step");
+      assert.deepEqual(fetched, [
+        { url: linuxImage.url, redirect: "manual" },
+        { url: mirrorUrl, redirect: "manual" },
+      ]);
+
+      const cliCalls = context.calls().filter((call) => call.kind === "cli");
+      const createCall = cliCalls.find((call) => call.op === "create");
+      assert.equal(createCall?.args?.[createCall.args.indexOf("--os") + 1], "linux");
+      assert.equal(createCall?.args?.[createCall.args.indexOf("--memory") + 1], "4GB");
+      assert.equal(createCall?.args?.[createCall.args.indexOf("--disk-size") + 1], "24GB");
+      assert.equal(createCall?.args?.[createCall.args.indexOf("--display") + 1], "1280x800");
+      assert.equal(createCall?.args?.includes("--ipsw"), false);
+
+      const runCall = cliCalls.find((call) => call.op === "run");
+      assert.ok(runCall?.args?.includes("--mount"), "first Linux boot mounts the CIDATA seed ISO");
+      assert.equal(runCall?.args?.[runCall.args.indexOf("--vnc") + 1], "disabled", "Linux base boot disables Lume's host VNC");
+      assert.equal(runCall?.args?.includes("--vnc-password"), false);
+      assert.equal(context.vncTunnels.length, 0, "base setup opens no SSH VNC tunnel");
+      const mountedIso = runCall?.args?.[runCall.args.indexOf("--mount") + 1] ?? "";
+      assert.equal(existsSync(mountedIso), false, "temporary CIDATA seed ISO is deleted after base build");
+
+      assert.equal(context.calls().filter((call) => call.kind === "ssh").length, 0, "Linux provisioning never uses password lume ssh");
+      assert.ok(context.sshCalls.length >= 6, "provisioning runs over key-based system ssh");
+      const stored = context.secrets.get(BOT_COMPUTER_GUEST_PASSWORD_SECRET);
+      assert.match(stored ?? "", /^[A-Za-z0-9]{32}$/u);
+      assert.ok(context.sshCalls.every((call) => !call.args.some((arg) => arg.includes(stored ?? "<none>"))));
+      assert.equal(readFileSync(path.join(context.root, "known_hosts"), "utf8"), `aiden-bot-computer ${HOST_KEY}\n`);
+      assert.equal(existsSync(path.join(context.root, "restore-images", "debian-20261123-2671.raw")), false);
+      assert.equal(context.vmRunning(BOT_COMPUTER_BASE_VM), false);
+
+      // setUpElementControl is a no-op on Linux (no macOS permission flow).
+      const beforeElementControl = context.calls().length;
+      await context.host.setUpElementControl();
+      assert.equal(context.calls().length, beforeElementControl);
+    },
+    {
+      env: { LANG: "en_US.UTF-8", AIDEN_BOT_COMPUTERS_LINUX: "1" },
+      image: linuxImage,
+      fetchImpl: (async (url: string | URL | Request, init?: RequestInit) => {
+        const href = String(url);
+        fetched.push({ url: href, redirect: init?.redirect });
+        if (href === linuxImage.url) {
+          return new Response(null, { status: 302, headers: { location: mirrorUrl } });
+        }
+        return new Response(new Uint8Array(linuxRaw));
+      }) as typeof fetch,
+    },
+  );
+});
+
+test("Linux Update base builds aiden-base-next, swaps cleanly, and marks existing Bot computers outdated until Reset", async () => {
+  const firstRaw = Buffer.from("debian build 1\n".repeat(64));
+  const secondRaw = Buffer.from("debian build 2\n".repeat(64));
+  const firstImage = {
+    version: "13",
+    build: "20261101-1001",
+    url: "https://cloud.debian.org/images/debian-1.raw",
+    bytes: firstRaw.length,
+    sha256: createHash("sha256").update(firstRaw).digest("hex"),
+  };
+  const secondImage = {
+    version: "13",
+    build: "20261123-2671",
+    url: "https://cloud.debian.org/images/debian-2.raw",
+    bytes: secondRaw.length,
+    sha256: createHash("sha256").update(secondRaw).digest("hex"),
+  };
+
+  await withHost(
+    async (context) => {
+      context.serve(firstImage.url, firstRaw);
+      context.serve(secondImage.url, secondRaw);
+      await setUp(context);
+      await context.host.give("ada");
+
+      const updatedHost = context.relaunch({ linux: true, image: secondImage });
+      const before = await updatedHost.status();
+      assert.equal(before.setup.kind === "ready" && before.setup.updateAvailable, true);
+
+      await updatedHost.updateBase();
+      const after = await updatedHost.status();
+      assert.deepEqual(after.setup, {
+        kind: "ready",
+        baseVersion: "13",
+        baseBuild: "20261123-2671",
+        updateAvailable: false,
+      });
+      assert.equal((await updatedHost.computer("ada"))?.outdated, true);
+      assert.equal(context.vmNames().includes("aiden-base-next"), false, "staging base removed after swap");
+      assert.equal(context.vmNames().includes(BOT_COMPUTER_BASE_VM), true);
+
+      const reset = await updatedHost.reset("ada");
+      assert.equal(reset.outdated, false);
+      assert.equal(reset.baseBuild, "20261123-2671");
+    },
+    { linux: true, image: firstImage },
+  );
+});
+
+test("Linux mode scales maxRunning up to 4 with host free memory and enforces the 2 GB minimum floor", async () => {
+  const linuxRaw = Buffer.from("debian concurrency image\n".repeat(64));
+  const linuxImage = {
+    version: "13",
+    build: "20261123-2671",
+    url: "https://cloud.debian.org/images/debian.raw",
+    bytes: linuxRaw.length,
+    sha256: createHash("sha256").update(linuxRaw).digest("hex"),
+  };
+  let freeMem = 64 * 1024 ** 3;
+
+  await withHost(
+    async (context) => {
+      context.serve(linuxImage.url, linuxRaw);
+      await setUp(context);
+
+      // 64 GiB available → limit is 4; all four Bots can run at once.
+      assert.equal((await context.host.status()).requirements.maxRunningLimit, 4);
+      const updated = await context.host.updateSettings({ maxRunning: 4 });
+      assert.equal(updated.maxRunning, 4);
+      await assert.rejects(context.host.updateSettings({ maxRunning: 5 as 4 }), /At most 4/u);
+
+      for (const botId of ["ada", "ben", "cyd", "dan"]) {
+        await context.host.give(botId);
+        await context.host.ensureRunning(botId, { reason: "tool" });
+      }
+      for (const botId of ["ada", "ben", "cyd", "dan"]) {
+        assert.equal((await context.host.computer(botId))?.state, "running", `${botId} runs concurrently`);
+        await context.host.stop(botId, { reason: "person" });
+      }
+
+      // 10 GiB available → limit drops to 2; setting maxRunning to 3 is refused.
+      freeMem = 10 * 1024 ** 3;
+      assert.equal((await context.host.status()).requirements.maxRunningLimit, 2);
+      await assert.rejects(context.host.updateSettings({ maxRunning: 3 }), /one or two/u);
+
+      // 3 GiB available (above 2 GiB minimum, below 4 GiB) → limit is 1 and the first Linux VM still starts.
+      freeMem = 3 * 1024 ** 3;
+      assert.equal((await context.host.status()).requirements.maxRunningLimit, 1);
+      await context.host.ensureRunning("ada", { reason: "tool" });
+      assert.equal((await context.host.computer("ada"))?.state, "running");
+      await context.host.stop("ada", { reason: "person" });
+
+      // 1 GiB available (below 2 GiB minimum) → starting even one Linux VM is refused with low_memory.
+      freeMem = 1 * 1024 ** 3;
+      await assert.rejects(
+        context.host.ensureRunning("ada", { reason: "tool" }),
+        (error: unknown) => error instanceof BotComputerError && error.code === "low_memory",
+      );
+
+      // Persisted Linux maxRunning: 4 stays clamped to macOS's 2-VM cap when relaunched with the flag off.
+      freeMem = 64 * 1024 ** 3;
+      const macHost = context.relaunch({ linux: false, env: { LANG: "en_US.UTF-8" } });
+      const macStatus = await macHost.status();
+      assert.equal(macStatus.settings.maxRunning, 2);
+      assert.notEqual(parseBotComputersStatus(macStatus), undefined, "macOS status parses cleanly after Linux maxRunning: 4");
+      assert.equal((await macHost.updateSettings({ idleStopMinutes: 30 })).maxRunning, 2);
+      await macHost.ensureRunning("ada", { reason: "tool" });
+      await macHost.ensureRunning("ben", { reason: "tool" });
+      macHost.touch("ada");
+      macHost.touch("ben");
+      const waiting = macHost.ensureRunning("cyd", { reason: "tool" });
+      await new Promise((resolve) => setTimeout(resolve, 100));
+      assert.equal((await macHost.computer("cyd"))?.state, "waiting_for_slot", "macOS mode still enforces cap 2");
+      await macHost.stop("ben", { reason: "person" });
+      await waiting;
+      await macHost.stop("ada", { reason: "person" });
+      await macHost.stop("cyd", { reason: "person" });
+    },
+    {
+      linux: true,
+      image: linuxImage,
+      resources: { freeDiskBytes: async () => 1e13, availableMemoryBytes: async () => freeMem },
+    },
+  );
+});
+
+test("Linux Bot computers disable Lume VNC, tunnel guest X0tigervnc on 127.0.0.1 passing real vncReachableBeyondLoopback, and tear down tunnels on stop or failure", async () => {
+  const linuxRaw = Buffer.from("debian vnc tunnel image\n".repeat(64));
+  const linuxImage = {
+    version: "13",
+    build: "20261123-2671",
+    url: "https://cloud.debian.org/images/debian-vnc.raw",
+    bytes: linuxRaw.length,
+    sha256: createHash("sha256").update(linuxRaw).digest("hex"),
+  };
+
+  await withHost(
+    async (context) => {
+      context.serve(linuxImage.url, linuxRaw);
+      await setUp(context);
+      await context.host.give("ada");
+
+      const beforeSsh = context.sshCalls.length;
+      const conn = await context.host.ensureRunning("ada", { reason: "tool" });
+      const runCall = last(context.calls().filter((c) => c.kind === "cli" && c.op === "run"));
+      assert.equal(runCall?.args?.[runCall.args.indexOf("--vnc") + 1], "disabled", "Linux Bot VM runs with --vnc disabled");
+      assert.equal(runCall?.args?.includes("--vnc-password"), false, "no --vnc-password passed to Lume");
+
+      const vncStartCall = context.sshCalls.slice(beforeSsh).find((c) => c.args.some((a) => a.includes("tigervncpasswd")));
+      assert.ok(vncStartCall, "guest VNC password & service started over SSH");
+      assert.equal(vncStartCall?.stdin, `${conn.vnc.password}\n`, "per-run VNC password passes on stdin, not argv");
+      assert.equal(vncStartCall?.args.some((a) => a.includes(conn.vnc.password)), false);
+
+      assert.equal(context.vncTunnels.length, 1);
+      assert.equal(context.vncTunnels[0]?.remoteSocket, BOT_COMPUTER_LINUX_VNC_SOCKET);
+      assert.equal(context.vncTunnels[0]?.closed, false);
+      assert.equal(conn.vnc.host, "127.0.0.1");
+      assert.equal(conn.vnc.port, context.vncTunnels[0]?.port);
+
+      await context.host.stop("ada", { reason: "person" });
+      assert.equal(context.vncTunnels[0]?.closed, true, "SSH VNC tunnel closes when Bot VM stops");
+
+      // When the G22 check reports exposure, both tunnel and VM are torn down cleanly.
+      const exposedHost = context.relaunch({ linux: true, image: linuxImage, vncExposed: async () => true });
+      await assert.rejects(
+        exposedHost.ensureRunning("ada", { reason: "tool" }),
+        (error: unknown) => error instanceof BotComputerError && error.code === "vnc_not_loopback",
+      );
+      assert.equal(context.vncTunnels.length, 2);
+      assert.equal(context.vncTunnels[1]?.closed, true, "tunnel closes on vnc_not_loopback rejection");
+      assert.equal(context.vmRunning(botComputerVmName("ada")), false, "VM stops on vnc_not_loopback rejection");
+
+      const botShared = path.join(context.dir, "bots", "ada", "Computer");
+      assert.equal(statSync(path.dirname(botShared)).mode & 0o777, 0o700, "Bot home parent keeps 0700 privacy");
+      assert.equal(statSync(botShared).mode & 0o777, 0o777, "exported Computer directory is traversable/writable by guest UIDs");
+      assert.equal(statSync(path.join(context.root, "base-shared")).mode & 0o777, 0o700, "base-shared parent keeps 0700 privacy");
+      assert.equal(statSync(path.join(context.root, "base-shared", "Computer")).mode & 0o777, 0o777);
+    },
+    {
+      linux: true,
+      image: linuxImage,
+      // Explicitly undefined so the REAL unmodified vncReachableBeyondLoopback(port) runs!
+      vncExposed: undefined,
+    },
+  );
+});
+
+test("Linux screen session recovers cleanly after post-start SSH tunnel child exit without retrying the dead port", async () => {
+  const linuxRaw = Buffer.from("debian tunnel recovery image\n".repeat(64));
+  const linuxImage = {
+    version: "13",
+    build: "20261123-2671",
+    url: "https://cloud.debian.org/images/debian-tunnel-recovery.raw",
+    bytes: linuxRaw.length,
+    sha256: createHash("sha256").update(linuxRaw).digest("hex"),
+  };
+
+  await withHost(
+    async (context) => {
+      context.serve(linuxImage.url, linuxRaw);
+      await setUp(context);
+      await context.host.give("ada");
+
+      const pidFile = path.join(context.dir, "tunnel-child.pid");
+      const fakeSsh = path.join(context.dir, "fake-ssh-tunnel");
+      writeFileSync(
+        fakeSsh,
+        `#!${process.execPath}\n` +
+          `import { writeFileSync } from "node:fs";\n` +
+          `import { connect, createServer } from "node:net";\n` +
+          `const lIdx = process.argv.indexOf("-L");\n` +
+          `const spec = lIdx >= 0 ? process.argv[lIdx + 1] : "";\n` +
+          `const match = /^127\\.0\\.0\\.1:(\\d+):(\\/.+)$/.exec(spec);\n` +
+          `if (!match) process.exit(2);\n` +
+          `writeFileSync(${JSON.stringify(pidFile)}, String(process.pid));\n` +
+          `const server = createServer((s) => { s.write("RFB 003.008\\n"); s.end(); });\n` +
+          `process.on("SIGTERM", () => { server.close(); process.exit(0); });\n` +
+          `server.listen(Number(match[1]), "127.0.0.1", () => { process.stdout.write("AIDEN_TUNNEL_READY\\n"); });\n`,
+      );
+      chmodSync(fakeSsh, 0o755);
+
+      const recoveringHost = context.relaunch({
+        linux: true,
+        image: linuxImage,
+        sshCommand: fakeSsh,
+        openVncTunnel: undefined,
+        vncExposed: undefined,
+      });
+      const sessions = createBotComputerSessions({ host: recoveringHost, control: recoveringHost.control });
+      const attemptedPorts: number[] = [];
+      let closes = 0;
+      sessions.setScreenFactory(async (connection) => {
+        attemptedPorts.push(connection.vnc.port);
+        // Probe the tunnel endpoint to prove the published loopback port actually accepts RFB.
+        const banner = await new Promise<string>((resolve, reject) => {
+          const socket = connect({ host: connection.vnc.host, port: connection.vnc.port });
+          socket.once("data", (chunk: Buffer) => {
+            socket.destroy();
+            resolve(chunk.toString("ascii"));
+          });
+          socket.once("error", reject);
+        });
+        assert.match(banner, /^RFB /u);
+        return {
+          capture: async () => ({ image: Buffer.from("png"), mimeType: "image/png", width: 1280, height: 800, framebufferWidth: 1280, framebufferHeight: 800 }),
+          pointer: async () => undefined,
+          key: async () => undefined,
+          close: async () => {
+            closes += 1;
+          },
+        };
+      });
+
+      const firstScreen = await sessions.screen("ada");
+      const firstPort = attemptedPorts[0];
+      assert.ok(firstPort && firstPort > 0);
+      const firstPid = Number(readFileSync(pidFile, "utf8").trim());
+
+      // Kill the SSH tunnel child after openGuestVncTunnel() succeeded, while the VM stays running.
+      process.kill(firstPid, "SIGKILL");
+      for (let attempt = 0; attempt < 100; attempt += 1) {
+        if ((await recoveringHost.computer("ada"))?.state === "stopped") break;
+        await new Promise((resolve) => setTimeout(resolve, 25));
+      }
+      assert.equal((await recoveringHost.computer("ada"))?.state, "stopped", "tunnel drop invalidates and stops the run");
+      assert.equal(closes, 1, "stale cached screen is closed on state transition");
+      assert.equal(recoveringHost.runningConnection("ada"), undefined);
+
+      // Next screen action starts a clean run with a fresh loopback port instead of retrying the dead port.
+      const secondScreen = await sessions.screen("ada");
+      assert.notEqual(secondScreen, firstScreen);
+      assert.equal(attemptedPorts.length, 2);
+      assert.notEqual(attemptedPorts[1], firstPort, "subsequent screen action opens a fresh tunnel port instead of retrying the dead port");
+      await recoveringHost.stop("ada", { reason: "person" });
+    },
+    {
+      linux: true,
+      image: linuxImage,
+      vncExposed: undefined,
+    },
+  );
+});
+
+test("Linux screen startup rejects and tears down cleanly when the SSH tunnel exits while vncExposed is pending", async () => {
+  const linuxRaw = Buffer.from("debian tunnel startup exit image\n".repeat(64));
+  const linuxImage = {
+    version: "13",
+    build: "20261123-2672",
+    url: "https://cloud.debian.org/images/debian-tunnel-startup-exit.raw",
+    bytes: linuxRaw.length,
+    sha256: createHash("sha256").update(linuxRaw).digest("hex"),
+  };
+
+  await withHost(
+    async (context) => {
+      context.serve(linuxImage.url, linuxRaw);
+      await setUp(context);
+      await context.host.give("ada");
+
+      const pidFile = path.join(context.dir, "startup-tunnel-child.pid");
+      const fakeSsh = path.join(context.dir, "fake-ssh-startup-tunnel");
+      writeFileSync(
+        fakeSsh,
+        `#!${process.execPath}\n` +
+          `import { writeFileSync } from "node:fs";\n` +
+          `import { createServer } from "node:net";\n` +
+          `const lIdx = process.argv.indexOf("-L");\n` +
+          `const spec = lIdx >= 0 ? process.argv[lIdx + 1] : "";\n` +
+          `const match = /^127\\.0\\.0\\.1:(\\d+):(\\/.+)$/.exec(spec);\n` +
+          `if (!match) process.exit(2);\n` +
+          `writeFileSync(${JSON.stringify(pidFile)}, String(process.pid));\n` +
+          `const server = createServer((s) => { s.write("RFB 003.008\\n"); s.end(); });\n` +
+          `process.on("SIGTERM", () => { server.close(); process.exit(0); });\n` +
+          `server.listen(Number(match[1]), "127.0.0.1", () => { process.stdout.write("AIDEN_TUNNEL_READY\\n"); });\n`,
+      );
+      chmodSync(fakeSsh, 0o755);
+
+      let exposedCalls = 0;
+      let firstPort: number | undefined;
+      let markExposedEntered!: () => void;
+      const exposedEntered = new Promise<void>((resolve) => {
+        markExposedEntered = resolve;
+      });
+      let releaseExposed!: (exposed: boolean) => void;
+      const firstExposedGate = new Promise<boolean>((resolve) => {
+        releaseExposed = resolve;
+      });
+
+      const testHost = context.relaunch({
+        linux: true,
+        image: linuxImage,
+        sshCommand: fakeSsh,
+        openVncTunnel: undefined,
+        vncExposed: async (port) => {
+          exposedCalls += 1;
+          if (exposedCalls === 1) {
+            firstPort = port;
+            markExposedEntered();
+            return firstExposedGate;
+          }
+          return false;
+        },
+      });
+      const sessions = createBotComputerSessions({ host: testHost, control: testHost.control });
+      const attemptedPorts: number[] = [];
+      sessions.setScreenFactory(async (connection) => {
+        attemptedPorts.push(connection.vnc.port);
+        const banner = await new Promise<string>((resolve, reject) => {
+          const socket = connect({ host: connection.vnc.host, port: connection.vnc.port });
+          socket.once("data", (chunk: Buffer) => {
+            socket.destroy();
+            resolve(chunk.toString("ascii"));
+          });
+          socket.once("error", reject);
+        });
+        assert.match(banner, /^RFB /u);
+        return {
+          capture: async () => ({ image: Buffer.from("png"), mimeType: "image/png", width: 1280, height: 800, framebufferWidth: 1280, framebufferHeight: 800 }),
+          pointer: async () => undefined,
+          key: async () => undefined,
+          close: async () => undefined,
+        };
+      });
+
+      const pendingScreen = assert.rejects(
+        sessions.screen("ada"),
+        (error: unknown) => error instanceof BotComputerError && error.code === "start_failed",
+      );
+      await exposedEntered;
+
+      const firstPid = Number(readFileSync(pidFile, "utf8").trim());
+      process.kill(firstPid, "SIGKILL");
+      for (let attempt = 0; attempt < 100; attempt += 1) {
+        let alive = true;
+        try {
+          process.kill(firstPid, 0);
+        } catch {
+          alive = false;
+        }
+        if (!alive) break;
+        await new Promise((resolve) => setTimeout(resolve, 25));
+      }
+      await new Promise<void>((resolve) => setImmediate(resolve));
+
+      releaseExposed(false);
+      await pendingScreen;
+
+      assert.equal(attemptedPorts.length, 0, "dead startup tunnel port is never published to screen sessions");
+      assert.equal((await testHost.computer("ada"))?.state, "stopped");
+      assert.equal(testHost.runningConnection("ada"), undefined);
+      assert.equal(context.vmRunning(botComputerVmName("ada")), false, "VM stops when tunnel exits during startup");
+
+      const secondScreen = await sessions.screen("ada");
+      assert.ok(secondScreen);
+      assert.equal(attemptedPorts.length, 1);
+      assert.ok(firstPort && firstPort > 0);
+      assert.notEqual(attemptedPorts[0], firstPort, "subsequent call starts cleanly on a fresh tunnel port");
+      assert.equal((await testHost.computer("ada"))?.state, "running");
+      assert.equal(testHost.runningConnection("ada")?.vnc.port, attemptedPorts[0]);
+      await testHost.stop("ada", { reason: "person" });
+    },
+    {
+      linux: true,
+      image: linuxImage,
+      vncExposed: undefined,
+    },
+  );
 });

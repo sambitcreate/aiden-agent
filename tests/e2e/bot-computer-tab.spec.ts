@@ -106,3 +106,62 @@ test("a computer that fails to start says why in the status red, not in the empt
   const note = panel.getByText("It starts when Planner needs it, or when you start it here.");
   expect(await note.evaluate((element) => getComputedStyle(element).color)).toBe(colors.secondary);
 });
+
+test("Settings shows Linux Bot computer sizes, 1-4 running choices, and no macOS permissions step when Linux mode is reported", async ({
+  aiden,
+}) => {
+  const { page } = aiden;
+  await finishLmStudioOnboarding(page);
+
+  await aiden.app.evaluate(({ ipcMain }) => {
+    let settings = { maxRunning: 2, idleStopMinutes: 10 };
+    for (const channel of ["app:getInfo", "botComputers:status", "botComputers:updateSettings"]) {
+      ipcMain.removeHandler(channel);
+    }
+    ipcMain.handle("app:getInfo", () => ({
+      name: "Aiden",
+      version: "e2e",
+      environment: "test",
+      capabilities: { platform: "darwin", subagents: true, bots: true, computerUse: true, botComputers: true },
+    }));
+    ipcMain.handle("botComputers:status", () => ({
+      setup: { kind: "not_set_up" },
+      settings,
+      diskUsedBytes: 0,
+      freeDiskBytes: 200_000_000_000,
+      computers: [],
+      requirements: {
+        downloadBytes: 3_221_225_472,
+        baseDiskBytes: 8_000_000_000,
+        setupFreeBytes: 20_401_094_656,
+        memoryPerComputerBytes: 4 * 1024 ** 3,
+        baseVersion: "13",
+        guestOs: "linux",
+        maxRunningLimit: 4,
+      },
+    }));
+    ipcMain.handle("botComputers:updateSettings", (_event, patch: Partial<typeof settings>) => {
+      settings = { ...settings, ...patch };
+      return settings;
+    });
+  });
+  await page.reload();
+
+  await page.getByRole("button", { name: "Settings", exact: true }).click();
+  const settingsNav = page.getByRole("navigation", { name: "Settings" });
+  await settingsNav.getByRole("button", { name: "Computers & VMs", exact: true }).click();
+  await page.getByRole("tab", { name: "Bot computers", exact: true }).click();
+
+  await expect(page.getByRole("button", { name: "Set up", exact: true })).toBeVisible();
+  await expect(page.getByText(/downloads Debian 13 \(about 3 GB, plus desktop packages\)/u)).toBeVisible();
+  await expect(page.getByText(/base computer of about 8 GB/u)).toBeVisible();
+  await expect(page.getByText(/needs about 20 GB free/u)).toBeVisible();
+  await expect(page.getByText(/about 4 GB of memory/u)).toBeVisible();
+  await expect(page.getByRole("button", { name: "Set up element control" })).toHaveCount(0);
+
+  const runningLimit = page.getByRole("combobox", { name: "Computers running at once" });
+  await runningLimit.click();
+  await expect(page.getByRole("option", { name: "4 computers", exact: true })).toBeVisible();
+  await page.getByRole("option", { name: "4 computers", exact: true }).click();
+  await expect(runningLimit).toContainText("4 computers");
+});

@@ -13,8 +13,9 @@ import { resolveVendoredCuaDriverExecutable, vendoredCuaDriverNoticePath } from 
 import { secrets } from "../secrets.js";
 import { createBotComputerControl, type BotComputerControlRegistry } from "./control.js";
 import { createBotComputerHost } from "./host.js";
+import { botComputersLinuxEnabled } from "./linux-feature-flag.js";
 import { resolveLumeInstallation } from "./lume-binary.js";
-import { hostMacosSupportsBotComputers } from "./release.js";
+import { hostMacosSupportsBotComputers, hostMacosSupportsLinuxBotComputers } from "./release.js";
 import { createRfbScreenFactory, nativeImageEncoder } from "./rfb-screen-main.js";
 import { createBotComputerActivity, createBotComputerSessions, type BotComputerActivity } from "./sessions.js";
 import type { BotComputerHost, BotComputerSessions } from "./types.js";
@@ -52,7 +53,10 @@ async function botComputerDir(botId: string): Promise<string> {
 function hostSupport(): { ok: true } | { ok: false; reason: "platform" | "host_os" } {
   if (!botComputersEnabled()) return { ok: false, reason: "platform" };
   const version = typeof process.getSystemVersion === "function" ? process.getSystemVersion() : undefined;
-  return hostMacosSupportsBotComputers(version) ? { ok: true } : { ok: false, reason: "host_os" };
+  const supported = botComputersLinuxEnabled()
+    ? hostMacosSupportsLinuxBotComputers(version)
+    : hostMacosSupportsBotComputers(version);
+  return supported ? { ok: true } : { ok: false, reason: "host_os" };
 }
 
 /** Where Computer Use's vendored helper bundle lives, whose cua-driver the guest driver lane copies. */

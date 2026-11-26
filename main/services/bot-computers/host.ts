@@ -1,9 +1,10 @@
 import { randomInt } from "node:crypto";
 import { existsSync } from "node:fs";
-import { mkdir, open, rm, type FileHandle } from "node:fs/promises";
+import { chmod, mkdir, open, rm, type FileHandle } from "node:fs/promises";
 import path from "node:path";
 import {
   parseBotComputersSettingsPatch,
+  type BotComputerMaxRunning,
   type BotComputerRunState,
   type BotComputerSetupState,
   type BotComputersSettings,
@@ -14,14 +15,36 @@ import { reportAnalyticsEvent } from "../analytics/analytics-report.js";
 import { CUA_DRIVER_UPSTREAM_PIN } from "../computer-use/binary.js";
 import { CUA_DRIVER_VERSION } from "../computer-use/contract.js";
 import type { CuaDriverHostFactory, CuaDriverSessionLike } from "../computer-use/controller.js";
+import { writeCloudInitSeedIso } from "./cloud-init-iso.js";
 import { createBotComputerControl, type BotComputerControlRegistry } from "./control.js";
 import { createGuestCuaDriverHostFactory, guestDriverSshBridge, type GuestDriverBridgeCommand } from "./guest-driver.js";
 import { guestDriverRestartScript, installGuestDriver, type GuestDriverLocation } from "./guest-driver-install.js";
 import { guestDriverPermissions, guestDriverReady, probeGuestDriver, type GuestDriverPermissions } from "./guest-driver-readiness.js";
+import { prepareLinuxBaseDisk } from "./linux-base.js";
+import { botComputersLinuxEnabled } from "./linux-feature-flag.js";
 import { lumeEnvironment, runLume, type LumeCommand, type LumeInvocation, type LumeRunResult } from "./lume-cli.js";
 import { classifyLumeError, isLoopbackHost, parseLumeVmInfo, parseLumeVmList, type LumeErrorKind, type LumeVmInfo } from "./lume-output.js";
-import { buildBaseVm, generateGuestPassword, type ProvisionContext } from "./provision.js";
 import {
+  BOT_COMPUTER_LINUX_DESKTOP_PACKAGES,
+  BOT_COMPUTER_LINUX_VNC_SOCKET,
+  buildBaseVm,
+  buildLinuxBaseVm,
+  generateGuestPassword,
+  linuxGuestVncStartScript,
+  type LinuxProvisionContext,
+  type ProvisionContext,
+} from "./provision.js";
+import {
+  BOT_COMPUTER_LINUX_BASE_DISK_RESERVE_BYTES,
+  BOT_COMPUTER_LINUX_BASE_SIZE_BYTES,
+  BOT_COMPUTER_LINUX_CPU_COUNT,
+  BOT_COMPUTER_LINUX_DISK_BYTES,
+  BOT_COMPUTER_LINUX_DISK_GB,
+  BOT_COMPUTER_LINUX_DISPLAY,
+  BOT_COMPUTER_LINUX_IMAGE,
+  BOT_COMPUTER_LINUX_MEMORY_BYTES,
+  BOT_COMPUTER_LINUX_MEMORY_GB,
+  BOT_COMPUTER_LINUX_MIN_MEMORY_BYTES,
   BOT_COMPUTER_RESTORE_IMAGE,
   BOT_COMPUTER_BASE_DISK_RESERVE_BYTES,
   BOT_COMPUTER_BASE_SIZE_BYTES,
@@ -35,9 +58,12 @@ import {
   ensureKeyPair,
   guestSshEnvironment,
   guestSshPaths,
+  openGuestVncTunnel,
   runGuestCommand as runSshCommand,
+  scanGuestHostKey,
   writeKnownHost,
   type GuestSshTarget,
+  type GuestVncTunnel,
   type ProcessRunner,
 } from "./ssh.js";
 import {
@@ -92,11 +118,20 @@ export interface BotComputerHostDependencies {
    * (Lume's detached run can return before the VM it launched is up), to turn it off.
    */
   launchSettleMs?: number;
-  /** `/usr/bin/ssh` and `/usr/bin/ssh-keygen`, or fakes. */
+  /** `/usr/bin/ssh`, `/usr/bin/ssh-keygen`, and `/usr/bin/ssh-keyscan`, or fakes. */
   sshCommand?: string;
   keygenCommand?: string;
+  keyscanCommand?: string;
   runProcess?: ProcessRunner;
+  /** Override `AIDEN_BOT_COMPUTERS_LINUX` for tests (defaults to checking `deps.env ?? process.env`). */
+  linux?: boolean;
   vncExposed?(port: number): Promise<boolean>;
+  /** Open the host-loopback SSH VNC tunnel for a Linux Bot computer (test seam). */
+  openVncTunnel?(
+    target: GuestSshTarget,
+    remoteSocket: string,
+    options: { timeoutMs?: number; signal?: AbortSignal; onExit?: () => void },
+  ): Promise<GuestVncTunnel>;
   control?: BotComputerControlRegistry;
   activity?: BotComputerActivity;
   /**
@@ -135,6 +170,7 @@ interface SharedStart {
 interface Runtime {
   state: BotComputerRunState;
   connection?: BotComputerConnection;
+  vncTunnel?: GuestVncTunnel;
   start?: SharedStart;
   stopping?: Promise<void>;
   cancelIdle?: () => void;
@@ -191,10 +227,16 @@ export function createBotComputerHost(deps: BotComputerHostDependencies): BotCom
     home: path.join(root, "home"),
     logs: path.join(root, "logs"),
     images: path.join(root, "restore-images"),
-    baseShared: path.join(root, "base-shared"),
+    baseSharedRoot: path.join(root, "base-shared"),
+    baseShared: path.join(root, "base-shared", "Computer"),
   };
   const sshPaths = guestSshPaths(root);
-  const image = deps.image ?? BOT_COMPUTER_RESTORE_IMAGE;
+  const linux = deps.linux ?? botComputersLinuxEnabled(deps.env ?? process.env);
+  const image = deps.image ?? (linux ? BOT_COMPUTER_LINUX_IMAGE : BOT_COMPUTER_RESTORE_IMAGE);
+  const baseDiskSizeBytes = linux ? BOT_COMPUTER_LINUX_BASE_SIZE_BYTES : BOT_COMPUTER_BASE_SIZE_BYTES;
+  const baseDiskReserveBytes = linux ? BOT_COMPUTER_LINUX_BASE_DISK_RESERVE_BYTES : BOT_COMPUTER_BASE_DISK_RESERVE_BYTES;
+  const vmMemoryBytes = linux ? BOT_COMPUTER_LINUX_MEMORY_BYTES : BOT_COMPUTER_VM_MEMORY_BYTES;
+  const vmMinMemoryBytes = linux ? BOT_COMPUTER_LINUX_MIN_MEMORY_BYTES : BOT_COMPUTER_VM_MEMORY_BYTES;
   const store = createBotComputersStore(path.join(root, "state.json"));
   const resources = deps.resources ?? systemResourceProbe;
   const now = deps.now ?? Date.now;
@@ -211,13 +253,29 @@ export function createBotComputerHost(deps: BotComputerHostDependencies): BotCom
   const control = deps.control ?? createBotComputerControl();
   const activity = deps.activity ?? createBotComputerActivity();
   const exposed = deps.vncExposed ?? ((port: number) => vncReachableBeyondLoopback(port));
+  const openVncTunnel =
+    deps.openVncTunnel ??
+    ((target: GuestSshTarget, remoteSocket: string, options: { timeoutMs?: number; signal?: AbortSignal; onExit?: () => void }) =>
+      openGuestVncTunnel(target, remoteSocket, options, {
+        paths: sshPaths,
+        env: guestSshEnvironment(deps.env ?? process.env, dirs.home),
+        sshCommand: deps.sshCommand,
+      }));
   const log = deps.log ?? (() => undefined);
   const downloader = createRestoreImageDownloader({
     dir: dirs.images,
     image,
+    ...(linux
+      ? {
+          filename: `debian-${image.build}.raw`,
+          label: "Debian Linux",
+          serverLabel: "Debian's download server",
+          allowHttpsRedirects: true,
+        }
+      : {}),
     fetchImpl: deps.fetchImpl,
     freeDiskBytes: (dir) => resources.freeDiskBytes(dir),
-    reserveBytes: BOT_COMPUTER_BASE_DISK_RESERVE_BYTES,
+    reserveBytes: baseDiskReserveBytes,
   });
 
   const runtimes = new Map<string, Runtime>();
@@ -270,6 +328,22 @@ export function createBotComputerHost(deps: BotComputerHostDependencies): BotCom
   };
   const occupied = () =>
     [...runtimes.values()].filter((entry) => SLOT_STATES.has(entry.state)).length + (baseHoldsSlot ? 1 : 0);
+  const runningCount = () => [...runtimes.values()].filter((entry) => entry.state === "running").length;
+  /** When Linux mode is off, never let a previously persisted Linux maxRunning (3|4) exceed macOS's 2-VM cap. */
+  const effectiveMaxRunning = (value: BotComputerMaxRunning): BotComputerMaxRunning =>
+    linux ? value : (Math.min(value, 2) as BotComputerMaxRunning);
+
+  /** Upper bound on concurrent Bot computers: 2 on macOS, 1–4 on Linux based on host memory. */
+  async function currentMaxRunningLimit(): Promise<BotComputerMaxRunning> {
+    if (!linux) return 2;
+    try {
+      const available = await resources.availableMemoryBytes();
+      const effective = available + runningCount() * BOT_COMPUTER_LINUX_MEMORY_BYTES;
+      return Math.max(1, Math.min(4, Math.floor(effective / BOT_COMPUTER_LINUX_MEMORY_BYTES))) as BotComputerMaxRunning;
+    } catch {
+      return 2;
+    }
+  }
   const wakeSlotWaiters = () => {
     const waiters = [...slotWaiters];
     slotWaiters.clear();
@@ -377,7 +451,9 @@ export function createBotComputerHost(deps: BotComputerHostDependencies): BotCom
       case "vm_limit":
         return new BotComputerError(
           "vm_limit",
-          "macOS runs at most two virtual machines at once, and another app is using one. Quit it or stop another Bot's computer, then try again.",
+          linux
+            ? "Another virtual machine is using the last available slot. Stop another virtual machine or Bot's computer, then try again."
+            : "macOS runs at most two virtual machines at once, and another app is using one. Quit it or stop another Bot's computer, then try again.",
         );
       case "low_disk":
         return new BotComputerError(
@@ -420,11 +496,12 @@ export function createBotComputerHost(deps: BotComputerHostDependencies): BotCom
   }
 
   /**
-   * Start a VM detached and wait for it to be running with an IP and a VNC
-   * endpoint. The endpoint must be loopback (G22) and its port must not answer
-   * on any other interface; otherwise the VM is stopped and refused. A start
-   * that fails or is cancelled once Lume has begun launching the VM turns it
-   * off before it rejects, and `onLeftRunning` hears when Lume still runs it.
+   * Start a VM detached and wait for it to be running with an IP (and, when
+   * Lume's VNC is enabled on macOS, a loopback-only VNC endpoint). When
+   * `vncDisabled` is true (Linux VMs), Lume is started with `--vnc disabled` so
+   * macOS's `_VZVNCServer` never binds a wildcard `*:port` socket on the host.
+   * A start that fails or is cancelled once Lume has begun launching the VM
+   * turns it off before it rejects, and `onLeftRunning` hears when Lume still runs it.
    */
   async function runAndWait(
     vmName: string,
@@ -433,8 +510,10 @@ export function createBotComputerHost(deps: BotComputerHostDependencies): BotCom
     signal: AbortSignal | undefined,
     requireSsh: boolean,
     onLeftRunning?: () => void,
-  ): Promise<{ info: LumeVmInfo & { ip: string; vnc: { host: string; port: number } }; password: string }> {
-    const password = vncPassword();
+    mount?: string,
+    vncDisabled = false,
+  ): Promise<{ info: LumeVmInfo & { ip: string; vnc?: { host: string; port: number } }; password: string }> {
+    const password = vncDisabled ? "" : vncPassword();
     await mkdir(dirs.logs, { recursive: true, mode: 0o700 });
     const logFile = path.join(dirs.logs, `${vmName}.log`);
     await rm(logFile, { force: true });
@@ -450,7 +529,9 @@ export function createBotComputerHost(deps: BotComputerHostDependencies): BotCom
       // with nobody left to turn it off. A run that fails, times out or is ended by quit may
       // still have launched the VM: the catch turns it off.
       const started = await lume(
-        { op: "run", name: vmName, vncPassword: password, sharedDir, logFile },
+        vncDisabled
+          ? { op: "run", name: vmName, vnc: "disabled", sharedDir, ...(mount ? { mount } : {}), logFile }
+          : { op: "run", name: vmName, vncPassword: password, sharedDir, ...(mount ? { mount } : {}), logFile },
         60_000,
         quitting.signal,
         () => {
@@ -471,14 +552,16 @@ export function createBotComputerHost(deps: BotComputerHostDependencies): BotCom
         const info = await getVm(vmName, signal);
         if (!info) throw startFailure("not_found", owner);
         if (info.stale) throw startFailure("stale", owner);
-        if (info.state === "running" && info.ip && info.vnc && (!requireSsh || info.sshAvailable === true)) {
-          if (!isLoopbackHost(info.vnc.host)) {
-            throw new BotComputerError("vnc_not_loopback", `${owner} computer offered its screen beyond this Mac, so Aiden stopped it.`);
+        if (info.state === "running" && info.ip && (vncDisabled || info.vnc) && (!requireSsh || info.sshAvailable === true)) {
+          if (!vncDisabled) {
+            if (!info.vnc || !isLoopbackHost(info.vnc.host)) {
+              throw new BotComputerError("vnc_not_loopback", `${owner} computer offered its screen beyond this Mac, so Aiden stopped it.`);
+            }
+            if (await exposed(info.vnc.port)) {
+              throw new BotComputerError("vnc_not_loopback", `${owner} computer's screen was reachable from the network, so Aiden stopped it.`);
+            }
           }
-          if (await exposed(info.vnc.port)) {
-            throw new BotComputerError("vnc_not_loopback", `${owner} computer's screen was reachable from the network, so Aiden stopped it.`);
-          }
-          return { info: { ...info, ip: info.ip, vnc: info.vnc }, password };
+          return { info: { ...info, ip: info.ip, ...(info.vnc ? { vnc: info.vnc } : {}) }, password };
         }
         if (info.state !== "running" && polls > 1) {
           const tail = await logTail(logFile);
@@ -516,7 +599,8 @@ export function createBotComputerHost(deps: BotComputerHostDependencies): BotCom
       if (signal.aborted) throw new BotComputerError("cancelled", "Starting the computer was cancelled.");
       if (shuttingDown) throw new BotComputerError("busy", "Aiden is quitting.");
       const { settings } = await store.read();
-      if (occupied() < settings.maxRunning) {
+      const cap = linux ? Math.min(settings.maxRunning, await currentMaxRunningLimit()) : effectiveMaxRunning(settings.maxRunning);
+      if (occupied() < cap) {
         entry.state = "starting";
         return;
       }
@@ -557,7 +641,8 @@ export function createBotComputerHost(deps: BotComputerHostDependencies): BotCom
       if (signal.aborted) throw new BotComputerError("cancelled", "Setting up Bot computers was cancelled.");
       if (shuttingDown) throw new BotComputerError("busy", "Aiden is quitting.");
       const { settings } = await store.read();
-      if (occupied() < settings.maxRunning) {
+      const cap = linux ? Math.min(settings.maxRunning, await currentMaxRunningLimit()) : effectiveMaxRunning(settings.maxRunning);
+      if (occupied() < cap) {
         baseHoldsSlot = true;
         return;
       }
@@ -650,13 +735,25 @@ export function createBotComputerHost(deps: BotComputerHostDependencies): BotCom
     }, minutes * 60_000);
   }
 
+  async function ensureSharedDirectory(dir: string): Promise<string> {
+    await mkdir(dir, { recursive: true, mode: 0o777 });
+    await chmod(dir, 0o777);
+    return dir;
+  }
+
+  async function ensureBaseSharedDir(): Promise<string> {
+    await mkdir(dirs.baseSharedRoot, { recursive: true, mode: 0o700 });
+    await chmod(dirs.baseSharedRoot, 0o700);
+    return ensureSharedDirectory(dirs.baseShared);
+  }
+
   async function sharedDirFor(botId: string): Promise<string> {
     const dir = await deps.botComputerDir(botId);
     if (!path.isAbsolute(dir) || dir.includes(":")) {
       throw new BotComputerError("invalid", "The Bot's Computer folder path can't contain a colon.");
     }
-    await mkdir(dir, { recursive: true, mode: 0o700 });
-    return dir;
+    await mkdir(path.dirname(dir), { recursive: true, mode: 0o700 });
+    return ensureSharedDirectory(dir);
   }
 
   async function startComputer(
@@ -667,28 +764,99 @@ export function createBotComputerHost(deps: BotComputerHostDependencies): BotCom
   ): Promise<BotComputerConnection> {
     const owner = await possessive(botId);
     let leftRunning = false;
+    let vmStarted = false;
+    let vncTunnel: GuestVncTunnel | undefined;
     try {
       await acquireSlot(botId, entry, options.signal, options.onProgress);
       emit(botId);
       await requireResources(resources, {
         dir: root,
         diskBytes: START_DISK_BYTES,
-        memoryBytes: BOT_COMPUTER_VM_MEMORY_BYTES,
+        memoryBytes: linux && occupied() <= 1 ? vmMinMemoryBytes : vmMemoryBytes,
         signal: options.signal,
       });
       options.onProgress?.(`Starting ${owner} computer…`);
       const sharedDir = await sharedDirFor(botId);
-      const { info, password } = await runAndWait(record.vmName, sharedDir, owner, options.signal, false, () => {
-        leftRunning = true;
-      });
-      const connection: BotComputerConnection = {
-        vmName: record.vmName,
-        ip: info.ip,
-        vnc: { host: "127.0.0.1", port: info.vnc.port, password },
-        ssh: { host: info.ip, user: BOT_COMPUTER_GUEST_USER },
-      };
+      let connection: BotComputerConnection;
+      if (linux) {
+        const { info } = await runAndWait(
+          record.vmName,
+          sharedDir,
+          owner,
+          options.signal,
+          true,
+          () => {
+            leftRunning = true;
+          },
+          undefined,
+          true,
+        );
+        vmStarted = true;
+        const sshTarget: GuestSshTarget = { host: info.ip, user: BOT_COMPUTER_GUEST_USER };
+        const password = vncPassword();
+        const startedVnc = await runSshCommand(
+          sshTarget,
+          linuxGuestVncStartScript(),
+          { timeoutMs: 60_000, maxOutputBytes: 16 * 1024, signal: options.signal, stdin: `${password}\n` },
+          {
+            paths: sshPaths,
+            env: guestSshEnvironment(deps.env ?? process.env, dirs.home),
+            sshCommand: deps.sshCommand,
+            run: deps.runProcess,
+          },
+        );
+        if (startedVnc.exitCode !== 0 || startedVnc.timedOut) {
+          throw new BotComputerError("start_failed", `${owner} computer's screen service didn't start.`);
+        }
+        let tunnelExited = false;
+        const onTunnelExit = () => {
+          tunnelExited = true;
+          if (!vncTunnel || entry.vncTunnel !== vncTunnel || entry.state !== "running") return;
+          log("A Bot computer's screen tunnel closed.");
+          entry.connection = undefined;
+          entry.vncTunnel = undefined;
+          emit(botId);
+          void stopComputer(botId, "person").catch((error: unknown) =>
+            log("Stopping a computer after its screen tunnel closed did not finish.", error),
+          );
+        };
+        vncTunnel = await openVncTunnel(sshTarget, BOT_COMPUTER_LINUX_VNC_SOCKET, {
+          signal: options.signal,
+          onExit: onTunnelExit,
+        });
+        if (tunnelExited) {
+          throw new BotComputerError("start_failed", `${owner} computer's screen tunnel closed.`);
+        }
+        if (!isLoopbackHost(vncTunnel.host)) {
+          throw new BotComputerError("vnc_not_loopback", `${owner} computer offered its screen beyond this Mac, so Aiden stopped it.`);
+        }
+        if (await exposed(vncTunnel.port)) {
+          throw new BotComputerError("vnc_not_loopback", `${owner} computer's screen was reachable from the network, so Aiden stopped it.`);
+        }
+        if (tunnelExited) {
+          throw new BotComputerError("start_failed", `${owner} computer's screen tunnel closed.`);
+        }
+        connection = {
+          vmName: record.vmName,
+          ip: info.ip,
+          vnc: { host: "127.0.0.1", port: vncTunnel.port, password },
+          ssh: sshTarget,
+        };
+      } else {
+        const { info, password } = await runAndWait(record.vmName, sharedDir, owner, options.signal, false, () => {
+          leftRunning = true;
+        });
+        if (!info.vnc) throw new BotComputerError("start_failed", `${owner} computer didn't report a screen address.`);
+        connection = {
+          vmName: record.vmName,
+          ip: info.ip,
+          vnc: { host: "127.0.0.1", port: info.vnc.port, password },
+          ssh: { host: info.ip, user: BOT_COMPUTER_GUEST_USER },
+        };
+      }
       entry.state = "running";
       entry.connection = connection;
+      entry.vncTunnel = vncTunnel;
       entry.lastUsedAt = now();
       const state = await store.update((draft) => {
         const current = draft.computers[botId];
@@ -698,8 +866,15 @@ export function createBotComputerHost(deps: BotComputerHostDependencies): BotCom
       emit(botId);
       return connection;
     } catch (error) {
+      if (vncTunnel && entry.vncTunnel !== vncTunnel) {
+        await vncTunnel.close().catch(() => undefined);
+      }
+      if (vmStarted && entry.state !== "running") {
+        if (await stopFailedStart(record.vmName)) leftRunning = true;
+      }
       if (entry.state !== "running") {
         entry.connection = undefined;
+        entry.vncTunnel = undefined;
         if (leftRunning) {
           // Lume couldn't turn off what this start launched. It is shown running, with no
           // connection, and keeps its place (macOS's limit) until a stop works: its idle
@@ -732,6 +907,7 @@ export function createBotComputerHost(deps: BotComputerHostDependencies): BotCom
     if (entry.stopping) return entry.stopping;
     if (entry.state !== "running") return;
     const connection = entry.connection;
+    const tunnel = entry.vncTunnel;
     const vmName = connection?.vmName ?? (await store.read()).computers[botId]?.vmName;
     entry.cancelIdle?.();
     entry.cancelIdle = undefined;
@@ -759,12 +935,15 @@ export function createBotComputerHost(deps: BotComputerHostDependencies): BotCom
           log("A Bot computer did not stop; it is still running.");
           entry.state = "running";
           entry.connection = connection;
+          entry.vncTunnel = tunnel;
           const minutes = await store
             .read()
             .then((state) => state.settings.idleStopMinutes)
             .catch(() => undefined);
           if (minutes !== undefined && entry.state === "running") armIdle(botId, entry, minutes);
         } else {
+          entry.vncTunnel = undefined;
+          await tunnel?.close().catch(() => undefined);
           entry.state = "stopped";
           // What the Bot was doing ended with the run.
           activity.set(botId, undefined);
@@ -863,7 +1042,11 @@ export function createBotComputerHost(deps: BotComputerHostDependencies): BotCom
     if (!support.ok) {
       throw new BotComputerError(
         "unsupported",
-        support.reason === "host_os" ? "Bot computers need macOS 26 or later." : "Bot computers need a Mac with Apple silicon.",
+        support.reason === "host_os"
+          ? linux
+            ? "Bot computers need macOS 14 or later."
+            : "Bot computers need macOS 26 or later."
+          : "Bot computers need a Mac with Apple silicon.",
       );
     }
   }
@@ -877,6 +1060,14 @@ export function createBotComputerHost(deps: BotComputerHostDependencies): BotCom
     if (!support.ok) return { kind: "unsupported", reason: support.reason };
     if (setupState) return setupState;
     if (state.setup.baseBuild) {
+      if (linux) {
+        return {
+          kind: "ready",
+          baseVersion: state.setup.baseVersion ?? image.version,
+          baseBuild: state.setup.baseBuild,
+          updateAvailable: state.setup.baseBuild !== image.build,
+        };
+      }
       const elementControl = guestDriverReady(state.setup.guestDriver);
       return {
         kind: "ready",
@@ -1138,6 +1329,8 @@ export function createBotComputerHost(deps: BotComputerHostDependencies): BotCom
   /** Element control for a ready base made without it: boot it once, install, wait for the grants, shut it down. */
   /** Whether this run added element control; false when it was already there. */
   async function performElementControlSetup(signal: AbortSignal): Promise<boolean> {
+    // Linux Bot computers have no macOS permission grant flow.
+    if (linux) return false;
     // A Bot's computer still being copied from the base finishes before the base boots.
     await copiesSettled();
     const state = await store.read();
@@ -1153,8 +1346,9 @@ export function createBotComputerHost(deps: BotComputerHostDependencies): BotCom
     await acquireBaseSlot(signal);
     try {
       await requireResources(resources, { dir: root, memoryBytes: BOT_COMPUTER_VM_MEMORY_BYTES, signal });
-      await mkdir(dirs.baseShared, { recursive: true, mode: 0o700 });
+      await ensureBaseSharedDir();
       const { info, password: vncPassword } = await runAndWait(BOT_COMPUTER_BASE_VM, dirs.baseShared, "The base", signal, true);
+      if (!info.vnc) throw new BotComputerError("start_failed", "The base computer didn't report a screen address.");
       const base: BotComputerConnection = {
         vmName: BOT_COMPUTER_BASE_VM,
         ip: info.ip,
@@ -1195,7 +1389,7 @@ export function createBotComputerHost(deps: BotComputerHostDependencies): BotCom
     // download; with Bot computers running, their memory is not free yet (an idle
     // one may stop for the base), so only the check before the install applies.
     if (occupied() === 0) {
-      await requireResources(resources, { dir: root, memoryBytes: BOT_COMPUTER_VM_MEMORY_BYTES, signal });
+      await requireResources(resources, { dir: root, memoryBytes: vmMinMemoryBytes, signal });
     }
     setupState = { kind: "downloading", receivedBytes: await downloader.partialBytes(), totalBytes: image.bytes };
     emit();
@@ -1215,8 +1409,10 @@ export function createBotComputerHost(deps: BotComputerHostDependencies): BotCom
     await acquireBaseSlot(signal);
     let guestDriver: BotComputerGuestDriverRecord | undefined;
     try {
-      await requireResources(resources, { dir: root, memoryBytes: BOT_COMPUTER_VM_MEMORY_BYTES, signal });
-      guestDriver = await buildAndInstallBase(mode, target, ipsw, signal);
+      await requireResources(resources, { dir: root, memoryBytes: vmMinMemoryBytes, signal });
+      guestDriver = linux
+        ? await buildAndInstallLinuxBase(mode, target, ipsw, signal)
+        : await buildAndInstallBase(mode, target, ipsw, signal);
     } finally {
       releaseBaseSlot();
     }
@@ -1244,7 +1440,7 @@ export function createBotComputerHost(deps: BotComputerHostDependencies): BotCom
       keygenCommand: deps.keygenCommand,
       signal,
     });
-    await mkdir(dirs.baseShared, { recursive: true, mode: 0o700 });
+    await ensureBaseSharedDir();
     const stored = await deps.secrets.get(BOT_COMPUTER_GUEST_PASSWORD_SECRET);
     const guestPassword = stored !== null && /^[A-Za-z0-9]{16,128}$/u.test(stored) ? stored : undefined;
     let driver: ReturnType<typeof guestDriverSetup> | undefined;
@@ -1263,6 +1459,7 @@ export function createBotComputerHost(deps: BotComputerHostDependencies): BotCom
       },
       start: async () => {
         const { info, password } = await runAndWait(target, dirs.baseShared, "The base", signal, true);
+        if (!info.vnc) throw new BotComputerError("start_failed", "The base computer didn't report a screen address.");
         driver = guestDriverSetup(
           {
             vmName: target,
@@ -1298,6 +1495,118 @@ export function createBotComputerHost(deps: BotComputerHostDependencies): BotCom
       await deleteVm(BOT_COMPUTER_STAGING_BASE_VM);
     }
     return driver?.result();
+  }
+
+  /** Install Debian Linux into `target`, provision it via cloud-init + SSH, and (for an update) swap it in as the base. */
+  async function buildAndInstallLinuxBase(
+    mode: "setup" | "update",
+    target: string,
+    downloadedImage: string,
+    signal: AbortSignal,
+  ): Promise<BotComputerGuestDriverRecord | undefined> {
+    setupState = { kind: "building_base", step: "create" };
+    emit();
+    const sshEnv = guestSshEnvironment(deps.env ?? process.env, dirs.home);
+    await mkdir(dirs.home, { recursive: true, mode: 0o700 });
+    const publicKey = await ensureKeyPair(sshPaths, {
+      env: sshEnv,
+      run: deps.runProcess,
+      keygenCommand: deps.keygenCommand,
+      signal,
+    });
+    await ensureBaseSharedDir();
+    const stored = await deps.secrets.get(BOT_COMPUTER_GUEST_PASSWORD_SECRET);
+    const guestPassword = stored !== null && /^[A-Za-z0-9]{16,128}$/u.test(stored) ? stored : generateGuestPassword();
+    await deps.secrets.set(BOT_COMPUTER_GUEST_PASSWORD_SECRET, guestPassword);
+    const seedIsoPath = path.join(dirs.images, `${target}-cidata.iso`);
+    const targetDiskPath = path.join(dirs.vms, target, "disk.img");
+
+    await buildLinuxBaseVm({
+      signal,
+      deleteVm: () => deleteVm(target),
+      create: async () => {
+        const result = await lume(
+          {
+            op: "create",
+            os: "linux",
+            name: target,
+            cpu: BOT_COMPUTER_LINUX_CPU_COUNT,
+            memoryGb: BOT_COMPUTER_LINUX_MEMORY_GB,
+            diskSizeGb: BOT_COMPUTER_LINUX_DISK_GB,
+            display: BOT_COMPUTER_LINUX_DISPLAY,
+          },
+          120_000,
+          signal,
+        );
+        if (result.exitCode !== 0) {
+          log(`lume create (linux) failed: ${result.stderr.slice(-600)}`);
+          const kind = failureKind(result);
+          if (kind === "vm_limit" || kind === "low_disk") throw startFailure(kind, "The base");
+          throw new BotComputerError("lume_failed", "Creating the Linux base computer failed. Choose Set up to try again.");
+        }
+        await prepareLinuxBaseDisk({
+          sourceImagePath: downloadedImage,
+          targetDiskPath,
+          targetBytes: BOT_COMPUTER_LINUX_DISK_BYTES,
+        });
+        await writeCloudInitSeedIso(seedIsoPath, {
+          instanceId: target,
+          hostname: target,
+          sshAuthorizedKey: publicKey,
+          password: guestPassword,
+          packages: BOT_COMPUTER_LINUX_DESKTOP_PACKAGES,
+        });
+      },
+      start: async () => {
+        const { info } = await runAndWait(target, dirs.baseShared, "The base", signal, true, undefined, seedIsoPath, true);
+        return { ip: info.ip };
+      },
+      provisionContext: (ip): LinuxProvisionContext => ({
+        signal,
+        publicKey,
+        password: guestPassword,
+        sharedDir: dirs.baseShared,
+        scanHostKey: () =>
+          scanGuestHostKey(ip, {
+            env: sshEnv,
+            run: deps.runProcess,
+            keyscanCommand: deps.keyscanCommand,
+            signal,
+          }),
+        writeKnownHost: (line) => writeKnownHost(sshPaths, line),
+        guestSsh: (command, options) =>
+          runSshCommand(
+            { host: ip, user: BOT_COMPUTER_GUEST_USER },
+            command,
+            { timeoutMs: options.timeoutMs, maxOutputBytes: 64 * 1024, signal, stdin: options.stdin },
+            { paths: sshPaths, env: sshEnv, sshCommand: deps.sshCommand, run: deps.runProcess },
+          ),
+        stopBase: () => shutDownBase(target, signal),
+      }),
+      stop: async () => {
+        await stopVm(target, true);
+      },
+      removeSeedIso: async () => {
+        await rm(seedIsoPath, { force: true });
+      },
+      removeImage: async () => {
+        await downloader.remove();
+      },
+      onStep: (step) => {
+        setupState = { kind: "building_base", step };
+        emit();
+      },
+    });
+    if (mode === "update") {
+      await deleteVm(BOT_COMPUTER_BASE_VM);
+      await lumeOrThrow(
+        { op: "clone", source: BOT_COMPUTER_STAGING_BASE_VM, target: BOT_COMPUTER_BASE_VM },
+        600_000,
+        "Aiden couldn't swap in the new base.",
+      );
+      await deleteVm(BOT_COMPUTER_STAGING_BASE_VM);
+    }
+    return undefined;
   }
 
   function startSetup(mode: "setup" | "update"): Promise<void> {
@@ -1382,18 +1691,20 @@ export function createBotComputerHost(deps: BotComputerHostDependencies): BotCom
     async status(): Promise<BotComputersStatus> {
       const state = await store.read();
       const freeDiskBytes = await resources.freeDiskBytes(root).catch(() => undefined);
+      const maxRunningLimit = linux ? await currentMaxRunningLimit() : undefined;
       return {
         setup: currentSetup(state),
-        settings: { ...state.settings },
+        settings: { ...state.settings, maxRunning: effectiveMaxRunning(state.settings.maxRunning) },
         diskUsedBytes: await diskUsed(),
         ...(freeDiskBytes !== undefined ? { freeDiskBytes } : {}),
         computers: Object.entries(state.computers).map(([botId, record]) => computerStatus(botId, record, state)),
         requirements: {
           downloadBytes: image.bytes,
-          baseDiskBytes: BOT_COMPUTER_BASE_SIZE_BYTES,
-          setupFreeBytes: image.bytes + BOT_COMPUTER_BASE_DISK_RESERVE_BYTES,
-          memoryPerComputerBytes: BOT_COMPUTER_VM_MEMORY_BYTES,
+          baseDiskBytes: baseDiskSizeBytes,
+          setupFreeBytes: image.bytes + baseDiskReserveBytes,
+          memoryPerComputerBytes: vmMemoryBytes,
           baseVersion: image.version,
+          ...(linux ? { guestOs: "linux" as const, maxRunningLimit } : {}),
         },
       };
     },
@@ -1464,7 +1775,7 @@ export function createBotComputerHost(deps: BotComputerHostDependencies): BotCom
       }),
 
     async updateSettings(patch) {
-      const parsed = parseBotComputersSettingsPatch(patch);
+      const parsed = parseBotComputersSettingsPatch(patch, await currentMaxRunningLimit());
       const state = await store.update((draft) => {
         Object.assign(draft.settings, parsed);
       });
@@ -1473,7 +1784,7 @@ export function createBotComputerHost(deps: BotComputerHostDependencies): BotCom
       }
       wakeSlotWaiters();
       emit();
-      return { ...state.settings } satisfies BotComputersSettings;
+      return { ...state.settings, maxRunning: effectiveMaxRunning(state.settings.maxRunning) } satisfies BotComputersSettings;
     },
 
     async give(botId) {
@@ -1732,7 +2043,12 @@ export function createBotComputerHost(deps: BotComputerHostDependencies): BotCom
         }),
       ]);
       clearTimeout(timer);
-      for (const entry of runtimes.values()) entry.cancelIdle?.();
+      for (const entry of runtimes.values()) {
+        entry.cancelIdle?.();
+        const tunnel = entry.vncTunnel;
+        entry.vncTunnel = undefined;
+        void tunnel?.close().catch(() => undefined);
+      }
     },
 
     onChange(listener) {

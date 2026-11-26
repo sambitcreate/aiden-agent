@@ -128,9 +128,10 @@ export function registerBotComputerHandlers(deps: BotComputerHandlerDependencies
     return deps.host.status();
   });
 
-  deps.handle(BOT_COMPUTER_CHANNELS.updateSettings, async (_event, patch): Promise<BotComputersSettings> =>
-    deps.host.updateSettings(parseBotComputersSettingsPatch(patch)),
-  );
+  deps.handle(BOT_COMPUTER_CHANNELS.updateSettings, async (_event, patch): Promise<BotComputersSettings> => {
+    const limit = (await deps.host.status()).requirements.maxRunningLimit ?? 2;
+    return deps.host.updateSettings(parseBotComputersSettingsPatch(patch, limit));
+  });
 
   deps.handle(BOT_COMPUTER_CHANNELS.give, async (_event, rawBotId): Promise<BotComputerStatus> =>
     deps.host.give(await knownBot(rawBotId)),

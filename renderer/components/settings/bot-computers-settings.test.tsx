@@ -276,3 +276,104 @@ test("a ready base without element control says why and offers to set it up", as
   await waitFor(() => assert.match(document.body.textContent ?? "", /Installing Aiden's helper in the base computer/u));
   assert.equal(screen.queryByRole("group", { name: "Element control" }), null);
 });
+
+function linuxStatus(setup: BotComputerSetupState, extra: Partial<BotComputersStatus> = {}): BotComputersStatus {
+  return {
+    setup,
+    settings: { ...DEFAULT_BOT_COMPUTERS_SETTINGS },
+    diskUsedBytes: 0,
+    computers: [],
+    requirements: {
+      downloadBytes: 3_221_225_472,
+      baseDiskBytes: 8_000_000_000,
+      setupFreeBytes: 20_401_094_656,
+      memoryPerComputerBytes: 4 * 1024 ** 3,
+      baseVersion: "13",
+      guestOs: "linux",
+      maxRunningLimit: 4,
+    },
+    ...extra,
+  };
+}
+
+const LINUX_READY: BotComputerSetupState = {
+  kind: "ready",
+  baseVersion: "13",
+  baseBuild: "20261123-2671",
+  updateAvailable: false,
+};
+
+test("Linux Settings shows Debian sizes and 4 GB memory, omits macOS permissions, and offers up to 4 running computers", async () => {
+  const { calls, push } = mount(linuxStatus({ kind: "not_set_up" }));
+  await screen.findByRole("button", { name: "Set up" });
+  const before = document.body.textContent ?? "";
+  assert.match(before, /downloads Debian 13 \(about 3 GB, plus desktop packages\)/u);
+  assert.match(before, /base computer of about 8 GB/u);
+  assert.match(before, /needs about 20 GB free/u);
+  assert.match(before, /Nothing is downloaded until you choose Set up\./u);
+  assert.match(before, /about 4 GB of memory/u);
+  assert.equal(/Apple|macOS 26/u.test(before), false, "Linux Settings does not mention Apple or macOS 26");
+
+  // Downloading progress bar and summary say Debian Linux.
+  act(() => push(linuxStatus({ kind: "downloading", receivedBytes: 1_610_612_736, totalBytes: 3_221_225_472 })));
+  await waitFor(() =>
+    assert.equal(screen.getByRole("progressbar", { name: "Downloading Debian Linux" }).getAttribute("aria-valuenow"), "50"),
+  );
+
+  // Even if a permissions step were received, Linux never renders macOS Accessibility / Screen Recording grants.
+  act(() => push(linuxStatus(PERMISSIONS)));
+  assert.equal(screen.queryByRole("group", { name: /Allow Accessibility/u }), null);
+
+  // Ready state shows Debian 13 and omits the macOS "Set up element control" button.
+  act(() => push(linuxStatus({ ...LINUX_READY, elementControl: false })));
+  await waitFor(() => assert.match(document.body.textContent ?? "", /Ready \(Debian 13\)\./u));
+  assert.equal(screen.queryByRole("button", { name: "Set up element control" }), null);
+
+  // Running at once offers 1..4 computers when maxRunningLimit is 4.
+  fireEvent.click(screen.getByRole("combobox", { name: "Computers running at once" }));
+  const options = await screen.findAllByRole("option");
+  assert.deepEqual(
+    options.map((option) => option.textContent),
+    ["1 computer", "2 computers", "3 computers", "4 computers"],
+  );
+  fireEvent.click(screen.getByRole("option", { name: "4 computers" }));
+  await flush();
+  assert.deepEqual(
+    calls.filter((call) => call.channel === "botComputers:updateSettings").map((call) => call.args[0]),
+    [{ maxRunning: 4 }],
+  );
+
+  // Remove everything confirmation uses Linux copy.
+  fireEvent.click(screen.getByRole("button", { name: "Remove everything" }));
+  const dialog = await screen.findByRole("alertdialog");
+  assert.match(dialog.textContent ?? "", /download Debian Linux again/u);
+  assert.match(dialog.textContent ?? "", /Files in each Bot's Computer folder stay/u);
+});
+
+test("Linux Settings caps running-at-once choices by host memory and requires macOS 14+ when unsupported", async () => {
+  mount(
+    linuxStatus(LINUX_READY, {
+      requirements: {
+        downloadBytes: 3_221_225_472,
+        baseDiskBytes: 8_000_000_000,
+        setupFreeBytes: 20_401_094_656,
+        memoryPerComputerBytes: 4 * 1024 ** 3,
+        baseVersion: "13",
+        guestOs: "linux",
+        maxRunningLimit: 2,
+      },
+    }),
+  );
+  fireEvent.click(await screen.findByRole("combobox", { name: "Computers running at once" }));
+  const options = await screen.findAllByRole("option");
+  assert.deepEqual(
+    options.map((option) => option.textContent),
+    ["1 computer", "2 computers"],
+  );
+  cleanup();
+
+  mount(linuxStatus({ kind: "unsupported", reason: "host_os" }));
+  await screen.findByRole("group", { name: "Base computer" });
+  assert.match(document.body.textContent ?? "", /Bot computers need macOS 14 or later on this Mac\./u);
+  assert.equal(screen.queryByRole("button", { name: "Set up" }), null);
+});

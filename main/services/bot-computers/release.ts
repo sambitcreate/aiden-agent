@@ -94,8 +94,14 @@ export const BOT_COMPUTER_LINUX_MEMORY_BYTES = BOT_COMPUTER_LINUX_MEMORY_GB * 10
 export const BOT_COMPUTER_LINUX_MIN_MEMORY_BYTES = 2 * 1024 ** 3;
 export const BOT_COMPUTER_LINUX_DISK_GB = 24;
 export const BOT_COMPUTER_LINUX_DISK_BYTES = BOT_COMPUTER_LINUX_DISK_GB * 1024 ** 3;
-export const BOT_COMPUTER_LINUX_BASE_SIZE_BYTES = 8 * 1024 ** 3;
+export const BOT_COMPUTER_LINUX_BASE_SIZE_BYTES = 8_000_000_000;
 export const BOT_COMPUTER_LINUX_BASE_DISK_RESERVE_BYTES = 16 * 1024 ** 3;
 export const BOT_COMPUTER_LINUX_DISPLAY = "1280x800";
 /** Lume 0.8.0 requires macOS 14.0+; Linux guests are not bound to host macOS 26. */
 export const BOT_COMPUTER_LINUX_MIN_HOST_MACOS = "14.0";
+
+/** Whether this Mac's macOS can host a Linux Bot computer (macOS 14.0+). */
+export function hostMacosSupportsLinuxBotComputers(hostVersion: string | undefined): boolean {
+  if (!hostVersion || !/^\d+(?:\.\d+){0,2}$/u.test(hostVersion)) return false;
+  return compareMacosVersions(hostVersion, BOT_COMPUTER_LINUX_MIN_HOST_MACOS) >= 0;
+}
