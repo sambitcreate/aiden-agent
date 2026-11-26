@@ -226,21 +226,46 @@ final class AidenShellIATests: XCTestCase {
     /// slid off the screen leave the tabs where they are.
     func testOnlyAKeyboardAlongTheBottomEdgeTakesTheDocksPlace() {
         let screen = CGRect(x: 0, y: 0, width: 402, height: 874)
+        func takes(_ keyboard: CGRect) -> Bool {
+            AidenTabChrome.keyboardTakesBottomEdge(keyboard: keyboard, screen: screen, window: screen)
+        }
 
+        XCTAssertTrue(takes(CGRect(x: 0, y: 874 - 336, width: 402, height: 336)))
+        XCTAssertFalse(takes(CGRect(x: 0, y: 874 - 55, width: 402, height: 55)),
+                       "A hardware keyboard's shortcut bar hid the dock")
+        XCTAssertFalse(takes(CGRect(x: 50, y: 300, width: 300, height: 250)),
+                       "A floating keyboard hid the dock")
+        XCTAssertFalse(takes(CGRect(x: 50, y: 874 - 250, width: 300, height: 250)),
+                       "A floating keyboard against the bottom edge hid the dock")
+        XCTAssertFalse(takes(CGRect(x: 0, y: 874, width: 402, height: 336)),
+                       "A keyboard below the screen hid the dock")
+    }
+
+    /// On an iPad the shell's window can be narrower or shorter than the
+    /// screen (Split View, Slide Over, Stage Manager), and the keyboard's frame
+    /// is the screen's. The dock yields only to a docked keyboard that covers
+    /// the window's bottom.
+    func testTheDockYieldsOnlyToAKeyboardOverItsOwnWindow() {
+        let screen = CGRect(x: 0, y: 0, width: 1366, height: 1024)
+        let docked = CGRect(x: 0, y: 1024 - 400, width: 1366, height: 400)
+
+        let slideOver = CGRect(x: 1366 - 340, y: 0, width: 320, height: 1024)
+        XCTAssertTrue(AidenTabChrome.keyboardTakesBottomEdge(keyboard: docked, screen: screen, window: slideOver),
+                      "A docked keyboard over a Slide Over window kept the dock")
+
+        let floatingOverSlideOver = CGRect(x: slideOver.minX, y: 1024 - 260, width: slideOver.width, height: 260)
+        XCTAssertFalse(AidenTabChrome.keyboardTakesBottomEdge(
+            keyboard: floatingOverSlideOver, screen: screen, window: slideOver),
+            "A floating keyboard as wide as a Slide Over window hid its dock")
+
+        let stageManagerAbove = CGRect(x: 200, y: 40, width: 600, height: 500)
+        XCTAssertFalse(AidenTabChrome.keyboardTakesBottomEdge(keyboard: docked, screen: screen, window: stageManagerAbove),
+                       "A keyboard below a Stage Manager window that ends above it hid the window's dock")
+
+        let stageManagerOverlapping = CGRect(x: 200, y: 300, width: 600, height: 600)
         XCTAssertTrue(AidenTabChrome.keyboardTakesBottomEdge(
-            keyboard: CGRect(x: 0, y: 874 - 336, width: 402, height: 336), screen: screen))
-        XCTAssertFalse(AidenTabChrome.keyboardTakesBottomEdge(
-            keyboard: CGRect(x: 0, y: 874 - 55, width: 402, height: 55), screen: screen),
-            "A hardware keyboard's shortcut bar hid the dock")
-        XCTAssertFalse(AidenTabChrome.keyboardTakesBottomEdge(
-            keyboard: CGRect(x: 50, y: 300, width: 300, height: 250), screen: screen),
-            "A floating keyboard hid the dock")
-        XCTAssertFalse(AidenTabChrome.keyboardTakesBottomEdge(
-            keyboard: CGRect(x: 50, y: 874 - 250, width: 300, height: 250), screen: screen),
-            "A floating keyboard against the bottom edge hid the dock")
-        XCTAssertFalse(AidenTabChrome.keyboardTakesBottomEdge(
-            keyboard: CGRect(x: 0, y: 874, width: 402, height: 336), screen: screen),
-            "A keyboard below the screen hid the dock")
+            keyboard: docked, screen: screen, window: stageManagerOverlapping),
+            "A keyboard over a Stage Manager window's bottom kept the dock")
     }
 
     /// Like the system tab bar: another tab keeps where each tab was, and the

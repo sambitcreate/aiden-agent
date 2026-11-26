@@ -410,12 +410,17 @@ struct AidenAppShellView: View {
         .environment(\.aidenTabsInSideRail, showsVerticalBar)
         .environment(\.aidenUsesDock, tabChrome == .dock)
         .environment(\.aidenOfflineNotices, built.offlineNotices)
-        // Only a keyboard along the bottom takes the dock's place: not a
-        // hardware keyboard's shortcut bar, nor a floating keyboard.
+        // Only a keyboard docked over the window's bottom takes the dock's
+        // place: not a hardware keyboard's shortcut bar, nor a floating
+        // keyboard. The notification's frame is in the screen's coordinate
+        // space, which in Split View, Slide Over and Stage Manager isn't the
+        // window's, so the window's frame is taken into that space to compare.
         .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillChangeFrameNotification)) { note in
             guard let frame = note.userInfo?[UIResponder.keyboardFrameEndUserInfoKey] as? CGRect,
                   let screen = (note.object as? UIScreen) ?? window.scene?.screen else { return }
-            keyboardIsUp = AidenTabChrome.keyboardTakesBottomEdge(keyboard: frame, screen: screen.bounds)
+            keyboardIsUp = AidenTabChrome.keyboardTakesBottomEdge(
+                keyboard: frame, screen: screen.bounds,
+                window: window.frame(in: screen.coordinateSpace) ?? screen.bounds)
         }
         .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillHideNotification)) { _ in
             keyboardIsUp = false
@@ -1840,6 +1845,14 @@ private struct AidenWindowReader: UIViewRepresentable {
     @MainActor
     final class Window {
         fileprivate weak var scene: UIWindowScene?
+        fileprivate weak var uiWindow: UIWindow?
+
+        /// The window's frame in `space` (the screen's, for the keyboard), or
+        /// nil before the shell is in a window.
+        func frame(in space: any UICoordinateSpace) -> CGRect? {
+            guard let uiWindow else { return nil }
+            return uiWindow.convert(uiWindow.bounds, to: space)
+        }
 
         /// The window's orientation, or nil before there is one.
         var isLandscape: Bool? {
@@ -1887,6 +1900,7 @@ private struct AidenWindowReader: UIViewRepresentable {
         override func didMoveToWindow() {
             super.didMoveToWindow()
             shellWindow?.scene = window?.windowScene
+            shellWindow?.uiWindow = window
             report()
         }
 

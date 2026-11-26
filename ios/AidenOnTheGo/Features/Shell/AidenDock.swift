@@ -20,17 +20,23 @@ enum AidenTabChrome: Equatable {
         horizontal == .regular && vertical != .compact
     }
 
-    /// Whether the keyboard takes the bottom edge, so the dock steps aside:
-    /// a keyboard docked along the bottom of the screen, as wide as the screen
-    /// and taller than a hardware keyboard's shortcut bar. A floating or
-    /// undocked keyboard (which can sit against any edge, the bottom too), the
-    /// shortcut bar alone, or a keyboard off screen leave the dock where it is.
-    static func keyboardTakesBottomEdge(keyboard: CGRect, screen: CGRect) -> Bool {
+    /// Whether the keyboard takes the shell's bottom edge, so the dock steps
+    /// aside: a keyboard docked along the bottom of the screen (as wide as the
+    /// screen and taller than a hardware keyboard's shortcut bar) that covers
+    /// the bottom of the shell's window. A floating or undocked keyboard (which
+    /// can sit against any edge, the bottom too, and can be as wide as a Slide
+    /// Over window), the shortcut bar alone, a keyboard off screen, or one
+    /// below a Stage Manager window that ends above it leave the dock where it
+    /// is. Every frame is in the screen's coordinate space, as the keyboard
+    /// notifications give theirs; `window` is the shell window's frame there.
+    static func keyboardTakesBottomEdge(keyboard: CGRect, screen: CGRect, window: CGRect) -> Bool {
         let visible = keyboard.intersection(screen)
-        guard !visible.isNull else { return false }
-        return visible.maxY >= screen.maxY - 1
-            && visible.width >= screen.width - 1
-            && visible.height >= minimumKeyboardHeight
+        guard !visible.isNull,
+              visible.maxY >= screen.maxY - 1,
+              visible.width >= screen.width - 1,
+              visible.height >= minimumKeyboardHeight else { return false }
+        let overWindow = visible.intersection(window)
+        return !overWindow.isNull && overWindow.height > 0 && overWindow.maxY >= window.maxY - 1
     }
 
     /// Taller than a shortcut or predictive bar, shorter than any on-screen keyboard.
