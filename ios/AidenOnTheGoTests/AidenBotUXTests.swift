@@ -98,6 +98,27 @@ final class AidenBotUXTests: XCTestCase {
         XCTAssertFalse(try decode(AidenApprovalCardModel.self, card("botWithoutAllowed")).offers(.allow, scope: .always))
     }
 
+    /// A notification's Approve always sends a one-time allow, so the alert
+    /// offers it only when the card has an Allow once button.
+    func testAnAlertOffersApproveOnlyWhenTheCardAllowsOnce() throws {
+        let full = try card("macCommand")
+        let buttons = try XCTUnwrap(full["buttons"] as? [[String: Any]])
+        let wideOnly = full.merging(["buttons": buttons.filter {
+            $0["decision"] as? String == "deny" || $0["scope"] != nil
+        }]) { $1 }
+        func approval(_ card: AidenApprovalCardModel?, canAllow: Bool = true) -> AidenPendingApproval {
+            AidenPendingApproval(
+                id: "ap", summary: "Run npm publish", expiresAt: .distantFuture, kind: .action,
+                canRespond: true, hasRequiredWriteCapability: true, hostCanAllow: canAllow, canAllow: canAllow,
+                scopes: [.once, .chat, .always], card: card
+            )
+        }
+        XCTAssertTrue(approval(try decode(AidenApprovalCardModel.self, full)).alertCanAllow)
+        XCTAssertFalse(approval(try decode(AidenApprovalCardModel.self, wideOnly)).alertCanAllow)
+        XCTAssertTrue(approval(nil).alertCanAllow, "without a card, a phone that may allow may allow once")
+        XCTAssertFalse(approval(nil, canAllow: false).alertCanAllow)
+    }
+
     func testCardParserRefusesWhatTheMacWouldNeverSend() throws {
         let base = try card("macCommand")
         let buttons = try XCTUnwrap(base["buttons"] as? [[String: Any]])

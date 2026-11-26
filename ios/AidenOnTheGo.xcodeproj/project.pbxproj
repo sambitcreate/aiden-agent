@@ -187,6 +187,12 @@
 		A0DA00000000000000000001 /* AidenScheduledTask.swift in Sources */ = {isa = PBXBuildFile; fileRef = A0DA00000000000000000011 /* AidenScheduledTask.swift */; };
 		A0DA00000000000000000002 /* AidenScheduledTasksView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A0DA00000000000000000012 /* AidenScheduledTasksView.swift */; };
 		A0DD00000000000000000001 /* AidenScheduledRunNotifier.swift in Sources */ = {isa = PBXBuildFile; fileRef = A0DD00000000000000000011 /* AidenScheduledRunNotifier.swift */; };
+		A1A100000000000000000001 /* AidenApprovalIntents.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1A100000000000000000011 /* AidenApprovalIntents.swift */; };
+		A1A100000000000000000002 /* AidenApprovalIntents.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1A100000000000000000011 /* AidenApprovalIntents.swift */; };
+		A1A100000000000000000003 /* AidenAlertActionResponder.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1A100000000000000000012 /* AidenAlertActionResponder.swift */; };
+		A1A100000000000000000004 /* AidenNotificationPreferences.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1A100000000000000000013 /* AidenNotificationPreferences.swift */; };
+		A1A100000000000000000009 /* AidenBackgroundGrace.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1A100000000000000000017 /* AidenBackgroundGrace.swift */; };
+		A1A100000000000000000005 /* AidenNotificationSettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1A100000000000000000014 /* AidenNotificationSettingsView.swift */; };
 		A0DA00000000000000000003 /* AidenScheduledTaskTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A0DA00000000000000000013 /* AidenScheduledTaskTests.swift */; };
 		A0D000000000000000000004 /* AidenRemoteContractV1.json in Resources */ = {isa = PBXBuildFile; fileRef = A0D000000000000000000014 /* AidenRemoteContractV1.json */; };
 		A0D000000000000000000005 /* AidenManualPairingVectorV1.json in Resources */ = {isa = PBXBuildFile; fileRef = A0D000000000000000000015 /* AidenManualPairingVectorV1.json */; };
@@ -214,6 +220,9 @@
 		A04500000000000000000004 /* AgentRunActivityAttributes.swift in Sources */ = {isa = PBXBuildFile; fileRef = A04500000000000000000010 /* AgentRunActivityAttributes.swift */; };
 		A04500000000000000000005 /* AidenDeepLink.swift in Sources */ = {isa = PBXBuildFile; fileRef = A04500000000000000000011 /* AidenDeepLink.swift */; };
 		A04500000000000000000006 /* AgentRunLiveActivityWidget.swift in Sources */ = {isa = PBXBuildFile; fileRef = A04500000000000000000013 /* AgentRunLiveActivityWidget.swift */; };
+		A1A100000000000000000006 /* AidenRunsSummaryActivityAttributes.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1A100000000000000000015 /* AidenRunsSummaryActivityAttributes.swift */; };
+		A1A100000000000000000007 /* AidenRunsSummaryActivityAttributes.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1A100000000000000000015 /* AidenRunsSummaryActivityAttributes.swift */; };
+		A1A100000000000000000008 /* AidenRunsSummaryLiveActivityWidget.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1A100000000000000000016 /* AidenRunsSummaryLiveActivityWidget.swift */; };
 		A04500000000000000000007 /* AidenLiveActivityWidget.appex in Embed App Extensions */ = {isa = PBXBuildFile; fileRef = A04500000000000000000017 /* AidenLiveActivityWidget.appex */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
 		A04500000000000000000008 /* aiden-sidebar-logo.png in Resources */ = {isa = PBXBuildFile; fileRef = A04500000000000000000018 /* aiden-sidebar-logo.png */; };
 		F10E00000000000000000006 /* aiden-icon-june15.png in Resources */ = {isa = PBXBuildFile; fileRef = F10E00000000000000000014 /* aiden-icon-june15.png */; };
@@ -521,6 +530,11 @@
 		A0DA00000000000000000011 /* AidenScheduledTask.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AidenScheduledTask.swift; sourceTree = "<group>"; };
 		A0DA00000000000000000012 /* AidenScheduledTasksView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AidenScheduledTasksView.swift; sourceTree = "<group>"; };
 		A0DD00000000000000000011 /* AidenScheduledRunNotifier.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AidenScheduledRunNotifier.swift; sourceTree = "<group>"; };
+		A1A100000000000000000011 /* AidenApprovalIntents.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AidenApprovalIntents.swift; sourceTree = "<group>"; };
+		A1A100000000000000000012 /* AidenAlertActionResponder.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AidenAlertActionResponder.swift; sourceTree = "<group>"; };
+		A1A100000000000000000013 /* AidenNotificationPreferences.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AidenNotificationPreferences.swift; sourceTree = "<group>"; };
+		A1A100000000000000000017 /* AidenBackgroundGrace.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AidenBackgroundGrace.swift; sourceTree = "<group>"; };
+		A1A100000000000000000014 /* AidenNotificationSettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AidenNotificationSettingsView.swift; sourceTree = "<group>"; };
 		A0DA00000000000000000013 /* AidenScheduledTaskTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AidenScheduledTaskTests.swift; sourceTree = "<group>"; };
 		351C0F1600000000000000A1 /* Shared.xcconfig */ = {isa = PBXFileReference; lastKnownFileType = text.xcconfig; name = Shared.xcconfig; path = Config/Shared.xcconfig; sourceTree = "<group>"; };
 		1A2B3C4D5E6F700000000010 /* AidenOnTheGo.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = AidenOnTheGo.app; sourceTree = BUILT_PRODUCTS_DIR; };
@@ -588,6 +602,8 @@
 		A04500000000000000000010 /* AgentRunActivityAttributes.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AgentRunActivityAttributes.swift; sourceTree = "<group>"; };
 		A04500000000000000000011 /* AidenDeepLink.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AidenDeepLink.swift; sourceTree = "<group>"; };
 		A04500000000000000000013 /* AgentRunLiveActivityWidget.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AgentRunLiveActivityWidget.swift; sourceTree = "<group>"; };
+		A1A100000000000000000015 /* AidenRunsSummaryActivityAttributes.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AidenRunsSummaryActivityAttributes.swift; sourceTree = "<group>"; };
+		A1A100000000000000000016 /* AidenRunsSummaryLiveActivityWidget.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AidenRunsSummaryLiveActivityWidget.swift; sourceTree = "<group>"; };
 		F10E00000000000000000010 /* AidenHomeActionIntent.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AidenHomeActionIntent.swift; sourceTree = "<group>"; };
 		F10E00000000000000000011 /* AidenQuickActions.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AidenQuickActions.swift; sourceTree = "<group>"; };
 		F10E00000000000000000012 /* AidenQuickActionsWidget.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AidenQuickActionsWidget.swift; sourceTree = "<group>"; };
@@ -942,6 +958,9 @@
 				B07A00000000000000000011 /* AidenBotChatToolsView.swift */,
 				A0DA00000000000000000012 /* AidenScheduledTasksView.swift */,
 				A0DD00000000000000000011 /* AidenScheduledRunNotifier.swift */,
+				A1A100000000000000000012 /* AidenAlertActionResponder.swift */,
+				A1A100000000000000000013 /* AidenNotificationPreferences.swift */,
+				A1A100000000000000000017 /* AidenBackgroundGrace.swift */,
 				A0D900000000000000000012 /* AidenWorkspaceEnvironmentView.swift */,
 				A0D600000000000000000014 /* AidenRemoteCoordinator.swift */,
 				A0D600000000000000000015 /* AidenPairingView.swift */,
@@ -1072,6 +1091,7 @@
 				A8C100000000000000000004 /* AidenHomeModel.swift */,
 				A8C100000000000000000005 /* AidenUsageView.swift */,
 				A8C100000000000000000006 /* AidenAppSettingsView.swift */,
+				A1A100000000000000000014 /* AidenNotificationSettingsView.swift */,
 				B6B100000000000000000007 /* AidenApprovalSettingsView.swift */,
 				B6B100000000000000000006 /* AidenApprovalSettingsModel.swift */,
 				A8C100000000000000000007 /* AidenMacTranscriptionSettingsView.swift */,
@@ -1121,7 +1141,9 @@
 			isa = PBXGroup;
 			children = (
 				A04500000000000000000010 /* AgentRunActivityAttributes.swift */,
+				A1A100000000000000000015 /* AidenRunsSummaryActivityAttributes.swift */,
 				A04500000000000000000011 /* AidenDeepLink.swift */,
+				A1A100000000000000000011 /* AidenApprovalIntents.swift */,
 				A0DB00000000000000000011 /* AidenRemoteLiveActivityManager.swift */,
 				A0F100000000000000000010 /* AidenLatestValueThrottle.swift */,
 			);
@@ -1143,6 +1165,7 @@
 			children = (
 				F10E00000000000000000012 /* AidenQuickActionsWidget.swift */,
 				A04500000000000000000013 /* AgentRunLiveActivityWidget.swift */,
+				A1A100000000000000000016 /* AidenRunsSummaryLiveActivityWidget.swift */,
 				A04500000000000000000022 /* Resources */,
 			);
 			path = AidenLiveActivityWidget;
@@ -1429,6 +1452,7 @@
 				F10E00000000000000000001 /* AidenHomeActionIntent.swift in Sources */,
 				F10E00000000000000000002 /* AidenQuickActions.swift in Sources */,
 				A04500000000000000000001 /* AgentRunActivityAttributes.swift in Sources */,
+				A1A100000000000000000006 /* AidenRunsSummaryActivityAttributes.swift in Sources */,
 				A04500000000000000000002 /* AidenDeepLink.swift in Sources */,
 				A0DB00000000000000000001 /* AidenRemoteLiveActivityManager.swift in Sources */,
 				A0F100000000000000000011 /* AidenLatestValueThrottle.swift in Sources */,
@@ -1468,6 +1492,11 @@
 				A0DA00000000000000000001 /* AidenScheduledTask.swift in Sources */,
 				A0DA00000000000000000002 /* AidenScheduledTasksView.swift in Sources */,
 				A0DD00000000000000000001 /* AidenScheduledRunNotifier.swift in Sources */,
+				A1A100000000000000000001 /* AidenApprovalIntents.swift in Sources */,
+				A1A100000000000000000003 /* AidenAlertActionResponder.swift in Sources */,
+				A1A100000000000000000004 /* AidenNotificationPreferences.swift in Sources */,
+				A1A100000000000000000009 /* AidenBackgroundGrace.swift in Sources */,
+				A1A100000000000000000005 /* AidenNotificationSettingsView.swift in Sources */,
 				A0D900000000000000000001 /* AidenWorkspaceEnvironment.swift in Sources */,
 				A0D900000000000000000002 /* AidenWorkspaceEnvironmentView.swift in Sources */,
 				A0D000000000000000000001 /* AidenRemoteContract.swift in Sources */,
@@ -1634,10 +1663,13 @@
 			buildActionMask = 2147483647;
 			files = (
 				A04500000000000000000004 /* AgentRunActivityAttributes.swift in Sources */,
+				A1A100000000000000000007 /* AidenRunsSummaryActivityAttributes.swift in Sources */,
 				A04500000000000000000005 /* AidenDeepLink.swift in Sources */,
+				A1A100000000000000000002 /* AidenApprovalIntents.swift in Sources */,
 				F10E00000000000000000003 /* AidenHomeActionIntent.swift in Sources */,
 				F10E00000000000000000004 /* AidenQuickActionsWidget.swift in Sources */,
 				A04500000000000000000006 /* AgentRunLiveActivityWidget.swift in Sources */,
+				A1A100000000000000000008 /* AidenRunsSummaryLiveActivityWidget.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
