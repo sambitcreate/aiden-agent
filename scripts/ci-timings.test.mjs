@@ -1,34 +1,742 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { collectReport, renderSummary, summarizeJobs } from "./ci-timings.mjs";
+import {
+  collectReport,
+  extractFirstFailedTest,
+  extractPhaseTimings,
+  findFirstFailure,
+  renderSummary,
+  summarizeJobs,
+} from "./ci-timings.mjs";
 
-const start = "2026-09-21T10:00:00Z";
-const job = { name: "Electron", status: "completed", conclusion: "success", started_at: "2026-09-21T10:01:00Z", completed_at: "2026-09-21T10:03:00Z", labels: ["macos-26"], steps: [] };
+const attemptStart = "2026-11-24T10:00:00Z";
 
-test("timings separate elapsed time, start offset and summed platform execution", () => {
-  const summary = summarizeJobs([job, { ...job, name: "Other" }, { ...job, conclusion: "skipped" }, { ...job, status: "in_progress" }], start);
-  assert.equal(summary.elapsed, 180);
-  assert.equal(summary.rows.length, 2);
-  assert.equal(summary.rows[0].startOffset, 60);
-  assert.equal(summary.totals["macos-26"], 240);
+function makeJob(overrides = {}) {
+  return {
+    id: 1001,
+    name: "Electron E2E (1/5)",
+    status: "completed",
+    conclusion: "success",
+    created_at: "2026-11-24T10:00:25Z",
+    started_at: "2026-11-24T10:02:25Z",
+    completed_at: "2026-11-24T10:05:25Z",
+    html_url: "https://github.com/owner/repo/actions/runs/123/job/1001",
+    labels: ["macos-26"],
+    steps: [],
+    ...overrides,
+  };
+}
+
+test("timings split wait into queue and waiting on jobs alongside execution and platform totals", () => {
+  const changes = makeJob({
+    id: 1000,
+    name: "Detect changed areas",
+    created_at: "2026-11-24T10:00:00Z",
+    started_at: "2026-11-24T10:00:04Z",
+    completed_at: "2026-11-24T10:00:24Z",
+    labels: ["ubuntu-24.04"],
+    steps: [{ name: "Detect shared and platform changes", conclusion: "success", started_at: "2026-11-24T10:00:05Z", completed_at: "2026-11-24T10:00:20Z" }],
+  });
+  const build = makeJob({
+    id: 1001,
+    name: "Desktop production build",
+    created_at: "2026-11-24T10:00:25Z",
+    started_at: "2026-11-24T10:02:25Z",
+    completed_at: "2026-11-24T10:05:25Z",
+    labels: ["macos-26"],
+  });
+  const e2e = makeJob({
+    id: 1002,
+    name: "Electron E2E (1/5)",
+    created_at: "2026-11-24T10:05:26Z",
+    started_at: "2026-11-24T10:09:26Z",
+    completed_at: "2026-11-24T10:21:26Z",
+    labels: ["macos-26"],
+  });
+  const skipped = makeJob({ id: 1003, name: "Android build and APK", conclusion: "skipped" });
+  const running = makeJob({ id: 1004, name: "CI timing report", status: "in_progress", conclusion: null });
+
+  const summary = summarizeJobs([changes, build, e2e, skipped, running], attemptStart);
+  assert.equal(summary.elapsed, 1286);
+  assert.equal(summary.rows.length, 3);
+  assert.equal(summary.firstFailure, null);
+
+  assert.equal(summary.rows[0].seconds, 20);
+  assert.equal(summary.rows[0].queueSeconds, 4);
+  assert.equal(summary.rows[0].waitSeconds, 0);
+  assert.equal(summary.rows[0].startOffset, 4);
+
+  assert.equal(summary.rows[1].seconds, 180);
+  assert.equal(summary.rows[1].queueSeconds, 120);
+  assert.equal(summary.rows[1].waitSeconds, 25);
+  assert.equal(summary.rows[1].startOffset, 145);
+
+  assert.equal(summary.rows[2].seconds, 720);
+  assert.equal(summary.rows[2].queueSeconds, 240);
+  assert.equal(summary.rows[2].waitSeconds, 326);
+  assert.equal(summary.rows[2].startOffset, 566);
+
+  assert.equal(summary.totals["ubuntu-24.04"], 20);
+  assert.equal(summary.totals["macos-26"], 900);
+
+  const markdown = renderSummary(summary);
+  assert.match(markdown, /\| Job \| Result \| Execution \| Queue \| Waiting on jobs \| Runner \|/u);
+  assert.match(markdown, /\| Electron E2E \(1\/5\) \| success \| 720s \| 240s \| 326s \| macos-26 \|/u);
+  assert.doesNotMatch(markdown, /### First failure/u);
 });
 
-test("invalid timestamps are unavailable rather than misleading zeros", () => {
-  const summary = summarizeJobs([{ ...job, started_at: null, completed_at: null }], start);
-  assert.equal(summary.elapsed, null);
+test("invalid or inverted timestamps are unavailable rather than misleading zeros", () => {
+  const missing = makeJob({ created_at: null, started_at: null, completed_at: null });
+  const inverted = makeJob({
+    name: "Inverted",
+    created_at: "2026-11-24T10:02:00Z",
+    started_at: "2026-11-24T10:01:00Z",
+    completed_at: "2026-11-24T10:03:00Z",
+  });
+  const summary = summarizeJobs([missing, inverted], attemptStart);
   assert.equal(summary.rows[0].seconds, null);
-  assert.deepEqual(summary.totals, {});
-  assert.match(renderSummary(summary), /unavailable/u);
+  assert.equal(summary.rows[0].queueSeconds, null);
+  assert.equal(summary.rows[0].waitSeconds, null);
+  assert.equal(summary.rows[1].queueSeconds, null);
+  assert.equal(summary.rows[1].waitSeconds, 120);
+  assert.match(renderSummary(summary), /\| Electron E2E \(1\/5\) \| success \| unavailable \| unavailable \| unavailable \| macos-26 \|/u);
 });
 
-test("report fetches every job page from the current attempt only", () => {
+test("first failure selects the earliest blocking job over non-blocking and aggregate gates", () => {
+  const preview = makeJob({
+    id: 2001,
+    name: "iOS build and simulator tests (Xcode 27, non-blocking)",
+    conclusion: "failure",
+    completed_at: "2026-11-24T10:03:00Z",
+    steps: [{ number: 6, name: "Run Aiden On The Go XCTest on the simulator", conclusion: "failure", completed_at: "2026-11-24T10:02:55Z" }],
+  });
+  const unitFail = makeJob({
+    id: 2002,
+    name: "Desktop tests (core-git)",
+    conclusion: "failure",
+    completed_at: "2026-11-24T10:05:10Z",
+    html_url: "https://github.com/owner/repo/actions/runs/456/job/2002",
+    labels: ["ubuntu-24.04"],
+    steps: [
+      { number: 6, name: "Download test selection", conclusion: "success", completed_at: "2026-11-24T10:01:10Z" },
+      { number: 7, name: "Run assigned regression tests and prerequisites", conclusion: "failure", completed_at: "2026-11-24T10:05:08Z" },
+    ],
+  });
+  const laterE2e = makeJob({
+    id: 2003,
+    name: "Electron E2E (2/5)",
+    conclusion: "failure",
+    completed_at: "2026-11-24T10:12:00Z",
+    steps: [{ number: 10, name: "Run deterministic Electron E2E shard", conclusion: "failure", completed_at: "2026-11-24T10:11:58Z" }],
+  });
+  const required = makeJob({
+    id: 2004,
+    name: "CI required",
+    conclusion: "failure",
+    completed_at: "2026-11-24T10:15:00Z",
+    steps: [{ number: 3, name: "Require every selected check to pass", conclusion: "failure", completed_at: "2026-11-24T10:14:59Z" }],
+  });
+
+  const logsByJobId = {
+    2002: [
+      "2026-11-24T10:05:06.1000000Z Failed tests in core-git:tests:",
+      "2026-11-24T10:05:06.1000000Z ",
+      "2026-11-24T10:05:06.1000000Z not ok preserves queue ordering",
+      "2026-11-24T10:05:06.1000000Z   at main/services/queue.test.ts:42:3",
+    ].join("\n"),
+  };
+
+  const first = findFirstFailure([{ attempt: 1, jobs: [preview, laterE2e, unitFail, required] }], { logsByJobId });
+  assert.equal(first.job, "Desktop tests (core-git)");
+  assert.equal(first.step, "Run assigned regression tests and prerequisites");
+  assert.equal(first.url, "https://github.com/owner/repo/actions/runs/456/job/2002#step:7:1");
+  assert.equal(first.failedTest, "preserves queue ordering (main/services/queue.test.ts:42:3)");
+  assert.equal(first.rerunPassed, false);
+
+  const markdown = renderSummary(summarizeJobs([preview, unitFail, laterE2e, required], attemptStart, { firstFailure: first }));
+  assert.ok(markdown.indexOf("### First failure") < markdown.indexOf("Elapsed to last completed validation job"));
+  assert.match(markdown, /\*\*Job:\*\* \[Desktop tests \(core-git\)\]\(https:\/\/github\.com\/owner\/repo\/actions\/runs\/456\/job\/2002#step:7:1\)/u);
+  assert.match(markdown, /\*\*Step:\*\* Run assigned regression tests and prerequisites/u);
+  assert.match(markdown, /\*\*First failed test:\*\* `preserves queue ordering \(main\/services\/queue\.test\.ts:42:3\)`/u);
+});
+
+test("first failure blames a timed-out cancelled job rather than the aggregate CI required gate", () => {
+  const timedOut = makeJob({
+    id: 3001,
+    name: "Electron E2E (1/5)",
+    conclusion: "cancelled",
+    completed_at: "2026-11-24T10:20:00Z",
+    html_url: "https://github.com/owner/repo/actions/runs/789/job/3001",
+    steps: [{ number: 10, name: "Run deterministic Electron E2E shard", conclusion: "cancelled", completed_at: "2026-11-24T10:19:59Z" }],
+  });
+  const required = makeJob({
+    id: 3002,
+    name: "CI required",
+    conclusion: "failure",
+    completed_at: "2026-11-24T10:20:05Z",
+    steps: [{ number: 3, name: "Require every selected check to pass", conclusion: "failure", completed_at: "2026-11-24T10:20:04Z" }],
+  });
+  const first = findFirstFailure([{ attempt: 1, jobs: [timedOut, required] }]);
+  assert.equal(first.job, "Electron E2E (1/5)");
+  assert.equal(first.conclusion, "cancelled");
+  assert.equal(first.step, "Run deterministic Electron E2E shard");
+});
+
+test("report surfaces attempt 1 first failure even when attempt 2 rerun passed, while keeping attempt 2 timings isolated", () => {
+  const attempt1Failed = makeJob({
+    id: 4101,
+    name: "Electron E2E (4/5)",
+    conclusion: "failure",
+    created_at: "2026-11-24T10:01:00Z",
+    started_at: "2026-11-24T10:02:00Z",
+    completed_at: "2026-11-24T10:10:00Z",
+    html_url: "https://github.com/owner/repo/actions/runs/900/job/4101",
+    steps: [{ number: 9, name: "Run deterministic Electron E2E shard", conclusion: "failure", completed_at: "2026-11-24T10:09:58Z" }],
+  });
+  const attempt2Passed = makeJob({
+    id: 4201,
+    name: "Electron E2E (4/5)",
+    conclusion: "success",
+    created_at: "2026-11-24T10:20:05Z",
+    started_at: "2026-11-24T10:21:05Z",
+    completed_at: "2026-11-24T10:26:05Z",
+    html_url: "https://github.com/owner/repo/actions/runs/900/job/4201",
+    steps: [{ number: 9, name: "Run deterministic Electron E2E shard", conclusion: "success", started_at: "2026-11-24T10:21:10Z", completed_at: "2026-11-24T10:26:00Z" }],
+  });
+  const attempt2Required = makeJob({
+    id: 4202,
+    name: "CI required",
+    conclusion: "success",
+    created_at: "2026-11-24T10:26:06Z",
+    started_at: "2026-11-24T10:26:10Z",
+    completed_at: "2026-11-24T10:26:20Z",
+    labels: ["ubuntu-24.04"],
+  });
+
   const calls = [];
   const execute = (command, args) => {
     calls.push([command, args]);
-    return JSON.stringify(args.includes("--paginate") ? [{ jobs: [job] }, { jobs: [{ ...job, name: "Second page" }] }] : { run_started_at: start });
+    const endpoint = args.at(-1);
+    if (endpoint === "repos/owner/repo/actions/runs/900/attempts/2") {
+      return JSON.stringify({ run_started_at: "2026-11-24T10:20:00Z" });
+    }
+    if (endpoint === "repos/owner/repo/actions/runs/900/attempts/2/jobs?per_page=100") {
+      return JSON.stringify([{ jobs: [attempt2Passed] }, { jobs: [attempt2Required] }]);
+    }
+    if (endpoint === "repos/owner/repo/actions/runs/900/attempts/1/jobs?per_page=100") {
+      return JSON.stringify([{ jobs: [attempt1Failed] }]);
+    }
+    if (endpoint === "repos/owner/repo/actions/jobs/4101/logs") {
+      return [
+        "2026-11-24T10:09:50.000Z   1) tests/e2e/bot-plans.spec.ts:15:5 › plan review jumps back to top on Home ───",
+        "2026-11-24T10:09:51.000Z     Error: expect(locator).toBeInViewport() failed",
+      ].join("\n");
+    }
+    throw new Error(`Unexpected endpoint: ${endpoint}`);
   };
-  const report = collectReport({ GITHUB_REPOSITORY: "owner/repo", GITHUB_RUN_ID: "123", GITHUB_RUN_ATTEMPT: "2" }, execute);
+
+  const report = collectReport(
+    { GITHUB_REPOSITORY: "owner/repo", GITHUB_RUN_ID: "900", GITHUB_RUN_ATTEMPT: "2" },
+    execute,
+  );
+  assert.match(report, /### First failure/u);
+  assert.match(report, /\[Electron E2E \(4\/5\)\]\(https:\/\/github\.com\/owner\/repo\/actions\/runs\/900\/job\/4101#step:9:1\) \(`failure`, attempt 1 — rerun passed on attempt 2\)/u);
+  assert.match(report, /\*\*Step:\*\* Run deterministic Electron E2E shard/u);
+  assert.match(report, /\*\*First failed test:\*\* `tests\/e2e\/bot-plans\.spec\.ts:15:5 › plan review jumps back to top on Home`/u);
+  // Attempt 2 timings only: 300s (5.00 runner-minutes), not attempt 1's 480s + 300s.
+  assert.match(report, /\| Electron E2E \(4\/5\) \| success \| 300s \| 60s \| 5s \| macos-26 \|/u);
+  assert.match(report, /- macos-26: 5\.00 runner-minutes/u);
+  assert.equal(calls.filter(([, args]) => args.at(-1).endsWith("/logs")).length, 1);
+});
+
+test("blocking failure in a later attempt outranks an earlier non-blocking failure across reruns", () => {
+  const attempt1NonBlocking = makeJob({
+    id: 4301,
+    name: "iOS build and simulator tests (Xcode 27, non-blocking)",
+    conclusion: "failure",
+    completed_at: "2026-11-24T10:05:00Z",
+    html_url: "https://github.com/owner/repo/actions/runs/901/job/4301",
+    steps: [{ number: 8, name: "Run Aiden On The Go XCTest on the simulator", conclusion: "failure", completed_at: "2026-11-24T10:04:58Z" }],
+  });
+  const attempt2Blocking = makeJob({
+    id: 4302,
+    name: "Desktop tests (core-git)",
+    conclusion: "failure",
+    completed_at: "2026-11-24T10:15:00Z",
+    html_url: "https://github.com/owner/repo/actions/runs/901/job/4302",
+    labels: ["ubuntu-24.04"],
+    steps: [{ number: 7, name: "Run assigned regression tests and prerequisites", conclusion: "failure", completed_at: "2026-11-24T10:14:58Z" }],
+  });
+  const attempt3Passed = makeJob({
+    id: 4303,
+    name: "Desktop tests (core-git)",
+    conclusion: "success",
+    created_at: "2026-11-24T10:25:05Z",
+    started_at: "2026-11-24T10:25:10Z",
+    completed_at: "2026-11-24T10:28:10Z",
+    labels: ["ubuntu-24.04"],
+  });
+
+  // Attempt 1 non-blocking + attempt 2 blocking (current): reports attempt 2 blocking, rerunPassed=false.
+  const twoAttempts = findFirstFailure(
+    [
+      { attempt: 1, jobs: [attempt1NonBlocking] },
+      { attempt: 2, jobs: [attempt2Blocking] },
+    ],
+    { currentAttempt: 2, currentJobs: [attempt2Blocking] },
+  );
+  assert.equal(twoAttempts.job, "Desktop tests (core-git)");
+  assert.equal(twoAttempts.attempt, 2);
+  assert.equal(twoAttempts.rerunPassed, false);
+
+  // Across 3 attempts in collectReport, attempt 1's non-blocking failure must not stop scanning attempt 2.
+  const execute = (_command, args) => {
+    const endpoint = args.at(-1);
+    if (endpoint === "repos/owner/repo/actions/runs/901/attempts/3") {
+      return JSON.stringify({ run_started_at: "2026-11-24T10:25:00Z" });
+    }
+    if (endpoint === "repos/owner/repo/actions/runs/901/attempts/3/jobs?per_page=100") {
+      return JSON.stringify([{ jobs: [attempt3Passed] }]);
+    }
+    if (endpoint === "repos/owner/repo/actions/runs/901/attempts/1/jobs?per_page=100") {
+      return JSON.stringify([{ jobs: [attempt1NonBlocking] }]);
+    }
+    if (endpoint === "repos/owner/repo/actions/runs/901/attempts/2/jobs?per_page=100") {
+      return JSON.stringify([{ jobs: [attempt2Blocking] }]);
+    }
+    if (endpoint === "repos/owner/repo/actions/jobs/4302/logs") {
+      return "not ok 1 - rejects stale lock\n";
+    }
+    throw new Error(`Unexpected endpoint: ${endpoint}`);
+  };
+  const report = collectReport(
+    { GITHUB_REPOSITORY: "owner/repo", GITHUB_RUN_ID: "901", GITHUB_RUN_ATTEMPT: "3" },
+    execute,
+  );
+  assert.match(report, /\[Desktop tests \(core-git\)\]\(https:\/\/github\.com\/owner\/repo\/actions\/runs\/901\/job\/4302#step:7:1\) \(`failure`, attempt 2 — rerun passed on attempt 3\)/u);
+  assert.match(report, /\*\*First failed test:\*\* `rejects stale lock`/u);
+});
+
+test("report on green attempt 1 paginates current attempt only and validates coordinates", () => {
+  const calls = [];
+  const execute = (command, args) => {
+    calls.push([command, args]);
+    return JSON.stringify(
+      args.includes("--paginate")
+        ? [{ jobs: [makeJob()] }, { jobs: [makeJob({ id: 1002, name: "Second page" })] }]
+        : { run_started_at: attemptStart },
+    );
+  };
+  const report = collectReport({ GITHUB_REPOSITORY: "owner/repo", GITHUB_RUN_ID: "123", GITHUB_RUN_ATTEMPT: "1" }, execute);
   assert.match(report, /Second page/u);
-  assert.ok(calls.every(([, args]) => args.at(-1).includes("/attempts/2")));
+  assert.doesNotMatch(report, /### First failure/u);
+  assert.ok(calls.every(([, args]) => args.at(-1).includes("/attempts/1")));
   assert.throws(() => collectReport({ GITHUB_REPOSITORY: "--bad" }, execute), /coordinates/u);
+});
+
+test("extractFirstFailedTest recognizes unit, Playwright, XCTest, Gradle, Rust and annotation logs", () => {
+  const esc = String.fromCharCode(0x1b);
+  assert.equal(
+    extractFirstFailedTest(`${esc}[31m  1) [chromium] › tests/generative-ui/containment.spec.ts:51:1 › sandbox blocks fetch ───${esc}[0m`),
+    "tests/generative-ui/containment.spec.ts:51:1 › sandbox blocks fetch",
+  );
+  assert.equal(
+    extractFirstFailedTest("  1 flaky\n    tests/e2e/usage-data.spec.ts:18:3 › persists opt-out across relaunch\n"),
+    "tests/e2e/usage-data.spec.ts:18:3 › persists opt-out across relaunch",
+  );
+  assert.equal(
+    extractFirstFailedTest("2026-11-24T10:05:00Z Test Case '-[AidenChatTests.ForeignRunTests testAttachesLive]' failed (30.012 seconds)."),
+    "-[AidenChatTests.ForeignRunTests testAttachesLive]",
+  );
+  assert.equal(
+    extractFirstFailedTest("2026-11-24T10:05:00Z Test case 'AidenChatMarkdownTests.testCopyButton()' failed on 'Clone 1 of iPhone 16' (1.2s)"),
+    "AidenChatMarkdownTests.testCopyButton()",
+  );
+  assert.equal(
+    extractFirstFailedTest("com.aiden.app.ChatScreenTest > rendersReply FAILED"),
+    "com.aiden.app.ChatScreenTest > rendersReply",
+  );
+  assert.equal(
+    extractFirstFailedTest("test worktree_remover::rejects_symlink ... FAILED"),
+    "worktree_remover::rejects_symlink",
+  );
+  assert.equal(
+    extractFirstFailedTest("not ok 1 - skipped todo # TODO\nnot ok 2 - actual failure\n"),
+    "actual failure",
+  );
+  assert.equal(
+    extractFirstFailedTest("::error title=Process completed with exit code 1.::\n::error title=AidenShellUITests/testLaunch::Timed out\n"),
+    "AidenShellUITests/testLaunch",
+  );
+  assert.equal(extractFirstFailedTest("npm error code 1\nBuild failed without running tests.\n"), null);
+});
+
+test("extractPhaseTimings parses chart test phases and identifies stalled iOS simulator boot", () => {
+  const chartLog = [
+    "2026-11-24T10:04:01.000Z # [phase] chart test / browser launch: started",
+    "2026-11-24T10:04:01.420Z # [phase] chart test / browser launch: 420ms (ok)",
+    "2026-11-24T10:04:01.421Z # [phase] chart test / page ready: started",
+    "2026-11-24T10:04:16.001Z # [phase] chart test / page ready: 14580ms (failed)",
+    "2026-11-24T10:04:16.002Z # [phase] chart test / close: started",
+    "2026-11-24T10:04:16.057Z # [phase] chart test / close: 55ms (ok)",
+  ].join("\n");
+  assert.deepEqual(extractPhaseTimings(chartLog), [
+    { scope: "chart test", phase: "browser launch", status: "ok", durationMs: 420 },
+    { scope: "chart test", phase: "page ready", status: "failed", durationMs: 14580 },
+    { scope: "chart test", phase: "close", status: "ok", durationMs: 55 },
+  ]);
+
+  const stalledIosJob = makeJob({
+    id: 5001,
+    name: "iOS build and simulator tests",
+    conclusion: "cancelled",
+    completed_at: "2026-11-24T10:50:00Z",
+    html_url: "https://github.com/owner/repo/actions/runs/999/job/5001",
+    steps: [
+      { number: 6, name: "Compile Aiden On The Go tests for generic iOS hardware", conclusion: "success", completed_at: "2026-11-24T10:04:00Z" },
+      { number: 8, name: "Build Aiden On The Go tests for the simulator", conclusion: "success", completed_at: "2026-11-24T10:07:00Z" },
+      { number: 9, name: "Boot iPhone simulator", conclusion: "cancelled", completed_at: "2026-11-24T10:49:59Z" },
+    ],
+  });
+  const stalledIosLog = [
+    "2026-11-24T10:02:25.000Z [phase] ios / build (device): started",
+    "2026-11-24T10:04:00.000Z [phase] ios / build (device): 95s (ok)",
+    "2026-11-24T10:05:10.000Z [phase] ios / build (simulator): started",
+    "2026-11-24T10:07:00.000Z [phase] ios / build (simulator): 110s (ok)",
+    "2026-11-24T10:07:01.000Z [phase] ios / simulator boot: started",
+  ].join("\n");
+
+  const first = findFirstFailure([{ attempt: 1, jobs: [stalledIosJob] }], { logsByJobId: { 5001: stalledIosLog } });
+  assert.equal(first.job, "iOS build and simulator tests");
+  assert.equal(first.step, "Boot iPhone simulator");
+  assert.deepEqual(first.phases, [
+    { scope: "ios", phase: "build (device)", status: "ok", durationMs: 95000 },
+    { scope: "ios", phase: "build (simulator)", status: "ok", durationMs: 110000 },
+    { scope: "ios", phase: "simulator boot", status: "stalled", durationMs: null },
+  ]);
+
+  const markdown = renderSummary(summarizeJobs([stalledIosJob], attemptStart, { firstFailure: first }));
+  assert.match(markdown, /\*\*Phases:\*\* ios \/ build \(device\) 95s \(ok\) → ios \/ build \(simulator\) 110s \(ok\) → ios \/ simulator boot \*\*stalled\*\*/u);
+});
+
+test("current-attempt blocking failure takes precedence over an earlier attempt's rerun-passed failure", () => {
+  const attempt1JobA = makeJob({
+    id: 6101,
+    name: "Electron E2E (1/5)",
+    conclusion: "failure",
+    completed_at: "2026-11-24T10:10:00Z",
+    html_url: "https://github.com/owner/repo/actions/runs/950/job/6101",
+    steps: [{ number: 9, name: "Run deterministic Electron E2E shard", conclusion: "failure", completed_at: "2026-11-24T10:09:58Z" }],
+  });
+  const attempt2JobA = makeJob({
+    id: 6201,
+    name: "Electron E2E (1/5)",
+    conclusion: "success",
+    completed_at: "2026-11-24T10:25:00Z",
+    html_url: "https://github.com/owner/repo/actions/runs/950/job/6201",
+  });
+  const attempt2JobB = makeJob({
+    id: 6202,
+    name: "Desktop tests (core-git)",
+    conclusion: "failure",
+    completed_at: "2026-11-24T10:26:00Z",
+    html_url: "https://github.com/owner/repo/actions/runs/950/job/6202",
+    labels: ["ubuntu-24.04"],
+    steps: [{ number: 7, name: "Run assigned regression tests and prerequisites", conclusion: "failure", completed_at: "2026-11-24T10:25:58Z" }],
+  });
+
+  const first = findFirstFailure(
+    [
+      { attempt: 1, jobs: [attempt1JobA] },
+      { attempt: 2, jobs: [attempt2JobA, attempt2JobB] },
+    ],
+    {
+      currentAttempt: 2,
+      currentJobs: [attempt2JobA, attempt2JobB],
+      logsByJobId: { 6202: "not ok 1 - fails on current attempt\n" },
+    },
+  );
+  assert.equal(first.job, "Desktop tests (core-git)");
+  assert.equal(first.attempt, 2);
+  assert.equal(first.rerunPassed, false);
+  assert.equal(first.nonBlocking, false);
+  assert.equal(first.failedTest, "fails on current attempt");
+
+  // collectReport should also skip prior-attempt API calls when attempt 2 already has a blocking failure.
+  const calls = [];
+  const execute = (_command, args) => {
+    const endpoint = args.at(-1);
+    calls.push(endpoint);
+    if (endpoint === "repos/owner/repo/actions/runs/950/attempts/2") {
+      return JSON.stringify({ run_started_at: "2026-11-24T10:20:00Z" });
+    }
+    if (endpoint === "repos/owner/repo/actions/runs/950/attempts/2/jobs?per_page=100") {
+      return JSON.stringify([{ jobs: [attempt2JobA, attempt2JobB] }]);
+    }
+    if (endpoint === "repos/owner/repo/actions/jobs/6202/logs") {
+      return "not ok 1 - fails on current attempt\n";
+    }
+    throw new Error(`Unexpected endpoint: ${endpoint}`);
+  };
+  const report = collectReport(
+    { GITHUB_REPOSITORY: "owner/repo", GITHUB_RUN_ID: "950", GITHUB_RUN_ATTEMPT: "2" },
+    execute,
+  );
+  assert.match(report, /### First failure/u);
+  assert.match(report, /Desktop tests \(core-git\)/u);
+  assert.ok(!calls.some((endpoint) => endpoint.includes("/attempts/1/")));
+});
+
+test("green run with only a non-blocking failure renders under Non-blocking failure heading", () => {
+  const requiredPassed = makeJob({
+    id: 7001,
+    name: "CI required",
+    conclusion: "success",
+    labels: ["ubuntu-24.04"],
+  });
+  const previewFailed = makeJob({
+    id: 7002,
+    name: "iOS build and simulator tests (Xcode 27, non-blocking)",
+    conclusion: "failure",
+    html_url: "https://github.com/owner/repo/actions/runs/960/job/7002",
+    steps: [{ number: 8, name: "Run Aiden On The Go XCTest on the simulator", conclusion: "failure", completed_at: "2026-11-24T10:08:00Z" }],
+  });
+  const first = findFirstFailure([{ attempt: 1, jobs: [requiredPassed, previewFailed] }]);
+  assert.equal(first.nonBlocking, true);
+  assert.equal(first.job, "iOS build and simulator tests (Xcode 27, non-blocking)");
+
+  const markdown = renderSummary(summarizeJobs([requiredPassed, previewFailed], attemptStart, { firstFailure: first }));
+  assert.match(markdown, /### Non-blocking failure/u);
+  assert.doesNotMatch(markdown, /### First failure/u);
+});
+
+test("extractFirstFailedTest handles ##[error], non-first title= annotations, Playwright retry suffixes, and pathological long lines in linear time", () => {
+  assert.equal(
+    extractFirstFailedTest(
+      "2026-11-24T10:05:00Z ##[error]Process completed with exit code 1.\n2026-11-24T10:05:01Z ##[error]The job running on runner GitHub Actions 4 has exceeded the maximum execution time of 20 minutes.\n",
+    ),
+    "The job running on runner GitHub Actions 4 has exceeded the maximum execution time of 20 minutes.",
+  );
+  assert.equal(
+    extractFirstFailedTest("::error file=ios/Tests.swift,line=42,title=AidenShellUITests/testBoot::Timed out\n"),
+    "AidenShellUITests/testBoot",
+  );
+  assert.equal(
+    extractFirstFailedTest("  ✘  1 [chromium] › tests/e2e/bot-plans.spec.ts:15:5 › keeps focus (retry #1) (2.3s)\n"),
+    "tests/e2e/bot-plans.spec.ts:15:5 › keeps focus",
+  );
+  // Pathological ReDoS input for the old Gradle regex must complete in milliseconds without hanging.
+  const pathological = `a > ${" ".repeat(20_000)}x\ncom.aiden.app.ChatScreenTest > rendersReply FAILED\n`;
+  const started = Date.now();
+  const extracted = extractFirstFailedTest(pathological);
+  const elapsedMs = Date.now() - started;
+  assert.equal(extracted, "com.aiden.app.ChatScreenTest > rendersReply");
+  assert.ok(elapsedMs < 200, `Expected linear-time parsing (<200ms), took ${elapsedMs}ms`);
+});
+
+test("collectReport caps prior attempt scans and respects the shared API time budget", () => {
+  const calls = [];
+  let clock = 0;
+  const execute = (_command, args) => {
+    const endpoint = args.at(-1);
+    calls.push(endpoint);
+    if (endpoint === "repos/owner/repo/actions/runs/970/attempts/12") {
+      return JSON.stringify({ run_started_at: attemptStart });
+    }
+    if (endpoint.endsWith("/jobs?per_page=100")) {
+      return JSON.stringify([{ jobs: [makeJob({ id: 8000, conclusion: "success" })] }]);
+    }
+    throw new Error(`Unexpected endpoint: ${endpoint}`);
+  };
+  collectReport(
+    { GITHUB_REPOSITORY: "owner/repo", GITHUB_RUN_ID: "970", GITHUB_RUN_ATTEMPT: "12" },
+    execute,
+    { now: () => clock, budgetMs: 180_000 },
+  );
+  const priorCalls = calls.filter((endpoint) => /\/attempts\/([1-9]|1[01])\/jobs/u.test(endpoint));
+  assert.equal(priorCalls.length, 5);
+
+  // When the shared budget is exhausted mid-scan, prior scanning stops without failing the report.
+  const budgetedCalls = [];
+  clock = 0;
+  const budgetedReport = collectReport(
+    { GITHUB_REPOSITORY: "owner/repo", GITHUB_RUN_ID: "970", GITHUB_RUN_ATTEMPT: "6" },
+    (_command, args) => {
+      const endpoint = args.at(-1);
+      budgetedCalls.push(endpoint);
+      clock += 60_000;
+      if (endpoint === "repos/owner/repo/actions/runs/970/attempts/6") {
+        return JSON.stringify({ run_started_at: attemptStart });
+      }
+      return JSON.stringify([{ jobs: [makeJob({ id: 8001, conclusion: "success" })] }]);
+    },
+    { now: () => clock, budgetMs: 180_000 },
+  );
+  assert.match(budgetedReport, /## CI execution timings/u);
+  assert.equal(budgetedCalls.filter((endpoint) => endpoint.includes("/attempts/1/")).length, 1);
+  assert.equal(budgetedCalls.filter((endpoint) => endpoint.includes("/attempts/2/")).length, 0);
+});
+
+test("partial rerun filters copied jobs (including rewritten run_attempt) out of attempt totals/steps and clamps small clock skew to 0s", () => {
+  const attempt2Start = "2026-11-24T10:30:00Z";
+  // Copied attempt 1 job returned by GitHub's /attempts/2/jobs on "Re-run failed jobs":
+  // GitHub rewrites run_attempt to 2 and created_at to attempt 2's creation time, while
+  // keeping attempt 1's started_at and completed_at before attempt 2's run_started_at.
+  const copiedRewrittenJob = makeJob({
+    id: 9101,
+    run_attempt: 2,
+    name: "Desktop production build",
+    conclusion: "success",
+    created_at: "2026-11-24T10:30:01Z",
+    started_at: "2026-11-24T10:01:25Z",
+    completed_at: "2026-11-24T10:11:25Z",
+    labels: ["macos-26"],
+    steps: [{ name: "Build desktop app", conclusion: "success", started_at: "2026-11-24T10:02:00Z", completed_at: "2026-11-24T10:11:00Z" }],
+  });
+  // Copied job that completed just 2 seconds before attempt2Start (within skew window, still before run_started_at).
+  const copiedLateJob = makeJob({
+    id: 9103,
+    run_attempt: 2,
+    name: "Detect changed areas",
+    conclusion: "success",
+    created_at: "2026-11-24T10:30:01Z",
+    started_at: "2026-11-24T10:29:40Z",
+    completed_at: "2026-11-24T10:29:58Z",
+    labels: ["ubuntu-24.04"],
+    steps: [{ name: "Detect shared and platform changes", conclusion: "success", started_at: "2026-11-24T10:29:42Z", completed_at: "2026-11-24T10:29:57Z" }],
+  });
+  const legacyAttemptJob = makeJob({
+    id: 9104,
+    run_attempt: 1,
+    name: "Model catalog contracts",
+    conclusion: "success",
+    created_at: "2026-11-24T10:00:25Z",
+    started_at: "2026-11-24T10:00:30Z",
+    completed_at: "2026-11-24T10:01:30Z",
+    labels: ["ubuntu-24.04"],
+    steps: [{ name: "Verify model catalog", conclusion: "success", started_at: "2026-11-24T10:00:35Z", completed_at: "2026-11-24T10:01:25Z" }],
+  });
+  const attempt1FailedJob = makeJob({
+    id: 9102,
+    run_attempt: 1,
+    name: "Electron E2E (3/5)",
+    conclusion: "failure",
+    created_at: "2026-11-24T10:05:00Z",
+    started_at: "2026-11-24T10:06:00Z",
+    completed_at: "2026-11-24T10:14:00Z",
+    html_url: "https://github.com/owner/repo/actions/runs/980/job/9102",
+    labels: ["macos-26"],
+    steps: [{ number: 10, name: "Run deterministic Electron E2E shard", conclusion: "failure", completed_at: "2026-11-24T10:13:58Z" }],
+  });
+  // Root rerun job stamped 1 second BEFORE metadata.run_started_at due to whole-second clock skew.
+  const rerunPassedJob = makeJob({
+    id: 9202,
+    run_attempt: 2,
+    name: "Electron E2E (3/5)",
+    conclusion: "success",
+    created_at: "2026-11-24T10:29:59Z",
+    started_at: "2026-11-24T10:30:20Z",
+    completed_at: "2026-11-24T10:34:20Z",
+    html_url: "https://github.com/owner/repo/actions/runs/980/job/9202",
+    labels: ["macos-26"],
+    steps: [{ name: "Run deterministic Electron E2E shard", conclusion: "success", started_at: "2026-11-24T10:30:30Z", completed_at: "2026-11-24T10:34:10Z" }],
+  });
+
+  const summary = summarizeJobs([copiedRewrittenJob, copiedLateJob, legacyAttemptJob, rerunPassedJob], attempt2Start, { currentAttempt: 2 });
+  assert.equal(summary.rows.length, 1);
+  assert.equal(summary.rows[0].name, "Electron E2E (3/5)");
+  assert.equal(summary.rows[0].waitSeconds, 0);
+  assert.equal(summary.rows[0].queueSeconds, 21);
+  assert.equal(summary.rows[0].seconds, 240);
+  assert.equal(summary.totals["macos-26"], 240);
+  assert.equal(summary.totals["ubuntu-24.04"], undefined);
+  assert.equal(summary.elapsed, 260);
+
+  // Also verify through collectReport that attempt 1's failure stays visible while copied jobs (even with run_attempt: 2) are excluded from attempt 2 table/totals/steps.
+  const execute = (_command, args) => {
+    const endpoint = args.at(-1);
+    if (endpoint === "repos/owner/repo/actions/runs/980/attempts/2") {
+      return JSON.stringify({ run_started_at: attempt2Start });
+    }
+    if (endpoint === "repos/owner/repo/actions/runs/980/attempts/2/jobs?per_page=100") {
+      return JSON.stringify([{ jobs: [copiedRewrittenJob, copiedLateJob, rerunPassedJob] }]);
+    }
+    if (endpoint === "repos/owner/repo/actions/runs/980/attempts/1/jobs?per_page=100") {
+      return JSON.stringify([{
+        jobs: [
+          { ...copiedRewrittenJob, run_attempt: 1, created_at: "2026-11-24T10:00:25Z" },
+          { ...copiedLateJob, run_attempt: 1, created_at: "2026-11-24T10:29:35Z" },
+          attempt1FailedJob,
+        ],
+      }]);
+    }
+    if (endpoint === "repos/owner/repo/actions/jobs/9102/logs") {
+      return "not ok 1 - flaky viewport check\n";
+    }
+    throw new Error(`Unexpected endpoint: ${endpoint}`);
+  };
+  const report = collectReport(
+    { GITHUB_REPOSITORY: "owner/repo", GITHUB_RUN_ID: "980", GITHUB_RUN_ATTEMPT: "2" },
+    execute,
+  );
+  assert.match(report, /### First failure/u);
+  assert.match(report, /attempt 1 — rerun passed on attempt 2/u);
+  assert.match(report, /\| Electron E2E \(3\/5\) \| success \| 240s \| 21s \| 0s \| macos-26 \|/u);
+  assert.match(report, /- macos-26: 4\.00 runner-minutes/u);
+  assert.doesNotMatch(report, /Desktop production build/u);
+  assert.doesNotMatch(report, /Build desktop app/u);
+  assert.doesNotMatch(report, /Detect changed areas/u);
+  assert.doesNotMatch(report, /Detect shared and platform changes/u);
+  assert.doesNotMatch(report, /ubuntu-24\.04/u);
+
+  // If a copied failed job from attempt 1 survives into attempt 2's payload with run_attempt: 2,
+  // collectReport must still scan attempt 1 and report attempt 1 rather than misattributing it to attempt 2.
+  const copiedAttempt1Failure = { ...attempt1FailedJob, run_attempt: 2, created_at: "2026-11-24T10:30:01Z" };
+  const singleJobRerunReport = collectReport(
+    { GITHUB_REPOSITORY: "owner/repo", GITHUB_RUN_ID: "980", GITHUB_RUN_ATTEMPT: "2" },
+    (_command, args) => {
+      const endpoint = args.at(-1);
+      if (endpoint === "repos/owner/repo/actions/runs/980/attempts/2") {
+        return JSON.stringify({ run_started_at: attempt2Start });
+      }
+      if (endpoint === "repos/owner/repo/actions/runs/980/attempts/2/jobs?per_page=100") {
+        return JSON.stringify([{ jobs: [copiedRewrittenJob, copiedAttempt1Failure, rerunPassedJob] }]);
+      }
+      if (endpoint === "repos/owner/repo/actions/runs/980/attempts/1/jobs?per_page=100") {
+        return JSON.stringify([{ jobs: [attempt1FailedJob] }]);
+      }
+      if (endpoint === "repos/owner/repo/actions/jobs/9102/logs") {
+        return "not ok 1 - flaky viewport check\n";
+      }
+      throw new Error(`Unexpected endpoint: ${endpoint}`);
+    },
+  );
+  assert.match(singleJobRerunReport, /attempt 1 — rerun passed on attempt 2/u);
+});
+
+test("extractFirstFailedTest parses colons and escapes in ::error properties and falls back to message when title is generic", () => {
+  assert.equal(
+    extractFirstFailedTest("::error file=ios/Tests.swift,title=AidenShellUITests:testLaunch::Timed out\n"),
+    "AidenShellUITests:testLaunch",
+  );
+  assert.equal(
+    extractFirstFailedTest("::error file=C:\\repo\\spec.ts,title=tests/e2e/foo.spec.ts%3A12%3A5%2C retry::Failed assertion\n"),
+    "tests/e2e/foo.spec.ts:12:5, retry",
+  );
+  assert.equal(
+    extractFirstFailedTest("::error title=Error::Simulator failed to boot\n"),
+    "Simulator failed to boot",
+  );
+  assert.equal(
+    extractFirstFailedTest("::error title=Process completed with exit code 1.::Actual crash message\n"),
+    "Actual crash message",
+  );
+  assert.equal(
+    extractFirstFailedTest("::error title=::Message with empty title\n"),
+    "Message with empty title",
+  );
+  assert.equal(
+    extractFirstFailedTest("::error::Bare workflow error message\n"),
+    "Bare workflow error message",
+  );
 });

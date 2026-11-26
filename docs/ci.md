@@ -64,11 +64,14 @@ cancelling CI never cancels a release. Runner capacity can still cause queueing.
   its own Ubuntu `catalog` job.
 - Apple Foundation Models tests run in their own job. The `ios` job resolves
   Swift packages into a cached directory keyed on `Package.resolved`, builds for
-  testing once for the generic device and once for the simulator, then runs
-  `test-without-building` against the shared DerivedData on one simulator,
-  with parallel clones off. iOS-only changes also
-  run shipping and TestFlight policies in that job; full desktop runs execute
-  them through the preserved regression lane.
+  testing once for the generic device and once for the simulator, explicitly
+  boots the selected iPhone simulator (`xcrun simctl bootstatus ... -b`), then
+  runs `test-without-building` against the shared DerivedData on one simulator,
+  with parallel clones off. Both `ios` and the non-blocking `ios-27` preview
+  emit named `[phase]` timings (`build (device)`, `build (simulator)`,
+  `simulator boot`, `test (unit)`, `test (shell UI)`) so a stall shows which
+  phase hung. iOS-only changes also run shipping and TestFlight policies in that
+  job; full desktop runs execute them through the preserved regression lane.
 - Four desktop lanes use `scripts/ci-test-registry.json`. GitHub allows five
   concurrent macOS jobs on this plan, and macOS is where jobs queue, so on PRs
   `core-git`, `runtime-subagents` and `renderer-other` run on Ubuntu and only the
@@ -170,10 +173,42 @@ hosted prerequisites are present.
 
 ## Measurement and rollout
 
-An advisory report fetches every job page for the current workflow attempt and
-summarizes execution, start offsets, per-platform runner-minutes and slow steps.
-Start offsets include both dependency waits and runner queueing. API/reporting
-failure cannot fail `CI required`. Test lanes also write elapsed summaries.
+An advisory report (`scripts/ci-timings.mjs`, running in `timings` after
+`required`, `linux-required`, and `ios-27` settle) fetches every job page for the current
+workflow attempt and summarizes execution, **Queue** (runner wait from
+`job.created_at` to `job.started_at`), **Waiting on jobs** (dependency wait from
+attempt start to `job.created_at`), per-platform runner-minutes and slow steps.
+Timing rows, elapsed time and runner-minute totals stay isolated to the current
+attempt.
+
+When any attempt in the workflow run failed, the summary opens with a **First
+failure** block (or **Non-blocking failure** when required gates passed and only
+a non-blocking job such as `ios-27` failed) naming the earliest failing blocking
+job (preferring validation jobs over aggregate gates such as `CI required` and
+over non-blocking jobs), its failed step, the first failed test extracted from
+its job log (including `##[error]` runner lines and workflow `::error`
+annotations as fallbacks), and a direct link to the failing job and step. If the
+current attempt itself has a blocking failure, that current failure is reported
+so a rerun-passed job from an earlier attempt never hides why the latest attempt
+is red; when the current attempt passes after a rerun (`GITHUB_RUN_ATTEMPT > 1`),
+the report scans earlier attempts (bounded by a shared API budget and at most 5
+prior attempts) so the original failure stays visible at the top of the summary.
+
+Named `[phase]` timings identify where a slow or stalled run stopped:
+
+- Headless server chart rendering (`packages/cli/tests/server-visuals.test.mjs`,
+  via `renderServerVisualImage`'s `onPhase` hook): `browser launch`, `page ready`,
+  `screenshot`, and `close`.
+- iOS build and simulator jobs (`ios` and `ios-27` in `.github/workflows/ci.yml`):
+  `build (device)`, `build (simulator)`, `simulator boot`, `test (unit)`, and
+  `test (shell UI)`.
+
+Each phase logs `[phase] <scope> / <phase>: started` before work begins and
+`[phase] <scope> / <phase>: <duration> (ok|failed)` on completion. If a job
+stalls or times out mid-phase, `scripts/ci-timings.mjs` reads those lines from
+the failing job's log and surfaces the phase sequence—marking any unfinished
+phase as **stalled**—in the **First failure** block. API/reporting failure
+cannot fail `CI required`. Test lanes also write elapsed summaries.
 
 The September 21 sample of ten successful PR runs had a 25m43s median completion,
 25m24s median Electron job and 14m09s median verify job. The older draft ran in
