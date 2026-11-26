@@ -103,6 +103,8 @@ final class AidenDemoResponder: @unchecked Sendable {
     private var probeFailures: [String: URLError.Code] = [:]
     private var log: [String: [String]] = [:]
     private var keyLog: [String: [String]] = [:]
+    /// Every POST body, by machine and path, oldest first.
+    private var bodyLog: [String: [String: [Data]]] = [:]
     private let token = UUID().uuidString
 
     /// Pass this to clients. Its requests never leave the process.
@@ -228,6 +230,13 @@ final class AidenDemoResponder: @unchecked Sendable {
         return log[instanceId] ?? []
     }
 
+    /// Every body POSTed to `path` on the machine, oldest first.
+    func postBodies(instanceId: String, path: String) -> [Data] {
+        lock.lock()
+        defer { lock.unlock() }
+        return bodyLog[instanceId]?[path] ?? []
+    }
+
     /// Every `Idempotency-Key` the machine was sent, oldest first.
     func idempotencyKeys(instanceId: String) -> [String] {
         lock.lock()
@@ -249,9 +258,14 @@ final class AidenDemoResponder: @unchecked Sendable {
         let instanceId = String(host.dropLast(Self.hostSuffix.count))
         let method = request.httpMethod ?? "GET"
         let path = url.path.hasPrefix(Self.apiRoot) ? String(url.path.dropFirst(Self.apiRoot.count)) : url.path
+        // Read once: a `URLProtocol` may only see the body as a stream.
+        let body = method == "POST" ? Self.bodyData(of: request) : nil
 
         lock.lock()
         log[instanceId, default: []].append("\(method) \(path)")
+        if let body {
+            bodyLog[instanceId, default: [:]][path, default: []].append(body)
+        }
         if let key = request.value(forHTTPHeaderField: "Idempotency-Key") {
             keyLog[instanceId, default: []].append(key)
         }
@@ -264,7 +278,7 @@ final class AidenDemoResponder: @unchecked Sendable {
         // The new chat takes a turn: the words sent come back as its first
         // message, and the run they start stays open (its events are held).
         if !isProbe, method == "POST", path == "/chats/\(AidenDemoContent.newChatId)/turns",
-           let turn = Self.turnText(of: request) {
+           let turn = Self.turnText(of: body) {
             lock.unlock()
             deliver(.success(Answer(response: Self.response(url: url, status: 202), data: AidenDemoContent.newChatTurnJSON(text: turn))))
             return {}
@@ -328,20 +342,22 @@ final class AidenDemoResponder: @unchecked Sendable {
         }
     }
 
-    /// The text of a `POST /chats/{id}/turns` body, which a `URLProtocol`
-    /// may only see as a stream.
-    private static func turnText(of request: URLRequest) -> String? {
-        var body = request.httpBody
-        if body == nil, let stream = request.httpBodyStream {
-            stream.open()
-            defer { stream.close() }
-            var data = Data()
-            var buffer = [UInt8](repeating: 0, count: 4096)
-            while case let count = stream.read(&buffer, maxLength: buffer.count), count > 0 {
-                data.append(buffer, count: count)
-            }
-            body = data
+    /// A request's body, which a `URLProtocol` may only see as a stream.
+    private static func bodyData(of request: URLRequest) -> Data? {
+        if let body = request.httpBody { return body }
+        guard let stream = request.httpBodyStream else { return nil }
+        stream.open()
+        defer { stream.close() }
+        var data = Data()
+        var buffer = [UInt8](repeating: 0, count: 4096)
+        while case let count = stream.read(&buffer, maxLength: buffer.count), count > 0 {
+            data.append(buffer, count: count)
         }
+        return data
+    }
+
+    /// The text of a `POST /chats/{id}/turns` body.
+    private static func turnText(of body: Data?) -> String? {
         guard let body, let turn = try? JSONDecoder().decode(AidenTurnStart.self, from: body) else { return nil }
         return turn.text
     }
@@ -787,6 +803,9 @@ enum AidenDemoHosts {
         responder.reply(instanceId: id, method: "POST", path: "/chats", status: 201, json: AidenDemoContent.newChatJSON())
         responder.reply(instanceId: id, path: "/chats/\(AidenDemoContent.newChatId)", status: 200, json: AidenDemoContent.newChatJSON())
         _ = responder.hold(instanceId: id, path: "/streams/\(AidenDemoContent.newChatStreamId)/events")
+        // A phone probes a run whose event stream dropped; the demo's run is
+        // still going, so the probe finds it running instead of a missing path.
+        responder.reply(instanceId: id, path: "/streams/\(AidenDemoContent.newChatStreamId)", status: 200, json: AidenDemoContent.newChatStreamStatusJSON())
         for (index, row) in rows.enumerated() {
             guard let chatId = row["id"] as? String else { continue }
             let forkId = "\(chatId)_fork"
@@ -1013,6 +1032,18 @@ private enum AidenDemoContent {
     }
 
     static let newChatStreamId = "stream_demo_new"
+
+    /// What `GET /streams/{new}` answers: the new chat's turn is still running.
+    static func newChatStreamStatusJSON() -> Data {
+        data([
+            "streamId": newChatStreamId,
+            "chatId": newChatId,
+            "turnId": "turn_demo_new",
+            "state": "running",
+            "lastSequence": 0,
+            "updatedAt": timestamp(Date()),
+        ])
+    }
 
     /// What `POST /chats/{new}/turns` answers: the turn is running, and `text`
     /// is its first message.

@@ -602,27 +602,14 @@ final class AidenRunningAccessoryTests: XCTestCase {
         XCTAssertNil(summary.tap)
     }
 
-    func testTheAccessoryIsRunningsHomeOnACompactWidth() {
-        XCTAssertEqual(
-            AidenRunningHome.resolve(accessoryCanTurnOff: true, horizontalSizeClass: .compact),
-            .accessory
-        )
+    /// The dock's bar carries the running chats above the tabs.
+    func testTheDockCarriesRunningChatsAboveIt() {
+        XCTAssertEqual(AidenRunningHome.resolve(.dock), .accessory)
     }
 
-    /// iOS 26.0 can't turn an accessory off, so the modifier stays off there.
-    func testAnAccessoryThatCannotTurnOffIsNotUsed() {
-        XCTAssertEqual(
-            AidenRunningHome.resolve(accessoryCanTurnOff: false, horizontalSizeClass: .compact),
-            .inboxRow
-        )
-    }
-
-    /// A sidebar has no bottom accessory.
-    func testARegularWidthKeepsRunningChatsInTheInbox() {
-        XCTAssertEqual(
-            AidenRunningHome.resolve(accessoryCanTurnOff: true, horizontalSizeClass: .regular),
-            .inboxRow
-        )
+    /// A sidebar has no bottom bar, so the running chats are the Inbox's first row.
+    func testBesideTheListRunningChatsAreTheInboxsFirstRow() {
+        XCTAssertEqual(AidenRunningHome.resolve(.system), .inboxRow)
     }
 }
 #endif

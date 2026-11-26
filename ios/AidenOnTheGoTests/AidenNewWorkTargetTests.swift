@@ -57,15 +57,17 @@ final class AidenNewWorkTargetTests: XCTestCase {
         readinessWait: Duration = .seconds(30),
         draftStore: AidenChatDraftStore = .shared,
         onCreated: @escaping @MainActor (AidenChat, AidenHostObjectID) -> Void = { _, _ in },
-        onLaunch: @escaping @MainActor (AidenHostObjectID, String?) -> Void = { _, _ in }
+        onLaunch: @escaping @MainActor (AidenHostObjectID, String?) -> Void = { _, _ in },
+        onLaunchSend: @escaping @MainActor (AidenLaunchSend?) -> Void = { _ in }
     ) -> AidenNewWorkChatFlow {
         AidenNewWorkChatFlow(
             coordinator: coordinator,
             preferences: preferences,
             readinessWait: readinessWait,
             draftStore: draftStore,
-            onCreated: { chat, id, prompt in
-                onLaunch(id, prompt)
+            onCreated: { chat, id, launch in
+                onLaunch(id, launch?.prompt)
+                onLaunchSend(launch)
                 onCreated(chat, id)
             }
         )
@@ -529,6 +531,128 @@ final class AidenNewWorkTargetTests: XCTestCase {
 
         XCTAssertEqual(posts("/chats", on: "laptop"), 1)
         XCTAssertEqual(posts("/chats", on: "mini"), 0)
+    }
+
+    /// The workspace each `POST /chats` on the machine asked for, oldest first.
+    private func newChatWorkspaces(on instanceId: String) -> [String?] {
+        responder.postBodies(instanceId: instanceId, path: "/chats").map { body in
+            (try? JSONSerialization.jsonObject(with: body) as? [String: Any])?["workspaceId"] as? String
+        }
+    }
+
+    /// A Home composer aimed at Laptop, with its own saved choices.
+    private func homeOnLaptop(_ flow: AidenNewWorkChatFlow, defaults: UserDefaults = AidenDemoHosts.isolatedDefaults()) async -> AidenHomeComposerModel {
+        defaults.set("laptop", forKey: AidenHomeComposerModel.lastMachineKey)
+        let home = homeComposer(store: temporaryDraftStore(), defaults: defaults)
+        await home.restored()
+        home.aim(flow.homePicker)
+        return home
+    }
+
+    private func offerNewWorktrees() {
+        var laptop = AidenDemoHosts.installation(instanceId: "laptop", name: "Laptop")
+        laptop.deviceCapabilities += [.chatNewWorktree]
+        laptop.serverCapabilities? += [.chatNewWorktree]
+        coordinator = makeCoordinator([AidenDemoHosts.installation(instanceId: "studio", name: "Studio"), laptop])
+    }
+
+    func testHomeOffersTheMachinesFoldersButNotTheHiddenJustChatOne() async throws {
+        await connectAll()
+        let flow = flow(draftStore: temporaryDraftStore())
+
+        XCTAssertEqual(flow.homeFolders(on: "laptop").map(\.name), ["Aiden Agent", "Notes"])
+        XCTAssertEqual(flow.homeFolders(on: "nowhere").map(\.id), [])
+    }
+
+    func testHomesSendGoesIntoTheFolderChosenForItsMachine() async throws {
+        await connectAll()
+        replyToNewChat(on: "laptop", workspaceId: "workspace_notes")
+        let flow = flow(draftStore: temporaryDraftStore())
+        let home = await homeOnLaptop(flow)
+
+        home.choose(folder: "workspace_notes", on: "laptop")
+        home.session.text = "Tidy the notes"
+        home.send(using: flow)
+        await assertSettles { home.pendingSends == 0 }
+
+        XCTAssertEqual(newChatWorkspaces(on: "laptop"), ["workspace_notes"])
+    }
+
+    func testAFolderTheMachineNoLongerListsSendsAsJustChat() async throws {
+        await connectAll()
+        replyToNewChat(on: "laptop", workspaceId: "default")
+        let flow = flow(draftStore: temporaryDraftStore())
+        let home = await homeOnLaptop(flow)
+
+        home.choose(folder: "workspace_gone", on: "laptop")
+        XCTAssertNil(home.sendFolder(on: "laptop", using: flow), "The chip reads Just chat")
+        home.session.text = "Hello"
+        home.send(using: flow)
+        await assertSettles { home.pendingSends == 0 }
+
+        XCTAssertEqual(newChatWorkspaces(on: "laptop"), ["default"])
+    }
+
+    func testHomeRemembersTheFolderForEachMachineSeparately() async throws {
+        await connectAll()
+        let defaults = AidenDemoHosts.isolatedDefaults()
+        let flow = flow(draftStore: temporaryDraftStore())
+        let first = await homeOnLaptop(flow, defaults: defaults)
+        first.choose(folder: "workspace_app", on: "laptop")
+
+        let next = homeComposer(store: temporaryDraftStore(), defaults: defaults)
+
+        XCTAssertEqual(next.folder(on: "laptop"), "workspace_app")
+        XCTAssertNil(next.folder(on: "mini"), "Another machine still starts a Just chat")
+    }
+
+    func testANewWorktreeGoesWithTheSendOnlyWhereTheMachineOffersOne() async throws {
+        offerNewWorktrees()
+        await connectAll()
+        replyToNewChat(on: "laptop", workspaceId: "workspace_app")
+        var launches: [AidenLaunchSend] = []
+        let flow = flow(draftStore: temporaryDraftStore(), onLaunchSend: { if let launch = $0 { launches.append(launch) } })
+        let home = await homeOnLaptop(flow)
+
+        XCTAssertFalse(flow.homeOffersNewWorktree(in: nil, on: "laptop"), "Just chat has no folder to branch")
+        home.choose(folder: "workspace_app", on: "laptop")
+        XCTAssertTrue(flow.homeOffersNewWorktree(in: "workspace_app", on: "laptop"))
+        home.startsInNewWorktree = true
+        home.session.text = "Try the new parser"
+        home.send(using: flow)
+        XCTAssertFalse(home.startsInNewWorktree, "Each worktree is its own: the next Send starts without one")
+        await assertSettles { home.pendingSends == 0 }
+
+        XCTAssertEqual(launches, [AidenLaunchSend(prompt: "Try the new parser", inNewWorktree: true)])
+    }
+
+    func testAMachineThatDoesntOfferWorktreesSendsWithoutOne() async throws {
+        await connectAll()
+        replyToNewChat(on: "laptop", workspaceId: "workspace_app")
+        var launches: [AidenLaunchSend] = []
+        let flow = flow(draftStore: temporaryDraftStore(), onLaunchSend: { if let launch = $0 { launches.append(launch) } })
+        let home = await homeOnLaptop(flow)
+        home.choose(folder: "workspace_app", on: "laptop")
+
+        XCTAssertFalse(flow.homeOffersNewWorktree(in: "workspace_app", on: "laptop"))
+        home.startsInNewWorktree = true
+        home.session.text = "Hello"
+        home.send(using: flow)
+        await assertSettles { home.pendingSends == 0 }
+
+        XCTAssertEqual(launches, [AidenLaunchSend(prompt: "Hello", inNewWorktree: false)])
+    }
+
+    func testChoosingAnotherFolderTurnsTheNewWorktreeOff() async throws {
+        await connectAll()
+        let flow = flow(draftStore: temporaryDraftStore())
+        let home = await homeOnLaptop(flow)
+        home.choose(folder: "workspace_app", on: "laptop")
+        home.startsInNewWorktree = true
+
+        home.choose(folder: "workspace_notes", on: "laptop")
+
+        XCTAssertFalse(home.startsInNewWorktree)
     }
 
     func testAHomeSendStillOnItsWayIsBackInTheFieldAfterARelaunch() async throws {

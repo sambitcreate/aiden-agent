@@ -100,12 +100,51 @@ enum AidenStateMatrix {
         tab("Inbox", in: app)
     }
 
-    /// A tab, in a bottom bar or a sidebar.
+    /// Chats' root: Home's own header at compact width, where the navigation
+    /// bar is hidden, or the Chats list's navigation bar beside the list.
+    static func homeRoot(in app: XCUIApplication) -> XCUIElement {
+        app.descendants(matching: .any).matching(NSPredicate(
+            format: "identifier == %@ OR (elementType == %d AND identifier == %@)",
+            "aiden.home.menu", XCUIElement.ElementType.navigationBar.rawValue, "Chats"
+        )).firstMatch
+    }
+
+    /// What shows at a tab's root: Home's header for Chats, else the tab's
+    /// navigation bar.
+    static func tabRoot(_ title: String, in app: XCUIApplication) -> XCUIElement {
+        title == "Chats" ? homeRoot(in: app) : app.navigationBars[title]
+    }
+
+    /// The compact-width dock Aiden draws in place of the system tab bar.
+    static func dock(in app: XCUIApplication) -> XCUIElement {
+        app.descendants(matching: .any)["aiden.dock"].firstMatch
+    }
+
+    /// A tab in the dock, by its name. Found by identifier, since the Inbox's
+    /// name carries how many chats need the person ("Inbox, 3 chats need you").
+    static func dockTab(_ title: String, in app: XCUIApplication) -> XCUIElement {
+        app.buttons["aiden.dock.\(title.lowercased())"].firstMatch
+    }
+
+    /// The tabs' bar along the bottom: the dock at compact width, else
+    /// whatever system tab bar there is.
+    static func bottomTabs(in app: XCUIApplication) -> XCUIElement {
+        let dock = dock(in: app)
+        return dock.exists ? dock : app.tabBars.firstMatch
+    }
+
+    /// A tab, in the dock, a system bottom bar or a sidebar. Before any of
+    /// them shows, a button that will be the tab once it does.
     static func tab(_ title: String, in app: XCUIApplication) -> XCUIElement {
+        let inDock = dockTab(title, in: app)
+        if inDock.exists { return inDock }
         let inBar = app.tabBars.buttons[title].firstMatch
         if inBar.exists { return inBar }
         let inSidebar = sidebarRow(title, in: app)
-        return inSidebar.exists ? inSidebar : app.buttons[title].firstMatch
+        if inSidebar.exists { return inSidebar }
+        return app.buttons.matching(NSPredicate(
+            format: "identifier == %@ OR label == %@", "aiden.dock.\(title.lowercased())", title
+        )).firstMatch
     }
 
     /// A tab's row in the list a regular-width window shows the tabs in.
@@ -120,9 +159,11 @@ enum AidenStateMatrix {
         app.windows.allElementsBoundByIndex.last ?? app.windows.firstMatch
     }
 
-    /// Taps beside an open popover, inside the window.
+    /// Taps beside an open popover, inside the window: low on the leading
+    /// edge, where no popover reaches. A popover hung from a closed iPhone
+    /// Duo's side rail runs down most of the window, over the middle.
     static func tapOutsidePopover(in app: XCUIApplication) {
-        window(of: app).coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.75)).tap()
+        window(of: app).coordinate(withNormalizedOffset: CGVector(dx: 0.04, dy: 0.96)).tap()
     }
 
     /// Drags a bottom corner of the window to `x`, as a person resizes one.
@@ -208,11 +249,20 @@ enum AidenStateMatrix {
         _ = close.waitForNonExistence(timeout: 3)
     }
 
-    /// Switches to a tab.
+    /// Switches to a tab, or returns the chosen one to its list. With the
+    /// chosen tab's list already showing it does nothing: a tap there opens
+    /// the dock's recents instead.
     static func openArea(_ title: String, in app: XCUIApplication) {
         closeDrawer(in: app)
         let tab = tab(title, in: app)
-        if tab.waitForExistence(timeout: 10) { tab.tap() }
+        guard tab.waitForExistence(timeout: 10) else { return }
+        if tab.identifier.hasPrefix("aiden.dock."), tab.isSelected, tabRoot(title, in: app).exists { return }
+        tab.tap()
+    }
+
+    /// The recents the dock's chosen tab opens when it's tapped again.
+    static func dockRecents(in app: XCUIApplication) -> XCUIElement {
+        app.descendants(matching: .any)["aiden.dockRecents"].firstMatch
     }
 
     /// Attaches a screenshot of the whole screen. It stays in the `.xcresult`

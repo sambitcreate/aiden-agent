@@ -207,6 +207,106 @@ final class AidenShellIATests: XCTestCase {
         XCTAssertTrue(split.showsChatList)
     }
 
+    /// Each device's posture: an iPhone keeps the stack (and the dock) both
+    /// upright and sideways, so a Plus or Pro Max doesn't swap layouts as it
+    /// turns; an iPad and an open iPhone Duo set the list beside its detail.
+    func testOnlyARegularWidthThatIsNotAPhoneOnItsSideSetsTheListBesideItsDetail() {
+        XCTAssertFalse(AidenTabChrome.besideList(horizontal: .compact, vertical: .regular),
+                       "An upright iPhone or the closed Duo")
+        XCTAssertFalse(AidenTabChrome.besideList(horizontal: .regular, vertical: .compact),
+                       "A Plus or Pro Max on its side swapped to the split")
+        XCTAssertFalse(AidenTabChrome.besideList(horizontal: .compact, vertical: .compact),
+                       "A smaller iPhone on its side")
+        XCTAssertTrue(AidenTabChrome.besideList(horizontal: .regular, vertical: .regular),
+                      "An iPad or the open Duo")
+    }
+
+    /// The dock steps aside only for a keyboard docked along the bottom; a
+    /// hardware keyboard's shortcut bar, a floating keyboard or one that has
+    /// slid off the screen leave the tabs where they are.
+    func testOnlyAKeyboardAlongTheBottomEdgeTakesTheDocksPlace() {
+        let screen = CGRect(x: 0, y: 0, width: 402, height: 874)
+        func takes(_ keyboard: CGRect) -> Bool {
+            AidenTabChrome.keyboardTakesBottomEdge(keyboard: keyboard, screen: screen, window: screen)
+        }
+
+        XCTAssertTrue(takes(CGRect(x: 0, y: 874 - 336, width: 402, height: 336)))
+        XCTAssertFalse(takes(CGRect(x: 0, y: 874 - 55, width: 402, height: 55)),
+                       "A hardware keyboard's shortcut bar hid the dock")
+        XCTAssertFalse(takes(CGRect(x: 50, y: 300, width: 300, height: 250)),
+                       "A floating keyboard hid the dock")
+        XCTAssertFalse(takes(CGRect(x: 50, y: 874 - 250, width: 300, height: 250)),
+                       "A floating keyboard against the bottom edge hid the dock")
+        XCTAssertFalse(takes(CGRect(x: 0, y: 874, width: 402, height: 336)),
+                       "A keyboard below the screen hid the dock")
+    }
+
+    /// On an iPad the shell's window can be narrower or shorter than the
+    /// screen (Split View, Slide Over, Stage Manager), and the keyboard's frame
+    /// is the screen's. The dock yields only to a docked keyboard that covers
+    /// the window's bottom.
+    func testTheDockYieldsOnlyToAKeyboardOverItsOwnWindow() {
+        let screen = CGRect(x: 0, y: 0, width: 1366, height: 1024)
+        let docked = CGRect(x: 0, y: 1024 - 400, width: 1366, height: 400)
+
+        let slideOver = CGRect(x: 1366 - 340, y: 0, width: 320, height: 1024)
+        XCTAssertTrue(AidenTabChrome.keyboardTakesBottomEdge(keyboard: docked, screen: screen, window: slideOver),
+                      "A docked keyboard over a Slide Over window kept the dock")
+
+        let floatingOverSlideOver = CGRect(x: slideOver.minX, y: 1024 - 260, width: slideOver.width, height: 260)
+        XCTAssertFalse(AidenTabChrome.keyboardTakesBottomEdge(
+            keyboard: floatingOverSlideOver, screen: screen, window: slideOver),
+            "A floating keyboard as wide as a Slide Over window hid its dock")
+
+        let stageManagerAbove = CGRect(x: 200, y: 40, width: 600, height: 500)
+        XCTAssertFalse(AidenTabChrome.keyboardTakesBottomEdge(keyboard: docked, screen: screen, window: stageManagerAbove),
+                       "A keyboard below a Stage Manager window that ends above it hid the window's dock")
+
+        let stageManagerOverlapping = CGRect(x: 200, y: 300, width: 600, height: 600)
+        XCTAssertTrue(AidenTabChrome.keyboardTakesBottomEdge(
+            keyboard: docked, screen: screen, window: stageManagerOverlapping),
+            "A keyboard over a Stage Manager window's bottom kept the dock")
+    }
+
+    /// Like the system tab bar: another tab keeps where each tab was, and the
+    /// tab already open goes back to its root.
+    func testTheDockKeepsEachTabsPlaceAndAReselectReturnsToTheRoot() {
+        let navigation = AidenAppNavigation()
+        navigation.open(.chat(id("c1")))
+        XCTAssertEqual(navigation.tab, .chats)
+
+        navigation.selectFromDock(.inbox)
+        XCTAssertEqual(navigation.tab, .inbox)
+        XCTAssertEqual(navigation.chatsPath, [.chat(id("c1"))], "Leaving Chats dropped its open chat")
+
+        navigation.selectFromDock(.chats)
+        XCTAssertEqual(navigation.chatsPath, [.chat(id("c1"))], "Coming back to Chats lost its open chat")
+        XCTAssertTrue(navigation.showsConversation)
+
+        navigation.selectFromDock(.chats)
+        XCTAssertEqual(navigation.tab, .chats)
+        XCTAssertEqual(navigation.chatsPath, [], "Choosing the open tab again didn't return to its root")
+        XCTAssertFalse(navigation.showsConversation)
+    }
+
+    /// The Inbox's dot says nothing to VoiceOver, so the tab tells how many
+    /// chats wait on the person; no other tab, and no count of none, adds a value.
+    func testTheInboxTabTellsVoiceOverHowManyChatsNeedThePerson() {
+        XCTAssertNil(AidenAppTab.inbox.accessibilityCount(needsYou: 0))
+        XCTAssertEqual(AidenAppTab.inbox.accessibilityCount(needsYou: 1), "1 chat needs you")
+        XCTAssertEqual(AidenAppTab.inbox.accessibilityCount(needsYou: 4), "4 chats need you")
+        for tab in AidenAppTab.allCases where tab != .inbox {
+            XCTAssertNil(tab.accessibilityCount(needsYou: 4), "\(tab) read the Inbox's count")
+        }
+
+        // In the dock the count rides in the tab's name, since a tab's value
+        // is whether it's chosen.
+        let dock = AidenDock(selection: .chats, needsYouCount: 3, onSelect: { _ in })
+        XCTAssertEqual(dock.accessibilityName(of: .inbox), "Inbox, 3 chats need you")
+        XCTAssertEqual(dock.accessibilityName(of: .bots), "Bots")
+        XCTAssertEqual(AidenDock(selection: .inbox, needsYouCount: 0, onSelect: { _ in }).accessibilityName(of: .inbox), "Inbox")
+    }
+
     /// A notification's chat opens beside Chats' list. With a page pushed over
     /// it, the Inbox still counts it as open, so its replies aren't news.
     func testAChatSelectedBesideTheChatsListCountsAsOpenUnderAPage() {
@@ -299,6 +399,92 @@ final class AidenShellIATests: XCTestCase {
 
         XCTAssertEqual(entries.map(\.title), ["Chat 0", "Chat 1", "Chat 2"])
         XCTAssertEqual(AidenChatsList.entries(snapshots: [snapshot("studio", chats: chats)], hiddenMachines: [], limit: -1), [])
+    }
+
+    // MARK: Drawer reveal
+
+    func testTheDrawerTakesTheConceptsShareAndLeavesASliceOfHome() {
+        // A Pro Max-class screen, as drawn: 330 of its 402 points.
+        XCTAssertEqual(AidenDrawerGeometry.width(in: 402), 330)
+        // A narrow screen keeps a slice of Home in view to tap.
+        XCTAssertEqual(AidenDrawerGeometry.width(in: 320), 263)
+        XCTAssertGreaterThanOrEqual(320 - AidenDrawerGeometry.width(in: 320), 56)
+        XCTAssertEqual(AidenDrawerGeometry.width(in: 60), 4)
+        // A wide one stops growing it.
+        XCTAssertEqual(AidenDrawerGeometry.width(in: 700), 360)
+        XCTAssertEqual(AidenDrawerGeometry.width(in: 0), 0)
+    }
+
+    func testSidewaysTheDrawerStartsPastTheCameraAndHomeMovesPastBoth() {
+        // A Pro Max held sideways: 956 wide, 62 of them beside the camera.
+        let column = AidenDrawerGeometry.width(in: 956, leadingInset: 62)
+        XCTAssertEqual(column, 360)
+        // Home clears the inset and the whole column, so nothing of the drawer sits under it.
+        XCTAssertEqual(AidenDrawerGeometry.travel(in: 956, leadingInset: 62), 422)
+        // Upright there's no inset and Home moves by the column alone.
+        XCTAssertEqual(AidenDrawerGeometry.travel(in: 402, leadingInset: 0), 330)
+        // A slice of Home stays in view past the inset too.
+        let narrow = AidenDrawerGeometry.travel(in: 400, leadingInset: 62)
+        XCTAssertGreaterThanOrEqual(400 - narrow, AidenDrawerGeometry.minimumSlice)
+        XCTAssertEqual(AidenDrawerGeometry.travel(in: 50, leadingInset: 62), 0)
+    }
+
+    func testTheRevealFollowsTheFingerAndStaysInRange() {
+        let width: CGFloat = 330
+        XCTAssertEqual(AidenDrawerGeometry.progress(start: 0, translation: 165, width: width, rightToLeft: false), 0.5)
+        XCTAssertEqual(AidenDrawerGeometry.progress(start: 0, translation: 500, width: width, rightToLeft: false), 1)
+        XCTAssertEqual(AidenDrawerGeometry.progress(start: 0, translation: -40, width: width, rightToLeft: false), 0)
+        // Dragging an open drawer back toward the leading edge closes it.
+        XCTAssertEqual(AidenDrawerGeometry.progress(start: 1, translation: -66, width: width, rightToLeft: false), 0.8, accuracy: 0.0001)
+        // Right to left, the leading edge is on the right, so the finger moves left.
+        XCTAssertEqual(AidenDrawerGeometry.progress(start: 0, translation: -165, width: width, rightToLeft: true), 0.5)
+        XCTAssertEqual(AidenDrawerGeometry.progress(start: 0, translation: 165, width: width, rightToLeft: true), 0)
+    }
+
+    func testMeasuringTheDrawersOwnScreenMidSwipeKeepsHomeWhereItIs() {
+        let reveal = AidenDrawerReveal()
+        // A closed Duo: the shell sees the whole screen, the drawer's cover a
+        // narrower one beside the system rail.
+        reveal.measure(screen: .init(width: 402, leadingInset: 0))
+        reveal.progress = 0.5
+        let before = AidenDrawerGeometry.contentOffset(progress: reveal.progress, travel: reveal.travel, reduceMotion: false)
+        XCTAssertEqual(before, 165)
+        reveal.measure(drawer: .init(width: 360, leadingInset: 0))
+        XCTAssertNotEqual(reveal.travel, 330)
+        let after = AidenDrawerGeometry.contentOffset(progress: reveal.progress, travel: reveal.travel, reduceMotion: false)
+        XCTAssertEqual(after, before, accuracy: 0.001)
+        // Shut stays shut and open stays open, at the new width.
+        reveal.progress = 1
+        reveal.measure(drawer: nil)
+        XCTAssertEqual(reveal.progress, 1)
+        reveal.progress = 0
+        reveal.measure(drawer: .init(width: 360, leadingInset: 0))
+        XCTAssertEqual(reveal.progress, 0)
+    }
+
+    func testLettingGoSettlesByPositionUnlessItWasAFlick() {
+        let width: CGFloat = 330
+        // Slow: whichever side of halfway it would coast to.
+        XCTAssertTrue(AidenDrawerGeometry.settlesOpen(progress: 0.6, velocity: 0, width: width, rightToLeft: false))
+        XCTAssertFalse(AidenDrawerGeometry.settlesOpen(progress: 0.4, velocity: 0, width: width, rightToLeft: false))
+        // A modest push carries a 40% reveal past halfway.
+        XCTAssertTrue(AidenDrawerGeometry.settlesOpen(progress: 0.4, velocity: 300, width: width, rightToLeft: false))
+        // A flick wins whatever the position.
+        XCTAssertTrue(AidenDrawerGeometry.settlesOpen(progress: 0.1, velocity: 900, width: width, rightToLeft: false))
+        XCTAssertFalse(AidenDrawerGeometry.settlesOpen(progress: 0.9, velocity: -900, width: width, rightToLeft: false))
+        // Right to left, a flick to the left opens it.
+        XCTAssertTrue(AidenDrawerGeometry.settlesOpen(progress: 0.1, velocity: -900, width: width, rightToLeft: true))
+        XCTAssertFalse(AidenDrawerGeometry.settlesOpen(progress: 0.9, velocity: 900, width: width, rightToLeft: true))
+    }
+
+    func testHomeSlidesByTheRevealAndHoldsStillUnderReduceMotion() {
+        XCTAssertEqual(AidenDrawerGeometry.contentOffset(progress: 0.5, travel: 330, reduceMotion: false), 165)
+        XCTAssertEqual(AidenDrawerGeometry.contentOffset(progress: 1.4, travel: 330, reduceMotion: false), 330)
+        XCTAssertEqual(AidenDrawerGeometry.contentOffset(progress: 1, travel: 330, reduceMotion: true), 0)
+        // The drawer drifts in from a little behind, and is in place once open.
+        XCTAssertLessThan(AidenDrawerGeometry.drawerOffset(progress: 0, width: 330, reduceMotion: false), 0)
+        XCTAssertEqual(AidenDrawerGeometry.drawerOffset(progress: 1, width: 330, reduceMotion: false), 0)
+        XCTAssertEqual(AidenDrawerGeometry.drawerOffset(progress: 0, width: 330, reduceMotion: true), 0)
     }
 
     // MARK: Pins

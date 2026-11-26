@@ -2363,10 +2363,15 @@ final class AidenChatViewModel {
 
     /// Home's Send: `prompt` goes in the composer now and is sent once the
     /// chat can send (`sendForLaunch()`), with no second press.
-    func queueLaunchSend(_ prompt: String) {
+    func queueLaunchSend(_ launch: AidenLaunchSend) {
+        let prompt = launch.prompt
         guard !prompt.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
         launchSendPrompt = prompt
         hasLaunchSend = true
+        // Home chose New worktree: the first message makes it, as the chip in
+        // the chat would. Send drops it with a reason if the chat stops
+        // qualifying first.
+        if launch.inNewWorktree { startsInNewWorktree = true }
         if draft.isEmpty, pendingAttachments.isEmpty { draft = prompt }
     }
 

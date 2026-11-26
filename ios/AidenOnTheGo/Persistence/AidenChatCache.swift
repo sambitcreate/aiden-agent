@@ -2,7 +2,18 @@ import CryptoKit
 import Foundation
 
 actor AidenChatCache {
-    static let shared = AidenChatCache()
+    static let shared: AidenChatCache = {
+#if DEBUG
+        // A demo run starts with an empty cache and keeps its chats and running
+        // streams out of the person's real ones, so one run's turn is never
+        // restored into the next run's chat of the same id.
+        if AidenDemoScenario.requested(in: ProcessInfo.processInfo.arguments) != nil {
+            return AidenChatCache(root: FileManager.default.temporaryDirectory
+                .appending(path: "AidenDemoChatCache-\(UUID().uuidString)", directoryHint: .isDirectory))
+        }
+#endif
+        return AidenChatCache()
+    }()
 
     struct SummarySnapshot: Codable, Equatable, Sendable {
         let summaries: [AidenChatSummary]

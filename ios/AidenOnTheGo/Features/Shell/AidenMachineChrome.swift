@@ -490,13 +490,17 @@ struct AidenHostStatusItem: View {
 extension EnvironmentValues {
     /// The name a conversation's toolbar shows under its title. Nil says nothing.
     @Entry var aidenConversationMachine: String?
-    /// The tab bar while a conversation is on screen. Hidden on a stack, where the
-    /// composer owns the bottom edge; a list beside its detail keeps it, since
-    /// the list stays up and the tabs must stay reachable from it.
+    /// The system tab bar while a conversation is on screen beside its list,
+    /// which keeps it, since the list stays up and the tabs must stay reachable
+    /// from it. On a stack Aiden's dock stands in (`aidenUsesDock`) and the
+    /// system bar stays hidden whatever this says.
     @Entry var aidenConversationTabBar: Visibility = .hidden
     /// Whether the system puts its bars in a rail at the side, as on a closed
     /// iPhone Duo. Set once by the shell, above every tab's stack.
     @Entry var aidenTabsInSideRail = false
+    /// Whether Aiden's own dock stands in for the system tab bar, as at compact
+    /// width. Set once by the shell, above every tab's stack.
+    @Entry var aidenUsesDock = false
 }
 
 extension View {
@@ -504,6 +508,7 @@ extension View {
     /// `aidenConversationTabBar` says. Where the bars sit in a side rail the
     /// tabs stay: they cover nothing there, and with them hidden the rail
     /// turns opaque white or black instead of showing the canvas under it.
+    /// Where the dock stands in for the tab bar the system's stays hidden.
     func aidenConversationTabBar() -> some View {
         modifier(AidenConversationTabBarModifier())
     }
@@ -512,9 +517,10 @@ extension View {
 private struct AidenConversationTabBarModifier: ViewModifier {
     @Environment(\.aidenConversationTabBar) private var tabBar
     @Environment(\.aidenTabsInSideRail) private var tabsInSideRail
+    @Environment(\.aidenUsesDock) private var usesDock
 
     func body(content: Content) -> some View {
-        content.toolbar(tabsInSideRail ? .automatic : tabBar, for: .tabBar)
+        content.toolbar(usesDock ? .hidden : tabsInSideRail ? .automatic : tabBar, for: .tabBar)
     }
 }
 
