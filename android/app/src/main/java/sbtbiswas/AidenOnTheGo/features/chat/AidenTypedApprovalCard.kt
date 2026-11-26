@@ -1,9 +1,12 @@
 package sbtbiswas.AidenOnTheGo.features.chat
 
+import androidx.compose.animation.Crossfade
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -23,10 +26,13 @@ import androidx.compose.material.icons.outlined.EditNote
 import androidx.compose.material.icons.outlined.FolderOpen
 import androidx.compose.material.icons.outlined.Info
 import androidx.compose.material.icons.outlined.Layers
+import androidx.compose.material.icons.outlined.SwapHoriz
 import androidx.compose.material.icons.outlined.Terminal
 import androidx.compose.material.icons.outlined.VerifiedUser
+import androidx.compose.material.icons.outlined.WarningAmber
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
@@ -43,6 +49,7 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.heading
 import androidx.compose.ui.semantics.liveRegion
 import androidx.compose.ui.semantics.LiveRegionMode
+import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
@@ -54,14 +61,18 @@ import sbtbiswas.AidenOnTheGo.models.AidenApprovalCard
 import sbtbiswas.AidenOnTheGo.models.AidenApprovalCardButton
 import sbtbiswas.AidenOnTheGo.models.AidenApprovalCardKind
 import sbtbiswas.AidenOnTheGo.models.AidenApprovalCardMac
+import sbtbiswas.AidenOnTheGo.models.AidenApprovalCardTag
+import sbtbiswas.AidenOnTheGo.models.AidenApprovalCardTagTone
 import sbtbiswas.AidenOnTheGo.models.AidenApprovalCardText
 import sbtbiswas.AidenOnTheGo.models.AidenApprovalCardTextFormat
 import sbtbiswas.AidenOnTheGo.ui.theme.AidenConnectedColumn
+import sbtbiswas.AidenOnTheGo.ui.theme.AidenMotion
 import sbtbiswas.AidenOnTheGo.ui.theme.AidenPrimaryButton
 import sbtbiswas.AidenOnTheGo.ui.theme.AidenSplitButton
 import sbtbiswas.AidenOnTheGo.ui.theme.AidenTheme
 import sbtbiswas.AidenOnTheGo.ui.theme.AidenTonalButton
 import sbtbiswas.AidenOnTheGo.ui.theme.aidenGroupItemShape
+import sbtbiswas.AidenOnTheGo.ui.theme.aidenReduceMotion
 
 private val TypedActionHeight = 48.dp
 private val TypedTextMaxHeight = 220.dp
@@ -104,7 +115,12 @@ fun AidenTypedApprovalCardContent(
         )
         val sections = buildList<@Composable () -> Unit> {
             if (card.arguments.isNotEmpty()) add { TypedPairs(card.arguments.map { it.key to it.value }) }
-            card.body?.let { body -> add { TypedText(label = null, text = body, resetKey = resetKey) } }
+            card.body?.let { body ->
+                val explanation = card.explanation
+                // Revision 69: a shell card with plain words opens on them; the command is one flip away.
+                if (explanation != null) add { TypedPlainWords(explanation = explanation, command = body, resetKey = resetKey) }
+                else add { TypedText(label = null, text = body, resetKey = resetKey) }
+            }
             card.previous?.let { previous ->
                 add { TypedText(label = stringResource(R.string.approval_card_previous), text = previous, resetKey = resetKey) }
             }
@@ -119,6 +135,10 @@ fun AidenTypedApprovalCardContent(
                     }
                 }
             }
+        }
+        card.tags?.takeIf { it.isNotEmpty() }?.let { tags ->
+            Spacer(Modifier.height(10.dp))
+            TypedTags(tags)
         }
         card.notes?.forEach { note ->
             Spacer(Modifier.height(10.dp))
@@ -224,10 +244,10 @@ private fun TypedPairs(pairs: List<Pair<String, String>>) {
 
 /** The body or the previous text: a command in monospace, prose as text; long ones scroll in place. */
 @Composable
-private fun TypedText(label: String?, text: AidenApprovalCardText, resetKey: Any) {
+private fun TypedText(label: String?, text: AidenApprovalCardText, resetKey: Any, trailingRoom: Boolean = false) {
     val palette = AidenTheme.palette
     val scroll = key(resetKey) { rememberScrollState() }
-    Column(Modifier.fillMaxWidth().padding(14.dp)) {
+    Column(Modifier.fillMaxWidth().padding(start = 14.dp, top = 14.dp, bottom = 14.dp, end = if (trailingRoom) 52.dp else 14.dp)) {
         if (label != null) {
             Text(
                 label,
@@ -247,6 +267,71 @@ private fun TypedText(label: String?, text: AidenApprovalCardText, resetKey: Any
                 },
                 color = if (label != null) palette.secondary else palette.foreground
             )
+        }
+    }
+}
+
+/**
+ * Revision 69: what the command will do, in the model's words, with a flip to the exact command
+ * and back. It always opens on the words; flipping never answers the card.
+ */
+@Composable
+private fun TypedPlainWords(explanation: String, command: AidenApprovalCardText, resetKey: Any) {
+    val palette = AidenTheme.palette
+    var showCommand by remember(resetKey) { mutableStateOf(false) }
+    val flipLabel = stringResource(if (showCommand) R.string.approval_card_show_words else R.string.approval_card_show_command)
+    Box(Modifier.fillMaxWidth()) {
+        Crossfade(targetState = showCommand, animationSpec = AidenMotion.short(aidenReduceMotion()), label = "approval-flip") { commandSide ->
+            if (commandSide) {
+                TypedText(label = stringResource(R.string.approval_card_command), text = command, resetKey = resetKey, trailingRoom = true)
+            } else {
+                Column(Modifier.fillMaxWidth().padding(start = 14.dp, top = 14.dp, bottom = 14.dp, end = 52.dp)) {
+                    Text(
+                        stringResource(R.string.approval_card_what_it_will_do),
+                        style = MaterialTheme.typography.labelMedium,
+                        fontWeight = FontWeight.SemiBold,
+                        color = palette.secondary,
+                        modifier = Modifier.padding(bottom = 6.dp).semantics { heading() }
+                    )
+                    Text(explanation, style = MaterialTheme.typography.bodyMedium, color = palette.foreground)
+                }
+            }
+        }
+        IconButton(
+            onClick = { showCommand = !showCommand },
+            modifier = Modifier.align(Alignment.TopEnd).padding(2.dp).semantics { contentDescription = flipLabel }
+        ) {
+            Icon(Icons.Outlined.SwapHoriz, contentDescription = null, tint = palette.secondary, modifier = Modifier.size(20.dp))
+        }
+    }
+}
+
+/** Revision 69: Aiden's own tags for the command, soft red for a risky step and grey for a calm one. */
+@OptIn(ExperimentalLayoutApi::class)
+@Composable
+private fun TypedTags(tags: List<AidenApprovalCardTag>) {
+    val palette = AidenTheme.palette
+    val listLabel = stringResource(R.string.approval_card_tags)
+    FlowRow(
+        Modifier.fillMaxWidth().semantics { contentDescription = listLabel },
+        horizontalArrangement = Arrangement.spacedBy(6.dp, Alignment.CenterHorizontally),
+        verticalArrangement = Arrangement.spacedBy(6.dp)
+    ) {
+        tags.forEach { tag ->
+            val risk = tag.tone == AidenApprovalCardTagTone.RISK
+            val ink = if (risk) palette.danger else palette.secondary
+            Row(
+                Modifier
+                    .background(if (risk) palette.danger.copy(alpha = 0.12f) else palette.canvas, RoundedCornerShape(8.dp))
+                    .padding(horizontal = 8.dp, vertical = 4.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                if (risk) {
+                    Icon(Icons.Outlined.WarningAmber, contentDescription = null, tint = ink, modifier = Modifier.size(14.dp))
+                    Spacer(Modifier.width(4.dp))
+                }
+                Text(tag.label, style = MaterialTheme.typography.labelMedium, color = ink)
+            }
         }
     }
 }

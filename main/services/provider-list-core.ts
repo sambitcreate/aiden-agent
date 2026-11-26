@@ -1,10 +1,10 @@
 import {
   OPENAI_CODEX_BASE_URL,
-  OPENAI_CODEX_DEFAULT_MODEL,
   OPENAI_CODEX_PROVIDER_ID,
   OPENAI_CODEX_PROVIDER_LABEL,
   type CodexProviderSnapshot,
 } from "./codex-provider.js";
+import { piDefaultModelFor } from "./pi-default-models.js";
 import type { Provider } from "./types.js";
 import type { NotificationChannel } from "../../renderer/preload-channels.js";
 
@@ -56,9 +56,7 @@ export function mergeCodexProvider(
   if (!snapshot?.configured || snapshot.needsAttention) return legacyProviders;
 
   const modelIds = [...new Set(snapshot.models.map((model) => model.id))];
-  const defaultModel = modelIds.includes(OPENAI_CODEX_DEFAULT_MODEL)
-    ? OPENAI_CODEX_DEFAULT_MODEL
-    : modelIds[0];
+  const defaultModel = piDefaultModelFor(OPENAI_CODEX_PROVIDER_ID, modelIds);
   return [
     ...legacyProviders,
     {

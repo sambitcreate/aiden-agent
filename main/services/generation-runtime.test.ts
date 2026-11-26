@@ -194,6 +194,44 @@ test("model thinking preserves native normalization and honors generic Pi reason
     ),
     "off",
   );
+  assert.equal(
+    resolveGenerationThinkingLevel(
+      "google",
+      {
+        reasoning: true,
+        thinkingLevelMap: {
+          off: null,
+          minimal: null,
+          low: "low",
+          medium: "medium",
+          high: "high",
+          xhigh: "xhigh",
+          max: null,
+        },
+      },
+      "xhigh",
+    ),
+    "xhigh",
+  );
+  assert.equal(
+    resolveGenerationThinkingLevel(
+      "google",
+      {
+        reasoning: true,
+        thinkingLevelMap: {
+          off: null,
+          minimal: null,
+          low: "low",
+          medium: "medium",
+          high: "high",
+          xhigh: null,
+          max: null,
+        },
+      },
+      "xhigh",
+    ),
+    "off",
+  );
 });
 
 test("clears transient agent state before bounded helper teardown", async () => {

@@ -1,11 +1,22 @@
-import "./test-dom";
+import { installBotTestIpc } from "./test-dom";
 import assert from "node:assert/strict";
 import { afterEach, test } from "node:test";
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { DEFAULT_BOT_AVATAR } from "../../shared/bots";
+import { botBubbleStore } from "../../lib/bot-bubbles-api";
+import { EMPTY_BOT_BUBBLE_STATE, type BotBubbleState } from "../../shared/bot-bubbles";
 import { BotChatActions, BotChatNamePill } from "./bot-chat-header";
 
-afterEach(cleanup);
+afterEach(() => {
+  cleanup();
+  botBubbleStore.accept(EMPTY_BOT_BUBBLE_STATE);
+});
+
+/** Main's bubble state as this window last heard it. */
+function bubbles(patch: Partial<BotBubbleState>) {
+  act(() => botBubbleStore.accept({ ...EMPTY_BOT_BUBBLE_STATE, host: "window", ...patch }));
+}
+const HEAD = { botId: "b1", placement: { side: "right" as const, y: 0.3, displayId: null } };
 
 const bot = { id: "b1", name: "SLMob", avatar: { ...DEFAULT_BOT_AVATAR } };
 
@@ -125,4 +136,51 @@ test("a menu whose action fails still gives focus back to •••", async () =
   }
   await waitFor(() => assert.equal(screen.queryByRole("menu") === null, true));
   await waitFor(() => assert.equal(document.activeElement === more, true));
+});
+
+test("with bubbles off there is no bubble button and the menu offers no bubble items", async () => {
+  await renderHeader();
+  // Heads hidden by the setting stay in the list; nothing here offers them.
+  bubbles({ host: "off", bubbles: [HEAD] });
+  assert.equal(screen.queryByRole("button", { name: "Bubble SLMob" }), null);
+  assert.deepEqual(await openMenu(), ["Pin to top", "Pause Bot", "Delete Bot"]);
+});
+
+test("the bubble button shrinks this Bot's chat into a head and hides once it is bubbled", async () => {
+  const calls = installBotTestIpc({
+    "bots:bubbles:bubble": () => ({ ...EMPTY_BOT_BUBBLE_STATE, host: "window", bubbles: [HEAD] }),
+  });
+  await renderHeader();
+  bubbles({});
+  const button = screen.getByRole("button", { name: "Bubble SLMob" });
+  await act(async () => fireEvent.click(button));
+  assert.deepEqual(
+    calls.filter((call) => call.channel === "bots:bubbles:bubble").map((call) => call.args),
+    [[{ botId: "b1" }]],
+  );
+  await waitFor(() => assert.equal(screen.queryByRole("button", { name: "Bubble SLMob" }), null));
+});
+
+test("the menu offers Bubble, and for a bubbled Bot Open bubble and Bring back to window", async () => {
+  const calls = await renderHeader();
+  bubbles({});
+  assert.deepEqual(await openMenu(), ["Pin to top", "Pause Bot", "Bubble", "Delete Bot"]);
+  fireEvent.click(screen.getByRole("menuitem", { name: "Bubble" }));
+  assert.deepEqual(calls, ["bubble"]);
+
+  bubbles({ bubbles: [HEAD] });
+  assert.deepEqual(await openMenu(), ["Pin to top", "Pause Bot", "Open bubble", "Bring back to window", "Delete Bot"]);
+  fireEvent.click(screen.getByRole("menuitem", { name: "Bring back to window" }));
+  await waitFor(() => assert.equal(screen.queryByRole("menu"), null));
+  await openMenu();
+  fireEvent.click(screen.getByRole("menuitem", { name: "Open bubble" }));
+  assert.deepEqual(calls, ["bubble", "bringBack", "openBubble"]);
+});
+
+test("a Bot in the recent list is offered Bubble again", async () => {
+  const calls = await renderHeader();
+  bubbles({ recents: ["b1"] });
+  assert.deepEqual(await openMenu(), ["Pin to top", "Pause Bot", "Bubble again", "Delete Bot"]);
+  fireEvent.click(screen.getByRole("menuitem", { name: "Bubble again" }));
+  assert.deepEqual(calls, ["bubble"]);
 });

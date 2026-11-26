@@ -617,14 +617,8 @@ final class AidenScheduledTasksModel {
         return left.name.localizedCaseInsensitiveCompare(right.name) == .orderedAscending
     }
 
-    private static func isAmbiguous(_ error: Error) -> Bool {
-        if error is URLError { return true }
-        guard let error = error as? AidenRemoteClientError else { return false }
-        switch error {
-        case .invalidResponse, .unexpectedStatus: return true
-        case .server(_, let body): return body.code.rawValue == "idempotency_in_flight" || body.code.rawValue == "internal_error"
-        case .invalidEndpoint, .missingCredential, .missingTrustConfiguration, .installationChanged: return false
-        }
+    static func isAmbiguous(_ error: Error) -> Bool {
+        AidenRemoteFailureClassification.isAmbiguous(error, policy: .cachedRejectionLedger)
     }
 }
 

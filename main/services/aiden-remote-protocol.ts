@@ -17,6 +17,16 @@ import {
   type AidenRemoteApprovalSchedule,
 } from "./aiden-remote-approval-schedule.js";
 import { parseGenerationTimeline, type GenerationTimeline } from "../../renderer/shared/generation-timeline.js";
+import {
+  GENERATION_THINKING_LEVELS,
+  type GenerationThinkingLevel,
+} from "../../renderer/shared/generation-thinking.js";
+import {
+  AGENT_SLIDER_LABEL_MAX,
+  AGENT_SLIDER_MAX_STOPS,
+  AGENT_SLIDER_MIN_STOPS,
+  agentSliderLabelProblem,
+} from "../../renderer/shared/agent-slider.js";
 import type {
   ChatRunInputMode,
   ChatRunInputRejectionReason,
@@ -371,7 +381,62 @@ export const AIDEN_REMOTE_CONTINUE_IN_NEW_CHAT_CONTRACT_REVISION = 64 as const;
  * payload so closed decoders on revision <= 64 stay valid.
  */
 export const AIDEN_REMOTE_STREAM_SNAPSHOT_REASONS_CONTRACT_REVISION = 65 as const;
-export const AIDEN_REMOTE_CONTRACT_REVISION = AIDEN_REMOTE_STREAM_SNAPSHOT_REASONS_CONTRACT_REVISION;
+/**
+ * Contract revision 66 (claimed at merge on 2026-11-25): host feed Bot rows may
+ * carry `preview`, the one plain line the host's own Bots list shows under the
+ * Bot's name (at most 140 characters), and a host now sends `lastReplyAt` for
+ * every Bot rather than only Bots whose chat is open there, marking each row
+ * whose summary it read `summarized: true`. Display-only, no
+ * capability or feature token; older desktops ignore the key, and phones don't
+ * read the host feed.
+ */
+export const AIDEN_REMOTE_BOT_FEED_PREVIEW_CONTRACT_REVISION = 66 as const;
+/**
+ * Contract revision 67 (claimed at merge on 2026-11-25): two Bot session routes.
+ * `GET /bots/{botId}/session/entries?before=&limit=` pages the transcript
+ * back from an entry the device already has, so a chat can show more than the
+ * snapshot's window. `POST /bots/{botId}/queued/{submissionId}/withdraw`
+ * takes back one of the person's queued messages before its turn starts.
+ * Neither has a feature token, since the server feature list is full: a host
+ * older than this revision answers both with 404, and the client says so.
+ */
+export const AIDEN_REMOTE_BOT_SESSION_PAGES_CONTRACT_REVISION = 67 as const;
+/**
+ * Contract revision 68 (claimed at merge on 2026-11-25):
+ * the `bot:needs-you` opt-in. A device holding it reads `needsYou: true` on a
+ * `GET /bots` summary while an approval, a question, a hand-off or an open
+ * issue waits on the person, the same signal the host feed's Bot rows carry
+ * (revision 52). Devices without it keep the summary shape they know, since
+ * Android's Bot decoder refuses unknown keys.
+ */
+export const AIDEN_REMOTE_BOT_NEEDS_YOU_CONTRACT_REVISION = 68 as const;
+/**
+ * Contract revision 69 (claimed at merge on 2026-11-25, after `bot:needs-you`
+ * took 68):
+ * plain-words command approvals (`approval:plain-words`, an opt-in that
+ * needs `approval:cards`).
+ * A holder's shell card (`kind: "mac"`, `mac: "shell"`, a `command` body) may
+ * carry `explanation`, the model's one-line description of the command, and
+ * `tags`, Aiden's own reading of the command text (`{label, tone: "calm" |
+ * "risk"}`, risky first). Display-only: the body stays the exact command,
+ * buttons and `canAllow` are unchanged, and closed revision-69 decoders never
+ * see the two keys.
+ */
+export const AIDEN_REMOTE_APPROVAL_PLAIN_WORDS_CONTRACT_REVISION = 69 as const;
+/**
+ * Contract revision 70 (claimed when written as 66, then 68 and 69; re-claimed
+ * as 70 at merge because `main`'s `approval:plain-words` took 69; recheck
+ * against `main` at merge by changing only this constant): the Agent Slider on
+ * phones. `GET /models` carries an optional `agentSlider` (its stops, the home
+ * stop and each stop's availability on this host); chat projections carry the
+ * chat's own `thinkingLevel`; and a device holding the opt-in
+ * `chat:agent-slider` has each turn's thinking level saved as the chat's own,
+ * with its provider and model, in the same write as the turn's message. Both
+ * new fields are additive, so closed decoders on revision <= 69 that ignore
+ * unknown keys stay valid.
+ */
+export const AIDEN_REMOTE_AGENT_SLIDER_CONTRACT_REVISION = 70 as const;
+export const AIDEN_REMOTE_CONTRACT_REVISION = AIDEN_REMOTE_AGENT_SLIDER_CONTRACT_REVISION;
 export const AIDEN_REMOTE_BASE_PATH = "/api/aiden/v1" as const;
 export const AIDEN_REMOTE_MAX_SSE_FRAME_BYTES = 1_048_576;
 export const AIDEN_REMOTE_MAX_JSON_RESPONSE_BYTES = 1_048_576;
@@ -600,6 +665,12 @@ export const AIDEN_REMOTE_BOT_WATCH_CAPABILITIES = ["bot:watches"] as const;
 export const AIDEN_REMOTE_BOT_OPEN_WORK_CAPABILITIES = ["bot:open-work"] as const;
 export const AIDEN_REMOTE_BOT_ROUTINE_MODEL_CAPABILITIES = ["bot:routine-models"] as const;
 export const AIDEN_REMOTE_BOT_PEER_CAPABILITIES = ["bot:peers"] as const;
+/**
+ * Contract revision 68: a device holding `bot:needs-you` reads `needsYou: true`
+ * on `GET /bots` summaries for a Bot waiting on the person. It grants no
+ * authority; any device type may hold it.
+ */
+export const AIDEN_REMOTE_BOT_NEEDS_YOU_CAPABILITIES = ["bot:needs-you"] as const;
 
 export type AidenRemoteBotIssueCapability = (typeof AIDEN_REMOTE_BOT_ISSUE_CAPABILITIES)[number];
 
@@ -629,6 +700,7 @@ export const AIDEN_REMOTE_BOT_OPT_IN_CAPABILITIES = [
   ...AIDEN_REMOTE_BOT_OPEN_WORK_CAPABILITIES,
   ...AIDEN_REMOTE_BOT_ROUTINE_MODEL_CAPABILITIES,
   ...AIDEN_REMOTE_BOT_PEER_CAPABILITIES,
+  ...AIDEN_REMOTE_BOT_NEEDS_YOU_CAPABILITIES,
   ...AIDEN_REMOTE_BOT_SETTINGS_CHANGE_CAPABILITIES,
   ...AIDEN_REMOTE_BOT_SUGGESTION_CAPABILITIES,
   ...AIDEN_REMOTE_BOT_TEMPLATE_CAPABILITIES,
@@ -702,6 +774,24 @@ export const AIDEN_REMOTE_CHAT_CONTINUE_CAPABILITIES = ["chat:continue-in-new-ch
 export const AIDEN_REMOTE_STREAM_SNAPSHOT_REASON_CAPABILITIES = ["stream:snapshot-reasons"] as const;
 
 /**
+ * Contract revision 69: a device holding `approval:plain-words` (with
+ * `approval:cards`) receives `explanation` and `tags` on shell approval cards.
+ * Display-only, no authority of its own.
+ */
+export const AIDEN_REMOTE_APPROVAL_PLAIN_WORDS_CAPABILITIES = ["approval:plain-words"] as const;
+
+/**
+ * Contract revision 70: a device holding `chat:agent-slider` has each turn's
+ * thinking level saved as the chat's own, with the provider and model every
+ * turn already saves, in the same write as the turn's message (so a refused
+ * send changes nothing). The chat then stays on the stop the person chose, as
+ * on the desktop. A turn that names no level clears the chat's own level.
+ * Offered while the host saves a chat's own level; it needs `chat:write` like any
+ * turn and widens nothing that grant allows.
+ */
+export const AIDEN_REMOTE_AGENT_SLIDER_CAPABILITIES = ["chat:agent-slider"] as const;
+
+/**
  * Every opt-in a paired device may persist. Each changes what a device is
  * shown; `chat:jobs` also opens its two routes, which still need the chat
  * grant (`chat:read`, `chat:write`); `attachments:raw` opens a second body
@@ -721,6 +811,8 @@ export const AIDEN_REMOTE_OPT_IN_CAPABILITIES = [
   ...AIDEN_REMOTE_APPROVAL_SETTINGS_CAPABILITIES,
   ...AIDEN_REMOTE_CHAT_CONTINUE_CAPABILITIES,
   ...AIDEN_REMOTE_STREAM_SNAPSHOT_REASON_CAPABILITIES,
+  ...AIDEN_REMOTE_APPROVAL_PLAIN_WORDS_CAPABILITIES,
+  ...AIDEN_REMOTE_AGENT_SLIDER_CAPABILITIES,
 ] as const;
 
 /** Vocabulary a paired device may add after pairing through `POST /device/capabilities`. */
@@ -742,6 +834,7 @@ export const AIDEN_REMOTE_NEGOTIABLE_CAPABILITIES = [
   ...AIDEN_REMOTE_BOT_OPEN_WORK_CAPABILITIES,
   ...AIDEN_REMOTE_BOT_ROUTINE_MODEL_CAPABILITIES,
   ...AIDEN_REMOTE_BOT_PEER_CAPABILITIES,
+  ...AIDEN_REMOTE_BOT_NEEDS_YOU_CAPABILITIES,
   ...AIDEN_REMOTE_SCHEDULE_CARD_CAPABILITIES,
   ...AIDEN_REMOTE_CHAT_JOB_CAPABILITIES,
   ...AIDEN_REMOTE_RAW_UPLOAD_CAPABILITIES,
@@ -753,6 +846,8 @@ export const AIDEN_REMOTE_NEGOTIABLE_CAPABILITIES = [
   ...AIDEN_REMOTE_APPROVAL_SETTINGS_CAPABILITIES,
   ...AIDEN_REMOTE_CHAT_CONTINUE_CAPABILITIES,
   ...AIDEN_REMOTE_STREAM_SNAPSHOT_REASON_CAPABILITIES,
+  ...AIDEN_REMOTE_APPROVAL_PLAIN_WORDS_CAPABILITIES,
+  ...AIDEN_REMOTE_AGENT_SLIDER_CAPABILITIES,
 ] as const;
 
 export type AidenRemoteNegotiableCapability =
@@ -778,6 +873,7 @@ export const AIDEN_REMOTE_CAPABILITIES = [
   ...AIDEN_REMOTE_BOT_OPEN_WORK_CAPABILITIES,
   ...AIDEN_REMOTE_BOT_ROUTINE_MODEL_CAPABILITIES,
   ...AIDEN_REMOTE_BOT_PEER_CAPABILITIES,
+  ...AIDEN_REMOTE_BOT_NEEDS_YOU_CAPABILITIES,
   ...AIDEN_REMOTE_SCHEDULE_CARD_CAPABILITIES,
   ...AIDEN_REMOTE_CHAT_JOB_CAPABILITIES,
   ...AIDEN_REMOTE_RAW_UPLOAD_CAPABILITIES,
@@ -789,6 +885,8 @@ export const AIDEN_REMOTE_CAPABILITIES = [
   ...AIDEN_REMOTE_APPROVAL_SETTINGS_CAPABILITIES,
   ...AIDEN_REMOTE_CHAT_CONTINUE_CAPABILITIES,
   ...AIDEN_REMOTE_STREAM_SNAPSHOT_REASON_CAPABILITIES,
+  ...AIDEN_REMOTE_APPROVAL_PLAIN_WORDS_CAPABILITIES,
+  ...AIDEN_REMOTE_AGENT_SLIDER_CAPABILITIES,
 ] as const;
 
 export type AidenRemoteCapability = (typeof AIDEN_REMOTE_CAPABILITIES)[number];
@@ -1414,6 +1512,12 @@ export type AidenRemoteBotSummary = AidenRemoteBotSummaryBase & {
    * the Bot's card list holds. Sent only while it is above zero.
    */
   issueCount?: number;
+  /**
+   * Contract revision 68, only on `GET /bots` for `bot:needs-you` devices: an
+   * approval, a question, a hand-off or an open issue waits on the person.
+   * Sent only as `true`.
+   */
+  needsYou?: true;
 };
 
 export interface AidenRemoteBotCustomSelection {
@@ -2111,6 +2215,32 @@ export interface AidenRemoteBotSession extends AidenRemoteBotSessionStateView {
   issues?: AidenRemoteBotIssue[];
 }
 
+/**
+ * Revision 67, `GET /bots/{botId}/session/entries?before=&limit=`: the entries
+ * just older than `before`, oldest first, as the device's session shows them.
+ * `epoch` is the session the page belongs to; a page from another epoch does
+ * not join the transcript the device holds.
+ */
+export interface AidenRemoteBotSessionEntriesPage {
+  botId: string;
+  epoch: string;
+  entries: AidenRemoteBotSessionEntry[];
+  hasOlder: boolean;
+}
+
+export const AIDEN_REMOTE_BOT_SESSION_PAGE_DEFAULT_LIMIT = 50;
+
+export const AIDEN_REMOTE_BOT_QUEUED_WITHDRAW_OUTCOMES = ["withdrawn", "started", "gone"] as const;
+/**
+ * Revision 67, `POST /bots/{botId}/queued/{submissionId}/withdraw`: what
+ * became of the queued message. `started` means its turn already began, so it
+ * stays in the chat; `gone` means the host no longer has it to take back.
+ */
+export interface AidenRemoteBotQueuedWithdrawReceipt {
+  submissionId: string;
+  outcome: (typeof AIDEN_REMOTE_BOT_QUEUED_WITHDRAW_OUTCOMES)[number];
+}
+
 export type AidenRemoteBotSessionEventPayload =
   | { type: "snapshot"; payload: { session: AidenRemoteBotSession } }
   | { type: "partial"; payload: { text: string } }
@@ -2429,6 +2559,8 @@ export interface AidenRemoteContractFixture {
   continueInNewChat?: AidenRemoteContinueInNewChatFixture;
   /** Revision 65 (`stream:snapshot-reasons`): reader-local gap snapshot replay, legacy reason-less projection, and provider reset. */
   streamRecovery?: AidenRemoteStreamRecoveryFixture;
+  /** Revision 70 (`chat:agent-slider`): a `/models` slider, the turn a stop sends, and the chat it leaves. */
+  agentSlider?: AidenRemoteAgentSliderFixture;
   taskProgress: AidenRemoteChatTaskProgress;
   agentRoster: AidenRemoteChatAgentRoster;
   agentInterrupt: AidenRemoteChatAgentInterruptFixture;
@@ -3391,7 +3523,14 @@ export function parseAidenRemoteBotSummary(value: unknown): AidenRemoteBotSummar
   const issueCount = hasOwn(record, "issueCount")
     ? boundedIntegerValue(record.issueCount, "Bot issueCount", 0, BOT_ISSUE_LIMITS.openPerBot)
     : undefined;
-  const withIssues = issueCount === undefined ? summary : { ...summary, issueCount };
+  if (hasOwn(record, "needsYou") && record.needsYou !== true) {
+    throw new Error("Bot summary needsYou must be true when present.");
+  }
+  const withIssues = {
+    ...summary,
+    ...(issueCount === undefined ? {} : { issueCount }),
+    ...(record.needsYou === true ? { needsYou: true as const } : {}),
+  };
   if (!hasOwn(record, "paused")) {
     assertBotPausedAgreesWithState(summary.sessionState, false, "Bot summary");
     return withIssues;
@@ -3451,6 +3590,37 @@ function parseBotSummaryFields(value: unknown): AidenRemoteBotSummary {
         }
       : {}),
   };
+}
+
+/** The longest `preview` a host feed Bot row carries (revision 66). */
+export const AIDEN_REMOTE_HOST_FEED_BOT_PREVIEW_MAX = 140;
+
+/**
+ * A host feed Bot row: a Bot summary without `issueCount` (a phone shape),
+ * plus revision 52's `needsYou`, `failed` and `lastReplyAt` and revision 66's
+ * `preview`, one trimmed plain line, and `summarized`.
+ */
+export function parseAidenRemoteHostFeedBot(value: unknown, label = "Host feed Bot"): Record<string, unknown> {
+  if (!isRecord(value)) throw new Error(`${label} must be an object.`);
+  if (hasOwn(value, "issueCount")) throw new Error(`${label} carries no issueCount.`);
+  const { needsYou, failed, lastReplyAt, preview, summarized, ...summary } = value;
+  parseAidenRemoteBotSummary(summary);
+  assertExactKeys(
+    summary,
+    ["id", "name", "purpose", "avatar", "health", "createdAt", "updatedAt", "revision", "sessionState", "paused"],
+    label,
+  );
+  if (needsYou !== undefined && needsYou !== true) throw new Error(`${label} needsYou must be true when present.`);
+  if (failed !== undefined && failed !== true) throw new Error(`${label} failed must be true when present.`);
+  if (summarized !== undefined && summarized !== true) throw new Error(`${label} summarized must be true when present.`);
+  if (lastReplyAt !== undefined) dateTimeValue(lastReplyAt, `${label} lastReplyAt`);
+  if (preview !== undefined) {
+    const text = boundedText(preview, `${label} preview`, AIDEN_REMOTE_HOST_FEED_BOT_PREVIEW_MAX);
+    if (text.trim() !== text || /[\p{Cc}\p{Cf}\u2028\u2029]/u.test(text.replace(/[\u200C\u200D]/gu, ""))) {
+      throw new Error(`${label} preview must be one trimmed plain line.`);
+    }
+  }
+  return value;
 }
 
 export function parseAidenRemoteBotList(value: unknown): AidenRemoteBotList {
@@ -4053,6 +4223,11 @@ export function parseAidenRemoteChatProjection(
   if (hasProviderId !== hasModelId) {
     throw new Error(`${label} providerId and modelId must be supplied together.`);
   }
+  // Revision 70: the chat's own level rides only with its model, and never on a Bot chat.
+  const hasThinkingLevel = hasOwn(value, "thinkingLevel");
+  if (hasThinkingLevel && (!hasModelId || hasOwn(value, "botId"))) {
+    throw new Error(`${label} thinkingLevel needs a model and is regular-chat-only.`);
+  }
   return {
     id: boundedText(value.id, `${label} id`, 128),
     workspaceId: boundedText(value.workspaceId, `${label} workspaceId`, 128),
@@ -4069,6 +4244,9 @@ export function parseAidenRemoteChatProjection(
       : {}),
     ...(hasModelId
       ? { modelId: boundedText(value.modelId, `${label} modelId`, 512) }
+      : {}),
+    ...(hasThinkingLevel
+      ? { thinkingLevel: enumMember(value.thinkingLevel, GENERATION_THINKING_LEVELS, `${label} thinkingLevel`) }
       : {}),
     ...(hasOwn(value, "titlePending")
       ? value.titlePending === true
@@ -6590,6 +6768,47 @@ export function parseAidenRemoteBotSession(value: unknown): AidenRemoteBotSessio
   };
 }
 
+export function parseAidenRemoteBotSessionEntriesPage(value: unknown): AidenRemoteBotSessionEntriesPage {
+  if (!isRecord(value)) throw new Error("Bot session page must be an object.");
+  assertExactKeys(value, ["botId", "epoch", "entries", "hasOlder"], "Bot session page");
+  if (!Array.isArray(value.entries) || value.entries.length > AIDEN_REMOTE_BOT_SESSION_MAX_ENTRIES) {
+    throw new Error(`Bot session page entries must contain at most ${AIDEN_REMOTE_BOT_SESSION_MAX_ENTRIES} items.`);
+  }
+  const entries = value.entries.map(parseAidenRemoteBotSessionEntry);
+  if (new Set(entries.map((entry) => entry.id)).size !== entries.length) {
+    throw new Error("Bot session page entry ids must be unique.");
+  }
+  return {
+    botId: boundedBotId(value.botId, "Bot session page botId"),
+    epoch: boundedEpoch(value.epoch, "Bot session page epoch"),
+    entries,
+    hasOlder: requiredBooleanValue(value.hasOlder, "Bot session page hasOlder"),
+  };
+}
+
+/** The `before` cursor of a session page: an entry id the device already holds. */
+export function parseAidenRemoteBotSessionEntryId(value: unknown): string {
+  const id = boundedText(value, "Bot session entry id", 128);
+  if (!BOT_SESSION_ENTRY_ID.test(id)) throw new Error("Bot session entry id is invalid.");
+  return id;
+}
+
+/** A queued message's `submissionId`, as the session's `queued` list names it. */
+export function parseAidenRemoteBotSubmissionId(value: unknown): string {
+  const id = boundedText(value, "Bot submissionId", 64);
+  if (!AIDEN_REMOTE_BOT_SUBMISSION_ID.test(id)) throw new Error("Bot submissionId is invalid.");
+  return id;
+}
+
+export function parseAidenRemoteBotQueuedWithdrawReceipt(value: unknown): AidenRemoteBotQueuedWithdrawReceipt {
+  if (!isRecord(value)) throw new Error("Bot queued withdraw receipt must be an object.");
+  assertExactKeys(value, ["submissionId", "outcome"], "Bot queued withdraw receipt");
+  return {
+    submissionId: parseAidenRemoteBotSubmissionId(value.submissionId),
+    outcome: enumMember(value.outcome, AIDEN_REMOTE_BOT_QUEUED_WITHDRAW_OUTCOMES, "Bot queued withdraw outcome"),
+  };
+}
+
 export function parseAidenRemoteBotSessionEvent(value: unknown): AidenRemoteBotSessionEvent {
   if (!isRecord(value)) throw new Error("Bot session event must be an object.");
   assertExactKeys(value, ["protocolVersion", "botId", "epoch", "seq", "type", "payload"], "Bot session event");
@@ -8561,6 +8780,13 @@ export function parseAidenRemoteContractFixture(value: unknown): AidenRemoteCont
     }
     streamRecovery = parseStreamRecoveryFixture(value.streamRecovery);
   }
+  let agentSlider: AidenRemoteAgentSliderFixture | undefined;
+  if (value.agentSlider !== undefined) {
+    if (contractRevision < AIDEN_REMOTE_AGENT_SLIDER_CONTRACT_REVISION) {
+      throw new Error(`Agent Slider fixtures require contract revision ${AIDEN_REMOTE_AGENT_SLIDER_CONTRACT_REVISION}.`);
+    }
+    agentSlider = parseAgentSliderFixture(value.agentSlider);
+  }
   let voiceInput: AidenRemoteVoiceInputFixture | undefined;
   if (value.voiceInput !== undefined) {
     if (contractRevision < AIDEN_REMOTE_VOICE_INPUT_CONTRACT_REVISION) {
@@ -8713,6 +8939,168 @@ export function parseAidenRemoteContractFixture(value: unknown): AidenRemoteCont
     ...(backgroundJobsChatSettled ? { backgroundJobsChatSettled } : {}),
     ...(continueInNewChat ? { continueInNewChat } : {}),
     ...(streamRecovery ? { streamRecovery } : {}),
+    ...(agentSlider ? { agentSlider } : {}),
+  };
+}
+
+export type AidenRemoteAgentSliderAvailability =
+  | "ready"
+  | "unassigned"
+  | "provider-missing"
+  | "not-signed-in"
+  | "model-missing"
+  | "hidden"
+  | "computer-only";
+
+const AIDEN_REMOTE_AGENT_SLIDER_AVAILABILITIES = [
+  "ready",
+  "unassigned",
+  "provider-missing",
+  "not-signed-in",
+  "model-missing",
+  "hidden",
+  "computer-only",
+] as const satisfies readonly AidenRemoteAgentSliderAvailability[];
+
+const AIDEN_REMOTE_AGENT_SLIDER_STOP_ID = /^[A-Za-z0-9_-]{1,64}$/u;
+
+export interface AidenRemoteAgentSliderStop {
+  id: string;
+  label: string;
+  providerId?: string;
+  modelId?: string;
+  providerLabel?: string;
+  modelLabel?: string;
+  thinkingLevel?: GenerationThinkingLevel;
+  availability: AidenRemoteAgentSliderAvailability;
+}
+
+export interface AidenRemoteAgentSlider {
+  stops: AidenRemoteAgentSliderStop[];
+  homeStopId: string;
+}
+
+/**
+ * Revision 70: the `agentSlider` of `GET /models`, as a host sends it. Strict:
+ * 3 to 7 stops with unique ids, a home naming one of them, and provider and
+ * model ids together and a level only on a `ready` stop. Labels name what a
+ * stop is set to in words: never on an `unassigned` or `computer-only` stop,
+ * no provider label when the provider is missing, and a model label only on
+ * a ready, not-signed-in or hidden stop. Phones decode more tolerantly: an
+ * unknown availability or level only makes that stop unavailable.
+ */
+export function parseAidenRemoteAgentSlider(value: unknown, label = "Agent Slider"): AidenRemoteAgentSlider {
+  const record = requiredFixtureRecord(value, label, ["stops", "homeStopId"]);
+  if (
+    !Array.isArray(record.stops) ||
+    record.stops.length < AGENT_SLIDER_MIN_STOPS ||
+    record.stops.length > AGENT_SLIDER_MAX_STOPS
+  ) {
+    throw new Error(`${label} must hold ${AGENT_SLIDER_MIN_STOPS} to ${AGENT_SLIDER_MAX_STOPS} stops.`);
+  }
+  const ids = new Set<string>();
+  const stops = record.stops.map((entry, index): AidenRemoteAgentSliderStop => {
+    const stopLabel = `${label} stop ${index}`;
+    const stop = requiredFixtureRecord(entry, stopLabel, ["id", "label", "availability"], [
+      "providerId",
+      "modelId",
+      "providerLabel",
+      "modelLabel",
+      "thinkingLevel",
+    ]);
+    if (typeof stop.id !== "string" || !AIDEN_REMOTE_AGENT_SLIDER_STOP_ID.test(stop.id) || ids.has(stop.id)) {
+      throw new Error(`${stopLabel} id is invalid or repeated.`);
+    }
+    ids.add(stop.id);
+    if (typeof stop.label !== "string" || stop.label.trim() !== stop.label || agentSliderLabelProblem(stop.label)) {
+      throw new Error(`${stopLabel} label must be 1 to ${AGENT_SLIDER_LABEL_MAX} characters without controls.`);
+    }
+    const hasProviderId = hasOwn(stop, "providerId");
+    const hasModelId = hasOwn(stop, "modelId");
+    if (hasProviderId !== hasModelId) {
+      throw new Error(`${stopLabel} providerId and modelId must be supplied together.`);
+    }
+    const availability = enumMember(stop.availability, AIDEN_REMOTE_AGENT_SLIDER_AVAILABILITIES, `${stopLabel} availability`);
+    if (hasModelId !== (availability === "ready")) {
+      throw new Error(`${stopLabel} names its provider and model exactly when it is ready.`);
+    }
+    if (hasOwn(stop, "thinkingLevel") && availability !== "ready") {
+      throw new Error(`${stopLabel} thinkingLevel goes only with a ready stop.`);
+    }
+    const unnamed = availability === "unassigned" || availability === "computer-only";
+    if (hasOwn(stop, "providerLabel") && (unnamed || availability === "provider-missing")) {
+      throw new Error(`${stopLabel} providerLabel names only a configured provider.`);
+    }
+    if (hasOwn(stop, "modelLabel") && !["ready", "not-signed-in", "hidden"].includes(availability)) {
+      throw new Error(`${stopLabel} modelLabel names only a ready, not-signed-in or hidden model.`);
+    }
+    return {
+      id: stop.id,
+      label: stop.label,
+      ...(hasProviderId
+        ? {
+            providerId: boundedText(stop.providerId, `${stopLabel} providerId`, 256),
+            modelId: boundedText(stop.modelId, `${stopLabel} modelId`, 512),
+          }
+        : {}),
+      ...(hasOwn(stop, "providerLabel") ? { providerLabel: boundedText(stop.providerLabel, `${stopLabel} providerLabel`, 256) } : {}),
+      ...(hasOwn(stop, "modelLabel") ? { modelLabel: boundedText(stop.modelLabel, `${stopLabel} modelLabel`, 256) } : {}),
+      ...(hasOwn(stop, "thinkingLevel")
+        ? { thinkingLevel: enumMember(stop.thinkingLevel, GENERATION_THINKING_LEVELS, `${stopLabel} thinkingLevel`) }
+        : {}),
+      availability,
+    };
+  });
+  if (typeof record.homeStopId !== "string" || !ids.has(record.homeStopId)) {
+    throw new Error(`${label} homeStopId must name one of its stops.`);
+  }
+  return { stops, homeStopId: record.homeStopId };
+}
+
+export interface AidenRemoteAgentSliderFixture {
+  capability: (typeof AIDEN_REMOTE_AGENT_SLIDER_CAPABILITIES)[number];
+  /** A `GET /models` body carrying the slider. */
+  models: { providers: unknown[]; defaults: Record<string, string>; agentSlider: AidenRemoteAgentSlider };
+  /**
+   * The `POST /chats/{chatId}/turns` body a ready stop sends: exactly its
+   * provider, model and level, with `saveSelection` so the host keeps it.
+   */
+  turnRequest: { text: string; providerId: string; modelId: string; thinkingLevel?: GenerationThinkingLevel; saveSelection: true };
+  /** The chat afterwards: the stop's selection saved as the chat's own. */
+  chat: AidenRemoteChatProjection;
+}
+
+function parseAgentSliderFixture(value: unknown): AidenRemoteAgentSliderFixture {
+  const section = requiredFixtureRecord(value, "Agent Slider fixture", ["capability", "models", "turnRequest", "chat"]);
+  if (section.capability !== AIDEN_REMOTE_AGENT_SLIDER_CAPABILITIES[0]) {
+    throw new Error("Agent Slider fixture must name chat:agent-slider.");
+  }
+  const models = requiredFixtureRecord(section.models, "Agent Slider models", ["providers", "defaults", "agentSlider"]);
+  if (!Array.isArray(models.providers) || !isRecord(models.defaults)) {
+    throw new Error("Agent Slider models must carry providers and defaults.");
+  }
+  const agentSlider = parseAidenRemoteAgentSlider(models.agentSlider, "Agent Slider models agentSlider");
+  const turn = requiredFixtureRecord(section.turnRequest, "Agent Slider turnRequest", ["text", "providerId", "modelId", "saveSelection"], [
+    "thinkingLevel",
+  ]);
+  if (turn.saveSelection !== true) throw new Error("Agent Slider turnRequest saves its stop with saveSelection true.");
+  const chat = parseAidenRemoteChatProjection(section.chat, "Agent Slider chat");
+  const sent = agentSlider.stops.find(
+    (stop) =>
+      stop.availability === "ready" &&
+      stop.providerId === turn.providerId &&
+      stop.modelId === turn.modelId &&
+      stop.thinkingLevel === turn.thinkingLevel,
+  );
+  if (!sent) throw new Error("Agent Slider turnRequest must send exactly a ready stop's selection.");
+  if (chat.providerId !== sent.providerId || chat.modelId !== sent.modelId || chat.thinkingLevel !== sent.thinkingLevel) {
+    throw new Error("Agent Slider chat must carry the sent stop's selection.");
+  }
+  return {
+    capability: AIDEN_REMOTE_AGENT_SLIDER_CAPABILITIES[0],
+    models: models as AidenRemoteAgentSliderFixture["models"],
+    turnRequest: turn as AidenRemoteAgentSliderFixture["turnRequest"],
+    chat,
   };
 }
 
@@ -9887,7 +10275,7 @@ function parseRunEventSequence(value: unknown, label: string, projection: "host"
   if (!runEnded) throw new Error("A run stream fixture ends with run.ended.");
 }
 const AIDEN_REMOTE_MESSAGES_WINDOW_METADATA_KEYS = [
-  "workspaceId", "botId", "title", "providerId", "modelId", "createdAt", "updatedAt", "titlePending",
+  "workspaceId", "botId", "title", "providerId", "modelId", "thinkingLevel", "createdAt", "updatedAt", "titlePending",
 ] as const;
 
 function parseRevision19Fixture(
@@ -9935,8 +10323,11 @@ function parseRevision19Fixture(
         throw new Error("Host feed snapshot lists must be arrays.");
       }
       event.payload.workspaces.forEach((workspace) => parseHostFeedWorkspaceRepository(workspace, "Host feed workspace"));
+      event.payload.bots.forEach((bot) => parseAidenRemoteHostFeedBot(bot));
     } else if (event.type === "workspace.upsert") {
       parseHostFeedWorkspaceRepository(event.payload, "Host feed workspace");
+    } else if (event.type === "bot.upsert") {
+      parseAidenRemoteHostFeedBot(event.payload);
     } else if (event.type === "run.state") {
       assertExactKeys(
         event.payload,

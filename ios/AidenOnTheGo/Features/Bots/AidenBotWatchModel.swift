@@ -83,6 +83,14 @@ enum AidenBotWatchMutation: Codable, Equatable {
     }
 }
 
+private struct AidenBotWatchAttempt: AidenDurablePendingAttempt {
+    let mutation: AidenBotWatchMutation
+    let createdAt: Date
+
+    var pendingAttemptID: UUID? { mutation.mutationID }
+    var pendingAttemptCreatedAt: Date { createdAt }
+}
+
 @MainActor
 @Observable
 final class AidenBotWatchModel {
@@ -90,26 +98,26 @@ final class AidenBotWatchModel {
     private let transport: any AidenBotWatchTransport
     private let isCurrent: @MainActor () -> Bool
     private let mayWrite: @MainActor () -> Bool
+    private var mutation: AidenDurablePendingMutation<AidenBotWatchAttempt>
     private(set) var list: AidenBotWatchList?
     private(set) var sources: AidenBotWatchSources?
     private(set) var isLoading = false
-    private(set) var isBusy = false
+    private var auxiliaryBusy = false
     private(set) var loadError: String?
     var message: String?
-    var draft: AidenBotWatchDraft? { didSet { persistState() } }
+    var draft: AidenBotWatchDraft? { didSet { persistDraft() } }
     private(set) var baseline: AidenBotWatch?
     private(set) var conflict: AidenBotWatch?
     private(set) var wasRemoved = false
     private(set) var testResult: AidenBotWatchTestResult?
-    private(set) var uncertain = false
-    private var pending: AidenBotWatchMutation?
-    private var pendingSince: Date?
-    private var storageBlocked = false
     @ObservationIgnored private var isRestoring = true
     private let draftStore: AidenBotWatchDraftStore?
     private let draftScope: AidenBotWatchDraftStore.Scope?
     private var loadGeneration = 0
     private var editorGeneration = 0
+
+    var isBusy: Bool { auxiliaryBusy || mutation.isInFlight }
+    var uncertain: Bool { mutation.isUncertain }
 
     init(botID: String, transport: any AidenBotWatchTransport,
          isCurrent: @escaping @MainActor () -> Bool = { true },
@@ -121,24 +129,36 @@ final class AidenBotWatchModel {
         self.mayWrite = mayWrite
         self.draftStore = draftStore
         self.draftScope = draftScope
+        var retained: AidenBotWatchDraftStore.State?
+        var restored: AidenBotWatchAttempt?
+        var readFailed = false
+        var readErrorMessage: String?
         if let draftStore, let draftScope {
             do {
-                if let retained = try draftStore.load(draftScope) {
-                    draft = retained.draft
-                    baseline = retained.baseline
-                    pending = retained.pending
-                    pendingSince = retained.pendingSince
-                    uncertain = pending != nil
+                if let loaded = try draftStore.load(draftScope) {
+                    retained = loaded
+                    if let pending = loaded.pending, let pendingSince = loaded.pendingSince {
+                        restored = AidenBotWatchAttempt(mutation: pending, createdAt: pendingSince)
+                    }
                 }
             } catch {
-                storageBlocked = true
-                message = "The saved watch draft couldn’t be read. Inspect watches on your computer before making changes."
+                readFailed = true
+                readErrorMessage = "The saved watch draft couldn’t be read. Inspect watches on your computer before making changes."
             }
         }
+        self.mutation = AidenDurablePendingMutation(
+            restoredAttempt: restored,
+            storageReadFailed: readFailed
+        )
+        if let retained {
+            draft = retained.draft
+            baseline = retained.baseline
+        }
+        if let readErrorMessage { message = readErrorMessage }
         isRestoring = false
     }
 
-    var canWrite: Bool { !storageBlocked && isCurrent() && mayWrite() && list?.supported == true }
+    var canWrite: Bool { mutation.canWrite && isCurrent() && mayWrite() && list?.supported == true }
     var canEditDraft: Bool { canWrite && !isBusy && !uncertain }
     var selectedTemplate: AidenBotWatchTemplate? { list?.templates.first { $0.id == draft?.templateID } }
     var eligibleSources: [AidenBotWatchSourceChoice] { sources?.choices.filter { $0.templateId == draft?.templateID } ?? [] }
@@ -222,14 +242,14 @@ final class AidenBotWatchModel {
         self.conflict = nil
         wasRemoved = false
         testResult = nil
-        persistState()
+        persistDraft()
     }
 
     func discover() async {
         guard canEditDraft, selectedTemplate?.available == true else { return }
-        isBusy = true
+        auxiliaryBusy = true
         let generation = editorGeneration
-        defer { isBusy = false }
+        defer { auxiliaryBusy = false }
         do {
             let loaded = try await transport.discoverBotWatchSources(botId: botID)
             guard isCurrent(), generation == editorGeneration else { return }
@@ -246,22 +266,22 @@ final class AidenBotWatchModel {
 
     func saveDraft() async {
         guard canSave, let draft, let request = try? draft.request(revision: baseline?.revision, mutationID: UUID()) else { return }
-        await perform(.save(id: baseline?.id, request: request))
+        await performNew(.save(id: baseline?.id, request: request))
     }
 
     func setEnabled(_ watch: AidenBotWatch, _ enabled: Bool) async {
         guard canWrite, !isBusy, !uncertain else { return }
-        await perform(.enabled(id: watch.id, request: .init(expectedRevision: watch.revision, mutationId: UUID(), enabled: enabled)))
+        await performNew(.enabled(id: watch.id, request: .init(expectedRevision: watch.revision, mutationId: UUID(), enabled: enabled)))
     }
 
     func remove(_ watch: AidenBotWatch) async {
         guard canWrite, !isBusy, !uncertain else { return }
-        await perform(.remove(id: watch.id, request: .init(expectedRevision: watch.revision, mutationId: UUID())))
+        await performNew(.remove(id: watch.id, request: .init(expectedRevision: watch.revision, mutationId: UUID())))
     }
 
     func run(_ watch: AidenBotWatch) async {
         guard canWrite, !isBusy, !uncertain else { return }
-        await perform(.run(id: watch.id, request: .init(expectedRevision: watch.revision, mutationId: UUID())))
+        await performNew(.run(id: watch.id, request: .init(expectedRevision: watch.revision, mutationId: UUID())))
     }
 
     func testDraft() async {
@@ -281,9 +301,9 @@ final class AidenBotWatchModel {
     }
 
     private func test(_ request: AidenBotWatchTestRequest) async {
-        isBusy = true
+        auxiliaryBusy = true
         let generation = editorGeneration
-        defer { isBusy = false }
+        defer { auxiliaryBusy = false }
         do {
             let result = try await transport.testBotWatch(botId: botID, request: request)
             guard isCurrent(), generation == editorGeneration else { return }
@@ -295,111 +315,157 @@ final class AidenBotWatchModel {
         }
     }
 
-    func retryPending() async {
-        guard canWrite, !isBusy, let pending else { return }
-        guard let pendingSince, (0..<(23 * 3600)).contains(Date().timeIntervalSince(pendingSince)) else {
+    func retryPending(now: Date = Date()) async {
+        guard canWrite, !isBusy else { return }
+        switch mutation.beginRetry(now: now, persist: { persistStore(pending: $0) }) {
+        case let .started(attempt):
+            await dispatch(attempt)
+        case .expired:
             message = "This outcome is still unknown. Inspect the watch on your computer before making another change."
+        case .storageBlocked:
+            message = "The request couldn’t be saved safely on this phone. No new request was sent."
+        case .unavailable, .rejectedBeforeWrite:
             return
         }
-        await perform(pending, replay: true)
     }
 
-    private func perform(_ mutation: AidenBotWatchMutation, replay: Bool = false) async {
+    private func performNew(_ command: AidenBotWatchMutation) async {
         guard isCurrent(), mayWrite(), !isBusy else { return }
-        // A denied retry says nothing about whether the earlier attempt was
-        // accepted. Only its response or identity-proving state can settle it.
-        let hadUnknownOutcome = uncertain
-        isBusy = true
-        pending = mutation
-        if !replay { pendingSince = Date() }
-        persistState()
-        guard !storageBlocked else {
-            isBusy = false
+        let attempt = AidenBotWatchAttempt(mutation: command, createdAt: Date())
+        switch mutation.begin(attempt, persist: { persistStore(pending: $0) }) {
+        case .started:
+            await dispatch(attempt)
+        case .storageBlocked:
             message = "The request couldn’t be saved safely on this phone. No new request was sent."
+        case .unavailable, .rejectedBeforeWrite:
             return
         }
+    }
+
+    private func dispatch(_ attempt: AidenBotWatchAttempt) async {
+        let command = attempt.mutation
+        let nonce = command.mutationID
+        auxiliaryBusy = true
         // Reject loads begun before the write. A fresh GET follows every outcome.
         loadGeneration += 1
-        defer { isBusy = false }
+        defer {
+            mutation.abandonInFlightIfUnsettled(matching: nonce)
+            auxiliaryBusy = false
+        }
         do {
-            switch mutation {
+            switch command {
             case let .save(id, request):
                 let updated = try await transport.saveBotWatch(botId: botID, id: id, request: request)
                 guard isCurrent(), updated.botId == botID else { return }
+                isRestoring = true
                 draft = nil
                 baseline = nil
-                clearPending()
+                isRestoring = false
+                let settled = settlePending(matching: nonce)
                 conflict = nil
                 wasRemoved = false
-                message = "Watch saved."
+                if settled { message = "Watch saved." }
             case let .enabled(id, request):
                 let updated = try await transport.setBotWatchEnabled(botId: botID, id: id, request: request)
                 guard isCurrent(), updated.botId == botID, updated.id == id else { return }
-                clearPending()
                 if baseline?.id == id { baseline = updated }
-                message = updated.enabled ? "Watch resumed." : "Watch paused."
+                if settlePending(matching: nonce) {
+                    message = updated.enabled ? "Watch resumed." : "Watch paused."
+                }
             case let .remove(id, request):
                 let result = try await transport.removeBotWatch(botId: botID, id: id, request: request)
                 guard isCurrent(), result.id == id else { return }
-                clearPending()
-                if result.removed, baseline?.id == id { draft = nil; baseline = nil }
-                message = result.removed ? "Watch deleted." : "The watch wasn’t deleted. Refresh and try again."
+                if result.removed, baseline?.id == id {
+                    isRestoring = true
+                    draft = nil
+                    baseline = nil
+                    isRestoring = false
+                }
+                if settlePending(matching: nonce) {
+                    message = result.removed ? "Watch deleted." : "The watch wasn’t deleted. Refresh and try again."
+                }
             case let .run(id, request):
                 let result = try await transport.runBotWatch(botId: botID, id: id, request: request)
                 guard isCurrent(), result.id == id else { return }
-                clearPending()
-                message = result.admitted ? "Run requested on your computer." : "Run was not started. Check the Bot’s current policy and limits on your computer."
+                if settlePending(matching: nonce) {
+                    message = result.admitted ? "Run requested on your computer." : "Run was not started. Check the Bot’s current policy and limits on your computer."
+                }
             }
         } catch {
             guard isCurrent() else { return }
             // A concurrent authoritative read may already have settled this
             // command. Its late retry failure cannot make it unknown again.
-            guard pending?.mutationID == mutation.mutationID else { return }
-            if hadUnknownOutcome || aidenBotSessionFailureIsAmbiguous(error) {
-                uncertain = true
+            let resolution = mutation.resolveFailure(matching: nonce, error: error) { settlingID in
+                persistStore(pending: nil, settling: settlingID)
+            }
+            switch resolution {
+            case .superseded:
+                return
+            case .retainedUncertain:
                 message = "The computer may have accepted this change. Refresh to check, or retry the same request. Your draft is kept."
-            } else {
-                clearPending()
-                if case let AidenRemoteClientError.server(status, _) = error, status == 409 {
-                    message = "This watch changed on your computer. Your draft is kept. Review the latest saved version before saving again."
-                } else {
-                    message = "That change wasn’t confirmed. Refresh and review the watch before trying again. Your draft is kept."
+            case let .clearedDefiniteRefusal(blocked):
+                if !blocked {
+                    if case let AidenRemoteClientError.server(status, _) = error, status == 409 {
+                        message = "This watch changed on your computer. Your draft is kept. Review the latest saved version before saving again."
+                    } else {
+                        message = "That change wasn’t confirmed. Refresh and review the watch before trying again. Your draft is kept."
+                    }
                 }
             }
         }
         await load()
     }
 
-    private func clearPending() {
-        let settledID = pending?.mutationID
-        pending = nil; pendingSince = nil; uncertain = false
-        persistState(settling: settledID)
+    @discardableResult
+    private func settlePending(matching id: UUID) -> Bool {
+        mutation.settle(matching: id) { settlingID in
+            persistStore(pending: nil, settling: settlingID)
+        }
     }
 
-    private func persistState(settling mutationID: UUID? = nil) {
-        guard !isRestoring, isCurrent(), let draftStore, let draftScope else { return }
+    private func persistDraft() {
+        let currentAttempt = mutation.pending
+        if persistStore(pending: currentAttempt) == .storageFailed {
+            mutation.recordStorageFailure()
+        }
+    }
+
+    private func persistStore(pending: AidenBotWatchAttempt?, settling mutationID: UUID? = nil) -> AidenDurablePendingMutation<AidenBotWatchAttempt>.PersistOutcome {
+        guard !isRestoring else { return .saved }
+        guard isCurrent() else { return .rejectedBeforeWrite }
+        guard let draftStore, let draftScope else { return .saved }
         do {
-            try draftStore.save(.init(draft: draft, baseline: baseline, pending: pending, pendingSince: pendingSince), scope: draftScope, settling: mutationID)
+            try draftStore.save(.init(draft: draft, baseline: baseline, pending: pending?.mutation, pendingSince: pending?.createdAt), scope: draftScope, settling: mutationID)
+            return .saved
         } catch {
-            storageBlocked = true
             message = "This phone couldn’t retain the watch draft safely. Inspect the watch on your computer before making changes."
+            return .storageFailed
         }
     }
 
     private func reconcile(_ loaded: AidenBotWatchList) {
-        guard uncertain, let pending else { return }
+        guard mutation.isUncertain, let pending = mutation.pending?.mutation else { return }
         switch pending {
         case let .save(nil, request):
             // Creation uses its mutation UUID as the resource ID. Never match by labels or text.
             if loaded.watches.contains(where: { UUID(uuidString: $0.id) == request.mutationId }) {
-                draft = nil; baseline = nil; conflict = nil; clearPending()
-                message = "Watch saved on your computer."
+                isRestoring = true
+                draft = nil; baseline = nil; conflict = nil
+                isRestoring = false
+                if settlePending(matching: request.mutationId) {
+                    message = "Watch saved on your computer."
+                }
             }
-        case let .remove(id, _):
+        case let .remove(id, request):
             if !loaded.watches.contains(where: { $0.id == id }) {
-                clearPending()
-                if baseline?.id == id { draft = nil; baseline = nil }
-                message = "Watch deleted on your computer."
+                if baseline?.id == id {
+                    isRestoring = true
+                    draft = nil; baseline = nil
+                    isRestoring = false
+                }
+                if settlePending(matching: request.mutationId) {
+                    message = "Watch deleted on your computer."
+                }
             }
         case .save, .enabled, .run:
             // Another client can publish the same values at a newer revision.

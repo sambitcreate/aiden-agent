@@ -35,12 +35,18 @@ test("chat shell keeps local interactions isolated and keyboard-accessible", asy
   const modelPicker = page.getByRole("button", { name: /^Selected model:/u });
   await modelPicker.focus();
   await page.keyboard.press("Enter");
-  await expect(page.getByRole("tablist", { name: "Model picker view" })).toBeVisible();
-  await page.getByRole("tab", { name: "List" }).click();
+  // The popover opens on the Agent Slider, focused on its thumb.
+  const agentSlider = page.getByRole("slider", { name: "Agent Slider" });
+  await expect(agentSlider).toBeFocused();
+  await page.getByRole("button", { name: /^Other models…/u }).click();
   const modelFilter = page.getByRole("combobox", { name: "Chat model" });
   await expect(modelFilter).toBeFocused();
+  // Escape steps back from the list to the slider, then closes the popover.
   await page.keyboard.press("Escape");
   await expect(modelFilter).toBeHidden();
+  await expect(agentSlider).toBeFocused();
+  await page.keyboard.press("Escape");
+  await expect(agentSlider).toBeHidden();
   await expect(modelPicker).toBeFocused();
 
   await composer.fill("/");
@@ -119,9 +125,8 @@ test("chat shell keeps local interactions isolated and keyboard-accessible", asy
     BrowserWindow.getAllWindows()[0].setSize(1280, 800);
   });
 
-  const terminal = page.getByRole("button", { name: "Show terminal" });
-  await expect(terminal).toBeDisabled();
-  await expect(terminal).toHaveAttribute("aria-pressed", "false");
+  // Without a folder the header leaves Terminal out; the New tab above still lists it with the reason.
+  await expect(page.getByRole("button", { name: "Show terminal" })).toHaveCount(0);
 
   // A workspace that follows Settings → Approvals shows no approvals chip;
   // the chip's own interactions are covered "with a workspace" below.
@@ -911,15 +916,18 @@ test("holding Command reveals chat shortcuts and typing outside a field lands in
   const modelPicker = page.getByRole("button", { name: /^Selected model:/u });
   await modelPicker.focus();
   await page.keyboard.press("Space");
-  await expect(page.getByRole("tablist", { name: "Model picker view" })).toBeVisible();
-  await page.getByRole("tab", { name: "List" }).click();
+  const agentSlider = page.getByRole("slider", { name: "Agent Slider" });
+  await expect(agentSlider).toBeFocused();
+  // Typing on the slider opens the model list with the key already in its filter.
+  await page.keyboard.type("zz");
   const modelFilter = page.getByRole("combobox", { name: "Chat model" });
   await expect(modelFilter).toBeFocused();
-  await page.keyboard.type("zz");
   await expect(modelFilter).toHaveValue("zz");
   await expect(composer).toHaveValue("hi there");
   await page.keyboard.press("Escape");
   await expect(modelFilter).toBeHidden();
+  await page.keyboard.press("Escape");
+  await expect(agentSlider).toBeHidden();
 
   // Disclosure summaries (activity feed, subagent detail) toggle on Space too.
   await page.evaluate(() => {
@@ -934,6 +942,54 @@ test("holding Command reveals chat shortcuts and typing outside a field lands in
   await page.keyboard.press("Space");
   await expect(disclosure).toHaveAttribute("open", "");
   await expect(composer).toHaveValue("hi there");
+});
+
+test("an Agent Slider stop sets the model the next message runs on", async ({ aiden }) => {
+  const { page, lmStudio } = aiden;
+  await finishLmStudioOnboarding(page);
+  type Ipc = { invoke<T>(channel: string, ...args: unknown[]): Promise<T> };
+  // A second ready model to put on a stop.
+  await page.evaluate(async () => {
+    const ipc = (window as unknown as { aidenAPI: { ipc: Ipc } }).aidenAPI.ipc;
+    const providers = await ipc.invoke<{ id: string; models: string[] }[]>("providers:list");
+    const lmStudioProvider = providers.find((provider) => provider.id === "custom:lmstudio")!;
+    await ipc.invoke("providers:save", {
+      ...lmStudioProvider,
+      models: [...lmStudioProvider.models, "aiden-e2e-second"],
+    });
+  });
+  // The composer read the providers before the save; read them again.
+  await page.reload();
+  await expect(page.locator("textarea")).toBeVisible();
+
+  // Onboarding seeded Fast / Balanced / Smart around the connected model.
+  const modelPicker = page.getByRole("button", { name: /^Selected model:/u });
+  await expect(modelPicker).toHaveAttribute("aria-label", /, Balanced on the Agent Slider\. Choose a model\.$/u);
+  await modelPicker.click();
+  const agentSlider = page.getByRole("slider", { name: "Agent Slider" });
+  await expect(agentSlider).toHaveAttribute("aria-valuenow", "2");
+
+  // Smart has no model yet: choosing it asks for one instead of moving the chat.
+  await page.locator('[data-agent-slider-stop="2"]').click();
+  await expect(page.getByRole("heading", { name: "Choose a model for Smart" })).toBeVisible();
+  await page
+    .getByRole("listbox", { name: "Suggestions" })
+    .getByRole("option")
+    .filter({ hasText: /second/iu })
+    .first()
+    .click();
+  await expect(modelPicker).toHaveAttribute("aria-label", /Smart on the Agent Slider/u);
+
+  const prompt = "Agent Slider test: which model answers this?";
+  const reply = lmStudio.enqueueToolScenario!({ prompt, calls: [], finalText: "The Smart stop's model." });
+  await page.locator("textarea").first().fill(prompt);
+  await page.getByRole("button", { name: "Send message" }).click();
+  await expect.poll(() => reply.completed).toBe(true);
+  const completion = lmStudio.requests
+    .filter((request) => request.method === "POST" && request.url === "/v1/chat/completions")
+    .pop();
+  expect((completion?.body as { model?: string } | null)?.model).toBe("aiden-e2e-second");
+  await expect(modelPicker).toHaveAttribute("aria-label", /Smart on the Agent Slider/u);
 });
 
 test("sent user prompts can be selected with the pointer", async ({ aiden }) => {
@@ -1888,4 +1944,69 @@ test.describe("mentions in a workspace", () => {
     await expect(chips).toHaveCount(0);
     await expect(composer).toHaveValue("see ");
   });
+});
+
+test("↑ in an empty composer shows message history with each previous reply and recalls prompts", async ({ aiden }) => {
+  const { app, page } = aiden;
+  await finishLmStudioOnboarding(page);
+  const workspaceId = await page.evaluate(() => localStorage.getItem("aiden-agent.workspaceId"));
+  expect(workspaceId).toBeTruthy();
+  await app.evaluate(({ ipcMain }, workspaceId) => {
+    const seededChat = {
+      id: "history-chat-1",
+      workspaceId,
+      title: "History demo",
+      createdAt: 1_800_000_000_000,
+      updatedAt: 1_800_000_120_000,
+      messages: [
+        { id: "h-u1", role: "user", content: "Plan the release", createdAt: 1_800_000_000_000 },
+        { id: "h-a1", role: "assistant", content: "First reply with milestones.", createdAt: 1_800_000_010_000 },
+        { id: "h-u2", role: "user", content: "Make it shorter", createdAt: 1_800_000_060_000 },
+        { id: "h-a2", role: "assistant", content: "Compact two-step release summary.", createdAt: 1_800_000_070_000 },
+      ],
+    };
+    ipcMain.removeHandler("chats:list");
+    ipcMain.handle("chats:list", () => [seededChat]);
+    ipcMain.removeHandler("chats:get");
+    ipcMain.handle("chats:get", (_event, id) => ({
+      chat: id === seededChat.id ? seededChat : null,
+      imageArtifactRecoveryPending: false,
+      imageArtifactRecoveryUnavailable: false,
+      reconciliation: null,
+    }));
+  }, workspaceId);
+  await page.reload();
+  const composer = page.locator("textarea");
+  await expect(composer).toBeVisible();
+  await expect(page.getByRole("complementary").getByRole("button", { name: "History demo", exact: true })).toBeVisible();
+  await composer.focus();
+  await page.keyboard.press(`${PRIMARY_MODIFIER}+1`);
+  await expect(page.getByText("Compact two-step release summary.")).toBeVisible();
+
+  await composer.focus();
+  await composer.press("ArrowUp");
+  const history = page.getByRole("listbox", { name: "Message history" });
+  const replyPreview = page.locator("[data-composer-history-reply]");
+  await expect(history).toBeVisible();
+  await expect(composer).toHaveValue("Make it shorter");
+  await expect(replyPreview).toContainText("Previous reply");
+  await expect(replyPreview).toContainText("Compact two-step release summary.");
+
+  // Stepping up moves to the older prompt and updates the paired reply preview.
+  await composer.press("ArrowUp");
+  await expect(composer).toHaveValue("Plan the release");
+  await expect(replyPreview).toContainText("First reply with milestones.");
+
+  // Escape closes history and restores the empty composer.
+  await composer.press("Escape");
+  await expect(history).toBeHidden();
+  await expect(composer).toHaveValue("");
+
+  // Reopen, step to the older prompt, and press Enter to keep it in the composer without sending.
+  await composer.press("ArrowUp");
+  await composer.press("ArrowUp");
+  await composer.press("Enter");
+  await expect(history).toBeHidden();
+  await expect(composer).toHaveValue("Plan the release");
+  await expect(composer).toBeFocused();
 });
