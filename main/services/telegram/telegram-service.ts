@@ -10,6 +10,7 @@ import { llmClient } from "../llm-client.js";
 import { providerRegistry } from "../provider-registry.js";
 import { listProvidersWithLegacyPiCredentialMigration } from "../legacy-pi-credential-migration.js";
 import { OPENAI_CODEX_PROVIDER_ID } from "../codex-provider.js";
+import { piDefaultModelFor } from "../pi-default-models.js";
 import { secrets } from "../secrets.js";
 import type { Provider, StoredProvider } from "../types.js";
 import {
@@ -225,7 +226,7 @@ async function listTelegramModels(): Promise<readonly TelegramModelChoice[]> {
           },
         ]),
       ),
-      defaultModel: codex.models[0]?.id,
+      defaultModel: piDefaultModelFor(OPENAI_CODEX_PROVIDER_ID, codex.models.map((model) => model.id)),
       needsKey: true,
       hasKey: true,
       isBuiltin: true,

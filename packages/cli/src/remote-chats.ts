@@ -97,6 +97,8 @@ export async function createCliRemoteChats(agentDir: string, daemon: ReturnType<
       const device = (await state.snapshot()).devices.find((candidate) => candidate.id === deviceId && candidate.revokedAt === undefined);
       return device?.capabilities.includes("chat:continue-in-new-chat") === true;
     },
+    // Revision 70: `chat:agent-slider` is deliberately not wired. `aiden serve`
+    // keeps no Agent Slider, so the capability is neither offered nor served.
     deviceIsPeer: async (deviceId) => {
       const device = (await state.snapshot()).devices.find((candidate) => candidate.id === deviceId);
       return device?.type === "mac" || device?.type === "linux";

@@ -26,7 +26,6 @@ export const CLI_COMMAND_HELP = `Aiden commands:
   speech status|download|select|delete <id>|transcribe <pcm16-file> <model-id>
   app help|status|get <topic>|set <control> <value> <revision> [operation-id]
   catalog refresh|models-dev fetch|models-dev status
-  insights aa|openrouter show|fetch|disconnect
   web-search show|import <settings.json>     Provider routing; keys from environment
   search <query>                            Search all session titles/previews
   import <desktop-journal|aiden-chat.json>   Copy a conversation into a new local session (search, export)

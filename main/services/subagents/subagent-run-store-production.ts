@@ -19,13 +19,16 @@ import {
 import { subagentV2Enabled } from "./feature-flag.js";
 
 const V1_DIRECTORY = "subagent-runs";
-const V2_DIRECTORY = "subagent-runs-v2";
+export const SUBAGENT_RUNS_V2_DIRECTORY = "subagent-runs-v2";
+const V2_DIRECTORY = SUBAGENT_RUNS_V2_DIRECTORY;
 
 export interface ProductionSubagentRunStoreOptions {
   environment?: Readonly<Record<string, string | undefined>>;
   resolveUserDataDirectory: () => Promise<string>;
   storageFactory?: (directory: string) => SubagentRunStoreStorage;
   now?: () => number;
+  /** Removes a deleted chat's saved helper conversations. */
+  deleteChatTranscripts?: (chatId: string) => Promise<void>;
 }
 
 export function productionSubagentRunStoreSelection(
@@ -99,6 +102,7 @@ export function createProductionSubagentRunStore(
     projection: "native",
     v1,
     v2,
+    ...(options.deleteChatTranscripts ? { deleteChatTranscripts: options.deleteChatTranscripts } : {}),
     ...(selection === "v2"
       ? {
           prepareV2: () =>

@@ -55,7 +55,7 @@ test("the Bots tile introduces the first Bot's set-up chat and still explains bo
   const tile = container.querySelector<HTMLElement>('[data-onboarding-feature="bots"]');
   assert.ok(tile);
   assert.equal(container.querySelectorAll('[data-onboarding-feature="bots"]').length, 1);
-  assert.ok(within(tile).getByText("Your first Bot asks what you need and sets itself up. Bots remember, ask each other for help, run routines, and hand steps back to you. Approve a whole plan in Aiden Agent or on your phone, follow its checklist, or stop it. Approval covers only listed actions within the Bot's access and limits, for this run and up to 60 minutes."));
+  assert.ok(within(tile).getByText("Your first Bot asks what you need and sets itself up. Bots remember, ask each other for help, run routines, hand steps back to you, and shrink into floating bubbles. Approve a whole plan in Aiden Agent or on your phone, follow its checklist, or stop it. Approval covers only listed actions within the Bot's access and limits, for this run and up to 60 minutes."));
   assert.match(tile.getAttribute("aria-label") ?? "", /Approve a whole plan in Aiden Agent or on your phone/u);
   assert.equal(tile.tabIndex, 0, "the tile remains reachable by keyboard");
   assert.ok(within(tile).getByText("COS replied"));
@@ -63,7 +63,7 @@ test("the Bots tile introduces the first Bot's set-up chat and still explains bo
   cleanup();
 });
 
-test("the Bots illustration is the first Bot's chat: it asks, the person answers, and it sets itself up", () => {
+test("the Bots illustration is the first Bot's chat: it asks, the person answers, it sets itself up, and it can float as a bubble", () => {
   const { container, unmount } = render(<BotsArt />);
   const art = within(container);
   const chat = art.getByRole("group", { name: "Chief's first chat" });
@@ -75,11 +75,35 @@ test("the Bots illustration is the first Bot's chat: it asks, the person answers
   assert.ok(within(within(chat).getByRole("group", { name: "Chief set itself up" })).getByText("Instructions updated · Undo"));
   assert.ok(art.getByText("Every Sunday at 9:00 AM"));
   assert.ok(art.getByText("COS replied"));
+  // The chat can shrink into a floating head, which shows how many replies are unread.
+  assert.ok(within(art.getByRole("group", { name: "Chief in a bubble" })).getByText("2"));
   assert.equal(art.queryAllByRole("button").length, 0, "the drawing does not add fake keyboard actions");
   // Only the shared oa-anim-* classes move, so Reduce Motion leaves a still pose.
   for (const element of container.querySelectorAll<HTMLElement>("[class*='anim']")) {
     for (const name of element.className.split(/\s+/u).filter((part) => part.includes("anim"))) {
       assert.match(name, /^oa-anim-[a-z]+$/u);
+    }
+  }
+  unmount();
+  cleanup();
+});
+
+test("the Helpers tile shows the helper list beside one helper's own chat: its task, its steps and its reply", () => {
+  const { container, unmount } = render(<OnboardingFeatureGallery features={onboardingFeatures} platform="darwin" />);
+  const tile = container.querySelector<HTMLElement>('[data-onboarding-feature="subagents"]');
+  assert.ok(tile);
+  assert.match(tile.getAttribute("aria-label") ?? "", /^Helpers\. .*Each helper has its own chat/u);
+  // The tile's art is aria-hidden, so look for the drawn chat with hidden elements included.
+  const chat = within(tile).getByRole("group", { name: "Implementer's chat", hidden: true });
+  assert.ok(within(chat).getByText("Implementer"), "the chat names the helper it belongs to");
+  assert.ok(within(chat).getByRole("group", { name: "Task", hidden: true }), "the helper's task sits in the chat as its first message");
+  assert.equal(within(within(chat).getByRole("list", { name: "Steps", hidden: true })).getAllByRole("listitem", { hidden: true }).length, 2);
+  assert.ok(within(chat).getByRole("group", { name: "Reply", hidden: true }));
+  assert.ok(within(tile).getByText("Running"), "the helper list is still drawn beside the chat");
+  assert.equal(tile.querySelectorAll("img").length, 0, "the helper chat is code-drawn");
+  for (const element of tile.querySelectorAll<HTMLElement>("[class*='anim']")) {
+    for (const name of element.className.split(/\s+/u).filter((part) => part.includes("anim"))) {
+      assert.match(name, /^oa-anim-[a-z]+$/u, "only the shared motion classes move, so Reduce Motion leaves a still pose");
     }
   }
   unmount();
@@ -150,6 +174,23 @@ test("Mac and Linux tours introduce Apps using Aiden with its local-only switch 
     visibleOnboardingFeatures(onboardingFeatures, { ...hostPlatformCapabilities("darwin", "arm64"), mcpServer: false }).some((feature) => feature.id === "otherApps"),
     false,
   );
+});
+
+test("the Browser & Annotations tile introduces React/DOM element grabbing with code-drawn art", () => {
+  const { container, unmount } = render(<OnboardingFeatureGallery features={onboardingFeatures} platform="darwin" />);
+  const tile = container.querySelector<HTMLElement>('[data-onboarding-feature="browser"]');
+  assert.ok(tile, "browser tile renders");
+  assert.match(tile.getAttribute("aria-label") ?? "", /grab React or DOM components directly into the composer/u);
+  const art = within(tile);
+  assert.ok(art.getByText("<PricingCard />"), "code-drawn art shows a grabbed component chip");
+  assert.equal(tile.querySelectorAll("img").length, 0, "browser tile art stays code-drawn");
+  for (const element of tile.querySelectorAll<HTMLElement>("[class*='anim']")) {
+    for (const name of element.className.split(/\s+/u).filter((part) => part.includes("anim"))) {
+      assert.match(name, /^oa-anim-[a-z]+$/u);
+    }
+  }
+  unmount();
+  cleanup();
 });
 
 test("the Scheduled Automations tile shows a task's result posted in its chat and the chat's check-back", () => {

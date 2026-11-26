@@ -1246,3 +1246,102 @@ test("changing a link task to a schedule or removing it releases its secret, and
   assert.deepEqual(link.released, ["task-1"], "a URL watch leaves nothing behind");
   link.triggers.stop();
 });
+
+test("link webhook 415, 413, 400, and 401 refusals release only their own slot, while disabled 404 retains and 429 stays pre-slot", async () => {
+  // 1. 415 on admit releases its slot, short-circuits past 30 refusals without calling open, and leaves all 60 valid slots free.
+  {
+    const link = linkHarness();
+    await link.setUp();
+    for (let n = 0; n < REFUSED_LINK_CALLS_PER_MINUTE + 40; n += 1) {
+      assert.deepEqual(
+        await link.triggers.webhook.admit({ token: link.token, contentType: "application/xml" }),
+        { status: 415 },
+      );
+    }
+    for (let n = 0; n < 60; n += 1) assert.equal(await link.call({ n }), 202);
+    assert.equal(await link.call({ over: 1 }), 429, "all 60 slots were still available after 70 415s");
+    link.triggers.stop();
+  }
+
+  // 2. 413 via tooLarge and deliver, plus 415 via deliver, release only their own slot; foreign admission ids never free another call's slot.
+  {
+    const link = linkHarness();
+    await link.setUp();
+    // 70 oversized calls via tooLarge + 5 via deliver + 5 wrong-type deliver calls.
+    for (let n = 0; n < 70; n += 1) {
+      const admitted = await link.triggers.webhook.admit({ token: link.token, contentType: "application/json" });
+      assert.ok("accept" in admitted);
+      assert.deepEqual(
+        await link.triggers.webhook.tooLarge({ token: link.token, admission: admitted.admission }),
+        { status: 413 },
+      );
+    }
+    const oversized = new Uint8Array(256 * 1024 + 1);
+    for (let n = 0; n < 5; n += 1) {
+      const admitted = await link.triggers.webhook.admit({ token: link.token, contentType: "application/json" });
+      assert.ok("accept" in admitted);
+      assert.deepEqual(
+        await link.triggers.webhook.deliver({ token: link.token, admission: admitted.admission, contentType: "application/json", body: oversized }),
+        { status: 413 },
+      );
+    }
+    for (let n = 0; n < 5; n += 1) {
+      const admitted = await link.triggers.webhook.admit({ token: link.token, contentType: "application/json" });
+      assert.ok("accept" in admitted);
+      assert.deepEqual(
+        await link.triggers.webhook.deliver({ token: link.token, admission: admitted.admission, contentType: "application/xml", body: new TextEncoder().encode("<x/>") }),
+        { status: 415 },
+      );
+    }
+    // Use all 60 valid slots, and verify a bogus/reused admission id on tooLarge cannot free one.
+    for (let n = 0; n < 60; n += 1) assert.equal(await link.call({ n }), 202);
+    assert.deepEqual(
+      await link.triggers.webhook.tooLarge({ token: link.token, admission: "bogus-slot" }),
+      { status: 413 },
+    );
+    assert.equal(await link.call({ over: 1 }), 429, "60 slots remain full after unrelated tooLarge");
+    link.triggers.stop();
+  }
+
+  // 3. >60 invalid-JSON (400) calls release all slots, leaving all 60 valid calls available.
+  {
+    const link = linkHarness();
+    await link.setUp();
+    for (let n = 0; n < 70; n += 1) assert.equal(await link.call("{not json"), 400);
+    for (let n = 0; n < 60; n += 1) assert.equal(await link.call({ n }), 202);
+    assert.equal(await link.call({ over: 1 }), 429);
+    link.triggers.stop();
+  }
+
+  // 4. 429 refusals are pre-slot: mid-minute 429s never occupy slots after the original 60 age out.
+  {
+    const link = linkHarness();
+    await link.setUp();
+    for (let n = 0; n < 60; n += 1) assert.equal(await link.call({ n }), 202);
+    link.advance(30_000);
+    for (let n = 0; n < 20; n += 1) assert.equal(await link.call({ mid: n }), 429);
+    // Advance just past 60s from the original 60 calls (still only 30s after the 429s).
+    link.advance(30_001);
+    for (let n = 0; n < 60; n += 1) assert.equal(await link.call({ fresh: n }), 202);
+    assert.equal(await link.call({ over: 1 }), 429);
+    link.triggers.stop();
+  }
+
+  // 5. A disabled task's known token retains its slot and returns 404 (then 429) even with an unsupported content type.
+  {
+    const link = linkHarness();
+    await link.setUp();
+    link.tasks[0] = { ...link.tasks[0]!, enabled: false };
+    for (let n = 0; n < 60; n += 1) {
+      assert.deepEqual(
+        await link.triggers.webhook.admit({ token: link.token, contentType: "application/xml" }),
+        { status: 404 },
+      );
+    }
+    assert.deepEqual(
+      await link.triggers.webhook.admit({ token: link.token, contentType: "application/xml" }),
+      { status: 429 },
+    );
+    link.triggers.stop();
+  }
+});

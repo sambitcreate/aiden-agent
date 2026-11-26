@@ -54,7 +54,7 @@ func aidenBotActivitySupported(server: AidenServer?, installation: AidenInstalla
 /// the chat reopens a feed that opened without one
 /// (`AidenBotSessionModel.reopenFeed()`; Android parity).
 func aidenBotSessionFeedGrants(_ installation: AidenInstallation?) -> Set<AidenRemoteCapability> {
-    Set([AidenRemoteCapability.botCards, .botActivity, .botHandoffs, .botHandoffNotes, .botHandoffOnMac, .botImages, .botPeers, .botIssues, .botAccessRequests, .botPlans, .botAllowed, .approvalCards, .botSettingsChanges, .botSuggestions].filter { installation?.hasNegotiatedAccess(to: $0) == true })
+    Set([AidenRemoteCapability.botCards, .botActivity, .botHandoffs, .botHandoffNotes, .botHandoffOnMac, .botImages, .botPeers, .botIssues, .botAccessRequests, .botPlans, .botAllowed, .approvalCards, .approvalPlainWords, .botSettingsChanges, .botSuggestions].filter { installation?.hasNegotiatedAccess(to: $0) == true })
 }
 
 /// How a Bot chat is opened. A host advertising `bot-durable-session-v1`
@@ -275,6 +275,11 @@ enum AidenBotSessionCopy {
     /// Revision 37: the person paused the Bot.
     static let pausedSubtitle = "Paused"
     static let needsModel = "Needs an AI model"
+    /// Revision 68: an approval, a question or a hand-off waits on the person.
+    static let waitingForYou = "Waiting for you"
+    /// A run waits on an approval this phone may answer, or only the Mac can.
+    static let needsYourOK = "Needs your OK"
+    static let waitingForYourOKOnMac = "Waiting for your OK on your Mac"
     static let needsModelHint = "Set up on your computer"
     static let setUp = "Set up"
     static let queued = "Queued"
@@ -1074,9 +1079,14 @@ enum AidenBotTranscriptRow: Equatable, Identifiable {
 }
 
 /// True when a request failure may have reached the Mac, so a retry of the
-/// same logical action must reuse its Idempotency-Key.
+/// same logical action must reuse its Idempotency-Key. A genuinely decoded
+/// `409 internal_error` is a replayed settled rejection from the durable Bot
+/// ledger and releases the key so a fresh attempt can mint a new one.
 func aidenBotSessionFailureIsAmbiguous(_ error: Error) -> Bool {
-    aidenBotEditorCreateFailureIsAmbiguous(error)
+    AidenRemoteFailureClassification.isAmbiguous(
+        error,
+        policy: .durableBotLedgerBeforeEffectRefusal
+    )
 }
 
 /// One Bot's durable conversation: a snapshot from `GET /session`, kept
@@ -1354,6 +1364,10 @@ final class AidenBotSessionModel {
     }
     /// Stop was pressed: the line says "Stopping" until the Mac speaks or the turn ends.
     private var stopIntent: Intent = .none
+    /// Stop was pressed during this turn. Unlike `isStopping` it outlasts the
+    /// turn's end, until the next turn starts, so the avatar settles quietly
+    /// even when the Stop and the end land in one update.
+    private(set) var stopRequestedThisTurn = false
     /// Resume was pressed: the line says "Picking up where it left off" until the Mac speaks (R18).
     private var resumeIntent: Intent = .none
     var errorMessage: String?
@@ -1627,6 +1641,24 @@ final class AidenBotSessionModel {
     /// words are the signal (§5.2), as on the Mac.
     private static let replyPhases: Set<String> = ["writing", "thinking"]
 
+    /// The Bot can't go on without the person: a question, approval or hand-off
+    /// card, or a running step that says it is waiting before any card arrives.
+    var waitsForPerson: Bool {
+        question != nil || approval != nil || handoff != nil || (isRunning && activity?.phase == "waiting")
+    }
+
+    /// The chat title's status line: what the Bot is doing, why it can't answer,
+    /// or what it is for. Waiting on the person is a warning, never typing dots.
+    func titleStatus(nowMs: Int, purpose: String?, machine: String?) -> AidenChatTitleStatus {
+        .bot(
+            state: isPaused ? .paused : state,
+            statusWord: statusLine(nowMs: nowMs)?.display.word,
+            waitsForYou: waitsForPerson,
+            purpose: purpose,
+            machine: machine
+        )
+    }
+
     /// The line can show, so its clock ticks (FR-m1): an idle chat runs no timer.
     var statusLineTicks: Bool { activitySupported && (isRunning || isAwaitingTurn) }
 
@@ -1833,6 +1865,7 @@ final class AidenBotSessionModel {
             if stopIntent == .acknowledged || (next != nil && (stopStartedAt == nil || next?.startedAt != stopStartedAt)) {
                 stopIntent = .none
             }
+            if let next, let stopStartedAt, next.startedAt != stopStartedAt { stopRequestedThisTurn = false }
             // Any frame after the tap is the Mac's word on the resumed run.
             if next != nil { resumeIntent = .none }
         case let .queued(next):
@@ -1956,6 +1989,7 @@ final class AidenBotSessionModel {
     /// what waited to go to it.
     private func setStateView(_ view: AidenBotSessionStateView?) {
         let wasBlocked = stateView?.blocked == .accessChanged
+        if view?.state == .running, stateView?.state != .running { stopRequestedThisTurn = false }
         stateView = view
         stateWrites += 1
         // A finished or interrupted turn retires the last approval's answered line.
@@ -2289,12 +2323,13 @@ final class AidenBotSessionModel {
     }
 
     /// Whether a message request may have reached the Mac. A request the Mac is
-    /// still working on (`409 idempotency_in_flight`) keeps its key too.
+    /// still working on (`409 idempotency_in_flight`) keeps its key too; a
+    /// replayed settled rejection (`409 internal_error`) does not.
     static func messageFailureIsAmbiguous(_ error: Error) -> Bool {
-        if case let AidenRemoteClientError.server(409, body) = error, body.code.rawValue == "idempotency_in_flight" {
-            return true
-        }
-        return aidenBotSessionFailureIsAmbiguous(error)
+        AidenRemoteFailureClassification.isAmbiguous(
+            error,
+            policy: .durableBotLedgerBeforeEffectRefusal
+        )
     }
 
     /// 401 or 403, or a pairing that's gone: this phone no longer reaches this Bot.
@@ -3095,12 +3130,14 @@ final class AidenBotSessionModel {
     func stop() async {
         guard isRunning, !inFlight.contains(.stop) else { return }
         stopIntent = .requested
+        stopRequestedThisTurn = true
         stopStartedAt = activity?.startedAt
         let stopped = await perform(.stop) { [transport, botID] key in
             try await transport.stopBotSession(botId: botID, idempotencyKey: key)
         }
         if !stopped {
             stopIntent = .none
+            stopRequestedThisTurn = false
         } else if stopIntent == .requested {
             stopIntent = .acknowledged
         }

@@ -1,14 +1,17 @@
 import { emitBotTestNotification, installBotTestIpc } from "./bots/test-dom";
 import assert from "node:assert/strict";
 import { afterEach, test } from "node:test";
-import { act, cleanup, fireEvent, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, screen, waitFor, within } from "@testing-library/react";
 import { createBotTestQueryClient, mountWithBotRouter } from "./bots/test-providers";
 import { hostQueryKeys } from "../lib/hosts/host-query-keys";
 import { detectedKeyboardPlatform } from "../shared/keybindings";
 import type { PeerHostView } from "../shared/peer-host";
 import type { PeerOperation } from "../shared/peer-operation";
 import { RemoteBotChatView } from "./remote-bot-chat-view";
+import { toast } from "../components/ui";
 import { clearHandoffTaken } from "../components/bots/handoff-taken";
+import { RemoteBotsSection } from "../components/remote-bots-section";
+import { REMOTE_BOT_SEEN_KEY, resetRemoteBotSeenForTests } from "../lib/remote-bot-seen";
 import {
   AIDEN_CONTENT_REGIONS_SOURCE,
   type AidenContentRegionFacts,
@@ -573,4 +576,303 @@ test("a shared image whose bytes cannot be read from the other computer says wha
   );
   assert.ok(await screen.findByText(/I shared an image: dentist-map\.png\. Open this chat on its computer to see it\./));
   assert.ok(!screen.queryByRole("img", { name: "dentist-map.png" }), "no image drawn");
+});
+
+const CARDS_HOST: PeerHostView = {
+  ...HOST,
+  capabilities: [...HOST.capabilities, "bot:cards", "bot:access-requests", "bot:plans"],
+};
+
+const TRIP_PLAN = {
+  planId: "plan-1",
+  status: "pending",
+  title: "Book the Lisbon trip",
+  why: "You asked for flights and a hotel.",
+  steps: [
+    { text: "Find flights", status: "pending" },
+    { text: "Hold a hotel", status: "pending" },
+  ],
+  items: [{ line: "Gmail · send (up to 3)", details: ["Send email"], used: 0, max: 3 }],
+};
+
+const DOCS_ACCESS = {
+  waitId: "wait-docs",
+  target: "folder",
+  label: "Documents",
+  place: "~/Documents",
+  why: "To read your passport scan.",
+  choices: ["once", "always", "not_now"],
+};
+
+async function mountCards(session: Record<string, unknown>, answers: Partial<Record<string, (operation: PeerOperation) => unknown>> = {}) {
+  return mount(CARDS_HOST, {
+    "remote:peerCall": (_hostId, raw) => {
+      const operation = raw as PeerOperation;
+      if (operation.operation === "botSession") return { ok: true, value: session };
+      const answer = answers[operation.operation];
+      return answer ? answer(operation) : { ok: false, error: { code: "failed", message: `unexpected ${operation.operation}` } };
+    },
+  });
+}
+
+test("a Bot on another computer waiting on a folder and a plan shows both cards here, and each answers there by its own id", async () => {
+  const { peerCalls } = await mountCards(
+    { ...SESSION, state: "running", accessRequest: DOCS_ACCESS, plan: TRIP_PLAN },
+    {
+      botAnswerAccessRequest: () => ({ ok: true, value: { answered: true } }),
+      botRespondPlan: (operation) => ({ ok: true, value: { planId: operation.itemId, status: "active" } }),
+    },
+  );
+  // Two things wait, one card at a time; the composer can't skip past the plan.
+  assert.ok(await screen.findByText("1 of 2"));
+  assert.ok(screen.getByText("Answer the plan under Needs you, then send a message."));
+  fireEvent.click(await screen.findByRole("button", { name: "Allow once" }));
+  await waitFor(() => {
+    const answer = peerCalls().find((call) => call.operation === "botAnswerAccessRequest");
+    assert.equal(answer?.itemId, "wait-docs");
+    assert.deepEqual(answer?.body, { choice: "once" });
+  });
+  // Answered: the plan is what's left.
+  assert.ok(await screen.findByText("Approve this plan?"));
+  assert.ok(screen.getByText("Book the Lisbon trip"));
+  fireEvent.click(screen.getByRole("button", { name: "Allow once" }));
+  await waitFor(() => {
+    const answer = peerCalls().find((call) => call.operation === "botRespondPlan");
+    assert.equal(answer?.resourceId, "bot_1");
+    assert.equal(answer?.itemId, "plan-1");
+    assert.deepEqual(answer?.body, { decision: "approve" });
+  });
+  await waitFor(() => assert.equal(screen.queryByText("Approve this plan?"), null));
+
+  // The host's next frame carries the approved plan: its checklist shows in the chat, with Stop.
+  await act(async () => {
+    emitBotTestNotification("remote:peer-bot-session", event(4, "access_request", { accessRequest: null }));
+    emitBotTestNotification("remote:peer-bot-session", event(5, "plan", { plan: { ...TRIP_PLAN, status: "active" } }));
+  });
+  fireEvent.click(await screen.findByRole("button", { name: "Stop plan" }));
+  await waitFor(() =>
+    assert.deepEqual(peerCalls().filter((call) => call.operation === "botRespondPlan").map((call) => call.body), [
+      { decision: "approve" },
+      { decision: "stop" },
+    ]),
+  );
+});
+
+test("a plan already answered on the other computer says so on the card instead of failing quietly", async () => {
+  await mountCards(
+    { ...SESSION, plan: TRIP_PLAN },
+    {
+      botRespondPlan: () => ({
+        ok: false,
+        error: { code: "request_failed", remoteCode: "plan_expired", message: "This plan is no longer waiting." },
+      }),
+    },
+  );
+  fireEvent.click(await screen.findByRole("button", { name: "Allow once" }));
+  assert.ok(await screen.findByText("This plan is no longer waiting."));
+});
+
+test("a routine a Bot on another computer suggested is added there, and a memory line says where to open it", async () => {
+  const { peerCalls } = await mountCards(
+    {
+      ...SESSION,
+      entries: [
+        ...SESSION.entries,
+        { type: "memory_update", id: "mem-1" },
+        {
+          type: "routine_proposal",
+          id: "rp-entry",
+          proposalId: "4b1f8a52-7f0e-4b8e-9d55-3f2c1a6b7e10",
+          name: "Morning brief",
+          prompt: "Summarize my day.",
+          label: "Weekdays at 8:00 AM",
+          status: "pending",
+        },
+      ],
+    },
+    {
+      botRespondRoutineProposal: () => ({ ok: true, value: { status: "accepted", routineId: "routine-9" } }),
+    },
+  );
+  const card = await screen.findByRole("group", { name: "Routine suggestion: Morning brief" });
+  assert.ok(card.textContent?.includes("Weekdays at 8:00 AM"));
+  fireEvent.click(within(card).getByRole("button", { name: /^Add/u }));
+  await waitFor(() => {
+    const answer = peerCalls().find((call) => call.operation === "botRespondRoutineProposal");
+    assert.equal(answer?.itemId, "4b1f8a52-7f0e-4b8e-9d55-3f2c1a6b7e10");
+    assert.deepEqual(answer?.body, { decision: "accept" });
+  });
+  assert.ok(screen.getByText("Memory updated"));
+});
+
+test("Not now on a routine a Bot on another computer suggested doesn't ask why, since that computer can't record a reason", async () => {
+  const { peerCalls } = await mountCards(
+    {
+      ...SESSION,
+      entries: [
+        ...SESSION.entries,
+        {
+          type: "routine_proposal",
+          id: "rp-entry",
+          proposalId: "4b1f8a52-7f0e-4b8e-9d55-3f2c1a6b7e10",
+          name: "Morning brief",
+          prompt: "Summarize my day.",
+          label: "Weekdays at 8:00 AM",
+          status: "pending",
+        },
+      ],
+    },
+    { botRespondRoutineProposal: () => ({ ok: true, value: { status: "dismissed" } }) },
+  );
+  const card = await screen.findByRole("group", { name: "Routine suggestion: Morning brief" });
+  fireEvent.click(within(card).getByRole("button", { name: /^Not now/u }));
+  assert.ok(await screen.findByText("Not added: Morning brief"));
+  assert.deepEqual(peerCalls().filter((call) => call.operation === "botRespondRoutineProposal").map((call) => call.body), [
+    { decision: "dismiss" },
+  ]);
+  assert.equal(screen.queryByRole("button", { name: /^Why not/u }), null);
+  assert.equal(screen.queryByText(/Noted, thanks/u), null);
+});
+
+test("a message sent to a Bot on another computer shows at once, before that computer has it", async () => {
+  let acknowledge: (value: unknown) => void = () => undefined;
+  await mount(HOST, {
+    "remote:peerCall": (_hostId, raw) => {
+      const operation = raw as PeerOperation;
+      if (operation.operation === "botSession") return { ok: true, value: SESSION };
+      if (operation.operation === "botSend") return new Promise((resolve) => (acknowledge = resolve));
+      return { ok: false, error: { code: "failed", message: `unexpected ${operation.operation}` } };
+    },
+  });
+  const box = await screen.findByPlaceholderText("Ask Planner");
+  fireEvent.change(box, { target: { value: "Move the dentist to Friday" } });
+  fireEvent.click(await screen.findByRole("button", { name: "Send message" }));
+  assert.ok(await screen.findByText("Move the dentist to Friday"));
+  // The host's entry takes its place: the words show once.
+  await act(async () => {
+    acknowledge({ ok: true, value: { submissionId: "s1", deduped: false, state: "running", interrupted: false } });
+    emitBotTestNotification(
+      "remote:peer-bot-session",
+      event(4, "entry", { entry: { type: "message", id: "m3", role: "user", text: "Move the dentist to Friday" } }),
+    );
+  });
+  await waitFor(() => assert.equal(screen.getAllByText("Move the dentist to Friday").length, 1));
+});
+
+test("a send the other computer refuses takes its echo away and keeps the draft", async () => {
+  await mount(HOST, {
+    "remote:peerCall": (_hostId, raw) => {
+      const operation = raw as PeerOperation;
+      if (operation.operation === "botSession") return { ok: true, value: SESSION };
+      return { ok: false, error: { code: "failed", message: "Studio is busy." } };
+    },
+  });
+  const box = (await screen.findByPlaceholderText("Ask Planner")) as HTMLTextAreaElement;
+  fireEvent.change(box, { target: { value: "Move the dentist to Friday" } });
+  fireEvent.click(await screen.findByRole("button", { name: "Send message" }));
+  await waitFor(() => assert.equal(box.value, "Move the dentist to Friday"));
+  await waitFor(() => assert.equal(document.querySelector("[data-bot-pending-send]"), null));
+});
+
+test("a message waiting for a Bot on another computer can be taken back from here, and an older computer says it can't", async (t) => {
+  const told: unknown[] = [];
+  t.mock.method(toast, "info", (message: unknown) => {
+    told.push(message);
+    return "toast-id";
+  });
+  const running = { ...SESSION, state: "running", activity: null, queued: [{ submissionId: "s9", mode: "queue", text: "and Friday?" }] };
+  let outcome: unknown = { ok: true, value: { submissionId: "s9", outcome: "started" } };
+  const { peerCalls } = await mountCards(running, { botWithdrawQueued: () => outcome });
+  const remove = await screen.findByRole("button", { name: "Remove queued message: and Friday?" });
+  await act(async () => {
+    fireEvent.click(remove);
+  });
+  const withdraw = peerCalls().find((call) => call.operation === "botWithdrawQueued")!;
+  assert.deepEqual([withdraw.resourceId, withdraw.itemId, withdraw.body], ["bot_1", "s9", {}]);
+  assert.ok(withdraw.idempotencyKey);
+  await waitFor(() => assert.deepEqual(told, ["That message already started, so it stays."]));
+
+  outcome = { ok: false, error: { code: "not_found", message: "This Aiden Remote endpoint does not exist.", status: 404 } };
+  await act(async () => {
+    fireEvent.click(screen.getByRole("button", { name: "Remove queued message: and Friday?" }));
+  });
+  await waitFor(() => assert.equal(told[told.length - 1], "Update Aiden on Studio to remove a waiting message from here."));
+});
+
+test("earlier messages of a Bot on another computer load a page at a time above the chat", async () => {
+  const pages: Record<string, unknown> = {
+    m1: { ok: true, value: { botId: "bot_1", epoch: "e1", entries: [{ type: "message", id: "m0", role: "assistant", text: "Morning! Coffee first?" }], hasOlder: false } },
+  };
+  const { peerCalls } = await mountCards({ ...SESSION, hasOlder: true }, { botSessionEntries: (operation) => pages[operation.before!] });
+  await screen.findByText("Two meetings and a dentist.");
+  assert.equal(screen.queryByText("Morning! Coffee first?"), null);
+  await act(async () => {
+    fireEvent.click(screen.getByRole("button", { name: "Load older messages" }));
+  });
+  await screen.findByText("Morning! Coffee first?");
+  assert.equal(peerCalls().find((call) => call.operation === "botSessionEntries")?.before, "m1", "the page ends where the chat began");
+  assert.equal(screen.queryByRole("button", { name: "Load older messages" }), null, "nothing older is left");
+});
+
+test("a computer too old to page back says where the older messages are", async () => {
+  await mountCards({ ...SESSION, hasOlder: true }, {
+    botSessionEntries: () => ({ ok: false, error: { code: "not_found", message: "This Aiden Remote endpoint does not exist.", status: 404 } }),
+  });
+  await screen.findByText("Two meetings and a dentist.");
+  await act(async () => {
+    fireEvent.click(screen.getByRole("button", { name: "Load older messages" }));
+  });
+  await screen.findByText("Older messages are on Studio. Update Aiden there to see them here.");
+  assert.equal(screen.queryByRole("button", { name: "Load older messages" }), null);
+});
+
+test("a paired Mac's Bot's dot clears only once its chat shows the new reply", async () => {
+  const before = Date.parse("2026-11-24T08:00:00.000Z");
+  const replyAt = "2026-11-24T09:00:00.000Z";
+  for (const shows of [false, true]) {
+    cleanup();
+    localStorage.clear();
+    resetRemoteBotSeenForTests();
+    // This Mac first listed the host's Bots before the reply came.
+    localStorage.setItem(REMOTE_BOT_SEEN_KEY, JSON.stringify({ version: 2, hostSince: { host_a: before }, seenReplyAt: {} }));
+    const entries = [
+      { type: "message", id: "m1", role: "user", text: "What is on today?", createdAt: "2026-11-24T07:59:00.000Z" },
+      { type: "message", id: "m2", role: "assistant", text: "Two meetings and a dentist.", createdAt: "2026-11-24T08:00:00.000Z" },
+      ...(shows ? [{ type: "message", id: "m3", role: "assistant", text: "The dentist moved to Friday.", createdAt: replyAt }] : []),
+    ];
+    installBotTestIpc({
+      "remote:peerBotSessionSubscribe": () => ({ subscriptionId: "bot_sub_1", state: "streaming" }),
+      "remote:peerBotSessionUnsubscribe": () => true,
+      "remote:peerCall": (_hostId, operation) =>
+        (operation as PeerOperation).operation === "botSession"
+          ? { ok: true, value: { ...SESSION, entries } }
+          : { ok: false, error: { code: "failed", message: "Not in this test." } },
+    });
+    const queryClient = createBotTestQueryClient();
+    queryClient.setQueryData(hostQueryKeys.list(), [HOST]);
+    queryClient.setQueryData(hostQueryKeys.feed("host_a"), {
+      bots: [{ id: "bot_1", name: "Planner", lastReplyAt: replyAt }],
+      chats: [],
+      runs: [],
+    });
+    const groups = [
+      {
+        host: { id: "host_a", label: "Studio", availability: "online" as const },
+        bots: [{ id: "bot_1", name: "Planner", lastReplyAt: Date.parse(replyAt) }],
+      },
+    ];
+    await mountWithBotRouter(<RemoteBotChatView hostId="host_a" botId="bot_1" />, {
+      initialPath: "/bots",
+      queryClient,
+      sidebar: <RemoteBotsSection groups={groups} opening={null} onOpen={() => undefined} />,
+    });
+    await screen.findByText("Two meetings and a dentist.");
+    if (shows) {
+      await screen.findByText("The dentist moved to Friday.");
+      await screen.findByRole("button", { name: "Planner, on Studio" });
+    } else {
+      // An older snapshot of the chat: the reply it doesn't show stays unread.
+      assert.ok(screen.getByRole("button", { name: "Planner, on Studio, unread" }));
+    }
+  }
 });

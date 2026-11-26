@@ -122,6 +122,33 @@
 .oa-bots-receipt { color: var(--text-tertiary); text-align: center; font-size: 7.5px; }
 .oa-bots-routine { position: absolute; height: 18px; padding: 0 7px; background: var(--surface-popover); box-shadow: var(--elevation-control); color: var(--text-primary); }
 .oa-bots-routine .oa-icon { color: var(--accent); }
+/* The floating head a Bot chat shrinks into, with its unread count */
+.oa-bots-head-bubble {
+  position: absolute;
+  display: grid;
+  place-items: center;
+  width: 34px;
+  height: 34px;
+  border-radius: 50%;
+  background: var(--surface-popover);
+  box-shadow: var(--elevation-control);
+}
+.oa-bots-head-bubble svg { width: 26px; height: 26px; }
+.oa-bots-head-count {
+  position: absolute;
+  top: -3px;
+  right: -3px;
+  display: grid;
+  place-items: center;
+  min-width: 13px;
+  height: 13px;
+  padding: 0 3px;
+  border-radius: var(--radius-pill);
+  background: var(--accent);
+  color: var(--accent-foreground);
+  font-size: 7px;
+  font-weight: 600;
+}
 
 /* Bot computers: the Computer tab over the Bot's own macOS screen */
 .oa-bc-bar { display: flex; align-items: center; gap: 5px; height: 26px; padding: 0 7px; color: var(--text-secondary); }

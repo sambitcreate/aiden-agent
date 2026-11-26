@@ -1,5 +1,6 @@
 import { parseBotResumeAcknowledgement } from "../../renderer/shared/bot-execution-resume.js";
-import { buildApprovalCard } from "../../renderer/shared/approval-card-model.js";
+import { buildApprovalCard, type ApprovalCard } from "../../renderer/shared/approval-card-model.js";
+import type { CommandReading } from "../../renderer/shared/command-reading.js";
 import { BOT_TEMPLATE_STALE_MESSAGE } from "../../renderer/shared/bot-presets.js";
 import {
   AIDEN_REMOTE_BOT_SETTINGS_CHANGE_ENTRY_TYPES,
@@ -117,6 +118,12 @@ import {
   type AidenRemoteBotRoutineSuggestionList,
   AIDEN_REMOTE_BOT_PRESETS_MAX,
   AIDEN_REMOTE_BOT_SESSION_MAX_ENTRIES,
+  AIDEN_REMOTE_BOT_SESSION_PAGE_DEFAULT_LIMIT,
+  parseAidenRemoteBotSessionEntriesPage,
+  parseAidenRemoteBotSessionEntryId,
+  parseAidenRemoteBotSubmissionId,
+  type AidenRemoteBotQueuedWithdrawReceipt,
+  type AidenRemoteBotSessionEntriesPage,
   AIDEN_REMOTE_BOT_SESSION_MAX_TEXT_CHARS,
   AIDEN_REMOTE_MAX_SSE_FRAME_BYTES,
   AIDEN_REMOTE_PROTOCOL_VERSION,
@@ -259,6 +266,13 @@ export interface AidenRemoteBotSessionRuntime {
    * the self-intro (`BotSessionRuntime.placedSubmissions`).
    */
   placedSubmissions(botId: string): Promise<ReadonlyMap<string, string>>;
+  /**
+   * Revision 67: take back a queued submission before its turn starts, as the
+   * desktop's Remove does (`BotSessionService.withdraw`). `personOnly` makes a
+   * routine's input, the self-intro or an unknown id `gone`, checked in the
+   * Bot's lane so a send racing the request is seen.
+   */
+  withdraw(botId: string, submissionId: string, options?: { personOnly?: boolean }): Promise<"withdrawn" | "started" | "gone">;
 }
 
 export interface AidenRemoteBotSessionServiceOptions {
@@ -865,9 +879,10 @@ export function projectBotSessionState(
 function windowed(
   entries: AidenRemoteBotSessionEntry[],
   budgetBytes: number,
+  maxEntries: number = AIDEN_REMOTE_BOT_SESSION_MAX_ENTRIES,
 ): { entries: AidenRemoteBotSessionEntry[]; hasOlder: boolean } {
   const limit = Math.min(MAX_SESSION_JSON_BYTES, budgetBytes);
-  let start = Math.max(0, entries.length - AIDEN_REMOTE_BOT_SESSION_MAX_ENTRIES);
+  let start = Math.max(0, entries.length - Math.min(maxEntries, AIDEN_REMOTE_BOT_SESSION_MAX_ENTRIES));
   let window = entries.slice(start);
   while (window.length > 0 && Buffer.byteLength(JSON.stringify(window), "utf8") > limit) {
     start = Math.min(entries.length, start + Math.max(1, Math.floor(window.length / 4)));
@@ -903,6 +918,8 @@ interface Audience {
   allowed: boolean;
   /** `approval:cards`: the typed `card` on the Bot's approval (revision 61). */
   approvalCards: boolean;
+  /** `approval:plain-words`: a shell card's `explanation` and `tags` (revision 69). */
+  approvalPlainWords: boolean;
   /** `bot:settings-changes`: `settings_change` entries (revision 61). */
   settingsChanges: boolean;
   /** `bot:suggestions`: `skill_proposal`, `lesson` and `memory_tidy` entries (revision 61). */
@@ -1091,7 +1108,7 @@ class BotLiveProjector {
     const state = stateViewForAudience(this.state, audience);
     const handoff = handoffForAudience(this.handoff?.handoff ?? null, audience);
     const issues = this.issuesFor(audience);
-    const approval = approvalForAudience(this.approval, audience.allowed, audience.approvalCards);
+    const approval = approvalForAudience(this.approval, audience.allowed, audience.approvalCards, audience.approvalPlainWords);
     const accessRequest = accessForAudience(this.accessRequest?.card ?? null, audience.allowed);
     let used = 2 + memberBytes("botId", this.botId) + memberBytes("epoch", this.epoch) + memberBytes("seq", this.seq);
     for (const [key, value] of Object.entries(state)) used += memberBytes(key, value);
@@ -1142,6 +1159,19 @@ class BotLiveProjector {
     });
   }
 
+  /**
+   * Revision 67: up to `limit` entries just older than `before`, as this
+   * device's session shows them, inside the transcript's byte limit. Null when
+   * `before` is not an entry this device's session holds (another epoch, or
+   * an id it was never sent).
+   */
+  olderEntries(audience: Audience, before: string, limit: number): { entries: AidenRemoteBotSessionEntry[]; hasOlder: boolean } | null {
+    const shown = entriesFor(this.entries, audience);
+    const index = shown.findIndex((entry) => entry.id === before);
+    if (index < 0) return null;
+    return windowed(shown.slice(0, index), MAX_SESSION_JSON_BYTES, limit);
+  }
+
   private issuesFor(audience: Audience): AidenRemoteBotIssue[] {
     return audience.accessRequests ? this.issues : this.legacyIssues;
   }
@@ -1167,7 +1197,7 @@ class BotLiveProjector {
         // A stalled client is dropped; it reconnects and gets a fresh snapshot.
         subscriber.overflowed = true;
       } else {
-        const key = `${subscriber.cards}:${subscriber.activity}:${subscriber.handoffs}:${subscriber.notes}:${subscriber.onMac}:${subscriber.images}:${subscriber.issues}:${subscriber.accessRequests}:${subscriber.plans}:${subscriber.allowed}:${subscriber.peers}:${subscriber.approvalCards}:${subscriber.settingsChanges}:${subscriber.suggestions}`;
+        const key = `${subscriber.cards}:${subscriber.activity}:${subscriber.handoffs}:${subscriber.notes}:${subscriber.onMac}:${subscriber.images}:${subscriber.issues}:${subscriber.accessRequests}:${subscriber.plans}:${subscriber.allowed}:${subscriber.peers}:${subscriber.approvalCards}:${subscriber.approvalPlainWords}:${subscriber.settingsChanges}:${subscriber.suggestions}`;
         let text = rendered.get(key);
         if (text === undefined) {
           text = render(subscriber);
@@ -1231,7 +1261,7 @@ class BotLiveProjector {
       if (entry?.type === "peer" && !audience.peers) return noOp(audience);
       if (!botUxEntryVisible(entry, audience)) return noOp(audience);
       if (event.type === "approval") {
-        const approval = approvalForAudience((event.payload as { approval: AidenRemoteBotApproval | null }).approval, audience.allowed, audience.approvalCards);
+        const approval = approvalForAudience((event.payload as { approval: AidenRemoteBotApproval | null }).approval, audience.allowed, audience.approvalCards, audience.approvalPlainWords);
         return sseFrame(id, "approval", { ...data, payload: { approval } });
       }
       if (event.type === "access_request" && audience.accessRequests) {
@@ -1596,14 +1626,21 @@ class BotLiveProjector {
 // Service
 // ---------------------------------------------------------------------------
 
-function approvalForAudience(approval: AidenRemoteBotApproval | null, allowed: boolean, cards: boolean): AidenRemoteBotApproval | null {
+function approvalForAudience(approval: AidenRemoteBotApproval | null, allowed: boolean, cards: boolean, plainWords = false): AidenRemoteBotApproval | null {
   if (!approval) return approval;
   const { alwaysCount, card, ...legacy } = approval;
   return {
     ...legacy,
     ...(allowed && alwaysCount !== undefined ? { alwaysCount } : {}),
-    ...(cards && card ? { card: botApprovalCardForAudience(card, allowed) } : {}),
+    ...(cards && card ? { card: botApprovalCardForAudience(withoutPlainWords(card, plainWords), allowed) } : {}),
   };
+}
+
+/** A shell card's plain words go only to an `approval:plain-words` holder (revision 69). */
+function withoutPlainWords(card: ApprovalCard, plainWords: boolean): ApprovalCard {
+  if (plainWords) return card;
+  const { explanation: _explanation, tags: _tags, ...rest } = card;
+  return rest;
 }
 function accessForAudience(card: AidenRemoteBotAccessRequest | null, allowed: boolean): AidenRemoteBotAccessRequest | null {
   if (!card || allowed) return card;
@@ -1616,7 +1653,7 @@ function botApprovalOffersAlways(prompt: { toolName: string; always?: { count: n
 }
 
 /** A waiting Bot approval as phones see it. */
-function wireApproval(prompt: { waitId: string; toolCallId: string; toolName: string; summary: string; always?: { count: number } }): AidenRemoteBotApproval {
+function wireApproval(prompt: { waitId: string; toolCallId: string; toolName: string; summary: string; always?: { count: number }; reading?: CommandReading }): AidenRemoteBotApproval {
   // Always allow is offered on every eligible card. The older `alwaysCount`
   // field still appears only with a repeat count (3 to 20), so a phone that
   // reads it alone keeps offering Always from the third approval.
@@ -1639,6 +1676,9 @@ function wireApproval(prompt: { waitId: string; toolCallId: string; toolName: st
       canAllow: !isComputerUseCapabilityTool(prompt.toolName),
       ...(alwaysOffered ? { scopes: ["always"], alwaysLabel: "Always allow this tool" } : {}),
       ...(alwaysCount !== undefined ? { notes: [`You’ve allowed this ${alwaysCount} times in the last 2 weeks.`] } : {}),
+      // Built with the plain words; `approvalForAudience` drops them for a device without the opt-in.
+      ...(prompt.reading ? { reading: prompt.reading } : {}),
+      plainWords: true,
     }),
   };
 }
@@ -1841,7 +1881,7 @@ function routineError(error: unknown): never {
 const HOLDER_AUDIENCE: AidenRemoteBotHandoffAudience = { handoffs: true };
 
 /** The opt-ins a route was called with, from the device's grants. */
-type AudienceOptions = { cards?: boolean; activity?: boolean; handoffs?: boolean; handoffNotes?: boolean; handoffOnMac?: boolean; images?: boolean; issues?: boolean; peers?: boolean; accessRequests?: boolean; plans?: boolean; allowed?: boolean; approvalCards?: boolean; settingsChanges?: boolean; suggestions?: boolean };
+type AudienceOptions = { cards?: boolean; activity?: boolean; handoffs?: boolean; handoffNotes?: boolean; handoffOnMac?: boolean; images?: boolean; issues?: boolean; peers?: boolean; accessRequests?: boolean; plans?: boolean; allowed?: boolean; approvalCards?: boolean; approvalPlainWords?: boolean; settingsChanges?: boolean; suggestions?: boolean };
 
 /** Ledger route of each session control. */
 const CONTROL_ROUTES = {
@@ -2663,6 +2703,7 @@ export class AidenRemoteBotSessionService {
       plans: options.plans === true && this.supportsPlans,
       allowed: options.allowed === true,
       approvalCards: options.approvalCards === true,
+      approvalPlainWords: options.approvalCards === true && options.approvalPlainWords === true,
       settingsChanges: options.settingsChanges === true && this.options.settingsChanges !== undefined,
       suggestions: options.suggestions === true && this.options.suggestions !== undefined,
     };
@@ -2694,6 +2735,69 @@ export class AidenRemoteBotSessionService {
       return projector.snapshot(audience);
     } catch (error) {
       return mapSessionError(error, audience);
+    }
+  }
+
+  /**
+   * Revision 67, `GET /bots/{botId}/session/entries`: the entries just older
+   * than `before`, as this device's session shows them. A `before` the
+   * session does not hold is `operation_stale`: read the session again.
+   */
+  async olderEntries(
+    botId: string,
+    query: { before: string; limit?: number },
+    options: AudienceOptions = {},
+  ): Promise<AidenRemoteBotSessionEntriesPage> {
+    const before = parseOrInvalid(parseAidenRemoteBotSessionEntryId, query.before, "The session page cursor is invalid.");
+    const limit = query.limit ?? AIDEN_REMOTE_BOT_SESSION_PAGE_DEFAULT_LIMIT;
+    if (!Number.isSafeInteger(limit) || limit < 1 || limit > AIDEN_REMOTE_BOT_SESSION_MAX_ENTRIES) {
+      throw new AidenRemoteServiceError("invalid_request", "The session page limit is invalid.", 400);
+    }
+    const bot = await this.options.bots.bot(botId);
+    const audience = this.audience(options);
+    let projector: BotLiveProjector;
+    try {
+      projector = await this.liveProjector(bot.id);
+    } catch (error) {
+      return mapSessionError(error, audience);
+    }
+    const page = projector.olderEntries(audience, before, limit);
+    if (!page) throw new AidenRemoteServiceError("operation_stale", "This Bot's chat changed. Read it again.", 409);
+    return parseAidenRemoteBotSessionEntriesPage({ botId: bot.id, epoch: projector.epoch, ...page });
+  }
+
+  /**
+   * Revision 67, `POST /bots/{botId}/queued/{submissionId}/withdraw`: take
+   * back one of the person's queued messages. Only the person's own message
+   * is theirs to take back, so a routine's input or the self-intro reads as
+   * `gone`, as does an id the host can't find; one whose turn began is
+   * `started` and stays in the chat. Idempotent per key.
+   */
+  async withdrawQueued(
+    deviceId: string,
+    botId: string,
+    submissionId: string,
+    key: string,
+    input: unknown,
+  ): Promise<AidenRemoteBotQueuedWithdrawReceipt> {
+    if (!this.supportsActivity) throw new AidenRemoteServiceError("not_found", "This endpoint is unavailable.", 404);
+    const id = parseOrInvalid(parseAidenRemoteBotSubmissionId, submissionId, "The queued message is invalid.");
+    parseOrInvalid((value) => parseAidenRemoteEmptyRequest(value, "Bot request"), input ?? {}, "The Bot request is invalid.");
+    const bot = await this.options.bots.bot(botId);
+    try {
+      const receipt = await this.options.bots.executeIdempotent(
+        { deviceId, route: "POST /bots/{id}/queued/{submissionId}/withdraw", resourceId: `${bot.id}:${id}`, key },
+        {},
+        async (): Promise<AidenRemoteBotQueuedWithdrawReceipt> => {
+          const runtime = await this.options.runtime();
+          // Whose message it is is decided in the Bot's lane, with the abort, not before it.
+          return { submissionId: id, outcome: await runtime.withdraw(bot.id, id, { personOnly: true }) };
+        },
+      );
+      await this.afterAction(bot.id);
+      return receipt;
+    } catch (error) {
+      return mapSessionError(error);
     }
   }
 

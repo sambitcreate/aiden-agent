@@ -2893,3 +2893,39 @@ test("a lead chat's started chat keeps approvals and questions open 30 minutes; 
     owner.owner.send("chat:done", { chat: { messages: [{ id: "a-1", role: "assistant" }] } });
   }
 });
+
+test("revision 69: a phone's stream approval carries the command's plain words only when it holds the opt-in", () => {
+  const service = new AidenRemoteStreamService({ now: () => 1_000, cancel: () => true, approve: () => true });
+  const owner = service.create("device-1", "stream-1", "chat-1", "turn-1");
+  const reading = { explanation: "Deletes the old build folder", tags: [{ label: "Deletes files", tone: "risk" }] };
+  owner.owner.send("chat:approval", {
+    approvalId: "approval-1",
+    summary: "Run command: rm -rf build",
+    toolCallId: "tool-call-1",
+    toolName: "run_command",
+    reading,
+  });
+  // The host keeps the reading for its own card.
+  assert.deepEqual(service.pendingApprovalForChat("chat-1")?.reading, reading);
+
+  const words = service.pendingApproval("device-1", "stream-1", { card: true, plainWords: true })!;
+  assert.equal(words.card?.explanation, "Deletes the old build folder");
+  assert.deepEqual(words.card?.tags, reading.tags);
+  const cards = service.pendingApproval("device-1", "stream-1", { card: true })!;
+  assert.equal(cards.card?.explanation, undefined);
+  assert.equal(cards.card?.tags, undefined);
+  const plain = service.pendingApproval("device-1", "stream-1", { plainWords: true })!;
+  assert.equal(plain.card, undefined, "plain words never come without the typed card");
+  for (const approval of [words, cards, plain]) assert.equal("reading" in approval, false);
+
+  // A malformed reading from the renderer side is dropped, not repaired.
+  const other = service.create("device-1", "stream-2", "chat-2", "turn-2");
+  other.owner.send("chat:approval", {
+    approvalId: "approval-2",
+    summary: "Run command: ls",
+    toolCallId: "tool-call-2",
+    toolName: "run_command",
+    reading: { explanation: "Two\nlines", tags: [] },
+  });
+  assert.equal(service.pendingApprovalForChat("chat-2")?.reading, undefined);
+});

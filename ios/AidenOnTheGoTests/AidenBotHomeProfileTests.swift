@@ -43,7 +43,8 @@ final class AidenBotHomeProfileTests: XCTestCase {
         name: String,
         purpose: String = "",
         updatedAt: String,
-        sessionState: String? = nil
+        sessionState: String? = nil,
+        needsYou: Bool = false
     ) throws -> AidenBotSummary {
         var object: [String: Any] = [
             "id": id,
@@ -58,6 +59,8 @@ final class AidenBotHomeProfileTests: XCTestCase {
         if let sessionState { object["sessionState"] = sessionState }
         // Revision 37: a paused Bot's summary also carries `paused: true`.
         if sessionState == "paused" { object["paused"] = true }
+        // Revision 68: only a `bot:needs-you` phone is told, and only as `true`.
+        if needsYou { object["needsYou"] = true }
         return try AidenRemoteJSONDecoder.decode(
             AidenBotSummary.self,
             from: JSONSerialization.data(withJSONObject: object)
@@ -68,6 +71,7 @@ final class AidenBotHomeProfileTests: XCTestCase {
         botID: String,
         preview: String?,
         state: String = "idle",
+        canRespond: Bool = false,
         updatedAt: String
     ) throws -> AidenBotConversationItem {
         var object: [String: Any] = [
@@ -75,7 +79,7 @@ final class AidenBotHomeProfileTests: XCTestCase {
             "botId": botID,
             "title": "",
             "activityState": state,
-            "canRespondToApproval": false,
+            "canRespondToApproval": canRespond,
             "createdAt": "2026-08-18T17:00:00.000Z",
             "updatedAt": updatedAt,
             "revision": "chat-rev-\(botID)",
@@ -150,6 +154,51 @@ final class AidenBotHomeProfileTests: XCTestCase {
         XCTAssertEqual(rows["paused"]?.isWorking, false)
     }
 
+    /// Revision 68: a Bot waiting on an approval or a question says so first,
+    /// over its last message, and stops showing the working dot.
+    func testHomeRowSaysWaitingForYouWhenTheMacSaysTheBotNeedsThePerson() throws {
+        let bots = [
+            try summary(id: "waiting", name: "Waiting", updatedAt: "2026-08-18T18:00:00.000Z", sessionState: "running", needsYou: true),
+            try summary(id: "busy", name: "Busy", updatedAt: "2026-08-18T17:00:00.000Z", sessionState: "running"),
+        ]
+        let conversations = [
+            try conversation(botID: "waiting", preview: "Booking the flight", updatedAt: "2026-08-18T18:00:00.000Z"),
+        ]
+        let rows = Dictionary(uniqueKeysWithValues: aidenBotHomeRows(
+            bots: bots,
+            conversations: conversations,
+            query: ""
+        ).map { ($0.id, $0) })
+        XCTAssertEqual(rows["waiting"]?.preview, "Waiting for you")
+        XCTAssertEqual(rows["waiting"]?.isWorking, false)
+        XCTAssertEqual(rows["busy"]?.isWorking, true)
+        XCTAssertEqual(rows["busy"]?.preview, "Say hello")
+    }
+
+    /// An approval the phone can see keeps its own line, also while the Mac
+    /// says the Bot waits on the person, as on Android.
+    func testHomeRowKeepsTheApprovalLineWhenTheBotAlsoNeedsThePerson() throws {
+        let bots = [
+            try summary(id: "answerable", name: "A", updatedAt: "2026-08-18T18:00:00.000Z", sessionState: "running", needsYou: true),
+            try summary(id: "mac-only", name: "B", updatedAt: "2026-08-18T17:30:00.000Z", sessionState: "running", needsYou: true),
+            try summary(id: "plain", name: "C", updatedAt: "2026-08-18T17:00:00.000Z", sessionState: "running"),
+        ]
+        let conversations = [
+            try conversation(botID: "answerable", preview: "Booking", state: "waiting_for_approval", canRespond: true, updatedAt: "2026-08-18T18:00:00.000Z"),
+            try conversation(botID: "mac-only", preview: "Booking", state: "waiting_for_approval", updatedAt: "2026-08-18T17:30:00.000Z"),
+            try conversation(botID: "plain", preview: "Booking", state: "waiting_for_approval", canRespond: true, updatedAt: "2026-08-18T17:00:00.000Z"),
+        ]
+        let rows = Dictionary(uniqueKeysWithValues: aidenBotHomeRows(
+            bots: bots,
+            conversations: conversations,
+            query: ""
+        ).map { ($0.id, $0) })
+        XCTAssertEqual(rows["answerable"]?.preview, "Needs your OK")
+        XCTAssertEqual(rows["mac-only"]?.preview, "Waiting for your OK on your Mac")
+        XCTAssertEqual(rows["plain"]?.preview, "Needs your OK")
+        XCTAssertEqual(rows["answerable"]?.isWorking, false)
+    }
+
     func testHomeSearchMatchesNameSubtitlePreviewAndServerMatches() throws {
         let bots = [
             try summary(id: "chef", name: "Chef", purpose: "Meal prepping", updatedAt: "2026-08-18T18:00:00.000Z"),
@@ -181,7 +230,6 @@ final class AidenBotHomeProfileTests: XCTestCase {
         for color in AidenBotAvatarColor.allCases {
             XCTAssertEqual(hex(color.rgb), colors[color.rawValue], "\(color.rawValue) differs from desktop")
         }
-        XCTAssertEqual(hex(aidenBotAvatarFaceRGB), palette["face"] as? String)
     }
 
     func testDeleteConfirmationUsesTheExactSharedCopy() {
@@ -818,6 +866,46 @@ final class AidenBotInstantEditTests: XCTestCase {
         await flow.submit(input, operations: try createOperations(mac)) { _ in created += 1 }
         await flow.submit(input, operations: try createOperations(mac)) { _ in created += 1 }
         XCTAssertNotEqual(mac.creates[2].key, mac.creates[3].key)
+    }
+
+    func testReplayed409InternalErrorAfterLostCreateReleasesSettledKeyForFreshAttempt() async throws {
+        func serverError(_ status: Int, _ code: String) throws -> AidenRemoteClientError {
+            let body = try AidenRemoteJSONDecoder.decode(
+                AidenRemoteErrorEnvelope.Body.self,
+                from: Data(#"{"code":"\#(code)","message":"This Bot request cannot be safely repeated.","requestId":"req_create_replay","retryable":false}"#.utf8)
+            )
+            return .server(statusCode: status, body: body)
+        }
+
+        let mac = CreateMac()
+        let flow = createFlow()
+        var created = 0
+
+        // 1. First rejection response is lost: key is retained.
+        // 2. Same-key retry hits 409 idempotency_in_flight: key is still retained.
+        // 3. Same-key retry hits undecodable 409 (.unexpectedStatus(409)): key is still retained.
+        // 4. Same-key retry receives decoded 409 internal_error (settled replay): key is released.
+        // 5. Next Try Again mints a fresh key and succeeds.
+        mac.createErrors = [
+            URLError(.networkConnectionLost),
+            try serverError(409, "idempotency_in_flight"),
+            AidenRemoteClientError.unexpectedStatus(409),
+            try serverError(409, "internal_error"),
+        ]
+
+        await flow.submit(input, operations: try createOperations(mac)) { _ in created += 1 }
+        await flow.submit(try XCTUnwrap(flow.failure).input, operations: try createOperations(mac)) { _ in created += 1 }
+        await flow.submit(try XCTUnwrap(flow.failure).input, operations: try createOperations(mac)) { _ in created += 1 }
+        await flow.submit(try XCTUnwrap(flow.failure).input, operations: try createOperations(mac)) { _ in created += 1 }
+        let settledFailure = try XCTUnwrap(flow.failure)
+        await flow.submit(settledFailure.input, operations: try createOperations(mac)) { _ in created += 1 }
+
+        XCTAssertEqual(mac.creates.count, 5)
+        XCTAssertEqual(mac.creates[0].key, mac.creates[1].key, "Lost response keeps key")
+        XCTAssertEqual(mac.creates[1].key, mac.creates[2].key, "409 idempotency_in_flight keeps key")
+        XCTAssertEqual(mac.creates[2].key, mac.creates[3].key, "Undecodable 409 keeps key")
+        XCTAssertNotEqual(mac.creates[3].key, mac.creates[4].key, "Replayed 409 internal_error releases settled key so fresh attempt mints a new key")
+        XCTAssertEqual(created, 1)
     }
 
     func testTryAgainAfterALostCreateReplaysTheSameRequestThroughACatalogChange() async throws {

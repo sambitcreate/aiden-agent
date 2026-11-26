@@ -368,6 +368,8 @@ export class AidenAppControlProvider implements LiveToolProvider {
     if (this.closed) return AIDEN_APP_CONTROL_ERRORS.unreadable;
     // The switch can be turned off mid-session: from then on nothing runs.
     if (!(await this.enabled())) return AIDEN_APP_CONTROL_ERRORS.turnedOff;
+    // The session may have closed while the switch check was awaited.
+    if (this.closed) return AIDEN_APP_CONTROL_ERRORS.unreadable;
     this.calls += 1;
     if (this.calls > (this.options.sessionCalls ?? DEFAULT_SESSION_CALLS)) return AIDEN_APP_CONTROL_ERRORS.budget;
     switch (call.name) {
@@ -589,8 +591,10 @@ export class AidenAppControlProvider implements LiveToolProvider {
         limits,
         previous: markNew ? this.signatures : undefined,
       });
-      this.refs = new Map(screen.elements.map((element) => [element.ref, element]));
-      this.signatures = screen.signatures;
+      if (!this.closed) {
+        this.refs = new Map(screen.elements.map((element) => [element.ref, element]));
+        this.signatures = screen.signatures;
+      }
       return screen;
     } finally {
       this.release(LOOK_OBJECT_GROUP);
@@ -682,7 +686,7 @@ export class AidenAppControlProvider implements LiveToolProvider {
   private finishAction(abort: AbortController): void {
     if (this.current === abort) this.current = null;
     this.busy = false;
-    if (!abort.signal.aborted) this.scheduleIdle();
+    if (!abort.signal.aborted && !this.closed) this.scheduleIdle();
   }
 
   /**
@@ -835,6 +839,10 @@ export class AidenAppControlProvider implements LiveToolProvider {
     if (!(await this.enabled())) {
       this.confirming = false;
       await this.note(`Let Live move through Aiden was turned off, so ${quoted(element.name, element.role)} was not used.`);
+      return;
+    }
+    if (this.closed) {
+      this.confirming = false;
       return;
     }
     const abort = this.beginAction(this.lifetime.signal);

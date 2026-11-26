@@ -29,7 +29,8 @@ import { createBotPlanLifecycle } from "../bot-plans/lifecycle.js";
 // schedules the background review, and compaction flushes memory and steers
 // its summary.
 
-import { app, BrowserWindow, ipcMain, logger, Notification, powerMonitor } from "../../platform.js";
+import { app, ipcMain, logger, Notification, powerMonitor } from "../../platform.js";
+import { isAidenAppWindowFocused } from "../../windows/bot-bubbles-overlay-registry.js";
 import { requestAppPath } from "../app-navigation.js";
 import { setBotFileToolProtectedRoots, setBotFileToolTemporaryPrivateRoots } from "../bot-file-tool-router.js";
 import { botAccessPrivateRoots, resolveBotAccessTarget } from "./bot-access-target.js";
@@ -134,6 +135,7 @@ import { BOT_RECALL_TOOL_NAME, botRecallToolEntry } from "../bot-memory/recall.j
 
 import { createBotLiveProjection, type BotLiveProjection } from "./live-projection.js";
 import { botIngressAllowsTool, botIngressRefusal, botTurnAttended } from "./bot-tool-policy.js";
+import { botSubagentReplyClocks } from "./bot-subagent-reply-clocks.js";
 
 const MODEL_CACHE_MS = 30_000;
 
@@ -495,7 +497,7 @@ const executionIssues = createBotExecutionIssues(botIssues, spending, {
     const before = await service.state(botId);
     if (before.kind !== "interrupted" || before.blocked) return "moot";
     try {
-      const after = await service.resume(botId, `auto-retry:${claim.id}:${attempt}`);
+      const after = await service.resume(botId, `auto-retry:${claim.id}:${attempt}`, { automatic: true });
       return after.kind === "running" ? "resumed" : after.kind === "interrupted" ? "failed" : "moot";
     } catch {
       return "failed";
@@ -539,7 +541,8 @@ async function reconcileBotPendingKnownCost(claim: BotExecutionClaim):Promise<vo
   const proof=await botRoutineModels.responseCostForDispatch(claim,pending);
   if(proof)await recordKnownBotExecutionCost(spending,proof.dispatch,proof.reportedCostUsd);
 }
-const execution: BotExecutionPort = {
+// Each claim's helper clock is dropped when its reply ends or is dismissed.
+const execution: BotExecutionPort = botSubagentReplyClocks.releasingWith({
   async reconcileResponseCosts(botId,taskId,scopeId) { for(const proof of await botRoutineModels.responseCosts(botId,taskId,scopeId)) await recordKnownBotExecutionCost(spending,proof.dispatch,proof.reportedCostUsd); },
   verifyResponse: async (facts) => Boolean(await botRoutineModels.responseEvidence(facts)),
   async recordKnownResponse(facts, message) { const dispatch = await botRoutineModels.responseEvidence(facts); if (dispatch) await recordKnownBotExecutionResponse(spending, facts.botId, dispatch.dispatchId, message, dispatch, facts.responseDigest); },
@@ -615,7 +618,7 @@ const execution: BotExecutionPort = {
 
     } catch (error) { admission.release(); peerLease?.release(); throw error; }
   },
-};
+});
 
 const helperRuntimeBindings = new WeakMap<ResolvedModelRuntime, { owner: NonNullable<ReturnType<typeof botExecutionScope>>; execution: BotExecutionRuntime }>();
 
@@ -948,7 +951,8 @@ const planLifecycle = createBotPlanLifecycle({
 // A card that opens while no Aiden window is focused also says so in a Mac
 // notification ("Ada needs you to: …"); clicking it opens the Bot's chat.
 const handoffNotifier = createBotHandoffNotifier({
-  isAppFocused: () => BrowserWindow.getFocusedWindow() !== null,
+  // A focused bubble mini chat isn't the app in front: the main window may be hidden.
+  isAppFocused: isAidenAppWindowFocused,
   show: ({ title, body, onClick }) => {
     if (!Notification.isSupported()) return;
     const notification = new Notification({ title, body });
@@ -965,7 +969,8 @@ const handoffNotifier = createBotHandoffNotifier({
 watchBotHandoffs(botHandoffs, handoffNotifier);
 
 const accessRequestNotifier = createBotHandoffNotifier({
-  isAppFocused: () => BrowserWindow.getFocusedWindow() !== null,
+  // A focused bubble mini chat isn't the app in front: the main window may be hidden.
+  isAppFocused: isAidenAppWindowFocused,
   show: ({ title, body, onClick }) => {
     if (!Notification.isSupported()) return;
     const notification = new Notification({ title, body });

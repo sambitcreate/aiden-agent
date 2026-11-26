@@ -1,5 +1,7 @@
 # Live Activity freshness chips and Bot deep links (2026-09-27)
 
+> **Superseded 2026-11-22 (ios-alerts-app-only plan):** the Live Activity and Dynamic Island are now plain text on a clean background. The chips, status dot, rail, pill, tints and keyline described below are gone; see `.memory/ios-run-alerts.md`. The state, freshness and deep-link notes still apply.
+
 Branch: `feature/live-activity-freshness`. Plan: `docs/plans/completed/live-activity-freshness-bot-deeplinks-plan.md`.
 
 ## Live Activity state and chips
@@ -55,3 +57,19 @@ Status (2026-10-01): merged in PR #276 (on main after 0.51.0); plan moved to `do
 - `testCancelledOlderProgressObserverCannotClearNewerHandle` failed on PR #377 CI (run 37829964725) with `Timed out waiting for progress SSE request (expected).` after 6.9 s. `waitForProgressRequestCount` polled 100 × 10 ms (about 1 s) for an observer that needs three stub round trips (tasks, agents, then the SSE). The xcresult shows the host stalled: older tests' leaked `stream-control/events` requests timing out and reconnecting during this test. A 1.2 s delay on the tasks stub reproduces the exact message on the old helper. With the new helpers all four progress tests pass under that delay.
 - `main` shows the same family: run 37549186978 `testChatOpenFetchesTheProgressSnapshotOnce…` saw `agentRequestCount` 2 instead of 1, which is a leaked earlier model hitting the shared static stub counter.
 - Fixes: `AidenRemoteLiveActivityManager.shared` no longer drives ActivityKit in the unit-test host. This follows the `AidenRunAlertNotifier.shared` precedent and also covers coordinator purges (`endAll`). ActivityKit tests build their own managers. `AidenChatProgressLifecycleURLProtocol` fences requests from sessions of earlier tests with a per-test epoch header (set in `setUp`). Request-count waits resume on the stub's count event (`whenRequests(_:reach:)`) with a 30 s failure-only ceiling. The 150 ms settle sleeps became condition waits. `makeProgressLifecycleModel` defaults to per-test cache, draft store and model-preference suite instead of `.shared`.
+
+## iOS alerts Plan A: known follow-ups fixed (2026-11-23)
+
+- PR #881 fixed the five follow-ups its final review deferred. `AidenAlertActionResponder` treats `operation_stale` (409, run finished) and `run_gone` (404) as `.alreadyResolved(winner: nil)`, and returns `.dropped` for a known-revoked connection (`isRevoked` in the app's lookup) or a `credential_revoked` reply.
+- `AidenPendingApproval.alertCanAllow` gates the alert's Approve: a card must offer `.allow` with scope `.once`, since Approve always sends a one-time allow.
+- `mergeIntoSummary` keeps an existing row when a run already on the summary starts again (reattach).
+- `questionAnswered(instanceID:chatID:landed:)` takes a card (single or summary row) out of `.waitingForAnswer` after a notification Reply: "Answered" when it landed, "No longer waiting" when the question was already gone.
+
+## A failed approval read no longer clears the card (2026-11-24)
+
+- Owner report on a Debug build of PR #881 installed on a phone: after tapping the Live Activity, the chat showed no Allow/Deny while the Mac still asked. The Mac's `aiden-remote-streams-v1.json` showed it was a phone-started stream (28 approvals); one waited 2 min 10 s and was answered on the Mac.
+- Cause: the foreground reload calls `restorePendingApproval` before the link to the Mac is back. The read fails with a `URLError`, and the catch cleared `pendingApproval` and moved the stream to `.reconciling`. The reload after reconnecting refreshes only when a card or `.waitingForApproval` is still there, so nothing re-asked, and the waiting run sends no new events.
+- Fix: in `restorePendingApproval` and `restorePendingQuestion`, a `URLError` (the Mac never answered) keeps the card and state and marks the Live Activity stale. An answer from the Mac (`AidenRemoteClientError`) keeps the old clearing behavior.
+- Review follow-up: `summaryState(for:)` used to rebuild a summary with `isStale` false, so `markStale` on a merged run left the summary looking current. A summary is now stale while any unfinished run in it is stale, until that run's next real update (`AidenNativeIntegrationTests.testAStaleRunOnASummaryMarksTheSummaryStaleUntilItsNextUpdate`). Each summary `Row` stores its own `isStale`, so a relaunched manager (`rehydrateSummaryRuns`) still knows which run is stale. Another run's update leaves the summary stale (`testAStaleRunKeepsTheSummaryStaleAcrossARelaunch`). `markAllStale` still sets only the summary-level flag, which any update clears.
+- Tests: `AidenChatTests.testAnApprovalStillWaitingComesBackAfterAReadFailsWhileReconnecting` and `testAQuestionStillWaitingComesBackAfterAReadFailsWhileReconnecting`.
+- Debugging tip: the Mac's `~/Library/Application Support/Aiden Agent/logs/aiden.log` records only remote requests that are slow or return 4xx/5xx. Requests that never reach the Mac don't appear there, and `aiden-remote-streams-v1.json` keeps each phone stream's event timeline.

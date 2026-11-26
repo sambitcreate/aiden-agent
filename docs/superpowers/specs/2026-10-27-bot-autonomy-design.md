@@ -129,7 +129,7 @@ About 30 minutes before each enabled routine's next fire (`BOT_ROUTINE_PREFLIGHT
 1. Session state: paused, `needs_model` or `unavailable`.
 2. Model binding drift, through `botProviderModelDrift`. When only the model fingerprint is stale, the binding is repaired through the same path `BotCapabilityStore.admit` uses today, `refreshStaleModelBindings`.
 3. Provider credential, through `preflightBotModelAuth`. This may refresh an OAuth token, which is the point (D1).
-4. Granted connections, through `resolveBotMcpInventory`, which has a 10-second deadline and a 60-second cache. A server reported as degraded becomes `needs_you`.
+4. Granted connections, through `resolveBotMcpInventory`, which has a 10-second deadline and a 60-second cache. A server that failed is skipped and retried in the background with backoff (30 s to 5 min). A server reported as degraded becomes `needs_you`.
 5. The Bot computer, through store reads only (`computer(botId)`, `baseReady()`). The check never boots, clones or downloads anything (AGENTS.md Bot-computer rules).
 
 The Bot browser's sign-in state cannot be checked; nothing probes it (§9).

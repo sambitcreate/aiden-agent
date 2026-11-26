@@ -1,9 +1,11 @@
 export interface OnboardingResetOperations {
-  disconnectArtificialAnalysis(): Promise<unknown>;
-  clearModelInsights(): Promise<unknown>;
   /** Image-generation keys and the device-local Image Generation settings. */
   clearImageGeneration(): Promise<unknown>;
-  clearModelPace(): Promise<void>;
+  /**
+   * The retired benchmark, Artificial Analysis and measured-pace leftovers.
+   * Quiet by design: it never rejects, and a miss is retried next launch.
+   */
+  clearRetiredModelScoring(): Promise<void>;
   resetConfiguration(): Promise<void>;
   clearLegacySecrets(): Promise<void>;
   clearPiCredentials(): Promise<void>;
@@ -34,22 +36,6 @@ export async function deleteEveryCredential(
   if (failures.length > 0) throw new Error("Provider credentials were not fully cleared.");
 }
 
-/**
- * Delete every credential, then let in-memory readers forget what they
- * remembered from the store, even when a deletion fails.
- */
-export async function clearEveryCredential(
-  providerIds: readonly string[],
-  deleteCredential: (providerId: string) => Promise<void>,
-  forgetCredentials: () => Promise<void>,
-): Promise<void> {
-  try {
-    await deleteEveryCredential(providerIds, deleteCredential);
-  } finally {
-    await forgetCredentials();
-  }
-}
-
 async function captureFailure(
   failures: unknown[],
   operation: () => Promise<unknown>,
@@ -69,13 +55,11 @@ async function captureFailure(
 export async function performOnboardingReset(operations: OnboardingResetOperations): Promise<void> {
   const failures: unknown[] = [];
 
-  // Disconnect model-data sources before the catch-all Pi credential pass;
-  // each source owns both its dedicated key and its device-local cache.
+  // Stores that own a dedicated key and a device-local file go before the
+  // catch-all Pi credential pass.
   await Promise.all([
-    captureFailure(failures, operations.disconnectArtificialAnalysis),
-    captureFailure(failures, operations.clearModelInsights),
     captureFailure(failures, operations.clearImageGeneration),
-    captureFailure(failures, operations.clearModelPace),
+    captureFailure(failures, operations.clearRetiredModelScoring),
   ]);
 
   await Promise.all([

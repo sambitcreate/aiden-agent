@@ -114,6 +114,8 @@ test("a phone that negotiated it continues a chat whose folder is gone in a new 
 
   const server = await phone("/server");
   assert.equal(server.data.serverCapabilities.includes("chat:continue-in-new-chat"), true, "aiden serve offers it");
+  // It keeps no Agent Slider, so it never offers the revision 70 capability that saves a phone's stop.
+  assert.equal(server.data.serverCapabilities.includes("chat:agent-slider"), false, "aiden serve does not offer the Agent Slider");
   const negotiated = await phone("/device/capabilities", "POST", { accepts: ["chat:continue-in-new-chat"] });
   assert.equal(negotiated.status, 200, JSON.stringify(negotiated));
 
