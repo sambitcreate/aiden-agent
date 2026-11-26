@@ -79,6 +79,8 @@ import {
 import { migrateLegacyPiProviderId } from "../../renderer/shared/google-provider.js";
 import {
   hideAllProviderModels,
+  hidesFutureModels,
+  revealFutureProviderModels,
   remapHiddenModelProvider,
   withModelVisibility,
   withoutProviderVisibility,
@@ -1418,16 +1420,41 @@ export function createConfigStore(
       return publicSettings(saved);
     },
 
-    /** Atomically hide current and future models for one provider. */
-    async hideAllProviderModels(providerId: string): Promise<AppSettings> {
+    /**
+     * Atomically hide every model the provider lists now (`modelIds`, read by
+     * main from the provider itself). Models it adds later start shown.
+     */
+    async hideAllProviderModels(providerId: string, modelIds: readonly string[]): Promise<AppSettings> {
       const saved = await mutateSettings((config) => {
         config.settings.hiddenModelsByProvider = hideAllProviderModels(
           config.settings.hiddenModelsByProvider,
           providerId,
+          modelIds,
         );
         return structuredClone(config.settings);
       });
       return publicSettings(saved);
+    },
+
+    /** Whether an earlier Hide all still hides models a provider adds later. */
+    async hidesFutureModels(): Promise<boolean> {
+      await ensureSeeded();
+      return hidesFutureModels((await settingsStore.load()).settings.hiddenModelsByProvider);
+    },
+
+    /**
+     * One-time move off "hidden by default": each such rule becomes the list
+     * of models it hides today, so later models show. True when it saved.
+     */
+    async revealFutureProviderModels(
+      modelsByProvider: ReadonlyMap<string, readonly string[]>,
+    ): Promise<boolean> {
+      return mutateSettings((config) => {
+        const next = revealFutureProviderModels(config.settings.hiddenModelsByProvider, modelsByProvider);
+        if (!next) return false;
+        config.settings.hiddenModelsByProvider = next;
+        return true;
+      });
     },
 
     /** Atomically merge one validated native-Google preference into current settings. */

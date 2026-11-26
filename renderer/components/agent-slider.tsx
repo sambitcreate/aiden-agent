@@ -4,9 +4,11 @@
 // pointer. A stop that can't run shows a hollow dot; choosing it never moves
 // the chat but asks for a model instead. When the chat matches no stop
 // (Custom) the thumb goes hollow, rests on the home stop, and the fill goes.
+// The thumb only ever rests on a stop: a drag moves it from stop to stop with
+// the same quick step as a click or an arrow key, like the phone slider.
 
 import * as React from "react";
-import { RotateCcw, Zap } from "lucide-react";
+import { RotateCcw } from "lucide-react";
 import { Button } from "./ui";
 import { cn } from "../lib/ui-utils";
 import { isComposingKey } from "../lib/dismiss-key";
@@ -23,6 +25,12 @@ const THUMB = 28;
 const INSET = 2;
 /** Pointer travel before a press counts as a drag rather than a click. */
 const DRAG_THRESHOLD = 3;
+/**
+ * The thumb and fill step between stops quicker than the 200ms control token
+ * (docs/design-guide.md allows a deliberately snappier 150ms step on a token
+ * curve). Reduce Motion collapses it like every other transition.
+ */
+const STEP_MOTION = "duration-150 ease-standard";
 
 export interface AgentSliderProps {
   views: readonly AgentSliderStopView[];
@@ -61,7 +69,8 @@ export function AgentSlider({
   const reasonId = React.useId();
   const trackRef = React.useRef<HTMLDivElement | null>(null);
   const localThumbRef = React.useRef<HTMLDivElement | null>(null);
-  const [drag, setDrag] = React.useState<{ fraction: number; index: number } | null>(null);
+  /** The stop under the pointer while a drag is in progress. */
+  const [drag, setDrag] = React.useState<{ index: number } | null>(null);
   const pressRef = React.useRef<{ pointerId: number; startX: number; moved: boolean } | null>(null);
   const suppressClickRef = React.useRef(false);
   const count = views.length;
@@ -81,8 +90,8 @@ export function AgentSlider({
   const shownIndex = drag ? drag.index : position.custom ? -1 : position.stopIndex;
   const shown = shownIndex >= 0 ? views[shownIndex] : undefined;
   const custom = !drag && position.custom;
-  const fraction = drag ? drag.fraction : stopFraction(position.thumbIndex, count);
   const thumbIndex = drag ? drag.index : position.thumbIndex;
+  const fraction = stopFraction(thumbIndex, count);
   const valueText = drag
     ? agentSliderValueText(views, { stopIndex: drag.index, thumbIndex: drag.index, custom: false }, customDetail)
     : agentSliderValueText(views, position, customDetail);
@@ -121,8 +130,8 @@ export function AgentSlider({
       }
     }
     press.moved = true;
-    const next = fractionAt(event.clientX);
-    setDrag({ fraction: next, index: Math.round(next * (count - 1)) });
+    const index = Math.round(fractionAt(event.clientX) * (count - 1));
+    setDrag((current) => (current?.index === index ? current : { index }));
   };
   const endPress = (event: React.PointerEvent<HTMLDivElement>, commit: boolean) => {
     const press = pressRef.current;
@@ -177,9 +186,8 @@ export function AgentSlider({
   return (
     <div className="px-1.5 pt-1">
       <div className="grid grid-cols-[1.75rem_minmax(0,1fr)_1.75rem] items-center gap-1">
-        <span aria-hidden="true" className="flex justify-center text-tertiary">
-          <Zap className="size-4" />
-        </span>
+        {/* Balances the reset button so the stop name stays centred. */}
+        <span aria-hidden="true" />
         <div aria-hidden="true" className="min-w-0 text-center">
           <p className="truncate text-large-strong font-semibold text-primary" title={heading}>
             {heading}
@@ -224,8 +232,8 @@ export function AgentSlider({
         <span
           aria-hidden="true"
           className={cn(
-            "pointer-events-none absolute inset-y-0 left-0 rounded-pill bg-fill-accent ease-standard",
-            drag ? "transition-none" : "transition-[width,opacity] duration-(--motion-duration)",
+            "pointer-events-none absolute inset-y-0 left-0 rounded-pill bg-fill-accent transition-[width,opacity]",
+            STEP_MOTION,
             custom && "opacity-0",
           )}
           style={{ width: `calc(${THUMB + INSET * 2}px + (100% - ${THUMB + INSET * 2}px) * ${fraction})` }}
@@ -293,10 +301,8 @@ export function AgentSlider({
           aria-disabled={disabled || undefined}
           aria-describedby={disabled && disabledReason ? reasonId : undefined}
           className={cn(
-            "pointer-events-none absolute top-1/2 -translate-y-1/2 rounded-full outline-none ease-standard focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring",
-            drag
-              ? "transition-none"
-              : "transition-[left,background-color,box-shadow] duration-(--motion-duration)",
+            "pointer-events-none absolute top-1/2 -translate-y-1/2 rounded-full outline-none transition-[left,background-color,box-shadow] focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring",
+            STEP_MOTION,
             custom
               ? "bg-transparent shadow-[inset_0_0_0_2px_var(--color-quaternary)]"
               : "bg-white shadow-control",

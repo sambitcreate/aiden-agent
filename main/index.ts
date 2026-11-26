@@ -181,6 +181,7 @@ import {
   cleanupRetiredMcpServerCredentials,
 } from "./services/mcp-credential-cleanup.js";
 import { cleanUpRetiredModelScoring } from "./services/retired-model-scoring-cleanup.js";
+import { revealFutureProviderModels } from "./services/model-visibility-migration.js";
 import { resetOnboardingData } from "./services/onboarding-reset.js";
 import {
   geminiLiveService,
@@ -2448,6 +2449,8 @@ if (!ownsSingleInstanceLock) {
       // Delete-only: the retired benchmark, Artificial Analysis and pace
       // leftovers. Local, never awaited, never rejects; retried next launch.
       void cleanUpRetiredModelScoring();
+      // Local: an earlier Hide all stops hiding models providers add later.
+      void revealFutureProviderModels();
       const packagedSubagentSoak = await loadSubagentPackagedSoakSession({
         isPackaged: isPackagedRuntime(),
       });
