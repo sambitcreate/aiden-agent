@@ -628,6 +628,7 @@
         "main/handlers/bot-pause.test.ts",
         "main/handlers/spending.test.ts",
         "main/services/bot-computers/control.test.ts",
+        "main/services/bot-computers/computer-elements.test.ts",
         "main/services/bot-computers/computer-shell-tool.test.ts",
         "main/services/bot-computers/computer-tool.test.ts",
         "main/services/bot-computers/host.test.ts",

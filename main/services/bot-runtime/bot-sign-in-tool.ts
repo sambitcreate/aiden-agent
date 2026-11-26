@@ -35,6 +35,7 @@ import {
   type BotHandoffResultDetails,
   type BotHandoffTarget,
 } from "../../../renderer/shared/bot-handoffs.js";
+import { botComputerGuestOs, type BotComputerGuestOs } from "../bot-computers/linux-guest-flag.js";
 import { normalizeSignInOrigin } from "../browser/sign-in-origin.js";
 import { handoffSkippedText, signInDoneText } from "./bot-handoff-text.js";
 import { handoffWhyOf } from "./bot-handoff-tool.js";
@@ -56,17 +57,23 @@ const DESCRIPTION =
   "You never see or type their password, so never ask for it in the chat. Afterwards your browser has their " +
   "sign-in: call `browser` to find the tab they used, and check with browser_snapshot.";
 
-const COMPUTER_DESCRIPTION =
-  "Ask the person to sign in to one website for you on your own computer, when a site you need there asks for an " +
-  "account. `site` is the site's name or https address (\"github.com\"); `why` says in a sentence why you need " +
-  "it. The app shows a card: the person takes control of your computer, signs in in Safari there, then answers " +
-  "I'm done or Skip. You can't see or use the computer until they give it back. Their answer comes back as this " +
-  "tool's result: wait for it. You never see or type their password, so never ask for it in the chat. Afterwards " +
-  "take a fresh computer capture to check.";
+function computerDescription(browserName: string): string {
+  return (
+    "Ask the person to sign in to one website for you on your own computer, when a site you need there asks for an " +
+    "account. `site` is the site's name or https address (\"github.com\"); `why` says in a sentence why you need " +
+    `it. The app shows a card: the person takes control of your computer, signs in in ${browserName} there, then answers ` +
+    "I'm done or Skip. You can't see or use the computer until they give it back. Their answer comes back as this " +
+    "tool's result: wait for it. You never see or type their password, so never ask for it in the chat. Afterwards " +
+    "take a fresh computer capture to check."
+  );
+}
 
-const BOTH_NOTE =
-  " To sign in on your own computer instead (for an app or site you use there), pass where: \"computer\": the " +
-  "person signs in in Safari on it, then gives it back; take a fresh computer capture to check.";
+function bothNote(browserName: string): string {
+  return (
+    " To sign in on your own computer instead (for an app or site you use there), pass where: \"computer\": the " +
+    `person signs in in ${browserName} on it, then gives it back; take a fresh computer capture to check.`
+  );
+}
 
 /** Where this Bot can have the person sign in, for the tool's description. */
 export interface BotSignInTargets {
@@ -74,9 +81,13 @@ export interface BotSignInTargets {
   computer: boolean;
 }
 
-export function botSignInDescription(targets: BotSignInTargets = { browser: true, computer: false }): string {
-  if (!targets.browser && targets.computer) return COMPUTER_DESCRIPTION;
-  return targets.computer ? `${DESCRIPTION}${BOTH_NOTE}` : DESCRIPTION;
+export function botSignInDescription(
+  targets: BotSignInTargets = { browser: true, computer: false },
+  guestOs: BotComputerGuestOs = botComputerGuestOs(),
+): string {
+  const browserName = guestOs === "linux" ? "Chromium" : "Safari";
+  if (!targets.browser && targets.computer) return computerDescription(browserName);
+  return targets.computer ? `${DESCRIPTION}${bothNote(browserName)}` : DESCRIPTION;
 }
 
 export interface BotSignInDeps {
@@ -94,6 +105,8 @@ export interface BotSignInDeps {
   hasBrowser?(botId: string): Promise<boolean>;
   /** Where the Bot can sign in this turn, for the description. Left out: the browser only. */
   targets?: BotSignInTargets;
+  /** Guest OS target for the computer description; defaults to `botComputerGuestOs()`. */
+  guestOs?: BotComputerGuestOs;
 }
 
 interface SignInParams {
@@ -135,7 +148,7 @@ export function signInCandidate(botId: string, handoffs: BotHandoffs, deps: BotS
   const schema: AgentTool = {
     name: BOT_SIGN_IN_TOOL_NAME,
     label: "Sign In",
-    description: botSignInDescription(deps.targets),
+    description: botSignInDescription(deps.targets, deps.guestOs),
     // One card at a time, with hand-offs too: a second card in the same round waits for the first.
     executionMode: "sequential",
     parameters: Type.Object({

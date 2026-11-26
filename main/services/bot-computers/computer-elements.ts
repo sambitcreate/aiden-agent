@@ -9,6 +9,8 @@ import type { AgentToolResult } from "@earendil-works/pi-agent-core";
 export interface BotComputerElement {
   role?: string;
   label?: string;
+  /** Affirmative per-instance editability when reported by the driver (or `false` when disabled/selectable). */
+  editable?: boolean;
 }
 
 /**
@@ -53,6 +55,19 @@ export interface BotComputerElementCapture {
   elements: Map<number, BotComputerElement>;
 }
 
+/**
+ * Fail closed for ambiguous AT-SPI roles (`entry`, `text`): pinned `cua-driver`
+ * 0.38.0 does not serialize `ATK_STATE_EDITABLE` / `ATK_STATE_READ_ONLY`, and
+ * `value` or `role` alone does not prove editability. Mark disabled/selectable
+ * controls `false`, preserve an explicit `editable` boolean when present, and
+ * never infer `editable: true` from `role` or `value`.
+ */
+function deriveElementEditable(element: Record<string, unknown>): boolean | undefined {
+  if (element.enabled === false || typeof element.selected === "boolean") return false;
+  if (typeof element.editable === "boolean") return element.editable;
+  return undefined;
+}
+
 /** Reads a `ComputerUseController` capture result: its target and numbered elements. */
 export function parseBotComputerElementCapture(result: AgentToolResult<unknown>): BotComputerElementCapture {
   const first = result.content.find((part) => part.type === "text");
@@ -71,7 +86,12 @@ export function parseBotComputerElementCapture(result: AgentToolResult<unknown>)
     if (typeof index !== "number" || !Number.isInteger(index) || index < 0) continue;
     const role = clean(element?.role, 64);
     const label = clean(element?.label, LABEL_MAX_CHARS);
-    elements.set(index, { ...(role ? { role } : {}), ...(label ? { label } : {}) });
+    const editable = element ? deriveElementEditable(element) : undefined;
+    elements.set(index, {
+      ...(role ? { role } : {}),
+      ...(label ? { label } : {}),
+      ...(typeof editable === "boolean" ? { editable } : {}),
+    });
   }
   const app = clean(target?.app, 120);
   const windowTitle = clean(target?.title, LABEL_MAX_CHARS);

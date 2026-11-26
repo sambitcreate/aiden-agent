@@ -24,17 +24,61 @@
 
 import type { BotComputerControl, BotComputerHost, BotComputerTakeOverSource } from "../bot-computers/types.js";
 import { guestDriverSuspendScript } from "../bot-computers/guest-driver-install.js";
+import {
+  BOT_COMPUTER_LINUX_SHELL_USER,
+  botComputerGuestOs,
+  type BotComputerGuestOs,
+} from "../bot-computers/linux-guest-flag.js";
 import { quoteRemoteArg } from "../devices/ssh-device-script.js";
 import type { BotHandoffs } from "./bot-handoffs.js";
 
-/** Safari's bundle id: the sign-in page opens there, whatever the default browser is. */
+/** Safari's bundle id on macOS guests: the sign-in page opens there, whatever the default browser is. */
 export const BOT_COMPUTER_SIGN_IN_BROWSER = "com.apple.Safari";
+/** Browser binary on Linux guests (`AIDEN_BOT_COMPUTERS_LINUX=1`). */
+export const BOT_COMPUTER_LINUX_SIGN_IN_BROWSER = "chromium";
 
+const LINUX_USER_PATTERN = /^[a-z_][a-z0-9_-]{0,31}$/u;
 const GUEST_COMMAND_TIMEOUT_MS = 30_000;
 const GUEST_COMMAND_OUTPUT_BYTES = 4_096;
 
+/**
+ * Terminate every process owned by the separate Bot shell user (`aiden-bot`,
+ * plan decision 4a) before the person signs in on a Linux guest. Fails closed
+ * (exit 76) if the user is missing or any process owned by it survives.
+ */
+export function botComputerStopShellUserScript(shellUser: string = BOT_COMPUTER_LINUX_SHELL_USER): string {
+  if (!LINUX_USER_PATTERN.test(shellUser)) {
+    throw new Error(`Invalid Linux shell user name: ${shellUser}`);
+  }
+  return [
+    `u=${quoteRemoteArg(shellUser)}`,
+    '/usr/bin/id -u "$u" >/dev/null 2>&1 || exit 76',
+    'if /usr/bin/pgrep -u "$u" >/dev/null 2>&1; then',
+    '  /usr/bin/sudo -n /usr/bin/pkill -KILL -u "$u" >/dev/null 2>&1 || true',
+    "  i=0",
+    '  while /usr/bin/pgrep -u "$u" >/dev/null 2>&1 && [ "$i" -lt 20 ]; do',
+    "    /bin/sleep 0.1",
+    '    /usr/bin/sudo -n /usr/bin/pkill -KILL -u "$u" >/dev/null 2>&1 || true',
+    "    i=$((i+1))",
+    "  done",
+    '  /usr/bin/pgrep -u "$u" >/dev/null 2>&1 && exit 76',
+    "fi",
+    "exit 0",
+  ].join("\n");
+}
+
 /** The guest command that opens the sign-in page; `url` is a checked https origin. */
-export function botComputerSignInOpenScript(url: string): string {
+export function botComputerSignInOpenScript(
+  url: string,
+  guestOs: BotComputerGuestOs = botComputerGuestOs(),
+): string {
+  if (guestOs === "linux") {
+    return [
+      `b=$(command -v ${BOT_COMPUTER_LINUX_SIGN_IN_BROWSER} || command -v chromium-browser) || exit 127`,
+      "u=$(/usr/bin/id -u) || exit 1",
+      `DISPLAY=:0 XAUTHORITY="$HOME/.Xauthority" XDG_RUNTIME_DIR="/run/user/$u" DBUS_SESSION_BUS_ADDRESS="unix:path=/run/user/$u/bus" ACCESSIBILITY_ENABLED=1 GNOME_ACCESSIBILITY=1 nohup "$b" --new-window ${quoteRemoteArg(url)} </dev/null >/dev/null 2>&1 &`,
+    ].join("\n");
+  }
   return `/usr/bin/open -b ${BOT_COMPUTER_SIGN_IN_BROWSER} ${quoteRemoteArg(url)}`;
 }
 
@@ -46,6 +90,8 @@ export interface BotComputerHandoffDeps {
   handoffs: Pick<BotHandoffs, "get" | "onSettled">;
   /** Bot computers are on (the platform flag). */
   enabled(): boolean;
+  /** Guest OS target; defaults to `botComputerGuestOs()`. */
+  guestOs?: BotComputerGuestOs;
   /** Why an Open opened nothing. */
   onError?(error: unknown): void;
 }
@@ -106,8 +152,12 @@ export function createBotComputerHandoffOpener(deps: BotComputerHandoffDeps): Bo
       held.add(heldKey(botId, waitId));
     }
     try {
-      await run(botId, guestDriverSuspendScript(), "stop its screen helper");
-      if (url !== undefined) await run(botId, botComputerSignInOpenScript(url), "open the page");
+      const guestOs = deps.guestOs ?? botComputerGuestOs();
+      await run(botId, guestDriverSuspendScript(guestOs), "stop its screen helper");
+      if (guestOs === "linux") {
+        await run(botId, botComputerStopShellUserScript(), "stop its background processes");
+      }
+      if (url !== undefined) await run(botId, botComputerSignInOpenScript(url, guestOs), "open the page");
     } catch (error) {
       release(botId, waitId);
       deps.onError?.(error);

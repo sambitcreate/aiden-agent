@@ -1,9 +1,17 @@
 import assert from "node:assert/strict";
+import { execFileSync } from "node:child_process";
 import test from "node:test";
 
 import type { AgentToolResult } from "@earendil-works/pi-agent-core";
 import { createBotComputerControl } from "./control.js";
-import { BOT_COMPUTER_SHELL_OUTPUT_BYTES, createBotComputerShellTool } from "./computer-shell-tool.js";
+import {
+  BOT_COMPUTER_SHELL_OUTPUT_BYTES,
+  BOT_COMPUTER_SHELL_TOOL_DESCRIPTION,
+  botComputerShellCommand,
+  botComputerShellToolDescription,
+  createBotComputerShellTool,
+} from "./computer-shell-tool.js";
+import { AIDEN_BOT_COMPUTERS_LINUX_ENV, BOT_COMPUTER_LINUX_SHELL_USER, type BotComputerGuestOs } from "./linux-guest-flag.js";
 import type { BotComputerConnection, BotComputerGuestCommandResult, BotComputerStartReason } from "./types.js";
 
 const connection: BotComputerConnection = {
@@ -22,7 +30,7 @@ interface GuestCall {
 
 function harness(
   respond: (call: GuestCall) => Promise<BotComputerGuestCommandResult>,
-  options: { routine?: boolean; unattended?: boolean; unattendedWaitMs?: number } = {},
+  options: { routine?: boolean; unattended?: boolean; unattendedWaitMs?: number; guestOs?: BotComputerGuestOs } = {},
 ) {
   const control = createBotComputerControl();
   const calls: GuestCall[] = [];
@@ -49,11 +57,15 @@ function harness(
       botName: async () => "Ada",
       ...(options.unattendedWaitMs === undefined ? {} : { unattendedWaitMs: options.unattendedWaitMs }),
     },
-    { routine: options.routine === true, ...(options.unattended === undefined ? {} : { unattended: options.unattended }) },
+    {
+      routine: options.routine === true,
+      ...(options.unattended === undefined ? {} : { unattended: options.unattended }),
+      ...(options.guestOs === undefined ? {} : { guestOs: options.guestOs }),
+    },
   );
   const run = (command: string, signal?: AbortSignal) =>
     tool.execute("call", { command, description: "List the home folder" }, signal) as Promise<AgentToolResult<null>>;
-  return { control, calls, reasons, touches: () => touches, run };
+  return { tool, control, calls, reasons, touches: () => touches, run };
 }
 
 const ok = (stdout: string, extra: Partial<BotComputerGuestCommandResult> = {}): BotComputerGuestCommandResult => ({
@@ -180,5 +192,44 @@ test("on a routine or Telegram turn, a command waits for the person only so long
     if (interrupted === "still waiting") continue;
     assert.equal(interrupted.isError, true);
     assert.match(textOf(interrupted), /still be running.*still using Ada's computer/su);
+  }
+});
+
+test("Linux computer_shell runs commands as the separate aiden-bot user and describes Linux", async () => {
+  assert.equal(botComputerShellToolDescription("macos"), BOT_COMPUTER_SHELL_TOOL_DESCRIPTION);
+  const linuxDesc = botComputerShellToolDescription("linux");
+  assert.match(linuxDesc, /Linux virtual machine/u);
+  assert.match(linuxDesc, new RegExp(`separate ${BOT_COMPUTER_LINUX_SHELL_USER} user`, "u"));
+  assert.match(linuxDesc, /~\/Shared/u);
+  assert.doesNotMatch(linuxDesc, /macOS|\/Volumes\/My Shared Files/u);
+
+  const h = harness(async () => ok("aiden-bot\n"), { guestOs: "linux" });
+  assert.equal(h.tool.description, linuxDesc);
+  const tricky = "printf '%s\\n' 'a'\"b\" && false || echo ok";
+  const result = await h.run(tricky);
+  assert.equal(result.isError, undefined);
+  assert.equal(h.calls[0]?.command, botComputerShellCommand(tricky, "linux"));
+  assert.match(h.calls[0]!.command, /^cd \/ && exec \/usr\/bin\/sudo -n -H -u 'aiden-bot' -- \/bin\/sh -c /u);
+
+  // Quoting keeps shell metacharacters intact inside the inner /bin/sh -c argument.
+  const inspectArgv = h.calls[0]!.command.replace(/^cd \/ && exec \/usr\/bin\/sudo /u, "printf '%s\\0' ");
+  const argv = execFileSync("/bin/sh", ["-c", inspectArgv], { encoding: "utf8" }).split("\0").slice(0, -1);
+  assert.deepEqual(argv.slice(0, 6), ["-n", "-H", "-u", BOT_COMPUTER_LINUX_SHELL_USER, "--", "/bin/sh"]);
+  assert.equal(argv[6], "-c");
+  assert.equal(argv[7], `cd "$HOME" || exit 1\n${tricky}`);
+
+  // Reject invalid usernames fail-closed.
+  assert.throws(() => botComputerShellCommand("id", "linux", "aiden-bot; id"), /invalid/iu);
+
+  // Build switch toggles default behavior.
+  const previous = process.env[AIDEN_BOT_COMPUTERS_LINUX_ENV];
+  try {
+    delete process.env[AIDEN_BOT_COMPUTERS_LINUX_ENV];
+    assert.equal(botComputerShellCommand("ls ~"), "ls ~");
+    process.env[AIDEN_BOT_COMPUTERS_LINUX_ENV] = "1";
+    assert.match(botComputerShellCommand("ls ~"), /sudo -n -H -u 'aiden-bot'/u);
+  } finally {
+    if (previous === undefined) delete process.env[AIDEN_BOT_COMPUTERS_LINUX_ENV];
+    else process.env[AIDEN_BOT_COMPUTERS_LINUX_ENV] = previous;
   }
 });

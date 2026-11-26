@@ -205,10 +205,16 @@ function lower(value: string | undefined): string {
   return (value ?? "").trim().toLocaleLowerCase("en-US");
 }
 
-/** `AXSecureTextField`, a secure text field subrole, or a web password input role. */
+/** `AXSecureTextField`, a secure text field subrole, an AT-SPI password text role, or a web password input role. */
 function isSecureRole(role: string | undefined): boolean {
   const value = lower(role).replace(/[^a-z]/gu, "");
-  return value.includes("securetextfield") || value === "secure" || value === "password" || value === "passwordfield";
+  return (
+    value.includes("securetextfield") ||
+    value.includes("passwordtext") ||
+    value === "secure" ||
+    value === "password" ||
+    value === "passwordfield"
+  );
 }
 
 function isCommunicationApp(app: string | undefined): boolean {
