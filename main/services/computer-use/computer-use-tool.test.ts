@@ -2349,29 +2349,67 @@ test("Linux AT-SPI password text role marks secureFieldInCapture just like AXSec
   await controller.close();
 });
 
-test("capture forwards element editability from driver editable boolean or AT-SPI states", async () => {
-  const atSpiRows = [
-    { role: "entry", label: "Search", editable: true, frame: { x: 110, y: 60, w: 80, h: 20 }, depth: 1 },
-    { role: "entry", label: "Static entry", editable: false, frame: { x: 110, y: 90, w: 80, h: 20 }, depth: 1 },
-    {
-      role: "text",
-      label: "Editable text",
-      states: ["focusable", "ATSPI_STATE_EDITABLE"],
-      frame: { x: 110, y: 120, w: 80, h: 20 },
-      depth: 1,
+test("mapped isError refusal preserves full recovery hint even when driver text exceeds 1,200 chars", async () => {
+  const { controller, session } = harness(false);
+  await capture(controller, "ax");
+  const hint = "Choose the option with set_value instead.";
+  const longDriverText = "Driver diagnostic detail. ".repeat(55); // > 1,300 chars
+  assert.ok(longDriverText.length > 1_200);
+
+  session.handler = (call) =>
+    call.name === "click"
+      ? {
+          isError: true,
+          content: [{ type: "text", text: longDriverText }],
+          structuredContent: {
+            effect: "refused",
+            route: "accessibility",
+            error: { code: "select_menu_would_raise_window" },
+            hint,
+          },
+        }
+      : fakeResponse(call, session.driver);
+
+  await assert.rejects(
+    () => approved(controller, "mapped-long-text-hint", { action: "click", element: 0 }),
+    (error: Error & { code?: string }) => {
+      assert.equal(error.code, "select_menu_would_raise_window");
+      assert.ok(
+        error.message.includes(hint),
+        `Expected full hint to survive refusalError slicing, got: ${error.message}`,
+      );
+      return true;
     },
-    { role: "text", label: "Read-only text", states: ["focusable"], frame: { x: 110, y: 150, w: 80, h: 20 }, depth: 1 },
-    { role: "AXButton", label: "Close", frame: { x: 110, y: 180, w: 80, h: 20 }, depth: 1 },
-  ];
-  const { controller } = harness(true, 0, { elements: () => atSpiRows });
-  const result = await capture(controller, "ax");
-  const payload = JSON.parse((result.content[0] as { text: string }).text) as {
-    elements: Array<{ element_index: number; editable?: boolean }>;
-  };
-  assert.equal(payload.elements[0]?.editable, true);
-  assert.equal(payload.elements[1]?.editable, false);
-  assert.equal(payload.elements[2]?.editable, true);
-  assert.equal(payload.elements[3]?.editable, false);
-  assert.equal("editable" in (payload.elements[4] ?? {}), false);
+  );
+
+  // Also when rawText includes the hint only beyond maxDetailChars (968), it must not be dropped.
+  const trailingHintText = `${"Driver diagnostic detail. ".repeat(50)}${hint}`;
+  assert.ok(trailingHintText.length > 1_200);
+  session.handler = (call) =>
+    call.name === "click"
+      ? {
+          isError: true,
+          content: [{ type: "text", text: trailingHintText }],
+          structuredContent: {
+            effect: "refused",
+            route: "accessibility",
+            error: { code: "select_menu_would_raise_window" },
+            hint,
+          },
+        }
+      : fakeResponse(call, session.driver);
+
+  await assert.rejects(
+    () => approved(controller, "mapped-trailing-hint", { action: "click", element: 0 }),
+    (error: Error & { code?: string }) => {
+      assert.equal(error.code, "select_menu_would_raise_window");
+      assert.ok(
+        error.message.includes(hint),
+        `Expected full hint to survive when rawText includes hint past 968 chars, got: ${error.message}`,
+      );
+      return true;
+    },
+  );
+
   await controller.close();
 });

@@ -27,13 +27,11 @@ import type { BotLiveApproval } from "./bot-tool-assembly.js";
 const ELEMENT_CLICKS = new Set(["click", "double_click", "right_click"]);
 /** Roles that unambiguously take typed text unless explicitly marked non-editable. */
 const TEXT_ENTRY_ROLES = ["textfield", "textarea", "searchfield", "combobox", "textbox", "searchbox", "passwordtext"];
-/** AT-SPI `ROLE_TEXT` and `ROLE_ENTRY` may be read-only, so they count as text entry only with explicit `editable: true` (`ATSPI_STATE_EDITABLE`). */
-const AMBIGUOUS_TEXT_ENTRY_ROLES = new Set(["text", "roletext", "entry", "roleentry"]);
 
 function takesText(element: BotComputerElement | undefined): boolean {
   if (!element || element.editable === false) return false;
+  if (element.editable === true) return true;
   const role = (element.role ?? "").toLowerCase().replace(/[^a-z]/gu, "");
-  if (AMBIGUOUS_TEXT_ENTRY_ROLES.has(role)) return element.editable === true;
   return TEXT_ENTRY_ROLES.some((kind) => role.includes(kind));
 }
 
