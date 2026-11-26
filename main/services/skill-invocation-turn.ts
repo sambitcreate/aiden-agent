@@ -8,6 +8,7 @@ import {
 } from "../../renderer/shared/slash-commands.js";
 import type { RegisteredSkill } from "./skill-registry.js";
 import type { Attachment, ChatMessage, ChatRole, ChatStartParams } from "./types.js";
+import type { GrabbedElementContextV1 } from "../../renderer/shared/browser-element-grab.js";
 import { chatUserTextWithAttachments } from "./generation-messages.js";
 import * as path from "node:path";
 import { MAX_CHAT_MESSAGE_CONTENT_BYTES } from "../../renderer/shared/chat-message-contract.js";
@@ -26,6 +27,7 @@ export interface PrepareSkillInvocationForAppendInput {
   role: ChatRole;
   content: string;
   attachments: Attachment[] | undefined;
+  grabbedElements?: readonly GrabbedElementContextV1[];
   workspaceId: string;
   userMessageId: string;
 }
@@ -53,7 +55,7 @@ export async function prepareSkillInvocationForAppend(
       "The selected skill and message exceed Aiden’s invocation limit.",
     );
   }
-  if (!input.content.trim() && !input.attachments?.length) {
+  if (!input.content.trim() && !input.attachments?.length && !input.grabbedElements?.length) {
     throw new SkillInvocationError(
       "invalid_reference",
       "Add a message or attachment before invoking a skill.",
@@ -66,6 +68,7 @@ export async function prepareSkillInvocationForAppend(
       input.content,
       input.attachments,
       SLASH_LIMITS.formattedInvocationBytes,
+      input.grabbedElements,
     ),
     input.workspaceId,
     input.userMessageId,

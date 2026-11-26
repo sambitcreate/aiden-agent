@@ -16,3 +16,5 @@
 
 Zod 4.6.7, CLI undici 8.12.3, KaTeX 0.18.2, Happy DOM 21.0.4, body-parser 2.4.0, tinypool 2.1.2 and @hono/node-server 2.1.5 are in the security dependency PR (#611). Pi stays 1.4.0 and electron-builder 26.15.3. See docs/security/dependency-maintenance-2026-10-27.md and the remediation plan for checks. The Electron Node fix landed separately on main (43.8.4, #632), above.
 
+
+2026-11-24: the CLI undici 8.12.3 override was removed in the Pi 1.6.0 upgrade; `pi-coding-agent` 1.6.0 pins undici 8.12.4 for six newer advisories, and the override held it back. See `.memory/pi-1.6.0-upgrade.md`.

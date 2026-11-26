@@ -55,13 +55,8 @@ interface Stream {
 /** Bounds what one window can hold open. */
 const MAX_SUBSCRIPTIONS_PER_OWNER = 32;
 
-function refused(error: unknown, status?: number): boolean {
-  return (
-    error instanceof PeerTransportError &&
-    error.code === "request_failed" &&
-    error.status !== undefined &&
-    (status === undefined ? error.status >= 400 && error.status < 500 : error.status === status)
-  );
+function refused(error: unknown, status: number): boolean {
+  return error instanceof PeerTransportError && error.code === "request_failed" && error.status === status;
 }
 
 /**
@@ -256,8 +251,9 @@ export class PeerBotSessionStreams {
           await this.wait(stream, this.options.backoff(failures));
           continue;
         }
-        if (refused(cause)) {
-          // Deleted, or this Mac may no longer read it.
+        if (refused(cause, 404) || refused(cause, 403)) {
+          // Deleted, or this Mac may no longer read it. Any other refusal (a
+          // busy host's 429, a request it could not take just now) is retried.
           this.setState(stream, "gone");
           this.forget(stream);
           return;

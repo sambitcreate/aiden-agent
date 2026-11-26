@@ -256,7 +256,7 @@ function ComputerScreen({ bot, computer, active, variant, onScreen }: ComputerSc
             className="bot-computer-pointer"
             style={{ left: `${(pointer.x / pointer.width) * 100}%`, top: `${(pointer.y / pointer.height) * 100}%` }}
           >
-            <BotAvatar botId={bot.id} avatar={bot.avatar} name={bot.name} photoLoading="immediate" size="small" working={Boolean(computer.activity)} />
+            <BotAvatar botId={bot.id} avatar={bot.avatar} name={bot.name} photoLoading="immediate" size="small" state={computer.activity ? "tool" : undefined} />
           </span>
         ) : null}
         {botDrives && overlays ? (

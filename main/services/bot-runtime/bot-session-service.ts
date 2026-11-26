@@ -9,6 +9,8 @@ import { randomUUID } from "node:crypto";
 import { botResponseDigest } from "./bot-response-digest.js";
 import { botCostReceiptScope, consumeBotResumeOperation } from "./bot-resume-operations.js";
 import type { BotExecutionResumeStatus, BotResumeAcknowledgement } from "../../../renderer/shared/bot-execution-resume.js";
+/** Resume options: the person's cost acknowledgement, plus an in-process flag for quiet retries. Never parsed from IPC. */
+export type BotResumeOptions = BotResumeAcknowledgement & { automatic?: true };
 import { reportChatMessageSent } from "../analytics/analytics-feature-reports.js";
 import { botMessageTurnOf, isBotMessageRequestId } from "../../../renderer/shared/bot-messages.js";
 import { BOT_MESSAGE_INPUT_KIND, type BotMessageInputMetadata } from "./bot-input-entry.js";
@@ -225,7 +227,12 @@ export interface BotSessionService {
   canRetryRoutineRequest(botId: string, requestId: string): Promise<boolean>;
   submissionForRequest(botId: string, requestId: string): Promise<string | undefined>;
   send(botId: string, input: BotSendInput): Promise<{ submissionId: string; deduped: boolean }>;
-  resume(botId: string, requestId: string, options?: BotResumeAcknowledgement): Promise<BotSessionState>;
+  /**
+   * Resume an interrupted reply. `automatic` marks a quiet retry made with no
+   * person involved: it resumes the same way but keeps the reply's helper
+   * clock, so only a person's Resume gives helpers a fresh 60 minutes.
+   */
+  resume(botId: string, requestId: string, options?: BotResumeOptions): Promise<BotSessionState>;
   executionResumeStatus(botId: string): Promise<BotExecutionResumeStatus>;
   dismiss(botId: string, requestId: string): Promise<BotSessionState>;
   /**
@@ -241,8 +248,11 @@ export interface BotSessionService {
   /**
    * Withdraw one queued message before its turn starts (Pi's
    * `abortSubmission`). A message already placed in a turn keeps running.
+   * `personOnly`: only the person's own message may be taken back; a routine's
+   * input, the self-intro or an id this Bot doesn't hold is `gone`. That check
+   * runs in the Bot's lane, so a send that allocates the id first is seen.
    */
-  withdraw(botId: string, submissionId: string): Promise<BotWithdrawResult>;
+  withdraw(botId: string, submissionId: string, options?: { personOnly?: boolean }): Promise<BotWithdrawResult>;
   state(botId: string): Promise<BotSessionState>;
   deleteBot(botId: string): Promise<void>;
   /**
@@ -958,7 +968,9 @@ export async function createBotSessionService(deps: BotSessionServiceDeps): Prom
       return { requiresUnknownCostAcknowledgement: false, interruptedSubmissionId: before.submissionId };
     },
 
-    resume(botId, requestId, options) {
+    resume(botId, requestId, resumeOptions) {
+      const { automatic, ...acknowledgement } = resumeOptions ?? {};
+      const options: BotResumeAcknowledgement | undefined = resumeOptions ? acknowledgement : undefined;
       return serialize(botId, async () => {
         const { conversation: controlConversation } = await openBot(botId);
         const current = await currentState(botId, false);
@@ -987,6 +999,7 @@ export async function createBotSessionService(deps: BotSessionServiceDeps): Prom
             if (receipt?.costReceiptId !== options.expectedCostReceiptId && !prior) throw new BotSessionError("spending_unconfirmed", "The unknown provider cost changed. Review the current receipt before resuming.");
           }
           const waitingForCostOwner: TaskId[] = [];
+          const resumedClaims = new Map<string, BotExecutionClaim>();
           for (const item of bindings) {
             let binding = item.binding;
             if (!binding?.claimId && item.kind === GenerationTask.definition.name && live?.run?.taskId === item.id && live.run.inputs.length === 1) {
@@ -1001,6 +1014,7 @@ export async function createBotSessionService(deps: BotSessionServiceDeps): Prom
             if (!binding?.claimId || !binding.requestId) throw new BotSessionError("access_changed", "This unfinished task has no saved model choice. Dismiss it and send the request again.");
             const claim = await deps.execution.getClaim(botId, binding.claimId, binding.requestId);
             await withBotExecutionAdmission(botId, claim, deps.execution, () => registry.refresh());
+            resumedClaims.set(claim.id, claim);
             const unknown = deps.execution.hasUnknown ? await deps.execution.hasUnknown(botId, claim) : binding.blocked?.kind === "spending_unknown";
             let consent = binding.costConsent;
             if (consent && !await verifiedConsent({ ...item, binding }, consent)) { if (options?.acknowledgeUnknownCost !== true) throw new BotSessionError("spending_unconfirmed", "The saved cost decision has no protected owner approval. Review the current receipt before resuming."); consent = undefined; }
@@ -1030,6 +1044,7 @@ export async function createBotSessionService(deps: BotSessionServiceDeps): Prom
             } else if (binding.blocked) await conversation.commit(async (tx) => { delete (await tx.doc(BotExecutionDoc, item.id)).blocked; }, ctx);
           }
           for (const taskId of waitingForCostOwner) await conversation.commit(async (tx) => { delete (await tx.doc(BotExecutionDoc, taskId)).blocked; }, ctx);
+          if (automatic !== true) for (const claim of resumedClaims.values()) await deps.execution.resumed?.(botId, claim);
           blocked.delete(botId); opened.harness.resume(); deps.onResumed?.(botId); requireHost().touch(botId);
           return publish(botId, await currentState(botId, false));
         }
@@ -1116,13 +1131,17 @@ export async function createBotSessionService(deps: BotSessionServiceDeps): Prom
       });
     },
 
-    withdraw(botId, submissionId) {
+    withdraw(botId, submissionId, options = {}) {
       return serialize(botId, async () => {
         const id = Number(submissionId);
         // A rounded id could name a different submission.
         if (!Number.isSafeInteger(id)) return "gone";
         await openBot(botId);
         const opened = await requireHost().open(botId);
+        if (options.personOnly) {
+          const record = (await requireHost().inspect(botId)).submissions.find((candidate) => Number(candidate.id) === id);
+          if (record === undefined || isQuietSubmission(record)) return "gone";
+        }
         const result = await opened.harness.abortSubmission(
           id as SubmissionId,
           ctx,

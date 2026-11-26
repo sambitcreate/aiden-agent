@@ -135,6 +135,7 @@ test("a Bot's browser has no profile choice, annotations, DevTools, capture, rec
   const workspace = render(<BrowserPanel workspaceId={WORKSPACE} active />);
   await screen.findByRole("tab", { name: "Sign in to GitHub" });
   assert.ok(screen.getByRole("button", { name: "Choose browser profile" }));
+  assert.ok(screen.getByRole("button", { name: "Grab element" }));
   assert.ok(screen.getByRole("button", { name: "Annotate" }));
   const full = await menuItems();
   for (const item of ["Open DevTools", "Record browser", "Float browser over chat", "Open separate preview window", "Clear cookies"]) {
@@ -145,6 +146,7 @@ test("a Bot's browser has no profile choice, annotations, DevTools, capture, rec
   render(<BrowserPanel workspaceId={WORKSPACE} active variant="bot" agentName="Planner" />);
   await screen.findByRole("tab", { name: "Sign in to GitHub" });
   assert.equal(screen.queryByRole("button", { name: "Choose browser profile" }), null);
+  assert.equal(screen.queryByRole("button", { name: "Grab element" }), null);
   assert.equal(screen.queryByRole("button", { name: "Annotate" }), null);
   const bot = await menuItems();
   assert.ok(bot.some((entry) => entry.includes("Open in system browser")));

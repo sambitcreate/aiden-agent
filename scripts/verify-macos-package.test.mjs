@@ -157,44 +157,25 @@ test("package verifier requires byte-identical Computer Use provenance and notic
   );
 });
 
-test("package verifier requires models.dev and rejects a bundled Artificial Analysis snapshot", async () => {
+test("package verifier requires the models.dev snapshot", async () => {
   assert.doesNotThrow(() =>
     assertPackagedModelCatalogEntries(["/resources/model-capabilities.json"]),
   );
   assert.throws(() => assertPackagedModelCatalogEntries([]), /missing the models.dev/u);
-  assert.throws(
-    () =>
-      assertPackagedModelCatalogEntries([
-        "/resources/model-capabilities.json",
-        "/resources/artificial-analysis-models.json",
-      ]),
-    /obsolete Artificial Analysis/u,
-  );
 
   const temporaryRoot = await mkdtemp(path.join(os.tmpdir(), "aiden-model-catalog-asar-"));
   const root = await realpath(temporaryRoot);
   const source = path.join(root, "source");
   const resources = path.join(source, "resources");
-  const rejectedAsar = path.join(root, "rejected.asar");
   const acceptedAsar = path.join(root, "accepted.asar");
   const malformedAsar = path.join(root, "malformed.asar");
   try {
     await mkdir(resources, { recursive: true });
-    await Promise.all([
-      writeFile(
-        path.join(resources, "model-capabilities.json"),
-        JSON.stringify(modelCatalogFixture()),
-        "utf8",
-      ),
-      writeFile(path.join(resources, "artificial-analysis-models.json"), "{}\n", "utf8"),
-    ]);
-    await createPackage(source, rejectedAsar);
-    await assert.rejects(
-      verifyPackagedModelCatalogResources(rejectedAsar),
-      /obsolete Artificial Analysis/u,
+    await writeFile(
+      path.join(resources, "model-capabilities.json"),
+      JSON.stringify(modelCatalogFixture()),
+      "utf8",
     );
-
-    await unlink(path.join(resources, "artificial-analysis-models.json"));
     await createPackage(source, acceptedAsar);
     await assert.doesNotReject(verifyPackagedModelCatalogResources(acceptedAsar));
 

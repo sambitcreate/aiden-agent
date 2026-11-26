@@ -8,83 +8,67 @@ import { useBotAccessRequestActions } from "./use-bot-access-request-actions";
 // send never doubles. Stop, Resume and Dismiss map to their runtime actions.
 
 import * as React from "react";
+import { useBotAvatarState } from "../../components/bot-avatar";
 import { useNavigate } from "@tanstack/react-router";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { CircleAlert, CircleCheck, CircleSlash, FileText, Hourglass, LogIn, Pause, RotateCcw, Square } from "lucide-react";
+import { CircleAlert, Hourglass, Pause, Square } from "lucide-react";
 import { AskUserQuestionComposer } from "../../components/ask-user-question-composer";
 import { Composer } from "../../components/composer";
-import { ConnectCard } from "../../components/bots/connect-card";
-import { RoutinesSkippedCard } from "../../components/bots/routines-skipped-card";
-import { RoutineProposalCard } from "../../components/bots/routine-proposal-card";
-import { SkillProposalCard } from "../../components/bots/skill-proposal-card";
-import { LearnedLine, LessonProposalCard } from "../../components/bots/lesson-cards";
-import { HeldSettingsCard, SettingsChangeReceipt } from "../../components/bots/settings-change-cards";
+import { HeldSettingsCard } from "../../components/bots/settings-change-cards";
 import type { BotSettingsChangeStatus } from "../../shared/bot-settings-changes";
 import { BotInstructionsDialog } from "./bot-instructions-editor";
 import { BotIssueCard } from "../../components/bots/bot-issue-card";
 import { HandoffCard, handoffNoNoteComposerText, handoffSignInComposerText } from "../../components/bots/handoff-card";
 import { NeedsYouAnnouncer, NeedsYouFocusScope, NeedsYouHeader, needsYouSlotState, type NeedsYouItem } from "../../components/bots/needs-you-slot";
 import { PlanCard } from "../../components/bots/plan-card";
-import { MemoryCardIcon } from "../../components/memory-card-icon";
-import { ApprovalStatusLine, ChatApprovalCard } from "../../components/chat-approval-card";
+import { ApprovalStatusLine } from "../../components/chat-approval-card";
 import { useApprovalStatusLine } from "../../lib/use-approval-status-line";
 import { SafeMessageBubble } from "../../components/message-bubble";
-import { MessageAttachmentPreviewProvider, MessageAttachments } from "../../components/message-attachments";
+import { MessageAttachmentPreviewProvider } from "../../components/message-attachments";
 import { insertTextIntoTextarea } from "../../lib/composer-type-focus";
+import { composerHistoryFromBotEntries } from "../../lib/composer-history";
 import { AlertDialog, Button, Callout, EmptyState, ScrollArea, Text, toast } from "../../components/ui";
 import { BotNoticeCard } from "../../components/bots/bot-notice-card";
 import { botListLocation } from "../../lib/bot-routes";
 import { settingsLocation } from "../../lib/settings-section";
-import { BOT_APPROVAL_REPEAT_COUNT, botAlwaysAllowLabel } from "../../shared/tool-approval-scope";
 import { botsApi } from "../../lib/ipc";
 import { useReportGoalView } from "../../lib/use-report-goal-view";
 import { userFacingErrorMessage } from "../../lib/ipc-error";
 import type { Attachment } from "../../lib/types";
-import { botChatActivityOnDevice, showsBotToolActivity, type BotChatActivityLevel } from "../../shared/bots";
+import { botChatActivityOnDevice, showsBotToolActivity } from "../../shared/bots";
 import { queryKeys, useBot, useBots } from "../../lib/queries";
 import { useBotComputersStatus } from "../../lib/use-bot-computers";
 import { useBotLive } from "../../lib/use-bot-live";
 import { BOT_COMPUTER_SHARED_DEFAULT_NAME } from "../../shared/bot-computers";
 import { prefersReducedMotion } from "../../lib/appearance-runtime";
-import {
-  BOT_FAILED_TURN_TEXT,
-  botLastReplyAt,
-  type BotLiveSnapshot,
-  type BotPendingQuestion,
-  type BotQueuedMessage,
-  type BotTranscriptEntry,
-} from "../../shared/bot-live";
-import type { AskUserQuestionPromptV1, AskUserQuestionResponseV1 } from "../../shared/ask-user-question";
+import { botLastReplyAt, botLastTurnEnd, type BotLiveSnapshot, type BotPendingQuestion } from "../../shared/bot-live";
+import type { AskUserQuestionResponseV1 } from "../../shared/ask-user-question";
 import {
   BOT_HANDOFF_NOTE_MAX_CHARS,
   botHandoffTakesNote,
-  type BotHandoffOutcome,
   type BotPendingHandoff,
 } from "../../shared/bot-handoffs";
 import type { BotApprovalPrompt } from "../../../main/services/bot-runtime/bot-approvals";
-import type { BotRoutineProposalDecision,
-  BotRoutineProposalDeclineReason, BotRoutineProposalRespondResult } from "../../shared/bot-routine-proposals";
+import type { BotRoutineProposalDecision, BotRoutineProposalDeclineReason } from "../../shared/bot-routine-proposals";
 import type { BotIssueAction } from "../../shared/bot-issues";
 import { BotChatActions, BotChatNamePill, BotPanelToggle } from "./bot-chat-header";
 import { BOT_CHAT_COMPOSER_SURFACES } from "./bot-chat-mode";
 import { BotDeleteDialog } from "./bot-delete-dialog";
 import { BotNeedsModel } from "./bot-needs-model";
 import { BotPausedCard, botPausedText } from "./bot-paused-card";
-import { BotActivityRecap } from "./bot-activity-recap";
 import { useAppearancePreference } from "../../lib/use-appearance-preference";
 import { BotStatusAnnouncer, BotStatusLine, botStatusSpeech } from "./bot-status-line";
 import { BotMessageActions, botReplyQuote } from "./bot-message-actions";
+import { BotApprovalCard, botApprovalGroupKey, groupBotApprovalPrompts, questionPrompt, useBotApprovals } from "./bot-approvals";
+import { BOT_INTERRUPTED_TEXT, BotQueuedBubble, TranscriptEntries } from "./bot-transcript-entries";
+import { BotBubbleCard, useBotChatHome } from "./bot-bubble-card";
 import { useBotMenuActions } from "./bot-menu";
 import { useBotPanelActions } from "./bot-panel-context";
 import { useBotHandoffActions } from "./use-bot-handoff-actions";
 import { botSidebarPreferenceActions, useIsBotPinned } from "./use-bot-sidebar-preferences";
-import { botTranscriptRows } from "./bot-transcript-rows";
 import { BOT_UNAVAILABLE_LABEL, type BotSessionState } from "./bot-session-state";
 import { botRoutinesKey } from "./bot-routines";
-import { WakeUpChip } from "../../components/bots/wake-up-chip";
-import { ReceiptLine } from "../../components/bots/receipt-line";
 import { pickBotStatus } from "./bot-status-slot";
-import { FoldedSuggestion } from "../../components/bots/suggestion-card";
 import { useConnectionSetup } from "./use-connection-setup";
 import { useChatFind } from "../../components/chat-find-bar";
 import { retryUsageLimitNow, useUsageLimitNow, useUsageLimitWait } from "../../lib/use-usage-limit-wait";
@@ -92,9 +76,7 @@ import { formatUsageLimitTime, type UsageLimitWaitView } from "../../shared/usag
 import { useSpendingStatus } from "../../lib/use-spending-status";
 import { SpendingLimitNotice } from "../../components/spending/spending-limit-notice";
 import { spendingNotice } from "../../shared/spending";
-import { switchToAutoSuggestion, useSwitchToAutoOffer } from "../../lib/switch-to-auto";
 
-export const BOT_INTERRUPTED_TEXT = "I got interrupted while working on this.";
 export const BOT_ACCESS_CHANGED_TEXT = "This Bot's access changed. Review it in Advanced.";
 
 /** The Bot's pending-paused notice: Resume continues the turn, Dismiss drops it. */
@@ -142,151 +124,6 @@ export function BotInterruptedCard({
   );
 }
 
-/** Tool approvals a Bot is waiting on, live: pushed prompts and withdrawals, plus a read on mount. */
-function useBotApprovals(botId: string | undefined, onWithdrawn?: (waitId: string) => void) {
-  const [prompts, setPrompts] = React.useState<BotApprovalPrompt[]>([]);
-  const withdrawn = React.useRef(onWithdrawn);
-  withdrawn.current = onWithdrawn;
-  const shown = React.useRef(prompts);
-  shown.current = prompts;
-  React.useEffect(() => {
-    if (!botId) return;
-    let active = true;
-    void botsApi.pendingApprovals(botId).then((pending) => {
-      if (active) setPrompts((current) => mergePrompts(current, pending));
-    }).catch(() => undefined);
-    const offPrompt = botsApi.onApproval((prompt) => {
-      if (prompt.botId === botId) setPrompts((current) => mergePrompts(current, [prompt]));
-    });
-    const offSettled = botsApi.onApprovalSettled((settled) => {
-      if (settled.botId === botId) {
-        // Still shown here, so nobody answered it on this device: it went away (answered elsewhere, expired, the run ended).
-        if (shown.current.some((prompt) => prompt.waitId === settled.waitId)) withdrawn.current?.(settled.waitId);
-        setPrompts((current) => current.filter((prompt) => prompt.waitId !== settled.waitId));
-      }
-    });
-    return () => {
-      active = false;
-      offPrompt();
-      offSettled();
-    };
-  }, [botId]);
-  const remove = React.useCallback(
-    (waitId: string) => setPrompts((current) => current.filter((prompt) => prompt.waitId !== waitId)),
-    [],
-  );
-  /** Puts a prompt back after its answer failed to send, so it can be answered again. */
-  const restore = React.useCallback(
-    (prompt: BotApprovalPrompt) => setPrompts((current) => mergePrompts(current, [prompt])),
-    [],
-  );
-  return { prompts, remove, restore };
-}
-
-function mergePrompts(current: BotApprovalPrompt[], next: BotApprovalPrompt[]): BotApprovalPrompt[] {
-  const byId = new Map(current.map((prompt) => [prompt.waitId, prompt] as const));
-  for (const prompt of next) byId.set(prompt.waitId, prompt);
-  return [...byId.values()];
-}
-
-/** Which shared card a pending approval belongs to: the same for every identical call, the wait itself otherwise. */
-export function botApprovalGroupKey(prompt: BotApprovalPrompt): string {
-  return prompt.argumentsHash && prompt.runHash
-    ? JSON.stringify([prompt.botId, prompt.runHash, prompt.argumentsHash, prompt.toolName, prompt.summary, prompt.always?.key ?? null])
-    : JSON.stringify(["wait", prompt.botId, prompt.waitId]);
-}
-
-/**
- * Identical pending approvals in one reply (same tool, card and exact
- * arguments) share one card. A wait without its arguments and run hashes is
- * never grouped: equal text is not the same action.
- */
-export function groupBotApprovalPrompts(prompts: readonly BotApprovalPrompt[]): BotApprovalPrompt[][] {
-  const groups = new Map<string, BotApprovalPrompt[]>();
-  for (const prompt of prompts) {
-    const key = botApprovalGroupKey(prompt);
-    const group = groups.get(key);
-    if (group) group.push(prompt);
-    else groups.set(key, [prompt]);
-  }
-  return [...groups.values()];
-}
-
-/** A Bot's tool call that needs the person's yes or no before it runs: the shared approval card. */
-export function BotApprovalCard({
-  name,
-  prompt,
-  onAnswer,
-  allowElsewhere,
-  keyboardShortcuts = false,
-  pendingCount = 1,
-}: {
-  name: string;
-  prompt: BotApprovalPrompt;
-  onAnswer(decision: "allow" | "deny", scope?: "always"): Promise<void> | void;
-  /** Set when this device may only deny: where the person can allow it instead. */
-  allowElsewhere?: string;
-  /** ⌘↩ allows and ⌘⌫ denies while the message box is empty; only the first card takes them. */
-  keyboardShortcuts?: boolean;
-  /** Cards waiting in this chat, this one first. */
-  pendingCount?: number;
-}) {
-  const [busy, setBusy] = React.useState(false);
-  const inFlight = React.useRef(false);
-  const [answerError, setAnswerError] = React.useState<string | null>(null);
-  // Every eligible card offers Always; a count of 3 or more means it was
-  // allowed again and again in the last 2 weeks. Then, in Ask, Auto is
-  // offered beside Always, but only where main said Auto would hand this
-  // call to the judge instead of a card. Not on a device that may only deny.
-  const repeated = prompt.always !== undefined && prompt.always.count >= BOT_APPROVAL_REPEAT_COUNT;
-  const autoOffer = useSwitchToAutoOffer(repeated && prompt.autoWouldJudge === true && allowElsewhere === undefined);
-  const respond = async (decision: "allow" | "deny", scope?: "always") => {
-    if (inFlight.current) return;
-    inFlight.current = true;
-    setBusy(true);
-    setAnswerError(null);
-    try {
-      await onAnswer(decision, scope);
-    } catch (error) {
-      setAnswerError(userFacingErrorMessage(error, "Aiden couldn’t send that answer."));
-    } finally {
-      inFlight.current = false;
-      setBusy(false);
-    }
-  };
-  return (
-    <ChatApprovalCard
-      pending={{
-        approvalId: prompt.waitId,
-        toolCallId: prompt.toolCallId,
-        toolName: prompt.toolName,
-        summary: prompt.summary,
-        ...(prompt.always ? { scopes: ["once", "always"] } : {}),
-      }}
-      deciding={busy}
-      onDecide={(decision, options) => void respond(decision, options?.scope === "always" ? "always" : undefined)}
-      requester={name}
-      alwaysOption={{ label: botAlwaysAllowLabel(name), hint: `${name} won’t ask again for this. Undo in Settings → Approvals.` }}
-      notes={repeated ? [`You’ve allowed this ${prompt.always!.count} times in the last 2 weeks.`] : []}
-      {...(autoOffer ? { suggestion: switchToAutoSuggestion(autoOffer) } : {})}
-      {...(allowElsewhere ? { allowElsewhere } : {})}
-      error={answerError}
-      keyboardShortcuts={keyboardShortcuts}
-      pendingCount={pendingCount}
-    />
-  );
-}
-
-/** The Bot's pending A–E question as the shared quick-reply composer's prompt. */
-export function questionPrompt(question: BotPendingQuestion): AskUserQuestionPromptV1 {
-  return {
-    version: 1,
-    promptId: question.waitId,
-    streamId: "s-bot",
-    toolCallId: question.toolCallId,
-    questions: question.questions,
-  };
-}
 
 function attachmentText(attachments: readonly Attachment[]): string {
   return attachments
@@ -295,38 +132,6 @@ function attachmentText(attachments: readonly Attachment[]): string {
     .join("");
 }
 
-/** "I couldn't finish that reply." with Retry, which resends the message as a new submission. */
-export function BotFailedTurnCard({
-  name,
-  retryable,
-  busy,
-  errorMessage,
-  onRetry,
-}: {
-  name: string;
-  retryable: boolean;
-  busy: boolean;
-  errorMessage?: string;
-  onRetry(): void;
-}) {
-  return (
-    <BotNoticeCard
-      label={`${name} couldn’t finish a reply`}
-      icon={<CircleAlert />}
-      iconTone="red"
-      title={BOT_FAILED_TURN_TEXT}
-      actions={
-        retryable ? (
-          <Button variant="filled" size="small" disabled={busy} onClick={onRetry}>
-            <RotateCcw /> Retry
-          </Button>
-        ) : undefined
-      }
-    >
-      {errorMessage ? <p className="whitespace-pre-wrap">{errorMessage}</p> : null}
-    </BotNoticeCard>
-  );
-}
 
 /** A reply waiting for a provider usage limit: when it tries again, and Retry now. */
 export function BotUsageLimitCard({
@@ -397,100 +202,6 @@ export function BotModelErrorCard({
   );
 }
 
-/** A file the Bot wrote: a chip that opens the panel's Files tab at that file. */
-function BotFileChip({ path, operation, onOpen }: { path: string; operation: "written" | "edited"; onOpen(): void }) {
-  const name = path.split("/").pop() || path;
-  return (
-    <div>
-      <Button
-        variant="filled"
-        size="medium"
-        className="max-w-full gap-2"
-        aria-label={`Open ${name}`}
-        title={path}
-        onClick={onOpen}
-      >
-        <FileText aria-hidden="true" />
-        <span className="truncate">{name}</span>
-        <span className="text-secondary">{operation === "edited" ? "Edited" : "Created"}</span>
-      </Button>
-    </div>
-  );
-}
-
-/** "Memory updated · Open": a receipt line that opens the panel's Memory tab. */
-function BotMemoryUpdatedCaption({ onOpen }: { onOpen(): void }) {
-  return <ReceiptLine icon={<MemoryCardIcon />} text="Memory updated" actions={[{ label: "Open", ariaLabel: "Memory updated. Open Memory", onClick: onOpen }]} />;
-}
-
-/** The person's answer to a hand-off card, on their side of the chat: what they did, then their note. */
-function BotHandoffResultBubble({
-  outcome,
-  signedIn,
-  text,
-  note,
-}: {
-  outcome: BotHandoffOutcome;
-  signedIn: boolean;
-  text: string;
-  note?: string;
-}) {
-  const Icon = outcome === "skipped" ? CircleSlash : signedIn ? LogIn : CircleCheck;
-  return (
-    <div className="flex justify-end" data-bot-handoff-result={outcome}>
-      <div className="flex max-w-[80%] select-text items-start gap-2 rounded-2xl bg-control px-4 py-2.5">
-        <Icon aria-hidden="true" className="mt-0.5 size-4 shrink-0 text-secondary" />
-        <div className="min-w-0 [overflow-wrap:anywhere]">
-          <p className="text-regular text-primary">{text}</p>
-          {note ? <p className="mt-0.5 whitespace-pre-wrap text-small text-secondary">{note}</p> : null}
-        </div>
-      </div>
-    </div>
-  );
-}
-
-const QUEUED_PREVIEW_CHARS = 40;
-
-/** A follow-up waiting for the running turn: a faded bubble surface, "Queued", and Remove when it can be withdrawn. */
-function BotQueuedBubble({
-  text,
-  removing,
-  onRemove,
-}: {
-  text: string;
-  removing: boolean;
-  onRemove?(button: HTMLButtonElement): void;
-}) {
-  const oneLine = text.replace(/\s+/gu, " ").trim();
-  const preview = oneLine.length > QUEUED_PREVIEW_CHARS ? `${oneLine.slice(0, QUEUED_PREVIEW_CHARS).trimEnd()}…` : oneLine;
-  return (
-    <div className="flex flex-col items-end gap-1" data-bot-queued>
-      <div className="max-w-full [&_.bg-control]:bg-[color-mix(in_srgb,var(--color-control)_55%,transparent)]">
-        <SafeMessageBubble role="user" content={text} showCopy={false} />
-      </div>
-      <div className="flex items-center gap-2 text-small text-tertiary">
-        <span>Queued</span>
-        {onRemove ? (
-          <Button
-            variant="transparent"
-            size="small"
-            disabled={removing}
-            aria-label={`Remove queued message: ${preview}`}
-            data-bot-queued-remove
-            onClick={(event) => onRemove(event.currentTarget)}
-          >
-            Remove
-          </Button>
-        ) : null}
-      </div>
-    </div>
-  );
-}
-
-/**
- * Chat transcript rows: bubbles, recaps, chips, cards. A paired host's Bot
- * chat leaves out the actions its host does not offer remotely.
- */
 /**
  * A message the person just sent, shown at once while main accepts it. It
  * looks like the entry it becomes (same row, same Copy and Reply), so the
@@ -500,7 +211,7 @@ function BotQueuedBubble({
  * when the projected entry (or the queued message) with the same words
  * arrives, or when the send fails.
  */
-function BotPendingSendBubble({
+export function BotPendingSendBubble({
   send,
   morphFrom,
   onMorphEnd,
@@ -637,7 +348,7 @@ function useSendMorph(
 }
 
 /** A send shown before main answers; `seen` names what was already on screen when it was made. */
-interface BotPendingSend {
+export interface BotPendingSend {
   requestId: string;
   text: string;
   /** Entry ids and queued submission ids present when the echo was made; a new one with the same text settles it. */
@@ -651,7 +362,7 @@ interface BotPendingSend {
 }
 
 /** The ids of everything a snapshot shows that a pending send could settle into. */
-function botVisibleSendIds(snapshot: BotLiveSnapshot): Set<string> {
+export function botVisibleSendIds(snapshot: BotLiveSnapshot): Set<string> {
   const ids = new Set<string>();
   for (const entry of snapshot.entries) if (entry.type === "user") ids.add(entry.id);
   for (const message of snapshot.queued ?? []) ids.add(`queued:${message.submissionId}`);
@@ -663,7 +374,7 @@ function botVisibleSendIds(snapshot: BotLiveSnapshot): Set<string> {
  * entry, or a queued message, with the same text that was not there when the
  * echo was made. Keyed by request id; the value is the arrival's id.
  */
-function matchBotPendingSends(pending: readonly BotPendingSend[], snapshot: BotLiveSnapshot): Map<string, string> {
+export function matchBotPendingSends(pending: readonly BotPendingSend[], snapshot: BotLiveSnapshot): Map<string, string> {
   const matches = new Map<string, string>();
   if (pending.length === 0) return matches;
   const arrivals = [
@@ -703,298 +414,8 @@ export function settleBotPendingSends(
 }
 
 /** How long an acknowledged send stays as an echo when its entry never shows (a hidden input, a routine). */
-const PENDING_SEND_SETTLE_MS = 4000;
+export const PENDING_SEND_SETTLE_MS = 4000;
 
-export function TranscriptEntries({
-  name,
-  entries,
-  partial,
-  running,
-  level,
-  queued,
-  removing,
-  retrying,
-  onRemoveQueued,
-  onConnect,
-  onDismissConnection,
-  onAddConnection,
-  onOpenFile,
-  onReply,
-  onRetry,
-  onOpenMemory,
-  onViewExchange,
-  onRunRoutine,
-  onRespondToProposal,
-  onNewRoutineLink,
-  onRespondToSkill,
-  onRespondToLesson,
-  onUndoLearning,
-  onUndoSettings,
-  wakeUpPending,
-  onCancelWakeUp,
-  connectLabel,
-  connecting,
-}: {
-  name: string;
-  entries: readonly BotTranscriptEntry[];
-  partial: string | null;
-  running: boolean;
-  level: BotChatActivityLevel;
-  queued: readonly BotQueuedMessage[];
-  removing: ReadonlySet<string>;
-  retrying: boolean;
-  onRemoveQueued?(submissionId: string, button: HTMLButtonElement): void;
-  onConnect(pluginId: string): void;
-  onDismissConnection?(pluginId: string): void;
-  /** Connect on an app connected in Aiden but left out of the Bot's access. */
-  onAddConnection?(pluginId: string): void;
-  onOpenFile?(path: string): void;
-  onReply(text: string): void;
-  onRetry(failedId: string, text: string): void;
-  onOpenMemory?(): void;
-  onViewExchange?(exchangeId: string): void;
-  /** Run now on a routine skipped while paused; rejects when it didn't start. Absent where routines can't run. */
-  onRunRoutine?(routineId: string): Promise<void>;
-  onRespondToProposal?(
-    proposalId: string,
-    decision: BotRoutineProposalDecision,
-    reason?: BotRoutineProposalDeclineReason,
-  ): Promise<BotRoutineProposalRespondResult | null>;
-  /** A new link for a link routine a card added; the old one stops working. */
-  onNewRoutineLink?(routineId: string): Promise<string | null>;
-  /** One action on a "Needs you" issue card. */
-  /** Undo on a "Settings updated" receipt; resolves to its settled status. */
-  onUndoSettings?(changeId: string): Promise<BotSettingsChangeStatus>;
-  /** Keep or decline a lesson from a routine's runs. */
-  onRespondToLesson?(lessonId: string, decision: "keep" | "dismiss"): Promise<"active" | "dismissed" | null>;
-  /** Undo a correction lesson or the newest memory tidy. */
-  onUndoLearning?(target: { kind: "lesson"; lessonId: string } | { kind: "change"; changeId: string }): Promise<void>;
-  /** Add or decline a proposed (or found) skill. */
-  onRespondToSkill?(proposalId: string, decision: "add" | "dismiss"): Promise<"added" | "dismissed" | null>;
-  /** Whether a wake-up the Bot set still waits; `undefined` while that is unknown. */
-  wakeUpPending?(wakeUpId: string): boolean | undefined;
-  /** Cancel on a wake-up chip; rejects (after saying why) when it couldn't. */
-  onCancelWakeUp?(wakeUpId: string): Promise<void>;
-  /** Connect cards' button text, e.g. where the connection is finished. */
-  connectLabel?: string;
-  /** A connection request is being sent. */
-  connecting?: boolean;
-}) {
-  const rows = botTranscriptRows(entries, partial, { running, level, queued });
-  // One suggestion in full per chat (§4.7): the newest one waiting, or the one
-  // the person chose to see; earlier ones fold to a line with Show.
-  const [chosenSuggestion, setChosenSuggestion] = React.useState<string | null>(null);
-  const waitingSuggestions = rows
-    .filter((row) =>
-      (row.kind === "routine_proposal" && row.status === "pending" && !row.supersededBy && onRespondToProposal !== undefined) ||
-      (row.kind === "skill_proposal" && row.status === "pending" && onRespondToSkill !== undefined) ||
-      (row.kind === "lesson_proposal" && row.status === "pending" && onRespondToLesson !== undefined))
-    .map((row) => row.id);
-  const shownSuggestion =
-    chosenSuggestion !== null && waitingSuggestions.includes(chosenSuggestion) ? chosenSuggestion : waitingSuggestions[waitingSuggestions.length - 1];
-  const folded = (id: string, label: string) =>
-    waitingSuggestions.includes(id) && id !== shownSuggestion ? (
-      <FoldedSuggestion key={id} label={label} onShow={() => setChosenSuggestion(id)} />
-    ) : null;
-  const workDetails = useAppearancePreference("workDetails");
-  const collapseTiming = useAppearancePreference("workDetailsCollapseTiming");
-  const retainedRecaps = React.useMemo(() => {
-    let latestUserIndex = 0;
-    entries.forEach((entry, index) => { if (entry.type === "user" || entry.type === "bot_message") latestUserIndex = index; });
-    return new Set(entries.slice(latestUserIndex).map((entry) => `${entry.id}:recap`));
-  }, [entries]);
-  return (
-    <>
-      {rows.map((row) => {
-        switch (row.kind) {
-          case "user":
-            return (
-              <BotMessageActions key={row.id} text={row.text} from="You" align="end" onReply={onReply}>
-                <SafeMessageBubble role="user" content={row.text} showCopy={false} />
-              </BotMessageActions>
-            );
-          case "handoff_result":
-            return (
-              <BotMessageActions
-                key={row.id}
-                text={row.note ? `${row.text}\n${row.note}` : row.text}
-                from="You"
-                align="end"
-                onReply={onReply}
-              >
-                <BotHandoffResultBubble
-                  outcome={row.outcome}
-                  signedIn={row.signedIn}
-                  text={row.text}
-                  {...(row.note ? { note: row.note } : {})}
-                />
-              </BotMessageActions>
-            );
-          case "bot_message":
-            return (
-              <div key={row.id} className="flex flex-col items-end gap-1">
-                <Text as="p" variant="small" color="secondary">{row.label}</Text>
-                <div className="w-full min-w-0">
-                  <BotMessageActions text={row.text} from={row.botName} align="end" onReply={onReply}>
-                    <SafeMessageBubble role="user" content={row.text} showCopy={false} />
-                  </BotMessageActions>
-                </div>
-              </div>
-            );
-          case "bot_message_status":
-            return (
-              <div key={row.id}>
-                <Text as="p" variant="small" color="secondary" role="note">{row.label}</Text>
-                {row.text ? <SafeMessageBubble role="assistant" content={row.text} showCopy={false} /> : null}
-              </div>
-            );
-          case "routine":
-            return (
-              <React.Fragment key={row.id}>
-                <Text as="p" variant="small" color="secondary" data-bot-routine-label>
-                  {row.label}
-                </Text>
-                <BotMessageActions text={row.text} from="You" align="end" onReply={onReply}>
-                  <SafeMessageBubble role="user" content={row.text} showCopy={false} />
-                </BotMessageActions>
-              </React.Fragment>
-            );
-          case "peer":
-            return <div key={row.id} className="flex flex-wrap items-center gap-2 py-1" role="note"><Text variant="small" color="secondary">{row.messageKind === "result" ? "Exchange update" : row.messageKind === "fyi" ? "FYI" : row.messageKind[0]!.toUpperCase() + row.messageKind.slice(1)} {row.direction === "sent" ? "to" : "from"} {row.peerName}</Text>{onViewExchange && <Button size="small" variant="transparent" onClick={() => onViewExchange(row.exchangeId)}>View exchange</Button>}</div>;
-          case "assistant":
-            return (
-              <BotMessageActions key={row.id} text={row.text} from={name} align="start" onReply={onReply}>
-                <SafeMessageBubble imageScope={row.id} role="assistant" content={row.text} showCopy={false} streaming={row.streaming} />
-              </BotMessageActions>
-            );
-          case "recap":
-            return <BotActivityRecap key={row.id} steps={row.steps} durationMs={row.durationMs} live={row.live} level={level} mode={workDetails} retainDetails={collapseTiming === "next-input" && retainedRecaps.has(row.id)} />;
-          case "queued":
-            return (
-              <BotQueuedBubble
-                key={row.id}
-                text={row.text}
-                removing={removing.has(row.submissionId)}
-                {...(onRemoveQueued ? { onRemove: (button: HTMLButtonElement) => onRemoveQueued(row.submissionId, button) } : {})}
-              />
-            );
-          case "stopped":
-            return (
-              <Text key={row.id} as="p" variant="small" color="tertiary" role="note" className="py-1 text-center">
-                You stopped this reply.
-              </Text>
-            );
-          case "file":
-            return onOpenFile ? (
-              <BotFileChip key={row.id} path={row.path} operation={row.operation} onOpen={() => onOpenFile(row.path)} />
-            ) : null;
-          case "image":
-            return (
-              <MessageAttachments
-                key={row.id}
-                role="assistant"
-                attachments={[{ id: row.id, name: row.name, mimeType: row.mimeType, kind: "image", size: row.size, data: row.data }]}
-              />
-            );
-          case "notice":
-            return (
-              <Text key={row.id} as="p" variant="small" color="tertiary" role="note" className="py-1 text-center">
-                {row.notice === "session_reset" ? "This conversation was reset." : BOT_INTERRUPTED_TEXT}
-              </Text>
-            );
-          case "connect":
-            return (
-              <ConnectCard
-                key={row.id}
-                card={row.card}
-                onConnect={onConnect}
-                {...(onDismissConnection ? { onDismiss: onDismissConnection } : {})}
-                {...(onAddConnection ? { onAddToBot: onAddConnection } : {})}
-                {...(connectLabel ? { connectLabel } : {})}
-                busy={connecting ?? false}
-              />
-            );
-          case "failed":
-            return (
-              <BotFailedTurnCard
-                key={row.id}
-                name={name}
-                retryable={row.retryText !== null}
-                busy={retrying}
-                {...(row.errorMessage ? { errorMessage: row.errorMessage } : {})}
-                onRetry={() => row.retryText !== null && onRetry(row.id, row.retryText)}
-              />
-            );
-          case "memory_update":
-            return onOpenMemory ? <BotMemoryUpdatedCaption key={row.id} onOpen={onOpenMemory} /> : null;
-          case "routines_skipped":
-            return onRunRoutine ? <RoutinesSkippedCard key={row.id} routines={row.routines} onRunNow={onRunRoutine} /> : null;
-          case "routine_proposal":
-            return folded(row.id, `Routine suggestion: ${row.proposal.name}`) ?? (onRespondToProposal ? (
-              <RoutineProposalCard
-                key={row.id}
-                proposal={row.proposal}
-                status={row.status}
-                {...(row.routineId ? { routineId: row.routineId } : {})}
-                {...(row.supersededBy ? { supersededBy: row.supersededBy } : {})}
-                onRespond={(decision, reason) => onRespondToProposal(row.proposal.proposalId, decision, reason)}
-                {...(onNewRoutineLink ? { onNewLink: onNewRoutineLink } : {})}
-              />
-            ) : null);
-          case "lesson_proposal":
-            return folded(row.id, `Lesson: ${row.lesson.lesson}`) ?? (onRespondToLesson ? (
-              <LessonProposalCard
-                key={row.id}
-                lesson={row.lesson}
-                status={row.status}
-                onRespond={(decision) => onRespondToLesson(row.lesson.lessonId, decision)}
-              />
-            ) : null);
-          case "lesson_learned":
-            return onUndoLearning ? (
-              <LearnedLine
-                key={row.id}
-                text={`Learned: ${row.lesson.lesson}`}
-                undone={row.status === "retired"}
-                onUndo={() => onUndoLearning({ kind: "lesson", lessonId: row.lesson.lessonId })}
-              />
-            ) : null;
-          case "memory_tidy":
-            return onUndoLearning && row.changeId ? (
-              <LearnedLine key={row.id} text="Tidied memory" undone={false} onUndo={() => onUndoLearning({ kind: "change", changeId: row.changeId! })} />
-            ) : null;
-          case "wake_up":
-            return (
-              <WakeUpChip
-                key={row.id}
-                fireAt={row.fireAt}
-                pending={wakeUpPending?.(row.wakeUpId)}
-                {...(onCancelWakeUp ? { onCancel: () => onCancelWakeUp(row.wakeUpId) } : {})}
-              />
-            );
-          case "skill_proposal":
-            return folded(row.id, `Skill: ${row.proposal.name}`) ?? (onRespondToSkill ? (
-              <SkillProposalCard
-                key={row.id}
-                proposal={row.proposal}
-                status={row.status}
-                onRespond={(decision) => onRespondToSkill(row.proposal.proposalId, decision)}
-              />
-            ) : null);
-          case "settings_change":
-            return (
-              <SettingsChangeReceipt
-                key={row.id}
-                change={row.change}
-                status={row.change.mode === "applied" ? row.status : row.status === "pending" ? "applied" : row.status}
-                onUndo={onUndoSettings ? () => onUndoSettings(row.change.changeId) : () => Promise.reject(new Error("Undo isn’t available here."))}
-              />
-            );
-        }
-      })}
-    </>
-  );
-}
 
 /**
  * When the live chat last moved: any new event (an entry, a step, a state) or
@@ -1028,7 +449,18 @@ export function BotChatPane({ botId }: { botId: string }) {
   const navigate = useNavigate();
   const qc = useQueryClient();
   const bot = useBot(botId);
-  const live = useBotLive(botId);
+  // A bubbled Bot's chat lives in its bubble (one home at a time): this pane
+  // shows the "in a bubble" card and must not subscribe to the live feed, which
+  // would tell main the chat is on screen here.
+  const { bubbled, liveHere } = useBotChatHome(botId);
+  const live = useBotLive(liveHere ? botId : undefined);
+  // The ••• menu's paused state while the live feed is closed (bubbled) comes from the summary.
+  const liveSummary = useQuery({
+    queryKey: queryKeys.botLiveSummary(botId),
+    queryFn: () => botsApi.liveSummary(botId),
+    enabled: bubbled,
+    retry: false,
+  });
   const needsComputerInfo = Boolean(
     live.snapshot?.handoff?.target === "computer" ||
       live.snapshot?.entries.some(
@@ -1092,6 +524,11 @@ export function BotChatPane({ botId }: { botId: string }) {
   const [statusLayout, setStatusLayout] = React.useState("");
   const composerRef = React.useRef<HTMLTextAreaElement | null>(null);
   const snapshot = live.snapshot;
+  const snapshotEntries = snapshot?.entries;
+  const composerHistory = React.useMemo(
+    () => (snapshotEntries ? composerHistoryFromBotEntries(snapshotEntries) : []),
+    [snapshotEntries],
+  );
   const quietSince = useLastProgressAt(snapshot?.seq ?? 0, snapshot?.partial ?? null);
   const latestSnapshot = React.useRef(snapshot);
   React.useLayoutEffect(() => { latestSnapshot.current = snapshot; }, [snapshot]);
@@ -1120,8 +557,8 @@ export function BotChatPane({ botId }: { botId: string }) {
   // Leaving records only when the chat was last open. A Bot that is gone (not
   // found, or just deleted) is never marked: its preferences were forgotten with it.
   React.useEffect(() => {
-    if (botFound) markViewed(botId, replyAt);
-  }, [botFound, botId, replyAt, markViewed]);
+    if (botFound && !bubbled) markViewed(botId, replyAt);
+  }, [botFound, bubbled, botId, replyAt, markViewed]);
   React.useEffect(
     () => () => {
       if (qc.getQueryData(queryKeys.bot(botId))) markViewed(botId, null);
@@ -1135,7 +572,7 @@ export function BotChatPane({ botId }: { botId: string }) {
       return next.length === current.length ? current : next;
     });
   }, [snapshot, morphing]);
-  const state: BotSessionState | undefined = snapshot?.state;
+  const state: BotSessionState | undefined = snapshot?.state ?? (bubbled ? liveSummary.data?.state : undefined);
   const running = state?.kind === "running";
   const usageLimitWait = useUsageLimitWait("bot", botId);
   const spending = useSpendingStatus("bot", botId);
@@ -1154,7 +591,7 @@ export function BotChatPane({ botId }: { botId: string }) {
   const showApprovalStatus = approvalStatus.show;
   // Cards this device is answering: their settlement is this answer, not a stale card.
   const answeringApprovals = React.useRef(new Set<string>());
-  const approvals = useBotApprovals(botId, (waitId) => {
+  const approvals = useBotApprovals(bubbled ? undefined : botId, (waitId) => {
     if (!answeringApprovals.current.has(waitId)) showApprovalStatus({ decision: "stale" });
   });
   const approvalGroups = groupBotApprovalPrompts(approvals.prompts);
@@ -1166,6 +603,19 @@ export function BotChatPane({ botId }: { botId: string }) {
   const [instructionsEdit, setInstructionsEdit] = React.useState<{ changeId: string; seed: string } | null>(null);
   const accessRequestActions = useBotAccessRequestActions(botId, live.snapshot?.accessRequest?.waitId);
   const handoffActions = useBotHandoffActions(botId, live.snapshot?.handoff?.waitId);
+  // The header face follows the running turn's phase, waits with the person while a card
+  // needs them, and has a done (or error) moment when the turn ends; a turn the person
+  // stopped settles quietly.
+  const lastTurnEnd = snapshot ? botLastTurnEnd(snapshot.entries) : null;
+  const avatarState = useBotAvatarState({
+    session: state?.kind,
+    phase: snapshot?.activity?.phase ?? null,
+    failed: lastTurnEnd === "failed",
+    stopped: lastTurnEnd === "stopped",
+    awaitingPerson:
+      approvals.prompts.length > 0 ||
+      Boolean(snapshot?.question || snapshot?.handoff || snapshot?.accessRequest || snapshot?.plan?.status === "pending"),
+  });
 
   // The Bot's routines, read only when its chat shows a wake-up chip.
   const hasWakeUps = snapshot?.entries.some((entry) => entry.type === "wake_up") ?? false;
@@ -1214,7 +664,7 @@ export function BotChatPane({ botId }: { botId: string }) {
         current ? (
           <BotChatNamePill
             bot={current}
-            working={running}
+            avatarState={avatarState}
             onOpenProfile={() => panel.show("advanced", { botId: current.id })}
           />
         ) : bot.isLoading ? (
@@ -1282,6 +732,7 @@ export function BotChatPane({ botId }: { botId: string }) {
       </div>,
     );
   }
+  if (bubbled) return shell(<BotBubbleCard bot={current} />);
   if (snapshot === null) {
     return shell(
       live.failed ? (
@@ -1928,6 +1379,7 @@ export function BotChatPane({ botId }: { botId: string }) {
                     : spendingReached
           }
           hasMessages={snapshot.entries.length > 0}
+          historyEntries={composerHistory}
           chatId={`bot:${current.id}`}
           placeholder={handoff && !noteRefused ? "Add a note and send to mark it done" : `Ask ${current.name}`}
           onSend={(text, attachments) =>

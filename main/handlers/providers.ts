@@ -4,10 +4,12 @@ import { syncQuickChatSettings } from "../windows/quick-chat-window.js";
 import { createPendingLastWorkspaceTracker } from "../windows/quick-chat-window-core.js";
 import { customModelThinkingLevels } from "../../renderer/shared/custom-model-options.js";
 import { isCompactionEngine, parseCompactionModelOverrides } from "../../renderer/shared/compaction.js";
-import { parseModelPadPreferencesPatch } from "../../renderer/shared/model-pad-preferences.js";
+import { parseModelPreferencesPatch } from "../../renderer/shared/model-preferences.js";
+import { parseAgentSliderSettingsPatch } from "../../renderer/shared/agent-slider.js";
 // Provider configuration + API key IPC handlers. Thin — logic lives in services.
 
-import { ipcMain } from "../platform.js";
+import { ipcMain, logger } from "../platform.js";
+import { hostPlatformCapabilities } from "../services/host-platform-capabilities.js";
 import { activeLinuxDictationHoldShortcut, bindLinuxDictationHoldShortcut, disableLinuxDictationHoldShortcut } from "../services/shortcut.js";
 import { DictationHoldSettingsTransaction } from "../services/dictation-hold-settings.js";
 import { configStore } from "../services/config-store.js";
@@ -25,7 +27,7 @@ import { providerRegistry } from "../services/provider-registry.js";
 import { projectPiCatalogRefreshErrors } from "../services/pi-catalog-refresh.js";
 import { isCustomProviderId } from "../services/custom-provider-id.js";
 import { GOOGLE_PROVIDER_ID, parseGoogleThinkingSelection } from "../services/google-provider.js";
-import { parseAnthropicThinkingSelection } from "../services/anthropic-provider.js";
+import { ANTHROPIC_PROVIDER_ID, parseAnthropicThinkingSelection } from "../services/anthropic-provider.js";
 import {
   assertMutableProviderId,
   forwardCodexProviderStatusChanges,
@@ -289,7 +291,12 @@ export function registerProviderHandlers(): void {
   ipcMain.handle(
     "settings:setGoogleThinking",
     async (_event, modelIdValue: unknown, levelValue: unknown) => {
-      const selection = parseGoogleThinkingSelection(modelIdValue, levelValue);
+      await providerRegistry.ensureBuiltinCatalogs();
+      const selection = parseGoogleThinkingSelection(
+        modelIdValue,
+        levelValue,
+        (modelId) => providerRegistry.getBuiltinModel(GOOGLE_PROVIDER_ID, modelId),
+      );
       return configStore.setGoogleThinkingLevel(selection.modelId, selection.level);
     },
   );
@@ -312,7 +319,12 @@ export function registerProviderHandlers(): void {
   ipcMain.handle(
     "settings:setAnthropicThinking",
     async (_event, modelIdValue: unknown, levelValue: unknown) => {
-      const selection = parseAnthropicThinkingSelection(modelIdValue, levelValue);
+      await providerRegistry.ensureBuiltinCatalogs();
+      const selection = parseAnthropicThinkingSelection(
+        modelIdValue,
+        levelValue,
+        (modelId) => providerRegistry.getBuiltinModel(ANTHROPIC_PROVIDER_ID, modelId),
+      );
       return configStore.setAnthropicThinkingLevel(selection.modelId, selection.level);
     },
   );
@@ -324,6 +336,7 @@ export function registerProviderHandlers(): void {
       if (modelId.length > MAX_CONFIG_ID_LENGTH || !isGenerationThinkingLevel(levelValue)) {
         throw new Error("Invalid provider thinking selection.");
       }
+      await providerRegistry.ensureBuiltinCatalogs();
       const builtin = providerRegistry.builtinProvider(providerId);
       const custom = builtin ? undefined : await configStore.getProvider(providerId);
       const levels = builtin?.modelMetadata?.[modelId]?.thinkingLevels ??
@@ -379,6 +392,15 @@ export function registerProviderHandlers(): void {
     }
     return configStore.setGeminiUsageScope(scopeValue);
   });
+  // The Agent Slider lives in the portable config.json, so it has its own
+  // call rather than straddling both stores inside settings:set.
+  ipcMain.handle("settings:setAgentSlider", async (_event, slider: unknown) =>
+    configStore.setAgentSlider(slider),
+  );
+  // The first-run seed: writes only when config.json holds no slider at all.
+  ipcMain.handle("settings:seedAgentSlider", async (_event, slider: unknown) =>
+    configStore.seedAgentSlider(slider),
+  );
   ipcMain.handle("settings:set", async (_event, patch: unknown) => {
     if (typeof patch !== "object" || patch === null) throw new Error("Invalid settings patch.");
     const p = patch as Record<string, unknown>;
@@ -393,6 +415,7 @@ export function registerProviderHandlers(): void {
     }
     if (typeof p.lastProviderId === "string") next.lastProviderId = p.lastProviderId;
     if (typeof p.lastModel === "string") next.lastModel = p.lastModel;
+    Object.assign(next, parseAgentSliderSettingsPatch(p));
     if (
       typeof p.lastWorkspaceId === "string" &&
       p.lastWorkspaceId.length <= 256 &&
@@ -476,6 +499,11 @@ export function registerProviderHandlers(): void {
       }
       next.quickChatKeepOpenOnBlur = p.quickChatKeepOpenOnBlur;
     }
+    for (const key of ["botBubblesEnabled", "botBubblesFloatOverApps"] as const) {
+      if (p[key] === undefined) continue;
+      if (typeof p[key] !== "boolean") throw new Error("Invalid Bot bubbles setting.");
+      next[key] = p[key];
+    }
     Object.assign(next, parseAidenLiveSettingsPatch(p as Record<string, unknown>));
     if (p.skillsEnabled !== undefined) {
       if (typeof p.skillsEnabled !== "boolean") throw new Error("Invalid skills enabled setting.");
@@ -491,7 +519,7 @@ export function registerProviderHandlers(): void {
       next.chatTitleProviderId = p.chatTitleProviderId;
     }
     if (p.appearance !== undefined) next.appearance = parseAppearanceConfig(p.appearance);
-    Object.assign(next, parseModelPadPreferencesPatch(p));
+    Object.assign(next, parseModelPreferencesPatch(p));
     const pendingWorkspaceToken =
       next.lastWorkspaceId !== undefined
         ? pendingLastWorkspace.beginWrite(next.lastWorkspaceId)
@@ -511,6 +539,12 @@ export function registerProviderHandlers(): void {
     }
     await applySettingsEffects(saved, next);
     if (next.quickChatKeepOpenOnBlur !== undefined) syncQuickChatSettings(saved);
+    if ((next.botBubblesEnabled !== undefined || next.botBubblesFloatOverApps !== undefined) && hostPlatformCapabilities().bots) {
+      // Loaded on demand: the bubble service pulls in the Bot application service.
+      void import("../services/bot-bubbles/bot-bubbles-main.js")
+        .then(({ botBubbleService }) => botBubbleService().syncSettings(saved))
+        .catch((error: unknown) => logger.warn("bot-bubbles", "Could not apply the Bot bubble settings.", error));
+    }
     if (next.quickChatDefaultPersistence !== undefined) {
       ipcMain.broadcast("settings:controls-changed", {});
     }

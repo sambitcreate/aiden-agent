@@ -5,7 +5,7 @@
 
 import * as React from "react";
 import { ArrowDownToLine, ChevronRight, ChevronUp, PanelRight, Square, X } from "lucide-react";
-import { subagentModelDisplay } from "../lib/subagent-panel-state";
+import { subagentModelName, useSubagentModelCatalog } from "../lib/subagent-model-name";
 import {
   formatSubagentElapsed,
   isSubagentRunViewStateActive,
@@ -28,6 +28,7 @@ import {
   subagentStatusLabel,
 } from "./subagent-chips";
 import { subagentMilestoneLabel } from "./subagent-detail";
+import { subagentFailureReason } from "../lib/subagent-helper-chat-state";
 import { Button, Popover, PopoverContent, PopoverTrigger } from "./ui";
 import { Kbd } from "./ui-primitives";
 
@@ -196,16 +197,17 @@ function plural(count: number, noun: string): string {
   return `${count} ${noun}${count === 1 ? "" : "s"}`;
 }
 
-/** "3 finished" for a batch that all completed; otherwise the card's own summary is used. */
+/** "3 done" for a batch that all completed; otherwise the card's own summary is used. */
 function allCompletedSummary(model: SubagentPillModel): string | null {
   if (model.activeCount > 0 || !model.runs.every((run) => run.state === "completed")) return null;
-  return `${model.runs.length} finished`;
+  return `${model.runs.length} done`;
 }
 
 /** The live feed for one run: saved milestones, then the current activity and latest text. */
 function RunFeed({
   run,
   elapsed,
+  statusShownAbove,
   stopPending,
   stopError,
   onOpen,
@@ -213,6 +215,8 @@ function RunFeed({
 }: {
   run: SubagentRunView;
   elapsed: string | undefined;
+  /** The row above already reads the live status, so the feed doesn't repeat it. */
+  statusShownAbove: boolean;
   stopPending: boolean;
   stopError: string | undefined;
   onOpen: (runId: string, trigger: HTMLElement) => void;
@@ -221,31 +225,40 @@ function RunFeed({
   const snapshot = run.snapshot;
   const active = isSubagentRunViewStateActive(run.state);
   const stoppable = subagentStoppableSnapshot(run);
-  const milestones = (snapshot?.milestones ?? []).slice(-4);
   const activity = snapshot?.activity?.trim();
+  const status = active ? subagentStatusLabel(run.state, activity) : null;
+  // The newest step and the live status can say the same thing ("Writing its
+  // report"); it is said once, by the row's status line when it shows one.
+  const milestoneLabels = (snapshot?.milestones ?? []).map((milestone, index, all) =>
+    subagentMilestoneLabel(milestone, { inProgress: active && index === all.length - 1 }),
+  );
+  if (status && milestoneLabels[milestoneLabels.length - 1] === status) milestoneLabels.pop();
+  const milestones = milestoneLabels.slice(-4);
   const latestText = snapshot?.latestText?.trim();
-  const error = snapshot?.error?.trim();
-  const model = snapshot ? subagentModelDisplay(snapshot) : undefined;
+  const rawError = snapshot?.error?.trim();
+  const error = rawError ? (subagentFailureReason(rawError) ?? "This helper couldn't finish.") : undefined;
+  const catalog = useSubagentModelCatalog();
+  const model = snapshot ? subagentModelName(snapshot, catalog) : null;
   const meta = [
     elapsed ? `${active ? "Working for" : "Ran for"} ${elapsed}` : null,
-    snapshot ? plural(snapshot.tools, "tool call") : null,
-    model?.model ?? null,
+    snapshot && snapshot.tools > 0 ? plural(snapshot.tools, "tool call") : null,
+    model,
   ].filter((part): part is string => part !== null);
 
   return (
     <div className="mt-0.5 mb-1.5 ml-[2.375rem] mr-2 rounded-card bg-well px-3 py-2.5" data-subagent-pill-feed={run.runId}>
       {meta.length ? <p className="m-0 truncate text-mini text-tertiary">{meta.join(" · ")}</p> : null}
       <ol className="m-0 mt-1.5 list-none space-y-1 p-0 text-small text-secondary" aria-label={`${run.label} activity`}>
-        {milestones.map((milestone, index) => (
-          <li key={`${index}:${milestone}`} className="flex items-start gap-2">
+        {milestones.map((label, index) => (
+          <li key={`${index}:${label}`} className="flex items-start gap-2">
             <span aria-hidden="true" className="mt-[0.45rem] size-1 shrink-0 rounded-full bg-tertiary" />
-            <span className="min-w-0">{subagentMilestoneLabel(milestone)}</span>
+            <span className="min-w-0">{label}</span>
           </li>
         ))}
-        {active ? (
+        {status && !statusShownAbove ? (
           <li className="flex items-start gap-2 font-medium text-primary">
             <span aria-hidden="true" className="mt-[0.4rem] size-1.5 shrink-0 rounded-full bg-status-accent" />
-            <span className="min-w-0">{subagentStatusLabel(run.state, activity)}</span>
+            <span className="min-w-0">{status}</span>
           </li>
         ) : null}
         {error ? (
@@ -266,10 +279,16 @@ function RunFeed({
           variant="muted"
           size="small"
           onClick={(event) => onOpen(run.runId, event.currentTarget)}
-          aria-label={`${run.state === "needs_attention" ? "Review" : active ? "Open" : "View result of"} ${run.label} in the side panel`}
+          aria-label={
+            run.state === "needs_attention"
+              ? `Review ${run.label} in the side panel`
+              : active
+                ? `Open helper chat for ${run.label}`
+                : `View result of ${run.label} in the side panel`
+          }
         >
           <PanelRight aria-hidden="true" className="size-3.5" />
-          {run.state === "needs_attention" ? "Review" : active ? "Open in side panel" : "View result"}
+          {run.state === "needs_attention" ? "Review" : active ? "Open helper chat" : "View result"}
         </Button>
         {stoppable ? (
           <Button
@@ -365,7 +384,7 @@ function TrayRun({
       </button>
       {expanded ? (
         <div id={feedId}>
-          <RunFeed run={run} elapsed={elapsed} {...feed} />
+          <RunFeed run={run} elapsed={elapsed} statusShownAbove={!error} {...feed} />
         </div>
       ) : null}
     </li>
@@ -471,13 +490,13 @@ export function SubagentComposerPill({
     void Promise.resolve(onStop(snapshot)).catch(() => undefined);
   };
   // Kept free of live activity so a focused trigger is not re-read on every step.
-  const triggerLabel = `${active ? `${countText} running` : `${countText} finished`}.${model.attention ? ` ${model.attention.label} needs your attention.` : ""} ${open ? "Hide" : "Show"} subagent details.`;
+  const triggerLabel = `${active ? `${countText} running` : `${countText} done`}.${model.attention ? ` ${model.attention.label} needs your attention.` : ""} ${open ? "Hide" : "Show"} subagent details.`;
 
   return (
     <Popover open={open} onOpenChange={onOpenChange}>
       <div
         ref={pillRef}
-        data-subagent-pill={active ? (model.attention ? "attention" : "active") : "finished"}
+        data-subagent-pill={active ? (model.attention ? "attention" : "active") : "done"}
         className={cn(
           // Shrinks ahead of the task chip so both stay legible when they share the row, but
           // never below its marks and count: the headline is the only part that gives way.
@@ -519,7 +538,7 @@ export function SubagentComposerPill({
                 allCompleted ? "text-status-green" : "text-primary",
               )}
             >
-              {active ? `${model.activeCount} running` : `${model.runs.length} finished`}
+              {active ? `${model.activeCount} running` : `${model.runs.length} done`}
             </span>
             {elapsed ? (
               <span className="shrink-0 text-mini text-tertiary tabular-nums @max-[30rem]:hidden">{elapsed}</span>
@@ -539,7 +558,7 @@ export function SubagentComposerPill({
             size="small"
             iconOnly
             className="mr-0.5 text-tertiary hover:text-primary"
-            aria-label={active ? "Hide background subagents" : "Dismiss finished subagents"}
+            aria-label={active ? "Hide background subagents" : "Dismiss done subagents"}
             onClick={onDismiss}
           >
             <X aria-hidden="true" className="size-3.5" />

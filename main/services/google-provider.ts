@@ -72,12 +72,15 @@ export function googleProviderModelMetadata(): Record<
 export function parseGoogleThinkingSelection(
   modelIdValue: unknown,
   levelValue: unknown,
+  resolveModel: (
+    modelId: string,
+  ) => Pick<Model<Api>, "reasoning" | "thinkingLevelMap"> | undefined = (
+    modelId,
+  ) => builtinGoogleModels.find((candidate) => candidate.id === modelId),
 ): { modelId: string; level: GoogleThinkingLevel } {
   if (typeof modelIdValue !== "string")
     throw new Error("Invalid Google model.");
-  const model = builtinGoogleModels.find(
-    (candidate) => candidate.id === modelIdValue,
-  );
+  const model = resolveModel(modelIdValue);
   if (!model?.reasoning)
     throw new Error("This Google model does not support thinking.");
   if (

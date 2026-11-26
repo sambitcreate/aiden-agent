@@ -31,6 +31,11 @@ struct AidenOpenWorkAttempt: Codable, Equatable {
     let createdAt: Date
 }
 
+extension AidenOpenWorkAttempt: AidenDurablePendingAttempt {
+    var pendingAttemptID: UUID? { mutation.mutationId }
+    var pendingAttemptCreatedAt: Date { createdAt }
+}
+
 @MainActor
 @Observable
 final class AidenBotOpenWorkModel {
@@ -40,57 +45,67 @@ final class AidenBotOpenWorkModel {
     private let mayWrite: @MainActor () -> Bool
     private let store: AidenBotOpenWorkDraftStore?
     private let scope: AidenBotOpenWorkDraftStore.Scope?
+    private var mutation: AidenDurablePendingMutation<AidenOpenWorkAttempt>
     private(set) var snapshot: AidenOpenWorkSnapshot?
     private(set) var isLoading = false
-    private(set) var isBusy = false
+    private var isSending = false
     private(set) var loadError: String?
     var message: String?
-    var draft: AidenOpenWorkDraft? { didSet { persist() } }
+    var draft: AidenOpenWorkDraft? { didSet { persistDraft() } }
     private(set) var baseline: AidenOpenWorkItem?
     private(set) var draftRevision: String?
     private(set) var conflict: AidenOpenWorkItem?
     private(set) var wasRemoved = false
     private(set) var addNeedsReview = false
-    private(set) var uncertain = false
     private(set) var evidence: AidenOpenWorkEvidence?
     private(set) var evidenceError: String?
     private(set) var isLoadingEvidence = false
-    private var attempt: AidenOpenWorkAttempt?
-    private var storageBlocked = false
     @ObservationIgnored private var isRestoring = true
     private var loadGeneration = 0
     private var evidenceGeneration = 0
+
+    var isBusy: Bool { isSending || mutation.isInFlight }
+    var uncertain: Bool { mutation.isUncertain }
 
     init(botID: String, transport: any AidenBotOpenWorkTransport,
          isCurrent: @escaping @MainActor () -> Bool = { true }, mayWrite: @escaping @MainActor () -> Bool = { true },
          store: AidenBotOpenWorkDraftStore? = nil, scope: AidenBotOpenWorkDraftStore.Scope? = nil) {
         self.botID = botID; self.transport = transport; self.isCurrent = isCurrent; self.mayWrite = mayWrite
         self.store = store; self.scope = scope
+        var retained: AidenBotOpenWorkDraftStore.State?
+        var readFailed = false
+        var readErrorMessage: String?
         if let store, let scope {
-            do {
-                if let retained = try store.load(scope) {
-                    baseline = retained.baseline; draftRevision = retained.draftRevision
-                    attempt = retained.attempt; draft = retained.draft; uncertain = attempt != nil
-                }
-            } catch {
-                storageBlocked = true
-                message = "This phone couldn’t read its saved Open work request. Inspect the computer before making changes."
+            do { retained = try store.load(scope) }
+            catch {
+                readFailed = true
+                readErrorMessage = "This phone couldn’t read its saved Open work request. Inspect the computer before making changes."
             }
         }
+        self.mutation = AidenDurablePendingMutation(
+            restoredAttempt: retained?.attempt,
+            storageReadFailed: readFailed
+        )
+        if let retained {
+            baseline = retained.baseline; draftRevision = retained.draftRevision; draft = retained.draft
+        }
+        if let readErrorMessage { message = readErrorMessage }
         isRestoring = false
     }
-    var canWrite: Bool { isCurrent() && mayWrite() && snapshot != nil && !storageBlocked }
+
+    var canWrite: Bool { isCurrent() && mayWrite() && snapshot != nil && mutation.canWrite }
     var canMutate: Bool { canWrite && !isBusy && !uncertain }
     var canEditDraft: Bool { canMutate }
     var canSave: Bool {
         canEditDraft && draft?.valid == true && draftRevision != nil && conflict == nil && !wasRemoved && !addNeedsReview
             && baseline?.hasPendingStop != true
     }
-    var isCheckingStop: Bool { uncertain && attempt?.mutation.action.isStop == true }
+    var isCheckingStop: Bool { uncertain && mutation.pending?.mutation.action.isStop == true }
     var countSummary: String {
         let count = snapshot?.items.filter { $0.state.isActive }.count ?? 0
         return count == 1 ? "1 active item" : "\(count) active items"
     }
+
     func load() async {
         guard isCurrent() else { return }
         loadGeneration += 1
@@ -107,6 +122,7 @@ final class AidenBotOpenWorkModel {
             loadError = "Open work couldn’t be loaded. Connect to your paired computer and try again."
         }
     }
+
     private func apply(_ loaded: AidenOpenWorkSnapshot) {
         // Revisions describe stored metadata; execution can change at equal revision.
         snapshot = loaded
@@ -123,17 +139,20 @@ final class AidenBotOpenWorkModel {
         }
         reconcile(loaded)
     }
+
     func begin(item: AidenOpenWorkItem? = nil) {
         guard !isBusy, !uncertain, let snapshot else { return }
         baseline = item; draftRevision = item?.revision ?? snapshot.revision
         conflict = nil; wasRemoved = false; addNeedsReview = false
         draft = item.map(AidenOpenWorkDraft.init) ?? AidenOpenWorkDraft()
     }
+
     func discardDraft() {
         guard !isBusy, !uncertain else { return }
         baseline = nil; draftRevision = nil; conflict = nil; wasRemoved = false; addNeedsReview = false
         draft = nil
     }
+
     func useLatestRevision() {
         guard canEditDraft else { return }
         if baseline != nil {
@@ -144,131 +163,178 @@ final class AidenBotOpenWorkModel {
             draftRevision = snapshot.revision
         }
         conflict = nil; wasRemoved = false; addNeedsReview = false
-        persist()
+        persistDraft()
     }
+
     func saveDraft() async {
         guard canSave, let draft, let draftRevision else { return }
-        let mutation: AidenOpenWorkMutation
+        let mutationRequest: AidenOpenWorkMutation
         do {
             if let baseline {
-                mutation = try .init(action: .edit, expectedRevision: draftRevision, id: baseline.id, patch: draft.patch)
+                mutationRequest = try .init(action: .edit, expectedRevision: draftRevision, id: baseline.id, patch: draft.patch)
             } else {
-                mutation = try .init(action: .add, expectedRevision: draftRevision, title: draft.patch.title, note: draft.note)
+                mutationRequest = try .init(action: .add, expectedRevision: draftRevision, title: draft.patch.title, note: draft.note)
             }
         } catch { return }
-        await send(.init(mutation: mutation, itemID: baseline?.id, consumesDraft: true, createdAt: Date()))
+        await beginNew(.init(mutation: mutationRequest, itemID: baseline?.id, consumesDraft: true, createdAt: Date()))
     }
+
     func setState(_ item: AidenOpenWorkItem, _ state: AidenOpenWorkState) async {
         guard canMutate, !item.hasPendingStop, state != .waiting,
-              let mutation = try? AidenOpenWorkMutation(action: .edit, expectedRevision: item.revision, id: item.id,
+              let mutationRequest = try? AidenOpenWorkMutation(action: .edit, expectedRevision: item.revision, id: item.id,
                 patch: .init(state: state)) else { return }
-        await send(.init(mutation: mutation, itemID: item.id, consumesDraft: false, createdAt: Date()))
+        await beginNew(.init(mutation: mutationRequest, itemID: item.id, consumesDraft: false, createdAt: Date()))
     }
+
     func act(_ action: AidenOpenWorkMutation.Action, on item: AidenOpenWorkItem) async {
         guard canMutate, !item.hasPendingStop, action == .dismiss || action.isStop,
               !action.isStop || item.execution.canStop,
-              let mutation = try? AidenOpenWorkMutation(action: action, expectedRevision: item.revision, id: item.id) else { return }
-        await send(.init(mutation: mutation, itemID: item.id, consumesDraft: false, createdAt: Date()))
+              let mutationRequest = try? AidenOpenWorkMutation(action: action, expectedRevision: item.revision, id: item.id) else { return }
+        await beginNew(.init(mutation: mutationRequest, itemID: item.id, consumesDraft: false, createdAt: Date()))
     }
+
     func undo(_ option: AidenOpenWorkUndo, now: Date = Date()) async {
         guard canMutate, option.isAvailable(at: now), snapshot?.undo.contains(option) == true,
               let item = snapshot?.items.first(where: { $0.id == option.itemId }), !item.hasPendingStop,
-              let mutation = try? AidenOpenWorkMutation(action: .undo, expectedRevision: option.expectedRevision, undoOf: option.mutationId) else { return }
-        await send(.init(mutation: mutation, itemID: option.itemId, consumesDraft: false, createdAt: Date()))
+              let mutationRequest = try? AidenOpenWorkMutation(action: .undo, expectedRevision: option.expectedRevision, undoOf: option.mutationId) else { return }
+        await beginNew(.init(mutation: mutationRequest, itemID: option.itemId, consumesDraft: false, createdAt: Date()))
     }
+
     func retryPending(now: Date = Date()) async {
-        guard canWrite, !isBusy, let attempt else { return }
-        let age = now.timeIntervalSince(attempt.createdAt)
-        guard attempt.mutation.action.isStop || (0..<(23 * 3600)).contains(age) else {
+        guard canWrite, !isBusy, let attempt = mutation.pending else { return }
+        let policy: AidenDurablePendingMutation<AidenOpenWorkAttempt>.ReplayPolicy =
+            attempt.mutation.action.isStop ? .unrestricted : .bounded()
+        switch mutation.beginRetry(now: now, policy: policy, persist: { persistStore(attempt: $0) }) {
+        case let .started(command):
+            await dispatch(command)
+        case .expired:
             message = "This request’s outcome is still unknown. Inspect Open work on your computer before making another change."
-            return
-        }
-        await send(attempt)
-    }
-    private func send(_ command: AidenOpenWorkAttempt) async {
-        guard canWrite, !isBusy else { return }
-        let hadUnknownOutcome = uncertain
-        isBusy = true; attempt = command
-        persist()
-        guard !storageBlocked else {
-            isBusy = false
+        case .storageBlocked:
             message = "This phone couldn’t safely retain the request. No new request was sent."
+        case .unavailable, .rejectedBeforeWrite:
             return
         }
+    }
+
+    private func beginNew(_ command: AidenOpenWorkAttempt) async {
+        guard canWrite, !isBusy else { return }
+        switch mutation.begin(command, persist: { persistStore(attempt: $0) }) {
+        case .started:
+            await dispatch(command)
+        case .storageBlocked:
+            message = "This phone couldn’t safely retain the request. No new request was sent."
+        case .unavailable, .rejectedBeforeWrite:
+            return
+        }
+    }
+
+    private func dispatch(_ command: AidenOpenWorkAttempt) async {
+        let nonce = command.mutation.mutationId
+        isSending = true
         loadGeneration += 1
-        defer { isBusy = false }
+        defer {
+            mutation.abandonInFlightIfUnsettled(matching: nonce)
+            isSending = false
+        }
         do {
             let result = try await transport.mutateBotOpenWork(botId: botID, mutation: command.mutation)
-            guard isCurrent(), attempt?.mutation.mutationId == command.mutation.mutationId else { return }
+            guard isCurrent(), mutation.isCurrentInFlight(matching: nonce) else { return }
             guard result.snapshot == nil || result.snapshot?.botId == botID else { throw AidenRemoteClientError.invalidResponse }
             switch result {
             case let .accepted(receipt):
-                guard receipt.mutationId == command.mutation.mutationId,
+                guard receipt.mutationId == nonce,
                       receipt.itemId == nil || command.itemID == nil || receipt.itemId == command.itemID,
                       receipt.stop == nil || command.mutation.action.isStop else { throw AidenRemoteClientError.invalidResponse }
                 if command.mutation.action.isStop {
                     if let stop = receipt.stop, stop.state.isTerminal {
-                        settle(command); message = stop.description
+                        if settle(command) { message = stop.description }
                     } else {
-                        uncertain = true
+                        mutation.markUncertain(matching: nonce)
                         message = receipt.stop?.description ?? "Stop is awaiting acknowledgement. Check the same request to confirm its outcome."
                     }
                 } else {
-                    settle(command); message = command.mutation.action == .undo ? "Change undone." : "Open work saved."
+                    if settle(command) { message = command.mutation.action == .undo ? "Change undone." : "Open work saved." }
                 }
                 apply(receipt.snapshot)
             case let .rejected(refusal):
-                if hadUnknownOutcome || refusal.code == .unavailable {
-                    uncertain = true
-                } else {
-                    settle(command, consumeDraft: false)
-                    if refusal.code == .stale, command.mutation.action == .add { addNeedsReview = true }
+                let resolution = mutation.resolveRejection(matching: nonce, isUncertainOutcome: refusal.code == .unavailable) { settlingID in
+                    persistStore(attempt: nil, settling: settlingID)
                 }
-                message = refusal.code.explanation
+                guard resolution != .superseded else { return }
+                if case let .clearedDefiniteRefusal(blocked) = resolution {
+                    if refusal.code == .stale, command.mutation.action == .add { addNeedsReview = true }
+                    if !blocked { message = refusal.code.explanation }
+                } else {
+                    message = refusal.code.explanation
+                }
                 if let snapshot = refusal.snapshot { apply(snapshot) }
             }
         } catch {
-            guard isCurrent(), attempt?.mutation.mutationId == command.mutation.mutationId else { return }
-            if hadUnknownOutcome || aidenBotSessionFailureIsAmbiguous(error) {
-                uncertain = true
+            guard isCurrent() else { return }
+            let resolution = mutation.resolveFailure(matching: nonce, error: error) { settlingID in
+                persistStore(attempt: nil, settling: settlingID)
+            }
+            switch resolution {
+            case .superseded:
+                return
+            case .retainedUncertain:
                 message = "The computer may have accepted this request. Check its state or retry the exact same request. Your draft is kept."
-            } else {
-                settle(command, consumeDraft: false)
-                message = "This change wasn’t confirmed. Refresh and review Open work before trying again. Your draft is kept."
+            case let .clearedDefiniteRefusal(blocked):
+                if !blocked {
+                    message = "This change wasn’t confirmed. Refresh and review Open work before trying again. Your draft is kept."
+                }
             }
         }
         await load()
     }
-    private func settle(_ command: AidenOpenWorkAttempt, consumeDraft: Bool = true) {
+
+    @discardableResult
+    private func settle(_ command: AidenOpenWorkAttempt, consumeDraft: Bool = true) -> Bool {
         if consumeDraft && command.consumesDraft {
+            isRestoring = true
             baseline = nil; draftRevision = nil; conflict = nil; wasRemoved = false; addNeedsReview = false
             draft = nil
+            isRestoring = false
         }
-        attempt = nil; uncertain = false
-        persist(settling: command.mutation.mutationId)
+        return mutation.settle(matching: command.mutation.mutationId) { settlingID in
+            persistStore(attempt: nil, settling: settlingID)
+        }
     }
+
     private func reconcile(_ loaded: AidenOpenWorkSnapshot) {
-        guard uncertain, let attempt else { return }
+        guard mutation.isUncertain, let attempt = mutation.pending else { return }
         if attempt.mutation.action.isReversible,
            let option = loaded.undo.first(where: { $0.mutationId == attempt.mutation.mutationId }),
            attempt.itemID == nil || option.itemId == attempt.itemID {
-            settle(attempt); message = "Change saved on your computer."
+            if settle(attempt) { message = "Change saved on your computer." }
         } else if attempt.mutation.action.isStop,
                   let item = loaded.items.first(where: { $0.id == attempt.itemID }),
                   let stop = item.lastStop, stop.mutationId == attempt.mutation.mutationId, stop.state.isTerminal {
-            settle(attempt); message = stop.description
+            if settle(attempt) { message = stop.description }
         }
         // Undo disappearance and matching text/revisions prove no mutation identity.
     }
-    private func persist(settling mutationID: UUID? = nil) {
-        guard !isRestoring, isCurrent(), let store, let scope else { return }
-        do {
-            try store.save(.init(draft: draft, baseline: baseline, draftRevision: draftRevision, attempt: attempt), scope: scope, settling: mutationID)
-        } catch {
-            storageBlocked = true
-            message = "This phone couldn’t retain the Open work draft safely. Inspect the computer before making changes."
+
+    private func persistDraft() {
+        let currentAttempt = mutation.pending
+        if persistStore(attempt: currentAttempt) == .storageFailed {
+            mutation.recordStorageFailure()
         }
     }
+
+    private func persistStore(attempt: AidenOpenWorkAttempt?, settling mutationID: UUID? = nil) -> AidenDurablePendingMutation<AidenOpenWorkAttempt>.PersistOutcome {
+        guard !isRestoring else { return .saved }
+        guard isCurrent() else { return .rejectedBeforeWrite }
+        guard let store, let scope else { return .saved }
+        do {
+            try store.save(.init(draft: draft, baseline: baseline, draftRevision: draftRevision, attempt: attempt), scope: scope, settling: mutationID)
+            return .saved
+        } catch {
+            message = "This phone couldn’t retain the Open work draft safely. Inspect the computer before making changes."
+            return .storageFailed
+        }
+    }
+
     func loadEvidence(item: AidenOpenWorkItem, kind: AidenOpenWorkEvidenceKind) async {
         guard isCurrent() else { return }
         evidenceGeneration += 1
@@ -290,6 +356,7 @@ final class AidenBotOpenWorkModel {
             evidenceError = "This retained source or result isn’t available from your computer."
         }
     }
+
     func closeEvidence() {
         evidenceGeneration += 1; evidence = nil; evidenceError = nil; isLoadingEvidence = false
     }

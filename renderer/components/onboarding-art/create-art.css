@@ -140,7 +140,18 @@
 .oa-cu-badge .oa-icon { width: 9px; height: 9px; }
 
 /* Native Subagents */
+.oa-sub-stage { position: absolute; inset: 0; container: oa-sub / inline-size; }
 .oa-sub-window { padding: 2px 5px; }
+.oa-sub-chat { right: 10px; top: 10px; width: 136px; height: 130px; }
+/* Below the one-column width the side-by-side chat would sit over the
+   Implementer row, or leave the list's words cut off beside it. There the chat
+   opens under the selected row, spans the list from just inside its left edge
+   and bleeds off the right, like the other tiles' cropped windows. */
+@container oa-sub (max-width: 259px) {
+  .oa-sub-chat { top: 60px; left: 16px; right: -12px; width: auto; }
+  /* Cut off by the edge, the header's More icon would read as a stray dot. */
+  .oa-sub-chat .oa-sub-more { display: none; }
+}
 .oa-sub-heading { padding: 7px 5px 3px; color: var(--text-tertiary); font-size: 7.5px; font-weight: 600; }
 .oa-sub-row { display: flex; align-items: center; gap: 5px; height: 28px; padding: 0 6px 0 2px; border-radius: 7px; }
 .oa-sub-row[data-level="2"] { margin-left: 12px; }
@@ -153,6 +164,14 @@
 .oa-sub-text { display: grid; gap: 3px; flex: 1; min-width: 0; font-size: 7.5px; line-height: 8px; color: var(--text-secondary); }
 .oa-sub-text .oa-bar { height: 4px; }
 .oa-sub-state { flex: none; color: var(--text-tertiary); font-size: 7.5px; margin-right: 10px; }
+/* The rows keep only the name where a status word would be cut: by the edge
+   of tiles too narrow for the whole list (below 160 px), or by the
+   side-by-side chat until the tile is wide enough for it to clear the list
+   (about 306 px). */
+@container oa-sub (max-width: 159px) or ((min-width: 260px) and (max-width: 305px)) {
+  .oa-sub-state { display: none; }
+}
+.oa-sub-live-dot { width: 5px; height: 5px; flex: none; border-radius: 50%; background: var(--status-accent); }
 
 /* Browser & Annotations */
 .oa-br-tabs { display: flex; align-items: center; gap: 3px; height: 21px; padding: 0 5px; color: var(--text-tertiary); }

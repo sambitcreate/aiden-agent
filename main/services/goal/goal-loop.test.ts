@@ -3,7 +3,7 @@
 
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { GOAL_MAX_ROUNDS, type GoalRecordV1, type GoalView } from "../../../renderer/shared/goal.js";
+import { GOAL_MAX_ROUNDS, GOAL_WAIT_LIMIT_MS, type GoalRecordV1, type GoalView } from "../../../renderer/shared/goal.js";
 import { agentNotice, type AgentNoticeV1 } from "../../../renderer/shared/agent-notices.js";
 import { createGoal, type GoalRoundActivity } from "./goal-core.js";
 import { GoalLoop, type GoalAnalyticsEvent, type GoalRoundStart } from "./goal-loop.js";
@@ -45,15 +45,22 @@ function harness(options: {
     throws: { activity: false, context: false, start: false, noticeContext: false },
     /** Holds startRound open, as a window's 5-second claim does. */
     holdStart: undefined as Promise<void> | undefined,
+    /** Holds startNoticeRound open to test races while a notice round starts. */
+    holdNoticeStart: undefined as Promise<void> | undefined,
+    /** Overrides fallbackContext for tests that hold or vary context lookup. */
+    fallbackContext: undefined as (() => Promise<typeof CONTEXT | undefined>) | undefined,
     review: (async (goal) => continueWith(`Next step ${goal.rounds}`)) as Review,
   };
   const rounds: Array<{ text: string; notice: AgentNoticeV1 }> = [];
   const roundCurrent: Array<() => boolean> = [];
+  const noticeCurrent: Array<() => boolean> = [];
   const noticeRounds: string[] = [];
   const events: GoalAnalyticsEvent[] = [];
   const changes: Array<GoalView | null> = [];
   const saved: GoalRecordV1[][] = [];
   const settled: GoalRecordV1[] = [];
+  const timers = new Map<number, { at: number; run: () => void }>();
+  let nextTimerId = 1;
   /** Looks waiting for the chat to be idle; `becomeIdle` releases them. */
   let idleWaiters: Array<() => void> = [];
   let lookingChanges = 0;
@@ -63,7 +70,13 @@ function harness(options: {
     now: () => clock,
     newId: () => `goal-${++ids}`,
     delay: (_ms, signal) => (signal.aborted ? Promise.reject(signal.reason) : Promise.resolve()),
-    setTimer: () => () => {},
+    setTimer: (run, ms) => {
+      const id = nextTimerId++;
+      timers.set(id, { at: clock + ms, run });
+      return () => {
+        timers.delete(id);
+      };
+    },
     persist: (goals) => saved.push([...goals]),
     onChange: (_chatId, goal) => changes.push(goal),
     eligibility: async () => options.refusal,
@@ -75,6 +88,7 @@ function harness(options: {
       return state.activity;
     },
     fallbackContext: async () => {
+      if (state.fallbackContext) return state.fallbackContext();
       if (state.throws.context || state.throws.noticeContext) throw new Error("The chat file could not be read.");
       return CONTEXT;
     },
@@ -99,7 +113,10 @@ function harness(options: {
       rounds.push(round);
       return state.roundStart;
     },
-    startNoticeRound: async (chatId, _context, notice) => {
+    startNoticeRound: async (chatId, _context, notice, isCurrent) => {
+      noticeCurrent.push(isCurrent);
+      await state.holdNoticeStart;
+      if (!isCurrent()) return { kind: "unavailable", reason: "Goal changed" };
       noticeRounds.push(notice?.text ?? "(saved)");
       if (state.noticeStart !== "started") return state.noticeStart === "busy" ? { kind: "busy" } : { kind: "unavailable", reason: "No model" };
       return { kind: "started", streamId: `notice-${chatId}-${noticeRounds.length}` };
@@ -127,6 +144,7 @@ function harness(options: {
     state,
     rounds,
     roundCurrent,
+    noticeCurrent,
     noticeRounds,
     events,
     changes,
@@ -136,6 +154,24 @@ function harness(options: {
     settle,
     flush,
     reviews: () => reviewCount,
+    activeTimers: () => timers.size,
+    fireDueTimers: async () => {
+      for (const [id, timer] of [...timers.entries()]) {
+        if (timer.at <= clock) {
+          timers.delete(id);
+          timer.run();
+        }
+      }
+      await flush();
+    },
+    idleWaitersCount: () => idleWaiters.length,
+    /** Resolves current idle waiters without clearing busy, for spurious/re-check wakeups. */
+    pulseIdleWaiters: async () => {
+      const waiters = idleWaiters;
+      idleWaiters = [];
+      for (const resolve of waiters) resolve();
+      await flush();
+    },
     /** Whatever held the chat lets go without a run settling. */
     becomeIdle: async () => {
       state.busy = false;
@@ -848,4 +884,168 @@ test("news that drops a review but whose round doesn't start leaves the goal loo
   await h.becomeIdle();
   assert.equal(h.reviews(), 1);
   assert.equal(h.rounds.length, 1);
+});
+
+test("a 30-minute watchdog pauses a waiting goal, and starting a round or changing the goal cancels it", async () => {
+  // 1. A `wait` verdict arms the 30-minute watchdog and pauses once the limit passes.
+  const waiting = harness();
+  await waiting.loop.set(CHAT, { objective: "Wait for CI", source: "slash" });
+  waiting.state.jobs = true;
+  waiting.state.review = async () => ({ kind: "verdict", verdict: { verdict: "wait", reason: "Waiting on tests" }, via: "continuation" });
+  await waiting.runSettles();
+  assert.equal(waiting.activeTimers(), 1, "wait verdict arms one watchdog timer");
+  waiting.tick(GOAL_WAIT_LIMIT_MS - 1);
+  await waiting.fireDueTimers();
+  assert.equal(waiting.goal()?.status, "active", "not expired before 30 minutes");
+  waiting.tick(1);
+  await waiting.fireDueTimers();
+  assert.equal(waiting.goal()?.status, "paused");
+  assert.equal(waiting.goal()?.cause, "wait-limit");
+  assert.equal(waiting.settled.length, 1);
+  assert.equal(waiting.activeTimers(), 0);
+
+  // 2. A running helper also arms the watchdog, and a subsequent round cancels it.
+  const helper = harness();
+  await helper.loop.set(CHAT, { objective: "Wait for helper", source: "slash" });
+  helper.state.helper = true;
+  await helper.runSettles();
+  assert.equal(helper.activeTimers(), 1);
+  helper.state.helper = false;
+  await helper.runSettles();
+  assert.equal(helper.activeTimers(), 0, "the next round cancels the wait watchdog");
+
+  // 3. Replacing, pausing, clearing, deleting, or shutting down cancels an armed watchdog.
+  for (const action of ["replace", "pause", "clear", "delete", "shutdown"] as const) {
+    const h = harness();
+    await h.loop.set(CHAT, { objective: "Wait for helper", source: "slash" });
+    h.state.helper = true;
+    await h.runSettles();
+    assert.equal(h.activeTimers(), 1, `${action}: watchdog armed`);
+    if (action === "replace") await h.loop.set(CHAT, { objective: "Different goal", source: "slash" });
+    else if (action === "pause") h.loop.pause(CHAT);
+    else if (action === "clear") h.loop.clear(CHAT);
+    else if (action === "delete") h.loop.deleteChat(CHAT);
+    else h.loop.shutdown();
+    assert.equal(h.activeTimers(), 0, `${action}: watchdog cancelled immediately`);
+  }
+});
+
+test("replacing, pausing, or clearing a goal while noticeRound starts never clobbers or relooks the replacement", async () => {
+  const news = { text: "job ended", notice: agentNotice({ source: "background_job", tone: "success", title: "Done", summary: "x" }) };
+  for (const action of ["pause", "clear", "replace"] as const) {
+    const h = harness();
+    await h.loop.set(CHAT, { objective: "Old goal", source: "slash" });
+    let release!: () => void;
+    h.state.holdNoticeStart = new Promise<void>((resolve) => { release = resolve; });
+    const pending = h.loop.noticeRound(CHAT, news);
+    await h.flush();
+    assert.equal(h.noticeCurrent.length, 1, action);
+    assert.equal(h.noticeCurrent[0]!(), true, action);
+
+    if (action === "pause") h.loop.pause(CHAT);
+    else if (action === "clear") h.loop.clear(CHAT);
+    else await h.loop.set(CHAT, { objective: "Fresh goal", source: "slash" });
+
+    assert.equal(h.noticeCurrent[0]!(), false, `${action}: notice round becomes stale`);
+    release();
+    const result = await pending;
+    assert.equal(result?.kind, "unavailable", action);
+    assert.equal(h.idleWaitersCount(), 0, `${action}: no spurious relook armed`);
+    await h.becomeIdle();
+    assert.equal(h.reviews(), 0, `${action}: no review triggered for stale notice round`);
+    if (action === "replace") {
+      assert.equal(h.goal()?.objective, "Fresh goal");
+      assert.equal(h.goal()?.rounds, 1);
+    }
+  }
+});
+
+test("a relook that wakes while the chat is still busy waits again, and shutdown drops pending relooks", async () => {
+  const h = harness();
+  await h.loop.set(CHAT, { objective: "Ship it", source: "slash" });
+  h.state.busy = true;
+  await h.runSettles();
+  assert.equal(h.idleWaitersCount(), 1);
+  // Spurious wakeup while still busy re-arms waitForIdle without starting a review.
+  await h.pulseIdleWaiters();
+  assert.equal(h.reviews(), 0);
+  assert.equal(h.idleWaitersCount(), 1);
+  await h.becomeIdle();
+  assert.equal(h.reviews(), 1);
+  assert.equal(h.rounds.length, 1);
+
+  const stopping = harness();
+  await stopping.loop.set(CHAT, { objective: "Ship it", source: "slash" });
+  stopping.state.busy = true;
+  await stopping.runSettles();
+  stopping.loop.shutdown();
+  await stopping.becomeIdle();
+  assert.equal(stopping.reviews(), 0);
+});
+
+test("pausing and resuming the same goal while noticeRound awaits fallbackContext fences the stale notice", async () => {
+  const news = { text: "job ended", notice: agentNotice({ source: "background_job", tone: "success", title: "Done", summary: "x" }) };
+  for (const outcome of ["context", "empty", "reject"] as const) {
+    const h = harness();
+    const initial = await h.loop.set(CHAT, { objective: "Ship it", source: "slash" });
+    let resolveContext!: (value: typeof CONTEXT | undefined) => void;
+    let rejectContext!: (reason: Error) => void;
+    h.state.fallbackContext = () =>
+      new Promise((resolve, reject) => {
+        resolveContext = resolve;
+        rejectContext = reject;
+      });
+
+    const pending = h.loop.noticeRound(CHAT, news);
+    await h.flush();
+
+    // Same-goal pause + resume retains the goal ID and restores active,
+    // while advancing the revision.
+    h.loop.pause(CHAT);
+    h.state.busy = true;
+    const resumed = await h.loop.resume(CHAT);
+    assert.equal(resumed?.id, initial.id, outcome);
+    assert.equal(resumed?.status, "active", outcome);
+    assert.ok((resumed?.revision ?? 0) > initial.revision, `${outcome}: revision advanced`);
+    const resumedRevision = resumed!.revision;
+
+    if (outcome === "context") resolveContext(CONTEXT);
+    else if (outcome === "empty") resolveContext(undefined);
+    else rejectContext(new Error("The chat file could not be read."));
+
+    const result = await pending;
+    assert.equal(result, undefined, `${outcome}: stale notice returns undefined`);
+    assert.deepEqual(h.noticeRounds, [], `${outcome}: stale notice starts no round`);
+    assert.equal(h.goal()?.id, initial.id, outcome);
+    assert.equal(h.goal()?.revision, resumedRevision, `${outcome}: resumed revision untouched`);
+    assert.equal(h.goal()?.rounds, 1, `${outcome}: stale notice does not count a round`);
+    assert.equal(h.idleWaitersCount(), 0, `${outcome}: no relook armed on resumed revision`);
+    await h.becomeIdle();
+    assert.equal(h.reviews(), 0, `${outcome}: no review triggered on resumed revision`);
+  }
+
+  // Capturing the revision fence after dropLook() still lets a current notice
+  // proceed when dropLook() synchronously restores an uncounted round.
+  const h = harness();
+  await h.loop.set(CHAT, { objective: "Ship it", source: "slash" });
+  let releaseStart!: () => void;
+  h.state.holdStart = new Promise<void>((resolve) => { releaseStart = resolve; });
+  h.loop.runSettled({ chatId: CHAT, streamId: "s", stopped: false, failed: false });
+  await h.flush();
+  assert.equal(h.roundCurrent.length, 1, "the look's round is waiting to start");
+  assert.equal(h.goal()?.rounds, 2, "the waiting look counted round 2");
+
+  let resolveContext!: (value: typeof CONTEXT | undefined) => void;
+  h.state.fallbackContext = () => new Promise((resolve) => { resolveContext = resolve; });
+  const pending = h.loop.noticeRound(CHAT, news);
+  await h.flush();
+  assert.equal(h.goal()?.rounds, 1, "dropLook restored the uncounted round before fallbackContext");
+  resolveContext(CONTEXT);
+  const started = await pending;
+  releaseStart();
+  await h.flush();
+  assert.equal(started?.kind, "started", "the current notice still starts after dropLook uncounted");
+  assert.deepEqual(h.noticeRounds, ["job ended"]);
+  assert.equal(h.rounds.length, 0, "the dropped look's round never started");
+  assert.equal(h.goal()?.rounds, 2);
 });

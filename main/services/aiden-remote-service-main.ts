@@ -92,7 +92,7 @@ import {
   AidenRemoteChatService,
   type AidenRemoteRetainedBotChatAuthorizationRequest,
 } from "./aiden-remote-chats.js";
-import { AidenRemoteModelService } from "./aiden-remote-models.js";
+import { AidenRemoteModelService, readableAgentSlider } from "./aiden-remote-models.js";
 import {
   AidenRemoteStreamService,
   removeRevokedDeviceStreams,
@@ -212,7 +212,7 @@ import {
 import { hostPlatformCapabilities } from "./host-platform-capabilities.js";
 import { electronConnectorWatchRemotePorts } from "./bot-routine-events/connector-watch-startup.js";
 import { AidenRemoteHostRunService } from "./aiden-remote-host-runs.js";
-import { AidenRemoteHostFeedService, hostFeedBotSignals } from "./aiden-remote-host-feed.js";
+import { AidenRemoteHostFeedService, createHostFeedBotSignalsCache } from "./aiden-remote-host-feed.js";
 import { createAidenRemoteHostFeedSource } from "./aiden-remote-host-feed-source.js";
 import { hostRunRegistry } from "./host-runs-main.js";
 import { liveRunAttention } from "./chat-pending-attention.js";
@@ -728,6 +728,15 @@ async function createRuntime(): Promise<AidenRemoteRuntime> {
               );
               return device?.capabilities.includes("chat:continue-in-new-chat") === true;
             },
+            // Revision 70: only a device that negotiated it keeps its turn's selection as the chat's own.
+            deviceSupportsAgentSlider: async (deviceId) => {
+              const device = (await state.snapshot()).devices.find(
+                (candidate) => candidate.id === deviceId && candidate.revokedAt === undefined,
+              );
+              return device?.capabilities.includes("chat:agent-slider") === true;
+            },
+            // A selection is saved only while the desktop keeps a readable slider.
+            hostHasAgentSlider: async () => readableAgentSlider(await configStore.getSettings()) !== undefined,
             isFolderWorkspace: async (workspaceId) =>
               analyticsWorkspaceKind(await configStore.getWorkspace(workspaceId)) !== "none",
             deviceIsPeer: async (deviceId) => {
@@ -906,6 +915,7 @@ async function createRuntime(): Promise<AidenRemoteRuntime> {
           const bots = botsSupported ? new AidenRemoteBotService({
             application: botApplicationService,
             chatStore,
+            log: (message, error) => logger.warn("aiden-remote", message, error),
             avatar: createMainBotAvatarApplicationAdapter(instanceId),
             inbox: {
               list: (deviceId, input) =>
@@ -1222,6 +1232,12 @@ async function createRuntime(): Promise<AidenRemoteRuntime> {
               await workspaceApplicationService.list(),
               () => chatStore.list(),
             );
+          const botSignalsCache = createHostFeedBotSignalsCache({
+            summary: async (botId) => {
+              const { botLiveProjection } = await import("./bot-runtime/bot-session-main.js");
+              return botLiveProjection().summary(botId);
+            },
+          });
           const hostFeed = new AidenRemoteHostFeedService({
             now: Date.now,
             attentionSummary: (runId) => {
@@ -1235,15 +1251,10 @@ async function createRuntime(): Promise<AidenRemoteRuntime> {
               approvalMode: async () => effectiveApprovalMode(await configStore.getSettings(), true),
               repositoryIdentity: gitCachedRepositoryIdentity,
               ...(bots ? { listBots: () => bots.list() } : {}),
-              // Read runtime signals without opening conversation entries or context.
-              // Reply times are available only from an already-open live feed.
-              botSignals: async (botRows) => {
-                const { botLiveProjection } = await import("./bot-runtime/bot-session-main.js");
-                const live = botLiveProjection();
-                return new Map(await mapWithConcurrency(botRows, 4, async (bot) =>
-                  [bot.id, hostFeedBotSignals(await live.inboxSignals(bot.id).catch(() => undefined))] as const,
-                ));
-              },
+              // The same summary this Mac's own Bots list reads (revision 66), kept per
+              // Bot until that Bot's own `bots:changed` or `bots:attention` arrives, so
+              // a chat or workspace change opens no Bot conversation.
+              botSignals: (botRows) => botSignalsCache.signals(botRows),
             }),
           });
           activeHostFeed = hostFeed;
@@ -1260,7 +1271,8 @@ async function createRuntime(): Promise<AidenRemoteRuntime> {
             "bots:attention",
           ]);
           const detachers = [
-            onBroadcast((channel) => {
+            onBroadcast((channel, botId) => {
+              if (channel === "bots:changed" || channel === "bots:attention") botSignalsCache.invalidate(botId);
               if (hostFeedChannels.has(channel)) hostFeed.invalidate();
             }),
             chatStore.onIndexChanged(() => hostFeed.invalidate()),
@@ -1348,6 +1360,16 @@ async function createRuntime(): Promise<AidenRemoteRuntime> {
                   botFiles,
                   bots,
                   botSessions,
+                  // Revision 68 (`bot:needs-you`): the same signal this Mac's own Bot rows, the host feed
+                  // and the Dock badge use, read without the transcript.
+                  botNeedsYou: async (botIds: readonly string[]) => {
+                    const { botLiveProjection } = await import("./bot-runtime/bot-session-main.js");
+                    const live = botLiveProjection();
+                    const waiting = await mapWithConcurrency(botIds, 4, async (botId) =>
+                      (await live.needsYou(botId).catch(() => false)) ? botId : null,
+                    );
+                    return new Set(waiting.filter((botId): botId is string => botId !== null));
+                  },
                   botOpenWork: (await import("./bot-open-work/service-main.js")).botOpenWork,
                   botRoutineModels: { ...(await import("./bot-routine-models-main.js")).botRoutineModels, resumeStatus: async (botId: string) => (await (await import("./bot-runtime/bot-session-main.js")).botSessionRuntime()).executionResumeStatus(botId) },
                   botPeers: (await import("./bot-peers/service-main.js")).botPeers,

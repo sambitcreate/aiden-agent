@@ -38,6 +38,10 @@ function createExportBudget() {
       charge(attachment.mimeType);
       charge(attachment.kind === "image" ? attachment.data : attachment.text);
     }
+    for (const element of message.grabbedElements ?? []) {
+      charged += 256;
+      charge(JSON.stringify(element));
+    }
     if (charged > MAX_EXPORT_BYTES) {
       throw new Error("This chat is too large to export as one Aiden file.");
     }
@@ -115,6 +119,16 @@ export function projectAidenChatExport(
       delete message.appPanels;
     }
     if (message.attachments) message.attachments = portableAttachments(message.attachments);
+    if (message.grabbedElements?.length) {
+      const portableIds = new Set((message.attachments ?? []).map((attachment) => attachment.id));
+      message.grabbedElements = message.grabbedElements.map((element) => {
+        if (element.thumbnailAttachmentId && !portableIds.has(element.thumbnailAttachmentId)) {
+          const { thumbnailAttachmentId: _missing, ...withoutThumb } = element;
+          return withoutThumb;
+        }
+        return element;
+      });
+    }
     budget.chargeMessage(message);
     messages.push(message);
   }

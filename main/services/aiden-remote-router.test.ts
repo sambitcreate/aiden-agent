@@ -26,6 +26,7 @@ import {
   parseAidenRemoteBackgroundJobs,
   parseAidenRemoteChatNewWorktreeResponse,
   parseAidenRemoteBotCreateRequest,
+  parseAidenRemoteBotList,
   parseAidenRemoteStreamEvent,
   type AidenRemoteCapability,
   type AidenRemoteStreamInputResult,
@@ -140,7 +141,10 @@ async function fixture(options: {
   newWorktrees?: boolean;
   /** With `forks`: the host can continue a chat whose folder is gone in a new chat (revision 64). */
   continueInNewChat?: boolean;
+  agentSlider?: boolean;
   streamsOverride?: import("./aiden-remote-router.js").AidenRemoteRouterDependencies["streams"];
+  /** Contract revision 68: which Bots wait on the person. */
+  botNeedsYou?: import("./aiden-remote-router.js").AidenRemoteRouterDependencies["botNeedsYou"];
 } = {}) {
   const logs: unknown[] = [];
   const calls: string[] = [];
@@ -308,12 +312,15 @@ async function fixture(options: {
               capability !== "attachments:raw" &&
               capability !== "chat:new-worktree" &&
               capability !== "approval:cards" &&
+              capability !== "approval:plain-words" &&
               capability !== "approvals:settings" &&
               capability !== "bot:settings-changes" &&
               capability !== "bot:suggestions" &&
               capability !== "bot:templates" &&
               capability !== "chat:continue-in-new-chat" &&
-              capability !== "stream:snapshot-reasons",
+              capability !== "stream:snapshot-reasons" &&
+              capability !== "bot:needs-you" &&
+              capability !== "chat:agent-slider",
           )
         ) {
           return null;
@@ -371,6 +378,7 @@ async function fixture(options: {
       },
     },
     chats: {
+      ...(options.agentSlider ? { supportsAgentSlider: true } : {}),
       ...(options.newWorktrees
         ? {
             supportsNewWorktrees: true,
@@ -629,6 +637,7 @@ async function fixture(options: {
     ...(options.providers ? { providers: options.providers } : {}),
     ...(options.spending ? { spending: options.spending } : {}),
     ...(options.backgroundJobs ? { backgroundJobs: options.backgroundJobs } : {}),
+    ...(options.botNeedsYou ? { botNeedsYou: options.botNeedsYou } : {}),
     models: {
       list: async () => ({
         providers: [{
@@ -2005,6 +2014,7 @@ test("progress support is advertised and upgraded only when the Mac can serve it
       "schedule:write",
       "schedule:cards",
       "approval:cards",
+      "approval:plain-words",
       "attachments:raw",
       "stream:snapshot-reasons",
       "skills:invoke",
@@ -6076,6 +6086,7 @@ test("a bubble's submissionId reaches only a device holding bot:activity, on a f
       }) as never,
       quietInputs: async () => new Map(),
       placedSubmissions: async () => new Map([["1", "17"]]),
+      withdraw: async () => "gone" as const,
     }),
     turnIntents: createBotTurnIntents(),
   });
@@ -6158,6 +6169,7 @@ test("a send the paused Bot refused is not recorded: once resumed, the same key 
       conversation: async () => { throw new Error("not used"); },
       quietInputs: async () => new Map(),
       placedSubmissions: async () => new Map(),
+      withdraw: async () => "gone" as const,
     }),
   });
   const app = await fixture({
@@ -6600,6 +6612,7 @@ test("a phone answers a real hand-off and pauses its Bot over HTTP, while a lega
       }) as never,
       quietInputs: async () => new Map(),
       placedSubmissions: async () => new Map(),
+      withdraw: async () => "gone" as const,
     }),
   });
   const holder = await fixture({
@@ -7551,6 +7564,32 @@ test("chat:continue-in-new-chat is offered only while the host can continue a ch
   }
 });
 
+test("revision 70 offers chat:agent-slider only where the host saves a phone's slider selection", async () => {
+  const headers = { authorization: `Bearer ${"a".repeat(43)}`, "aiden-protocol-version": "1" };
+  const negotiate = {
+    method: "POST",
+    headers: { ...headers, "content-type": "application/json" },
+    body: JSON.stringify({ accepts: ["chat:agent-slider"] }),
+  };
+  for (const offered of [false, true]) {
+    const app = await fixture({
+      capabilities: ["server:read", "chat:read", "chat:write"],
+      acceptsProgressCapabilities: true,
+      deviceType: "iphone",
+      agentSlider: offered,
+    });
+    try {
+      const server = await (await fetch(`${app.base}/server`, { headers })).json();
+      assert.equal(server.serverCapabilities.includes("chat:agent-slider"), offered);
+      const upgrade = await fetch(`${app.base}/device/capabilities`, negotiate);
+      assert.equal(upgrade.status, offered ? 200 : 404);
+      if (offered) assert.equal((await upgrade.json()).capabilities.includes("chat:agent-slider"), true);
+    } finally {
+      await app.close();
+    }
+  }
+});
+
 const REV61_HEADERS = { authorization: `Bearer ${"a".repeat(43)}`, "aiden-protocol-version": "1", "content-type": "application/json" };
 
 test("revision 61 approval settings are offered where wired and need approval:respond with the opt-in", async () => {
@@ -7749,5 +7788,123 @@ test("revision 65 advertises stream:snapshot-reasons only when streams are wired
     } finally {
       await serverApp.close();
     }
+  }
+});
+
+test("revision 67: a device pages back through a Bot's chat and takes back a queued message, each only with the grants the session needs", async () => {
+  const headers = { authorization: `Bearer ${"a".repeat(43)}`, "aiden-protocol-version": "1" };
+  const seen: string[] = [];
+  const sessions = () => ({
+    ...(recordingRevision27Sessions(seen, { memory: false, proactive: false }) as Record<string, unknown>),
+    supportsActivity: true,
+    olderEntries: async (botId: string, query: { before: string; limit?: number }, options: { activity?: boolean; peers?: boolean } = {}) => {
+      seen.push(`older:${botId}:${query.before}:${query.limit ?? "default"}:${options.activity === true}`);
+      return { botId, epoch: "epoch_1", entries: [], hasOlder: false };
+    },
+    withdrawQueued: async (deviceId: string, botId: string, submissionId: string, key: string, body: unknown) => {
+      seen.push(`withdraw:${deviceId.slice(-8)}:${botId}:${submissionId}:${key}:${JSON.stringify(body)}`);
+      return { submissionId, outcome: "withdrawn" };
+    },
+  }) as unknown as import("./aiden-remote-router.js").AidenRemoteRouterDependencies["botSessions"];
+  const withdraw = (base: string, key = "withdraw-key-00000001") =>
+    fetch(`${base}/bots/bot-1/queued/42/withdraw`, {
+      method: "POST",
+      headers: { ...headers, "content-type": "application/json", "idempotency-key": key },
+      body: "{}",
+    });
+
+  const holder = await fixture({
+    capabilities: ["server:read", "bot:read", "bot:write", "chat:read", "chat:write", "bot:activity"],
+    acceptsBotCapabilities: true,
+    deviceType: "mac",
+    chatActivity: true,
+    botSessions: sessions(),
+  });
+  try {
+    assert.equal((await fetch(`${holder.base}/bots/bot-1/session/entries?before=entry_9&limit=25`, { headers })).status, 200);
+    assert.equal((await fetch(`${holder.base}/bots/bot-1/session/entries?before=entry_9`, { headers })).status, 200);
+    for (const query of ["", "?limit=25", "?before=entry_9&limit=0", "?before=entry_9&limit=201", "?before=a/b", "?before=entry_9&x=1"]) {
+      assert.equal((await fetch(`${holder.base}/bots/bot-1/session/entries${query}`, { headers })).status, 400, query);
+    }
+    const receipt = await withdraw(holder.base);
+    assert.equal(receipt.status, 200);
+    assert.deepEqual(await receipt.json(), { submissionId: "42", outcome: "withdrawn" });
+    const keyless = await fetch(`${holder.base}/bots/bot-1/queued/42/withdraw`, { method: "POST", headers: { ...headers, "content-type": "application/json" }, body: "{}" });
+    assert.equal(keyless.status, 400);
+  } finally {
+    await holder.close();
+  }
+
+  // Without bot:activity the queue is never shown, so nothing in it can be taken back; without chat:read the transcript stays closed.
+  const reader = await fixture({
+    capabilities: ["server:read", "bot:read", "bot:write", "chat:write"],
+    acceptsBotCapabilities: true,
+    deviceType: "mac",
+    chatActivity: true,
+    botSessions: sessions(),
+  });
+  try {
+    assert.equal((await fetch(`${reader.base}/bots/bot-1/session/entries?before=entry_9`, { headers })).status, 403);
+    assert.equal((await withdraw(reader.base)).status, 403);
+  } finally {
+    await reader.close();
+  }
+  assert.deepEqual(seen, [
+    "older:bot-1:entry_9:25:true",
+    "older:bot-1:entry_9:default:true",
+    'withdraw:12345678:bot-1:42:withdraw-key-00000001:{}',
+  ]);
+});
+
+test("revision 68: only a device holding bot:needs-you reads needsYou on its Bot list, and only where the host wires it", async () => {
+  const headers = { authorization: `Bearer ${"a".repeat(43)}`, "aiden-protocol-version": "1" };
+  const negotiate = {
+    method: "POST",
+    headers: { ...headers, "content-type": "application/json" },
+    body: JSON.stringify({ accepts: ["bot:needs-you"] }),
+  };
+  const asked: string[][] = [];
+  const waiting = async (botIds: readonly string[]) => {
+    asked.push([...botIds]);
+    return new Set(["bot-1"]);
+  };
+  for (const [label, capabilities, wired, expected] of [
+    ["holder", ["server:read", "bot:read", "bot:needs-you"], true, true],
+    ["older phone", ["server:read", "bot:read"], true, undefined],
+    ["unwired host", ["server:read", "bot:read", "bot:needs-you"], false, undefined],
+  ] as Array<[string, AidenRemoteCapability[], boolean, true | undefined]>) {
+    const app = await fixture({
+      capabilities,
+      acceptsBotCapabilities: true,
+      deviceType: "android",
+      ...(wired ? { botNeedsYou: waiting } : {}),
+    });
+    try {
+      const server = await (await fetch(`${app.base}/server`, { headers })).json();
+      assert.equal(server.serverCapabilities.includes("bot:needs-you"), wired, label);
+      assert.equal((await fetch(`${app.base}/device/capabilities`, negotiate)).status, wired ? 200 : 404, label);
+      const list = await (await fetch(`${app.base}/bots`, { headers })).json();
+      assert.equal(list.bots[0].needsYou, expected, label);
+      // What the device reads still passes the shared parser.
+      parseAidenRemoteBotList(list);
+    } finally {
+      await app.close();
+    }
+  }
+  assert.deepEqual(asked, [["bot-1"]], "only the holder's list asks which Bots wait");
+
+  // A failed read lists the Bots without the signal instead of failing the list.
+  const app = await fixture({
+    capabilities: ["server:read", "bot:read", "bot:needs-you"],
+    acceptsBotCapabilities: true,
+    deviceType: "iphone",
+    botNeedsYou: async () => { throw new Error("projection unavailable"); },
+  });
+  try {
+    const response = await fetch(`${app.base}/bots`, { headers });
+    assert.equal(response.status, 200);
+    assert.equal((await response.json()).bots[0].needsYou, undefined);
+  } finally {
+    await app.close();
   }
 });

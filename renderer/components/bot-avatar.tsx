@@ -2,92 +2,182 @@ import * as React from "react";
 import {
   resolveBotAvatar,
   type BotAvatar as BotAvatarValue,
-  type BotAvatarShape,
 } from "../shared/bots";
+import type { BotActivityPhase } from "../shared/bot-activity";
+import {
+  BOT_SPRITE_SMALL_GLINT_HEX,
+  BOT_SPRITE_TONES,
+  BOT_SPRITE_VIEWBOX,
+  botAvatarEndsQuietly,
+  botAvatarStateIsWorking,
+  botAvatarTarget,
+  botSpriteFace,
+  botSpriteGrid,
+  botSpriteIsSmall,
+  botSpriteProps,
+  botSpriteRows,
+  createBotAvatarSettler,
+  type BotAvatarActivityInput,
+  type BotAvatarState,
+  type BotSpriteCell,
+  type BotSpriteTones,
+} from "../shared/bot-sprite";
 import { AidenActivityMark } from "./aiden-activity-mark";
 import { observeOffscreen } from "../lib/offscreen-pause";
 import { useBotCanonicalPhoto } from "../lib/bot-canonical-photo-cache";
 
-interface AvatarBody {
-  path: string;
-  eyeY: number;
-  eyeSpread: number;
-}
-
-const avatarBodies: Record<BotAvatarShape, AvatarBody> = {
-  wisp: {
-    path: "M20 3.5C25 3.5 26.5 7.2 30.8 8.8C35.2 10.5 37 14.4 35.2 18.5C33.8 21.7 36 24.5 33.5 29.2C31.2 33.7 27.5 32.8 23.2 35.3C18.8 37.9 15.8 34.7 11.2 34.2C6.6 33.7 5.4 29.8 5.7 25.4C6 21.6 2.9 19.3 4.8 14.8C6.6 10.4 10.5 10.5 13.4 7.2C15.3 5 17.2 3.5 20 3.5Z",
-    eyeY: 19,
-    eyeSpread: 4.8,
-  },
-  orb: {
-    path: "M20 3.5A16.5 16.5 0 1 1 20 36.5A16.5 16.5 0 0 1 20 3.5Z",
-    eyeY: 19,
-    eyeSpread: 5,
-  },
-  drop: {
-    path: "M20 3.2C20 3.2 6.2 19 6.2 26.4A13.8 12.5 0 0 0 33.8 26.4C33.8 19 20 3.2 20 3.2Z",
-    eyeY: 24,
-    eyeSpread: 4.7,
-  },
-  hex: {
-    path: "M20 3.5L34.3 11.8V28.2L20 36.5L5.7 28.2V11.8L20 3.5Z",
-    eyeY: 19,
-    eyeSpread: 5,
-  },
-  cloud: {
-    path: "M10.2 33A7.3 7.3 0 0 1 9 18.5A9.8 9.8 0 0 1 28.8 14A7.4 7.4 0 0 1 30.1 33H10.2Z",
-    eyeY: 24,
-    eyeSpread: 5,
-  },
-  peak: {
-    path: "M20 4.5C20.7 4.5 21.3 5 21.8 5.8L35.8 31.4C36.5 32.7 35.6 34.3 34.1 34.3H5.9C4.4 34.3 3.5 32.7 4.2 31.4L18.2 5.8C18.7 5 19.3 4.5 20 4.5Z",
-    eyeY: 25,
-    eyeSpread: 4.5,
-  },
-  squircle: {
-    path: "M12.1 4.2C7.1 4.7 4.7 7.1 4.2 12.1C3.7 17.4 3.7 22.6 4.2 27.9C4.7 32.9 7.1 35.3 12.1 35.8C17.4 36.3 22.6 36.3 27.9 35.8C32.9 35.3 35.3 32.9 35.8 27.9C36.3 22.6 36.3 17.4 35.8 12.1C35.3 7.1 32.9 4.7 27.9 4.2C22.6 3.7 17.4 3.7 12.1 4.2Z",
-    eyeY: 20,
-    eyeSpread: 5,
-  },
-  capsule: {
-    path: "M12.8 3.8H27.2C32.4 3.8 35.8 8.1 35.8 13.3V26.7C35.8 31.9 32.4 36.2 27.2 36.2H12.8C7.6 36.2 4.2 31.9 4.2 26.7V13.3C4.2 8.1 7.6 3.8 12.8 3.8Z",
-    eyeY: 20,
-    eyeSpread: 5.3,
-  },
+const SPRITE_FILL: Record<Exclude<BotSpriteCell, ".">, keyof BotSpriteTones> = {
+  o: "shade",
+  b: "tint",
+  h: "light",
 };
 
-/** The one fixed eye mark every Bot shares; only colour and shape vary. Eyes glance while working. */
-function EyeMark({ y, spread }: { y: number; spread: number }) {
+type SpriteStyle = React.CSSProperties & Record<`--${string}`, string | number>;
+
+/**
+ * A Bot's fallback face: its Hi-bit pixel sprite in the Bot's tint, posed for `state`.
+ * `small` is the small cut for faces drawn at 24 px or less: no highlight cells, and larger
+ * `deep` eyes with a white glint in place of the `light` one. The glint rides inside the lid, so
+ * it closes with the blink; the happy and wince marks have none.
+ * The pose is markup and CSS still poses; the stepped motion runs only inside a live
+ * `.bot-avatar` with Reduce Motion off (renderer/styles.css).
+ */
+export function AvatarFace({
+  avatar,
+  small = false,
+  state = "idle",
+}: {
+  avatar: BotAvatarValue;
+  small?: boolean;
+  state?: BotAvatarState;
+}) {
+  const appearance = resolveBotAvatar(avatar);
+  const tones = BOT_SPRITE_TONES[appearance.color];
+  const grid = React.useMemo(() => botSpriteGrid(appearance.shape, small), [appearance.shape, small]);
+  const rows = React.useMemo(() => botSpriteRows(grid), [grid]);
+  const face = botSpriteFace(small);
+  const props = botSpriteProps(grid);
+  const mark = `var(--bs-mark, ${tones.markLight})`;
+  const glint = small ? BOT_SPRITE_SMALL_GLINT_HEX : tones.light;
+  const strokes = {
+    fill: "none",
+    stroke: tones.deep,
+    strokeWidth: face.strokeWidth,
+    strokeLinecap: "square",
+    strokeLinejoin: "miter",
+  } as const;
   return (
-    <g className="bot-avatar-eyes">
-      {[20 - spread, 20 + spread].map((x) => (
-        <g key={x} className="bot-avatar-eye">
-          <ellipse cx={x} cy={y} rx="2.05" ry="2.85" fill="var(--bot-avatar-face)" />
-          <circle cx={x - 0.7} cy={y - 1} r="0.58" fill="var(--bot-avatar-eye-highlight)" opacity="0.94" />
+    <svg
+      viewBox={`0 0 ${BOT_SPRITE_VIEWBOX} ${BOT_SPRITE_VIEWBOX}`}
+      shapeRendering="crispEdges"
+      focusable="false"
+      className="bot-sprite"
+      data-state={state}
+      data-cut={small ? "small" : "full"}
+      style={
+        {
+          "--bs-mark-light": tones.markLight,
+          "--bs-mark-dark": tones.markDark,
+        } as SpriteStyle
+      }
+    >
+      <g className="bs-rig">
+        <g className="bs-body">
+          {rows.map((row) => (
+            <g key={row.y} className="bs-row" data-odd={row.pair % 2 === 1 ? "" : undefined} style={{ "--r": row.pair } as SpriteStyle}>
+              {row.runs.map((run) => (
+                <rect
+                  key={run.x}
+                  className="bs-px"
+                  data-cell={run.cell}
+                  x={run.x}
+                  y={run.y}
+                  width={run.width}
+                  height={run.height}
+                  fill={tones[SPRITE_FILL[run.cell]]}
+                  style={{ "--c": run.column } as SpriteStyle}
+                />
+              ))}
+            </g>
+          ))}
         </g>
-      ))}
-    </g>
+        <g className="bs-face">
+          {state === "done" ? (
+            <g className="bs-happy" {...strokes}>
+              {face.happy.map((d) => <path key={d} d={d} />)}
+            </g>
+          ) : state === "error" ? (
+            <g className="bs-wince" {...strokes}>
+              {face.wince.map((d) => <path key={d} d={d} />)}
+            </g>
+          ) : (
+            <g className="bs-look">
+              <g className="bs-lid">
+                <g className="bs-open">
+                  {face.eyes.map((eye) => <rect key={eye.x} className="bs-eye" {...eye} fill={tones.deep} />)}
+                  {face.glints.map((rect) => <rect key={rect.x} className="bs-glint" {...rect} fill={glint} />)}
+                </g>
+              </g>
+            </g>
+          )}
+        </g>
+        {state === "thinking" ? (
+          <g className="bs-think" data-sprite-prop="think">
+            {props.thinkDots.map((dot, index) => (
+              <rect key={dot.x} className="bs-dot" {...dot} fill={mark} style={{ "--i": index } as SpriteStyle} />
+            ))}
+          </g>
+        ) : null}
+        {state === "tool" ? (
+          <g className="bs-plug" data-sprite-prop="plug">
+            <rect {...props.plug.arm} fill={tones.shade} />
+            <rect {...props.plug.head} fill={mark} />
+          </g>
+        ) : null}
+        {state === "editing" ? (
+          <g className="bs-cursor" data-sprite-prop="cursor">
+            <rect {...props.cursor} fill={mark} />
+          </g>
+        ) : null}
+      </g>
+    </svg>
   );
 }
 
-export function AvatarFace({ avatar }: { avatar: BotAvatarValue }) {
-  const appearance = resolveBotAvatar(avatar);
-  const body = avatarBodies[appearance.shape];
-  const color = `var(--bot-avatar-${appearance.color})`;
-  return (
-    <svg viewBox="0 0 40 40" focusable="false">
-      <path d={body.path} fill="var(--bot-avatar-face)" opacity="0.14" transform="translate(0 1)" />
-      <path d={body.path} fill={color} />
-      <path
-        d={body.path}
-        fill="var(--bot-avatar-sheen)"
-        opacity="0.12"
-        transform="translate(-1.2 -1.2) scale(.97)"
-      />
-      <EyeMark y={body.eyeY} spread={body.eyeSpread} />
-    </svg>
+const browserTimers = {
+  setTimeout: (callback: () => void, ms: number) => window.setTimeout(callback, ms),
+  clearTimeout: (handle: unknown) => window.clearTimeout(handle as number),
+};
+
+/**
+ * What a Bot's avatar shows for its live activity: working states after a short debounce,
+ * then a done (or error) moment when the turn ends, then idle. A turn the person stopped,
+ * either flagged by `stopped` or seen as its last live phase (`stopping`), a paused Bot, and a
+ * card answered while no turn runs settle straight to idle.
+ */
+export function useBotAvatarState(input: BotAvatarActivityInput): BotAvatarState {
+  const target = botAvatarTarget(input);
+  const phase = input.phase ?? null;
+  const running = input.session === "running";
+  const endsQuietly = botAvatarEndsQuietly(input);
+  const [state, setState] = React.useState<BotAvatarState>(() => (botAvatarStateIsWorking(target) ? target : "idle"));
+  const [settler] = React.useState(() =>
+    createBotAvatarSettler({ timers: browserTimers, onChange: setState, initial: state }),
   );
+  // The newest phase this turn showed; it outlives the phase itself, which clears as the turn
+  // ends, and is forgotten once that end is settled so the next turn starts fresh.
+  const lastPhase = React.useRef<BotActivityPhase | null>(null);
+  // The previous target, to tell a card answered with no turn running from a turn that ended.
+  const lastTarget = React.useRef<BotAvatarState>(target);
+  React.useEffect(() => {
+    if (phase) lastPhase.current = phase;
+    const resolvedWithoutTurn = lastTarget.current === "waiting" && target === "idle" && !running;
+    settler.update(target, endsQuietly || lastPhase.current === "stopping" || resolvedWithoutTurn);
+    lastTarget.current = target;
+    if (!botAvatarStateIsWorking(target)) lastPhase.current = null;
+  }, [settler, target, phase, running, endsQuietly]);
+  React.useEffect(() => () => settler.dispose(), [settler]);
+  return state;
 }
 
 /** Monochrome Aiden bot mark sized to match the sidebar's Lucide icon rhythm. */
@@ -106,22 +196,39 @@ export function BotSidebarIcon() {
   );
 }
 
+type BotAvatarSize = "small" | "medium" | "large" | "preview";
+
+/** The face's drawn size inside each avatar tile (tile minus padding), which picks the sprite's cut. */
+const BOT_AVATAR_FACE_PX: Record<BotAvatarSize, number> = { small: 20, medium: 24, large: 36, preview: 104 };
+
 export function BotAvatar({
   avatar,
   botId,
   name,
   photoLoading = "none",
+  photoUrl,
   size = "medium",
+  state,
   working = false,
 }: {
   avatar: BotAvatarValue;
   botId?: string;
   name: string;
+  /** A photo read elsewhere (a paired Mac's Bot), drawn over the shape like this Mac's own Bots' photos. */
+  photoUrl?: string;
   photoLoading?: "none" | "visible" | "immediate";
-  size?: "small" | "medium" | "large" | "preview";
-  /** The Bot is in a running turn: its face glances (a photo shows a small activity badge instead). */
+  size?: BotAvatarSize;
+  /**
+   * The live pose (see `useBotAvatarState`). Set, the face animates it while on screen and
+   * Reduce Motion is off; unset, the face is a static idle sprite.
+   */
+  state?: BotAvatarState;
+  /** Shorthand for a running turn without a known phase: `state="thinking"`. */
   working?: boolean;
 }) {
+  const shownState = state ?? (working ? "thinking" : undefined);
+  const live = shownState !== undefined;
+  const busy = live && botAvatarStateIsWorking(shownState);
   const avatarRef = React.useRef<HTMLSpanElement>(null);
   const [nearViewport, setNearViewport] = React.useState(photoLoading === "immediate");
   React.useEffect(() => {
@@ -151,18 +258,21 @@ export function BotAvatar({
     photoLoading === "immediate" ? "selected" : "visible",
   );
   const [failedRevision, setFailedRevision] = React.useState<string>();
-  const showPhoto = photo && failedRevision !== photo.assetRevision;
+  const shown = photoUrl ? { dataUrl: photoUrl, assetRevision: photoUrl } : photo;
+  const showPhoto = shown && failedRevision !== shown.assetRevision;
   React.useEffect(() => {
     const node = avatarRef.current;
-    if (!working || !node) return;
+    if (!live || !node) return;
     return observeOffscreen(node);
-  }, [working]);
+  }, [live]);
   return (
     <span
       ref={avatarRef}
       aria-hidden="true"
       title={name}
-      data-working={working ? "" : undefined}
+      data-working={busy ? "" : undefined}
+      data-live={live ? "" : undefined}
+      data-state={shownState ?? "idle"}
       className={`bot-avatar relative grid shrink-0 place-items-center overflow-hidden bg-control shadow-control ${
         size === "small"
           ? "size-7 rounded-card p-1"
@@ -173,17 +283,19 @@ export function BotAvatar({
               : "size-9 rounded-card p-1.5"
       }`}
     >
-      <AvatarFace avatar={avatar} />
+      {showPhoto ? null : (
+        <AvatarFace avatar={avatar} small={botSpriteIsSmall(BOT_AVATAR_FACE_PX[size])} state={shownState} />
+      )}
       {showPhoto ? (
         <img
           alt=""
           className="absolute inset-0 size-full object-cover"
           draggable={false}
-          src={photo.dataUrl}
-          onError={() => setFailedRevision(photo.assetRevision)}
+          src={shown.dataUrl}
+          onError={() => setFailedRevision(shown.assetRevision)}
         />
       ) : null}
-      {showPhoto && working ? (
+      {showPhoto && busy ? (
         <span className="absolute bottom-0 right-0 grid place-items-center rounded-full bg-background p-px text-primary">
           <AidenActivityMark mark="glance" size={size === "large" || size === "preview" ? 14 : 10} />
         </span>

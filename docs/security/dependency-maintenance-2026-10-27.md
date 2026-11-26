@@ -17,3 +17,5 @@ Both root and CLI audits report zero known advisories after this bounded refresh
 When this refresh was written, every stable Electron line still shipped Node 24.22.0. Electron 43.8.4 (released 2026-10-27) carries Node 24.22.1, and `main` moved to it separately in #632, so that fix is not part of this dependency refresh. Sources: [Electron releases](https://releases.electronjs.org/), [Zod advisory](https://github.com/advisories/GHSA-mrhx-c7xc-m3w5), [undici content-encoding advisory](https://github.com/nodejs/undici/security/advisories/GHSA-xjj6-f33q-929c).
 
 Validation status and exact-head PR acceptance are recorded in the remediation plan. Proxy and custom TLS production acceptance remains separate from local model-free tests.
+
+Update 2026-11-24: the CLI undici override is gone. Pi 1.6.0's `pi-coding-agent` pins `undici` 8.12.4 itself (GHSA-mqg3-3v4r-cm32, GHSA-7xg3-fphp-28hg, GHSA-5rm8-gv32-r954, GHSA-9v6h-8rgp-m69f, GHSA-3g9m-rv3r-w5w2, GHSA-r4pc-4jcp-7pqc), and the exact 8.12.3 override would have held the CLI below that fix. The CLI now resolves a single undici 8.12.4. See `.memory/pi-1.6.0-upgrade.md`.

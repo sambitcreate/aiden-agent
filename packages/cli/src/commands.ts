@@ -10,7 +10,7 @@ import { CLI_COMMAND_HELP } from "./command-help.ts";
  */
 export const CLI_COMMANDS: readonly string[] = [
   "serve", "service", "remote", "apps", "auth", "provider", "workspace", "mcp", "hooks", "schedule", "bots",
-  "telegram", "speech", "app", "catalog", "insights", "web-search", "search", "import", "export", "files", "git",
+  "telegram", "speech", "app", "catalog", "web-search", "search", "import", "export", "files", "git",
   "worktree", "telemetry", "help",
 ];
 
@@ -48,7 +48,6 @@ export async function dispatchCommand(agentDir: string, cwd: string, args: strin
     case "hooks": result = await (await import("./hooks.ts")).hooksAdminCommand(agentDir, rest); break;
     case "auth": result = await (await import("./auth.ts")).authCommand(agentDir, rest); break;
     case "catalog": result = await (await import("./providers.ts")).catalogCommand(agentDir, rest); break;
-    case "insights": result = await (await import("./providers.ts")).insightsCommand(agentDir, rest); break;
     case "files": result = await (await import("./git-commands.ts")).filesCommand(cwd, rest); break;
     case "git": result = await (await import("./git-commands.ts")).gitCommand(cwd, rest); break;
     case "worktree": result = await (await import("./git-commands.ts")).worktreeCommand(agentDir, cwd, rest); break;
