@@ -1978,7 +1978,7 @@ test("↑ in an empty composer shows message history with each previous reply an
   await page.reload();
   const composer = page.locator("textarea");
   await expect(composer).toBeVisible();
-  await expect(page.getByText("History demo")).toBeVisible();
+  await expect(page.getByRole("complementary").getByRole("button", { name: "History demo", exact: true })).toBeVisible();
   await composer.focus();
   await page.keyboard.press(`${PRIMARY_MODIFIER}+1`);
   await expect(page.getByText("Compact two-step release summary.")).toBeVisible();
