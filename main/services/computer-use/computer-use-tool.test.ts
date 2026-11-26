@@ -2348,3 +2348,30 @@ test("Linux AT-SPI password text role marks secureFieldInCapture just like AXSec
   assert.equal(descriptor?.secureFieldInCapture, true);
   await controller.close();
 });
+
+test("capture forwards element editability from driver editable boolean or AT-SPI states", async () => {
+  const atSpiRows = [
+    { role: "entry", label: "Search", editable: true, frame: { x: 110, y: 60, w: 80, h: 20 }, depth: 1 },
+    { role: "entry", label: "Static entry", editable: false, frame: { x: 110, y: 90, w: 80, h: 20 }, depth: 1 },
+    {
+      role: "text",
+      label: "Editable text",
+      states: ["focusable", "ATSPI_STATE_EDITABLE"],
+      frame: { x: 110, y: 120, w: 80, h: 20 },
+      depth: 1,
+    },
+    { role: "text", label: "Read-only text", states: ["focusable"], frame: { x: 110, y: 150, w: 80, h: 20 }, depth: 1 },
+    { role: "AXButton", label: "Close", frame: { x: 110, y: 180, w: 80, h: 20 }, depth: 1 },
+  ];
+  const { controller } = harness(true, 0, { elements: () => atSpiRows });
+  const result = await capture(controller, "ax");
+  const payload = JSON.parse((result.content[0] as { text: string }).text) as {
+    elements: Array<{ element_index: number; editable?: boolean }>;
+  };
+  assert.equal(payload.elements[0]?.editable, true);
+  assert.equal(payload.elements[1]?.editable, false);
+  assert.equal(payload.elements[2]?.editable, true);
+  assert.equal(payload.elements[3]?.editable, false);
+  assert.equal("editable" in (payload.elements[4] ?? {}), false);
+  await controller.close();
+});
