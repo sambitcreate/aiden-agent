@@ -1255,7 +1255,7 @@ data class AidenChat(
     /** Set when the chat was created by Fork (revision 21). */
     val forkedFrom: AidenChatForkLineage? = null,
     /**
-     * Revision 69: the chat's own thinking level, sent only with its model and never on a Bot
+     * Revision 70: the chat's own thinking level, sent only with its model and never on a Bot
      * chat. Older hosts never send it.
      */
     var thinkingLevel: String? = null
@@ -1315,7 +1315,7 @@ data class AidenChatMessagesWindow(
     @Serializable(with = InstantIso8601Serializer::class) val updatedAt: Instant? = null,
     /** Fork lineage (revision 21), on a fork's pages as on its whole-chat read. */
     val forkedFrom: AidenChatForkLineage? = null,
-    /** Revision 69: the chat's own thinking level, with its model, as on a whole-chat read. */
+    /** Revision 70: the chat's own thinking level, with its model, as on a whole-chat read. */
     val thinkingLevel: String? = null
 ) {
     init {
@@ -1591,7 +1591,7 @@ data class AidenModelCatalog(
     val providers: List<AidenProvider>,
     val defaults: Map<String, String> = emptyMap(),
     /**
-     * Revision 69: the host's Agent Slider. Null from an older host, a host without a readable
+     * Revision 70: the host's Agent Slider. Null from an older host, a host without a readable
      * slider, or a slider that breaks the contract; the phone then offers only the model list.
      */
     @Serializable(with = AidenAgentSliderTolerantSerializer::class)
@@ -1609,7 +1609,7 @@ object AidenThinkingLevels {
     val ALL: List<String> = listOf("off", "low", "medium", "high", "xhigh", "max")
 
     /**
-     * Revision 69: a chat's own level needs its model and is regular-chat-only. Its value is only
+     * Revision 70: a chat's own level needs its model and is regular-chat-only. Its value is only
      * bounded, so a level a later host adds never costs the phone the whole chat.
      */
     internal fun isValidChatLevel(level: String?, modelId: String?, botId: String?): Boolean =
@@ -1617,7 +1617,7 @@ object AidenThinkingLevels {
 }
 
 /**
- * Revision 69: why an Agent Slider stop can or cannot run from this phone. [UNKNOWN] stands for a
+ * Revision 70: why an Agent Slider stop can or cannot run from this phone. [UNKNOWN] stands for a
  * value a later host adds, or a stop whose level this phone doesn't know: that stop can't be
  * chosen, and the rest of the slider stays.
  */
@@ -1639,7 +1639,7 @@ enum class AidenAgentSliderAvailability(val rawValue: String?) {
 }
 
 /**
- * Revision 69: one stop of `GET /models` `agentSlider`. A stop names its provider and model, both
+ * Revision 70: one stop of `GET /models` `agentSlider`. A stop names its provider and model, both
  * or neither, exactly when it is ready, and a level only then. [thinkingLevel] is the level a turn
  * on this stop runs with on the host, already fitted to the model. [providerLabel] and
  * [modelLabel] are display names only, never ids.
@@ -1741,7 +1741,7 @@ object AidenAgentSliderStopSerializer : KSerializer<AidenAgentSliderStop> {
     }
 }
 
-/** Revision 69: the host's Agent Slider, 3 to 7 stops left to right, and the Reset to home stop. */
+/** Revision 70: the host's Agent Slider, 3 to 7 stops left to right, and the Reset to home stop. */
 @Serializable
 data class AidenAgentSlider(
     val stops: List<AidenAgentSliderStop>,

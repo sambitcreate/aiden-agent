@@ -312,6 +312,7 @@ async function fixture(options: {
               capability !== "attachments:raw" &&
               capability !== "chat:new-worktree" &&
               capability !== "approval:cards" &&
+              capability !== "approval:plain-words" &&
               capability !== "approvals:settings" &&
               capability !== "bot:settings-changes" &&
               capability !== "bot:suggestions" &&
@@ -2013,6 +2014,7 @@ test("progress support is advertised and upgraded only when the Mac can serve it
       "schedule:write",
       "schedule:cards",
       "approval:cards",
+      "approval:plain-words",
       "attachments:raw",
       "stream:snapshot-reasons",
       "skills:invoke",
@@ -7562,7 +7564,7 @@ test("chat:continue-in-new-chat is offered only while the host can continue a ch
   }
 });
 
-test("revision 69 offers chat:agent-slider only where the host saves a phone's slider selection", async () => {
+test("revision 70 offers chat:agent-slider only where the host saves a phone's slider selection", async () => {
   const headers = { authorization: `Bearer ${"a".repeat(43)}`, "aiden-protocol-version": "1" };
   const negotiate = {
     method: "POST",

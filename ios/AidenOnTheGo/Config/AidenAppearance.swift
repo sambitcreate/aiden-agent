@@ -827,8 +827,6 @@ struct AidenAppearanceSettingsView: View {
     @Environment(\.dismiss) private var dismiss
     @Environment(\.aidenPalette) private var palette
     @Bindable var appearance: AidenAppearanceStore
-    @AppStorage(AidenRemoteLiveActivityManager.responseExcerptPreferenceKey)
-    private var showsLiveActivityResponseExcerpts = false
 
     private var selectedPreset: AidenThemePresetID? {
         appearance.lightPreset == appearance.darkPreset ? appearance.lightPreset : nil
@@ -861,15 +859,6 @@ struct AidenAppearanceSettingsView: View {
                     Text("Themes")
                 } footer: {
                     Text("Current theme: \(selectedPreset?.title ?? "Custom")")
-                }
-
-                Section {
-                    Toggle("Show response excerpts on Lock Screen", isOn: $showsLiveActivityResponseExcerpts)
-                        .aidenSwitchStyle()
-                } header: {
-                    Text("Privacy")
-                } footer: {
-                    Text("Off by default. Live Activities otherwise show only the chat title and bounded status.")
                 }
             }
             .navigationTitle("Appearance")

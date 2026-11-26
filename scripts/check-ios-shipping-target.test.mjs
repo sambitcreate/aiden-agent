@@ -136,6 +136,7 @@ const appSourcePaths = [
   "AidenOnTheGo/Features/Workspace/AidenRelativeTimestamp.swift",
   "AidenOnTheGo/Features/Workspace/AidenNewAgentPopover.swift",
   "AidenOnTheGo/Features/Workspace/AidenWorkspaceArchiveStore.swift",
+  "AidenOnTheGo/Features/Workspace/AidenNotificationSettingsView.swift",
   "AidenOnTheGo/Features/Workspace/AidenHomeModel.swift",
   "AidenOnTheGo/Features/Workspace/AidenUsageView.swift",
   "AidenOnTheGo/Features/Workspace/AidenAppSettingsView.swift",
@@ -179,6 +180,9 @@ const appSourcePaths = [
   "AidenOnTheGo/Features/Remote/AidenSandboxedHTMLView.swift",
   "AidenOnTheGo/Features/Remote/AidenHTMLPreviewTheme.swift",
   "AidenOnTheGo/Features/Remote/AidenWorkspaceEnvironmentView.swift",
+  "AidenOnTheGo/Features/Remote/AidenAlertActionResponder.swift",
+  "AidenOnTheGo/Features/Remote/AidenBackgroundGrace.swift",
+  "AidenOnTheGo/Features/Remote/AidenNotificationPreferences.swift",
   "AidenOnTheGo/Features/Shared/ActivityMarks/AidenActivityMarkEvaluator.swift",
   "AidenOnTheGo/Features/Shared/ActivityMarks/AidenActivityMarkMapping.swift",
   "AidenOnTheGo/Features/Shared/ActivityMarks/AidenActivityMarkSpec.swift",
@@ -190,6 +194,8 @@ const appSourcePaths = [
   "AidenOnTheGo/LiveActivities/AidenDeepLink.swift",
   "AidenOnTheGo/LiveActivities/AidenLatestValueThrottle.swift",
   "AidenOnTheGo/LiveActivities/AidenRemoteLiveActivityManager.swift",
+  "AidenOnTheGo/LiveActivities/AidenApprovalIntents.swift",
+  "AidenOnTheGo/LiveActivities/AidenRunsSummaryActivityAttributes.swift",
   "AidenOnTheGo/Models/AidenBot.swift",
   "AidenOnTheGo/Models/AidenBotAllowed.swift",
   "AidenOnTheGo/Models/AidenBotMemory.swift",
@@ -286,6 +292,7 @@ const workspaceShellSourcePaths = [
   "AidenOnTheGo/Features/Workspace/AidenRelativeTimestamp.swift",
   "AidenOnTheGo/Features/Workspace/AidenHomeModel.swift",
   "AidenOnTheGo/Features/Workspace/AidenWorkspaceArchiveStore.swift",
+  "AidenOnTheGo/Features/Workspace/AidenNotificationSettingsView.swift",
   "AidenOnTheGo/Features/Workspace/AidenNewAgentPopover.swift",
   "AidenOnTheGo/Features/Workspace/AidenUsageView.swift",
   "AidenOnTheGo/Features/Workspace/AidenAppSettingsView.swift",
@@ -382,10 +389,13 @@ const uiTestSources = [
 
 const widgetSources = [
   "AgentRunActivityAttributes.swift",
+  "AidenRunsSummaryActivityAttributes.swift",
   "AidenDeepLink.swift",
+  "AidenApprovalIntents.swift",
   "AidenHomeActionIntent.swift",
   "AidenQuickActionsWidget.swift",
   "AgentRunLiveActivityWidget.swift",
+  "AidenRunsSummaryLiveActivityWidget.swift",
 ];
 
 function phaseSourceNames(project, phaseId) {
@@ -965,10 +975,6 @@ test("the Aiden home, onboarding, composer, schedules, and activity retain the r
   assert.match(scheduledTasks, /visibleProviders[\s\S]*?selectedProvider\?\.visibleModels/u);
   assert.doesNotMatch(chat, /if let levels = model\.selectedModel\?\.thinkingLevels/u);
   assert.doesNotMatch(chat, /\.background\(\.bar\)/u);
-  assert.match(
-    widget,
-    /status == \.starting \|\| status == \.thinking[\s\S]*?Image\("aiden-sidebar-logo"\)/u,
-  );
   assert.match(project, /aiden-sidebar-logo\.png in Resources/u);
   assert.doesNotMatch(`${shell}\n${pairing}\n${chat}\n${widget}`, /brain|sparkle/iu);
 

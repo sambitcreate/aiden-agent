@@ -682,11 +682,12 @@ struct AidenRemoteCapability: RawRepresentable, Codable, Hashable, Sendable {
     /// Contract revision 59 adds `bot:peers`, asked for alone.
     /// Contract revision 64 adds `chat:continue-in-new-chat`, asked for alone.
     /// Contract revision 68 adds `bot:needs-you`, asked for alone.
-    /// Contract revision 69 adds `chat:agent-slider`, asked for alone.
+    /// Contract revision 70 adds `chat:agent-slider`, asked for alone.
 
     /// Contract revision 61 adds `approval:cards`, `approvals:settings`,
     /// `bot:settings-changes`, `bot:suggestions` and `bot:templates`, each alone.
     /// Contract revision 54 adds `bot:messaging`, also asked for alone.
+    /// Contract revision 69 adds `approval:plain-words`, asked for alone after `approval:cards`.
     static let phoneNegotiable: [Self] = v1Known + [
         Self(rawValue: "runs:observe"), Self(rawValue: "runs:control"),
         Self(rawValue: "simulators:mobile"), Self(rawValue: "bot:cards"),
@@ -706,6 +707,7 @@ struct AidenRemoteCapability: RawRepresentable, Codable, Hashable, Sendable {
         Self(rawValue: "bot:open-work"),
         Self(rawValue: "bot:routine-models"),
         Self(rawValue: "bot:peers"),
+        Self(rawValue: "approval:plain-words"),
     ] + botUX
 
     /// Revision 27: the device renders `memory_update` and `routine_proposal`
@@ -791,7 +793,7 @@ struct AidenRemoteCapability: RawRepresentable, Codable, Hashable, Sendable {
     /// name, so the device asks for it alone.
     static let botNeedsYou = Self(rawValue: "bot:needs-you")
 
-    /// Revision 69: a turn this device sends saves its model and thinking level
+    /// Revision 70: a turn this device sends saves its model and thinking level
     /// as the chat's own, as a turn sent from the Mac's composer does, so the
     /// Agent Slider on `GET /models` matches what the next turn runs. Asked for
     /// alone so older hosts do not reject the progress batch.
@@ -3117,7 +3119,7 @@ struct AidenChatMessagesWindow: Decodable, Equatable, Sendable {
         var modelId: String?
         var createdAt: Date
         var updatedAt: Date
-        /// Revision 69: the chat's own thinking level, with its model.
+        /// Revision 70: the chat's own thinking level, with its model.
         var thinkingLevel: String? = nil
     }
 

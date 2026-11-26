@@ -89,6 +89,7 @@ import {
   AIDEN_REMOTE_CHAT_NEW_WORKTREE_CAPABILITIES,
   AIDEN_REMOTE_CHAT_CONTINUE_CAPABILITIES,
   AIDEN_REMOTE_STREAM_SNAPSHOT_REASON_CAPABILITIES,
+  AIDEN_REMOTE_APPROVAL_PLAIN_WORDS_CAPABILITIES,
   AIDEN_REMOTE_AGENT_SLIDER_CAPABILITIES,
   AIDEN_REMOTE_CHAT_SUMMARY_MAX_CURSOR_LENGTH,
   AIDEN_REMOTE_CHAT_SUMMARY_MAX_LIMIT,
@@ -1775,7 +1776,7 @@ function streamSnapshotReasonsWired(dependencies: AidenRemoteRouterDependencies)
   return Boolean(dependencies.streams && dependencies.chats);
 }
 
-/** Revision 69: whether a turn can save its selection as the chat's own (`chat:agent-slider`). */
+/** Revision 70: whether a turn can save its selection as the chat's own (`chat:agent-slider`). */
 function agentSliderWired(dependencies: AidenRemoteRouterDependencies): boolean {
   return dependencies.chats?.supportsAgentSlider === true;
 }
@@ -2116,6 +2117,10 @@ function approvalCardsWired(dependencies: AidenRemoteRouterDependencies): boolea
 function holdsApprovalCards(device: Pick<AidenRemoteRouterAuthenticatedDevice, "capabilities">): boolean {
   return device.capabilities.has("approval:cards");
 }
+/** Revision 69: a card holder that also reads a shell card's plain words. */
+function holdsApprovalPlainWords(device: Pick<AidenRemoteRouterAuthenticatedDevice, "capabilities">): boolean {
+  return holdsApprovalCards(device) && device.capabilities.has("approval:plain-words");
+}
 /** Revision 61: the Mac's approval mode and rules page. */
 function approvalSettingsWired(dependencies: AidenRemoteRouterDependencies): boolean {
   return dependencies.approvalSettings !== undefined;
@@ -2417,6 +2422,8 @@ function advertisedServerCapabilities(
     ...(scheduleCardsWired(dependencies) ? AIDEN_REMOTE_SCHEDULE_CARD_CAPABILITIES : []),
     // Revision 61: typed approval cards and the approval settings, offered only where wired.
     ...(approvalCardsWired(dependencies) ? AIDEN_REMOTE_APPROVAL_CARD_CAPABILITIES : []),
+    // Revision 69: plain words on shell cards, beside the typed cards.
+    ...(approvalCardsWired(dependencies) ? AIDEN_REMOTE_APPROVAL_PLAIN_WORDS_CAPABILITIES : []),
     ...(approvalSettingsWired(dependencies) ? AIDEN_REMOTE_APPROVAL_SETTINGS_CAPABILITIES : []),
     ...(device.acceptsBotCapabilities === true && botSettingsChangesWired(dependencies) ? AIDEN_REMOTE_BOT_SETTINGS_CHANGE_CAPABILITIES : []),
     ...(device.acceptsBotCapabilities === true && botSuggestionsWired(dependencies) ? AIDEN_REMOTE_BOT_SUGGESTION_CAPABILITIES : []),
@@ -2431,7 +2438,7 @@ function advertisedServerCapabilities(
     ...(continueInNewChatWired(dependencies) ? AIDEN_REMOTE_CHAT_CONTINUE_CAPABILITIES : []),
     // Revision 65: offered while stream event replay is served.
     ...(streamSnapshotReasonsWired(dependencies) ? AIDEN_REMOTE_STREAM_SNAPSHOT_REASON_CAPABILITIES : []),
-    // Revision 69: offered while turns can save the chat's own model selection.
+    // Revision 70: offered while turns can save the chat's own model selection.
     ...(agentSliderWired(dependencies) ? AIDEN_REMOTE_AGENT_SLIDER_CAPABILITIES : []),
     ...(device.acceptsProgressCapabilities === true
       ? AIDEN_REMOTE_PROGRESS_CAPABILITIES.filter((capability) =>
@@ -2909,6 +2916,9 @@ export function createAidenRemoteRequestHandler(
           } else if ((AIDEN_REMOTE_APPROVAL_CARD_CAPABILITIES as readonly string[]).includes(capability)) {
             // Revision 61: typed approval cards; answers still need approval:respond.
             if (!approvalCardsWired(dependencies)) throw new AidenRemoteServiceError("not_found", "Approval cards are unavailable on this Aiden installation.", 404);
+          } else if ((AIDEN_REMOTE_APPROVAL_PLAIN_WORDS_CAPABILITIES as readonly string[]).includes(capability)) {
+            // Revision 69: display-only plain words on shell cards; read only with approval:cards.
+            if (!approvalCardsWired(dependencies)) throw new AidenRemoteServiceError("not_found", "Approval cards are unavailable on this Aiden installation.", 404);
           } else if ((AIDEN_REMOTE_APPROVAL_SETTINGS_CAPABILITIES as readonly string[]).includes(capability)) {
             if (!approvalSettingsWired(dependencies)) throw new AidenRemoteServiceError("not_found", "Approval settings are unavailable on this Aiden installation.", 404);
           } else if ((AIDEN_REMOTE_BOT_SETTINGS_CHANGE_CAPABILITIES as readonly string[]).includes(capability)) {
@@ -2948,7 +2958,7 @@ export function createAidenRemoteRequestHandler(
               throw new AidenRemoteServiceError("not_found", "Stream snapshot reasons are unavailable on this Aiden installation.", 404);
             }
           } else if ((AIDEN_REMOTE_AGENT_SLIDER_CAPABILITIES as readonly string[]).includes(capability)) {
-            // Revision 69: offered while turns can save the chat's own model selection.
+            // Revision 70: offered while turns can save the chat's own model selection.
             if (!agentSliderWired(dependencies)) {
               throw new AidenRemoteServiceError("not_found", "The Agent Slider is unavailable on this Aiden installation.", 404);
             }
@@ -3342,6 +3352,7 @@ export function createAidenRemoteRequestHandler(
             allowed: holdsBotAllowed(device, dependencies),
             peers: holdsBotPeers(device, dependencies),
             approvalCards: holdsApprovalCards(device),
+            approvalPlainWords: holdsApprovalPlainWords(device),
             settingsChanges: holdsBotSettingsChanges(device, dependencies),
             suggestions: holdsBotSuggestions(device, dependencies),
           });
@@ -3351,7 +3362,7 @@ export function createAidenRemoteRequestHandler(
         requireRetainedBotProjectionGrants(device, current, [
           "bot:cards", "bot:activity", "bot:handoffs", "bot:handoff-notes", "bot:handoff-on-mac",
           "bot:images", "bot:issues", "bot:access-requests", "bot:plans", "bot:allowed",
-          "approval:cards", "bot:settings-changes", "bot:suggestions",
+          "approval:cards", "approval:plain-words", "bot:settings-changes", "bot:suggestions",
         ]);
         writeJson(response, 200, holdsBotPeers(current, dependencies) ? session : { ...session, entries: session.entries.filter((entry) => entry.type !== "peer") });
         return;
@@ -3382,6 +3393,7 @@ export function createAidenRemoteRequestHandler(
             plans: holdsBotPlans(device, dependencies),
             allowed: holdsBotAllowed(device, dependencies),
             approvalCards: holdsApprovalCards(device),
+            approvalPlainWords: holdsApprovalPlainWords(device),
             settingsChanges: holdsBotSettingsChanges(device, dependencies),
             suggestions: holdsBotSuggestions(device, dependencies),
           },
@@ -5345,7 +5357,7 @@ export function createAidenRemoteRequestHandler(
         const pending = dependencies.streams.pendingApproval(
           device.id,
           streamApprovalMatch[1]!,
-          { scheduleCard: holdsScheduleCards(device), card: holdsApprovalCards(device) },
+          { scheduleCard: holdsScheduleCards(device), card: holdsApprovalCards(device), plainWords: holdsApprovalPlainWords(device) },
         );
         const requiredCapability = pending
           ? dependencies.streams.approvalRequiredCapability(

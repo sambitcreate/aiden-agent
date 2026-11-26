@@ -171,7 +171,7 @@ data class AidenStreamRecoveryFixture(
 )
 
 /**
- * Revision 69 (`chat:agent-slider`): a `GET /models` body carrying the slider, the turn a ready
+ * Revision 70 (`chat:agent-slider`): a `GET /models` body carrying the slider, the turn a ready
  * stop sends, and the chat it leaves. The models body and chat stay raw so tests decode them
  * through the client, as the live routes are.
  */

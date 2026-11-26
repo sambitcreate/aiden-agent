@@ -36,7 +36,7 @@ struct AidenAppSettingsView: View {
             && coordinator.installationStore.activeInstallation?.hasNegotiatedAccess(to: .approvalRespond) == true
     }
 
-    /// Revision 69 (`chat:agent-slider`): the Mac's slider stops, read-only.
+    /// Revision 70 (`chat:agent-slider`): the Mac's slider stops, read-only.
     private var offersAgentSlider: Bool {
         coordinator.installationStore.activeInstallation?.hasNegotiatedAccess(to: .chatAgentSlider) == true
     }
@@ -111,6 +111,12 @@ struct AidenAppSettingsView: View {
             } footer: {
                 Text("These are app-wide defaults. Permission, files, Git, and other workspace-specific options remain in each workspace’s ••• menu.")
             }
+
+            Section {
+                NavigationLink { AidenNotificationSettingsView() } label: {
+                    Label("Notifications", systemImage: "bell")
+                }
+            } footer: { Text("What this iPhone tells you about chats, and what shows on the Lock Screen.") }
 
             Section {
                 NavigationLink { AidenProvidersView(coordinator: coordinator) } label: {

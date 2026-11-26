@@ -382,8 +382,7 @@ export const AIDEN_REMOTE_CONTINUE_IN_NEW_CHAT_CONTRACT_REVISION = 64 as const;
  */
 export const AIDEN_REMOTE_STREAM_SNAPSHOT_REASONS_CONTRACT_REVISION = 65 as const;
 /**
- * Contract revision 66 (provisional; re-claim the next revision after
- * `main`'s at merge by changing only this constant): host feed Bot rows may
+ * Contract revision 66 (claimed at merge on 2026-11-25): host feed Bot rows may
  * carry `preview`, the one plain line the host's own Bots list shows under the
  * Bot's name (at most 140 characters), and a host now sends `lastReplyAt` for
  * every Bot rather than only Bots whose chat is open there, marking each row
@@ -393,8 +392,7 @@ export const AIDEN_REMOTE_STREAM_SNAPSHOT_REASONS_CONTRACT_REVISION = 65 as cons
  */
 export const AIDEN_REMOTE_BOT_FEED_PREVIEW_CONTRACT_REVISION = 66 as const;
 /**
- * Contract revision 67 (provisional; re-claim the next revision after
- * `main`'s at merge by changing only this constant): two Bot session routes.
+ * Contract revision 67 (claimed at merge on 2026-11-25): two Bot session routes.
  * `GET /bots/{botId}/session/entries?before=&limit=` pages the transcript
  * back from an entry the device already has, so a chat can show more than the
  * snapshot's window. `POST /bots/{botId}/queued/{submissionId}/withdraw`
@@ -404,7 +402,7 @@ export const AIDEN_REMOTE_BOT_FEED_PREVIEW_CONTRACT_REVISION = 66 as const;
  */
 export const AIDEN_REMOTE_BOT_SESSION_PAGES_CONTRACT_REVISION = 67 as const;
 /**
- * Contract revision 68 (provisional; re-claim the next free number at merge):
+ * Contract revision 68 (claimed at merge on 2026-11-25):
  * the `bot:needs-you` opt-in. A device holding it reads `needsYou: true` on a
  * `GET /bots` summary while an approval, a question, a hand-off or an open
  * issue waits on the person, the same signal the host feed's Bot rows carry
@@ -413,17 +411,31 @@ export const AIDEN_REMOTE_BOT_SESSION_PAGES_CONTRACT_REVISION = 67 as const;
  */
 export const AIDEN_REMOTE_BOT_NEEDS_YOU_CONTRACT_REVISION = 68 as const;
 /**
- * Contract revision 69 (claimed when written as 66, then 68; re-claimed as 69
- * at merge because `main`'s `bot:needs-you` took 68; recheck against `main` at
- * merge by changing only this constant): the Agent Slider on phones. `GET /models`
- * carries an optional `agentSlider` (its stops, the home stop and each stop's
- * availability on this host); chat projections carry the chat's own
- * `thinkingLevel`; and a device holding the opt-in `chat:agent-slider` has
- * each turn's thinking level saved as the chat's own, with its provider and
- * model, in the same write as the turn's message. Both new fields are additive, so closed
- * decoders on revision <= 68 that ignore unknown keys stay valid.
+ * Contract revision 69 (claimed at merge on 2026-11-25, after `bot:needs-you`
+ * took 68):
+ * plain-words command approvals (`approval:plain-words`, an opt-in that
+ * needs `approval:cards`).
+ * A holder's shell card (`kind: "mac"`, `mac: "shell"`, a `command` body) may
+ * carry `explanation`, the model's one-line description of the command, and
+ * `tags`, Aiden's own reading of the command text (`{label, tone: "calm" |
+ * "risk"}`, risky first). Display-only: the body stays the exact command,
+ * buttons and `canAllow` are unchanged, and closed revision-69 decoders never
+ * see the two keys.
  */
-export const AIDEN_REMOTE_AGENT_SLIDER_CONTRACT_REVISION = 69 as const;
+export const AIDEN_REMOTE_APPROVAL_PLAIN_WORDS_CONTRACT_REVISION = 69 as const;
+/**
+ * Contract revision 70 (claimed when written as 66, then 68 and 69; re-claimed
+ * as 70 at merge because `main`'s `approval:plain-words` took 69; recheck
+ * against `main` at merge by changing only this constant): the Agent Slider on
+ * phones. `GET /models` carries an optional `agentSlider` (its stops, the home
+ * stop and each stop's availability on this host); chat projections carry the
+ * chat's own `thinkingLevel`; and a device holding the opt-in
+ * `chat:agent-slider` has each turn's thinking level saved as the chat's own,
+ * with its provider and model, in the same write as the turn's message. Both
+ * new fields are additive, so closed decoders on revision <= 69 that ignore
+ * unknown keys stay valid.
+ */
+export const AIDEN_REMOTE_AGENT_SLIDER_CONTRACT_REVISION = 70 as const;
 export const AIDEN_REMOTE_CONTRACT_REVISION = AIDEN_REMOTE_AGENT_SLIDER_CONTRACT_REVISION;
 export const AIDEN_REMOTE_BASE_PATH = "/api/aiden/v1" as const;
 export const AIDEN_REMOTE_MAX_SSE_FRAME_BYTES = 1_048_576;
@@ -762,7 +774,14 @@ export const AIDEN_REMOTE_CHAT_CONTINUE_CAPABILITIES = ["chat:continue-in-new-ch
 export const AIDEN_REMOTE_STREAM_SNAPSHOT_REASON_CAPABILITIES = ["stream:snapshot-reasons"] as const;
 
 /**
- * Contract revision 69: a device holding `chat:agent-slider` has each turn's
+ * Contract revision 69: a device holding `approval:plain-words` (with
+ * `approval:cards`) receives `explanation` and `tags` on shell approval cards.
+ * Display-only, no authority of its own.
+ */
+export const AIDEN_REMOTE_APPROVAL_PLAIN_WORDS_CAPABILITIES = ["approval:plain-words"] as const;
+
+/**
+ * Contract revision 70: a device holding `chat:agent-slider` has each turn's
  * thinking level saved as the chat's own, with the provider and model every
  * turn already saves, in the same write as the turn's message (so a refused
  * send changes nothing). The chat then stays on the stop the person chose, as
@@ -792,6 +811,7 @@ export const AIDEN_REMOTE_OPT_IN_CAPABILITIES = [
   ...AIDEN_REMOTE_APPROVAL_SETTINGS_CAPABILITIES,
   ...AIDEN_REMOTE_CHAT_CONTINUE_CAPABILITIES,
   ...AIDEN_REMOTE_STREAM_SNAPSHOT_REASON_CAPABILITIES,
+  ...AIDEN_REMOTE_APPROVAL_PLAIN_WORDS_CAPABILITIES,
   ...AIDEN_REMOTE_AGENT_SLIDER_CAPABILITIES,
 ] as const;
 
@@ -826,6 +846,7 @@ export const AIDEN_REMOTE_NEGOTIABLE_CAPABILITIES = [
   ...AIDEN_REMOTE_APPROVAL_SETTINGS_CAPABILITIES,
   ...AIDEN_REMOTE_CHAT_CONTINUE_CAPABILITIES,
   ...AIDEN_REMOTE_STREAM_SNAPSHOT_REASON_CAPABILITIES,
+  ...AIDEN_REMOTE_APPROVAL_PLAIN_WORDS_CAPABILITIES,
   ...AIDEN_REMOTE_AGENT_SLIDER_CAPABILITIES,
 ] as const;
 
@@ -864,6 +885,7 @@ export const AIDEN_REMOTE_CAPABILITIES = [
   ...AIDEN_REMOTE_APPROVAL_SETTINGS_CAPABILITIES,
   ...AIDEN_REMOTE_CHAT_CONTINUE_CAPABILITIES,
   ...AIDEN_REMOTE_STREAM_SNAPSHOT_REASON_CAPABILITIES,
+  ...AIDEN_REMOTE_APPROVAL_PLAIN_WORDS_CAPABILITIES,
   ...AIDEN_REMOTE_AGENT_SLIDER_CAPABILITIES,
 ] as const;
 
@@ -2537,7 +2559,7 @@ export interface AidenRemoteContractFixture {
   continueInNewChat?: AidenRemoteContinueInNewChatFixture;
   /** Revision 65 (`stream:snapshot-reasons`): reader-local gap snapshot replay, legacy reason-less projection, and provider reset. */
   streamRecovery?: AidenRemoteStreamRecoveryFixture;
-  /** Revision 69 (`chat:agent-slider`): a `/models` slider, the turn a stop sends, and the chat it leaves. */
+  /** Revision 70 (`chat:agent-slider`): a `/models` slider, the turn a stop sends, and the chat it leaves. */
   agentSlider?: AidenRemoteAgentSliderFixture;
   taskProgress: AidenRemoteChatTaskProgress;
   agentRoster: AidenRemoteChatAgentRoster;
@@ -4201,7 +4223,7 @@ export function parseAidenRemoteChatProjection(
   if (hasProviderId !== hasModelId) {
     throw new Error(`${label} providerId and modelId must be supplied together.`);
   }
-  // Revision 69: the chat's own level rides only with its model, and never on a Bot chat.
+  // Revision 70: the chat's own level rides only with its model, and never on a Bot chat.
   const hasThinkingLevel = hasOwn(value, "thinkingLevel");
   if (hasThinkingLevel && (!hasModelId || hasOwn(value, "botId"))) {
     throw new Error(`${label} thinkingLevel needs a model and is regular-chat-only.`);
@@ -8959,7 +8981,7 @@ export interface AidenRemoteAgentSlider {
 }
 
 /**
- * Revision 69: the `agentSlider` of `GET /models`, as a host sends it. Strict:
+ * Revision 70: the `agentSlider` of `GET /models`, as a host sends it. Strict:
  * 3 to 7 stops with unique ids, a home naming one of them, and provider and
  * model ids together and a level only on a `ready` stop. Labels name what a
  * stop is set to in words: never on an `unassigned` or `computer-only` stop,
