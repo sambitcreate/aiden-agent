@@ -2213,6 +2213,103 @@ test("select_menu_would_raise_window keeps the capture and steers to set_value",
   await controller.close();
 });
 
+test("isError 0.38 refusal preserves bounded top-level recovery hint alongside code, effect, reason, and execution_state", async () => {
+  const { controller, session } = harness(false);
+  await capture(controller, "ax");
+  session.handler = (call) =>
+    call.name === "click"
+      ? {
+          isError: true,
+          content: [{ type: "text", text: "refused" }],
+          structuredContent: {
+            effect: "refused",
+            route: "accessibility",
+            error: { code: "select_menu_would_raise_window" },
+            hint: "Choose the option with set_value instead.",
+            next_call: { tool: "get_window_state", arguments: { pid: 42, window_id: 7 } },
+          },
+        }
+      : fakeResponse(call, session.driver);
+  await assert.rejects(
+    () => approved(controller, "top-level-hint-is-error", { action: "click", element: 0 }),
+    (error: Error & { code?: string }) => {
+      assert.equal(error.code, "select_menu_would_raise_window");
+      assert.match(error.message, /Choose the option with set_value instead\./u);
+      return true;
+    },
+  );
+
+  // An unmapped refusal code with isError: true also keeps the bounded top-level hint.
+  const longHint = `${"Use a different element. ".repeat(60)}END_OF_HINT`;
+  session.handler = (call) =>
+    call.name === "click"
+      ? {
+          isError: true,
+          content: [{ type: "text", text: "refused" }],
+          structuredContent: {
+            code: "custom_refusal_code",
+            effect: "refused",
+            hint: longHint,
+          },
+        }
+      : fakeResponse(call, session.driver);
+  await assert.rejects(
+    () => approved(controller, "top-level-hint-bounded", { action: "click", element: 0 }),
+    (error: Error & { code?: string }) => {
+      assert.equal(error.code, "custom_refusal_code");
+      assert.match(error.message, /Use a different element\./u);
+      assert.doesNotMatch(error.message, /END_OF_HINT/u);
+      return true;
+    },
+  );
+
+  // execution_state, effect, and reason handling still takes precedence on isError: true.
+  session.handler = (call) =>
+    call.name === "click"
+      ? {
+          isError: true,
+          content: [{ type: "text", text: "drag started" }],
+          structuredContent: {
+            code: "background_unavailable",
+            effect: "partial",
+            reason: "drag_and_drop_session",
+            hint: "Retry in foreground.",
+          },
+        }
+      : fakeResponse(call, session.driver);
+  await assert.rejects(
+    () => approved(controller, "top-level-hint-drag", { action: "click", element: 0 }),
+    (error: Error & { code?: string }) => {
+      assert.equal(error.code, "drag_released");
+      assert.match(error.message, /Retry in foreground\./u);
+      return true;
+    },
+  );
+
+  await capture(controller, "ax");
+  session.handler = (call) =>
+    call.name === "click"
+      ? {
+          isError: true,
+          content: [{ type: "text", text: "uncertain" }],
+          structuredContent: {
+            code: "action_outcome_mismatch",
+            execution_state: "unknown",
+            hint: "Capture before retrying.",
+          },
+        }
+      : fakeResponse(call, session.driver);
+  await assert.rejects(
+    () => approved(controller, "top-level-hint-unknown", { action: "click", element: 0 }),
+    (error: Error & { code?: string }) => {
+      assert.equal(error.code, "execution_unknown");
+      assert.match(error.message, /Capture before retrying\./u);
+      return true;
+    },
+  );
+  await controller.close();
+});
+
 test("refused ActionResult falls back to 0.38 top-level recovery hint when error.hint is absent", async () => {
   const { controller, session } = harness(false);
   await capture(controller, "ax");
