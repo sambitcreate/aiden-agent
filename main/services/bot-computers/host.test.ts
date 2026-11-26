@@ -3037,3 +3037,127 @@ test("macOS migration retries failed secret cleanup and Bot memory notes without
     { image: linuxImage },
   );
 });
+
+test("assignComputerWithProvenance guards deleteComputer with creationToken and shared-owner checks", async () => {
+  await withHost(async (context) => {
+    await setUp(context, "dedicated");
+    const assigned = await context.host.assignComputerWithProvenance("ada", { kind: "new", name: "Ada Box" });
+    assert.ok(assigned.createdComputer?.computerId);
+    assert.ok(assigned.createdComputer?.creationToken);
+    const { computerId, creationToken } = assigned.createdComputer;
+
+    // A mismatched creation token cannot delete the VM even if forced=false.
+    await context.host.assignComputer("ada", { kind: "shared" });
+    await assert.rejects(
+      context.host.deleteComputer(computerId, { force: false, creationToken: "wrong-token" }),
+      (error: unknown) => error instanceof BotComputerError && error.code === "busy",
+    );
+
+    // If another Bot attaches before rollback runs, deletion with the real token is refused.
+    await context.host.assignComputer("ben", { kind: "existing", computerId });
+    await assert.rejects(
+      context.host.deleteComputer(computerId, { force: false, creationToken }),
+      (error: unknown) => error instanceof BotComputerError && error.code === "busy",
+    );
+    assert.equal((await context.host.computer("ben"))?.computerId, computerId);
+
+    // Once unattached, the matching creation token deletes the VM cleanly.
+    await context.host.assignComputer("ben", { kind: "shared" });
+    await context.host.deleteComputer(computerId, { force: false, creationToken });
+    const status = await context.host.status();
+    assert.equal(status.vms.some((vm) => vm.id === computerId), false);
+  });
+});
+
+test("assignComputer removes departed Bot workspace on stopped and live shared VMs while preserving sole dedicated VMs", async () => {
+  await withHost(async (context) => {
+    await setUp(context, "shared");
+    await context.host.give("ada");
+    await context.host.give("ben");
+    const adaSharedDir = path.join(context.root, "computers", "shared", "Computer", "bots", botComputerWorkspaceDirName("ada"));
+    const benSharedDir = path.join(context.root, "computers", "shared", "Computer", "bots", botComputerWorkspaceDirName("ben"));
+    assert.equal(existsSync(adaSharedDir), true);
+    assert.equal(existsSync(benSharedDir), true);
+
+    // Stopped-host reassignment away from shared deletes only the departed Bot's subfolder.
+    const dedicated = await context.host.assignComputer("ada", { kind: "new", name: "Ada Solo" });
+    assert.equal(existsSync(adaSharedDir), false, "Ada's shared subfolder removed on stopped host");
+    assert.equal(existsSync(benSharedDir), true, "Ben's shared subfolder preserved");
+
+    const adaDedicatedDir = path.join(
+      context.root,
+      "computers",
+      dedicated.computerId,
+      "Computer",
+      "bots",
+      botComputerWorkspaceDirName("ada"),
+    );
+    assert.equal(existsSync(adaDedicatedDir), true);
+
+    // Reassigning back to shared leaves the sole dedicated VM (now with 0 assignees) intact.
+    await context.host.assignComputer("ada", { kind: "shared" });
+    assert.equal(existsSync(adaDedicatedDir), true, "sole dedicated VM files remain intact when unassigned");
+    assert.equal(existsSync(adaSharedDir), true);
+
+    // Live-guest reassignment away from a running shared VM cleans Ada's folder over SSH.
+    await context.host.ensureRunning("ada", { reason: "tool" });
+    const beforeCallCount = context.sshCalls.length;
+    await context.host.assignComputer("ada", { kind: "existing", computerId: dedicated.computerId });
+    const cleanCalls = context.sshCalls
+      .slice(beforeCallCount)
+      .map((call) => call.args[call.args.length - 1] ?? "")
+      .filter((cmd) => cmd.includes("rm -rf --") && cmd.includes(botComputerWorkspaceDirName("ada")));
+    assert.equal(cleanCalls.length, 1, "live guest SSH cleanup removed departed Bot's workspace");
+    assert.equal(existsSync(benSharedDir), true, "Ben's shared subfolder still exists");
+
+    await context.host.stop("ben", { reason: "person" });
+  });
+});
+
+test("ensureRunning re-reads assignment after waiting on a Bot turn and starts the new VM", async () => {
+  await withHost(async (context) => {
+    await setUp(context, "shared");
+    await context.host.give("ada");
+
+    let signalEnteredBotName!: () => void;
+    const enteredBotName = new Promise<void>((resolve) => {
+      signalEnteredBotName = resolve;
+    });
+    let releaseBotName!: () => void;
+    const botNameGate = new Promise<void>((resolve) => {
+      releaseBotName = resolve;
+    });
+    const gatedHost = context.relaunch({
+      botName: async () => {
+        signalEnteredBotName();
+        await botNameGate;
+        return "Ada";
+      },
+    });
+
+    // Hold Ada's Bot turn inside assignComputer({ kind: "new" }) (no name so botName() runs) before state.assignments changes.
+    const reassignPromise = gatedHost.assignComputer("ada", { kind: "new" });
+    await enteredBotName;
+
+    // ensureRunning initially reads "shared", then waits on Ada's active Bot turn.
+    const ensurePromise = gatedHost.ensureRunning("ada", { reason: "tool" });
+    await new Promise((resolve) => setTimeout(resolve, 25));
+    assert.equal(
+      context.calls().some((call) => call.op === "run" && call.name === BOT_COMPUTER_SHARED_VM),
+      false,
+      "must not start the old shared VM while reassignment is in flight",
+    );
+
+    releaseBotName();
+    const updated = await reassignPromise;
+    const connection = await ensurePromise;
+    assert.equal(connection.vmName, updated.vmName, "starts the newly assigned VM instead of the stale shared VM");
+    assert.notEqual(connection.vmName, BOT_COMPUTER_SHARED_VM);
+    assert.equal(
+      context.calls().some((call) => call.op === "run" && call.name === BOT_COMPUTER_SHARED_VM),
+      false,
+      "never ran the old shared VM after reassignment settled",
+    );
+    await gatedHost.stop("ada", { reason: "person" });
+  });
+});

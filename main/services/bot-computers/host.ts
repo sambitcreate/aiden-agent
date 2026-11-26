@@ -320,6 +320,8 @@ export function createBotComputerHost(deps: BotComputerHostDependencies): BotCom
   const runtimes = new Map<string, Runtime>();
   /** Per-VM stale set keyed by `computerId`. */
   const stale = new Set<string>();
+  /** In-process creation nonces keyed by `computerId`, used by settings rollback. */
+  const vmCreationTokens = new Map<string, string>();
   /** Mirror of `state.assignments` (`botId -> computerId`) for synchronous control/connection lookups. */
   const assignmentCache = new Map<string, string>();
   const syncAssignmentCache = (state: BotComputersState): BotComputersState => {
@@ -986,6 +988,34 @@ export function createBotComputerHost(deps: BotComputerHostDependencies): BotCom
     await cleanOnHost();
   }
 
+  /**
+   * After reassigning `botId` away from `oldComputerId`, remove `botId`'s
+   * per-Bot subfolder when the old VM stays live for other Bots (`shared` or
+   * another assignee remains on a dedicated VM). An empty sole dedicated VM keeps
+   * its workspace intact on disk until explicitly deleted.
+   */
+  async function cleanupDepartedWorkspace(
+    oldComputerId: string | undefined,
+    botId: string,
+    parentEpoch: number,
+  ): Promise<void> {
+    if (!oldComputerId || !isPoolWorkspaceId(oldComputerId)) return;
+    await inTurn(
+      vmTurnKey(oldComputerId),
+      async () => {
+        const latest = await readState();
+        const oldVm = hasOwn(latest.vms, oldComputerId) ? latest.vms[oldComputerId] : undefined;
+        if (!oldVm) return;
+        if (assignedComputerId(latest, botId) === oldComputerId) return;
+        const remaining = assignedBotsInState(latest, oldComputerId);
+        if (oldVm.kind === "shared" || remaining.length > 0) {
+          await removeBotWorkspaceSubfolder(oldComputerId, botId);
+        }
+      },
+      parentEpoch,
+    );
+  }
+
   async function ensureSharedDirectory(dir: string): Promise<string> {
     await assertNotSymlinkDir(dir);
     await mkdir(dir, { recursive: true, mode: 0o777 });
@@ -1540,7 +1570,10 @@ export function createBotComputerHost(deps: BotComputerHostDependencies): BotCom
   }
 
   /** Lazily clone the canonical `"shared"` Linux VM if needed and assign `forBotId` inside the `vm:shared` turn. */
-  async function ensureSharedVmAndAssign(forBotId: string, parentEpoch?: number): Promise<BotComputersState> {
+  async function ensureSharedVmAndAssign(
+    forBotId: string,
+    parentEpoch?: number,
+  ): Promise<{ state: BotComputersState; createdComputer?: { computerId: string; creationToken: string } }> {
     return inTurn(
       vmTurnKey(BOT_COMPUTER_SHARED_ID),
       async () => {
@@ -1548,9 +1581,11 @@ export function createBotComputerHost(deps: BotComputerHostDependencies): BotCom
         const existing = hasOwn(state.vms, BOT_COMPUTER_SHARED_ID) ? state.vms[BOT_COMPUTER_SHARED_ID] : undefined;
         if (existing && !existing.migratedFromMacos) {
           await sharedDirForVm(existing, [...assignedBotsInState(state, BOT_COMPUTER_SHARED_ID), forBotId], forBotId);
-          return updateState((draft) => {
-            draft.assignments[forBotId] = BOT_COMPUTER_SHARED_ID;
-          });
+          return {
+            state: await updateState((draft) => {
+              draft.assignments[forBotId] = BOT_COMPUTER_SHARED_ID;
+            }),
+          };
         }
         if (!ready(state)) throw new BotComputerError("not_set_up", "Set up Bot computers in Settings first.");
         if (setupTask) throw new BotComputerError("busy", "Wait for the base computer to finish updating.");
@@ -1567,12 +1602,17 @@ export function createBotComputerHost(deps: BotComputerHostDependencies): BotCom
             state,
           ),
         );
+        const creationToken = randomBytes(16).toString("hex");
         const next = await updateState((draft) => {
           draft.vms[BOT_COMPUTER_SHARED_ID] = record;
           draft.assignments[forBotId] = BOT_COMPUTER_SHARED_ID;
         });
+        vmCreationTokens.set(BOT_COMPUTER_SHARED_ID, creationToken);
         stale.delete(BOT_COMPUTER_SHARED_ID);
-        return next;
+        return {
+          state: next,
+          createdComputer: { computerId: BOT_COMPUTER_SHARED_ID, creationToken },
+        };
       },
       parentEpoch,
     );
@@ -1974,6 +2014,7 @@ export function createBotComputerHost(deps: BotComputerHostDependencies): BotCom
         const next = await updateState((draft) => {
           if (hasOwn(draft.vms, id)) draft.vms[id] = fresh;
         });
+        vmCreationTokens.delete(id);
         stale.delete(id);
         emitVm(id);
         return vmStatus(fresh, next);
@@ -2093,6 +2134,7 @@ export function createBotComputerHost(deps: BotComputerHostDependencies): BotCom
         assignmentCache.clear();
         runtimes.clear();
         stale.clear();
+        vmCreationTokens.clear();
         setupState = undefined;
         emit();
         deps.onRemoved?.();
@@ -2122,7 +2164,7 @@ export function createBotComputerHost(deps: BotComputerHostDependencies): BotCom
         if (!ready(state)) throw new BotComputerError("not_set_up", "Set up Bot computers in Settings first.");
         if (setupTask) throw new BotComputerError("busy", "Wait for the base computer to finish updating.");
         if (state.settings.defaultComputerMode === "shared") {
-          const next = await ensureSharedVmAndAssign(botId, epoch);
+          const { state: next } = await ensureSharedVmAndAssign(botId, epoch);
           emit();
           return computerStatus(botId, next)!;
         }
@@ -2155,6 +2197,10 @@ export function createBotComputerHost(deps: BotComputerHostDependencies): BotCom
     },
 
     async assignComputer(botId, target) {
+      return (await host.assignComputerWithProvenance(botId, target)).status;
+    },
+
+    async assignComputerWithProvenance(botId, target) {
       ensureSupported();
       const parsed = parseBotComputerAssignTarget(target);
       return inTurn(botTurnKey(botId), async (epoch) => {
@@ -2162,7 +2208,7 @@ export function createBotComputerHost(deps: BotComputerHostDependencies): BotCom
         const oldComputerId = assignedComputerId(state, botId);
         if (parsed.kind === "shared") {
           if (oldComputerId === BOT_COMPUTER_SHARED_ID && hasOwn(state.vms, BOT_COMPUTER_SHARED_ID)) {
-            return computerStatus(botId, state)!;
+            return { status: computerStatus(botId, state)! };
           }
           if (!ready(state)) throw new BotComputerError("not_set_up", "Set up Bot computers in Settings first.");
           if (setupTask) throw new BotComputerError("busy", "Wait for the base computer to finish updating.");
@@ -2170,15 +2216,20 @@ export function createBotComputerHost(deps: BotComputerHostDependencies): BotCom
             revokeBotLease(oldComputerId, botId);
             control.forget(botId);
           }
-          const next = await ensureSharedVmAndAssign(botId, epoch);
+          const { state: next, createdComputer } = await ensureSharedVmAndAssign(botId, epoch);
           if (oldComputerId && oldComputerId !== BOT_COMPUTER_SHARED_ID) {
             releaseOrphanedControlScope(oldComputerId, next);
+            await cleanupDepartedWorkspace(oldComputerId, botId, epoch);
           }
           emit();
-          return computerStatus(botId, next)!;
+          return {
+            status: computerStatus(botId, next)!,
+            ...(createdComputer ? { createdComputer } : {}),
+          };
         }
         if (parsed.kind === "existing") {
           const targetId = parsed.computerId;
+          let departedComputerId: string | undefined;
           const next = await inTurn(
             vmTurnKey(targetId),
             async () => {
@@ -2195,13 +2246,19 @@ export function createBotComputerHost(deps: BotComputerHostDependencies): BotCom
               const updated = await updateState((draft) => {
                 draft.assignments[botId] = targetVm.id;
               });
-              if (currentOldId) releaseOrphanedControlScope(currentOldId, updated);
+              if (currentOldId) {
+                releaseOrphanedControlScope(currentOldId, updated);
+                departedComputerId = currentOldId;
+              }
               return updated;
             },
             epoch,
           );
+          if (departedComputerId) {
+            await cleanupDepartedWorkspace(departedComputerId, botId, epoch);
+          }
           emit();
-          return computerStatus(botId, next)!;
+          return { status: computerStatus(botId, next)! };
         }
         // parsed.kind === "new"
         if (!ready(state)) throw new BotComputerError("not_set_up", "Set up Bot computers in Settings first.");
@@ -2215,14 +2272,22 @@ export function createBotComputerHost(deps: BotComputerHostDependencies): BotCom
         const record = await copyingBase(
           cloneVmFromBase({ id, name: label, kind: "dedicated", assignedBotIds: [botId], primaryBotId: botId }, state),
         );
+        const creationToken = randomBytes(16).toString("hex");
         const next = await updateState((draft) => {
           draft.vms[id] = record;
           draft.assignments[botId] = id;
         });
-        if (oldComputerId) releaseOrphanedControlScope(oldComputerId, next);
+        vmCreationTokens.set(id, creationToken);
+        if (oldComputerId) {
+          releaseOrphanedControlScope(oldComputerId, next);
+          await cleanupDepartedWorkspace(oldComputerId, botId, epoch);
+        }
         stale.delete(id);
         emit();
-        return computerStatus(botId, next)!;
+        return {
+          status: computerStatus(botId, next)!,
+          createdComputer: { computerId: id, creationToken },
+        };
       });
     },
 
@@ -2266,6 +2331,9 @@ export function createBotComputerHost(deps: BotComputerHostDependencies): BotCom
         const state = await readState();
         const vm = hasOwn(state.vms, id) ? state.vms[id] : undefined;
         if (!vm) throw new BotComputerError("no_computer", "That computer doesn't exist.");
+        if (options?.creationToken !== undefined && vmCreationTokens.get(id) !== options.creationToken) {
+          throw new BotComputerError("busy", `${vm.name} was not created by this change.`);
+        }
         const assigned = assignedBotsInState(state, id);
         if (assigned.length > 0 && !options?.force) {
           throw new BotComputerError(
@@ -2273,7 +2341,14 @@ export function createBotComputerHost(deps: BotComputerHostDependencies): BotCom
             `${vm.name} is still assigned to ${assigned.length === 1 ? "1 Bot" : `${assigned.length} Bots`}. Reassign or confirm deletion first.`,
           );
         }
-        if (runtimes.get(id)?.activeBotId !== undefined && !options?.force) {
+        const runtimeEntry = runtimes.get(id);
+        if (
+          !options?.force &&
+          runtimeEntry &&
+          (runtimeEntry.activeBotId !== undefined ||
+            runtimeEntry.start !== undefined ||
+            runtimeEntry.waiters.length > 0)
+        ) {
           throw new BotComputerError(
             "busy",
             `${vm.name} is currently in use. Wait for the Bot to finish or confirm deletion.`,
@@ -2289,6 +2364,7 @@ export function createBotComputerHost(deps: BotComputerHostDependencies): BotCom
             if (draft.assignments[botId] === id) delete draft.assignments[botId];
           }
         });
+        vmCreationTokens.delete(id);
         runtimes.get(id)?.cancelIdle?.();
         runtimes.delete(id);
         stale.delete(id);
@@ -2370,6 +2446,7 @@ export function createBotComputerHost(deps: BotComputerHostDependencies): BotCom
               });
               runtimes.get(currentId)?.cancelIdle?.();
               runtimes.delete(currentId);
+              vmCreationTokens.delete(currentId);
               stale.delete(currentId);
               control.forgetScope(currentId);
             } else {
@@ -2489,8 +2566,14 @@ export function createBotComputerHost(deps: BotComputerHostDependencies): BotCom
       for (let held = startsHeld(botId, computerId); held; held = startsHeld(botId, computerId)) {
         await untilDone(held, options.signal);
       }
-      if (isLegacyMacosVmRecord(vm, initialState)) {
-        if (!ready(initialState)) {
+      const postWaitState = await readState();
+      if (assignedComputerId(postWaitState, botId) !== computerId) {
+        return host.ensureRunning(botId, options);
+      }
+      vm = hasOwn(postWaitState.vms, computerId) ? postWaitState.vms[computerId] : undefined;
+      if (!vm) throw new BotComputerError("no_computer", `${await name(botId)} doesn't have a computer yet.`);
+      if (isLegacyMacosVmRecord(vm, postWaitState)) {
+        if (!ready(postWaitState)) {
           throw new BotComputerError(
             "not_set_up",
             "Bot computers now run Linux. Set up Bot computers in Settings → Computers & VMs to continue.",
@@ -2499,8 +2582,13 @@ export function createBotComputerHost(deps: BotComputerHostDependencies): BotCom
         if (setupTask) throw new BotComputerError("busy", "Wait for the base computer to finish updating.");
         // Automatically clone a fresh Linux VM from the newly set-up base so each migrated
         // Bot keeps its "has a computer" setting without manual Reset.
-        vm = await inTurn(vmTurnKey(computerId), async () => {
+        let driftedDuringLegacyUpgrade = false;
+        const upgraded = await inTurn(vmTurnKey(computerId), async () => {
           const latest = await readState();
+          if (assignedComputerId(latest, botId) !== computerId) {
+            driftedDuringLegacyUpgrade = true;
+            return undefined;
+          }
           const current = hasOwn(latest.vms, computerId) ? latest.vms[computerId] : undefined;
           if (!current) throw new BotComputerError("no_computer", `${await name(botId)} doesn't have a computer yet.`);
           if (!isLegacyMacosVmRecord(current, latest)) return current;
@@ -2532,6 +2620,10 @@ export function createBotComputerHost(deps: BotComputerHostDependencies): BotCom
           emitVm(computerId);
           return cloned;
         });
+        if (driftedDuringLegacyUpgrade || !upgraded) {
+          return host.ensureRunning(botId, options);
+        }
+        vm = upgraded;
       }
       if (stale.has(computerId)) {
         throw new BotComputerError("stale", `${await possessive(botId)} computer didn't finish being made. Reset it in the Bot's profile.`);
@@ -2543,7 +2635,12 @@ export function createBotComputerHost(deps: BotComputerHostDependencies): BotCom
           return host.ensureRunning(botId, options);
         }
         if (entry.state === "running" && entry.connection) {
-          await sharedDirForVm(vm, assignedBotsInState(initialState, computerId), botId);
+          const latestState = await readState();
+          const currentVm = hasOwn(latestState.vms, computerId) ? latestState.vms[computerId] : undefined;
+          if (assignedComputerId(latestState, botId) !== computerId || !currentVm || stale.has(computerId)) {
+            return host.ensureRunning(botId, options);
+          }
+          await sharedDirForVm(currentVm, assignedBotsInState(latestState, computerId), botId);
           if (assignmentDrifted(botId, computerId, entry) || stale.has(computerId)) {
             return host.ensureRunning(botId, options);
           }

@@ -46,6 +46,11 @@ export interface BotComputerGuestCommandResult {
   timedOut: boolean;
 }
 
+export interface BotComputerAssignResult {
+  status: BotComputerStatus;
+  createdComputer?: { computerId: string; creationToken: string };
+}
+
 export interface BotComputerHost {
   status(): Promise<BotComputersStatus>;
   /**
@@ -69,12 +74,14 @@ export interface BotComputerHost {
   deleteForBot(botId: string): Promise<void>;
   /** Assign a Bot to `"shared"`, an existing Linux computer, or a newly cloned dedicated Linux computer. */
   assignComputer(botId: string, target: BotComputerAssignTarget): Promise<BotComputerStatus>;
+  /** Same as `assignComputer`, also returning creation provenance if this call cloned a VM. */
+  assignComputerWithProvenance(botId: string, target: BotComputerAssignTarget): Promise<BotComputerAssignResult>;
   /** Create a new standalone dedicated Linux computer cloned from `aiden-base`. */
   createComputer(name?: string): Promise<BotComputerVmStatus>;
   /** Rename an existing Linux computer. */
   renameComputer(computerId: string, name: string): Promise<BotComputerVmStatus>;
-  /** Delete a Linux computer; refuses while Bots are assigned unless `options.force` is true. */
-  deleteComputer(computerId: string, options?: { force?: boolean }): Promise<void>;
+  /** Delete a Linux computer; refuses while Bots are assigned or active unless `options.force` is true. */
+  deleteComputer(computerId: string, options?: { force?: boolean; creationToken?: string }): Promise<void>;
   /** Stop, delete, and re-clone a Linux computer from the current `aiden-base`. */
   resetComputer(computerId: string, options?: { force?: boolean }): Promise<BotComputerVmStatus>;
   /**

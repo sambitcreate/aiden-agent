@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import type { BotAccessView } from "../../../renderer/shared/bot-capabilities.js";
 import { DEFAULT_BOT_AVATAR, type BotDefinition } from "../../../renderer/shared/bots.js";
+import { BotComputerError } from "../bot-computers/types.js";
 import { BotCapabilityRevisionConflictError } from "../bot-capability-store-core.js";
 import { BotIdentityRevisionConflictError } from "../bot-store-core.js";
 import { createBotSettingsPorts } from "./ports.js";
@@ -446,4 +447,143 @@ test("rollbackComputer unassigns a previously computer-less Bot and deletes a fr
   );
   assert.deepEqual(hadOld.currentComputer(), { kind: "existing", computerId: "vm-old" });
   assert.deepEqual(hadOld.deleted, ["shared"]);
+});
+
+test("computer write fails before assignComputer when readComputer or listComputers fails", async () => {
+  const bot: BotDefinition = {
+    id: BOT,
+    revision: "bot-1",
+    name: "Chief",
+    instructions: "Help me plan.",
+    avatar: { ...DEFAULT_BOT_AVATAR },
+    createdAt: 0,
+    updatedAt: 0,
+  };
+  let assignCalls = 0;
+
+  const makePorts = (overrides: { failRead?: boolean; failList?: boolean }) =>
+    createBotSettingsPorts({
+      profileDir: () => "/unused",
+      getBot: async () => structuredClone(bot),
+      modelSelection: async () => ({ providerId: "provider:a", modelId: "model:slow" }),
+      getBotAccess: async () => ({
+        botId: BOT,
+        revision: "access-1",
+        policyEpoch: "1",
+        summary: "",
+        accessMode: "full",
+      }),
+      capabilityCatalog: async () => ({ revision: "catalog-1", providers: [] }),
+      botWebSearchEnabled: async () => false,
+      readComputer: async () => {
+        if (overrides.failRead) throw new Error("state store corrupt");
+        return null;
+      },
+      listComputers: async () => {
+        if (overrides.failList) throw new Error("lume state unavailable");
+        return [];
+      },
+      assignComputer: async () => {
+        assignCalls += 1;
+      },
+      updateBotAccess: async () => {},
+      updateBot: async () => ({ revision: "bot-2" }),
+      cancelWakeUps: async () => {},
+      broadcastChanged: () => {},
+      appendEntry: async () => {},
+    });
+
+  const readFailPorts = makePorts({ failRead: true });
+  await assert.rejects(
+    readFailPorts.write(BOT, { computer: { kind: "shared" } }, JSON.stringify(["bot-1", "access-1"])),
+    /state store corrupt/u,
+  );
+  assert.equal(assignCalls, 0);
+
+  const listFailPorts = makePorts({ failList: true });
+  await assert.rejects(
+    listFailPorts.write(BOT, { computer: { kind: "shared" } }, JSON.stringify(["bot-1", "access-1"])),
+    /lume state unavailable/u,
+  );
+  assert.equal(assignCalls, 0);
+});
+
+test("rollback restores prior assignment before non-forced deleteComputer and preserves VM when another Bot attached", async () => {
+  let bot: BotDefinition = {
+    id: BOT,
+    revision: "bot-1",
+    name: "Chief",
+    instructions: "Help me plan.",
+    avatar: { ...DEFAULT_BOT_AVATAR },
+    createdAt: 0,
+    updatedAt: 0,
+  };
+  let botRevision = 1;
+  let currentComputer: { kind: "shared" } | { kind: "existing"; computerId: string } = { kind: "shared" };
+  const vms = [{ id: "shared", name: "Shared computer", kind: "shared" as const }];
+  const operations: string[] = [];
+  const deleteCalls: Array<{ computerId: string; options?: { force?: boolean; creationToken?: string } }> = [];
+
+  const ports = createBotSettingsPorts({
+    profileDir: () => "/unused",
+    getBot: async () => structuredClone(bot),
+    modelSelection: async () => ({ providerId: "provider:a", modelId: "model:slow" }),
+    getBotAccess: async () => ({
+      botId: BOT,
+      revision: "access-1",
+      policyEpoch: "1",
+      summary: "",
+      accessMode: "full",
+    }),
+    capabilityCatalog: async () => ({
+      revision: "catalog-1",
+      providers: [{ id: "provider:a", label: "A", available: true, models: [{ id: "model:fast", label: "Fast", available: true }] }],
+    }),
+    botWebSearchEnabled: async () => false,
+    readComputer: async () => currentComputer,
+    listComputers: async () => vms.map((vm) => ({ ...vm })),
+    assignComputer: async (_botId, target) => {
+      if (target.kind === "new") {
+        const createdId = "vm-shared-later";
+        operations.push(`assign-new:${createdId}`);
+        vms.push({ id: createdId, name: target.name ?? "New", kind: "dedicated" as never });
+        currentComputer = { kind: "existing", computerId: createdId };
+        return { createdComputer: { computerId: createdId, creationToken: "token-123" } };
+      }
+      operations.push(`assign-restore:${target.kind}`);
+      currentComputer = target;
+      return undefined;
+    },
+    deleteComputer: async (computerId, options) => {
+      operations.push(`delete:${computerId}`);
+      deleteCalls.push({ computerId, options });
+      throw new BotComputerError("busy", "Another Bot is now assigned to this computer.");
+    },
+    updateBotAccess: async () => {
+      throw new BotCapabilityRevisionConflictError("access-2");
+    },
+    updateBot: async (input) => {
+      botRevision += 1;
+      bot = { ...bot, name: input.name, description: input.description, instructions: input.instructions, avatar: input.avatar, revision: `bot-${botRevision}` };
+      return structuredClone(bot);
+    },
+    cancelWakeUps: async () => {},
+    broadcastChanged: () => {},
+    appendEntry: async () => {},
+  });
+
+  const { revision } = await ports.read(BOT);
+  await assert.rejects(
+    ports.write(BOT, { name: "Planner", model: FAST, computer: { kind: "new", name: "Shared Later" } }, revision),
+    BotSettingsConflictError,
+  );
+  assert.deepEqual(operations, ["assign-new:vm-shared-later", "assign-restore:shared", "delete:vm-shared-later"]);
+  assert.equal(deleteCalls.length, 1);
+  assert.deepEqual(deleteCalls[0], {
+    computerId: "vm-shared-later",
+    options: { force: false, creationToken: "token-123" },
+  });
+  assert.deepEqual(currentComputer, { kind: "shared" });
+  assert.equal(vms.some((vm) => vm.id === "vm-shared-later"), true, "VM busy with another Bot is preserved");
+  assert.equal(bot.name, "Chief");
 });

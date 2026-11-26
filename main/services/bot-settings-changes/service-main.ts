@@ -54,7 +54,8 @@ export const botSettingsChanges = createBotSettingsChangeService(createBotSettin
   },
   async assignComputer(botId, target) {
     if (!botComputersEnabled()) throw new Error("Bot computers need a Mac with Apple silicon.");
-    await botComputers().host.assignComputer(botId, target);
+    const { createdComputer } = await botComputers().host.assignComputerWithProvenance(botId, target);
+    return createdComputer ? { createdComputer } : undefined;
   },
   async unassignComputer(botId) {
     if (!botComputersEnabled()) return;
