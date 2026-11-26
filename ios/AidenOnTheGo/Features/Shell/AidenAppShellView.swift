@@ -184,6 +184,9 @@ struct AidenAppShellView: View {
     @State private var window = AidenWindowReader.Window()
     /// Whether the software keyboard is up. The compact dock gives way to it.
     @State private var keyboardIsUp = false
+    /// How far the drawer is open: the tabs slide aside by it at compact width.
+    @State private var drawerReveal = AidenDrawerReveal()
+    @Environment(\.aidenReduceMotion) private var reduceMotion
     /// The drawer over the tabs (`AidenDrawerView`).
     private var drawerIsOpen: Bool {
         get { navigation.drawerIsOpen }
@@ -432,7 +435,15 @@ struct AidenAppShellView: View {
         // accessory over a chat (iOS 27.1 simulator). The paths and chats
         // are the shell's, so the new one opens where the old one was.
         .id(navigation.besideList)
-        .gesture(AidenDrawerEdgeSwipe(isEnabled: opensDrawerFromEdge, layoutDirection: layoutDirection, onOpen: openDrawer))
+        // At compact width the tabs slide aside to show the drawer under them.
+        .modifier(AidenDrawerPush(reveal: drawerReveal, isEnabled: drawerPushesContent))
+        .gesture(AidenDrawerEdgeSwipe(
+            isEnabled: opensDrawerFromEdge,
+            layoutDirection: layoutDirection,
+            onBegan: beginDrawerSwipe,
+            onChanged: trackDrawerSwipe,
+            onEnded: endDrawerSwipe
+        ))
         // The drawer is modal: a clear full-screen presentation, so UIKit
         // takes everything under it (the tabs' hosts, bars, side rail and
         // accessory) out of VoiceOver's reach. Attached after the `.id`, so
@@ -460,6 +471,13 @@ struct AidenAppShellView: View {
                 }
         }
         .transaction(value: drawerIsOpen) { $0.disablesAnimations = true }
+        // Something other than the drawer's own close put it away (a route
+        // the navigation opened): the tabs slide back.
+        .onChange(of: drawerIsOpen) { _, isOpen in
+            guard !isOpen, drawerReveal.progress > 0 else { return }
+            drawerReveal.isTracking = false
+            drawerReveal.settle(open: false, reduceMotion: reduceMotion)
+        }
         // While the cover is up the drawer presents the flow; the shell can't.
         .aidenNewWorkPresentation(newWork, coordinator: coordinator, isActive: !drawerIsOpen)
         .sheet(item: $activeSheet) { sheet in
@@ -853,8 +871,12 @@ struct AidenAppShellView: View {
             && coordinator.presentedError == nil
     }
 
+    /// The tabs slide aside for the drawer on a stack; beside the list it
+    /// lays over them.
+    private var drawerPushesContent: Bool { !navigation.besideList }
+
     private var drawerOverlay: some View {
-        AidenDrawerOverlay(onClose: closeDrawer) { slideOut in
+        AidenDrawerOverlay(reveal: drawerReveal, pushesContent: drawerPushesContent, close: closeDrawer) {
             AidenDrawerView(
                 search: built.search,
                 coordinator: coordinator,
@@ -873,7 +895,7 @@ struct AidenAppShellView: View {
                     // list that its pick put away comes back over it.
                     if navigation.besideList { chatsColumns.visibility = .all }
                 },
-                onClose: slideOut
+                onClose: closeDrawer
             ) {
                 if hasNoComputers {
                     // Pairing is the shell's sheet, so the drawer goes first.
@@ -902,17 +924,61 @@ struct AidenAppShellView: View {
     }
 
     private func openDrawer() {
-        drawerIsOpen = true
+        drawerReveal.isTracking = false
+        if drawerIsOpen {
+            // Reopened while it was sliding shut.
+            drawerReveal.settle(open: true, reduceMotion: reduceMotion)
+        } else {
+            // The cover slides the drawer in once it's up.
+            drawerIsOpen = true
+        }
     }
 
     private func closeDrawer() {
         closeDrawer(refocusingMenu: true)
     }
 
+    /// Slides the drawer shut, and the tabs back, then takes its cover away.
+    /// Whatever the person picked opens underneath meanwhile.
     private func closeDrawer(refocusingMenu: Bool) {
         guard drawerIsOpen else { return }
-        drawerIsOpen = false
-        if refocusingMenu { focusedMenuButton = navigation.tab }
+        drawerReveal.isTracking = false
+        drawerReveal.settle(open: false, reduceMotion: reduceMotion) {
+            drawerIsOpen = false
+            if refocusingMenu { focusedMenuButton = navigation.tab }
+        }
+    }
+
+    /// A finger on the leading edge: the drawer comes up shut and follows it.
+    private func beginDrawerSwipe() {
+        drawerReveal.isTracking = true
+        drawerReveal.progress = 0
+        drawerIsOpen = true
+    }
+
+    private func trackDrawerSwipe(_ movement: AidenDrawerEdgeSwipe.Movement) {
+        guard drawerReveal.isTracking else { return }
+        drawerReveal.progress = AidenDrawerGeometry.progress(
+            start: 0, translation: movement.translation, width: drawerReveal.travel,
+            rightToLeft: layoutDirection == .rightToLeft
+        )
+    }
+
+    /// Let go: open or shut by where it is and how fast it was moving.
+    private func endDrawerSwipe(_ movement: AidenDrawerEdgeSwipe.Movement?) {
+        guard drawerReveal.isTracking else { return }
+        drawerReveal.isTracking = false
+        let staysOpen = movement.map {
+            AidenDrawerGeometry.settlesOpen(
+                progress: drawerReveal.progress, velocity: $0.velocity, width: drawerReveal.travel,
+                rightToLeft: layoutDirection == .rightToLeft
+            )
+        } ?? false
+        if staysOpen {
+            drawerReveal.settle(open: true, reduceMotion: reduceMotion)
+        } else {
+            closeDrawer(refocusingMenu: false)
+        }
     }
 
     /// Beside the list a conversation keeps the system tabs, which stay

@@ -14,6 +14,14 @@ Branch `claude/ios-home-chrome`, stacked on `claude/ios-home-aurora` (#931). Own
 - `@ScaledMetric` reads the environment above the dock's `.dynamicTypeSize(...xxxLarge)` clamp, so the icon sizes are capped by hand (dock 27, header 24).
 - Reselect at a tab's root does not scroll to top yet (deferred: needs a scroll hook across the four list containers alongside `AidenListScrollKeeper`).
 
+## Push/reveal drawer (concept 03, 2026-11-25)
+- Owner: "the whole view shifts to the right and shows the drawer underneath". Compact width only (`drawerPushesContent = !navigation.besideList`, so the closed Duo pushes too); beside the list it stays an overlay with a scrim.
+- Still a clear `fullScreenCover` (modality and VoiceOver). The shared `@Observable AidenDrawerReveal.progress` (0...1) drives both `AidenDrawerPush` on the TabView (offset by `travel * progress`, continuous corner radius 40 while moved) and the cover, which masks the drawer to the revealed width and puts a clear **Close menu** button (`aiden.drawer.close`, `.cancelAction`) over the slice.
+- Geometry is pure in `AidenDrawerGeometry` (`AidenDrawerModel.swift`), unit-tested in `AidenShellIATests`. `AidenDrawerEdgeSwipe` reports began/changed/ended in window space; the shell's `beginDrawerSwipe` puts the cover up at progress 0 and tracks.
+- Close always animates progress to 0 first, then sets `drawerIsOpen = false` in `settle`'s completion (guarded by a settle id). External closes (`navigation.dismissDrawer`) are caught by `.onChange(of: drawerIsOpen)` and slide back.
+- UI test `testOpeningTheDrawerSlidesHomeAsideAndTheSliceClosesIt` checks the menu button's frame moves past half the window and the slice tap restores it (it waits for Home to settle: the closed Duo is still sliding when the slice appears).
+- Sideways (phones keep the stack in landscape, Pro Max too) the drawer column starts at the safe leading inset, so Home travels column + inset (`AidenDrawerGeometry.travel`, `AidenDrawerReveal.travel`) and the column is sized from the usable width. Before this the drawer's compose sat under Home's slice. Note: a fixed-width mask/overlay child with `.ignoresSafeArea()` lays out from the screen's x=0, not the safe edge. Covered by `testSidewaysTheDrawerStartsPastTheCameraAndHomeMovesPastBoth` (unit) and `testSidewaysHomeMovesClearOfTheWholeDrawer` (UI). Right-to-left mirrors correctly; Reduce Motion crossfades over a still, dimmed Home.
+
 ## Gotchas
 - A `safeAreaInset`/`safeAreaBar` outside a `NavigationStack` doesn't reach the list inside it; the dock must be each screen's own bar.
 - The closed Duo draws a hard scroll edge under a bottom bar unless `.scrollEdgeEffectStyle(.soft, ...)` (via `aidenComposerSoftScrollEdge()`).

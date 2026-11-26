@@ -16,8 +16,9 @@ struct AidenDrawerPinButton: View {
 }
 
 /// The drawer: the person's pins, recent chats and the pages with no tab of
-/// their own, over a search field that searches every chat and Bot. It lays
-/// over the content from the leading edge at every width (`AidenDrawerOverlay`).
+/// their own, over a search field that searches every chat and Bot. At
+/// compact width it lies under the screen, which slides aside to show it; at
+/// regular width it lays over the content (`AidenDrawerOverlay`).
 struct AidenDrawerView<Compose: View>: View {
     /// The shell's, so the query and what it found outlive a fold and the
     /// drawer closing.
@@ -74,27 +75,16 @@ struct AidenDrawerView<Compose: View>: View {
 
     // MARK: Header
 
+    /// The concept's header: the name alone. The screen pushed aside is the
+    /// close target (`AidenDrawerOverlay`), so there's no close button here.
     private var header: some View {
-        HStack {
-            Text("Aiden")
-                .font(.title2.bold())
-                .accessibilityAddTraits(.isHeader)
-                .accessibilityFocused($headingIsFocused)
-            Spacer()
-            Button(action: onClose) {
-                Label("Close menu", systemImage: "xmark")
-                    .labelStyle(.iconOnly)
-                    .frame(width: 44, height: 44)
-                    .contentShape(Rectangle())
-            }
-            .buttonStyle(.plain)
-            .foregroundStyle(palette.secondary)
-            // A hardware keyboard's Escape.
-            .keyboardShortcut(.cancelAction)
-        }
-        .padding(.leading, AidenSpacing.xl)
-        .padding(.trailing, AidenSpacing.s)
-        .padding(.top, AidenSpacing.s)
+        Text("Aiden")
+            .font(.title.bold())
+            .accessibilityAddTraits(.isHeader)
+            .accessibilityFocused($headingIsFocused)
+            .frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
+            .padding(.horizontal, AidenSpacing.xl)
+            .padding(.top, AidenSpacing.s)
     }
 
     // MARK: Sections
@@ -244,16 +234,13 @@ struct AidenDrawerView<Compose: View>: View {
         HStack(spacing: AidenSpacing.s) {
             Button { onOpen(.settings) } label: {
                 Label("Settings", systemImage: "gearshape")
-                    .labelStyle(.iconOnly)
-                    .frame(width: 44, height: 44)
-                    .contentShape(Rectangle())
             }
-            .buttonStyle(.plain)
+            .buttonStyle(AidenDrawerIconButtonStyle(fill: .raised))
             searchField
             // The style reaches the shell's own button, so its whole 44pt
             // square takes the tap, not only the glyph.
             compose()
-                .buttonStyle(AidenDrawerIconButtonStyle())
+                .buttonStyle(AidenDrawerIconButtonStyle(fill: .prominent))
         }
         .padding(.horizontal, AidenSpacing.m)
         .padding(.vertical, AidenSpacing.s)
@@ -287,7 +274,7 @@ struct AidenDrawerView<Compose: View>: View {
             }
         }
         .padding(.horizontal, AidenSpacing.m)
-        .frame(minHeight: 44)
+        .frame(minHeight: 48)
         .background(palette.raised, in: Capsule())
         // The whole 44pt capsule focuses the field, and it's the frame
         // accessibility reports for it (the field alone is one line tall).
@@ -296,92 +283,244 @@ struct AidenDrawerView<Compose: View>: View {
     }
 }
 
-/// An icon-only button whose 44pt square, not only its glyph, takes the tap.
+/// The drawer bar's round buttons (concept 03): Settings on the raised fill,
+/// compose on the foreground colour. The whole circle takes the tap.
 private struct AidenDrawerIconButtonStyle: ButtonStyle {
+    enum Fill { case raised, prominent }
+    let fill: Fill
+
     func makeBody(configuration: Configuration) -> some View {
-        IconLabel(configuration: configuration)
+        IconLabel(configuration: configuration, fill: fill)
     }
 
     private struct IconLabel: View {
         let configuration: Configuration
+        let fill: Fill
         @Environment(\.isEnabled) private var isEnabled
         @Environment(\.aidenPalette) private var palette
+        @Environment(\.aidenReduceMotion) private var reduceMotion
 
         var body: some View {
             configuration.label
                 .labelStyle(.iconOnly)
                 .font(.title3)
-                .foregroundStyle(isEnabled ? palette.accent : palette.secondary)
-                .frame(minWidth: 44, minHeight: 44)
-                .contentShape(Rectangle())
-                .opacity(configuration.isPressed ? 0.5 : 1)
+                .foregroundStyle(fill == .prominent ? palette.canvas : palette.foreground)
+                .frame(width: 48, height: 48)
+                .background(fill == .prominent ? palette.foreground : palette.raised, in: Circle())
+                .contentShape(Circle())
+                .opacity(isEnabled ? (configuration.isPressed ? 0.6 : 1) : 0.4)
+                .scaleEffect(configuration.isPressed && !reduceMotion ? 0.94 : 1)
+                .animation(reduceMotion ? nil : .snappy(duration: 0.2), value: configuration.isPressed)
         }
     }
 }
 
-/// Lays the drawer over the content from the leading edge, with a dimmed
-/// scrim behind it, at every width. The scrim, a swipe toward the edge, or
-/// Escape closes it. Reduce Motion fades it in place of the slide.
+/// How far the drawer is open, shared by the screen it pushes aside and the
+/// drawer itself, so the two move as one while a finger drags them.
+@MainActor @Observable
+final class AidenDrawerReveal {
+    /// 0 shut, 1 open.
+    var progress: CGFloat = 0
+    /// The window's width and its leading safe-area inset, from the shell, so
+    /// the screen and the drawer agree on the column (`AidenDrawerGeometry`).
+    var containerWidth: CGFloat = 0
+    var leadingInset: CGFloat = 0
+    /// A finger on the screen's edge is opening it, so the drawer doesn't run
+    /// its own slide in when it appears.
+    var isTracking = false
+    /// Counts each settle, so a close that finishes after the drawer was
+    /// reopened doesn't put it away.
+    @ObservationIgnored private var settleID = 0
+
+    /// How far the pushed screen moves for the whole drawer, and so how far
+    /// a finger drags to open or close it.
+    var travel: CGFloat { AidenDrawerGeometry.travel(in: containerWidth, leadingInset: leadingInset) }
+
+    static func motion(reduceMotion: Bool) -> Animation {
+        reduceMotion ? .easeInOut(duration: 0.2) : .smooth(duration: 0.32)
+    }
+
+    /// Slides it open or shut, then runs `completion`, unless another settle
+    /// started in the meantime.
+    func settle(open: Bool, reduceMotion: Bool, completion: @escaping () -> Void = {}) {
+        settleID += 1
+        let id = settleID
+        withAnimation(Self.motion(reduceMotion: reduceMotion)) {
+            progress = open ? 1 : 0
+        } completion: { [weak self] in
+            guard let self, self.settleID == id else { return }
+            completion()
+        }
+    }
+}
+
+/// Moves the screen aside for the drawer at compact width: it slides toward
+/// the trailing edge by the drawer's width, its corners rounded like the
+/// concept's card, and the shell records the window's width for both. Off
+/// (beside the list, or Reduce Motion) it stays in place.
+struct AidenDrawerPush: ViewModifier {
+    let reveal: AidenDrawerReveal
+    let isEnabled: Bool
+    @Environment(\.aidenReduceMotion) private var reduceMotion
+
+    static let cornerRadius: CGFloat = 40
+
+    private struct Window: Equatable {
+        var width: CGFloat
+        var leadingInset: CGFloat
+    }
+
+    func body(content: Content) -> some View {
+        let progress = isEnabled ? reveal.progress : 0
+        let offset = AidenDrawerGeometry.contentOffset(
+            progress: progress, travel: reveal.travel, reduceMotion: reduceMotion
+        )
+        content
+            .onGeometryChange(for: Window.self) { proxy in
+                let insets = proxy.safeAreaInsets
+                return Window(width: proxy.size.width + insets.leading + insets.trailing, leadingInset: insets.leading)
+            } action: { window in
+                reveal.containerWidth = window.width
+                reveal.leadingInset = window.leadingInset
+            }
+            // Rounded only while it's moved; at rest nothing is clipped, so
+            // what draws into the safe area keeps doing so.
+            .mask {
+                RoundedRectangle(cornerRadius: offset > 0 ? Self.cornerRadius : 0, style: .continuous)
+                    .padding(offset > 0 ? 0 : -400)
+                    .ignoresSafeArea()
+            }
+            .offset(x: offset)
+    }
+}
+
+/// The drawer, presented by the shell as a clear full-screen cover so it's
+/// modal. At compact width (`pushesContent`) the screen under the cover slides
+/// aside (`AidenDrawerPush`) and the drawer shows in the space it leaves, as
+/// if lying beneath it; the slice of the screen still in view closes it. At
+/// regular width it lays over the content with a dimmed scrim. A drag toward
+/// the leading edge or Escape closes it, and Reduce Motion fades it in place.
 ///
-/// The shell presents it as a clear full-screen cover with no animation of
-/// its own, so it slides in when it appears and slides out before it asks to
-/// be closed (`onClose`).
+/// The cover comes and goes without the system's animation; the drawer runs
+/// its own slide in when it appears and the shell slides it out before it
+/// takes the cover away (`close`).
 struct AidenDrawerOverlay<Drawer: View>: View {
-    let onClose: () -> Void
-    /// Gets the overlay's own close, which slides the drawer out first.
-    @ViewBuilder let drawer: (_ close: @escaping () -> Void) -> Drawer
+    let reveal: AidenDrawerReveal
+    let pushesContent: Bool
+    /// Slides it shut, then takes the cover away.
+    let close: () -> Void
+    @ViewBuilder let drawer: () -> Drawer
 
     @Environment(\.aidenReduceMotion) private var reduceMotion
     @Environment(\.aidenPalette) private var palette
-    @State private var isOpen = false
-    @State private var isClosing = false
+    @Environment(\.layoutDirection) private var layoutDirection
+    /// A drag's direction, fixed by its first move: only a sideways drag moves the drawer.
+    @State private var dragIsSideways: Bool?
 
-    private var motion: Animation {
-        reduceMotion ? .easeInOut(duration: 0.2) : .smooth(duration: 0.3)
-    }
-
-    private func close() {
-        guard !isClosing else { return }
-        isClosing = true
-        withAnimation(motion) {
-            isOpen = false
-        } completion: {
-            onClose()
-        }
-    }
-
-    static func width(in container: CGFloat) -> CGFloat {
-        min(360, (container * 0.85).rounded(.down))
-    }
+    /// Whether the screen slides aside, not only the drawer.
+    private var slides: Bool { pushesContent && !reduceMotion }
 
     var body: some View {
         GeometryReader { proxy in
+            let inset = proxy.safeAreaInsets.leading
+            let container = proxy.size.width + inset + proxy.safeAreaInsets.trailing
+            let width = AidenDrawerGeometry.width(in: container, leadingInset: inset)
+            let travel = AidenDrawerGeometry.travel(in: container, leadingInset: inset)
+            let progress = reveal.progress
+            // The part of the window the drawer shows in, from its leading
+            // edge (the masks and the slice ignore the safe area, so they
+            // measure from there; the drawer's column starts after the inset).
+            let revealed = slides ? travel * progress : travel
             ZStack(alignment: .leading) {
-                if isOpen {
+                if !slides {
                     palette.scrim
+                        .opacity(progress)
                         .ignoresSafeArea()
-                        .contentShape(Rectangle())
-                        .onTapGesture(perform: close)
                         .accessibilityHidden(true)
-                        .transition(.opacity)
-                    drawer(close)
-                        .frame(width: Self.width(in: proxy.size.width + proxy.safeAreaInsets.leading))
-                        .frame(maxHeight: .infinity)
-                        .simultaneousGesture(
-                            DragGesture(minimumDistance: 20).onEnded { value in
-                                let dx = value.translation.width
-                                if dx < -60, abs(dx) > abs(value.translation.height) { close() }
-                            }
-                        )
-                        .transition(reduceMotion ? .opacity : .move(edge: .leading))
                 }
+                drawer()
+                    .frame(width: width)
+                    .frame(maxHeight: .infinity)
+                    .offset(x: drawerOffset(progress: progress, width: width))
+                    .opacity(reduceMotion ? progress : 1)
+                    .mask(alignment: .leading) {
+                        Rectangle()
+                            .frame(width: max(0, revealed))
+                            .ignoresSafeArea()
+                    }
+                if slides {
+                    // The pushed screen's shadow across the drawer's edge.
+                    LinearGradient(
+                        colors: [.clear, .black.opacity(0.10)],
+                        startPoint: .leading, endPoint: .trailing
+                    )
+                    .frame(width: 18)
+                    .offset(x: revealed - 18)
+                    .opacity(progress)
+                    .ignoresSafeArea()
+                    .allowsHitTesting(false)
+                    .accessibilityHidden(true)
+                }
+                closeTarget
+                    .frame(width: max(0, container - revealed))
+                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .trailing)
+                    .ignoresSafeArea()
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .leading)
+            .simultaneousGesture(dragToClose(travel: travel))
         }
-        .allowsHitTesting(isOpen)
         .onAppear {
-            withAnimation(motion) { isOpen = true }
+            guard !reveal.isTracking, reveal.progress < 1 else { return }
+            reveal.settle(open: true, reduceMotion: reduceMotion)
         }
+    }
+
+    /// The pushed screen's slice, or the scrim: a tap puts the drawer away.
+    private var closeTarget: some View {
+        Button(action: close) {
+            Color.clear.contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel("Close menu")
+        .accessibilityIdentifier("aiden.drawer.close")
+        // A hardware keyboard's Escape.
+        .keyboardShortcut(.cancelAction)
+    }
+
+    private func drawerOffset(progress: CGFloat, width: CGFloat) -> CGFloat {
+        if reduceMotion { return 0 }
+        if slides { return AidenDrawerGeometry.drawerOffset(progress: progress, width: width, reduceMotion: false) }
+        // Over the content it slides in whole from the leading edge.
+        return -(1 - progress) * width
+    }
+
+    /// The drawer follows a sideways drag and settles by where it's let go
+    /// and how fast. Global coordinates, so the drawer moving under the
+    /// finger doesn't change the drag's own measure.
+    private func dragToClose(travel: CGFloat) -> some Gesture {
+        DragGesture(minimumDistance: 12, coordinateSpace: .global)
+            .onChanged { value in
+                if dragIsSideways == nil {
+                    dragIsSideways = abs(value.translation.width) > abs(value.translation.height)
+                }
+                guard dragIsSideways == true else { return }
+                reveal.progress = AidenDrawerGeometry.progress(
+                    start: 1, translation: value.translation.width, width: travel,
+                    rightToLeft: layoutDirection == .rightToLeft
+                )
+            }
+            .onEnded { value in
+                defer { dragIsSideways = nil }
+                guard dragIsSideways == true else { return }
+                if AidenDrawerGeometry.settlesOpen(
+                    progress: reveal.progress, velocity: value.velocity.width, width: travel,
+                    rightToLeft: layoutDirection == .rightToLeft
+                ) {
+                    reveal.settle(open: true, reduceMotion: reduceMotion)
+                } else {
+                    close()
+                }
+            }
     }
 }
 
@@ -389,12 +528,23 @@ struct AidenDrawerOverlay<Drawer: View>: View {
 /// drawer. A screen-edge recogniser, not an invisible strip over the content,
 /// so a tap at the edge and a row's leading swipe that starts inside the
 /// screen still reach what's under them. Off (`isEnabled`), it never begins,
-/// so a pushed screen's own Back swipe keeps the edge.
+/// so a pushed screen's own Back swipe keeps the edge. The drawer follows the
+/// finger, and where and how fast it's let go decides whether it stays open.
 struct AidenDrawerEdgeSwipe: UIGestureRecognizerRepresentable {
+    /// A swipe's travel and speed, in points on the screen (not mirrored for
+    /// a right-to-left language).
+    struct Movement {
+        var translation: CGFloat
+        var velocity: CGFloat
+    }
+
     let isEnabled: Bool
     /// The leading edge, on the screen.
     let layoutDirection: LayoutDirection
-    let onOpen: () -> Void
+    let onBegan: () -> Void
+    let onChanged: (Movement) -> Void
+    /// Nil when the system cancelled the swipe.
+    let onEnded: (Movement?) -> Void
 
     func makeUIGestureRecognizer(context: Context) -> UIScreenEdgePanGestureRecognizer {
         let recognizer = UIScreenEdgePanGestureRecognizer()
@@ -424,9 +574,20 @@ struct AidenDrawerEdgeSwipe: UIGestureRecognizerRepresentable {
     }
 
     func handleUIGestureRecognizerAction(_ recognizer: UIScreenEdgePanGestureRecognizer, context: Context) {
-        guard recognizer.state == .ended, isEnabled else { return }
-        let dx = abs(recognizer.translation(in: recognizer.view).x)
-        if dx > 40 { onOpen() }
+        // The window's space: the shell's view slides with the drawer, so its
+        // own space would move under the finger.
+        let space = recognizer.view?.window
+        let movement = Movement(
+            translation: recognizer.translation(in: space).x,
+            velocity: recognizer.velocity(in: space).x
+        )
+        switch recognizer.state {
+        case .began: onBegan(); onChanged(movement)
+        case .changed: onChanged(movement)
+        case .ended: onEnded(movement)
+        case .cancelled, .failed: onEnded(nil)
+        default: break
+        }
     }
 
     func makeCoordinator(converter: CoordinateSpaceConverter) -> Coordinator { Coordinator() }

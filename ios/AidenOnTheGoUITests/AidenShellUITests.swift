@@ -109,6 +109,72 @@ final class AidenShellUITests: XCTestCase {
         app.terminate()
     }
 
+    /// On a phone the drawer sits under Home: opening it slides Home aside to
+    /// show it, and a tap on the slice of Home still in view slides it back.
+    func testOpeningTheDrawerSlidesHomeAsideAndTheSliceClosesIt() throws {
+        let app = AidenStateMatrix.launch(scenario: .busy, startingTab: nil)
+        XCTAssertTrue(AidenStateMatrix.homeRoot(in: app).waitForExistence(timeout: 10), "A first launch opens on Chats")
+        let window = AidenStateMatrix.window(of: app)
+        try XCTSkipIf(window.frame.width > AidenStateMatrix.compactWidth, "Beside the list the drawer lays over the columns")
+        let menu = app.buttons["Open menu"].firstMatch
+        XCTAssertTrue(menu.waitForExistence(timeout: 10), "No menu button")
+        let restingX = menu.frame.minX
+
+        openDrawer(in: app)
+        XCTAssertTrue(
+            waitUntil(timeout: 5) { menu.frame.minX > restingX + window.frame.width * 0.5 },
+            "Home did not slide aside for the drawer"
+        )
+        // What's left of Home is the close target: from the drawer's edge to the window's.
+        // A slower phone may still be sliding, so give Home the moment it takes to settle.
+        let slice = app.buttons["Close menu"].firstMatch
+        XCTAssertTrue(slice.waitForExistence(timeout: 5), "The drawer did not open")
+        XCTAssertTrue(
+            waitUntil(timeout: 3) { abs(slice.frame.minX - (menu.frame.minX - restingX)) <= 1 },
+            "The close target is not Home's slice: slice starts at \(slice.frame.minX), Home moved \(menu.frame.minX - restingX)"
+        )
+        XCTAssertEqual(slice.frame.maxX, window.frame.maxX, accuracy: 1, "The close target stops short of the window's edge")
+
+        slice.tap()
+        XCTAssertTrue(slice.waitForNonExistence(timeout: 5), "A tap on Home's slice left the drawer up")
+        XCTAssertTrue(
+            waitUntil(timeout: 3) { abs(menu.frame.minX - restingX) <= 1 },
+            "Home did not slide back"
+        )
+        XCTAssertTrue(menu.isHittable, "Home is out of reach after the drawer closed")
+        app.terminate()
+    }
+
+    /// Held sideways the drawer's column starts past the camera's inset, and
+    /// Home moves past both, so nothing of the drawer's bar sits under Home's
+    /// slice: compose is still there to tap.
+    func testSidewaysHomeMovesClearOfTheWholeDrawer() throws {
+        try XCTSkipIf(UIDevice.current.userInterfaceIdiom != .phone, "Only a phone keeps the stack held sideways")
+        let app = AidenStateMatrix.launch(scenario: .busy, startingTab: nil)
+        XCTAssertTrue(AidenStateMatrix.homeRoot(in: app).waitForExistence(timeout: 10), "A first launch opens on Chats")
+        XCUIDevice.shared.orientation = .landscapeLeft
+        defer { XCUIDevice.shared.orientation = .portrait }
+        let window = AidenStateMatrix.window(of: app)
+        XCTAssertTrue(waitUntil(timeout: 5) { window.frame.width > window.frame.height }, "The phone did not turn")
+
+        openDrawer(in: app)
+        let slice = app.buttons["Close menu"].firstMatch
+        XCTAssertTrue(slice.waitForExistence(timeout: 5), "The drawer did not open")
+        let search = searchField(in: app)
+        XCTAssertTrue(search.exists, "No search in the drawer")
+        // Settled: the slice runs from where Home now starts to the window's edge.
+        XCTAssertTrue(
+            waitUntil(timeout: 3) { slice.frame.minX > search.frame.maxX },
+            "Home's slice covers the drawer's search"
+        )
+        let drawerCompose = app.buttons.matching(NSPredicate(format: "label == %@", "New chat")).allElementsBoundByIndex
+            .first { $0.frame.minX > search.frame.maxX && abs($0.frame.midY - search.frame.midY) < 24 }
+        let compose = try XCTUnwrap(drawerCompose, "No compose beside the drawer's search")
+        XCTAssertLessThanOrEqual(compose.frame.maxX, slice.frame.minX + 1, "Home's slice covers the drawer's compose")
+        XCTAssertTrue(compose.isHittable, "The drawer's compose is out of reach")
+        app.terminate()
+    }
+
     /// Show all chats puts the chat list on screen. On a phone, opened from
     /// another tab, it lands on Chats' list. Beside the list, a list laid over the
     /// chat (an iPad, or an open iPhone Duo, in portrait) that the pick put

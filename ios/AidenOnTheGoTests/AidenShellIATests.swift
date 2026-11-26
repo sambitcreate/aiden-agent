@@ -401,6 +401,71 @@ final class AidenShellIATests: XCTestCase {
         XCTAssertEqual(AidenChatsList.entries(snapshots: [snapshot("studio", chats: chats)], hiddenMachines: [], limit: -1), [])
     }
 
+    // MARK: Drawer reveal
+
+    func testTheDrawerTakesTheConceptsShareAndLeavesASliceOfHome() {
+        // A Pro Max-class screen, as drawn: 330 of its 402 points.
+        XCTAssertEqual(AidenDrawerGeometry.width(in: 402), 330)
+        // A narrow screen keeps a slice of Home in view to tap.
+        XCTAssertEqual(AidenDrawerGeometry.width(in: 320), 263)
+        XCTAssertGreaterThanOrEqual(320 - AidenDrawerGeometry.width(in: 320), 56)
+        XCTAssertEqual(AidenDrawerGeometry.width(in: 60), 4)
+        // A wide one stops growing it.
+        XCTAssertEqual(AidenDrawerGeometry.width(in: 700), 360)
+        XCTAssertEqual(AidenDrawerGeometry.width(in: 0), 0)
+    }
+
+    func testSidewaysTheDrawerStartsPastTheCameraAndHomeMovesPastBoth() {
+        // A Pro Max held sideways: 956 wide, 62 of them beside the camera.
+        let column = AidenDrawerGeometry.width(in: 956, leadingInset: 62)
+        XCTAssertEqual(column, 360)
+        // Home clears the inset and the whole column, so nothing of the drawer sits under it.
+        XCTAssertEqual(AidenDrawerGeometry.travel(in: 956, leadingInset: 62), 422)
+        // Upright there's no inset and Home moves by the column alone.
+        XCTAssertEqual(AidenDrawerGeometry.travel(in: 402, leadingInset: 0), 330)
+        // A slice of Home stays in view past the inset too.
+        let narrow = AidenDrawerGeometry.travel(in: 400, leadingInset: 62)
+        XCTAssertGreaterThanOrEqual(400 - narrow, AidenDrawerGeometry.minimumSlice)
+        XCTAssertEqual(AidenDrawerGeometry.travel(in: 50, leadingInset: 62), 0)
+    }
+
+    func testTheRevealFollowsTheFingerAndStaysInRange() {
+        let width: CGFloat = 330
+        XCTAssertEqual(AidenDrawerGeometry.progress(start: 0, translation: 165, width: width, rightToLeft: false), 0.5)
+        XCTAssertEqual(AidenDrawerGeometry.progress(start: 0, translation: 500, width: width, rightToLeft: false), 1)
+        XCTAssertEqual(AidenDrawerGeometry.progress(start: 0, translation: -40, width: width, rightToLeft: false), 0)
+        // Dragging an open drawer back toward the leading edge closes it.
+        XCTAssertEqual(AidenDrawerGeometry.progress(start: 1, translation: -66, width: width, rightToLeft: false), 0.8, accuracy: 0.0001)
+        // Right to left, the leading edge is on the right, so the finger moves left.
+        XCTAssertEqual(AidenDrawerGeometry.progress(start: 0, translation: -165, width: width, rightToLeft: true), 0.5)
+        XCTAssertEqual(AidenDrawerGeometry.progress(start: 0, translation: 165, width: width, rightToLeft: true), 0)
+    }
+
+    func testLettingGoSettlesByPositionUnlessItWasAFlick() {
+        let width: CGFloat = 330
+        // Slow: whichever side of halfway it would coast to.
+        XCTAssertTrue(AidenDrawerGeometry.settlesOpen(progress: 0.6, velocity: 0, width: width, rightToLeft: false))
+        XCTAssertFalse(AidenDrawerGeometry.settlesOpen(progress: 0.4, velocity: 0, width: width, rightToLeft: false))
+        // A modest push carries a 40% reveal past halfway.
+        XCTAssertTrue(AidenDrawerGeometry.settlesOpen(progress: 0.4, velocity: 300, width: width, rightToLeft: false))
+        // A flick wins whatever the position.
+        XCTAssertTrue(AidenDrawerGeometry.settlesOpen(progress: 0.1, velocity: 900, width: width, rightToLeft: false))
+        XCTAssertFalse(AidenDrawerGeometry.settlesOpen(progress: 0.9, velocity: -900, width: width, rightToLeft: false))
+        // Right to left, a flick to the left opens it.
+        XCTAssertTrue(AidenDrawerGeometry.settlesOpen(progress: 0.1, velocity: -900, width: width, rightToLeft: true))
+        XCTAssertFalse(AidenDrawerGeometry.settlesOpen(progress: 0.9, velocity: 900, width: width, rightToLeft: true))
+    }
+
+    func testHomeSlidesByTheRevealAndHoldsStillUnderReduceMotion() {
+        XCTAssertEqual(AidenDrawerGeometry.contentOffset(progress: 0.5, travel: 330, reduceMotion: false), 165)
+        XCTAssertEqual(AidenDrawerGeometry.contentOffset(progress: 1.4, travel: 330, reduceMotion: false), 330)
+        XCTAssertEqual(AidenDrawerGeometry.contentOffset(progress: 1, travel: 330, reduceMotion: true), 0)
+        // The drawer drifts in from a little behind, and is in place once open.
+        XCTAssertLessThan(AidenDrawerGeometry.drawerOffset(progress: 0, width: 330, reduceMotion: false), 0)
+        XCTAssertEqual(AidenDrawerGeometry.drawerOffset(progress: 1, width: 330, reduceMotion: false), 0)
+        XCTAssertEqual(AidenDrawerGeometry.drawerOffset(progress: 0, width: 330, reduceMotion: true), 0)
+    }
+
     // MARK: Pins
 
     func testPinsToggleInOrderAndSurviveARelaunch() {
