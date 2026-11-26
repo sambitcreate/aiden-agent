@@ -294,19 +294,41 @@ a second artifact:
    distribution staging; mandatory Developer ID and notarization preflight;
    nested signature, staple, Gatekeeper, entitlement, fuse, and
    packaged-resource validation; privacy documentation; the full test suite;
-   and an opt-in operator-driven real-driver smoke against an isolated profile
-   and uniquely titled disposable TextEdit window. The smoke seeds both gates
-   off, then uses the normal Settings, macOS TCC, per-chat access card, Stop, and
-   quit paths with a capability-authenticated, loopback-only scripted
-   vision/tool model—never a privileged test backdoor. It validates and owns the
-   exact system TextEdit executable, correlates every result to its tool-call ID
-   and exact PID/window, rejects failed or denied actions, and verifies the saved
-   marker and post-action capture. Only the visible Stop control emits the
-   content-free explicit user-Stop event; unmount/navigation cleanup cannot
-   satisfy this evidence. The harness proves Stop reaped the helper while Aiden
-   remained alive and only then accepts a normal app quit. Failure cleanup
-   actively TERM-to-KILLs only exact package-owned broker/driver and disposable
-   TextEdit processes with PID-reuse checks.
+   and an opt-in operator-driven real-desktop acceptance run on macOS against an
+   isolated profile and two uniquely titled disposable TextEdit windows (a target
+   window and a decoy window). The harness seeds both gates off, then uses the
+   normal Settings, macOS TCC, per-chat access card, Stop, and quit paths with a
+   capability-authenticated, loopback-only scripted vision/tool model—never a
+   privileged test backdoor. It validates and owns the exact system TextEdit
+   executable, correlates every result to its tool-call ID and exact PID/window,
+   and verifies four outcome-based real-desktop checks against disk files, live
+   TextEdit document state, host cursor and process probes, and correlated tool
+   responses:
+   - `textedit_saves_marker`: the target TextEdit file on disk changed and
+     contains the expected typed and saved marker, and the scripted call
+     sequence and access gates completed as expected.
+   - `two_windows_isolation_and_cursor`: with both target and decoy TextEdit
+     windows open, only the target window changed (the decoy is byte-for-byte
+     unchanged on disk and its live accessibility capture retains its initial
+     line without any target prefix) and the host mouse cursor position sampled
+     before background `type` and after `cmd+s` did not move.
+   - `stop_leaves_no_helper`: only the visible Stop control emits the
+     content-free explicit user-Stop event (unmount/navigation cleanup cannot
+     satisfy it), Stop reaps every package-owned broker and driver process while
+     Aiden remains alive, and none remain after a normal app quit.
+   - `denied_permission_changes_nothing`: denying Computer Use on the seeded
+     denied chat returns Aiden's expected refusal response (failing closed if no
+     correlated tool result arrived), records no grant, and leaves both the live
+     TextEdit target window text (sampled via AppleScript) and the target and
+     decoy files on disk unchanged.
+
+   Every check row reports one of four statuses—`pass`, `failed`,
+   `environment problem`, or `unsupported`—alongside the app version, pinned
+   driver version, and macOS version. Report aggregation is fail-closed: a
+   missing required check row, duplicate ID, unknown status, or version mismatch
+   never counts as a pass. Failure cleanup actively TERM-to-KILLs only exact
+   package-owned broker/driver and disposable TextEdit processes with PID-reuse
+   checks.
 
 The reproducible commands are:
 
@@ -316,13 +338,34 @@ npm run package:verify
 AIDEN_COMPUTER_USE_ACCEPTANCE=1 npm run test:computer-use:packaged
 ```
 
-The acceptance command intentionally stops for visible macOS TCC decisions and
-one Computer Use access card (choose **Allow in this chat**); the type,
-save-key and stale-click actions then run without further cards. On success it writes
-an evidence-only receipt to `build/computer-use-acceptance-receipt.json`, bound
-to the tested app's signed CDHash, app-ASAR hash, bundle ID, and versions. A new
-package or acceptance run invalidates the old receipt. TCC grants are persistent
-macOS state and must be revoked manually in System Settings if no longer wanted.
+During preflight, before Aiden launches, the harness opens the disposable
+TextEdit documents and reads their live text via `osascript` (Apple Events); it
+prints an operator notice first and allows up to 120 seconds for the macOS
+**Automation** prompt asking whether the invoking terminal or host app may
+control **TextEdit** (denying Automation fails closed as an `environment
+problem`). The acceptance command then intentionally stops for visible macOS
+**Accessibility** and **Screen Recording** TCC decisions for **Aiden Computer
+Use**, one **Deny** on the seeded `Computer Use acceptance (denied)` chat, and
+one **Allow in this chat** on `Computer Use acceptance` (keep hands off the
+mouse until the 30-second wait starts so the cursor check measures only
+background `type` and `cmd+s` actions); the type, save-key, stale-click, and
+decoy capture actions then run without further cards. On success it prints the
+structured real-desktop report and writes an evidence-only receipt (schema
+version 4, carrying the full `realDesktopReport` plus `appVersion`,
+`driverVersion`, and `macOSVersion`) to
+`build/computer-use-acceptance-receipt.json`, bound to the tested app's signed
+CDHash, app-ASAR hash, bundle ID, and versions. On an unsupported host it prints
+the structured `unsupported` report and exits non-zero without modifying any
+existing receipt or creating a temporary evidence directory. On a supported host,
+an opted-in non-pass run (including package, running-process, metadata, and
+temporary-directory preflight failures) prints the structured report, retains
+`real-desktop-report.json` with the temporary evidence (or reports the
+retention failure if the temporary directory or report file could not be
+written), and invalidates any old receipt. A new package or opted-in acceptance
+run invalidates the old receipt. TCC grants are persistent macOS state and must
+be revoked manually in **System Settings → Privacy & Security** if no longer
+wanted: **Accessibility** and **Screen Recording** for Aiden Computer Use, and
+**Automation** (controlling **TextEdit**) for the invoking terminal or host app.
 Distribution uses `npm run dist`; it removes the old canonical output, builds in
 staging, and promotes only verified current DMG/ZIP output. Its after-sign and
 pre-promotion verifiers require Aiden's Developer ID Application identity, a
