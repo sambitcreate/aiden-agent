@@ -666,9 +666,15 @@ struct AidenAppShellView: View {
             openFromHome(route)
         }
         // The dock steps aside while the Home field's keyboard is up, and the
-        // drawer gives the field its focus back when it closes, so a drag down
-        // the list is the way to put the keyboard away and get the tabs back.
+        // drawer gives the field its focus back when it closes, so a tap on
+        // the list, or a drag down it, puts the keyboard away and brings the
+        // tabs back. A short list doesn't scroll, so the tap is the way out.
+        // It sits under the composer's inset: a tap on the composer keeps the
+        // keyboard. Simultaneous, so the tapped row or button still answers.
         .scrollDismissesKeyboard(.immediately)
+        .simultaneousGesture(TapGesture().onEnded {
+            if keyboardIsUp { homeComposer.session.putAwayKeyboard() }
+        })
         .safeAreaInset(edge: .top, spacing: 0) {
             AidenConnectionNotice(coordinator: coordinator)
         }

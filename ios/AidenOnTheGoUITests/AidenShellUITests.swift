@@ -411,6 +411,34 @@ final class AidenShellUITests: XCTestCase {
         app.terminate()
     }
 
+    /// A short Home list doesn't scroll, so a drag can't put the keyboard away:
+    /// a tap outside the composer does, keeps what was typed, and brings the
+    /// dock back. A tap on the composer itself keeps the keyboard.
+    func testATapOutsideHomesComposerPutsTheKeyboardAway() {
+        let app = AidenStateMatrix.launch(scenario: .one, startingTab: "chats")
+        XCTAssertTrue(AidenStateMatrix.homeRoot(in: app).waitForExistence(timeout: 10), "Home didn't open")
+        let field = homeField(in: app)
+        XCTAssertTrue(field.waitForExistence(timeout: 5), "No Home field")
+        let keyboard = app.keyboards.firstMatch
+
+        field.tap()
+        XCTAssertTrue(keyboard.waitForExistence(timeout: 5), "The keyboard didn't come up")
+        field.typeText("hello")
+        field.tap()
+        XCTAssertTrue(keyboard.exists, "A tap on the composer put the keyboard away")
+
+        let greeting = app.staticTexts["home.greeting"].firstMatch
+        XCTAssertTrue(greeting.waitForExistence(timeout: 5), "No greeting to tap")
+        greeting.tap()
+        XCTAssertTrue(keyboard.waitForNonExistence(timeout: 5), "A tap outside the composer left the keyboard up")
+        XCTAssertEqual(field.value as? String, "hello", "Putting the keyboard away lost the draft")
+        let dock = AidenStateMatrix.dock(in: app)
+        if app.windows.firstMatch.horizontalSizeClass == .compact {
+            XCTAssertTrue(dock.waitForExistence(timeout: 5), "The dock didn't come back after the keyboard")
+        }
+        app.terminate()
+    }
+
     /// A closed iPhone Duo's side rail carries the tab's bar items down the
     /// trailing edge, and the dock stays along the bottom, clear of it.
     func testTheClosedDuosSideRailAndTheDockShareTheScreen() throws {
