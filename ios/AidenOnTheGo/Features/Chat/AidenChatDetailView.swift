@@ -230,6 +230,8 @@ struct AidenChatDetailView: View {
     @Environment(\.aidenPalette) private var palette
     @Environment(\.scenePhase) private var scenePhase
     @State private var model: AidenChatViewModel
+    /// What a Bot chat's header avatar shows, spoken by the title capsule.
+    @State private var settledBotAvatar: AidenBotAvatarState = .idle
     /// Lives here, not in the composer, so a question card taking the composer's
     /// place leaves dictation and attachment preparation running.
     @State private var composerSession: AidenComposerSession
@@ -539,6 +541,9 @@ struct AidenChatDetailView: View {
                 onChoose: performContinueInNewChat(workspaceID:)
             )
         }
+        .environment(\.aidenChatScreen, screen)
+        // `/server` can grant the slider after the catalog loaded.
+        .onChange(of: model.agentSlider != nil) { model.reconcileAgentSliderAvailability() }
         .aidenBotDeleteConfirmation(
             isPresented: $isConfirmingBotDelete,
             botName: botToolsModel?.bot?.name ?? model.chat.title
@@ -600,6 +605,8 @@ struct AidenChatDetailView: View {
             let hidden = { [model, composerSession] in
                 Task { await model.saveDraftNow() }
                 model.setViewPresent(false)
+                // A real leave closes the slider; a Duo fold keeps it open.
+                model.isAgentSliderPresented = false
                 model.readAloud.stop()
                 model.setHapticsActive(false)
                 model.setChatForegrounded(false)
@@ -1268,7 +1275,8 @@ struct AidenChatDetailView: View {
         AidenChatTitleCapsule(
             title: botModel.bot?.name ?? model.chat.title,
             status: legacyBotTitleStatus(botModel.bot),
-            accessibilityHint: "Opens the Bot’s profile"
+            accessibilityHint: "Opens the Bot’s profile",
+            settledAvatar: botModel.bot == nil ? nil : settledBotAvatar
         ) {
             openBotProfile(coordinator: coordinator, model: botModel)
         }
@@ -1293,7 +1301,8 @@ struct AidenChatDetailView: View {
     }
 
     /// The Bot's face in the middle of the bar, over its name; like the name,
-    /// it opens the Profile.
+    /// it opens the Profile. It plays what the reply is doing; a pending
+    /// approval or question waits on the person, as in a Bot chat.
     private func botAvatarHeader(
         coordinator: AidenRemoteCoordinator,
         model botModel: AidenBotChatToolsModel
@@ -1302,14 +1311,24 @@ struct AidenChatDetailView: View {
             openBotProfile(coordinator: coordinator, model: botModel)
         } avatar: {
             if let bot = botModel.bot {
-                AidenBotCanonicalAvatarView(
-                    coordinator: coordinator,
-                    machine: pinnedOwner,
-                    botID: bot.id,
-                    avatar: bot.avatar,
-                    name: bot.name,
-                    size: AidenChatHeaderAvatar<EmptyView>.size
-                )
+                AidenBotSettledAvatarState(
+                    signal: AidenBotAvatarSignal(
+                        stream: model.streamState,
+                        isStopping: model.isStopping,
+                        awaitingPerson: model.pendingApproval != nil || model.pendingQuestion != nil
+                    ),
+                    onShownChange: { settledBotAvatar = $0 }
+                ) { state in
+                    AidenBotCanonicalAvatarView(
+                        coordinator: coordinator,
+                        machine: pinnedOwner,
+                        botID: bot.id,
+                        avatar: bot.avatar,
+                        name: bot.name,
+                        size: AidenChatHeaderAvatar<EmptyView>.size,
+                        state: state == .idle ? nil : state
+                    )
+                }
             } else {
                 Circle().fill(palette.raised)
             }

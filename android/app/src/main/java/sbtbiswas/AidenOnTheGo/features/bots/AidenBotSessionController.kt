@@ -413,6 +413,8 @@ fun aidenBotSessionFeedGrants(installation: AidenInstallation?): Set<AidenRemote
         AidenRemoteCapability.BOT_ALLOWED,
         // Revision 61: the typed approval card and the settings, suggestion and learning entries.
         AidenRemoteCapability.APPROVAL_CARDS,
+        // Revision 69: the command's plain words on that card.
+        AidenRemoteCapability.APPROVAL_PLAIN_WORDS,
         AidenRemoteCapability.BOT_SETTINGS_CHANGES,
         AidenRemoteCapability.BOT_SUGGESTIONS
     )
@@ -494,6 +496,11 @@ data class AidenBotSessionUiState(
     val outbox: List<AidenBotOutgoingMessage> = emptyList(),
     /** Stop was tapped: "Stopping" until the Mac's word stands for it or the turn ends. */
     val stopIntent: AidenBotTurnIntent = AidenBotTurnIntent.NONE,
+    /**
+     * The last turn ended after a Stop (from this phone, or one the Mac reported as "stopping");
+     * cleared when a turn runs again, a new run reports activity, or a message is taken.
+     */
+    val endedByStop: Boolean = false,
     /** Resume was tapped: "Picking up where it left off" until the Mac says what the run is doing. */
     val resumeIntent: AidenBotTurnIntent = AidenBotTurnIntent.NONE,
     /** Revision 61: settings, suggestion and learning entries whose answer is on its way, by entry id. */
@@ -715,7 +722,12 @@ class AidenBotSessionController(
     /** Transcript entries that already stand for an outgoing message, for the life of an epoch. */
     private val claimedEntries = mutableSetOf<String>()
     private var claimsEpoch: String? = null
-    /** The run a Stop was pressed in, by its `startedAt`. */
+    /**
+     * Stop was taken for the running turn, here or on another device: its end is quiet (the
+     * avatar rests at idle, not done). A new run lets go of it.
+     */
+    private var stopRequestedThisTurn = false
+    /** The run a Stop was pressed in (or reported "stopping"), by its `startedAt`. */
     private var stopStartedAt: Long? = null
     /** Revision 45: images the Bot shared, kept in memory within a budget while this chat is open; never written to disk. */
     private val sharedImages = AidenSharedImageBytes(sharedImageBudgetBytes)
@@ -1029,15 +1041,20 @@ class AidenBotSessionController(
      */
     private fun afterStateWrite(previous: AidenBotSession?) {
         stateWrites += 1
+        val stopped = stopRequestedThisTurn
         _state.update { current ->
-            if (current.isRunning) return@update current
+            if (current.isRunning) {
+                return@update if (current.endedByStop) current.copy(endedByStop = false) else current
+            }
             val session = current.session
             current.copy(
                 session = if (session?.activity != null) session.copy(activity = null) else session,
                 stopIntent = AidenBotTurnIntent.NONE,
-                resumeIntent = AidenBotTurnIntent.NONE
+                resumeIntent = AidenBotTurnIntent.NONE,
+                endedByStop = current.endedByStop || stopped || current.stopIntent != AidenBotTurnIntent.NONE
             )
         }
+        if (!_state.value.isRunning) stopRequestedThisTurn = false
         val blocked = _state.value.session?.blocked == AidenBotSessionBlock.ACCESS_CHANGED
         if (blocked && previous?.blocked != AidenBotSessionBlock.ACCESS_CHANGED) purgeForAccessLoss()
     }
@@ -1046,15 +1063,34 @@ class AidenBotSessionController(
      * The Mac's own word now stands for a Stop or Resume it has heard, and a new run (another
      * `startedAt`, or a first activity after a Stop pressed before any) has nothing to stop. An
      * activity after a Resume tap says what the resumed run is doing; a cleared one says nothing.
+     *
+     * A run the Mac reports as "stopping" (a Stop from the Mac or another phone) ends quietly too.
+     * A Stop pressed before any activity belongs to the first run that reports one. A different
+     * run lets go of the Stop, so a queued turn that starts straight after a stopped one still
+     * ends with done.
      */
     private fun activityArrived(next: AidenBotSessionActivity?) {
         val stopRun = stopStartedAt
+        if (next != null) {
+            when {
+                next.phase == AidenBotActivityPhase.STOPPING.id -> {
+                    stopRequestedThisTurn = true
+                    stopStartedAt = next.startedAt
+                }
+                stopRequestedThisTurn && stopRun == null -> stopStartedAt = next.startedAt
+                stopRun != null && next.startedAt != stopRun -> {
+                    stopRequestedThisTurn = false
+                    stopStartedAt = null
+                }
+            }
+        }
+        val newRun = next != null && (stopRun == null || next.startedAt != stopRun)
         _state.update { current ->
-            val clearStop = current.stopIntent == AidenBotTurnIntent.ACKNOWLEDGED ||
-                (next != null && (stopRun == null || next.startedAt != stopRun))
+            val clearStop = current.stopIntent == AidenBotTurnIntent.ACKNOWLEDGED || newRun
             current.copy(
                 stopIntent = if (clearStop) AidenBotTurnIntent.NONE else current.stopIntent,
-                resumeIntent = if (next != null) AidenBotTurnIntent.NONE else current.resumeIntent
+                resumeIntent = if (next != null) AidenBotTurnIntent.NONE else current.resumeIntent,
+                endedByStop = current.endedByStop && !newRun
             )
         }
     }
@@ -1447,6 +1483,13 @@ class AidenBotSessionController(
         _state.update { it.copy(isSending = true) }
         try {
             val receipt = bounded { transport.send(botId, request.text, key, request.sentMode) }
+            // A message the Mac took starts a new turn: a Stop from a finished turn doesn't carry
+            // into it. One queued behind a running turn leaves that turn's Stop in place.
+            if (!current.isRunning) {
+                stopRequestedThisTurn = false
+                stopStartedAt = null
+            }
+            _state.update { if (it.endedByStop) it.copy(endedByStop = false) else it }
             if (stateWrites == writes) applyStateView(receipt.stateView)
             updateMessage(key) { latest ->
                 var settled = latest
@@ -1707,6 +1750,7 @@ class AidenBotSessionController(
         inFlight += STOP
         if (current.isRunning) {
             stopStartedAt = current.session?.activity?.startedAt
+            stopRequestedThisTurn = true
             _state.update { it.copy(stopIntent = AidenBotTurnIntent.REQUESTED, actionError = null) }
         } else {
             _state.update { it.copy(actionError = null) }
@@ -1724,6 +1768,7 @@ class AidenBotSessionController(
             throw error
         } catch (error: Exception) {
             keys.failed(STOP, error)
+            stopRequestedThisTurn = false
             _state.update { it.copy(stopIntent = AidenBotTurnIntent.NONE, actionError = UNREACHABLE) }
             false
         } finally {

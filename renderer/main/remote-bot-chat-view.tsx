@@ -53,17 +53,16 @@ import { mintPeerIdempotencyKey, type PeerHostFeedSnapshot, type PeerHostView, t
 import type { PeerOperation } from "../shared/peer-operation";
 import type { AidenRemoteBotApproval, AidenRemoteBotHandoff } from "../../main/services/aiden-remote-protocol";
 import {
-  BotApprovalCard,
   BotInterruptedCard,
   BotPendingSendBubble,
   PENDING_SEND_SETTLE_MS,
-  TranscriptEntries,
   botVisibleSendIds,
   matchBotPendingSends,
-  questionPrompt,
   settleBotPendingSends,
   type BotPendingSend,
 } from "./bots/bot-chat-pane";
+import { BotApprovalCard, questionPrompt } from "./bots/bot-approvals";
+import { TranscriptEntries } from "./bots/bot-transcript-entries";
 import { ApprovalStatusLine } from "../components/chat-approval-card";
 import { useApprovalStatusLine } from "../lib/use-approval-status-line";
 import { BOT_CHAT_COMPOSER_SURFACES } from "./bots/bot-chat-mode";

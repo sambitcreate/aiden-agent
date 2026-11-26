@@ -62,6 +62,8 @@ import {
   botFailedTurnId,
   botQuestionAnswerText,
   botLastReplyAt,
+  botRecentReplyTimes,
+  botLastTurnEnd,
   botTranscriptPreview,
   type BotLiveActivity,
   type BotLiveEvent,
@@ -1165,7 +1167,7 @@ export function createBotLiveProjection(deps: BotLiveProjectionDeps): BotLivePro
   // edit) appends an entry, so one newest-entry read tells a list refresh (the
   // Remote host feed asks on every chat or Bot change) whether the transcript
   // needs reading again.
-  type BotTranscriptSummary = Pick<BotLiveSummary, "preview" | "updatedAt" | "lastReplyAt">;
+  type BotTranscriptSummary = Pick<BotLiveSummary, "preview" | "updatedAt" | "lastReplyAt" | "recentReplyAt" | "lastTurnEnd">;
   const transcriptSummaries = new Map<string, { key: string } & BotTranscriptSummary>();
 
   async function transcriptSummary(botId: string, conversation: Conversation): Promise<BotTranscriptSummary> {
@@ -1179,10 +1181,13 @@ export function createBotLiveProjection(deps: BotLiveProjectionDeps): BotLivePro
     const view = await conversation.context(BACKGROUND_CONTEXT);
     const entries = projectBotTranscript(view.entries);
     const preview = botTranscriptPreview(entries);
+    const lastTurnEnd = botLastTurnEnd(entries);
     const summary: BotTranscriptSummary = {
       preview: preview?.text ?? null,
       updatedAt: preview?.at ?? null,
       lastReplyAt: botLastReplyAt(entries),
+      recentReplyAt: botRecentReplyTimes(entries),
+      ...(lastTurnEnd ? { lastTurnEnd } : {}),
     };
     transcriptSummaries.set(botId, { key, ...summary });
     return summary;
@@ -1758,6 +1763,7 @@ export function createBotLiveProjection(deps: BotLiveProjectionDeps): BotLivePro
       if (feed && !feed.ended) {
         await feed.queue;
         const preview = botTranscriptPreview(feed.entries);
+        const lastTurnEnd = botLastTurnEnd(feed.entries);
         return {
           botId,
           preview: preview?.text ?? null,
@@ -1765,6 +1771,8 @@ export function createBotLiveProjection(deps: BotLiveProjectionDeps): BotLivePro
           state: feed.state,
           needsYou: await needsYouNow(botId),
           lastReplyAt: botLastReplyAt(feed.entries),
+          recentReplyAt: botRecentReplyTimes(feed.entries),
+          ...(lastTurnEnd ? { lastTurnEnd } : {}),
         };
       }
       const state = await deps.state(botId);

@@ -111,7 +111,16 @@ import {
   type WorkspaceFolderPresenceResult,
 } from "../shared/workspace-folder-presence";
 import { useOptionalNewChatActions } from "../lib/new-chat-actions";
-import { Badge, Button, EmptyState, ScrollArea, ScrollAreaFooterStack, Text, toast } from "../components/ui";
+import {
+  Badge,
+  Button,
+  DismissHoverSurfaces,
+  EmptyState,
+  ScrollArea,
+  ScrollAreaFooterStack,
+  Text,
+  toast,
+} from "../components/ui";
 import {
   agentsInstructionNoticeMessage,
   createAgentsInstructionNoticeLog,
@@ -191,7 +200,7 @@ import { ContextMeter } from "../components/context-meter";
 import { ContextPressureFeed } from "../lib/context-pressure-feed";
 import type { ChatContextPressureV1 } from "../shared/context-pressure";
 import { ReasoningVisibilityControl } from "../components/reasoning-visibility-control";
-import { ApprovalStatusLine, ChatApprovalCard } from "../components/chat-approval-card";
+import { ApprovalStatusLine, ChatApprovalCard, revealApprovalCard } from "../components/chat-approval-card";
 import { noteWorkspaceAllow, repeatableApproval, useWorkspaceRepeatNudge } from "../lib/switch-to-auto";
 import { useApprovalStatusLine } from "../lib/use-approval-status-line";
 import { isComputerUseAccessApprovalDetails } from "../shared/computer-use-access";
@@ -321,6 +330,23 @@ import {
 import type { SubagentRunSnapshot } from "../shared/subagent-runs";
 import type { SkillInvocationV1 } from "../shared/slash-commands";
 import { mergeSubagentSnapshots } from "../lib/subagent-view-state";
+import {
+  foldLiveSubagentTranscript,
+  type LiveSubagentTranscripts,
+  type SubagentTranscriptUpdateV1,
+} from "../shared/subagent-transcript";
+import {
+  combineLiveSubagentTranscripts,
+  type MainChatWaitingKind,
+  useSubagentHelperChatSelector,
+  useSubagentHelperChatStore,
+} from "../lib/subagent-helper-chat-store";
+import { ExpandedSubagentHelperChat } from "../components/subagent-helper-chat-expanded";
+import {
+  withSubagentApprovalWaitSnapshots,
+  withSubagentApprovalWaitViews,
+} from "../lib/subagent-helper-chat-state";
+import { focusRegion } from "../lib/focus-regions";
 import { visibleSubagentReferences } from "../lib/subagent-feature-gate";
 import { persistedChatWorkspaceId } from "../shared/chat-workspace";
 import {
@@ -371,6 +397,7 @@ const TEXT_STREAMING_IDLE_MS = 2_000;
 /** Stable so idle frames don't rebuild the transcript artifact plan. */
 const NO_STREAMING_ARTIFACTS: ChatArtifactV1[] = [];
 const NO_UI_VISUALS: readonly ChatUiVisualV1[] = [];
+const NO_LIVE_SUBAGENT_TRANSCRIPTS: LiveSubagentTranscripts = new Map();
 const NO_UI_DRAFTS: UiDrafts = new Map();
 const NO_VISUAL_DRAFTS: VisualDrafts = new Map();
 // AGENTS.md size notices are shown once per chat until the file changes.
@@ -522,6 +549,8 @@ export function ChatPane({ chatId }: { chatId: string }) {
   const git = useGitInfo(effectiveWorkspace?.id);
   const environmentPanel = useEnvironmentPanelCore();
   const designChatBodyHidden = useDesignChatBodyHidden();
+  const transcriptUnderFloatingPanel =
+    environmentPanel.surfaceMode === "tools-floating" && environmentPanel.toolsPresented;
   const settingsBlockedReason = environmentPanel.gitOperationBusy
     ? "Wait for the current Git operation to finish"
     : environmentPanel.editorState.saving
@@ -921,6 +950,8 @@ export function ChatPane({ chatId }: { chatId: string }) {
     null,
   );
   const [liveSubagents, setLiveSubagents] = React.useState<SubagentRunSnapshot[]>([]);
+  const [liveSubagentTranscripts, setLiveSubagentTranscripts] =
+    React.useState<LiveSubagentTranscripts>(NO_LIVE_SUBAGENT_TRANSCRIPTS);
   const [error, setError] = React.useState<string | null>(null);
   const [approvals, setApprovals] = React.useState<ApprovalPrompt[]>([]);
   // After a Deny, the composer invites the user to say what to do instead,
@@ -1131,6 +1162,7 @@ export function ChatPane({ chatId }: { chatId: string }) {
     setGenerationTimeline(null);
     generationTimelineRef.current = null;
     setLiveSubagents([]);
+    setLiveSubagentTranscripts(NO_LIVE_SUBAGENT_TRANSCRIPTS);
     setError(null);
     setApprovals([]);
     setQuestionnaire(null);
@@ -1221,6 +1253,14 @@ export function ChatPane({ chatId }: { chatId: string }) {
       }),
     [chatId, effectiveWorkspaceId, liveSubagents, visibleDetachedProjection?.subagents],
   );
+  const displayedLiveSubagentTranscripts = React.useMemo(
+    () =>
+      combineLiveSubagentTranscripts(
+        liveSubagentTranscripts,
+        visibleDetachedProjection?.subagentTranscripts,
+      ),
+    [liveSubagentTranscripts, visibleDetachedProjection?.subagentTranscripts],
+  );
   const latestAssistantResponse = React.useMemo(
     () =>
       [...messages]
@@ -1232,9 +1272,27 @@ export function ChatPane({ chatId }: { chatId: string }) {
     () => visibleSubagentReferences(messages, environmentPanel.subagentsEnabled),
     [environmentPanel.subagentsEnabled, messages],
   );
+  const chatSubagentViews =
+    environmentPanel.subagents.chatId === chatId ? environmentPanel.subagentViews : null;
+  // A helper that waits on one of your approvals reads "Waiting on you" in the
+  // chat's helper rows and the tray, as its own chat does. Display only. Shared
+  // labels are judged against every helper in the chat, as the side panel does.
+  const shownLiveSubagents = React.useMemo(
+    () =>
+      withSubagentApprovalWaitSnapshots(
+        displayedLiveSubagents,
+        approvals,
+        chatSubagentViews ?? displayedLiveSubagents,
+      ),
+    [approvals, chatSubagentViews, displayedLiveSubagents],
+  );
+  const shownSubagentViews = React.useMemo(
+    () => (chatSubagentViews ? withSubagentApprovalWaitViews(chatSubagentViews, approvals) : null),
+    [approvals, chatSubagentViews],
+  );
   const subagentPill = useSubagentComposerPill(
     chatId,
-    environmentPanel.subagents.chatId === chatId ? environmentPanel.subagentViews : null,
+    shownSubagentViews,
     environmentPanel.subagentsEnabled,
   );
   const [subagentTrayOpen, setSubagentTrayOpen] = React.useState(false);
@@ -1945,6 +2003,16 @@ export function ChatPane({ chatId }: { chatId: string }) {
                   }),
                 );
               },
+              onSubagentTranscript: (update: SubagentTranscriptUpdateV1) => {
+                if (
+                  !mountedRef.current ||
+                  generationIntentRef.current !== generationIntent ||
+                  chatIdRef.current !== chatId
+                ) {
+                  return;
+                }
+                setLiveSubagentTranscripts((current) => foldLiveSubagentTranscript(current, update));
+              },
             }
           : {}),
         onTimeline: (next) => {
@@ -2017,6 +2085,7 @@ export function ChatPane({ chatId }: { chatId: string }) {
           if (generationIntentRef.current !== generationIntent) return;
           if (mountedRef.current) {
             setLiveSubagents([]);
+            setLiveSubagentTranscripts(NO_LIVE_SUBAGENT_TRANSCRIPTS);
             setStreamingText(null);
             setStreamingReasoning(null);
             setStreamingArtifacts([]);
@@ -2092,7 +2161,10 @@ export function ChatPane({ chatId }: { chatId: string }) {
               if (generationIntentRef.current !== generationIntent) return;
             }
             if (mountedRef.current) {
-              if (updatedChat || !partial) setLiveSubagents([]);
+              if (updatedChat || !partial) {
+                setLiveSubagents([]);
+                setLiveSubagentTranscripts(NO_LIVE_SUBAGENT_TRANSCRIPTS);
+              }
               if (!partial || updatedChat) {
                 setStreamingText(null);
                 setStreamingReasoning(null);
@@ -2177,6 +2249,7 @@ export function ChatPane({ chatId }: { chatId: string }) {
       setGenerationTimeline(null);
       generationTimelineRef.current = null;
       setLiveSubagents([]);
+      setLiveSubagentTranscripts(NO_LIVE_SUBAGENT_TRANSCRIPTS);
       setApprovals([]);
       setQuestionnaire(null);
       setQuestionnaireSubmitting(false);
@@ -2994,6 +3067,7 @@ export function ChatPane({ chatId }: { chatId: string }) {
     setGenerationTimeline(null);
     generationTimelineRef.current = null;
     setLiveSubagents([]);
+    setLiveSubagentTranscripts(NO_LIVE_SUBAGENT_TRANSCRIPTS);
     setApprovals([]);
     setQuestionnaire(null);
     setQuestionnaireSubmitting(false);
@@ -3068,6 +3142,26 @@ export function ChatPane({ chatId }: { chatId: string }) {
   );
   // Aiden Live answers the first approval by voice through this same decide.
   usePublishLiveChatApprovals(chatId, approvals, decideApproval);
+
+  // The helper chats read this chat's live helper updates and its approvals.
+  const helperChatStore = useSubagentHelperChatStore();
+  React.useLayoutEffect(() => {
+    helperChatStore?.syncLive(chatId, displayedLiveSubagentTranscripts);
+  }, [chatId, displayedLiveSubagentTranscripts, helperChatStore]);
+  React.useLayoutEffect(() => {
+    helperChatStore?.syncApprovals(chatId, approvals, decidingApprovalId, decideApproval);
+  }, [approvals, chatId, decideApproval, decidingApprovalId, helperChatStore]);
+  React.useLayoutEffect(() => {
+    if (!helperChatStore) return;
+    // Leaving the chat closes its expanded helper chat.
+    return () => {
+      if (helperChatStore.getState().chatId === chatId) helperChatStore.collapse({ restoreFocus: false });
+    };
+  }, [chatId, helperChatStore]);
+  // Only whether this chat's helper chat is expanded; streamed helper tokens do not redraw the pane.
+  const helperChatExpanded = useSubagentHelperChatSelector(
+    (state) => state.chatId === chatId && state.expandedRunId !== null,
+  );
 
   React.useEffect(() => {
     if (!questionnaire) return;
@@ -4207,6 +4301,25 @@ export function ChatPane({ chatId }: { chatId: string }) {
         }
       : undefined;
   }, [interruptedWaits, questionnaire]);
+  // An expanded helper chat says when the main chat waits on a question, and
+  // its Back to main chat lands on the approval or question waiting here.
+  const mainQuestionPending = Boolean(questionnaire || recoveredQuestion);
+  // A question replaces the message box, and the questionnaire is the message
+  // box's focus area then.
+  const focusMainWaiting = React.useCallback((kind: MainChatWaitingKind) => {
+    if (kind === "approval") {
+      // The card itself, never a decision button: arriving here answers nothing.
+      const target = approvalCardRef.current;
+      if (target?.isConnected) {
+        revealApprovalCard(target);
+        return;
+      }
+    }
+    focusRegion("composer");
+  }, []);
+  React.useLayoutEffect(() => {
+    helperChatStore?.syncMainWaiting(chatId, mainQuestionPending, focusMainWaiting);
+  }, [chatId, focusMainWaiting, helperChatStore, mainQuestionPending]);
   // Like Resume, sending a recovered answer is busy only in its own chat.
   const recoveredAnswerTokenRef = React.useRef(0);
   const [recoveredAnswerOwners, setRecoveredAnswerOwners] = React.useState<Readonly<Record<string, number>>>({});
@@ -4338,6 +4451,9 @@ export function ChatPane({ chatId }: { chatId: string }) {
       <ScrollArea
         focusRegion="chat"
         bodyHidden={designChatBodyHidden}
+        bodyReplacement={
+          helperChatExpanded ? <ExpandedSubagentHelperChat chatId={chatId} /> : undefined
+        }
         overlay={findBar}
         toolbarAccessory={<DesignModeBannerSlot />}
         className="h-full min-h-0"
@@ -4540,7 +4656,7 @@ export function ChatPane({ chatId }: { chatId: string }) {
                   cardRef={approvalCardRef}
                   denyRef={approvalDenyRef}
                   pendingCount={approvals.length}
-                  keyboardShortcuts
+                  keyboardShortcuts={!helperChatExpanded}
                   liveVoice={pendingLiveVoice}
                   {...repeatNudge}
                 />
@@ -5024,67 +5140,72 @@ export function ChatPane({ chatId }: { chatId: string }) {
           </div>
         ) : (
           <KeepVisualChatContext.Provider value={keepVisualChatId}>
-            <MessageList
-              key={chatId}
-              chatId={chatId}
-              {...(leadChatMessageLabel ? { leadChatLabel: leadChatMessageLabel } : {})}
-              messages={messages}
-              draftWorktreeSend={worktreeSend}
-              draftWorktreeGrabbedElements={getActiveWorktreeGrabbedElements(chatId)}
-              streamingText={displayedStreamingText}
-              streamingReasoning={displayedStreamingReasoning}
-              streamingArtifacts={displayedStreamingArtifacts}
-              streamingArtifactPlacements={streamingArtifactPlacements}
-              streamingWideVisuals={streamingWideVisuals}
-              onVisualPrompt={handleVisualPrompt}
-              visualFollowUpBusy={visualPromptBusy}
-              streamingVisualDrafts={visualDrafts}
-              streamingUiVisuals={displayedStreamingUiVisuals}
-              streamingUiDrafts={uiDrafts}
-              streamComplete={streamComplete || detachedProjectionStreamComplete(visibleDetachedProjection)}
-              persistedHandoffMessageId={persistedHandoffMessageId}
-              onStreamHandoffComplete={() => streamHandoffRef.current?.()}
-              timeline={displayedGenerationTimeline}
-              liveSubagents={displayedLiveSubagents}
-              subagentsEnabled={environmentPanel.subagentsEnabled}
-              onOpenSubagent={environmentPanel.openSubagent}
-              agentActivity={visibleAgentActivity}
-              onRetryUsageLimit={() => void retryUsageLimitNow("chat", chatId)}
-              readAloudMessageId={readAloudCandidateId}
-              failureActions={failureActions}
-              interruptedReply={interruptedReply}
-              readAloud={readAloudProps}
-              onFork={forkFromTranscript}
-              forkDisabledReason={forkDisabledReason}
-              onForkWithSummary={(messageId, position) =>
-                setForkSummaryRequest({ messageId, position })
-              }
-              forkSummary={
-                forkSummary
-                  ? {
-                      afterMessageId: forkSummary.afterMessageId,
-                      node: (
-                        <ForkSummaryCard
-                          key={`${forkSummary.state}:${forkSummary.afterMessageId}`}
-                          summary={forkSummary}
-                          busy={forkSummaryBusy}
-                          onCancel={() => void runForkSummaryAction("cancel")}
-                          onRetry={() => void runForkSummaryAction("retry")}
-                          onSkip={() => void runForkSummaryAction("skip")}
-                        />
-                      ),
-                    }
-                  : undefined
-              }
-              error={
-                error ??
-                (imageArtifactRecoveryUnavailable
-                  ? "Visual artifact staging is unavailable. Open Settings → About → Diagnostics and choose Reveal to locate the staging file that needs repair."
-                  : imageArtifactRecoveryPending
-                    ? "A visual artifact could not be recovered. Delete this chat to discard it before continuing."
-                    : null)
-              }
-            />
+            {/* A side panel floating over the conversation closes any link
+                preview, helper card or tooltip left open there, so none draws
+                over the panel. The strip it leaves visible still shows them. */}
+            <DismissHoverSurfaces when={transcriptUnderFloatingPanel}>
+              <MessageList
+                key={chatId}
+                chatId={chatId}
+                {...(leadChatMessageLabel ? { leadChatLabel: leadChatMessageLabel } : {})}
+                messages={messages}
+                draftWorktreeSend={worktreeSend}
+                draftWorktreeGrabbedElements={getActiveWorktreeGrabbedElements(chatId)}
+                streamingText={displayedStreamingText}
+                streamingReasoning={displayedStreamingReasoning}
+                streamingArtifacts={displayedStreamingArtifacts}
+                streamingArtifactPlacements={streamingArtifactPlacements}
+                streamingWideVisuals={streamingWideVisuals}
+                onVisualPrompt={handleVisualPrompt}
+                visualFollowUpBusy={visualPromptBusy}
+                streamingVisualDrafts={visualDrafts}
+                streamingUiVisuals={displayedStreamingUiVisuals}
+                streamingUiDrafts={uiDrafts}
+                streamComplete={streamComplete || detachedProjectionStreamComplete(visibleDetachedProjection)}
+                persistedHandoffMessageId={persistedHandoffMessageId}
+                onStreamHandoffComplete={() => streamHandoffRef.current?.()}
+                timeline={displayedGenerationTimeline}
+                liveSubagents={shownLiveSubagents}
+                subagentsEnabled={environmentPanel.subagentsEnabled}
+                onOpenSubagent={environmentPanel.openSubagent}
+                agentActivity={visibleAgentActivity}
+                onRetryUsageLimit={() => void retryUsageLimitNow("chat", chatId)}
+                readAloudMessageId={readAloudCandidateId}
+                failureActions={failureActions}
+                interruptedReply={interruptedReply}
+                readAloud={readAloudProps}
+                onFork={forkFromTranscript}
+                forkDisabledReason={forkDisabledReason}
+                onForkWithSummary={(messageId, position) =>
+                  setForkSummaryRequest({ messageId, position })
+                }
+                forkSummary={
+                  forkSummary
+                    ? {
+                        afterMessageId: forkSummary.afterMessageId,
+                        node: (
+                          <ForkSummaryCard
+                            key={`${forkSummary.state}:${forkSummary.afterMessageId}`}
+                            summary={forkSummary}
+                            busy={forkSummaryBusy}
+                            onCancel={() => void runForkSummaryAction("cancel")}
+                            onRetry={() => void runForkSummaryAction("retry")}
+                            onSkip={() => void runForkSummaryAction("skip")}
+                          />
+                        ),
+                      }
+                    : undefined
+                }
+                error={
+                  error ??
+                  (imageArtifactRecoveryUnavailable
+                    ? "Visual artifact staging is unavailable. Open Settings → About → Diagnostics and choose Reveal to locate the staging file that needs repair."
+                    : imageArtifactRecoveryPending
+                      ? "A visual artifact could not be recovered. Delete this chat to discard it before continuing."
+                      : null)
+                }
+              />
+            </DismissHoverSurfaces>
           </KeepVisualChatContext.Provider>
         )}
       </ScrollArea>

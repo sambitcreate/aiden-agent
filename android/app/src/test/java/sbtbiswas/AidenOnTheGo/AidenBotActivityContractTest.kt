@@ -26,7 +26,6 @@ import sbtbiswas.AidenOnTheGo.features.bots.aidenBotActivityDisplay
 import sbtbiswas.AidenOnTheGo.features.bots.aidenBotChatActivity
 import sbtbiswas.AidenOnTheGo.features.remote.aidenProgressCapabilitiesToRequest
 import sbtbiswas.AidenOnTheGo.features.bots.aidenBotElapsedLabel
-import sbtbiswas.AidenOnTheGo.features.bots.aidenBotFaceGlance
 import sbtbiswas.AidenOnTheGo.features.bots.aidenBotNextAnnouncement
 import sbtbiswas.AidenOnTheGo.models.*
 import sbtbiswas.AidenOnTheGo.persistence.AidenInstallationStore
@@ -350,16 +349,6 @@ class AidenBotActivityContractTest {
         assertEquals("Reading", early.shown?.text)
         assertEquals(1_000L, early.retryInMs)
         assertEquals("Searching the web", aidenBotNextAnnouncement(early.shown, "Searching the web", 2_000).shown?.text)
-    }
-
-    // Test 7
-    @Test
-    fun aWorkingFaceFollowsTheGlanceKeyframes() {
-        assertEquals(0f, aidenBotFaceGlance(0).dxFraction, 0.0005f)
-        assertEquals(1f, aidenBotFaceGlance(0).blink, 0.0005f)
-        assertEquals(-2.6f / 24f, aidenBotFaceGlance(1_280).dxFraction, 0.0005f)
-        assertEquals(2.6f / 24f, aidenBotFaceGlance(2_400).dxFraction, 0.0005f)
-        assertEquals(0.1f, aidenBotFaceGlance(3_600).blink, 0.0005f)
     }
 
     // Test 8: the opt-in is requested only from a Mac that offers it.

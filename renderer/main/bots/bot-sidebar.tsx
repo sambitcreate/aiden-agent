@@ -6,10 +6,11 @@
 import * as React from "react";
 import { useNavigate, useRouter, useRouterState } from "@tanstack/react-router";
 import { ChevronLeft, Plug, RotateCcw, Search, Star, UserRound, X } from "lucide-react";
-import { BotAvatar } from "../../components/bot-avatar";
+import { BotAvatar, useBotAvatarState } from "../../components/bot-avatar";
 import { BotNeedsYouBadge } from "../../components/bot-needs-you-badge";
 import { HistoryNavButtons } from "../../components/history-nav";
 import {
+  Badge,
   Button,
   EmptyState,
   Input,
@@ -44,6 +45,33 @@ import {
 import { useHeldModifierReveal } from "../../lib/use-held-modifier-reveal";
 import { ariaKeyShortcut, prettyAccelerator, type CommandId } from "../../shared/keybindings";
 import { isEscapeKey } from "../../lib/dismiss-key";
+import { useBotBubbles } from "../../lib/bot-bubbles-api";
+import { isBotBubbled } from "../../shared/bot-bubbles";
+
+/**
+ * A sidebar Bot's face: static while the Bot rests, acting out its turn while it runs
+ * (the row knows the session, not the phase, so a running turn reads as thinking), waiting
+ * with the person while it needs them, and a done or error moment when the turn ends. A
+ * turn the person stopped, or a paused Bot, settles straight to idle.
+ */
+function BotRowAvatar({ row, size }: { row: BotSidebarRow; size: "medium" | "large" }) {
+  const state = useBotAvatarState({
+    session: row.state?.kind,
+    awaitingPerson: row.needsYou,
+    failed: row.lastTurnEnd === "failed",
+    stopped: row.lastTurnEnd === "stopped",
+  });
+  return (
+    <BotAvatar
+      botId={row.bot.id}
+      avatar={row.bot.avatar}
+      name={row.bot.name}
+      photoLoading="visible"
+      size={size}
+      state={state === "idle" ? undefined : state}
+    />
+  );
+}
 
 const ROW_FOCUS =
   "outline-none focus-visible:bg-list-selection focus-visible:outline focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-focus-ring";
@@ -105,6 +133,18 @@ function ShortcutHint({ binding, className }: { binding: string; className: stri
 }
 
 
+/** "Bubble" on the row of a Bot whose chat is a floating head now (docs/bot-bubbles.md). */
+function BotBubbleChip({ botId }: { botId: string }) {
+  const bubbles = useBotBubbles();
+  // With bubbles turned off the heads are hidden, so the row doesn't say Bubble.
+  if (bubbles.host === "off" || !isBotBubbled(bubbles, botId)) return null;
+  return (
+    <Badge color="blue" className="h-5 shrink-0 px-1.5 text-mini font-semibold">
+      Bubble
+    </Badge>
+  );
+}
+
 const BotRow = React.memo(function BotRow({
   row,
   selected,
@@ -141,19 +181,13 @@ const BotRow = React.memo(function BotRow({
           onClick={() => onOpen(row.bot)}
         >
           <span aria-hidden="true" className="shrink-0">
-            <BotAvatar
-              botId={row.bot.id}
-              avatar={row.bot.avatar}
-              name={row.bot.name}
-              photoLoading="visible"
-              size="medium"
-              working={row.state?.kind === "running"}
-            />
+            <BotRowAvatar row={row} size="medium" />
           </span>
           {/* Every row's text spans the same width, so names and previews line up. */}
           <span className="min-w-0 flex-1">
             <span className="flex min-w-0 items-center gap-1.5">
               <span className="truncate text-regular font-medium text-primary">{row.bot.name}</span>
+              <BotBubbleChip botId={row.bot.id} />
               {/* "Needs you" outranks the dot; the row still says "Unread" to a screen reader. */}
               {unread && !row.needsYou ? <BotUnreadDot /> : null}
             </span>
@@ -225,14 +259,7 @@ const PinnedBot = React.memo(function PinnedBot({
           onClick={() => onOpen(row.bot)}
         >
           <span aria-hidden="true" className="relative shrink-0">
-            <BotAvatar
-              botId={row.bot.id}
-              avatar={row.bot.avatar}
-              name={row.bot.name}
-              photoLoading="visible"
-              size="large"
-              working={row.state?.kind === "running"}
-            />
+            <BotRowAvatar row={row} size="large" />
             {/* The pin mark; "Pinned Bot" names the region for screen readers. */}
             <span className="absolute -bottom-1 -right-1 grid size-4.5 place-items-center rounded-full bg-status-warning-surface text-status-warning">
               <Star className="size-2.5 fill-current" />
@@ -240,6 +267,7 @@ const PinnedBot = React.memo(function PinnedBot({
           </span>
           <span className="flex max-w-full min-w-0 items-center gap-1.5">
             <span className="truncate text-strong font-medium text-primary">{row.bot.name}</span>
+            <BotBubbleChip botId={row.bot.id} />
             {row.needsYou ? <BotNeedsYouBadge /> : unread ? <BotUnreadDot /> : null}
             {row.needsYou && unread ? <span className="sr-only">Unread</span> : null}
           </span>
@@ -434,7 +462,7 @@ export function BotSidebar() {
   } else {
     list = (
       <>
-        {pinnedRow ? <PinnedBot {...rowProps(pinnedRow)} /> : null}
+        {pinnedRow ? <PinnedBot key={pinnedRow.bot.id} {...rowProps(pinnedRow)} /> : null}
         {visible.length > 0 ? (
           <ul aria-label="Your Bots" className="flex flex-col gap-0.5">
             {visible.map((row) => (

@@ -54,7 +54,7 @@ func aidenBotActivitySupported(server: AidenServer?, installation: AidenInstalla
 /// the chat reopens a feed that opened without one
 /// (`AidenBotSessionModel.reopenFeed()`; Android parity).
 func aidenBotSessionFeedGrants(_ installation: AidenInstallation?) -> Set<AidenRemoteCapability> {
-    Set([AidenRemoteCapability.botCards, .botActivity, .botHandoffs, .botHandoffNotes, .botHandoffOnMac, .botImages, .botPeers, .botIssues, .botAccessRequests, .botPlans, .botAllowed, .approvalCards, .botSettingsChanges, .botSuggestions].filter { installation?.hasNegotiatedAccess(to: $0) == true })
+    Set([AidenRemoteCapability.botCards, .botActivity, .botHandoffs, .botHandoffNotes, .botHandoffOnMac, .botImages, .botPeers, .botIssues, .botAccessRequests, .botPlans, .botAllowed, .approvalCards, .approvalPlainWords, .botSettingsChanges, .botSuggestions].filter { installation?.hasNegotiatedAccess(to: $0) == true })
 }
 
 /// How a Bot chat is opened. A host advertising `bot-durable-session-v1`
@@ -1364,6 +1364,10 @@ final class AidenBotSessionModel {
     }
     /// Stop was pressed: the line says "Stopping" until the Mac speaks or the turn ends.
     private var stopIntent: Intent = .none
+    /// Stop was pressed during this turn. Unlike `isStopping` it outlasts the
+    /// turn's end, until the next turn starts, so the avatar settles quietly
+    /// even when the Stop and the end land in one update.
+    private(set) var stopRequestedThisTurn = false
     /// Resume was pressed: the line says "Picking up where it left off" until the Mac speaks (R18).
     private var resumeIntent: Intent = .none
     var errorMessage: String?
@@ -1861,6 +1865,7 @@ final class AidenBotSessionModel {
             if stopIntent == .acknowledged || (next != nil && (stopStartedAt == nil || next?.startedAt != stopStartedAt)) {
                 stopIntent = .none
             }
+            if let next, let stopStartedAt, next.startedAt != stopStartedAt { stopRequestedThisTurn = false }
             // Any frame after the tap is the Mac's word on the resumed run.
             if next != nil { resumeIntent = .none }
         case let .queued(next):
@@ -1984,6 +1989,7 @@ final class AidenBotSessionModel {
     /// what waited to go to it.
     private func setStateView(_ view: AidenBotSessionStateView?) {
         let wasBlocked = stateView?.blocked == .accessChanged
+        if view?.state == .running, stateView?.state != .running { stopRequestedThisTurn = false }
         stateView = view
         stateWrites += 1
         // A finished or interrupted turn retires the last approval's answered line.
@@ -3124,12 +3130,14 @@ final class AidenBotSessionModel {
     func stop() async {
         guard isRunning, !inFlight.contains(.stop) else { return }
         stopIntent = .requested
+        stopRequestedThisTurn = true
         stopStartedAt = activity?.startedAt
         let stopped = await perform(.stop) { [transport, botID] key in
             try await transport.stopBotSession(botId: botID, idempotencyKey: key)
         }
         if !stopped {
             stopIntent = .none
+            stopRequestedThisTurn = false
         } else if stopIntent == .requested {
             stopIntent = .acknowledged
         }

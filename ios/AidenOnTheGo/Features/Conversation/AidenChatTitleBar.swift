@@ -161,7 +161,19 @@ struct AidenChatTitleCapsule: View {
     let title: String
     let status: AidenChatTitleStatus?
     let accessibilityHint: LocalizedStringKey
+    /// The state the Bot's header avatar is showing. Its face is hidden from
+    /// VoiceOver, so a finished or failed turn is spoken here instead.
+    var settledAvatar: AidenBotAvatarState? = nil
     let action: () -> Void
+
+    /// What VoiceOver reads after the title: a Done or Something went wrong
+    /// the avatar is playing, else the status line.
+    static func accessibilityValue(status: AidenChatTitleStatus?, settledAvatar: AidenBotAvatarState?) -> String {
+        if let settledAvatar, settledAvatar.isOutcome, let spoken = settledAvatar.accessibilityValue {
+            return spoken
+        }
+        return status?.text ?? ""
+    }
 
     var body: some View {
         Button(action: action) {
@@ -200,7 +212,7 @@ struct AidenChatTitleCapsule: View {
         .accessibilityShowsLargeContentViewer()
         .accessibilityElement(children: .ignore)
         .accessibilityLabel(title)
-        .accessibilityValue(status?.text ?? "")
+        .accessibilityValue(Self.accessibilityValue(status: status, settledAvatar: settledAvatar))
         .accessibilityHint(accessibilityHint)
         .accessibilityAddTraits(.isButton)
         .accessibilityIdentifier("chat-title-capsule")

@@ -1435,6 +1435,27 @@ final class AidenRemoteClientTests: XCTestCase {
         XCTAssertTrue(grants.contains(.chatContinueInNewChat))
     }
 
+    /// Revision 70: the Agent Slider is an opt-in asked for alone, because a Mac
+    /// saves a sent selection only for a phone that holds it.
+    func testAgentSliderIsAnOptInNegotiatedAlone() async throws {
+        let section = try XCTUnwrap(
+            JSONSerialization.jsonObject(with: botFixtureData(at: ["agentSlider"])) as? [String: Any]
+        )
+        let capability = try XCTUnwrap(section["capability"] as? String)
+        XCTAssertEqual(AidenRemoteCapability(rawValue: capability), .chatAgentSlider)
+        XCTAssertFalse(AidenRemoteCapability.v1Known.contains(.chatAgentSlider))
+        XCTAssertTrue(AidenRemoteCapability.phoneNegotiable.contains(.chatAgentSlider))
+        let askedForAlone = await MainActor.run { AidenRemoteCoordinator.capabilitiesAskedForAlone }
+        XCTAssertTrue(askedForAlone.contains([.chatAgentSlider]))
+        AidenRemoteMockURLProtocol.handler = { request in
+            XCTAssertEqual(request.url?.path, "/api/aiden/v1/device/capabilities")
+            XCTAssertEqual(try Self.jsonBody(request)["accepts"] as? [String], [capability])
+            return Self.response(for: request, status: 200, json: #"{"capabilities":["chat:read","chat:write","chat:agent-slider"]}"#)
+        }
+        let grants = try await makeClient().updateDeviceCapabilities(accepts: [.chatAgentSlider])
+        XCTAssertTrue(grants.contains(.chatAgentSlider))
+    }
+
     /// Revision 65: `stream:snapshot-reasons` is negotiated solo so older phones
     /// with closed snapshot decoders keep receiving the legacy 3-key payload.
     func testStreamSnapshotReasonsIsAnOptInNegotiatedAlone() async throws {

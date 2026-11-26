@@ -99,7 +99,8 @@ export function resolveAgentActivity({
   }
 
   if (pendingApproval) {
-    return { phase: "waiting", label: "Waiting for approval", mark: "glance" };
+    // The same words the helpers use when they wait on the person.
+    return { phase: "waiting", label: "Waiting on you", mark: "glance" };
   }
 
   if (usageLimitWait && (isStarting || streamingText !== null)) {

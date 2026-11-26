@@ -77,6 +77,8 @@ const appSourcePaths = [
   "AidenOnTheGo/Features/Bots/AidenBotSessionChatView.swift",
   "AidenOnTheGo/Features/Bots/AidenBotSessionModel.swift",
   "AidenOnTheGo/Features/Bots/AidenBotSettingsDraft.swift",
+  "AidenOnTheGo/Features/Bots/AidenBotSprite.swift",
+  "AidenOnTheGo/Features/Bots/AidenBotSpriteView.swift",
   "AidenOnTheGo/Features/Bots/AidenBotWatchEditorView.swift",
   "AidenOnTheGo/Features/Bots/AidenBotWatchModel.swift",
   "AidenOnTheGo/Features/Bots/AidenBotWatchesView.swift",
@@ -111,6 +113,10 @@ const appSourcePaths = [
   "AidenOnTheGo/Features/Chat/AidenChatComposer.swift",
   "AidenOnTheGo/Features/Chat/AidenChatRows.swift",
   "AidenOnTheGo/Features/Chat/AidenActivityFeed.swift",
+  "AidenOnTheGo/Features/Chat/AidenAgentSlider.swift",
+  "AidenOnTheGo/Features/Chat/AidenAgentSliderSettingsView.swift",
+  "AidenOnTheGo/Features/Chat/AidenAgentSliderSheet.swift",
+  "AidenOnTheGo/Features/Chat/AidenChatViewModel+AgentSlider.swift",
   "AidenOnTheGo/Features/Chat/AidenWorkspaceChatsModel.swift",
   "AidenOnTheGo/Features/Chat/AidenChatsView.swift",
   "AidenOnTheGo/Features/Chat/AidenChatDetailView.swift",
@@ -130,6 +136,7 @@ const appSourcePaths = [
   "AidenOnTheGo/Features/Workspace/AidenRelativeTimestamp.swift",
   "AidenOnTheGo/Features/Workspace/AidenNewAgentPopover.swift",
   "AidenOnTheGo/Features/Workspace/AidenWorkspaceArchiveStore.swift",
+  "AidenOnTheGo/Features/Workspace/AidenNotificationSettingsView.swift",
   "AidenOnTheGo/Features/Workspace/AidenHomeModel.swift",
   "AidenOnTheGo/Features/Workspace/AidenUsageView.swift",
   "AidenOnTheGo/Features/Workspace/AidenAppSettingsView.swift",
@@ -143,6 +150,7 @@ const appSourcePaths = [
   "AidenOnTheGo/Features/Remote/AidenBotChatToolsView.swift",
   "AidenOnTheGo/Features/Remote/Demo/AidenDemoHosts.swift",
   "AidenOnTheGo/Features/Remote/Demo/AidenDemoBotUX.swift",
+  "AidenOnTheGo/Features/Remote/Demo/AidenDemoAgentSlider.swift",
   "AidenOnTheGo/Features/Remote/Demo/AidenPreviewFixtureView.swift",
   "AidenOnTheGo/Features/Remote/Hosts/AidenHostConnectScheduler.swift",
   "AidenOnTheGo/Features/Shell/AidenAppNavigation.swift",
@@ -172,6 +180,9 @@ const appSourcePaths = [
   "AidenOnTheGo/Features/Remote/AidenSandboxedHTMLView.swift",
   "AidenOnTheGo/Features/Remote/AidenHTMLPreviewTheme.swift",
   "AidenOnTheGo/Features/Remote/AidenWorkspaceEnvironmentView.swift",
+  "AidenOnTheGo/Features/Remote/AidenAlertActionResponder.swift",
+  "AidenOnTheGo/Features/Remote/AidenBackgroundGrace.swift",
+  "AidenOnTheGo/Features/Remote/AidenNotificationPreferences.swift",
   "AidenOnTheGo/Features/Shared/ActivityMarks/AidenActivityMarkEvaluator.swift",
   "AidenOnTheGo/Features/Shared/ActivityMarks/AidenActivityMarkMapping.swift",
   "AidenOnTheGo/Features/Shared/ActivityMarks/AidenActivityMarkSpec.swift",
@@ -183,6 +194,8 @@ const appSourcePaths = [
   "AidenOnTheGo/LiveActivities/AidenDeepLink.swift",
   "AidenOnTheGo/LiveActivities/AidenLatestValueThrottle.swift",
   "AidenOnTheGo/LiveActivities/AidenRemoteLiveActivityManager.swift",
+  "AidenOnTheGo/LiveActivities/AidenApprovalIntents.swift",
+  "AidenOnTheGo/LiveActivities/AidenRunsSummaryActivityAttributes.swift",
   "AidenOnTheGo/Models/AidenBot.swift",
   "AidenOnTheGo/Models/AidenBotAllowed.swift",
   "AidenOnTheGo/Models/AidenBotMemory.swift",
@@ -279,6 +292,7 @@ const workspaceShellSourcePaths = [
   "AidenOnTheGo/Features/Workspace/AidenRelativeTimestamp.swift",
   "AidenOnTheGo/Features/Workspace/AidenHomeModel.swift",
   "AidenOnTheGo/Features/Workspace/AidenWorkspaceArchiveStore.swift",
+  "AidenOnTheGo/Features/Workspace/AidenNotificationSettingsView.swift",
   "AidenOnTheGo/Features/Workspace/AidenNewAgentPopover.swift",
   "AidenOnTheGo/Features/Workspace/AidenUsageView.swift",
   "AidenOnTheGo/Features/Workspace/AidenAppSettingsView.swift",
@@ -328,6 +342,7 @@ const testSources = [
   "AidenDurablePendingMutationTests.swift",
   "AidenBotPlanTests.swift",
   "AidenBotSessionTests.swift",
+  "AidenBotSpriteTests.swift",
   "AidenBotWatchTests.swift",
   "AidenActivityMarkTests.swift",
   "AidenChatDockTests.swift",
@@ -359,6 +374,7 @@ const testSources = [
   "AidenVisualViewerTests.swift",
   "AidenSandboxedHTMLTests.swift",
   "AidenWorkspaceEnvironmentTests.swift",
+  "AidenAgentSliderTests.swift",
 ];
 
 // UI tests never ship. They launch the Debug app against demo machines.
@@ -367,15 +383,19 @@ const uiTestSources = [
   "AidenBotUXUITests.swift",
   "AidenSandboxedHTMLUITests.swift",
   "AidenWorkspaceHTMLUITests.swift",
+  "AidenAgentSliderUITests.swift",
   "AidenStateMatrix.swift",
 ];
 
 const widgetSources = [
   "AgentRunActivityAttributes.swift",
+  "AidenRunsSummaryActivityAttributes.swift",
   "AidenDeepLink.swift",
+  "AidenApprovalIntents.swift",
   "AidenHomeActionIntent.swift",
   "AidenQuickActionsWidget.swift",
   "AgentRunLiveActivityWidget.swift",
+  "AidenRunsSummaryLiveActivityWidget.swift",
 ];
 
 function phaseSourceNames(project, phaseId) {
@@ -955,10 +975,6 @@ test("the Aiden home, onboarding, composer, schedules, and activity retain the r
   assert.match(scheduledTasks, /visibleProviders[\s\S]*?selectedProvider\?\.visibleModels/u);
   assert.doesNotMatch(chat, /if let levels = model\.selectedModel\?\.thinkingLevels/u);
   assert.doesNotMatch(chat, /\.background\(\.bar\)/u);
-  assert.match(
-    widget,
-    /status == \.starting \|\| status == \.thinking[\s\S]*?Image\("aiden-sidebar-logo"\)/u,
-  );
   assert.match(project, /aiden-sidebar-logo\.png in Resources/u);
   assert.doesNotMatch(`${shell}\n${pairing}\n${chat}\n${widget}`, /brain|sparkle/iu);
 

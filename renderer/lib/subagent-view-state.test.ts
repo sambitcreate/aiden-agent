@@ -338,10 +338,10 @@ test("V2 terminal handoff preserves outcome and bounds delayed saving", () => {
   const terminalStates: readonly [V2TerminalState, string][] = [
     ["completed", "Done"],
     ["failed", "Failed"],
-    ["timed_out", "Timed out"],
-    ["interrupted", "Interrupted"],
+    ["timed_out", "Failed"],
+    ["interrupted", "Stopped"],
     ["stopped", "Stopped"],
-    ["unknown", "Outcome unknown"],
+    ["unknown", "Stopped"],
   ];
 
   for (const [state, outcome] of terminalStates) {
@@ -727,9 +727,9 @@ test("status and elapsed labels are deterministic for active and terminal runs",
   )[0]!;
   const done = buildSubagentRunViews("chat-1", [], [snapshot()])[0]!;
 
-  assert.equal(subagentStatusLabel("running"), "Working");
+  assert.equal(subagentStatusLabel("running"), "Running");
   assert.equal(subagentStatusLabel("completed"), "Done");
-  assert.equal(subagentStatusLabel("unknown"), "Outcome unknown");
+  assert.equal(subagentStatusLabel("unknown"), "Stopped");
   assert.equal(subagentElapsedLabel(active, 3_725_000), "1h 2m 4s");
   assert.equal(subagentElapsedLabel(done, 9_999_999), "2s");
   assert.equal(formatSubagentElapsed(90_061_000), "1d 1h 1m");
@@ -767,13 +767,13 @@ test("stale-active presentation is clock-injected, bounded, and terminal-safe", 
   assert.equal(isSubagentRunViewStale(active, 5_999, 5_000), false);
   assert.deepEqual(deriveSubagentRunPresentation(active, [], 5_999, 5_000), {
     state: "active",
-    label: "Working",
+    label: "Running",
   });
   assert.equal(isSubagentRunViewStale(active, 6_000, 5_000), true);
   const stale = deriveSubagentRunPresentation(active, [], 6_000, 5_000);
   assert.deepEqual(stale, {
     state: "stale_active",
-    label: "Still working; last update 5s ago",
+    label: "Still running; last update 5s ago",
   });
   assert.ok(stale.label.length < 96);
   assert.deepEqual(active.snapshot, before);
@@ -792,7 +792,7 @@ test("stale-active presentation is clock-injected, bounded, and terminal-safe", 
   const bounded = deriveSubagentRunPresentation(active, [], Number.MAX_VALUE, 0);
   assert.equal(bounded.state, "stale_active");
   assert.ok(bounded.label.length < 96);
-  assert.match(bounded.label, /^Still working; last update \d+d \d+h \d+m ago$/u);
+  assert.match(bounded.label, /^Still running; last update \d+d \d+h \d+m ago$/u);
 });
 
 test("detail results are rejected after request, chat, or selection ownership changes", () => {

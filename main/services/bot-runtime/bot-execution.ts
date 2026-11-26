@@ -63,6 +63,10 @@ export interface BotExecutionPort {
   acknowledgeUnknown?(botId: string, claim: BotExecutionClaim, expectedDispatchId?: string): Promise<boolean | "recorded">;
   hasUnknown?(botId: string, claim: BotExecutionClaim): Promise<boolean>;
   dismissed?(botId: string, claim: BotExecutionClaim): Promise<void>;
+  /** The claim's generation committed its final outcome and no new generation carries its inputs: its reply ended. */
+  settled?(botId: string, claim: BotExecutionClaim): Promise<void>;
+  /** The person resumed the claim's interrupted reply, so it starts again with fresh per-reply limits. A quiet automatic retry does not call this. */
+  resumed?(botId: string, claim: BotExecutionClaim): Promise<void>;
   verifyResponse?(facts: BotProviderResponseFacts): Promise<boolean>;
   reconcileResponseCosts?(botId: string, taskId: string, scopeId: string): Promise<void>;
   recordKnownResponse?(facts: BotProviderResponseFacts, message: AssistantMessage): Promise<void>;
@@ -344,14 +348,14 @@ export function createBotExecutionRegistry(botId: string, registry: RegistryRead
       const selected = claim.actual === "fallback" ? claim.fallback! : claim.primary;
       const prepared = task.state.checkpoint as S & { model?: { provider: string; modelId: string }; thinkingLevel?: string };
       if (prepared.model && (prepared.model.provider !== execution.model.provider || prepared.model.modelId !== execution.model.id || prepared.thinkingLevel !== undefined && prepared.thinkingLevel !== selected.thinkingLevel)) { execution.release(); throw new Error("Prepared model settings disagree with the durable execution choice."); }
-      let settledTerminal = false;
+      let settledTerminal = false, generationEnded = false;
       const verifyCostApproval = port.verifyCostApproval ?? (async () => false);
       const boundModels = executionModels(runtime, execution, claim, original.definition.name, phase, task.state.checkpoint, context, binding.dispatchGeneration ?? 0, responseScopeId, port, block, () => { settledTerminal = true; }, verifyCostApproval);
       const restoreRuntime = overrideOwn(runtime, (base) => ({
         agent: async (at: Context) => ({ ...await base.agent(at), model: { provider: execution.model.provider, modelId: execution.model.id }, thinkingLevel: selected.thinkingLevel }),
         models: boundModels,
         get settings() { const settings = base.settings; return settledTerminal ? { ...settings, retry: { ...settings.retry, enabled: false }, compaction: { ...settings.compaction, enabled: false, modelOverrides: {} } } : settings; },
-        commit: ((change, at) => base.commit(async (tx, current) => {
+        commit: (async (change, at) => { let ends = false; const committed = await base.commit(async (tx, current) => {
           const generations: { id: TaskId; conversationId: typeof runtime.conversationId }[] = [];
           const decorated = proxyBound(tx, { createTask: (async (definition, input, options) => {
             const id = await tx.createTask(definition, input, options), kind = definition.definition.name;
@@ -360,13 +364,18 @@ export function createBotExecutionRegistry(botId: string, registry: RegistryRead
             return id;
           }) as Tx["createTask"] });
           const next = await change(decorated, current);
+          // A queued message can start its own generation in this same commit;
+          // only a generation that carries one of this claim's inputs continues its reply.
+          let continues = false;
           for (const created of generations) {
             const final = await tx.doc(LiveDoc, created.conversationId);
             if (final.run?.taskId !== created.id || !final.run.inputs.length) throw new Error("New generation has no exact staged input owner.");
             const child = await tx.doc(BotExecutionDoc, created.id); child.sourceInputs = [...final.run.inputs];
+            if (final.run.inputs.some((input) => binding!.sourceInputs?.includes(input))) continues = true;
           }
+          ends = original.definition.name === GenerationTask.definition.name && !continues && (next as { status?: unknown } | undefined)?.status === "terminal";
           return next;
-        }, at)) as TaskRuntime<I, S, R, H>["commit"],
+        }, at); if (ends) generationEnded = true; return committed; }) as TaskRuntime<I, S, R, H>["commit"],
       }));
       let active = true;
       const helpers: BotExecutionRuntime[] = [];
@@ -382,6 +391,7 @@ export function createBotExecutionRegistry(botId: string, registry: RegistryRead
         }
         await handler(task, runtime, context);
         if ((phase === "abort" || settledTerminal) && original.definition.name === GenerationTask.definition.name) await port.dismissed?.(botId, claim);
+        if (generationEnded) await port.settled?.(botId, claim);
       });
       try { await claimScope(claim, run); }
       finally { restoreRuntime(); active = false; for (const helper of helpers) helper.release(); execution.release(); }

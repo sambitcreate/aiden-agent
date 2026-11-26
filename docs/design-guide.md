@@ -57,7 +57,18 @@ exact command, but a file rule covers any later edit (or write) to that file,
 whatever it changes, so the line says so. The Computer Use card's primary is
 **Allow in this chat**, with **Always allow** (every chat) in the menu. A file
 change shows removed and added lines on the soft red and green status fills,
-with screen-reader labels instead of relying on color. Specialized approvals
+with screen-reader labels instead of relying on color. A command card opens on
+**What it will do**: the model's one-line description of the command (now
+required on `run_command`), with a quiet icon-only flip button in the well's
+corner that turns to the exact command (with Copy) and back; it always opens on
+the words, the flip is a short tilt that Reduce Motion turns off, and flipping
+never answers the card. Under the well, Aiden's own tags read from the command
+text: soft red `Badge` fills with a warning icon for risky steps (deleting
+files, the internet, a downloaded script, admin rights, files outside the
+project, stopping programs) and quiet grey ones for calm steps, listed as
+"What Aiden sees in this command". A call with no description shows the command
+as before, with the tags. iPhone and Android draw the same flip and tags.
+Specialized approvals
 (scheduled tasks, subagent grants, form fills, classifiers, hook proposals)
 keep their own review bodies inside the same card.
 
@@ -257,6 +268,8 @@ read the pairing's saved `/server` features until the connection answers.
 ## Activity marks
 
 Show agent activity with the shared activity marks (`AidenActivityMark` on desktop), never with new spinners, canvas loops or shimmering icons. Geometry, timing and the phase mapping live in [`activity-marks.md`](activity-marks.md), and iOS and Android draw the same marks natively. Chat marks use the text colour, and Live uses the accent. Pass `active={false}` for terminal states so the mark freezes on its still pose rather than disappearing.
+
+The documented exception is a Bot's Hi-bit sprite avatar, which acts out its Bot's live state itself; see [Bot avatar states](activity-marks.md#bot-avatar-states-hi-bit-sprites). Its eyes use the tone's `deep` at every size. Faces drawn at 24 px and below add a small white glint while the eyes are open; larger faces keep the tone's `light` glint.
 
 ## Inbox rows
 

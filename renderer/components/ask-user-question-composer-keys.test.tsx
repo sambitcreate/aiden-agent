@@ -9,6 +9,7 @@ import {
   type AskUserQuestionV1,
 } from "../shared/ask-user-question";
 import { AskUserQuestionComposer } from "./ask-user-question-composer";
+import { focusRegion } from "../lib/focus-regions";
 
 afterEach(cleanup);
 
@@ -194,4 +195,17 @@ test("Esc still skips a question that had a recommendation", () => {
   const { card, responses } = mount([recommended("Database")]);
   fireEvent.keyDown(card, { key: "Escape" });
   assert.deepEqual(responses.map((response) => [response.cancelled, response.answers]), [[false, []]]);
+});
+
+test("while a question waits, focus sent to the message box lands on the question's answers", () => {
+  // Answer question in an expanded helper chat, F6 and Esc all send focus to the message box.
+  mount([question("Database"), question("Region")]);
+  (document.activeElement as HTMLElement | null)?.blur();
+  assert.equal(focusRegion("composer"), true);
+  assert.equal(document.activeElement, screen.getByRole("button", { name: /Database A/u }));
+
+  fireEvent.keyDown(screen.getByRole("region"), { key: "2" });
+  (document.activeElement as HTMLElement | null)?.blur();
+  focusRegion("composer");
+  assert.equal(document.activeElement, screen.getByRole("button", { name: /Database B/u }), "the current answer");
 });

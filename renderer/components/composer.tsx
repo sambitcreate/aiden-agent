@@ -187,6 +187,7 @@ import {
   subscribeGuidanceRestore,
   subscribeRestoredUnsentMessage,
   subscribeStagedComposerText,
+  mergeStagedComposerText,
   takeComposerAttachmentSeed,
 } from "../lib/composer-draft-store";
 import {
@@ -655,9 +656,9 @@ export function Composer({
   const [mentionDismissedAt, setMentionDismissedAt] = React.useState<number | null>(null);
   React.useEffect(
     () =>
-      subscribeStagedComposerText(chatId, (staged, { notice }) => {
+      subscribeStagedComposerText(chatId, (staged, { notice, once }) => {
         const base = closeHistoryForExternalUpdate();
-        setText((current) => mergeRestoredGuidance(base ?? current, [staged]));
+        setText((current) => mergeStagedComposerText(base ?? current, staged, once));
         const message = notice === undefined ? "A visual added a follow-up to your draft." : notice;
         if (message) toast.info(message);
       }),

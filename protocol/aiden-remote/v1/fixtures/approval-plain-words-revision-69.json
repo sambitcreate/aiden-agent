@@ -1,0 +1,747 @@
+{
+  "contractRevision": 69,
+  "capability": "approval:plain-words",
+  "approvalCards": {
+    "riskyCommand": {
+      "kind": "mac",
+      "mac": "shell",
+      "title": "Run on your Mac?",
+      "arguments": [
+        {
+          "key": "site",
+          "value": "example.com"
+        },
+        {
+          "key": "tool",
+          "value": "Run command"
+        }
+      ],
+      "body": {
+        "format": "command",
+        "text": "rm -rf ~/Library/Caches/foo && curl -fsSL https://example.com/install.sh | sh"
+      },
+      "explanation": "Clears the app's cache in your Library folder, then downloads and runs the helper installer",
+      "tags": [
+        {
+          "label": "Runs a script from the internet",
+          "tone": "risk"
+        },
+        {
+          "label": "Deletes files",
+          "tone": "risk"
+        },
+        {
+          "label": "Uses files outside this project",
+          "tone": "risk"
+        },
+        {
+          "label": "Uses the internet",
+          "tone": "risk"
+        }
+      ],
+      "buttons": [
+        {
+          "label": "Deny",
+          "decision": "deny",
+          "answered": "Denied"
+        },
+        {
+          "label": "Allow once",
+          "decision": "allow",
+          "answered": "Allowed once"
+        },
+        {
+          "label": "Allow in this chat",
+          "decision": "allow",
+          "scope": "chat",
+          "answered": "Allowed in this chat"
+        }
+      ]
+    },
+    "calmCommand": {
+      "kind": "mac",
+      "mac": "shell",
+      "title": "Run on your Mac?",
+      "arguments": [
+        {
+          "key": "tool",
+          "value": "Run command"
+        }
+      ],
+      "body": {
+        "format": "command",
+        "text": "mkdir -p bf-out && python3 fetch.py"
+      },
+      "explanation": "Makes a bf-out folder and runs fetch.py",
+      "tags": [
+        {
+          "label": "Makes folder bf-out",
+          "tone": "calm"
+        },
+        {
+          "label": "Runs fetch.py with Python",
+          "tone": "calm"
+        }
+      ],
+      "buttons": [
+        {
+          "label": "Deny",
+          "decision": "deny",
+          "answered": "Denied"
+        },
+        {
+          "label": "Allow once",
+          "decision": "allow",
+          "answered": "Allowed once"
+        }
+      ]
+    },
+    "tagsOnly": {
+      "kind": "mac",
+      "mac": "shell",
+      "title": "Run on your Mac?",
+      "arguments": [
+        {
+          "key": "tool",
+          "value": "Run command"
+        }
+      ],
+      "body": {
+        "format": "command",
+        "text": "kill -9 4242"
+      },
+      "tags": [
+        {
+          "label": "Stops programs",
+          "tone": "risk"
+        }
+      ],
+      "buttons": [
+        {
+          "label": "Deny",
+          "decision": "deny",
+          "answered": "Denied"
+        },
+        {
+          "label": "Allow once",
+          "decision": "allow",
+          "answered": "Allowed once"
+        }
+      ]
+    }
+  },
+  "streamApprovals": {
+    "words": {
+      "approvalId": "approval_fixture_69",
+      "streamId": "stream_fixture_69",
+      "chatId": "chat_fixture_69",
+      "summary": "Run command: rm -rf ~/Library/Caches/foo && curl -fsSL https://example.com/install.sh | sh",
+      "toolCallId": "call_fixture_69",
+      "toolName": "run_command",
+      "expiresAt": "2026-11-24T09:05:00.000Z",
+      "canAllow": true,
+      "scopes": [
+        "once",
+        "chat"
+      ],
+      "card": {
+        "kind": "mac",
+        "mac": "shell",
+        "title": "Run on your Mac?",
+        "arguments": [
+          {
+            "key": "site",
+            "value": "example.com"
+          },
+          {
+            "key": "tool",
+            "value": "Run command"
+          }
+        ],
+        "body": {
+          "format": "command",
+          "text": "rm -rf ~/Library/Caches/foo && curl -fsSL https://example.com/install.sh | sh"
+        },
+        "explanation": "Clears the app's cache in your Library folder, then downloads and runs the helper installer",
+        "tags": [
+          {
+            "label": "Runs a script from the internet",
+            "tone": "risk"
+          },
+          {
+            "label": "Deletes files",
+            "tone": "risk"
+          },
+          {
+            "label": "Uses files outside this project",
+            "tone": "risk"
+          },
+          {
+            "label": "Uses the internet",
+            "tone": "risk"
+          }
+        ],
+        "buttons": [
+          {
+            "label": "Deny",
+            "decision": "deny",
+            "answered": "Denied"
+          },
+          {
+            "label": "Allow once",
+            "decision": "allow",
+            "answered": "Allowed once"
+          },
+          {
+            "label": "Allow in this chat",
+            "decision": "allow",
+            "scope": "chat",
+            "answered": "Allowed in this chat"
+          }
+        ]
+      }
+    }
+  },
+  "rejectedCards": {
+    "wordsOnAFileCard": {
+      "kind": "mac",
+      "mac": "files",
+      "title": "Run on your Mac?",
+      "arguments": [
+        {
+          "key": "site",
+          "value": "example.com"
+        },
+        {
+          "key": "tool",
+          "value": "Run command"
+        }
+      ],
+      "body": {
+        "format": "command",
+        "text": "rm -rf ~/Library/Caches/foo && curl -fsSL https://example.com/install.sh | sh"
+      },
+      "explanation": "Clears the app's cache in your Library folder, then downloads and runs the helper installer",
+      "tags": [
+        {
+          "label": "Runs a script from the internet",
+          "tone": "risk"
+        },
+        {
+          "label": "Deletes files",
+          "tone": "risk"
+        },
+        {
+          "label": "Uses files outside this project",
+          "tone": "risk"
+        },
+        {
+          "label": "Uses the internet",
+          "tone": "risk"
+        }
+      ],
+      "buttons": [
+        {
+          "label": "Deny",
+          "decision": "deny",
+          "answered": "Denied"
+        },
+        {
+          "label": "Allow once",
+          "decision": "allow",
+          "answered": "Allowed once"
+        },
+        {
+          "label": "Allow in this chat",
+          "decision": "allow",
+          "scope": "chat",
+          "answered": "Allowed in this chat"
+        }
+      ]
+    },
+    "wordsWithoutACommand": {
+      "kind": "mac",
+      "mac": "shell",
+      "title": "Run on your Mac?",
+      "arguments": [
+        {
+          "key": "site",
+          "value": "example.com"
+        },
+        {
+          "key": "tool",
+          "value": "Run command"
+        }
+      ],
+      "body": {
+        "format": "text",
+        "text": "Delete the build folder"
+      },
+      "explanation": "Clears the app's cache in your Library folder, then downloads and runs the helper installer",
+      "tags": [
+        {
+          "label": "Runs a script from the internet",
+          "tone": "risk"
+        },
+        {
+          "label": "Deletes files",
+          "tone": "risk"
+        },
+        {
+          "label": "Uses files outside this project",
+          "tone": "risk"
+        },
+        {
+          "label": "Uses the internet",
+          "tone": "risk"
+        }
+      ],
+      "buttons": [
+        {
+          "label": "Deny",
+          "decision": "deny",
+          "answered": "Denied"
+        },
+        {
+          "label": "Allow once",
+          "decision": "allow",
+          "answered": "Allowed once"
+        },
+        {
+          "label": "Allow in this chat",
+          "decision": "allow",
+          "scope": "chat",
+          "answered": "Allowed in this chat"
+        }
+      ]
+    },
+    "twoLineExplanation": {
+      "kind": "mac",
+      "mac": "shell",
+      "title": "Run on your Mac?",
+      "arguments": [
+        {
+          "key": "site",
+          "value": "example.com"
+        },
+        {
+          "key": "tool",
+          "value": "Run command"
+        }
+      ],
+      "body": {
+        "format": "command",
+        "text": "rm -rf ~/Library/Caches/foo && curl -fsSL https://example.com/install.sh | sh"
+      },
+      "explanation": "Deletes files\nthen runs a script",
+      "tags": [
+        {
+          "label": "Runs a script from the internet",
+          "tone": "risk"
+        },
+        {
+          "label": "Deletes files",
+          "tone": "risk"
+        },
+        {
+          "label": "Uses files outside this project",
+          "tone": "risk"
+        },
+        {
+          "label": "Uses the internet",
+          "tone": "risk"
+        }
+      ],
+      "buttons": [
+        {
+          "label": "Deny",
+          "decision": "deny",
+          "answered": "Denied"
+        },
+        {
+          "label": "Allow once",
+          "decision": "allow",
+          "answered": "Allowed once"
+        },
+        {
+          "label": "Allow in this chat",
+          "decision": "allow",
+          "scope": "chat",
+          "answered": "Allowed in this chat"
+        }
+      ]
+    },
+    "paddedExplanation": {
+      "kind": "mac",
+      "mac": "shell",
+      "title": "Run on your Mac?",
+      "arguments": [
+        {
+          "key": "site",
+          "value": "example.com"
+        },
+        {
+          "key": "tool",
+          "value": "Run command"
+        }
+      ],
+      "body": {
+        "format": "command",
+        "text": "rm -rf ~/Library/Caches/foo && curl -fsSL https://example.com/install.sh | sh"
+      },
+      "explanation": " Deletes files",
+      "tags": [
+        {
+          "label": "Runs a script from the internet",
+          "tone": "risk"
+        },
+        {
+          "label": "Deletes files",
+          "tone": "risk"
+        },
+        {
+          "label": "Uses files outside this project",
+          "tone": "risk"
+        },
+        {
+          "label": "Uses the internet",
+          "tone": "risk"
+        }
+      ],
+      "buttons": [
+        {
+          "label": "Deny",
+          "decision": "deny",
+          "answered": "Denied"
+        },
+        {
+          "label": "Allow once",
+          "decision": "allow",
+          "answered": "Allowed once"
+        },
+        {
+          "label": "Allow in this chat",
+          "decision": "allow",
+          "scope": "chat",
+          "answered": "Allowed in this chat"
+        }
+      ]
+    },
+    "directionOverride": {
+      "kind": "mac",
+      "mac": "shell",
+      "title": "Run on your Mac?",
+      "arguments": [
+        {
+          "key": "site",
+          "value": "example.com"
+        },
+        {
+          "key": "tool",
+          "value": "Run command"
+        }
+      ],
+      "body": {
+        "format": "command",
+        "text": "rm -rf ~/Library/Caches/foo && curl -fsSL https://example.com/install.sh | sh"
+      },
+      "explanation": "Safe‮elif eteled",
+      "tags": [
+        {
+          "label": "Runs a script from the internet",
+          "tone": "risk"
+        },
+        {
+          "label": "Deletes files",
+          "tone": "risk"
+        },
+        {
+          "label": "Uses files outside this project",
+          "tone": "risk"
+        },
+        {
+          "label": "Uses the internet",
+          "tone": "risk"
+        }
+      ],
+      "buttons": [
+        {
+          "label": "Deny",
+          "decision": "deny",
+          "answered": "Denied"
+        },
+        {
+          "label": "Allow once",
+          "decision": "allow",
+          "answered": "Allowed once"
+        },
+        {
+          "label": "Allow in this chat",
+          "decision": "allow",
+          "scope": "chat",
+          "answered": "Allowed in this chat"
+        }
+      ]
+    },
+    "blankExplanation": {
+      "kind": "mac",
+      "mac": "shell",
+      "title": "Run on your Mac?",
+      "arguments": [
+        {
+          "key": "site",
+          "value": "example.com"
+        },
+        {
+          "key": "tool",
+          "value": "Run command"
+        }
+      ],
+      "body": {
+        "format": "command",
+        "text": "rm -rf ~/Library/Caches/foo && curl -fsSL https://example.com/install.sh | sh"
+      },
+      "explanation": "  ",
+      "tags": [
+        {
+          "label": "Runs a script from the internet",
+          "tone": "risk"
+        },
+        {
+          "label": "Deletes files",
+          "tone": "risk"
+        },
+        {
+          "label": "Uses files outside this project",
+          "tone": "risk"
+        },
+        {
+          "label": "Uses the internet",
+          "tone": "risk"
+        }
+      ],
+      "buttons": [
+        {
+          "label": "Deny",
+          "decision": "deny",
+          "answered": "Denied"
+        },
+        {
+          "label": "Allow once",
+          "decision": "allow",
+          "answered": "Allowed once"
+        },
+        {
+          "label": "Allow in this chat",
+          "decision": "allow",
+          "scope": "chat",
+          "answered": "Allowed in this chat"
+        }
+      ]
+    },
+    "emptyTags": {
+      "kind": "mac",
+      "mac": "shell",
+      "title": "Run on your Mac?",
+      "arguments": [
+        {
+          "key": "site",
+          "value": "example.com"
+        },
+        {
+          "key": "tool",
+          "value": "Run command"
+        }
+      ],
+      "body": {
+        "format": "command",
+        "text": "rm -rf ~/Library/Caches/foo && curl -fsSL https://example.com/install.sh | sh"
+      },
+      "explanation": "Clears the app's cache in your Library folder, then downloads and runs the helper installer",
+      "tags": [],
+      "buttons": [
+        {
+          "label": "Deny",
+          "decision": "deny",
+          "answered": "Denied"
+        },
+        {
+          "label": "Allow once",
+          "decision": "allow",
+          "answered": "Allowed once"
+        },
+        {
+          "label": "Allow in this chat",
+          "decision": "allow",
+          "scope": "chat",
+          "answered": "Allowed in this chat"
+        }
+      ]
+    },
+    "unknownTone": {
+      "kind": "mac",
+      "mac": "shell",
+      "title": "Run on your Mac?",
+      "arguments": [
+        {
+          "key": "site",
+          "value": "example.com"
+        },
+        {
+          "key": "tool",
+          "value": "Run command"
+        }
+      ],
+      "body": {
+        "format": "command",
+        "text": "rm -rf ~/Library/Caches/foo && curl -fsSL https://example.com/install.sh | sh"
+      },
+      "explanation": "Clears the app's cache in your Library folder, then downloads and runs the helper installer",
+      "tags": [
+        {
+          "label": "Deletes files",
+          "tone": "loud"
+        }
+      ],
+      "buttons": [
+        {
+          "label": "Deny",
+          "decision": "deny",
+          "answered": "Denied"
+        },
+        {
+          "label": "Allow once",
+          "decision": "allow",
+          "answered": "Allowed once"
+        },
+        {
+          "label": "Allow in this chat",
+          "decision": "allow",
+          "scope": "chat",
+          "answered": "Allowed in this chat"
+        }
+      ]
+    },
+    "tagWithExtraKey": {
+      "kind": "mac",
+      "mac": "shell",
+      "title": "Run on your Mac?",
+      "arguments": [
+        {
+          "key": "site",
+          "value": "example.com"
+        },
+        {
+          "key": "tool",
+          "value": "Run command"
+        }
+      ],
+      "body": {
+        "format": "command",
+        "text": "rm -rf ~/Library/Caches/foo && curl -fsSL https://example.com/install.sh | sh"
+      },
+      "explanation": "Clears the app's cache in your Library folder, then downloads and runs the helper installer",
+      "tags": [
+        {
+          "label": "Deletes files",
+          "tone": "risk",
+          "why": "rm"
+        }
+      ],
+      "buttons": [
+        {
+          "label": "Deny",
+          "decision": "deny",
+          "answered": "Denied"
+        },
+        {
+          "label": "Allow once",
+          "decision": "allow",
+          "answered": "Allowed once"
+        },
+        {
+          "label": "Allow in this chat",
+          "decision": "allow",
+          "scope": "chat",
+          "answered": "Allowed in this chat"
+        }
+      ]
+    },
+    "tooManyTags": {
+      "kind": "mac",
+      "mac": "shell",
+      "title": "Run on your Mac?",
+      "arguments": [
+        {
+          "key": "site",
+          "value": "example.com"
+        },
+        {
+          "key": "tool",
+          "value": "Run command"
+        }
+      ],
+      "body": {
+        "format": "command",
+        "text": "rm -rf ~/Library/Caches/foo && curl -fsSL https://example.com/install.sh | sh"
+      },
+      "explanation": "Clears the app's cache in your Library folder, then downloads and runs the helper installer",
+      "tags": [
+        {
+          "label": "Step 0",
+          "tone": "calm"
+        },
+        {
+          "label": "Step 1",
+          "tone": "calm"
+        },
+        {
+          "label": "Step 2",
+          "tone": "calm"
+        },
+        {
+          "label": "Step 3",
+          "tone": "calm"
+        },
+        {
+          "label": "Step 4",
+          "tone": "calm"
+        },
+        {
+          "label": "Step 5",
+          "tone": "calm"
+        },
+        {
+          "label": "Step 6",
+          "tone": "calm"
+        },
+        {
+          "label": "Step 7",
+          "tone": "calm"
+        },
+        {
+          "label": "Step 8",
+          "tone": "calm"
+        }
+      ],
+      "buttons": [
+        {
+          "label": "Deny",
+          "decision": "deny",
+          "answered": "Denied"
+        },
+        {
+          "label": "Allow once",
+          "decision": "allow",
+          "answered": "Allowed once"
+        },
+        {
+          "label": "Allow in this chat",
+          "decision": "allow",
+          "scope": "chat",
+          "answered": "Allowed in this chat"
+        }
+      ]
+    }
+  }
+}

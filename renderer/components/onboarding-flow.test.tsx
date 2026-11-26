@@ -167,7 +167,7 @@ test("the final step is a complete grouped bento gallery with hover descriptions
   for (const title of [
     "Workspace Agent",
     "Computer Use",
-    "Native Subagents",
+    "Helpers",
     "Files & Text Editor",
     "Review & Diffs",
     "Integrated Terminal",

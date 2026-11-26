@@ -17,6 +17,10 @@ import {
   QUICK_CHAT_NOTIFICATION_CHANNELS,
 } from "../../renderer/quick-chat-preload-channels.js";
 import {
+  BOT_BUBBLES_INVOKE_CHANNELS,
+  BOT_BUBBLES_NOTIFICATION_CHANNELS,
+} from "../../renderer/bot-bubbles-preload-channels.js";
+import {
   createAttachmentPreloadBridge,
   PRELOAD_MAX_ATTACHMENT_BYTES,
   PRELOAD_MAX_ATTACHMENT_PATHS,
@@ -201,6 +205,27 @@ async function productionSourceFiles(directory: string): Promise<ts.SourceFile[]
   return sourceFiles;
 }
 
+/** The Bot bubble client and the overlay's own renderer (when present): they invoke `bots:bubbles:*`. */
+async function botBubbleRendererSources(): Promise<ts.SourceFile[]> {
+  const files = [path.join(REPO_ROOT, "renderer/lib/bot-bubbles-api.ts")];
+  const overlayRoot = path.join(REPO_ROOT, "renderer", "bot-bubbles");
+  const entries = await fs.readdir(overlayRoot, { recursive: true }).catch(() => [] as string[]);
+  for (const entry of entries) {
+    if (/\.tsx?$/u.test(entry) && !/\.test\.tsx?$/u.test(entry)) files.push(path.join(overlayRoot, entry));
+  }
+  return Promise.all(
+    files.map(async (file) =>
+      ts.createSourceFile(
+        file,
+        await fs.readFile(file, "utf8"),
+        ts.ScriptTarget.Latest,
+        true,
+        file.endsWith(".tsx") ? ts.ScriptKind.TSX : ts.ScriptKind.TS,
+      ),
+    ),
+  );
+}
+
 function sorted(values: Iterable<string>): string[] {
   return [...values].sort();
 }
@@ -223,6 +248,7 @@ const rendererInvokes = collectRendererInvokes(
       true,
       ts.ScriptKind.TS,
     ),
+    ...(await botBubbleRendererSources()),
   ],
   sharedSources,
 );
@@ -440,6 +466,15 @@ test("every Quick Chat preload invoke and notification channel exists in live ma
     [],
     "Quick Chat notification channels missing from main notification sites",
   );
+});
+
+test("every Bot bubble overlay preload channel exists in live main inventory", () => {
+  const missingHandlers = [...BOT_BUBBLES_INVOKE_CHANNELS].filter((channel) => !inventory.handlers.has(channel));
+  assert.deepEqual(missingHandlers, [], "Bot bubble overlay invoke channels missing from main handlers");
+  const missingNotifications = [...BOT_BUBBLES_NOTIFICATION_CHANNELS].filter(
+    (channel) => !inventory.notifications.has(channel),
+  );
+  assert.deepEqual(missingNotifications, [], "Bot bubble overlay notification channels missing from main notification sites");
 });
 
 test("handler bootstrap registers every dedicated handler surface", async () => {

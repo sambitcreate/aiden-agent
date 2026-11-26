@@ -141,6 +141,7 @@ async function fixture(options: {
   newWorktrees?: boolean;
   /** With `forks`: the host can continue a chat whose folder is gone in a new chat (revision 64). */
   continueInNewChat?: boolean;
+  agentSlider?: boolean;
   streamsOverride?: import("./aiden-remote-router.js").AidenRemoteRouterDependencies["streams"];
   /** Contract revision 68: which Bots wait on the person. */
   botNeedsYou?: import("./aiden-remote-router.js").AidenRemoteRouterDependencies["botNeedsYou"];
@@ -311,13 +312,15 @@ async function fixture(options: {
               capability !== "attachments:raw" &&
               capability !== "chat:new-worktree" &&
               capability !== "approval:cards" &&
+              capability !== "approval:plain-words" &&
               capability !== "approvals:settings" &&
               capability !== "bot:settings-changes" &&
               capability !== "bot:suggestions" &&
               capability !== "bot:templates" &&
               capability !== "chat:continue-in-new-chat" &&
               capability !== "stream:snapshot-reasons" &&
-              capability !== "bot:needs-you",
+              capability !== "bot:needs-you" &&
+              capability !== "chat:agent-slider",
           )
         ) {
           return null;
@@ -375,6 +378,7 @@ async function fixture(options: {
       },
     },
     chats: {
+      ...(options.agentSlider ? { supportsAgentSlider: true } : {}),
       ...(options.newWorktrees
         ? {
             supportsNewWorktrees: true,
@@ -2010,6 +2014,7 @@ test("progress support is advertised and upgraded only when the Mac can serve it
       "schedule:write",
       "schedule:cards",
       "approval:cards",
+      "approval:plain-words",
       "attachments:raw",
       "stream:snapshot-reasons",
       "skills:invoke",
@@ -7553,6 +7558,32 @@ test("chat:continue-in-new-chat is offered only while the host can continue a ch
         assert.equal(response.status, 201);
         assert.ok(app.calls.includes(`chat-fork:device-authorized-12345678:chat-1:rev-1:continue-key-00000001:${body}`));
       }
+    } finally {
+      await app.close();
+    }
+  }
+});
+
+test("revision 70 offers chat:agent-slider only where the host saves a phone's slider selection", async () => {
+  const headers = { authorization: `Bearer ${"a".repeat(43)}`, "aiden-protocol-version": "1" };
+  const negotiate = {
+    method: "POST",
+    headers: { ...headers, "content-type": "application/json" },
+    body: JSON.stringify({ accepts: ["chat:agent-slider"] }),
+  };
+  for (const offered of [false, true]) {
+    const app = await fixture({
+      capabilities: ["server:read", "chat:read", "chat:write"],
+      acceptsProgressCapabilities: true,
+      deviceType: "iphone",
+      agentSlider: offered,
+    });
+    try {
+      const server = await (await fetch(`${app.base}/server`, { headers })).json();
+      assert.equal(server.serverCapabilities.includes("chat:agent-slider"), offered);
+      const upgrade = await fetch(`${app.base}/device/capabilities`, negotiate);
+      assert.equal(upgrade.status, offered ? 200 : 404);
+      if (offered) assert.equal((await upgrade.json()).capabilities.includes("chat:agent-slider"), true);
     } finally {
       await app.close();
     }

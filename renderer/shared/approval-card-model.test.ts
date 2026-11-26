@@ -266,3 +266,33 @@ test("a hook proposal can be applied from a device only when its event, matcher 
   const noMatcher = buildApprovalCard({ toolName: "hooks", summary: "Add hook", canAllow: true, details: proposal({ matcher: undefined }) });
   assert.equal(approvalCardAllows(noMatcher), false);
 });
+
+test("plain words ride on a Mac command card only when the reader asked for them", () => {
+  const input = {
+    toolName: "run_command",
+    summary: "Run command: rm -rf build && mkdir build",
+    canAllow: true,
+    reading: { explanation: "Deletes the build folder and makes it again", tags: [{ label: "Deletes files", tone: "risk" as const }, { label: "Makes folder build", tone: "calm" as const }] },
+  };
+  const words = buildApprovalCard({ ...input, plainWords: true });
+  assert.equal(words.explanation, "Deletes the build folder and makes it again");
+  assert.deepEqual(words.tags, input.reading.tags);
+  assert.deepEqual(words.body, { format: "command", text: "rm -rf build && mkdir build" }, "the exact command is always there to flip to");
+  assert.equal(approvalCardAllows(words), true);
+
+  const plain = buildApprovalCard(input);
+  assert.equal(plain.explanation, undefined);
+  assert.equal(plain.tags, undefined);
+
+  const notShell = buildApprovalCard({ ...input, toolName: "web_fetch", summary: "Fetch https://example.com", plainWords: true });
+  assert.equal(notShell.explanation, undefined);
+  assert.equal(notShell.tags, undefined);
+
+  const malformed = buildApprovalCard({ ...input, plainWords: true, reading: { explanation: "Two\nlines", tags: [] } as never });
+  assert.equal(malformed.explanation, undefined, "a reading that does not validate is dropped whole");
+  assert.deepEqual(malformed.body, words.body);
+
+  const noWords = buildApprovalCard({ ...input, plainWords: true, reading: { tags: [{ label: "Deletes files", tone: "risk" }] } });
+  assert.equal(noWords.explanation, undefined, "a call with no description still shows the command as today");
+  assert.deepEqual(noWords.tags, [{ label: "Deletes files", tone: "risk" }]);
+});

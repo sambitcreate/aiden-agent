@@ -92,7 +92,7 @@ import {
   AidenRemoteChatService,
   type AidenRemoteRetainedBotChatAuthorizationRequest,
 } from "./aiden-remote-chats.js";
-import { AidenRemoteModelService } from "./aiden-remote-models.js";
+import { AidenRemoteModelService, readableAgentSlider } from "./aiden-remote-models.js";
 import {
   AidenRemoteStreamService,
   removeRevokedDeviceStreams,
@@ -728,6 +728,15 @@ async function createRuntime(): Promise<AidenRemoteRuntime> {
               );
               return device?.capabilities.includes("chat:continue-in-new-chat") === true;
             },
+            // Revision 70: only a device that negotiated it keeps its turn's selection as the chat's own.
+            deviceSupportsAgentSlider: async (deviceId) => {
+              const device = (await state.snapshot()).devices.find(
+                (candidate) => candidate.id === deviceId && candidate.revokedAt === undefined,
+              );
+              return device?.capabilities.includes("chat:agent-slider") === true;
+            },
+            // A selection is saved only while the desktop keeps a readable slider.
+            hostHasAgentSlider: async () => readableAgentSlider(await configStore.getSettings()) !== undefined,
             isFolderWorkspace: async (workspaceId) =>
               analyticsWorkspaceKind(await configStore.getWorkspace(workspaceId)) !== "none",
             deviceIsPeer: async (deviceId) => {

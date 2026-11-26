@@ -4448,9 +4448,26 @@
                     },
                     "defaults": {
                       "type": "object",
+                      "description": "providerId and modelId of the model a new chat starts on. Contract revision 70 adds thinkingLevel, only while agentSlider is present and the default is exactly the host's last provider and model: the host's last level fitted to that model's levels, absent when the fit has none.",
+                      "properties": {
+                        "thinkingLevel": {
+                          "type": "string",
+                          "enum": [
+                            "off",
+                            "low",
+                            "medium",
+                            "high",
+                            "xhigh",
+                            "max"
+                          ]
+                        }
+                      },
                       "additionalProperties": {
                         "type": "string"
                       }
+                    },
+                    "agentSlider": {
+                      "$ref": "#/components/schemas/AgentSlider"
                     }
                   },
                   "additionalProperties": false
@@ -10261,7 +10278,9 @@
                 "approval:cards",
                 "approvals:settings",
                 "chat:continue-in-new-chat",
-                "stream:snapshot-reasons"
+                "stream:snapshot-reasons",
+                "approval:plain-words",
+                "chat:agent-slider"
               ]
             },
             "uniqueItems": true
@@ -10323,7 +10342,9 @@
                 "approval:cards",
                 "approvals:settings",
                 "chat:continue-in-new-chat",
-                "stream:snapshot-reasons"
+                "stream:snapshot-reasons",
+                "approval:plain-words",
+                "chat:agent-slider"
               ]
             },
             "uniqueItems": true
@@ -10488,7 +10509,9 @@
                 "approval:cards",
                 "approvals:settings",
                 "chat:continue-in-new-chat",
-                "stream:snapshot-reasons"
+                "stream:snapshot-reasons",
+                "approval:plain-words",
+                "chat:agent-slider"
               ]
             },
             "uniqueItems": true
@@ -10559,7 +10582,9 @@
                 "approval:cards",
                 "approvals:settings",
                 "chat:continue-in-new-chat",
-                "stream:snapshot-reasons"
+                "stream:snapshot-reasons",
+                "approval:plain-words",
+                "chat:agent-slider"
               ]
             },
             "uniqueItems": true
@@ -13718,8 +13743,17 @@
         "type": "object",
         "x-aiden-max-json-response-bytes": 1048576,
         "x-aiden-updated-at-not-before-created-at": true,
+        "not": {
+          "required": [
+            "botId",
+            "thinkingLevel"
+          ]
+        },
         "dependentRequired": {
           "providerId": [
+            "modelId"
+          ],
+          "thinkingLevel": [
             "modelId"
           ],
           "modelId": [
@@ -13779,6 +13813,18 @@
             "type": "string",
             "minLength": 1,
             "maxLength": 512
+          },
+          "thinkingLevel": {
+            "type": "string",
+            "enum": [
+              "off",
+              "low",
+              "medium",
+              "high",
+              "xhigh",
+              "max"
+            ],
+            "description": "Contract revision 70: the chat's own thinking level (an Agent Slider stop), present only with providerId and modelId and never on a Bot chat. Absent: the model's saved level applies."
           },
           "messages": {
             "type": "array",
@@ -14838,6 +14884,10 @@
           },
           "thinkingLevel": {
             "type": "string"
+          },
+          "saveSelection": {
+            "type": "boolean",
+            "description": "Contract revision 70, for a device holding chat:agent-slider: true asks the host to keep this turn's selection as the chat's own, in the same write as the message. The level is saved only when the device holds chat:agent-slider, saveSelection is true, the turn names both providerId and modelId, the chat is not a Bot chat, and the host has a readable Agent Slider; otherwise the level applies to this turn only and the chat's saved level is untouched. For a chat:agent-slider device the host fits thinkingLevel to the model's levels instead of refusing it, runs that level and saves it; a model without levels runs with none and saves none, as does a saved turn that names no level. Other devices keep the strict check (a level the model does not offer is a 400) and never save."
           },
           "attachmentIds": {
             "type": "array",
@@ -19084,12 +19134,156 @@
         },
         "additionalProperties": false
       },
+      "AgentSlider": {
+        "type": "object",
+        "description": "Contract revision 70: the host's Agent Slider, absent when the host has none or cannot read it. Stops run left to right; homeStopId names the stop Reset to home returns to. A stop is never substituted: availability is ready, the first reason it cannot run, or computer-only for a stop that runs on the computer but whose provider or model this device's catalog leaves out. Clients decode tolerantly: a stop with an unknown availability or an unknown thinkingLevel keeps its id and label but cannot be chosen, and the rest of the slider stays.",
+        "required": [
+          "stops",
+          "homeStopId"
+        ],
+        "properties": {
+          "stops": {
+            "type": "array",
+            "minItems": 3,
+            "maxItems": 7,
+            "items": {
+              "$ref": "#/components/schemas/AgentSliderStop"
+            }
+          },
+          "homeStopId": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9_-]{1,64}$"
+          }
+        },
+        "additionalProperties": false
+      },
+      "AgentSliderStop": {
+        "type": "object",
+        "dependentRequired": {
+          "providerId": [
+            "modelId"
+          ],
+          "modelId": [
+            "providerId"
+          ],
+          "thinkingLevel": [
+            "modelId"
+          ]
+        },
+        "if": {
+          "properties": {
+            "availability": {
+              "const": "ready"
+            }
+          }
+        },
+        "then": {
+          "required": [
+            "providerId",
+            "modelId"
+          ]
+        },
+        "else": {
+          "not": {
+            "anyOf": [
+              {
+                "required": [
+                  "providerId"
+                ]
+              },
+              {
+                "required": [
+                  "modelId"
+                ]
+              },
+              {
+                "required": [
+                  "thinkingLevel"
+                ]
+              }
+            ]
+          }
+        },
+        "required": [
+          "id",
+          "label",
+          "availability"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9_-]{1,64}$"
+          },
+          "label": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 24
+          },
+          "providerLabel": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 256,
+            "description": "The configured provider's label, on every stop whose provider is configured except computer-only. Never an id."
+          },
+          "modelLabel": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 256,
+            "description": "The model's human name: its catalog label on a ready stop, its name on a not-signed-in or hidden stop. Absent when only the id is known, and on unassigned, provider-missing, model-missing and computer-only stops."
+          },
+          "providerId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 256
+          },
+          "modelId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 512
+          },
+          "thinkingLevel": {
+            "type": "string",
+            "enum": [
+              "off",
+              "low",
+              "medium",
+              "high",
+              "xhigh",
+              "max"
+            ],
+            "description": "The level a turn on this stop runs with on this host: the stop's own level fitted to its model's levels. Absent when the stop has none or the model has no levels."
+          },
+          "availability": {
+            "type": "string",
+            "enum": [
+              "ready",
+              "unassigned",
+              "provider-missing",
+              "not-signed-in",
+              "model-missing",
+              "hidden",
+              "computer-only"
+            ],
+            "description": "computer-only: the stop runs on the computer, but its provider or model is one the phone catalog deliberately leaves out (an agent harness, an id past the length limit, an embedding model, or one past the size budget). Such a stop carries no ids, labels or level. providerId, modelId and thinkingLevel are sent only on ready stops."
+          }
+        },
+        "additionalProperties": false
+      },
       "ChatMessagesWindow": {
         "type": "object",
         "description": "Contract revision 23 (chat-messages-window-metadata-v1) adds the chat metadata a whole-chat read returns: workspaceId, botId, title, titlePending, providerId/modelId, createdAt and updatedAt. A host advertising chat-messages-window-metadata-v1 always includes workspaceId, title, createdAt and updatedAt; a client that refreshes from a window falls back to GET /chats/{chatId} when they are absent.",
+        "not": {
+          "required": [
+            "botId",
+            "thinkingLevel"
+          ]
+        },
         "x-aiden-max-json-response-bytes": 1048576,
         "dependentRequired": {
           "providerId": [
+            "modelId"
+          ],
+          "thinkingLevel": [
             "modelId"
           ],
           "modelId": [
@@ -19154,6 +19348,18 @@
             "type": "string",
             "minLength": 1,
             "maxLength": 512
+          },
+          "thinkingLevel": {
+            "type": "string",
+            "enum": [
+              "off",
+              "low",
+              "medium",
+              "high",
+              "xhigh",
+              "max"
+            ],
+            "description": "Contract revision 70: the chat's own thinking level (an Agent Slider stop), present only with providerId and modelId and never on a Bot chat. Absent: the model's saved level applies."
           },
           "createdAt": {
             "type": "string",

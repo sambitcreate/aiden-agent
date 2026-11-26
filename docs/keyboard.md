@@ -31,6 +31,7 @@ one starts unassigned.
 | `⌘B` | Toggle sidebar |
 | `⌘O` / `⇧⌘O` | Open workspace in preferred editor / Open folder… |
 | `⌘J` / `⇧⌘E` | Toggle terminal / Toggle Environment |
+| `⌥⌘B` | Bubble this Bot: shrink the open Bot chat into a floating head ([Bot bubbles](bot-bubbles.md)); does nothing elsewhere, while that Bot is already bubbled or with bubbles turned off |
 | `⌘S` | Save file (Files editor) |
 
 ## Moving around the window
