@@ -30,6 +30,8 @@ export interface BotComputerRecord {
    * Linux VM is cloned once the Linux base is set up.
    */
   migratedFromMacos?: boolean;
+  /** True while the one-time Linux migration note still needs to be written to this Bot's memory. */
+  pendingMigrationNote?: boolean;
 }
 
 export interface BotComputersSetupRecord {
@@ -46,11 +48,13 @@ export interface BotComputersSetupRecord {
 
 /** Recorded during and after the one-time first-launch removal of legacy macOS Bot computers. */
 export interface BotComputersMacosMigrationRecord {
-  /** Set only once every targeted legacy macOS VM and .ipsw file has been removed. */
+  /** Set only once every targeted legacy macOS VM, .ipsw file, and legacy secret has been removed. */
   completedAt?: number;
   freedBytes: number;
   /** True once the person sets up Linux, removes everything, or dismisses the Settings notice. */
   noticeDismissed?: boolean;
+  /** True when clearing the legacy macOS guest password secret failed and must be retried or rotated. */
+  pendingSecretCleanup?: boolean;
 }
 
 export interface BotComputersState {
@@ -93,6 +97,7 @@ function parseMigration(value: unknown): BotComputersMacosMigrationRecord | unde
     ...(completedAt !== undefined ? { completedAt } : {}),
     freedBytes,
     ...(input.noticeDismissed === true ? { noticeDismissed: true } : {}),
+    ...(input.pendingSecretCleanup === true ? { pendingSecretCleanup: true } : {}),
   };
 }
 
@@ -145,6 +150,7 @@ export function parseBotComputersState(value: unknown): BotComputersState {
         ...(lastUsedAt !== undefined ? { lastUsedAt } : {}),
         ...(driver ? { guestDriver: driver } : {}),
         ...(entry.migratedFromMacos === true ? { migratedFromMacos: true } : {}),
+        ...(entry.pendingMigrationNote === true ? { pendingMigrationNote: true } : {}),
       };
     }
   }

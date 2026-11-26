@@ -1218,9 +1218,17 @@ export function createBotComputerHost(deps: BotComputerHostDependencies): BotCom
       signal,
     });
     await ensureBaseSharedDir();
-    const stored = await deps.secrets.get(BOT_COMPUTER_GUEST_PASSWORD_SECRET);
+    const currentState = await store.read();
+    const stored = currentState.macosMigration?.pendingSecretCleanup
+      ? null
+      : await deps.secrets.get(BOT_COMPUTER_GUEST_PASSWORD_SECRET);
     const guestPassword = stored !== null && /^[A-Za-z0-9]{16,128}$/u.test(stored) ? stored : generateGuestPassword();
     await deps.secrets.set(BOT_COMPUTER_GUEST_PASSWORD_SECRET, guestPassword);
+    if (currentState.macosMigration?.pendingSecretCleanup) {
+      await store.update((draft) => {
+        if (draft.macosMigration) delete draft.macosMigration.pendingSecretCleanup;
+      });
+    }
     const seedIsoPath = path.join(dirs.images, `${target}-cidata.iso`);
     const targetDiskPath = path.join(dirs.vms, target, "disk.img");
     let guestDriverRecord: BotComputerGuestDriverRecord | undefined;
@@ -1721,6 +1729,26 @@ export function createBotComputerHost(deps: BotComputerHostDependencies): BotCom
       }
       const byName = new Map(vms.map((info) => [info.name, info]));
 
+      const deliverPendingMigrationNotes = async () => {
+        if (!deps.onMacosComputerMigrated) return;
+        const latest = await store.read();
+        const pendingBots = Object.entries(latest.computers)
+          .filter(([, rec]) => rec.pendingMigrationNote === true)
+          .map(([botId]) => botId);
+        for (const botId of pendingBots) {
+          stale.delete(botId);
+          try {
+            await Promise.resolve(deps.onMacosComputerMigrated(botId, BOT_COMPUTER_LINUX_MIGRATION_BOT_NOTE));
+            await store.update((draft) => {
+              const current = draft.computers[botId];
+              if (current) delete current.pendingMigrationNote;
+            });
+          } catch (error: unknown) {
+            log("Writing Linux migration note to Bot memory did not finish.", error);
+          }
+        }
+      };
+
       // One-time first-launch migration from legacy macOS Bot computers to Linux:
       // stop & delete Aiden's own macOS VMs and any Apple .ipsw files, clear the
       // old guest password, reset setup to "not set up", keep every Bot's
@@ -1730,6 +1758,7 @@ export function createBotComputerHost(deps: BotComputerHostDependencies): BotCom
         // Do not mark migration complete if dirs.vms exists and Lume could not
         // list VMs; retry cleanly on the next reconcile().
         if (hasVmsDir && !lumeListed) {
+          await deliverPendingMigrationNotes();
           emit();
           return;
         }
@@ -1792,11 +1821,16 @@ export function createBotComputerHost(deps: BotComputerHostDependencies): BotCom
                 log("Deleting a legacy Apple restore image did not finish.", error);
               }
             }
-            const clearLegacySetup = state.setup.guestOs !== "linux";
+            const clearLegacySetup = state.setup.guestOs !== "linux" || state.macosMigration?.pendingSecretCleanup === true;
+            let secretCleared = true;
             if (clearLegacySetup) {
-              await deps.secrets
-                .deleteFamily(BOT_COMPUTER_SECRET_FAMILY)
-                .catch((error: unknown) => log("Removing old guest password did not finish.", error));
+              try {
+                await deps.secrets.deleteFamily(BOT_COMPUTER_SECRET_FAMILY);
+              } catch (error: unknown) {
+                secretCleared = false;
+                allRemoved = false;
+                log("Removing old guest password did not finish.", error);
+              }
             }
             const migratedBotIds: string[] = [];
             state = await store.update((draft) => {
@@ -1811,6 +1845,7 @@ export function createBotComputerHost(deps: BotComputerHostDependencies): BotCom
                     createdAt: rec.createdAt,
                     ...(rec.lastUsedAt !== undefined ? { lastUsedAt: rec.lastUsedAt } : {}),
                     migratedFromMacos: true,
+                    ...(deps.onMacosComputerMigrated ? { pendingMigrationNote: true } : {}),
                   };
                 }
               }
@@ -1823,13 +1858,11 @@ export function createBotComputerHost(deps: BotComputerHostDependencies): BotCom
                   }
                 : {
                     freedBytes: totalFreedBytes,
+                    ...(secretCleared ? {} : { pendingSecretCleanup: true }),
                   };
             });
             for (const botId of migratedBotIds) {
               stale.delete(botId);
-              await Promise.resolve(deps.onMacosComputerMigrated?.(botId, BOT_COMPUTER_LINUX_MIGRATION_BOT_NOTE)).catch(
-                (error: unknown) => log("Writing Linux migration note to Bot memory did not finish.", error),
-              );
             }
             if (allRemoved || freedThisPass > 0 || migratedBotIds.length > 0) {
               deps.onRemoved?.();
@@ -1847,6 +1880,9 @@ export function createBotComputerHost(deps: BotComputerHostDependencies): BotCom
           });
         }
       }
+
+      await deliverPendingMigrationNotes();
+      state = await store.read();
 
       if (!lumeListed) {
         emit();

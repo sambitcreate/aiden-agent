@@ -184,6 +184,17 @@ async function world(model: { steps: Parameters<typeof createFauxModels>[0] }) {
     if (args.some((arg) => arg.includes("tigervncpasswd")) && typeof options.stdin === "string") {
       guestVncPassword = options.stdin.trim();
     }
+    const remoteCmd = args[args.length - 1] ?? "";
+    const hostProbeMatch = /\.aiden-shared-host-([0-9a-f]+)/u.exec(remoteCmd);
+    if (hostProbeMatch?.[1]) {
+      const nonce = hostProbeMatch[1];
+      const baseShared = path.join(root, "base-shared", "Computer");
+      const token = readFileSync(path.join(baseShared, `.aiden-shared-host-${nonce}`), "utf8").trim();
+      assert.equal(token, `aiden-host-${nonce}`);
+      for (const user of ["lume", "aiden-bot"]) {
+        writeFileSync(path.join(baseShared, `.aiden-shared-guest-${user}-${nonce}`), `aiden-guest-${user}-${nonce}\n`, { mode: 0o644 });
+      }
+    }
     return { exitCode: 0, signal: null, stdout: "", stderr: "", truncated: false, timedOut: false };
   };
 

@@ -2459,3 +2459,102 @@ test("Linux screen session recovers cleanly after post-start SSH tunnel child ex
     },
   );
 });
+
+test("macOS migration retries failed secret cleanup and Bot memory notes without duplicating delivered notes", async () => {
+  const linuxRaw = Buffer.from("debian migration retry image\n".repeat(64));
+  const linuxImage = {
+    version: "13",
+    build: "20261123-2671",
+    url: "https://cloud.debian.org/images/debian-migration-retry.raw",
+    bytes: linuxRaw.length,
+    sha256: createHash("sha256").update(linuxRaw).digest("hex"),
+  };
+
+  await withHost(
+    async (context) => {
+      context.serve(linuxImage.url, linuxRaw);
+      mkdirSync(context.root, { recursive: true });
+      const legacySecret = "LegacyMacosGuestPassword12345678";
+      context.secrets.set(BOT_COMPUTER_GUEST_PASSWORD_SECRET, legacySecret);
+
+      const stateFile = path.join(context.root, "state.json");
+      writeFileSync(
+        stateFile,
+        JSON.stringify({
+          version: 1,
+          settings: { maxRunning: 2, idleStopMinutes: 10 },
+          setup: { baseBuild: "25D125", baseVersion: "26.3" },
+          computers: {
+            ada: { vmName: botComputerVmName("ada"), baseBuild: "25D125", createdAt: 100 },
+            ben: { vmName: botComputerVmName("ben"), baseBuild: "25D125", createdAt: 101 },
+          },
+        }),
+      );
+
+      let failDeleteFamily = true;
+      let failBenNote = true;
+      const delivered: string[] = [];
+      const retryingHost = context.relaunch({
+        image: linuxImage,
+        secrets: {
+          get: async (name) => context.secrets.get(name) ?? null,
+          set: async (name, value) => void context.secrets.set(name, value),
+          deleteFamily: async (prefix) => {
+            if (failDeleteFamily) throw new Error("Keychain busy");
+            for (const key of [...context.secrets.keys()]) {
+              if (key === prefix || key.startsWith(`${prefix}:`)) context.secrets.delete(key);
+            }
+          },
+        },
+        onMacosComputerMigrated: async (botId) => {
+          if (botId === "ben" && failBenNote) throw new Error("Bot memory temporarily locked");
+          delivered.push(botId);
+        },
+      });
+
+      // Pass 1: secret cleanup fails, ada's note succeeds, ben's note rejects.
+      await retryingHost.reconcile();
+      assert.equal(context.secrets.get(BOT_COMPUTER_GUEST_PASSWORD_SECRET), legacySecret);
+      const afterPass1 = JSON.parse(readFileSync(stateFile, "utf8")) as {
+        macosMigration?: { completedAt?: number; pendingSecretCleanup?: boolean };
+        computers?: Record<string, { migratedFromMacos?: boolean; pendingMigrationNote?: boolean }>;
+      };
+      assert.equal(afterPass1.macosMigration?.completedAt, undefined, "migration stays pending when deleteFamily fails");
+      assert.equal(afterPass1.macosMigration?.pendingSecretCleanup, true);
+      assert.deepEqual(delivered, ["ada"]);
+      assert.equal(afterPass1.computers?.ada?.migratedFromMacos, true);
+      assert.equal(afterPass1.computers?.ada?.pendingMigrationNote, undefined);
+      assert.equal(afterPass1.computers?.ben?.migratedFromMacos, true);
+      assert.equal(afterPass1.computers?.ben?.pendingMigrationNote, true);
+
+      // Even before a second reconcile, Linux Set up must rotate rather than reuse the surviving legacy secret.
+      // (Test rotation in a separate check below; first verify reconcile pass 2 completes cleanup + note retry.)
+      failDeleteFamily = false;
+      failBenNote = false;
+      await retryingHost.reconcile();
+      assert.equal(context.secrets.get(BOT_COMPUTER_GUEST_PASSWORD_SECRET), undefined, "legacy secret is removed on retry");
+      const afterPass2 = JSON.parse(readFileSync(stateFile, "utf8")) as {
+        macosMigration?: { completedAt?: number; pendingSecretCleanup?: boolean };
+        computers?: Record<string, { pendingMigrationNote?: boolean }>;
+      };
+      assert.ok(typeof afterPass2.macosMigration?.completedAt === "number", "migration completes once secret cleanup succeeds");
+      assert.equal(afterPass2.macosMigration?.pendingSecretCleanup, undefined);
+      assert.deepEqual(delivered, ["ada", "ben"], "ben's note is retried without duplicating ada's");
+      assert.equal(afterPass2.computers?.ben?.pendingMigrationNote, undefined);
+
+      // Pass 3: no duplicate notes.
+      await retryingHost.reconcile();
+      assert.deepEqual(delivered, ["ada", "ben"]);
+
+      // Also verify Linux Set up rotates away from a surviving secret if pendingSecretCleanup is true.
+      context.secrets.set(BOT_COMPUTER_GUEST_PASSWORD_SECRET, legacySecret);
+      const pendingRaw = JSON.parse(readFileSync(stateFile, "utf8")) as Record<string, unknown>;
+      pendingRaw.macosMigration = { freedBytes: 0, pendingSecretCleanup: true };
+      writeFileSync(stateFile, JSON.stringify(pendingRaw));
+      await setUp({ ...context, host: retryingHost });
+      const rotated = context.secrets.get(BOT_COMPUTER_GUEST_PASSWORD_SECRET);
+      assert.ok(rotated && rotated !== legacySecret, "Linux setup forces fresh password rotation when legacy cleanup was pending");
+    },
+    { image: linuxImage },
+  );
+});
