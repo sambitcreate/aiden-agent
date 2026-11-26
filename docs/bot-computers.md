@@ -228,9 +228,11 @@ the screen keeps working.
   `LUME_UPDATE_CHECK=false`, a fixed `PATH` and its own `HOME` under Aiden's
   data folder, and every command names Aiden's own storage. Lume's own
   configuration in `~/.lume` is not used.
-- **No host audio or clipboard.** Every VM start passes `--no-audio-device` and
-  `--no-clipboard-device`, so the guest gets no virtio sound device (no host
-  microphone or speaker) and no SPICE clipboard-sharing device.
+- **No host audio or clipboard.** Every `lume run` passes `--no-audio-device` and
+  `--no-clipboard-device`, so the running guest gets no virtio sound device (no host
+  microphone or speaker) and no SPICE clipboard-sharing device. (While macOS
+  base installation uses `lume create --unattended`, Lume's installer subcommand
+  does not expose those device flags during the one-time base install boot.)
 - **Screen.** Each start sets a new random screen-sharing password. Aiden uses
   the computer's screen only if Lume reports it on `127.0.0.1`, and stops the
   computer if the screen-sharing port also answers on any of the Mac's network

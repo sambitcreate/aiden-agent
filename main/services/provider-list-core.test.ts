@@ -99,6 +99,15 @@ test("exposes the virtual Codex provider only for configured OAuth", () => {
   });
 });
 
+test("Codex starts on Pi's default model when ChatGPT serves it, otherwise on its first model", () => {
+  const served = snapshot(true);
+  const sol = { ...served.models[1], id: "gpt-6.2-sol", name: "GPT-6.2 Sol" };
+  const withSol = { ...served, models: [...served.models, sol] };
+  assert.equal(mergeCodexProvider([], withSol)[0]?.defaultModel, "gpt-6.2-sol");
+  // An account or cached catalog without Pi's default still gets a usable model.
+  assert.equal(mergeCodexProvider([], served)[0]?.defaultModel, "gpt-5.4");
+});
+
 test("filters reserved stored collisions and rejects generic credential management", () => {
   const collision = {
     ...legacy,

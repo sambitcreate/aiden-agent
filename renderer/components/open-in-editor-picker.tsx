@@ -17,6 +17,7 @@ import { workspacesApi } from "../lib/ipc";
 import type { ExternalEditor } from "../lib/types";
 import { useCommandHandler, useCommandSystem } from "../lib/command-system";
 import { ariaKeyShortcut, prettyAccelerator } from "../shared/keybindings";
+import { ToolbarPresence } from "./toolbar-presence";
 
 interface OpenInEditorPickerProps {
   workspaceId?: string;
@@ -40,6 +41,13 @@ function EditorIcon({ editor, className }: { editor: ExternalEditor; className: 
 }
 
 /**
+ * The last editor list this window discovered. A picker that mounts again (back
+ * from Settings, another chat pane) starts from it instead of an empty list, so
+ * Open is there at once rather than sliding in after a fresh discovery.
+ */
+let lastDiscoveredEditors: ExternalEditor[] | null = null;
+
+/**
  * Installed-editor discovery plus the remembered preferred editor for a workspace folder.
  * Shared by the toolbar picker and the Quick View Folder row; only the picker registers
  * the `workspace.openPreferredEditor` command so it is never bound twice.
@@ -50,9 +58,9 @@ export function usePreferredEditor(
   /** Skip the toast when discovery fails; the toolbar picker already reports it. */
   { silentDiscoveryErrors = false }: { silentDiscoveryErrors?: boolean } = {},
 ) {
-  const [editors, setEditors] = React.useState<ExternalEditor[]>([]);
+  const [editors, setEditors] = React.useState<ExternalEditor[]>(() => lastDiscoveredEditors ?? []);
   const [storedEditorId, setStoredEditorId] = React.useState<string | null>(readPreferredEditorId);
-  const [isLoading, setIsLoading] = React.useState(true);
+  const [isLoading, setIsLoading] = React.useState(lastDiscoveredEditors === null);
   const mountedRef = React.useRef(false);
 
   const refreshEditors = React.useCallback(
@@ -60,6 +68,7 @@ export function usePreferredEditor(
       if (mountedRef.current) setIsLoading(true);
       try {
         const discovered = await workspacesApi.externalEditors(forceRefresh);
+        lastDiscoveredEditors = discovered;
         if (mountedRef.current) setEditors(discovered);
         return discovered;
       } catch (error) {
@@ -146,7 +155,6 @@ export function OpenInEditorPicker({ workspaceId, folderPath }: OpenInEditorPick
   const shortcut = prettyAccelerator(shortcutBinding);
   const {
     editors,
-    isLoading,
     preferredEditorId,
     preferredEditor,
     refreshEditors,
@@ -159,79 +167,84 @@ export function OpenInEditorPicker({ workspaceId, folderPath }: OpenInEditorPick
     Boolean(workspaceId && folderPath && preferredEditor),
   );
 
-  if (!workspaceId || !folderPath) return null;
-
-  const isInitialLoading = isLoading && editors.length === 0;
-  const disabled = isInitialLoading || !preferredEditor;
+  // Left out, with its divider, until there is a folder and an editor to open it in;
+  // it slides in when the first discovery finishes.
+  const ready = Boolean(workspaceId && folderPath && preferredEditor);
+  const disabled = !preferredEditor;
 
   return (
-    <div
-      role="group"
-      aria-label="Open workspace in editor"
-      className="open-in-editor-picker squircle-control squircle-action-group flex h-7 shrink-0"
-    >
-      <Button
-        variant="bar"
-        size="small"
-        disabled={disabled}
-        onClick={() => void openPreferredEditor()}
-        aria-keyshortcuts={ariaKeyShortcut(shortcutBinding)}
-        aria-label={
-          preferredEditor
-            ? `Open workspace in ${preferredEditor.label}`
-            : "Open workspace in preferred editor"
-        }
-        className="h-7 border-0 px-2 text-small"
-      >
-        {preferredEditor ? (
-          <EditorIcon editor={preferredEditor} className="size-4 shrink-0 rounded-[4px]" />
-        ) : (
-          <span
-            aria-hidden="true"
-            className="size-4 shrink-0 animate-pulse rounded-[4px] bg-control"
-          />
-        )}
-        <span className="open-in-editor-label">Open</span>
-      </Button>
-      <span aria-hidden="true" className="my-1.5 w-px shrink-0 bg-separator/70" />
-      <DropdownMenu
-        onOpenChange={(open) => {
-          if (open) void refreshEditors(true);
-        }}
-      >
-        <DropdownMenuTrigger asChild>
+    <ToolbarPresence present={ready}>
+      <span className="flex items-center">
+        <span aria-hidden="true" className="mx-1 h-4 w-px shrink-0 bg-separator" />
+        <div
+          role="group"
+          aria-label="Open workspace in editor"
+          className="open-in-editor-picker squircle-control squircle-action-group flex h-7 shrink-0"
+        >
           <Button
-            iconOnly
             variant="bar"
             size="small"
             disabled={disabled}
-            aria-label="Choose editor"
-            className="h-7 w-6 border-0 [&_svg]:size-3.5"
+            onClick={() => void openPreferredEditor()}
+            aria-keyshortcuts={ariaKeyShortcut(shortcutBinding)}
+            aria-label={
+              preferredEditor
+                ? `Open workspace in ${preferredEditor.label}`
+                : "Open workspace in preferred editor"
+            }
+            className="h-7 border-0 px-2 text-small"
           >
-            <ChevronDown aria-hidden="true" />
+            {preferredEditor ? (
+              <EditorIcon editor={preferredEditor} className="size-4 shrink-0 rounded-[4px]" />
+            ) : (
+              <span
+                aria-hidden="true"
+                className="size-4 shrink-0 animate-pulse rounded-[4px] bg-control"
+              />
+            )}
+            <span className="open-in-editor-label">Open</span>
           </Button>
-        </DropdownMenuTrigger>
-        <DropdownMenuContent align="end" className="min-w-56">
-          {editors.map((editor) => (
-            <DropdownMenuItem key={editor.id} onSelect={() => void openInEditor(editor)}>
-              <EditorIcon editor={editor} className="size-4 shrink-0 rounded-[3px]" />
-              <span className="min-w-0 flex-1 truncate">{editor.label}</span>
-              {editor.id === preferredEditorId ? (
-                <span
-                  className="ml-5 text-small opacity-55"
-                  aria-label={
-                    shortcutBinding
-                      ? `Shortcut ${ariaKeyShortcut(shortcutBinding)}`
-                      : "No shortcut assigned"
-                  }
-                >
-                  {shortcut}
-                </span>
-              ) : null}
-            </DropdownMenuItem>
-          ))}
-        </DropdownMenuContent>
-      </DropdownMenu>
-    </div>
+          <span aria-hidden="true" className="my-1.5 w-px shrink-0 bg-separator/70" />
+          <DropdownMenu
+            onOpenChange={(open) => {
+              if (open) void refreshEditors(true);
+            }}
+          >
+            <DropdownMenuTrigger asChild>
+              <Button
+                iconOnly
+                variant="bar"
+                size="small"
+                disabled={disabled}
+                aria-label="Choose editor"
+                className="h-7 w-6 border-0 [&_svg]:size-3.5"
+              >
+                <ChevronDown aria-hidden="true" />
+              </Button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end" className="min-w-56">
+              {editors.map((editor) => (
+                <DropdownMenuItem key={editor.id} onSelect={() => void openInEditor(editor)}>
+                  <EditorIcon editor={editor} className="size-4 shrink-0 rounded-[3px]" />
+                  <span className="min-w-0 flex-1 truncate">{editor.label}</span>
+                  {editor.id === preferredEditorId ? (
+                    <span
+                      className="ml-5 text-small opacity-55"
+                      aria-label={
+                        shortcutBinding
+                          ? `Shortcut ${ariaKeyShortcut(shortcutBinding)}`
+                          : "No shortcut assigned"
+                      }
+                    >
+                      {shortcut}
+                    </span>
+                  ) : null}
+                </DropdownMenuItem>
+              ))}
+            </DropdownMenuContent>
+          </DropdownMenu>
+        </div>
+      </span>
+    </ToolbarPresence>
   );
 }

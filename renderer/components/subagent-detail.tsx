@@ -1,12 +1,13 @@
 import * as React from "react";
-import { ArrowDownToLine, ChevronRight, Square } from "lucide-react";
+import { ArrowDownToLine, Square } from "lucide-react";
 import { cn } from "../lib/ui-utils";
 import {
   subagentDetailGrowthAction,
   subagentDetailIsAwayFromLatest,
-  subagentModelDisplay,
 } from "../lib/subagent-panel-state";
-import type { SubagentRunPresentation } from "../lib/subagent-view-state";
+import { SUBAGENT_HELPER_TONE_DOT, subagentHelperTone } from "../lib/subagent-helper-chat-state";
+import { subagentModelLine, useSubagentModelCatalog } from "../lib/subagent-model-name";
+import { subagentRoleLabel, type SubagentRunPresentation } from "../lib/subagent-view-state";
 import {
   subagentPendingQuestion,
   type SubagentEffectActivityV1,
@@ -19,20 +20,9 @@ import {
   type SubagentContextUsageV1,
 } from "../shared/subagent-context-usage";
 import { Markdown } from "./markdown";
-import { SubagentMark, subagentStateLabel } from "./subagent-chips";
+import { subagentStateLabel } from "./subagent-chips";
 import { Button, Callout, ErrorBoundary, Text } from "./ui";
 import { CopyButton } from "./copy-button";
-
-export function subagentProjectionNotices(run: SubagentRunSnapshot): string[] {
-  const notices = new Set(run.projectionNotices);
-  return [
-    notices.has("task_truncated") ? "This saved task preview was shortened." : null,
-    notices.has("report_truncated") ? "This saved result was shortened." : null,
-    notices.has("display_filtered")
-      ? "Some text was replaced by a privacy marker in this saved inspector. This display filter does not rewrite the child's task or its report to the main thread."
-      : null,
-  ].filter((notice): notice is string => notice !== null);
-}
 
 export function formatSubagentElapsed(startedAt: number, endedAt: number): string {
   const totalSeconds = Math.max(0, Math.floor((endedAt - startedAt) / 1_000));
@@ -45,28 +35,25 @@ export function formatSubagentElapsed(startedAt: number, endedAt: number): strin
   return `${hours}h ${minutes}m`;
 }
 
-export function subagentToolAggregate(run: SubagentRunSnapshot): string {
-  const toolLabel = run.tools === 1 ? "tool use" : "tool uses";
-  const turnLabel = run.turns === 1 ? "turn" : "turns";
-  return `${run.tools} ${toolLabel} · ${run.turns} ${turnLabel}`;
-}
-
 const SUBAGENT_MILESTONE_LABELS: Record<SubagentMilestoneKind, string> = {
-  reading: "Read a workspace file",
-  listing: "Listed a workspace directory",
-  matching: "Matched workspace file names",
-  searching: "Searched workspace text",
-  inspecting: "Tool activity",
-  composing: "Composed the bounded report",
+  reading: "Read a file",
+  listing: "Looked in a folder",
+  matching: "Found files by name",
+  searching: "Searched the files",
+  inspecting: "Used a tool",
+  composing: "Wrote its report",
 };
 
-export function subagentMilestoneLabel(milestone: SubagentMilestoneKind): string {
+/**
+ * What a step says in a helper's list of what it did. `inProgress` marks the
+ * newest step of a helper that is still working: its report is still being written.
+ */
+export function subagentMilestoneLabel(
+  milestone: SubagentMilestoneKind,
+  options: { inProgress?: boolean } = {},
+): string {
+  if (milestone === "composing" && options.inProgress) return "Writing its report";
   return SUBAGENT_MILESTONE_LABELS[milestone];
-}
-
-export function subagentMilestoneAggregate(run: SubagentRunSnapshot): string {
-  const count = run.milestones?.length ?? 0;
-  return `${count} activity milestone${count === 1 ? "" : "s"}`;
 }
 
 function UnrenderableSubagentUpdate({ content }: { content: string }) {
@@ -96,6 +83,11 @@ export interface SubagentDetailProps {
   presentation?: SubagentRunPresentation;
   refreshing?: boolean;
   refreshError?: string | null;
+  /**
+   * What could not be read: a saved message's run detail, or a helper's
+   * saved conversation (the helper chat's own wording, so both read alike).
+   */
+  refreshErrorKind?: "detail" | "conversation";
   onRetryRefresh?: () => void;
   now?: number;
   /** Live context reading; supplied only while the run is active. */
@@ -114,6 +106,7 @@ export const SubagentDetail = React.forwardRef<HTMLHeadingElement, SubagentDetai
       presentation,
       refreshing = false,
       refreshError = null,
+      refreshErrorKind = "detail",
       onRetryRefresh,
       now = Date.now(),
       contextUsage,
@@ -128,10 +121,12 @@ export const SubagentDetail = React.forwardRef<HTMLHeadingElement, SubagentDetai
     const [awayFromLatest, setAwayFromLatest] = React.useState(false);
     const endedAt = run.finishedAt ?? now;
     const state = subagentStateLabel(run.state);
-    const modelDisplay = subagentModelDisplay(run);
+    const modelLine = subagentModelLine(run, useSubagentModelCatalog());
+    const role = subagentRoleLabel(run.role);
+    const tone = subagentHelperTone(run.state);
     const pendingQuestion = subagentPendingQuestion(run);
     const resultText = run.terminalMarkdown ?? run.latestText;
-    const projectionNotices = subagentProjectionNotices(run);
+    const milestones = run.milestones ?? [];
     const active =
       run.state === "queued" ||
       run.state === "starting" ||
@@ -221,6 +216,22 @@ export const SubagentDetail = React.forwardRef<HTMLHeadingElement, SubagentDetai
       followGrowthRef.current = false;
     };
 
+    const staleActive = presentation?.state === "stale_active";
+    const stopButton = canStop ? (
+      <Button
+        variant="muted"
+        size="small"
+        disabled={stopPending}
+        aria-label={stopPending ? `Stopping ${run.label}` : `${stopLabel} ${run.label}`}
+        aria-busy={stopPending ? true : undefined}
+        onClick={() => void invokeControl()}
+        className="motion-reduce:transition-none"
+      >
+        <Square aria-hidden="true" className="size-3" />
+        {stopPending ? "Stopping…" : stopLabel}
+      </Button>
+    ) : null;
+
     return (
       <article className={cn("relative flex h-full min-h-0 flex-col", className)}>
         <div
@@ -234,11 +245,9 @@ export const SubagentDetail = React.forwardRef<HTMLHeadingElement, SubagentDetai
         >
           <div className="mx-auto flex w-full max-w-2xl flex-col gap-4">
             <header className="flex min-w-0 items-start gap-2.5">
-              <SubagentMark
-                role={run.role}
-                state={run.state}
-                activity={run.activity}
-                className="mt-0.5"
+              <span
+                aria-hidden="true"
+                className={cn("mt-2 size-2 shrink-0 rounded-full", SUBAGENT_HELPER_TONE_DOT[tone])}
               />
               <span className="min-w-0 flex-1">
                 <h2
@@ -250,7 +259,8 @@ export const SubagentDetail = React.forwardRef<HTMLHeadingElement, SubagentDetai
                   {run.label}
                 </h2>
                 <Text as="p" variant="small" color="secondary" className="mt-0.5">
-                  {run.role} · {presentation?.label ?? state} ·{" "}
+                  {role ? `${role} · ` : ""}
+                  {presentation?.label ?? state} ·{" "}
                   <span className="tabular-nums">{formatSubagentElapsed(run.startedAt, endedAt)}</span>
                 </Text>
                 <Text
@@ -258,14 +268,9 @@ export const SubagentDetail = React.forwardRef<HTMLHeadingElement, SubagentDetai
                   variant="small"
                   color="tertiary"
                   className="mt-0.5 break-words [overflow-wrap:anywhere]"
+                  data-subagent-detail-model="true"
                 >
-                  {[
-                    `Model: ${modelDisplay.model}`,
-                    modelDisplay.effort && `Effort ${modelDisplay.effort}`,
-                    modelDisplay.selection,
-                  ]
-                    .filter(Boolean)
-                    .join(" · ")}
+                  {modelLine}
                 </Text>
                 {contextUsage ? (
                   <Text
@@ -279,19 +284,6 @@ export const SubagentDetail = React.forwardRef<HTMLHeadingElement, SubagentDetai
                     data-subagent-detail-context-usage="true"
                   >
                     {subagentContextSummary(contextUsage)}
-                  </Text>
-                ) : null}
-                {run.version === 2 ? (
-                  <Text
-                    as="p"
-                    variant="small"
-                    color="tertiary"
-                    className="mt-0.5 break-words"
-                    data-subagent-context={run.context}
-                  >
-                    {run.context === "fresh"
-                      ? "Context: task only (fresh session)"
-                      : "Context: bounded visible conversation text copied at launch"}
                   </Text>
                 ) : null}
               </span>
@@ -317,6 +309,11 @@ export const SubagentDetail = React.forwardRef<HTMLHeadingElement, SubagentDetai
                 <Text as="p" variant="small" color="secondary">
                   {presentation.label}. The child is still active; no newer activity has arrived.
                 </Text>
+                {stopButton ? (
+                  <div className="mt-3 flex min-w-0" data-subagent-controls="true">
+                    {stopButton}
+                  </div>
+                ) : null}
               </Callout>
             ) : null}
 
@@ -324,6 +321,22 @@ export const SubagentDetail = React.forwardRef<HTMLHeadingElement, SubagentDetai
               <Text as="p" variant="small" color="secondary" data-subagent-detail-refreshing="true">
                 Refreshing saved activity…
               </Text>
+            ) : refreshError && refreshErrorKind === "conversation" ? (
+              <Callout role="note" data-subagent-helper-refresh-error="true">
+                <Text as="p" variant="small" color="secondary">
+                  Couldn't load this helper's conversation. What's shown may be out of date.
+                </Text>
+                {onRetryRefresh ? (
+                  <Button
+                    variant="muted"
+                    size="small"
+                    onClick={onRetryRefresh}
+                    className="mt-2 w-fit self-start motion-reduce:transition-none"
+                  >
+                    Try again
+                  </Button>
+                ) : null}
+              </Callout>
             ) : refreshError ? (
               <Callout role="note" data-subagent-detail-refresh-error="true">
                 <Text variant="small-strong">Showing the last available activity</Text>
@@ -343,23 +356,12 @@ export const SubagentDetail = React.forwardRef<HTMLHeadingElement, SubagentDetai
               </Callout>
             ) : null}
 
-            {canStop ? (
+            {stopButton && !staleActive ? (
               <div
                 className="flex min-w-0 flex-wrap items-center gap-2"
                 data-subagent-controls="true"
               >
-                <Button
-                  variant="muted"
-                  size="small"
-                  disabled={stopPending}
-                  aria-label={stopPending ? `Stopping ${run.label}` : `${stopLabel} ${run.label}`}
-                  aria-busy={stopPending ? true : undefined}
-                  onClick={() => void invokeControl()}
-                  className="motion-reduce:transition-none"
-                >
-                  <Square aria-hidden="true" className="size-3" />
-                  {stopPending ? "Stopping…" : stopLabel}
-                </Button>
+                {stopButton}
               </div>
             ) : null}
 
@@ -383,11 +385,11 @@ export const SubagentDetail = React.forwardRef<HTMLHeadingElement, SubagentDetai
                   color="tertiary"
                   className="min-w-0 flex-1"
                 >
-                  Task preview
+                  What it was asked
                 </Text>
                 <CopyButton
                   text={run.taskPreview}
-                  label={`Copy task preview for ${run.label}`}
+                  label={`Copy what ${run.label} was asked`}
                   className="shrink-0"
                 />
               </div>
@@ -396,30 +398,21 @@ export const SubagentDetail = React.forwardRef<HTMLHeadingElement, SubagentDetai
               </Text>
             </section>
 
-            {projectionNotices.length > 0 ? (
-              <Callout role="note" data-subagent-projection-notice="true">
-                <Text variant="small-strong">Saved view notice</Text>
-                <ul className="list-disc space-y-1 pl-4 text-small text-secondary">
-                  {projectionNotices.map((notice) => (
-                    <li key={notice}>{notice}</li>
-                  ))}
-                </ul>
-              </Callout>
+            {active || pendingQuestion ? (
+              <section aria-labelledby={`subagent-activity-${run.runId}`}>
+                <Text
+                  as="h3"
+                  id={`subagent-activity-${run.runId}`}
+                  variant="small-strong"
+                  color="tertiary"
+                >
+                  {pendingQuestion ? "Waiting on" : "Latest activity"}
+                </Text>
+                <Text as="p" variant="regular" color="secondary" className="mt-1 break-words">
+                  {run.activity ?? state}
+                </Text>
+              </section>
             ) : null}
-
-            <section aria-labelledby={`subagent-activity-${run.runId}`}>
-              <Text
-                as="h3"
-                id={`subagent-activity-${run.runId}`}
-                variant="small-strong"
-                color="tertiary"
-              >
-                {pendingQuestion ? "Waiting on" : "Latest activity"}
-              </Text>
-              <Text as="p" variant="regular" color="secondary" className="mt-1 break-words">
-                {run.activity ?? state}
-              </Text>
-            </section>
 
             {effectActivity.length > 0 ? (
               <section
@@ -455,35 +448,27 @@ export const SubagentDetail = React.forwardRef<HTMLHeadingElement, SubagentDetai
               </section>
             ) : null}
 
-            <details className="group/milestones rounded-card bg-well">
-              <summary className="flex cursor-default list-none items-center gap-2 rounded-card px-3 py-2 outline-none transition-colors hover:bg-list-hover focus-visible:bg-list-selection focus-visible:outline-none motion-reduce:transition-none">
-                <ChevronRight
-                  aria-hidden="true"
-                  className="size-3.5 shrink-0 text-tertiary transition-transform duration-150 group-open/milestones:rotate-90 motion-reduce:transition-none"
-                />
-                <Text variant="small-strong">
-                  {subagentToolAggregate(run)} · {subagentMilestoneAggregate(run)}
+            {milestones.length ? (
+              <section aria-labelledby={`subagent-did-${run.runId}`} data-subagent-did="true">
+                <Text
+                  as="h3"
+                  id={`subagent-did-${run.runId}`}
+                  variant="small-strong"
+                  color="tertiary"
+                >
+                  What it did
                 </Text>
-              </summary>
-              <div className="space-y-2 border-t border-separator px-3 py-2">
-                {run.milestones?.length ? (
-                  <ol className="list-decimal space-y-1 pl-5 text-small text-secondary">
-                    {run.milestones.map((milestone, index) => (
-                      <li key={`${index}:${milestone}`}>{subagentMilestoneLabel(milestone)}</li>
-                    ))}
-                  </ol>
-                ) : (
-                  <Text as="p" variant="small" color="secondary">
-                    No saved activity milestones.
-                  </Text>
-                )}
-                <Text as="p" variant="small" color="secondary">
-                  {run.tokens} tokens recorded. Saved details omit raw tool payloads, commands, and
-                  absolute paths. Children can read ordinary source and docs as written; protected
-                  credential and private-key paths are unavailable.
-                </Text>
-              </div>
-            </details>
+                <ol className="mt-1 list-decimal space-y-1 pl-5 text-small text-secondary">
+                  {milestones.map((milestone, index) => (
+                    <li key={`${index}:${milestone}`}>
+                      {subagentMilestoneLabel(milestone, {
+                        inProgress: active && index === milestones.length - 1,
+                      })}
+                    </li>
+                  ))}
+                </ol>
+              </section>
+            ) : null}
 
             {run.error ? (
               <Callout color="red" role="note">

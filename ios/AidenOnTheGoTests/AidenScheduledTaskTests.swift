@@ -597,6 +597,42 @@ final class AidenScheduledTaskTests: XCTestCase {
         XCTAssertFalse(requests.contains { ($0.url?.absoluteString ?? "").contains("/Users/") })
     }
 
+    @MainActor
+    func testScheduledTasksModelAmbiguityRetainsUnknownAndCancelsAndClearsLedgerRejections() throws {
+        struct UnclassifiedTransportError: Error {}
+        func serverError(_ status: Int, _ code: String) throws -> AidenRemoteClientError {
+            let body = try AidenRemoteJSONDecoder.decode(
+                AidenRemoteErrorEnvelope.Body.self,
+                from: Data(#"{"code":"\#(code)","message":"Refused.","requestId":"req_sched_1","retryable":false}"#.utf8)
+            )
+            return .server(statusCode: status, body: body)
+        }
+
+        // Unknown / transport / cancellation / in-flight / transient-status outcomes MUST retain the pending run key.
+        XCTAssertTrue(AidenScheduledTasksModel.isAmbiguous(CancellationError()))
+        XCTAssertTrue(AidenScheduledTasksModel.isAmbiguous(URLError(.timedOut)))
+        XCTAssertTrue(AidenScheduledTasksModel.isAmbiguous(UnclassifiedTransportError()))
+        XCTAssertTrue(AidenScheduledTasksModel.isAmbiguous(AidenRemoteClientError.invalidResponse))
+        XCTAssertTrue(AidenScheduledTasksModel.isAmbiguous(AidenRemoteClientError.unexpectedStatus(502)))
+        XCTAssertTrue(AidenScheduledTasksModel.isAmbiguous(AidenRemoteClientError.unexpectedStatus(409)))
+        XCTAssertTrue(AidenScheduledTasksModel.isAmbiguous(try serverError(409, "idempotency_in_flight")))
+        XCTAssertTrue(AidenScheduledTasksModel.isAmbiguous(try serverError(408, "internal_error")))
+        XCTAssertTrue(AidenScheduledTasksModel.isAmbiguous(try serverError(429, "rate_limited")))
+        XCTAssertTrue(AidenScheduledTasksModel.isAmbiguous(try serverError(500, "internal_error")))
+        XCTAssertTrue(AidenScheduledTasksModel.isAmbiguous(try serverError(503, "internal_error")))
+
+        // Structured rejections cached by executeAidenDurableOperation and client-local errors clear the key.
+        XCTAssertFalse(AidenScheduledTasksModel.isAmbiguous(try serverError(400, "invalid_request")))
+        XCTAssertFalse(AidenScheduledTasksModel.isAmbiguous(try serverError(403, "capability_denied")))
+        XCTAssertFalse(AidenScheduledTasksModel.isAmbiguous(try serverError(404, "not_found")))
+        XCTAssertFalse(AidenScheduledTasksModel.isAmbiguous(try serverError(409, "schedule_disabled")))
+        XCTAssertFalse(AidenScheduledTasksModel.isAmbiguous(try serverError(409, "revision_conflict")))
+        XCTAssertFalse(AidenScheduledTasksModel.isAmbiguous(AidenRemoteClientError.invalidEndpoint))
+        XCTAssertFalse(AidenScheduledTasksModel.isAmbiguous(AidenRemoteClientError.missingCredential))
+        XCTAssertFalse(AidenScheduledTasksModel.isAmbiguous(AidenRemoteClientError.missingTrustConfiguration))
+        XCTAssertFalse(AidenScheduledTasksModel.isAmbiguous(AidenRemoteClientError.installationChanged))
+    }
+
     private static let taskJSON = #"{"id":"task-1","revision":"rev_task_1","name":"Daily","enabled":true,"schedule":"0 8 * * *","timezone":"UTC","mode":"llm","permission":"read-only","providerId":"provider-1","modelId":"model-1","prompt":"Summarize","notify":true,"running":false,"createdAt":"2026-08-19T12:00:00.000Z","updatedAt":"2026-08-19T12:00:00.000Z"}"#
 
     private static func makeTask(

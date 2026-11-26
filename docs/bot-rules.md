@@ -103,9 +103,10 @@ held independently.
 
 Direct calls and each nested call in a codemode script use the same coverage,
 limits and final checks. A script cannot use one covered call to authorize the
-rest of its calls. The CLI host does not offer plan tools or coverage, and a
-desktop viewing another desktop's Bot does not show plan cards. Such a viewer
-can still show Waiting for you; answer on the host desktop or a supported phone.
+rest of its calls. The CLI host does not offer plan tools or coverage. A
+desktop viewing another desktop's Bot shows its plan card and sends the answer
+to the host desktop, as a supported phone does; one paired with an older host
+shows Waiting for you, and the plan is answered on the host desktop.
 
 ## Routines and the approval mode (Settings → Approvals)
 

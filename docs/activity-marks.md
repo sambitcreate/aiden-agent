@@ -120,7 +120,31 @@ The interactive gallery that the set was chosen from is `docs/aiden-thinking-ani
 | Preparing / queued / model loading / stopping | `bounce` |
 | Waiting for approval or an answer | `glance` |
 | Subagent: queued or starting | `bounce` |
-| Subagent: needs attention | `glance` |
+| Subagent: waiting on you | `glance` |
 | Subagent: running | from its activity: searching → `scan-grid`, reviewing context → `tri-step`, writing a report → `compose`, otherwise by role (scout `scan-grid`, planner `tri-step`, others `quad-shuffle`) |
-| Subagent: finished, failed or stopped | same mark, frozen |
+| Subagent: done, failed or stopped | same mark, frozen |
 | Live | Helix family as tabled above; approval uses `glance` |
+
+## Bot avatar states (Hi-bit sprites)
+
+A Bot without a profile photo is drawn as a Hi-bit pixel sprite, and its avatar acts out the Bot's live activity. This is the one documented exception to "show activity with an activity mark": the sprite is the Bot's own face, so it carries the state itself rather than sitting next to a mark. Geometry, tones and the still poses live in [`plans/hibit-sprite-avatars-plan.md`](plans/hibit-sprite-avatars-plan.md) and the `botAvatarSprite` section of `protocol/aiden-remote/v1/fixtures/contract.json`. On desktop the code is `renderer/shared/bot-sprite.ts`, `renderer/components/bot-avatar.tsx` and the `.bot-sprite` rules in `renderer/styles.css`.
+
+The nine states are idle, thinking, reading, tool, writing, editing, waiting, done and error. The first seven are open-eyed poses; done shows happy `^` eyes and error shows wince `>` `<` eyes.
+
+| Activity | State |
+|---|---|
+| Nothing running | idle |
+| Running: preparing, thinking, tidying, resuming, reconnecting, stopping, or no known phase | thinking |
+| Running: reading, photo, searching | reading |
+| Running: command, app, helper, computer, remembering, routine, working | tool |
+| Running: editing | editing |
+| Running: writing | writing |
+| Waiting on the person (approval, question, hand-off, access request, plan), whatever the phase | waiting |
+| A turn that finished normally | done, then idle |
+| A failed turn, an interrupted session, or a Bot with no usable model | error, then idle |
+| A turn the person stopped, or a paused Bot | idle at once, with no done or error moment |
+
+- **Timing.** A working state appears only after it has lasted 250 ms, so a quick burst of tool calls shows only the phase that lasts. When work that was on screen ends, done or error shows at once and is held for 1.5 s before the avatar rests at idle. Work too short to show ends silently. A failure reported just after the turn ended turns the done moment into error. A card answered while no turn runs settles back to idle quietly. An avatar that mounts with its turn already known shows it without waiting, but the chat header and sidebar rows load their snapshot or summary after they mount, so they start idle and take the 250 ms debounce like any other change. One that mounts on an already failed Bot stays idle.
+- **Reduce Motion.** Every state has a complete still pose drawn by markup and CSS, and the motion (stepped, transform and opacity only) runs only while Aiden's applied Reduce Motion is off, the avatar is live and on screen, and the document is visible. With Reduce Motion on, the avatar still changes state, but it holds each state's still pose.
+- **Where it moves.** The chat header's face is live only while its Bot works or has a done, error or waiting moment; at idle it is a static sprite with no blink. Sidebar rows and the pinned card do the same. The Bot computer tab's face shows the tool pose while the Bot drives its computer, and every other avatar is a static idle sprite.
+- **Eyes.** Eyes use the tone's `deep` at every size and in every pose. Full-size open eyes carry a `light` glint square at each eye's top-left (0.42 × the eye's shorter side). At 24 px and below (the small cut) sprites drop their highlight cells and draw larger 6×6 eyes, whose glint is white (`smallGlintHex`, `#FFFFFF`) instead. The glint closes with the blink's shut frame, and the happy and wince marks have none.

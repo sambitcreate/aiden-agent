@@ -26,7 +26,10 @@ import {
 import type { SubagentTaskRequest, SubagentTaskResult } from "./contracts.js";
 import type { GenerationThinkingLevel } from "../../../renderer/shared/generation-thinking.js";
 import type { SubagentModelSelectionSource } from "../../../renderer/shared/subagent-runs.js";
-import { sanitizeSubagentSnapshotTextWithFacts } from "../../../renderer/shared/subagent-safe-text.js";
+import {
+  collapseSubagentTextToSingleLine,
+  sanitizeSubagentSnapshotTextWithFacts,
+} from "../../../renderer/shared/subagent-safe-text.js";
 
 const MAX_DURABLE_LIVE_MILESTONES = 4;
 
@@ -134,7 +137,7 @@ function boundedSingleLineProjection(
   marker?: string,
 ): ProjectedText {
   const normalized = normalizeProjectedTextWithFacts(value);
-  const projected = boundedProjection(normalized.text.replace(/\s+/gu, " "), maximum, marker);
+  const projected = boundedProjection(collapseSubagentTextToSingleLine(normalized.text), maximum, marker);
   return {
     ...projected,
     displayFiltered: normalized.displayFiltered || projected.displayFiltered,
@@ -357,9 +360,9 @@ export class SubagentEventProjector {
     // while the child is live and publishes text only from the terminal result,
     // where the complete bounded value can be sanitized in one pass.
     void delta;
-    if (current.activity === "Writing a bounded report") return;
+    if (current.activity === "Writing its report") return;
     this.update(runId, {
-      activity: "Writing a bounded report",
+      activity: "Writing its report",
       milestones: appendMilestone(current.milestones, "composing"),
     });
   }
@@ -389,29 +392,36 @@ export class SubagentEventProjector {
       : undefined;
     const projectedWarning = warningProjection?.text ?? "";
     const warning = projectedWarning || undefined;
-    const sourceText = result.summary || result.warning || "[No textual result.]";
-    const terminalProjection = boundedProjection(
-      sourceText,
-      MAX_SUBAGENT_TERMINAL_MARKDOWN_CHARS,
-      "\n\n… [report truncated]",
-    );
-    const terminalMarkdown = terminalProjection.text || "[No textual result.]";
+    // A helper that stopped, failed or timed out without a report has no
+    // Result: its warning is shown once, in the warning notice, rather than
+    // being copied into the Result body as well.
+    const hasReport = Boolean(result.summary) || result.status === "completed";
+    const terminalProjection = hasReport
+      ? boundedProjection(
+          result.summary || "[No textual result.]",
+          MAX_SUBAGENT_TERMINAL_MARKDOWN_CHARS,
+          "\n\n… [report truncated]",
+        )
+      : undefined;
+    const terminalMarkdown = terminalProjection
+      ? terminalProjection.text || "[No textual result.]"
+      : undefined;
     const latestProjection = boundedProjection(
-      result.summary || result.warning || "",
+      result.summary || "",
       MAX_SUBAGENT_LATEST_TEXT_CHARS,
     );
     const latestText = latestProjection.text || undefined;
     const errorProjection = boundedSingleLineProjection(
-      result.warning || "The child could not complete this task.",
+      result.warning || "This helper couldn't finish.",
       MAX_SUBAGENT_ERROR_CHARS,
     );
-    const error = errorProjection.text || "The child could not complete this task.";
+    const error = errorProjection.text || "This helper couldn't finish.";
     const projectionNotices = mergeProjectionNotices(
       current.projectionNotices,
-      (result.summaryTruncated === true ||
-        terminalProjection.truncated) &&
+      terminalProjection !== undefined &&
+        (result.summaryTruncated === true || terminalProjection.truncated) &&
         "report_truncated",
-      (terminalProjection.displayFiltered ||
+      (terminalProjection?.displayFiltered === true ||
         warningProjection?.displayFiltered === true ||
         (result.status === "failed" && errorProjection.displayFiltered)) &&
         "display_filtered",
@@ -424,7 +434,7 @@ export class SubagentEventProjector {
         activity: undefined,
         finishedAt: now,
         ...(latestText ? { latestText } : {}),
-        terminalMarkdown,
+        ...(terminalMarkdown ? { terminalMarkdown } : {}),
         ...(projectionNotices ? { projectionNotices } : {}),
         ...(result.status === "failed"
           ? {

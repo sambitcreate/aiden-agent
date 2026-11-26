@@ -3,51 +3,36 @@ import Foundation
 // MARK: - Contract revision 24: foreign runs
 
 /// Observation and control of a run this phone did not start (on the Mac, in
-/// Telegram or from the scheduler). The phone attaches when the chat loads and
-/// the Mac advertises `phone-run-control-v1`. Events are reduced by the pure
-/// `AidenForeignRunProjection` and mirrored into the same published state an
-/// owned stream uses, so the transcript, approval card, question card, Stop
-/// control and Live Activity render unchanged.
+/// Telegram or from the scheduler). Lifecycle, probing, attach/reconnect, and
+/// recovery live in `AidenForeignRunObserver`; this extension binds them to
+/// `AidenChatViewModel`'s published transcript, Live Activities, and control
+/// actions.
 extension AidenChatViewModel {
-    /// Frames retained from an already finished run arrive back to back.
-    /// Publishing waits for this quiet period so opening a chat never replays
-    /// a finished run as if it were live.
-    static let foreignRunSettleInterval: Duration = .milliseconds(400)
-    static let foreignRunMaxReconnects = 3
-    static let foreignRunMaxReconcileAttempts = 6
-    /// A run the roster announced may not be registered on the Mac yet when
-    /// the phone first asks for it; one retry after this long covers that.
-    static let announcedRunRetryDelay: Duration = .milliseconds(400)
+    static let foreignRunSettleInterval: Duration = AidenForeignRunObserver.settleInterval
+    static let foreignRunMaxReconnects = AidenForeignRunObserver.maxReconnects
+    static let foreignRunMaxReconcileAttempts = AidenForeignRunObserver.maxReconcileAttempts
+    static let announcedRunRetryDelay: Duration = AidenForeignRunObserver.announcedRunRetryDelay
 
-    /// Why the phone is looking for a run it did not start.
-    enum ForeignRunAttachReason: Sendable {
-        /// The chat opened or reloaded; its transcript was just read.
-        case load
-        /// The agent roster reported a new turn.
-        case announcedTurn
-        /// The first roster this chat received named a turn. It is usually the
-        /// last finished one, so a missing run is not looked for again.
-        case firstRosterTurn
-        /// A foreground check on a device that cannot read the agent roster.
-        case probe
-    }
+    typealias ForeignRunAttachReason = AidenForeignRunObserver.AttachReason
 
     /// Delay before the foreground probe's next check, after `idleProbes`
     /// consecutive checks that found nothing live: 5s, 10s, 20s, then 30s.
     static func foreignRunProbeDelay(afterIdleProbes idleProbes: Int) -> Duration {
-        .seconds(min(30, 5 << min(max(idleProbes, 0), 3)))
+        AidenForeignRunObserver.probeDelay(afterIdleProbes: idleProbes)
     }
 
-    var isObservingForeignRun: Bool { foreignRun != nil && foreignRunIsLive }
+    var isObservingForeignRun: Bool { foreignRunObserver.isObservingLive }
 
     /// Whether a lookup for, or observation of, a foreign run is in flight.
-    var isLookingForForeignRun: Bool { foreignRunTask != nil }
+    var isLookingForForeignRun: Bool { foreignRunObserver.isLookingForRun }
+
+    var isProbingForForeignRuns: Bool { foreignRunObserver.isProbing }
 
     func startForeignRunObservationIfNeeded(
         context: AidenRemoteRequestContext,
         reason: ForeignRunAttachReason = .load
     ) {
-        guard !isReadOnlyFixture, !isRemoved, foreignRunTask == nil,
+        guard !isReadOnlyFixture, !isRemoved, !foreignRunObserver.isLookingForRun,
               activeStreamID == nil, !isStarting, coordinator.isLive(context),
               ownerServer?.canObserveForeignRuns == true,
               let installation = ownerInstallation,
@@ -55,36 +40,32 @@ extension AidenChatViewModel {
               installation.hasNegotiatedAccess(to: .runsObserve),
               installation.deviceCapabilities.contains(.chatRead),
               chat.botId == nil || installation.hasNegotiatedAccess(to: .botRead) else { return }
-        foreignRunGeneration &+= 1
-        let generation = foreignRunGeneration
-        foreignRunLookupIsProbes = reason == .probe
-        foreignRunTask = Task { [weak self] in
-            await self?.observeForeignRun(context: context, generation: generation, reason: reason)
-            self?.attachToTurnAnnouncedDuringObservation()
-        }
+        foreignRunObserver.startObservation(
+            context: context,
+            reason: reason,
+            host: makeForeignRunObserverHost()
+        )
     }
 
     /// The roster reported a new turn: attach to its run unless a reply is
     /// already live here. A lookup still in flight may have been answered
     /// before this turn's run registered, so the turn waits for it to end and
     /// is looked up then. A run that lookup already showed or read is
-    /// recognised by `foreignRunAccountedRunId` and not replayed or read again.
-    /// The turn also waits while this phone restores its own stream, which
-    /// may be the announced turn's run.
+    /// recognised by `foreignRunObserver.accountedRunId` and not replayed or
+    /// read again. The turn also waits while this phone restores its own
+    /// stream, which may be the announced turn's run.
     func attachToAnnouncedTurn(reason: ForeignRunAttachReason) {
         guard !isReadOnlyFixture, !isRemoved, activeStreamID == nil, !isStarting,
               let context = liveOwner else { return }
-        if foreignRunTask != nil || isRestoringStream {
-            // A newer announced turn keeps the not-found retry.
-            if turnAwaitingLookup != .announcedTurn { turnAwaitingLookup = reason }
+        if foreignRunObserver.isLookingForRun || isRestoringStream {
+            foreignRunObserver.queueAnnouncedTurn(reason: reason)
             return
         }
         startForeignRunObservationIfNeeded(context: context, reason: reason)
     }
 
     func attachToTurnAnnouncedDuringObservation() {
-        guard let reason = turnAwaitingLookup, foreignRunTask == nil, !Task.isCancelled else { return }
-        turnAwaitingLookup = nil
+        guard let reason = foreignRunObserver.consumeQueuedAnnouncedTurn() else { return }
         attachToAnnouncedTurn(reason: reason)
     }
 
@@ -92,269 +73,152 @@ extension AidenChatViewModel {
     /// that cannot read the agent roster. It stops with progress observation,
     /// which the chat ends when it leaves the screen or the app the foreground.
     func startForeignRunProbeIfNeeded() {
-        guard !isReadOnlyFixture, !isRemoved, foreignRunProbeTask == nil, !canReadAgentRoster,
-              ownerServer?.canObserveForeignRuns == true else { return }
-        foreignRunProbeGeneration &+= 1
-        let generation = foreignRunProbeGeneration
-        foreignRunProbeTask = Task { [weak self] in
-            await self?.probeForForeignRuns(generation: generation)
-            guard let self, generation == self.foreignRunProbeGeneration else { return }
-            self.foreignRunProbeTask = nil
-        }
+        let canStart = !isReadOnlyFixture && !isRemoved && !canReadAgentRoster
+            && ownerServer?.canObserveForeignRuns == true
+        foreignRunObserver.startProbeIfNeeded(
+            canStart: canStart,
+            nextStep: { [weak self] in
+                guard let self, !self.isRemoved, !self.canReadAgentRoster,
+                      let context = self.liveOwner else { return .stop }
+                if self.activeStreamID != nil || self.isStarting || self.isRestoringStream
+                    || self.foreignRunObserver.isLookingForRun {
+                    return .deferWhileBusy
+                }
+                return .attach(context)
+            },
+            startAttach: { [weak self] context, reason in
+                guard let self else { return nil }
+                self.startForeignRunObservationIfNeeded(context: context, reason: reason)
+                return self.foreignRunObserver.attachTask
+            }
+        )
     }
 
     func stopForeignRunProbe() {
-        foreignRunProbeGeneration &+= 1
-        foreignRunProbeTask?.cancel()
-        foreignRunProbeTask = nil
-        // Its lookup goes too, or it asks the machine again after the chat has
-        // left. A run it found stays on, as any live run does.
-        guard foreignRunLookupIsProbes, foreignRunTask != nil, foreignRun == nil else { return }
-        foreignRunTask?.cancel()
-        endForeignRunObservation(preservingRecovery: true)
-    }
-
-    var isProbingForForeignRuns: Bool { foreignRunProbeTask != nil }
-
-    private func probeForForeignRuns(generation: UInt64) async {
-        var idleProbes = 0
-        while generation == foreignRunProbeGeneration, !Task.isCancelled {
-            do {
-                try await foreignRunProbeSleep(Self.foreignRunProbeDelay(afterIdleProbes: idleProbes))
-            } catch {
-                return
-            }
-            guard generation == foreignRunProbeGeneration, !Task.isCancelled,
-                  !isRemoved, !canReadAgentRoster,
-                  let context = liveOwner else { return }
-            if activeStreamID != nil || isStarting || isRestoringStream || foreignRunTask != nil {
-                // A reply is already live here; check again soon after it ends.
-                idleProbes = 0
-                continue
-            }
-            let shownLive = foreignRunsShownLive
-            startForeignRunObservationIfNeeded(context: context, reason: .probe)
-            // The device or Mac no longer allows observing runs.
-            guard let attach = foreignRunTask else { return }
-            await attach.value
-            idleProbes = foreignRunsShownLive == shownLive ? idleProbes + 1 : 0
+        foreignRunObserver.stopProbe(hasActiveStream: activeStreamID != nil) { [weak self] in
+            self?.clearForeignLiveOutputAndPrompts()
         }
     }
 
     /// Stops observing, and drops a turn announced during the stopped lookup.
     func stopForeignRunObservation() {
-        turnAwaitingLookup = nil
-        foreignRunTask?.cancel()
-        endForeignRunObservation(preservingRecovery: false)
-    }
-
-    /// Ends observation from within the lookup itself, so a turn announced
-    /// while it ran is still looked up once it returns. `preservingRecovery`
-    /// keeps a finished run's response, still awaiting its transcript, on
-    /// screen while a later attach finds nothing live.
-    private func endForeignRunObservation(preservingRecovery: Bool) {
-        foreignRunGeneration &+= 1
-        foreignRunTask = nil
-        foreignRunSettleTask?.cancel()
-        foreignRunSettleTask = nil
-        // An ended run still awaiting its transcript is presented too.
-        var wasLive = foreignRunIsLive
-        if !preservingRecovery, let recovery = foreignRunReconcileTask {
-            recovery.cancel()
-            foreignRunReconcileTask = nil
-            wasLive = true
-        }
-        foreignRun = nil
-        foreignRunIsLive = false
-        if wasLive, activeStreamID == nil {
-            replaceLiveText("")
-            reasoning = ""
-            tools = []
-            activityTimeline = nil
-            pendingApproval = nil
-            pendingQuestion = nil
+        foreignRunObserver.stopObservation(hasActiveStream: activeStreamID != nil) { [weak self] in
+            self?.clearForeignLiveOutputAndPrompts()
         }
     }
 
-    private func isCurrentForeignRun(_ generation: UInt64, context: AidenRemoteRequestContext) -> Bool {
-        !Task.isCancelled && !isRemoved && generation == foreignRunGeneration
-            && coordinator.isLive(context) && activeStreamID == nil && !isStarting
-    }
-
-    private func observeForeignRun(
-        context: AidenRemoteRequestContext,
-        generation: UInt64,
-        reason: ForeignRunAttachReason
-    ) async {
-        defer {
-            if generation == foreignRunGeneration { foreignRunTask = nil }
-        }
-        var reconnects = 0
-        var retriedAnnouncedRun = false
-        /// Waits once for an announced run the Mac has not registered yet.
-        func retryAnnouncedRun() async -> Bool {
-            guard reason == .announcedTurn, !retriedAnnouncedRun else { return false }
-            retriedAnnouncedRun = true
-            try? await announcedRunRetrySleep(Self.announcedRunRetryDelay)
-            return true
-        }
-        attach: while isCurrentForeignRun(generation, context: context) {
-            let client: AidenRemoteClient
-            do {
-                client = try coordinator.remoteClient(for: context)
-            } catch {
-                return
+    private func makeForeignRunObserverHost() -> AidenForeignRunObserver.Host {
+        AidenForeignRunObserver.Host(
+            currencyInputs: { [weak self] context in
+                guard let self else {
+                    return AidenForeignRunObserver.CurrencyInputs(
+                        isTaskCancelled: true,
+                        isRemoved: true,
+                        isContextLive: false,
+                        hasActiveStream: false,
+                        isStarting: false
+                    )
+                }
+                return AidenForeignRunObserver.CurrencyInputs(
+                    isTaskCancelled: Task.isCancelled,
+                    isRemoved: self.isRemoved,
+                    isContextLive: self.coordinator.isLive(context),
+                    hasActiveStream: self.activeStreamID != nil,
+                    isStarting: self.isStarting
+                )
+            },
+            isRemoved: { [weak self] in self?.isRemoved ?? true },
+            hasActiveStream: { [weak self] in self?.activeStreamID != nil },
+            openEventStream: { [weak self] context, currentProjection in
+                guard let self else { throw CancellationError() }
+                let client = try self.coordinator.remoteClient(for: context)
+                return currentProjection.map { client.runEvents(runId: $0.runId, after: $0.lastSequence) }
+                    ?? client.currentRunEvents(chatId: self.chat.id)
+            },
+            handleCredentialRevocation: { [weak self] error, context in
+                guard let self else { return false }
+                return await self.coordinator.handleCredentialRevocation(error, context: context)
+            },
+            reconcileChat: { [weak self] context in
+                guard let self else { return false }
+                return await self.reconcileChat(context: context)
+            },
+            bumpTranscriptGeneration: { [weak self] in
+                self?.transcriptGeneration &+= 1
+            },
+            onGoLive: { [weak self] projection, context in
+                await self?.handleForeignRunWentLive(projection, context: context)
+            },
+            onPublishUpdate: { [weak self] projection, flushingText, context in
+                self?.publishForeignRun(projection, context: context, flushingText: flushingText)
+            },
+            onPerformEffect: { [weak self] effect, runId, context in
+                guard let self else { return true }
+                return await self.performForeignRunEffect(effect, runId: runId, context: context)
+            },
+            onReconnectExhaustedLive: { [weak self] runId, _ in
+                guard let self else { return }
+                self.streamState = .reconciling
+                await self.liveActivities.markStale(instanceID: self.instanceId, streamID: runId)
+            },
+            onFlushBeforeQuietEnd: { [weak self] in
+                self?.flushPendingStreamingContent()
+            },
+            onEndedQuietlyLive: { [weak self] finalState, reconciled in
+                guard let self else { return }
+                self.pendingApproval = nil
+                self.pendingQuestion = nil
+                if finalState == nil, self.streamState?.isTerminal != true { self.streamState = nil }
+                if reconciled {
+                    self.clearForeignLiveOutput()
+                }
+            },
+            onClearLiveOutput: { [weak self] in
+                self?.clearForeignLiveOutput()
+            },
+            onClearLiveOutputAndPrompts: { [weak self] in
+                self?.clearForeignLiveOutputAndPrompts()
+            },
+            onObservationFinished: { [weak self] in
+                self?.attachToTurnAnnouncedDuringObservation()
             }
-            let events = foreignRun.map { client.runEvents(runId: $0.runId, after: $0.lastSequence) }
-                ?? client.currentRunEvents(chatId: chat.id)
-            do {
-                for try await event in events {
-                    guard isCurrentForeignRun(generation, context: context) else { return }
-                    reconnects = 0
-                    switch await applyForeignRunEvent(event, context: context, generation: generation) {
-                    case .keepObserving:
-                        continue
-                    case .stop:
-                        return
-                    case let .endedBeforeAttach(runId):
-                        let isNewRun = runId != foreignRunAccountedRunId
-                        if !isNewRun {
-                            // The newest retained run is one already accounted
-                            // for: an announced run may not be registered yet.
-                            discardUnsettledForeignRun()
-                            if await retryAnnouncedRun() { continue attach }
-                        }
-                        // The load may have read the transcript before the Mac
-                        // committed the reply. Terminal replay settles that read
-                        // even though historical activity stays off screen.
-                        guard isCurrentForeignRun(generation, context: context) else { return }
-                        foreignRunAccountedRunId = runId
-                        await endForeignRunQuietly(context: context, reconcile: isNewRun)
-                        return
-                    }
-                }
-            } catch let error where aidenIsCancellation(error) {
-                return
-            } catch {
-                if await coordinator.handleCredentialRevocation(error, context: context) {
-                    stopForeignRunObservation()
-                    return
-                }
-                guard isCurrentForeignRun(generation, context: context) else { return }
-                if case let .server(statusCode, _)? = error as? AidenRemoteClientError,
-                   statusCode < 500 {
-                    // No retained run (run_gone), or this device may not see it.
-                    let neverFound = foreignRun == nil
-                    if statusCode == 404, neverFound, await retryAnnouncedRun() { continue attach }
-                    if statusCode == 404, neverFound, reason == .announcedTurn {
-                        // The announced run cannot be observed; its outcome
-                        // still reaches the transcript.
-                        await reconcileChat(context: context)
-                        guard generation == foreignRunGeneration else { return }
-                    }
-                    await endForeignRunQuietly(context: context, reconcile: foreignRunIsLive)
-                    return
-                }
-            }
-            reconnects += 1
-            guard reconnects <= Self.foreignRunMaxReconnects,
-                  isCurrentForeignRun(generation, context: context) else { break }
-            try? await Task.sleep(for: .seconds(reconnects))
-        }
-        guard generation == foreignRunGeneration, !isRemoved else { return }
-        if foreignRunIsLive, let runId = foreignRun?.runId {
-            streamState = .reconciling
-            await liveActivities.markStale(instanceID: instanceId, streamID: runId)
-            await endForeignRunQuietly(context: context, reconcile: true)
-        } else {
-            endForeignRunObservation(preservingRecovery: true)
-        }
+        )
     }
 
-    private enum ForeignRunStep {
-        case keepObserving
-        case stop
-        /// A finished run replayed on attach: nothing to show live.
-        case endedBeforeAttach(runId: String)
-    }
-
-    private func applyForeignRunEvent(
-        _ event: AidenRemoteRunEvent,
-        context: AidenRemoteRequestContext,
-        generation: UInt64
-    ) async -> ForeignRunStep {
-        if foreignRun == nil {
-            foreignRun = AidenForeignRunProjection(runId: event.runId)
-            scheduleForeignRunSettle(context: context, generation: generation)
-        }
-        guard var projection = foreignRun else { return .stop }
-        let effects = projection.apply(event)
-        foreignRun = projection
-        guard foreignRunIsLive else {
-            return projection.isEnded ? .endedBeforeAttach(runId: projection.runId) : .keepObserving
-        }
-        var flushesText = true
-        if case let .content(content) = event.kind {
-            flushesText = content.type != .textDelta && content.type != .heartbeat
-        }
-        publishForeignRun(context: context, flushingText: flushesText)
-        for effect in effects {
-            guard isCurrentForeignRun(generation, context: context) else { return .stop }
-            if await performForeignRunEffect(effect, runId: projection.runId, context: context) { return .stop }
-        }
-        return .keepObserving
-    }
-
-    /// Drops a replay that never went live so the next attach starts afresh.
-    private func discardUnsettledForeignRun() {
-        guard !foreignRunIsLive else { return }
-        foreignRunSettleTask?.cancel()
-        foreignRunSettleTask = nil
-        foreignRun = nil
-    }
-
-    private func scheduleForeignRunSettle(context: AidenRemoteRequestContext, generation: UInt64) {
-        foreignRunSettleTask?.cancel()
-        foreignRunSettleTask = Task { [weak self] in
-            try? await Task.sleep(for: Self.foreignRunSettleInterval)
-            guard !Task.isCancelled, let self,
-                  self.isCurrentForeignRun(generation, context: context),
-                  let projection = self.foreignRun, !projection.isEnded else { return }
-            await self.goLiveWithForeignRun(projection, context: context)
-        }
-    }
-
-    private func goLiveWithForeignRun(
+    private func handleForeignRunWentLive(
         _ projection: AidenForeignRunProjection,
         context: AidenRemoteRequestContext
     ) async {
-        // A newly live run owns the live output from here on.
-        foreignRunReconcileTask?.cancel()
-        foreignRunReconcileTask = nil
-        foreignRunIsLive = true
-        foreignRunAccountedRunId = projection.runId
-        foreignRunsShownLive += 1
         // The retained replay lands at once: text it holds before a tool,
         // approval or other structural state shows before that state.
         let carriesStructure = !projection.tools.isEmpty || !projection.reasoning.isEmpty
             || projection.pendingApproval != nil || projection.pendingQuestion != nil || projection.timeline != nil
-        publishForeignRun(context: context, flushingText: carriesStructure)
+        publishForeignRun(projection, context: context, flushingText: carriesStructure)
         await liveActivities.start(
             instanceID: instanceId,
             deviceID: context.deviceId,
             chatID: chat.id,
             title: chat.displayTitle,
-            streamID: projection.runId
+            streamID: projection.runId,
+            machineName: ownerMachineName
         )
-        if projection.pendingApproval != nil {
-            await liveActivities.approvalRequired(instanceID: instanceId, streamID: projection.runId)
+        if let approval = projection.pendingApproval {
+            await liveActivities.approvalRequired(
+                instanceID: instanceId,
+                streamID: projection.runId,
+                target: foreignApprovalTarget(approvalID: approval.approvalId, runID: projection.runId, context: context)
+            )
         } else if let state = streamState {
             await publishLiveActivityStatus(streamID: projection.runId, state: state)
         }
     }
 
-    private func publishForeignRun(context: AidenRemoteRequestContext, flushingText: Bool = false) {
-        guard let projection = foreignRun, foreignRunIsLive, activeStreamID == nil else { return }
+    private func publishForeignRun(
+        _ projection: AidenForeignRunProjection? = nil,
+        context: AidenRemoteRequestContext,
+        flushingText: Bool = false
+    ) {
+        guard let projection = projection ?? foreignRun, foreignRunIsLive, activeStreamID == nil else { return }
         receiveCumulativeLiveText(projection.liveText)
         // As on an owned stream, text received before a tool, approval or
         // other structural event shows before it lands.
@@ -425,6 +289,17 @@ extension AidenChatViewModel {
         )
     }
 
+    /// The card offers Deny on a run from the Mac only when this phone may
+    /// answer it there; otherwise it offers Review alone.
+    private func foreignApprovalTarget(
+        approvalID: String,
+        runID: String,
+        context: AidenRemoteRequestContext
+    ) -> AgentRunApprovalTarget? {
+        guard foreignApprovalCapabilities(context: context).canRespond else { return nil }
+        return AgentRunApprovalTarget(approvalID: approvalID, runID: runID)
+    }
+
     private func canRespondToForeignQuestions(context: AidenRemoteRequestContext) -> Bool {
         canRespondToQuestions(for: context) && hasForeignRunControl(context: context)
     }
@@ -439,7 +314,7 @@ extension AidenChatViewModel {
             && installation.hasNegotiatedAccess(to: .botWrite))
     }
 
-    /// Returns true when observation should stop.
+    /// Returns true when observation should stop (the observer then ends quietly).
     private func performForeignRunEffect(
         _ effect: AidenForeignRunProjection.Effect,
         runId: String,
@@ -457,7 +332,11 @@ extension AidenChatViewModel {
             if ambient { await liveActivities.toolFinished(instanceID: instanceId, streamID: runId) }
         case let .approvalRequired(id):
             coordinator.haptics.play(.warning, scope: hapticScope, dedupeKey: "approval-required:\(id)")
-            await liveActivities.approvalRequired(instanceID: instanceId, streamID: runId)
+            await liveActivities.approvalRequired(
+                instanceID: instanceId,
+                streamID: runId,
+                target: foreignApprovalTarget(approvalID: id, runID: runId, context: context)
+            )
         case let .questionRequired(id):
             coordinator.haptics.play(.warning, scope: hapticScope, dedupeKey: "question-required:\(id)")
             await publishLiveActivityStatus(streamID: runId, state: .waitingForApproval)
@@ -485,43 +364,9 @@ extension AidenChatViewModel {
                     message: String(localized: "Response cancelled")
                 )
             }
-            await endForeignRunQuietly(context: context, reconcile: true)
             return true
         }
         return false
-    }
-
-    private func endForeignRunQuietly(context: AidenRemoteRequestContext, reconcile: Bool) async {
-        if foreignRunIsLive, activeStreamID == nil { flushPendingStreamingContent() }
-        let generation = foreignRunGeneration
-        var reconciled = true
-        if reconcile {
-            reconciled = await reconcileChat(context: context)
-        }
-        guard isCurrentForeignRun(generation, context: context) else { return }
-        foreignRunGeneration &+= 1
-        foreignRunSettleTask?.cancel()
-        foreignRunSettleTask = nil
-        foreignRunTask = nil
-        let wasLive = foreignRunIsLive
-        let finalState = foreignRun?.endState
-        foreignRun = nil
-        foreignRunIsLive = false
-        guard activeStreamID == nil else { return }
-        if !wasLive {
-            if !reconciled { scheduleForeignRunReconciliation(context: context) }
-            return
-        }
-        pendingApproval = nil
-        pendingQuestion = nil
-        if finalState == nil, streamState?.isTerminal != true { streamState = nil }
-        if reconciled {
-            clearForeignLiveOutput()
-        } else {
-            // Keep the response the user was watching until the transcript that
-            // holds it is accepted. Only the chat is re-read; nothing is resent.
-            scheduleForeignRunReconciliation(context: context)
-        }
     }
 
     private func clearForeignLiveOutput() {
@@ -531,34 +376,10 @@ extension AidenChatViewModel {
         activityTimeline = nil
     }
 
-    private func scheduleForeignRunReconciliation(context: AidenRemoteRequestContext) {
-        guard foreignRunReconcileTask == nil else { return }
-        foreignRunReconcileTask = Task { [weak self] in
-            for attempt in 0..<Self.foreignRunMaxReconcileAttempts {
-                let delay = AidenTerminalReconciliation.retryDelayMilliseconds(attempt: attempt)
-                do {
-                    try await Task.sleep(for: .milliseconds(delay))
-                } catch {
-                    return
-                }
-                guard let self, !self.isForeignRunRecoveryFenced(context: context) else { return }
-                self.transcriptGeneration &+= 1
-                if await self.reconcileChat(context: context) {
-                    guard !self.isForeignRunRecoveryFenced(context: context) else { return }
-                    self.foreignRunReconcileTask = nil
-                    self.clearForeignLiveOutput()
-                    return
-                }
-            }
-            self?.foreignRunReconcileTask = nil
-        }
-    }
-
-    /// A send, this phone's own stream, a newly live foreign run or a removed
-    /// pairing owns the live state from then on.
-    private func isForeignRunRecoveryFenced(context: AidenRemoteRequestContext) -> Bool {
-        Task.isCancelled || isRemoved || !coordinator.isLive(context) || activeStreamID != nil
-            || isStarting || foreignRunIsLive
+    private func clearForeignLiveOutputAndPrompts() {
+        clearForeignLiveOutput()
+        pendingApproval = nil
+        pendingQuestion = nil
     }
 
     func stopForeignRun() async -> Bool {
@@ -615,7 +436,7 @@ extension AidenChatViewModel {
             && approval.scopes.contains(scope) ? scope : nil
         isRespondingToApproval = true
         defer { isRespondingToApproval = false }
-        foreignRun?.markAnsweredLocally(approval.id)
+        foreignRunObserver.markAnsweredLocally(approval.id)
         publishForeignRun(context: context)
         onSend?()
         do {
@@ -638,7 +459,7 @@ extension AidenChatViewModel {
             if await coordinator.handleCredentialRevocation(error, context: context) { return }
             guard coordinator.isLive(context) else { return }
             retractApprovalAnsweredLine()
-            foreignRun?.answerUnconfirmed(approval.id)
+            foreignRunObserver.answerUnconfirmed(approval.id)
             if let loser = AidenForeignRunResolution.loser(from: error) {
                 showForeignRunNotice(loser.notice)
                 return
@@ -658,7 +479,7 @@ extension AidenChatViewModel {
               canRespondToForeignQuestions(context: context) else { return }
         isRespondingToQuestion = true
         defer { isRespondingToQuestion = false }
-        foreignRun?.markAnsweredLocally(question.id)
+        foreignRunObserver.markAnsweredLocally(question.id)
         publishForeignRun(context: context)
         do {
             _ = try await coordinator.remoteClient(for: context).respondToRunQuestion(
@@ -674,7 +495,7 @@ extension AidenChatViewModel {
         } catch {
             if await coordinator.handleCredentialRevocation(error, context: context) { return }
             guard coordinator.isLive(context) else { return }
-            foreignRun?.answerUnconfirmed(question.id)
+            foreignRunObserver.answerUnconfirmed(question.id)
             if let loser = AidenForeignRunResolution.loser(from: error) {
                 showForeignRunNotice(loser.notice)
                 return

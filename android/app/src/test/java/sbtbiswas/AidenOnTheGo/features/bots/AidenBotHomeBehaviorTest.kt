@@ -1,5 +1,8 @@
 package sbtbiswas.AidenOnTheGo.features.bots
 
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.jsonObject
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
@@ -17,7 +20,8 @@ class AidenBotHomeBehaviorTest {
         name: String,
         purpose: String = "",
         updated: Instant = t0,
-        sessionState: AidenBotSessionState? = null
+        sessionState: AidenBotSessionState? = null,
+        needsYou: Boolean = false
     ) = AidenBotSummary(
         id = id,
         name = name,
@@ -28,7 +32,8 @@ class AidenBotHomeBehaviorTest {
         paused = sessionState == AidenBotSessionState.PAUSED,
         createdAt = t0.minusSeconds(86_400),
         updatedAt = updated,
-        revision = "r1"
+        revision = "r1",
+        needsYou = needsYou
     )
 
     private fun chat(
@@ -132,12 +137,85 @@ class AidenBotHomeBehaviorTest {
     }
 
     @Test
+    fun aRunningBotTheMacSaysWaitsOnThePersonSaysSoInsteadOfLookingBusy() {
+        val waiting = bot("b", "Scout", sessionState = AidenBotSessionState.RUNNING, needsYou = true)
+        val running = AidenBotHomeRow(waiting, chat("c", "b", "Checking the build", state = AidenBotConversationActivityState.RUNNING))
+        assertEquals(AidenBotSessionCopy.WAITING_FOR_YOU, running.preview)
+        assertFalse(running.isWorking)
+        // An approval this phone can answer keeps its own, more useful line.
+        assertEquals(
+            "Needs your OK",
+            AidenBotHomeRow(waiting, chat("c", "b", "old", state = AidenBotConversationActivityState.WAITING_FOR_APPROVAL, canRespond = true)).preview
+        )
+        // Without the flag the same Bot still reads as busy.
+        assertTrue(AidenBotHomeRow(bot("b", "Scout", sessionState = AidenBotSessionState.RUNNING), null).isWorking)
+    }
+
+    @Test
+    fun needsYouDecodesOnlyAsABooleanAndIsNeverWrittenWhenFalse() {
+        val wire = AidenBotWireJson.json
+        val plain = wire.encodeToJsonElement(AidenBotSummary.serializer(), bot("b", "Scout")).jsonObject
+        assertFalse("needsYou" in plain)
+        assertFalse(wire.decodeFromJsonElement(AidenBotSummary.serializer(), plain).needsYou)
+        assertTrue(wire.decodeFromJsonElement(AidenBotSummary.serializer(), JsonObject(plain + ("needsYou" to JsonPrimitive(true)))).needsYou)
+        assertTrue(runCatching {
+            wire.decodeFromJsonElement(AidenBotSummary.serializer(), JsonObject(plain + ("needsYou" to JsonPrimitive("true"))))
+        }.isFailure)
+    }
+
+    @Test
     fun activityDotShowsOnlyWhileTheBotIsBusy() {
         val scout = bot("b", "Scout")
         assertFalse(AidenBotHomeRow(scout, null).isWorking)
         assertFalse(AidenBotHomeRow(scout, chat("c", "b")).isWorking)
         assertTrue(AidenBotHomeRow(scout, chat("c", "b", state = AidenBotConversationActivityState.RUNNING)).isWorking)
         assertTrue(AidenBotHomeRow(scout, chat("c", "b", state = AidenBotConversationActivityState.QUEUED)).isWorking)
+    }
+
+    @Test
+    fun aBotRowsAvatarShowsWaitingWorkingOrAnErrorButNeverDone() {
+        val scout = bot("b", "Scout")
+        assertEquals(
+            AidenBotAvatarState.WAITING,
+            aidenBotHomeAvatarTarget(AidenBotHomeRow(scout, chat("c", "b", state = AidenBotConversationActivityState.WAITING_FOR_APPROVAL)))
+        )
+        assertEquals(AidenBotAvatarState.THINKING, aidenBotHomeAvatarTarget(AidenBotHomeRow(scout, chat("c", "b", state = AidenBotConversationActivityState.RUNNING))))
+        assertEquals(
+            AidenBotAvatarState.THINKING,
+            aidenBotHomeAvatarTarget(AidenBotHomeRow(bot("b", "Scout", sessionState = AidenBotSessionState.RUNNING), null))
+        )
+        assertEquals(
+            AidenBotAvatarState.ERROR,
+            aidenBotHomeAvatarTarget(AidenBotHomeRow(bot("b", "Scout", sessionState = AidenBotSessionState.INTERRUPTED), null))
+        )
+        assertEquals(
+            AidenBotAvatarState.ERROR,
+            aidenBotHomeAvatarTarget(AidenBotHomeRow(bot("b", "Scout", sessionState = AidenBotSessionState.NEEDS_MODEL), null))
+        )
+        // A turn that ended normally rests quietly on the home list; done shows only in the chat.
+        assertEquals(
+            AidenBotAvatarState.IDLE,
+            aidenBotHomeAvatarTarget(AidenBotHomeRow(bot("b", "Scout", sessionState = AidenBotSessionState.IDLE), chat("c", "b")))
+        )
+        assertEquals(AidenBotAvatarState.IDLE, aidenBotHomeAvatarTarget(AidenBotHomeRow(scout, chat("c", "b"))))
+        assertEquals(
+            AidenBotAvatarState.IDLE,
+            aidenBotHomeAvatarTarget(AidenBotHomeRow(bot("b", "Scout", sessionState = AidenBotSessionState.UNAVAILABLE), null))
+        )
+        // A paused Bot rests quietly, but a card left up still waits on the person.
+        assertEquals(
+            AidenBotAvatarState.IDLE,
+            aidenBotHomeAvatarTarget(AidenBotHomeRow(bot("b", "Scout", sessionState = AidenBotSessionState.PAUSED), chat("c", "b")))
+        )
+        assertEquals(
+            AidenBotAvatarState.WAITING,
+            aidenBotHomeAvatarTarget(
+                AidenBotHomeRow(
+                    bot("b", "Scout", sessionState = AidenBotSessionState.PAUSED),
+                    chat("c", "b", state = AidenBotConversationActivityState.WAITING_FOR_APPROVAL)
+                )
+            )
+        )
     }
 
     @Test

@@ -8,6 +8,7 @@ import { createServerVisualCollector } from "./server-visuals.ts";
 import { createMcpExtension } from "./mcp.ts";
 import type { InlineExtension } from "@earendil-works/pi-coding-agent";
 import { visionAttachmentAlias } from "../../../main/services/vision-attachment-reference.js";
+import { formatGrabbedElementsForPrompt, withoutGrabbedElementThumbnails } from "../../../renderer/shared/browser-element-grab.js";
 import { withoutMessageThreads } from "../../../main/services/pi-message-threads.js";
 import { daemonSettingsManager, profileKeepsLongPromptCache, profileWarmsCaches } from "./daemon-session-settings.ts";
 import { PiCacheWarmer, settleReplyCacheWarmer } from "../../../main/services/pi-cache-warming.js";
@@ -29,6 +30,8 @@ import type { AssistantMessage, TranscriptContext } from "@earendil-works/pi-ai"
 import type { AgentTurnDecision, StreamFn } from "@earendil-works/pi-agent-core";
 import { createChatStore } from "../../../main/services/chat-store-core.js";
 import { ChatActivityRegistry } from "../../../main/services/chat-activity-core.js";
+import { commandReadingForCall } from "../../../renderer/shared/command-reading.js";
+import { homedir } from "node:os";
 import type { ChatActivitySnapshot } from "../../../renderer/shared/chat-activity.js";
 import { HostRunRegistry } from "../../../main/services/host-run-registry.js";
 import { createHostRunRecorders } from "../../../main/services/host-runs.js";
@@ -60,15 +63,19 @@ import { createGenerationWatchdog } from "./generation-watchdog.ts";
 /**
  * The approval summary a paired phone shows. A call with only a command or path reads
  * like the desktop host's ("Run command: npm test"); anything else stays the exact
- * request, so nothing the call would do is hidden.
+ * request, so nothing the call would do is hidden. A command's `description` is the
+ * model's plain words, shown beside the command (never instead of it), so it may
+ * come with the command.
  */
 export function daemonApprovalSummary(toolName: string, input: unknown): string {
   const args = input !== null && typeof input === "object" && !Array.isArray(input) ? (input as Record<string, unknown>) : undefined;
-  const only = (key: string) => {
-    const value = args && Object.keys(args).length === 1 ? args[key] : undefined;
+  const only = (key: string, alongside: readonly string[] = []) => {
+    const keys = args ? Object.keys(args) : [];
+    const value = args && keys.every((name) => name === key || (alongside.includes(name) && typeof args[name] === "string")) ? args[key] : undefined;
     return typeof value === "string" && value.trim() ? value : undefined;
   };
-  const readable = toolName === "run_command" ? only("command") && `Run command: ${only("command")}`
+  const command = only("command", ["description"]);
+  const readable = toolName === "run_command" ? command && `Run command: ${command}`
     : toolName === "read_file" ? only("path") && `Read file: ${only("path")}`
       : toolName === "list_dir" ? only("path") && `List folder: ${only("path")}`
         : undefined;
@@ -438,8 +445,9 @@ export function createDaemonChats(agentDir: string) {
               const original = JSON.stringify(event.input);
               if (Buffer.byteLength(original) > 1_700) return { block: true, reason: "The tool request exceeds the remote approval display budget." };
               timeline.toolAwaitingApproval(event.toolCallId);
-              const outcome = await approvals.request({ streamId, toolCallId: event.toolCallId, toolName: event.toolName, summary: hookAsks ? `${daemonApprovalSummary(event.toolName, event.input)}\n\n${hookAskText(hooked).slice(0, HOOK_ASK_SUMMARY_CHARS)}` : daemonApprovalSummary(event.toolName, event.input) }, entry.abort.signal, owner.documentId,
-                ({ approvalId, toolCallId, toolName, summary }) => send("chat:approval", { streamId, approvalId, toolCallId, toolName, summary }));
+              const reading = commandReadingForCall(event.toolName, event.input, { workspaceRoot: cwd, home: homedir() });
+              const outcome = await approvals.request({ streamId, toolCallId: event.toolCallId, toolName: event.toolName, summary: hookAsks ? `${daemonApprovalSummary(event.toolName, event.input)}\n\n${hookAskText(hooked).slice(0, HOOK_ASK_SUMMARY_CHARS)}` : daemonApprovalSummary(event.toolName, event.input), ...(reading ? { reading } : {}) }, entry.abort.signal, owner.documentId,
+                ({ approvalId, toolCallId, toolName, summary, reading: shown }) => send("chat:approval", { streamId, approvalId, toolCallId, toolName, summary, ...(shown ? { reading: shown } : {}) }));
               await assertAuthority();
               if (outcome !== "allowed" || JSON.stringify(event.input) !== original || accessFor(agentDir, cwd) === "none") return { block: true, reason: "The tool request was denied, changed or expired." };
             }
@@ -525,22 +533,49 @@ export function createDaemonChats(agentDir: string) {
             send("chat:tool", { streamId, toolName: event.toolName, phase: "call" });
           }
           if (event.type === "tool_execution_end") {
-            timeline.toolFinished(event.toolCallId, event.isError ? "failed" : "completed");
+            // After a stop, Pi ends every unstarted call in the batch with an error result; like the
+            // desktop, show those (and the interrupted call) as stopped rather than failed.
+            const status = entry.stopRequested ? "cancelled" : event.isError ? "failed" : "completed";
+            timeline.toolFinished(event.toolCallId, status, undefined, { stoppedByUser: status === "cancelled" && entry.cancellationOrigin === "user_stop" });
             send("chat:tool", { streamId, toolName: event.toolName, phase: event.isError ? "error" : "result" });
           }
         });
         const input = params.messages.at(-1) ?? chat.messages.at(-1);
         if (!input) throw new Error("A user message is required.");
+        const stored = "id" in input && typeof input.id === "string"
+          ? chat.messages.find((message) => message.id === input.id && message.role === "user")
+          : chat.messages.findLast((message) => message.role === "user" && message.content === input.content);
         const attachments = parseAttachments(withReadableImages(input.attachments)) ?? [];
-        const text = [input.content, ...attachments.filter((item) => item.kind === "image" && !model.input.includes("image")).map((item) => `Attached image: ${visionAttachmentAlias(item)} (${item.name}). Use inspect_image to analyze it.`), ...attachments.filter((item) => item.kind === "text").map((item) => `Attachment: ${item.name}\n${item.text ?? ""}`)].join("\n\n");
+        const supportsImages = model.input.includes("image");
+        const grabbedElements = input.role === "user"
+          ? (input.grabbedElements ?? stored?.grabbedElements)
+          : undefined;
+        const readableImagesById = new Map(
+          attachments
+            .filter((item) => item.kind === "image" && Boolean(item.data))
+            .map((item) => [item.id, item] as const),
+        );
+        const grabbedForPrompt = grabbedElements?.map((element) => {
+          if (supportsImages && element.thumbnailAttachmentId && readableImagesById.has(element.thumbnailAttachmentId)) {
+            return element;
+          }
+          if (element.thumbnailAttachmentId === undefined) return element;
+          const { thumbnailAttachmentId: _omitted, ...withoutThumb } = element;
+          return withoutThumb;
+        });
+        const grabbedText = formatGrabbedElementsForPrompt(grabbedForPrompt, { includeThumbnailNote: supportsImages });
+        const nonGrabAttachments = withoutGrabbedElementThumbnails(attachments);
+        const text = [
+          grabbedText,
+          input.content,
+          ...nonGrabAttachments.filter((item) => item.kind === "image" && !supportsImages).map((item) => `Attached image: ${visionAttachmentAlias(item)} (${item.name}). Use inspect_image to analyze it.`),
+          ...attachments.filter((item) => item.kind === "text").map((item) => `Attachment: ${item.name}\n${item.text ?? ""}`),
+        ].filter(Boolean).join("\n\n");
         if (!botAdmission) {
           // SessionStart then UserPromptSubmit, as on the desktop. A SessionStart `continue: false` or a refused
           // prompt throws before the model runs; a refused prompt never reaches the journal, and its stored copy
           // is marked (by id) so forks and summaries never send it later. A retried prompt that goes through now
           // loses the mark.
-          const stored = "id" in input && typeof input.id === "string"
-            ? chat.messages.find((message) => message.id === input.id && message.role === "user")
-            : chat.messages.findLast((message) => message.role === "user" && message.content === input.content);
           turnHookContext = await runPromptIntakeHooks({
             target: hookTarget, dispatch: dispatchHook,
             hasPriorMessages: chat.messages.some((message) => message.role === "assistant"),
@@ -551,7 +586,23 @@ export function createDaemonChats(agentDir: string) {
           });
         }
         await assertAuthority();
-        await session.prompt(text, { expandPromptTemplates: false, preflightResult: (accepted) => { if (accepted) options.onTurnAccepted?.(); }, images: (model.input.includes("image") ? attachments : []).flatMap((item) => item.kind === "image" && item.data ? [{ type: "image" as const, data: item.data, mimeType: item.mimeType }] : []) });
+        const promptImages: Array<{ type: "image"; data: string; mimeType: string }> = [];
+        if (supportsImages) {
+          for (const item of nonGrabAttachments) {
+            if (item.kind === "image" && item.data) promptImages.push({ type: "image", data: item.data, mimeType: item.mimeType });
+          }
+          const emittedThumbnails = new Set<string>();
+          for (const element of grabbedElements ?? []) {
+            const thumbId = element.thumbnailAttachmentId;
+            if (!thumbId || emittedThumbnails.has(thumbId)) continue;
+            const thumb = readableImagesById.get(thumbId);
+            if (thumb?.data) {
+              emittedThumbnails.add(thumbId);
+              promptImages.push({ type: "image", data: thumb.data, mimeType: thumb.mimeType });
+            }
+          }
+        }
+        await session.prompt(text, { expandPromptTemplates: false, preflightResult: (accepted) => { if (accepted) options.onTurnAccepted?.(); }, images: promptImages });
         if (entry.stopRequested) throw new Error("Generation cancelled.");
         // Stop hooks may keep a workspace chat's turn going, at most MAX_STOP_HOOK_CONTINUATIONS times.
         for (let continuation = 0; !botAdmission && hookStop === undefined && continuation < MAX_STOP_HOOK_CONTINUATIONS; continuation += 1) {

@@ -5,6 +5,12 @@
 
 import type { CommandCapability } from "./keybindings";
 
+/**
+ * Opens the model list from the composer's model popover. Not ⇧⌘M: that is
+ * Change model (the command palette), which the app catches first.
+ */
+export const OTHER_MODELS_SHORTCUT = "Command+L";
+
 export type BuiltInKeySection = "Moving around" | "In a chat" | "Design canvas";
 
 export interface BuiltInKey {
@@ -86,9 +92,9 @@ export const BUILT_IN_KEYS: readonly BuiltInKey[] = [
   },
   {
     id: "edit-last",
-    title: "Fix and resend your last message",
-    description: "In an empty message box after a finished reply; pauses during dictation.",
-    keys: ["Up"],
+    title: "Browse sent message history",
+    description: "In an empty message box, shows earlier prompts with each paired reply; Down steps back, Return keeps the prompt, Esc restores the box, and Option+Return (Alt+Enter off macOS) edits a settled turn in a fork.",
+    keys: ["Up", "Down"],
     section: "In a chat",
   },
   {
@@ -122,9 +128,23 @@ export const BUILT_IN_KEYS: readonly BuiltInKey[] = [
   },
   {
     id: "model-row-actions",
-    title: "Pin / add to Pad",
-    description: "On the highlighted model in the model picker's List; pressed again, unpins it or takes it off the Pad.",
-    keys: ["Command+Shift+P", "Command+Shift+A"],
+    title: "Pin a model",
+    description: "On the highlighted model in a model list; pressed again, unpins it.",
+    keys: ["Command+Shift+P"],
+    section: "In a chat",
+  },
+  {
+    id: "agent-slider",
+    title: "Move the Agent Slider",
+    description: "With the slider focused in the model popover; skips stops that can't run, and Home and End go to the first and last. Typing a letter opens the model list with it filled in.",
+    keys: ["Left", "Right"],
+    section: "In a chat",
+  },
+  {
+    id: "agent-slider-other-models",
+    title: "Other models",
+    description: "In the model popover, opens the full model list.",
+    keys: [OTHER_MODELS_SHORTCUT],
     section: "In a chat",
   },
   {

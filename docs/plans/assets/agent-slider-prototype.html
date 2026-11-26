@@ -1,0 +1,1252 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<style>[hidden]{display:none!important}body{margin:0}</style>
+</head>
+<body>
+<title>Agent Slider</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<style>
+/* Layout: a working prototype on top (Aiden window mock + Settings editor side by side), the synthesized plan underneath as a reading column. Tokens below are copied from renderer/styles.css (Aiden preset). */
+:root {
+  --font-ui-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Helvetica Neue", system-ui, sans-serif;
+  --font-code-family: ui-monospace, "SFMono-Regular", Menlo, Monaco, Consolas, monospace;
+  --ui-font-size: 14px;
+  --text-heading1: calc(var(--ui-font-size) + 10px);
+  --text-heading2: calc(var(--ui-font-size) + 4px);
+  --text-large-strong: calc(var(--ui-font-size) + 2px);
+  --text-regular: var(--ui-font-size);
+  --text-small: calc(var(--ui-font-size) - 2px);
+  --text-mini: calc(var(--ui-font-size) - 4px);
+
+  --radius-control: 12px;
+  --radius-button: 16px;
+  --radius-menu: 8px;
+  --radius-card: 12px;
+  --radius-dialog: 16px;
+  --radius-popover: 12px;
+  --radius-sheet: 24px;
+  --radius-pill: 9999px;
+
+  --motion-duration: 200ms;
+  --motion-easing: cubic-bezier(0.16, 1, 0.3, 1);
+  --motion-decelerate-easing: cubic-bezier(0, 0, 0.2, 1);
+
+  --text-primary: #3D3F41;
+  --text-secondary: #535862;
+  --text-tertiary: #585D69;
+  --text-quaternary: #5C626F;
+  --surface-background: rgb(246 247 249);
+  --surface-sidebar: rgb(238 240 243);
+  --surface-popover: #ffffff;
+  --surface-control: rgb(61 63 65 / 0.084);
+  --surface-control-hover: rgb(61 63 65 / 0.129);
+  --surface-control-active: rgb(61 63 65 / 0.184);
+  --surface-input: rgb(61 63 65 / 0.051);
+  --surface-well: rgb(61 63 65 / 0.029);
+  --surface-list-hover: rgb(61 63 65 / 0.053);
+  --surface-list-selection: rgb(0 106 214 / 0.12);
+  --border-separator: rgb(61 63 65 / 0.087);
+  --accent: #006ad6;
+  --accent-foreground: #ffffff;
+  --focus-ring: var(--text-primary);
+  --status-warning: #704F1A;
+  --status-warning-surface: rgb(139 87 5 / 0.08);
+  --slider-thumb: #ffffff;
+  --elevation-control: 0 1px 2px -1px rgb(0 0 0 / 0.1), 0 4px 10px -8px rgb(0 0 0 / 0.16);
+  --elevation-control-hover: 0 2px 5px -2px rgb(0 0 0 / 0.16), 0 7px 14px -10px rgb(0 0 0 / 0.2);
+  --elevation-popover: 0 0 0 0.5px rgb(0 0 0 / 0.12), 0 3px 7.5px rgb(0 0 0 / 0.12), 0 0 20px rgb(0 0 0 / 0.035);
+  --elevation-toast: 0 4px 12px rgb(0 0 0 / 0.1);
+  --R: 19px;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --text-primary: #D1D4DA;
+    --text-secondary: #B0B7C0;
+    --text-tertiary: #A9B2BB;
+    --text-quaternary: #A3ACB6;
+    --surface-background: rgb(24 27 33);
+    --surface-sidebar: rgb(32 36 44);
+    --surface-popover: #292e37;
+    --surface-control: rgb(209 212 218 / 0.094);
+    --surface-control-hover: rgb(209 212 218 / 0.139);
+    --surface-control-active: rgb(209 212 218 / 0.194);
+    --surface-input: rgb(209 212 218 / 0.056);
+    --surface-well: rgb(209 212 218 / 0.032);
+    --surface-list-hover: rgb(209 212 218 / 0.059);
+    --surface-list-selection: rgb(62 151 246 / 0.18);
+    --border-separator: rgb(209 212 218 / 0.097);
+    --accent: #3e97f6;
+    --accent-foreground: #000000;
+    --status-warning: #EFBD61;
+    --status-warning-surface: rgb(255 176 32 / 0.08);
+    --elevation-control: 0 1px 3px -1px rgb(0 0 0 / 0.58), 0 5px 12px -9px rgb(0 0 0 / 0.78);
+    --elevation-control-hover: 0 2px 6px -2px rgb(0 0 0 / 0.7), 0 8px 16px -11px rgb(0 0 0 / 0.88);
+    --elevation-popover: 0 0 0 0.5px rgb(255 255 255 / 0.14), 0 3px 8px rgb(0 0 0 / 0.58), 0 0 20px rgb(0 0 0 / 0.16);
+    --elevation-toast: 0 4px 12px rgb(0 0 0 / 0.54);
+    color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --text-primary: #D1D4DA;
+  --text-secondary: #B0B7C0;
+  --text-tertiary: #A9B2BB;
+  --text-quaternary: #A3ACB6;
+  --surface-background: rgb(24 27 33);
+  --surface-sidebar: rgb(32 36 44);
+  --surface-popover: #292e37;
+  --surface-control: rgb(209 212 218 / 0.094);
+  --surface-control-hover: rgb(209 212 218 / 0.139);
+  --surface-control-active: rgb(209 212 218 / 0.194);
+  --surface-input: rgb(209 212 218 / 0.056);
+  --surface-well: rgb(209 212 218 / 0.032);
+  --surface-list-hover: rgb(209 212 218 / 0.059);
+  --surface-list-selection: rgb(62 151 246 / 0.18);
+  --border-separator: rgb(209 212 218 / 0.097);
+  --accent: #3e97f6;
+  --accent-foreground: #000000;
+  --status-warning: #EFBD61;
+  --status-warning-surface: rgb(255 176 32 / 0.08);
+  --elevation-control: 0 1px 3px -1px rgb(0 0 0 / 0.58), 0 5px 12px -9px rgb(0 0 0 / 0.78);
+  --elevation-control-hover: 0 2px 6px -2px rgb(0 0 0 / 0.7), 0 8px 16px -11px rgb(0 0 0 / 0.88);
+  --elevation-popover: 0 0 0 0.5px rgb(255 255 255 / 0.14), 0 3px 8px rgb(0 0 0 / 0.58), 0 0 20px rgb(0 0 0 / 0.16);
+  --elevation-toast: 0 4px 12px rgb(0 0 0 / 0.54);
+  color-scheme: dark;
+}
+@media (prefers-reduced-motion: reduce) { :root { --motion-duration: 0ms; } }
+
+* { box-sizing: border-box; }
+body {
+  background: var(--surface-background);
+  color: var(--text-primary);
+  font-family: var(--font-ui-family);
+  font-size: var(--text-regular);
+  line-height: 20px;
+  -webkit-font-smoothing: antialiased;
+}
+.page {
+  max-width: 1180px;
+  margin: 0 auto;
+  padding-block: 32px 72px;
+  padding-left: max(16px, env(safe-area-inset-left, 0px));
+  padding-right: max(16px, env(safe-area-inset-right, 0px));
+  display: grid;
+  gap: 40px;
+}
+button, input, select { font: inherit; color: inherit; }
+button { cursor: pointer; }
+svg.i { width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; flex: none; }
+:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 2px; }
+input[type="text"]:focus, input[type="text"]:focus-visible { outline: none; }
+kbd { font-family: var(--font-ui-family); font-size: var(--text-mini); color: var(--text-tertiary); letter-spacing: 0.04em; }
+.sr { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+
+/* Header */
+.top { display: flex; flex-wrap: wrap; gap: 16px 24px; align-items: end; justify-content: space-between; }
+.eyebrow { font-size: var(--text-small); color: var(--text-tertiary); letter-spacing: 0.02em; }
+h1 { font-size: 32px; line-height: 38px; font-weight: 650; letter-spacing: -0.02em; margin: 4px 0 8px; text-wrap: balance; }
+.lede { max-width: 62ch; color: var(--text-secondary); margin: 0; font-size: 15px; line-height: 22px; }
+.seg { display: inline-flex; background: var(--surface-control); border-radius: var(--radius-pill); padding: 2px; gap: 2px; }
+.seg button { border: 0; background: transparent; padding: 5px 12px; border-radius: var(--radius-pill); font-size: var(--text-small); color: var(--text-secondary); }
+.seg button[aria-pressed="true"] { background: var(--surface-popover); color: var(--text-primary); box-shadow: var(--elevation-control); }
+
+/* Buttons (squircle treatment) */
+.btn { display: inline-flex; align-items: center; gap: 6px; border: 0; border-radius: var(--radius-button); corner-shape: squircle; padding: 7px 14px; background: var(--surface-control); font-size: var(--text-small); font-weight: 500; transition: background var(--motion-duration) var(--motion-easing); }
+.btn:hover:not(:disabled) { background: var(--surface-control-hover); }
+.btn:active:not(:disabled) { background: var(--surface-control-active); }
+.btn:disabled { opacity: 0.45; cursor: default; }
+.btn.primary { background: var(--accent); color: var(--accent-foreground); }
+.icon-btn { display: inline-grid; place-items: center; width: 28px; height: 28px; border: 0; border-radius: var(--radius-button); corner-shape: squircle; background: transparent; color: var(--text-tertiary); }
+.icon-btn:hover:not(:disabled) { background: var(--surface-list-hover); color: var(--text-primary); }
+.icon-btn:disabled { opacity: 0.35; cursor: default; }
+
+/* Try-it grid */
+.try { display: grid; grid-template-columns: minmax(0, 1.08fr) minmax(0, 1fr); gap: 24px; align-items: start; }
+@media (max-width: 920px) { .try { grid-template-columns: minmax(0, 1fr); } }
+.caption { font-size: var(--text-small); color: var(--text-tertiary); margin: 10px 2px 0; }
+
+/* App window mock */
+.window { position: relative; background: var(--surface-popover); border-radius: var(--radius-dialog); box-shadow: var(--elevation-popover); height: 600px; display: grid; grid-template-rows: auto 1fr auto; overflow: hidden; }
+.titlebar { display: flex; align-items: center; gap: 8px; padding: 10px 14px; background: var(--surface-sidebar); font-size: var(--text-small); color: var(--text-tertiary); }
+.lights { display: flex; gap: 6px; }
+.lights span { width: 10px; height: 10px; border-radius: 50%; background: var(--surface-control-active); }
+.transcript { overflow-y: auto; padding: 18px 18px 8px; display: flex; flex-direction: column; gap: 14px; min-height: 0; }
+.bubble { align-self: flex-end; max-width: 80%; background: var(--surface-control); padding: 8px 12px; border-radius: 16px; }
+.answer { display: grid; gap: 6px; max-width: 88%; }
+.answer .meta { font-size: var(--text-small); color: var(--text-tertiary); display: flex; gap: 6px; align-items: center; flex-wrap: wrap; }
+.answer .meta b { color: var(--text-secondary); font-weight: 600; }
+.bar { height: 8px; border-radius: var(--radius-pill); background: var(--surface-control); }
+.thinking { font-size: var(--text-small); color: var(--text-tertiary); animation: pulse 1.2s ease-in-out infinite; }
+@keyframes pulse { 50% { opacity: 0.45; } }
+@media (prefers-reduced-motion: reduce) { .thinking { animation: none; } }
+
+.composer-wrap { padding: 10px 14px 14px; }
+.composer { background: var(--surface-input); border-radius: var(--radius-sheet); padding: 10px 10px 8px 14px; display: grid; gap: 6px; }
+.composer input { border: 0; background: transparent; padding: 4px 0; outline: none; min-width: 0; }
+.composer input::placeholder { color: var(--text-tertiary); }
+.composer-row { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.chip { display: inline-flex; align-items: center; gap: 6px; border: 0; background: transparent; border-radius: var(--radius-button); corner-shape: squircle; padding: 4px 8px 4px 4px; font-size: var(--text-small); color: var(--text-secondary); max-width: 100%; }
+.chip:hover, .chip[aria-expanded="true"] { background: var(--surface-control); color: var(--text-primary); }
+.chip .name { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.glyph { display: inline-grid; place-items: center; width: 20px; height: 20px; border-radius: 6px; background: var(--surface-control); font-size: 11px; font-weight: 650; color: var(--text-secondary); flex: none; }
+.spacer { flex: 1; }
+.send { width: 32px; height: 32px; border-radius: 50%; border: 0; display: grid; place-items: center; background: var(--accent); color: var(--accent-foreground); }
+.send:disabled { opacity: 0.35; cursor: default; }
+.pill { display: inline-flex; align-items: center; gap: 5px; border-radius: var(--radius-pill); padding: 2px 8px; font-size: var(--text-mini); line-height: 16px; font-weight: 500; background: var(--surface-control); color: var(--text-secondary); }
+.pill.warn { background: var(--status-warning-surface); color: var(--status-warning); }
+.pill.warn svg.i { width: 12px; height: 12px; }
+
+/* Popover */
+.popover { position: absolute; left: 16px; bottom: 112px; width: min(20rem, calc(100% - 32px)); background: var(--surface-popover); border-radius: var(--radius-popover); box-shadow: var(--elevation-popover); padding: 12px 10px 6px; z-index: 5; transform-origin: bottom left; animation: pop var(--motion-duration) var(--motion-decelerate-easing); }
+@keyframes pop { from { opacity: 0; transform: scale(0.96); } }
+.pv-head { display: grid; grid-template-columns: 28px minmax(0, 1fr) 28px; align-items: center; gap: 4px; padding: 0 2px; }
+.pv-zap { color: var(--text-tertiary); display: grid; place-items: center; }
+.pv-titles { display: grid; justify-items: center; gap: 1px; min-width: 0; }
+.pv-label { font-size: var(--text-large-strong); line-height: 24px; font-weight: 600; transition: opacity 150ms var(--motion-decelerate-easing); }
+.pv-model { display: inline-flex; align-items: center; gap: 2px; border: 0; background: transparent; padding: 2px 6px; border-radius: var(--radius-menu); font-size: var(--text-small); color: var(--text-secondary); max-width: 100%; }
+.pv-model span { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.pv-model:hover { background: var(--surface-list-hover); color: var(--text-primary); }
+.pv-model svg.i { width: 13px; height: 13px; }
+.pv-reset.is-home { visibility: hidden; }
+
+.track { position: relative; height: 34px; margin: 12px 4px 4px; border-radius: var(--radius-pill); background: var(--surface-control); touch-action: none; cursor: pointer; user-select: none; }
+.track:hover { background: var(--surface-control-hover); }
+.track[aria-disabled="true"] { opacity: 0.45; cursor: default; }
+.fill { position: absolute; left: 0; top: 0; bottom: 0; border-radius: var(--radius-pill); background: var(--accent); width: calc(2 * var(--R) + (100% - 2 * var(--R)) * var(--t, 0)); transition: width var(--motion-duration) var(--motion-easing), opacity var(--motion-duration) var(--motion-easing); }
+.dot { position: absolute; top: 50%; left: calc(var(--R) + (100% - 2 * var(--R)) * var(--k)); width: 6px; height: 6px; border-radius: 50%; transform: translate(-50%, -50%); background: var(--text-quaternary); opacity: 0.5; pointer-events: none; }
+.dot.on { background: var(--accent-foreground); opacity: 0.6; }
+.dot.gone { background: transparent; box-shadow: inset 0 0 0 1.5px var(--text-quaternary); opacity: 0.9; width: 8px; height: 8px; }
+.thumb { position: absolute; top: 50%; left: calc((100% - 2 * var(--R)) * var(--t, 0)); width: calc(2 * var(--R)); height: calc(2 * var(--R)); transform: translateY(-50%); border-radius: 50%; background: var(--slider-thumb); box-shadow: var(--elevation-control), 0 0 0 0.5px rgb(0 0 0 / 0.08); transition: left var(--motion-duration) var(--motion-easing), box-shadow var(--motion-duration) var(--motion-easing), background var(--motion-duration) var(--motion-easing); }
+.track:hover .thumb, .track.is-dragging .thumb { box-shadow: var(--elevation-control-hover), 0 0 0 0.5px rgb(0 0 0 / 0.1); }
+.track.is-dragging .thumb, .track.is-dragging .fill { transition: none; }
+.track.is-custom .fill { opacity: 0; }
+.track.is-custom .thumb { background: transparent; box-shadow: inset 0 0 0 2px var(--text-quaternary); }
+.pv-notice { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin: 8px 4px 0; padding: 6px 10px; border-radius: var(--radius-menu); background: var(--status-warning-surface); color: var(--status-warning); font-size: var(--text-small); }
+.pv-notice.neutral { background: var(--surface-well); color: var(--text-tertiary); }
+.pv-notice button { border: 0; background: transparent; color: inherit; font-weight: 600; text-decoration: underline; text-underline-offset: 2px; padding: 0; font-size: inherit; }
+.pv-effort { display: flex; flex-wrap: wrap; gap: 4px; justify-content: center; margin: 10px 4px 0; }
+.pv-effort button { border: 0; border-radius: var(--radius-pill); padding: 3px 10px; font-size: var(--text-small); background: transparent; color: var(--text-secondary); }
+.pv-effort button:hover { background: var(--surface-list-hover); }
+.pv-effort button[aria-checked="true"] { background: var(--surface-list-selection); color: var(--text-primary); font-weight: 500; }
+.pv-hint { text-align: center; font-size: var(--text-mini); color: var(--text-tertiary); margin: 6px 0 0; }
+.sep { height: 1px; background: var(--border-separator); margin: 10px 8px 4px; }
+.menu-row { display: flex; align-items: center; gap: 8px; width: 100%; border: 0; background: transparent; text-align: left; padding: 7px 10px; border-radius: var(--radius-menu); }
+.menu-row:hover { background: var(--surface-list-hover); }
+.menu-row .spacer { flex: 1; }
+.menu-row svg.i { color: var(--text-tertiary); }
+
+.list-head { display: flex; align-items: center; gap: 4px; padding: 0 2px 6px; font-weight: 600; min-width: 0; }
+.list-head span { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.search { display: flex; align-items: center; gap: 8px; background: var(--surface-input); border-radius: var(--radius-control); padding: 6px 10px; margin: 0 2px 6px; color: var(--text-tertiary); }
+.search input { border: 0; background: transparent; flex: 1; min-width: 0; color: var(--text-primary); }
+.list { max-height: 264px; overflow-y: auto; display: grid; gap: 1px; padding-bottom: 4px; }
+.group-label { font-size: var(--text-mini); color: var(--text-tertiary); padding: 8px 10px 2px; letter-spacing: 0.04em; text-transform: uppercase; }
+.option { display: grid; grid-template-columns: 20px minmax(0, 1fr) auto; gap: 10px; align-items: center; width: 100%; border: 0; background: transparent; text-align: left; padding: 6px 10px; border-radius: var(--radius-menu); }
+.option:hover, .option:focus-visible { background: var(--surface-list-hover); }
+.option[aria-selected="true"] { background: var(--surface-list-selection); }
+.option .sub { display: block; font-size: var(--text-mini); color: var(--text-tertiary); line-height: 14px; }
+.option[aria-disabled="true"] .nm { color: var(--text-tertiary); }
+.empty { padding: 16px 10px; color: var(--text-tertiary); font-size: var(--text-small); text-align: center; }
+
+/* Editor (Settings page style) */
+.settings h2 { font-size: var(--text-heading2); line-height: 24px; margin: 0 0 2px; font-weight: 600; }
+.settings .sub { color: var(--text-tertiary); font-size: var(--text-small); margin: 0 0 14px; }
+.group { background: var(--surface-popover); border-radius: var(--radius-card); box-shadow: var(--elevation-popover); }
+.group + .group-title { margin-top: 18px; }
+.group-title { font-size: var(--text-small); font-weight: 600; color: var(--text-secondary); margin: 0 4px 8px; display: flex; align-items: center; gap: 8px; }
+.group-title .spacer { flex: 1; }
+.group-title .count { font-weight: 400; color: var(--text-tertiary); font-variant-numeric: tabular-nums; }
+.ed-row { display: grid; grid-template-columns: 18px 28px minmax(0, 1fr) auto; gap: 6px 8px; align-items: center; padding: 10px 12px; position: relative; }
+.ed-row + .ed-row::before { content: ""; position: absolute; top: 0; left: 52px; right: 12px; height: 1px; background: var(--border-separator); }
+.ed-num { font-size: var(--text-small); color: var(--text-tertiary); text-align: center; font-variant-numeric: tabular-nums; }
+.ed-order { display: grid; gap: 0; }
+.ed-order .icon-btn { width: 28px; height: 18px; border-radius: 6px; }
+.ed-order svg.i { width: 13px; height: 13px; }
+.ed-main { display: grid; grid-template-columns: minmax(0, 0.75fr) minmax(0, 1.7fr) minmax(0, 0.85fr); gap: 6px; min-width: 0; }
+.ed-main input, .ed-main select { width: 100%; min-width: 0; border: 0; border-radius: var(--radius-control); background: var(--surface-input); padding: 6px 10px; font-size: var(--text-small); height: 30px; }
+.ed-main select { appearance: none; -webkit-appearance: none; padding-right: 24px; background-image: linear-gradient(45deg, transparent 50%, currentColor 50%), linear-gradient(135deg, currentColor 50%, transparent 50%); background-position: calc(100% - 13px) 13px, calc(100% - 9px) 13px; background-size: 4px 4px; background-repeat: no-repeat; color: var(--text-primary); }
+.ed-main select:disabled { color: var(--text-tertiary); cursor: default; }
+.ed-tail { display: flex; align-items: center; gap: 2px; }
+.home { display: inline-flex; align-items: center; gap: 5px; font-size: var(--text-small); color: var(--text-tertiary); padding: 0 6px; cursor: pointer; white-space: nowrap; }
+.home input { accent-color: var(--accent); margin: 0; }
+.ed-status { grid-column: 3 / -1; display: flex; gap: 6px; flex-wrap: wrap; }
+@media (max-width: 560px) {
+  .ed-main { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }
+  .ed-main input { grid-column: 1 / -1; }
+}
+.ed-foot { display: flex; align-items: center; gap: 10px; padding: 10px 12px; flex-wrap: wrap; border-top: 1px solid var(--border-separator); }
+.ed-foot .note { font-size: var(--text-small); color: var(--text-tertiary); }
+.templates { display: grid; gap: 1px; }
+.tpl { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 10px; align-items: center; padding: 10px 12px; position: relative; }
+.tpl + .tpl::before { content: ""; position: absolute; top: 0; left: 12px; right: 12px; height: 1px; background: var(--border-separator); }
+.tpl b { font-weight: 500; display: block; }
+.tpl span { font-size: var(--text-small); color: var(--text-tertiary); }
+.switch-row { display: flex; align-items: center; gap: 10px; padding: 10px 12px; position: relative; }
+.switch-row + .switch-row::before { content: ""; position: absolute; top: 0; left: 12px; right: 12px; height: 1px; background: var(--border-separator); }
+.switch-row label { flex: 1; cursor: pointer; }
+.switch { appearance: none; -webkit-appearance: none; width: 32px; height: 20px; border-radius: var(--radius-pill); background: var(--surface-control-active); position: relative; cursor: pointer; margin: 0; transition: background var(--motion-duration) var(--motion-easing); flex: none; }
+.switch::after { content: ""; position: absolute; top: 2px; left: 2px; width: 16px; height: 16px; border-radius: 50%; background: var(--slider-thumb); box-shadow: var(--elevation-control); transition: transform var(--motion-duration) var(--motion-easing); }
+.switch:checked { background: var(--accent); }
+.switch:checked::after { transform: translateX(12px); }
+.tries { margin: 14px 4px 0; padding: 0 0 0 18px; color: var(--text-secondary); font-size: var(--text-small); display: grid; gap: 4px; }
+
+/* Toast */
+.toast { position: fixed; left: 50%; bottom: calc(20px + env(safe-area-inset-bottom, 0px)); transform: translateX(-50%); background: var(--surface-popover); box-shadow: var(--elevation-toast), var(--elevation-popover); border-radius: var(--radius-card); padding: 8px 10px 8px 14px; display: flex; gap: 12px; align-items: center; font-size: var(--text-small); z-index: 20; max-width: calc(100% - 32px); }
+.toast button { border: 0; background: var(--surface-control); border-radius: var(--radius-button); corner-shape: squircle; padding: 4px 10px; font-size: var(--text-small); font-weight: 500; }
+
+/* Plan */
+.plan { display: grid; gap: 36px; }
+.plan h2 { font-size: var(--text-heading1); line-height: 32px; margin: 0 0 6px; letter-spacing: -0.01em; text-wrap: balance; }
+.plan h3 { font-size: var(--text-heading2); line-height: 24px; margin: 0 0 10px; }
+.plan p { margin: 0 0 10px; max-width: 72ch; color: var(--text-secondary); }
+.plan .intro { max-width: 72ch; color: var(--text-secondary); }
+.table-wrap { overflow-x: auto; border-radius: var(--radius-card); background: var(--surface-popover); box-shadow: var(--elevation-popover); }
+table { border-collapse: collapse; width: 100%; min-width: 720px; font-size: 13px; line-height: 19px; }
+th, td { text-align: left; vertical-align: top; padding: 10px 14px; }
+th { font-size: var(--text-small); color: var(--text-tertiary); font-weight: 500; background: var(--surface-well); }
+tr + tr td { border-top: 1px solid var(--border-separator); }
+td:first-child { font-weight: 600; white-space: nowrap; color: var(--text-primary); }
+td { color: var(--text-secondary); }
+td .who { display: block; margin-top: 4px; font-size: var(--text-small); color: var(--text-tertiary); }
+code { font-family: var(--font-code-family); font-size: 12px; background: var(--surface-well); padding: 1px 4px; border-radius: 4px; }
+pre { margin: 0; font-family: var(--font-code-family); font-size: 12px; line-height: 18px; background: var(--surface-popover); box-shadow: var(--elevation-popover); padding: 14px 16px; border-radius: var(--radius-card); overflow-x: auto; color: var(--text-secondary); }
+pre code { background: none; padding: 0; }
+pre .c { color: var(--text-tertiary); }
+.cols { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 14px; }
+@media (max-width: 820px) { .cols { grid-template-columns: minmax(0, 1fr); } }
+.card { background: var(--surface-popover); border-radius: var(--radius-card); box-shadow: var(--elevation-popover); padding: 14px 16px; min-width: 0; }
+.card h4 { margin: 0 0 8px; font-size: var(--text-regular); }
+.card ul { margin: 0; padding-left: 18px; display: grid; gap: 5px; font-size: 13px; color: var(--text-secondary); }
+.card .tag { display: inline-block; margin-bottom: 8px; }
+.flow { margin: 0; padding-left: 20px; display: grid; gap: 8px; max-width: 80ch; color: var(--text-secondary); }
+.flow b { color: var(--text-primary); }
+.prs { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; }
+@media (max-width: 820px) { .prs { grid-template-columns: minmax(0, 1fr); } }
+.prs .card p { font-size: 13px; margin: 0 0 8px; }
+.prs .ci { font-size: var(--text-small); color: var(--text-tertiary); margin: 0; }
+.qs { margin: 0; padding-left: 22px; display: grid; gap: 10px; max-width: 80ch; color: var(--text-secondary); }
+.qs b { color: var(--text-primary); }
+.qs .rec { display: block; font-size: var(--text-small); color: var(--text-tertiary); }
+.agents { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 14px; }
+@media (max-width: 820px) { .agents { grid-template-columns: minmax(0, 1fr); } }
+.agents .card p { font-size: 13px; margin: 0; }
+</style>
+
+<div class="page">
+  <header class="top">
+    <div>
+      <div class="eyebrow">Aiden · Model selector overhaul · plan for review, 23 Nov 2026</div>
+      <h1>Agent Slider</h1>
+      <p class="lede">The Model Pad's scored chart goes away. In its place: one slider with 3 to 7 stops, and you decide which model and effort sit behind each stop. Try the prototype below, then read the plan the three research agents agreed on.</p>
+    </div>
+    <div class="seg" role="group" aria-label="Theme">
+      <button type="button" data-theme-choice="system" aria-pressed="true">System</button>
+      <button type="button" data-theme-choice="light" aria-pressed="false">Light</button>
+      <button type="button" data-theme-choice="dark" aria-pressed="false">Dark</button>
+    </div>
+  </header>
+
+  <section class="try" aria-label="Prototype">
+    <div>
+      <div class="window">
+        <div class="titlebar"><div class="lights" aria-hidden="true"><span></span><span></span><span></span></div><span>New chat</span></div>
+        <div class="transcript" id="transcript" aria-live="polite"></div>
+        <div class="composer-wrap">
+          <form class="composer" id="composer">
+            <label class="sr" for="composer-input">Message</label>
+            <input id="composer-input" type="text" placeholder="Ask Aiden anything" autocomplete="off">
+            <div class="composer-row">
+              <button type="button" class="chip" id="agent-chip" aria-haspopup="dialog" aria-expanded="true" aria-controls="popover"></button>
+              <span id="composer-status"></span>
+              <span class="spacer"></span>
+              <button type="submit" class="send" id="send" aria-label="Send"><svg class="i" viewBox="0 0 24 24"><path d="m5 12 7-7 7 7"/><path d="M12 19V5"/></svg></button>
+            </div>
+          </form>
+        </div>
+
+        <div class="popover" id="popover" role="dialog" aria-label="Choose agent">
+          <div id="pv-slider">
+            <div class="pv-head">
+              <span class="pv-zap" aria-hidden="true"><svg class="i" viewBox="0 0 24 24"><path d="M13 2 3 14h9l-1 8 10-12h-9l1-8z"/></svg></span>
+              <div class="pv-titles">
+                <div class="pv-label" id="pv-label" aria-hidden="true"></div>
+                <button type="button" class="pv-model" id="pv-model"><span id="pv-model-text"></span><svg class="i" viewBox="0 0 24 24"><path d="m9 18 6-6-6-6"/></svg></button>
+              </div>
+              <button type="button" class="icon-btn pv-reset" id="pv-reset"><svg class="i" viewBox="0 0 24 24"><path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/></svg></button>
+            </div>
+            <div class="track" id="track">
+              <div class="fill" id="fill"></div>
+              <div id="dots" aria-hidden="true"></div>
+              <div class="thumb" id="thumb" role="slider" tabindex="0" aria-label="Agent" aria-orientation="horizontal"></div>
+            </div>
+            <div class="pv-effort" id="pv-effort" role="radiogroup" aria-label="Effort" hidden></div>
+            <div class="pv-notice" id="pv-notice" hidden></div>
+            <p class="pv-hint" id="pv-hint">Drag, click a dot, or use the arrow keys</p>
+            <div class="sep"></div>
+            <button type="button" class="menu-row" id="row-other"><svg class="i" viewBox="0 0 24 24"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/></svg>Other models…<span class="spacer"></span><kbd>⇧⌘M</kbd></button>
+            <button type="button" class="menu-row" id="row-customize"><svg class="i" viewBox="0 0 24 24"><path d="M21 4h-7M10 4H3M21 12h-9M8 12H3M21 20h-5M12 20H3M14 2v4M8 10v4M16 18v4"/></svg>Customize slider…</button>
+          </div>
+          <div id="pv-list" hidden>
+            <div class="list-head"><button type="button" class="icon-btn" id="list-back" aria-label="Back to slider"><svg class="i" viewBox="0 0 24 24"><path d="m15 18-6-6 6-6"/></svg></button><span id="list-title">Other models</span></div>
+            <div class="search"><svg class="i" viewBox="0 0 24 24"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/></svg><label class="sr" for="list-search">Search models</label><input id="list-search" type="text" placeholder="Search models" autocomplete="off"></div>
+            <div class="list" id="list" role="listbox" aria-label="Models"></div>
+          </div>
+        </div>
+      </div>
+      <p class="caption">Composer popover. The models are examples. ⌥⌘[ and ⌥⌘] step the slider from anywhere, and ⇧⌘M opens the model list.</p>
+      <ul class="tries">
+        <li>Drag the thumb or click a dot, then press Send. The answer shows which model and effort handled the turn.</li>
+        <li>Pick a model under <b>Other models…</b> and you get the Custom state: the thumb goes hollow and the effort control comes back.</li>
+        <li>Sign out of Anthropic on the right. Those stops go hollow, and the arrow keys skip them.</li>
+        <li>Focus the thumb and start typing a model name. The list opens with your text already in the search.</li>
+      </ul>
+    </div>
+
+    <div class="settings">
+      <h2>Agent Slider</h2>
+      <p class="sub">Settings → Models &amp; Context. Changes save automatically.</p>
+
+      <div class="group-title">Stops<span class="spacer"></span><span class="count" id="stop-count"></span></div>
+      <div class="group">
+        <div id="ed-rows"></div>
+        <div class="ed-foot">
+          <button type="button" class="btn" id="add-stop"><svg class="i" viewBox="0 0 24 24"><path d="M5 12h14M12 5v14"/></svg>Add stop</button>
+          <span class="note" id="ed-note"></span>
+        </div>
+      </div>
+
+      <div class="group-title" style="margin-top:18px">Start from a template</div>
+      <div class="group templates">
+        <div class="tpl"><div><b>Effort ladder</b><span id="tpl-ladder-desc">One model, from its lowest to its highest effort.</span></div><button type="button" class="btn" data-template="ladder">Use</button></div>
+        <div class="tpl"><div><b>Local to cloud</b><span>A local model first, then hosted models.</span></div><button type="button" class="btn" data-template="local">Use</button></div>
+        <div class="tpl"><div><b>Mixed sample</b><span>The five-stop example this page opened with.</span></div><button type="button" class="btn" data-template="sample">Use</button></div>
+      </div>
+
+      <div class="group-title" style="margin-top:18px">Simulate</div>
+      <div class="group">
+        <div class="switch-row"><label for="sw-anthropic">Signed in to Anthropic</label><input type="checkbox" class="switch" role="switch" id="sw-anthropic" checked></div>
+        <div class="switch-row"><label for="sw-openai">Signed in to OpenAI</label><input type="checkbox" class="switch" role="switch" id="sw-openai" checked></div>
+        <div class="switch-row"><label>Start over with the sample slider</label><button type="button" class="btn" id="reset-proto">Reset prototype</button></div>
+      </div>
+    </div>
+  </section>
+
+  <section class="plan" aria-labelledby="plan-h">
+    <div>
+      <h2 id="plan-h">The plan</h2>
+      <p class="intro">Three Opus 5.5 Explore agents each wrote a complete plan from a different angle. Each then reviewed the other two plans' positions on the disputed points, with file:line evidence. Every one gave up at least one point. What follows is where they ended up, plus my call on the one question they still split on.</p>
+    </div>
+
+    <div class="agents">
+      <div class="card"><span class="pill tag">Agent A · data, runtime, contracts</span><p>Designed the stop shape and the per-chat effort contract. Found that the turn API already takes <code>thinkingLevel</code>, so v1 needs no Remote change. Gave up on keeping measured pace.</p></div>
+      <div class="card"><span class="pill tag">Agent B · UX and design</span><p>Designed the popover anatomy, keyboard model and token map, and proved two stops on one model collide in today's per-model maps. Dropped "Cheap → Best" because it is a price score.</p></div>
+      <div class="card"><span class="pill tag">Agent C · retirement and rollout</span><p>Inventoried about 85 files that mention the Pad: about 22 tests are deleted and about 17 rewritten. Planned the orphaned-key cleanup and the bounded analytics. Gave up on writing stop effort into the shared maps.</p></div>
+    </div>
+
+    <div>
+      <h3>Decisions</h3>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>Topic</th><th>Decision</th></tr></thead>
+          <tbody>
+            <tr><td>What a stop is</td><td>A label, a provider and model, and an optional effort. The slider holds 3 to 7 stops, ordered left to right. The same model may appear twice at different efforts.<span class="who">All three agreed from the start.</span></td></tr>
+            <tr><td>Where it lives</td><td>In the composer popover: the slider on top, then an <b>Other models…</b> row that opens today's searchable list. The full editor replaces the Model Pad page in Settings → Models &amp; Context.<span class="who">B's layout. C's inline list was dropped because it puts two keyboard models in a 316px popover.</span></td></tr>
+            <tr><td>Effort storage</td><td>Per chat: a new <code>ChatMeta.thinkingLevel</code> and <code>chats:setModel(chatId, provider, model, thinkingLevel?)</code>. Stops never write the per-model thinking maps.<span class="who">Proposed by A, confirmed by B, conceded by C. The maps are global (<code>chat-pane.tsx:3099</code>), and <code>setChatModelSelection</code> returns early when only the level changes (<code>chat-store-core.ts:2097</code>).</span></td></tr>
+            <tr><td>Which stop is lit</td><td>Worked out from the chat's own provider, model and effort, with the first match winning. When nothing matches, the chat is Custom: the thumb goes hollow and ThinkingControl comes back.<span class="who">Unanimous.</span></td></tr>
+            <tr><td>The ⌃T effort slider</td><td>It isn't in 0.69.0. Today's effort control is <code>ThinkingControl</code>, a vertical radiogroup with no shortcut. It hides while the chat is on a stop.<span class="who">All three found this independently.</span></td></tr>
+            <tr><td>Stepping shortcut</td><td>Rebindable <code>agentSlider.next</code> and <code>agentSlider.previous</code> commands. ⌃T is not the default because it transposes characters in macOS text fields. The prototype uses ⌥⌘[ and ⌥⌘].<span class="who">Unanimous. The keys are your call.</span></td></tr>
+            <tr><td>Unavailable stop</td><td>The stop stays in place, so the 3-stop minimum holds, and shows a hollow dot with "Sign in to …". Arrow keys skip it, clicking it opens reassign, and if every stop is unavailable the chat drops to Custom. A stop is never swapped for another model without telling you.<span class="who">Reconciles B (focusable) with A and C (skip).</span></td></tr>
+            <tr><td>Scores</td><td>Delete the benchmarks, the Artificial Analysis leftovers, measured pace and the lattice. Keep models.dev facts (context, capabilities) and list price as plain text in the hover card. Nothing orders or seeds stops by price.<span class="who">A withdrew "keep pace". B withdrew "Cheap → Best". AGENTS.md:40 bars models.dev from routing anyway.</span></td></tr>
+            <tr><td>First run</td><td><b>Seeded once and saved</b>, never recomputed, so the thumb can't move under you. If the current model has 3 or more effort levels, the seed is that model's own effort ladder with home in the middle. Otherwise it is 3 stops with the current model in the middle and two "Choose a model" stops.<span class="who">My call. A wanted it saved, B wanted it visible on day one, and C's derived default would drift as pins and recents change.</span></td></tr>
+            <tr><td>Storage</td><td>One home: the portable <code>~/.aiden/config.json</code>, next to the providers its stops point at. That way it travels with the file, and hand edits get picked up. <code>settings.json</code> never stores it. Old <code>modelPad*</code> keys are ignored, not migrated (pre-1.0 rule).<span class="who">Settled after review on PR #888, following your "travel with portable config" decision.</span></td></tr>
+            <tr><td>Bots, routines, subagents</td><td>Unchanged. Bots and routines keep their own model choice, and the slider is hidden in Bot chats.<span class="who">Unanimous.</span></td></tr>
+            <tr><td>Phones</td><td>No wire change until the mobile PR. That PR adds a capability-gated slider to <code>GET /models</code>, plus native iOS and Android sliders.<span class="who">Unanimous. You asked for phones to be included.</span></td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+
+    <div>
+      <h3>Data model</h3>
+<pre><code><span class="c">// renderer/shared/agent-slider.ts — shared by main, renderer and the CLI bundle</span>
+export const AGENT_SLIDER_MIN_STOPS = 3;
+export const AGENT_SLIDER_MAX_STOPS = 7;
+
+export interface AgentSliderStop {
+  id: string;                               <span class="c">// "stop_" + 8 hex, UI identity only</span>
+  label: string;                            <span class="c">// 1–24 chars, editable</span>
+  providerId?: string;                      <span class="c">// absent = "Choose a model"</span>
+  model?: string;
+  thinkingLevel?: GenerationThinkingLevel;  <span class="c">// absent = model has no levels</span>
+}
+
+export interface AgentSliderSettings {
+  version: 1;
+  stops: AgentSliderStop[];                 <span class="c">// left → right</span>
+  homeStopId: string;                       <span class="c">// where ↺ returns</span>
+}
+
+<span class="c">// PortableConfigShape.agentSlider?: AgentSliderSettings  (only durable copy, in ~/.aiden/config.json;
+//   the renderer reads it as AppSettings.agentSlider)
+// AppSettings.lastThinkingLevel?: GenerationThinkingLevel (machine-local, beside lastModel)
+// ChatMeta.thinkingLevel?: GenerationThinkingLevel        (new)</span>
+
+normalizeAgentSlider(value)                 <span class="c">// fail-closed, drops bad stops</span>
+parseAgentSliderPatch(value)                <span class="c">// throws on &lt;3, &gt;7, duplicate ids</span>
+remapAgentSliderProvider(slider, from, to)
+resolveAgentSliderStop(stop, inventory)     <span class="c">// ok | provider-missing | not-signed-in | model-missing | hidden</span>
+activeStopIndex(slider, chatSelection)      <span class="c">// -1 = Custom</span></code></pre>
+    </div>
+
+    <div>
+      <h3>How a turn picks its model</h3>
+      <ol class="flow">
+        <li><b>You move the thumb.</b> The renderer calls <code>chats:setModel(chatId, providerId, model, thinkingLevel)</code>. <code>setChatModelSelection</code> now compares the level as well. Bot chats and changes during a reply are still refused.</li>
+        <li><b>You send.</b> <code>chat-pane</code> passes the chat's own <code>thinkingLevel</code>, replacing the four-way per-provider ternary at <code>chat-pane.tsx:2088–2107</code>.</li>
+        <li><b>Main has the final say.</b> <code>resolveGenerationThinkingLevel(params.thinkingLevel ?? saved)</code> at <code>llm-client.ts:1638</code> clamps any level the model no longer supports. If the turn began with a level stored on the chat and main resolved it to a different level, main writes the resolved level back to the chat, unless you picked something newer in the meantime. A Custom chat with no stored level stays that way.</li>
+        <li><b>You reopen the chat.</b> The thumb is placed again from the chat's stored provider, model and effort, so it lands where you left it.</li>
+      </ol>
+    </div>
+
+    <div>
+      <h3>What changes in the codebase</h3>
+      <div class="cols">
+        <div class="card"><span class="pill tag">Delete</span><ul>
+          <li><code>model-picker-pad.tsx</code>, <code>model-pad-lattice.tsx</code></li>
+          <li><code>settings/model-pad/*</code> (8 components, 8 tests), <code>model-data-settings.tsx</code></li>
+          <li><code>model-pad-layout</code>, <code>-pace</code> and <code>-preferences</code> libs; about 119 lines of Pad CSS</li>
+          <li><code>openrouter-benchmark-*</code>, <code>artificial-analysis-*</code>, the model-insights handler</li>
+          <li><code>model-pace-*</code> and the per-request wrapper at <code>llm-client.ts:5046</code></li>
+          <li>The <code>modelInsights:*</code> and <code>modelPace:*</code> IPC channels, and CLI <code>aiden insights</code></li>
+        </ul></div>
+        <div class="card"><span class="pill tag">Keep</span><ul>
+          <li>The bundled models.dev catalog, <b>Update model catalogs</b>, and <code>aiden catalog models-dev fetch</code></li>
+          <li>Pins and recents, moved to <code>model-preferences.ts</code></li>
+          <li>The searchable list, extracted as <code>ModelListPanel</code> for the composer, Quick Chat, stop reassign and the editor</li>
+          <li>The per-model thinking maps, as the fallback for Custom picks and subagents</li>
+          <li>List price as plain hover text</li>
+        </ul></div>
+        <div class="card"><span class="pill tag">Repurpose</span><ul>
+          <li>Settings section <code>modelData</code> becomes <code>agentSlider</code></li>
+          <li><code>--model-pad-knob-foreground</code> becomes <code>--agent-slider-thumb-foreground</code>, plus a new <code>--slider-thumb</code></li>
+          <li>Onboarding <code>modelPad</code> tile becomes <code>agentSlider</code> with <code>AgentSliderArt</code> (<code>oa-anim-*</code> only)</li>
+          <li>Provider remap in <code>config-store-core</code> rewrites stops</li>
+          <li>Onboarding reset calls one <code>clearRetiredModelInsights()</code></li>
+        </ul></div>
+      </div>
+    </div>
+
+    <div>
+      <h3>Stacked pull requests</h3>
+      <p>Each PR targets the one before it. They merge bottom-up with merge commits, and only when CI is green on each PR's exact head commit. PRs 2 to 4 go out in the same release.</p>
+      <div class="prs">
+        <div class="card"><h4>0 · Plan</h4><p>The plan doc, this prototype, the plans index row and the repo memory note.</p><p class="ci">Docs only</p></div>
+        <div class="card"><h4>1 · Data and runtime</h4><p>The shared module, the settings fields and portable export, provider remap, <code>ChatMeta.thinkingLevel</code>, <code>setModel</code> with a level, effort resolution at send, <code>lastThinkingLevel</code>, and the pins and recents move. No UI.</p><p class="ci">Checks: the touched tsx tests, test:main-shared, tsc, eslint, CLI type-check and bundle</p></div>
+        <div class="card"><h4>2 · The slider</h4><p>The AgentSlider component, the ModelListPanel extraction, the popover swap in the composer and Quick Chat, the first-run seed, the ⌥⌘[ and ⌥⌘] shortcuts, and hiding ThinkingControl while on a stop.</p><p class="ci">Checks: test:agent-slider, picker and composer tests, test:preflight, check:aiden-rules, E2E in a Cua Space</p></div>
+        <div class="card"><h4>3 · Editor and Pad removal</h4><p>The Settings editor, deleting the Pad UI and CSS, the token rename, the onboarding tile with the Thinking tile merged in, and the docs.</p><p class="ci">Checks: test:settings-design, test:onboarding, axe, E2E</p></div>
+        <div class="card"><h4>4 · Retire the scoring backend</h4><p>Deletes benchmarks, Artificial Analysis, pace, the IPC channels and CLI insights. Adds the delete-only cleanup and the bounded analytics, and updates AGENTS.md.</p><p class="ci">Checks: model-insights, model-catalog, IPC contract, onboarding reset, CLI parity, analytics, full npm test</p></div>
+        <div class="card"><h4>5 · Phones</h4><p>A capability-gated <code>agentSlider</code> on <code>GET /models</code>, at the next Remote revision when it merges. Native iOS and Android sliders with haptic ticks, plus fixtures.</p><p class="ci">Checks: iOS and Android suites, contract fixtures, CLI bundle</p></div>
+      </div>
+    </div>
+
+    <div>
+      <h3>Your decisions (23 Nov)</h3>
+      <ol class="qs">
+        <li><b>Step keys: ⌥⌘[ and ⌥⌘], rebindable.</b><span class="rec">Nothing else uses them. ⌘[ and ⇧⌘[ are already taken. ⌃T is out because it transposes characters in text fields.</span></li>
+        <li><b>New chats start on the last model you used</b>, together with its effort, so they land on the same stop.<span class="rec">The home stop is only where ↺ returns.</span></li>
+        <li><b>The slider travels in the portable config export.</b></li>
+        <li><b>A one-time cleanup deletes the leftover benchmark and Artificial Analysis keys and caches.</b><span class="rec">It only deletes, makes no network calls, and runs at startup and on onboarding reset.</span></li>
+        <li><b>List price stays</b> as plain text in the hover card.</li>
+        <li><b>Phones get the slider</b> in the mobile PR of the stack.</li>
+        <li><b>Quick Chat gets the slider.</b> Bots and routines don't.</li>
+        <li><b>The onboarding "Thinking" tile merges</b> into the Agent Slider tile.</li>
+      </ol>
+    </div>
+
+    <div>
+      <h3>Risks</h3>
+      <div class="cols">
+        <div class="card"><ul>
+          <li>Two sources of effort, stop and per-model map. Mitigation: ThinkingControl shows only in Custom, and a manual effort change clears the chat's level.</li>
+          <li>A clamped level makes the label wrong unless the UI reads back what main resolved.</li>
+        </ul></div>
+        <div class="card"><ul>
+          <li>Provider remap in <code>config-store-core</code> is subtle. Tests need to cover remap and removal.</li>
+          <li>The mobile decoders are strict, so any Remote addition has to be capability-gated.</li>
+        </ul></div>
+        <div class="card"><ul>
+          <li>The large deletion diff will conflict in <code>package.json</code> and the CI test registry. Resolve those by taking both sides.</li>
+          <li>A white thumb on the Paper and Monochrome presets depends on its shadow. Check those presets.</li>
+        </ul></div>
+      </div>
+    </div>
+  </section>
+</div>
+
+<div class="toast" id="toast" role="status" hidden><span id="toast-text"></span><button type="button" id="toast-action" hidden>Undo</button></div>
+<div class="sr" id="live" aria-live="polite"></div>
+
+<script>
+(function () {
+  const $ = (id) => document.getElementById(id);
+  const STORE = 'aiden-agent-slider-proto-v1';
+  const THEME_STORE = 'aiden-agent-slider-theme';
+
+  const LEVEL_NAMES = { off: 'Off', low: 'Low', medium: 'Medium', high: 'High', xhigh: 'Extra high', max: 'Max' };
+  const PROVIDERS = {
+    anthropic: { name: 'Anthropic', glyph: 'A' },
+    openai: { name: 'OpenAI', glyph: 'O' },
+    zai: { name: 'Z.ai', glyph: 'Z' },
+    ollama: { name: 'Ollama · on this Mac', glyph: 'L' }
+  };
+  const MODELS = [
+    { id: 'zai/glm-5.3-flash', provider: 'zai', name: 'GLM-5.3-Flash', levels: ['off', 'high'] },
+    { id: 'anthropic/claude-haiku-5-5', provider: 'anthropic', name: 'Claude Haiku 5.5', levels: ['off', 'low', 'medium', 'high'] },
+    { id: 'anthropic/claude-sonnet-5-5', provider: 'anthropic', name: 'Claude Sonnet 5.5', levels: ['off', 'low', 'medium', 'high', 'xhigh', 'max'] },
+    { id: 'anthropic/claude-opus-5-5', provider: 'anthropic', name: 'Claude Opus 5.5', levels: ['low', 'medium', 'high', 'xhigh', 'max'] },
+    { id: 'anthropic/claude-fable-5-2', provider: 'anthropic', name: 'Claude Fable 5.2', levels: ['low', 'medium', 'high', 'max'] },
+    { id: 'openai/gpt-6.1-sol', provider: 'openai', name: 'GPT-6.1 Sol', levels: ['low', 'medium', 'high', 'xhigh'] },
+    { id: 'ollama/qwen3-32b', provider: 'ollama', name: 'Qwen3 32B', levels: [] }
+  ];
+  const SAMPLE = [
+    { id: 's1', label: 'Instant', model: 'zai/glm-5.3-flash', effort: 'off' },
+    { id: 's2', label: 'Fast', model: 'anthropic/claude-haiku-5-5', effort: 'low' },
+    { id: 's3', label: 'Balanced', model: 'anthropic/claude-sonnet-5-5', effort: 'medium' },
+    { id: 's4', label: 'High', model: 'openai/gpt-6.1-sol', effort: 'high' },
+    { id: 's5', label: 'Max', model: 'anthropic/claude-opus-5-5', effort: 'max' }
+  ];
+  const MIN = 3, MAX = 7;
+
+  const clone = (v) => JSON.parse(JSON.stringify(v));
+  const uid = () => 'stop_' + Math.random().toString(16).slice(2, 10);
+  const esc = (s) => String(s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+  const modelById = (id) => MODELS.find((m) => m.id === id) || null;
+
+  function initial() {
+    return {
+      stops: clone(SAMPLE),
+      homeId: 's3',
+      chat: { model: 'anthropic/claude-sonnet-5-5', effort: 'medium' },
+      signedIn: { anthropic: true, openai: true, zai: true, ollama: true },
+      turns: [{ text: 'Summarize the 0.69.0 release notes', model: 'anthropic/claude-sonnet-5-5', effort: 'medium', stop: 'Balanced' }]
+    };
+  }
+  function load() {
+    try {
+      const raw = localStorage.getItem(STORE);
+      if (!raw) return null;
+      const v = JSON.parse(raw);
+      if (!v || !Array.isArray(v.stops) || v.stops.length < MIN || v.stops.length > MAX) return null;
+      return v;
+    } catch (e) { return null; }
+  }
+  function save() { try { localStorage.setItem(STORE, JSON.stringify(state)); } catch (e) {} }
+
+  let state = load() || initial();
+  const ui = { open: true, view: 'slider', listMode: null, dragging: false, dragT: 0, previewIdx: -1, notice: null, generating: false };
+
+  /* ---------- derived ---------- */
+  function available(stop) {
+    if (!stop.model) return false;
+    const m = modelById(stop.model);
+    return !!m && !!state.signedIn[m.provider];
+  }
+  function unavailableReason(stop) {
+    if (!stop.model) return 'Choose a model';
+    const m = modelById(stop.model);
+    return 'Sign in to ' + PROVIDERS[m.provider].name;
+  }
+  function activeIndex() {
+    return state.stops.findIndex((s) => s.model === state.chat.model && (s.effort || null) === (state.chat.effort || null));
+  }
+  function homeIndex() {
+    const i = state.stops.findIndex((s) => s.id === state.homeId);
+    return i < 0 ? 0 : i;
+  }
+  function effortWords(effort) {
+    if (!effort) return 'no effort levels';
+    if (effort === 'off') return 'thinking off';
+    return LEVEL_NAMES[effort].toLowerCase() + ' effort';
+  }
+  function summary(modelId, effort) {
+    const m = modelById(modelId);
+    if (!m) return 'Choose a model';
+    return m.name + (effort ? ' · ' + LEVEL_NAMES[effort] : '');
+  }
+  function clampEffort(m, effort) {
+    if (!m || !m.levels.length) return null;
+    if (effort && m.levels.includes(effort)) return effort;
+    return m.levels.includes('medium') ? 'medium' : m.levels[Math.floor((m.levels.length - 1) / 2)];
+  }
+  function levelRange(m) {
+    if (!m.levels.length) return 'No effort levels';
+    if (m.levels.length === 1) return LEVEL_NAMES[m.levels[0]];
+    return LEVEL_NAMES[m.levels[0]] + ' to ' + LEVEL_NAMES[m.levels[m.levels.length - 1]];
+  }
+  function chatAvailable() {
+    const m = modelById(state.chat.model);
+    return !!m && !!state.signedIn[m.provider];
+  }
+
+  /* ---------- toast / live ---------- */
+  let toastTimer = 0;
+  function toast(text, undo) {
+    $('toast-text').textContent = text;
+    const btn = $('toast-action');
+    btn.hidden = !undo;
+    btn.onclick = undo ? () => { undo(); hideToast(); } : null;
+    $('toast').hidden = false;
+    clearTimeout(toastTimer);
+    toastTimer = setTimeout(hideToast, undo ? 6000 : 2600);
+  }
+  function hideToast() { $('toast').hidden = true; }
+  function announce(text) { $('live').textContent = ''; requestAnimationFrame(() => { $('live').textContent = text; }); }
+
+  /* ---------- slider ---------- */
+  const track = $('track'), thumb = $('thumb');
+
+  function updateSlider() {
+    const n = state.stops.length;
+    const idx = activeIndex();
+    const shown = ui.dragging ? ui.previewIdx : idx;
+    const custom = idx < 0 && !ui.dragging;
+    const t = ui.dragging ? ui.dragT : (idx >= 0 ? idx / (n - 1) : homeIndex() / (n - 1));
+    track.style.setProperty('--t', String(t));
+    track.classList.toggle('is-custom', custom);
+    track.classList.toggle('is-dragging', ui.dragging);
+    track.setAttribute('aria-disabled', ui.generating ? 'true' : 'false');
+
+    $('dots').innerHTML = state.stops.map((s, k) => {
+      const cls = ['dot'];
+      if (!available(s)) cls.push('gone');
+      else if (!custom && k <= (shown < 0 ? -1 : shown)) cls.push('on');
+      return '<span class="' + cls.join(' ') + '" style="--k:' + (k / (n - 1)) + '"></span>';
+    }).join('');
+
+    let label, modelText, valuetext;
+    if (shown >= 0) {
+      const s = state.stops[shown];
+      label = s.label || 'Stop ' + (shown + 1);
+      modelText = summary(s.model, s.effort);
+      valuetext = label + ', ' + (modelById(s.model) ? modelById(s.model).name + ', ' + effortWords(s.effort) : 'no model chosen') + ', stop ' + (shown + 1) + ' of ' + n + (available(s) ? '' : ', unavailable');
+    } else {
+      label = 'Custom';
+      modelText = summary(state.chat.model, state.chat.effort);
+      valuetext = 'Custom: ' + summary(state.chat.model, state.chat.effort);
+    }
+    $('pv-label').textContent = label;
+    $('pv-model-text').textContent = modelText;
+    $('pv-model').setAttribute('aria-label', shown >= 0 ? 'Change model for ' + label + ': ' + modelText : 'Choose another model: ' + modelText);
+    thumb.setAttribute('aria-valuemin', '1');
+    thumb.setAttribute('aria-valuemax', String(n));
+    thumb.setAttribute('aria-valuenow', String((shown >= 0 ? shown : homeIndex()) + 1));
+    thumb.setAttribute('aria-valuetext', valuetext);
+    if (ui.generating) thumb.setAttribute('aria-disabled', 'true'); else thumb.removeAttribute('aria-disabled');
+
+    const home = state.stops[homeIndex()];
+    const reset = $('pv-reset');
+    reset.classList.toggle('is-home', idx === homeIndex());
+    reset.setAttribute('aria-label', 'Reset to ' + (home.label || 'home stop'));
+    reset.tabIndex = idx === homeIndex() ? -1 : 0;
+
+    // Custom effort control (ThinkingControl comes back)
+    const eff = $('pv-effort');
+    const cm = modelById(state.chat.model);
+    if (custom && cm && cm.levels.length) {
+      eff.hidden = false;
+      eff.innerHTML = cm.levels.map((l) => '<button type="button" role="radio" aria-checked="' + (state.chat.effort === l) + '" data-level="' + l + '">' + LEVEL_NAMES[l] + '</button>').join('');
+    } else {
+      eff.hidden = true;
+      eff.innerHTML = '';
+    }
+
+    // Notice
+    const notice = $('pv-notice');
+    if (ui.generating) {
+      notice.hidden = false;
+      notice.className = 'pv-notice neutral';
+      notice.textContent = 'You can change the agent after this response finishes.';
+    } else if (ui.notice) {
+      const s = state.stops.find((x) => x.id === ui.notice);
+      if (s) {
+        notice.hidden = false;
+        notice.className = 'pv-notice';
+        const what = s.model ? modelById(s.model).name + ' needs you to ' + unavailableReason(s).toLowerCase() + '.' : (s.label || 'This stop') + " doesn't have a model yet.";
+        notice.innerHTML = '<span>' + esc(what) + '</span><button type="button" data-reassign="' + s.id + '">Choose a model</button>';
+      } else { ui.notice = null; notice.hidden = true; }
+    } else {
+      notice.hidden = true;
+    }
+    $('pv-hint').hidden = !notice.hidden || !eff.hidden;
+  }
+
+  function commit(i) {
+    const s = state.stops[i];
+    if (!s || !available(s)) return false;
+    state.chat = { model: s.model, effort: s.effort || null };
+    ui.notice = null;
+    renderAll();
+    return true;
+  }
+  function nextAvailable(from, dir) {
+    for (let j = from + dir; j >= 0 && j < state.stops.length; j += dir) if (available(state.stops[j])) return j;
+    return -1;
+  }
+  function step(dir, viaShortcut) {
+    if (ui.generating) { if (viaShortcut) toast('You can change the agent after this response finishes.'); return; }
+    const idx = activeIndex();
+    let target;
+    if (idx < 0) {
+      const h = homeIndex();
+      target = available(state.stops[h]) ? h : nextAvailable(-1, 1);
+    } else {
+      target = nextAvailable(idx, dir);
+    }
+    if (target < 0) return;
+    commit(target);
+    if (viaShortcut) {
+      const s = state.stops[target];
+      toast(s.label + ' · ' + summary(s.model, s.effort));
+      announce(s.label + ', ' + modelById(s.model).name);
+    }
+  }
+  function goEdge(last) {
+    const order = state.stops.map((_, k) => k);
+    if (last) order.reverse();
+    const k = order.find((j) => available(state.stops[j]));
+    if (k !== undefined) commit(k);
+  }
+
+  function tFromEvent(e) {
+    const r = track.getBoundingClientRect();
+    const R = 19;
+    const usable = Math.max(1, r.width - 2 * R);
+    return Math.min(1, Math.max(0, (e.clientX - r.left - R) / usable));
+  }
+  track.addEventListener('pointerdown', (e) => {
+    if (ui.generating || e.button !== 0) return;
+    e.preventDefault();
+    track.setPointerCapture(e.pointerId);
+    ui.dragging = true;
+    ui.notice = null;
+    ui.dragT = tFromEvent(e);
+    ui.previewIdx = Math.round(ui.dragT * (state.stops.length - 1));
+    thumb.focus({ preventScroll: true });
+    updateSlider();
+  });
+  track.addEventListener('pointermove', (e) => {
+    if (!ui.dragging) return;
+    ui.dragT = tFromEvent(e);
+    ui.previewIdx = Math.round(ui.dragT * (state.stops.length - 1));
+    updateSlider();
+  });
+  function endDrag(commitIt) {
+    if (!ui.dragging) return;
+    ui.dragging = false;
+    const i = ui.previewIdx;
+    if (commitIt) {
+      const s = state.stops[i];
+      if (available(s)) { commit(i); return; }
+      ui.notice = s.id;
+    }
+    updateSlider();
+  }
+  track.addEventListener('pointerup', () => endDrag(true));
+  track.addEventListener('pointercancel', () => endDrag(false));
+
+  thumb.addEventListener('keydown', (e) => {
+    const k = e.key;
+    if (['ArrowRight', 'ArrowUp', 'PageUp'].includes(k)) { e.preventDefault(); step(1); }
+    else if (['ArrowLeft', 'ArrowDown', 'PageDown'].includes(k)) { e.preventDefault(); step(-1); }
+    else if (k === 'Home') { e.preventDefault(); if (!ui.generating) goEdge(false); }
+    else if (k === 'End') { e.preventDefault(); if (!ui.generating) goEdge(true); }
+    else if (k === 'Escape') {
+      e.preventDefault();
+      if (ui.dragging) endDrag(false); else closePopover();
+    }
+    else if (k === 'Enter' || k === ' ') { e.preventDefault(); closePopover(); }
+    else if (k.length === 1 && !e.metaKey && !e.ctrlKey && !e.altKey) { e.preventDefault(); openList({ kind: 'other' }, k); }
+  });
+
+  $('pv-reset').addEventListener('click', () => {
+    const h = homeIndex();
+    if (available(state.stops[h])) commit(h); else ui.notice = state.stops[h].id, updateSlider();
+    thumb.focus();
+  });
+  $('pv-model').addEventListener('click', () => {
+    const idx = activeIndex();
+    if (idx >= 0) openList({ kind: 'reassign', stopId: state.stops[idx].id });
+    else openList({ kind: 'other' });
+  });
+  $('pv-effort').addEventListener('click', (e) => {
+    const b = e.target.closest('button[data-level]');
+    if (!b || ui.generating) return;
+    state.chat.effort = b.dataset.level;
+    renderAll();
+    if (activeIndex() >= 0) { thumb.focus(); announce('Back on stop ' + state.stops[activeIndex()].label); }
+  });
+  $('pv-notice').addEventListener('click', (e) => {
+    const b = e.target.closest('button[data-reassign]');
+    if (b) openList({ kind: 'reassign', stopId: b.dataset.reassign });
+  });
+  $('row-other').addEventListener('click', () => openList({ kind: 'other' }));
+  $('row-customize').addEventListener('click', () => {
+    const first = document.querySelector('#ed-rows input[type="text"]');
+    const reduce = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+    document.querySelector('.settings').scrollIntoView({ behavior: reduce ? 'auto' : 'smooth', block: 'start' });
+    if (first) first.focus({ preventScroll: true });
+  });
+
+  /* ---------- list view ---------- */
+  function openList(mode, seed) {
+    ui.view = 'list';
+    ui.listMode = mode;
+    $('pv-slider').hidden = true;
+    $('pv-list').hidden = false;
+    if (mode.kind === 'reassign') {
+      const s = state.stops.find((x) => x.id === mode.stopId);
+      $('list-title').textContent = 'Choose model for ' + (s ? s.label : 'stop');
+    } else {
+      $('list-title').textContent = 'Other models';
+    }
+    const input = $('list-search');
+    input.value = seed || '';
+    renderList();
+    input.focus();
+    try { input.setSelectionRange(input.value.length, input.value.length); } catch (e) {}
+  }
+  function closeList(focusThumb) {
+    ui.view = 'slider';
+    ui.listMode = null;
+    $('pv-list').hidden = true;
+    $('pv-slider').hidden = false;
+    updateSlider();
+    if (focusThumb !== false) thumb.focus();
+  }
+  function renderList() {
+    const q = $('list-search').value.trim().toLowerCase();
+    const mode = ui.listMode || { kind: 'other' };
+    const currentId = mode.kind === 'reassign' ? (state.stops.find((x) => x.id === mode.stopId) || {}).model : state.chat.model;
+    let html = '';
+    Object.keys(PROVIDERS).forEach((pid) => {
+      const items = MODELS.filter((m) => m.provider === pid && (!q || m.name.toLowerCase().includes(q) || PROVIDERS[pid].name.toLowerCase().includes(q)));
+      if (!items.length) return;
+      html += '<div class="group-label" role="presentation">' + esc(PROVIDERS[pid].name) + '</div>';
+      items.forEach((m) => {
+        const signed = !!state.signedIn[m.provider];
+        html += '<button type="button" class="option" role="option" data-model="' + m.id + '" aria-selected="' + (m.id === currentId) + '"' + (signed ? '' : ' aria-disabled="true"') + '>' +
+          '<span class="glyph" aria-hidden="true">' + PROVIDERS[m.provider].glyph + '</span>' +
+          '<span><span class="nm">' + esc(m.name) + '</span><span class="sub">' + esc(levelRange(m)) + '</span></span>' +
+          (signed ? '' : '<span class="pill warn">Sign in</span>') + '</button>';
+      });
+    });
+    $('list').innerHTML = html || '<div class="empty">No models match "' + esc(q) + '"</div>';
+  }
+  function chooseModel(id) {
+    const m = modelById(id);
+    if (!m) return;
+    if (!state.signedIn[m.provider]) { toast('Sign in to ' + PROVIDERS[m.provider].name + ' to use ' + m.name + '.'); return; }
+    const mode = ui.listMode || { kind: 'other' };
+    if (mode.kind === 'reassign') {
+      const s = state.stops.find((x) => x.id === mode.stopId);
+      if (s) {
+        const wasActive = activeIndex() === state.stops.indexOf(s) || ui.notice === s.id;
+        s.model = id;
+        s.effort = clampEffort(m, s.effort);
+        if (wasActive) state.chat = { model: s.model, effort: s.effort };
+        ui.notice = null;
+      }
+    } else {
+      state.chat = { model: id, effort: clampEffort(m, state.chat.effort) };
+    }
+    renderAll();
+    closeList();
+  }
+  $('list').addEventListener('click', (e) => {
+    const b = e.target.closest('.option');
+    if (b) chooseModel(b.dataset.model);
+  });
+  $('list').addEventListener('keydown', (e) => {
+    const opts = [...$('list').querySelectorAll('.option')];
+    const i = opts.indexOf(document.activeElement);
+    if (e.key === 'ArrowDown') { e.preventDefault(); (opts[i + 1] || opts[0]).focus(); }
+    else if (e.key === 'ArrowUp') { e.preventDefault(); if (i <= 0) $('list-search').focus(); else opts[i - 1].focus(); }
+    else if (e.key === 'Escape') { e.preventDefault(); closeList(); }
+  });
+  $('list-search').addEventListener('input', renderList);
+  $('list-search').addEventListener('keydown', (e) => {
+    if (e.key === 'ArrowDown') { e.preventDefault(); const o = $('list').querySelector('.option'); if (o) o.focus(); }
+    else if (e.key === 'Enter') { e.preventDefault(); const o = $('list').querySelector('.option:not([aria-disabled="true"])'); if (o) chooseModel(o.dataset.model); }
+    else if (e.key === 'Escape') { e.preventDefault(); closeList(); }
+  });
+  $('list-back').addEventListener('click', () => closeList());
+
+  /* ---------- popover open/close ---------- */
+  function openPopover() {
+    ui.open = true;
+    $('popover').hidden = false;
+    $('agent-chip').setAttribute('aria-expanded', 'true');
+    if (ui.view === 'list') closeList(false);
+    updateSlider();
+    thumb.focus({ preventScroll: true });
+  }
+  function closePopover() {
+    ui.open = false;
+    if (ui.dragging) endDrag(false);
+    $('popover').hidden = true;
+    $('agent-chip').setAttribute('aria-expanded', 'false');
+    $('agent-chip').focus({ preventScroll: true });
+  }
+  $('agent-chip').addEventListener('click', () => (ui.open ? closePopover() : openPopover()));
+  $('popover').addEventListener('keydown', (e) => {
+    if (e.key === 'Escape' && ui.view === 'slider' && e.target !== thumb) { e.preventDefault(); closePopover(); }
+  });
+
+  /* ---------- global shortcuts ---------- */
+  document.addEventListener('keydown', (e) => {
+    if (e.isComposing) return;
+    const stepCombo = e.altKey && (e.metaKey || e.ctrlKey);
+    if (stepCombo && (e.code === 'BracketLeft' || e.code === 'BracketRight')) {
+      e.preventDefault();
+      step(e.code === 'BracketRight' ? 1 : -1, true);
+    } else if ((e.metaKey || e.ctrlKey) && e.shiftKey && e.code === 'KeyM') {
+      e.preventDefault();
+      if (!ui.open) { ui.open = true; $('popover').hidden = false; $('agent-chip').setAttribute('aria-expanded', 'true'); }
+      openList({ kind: 'other' });
+    }
+  });
+
+  /* ---------- composer + transcript ---------- */
+  function renderComposer() {
+    const idx = activeIndex();
+    const m = modelById(state.chat.model);
+    const glyph = m ? PROVIDERS[m.provider].glyph : '?';
+    const name = (idx >= 0 ? state.stops[idx].label : 'Custom') + ' · ' + (m ? m.name : 'No model');
+    $('agent-chip').innerHTML = '<span class="glyph" aria-hidden="true">' + glyph + '</span><span class="name">' + esc(name) + '</span><svg class="i" viewBox="0 0 24 24" style="width:13px;height:13px"><path d="m6 9 6 6 6-6"/></svg>';
+    $('agent-chip').setAttribute('aria-label', 'Agent: ' + name);
+    const st = $('composer-status');
+    if (!chatAvailable()) {
+      st.innerHTML = '<span class="pill warn"><svg class="i" viewBox="0 0 24 24"><path d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3"/><path d="M12 9v4M12 17h.01"/></svg>Sign in to ' + esc(PROVIDERS[m.provider].name) + ' to send</span>';
+    } else if (idx < 0 && state.chat.effort) {
+      st.innerHTML = '<span class="pill">' + esc(LEVEL_NAMES[state.chat.effort]) + ' effort</span>';
+    } else {
+      st.innerHTML = '';
+    }
+    $('send').disabled = ui.generating || !chatAvailable();
+  }
+  function renderTranscript() {
+    const list = state.turns.slice(-6);
+    $('transcript').innerHTML = list.map((t, i) => {
+      const pending = ui.generating && i === list.length - 1;
+      const m = modelById(t.model);
+      const meta = pending
+        ? '<span class="thinking">' + esc(m ? m.name : '') + ' is working…</span>'
+        : '<span class="meta">Answered by <b>' + esc(m ? m.name : t.model) + '</b> · ' + esc(effortWords(t.effort)) + ' · ' + (t.stop === 'Custom' ? 'Custom pick' : 'stop <b>' + esc(t.stop) + '</b>') + '</span>';
+      return '<div class="bubble">' + esc(t.text) + '</div><div class="answer">' + meta +
+        (pending ? '' : '<div class="bar" style="width:92%"></div><div class="bar" style="width:78%"></div><div class="bar" style="width:54%"></div>') + '</div>';
+    }).join('');
+    $('transcript').scrollTop = $('transcript').scrollHeight;
+  }
+  $('composer').addEventListener('submit', (e) => {
+    e.preventDefault();
+    if (ui.generating || !chatAvailable()) return;
+    const input = $('composer-input');
+    const text = input.value.trim() || 'Draft a reply to the launch thread';
+    const idx = activeIndex();
+    state.turns.push({ text, model: state.chat.model, effort: state.chat.effort, stop: idx >= 0 ? state.stops[idx].label : 'Custom' });
+    if (state.turns.length > 12) state.turns = state.turns.slice(-12);
+    input.value = '';
+    ui.generating = true;
+    renderAll();
+    setTimeout(() => { ui.generating = false; renderAll(); }, 1400);
+  });
+
+  /* ---------- editor ---------- */
+  function renderEditor() {
+    const n = state.stops.length;
+    const idx = activeIndex();
+    const optionsFor = (stop) => {
+      let o = '<option value=""' + (stop.model ? '' : ' selected') + '>Choose a model</option>';
+      Object.keys(PROVIDERS).forEach((pid) => {
+        o += '<optgroup label="' + esc(PROVIDERS[pid].name) + '">';
+        MODELS.filter((m) => m.provider === pid).forEach((m) => {
+          o += '<option value="' + m.id + '"' + (m.id === stop.model ? ' selected' : '') + '>' + esc(m.name) + '</option>';
+        });
+        o += '</optgroup>';
+      });
+      return o;
+    };
+    const effortFor = (stop) => {
+      const m = modelById(stop.model);
+      if (!m || !m.levels.length) return '<option value="">' + (m ? 'No effort levels' : 'Effort') + '</option>';
+      return m.levels.map((l) => '<option value="' + l + '"' + (l === stop.effort ? ' selected' : '') + '>' + LEVEL_NAMES[l] + '</option>').join('');
+    };
+    $('ed-rows').innerHTML = state.stops.map((s, i) => {
+      const m = modelById(s.model);
+      const status = [];
+      if (i === idx) status.push('<span class="pill">This chat</span>');
+      if (!available(s)) status.push('<span class="pill warn">' + esc(unavailableReason(s)) + '</span>');
+      return '<div class="ed-row" data-id="' + s.id + '">' +
+        '<span class="ed-num" aria-hidden="true">' + (i + 1) + '</span>' +
+        '<div class="ed-order">' +
+          '<button type="button" class="icon-btn" id="up-' + s.id + '" data-act="up" aria-label="Move ' + esc(s.label) + ' left"' + (i === 0 ? ' disabled' : '') + '><svg class="i" viewBox="0 0 24 24"><path d="m5 12 7-7 7 7"/><path d="M12 19V5"/></svg></button>' +
+          '<button type="button" class="icon-btn" id="dn-' + s.id + '" data-act="down" aria-label="Move ' + esc(s.label) + ' right"' + (i === n - 1 ? ' disabled' : '') + '><svg class="i" viewBox="0 0 24 24"><path d="M12 5v14"/><path d="m19 12-7 7-7-7"/></svg></button>' +
+        '</div>' +
+        '<div class="ed-main">' +
+          '<input type="text" id="lbl-' + s.id + '" data-field="label" maxlength="24" value="' + esc(s.label) + '" aria-label="Name of stop ' + (i + 1) + '">' +
+          '<select id="mdl-' + s.id + '" data-field="model" aria-label="Model for ' + esc(s.label) + '">' + optionsFor(s) + '</select>' +
+          '<select id="eff-' + s.id + '" data-field="effort" aria-label="Effort for ' + esc(s.label) + '"' + (m && m.levels.length ? '' : ' disabled') + '>' + effortFor(s) + '</select>' +
+        '</div>' +
+        '<div class="ed-tail">' +
+          '<label class="home" title="Where ↺ returns"><input type="radio" name="home-stop" id="home-' + s.id + '" data-field="home"' + (s.id === state.homeId ? ' checked' : '') + '>Home</label>' +
+          '<button type="button" class="icon-btn" id="rm-' + s.id + '" data-act="remove" aria-label="Remove ' + esc(s.label) + '"' + (n <= MIN ? ' disabled' : '') + '><svg class="i" viewBox="0 0 24 24"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg></button>' +
+        '</div>' +
+        (status.length ? '<div class="ed-status">' + status.join('') + '</div>' : '') +
+      '</div>';
+    }).join('');
+    $('stop-count').textContent = n + ' of ' + MAX;
+    $('add-stop').disabled = n >= MAX;
+    $('ed-note').textContent = n >= MAX ? 'Up to 7 stops.' : n <= MIN ? 'At least 3 stops. Remove is off until you add one.' : 'Left to right, top to bottom.';
+    const homeStop = state.stops[homeIndex()];
+    const ladderModel = modelById(homeStop.model);
+    const ladderOk = ladderModel && ladderModel.levels.length >= MIN;
+    const ladderBtn = document.querySelector('[data-template="ladder"]');
+    ladderBtn.disabled = !ladderOk;
+    $('tpl-ladder-desc').textContent = ladderOk
+      ? ladderModel.name + ' from ' + LEVEL_NAMES[ladderModel.levels[0]] + ' to ' + LEVEL_NAMES[ladderModel.levels[ladderModel.levels.length - 1]] + ' (uses the home stop\'s model).'
+      : 'The home stop\'s model needs 3 or more effort levels.';
+  }
+
+  function stopById(id) { return state.stops.find((s) => s.id === id); }
+  $('ed-rows').addEventListener('input', (e) => {
+    const el = e.target;
+    if (el.dataset.field !== 'label') return;
+    const s = stopById(el.closest('.ed-row').dataset.id);
+    s.label = el.value.slice(0, 24);
+    updateSlider(); renderComposer(); save();
+  });
+  $('ed-rows').addEventListener('change', (e) => {
+    const el = e.target;
+    const row = el.closest('.ed-row');
+    if (!row) return;
+    const s = stopById(row.dataset.id);
+    const wasActive = activeIndex() === state.stops.indexOf(s);
+    if (el.dataset.field === 'label' && !el.value.trim()) { s.label = 'Stop ' + (state.stops.indexOf(s) + 1); }
+    if (el.dataset.field === 'model') {
+      s.model = el.value || undefined;
+      s.effort = clampEffort(modelById(s.model), s.effort);
+    }
+    if (el.dataset.field === 'effort') s.effort = el.value || null;
+    if (el.dataset.field === 'home' && el.checked) state.homeId = s.id;
+    if (wasActive && available(s)) state.chat = { model: s.model, effort: s.effort || null };
+    renderAll();
+  });
+  $('ed-rows').addEventListener('click', (e) => {
+    const b = e.target.closest('button[data-act]');
+    if (!b || b.disabled) return;
+    const row = b.closest('.ed-row');
+    const i = state.stops.findIndex((s) => s.id === row.dataset.id);
+    const s = state.stops[i];
+    if (b.dataset.act === 'up' || b.dataset.act === 'down') {
+      const j = b.dataset.act === 'up' ? i - 1 : i + 1;
+      [state.stops[i], state.stops[j]] = [state.stops[j], state.stops[i]];
+      renderAll();
+      const again = $((b.dataset.act === 'up' ? 'up-' : 'dn-') + s.id);
+      (again && !again.disabled ? again : $('lbl-' + s.id)).focus();
+      announce('Moved ' + s.label + ' to position ' + (j + 1) + ' of ' + state.stops.length);
+    } else if (b.dataset.act === 'remove') {
+      if (state.stops.length <= MIN) return;
+      const before = clone(state);
+      state.stops.splice(i, 1);
+      if (state.homeId === s.id) state.homeId = state.stops[Math.floor((state.stops.length - 1) / 2)].id;
+      renderAll();
+      const next = state.stops[Math.min(i, state.stops.length - 1)];
+      $('lbl-' + next.id).focus();
+      toast('Removed ' + s.label + '.', () => { state = before; renderAll(); });
+    }
+  });
+  $('add-stop').addEventListener('click', () => {
+    if (state.stops.length >= MAX) return;
+    const last = state.stops[state.stops.length - 1];
+    const s = { id: uid(), label: 'New stop', model: last.model, effort: last.effort };
+    state.stops.push(s);
+    renderAll();
+    const input = $('lbl-' + s.id);
+    input.focus();
+    input.select();
+  });
+  document.querySelectorAll('[data-template]').forEach((b) => b.addEventListener('click', () => {
+    const before = clone(state);
+    const kind = b.dataset.template;
+    let stops;
+    if (kind === 'ladder') {
+      const m = modelById(state.stops[homeIndex()].model);
+      if (!m || m.levels.length < MIN) return;
+      stops = m.levels.slice(0, MAX).map((l) => ({ id: uid(), label: LEVEL_NAMES[l], model: m.id, effort: l }));
+    } else if (kind === 'local') {
+      stops = [
+        { id: uid(), label: 'Local', model: 'ollama/qwen3-32b', effort: null },
+        { id: uid(), label: 'Quick', model: 'anthropic/claude-haiku-5-5', effort: 'low' },
+        { id: uid(), label: 'Balanced', model: 'anthropic/claude-sonnet-5-5', effort: 'medium' },
+        { id: uid(), label: 'Deep', model: 'anthropic/claude-opus-5-5', effort: 'max' }
+      ];
+    } else {
+      stops = clone(SAMPLE).map((s) => ({ ...s, id: uid() }));
+    }
+    state.stops = stops;
+    const h = stops[Math.floor((stops.length - 1) / 2)];
+    state.homeId = h.id;
+    if (available(h)) state.chat = { model: h.model, effort: h.effort || null };
+    renderAll();
+    toast('Slider replaced with ' + b.closest('.tpl').querySelector('b').textContent + '.', () => { state = before; renderAll(); });
+  }));
+
+  /* ---------- simulate ---------- */
+  $('sw-anthropic').addEventListener('change', (e) => { state.signedIn.anthropic = e.target.checked; ui.notice = null; renderAll(); if (ui.view === 'list') renderList(); });
+  $('sw-openai').addEventListener('change', (e) => { state.signedIn.openai = e.target.checked; ui.notice = null; renderAll(); if (ui.view === 'list') renderList(); });
+  $('reset-proto').addEventListener('click', () => {
+    const before = clone(state);
+    state = initial();
+    ui.notice = null;
+    renderAll();
+    toast('Prototype reset.', () => { state = before; renderAll(); });
+  });
+
+  /* ---------- theme ---------- */
+  function applyTheme(choice) {
+    if (choice === 'light' || choice === 'dark') document.documentElement.setAttribute('data-theme', choice);
+    else document.documentElement.removeAttribute('data-theme');
+    document.querySelectorAll('[data-theme-choice]').forEach((b) => b.setAttribute('aria-pressed', String(b.dataset.themeChoice === choice)));
+    try { localStorage.setItem(THEME_STORE, choice); } catch (e) {}
+  }
+  document.querySelectorAll('[data-theme-choice]').forEach((b) => b.addEventListener('click', () => applyTheme(b.dataset.themeChoice)));
+  try { const t = localStorage.getItem(THEME_STORE); if (t) applyTheme(t); } catch (e) {}
+
+  /* ---------- render ---------- */
+  function renderAll() {
+    const a = document.activeElement;
+    const id = a && a.id;
+    const sel = a && a.tagName === 'INPUT' && a.type === 'text' ? [a.selectionStart, a.selectionEnd] : null;
+    $('sw-anthropic').checked = !!state.signedIn.anthropic;
+    $('sw-openai').checked = !!state.signedIn.openai;
+    renderEditor();
+    updateSlider();
+    renderComposer();
+    renderTranscript();
+    save();
+    if (id && id !== 'thumb') {
+      const el = $(id);
+      if (el && el !== document.activeElement && !el.disabled) {
+        el.focus({ preventScroll: true });
+        if (sel && el.setSelectionRange) { try { el.setSelectionRange(sel[0], sel[1]); } catch (e) {} }
+      }
+    }
+  }
+  renderAll();
+})();
+</script>
+
+</body>
+</html>

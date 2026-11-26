@@ -89,6 +89,13 @@ export function electronBuildOptions({ production = false, analytics } = {}) {
       format: "cjs",
       external: ["electron"],
     },
+    {
+      ...common,
+      entryPoints: ["renderer/preload-bot-bubbles.ts"],
+      outfile: "build/preload/preload-bot-bubbles.cjs",
+      format: "cjs",
+      external: ["electron"],
+    },
   ];
 }
 

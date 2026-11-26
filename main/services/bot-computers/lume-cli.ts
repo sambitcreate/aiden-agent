@@ -14,10 +14,12 @@ export interface LumeInvocation {
  * unauthenticated HTTP API on localhost:7777), `pull`, `update`, `push`,
  * `ipsw` or `setup`: none of them can be expressed.
  *
- * `ssh` and `cp` use Lume's default preset credentials without ever placing a
- * rotated secret on argv, so they apply only before guest SSH hardening turns
- * off password login; post-hardening commands and file copies use Aiden's own
- * key-authenticated, host-key-pinned `/usr/bin/ssh`.
+ * `ssh` uses Lume's default preset credentials without ever placing a rotated
+ * secret on argv, so it applies only before guest SSH hardening turns off
+ * password login; post-hardening commands and file transfers use Aiden's own
+ * key-authenticated, host-key-pinned `/usr/bin/ssh` or the shared folder.
+ * `lume cp` is deliberately omitted because Aiden has no caller for it and
+ * post-hardening copies never use Lume's preset SSH password.
  */
 export type LumeCommand =
   | { op: "create"; os?: "macOS"; name: string; ipsw: string; unattended: "tahoe" }
@@ -52,16 +54,7 @@ export type LumeCommand =
   | { op: "list" }
   | { op: "stop"; name: string; force?: boolean; timeoutSeconds?: number }
   | { op: "delete"; name: string }
-  | { op: "ssh"; name: string; command: string; timeoutSeconds?: number }
-  | {
-      op: "cp";
-      name: string;
-      direction: "to_guest" | "from_guest";
-      localPath: string;
-      remotePath: string;
-      recursive?: boolean;
-      timeoutSeconds?: number;
-    };
+  | { op: "ssh"; name: string; command: string; timeoutSeconds?: number };
 
 function requireAbsolute(value: string, what: string): string {
   if (typeof value !== "string" || value.length === 0 || value.includes("\0") || !path.isAbsolute(value)) {
@@ -208,21 +201,6 @@ export function lumeArgs(command: LumeCommand, storage: string): string[] {
         requireName(command.name),
         command.command,
       ];
-    case "cp": {
-      const localPath = requireAbsolute(command.localPath, "The host path");
-      if (typeof command.remotePath !== "string" || command.remotePath.length === 0 || /[\0\r\n]/u.test(command.remotePath)) {
-        throw new BotComputerError("invalid", "A guest path is required.");
-      }
-      if (command.direction !== "to_guest" && command.direction !== "from_guest") {
-        throw new BotComputerError("invalid", "Unknown copy direction.");
-      }
-      const remoteEndpoint = `${requireName(command.name)}:${command.remotePath}`;
-      const [source, destination] = command.direction === "to_guest" ? [localPath, remoteEndpoint] : [remoteEndpoint, localPath];
-      const args = ["cp", "--storage", storage, "--timeout", requireSeconds(command.timeoutSeconds, 600)];
-      if (command.recursive) args.push("--recursive");
-      args.push(source, destination);
-      return args;
-    }
     default: {
       const unknown: never = command;
       throw new BotComputerError("invalid", `Unknown Lume operation: ${String((unknown as { op?: unknown }).op)}`);

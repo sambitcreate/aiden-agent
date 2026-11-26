@@ -132,7 +132,7 @@ test.describe("fresh portable config", () => {
     await expect(page.locator('section[aria-label="Set up Aiden"]')).toHaveCount(0);
     await expect(
       page.getByRole("button", {
-        name: new RegExp(`^Selected model: ${E2E_MODEL_DISPLAY_NAME}\\. Choose a model\\.$`, "u"),
+        name: new RegExp(`^Selected model: ${E2E_MODEL_DISPLAY_NAME}(, .+ on the Agent Slider)?\\. Choose a model\\.$`, "u"),
       }),
     ).toBeVisible();
     const afterRelaunch = await persistedProviderState(aiden);
@@ -197,7 +197,7 @@ test("onboarding preserves an existing keyless LM Studio profile across a full r
   await expect(page.locator('section[aria-label="Set up Aiden"]')).toHaveCount(0);
   await expect(
     page.getByRole("button", {
-      name: new RegExp(`^Selected model: ${E2E_MODEL_DISPLAY_NAME}\\. Choose a model\\.$`, "u"),
+      name: new RegExp(`^Selected model: ${E2E_MODEL_DISPLAY_NAME}(, .+ on the Agent Slider)?\\. Choose a model\\.$`, "u"),
     }),
   ).toBeVisible();
   await expect

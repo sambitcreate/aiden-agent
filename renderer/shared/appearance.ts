@@ -1096,7 +1096,6 @@ export function resolveThemeTokens(
     "--accent": variant.accent,
     "--accent-text": accentText,
     "--accent-foreground": accentForeground,
-    "--model-pad-knob-foreground": foregroundForFill("#FFFFFF", scheme),
     "--accent-hover": accentHover,
     "--accent-active": accentActive,
     "--focus-ring": contrastCorrectColor(

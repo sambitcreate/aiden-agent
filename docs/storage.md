@@ -10,7 +10,7 @@ The scan measures every top-level entry of Aiden's device-local user-data profil
 
 | Category | Contains | Action on its row |
 | --- | --- | --- |
-| Chats | `chats/` (transcripts and their `images/`), `pi-compaction-sessions/`, `pi-runtime-effects.json`, `subagent-runs/` and `subagent-runs-v2/`, `tool-output-spills.json`, `display-image-artifacts.json`, `generative-ui-artifacts.json`, `chat-pull-requests/`, `chat-folders/`, `follow-through/`, `interrupted-waits.json`, `chat-triage.json`, `chat-read-markers.json`, `first-message-worktrees.json`, `bots/`, `memory/`. | None; each chat is deleted from its own row in Largest chats. |
+| Chats | `chats/` (transcripts and their `images/`), `pi-compaction-sessions/`, `pi-runtime-effects.json`, `subagent-runs/` and `subagent-runs-v2/` (including `subagent-runs-v2/transcripts/`, each helper's saved conversation), `tool-output-spills.json`, `display-image-artifacts.json`, `generative-ui-artifacts.json`, `chat-pull-requests/`, `chat-folders/`, `follow-through/`, `interrupted-waits.json`, `chat-triage.json`, `chat-read-markers.json`, `first-message-worktrees.json`, `bots/`, `memory/`. | None; each chat is deleted from its own row in Largest chats. |
 | Logs and diagnostics | `logs/`, `Crashpad/`, `terminal-history/`. | **Clear…** |
 | Artifacts and images | `workspace-artifacts/`, `create-images/`, `studio-assets/`, `design-projects/`. | None. |
 | Browser data | `Partitions/` (the built-in browser's and Bots' browser profiles), `browser/` (recordings), and the app's own Chromium caches (`Cache/`, `Code Cache/`, `GPUCache/`). | **Clear cache…** |

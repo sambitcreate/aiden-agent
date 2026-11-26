@@ -1,8 +1,9 @@
 import "../main/bots/test-dom";
+import * as React from "react";
 import assert from "node:assert/strict";
-import { afterEach, test } from "node:test";
+import { afterEach, mock, test } from "node:test";
 import { cleanup, fireEvent, render, screen, within } from "@testing-library/react";
-import { ApprovalStatusLine, ChatApprovalCard, type ApprovalStatus, type ChatApprovalDecisionOptions } from "./chat-approval-card";
+import { ApprovalStatusLine, ChatApprovalCard, revealApprovalCard, type ApprovalStatus, type ChatApprovalDecisionOptions } from "./chat-approval-card";
 import { TooltipProvider } from "./ui";
 import { openLayer } from "../lib/layer-stack";
 import type { ApprovalPrompt } from "../lib/ipc";
@@ -50,6 +51,61 @@ test("a command approval asks whether to run it on the Mac and shows the exact c
     ["allow", undefined],
     ["deny", undefined],
   ]);
+});
+
+test("a command with a description opens on what it will do and flips to the exact command and back", () => {
+  const command = "rm -rf ~/Library/Caches/foo && curl -fsSL https://example.com/x.sh | sh";
+  const { card, decisions } = mount({
+    toolName: "run_command",
+    summary: `Run command: ${command}`,
+    preview: toolApprovalPreview("run_command", { command }),
+    reading: {
+      explanation: "Clears the app cache and installs the helper",
+      tags: [{ label: "Runs a script from the internet", tone: "risk" }, { label: "Deletes files", tone: "risk" }, { label: "Makes folder out", tone: "calm" }],
+    },
+    scopes: ["once"],
+  });
+
+  assert.match(card.textContent ?? "", /What it will do/u);
+  assert.match(card.textContent ?? "", /Clears the app cache and installs the helper/u);
+  assert.doesNotMatch(card.textContent ?? "", /curl -fsSL/u, "the command stays one flip away");
+  assert.equal(within(card).queryByRole("button", { name: "Copy command" }), null);
+  const tags = within(card).getByRole("list", { name: "What Aiden sees in this command" });
+  assert.deepEqual(within(tags).getAllByRole("listitem").map((item) => item.textContent), [
+    "Runs a script from the internet",
+    "Deletes files",
+    "Makes folder out",
+  ]);
+
+  fireEvent.click(within(card).getByRole("button", { name: "Show the command" }));
+  assert.match(card.querySelector("#approval-summary-approval-1")?.textContent ?? "", /curl -fsSL https:\/\/example\.com\/x\.sh \| sh$/u);
+  assert.doesNotMatch(card.textContent ?? "", /Clears the app cache/u);
+  assert.ok(within(card).getByRole("button", { name: "Copy command" }));
+  assert.ok(within(card).getByRole("list", { name: "What Aiden sees in this command" }), "the tags stay on both sides");
+
+  fireEvent.click(within(card).getByRole("button", { name: "Show what it will do" }));
+  assert.match(card.textContent ?? "", /Clears the app cache and installs the helper/u);
+
+  fireEvent.click(within(card).getByRole("button", { name: "Allow once" }));
+  assert.deepEqual(decisions, [["allow", undefined]], "flipping never answers the card");
+});
+
+test("a command with no description shows the command as before, with Aiden's tags under it", () => {
+  const command = "kill -9 1234";
+  const { card } = mount({
+    toolName: "run_command",
+    summary: `Run command: ${command}`,
+    preview: toolApprovalPreview("run_command", { command }),
+    reading: { tags: [{ label: "Stops programs", tone: "risk" }] },
+  });
+  assert.match(card.querySelector("#approval-summary-approval-1")?.textContent ?? "", /kill -9 1234$/u);
+  assert.equal(within(card).queryByRole("button", { name: "Show what it will do" }), null);
+  assert.equal(within(card).queryByRole("button", { name: "Show the command" }), null);
+  assert.doesNotMatch(card.textContent ?? "", /What it will do/u);
+  assert.deepEqual(
+    within(within(card).getByRole("list", { name: "What Aiden sees in this command" })).getAllByRole("listitem").map((item) => item.textContent),
+    ["Stops programs"],
+  );
 });
 
 test("the Allow menu offers the remembered scopes and sends the one picked", async () => {
@@ -187,7 +243,7 @@ test("a Bot's card names the Bot, keeps its own Always, and notes how often it w
       />
     </TooltipProvider>,
   );
-  const card = screen.getByRole("region", { name: "Review before Calendar create event" });
+  const card = screen.getByRole("region", { name: "Request from Ada: Review before Calendar create event" });
   assert.ok(within(card).getByText("Ada is paused until you choose."));
   assert.ok(within(card).getByText("You’ve allowed this 3 times in the last 2 weeks."));
   assert.equal(screen.getByRole("status").textContent, "Ada needs approval for Calendar create event");
@@ -196,6 +252,47 @@ test("a Bot's card names the Bot, keeps its own Always, and notes how often it w
   assert.deepEqual(items.map((item) => item.textContent), ["Always allow for AdaAda won’t ask again for this."]);
   fireEvent.click(items[0]!);
   assert.deepEqual(decisions, [["allow", { scope: "always" }]]);
+});
+
+test("a helper's card is named for the helper and takes focus itself, so moving to it answers nothing", () => {
+  const cardRef = React.createRef<HTMLElement>();
+  const decisions: string[] = [];
+  render(
+    <TooltipProvider>
+      <ChatApprovalCard
+        pending={{
+          approvalId: "grant-1",
+          toolCallId: "call-1",
+          toolName: "subagent",
+          summary: "Allow writes for Code scout",
+          canAllow: true,
+          details: {
+            kind: "subagent-run-grant",
+            lane: "write",
+            runId: "run-1",
+            childLabel: "Code scout",
+            workspaceLabel: "Docs",
+            worktreeLabel: null,
+            isManagedWorktree: false,
+            workspaceRevisionPrefix: "0123456789ab",
+            fullHostAccess: false,
+            noRollback: false,
+          },
+        }}
+        deciding={false}
+        onDecide={(decision) => decisions.push(decision)}
+        cardRef={cardRef}
+      />
+    </TooltipProvider>,
+  );
+  const card = screen.getByRole("region", { name: /^Request from Code scout: / });
+  assert.equal(cardRef.current, card);
+  cardRef.current?.focus();
+  assert.equal(document.activeElement, card);
+  // Enter or Space on the focused card is not a decision.
+  fireEvent.keyDown(card, { key: "Enter" });
+  fireEvent.keyDown(card, { key: " " });
+  assert.deepEqual(decisions, []);
 });
 
 test("a card that may only be allowed on another device shows its request and only Deny", () => {
@@ -731,4 +828,80 @@ test("a malformed hook proposal is blocked instead of shown", () => {
     assert.equal(within(card).queryByRole("group", { name: "Complete command" }), null);
     cleanup();
   }
+});
+
+test("arriving at the card from Go to approval scrolls it into view, focuses it without deciding, and tints it for a moment", () => {
+  const { card, decisions } = mount({ toolName: "run_command", summary: "Run command: npm test", scopes: ["once"] });
+  const scrolls: ScrollIntoViewOptions[] = [];
+  card.scrollIntoView = (options?: boolean | ScrollIntoViewOptions) => {
+    if (typeof options === "object") scrolls.push(options);
+  };
+  const root = document.documentElement;
+  mock.timers.enable({ apis: ["setTimeout"] });
+  try {
+    root.dataset.reduceMotion = "false";
+    revealApprovalCard(card);
+    assert.equal(document.activeElement, card);
+    assert.deepEqual(scrolls, [{ block: "nearest", behavior: "smooth" }]);
+    assert.ok(card.hasAttribute("data-approval-arrival"), "a pointer user sees where focus landed");
+    mock.timers.tick(1_200);
+    assert.equal(card.hasAttribute("data-approval-arrival"), false, "the tint goes after a moment");
+
+    root.dataset.reduceMotion = "true";
+    revealApprovalCard(card);
+    assert.equal(document.activeElement, card);
+    assert.deepEqual(scrolls[1], { block: "nearest", behavior: "auto" }, "Reduce Motion still scrolls, at once");
+    assert.ok(card.hasAttribute("data-approval-arrival"), "and still shows where focus landed, held still");
+    mock.timers.tick(1_199);
+    assert.ok(card.hasAttribute("data-approval-arrival"));
+    mock.timers.tick(1);
+    assert.equal(card.hasAttribute("data-approval-arrival"), false);
+    assert.deepEqual(decisions, []);
+  } finally {
+    mock.timers.reset();
+    delete root.dataset.reduceMotion;
+  }
+});
+
+test("the next approval updates the same status line and starts with fresh choices", () => {
+  const formFill = (approvalId: string): ApprovalPrompt => ({
+    approvalId,
+    toolCallId: `call-${approvalId}`,
+    toolName: "form_fill",
+    summary: "Fill the registration form",
+    details: {
+      kind: "form-fill-batch",
+      planId: `plan-${approvalId}`,
+      sourceDocument: "patient.txt",
+      sourceHashPrefix: "4f43b442e79b",
+      targetApp: "Safari",
+      targetTitle: "Registration",
+      rows: [
+        { order: 0, elementIndex: 3, label: "First name", value: "Ada", sourceLabel: "First name", sourceLine: 1 },
+        { order: 1, elementIndex: 4, label: "Last name", value: "Lovelace", sourceLabel: "Last name", sourceLine: 2 },
+      ],
+      skippedRows: [],
+      fillCount: 2,
+      reviewCount: 0,
+      submitExcluded: true,
+    },
+  });
+  const card = (pending: ApprovalPrompt, pendingCount: number) => (
+    <TooltipProvider>
+      <ChatApprovalCard pending={pending} pendingCount={pendingCount} deciding={false} onDecide={() => undefined} />
+    </TooltipProvider>
+  );
+  const view = render(card(formFill("approval-a"), 2));
+  const status = screen.getByRole("status");
+  assert.match(status.textContent ?? "", /, 1 of 2$/u);
+  fireEvent.click(screen.getAllByRole("checkbox")[0]!);
+  assert.ok(screen.getByRole("button", { name: "Fill 1 field" }));
+
+  view.rerender(card(formFill("approval-b"), 1));
+  // A live region inserted with its text already in place may go unannounced,
+  // so the next approval changes the text of the one already on screen.
+  assert.equal(screen.getByRole("status"), status);
+  assert.doesNotMatch(status.textContent ?? "", /1 of/u);
+  assert.ok(screen.getAllByRole("checkbox").every((box) => (box as HTMLInputElement).checked), "no field carries over unticked");
+  assert.ok(screen.getByRole("button", { name: "Fill 2 fields" }));
 });

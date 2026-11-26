@@ -228,7 +228,7 @@ class AidenNewWorktreeTest {
         fun refusal(status: Int, code: AidenRemoteErrorCode) =
             AidenRemoteClientException.Server(status, AidenRemoteErrorEnvelope.Body(code, "Refused.", "req_1", false))
         assertTrue(AidenNewWorktreeRetry.spendsKey(refusal(409, AidenRemoteErrorCode("git_capability_denied"))))
-        assertTrue(AidenNewWorktreeRetry.spendsKey(refusal(500, AidenRemoteErrorCode.INTERNAL_ERROR)))
+        assertFalse("a server error leaves the outcome unknown", AidenNewWorktreeRetry.spendsKey(refusal(500, AidenRemoteErrorCode.INTERNAL_ERROR)))
         assertTrue(AidenNewWorktreeRetry.spendsKey(AidenRemoteClientException.UnexpectedStatus(502)))
         assertTrue("an answer the phone could not read would only replay", AidenNewWorktreeRetry.spendsKey(AidenRemoteClientException.InvalidResponse()))
         assertFalse("the Mac is still on it", AidenNewWorktreeRetry.spendsKey(refusal(409, AidenRemoteErrorCode.IDEMPOTENCY_IN_FLIGHT)))
@@ -481,6 +481,38 @@ class AidenNewWorktreeTest {
             val keys = mac.worktreeKeys()
             assertNotEquals("the Mac answered the refusal, so the next request has a new key", keys[0], keys[1])
             assertEquals("a canceled wait got no answer, so the retry keeps its key", keys[1], keys[2])
+            assertEquals("no message was sent", List(3) { "/chats/chat-new/worktree" }, mac.posted())
+        }
+    }
+
+    @Test
+    fun aServerErrorKeepsTheWorktreeKeyAndOnlyTheMacsRefusalSpendsIt() {
+        val mac = Mac(emptyChat)
+        fun refusal(status: Int, code: String, id: String) = MockResponse().setResponseCode(status).setBody(
+            """{"error":{"code":"$code","message":"Not now.","requestId":"$id","retryable":false}}"""
+        )
+        val answers = java.util.concurrent.ConcurrentLinkedQueue(listOf(
+            refusal(503, "internal_error", "worktree-1"),
+            refusal(409, "operation_in_progress", "worktree-2"),
+            refusal(409, "operation_in_progress", "worktree-3")
+        ))
+        withEmptyWorkspaceChat(mac, route = { path ->
+            when (path) {
+                "/chats/chat-new/worktree" -> answers.poll()
+                else -> null
+            }
+        }) { model, _ ->
+            for (attempt in 1..3) {
+                model.updateDraft("Fix the header")
+                model.setStartsInNewWorktree(true)
+                model.send()
+                withTimeout(5_000) { while (mac.worktreeKeys().size < attempt) delay(10) }
+                withTimeout(5_000) { model.isStarting.first { !it } }
+                assertTrue(model.chat.value!!.messages.isEmpty())
+            }
+            val keys = mac.worktreeKeys()
+            assertEquals("a 503 may have made the worktree, so the retry keeps its key", keys[0], keys[1])
+            assertNotEquals("the Mac answered the refusal, so the next request has a new key", keys[1], keys[2])
             assertEquals("no message was sent", List(3) { "/chats/chat-new/worktree" }, mac.posted())
         }
     }

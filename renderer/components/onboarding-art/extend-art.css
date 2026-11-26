@@ -1,88 +1,39 @@
 /* Art for the "Choose and extend" tiles. See onboarding-art.css for the shared rules. */
 
-/* Personal Model Pad */
-.oa-pad-window { display: flex; flex-direction: column; gap: 6px; padding: 6px; }
-.oa-segmented {
-  display: grid;
-  grid-auto-columns: 1fr;
-  grid-auto-flow: column;
-  flex: none;
-  height: 18px;
-  padding: 2px;
-  border-radius: var(--radius-pill);
-  background: var(--oa-fill);
-  font-size: 8px;
-  font-weight: 500;
-}
-.oa-segmented > span { display: grid; place-items: center; border-radius: var(--radius-pill); }
-.oa-segmented > [data-on] { background: var(--surface-popover); box-shadow: var(--elevation-control); color: var(--text-primary); }
-.oa-pad {
-  position: relative;
-  display: grid;
-  flex: 1;
-  grid-template-columns: repeat(8, 1fr);
-  grid-template-rows: repeat(9, 1fr);
-  place-items: center;
-  overflow: hidden;
-  padding: 4px;
-  border-radius: 8px;
-  background: var(--oa-fill);
-}
-.oa-pad-dot { width: 2px; height: 2px; border-radius: 50%; background: var(--oa-bar); }
-.oa-pad-dot[data-model] { width: 5px; height: 5px; background: var(--accent); }
-.oa-pad-glow {
+/* Agent Slider: the composer's model popover, slider on top */
+.oa-slider-popover { display: grid; gap: 6px; padding: 8px 8px 4px; }
+.oa-slider-head { display: grid; justify-items: center; gap: 3px; }
+.oa-slider-head .oa-icon { width: 8px; height: 8px; color: var(--text-tertiary); }
+.oa-slider-name { color: var(--text-primary); font-size: 10px; font-weight: 600; }
+.oa-slider-detail { height: 4px; }
+.oa-slider-track { position: relative; height: 14px; margin: 2px 1px 0; border-radius: var(--radius-pill); background: var(--oa-fill); }
+.oa-slider-fill { position: absolute; inset: 0 auto 0 0; border-radius: var(--radius-pill); background: var(--accent); }
+.oa-slider-dot {
   position: absolute;
-  left: 58px;
-  top: -6px;
-  width: 72px;
-  height: 72px;
+  top: 50%;
+  width: 3px;
+  height: 3px;
   border-radius: 50%;
-  background: radial-gradient(closest-side, color-mix(in srgb, var(--accent) 24%, transparent), transparent);
+  background: var(--oa-bar);
+  transform: translate(-50%, -50%);
 }
-.oa-pad-knob {
+.oa-slider-dot[data-lit] { background: color-mix(in srgb, var(--accent-foreground) 60%, transparent); }
+.oa-slider-thumb {
   position: absolute;
-  left: 86px;
-  top: 21px;
-  width: 15px;
-  height: 15px;
+  top: 1px;
+  width: 12px;
+  height: 12px;
   border-radius: 50%;
   background: #fff;
-  box-shadow: 0 1px 3px rgb(0 0 0 / 0.32), 0 0 0 0.5px rgb(0 0 0 / 0.14);
+  box-shadow: var(--elevation-control);
 }
-.oa-pad-info { display: grid; gap: 4px; padding: 7px; }
-.oa-pad-info .oa-bar { height: 4px; }
-:root:not([data-reduce-motion="true"]) .oa-art :is(.oa-pad-knob, .oa-pad-glow) {
-  animation: oa-pad-knob 9s cubic-bezier(0.65, 0, 0.35, 1) infinite;
-}
-/* The knob settles on three model dots in turn (grid cells 5·1, 3·3, 4·6). */
-@keyframes oa-pad-knob {
-  0%, 20% { transform: translate(0, 0); }
-  33%, 53% { transform: translate(-32.5px, 32.4px); }
-  66%, 86% { transform: translate(-16.3px, 81px); }
-  100% { transform: translate(0, 0); }
-}
-
-/* Thinking Controls */
-.oa-think-head { display: flex; align-items: center; gap: 4px; color: var(--text-secondary); font-size: 8.5px; font-weight: 600; }
-.oa-think-head .aiden-mark { color: var(--text-primary); }
-.oa-think-head .oa-icon { width: 8px; height: 8px; }
-.oa-think-lines { display: grid; gap: 4px; margin-top: 8px; padding-left: 7px; box-shadow: inset 1.5px 0 var(--border-separator); }
-.oa-think-lines .oa-bar { height: 4px; }
-.oa-effort { display: grid; padding: 3px; }
-.oa-effort > span {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  height: 15px;
-  padding: 0 7px;
-  border-radius: 6px;
-  color: var(--text-secondary);
-}
-.oa-effort .oa-icon { width: 8px; height: 8px; color: var(--accent); }
+.oa-slider-row { display: flex; align-items: center; gap: 5px; height: 16px; padding: 0 2px; color: var(--text-tertiary); }
+.oa-slider-row[data-first] { margin-top: 2px; padding-top: 2px; box-shadow: inset 0 1px var(--border-separator); }
+.oa-slider-row .oa-icon { width: 8px; height: 8px; }
+.oa-slider-row .oa-bar { height: 4px; }
 
 /* Model Freedom: the composer's model picker, List view */
 .oa-models-picker { display: grid; gap: 2px; padding: 4px; }
-.oa-models-picker .oa-segmented { margin-bottom: 2px; }
 .oa-models-filter { display: flex; align-items: center; gap: 4px; height: 18px; padding: 0 6px 2px; color: var(--text-tertiary); }
 .oa-models-filter .oa-icon { width: 8px; height: 8px; }
 .oa-models-row { display: flex; align-items: center; gap: 6px; height: 21px; padding: 0 6px; border-radius: 6px; }
