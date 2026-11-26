@@ -1,6 +1,6 @@
 import { randomInt } from "node:crypto";
 import { existsSync } from "node:fs";
-import { mkdir, open, readdir, rm, stat, type FileHandle } from "node:fs/promises";
+import { chmod, mkdir, open, readdir, rm, stat, type FileHandle } from "node:fs/promises";
 import path from "node:path";
 import {
   parseBotComputersSettingsPatch,
@@ -125,7 +125,7 @@ export interface BotComputerHostDependencies {
   openVncTunnel?(
     target: GuestSshTarget,
     remoteSocket: string,
-    options: { signal?: AbortSignal },
+    options: { timeoutMs?: number; signal?: AbortSignal; onExit?: () => void },
   ): Promise<GuestVncTunnel>;
   control?: BotComputerControlRegistry;
   activity?: BotComputerActivity;
@@ -220,7 +220,8 @@ export function createBotComputerHost(deps: BotComputerHostDependencies): BotCom
     home: path.join(root, "home"),
     logs: path.join(root, "logs"),
     images: path.join(root, "restore-images"),
-    baseShared: path.join(root, "base-shared"),
+    baseSharedRoot: path.join(root, "base-shared"),
+    baseShared: path.join(root, "base-shared", "Computer"),
   };
   const sshPaths = guestSshPaths(root);
   const image = deps.image ?? BOT_COMPUTER_LINUX_IMAGE;
@@ -242,7 +243,7 @@ export function createBotComputerHost(deps: BotComputerHostDependencies): BotCom
   const exposed = deps.vncExposed ?? ((port: number) => vncReachableBeyondLoopback(port));
   const openVncTunnel =
     deps.openVncTunnel ??
-    ((target: GuestSshTarget, remoteSocket: string, options: { signal?: AbortSignal }) =>
+    ((target: GuestSshTarget, remoteSocket: string, options: { timeoutMs?: number; signal?: AbortSignal; onExit?: () => void }) =>
       openGuestVncTunnel(target, remoteSocket, options, {
         paths: sshPaths,
         env: guestSshEnvironment(deps.env ?? process.env, dirs.home),
@@ -708,13 +709,25 @@ export function createBotComputerHost(deps: BotComputerHostDependencies): BotCom
     }, minutes * 60_000);
   }
 
+  async function ensureSharedDirectory(dir: string): Promise<string> {
+    await mkdir(dir, { recursive: true, mode: 0o777 });
+    await chmod(dir, 0o777);
+    return dir;
+  }
+
+  async function ensureBaseSharedDir(): Promise<string> {
+    await mkdir(dirs.baseSharedRoot, { recursive: true, mode: 0o700 });
+    await chmod(dirs.baseSharedRoot, 0o700);
+    return ensureSharedDirectory(dirs.baseShared);
+  }
+
   async function sharedDirFor(botId: string): Promise<string> {
     const dir = await deps.botComputerDir(botId);
     if (!path.isAbsolute(dir) || dir.includes(":")) {
       throw new BotComputerError("invalid", "The Bot's Computer folder path can't contain a colon.");
     }
-    await mkdir(dir, { recursive: true, mode: 0o700 });
-    return dir;
+    await mkdir(path.dirname(dir), { recursive: true, mode: 0o700 });
+    return ensureSharedDirectory(dir);
   }
 
   async function startComputer(
@@ -767,7 +780,25 @@ export function createBotComputerHost(deps: BotComputerHostDependencies): BotCom
       if (startedVnc.exitCode !== 0 || startedVnc.timedOut) {
         throw new BotComputerError("start_failed", `${owner} computer's screen service didn't start.`);
       }
-      vncTunnel = await openVncTunnel(sshTarget, BOT_COMPUTER_LINUX_VNC_SOCKET, { signal: options.signal });
+      let tunnelExited = false;
+      const onTunnelExit = () => {
+        tunnelExited = true;
+        if (!vncTunnel || entry.vncTunnel !== vncTunnel || entry.state !== "running") return;
+        log("A Bot computer's screen tunnel closed.");
+        entry.connection = undefined;
+        entry.vncTunnel = undefined;
+        emit(botId);
+        void stopComputer(botId, "person").catch((error: unknown) =>
+          log("Stopping a computer after its screen tunnel closed did not finish.", error),
+        );
+      };
+      vncTunnel = await openVncTunnel(sshTarget, BOT_COMPUTER_LINUX_VNC_SOCKET, {
+        signal: options.signal,
+        onExit: onTunnelExit,
+      });
+      if (tunnelExited) {
+        throw new BotComputerError("start_failed", `${owner} computer's screen tunnel closed.`);
+      }
       if (!isLoopbackHost(vncTunnel.host)) {
         throw new BotComputerError("vnc_not_loopback", `${owner} computer offered its screen beyond this Mac, so Aiden stopped it.`);
       }
@@ -1186,7 +1217,7 @@ export function createBotComputerHost(deps: BotComputerHostDependencies): BotCom
       keygenCommand: deps.keygenCommand,
       signal,
     });
-    await mkdir(dirs.baseShared, { recursive: true, mode: 0o700 });
+    await ensureBaseSharedDir();
     const stored = await deps.secrets.get(BOT_COMPUTER_GUEST_PASSWORD_SECRET);
     const guestPassword = stored !== null && /^[A-Za-z0-9]{16,128}$/u.test(stored) ? stored : generateGuestPassword();
     await deps.secrets.set(BOT_COMPUTER_GUEST_PASSWORD_SECRET, guestPassword);
@@ -1238,6 +1269,7 @@ export function createBotComputerHost(deps: BotComputerHostDependencies): BotCom
         signal,
         publicKey,
         password: guestPassword,
+        sharedDir: dirs.baseShared,
         scanHostKey: () =>
           scanGuestHostKey(ip, {
             env: sshEnv,
