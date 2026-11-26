@@ -84,6 +84,7 @@ Distribution builds use `npm run dist` on macOS (requires Developer ID signing p
 ### Release metadata and download aliases
 
 - The checked-in `models.dev` snapshot is refreshed only through `npm run models:refresh` or the guarded distribution path (`npm run dist` / `release.yml`).
+- `npm run models:check` lists models pi.dev offers that the pinned Pi catalog doesn't bundle. The release workflow runs it as an advisory warning; see [Built-in model lists](releasing.md#built-in-model-lists).
 - Aiden no longer fetches benchmark scores (OpenRouter, Artificial Analysis) or measures model pace; a delete-only cleanup removes what earlier versions stored.
 - Each public release publishes a signed Apple silicon macOS DMG/ZIP pair and verified Linux AppImage/DEB/RPM builds for x64 and arm64 with checksums.
 - The canonical website download is the `Aiden-Agent-Beta-arm64.dmg` alias from the latest public GitHub release; `download.chatwithaiden.com/Aiden-Agent-Beta.dmg` is maintained by [`aiden-website`](https://github.com/sambitcreate/aiden-website) as a non-cacheable redirect to that alias (its R2 object is rollback fallback only). Release preflight verifies both paths before signing begins.
