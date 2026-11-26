@@ -136,7 +136,7 @@ final class AidenChatScreen {
     private var heldHide: (@MainActor () -> Void)?
     private var backstop: Task<Void, Never>?
     /// Home's Send, for the chat's model once a view makes it.
-    private var launchSend: String?
+    private var launchSend: AidenLaunchSend?
     private let isOpen: @MainActor () -> Bool
     private let onLeft: @MainActor () -> Void
     private let pause: @MainActor (Duration) async -> Void
@@ -166,13 +166,13 @@ final class AidenChatScreen {
         return made
     }
 
-    /// Holds `prompt` for this chat to send as soon as it opens.
-    func queueLaunchSend(_ prompt: String) {
-        if let parts { parts.model.queueLaunchSend(prompt) } else { launchSend = prompt }
+    /// Holds Home's words for this chat to send as soon as it opens.
+    func queueLaunchSend(_ launch: AidenLaunchSend) {
+        if let parts { parts.model.queueLaunchSend(launch) } else { launchSend = launch }
     }
 
-    /// The held prompt, once.
-    func takeLaunchSend() -> String? {
+    /// The held send, once.
+    func takeLaunchSend() -> AidenLaunchSend? {
         defer { launchSend = nil }
         return launchSend
     }
@@ -330,7 +330,7 @@ struct AidenChatDetailView: View {
             )
         }
         let parts = screen?.parts(make) ?? make()
-        if let prompt = screen?.takeLaunchSend() { parts.model.queueLaunchSend(prompt) }
+        if let launch = screen?.takeLaunchSend() { parts.model.queueLaunchSend(launch) }
         _parts = State(initialValue: parts)
         _model = State(initialValue: parts.model)
         _composerSession = State(initialValue: parts.composerSession)

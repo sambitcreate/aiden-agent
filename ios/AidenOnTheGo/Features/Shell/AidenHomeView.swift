@@ -499,6 +499,19 @@ final class AidenHomeComposerModel {
     static let draftInstanceId = "aiden.home"
     static let draftChatId = "composer"
     static let lastMachineKey = "aiden.home.lastMachine"
+    /// The folder Home's composer last chose on each machine, by machine id.
+    static let foldersKey = "aiden.home.folders"
+
+    /// Where the app keeps Home's choices. A demo run keeps its own, so its
+    /// picks never reach the person's real ones or the next run.
+    static var appDefaults: UserDefaults {
+#if DEBUG
+        if AidenDemoScenario.requested(in: ProcessInfo.processInfo.arguments) != nil {
+            return AidenDemoHosts.isolatedDefaults()
+        }
+#endif
+        return .standard
+    }
 
     let session = AidenComposerSession()
     /// "Starting a chat on Studio…" while sends are on their way.
@@ -510,6 +523,12 @@ final class AidenHomeComposerModel {
     private(set) var readyChat: AidenHostObjectID?
     /// Where a finished Send may take the person. Set by the shell.
     var place: AidenHomeSendPlace = .stays
+    /// The folder chosen on each machine, by machine id; a machine missing
+    /// here starts a Just chat. Kept on this device.
+    private(set) var folders: [String: String] = [:]
+    /// The next Send's chat starts in a new worktree of its folder. Off again
+    /// once a Send takes it, since each worktree is its own.
+    var startsInNewWorktree = false
 
     @ObservationIgnored private let store: AidenChatDraftStore
     @ObservationIgnored private let defaults: UserDefaults
@@ -533,11 +552,34 @@ final class AidenHomeComposerModel {
     /// by hand, and is left alone.
     @ObservationIgnored private var aimed: (picker: ObjectIdentifier, machine: String?)?
 
-    init(store: AidenChatDraftStore = .shared, defaults: UserDefaults = .standard, saveDelay: Duration = .milliseconds(250)) {
+    init(store: AidenChatDraftStore = .shared, defaults: UserDefaults? = nil, saveDelay: Duration = .milliseconds(250)) {
+        let defaults = defaults ?? Self.appDefaults
         self.store = store
         self.defaults = defaults
         self.saveDelay = saveDelay
+        folders = defaults.dictionary(forKey: Self.foldersKey) as? [String: String] ?? [:]
         restoring = Task { [weak self] in await self?.restore() }
+    }
+
+    /// The folder chosen on the machine: nil for Just chat.
+    func folder(on instanceId: String?) -> String? {
+        instanceId.flatMap { folders[$0] }
+    }
+
+    /// Chooses where the machine's next chat starts: a folder's id, or nil
+    /// for Just chat. A new folder starts without a new worktree.
+    func choose(folder workspaceId: String?, on instanceId: String) {
+        guard folders[instanceId] != workspaceId else { return }
+        folders[instanceId] = workspaceId
+        startsInNewWorktree = false
+        defaults.set(folders, forKey: Self.foldersKey)
+    }
+
+    /// The folder Send uses on the machine: the chosen one while the machine
+    /// still lists it, otherwise Just chat.
+    func sendFolder(on instanceId: String?, using flow: AidenNewWorkChatFlow) -> AidenWorkspace? {
+        guard let id = folder(on: instanceId) else { return nil }
+        return flow.homeFolders(on: instanceId).first { $0.id == id }
     }
 
     /// Finished once the saved draft, if any, is back in the field.
@@ -637,12 +679,17 @@ final class AidenHomeComposerModel {
         notice = nil
         readyChat = nil
         let name = picker.pickedMachine?.label.name
+        // Exactly what the chip shows: a folder the machine no longer lists
+        // reads as Just chat there, and goes as one.
+        let workspaceId = sendFolder(on: target.instanceId, using: flow)?.id
+        let worktree = startsInNewWorktree && flow.homeOffersNewWorktree(in: workspaceId, on: target.instanceId)
+        startsInNewWorktree = false
         let id = UUID()
         latestSend = id
         inFlight.append((id, prompt))
         write("")
         sends[id] = Task { [weak self] in
-            let outcome = await flow.startChat(sending: prompt, on: target)
+            let outcome = await flow.startChat(sending: prompt, on: target, in: workspaceId, inNewWorktree: worktree)
             self?.finish(id, prompt: prompt, target: target, outcome: outcome)
         }
         updateStatus(machineName: name)
@@ -705,6 +752,10 @@ struct AidenHomeComposerSlot: View {
     let model: AidenHomeComposerModel
 
     @Environment(\.aidenPalette) private var palette
+    @Environment(\.aidenReduceMotion) private var reduceMotion
+    /// The keyboard is up: the person has opened the composer.
+    @State private var isComposing = false
+    @State private var showsEnvironment = false
 
     var body: some View {
         let picker = flow.homePicker
@@ -729,19 +780,47 @@ struct AidenHomeComposerSlot: View {
         // identifiers instead of taking this one.
         .accessibilityElement(children: .contain)
         .accessibilityIdentifier("home.composer")
+        .animation(reduceMotion ? nil : .snappy(duration: 0.24), value: showsChips(picker))
         .onChange(of: model.session.text) { model.textChanged() }
         .onAppear { model.aim(picker) }
         .onChange(of: picker.machines(includingHidden: false).map(\.id)) { model.aim(picker) }
+        .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillShowNotification)) { _ in
+            isComposing = true
+        }
+        .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillHideNotification)) { _ in
+            isComposing = false
+        }
+        .sheet(isPresented: $showsEnvironment) {
+            AidenHomeEnvironmentSheet(flow: flow, model: model, picker: picker)
+        }
     }
 
     private var hasMachine: Bool { !flow.homePicker.machines(includingHidden: false).isEmpty }
 
+    /// Where the chat runs shows once the person opens the composer, and stays
+    /// while there's something to send or a place other than the default.
+    private func showsChips(_ picker: AidenNewWorkPicker) -> Bool {
+        guard hasMachine else { return false }
+        return isComposing || showsEnvironment || model.session.hasContent
+            || model.sendFolder(on: picker.target?.instanceId, using: flow) != nil
+    }
+
     @ViewBuilder
     private func accessory(_ picker: AidenNewWorkPicker) -> some View {
         let line = model.notice ?? model.status
-        if picker.showsPicker || line != nil {
+        let chips = showsChips(picker)
+        if chips || picker.refusalMessage != nil || line != nil {
             VStack(alignment: .leading, spacing: AidenSpacing.xs) {
-                AidenNewWorkMachinePicker(picker: picker)
+                if chips {
+                    chipRow(picker)
+                        .transition(.opacity.combined(with: .move(edge: .bottom)))
+                }
+                if let refusal = picker.refusalMessage {
+                    Text(refusal)
+                        .font(.caption)
+                        .foregroundStyle(palette.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
                 if model.readyChat != nil, let line {
                     Button(action: model.openReadyChat) {
                         Text(line)
@@ -762,6 +841,261 @@ struct AidenHomeComposerSlot: View {
                 }
             }
         }
+    }
+
+    private func chipRow(_ picker: AidenNewWorkPicker) -> some View {
+        let instanceId = picker.target?.instanceId
+        let folder = model.sendFolder(on: instanceId, using: flow)
+        let offersWorktree = flow.homeOffersNewWorktree(in: folder?.id, on: instanceId)
+        return ViewThatFits(in: .horizontal) {
+            HStack(spacing: AidenSpacing.s) {
+                environmentChip(picker, folder: folder)
+                if offersWorktree { worktreeChip }
+            }
+            VStack(alignment: .leading, spacing: 0) {
+                environmentChip(picker, folder: folder)
+                if offersWorktree { worktreeChip }
+            }
+        }
+    }
+
+    private func environmentChip(_ picker: AidenNewWorkPicker, folder: AidenWorkspace?) -> some View {
+        let place = folder?.name ?? AidenHomeEnvironmentCopy.justChat
+        let title = picker.showsPicker
+            ? picker.pickedMachine.map { "\($0.label.name) · \(place)" } ?? place
+            : place
+        return Button { showsEnvironment = true } label: {
+            AidenHomeChipLabel(
+                systemImage: folder == nil ? "bubble.left" : "folder",
+                title: title,
+                isOn: false,
+                showsDisclosure: true
+            )
+        }
+        .buttonStyle(.plain)
+        .frame(minHeight: 44)
+        .contentShape(Rectangle())
+        .accessibilityLabel(Text(AidenHomeEnvironmentCopy.title))
+        .accessibilityValue(Text(title))
+        .accessibilityHint(Text(picker.showsPicker
+            ? "Chooses the computer and folder this chat starts in."
+            : "Chooses the folder this chat starts in."))
+        .accessibilityIdentifier("home.composer.environment")
+    }
+
+    private var worktreeChip: some View {
+        @Bindable var model = model
+        return Button { model.startsInNewWorktree.toggle() } label: {
+            AidenHomeChipLabel(
+                systemImage: model.startsInNewWorktree ? "checkmark.circle.fill" : "arrow.triangle.branch",
+                title: AidenNewWorktreeCopy.toggle,
+                isOn: model.startsInNewWorktree,
+                showsDisclosure: false
+            )
+        }
+        .buttonStyle(.plain)
+        .frame(minHeight: 44)
+        .contentShape(Rectangle())
+        .accessibilityLabel(Text(AidenNewWorktreeCopy.toggle))
+        .accessibilityValue(Text(model.startsInNewWorktree ? "On" : "Off"))
+        .accessibilityAddTraits(model.startsInNewWorktree ? [.isButton, .isSelected] : .isButton)
+        .accessibilityHint(Text(AidenNewWorktreeCopy.hint))
+        .accessibilityIdentifier("home.composer.worktree")
+    }
+}
+
+enum AidenHomeEnvironmentCopy {
+    static let title = String(localized: "Where it runs")
+    static let justChat = String(localized: "Just chat")
+    static let justChatDetail = String(localized: "Work without a folder")
+}
+
+/// A small filled capsule inside the composer: the composer is already glass,
+/// so its chips sit on a soft fill rather than glass of their own.
+struct AidenHomeChipLabel: View {
+    let systemImage: String
+    let title: String
+    let isOn: Bool
+    let showsDisclosure: Bool
+
+    @Environment(\.aidenPalette) private var palette
+
+    var body: some View {
+        HStack(spacing: 6) {
+            Image(systemName: systemImage)
+                .foregroundStyle(isOn ? palette.accent : palette.secondary)
+                .accessibilityHidden(true)
+            Text(title)
+                .lineLimit(1)
+                .truncationMode(.middle)
+            if showsDisclosure {
+                Image(systemName: "chevron.down")
+                    .font(.caption2.weight(.semibold))
+                    .foregroundStyle(palette.secondary)
+                    .accessibilityHidden(true)
+            }
+        }
+        .font(.footnote.weight(.medium))
+        .foregroundStyle(palette.foreground)
+        .padding(.horizontal, AidenSpacing.m)
+        .frame(minHeight: 32)
+        .background(Capsule().fill(isOn ? palette.accent.opacity(0.14) : palette.foreground.opacity(0.06)))
+    }
+}
+
+/// Where Home's next chat runs: the computer, when there's more than one, the
+/// folder (or Just chat), and whether it starts in a new worktree.
+struct AidenHomeEnvironmentSheet: View {
+    let flow: AidenNewWorkChatFlow
+    let model: AidenHomeComposerModel
+    let picker: AidenNewWorkPicker
+
+    @Environment(\.dismiss) private var dismiss
+    @Environment(\.aidenPalette) private var palette
+
+    private var instanceId: String? { picker.target?.instanceId }
+
+    var body: some View {
+        @Bindable var model = model
+        let folders = flow.homeFolders(on: instanceId)
+        let chosen = model.sendFolder(on: instanceId, using: flow)
+        NavigationStack {
+            List {
+                if picker.showsPicker {
+                    Section("Computer") {
+                        ForEach(picker.machines) { machine in
+                            machineRow(machine)
+                        }
+                    }
+                }
+                Section("Folder") {
+                    placeRow(
+                        title: AidenHomeEnvironmentCopy.justChat,
+                        detail: AidenHomeEnvironmentCopy.justChatDetail,
+                        systemImage: "bubble.left",
+                        isChosen: chosen == nil,
+                        identifier: "home.environment.justChat"
+                    ) { choose(nil) }
+                    ForEach(folders) { folder in
+                        placeRow(
+                            title: folder.name,
+                            detail: detail(for: folder),
+                            systemImage: folder.hasFolder ? "folder" : "tray",
+                            isChosen: chosen?.id == folder.id,
+                            identifier: "home.environment.folder.\(folder.id)"
+                        ) { choose(folder.id) }
+                    }
+                }
+                if flow.homeOffersNewWorktree(in: chosen?.id, on: instanceId) {
+                    Section {
+                        Toggle(AidenNewWorktreeCopy.toggle, isOn: $model.startsInNewWorktree)
+                            .tint(palette.accent)
+                            .accessibilityIdentifier("home.environment.worktree")
+                    } footer: {
+                        Text(AidenNewWorktreeCopy.hint)
+                    }
+                }
+            }
+            .navigationTitle(AidenHomeEnvironmentCopy.title)
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("Done") { dismiss() }
+                        .accessibilityIdentifier("home.environment.done")
+                }
+            }
+            .task(id: instanceId) {
+                if let instanceId { await flow.refreshHomeFolders(on: instanceId) }
+            }
+        }
+        .presentationDetents([.medium, .large])
+        .presentationDragIndicator(.visible)
+    }
+
+    private func choose(_ workspaceId: String?) {
+        guard let instanceId else { return }
+        model.choose(folder: workspaceId, on: instanceId)
+    }
+
+    private func detail(for folder: AidenWorkspace) -> String? {
+        switch (folder.repositoryName, folder.branchName) {
+        case let (repository?, branch?) where repository != folder.name: "\(repository) · \(branch)"
+        case let (_, branch?): branch
+        case let (repository?, nil) where repository != folder.name: repository
+        default: nil
+        }
+    }
+
+    private func machineRow(_ machine: AidenNewWorkMachine) -> some View {
+        let isPicked = picker.target?.instanceId == machine.id
+        return Button { picker.pick(machine.id) } label: {
+            HStack(spacing: AidenSpacing.m) {
+                AidenMachineChip(label: machine.label)
+                    .accessibilityHidden(true)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(machine.label.name)
+                        .foregroundStyle(palette.foreground)
+                    if let detail = machine.detail {
+                        Text(detail)
+                            .font(.caption)
+                            .foregroundStyle(palette.secondary)
+                    }
+                }
+                Spacer(minLength: AidenSpacing.s)
+                if isPicked {
+                    Image(systemName: "checkmark")
+                        .font(.body.weight(.semibold))
+                        .foregroundStyle(palette.accent)
+                        .accessibilityHidden(true)
+                }
+            }
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .disabled(!machine.canBePicked)
+        .opacity(machine.canBePicked ? 1 : 0.5)
+        .accessibilityAddTraits(isPicked ? .isSelected : [])
+        .accessibilityIdentifier("home.environment.machine.\(machine.id)")
+    }
+
+    private func placeRow(
+        title: String,
+        detail: String?,
+        systemImage: String,
+        isChosen: Bool,
+        identifier: String,
+        action: @escaping () -> Void
+    ) -> some View {
+        Button(action: action) {
+            HStack(spacing: AidenSpacing.m) {
+                Image(systemName: systemImage)
+                    .foregroundStyle(palette.secondary)
+                    .frame(width: 24)
+                    .accessibilityHidden(true)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(title)
+                        .foregroundStyle(palette.foreground)
+                        .lineLimit(1)
+                    if let detail {
+                        Text(detail)
+                            .font(.caption)
+                            .foregroundStyle(palette.secondary)
+                            .lineLimit(1)
+                    }
+                }
+                Spacer(minLength: AidenSpacing.s)
+                if isChosen {
+                    Image(systemName: "checkmark")
+                        .font(.body.weight(.semibold))
+                        .foregroundStyle(palette.accent)
+                        .accessibilityHidden(true)
+                }
+            }
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityAddTraits(isChosen ? .isSelected : [])
+        .accessibilityIdentifier(identifier)
     }
 }
 

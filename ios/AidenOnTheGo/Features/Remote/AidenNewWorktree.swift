@@ -39,8 +39,15 @@ enum AidenNewWorktreeAvailability {
         hasCommits: Bool?
     ) -> Bool {
         guard !chat.isBotChat, chat.messages.isEmpty,
-              let workspace, workspace.id == chat.workspaceId,
-              workspace.hasFolder, !workspace.isManagedWorktree, workspace.permission != .none,
+              let workspace, workspace.id == chat.workspaceId else { return false }
+        return isOffered(in: workspace, server: server, hasCommits: hasCommits)
+    }
+
+    /// The workspace half of the rule, for a chat that doesn't exist yet
+    /// (Home's composer): a folder Aiden may use that is not already a
+    /// worktree, on a Mac that offers it to this phone.
+    static func isOffered(in workspace: AidenWorkspace, server: AidenServer?, hasCommits: Bool? = nil) -> Bool {
+        guard workspace.hasFolder, !workspace.isManagedWorktree, workspace.permission != .none,
               let server,
               server.serverCapabilities?.contains(.chatNewWorktree) == true,
               server.capabilities.contains(.chatNewWorktree),

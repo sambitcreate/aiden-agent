@@ -231,18 +231,20 @@ struct AidenDrawerView<Compose: View>: View {
     // MARK: Bottom bar
 
     private var bottomBar: some View {
-        HStack(spacing: AidenSpacing.s) {
+        // The concept's bar: 48pt raised circle, a raised capsule, and the
+        // dark compose circle, 10pt apart and 16pt from the edges.
+        HStack(spacing: AidenDrawerBarMetrics.spacing) {
             Button { onOpen(.settings) } label: {
                 Label("Settings", systemImage: "gearshape")
             }
             .buttonStyle(AidenDrawerIconButtonStyle(fill: .raised))
             searchField
-            // The style reaches the shell's own button, so its whole 44pt
-            // square takes the tap, not only the glyph.
+            // The style reaches the shell's own button, so its whole 48pt
+            // circle takes the tap, not only the glyph.
             compose()
                 .buttonStyle(AidenDrawerIconButtonStyle(fill: .prominent))
         }
-        .padding(.horizontal, AidenSpacing.m)
+        .padding(.horizontal, AidenSpacing.l)
         .padding(.vertical, AidenSpacing.s)
     }
 
@@ -251,9 +253,15 @@ struct AidenDrawerView<Compose: View>: View {
         @Bindable var search = search
         return HStack(spacing: AidenSpacing.s) {
             Image(systemName: "magnifyingglass")
+                .font(.body)
                 .foregroundStyle(palette.secondary)
                 .accessibilityHidden(true)
-            TextField("Search chats and Bots", text: $search.query)
+            // "Search" on screen, as in the concept; VoiceOver hears what it
+            // searches.
+            TextField(text: $search.query, prompt: Text("Search").foregroundStyle(palette.secondary)) {
+                Text("Search chats and Bots")
+            }
+                .accessibilityLabel("Search chats and Bots")
                 .textFieldStyle(.plain)
                 .focused($searchIsFocused)
                 .submitLabel(.search)
@@ -273,9 +281,13 @@ struct AidenDrawerView<Compose: View>: View {
                 .padding(.trailing, -AidenSpacing.m)
             }
         }
-        .padding(.horizontal, AidenSpacing.m)
-        .frame(minHeight: 48)
-        .background(palette.raised, in: Capsule())
+        .padding(.horizontal, AidenSpacing.l)
+        .frame(minHeight: AidenDrawerBarMetrics.height)
+        .background {
+            Capsule()
+                .fill(palette.raised)
+                .shadow(color: palette.foreground.opacity(0.06), radius: 5, y: 2)
+        }
         // The whole 44pt capsule focuses the field, and it's the frame
         // accessibility reports for it (the field alone is one line tall).
         .contentShape(Capsule())
@@ -283,8 +295,14 @@ struct AidenDrawerView<Compose: View>: View {
     }
 }
 
-/// The drawer bar's round buttons (concept 03): Settings on the raised fill,
-/// compose on the foreground colour. The whole circle takes the tap.
+/// The drawer bar's measurements (concept 03).
+private enum AidenDrawerBarMetrics {
+    static let height: CGFloat = 48
+    static let spacing: CGFloat = 10
+}
+
+/// The drawer bar's round buttons (concept 03): Settings raised on a soft
+/// shadow, compose on the foreground colour. The whole circle takes the tap.
 private struct AidenDrawerIconButtonStyle: ButtonStyle {
     enum Fill { case raised, prominent }
     let fill: Fill
@@ -305,8 +323,16 @@ private struct AidenDrawerIconButtonStyle: ButtonStyle {
                 .labelStyle(.iconOnly)
                 .font(.title3)
                 .foregroundStyle(fill == .prominent ? palette.canvas : palette.foreground)
-                .frame(width: 48, height: 48)
-                .background(fill == .prominent ? palette.foreground : palette.raised, in: Circle())
+                .frame(width: AidenDrawerBarMetrics.height, height: AidenDrawerBarMetrics.height)
+                .background {
+                    if fill == .prominent {
+                        Circle().fill(palette.foreground)
+                    } else {
+                        Circle()
+                            .fill(palette.raised)
+                            .shadow(color: palette.foreground.opacity(0.08), radius: 5, y: 2)
+                    }
+                }
                 .contentShape(Circle())
                 .opacity(isEnabled ? (configuration.isPressed ? 0.6 : 1) : 0.4)
                 .scaleEffect(configuration.isPressed && !reduceMotion ? 0.94 : 1)

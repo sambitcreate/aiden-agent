@@ -40,7 +40,7 @@ Efforts are S (up to a day), M (a few days), L (a week or more) and XL (a projec
 | # | Concept | Live today | Track | Gap | Effort |
 |---|---|---|---|---|---|
 | 01 | Home: greeting, Bot sprites, "From your Bots" digest, composer | Chats list root (`AidenAppShellView.swift:283-442`) | 1A | UI + client model | M |
-| 02 | Dock recents: a popover of recents when the selected tab is tapped again | Running sheet and running accessory | 1A | UI + spike (TabView has no reselect callback) | M, high risk |
+| 02 | Dock recents: a popover of recents when the selected tab is tapped again (built 2026-11-26 on the custom dock, see Phase 2) | Running sheet and running accessory | 1A | UI + spike (TabView has no reselect callback) | M, high risk |
 | 03 | Drawer: Pinned, Recents, More, Settings, Search, Compose | No drawer; the Search and Settings tabs | 1A | UI + client model (device-local pins) | M |
 | 07 | Inbox: triage, with All / Needs you / Done | Inbox tab list | 1A | UI + client (Option A) or server (Option B) | L |
 | 13 | New chat sheet | Compose flow | 1B | UI-only | M |
@@ -148,13 +148,18 @@ The phases run in order. The screens inside each phase can run in parallel, one 
 
 - **Home header and dock (01, 02; owner decision 2026-11-25).**
   - **Header.** The Chats root hides the system navigation bar and draws the concept's header: a round glass **Open menu** button, which opens the drawer and gets VoiceOver focus back when it closes, the round glass compose button (Add Computer with none paired), and the greeting, which VoiceOver reads as the screen's heading. Pushed pages and the other tabs keep the system navigation bar.
-  - **Dock.** On a stack (an iPhone upright or sideways, a closed iPhone Duo, a narrow iPad window) the system tab bar is hidden and `AidenDock` draws the tabs: icons only on a chrome glass capsule, the chosen tab in a neutral pill with its name, and a dot on the Inbox while chats need the person.
+  - **Dock.** On a stack (an iPhone upright or sideways, a closed iPhone Duo, a narrow iPad window) the system tab bar is hidden and `AidenDock` draws the tabs as in concept 02: bare line icons spread along the bottom edge with no bar behind them, the chosen tab in a neutral pill with its name beside the icon, and a dot on the Inbox while chats need the person. One pill slides between the tabs on a spring.
     - Each screen of a tab's stack carries the dock in its own bottom bar (`safeAreaBar`), so lists end above it and scroll under its soft edge, and the aurora stays behind it. The running chats accessory sits above the dock.
     - It steps aside for a conversation, whose composer owns the bottom edge, and while a keyboard is docked along the bottom of the screen. A floating keyboard or a hardware keyboard's shortcut bar leaves it in place (`AidenTabChrome.keyboardTakesBottomEdge`).
     - **Landscape.** An iPhone keeps the stack and the dock when it turns. A Plus or Pro Max held sideways is regular width but compact height, and it used to switch to the list-beside-detail layout. Now the list sits beside its detail only at regular width and regular height (`AidenTabChrome.besideList`), so the chrome no longer swaps mid-session. An iPad and an open iPhone Duo are regular both ways and keep the sidebar.
     - The running chats accessory sits in the dock's bar on every supported iOS version, 26.0 included, since it no longer uses the system `tabViewBottomAccessory`.
     - The icons grow with Dynamic Type up to the dock's own cap (xxxLarge), so at the accessibility sizes every tab stays on screen.
-    - Tapping the chosen tab again goes back to its root (`AidenAppNavigation.selectFromDock`).
+    - Tapping the chosen tab again goes back to its root when a page is pushed over its list (`AidenAppNavigation.selectFromDock`). With the list already showing, it opens the tab's recents instead (below).
+    - **Dock recents (02, built 2026-11-26).** `AidenDockHost` wraps the dock in each bar. A tap on the chosen tab at its root opens a card above the dock, on the tab's side of the screen, over the whitened page: up to four rows (`AidenDockRecents.cap`), work in progress first and then the newest, each with an icon, a title and a line under it, and a spinner on a row that is working or a dot on one that waits on the person.
+      - Chats lists the newest chats and **New chat**; Bots the Bots last heard from, drawn as their sprites; Workspaces the workspaces last worked in (by their newest chat) and **New workspace chat**; Inbox what needs the person, then the updates.
+      - A row opens its route on that tab. A tap outside, on the chosen tab, or VoiceOver's escape closes the card; another tab closes it and switches. The actions go through the shell's compose flow: a workspace chat asks which workspace (or names one with none to choose), a plain chat starts in the machine's Chats home when it has one.
+      - The lists are built from what the phone already holds (the Inbox snapshots and each machine's workspace list) on the tap that opens them. Nothing is fetched, stored or observed while the dock just sits there, and `AidenDock` is `Equatable` on its plain inputs so a shell redraw leaves it alone.
+      - The card is a transparent full-screen cover, so the page and its bars are out of reach, of VoiceOver too, while it's up. A copy of the dock is drawn exactly over the real one with the same identifiers. The chosen tab's hint says a second tap shows recents, or closes them. Reduce Motion drops the card's scale and fade.
     - VoiceOver reads it as a tab bar: each tab says its name, is marked chosen when it is, and the Inbox says "Inbox, 3 chats need you". Voice Control answers to the bare names. Its text stops growing at the largest non-accessibility size, and a held press shows the large content viewer. Reduce Motion drops the pill's slide.
     - Regular width (iPad, an open iPhone Duo) keeps the system `TabView` `.sidebarAdaptable` sidebar exactly as before. On the closed Duo the system's side rail still holds the status bar and the navigation bar's items; the tabs are in the dock.
 
@@ -164,6 +169,7 @@ The phases run in order. The screens inside each phase can run in parallel, one 
   - Add hold to talk.
   - Add `AidenComposerConfig.home()`.
   - Add the New chat sheet, built from `AidenRadioListRow`, `AidenSummaryChip` and the machine line.
+  - Built 2026-11-26 (PR #934): opening Home's composer shows where the chat will run, as a chip ("Studio Mac · Just chat"). It opens a Where it runs sheet: the computer (listed only when more than one is paired), Just chat or one of that computer's folders, and New worktree when the folder can have one. The choice is remembered per computer, and Send starts the chat there and sends the words in it.
 - **Aurora renderer and settings (4B steps 3-6).** See [Aurora](#aurora).
 - **Progress (2026-11-24, branch `claude/ios-home-aurora`).**
   - Step 1: `AidenAuroraState`, `AidenAmbientActivityModel`, the renderer and the Ambient background card.

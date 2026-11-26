@@ -246,15 +246,15 @@ struct AidenAppShellView: View {
                 isOpen: { [weak navigation] id in navigation?.holdsConversation(id) ?? false },
                 isBotOpen: { [weak navigation] id in navigation?.holdsBot(id) ?? false }
             )
-            let newWork = AidenNewWorkChatFlow(coordinator: coordinator) { [weak navigation, weak chatScreens] chat, id, prompt in
+            let newWork = AidenNewWorkChatFlow(coordinator: coordinator) { [weak navigation, weak chatScreens] chat, id, launch in
                 let home = inboxStore.homeModel(for: id.instanceId)
                 home?.accept(chat)
                 home?.markViewed(chatID: chat.id)
                 guard let navigation else { return }
-                if let prompt {
+                if let launch {
                     // Home's Send: the words go with the chat, and Home decides
                     // whether to open it (only if the person is still there).
-                    chatScreens?.screen(for: id, receipt: chat).chat.queueLaunchSend(prompt)
+                    chatScreens?.screen(for: id, receipt: chat).chat.queueLaunchSend(launch)
                     return
                 }
                 navigation.openNewChat(id)
@@ -809,9 +809,39 @@ struct AidenAppShellView: View {
                 if runningHome == .accessory {
                     AidenRunningAccessoryHost(store: inboxStore, onOpen: openRow) { activeSheet = .runningChats }
                 }
-                AidenDock(selection: navigation.tab, needsYouCount: inboxStore.needsYouCount) { tab in
-                    navigation.selectFromDock(tab)
-                }
+                AidenDockHost(
+                    selection: navigation.tab,
+                    needsYouCount: inboxStore.needsYouCount,
+                    isAtRoot: route == nil,
+                    onSelect: { tab in
+                        if tab != navigation.tab {
+                            coordinator.haptics.play(.selection, scope: newWork.hapticScope)
+                        }
+                        navigation.selectFromDock(tab)
+                    },
+                    recents: { tab in
+                        // Read on the tap that opens the list, never as the dock draws.
+                        let archive = coordinator.workspaceArchiveStore
+                        return AidenDockRecents.list(
+                            for: tab,
+                            store: inboxStore,
+                            isArchived: { archive.isArchived(workspaceID: $1, instanceID: $0) },
+                            canStart: !hasNoComputers && !newWork.isUnavailable(offeringHidden: tab == .workspaces)
+                        )
+                    },
+                    onOpen: { tab, route in
+                        switch tab {
+                        case .chats:
+                            openFromHome(route)
+                        case .inbox:
+                            openRow(route)
+                        case .bots, .workspaces:
+                            navigation.pick(route, fromListOf: tab)
+                            hideOverlaidList(on: tab)
+                        }
+                    },
+                    onFooter: { AidenDockRecents.start($0, with: newWork) }
+                )
             }
         }
     }

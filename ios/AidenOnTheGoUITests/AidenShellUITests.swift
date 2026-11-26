@@ -915,6 +915,47 @@ final class AidenShellUITests: XCTestCase {
         app.terminate()
     }
 
+    /// Opening Home's composer shows where the chat will run; the sheet picks a
+    /// folder, the chip names it, and Send still opens the new chat.
+    func testHomeComposerChoosesWhereTheChatRuns() {
+        let app = AidenStateMatrix.launch(scenario: .full)
+        AidenStateMatrix.openArea("Chats", in: app)
+        let field = homeField(in: app)
+        XCTAssertTrue(field.waitForExistence(timeout: 10), "No Home field")
+        let chip = app.descendants(matching: .any)["home.composer.environment"].firstMatch
+        XCTAssertFalse(chip.exists, "Where it runs shows only once the composer is open")
+        field.tap()
+        XCTAssertTrue(chip.waitForExistence(timeout: 5), "Opening the composer doesn't say where the chat runs")
+        XCTAssertTrue((chip.value as? String ?? "").contains("Just chat"), "A new chat starts as Just chat")
+        AidenStateMatrix.capture("home-environment-chip", in: self)
+
+        chip.tap()
+        let justChat = app.descendants(matching: .any)["home.environment.justChat"].firstMatch
+        XCTAssertTrue(justChat.waitForExistence(timeout: 5), "No Just chat choice")
+        let notes = app.descendants(matching: .any)["home.environment.folder.workspace_notes"].firstMatch
+        // On a short phone the sheet opens at half height; raise it with the
+        // grabber, then scroll, for the rest of the folders, as a person would.
+        if !notes.waitForExistence(timeout: 2) {
+            let grabber = app.buttons["Sheet Grabber"].firstMatch
+            if grabber.exists { grabber.tap() }
+            if !notes.waitForExistence(timeout: 2) { justChat.swipeUp(velocity: .slow) }
+        }
+        XCTAssertTrue(notes.waitForExistence(timeout: 5), "The computer's folders aren't offered")
+        AidenStateMatrix.capture("home-environment-sheet", in: self)
+        notes.tap()
+        app.buttons["home.environment.done"].firstMatch.tap()
+
+        XCTAssertTrue(chip.waitForExistence(timeout: 5))
+        XCTAssertTrue((chip.value as? String ?? "").contains("Notes"), "The chip doesn't name the chosen folder")
+        field.tap()
+        let prompt = "Tidy up the meeting notes"
+        field.typeText(prompt)
+        app.buttons["Start chat"].firstMatch.tap()
+        let sent = app.staticTexts.matching(NSPredicate(format: "label CONTAINS %@", prompt)).firstMatch
+        XCTAssertTrue(sent.waitForExistence(timeout: 15), "The new chat doesn't show the words Home sent")
+        app.terminate()
+    }
+
     /// Send empties the field at once, even while the computer is still
     /// connecting; if no chat can start, the words come back with the reason.
     func testHomeSendEmptiesTheFieldAndGivesTheWordsBackIfNoChatStarts() {

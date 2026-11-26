@@ -249,11 +249,20 @@ enum AidenStateMatrix {
         _ = close.waitForNonExistence(timeout: 3)
     }
 
-    /// Switches to a tab.
+    /// Switches to a tab, or returns the chosen one to its list. With the
+    /// chosen tab's list already showing it does nothing: a tap there opens
+    /// the dock's recents instead.
     static func openArea(_ title: String, in app: XCUIApplication) {
         closeDrawer(in: app)
         let tab = tab(title, in: app)
-        if tab.waitForExistence(timeout: 10) { tab.tap() }
+        guard tab.waitForExistence(timeout: 10) else { return }
+        if tab.identifier.hasPrefix("aiden.dock."), tab.isSelected, tabRoot(title, in: app).exists { return }
+        tab.tap()
+    }
+
+    /// The recents the dock's chosen tab opens when it's tapped again.
+    static func dockRecents(in app: XCUIApplication) -> XCUIElement {
+        app.descendants(matching: .any)["aiden.dockRecents"].firstMatch
     }
 
     /// Attaches a screenshot of the whole screen. It stays in the `.xcresult`

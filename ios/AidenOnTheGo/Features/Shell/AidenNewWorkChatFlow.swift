@@ -110,7 +110,7 @@ final class AidenNewWorkChatFlow {
     @ObservationIgnored private let readinessWait: Duration
     /// The new chat, its id, and the message it sends as soon as it opens
     /// (Home's Send), if any.
-    @ObservationIgnored private let onCreated: @MainActor (AidenChat, AidenHostObjectID, String?) -> Void
+    @ObservationIgnored private let onCreated: @MainActor (AidenChat, AidenHostObjectID, AidenLaunchSend?) -> Void
     @ObservationIgnored private var latestReceipt: (id: AidenHostObjectID, chat: AidenChat)?
     @ObservationIgnored private let draftStore: AidenChatDraftStore
     /// Home's own machine choice: its chip, apart from the New chat button's,
@@ -122,7 +122,7 @@ final class AidenNewWorkChatFlow {
         preferences: AidenMachinePreferencesStore? = nil,
         readinessWait: Duration = .seconds(30),
         draftStore: AidenChatDraftStore = .shared,
-        onCreated: @escaping @MainActor (AidenChat, AidenHostObjectID, String?) -> Void
+        onCreated: @escaping @MainActor (AidenChat, AidenHostObjectID, AidenLaunchSend?) -> Void
     ) {
         self.coordinator = coordinator
         self.draftStore = draftStore
@@ -288,11 +288,43 @@ final class AidenNewWorkChatFlow {
         }
     }
 
-    /// Home's Send: a Just chat on `target` that sends `prompt` as soon as it
-    /// opens. Each call carries its own prompt to its own chat, so a second
-    /// Send while the first is still on its way never reaches the first's
-    /// chat, and nothing here gates the New chat button (`isCreating`).
-    func startChat(sending prompt: String, on target: AidenNewWorkTarget) async -> AidenHomeSendOutcome {
+    /// The folders Home's composer offers on a machine: its listed, unarchived
+    /// workspaces, without the hidden records behind Just chat.
+    func homeFolders(on instanceId: String?) -> [AidenWorkspace] {
+        guard let instanceId, let connection = coordinator.hosts.connection(for: instanceId) else { return [] }
+        return AidenNoWorkspace.choices(AidenNoWorkspace.unarchived(
+            connection.workspaces,
+            archivedIDs: coordinator.workspaceArchiveStore.archivedWorkspaceIDs(for: instanceId)
+        ))
+    }
+
+    /// Fresh folders for Home's "Where it runs" sheet.
+    func refreshHomeFolders(on instanceId: String) async {
+        await coordinator.refreshWorkspaces(on: AidenNewWorkTarget(instanceId: instanceId))
+    }
+
+    /// Whether Home's composer can start its chat in a new worktree of the
+    /// folder. The Mac still refuses a folder that isn't a repository with
+    /// commits, in the chat, with its own reason.
+    func homeOffersNewWorktree(in workspaceId: String?, on instanceId: String?) -> Bool {
+        guard let workspaceId, let instanceId,
+              let connection = coordinator.hosts.connection(for: instanceId),
+              let workspace = homeFolders(on: instanceId).first(where: { $0.id == workspaceId }) else { return false }
+        return AidenNewWorktreeAvailability.isOffered(in: workspace, server: connection.server)
+    }
+
+    /// Home's Send: a chat on `target` that sends `prompt` as soon as it opens,
+    /// in the folder `workspaceId` names, or a Just chat when it's nil.
+    /// `inNewWorktree` has the first message make a worktree of that folder.
+    /// Each call carries its own prompt to its own chat, so a second Send while
+    /// the first is still on its way never reaches the first's chat, and
+    /// nothing here gates the New chat button (`isCreating`).
+    func startChat(
+        sending prompt: String,
+        on target: AidenNewWorkTarget,
+        in workspaceId: String? = nil,
+        inNewWorktree: Bool = false
+    ) async -> AidenHomeSendOutcome {
         guard await awaitReady(target, showsStatus: false) else {
             return .failed(unavailableMessage(target))
         }
@@ -300,12 +332,27 @@ final class AidenNewWorkChatFlow {
         guard let owner = try? coordinator.ownerContext(for: target.instanceId) else {
             return .failed(AidenNewWorkMachine.noLongerPaired)
         }
-        func home() -> AidenWorkspace? {
-            AidenNoWorkspace.home(in: coordinator.hosts.connection(for: target.instanceId)?.workspaces ?? [])
+        let workspace: AidenWorkspace
+        if let workspaceId {
+            func folder() -> AidenWorkspace? { homeFolders(on: target.instanceId).first { $0.id == workspaceId } }
+            if folder() == nil { await coordinator.refreshWorkspaces(on: target) }
+            guard let found = folder() else {
+                return .failed(String(localized: "That folder isn’t on this computer any more. Choose another, or Just chat."))
+            }
+            workspace = found
+        } else {
+            func home() -> AidenWorkspace? {
+                AidenNoWorkspace.home(in: coordinator.hosts.connection(for: target.instanceId)?.workspaces ?? [])
+            }
+            if home() == nil { await coordinator.refreshWorkspaces(on: target) }
+            // A host without the Chats home can't take a Just chat (spec A5).
+            guard let found = home() else { return .needsChoice }
+            workspace = found
         }
-        if home() == nil { await coordinator.refreshWorkspaces(on: target) }
-        // A host without the Chats home can't take a Just chat (spec A5).
-        guard let workspace = home() else { return .needsChoice }
+        let launch = AidenLaunchSend(
+            prompt: prompt,
+            inNewWorktree: inNewWorktree && homeOffersNewWorktree(in: workspaceId, on: target.instanceId)
+        )
         do {
             guard let created = try await coordinator.createChat(on: target, in: workspace) else {
                 // The coordinator has already said why.
@@ -316,7 +363,7 @@ final class AidenNewWorkChatFlow {
             // leaves the words in the chat rather than nowhere.
             _ = await seedComposer(prompt, for: created.id)
             guard coordinator.isLive(owner) else { return .failed(AidenNewWorkMachine.noLongerPaired) }
-            onCreated(created.chat, created.id, prompt)
+            onCreated(created.chat, created.id, launch)
             coordinator.haptics.play(
                 .success,
                 scope: hapticScope,
@@ -346,6 +393,13 @@ final class AidenNewWorkChatFlow {
         }
         return saved
     }
+}
+
+/// What a chat Home's Send made does as soon as it can: send `prompt`, in a
+/// new worktree of its folder when `inNewWorktree` is on.
+struct AidenLaunchSend: Equatable {
+    var prompt: String
+    var inNewWorktree = false
 }
 
 /// The compose button, in the Inbox and on the Workspaces tab. It opens on the

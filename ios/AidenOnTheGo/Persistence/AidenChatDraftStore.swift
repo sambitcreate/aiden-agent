@@ -93,7 +93,17 @@ actor AidenChatDraftStore {
         instanceDirectory(instanceId: session.instanceId).appending(path: "\(digest(session.chatId)).attempt.json")
     }
 
-    static let shared = AidenChatDraftStore()
+    static let shared: AidenChatDraftStore = {
+#if DEBUG
+        // A demo run starts with no drafts and keeps its own out of the
+        // person's real ones, so one run's words never reach the next.
+        if AidenDemoScenario.requested(in: ProcessInfo.processInfo.arguments) != nil {
+            return AidenChatDraftStore(root: FileManager.default.temporaryDirectory
+                .appending(path: "AidenDemoDrafts-\(UUID().uuidString)", directoryHint: .isDirectory))
+        }
+#endif
+        return AidenChatDraftStore()
+    }()
 
     private struct Envelope: Codable {
         let version: Int

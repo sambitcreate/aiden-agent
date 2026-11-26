@@ -60,10 +60,10 @@ extension AidenAppTab {
         }
     }
 
-    /// The dock's outline symbol. The chosen tab fills it.
+    /// The dock's line icon, the same chosen or not: the pill marks the choice.
     var dockSymbol: String {
         switch self {
-        case .chats: "bubble.left.and.bubble.right"
+        case .chats: "bubble"
         case .bots: "person.2"
         case .workspaces: "folder"
         case .inbox: "tray"
@@ -81,28 +81,43 @@ extension AidenAppTab {
     }
 }
 
-/// The compact-width tab dock (concept 02): icon-only tabs on a chrome glass
-/// capsule, the chosen one in a neutral pill with its name beside the icon,
-/// and a dot on the Inbox while chats wait. It sits in each screen's bottom
-/// bar, so the content above keeps clear of it and scrolls under its edge
-/// effect; the glass keeps the tabs legible over the rows passing beneath,
-/// as the system Liquid Glass bar did.
+/// The compact-width tab dock (concept 02): bare line icons spread along the
+/// bottom edge, the chosen one in a neutral pill with its name beside the
+/// icon, and a dot on the Inbox while chats wait. It sits in each screen's
+/// bottom bar, so the content above keeps clear of it and scrolls under the
+/// bar's soft edge.
 ///
 /// VoiceOver reads it as a tab bar: each tab says its name, whether it's
 /// chosen and, for the Inbox, how many chats need the person.
-struct AidenDock: View {
+///
+/// It takes plain values and compares equal on them, so a shell that redraws
+/// for something else leaves it alone (`.equatable()`). `onSelect` is not
+/// compared: give it a closure whose behaviour depends only on those values
+/// and on references that outlive the dock.
+struct AidenDock: View, Equatable {
     let selection: AidenAppTab
     let needsYouCount: Int
+    /// What a tap on the chosen tab does, as VoiceOver's hint for it.
+    var chosenTabHint: String?
     let onSelect: (AidenAppTab) -> Void
 
     @Environment(\.aidenPalette) private var palette
     @Environment(\.aidenReduceMotion) private var reduceMotion
-    @ScaledMetric(relativeTo: .body) private var scaledIconSize: CGFloat = 20
+    @ScaledMetric(relativeTo: .subheadline) private var scaledIconSize: CGFloat = 20
     @Namespace private var pill
+
+    nonisolated static func == (lhs: Self, rhs: Self) -> Bool {
+        lhs.selection == rhs.selection
+            && lhs.needsYouCount == rhs.needsYouCount
+            && lhs.chosenTabHint == rhs.chosenTabHint
+    }
 
     /// The metric reads the text size above the dock, which the dock's own
     /// clamp doesn't reach, so it stops where the clamp does (xxxLarge).
     private var iconSize: CGFloat { min(scaledIconSize, 27) }
+
+    /// The pill's slide and the name's fade, one spring for both.
+    static let selectionSpring = Animation.spring(response: 0.32, dampingFraction: 0.82)
 
     var body: some View {
         // Past a size where the chosen tab's name fits, the pill alone marks
@@ -111,13 +126,11 @@ struct AidenDock: View {
             row(namesChosenTab: true)
             row(namesChosenTab: false)
         }
-        .padding(AidenSpacing.xs)
-        .aidenChromeGlass(in: Capsule())
-        .padding(.horizontal, AidenSpacing.m)
-        .padding(.bottom, AidenSpacing.xs)
+        .padding(.horizontal, AidenSpacing.xl)
+        .padding(.vertical, AidenSpacing.xs)
         // A bar keeps its height; held presses show the large version.
         .dynamicTypeSize(...DynamicTypeSize.xxxLarge)
-        .animation(reduceMotion ? nil : .snappy(duration: 0.25), value: selection)
+        .animation(reduceMotion ? nil : Self.selectionSpring, value: selection)
         .accessibilityElement(children: .contain)
         .accessibilityAddTraits(.isTabBar)
         .accessibilityIdentifier("aiden.dock")
@@ -127,29 +140,28 @@ struct AidenDock: View {
         HStack(spacing: 0) {
             ForEach(AidenAppTab.allCases, id: \.self) { tab in
                 if tab != AidenAppTab.allCases.first {
-                    Spacer(minLength: AidenSpacing.xs)
+                    Spacer(minLength: 0)
                 }
-                item(tab, showsName: namesChosenTab && tab == selection)
+                item(tab, showsName: namesChosenTab && tab == selection, namesChosenTab: namesChosenTab)
             }
         }
     }
 
-    private func item(_ tab: AidenAppTab, showsName: Bool) -> some View {
+    private func item(_ tab: AidenAppTab, showsName: Bool, namesChosenTab: Bool) -> some View {
         let isSelected = tab == selection
         return Button {
             onSelect(tab)
         } label: {
-            HStack(spacing: AidenSpacing.s) {
+            HStack(spacing: 6) {
                 Image(systemName: tab.dockSymbol)
-                    .symbolVariant(isSelected ? .fill : .none)
-                    .font(.system(size: iconSize))
-                    .frame(width: iconSize + AidenSpacing.xs, height: iconSize + AidenSpacing.xs)
+                    .font(.system(size: iconSize, weight: .medium))
+                    .frame(width: iconSize + 2, height: iconSize + 2)
                     .overlay(alignment: .topTrailing) {
                         if tab == .inbox, needsYouCount > 0 {
                             Circle()
                                 .fill(palette.danger)
                                 .frame(width: 8, height: 8)
-                                .offset(x: 2, y: -1)
+                                .offset(x: 3, y: -2)
                         }
                     }
                 if showsName {
@@ -157,6 +169,7 @@ struct AidenDock: View {
                         .font(.subheadline.weight(.semibold))
                         .lineLimit(1)
                         .fixedSize()
+                        .transition(.opacity)
                 }
             }
             .foregroundStyle(isSelected ? palette.foreground : palette.secondary)
@@ -166,8 +179,9 @@ struct AidenDock: View {
                 if isSelected {
                     Capsule()
                         .fill(AidenListRowBackground.selectedFill(palette))
-                        // One source per row: ViewThatFits builds both.
-                        .matchedGeometryEffect(id: showsName ? "pill.named" : "pill", in: pill)
+                        // One pill slides between the tabs. ViewThatFits
+                        // builds both rows, so each has its own.
+                        .matchedGeometryEffect(id: namesChosenTab ? "pill.named" : "pill", in: pill)
                 }
             }
             .contentShape(Capsule())
@@ -178,6 +192,7 @@ struct AidenDock: View {
         // still answers to the bare name.
         .accessibilityLabel(Text(accessibilityName(of: tab)))
         .accessibilityAddTraits(isSelected ? .isSelected : [])
+        .accessibilityHint(Text(isSelected ? chosenTabHint ?? "" : ""))
         .accessibilityInputLabels([Text(tab.title)])
         .accessibilityShowsLargeContentViewer {
             Label(tab.title, systemImage: tab.dockSymbol)
