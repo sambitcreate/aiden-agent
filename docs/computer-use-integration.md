@@ -338,24 +338,34 @@ npm run package:verify
 AIDEN_COMPUTER_USE_ACCEPTANCE=1 npm run test:computer-use:packaged
 ```
 
-The acceptance command intentionally stops for visible macOS TCC decisions, one
-**Deny** on the seeded `Computer Use acceptance (denied)` chat, and one
-**Allow in this chat** on `Computer Use acceptance` (keep hands off the mouse
-until the 30-second wait starts so the cursor check measures only background
-`type` and `cmd+s` actions); the type, save-key, stale-click, and decoy capture
-actions then run without further cards. On success it prints the structured
-real-desktop report and writes an evidence-only receipt (schema version 4,
-carrying the full `realDesktopReport` plus `appVersion`, `driverVersion`, and
-`macOSVersion`) to `build/computer-use-acceptance-receipt.json`, bound to the
-tested app's signed CDHash, app-ASAR hash, bundle ID, and versions. On an
-unsupported host it prints the structured `unsupported` report and exits
-non-zero without modifying any existing receipt or creating a temporary evidence
-directory. On a supported host, a non-pass run prints the structured report,
-keeps `real-desktop-report.json` with the temporary evidence, and invalidates
-any old receipt. A new package or opted-in acceptance run invalidates the old
-receipt. TCC grants
-are persistent macOS state and must be revoked manually in System Settings if no
-longer wanted.
+During preflight, before Aiden launches, the harness opens the disposable
+TextEdit documents and reads their live text via `osascript` (Apple Events); it
+prints an operator notice first and allows up to 120 seconds for the macOS
+**Automation** prompt asking whether the invoking terminal or host app may
+control **TextEdit** (denying Automation fails closed as an `environment
+problem`). The acceptance command then intentionally stops for visible macOS
+**Accessibility** and **Screen Recording** TCC decisions for **Aiden Computer
+Use**, one **Deny** on the seeded `Computer Use acceptance (denied)` chat, and
+one **Allow in this chat** on `Computer Use acceptance` (keep hands off the
+mouse until the 30-second wait starts so the cursor check measures only
+background `type` and `cmd+s` actions); the type, save-key, stale-click, and
+decoy capture actions then run without further cards. On success it prints the
+structured real-desktop report and writes an evidence-only receipt (schema
+version 4, carrying the full `realDesktopReport` plus `appVersion`,
+`driverVersion`, and `macOSVersion`) to
+`build/computer-use-acceptance-receipt.json`, bound to the tested app's signed
+CDHash, app-ASAR hash, bundle ID, and versions. On an unsupported host it prints
+the structured `unsupported` report and exits non-zero without modifying any
+existing receipt or creating a temporary evidence directory. On a supported host,
+an opted-in non-pass run (including package, running-process, metadata, and
+temporary-directory preflight failures) prints the structured report, retains
+`real-desktop-report.json` with the temporary evidence (or reports the
+retention failure if the temporary directory or report file could not be
+written), and invalidates any old receipt. A new package or opted-in acceptance
+run invalidates the old receipt. TCC grants are persistent macOS state and must
+be revoked manually in **System Settings → Privacy & Security** if no longer
+wanted: **Accessibility** and **Screen Recording** for Aiden Computer Use, and
+**Automation** (controlling **TextEdit**) for the invoking terminal or host app.
 Distribution uses `npm run dist`; it removes the old canonical output, builds in
 staging, and promotes only verified current DMG/ZIP output. Its after-sign and
 pre-promotion verifiers require Aiden's Developer ID Application identity, a

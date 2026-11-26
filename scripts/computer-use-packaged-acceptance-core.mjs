@@ -940,7 +940,7 @@ export function classifyAcceptanceError(error) {
     return "unsupported";
   }
   if (
-    /Quit every running Aiden|already running|Could not resolve.*TextEdit|TextEdit process did not start|Disposable TextEdit document did not become readable|permission_required|Accessibility and Screen Recording|missing permissions|ENOENT|No packaged app|Could not (?:parse|sample) host mouse cursor|Host mouse cursor position was not a finite/iu.test(
+    /Quit every running Aiden|already running|Could not resolve.*TextEdit|TextEdit process did not start|Disposable TextEdit document did not become readable|Not authorized to send Apple events|\(-1743\)|errAEEventNotPermitted|Automation permission to control TextEdit|Expected exactly one unpacked Aiden macOS package|mkdtemp|permission_required|Accessibility and Screen Recording|missing permissions|ENOENT|No packaged app|Could not (?:parse|sample) host mouse cursor|Host mouse cursor position was not a finite/iu.test(
       message,
     )
   ) {

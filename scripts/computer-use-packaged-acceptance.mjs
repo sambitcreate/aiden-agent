@@ -56,6 +56,7 @@ const modulePath = fileURLToPath(import.meta.url);
 const repositoryRoot = path.resolve(path.dirname(modulePath), "..");
 const MAX_REQUEST_BYTES = 64 * 1024 * 1024;
 const ACCEPTANCE_TIMEOUT_MS = 15 * 60 * 1_000;
+const TEXTEDIT_AUTOMATION_PREFLIGHT_TIMEOUT_MS = 120_000;
 const PROCESS_POLL_MS = 250;
 const TEXTEDIT_BUNDLE_ID = "com.apple.TextEdit";
 const TEXTEDIT_KNOWN_PATHS = Object.freeze([
@@ -63,9 +64,24 @@ const TEXTEDIT_KNOWN_PATHS = Object.freeze([
   "/Applications/TextEdit.app",
 ]);
 
-function argumentValue(name) {
-  const index = process.argv.indexOf(name);
-  return index >= 0 ? process.argv[index + 1] : undefined;
+function argumentValue(name, argv = process.argv) {
+  const index = argv.indexOf(name);
+  return index >= 0 ? argv[index + 1] : undefined;
+}
+
+function execErrorDetail(error) {
+  if (!(error instanceof Error)) return String(error ?? "");
+  const stderr = typeof error.stderr === "string" ? error.stderr.trim() : "";
+  return stderr && !error.message.includes(stderr)
+    ? `${error.message} (${stderr})`
+    : error.message;
+}
+
+export function isAutomationPermissionDeniedError(error) {
+  const detail = execErrorDetail(error);
+  return /Not authorized to send Apple events|\(-1743\)|errAEEventNotPermitted|Automation permission to control TextEdit/iu.test(
+    detail,
+  );
 }
 
 export async function readHostMacOSVersion({
@@ -119,7 +135,7 @@ export async function readHostCursorPosition({
 
 export async function readTextEditDocumentText(
   documentNames,
-  { pid = null, platform = process.platform, exec = executeFile } = {},
+  { pid = null, platform = process.platform, exec = executeFile, timeoutMs = 5_000 } = {},
 ) {
   if (platform !== "darwin") {
     throw new Error(`TextEdit document text probe is macOS-only (host platform is ${platform}).`);
@@ -132,19 +148,30 @@ export async function readTextEditDocumentText(
   if (names.length === 0) {
     throw new Error("At least one TextEdit document name is required.");
   }
-  const { stdout } = await exec(
-    "/usr/bin/osascript",
-    [
-      "-l",
-      "JavaScript",
-      "-e",
-      'function run(argv) { const pidArg = argv[0]; const names = argv.slice(1); const app = pidArg ? Application(Number(pidArg)) : Application("TextEdit"); const docs = app.documents(); for (let i = 0; i < docs.length; i++) { const docName = String(docs[i].name()); if (names.indexOf(docName) >= 0) { return JSON.stringify({ text: String(docs[i].text()) }); } } throw new Error("TextEdit document not found: " + names[0]); }',
-      "--",
-      pid ? String(pid) : "",
-      ...names,
-    ],
-    { encoding: "utf8", timeout: 5_000 },
-  );
+  let stdout;
+  try {
+    ({ stdout } = await exec(
+      "/usr/bin/osascript",
+      [
+        "-l",
+        "JavaScript",
+        "-e",
+        'function run(argv) { const pidArg = argv[0]; const names = argv.slice(1); const app = pidArg ? Application(Number(pidArg)) : Application("TextEdit"); const docs = app.documents(); for (let i = 0; i < docs.length; i++) { const docName = String(docs[i].name()); if (names.indexOf(docName) >= 0) { return JSON.stringify({ text: String(docs[i].text()) }); } } throw new Error("TextEdit document not found: " + names[0]); }',
+        "--",
+        pid ? String(pid) : "",
+        ...names,
+      ],
+      { encoding: "utf8", timeout: timeoutMs },
+    ));
+  } catch (error) {
+    if (isAutomationPermissionDeniedError(error)) {
+      throw new Error(
+        `macOS Automation permission to control TextEdit was denied (${execErrorDetail(error)}). Allow your invoking host app to control TextEdit in System Settings → Privacy & Security → Automation.`,
+        { cause: error },
+      );
+    }
+    throw error;
+  }
   let parsed;
   try {
     parsed = JSON.parse(String(stdout ?? "").trim());
@@ -164,6 +191,7 @@ export async function waitForTextEditDocumentText(
     platform = process.platform,
     exec = executeFile,
     timeoutMs = 10_000,
+    execTimeoutMs = null,
     pollMs = 150,
     sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
     now = Date.now,
@@ -175,10 +203,17 @@ export async function waitForTextEditDocumentText(
   const deadline = now() + timeoutMs;
   let lastError = null;
   while (true) {
+    const remainingMs = Math.max(1, deadline - now());
     try {
-      return await readTextEditDocumentText(documentNames, { pid, platform, exec });
+      return await readTextEditDocumentText(documentNames, {
+        pid,
+        platform,
+        exec,
+        timeoutMs: execTimeoutMs ?? remainingMs,
+      });
     } catch (error) {
-      lastError = error instanceof Error ? error.message : String(error);
+      if (isAutomationPermissionDeniedError(error)) throw error;
+      lastError = execErrorDetail(error);
     }
     if (now() >= deadline) {
       throw new Error(
@@ -927,44 +962,61 @@ export async function emergencyCleanup(
   return errors;
 }
 
-async function runAcceptance() {
-  let metadata = await readPackagedMetadata({ root: repositoryRoot });
+export async function runAcceptance({
+  env = process.env,
+  argv = process.argv,
+  platform = process.platform,
+  root = repositoryRoot,
+  tmpdir = os.tmpdir(),
+  exec = executeFile,
+  discoverApp = discoverPackagedApp,
+  verifyPackage = verifyMacPackage,
+  checkNoRunningAiden = assertNoRunningAiden,
+  readArtifactIdentity = packagedArtifactIdentity,
+  readMetadata = readPackagedMetadata,
+  invalidateReceipt = invalidateComputerUseAcceptanceReceipt,
+  resolveReceiptPath = resolveComputerUseAcceptanceReceipt,
+  writeReceipt = writeComputerUseAcceptanceReceipt,
+  createTempDir = mkdtemp,
+  writeFileFn = writeFile,
+  readFileFn = readFile,
+  removeDir = rm,
+  launchTextEdit = launchDisposableTextEdit,
+  waitForTextEdit = waitForTextEditDocumentText,
+  readTextEdit = readTextEditDocumentText,
+  readCursor = readHostCursorPosition,
+  startModel = startAcceptanceModel,
+  seedUserData = seedAcceptanceUserData,
+  readGates = readAcceptanceGates,
+  spawnChild = spawn,
+  waitStop = waitForStopTeardown,
+  waitCleanExit = waitForCleanComputerUseExit,
+  listHelpers = lingeringComputerUseProcesses,
+  terminateProcess = terminateTrackedProcess,
+  cleanup = emergencyCleanup,
+  log = console.log,
+  logError = console.error,
+} = {}) {
+  let metadata = await readMetadata({ root, platform, exec });
   const support = evaluateHostSupport({
-    platform: process.platform,
+    platform,
     macOSVersion: metadata.macOSVersion,
   });
   if (!support.supported) {
     const unsupportedReport = buildUnsupportedRealDesktopReport(metadata, support.reason);
-    console.log(`\n${renderRealDesktopReport(unsupportedReport)}`);
+    log(`\n${renderRealDesktopReport(unsupportedReport)}`);
     throw new Error(support.reason);
   }
-  if (process.env.AIDEN_COMPUTER_USE_ACCEPTANCE !== "1") {
+  if (env.AIDEN_COMPUTER_USE_ACCEPTANCE !== "1") {
     throw new Error(
-      "This test can request macOS Accessibility and Screen Recording. Re-run with AIDEN_COMPUTER_USE_ACCEPTANCE=1 after reviewing the checklist.",
+      "This test can request macOS Accessibility, Screen Recording, and host Automation (TextEdit) permissions. Re-run with AIDEN_COMPUTER_USE_ACCEPTANCE=1 after reviewing the checklist.",
     );
   }
 
-  await invalidateComputerUseAcceptanceReceipt(repositoryRoot);
-  const receiptPath = resolveComputerUseAcceptanceReceipt(repositoryRoot);
-  const appPath = path.resolve(
-    argumentValue("--app") ??
-      (await discoverPackagedApp(path.join(repositoryRoot, "release", "development"))),
-  );
-  await verifyMacPackage(appPath);
-  await assertNoRunningAiden(appPath);
-  const artifact = await packagedArtifactIdentity(appPath);
-  metadata = await readPackagedMetadata({ root: repositoryRoot, appPath, artifact });
-
-  const temporary = await mkdtemp(path.join(os.tmpdir(), "aiden-cua-acceptance-"));
-  const userData = path.join(temporary, "user-data");
-  const runId = path.basename(temporary);
-  const targetName = `Aiden CUA Target ${runId}.txt`;
-  const decoyName = `Aiden CUA Decoy ${runId}.txt`;
-  const targetFile = path.join(temporary, targetName);
-  const decoyFile = path.join(temporary, decoyName);
-  const expectedTitles = [targetName, path.parse(targetName).name];
-  const decoyTitles = [decoyName, path.parse(decoyName).name];
-  const modelCapability = randomBytes(32).toString("base64url");
+  let temporary = null;
+  let tempDirAttempted = false;
+  let appPath = null;
+  let aidenLaunched = false;
   let model = null;
   let textEditProcess = null;
   let aidenProcess = null;
@@ -977,34 +1029,82 @@ async function runAcceptance() {
   let deniedWindowProbeError = null;
   let cursorProbeError = null;
   let stopEvidence = null;
+  let retainedReportPath = null;
+  let evidenceRetentionError = null;
+
+  const ensureTemporaryDir = async () => {
+    if (!temporary) {
+      temporary = await createTempDir(path.join(tmpdir, "aiden-cua-acceptance-"));
+    }
+    return temporary;
+  };
 
   try {
+    await invalidateReceipt(root);
+    const receiptPath = resolveReceiptPath(root);
+    const explicitApp = argumentValue("--app", argv);
+    appPath = path.resolve(
+      explicitApp ?? (await discoverApp(path.join(root, "release", "development"))),
+    );
+    await verifyPackage(appPath);
+    await checkNoRunningAiden(appPath);
+    const artifact = await readArtifactIdentity(appPath);
+    metadata = await readMetadata({ root, appPath, artifact, platform, exec });
+
+    tempDirAttempted = true;
+    await ensureTemporaryDir();
+    const userData = path.join(temporary, "user-data");
+    const runId = path.basename(temporary);
+    const targetName = `Aiden CUA Target ${runId}.txt`;
+    const decoyName = `Aiden CUA Decoy ${runId}.txt`;
+    const targetFile = path.join(temporary, targetName);
+    const decoyFile = path.join(temporary, decoyName);
+    const expectedTitles = [targetName, path.parse(targetName).name];
+    const decoyTitles = [decoyName, path.parse(decoyName).name];
+    const modelCapability = randomBytes(32).toString("base64url");
+
+    log(`\nPackaged Computer Use acceptance is running in: ${temporary}`);
+    log(
+      `App ${metadata.appVersion} · cua-driver ${metadata.driverVersion} · macOS ${metadata.macOSVersion}`,
+    );
+    log(
+      "Preflight: opening disposable TextEdit windows and verifying live document access via macOS Automation.",
+    );
+    log(
+      `If macOS prompts to allow the invoking terminal or host app to control TextEdit, choose Allow (up to ${Math.round(TEXTEDIT_AUTOMATION_PREFLIGHT_TIMEOUT_MS / 1000)}s; denying fails closed).`,
+    );
+
     await Promise.all([
-      writeFile(targetFile, ACCEPTANCE_TARGET_INITIAL_TEXT, "utf8"),
-      writeFile(decoyFile, ACCEPTANCE_DECOY_INITIAL_TEXT, "utf8"),
+      writeFileFn(targetFile, ACCEPTANCE_TARGET_INITIAL_TEXT, "utf8"),
+      writeFileFn(decoyFile, ACCEPTANCE_DECOY_INITIAL_TEXT, "utf8"),
     ]);
-    textEditProcess = await launchDisposableTextEdit(targetFile, decoyFile);
+    textEditProcess = await launchTextEdit(targetFile, decoyFile);
     // The operator runs the denied chat (step 3) before the allowed chat (step 4),
     // so the disposable target document's initial live text is the pre-denial baseline.
-    // Fail fast here (environment problem) before launching Aiden if Cocoa never opens it.
-    deniedWindowTextBefore = await waitForTextEditDocumentText(expectedTitles, {
+    // Fail fast on Automation denial or if Cocoa never opens the document.
+    deniedWindowTextBefore = await waitForTextEdit(expectedTitles, {
       pid: textEditProcess.pid,
+      platform,
+      exec,
+      timeoutMs: TEXTEDIT_AUTOMATION_PREFLIGHT_TIMEOUT_MS,
     });
-    model = await startAcceptanceModel({
+    model = await startModel({
       capability: modelCapability,
       expectedTitles,
       decoyTitles,
-      readGates: () => readAcceptanceGates(userData, "computer-use-acceptance"),
-      readDeniedGates: () => readAcceptanceGates(userData, "computer-use-acceptance-denied"),
+      readGates: () => readGates(userData, "computer-use-acceptance"),
+      readDeniedGates: () => readGates(userData, "computer-use-acceptance-denied"),
       onDeniedObserved: async () => {
         const [targetAfterDenied, decoyAfterDenied] = await Promise.all([
-          readFile(targetFile, "utf8"),
-          readFile(decoyFile, "utf8"),
+          readFileFn(targetFile, "utf8"),
+          readFileFn(decoyFile, "utf8"),
         ]);
         deniedDiskSnapshots = { target: targetAfterDenied, decoy: decoyAfterDenied };
         try {
-          deniedWindowTextAfter = await readTextEditDocumentText(expectedTitles, {
+          deniedWindowTextAfter = await readTextEdit(expectedTitles, {
             pid: textEditProcess.pid,
+            platform,
+            exec,
           });
         } catch (error) {
           deniedWindowProbeError = error instanceof Error ? error.message : String(error);
@@ -1013,18 +1113,19 @@ async function runAcceptance() {
       },
       onSampleCursor: async () => {
         try {
-          return await readHostCursorPosition();
+          return await readCursor({ platform, exec });
         } catch (error) {
           cursorProbeError = error instanceof Error ? error.message : String(error);
           return null;
         }
       },
     });
-    await seedAcceptanceUserData(userData, model.port, modelCapability);
+    await seedUserData(userData, model.port, modelCapability);
 
     const executable = path.join(appPath, "Contents", "MacOS", "Aiden Agent");
-    const child = spawn(executable, [`--user-data-dir=${userData}`], {
-      env: { ...process.env, AIDEN_ANALYTICS: "0" },
+    aidenLaunched = true;
+    const child = spawnChild(executable, [`--user-data-dir=${userData}`], {
+      env: { ...env, AIDEN_ANALYTICS: "0" },
       stdio: ["ignore", "pipe", "pipe"],
     });
     if (!child.pid) throw new Error("The packaged Aiden process did not start.");
@@ -1033,24 +1134,20 @@ async function runAcceptance() {
     const stopAudit = forwardChildOutput(child);
     const deadline = Date.now() + ACCEPTANCE_TIMEOUT_MS;
 
-    console.log(`\nPackaged Computer Use acceptance is running in: ${temporary}`);
-    console.log(
-      `App ${metadata.appVersion} · cua-driver ${metadata.driverVersion} · macOS ${metadata.macOSVersion}`,
-    );
-    console.log("1. In Settings → Computers & VMs → Computer Use, turn on the global beta gate.");
-    console.log("2. Request access if macOS reports missing permissions.");
-    console.log("3. Open “Computer Use acceptance (denied)”, send a message, and choose Deny on the access card.");
-    console.log("4. Open “Computer Use acceptance” and send: “Run the packaged Computer Use acceptance sequence.”");
-    console.log("5. On the Computer Use access card, choose Allow in this chat — then keep hands off the mouse until the 30-second wait starts.");
-    console.log("6. Both TextEdit windows stay open; only the Target window changes, the Decoy stays unchanged, and the stale click is rejected.");
-    console.log("7. When the 30-second wait starts, press Stop but keep Aiden open.");
-    console.log("8. Quit Aiden normally only after this terminal confirms Stop teardown.");
-    console.log("No model data leaves this Mac; the provider listens only on 127.0.0.1.");
-    console.log(
-      "macOS TCC grants persist after this test; revoke them in System Settings if you no longer want Aiden Computer Use access.\n",
+    log("1. In Settings → Computers & VMs → Computer Use, turn on the global beta gate.");
+    log("2. Request access if macOS reports missing Accessibility or Screen Recording permissions.");
+    log("3. Open “Computer Use acceptance (denied)”, send a message, and choose Deny on the access card.");
+    log("4. Open “Computer Use acceptance” and send: “Run the packaged Computer Use acceptance sequence.”");
+    log("5. On the Computer Use access card, choose Allow in this chat — then keep hands off the mouse until the 30-second wait starts.");
+    log("6. Both TextEdit windows stay open; only the Target window changes, the Decoy stays unchanged, and the stale click is rejected.");
+    log("7. When the 30-second wait starts, press Stop but keep Aiden open.");
+    log("8. Quit Aiden normally only after this terminal confirms Stop teardown.");
+    log("No model data leaves this Mac; the provider listens only on 127.0.0.1.");
+    log(
+      "macOS TCC grants persist after this test (Accessibility and Screen Recording for Aiden Computer Use, plus Automation → TextEdit for the invoking host); revoke them in System Settings → Privacy & Security if no longer wanted.\n",
     );
 
-    stopEvidence = await waitForStopTeardown({
+    stopEvidence = await waitStop({
       appPath,
       childState,
       model,
@@ -1058,7 +1155,7 @@ async function runAcceptance() {
       deadline,
       expectedToolCount: ACCEPTANCE_TWO_WINDOW_TOOL_COUNT,
     });
-    console.log("Stop teardown observed while Aiden is still running. Quit Aiden normally now.");
+    log("Stop teardown observed while Aiden is still running. Quit Aiden normally now.");
     const exit = await beforeDeadline(
       childState.promise,
       deadline,
@@ -1069,12 +1166,12 @@ async function runAcceptance() {
       throw new Error(`Packaged Aiden did not exit normally (${exit.code ?? exit.signal}).`);
     }
     aidenProcess = null;
-    await waitForCleanComputerUseExit(appPath);
-    const helpersAfterQuit = await lingeringComputerUseProcesses(appPath);
+    await waitCleanExit(appPath);
+    const helpersAfterQuit = await listHelpers(appPath);
 
     const [savedText, decoySavedText] = await Promise.all([
-      readFile(targetFile, "utf8"),
-      readFile(decoyFile, "utf8"),
+      readFileFn(targetFile, "utf8"),
+      readFileFn(decoyFile, "utf8"),
     ]);
     const evidence = evaluateAcceptanceRequests(model.requests, {
       expectedTitles,
@@ -1145,7 +1242,7 @@ async function runAcceptance() {
       checks: checkRows,
     };
     const reportEval = evaluateRealDesktopReport(realDesktopReport);
-    console.log(`\n${renderRealDesktopReport(realDesktopReport)}`);
+    log(`\n${renderRealDesktopReport(realDesktopReport)}`);
 
     if (!reportEval.ok) {
       const checkDetails = realDesktopReport.checks
@@ -1157,13 +1254,13 @@ async function runAcceptance() {
       );
     }
 
-    await terminateTrackedProcess(textEditProcess);
+    await terminateProcess(textEditProcess);
     textEditProcess = null;
     await model.close();
     model = null;
-    await rm(temporary, { recursive: true, force: true });
+    await removeDir(temporary, { recursive: true, force: true });
 
-    await writeComputerUseAcceptanceReceipt(
+    await writeReceipt(
       JSON.stringify(
         {
           schemaVersion: 4,
@@ -1197,10 +1294,10 @@ async function runAcceptance() {
         null,
         2,
       ),
-      repositoryRoot,
+      root,
     );
     completed = true;
-    console.log(`Packaged Computer Use acceptance passed. Receipt: ${receiptPath}`);
+    log(`Packaged Computer Use acceptance passed. Receipt: ${receiptPath}`);
   } catch (error) {
     failure = error;
     if (!realDesktopReport) {
@@ -1235,23 +1332,51 @@ async function runAcceptance() {
           };
         }),
       };
-      console.log(`\n${renderRealDesktopReport(realDesktopReport)}`);
+      log(`\n${renderRealDesktopReport(realDesktopReport)}`);
     }
-    await writeFile(
-      path.join(temporary, "real-desktop-report.json"),
-      `${JSON.stringify(realDesktopReport, null, 2)}\n`,
-      "utf8",
-    ).catch(() => {});
+    try {
+      if (!temporary && !tempDirAttempted) {
+        tempDirAttempted = true;
+        await ensureTemporaryDir();
+      }
+      if (temporary) {
+        const reportPath = path.join(temporary, "real-desktop-report.json");
+        await writeFileFn(reportPath, `${JSON.stringify(realDesktopReport, null, 2)}\n`, "utf8");
+        retainedReportPath = reportPath;
+      } else {
+        evidenceRetentionError = error;
+      }
+    } catch (retentionError) {
+      evidenceRetentionError = retentionError;
+    }
   } finally {
     if (!completed) {
-      await invalidateComputerUseAcceptanceReceipt(repositoryRoot).catch(() => {});
-      const cleanupErrors = await emergencyCleanup({
-        appPath,
+      await invalidateReceipt(root).catch(() => {});
+      const cleanupErrors = await cleanup({
+        appPath: aidenLaunched ? appPath : null,
         aidenProcess,
         textEditProcess,
         model,
       });
-      console.error(`Acceptance evidence was kept for diagnosis at ${temporary}`);
+      if (retainedReportPath) {
+        logError(
+          `Acceptance evidence was kept for diagnosis at ${temporary} (report: ${retainedReportPath})`,
+        );
+      } else if (temporary) {
+        const reason =
+          evidenceRetentionError instanceof Error
+            ? evidenceRetentionError.message
+            : String(evidenceRetentionError ?? "unknown error");
+        logError(
+          `Acceptance evidence directory exists at ${temporary}, but real-desktop-report.json could not be written (${reason}).`,
+        );
+      } else {
+        const reason =
+          evidenceRetentionError instanceof Error
+            ? evidenceRetentionError.message
+            : String(evidenceRetentionError ?? "unknown error");
+        logError(`Acceptance evidence could not be retained on disk (${reason}).`);
+      }
       if (cleanupErrors.length > 0) {
         failure = new AggregateError(
           [failure, ...cleanupErrors].filter(Boolean),

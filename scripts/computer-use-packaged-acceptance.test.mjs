@@ -1,7 +1,8 @@
 /* global fetch */
 
 import assert from "node:assert/strict";
-import { readFile } from "node:fs/promises";
+import { mkdtemp, readFile, rm } from "node:fs/promises";
+import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
@@ -41,12 +42,14 @@ import {
   bindOwnedProcesses,
   computerUseHelperExecutables,
   emergencyCleanup,
+  isAutomationPermissionDeniedError,
   launchTrackedApplicationProcess,
   readHostCursorPosition,
   readHostMacOSVersion,
   readPackagedMetadata,
   readTextEditDocumentText,
   resolveTextEditExecutable,
+  runAcceptance,
   startAcceptanceModel,
   terminateLingeringComputerUseProcesses,
   waitForCleanComputerUseExit,
@@ -1297,5 +1300,338 @@ test("two-window and denied-chat loopback sequence samples cursor around backgro
     assert.equal(evalResult.ok, true);
   } finally {
     await model.close();
+  }
+});
+
+test("TextEdit Automation probe allows full decision timeout, fails closed immediately on denial, and classifies as environment problem", async () => {
+  const execTimeouts = [];
+  let attempts = 0;
+  let clock = 0;
+  const text = await waitForTextEditDocumentText(["Aiden CUA Target.txt"], {
+    pid: 4242,
+    platform: "darwin",
+    timeoutMs: 120_000,
+    pollMs: 150,
+    now: () => clock,
+    sleep: async (ms) => {
+      clock += ms;
+    },
+    exec: async (_bin, _args, options) => {
+      execTimeouts.push(options?.timeout);
+      attempts += 1;
+      if (attempts === 1) throw new Error("TextEdit document not found: Aiden CUA Target.txt");
+      return { stdout: JSON.stringify({ text: ACCEPTANCE_TARGET_INITIAL_TEXT }) };
+    },
+  });
+  assert.equal(text, ACCEPTANCE_TARGET_INITIAL_TEXT);
+  assert.equal(execTimeouts[0], 120_000);
+
+  let deniedAttempts = 0;
+  const deniedErr = Object.assign(new Error("Command failed: osascript"), {
+    stderr: "execution error: Not authorized to send Apple events to TextEdit. (-1743)\n",
+  });
+  assert.equal(isAutomationPermissionDeniedError(deniedErr), true);
+
+  let caught = null;
+  try {
+    await waitForTextEditDocumentText(["Aiden CUA Target.txt"], {
+      pid: 4242,
+      platform: "darwin",
+      timeoutMs: 120_000,
+      pollMs: 150,
+      now: () => clock,
+      sleep: async () => {
+        throw new Error("sleep must not be called after Automation denial");
+      },
+      exec: async () => {
+        deniedAttempts += 1;
+        throw deniedErr;
+      },
+    });
+  } catch (error) {
+    caught = error;
+  }
+  assert.ok(caught instanceof Error);
+  assert.equal(deniedAttempts, 1);
+  assert.match(caught.message, /Automation permission to control TextEdit was denied/u);
+  assert.match(caught.message, /Privacy & Security → Automation/u);
+  assert.equal(classifyAcceptanceError(caught), "environment problem");
+  assert.equal(
+    classifyAcceptanceError(
+      new Error("Expected exactly one unpacked Aiden macOS package, found 0. Pass an explicit .app path."),
+    ),
+    "environment problem",
+  );
+  assert.equal(
+    classifyAcceptanceError(new Error("EACCES: permission denied, mkdtemp '/tmp/aiden-cua-acceptance-xxx'")),
+    "environment problem",
+  );
+});
+
+async function runAcceptanceForTest(overrides = {}) {
+  const logs = [];
+  const errorLogs = [];
+  const invalidatedRoots = [];
+  const cleanupCalls = [];
+  let tempCounter = 0;
+  const scratchRoot = await mkdtemp(path.join(os.tmpdir(), "aiden-cua-run-test-"));
+  const defaultMetadata = {
+    appVersion: "0.70.0",
+    driverVersion: CUA_DRIVER_ARTIFACT_PROVENANCE.version,
+    macOSVersion: "15.4.1",
+  };
+  let error = null;
+  try {
+    await runAcceptance({
+      env: { AIDEN_COMPUTER_USE_ACCEPTANCE: "1" },
+      argv: ["node", "scripts/computer-use-packaged-acceptance.mjs"],
+      platform: "darwin",
+      root: path.join(scratchRoot, "repo"),
+      tmpdir: scratchRoot,
+      readMetadata: async ({ appPath }) =>
+        appPath ? { ...defaultMetadata, appVersion: "0.70.0-packaged" } : defaultMetadata,
+      invalidateReceipt: async (rootArg) => {
+        invalidatedRoots.push(rootArg);
+      },
+      resolveReceiptPath: (rootArg) =>
+        path.join(rootArg, "build", "computer-use-acceptance-receipt.json"),
+      discoverApp: async () => path.join(scratchRoot, "Aiden Agent.app"),
+      verifyPackage: async () => {},
+      checkNoRunningAiden: async () => {},
+      readArtifactIdentity: async () => ({ cdhash: "abc", appAsarSha256: "def" }),
+      createTempDir: async (prefix) => {
+        tempCounter += 1;
+        return mkdtemp(`${prefix}${tempCounter}-`);
+      },
+      cleanup: async (state) => {
+        cleanupCalls.push(state);
+        return [];
+      },
+      log: (line) => logs.push(String(line)),
+      logError: (line) => errorLogs.push(String(line)),
+      ...overrides,
+    });
+  } catch (caught) {
+    error = caught;
+  }
+  return {
+    error,
+    logs,
+    errorLogs,
+    invalidatedRoots,
+    cleanupCalls,
+    scratchRoot,
+    cleanupScratch: () => rm(scratchRoot, { recursive: true, force: true }),
+  };
+}
+
+test("runAcceptance skips receipt invalidation and temp dirs when unsupported or not opted in", async () => {
+  const unsupported = await runAcceptanceForTest({
+    platform: "linux",
+    readMetadata: async () => ({
+      appVersion: "0.70.0",
+      driverVersion: CUA_DRIVER_ARTIFACT_PROVENANCE.version,
+      macOSVersion: "unavailable (linux)",
+    }),
+  });
+  try {
+    assert.ok(unsupported.error instanceof Error);
+    assert.match(unsupported.error.message, /requires macOS/u);
+    assert.equal(unsupported.invalidatedRoots.length, 0);
+    assert.equal(unsupported.errorLogs.length, 0);
+    assert.match(unsupported.logs.join("\n"), /Overall:\*\* unsupported/u);
+  } finally {
+    await unsupported.cleanupScratch();
+  }
+
+  const unopted = await runAcceptanceForTest({ env: {} });
+  try {
+    assert.ok(unopted.error instanceof Error);
+    assert.match(unopted.error.message, /Automation \(TextEdit\)/u);
+    assert.match(unopted.error.message, /AIDEN_COMPUTER_USE_ACCEPTANCE=1/u);
+    assert.equal(unopted.invalidatedRoots.length, 0);
+    assert.equal(unopted.errorLogs.length, 0);
+  } finally {
+    await unopted.cleanupScratch();
+  }
+});
+
+test("runAcceptance prints Automation notice before TextEdit probe and fails closed on Automation denial", async () => {
+  const events = [];
+  let waitTimeoutSeen = null;
+  const run = await runAcceptanceForTest({
+    launchTextEdit: async () => {
+      events.push("launchTextEdit");
+      return { pid: 9001, executable: "/System/Applications/TextEdit.app/Contents/MacOS/TextEdit" };
+    },
+    waitForTextEdit: async (_titles, options) => {
+      events.push("waitForTextEdit");
+      waitTimeoutSeen = options?.timeoutMs;
+      throw new Error(
+        "macOS Automation permission to control TextEdit was denied (Not authorized to send Apple events to TextEdit. (-1743)). Allow your invoking host app to control TextEdit in System Settings → Privacy & Security → Automation.",
+      );
+    },
+    log: (line) => {
+      const text = String(line);
+      if (text.includes("macOS Automation")) events.push("automationNotice");
+      events.push(`log:${text}`);
+    },
+  });
+  try {
+    assert.ok(run.error instanceof Error);
+    assert.match(run.error.message, /Automation permission to control TextEdit was denied/u);
+    assert.ok(waitTimeoutSeen >= 60_000, `expected >= 60s Automation wait, got ${waitTimeoutSeen}`);
+    const noticeIndex = events.indexOf("automationNotice");
+    const probeIndex = events.indexOf("waitForTextEdit");
+    assert.ok(noticeIndex >= 0 && probeIndex > noticeIndex, "Automation notice must print before TextEdit probe");
+    assert.equal(run.invalidatedRoots.length, 2);
+    assert.equal(run.cleanupCalls.length, 1);
+    assert.equal(run.cleanupCalls[0].textEditProcess?.pid, 9001);
+    assert.equal(run.cleanupCalls[0].appPath, null);
+    const reportPathMatch = run.errorLogs.join("\n").match(/\(report: ([^)]+real-desktop-report\.json)\)/u);
+    assert.ok(reportPathMatch, `expected truthful report path in stderr: ${run.errorLogs.join("\n")}`);
+    const retainedReport = JSON.parse(await readFile(reportPathMatch[1], "utf8"));
+    const evaluated = evaluateRealDesktopReport(retainedReport);
+    assert.equal(evaluated.overallStatus, "environment problem");
+  } finally {
+    await run.cleanupScratch();
+  }
+});
+
+test("runAcceptance routes all supported-host preflight failures through report emission, retention, and receipt invalidation", async () => {
+  let invalidationAttempts = 0;
+  const preflightCases = [
+    {
+      name: "discoverApp",
+      expectedStatus: "environment problem",
+      override: {
+        discoverApp: async () => {
+          throw new Error(
+            "Expected exactly one unpacked Aiden macOS package, found 0. Pass an explicit .app path.",
+          );
+        },
+      },
+    },
+    {
+      name: "verifyPackage",
+      expectedStatus: "failed",
+      override: {
+        verifyPackage: async () => {
+          throw new Error("Packaged cua-driver hash mismatch.");
+        },
+      },
+    },
+    {
+      name: "checkNoRunningAiden",
+      expectedStatus: "environment problem",
+      override: {
+        checkNoRunningAiden: async () => {
+          throw new Error("Quit every running Aiden window before starting the isolated acceptance run.");
+        },
+      },
+    },
+    {
+      name: "readArtifactIdentity",
+      expectedStatus: "failed",
+      override: {
+        readArtifactIdentity: async () => {
+          throw new Error("Could not read packaged artifact CDHash.");
+        },
+      },
+    },
+    {
+      name: "postPackageMetadata",
+      expectedStatus: "failed",
+      override: {
+        readMetadata: async ({ appPath }) => {
+          if (appPath) throw new Error("Packaged provenance JSON is corrupt.");
+          return {
+            appVersion: "0.70.0",
+            driverVersion: CUA_DRIVER_ARTIFACT_PROVENANCE.version,
+            macOSVersion: "15.4.1",
+          };
+        },
+      },
+    },
+    {
+      name: "invalidateReceipt",
+      expectedStatus: "failed",
+      override: {
+        invalidateReceipt: async () => {
+          invalidationAttempts += 1;
+          throw new Error("Refusing package path with a symlink component.");
+        },
+      },
+    },
+  ];
+
+  for (const testCase of preflightCases) {
+    const run = await runAcceptanceForTest(testCase.override);
+    try {
+      assert.ok(run.error instanceof Error, `${testCase.name} should reject`);
+      if (testCase.name === "invalidateReceipt") {
+        assert.equal(invalidationAttempts, 2);
+      } else {
+        assert.equal(run.invalidatedRoots.length, 2, `${testCase.name} should invalidate receipt`);
+      }
+      assert.match(
+        run.logs.join("\n"),
+        new RegExp(`Overall:\\*\\* ${testCase.expectedStatus}`, "u"),
+        `${testCase.name} should print structured report`,
+      );
+      assert.equal(run.cleanupCalls.length, 1);
+      assert.equal(
+        run.cleanupCalls[0].appPath,
+        null,
+        `${testCase.name} preflight must not reap helpers from another running session`,
+      );
+      const reportPathMatch = run.errorLogs
+        .join("\n")
+        .match(/\(report: ([^)]+real-desktop-report\.json)\)/u);
+      assert.ok(reportPathMatch, `${testCase.name} must log truthful retained report path`);
+      const retainedReport = JSON.parse(await readFile(reportPathMatch[1], "utf8"));
+      const evaluated = evaluateRealDesktopReport(retainedReport);
+      assert.equal(evaluated.overallStatus, testCase.expectedStatus);
+      assert.equal(retainedReport.checks.length, REAL_DESKTOP_CHECK_IDS.length);
+    } finally {
+      await run.cleanupScratch();
+    }
+  }
+
+  // mkdtemp failure: still prints structured report with packaged metadata and never fabricates a path on disk.
+  const mkdtempFailure = await runAcceptanceForTest({
+    createTempDir: async () => {
+      throw new Error("EACCES: permission denied, mkdtemp '/tmp/aiden-cua-acceptance-'");
+    },
+  });
+  try {
+    assert.ok(mkdtempFailure.error instanceof Error);
+    assert.equal(mkdtempFailure.invalidatedRoots.length, 2);
+    assert.match(mkdtempFailure.logs.join("\n"), /App version:\*\* 0\.70\.0-packaged/u);
+    assert.match(mkdtempFailure.logs.join("\n"), /Overall:\*\* environment problem/u);
+    const stderrText = mkdtempFailure.errorLogs.join("\n");
+    assert.match(stderrText, /could not be retained on disk/u);
+    assert.doesNotMatch(stderrText, /kept for diagnosis at/u);
+  } finally {
+    await mkdtempFailure.cleanupScratch();
+  }
+
+  // Report write failure: truthfully reports that real-desktop-report.json could not be written.
+  const writeFailure = await runAcceptanceForTest({
+    discoverApp: async () => {
+      throw new Error("Expected exactly one unpacked Aiden macOS package, found 0.");
+    },
+    writeFileFn: async () => {
+      throw new Error("ENOSPC: no space left on device");
+    },
+  });
+  try {
+    assert.ok(writeFailure.error instanceof Error);
+    assert.match(writeFailure.logs.join("\n"), /Overall:\*\* environment problem/u);
+    const stderrText = writeFailure.errorLogs.join("\n");
+    assert.match(stderrText, /real-desktop-report\.json could not be written \(ENOSPC/u);
+    assert.doesNotMatch(stderrText, /kept for diagnosis/u);
+  } finally {
+    await writeFailure.cleanupScratch();
   }
 });
