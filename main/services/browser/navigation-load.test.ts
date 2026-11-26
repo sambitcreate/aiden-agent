@@ -8,19 +8,26 @@ const NEW = "http://127.0.0.1:4000/held";
 
 /**
  * A guest whose loadURL starts its main-frame navigation synchronously, as
- * Chromium does, and whose own promise settles as Electron's does: on the first
- * main-frame finish or failure after the call, whichever document sent it.
+ * Chromium does unless a beforeunload handler defers it, and whose own promise
+ * settles as Electron's does: on the first main-frame finish, failure or stop
+ * after the call, whichever document sent it.
  */
 class FakeGuest extends EventEmitter {
-  loadURL(url: string, startsNavigation = true): Promise<void> {
+  loading = false;
+  defersStart = false;
+  isLoading() { return this.loading; }
+  loadURL(url: string, startsNavigation = !this.defersStart): Promise<void> {
     const native = new Promise<void>((resolve, reject) => {
       this.once("did-finish-load", () => resolve());
       this.once("did-fail-load", (_event, code: number, description: string, failedUrl: string) =>
         reject(new Error(`${description} (${code}) loading '${failedUrl}'`)));
+      this.once("did-stop-loading", () =>
+        reject(Object.assign(new Error(`ERR_FAILED (-2) loading '${url}'`), { errno: -2 })));
     });
     if (startsNavigation) this.emit("did-start-navigation", {}, url, false, true);
     return native;
   }
+  stopLoading() { this.loading = false; this.emit("did-stop-loading"); }
   commit(url = NEW) { this.emit("did-navigate", {}, url, 200, "OK"); }
   finish() { this.emit("did-finish-load", {}); }
   fail(code: number, description: string, url: string, isMainFrame = true) {
@@ -46,6 +53,42 @@ test("replacing a still-loading document waits for the requested page, not the r
   assert.equal(await outcome(load), "pending", "a committed page has not finished loading yet");
   guest.finish();
   assert.equal(await outcome(load), "loaded");
+});
+
+test("a still-loading document that completes before a deferred start cannot settle the new load", async () => {
+  for (const completion of ["finish", "fail", "stop"] as const) {
+    const guest = new FakeGuest();
+    guest.loading = true;
+    guest.defersStart = true; // beforeunload runs before the navigation starts
+    const load = loadBrowserUrl(guest, NEW);
+    if (completion === "finish") guest.finish();
+    if (completion === "fail") guest.fail(-102, "ERR_CONNECTION_REFUSED", OLD);
+    guest.stopLoading();
+    assert.equal(await outcome(load), "pending", completion);
+    guest.loading = true;
+    guest.emit("did-start-navigation", {}, NEW, false, true);
+    guest.commit();
+    guest.finish();
+    assert.equal(await outcome(load), "loaded", completion);
+  }
+});
+
+test("a deferred load still fails on its own stop, and on a stop with nothing else loading", async () => {
+  const guest = new FakeGuest();
+  guest.loading = true;
+  guest.defersStart = true;
+  const load = loadBrowserUrl(guest, NEW);
+  guest.stopLoading(); // the replaced document's
+  guest.loading = true;
+  guest.emit("did-start-navigation", {}, NEW, false, true);
+  guest.stopLoading(); // this load's, before it committed
+  assert.equal(await outcome(load), `Error: ERR_FAILED (-2) loading '${NEW}'`);
+
+  const idle = new FakeGuest();
+  idle.defersStart = true;
+  const stopped = loadBrowserUrl(idle, NEW);
+  idle.stopLoading();
+  assert.equal(await outcome(stopped), `Error: ERR_FAILED (-2) loading '${NEW}'`);
 });
 
 test("the requested page's own failures still reject", async () => {
