@@ -21,13 +21,16 @@ enum AidenTabChrome: Equatable {
     }
 
     /// Whether the keyboard takes the bottom edge, so the dock steps aside:
-    /// a keyboard docked along the bottom of the screen and taller than a
-    /// hardware keyboard's shortcut bar. A floating or undocked keyboard, the
+    /// a keyboard docked along the bottom of the screen, as wide as the screen
+    /// and taller than a hardware keyboard's shortcut bar. A floating or
+    /// undocked keyboard (which can sit against any edge, the bottom too), the
     /// shortcut bar alone, or a keyboard off screen leave the dock where it is.
     static func keyboardTakesBottomEdge(keyboard: CGRect, screen: CGRect) -> Bool {
         let visible = keyboard.intersection(screen)
         guard !visible.isNull else { return false }
-        return visible.maxY >= screen.maxY - 1 && visible.height >= minimumKeyboardHeight
+        return visible.maxY >= screen.maxY - 1
+            && visible.width >= screen.width - 1
+            && visible.height >= minimumKeyboardHeight
     }
 
     /// Taller than a shortcut or predictive bar, shorter than any on-screen keyboard.

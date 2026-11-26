@@ -236,6 +236,9 @@ final class AidenShellIATests: XCTestCase {
             keyboard: CGRect(x: 50, y: 300, width: 300, height: 250), screen: screen),
             "A floating keyboard hid the dock")
         XCTAssertFalse(AidenTabChrome.keyboardTakesBottomEdge(
+            keyboard: CGRect(x: 50, y: 874 - 250, width: 300, height: 250), screen: screen),
+            "A floating keyboard against the bottom edge hid the dock")
+        XCTAssertFalse(AidenTabChrome.keyboardTakesBottomEdge(
             keyboard: CGRect(x: 0, y: 874, width: 402, height: 336), screen: screen),
             "A keyboard below the screen hid the dock")
     }

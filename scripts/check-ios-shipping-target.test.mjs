@@ -155,6 +155,7 @@ const appSourcePaths = [
   "AidenOnTheGo/Features/Shell/AidenBotsTabView.swift",
   "AidenOnTheGo/Features/Shell/AidenSearchResultsView.swift",
   "AidenOnTheGo/Features/Shell/AidenDrawerView.swift",
+  "AidenOnTheGo/Features/Shell/AidenDock.swift",
   "AidenOnTheGo/Features/Shell/AidenChatsTabView.swift",
   "AidenOnTheGo/Features/Shell/AidenWorkspacesTabView.swift",
   "AidenOnTheGo/Features/Remote/Hosts/AidenHostConnection.swift",
