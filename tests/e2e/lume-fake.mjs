@@ -114,9 +114,14 @@ const VALUE_OPTIONS = new Set([
   "--log-file",
   "--timeout",
   "--os",
+  "--cpu",
+  "--memory",
+  "--disk-size",
   "--ipsw",
   "--unattended",
   "--display",
+  "--mount",
+  "--disk-path",
   "--user",
   "--password",
   "--network",
@@ -199,6 +204,10 @@ function details(storage, name, vm) {
   return {
     ...template,
     name,
+    os: vm.os ?? template.os,
+    ...(vm.cpuCount !== undefined ? { cpuCount: vm.cpuCount } : {}),
+    ...(vm.memorySize !== undefined ? { memorySize: vm.memorySize } : {}),
+    ...(vm.display !== undefined ? { display: vm.display } : {}),
     status: stale ? "provisioning (stale)" : running ? "running" : "stopped",
     provisioningOperation: stale ? "unattended_setup" : null,
     vncUrl: running && !stale ? `vnc://:${vm.vncPassword}@${host}:${vm.port}` : null,
@@ -304,8 +313,19 @@ async function main() {
   switch (op) {
     case "create": {
       const [, name] = positionals;
-      if (options["--os"] !== "macOS" || options["--unattended"] !== "tahoe") fail("unexpected create options", 74);
-      if (!options["--ipsw"] || !existsSync(options["--ipsw"])) fail("restore image not found");
+      const osKind = (options["--os"] ?? "macOS").toLowerCase();
+      if (osKind !== "macos" && osKind !== "linux") fail(`Unsupported operating system: ${options["--os"]}`, 74);
+      if (osKind === "linux") {
+        if (options["--unattended"] !== undefined) fail("--unattended is only supported for macOS VMs", 74);
+        if (options["--ipsw"] !== undefined) fail("IPSW path not supported for Linux VM", 74);
+        if (options["--disk-size"]) {
+          const gb = Number(/^(\d+)(?:GB)?$/iu.exec(options["--disk-size"])?.[1] ?? "0");
+          if (gb < 10) fail(`Disk size ${gb}GB is too small. Minimum recommended size for linux is 10GB.`, 74);
+        }
+      } else {
+        if (options["--unattended"] !== "tahoe") fail("unexpected create options", 74);
+        if (!options["--ipsw"] || !existsSync(options["--ipsw"])) fail("restore image not found");
+      }
       if (state.vms[name]) fail(`Virtual machine already exists with name: ${name}`);
       // `--unattended` boots the new VM to drive Setup Assistant, so it needs one of
       // the macOS VM places and host free space like `run` does.
@@ -314,12 +334,21 @@ async function main() {
         process.exit(1);
       }
       const createLimit = Number(process.env.AIDEN_FAKE_LUME_LIMIT ?? "0");
-      if (createLimit > 0 && Object.values(state.vms).filter(isRunning).length >= createLimit) {
+      if (osKind === "macos" && createLimit > 0 && Object.values(state.vms).filter(isRunning).length >= createLimit) {
         process.stderr.write(readFileSync(path.join(fixtures, "lume-error-vm-limit.txt"), "utf8"));
         process.exit(1);
       }
       const count = Object.keys(state.vms).length;
+      const parseGb = (raw) => {
+        if (!raw) return undefined;
+        const match = /^(\d+)(?:GB)?$/iu.exec(raw);
+        return match ? Number(match[1]) * 1024 ** 3 : undefined;
+      };
       state.vms[name] = {
+        os: osKind === "linux" ? "linux" : "macOS",
+        ...(options["--cpu"] ? { cpuCount: Number(options["--cpu"]) } : {}),
+        ...(parseGb(options["--memory"]) ? { memorySize: parseGb(options["--memory"]) } : {}),
+        ...(options["--display"] ? { display: options["--display"] } : {}),
         status: "stopped",
         ip: `192.168.64.${10 + count}`,
         mac: `a6:4f:2c:9e:13:${String(10 + count)}`,
@@ -346,6 +375,10 @@ async function main() {
       }
       const count = Object.keys(state.vms).length;
       state.vms[target] = {
+        ...(vm.os ? { os: vm.os } : {}),
+        ...(vm.cpuCount !== undefined ? { cpuCount: vm.cpuCount } : {}),
+        ...(vm.memorySize !== undefined ? { memorySize: vm.memorySize } : {}),
+        ...(vm.display !== undefined ? { display: vm.display } : {}),
         status: "stopped",
         ip: `192.168.64.${10 + count}`,
         mac: `a6:4f:2c:9e:14:${String(10 + count)}`,
@@ -366,6 +399,19 @@ async function main() {
       }
       if (flags.has("--clipboard")) {
         fail("'--clipboard' cannot be combined with '--no-clipboard-device'.", 75);
+      }
+      if (options["--mount"] !== undefined) {
+        if ((vm.os ?? "macOS").toLowerCase() !== "linux") {
+          fail("Mounting disk images is not supported for macOS VMs.", 75);
+        }
+        if (!path.isAbsolute(options["--mount"]) || !existsSync(options["--mount"])) {
+          fail(`Mount file not found: ${options["--mount"]}`, 75);
+        }
+      }
+      if (options["--disk-path"] !== undefined) {
+        if (!path.isAbsolute(options["--disk-path"]) || !existsSync(options["--disk-path"])) {
+          fail(`Disk image not found: ${options["--disk-path"]}`, 75);
+        }
       }
       const shared = options["--shared-dir"] ?? "";
       if (!shared.endsWith(":rw") || !path.isAbsolute(shared.slice(0, -3)) || !existsSync(shared.slice(0, -3))) {

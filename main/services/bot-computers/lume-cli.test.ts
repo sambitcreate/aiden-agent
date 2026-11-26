@@ -21,6 +21,7 @@ function option(args: string[], name: string): string | undefined {
 test("every operation names Aiden's storage; clone names it as source and destination", () => {
   const commands: LumeCommand[] = [
     { op: "create", name: BOT_COMPUTER_BASE_VM, ipsw: "/tmp/restore.ipsw", unattended: "tahoe" },
+    { op: "create", os: "linux", name: BOT_COMPUTER_BASE_VM, cpu: 4, memoryGb: 4, diskSizeGb: 24, display: "1280x800" },
     { op: "run", name: botVm, vncPassword: "Zq7Tn2Lw9Rk4Hm6X", sharedDir: "/Users/person/Bots/ada/Computer" },
     { op: "get", name: botVm },
     { op: "list" },
@@ -52,6 +53,49 @@ test("run is detached and headless without host audio or clipboard devices, with
   assert.equal(option(args, "--log-file"), "/tmp/ada.log");
 });
 
+test("Linux create omits macOS-only flags and run accepts --mount and --disk-path", () => {
+  const create = lumeArgs(
+    { op: "create", os: "linux", name: BOT_COMPUTER_BASE_VM, cpu: 4, memoryGb: 4, diskSizeGb: 24, display: "1280x800" },
+    storage,
+  );
+  assert.deepEqual(create, [
+    "create",
+    BOT_COMPUTER_BASE_VM,
+    "--os",
+    "linux",
+    "--cpu",
+    "4",
+    "--memory",
+    "4GB",
+    "--disk-size",
+    "24GB",
+    "--display",
+    "1280x800",
+    "--storage",
+    storage,
+  ]);
+  assert.equal(create.includes("--ipsw"), false);
+  assert.equal(create.includes("--unattended"), false);
+
+  const run = lumeArgs(
+    {
+      op: "run",
+      name: BOT_COMPUTER_BASE_VM,
+      vncPassword: "Zq7Tn2Lw9Rk4Hm6X",
+      sharedDir: "/Users/person/Bots/base/Computer",
+      mount: "/tmp/cidata.iso",
+      diskPath: "/tmp/debian.raw",
+      logFile: "/tmp/base.log",
+    },
+    storage,
+  );
+  assert.ok(run.includes("--no-audio-device"));
+  assert.ok(run.includes("--no-clipboard-device"));
+  assert.equal(option(run, "--mount"), "/tmp/cidata.iso");
+  assert.equal(option(run, "--disk-path"), "/tmp/debian.raw");
+  assert.equal(option(run, "--log-file"), "/tmp/base.log");
+});
+
 test("delete always passes --force and ssh puts its options before the VM name", () => {
   assert.ok(lumeArgs({ op: "delete", name: botVm }, storage).includes("--force"));
   const ssh = lumeArgs({ op: "ssh", name: botVm, command: "echo hi; ls ~", timeoutSeconds: 20 }, storage);
@@ -68,6 +112,11 @@ test("a shared folder with a colon, a relative path or a foreign VM name is refu
   // A `name:tag` reaching `lume run` would make it pull from a registry.
   refuse({ op: "run", name: "macos-sequoia:latest", vncPassword: "Zq7Tn2Lw9Rk4Hm6X", sharedDir: "/tmp/x" });
   refuse({ op: "create", name: BOT_COMPUTER_BASE_VM, ipsw: "latest", unattended: "tahoe" });
+  refuse({ op: "create", os: "linux", name: BOT_COMPUTER_BASE_VM, diskSizeGb: 8 });
+  refuse({ op: "create", os: "linux", name: BOT_COMPUTER_BASE_VM, memoryGb: 1 });
+  refuse({ op: "create", os: "linux", name: BOT_COMPUTER_BASE_VM, display: "wide" });
+  refuse({ op: "run", name: botVm, vncPassword: "Zq7Tn2Lw9Rk4Hm6X", sharedDir: "/tmp/x", mount: "relative/cidata.iso" });
+  refuse({ op: "run", name: botVm, vncPassword: "Zq7Tn2Lw9Rk4Hm6X", sharedDir: "/tmp/x", diskPath: "relative/disk.raw" });
   refuse({ op: "list" }, "relative/vms");
   refuse({ op: "serve" } as unknown as LumeCommand);
   refuse({ op: "cp" } as unknown as LumeCommand);
