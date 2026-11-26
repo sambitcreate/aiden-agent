@@ -219,8 +219,8 @@ export function BotsArt() {
 }
 
 /**
- * A Bot's Computer tab: the status line and Take over above its own macOS
- * screen, with the Bot's avatar resting where it last clicked.
+ * A Bot's Computer tab: the status line and Take over above its own Linux
+ * (XFCE) screen, with the Bot's avatar resting where it last clicked.
  */
 export function BotComputersArt() {
   return (
@@ -237,15 +237,21 @@ export function BotComputersArt() {
         <ArtIcon icon={PictureInPicture2} />
       </div>
       <div className="oa-bc-screen">
-        <div className="oa-bc-menubar">
+        <div className="oa-bc-panel">
+          <span className="oa-bc-appmenu" aria-hidden />
+          <Bar width={26} tone="soft" />
+          <span className="oa-grow" />
           <Bar width={16} tone="ink" />
-          <Bar width={22} tone="soft" />
-          <Bar width={18} tone="soft" />
         </div>
         <div className="oa-bc-guest" style={{ left: 12, top: 20, width: 118 }}>
           <div className="oa-bc-guest-head oa-separator-bottom">
-            <TrafficLights />
-            <Bar width={36} tone="soft" style={{ marginLeft: 4 }} />
+            <Bar width={40} tone="soft" />
+            <span className="oa-grow" />
+            <span className="oa-bc-win-controls" aria-hidden>
+              <i />
+              <i />
+              <i />
+            </span>
           </div>
           <div className="oa-stack" style={{ gap: 4, padding: "6px 8px 7px" }}>
             <Bar width="82%" />

@@ -173,7 +173,7 @@ runs.
 
 Computer Use and Apple Foundation Models are not included in the Linux
 build. Their settings, navigation, onboarding promises, helper bundles, and
-chat controls are omitted. Bot computers (a macOS VM per Bot) need a Mac with
+chat controls are omitted. Bot computers (a Debian Linux VM per Bot) need a Mac with
 Apple silicon, so on Linux the Settings → Computers & VMs → Bot computers page, the Bot
 profile's Computer section, the Bot panel's Computer tab and the onboarding
 tour's Bot computers tile do not appear, and no Lume code runs. Connectors

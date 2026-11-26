@@ -12,17 +12,14 @@ export interface LumeInvocation {
 /**
  * Every Lume operation Aiden runs. There is deliberately no `serve` (an
  * unauthenticated HTTP API on localhost:7777), `pull`, `update`, `push`,
- * `ipsw` or `setup`: none of them can be expressed.
+ * `ipsw`, `cp` or `setup`: none of them can be expressed.
  *
  * `ssh` uses Lume's default preset credentials without ever placing a rotated
  * secret on argv, so it applies only before guest SSH hardening turns off
- * password login; post-hardening commands and file transfers use Aiden's own
- * key-authenticated, host-key-pinned `/usr/bin/ssh` or the shared folder.
- * `lume cp` is deliberately omitted because Aiden has no caller for it and
- * post-hardening copies never use Lume's preset SSH password.
+ * password login; post-hardening commands and file copies use Aiden's own
+ * key-authenticated, host-key-pinned `/usr/bin/ssh`.
  */
 export type LumeCommand =
-  | { op: "create"; os?: "macOS"; name: string; ipsw: string; unattended: "tahoe" }
   | {
       op: "create";
       os: "linux";
@@ -87,50 +84,37 @@ export function lumeArgs(command: LumeCommand, storage: string): string[] {
   requireAbsolute(storage, "Aiden's VM storage");
   switch (command.op) {
     case "create": {
-      if (command.os === "linux") {
-        const args = ["create", requireName(command.name), "--os", "linux"];
-        if (command.cpu !== undefined) {
-          if (!Number.isSafeInteger(command.cpu) || command.cpu < 1 || command.cpu > 32) {
-            throw new BotComputerError("invalid", "Linux VM CPU count must be a whole number between 1 and 32.");
-          }
-          args.push("--cpu", String(command.cpu));
-        }
-        if (command.memoryGb !== undefined) {
-          if (!Number.isSafeInteger(command.memoryGb) || command.memoryGb < 2 || command.memoryGb > 128) {
-            throw new BotComputerError("invalid", "Linux VM memory must be a whole number of GB (at least 2 GB).");
-          }
-          args.push("--memory", `${command.memoryGb}GB`);
-        }
-        if (command.diskSizeGb !== undefined) {
-          // Lume 0.8.0 enforces a 10 GB minimum for Linux VMs (Create.swift).
-          if (!Number.isSafeInteger(command.diskSizeGb) || command.diskSizeGb < 10 || command.diskSizeGb > 1024) {
-            throw new BotComputerError("invalid", "Linux VM disk size must be a whole number of GB (at least 10 GB).");
-          }
-          args.push("--disk-size", `${command.diskSizeGb}GB`);
-        }
-        if (command.display !== undefined) {
-          if (!/^\d{3,4}x\d{3,4}$/u.test(command.display)) {
-            throw new BotComputerError("invalid", "VM display resolution must be WIDTHxHEIGHT.");
-          }
-          args.push("--display", command.display);
-        }
-        args.push("--storage", storage);
-        return args;
+      if (command.os !== "linux") {
+        throw new BotComputerError("invalid", "Only Linux Bot computers can be created.");
       }
-      const ipsw = requireAbsolute(command.ipsw, "The restore image");
-      if (command.unattended !== "tahoe") throw new BotComputerError("invalid", "Unknown unattended preset.");
-      return [
-        "create",
-        requireName(command.name),
-        "--os",
-        "macOS",
-        "--ipsw",
-        ipsw,
-        "--unattended",
-        command.unattended,
-        "--storage",
-        storage,
-      ];
+      const args = ["create", requireName(command.name), "--os", "linux"];
+      if (command.cpu !== undefined) {
+        if (!Number.isSafeInteger(command.cpu) || command.cpu < 1 || command.cpu > 32) {
+          throw new BotComputerError("invalid", "Linux VM CPU count must be a whole number between 1 and 32.");
+        }
+        args.push("--cpu", String(command.cpu));
+      }
+      if (command.memoryGb !== undefined) {
+        if (!Number.isSafeInteger(command.memoryGb) || command.memoryGb < 2 || command.memoryGb > 128) {
+          throw new BotComputerError("invalid", "Linux VM memory must be a whole number of GB (at least 2 GB).");
+        }
+        args.push("--memory", `${command.memoryGb}GB`);
+      }
+      if (command.diskSizeGb !== undefined) {
+        // Lume 0.8.0 enforces a 10 GB minimum for Linux VMs (Create.swift).
+        if (!Number.isSafeInteger(command.diskSizeGb) || command.diskSizeGb < 10 || command.diskSizeGb > 1024) {
+          throw new BotComputerError("invalid", "Linux VM disk size must be a whole number of GB (at least 10 GB).");
+        }
+        args.push("--disk-size", `${command.diskSizeGb}GB`);
+      }
+      if (command.display !== undefined) {
+        if (!/^\d{3,4}x\d{3,4}$/u.test(command.display)) {
+          throw new BotComputerError("invalid", "VM display resolution must be WIDTHxHEIGHT.");
+        }
+        args.push("--display", command.display);
+      }
+      args.push("--storage", storage);
+      return args;
     }
     case "clone":
       return [

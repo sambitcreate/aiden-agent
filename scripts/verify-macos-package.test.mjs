@@ -1,4 +1,4 @@
-/* global Buffer */
+/* global Buffer, URL */
 
 import assert from "node:assert/strict";
 import {
@@ -60,7 +60,9 @@ import {
   assertLumeArchitecture,
   assertLumeEntitlements,
   verifyPackagedLume,
+  verifyPackagedLinuxGuestDriver,
 } from "./verify-macos-package.mjs";
+import { packagedLinuxGuestDriverPaths } from "./computer-use-signing-pins.mjs";
 import {
   LUME_APP_TREE,
   LUME_ARTIFACT_PROVENANCE,
@@ -1020,4 +1022,92 @@ test("package verifier requires Lume's virtualization entitlements and an arm64-
   assert.doesNotThrow(() => assertLumeArchitecture("arm64\n"));
   assert.throws(() => assertLumeArchitecture("x86_64 arm64\n"), /arm64-only/);
   assert.throws(() => assertLumeArchitecture(""), /arm64-only/);
+});
+
+test("package verifier validates packaged Linux arm64 guest cua-driver and rejects tampering", async (t) => {
+  const { createHash } = await import("node:crypto");
+  const root = await realpath(await mkdtemp(path.join(os.tmpdir(), "aiden-verify-linux-driver-")));
+  t.after(() => rm(root, { recursive: true, force: true }));
+
+  const elfAarch64 = Buffer.alloc(32);
+  elfAarch64[0] = 0x7f;
+  elfAarch64[1] = 0x45;
+  elfAarch64[2] = 0x4c;
+  elfAarch64[3] = 0x46;
+  elfAarch64[4] = 2;
+  elfAarch64[5] = 1;
+  elfAarch64.writeUInt16LE(183, 18);
+  const expectedSha256 = createHash("sha256").update(elfAarch64).digest("hex");
+  const reviewedProvenance = path.resolve(
+    new URL("../resources/computer-use/cua-driver-linux-arm64-artifact.json", import.meta.url).pathname,
+  );
+  const provenanceBytes = await readFile(reviewedProvenance, "utf8");
+
+  const makeFixture = async (name) => {
+    const app = path.join(root, `${name}.app`);
+    const paths = packagedLinuxGuestDriverPaths(app);
+    await mkdir(paths.dir, { recursive: true });
+    await writeFile(paths.driver, elfAarch64);
+    await writeFile(paths.provenance, provenanceBytes, "utf8");
+    return { app, paths };
+  };
+
+  const ok = await makeFixture("ok");
+  await verifyPackagedLinuxGuestDriver(ok.app, {
+    reviewedProvenance,
+    expectedBytes: elfAarch64.length,
+    expectedSha256,
+  });
+
+  // Wrong ELF architecture fails.
+  const wrongArch = await makeFixture("wrong-arch");
+  const elfX64 = Buffer.from(elfAarch64);
+  elfX64.writeUInt16LE(62, 18);
+  await writeFile(wrongArch.paths.driver, elfX64);
+  await assert.rejects(
+    verifyPackagedLinuxGuestDriver(wrongArch.app, {
+      reviewedProvenance,
+      expectedBytes: elfX64.length,
+      expectedSha256: createHash("sha256").update(elfX64).digest("hex"),
+    }),
+    /not an ELF aarch64 binary/,
+  );
+
+  // Hash mismatch fails.
+  const badHash = await makeFixture("bad-hash");
+  await assert.rejects(
+    verifyPackagedLinuxGuestDriver(badHash.app, {
+      reviewedProvenance,
+      expectedBytes: elfAarch64.length,
+      expectedSha256: "0".repeat(64),
+    }),
+    /hash mismatch/,
+  );
+
+  // Symlinked driver fails.
+  const linked = await makeFixture("linked");
+  const outside = path.join(root, "outside-driver");
+  await writeFile(outside, elfAarch64);
+  await unlink(linked.paths.driver);
+  await symlink(outside, linked.paths.driver);
+  await assert.rejects(
+    verifyPackagedLinuxGuestDriver(linked.app, {
+      reviewedProvenance,
+      expectedBytes: elfAarch64.length,
+      expectedSha256,
+    }),
+    /regular non-symlinked/,
+  );
+
+  // Substituted provenance fails.
+  const badProv = await makeFixture("bad-prov");
+  await writeFile(badProv.paths.provenance, '{"schemaVersion":1}\n', "utf8");
+  await assert.rejects(
+    verifyPackagedLinuxGuestDriver(badProv.app, {
+      reviewedProvenance,
+      expectedBytes: elfAarch64.length,
+      expectedSha256,
+    }),
+    /differs from the reviewed copy/,
+  );
 });

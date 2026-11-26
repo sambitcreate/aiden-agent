@@ -1,10 +1,22 @@
 import assert from "node:assert/strict";
+import { execFileSync } from "node:child_process";
 import test from "node:test";
 
 import type { AgentToolResult } from "@earendil-works/pi-agent-core";
 import { createBotComputerControl } from "./control.js";
-import { BOT_COMPUTER_SHELL_OUTPUT_BYTES, createBotComputerShellTool } from "./computer-shell-tool.js";
-import type { BotComputerConnection, BotComputerGuestCommandResult, BotComputerStartReason } from "./types.js";
+import {
+  BOT_COMPUTER_SHELL_OUTPUT_BYTES,
+  BOT_COMPUTER_SHELL_TOOL_DESCRIPTION,
+  botComputerShellCommand,
+  botComputerShellToolDescription,
+  createBotComputerShellTool,
+} from "./computer-shell-tool.js";
+import {
+  BOT_COMPUTER_LINUX_SHELL_USER,
+  type BotComputerConnection,
+  type BotComputerGuestCommandResult,
+  type BotComputerStartReason,
+} from "./types.js";
 
 const connection: BotComputerConnection = {
   vmName: "aiden-bot-ada",
@@ -49,11 +61,14 @@ function harness(
       botName: async () => "Ada",
       ...(options.unattendedWaitMs === undefined ? {} : { unattendedWaitMs: options.unattendedWaitMs }),
     },
-    { routine: options.routine === true, ...(options.unattended === undefined ? {} : { unattended: options.unattended }) },
+    {
+      routine: options.routine === true,
+      ...(options.unattended === undefined ? {} : { unattended: options.unattended }),
+    },
   );
   const run = (command: string, signal?: AbortSignal) =>
     tool.execute("call", { command, description: "List the home folder" }, signal) as Promise<AgentToolResult<null>>;
-  return { control, calls, reasons, touches: () => touches, run };
+  return { tool, control, calls, reasons, touches: () => touches, run };
 }
 
 const ok = (stdout: string, extra: Partial<BotComputerGuestCommandResult> = {}): BotComputerGuestCommandResult => ({
@@ -74,7 +89,7 @@ test("a command runs in the Bot's computer within 120 seconds and 64 KiB", async
   const result = await h.run("ls ~");
   assert.equal(result.isError, undefined);
   assert.equal(textOf(result), "Desktop\nShared\n\nwarning: slow disk");
-  assert.equal(h.calls[0]?.command, "ls ~");
+  assert.equal(h.calls[0]?.command, botComputerShellCommand("ls ~"));
   assert.equal(h.calls[0]?.timeoutMs, 120_000);
   assert.equal(h.calls[0]?.maxOutputBytes, 64 * 1024);
   assert.deepEqual(h.reasons, ["tool"]);
@@ -181,4 +196,31 @@ test("on a routine or Telegram turn, a command waits for the person only so long
     assert.equal(interrupted.isError, true);
     assert.match(textOf(interrupted), /still be running.*still using Ada's computer/su);
   }
+});
+
+test("Linux computer_shell runs commands as the separate aiden-bot user and describes Linux", async () => {
+  const linuxDesc = botComputerShellToolDescription();
+  assert.equal(linuxDesc, BOT_COMPUTER_SHELL_TOOL_DESCRIPTION);
+  assert.match(linuxDesc, /Linux virtual machine/u);
+  assert.match(linuxDesc, new RegExp(`separate ${BOT_COMPUTER_LINUX_SHELL_USER} user`, "u"));
+  assert.match(linuxDesc, /~\/Shared/u);
+  assert.doesNotMatch(linuxDesc, /macOS|\/Volumes\/My Shared Files/u);
+
+  const h = harness(async () => ok("aiden-bot\n"));
+  assert.equal(h.tool.description, linuxDesc);
+  const tricky = "printf '%s\\n' 'a'\"b\" && false || echo ok";
+  const result = await h.run(tricky);
+  assert.equal(result.isError, undefined);
+  assert.equal(h.calls[0]?.command, botComputerShellCommand(tricky));
+  assert.match(h.calls[0]!.command, /^cd \/ && exec \/usr\/bin\/sudo -n -H -u 'aiden-bot' -- \/bin\/sh -c /u);
+
+  // Quoting keeps shell metacharacters intact inside the inner /bin/sh -c argument.
+  const inspectArgv = h.calls[0]!.command.replace(/^cd \/ && exec \/usr\/bin\/sudo /u, "printf '%s\\0' ");
+  const argv = execFileSync("/bin/sh", ["-c", inspectArgv], { encoding: "utf8" }).split("\0").slice(0, -1);
+  assert.deepEqual(argv.slice(0, 6), ["-n", "-H", "-u", BOT_COMPUTER_LINUX_SHELL_USER, "--", "/bin/sh"]);
+  assert.equal(argv[6], "-c");
+  assert.equal(argv[7], `cd "$HOME" || exit 1\n${tricky}`);
+
+  // Reject invalid usernames fail-closed.
+  assert.throws(() => botComputerShellCommand("id", "aiden-bot; id"), /invalid/iu);
 });

@@ -16,7 +16,8 @@ const MODIFIER_KEYSYMS: Readonly<Record<string, number>> = {
   ctrl: XK.Control_L,
   option: XK.Alt_L,
   shift: XK.Shift_L,
-  cmd: XK.Super_L,
+  /** Command/cmd maps to Ctrl on Linux Bot computers. */
+  cmd: XK.Control_L,
   win: XK.Super_L,
 };
 
@@ -55,16 +56,18 @@ export function botComputerModifierKeysyms(modifiers: readonly string[] | undefi
   if (!modifiers || modifiers.length === 0) return [];
   const names = [...new Set(modifiers.map((raw) => MODIFIER_ALIASES[raw.trim().toLowerCase()] ?? raw.trim().toLowerCase()))];
   names.sort((left, right) => MODIFIER_ORDER.indexOf(left) - MODIFIER_ORDER.indexOf(right));
-  return names.map((modifier) => {
+  const keysyms = names.map((modifier) => {
     const keysym = MODIFIER_KEYSYMS[modifier];
     if (keysym === undefined) throw new BotComputerKeyError(`The ${modifier} key can't be sent to a Bot computer.`);
     return keysym;
   });
+  return [...new Set(keysyms)];
 }
 
 /**
- * A chord such as `cmd+shift+t` or `return`: modifiers down in order, the
- * key down and up, then the modifiers up in reverse.
+ * A chord such as `ctrl+shift+t` or `return`: modifiers down in order, the
+ * key down and up, then the modifiers up in reverse. Command (`cmd`/`command`)
+ * maps to Ctrl on Linux Bot computers.
  */
 export function botComputerChordStrokes(chord: string): BotComputerKeyStroke[] {
   try {

@@ -250,6 +250,177 @@ test("on the guest driver lane the rules read the clicked element, its app and w
   }
 });
 
+test("Linux AT-SPI password and editable entry/text roles keep text-edit behavior, while read-only text/entry allow delete classification", async () => {
+  const passwordFacts = {
+    run: "run-1",
+    epoch: 0,
+    app: "Chromium",
+    windowTitle: "Sign in",
+    focused: { role: "password text", label: "Field 1" },
+  };
+  const backspaceInPassword = botComputerAction(
+    { args: { action: "key", keys: "backspace", intent: "Delete the extra letter" } },
+    passwordFacts,
+  );
+  assert.equal(backspaceInPassword.action?.surface, "computer");
+  assert.equal(backspaceInPassword.action && "action" in backspaceInPassword.action ? backspaceInPassword.action.action : undefined, "key");
+  assert.equal(classifyBotAction(backspaceInPassword.action!, []).classes.has("credentials"), true);
+
+  for (const [role, label] of [
+    ["entry", "Query"],
+    ["ROLE_ENTRY", "Query"],
+    ["text", "Note body"],
+    ["ROLE_TEXT", "Note body"],
+  ] as const) {
+    const editableFacts: BotComputerDriverFacts = {
+      run: "run-1",
+      epoch: 0,
+      app: "Chromium",
+      windowTitle: "Search",
+      focused: { role, label, editable: true },
+    };
+    for (const keys of ["backspace", "Delete"] as const) {
+      const editStep = botComputerAction(
+        { args: { action: "key", keys, intent: "Delete the extra letter" } },
+        editableFacts,
+      );
+      assert.equal(editStep.action && "action" in editStep.action ? editStep.action.action : undefined, "key", `${role} ${keys}`);
+      assert.equal(classifyBotAction(editStep.action!, []).classes.has("delete"), false, `${role} ${keys}`);
+      assert.equal(classifyBotAction(editStep.action!, []).classes.has("credentials"), false, `${role} ${keys}`);
+    }
+
+    for (const editable of [false, undefined] as const) {
+      const readOnlyFacts: BotComputerDriverFacts = {
+        run: "run-1",
+        epoch: 0,
+        app: "Mail",
+        windowTitle: "Inbox",
+        focused: { role, label: "Message row", ...(editable === undefined ? {} : { editable }) },
+      };
+      for (const keys of ["backspace", "Delete"] as const) {
+        const deleteStep = botComputerAction(
+          { args: { action: "key", keys, intent: "Delete the selected message" } },
+          readOnlyFacts,
+        );
+        assert.equal(
+          deleteStep.action && "action" in deleteStep.action ? deleteStep.action.action : undefined,
+          "press",
+          `${role} editable=${String(editable)} ${keys}`,
+        );
+        assert.equal(
+          classifyBotAction(deleteStep.action!, []).classes.has("delete"),
+          true,
+          `${role} editable=${String(editable)} ${keys}`,
+        );
+      }
+    }
+  }
+
+  // End-to-end guest driver capture fails closed for ambiguous cua-driver 0.38.0 text/entry roles (never inferring editability from role or value) while preserving password text classification.
+  const dir = tempHome();
+  const elements = path.join(dir, "atspi-elements.json");
+  writeFileSync(
+    elements,
+    JSON.stringify([
+      { role: "text", label: "Message row", frame: { x: 10, y: 10, w: 120, h: 24 }, depth: 1 },
+      { role: "text", label: "Quoted message", value: "secret draft", frame: { x: 10, y: 40, w: 120, h: 24 }, depth: 1 },
+      { role: "entry", label: "Read-only summary", value: "fixed summary", frame: { x: 10, y: 70, w: 120, h: 24 }, depth: 1 },
+      { role: "entry", label: "Disabled search", enabled: false, frame: { x: 10, y: 100, w: 120, h: 24 }, depth: 1 },
+      { role: "password text", label: "Master passphrase", frame: { x: 10, y: 130, w: 120, h: 24 }, depth: 1 },
+    ]),
+  );
+  const fixture = fileURLToPath(new URL("../bot-computers/fixtures/guest-cua-driver.mjs", import.meta.url));
+  const control = createBotComputerControl();
+  const state = createBotComputerToolState(control);
+  const screen: BotComputerScreen = {
+    capture: async ({ maxWidth }) => ({
+      image: Buffer.from("jpeg"),
+      mimeType: "image/jpeg",
+      width: maxWidth,
+      height: Math.round(maxWidth / 1.6),
+      framebufferWidth: 2560,
+      framebufferHeight: 1600,
+    }),
+    pointer: async () => undefined,
+    key: async () => undefined,
+    close: async () => undefined,
+  };
+  const connection: BotComputerConnection = {
+    vmName: "aiden-bot-1",
+    ip: "192.168.64.9",
+    vnc: { host: "127.0.0.1", port: 5905, password: "vnc-password-abcd" },
+    ssh: { host: "192.168.64.9", user: "lume" },
+  };
+  const factory = createGuestCuaDriverHostFactory({
+    bridge: () => ({ command: process.execPath, args: [fixture, "--elements", elements], env: { PATH: "/usr/bin:/bin" } }),
+  });
+  const tool = createBotComputerTool(
+    BOT,
+    {
+      host: { ensureRunning: async () => connection, touch: () => undefined, guestDriver: async () => factory },
+      sessions: { screen: async () => screen, recordPointer: () => undefined, setActivity: () => undefined },
+      control,
+      state,
+      botName: async () => "Ada",
+      sleep: async () => undefined,
+    },
+    { routine: false, elementControl: true },
+  );
+  try {
+    const run = (id: string, args: Record<string, unknown>) => tool.execute(id, args as unknown as BotComputerArgs);
+    await run("cap-1", { action: "capture", app: "Safari" });
+    await run("click-ro-text", { action: "click", element: 0, intent: "Select the message row" });
+    const roDelete = botComputerAction(
+      { args: { action: "key", keys: "Delete", intent: "Delete the selected message" } },
+      state.driverFacts(BOT),
+    );
+    assert.equal(roDelete.action && "action" in roDelete.action ? roDelete.action.action : undefined, "press");
+    assert.equal(classifyBotAction(roDelete.action!, []).classes.has("delete"), true);
+
+    await run("cap-2", { action: "capture", app: "Safari" });
+    await run("click-text-with-value", { action: "click", element: 1, intent: "Select the quoted message" });
+    const focusedText = state.driverFacts(BOT)?.focused;
+    assert.equal(focusedText?.editable, undefined);
+    assert.equal("value" in (focusedText ?? {}), false);
+    const textWithValueDelete = botComputerAction(
+      { args: { action: "key", keys: "Delete", intent: "Delete the quoted message" } },
+      state.driverFacts(BOT),
+    );
+    assert.equal(textWithValueDelete.action && "action" in textWithValueDelete.action ? textWithValueDelete.action.action : undefined, "press");
+    assert.equal(classifyBotAction(textWithValueDelete.action!, []).classes.has("delete"), true);
+
+    await run("cap-3", { action: "capture", app: "Safari" });
+    await run("click-ro-entry", { action: "click", element: 2, intent: "Select the read-only entry" });
+    const roEntryDelete = botComputerAction(
+      { args: { action: "key", keys: "Delete", intent: "Delete the selected summary" } },
+      state.driverFacts(BOT),
+    );
+    assert.equal(roEntryDelete.action && "action" in roEntryDelete.action ? roEntryDelete.action.action : undefined, "press");
+    assert.equal(classifyBotAction(roEntryDelete.action!, []).classes.has("delete"), true);
+
+    await run("cap-4", { action: "capture", app: "Safari" });
+    await run("click-disabled-entry", { action: "click", element: 3, intent: "Select the disabled field" });
+    const disabledDelete = botComputerAction(
+      { args: { action: "key", keys: "Delete", intent: "Delete the selected row" } },
+      state.driverFacts(BOT),
+    );
+    assert.equal(disabledDelete.action && "action" in disabledDelete.action ? disabledDelete.action.action : undefined, "press");
+    assert.equal(classifyBotAction(disabledDelete.action!, []).classes.has("delete"), true);
+
+    await run("cap-5", { action: "capture", app: "Safari" });
+    await run("click-password", { action: "click", element: 4, intent: "Focus the master passphrase field" });
+    const passwordBackspace = botComputerAction(
+      { args: { action: "key", keys: "backspace", intent: "Delete the extra letter" } },
+      state.driverFacts(BOT),
+    );
+    assert.equal(passwordBackspace.action && "action" in passwordBackspace.action ? passwordBackspace.action.action : undefined, "key");
+    assert.equal(classifyBotAction(passwordBackspace.action!, []).classes.has("credentials"), true);
+    assert.equal(classifyBotAction(passwordBackspace.action!, []).classes.has("delete"), false);
+  } finally {
+    await state.shutdown();
+  }
+});
+
 /* ------------------------------------------------------------------------- */
 /* Through a real Bot turn                                                    */
 /* ------------------------------------------------------------------------- */

@@ -45,7 +45,7 @@ interface Call {
   signal?: AbortSignal;
 }
 
-/** Aiden's allowlisted 0.36.0 catalog, parsed exactly as a live session parses it. */
+/** Aiden's allowlisted 0.38.0 catalog, parsed exactly as a live session parses it. */
 function pinnedCatalog(): Map<string, CuaDriverToolInfo> {
   return parseCuaDriverTools(toolListResult([...CUA_DRIVER_ALLOWED_TOOLS])).tools;
 }
@@ -121,7 +121,7 @@ class FakeHost implements CuaDriverHostLike {
   }
 }
 
-/** The 0.36.0 driver's answer, with extra driver data Aiden must not forward. */
+/** The 0.38.0 driver's answer, with extra driver data Aiden must not forward. */
 function fakeResponse(call: Call, driver: FakeCuaDriver): unknown {
   const result = driver.call(call.name, call.args) as {
     structuredContent?: Record<string, unknown>;
@@ -1144,7 +1144,7 @@ test("desktop resolution ignores Finder folders and desktop-named third-party ap
   await missing.controller.close();
 });
 
-test("maps every action to arguments the pinned 0.36.0 schemas admit", async () => {
+test("maps every action to arguments the pinned 0.38.0 schemas admit", async () => {
   const { controller, session } = harness(true);
   const tokens: string[] = [];
   await capture(controller, "som");
@@ -2184,5 +2184,232 @@ test("electron_main_process_unavailable asks for an approved foreground retry", 
   assert.match(error.message, /delivery_mode "foreground"/u);
   assert.equal(controller.lifecycleState, "ready");
   assert.equal(await captureStillUsable(controller), true);
+  await controller.close();
+});
+
+test("screen_locked invalidates the capture and never suggests a foreground retry", async () => {
+  const { controller, error } = await refuseAfterCapture("screen_locked", "click", {
+    action: "click",
+    element: 0,
+  });
+  assert.equal(error.code, "screen_locked");
+  assert.match(error.message, /screen is locked/iu);
+  assert.match(error.message, /do not retry in the foreground/iu);
+  assert.equal(controller.lifecycleState, "ready");
+  assert.equal(await captureStillUsable(controller), false);
+  await controller.close();
+});
+
+test("select_menu_would_raise_window keeps the capture and steers to set_value", async () => {
+  const { controller, error } = await refuseAfterCapture(
+    "select_menu_would_raise_window",
+    "click",
+    { action: "click", element: 0 },
+  );
+  assert.equal(error.code, "select_menu_would_raise_window");
+  assert.match(error.message, /set_value/u);
+  assert.equal(controller.lifecycleState, "ready");
+  assert.equal(await captureStillUsable(controller), true);
+  await controller.close();
+});
+
+test("isError 0.38 refusal preserves bounded top-level recovery hint alongside code, effect, reason, and execution_state", async () => {
+  const { controller, session } = harness(false);
+  await capture(controller, "ax");
+  session.handler = (call) =>
+    call.name === "click"
+      ? {
+          isError: true,
+          content: [{ type: "text", text: "refused" }],
+          structuredContent: {
+            effect: "refused",
+            route: "accessibility",
+            error: { code: "select_menu_would_raise_window" },
+            hint: "Choose the option with set_value instead.",
+            next_call: { tool: "get_window_state", arguments: { pid: 42, window_id: 7 } },
+          },
+        }
+      : fakeResponse(call, session.driver);
+  await assert.rejects(
+    () => approved(controller, "top-level-hint-is-error", { action: "click", element: 0 }),
+    (error: Error & { code?: string }) => {
+      assert.equal(error.code, "select_menu_would_raise_window");
+      assert.match(error.message, /Choose the option with set_value instead\./u);
+      return true;
+    },
+  );
+
+  // An unmapped refusal code with isError: true also keeps the bounded top-level hint.
+  const longHint = `${"Use a different element. ".repeat(60)}END_OF_HINT`;
+  session.handler = (call) =>
+    call.name === "click"
+      ? {
+          isError: true,
+          content: [{ type: "text", text: "refused" }],
+          structuredContent: {
+            code: "custom_refusal_code",
+            effect: "refused",
+            hint: longHint,
+          },
+        }
+      : fakeResponse(call, session.driver);
+  await assert.rejects(
+    () => approved(controller, "top-level-hint-bounded", { action: "click", element: 0 }),
+    (error: Error & { code?: string }) => {
+      assert.equal(error.code, "custom_refusal_code");
+      assert.match(error.message, /Use a different element\./u);
+      assert.doesNotMatch(error.message, /END_OF_HINT/u);
+      return true;
+    },
+  );
+
+  // execution_state, effect, and reason handling still takes precedence on isError: true.
+  session.handler = (call) =>
+    call.name === "click"
+      ? {
+          isError: true,
+          content: [{ type: "text", text: "drag started" }],
+          structuredContent: {
+            code: "background_unavailable",
+            effect: "partial",
+            reason: "drag_and_drop_session",
+            hint: "Retry in foreground.",
+          },
+        }
+      : fakeResponse(call, session.driver);
+  await assert.rejects(
+    () => approved(controller, "top-level-hint-drag", { action: "click", element: 0 }),
+    (error: Error & { code?: string }) => {
+      assert.equal(error.code, "drag_released");
+      assert.match(error.message, /Retry in foreground\./u);
+      return true;
+    },
+  );
+
+  await capture(controller, "ax");
+  session.handler = (call) =>
+    call.name === "click"
+      ? {
+          isError: true,
+          content: [{ type: "text", text: "uncertain" }],
+          structuredContent: {
+            code: "action_outcome_mismatch",
+            execution_state: "unknown",
+            hint: "Capture before retrying.",
+          },
+        }
+      : fakeResponse(call, session.driver);
+  await assert.rejects(
+    () => approved(controller, "top-level-hint-unknown", { action: "click", element: 0 }),
+    (error: Error & { code?: string }) => {
+      assert.equal(error.code, "execution_unknown");
+      assert.match(error.message, /Capture before retrying\./u);
+      return true;
+    },
+  );
+  await controller.close();
+});
+
+test("refused ActionResult falls back to 0.38 top-level recovery hint when error.hint is absent", async () => {
+  const { controller, session } = harness(false);
+  await capture(controller, "ax");
+  session.handler = (call) =>
+    call.name === "click"
+      ? {
+          content: [{ type: "text", text: "refused" }],
+          structuredContent: {
+            effect: "refused",
+            route: "accessibility",
+            error: { code: "select_menu_would_raise_window" },
+            hint: "Choose the option with set_value instead.",
+            next_call: { tool: "get_window_state", arguments: { pid: 42, window_id: 7 } },
+          },
+        }
+      : fakeResponse(call, session.driver);
+  await assert.rejects(
+    () => approved(controller, "top-level-hint", { action: "click", element: 0 }),
+    (error: Error & { code?: string }) => {
+      assert.equal(error.code, "select_menu_would_raise_window");
+      assert.match(error.message, /Choose the option with set_value instead\./u);
+      return true;
+    },
+  );
+  await controller.close();
+});
+
+test("Linux AT-SPI password text role marks secureFieldInCapture just like AXSecureTextField", async () => {
+  const atSpiForm = [
+    { role: "entry", label: "Username", value: "ada", frame: { x: 110, y: 60, w: 80, h: 20 }, depth: 1 },
+    { role: "password text", label: "Secret", value: "••••••••", frame: { x: 110, y: 90, w: 80, h: 20 }, depth: 1 },
+  ];
+  const { controller } = harness(true, 0, { elements: () => atSpiForm });
+  await capture(controller, "som");
+  const descriptor = await controller.approvalFor({ action: "type", text: "hunter2" });
+  assert.equal(descriptor?.secureFieldInCapture, true);
+  await controller.close();
+});
+
+test("mapped isError refusal preserves full recovery hint even when driver text exceeds 1,200 chars", async () => {
+  const { controller, session } = harness(false);
+  await capture(controller, "ax");
+  const hint = "Choose the option with set_value instead.";
+  const longDriverText = "Driver diagnostic detail. ".repeat(55); // > 1,300 chars
+  assert.ok(longDriverText.length > 1_200);
+
+  session.handler = (call) =>
+    call.name === "click"
+      ? {
+          isError: true,
+          content: [{ type: "text", text: longDriverText }],
+          structuredContent: {
+            effect: "refused",
+            route: "accessibility",
+            error: { code: "select_menu_would_raise_window" },
+            hint,
+          },
+        }
+      : fakeResponse(call, session.driver);
+
+  await assert.rejects(
+    () => approved(controller, "mapped-long-text-hint", { action: "click", element: 0 }),
+    (error: Error & { code?: string }) => {
+      assert.equal(error.code, "select_menu_would_raise_window");
+      assert.ok(
+        error.message.includes(hint),
+        `Expected full hint to survive refusalError slicing, got: ${error.message}`,
+      );
+      return true;
+    },
+  );
+
+  // Also when rawText includes the hint only beyond maxDetailChars (968), it must not be dropped.
+  const trailingHintText = `${"Driver diagnostic detail. ".repeat(50)}${hint}`;
+  assert.ok(trailingHintText.length > 1_200);
+  session.handler = (call) =>
+    call.name === "click"
+      ? {
+          isError: true,
+          content: [{ type: "text", text: trailingHintText }],
+          structuredContent: {
+            effect: "refused",
+            route: "accessibility",
+            error: { code: "select_menu_would_raise_window" },
+            hint,
+          },
+        }
+      : fakeResponse(call, session.driver);
+
+  await assert.rejects(
+    () => approved(controller, "mapped-trailing-hint", { action: "click", element: 0 }),
+    (error: Error & { code?: string }) => {
+      assert.equal(error.code, "select_menu_would_raise_window");
+      assert.ok(
+        error.message.includes(hint),
+        `Expected full hint to survive when rawText includes hint past 968 chars, got: ${error.message}`,
+      );
+      return true;
+    },
+  );
+
   await controller.close();
 });

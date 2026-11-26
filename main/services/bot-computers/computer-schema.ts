@@ -74,7 +74,7 @@ export const BotComputerParameters = Type.Object(
         minLength: 1,
         maxLength: 256,
         description:
-          "capture only, with element control: also list this app's numbered elements (its name, such as \"Safari\", or its bundle id).",
+          'capture only, with element control: also list this app\'s numbered elements (its name, such as "Chromium", "Firefox" or "LibreOffice").',
       }),
     ),
     element: Type.Optional(
@@ -113,7 +113,8 @@ export const BotComputerParameters = Type.Object(
       Type.String({
         minLength: 1,
         maxLength: 256,
-        description: 'key only: one key with optional modifiers joined by "+", e.g. "return", "tab" or "cmd+s".',
+        description:
+          'key only: one key with optional modifiers joined by "+", e.g. "return", "tab" or "ctrl+s" (Command/cmd maps to Ctrl).',
       }),
     ),
     seconds: Type.Optional(

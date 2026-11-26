@@ -480,7 +480,7 @@
       "sign": "./scripts/sign-macos.mjs",
       "entitlements": "resources/entitlements.mac.plist",
       "entitlementsInherit": "resources/entitlements.mac.inherit.plist",
-      "signIgnore": "\\/Contents\\/Helpers\\/(CuaDriver\\.app\\/Contents\\/MacOS\\/cua-driver|lume\\.app(\\/.*)?)$",
+      "signIgnore": "\\/Contents\\/(Helpers\\/(CuaDriver\\.app\\/Contents\\/MacOS\\/cua-driver|lume\\.app(\\/.*)?)|Resources\\/bot-computers\\/cua-driver-linux-arm64\\/cua-driver)$",
       "binaries": [
         "Contents/Helpers/Aiden Foundation Models Helper.app",
         "Contents/Helpers/Aiden CUA-S1 Forms Helper.app",
@@ -509,6 +509,14 @@
         {
           "from": "resources/bot-computers/LICENSE.lume.md",
           "to": "bot-computers/LICENSE.lume.md"
+        },
+        {
+          "from": "resources/computer-use/cua-driver-linux-arm64-artifact.json",
+          "to": "bot-computers/cua-driver-linux-arm64-artifact.json"
+        },
+        {
+          "from": "build/computer-use/cua-driver-linux-arm64/cua-driver",
+          "to": "bot-computers/cua-driver-linux-arm64/cua-driver"
         }
       ],
       "extraFiles": [

@@ -1,5 +1,6 @@
 /**
- * Bot computers (plan §8): a macOS VM per Bot, on Apple silicon only.
+ * Bot computers: a Linux desktop VM (Debian 13 + XFCE) per Bot in Lume, on
+ * Apple silicon Macs only.
  *
  * These are the renderer-safe shapes main projects over IPC. Main owns every
  * decision (what is downloaded, which VM runs, when it stops); the renderer
@@ -9,25 +10,14 @@
 import { formatHarnessBytes } from "./acp-harness.js";
 import { DEVICE_ID_PATTERN, parseDeviceStreamGrant, type DeviceStreamGrant } from "./devices.js";
 
-/** The guest's grants for its driver, as the base reports them while it waits for the person. */
-export interface BotComputerGuestPermissions {
-  accessibility: boolean;
-  screenRecording: boolean;
-}
-
-export type BotComputerBuildStep = "create" | "provision" | "guest_driver" | "permissions";
+export type BotComputerBuildStep = "create" | "provision" | "guest_driver";
 
 export type BotComputerSetupState =
   | { kind: "unsupported"; reason: "platform" | "host_os" }
   | { kind: "not_set_up" }
   | { kind: "downloading"; receivedBytes: number; totalBytes: number }
   | { kind: "verifying" }
-  | {
-      kind: "building_base";
-      step: BotComputerBuildStep;
-      /** Only while `step` is "permissions": what the guest has granted so far. */
-      permissions?: BotComputerGuestPermissions;
-    }
+  | { kind: "building_base"; step: BotComputerBuildStep }
   | {
       kind: "ready";
       baseVersion: string;
@@ -35,8 +25,6 @@ export type BotComputerSetupState =
       updateAvailable: boolean;
       /** The base's guest driver passed its probe: Bots can act on screen elements, not only pixels. */
       elementControl?: boolean;
-      /** Why the last attempt to set up element control ended without it. */
-      elementControlNote?: string;
     }
   | { kind: "failed"; message: string; resumable: boolean };
 
@@ -53,7 +41,6 @@ export interface BotComputerStatus {
   activity?: string;
 }
 
-export type BotComputerGuestOs = "macos" | "linux";
 export type BotComputerMaxRunning = 1 | 2 | 3 | 4;
 
 export interface BotComputersSettings {
@@ -63,7 +50,7 @@ export interface BotComputersSettings {
 
 /** What Set up and each start need, stated up front on the Settings page. */
 export interface BotComputersRequirements {
-  /** The pinned OS image download. */
+  /** The pinned Debian OS image download. */
   downloadBytes: number;
   /** About how much disk the finished base computer takes. */
   baseDiskBytes: number;
@@ -71,12 +58,15 @@ export interface BotComputersRequirements {
   setupFreeBytes: number;
   /** Free memory each running computer needs. */
   memoryPerComputerBytes: number;
-  /** The guest OS version the pinned base installs. */
+  /** The Debian version the pinned base installs. */
   baseVersion: string;
-  /** Guest OS for Bot computers (defaults to `"macos"` when omitted). */
-  guestOs?: BotComputerGuestOs;
-  /** Upper bound on "Computers running at once" allowed by the guest OS and host memory. */
-  maxRunningLimit?: BotComputerMaxRunning;
+  /** Upper bound on "Computers running at once" allowed by host memory (1–4). */
+  maxRunningLimit: BotComputerMaxRunning;
+}
+
+/** One-time Settings notice shown after legacy macOS Bot computers are removed on upgrade. */
+export interface BotComputersMigrationNotice {
+  freedBytes: number;
 }
 
 export interface BotComputersStatus {
@@ -86,6 +76,8 @@ export interface BotComputersStatus {
   freeDiskBytes?: number;
   computers: BotComputerStatus[];
   requirements: BotComputersRequirements;
+  /** Present until Set up finishes, Remove everything runs, or the person dismisses it. */
+  migrationNotice?: BotComputersMigrationNotice;
 }
 
 /** Every Bot-computer IPC channel. Invoke channels share the `botComputers:` prefix. */
@@ -98,23 +90,17 @@ export const BOT_COMPUTER_CHANNELS = {
   updateBase: "botComputers:updateBase", // invoke() → BotComputersStatus
   removeEverything: "botComputers:removeEverything", // invoke() → BotComputersStatus
   updateSettings: "botComputers:updateSettings", // invoke(Partial<BotComputersSettings>) → BotComputersSettings
+  dismissMigrationNotice: "botComputers:dismissMigrationNotice", // invoke() → BotComputersStatus
   give: "botComputers:give", // invoke(botId) → BotComputerStatus
   reset: "botComputers:reset", // invoke(botId) → BotComputerStatus
   remove: "botComputers:remove", // invoke(botId) → void
   stop: "botComputers:stop", // invoke(botId) → void
-  // The Computer tab (plan §8.5). A grant with `start: true` starts the
-  // computer (the person opened the tab); without it a stopped computer is refused.
+  // The Computer tab. A grant with `start: true` starts the computer (the
+  // person opened the tab); without it a stopped computer is refused.
   viewerGrant: "botComputers:viewerGrant", // invoke(botId, { start }) → BotComputerViewerGrant
   takeOver: "botComputers:takeOver", // invoke(botId) → BotComputerStatus; refused unless the computer is running
   giveBack: "botComputers:giveBack", // invoke(botId) → BotComputerStatus
   pointer: "botComputers:pointer", // invoke(botId) → BotComputerPointer | null
-  // The guest driver lane (plan §8.6). Element control on a ready base that
-  // lacks it boots the base once; while setup waits for the person's grants,
-  // Settings shows the base's screen and can check again or skip.
-  setUpElementControl: "botComputers:setUpElementControl", // invoke() → BotComputersStatus
-  checkPermissions: "botComputers:checkPermissions", // invoke() → void
-  skipPermissions: "botComputers:skipPermissions", // invoke() → void
-  baseViewerGrant: "botComputers:baseViewerGrant", // invoke() → BotComputerViewerGrant; only while the base waits for grants
 } as const;
 
 /** The host id the Computer tab's device stream uses; main's viewer proxy serves nothing else. */
@@ -146,17 +132,16 @@ export interface BotComputerPointer {
 /** Broadcast with the whole `BotComputersStatus` whenever anything changes. */
 export const BOT_COMPUTERS_CHANGED_CHANNEL = "botComputers:changed";
 
-export const BOT_COMPUTER_MAX_RUNNING_CHOICES = [1, 2] as const;
-export const BOT_COMPUTER_LINUX_MAX_RUNNING_CHOICES = [1, 2, 3, 4] as const;
+export const BOT_COMPUTER_MAX_RUNNING_CHOICES = [1, 2, 3, 4] as const;
 export const BOT_COMPUTER_IDLE_STOP_CHOICES = [5, 10, 15, 30, 60] as const;
 export const DEFAULT_BOT_COMPUTERS_SETTINGS: BotComputersSettings = Object.freeze({
   maxRunning: 2,
   idleStopMinutes: 10,
 });
 
-/** Offered "Computers running at once" values up to the host's limit (defaults to 1–2 for macOS). */
-export function botComputerMaxRunningChoices(limit: BotComputerMaxRunning = 2): readonly BotComputerMaxRunning[] {
-  return BOT_COMPUTER_LINUX_MAX_RUNNING_CHOICES.slice(0, limit);
+/** Offered "Computers running at once" values up to the host's limit (1–4). */
+export function botComputerMaxRunningChoices(limit: BotComputerMaxRunning = 4): readonly BotComputerMaxRunning[] {
+  return BOT_COMPUTER_MAX_RUNNING_CHOICES.slice(0, limit);
 }
 
 /**
@@ -165,7 +150,7 @@ export function botComputerMaxRunningChoices(limit: BotComputerMaxRunning = 2): 
  */
 export function parseBotComputersSettingsPatch(
   value: unknown,
-  maxRunningLimit: BotComputerMaxRunning = 2,
+  maxRunningLimit: BotComputerMaxRunning = 4,
 ): Partial<BotComputersSettings> {
   const input = record(value);
   if (!input) throw new Error("Bot computer settings must be an object.");
@@ -173,7 +158,6 @@ export function parseBotComputersSettingsPatch(
   for (const [key, entry] of Object.entries(input)) {
     if (key === "maxRunning") {
       if (typeof entry !== "number" || !Number.isSafeInteger(entry) || entry < 1 || entry > maxRunningLimit) {
-        if (maxRunningLimit === 2) throw new Error("At most one or two Bot computers can run at once.");
         if (maxRunningLimit === 1) throw new Error("At most one Bot computer can run at once on this Mac.");
         throw new Error(`At most ${maxRunningLimit} Bot computers can run at once on this Mac.`);
       }
@@ -198,7 +182,7 @@ const RUN_STATES: ReadonlySet<string> = new Set([
   "waiting_for_slot",
   "stale",
 ]);
-const BUILD_STEPS: ReadonlySet<string> = new Set(["create", "provision", "guest_driver", "permissions"]);
+const BUILD_STEPS: ReadonlySet<string> = new Set(["create", "provision", "guest_driver"]);
 
 function record(value: unknown): Record<string, unknown> | undefined {
   return value && typeof value === "object" && !Array.isArray(value) ? (value as Record<string, unknown>) : undefined;
@@ -232,30 +216,18 @@ function parseSetup(value: unknown): BotComputerSetupState | undefined {
       return { kind: "verifying" };
     case "building_base": {
       if (typeof input.step !== "string" || !BUILD_STEPS.has(input.step)) return undefined;
-      const step = input.step as BotComputerBuildStep;
-      const permissions = record(input.permissions);
-      return step === "permissions" &&
-        typeof permissions?.accessibility === "boolean" &&
-        typeof permissions.screenRecording === "boolean"
-        ? {
-            kind: "building_base",
-            step,
-            permissions: { accessibility: permissions.accessibility, screenRecording: permissions.screenRecording },
-          }
-        : { kind: "building_base", step };
+      return { kind: "building_base", step: input.step as BotComputerBuildStep };
     }
     case "ready": {
       const baseVersion = text(input.baseVersion, 32);
       const baseBuild = text(input.baseBuild, 32);
       if (!baseVersion || !baseBuild || typeof input.updateAvailable !== "boolean") return undefined;
-      const note = text(input.elementControlNote, 300);
       return {
         kind: "ready",
         baseVersion,
         baseBuild,
         updateAvailable: input.updateAvailable,
         ...(typeof input.elementControl === "boolean" ? { elementControl: input.elementControl } : {}),
-        ...(note ? { elementControlNote: note } : {}),
       };
     }
     case "failed": {
@@ -299,16 +271,9 @@ export function parseBotComputersStatus(value: unknown): BotComputersStatus | un
   const settings = record(input?.settings);
   const requirements = record(input?.requirements);
   if (!input || !setup || !settings || !requirements || !Array.isArray(input.computers)) return undefined;
-  const guestOs =
-    requirements.guestOs === undefined
-      ? undefined
-      : requirements.guestOs === "macos" || requirements.guestOs === "linux"
-        ? requirements.guestOs
-        : null;
-  if (guestOs === null) return undefined;
   const maxRunningLimit =
     requirements.maxRunningLimit === undefined
-      ? undefined
+      ? 4
       : requirements.maxRunningLimit === 1 ||
           requirements.maxRunningLimit === 2 ||
           requirements.maxRunningLimit === 3 ||
@@ -316,12 +281,11 @@ export function parseBotComputersStatus(value: unknown): BotComputersStatus | un
         ? requirements.maxRunningLimit
         : null;
   if (maxRunningLimit === null) return undefined;
-  const allowedMaxRunning = guestOs === "linux" || maxRunningLimit !== undefined ? 4 : 2;
   if (
     typeof settings.maxRunning !== "number" ||
     !Number.isSafeInteger(settings.maxRunning) ||
     settings.maxRunning < 1 ||
-    settings.maxRunning > allowedMaxRunning
+    settings.maxRunning > 4
   ) {
     return undefined;
   }
@@ -344,6 +308,13 @@ export function parseBotComputersStatus(value: unknown): BotComputersStatus | un
   ) {
     return undefined;
   }
+  let migrationNotice: BotComputersMigrationNotice | undefined;
+  if (input.migrationNotice !== undefined) {
+    const notice = record(input.migrationNotice);
+    const freedBytes = count(notice?.freedBytes);
+    if (freedBytes === undefined) return undefined;
+    migrationNotice = { freedBytes };
+  }
   const computers: BotComputerStatus[] = [];
   for (const entry of input.computers) {
     const computer = parseBotComputerStatus(entry);
@@ -361,60 +332,64 @@ export function parseBotComputersStatus(value: unknown): BotComputersStatus | un
       setupFreeBytes,
       memoryPerComputerBytes,
       baseVersion,
-      ...(guestOs !== undefined ? { guestOs } : {}),
-      ...(maxRunningLimit !== undefined ? { maxRunningLimit } : {}),
+      maxRunningLimit,
     },
+    ...(migrationNotice ? { migrationNotice } : {}),
   };
 }
 
-/** "20 GB", "8.6 GB". Decimal units, as download pages and Finder show them. */
+/** "8 GB", "3.2 GB". Decimal units, as download pages and Finder show them. */
 export function formatBotComputerBytes(bytes: number): string {
   if (bytes >= 1_000_000_000 && bytes % 1_000_000_000 < 50_000_000) return `${Math.round(bytes / 1_000_000_000)} GB`;
   return formatHarnessBytes(bytes);
 }
 
-/** "about 20 GB": sizes stated before anything is downloaded are approximate. */
+/** "about 8 GB": sizes stated before anything is downloaded are approximate. */
 export function approximateBotComputerBytes(bytes: number): string {
   if (bytes >= 1_000_000_000) return `about ${Math.round(bytes / 1_000_000_000)} GB`;
   return `about ${formatHarnessBytes(bytes)}`;
 }
 
-const BUILD_STEP_COPY: Record<BotComputerBuildStep, string> = {
-  create: "Installing macOS on the base computer",
-  provision: "Preparing the base computer",
-  guest_driver: "Installing Aiden's helper in the base computer",
-  permissions: "Waiting for permissions in the base computer",
-};
+/** Freed space in whole GB when >= 1 GB, or formatted bytes otherwise ("54 GB", "0 GB"). */
+export function formatBotComputerFreedSpace(bytes: number): string {
+  if (bytes <= 0) return "0 GB";
+  if (bytes >= 1_000_000_000) return `${Math.round(bytes / 1_000_000_000)} GB`;
+  return formatBotComputerBytes(bytes);
+}
 
-const LINUX_BUILD_STEP_COPY: Record<BotComputerBuildStep, string> = {
+/** One-time Settings notice shown after legacy macOS Bot computers are removed on upgrade. */
+export function botComputersMigrationNoticeText(freedBytes: number): string {
+  if (freedBytes <= 0) {
+    return "Bot computers now run Linux. Your Mac computers were removed. Set up to continue.";
+  }
+  return `Bot computers now run Linux. Your Mac computers were removed and freed ${formatBotComputerFreedSpace(freedBytes)}. Set up to continue.`;
+}
+
+const BUILD_STEP_COPY: Record<BotComputerBuildStep, string> = {
   create: "Setting up Debian Linux on the base computer",
   provision: "Preparing the base computer",
   guest_driver: "Installing Aiden's helper in the base computer",
-  permissions: "Preparing the base computer",
 };
 
 /** One line describing setup, for the Settings row and screen readers. */
-export function botComputerSetupSummary(setup: BotComputerSetupState, guestOs: BotComputerGuestOs = "macos"): string {
-  const linux = guestOs === "linux";
+export function botComputerSetupSummary(setup: BotComputerSetupState): string {
   switch (setup.kind) {
     case "unsupported":
       return setup.reason === "host_os"
-        ? linux
-          ? "Bot computers need macOS 14 or later on this Mac."
-          : "Bot computers need macOS 26 or later on this Mac."
+        ? "Bot computers need macOS 14 or later on this Mac."
         : "Bot computers need a Mac with Apple silicon.";
     case "not_set_up":
       return "Not set up.";
     case "downloading":
       return setup.totalBytes > 0
-        ? `Downloading ${linux ? "Debian Linux" : "macOS"} ${formatHarnessBytes(setup.receivedBytes)} of ${formatHarnessBytes(setup.totalBytes)}…`
-        : `Downloading ${linux ? "Debian Linux" : "macOS"}…`;
+        ? `Downloading Debian Linux ${formatHarnessBytes(setup.receivedBytes)} of ${formatHarnessBytes(setup.totalBytes)}…`
+        : "Downloading Debian Linux…";
     case "verifying":
       return "Checking the download…";
     case "building_base":
-      return `${(linux ? LINUX_BUILD_STEP_COPY : BUILD_STEP_COPY)[setup.step]}…`;
+      return `${BUILD_STEP_COPY[setup.step]}…`;
     case "ready": {
-      const osLabel = linux ? `Debian ${setup.baseVersion}` : `macOS ${setup.baseVersion}`;
+      const osLabel = `Debian ${setup.baseVersion}`;
       return setup.updateAvailable ? `Ready. A newer base (${osLabel}) is available.` : `Ready (${osLabel}).`;
     }
     case "failed":

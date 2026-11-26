@@ -88,7 +88,7 @@ test("a whole download is verified and kept under its build name, owner-only", a
   try {
     const file = await downloader.download({ onProgress: (progress) => phases.push(progress.phase) });
     assert.deepEqual(readFileSync(file), body);
-    assert.equal(path.basename(file), "UniversalMac_25G83_Restore.ipsw");
+    assert.equal(path.basename(file), "debian-25G83.raw");
     assert.equal(statSync(file).mode & 0o777, 0o600);
     assert.equal(existsSync(downloader.paths().partial), false);
     assert.ok(phases.includes("downloading") && last(phases) === "verifying");

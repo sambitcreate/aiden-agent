@@ -1,5 +1,8 @@
 import assert from "node:assert/strict";
-import { execFileSync } from "node:child_process";
+import { spawnSync } from "node:child_process";
+import { chmodSync, existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import path from "node:path";
 import test from "node:test";
 import type { AgentToolResult } from "@earendil-works/pi-agent-core";
 import { BOT_COMPUTER_GIVE_BACK_NOTE, createBotComputerControl } from "../bot-computers/control.js";
@@ -7,7 +10,11 @@ import type { BotComputerArgs } from "../bot-computers/computer-schema.js";
 import { createBotComputerTool, createBotComputerToolState } from "../bot-computers/computer-tool.js";
 import { guestDriverSuspendScript } from "../bot-computers/guest-driver-install.js";
 import type { BotComputerConnection, BotComputerGuestCommandResult, BotComputerScreen } from "../bot-computers/types.js";
-import { botComputerSignInOpenScript, createBotComputerHandoffOpener } from "./bot-computer-handoff.js";
+import {
+  botComputerSignInOpenScript,
+  botComputerStopShellUserScript,
+  createBotComputerHandoffOpener,
+} from "./bot-computer-handoff.js";
 import { createBotHandoffs } from "./bot-handoffs.js";
 
 const BOT = "bot:ada";
@@ -24,7 +31,9 @@ function ok(): BotComputerGuestCommandResult {
   return { exitCode: 0, stdout: "", stderr: "", truncated: false, timedOut: false };
 }
 
-function setup(options: { enabled?: boolean; hasComputer?: boolean; failOn?: "suspend" | "open" } = {}) {
+function setup(
+  options: { enabled?: boolean; hasComputer?: boolean; failOn?: "suspend" | "stopShellUser" | "open" } = {},
+) {
   const control = createBotComputerControl();
   const handoffs = createBotHandoffs();
   const commands: string[] = [];
@@ -33,6 +42,8 @@ function setup(options: { enabled?: boolean; hasComputer?: boolean; failOn?: "su
   /** Who held the computer when each guest command ran. */
   const heldDuring: string[] = [];
   let beforeOpen: (() => void) | undefined;
+  const suspendScript = guestDriverSuspendScript();
+  const stopShellScript = botComputerStopShellUserScript();
   const open = createBotComputerHandoffOpener({
     host: {
       computer: async () => (options.hasComputer === false ? undefined : ({ state: "stopped" } as never)),
@@ -43,7 +54,8 @@ function setup(options: { enabled?: boolean; hasComputer?: boolean; failOn?: "su
       runGuestCommand: async (_botId, command) => {
         commands.push(command);
         heldDuring.push(control.controller(BOT));
-        if (command === guestDriverSuspendScript()) return options.failOn === "suspend" ? { ...ok(), exitCode: 255 } : ok();
+        if (command === suspendScript) return options.failOn === "suspend" ? { ...ok(), exitCode: 255 } : ok();
+        if (command === stopShellScript) return options.failOn === "stopShellUser" ? { ...ok(), exitCode: 76 } : ok();
         beforeOpen?.();
         return options.failOn === "open" ? { ...ok(), exitCode: 1 } : ok();
       },
@@ -86,13 +98,17 @@ function setup(options: { enabled?: boolean; hasComputer?: boolean; failOn?: "su
   };
 }
 
-test("Open takes the computer over, stops the screen helper, then opens the site in Safari", async () => {
+test("Open takes the computer over, stops the screen helper and aiden-bot processes, then opens Chromium", async () => {
   const h = setup();
   h.ask("wait-1");
   assert.equal(await h.open(BOT, "wait-1", ORIGIN), true);
   assert.deepEqual(h.starts, ["viewer"], "the person's Open starts the computer, as opening its Computer tab does");
-  assert.deepEqual(h.commands, [guestDriverSuspendScript(), botComputerSignInOpenScript(ORIGIN)]);
-  assert.deepEqual(h.heldDuring, ["person", "person"], "the person holds the computer before anything opens on it");
+  assert.deepEqual(h.commands, [
+    guestDriverSuspendScript(),
+    botComputerStopShellUserScript(),
+    botComputerSignInOpenScript(ORIGIN),
+  ]);
+  assert.deepEqual(h.heldDuring, ["person", "person", "person"], "the person holds the computer before anything opens on it");
   assert.equal(h.control.controller(BOT), "person");
   assert.equal(h.control.takenOverBy(BOT), "sign_in");
 });
@@ -211,9 +227,67 @@ test("while the person signs in, the Bot's computer call waits and sees nothing;
   assert.equal(captures, 0);
 });
 
-test("the open command passes the site to Safari as one argument", () => {
+test("if stopping aiden-bot processes fails, Chromium never opens and control returns to the Bot", async () => {
+  const failed = setup({ failOn: "stopShellUser" });
+  failed.ask("wait-2");
+  assert.equal(await failed.open(BOT, "wait-2", ORIGIN), false);
+  assert.deepEqual(failed.commands, [guestDriverSuspendScript(), botComputerStopShellUserScript()]);
+  assert.equal(failed.control.controller(BOT), "bot");
+  assert.equal(failed.errors.length, 1);
+});
+
+test("Linux open script launches Chromium detached on DISPLAY=:0 with quoted URL and fails closed when missing", async (t) => {
+  const dir = mkdtempSync(path.join(tmpdir(), "aiden-linux-open-"));
+  t.after(() => rmSync(dir, { recursive: true, force: true }));
+  const bin = path.join(dir, "bin");
+  const out = path.join(dir, "chromium.args");
+  const fakeChromium = path.join(bin, "chromium");
+  spawnSync("/bin/mkdir", ["-p", bin]);
+  writeFileSync(
+    fakeChromium,
+    `#!/bin/sh\nprintf 'DISPLAY=%s\\nXAUTHORITY=%s\\nXDG_RUNTIME_DIR=%s\\nDBUS_SESSION_BUS_ADDRESS=%s\\nACCESSIBILITY_ENABLED=%s\\nGNOME_ACCESSIBILITY=%s\\n' "$DISPLAY" "$XAUTHORITY" "$XDG_RUNTIME_DIR" "$DBUS_SESSION_BUS_ADDRESS" "$ACCESSIBILITY_ENABLED" "$GNOME_ACCESSIBILITY" > ${JSON.stringify(out)}\nfor a in "$@"; do printf '%s\\n' "$a" >> ${JSON.stringify(out)}; done\n`,
+  );
+  chmodSync(fakeChromium, 0o755);
+
   const url = "https://example.com/$(touch pwned)'x";
-  const script = botComputerSignInOpenScript(url).replace(/^\/usr\/bin\/open /u, "printf '%s\\n' ");
-  const argv = execFileSync("/bin/sh", ["-c", script], { encoding: "utf8" }).trimEnd().split("\n");
-  assert.deepEqual(argv, ["-b", "com.apple.Safari", url]);
+  const ran = spawnSync("/bin/sh", ["-c", botComputerSignInOpenScript(url)], {
+    env: { PATH: `${bin}:/usr/bin:/bin`, HOME: dir },
+    encoding: "utf8",
+    timeout: 10_000,
+  });
+  assert.equal(ran.status, 0, ran.stderr);
+  // Wait briefly for the detached background child to finish writing its marker.
+  for (let tries = 0; !existsSync(out) && tries < 100; tries += 1) {
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+  assert.equal(existsSync(out), true, "fake chromium ran");
+  const uid = process.getuid?.();
+  const lines = readFileSync(out, "utf8").trimEnd().split("\n");
+  assert.deepEqual(lines, [
+    "DISPLAY=:0",
+    `XAUTHORITY=${path.join(dir, ".Xauthority")}`,
+    `XDG_RUNTIME_DIR=/run/user/${uid}`,
+    `DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/${uid}/bus`,
+    "ACCESSIBILITY_ENABLED=1",
+    "GNOME_ACCESSIBILITY=1",
+    "--new-window",
+    url,
+  ]);
+
+  // Without chromium on PATH, the script fails closed with exit 127.
+  const missing = spawnSync("/bin/sh", ["-c", botComputerSignInOpenScript(url)], {
+    env: { PATH: path.join(dir, "empty-bin") },
+    encoding: "utf8",
+    timeout: 10_000,
+  });
+  assert.equal(missing.status, 127);
+
+  // Stop-shell-user script fails closed (exit 76) if the target user doesn't exist, and rejects invalid names.
+  const nonexistent = spawnSync("/bin/sh", ["-c", botComputerStopShellUserScript("aiden-nonexistent-user-xyz")], {
+    env: { PATH: "/usr/bin:/bin" },
+    encoding: "utf8",
+    timeout: 10_000,
+  });
+  assert.equal(nonexistent.status, 76);
+  assert.throws(() => botComputerStopShellUserScript("bad;user"), /Invalid Linux shell user/u);
 });

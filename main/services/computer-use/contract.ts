@@ -1,4 +1,4 @@
-export const CUA_DRIVER_VERSION = "0.36.0";
+export const CUA_DRIVER_VERSION = "0.38.0";
 export const CUA_DRIVER_TOOL_SCHEMA = "1";
 export const CUA_DRIVER_CAPABILITY_VERSION = "1";
 export const CUA_DRIVER_HOST_BUNDLE_ID = "com.sambitcreate.aiden-agent";
@@ -45,14 +45,15 @@ export const CUA_DRIVER_ALLOWED_TOOLS: ReadonlySet<string> = new Set([
 
 /**
  * Every allowed tool is required so native and TypeScript fail closed on
- * contract drift. 0.36.0 registers each of them on macOS
- * (`platform-macos/src/tools/mod.rs::register_all`, with the session tools
- * from `ToolRegistry::register_session_tools`).
+ * contract drift. 0.38.0 registers each of them on both macOS
+ * (`platform-macos/src/tools/mod.rs::register_all`) and Linux
+ * (`platform-linux/src/tools/impl_.rs`), with the session tools from
+ * `ToolRegistry::register_session_tools`.
  */
 export const CUA_DRIVER_REQUIRED_TOOLS = CUA_DRIVER_ALLOWED_TOOLS;
 
 /**
- * Tools whose 0.36.0 schema accepts the preferred per-call tagged
+ * Tools whose 0.38.0 schema accepts the preferred per-call tagged
  * `target: {kind:"window", pid, window_id}` (upstream
  * `cua-driver-core/src/action_target.rs::TARGETED_TOOLS`). The driver refuses
  * `target` combined with flat pid/window_id, so these tools receive only

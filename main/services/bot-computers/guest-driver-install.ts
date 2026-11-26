@@ -1,39 +1,41 @@
-// The guest driver lane's install (plan §8.6, decision 7): Aiden's own pinned
-// `cua-driver`, copied from its vendored helper bundle into the base computer
-// during Set up or Update base, and run there as a LaunchAgent in the
-// logged-in session so it can reach the guest's window server.
+// The guest driver lane's install: Aiden's pinned Linux arm64 `cua-driver`,
+// copied from its vendored helper bundle into the Debian Linux base computer
+// during Set up or Update base, and run there as a `systemd --user` service in
+// the logged-in XFCE session so it can reach the guest desktop and AT-SPI bus.
 //
-// - Only the upstream-signed `cua-driver` executable is copied, with its MIT
-//   notice beside it. Aiden's broker stays on the Mac: it authenticates the
-//   Aiden process it runs under.
-// - The guest checks the copy itself before it is put in place: its SHA-256
-//   against Aiden's compiled pin, and its signature against the pinned Cua
-//   identity and Team ID. Nothing is downloaded in the guest, and no PATH
-//   lookup ever finds a driver.
-// - The agent keeps the daemon alive only while an "enabled" file exists, so
-//   computer sign-in can stop it without the guest password (see
-//   `guestDriverSuspendScript`).
+// - Only the pinned `cua-driver` executable is copied, with its MIT notice
+//   beside it. Aiden's broker stays on the Mac.
+// - The guest checks the copy itself before it is put in place via
+//   `/usr/bin/sha256sum` against Aiden's compiled pin (`CUA_DRIVER_LINUX_ARM64_UPSTREAM_PIN`).
+//   Nothing is downloaded in the guest, and no PATH lookup ever finds a driver.
+// - The service keeps the daemon alive only while an "enabled" file exists, so
+//   computer sign-in can stop it without a password (`guestDriverSuspendScript`).
 // - The CLI shape (`serve --socket`, `mcp --embedded --socket`) is cua-driver
-//   0.36.0's documented one; the scripts are unproven until owner-Mac
-//   acceptance (docs/bot-computers.md, "Guest driver lane").
+//   0.38.0's documented one.
 
 import { quoteRemoteArg } from "../devices/ssh-device-script.js";
+import { CUA_DRIVER_LINUX_ARM64_UPSTREAM_PIN } from "../computer-use/binary.js";
 import { buildCuaDriverEnvironment } from "../computer-use/contract.js";
 import { BotComputerError, type BotComputerGuestCommandResult } from "./types.js";
 
-export const GUEST_DRIVER_LABEL = "com.aiden.bot-computer.cua-driver";
-/** Under the guest user's home. None of these contain a quote or a backslash. */
-export const GUEST_DRIVER_SUPPORT_DIR = "Library/Application Support/Aiden";
+/** Under the Linux guest user's home. None of these contain a quote or a backslash. */
+export const GUEST_DRIVER_SERVICE = "cua-driver.service";
+export const GUEST_DRIVER_SUPPORT_DIR = ".local/share/aiden";
 export const GUEST_DRIVER_BINARY = `${GUEST_DRIVER_SUPPORT_DIR}/cua-driver/cua-driver`;
 /** cua-driver's MIT notice, beside the copy it covers. */
 export const GUEST_DRIVER_NOTICE = `${GUEST_DRIVER_SUPPORT_DIR}/cua-driver/LICENSE.cua-driver.md`;
 export const GUEST_DRIVER_SOCKET = `${GUEST_DRIVER_SUPPORT_DIR}/cua-driver.sock`;
 export const GUEST_DRIVER_PID_FILE = `${GUEST_DRIVER_SUPPORT_DIR}/cua-driver.pid`;
 export const GUEST_DRIVER_ENABLED_FILE = `${GUEST_DRIVER_SUPPORT_DIR}/cua-driver.enabled`;
-export const GUEST_DRIVER_PLIST = `Library/LaunchAgents/${GUEST_DRIVER_LABEL}.plist`;
-export const GUEST_DRIVER_LOG = "Library/Logs/Aiden/cua-driver.log";
+export const GUEST_DRIVER_UNIT = `.config/systemd/user/${GUEST_DRIVER_SERVICE}`;
 /** The copy lands here first: home-relative, with no space, and replaced atomically. */
 export const GUEST_DRIVER_STAGING = ".aiden-cua-driver.partial";
+
+/** Compiled Linux arm64 guest driver pin, derived from Aiden's release pin table. */
+export const LINUX_GUEST_DRIVER_PIN: GuestDriverPin = Object.freeze({
+  version: CUA_DRIVER_LINUX_ARM64_UPSTREAM_PIN.version,
+  binarySha256: CUA_DRIVER_LINUX_ARM64_UPSTREAM_PIN.binarySha256,
+});
 
 /** The guest user's home and uid, read from the guest before anything is written. */
 export interface GuestDriverLocation {
@@ -44,22 +46,19 @@ export interface GuestDriverLocation {
 export interface GuestDriverPin {
   version: string;
   binarySha256: string;
-  signingRequirement: string;
 }
 
 export interface GuestDriverInstallContext {
-  /** System ssh with Aiden's key; `stdin` carries the guest password, `stdinFile` the copy. */
+  /** System ssh with Aiden's key; `stdin` carries the systemd unit, `stdinFile` the binary/notice copy. */
   guestSsh(
     command: string,
     options: { stdin?: string; stdinFile?: string; timeoutMs: number },
   ): Promise<BotComputerGuestCommandResult>;
-  /** The vendored driver on this Mac, already verified against the pin. */
+  /** The vendored Linux arm64 driver on this Mac, already verified against the pin. */
   driverPath: string;
   /** Its licence notice from the same helper bundle, copied beside it in the guest. */
   noticePath?: string;
   pin: GuestDriverPin;
-  /** The guest password sudo needs to load the agent into the logged-in session. */
-  password: string;
   signal?: AbortSignal;
 }
 
@@ -69,17 +68,31 @@ function absolute(location: GuestDriverLocation, relative: string): string {
   return `${location.home}/${relative}`;
 }
 
-/** The environment the daemon runs with: no telemetry, no update checks, no scripts. */
-export function guestDriverEnvironment(): Record<string, string> {
+function linuxUserBusPrefix(uidExpr: string): string {
+  return `XDG_RUNTIME_DIR="/run/user/${uidExpr}" DBUS_SESSION_BUS_ADDRESS="unix:path=/run/user/${uidExpr}/bus"`;
+}
+
+function systemdQuote(value: string): string {
+  return `"${value.replace(/\\/gu, "\\\\").replace(/"/gu, '\\"')}"`;
+}
+
+/** The environment the daemon runs with: no telemetry, no update checks, no scripts, X11 display. */
+export function guestDriverEnvironment(location?: GuestDriverLocation): Record<string, string> {
   const env = buildCuaDriverEnvironment({});
-  // That label names Aiden's broker for the Mac's embedded driver; the guest
-  // driver owns its own permissions.
   delete env.CUA_DRIVER_HOST_BUNDLE_ID;
   env.CUA_DRIVER_RS_PERMISSIONS_GATE = "0";
+  env.DISPLAY = ":0";
+  if (location !== undefined) {
+    // LightDM launches Xorg with `-auth /var/run/lightdm/root/:0` and writes the
+    // session cookie to `$HOME/.Xauthority`, so `cua-driver` needs XAUTHORITY to reach `:0`.
+    env.XAUTHORITY = `${location.home}/.Xauthority`;
+    env.XDG_RUNTIME_DIR = `/run/user/${location.uid}`;
+    env.DBUS_SESSION_BUS_ADDRESS = `unix:path=/run/user/${location.uid}/bus`;
+  }
   return env;
 }
 
-/** `cua-driver serve` as the agent runs it. */
+/** `cua-driver serve` as the systemd user service runs it. */
 export function guestDriverDaemonArguments(location: GuestDriverLocation): string[] {
   return [
     absolute(location, GUEST_DRIVER_BINARY),
@@ -93,82 +106,57 @@ export function guestDriverDaemonArguments(location: GuestDriverLocation): strin
   ];
 }
 
-function xml(value: string): string {
-  return value.replace(/&/gu, "&amp;").replace(/</gu, "&lt;").replace(/>/gu, "&gt;").replace(/"/gu, "&quot;");
-}
-
 /**
- * The LaunchAgent: loaded at every login of the guest user (the base logs in
- * on its own), only in the GUI session, kept alive while the enabled file
- * exists. Every path is absolute.
+ * The `systemd --user` service unit: started with the desktop user's session
+ * while the enabled file exists, with absolute paths and telemetry off.
  */
-export function guestDriverLaunchAgentPlist(location: GuestDriverLocation): string {
-  const strings = (values: readonly string[]) => values.map((value) => `\t\t<string>${xml(value)}</string>`).join("\n");
-  const env = Object.entries(guestDriverEnvironment())
-    .map(([key, value]) => `\t\t<key>${xml(key)}</key>\n\t\t<string>${xml(value)}</string>`)
-    .join("\n");
-  const log = xml(absolute(location, GUEST_DRIVER_LOG));
+export function guestDriverSystemdUnit(location: GuestDriverLocation): string {
+  const envEntries: Array<[string, string]> = [
+    ["HOME", location.home],
+    ...Object.entries(guestDriverEnvironment(location)),
+  ];
+  const envLines = envEntries.map(([key, value]) => `Environment=${systemdQuote(`${key}=${value}`)}`);
+  const execStart = guestDriverDaemonArguments(location).join(" ");
   return [
-    '<?xml version="1.0" encoding="UTF-8"?>',
-    '<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">',
-    '<plist version="1.0">',
-    "<dict>",
-    "\t<key>Label</key>",
-    `\t<string>${GUEST_DRIVER_LABEL}</string>`,
-    "\t<key>ProgramArguments</key>",
-    "\t<array>",
-    strings(guestDriverDaemonArguments(location)),
-    "\t</array>",
-    "\t<key>EnvironmentVariables</key>",
-    "\t<dict>",
-    `\t\t<key>HOME</key>\n\t\t<string>${xml(location.home)}</string>`,
-    env,
-    "\t</dict>",
-    "\t<key>WorkingDirectory</key>",
-    `\t<string>${xml(location.home)}</string>`,
-    "\t<key>LimitLoadToSessionType</key>",
-    "\t<string>Aqua</string>",
-    "\t<key>ProcessType</key>",
-    "\t<string>Interactive</string>",
-    "\t<key>RunAtLoad</key>",
-    "\t<true/>",
-    "\t<key>KeepAlive</key>",
-    "\t<dict>",
-    "\t\t<key>PathState</key>",
-    "\t\t<dict>",
-    `\t\t\t<key>${xml(absolute(location, GUEST_DRIVER_ENABLED_FILE))}</key>`,
-    "\t\t\t<true/>",
-    "\t\t</dict>",
-    "\t</dict>",
-    "\t<key>ThrottleInterval</key>",
-    "\t<integer>5</integer>",
-    "\t<key>StandardOutPath</key>",
-    `\t<string>${log}</string>`,
-    "\t<key>StandardErrorPath</key>",
-    `\t<string>${log}</string>`,
-    "</dict>",
-    "</plist>",
+    "[Unit]",
+    "Description=Aiden Bot Computer Cua Driver",
+    "After=graphical-session.target",
+    `ConditionPathExists=${absolute(location, GUEST_DRIVER_ENABLED_FILE)}`,
+    "",
+    "[Service]",
+    "Type=simple",
+    `WorkingDirectory=${location.home}`,
+    ...envLines,
+    `ExecStart=${execStart}`,
+    "Restart=on-failure",
+    "RestartSec=5",
+    "",
+    "[Install]",
+    "WantedBy=default.target",
     "",
   ].join("\n");
 }
 
-const SUDO = "/usr/bin/sudo -S -p ''";
 const LOCATE_MARKER = "aiden-guest-driver";
 
-/** Make the folders and report the home and uid, refusing a home outside /Users. */
+/** Make the folders and report the home and uid, refusing a home outside `/home/*`. */
 export function guestDriverLocateScript(): string {
   return [
     'h="$HOME"',
-    'case "$h" in /Users/*) ;; *) exit 65 ;; esac',
-    `umask 022 && /bin/mkdir -p "$h/${GUEST_DRIVER_SUPPORT_DIR}/cua-driver" "$h/Library/LaunchAgents" "$h/Library/Logs/Aiden" || exit 66`,
+    'case "$h" in /home/*) ;; *) exit 65 ;; esac',
+    `umask 022 && /bin/mkdir -p "$h/${GUEST_DRIVER_SUPPORT_DIR}/cua-driver" "$h/.config/systemd/user" || exit 66`,
     `printf '${LOCATE_MARKER} %s %s\\n' "$(/usr/bin/id -u)" "$h"`,
   ].join("\n");
 }
 
 export function parseGuestDriverLocation(stdout: string): GuestDriverLocation {
   const line = stdout.split(/\r?\n/u).find((entry) => entry.startsWith(`${LOCATE_MARKER} `));
-  const match = line ? new RegExp(`^${LOCATE_MARKER} ([0-9]{1,7}) (/Users/[A-Za-z0-9._-]{1,64})$`, "u").exec(line) : null;
-  if (!match) throw new BotComputerError("start_failed", "The base computer reported an unexpected user home.");
+  const match = line
+    ? new RegExp(`^${LOCATE_MARKER} ([0-9]{1,7}) (/home/([A-Za-z0-9._-]{1,64}))$`, "u").exec(line)
+    : null;
+  if (!match || match[3] === "." || match[3] === "..") {
+    throw new BotComputerError("start_failed", "The base computer reported an unexpected user home.");
+  }
   return { uid: Number(match[1]), home: match[2] };
 }
 
@@ -183,37 +171,32 @@ export function guestDriverNoticeScript(): string {
 }
 
 /**
- * Check the copy in the guest (hash, then signature) and only then move it
- * into place. A copy that fails either check is deleted.
+ * Check the copy in the guest against its pinned SHA-256 and only then move it
+ * into place. A copy that fails is deleted.
  */
 export function guestDriverVerifyScript(pin: GuestDriverPin): string {
   if (!/^[0-9a-f]{64}$/u.test(pin.binarySha256)) throw new BotComputerError("invalid", "The driver pin is malformed.");
   return [
     `f="$HOME/${GUEST_DRIVER_STAGING}"`,
     `d="$HOME/${GUEST_DRIVER_BINARY}"`,
-    "sum=$(/usr/bin/shasum -a 256 \"$f\" | /usr/bin/awk '{print $1}')",
+    "sum=$(/usr/bin/sha256sum \"$f\" | /usr/bin/awk '{print $1}')",
     `[ "$sum" = ${quoteRemoteArg(pin.binarySha256)} ] || { /bin/rm -f "$f"; exit 70; }`,
-    `/usr/bin/codesign --verify --strict -R=${quoteRemoteArg(pin.signingRequirement)} "$f" >/dev/null 2>&1 || { /bin/rm -f "$f"; exit 71; }`,
     '/bin/chmod 755 "$f" && /bin/mv -f "$f" "$d" || exit 72',
   ].join("\n");
 }
 
-/**
- * Write the agent (plist on stdin after the password line), lint it, and load
- * it into the logged-in session. Loading another user's GUI domain from an SSH
- * session needs root, hence sudo with the password on stdin.
- */
+/** Write the `systemd --user` unit from stdin, enable and restart it. */
 export function guestDriverAgentScript(location: GuestDriverLocation): string {
-  const plist = absolute(location, GUEST_DRIVER_PLIST);
+  const unit = absolute(location, GUEST_DRIVER_UNIT);
+  const bus = linuxUserBusPrefix(String(location.uid));
   return [
-    "IFS= read -r pw || exit 64",
-    `p=${quoteRemoteArg(plist)}`,
-    'umask 022 && /bin/cat > "$p.partial" || exit 73',
-    '/usr/bin/plutil -lint -s "$p.partial" || { /bin/rm -f "$p.partial"; exit 74; }',
-    '/bin/mv -f "$p.partial" "$p" || exit 74',
+    `u=${quoteRemoteArg(unit)}`,
+    'umask 022 && /bin/cat > "$u.partial" || exit 73',
+    '/bin/mv -f "$u.partial" "$u" || exit 74',
     `/usr/bin/touch ${quoteRemoteArg(absolute(location, GUEST_DRIVER_ENABLED_FILE))} || exit 74`,
-    `printf '%s\\n' "$pw" | ${SUDO} /bin/launchctl bootout gui/${location.uid}/${GUEST_DRIVER_LABEL} >/dev/null 2>&1`,
-    `printf '%s\\n' "$pw" | ${SUDO} /bin/launchctl bootstrap gui/${location.uid} "$p" || exit 75`,
+    `${bus} /usr/bin/systemctl --user daemon-reload || exit 75`,
+    `${bus} /usr/bin/systemctl --user enable ${GUEST_DRIVER_SERVICE} || exit 75`,
+    `${bus} /usr/bin/systemctl --user restart ${GUEST_DRIVER_SERVICE} || exit 75`,
   ].join("\n");
 }
 
@@ -227,35 +210,23 @@ export function guestDriverWaitScript(location: GuestDriverLocation, seconds: nu
   ].join("\n");
 }
 
-/** Restart the daemon so a process started before the grant sees it (TCC caches per process). */
+/** Restart the `systemd --user` service. */
 export function guestDriverRestartScript(location: GuestDriverLocation): string {
-  return [
-    "IFS= read -r pw || exit 64",
-    `printf '%s\\n' "$pw" | ${SUDO} /bin/launchctl kickstart -k gui/${location.uid}/${GUEST_DRIVER_LABEL} || exit 75`,
-  ].join("\n");
+  return `${linuxUserBusPrefix(String(location.uid))} /usr/bin/systemctl --user restart ${GUEST_DRIVER_SERVICE} || exit 75`;
 }
 
 /**
- * Stop the guest driver for computer sign-in, without the guest password:
- * remove the enabled file so the agent isn't kept alive, then end every
- * process signed as cua-driver, wherever its file is. A copy the Bot made
- * keeps the driver's signature and so its grants; this sweep ends those that
- * run now. It is one sweep: a program left running in the guest can still
- * start the driver again later (docs/bot-computers.md, "Signing in on a Bot's
- * computer").
- *
- * The kill can't be handled, so the daemon leaves its socket file. That goes
- * too: otherwise the next bridge would find the dead daemon's socket at once
- * and connect before the restarted daemon listens on its own.
+ * Stop the guest driver for computer sign-in, without a password: remove the
+ * enabled file, stop `cua-driver.service`, kill any remaining `cua-driver`
+ * process owned by the desktop user, and remove the dead socket file.
+ * (Separate Bot shell user processes are ended by `botComputerStopShellUserScript`.)
  */
 export function guestDriverSuspendScript(): string {
   return [
     `/bin/rm -f "$HOME/${GUEST_DRIVER_ENABLED_FILE}"`,
     "u=$(/usr/bin/id -u)",
-    'for p in $(/usr/bin/pgrep -U "$u"); do',
-    '  [ "$p" = "$$" ] && continue',
-    '  if /usr/bin/codesign -d -v "+$p" 2>&1 | /usr/bin/grep -qx "Identifier=cua-driver"; then /bin/kill -KILL "$p" 2>/dev/null; fi',
-    "done",
+    `${linuxUserBusPrefix("$u")} /usr/bin/systemctl --user stop ${GUEST_DRIVER_SERVICE} >/dev/null 2>&1 || true`,
+    '/usr/bin/pkill -KILL -u "$u" -x cua-driver >/dev/null 2>&1 || true',
     `/bin/rm -f "$HOME/${GUEST_DRIVER_SOCKET}"`,
     "exit 0",
   ].join("\n");
@@ -267,10 +238,11 @@ export function guestDriverSuspendScript(): string {
  * --socket`, which never launches a standalone driver app of its own.
  */
 export function guestDriverBridgeScript(location: GuestDriverLocation, waitSeconds = 10): string {
-  const env = Object.entries(guestDriverEnvironment()).map(([key, value]) => `${key}=${quoteRemoteArg(value)}`);
+  const env = Object.entries(guestDriverEnvironment(location)).map(([key, value]) => `${key}=${quoteRemoteArg(value)}`);
   return [
     `e=${quoteRemoteArg(absolute(location, GUEST_DRIVER_ENABLED_FILE))}`,
     '[ -e "$e" ] || /usr/bin/touch "$e" || exit 68',
+    `if [ ! -S ${quoteRemoteArg(absolute(location, GUEST_DRIVER_SOCKET))} ]; then ${linuxUserBusPrefix(String(location.uid))} /usr/bin/systemctl --user start ${GUEST_DRIVER_SERVICE} >/dev/null 2>&1 || true; fi`,
     guestDriverWaitScript(location, waitSeconds),
     [
       "exec /usr/bin/env -i",
@@ -288,19 +260,17 @@ function check(step: GuestDriverInstallStep, result: BotComputerGuestCommandResu
   const reason =
     result.exitCode === 70
       ? "the copied helper didn't match Aiden's pinned release"
-      : result.exitCode === 71
-        ? "the copied helper failed its signature check"
-        : result.exitCode === 69
-          ? "the helper didn't start"
-          : result.timedOut
-            ? "it timed out"
-            : `exit ${String(result.exitCode)}`;
+      : result.exitCode === 69
+        ? "the helper didn't start"
+        : result.timedOut
+          ? "it timed out"
+          : `exit ${String(result.exitCode)}`;
   throw new BotComputerError("start_failed", `Installing Aiden's helper in the base computer failed at "${step}" (${reason}).`);
 }
 
 /**
- * Copy, verify and load the guest driver. Returns where it lives, for the
- * bridge and the permission step that follow.
+ * Copy, verify and start the Linux guest driver. Returns where it lives, for
+ * the bridge and the readiness probe that follow.
  */
 export async function installGuestDriver(
   context: GuestDriverInstallContext,
@@ -326,7 +296,7 @@ export async function installGuestDriver(
   check(
     "agent",
     await context.guestSsh(guestDriverAgentScript(location), {
-      stdin: `${context.password}\n${guestDriverLaunchAgentPlist(location)}`,
+      stdin: guestDriverSystemdUnit(location),
       timeoutMs: 60_000,
     }),
   );

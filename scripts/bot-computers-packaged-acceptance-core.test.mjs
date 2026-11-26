@@ -65,16 +65,18 @@ async function loopbackModel() {
   return { port, requests, close: () => new Promise((resolve) => server.close(resolve)) };
 }
 
-/** A guest whose home has a ~/Shared (the Bot's Computer folder) and a `sw_vers`, for the real shell. */
-async function guest({ takeOverOnWait, takeOverOnClick = false, captureMimeType = "image/jpeg" } = {}) {
+/** A guest whose home has a ~/Shared (the Bot's Computer folder), `id`, and `uname`, for the real shell. */
+async function guest({ takeOverOnWait, takeOverOnClick = false, captureMimeType = "image/jpeg", shellUser = "aiden-bot" } = {}) {
   const root = await mkdtemp(path.join(os.tmpdir(), "aiden-bc-acceptance-"));
   roots.push(root);
   const home = path.join(root, "home");
   const computerFolder = path.join(home, "Shared");
   const bin = path.join(root, "bin");
   await Promise.all([mkdir(computerFolder, { recursive: true }), mkdir(bin)]);
-  await writeFile(path.join(bin, "sw_vers"), "#!/bin/sh\n[ \"$1\" = -productVersion ] && echo 26.6.2\n");
-  await chmod(path.join(bin, "sw_vers"), 0o755);
+  await writeFile(path.join(bin, "id"), `#!/bin/sh\n[ "$1" = -un ] && echo "${shellUser}"\n`);
+  await chmod(path.join(bin, "id"), 0o755);
+  await writeFile(path.join(bin, "uname"), '#!/bin/sh\n[ "$1" = -sm ] && echo "Linux aarch64"\n');
+  await chmod(path.join(bin, "uname"), 0o755);
   let waits = 0;
   return {
     computerFolder,
@@ -176,8 +178,23 @@ test("the scripted Bot captures, clicks the capture's centre, waits for Take ove
     assert.deepEqual(verdict, {
       ok: true,
       failures: [],
-      evidence: { captureSize: { width: 1280, height: 800 }, waits: 2, interrupted: "wait", macosVersion: "26.6.2" },
+      evidence: { captureSize: { width: 1280, height: 800 }, waits: 2, interrupted: "wait", guestLinux: "Linux aarch64", shellUser: "aiden-bot" },
     });
+  } finally {
+    await model.close();
+  }
+});
+
+test("computer_shell running as the desktop user instead of aiden-bot fails the run", async () => {
+  const model = await loopbackModel();
+  try {
+    const computer = await guest({ takeOverOnWait: 1, shellUser: "lume" });
+    await playBot(model, computer);
+    const sharedFileText = await readFile(path.join(computer.computerFolder, acceptanceSharedFileName(NONCE)), "utf8");
+    const { ok, failures, evidence } = evaluateAcceptanceRequests(model.requests, { ...context, sharedFileText });
+    assert.equal(ok, false);
+    assert.equal(evidence.shellUser, "lume");
+    assert.deepEqual(failures, ["computer_shell ran as lume instead of aiden-bot."]);
   } finally {
     await model.close();
   }

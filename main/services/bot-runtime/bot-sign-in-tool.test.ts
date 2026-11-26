@@ -26,7 +26,7 @@ import { createBotRegistry, type BotRegistry } from "./bot-extension.js";
 import { openBotHandoff } from "./bot-handoff-open.js";
 import { createBotHandoffs, type BotHandoffs } from "./bot-handoffs.js";
 import { createBotHarnessHost, type BotHarnessHost } from "./harness-host.js";
-import { signInCandidate, type BotSignInDeps } from "./bot-sign-in-tool.js";
+import { botSignInDescription, signInCandidate, type BotSignInDeps } from "./bot-sign-in-tool.js";
 import { createBotToolAssembly, type BotAdmission } from "./bot-tool-assembly.js";
 import type { BotToolFacts } from "./bot-tool-policy.js";
 import { projectBotTranscript } from "./live-projection.js";
@@ -541,4 +541,11 @@ test("sign-in is offered only with the Browser in the Bot's access, and refused 
     allowed: false,
     reason: "Sign-in needs the Browser or a computer in this Bot's access.",
   });
+});
+
+test("sign_in description names Chromium on Linux computers and never Safari", () => {
+  assert.match(botSignInDescription({ browser: false, computer: true }), /signs in in Chromium there/u);
+  assert.match(botSignInDescription({ browser: true, computer: true }), /signs in in Chromium on it/u);
+  assert.doesNotMatch(botSignInDescription({ browser: false, computer: true }), /Safari/u);
+  assert.doesNotMatch(botSignInDescription({ browser: true, computer: true }), /Safari/u);
 });

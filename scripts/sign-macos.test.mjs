@@ -1,4 +1,4 @@
-/* global URL */
+/* global Buffer, URL */
 
 import assert from "node:assert/strict";
 import path from "node:path";
@@ -6,9 +6,15 @@ import test from "node:test";
 import {
   COMPUTER_USE_ENTITLEMENTS,
   createAidenMacSignOptions,
+  verifyPinnedLinuxGuestDriver,
   verifyPinnedLume,
 } from "./sign-macos.mjs";
-import { packagedComputerUsePaths } from "./computer-use-signing-pins.mjs";
+import {
+  CUA_DRIVER_LINUX_ARM64_ARTIFACT_PROVENANCE,
+  CUA_DRIVER_LINUX_ARM64_SHA256,
+  packagedComputerUsePaths,
+  packagedLinuxGuestDriverPaths,
+} from "./computer-use-signing-pins.mjs";
 import {
   LUME_ARTIFACT_PROVENANCE,
   lumeRequirement,
@@ -119,8 +125,11 @@ test("electron-builder's signIgnore covers the Lume bundle directory and its con
   const app = "/Users/me/release/mac-arm64/Aiden Agent.app";
   const lume = packagedLumePaths(app);
   const cua = packagedComputerUsePaths(app);
+  const linuxDriver = packagedLinuxGuestDriverPaths(app);
   // osx-sign signs every .app directory it walks, so the bundle path itself must match.
-  for (const file of [lume.lumeApp, lume.binary, lume.infoPlist, cua.driver]) assert.equal(ignored(file), true, file);
+  for (const file of [lume.lumeApp, lume.binary, lume.infoPlist, cua.driver, linuxDriver.driver]) {
+    assert.equal(ignored(file), true, file);
+  }
   for (const file of [cua.broker, cua.helperApp, path.join(app, "Contents", "MacOS", "Aiden Agent")]) {
     assert.equal(ignored(file), false, file);
   }
@@ -190,5 +199,51 @@ test("pinned Lume verification refuses a symlinked bundle", async (t) => {
       execute: async () => assert.fail("codesign must not run"),
     }),
     /not a regular, non-symlinked bundle/,
+  );
+});
+
+test("mac signing hook ignores the Linux arm64 guest driver ELF and verifies its size, header, and hash", async (t) => {
+  const { mkdtemp, mkdir, realpath, rm, truncate, writeFile } = await import("node:fs/promises");
+  const os = await import("node:os");
+  const root = await realpath(await mkdtemp(path.join(os.tmpdir(), "aiden-sign-linux-driver-")));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const app = path.join(root, "Aiden Agent.app");
+  const linux = packagedLinuxGuestDriverPaths(app);
+
+  const options = createAidenMacSignOptions({ app });
+  assert.equal(options.ignore(linux.driver), true);
+  assert.equal(options.ignore(linux.provenance), false);
+
+  const elfAarch64 = Buffer.alloc(24);
+  elfAarch64[0] = 0x7f;
+  elfAarch64[1] = 0x45;
+  elfAarch64[2] = 0x4c;
+  elfAarch64[3] = 0x46;
+  elfAarch64[4] = 2;
+  elfAarch64[5] = 1;
+  elfAarch64.writeUInt16LE(183, 18);
+
+  await mkdir(path.dirname(linux.driver), { recursive: true });
+  await writeFile(linux.driver, elfAarch64);
+  await assert.rejects(
+    verifyPinnedLinuxGuestDriver(app, { hash: async () => CUA_DRIVER_LINUX_ARM64_SHA256 }),
+    /Linux guest cua-driver size/,
+  );
+
+  await truncate(linux.driver, CUA_DRIVER_LINUX_ARM64_ARTIFACT_PROVENANCE.binaryBytes);
+  await verifyPinnedLinuxGuestDriver(app, { hash: async () => CUA_DRIVER_LINUX_ARM64_SHA256 });
+
+  await assert.rejects(
+    verifyPinnedLinuxGuestDriver(app, { hash: async () => "0".repeat(64) }),
+    /Packaging changed the pinned Linux guest cua-driver/,
+  );
+
+  const elfX64 = Buffer.from(elfAarch64);
+  elfX64.writeUInt16LE(62, 18);
+  await writeFile(linux.driver, elfX64);
+  await truncate(linux.driver, CUA_DRIVER_LINUX_ARM64_ARTIFACT_PROVENANCE.binaryBytes);
+  await assert.rejects(
+    verifyPinnedLinuxGuestDriver(app, { hash: async () => CUA_DRIVER_LINUX_ARM64_SHA256 }),
+    /not a valid ELF64 aarch64 binary/,
   );
 });

@@ -25,11 +25,13 @@ import type { BotToolCallCheck } from "./bot-extension.js";
 import type { BotLiveApproval } from "./bot-tool-assembly.js";
 
 const ELEMENT_CLICKS = new Set(["click", "double_click", "right_click"]);
-/** Roles that take typed text: text fields and areas (secure and search fields among them) and combo boxes. */
-const TEXT_ENTRY_ROLES = ["textfield", "textarea", "searchfield", "combobox", "textbox", "searchbox"];
+/** Roles that unambiguously take typed text unless explicitly marked non-editable. */
+const TEXT_ENTRY_ROLES = ["textfield", "textarea", "searchfield", "combobox", "textbox", "searchbox", "passwordtext"];
 
 function takesText(element: BotComputerElement | undefined): boolean {
-  const role = (element?.role ?? "").toLowerCase().replace(/[^a-z]/gu, "");
+  if (!element || element.editable === false) return false;
+  if (element.editable === true) return true;
+  const role = (element.role ?? "").toLowerCase().replace(/[^a-z]/gu, "");
   return TEXT_ENTRY_ROLES.some((kind) => role.includes(kind));
 }
 
@@ -56,7 +58,10 @@ function elementFacts(
   return {
     ...(facts.app ? { app: facts.app } : {}),
     ...(facts.windowTitle ? { windowTitle: facts.windowTitle } : {}),
-    element: { ...element },
+    element: {
+      ...(element.role !== undefined ? { role: element.role } : {}),
+      ...(element.label !== undefined ? { label: element.label } : {}),
+    },
   };
 }
 

@@ -59,14 +59,14 @@ const DESCRIPTION =
 const COMPUTER_DESCRIPTION =
   "Ask the person to sign in to one website for you on your own computer, when a site you need there asks for an " +
   "account. `site` is the site's name or https address (\"github.com\"); `why` says in a sentence why you need " +
-  "it. The app shows a card: the person takes control of your computer, signs in in Safari there, then answers " +
+  "it. The app shows a card: the person takes control of your computer, signs in in Chromium there, then answers " +
   "I'm done or Skip. You can't see or use the computer until they give it back. Their answer comes back as this " +
   "tool's result: wait for it. You never see or type their password, so never ask for it in the chat. Afterwards " +
   "take a fresh computer capture to check.";
 
 const BOTH_NOTE =
   " To sign in on your own computer instead (for an app or site you use there), pass where: \"computer\": the " +
-  "person signs in in Safari on it, then gives it back; take a fresh computer capture to check.";
+  "person signs in in Chromium on it, then gives it back; take a fresh computer capture to check.";
 
 /** Where this Bot can have the person sign in, for the tool's description. */
 export interface BotSignInTargets {

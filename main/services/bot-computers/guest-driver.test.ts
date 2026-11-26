@@ -142,6 +142,31 @@ test("the probe passes only with both grants, the pinned version, apps, and a re
   assert.equal((await probeGuestDriver(older)).ready, false);
 });
 
+test("Linux check_permissions x11 and atspi booleans map to readiness and veto when either is false", async (t) => {
+  const dir = scratch(t);
+  const permissions = path.join(dir, "permissions.json");
+  writeFileSync(permissions, JSON.stringify({ x11: true, atspi: true, xsend_event: true, wayland: false }));
+  const session = await (await host(t, "--permissions-file", permissions)).createSession();
+
+  assert.deepEqual(await probeGuestDriver(session), {
+    ready: true,
+    permissions: { accessibility: true, screenRecording: true },
+  });
+
+  writeFileSync(permissions, JSON.stringify({ x11: true, atspi: false, xsend_event: true, wayland: false }));
+  assert.deepEqual(await probeGuestDriver(session), {
+    ready: false,
+    permissions: { accessibility: false, screenRecording: true },
+    reason: "permissions",
+  });
+
+  writeFileSync(permissions, JSON.stringify({ x11: false, atspi: true, xsend_event: false, wayland: false }));
+  assert.deepEqual(await guestDriverPermissions(session, { prompt: false }), {
+    accessibility: false,
+    screenRecording: false,
+  });
+});
+
 test("asking for the grants prompts in the guest; checking never does", async (t) => {
   const dir = scratch(t);
   const permissions = path.join(dir, "permissions.json");
@@ -159,24 +184,26 @@ test("asking for the grants prompts in the guest; checking never does", async (t
 });
 
 test("only a recorded pass for the pinned driver opens the driver lane", () => {
-  assert.equal(guestDriverReady({ version: "0.36.0" }), true);
-  assert.equal(guestDriverReady({ version: "0.34.1" }), false);
+  assert.equal(guestDriverReady({ version: "0.38.0" }), true);
+  assert.equal(guestDriverReady({ version: "0.36.0" }), false);
   assert.equal(guestDriverReady(undefined), false);
 });
 
-test("the production bridge is Aiden's own ssh to the guest, ending in the driver's MCP proxy", () => {
+test("the production bridge is Aiden's own ssh to the guest, starting systemd cua-driver and ending in the MCP proxy", () => {
   const paths = guestSshPaths("/Users/ada/Library/Application Support/Aiden Agent/bot-computers");
   const bridge = guestDriverSshBridge(
-    { host: "192.168.64.7", user: "lume" },
-    { home: "/Users/lume", uid: 501 },
+    { host: "192.168.64.8", user: "lume" },
+    { home: "/home/lume", uid: 1000 },
     { paths, env: { PATH: "/usr/bin:/bin", HOME: paths.home } },
   );
   assert.equal(bridge.command, "/usr/bin/ssh");
   const separator = bridge.args.indexOf("--");
-  assert.deepEqual(bridge.args.slice(separator, separator + 2), ["--", "192.168.64.7"]);
+  assert.deepEqual(bridge.args.slice(separator, separator + 2), ["--", "192.168.64.8"]);
   assert.ok(bridge.args.includes("BatchMode=yes"));
   const remote = bridge.args[bridge.args.length - 1] ?? "";
   assert.match(remote, /^perl -e 'alarm \d+; exec @ARGV' \/bin\/sh -c /u);
+  assert.match(remote, /systemctl --user start cua-driver\.service/u);
+  assert.match(remote, /\/home\/lume\/\.local\/share\/aiden\/cua-driver\/cua-driver/u);
   assert.match(remote, /mcp --embedded --socket/u);
   assert.deepEqual(Object.keys(bridge.env).sort(), ["HOME", "PATH"]);
 });

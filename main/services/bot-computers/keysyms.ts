@@ -131,7 +131,8 @@ const CHORD_MODIFIERS: Readonly<Record<string, number>> = {
   ctrl: XK.Control_L,
   option: XK.Alt_L,
   shift: XK.Shift_L,
-  cmd: XK.Super_L,
+  /** Command/cmd chords map to Ctrl on Linux Bot computers. */
+  cmd: XK.Control_L,
   win: XK.Super_L,
 };
 

@@ -43,7 +43,7 @@ Feature events fire once, at the moment the action succeeded, from the service t
 | `mcp_app_connected` | An outside app was added in Settings → Connections → Apps using Aiden, or with `aiden apps connect` (sent by the running `aiden serve`, not the command). Never the app's name, token or id. | `access`: read or supervised |
 | `mcp_chat_started` | An outside app started a chat and its first turn with `aiden_chat_start`. A retry with the same `clientRequestId` is not counted again, and `aiden_chat_send` is not counted. Never the prompt, chat, workspace or model. | `model_choice`: default (the app left Aiden's model) or chosen (it named a provider or model) |
 | `computer_use_enabled` | The global Computer Use switch went from off to on | none |
-| `bot_computer_set_up` | Bot computers finished Set up, or element control was added later | `element_control` |
+| `bot_computer_set_up` | Bot computers finished Set up | `element_control` |
 | `terminal_opened` | A terminal started | none |
 | `git_commit` | A commit was made from Aiden | none |
 | `worktree_created` | A managed worktree was created and saved as a workspace | none |

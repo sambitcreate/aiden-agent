@@ -12,9 +12,9 @@ type ComputerBot = Pick<BotDefinition, "id" | "name">;
 type Confirm = "reset" | "remove" | null;
 
 /**
- * The Bot profile's Computer section (plan §8): give the Bot its own macOS
- * computer, see what it is doing, and reset or remove it. Renders nothing
- * where the platform has no Bot computers, so Linux never asks main.
+ * The Bot profile's Computer section: give the Bot its own Linux computer,
+ * see what it is doing, and reset or remove it. Renders nothing where the
+ * platform has no Bot computers, so unsupported hosts never ask main.
  */
 export function BotComputerSection({ bot }: { bot: ComputerBot }) {
   const query = useBotComputersStatus();
@@ -71,7 +71,7 @@ export function BotComputerSection({ bot }: { bot: ComputerBot }) {
         label="Computer"
         description={
           status.setup.kind === "not_set_up" || status.setup.kind === "failed"
-            ? `Set up Bot computers in Settings to give ${bot.name} its own macOS computer to work in.`
+            ? `Set up Bot computers in Settings to give ${bot.name} its own Linux computer to work in.`
             : `Bot computers are being set up. ${botComputerSetupSummary(status.setup)}`
         }
       >
@@ -84,7 +84,7 @@ export function BotComputerSection({ bot }: { bot: ComputerBot }) {
     row = (
       <Field
         label="Computer"
-        description={`Give ${bot.name} its own macOS computer, apart from yours. It starts when ${bot.name} needs it and stops when idle.`}
+        description={`Give ${bot.name} its own Linux computer, apart from yours. It starts when ${bot.name} needs it and stops when idle.`}
       >
         <Button size="small" variant="accent" className="justify-self-end" disabled={acting} onClick={() => void give()}>
           <Monitor /> Give a computer

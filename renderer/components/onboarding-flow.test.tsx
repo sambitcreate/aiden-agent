@@ -329,12 +329,16 @@ test("platform feature filtering preserves classifier consent and unavailable-fe
   assert.match(mac[0]!.description, /Enable local llama.cpp classification.*Advanced panel under Model options/u);
 });
 
-test("the Bot computers tile shows only where a Bot can have its own macOS computer", () => {
+test("the Bot computers tile shows only where a Bot can have its own Linux computer", () => {
   const tiles = (host: Parameters<typeof visibleOnboardingFeatures>[1]) =>
     visibleOnboardingFeatures(onboardingFeatures, host).map(({ id }) => id);
   const appleSilicon = tiles(hostPlatformCapabilities("darwin", "arm64"));
   assert.ok(appleSilicon.includes("botComputers"));
   assert.equal(appleSilicon.indexOf("botComputers"), appleSilicon.indexOf("bots") + 1, "it follows Meet your Bots");
+  const tile = onboardingFeatures.find((feature) => feature.id === "botComputers");
+  assert.ok(tile && typeof tile.description === "string");
+  assert.match(tile.description, /Linux virtual machine \(Debian with XFCE\)/u);
+  assert.doesNotMatch(tile.description, /macOS virtual machine/u);
   for (const [name, host] of [
     ["Intel Mac", hostPlatformCapabilities("darwin", "x64")],
     ["Linux", hostPlatformCapabilities("linux", "arm64")],

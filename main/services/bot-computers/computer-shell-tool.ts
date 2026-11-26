@@ -1,5 +1,6 @@
-// The Bot's `computer_shell` tool (plan §8.6): a shell command inside its own
-// computer, over SSH as the guest user, never on the person's Mac.
+// The Bot's `computer_shell` tool: a shell command inside its own Linux
+// virtual machine, over SSH as the separate unprivileged `aiden-bot` user
+// (decision 4a), never on the person's Mac.
 //
 // - Bounded: 120 seconds (the guest's own alarm, plus a local bound for a dead
 //   connection) and 64 KiB of output, shown like `run_command`'s output.
@@ -7,15 +8,16 @@
 //   back, and Take over ends a running command's SSH connection, as it stops
 //   any computer action. Without a terminal the guest side is not signalled,
 //   so the command itself can keep running until it ends or its alarm fires;
-//   the result says so.
-// - The guest user is the computer's administrator, but sudo needs the guest
-//   password, which only Aiden holds and never shows the model.
+//   the result says so. During sign-in Aiden terminates every process owned by
+//   `aiden-bot`.
 
 import { Type } from "typebox";
 import type { AgentTool, AgentToolResult } from "@earendil-works/pi-agent-core";
+import { quoteRemoteArg } from "../devices/ssh-device-script.js";
 import { boundedToolOutput } from "../tool-output-context.js";
 import { BOT_COMPUTER_UNATTENDED_WAIT_MS, botComputerUnattendedGaveUp, waitForBotWithin, type BotComputerGiveBackBudget } from "./control.js";
 import {
+  BOT_COMPUTER_LINUX_SHELL_USER,
   BOT_COMPUTER_SHELL_TOOL_NAME,
   BotComputerError,
   BotComputerTakenOverError,
@@ -36,7 +38,7 @@ export const BotComputerShellParameters = Type.Object(
     command: Type.String({
       minLength: 1,
       maxLength: BOT_COMPUTER_SHELL_COMMAND_MAX_CHARS,
-      description: "The command to run in your computer, with /bin/sh as its user, in its home folder.",
+      description: `The command to run in your computer, with /bin/sh as ${BOT_COMPUTER_LINUX_SHELL_USER}, in its home folder.`,
     }),
     description: Type.Optional(
       Type.String({
@@ -49,9 +51,37 @@ export const BotComputerShellParameters = Type.Object(
 );
 
 export const BOT_COMPUTER_SHELL_TOOL_DESCRIPTION =
-  "Run a shell command inside your own computer (the macOS virtual machine), never on the person's Mac. " +
-  "Use it to install and run tools there. Runs as the computer's user, without the password sudo asks for, for up to 120 seconds, with up to 64 KiB of output. " +
-  "~/Shared (/Volumes/My Shared Files) is your Computer folder, shared with the person's Files panel.";
+  "Run a shell command inside your own computer (the Linux virtual machine), never on the person's Mac. " +
+  `Use it to install and run tools there. Runs as the separate ${BOT_COMPUTER_LINUX_SHELL_USER} user, without sudo privileges, for up to 120 seconds, with up to 64 KiB of output. ` +
+  "~/Shared is your Computer folder, shared with the person's Files panel.";
+
+const LINUX_USER_PATTERN = /^[a-z_][a-z0-9_-]{0,31}$/u;
+
+/** Shell tool guidance. */
+export function botComputerShellToolDescription(shellUser: string = BOT_COMPUTER_LINUX_SHELL_USER): string {
+  return (
+    "Run a shell command inside your own computer (the Linux virtual machine), never on the person's Mac. " +
+    `Use it to install and run tools there. Runs as the separate ${shellUser} user, without sudo privileges, for up to 120 seconds, with up to 64 KiB of output. ` +
+    "~/Shared is your Computer folder, shared with the person's Files panel."
+  );
+}
+
+/**
+ * Wrap `command` to execute over SSH via `sudo -n -H -u <shellUser>` as the
+ * separate unprivileged Bot shell user (`aiden-bot`, plan decision 4a) in its
+ * home folder, so the Bot's shell processes are isolated from the desktop
+ * sign-in user and can all be terminated during sign-in.
+ */
+export function botComputerShellCommand(
+  command: string,
+  shellUser: string = BOT_COMPUTER_LINUX_SHELL_USER,
+): string {
+  if (!LINUX_USER_PATTERN.test(shellUser)) {
+    throw new BotComputerError("invalid", "The Bot computer shell user name is invalid.");
+  }
+  const inner = `cd "$HOME" || exit 1\n${command}`;
+  return `cd / && exec /usr/bin/sudo -n -H -u ${quoteRemoteArg(shellUser)} -- /bin/sh -c ${quoteRemoteArg(inner)}`;
+}
 
 export interface BotComputerShellDependencies {
   host: Pick<BotComputerHost, "ensureRunning" | "runGuestCommand" | "touch">;
@@ -92,7 +122,6 @@ export function createBotComputerShellTool(
   turn: BotComputerShellTurn,
 ): AgentTool<typeof BotComputerShellParameters, null> {
   const reason: BotComputerStartReason = turn.routine ? "routine" : "tool";
-  // Nobody can give the computer back on behalf of a routine or Telegram run: it waits only so long, in all.
   const giveBackBudget =
     (turn.unattended ?? turn.routine)
       ? (turn.giveBackBudget ?? { remainingMs: deps.unattendedWaitMs ?? BOT_COMPUTER_UNATTENDED_WAIT_MS })
@@ -108,7 +137,6 @@ export function createBotComputerShellTool(
       if (!command.trim()) return textResult("computer_shell needs a command.", true);
       const owner = (await deps.botName(botId).catch(() => undefined)) || "The Bot";
       const progress = (line: string) => onUpdate?.({ content: [{ type: "text", text: line }], details: null });
-      /** False when an unattended turn stopped waiting; the person still has the computer. */
       const waitForGiveBack = async (): Promise<boolean> => {
         progress(`Waiting for the person to give ${owner}'s computer back.`);
         return waitForBotWithin(deps.control, botId, signal, giveBackBudget);
@@ -118,8 +146,9 @@ export function createBotComputerShellTool(
           return textResult(botComputerUnattendedGaveUp(`${owner}'s`), true);
         }
         await deps.host.ensureRunning(botId, { reason, signal, onProgress: progress });
+        const remoteCommand = botComputerShellCommand(command);
         const result = await deps.control.run(botId, signal, (actionSignal) =>
-          deps.host.runGuestCommand(botId, command, {
+          deps.host.runGuestCommand(botId, remoteCommand, {
             timeoutMs: BOT_COMPUTER_SHELL_TIMEOUT_MS,
             maxOutputBytes: BOT_COMPUTER_SHELL_OUTPUT_BYTES,
             signal: actionSignal,

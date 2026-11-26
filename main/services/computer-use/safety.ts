@@ -192,7 +192,7 @@ function optionalBoolean(
   target[key] = source[key];
 }
 
-/** Mirror cua-driver 0.36.0 `verify_state` predicate validation (`expectation.rs`). */
+/** Mirror cua-driver 0.38.0 `verify_state` predicate validation (`expectation.rs`). */
 function normalizeVerifyPredicate(value: unknown, index: number): Record<string, unknown> {
   const name = `expect[${index}]`;
   const predicate = plainObject(value);

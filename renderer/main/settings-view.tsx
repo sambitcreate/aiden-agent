@@ -221,7 +221,7 @@ const settingsDescriptions = (computer: LocalComputerNoun): Record<SettingsSecti
   appControls: "Ask Aiden how a feature works or to show its settings. Chat controls use the same settings and permissions as the app.",
   computerUse: "Manage Aiden’s access to native apps and your screen.",
   bots: "Choose when Aiden asks before acting, and review what it may repeat without asking.",
-  botComputers: "Give a Bot its own macOS computer to work in, apart from yours.",
+  botComputers: "Give a Bot its own Linux computer to work in, apart from yours.",
   botBubbles: "Choose whether Bot chats can shrink into floating bubbles, and where they float.",
   simulator: "Control iOS Simulator streaming, agent access, and the helper tools on this Mac.",
   memory: "Control what Aiden remembers across chats and Workspaces.",

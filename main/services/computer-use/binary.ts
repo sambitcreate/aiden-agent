@@ -1,7 +1,6 @@
 import { createHash } from "node:crypto";
-import { constants } from "node:fs";
-import { createReadStream } from "node:fs";
-import { access, lstat, realpath } from "node:fs/promises";
+import { constants, createReadStream, type Stats } from "node:fs";
+import { access, lstat, open, realpath } from "node:fs/promises";
 import path from "node:path";
 import {
   CUA_DRIVER_BROKER_BUNDLE_ID,
@@ -16,19 +15,37 @@ import { runCuaDriverCommand } from "./process.js";
 
 // Security pins are compiled into Aiden. The packaged artifact JSON is release
 // provenance for humans/build tooling, never runtime security authority.
-const CUA_DRIVER_BINARY_SHA256 = "87c7e782e69703d95524e4ceb7ceba03c8a159caabf1f1ce2c118eade7d2a5ec";
+const CUA_DRIVER_BINARY_SHA256 = "92067848d0eeb9de76929fbd06a137af801b0ff6caedbb3109bd7a6cc84a1f9f";
+const CUA_DRIVER_BINARY_BYTES = 80_571_376;
 const CUA_DRIVER_UPSTREAM_SIGNING_IDENTIFIER = "cua-driver";
 const CUA_DRIVER_UPSTREAM_SIGNING_TEAM_ID = "YCK386LBJ7";
 
 /**
- * The pinned upstream driver's identity, for a copy Aiden checks somewhere
- * other than this Mac: a Bot computer's guest verifies the copied
+ * The pinned upstream macOS driver's identity, for a copy Aiden checks
+ * somewhere other than this Mac: a Bot computer's guest verifies the copied
  * executable against these before it is put in place (docs/bot-computers.md).
  */
 export const CUA_DRIVER_UPSTREAM_PIN = Object.freeze({
   version: CUA_DRIVER_VERSION,
+  binaryBytes: CUA_DRIVER_BINARY_BYTES,
   binarySha256: CUA_DRIVER_BINARY_SHA256,
   signingRequirement: `anchor apple generic and identifier "${CUA_DRIVER_UPSTREAM_SIGNING_IDENTIFIER}" and certificate leaf[subject.OU] = "${CUA_DRIVER_UPSTREAM_SIGNING_TEAM_ID}"`,
+});
+
+/**
+ * The pinned upstream Linux arm64 driver's identity, from the same
+ * `cua-driver-rs-v0.38.0` release tag, for Linux Bot computers running in Lume
+ * on Apple silicon Macs. Verified by exact archive/binary byte length and
+ * SHA-256 (no macOS codesign).
+ */
+export const CUA_DRIVER_LINUX_ARM64_UPSTREAM_PIN = Object.freeze({
+  version: CUA_DRIVER_VERSION,
+  tag: "cua-driver-rs-v0.38.0",
+  url: "https://github.com/trycua/cua/releases/download/cua-driver-rs-v0.38.0/cua-driver-rs-0.38.0-linux-arm64-binary.tar.gz",
+  archiveBytes: 36_674_648,
+  archiveSha256: "80c9ae66bc7322052dd426c6133c96086b33894bf06c972bca8215384400b33d",
+  binaryBytes: 56_512_184,
+  binarySha256: "26e9eee8165e9ce7b614b5e3d68e5d963231385a82b65236406718b5ce1ff936",
 });
 
 export interface CuaDriverPathOptions {
@@ -74,7 +91,7 @@ async function verifyRegularExecutable(
   candidate: string,
   message: string,
   signal?: AbortSignal,
-): Promise<void> {
+): Promise<Stats> {
   throwIfAborted(signal);
   try {
     const info = await lstat(candidate);
@@ -82,6 +99,7 @@ async function verifyRegularExecutable(
     if (!info.isFile() || info.isSymbolicLink()) throw new Error("not a regular file");
     await access(candidate, constants.R_OK | constants.X_OK);
     throwIfAborted(signal);
+    return info;
   } catch {
     throwIfAborted(signal);
     throw new CuaDriverError("driver_missing", message);
@@ -250,13 +268,16 @@ export async function resolveVendoredCuaDriverExecutable(
     throwIfAborted(signal);
     throw new CuaDriverError("driver_missing", missing);
   }
-  await verifyRegularExecutable(driverPath, missing, signal);
+  const driverInfo = await verifyRegularExecutable(driverPath, missing, signal);
   const resolvedApp = await realpath(brokerAppPath);
   const resolvedDriver = await realpath(driverPath);
   if (!resolvedDriver.startsWith(`${resolvedApp}${path.sep}Contents${path.sep}MacOS${path.sep}`)) {
     throw new CuaDriverError("invalid_driver_path", "The cua-driver executable escaped its helper bundle.");
   }
-  if ((await hashFile(resolvedDriver, signal)) !== CUA_DRIVER_BINARY_SHA256) {
+  if (
+    driverInfo.size !== CUA_DRIVER_BINARY_BYTES ||
+    (await hashFile(resolvedDriver, signal)) !== CUA_DRIVER_BINARY_SHA256
+  ) {
     throw new CuaDriverError(
       "driver_integrity_failed",
       `The cua-driver executable does not match Aiden's pinned ${CUA_DRIVER_VERSION} release.`,
@@ -269,6 +290,90 @@ export async function resolveVendoredCuaDriverExecutable(
       "The cua-driver executable failed its pinned signing requirement.",
     );
   });
+  return resolvedDriver;
+}
+
+function vendoredLinuxDriverDir(options: CuaDriverPathOptions): string {
+  return options.isPackaged
+    ? path.join(options.resourcesPath, "bot-computers", "cua-driver-linux-arm64")
+    : path.join(options.appPath, "build", "computer-use", "cua-driver-linux-arm64");
+}
+
+function isElfAarch64Header(header: Buffer): boolean {
+  return (
+    header.length >= 20 &&
+    header[0] === 0x7f &&
+    header[1] === 0x45 &&
+    header[2] === 0x4c &&
+    header[3] === 0x46 &&
+    header[4] === 2 &&
+    header[5] === 1 &&
+    header.readUInt16LE(18) === 183
+  );
+}
+
+/**
+ * The vendored Linux arm64 `cua-driver` binary for Linux Bot computers,
+ * verified against Aiden's compiled `CUA_DRIVER_LINUX_ARM64_UPSTREAM_PIN`
+ * (regular non-symlink ELF aarch64 file, exact byte length, exact SHA-256).
+ */
+export async function resolveVendoredLinuxCuaDriverExecutable(
+  options: CuaDriverPathOptions,
+  signal?: AbortSignal,
+): Promise<string> {
+  throwIfAborted(signal);
+  if (options.platform !== "darwin") {
+    throw new CuaDriverError("unsupported_platform", "The guest driver is copied only from a Mac.");
+  }
+  const driverDir = vendoredLinuxDriverDir(options);
+  const driverPath = path.join(driverDir, "cua-driver");
+  const missing = options.isPackaged
+    ? "The packaged Linux arm64 cua-driver executable is missing or invalid."
+    : "The pinned Linux arm64 cua-driver has not been vendored. Run npm run computer-use:vendor.";
+  try {
+    const dirInfo = await lstat(driverDir);
+    throwIfAborted(signal);
+    if (!dirInfo.isDirectory() || dirInfo.isSymbolicLink()) throw new Error("invalid directory");
+    const fileInfo = await lstat(driverPath);
+    throwIfAborted(signal);
+    if (!fileInfo.isFile() || fileInfo.isSymbolicLink()) throw new Error("not a regular file");
+    await access(driverPath, constants.R_OK);
+    throwIfAborted(signal);
+    if (fileInfo.size !== CUA_DRIVER_LINUX_ARM64_UPSTREAM_PIN.binaryBytes) {
+      throw new CuaDriverError(
+        "driver_integrity_failed",
+        `The Linux arm64 cua-driver size does not match Aiden's pinned ${CUA_DRIVER_VERSION} release.`,
+      );
+    }
+  } catch (error) {
+    throwIfAborted(signal);
+    if (error instanceof CuaDriverError) throw error;
+    throw new CuaDriverError("driver_missing", missing);
+  }
+  const resolvedDir = await realpath(driverDir);
+  const resolvedDriver = await realpath(driverPath);
+  if (!resolvedDriver.startsWith(`${resolvedDir}${path.sep}`)) {
+    throw new CuaDriverError("invalid_driver_path", "The Linux arm64 cua-driver escaped its directory.");
+  }
+  const handle = await open(resolvedDriver, "r");
+  try {
+    const header = Buffer.alloc(20);
+    const { bytesRead } = await handle.read(header, 0, header.length, 0);
+    if (!isElfAarch64Header(header.subarray(0, bytesRead))) {
+      throw new CuaDriverError(
+        "driver_integrity_failed",
+        "The vendored Linux arm64 cua-driver is not an aarch64 ELF binary.",
+      );
+    }
+  } finally {
+    await handle.close();
+  }
+  if ((await hashFile(resolvedDriver, signal)) !== CUA_DRIVER_LINUX_ARM64_UPSTREAM_PIN.binarySha256) {
+    throw new CuaDriverError(
+      "driver_integrity_failed",
+      `The Linux arm64 cua-driver does not match Aiden's pinned ${CUA_DRIVER_VERSION} release.`,
+    );
+  }
   return resolvedDriver;
 }
 
@@ -308,7 +413,7 @@ export async function resolveCuaDriverInstallation(
     "The Aiden Computer Use broker executable is missing or invalid.",
     signal,
   );
-  await verifyRegularExecutable(
+  const driverInfo = await verifyRegularExecutable(
     driverPath,
     "The pinned cua-driver executable is missing or invalid.",
     signal,
@@ -324,6 +429,12 @@ export async function resolveCuaDriverInstallation(
         "The Computer Use executable escaped its signed helper bundle.",
       );
     }
+  }
+  if (driverInfo.size !== CUA_DRIVER_BINARY_BYTES) {
+    throw new CuaDriverError(
+      "driver_integrity_failed",
+      `The cua-driver executable does not match Aiden's pinned ${CUA_DRIVER_VERSION} release.`,
+    );
   }
 
   const plist = await runCuaDriverCommand(

@@ -140,7 +140,7 @@ function isAction(call, action) {
 
 function shellCommand(nonce) {
   const file = acceptanceSharedFileName(nonce);
-  return `printf '%s\\n' '${nonce}' > "$HOME/Shared/${file}" && sw_vers -productVersion && cat "$HOME/Shared/${file}"`;
+  return `printf '%s\\n' '${nonce}' > "$HOME/Shared/${file}" && printf 'user:%s\\n' "$(id -un)" && uname -sm && cat "$HOME/Shared/${file}"`;
 }
 
 /**
@@ -151,7 +151,7 @@ function shellCommand(nonce) {
  * 3. wait, again and again, until a result is the give-back note: the
  *    operator presses Take over during a wait and then Give back;
  * 4. a fresh capture, as the note asks;
- * 5. computer_shell: the macOS version, and a file written to ~/Shared.
+ * 5. computer_shell: the shell user (`id -un`), the Linux kernel/arch (`uname -sm`), and a file written to ~/Shared.
  */
 export function acceptanceToolCall(history, { giveBackNote, nonce }) {
   if (typeof giveBackNote !== "string" || giveBackNote.length === 0) {
@@ -184,7 +184,7 @@ export function acceptanceToolCall(history, { giveBackNote, nonce }) {
   if (!after.some((call) => call.name === COMPUTER_SHELL)) {
     return {
       name: COMPUTER_SHELL,
-      arguments: { command: shellCommand(nonce), description: "Print the macOS version and write a shared file" },
+      arguments: { command: shellCommand(nonce), description: "Print the Linux guest architecture and write a shared file" },
     };
   }
   return null;
@@ -260,7 +260,7 @@ function firstResults(requests) {
 export function evaluateAcceptanceRequests(requests, { giveBackNote, nonce, sharedFileText }) {
   const failures = [];
   const turns = requests.filter(isAcceptanceRequest);
-  const evidence = { captureSize: null, waits: 0, interrupted: null, macosVersion: null };
+  const evidence = { captureSize: null, waits: 0, interrupted: null, guestLinux: null, shellUser: null };
   if (turns.length === 0) {
     return { ok: false, failures: ["The Bot never sent the acceptance prompt with its computer tools."], evidence };
   }
@@ -307,8 +307,13 @@ export function evaluateAcceptanceRequests(requests, { giveBackNote, nonce, shar
     failures.push("computer_shell never ran in the Bot's computer.");
   } else {
     const lines = shell.result.text.split(/\r?\n/u).map((line) => line.trim());
-    evidence.macosVersion = lines.find((line) => /^\d+\.\d+(?:\.\d+)?$/u.test(line)) ?? null;
-    if (!evidence.macosVersion) failures.push("computer_shell did not print the guest's macOS version.");
+    const userLine = lines.find((line) => /^user:\S+$/u.test(line));
+    evidence.shellUser = userLine ? userLine.slice("user:".length) : null;
+    if (evidence.shellUser !== "aiden-bot") {
+      failures.push(`computer_shell ran as ${evidence.shellUser ?? "an unknown user"} instead of aiden-bot.`);
+    }
+    evidence.guestLinux = lines.find((line) => /^Linux\s+\S+$/u.test(line)) ?? null;
+    if (!evidence.guestLinux) failures.push("computer_shell did not print the Linux guest architecture.");
     if (!lines.includes(nonce)) failures.push("computer_shell did not read back the file it wrote to ~/Shared.");
   }
   if (typeof sharedFileText !== "string" || sharedFileText.trim() !== nonce) {

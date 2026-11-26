@@ -7,6 +7,7 @@ import { isIP } from "node:net";
  */
 export interface LumeVmInfo {
   name: string;
+  os?: "macOS" | "linux";
   state: "stopped" | "running" | "provisioning" | "unknown";
   ip?: string;
   vnc?: { host: string; port: number };
@@ -63,6 +64,11 @@ function parseEntry(value: unknown): LumeVmInfo {
     stale = true;
   }
   const info: LumeVmInfo = { name: entry.name, state };
+  if (typeof entry.os === "string") {
+    const normalizedOs = entry.os.trim().toLowerCase();
+    if (normalizedOs === "macos") info.os = "macOS";
+    else if (normalizedOs === "linux") info.os = "linux";
+  }
   if (stale) info.stale = true;
   if (typeof entry.ipAddress === "string" && isIP(entry.ipAddress)) info.ip = entry.ipAddress;
   if (typeof entry.sshAvailable === "boolean") info.sshAvailable = entry.sshAvailable;
