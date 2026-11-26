@@ -151,9 +151,10 @@ final class AidenShellUITests: XCTestCase {
             "Beside the list the edge belongs to the columns"
         )
         // A closed iPhone Duo puts the bars in a side rail, whose columns own
-        // the edge, so there the swipe leaves the drawer shut.
+        // the edge, so there the swipe leaves the drawer shut. It starts on
+        // the navigation bar: started on a row, a sideways drag opens it.
         if showsSideRail(in: app) {
-            edgeSwipe(in: app)
+            edgeSwipe(in: app, atY: app.navigationBars["Inbox"].frame.midY)
             XCTAssertFalse(
                 app.buttons["Close menu"].waitForExistence(timeout: 3),
                 "An edge swipe opened the drawer beside the side rail"
@@ -300,9 +301,10 @@ final class AidenShellUITests: XCTestCase {
 
     /// A drag from the leading edge across most of the window, at a person's
     /// pace, so the stack's own Back gesture recognizes it as well as ours.
-    private func edgeSwipe(in app: XCUIApplication) {
+    private func edgeSwipe(in app: XCUIApplication, atY y: CGFloat? = nil) {
         let window = AidenStateMatrix.window(of: app)
-        let start = window.coordinate(withNormalizedOffset: CGVector(dx: 0, dy: 0.5)).withOffset(CGVector(dx: 4, dy: 0))
+        let startY = y.map { $0 - window.frame.minY } ?? window.frame.height / 2
+        let start = window.coordinate(withNormalizedOffset: .zero).withOffset(CGVector(dx: 4, dy: startY))
         let distance = window.frame.width * 0.75
         start.press(forDuration: 0.1, thenDragTo: start.withOffset(CGVector(dx: distance, dy: 0)), withVelocity: .slow, thenHoldForDuration: 0)
     }
@@ -1034,6 +1036,12 @@ final class AidenShellUITests: XCTestCase {
         // Far down a lazy form: it isn't built until it's scrolled to.
         for _ in 0..<6 where !change.waitForExistence(timeout: 1) { offline.swipeUp() }
         XCTAssertTrue(change.exists, "No way to select the offline machine")
+        // In a closed iPhone Duo's short window it is built under the dock,
+        // where a tap would open the running accessory's chat instead.
+        for _ in 0..<4 where isUnderTheBottomBars(change, in: offline) {
+            dragResults(in: offline, from: 0.6, to: 0.4)
+        }
+        XCTAssertFalse(isUnderTheBottomBars(change, in: offline), "The default-computer button is still under the dock")
         change.tap()
         let failure = offline.alerts.buttons["OK"].firstMatch
         if failure.waitForExistence(timeout: 5) { failure.tap() }
@@ -2521,9 +2529,10 @@ final class AidenShellUITests: XCTestCase {
             // counts: text wholly on the screen, and controls and graphics
             // anywhere, must pass. On a phone the lists scroll under the dock to
             // the window's edge, so the last row Settings or the computer editor
-            // shows runs past it too.
+            // shows runs past it too, and on a closed iPhone Duo's short window
+            // so does the Inbox's.
             reason: "A list row's text the window's bottom edge cuts",
-            ceiling: ["settings": 1, "machine editor": 1],
+            ceiling: ["inbox": 1, "settings": 1, "machine editor": 1],
             ceilingInRegularWidth: ["inbox": 1],
             matches: { finding in
                 guard finding.type == .contrast, finding.elementType == .staticText,
@@ -2653,9 +2662,11 @@ final class AidenShellUITests: XCTestCase {
             // for the band beside each bar on iOS 26. Last, so a finding the
             // rules above explain is counted there. Settings went from 3 to 4 on
             // iOS 27 in the final review's fix: the Connected machine row (M4) is
-            // gone, so one more Read Aloud row sits under the tab bar.
+            // gone, so one more Read Aloud row sits under the tab bar. On a
+            // closed iPhone Duo's short window the computer editor's colour
+            // row sits under the dock's soft edge.
             reason: "Contrast of text in or under glass (navigation bar, tab bar, bottom accessory, search field, Bot connection hint)",
-            ceiling: ["inbox": 8, "search": 1, "bots": 1, "bot": 2, "machines": 1, "settings": 4],
+            ceiling: ["inbox": 8, "search": 1, "bots": 1, "bot": 2, "machines": 1, "machine editor": 1, "settings": 4],
             ceilingOnIOS26: ["inbox": 12, "search": 1, "bot": 2, "machine editor": 2, "settings": 6],
             ceilingInRegularWidth: ["inbox": 1, "bot": 2],
             matches: { $0.type == .contrast && $0.touchesGlass }
@@ -2982,26 +2993,27 @@ final class AidenShellUITests: XCTestCase {
         app.terminate()
     }
 
+    /// Whether `element` lies under the running accessory or the dock. A list
+    /// scrolls under both, and XCUITest calls a row there hittable, but a tap
+    /// on it lands on the bar instead. The accessory is under the list on a
+    /// phone and beside the tabs at the top of a regular width; the dock's bar
+    /// runs on below its capsule to the window's bottom edge.
+    private func isUnderTheBottomBars(_ element: XCUIElement, in app: XCUIApplication) -> Bool {
+        let accessory = AidenStateMatrix.runningAccessory(in: app)
+        let dock = AidenStateMatrix.dock(in: app)
+        return (accessory.exists && element.frame.intersects(accessory.frame))
+            || (dock.exists && element.frame.maxY > dock.frame.minY)
+    }
+
     private func openLongChat(in app: XCUIApplication) {
         _ = openInbox(in: app)
         let row = app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", "Rename the onboarding assets")).firstMatch
         for _ in 0..<8 where !row.exists || !row.isHittable { app.swipeUp() }
         XCTAssertTrue(row.waitForExistence(timeout: 10), "No long chat in the inbox")
-        // The list scrolls under the running accessory and the dock, and XCUITest
-        // calls a row there hittable, but a tap on it lands on the bar instead.
-        // The accessory is under the list on a phone and beside the tabs at the
-        // top of a regular width; the dock's bar runs on below its capsule to the
-        // window's bottom edge.
-        let accessory = app.buttons["aiden.running-accessory"].firstMatch
-        let dock = AidenStateMatrix.dock(in: app)
-        func underABar() -> Bool {
-            (accessory.exists && row.frame.intersects(accessory.frame))
-                || (dock.exists && row.frame.maxY > dock.frame.minY)
-        }
-        for _ in 0..<4 where underABar() {
+        for _ in 0..<4 where isUnderTheBottomBars(row, in: app) {
             dragResults(in: app, from: 0.6, to: 0.4)
         }
-        XCTAssertFalse(underABar(), "The long chat's row is still under the running accessory or the dock")
+        XCTAssertFalse(isUnderTheBottomBars(row, in: app), "The long chat's row is still under the running accessory or the dock")
         hideOverlaySidebar(in: app)
         row.tap()
         XCTAssertTrue(app.buttons["Send message"].firstMatch.waitForExistence(timeout: 10), "The chat did not open")

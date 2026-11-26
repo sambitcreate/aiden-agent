@@ -159,9 +159,11 @@ enum AidenStateMatrix {
         app.windows.allElementsBoundByIndex.last ?? app.windows.firstMatch
     }
 
-    /// Taps beside an open popover, inside the window.
+    /// Taps beside an open popover, inside the window: low on the leading
+    /// edge, where no popover reaches. A popover hung from a closed iPhone
+    /// Duo's side rail runs down most of the window, over the middle.
     static func tapOutsidePopover(in app: XCUIApplication) {
-        window(of: app).coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.75)).tap()
+        window(of: app).coordinate(withNormalizedOffset: CGVector(dx: 0.04, dy: 0.96)).tap()
     }
 
     /// Drags a bottom corner of the window to `x`, as a person resizes one.
