@@ -89,7 +89,7 @@
     ],
     "bot-computer-tab.spec.ts": [
       "renderer/components/bot",
-      "renderer/components/settings/bot-computer",
+      "renderer/components/settings/bot-computers",
       "main/services/bot-computers",
       "main/services/bot-runtime/bot-computer"
     ],
