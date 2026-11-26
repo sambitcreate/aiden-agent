@@ -192,7 +192,7 @@ test("an approval answered in the mini chat reaches the Bot by its wait id", asy
     { openBotId: "bot-1" },
   );
   const chat = await screen.findByRole("region", { name: "Penny chat" });
-  const card = await within(chat).findByRole("region", { name: "Review before Send email" });
+  const card = await within(chat).findByRole("region", { name: "Request from Penny: Review before Send email" });
   fireEvent.click(within(card).getByRole("button", { name: "Allow once" }));
   await waitFor(() =>
     assert.deepEqual(calls.find((call) => call.channel === "bots:approve")?.args, [{ waitId: "wait-9", decision: "allow" }]),
