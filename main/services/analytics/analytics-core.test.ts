@@ -280,6 +280,64 @@ test("the outgoing guard rejects events outside the registry", () => {
   assert.equal(validateOutgoingEvent({ event: "$exception", properties: { source: "main", level: "error" } }), null);
 });
 
+test("browser_element_grabbed and browser_grab_sent pass content-free props and reject invalid or free-text fields", () => {
+  const { core, sent } = harness();
+  const untyped = core.track as (event: string, props: Record<string, unknown>) => boolean;
+
+  assert.equal(
+    untyped("browser_element_grabbed", {
+      kind: "react",
+      source: "toolbar",
+      pageUrl: "https://private.example/app",
+      selector: ".secret-card",
+    }),
+    true,
+  );
+  assert.equal(
+    core.track("browser_element_grabbed", { kind: "dom", source: "shortcut" }),
+    true,
+  );
+  assert.equal(
+    untyped("browser_element_grabbed", { kind: "vue", source: "toolbar" }),
+    false,
+  );
+  assert.equal(
+    untyped("browser_element_grabbed", { kind: "react", source: "menu" }),
+    false,
+  );
+
+  assert.equal(
+    untyped("browser_grab_sent", {
+      count_bucket: "2-3",
+      with_screenshot: true,
+      html: "<div>secret</div>",
+    }),
+    true,
+  );
+  assert.equal(
+    untyped("browser_grab_sent", { count_bucket: "99", with_screenshot: false }),
+    false,
+  );
+  assert.equal(
+    untyped("browser_grab_sent", { count_bucket: "1" }),
+    false,
+  );
+
+  assert.equal(sent.length, 3);
+  assert.equal(sent[0]!.event, "browser_element_grabbed");
+  assert.equal(sent[0]!.properties.kind, "react");
+  assert.equal(sent[0]!.properties.source, "toolbar");
+  assert.equal("pageUrl" in sent[0]!.properties, false);
+  assert.equal("selector" in sent[0]!.properties, false);
+  assert.ok(validateOutgoingEvent(sent[0]!));
+
+  assert.equal(sent[2]!.event, "browser_grab_sent");
+  assert.equal(sent[2]!.properties.count_bucket, "2-3");
+  assert.equal(sent[2]!.properties.with_screenshot, true);
+  assert.equal("html" in sent[2]!.properties, false);
+  assert.ok(validateOutgoingEvent(sent[2]!));
+});
+
 test("floating Quick Chat events accept allowlisted enums/booleans and drop invalid payloads", () => {
   const { core, sent } = harness();
   assert.equal(core.track("floating_chat_opened", { source: "hotkey" }), true);

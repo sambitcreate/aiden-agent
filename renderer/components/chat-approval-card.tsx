@@ -1,11 +1,25 @@
 import { ClassifierApproval } from "./classifier-approval";
 import { classifierApprovalState } from "../shared/classifier-approval";
 import * as React from "react";
-import { CalendarClock, FilePen, FilePlus, Hand, Mic, ShieldQuestion, SquareTerminal, type LucideIcon } from "lucide-react";
-import { Button, Text } from "./ui";
+import {
+  ArrowLeftRight,
+  CalendarClock,
+  FilePen,
+  FilePlus,
+  Hand,
+  Mic,
+  ShieldQuestion,
+  SquareTerminal,
+  TriangleAlert,
+  type LucideIcon,
+} from "lucide-react";
+import { Badge, Button, Text } from "./ui";
+import { Tooltip } from "./ui-primitives";
+import type { CommandReading } from "../shared/command-reading";
 import { ApprovalActions, ApprovalIconTile, type ApprovalRememberOption } from "./approval-card-parts";
 import { CopyButton } from "./copy-button";
 import { cn } from "../lib/ui-utils";
+import { prefersReducedMotion } from "../lib/appearance-runtime";
 import { useApprovalShortcuts } from "../lib/approval-shortcuts";
 import { SubagentWorkspaceWriteApproval } from "./subagent-workspace-write-approval";
 import {
@@ -80,23 +94,100 @@ export function ApprovalIcon({
   return <ApprovalIconTile icon={Icon} />;
 }
 
-function ApprovalCommand({ command, descriptionId }: { command: string; descriptionId: string }) {
+/**
+ * A command under review. With the model's plain-words description the well
+ * opens on what the command will do, and the flip button turns it over to the
+ * exact command (and back). Aiden's own tags, read from the command text, sit
+ * under the well on both sides, so a description can never hide them.
+ */
+export function ApprovalCommand({
+  command,
+  reading,
+  descriptionId,
+}: {
+  command: string;
+  reading?: CommandReading;
+  descriptionId: string;
+}) {
+  const explanation = reading?.explanation;
+  const tags = reading?.tags ?? [];
+  const [side, setSide] = React.useState<"words" | "command">("words");
+  const [flipped, setFlipped] = React.useState(false);
+  const showWords = explanation !== undefined && side === "words";
+  const flipLabel = showWords ? "Show the command" : "Show what it will do";
+  const wellClass =
+    "approval-well max-h-40 select-text overflow-y-auto py-3 pl-4 whitespace-pre-wrap break-words focus-visible:outline focus-visible:outline-2 focus-visible:outline-focus-ring";
   return (
-    <div className="approval-well relative mt-3 bg-well">
-      <Text
-        variant="regular"
-        as="p"
-        id={descriptionId}
-        tabIndex={0}
-        className="approval-well max-h-40 select-text overflow-y-auto py-3 pr-10 pl-4 font-mono whitespace-pre-wrap break-words focus-visible:outline focus-visible:outline-2 focus-visible:outline-focus-ring"
-      >
-        <span aria-hidden="true" className="select-none text-tertiary">
-          ${" "}
-        </span>
-        {command}
-      </Text>
-      <CopyButton text={command} label="Copy command" className="absolute top-2 right-2" />
-    </div>
+    <>
+      <div className="approval-well relative mt-3 bg-well">
+        <div key={showWords ? "words" : "command"} className="approval-flip-face" data-flipped={flipped ? "" : undefined}>
+          {showWords ? (
+            <Text
+              variant="regular"
+              as="p"
+              id={descriptionId}
+              tabIndex={0}
+              data-approval-side="words"
+              className={cn(wellClass, "pr-12 text-pretty")}
+            >
+              <span className="block text-small text-tertiary">What it will do</span>
+              {explanation}
+            </Text>
+          ) : (
+            <Text
+              variant="regular"
+              as="p"
+              id={descriptionId}
+              tabIndex={0}
+              data-approval-side="command"
+              className={cn(wellClass, "font-mono", explanation !== undefined ? "pr-20" : "pr-10")}
+            >
+              {explanation !== undefined ? <span className="block font-sans text-small text-tertiary">Command</span> : null}
+              <span aria-hidden="true" className="select-none text-tertiary">
+                ${" "}
+              </span>
+              {command}
+            </Text>
+          )}
+        </div>
+        <div className="absolute top-2 right-2 flex items-center gap-0.5">
+          {explanation !== undefined ? (
+            <Tooltip content={flipLabel}>
+              <Button
+                iconOnly
+                size="small"
+                variant="transparent"
+                aria-label={flipLabel}
+                className="text-tertiary hover:text-secondary"
+                onClick={() => {
+                  setFlipped(true);
+                  setSide(showWords ? "command" : "words");
+                }}
+              >
+                <ArrowLeftRight className="size-3.5" />
+              </Button>
+            </Tooltip>
+          ) : null}
+          {!showWords ? <CopyButton text={command} label="Copy command" /> : null}
+        </div>
+      </div>
+      {tags.length > 0 ? (
+        <ul aria-label="What Aiden sees in this command" className="mt-2 flex shrink-0 flex-wrap justify-center gap-1.5">
+          {tags.map((tag) => (
+            <li key={tag.label}>
+              <Badge
+                color={tag.tone === "risk" ? "red" : "gray"}
+                icon={tag.tone === "risk" ? <TriangleAlert /> : undefined}
+                className={cn("text-small", tag.tone === "calm" && "font-normal text-secondary")}
+                data-command-tag={tag.tone}
+              >
+                {tag.label}
+              </Badge>
+            </li>
+          ))}
+        </ul>
+      ) : null}
+    </>
   );
 }
 
@@ -220,29 +311,87 @@ function claimsKind(details: unknown, kind: string): boolean {
   );
 }
 
+const approvalArrivalTimers = new WeakMap<HTMLElement, ReturnType<typeof setTimeout>>();
+/** How long the tint in styles.css (`[data-approval-arrival]`) fades, or holds under Reduce Motion. */
+const APPROVAL_ARRIVAL_MS = 1_200;
+
 /**
- * The pending approval above the composer, shared by workspace chats, Bot
- * chats and paired hosts' chats. A details payload that claims a specialized
- * kind but fails its guard can never be allowed.
+ * Go to approval lands on the card as a whole: it scrolls into view, takes
+ * focus without pressing anything, and briefly tints so a pointer user, who
+ * gets no focus ring, sees where they arrived. Under Reduce Motion it scrolls
+ * at once and the tint holds still instead of fading.
  */
-export function ChatApprovalCard({
+export function revealApprovalCard(card: HTMLElement): void {
+  card.focus({ preventScroll: true });
+  const reduceMotion = prefersReducedMotion();
+  card.scrollIntoView?.({ block: "nearest", behavior: reduceMotion ? "auto" : "smooth" });
+  const previous = approvalArrivalTimers.get(card);
+  if (previous !== undefined) clearTimeout(previous);
+  delete card.dataset.approvalArrival;
+  // Reading layout restarts the tint when Go to approval is pressed again.
+  void card.offsetWidth;
+  card.dataset.approvalArrival = "";
+  approvalArrivalTimers.set(card, setTimeout(() => {
+    approvalArrivalTimers.delete(card);
+    delete card.dataset.approvalArrival;
+  }, APPROVAL_ARRIVAL_MS));
+}
+
+/** What a pending approval asks for, and whether it claims a kind it fails. */
+function approvalRequestKinds(pending: ApprovalPrompt) {
+  const details = pending.details as unknown;
+  const schedule = isScheduledTaskApprovalDetails(details) || isAssistantAutomationApprovalDetails(details) ? details : undefined;
+  const pendingWorkspaceWrite = isSubagentWorkspaceWriteApprovalDetails(pending.details) ? pending.details : undefined;
+  const pendingMcpMutation = isSubagentMcpMutationApprovalDetails(pending.details) ? pending.details : undefined;
+  const pendingShell = isSubagentShellApprovalDetails(pending.details) ? pending.details : undefined;
+  const pendingRunGrant = isSubagentRunGrantApprovalDetails(pending.details) ? pending.details : undefined;
+  const pendingFormFill = isFormFillBatchApprovalDetails(pending.details) ? pending.details : undefined;
+  const pendingHook = isHookProposalApprovalDetails(details) ? details : undefined;
+  const pendingClassifier = classifierApprovalState(pending.toolName, details);
+  const invalidPendingPrivilegedApproval =
+    (claimsKind(details, "scheduled-task") && !schedule) ||
+    (claimsKind(details, "assistant-automation") && !schedule) ||
+    pendingClassifier.invalid ||
+    (claimsKind(details, "subagent-workspace-write") && pendingWorkspaceWrite === undefined) ||
+    (claimsKind(details, "subagent-mcp-mutation") && pendingMcpMutation === undefined) ||
+    (claimsKind(details, "subagent-shell") && pendingShell === undefined) ||
+    (claimsKind(details, "subagent-run-grant") && pendingRunGrant === undefined) ||
+    (claimsKind(details, "form-fill-batch") && pendingFormFill === undefined) ||
+    (claimsKind(details, HOOK_PROPOSAL_APPROVAL_KIND) && pendingHook === undefined);
+  return {
+    details,
+    schedule,
+    pendingWorkspaceWrite,
+    pendingMcpMutation,
+    pendingShell,
+    pendingRunGrant,
+    pendingFormFill,
+    pendingHook,
+    pendingClassifier,
+    invalidPendingPrivilegedApproval,
+  };
+}
+
+function approvalStatusText({
   pending,
-  deciding,
-  onDecide,
-  cardRef,
-  denyRef,
-  disabledReason,
   pendingCount = 1,
-  computerUseHost = "local",
-  keyboardShortcuts = false,
-  liveVoice = null,
   requester = "Aiden",
-  alwaysOption,
-  notes = [],
-  suggestion,
-  allowElsewhere,
-  error,
-}: {
+  liveVoice = null,
+  disabledReason,
+}: ChatApprovalCardProps): string {
+  const position = pendingCount > 1 ? `, 1 of ${pendingCount}` : "";
+  if (isComputerUseAccessApprovalDetails(pending.details)) return `Approval needed for Computer Use${position}`;
+  const kinds = approvalRequestKinds(pending);
+  if (kinds.invalidPendingPrivilegedApproval) return "Invalid privileged approval blocked";
+  const subject =
+    kinds.pendingWorkspaceWrite?.childLabel ??
+    kinds.pendingMcpMutation?.childLabel ??
+    kinds.pendingShell?.childLabel ??
+    toolLabel(pending.toolName);
+  return `${requester === "Aiden" ? "Approval needed" : `${requester} needs approval`} for ${subject}${position}${liveVoice === "voice" && !disabledReason ? ". Live is listening: say allow or deny" : ""}`;
+}
+
+type ChatApprovalCardProps = {
   pending: ApprovalPrompt;
   deciding: boolean;
   onDecide: (decision: "allow" | "deny", options?: ChatApprovalDecisionOptions) => void;
@@ -279,31 +428,62 @@ export function ChatApprovalCard({
   allowElsewhere?: string;
   /** The last answer could not be sent. */
   error?: string | null;
-}) {
+};
+
+/**
+ * The pending approval above the composer, shared by workspace chats, Bot
+ * chats and paired hosts' chats. A details payload that claims a specialized
+ * kind but fails its guard can never be allowed.
+ */
+export function ChatApprovalCard(props: ChatApprovalCardProps) {
+  return (
+    // Approvals are the user's: Aiden Live can never press Allow, Always allow or their menu.
+    <LiveGuard guard="you">
+    <div className="flex min-h-0 flex-col">
+      {/* The status line outlives each approval, so a screen reader announces
+          the next one as its text changes; the card below it belongs to one
+          approval and starts fresh for the next (its choices, its tint). */}
+      <p className="sr-only" role="status">
+        {approvalStatusText(props)}
+      </p>
+      <ApprovalCardBody key={props.pending.approvalId} {...props} />
+    </div>
+    </LiveGuard>
+  );
+}
+
+function ApprovalCardBody({
+  pending,
+  deciding,
+  onDecide,
+  cardRef,
+  denyRef,
+  disabledReason,
+  pendingCount = 1,
+  computerUseHost = "local",
+  keyboardShortcuts = false,
+  liveVoice = null,
+  requester = "Aiden",
+  alwaysOption,
+  notes = [],
+  suggestion,
+  allowElsewhere,
+  error,
+}: ChatApprovalCardProps) {
   const { platform } = useAppCapabilities();
-  const details = pending.details as unknown;
-  const schedule = isScheduledTaskApprovalDetails(details) || isAssistantAutomationApprovalDetails(details) ? details : undefined;
-  const pendingWorkspaceWrite = isSubagentWorkspaceWriteApprovalDetails(pending.details) ? pending.details : undefined;
-  const pendingMcpMutation = isSubagentMcpMutationApprovalDetails(pending.details) ? pending.details : undefined;
-  const pendingShell = isSubagentShellApprovalDetails(pending.details) ? pending.details : undefined;
-  const pendingRunGrant = isSubagentRunGrantApprovalDetails(pending.details) ? pending.details : undefined;
-  const pendingFormFill = isFormFillBatchApprovalDetails(pending.details) ? pending.details : undefined;
-  const pendingHook = isHookProposalApprovalDetails(details) ? details : undefined;
-  const pendingClassifier = classifierApprovalState(pending.toolName, details);
-  const invalidPendingPrivilegedApproval =
-    (claimsKind(details, "scheduled-task") && !schedule) ||
-    (claimsKind(details, "assistant-automation") && !schedule) ||
-    pendingClassifier.invalid ||
-    (claimsKind(details, "subagent-workspace-write") && pendingWorkspaceWrite === undefined) ||
-    (claimsKind(details, "subagent-mcp-mutation") && pendingMcpMutation === undefined) ||
-    (claimsKind(details, "subagent-shell") && pendingShell === undefined) ||
-    (claimsKind(details, "subagent-run-grant") && pendingRunGrant === undefined) ||
-    (claimsKind(details, "form-fill-batch") && pendingFormFill === undefined) ||
-    (claimsKind(details, HOOK_PROPOSAL_APPROVAL_KIND) && pendingHook === undefined);
+  const {
+    details,
+    schedule,
+    pendingWorkspaceWrite,
+    pendingMcpMutation,
+    pendingShell,
+    pendingRunGrant,
+    pendingFormFill,
+    pendingHook,
+    pendingClassifier,
+    invalidPendingPrivilegedApproval,
+  } = approvalRequestKinds(pending);
   const [formFillExcludedOrders, setFormFillExcludedOrders] = React.useState<number[]>([]);
-  React.useEffect(() => {
-    setFormFillExcludedOrders([]);
-  }, [pending.approvalId]);
   const pendingCanAllow = pending.canAllow !== false && !invalidPendingPrivilegedApproval && allowElsewhere === undefined;
   // Only plain workspace writes and shell commands can be remembered; the main
   // process offers scopes solely for those, and specialized cards keep once.
@@ -337,6 +517,15 @@ export function ChatApprovalCard({
     );
   }
   const summaryId = `approval-summary-${pending.approvalId}`;
+  // A helper's or a Bot's card is named for who asked, so it reads as theirs
+  // when Go to approval moves focus onto it; Aiden's own keeps its question.
+  const requestedBy =
+    pendingRunGrant?.childLabel ??
+    pendingWorkspaceWrite?.childLabel ??
+    pendingMcpMutation?.childLabel ??
+    pendingShell?.childLabel ??
+    (requester === "Aiden" ? undefined : requester);
+  const requestedById = `approval-requester-${pending.approvalId}`;
   // A card that can't be allowed here still shows its request when the reason
   // is only where it may be allowed.
   const reviewable = pendingCanAllow || (allowElsewhere !== undefined && !invalidPendingPrivilegedApproval && pending.canAllow !== false);
@@ -355,154 +544,159 @@ export function ChatApprovalCard({
   }));
 
   return (
-    // Approvals are the user's: Aiden Live can never press Allow, Always allow or their menu.
-    <LiveGuard guard="you">
-    <div className="flex min-h-0 flex-col">
-      <p className="sr-only" role="status">
-        {invalidPendingPrivilegedApproval
-          ? "Invalid privileged approval blocked"
-          : `${requester === "Aiden" ? "Approval needed" : `${requester} needs approval`} for ${pendingWorkspaceWrite?.childLabel ?? pendingMcpMutation?.childLabel ?? pendingShell?.childLabel ?? toolLabel(pending.toolName)}${pendingCount > 1 ? `, 1 of ${pendingCount}` : ""}${liveVoice === "voice" && !disabledReason ? ". Live is listening: say allow or deny" : ""}`}
-      </p>
-      <section
-        ref={cardRef}
-        aria-labelledby={`approval-title-${pending.approvalId}`}
-        aria-describedby={summaryId}
-        className={cn(
-          // The chat's footer gives the card only the room the composer leaves. A
-          // schedule review shrinks first; past that, the card scrolls from its question.
-          "approval-shell composer-shell min-h-0 overflow-y-auto overscroll-contain bg-popover p-4 shadow-composer",
-          schedule && pendingCanAllow && "flex flex-col",
-        )}
-      >
-        <div className="flex shrink-0 flex-col items-center text-center">
-          <ApprovalIcon
-            preview={plainPreview}
-            command={plainCommand !== undefined}
-            icon={schedule && pendingCanAllow ? CalendarClock : undefined}
-          />
-          <Text variant="strong" as="p" id={`approval-title-${pending.approvalId}`} className="mt-2.5 text-balance">
-            {invalidPendingPrivilegedApproval
-              ? "Invalid privileged approval blocked"
-              : // A hook the person can't apply here reads as the plain card it falls back to.
-                (pendingHook && !pendingCanAllow ? undefined : approvalDetailsHeadline(details)) ?? approvalHeadline(pending)}
-            {pendingCount > 1 ? <span className="ml-1.5 font-normal text-tertiary">1 of {pendingCount}</span> : null}
-          </Text>
-        </div>
-        {!reviewable ? (
-          <Text variant="small" as="p" id={summaryId} className="approval-well mt-3 bg-well px-4 py-3">
-            Aiden cannot safely authorize this action from this view. Deny it here or review the exact action on the
-            device that owns this chat.
-          </Text>
-        ) : schedule ? (
-          <ScheduledTaskApproval details={schedule} descriptionId={summaryId} />
-        ) : pendingClassifier.details ? (
-          <ClassifierApproval details={pendingClassifier.details} descriptionId={summaryId} />
-        ) : pendingWorkspaceWrite ? (
-          <SubagentWorkspaceWriteApproval details={pendingWorkspaceWrite} descriptionId={summaryId} />
-        ) : pendingMcpMutation ? (
-          <SubagentMcpMutationApproval details={pendingMcpMutation} descriptionId={summaryId} />
-        ) : pendingShell ? (
-          <SubagentShellApproval details={pendingShell} descriptionId={summaryId} />
-        ) : pendingRunGrant ? (
-          <SubagentRunGrantApproval details={pendingRunGrant} descriptionId={summaryId} />
-        ) : pendingHook ? (
-          <HookProposalApproval details={pendingHook} descriptionId={summaryId} />
-        ) : pendingFormFill ? (
-          <FormFillApproval
-            details={pendingFormFill}
-            descriptionId={summaryId}
-            onDeselectChange={setFormFillExcludedOrders}
-          />
-        ) : plainPreview?.kind === "file" ? (
-          <ApprovalFileChange preview={plainPreview} descriptionId={summaryId} />
-        ) : plainCommand !== undefined ? (
-          <ApprovalCommand command={plainCommand} descriptionId={summaryId} />
-        ) : (
-          <Text
-            variant="small"
-            as="p"
-            id={summaryId}
-            tabIndex={0}
-            className="approval-well mt-3 max-h-32 select-text overflow-y-auto bg-well px-4 py-3 font-mono whitespace-pre-wrap break-words focus-visible:outline focus-visible:outline-2 focus-visible:outline-focus-ring"
-          >
-            {pending.summary}
-          </Text>
-        )}
-        <Text variant="small" color="secondary" as="p" className="mt-2.5 shrink-0 text-center text-pretty">
-          {invalidPendingPrivilegedApproval
-            ? "This malformed privileged action cannot be allowed. Deny it to continue."
-            : pendingWorkspaceWrite
-              ? "Review this one exact file change before Aiden continues."
-              : pendingMcpMutation
-                ? "Review this one exact external mutation before Aiden continues."
-                : pendingShell
-                  ? "Review this one exact full-host command before Aiden continues."
-                  : pendingRunGrant
-                    ? "Review this grant for the entire subagent run."
-                    : pendingHook && pendingCanAllow
-                      ? HOOK_PROPOSAL_APPROVAL_FOOTER
-                      : schedule
-                      ? scheduleApprovalFooter(platform)
-                      : approvalMeta(plainPreview, requester)}
-        </Text>
-        {notes.map((note) => (
-          <Text key={note} variant="small" color="tertiary" as="p" className="mt-1 shrink-0 text-center text-pretty">
-            {note}
-          </Text>
-        ))}
-        {suggestion ? (
-          <div className="mt-1 flex shrink-0 flex-wrap items-center justify-center gap-x-1.5" role="group" aria-label={suggestion.text}>
-            <Text variant="small" color="tertiary" as="span" className="text-pretty">
-              {suggestion.text}
-            </Text>
-            <Button variant="transparent" size="small" disabled={suggestion.busy === true || deciding} onClick={suggestion.onAction}>
-              {suggestion.action}
-            </Button>
-          </div>
-        ) : null}
-        {allowElsewhere !== undefined ? (
-          <Text variant="small" color="secondary" as="p" role="note" className="mt-1.5 shrink-0 text-center">
-            {`Allow it on ${allowElsewhere}.`}
-          </Text>
-        ) : null}
-        {disabledReason ? (
-          <Text variant="small" color="secondary" as="p" role="note" className="mt-1.5 shrink-0 text-center">
-            {disabledReason}
-          </Text>
-        ) : null}
-        {liveVoice && !disabledReason ? <LiveVoiceApprovalHint mode={liveVoice} /> : null}
-        {error ? (
-          <Text variant="small" as="p" role="alert" className="mt-1.5 shrink-0 text-center text-status-red">
-            {error}
-          </Text>
-        ) : null}
-        <ApprovalActions
-          denyRef={denyRef}
-          // A held change (a hook the agent proposed) is applied or dismissed, never "allowed".
-          denyLabel={pendingFormFill ? "Cancel" : pendingHook ? "Dismiss" : "Deny"}
-          onDeny={() => onDecide("deny")}
-          {...(pendingCanAllow
-            ? {
-                allowLabel: deciding
-                  ? "Sending…"
-                  : pendingFormFill
-                    ? `Fill ${pendingFormFill.rows.length - formFillExcludedOrders.length} field${pendingFormFill.rows.length - formFillExcludedOrders.length === 1 ? "" : "s"}`
-                    : pendingMcpMutation
-                      ? subagentMcpMutationAllowLabel(pendingMcpMutation)
-                      : pendingRunGrant
-                        ? "Allow for run"
-                        : pendingHook
-                          ? "Apply"
-                          : "Allow once",
-                onAllow: () => onDecide("allow", pendingFormFill ? { formFillExcludedOrders } : undefined),
-              }
-            : {})}
-          rememberOptions={rememberOptions}
-          disabled={disabled}
-          keyboardShortcuts={keyboardShortcuts}
+    <section
+      ref={cardRef}
+      // Focusable as a whole, so moving here never lands on Allow or Deny.
+      tabIndex={-1}
+      aria-labelledby={
+        requestedBy ? `${requestedById} approval-title-${pending.approvalId}` : `approval-title-${pending.approvalId}`
+      }
+      aria-describedby={summaryId}
+      className={cn(
+        // The chat's footer gives the card only the room the composer leaves. A
+        // schedule review shrinks first; past that, the card scrolls from its question.
+        "approval-shell composer-shell min-h-0 overflow-y-auto overscroll-contain bg-popover p-4 shadow-composer",
+        "outline-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring",
+        schedule && pendingCanAllow && "flex flex-col",
+      )}
+    >
+      {requestedBy ? (
+        <span id={requestedById} className="sr-only">
+          {`Request from ${requestedBy}:`}
+        </span>
+      ) : null}
+      <div className="flex shrink-0 flex-col items-center text-center">
+        <ApprovalIcon
+          preview={plainPreview}
+          command={plainCommand !== undefined}
+          icon={schedule && pendingCanAllow ? CalendarClock : undefined}
         />
-      </section>
-    </div>
-    </LiveGuard>
+        <Text variant="strong" as="p" id={`approval-title-${pending.approvalId}`} className="mt-2.5 text-balance">
+          {invalidPendingPrivilegedApproval
+            ? "Invalid privileged approval blocked"
+            : // A hook the person can't apply here reads as the plain card it falls back to.
+              (pendingHook && !pendingCanAllow ? undefined : approvalDetailsHeadline(details)) ?? approvalHeadline(pending)}
+          {pendingCount > 1 ? <span className="ml-1.5 font-normal text-tertiary">1 of {pendingCount}</span> : null}
+        </Text>
+      </div>
+      {!reviewable ? (
+        <Text variant="small" as="p" id={summaryId} className="approval-well mt-3 bg-well px-4 py-3">
+          Aiden cannot safely authorize this action from this view. Deny it here or review the exact action on the
+          device that owns this chat.
+        </Text>
+      ) : schedule ? (
+        <ScheduledTaskApproval details={schedule} descriptionId={summaryId} />
+      ) : pendingClassifier.details ? (
+        <ClassifierApproval details={pendingClassifier.details} descriptionId={summaryId} />
+      ) : pendingWorkspaceWrite ? (
+        <SubagentWorkspaceWriteApproval details={pendingWorkspaceWrite} descriptionId={summaryId} />
+      ) : pendingMcpMutation ? (
+        <SubagentMcpMutationApproval details={pendingMcpMutation} descriptionId={summaryId} />
+      ) : pendingShell ? (
+        <SubagentShellApproval details={pendingShell} descriptionId={summaryId} />
+      ) : pendingRunGrant ? (
+        <SubagentRunGrantApproval details={pendingRunGrant} descriptionId={summaryId} />
+      ) : pendingHook ? (
+        <HookProposalApproval details={pendingHook} descriptionId={summaryId} />
+      ) : pendingFormFill ? (
+        <FormFillApproval
+          details={pendingFormFill}
+          descriptionId={summaryId}
+          onDeselectChange={setFormFillExcludedOrders}
+        />
+      ) : plainPreview?.kind === "file" ? (
+        <ApprovalFileChange preview={plainPreview} descriptionId={summaryId} />
+      ) : plainCommand !== undefined ? (
+        <ApprovalCommand
+          key={pending.approvalId}
+          command={plainCommand}
+          {...(pending.reading ? { reading: pending.reading } : {})}
+          descriptionId={summaryId}
+        />
+      ) : (
+        <Text
+          variant="small"
+          as="p"
+          id={summaryId}
+          tabIndex={0}
+          className="approval-well mt-3 max-h-32 select-text overflow-y-auto bg-well px-4 py-3 font-mono whitespace-pre-wrap break-words focus-visible:outline focus-visible:outline-2 focus-visible:outline-focus-ring"
+        >
+          {pending.summary}
+        </Text>
+      )}
+      <Text variant="small" color="secondary" as="p" className="mt-2.5 shrink-0 text-center text-pretty">
+        {invalidPendingPrivilegedApproval
+          ? "This malformed privileged action cannot be allowed. Deny it to continue."
+          : pendingWorkspaceWrite
+            ? "Review this one exact file change before Aiden continues."
+            : pendingMcpMutation
+              ? "Review this one exact external mutation before Aiden continues."
+              : pendingShell
+                ? "Review this one exact full-host command before Aiden continues."
+                : pendingRunGrant
+                  ? "Review this grant for the entire subagent run."
+                  : pendingHook && pendingCanAllow
+                    ? HOOK_PROPOSAL_APPROVAL_FOOTER
+                    : schedule
+                    ? scheduleApprovalFooter(platform)
+                    : approvalMeta(plainPreview, requester)}
+      </Text>
+      {notes.map((note) => (
+        <Text key={note} variant="small" color="tertiary" as="p" className="mt-1 shrink-0 text-center text-pretty">
+          {note}
+        </Text>
+      ))}
+      {suggestion ? (
+        <div className="mt-1 flex shrink-0 flex-wrap items-center justify-center gap-x-1.5" role="group" aria-label={suggestion.text}>
+          <Text variant="small" color="tertiary" as="span" className="text-pretty">
+            {suggestion.text}
+          </Text>
+          <Button variant="transparent" size="small" disabled={suggestion.busy === true || deciding} onClick={suggestion.onAction}>
+            {suggestion.action}
+          </Button>
+        </div>
+      ) : null}
+      {allowElsewhere !== undefined ? (
+        <Text variant="small" color="secondary" as="p" role="note" className="mt-1.5 shrink-0 text-center">
+          {`Allow it on ${allowElsewhere}.`}
+        </Text>
+      ) : null}
+      {disabledReason ? (
+        <Text variant="small" color="secondary" as="p" role="note" className="mt-1.5 shrink-0 text-center">
+          {disabledReason}
+        </Text>
+      ) : null}
+      {liveVoice && !disabledReason ? <LiveVoiceApprovalHint mode={liveVoice} /> : null}
+      {error ? (
+        <Text variant="small" as="p" role="alert" className="mt-1.5 shrink-0 text-center text-status-red">
+          {error}
+        </Text>
+      ) : null}
+      <ApprovalActions
+        denyRef={denyRef}
+        // A held change (a hook the agent proposed) is applied or dismissed, never "allowed".
+        denyLabel={pendingFormFill ? "Cancel" : pendingHook ? "Dismiss" : "Deny"}
+        onDeny={() => onDecide("deny")}
+        {...(pendingCanAllow
+          ? {
+              allowLabel: deciding
+                ? "Sending…"
+                : pendingFormFill
+                  ? `Fill ${pendingFormFill.rows.length - formFillExcludedOrders.length} field${pendingFormFill.rows.length - formFillExcludedOrders.length === 1 ? "" : "s"}`
+                  : pendingMcpMutation
+                    ? subagentMcpMutationAllowLabel(pendingMcpMutation)
+                    : pendingRunGrant
+                      ? "Allow for run"
+                      : pendingHook
+                        ? "Apply"
+                        : "Allow once",
+              onAllow: () => onDecide("allow", pendingFormFill ? { formFillExcludedOrders } : undefined),
+            }
+          : {})}
+        rememberOptions={rememberOptions}
+        disabled={disabled}
+        keyboardShortcuts={keyboardShortcuts}
+      />
+    </section>
   );
 }

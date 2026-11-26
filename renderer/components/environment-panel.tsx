@@ -53,7 +53,27 @@ import {
 import { contextPressurePercent, type ChatContextPressureV1 } from "../shared/context-pressure";
 import type { Workspace } from "../lib/types";
 import { ReviewPanel } from "./review-panel";
-import { SubagentsPanel } from "./subagents-panel";
+import { SubagentsPanel, type SubagentsPanelHelperChat } from "./subagents-panel";
+import {
+  askMainChatToRetrySubagent,
+  createSubagentHelperChatStore,
+  subagentHelperChatTranscript,
+  subagentHelperTranscriptsRecovered,
+  SubagentHelperChatStoreContext,
+  useSubagentHelperChatSelector,
+  useSubagentHelperChatStore,
+} from "../lib/subagent-helper-chat-store";
+import {
+  subagentHelperApprovalFor,
+  subagentHelperHasActiveHelpers,
+  subagentHelperIsActive,
+  subagentHelperRefetchAwaitsFinal,
+  subagentHelperRefetchSkipRevision,
+  subagentTranscriptIsFinal,
+  withSubagentApprovalWaitViews,
+} from "../lib/subagent-helper-chat-state";
+import { createSubagentTranscriptReader } from "../lib/subagent-transcript-reader";
+import { mergeSubagentTranscript } from "../shared/subagent-transcript";
 import {
   resolveEnvironmentPanelLayout,
   resolveChatCardInset,
@@ -119,6 +139,7 @@ import { prefersReducedMotion } from "../lib/appearance-runtime";
 import { usePresence } from "../lib/use-presence";
 import { useLayer } from "../lib/layer-stack";
 import { arrangeByDraft, ReorderAnnouncer, reorderMessage, useReorderDraft } from "../lib/reorder-draft";
+import { useDelayedFlag } from "../lib/use-delayed-flag";
 import {
   DeviceTabContextMenu,
   DeviceTabRenameInput,
@@ -239,10 +260,26 @@ export interface EnvironmentPanelContextValue {
   openSubagent: (runId: string, returnTarget?: HTMLElement | null) => void;
   selectSubagent: (runId: string | null) => void;
   retrySubagentDetail: () => void;
+  /**
+   * Read a helper's saved conversation again, once per `reason` (see
+   * `subagentHelperTranscriptRefetchReason`).
+   */
+  refetchSubagentTranscript?: (runId: string, reason: string) => void;
+  /** Helpers whose last saved-conversation read failed, by run, with the reason it was for. */
+  subagentTranscriptRefetchFailures: Readonly<Record<string, string>>;
+  /** Try a failed saved-conversation read again. */
+  retrySubagentTranscript: (runId: string) => void;
   stopSubagent: (run: SubagentRunSnapshot) => Promise<void>;
   editorState: FilesEditorState;
   agentBusy: boolean;
+  /** A Git operation started from Aiden is running; panel and tool changes wait for it. */
   gitOperationBusy: boolean;
+  /**
+   * The same operation once it has run for `GIT_BUSY_DIM_DELAY_MS`. Header buttons
+   * dim only then, so a quick commit doesn't flash the bar; until then the panel
+   * still refuses their changes.
+   */
+  gitOperationDimmed: boolean;
   gitMutationBlockedReason: string | null;
   reportEditorState: (state: FilesEditorState, options?: FilesEditorStateChangeOptions) => void;
   setAgentBusy: (busy: boolean) => void;
@@ -254,6 +291,12 @@ export interface EnvironmentPanelContextValue {
 }
 
 /** Exported so component tests can render a single surface against a stub panel. */
+/**
+ * How long a Git operation runs before the header buttons dim. A commit or push
+ * that finishes sooner leaves the bar looking as it was.
+ */
+export const GIT_BUSY_DIM_DELAY_MS = 300;
+
 export const EnvironmentPanelContext = React.createContext<EnvironmentPanelContextValue | null>(null);
 
 interface EnvironmentArtifactsContextValue {
@@ -368,6 +411,11 @@ const EMPTY_EDITOR_STATE: FilesEditorState = {
   saving: false,
 };
 const EMPTY_ACTIVE_CHAT: EnvironmentActiveChat = { chatId: null, workspaceId: null };
+const NO_TRANSCRIPT_REFETCH_FAILURES: Readonly<Record<string, string>> = {};
+const EMPTY_TRANSCRIPT_REFETCH_FAILURES = {
+  chatId: null,
+  byRunId: NO_TRANSCRIPT_REFETCH_FAILURES,
+};
 
 const EMPTY_SUBAGENT_CONTEXT: EnvironmentSubagentContext = {
   chatId: null,
@@ -501,9 +549,27 @@ export function EnvironmentPanelProvider({ children }: React.PropsWithChildren) 
     effects: SubagentEffectActivityV1[];
   } | null>(null);
   const [subagentDetailRequestVersion, setSubagentDetailRequestVersion] = React.useState(0);
+  const [helperChatStore] = React.useState(createSubagentHelperChatStore);
+  const [transcriptRefetchFailures, setTranscriptRefetchFailures] = React.useState<{
+    chatId: string | null;
+    byRunId: Readonly<Record<string, string>>;
+  }>(EMPTY_TRANSCRIPT_REFETCH_FAILURES);
+  // Whether a refresh failure may be recorded: set as soon as one is, so the
+  // store subscription below never misses one that is not yet committed, and
+  // otherwise taken from each update's result (`withFailureFlag`), never from
+  // an effect that could run after a newer failure.
+  const transcriptRefetchMayHaveFailedRef = React.useRef(false);
+  const withFailureFlag = React.useCallback(
+    (next: { chatId: string | null; byRunId: Readonly<Record<string, string>> }) => {
+      transcriptRefetchMayHaveFailedRef.current = Object.keys(next.byRunId).length > 0;
+      return next;
+    },
+    [],
+  );
   const [subagentDetailAnnouncement, setSubagentDetailAnnouncement] =
     React.useState<SubagentDetailAnnouncementRequest | null>(null);
   const [gitOperationBusy, setGitOperationBusyState] = React.useState(false);
+  const gitOperationDimmed = useDelayedFlag(gitOperationBusy, GIT_BUSY_DIM_DELAY_MS);
   const [createWorktree, setCreateWorktree] = React.useState<
     ((branchName: string) => Promise<void>) | undefined
   >();
@@ -874,6 +940,103 @@ export function EnvironmentPanelProvider({ children }: React.PropsWithChildren) 
     [subagentViews, subagentsEnabled],
   );
 
+  // A helper chat reads its saved copy again once per reason: a gap in its
+  // streamed updates, a helper that started before this window opened, or a
+  // run that moved while its updates stream to another window. The reader
+  // keeps one read in flight per run and at most one a second. Only the
+  // transcript is taken from the answer; the run record keeps its own
+  // refresh. Only a rejected read is kept, so the helper chat can offer Try
+  // again; an empty answer means nothing is saved yet.
+  const settleTranscriptRead = React.useCallback(
+    (chatId: string, runId: string, failedReason: string | null) => {
+      if (failedReason !== null) transcriptRefetchMayHaveFailedRef.current = true;
+      setTranscriptRefetchFailures((current) => {
+        if (current.chatId !== chatId) {
+          return withFailureFlag(failedReason ? { chatId, byRunId: { [runId]: failedReason } } : current);
+        }
+        if (failedReason === null) {
+          if (!(runId in current.byRunId)) return withFailureFlag(current);
+          const { [runId]: _cleared, ...rest } = current.byRunId;
+          return withFailureFlag({ chatId, byRunId: rest });
+        }
+        if (current.byRunId[runId] === failedReason) return withFailureFlag(current);
+        return withFailureFlag({ chatId, byRunId: { ...current.byRunId, [runId]: failedReason } });
+      });
+    },
+    [withFailureFlag],
+  );
+  const [transcriptReader] = React.useState(() =>
+    createSubagentTranscriptReader({
+      read: async (chatId, runId) => (await subagentsApi.get(chatId, runId))?.transcript ?? null,
+      onTranscript: (chatId, transcript) => {
+        if (subagentChatIdRef.current === chatId) helperChatStore.rememberSaved(chatId, transcript);
+      },
+      onSettled: (chatId, runId, failedReason) => {
+        if (subagentChatIdRef.current === chatId) settleTranscriptRead(chatId, runId, failedReason);
+      },
+      isFinal: subagentTranscriptIsFinal,
+    }),
+  );
+  const refetchSubagentTranscript = React.useCallback(
+    (runId: string, reason: string) => {
+      const chatId = subagentChatIdRef.current;
+      if (!subagentsEnabled || !chatId) return;
+      const skipIfLoadedAt = subagentHelperRefetchSkipRevision(reason);
+      transcriptReader.request(chatId, runId, {
+        reason,
+        ...(skipIfLoadedAt === undefined ? {} : { skipIfLoadedAt }),
+        final: subagentHelperRefetchAwaitsFinal(reason),
+      });
+    },
+    [subagentsEnabled, transcriptReader],
+  );
+
+  const retrySubagentTranscript = React.useCallback(
+    (runId: string) => {
+      const chatId = subagentChatIdRef.current;
+      if (!subagentsEnabled || !chatId || transcriptRefetchFailures.chatId !== chatId) return;
+      const reason = transcriptRefetchFailures.byRunId[runId];
+      if (reason) {
+        transcriptReader.retry(chatId, runId, reason, { final: subagentHelperRefetchAwaitsFinal(reason) });
+      }
+    },
+    [subagentsEnabled, transcriptReader, transcriptRefetchFailures],
+  );
+
+  // Reads and failures belong to one chat. A read already started for the new
+  // chat in this commit is kept; unmounting drops any read still waiting.
+  React.useEffect(() => {
+    transcriptReader.switchChat(subagents.chatId);
+    setTranscriptRefetchFailures(() => withFailureFlag(EMPTY_TRANSCRIPT_REFETCH_FAILURES));
+    return () => transcriptReader.reset(null);
+  }, [subagents.chatId, transcriptReader, withFailureFlag]);
+
+  // A finished helper's reasons are forgotten once its reads settle.
+  React.useEffect(() => {
+    for (const view of subagentViews) if (view.terminal) transcriptReader.finish(view.runId);
+  }, [subagentViews, transcriptReader]);
+
+  // A failure clears once the helper's conversation arrives by another way:
+  // the live stream, or the saved run's own detail read. With no failure to
+  // clear, a store change (every streamed token) leaves this state alone.
+  React.useEffect(() => {
+    let previous = helperChatStore.getState();
+    return helperChatStore.subscribe(() => {
+      const next = helperChatStore.getState();
+      const before = previous;
+      previous = next;
+      if (!transcriptRefetchMayHaveFailedRef.current) return;
+      setTranscriptRefetchFailures((current) => {
+        if (current.chatId !== next.chatId) return withFailureFlag(current);
+        const recovered = subagentHelperTranscriptsRecovered(before, next, Object.keys(current.byRunId));
+        if (recovered.length === 0) return withFailureFlag(current);
+        const byRunId = { ...current.byRunId };
+        for (const runId of recovered) delete byRunId[runId];
+        return withFailureFlag({ chatId: current.chatId, byRunId });
+      });
+    });
+  }, [helperChatStore, withFailureFlag]);
+
   const retrySubagentDetail = React.useCallback(() => {
     if (!subagentsEnabled || !selectedSubagentRunId || !selectedSubagentReferenceMessageId) return;
     subagentDetailRequestRef.current = undefined;
@@ -1079,6 +1242,14 @@ export function EnvironmentPanelProvider({ children }: React.PropsWithChildren) 
           setSubagentDetailError("Aiden could not refresh this saved subagent.");
           return;
         }
+        if (detail?.transcript) {
+          helperChatStore.rememberSaved(chatId, detail.transcript);
+          // A finished helper's copy saved before it ended does not count as
+          // read: its final save is still on its way.
+          if (subagentHelperIsActive(safeSnapshot.state) || subagentTranscriptIsFinal(detail.transcript)) {
+            transcriptReader.noteLoaded(chatId, runId, safeSnapshot.revision);
+          }
+        }
         setSubagentEffectDetail({
           ownerKey: subagentPanelOwnerKey(chatId, workspaceId),
           runId,
@@ -1116,6 +1287,7 @@ export function EnvironmentPanelProvider({ children }: React.PropsWithChildren) 
     subagentDetailRequestVersion,
     subagentsEnabled,
     commitSubagents,
+    helperChatStore,
   ]);
 
   React.useEffect(() => {
@@ -1282,10 +1454,17 @@ export function EnvironmentPanelProvider({ children }: React.PropsWithChildren) 
       openSubagent,
       selectSubagent,
       retrySubagentDetail,
+      refetchSubagentTranscript,
+      subagentTranscriptRefetchFailures:
+        transcriptRefetchFailures.chatId === subagents.chatId
+          ? transcriptRefetchFailures.byRunId
+          : NO_TRANSCRIPT_REFETCH_FAILURES,
+      retrySubagentTranscript,
       stopSubagent,
       editorState: activeEditorState,
       agentBusy,
       gitOperationBusy,
+      gitOperationDimmed,
       gitMutationBlockedReason,
       reportEditorState,
       setAgentBusy,
@@ -1311,6 +1490,7 @@ export function EnvironmentPanelProvider({ children }: React.PropsWithChildren) 
       dockRightInset,
       fileRequest,
       gitOperationBusy,
+      gitOperationDimmed,
       gitMutationBlockedReason,
       openFile,
       openReview,
@@ -1319,6 +1499,9 @@ export function EnvironmentPanelProvider({ children }: React.PropsWithChildren) 
       releaseSubagents,
       reviewMode,
       retrySubagentDetail,
+      refetchSubagentTranscript,
+      retrySubagentTranscript,
+      transcriptRefetchFailures,
       reportSurfaceLayout,
       reportDesignDockInset,
       stopSubagent,
@@ -1355,28 +1538,30 @@ export function EnvironmentPanelProvider({ children }: React.PropsWithChildren) 
   );
   return (
     <EnvironmentPanelContext.Provider value={value}>
-      <LinkOpenerProvider
-        workspaceId={activeId ?? null}
-        workspaceFolder={activeWorkspace?.folderPath ?? null}
-        onOpenWorkspaceFile={openFile}
-      >
-        {subagentsEnabled ? (
-          <SubagentLiveAnnouncer
-            ownerKey={subagentPanelOwnerKey(subagents.chatId, subagents.workspaceId)}
-            runs={subagents.liveSnapshots}
-            detailRequest={subagentDetailAnnouncement}
-          />
-        ) : null}
-        <EnvironmentArtifactsProvider
-          activeId={activeId}
-          activeChat={activeChat}
-          artifactsTabOpen={artifactsTabOpen}
-          showTools={showTools}
-          closeArtifactsTab={closeArtifactsTab}
+      <SubagentHelperChatStoreContext.Provider value={helperChatStore}>
+        <LinkOpenerProvider
+          workspaceId={activeId ?? null}
+          workspaceFolder={activeWorkspace?.folderPath ?? null}
+          onOpenWorkspaceFile={openFile}
         >
-          {children}
-        </EnvironmentArtifactsProvider>
-      </LinkOpenerProvider>
+          {subagentsEnabled ? (
+            <SubagentLiveAnnouncer
+              ownerKey={subagentPanelOwnerKey(subagents.chatId, subagents.workspaceId)}
+              runs={subagents.liveSnapshots}
+              detailRequest={subagentDetailAnnouncement}
+            />
+          ) : null}
+          <EnvironmentArtifactsProvider
+            activeId={activeId}
+            activeChat={activeChat}
+            artifactsTabOpen={artifactsTabOpen}
+            showTools={showTools}
+            closeArtifactsTab={closeArtifactsTab}
+          >
+            {children}
+          </EnvironmentArtifactsProvider>
+        </LinkOpenerProvider>
+      </SubagentHelperChatStoreContext.Provider>
     </EnvironmentPanelContext.Provider>
   );
 }
@@ -1392,6 +1577,99 @@ export function useEnvironmentPanelCore(): EnvironmentPanelContextValue {
   if (!context)
     throw new Error("useEnvironmentPanelCore must be used inside EnvironmentPanelProvider.");
   return context;
+}
+
+/**
+ * The helpers panel with the helper chat wired in. It reads only the selected
+ * helper's slices of the helper chat state, so another helper's streamed
+ * tokens do not redraw the panel.
+ */
+function HelperAwareSubagentsPanel({
+  onClosePanel,
+  onTranscriptIncomplete,
+  transcriptRefetchFailures,
+  onRetryTranscript,
+  ...props
+}: Omit<React.ComponentProps<typeof SubagentsPanel>, "helperChat"> & {
+  onClosePanel: () => void;
+  onTranscriptIncomplete?: (runId: string, reason: string) => void;
+  transcriptRefetchFailures: Readonly<Record<string, string>>;
+  onRetryTranscript: (runId: string) => void;
+}) {
+  const store = useSubagentHelperChatStore();
+  const chatId = props.chatId;
+  const runId = props.selectedRunId ?? null;
+  const scoped = useSubagentHelperChatSelector((state) => Boolean(chatId) && state.chatId === chatId);
+  const saved = useSubagentHelperChatSelector((state) => (runId ? state.saved.get(runId) : undefined));
+  const live = useSubagentHelperChatSelector((state) => (runId ? state.live.get(runId) : undefined));
+  const approvals = useSubagentHelperChatSelector((state) => state.approvals);
+  const decidingApprovalId = useSubagentHelperChatSelector((state) => state.decidingApprovalId);
+  const expandedRunId = useSubagentHelperChatSelector((state) => state.expandedRunId);
+  // A running helper that waits on one of your approvals reads as waiting on you.
+  const runs = React.useMemo(
+    () => (scoped ? withSubagentApprovalWaitViews(props.runs, approvals) : props.runs),
+    [approvals, props.runs, scoped],
+  );
+  const selectedRunSnapshot =
+    runs === props.runs
+      ? props.selectedRunSnapshot
+      : (runs.find((run) => run.runId === runId)?.snapshot ?? props.selectedRunSnapshot);
+  const selectedTranscript = React.useMemo(() => mergeSubagentTranscript(saved, live), [live, saved]);
+  const helperChat = React.useMemo<SubagentsPanelHelperChat | undefined>(() => {
+    if (!store || !chatId || !scoped) return undefined;
+    return {
+      transcriptFor: (id) =>
+        id === runId ? selectedTranscript : subagentHelperChatTranscript(store.getState(), id),
+      approvalFor: (run) => {
+        const prompt = subagentHelperApprovalFor(run, approvals, runs);
+        return prompt
+          ? {
+              prompt,
+              deciding: decidingApprovalId === prompt.approvalId,
+              onDecide: (decision, options) => store.decide(prompt, decision, options),
+              ahead: Math.max(0, approvals.indexOf(prompt)),
+            }
+          : null;
+      },
+      onAskRetry: (text) => askMainChatToRetrySubagent(store, chatId, text),
+      onExpand: (id, opener) => store.expand(id, opener),
+      onClose: () => {
+        store.collapse({ restoreFocus: false });
+        onClosePanel();
+      },
+      expandedRunId,
+      onCollapse: () => store.collapse({ restoreFocus: false }),
+      streamingHere: (id) => (id === runId ? Boolean(live) : store.getState().live.has(id)),
+      ...(onTranscriptIncomplete ? { onTranscriptIncomplete } : {}),
+      transcriptRefreshFailed: (id) => id in transcriptRefetchFailures,
+      onRetryTranscript,
+      onFocusMainApproval: () => store.focusMainWaiting("approval"),
+      hasActiveHelpers: (id) => subagentHelperHasActiveHelpers(id, runs),
+    };
+  }, [
+    approvals,
+    chatId,
+    decidingApprovalId,
+    expandedRunId,
+    live,
+    onClosePanel,
+    onRetryTranscript,
+    onTranscriptIncomplete,
+    runId,
+    runs,
+    scoped,
+    selectedTranscript,
+    store,
+    transcriptRefetchFailures,
+  ]);
+  return (
+    <SubagentsPanel
+      {...props}
+      runs={runs}
+      selectedRunSnapshot={selectedRunSnapshot}
+      helperChat={helperChat}
+    />
+  );
 }
 
 export function useEnvironmentPanel(): EnvironmentPanelContextValue {
@@ -1626,7 +1904,11 @@ function EnvironmentPanelSurface({
       />
     ),
     subagents: () => (
-      <SubagentsPanel
+      <HelperAwareSubagentsPanel
+        onClosePanel={panel.closeTools}
+        onTranscriptIncomplete={panel.refetchSubagentTranscript}
+        transcriptRefetchFailures={panel.subagentTranscriptRefetchFailures}
+        onRetryTranscript={panel.retrySubagentTranscript}
         chatId={panel.subagents.chatId}
         workspaceId={panel.subagents.workspaceId}
         runs={panel.subagentViews}
@@ -2376,7 +2658,7 @@ export function EnvironmentPanelToggle({ disabled = false }: { disabled?: boolea
       variant="bar"
       size="small"
       onClick={panel.toggleTools}
-      disabled={disabled || panel.gitOperationBusy}
+      disabled={disabled || panel.gitOperationDimmed}
       aria-label={active ? "Hide Environment" : "Show Environment"}
       aria-keyshortcuts={ariaKeyShortcut(toggleShortcutBinding)}
       aria-pressed={active}
@@ -2418,7 +2700,7 @@ export function QuickViewToggle({ disabled = false }: { disabled?: boolean }) {
       variant="bar"
       size="small"
       onClick={panel.toggleQuickView}
-      disabled={disabled || panel.gitOperationBusy}
+      disabled={disabled || panel.gitOperationDimmed}
       aria-label={active ? "Hide Quick View" : "Show Quick View"}
       aria-pressed={active}
       aria-controls="quick-view-card"

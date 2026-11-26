@@ -32,6 +32,7 @@ import org.junit.Test
 import org.junit.rules.TemporaryFolder
 import sbtbiswas.AidenOnTheGo.features.shared.activitymarks.AidenActivityMarkKind
 import sbtbiswas.AidenOnTheGo.models.*
+import sbtbiswas.AidenOnTheGo.networking.AidenRemoteClient
 import sbtbiswas.AidenOnTheGo.peerFixture
 import sbtbiswas.AidenOnTheGo.protocol.AidenRemoteCapability
 import java.time.Instant
@@ -86,7 +87,13 @@ class AidenBotSessionControllerTest {
     @Test fun sameChoiceUncertainRetryReusesBodyAndKey() = runTest {
         val body = json.decodeFromJsonElement(AidenRemoteErrorEnvelope.serializer(), accessSection().getValue("expired")).error
             .copy(code = AidenRemoteErrorCode.INTERNAL_ERROR)
-        for (failure in listOf(IOException("lost"), AidenRemoteClientException.Server(503, body))) {
+        val inFlightBody = body.copy(code = AidenRemoteErrorCode.IDEMPOTENCY_IN_FLIGHT)
+        for (failure in listOf(
+            IOException("lost"),
+            AidenRemoteClientException.Server(503, body),
+            AidenRemoteClientException.Server(409, inFlightBody),
+            AidenRemoteClientException.Server(429, body.copy(code = AidenRemoteErrorCode.RATE_LIMITED))
+        )) {
             val transport = FakeTransport(accessSession())
             val controller = AidenBotSessionController("bot_fixture_01", transport, backgroundScope)
             controller.refetch()
@@ -215,7 +222,12 @@ class AidenBotSessionControllerTest {
         controller.stopFollowing()
     }
     @Test fun sameDecisionUnknownRetryKeepsKeyAndDifferentDecisionSendsNewBody() = runTest {
-        for (failure in listOf(IOException("lost"), planError(503))) {
+        val inFlight409 = AidenRemoteClientException.Server(
+            409,
+            AidenRemoteErrorEnvelope.Body(AidenRemoteErrorCode.IDEMPOTENCY_IN_FLIGHT, "In flight", "req_in_flight", true)
+        )
+        val malformed409 = AidenRemoteClient.parseError(409, "{\"error\":{\"code\":\"idempotency_in_flight\"".toByteArray(Charsets.UTF_8))
+        for (failure in listOf(IOException("lost"), planError(503), inFlight409, malformed409)) {
             val initial = planSession(); val transport = FakeTransport(initial)
             val controller = AidenBotSessionController(initial.botId, transport, backgroundScope, plansSupported = true)
             controller.refetch(); transport.planFailure = failure
@@ -931,7 +943,7 @@ class AidenBotSessionControllerTest {
     }
 
     @Test fun legacyFirstTypedUnknownOutcomeKeepsItsUuidAndReconcilesCachedStateWithoutAnotherMutation()=runTest {
-        for(code in listOf("idempotency_in_flight","internal_error","new_resume_recovery","revision_conflict")) {
+        for(code in listOf("idempotency_in_flight","internal_error","new_resume_recovery")) {
             val base=FakeTransport(interruptedSession);val seen=mutableListOf<UUID>();var first=true
             val transport=object:AidenBotSessionTransport by base {
                 override suspend fun resume(botId:String,key:UUID):AidenBotSessionStateView {
@@ -945,6 +957,20 @@ class AidenBotSessionControllerTest {
             assertTrue(controller.resume());assertEquals(2,seen.size);assertEquals(seen[0],seen[1])
             assertEquals(2,base.sessionReads);assertTrue(controller.state.value.isInterrupted);assertTrue(base.sends.isEmpty())
         }
+    }
+
+    @Test fun legacyFirstRevisionConflictIsADefiniteRefusalSoTheNextResumeMintsANewKey()=runTest {
+        val base=FakeTransport(interruptedSession);val seen=mutableListOf<UUID>();var first=true
+        val transport=object:AidenBotSessionTransport by base {
+            override suspend fun resume(botId:String,key:UUID):AidenBotSessionStateView {
+                seen+=key
+                if(first) {first=false;throw AidenRemoteClientException.Server(409,AidenRemoteErrorEnvelope.Body(AidenRemoteErrorCode.REVISION_CONFLICT,"Changed","req",false))}
+                return AidenBotSessionStateView(AidenBotSessionState.RUNNING,false)
+            }
+        }
+        val controller=AidenBotSessionController(interruptedSession.botId,transport,backgroundScope)
+        controller.refetch();assertFalse(controller.resume());assertTrue(controller.state.value.isInterrupted)
+        controller.resume();assertEquals(2,seen.size);assertNotEquals(seen[0],seen[1])
     }
 
     @Test
@@ -1550,6 +1576,134 @@ class AidenBotSessionControllerTest {
         )
         assertNull(aidenBotStatusLine(ui(activitySession, supported = false), started))
         assertFalse(ui(activitySession, supported = false).offersBusyModes)
+    }
+
+    // Hi-bit sprite: the chat header's avatar follows the same signal as the status line.
+    @Test
+    fun theAvatarStateFollowsTheStatusLinesPhase() {
+        fun doing(phase: String) = activitySession.copy(activity = AidenBotSessionActivity(phase, null, started))
+        assertEquals(AidenBotAvatarState.TOOL, aidenBotAvatarTarget(ui(activitySession)))
+        assertEquals(AidenBotAvatarState.THINKING, aidenBotAvatarTarget(ui(activitySession, wording = AidenBotChatActivityWording.THINKING)))
+        assertEquals(AidenBotAvatarState.READING, aidenBotAvatarTarget(ui(doing("reading"))))
+        assertEquals(AidenBotAvatarState.READING, aidenBotAvatarTarget(ui(doing("searching"))))
+        assertEquals(AidenBotAvatarState.EDITING, aidenBotAvatarTarget(ui(doing("editing"))))
+        assertEquals(AidenBotAvatarState.TOOL, aidenBotAvatarTarget(ui(doing("command"))))
+        assertEquals("a routine at work is a tool", AidenBotAvatarState.TOOL, aidenBotAvatarTarget(ui(doing("routine"))))
+        assertEquals("an unknown phase is a tool at work", AidenBotAvatarState.TOOL, aidenBotAvatarTarget(ui(doing("browsing"))))
+        assertEquals("before the first frame it gets ready", AidenBotAvatarState.THINKING, aidenBotAvatarTarget(ui(activitySession.copy(activity = null))))
+        // The line hides while the reply's words stream; the avatar writes.
+        val writing = activitySession.copy(partial = "Here is", activity = AidenBotSessionActivity("writing", null, started))
+        assertEquals(AidenBotAvatarState.WRITING, aidenBotAvatarTarget(ui(writing)))
+        // A Mac without activity frames: words streaming read as writing, otherwise thinking.
+        assertEquals(AidenBotAvatarState.THINKING, aidenBotAvatarTarget(ui(activitySession.copy(partial = null), supported = false)))
+        assertEquals(AidenBotAvatarState.WRITING, aidenBotAvatarTarget(ui(activitySession.copy(partial = "Here is"), supported = false)))
+        // Words already streaming while the Mac says it is thinking again: the avatar thinks.
+        val rethinking = activitySession.copy(partial = "Here is", activity = AidenBotSessionActivity("thinking", null, started))
+        assertEquals(AidenBotAvatarState.THINKING, aidenBotAvatarTarget(ui(rethinking)))
+    }
+
+    @Test
+    fun theAvatarWaitsOnACardAndEndsDoneOrInError() {
+        assertEquals(AidenBotAvatarState.WAITING, aidenBotAvatarTarget(ui(activitySession.copy(approval = mailApproval))))
+        val idle = activitySession.copy(state = AidenBotSessionState.IDLE, activity = null, partial = null)
+        assertEquals("a question waits even once the turn has stopped", AidenBotAvatarState.WAITING, aidenBotAvatarTarget(ui(idle.copy(question = colourQuestion))))
+        assertEquals(AidenBotAvatarState.DONE, aidenBotAvatarTarget(ui(idle)))
+        val failed = idle.copy(entries = idle.entries + AidenBotSessionEntry.FailedTurn("entry_failed"))
+        assertEquals(AidenBotAvatarState.ERROR, aidenBotAvatarTarget(ui(failed)))
+        // An interrupted turn is an error, and its stale card no longer waits.
+        assertEquals(AidenBotAvatarState.ERROR, aidenBotAvatarTarget(ui(idle.copy(state = AidenBotSessionState.INTERRUPTED, interrupted = true, approval = mailApproval))))
+        // A Bot missing its model can't finish its turn.
+        assertEquals(AidenBotAvatarState.ERROR, aidenBotAvatarTarget(ui(idle.copy(state = AidenBotSessionState.NEEDS_MODEL))))
+        // A card left up on a paused Bot still waits on the person; otherwise pausing rests quietly.
+        assertEquals(AidenBotAvatarState.WAITING, aidenBotAvatarTarget(ui(idle.copy(state = AidenBotSessionState.PAUSED, question = colourQuestion))))
+        assertEquals(AidenBotAvatarState.IDLE, aidenBotAvatarTarget(ui(idle.copy(state = AidenBotSessionState.PAUSED))))
+    }
+
+    @Test
+    fun aPlanWaitingForReviewMakesTheAvatarWait() {
+        val pending = planSession()
+        assertEquals(
+            AidenBotAvatarState.WAITING,
+            aidenBotAvatarTarget(AidenBotSessionUiState(session = pending, isLoading = false, plansSupported = true))
+        )
+        // A Mac that doesn't offer plans holds nothing, so the same session doesn't wait.
+        assertNotEquals(
+            AidenBotAvatarState.WAITING,
+            aidenBotAvatarTarget(AidenBotSessionUiState(session = pending, isLoading = false, plansSupported = false))
+        )
+    }
+
+    @Test
+    fun aStoppedTurnEndsQuietlyAndTheNextTurnCanFinishDone() = runTest {
+        val transport = FakeTransport(runningSession)
+        val controller = AidenBotSessionController(runningSession.botId, transport, backgroundScope, activitySupported = true)
+        controller.refetch()
+        assertTrue(controller.stop())
+        assertFalse(controller.state.value.isRunning)
+        assertEquals("a Stop isn't a finished turn", AidenBotAvatarState.IDLE, aidenBotAvatarTarget(controller.state.value))
+
+        // The next turn runs and ends on its own: that one is done.
+        controller.frame(AidenBotSessionEventPayload.State(AidenBotSessionStateView(AidenBotSessionState.RUNNING, false)))
+        assertEquals(AidenBotAvatarState.THINKING, aidenBotAvatarTarget(controller.state.value))
+        controller.frame(AidenBotSessionEventPayload.State(AidenBotSessionStateView(AidenBotSessionState.IDLE, false)))
+        assertEquals(AidenBotAvatarState.DONE, aidenBotAvatarTarget(controller.state.value))
+    }
+
+    @Test
+    fun aStopTheMacTookEndsQuietlyEvenAfterItsNextFrameClearedStopping() = runTest {
+        val transport = FakeTransport(runningSession)
+        val controller = AidenBotSessionController(runningSession.botId, transport, backgroundScope, activitySupported = true)
+        controller.refetch()
+        transport.stopState = AidenBotSessionState.RUNNING
+        assertTrue(controller.stop())
+        // The Mac's next frame for the same run stands for the Stop, so "Stopping" clears…
+        controller.frame(AidenBotSessionEventPayload.Activity(AidenBotSessionActivity("thinking", null, started)))
+        assertFalse(controller.state.value.isStopping)
+        // …and when the run ends it still ends quietly.
+        controller.frame(AidenBotSessionEventPayload.State(AidenBotSessionStateView(AidenBotSessionState.IDLE, false)))
+        assertEquals(AidenBotAvatarState.IDLE, aidenBotAvatarTarget(controller.state.value))
+    }
+
+    @Test
+    fun aQueuedTurnThatStartsStraightAfterAStoppedOneStillFinishesDone() = runTest {
+        val transport = FakeTransport(runningSession)
+        val controller = AidenBotSessionController(runningSession.botId, transport, backgroundScope, activitySupported = true)
+        controller.refetch()
+        // Turn A is stopped, but the Mac moves straight on to queued turn B without an idle state.
+        transport.stopState = AidenBotSessionState.RUNNING
+        assertTrue(controller.stop())
+        controller.frame(AidenBotSessionEventPayload.Activity(AidenBotSessionActivity("thinking", null, started + 5_000)))
+        assertTrue(controller.state.value.isRunning)
+        // B ends on its own: that one is done.
+        controller.frame(AidenBotSessionEventPayload.State(AidenBotSessionStateView(AidenBotSessionState.IDLE, false)))
+        assertEquals(AidenBotAvatarState.DONE, aidenBotAvatarTarget(controller.state.value))
+    }
+
+    @Test
+    fun aStopFromAnotherDeviceEndsQuietlyAndTheNextTurnFinishesDone() = runTest {
+        val transport = FakeTransport(runningSession)
+        val controller = AidenBotSessionController(runningSession.botId, transport, backgroundScope, activitySupported = true)
+        controller.refetch()
+        // The Mac reports the running turn as stopping; this phone never pressed Stop.
+        controller.frame(AidenBotSessionEventPayload.Activity(AidenBotSessionActivity("stopping", null, started)))
+        controller.frame(AidenBotSessionEventPayload.State(AidenBotSessionStateView(AidenBotSessionState.IDLE, false)))
+        assertEquals("a Stop isn't a finished turn", AidenBotAvatarState.IDLE, aidenBotAvatarTarget(controller.state.value))
+
+        controller.frame(AidenBotSessionEventPayload.State(AidenBotSessionStateView(AidenBotSessionState.RUNNING, false)))
+        controller.frame(AidenBotSessionEventPayload.Activity(AidenBotSessionActivity("thinking", null, started + 60_000)))
+        controller.frame(AidenBotSessionEventPayload.State(AidenBotSessionStateView(AidenBotSessionState.IDLE, false)))
+        assertEquals(AidenBotAvatarState.DONE, aidenBotAvatarTarget(controller.state.value))
+    }
+
+    @Test
+    fun aStopThatNeverReachedTheMacLetsTheTurnFinishDone() = runTest {
+        val transport = FakeTransport(runningSession)
+        val controller = AidenBotSessionController(runningSession.botId, transport, backgroundScope, activitySupported = true)
+        controller.refetch()
+        transport.stopFailures += IOException("offline")
+        assertFalse(controller.stop())
+        controller.frame(AidenBotSessionEventPayload.State(AidenBotSessionStateView(AidenBotSessionState.IDLE, false)))
+        assertEquals(AidenBotAvatarState.DONE, aidenBotAvatarTarget(controller.state.value))
     }
 
     // Test 4 (Review Focus 2)

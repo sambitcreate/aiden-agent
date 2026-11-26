@@ -269,6 +269,29 @@ test("back, forward, stop and attach get their keys unless a saved shortcut alre
   assert.equal(effectiveBinding("composer.attach", rebound), "Command+Shift+U");
 });
 
+test("the Agent Slider steps get ⌥⌘[ and ⌥⌘] unless a saved shortcut already uses them", () => {
+  const defaults = effectiveBindings(undefined);
+  assert.deepEqual(
+    [defaults["agentSlider.previous"], defaults["agentSlider.next"]],
+    ["Command+Alt+[", "Command+Alt+]"],
+  );
+  // Distinct from back/forward and the chat-switching keys on the same brackets.
+  assert.doesNotThrow(() => validateEffectiveBindings(defaults));
+
+  // Saved by an earlier build: the person put Search chats on ⌥⌘].
+  const repaired = repairKeybindingOverrides({
+    version: 1,
+    commands: { "chat.search": { binding: "Command+Alt+]" } },
+  });
+  assert.equal(effectiveBinding("chat.search", repaired), "Command+Alt+]");
+  assert.equal(effectiveBinding("agentSlider.next", repaired), null);
+  assert.equal(effectiveBinding("agentSlider.previous", repaired), "Command+Alt+[");
+
+  // Both are rebindable like any other command.
+  const rebound = applyKeybindingMutation(undefined, { commandId: "agentSlider.next", binding: "Command+Alt+N" });
+  assert.equal(effectiveBinding("agentSlider.next", rebound), "Command+Alt+N");
+});
+
 test("Find in chat gets Command+F unless a saved shortcut already uses it", () => {
   assert.equal(effectiveBinding("chat.find", repairKeybindingOverrides(undefined)), "Command+F");
   const saved = { version: 1, commands: { "chat.search": { binding: "Command+F" } } };

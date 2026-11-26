@@ -177,7 +177,6 @@ test("floating Environment remains non-modal across every app-level interaction 
 
 test("Environment and Quick View have independent toolbar and command routes", () => {
   const environment = source("./environment-panel.tsx");
-  const pane = source("../main/chat-pane.tsx");
   const root = source("../main/root-view.tsx");
 
   assert.match(environment, /export function EnvironmentPanelToggle/u);
@@ -188,8 +187,8 @@ test("Environment and Quick View have independent toolbar and command routes", (
   assert.match(environment, /onClick=\{panel\.toggleQuickView\}/u);
   assert.match(environment, /data-quick-view-toggle/u);
   assert.match(environment, /<circle cx="7" cy="7" r="2\.5"/u);
-  // Folderless launcher availability is exercised in chat-shell-interactions.
-  assert.match(pane, /<QuickViewToggle disabled=\{!effectiveWorkspace\} \/>/u);
+  // Quick View's availability rides on the foldable action's `available`, which
+  // chat-top-bar-presence.test.tsx renders: unavailable tools leave the bar and the ⋯ menu.
   assert.match(root, /"environment\.toggle",[\s\S]*environmentPanel\.toggleTools\(\)/u);
   assert.match(root, /"quick-view\.toggle",[\s\S]*environmentPanel\.toggleQuickView\(\)/u);
 });
@@ -335,7 +334,6 @@ test("saved detail failures expose a versioned retry path", () => {
   assert.match(environment, /setSubagentDetailLoading\(true\)/u);
   assert.match(environment, /handoffSnapshots=\{panel\.subagents\.handoffSnapshots\}/u);
   assert.match(panel, /onRetryDetail/u);
-  assert.match(panel, /refreshError=\{savedDetailRefreshError\}/u);
   assert.match(panel, /refreshing=\{savedDetailRefreshing\}/u);
   assert.match(panel, /\sRetry\s*<\/Button>/u);
 });
@@ -513,7 +511,7 @@ test("the composed Subagents UI routes activity and detail lifecycle through one
   assert.doesNotMatch(environment, /subagentAnnouncerHost|setSubagentAnnouncerHost/u);
   assert.match(
     environment,
-    /<EnvironmentPanelContext.Provider value=\{value\}>\s*<LinkOpenerProvider[^>]*>\s*\{subagentsEnabled \? \(\s*<SubagentLiveAnnouncer/u,
+    /<EnvironmentPanelContext.Provider value=\{value\}>\s*(?:<SubagentHelperChatStoreContext.Provider value=\{helperChatStore\}>\s*)?<LinkOpenerProvider[^>]*>\s*\{subagentsEnabled \? \(\s*<SubagentLiveAnnouncer/u,
   );
   assert.doesNotMatch(environment, /data-environment-modal-background="subagent-announcer"/u);
   assert.match(environment, /onDetailAnnouncement=\{panel\.announceSubagentDetail\}/u);
@@ -556,7 +554,6 @@ test("the shell reconciles lifecycle-detached terminal chats without per-stream 
   );
   assert.match(pane, /React\.useSyncExternalStore\(\s+subscribeDetachedLifecycleStreams/u);
   assert.match(pane, /detachedLifecycleChatProjection\(chatId, effectiveWorkspaceId\)/u);
-  assert.match(pane, /liveSubagents=\{displayedLiveSubagents\}/u);
   assert.match(pane, /streamingText=\{displayedStreamingText\}/u);
   assert.match(
     pane,

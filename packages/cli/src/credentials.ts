@@ -2,6 +2,10 @@ import { createCipheriv, createDecipheriv, randomBytes } from "node:crypto";
 import { readFileSync, writeFileSync, mkdirSync } from "node:fs";
 import { join } from "node:path";
 import { EncryptedPiCredentialStore } from "../../../main/services/pi-credential-store-core.js";
+import {
+  removeRetiredModelScoringData,
+  RETIRED_SERVER_MODEL_SCORING,
+} from "../../../main/services/retired-model-scoring-cleanup-core.js";
 import { acquireLease } from "./state.ts";
 
 /** Portable file cipher; the wrapping key is protected by owner-only filesystem access. */
@@ -68,6 +72,8 @@ export function insightCredentials(agentDir: string) {
   const valueOf = (credential: Awaited<ReturnType<typeof store.read>>) => credential?.type === "api_key" ? credential.key : undefined;
   return {
     async read(source: string) { return valueOf(await store.read(source)); },
+    /** Names of the stored keys, read without decrypting any of them. */
+    async list() { return (await store.list()).map((entry) => entry.providerId); },
     /** `isCurrent` is checked under the writer lease; a superseded writer changes nothing. */
     write(source: string, value: string, isCurrent?: () => boolean) { return withCredentialWriterLease(lease, async () => { assertCurrent(isCurrent); await store.modify(source, async () => ({ type: "api_key", key: value })); }); },
     /**
@@ -82,4 +88,25 @@ export function insightCredentials(agentDir: string) {
     },
     delete(source: string, isCurrent?: () => boolean) { return withCredentialWriterLease(lease, async () => { assertCurrent(isCurrent); await store.delete(source); }); },
   };
+}
+
+/**
+ * Delete-only cleanup of what the retired `aiden insights` command stored: the
+ * `aa` and `openrouter` keys and their `*-insights.json` caches. No network,
+ * safe to repeat, never rejects; `aiden serve` runs it once it is ready.
+ */
+export async function cleanUpRetiredInsights(agentDir: string): Promise<void> {
+  const credentials = insightCredentials(agentDir);
+  try {
+    await removeRetiredModelScoringData({
+      directory: agentDir,
+      ...RETIRED_SERVER_MODEL_SCORING,
+      credentials: {
+        has: async (id) => (await credentials.list()).includes(id),
+        delete: (id) => credentials.delete(id),
+      },
+    });
+  } catch {
+    // Quiet by design: a miss is retried on the next start.
+  }
 }

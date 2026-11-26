@@ -6,6 +6,7 @@ import test from "node:test";
 import { discoverSpecs } from "./ci-e2e-shards.mjs";
 import {
   parseImportSpecifiers,
+  planMacE2E,
   readE2ESpecMap,
   selectReachableTests,
   selectRelatedE2ESpecs,
@@ -250,4 +251,51 @@ test("a chat-fork service change selects the fork spec rather than falling throu
   });
   assert.equal(selected.mode, "related");
   assert.ok(selected.specs.includes("chat-fork.spec.ts"));
+});
+
+test("pull requests send only their selected macOS-only specs to a Mac; other events keep the full macOS suite", () => {
+  const specs = discoverSpecs();
+  const map = readE2ESpecMap();
+  const plan = (eventName, changedPaths, desktop = true) => planMacE2E({
+    eventName,
+    desktop,
+    e2e: selectRelatedE2ESpecs({ changedPaths, specs, map }),
+    map,
+    shardCount: 5,
+  });
+
+  for (const eventName of ["push", "merge_group", "workflow_dispatch"]) {
+    assert.deepEqual(plan(eventName, ["main/services/chat-fork-service.ts"]), {
+      run: true, scope: "all", shards: [1, 2, 3, 4, 5], specs: [],
+    }, eventName);
+  }
+  assert.equal(plan("push", ["main/services/chat-fork-service.ts"], false).run, false);
+
+  // A chat change still has E2E specs to run, but none of them needs a Mac.
+  const chat = selectRelatedE2ESpecs({ changedPaths: ["main/services/chat-fork-service.ts"], specs, map });
+  assert.ok(chat.specs.length > 0);
+  assert.deepEqual(plan("pull_request", ["main/services/chat-fork-service.ts"]), { run: false, scope: "none", shards: [], specs: [] });
+
+  // A devices change keeps the iOS Simulator specs, which skip off macOS, on one Mac.
+  const devices = plan("pull_request", ["main/services/devices/device-hub.ts"]);
+  assert.equal(devices.run, true);
+  assert.equal(devices.scope, "macos");
+  assert.deepEqual(devices.shards, [1]);
+  assert.ok(devices.specs.includes("environment-devices-tab.spec.ts"));
+  assert.ok(!devices.specs.includes("bots-persistence.spec.ts"));
+  assert.ok(devices.specs.every((file) => map.macos.includes(file)));
+
+  // A shared-harness change selects every spec; the Mac still runs only the macOS-only ones.
+  const harness = plan("pull_request", ["tests/e2e/fixtures.ts"]);
+  assert.equal(harness.scope, "macos");
+  assert.deepEqual(harness.specs.toSorted(), map.macos.toSorted());
+  assert.deepEqual(plan("pull_request", ["tests/e2e/fixtures.ts"], false), { run: false, scope: "none", shards: [], specs: [] });
+});
+
+test("the macOS-only spec list names each runnable spec once", () => {
+  const specs = discoverSpecs();
+  const map = validateE2ESpecMap(specs, readE2ESpecMap());
+  assert.ok(map.macos.length > 0);
+  assert.throws(() => validateE2ESpecMap(specs, { ...map, macos: [...map.macos, "not-a-spec.spec.ts"] }), /not-a-spec\.spec\.ts/u);
+  assert.throws(() => validateE2ESpecMap(specs, { ...map, macos: [map.macos[0], map.macos[0]] }), /macos list is malformed/u);
 });

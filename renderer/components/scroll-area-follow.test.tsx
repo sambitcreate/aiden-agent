@@ -2,7 +2,21 @@ import "../main/bots/test-dom";
 import assert from "node:assert/strict";
 import { afterEach, test } from "node:test";
 import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
-import { ScrollArea } from "./ui";
+import type React from "react";
+import {
+  AlertDialog,
+  Dialog,
+  DismissHoverSurfaces,
+  HoverCard,
+  HoverCardContent,
+  HoverCardTrigger,
+  Popover,
+  PopoverContent,
+  PopoverTrigger,
+  ScrollArea,
+  TooltipProvider,
+} from "./ui";
+import { Tooltip } from "./ui-primitives";
 
 afterEach(() => cleanup());
 
@@ -539,4 +553,135 @@ test("a content-height clamp after an embedded visual shrinks keeps live follow 
   port.grow(80);
   view.rerender(<Transcript chunks={3} />);
   assert.equal(port.top(), port.bottom());
+});
+
+test("a body replacement stays reachable while the transcript and footer behind it are hidden", () => {
+  render(
+    <ScrollArea
+      footer={<button type="button">Send message</button>}
+      bodyReplacement={<button type="button">Back to main chat</button>}
+    >
+      <p>chunk 0</p>
+    </ScrollArea>,
+  );
+  const hiddenAncestor = (element: Element) => element.closest("[inert], [aria-hidden='true']");
+  const back = screen.getByRole("button", { name: "Back to main chat" });
+  assert.equal(hiddenAncestor(back), null, "the replacement is not inside a hidden or inert subtree");
+  back.focus();
+  assert.equal(document.activeElement, back);
+
+  assert.ok(hiddenAncestor(screen.getByText("chunk 0")), "the transcript is hidden");
+  assert.equal(screen.queryByRole("button", { name: "Send message" }), null, "the footer is hidden");
+});
+
+test("hover cards and tooltips in a covered transcript stay closed, and the replacement's own still open", () => {
+  // A link preview pinned open and a tooltip trigger, as the conversation renders them.
+  const transcript = (
+    <>
+      <HoverCard open>
+        <HoverCardTrigger asChild>
+          <a href="https://example.com">example.com</a>
+        </HoverCardTrigger>
+        <HoverCardContent>Link preview</HoverCardContent>
+      </HoverCard>
+      <Tooltip content="Copy reply">
+        <button type="button">Copy</button>
+      </Tooltip>
+    </>
+  );
+  const back = (
+    <Tooltip content="Back to main chat (Esc)">
+      <button type="button">Back to main chat</button>
+    </Tooltip>
+  );
+  const view = render(
+    <TooltipProvider delayDuration={0}>
+      <ScrollArea>{transcript}</ScrollArea>
+    </TooltipProvider>,
+  );
+  assert.ok(screen.getByText("Link preview"), "uncovered, the preview shows");
+  fireEvent.focus(screen.getByRole("button", { name: "Copy" }));
+  assert.ok(screen.getAllByText("Copy reply").length > 0, "uncovered, the tooltip shows");
+
+  view.rerender(
+    <TooltipProvider delayDuration={0}>
+      <ScrollArea bodyReplacement={back}>{transcript}</ScrollArea>
+    </TooltipProvider>,
+  );
+  assert.equal(screen.queryByText("Link preview"), null, "the preview no longer floats over the replacement");
+  assert.equal(screen.queryByText("Copy reply"), null, "nor does the tooltip");
+  fireEvent.focus(screen.getByRole("button", { name: "Back to main chat" }));
+  assert.ok(screen.getAllByText("Back to main chat (Esc)").length > 0, "the replacement's tooltip still shows");
+});
+
+const copyReply = (
+  <Tooltip content="Copies the reply">
+    <button type="button">Copy reply</button>
+  </Tooltip>
+);
+const surfacesOpenedFromTheTranscript: Array<[string, React.ReactNode]> = [
+  [
+    "a popover",
+    <Popover open key="popover">
+      <PopoverTrigger asChild>
+        <button type="button">More</button>
+      </PopoverTrigger>
+      <PopoverContent>{copyReply}</PopoverContent>
+    </Popover>,
+  ],
+  [
+    "a dialog",
+    <Dialog open onOpenChange={() => undefined} title="Reply details" key="dialog">
+      {copyReply}
+    </Dialog>,
+  ],
+  [
+    "an alert dialog",
+    <AlertDialog open onOpenChange={() => undefined} title="Delete reply?" confirmLabel="Delete" key="alert">
+      {copyReply}
+    </AlertDialog>,
+  ],
+];
+
+for (const [name, surface] of surfacesOpenedFromTheTranscript) {
+  test(`${name} opened from a covered transcript is a surface of its own, and its tooltips show`, () => {
+    render(
+      <TooltipProvider delayDuration={0}>
+        <ScrollArea bodyReplacement={<button type="button">Back to main chat</button>}>{surface}</ScrollArea>
+      </TooltipProvider>,
+    );
+    fireEvent.focus(screen.getByRole("button", { name: "Copy reply" }));
+    assert.ok(screen.getAllByText("Copies the reply").length > 0);
+  });
+}
+
+test("a side panel floating over the conversation closes its open cards once, and the visible strip shows them again", () => {
+  const transcript = (floating: boolean) => (
+    <TooltipProvider delayDuration={0}>
+      <DismissHoverSurfaces when={floating}>
+        <HoverCard defaultOpen>
+          <HoverCardTrigger asChild>
+            <a href="https://example.com">example.com</a>
+          </HoverCardTrigger>
+          <HoverCardContent>Link preview</HoverCardContent>
+        </HoverCard>
+        <Tooltip content="Copy reply">
+          <button type="button">Copy</button>
+        </Tooltip>
+      </DismissHoverSurfaces>
+    </TooltipProvider>
+  );
+  const view = render(transcript(false));
+  const copy = screen.getByRole("button", { name: "Copy" });
+  fireEvent.focus(copy);
+  assert.ok(screen.getByText("Link preview"), "before the panel floats, the preview is open");
+  assert.ok(screen.getAllByText("Copy reply").length > 0, "and so is the tooltip");
+
+  view.rerender(transcript(true));
+  assert.equal(screen.queryByText("Link preview"), null, "the panel floating in closes the preview");
+  assert.equal(screen.queryByText("Copy reply"), null, "and the tooltip");
+
+  fireEvent.blur(copy);
+  fireEvent.focus(copy);
+  assert.ok(screen.getAllByText("Copy reply").length > 0, "with the panel still floating, the strip's tooltip opens again");
 });

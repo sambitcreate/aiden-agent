@@ -10,9 +10,15 @@ on:
 permissions:
   contents: read
 
+# One group per PR and one for main pushes: a run that joins the group cancels
+# the older queued or running CI for the same ref, so a burst of merges runs the
+# macOS suite about once instead of once per merge. GitHub orders the group by
+# when each run starts waiting and does not guarantee that order, so in a burst
+# seconds apart the surviving run may be for an earlier commit; re-run CI on the
+# tip by hand if that happens. Manual dispatches keep their own group.
 concurrency:
-  group: ci-${{ github.event_name == 'pull_request' && github.ref || github.run_id }}
-  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+  group: ci-${{ github.event_name == 'workflow_dispatch' && github.run_id || github.ref }}
+  cancel-in-progress: ${{ github.event_name != 'workflow_dispatch' }}
 
 jobs:
   changes:
@@ -28,6 +34,8 @@ jobs:
       linux: ${{ steps.filter.outputs.linux }}
       catalog: ${{ steps.filter.outputs.catalog }}
       selection-artifact: ${{ steps.selection.outputs.artifact }}
+      mac-e2e: ${{ steps.selection.outputs.mac_e2e }}
+      mac-e2e-shards: ${{ steps.selection.outputs.mac_e2e_shards }}
     steps:
       - name: Check out source
         uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
@@ -116,16 +124,19 @@ jobs:
           if-no-files-found: error
           retention-days: 1
 
+  # macOS slots are the scarce runner. Pull requests run here only the selected
+  # specs from the spec map's `macos` list, on one runner (skipped when none is
+  # selected); linux-e2e runs every selected spec. Main runs the full suite here.
   e2e:
-    name: Electron E2E (${{ matrix.shard }}/5)
+    name: Electron E2E (${{ matrix.shard }}/${{ strategy.job-total }})
     needs: [changes, build]
-    if: ${{ needs.changes.outputs.desktop == 'true' }}
+    if: ${{ needs.changes.outputs.mac-e2e == 'true' }}
     runs-on: macos-26
     timeout-minutes: 20
     strategy:
       fail-fast: false
       matrix:
-        shard: [1, 2, 3, 4, 5]
+        shard: ${{ fromJSON(needs.changes.outputs.mac-e2e-shards) }}
     steps:
       - name: Check out source
         uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
@@ -152,9 +163,10 @@ jobs:
         env:
           AIDEN_E2E_TIMINGS: test-results/e2e-spec-timings.json
           AIDEN_E2E_TIMINGS_PLATFORM: darwin
+          AIDEN_E2E_RUNNER: macos
           AIDEN_CI_TEST_SELECTION: ${{ runner.temp }}/ci-test-selection/ci-test-selection.json
         run: |
-          node scripts/ci-e2e-shards.mjs ${{ matrix.shard }}/5 --list > "$RUNNER_TEMP/e2e-shard.json"
+          node scripts/ci-e2e-shards.mjs ${{ matrix.shard }}/${{ strategy.job-total }} --list > "$RUNNER_TEMP/e2e-shard.json"
           node -e 'const fs=require("fs"); const s=JSON.parse(fs.readFileSync(process.argv[1],"utf8")); fs.appendFileSync(process.env.GITHUB_OUTPUT, `empty=${s.files.length===0}\n`);' "$RUNNER_TEMP/e2e-shard.json"
       - name: Install locked dependencies
         if: ${{ steps.plan.outputs.empty != 'true' }}
@@ -174,8 +186,9 @@ jobs:
         env:
           AIDEN_E2E_TIMINGS: test-results/e2e-spec-timings.json
           AIDEN_E2E_TIMINGS_PLATFORM: darwin
+          AIDEN_E2E_RUNNER: macos
           AIDEN_CI_TEST_SELECTION: ${{ runner.temp }}/ci-test-selection/ci-test-selection.json
-        run: node scripts/ci-e2e-shards.mjs ${{ matrix.shard }}/5
+        run: node scripts/ci-e2e-shards.mjs ${{ matrix.shard }}/${{ strategy.job-total }}
       - name: Build sanitized E2E failure receipt
         if: ${{ failure() }}
         run: npm run diagnostics:failure-receipt -- test-results/e2e-safe-receipt.json electron-e2e test-failed test-results/safe-test-details.json
@@ -417,6 +430,10 @@ jobs:
           -derivedDataPath '${{ runner.temp }}/AidenOnTheGoDerivedData'
           -clonedSourcePackagesDirPath '${{ runner.temp }}/AidenOnTheGoSourcePackages'
           CODE_SIGNING_ALLOWED=NO
+      # One simulator, no clones. On the 3-core, 7 GB hosted runner two clones
+      # took 6-9 minutes to boot, stalled whole test processes for minutes, and
+      # sometimes never launched, which hung the step until the job timed out.
+      # The suite's summed test time is below what the clones took end to end.
       - name: Run Aiden On The Go XCTest on the simulator
         run: >-
           xcodebuild test-without-building -quiet
@@ -428,6 +445,7 @@ jobs:
           -clonedSourcePackagesDirPath '${{ runner.temp }}/AidenOnTheGoSourcePackages'
           -resultBundlePath '${{ runner.temp }}/AidenOnTheGoSimulator.xcresult'
           -skip-testing:AidenOnTheGoUITests
+          -parallel-testing-enabled NO
           CODE_SIGNING_ALLOWED=NO
 
       # Cover the demo launch matrix and pairing through the unpaired shell.
@@ -539,6 +557,10 @@ jobs:
           -derivedDataPath '${{ runner.temp }}/AidenOnTheGoDerivedData'
           -clonedSourcePackagesDirPath '${{ runner.temp }}/AidenOnTheGoSourcePackages'
           CODE_SIGNING_ALLOWED=NO
+      # One simulator, no clones. On the 3-core, 7 GB hosted runner two clones
+      # took 6-9 minutes to boot, stalled whole test processes for minutes, and
+      # sometimes never launched, which hung the step until the job timed out.
+      # The suite's summed test time is below what the clones took end to end.
       - name: Run Aiden On The Go XCTest on the simulator
         run: >-
           xcodebuild test-without-building -quiet
@@ -550,6 +572,7 @@ jobs:
           -clonedSourcePackagesDirPath '${{ runner.temp }}/AidenOnTheGoSourcePackages'
           -resultBundlePath '${{ runner.temp }}/AidenOnTheGoSimulator.xcresult'
           -skip-testing:AidenOnTheGoUITests
+          -parallel-testing-enabled NO
           CODE_SIGNING_ALLOWED=NO
 
       # Cover the demo launch matrix and pairing through the unpaired shell.
@@ -693,7 +716,7 @@ jobs:
   required:
     name: CI required
     if: ${{ always() }}
-    needs: [changes, policy, static, build, verify, catalog, unit, e2e, apple, ios, android, cli-linux]
+    needs: [changes, policy, static, build, verify, catalog, unit, e2e, linux-e2e, apple, ios, android, cli-linux]
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     steps:
@@ -753,7 +776,8 @@ jobs:
         run: |
           case "$CHANGES_RESULT:$LINUX_SELECTED:$LINUX_RESULT:$LINUX_E2E_RESULT" in
             # Unselected, the always-started linux matrix skips its steps and reports success.
-            success:true:success:success|success:false:success:skipped|success:false:skipped:skipped) exit 0 ;;
+            # Desktop-only PRs run the Linux E2E shards without the packaging steps.
+            success:true:success:success|success:false:success:success|success:false:success:skipped|success:false:skipped:skipped) exit 0 ;;
             *) echo "Linux gate failed: $CHANGES_RESULT:$LINUX_SELECTED:$LINUX_RESULT:$LINUX_E2E_RESULT"; exit 1 ;;
           esac
 
@@ -887,11 +911,13 @@ jobs:
           fi
 
   # Electron specs run on three runners beside packaging, not after it, because
-  # this was the longest step on the path to the required Linux checks.
+  # this was the longest step on the path to the required Linux checks. Desktop
+  # changes select them too: on pull requests they carry the E2E specs that
+  # macOS no longer runs there.
   linux-e2e:
     name: Linux E2E (${{ matrix.shard }}/3)
     needs: changes
-    if: ${{ needs.changes.outputs.linux == 'true' }}
+    if: ${{ needs.changes.outputs.desktop == 'true' || needs.changes.outputs.linux == 'true' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     permissions:

@@ -1,8 +1,9 @@
 // Installs happy-dom and the fake IPC bridge; must stay the first import.
 import { emitBotTestNotification, installBotTestIpc } from "../main/bots/test-dom";
+import type { GenerationThinkingLevel } from "../shared/generation-thinking";
 import assert from "node:assert/strict";
 import { afterEach, test } from "node:test";
-import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { TooltipProvider } from "../components/ui";
 import { AppCapabilitiesProvider, DISABLED_APP_CAPABILITIES } from "../lib/app-capabilities";
@@ -65,8 +66,6 @@ function mountFloatingApp(overrides: Record<string, (...args: unknown[]) => unkn
       updatedAt: 2,
     }),
     "models:info": () => ({}),
-    "modelPace:summaries": () => ({}),
-    "modelInsights:status": () => ({ connected: false }),
     "quickChat:setMode": () => true,
     "quickChat:hide": () => true,
     "quickChat:suppressBlur": () => true,
@@ -640,16 +639,16 @@ test("external hide and reopen close already-open starter pickers and restore st
     await act(async () => {
       fireEvent.click(modelTrigger);
     });
-    await screen.findByLabelText("Filter chat models");
+    await screen.findByRole("dialog", { name: "Choose agent" });
 
     // Reopening via quickChat:opened (even without a prior quickChat:hidden) must close
-    // the mounted ModelPicker AND sync main back to compact starter mode.
+    // the mounted model popover AND sync main back to compact starter mode.
     const modeCallsBeforeReopen = calls.filter((c) => c.channel === "quickChat:setMode").length;
     await act(async () => {
       emitBotTestNotification("quickChat:opened", { source: "hotkey" });
     });
     await waitFor(() => {
-      assert.equal(screen.queryByLabelText("Filter chat models"), null);
+      assert.equal(screen.queryByRole("dialog", { name: "Choose agent" }), null);
     });
     const modeCallsAfterReopen = calls
       .filter((c) => c.channel === "quickChat:setMode")
@@ -657,11 +656,11 @@ test("external hide and reopen close already-open starter pickers and restore st
       .map((c) => c.args[0]);
     assert.deepEqual(modeCallsAfterReopen, ["starter"]);
 
-    // Clicking the ModelPicker trigger after reopen opens cleanly again.
+    // Clicking the model trigger after reopen opens cleanly again.
     await act(async () => {
       fireEvent.click(modelTrigger);
     });
-    await screen.findByLabelText("Filter chat models");
+    await screen.findByRole("dialog", { name: "Choose agent" });
   } finally {
     qc.clear();
   }
@@ -702,6 +701,269 @@ test("external hide and reopen preserve State 2 mini-modal stage and draft witho
       .slice(modeCountBeforeHide);
     assert.deepEqual(modeCallsAfterHide, []);
   } finally {
+    qc.clear();
+  }
+});
+
+test("an Agent Slider stop picked in Quick Chat sends its effort with the first message, the turn and later picks", async () => {
+  // A save can be held open (a pick just before Send) or refused (main busy).
+  let holdSave: Promise<void> | undefined;
+  let releaseSave = () => {};
+  let refuseSave = false;
+  // A stop reassignment's slider save, which can be held open too.
+  let holdSlider: Promise<void> | undefined;
+  let releaseSlider = () => {};
+  const quickChat = (id: unknown, providerId: unknown, model: unknown, level?: unknown): Chat => ({
+    id: String(id),
+    workspaceId: "nows-ephemeral-1",
+    ephemeral: true,
+    title: "Think hard",
+    providerId: String(providerId),
+    model: String(model),
+    ...(typeof level === "string" ? { thinkingLevel: level as GenerationThinkingLevel } : {}),
+    messages: [{ id: "m-user-1", role: "user", content: "Think hard", createdAt: 10 }],
+    createdAt: 10,
+    updatedAt: 11,
+  });
+  const { calls, qc } = mountFloatingApp({
+    "chats:setModel": async (id: unknown, providerId: unknown, model: unknown, level?: unknown) => {
+      if (holdSave) await holdSave;
+      if (refuseSave) throw new Error("This chat is busy.");
+      return quickChat(id, providerId, model, level);
+    },
+    // The follow-up runs on the Quick stop the pick just saved (no effort of its own).
+    "chats:appendMessage": (id: unknown) => quickChat(id, "lmstudio", "local-model"),
+    "settings:setAgentSlider": async (next: unknown) => {
+      if (holdSlider) await holdSlider;
+      return { lastProviderId: "lmstudio", lastModel: "local-model", agentSlider: next };
+    },
+    "settings:get": () => ({
+      lastProviderId: "lmstudio",
+      lastModel: "local-model",
+      agentSlider: {
+        version: 1,
+        homeStopId: "quick",
+        stops: [
+          { id: "quick", label: "Quick", providerId: "lmstudio", model: "local-model" },
+          { id: "deep", label: "Deep", providerId: "lmstudio", model: "local-model", thinkingLevel: "high" },
+          { id: "spare", label: "Spare" },
+        ],
+      },
+    }),
+  });
+  try {
+    const input = await screen.findByTestId("quick-chat-input");
+    const trigger = await waitFor(() => {
+      const button = screen.getByRole("button", { name: /Quick on the Agent Slider/u }) as HTMLButtonElement;
+      assert.equal(button.disabled, false);
+      return button;
+    });
+    await act(async () => {
+      fireEvent.click(trigger);
+    });
+    const slider = await screen.findByRole("slider", { name: "Agent Slider" });
+    await act(async () => {
+      fireEvent.keyDown(slider, { key: "ArrowRight" });
+    });
+    await waitFor(() =>
+      assert.match(trigger.getAttribute("aria-label") ?? "", /Deep on the Agent Slider/u),
+    );
+
+    await waitFor(() => {
+      fireEvent.change(input, { target: { value: "Think hard" } });
+      assert.equal((screen.getByTestId("quick-chat-send-btn") as HTMLButtonElement).disabled, false);
+    });
+    await act(async () => {
+      fireEvent.click(screen.getByTestId("quick-chat-send-btn"));
+    });
+    await waitFor(() => assert.ok(calls.some((call) => call.channel === "chat:start")));
+
+    const create = calls.find((call) => call.channel === "chats:createWithFirstMessage");
+    assert.equal((create?.args[0] as { thinkingLevel?: string }).thinkingLevel, "high");
+    const start = calls.find((call) => call.channel === "chat:start");
+    assert.ok(
+      start?.args.some(
+        (arg) => typeof arg === "object" && arg !== null && (arg as { thinkingLevel?: string }).thinkingLevel === "high",
+      ),
+      "the turn asks for the stop's effort",
+    );
+
+    // Once the chat exists, a stop is saved on the chat itself, so a handoff
+    // or reopen sees it; a stop without a level clears the chat's own level.
+    const chatId = String((create?.args[0] as { draftId: string }).draftId);
+    await act(async () => {
+      emitBotTestNotification("chat:done", { streamId: String(start?.args[0]), fullContent: "Done." });
+    });
+    const modalTrigger = await waitFor(() => {
+      const button = screen.getByRole("button", { name: /Deep on the Agent Slider/u }) as HTMLButtonElement;
+      assert.equal(button.disabled, false);
+      return button;
+    });
+    await act(async () => {
+      fireEvent.click(modalTrigger);
+    });
+    await act(async () => {
+      fireEvent.keyDown(await screen.findByRole("slider", { name: "Agent Slider" }), { key: "ArrowLeft" });
+    });
+    await waitFor(() => {
+      const save = calls.find((call) => call.channel === "chats:setModel");
+      assert.deepEqual(save?.args, [chatId, "lmstudio", "local-model", null]);
+    });
+    await waitFor(() =>
+      assert.match(modalTrigger.getAttribute("aria-label") ?? "", /Quick on the Agent Slider/u),
+    );
+
+    // Main reconciled the chat's level (a clamp): the slider follows what ran.
+    await act(async () => {
+      emitBotTestNotification("chats:metadata-updated", {
+        chatId,
+        title: "Think hard",
+        updatedAt: 20,
+        thinkingLevel: "high",
+      });
+    });
+    await waitFor(() =>
+      assert.match(modalTrigger.getAttribute("aria-label") ?? "", /Deep on the Agent Slider/u),
+    );
+
+    // Send right after a pick waits for the pick to be saved on the chat, so
+    // the turn and the chat's stored stop agree.
+    holdSave = new Promise<void>((resolve) => {
+      releaseSave = resolve;
+    });
+    const sliderOpen = async (trigger: HTMLElement) => {
+      if (!screen.queryByRole("slider", { name: "Agent Slider" })) {
+        await act(async () => {
+          fireEvent.click(trigger);
+        });
+      }
+      return screen.findByRole("slider", { name: "Agent Slider" });
+    };
+    const pickedQuick = await sliderOpen(modalTrigger);
+    await act(async () => {
+      fireEvent.keyDown(pickedQuick, { key: "ArrowLeft" });
+    });
+    // The popover stays open across Send, as it would under the pointer.
+    const followUp = screen.getByTestId("quick-chat-input");
+    await waitFor(() => {
+      fireEvent.change(followUp, { target: { value: "Now quickly" } });
+      assert.equal((screen.getByTestId("quick-chat-send-btn") as HTMLButtonElement).disabled, false);
+    });
+    await act(async () => {
+      fireEvent.click(screen.getByTestId("quick-chat-send-btn"));
+    });
+    assert.equal(
+      calls.some((call) => call.channel === "chats:appendMessage"),
+      false,
+      "the turn waits for the pick's save",
+    );
+    // A second pick while that send is in flight can't overtake it.
+    const savesBeforeLatePick = calls.filter((call) => call.channel === "chats:setModel").length;
+    await act(async () => {
+      fireEvent.keyDown(pickedQuick, { key: "ArrowRight" });
+    });
+    assert.equal(calls.filter((call) => call.channel === "chats:setModel").length, savesBeforeLatePick);
+    assert.match(modalTrigger.getAttribute("aria-label") ?? "", /Quick on the Agent Slider/u);
+    // The trigger is off while sending; Escape still closes the open popover.
+    assert.equal((modalTrigger as HTMLButtonElement).disabled, true);
+    await act(async () => {
+      fireEvent.keyDown(pickedQuick, { key: "Escape" });
+    });
+    await waitFor(() => assert.equal(screen.queryByRole("slider", { name: "Agent Slider" }), null));
+    await act(async () => {
+      releaseSave();
+      holdSave = undefined;
+    });
+    await waitFor(() => assert.ok(calls.some((call) => call.channel === "chats:appendMessage")));
+    const saves = calls.filter((call) => call.channel === "chats:setModel");
+    assert.deepEqual(saves[saves.length - 1]?.args, [chatId, "lmstudio", "local-model", null]);
+    const turns = calls.filter((call) => call.channel === "chat:start");
+    const lastTurn = turns[turns.length - 1];
+    assert.equal(
+      lastTurn?.args.some(
+        (arg: unknown) => typeof arg === "object" && arg !== null && "thinkingLevel" in (arg as object),
+      ),
+      false,
+      "the follow-up runs on the stop just saved, which has no effort of its own",
+    );
+    await act(async () => {
+      emitBotTestNotification("chat:done", { streamId: String(lastTurn?.args[0]), fullContent: "Done." });
+    });
+
+    // Main refuses a pick: the slider shows the chat's own selection again.
+    refuseSave = true;
+    const quickTrigger = await waitFor(() => {
+      const button = screen.getByRole("button", { name: /on the Agent Slider/u }) as HTMLButtonElement;
+      assert.equal(button.disabled, false);
+      return button;
+    });
+    const refused = await sliderOpen(quickTrigger);
+    await act(async () => {
+      fireEvent.keyDown(refused, { key: "ArrowRight" });
+    });
+    await waitFor(() => {
+      const refusedSave = calls.filter((call) => call.channel === "chats:setModel").pop();
+      assert.deepEqual(refusedSave?.args, [chatId, "lmstudio", "local-model", "high"]);
+    });
+    await waitFor(() =>
+      assert.match(quickTrigger.getAttribute("aria-label") ?? "", /Quick on the Agent Slider/u),
+    );
+
+    // A stop reassigned just before Send: Send waits until the stop is saved
+    // and the chat has moved onto it, so the turn runs on the reassigned stop.
+    refuseSave = false;
+    holdSlider = new Promise<void>((resolve) => {
+      releaseSlider = resolve;
+    });
+    await sliderOpen(quickTrigger);
+    const fixes = within(await screen.findByRole("list", { name: "Stops without a model to run" }));
+    await act(async () => {
+      fireEvent.click(fixes.getByRole("button", { name: /^Spare/u }));
+    });
+    await screen.findByRole("heading", { name: "Choose a model for Spare" });
+    await act(async () => {
+      fireEvent.click(screen.getAllByRole("option")[0]!);
+    });
+    await waitFor(() => assert.ok(calls.some((call) => call.channel === "settings:setAgentSlider")));
+    const appendCount = () => calls.filter((call) => call.channel === "chats:appendMessage").length;
+    const appendsBefore = appendCount();
+    const savesBeforeReassign = calls.filter((call) => call.channel === "chats:setModel").length;
+    const onSpare = screen.getByTestId("quick-chat-input");
+    fireEvent.change(onSpare, { target: { value: "On the spare stop" } });
+    assert.equal(
+      (screen.getByTestId("quick-chat-send-btn") as HTMLButtonElement).disabled,
+      true,
+      "Send waits for the reassignment",
+    );
+    await act(async () => {
+      fireEvent.keyDown(onSpare, { key: "Enter" });
+    });
+    assert.equal(appendCount(), appendsBefore, "Enter waits too");
+    await act(async () => {
+      releaseSlider();
+      holdSlider = undefined;
+    });
+    await waitFor(() =>
+      assert.equal(calls.filter((call) => call.channel === "chats:setModel").length, savesBeforeReassign + 1),
+    );
+    await waitFor(() =>
+      assert.equal((screen.getByTestId("quick-chat-send-btn") as HTMLButtonElement).disabled, false),
+    );
+    await act(async () => {
+      fireEvent.click(screen.getByTestId("quick-chat-send-btn"));
+    });
+    await waitFor(() => assert.equal(appendCount(), appendsBefore + 1));
+    const lastCall = (channel: string) =>
+      calls.reduce((found, call, index) => (call.channel === channel ? index : found), -1);
+    const reassignSave = lastCall("chats:setModel");
+    assert.deepEqual(calls[reassignSave]?.args, [chatId, "lmstudio", "local-model", null]);
+    assert.ok(
+      reassignSave < lastCall("chats:appendMessage"),
+      "the chat moved onto the reassigned stop before the turn",
+    );
+  } finally {
+    releaseSlider();
+    releaseSave();
     qc.clear();
   }
 });

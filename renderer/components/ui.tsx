@@ -1104,7 +1104,8 @@ export function ScrollArea({
   scrollRestorationId,
   focusRegion,
   overlay,
-  bodyHidden = false,
+  bodyHidden: bodyHiddenProp = false,
+  bodyReplacement,
   className,
   children,
 }: React.PropsWithChildren<{
@@ -1114,6 +1115,13 @@ export function ScrollArea({
    * stacked layout showing the canvas in the chat's place.
    */
   bodyHidden?: boolean;
+  /**
+   * Shown below the toolbar in place of the body and footer, such as a
+   * helper's chat filling the main pane. The body and footer stay mounted but
+   * hidden from sight, focus and assistive tech, so closing it returns to the
+   * same scroll position and composer draft.
+   */
+  bodyReplacement?: React.ReactNode;
   /**
    * Marks the scrollport as the conversation F6 moves to, so arrow keys and
    * Page Up/Down scroll it once it has focus.
@@ -1156,6 +1164,8 @@ export function ScrollArea({
   scrollContentBottomOffset?: number;
   className?: string;
 }>) {
+  const replaced = bodyReplacement !== undefined && bodyReplacement !== null && bodyReplacement !== false;
+  const bodyHidden = bodyHiddenProp || replaced;
   const viewport = React.useRef<HTMLDivElement>(null);
   const content = React.useRef<HTMLDivElement>(null);
   const toolbarRef = React.useRef<HTMLDivElement>(null);
@@ -1500,119 +1510,131 @@ export function ScrollArea({
         inert={bodyHidden}
         aria-hidden={bodyHidden || undefined}
       >
-        <div
-          ref={viewport}
-          data-scroll-restoration-id={scrollRestorationId}
-          data-scroll-top={atTop}
-          data-scroll-bottom={atScrollEnd}
-          data-follow={autoScrollToBottom ? following : undefined}
-          {...(focusRegion
-            ? {
-                "data-focus-region": focusRegion,
-                "data-focus-region-entry": "",
-                role: "region",
-                "aria-label": "Conversation",
-                tabIndex: -1,
-              }
-            : {})}
-          className={cn(
-            "scroll-edge-mask relative z-0 h-full w-full overflow-y-auto overscroll-contain",
-            focusRegion && "conversation-scrollport",
-          )}
-          style={{
-            paddingTop: toolbarHeight,
-            paddingBottom: footerHeight + Math.max(0, scrollContentBottomOffset),
-            // While following, the latch owns the bottom edge; browser scroll
-            // anchoring would fight it by holding a mid-transcript node still.
-            // A reader who has scrolled away keeps anchoring, so content changing
-            // above their place does not shift what they are reading.
-            overflowAnchor: autoScrollToBottom && following ? "none" : undefined,
-          }}
-          onScroll={(event) => {
-            const element = event.currentTarget;
-            const sample = { top: element.scrollTop, height: element.scrollHeight, viewport: element.clientHeight };
-            const previous = scrollSampleRef.current;
-            const clamped = previous !== null &&
-              (sample.height < previous.height || sample.viewport !== previous.viewport);
-            // Sandboxed frame input cannot reach our wheel/touch listeners. Its
-            // chained host scroll can still reveal the reader moving upward.
-            // Fractional upward movement adds up across events, including across
-            // a streaming snap; a downward move or a jump starts over.
-            if (!previous || clamped || followRef.current.jumpPending || sample.top > previous.top) {
-              upwardDriftRef.current = 0;
-            } else {
-              upwardDriftRef.current += previous.top - sample.top;
-            }
-            const movedUp = upwardDriftRef.current > 1;
-            if (movedUp) upwardDriftRef.current = 0;
-            scrollSampleRef.current = sample;
-            if (autoScrollRef.current && movedUp && !followRef.current.jumpPending && !followRef.current.scrollbarHeld) {
-              dispatchFollow({ type: "userIntent", intent: "drag", at: performance.now(), canScrollUp: true });
-            }
-            dispatchFollow({
-              type: clamped ? "contentResize" : "settle",
-              distance: measureDistance(element),
-              scrollTop: element.scrollTop,
-            });
-          }}
-        >
-          <div ref={content} data-scroll-content className="min-h-full">
-            {children}
-          </div>
-        </div>
-        {focusRegion ? (
-          // The conversation's keyboard focus ring, drawn below the overlaid toolbar.
-          <div aria-hidden className="conversation-focus-ring pointer-events-none absolute inset-x-0 bottom-0 z-20" style={{ top: toolbarHeight }} />
-        ) : null}
-        {overlay ? (
+        <SurfaceCovered covered={bodyHidden}>
           <div
-            className="pointer-events-none absolute inset-x-0 z-30 flex justify-end px-4"
-            style={{ top: toolbarHeight + 8 }}
-          >
-            <div className="pointer-events-auto">{overlay}</div>
-          </div>
-        ) : null}
-        {showScrollToBottomButton && offerJump ? (
-          // The button floats over the scrollport like the footer, but is centred
-          // on the same chat column as the composer, so it follows the column
-          // when Quick View insets it (and through that transition) and when a
-          // classic scrollbar takes a gutter.
-          <div
-            className="pointer-events-none absolute inset-x-0 bottom-0 z-20"
-            style={alignFooterToScrollContent ? { insetInlineEnd: scrollbarGutter } : undefined}
-          >
-            <div className="aiden-dock-inset chat-content-column relative">
-              <Button
-                iconOnly
-                size="medium"
-                variant="filled"
-                onClick={() => scrollToBottom()}
-                aria-label="Scroll to bottom"
-                className="pointer-events-auto absolute left-1/2 -translate-x-1/2 bg-popover/95 shadow-popover hover:bg-popover"
-                style={{ bottom: footerHeight + 12 + Math.max(0, scrollToBottomButtonOffset) }}
-              >
-                <ArrowDownToLine />
-              </Button>
-            </div>
-          </div>
-        ) : null}
-        {footer ? (
-          // Nothing scrolls the footer, so it never grows under the toolbar; a child
-          // that opts in with min-h-0 (a tall approval) shrinks to the room left.
-          // Anything still too tall overflows through the top, keeping the
-          // composer's input and actions at the bottom in view.
-          <div
-            ref={footerRef}
-            className="absolute inset-x-0 bottom-0 z-10 flex flex-col justify-end"
+            ref={viewport}
+            data-scroll-restoration-id={scrollRestorationId}
+            data-scroll-top={atTop}
+            data-scroll-bottom={atScrollEnd}
+            data-follow={autoScrollToBottom ? following : undefined}
+            {...(focusRegion
+              ? {
+                  "data-focus-region": focusRegion,
+                  "data-focus-region-entry": "",
+                  role: "region",
+                  "aria-label": "Conversation",
+                  tabIndex: -1,
+                }
+              : {})}
+            className={cn(
+              "scroll-edge-mask relative z-0 h-full w-full overflow-y-auto overscroll-contain",
+              focusRegion && "conversation-scrollport",
+            )}
             style={{
-              maxHeight: `calc(100% - ${toolbarHeight}px)`,
-              ...(alignFooterToScrollContent ? { insetInlineEnd: scrollbarGutter } : undefined),
+              paddingTop: toolbarHeight,
+              paddingBottom: footerHeight + Math.max(0, scrollContentBottomOffset),
+              // While following, the latch owns the bottom edge; browser scroll
+              // anchoring would fight it by holding a mid-transcript node still.
+              // A reader who has scrolled away keeps anchoring, so content changing
+              // above their place does not shift what they are reading.
+              overflowAnchor: autoScrollToBottom && following ? "none" : undefined,
+            }}
+            onScroll={(event) => {
+              const element = event.currentTarget;
+              const sample = { top: element.scrollTop, height: element.scrollHeight, viewport: element.clientHeight };
+              const previous = scrollSampleRef.current;
+              const clamped = previous !== null &&
+                (sample.height < previous.height || sample.viewport !== previous.viewport);
+              // Sandboxed frame input cannot reach our wheel/touch listeners. Its
+              // chained host scroll can still reveal the reader moving upward.
+              // Fractional upward movement adds up across events, including across
+              // a streaming snap; a downward move or a jump starts over.
+              if (!previous || clamped || followRef.current.jumpPending || sample.top > previous.top) {
+                upwardDriftRef.current = 0;
+              } else {
+                upwardDriftRef.current += previous.top - sample.top;
+              }
+              const movedUp = upwardDriftRef.current > 1;
+              if (movedUp) upwardDriftRef.current = 0;
+              scrollSampleRef.current = sample;
+              if (autoScrollRef.current && movedUp && !followRef.current.jumpPending && !followRef.current.scrollbarHeld) {
+                dispatchFollow({ type: "userIntent", intent: "drag", at: performance.now(), canScrollUp: true });
+              }
+              dispatchFollow({
+                type: clamped ? "contentResize" : "settle",
+                distance: measureDistance(element),
+                scrollTop: element.scrollTop,
+              });
             }}
           >
-            {footer}
+            <div ref={content} data-scroll-content className="min-h-full">
+              {children}
+            </div>
           </div>
-        ) : null}
+          {focusRegion ? (
+            // The conversation's keyboard focus ring, drawn below the overlaid toolbar.
+            <div aria-hidden className="conversation-focus-ring pointer-events-none absolute inset-x-0 bottom-0 z-20" style={{ top: toolbarHeight }} />
+          ) : null}
+          {overlay && !replaced ? (
+            <div
+              className="pointer-events-none absolute inset-x-0 z-30 flex justify-end px-4"
+              style={{ top: toolbarHeight + 8 }}
+            >
+              <div className="pointer-events-auto">{overlay}</div>
+            </div>
+          ) : null}
+          {showScrollToBottomButton && offerJump && !replaced ? (
+            // The button floats over the scrollport like the footer, but is centred
+            // on the same chat column as the composer, so it follows the column
+            // when Quick View insets it (and through that transition) and when a
+            // classic scrollbar takes a gutter.
+            <div
+              className="pointer-events-none absolute inset-x-0 bottom-0 z-20"
+              style={alignFooterToScrollContent ? { insetInlineEnd: scrollbarGutter } : undefined}
+            >
+              <div className="aiden-dock-inset chat-content-column relative">
+                <Button
+                  iconOnly
+                  size="medium"
+                  variant="filled"
+                  onClick={() => scrollToBottom()}
+                  aria-label="Scroll to bottom"
+                  className="pointer-events-auto absolute left-1/2 -translate-x-1/2 bg-popover/95 shadow-popover hover:bg-popover"
+                  style={{ bottom: footerHeight + 12 + Math.max(0, scrollToBottomButtonOffset) }}
+                >
+                  <ArrowDownToLine />
+                </Button>
+              </div>
+            </div>
+          ) : null}
+          {footer ? (
+            // Nothing scrolls the footer, so it never grows under the toolbar; a child
+            // that opts in with min-h-0 (a tall approval) shrinks to the room left.
+            // Anything still too tall overflows through the top, keeping the
+            // composer's input and actions at the bottom in view.
+            <div
+              ref={footerRef}
+              className="absolute inset-x-0 bottom-0 z-10 flex flex-col justify-end"
+              style={{
+                maxHeight: `calc(100% - ${toolbarHeight}px)`,
+                ...(alignFooterToScrollContent ? { insetInlineEnd: scrollbarGutter } : undefined),
+              }}
+            >
+              {footer}
+            </div>
+          ) : null}
+        </SurfaceCovered>
       </div>
+      {replaced ? (
+        // Outside the hidden body, so the replacement stays visible and focusable.
+        <div
+          data-scroll-area-replacement=""
+          className="absolute inset-x-0 bottom-0 z-20 flex min-h-0 flex-col"
+          style={{ top: toolbarHeight }}
+        >
+          {bodyReplacement}
+        </div>
+      ) : null}
     </div>
   );
 }
@@ -1799,28 +1821,18 @@ export function Dialog({
             size === "full" && "h-[94vh] max-h-[94vh] w-[96vw]",
           )}
         >
-          <DialogPrimitive.Title className="shrink-0 text-heading2 font-semibold">
-            {title}
-          </DialogPrimitive.Title>
-          {description ? (
-            <DialogPrimitive.Description asChild>
-              <div className="mt-1.5 shrink-0 text-regular text-secondary">{description}</div>
-            </DialogPrimitive.Description>
-          ) : null}
-          <div className={cn("mt-4 min-h-0 overflow-y-auto px-0.5", size === "full" && "flex-1")}>{children}</div>
-          <div className="mt-5 flex shrink-0 justify-end gap-2">
-            {cancelKeepsOpen ? (
-              <Button
-                ref={cancelRef}
-                variant="filled"
-                className={actionClassName}
-                disabled={dismissBlocked}
-                onClick={() => void onCancel?.()}
-              >
-                {cancelLabel ?? (confirmHidden ? "Close" : "Cancel")}
-              </Button>
-            ) : (
-              <DialogPrimitive.Close asChild>
+          <UncoveredSurface>
+            <DialogPrimitive.Title className="shrink-0 text-heading2 font-semibold">
+              {title}
+            </DialogPrimitive.Title>
+            {description ? (
+              <DialogPrimitive.Description asChild>
+                <div className="mt-1.5 shrink-0 text-regular text-secondary">{description}</div>
+              </DialogPrimitive.Description>
+            ) : null}
+            <div className={cn("mt-4 min-h-0 overflow-y-auto px-0.5", size === "full" && "flex-1")}>{children}</div>
+            <div className="mt-5 flex shrink-0 justify-end gap-2">
+              {cancelKeepsOpen ? (
                 <Button
                   ref={cancelRef}
                   variant="filled"
@@ -1830,20 +1842,32 @@ export function Dialog({
                 >
                   {cancelLabel ?? (confirmHidden ? "Close" : "Cancel")}
                 </Button>
-              </DialogPrimitive.Close>
-            )}
-            {confirmHidden ? null : (
-              <Button
-                variant="accent"
-                className={actionClassName}
-                disabled={confirmDisabled || busy}
-                aria-describedby={confirmDescribedBy}
-                onClick={() => void onConfirm?.()}
-              >
-                {confirmLabel}
-              </Button>
-            )}
-          </div>
+              ) : (
+                <DialogPrimitive.Close asChild>
+                  <Button
+                    ref={cancelRef}
+                    variant="filled"
+                    className={actionClassName}
+                    disabled={dismissBlocked}
+                    onClick={() => void onCancel?.()}
+                  >
+                    {cancelLabel ?? (confirmHidden ? "Close" : "Cancel")}
+                  </Button>
+                </DialogPrimitive.Close>
+              )}
+              {confirmHidden ? null : (
+                <Button
+                  variant="accent"
+                  className={actionClassName}
+                  disabled={confirmDisabled || busy}
+                  aria-describedby={confirmDescribedBy}
+                  onClick={() => void onConfirm?.()}
+                >
+                  {confirmLabel}
+                </Button>
+              )}
+            </div>
+          </UncoveredSurface>
         </DialogPrimitive.Content>
       </DialogPrimitive.Portal>
     </DialogPrimitive.Root>
@@ -1918,29 +1942,31 @@ export function AlertDialog({
             layer === "onboarding" ? "z-[70] shadow-onboarding" : "z-50 shadow-modal",
           )}
         >
-          <AlertDialogPrimitive.Title className="text-heading2 font-semibold">
-            {title}
-          </AlertDialogPrimitive.Title>
-          {description ? (
-            <AlertDialogPrimitive.Description asChild>
-              <div className="mt-2 text-regular text-secondary">{description}</div>
-            </AlertDialogPrimitive.Description>
-          ) : null}
-          {children ? (
-            <div className="mt-3 max-h-[46vh] min-h-0 overflow-y-auto text-small text-primary">{children}</div>
-          ) : null}
-          <div className="mt-5 flex justify-end gap-2">
-            <AlertDialogPrimitive.Cancel asChild>
-              <Button variant="filled" disabled={busy}>
-                Cancel
-              </Button>
-            </AlertDialogPrimitive.Cancel>
-            {keepOpenOnConfirm ? (
-              confirm
-            ) : (
-              <AlertDialogPrimitive.Action asChild>{confirm}</AlertDialogPrimitive.Action>
-            )}
-          </div>
+          <UncoveredSurface>
+            <AlertDialogPrimitive.Title className="text-heading2 font-semibold">
+              {title}
+            </AlertDialogPrimitive.Title>
+            {description ? (
+              <AlertDialogPrimitive.Description asChild>
+                <div className="mt-2 text-regular text-secondary">{description}</div>
+              </AlertDialogPrimitive.Description>
+            ) : null}
+            {children ? (
+              <div className="mt-3 max-h-[46vh] min-h-0 overflow-y-auto text-small text-primary">{children}</div>
+            ) : null}
+            <div className="mt-5 flex justify-end gap-2">
+              <AlertDialogPrimitive.Cancel asChild>
+                <Button variant="filled" disabled={busy}>
+                  Cancel
+                </Button>
+              </AlertDialogPrimitive.Cancel>
+              {keepOpenOnConfirm ? (
+                confirm
+              ) : (
+                <AlertDialogPrimitive.Action asChild>{confirm}</AlertDialogPrimitive.Action>
+              )}
+            </div>
+          </UncoveredSurface>
         </AlertDialogPrimitive.Content>
       </AlertDialogPrimitive.Portal>
     </AlertDialogPrimitive.Root>
@@ -2125,7 +2151,7 @@ export const PopoverTrigger = PopoverPrimitive.Trigger;
 export const PopoverContent = React.forwardRef<
   React.ElementRef<typeof PopoverPrimitive.Content>,
   React.ComponentPropsWithoutRef<typeof PopoverPrimitive.Content>
->(function PopoverContent({ className, sideOffset = 6, onEscapeKeyDown, ...props }, ref) {
+>(function PopoverContent({ className, sideOffset = 6, onEscapeKeyDown, children, ...props }, ref) {
   const liveGuard = useLiveGuardAttributes(props);
   return (
     <PopoverPrimitive.Portal>
@@ -2141,18 +2167,106 @@ export const PopoverContent = React.forwardRef<
         {...props}
         {...liveGuard}
         onEscapeKeyDown={keepOpenWhileComposing(onEscapeKeyDown)}
-      />
+      >
+        <UncoveredSurface>{children}</UncoveredSurface>
+      </PopoverPrimitive.Content>
     </PopoverPrimitive.Portal>
   );
 });
 
-export const HoverCard = HoverCardPrimitive.Root;
+const SurfaceCoveredContext = React.createContext(false);
+
+/**
+ * Marks content that is covered: hidden behind something that replaced it (an
+ * expanded helper chat over the conversation). Hover cards and tooltips
+ * anchored inside render nothing there, since one left open on a hidden anchor
+ * would float over what covers it and take the first Esc. A covered surface
+ * stays covered inside a nested one, but not inside a dialog or popover opened
+ * from it, which is a new surface of its own.
+ */
+export function SurfaceCovered({ covered, children }: { covered: boolean; children: React.ReactNode }) {
+  const parent = React.useContext(SurfaceCoveredContext);
+  return <SurfaceCoveredContext.Provider value={parent || covered}>{children}</SurfaceCoveredContext.Provider>;
+}
+
+/** Starts a new, uncovered surface: dialog and popover content. */
+function UncoveredSurface({ children }: { children: React.ReactNode }) {
+  return <SurfaceCoveredContext.Provider value={false}>{children}</SurfaceCoveredContext.Provider>;
+}
+
+/** Whether this content sits in a covered surface (see `SurfaceCovered`). */
+export function useSurfaceCovered(): boolean {
+  return React.useContext(SurfaceCoveredContext);
+}
+
+const HoverSurfaceDismissalContext = React.createContext(0);
+
+/**
+ * Closes the hover cards and tooltips open inside, once, each time `when`
+ * turns true: a side panel floating over the conversation would otherwise
+ * leave a card open over it. They open again as usual afterwards.
+ */
+export function DismissHoverSurfaces({ when, children }: { when: boolean; children: React.ReactNode }) {
+  const parent = React.useContext(HoverSurfaceDismissalContext);
+  const [state, setState] = React.useState({ when, count: 0 });
+  let count = state.count;
+  if (state.when !== when) {
+    count = when ? state.count + 1 : state.count;
+    setState({ when, count });
+  }
+  return (
+    <HoverSurfaceDismissalContext.Provider value={parent + count}>{children}</HoverSurfaceDismissalContext.Provider>
+  );
+}
+
+/**
+ * Open state for a hover card or tooltip root that closes when an enclosing
+ * `DismissHoverSurfaces` fires. Works for controlled and uncontrolled roots.
+ */
+export function useDismissibleHoverOpen({
+  open,
+  defaultOpen,
+  onOpenChange,
+}: {
+  open?: boolean;
+  defaultOpen?: boolean;
+  onOpenChange?: (open: boolean) => void;
+}): [boolean, (open: boolean) => void] {
+  const dismissal = React.useContext(HoverSurfaceDismissalContext);
+  const [ownOpen, setOwnOpen] = React.useState(defaultOpen ?? false);
+  const shown = open ?? ownOpen;
+  const change = React.useCallback(
+    (next: boolean) => {
+      if (open === undefined) setOwnOpen(next);
+      onOpenChange?.(next);
+    },
+    [open, onOpenChange],
+  );
+  const seenDismissalRef = React.useRef(dismissal);
+  React.useEffect(() => {
+    if (seenDismissalRef.current === dismissal) return;
+    seenDismissalRef.current = dismissal;
+    if (shown) change(false);
+  }, [dismissal, shown, change]);
+  return [shown, change];
+}
+
+export function HoverCard({
+  open,
+  defaultOpen,
+  onOpenChange,
+  ...props
+}: React.ComponentProps<typeof HoverCardPrimitive.Root>) {
+  const [shown, change] = useDismissibleHoverOpen({ open, defaultOpen, onOpenChange });
+  return <HoverCardPrimitive.Root {...props} open={shown} onOpenChange={change} />;
+}
 export const HoverCardTrigger = HoverCardPrimitive.Trigger;
 export const HoverCardContent = React.forwardRef<
   React.ElementRef<typeof HoverCardPrimitive.Content>,
   React.ComponentPropsWithoutRef<typeof HoverCardPrimitive.Content>
 >(function HoverCardContent({ className, sideOffset = 8, ...props }, ref) {
   const liveGuard = useLiveGuardAttributes(props);
+  if (useSurfaceCovered()) return null;
   return (
     <HoverCardPrimitive.Portal>
       <HoverCardPrimitive.Content

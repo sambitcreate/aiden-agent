@@ -1,6 +1,11 @@
 import { builtinProviders } from "@earendil-works/pi-ai/providers/all";
 
 import { BOT_PRESETS } from "../../../renderer/shared/bot-presets.js";
+import {
+  activeStopIndex,
+  normalizeAgentSlider,
+  type AgentSliderSelection,
+} from "../../../renderer/shared/agent-slider.js";
 import type { GenerationThinkingLevel } from "../../../renderer/shared/generation-thinking.js";
 import { ANTIGRAVITY_PROVIDER_ID } from "../antigravity/models.js";
 import { CONCENTRATE_PROVIDER_ID } from "../concentrate-provider.js";
@@ -66,6 +71,25 @@ export function analyticsBotPresetId(presetId: unknown): string {
 
 export function analyticsConnectorPresetId(presetId: unknown): string {
   return normalizeKnownId(presetId, CONNECTOR_PRESET_IDS);
+}
+
+type SliderStopProps = Pick<AnalyticsEventProps<"chat_message_sent">, "slider_stop" | "slider_stop_count">;
+
+const SLIDER_STOP_NUMBERS = ["1", "2", "3", "4", "5", "6", "7"] as const;
+
+/**
+ * The Agent Slider stop a chat's provider, model and own level sit on, as the
+ * composer derives it: 1-based, or custom when no stop matches. Nothing when
+ * the slider is absent or unreadable. Never a label, model or provider.
+ */
+export function analyticsSliderStop(slider: unknown, selection: AgentSliderSelection): SliderStopProps {
+  const normalized = normalizeAgentSlider(slider);
+  if (!normalized) return {};
+  const index = activeStopIndex(normalized, selection);
+  return {
+    slider_stop: index === -1 ? "custom" : (SLIDER_STOP_NUMBERS[index] ?? "custom"),
+    slider_stop_count: normalized.stops.length,
+  };
 }
 
 export function analyticsThinking(
