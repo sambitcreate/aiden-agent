@@ -23,7 +23,6 @@
 .browser-floating-resize-northwest, .browser-floating-resize-northeast, .browser-floating-resize-southwest, .browser-floating-resize-southeast { width: 14px; height: 14px; }
 .browser-floating-resize-northwest { top: -6px; left: -6px; cursor: nwse-resize; } .browser-floating-resize-northeast { top: -6px; right: -6px; cursor: nesw-resize; }
 .browser-floating-resize-southwest { bottom: -6px; left: -6px; cursor: nesw-resize; } .browser-floating-resize-southeast { bottom: -6px; right: -6px; cursor: nwse-resize; }
-.browser-floating-header:focus-visible, .browser-floating-resize:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 2px; }
 .browser-tab-strip { display: flex; min-width: 0; height: 40px; flex: 0 0 auto; align-items: center; gap: 5px; padding: 5px 9px; }
 .browser-tabs { display: flex; min-width: 0; flex: 1; gap: 3px; overflow-x: auto; scrollbar-width: thin; }
 .browser-tab { display: flex; min-width: 104px; max-width: 220px; height: 29px; flex: 1; align-items: center; padding: 0 4px 0 2px; border-radius: 10px; }
@@ -131,7 +130,6 @@
 .device-event-log-chevron { transition: transform 150ms ease-out; }
 .device-event-log-chevron[data-open] { transform: rotate(180deg); }
 .device-event-log-list { max-height: 16rem; min-height: 3rem; margin: 0; padding: 6px 8px; overflow-y: auto; border-radius: var(--radius-menu); background: var(--surface-well); list-style: none; font-family: var(--font-mono); font-size: calc(var(--text-small) - 1px); line-height: 1.55; outline: none; }
-.device-event-log-list:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 2px; }
 .device-event-log-entry { display: flex; min-width: 0; gap: 8px; }
 .device-event-log-time { flex: 0 0 auto; color: var(--text-tertiary); font-variant-numeric: tabular-nums; }
 .device-event-log-summary { min-width: 0; overflow-wrap: anywhere; }
@@ -208,7 +206,6 @@
 .browser-annotation-color input[type="color"] { width: 26px; flex: 0 0 auto; padding: 0; border: 0; background: transparent; }
 .browser-annotation-style-field input[type="range"] { accent-color: var(--text-secondary); }
 .browser-annotation-footer { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
-.browser-tab-select:focus-visible, .browser-tab-close:focus-visible, .browser-select:focus-visible, .browser-recent-row > button:focus-visible, .browser-annotation-details summary:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 2px; }
 @keyframes browser-loading { 0% { transform: scaleX(.08); opacity: .45; } 75% { transform: scaleX(.8); opacity: .7; } 100% { transform: scaleX(1); opacity: .2; } }
 :root[data-reduce-motion="true"] .browser-chrome[data-loading="true"]::after { animation: none; opacity: .55; }
 
@@ -1267,11 +1264,6 @@ textarea {
 
 .settings-page .settings-field:has(> .settings-field-control:empty) {
   grid-template-columns: minmax(0, 1fr);
-}
-
-.settings-page :is(button, [role="button"], summary):focus-visible {
-  outline: 2px solid var(--focus-ring);
-  outline-offset: 2px;
 }
 
 @container settings-content (max-width: 540px) {
