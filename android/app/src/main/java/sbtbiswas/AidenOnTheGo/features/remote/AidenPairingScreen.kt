@@ -67,7 +67,6 @@ import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.launch
-import kotlinx.serialization.json.Json
 import sbtbiswas.AidenOnTheGo.R
 import sbtbiswas.AidenOnTheGo.features.settings.AidenSettingsDefaults
 import sbtbiswas.AidenOnTheGo.features.settings.AidenSettingsGroup
@@ -76,7 +75,7 @@ import sbtbiswas.AidenOnTheGo.features.settings.AidenSettingsMessageRow
 import sbtbiswas.AidenOnTheGo.features.settings.AidenSettingsNavigationRow
 import sbtbiswas.AidenOnTheGo.features.settings.AidenSettingsScaffold
 import sbtbiswas.AidenOnTheGo.models.AidenInstallation
-import sbtbiswas.AidenOnTheGo.models.AidenPairingPayload
+import sbtbiswas.AidenOnTheGo.networking.AidenRemoteClient
 import sbtbiswas.AidenOnTheGo.persistence.AidenInstallationStore
 import sbtbiswas.AidenOnTheGo.ui.theme.AidenDialogConfirmButton
 import sbtbiswas.AidenOnTheGo.ui.theme.AidenDialogDismissButton
@@ -244,6 +243,7 @@ fun AidenPairDesktopScreen(
     var isPairing by remember { mutableStateOf(false) }
     var errorMessage by remember { mutableStateOf<String?>(null) }
     val fallbackError = stringResource(R.string.pairing_failed)
+    val unverifiedError = stringResource(R.string.pairing_desktop_unverified)
 
     fun pair(block: suspend () -> Unit, onFailure: () -> Unit = {}) {
         if (isPairing) return
@@ -256,7 +256,7 @@ fun AidenPairDesktopScreen(
             } catch (cancelled: CancellationException) {
                 throw cancelled
             } catch (error: Exception) {
-                errorMessage = error.message ?: fallbackError
+                errorMessage = if (aidenPairingFailedTlsVerification(error)) unverifiedError else error.message ?: fallbackError
                 onFailure()
             } finally {
                 isPairing = false
@@ -289,7 +289,7 @@ fun AidenPairDesktopScreen(
                 errorMessage = errorMessage,
                 onScanned = { scanned, retry ->
                     pair({
-                        val payload = pairingJson.decodeFromString<AidenPairingPayload>(scanned.trim())
+                        val payload = AidenRemoteClient.decodePairingPayload(scanned.trim())
                         coordinator.pairWithQRCode(payload)
                     }, onFailure = retry)
                 },
@@ -310,7 +310,14 @@ fun AidenPairDesktopScreen(
     }
 }
 
-private val pairingJson = Json { ignoreUnknownKeys = true }
+/**
+ * The desktop's certificate didn't verify. With a typed setup code this is usually a desktop whose
+ * address or certificate changed; its QR code carries the trust the phone needs.
+ */
+internal fun aidenPairingFailedTlsVerification(error: Throwable): Boolean =
+    generateSequence(error) { it.cause.takeIf { cause -> cause !== it } }
+        .take(8)
+        .any { it is javax.net.ssl.SSLHandshakeException || it is javax.net.ssl.SSLPeerUnverifiedException }
 
 @Composable
 private fun AidenPairingSteps() {

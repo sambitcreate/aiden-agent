@@ -117,6 +117,7 @@ dependencies {
   testImplementation(libs.junit)
   testImplementation(libs.kotlinx.coroutines.test)
   testImplementation(libs.okhttp.mockwebserver)
+  testImplementation(libs.okhttp.tls)
 
   // Instrumented tests
   androidTestImplementation(libs.androidx.compose.ui.test.junit4)

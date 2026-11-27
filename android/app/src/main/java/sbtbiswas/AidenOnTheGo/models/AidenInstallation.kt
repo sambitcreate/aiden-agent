@@ -1,5 +1,6 @@
 package sbtbiswas.AidenOnTheGo.models
 
+import kotlinx.serialization.Required
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 import sbtbiswas.AidenOnTheGo.protocol.AidenRemoteCapability
@@ -292,7 +293,7 @@ data class AidenServer(
 
 @Serializable
 data class AidenPairingBootstrap(
-    val protocolVersion: Int = AidenRemoteProtocol.VERSION,
+    @Required val protocolVersion: Int = AidenRemoteProtocol.VERSION,
     val instanceId: String,
     val endpoint: String,
     val serverSpkiSha256: String,
@@ -303,8 +304,10 @@ data class AidenPairingBootstrap(
         if (protocolVersion != AidenRemoteProtocol.VERSION) throw sbtbiswas.AidenOnTheGo.protocol.AidenPairingBootstrapException.UnsupportedProtocol
         if (instanceId.isEmpty() || instanceId.length > AidenRemoteProtocol.MAX_IDENTIFIER_LENGTH) throw sbtbiswas.AidenOnTheGo.protocol.AidenPairingBootstrapException.InvalidInstance
         if (!AidenRemoteProtocol.isCanonicalAidenEndpoint(endpoint)) throw sbtbiswas.AidenOnTheGo.protocol.AidenPairingBootstrapException.InvalidEndpoint
-        if (!serverSpkiSha256.startsWith("sha256/") || serverSpkiSha256.length != 51) throw sbtbiswas.AidenOnTheGo.protocol.AidenPairingBootstrapException.InvalidFingerprint
-        if (secret.length < 32) throw sbtbiswas.AidenOnTheGo.protocol.AidenPairingBootstrapException.WeakSecret
+        if (!SPKI_PIN.matches(serverSpkiSha256) || decodedLength(serverSpkiSha256.removePrefix("sha256/"), urlSafe = false) != 32) {
+            throw sbtbiswas.AidenOnTheGo.protocol.AidenPairingBootstrapException.InvalidFingerprint
+        }
+        if (!isPairingSecret(secret)) throw sbtbiswas.AidenOnTheGo.protocol.AidenPairingBootstrapException.WeakSecret
         if (!expiresAt.isAfter(at)) throw sbtbiswas.AidenOnTheGo.protocol.AidenPairingBootstrapException.Expired
         if (java.time.Duration.between(at, expiresAt).seconds > 300) throw sbtbiswas.AidenOnTheGo.protocol.AidenPairingBootstrapException.ExcessiveTTL
         return this
@@ -316,6 +319,21 @@ data class AidenPairingBootstrap(
     } catch (_: Exception) {
         false
     }
+
+    companion object {
+        private val SPKI_PIN = Regex("^sha256/[A-Za-z0-9+/]{43}=$")
+        private val PAIRING_SECRET = Regex("^[A-Za-z0-9_-]{43}$")
+
+        /** A pairing secret or credential: 43 base64url characters that decode to 32 bytes. */
+        internal fun isPairingSecret(value: String): Boolean =
+            PAIRING_SECRET.matches(value) && decodedLength(value, urlSafe = true) == 32
+
+        internal fun decodedLength(value: String, urlSafe: Boolean): Int? = try {
+            (if (urlSafe) java.util.Base64.getUrlDecoder() else java.util.Base64.getDecoder()).decode(value).size
+        } catch (_: IllegalArgumentException) {
+            null
+        }
+    }
 }
 
 @Serializable
@@ -324,17 +342,40 @@ data class AidenPairingTrust(
     @SerialName("caCertificateDerBase64") val caCertificateDerBase64: String? = null
 ) {
     val caCertificateDER: String? get() = caCertificateDerBase64
+
+    /** The two trust shapes a desktop writes: system roots with no CA, or one canonical private CA. */
+    fun validated(): AidenPairingTrust {
+        when (mode) {
+            "system" -> if (caCertificateDerBase64 != null) throw sbtbiswas.AidenOnTheGo.protocol.AidenPairingPayloadException.InvalidTrust
+            "private-ca" -> {
+                val value = caCertificateDerBase64
+                val decoded = try {
+                    value?.takeIf { it.isNotEmpty() }?.let { java.util.Base64.getDecoder().decode(it) }
+                } catch (_: IllegalArgumentException) {
+                    null
+                }
+                if (decoded == null || decoded.size > AidenRemoteProtocol.MAX_PAIRING_PAYLOAD_BYTES ||
+                    java.util.Base64.getEncoder().encodeToString(decoded) != value
+                ) {
+                    throw sbtbiswas.AidenOnTheGo.protocol.AidenPairingPayloadException.InvalidCACertificateData
+                }
+            }
+            else -> throw sbtbiswas.AidenOnTheGo.protocol.AidenPairingPayloadException.InvalidTrust
+        }
+        return this
+    }
 }
 
 @Serializable
 data class AidenPairingPayload(
-    val kind: String = "aiden-pairing-v1",
+    @Required val kind: String = "aiden-pairing-v1",
     val bootstrap: AidenPairingBootstrap,
     val trust: AidenPairingTrust
 ) {
     fun validated(at: Instant = Instant.now()): AidenPairingPayload {
         if (kind != "aiden-pairing-v1") throw sbtbiswas.AidenOnTheGo.protocol.AidenPairingPayloadException.InvalidKind
         bootstrap.validated(at)
+        trust.validated()
         return this
     }
 
@@ -348,8 +389,8 @@ data class AidenPairingPayload(
 
 @Serializable
 data class AidenManualPairingBootstrap(
-    val kind: String = "aiden-manual-pairing-v1",
-    val protocolVersion: Int = AidenRemoteProtocol.VERSION,
+    @Required val kind: String = "aiden-manual-pairing-v1",
+    @Required val protocolVersion: Int = AidenRemoteProtocol.VERSION,
     val sessionId: String,
     @Serializable(with = InstantIso8601Serializer::class) val expiresAt: Instant,
     val salt: String,
@@ -367,7 +408,7 @@ data class AidenManualPairingResponse(
 
 @Serializable
 data class AidenPairingExchange(
-    val protocolVersion: Int = AidenRemoteProtocol.VERSION,
+    @Required val protocolVersion: Int = AidenRemoteProtocol.VERSION,
     val instanceId: String,
     val deviceId: String,
     val credential: String,
@@ -375,7 +416,32 @@ data class AidenPairingExchange(
     val endpoint: String,
     val serverSpkiSha256: String,
     val displayName: String? = null
-)
+) {
+    /**
+     * The exchange must describe the desktop the bootstrap named: the same instance, address and
+     * pin, a well-formed credential, and only the pairing vocabulary. Grants beyond it are
+     * negotiated later, never handed out at pairing. Mirrors iOS `PairingExchange.validated(against:)`.
+     */
+    fun validatedAgainst(bootstrap: AidenPairingBootstrap): AidenPairingExchange {
+        val capabilitySet = capabilities.toSet()
+        if (protocolVersion != AidenRemoteProtocol.VERSION ||
+            instanceId.isEmpty() || instanceId.length > AidenRemoteProtocol.MAX_IDENTIFIER_LENGTH ||
+            deviceId.isEmpty() || deviceId.length > AidenRemoteProtocol.MAX_IDENTIFIER_LENGTH ||
+            instanceId != bootstrap.instanceId ||
+            !AidenRemoteProtocol.isCanonicalAidenEndpoint(endpoint) ||
+            endpoint != bootstrap.endpoint ||
+            serverSpkiSha256 != bootstrap.serverSpkiSha256 ||
+            !AidenPairingBootstrap.isPairingSecret(credential) ||
+            capabilitySet.size != capabilities.size ||
+            !AidenRemoteCapability.V1_KNOWN.containsAll(capabilitySet) ||
+            (capabilitySet.contains(AidenRemoteCapability.BOT_WRITE) && !capabilitySet.contains(AidenRemoteCapability.BOT_READ)) ||
+            (displayName != null && displayName.codePointCount(0, displayName.length) > 80)
+        ) {
+            throw AidenRemoteContractException.InvalidPairingExchange
+        }
+        return this
+    }
+}
 
 @Serializable
 data class AidenInstallation(

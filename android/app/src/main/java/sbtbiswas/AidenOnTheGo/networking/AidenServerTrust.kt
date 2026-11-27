@@ -196,21 +196,53 @@ object AidenServerTrust {
         return true
     }
 
+    /**
+     * Whether the leaf names [host] in its subject alternative names, the way TLS hostname
+     * verification reads them: an IP literal matches an IP entry by address, a DNS name matches a
+     * DNS entry case-insensitively, and a wildcard covers exactly one left-most label.
+     */
     private fun matchesHost(cert: X509Certificate, host: String): Boolean {
-        val target = host.trim('[', ']')
-        try {
-            val altNames = cert.subjectAlternativeNames
-            if (altNames != null) {
-                for (item in altNames) {
-                    val name = item[1]?.toString()?.trim('[', ']') ?: continue
-                    if (name.equals(target, ignoreCase = true)) return true
-                }
+        val target = host.trim('[', ']').lowercase(java.util.Locale.US).trimEnd('.')
+        val targetAddress = ipLiteralBytes(target)
+        val altNames = try {
+            cert.subjectAlternativeNames
+        } catch (_: Exception) {
+            null
+        } ?: return false
+        for (item in altNames) {
+            val type = item.getOrNull(0) as? Int ?: continue
+            val name = item.getOrNull(1) as? String ?: continue
+            when {
+                type == SAN_IP_ADDRESS && targetAddress != null ->
+                    if (ipLiteralBytes(name.trim('[', ']'))?.contentEquals(targetAddress) == true) return true
+                type == SAN_DNS_NAME && targetAddress == null ->
+                    if (dnsNameMatches(name.lowercase(java.util.Locale.US).trimEnd('.'), target)) return true
             }
-        } catch (_: Exception) {}
+        }
+        return false
+    }
 
-        val dn = cert.subjectX500Principal.name
-        val cn = dn.split(",").firstOrNull { it.trim().startsWith("CN=") }?.substringAfter("CN=")?.trim('[', ']')
-        return cn?.equals(target, ignoreCase = true) == true
+    private const val SAN_DNS_NAME = 2
+    private const val SAN_IP_ADDRESS = 7
+
+    private fun dnsNameMatches(pattern: String, host: String): Boolean {
+        if (!pattern.startsWith("*.")) return pattern == host
+        val suffix = pattern.substring(1)
+        if (suffix.count { it == '.' } < 2) return false
+        val label = host.removeSuffix(suffix)
+        return host.endsWith(suffix) && label.isNotEmpty() && !label.contains('.')
+    }
+
+    /** The address bytes of an IPv4 or IPv6 literal, or null for a name. Never touches DNS. */
+    private fun ipLiteralBytes(value: String): ByteArray? {
+        val isIPv4 = value.matches(Regex("^[0-9]{1,3}(\\.[0-9]{1,3}){3}$"))
+        val isIPv6 = value.contains(':') && value.all { it.isDigit() || it in 'a'..'f' || it in 'A'..'F' || it == ':' || it == '.' }
+        if (!isIPv4 && !isIPv6) return null
+        return try {
+            java.net.InetAddress.getByName(value).address
+        } catch (_: Exception) {
+            null
+        }
     }
 
     private fun getSystemTrustManager(): X509TrustManager {

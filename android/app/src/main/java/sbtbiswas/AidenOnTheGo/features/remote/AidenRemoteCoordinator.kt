@@ -28,6 +28,7 @@ import sbtbiswas.AidenOnTheGo.persistence.AidenUsageCache
 import sbtbiswas.AidenOnTheGo.persistence.AidenWorkspaceArchiveStore
 import sbtbiswas.AidenOnTheGo.persistence.AidenWorkspaceEnvironmentCache
 import sbtbiswas.AidenOnTheGo.protocol.AidenRemoteClientException
+import sbtbiswas.AidenOnTheGo.protocol.AidenRemoteContractException
 import sbtbiswas.AidenOnTheGo.protocol.AidenRemoteCapability
 import sbtbiswas.AidenOnTheGo.protocol.AidenRemoteProtocol
 import kotlinx.serialization.builtins.ListSerializer
@@ -579,7 +580,7 @@ class AidenRemoteCoordinator(
     private var activationGeneration: Long = 0
     private var pinnedHttp: Pair<PinnedHttpKey, OkHttpClient>? = null
 
-    private data class PinnedHttpKey(val serverSpkiSha256: String, val trust: AidenPairingTrust?)
+    private data class PinnedHttpKey(val serverSpkiSha256: String, val trust: AidenPairingTrust?, val endpoint: String)
 
     /**
      * One OkHttp client per pinned trust anchor. Retrying or re-activating the
@@ -587,9 +588,9 @@ class AidenRemoteCoordinator(
      * sessions instead of building a fresh client each time.
      */
     private fun pinnedHttpClient(installation: AidenInstallation): OkHttpClient {
-        val key = PinnedHttpKey(installation.serverSpkiSha256, installation.pairingTrust)
+        val key = PinnedHttpKey(installation.serverSpkiSha256, installation.pairingTrust, installation.endpoint)
         pinnedHttp?.let { (cachedKey, cached) -> if (cachedKey == key) return cached }
-        return AidenRemoteClient.createOkHttpClient(key.serverSpkiSha256, key.trust)
+        return AidenRemoteClient.createOkHttpClient(key.serverSpkiSha256, key.trust, key.endpoint)
             .also { pinnedHttp = key to it }
     }
 
@@ -764,7 +765,7 @@ class AidenRemoteCoordinator(
 
         scope.launch {
             try {
-                val server = newClient.server()
+                val server = newClient.server().requireInstance(installation)
                 if (!isCurrent(generation, installation.id, newClient)) return@launch
                 _connectionState.value = AidenConnectionState.CONNECTED
                 val serverCapabilities = server.serverCapabilities ?: server.capabilities
@@ -950,7 +951,7 @@ class AidenRemoteCoordinator(
         return try {
             val completeCapabilities = client.updateDeviceCapabilities(requested)
             if (!isCurrent(generation, installation.id, client)) return server
-            val refreshed = client.server()
+            val refreshed = client.server().requireInstance(installation)
             if (!isCurrent(generation, installation.id, client)) return server
             // The legacy aggregate can keep Bot/chat clients working, but it
             // is not proof that the new progress grant was accepted. Require
@@ -1000,8 +1001,8 @@ class AidenRemoteCoordinator(
         val outcome = request(client, server, installation) {
             isCurrent(generation, installation.id, client)
         } ?: return server
-        val granted = outcome.granted ?: return outcome.server
-        val refreshed = outcome.server
+        val refreshed = outcome.server.requireInstance(installation)
+        val granted = outcome.granted ?: return refreshed
         installationStore.updateServerCapabilities(
             instanceId = installation.instanceId,
             serverCapabilities = refreshed.serverCapabilities ?: refreshed.capabilities,
@@ -1113,6 +1114,15 @@ class AidenRemoteCoordinator(
 
     private fun cachedWorkspaces(instanceId: String): List<AidenWorkspace> =
         readSnapshotCache.load(instanceId, AidenReadSnapshotKeys.WORKSPACES, workspaceListSerializer).orEmpty()
+
+    /**
+     * A `/server` answer from another desktop instance never stands in for this pairing's, even
+     * over the same pin: the connection stops, as on iOS (`AidenHostConnection.load`).
+     */
+    private fun AidenServer.requireInstance(installation: AidenInstallation): AidenServer {
+        if (instanceId != installation.instanceId) throw AidenRemoteContractException.InvalidPairingExchange
+        return this
+    }
 
     private fun isCurrent(generation: Long, installationId: String, client: AidenRemoteClient): Boolean =
         activationGeneration == generation &&

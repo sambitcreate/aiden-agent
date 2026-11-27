@@ -23,6 +23,9 @@ import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
 import okhttp3.Call
 import okhttp3.Callback
+import okhttp3.ConnectionPool
+import okhttp3.CookieJar
+import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
 import okhttp3.Request
@@ -43,9 +46,9 @@ import java.io.File
 import java.io.IOException
 import java.security.MessageDigest
 import java.security.SecureRandom
+import java.security.cert.CertificateException
 import java.security.cert.X509Certificate
 import java.time.Instant
-import java.time.format.DateTimeFormatter
 import java.util.Base64
 import java.util.UUID
 import java.util.concurrent.TimeUnit
@@ -97,7 +100,8 @@ class AidenRemoteClient(
         credential = credential,
         customOkHttpClient = customOkHttpClient ?: createOkHttpClient(
             serverSpkiSha256 = installation.serverSpkiSha256,
-            trust = installation.pairingTrust
+            trust = installation.pairingTrust,
+            endpoint = installation.endpoint
         )
     )
 
@@ -113,7 +117,8 @@ class AidenRemoteClient(
 
     private val httpClient: OkHttpClient = customOkHttpClient ?: createOkHttpClient(
         serverSpkiSha256 = "",
-        trust = null
+        trust = null,
+        endpoint = endpoint
     )
 
     companion object {
@@ -135,15 +140,39 @@ class AidenRemoteClient(
             encodeDefaults = true
             explicitNulls = true
         }
+        /** A pairing payload carries exactly the keys a desktop writes, as iOS requires. */
+        private val pairingPayloadParser = Json {
+            ignoreUnknownKeys = false
+            explicitNulls = false
+        }
 
+        /**
+         * Reads a scanned or pasted pairing payload, or the one a setup code decrypts. Unknown or
+         * duplicate keys and a missing `kind` fail; the caller still validates the values.
+         */
+        fun decodePairingPayload(text: String): AidenPairingPayload {
+            AidenRawJsonDuplicateKeyScanner.validate(text)
+            return pairingPayloadParser.decodeFromString<AidenPairingPayload>(text)
+        }
+
+        /**
+         * The client for a paired desktop. The leaf must carry the pinned SPKI, chain to the pinned
+         * private CA (or the system roots), and name [endpoint]'s host; OkHttp's default hostname
+         * verification checks every request's host as well. Redirects are never followed: the
+         * desktop never sends one, and following one would carry the credential elsewhere.
+         */
         fun createOkHttpClient(
             serverSpkiSha256: String,
-            trust: AidenPairingTrust?
+            trust: AidenPairingTrust?,
+            endpoint: String
         ): OkHttpClient {
+            val expectedHost = endpoint.toHttpUrlOrNull()?.host
             val builder = OkHttpClient.Builder()
                 .connectTimeout(15, TimeUnit.SECONDS)
                 .readTimeout(60, TimeUnit.SECONDS)
                 .writeTimeout(30, TimeUnit.SECONDS)
+                .followRedirects(false)
+                .followSslRedirects(false)
 
             val trustPolicy = if (trust?.mode == "private-ca" && !trust.caCertificateDerBase64.isNullOrEmpty()) {
                 val caBytes = Base64.getDecoder().decode(trust.caCertificateDerBase64)
@@ -155,14 +184,23 @@ class AidenRemoteClient(
             val trustManager = object : X509TrustManager {
                 override fun checkClientTrusted(chain: Array<out X509Certificate>?, authType: String?) {}
                 override fun checkServerTrusted(chain: Array<out X509Certificate>?, authType: String?) {
-                    if (chain.isNullOrEmpty()) throw IOException("Empty certificate chain")
-                    @Suppress("UNCHECKED_CAST")
-                    AidenServerTrust.evaluate(
-                        chain = chain as Array<X509Certificate>,
-                        expectedHost = "",
-                        expectedFingerprint = serverSpkiSha256,
-                        policy = trustPolicy
-                    )
+                    if (chain.isNullOrEmpty()) throw CertificateException("Empty certificate chain")
+                    if (expectedHost.isNullOrEmpty()) throw CertificateException("The paired address has no host")
+                    try {
+                        @Suppress("UNCHECKED_CAST")
+                        AidenServerTrust.evaluate(
+                            chain = chain as Array<X509Certificate>,
+                            expectedHost = expectedHost,
+                            expectedFingerprint = serverSpkiSha256,
+                            policy = trustPolicy
+                        )
+                    } catch (error: CertificateException) {
+                        throw error
+                    } catch (error: Exception) {
+                        // A trust manager reports refusal as a CertificateException, which the TLS
+                        // stack turns into an SSLHandshakeException.
+                        throw CertificateException(error.message, error)
+                    }
                 }
                 override fun getAcceptedIssuers(): Array<X509Certificate> = arrayOf()
             }
@@ -170,8 +208,57 @@ class AidenRemoteClient(
             val sslContext = SSLContext.getInstance("TLS")
             sslContext.init(null, arrayOf(trustManager), SecureRandom())
             builder.sslSocketFactory(sslContext.socketFactory, trustManager)
-            builder.hostnameVerifier { _, _ -> true }
             return builder.build()
+        }
+
+        /**
+         * The client for `POST /pairing/manual-bootstrap` only. A setup code carries no pin, and a
+         * LAN desktop presents a private CA the phone doesn't know yet, so this session accepts the
+         * certificate without judging it, as iOS's `AidenSealedBootstrapSessionDelegate` does. Its
+         * answer is trusted only once the AES-GCM envelope opens with the code, and the decrypted
+         * payload then supplies the pin and CA every later request is held to. The session talks to
+         * the typed host and port alone, follows no redirect, keeps no cookie, and never reuses a
+         * connection for anything else.
+         */
+        internal fun createSealedBootstrapClient(endpoint: String): OkHttpClient {
+            val url = endpoint.toHttpUrlOrNull()
+            if (url == null || !url.isHttps) throw AidenRemoteClientException.InvalidEndpoint
+            val expectedHost = url.host
+            val expectedPort = url.port
+
+            @android.annotation.SuppressLint("CustomX509TrustManager", "TrustAllX509TrustManager")
+            val trustManager = object : X509TrustManager {
+                override fun checkClientTrusted(chain: Array<out X509Certificate>?, authType: String?) {
+                    throw CertificateException("Client certificates are not used")
+                }
+                // Deliberately unevaluated: nothing this session receives is trusted until the
+                // sealed envelope authenticates under the setup code (see the KDoc above).
+                override fun checkServerTrusted(chain: Array<out X509Certificate>?, authType: String?) {
+                    if (chain.isNullOrEmpty()) throw CertificateException("Empty certificate chain")
+                }
+                override fun getAcceptedIssuers(): Array<X509Certificate> = arrayOf()
+            }
+            val sslContext = SSLContext.getInstance("TLS")
+            sslContext.init(null, arrayOf(trustManager), SecureRandom())
+
+            return OkHttpClient.Builder()
+                .connectTimeout(30, TimeUnit.SECONDS)
+                .readTimeout(30, TimeUnit.SECONDS)
+                .sslSocketFactory(sslContext.socketFactory, trustManager)
+                .hostnameVerifier { hostname, _ -> hostname.equals(expectedHost, ignoreCase = true) }
+                .followRedirects(false)
+                .followSslRedirects(false)
+                .retryOnConnectionFailure(false)
+                .cookieJar(CookieJar.NO_COOKIES)
+                .connectionPool(ConnectionPool(0, 1, TimeUnit.SECONDS))
+                .addNetworkInterceptor { chain ->
+                    val requested = chain.request().url
+                    if (!requested.isHttps || !requested.host.equals(expectedHost, ignoreCase = true) || requested.port != expectedPort) {
+                        throw IOException("The setup-code request left the typed desktop address.")
+                    }
+                    chain.proceed(chain.request())
+                }
+                .build()
         }
 
         fun normalizeManualPairingCode(value: String): String {
@@ -197,21 +284,9 @@ class AidenRemoteClient(
             acceptsProgressCapabilities: Boolean? = null,
             customOkHttpClient: OkHttpClient? = null
         ): AidenPairingExchange = withContext(Dispatchers.IO) {
-            val bootstrap = payload.bootstrap
-            if (bootstrap.protocolVersion != AidenRemoteProtocol.VERSION) {
-                throw AidenPairingBootstrapException.UnsupportedProtocol
-            }
-            if (bootstrap.expiresAt.isBefore(Instant.now())) {
-                throw AidenPairingBootstrapException.Expired
-            }
-            if (bootstrap.instanceId.isEmpty() || bootstrap.instanceId.length > AidenRemoteProtocol.MAX_IDENTIFIER_LENGTH) {
-                throw AidenPairingBootstrapException.InvalidInstance
-            }
-            if (!AidenServerTrust.isCanonicalEndpoint(bootstrap.endpoint)) {
-                throw AidenPairingBootstrapException.InvalidEndpoint
-            }
+            val bootstrap = payload.validated().bootstrap
 
-            val client = customOkHttpClient ?: createOkHttpClient(bootstrap.serverSpkiSha256, payload.trust)
+            val client = customOkHttpClient ?: createOkHttpClient(bootstrap.serverSpkiSha256, payload.trust, bootstrap.endpoint)
             val pairUrl = "${bootstrap.endpoint.trimEnd('/')}/pairing/exchange"
 
             val requestObj = PairingExchangeRequest(
@@ -265,12 +340,14 @@ class AidenRemoteClient(
                     }
                     AidenRawJsonDuplicateKeyScanner.validate(retryBytes)
                     return@withContext jsonParser.decodeFromString<AidenPairingExchange>(String(retryBytes, Charsets.UTF_8))
+                        .validatedAgainst(bootstrap)
                 }
                 throw error
             }
 
             AidenRawJsonDuplicateKeyScanner.validate(responseBytes)
             jsonParser.decodeFromString<AidenPairingExchange>(String(responseBytes, Charsets.UTF_8))
+                .validatedAgainst(bootstrap)
         }
 
         suspend fun pair(
@@ -307,10 +384,7 @@ class AidenRemoteClient(
                 throw AidenRemoteClientException.InvalidEndpoint
             }
 
-            val tempClient = customOkHttpClient ?: OkHttpClient.Builder()
-                .connectTimeout(30, TimeUnit.SECONDS)
-                .readTimeout(30, TimeUnit.SECONDS)
-                .build()
+            val tempClient = customOkHttpClient ?: createSealedBootstrapClient(endpoint)
 
             val bootstrapUrl = "${endpoint.trimEnd('/')}/pairing/manual-bootstrap"
             val request = Request.Builder()
@@ -327,7 +401,11 @@ class AidenRemoteClient(
             }
 
             AidenRawJsonDuplicateKeyScanner.validate(responseBytes)
-            val sealed = jsonParser.decodeFromString<AidenManualPairingBootstrap>(String(responseBytes, Charsets.UTF_8))
+            val sealedText = String(responseBytes, Charsets.UTF_8)
+            val sealed = jsonParser.decodeFromString<AidenManualPairingBootstrap>(sealedText)
+            // The AAD binds the expiry exactly as the desktop wrote it, as iOS reads it.
+            val rawExpiresAt = ((jsonParser.parseToJsonElement(sealedText) as? JsonObject)?.get("expiresAt") as? JsonPrimitive)
+                ?.takeIf { it.isString }?.content ?: throw AidenManualPairingException.InvalidBootstrap
 
             if (sealed.kind != "aiden-manual-pairing-v1" ||
                 sealed.protocolVersion != AidenRemoteProtocol.VERSION ||
@@ -338,9 +416,8 @@ class AidenRemoteClient(
                 throw AidenManualPairingException.InvalidBootstrap
             }
 
-            val decryptedJson = decryptManualPairing(normalizedCode, sealed)
-            AidenRawJsonDuplicateKeyScanner.validate(decryptedJson)
-            val payload = jsonParser.decodeFromString<AidenPairingPayload>(decryptedJson)
+            val decryptedJson = decryptManualPairing(normalizedCode, sealed, rawExpiresAt)
+            val payload = decodePairingPayload(decryptedJson)
 
             if (payload.bootstrap.endpoint.trimEnd('/') != endpoint.trimEnd('/') ||
                 payload.bootstrap.expiresAt != sealed.expiresAt
@@ -348,10 +425,10 @@ class AidenRemoteClient(
                 throw AidenManualPairingException.EndpointMismatch
             }
 
-            payload
+            payload.validated(now)
         }
 
-        private fun decryptManualPairing(normalizedCode: String, bootstrap: AidenManualPairingBootstrap): String {
+        private fun decryptManualPairing(normalizedCode: String, bootstrap: AidenManualPairingBootstrap, rawExpiresAt: String): String {
             try {
                 val ikm = normalizedCode.toByteArray(Charsets.US_ASCII)
                 val salt = Base64.getUrlDecoder().decode(bootstrap.salt)
@@ -372,7 +449,6 @@ class AidenRemoteClient(
                 val keyBytes = mac.doFinal()
 
                 // AES-GCM-256 AAD
-                val rawExpiresAt = DateTimeFormatter.ISO_INSTANT.format(bootstrap.expiresAt)
                 val aad = "aiden-manual-pairing-v1\n${bootstrap.sessionId}\n$rawExpiresAt".toByteArray(Charsets.UTF_8)
 
                 val cipher = Cipher.getInstance("AES/GCM/NoPadding")

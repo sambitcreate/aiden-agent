@@ -65,7 +65,7 @@ class AidenRemoteClientTest {
         val endpoint = "https://desktop.test/api/aiden/v1"
         val expires = Instant.now().plusSeconds(120).truncatedTo(java.time.temporal.ChronoUnit.SECONDS)
         val payload = AidenPairingPayload(bootstrap = AidenPairingBootstrap(instanceId = "desktop", endpoint = endpoint,
-            serverSpkiSha256 = "sha256/" + "A".repeat(43) + "=", secret = "S".repeat(32), expiresAt = expires), trust = AidenPairingTrust("system"))
+            serverSpkiSha256 = "sha256/" + "A".repeat(43) + "=", secret = "S".repeat(42) + "A", expiresAt = expires), trust = AidenPairingTrust("system"))
         val code = "0123456789ABCDEFGHJK"
         val sessionId = "pairing_" + "P".repeat(32)
         val salt = ByteArray(32) { it.toByte() }
@@ -77,12 +77,14 @@ class AidenRemoteClientTest {
         val key = mac.doFinal(("aiden-manual-pairing-v1\n$sessionId").toByteArray() + byteArrayOf(1))
         val cipher = javax.crypto.Cipher.getInstance("AES/GCM/NoPadding")
         cipher.init(javax.crypto.Cipher.ENCRYPT_MODE, javax.crypto.spec.SecretKeySpec(key, "AES"), javax.crypto.spec.GCMParameterSpec(128, nonce))
-        cipher.updateAAD("aiden-manual-pairing-v1\n$sessionId\n$expires".toByteArray())
+        // The desktop writes millisecond timestamps (`toISOString`), and the AAD binds that text.
+        val wireExpires = java.time.format.DateTimeFormatter.ofPattern("yyyy-MM-dd'T'HH:mm:ss.SSS'Z'").withZone(java.time.ZoneOffset.UTC).format(expires)
+        cipher.updateAAD("aiden-manual-pairing-v1\n$sessionId\n$wireExpires".toByteArray())
         val encrypted = cipher.doFinal(Json.encodeToString(payload).toByteArray())
         fun b64(bytes: ByteArray) = Base64.getUrlEncoder().withoutPadding().encodeToString(bytes)
         val sealed = AidenManualPairingBootstrap(sessionId = sessionId, expiresAt = expires, salt = b64(salt), nonce = b64(nonce),
             ciphertext = b64(encrypted.dropLast(16).toByteArray()), tag = b64(encrypted.takeLast(16).toByteArray()))
-        val exchange = AidenPairingExchange(instanceId = "desktop", deviceId = "phone", credential = "credential", capabilities = emptyList(), endpoint = endpoint, serverSpkiSha256 = payload.bootstrap.serverSpkiSha256)
+        val exchange = AidenPairingExchange(instanceId = "desktop", deviceId = "phone", credential = "C".repeat(42) + "A", capabilities = emptyList(), endpoint = endpoint, serverSpkiSha256 = payload.bootstrap.serverSpkiSha256)
         for (manual in listOf(false, true)) for (oldHost in listOf(false, true)) {
             val requests = mutableListOf<Pair<String, String>>()
             val transport = OkHttpClient.Builder().addInterceptor { chain ->
