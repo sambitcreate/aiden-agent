@@ -150,34 +150,16 @@ function utf8ByteLength(value: string): number {
  * UTF-8 byte length (`maxBytes`), returning both the string and its UTF-8 byte
  * length. Throws `Invalid ${label}.` on failure.
  */
-export function parseUtf8BoundedString(
+export function parseUtf8BoundedString<Optional extends boolean = false>(
   value: unknown,
   label: string,
   maxChars: number,
   maxBytes: number,
-): { value: string; bytes: number };
-export function parseUtf8BoundedString(
-  value: unknown,
-  label: string,
-  maxChars: number,
-  maxBytes: number,
-  optional: false,
-): { value: string; bytes: number };
-export function parseUtf8BoundedString(
-  value: unknown,
-  label: string,
-  maxChars: number,
-  maxBytes: number,
-  optional: boolean,
-): { value: string | undefined; bytes: number };
-export function parseUtf8BoundedString(
-  value: unknown,
-  label: string,
-  maxChars: number,
-  maxBytes: number,
-  optional = false,
-): { value: string | undefined; bytes: number } {
-  if (value === undefined && optional) return { value: undefined, bytes: 0 };
+  optional?: Optional,
+): { value: Optional extends true ? string | undefined : string; bytes: number } {
+  if (value === undefined && optional) {
+    return { value: undefined as Optional extends true ? string | undefined : string, bytes: 0 };
+  }
   if (typeof value !== "string" || value.length === 0 || value.length > maxChars) {
     throw new Error(`Invalid ${label}.`);
   }
