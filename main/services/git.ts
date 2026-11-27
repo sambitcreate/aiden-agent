@@ -45,6 +45,14 @@ const DEFAULT_CACHE_ENTRIES = 64;
 const SNAPSHOT_CACHE_ENTRIES = 4_096;
 const KILL_GRACE_MS = 750;
 const MANAGED_STATUS_PATH_LIMIT = 4_096;
+const MANAGED_STATUS_ARGS = [
+  "status",
+  "--porcelain=v2",
+  "--branch",
+  "-z",
+  "--untracked-files=all",
+  "--ignored=matching",
+] as const;
 const WORKTREE_OWNER_MARKER = "aiden-owner";
 const WORKTREE_OWNER_TOKEN =
   /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u;
@@ -57,6 +65,10 @@ const GIT_ROUTING_ENV = [
   "GIT_OBJECT_DIRECTORY",
   "GIT_WORK_TREE",
 ] as const;
+const NO_FOLLOW_READ_FLAGS =
+  fsConstants.O_RDONLY |
+  (fsConstants.O_NOFOLLOW ?? 0) |
+  (fsConstants.O_NONBLOCK ?? 0);
 
 export type GitErrorCode =
   | "aborted"
@@ -96,6 +108,18 @@ function waitUnlessAborted(pending: Promise<void>, signal: AbortSignal | undefin
       () => { signal.removeEventListener("abort", onAbort); resolve(); },
     );
   });
+}
+
+function trimBounded<K, V>(
+  map: Map<K, V>,
+  limit: number,
+  keep?: (key: K) => boolean,
+): void {
+  while (map.size > limit) {
+    const oldest = map.keys().next();
+    if (oldest.done || keep?.(oldest.value)) break;
+    map.delete(oldest.value);
+  }
 }
 
 export class GitManagedWorktreeDeleteError extends GitServiceError {
@@ -791,6 +815,25 @@ function reviewStatus(xy: string, recordType: string): GitReviewFileStatus {
   return "modified";
 }
 
+function compareReviewFilePath(left: GitReviewFile, right: GitReviewFile): number {
+  return left.path.localeCompare(right.path, undefined, { numeric: true });
+}
+
+function reviewSummary(
+  files: readonly GitReviewFile[],
+  counts: Pick<GitReviewSummary, "stagedFiles" | "unstagedFiles" | "conflictedFiles">,
+): GitReviewSummary {
+  return {
+    fileCount: files.length,
+    additions: files.reduce((total, file) => total + (file.additions ?? 0), 0),
+    deletions: files.reduce((total, file) => total + (file.deletions ?? 0), 0),
+    unavailableStats: files.filter(
+      (file) => file.additions === undefined || file.deletions === undefined,
+    ).length,
+    ...counts,
+  };
+}
+
 /** Parse workspace-relative `git status --porcelain=v2 -z` entries for Review. */
 export function parseGitReviewStatus(raw: string): GitReviewFile[] {
   const records = raw.split("\u0000");
@@ -824,9 +867,7 @@ export function parseGitReviewStatus(raw: string): GitReviewFile[] {
       unstaged: xy[1] !== ".",
     });
   }
-  return files.sort((left, right) =>
-    left.path.localeCompare(right.path, undefined, { numeric: true }),
-  );
+  return files.sort(compareReviewFilePath);
 }
 
 interface GitNumstat {
@@ -885,29 +926,15 @@ export function parseGitNameStatus(raw: string): GitReviewFile[] {
       filePath = records[index + 1] || firstPath;
       index += 1;
     }
-    const status: GitReviewFileStatus =
-      kind === "A"
-        ? "added"
-        : kind === "D"
-          ? "deleted"
-          : kind === "R"
-            ? "renamed"
-            : kind === "C"
-              ? "copied"
-              : kind === "U"
-                ? "conflicted"
-                : "modified";
     files.push({
       path: filePath,
       ...(previousPath ? { previousPath } : {}),
-      status,
+      status: reviewStatus(kind, "1"),
       staged: false,
       unstaged: false,
     });
   }
-  return files.sort((left, right) =>
-    left.path.localeCompare(right.path, undefined, { numeric: true }),
-  );
+  return files.sort(compareReviewFilePath);
 }
 
 function lexicalWorkspacePath(root: string, relativePath: string): string {
@@ -986,7 +1013,7 @@ export function parseRemoteRefs(raw: string): RemoteRefs {
   return { branches, defaultBranch: preferred?.branch };
 }
 
-export function parseGitWorktrees(raw: string, currentPath: string): GitWorktree[] {
+function parseGitWorktrees(raw: string, currentPath: string): GitWorktree[] {
   const worktrees: GitWorktree[] = [];
   let next: Partial<GitWorktree> = {};
   const finish = () => {
@@ -1120,13 +1147,9 @@ async function sha256BoundedNoFollowFile(
   filePath: string,
   maxBytes: number,
 ): Promise<string | undefined> {
-  const flags =
-    fsConstants.O_RDONLY |
-    (fsConstants.O_NOFOLLOW ?? 0) |
-    (fsConstants.O_NONBLOCK ?? 0);
   let handle: fs.FileHandle | undefined;
   try {
-    handle = await fs.open(filePath, flags);
+    handle = await fs.open(filePath, NO_FOLLOW_READ_FLAGS);
     const stat = await handle.stat();
     if (!stat.isFile() || stat.size <= 0 || stat.size > maxBytes) {
       return undefined;
@@ -1160,13 +1183,9 @@ async function isNativeExecutableBinary(realPath: string): Promise<boolean> {
   if (process.platform !== "darwin" && process.platform !== "linux") {
     return false;
   }
-  const flags =
-    fsConstants.O_RDONLY |
-    (fsConstants.O_NOFOLLOW ?? 0) |
-    (fsConstants.O_NONBLOCK ?? 0);
   let handle: fs.FileHandle | undefined;
   try {
-    handle = await fs.open(realPath, flags);
+    handle = await fs.open(realPath, NO_FOLLOW_READ_FLAGS);
     const stat = await handle.stat();
     if (!stat.isFile() || stat.size < 64) return false;
     const header = Buffer.alloc(8);
@@ -1998,11 +2017,7 @@ export class GitService {
     ) {
       this.verifiedRepoIdentities.delete(canonicalCwd);
       this.verifiedRepoIdentities.set(canonicalCwd, beforeProof);
-      while (this.verifiedRepoIdentities.size > this.cacheEntries) {
-        const oldest = this.verifiedRepoIdentities.keys().next().value as string | undefined;
-        if (!oldest) break;
-        this.verifiedRepoIdentities.delete(oldest);
-      }
+      trimBounded(this.verifiedRepoIdentities, this.cacheEntries);
     } else if (canonicalCwd) {
       this.verifiedRepoIdentities.delete(canonicalCwd);
     }
@@ -2305,11 +2320,7 @@ export class GitService {
       expiresAt: Date.now() + this.cacheTtlMs,
       value,
     });
-    while (cache.size > this.cacheEntries) {
-      const oldest = cache.keys().next().value as string | undefined;
-      if (!oldest) break;
-      cache.delete(oldest);
-    }
+    trimBounded(cache, this.cacheEntries);
   }
 
   private invalidate(commonDir: string): void {
@@ -2323,11 +2334,7 @@ export class GitService {
     const next = (this.mutationEpochs.get(commonDir) ?? 0) + 1;
     this.mutationEpochs.delete(commonDir);
     this.mutationEpochs.set(commonDir, next);
-    while (this.mutationEpochs.size > this.cacheEntries) {
-      const oldest = this.mutationEpochs.keys().next().value as string | undefined;
-      if (!oldest || this.mutations.has(oldest)) break;
-      this.mutationEpochs.delete(oldest);
-    }
+    trimBounded(this.mutationEpochs, this.cacheEntries, (key) => this.mutations.has(key));
   }
 
   private enqueueMutation<T>(commonDir: string, operation: () => Promise<T>): Promise<T> {
@@ -2446,10 +2453,7 @@ export class GitService {
     if (!afterSignature || afterSignature !== expectedSignature) return;
     this.repoRemoteHints.delete(commonDir);
     this.repoRemoteHints.set(commonDir, { configSignature: afterSignature, hasRemote, defaultBranch });
-    if (this.repoRemoteHints.size > this.cacheEntries) {
-      const oldest = this.repoRemoteHints.keys().next().value as string | undefined;
-      if (oldest !== undefined) this.repoRemoteHints.delete(oldest);
-    }
+    trimBounded(this.repoRemoteHints, this.cacheEntries);
   }
 
   private async seedCreatedWorktreeDisplayCache(
@@ -2556,10 +2560,7 @@ export class GitService {
     this.repositoryIdentities.delete(repo.cwd);
     if (!canonicalKey) return;
     this.repositoryIdentities.set(repo.cwd, { topLevel: repo.topLevel, canonicalKey });
-    if (this.repositoryIdentities.size > MAX_REPOSITORY_IDENTITIES) {
-      const oldest = this.repositoryIdentities.keys().next().value;
-      if (oldest !== undefined) this.repositoryIdentities.delete(oldest);
-    }
+    trimBounded(this.repositoryIdentities, MAX_REPOSITORY_IDENTITIES);
   }
 
   /**
@@ -2696,11 +2697,7 @@ export class GitService {
           digest = createHash("sha256").update(contents).digest("hex");
           this.snapshotFileCache.delete(cacheKey);
           this.snapshotFileCache.set(cacheKey, { digest, signature });
-          while (this.snapshotFileCache.size > SNAPSHOT_CACHE_ENTRIES) {
-            const oldest = this.snapshotFileCache.keys().next().value as string | undefined;
-            if (!oldest) break;
-            this.snapshotFileCache.delete(oldest);
-          }
+          trimBounded(this.snapshotFileCache, SNAPSHOT_CACHE_ENTRIES);
         }
         hash.update("file\u0000");
         hash.update(digest);
@@ -2894,11 +2891,7 @@ export class GitService {
           deletions: file.deletions,
           binary,
         });
-        while (this.reviewStatsCache.size > SNAPSHOT_CACHE_ENTRIES) {
-          this.reviewStatsCache.delete(
-            this.reviewStatsCache.keys().next().value!,
-          );
-        }
+        trimBounded(this.reviewStatsCache, SNAPSHOT_CACHE_ENTRIES);
       } catch (error) {
         if (
           signal?.aborted ||
@@ -2911,24 +2904,11 @@ export class GitService {
         await handle?.close();
       }
     }
-    const summary: GitReviewSummary = {
-      fileCount: files.length,
-      additions: files.reduce(
-        (total, file) => total + (file.additions ?? 0),
-        0,
-      ),
-      deletions: files.reduce(
-        (total, file) => total + (file.deletions ?? 0),
-        0,
-      ),
-      unavailableStats: files.filter(
-        (file) => file.additions === undefined || file.deletions === undefined,
-      ).length,
+    const summary = reviewSummary(files, {
       stagedFiles: files.filter((file) => file.staged).length,
       unstagedFiles: files.filter((file) => file.unstaged).length,
-      conflictedFiles: files.filter((file) => file.status === "conflicted")
-        .length,
-    };
+      conflictedFiles: files.filter((file) => file.status === "conflicted").length,
+    });
     const repositoryRoot =
       path.resolve(repo.cwd) === path.resolve(repo.topLevel);
     let reason: string | undefined;
@@ -3141,28 +3121,38 @@ export class GitService {
     return path.isAbsolute(value) ? value : path.resolve(repo.cwd, value);
   }
 
-  private async commitStateBlocker(
+  private async inProgressOperation(
     repo: GitRepository,
+    action: "committing" | "pushing",
     signal?: AbortSignal,
   ): Promise<string | undefined> {
     const inProgress = [
-      ["MERGE_HEAD", "Finish or abort the merge before committing from Aiden."],
-      ["CHERRY_PICK_HEAD", "Finish or abort the cherry-pick before committing from Aiden."],
-      ["REVERT_HEAD", "Finish or abort the revert before committing from Aiden."],
-      ["rebase-merge", "Finish or abort the rebase before committing from Aiden."],
-      ["rebase-apply", "Finish or abort the rebase before committing from Aiden."],
+      ["MERGE_HEAD", "merge"],
+      ["CHERRY_PICK_HEAD", "cherry-pick"],
+      ["REVERT_HEAD", "revert"],
+      ["rebase-merge", "rebase"],
+      ["rebase-apply", "rebase"],
     ] as const;
-    for (const [gitPath, reason] of inProgress) {
+    for (const [gitPath, operation] of inProgress) {
       const resolvedPath = await this.repositoryGitPath(repo, gitPath, signal);
       try {
         await fs.access(resolvedPath);
-        return reason;
+        return `Finish or abort the ${operation} before ${action} from Aiden.`;
       } catch (error) {
         if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
           return "Aiden could not verify whether another Git operation is in progress.";
         }
       }
     }
+    return undefined;
+  }
+
+  private async commitStateBlocker(
+    repo: GitRepository,
+    signal?: AbortSignal,
+  ): Promise<string | undefined> {
+    const blocker = await this.inProgressOperation(repo, "committing", signal);
+    if (blocker) return blocker;
     const sharedIndex = await this.run(repo.cwd, ["rev-parse", "--shared-index-path"], {
       allowExitCodes: [128],
       signal,
@@ -3467,10 +3457,20 @@ export class GitService {
           );
         }
 
-        await fs.writeFile(transaction.messagePath, `${message}\n`, {
-          encoding: "utf8",
-          mode: 0o600,
-        });
+        const writeMessage = (text: string) =>
+          fs.writeFile(transaction.messagePath, `${text}\n`, {
+            encoding: "utf8",
+            mode: 0o600,
+          });
+        const readBoundedMessage = async (invalidMessage: string) => {
+          const text = (await fs.readFile(transaction.messagePath, "utf8")).trim();
+          if (!text || text.includes("\u0000") || text.length > 10_000) {
+            throw new GitServiceError("invalid_input", invalidMessage);
+          }
+          return text;
+        };
+
+        await writeMessage(message);
         await this.runHook(repo, "pre-commit", [], transaction.tempIndexPath, signal);
         await this.runHook(
           repo,
@@ -3479,17 +3479,10 @@ export class GitService {
           transaction.tempIndexPath,
           signal,
         );
-        let finalMessage = (await fs.readFile(transaction.messagePath, "utf8")).trim();
-        if (!finalMessage || finalMessage.includes("\u0000") || finalMessage.length > 10_000) {
-          throw new GitServiceError(
-            "invalid_input",
-            "The prepared commit message must be between 1 and 10,000 characters.",
-          );
-        }
-        await fs.writeFile(transaction.messagePath, `${finalMessage}\n`, {
-          encoding: "utf8",
-          mode: 0o600,
-        });
+        let finalMessage = await readBoundedMessage(
+          "The prepared commit message must be between 1 and 10,000 characters.",
+        );
+        await writeMessage(finalMessage);
         await this.runHook(
           repo,
           "commit-msg",
@@ -3497,17 +3490,10 @@ export class GitService {
           transaction.tempIndexPath,
           signal,
         );
-        finalMessage = (await fs.readFile(transaction.messagePath, "utf8")).trim();
-        if (!finalMessage || finalMessage.includes("\u0000") || finalMessage.length > 10_000) {
-          throw new GitServiceError(
-            "invalid_input",
-            "The commit-message hook produced an invalid commit message.",
-          );
-        }
-        await fs.writeFile(transaction.messagePath, `${finalMessage}\n`, {
-          encoding: "utf8",
-          mode: 0o600,
-        });
+        finalMessage = await readBoundedMessage(
+          "The commit-message hook produced an invalid commit message.",
+        );
+        await writeMessage(finalMessage);
         subject = finalMessage.split(/\r?\n/, 1)[0];
 
         const hookTree = (
@@ -3715,25 +3701,7 @@ export class GitService {
     repo: GitRepository,
     signal?: AbortSignal,
   ): Promise<string | undefined> {
-    const inProgress = [
-      ["MERGE_HEAD", "Finish or abort the merge before pushing from Aiden."],
-      ["CHERRY_PICK_HEAD", "Finish or abort the cherry-pick before pushing from Aiden."],
-      ["REVERT_HEAD", "Finish or abort the revert before pushing from Aiden."],
-      ["rebase-merge", "Finish or abort the rebase before pushing from Aiden."],
-      ["rebase-apply", "Finish or abort the rebase before pushing from Aiden."],
-    ] as const;
-    for (const [gitPath, reason] of inProgress) {
-      const resolvedPath = await this.repositoryGitPath(repo, gitPath, signal);
-      try {
-        await fs.access(resolvedPath);
-        return reason;
-      } catch (error) {
-        if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
-          return "Aiden could not verify whether another Git operation is in progress.";
-        }
-      }
-    }
-    return undefined;
+    return this.inProgressOperation(repo, "pushing", signal);
   }
 
   private async cohesivePushHead(
@@ -4317,26 +4285,23 @@ export class GitService {
       } catch {
         trackingRecorded = false;
       }
+      const addWarning = (message: string) => {
+        warning = warning ? `${warning} ${message}` : message;
+      };
       if (!trackingRecorded) {
-        warning = [
-          warning,
+        addWarning(
           remoteStillMatches
             ? "The push completed, but Aiden could not safely update its local tracking ref."
             : "The push completed, but the remote configuration changed before Aiden could update its local tracking ref.",
-        ]
-          .filter(Boolean)
-          .join(" ");
+        );
       }
 
       let upstreamSet = capability.upstream === `${input.remote}/${input.destinationBranch}`;
       if (input.setUpstream && !upstreamSet) {
         if (signal?.aborted) {
-          warning = [
-            warning,
+          addWarning(
             "The push completed, but the cancelled request did not change the local upstream setting.",
-          ]
-            .filter(Boolean)
-            .join(" ");
+          );
         } else {
           const [headAfter, symbolicAfter] = await Promise.all([
             this.run(repo.cwd, ["rev-parse", "--verify", "HEAD"], {
@@ -4347,19 +4312,13 @@ export class GitService {
             }),
           ]);
           if (signal?.aborted) {
-            warning = [
-              warning,
+            addWarning(
               "The push completed, but the cancelled request did not change the local upstream setting.",
-            ]
-              .filter(Boolean)
-              .join(" ");
+            );
           } else if (!remoteStillMatches) {
-            warning = [
-              warning,
+            addWarning(
               "The push completed, but the remote configuration changed before Aiden could remember its upstream.",
-            ]
-              .filter(Boolean)
-              .join(" ");
+            );
           } else if (
             headAfter.exitCode === 0 &&
             headAfter.stdout.trim() === input.expectedHead &&
@@ -4367,14 +4326,11 @@ export class GitService {
             symbolicAfter.stdout.trim() === `refs/heads/${input.expectedBranch}`
           ) {
             if (!trackingRecorded) {
-              warning = [
-                warning,
+              addWarning(
                 signal?.aborted
                   ? "The push completed, but the cancelled request did not change the local upstream setting."
                   : "The push completed, but Aiden could not safely update its local tracking ref or upstream setting.",
-              ]
-                .filter(Boolean)
-                .join(" ");
+              );
             } else {
               try {
                 await this.run(
@@ -4390,33 +4346,24 @@ export class GitService {
                 upstreamSet = true;
               } catch (error) {
                 if (signal?.aborted) {
-                  warning = [
-                    warning,
+                  addWarning(
                     "The push completed, but the cancelled request did not change the local upstream setting.",
-                  ]
-                    .filter(Boolean)
-                    .join(" ");
+                  );
                 } else {
                   const detail =
                     error instanceof Error
                       ? error.message
                       : "Git could not set the upstream branch.";
-                  warning = [
-                    warning,
+                  addWarning(
                     `The push completed, but Aiden could not remember its upstream: ${detail}`,
-                  ]
-                    .filter(Boolean)
-                    .join(" ");
+                  );
                 }
               }
             }
           } else {
-            warning = [
-              warning,
+            addWarning(
               "The push completed, but the local branch moved before Aiden could remember its upstream.",
-            ]
-              .filter(Boolean)
-              .join(" ");
+            );
           }
         }
       }
@@ -4554,17 +4501,11 @@ export class GitService {
         file.binary = stat.binary;
       });
       const [behindText = "0", aheadText = "0"] = counts.stdout.trim().split(/\s+/);
-      const summary: GitReviewSummary = {
-        fileCount: files.length,
-        additions: files.reduce((total, file) => total + (file.additions ?? 0), 0),
-        deletions: files.reduce((total, file) => total + (file.deletions ?? 0), 0),
-        unavailableStats: files.filter(
-          (file) => file.additions === undefined || file.deletions === undefined,
-        ).length,
+      const summary = reviewSummary(files, {
         stagedFiles: 0,
         unstagedFiles: 0,
         conflictedFiles: 0,
-      };
+      });
       const targetLabel = targetRef.replace(/^refs\/heads\//, "").replace(/^refs\/remotes\//, "");
       const snapshot = createHash("sha256")
         .update(
@@ -5281,13 +5222,9 @@ export class GitService {
     filePath: string,
     maxBytes: number,
   ): Promise<{ ok: true; text: string } | { ok: false; code?: string }> {
-    const flags =
-      fsConstants.O_RDONLY |
-      (fsConstants.O_NOFOLLOW ?? 0) |
-      (fsConstants.O_NONBLOCK ?? 0);
     let handle: fs.FileHandle | undefined;
     try {
-      handle = await fs.open(filePath, flags);
+      handle = await fs.open(filePath, NO_FOLLOW_READ_FLAGS);
       const stat = await handle.stat();
       if (!stat.isFile() || stat.size <= 0 || stat.size > maxBytes) {
         return { ok: false };
@@ -6638,12 +6575,7 @@ export class GitService {
           await this.run(repo.cwd, [
             `--git-dir=${activeGitDir}`,
             `--work-tree=${checkoutRemovalPath!}`,
-            "status",
-            "--porcelain=v2",
-            "--branch",
-            "-z",
-            "--untracked-files=all",
-            "--ignored=matching",
+            ...MANAGED_STATUS_ARGS,
           ])
         ).stdout,
       );
@@ -6771,12 +6703,7 @@ export class GitService {
                 await this.run(repo.cwd, [
                   `--git-dir=${adminRemovalPath!}`,
                   `--work-tree=${scannedPath}`,
-                  "status",
-                  "--porcelain=v2",
-                  "--branch",
-                  "-z",
-                  "--untracked-files=all",
-                  "--ignored=matching",
+                  ...MANAGED_STATUS_ARGS,
                 ])
               ).stdout,
             );
@@ -7012,14 +6939,7 @@ export class GitService {
     try {
       const status = parseGitStatus(
         (
-          await this.run(worktreePath, [
-            "status",
-            "--porcelain=v2",
-            "--branch",
-            "-z",
-            "--untracked-files=all",
-            "--ignored=matching",
-          ])
+          await this.run(worktreePath, [...MANAGED_STATUS_ARGS])
         ).stdout,
       );
       let unknownIgnored = status.ignored > status.ignoredPaths.length;
@@ -7451,14 +7371,7 @@ export class GitService {
           }
           const status = parseGitStatus(
             (
-              await this.run(worktreePath, [
-                "status",
-                "--porcelain=v2",
-                "--branch",
-                "-z",
-                "--untracked-files=all",
-                "--ignored=matching",
-              ])
+              await this.run(worktreePath, [...MANAGED_STATUS_ARGS])
             ).stdout,
           );
           const blocked = await this.managedWorktreeDeletionBlocked(
@@ -7561,14 +7474,13 @@ export class GitService {
     }
   }
 
-  async finalizeManagedWorktreeDeletion(
+  private assertJournalMatchesRemoval(
+    removal: ReturnType<GitService["managedWorktreeRemovalPaths"]>,
+    journal: GitWorktreeRemovalJournal,
     worktreePath: string,
     worktreeGitDir: string,
     ownershipToken: string,
-  ): Promise<void> {
-    const removal = this.managedWorktreeRemovalPaths(worktreePath, worktreeGitDir, ownershipToken);
-    const journal = await this.readWorktreeRemovalJournal(removal.journal);
-    if (!journal) return;
+  ): void {
     if (
       journal.checkoutPath !== worktreePath ||
       journal.checkoutAuthorization !== removal.checkoutAuthorization ||
@@ -7583,6 +7495,17 @@ export class GitService {
         "The managed worktree deletion journal does not match this workspace.",
       );
     }
+  }
+
+  async finalizeManagedWorktreeDeletion(
+    worktreePath: string,
+    worktreeGitDir: string,
+    ownershipToken: string,
+  ): Promise<void> {
+    const removal = this.managedWorktreeRemovalPaths(worktreePath, worktreeGitDir, ownershipToken);
+    const journal = await this.readWorktreeRemovalJournal(removal.journal);
+    if (!journal) return;
+    this.assertJournalMatchesRemoval(removal, journal, worktreePath, worktreeGitDir, ownershipToken);
     if (journal.phase !== "filesystem_complete") {
       throw new GitServiceError(
         "command_failed",
@@ -7714,20 +7637,7 @@ export class GitService {
     const removal = this.managedWorktreeRemovalPaths(worktreePath, worktreeGitDir, ownershipToken);
     const journal = await this.readWorktreeRemovalJournal(removal.journal);
     if (!journal) return false;
-    if (
-      journal.checkoutPath !== worktreePath ||
-      journal.checkoutAuthorization !== removal.checkoutAuthorization ||
-      journal.checkoutQuarantine !== removal.checkout ||
-      journal.gitDir !== worktreeGitDir ||
-      journal.gitDirAuthorization !== removal.gitDirAuthorization ||
-      journal.gitDirQuarantine !== removal.gitDir ||
-      journal.ownershipToken !== ownershipToken
-    ) {
-      throw new GitServiceError(
-        "command_failed",
-        "The managed worktree deletion journal does not match this workspace.",
-      );
-    }
+    this.assertJournalMatchesRemoval(removal, journal, worktreePath, worktreeGitDir, ownershipToken);
     return true;
   }
 
@@ -7892,14 +7802,7 @@ export class GitService {
     await this.requireRepository(await this.repository(cwd));
     const [head, status] = await Promise.all([
       this.run(worktreePath, ["rev-parse", "--verify", "HEAD"]),
-      this.run(worktreePath, [
-        "status",
-        "--porcelain=v2",
-        "--branch",
-        "-z",
-        "--untracked-files=all",
-        "--ignored=matching",
-      ]),
+      this.run(worktreePath, [...MANAGED_STATUS_ARGS]),
     ]);
     const parsed = parseGitStatus(status.stdout);
     return {
@@ -8019,12 +7922,7 @@ export class GitService {
     if (!GIT_OBJECT_ID.test(baseCommit)) {
       throw new GitServiceError("invalid_input", "The managed worktree snapshot base is invalid.");
     }
-    if (
-      workspaceSubpath !== "" &&
-      normalizedRelativeWorktreePath(workspaceSubpath) !== workspaceSubpath
-    ) {
-      throw new GitServiceError("invalid_input", "The managed worktree workspace path is invalid.");
-    }
+    this.requireWorkspaceSubpath(workspaceSubpath);
     return this.enqueueMutation(repo.commonDir, async () => {
       signal?.throwIfAborted();
       const candidate = path.resolve(worktreePath);
@@ -8180,6 +8078,16 @@ export class GitService {
     return GIT_OBJECT_ID.test(commit) ? commit : undefined;
   }
 
+  private requireWorkspaceSubpath(workspaceSubpath: string): string {
+    if (
+      workspaceSubpath !== "" &&
+      normalizedRelativeWorktreePath(workspaceSubpath) !== workspaceSubpath
+    ) {
+      throw new GitServiceError("invalid_input", "The managed worktree workspace path is invalid.");
+    }
+    return workspaceSubpath;
+  }
+
   /**
    * The captured tree the snapshot ref still anchors, or undefined when the ref
    * no longer resolves. Used to prove a safe deletion remains restorable.
@@ -8241,12 +8149,7 @@ export class GitService {
     if (!GIT_OBJECT_ID.test(baseCommit)) {
       throw new GitServiceError("invalid_input", "The managed worktree snapshot base is invalid.");
     }
-    if (
-      workspaceSubpath !== "" &&
-      normalizedRelativeWorktreePath(workspaceSubpath) !== workspaceSubpath
-    ) {
-      throw new GitServiceError("invalid_input", "The managed worktree workspace path is invalid.");
-    }
+    this.requireWorkspaceSubpath(workspaceSubpath);
     return this.enqueueMutation(repo.commonDir, async () => {
       const managedRoot = await fs.realpath(root);
       // The target does not exist yet, so canonicalize its parent: ancestors
@@ -8403,12 +8306,7 @@ export class GitService {
   ): Promise<GitCreatedWorktree> {
     const repo = this.requireRepository(await this.repository(cwd));
     await this.validateBranchName(repo, branch);
-    if (
-      workspaceSubpath !== "" &&
-      normalizedRelativeWorktreePath(workspaceSubpath) !== workspaceSubpath
-    ) {
-      throw new GitServiceError("invalid_input", "The managed worktree workspace path is invalid.");
-    }
+    this.requireWorkspaceSubpath(workspaceSubpath);
     return this.enqueueMutation(repo.commonDir, async () => {
       const managedRoot = await fs.realpath(root);
       const requestedTarget = path.resolve(worktreePath);

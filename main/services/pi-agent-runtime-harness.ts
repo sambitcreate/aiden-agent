@@ -894,22 +894,11 @@ async function waitForManagedHook(
   hook: Promise<void> | void,
   signal: AbortSignal,
 ): Promise<{ cancelled: boolean; error?: unknown }> {
-  if (signal.aborted) return { cancelled: true };
-  let removeAbort = () => {};
-  const aborted = new Promise<{ cancelled: true }>((resolve) => {
-    const onAbort = () => resolve({ cancelled: true });
-    signal.addEventListener("abort", onAbort, { once: true });
-    removeAbort = () => signal.removeEventListener("abort", onAbort);
-  });
-  const settled = Promise.resolve(hook).then(
-    () => ({ cancelled: false as const }),
-    (error: unknown) => ({ cancelled: false as const, error }),
-  );
-  try {
-    return await Promise.race([settled, aborted]);
-  } finally {
-    removeAbort();
-  }
+  const settled = await waitForManagedPromise(Promise.resolve(hook), signal);
+  if (settled.kind === "cancelled") return { cancelled: true };
+  return settled.kind === "failed"
+    ? { cancelled: false, error: settled.error }
+    : { cancelled: false };
 }
 
 async function waitForManagedPromise<T>(
@@ -2526,13 +2515,16 @@ export class PiAgentRuntimeHarness {
         if (compactionResult.messages) {
           this.installCompactedMessages(compactionResult.messages);
         }
+        const abandonedFields = compactionResult.assistantAbandoned
+          ? { finalMessageWasAbandoned: true as const }
+          : {};
         const terminalCompactionHostFault = compactionHostFault(compactionResult);
         if (terminalCompactionHostFault) {
           return await finish({
             kind: "host_failed",
             faultKind: terminalCompactionHostFault,
             finalMessage: assistant,
-            ...(compactionResult.assistantAbandoned ? { finalMessageWasAbandoned: true } : {}),
+            ...abandonedFields,
             attempts,
           });
         }
@@ -2575,7 +2567,7 @@ export class PiAgentRuntimeHarness {
                   ? "context-overflow"
                   : "request-failed",
               finalMessage: assistant,
-              ...(compactionResult.assistantAbandoned ? { finalMessageWasAbandoned: true } : {}),
+              ...abandonedFields,
               attempts,
             });
           }
@@ -2607,7 +2599,7 @@ export class PiAgentRuntimeHarness {
               kind: "host_failed",
               faultKind: "lifecycle",
               finalMessage: assistant,
-              ...(compactionResult.assistantAbandoned ? { finalMessageWasAbandoned: true } : {}),
+              ...abandonedFields,
               attempts,
             });
           }
@@ -2615,7 +2607,7 @@ export class PiAgentRuntimeHarness {
             return await finish({
               kind: "app_cancelled",
               finalMessage: assistant,
-              ...(compactionResult.assistantAbandoned ? { finalMessageWasAbandoned: true } : {}),
+              ...abandonedFields,
               attempts,
             });
           }
@@ -2624,7 +2616,7 @@ export class PiAgentRuntimeHarness {
             return await finish({
               kind: "app_cancelled",
               finalMessage: assistant,
-              ...(compactionResult.assistantAbandoned ? { finalMessageWasAbandoned: true } : {}),
+              ...abandonedFields,
               attempts,
             });
           }
@@ -2641,7 +2633,7 @@ export class PiAgentRuntimeHarness {
           return await finish({
             kind: "app_cancelled",
             finalMessage: assistant,
-            ...(compactionResult.assistantAbandoned ? { finalMessageWasAbandoned: true } : {}),
+            ...abandonedFields,
             attempts,
           });
         }
@@ -2650,7 +2642,7 @@ export class PiAgentRuntimeHarness {
             kind: "host_failed",
             faultKind: this.policyFault ? "policy" : "session",
             finalMessage: assistant,
-            ...(compactionResult.assistantAbandoned ? { finalMessageWasAbandoned: true } : {}),
+            ...abandonedFields,
             attempts,
           });
         }
@@ -2659,7 +2651,7 @@ export class PiAgentRuntimeHarness {
             kind: "host_failed",
             faultKind: "session",
             finalMessage: assistant,
-            ...(compactionResult.assistantAbandoned ? { finalMessageWasAbandoned: true } : {}),
+            ...abandonedFields,
             attempts,
           });
         }
@@ -2682,7 +2674,7 @@ export class PiAgentRuntimeHarness {
                   ? "compaction-failed"
                   : "request-failed",
             finalMessage: assistant,
-            ...(compactionResult.assistantAbandoned ? { finalMessageWasAbandoned: true } : {}),
+            ...abandonedFields,
             attempts,
           });
         }
@@ -2691,7 +2683,7 @@ export class PiAgentRuntimeHarness {
             kind: "provider_failed",
             reason: "interrupted",
             finalMessage: assistant,
-            ...(compactionResult.assistantAbandoned ? { finalMessageWasAbandoned: true } : {}),
+            ...abandonedFields,
             attempts,
           });
         }
@@ -2705,7 +2697,7 @@ export class PiAgentRuntimeHarness {
             kind: "provider_failed",
             reason: "output-limit",
             finalMessage: assistant,
-            ...(compactionResult.assistantAbandoned ? { finalMessageWasAbandoned: true } : {}),
+            ...abandonedFields,
             attempts,
           });
         }

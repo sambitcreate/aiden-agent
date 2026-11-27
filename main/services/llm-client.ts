@@ -778,27 +778,26 @@ interface LoadMonitorState {
   readyEmitted: boolean;
 }
 
-interface ActiveGeneration {
-  agent: PiAgentRuntimeHarness;
+interface OwnerBoundGeneration extends GenerationOwnershipEntry {
   chatId: string;
   owner: ChatGenerationOwner;
-  removeOwnerInvalidation: () => void;
   ownerInvalidationListeners?: Set<() => void>;
   stopCacheWarming?: () => void;
-  workspaceId?: string;
   cancelRequested: boolean;
   cancellationOrigin?: GenerationCancellationOrigin;
   rendererDetached: boolean;
   /** Nobody attends this run's prompts, so a refused one is not left for the Inbox. */
   promptsUnattended: boolean;
   computerUse?: ComputerUseController;
+  formFill?: FormFillService;
+  loadMonitor?: LoadMonitorState;
+}
+
+interface ActiveGeneration extends OwnerBoundGeneration {
+  agent: PiAgentRuntimeHarness;
   /** Set when a computer_use or fill_form call first reaches the access gate. */
   computerUseActivated?: boolean;
-  formFill?: FormFillService;
   completion: Promise<void> | null;
-  loadMonitor?: LoadMonitorState;
-  releaseSkillReservation: () => void;
-  releaseBotAuthority: () => void;
   /** A steered send stops this run's still-running subagents. */
   stopSubagentsForGuidance?: () => void;
   /** UserPromptSubmit for mid-flight input, in a chat that runs hooks. */
@@ -819,23 +818,8 @@ interface GenerationEscape {
   settle(): Promise<void>;
 }
 
-interface InitializingGeneration {
-  chatId: string;
-  owner: ChatGenerationOwner;
-  removeOwnerInvalidation: () => void;
-  ownerInvalidationListeners?: Set<() => void>;
-  stopCacheWarming?: () => void;
-  workspaceId?: string;
-  cancelRequested: boolean;
-  cancellationOrigin?: GenerationCancellationOrigin;
-  rendererDetached: boolean;
-  promptsUnattended: boolean;
+interface InitializingGeneration extends OwnerBoundGeneration {
   controller: AbortController;
-  computerUse?: ComputerUseController;
-  formFill?: FormFillService;
-  loadMonitor?: LoadMonitorState;
-  releaseSkillReservation: () => void;
-  releaseBotAuthority: () => void;
   skillInvocation?: PreparedSkillInvocation;
   skillPrompt?: string;
 }
@@ -3392,6 +3376,14 @@ const acpScratch = createAcpScratchDirectories({
   onPrepareError: (error) => logger.warn("acp", "Could not prepare the agent scratch directory.", error),
 });
 
+function endChatWorkspaceSession(chatId: string, label: string): Promise<void> {
+  // SessionEnd for a chat whose hooks ran in this process; never awaited.
+  endWorkspaceChatSession(chatId, undefined, {
+    onMessages: (lines) => logger.warn("hooks", `SessionEnd hooks for a ${label}: ${lines.join("\n")}`),
+  });
+  return acpScratch.forget(chatId);
+}
+
 /** Keeps the admitted half of `start` out of reach of anything but `start`. */
 const runAdmittedStart = Symbol("runAdmittedStart");
 
@@ -5352,6 +5344,13 @@ export const llmClient = {
           // a card a remembered approval scope could already skip.
           let hookAsk: string | undefined;
           let hookAllow = false;
+          const blockToolCall = (reason: string) => {
+            if (!signal?.aborted) {
+              deniedToolCalls.add(context.toolCall.id);
+              timeline.toolFinished(context.toolCall.id, "blocked");
+            }
+            return { block: true, reason };
+          };
           const runPreToolUseHooks = async () => {
             if (!chatHooks) return undefined;
             const hook = await chatHooks.preToolUse({
@@ -5362,11 +5361,7 @@ export const llmClient = {
               signal,
             });
             if (hook.kind === "block") {
-              if (!signal?.aborted) {
-                deniedToolCalls.add(context.toolCall.id);
-                timeline.toolFinished(context.toolCall.id, "blocked");
-              }
-              return { block: true, reason: hook.reason };
+              return blockToolCall(hook.reason);
             }
             if (hook.kind === "ask") hookAsk = hook.reason;
             else if (hook.kind === "allow") hookAllow = true;
@@ -5383,11 +5378,7 @@ export const llmClient = {
           // refused before hooks, approvals or the call itself.
           const turnRefusal = turnToolRefusal(context.toolCall.name, context.args);
           if (turnRefusal) {
-            if (!signal?.aborted) {
-              deniedToolCalls.add(context.toolCall.id);
-              timeline.toolFinished(context.toolCall.id, "blocked");
-            }
-            return { block: true, reason: turnRefusal };
+            return blockToolCall(turnRefusal);
           }
           // Computer Use and Form Fill check the chat's access first.
           if (
@@ -5426,18 +5417,11 @@ export const llmClient = {
           }
           let approvedScheduleMcpBindings: import("./types.js").ScheduledMcpServerBinding[] = [];
           if (context.toolCall.name === COMPUTER_USE_TOOL_NAME) {
-            const blockComputerUse = (reason: string) => {
-              if (!signal?.aborted) {
-                deniedToolCalls.add(context.toolCall.id);
-                timeline.toolFinished(context.toolCall.id, "blocked");
-              }
-              return { block: true, reason };
-            };
             if (!computerUse) {
-              return blockComputerUse("Computer Use is not enabled for this response.");
+              return blockToolCall("Computer Use is not enabled for this response.");
             }
             const access = await authorizeComputerUseAccess(context.toolCall.id, signal);
-            if (!access.allowed) return blockComputerUse(access.reason);
+            if (!access.allowed) return blockToolCall(access.reason);
             const hookBlock = await runPreToolUseHooks();
             if (hookBlock) return hookBlock;
             const computerUseDecision = workspaceToolApproval({
@@ -5449,7 +5433,7 @@ export const llmClient = {
             if (computerUseDecision.outcome === "ask") {
               // A hook asked: this one action needs its own card.
               const toolCallId = timeline.publicToolCallId(context.toolCall.id);
-              if (!toolCallId) return blockComputerUse("The tool approval step was not initialized.");
+              if (!toolCallId) return blockToolCall("The tool approval step was not initialized.");
               timeline.toolAwaitingApproval(context.toolCall.id);
               notifyApprovalWaiting();
               const hookOutcome = await approvals.request(
@@ -5467,7 +5451,7 @@ export const llmClient = {
                 currentOwnerDocumentId(),
               );
               if (hookOutcome !== "allowed") {
-                return blockComputerUse(toolApprovalBlockReason(hookOutcome, false));
+                return blockToolCall(toolApprovalBlockReason(hookOutcome, false));
               }
             }
             // The chat is allowed, so input actions run without a per-action card.
@@ -5479,7 +5463,7 @@ export const llmClient = {
                 signal,
               );
             } catch (error) {
-              return blockComputerUse(
+              return blockToolCall(
                 error instanceof Error ? error.message : "Computer Use rejected this action.",
               );
             }
@@ -5497,11 +5481,7 @@ export const llmClient = {
             // Form Fill drives the computer, so it needs the same chat access.
             const access = await authorizeComputerUseAccess(context.toolCall.id, signal);
             if (!access.allowed) {
-              if (!signal?.aborted) {
-                deniedToolCalls.add(context.toolCall.id);
-                timeline.toolFinished(context.toolCall.id, "blocked");
-              }
-              return { block: true, reason: access.reason };
+              return blockToolCall(access.reason);
             }
             // Form Fill always shows its card; a hook's ask adds its reason there.
             const hookBlock = await runPreToolUseHooks();
@@ -5800,11 +5780,7 @@ export const llmClient = {
                   signal,
                 );
                 if (hookOutcome !== "allowed") {
-                  if (!signal?.aborted) {
-                    deniedToolCalls.add(context.toolCall.id);
-                    timeline.toolFinished(context.toolCall.id, "blocked");
-                  }
-                  return { block: true, reason: toolApprovalBlockReason(hookOutcome, false) };
+                  return blockToolCall(toolApprovalBlockReason(hookOutcome, false));
                 }
               }
               timeline.toolRunning(context.toolCall.id);
@@ -7401,19 +7377,12 @@ export const llmClient = {
 
   /** Remove a deleted chat's agent scratch directory. Never throws. */
   forgetDeletedChat(chatId: string): Promise<void> {
-    // SessionEnd for a chat whose hooks ran in this process; never awaited.
-    endWorkspaceChatSession(chatId, undefined, {
-      onMessages: (lines) => logger.warn("hooks", `SessionEnd hooks for a deleted chat: ${lines.join("\n")}`),
-    });
-    return acpScratch.forget(chatId);
+    return endChatWorkspaceSession(chatId, "deleted chat");
   },
 
   /** Reset workspace-bound hook/ACP scratch state after attaching a chat to a new workspace. */
   resetChatWorkspaceSession(chatId: string): Promise<void> {
-    endWorkspaceChatSession(chatId, undefined, {
-      onMessages: (lines) => logger.warn("hooks", `SessionEnd hooks for a reattached chat: ${lines.join("\n")}`),
-    });
-    return acpScratch.forget(chatId);
+    return endChatWorkspaceSession(chatId, "reattached chat");
   },
 
   /** Close generation admission before chat deletion performs its first await. */
@@ -7434,8 +7403,7 @@ export const llmClient = {
   },
 
   beginChatExport(chatId: string): (() => void) | null {
-    if (chatDeletionGate.isDeleting(chatId)) return null;
-    return chatCopyGate.tryBegin(chatId, this.isChatBusy(chatId));
+    return this.beginChatCopy(chatId);
   },
 
   /** Claim one append-to-generation turn before its first persistence await. */
