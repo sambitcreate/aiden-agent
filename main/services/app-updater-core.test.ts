@@ -10,16 +10,7 @@ import {
   shouldEnableAppUpdates,
   type AppUpdateDriver,
 } from "./app-updater-core.js";
-
-function deferred<T>() {
-  let resolve!: (value: T | PromiseLike<T>) => void;
-  let reject!: (reason?: unknown) => void;
-  const promise = new Promise<T>((resolvePromise, rejectPromise) => {
-    resolve = resolvePromise;
-    reject = rejectPromise;
-  });
-  return { promise, reject, resolve };
-}
+import { deferred } from "../shared/async-test-support.js";
 
 test("auto updates require a packaged macOS app with embedded feed metadata", () => {
   assert.equal(

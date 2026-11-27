@@ -2,20 +2,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
 import { createSupersedingTaskGate } from "./superseding-task-core";
-
-function deferred(): {
-  promise: Promise<void>;
-  reject: (error: Error) => void;
-  resolve: () => void;
-} {
-  let reject!: (error: Error) => void;
-  let resolve!: () => void;
-  const promise = new Promise<void>((resolvePromise, rejectPromise) => {
-    reject = rejectPromise;
-    resolve = resolvePromise;
-  });
-  return { promise, reject, resolve };
-}
+import { deferred } from "../shared/async-test-support.js";
 
 test("concurrent waiters follow a replacement without settling the obsolete task", { timeout: 1_000 }, async () => {
   const gate = createSupersedingTaskGate();

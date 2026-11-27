@@ -14,6 +14,7 @@ import { MAX_ATTACHMENT_INLINE_BYTES } from "../../renderer/shared/attachment-co
 import { compileAum } from "../../renderer/shared/aiden-ui/compile.js";
 import type { ChatUiVisualV1 } from "../../renderer/shared/aiden-ui/types.js";
 import type { Attachment } from "./types.js";
+import { deferred } from "../shared/async-test-support.js";
 
 const PNG = Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==", "base64");
 
@@ -81,14 +82,6 @@ test("a computed image reference draws every eligible message image, since its i
 
 function job(chatId: string, visualIds: string[]): VisualSnapshotJob {
   return { chatId, messageId: "m-1", visuals: visualIds.map((visualId) => ({ kind: "html", visualId, title: visualId })) };
-}
-
-function deferred() {
-  let resolve!: () => void;
-  const promise = new Promise<void>((done) => {
-    resolve = done;
-  });
-  return { promise, resolve };
 }
 
 test("attachment ids are reserved and stable per chat, message, and visual", () => {

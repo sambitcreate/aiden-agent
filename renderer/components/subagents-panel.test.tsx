@@ -63,6 +63,7 @@ import {
   SubagentMcpMutationApproval,
   subagentMcpMutationAllowLabel,
 } from "./subagent-mcp-mutation-approval.js";
+import { deferred } from "../../main/shared/async-test-support.js";
 
 function run(runId: string, extra: Partial<SubagentRunSnapshotV1> = {}): SubagentRunSnapshotV1 {
   return {
@@ -332,16 +333,6 @@ function mountedCopyAnnouncement(document: Document, status: string): string | u
   return mountedElementsWithAttribute(document, "data-copy-announcement").find(
     (element) => element.getAttribute("data-copy-announcement") === status,
   )?.textContent;
-}
-
-function deferred<T>() {
-  let resolve!: (value: T | PromiseLike<T>) => void;
-  let reject!: (reason?: unknown) => void;
-  const promise = new Promise<T>((resolvePromise, rejectPromise) => {
-    resolve = resolvePromise;
-    reject = rejectPromise;
-  });
-  return { promise, resolve, reject };
 }
 
 function SuspendForCopyTest({ promise }: { promise: Promise<unknown> }): React.ReactElement {

@@ -78,12 +78,4 @@ export function fixture(t: TestContext, maxConcurrent = 3) {
     },
   };
 }
-export function deferred<T = void>() {
-  let resolve!: (value: T) => void;
-  let reject!: (error: Error) => void;
-  const promise = new Promise<T>((yes, no) => {
-    resolve = yes;
-    reject = no;
-  });
-  return { promise, resolve, reject };
-}
+export { deferred, type Deferred } from "../../shared/async-test-support.js";

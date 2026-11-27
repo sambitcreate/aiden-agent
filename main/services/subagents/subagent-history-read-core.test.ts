@@ -10,6 +10,7 @@ import {
   readSubagentHistoryDetailForOwner,
   readSubagentHistoryForOwner,
 } from "./subagent-history-read-core.js";
+import { deferred } from "../../shared/async-test-support.js";
 
 function base32(value: string): string {
   let bits = 0;
@@ -33,14 +34,6 @@ function base32(value: string): string {
 
 function splitEncoding(value: string): string {
   return value.match(/.{1,4}/gu)!.join(".");
-}
-
-function deferred<T>() {
-  let resolve = (_value: T | PromiseLike<T>): void => undefined;
-  const promise = new Promise<T>((resolvePromise) => {
-    resolve = resolvePromise;
-  });
-  return { promise, resolve };
 }
 
 function snapshot(): SubagentRunSnapshotV1 {

@@ -12,6 +12,7 @@ import {
   type AutosaveState,
   type SaveOutcome,
 } from "./workflow-session-core";
+import { deferred } from "../../main/shared/async-test-support.js";
 
 const at = { x: 0, y: 0 };
 const base: WorkflowDocV1 = {
@@ -74,11 +75,6 @@ function fakeTimers() {
     },
     size: () => pending.size,
   };
-}
-
-function deferred<T>() {
-  let resolve!: (value: T) => void;
-  return { promise: new Promise<T>((done) => (resolve = done)), resolve };
 }
 
 const titled = (title: string): WorkflowDocV1 => ({ ...base, title });

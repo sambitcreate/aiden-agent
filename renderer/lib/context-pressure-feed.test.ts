@@ -2,17 +2,10 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import type { ChatContextPressureV1 } from "../shared/context-pressure";
 import { ContextPressureFeed } from "./context-pressure-feed";
+import { deferred } from "../../main/shared/async-test-support.js";
 
 function reading(contextTokens: number): ChatContextPressureV1 {
   return { contextTokens } as ChatContextPressureV1;
-}
-
-function deferred<T>() {
-  let resolve!: (value: T) => void;
-  const promise = new Promise<T>((done) => {
-    resolve = done;
-  });
-  return { promise, resolve };
 }
 
 function harness(options: { history?: boolean } = {}) {

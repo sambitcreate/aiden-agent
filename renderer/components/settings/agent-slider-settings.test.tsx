@@ -10,6 +10,7 @@ import { Toaster } from "../ui";
 import type { AgentSliderSettings as Slider } from "../../shared/agent-slider";
 import { queryKeys } from "../../lib/queries";
 import type { AppSettings, Provider } from "../../lib/types";
+import { deferred } from "../../../main/shared/async-test-support.js";
 
 const SAVE_ERROR = "Aiden couldn’t save the Agent Slider.";
 
@@ -107,14 +108,6 @@ function mount(settings: Partial<AppSettings>, settleSave?: SettleSave) {
     lastSaved: () => saves[saves.length - 1],
     persisted: () => current,
   };
-}
-
-function deferred<T>() {
-  let resolve!: (value: T) => void;
-  const promise = new Promise<T>((done) => {
-    resolve = done;
-  });
-  return { promise, resolve };
 }
 
 const isHome = (label: string) =>

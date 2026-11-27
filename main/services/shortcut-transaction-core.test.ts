@@ -4,14 +4,7 @@ import {
   createShortcutTransactionQueue,
   ShortcutPersistenceRollbackError,
 } from "./shortcut-transaction-core";
-
-function deferred() {
-  let resolve!: () => void;
-  const promise = new Promise<void>((next) => {
-    resolve = next;
-  });
-  return { promise, resolve };
-}
+import { deferred } from "../shared/async-test-support.js";
 
 test("serializes read, apply, and persistence so concurrent mutations cannot lose updates", async () => {
   const queue = createShortcutTransactionQueue<Record<string, number>, string>();

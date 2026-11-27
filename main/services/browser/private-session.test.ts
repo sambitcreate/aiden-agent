@@ -1,12 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { BrowserPrivateSession } from "./private-session.js";
-
-const deferred = () => {
-  let resolve!: () => void;
-  const promise = new Promise<void>((done) => { resolve = done; });
-  return { promise, resolve };
-};
+import { deferred } from "../../shared/async-test-support.js";
 
 test("private browsing cycles reuse one session and remove the prior cycle's state", async () => {
   let created = 0;

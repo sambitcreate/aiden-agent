@@ -3,6 +3,7 @@ import test from "node:test";
 import type { OutputRef } from "../../../renderer/shared/images/run-types.js";
 import type { WorkflowDocV1, WorkflowEdge, WorkflowNode } from "../../../renderer/shared/images/schema.js";
 import { planDigest, planRun, runPlan, staleNodeIds, summarizeRunState, type PlanContext, type StepOutcome, type StepTransition } from "./scheduler-core.js";
+import { deferred } from "../../shared/async-test-support.js";
 
 const MODEL = { provider: "openrouter", id: "google/gemini-3.1-flash-image" };
 const ref = (seed: string): OutputRef => ({ assetId: seed.repeat(64), width: 8, height: 8, mediaType: "image/png" });
@@ -184,11 +185,6 @@ test("plans over the request cap, without requests, or with missing assets are r
   assert.deepEqual(gone.ok ? [] : gone.issues.map((issue) => [issue.code, issue.nodeId]), [["missing_asset", "i"]]);
 });
 
-function deferred<T>() {
-  let resolve!: (value: T) => void;
-  const promise = new Promise<T>((done) => (resolve = done));
-  return { promise, resolve };
-}
 const images = (seed: string): StepOutcome => ({ ok: true, value: { kind: "images", images: [ref(seed)] } });
 
 test("dispatch honors the concurrency limit and resolves local nodes inline", async () => {

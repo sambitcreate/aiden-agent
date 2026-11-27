@@ -2,16 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { captureAnalyticsEvents } from "../analytics/test-support.js";
 import { ComputerUseSettingsCoordinator } from "./settings-core.js";
-
-function deferred<T>() {
-  let resolve!: (value: T | PromiseLike<T>) => void;
-  let reject!: (error: unknown) => void;
-  const promise = new Promise<T>((resolvePromise, rejectPromise) => {
-    resolve = resolvePromise;
-    reject = rejectPromise;
-  });
-  return { promise, resolve, reject };
-}
+import { deferred } from "../../shared/async-test-support.js";
 
 test("disable closes and cancels the live gate before persistence settles", async () => {
   const write = deferred<void>();

@@ -13,6 +13,7 @@ import {
   type PiCredentialWriteChange,
 } from "./pi-credential-store-core.js";
 import { BotRuntimeInventoryLeaseRegistry } from "./bot-runtime-inventory-lease.js";
+import { deferred } from "../shared/async-test-support.js";
 
 const temporaryDirectories: string[] = [];
 
@@ -277,12 +278,6 @@ test("fails closed for unavailable secure storage, corrupt files, and bad cipher
     return true;
   });
 });
-
-function deferred<T = void>() {
-  let resolve!: (value: T) => void;
-  const promise = new Promise<T>((done) => { resolve = done; });
-  return { promise, resolve };
-}
 
 for (const operation of ["modify", "delete"] as const) {
   test(`cancelled queued ${operation} cannot replace or remove a newer credential`, async () => {

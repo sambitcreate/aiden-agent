@@ -9,6 +9,7 @@ import { LOCAL_SIDEBAR_HOST_ID, projectOrderKey } from "./sidebar-organization";
 import { settledInboxReads, triageSignals, withInboxReadsPending } from "./inbox-triage";
 import { inboxState, type InboxSignals } from "./sidebar-inbox";
 import { useInboxTriage, type InboxTriage, type InboxTriageRow } from "./use-inbox-triage";
+import { deferred, type Deferred } from "../../main/shared/async-test-support.js";
 
 const NO_PEERS: ReadonlyMap<string, PeerHostView> = new Map();
 const ROW: InboxTriageRow = {
@@ -20,22 +21,6 @@ const ROW: InboxTriageRow = {
 afterEach(() => {
   cleanup();
 });
-
-interface Deferred<T> {
-  promise: Promise<T>;
-  resolve: (value: T) => void;
-  reject: (error: unknown) => void;
-}
-
-function deferred<T>(): Deferred<T> {
-  let resolve!: (value: T) => void;
-  let reject!: (error: unknown) => void;
-  const promise = new Promise<T>((res, rej) => {
-    resolve = res;
-    reject = rej;
-  });
-  return { promise, resolve, reject };
-}
 
 /**
  * This Mac's triage store over IPC: `chats:triage` answers `chats` and each

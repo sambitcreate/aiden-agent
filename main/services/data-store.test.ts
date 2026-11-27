@@ -5,14 +5,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import test from "node:test";
 import { DataStore, type DataStorePublicationReceipt } from "./data-store.js";
-
-function deferred<T>() {
-  let resolve!: (value: T | PromiseLike<T>) => void;
-  const promise = new Promise<T>((resolvePromise) => {
-    resolve = resolvePromise;
-  });
-  return { promise, resolve };
-}
+import { deferred } from "../shared/async-test-support.js";
 
 test("serializes full config mutations so a delayed write cannot resurrect stale settings", async (t) => {
   const directory = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-data-store-"));

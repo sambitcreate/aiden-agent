@@ -12,6 +12,7 @@ import {
   getPresetVariant,
   type AppearanceConfig,
 } from "../shared/appearance";
+import { deferred } from "../../main/shared/async-test-support.js";
 
 class FakeMediaQuery {
   matches = false;
@@ -37,14 +38,6 @@ class FakeMediaQuery {
       listener({ matches } as MediaQueryListEvent);
     }
   }
-}
-
-function deferred<Value>() {
-  let resolve!: (value: Value) => void;
-  const promise = new Promise<Value>((done) => {
-    resolve = done;
-  });
-  return { promise, resolve };
 }
 
 function customAppearance(

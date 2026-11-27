@@ -26,6 +26,7 @@ import {
   DESIGN_PAGE_INSPECT_SECTION,
   withDesignInspectNote,
 } from "./inspect-note.js";
+import { deferred } from "../../shared/async-test-support.js";
 
 const PAGE = "aiden-design://grant-1/design/home.html";
 
@@ -453,12 +454,6 @@ test("inspectDesignPage draws the frame's own look at its design width and repor
   assert.equal(requests.length, 2, "a missing page is not drawn");
   assert.match(missing.text, /design\/gone\.html is not in the workspace/u);
 });
-
-const deferred = <T>() => {
-  let resolve!: (value: T) => void;
-  const promise = new Promise<T>((done) => (resolve = done));
-  return { promise, resolve };
-};
 
 test("pages Aiden writes are inspected one at a time, and each report describes the page as it now is", async () => {
   const started: string[] = [];

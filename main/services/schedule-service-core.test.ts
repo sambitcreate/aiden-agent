@@ -4,6 +4,7 @@ import { scheduledJobs, type Cron } from "croner";
 import { createCatchUpQueue, createScheduleServiceCore, type ScheduledRunTrigger } from "./schedule-service-core.js";
 import { createScheduleStore } from "./schedule-store.js";
 import type { ScheduledRun, ScheduledTask } from "./types.js";
+import { deferred } from "../shared/async-test-support.js";
 
 class MemoryPersistence<T> {
   constructor(private data: T) {}
@@ -538,16 +539,6 @@ test("aborted resume preserves an already-enabled task", async () => {
   await assert.rejects(testbed.service.resume(task.id, { signal: controller.signal }), /cancelled/iu);
   assert.equal((await testbed.store.get(task.id))?.enabled, true);
 });
-
-function deferred<T>() {
-  let resolve!: (value: T) => void;
-  let reject!: (error: Error) => void;
-  const promise = new Promise<T>((resolvePromise, rejectPromise) => {
-    resolve = resolvePromise;
-    reject = rejectPromise;
-  });
-  return { promise, resolve, reject };
-}
 
 test("disabling schedules during startup overrides the pending settings read", async (t) => {
   const settings = deferred<boolean>();

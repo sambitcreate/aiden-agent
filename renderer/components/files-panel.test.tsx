@@ -8,6 +8,7 @@ import { CommandSystemProvider } from "../lib/command-system";
 import type { Workspace, WorkspaceFileEntry, WorkspaceFileIndex } from "../lib/types";
 import { FilesPanel } from "./files-panel";
 import { TooltipProvider } from "./ui";
+import { deferred } from "../../main/shared/async-test-support.js";
 
 afterEach(cleanup);
 
@@ -21,12 +22,6 @@ const entry = (path: string, kind: WorkspaceFileEntry["kind"]): WorkspaceFileEnt
   kind,
 });
 const index = (...entries: WorkspaceFileEntry[]): WorkspaceFileIndex => ({ entries, truncated: false, skippedDirectories: 0 }) as WorkspaceFileIndex;
-
-function deferred<T>() {
-  let resolve!: (value: T) => void;
-  const promise = new Promise<T>((done) => { resolve = done; });
-  return { promise, resolve };
-}
 
 function panel(props: { requestedPath: string | null; requestedPathKey: number }) {
   return (

@@ -10,6 +10,7 @@ import {
   computerUseReadinessReady,
   reduceComputerUseRefreshState,
 } from "../../../renderer/lib/computer-use-readiness.js";
+import { deferred } from "../../shared/async-test-support.js";
 
 test("closing the global gate invalidates old activation snapshots", () => {
   const gate = new ComputerUseGenerationGate();
@@ -95,12 +96,6 @@ test("a failed status query overrides stale cached readiness", () => {
   assert.equal(computerUseReadinessReady(true, false), true);
   assert.equal(computerUseReadinessReady(true, true), false);
 });
-
-function deferred() {
-  let resolve!: () => void;
-  const promise = new Promise<void>((done) => { resolve = done; });
-  return { promise, resolve };
-}
 
 test("cancel-and-settle waits for driver closure, generation completion and owner-map removal", async () => {
   const driver = deferred();

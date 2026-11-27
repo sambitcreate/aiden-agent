@@ -17,6 +17,7 @@ import {
   type ChatForkLineageV1,
   type ChatForkSummaryV1,
 } from "../shared/chat-copy-contract";
+import { deferred } from "../../main/shared/async-test-support.js";
 
 test("committed steer shows once in the open chat, even if a reload already has it", () => {
   const chat = {
@@ -38,13 +39,6 @@ test("committed steer shows once in the open chat, even if a reload already has 
 
 function message(id: string): QueuedChatMessage {
   return { id, text: `message ${id}`, attachments: [] };
-}
-function deferred<T>() {
-  let resolve!: (value: T) => void;
-  const promise = new Promise<T>((done) => {
-    resolve = done;
-  });
-  return { promise, resolve };
 }
 function delivery(queue: ChatMessageQueue) {
   const sent: string[] = [];

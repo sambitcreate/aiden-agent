@@ -29,12 +29,11 @@ import { createFauxModels, FAUX_MODEL_REF, waitFor } from "./test-support/faux.j
 import type { BotToolCall } from "./tool-adapter.js";
 import type { BotToolCandidate } from "./bot-tool-assembly.js";
 import { BOT_PLAN_MEMO, planStepCandidate, proposePlanCandidate, type BotPlanToolDeps } from "./bot-plan-tools.js";
+import { deferred } from "../../shared/async-test-support.js";
 
 const BOT = "ada";
 const input = (covers: unknown[] = [{ shell: "bot_home" }]) => ({ title: "Prepare a report", why: "Organize the results", steps: [{ text: "Read the sources" }, { text: "Write the report" }], covers });
 const textOf = (result: { content: Array<{ type: string; text?: string }> }) => result.content.map(part => part.text ?? "").join("");
-function deferred() { let resolve!: () => void; const promise = new Promise<void>(r => { resolve = r; }); return { promise, resolve }; }
-
 async function fixture(t: TestContext, useProductionAuthority = false) {
   const dir = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), "bot-plan-tools-")));
   const home = path.join(dir, "Home"), outside = path.join(dir, "Outside"), privateRoot = path.join(dir, "Private");

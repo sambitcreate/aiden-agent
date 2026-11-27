@@ -3,15 +3,9 @@ import test from "node:test";
 import { ReadAloudController } from "./tts-client.js";
 import { defaultTtsSettings, type TtsJobSnapshot, type TtsSourceRef } from "../shared/tts.js";
 import type { ttsApi } from "./ipc.js";
+import { deferred } from "../../main/shared/async-test-support.js";
 
 const flush = () => new Promise<void>((resolve) => setImmediate(resolve));
-function deferred<T>() {
-  let resolve!: (value: T) => void;
-  const promise = new Promise<T>((done) => {
-    resolve = done;
-  });
-  return { promise, resolve };
-}
 const source: TtsSourceRef = {
   chatId: "chat",
   messageId: "message",

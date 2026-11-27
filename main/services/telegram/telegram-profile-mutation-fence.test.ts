@@ -4,14 +4,7 @@ import {
   TELEGRAM_PROFILE_CHANGED_MESSAGE,
   TelegramProfileMutationFence,
 } from "./telegram-profile-mutation-fence.js";
-
-function deferred() {
-  let resolve!: () => void;
-  const promise = new Promise<void>((done) => {
-    resolve = done;
-  });
-  return { promise, resolve };
-}
+import { deferred } from "../../shared/async-test-support.js";
 
 test("reset request invalidates an in-flight bind before its commit and runs afterward", async () => {
   const fence = new TelegramProfileMutationFence();

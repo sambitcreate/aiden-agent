@@ -32,6 +32,7 @@ import {
   type HostChildProcess,
   type LocalDeviceHostDeps,
 } from "./local-device-host.js";
+import { deferred } from "../../shared/async-test-support.js";
 
 class FakeChild extends EventEmitter implements HostChildProcess {
   exitCode: number | null = null;
@@ -142,12 +143,6 @@ async function withHost(
 }
 
 const settle = () => new Promise((resolve) => setImmediate(resolve));
-
-function deferred() {
-  let resolve!: () => void;
-  const promise = new Promise<void>((done) => { resolve = done; });
-  return { promise, resolve };
-}
 
 /** Bounded by wall time, not turns: restarts do real file I/O that a loaded CI lane can slow down. */
 async function waitFor(predicate: () => boolean | Promise<boolean>) {

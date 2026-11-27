@@ -12,6 +12,7 @@ import {
   type AndroidFoldSnapshot,
   type AndroidFoldState,
 } from "./device-fold";
+import { deferred } from "../../main/shared/async-test-support.js";
 
 const OPEN: AndroidFoldState = { supported: true, posture: "opened", hingeAngle: 180 };
 const CLOSED: AndroidFoldState = { supported: true, posture: "closed", hingeAngle: 0 };
@@ -42,16 +43,6 @@ function fakeClock() {
     },
     pending: () => timers.size,
   };
-}
-
-function deferred<T>() {
-  let resolve!: (value: T) => void;
-  let reject!: (error: unknown) => void;
-  const promise = new Promise<T>((res, rej) => {
-    resolve = res;
-    reject = rej;
-  });
-  return { promise, resolve, reject };
 }
 
 const tick = async () => {

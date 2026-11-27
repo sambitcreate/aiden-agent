@@ -1,16 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { LocalSpeechLane } from "./local-speech-lane.js";
-
-function deferred<T>() {
-  let resolve!: (value: T) => void;
-  let reject!: (error: unknown) => void;
-  const promise = new Promise<T>((resolvePromise, rejectPromise) => {
-    resolve = resolvePromise;
-    reject = rejectPromise;
-  });
-  return { promise, resolve, reject };
-}
+import { deferred } from "../shared/async-test-support.js";
 
 test("cancelling queued local speech work leaves the active request running", async () => {
   const lane = new LocalSpeechLane();

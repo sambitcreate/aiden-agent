@@ -6,6 +6,7 @@ import { SUBAGENT_READ_TOOL_NAMES } from "./capability-profile.js";
 import type { SubagentTaskResult } from "./contracts.js";
 import { SubagentEventProjector } from "./subagent-event-projector.js";
 import { SubagentReplyClock, SubagentSupervisor, type PreparedSubagentRun } from "./subagent-supervisor.js";
+import { deferred } from "../../shared/async-test-support.js";
 
 function runtime(): ResolvedModelRuntime {
   return {
@@ -64,14 +65,6 @@ function persistedChat() {
       },
     ],
   };
-}
-
-function deferred() {
-  let resolve = (): void => undefined;
-  const promise = new Promise<void>((resolvePromise) => {
-    resolve = resolvePromise;
-  });
-  return { promise, resolve };
 }
 
 async function tick(): Promise<void> {

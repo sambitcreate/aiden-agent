@@ -29,6 +29,7 @@ import { fauxAssistantMessage } from "@earendil-works/pi-ai/providers/faux";
 import { createPiCodemodeTool } from "./pi-codemode.js";
 import { advanceAttendedToolErrorState } from "./assistant/tool-loop-guard.js";
 import { processRunning } from "../shared/process-liveness-test-support.js";
+import { deferred } from "../shared/async-test-support.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -3240,13 +3241,6 @@ test("foreground matcher capacity rejects excess work and recovers after concurr
   assert.ok(outcomes.every((outcome) => outcome.status === "rejected" && outcome.reason.message === "capacity test cancelled"));
   assert.deepEqual(await withCodingToolMatcher("grep", "safe", Date.now() + 5_000, undefined, async (match) => match(["other", "safe"], 1)), [1]);
 });
-
-function deferred<T = void>() {
-  let resolve!: (value: T | PromiseLike<T>) => void;
-  let reject!: (error: unknown) => void;
-  const promise = new Promise<T>((yes, no) => { resolve = yes; reject = no; });
-  return { promise, resolve, reject };
-}
 
 test("foreground callers cancel pending reads and late acquisitions while handles retain an owner", { timeout: 15_000 }, async (t) => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-parent-pending-"));

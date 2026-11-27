@@ -14,12 +14,7 @@ import {
   emptyPortableConfig,
   type PortableConfigShape,
 } from "./portable-config-core.js";
-
-function deferred<T = void>() {
-  let resolve!: (value: T | PromiseLike<T>) => void;
-  const promise = new Promise<T>((r) => (resolve = r));
-  return { promise, resolve };
-}
+import { deferred } from "../shared/async-test-support.js";
 
 async function portableStore(t: test.TestContext) {
   const base = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-roundtrip-"));

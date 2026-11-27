@@ -23,6 +23,7 @@ import type {
   SubagentRunStoreGeneration,
   SubagentRunStoreStorage,
 } from "./subagent-run-store-io.js";
+import { deferred } from "../../shared/async-test-support.js";
 
 async function testDirectory(t: test.TestContext): Promise<string> {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-subagent-runs-"));
@@ -92,14 +93,6 @@ test("lossless V1 migration accepts only exact non-normalizing evidence", () => 
     ),
   );
 });
-
-function deferred<T = void>() {
-  let resolve!: (value: T | PromiseLike<T>) => void;
-  const promise = new Promise<T>((resolvePromise) => {
-    resolve = resolvePromise;
-  });
-  return { promise, resolve };
-}
 
 function framedIrregularEncoding(value: string): string {
   const chunks: string[] = [];
