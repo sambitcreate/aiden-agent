@@ -11,9 +11,6 @@ export interface RectBounds {
   height: number;
 }
 
-/** Transparent outer shadow padding around the visible floating card (`px-14 pt-10 pb-[68px]`). */
-export const QUICK_CHAT_SHADOW_MARGIN = 56;
-
 export const QUICK_CHAT_STAGE_SIZES: Record<QuickChatWindowMode, { width: number; height: number }> = {
   // 512x132 visible starter bar + 56px L/R, 40px top, 68px bottom shadow gutter (zero shadow clip).
   starter: { width: 624, height: 240 },
