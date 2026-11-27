@@ -252,6 +252,7 @@
         "main/services/analytics/analytics-sanitize.test.ts",
         "main/services/analytics/analytics-service.test.ts",
         "main/handlers/analytics.test.ts",
+        "renderer/shared/design-canvas/app-devices.test.ts",
         "renderer/shared/design-canvas/app-routes.test.ts",
         "scripts/analytics-build-config.test.mjs",
         "main/services/hooks/hook-config.test.ts",

@@ -602,6 +602,7 @@ import {
 import { createDesignMdTurn, withDesignModeSection, type DesignMdTurn } from "./design-canvas/design-md/turn.js";
 import { createDesignNoteOffers, designMdLive, designMdTurnDeps, designOfferable } from "./design-canvas/design-md/turn-wiring.js";
 import { reportAnalyticsEvent } from "./analytics/analytics-report.js";
+import { deviceBucket } from "../../renderer/shared/design-canvas/app-devices.js";
 import { designTurnPages } from "./design-canvas/views.js";
 import {
   createDesignCanvasTools,
@@ -3146,7 +3147,15 @@ async function prepareGeneration(
         stillAvailable: canvasStillAvailable,
         ...(mdTurn ? { designMdLine: (toolSignal?: AbortSignal) => mdTurn.canvasReadLine(toolSignal ?? signal) } : {}),
         // Live app frames (design mode v2 Phase 3a, D17): kind app, read from the workspace's app servers.
-        ...(designLive ? { designLive: true, apps: { snapshot: (workspaceId: string) => designAppServers.snapshot(workspaceId) } } : {}),
+        ...(designLive
+          ? {
+              designLive: true,
+              apps: { snapshot: (workspaceId: string) => designAppServers.snapshot(workspaceId) },
+              // 3b (S88, call site 1): Aiden's own app frames, once saved.
+              onAppFrameAdded: (viewportWidth: number) =>
+                reportAnalyticsEvent("design_app_frame_added", { source: "aiden", device_bucket: deviceBucket(viewportWidth) }),
+            }
+          : {}),
       }),
       // The design_system tool joins the canvas tools, so it is declared, held and refused with them.
       ...(mdTurn ? [mdTurn.tool] : []),

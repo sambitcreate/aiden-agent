@@ -771,9 +771,19 @@ export function AppFrame({
     );
   }
 
+  // 3b (S85): a variant's label follows the title, in muted text.
+  const titledRow = frame.label ? (
+    <>
+      {titleSlot ?? <span className="min-w-0 flex-1 truncate text-strong text-primary">{frame.title}</span>}
+      <span className="max-w-[40%] shrink-0 truncate text-secondary">{frame.label}</span>
+    </>
+  ) : (
+    titleSlot
+  );
+
   return (
     <div className="h-full w-full" onDoubleClick={enterable ? onEnter : undefined}>
-      <CanvasNodeChrome title={frame.title} titleSlot={titleSlot} selected={selected} flush status={statusRow} toolbar={actions}>
+      <CanvasNodeChrome title={frame.title} titleSlot={titledRow} selected={selected} flush status={statusRow} toolbar={actions}>
         <div ref={contentRef} className="relative h-full w-full overflow-hidden rounded-b-button">
           {body}
           {frame.guide ? <LayoutGuide guide={frame.guide} scale={scale} /> : null}

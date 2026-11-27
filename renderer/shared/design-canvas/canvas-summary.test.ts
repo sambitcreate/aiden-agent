@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
+  summarizeFrame,
   CANVAS_STATUS_SECTION,
   canvasPromptLine,
   canvasReadCursorPage,
@@ -422,4 +423,31 @@ test("a selection goes to the conversation once, and again only when it changes"
   const moved = withCanvasStatusNote(next, canvasPromptLine(doc, undefined, ["settings"]), 3);
   assert.equal(moved.messages.length, next.messages.length + 1);
   assert.match(String((moved.messages[moved.messages.length - 1] as unknown as { sections: Record<string, string> }).sections[CANVAS_STATUS_SECTION]), /"Settings"/);
+});
+
+test("3b: an app frame's summary carries its label and the frame it is a variant of; other kinds never do", () => {
+  const app = {
+    id: "v2",
+    kind: "app",
+    title: "Pricing v2",
+    pageId: "page-1",
+    x: 0,
+    y: 0,
+    w: 640,
+    h: 436,
+    appRoot: ".",
+    route: "/pricing-v2",
+    viewport: { width: 1280, height: 800 },
+    scale: 0.5,
+    label: "Bold",
+    variantOf: "v1",
+    createdBy: "aiden",
+  } as DesignFrame;
+  const summary = summarizeFrame(app);
+  assert.equal(summary.label, "Bold");
+  assert.equal(summary.variantOf, "v1");
+  assert.equal(summary.title, "Pricing v2");
+  const plain = summarizeFrame(note("n", 0, 0, { label: "x", variantOf: "v1" } as Partial<DesignFrame>));
+  assert.equal("label" in plain, false);
+  assert.equal("variantOf" in plain, false);
 });

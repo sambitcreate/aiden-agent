@@ -869,3 +869,12 @@ test("an app frame's actions are the Dark switch and Download as PNG or PDF, wit
   assert.deepEqual(items, ["PNG image", "PDF"]);
   assert.equal(screen.queryByText("PDF paper"), null, "paper and layout are a page's");
 });
+
+// ── 3b: the variant label (S85) ──
+
+test("3b: a variant's label shows after the title in the frame's header", async () => {
+  setup();
+  render(<Harness frame={appFrame({ title: "Pricing v2", label: "Calm" })} />);
+  assert.ok(screen.getByText("Pricing v2"));
+  assert.ok(screen.getByText("Calm"));
+});
