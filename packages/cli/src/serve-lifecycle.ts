@@ -15,7 +15,7 @@ import { spawn, spawnSync, type ChildProcess } from "node:child_process";
 import { closeSync, existsSync, openSync, readFileSync, realpathSync, rmSync } from "node:fs";
 import { createConnection } from "node:net";
 import { join, relative, resolve } from "node:path";
-import { daemonSocket } from "./daemon-control.ts";
+import { assertDaemonSocketPathFits, daemonSocket } from "./daemon-control.ts";
 import { acquireLease, atomicJson, cliLeaseHelperPath, leaseGuardPath, readJson } from "./state.ts";
 import { tryAcquireProcessLifetimeLock } from "../../../main/services/process-lifetime-lock.ts";
 import { watchMcpProcessGroupRecords } from "../../../main/services/mcp-stdio-transport.js";
@@ -466,6 +466,7 @@ export async function startDaemon(agentDir: string, options: { remote?: boolean;
   if (process.platform === "win32") {
     throw new Error("`aiden serve --daemon` is not supported on Windows; run `aiden serve` in the foreground instead.");
   }
+  assertDaemonSocketPathFits(agentDir);
   ensurePrivateDirectory(agentDir, "reject");
   const releaseStart = acquireStartLease(agentDir);
   try {

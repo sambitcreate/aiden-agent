@@ -26,6 +26,7 @@ import type {
 import { BotCapabilityNoticeRequiredError } from "./bot-capability-store-core.js";
 import {
   BOT_RUNTIME_AUTHORITY_FAILURE_MESSAGES,
+  BOT_RUNTIME_NOTICE_REQUIRED_MESSAGE,
   assertBotRuntimeProviderSelection,
   BotRuntimeAuthorityError,
   createBotRuntimeAuthorityResolver,
@@ -486,11 +487,12 @@ function fixture(input: {
 async function expectFailure(
   operation: Promise<unknown>,
   classification: BotRuntimeAuthorityError["classification"],
+  message: string = BOT_RUNTIME_AUTHORITY_FAILURE_MESSAGES[classification],
 ): Promise<void> {
   await assert.rejects(operation, (error: unknown) => {
     assert.ok(error instanceof BotRuntimeAuthorityError);
     assert.equal(error.classification, classification);
-    assert.equal(error.message, BOT_RUNTIME_AUTHORITY_FAILURE_MESSAGES[classification]);
+    assert.equal(error.message, message);
     return true;
   });
 }
@@ -712,9 +714,11 @@ test("missing admitted Bot model authority fails closed for Full and Custom acce
 test("the sole store admission gate prevents Full authority before audience notice acceptance", async () => {
   const app = fixture();
   app.requireNotice();
+  // The wire classification stays access_unavailable; the text says the notice is what is missing.
   await expectFailure(
     app.resolver.admit({ audienceId: "device-a", botId: "bot-a", chatId: "chat-a" }),
     "access_unavailable",
+    BOT_RUNTIME_NOTICE_REQUIRED_MESSAGE,
   );
 });
 
@@ -782,6 +786,7 @@ test("failed runtime admission releases its inventory lease", async () => {
   await expectFailure(
     app.resolver.admit({ audienceId: "device-a", botId: "bot-a", chatId: "chat-a" }),
     "access_unavailable",
+    BOT_RUNTIME_NOTICE_REQUIRED_MESSAGE,
   );
   assert.equal(app.activeInventoryLeases, 0);
 });

@@ -888,12 +888,18 @@ test("Remote HTTPS serves private workspaces, persists turns once, replays SSE a
   const features = (await request("/server")).data.features;
   assert.ok(features.includes("chat-fork-v1")); assert.ok(!features.includes("chat-fork-summary-v1"));
   assert.ok(!features.includes("bot-durable-session-v1")); assert.ok(!features.includes("bot-memory-v1")); assert.ok(!features.includes("bot-proactive-v1"));
+  // The opt-in host descriptor names this server's platform, as a desktop's does.
+  const descriptor = await request("/health?detail=host");
+  assert.equal(descriptor.status, 200, JSON.stringify(descriptor));
+  assert.equal(descriptor.data.platform, { darwin: "mac", linux: "linux" }[process.platform]);
   // The server has no skill registry, so it neither advertises skills nor grants them.
   assert.ok(!features.includes("chat-skills-v1"));
   // A progress-aware device paired here holds only what `/server` offers it.
-  const { bootstrap } = await remote.service.beginPairing("lan");
+  const { bootstrap, sessionId: pairingSession } = await remote.service.beginPairing("lan");
   const paired = await request("/pairing/exchange", "POST", { secret: bootstrap.secret, deviceName: "Progress phone", deviceType: "iphone", clientVersion: "test", acceptsBotCapabilities: true, acceptsProgressCapabilities: true });
   assert.equal(paired.status, 200, JSON.stringify(paired));
+  // `aiden remote pair-status` reports the finished pairing, not a window still finishing.
+  assert.deepEqual(await remote.command(["pair-status"]), { sessionId: pairingSession, state: "paired", deviceId: paired.data.deviceId });
   const pairedServer = (await request("/server", "GET", undefined, undefined, { authorization: `Bearer ${paired.data.credential}` })).data;
   assert.deepEqual(paired.data.capabilities.filter((capability) => !pairedServer.serverCapabilities.includes(capability)), []);
   assert.ok(!paired.data.capabilities.includes("skills:invoke"));
@@ -1064,6 +1070,9 @@ test("a paired phone sends to a default-mode Bot chat only while the server owne
   const refused = await request(path, "POST", { text: "Still there?" }, "bot-turn-from-phone-02");
   assert.equal(refused.status, 404, JSON.stringify(refused));
   assert.equal(requests.length, 1);
+  // On the server, the same refusal says the notice is what is missing and how to accept it.
+  await assert.rejects(remote.bots.preflight({ audienceId: owner, botId: bot.id, chatId: chat.id, providerId: "cli-test", model: "test" }),
+    (error) => error.classification === "access_unavailable" && /access notice/u.test(error.message) && error.message.includes("aiden bots acknowledge"));
   // Acknowledged again on the host, the phone's turns run once more.
   await app.acknowledgeNotice(owner, { version: notice.version, decision: "customize_first", confirmedForeground: true });
   const resumed = await request(path, "POST", { text: "Still there?" }, "bot-turn-from-phone-03");
@@ -1076,6 +1085,54 @@ test("a paired phone sends to a default-mode Bot chat only while the server owne
     if (archive.streams.some((stream) => stream.streamId === resumed.data.streamId && stream.state === "done")) break;
     await new Promise((resolve) => setTimeout(resolve, 100));
   }
+});
+
+test("once durable Bot sessions are switched on, a paired device's old Bot chat is history only", async (t) => {
+  const dir = temporary(t);
+  // The provider is never reached: every write below is refused before a turn starts.
+  api.atomicJson(join(dir, "models.json"), { providers: { "cli-test": { api: "openai-completions", baseUrl: "http://127.0.0.1:9/v1", apiKey: "test-only", models: [{ id: "test", name: "Test", reasoning: false, input: ["text"], contextWindow: 32000, maxTokens: 4096, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 } }] } } });
+  const original = process.env.AIDEN_CLI_ENTRY; process.env.AIDEN_CLI_ENTRY = join(pkg, "dist/app/cli.js");
+  t.after(() => { if (original === undefined) delete process.env.AIDEN_CLI_ENTRY; else process.env.AIDEN_CLI_ENTRY = original; });
+  const daemon = api.createDaemonChats(dir), scheduler = api.createCliScheduler(dir);
+  const runtime = await api.createCliBots(dir, daemon);
+  const remote = await api.createCliRemote(dir, daemon, scheduler, { bots: runtime, discovery: { async start() {}, stop() {} } });
+  t.after(async () => { await remote.stop(); await scheduler.service.stopAndSettle(); await runtime.stop(); });
+  await remote.start();
+  const owner = "cli:local", app = runtime.application;
+  const notice = await app.noticeStatus(owner);
+  await app.acknowledgeNotice(owner, { version: notice.version, decision: "customize_first", confirmedForeground: true });
+  const catalog = await app.capabilityCatalog(owner);
+  const model = catalog.providers.find((item) => item.label === "cli-test"); assert.ok(model);
+  const bot = await app.createBot({ audienceId: owner, bot: { name: "Ada", instructions: "Help briefly", avatar: { version: 1, shape: "wisp", color: "lilac" } }, access: { accessMode: "custom", catalogRevision: catalog.revision,
+    custom: { providerId: model.id, modelId: model.models[0].id, fileScopeIds: [], shellEnabled: false, connectionIds: [], skillIds: [], otherCapabilityIds: [] } } });
+  const chat = await app.createChat({ audienceId: owner, botId: bot.id, providerId: "cli-test", model: "test" });
+  const status = await remote.service.status();
+  const issued = await remote.state.issueDevice({ name: "Test phone", type: "iphone", clientVersion: "test", capabilities: ["server:read", "chat:read", "chat:write", "bot:read", "bot:write"], acceptsBotCapabilities: true });
+  const ca = readFileSync(join(dir, "remote-tls/ca-certificate.pem"));
+  const request = (path, method = "GET", body, headers = {}) => new Promise((resolve, reject) => {
+    const sent = httpsRequest({ hostname: "127.0.0.1", port: status.lanPort, ca, path: `/api/aiden/v1${path}`, method,
+      headers: { authorization: `Bearer ${issued.credential}`, "aiden-protocol-version": "1", ...(body ? { "content-type": "application/json" } : {}), ...headers } }, (response) => {
+      let data = ""; response.on("data", (chunk) => { data += chunk; }); response.on("end", () => resolve({ status: response.statusCode, data: response.headers["content-type"]?.includes("json") ? JSON.parse(data) : data }));
+    });
+    sent.setTimeout(15000, () => sent.destroy(new Error(`Remote request timed out: ${method} ${path}`)));
+    sent.on("error", reject); sent.end(body ? JSON.stringify(body) : undefined);
+  });
+  const rename = async (title) => request(`/chats/${chat.id}`, "PATCH", { title }, { "if-match": (await request(`/chats/${chat.id}`)).data.revision });
+  // Legacy chats: the owner acknowledged, so the phone may write to the Bot's chat.
+  const renamed = await rename("Ada, before");
+  assert.equal(renamed.status, 200, JSON.stringify(renamed));
+  await runtime.command(["enable-durable"]);
+  // From the switch on, the old chat stays readable but takes no writes.
+  const kept = await request(`/chats/${chat.id}`);
+  assert.equal(kept.status, 200);
+  assert.equal(kept.data.title, "Ada, before");
+  const refusedRename = await rename("Ada, after");
+  assert.equal(refusedRename.status, 404, JSON.stringify(refusedRename));
+  const turn = await request(`/chats/${chat.id}/turns`, "POST", { text: "Hello Ada" }, { "idempotency-key": "bot-turn-durable-0001" });
+  assert.equal(turn.status, 404, JSON.stringify(turn));
+  const stored = await daemon.chatStore.get(chat.id);
+  assert.equal(stored.title, "Ada, before");
+  assert.equal(stored.messages.length, 0, "nothing was appended");
 });
 
 test("a paused Bot stops its running turn, refuses new ones and runs again once unpaused", async (t) => {
@@ -1147,6 +1204,23 @@ test("a paused Bot stops its running turn, refuses new ones and runs again once 
   assert.equal(requests.length, 2);
   await assert.rejects(runtime.command(["pause", "missing-bot"]), /no longer exists/u);
   await assert.rejects(runtime.command(["pause"]), /Usage: bots pause/u);
+
+  // Commands that read a JSON file print their usage without one, and name a file that is missing or malformed.
+  for (const [args, usage] of [[["create"], /Usage: bots create </u], [["update"], /Usage: bots update </u], [["access"], /Usage: bots access </u],
+    [["chat", bot.id], /Usage: bots chat </u], [["chat"], /Usage: bots chat </u], [["chat-access"], /Usage: bots chat-access </u], [["acknowledge"], /Usage: bots acknowledge /u]]) {
+    await assert.rejects(runtime.command(args), usage, args.join(" "));
+  }
+  const missing = join(dir, "no-such-bot.json");
+  await assert.rejects(runtime.command(["create", missing]), (error) => error.message.startsWith(`No file at ${missing}.`) && /Usage: bots create/u.test(error.message));
+  await assert.rejects(runtime.command(["chat", bot.id, missing]), (error) => error.message.startsWith(`No file at ${missing}.`));
+  writeFileSync(join(dir, "broken.json"), "{ bot:");
+  await assert.rejects(runtime.command(["create", join(dir, "broken.json")]), /broken\.json is not valid JSON/u);
+  await assert.rejects(runtime.command(["acknowledge", "{ version"]), /not valid JSON\. Usage: bots acknowledge/u);
+  const before = (await app.list()).length;
+  // A real file still creates the Bot.
+  writeFileSync(join(dir, "grace.json"), JSON.stringify({ bot: { name: "Grace", instructions: "Help briefly", avatar: { version: 1, shape: "wisp", color: "lilac" } }, access: { accessMode: "custom", catalogRevision: catalog.revision, custom } }));
+  assert.equal((await runtime.command(["create", join(dir, "grace.json")])).name, "Grace");
+  assert.equal((await app.list()).length, before + 1);
 });
 
 test("isolated subagent inference executes only parent-owned tools with immutable fork context", async (t) => {

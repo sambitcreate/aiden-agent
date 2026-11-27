@@ -59,11 +59,21 @@ export const BOT_RUNTIME_AUTHORITY_FAILURE_MESSAGES = Object.freeze({
 
 export type BotRuntimeAuthorityFailure = keyof typeof BOT_RUNTIME_AUTHORITY_FAILURE_MESSAGES;
 
+/**
+ * The fixed text of an `access_unavailable` refusal whose cause is the Bot
+ * access notice: nobody accepted it for this audience, or it was accepted to
+ * customize first while the Bot (or chat) still has Full Access. The
+ * classification stays `access_unavailable`, which clients and routine
+ * failures already decode; only the text says what to do.
+ */
+export const BOT_RUNTIME_NOTICE_REQUIRED_MESSAGE =
+  "This Bot can't act until the Bot access notice is accepted. Accept it with Full Access, or give the Bot Custom access. On an Aiden server, run `aiden bots notice`, then `aiden bots acknowledge`.";
+
 export class BotRuntimeAuthorityError extends Error {
   readonly name = "BotRuntimeAuthorityError";
 
-  constructor(readonly classification: BotRuntimeAuthorityFailure) {
-    super(BOT_RUNTIME_AUTHORITY_FAILURE_MESSAGES[classification]);
+  constructor(readonly classification: BotRuntimeAuthorityFailure, message?: typeof BOT_RUNTIME_NOTICE_REQUIRED_MESSAGE) {
+    super(message ?? BOT_RUNTIME_AUTHORITY_FAILURE_MESSAGES[classification]);
   }
 }
 
@@ -591,6 +601,10 @@ export class BotRuntimeAuthorityResolver {
           error instanceof BotCapabilityValidationError
         ) {
           fail(bindingDriftClassification(error));
+        }
+        // By name: the store may come from another module instance.
+        if (error instanceof Error && error.name === "BotCapabilityNoticeRequiredError") {
+          throw new BotRuntimeAuthorityError("access_unavailable", BOT_RUNTIME_NOTICE_REQUIRED_MESSAGE);
         }
         throw error;
       }

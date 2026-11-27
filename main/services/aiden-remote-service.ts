@@ -32,7 +32,7 @@ import {
   type AidenRemoteRouterDependencies,
 } from "./aiden-remote-router.js";
 import {
-  isAidenRemotePairedDevice,
+  isAidenRemoteLivePairedDevice,
   type AidenRemoteConnectionMode,
   type AidenRemoteStateDocument,
   type AidenRemoteStateRegistry,
@@ -714,7 +714,7 @@ export class AidenRemoteService {
       };
 
       const mayMoveFreshProfile = !state.lanPortCommitted
-        && !state.devices.some(isAidenRemotePairedDevice)
+        && !state.devices.some(isAidenRemoteLivePairedDevice)
         && state.tailscaleOwnership === undefined;
       const maySelectAlternatePort = mayMoveFreshProfile
         || options.allowEndpointRelocation === true;
@@ -1500,7 +1500,7 @@ export class AidenRemoteService {
         const mode = current.connectionMode === "both" ? "both" : transport;
         // Changing a saved transport can strand existing devices. Keep that an
         // explicit advanced operation, rather than silently choosing both.
-        if (mode !== current.connectionMode && (current.devices.some(isAidenRemotePairedDevice) || current.tailscaleOwnership)) {
+        if (mode !== current.connectionMode && (current.devices.some(isAidenRemoteLivePairedDevice) || current.tailscaleOwnership)) {
           throw new Error("This computer already has a saved connection. Use its current method, or review Connection settings before changing it.");
         }
         if (["finishing", "awaiting_scan"].includes(this.pairingStatus()?.state ?? "")) {
@@ -1680,7 +1680,7 @@ export class AidenRemoteService {
         : tailscaleErrorCode
           ? { tailscaleErrorCode }
           : {}),
-      pairedDeviceCount: state.devices.filter(isAidenRemotePairedDevice).length,
+      pairedDeviceCount: state.devices.filter(isAidenRemoteLivePairedDevice).length,
       approvedRootCount: state.approvedRoots.filter((root) => !root.botsOnly).length,
       ...(this.options.pairingRequestSettings
         ? { acceptPairingRequests: await this.loadPairingRequestSetting() }

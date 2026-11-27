@@ -137,6 +137,34 @@ test("a failed startup releases its lease and the next start succeeds", posix, a
   assert.deepEqual(await server.exited, { code: 0, signal: null }, server.stderr());
 });
 
+test("a data directory too deep for a Unix socket is refused up front with the limit and the fix", posix, async (t) => {
+  const root = mkdtempSync(join(tmpdir(), "aiden-serve-long-"));
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+  const limit = process.platform === "darwin" ? 103 : 107;
+  // One byte over: `<agentDir>/serve.sock` is exactly limit + 1 bytes.
+  const padding = limit + 1 - Buffer.byteLength(join(root, "serve.sock")) - 1;
+  const agentDir = join(root, "d".repeat(padding)), home = join(root, "home");
+  mkdirSync(agentDir, { mode: 0o700 }); mkdirSync(home);
+  assert.equal(Buffer.byteLength(api.daemonSocket(agentDir)), limit + 1);
+  const env = { ...process.env, HOME: home, AIDEN_CODING_AGENT_DIR: agentDir, PI_OFFLINE: "1" };
+  for (const args of [["serve", "--no-remote"], ["serve", "--daemon", "--no-remote"]]) {
+    const refused = run(args, env);
+    assert.notEqual(refused.status, 0, args.join(" "));
+    assert.match(refused.stderr, new RegExp(`${limit + 1} bytes, over the ${limit}-byte limit`, "u"), args.join(" "));
+    assert.match(refused.stderr, /AIDEN_CODING_AGENT_DIR/u);
+    // Refused before anything started: no lease, socket or server log.
+    assert.equal(existsSync(join(agentDir, "serve.lock")), false);
+    assert.equal(existsSync(api.daemonSocket(agentDir)), false);
+  }
+  // At the limit itself the server starts.
+  const fits = join(root, "d".repeat(padding - 1));
+  mkdirSync(fits, { mode: 0o700 });
+  const box = { agentDir: fits, socket: api.daemonSocket(fits), env: { ...env, AIDEN_CODING_AGENT_DIR: fits } };
+  const server = await foreground(t, box);
+  server.child.kill("SIGTERM");
+  assert.deepEqual(await server.exited, { code: 0, signal: null }, server.stderr());
+});
+
 test("an idle or half-sent control client does not hold up shutdown", posix, async (t) => {
   const box = sandbox(t);
   const server = await foreground(t, box);

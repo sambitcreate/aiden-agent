@@ -6,6 +6,7 @@ import { join } from "node:path";
 import { acquireLease } from "./state.ts";
 import { DETACHED_SERVE_ENV, recordServeMcpGroups, recoverStaleServeLease } from "./serve-lifecycle.ts";
 import { createCliScheduler, daemonSocket } from "./schedules.ts";
+import { assertDaemonSocketPathFits } from "./daemon-control.ts";
 import { createDaemonChats } from "./daemon-chats.ts";
 import { createCliTelegram } from "./telegram.ts";
 import { workspaceCommand } from "./workspaces.ts";
@@ -31,6 +32,8 @@ async function serveStatus(remote: CliRemote | undefined, args: string[]) {
 
 /** Local control socket is private to the agent directory's owner. */
 export async function serve(agentDir: string, signal: AbortSignal, options: { remote?: boolean; onReady?: () => void } = {}) {
+  // Before the lease, hooks, Bots or Remote: a socket that cannot bind would fail late and cryptically.
+  assertDaemonSocketPathFits(agentDir);
   ensurePrivateDirectory(agentDir, "reject");
   recoverStaleServeLease(agentDir);
   // startDaemon marks the background daemon so `serve stop` may force-kill its

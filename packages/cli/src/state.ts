@@ -12,6 +12,23 @@ export function readJson<T>(file: string, fallback: T): T {
   }
 }
 
+/**
+ * The JSON file a command names, read by the running server. A missing
+ * argument prints the command's usage; a missing or malformed file says so,
+ * with the absolute path the server looked at, instead of reading as empty.
+ */
+export function requireJsonFile<T>(file: string | undefined, usage: string): T {
+  if (!file) throw new Error(usage);
+  let text: string;
+  try { text = readFileSync(file, "utf8"); }
+  catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") throw new Error(`No file at ${resolve(file)}. ${usage}`);
+    throw new Error(`Cannot read ${resolve(file)}: ${error instanceof Error ? error.message : error}`);
+  }
+  try { return JSON.parse(text) as T; }
+  catch (error) { throw new Error(`${resolve(file)} is not valid JSON: ${error instanceof Error ? error.message : error}`); }
+}
+
 export function atomicJson(file: string, value: unknown): void {
   mkdirSync(dirname(file), { recursive: true, mode: 0o700 });
   const temporary = `${file}.${randomUUID()}.tmp`;

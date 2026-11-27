@@ -1,4 +1,5 @@
-import type { AidenRemoteDesktopPairing, AidenRemotePairingWindowStatus } from "../../../main/services/aiden-remote-pairing.js";
+import type { AidenRemoteDesktopPairing } from "../../../main/services/aiden-remote-pairing.js";
+import type { CliPairingStatus } from "./remote.ts";
 import { reportServerRejection, serverAnalyticsContext, showServerNoticeInTerminal, startServerAnalytics } from "./server-analytics.ts";
 import { remoteDaemonCommand } from "./daemon-control.ts";
 
@@ -115,13 +116,13 @@ export async function showStartupPairing(agentDir: string, requested: PairTransp
   while (!signal.aborted) {
     await wait(Math.min(POLL_MS, Math.max(0, expiresAt - Date.now())), signal);
     if (signal.aborted) return pairing.sessionId;
-    let status: AidenRemotePairingWindowStatus | { state: "none" };
+    let status: CliPairingStatus;
     try { status = await remoteDaemonCommand(agentDir, "remote", ["pair-status"]) as typeof status; } catch { return pairing.sessionId; }
     if (signal.aborted) return pairing.sessionId;
     // Someone opened or closed a window from another shell: that one is theirs to report.
     if (!("sessionId" in status) || status.sessionId !== pairing.sessionId) return pairing.sessionId;
     if (status.state === "failed") { err.write(`aiden: Pairing failed. Run \`aiden remote pair ${transport}\` to try again.\n`); return pairing.sessionId; }
-    if (status.state === "finishing" && status.deviceId) { out.write("A device paired. Run `aiden remote pair lan` (or `aiden remote pair tailscale`) to add another.\n"); return pairing.sessionId; }
+    if (status.state === "paired") { out.write("A device paired. Run `aiden remote pair lan` (or `aiden remote pair tailscale`) to add another.\n"); return pairing.sessionId; }
     if (status.state === "expired" || Date.now() >= expiresAt) { out.write("The pairing code expired. Run `aiden remote pair lan` (or `aiden remote pair tailscale`) for a new code.\n"); return pairing.sessionId; }
   }
   return pairing.sessionId;

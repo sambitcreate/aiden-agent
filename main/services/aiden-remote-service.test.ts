@@ -2085,6 +2085,26 @@ test("failed pairing removes only the new route when existing access stays enabl
   } finally { await f.cleanup(); }
 });
 
+test("a removed device is kept for Settings but neither counts as paired nor pins the connection method", async () => {
+  const f = await fixture({ tailscaleAssessment: { state: "owned" } });
+  try {
+    await f.service.setEnabled(true);
+    const issued = await f.state.issueDevice({ name: "Old phone", type: "iphone", clientVersion: "1" });
+    assert.equal((await f.service.status()).pairedDeviceCount, 1);
+    // A live phone could be stranded by a method change, so guided setup refuses one.
+    await assert.rejects(f.service.setupPairing("tailscale", await f.state.snapshot()), /saved connection/);
+    assert.equal(await f.state.revokeDevice(issued.device.id), true);
+    assert.equal((await f.service.status()).pairedDeviceCount, 0);
+    const listed = await f.state.listDevices();
+    assert.equal(listed.length, 1, "the removed phone stays listed");
+    assert.notEqual(listed[0]?.revokedAt, undefined);
+    // Nothing is left to strand, so the person may now switch to Tailscale.
+    const pairing = await f.service.setupPairing("tailscale", await f.state.snapshot());
+    assert.ok(pairing.qrPayload);
+    assert.equal((await f.state.snapshot()).connectionMode, "tailscale");
+  } finally { await f.cleanup(); }
+});
+
 test("guided setup never changes the mode of a saved private connection", async () => {
   const f = await fixture({ mode: "tailscale", tailscaleAssessment: { state: "owned" } });
   try {
