@@ -224,33 +224,48 @@ function startsWith(longer: readonly string[], prefix: readonly string[]): boole
   return longer.length > prefix.length && prefix.every((token, position) => longer[position] === token);
 }
 
+/**
+ * Each page file of a whole tree, in order, with its pattern and whether the
+ * tree makes it a layout: a flat file (TanStack, React Router) with child or
+ * index routes. Non-pages are left out.
+ */
+export function routeFileEntries(convention: RouteConvention, relPaths: readonly string[]): { relPath: string; route: string; layout: boolean }[] {
+  if (convention !== "tanstack" && convention !== "react-router-flat") {
+    return relPaths.flatMap((relPath) => {
+      const route = routeFromFile(convention, relPath);
+      return route === null ? [] : [{ relPath, route, layout: false }];
+    });
+  }
+  const files = relPaths
+    .map((relPath) => ({ relPath, file: flatFile(convention, relPath) }))
+    .filter((entry): entry is { relPath: string; file: FlatFile } => entry.file !== null);
+  const out: { relPath: string; route: string; layout: boolean }[] = [];
+  for (const { relPath, file } of files) {
+    if (file.route === null) continue;
+    const layout =
+      !file.index &&
+      files.some(({ file: other }) => other !== file && (startsWith(other.key, file.key) || (other.index && other.key.join("\0") === file.key.join("\0"))));
+    out.push({ relPath, route: file.route, layout });
+  }
+  return out;
+}
+
 /** Every pattern of a whole tree: like `routeFromFile`, but a layout with child or index routes is dropped. */
 export function routesFromFiles(convention: RouteConvention, relPaths: readonly string[]): string[] {
   const out: string[] = [];
   const seen = new Set<string>();
-  const add = (route: string | null) => {
-    if (route !== null && !seen.has(route)) {
-      seen.add(route);
-      out.push(route);
-    }
-  };
-  if (convention !== "tanstack" && convention !== "react-router-flat") {
-    for (const path of relPaths) add(routeFromFile(convention, path));
-    return out;
-  }
-  const files = relPaths.map((path) => flatFile(convention, path)).filter((file): file is FlatFile => file !== null);
-  for (const file of files) {
-    if (file.route === null) continue;
-    const isLayout =
-      !file.index && files.some((other) => other !== file && (startsWith(other.key, file.key) || (other.index && other.key.join("\0") === file.key.join("\0"))));
-    if (!isLayout) add(file.route);
+  for (const entry of routeFileEntries(convention, relPaths)) {
+    if (entry.layout || seen.has(entry.route)) continue;
+    seen.add(entry.route);
+    out.push(entry.route);
   }
   return out;
 }
 
 // ---- The tokenizer (S78, M8.4) ----
 
-export type TsToken = { kind: "id" | "str" | "punct"; value: string };
+/** One token. With `scanTsTokens`'s `offsets`, a `str` token also has its span in the text, quotes included. */
+export type TsToken = { kind: "id" | "str" | "punct"; value: string; start?: number; end?: number };
 
 const isIdStart = (code: number) => (code >= 65 && code <= 90) || (code >= 97 && code <= 122) || code === 95 || code === 36;
 const isIdPart = (code: number) => isIdStart(code) || (code >= 48 && code <= 57);
@@ -336,8 +351,13 @@ function skipTemplate(text: string, start: number): number {
   return -1;
 }
 
-/** One forward pass over TS/JS text: identifiers, strings (escapes decoded) and punctuation; comments and template literals skipped; null when unterminated or past `maxTokens`. */
-export function scanTsTokens(text: string, maxTokens = DEFAULT_MAX_TOKENS): TsToken[] | null {
+/**
+ * One forward pass over TS/JS text: identifiers, strings (escapes decoded) and
+ * punctuation; comments and template literals skipped; null when unterminated
+ * or past `maxTokens`. With `offsets`, each `str` token also carries `start`
+ * and `end`, so `text.slice(start, end)` is its quoted source.
+ */
+export function scanTsTokens(text: string, maxTokens = DEFAULT_MAX_TOKENS, options: { offsets?: boolean } = {}): TsToken[] | null {
   const tokens: TsToken[] = [];
   let position = 0;
   const push = (token: TsToken) => {
@@ -358,7 +378,8 @@ export function scanTsTokens(text: string, maxTokens = DEFAULT_MAX_TOKENS): TsTo
     } else if (character === "'" || character === '"') {
       const string = readString(text, position);
       if (!string) return null;
-      if (!push({ kind: "str", value: string.value })) return null;
+      const token: TsToken = options.offsets ? { kind: "str", value: string.value, start: position, end: string.end } : { kind: "str", value: string.value };
+      if (!push(token)) return null;
       position = string.end;
     } else if (character === "`") {
       position = skipTemplate(text, position);

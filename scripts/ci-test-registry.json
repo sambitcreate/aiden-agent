@@ -489,7 +489,9 @@
         "main/services/design-canvas/app-frames/app-bridge-main.test.ts",
         "main/services/design-canvas/app-frames/app-export-core.test.ts",
         "main/services/design-canvas/app-frames/app-frame-switches.test.ts",
-        "renderer/shared/design-canvas/app-variants.test.ts"
+        "renderer/shared/design-canvas/app-variants.test.ts",
+        "main/services/design-canvas/app-server/app-page-files-core.test.ts",
+        "main/services/design-canvas/app-server/app-page-files.test.ts"
       ],
       "preserved": [
         "browser"
