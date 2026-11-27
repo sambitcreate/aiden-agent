@@ -784,9 +784,12 @@ export function registerDesignCanvasHandlers<Event>(deps: {
     if (("placed" in result || "already" in result) && (await stillFraming(chat.id, workspaceId))) {
       const frameId = "placed" in result ? result.placed : result.already;
       // Unlike a visual, the frame is focused on its own page too, so the person sees what Add did.
-      const focusId = await pages.show(workspaceId, result.pageId);
+      // The view is kept only while the chat still frames this workspace, checked again after the show's own load.
+      const focusId = await pages.show(workspaceId, result.pageId, () => stillFraming(chat.id, workspaceId));
       // The person's own focus: the canvas shows it even though they just clicked there.
-      if (focusId !== undefined) deps.sendFocus?.(event, { chatId: chat.id, pageId: result.pageId, frameIds: [frameId], focusId, own: true });
+      if (focusId !== undefined && (await stillFraming(chat.id, workspaceId))) {
+        deps.sendFocus?.(event, { chatId: chat.id, pageId: result.pageId, frameIds: [frameId], focusId, own: true });
+      }
     }
     if ("placed" in result) {
       try {

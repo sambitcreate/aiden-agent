@@ -1779,6 +1779,32 @@ test("3b: a chat that leaves design mode or moves while main reads its apps gets
   }
 });
 
+test("3b: a chat that leaves or moves while main shows the placed frame's page keeps no view there and gets no focus", async (t) => {
+  for (const change of [
+    (chat: DesignCanvasChat): DesignCanvasChat => {
+      const { designMode: _left, ...rest } = chat;
+      return rest;
+    },
+    (chat: DesignCanvasChat): DesignCanvasChat => ({ ...chat, workspaceId: "workspace-2" }),
+  ]) {
+    const chats: Record<string, DesignCanvasChat> = { "chat-1": { id: "chat-1", workspaceId: "workspace-1", designMode: true } };
+    const original = chats["chat-1"]!;
+    const { invoke, views, broadcasts, focusSent } = await pickerFixture(t, { chats });
+    // The views' own load is the await inside showing the page: once the frame is saved, the chat changes during it.
+    const internals = views as unknown as { workspace(id: string): Promise<unknown> };
+    const load = internals.workspace.bind(views);
+    internals.workspace = async (id) => {
+      if (broadcasts.length > 0) chats["chat-1"] = change(original);
+      return load(id);
+    };
+    const answer = await invoke("designCanvas:placeAppRoute", "chat-1", { appRoot: ".", route: "/pricing" });
+    assert.ok("placed" in (answer as object), "the frame was saved before the chat changed");
+    internals.workspace = load;
+    assert.equal(await views.get("chat-1", "workspace-1"), undefined, "no view was kept for the workspace the chat left");
+    assert.deepEqual(focusSent, [], "no focus reached the chat");
+  }
+});
+
 test("3b: placeAppRoute in a workspace whose apps are unavailable answers unavailable", async (t) => {
   const { invoke } = await pickerFixture(t, { target: "unavailable" });
   assert.deepEqual(await invoke("designCanvas:placeAppRoute", "chat-1", { appRoot: ".", route: "/pricing" }), { error: "unavailable" });
