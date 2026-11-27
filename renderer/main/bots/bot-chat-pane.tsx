@@ -1288,6 +1288,15 @@ export function BotChatPane({ botId }: { botId: string }) {
     plan: plan !== null && plan !== undefined && !pendingPlan,
   });
 
+  const stopRow = (
+    <div className="aiden-dock-inset chat-content-column flex justify-end pb-4 pt-2">
+      <Button variant="filled" size="small" onClick={stop}>
+        <Square aria-hidden="true" />
+        Stop
+      </Button>
+    </div>
+  );
+
   const footer = (
     <NeedsYouFocusScope currentKey={slot.current?.key} className="flex flex-col">
       <NeedsYouAnnouncer slot={slot} />
@@ -1315,12 +1324,7 @@ export function BotChatPane({ botId }: { botId: string }) {
             />
           </div>
           {/* The card replaces the composer, so Stop lives here while it waits. */}
-          <div className="aiden-dock-inset chat-content-column flex justify-end pb-4 pt-2">
-            <Button variant="filled" size="small" onClick={stop}>
-              <Square aria-hidden="true" />
-              Stop
-            </Button>
-          </div>
+          {stopRow}
         </>
       ) : (
         <Composer
@@ -1366,14 +1370,7 @@ export function BotChatPane({ botId }: { botId: string }) {
         />
       )}
       {/* The composer's send answers the card, so Stop lives here while it waits. */}
-      {handoff && !askingQuestion && running ? (
-        <div className="aiden-dock-inset chat-content-column flex justify-end pb-4 pt-2">
-          <Button variant="filled" size="small" onClick={stop}>
-            <Square aria-hidden="true" />
-            Stop
-          </Button>
-        </div>
-      ) : null}
+      {handoff && !askingQuestion && running ? stopRow : null}
     </NeedsYouFocusScope>
   );
 
