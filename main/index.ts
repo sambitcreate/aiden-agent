@@ -275,13 +275,14 @@ let resolveShortcutInitialization: (() => void) | null = null;
 const shortcutInitializationPromise = new Promise<void>((resolve) => {
   resolveShortcutInitialization = resolve;
 });
-let closeGuard = {
+const EMPTY_CLOSE_GUARD = {
   dirty: false,
   gitBusy: false,
   path: undefined as string | undefined,
   saving: false,
   sources: undefined as CloseGuardSources | undefined,
 };
+let closeGuard = { ...EMPTY_CLOSE_GUARD };
 let protectedAction: "close" | "quit" | "reload" | "onboarding-reset" | null =
   null;
 let forceAppQuit = false;
@@ -1090,13 +1091,7 @@ async function requestWindowReload(
   if (window.isDestroyed() || !lifecycleCheck.tryBegin()) return;
   try {
     if (!(await authorizeProtectedAction(window, "reload"))) return;
-    closeGuard = {
-      dirty: false,
-      gitBusy: false,
-      path: undefined,
-      saving: false,
-      sources: undefined,
-    };
+    closeGuard = { ...EMPTY_CLOSE_GUARD };
     protectedAction = "reload";
     if (options.ignoreCache) window.webContents.reloadIgnoringCache();
     else window.webContents.reload();
@@ -1848,13 +1843,7 @@ async function createMainWindow(
       mainWindowLoads.clear();
       rendererReadiness.dispose();
     }
-    closeGuard = {
-      dirty: false,
-      gitBusy: false,
-      path: undefined,
-      saving: false,
-      sources: undefined,
-    };
+    closeGuard = { ...EMPTY_CLOSE_GUARD };
     protectedAction = null;
   });
 
