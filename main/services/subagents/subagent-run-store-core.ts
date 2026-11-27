@@ -386,6 +386,21 @@ export function assertUniqueJsonObjectKeys(serialized: string): void {
   if (offset !== serialized.length) fail();
 }
 
+function databaseSchemaKind(keys: readonly string[]): "current" | "legacy" | undefined {
+  if (
+    keys.length === 3 &&
+    keys.includes("version") &&
+    keys.includes("runs") &&
+    keys.includes("pendingChatDeletions")
+  ) {
+    return "current";
+  }
+  if (keys.length === 2 && keys.includes("version") && keys.includes("runs")) {
+    return "legacy";
+  }
+  return undefined;
+}
+
 function parseDatabase(value: unknown, maxRuns: number): SubagentRunDatabaseV1 {
   if (value === undefined) {
     return { version: STORE_VERSION, runs: [], pendingChatDeletions: [] };
@@ -394,23 +409,18 @@ function parseDatabase(value: unknown, maxRuns: number): SubagentRunDatabaseV1 {
     throw new Error("Invalid subagent run database.");
   }
   const candidate = value as Record<string, unknown>;
-  const keys = Object.keys(candidate);
-  const currentSchema =
-    keys.length === 3 &&
-    keys.includes("version") &&
-    keys.includes("runs") &&
-    keys.includes("pendingChatDeletions");
-  const legacySchema = keys.length === 2 && keys.includes("version") && keys.includes("runs");
+  const schema = databaseSchemaKind(Object.keys(candidate));
   if (
-    (!currentSchema && !legacySchema) ||
+    !schema ||
     candidate.version !== STORE_VERSION ||
     !Array.isArray(candidate.runs)
   ) {
     throw new Error("Invalid subagent run database.");
   }
-  const pendingChatDeletions = currentSchema
-    ? normalizedPendingChatDeletions(candidate.pendingChatDeletions)
-    : [];
+  const pendingChatDeletions =
+    schema === "current"
+      ? normalizedPendingChatDeletions(candidate.pendingChatDeletions)
+      : [];
   const pendingChatDeletionSet = new Set(pendingChatDeletions);
 
   const byRunId = new Map<string, SubagentRunSnapshotV1>();
@@ -462,15 +472,9 @@ export function parseSubagentRunDatabaseV1ForMigration(serialized: string): Suba
     throw new Error("Invalid subagent V1 migration source.");
   }
   const candidate = parsed as Record<string, unknown>;
-  const keys = Object.keys(candidate);
-  const currentSchema =
-    keys.length === 3 &&
-    keys.includes("version") &&
-    keys.includes("runs") &&
-    keys.includes("pendingChatDeletions");
-  const legacySchema = keys.length === 2 && keys.includes("version") && keys.includes("runs");
+  const schema = databaseSchemaKind(Object.keys(candidate));
   if (
-    (!currentSchema && !legacySchema) ||
+    !schema ||
     candidate.version !== STORE_VERSION ||
     !Array.isArray(candidate.runs) ||
     candidate.runs.length > MAX_STORED_SUBAGENT_RUNS
@@ -487,7 +491,7 @@ export function parseSubagentRunDatabaseV1ForMigration(serialized: string): Suba
   if (new Set(runs.map(({ runId }) => runId)).size !== runs.length) {
     throw new Error("Subagent V1 migration source has duplicate runs.");
   }
-  const pendingChatDeletions = currentSchema ? candidate.pendingChatDeletions : [];
+  const pendingChatDeletions = schema === "current" ? candidate.pendingChatDeletions : [];
   if (
     !Array.isArray(pendingChatDeletions) ||
     pendingChatDeletions.length > MAX_SUBAGENT_CHAT_TOMBSTONES ||
