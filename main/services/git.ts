@@ -106,6 +106,18 @@ function waitUnlessAborted(pending: Promise<void>, signal: AbortSignal | undefin
   });
 }
 
+function trimBounded<K, V>(
+  map: Map<K, V>,
+  limit: number,
+  keep?: (key: K) => boolean,
+): void {
+  while (map.size > limit) {
+    const oldest = map.keys().next();
+    if (oldest.done || keep?.(oldest.value)) break;
+    map.delete(oldest.value);
+  }
+}
+
 export class GitManagedWorktreeDeleteError extends GitServiceError {
   constructor(
     error: GitServiceError,
@@ -2006,11 +2018,7 @@ export class GitService {
     ) {
       this.verifiedRepoIdentities.delete(canonicalCwd);
       this.verifiedRepoIdentities.set(canonicalCwd, beforeProof);
-      while (this.verifiedRepoIdentities.size > this.cacheEntries) {
-        const oldest = this.verifiedRepoIdentities.keys().next().value as string | undefined;
-        if (!oldest) break;
-        this.verifiedRepoIdentities.delete(oldest);
-      }
+      trimBounded(this.verifiedRepoIdentities, this.cacheEntries);
     } else if (canonicalCwd) {
       this.verifiedRepoIdentities.delete(canonicalCwd);
     }
@@ -2313,11 +2321,7 @@ export class GitService {
       expiresAt: Date.now() + this.cacheTtlMs,
       value,
     });
-    while (cache.size > this.cacheEntries) {
-      const oldest = cache.keys().next().value as string | undefined;
-      if (!oldest) break;
-      cache.delete(oldest);
-    }
+    trimBounded(cache, this.cacheEntries);
   }
 
   private invalidate(commonDir: string): void {
@@ -2331,11 +2335,7 @@ export class GitService {
     const next = (this.mutationEpochs.get(commonDir) ?? 0) + 1;
     this.mutationEpochs.delete(commonDir);
     this.mutationEpochs.set(commonDir, next);
-    while (this.mutationEpochs.size > this.cacheEntries) {
-      const oldest = this.mutationEpochs.keys().next().value as string | undefined;
-      if (!oldest || this.mutations.has(oldest)) break;
-      this.mutationEpochs.delete(oldest);
-    }
+    trimBounded(this.mutationEpochs, this.cacheEntries, (key) => this.mutations.has(key));
   }
 
   private enqueueMutation<T>(commonDir: string, operation: () => Promise<T>): Promise<T> {
@@ -2454,10 +2454,7 @@ export class GitService {
     if (!afterSignature || afterSignature !== expectedSignature) return;
     this.repoRemoteHints.delete(commonDir);
     this.repoRemoteHints.set(commonDir, { configSignature: afterSignature, hasRemote, defaultBranch });
-    if (this.repoRemoteHints.size > this.cacheEntries) {
-      const oldest = this.repoRemoteHints.keys().next().value as string | undefined;
-      if (oldest !== undefined) this.repoRemoteHints.delete(oldest);
-    }
+    trimBounded(this.repoRemoteHints, this.cacheEntries);
   }
 
   private async seedCreatedWorktreeDisplayCache(
@@ -2564,10 +2561,7 @@ export class GitService {
     this.repositoryIdentities.delete(repo.cwd);
     if (!canonicalKey) return;
     this.repositoryIdentities.set(repo.cwd, { topLevel: repo.topLevel, canonicalKey });
-    if (this.repositoryIdentities.size > MAX_REPOSITORY_IDENTITIES) {
-      const oldest = this.repositoryIdentities.keys().next().value;
-      if (oldest !== undefined) this.repositoryIdentities.delete(oldest);
-    }
+    trimBounded(this.repositoryIdentities, MAX_REPOSITORY_IDENTITIES);
   }
 
   /**
@@ -2704,11 +2698,7 @@ export class GitService {
           digest = createHash("sha256").update(contents).digest("hex");
           this.snapshotFileCache.delete(cacheKey);
           this.snapshotFileCache.set(cacheKey, { digest, signature });
-          while (this.snapshotFileCache.size > SNAPSHOT_CACHE_ENTRIES) {
-            const oldest = this.snapshotFileCache.keys().next().value as string | undefined;
-            if (!oldest) break;
-            this.snapshotFileCache.delete(oldest);
-          }
+          trimBounded(this.snapshotFileCache, SNAPSHOT_CACHE_ENTRIES);
         }
         hash.update("file\u0000");
         hash.update(digest);
@@ -2902,11 +2892,7 @@ export class GitService {
           deletions: file.deletions,
           binary,
         });
-        while (this.reviewStatsCache.size > SNAPSHOT_CACHE_ENTRIES) {
-          this.reviewStatsCache.delete(
-            this.reviewStatsCache.keys().next().value!,
-          );
-        }
+        trimBounded(this.reviewStatsCache, SNAPSHOT_CACHE_ENTRIES);
       } catch (error) {
         if (
           signal?.aborted ||
