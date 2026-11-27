@@ -2,7 +2,7 @@
 // convention reads, strict no-follow confinement to the app root, and the caps.
 
 import assert from "node:assert/strict";
-import { mkdir, mkdtemp, realpath, rm, symlink, writeFile } from "node:fs/promises";
+import { lstat, mkdir, mkdtemp, realpath, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import test, { type TestContext } from "node:test";
@@ -157,6 +157,62 @@ test("confinement: linked parsed files and linked route files are never read", a
   const rr = await workspace(t, { "real-routes.ts": 'export default [index("a.tsx")];', "app/routes/_index.tsx": "" });
   await symlink(path.join(rr, "real-routes.ts"), path.join(rr, "app/routes.ts"));
   assert.equal(await discoverRoutes(rr, ".", "react-router"), null);
+});
+
+test("confinement: a folder swapped for a link after it was checked or queued is never listed", async (t) => {
+  const outside = await workspace(t, { "admin/page.tsx": "", "page.tsx": "" });
+  const swap = async (target: string) => {
+    await rm(target, { recursive: true, force: true });
+    await symlink(outside, target);
+  };
+
+  // A subfolder queued from its parent's listing becomes a link before its own turn.
+  const queued = await workspace(t, { "app/page.tsx": "", "app/blog/page.tsx": "" });
+  const blog = path.join(queued, "app/blog");
+  const listed: string[] = [];
+  const afterParent: Partial<RouteFs> = {
+    readdir: async (dir) => {
+      listed.push(dir);
+      const entries = await readdir(dir, { withFileTypes: true });
+      if (dir === path.join(queued, "app")) await swap(blog);
+      return entries;
+    },
+  };
+  assert.deepEqual((await discoverRoutes(queued, ".", "next", { fs: afterParent }))?.patterns, ["/"]);
+  assert.equal(listed.includes(blog), false, "the swapped folder isn't listed");
+
+  // The convention folder itself becomes a link right after it was checked.
+  const checked = await workspace(t, { "app/page.tsx": "", "app/x/page.tsx": "" });
+  const app = path.join(checked, "app");
+  let swapped = false;
+  const afterCheck: Partial<RouteFs> = {
+    lstat: async (target) => {
+      const info = await lstat(target);
+      if (target === app && !swapped) {
+        swapped = true;
+        await swap(app);
+      }
+      return info;
+    },
+  };
+  const found = await discoverRoutes(checked, ".", "next", { fs: afterCheck });
+  assert.equal(swapped, true);
+  assert.deepEqual(found?.patterns ?? [], [], "nothing from the outside tree is listed");
+
+  // A parsed file's folder becomes a link while the file is read: its text isn't used.
+  const tree = "export interface FileRoutesByFullPath {\n  '/from-outside': typeof X\n}\n";
+  const elsewhere = await workspace(t, { "routeTree.gen.ts": tree });
+  const tanstack = await workspace(t, { "src/routeTree.gen.ts": "export interface FileRoutesByFullPath {\n  '/': typeof X\n}\n", "src/routes/index.tsx": "" });
+  const src = path.join(tanstack, "src");
+  const duringRead: Partial<RouteFs> = {
+    readBounded: async (file, cap) => {
+      await rm(src, { recursive: true, force: true });
+      await symlink(elsewhere, src);
+      return readBounded(file, cap);
+    },
+  };
+  const read = await discoverRoutes(tanstack, ".", "tanstack-router", { fs: duringRead });
+  assert.equal(read?.patterns.includes("/from-outside"), false);
 });
 
 test("a directory link loop is skipped and the walk ends", async (t) => {

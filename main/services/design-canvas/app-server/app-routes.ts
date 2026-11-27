@@ -2,7 +2,8 @@
 // confined to the workspace before any read: every segment of it is `lstat`ed
 // and must be a real folder, never a link. Inside, no link is ever followed —
 // not a folder, not a file, not the two parsed files, which `readBounded`
-// opens with O_NOFOLLOW. The walk is breadth-first and capped (depth, entries,
+// opens with O_NOFOLLOW, and each folder is read only while it is still a real
+// folder at its own real path (`readRealDir`). The walk is breadth-first and capped (depth, entries,
 // routes); the rules live in `app-routes-core.ts`. Nothing here runs code.
 
 import type { Dirent, Stats } from "node:fs";
@@ -87,6 +88,32 @@ async function conventionFolder(fs: RouteFs, root: string, relative: string): Pr
   return current;
 }
 
+/**
+ * A folder's entries, only while it is the real folder it was when queued or
+ * checked. Node can't list a folder through a no-follow handle, so the read is
+ * fenced instead: right before it, an `lstat` must show a folder, not a link;
+ * right after it, a second `lstat` must show the same folder (device and
+ * inode) and its real path must be the path itself, so no link sits anywhere
+ * above it under `root`. A folder swapped for a link at any point is skipped.
+ */
+async function readRealDir(fs: RouteFs, dir: string): Promise<Dirent[] | null> {
+  return inRealDir(fs, dir, () => fs.readdir(dir));
+}
+
+/** `read`'s answer, only while `dir` stayed the same real folder at its own real path around it; null otherwise. */
+async function inRealDir<T>(fs: RouteFs, dir: string, read: () => Promise<T>): Promise<T | null> {
+  try {
+    const before = await fs.lstat(dir);
+    if (!before.isDirectory() || before.isSymbolicLink()) return null;
+    const value = await read();
+    const after = await fs.lstat(dir);
+    if (!after.isDirectory() || after.isSymbolicLink() || after.dev !== before.dev || after.ino !== before.ino) return null;
+    return (await fs.realpath(dir)) === dir ? value : null;
+  } catch {
+    return null;
+  }
+}
+
 type Budget = { entries: number; truncated: boolean };
 
 function abortError(): Error {
@@ -107,12 +134,8 @@ async function walk(fs: RouteFs, root: string, folder: string, budget: Budget, s
     const next: string[] = [];
     for (const dir of level) {
       if (signal?.aborted) throw abortError();
-      let entries: Dirent[];
-      try {
-        entries = await fs.readdir(dir);
-      } catch {
-        continue;
-      }
+      const entries = await readRealDir(fs, dir);
+      if (!entries) continue;
       for (const entry of entries) {
         if (budget.entries >= ROUTE_LIMITS.entries) {
           budget.truncated = true;
@@ -146,7 +169,8 @@ async function readParsedFile(fs: RouteFs, root: string, relative: string): Prom
   const file = path.join(folder, path.posix.basename(relative));
   const kind = await kindOf(fs, file);
   if (kind === "missing") return "missing";
-  const text = await fs.readBounded(file, ROUTE_LIMITS.fileBytes);
+  // O_NOFOLLOW guards the file; the fence guards the folders above it.
+  const text = await inRealDir(fs, folder, () => fs.readBounded(file, ROUTE_LIMITS.fileBytes));
   return text ?? "refused";
 }
 
