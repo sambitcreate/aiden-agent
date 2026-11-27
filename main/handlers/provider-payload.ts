@@ -14,13 +14,9 @@ import type {
   StoredProvider,
 } from "../services/types.js";
 import { MAX_CONFIG_ID_LENGTH, MAX_PROVIDER_BASE_URL_LENGTH } from "../services/types.js";
+import { asString } from "./voice-codec.js";
 
-export function asString(value: unknown, name: string): string {
-  if (typeof value !== "string" || value.length === 0) {
-    throw new Error(`Expected non-empty string for "${name}".`);
-  }
-  return value;
-}
+export { asString };
 
 export function asProviderId(value: unknown): string {
   const id = asString(value, "id");

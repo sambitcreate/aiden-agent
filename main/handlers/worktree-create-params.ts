@@ -2,43 +2,27 @@ import {
   MAX_WORKSPACE_ID_BYTES,
   MAX_WORKSPACE_ID_CHARS,
 } from "../../renderer/shared/chat-message-contract.js";
+import { parseUtf8BoundedString } from "../shared/guards.js";
 
 export const MAX_WORKTREE_BRANCH_CHARS = 100;
 export const MAX_WORKTREE_BRANCH_BYTES = 400;
-
-function boundedString(
-  value: unknown,
-  label: string,
-  maxChars: number,
-  maxBytes: number,
-): string {
-  if (
-    typeof value !== "string" ||
-    value.length === 0 ||
-    value.length > maxChars ||
-    Buffer.byteLength(value, "utf8") > maxBytes
-  ) {
-    throw new Error(`Invalid ${label}.`);
-  }
-  return value;
-}
 
 export function parseWorktreeCreateParams(
   workspaceIdValue: unknown,
   branchValue: unknown,
 ): { workspaceId: string; branch: string } {
-  const workspaceId = boundedString(
+  const workspaceId = parseUtf8BoundedString(
     workspaceIdValue,
     "workspace identifier",
     MAX_WORKSPACE_ID_CHARS,
     MAX_WORKSPACE_ID_BYTES,
-  );
-  const rawBranch = boundedString(
+  ).value;
+  const rawBranch = parseUtf8BoundedString(
     branchValue,
     "worktree branch",
     MAX_WORKTREE_BRANCH_CHARS,
     MAX_WORKTREE_BRANCH_BYTES,
-  );
+  ).value;
   const branch = rawBranch.trim();
   if (
     !branch || branch !== rawBranch ||

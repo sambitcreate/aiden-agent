@@ -52,13 +52,7 @@ import { workspaceIntakeService } from "../services/workspace-intake-main.js";
 import { workspaceEnvironmentApplicationService } from "../services/workspace-environment-application-service-main.js";
 import type { WorkspaceEnvironmentDirectory } from "../services/workspace-environment-application-service.js";
 import { workspaceWorktreeApplicationService } from "../services/workspace-worktree-application-service-main.js";
-
-function asString(value: unknown, name: string): string {
-  if (typeof value !== "string" || value.length === 0) {
-    throw new Error(`Expected non-empty string for "${name}".`);
-  }
-  return value;
-}
+import { asString } from "./voice-codec.js";
 
 function asText(value: unknown, name: string): string {
   if (typeof value !== "string") throw new Error(`Expected text for "${name}".`);

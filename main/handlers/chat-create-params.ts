@@ -6,7 +6,7 @@ import {
   MAX_WORKSPACE_ID_BYTES,
   MAX_WORKSPACE_ID_CHARS,
 } from "../../renderer/shared/chat-message-contract.js";
-import { requireAllowedKeys } from "../shared/guards.js";
+import { parseUtf8BoundedString, requireAllowedKeys } from "../shared/guards.js";
 
 const CHAT_CREATE_KEYS = new Set([
   "model",
@@ -28,51 +28,36 @@ export interface ParsedPublicChatCreate extends ParsedChatCreate {
   workspaceId: string;
 }
 
-function optionalBoundedString(
-  value: unknown,
-  label: string,
-  maxChars: number,
-  maxBytes: number,
-): string | undefined {
-  if (value === undefined) return undefined;
-  if (
-    typeof value !== "string" ||
-    value.length === 0 ||
-    value.length > maxChars
-  ) {
-    throw new Error(`Invalid ${label}.`);
-  }
-  if (Buffer.byteLength(value, "utf8") > maxBytes)
-    throw new Error(`Invalid ${label}.`);
-  return value;
-}
-
 function projectedCreate(record: Record<string, unknown>): ParsedChatCreate {
   return {
-    title: optionalBoundedString(
+    title: parseUtf8BoundedString(
       record.title,
       "chat title",
       MAX_CREATE_TITLE_CHARS,
       MAX_CREATE_TITLE_BYTES,
-    ),
-    workspaceId: optionalBoundedString(
+      true,
+    ).value,
+    workspaceId: parseUtf8BoundedString(
       record.workspaceId,
       "workspace id",
       MAX_WORKSPACE_ID_CHARS,
       MAX_WORKSPACE_ID_BYTES,
-    ),
-    providerId: optionalBoundedString(
+      true,
+    ).value,
+    providerId: parseUtf8BoundedString(
       record.providerId,
       "provider id",
       MAX_PROVIDER_ID_CHARS,
       MAX_PROVIDER_ID_BYTES,
-    ),
-    model: optionalBoundedString(
+      true,
+    ).value,
+    model: parseUtf8BoundedString(
       record.model,
       "model id",
       MAX_MODEL_ID_CHARS,
       MAX_MODEL_ID_BYTES,
-    ),
+      true,
+    ).value,
   };
 }
 
