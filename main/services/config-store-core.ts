@@ -118,7 +118,7 @@ import type {
   StoredProvider,
   Workspace,
 } from "./types.js";
-import { isRecord } from "../shared/guards.js";
+import { isRecord, ownEntry as ownRecordEntry, setOwnEntry as setRecordEntry } from "../shared/guards.js";
 
 /** The slice of the keychain store this module needs. See secrets.ts. */
 export interface SecretsPort {
@@ -163,19 +163,6 @@ function withResolvedStopProviders(
       stop.providerId ? { ...stop, providerId: resolve(stop.providerId) } : stop,
     ),
   };
-}
-
-function ownRecordEntry<T>(record: Readonly<Record<string, T>>, key: string): T | undefined {
-  return Object.prototype.hasOwnProperty.call(record, key) ? record[key] : undefined;
-}
-
-function setRecordEntry<T>(record: Record<string, T>, key: string, value: T): void {
-  Object.defineProperty(record, key, {
-    value,
-    enumerable: true,
-    configurable: true,
-    writable: true,
-  });
 }
 
 function providerAliasRoutes(

@@ -67,7 +67,7 @@ import { parseWebFetchSettings } from "../../renderer/shared/web-fetch-settings.
 import { parseTtsSettingsDocument } from "./tts/settings.js";
 import { isUsageLimitWaitHours } from "../../renderer/shared/usage-limits.js";
 import { parseSpendingLimitsSettings } from "../../renderer/shared/spending.js";
-import { isRecord } from "../shared/guards.js";
+import { isRecord, ownEntry, setOwnEntry as setRecordEntry } from "../shared/guards.js";
 
 /** A provider minus the caches that model discovery refills. */
 export type PortableProvider = Omit<StoredProvider, "models" | "modelMetadata">;
@@ -159,23 +159,6 @@ function isStringMap(value: unknown): value is Record<string, string> {
   return isRecord(value) && Object.values(value).every((entry) => typeof entry === "string");
 }
 
-function ownStringEntry(record: Readonly<Record<string, string>>, key: string): string | undefined {
-  return Object.prototype.hasOwnProperty.call(record, key) ? record[key] : undefined;
-}
-
-function ownRecordEntry<T>(record: Readonly<Record<string, T>>, key: string): T | undefined {
-  return Object.prototype.hasOwnProperty.call(record, key) ? record[key] : undefined;
-}
-
-function setRecordEntry<T>(record: Record<string, T>, key: string, value: T): void {
-  Object.defineProperty(record, key, {
-    value,
-    enumerable: true,
-    configurable: true,
-    writable: true,
-  });
-}
-
 function hasUniqueIds(values: ReadonlyArray<{ id: string }>): boolean {
   return new Set(values.map(({ id }) => id)).size === values.length;
 }
@@ -192,7 +175,7 @@ function providerAliasResolutions(
     const cached = resolved.get(source);
     if (cached) return cached;
     if (depth > MAX_PROVIDER_ALIAS_DEPTH || resolving.has(source)) return null;
-    const target = ownStringEntry(aliases, source);
+    const target = ownEntry(aliases, source);
     if (target === undefined) return { terminal: source, depth: 0 };
     resolving.add(source);
     const downstream = visit(target, depth + 1);
@@ -237,7 +220,7 @@ export function resolveProviderAlias(
   let target: string | undefined;
   let depth = 0;
   const visited = new Set<string>();
-  while ((target = ownStringEntry(aliases, cursor)) !== undefined) {
+  while ((target = ownEntry(aliases, cursor)) !== undefined) {
     if (visited.has(cursor) || depth >= MAX_PROVIDER_ALIAS_DEPTH) return undefined;
     visited.add(cursor);
     cursor = target;
@@ -1699,7 +1682,7 @@ export function createPortableConfigStores(
           setRecordEntry(
             draft.byProvider,
             id,
-            mergeProviderModelCacheEntries(cache, ownRecordEntry(draft.byProvider, id)),
+            mergeProviderModelCacheEntries(cache, ownEntry(draft.byProvider, id)),
           );
         }
       });

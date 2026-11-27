@@ -1,3 +1,5 @@
+import { setOwnEntry } from "../shared/guards.js";
+
 export type SecretKeyMap = Record<string, unknown>;
 
 /** Recovery slot for a pre-binding provider key that must never be sent again. */
@@ -27,12 +29,7 @@ export function secretKeyEntry(
 }
 
 export function setSecretKeyEntry(map: SecretKeyMap, providerId: string, value: string): void {
-  Object.defineProperty(map, providerId, {
-    value,
-    enumerable: true,
-    configurable: true,
-    writable: true,
-  });
+  setOwnEntry(map, providerId, value);
 }
 
 export function deleteSecretKeyEntry(map: SecretKeyMap, providerId: string): boolean {
