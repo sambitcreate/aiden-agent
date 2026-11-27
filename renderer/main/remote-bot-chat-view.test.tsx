@@ -266,6 +266,15 @@ test("a question or approval answered here shows again when the host asks it aga
 test("a host too old to share its Bots' conversation says so instead of opening a split chat", async () => {
   const { peerCalls } = await mount({ ...HOST, features: [] });
   assert.ok(await screen.findByText("This Bot's chat isn't shared"));
+  assert.ok(screen.getByText(/Update Aiden on/));
+  assert.equal(peerCalls().length, 0);
+});
+
+test("an aiden serve host without durable Bot sessions points to its switch, not to an update", async () => {
+  const { peerCalls } = await mount({ ...HOST, features: ["bot-delete-v1"] });
+  assert.ok(await screen.findByText("This Bot's chat isn't shared"));
+  assert.ok(screen.getByText(/aiden bots enable-durable/));
+  assert.equal(screen.queryByText(/Update Aiden/), null);
   assert.equal(peerCalls().length, 0);
 });
 

@@ -477,6 +477,38 @@ export function hostSharesBotSessions(view: Pick<PeerHostView, "features" | "cap
 }
 
 /**
+ * Why a host's Bot conversation can't open here, for a host that fails
+ * `hostSharesBotSessions`:
+ * - `repair`: the host shares durable sessions, but this Mac's pairing lacks
+ *   the grants; pairing again from the host fixes it.
+ * - `enable_durable`: an `aiden serve` host with durable Bot sessions off. It
+ *   has Bots (every revision 25+ host advertises `bot-delete-v1`) but no
+ *   durable session, which every desktop since then serves. Updating Aiden
+ *   would not change that; the server's owner turns it on with
+ *   `aiden bots enable-durable`. Its Bots still open in their workspace chat.
+ * - `update`: a host older than contract revision 25.
+ */
+export type RemoteBotSessionGap = "repair" | "enable_durable" | "update";
+
+export function remoteBotSessionGap(view: Pick<PeerHostView, "features">): RemoteBotSessionGap {
+  if (view.features.includes("bot-durable-session-v1")) return "repair";
+  if (view.features.includes("bot-delete-v1")) return "enable_durable";
+  return "update";
+}
+
+/** The empty state's line for a host whose Bot conversation can't open here. */
+export function remoteBotSessionGapDescription(view: Pick<PeerHostView, "features">, hostName: string): string {
+  switch (remoteBotSessionGap(view)) {
+    case "repair":
+      return `This device can see ${hostName}'s Bots but can't chat with them. Pair it again from ${hostName} to update its access.`;
+    case "enable_durable":
+      return `${hostName} keeps its Bots' chats in workspace chats, so open this Bot from All Bots to chat with it. To get the full Bot chat here, run “aiden bots enable-durable” on ${hostName} and restart the server.`;
+    case "update":
+      return `Update Aiden on ${hostName} to chat with its Bots here.`;
+  }
+}
+
+/**
  * The host sends this Mac its Bots' hand-off cards and pauses, and takes
  * their answers and Pause and Resume (contract revision 37, `bot:handoffs`).
  */

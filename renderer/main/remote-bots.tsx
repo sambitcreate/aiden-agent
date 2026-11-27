@@ -23,8 +23,10 @@ function grantsOf(view: PeerHostView): string {
 
 /**
  * The Bots on paired Macs, for the Bots sidebar. Bots come from each host's last-known
- * feed. Opening one shows its one durable conversation on that host; a host too
- * old to share it gets the Bot's workspace chat instead.
+ * feed. Opening one shows its one durable conversation on that host; a host that
+ * doesn't share it (one too old, or an `aiden serve` without durable Bot
+ * sessions, whose workspace chat paired devices can send to) gets the Bot's
+ * workspace chat instead.
  * One control per host is kept while the view is open, so a retry after a
  * lost answer reuses its key.
  */
