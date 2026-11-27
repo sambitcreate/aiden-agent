@@ -1,13 +1,12 @@
-import { chmodSync, mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
-import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
+import { readFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { pathToFileURL } from "node:url";
+import { readJsonLines, seedInstalledFakeHub, writeFakeXcrun } from "./device-fixtures";
 import {
   E2E_ASSISTANT_RESPONSE,
   expect,
   finishLmStudioOnboarding,
-  REPOSITORY_ROOT,
   test,
 } from "./fixtures";
 
@@ -20,7 +19,6 @@ import {
 const DEVICE_UDID = "5A1E2E00-0000-4000-8000-00000000E2E1";
 const DEVICE_NAME = "iPhone 17 Pro";
 const MSG_MULTI_TOUCH = 0x05;
-const HUB_VERSION = "0.12.0";
 
 const fakeRoot = mkdtempSync(path.join(os.tmpdir(), "aiden-e2e-device-features-"));
 const fakeBin = path.join(fakeRoot, "bin");
@@ -43,25 +41,7 @@ const simctlList = JSON.stringify({
     ],
   },
 });
-mkdirSync(fakeBin, { recursive: true });
-writeFileSync(
-  path.join(fakeBin, "xcrun"),
-  [
-    "#!/bin/sh",
-    `printf '%s\\n' "$*" >> '${xcrunLog}'`,
-    '[ "$1" = "simctl" ] || exit 1',
-    'case "$2" in',
-    '  help) echo "usage: simctl"; exit 0 ;;',
-    `  list) printf '%s\\n' '${simctlList}'; exit 0 ;;`,
-    '  ui) [ -n "$5" ] && exit 0',
-    '      case "$4" in appearance) echo light ;; content_size) echo large ;; increase_contrast) echo disabled ;; esac',
-    "      exit 0 ;;",
-    "  *) exit 0 ;;",
-    "esac",
-    "",
-  ].join("\n"),
-);
-chmodSync(path.join(fakeBin, "xcrun"), 0o755);
+writeFakeXcrun(fakeBin, simctlList, xcrunLog);
 
 type HubLogEntry = {
   kind: "http" | "ws-open" | "ws-message" | "sse-close";
@@ -71,32 +51,13 @@ type HubLogEntry = {
   body?: { type?: string; x1?: number; x2?: number } | null;
 };
 
-async function readHubLog(): Promise<HubLogEntry[]> {
-  return (await readFile(hubLog, "utf8"))
-    .split("\n")
-    .filter(Boolean)
-    .map((line) => JSON.parse(line) as HubLogEntry);
-}
+const readHubLog = (): Promise<HubLogEntry[]> => readJsonLines<HubLogEntry>(hubLog);
 
 async function simctlVerbs(): Promise<string[]> {
   return (await readFile(xcrunLog, "utf8"))
     .split("\n")
     .filter((line) => line.startsWith("simctl ") && !line.startsWith("simctl list") && !line.startsWith("simctl ui"))
     .filter((line) => !line.startsWith("simctl help") && !line.startsWith("simctl spawn"));
-}
-
-async function seedInstalledFakeHub(userDataDir: string): Promise<void> {
-  const baseDir = path.join(userDataDir, "devices");
-  const installDir = path.join(baseDir, "tools", "expo-device-hub", HUB_VERSION);
-  const entryDir = path.join(installDir, "node_modules", "expo-device-hub", "dist", "server");
-  await mkdir(entryDir, { recursive: true });
-  const fakeHub = pathToFileURL(path.join(REPOSITORY_ROOT, "tests", "e2e", "device-hub-fake.mjs")).href;
-  await writeFile(path.join(entryDir, "cli.mjs"), `import ${JSON.stringify(fakeHub)};\n`);
-  await writeFile(path.join(installDir, ".install-complete"), `${HUB_VERSION}\n`);
-  await writeFile(
-    path.join(baseDir, "consent.json"),
-    `${JSON.stringify({ version: 1, streaming: true, agentAccess: false })}\n`,
-  );
 }
 
 test.describe("Simulator power features", () => {

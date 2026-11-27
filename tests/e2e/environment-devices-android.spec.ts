@@ -1,13 +1,12 @@
 import { chmodSync, mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
-import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { readFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { pathToFileURL } from "node:url";
+import { readJsonLines, seedInstalledFakeHub } from "./device-fixtures";
 import {
   E2E_ASSISTANT_RESPONSE,
   expect,
   finishLmStudioOnboarding,
-  REPOSITORY_ROOT,
   test,
 } from "./fixtures";
 
@@ -19,7 +18,6 @@ import {
 // Mac can run Android only. Nothing here contacts npm, Xcode, or a real SDK.
 const SERIAL = "emulator-5554";
 const AVD = "Pixel_Fold_E2E";
-const HUB_VERSION = "0.12.0";
 
 const fakeRoot = mkdtempSync(path.join(os.tmpdir(), "aiden-e2e-android-"));
 const fakeBin = path.join(fakeRoot, "bin");
@@ -73,32 +71,12 @@ type HubLogEntry = {
   body?: Record<string, unknown> | null;
 };
 
-async function readHubLog(): Promise<HubLogEntry[]> {
-  const text = await readFile(hubLog, "utf8");
-  return text
-    .split("\n")
-    .filter(Boolean)
-    .map((line) => JSON.parse(line) as HubLogEntry);
-}
+const readHubLog = (): Promise<HubLogEntry[]> => readJsonLines<HubLogEntry>(hubLog);
 
 const gestures = async () =>
   (await readHubLog())
     .filter((entry) => entry.kind === "ws-message" && entry.platform === "android" && entry.body?.type !== "reset-video")
     .map((entry) => entry.body);
-
-async function seedInstalledFakeHub(userDataDir: string): Promise<void> {
-  const baseDir = path.join(userDataDir, "devices");
-  const installDir = path.join(baseDir, "tools", "expo-device-hub", HUB_VERSION);
-  const entryDir = path.join(installDir, "node_modules", "expo-device-hub", "dist", "server");
-  await mkdir(entryDir, { recursive: true });
-  const fakeHub = pathToFileURL(path.join(REPOSITORY_ROOT, "tests", "e2e", "device-hub-fake.mjs")).href;
-  await writeFile(path.join(entryDir, "cli.mjs"), `import ${JSON.stringify(fakeHub)};\n`);
-  await writeFile(path.join(installDir, ".install-complete"), `${HUB_VERSION}\n`);
-  await writeFile(
-    path.join(baseDir, "consent.json"),
-    `${JSON.stringify({ version: 1, streaming: true, agentAccess: false })}\n`,
-  );
-}
 
 test.describe("Android emulator", () => {
   test.skip(process.platform !== "darwin", "Simulator devices are macOS-only");
