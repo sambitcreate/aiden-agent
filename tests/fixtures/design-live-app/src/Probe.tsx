@@ -288,11 +288,6 @@ export async function runProbes(): Promise<Outcomes> {
       await wait(300);
       return "assigned";
     }),
-    settle("mailto", async () => {
-      location.href = "mailto:x@example.com";
-      await wait(300);
-      return location.pathname;
-    }),
     settle("download", downloadProbe()),
     settle("serviceWorker", serviceWorkerProbe, 8000),
   ];
@@ -343,6 +338,10 @@ export function Probe() {
       </button>
       <button id="thief" type="button" onClick={() => setThief((value) => !value)}>
         Focus thief {thief ? "on" : "off"}
+      </button>
+      {/* Separate from Run: a refused mailto: may leave this frame on Chromium's blocked page. */}
+      <button id="mailto" type="button" onClick={() => void (location.href = "mailto:x@example.com")}>
+        Mail
       </button>
       <button id="history-back" type="button" onClick={() => history.go(-1)}>
         Back
