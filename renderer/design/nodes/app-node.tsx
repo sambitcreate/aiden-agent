@@ -1,10 +1,11 @@
 // A route of the workspace's running web app (design mode v2 Phase 3a, D16).
-// Until the live body lands, every app frame draws as a static card over its
-// last snapshot.
+// Until the live body lands (Task 11), every app frame draws as a static card
+// over its last snapshot, with a sentence that is true in both flag states.
 
 import type { NodeProps } from "@xyflow/react";
 import { CanvasNodeChrome } from "../../canvas";
-import { designMinSize } from "../../shared/design-canvas/schema";
+import { useAppCapabilities } from "../../lib/app-capabilities";
+import { designMinSize, type DesignFrame } from "../../shared/design-canvas/schema";
 import type { DesignNode } from "../canvas-adapter-core";
 import { useFrameSnapshot } from "../frame-snapshots";
 import { FrameActions } from "./frame-actions";
@@ -25,9 +26,19 @@ export function AppFrameCard({ title, snapshot, children }: { title: string; sna
   );
 }
 
-export function AppNode({ id, data, selected }: NodeProps<DesignNode>) {
+/** An app frame's body: its last picture and why it isn't live. */
+export function AppFrameBody({ frame }: { frame: DesignFrame }) {
+  const { designLive } = useAppCapabilities();
+  const { snapshot } = useFrameSnapshot(frame.id, 0);
+  return (
+    <AppFrameCard title={frame.title} snapshot={snapshot}>
+      <span className="text-strong text-secondary">{designLive ? "Not live on the canvas yet" : "Live apps are off"}</span>
+    </AppFrameCard>
+  );
+}
+
+export function AppNode({ data, selected }: NodeProps<DesignNode>) {
   const { frame } = data;
-  const { snapshot } = useFrameSnapshot(id, 0);
   return (
     <>
       <DesignNodeResizer selected={selected} minSize={designMinSize("app")} />
@@ -39,9 +50,7 @@ export function AppNode({ id, data, selected }: NodeProps<DesignNode>) {
           flush
           toolbar={<FrameActions frame={frame} />}
         >
-          <AppFrameCard title={frame.title} snapshot={snapshot}>
-            <span className="text-strong text-secondary">Live apps are off</span>
-          </AppFrameCard>
+          <AppFrameBody frame={frame} />
         </CanvasNodeChrome>
       </div>
     </>

@@ -1289,6 +1289,7 @@
         "renderer/design/live-set-core.test.ts",
         "renderer/design/frame-snapshots.test.ts",
         "renderer/design/nodes/file-node.test.tsx",
+        "renderer/design/nodes/app-node.test.tsx",
         "renderer/design/design-canvas.test.tsx",
         "renderer/components/chat-sidebar-scope.test.tsx",
         "renderer/components/chat-top-bar-design.test.tsx",

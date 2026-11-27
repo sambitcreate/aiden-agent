@@ -1197,6 +1197,9 @@ export const test = base.extend<AidenE2eOptions & { aiden: AidenE2e }>({
           XDG_DATA_HOME: testXdgDataDir,
           ...(redirectOrigin ? { [LM_STUDIO_REDIRECT_ENV]: redirectOrigin } : {}),
           ...fakeOpenRouterEnvironment,
+          // Flag-on v1 runs (design mode v2 Phase 3a): every launch gets live apps on,
+          // and a test's own environment still decides.
+          ...(process.env.AIDEN_E2E_DESIGN_LIVE_ALL === "1" ? { AIDEN_EXPERIMENTAL_DESIGN_LIVE: "1" } : {}),
           ...extraAppEnvironment,
         };
         const launchArgs = [
