@@ -65,6 +65,10 @@ const GIT_ROUTING_ENV = [
   "GIT_OBJECT_DIRECTORY",
   "GIT_WORK_TREE",
 ] as const;
+const NO_FOLLOW_READ_FLAGS =
+  fsConstants.O_RDONLY |
+  (fsConstants.O_NOFOLLOW ?? 0) |
+  (fsConstants.O_NONBLOCK ?? 0);
 
 export type GitErrorCode =
   | "aborted"
@@ -1128,13 +1132,9 @@ async function sha256BoundedNoFollowFile(
   filePath: string,
   maxBytes: number,
 ): Promise<string | undefined> {
-  const flags =
-    fsConstants.O_RDONLY |
-    (fsConstants.O_NOFOLLOW ?? 0) |
-    (fsConstants.O_NONBLOCK ?? 0);
   let handle: fs.FileHandle | undefined;
   try {
-    handle = await fs.open(filePath, flags);
+    handle = await fs.open(filePath, NO_FOLLOW_READ_FLAGS);
     const stat = await handle.stat();
     if (!stat.isFile() || stat.size <= 0 || stat.size > maxBytes) {
       return undefined;
@@ -1168,13 +1168,9 @@ async function isNativeExecutableBinary(realPath: string): Promise<boolean> {
   if (process.platform !== "darwin" && process.platform !== "linux") {
     return false;
   }
-  const flags =
-    fsConstants.O_RDONLY |
-    (fsConstants.O_NOFOLLOW ?? 0) |
-    (fsConstants.O_NONBLOCK ?? 0);
   let handle: fs.FileHandle | undefined;
   try {
-    handle = await fs.open(realPath, flags);
+    handle = await fs.open(realPath, NO_FOLLOW_READ_FLAGS);
     const stat = await handle.stat();
     if (!stat.isFile() || stat.size < 64) return false;
     const header = Buffer.alloc(8);
@@ -5230,13 +5226,9 @@ export class GitService {
     filePath: string,
     maxBytes: number,
   ): Promise<{ ok: true; text: string } | { ok: false; code?: string }> {
-    const flags =
-      fsConstants.O_RDONLY |
-      (fsConstants.O_NOFOLLOW ?? 0) |
-      (fsConstants.O_NONBLOCK ?? 0);
     let handle: fs.FileHandle | undefined;
     try {
-      handle = await fs.open(filePath, flags);
+      handle = await fs.open(filePath, NO_FOLLOW_READ_FLAGS);
       const stat = await handle.stat();
       if (!stat.isFile() || stat.size <= 0 || stat.size > maxBytes) {
         return { ok: false };
