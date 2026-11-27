@@ -1,4 +1,3 @@
-import CryptoKit
 import Foundation
 import Observation
 import SwiftUI
@@ -78,7 +77,7 @@ actor AidenWorkspaceEnvironmentCache {
 
     func purge(instanceId: String, knownWorkspaceIds: Set<String> = []) {
         let instanceDirectory = directory.appending(
-            path: instanceDigest(instanceId),
+            path: aidenSHA256Hex(instanceId),
             directoryHint: .isDirectory
         )
         try? FileManager.default.removeItem(at: instanceDirectory)
@@ -128,25 +127,13 @@ actor AidenWorkspaceEnvironmentCache {
     }
 
     private func file(instanceId: String, workspaceId: String) -> URL {
-        let digest = SHA256.hash(data: Data(workspaceId.utf8))
-            .map { String(format: "%02x", $0) }
-            .joined()
-        return directory
-            .appending(path: instanceDigest(instanceId), directoryHint: .isDirectory)
-            .appending(path: "\(digest).json")
-    }
-
-    private func instanceDigest(_ instanceId: String) -> String {
-        SHA256.hash(data: Data(instanceId.utf8))
-            .map { String(format: "%02x", $0) }
-            .joined()
+        directory
+            .appending(path: aidenSHA256Hex(instanceId), directoryHint: .isDirectory)
+            .appending(path: "\(aidenSHA256Hex(workspaceId)).json")
     }
 
     private func legacyFile(instanceId: String, workspaceId: String) -> URL {
-        let digest = SHA256.hash(data: Data("\(instanceId)\u{0}\(workspaceId)".utf8))
-            .map { String(format: "%02x", $0) }
-            .joined()
-        return directory.appending(path: "\(digest).json")
+        directory.appending(path: "\(aidenSHA256Hex("\(instanceId)\u{0}\(workspaceId)")).json")
     }
 }
 

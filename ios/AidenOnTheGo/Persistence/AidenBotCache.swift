@@ -1,4 +1,3 @@
-import CryptoKit
 import Foundation
 import ImageIO
 
@@ -398,7 +397,7 @@ actor AidenBotCache {
     func removeAvatars(instanceId: String, deviceId: String, botId: String) {
         let directory = deviceDirectory(instanceId: instanceId, deviceId: deviceId)
             .appending(path: "avatars", directoryHint: .isDirectory)
-            .appending(path: digest(botId), directoryHint: .isDirectory)
+            .appending(path: aidenSHA256Hex(botId), directoryHint: .isDirectory)
         try? fileManager.removeItem(at: directory)
     }
 
@@ -491,21 +490,17 @@ actor AidenBotCache {
     ) -> URL {
         deviceDirectory(instanceId: instanceId, deviceId: deviceId)
             .appending(path: "avatars", directoryHint: .isDirectory)
-            .appending(path: digest(botId), directoryHint: .isDirectory)
-            .appending(path: "\(digest(assetRevision)).png")
+            .appending(path: aidenSHA256Hex(botId), directoryHint: .isDirectory)
+            .appending(path: "\(aidenSHA256Hex(assetRevision)).png")
     }
 
     private func instanceDirectory(instanceId: String) -> URL {
-        root.appending(path: digest(instanceId), directoryHint: .isDirectory)
+        root.appending(path: aidenSHA256Hex(instanceId), directoryHint: .isDirectory)
     }
 
     private func deviceDirectory(instanceId: String, deviceId: String) -> URL {
         instanceDirectory(instanceId: instanceId)
-            .appending(path: digest(deviceId), directoryHint: .isDirectory)
-    }
-
-    private func digest(_ value: String) -> String {
-        SHA256.hash(data: Data(value.utf8)).map { String(format: "%02x", $0) }.joined()
+            .appending(path: aidenSHA256Hex(deviceId), directoryHint: .isDirectory)
     }
 
     private func pruneAvatars(preserving: URL) {

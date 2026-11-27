@@ -111,7 +111,7 @@ actor AidenChatDraftStore {
     }
 
     private func attemptURL(_ session: Session) -> URL {
-        instanceDirectory(instanceId: session.instanceId).appending(path: "\(digest(session.chatId)).attempt.json")
+        instanceDirectory(instanceId: session.instanceId).appending(path: "\(aidenSHA256Hex(session.chatId)).attempt.json")
     }
 
     static let shared = AidenChatDraftStore()
@@ -261,14 +261,18 @@ actor AidenChatDraftStore {
     }
 
     private func fileURL(instanceId: String, chatId: String) -> URL {
-        instanceDirectory(instanceId: instanceId).appending(path: "\(digest(chatId)).json")
+        instanceDirectory(instanceId: instanceId).appending(path: "\(aidenSHA256Hex(chatId)).json")
     }
 
     private func instanceDirectory(instanceId: String) -> URL {
-        root.appending(path: digest(instanceId), directoryHint: .isDirectory)
+        root.appending(path: aidenSHA256Hex(instanceId), directoryHint: .isDirectory)
     }
+}
 
-    private func digest(_ value: String) -> String {
-        SHA256.hash(data: Data(value.utf8)).map { String(format: "%02x", $0) }.joined()
-    }
+func aidenSHA256Hex(_ value: String) -> String {
+    SHA256.hash(data: Data(value.utf8)).map { String(format: "%02x", $0) }.joined()
+}
+
+func aidenSHA256Hex(_ parts: [String]) -> String {
+    aidenSHA256Hex(parts.joined(separator: "\u{1f}"))
 }

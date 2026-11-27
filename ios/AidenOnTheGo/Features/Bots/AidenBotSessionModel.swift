@@ -1,4 +1,3 @@
-import CryptoKit
 import Foundation
 import Observation
 
@@ -932,7 +931,7 @@ actor AidenBotOutboxStore {
             revokedDevices.insert(Self.pairing(AidenBotSessionKey(instanceId: instanceId, deviceId: device, botID: "")))
         }
         stuckFiles = stuckFiles.filter { $0.instanceId != instanceId }
-        try? fileManager.removeItem(at: root.appending(path: digest(instanceId), directoryHint: .isDirectory))
+        try? fileManager.removeItem(at: root.appending(path: aidenSHA256Hex(instanceId), directoryHint: .isDirectory))
     }
 
     private func write(_ records: [Record], for key: AidenBotSessionKey) throws {
@@ -961,12 +960,12 @@ actor AidenBotOutboxStore {
 
     private func fileURL(_ key: AidenBotSessionKey) -> URL {
         pairingDirectory(instanceId: key.instanceId, deviceId: key.deviceId)
-            .appending(path: "\(digest(key.botID)).json")
+            .appending(path: "\(aidenSHA256Hex(key.botID)).json")
     }
 
     private func pairingDirectory(instanceId: String, deviceId: String) -> URL {
-        root.appending(path: digest(instanceId), directoryHint: .isDirectory)
-            .appending(path: digest(deviceId), directoryHint: .isDirectory)
+        root.appending(path: aidenSHA256Hex(instanceId), directoryHint: .isDirectory)
+            .appending(path: aidenSHA256Hex(deviceId), directoryHint: .isDirectory)
     }
 
     // MARK: A New Bot on its way (R15)
@@ -1044,10 +1043,6 @@ actor AidenBotOutboxStore {
 
     func removePendingCreate(instanceId: String, deviceId: String) {
         try? fileManager.removeItem(at: pendingCreateURL(instanceId: instanceId, deviceId: deviceId))
-    }
-
-    private func digest(_ value: String) -> String {
-        SHA256.hash(data: Data(value.utf8)).map { String(format: "%02x", $0) }.joined()
     }
 }
 

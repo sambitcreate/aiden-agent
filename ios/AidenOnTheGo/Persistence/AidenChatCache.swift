@@ -1,4 +1,3 @@
-import CryptoKit
 import Foundation
 
 actor AidenChatCache {
@@ -1113,15 +1112,9 @@ actor AidenChatCache {
     }
 
     private func fileURL(kind: String, _ parts: String...) -> URL {
-        let digest = SHA256.hash(data: Data(parts.joined(separator: "\u{1f}").utf8))
-        let name = digest.map { String(format: "%02x", $0) }.joined()
-        return root
+        root
             .appending(path: kind, directoryHint: .isDirectory)
-            .appending(path: "\(name).json")
-    }
-
-    private func digestName(_ value: String) -> String {
-        SHA256.hash(data: Data(value.utf8)).map { String(format: "%02x", $0) }.joined()
+            .appending(path: "\(aidenSHA256Hex(parts)).json")
     }
 
     private func attachmentInstanceDirectory(
@@ -1130,12 +1123,12 @@ actor AidenChatCache {
     ) -> URL {
         (cacheRoot ?? root)
             .appending(path: "attachment-images", directoryHint: .isDirectory)
-            .appending(path: digestName(instanceId), directoryHint: .isDirectory)
+            .appending(path: aidenSHA256Hex(instanceId), directoryHint: .isDirectory)
     }
 
     private func attachmentChatDirectory(instanceId: String, chatId: String) -> URL {
         attachmentInstanceDirectory(instanceId: instanceId)
-            .appending(path: digestName(chatId), directoryHint: .isDirectory)
+            .appending(path: aidenSHA256Hex(chatId), directoryHint: .isDirectory)
     }
 
     private func attachmentImageURL(
@@ -1145,8 +1138,8 @@ actor AidenChatCache {
         attachmentId: String
     ) -> URL {
         attachmentChatDirectory(instanceId: instanceId, chatId: chatId)
-            .appending(path: digestName(deviceId), directoryHint: .isDirectory)
-            .appending(path: "\(digestName(attachmentId)).image")
+            .appending(path: aidenSHA256Hex(deviceId), directoryHint: .isDirectory)
+            .appending(path: "\(aidenSHA256Hex(attachmentId)).image")
     }
 
     private func pruneAttachmentImages(instanceId: String, preserving preservedURL: URL) {
