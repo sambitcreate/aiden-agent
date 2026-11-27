@@ -443,8 +443,6 @@ export function RemoteChatPane({
   const send = (text: string, attachments?: Attachment[], skill?: SkillInvocationV1) =>
     sendFencedTurn(turnKey, () => sendTurn(text, attachments, skill));
   const generating = live && run?.status === "running";
-  // A run the host is still working on; an idle view with no run is not one.
-  const runActive = live && run?.runId != null;
 
   // A queued turn's run reaches this Mac over the run stream a moment after
   // the host accepts it, so the queue waits until that turn has finished.
@@ -478,7 +476,7 @@ export function RemoteChatPane({
       !unavailable &&
       !stale &&
       Boolean(capabilities?.has("send")) &&
-      !runActive &&
+      runId === null &&
       !state?.sending &&
       !state?.recovering &&
       !unresolved &&
@@ -525,7 +523,7 @@ export function RemoteChatPane({
       Boolean(snapshot?.loaded) &&
       contextRevision !== null &&
       !stale &&
-      !runActive,
+      runId === null,
     // While a reply runs the last reading stays up; the next one follows it.
     placeholderData: (previous) => previous,
     staleTime: Infinity,
@@ -535,7 +533,7 @@ export function RemoteChatPane({
   // The latest reply failed: offer the next step this Mac can take on the host.
   const [failureBusy, setFailureBusy] = React.useState(false);
   const last = messages[messages.length - 1];
-  const failedReplyId = !runActive && last?.role === "assistant" && last.providerFailure ? last.id : undefined;
+  const failedReplyId = runId === null && last?.role === "assistant" && last.providerFailure ? last.id : undefined;
   const failureActions: (ProviderFailureActions & { messageId: string }) | undefined =
     failedReplyId && capabilities?.has("send")
       ? {
@@ -690,7 +688,6 @@ export function RemoteChatPane({
   // Decisions go out one at a time, so only the first approval takes input and
   // the rest wait behind it, the way a local chat queues them.
   const openApproval = approvalAnswerable ? approvals[0] : undefined;
-  const isGenerating = generating;
   const showChatMenu = Boolean(capabilities?.has("rename") || capabilities?.has("remove"));
   const composerKey = snapshot ? hostResourceKey({ hostId: snapshot.hostId, resourceId: snapshot.chatId }) : null;
   const composerWaiting = useComposerWaiting(control);
@@ -765,7 +762,7 @@ export function RemoteChatPane({
           questions.length,
         ]}
         showScrollToBottomButton
-        streaming={isGenerating}
+        streaming={generating}
         footer={
           <ScrollAreaFooterStack>
             {/* Cards and notices sit on the transcript column. The composers
@@ -934,7 +931,7 @@ export function RemoteChatPane({
                       catalog={models}
                       loading={modelsLoading}
                       selected={selection.model}
-                      disabled={isGenerating || Boolean(state?.sending)}
+                      disabled={generating || Boolean(state?.sending)}
                       onSelect={(model) => setPick({ ...pick, model })}
                       open={modelMenuOpen}
                       onOpenChange={setModelMenuOpen}
@@ -948,7 +945,7 @@ export function RemoteChatPane({
                       level={selection.thinkingLevel}
                       levels={selection.levels}
                       canDisable={selection.canDisable}
-                      disabled={isGenerating || Boolean(state?.sending)}
+                      disabled={generating || Boolean(state?.sending)}
                       disabledReason="Change the effort after this response finishes."
                       onChange={(thinkingLevel) => setPick({ ...pick, thinkingLevel })}
                     />
@@ -973,8 +970,8 @@ export function RemoteChatPane({
                 }
                 onStop={stop}
                 inputRef={composerRef}
-                isGenerating={isGenerating || Boolean(state?.sending)}
-                canStopGeneration={isGenerating && Boolean(runId) && cancelRefusal === null && !state?.stopping}
+                isGenerating={generating || Boolean(state?.sending)}
+                canStopGeneration={generating && Boolean(runId) && cancelRefusal === null && !state?.stopping}
                 stoppingGeneration={Boolean(state?.stopping)}
               />
             ) : control ? (

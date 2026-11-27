@@ -574,11 +574,10 @@ export function BotChatPane({ botId }: { botId: string }) {
   const connectionSetup = useConnectionSetup(() => live.reload());
   const [addingConnection, setAddingConnection] = React.useState(false);
   const approvalStatus = useApprovalStatusLine(botId);
-  const showApprovalStatus = approvalStatus.show;
   // Cards this device is answering: their settlement is this answer, not a stale card.
   const answeringApprovals = React.useRef(new Set<string>());
   const approvals = useBotApprovals(bubbled ? undefined : botId, (waitId) => {
-    if (!answeringApprovals.current.has(waitId)) showApprovalStatus({ decision: "stale" });
+    if (!answeringApprovals.current.has(waitId)) approvalStatus.show({ decision: "stale" });
   });
   const approvalGroups = groupBotApprovalPrompts(approvals.prompts);
   const [answering, setAnswering] = React.useState(false);
