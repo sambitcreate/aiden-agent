@@ -1056,7 +1056,7 @@ Before styling, read `docs/chatgpt-desktop-ui-inspiration.md` and `docs/chatgpt-
 - Create: `tests/e2e/design-live-frames.spec.ts`, `tests/e2e/design-live-observer.ts` (the observer listeners and the Space's non-loopback address)
 - Modify: `tests/e2e/design-mode-helpers.ts` (an `AIDEN_E2E_DESIGN_LIVE_ALL=1` switch that adds `AIDEN_EXPERIMENTAL_DESIGN_LIVE=1` to every launch, for the flag-on v1 runs), `scripts/ci-e2e-spec-map.json`: map the spec to `renderer/design/nodes/app-node`, `renderer/shared/design-canvas/app-*`, `main/services/design-canvas/app-frames/`, `main/services/default-session-*`, `main/windows/main-window-navigation`, `main/windows/main-window-console`, `main/services/loopback-ports.ts`, `main-window.html` and `tests/fixtures/design-live-app/`
 
-- [ ] **Step 1: Write the spec.** Launch with `AIDEN_EXPERIMENTAL_DESIGN_LIVE=1`, `AIDEN_E2E_DESIGN_LIVE_RECORD=<test output>/record.jsonl`, a temp copy of `tests/fixtures/design-live-app/` with `node_modules` linked to the repo root's, and the fake model scripted to call `design_app start` and then `canvas_place_frame` for `/` and `/pricing`. The E2E renderer loads from `build/renderer` (`file://`), as packaged builds do.
+- [x] **Step 1: Write the spec** (as built: deviation 17). Launch with `AIDEN_EXPERIMENTAL_DESIGN_LIVE=1`, `AIDEN_E2E_DESIGN_LIVE_RECORD=<test output>/record.jsonl`, a temp copy of `tests/fixtures/design-live-app/` with `node_modules` linked to the repo root's, and the fake model scripted to call `design_app start` and then `canvas_place_frame` for `/` and `/pricing`. The E2E renderer loads from `build/renderer` (`file://`), as packaged builds do.
   - **Observers (the oracle for every `*` row).** `design-live-observer.ts` starts, per test: a raw TCP listener on `127.0.0.1:P` (for `https://127.0.0.1:P`, which policy cancels), a TCP listener on `127.0.0.2:P2` (A17; routable on Linux loopback), a UDP listener on `127.0.0.1:U` (QUIC/WebTransport), and an HTTP listener on the Space's non-loopback interface address `I:Q`. Aiden's own ports can't host an observer (Aiden is listening there), so own-port rows (A29, A41) assert on the recorder instead: the spec reads one registered own port from the recorder's install line and checks a `cancel` entry for a request to it. Electron launches with the **test-only** switch `--host-resolver-rules="MAP example.com I:Q, MAP www.youtube.com I:Q, MAP localhost.evil.test I:Q, MAP fonts.googleapis.com I:Q"` passed by Playwright's launch args, never by product code. Each observer counts connections, bytes and datagrams; every `*` row asserts **zero** at its observer as well as the page-side failure. A positive control at the start proves the mapping works: an unfiltered request from Playwright's own Node side reaches `I:Q`.
   - **Attribution (A46).** After `/pricing` loads, `record.jsonl` holds a `subFrame` entry whose `frameTreeNodeId` is the app iframe's own (read through the recorder's `frame-created` line), proving the dispatcher sees the frame's own navigation as the child.
   - **Two routes live:** after Allow on the consent card, both frames show "Fixture home" and "Pricing" inside their iframes (Playwright frame locators).
@@ -1092,8 +1092,8 @@ Before styling, read `docs/chatgpt-desktop-ui-inspiration.md` and `docs/chatgpt-
   - **Browser panel (S53):** opening the design app from Local servers loads it in the panel with the flag on.
   - **Screenshots** in the test's output folder, light and dark at 1440: `design-live-frames`, `design-live-blocked-popover`, `design-live-error-label`, `design-live-start-overlay`, `design-live-starting`, `design-live-crashed`, `design-live-consent`, `design-live-too-many`, `design-live-off`, `design-live-not-in-workspace`, `design-live-open-in-browser`, and the title row truncating at scale 0.1.
 - [ ] **Step 2: Run in the Space.** `npm run test:e2e:space -- tests/e2e/design-live-frames.spec.ts`. Then the v1 and Live suites **twice**, unchanged: with the flag off (`npm run test:e2e:space -- tests/e2e/design-canvas.spec.ts tests/e2e/design-containment.spec.ts tests/e2e/design-mode.spec.ts tests/e2e/live-app-control.spec.ts tests/e2e/design-app-status.spec.ts tests/e2e/design-app-server.spec.ts`), and with the flag on (`npm run test:e2e:space -- --run env AIDEN_E2E_DESIGN_LIVE_ALL=1 npx playwright test tests/e2e/design-canvas.spec.ts tests/e2e/design-containment.spec.ts tests/e2e/design-mode.spec.ts tests/e2e/live-app-control.spec.ts`). Add the flag-on chat-send smoke run: `npm run test:e2e:space -- --run env AIDEN_E2E_DESIGN_LIVE_ALL=1 npx playwright test tests/e2e/chat-message-queue.spec.ts`. Expected: PASS for all.
-- [ ] **Step 3: Host (macOS), headless only.** Window-opening tests run only in the Space. Darwin-only behaviour here is the macOS system picker in Gemini Live's display path; Task 4's and Task 7's tests cover the slot headlessly. The window-recreation path (R7) is covered by Task 6's and Task 7's register-and-invoke tests, because closing the last window ends the app on Linux. Run `npm run test:gemini-live` on the host.
-- [ ] **Step 4:** Commit `test(design): live app frames E2E with observer oracles`.
+- [x] **Step 3: Host (macOS), headless only.** (2026-11-27: `test:gemini-live` passed on the host.) Window-opening tests run only in the Space. Darwin-only behaviour here is the macOS system picker in Gemini Live's display path; Task 4's and Task 7's tests cover the slot headlessly. The window-recreation path (R7) is covered by Task 6's and Task 7's register-and-invoke tests, because closing the last window ends the app on Linux. Run `npm run test:gemini-live` on the host.
+- [x] **Step 4:** Commit `test(design): live app frames E2E with observer oracles`.
 
 ### Task 15: Docs, memory and spec amendments
 
@@ -1336,7 +1336,7 @@ Recorded as the build goes. Task 15 adds Task 5's audit, the cookie outcome and 
 14. **Task 14 and 15 as far as Task 11 allows (2026-11-27).**
     - The `AIDEN_E2E_DESIGN_LIVE_ALL=1` switch lives in `tests/e2e/fixtures.ts`, where the launch environment is built, not in `design-mode-helpers.ts`. A test's own environment is spread after it, so a test can still set the flag itself.
     - `AppNode`'s static card now says "Not live on the canvas yet" with the flag on and "Live apps are off" only with it off. Task 12 lets Aiden place app frames with the flag on, so the old sentence would have been false. `AppFrameBody` is split out, and `app-node.test.tsx` starts with those two cases; Task 11 extends it.
-    - `tests/e2e/design-live-frames.spec.ts`, its observers and the screenshots wait for Task 11: without the live node there is no app iframe to drive. The flag-off and flag-on v1 runs and the flag-on chat-send smoke run ran (see Build status).
+    - `tests/e2e/design-live-frames.spec.ts`, its observers and the screenshots waited for Task 11, because without the live node there is no app iframe to drive. They landed after it (deviation 17). The flag-off and flag-on v1 runs and the flag-on chat-send smoke run ran (see Build status).
     - The docs describe what is built: app frames that Aiden places, the static card, and Download. The "Live frames" docs section from Task 15 Step 2 (entering, overlays, blocked label, cookies, the dev-only process note) lands with Task 11.
     - `docs/pi-gui-artifacts.md` gave the main window's `frame-src` from before design mode; it was corrected.
 
@@ -1360,6 +1360,42 @@ Recorded as the build goes. Task 15 adds Task 5's audit, the cookie outcome and 
     - m2: the bridge injects at every `dom-ready` of a frame, not only the first.
     - m3: a download whose frame is gone is judged by `item.getInitiatorOrigin()`.
     - m4: `APP_CONNECT_SRC` names no `[::1]` source.
+
+17. **Task 14's live-frames spec (2026-11-27), and two escalations.**
+    - **What it covers.**
+      - Two routes and `/framed` render live and inert.
+      - Enter, press, Esc and leave work, with the canvas getting focus back.
+      - A redirect inside the app goes to `/login`, and Esc still leaves from the new page.
+      - Download offers PNG and PDF but not the original file, and the PNG is 1280 px wide.
+      - Present shows one frame a slide, and the frame stays inert.
+      - Stopping the app shows Start app; Start brings the frames back.
+      - With the flag off after a relaunch, the frames say "Live apps are off" and nothing is framed.
+      - The probe:
+        - A control fetch reaches the mapped observer.
+        - In the page, these fail: fetch to external, LAN, 127.0.0.2 and https loopback; `img`; ws, wss and EventSource; the custom schemes; redirects to an own port, evil and out; `getUserMedia` (`NotAllowedError`); `getDisplayMedia`; geolocation; PiP; fullscreen; clipboard.
+        - `window.open` gives null, `confirm` returns at once, Notification is `denied`, and the beacon is queued.
+        - The main window keeps its `file:` URL, and `shell.openExternal` is never called (it's recorded).
+        - The TCP observers on 127.0.0.1 and 127.0.0.2 and the external observer see zero.
+        - The blocked label counts at least 5, and its popover shows the hosts, the localhost sentence and the dialogs line.
+        - Pressing `mailto:` opens nothing.
+    - **Changes from Step 1.**
+      - Frames are placed at `scale: 0.25` so a fitted canvas stays at or above the live zoom floor.
+      - `mailto:` has its own probe button, because a refused one leaves the frame on a blocked page.
+      - The UDP observer is a target only: WebTransport leaks (S71), so nothing is asserted about it.
+      - Rows not automated yet: attribution (A46), joint history (H2), reporting (H1), cookies (S4), React source, HMR, crash and Retry, `[::1]`, PDF and probe export (E1–E6), service-worker relaunch, the browser panel (S53), frameless beacons, and the consent, starting, crashed, too-many, not-in-workspace and truncation screenshots.
+    - **K1 escalated.** Space probes (Electron 43.8.4) showed the S75 guard can't keep the keys.
+      - A cross-process app frame takes focus in two steps: the composer's `focusout` fires with the body active, then the window's `blur` with the iframe active. The guard now answers the second step (it remembers what lost focus for 250 ms) and puts `document.activeElement` back on the composer.
+      - Chromium still keeps the app frame focused, so keys routed the way a keyboard's are (CDP `Input.dispatchKeyEvent`, the same as Playwright's keys) go to the page.
+      - Every same-task variant lost 20 of 20 keys: `focus`, blur then focus, `window.focus`, blurring the iframe, hiding it.
+      - A `setTimeout(0)` or rAF restore lost 1 to 4 of 20.
+      - `--enable-blink-features=BlockingFocusWithoutUserActivation` with `allow="focus-without-user-activation 'none'"` on the iframe lost 0 of 20. Without the switch, the `allow` token does nothing.
+      - Probe 8 and the first K1 run used Electron's `sendInputEvent`. It delivers only to the main frame's widget, for keys and for mouse (a click on an app frame never reaches its page), so it couldn't show this.
+      - The K1 test is `live.fixme` with the real routing. Choosing between the Blink switch (app-wide), a timer guard that still leaks, or a documented limit is a decision for the owner.
+    - **S1/D1 escalated.** The main window's CSP `frame-src` refuses a navigation or redirect out of an app frame before `will-frame-navigate` or `will-redirect` runs.
+      - The dev log shows `ERR_BLOCKED_BY_CSP` with `isMainFrame: false` for `/go-out` → `https://example.com/` and for `mailto:`.
+      - The frame lands on Chromium's blocked page. There's no "*host* is outside the app" toast, no Open in browser and no blocked count, but nothing leaves Aiden.
+      - The S1 test is `live.fixme`. A fix (for example, answering `did-fail-provisional-load` for app frames with the refusal and reloading the last in-app URL) needs a decision. `docs/design-mode.md` states the current behaviour.
+    - The `design-live-open-in-browser` screenshot waits for S1.
 
 ### Build status (2026-11-27)
 
