@@ -7134,21 +7134,6 @@ export const llmClient = {
     return questionnaires.respondWithOutcome(promptId, response, ownerDocumentId);
   },
 
-  /** Return the active or initializing streamId owned by a desktop renderer for `chatId`, if any. */
-  activeStreamForChat(chatId: string): { streamId: string; ownerDocumentId: string } | null {
-    for (const [streamId, entry] of active) {
-      if (entry.chatId === chatId && !entry.rendererDetached) {
-        return { streamId, ownerDocumentId: entry.owner.documentId };
-      }
-    }
-    for (const [streamId, entry] of initializing) {
-      if (entry.chatId === chatId && !entry.rendererDetached) {
-        return { streamId, ownerDocumentId: entry.owner.documentId };
-      }
-    }
-    return null;
-  },
-
   /**
    * Atomically hand off an active or initializing desktop generation (plus all
    * pending approvals, questionnaires, and owed turns) from one desktop window
