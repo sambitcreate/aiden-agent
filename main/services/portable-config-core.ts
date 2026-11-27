@@ -1263,6 +1263,13 @@ function appendMissingSettings(
   return merged;
 }
 
+type StorePublishTestHooks<Prefix extends string, T> = {
+  [K in
+    | `before${Prefix}ExternalCacheCommit`
+    | `before${Prefix}WritePublish`
+    | `after${Prefix}WritePublish`]?: (previous: T | null, next: T) => void;
+};
+
 /**
  * Build the four stores plus the one-time migration that fills them.
  *
@@ -1275,37 +1282,9 @@ export function createPortableConfigStores(
   testHooks: {
     beforeLocalProtectedPublish?: () => Promise<void>;
     beforeLegacyArchive?: () => Promise<void>;
-    beforePortableExternalCacheCommit?: (
-      previous: PortableConfigShape | null,
-      next: PortableConfigShape,
-    ) => void;
-    beforePortableWritePublish?: (
-      previous: PortableConfigShape | null,
-      next: PortableConfigShape,
-    ) => void;
-    afterPortableWritePublish?: (
-      previous: PortableConfigShape | null,
-      next: PortableConfigShape,
-    ) => void;
-    beforeSettingsExternalCacheCommit?: (
-      previous: SettingsShape | null,
-      next: SettingsShape,
-    ) => void;
-    beforeSettingsWritePublish?: (previous: SettingsShape | null, next: SettingsShape) => void;
-    afterSettingsWritePublish?: (previous: SettingsShape | null, next: SettingsShape) => void;
-    beforeProviderModelExternalCacheCommit?: (
-      previous: ProviderModelCacheShape | null,
-      next: ProviderModelCacheShape,
-    ) => void;
-    beforeProviderModelWritePublish?: (
-      previous: ProviderModelCacheShape | null,
-      next: ProviderModelCacheShape,
-    ) => void;
-    afterProviderModelWritePublish?: (
-      previous: ProviderModelCacheShape | null,
-      next: ProviderModelCacheShape,
-    ) => void;
-  } = {},
+  } & StorePublishTestHooks<"Portable", PortableConfigShape> &
+    StorePublishTestHooks<"Settings", SettingsShape> &
+    StorePublishTestHooks<"ProviderModel", ProviderModelCacheShape> = {},
 ) {
   const archivePublicationPaths = new Set<string>();
   async function protectConfigDirectory(
