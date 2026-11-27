@@ -2,6 +2,11 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
+> **Revision 3 (2026-11-27).** This revision applies review-p3c-plan-2 (2 blockers, 3 majors, 3 minors; 14 of round 1's 18 confirmed resolved). All 8 were checked against the code and accepted:
+> - S101 now matches the `createFileRoute(` call site and replaces that one string token by its offsets. A probe of the 77 route examples shipped in `@tanstack/router-core` 1.170.18 shows the rule accepts every single-file example. The old identifier count would have refused 51 of them.
+> - S89's cleanup follows what d3-drag 3.0.0 really listens for, and has a generation guard.
+> - S96 reads and gates inside the lock, S95 checks the canvas before writing, paths are split into app-relative and workspace-relative, both store classes take the new options, and the Undo toast and narrow-header checks are fixed.
+
 > **Revision 2 (2026-11-27).** This revision applies review-p3c-plan (Gemini 4 Neon high: 6 blockers, 7 majors, 5 minors). All 18 findings were checked against the code after merging 3b at `c354b32ba`, and every one held. Two are fixed by a different mechanism from the one the reviewer suggested, for the reasons given in "Applied review decisions" at the end. The TanStack copy is no longer a known gap: S101 rewrites its route literal or refuses.
 
 > **Revision 1 (2026-11-27).** First draft, written against 3b's head `0a37450dd`.
@@ -95,6 +100,7 @@ Line numbers drift as 3a and 3b take review fixes. Task 0 rechecks them with `rg
 | Corner resize | `appResizeScale` keeps the aspect and fits with `fitAppScale` | `app-frame.ts:117-148` |
 | Devices | `APP_DEVICES`: iPhone 390×844, iPad 768×1024, Laptop 1280×800, Desktop 1440×900; `deviceBucket` | `renderer/shared/design-canvas/app-devices.ts:7-26` |
 | Resizer | `DesignNodeResizer` wraps `NodeResizer` with `design-resize-handle` and `design-resize-line`. The controls are pointer-only `<div>`s (no `tabIndex`), styled in `design-canvas.css:3-15` | `renderer/design/nodes/frame-parts.tsx:14-37`, `renderer/design/design-canvas.css` |
+| d3-drag | `XYResizer` uses d3-drag 3.0.0, which listens for `mousedown.drag` on the control, then adds `mousemove.drag` and `mouseup.drag` **capture** listeners on `window` per gesture (`mouseupped` calls `noevent`, which stops immediate propagation), plus `touchstart`/`touchmove`/`touchend`/`touchcancel` on the control. It never listens for pointer events | `node_modules/d3-drag/src/drag.js:39-79`, `node_modules/@xyflow/system/dist/esm/index.mjs:1` |
 | xyflow resize events | `XYResizer` calls `onResizeStart` on drag start. On end it returns early unless a resize happened (`resizeDetected`), and otherwise calls `onResizeEnd` **before** `onEnd`, which emits the final `{type: "dimensions", resizing: false}` change. `ResizeParams` is `{x, y, width, height}`, with no control name | `node_modules/@xyflow/system/dist/esm/index.mjs:3445-3605` |
 | Adapter | `applyNodeChanges`: dimension changes with `resizing` set are applied, and the app branch sets the scale from `appResizeScale` and the box from `appFrameBox`. A frame is re-emitted only when its box differs | `renderer/design/canvas-adapter-core.ts:127-186` |
 | App node | `<DesignNodeResizer selected minSize={designMinSize("app")} keepAspectRatio />`; the status row prints `${viewport.width} × ${viewport.height}`; the iframe is drawn at viewport width with `transform: scale(scale)`; its key `${origin}\|${token}` excludes the viewport, so a width change reflows in place; page state resets when `routeShown !== route`; `shownKey` names the mounted page | `renderer/design/nodes/app-node.tsx` (`AppNode`, `statusRow`, `routeShown`, `shownKey`) |
@@ -117,7 +123,7 @@ Line numbers drift as 3a and 3b take review fixes. Task 0 rechecks them with `rg
 | Workspace | Handlers get only `workspaceRoot(chat)`; nothing passes the workspace permission | `main/handlers/design-canvas.ts:330-331`, `design-canvas-main.ts` |
 | Permission | `runnable()` refuses `none` and `read-only` | `main/services/design-canvas/app-server/app-server-main.ts` (`runnable`) |
 | Framework | `DesignAppsSnapshot.candidates[]` and `.apps[]` carry `framework?: FrameworkId` | `renderer/shared/design-app.ts:6-18`, `:91`, `:115`, `:121` |
-| Save, update and removed routes | `save(workspaceId, doc, baseRevision, {undone, undoneRoutes, beforeWrite, chatsLive})` checks the revision (`conflict` otherwise) and notes removals `byPerson`; the reply has no `doc`. `update(workspaceId, mutate, {beforeWrite})` has no revision check and notes no removal | `main/services/design-canvas/store.ts:144-229` |
+| Save, update and removed routes | `save(workspaceId, doc, baseRevision, {undone, undoneRoutes, beforeWrite, chatsLive})` checks the revision (`conflict` otherwise) and notes removals `byPerson`; the reply has no `doc`. `update(workspaceId, mutate, {beforeWrite})` has no revision check and notes no removal. The handlers use the `DesignChatCanvases` wrapper, whose own `save` and `update` forward options | `main/services/design-canvas/store.ts:144-229`, `:471-556` |
 | Route keys | `appRouteKey = "<root>\u0000<route>"`; a route is noted removed only when no frame in the **workspace** doc shows it (`shownAppRoutes`); capped at 200 | `renderer/shared/design-canvas/schema.ts` (`removedAppRoutes`, `shownAppRoutes`, `withRemovedAppRoutes`) |
 | Variant placement | `canvas_place_frame`'s variant branch | `main/services/design-canvas/canvas-tools.ts:1236-1345` |
 | Viewport updates in the tool | The reuse branch merges the viewport with an explicit `p.scale` when given; the update rule keeps the scale; both refit groups | `canvas-tools.ts:1258-1272`, `:1857-1863` |
@@ -125,9 +131,11 @@ Line numbers drift as 3a and 3b take review fixes. Task 0 rechecks them with `rg
 | Bounded read | `readBounded(path, cap)` opens `O_NOFOLLOW \| O_NONBLOCK` but returns a UTF-8 string, and `null` for missing, irregular **and** over-cap files | `main/services/design-canvas/app-server/app-detect.ts:53-75` |
 | File lock and digest | `withFileLock(file, task)`; `digest(text)` (SHA-256 of a string) | `main/handlers/design-canvas.ts:203`, `:399` |
 | File watcher | `DesignFileWatcher` and `ownWrite` cover v1 `file`/`image` frames only, not app route files | `main/services/design-canvas/watch.ts`, `design-canvas.tsx` (watched paths) |
-| Route walker | `CONVENTION_FOLDERS`, `confinedRoot`, `walk`, `walkConvention`; `discoverRoutes` reads React Router's `app/routes.ts` and walks flat files only for `{flat: true}` | `main/services/design-canvas/app-server/app-routes.ts` (`discoverRoutes`) |
-| Route rules | `routeFromFile` (one file, no siblings), `routesFromFiles` (drops a flat file with child routes as a layout), `scanTsTokens` (no positions; `null` past 50 000 tokens or when unterminated), `parseReactRouterConfig` (`{routes}` for a literal config, `{flat: true}` for `flatRoutes()`, `null` otherwise) | `main/services/design-canvas/app-server/app-routes-core.ts` |
+| Route walker | `CONVENTION_FOLDERS`, `confinedRoot`, `walk` (POSIX paths relative to the **app root**, `app-routes.ts:124`), `walkConvention`; `discoverRoutes` reads React Router's `app/routes.ts` and walks flat files only for `{flat: true}` | `main/services/design-canvas/app-server/app-routes.ts` (`discoverRoutes`) |
+| Route rules | `routeFromFile` (one file, no siblings), `routesFromFiles` (drops a flat file with child routes as a layout), `scanTsTokens` (tokens carry no offsets; `null` past 50 000 tokens or when unterminated), `parseReactRouterConfig` (`{routes}` for a literal config, `{flat: true}` for `flatRoutes()`, `null` otherwise) | `main/services/design-canvas/app-server/app-routes-core.ts` |
 | Route patterns | `isConcreteRoute` allows a query and a trailing `/` | `renderer/shared/design-canvas/app-routes.ts` (`isConcreteRoute`) |
+| Toasts | Sonner's `action` is `{label, onClick}`, with no `disabled`; a toast is replaced by calling `toast(…, {id})` again | `node_modules/sonner/dist/index.d.ts:43-47`, `design-canvas.tsx` (the page delete's Undo toast) |
+| TanStack examples | `@tanstack/react-router` 1.170.18 and `@tanstack/router-core` are installed; `router-core/skills/**/SKILL.md` hold 77 route-file code blocks | `node_modules/@tanstack/` |
 | Ask Aiden handoff | `queueOnFrame(frameId, note)` | `renderer/design/design-comments.tsx` |
 | Analytics | `design_app_frame_added {source, device_bucket}`, four call sites (S88) | `main/services/analytics/analytics-events.ts`, `docs/analytics.md`, `main/handlers/design-canvas-main.ts` (`onAppFrameAdded`) |
 | Fixture | `tests/fixtures/design-live-routes/`: TanStack detected without the router plugin installed; `App.tsx` maps the path through `import.meta.glob("./routes/*.tsx")`, so `pricing-v2.tsx` is served at `/pricing-v2`; route files are plain default exports | `tests/fixtures/design-live-routes/src/App.tsx`, `src/routes/pricing.tsx` |
@@ -147,9 +155,9 @@ All are **proposed**. They become spec amendments S89–S101 in Task 12. Each fo
 - **Bounds the resizer knows.** Edge controls get `minWidth = max(minSize, round(200 × scale))`, `maxWidth = min(maxSize, round(4000 × scale))`, and the same for height plus the 36 px title row. So xyflow's own values never pass the clamp, and the left and top edges don't drift.
 - **Telling the adapter.**
   - `onResizeStart` calls `context.resizeStart(id, side)`. That sets `resizeModes` (a ref map read synchronously by `onNodesChange`) and the React state `activeResize: {frameId, side} | null` (read by the ruler and live region).
-  - It also adds one-shot `pointerup` and `pointercancel` listeners on `window`. These clear both in a `setTimeout(0)`, which runs after xyflow's end handler has delivered the final `resizing: false` change.
-  - `onResizeEnd` clears nothing, because it runs before that change.
-  - The `pointerup` listener also covers a press with no drag, where xyflow sends no end at all.
+  - It also bumps a monotonic `resizeGeneration` ref.
+  - **A real drag** is cleared synchronously in `onNodesChange`, right after `applyNodeChanges` has handled that frame's `{type: "dimensions", resizing: false}` change. That change is the last thing xyflow sends (`onEnd` runs after `onResizeEnd`). `onResizeEnd` clears nothing.
+  - **A press without a drag** gets no end from xyflow, because it returns early when `!resizeDetected`. `DesignCanvas` adds capture listeners on `window` **once, at mount**: `mouseup`, `touchend`, `touchcancel`, `pointerup`, `pointercancel` and `blur`. Registered before any gesture, they run ahead of d3-drag's per-gesture `mouseup.drag` capture listener, whose `noevent` stops later listeners on the same target. When `resizeModes` isn't empty, a listener records the current generation and schedules a `setTimeout(0)`. The timeout clears the modes and `activeResize` only if the generation is unchanged, and the timer is cancelled on unmount. After a real drag, the synchronous clear has already run, so the timeout finds nothing to do.
 - **The edge rule** (`appEdgeResize`):
   - `left`/`right`: `viewport.width = clamp(round(w / scale))`.
   - `top`/`bottom`: `viewport.height = clamp(round((h − 36) / scale))`.
@@ -242,7 +250,8 @@ All are **proposed**. They become spec amendments S89–S101 in Task 12. Each fo
 
 - **The route a frame names.** `pagePath(route)` drops the query and a trailing `/` (except for `/`), and ownership and naming use that path. A query is carried over to the variant frame's route (`/pricing?plan=pro` → `/pricing-v2?plan=pro`).
 - **Framework.** It comes from the app's entry in `live.apps.snapshot(workspaceId)` (`candidates[]` or `apps[]`, `framework?: FrameworkId`). With no framework, the answer is `config-router`.
-- **The owner walk.** `routeFiles(workspaceRoot, appRoot, framework)` reuses 3b's confined, no-follow walker and caps (S78). It never runs code. It returns `{files: Map<pattern, OwnerFile[]>, layouts: Set<pattern>, truncated, configRouter}`, where `OwnerFile = {relPath, convention}`.
+- **The owner walk.** `routeFiles(workspaceRoot, appRoot, framework)` reuses 3b's confined, no-follow walker and caps (S78). It never runs code. It returns `{files: Map<pattern, OwnerFile[]>, layouts: Set<pattern>, truncated, configRouter}`, where `OwnerFile = {appRelPath, convention}`.
+  - **Two kinds of path.** `appRelPath` is relative to the app root, as 3b's walker gives it. It's what `routeFromFile`, `variantPathCandidates` and `tanstackRouteId` take. `workspaceRelPath(appRoot, appRelPath)` gives `appRelPath` for `.`, else `${appRoot}/${appRelPath}`. That's what `confinedTarget`, ledger records and every file name shown to the person use. In a monorepo with `appRoot: "apps/web"`, a copy of `src/routes/pricing.tsx` goes to `apps/web/src/routes/pricing-v2.tsx`.
   - **React Router**, mirroring `discoverRoutes`: when `app/routes.ts` exists, flat routes are walked only if it reads as `{flat: true}`. A literal `{routes}` config, `null` or a refused read gives `configRouter: true`.
   - **Layouts.** A flat file that `routesFromFiles` would drop as a layout (it has child routes) is listed under `layouts`, never as an owner.
 - **Matching.** Equality with a static pattern first. When only a dynamic pattern matches, the answer is `dynamic`. When the matching file is a layout, the answer is `layout`.
@@ -284,14 +293,19 @@ All are **proposed**. They become spec amendments S89–S101 in Task 12. Each fo
 - **The bytes.**
   - `readRegularFileBytes(path, cap)` opens `O_RDONLY | O_NOFOLLOW | O_NONBLOCK` and stats the open handle (`isFile()`, `mode & 0o777`). It returns `{bytes: Buffer, mode}`, or `too-large`, `not-regular`, `missing` or `io`.
   - The copy is the same bytes, except for S101's TanStack literal.
-- **The write** (`confinedTarget(workspaceReal, relPath, {create})`):
+- **The write** (`confinedTarget(workspaceReal, workspaceRelPath, {create})`):
   - It `lstat`s every segment from the workspace realpath, refusing a link or a non-folder, and checks `isPathInside(workspaceReal, realpath(parent))`.
   - For a new folder (candidates 3 and 4), it creates only that one child with a non-recursive `mkdir`, after the parent passed.
   - Then it writes `writeFile(target, bytes, {flag: "wx", mode})` under `withFileLock(target)`. If the write fails, a folder it just created is removed when empty.
+- **Check the canvas before touching disk.** Before any file is written, main runs `placeAppVariant` as a dry run on `store.get`'s document, with a placeholder route. `locked`, `locked-group`, `page-full` and `canvas-full` refuse there (as `locked` or `full`), and nothing is written.
 - **Placement.** The variant route, beside the variant set with `placeAppVariant`, labelled `vN`, with `createdBy: "person"`.
-  - `store.update` with `stillFraming` in `beforeWrite`.
+  - `store.update` re-runs `placeAppVariant` on the latest document and `stillFraming` in `beforeWrite`.
   - A broadcast step `app-page-variant:<revision>`, `sendFocus` with `own: true`, then `onAppFrameAdded`.
-  - If the store write fails after the file was written, the new file is moved to the Trash at once (its bytes are known and just written), and the reply is `io`.
+- **Rollback.** If the update refuses or fails after the file was written (a lock or a full page that appeared meanwhile, design mode turned off, or a write error):
+  - under `withFileLock`, main re-reads the copy;
+  - only if its digest still equals the written bytes is it moved to the Trash, and a folder `confinedTarget` created is then removed if empty;
+  - a copy changed in the meantime is kept, and the reply says so;
+  - the reply is the real reason (`locked`, `full`, `unavailable` or `io`), not always `io`.
 - **No file watcher.** `watcher.ownWrite` is for v1 file frames. App route files update through the dev server's HMR, so nothing is announced to the watcher.
 
 ### S96 — Move page file to Trash (proposed)
@@ -305,27 +319,32 @@ All are **proposed**. They become spec amendments S89–S101 in Task 12. Each fo
 - **The renderer** calls `await flush()` first, then dims every frame of that route at once (optimistic, through a `trashing` set in the node context).
 - **Main:**
   1. Run the gates (S99).
-  2. Resolve the owner and read its bytes (`readRegularFileBytes`).
-  3. Call `store.update(workspaceId, mutate, {byPerson: true, beforeWrite})`. It has no revision check, so it can't hit a save conflict. `byPerson` is a new option: `withRemovedAppRoutes(…, byPerson)`, which defaults to `false`, so existing callers are unchanged.
+  2. Resolve the owner with the walk, to fail fast on S95's refusals. Nothing is read or kept yet.
+  3. Call `store.update(workspaceId, mutate, {byPerson: true, beforeWrite})` (the `DesignChatCanvases` wrapper's, which forwards `byPerson`). It has no revision check, so it can't hit a save conflict. `byPerson` is a new option: `withRemovedAppRoutes(…, byPerson)`, which defaults to `false`, so existing callers are unchanged.
      - `mutate` removes every app frame of that root and route in the **whole workspace document**, because `shownAppRoutes` is workspace-wide. It throws `locked` when any of them is locked.
-     - `beforeWrite` re-runs `stillFraming` and the confinement check, then calls `trash(realPath)` under `withFileLock`. If `trash` throws, nothing is written and the reply is `io`.
+     - `beforeWrite` takes `withFileLock(workspaceRelPath)` and, inside it:
+       - re-runs `stillFraming`;
+       - re-reads `workspaceAccess` (still writable, and the same workspace realpath);
+       - re-runs `confinedTarget`;
+       - reads the bytes with `readRegularFileBytes`, so the bytes kept for undo are the ones trashed. `too-large`, `not-regular` or `io` throws, and nothing is written.
+       - Then it calls `trash(absolute)`. If `trash` throws, nothing is written and the reply is `io`.
      - If the canvas write throws after a successful trash, the kept bytes are written back with `wx` and the reply is `io`. If that also fails, the reply is `io` with `restore: "failed"`, and the toast says the file is in the Trash.
   4. Broadcast step `app-page-trash:<revision>`, record the ledger entry, and reply `{trashed, route, removed, revision}`.
-- **The renderer** puts the frames back on failure, with a toast naming the reason. On success it moves focus to the canvas region with `returnFocus`, so ⌘Z works at once. The toast's **Undo** is disabled until the canvas has applied `revision`, so it always undoes the Trash step and never the step before it.
+- **The renderer** puts the frames back on failure, with a toast naming the reason. On success it moves focus to the canvas region with `returnFocus`, so ⌘Z works at once. The success toast, with its **Undo** action, is shown only once the canvas has applied `revision`. Sonner's action has no `disabled` state, so the toast is deferred rather than disabled, and its Undo always undoes the Trash step, never the step before it. The deferral is usually a few milliseconds. If the revision isn't applied within 5 s, a toast without Undo says ⌘Z undoes it.
 - **Undo** brings the frames back, and the ledger (S97) restores the file with `wx`. If something exists at the path, nothing is overwritten and a toast says so.
 - **Redo** removes the frames again but **doesn't** trash the file again. A save can't tell a redo from the person removing a frame, and the ledger never deletes on a signal it can't read (open question 4).
 - **The Trash keeps its copy** after Undo, because Electron has no restore-from-Trash API. That's documented.
 
 ### S97 — The page-file ledger (proposed)
 
-`app-page-ledger.ts` keeps, per workspace and in memory, at most 16 records, newest kept (the `TWEAK_UNDO_LIMIT` precedent). Each record holds `chatId`, `workspaceId`, `workspaceRoot` (the realpath when recorded), `appRoot`, `route`, `file` (relative), `bytes: Buffer`, `mode` and `digest` (SHA-256 of the bytes):
+`app-page-ledger.ts` keeps, per workspace and in memory, at most 16 records, newest kept (the `TWEAK_UNDO_LIMIT` precedent). Each record holds `chatId`, `workspaceId`, `workspaceRoot` (the realpath when recorded), `appRoot`, `route`, `file` (workspace-relative, `workspaceRelPath`), `bytes: Buffer`, `mode` and `digest` (SHA-256 of the bytes):
 - a **copy record** adds `frameId` and `state: "present" | "trashed"`;
 - a **trash record** adds `frameIds` and `state: "trashed" | "restored"`.
 
 **One record per file.** Recording a file drops any older record of that workspace for the same `file`. So E2E case E's copy and a later Trash of the same page never both act.
 
 **Reconciling.**
-- `designCanvas:save` passes `onCommitted(doc)` to `store.save`. This is a new, internal option, called on the workspace chain with the exact document written, and the IPC reply is unchanged.
+- `designCanvas:save` passes `onCommitted(doc)` to the `DesignChatCanvases` wrapper's `save`, which forwards it to `DesignCanvasStore.save`. This is a new, internal option. It's called synchronously on the workspace chain with the exact document written, and only after the write. It's wrapped in `try/catch`, so a throw can't fail or delay the save. The IPC reply is unchanged.
 - The handler then queues `ledger.reconcile(workspaceId, chatId, committedDoc, undoneRoutes)` on a per-workspace queue. It's never awaited by the reply, and it pairs that save's `undoneRoutes` with that save's document.
 
 | Record | Signal in the committed doc | Action | Then |
@@ -362,21 +381,28 @@ No new event, so the registry is unchanged. `design_app_frame_added {source: "pe
 ### S101 — TanStack copies rewrite their route literal, or refuse (proposed)
 
 A TanStack route file names its own path in `createFileRoute("/pricing")` (or `createLazyFileRoute`). An unchanged copy would claim `/pricing` without the router plugin. With the plugin, the plugin would rewrite the copy as soon as it lands, which would change its digest and turn ⌘D → ⌘Z into a `changed` refusal. So for `tanstack-router` and `tanstack-start` copies:
-- **The expected literal.** `tanstackRouteId(relPath)` gives the path the generator writes for the source file:
+- **The expected literal.** `tanstackRouteId(appRelPath)` gives the path the generator writes for the source file:
   - the path under `src/routes/` without its extension;
   - `.` and `/` split into tokens, with a trailing `route` or `lazy` token dropped;
   - a trailing `index` gives the parent path plus `/` (`/` at the root), and anything else gives `/` plus the tokens joined with `/`.
 
   The same function on the copy's path gives the new literal (`/pricing` → `/pricing-v2`, `/blog/` → `/blog-v2/`, `/` → `/index-v2`).
-- **The edit is exact and single.**
-  - The bytes must decode as UTF-8 and re-encode to the same bytes.
-  - `scanTsTokens` must succeed, and the tokens must hold at most one `createFileRoute` or `createLazyFileRoute` identifier.
-  - If there is one, it must be followed by `(`, a string equal to the expected literal, and `)` (or `(`).
-  - The raw text must contain that literal, quoted with `'` or `"` and with no backslash, exactly once.
-  - That one occurrence is replaced with the new literal in the same quotes.
+- **The edit targets the call site.** `scanTsTokens(text, maxTokens, {offsets: true})` gives each string token its `start` and `end` in the text. This is a new option, and the default output is unchanged.
+  - The bytes must decode as UTF-8 and re-encode to the same bytes, and the scan must succeed.
+  - A **call site** is an `id` token `createFileRoute` or `createLazyFileRoute` followed by `(`. Imports (`import { createFileRoute } from …`), types and other mentions aren't call sites, and neither are strings elsewhere (`<Link to="/pricing">`, `href`).
+  - An aliased import (`createFileRoute as …` or `createLazyFileRoute as …`) refuses, because its calls can't be seen by name.
+  - There must be at most one call site. Its tokens must be `(`, one `str` equal to the expected literal, then `)` (usually followed by the options call's `(`). The raw text from `start` to `end` must be the value in `'` or `"` quotes, with no backslash, so the decoded value is the raw text.
+  - Exactly that token span is replaced with the new literal in the same quotes. Every other byte stays.
 - **No call** (a plain default export, as in the fixture) means a byte-identical copy.
-- **Anything else** (a second call, a template literal, a different path, two textual occurrences, or invalid UTF-8) refuses with `route-literal` and **Ask Aiden**, and nothing is written.
+- **Anything else** (a second call site, an aliased import, a template literal or any non-string argument, a different path, or invalid UTF-8) refuses with `route-literal` and **Ask Aiden**, and nothing is written.
 - **The ledger's bytes and digest** are the rewritten bytes, so the plugin finds nothing to change and ⌘Z trashes the copy cleanly.
+- **Checked against real examples.** Scanning the 77 route-file code blocks in `node_modules/@tanstack/router-core/skills/**/SKILL.md` (1.170.18) with the real `scanTsTokens`:
+  - 51 blocks have more than one `createFileRoute` identifier, usually the import, so the round-1 identifier rule would have refused them;
+  - 70 have exactly one call site with one string literal;
+  - the 7 with two call sites are WRONG/CORRECT comparison snippets, not files;
+  - 2 repeat the route literal elsewhere in the text, which the round-1 text-uniqueness rule would have refused.
+
+  Task 7's rows include a full file with its import, a `<Link to>` to its own path, and one of these doc examples, copied as a fixture.
 
 Next, Astro and React Router or Remix flat routes carry no path literal, so their copies are byte-identical.
 
@@ -431,23 +457,24 @@ trashing: ReadonlySet<string>;
 export type AppPageRefusal =
   | "config-router" | "dynamic" | "layout" | "no-file" | "several-files" | "special-files"
   | "relative-imports" | "route-literal" | "too-many" | "too-large" | "not-regular" | "truncated" | "read-only";
-export type OwnerFile = { relPath: string; convention: RouteConvention };
+export type OwnerFile = { appRelPath: string; convention: RouteConvention };            // relative to the app root
+export function workspaceRelPath(appRoot: string, appRelPath: string): string;           // "." → appRelPath, else `${appRoot}/${appRelPath}`
 export function pagePath(route: string): { path: string; query: string };
 export function ownerOf(path: string, walk: { files: ReadonlyMap<string, OwnerFile[]>; layouts: ReadonlySet<string> }):
   { owner: OwnerFile } | { refused: "dynamic" | "layout" | "no-file" | "several-files" };
 export function variantBase(path: string): string;                       // "/pricing-v2" → "/pricing", "/" → "/index"
-export function variantPathCandidates(owner: OwnerFile, n: number): { relPath: string; newFolder?: string }[];
+export function variantPathCandidates(owner: OwnerFile, n: number): { appRelPath: string; newFolder?: string }[];
 export function specialFilesLost(owner: OwnerFile, candidate: { newFolder?: string }, siblings: readonly string[]): boolean;
 export function relativeImportsMoved(source: string, fromDir: string, toDir: string, kind: "ts" | "astro"): boolean;
-export function tanstackRouteId(relPath: string): string;
+export function tanstackRouteId(appRelPath: string): string;
 export function rewriteTanstackLiteral(bytes: Buffer, from: string, to: string): { bytes: Buffer } | { refused: "route-literal" };
 
 // main/services/design-canvas/app-server/app-page-files.ts
 export function routeFiles(fs: RouteFs, workspaceRoot: string, appRoot: string, framework: FrameworkId | undefined):
-  Promise<{ files: Map<string, OwnerFile[]>; layouts: Set<string>; siblings: (relPath: string) => Promise<string[]>; truncated: boolean; configRouter: boolean } | null>;
+  Promise<{ files: Map<string, OwnerFile[]>; layouts: Set<string>; siblings: (appRelPath: string) => Promise<string[]>; truncated: boolean; configRouter: boolean } | null>;
 export function readRegularFileBytes(path: string, cap: number):
   Promise<{ ok: true; bytes: Buffer; mode: number } | { ok: false; reason: "too-large" | "not-regular" | "missing" | "io" }>;
-export function confinedTarget(workspaceReal: string, relPath: string, options: { create: boolean }):
+export function confinedTarget(workspaceReal: string, workspaceRelPath: string, options: { create: boolean }):
   Promise<{ ok: true; absolute: string; createdFolder?: string } | { ok: false; reason: "outside" | "link" | "io" }>;
 
 // main/services/design-canvas/app-page-ledger.ts
@@ -469,9 +496,14 @@ export function createAppPageLedger(deps: {
   reconcile(workspaceId: string, chatId: string, committed: DesignCanvas, undoneRoutes: readonly string[]): Promise<void>;
 };
 
-// main/services/design-canvas/store.ts
+// main/services/design-canvas/app-server/app-routes-core.ts
+export function scanTsTokens(text: string, maxTokens?: number, options?: { offsets?: boolean }): TsToken[] | null;
+//   with offsets, str tokens also carry { start: number; end: number } (the quotes included); default output unchanged
+
+// main/services/design-canvas/store.ts — both DesignCanvasStore and the DesignChatCanvases wrapper
 update(workspaceId, mutate, options?: { beforeWrite?; byPerson?: boolean }): Promise<DesignCanvas>;
 save(workspaceId, doc, baseRevision, options?: { …today's; onCommitted?(doc: DesignCanvas): void }): Promise<DesignCanvasSaveResult>;
+//   onCommitted is synchronous, runs after the write, and a throw inside it is caught
 
 // main/handlers/design-canvas.ts
 export const DESIGN_PAGE_FILE_CHANNEL = "designCanvas:pageFile";
@@ -603,7 +635,7 @@ export type CommandCapability = StudioFeature | "designMode" | "designLive";
 - Modify: `renderer/design/nodes/frame-parts.tsx` (`AppFrameResizers({selected, minSize, scale, onStart})`: eight `NodeResizeControl`s with per-side closures and `appEdgeBounds`)
 - Modify: `renderer/design/nodes/app-node.tsx` (flag on: `AppFrameResizers`; flag off: today's resizer)
 - Modify: `renderer/design/nodes/design-node-context.ts` (`resizeStart`, `activeResize`)
-- Modify: `renderer/design/design-canvas.tsx` (the `resizeModes` ref and `activeResize` state; the window `pointerup`/`pointercancel` cleanup in `setTimeout(0)`; `resizeStart` leaves an entered frame)
+- Modify: `renderer/design/design-canvas.tsx` (the `resizeModes` ref, `activeResize` state and `resizeGeneration` ref; the synchronous clear after the final change; the mount-time capture listeners with the generation-guarded `setTimeout(0)`; `resizeStart` leaves an entered frame)
 - Test: `renderer/design/canvas-adapter-core.test.ts`, `renderer/design/nodes/app-node.test.tsx`, `renderer/design/design-canvas.test.tsx`
 
 - [ ] **Step 1: Write the failing tests** in `canvas-adapter-core.test.ts`:
@@ -614,7 +646,10 @@ export type CommandCapability = StudioFeature | "designMode" | "designLive";
   - `"a viewport change that rounds to the same box is still saved"`: at scale 0.25, `w` from 320 to 320.4 changes nothing, and a change that moves the viewport by 1 is emitted.
 - [ ] **Step 2: Write the failing tests:**
   - `app-node.test.tsx`: `"flag on: an app frame has edge and corner resize controls"` (eight controls, four lines), and `"flag off: one aspect-locked resizer, as today"`.
-  - `design-canvas.test.tsx`: `"a press on a resize control without a drag leaves no resize mode"`. Dispatch `pointerdown` on a line, then `pointerup` on `window`, and run timers. `activeResize` is `null`, and a following side-panel resize scales as today.
+  - `design-canvas.test.tsx`:
+    - `"a press on a resize control without a drag leaves no resize mode"`. Dispatch `mousedown` on a line (what d3-drag listens for), then `mouseup` on `window`, and run timers. `activeResize` is `null`, and a following side-panel resize scales as today.
+    - `"a real drag clears its mode on the final change, not on a timer"`. After `mousedown`, `mousemove` and `mouseup`, `activeResize` is `null` before timers run.
+    - `"a new resize started before the timer fires keeps its mode"`. Press without a drag, start a second resize, then run timers: the second mode stays.
 - [ ] **Step 3: Run** the three suites. Expected: FAIL.
 - [ ] **Step 4: Implement** per S89.
 - [ ] **Step 5: Run** the three suites. Expected: PASS.
@@ -681,7 +716,7 @@ Read `docs/chatgpt-desktop-ui-inspiration.md` and `docs/chatgpt-ui-element-speci
   - `"a grouped frame changed to Desktop still fits its group"` (`design-canvas.test.tsx`): the group's box contains the frame's new box.
   - `"Custom… opens with focus in Width, applies whole numbers in range and refuses others"`: `150` disables Apply and shows `200–4000`.
   - `"closing Custom returns focus to the device button"`.
-  - `"on a narrow frame every header button stays reachable"`: at a 98 px box, each button has a non-zero rect and is in the tab order.
+  - `"on a narrow frame every header button stays reachable"`: at a 98 px box (happy-dom, where layout boxes are zero), the device button renders icon-only with its `aria-label`, and every header button is in the DOM and in tab order. Non-zero rects are checked in Task 10's E2E, which has real layout.
   - `"flag off: no device button, and the size text stays"`.
 - [ ] **Step 2: Run** the suites. Expected: FAIL.
 - [ ] **Step 3: Implement** with `DropdownMenu`, `DropdownMenuRadioGroup`, `DropdownMenuRadioItem` and `Popover` from `renderer/components/ui`. Use the `opening` ref with `onCloseAutoFocus` `preventDefault()`, and `returnFocus` on close.
@@ -712,11 +747,14 @@ Read `docs/chatgpt-desktop-ui-inspiration.md` and `docs/chatgpt-ui-element-speci
 ### Task 7: Which file owns a page, the copy's name, and safe file access
 
 **Files:**
-- Create: `main/services/design-canvas/app-server/app-page-files-core.ts` (`pagePath`, `ownerOf`, `variantBase`, `variantPathCandidates`, `specialFilesLost`, `relativeImportsMoved`, `tanstackRouteId`, `rewriteTanstackLiteral`)
+- Create: `main/services/design-canvas/app-server/app-page-files-core.ts` (`workspaceRelPath`, `pagePath`, `ownerOf`, `variantBase`, `variantPathCandidates`, `specialFilesLost`, `relativeImportsMoved`, `tanstackRouteId`, `rewriteTanstackLiteral`)
+- Modify: `main/services/design-canvas/app-server/app-routes-core.ts` (`scanTsTokens`'s `offsets` option)
+- Create: `main/services/design-canvas/app-server/fixtures/tanstack-route.tsx` (a TanStack doc example, with its source in a comment)
 - Create: `main/services/design-canvas/app-server/app-page-files.ts` (`routeFiles`, `readRegularFileBytes`, `confinedTarget`, reusing `confinedRoot`, `walkConvention`, `readParsedFile` and the caps from `app-routes.ts`, exported from there without behaviour change)
 - Test: `main/services/design-canvas/app-server/app-page-files-core.test.ts`, `app-page-files.test.ts` (new, `core-git`)
 
 - [ ] **Step 1: Write the failing tests** in `app-page-files-core.test.ts`, with rows written by hand:
+  - `"workspace paths"`: `workspaceRelPath(".", "src/routes/a.tsx")` gives `src/routes/a.tsx`, and `workspaceRelPath("apps/web", "src/routes/a.tsx")` gives `apps/web/src/routes/a.tsx`.
   - `"page paths"`: `/pricing/` → `/pricing`, `/pricing?tab=a` → path `/pricing` and query `?tab=a`, and `/` → `/`.
   - `"variant bases"`: `/pricing-v2` → `/pricing`, `/` → `/index`, and `/pricing-v10` stays `/pricing-v10`.
   - `"candidate paths per framework"`:
@@ -740,10 +778,13 @@ Read `docs/chatgpt-desktop-ui-inspiration.md` and `docs/chatgpt-ui-element-speci
     - a specifier in a comment doesn't count;
     - an unterminated template with a folder change gives `true`.
   - `"TanStack route ids"`: `pricing.tsx` → `/pricing`, `blog.index.tsx` → `/blog/`, `index.tsx` → `/`, `pricing/route.tsx` → `/pricing`.
-  - `"the TanStack literal is rewritten exactly once, or refused"`:
-    - `createFileRoute('/pricing')({…})` → `'/pricing-v2'`, with every other byte equal;
-    - no call → the same bytes;
-    - two calls, a template literal, a different path, the literal appearing twice in text, or invalid UTF-8 → `route-literal`.
+  - `"the TanStack literal is rewritten at its call site, or refused"`:
+    - a full file, `import { createFileRoute, Link } from "@tanstack/react-router"` plus `export const Route = createFileRoute('/pricing')({ component: Pricing })` plus `<Link to="/pricing">`, gives `'/pricing-v2'` in the call only: the import and the `Link` string are untouched, and every other byte is equal;
+    - a `createLazyFileRoute("/about")` file with its import is rewritten the same way;
+    - one of `@tanstack/router-core`'s SKILL.md route examples, copied into `main/services/design-canvas/app-server/fixtures/tanstack-route.tsx` with its source noted, is rewritten;
+    - no call site (a plain default export, or an import only) gives the same bytes;
+    - two call sites, an aliased import, a template literal, a non-string argument, a different path, or invalid UTF-8 gives `route-literal`.
+  - `"scanTsTokens offsets don't change the default output"`: without the option, the tokens deep-equal today's for the same text, and with it each `str` token's `text.slice(start, end)` is its quoted source.
 - [ ] **Step 2: Write the failing tests** in `app-page-files.test.ts`, on a temp workspace:
   - `"routeFiles maps patterns to files without following links"`: a symlinked file and folder are absent, and every path the spy recorded is under the app root.
   - `"React Router: flatRoutes() walks files; a literal routes.ts is a config router"`.
@@ -753,14 +794,14 @@ Read `docs/chatgpt-desktop-ui-inspiration.md` and `docs/chatgpt-ui-element-speci
   - `"confinedTarget refuses a link anywhere on the path and creates one folder at most"`: with a symlink at `app/pricing-v2`, nothing is written outside, and the result is `link`. A new `app/pricing-v2/` is created when absent, and a missing grandparent refuses.
 - [ ] **Step 3: Run** both. Expected: FAIL.
 - [ ] **Step 4: Implement** per S95 and S101.
-- [ ] **Step 5: Run** both, plus `app-routes.test.ts` and `app-detect.test.ts` (unchanged). Expected: PASS.
+- [ ] **Step 5: Run** both, plus `app-routes-core.test.ts`, `app-routes.test.ts` and `app-detect.test.ts` (unchanged). Expected: PASS.
 - [ ] **Step 6:** Register both (`test:design-mode`, `core-git`). Run `npm run test:ci-policy`. Commit `feat(design): find the file that owns a page and name its variant (3c)`.
 
 ### Task 8: Main file operations and the ledger
 
 **Files:**
 - Create: `main/services/design-canvas/app-page-ledger.ts` (S97)
-- Modify: `main/services/design-canvas/store.ts` (`update`'s `byPerson`, `save`'s `onCommitted`)
+- Modify: `main/services/design-canvas/store.ts` (`byPerson` on `DesignCanvasStore.update` and `DesignChatCanvases.update`; `onCommitted` on both `save`s)
 - Modify: `main/handlers/design-canvas.ts`:
   - `DESIGN_PAGE_FILE_CHANNEL`;
   - `designCanvas:appPageVariant` and `designCanvas:appPageTrash`;
@@ -784,13 +825,19 @@ Read `docs/chatgpt-desktop-ui-inspiration.md` and `docs/chatgpt-ui-element-speci
   - `"each action runs inside the file lock"`: the order the fake lock records.
 - [ ] **Step 2: Write the failing tests** in `store.test.ts`:
   - `"update with byPerson notes a removed app route"`, and without it notes nothing (today).
-  - `"save's onCommitted gets the written document"`: it equals the next `get`.
+  - `"save's onCommitted gets the written document"`: it equals the next `get`, through both `DesignCanvasStore` and `DesignChatCanvases`.
+  - `"a throwing onCommitted doesn't fail the save"`.
+  - `"DesignChatCanvases.update forwards byPerson"`.
 - [ ] **Step 3: Write the failing tests** in `design-canvas.test.ts`:
   - `"appPageVariant copies the route file and places it as a variant, as an undoable step"`:
     - on a TanStack temp app, `/pricing` gives `src/routes/pricing-v2.tsx` with equal bytes and mode;
     - the frame has `route: "/pricing-v2"`, `label: "v2"` and `variantOf` the root;
     - a broadcast step `app-page-variant:<rev>`, a focus with `own: true`, and one `onAppFrameAdded`.
-  - `"appPageVariant rewrites a TanStack createFileRoute literal"`.
+  - `"appPageVariant rewrites a TanStack createFileRoute literal"`, on a realistic file with its `import { createFileRoute }` line and a `<Link to>` to itself.
+  - `"a monorepo app copies, trashes and restores under its app root"`: with `appRoot: "apps/web"`, ⌘D writes `apps/web/src/routes/pricing-v2.tsx`; Trash moves `apps/web/src/routes/about.tsx`; undo restores it there. Nothing appears under the workspace's own `src/`.
+  - `"a locked or full canvas refuses before any file is written"`: the fs spy records no write and no `mkdir`.
+  - `"a lock that appears after the write rolls the copy back and answers locked"`: `beforeWrite` sees the new lock, and the unchanged copy is trashed. The created folder is removed when empty, and the reply is `locked`.
+  - `"a copy edited before rollback is kept"`.
   - `"appPageVariant on /pricing?plan=pro places /pricing-v2?plan=pro"`.
   - `"appPageVariant skips a taken slot on EEXIST"`: a pre-made `Pricing-v2.tsx` on a case-insensitive fake fs gives `-v3`.
   - `"appPageVariant refuses and writes nothing"`: one case each for `dynamic`, `layout`, `relative-imports`, `route-literal`, `too-large`, `read-only` (`workspaceAccess` permission `none`), `config-router` and `locked`. The fs spy records no write and no `mkdir`.
@@ -802,6 +849,8 @@ Read `docs/chatgpt-desktop-ui-inspiration.md` and `docs/chatgpt-ui-element-speci
     - the reply carries `revision`.
   - `"appPageTrash refuses a locked frame on any page before trashing"`.
   - `"a failed canvas write after trash writes the file back"`: `beforeWrite` succeeds and the write throws, so the bytes are restored with `wx` and the reply is `io`.
+  - `"Trash keeps the bytes it trashed"`: the file is changed after the owner walk and before `beforeWrite`, and undo restores the changed bytes.
+  - `"Trash re-checks the permission inside the lock"`: `workspaceAccess` turns `none` while the update waits, so nothing is trashed and the reply is `read-only`.
   - `"a save after undo restores the trashed file, after the reply"`: end to end through the handler.
   - `"a save after leaving design mode touches no file"`.
   - `"flag off: both answer unavailable"`.
@@ -836,7 +885,8 @@ Read `docs/chatgpt-desktop-ui-inspiration.md` and `docs/chatgpt-ui-element-speci
     - `"⌘D and ⌫ do nothing while a frame menu or the Trash confirmation is open"` (flag on), and `"⌫ does nothing while the Download menu is open"` (flag off).
     - `"a refusal shows its reason and Ask Aiden queues a note on the frame"`.
     - `"trash dims the frame at once and puts it back on failure"`.
-    - `"the Trash toast's Undo undoes the Trash step, not the one before"`: the reply's `revision` arrives before the canvas sync. Undo is disabled until the sync, and after it, undo brings the frames back.
+    - `"the Trash toast's Undo undoes the Trash step, not the one before"`: the reply's `revision` arrives before the canvas sync, and no Undo toast is shown yet. After the sync, the toast appears, and its Undo brings the frames back.
+    - `"a Trash whose revision never arrives shows a toast without Undo"` (fake timers, 5 s).
     - `"after Trash, focus is on the canvas and ⌘Z undoes it"`.
     - `"a page-file outcome shows a toast in its own chat only"`.
   - `shortcut-sheet.test.ts`: `"the live-page duplicate row shows only with designLive"`.
@@ -874,6 +924,7 @@ Read `docs/chatgpt-desktop-ui-inspiration.md` and `docs/chatgpt-ui-element-speci
   - **G. Refusal.** ⌘D on `/blog/hello-world` shows the dynamic toast. Ask Aiden puts the note on the frame, and no file is written.
   - **H. Flag off.** ⌘D on a page frame duplicates the frame, and there's no More or device button.
   - **I. Shortcut sheet.** ⌘/ lists the new row with the flag on only.
+  - **J. A narrow header.** An iPhone frame at scale 0.25: every header button has a non-zero bounding box inside the frame, and each is reachable by Tab.
 - [ ] **Step 2: Run** in the Space: `npm run test:e2e:space -- tests/e2e/design-live-viewports.spec.ts`. If Probe 2 found no `gio`, E and F's Trash checks skip on Linux with that reason, and then run on the macOS host with `npx playwright test tests/e2e/design-live-viewports.spec.ts -g "Trash|⌘D"`. That host run is allowed only for this macOS-only behaviour (AGENTS.md).
 - [ ] **Step 3: Screenshots** in light and dark (`shoot`):
   - an edge drag with the readout and ticks;
@@ -910,7 +961,7 @@ Read `docs/chatgpt-desktop-ui-inspiration.md` and `docs/chatgpt-ui-element-speci
   - §6.3.9 (S94–S99, S101);
   - §6.10 (S100);
   - append S89–S101 as amendments.
-- Modify: `.memory/design-mode.md` (a "v2 Phase 3c" section: xyflow's resize end order and the `pointerup` cleanup, the ledger and its signals, the naming and TanStack rules, and E2E gotchas).
+- Modify: `.memory/design-mode.md` (a "v2 Phase 3c" section: xyflow's and d3-drag's resize event order, the synchronous clear and the mount-time capture cleanup, the ledger and its signals, the naming and TanStack rules, and E2E gotchas).
 - Modify: this plan's As built.
 
 - [ ] Search for stale claims: `rg -n "corner keeps|keeps its shape|⌘D|Hide from canvas|Duplicate page|browser size" docs README.md PRODUCT.md`. Fix any that 3c makes stale.
@@ -920,7 +971,7 @@ Read `docs/chatgpt-desktop-ui-inspiration.md` and `docs/chatgpt-ui-element-speci
 
 | # | Amendment | Section |
 |---|---|---|
-| S89 | Edges change the viewport and keep the scale, and corners keep D15; per-side controls with viewport-derived bounds; modes cleared after xyflow's final change, also on a press without a drag; one undo step | §6.3.8 |
+| S89 | Edges change the viewport and keep the scale, and corners keep D15; per-side controls with viewport-derived bounds; modes cleared synchronously after xyflow's final change, and for a press without a drag by mount-time window capture listeners (ahead of d3-drag's) with a generation-guarded timer; one undo step | §6.3.8 |
 | S90 | ⌥-drag clipping deferred: it conflicts with S62's recomputed box | §6.3.8 |
 | S91 | Breakpoints from same-origin width conditions (chained ranges, px/em/rem × 16), a capped walk with imports and scopes, filtered and capped before posting, validated and display-only; zoom-aware ticks on width drags; a polite end announcement; no snapping | §6.3.8 |
 | S92 | The device menu replaces the size text; presets plus Custom… by the shared keep-scale rule with a group refit; the keyboard path for resizing | §6.3.8 |
@@ -932,7 +983,7 @@ Read `docs/chatgpt-desktop-ui-inspiration.md` and `docs/chatgpt-ui-element-speci
 | S98 | "Hide from canvas" is Remove from canvas | §6.3.9 |
 | S99 | The gates, with the workspace permission from a new `workspaceAccess` dependency; desktop only; no new tool | §6.3.9 |
 | S100 | `design_app_frame_added` call sites 5 and 6; nothing else sends | §6.10 |
-| S101 | TanStack copies rewrite their one `createFileRoute` path literal exactly, or refuse with `route-literal` | §6.3.9 |
+| S101 | TanStack copies rewrite the one string argument of their single `createFileRoute(`/`createLazyFileRoute(` call site by its offsets (imports and other strings don't count), or refuse with `route-literal` | §6.3.9 |
 
 ## Verification
 
@@ -1002,6 +1053,19 @@ All 18 findings were checked after merging 3b at `c354b32ba`. Each held. Two are
 | 16 | Resize controls aren't focusable; CSS location; the live region's mount | S89's keyboard note; ruler CSS in `design-canvas.css`; the live region outside the ruler (S91) |
 | 17 | Case-insensitive clashes and the check-then-write gap | S95 (`wx` per slot, `EEXIST` moves on); Task 8 case |
 | 18 | `PRODUCT.md`, the doc targets, Risk 7's wording | Task 12; Risk 7 |
+
+## Applied review decisions, round 2 (review-p3c-plan-2, 2026-11-27)
+
+| # | Finding | Where fixed |
+|---|---|---|
+| 1 | S101 counted identifiers, so every real file's import refused | S101 matches call sites only and refuses aliased imports; probe against 77 TanStack examples; Task 7 and Task 8 cases on full files |
+| 2 | S89's cleanup used pointer events d3-drag doesn't use, and had no generation guard | S89: a synchronous clear after the final change; mount-time capture listeners for mouse, touch, pointer and `blur`; the `resizeGeneration` guard; Task 2's `mousedown`/`mouseup` cases |
+| 3 | Trash read its bytes before the lock, and `beforeWrite` didn't re-check the permission | S96: read, gates and trash all inside `beforeWrite`'s file lock; Task 8 cases |
+| 4 | App-relative and workspace-relative paths were mixed | `appRelPath` and `workspaceRelPath` (S95, S97, Interfaces); Task 7 rows; Task 8's monorepo case |
+| 5 | ⌘D could write a file and then refuse | S95's dry run before the write, and a digest-checked rollback that returns the real reason; Task 8 cases |
+| 6 | The wrapper store must forward the new options | Interfaces, S96, S97 and Task 8 name both classes; `onCommitted` is synchronous and caught |
+| 7 | Sonner has no disabled action; happy-dom has no layout | S96 defers the Undo toast; Task 5 asserts DOM and tab order; Task 10 case J checks real rects |
+| 8 | Text uniqueness refused pages that link to themselves | S101 replaces the call's token span by offsets (`scanTsTokens`'s new `offsets` option) |
 
 ## As built
 
