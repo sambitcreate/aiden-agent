@@ -1,6 +1,6 @@
 import SwiftUI
 
-struct AidenBotCustomAccessSessionIdentity: Equatable {
+struct AidenBotSessionIdentity: Equatable {
     let instanceID: String?
     let deviceID: String?
     let connection: String
@@ -24,6 +24,14 @@ struct AidenBotCustomAccessSessionIdentity: Equatable {
         ].joined(separator: "|")
     }
 
+    /// `owner` is the machine an open chat stays on, so the default moving leaves
+    /// this alone. There is no "selected machine" form: a chat whose machine is
+    /// gone reads that machine's absence, never another machine's state.
+    @MainActor
+    init(coordinator: AidenRemoteCoordinator, owner: String) {
+        self.init(coordinator: coordinator, machine: owner)
+    }
+
     /// The same pairing and grants, whatever the connection is doing. Bot pages
     /// start over when this changes; a connection coming up only re-reads (R15).
     struct Pairing: Equatable, Hashable {
@@ -36,6 +44,10 @@ struct AidenBotCustomAccessSessionIdentity: Equatable {
         Pairing(instanceID: instanceID, deviceID: deviceID, capabilityRevision: capabilityRevision)
     }
 }
+
+typealias AidenBotCustomAccessSessionIdentity = AidenBotSessionIdentity
+typealias AidenBotGeneratedAvatarSessionIdentity = AidenBotSessionIdentity
+typealias AidenBotChatToolsSessionIdentity = AidenBotSessionIdentity
 
 struct AidenBotCustomAccessDraft: Codable, Equatable {
     var providerID: String

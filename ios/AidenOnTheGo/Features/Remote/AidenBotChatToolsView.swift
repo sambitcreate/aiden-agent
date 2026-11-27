@@ -13,33 +13,6 @@ enum AidenBotChatSheet: Identifiable {
     }
 }
 
-struct AidenBotChatToolsSessionIdentity: Equatable {
-    let instanceID: String?
-    let deviceID: String?
-    let connection: String
-    let capabilities: String
-
-    /// `owner` is the machine an open chat stays on, so the default moving leaves
-    /// this alone. There is no "selected machine" form: a chat whose machine is
-    /// gone reads that machine's absence, never another machine's state.
-    @MainActor
-    init(coordinator: AidenRemoteCoordinator, owner: String) {
-        let installation = coordinator.botInstallation(on: owner)
-        instanceID = installation?.id
-        deviceID = installation?.deviceId
-        switch coordinator.botConnectionState(on: owner) {
-        case .needsPairing: connection = "needs-pairing"
-        case .connecting: connection = "connecting"
-        case .connected: connection = "connected"
-        case .offline: connection = "offline"
-        }
-        capabilities = [
-            installation?.deviceCapabilities.map(\.rawValue).sorted().joined(separator: ",") ?? "",
-            installation?.serverCapabilities?.map(\.rawValue).sorted().joined(separator: ",") ?? "legacy",
-        ].joined(separator: "|")
-    }
-}
-
 enum AidenBotFilesPresentation {
     /// A Bot has Files when its access includes at least one file location.
     static func hasFiles(botAccess: AidenBotAccessView, catalog: AidenBotCapabilityCatalog) -> Bool {
