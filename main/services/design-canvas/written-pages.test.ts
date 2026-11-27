@@ -1008,6 +1008,35 @@ test("an entry still running when its chat moves to another workspace writes not
   assert.equal(placed.focusId, undefined);
 });
 
+test("a chat that moves while its turn's claim asks which chats are live claims nothing there, and gets no focus", async (t) => {
+  const { workspaceRoot, canvases } = await workspaceWith(t, ["home.html"]);
+  // chatPages is full, so the claim waits on liveness after the save.
+  const others = Array.from({ length: DESIGN_CANVAS_LIMITS.chatPages }, (_, index) => `old-${index}`);
+  await canvases.store.update("chat-1", (doc) => ({ ...doc, chatPages: Object.fromEntries(others.map((id) => [id, "page-1"])) }));
+  const workspaces = new Map([["chat-2", "ws-1"]]);
+  const store = new DesignChatCanvases({ store: canvases.workspaceStore, workspaceIdOf: async (chatId) => workspaces.get(chatId) ?? null });
+  let asked = 0;
+  const placed = await placeWrittenPagesOnCanvas({
+    chatId: "chat-2",
+    store,
+    pages: canvases.pages("chat-2"),
+    workspaceRoot,
+    paths: ["design/home.html"],
+    broadcast: () => undefined,
+    newId: ids(),
+    isLive: async () => {
+      asked += 1;
+      // The move commits while the claim waits; every old chat is gone, so there would be room.
+      workspaces.set("chat-2", "ws-2");
+      return new Set<string>();
+    },
+  });
+  assert.equal(asked, 1, "the claim asked which chats are live");
+  const doc = await canvases.workspaceStore.get("ws-1");
+  assert.equal(Object.prototype.hasOwnProperty.call(doc.chatPages, "chat-2"), false, "no claim in the workspace it left");
+  assert.deepEqual([placed.frameIds, placed.pageId, placed.focusId], [[], undefined, undefined], "no focus for the old page");
+});
+
 test("a turn's write while design mode's entry runs waits for it, lands on the chat's new page, and the page takes the newest title", async (t) => {
   const { workspaceRoot, canvases } = await workspaceWith(t, []);
   await canvases.store.update("chat-1", (doc) => ({ ...doc, chatPages: { "chat-1": "page-1" } }));

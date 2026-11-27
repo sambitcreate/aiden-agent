@@ -772,9 +772,13 @@ export async function placeWrittenPagesOnCanvas(input: {
   const reportRemoved = () => {
     if (removed.length > 0) input.onRemoved?.(removed);
   };
-  // Entry always shows the chat's page, so the view and the open canvas move to it.
+  // Entry always shows the chat's page, so the view and the open canvas move to it,
+  // kept only while the chat still owns this workspace right before the change.
   const show = async (): Promise<number | undefined> =>
-    rules && pageId !== undefined ? await input.pages.show(workspaceId, pageId) : undefined;
+    rules && pageId !== undefined ? await input.pages.show(workspaceId, pageId, shouldSave) : undefined;
+  // After the save, every step that changes the canvas, the view or the focus
+  // is fenced by `shouldSave` right before it: a chat that left meanwhile gets
+  // no claim, view, page or focus there (the frames already saved stay).
   try {
     const { doc: saved } = await input.store.update(
       input.chatId,
@@ -837,15 +841,20 @@ export async function placeWrittenPagesOnCanvas(input: {
       store: input.store,
       isLive: input.isLive,
       broadcast: input.broadcast,
+      stillOwned: shouldSave,
     });
     reportRemoved();
+    if (!(await shouldSave())) return { frameIds: [], added: routeWidths };
     const focusId = await show();
+    // The show awaited too: the focus goes back only while the chat is still here.
+    if (!(await shouldSave())) return { frameIds: [], added: routeWidths };
     return { frameIds: placedIds, ...(pageId ? { pageId } : {}), ...(focusId !== undefined ? { focusId } : {}), added: routeWidths };
   } catch (error) {
     if (error === UNCHANGED) {
       reportRemoved();
       if (!rules || refused || !(await shouldSave())) return { frameIds: [], added: [] };
       const focusId = await show();
+      if (!(await shouldSave())) return { frameIds: [], added: [] };
       return { frameIds: [], ...(pageId ? { pageId } : {}), ...(focusId !== undefined ? { focusId } : {}), added: [] };
     }
     throw error;

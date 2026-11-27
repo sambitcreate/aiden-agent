@@ -20,6 +20,8 @@ export async function claimWithRoom(input: {
   store: Pick<DesignChatCanvases, "update">;
   isLive?(chatIds: string[], workspaceId: string): Promise<Set<string>>;
   broadcast(update: DesignCanvasUpdated): void;
+  /** Asked on the canvas's chain right before the claim is written: false (the chat left the workspace) writes nothing. */
+  stillOwned?(): Promise<boolean>;
 }): Promise<void> {
   const pageId = input.pageId;
   if (!input.isLive || pageId === undefined || !lazyClaimNeedsRoom(input.saved, input.chatId)) return;
@@ -35,7 +37,16 @@ export async function claimWithRoom(input: {
         if (next === current) throw NO_ROOM;
         return next;
       },
-      { workspaceId: input.workspaceId },
+      {
+        workspaceId: input.workspaceId,
+        ...(input.stillOwned
+          ? {
+              beforeWrite: async () => {
+                if (!(await input.stillOwned!())) throw NO_ROOM;
+              },
+            }
+          : {}),
+      },
     );
     input.broadcast({ workspaceId: input.workspaceId, chatId: input.chatId, revision: doc.revision });
   } catch {
