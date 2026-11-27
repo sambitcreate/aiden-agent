@@ -2775,8 +2775,8 @@ export type DesignCanvasSaveResult =
 /** `designCanvas:updated`: a workspace's canvas changed, through `chatId`'s action. */
 export type DesignCanvasUpdate = { workspaceId: string; chatId: string; revision: number; aidenTurn?: string; step?: string };
 
-/** `designCanvas:focus`: Aiden shows a page or frames to one chat. `focusId` orders Aiden's page changes. */
-export type DesignCanvasFocusRequest = { chatId: string; frameIds: string[]; pageId?: string; focusId?: number };
+/** `designCanvas:focus`: Aiden shows a page or frames to one chat. `focusId` orders Aiden's page changes; `own` marks the person's own placement. */
+export type DesignCanvasFocusRequest = { chatId: string; frameIds: string[]; pageId?: string; focusId?: number; own?: true };
 
 /** The workspace design canvas, through one of its chats. Available only while design mode's flag is on. */
 export const designCanvasApi = {

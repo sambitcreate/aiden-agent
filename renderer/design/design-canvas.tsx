@@ -31,7 +31,7 @@ import {
 import { APP_FRAME_ID_ATTRIBUTE } from "./app-frame-focus-guard";
 import { readDesignArtifactTheme } from "./artifact-theme";
 import { resolveDesignCanvasKey } from "./canvas-keymap-core";
-import { canvasFocusFrom, forgetCanvasFocus, takeCanvasFocus, type CanvasFocusRequest } from "./canvas-focus-requests";
+import { canvasFocusFrom, focusYieldsToPerson, forgetCanvasFocus, takeCanvasFocus, type CanvasFocusRequest } from "./canvas-focus-requests";
 import { DesignCanvasEmpty } from "./design-canvas-empty";
 import { frameIframe, useDesignComments } from "./design-comments";
 import { usePageTextEdits } from "./page-text-edits";
@@ -484,7 +484,7 @@ function LoadedDesignCanvas({
   const showPageOfView = view.showPage;
   React.useEffect(() => {
     if (!pendingFocus) return;
-    if (gesture.current || Date.now() - lastInteraction.current < FOCUS_QUIET_MS) {
+    if (focusYieldsToPerson(pendingFocus, { gesture: gesture.current, sinceInteractionMs: Date.now() - lastInteraction.current, quietMs: FOCUS_QUIET_MS })) {
       setPendingFocus(null);
       return;
     }

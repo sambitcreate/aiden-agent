@@ -1701,6 +1701,7 @@ test("3b: placeAppRoute puts the person's frame centred on the page on screen, a
   assert.deepEqual([frame.x + frame.w / 2, frame.y + frame.h / 2], [1500, 1000], "centred in the reported view");
   assert.match(broadcasts[broadcasts.length - 1]?.step ?? "", /^add-app-route:/u);
   assert.deepEqual((focusSent[focusSent.length - 1]?.request as { frameIds: string[] }).frameIds, [placed.placed]);
+  assert.equal((focusSent[focusSent.length - 1]?.request as { own?: boolean }).own, true, "the person's own Add, which the canvas doesn't hold back");
   assert.deepEqual(reported, [1280]);
 
   const again = (await invoke("designCanvas:placeAppRoute", "chat-1", { appRoot: ".", route: "/pricing", pageId: "page-2" })) as { already: string };

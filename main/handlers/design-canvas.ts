@@ -326,7 +326,7 @@ export function registerDesignCanvasHandlers<Event>(deps: {
    */
   senderWindowShown?(event: Event, changed: () => void): () => boolean;
   /** Sends `designCanvas:focus` to the window that sent `event`, if it is still there. */
-  sendFocus?(event: Event, request: { chatId: string; pageId: string; frameIds: string[]; focusId: number }): void;
+  sendFocus?(event: Event, request: { chatId: string; pageId: string; frameIds: string[]; focusId: number; own?: true }): void;
   /** The chat's workspace folder, or null when the chat has no folder to frame. */
   workspaceRoot(chat: DesignCanvasChat): Promise<string | null>;
   /** The window that sent `event`, or null when it has none (or it is gone). */
@@ -766,7 +766,8 @@ export function registerDesignCanvasHandlers<Event>(deps: {
       const frameId = "placed" in result ? result.placed : result.already;
       // Unlike a visual, the frame is focused on its own page too, so the person sees what Add did.
       const focusId = await pages.show(workspaceId, result.pageId);
-      if (focusId !== undefined) deps.sendFocus?.(event, { chatId: chat.id, pageId: result.pageId, frameIds: [frameId], focusId });
+      // The person's own focus: the canvas shows it even though they just clicked there.
+      if (focusId !== undefined) deps.sendFocus?.(event, { chatId: chat.id, pageId: result.pageId, frameIds: [frameId], focusId, own: true });
     }
     if ("placed" in result) {
       try {
