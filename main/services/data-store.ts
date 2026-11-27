@@ -8,6 +8,7 @@ import * as fs from "fs/promises";
 import * as path from "path";
 import { createHash, randomUUID } from "node:crypto";
 import { decodeUtf8, readRegularFile } from "./regular-file-read.js";
+import { stagedPathFor, syncDirectory, syncFile } from "./durable-fs.js";
 
 /** Match the complete destination basename plus the fixed recovery suffix. */
 export function isDataStoreRecoveryFile(
@@ -279,12 +280,7 @@ export class DataStore<T> {
 
   private async syncDirectory(directory: string): Promise<void> {
     if (this.options.syncDirectory) return this.options.syncDirectory(directory);
-    const handle = await fs.open(directory, "r");
-    try {
-      await handle.sync();
-    } finally {
-      await handle.close();
-    }
+    return syncDirectory(directory);
   }
 
   private async restoreHeldFile(
@@ -519,22 +515,14 @@ export class DataStore<T> {
       if (this.cache === null) await this.load();
       if (this.corrupt) await this.preserveCorrupt(destination);
     }
-    const staged = path.join(
-      path.dirname(destination),
-      `.${path.basename(destination)}.${randomUUID()}.tmp`,
-    );
+    const staged = stagedPathFor(destination);
     this.ownedPublicationPaths = [destination, staged];
     try {
       await fs.writeFile(staged, serialized, {
         encoding: "utf-8",
         ...(this.options.fileMode === undefined ? {} : { mode: this.options.fileMode }),
       });
-      const stagedHandle = await fs.open(staged, "r");
-      try {
-        await stagedHandle.sync();
-      } finally {
-        await stagedHandle.close();
-      }
+      await syncFile(staged);
       if (!isCurrent()) throw new Error("The renderer document is no longer active.");
       // Only the publish hooks read the predecessor, so stores without hooks
       // skip a deep clone of the whole document on every write.

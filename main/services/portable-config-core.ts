@@ -29,6 +29,7 @@ import * as path from "path";
 import { randomUUID } from "node:crypto";
 import { ensurePrivateDirectory, hardenPrivateFile } from "./private-storage.js";
 import { DataStore, DataStoreExternalChangeError, isDataStoreRecoveryFile } from "./data-store.js";
+import { syncDirectory, syncFile } from "./durable-fs.js";
 import {
   isGenerationThinkingLevel,
   type GenerationThinkingLevel,
@@ -1010,24 +1011,14 @@ async function writeFileAtomicallyIfAbsent(
   ownedPublicationPaths.add(staged);
   try {
     await fs.writeFile(staged, contents, { flag: "wx", mode: 0o600 });
-    const stagedHandle = await fs.open(staged, "r");
-    try {
-      await stagedHandle.sync();
-    } finally {
-      await stagedHandle.close();
-    }
+    await syncFile(staged);
     try {
       // A hard link publishes the fully copied sibling in one no-overwrite
       // operation. A crash before this point leaves only a disposable temp;
       // after it, the final archive necessarily names the complete file.
       await fs.link(staged, destination);
       published = true;
-      const directoryHandle = await fs.open(path.dirname(destination), "r");
-      try {
-        await directoryHandle.sync();
-      } finally {
-        await directoryHandle.close();
-      }
+      await syncDirectory(path.dirname(destination));
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
     }
