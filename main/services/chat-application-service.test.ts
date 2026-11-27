@@ -6,6 +6,8 @@ import { DesignGrantRegistry } from "./design-canvas/grants.js";
 import { DesignModeConsent } from "./design-canvas/design-mode-tool.js";
 import type { ChatGenerationOwner } from "./chat-generation-owner.js";
 import { DesignCanvasStore } from "./design-canvas/store.js";
+import { DesignCanvasViews } from "./design-canvas/views.js";
+import { createDesignChatCleanup } from "./design-canvas/cleanup.js";
 import { captureAnalyticsEvents } from "./analytics/test-support.js";
 import type { Chat, Workspace } from "./types.js";
 import fs from "node:fs/promises";
@@ -661,18 +663,43 @@ test("a committed deletion offers the chat's workspace for release, and a failed
   assert.deepEqual(released, ["workspace-1"], "nothing is released for a deletion that did not commit");
 });
 
-test("deleting a chat deletes its design canvas, and a canvas that cannot be deleted keeps the chat", async () => {
+/** A workspace canvas with one comment from each of two chats. */
+function sharedCanvasWithComments() {
+  const at = "2026-11-23T10:00:00.000Z";
+  return {
+    ...emptyDesignCanvas(),
+    comments: (["chat-1", "chat-2"] as const).map((chatId) => ({
+      id: `from-${chatId}`,
+      chatId,
+      pageId: "page-1",
+      x: 0,
+      y: 0,
+      note: `from ${chatId}`,
+      state: "open" as const,
+      anchorState: "anchored" as const,
+      createdAt: at,
+    })),
+  };
+}
+
+test("deleting a chat keeps its workspace's canvas, dropping only the chat's comments and view; a cleanup that fails keeps the chat", async () => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-chat-delete-canvas-"));
   try {
-    const designCanvasStore = new DesignCanvasStore({ root: () => root });
-    await designCanvasStore.save("chat-1", emptyDesignCanvas(), 0);
-    await designCanvasStore.save("chat-2", emptyDesignCanvas(), 0);
-    await fixture({ designCanvasStore }).service.remove("chat-1");
-    assert.deepEqual(await fs.readdir(root), ["chat-2.json"]);
+    const store = new DesignCanvasStore({ root: () => path.join(root, "canvases") });
+    const views = new DesignCanvasViews({ root: () => path.join(root, "views") });
+    await store.save("workspace-1", sharedCanvasWithComments(), 0);
+    await views.report("chat-1", "workspace-1", { pageId: "page-1", viewport: { x: 0, y: 0, zoom: 1 } }, 0);
+    await views.report("chat-2", "workspace-1", { pageId: "page-1", viewport: { x: 0, y: 0, zoom: 1 } }, 0);
+    const designCanvasCleanup = createDesignChatCleanup({ store, views });
+    await fixture({ designCanvasCleanup }).service.remove("chat-1");
+    const after = await store.get("workspace-1");
+    assert.deepEqual(after.comments.map((comment) => comment.id), ["from-chat-2"], "the other chat's comment stays");
+    assert.equal(await views.get("chat-1", "workspace-1"), undefined);
+    assert.notEqual(await views.get("chat-2", "workspace-1"), undefined);
 
     let removed = false;
     const failing = fixture({
-      designCanvasStore: { delete: async () => { throw new Error("disk failed"); } },
+      designCanvasCleanup: { forgetChat: async () => { throw new Error("disk failed"); } },
       chatStore: {
         listRegular: async () => [],
         list: async () => [],
@@ -711,6 +738,20 @@ test("a chat's design grant ends when design mode turns off, the chat moves or t
 
   await service.remove("chat-3");
   assert.equal(designGrants.resolve(bystander), null);
+});
+
+test("moving an empty chat clears its view and comments on the old workspace's canvas, and a failure there does not stop the move", async () => {
+  const forgotten: Array<[string, string]> = [];
+  const { service } = fixture({
+    designCanvasCleanup: { forgetChat: async (chatId: string, workspaceId: string) => { forgotten.push([chatId, workspaceId]); } },
+  });
+  await service.moveEmptyToWorkspace("chat-2", "workspace-1");
+  // The fixture's chats start in workspace-1; what is cleared is the workspace the chat was in.
+  assert.deepEqual(forgotten, [["chat-2", "workspace-1"]]);
+
+  const failing = fixture({ designCanvasCleanup: { forgetChat: async () => { throw new Error("disk failed"); } } });
+  const moved = await failing.service.moveEmptyToWorkspace("chat-2", "workspace-1");
+  assert.equal(moved?.id, "chat-2");
 });
 
 test("after a Not now, Aiden may ask about design mode again only once the person has opened it themselves", async () => {
@@ -801,14 +842,14 @@ test("turning design mode on hands the chat and its folder to the canvas once, a
   assert.equal(logged.length, 1);
 });
 
-test("a canvas save or grant that lands while the chat is being deleted does not outlive it", async () => {
+test("a canvas save or grant that lands while the chat is being deleted does not bring back its comments or outlive it", async () => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-chat-delete-race-"));
   try {
-    const designCanvasStore = new DesignCanvasStore({ root: () => root });
+    const store = new DesignCanvasStore({ root: () => root });
     const designGrants = new DesignGrantRegistry();
     let lateGrant = "";
     const { service } = fixture({
-      designCanvasStore,
+      designCanvasCleanup: createDesignChatCleanup({ store, views: new DesignCanvasViews() }),
       designGrants,
       chatStore: {
         listRegular: async () => [],
@@ -821,14 +862,26 @@ test("a canvas save or grant that lands while the chat is being deleted does not
         moveEmptyChatToWorkspace: async () => chat(),
         // The chat still exists until remove commits, so in-flight IPC passes its checks.
         remove: async () => {
-          await designCanvasStore.save("chat-1", emptyDesignCanvas(), 0);
+          const current = await store.get("workspace-1");
+          await store.save("workspace-1", sharedCanvasWithComments(), current.revision);
           lateGrant = designGrants.issue("chat-1", "/work/site");
         },
       } as ChatApplicationDependencies["chatStore"],
     });
     await service.remove("chat-1");
-    assert.deepEqual(await fs.readdir(root), []);
+    assert.deepEqual((await store.get("workspace-1")).comments.map((comment) => comment.id), ["from-chat-2"]);
     assert.equal(designGrants.resolve(lateGrant), null);
+  } finally {
+    await fs.rm(root, { recursive: true, force: true });
+  }
+});
+
+test("deleting a chat whose workspace has no canvas writes no canvas file", async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-chat-delete-nocanvas-"));
+  try {
+    const store = new DesignCanvasStore({ root: () => root });
+    await fixture({ designCanvasCleanup: createDesignChatCleanup({ store, views: new DesignCanvasViews() }) }).service.remove("chat-1");
+    assert.deepEqual((await fs.readdir(root).catch(() => [])).filter((name) => name.endsWith(".json")), []);
   } finally {
     await fs.rm(root, { recursive: true, force: true });
   }

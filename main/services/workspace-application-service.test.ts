@@ -9,6 +9,10 @@ import { captureAnalyticsEvents } from "./analytics/test-support.js";
 import { compileAum } from "../../renderer/shared/aiden-ui/compile.js";
 import { AIDEN_UI_CATALOG_VERSION } from "../../renderer/shared/aiden-ui/types.js";
 import { DesignGrantRegistry } from "./design-canvas/grants.js";
+import { createDesignWorkspaceCleanup } from "./design-canvas/cleanup.js";
+import { DesignCanvasStore } from "./design-canvas/store.js";
+import { DesignCanvasViews } from "./design-canvas/views.js";
+import { emptyDesignCanvas } from "../../renderer/shared/design-canvas/schema.js";
 import { createScratchWorkspaceDirectory } from "./scratch-workspace.js";
 import { WorkspaceArtifactStore } from "./workspace-artifacts/store.js";
 import { ApprovalRuleBook, memoryApprovalRuleStore } from "./approval-rules/store.js";
@@ -375,6 +379,31 @@ test("removing a workspace ends the design grants on its folder and no others", 
   await application.service.remove("workspace-1");
   assert.equal(designGrants.resolve(inside), null);
   assert.notEqual(designGrants.resolve(elsewhere), null);
+});
+
+test("removing a workspace deletes its design canvas, the copies set aside as corrupt, and its chats' views", async (t) => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-workspace-remove-canvas-"));
+  t.after(() => fs.rm(root, { recursive: true, force: true }));
+  const canvases = path.join(root, "canvases");
+  const store = new DesignCanvasStore({ root: () => canvases });
+  const views = new DesignCanvasViews({ root: () => path.join(root, "views") });
+  await store.save("workspace-1", emptyDesignCanvas(), 0);
+  await store.save("workspace-2", emptyDesignCanvas(), 0);
+  await fs.writeFile(path.join(canvases, "workspace-1.json.corrupt-1"), "{");
+  await views.report("chat-1", "workspace-1", { pageId: "page-1", viewport: { x: 0, y: 0, zoom: 1 } }, 0);
+  await views.flush();
+  const application = fixture();
+  (application.deps as { designCanvas?: unknown }).designCanvas = createDesignWorkspaceCleanup({ store, views });
+  await application.service.remove("workspace-1");
+  assert.deepEqual((await fs.readdir(canvases)).filter((name) => name.startsWith("workspace")), ["workspace-2.json"]);
+  assert.deepEqual(await fs.readdir(path.join(root, "views")), []);
+  assert.equal(await views.get("chat-1", "workspace-1"), undefined);
+
+  // A cleanup that fails is logged; the workspace is still removed.
+  const failing = fixture();
+  (failing.deps as { designCanvas?: unknown }).designCanvas = { removeWorkspace: async () => { throw new Error("disk failed"); } };
+  await failing.service.remove("workspace-1");
+  assert.ok(failing.events.includes("remove-record"));
 });
 
 async function noWorkspaceFixture(t: { after(fn: () => Promise<void>): void }, initial: Workspace[]) {

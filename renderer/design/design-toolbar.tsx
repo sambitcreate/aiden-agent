@@ -39,7 +39,7 @@ import { prettyAccelerator } from "../shared/keybindings";
 import { DESIGN_DRAW_SHORTCUTS } from "./canvas-keymap-core";
 import { DesignCommentsPanel } from "./design-comments-panel";
 import type { DesignDrawTool } from "./design-drawing";
-import { activeDesignPage, DESIGN_CANVAS_LIMITS, type DesignCanvas } from "../shared/design-canvas/schema";
+import { DESIGN_CANVAS_LIMITS, type DesignCanvas } from "../shared/design-canvas/schema";
 
 export type DesignAddKind = "note" | "group" | "file" | "image";
 
@@ -77,6 +77,7 @@ const DRAW_MENU: readonly DesignDrawTool[] = ["pencil", "pen"];
 
 export function DesignToolbar({
   doc,
+  pageId,
   tool,
   onToolChange,
   commenting,
@@ -89,6 +90,8 @@ export function DesignToolbar({
   onDraw,
 }: {
   doc: DesignCanvas;
+  /** The page on screen, from the chat's view. */
+  pageId: string;
   tool: CanvasTool;
   onToolChange(tool: CanvasTool): void;
   /** The drawing tool in use; it replaces the Select tool while it is. */
@@ -110,7 +113,7 @@ export function DesignToolbar({
       aria-label="Canvas tools"
       className="glass-surface nodrag flex max-w-full flex-wrap items-center gap-0.5 rounded-button p-1 shadow-control"
     >
-      <DesignPageMenu doc={doc} onPage={onPage} />
+      <DesignPageMenu doc={doc} pageId={pageId} onPage={onPage} />
       <div aria-hidden className="mx-1 h-4 w-px shrink-0 bg-separator" />
       {TOOLS.map(({ tool: item, label, Icon }) => {
         const shortcut = CANVAS_TOOL_SHORTCUTS[item];
@@ -274,8 +277,8 @@ function DrawToolMenu({
 }
 
 /** The page picker: every page, and what can be done to the one on screen. */
-function DesignPageMenu({ doc, onPage }: { doc: DesignCanvas; onPage(action: DesignPageAction): void }) {
-  const page = activeDesignPage(doc);
+function DesignPageMenu({ doc, pageId, onPage }: { doc: DesignCanvas; pageId: string; onPage(action: DesignPageAction): void }) {
+  const page = doc.pages.find((entry) => entry.id === pageId) ?? doc.pages[0]!;
   const at = doc.pages.indexOf(page);
   const [renaming, setRenaming] = React.useState(false);
   const trigger = React.useRef<HTMLButtonElement | null>(null);

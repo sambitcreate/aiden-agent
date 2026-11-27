@@ -147,6 +147,8 @@ export type DesignSidePanelProps = {
   /** Reads a page's file or an artifact's HTML; the canvas saves first, since main reads the stored frame. */
   readSource: DesignReadSource;
   doc: DesignCanvas;
+  /** The page on screen, from the chat's view. */
+  pageId: string;
   selection: ReadonlySet<string>;
   tab: DesignPanelTab;
   onTab(tab: DesignPanelTab): void;
@@ -164,8 +166,8 @@ export type DesignSidePanelProps = {
 };
 
 export function DesignSidePanel(props: DesignSidePanelProps) {
-  const { doc, selection, tab, onTab, onClose } = props;
-  const selected = doc.frames.filter((frame) => selection.has(frame.id) && frame.pageId === doc.activePageId);
+  const { doc, pageId, selection, tab, onTab, onClose } = props;
+  const selected = doc.frames.filter((frame) => selection.has(frame.id) && frame.pageId === pageId);
   // On Linux without a desktop title bar, Aiden's window buttons sit at the top
   // right; the panel starts below them instead of under them.
   const asideRef = React.useRef<HTMLElement>(null);
@@ -237,14 +239,15 @@ export function DesignPanelButton({ open, onToggle }: { open: boolean; onToggle(
 
 function PropertiesTab({
   doc,
+  pageId,
   selected,
   update,
   moveTo,
   resizeTo,
 }: DesignSidePanelProps & { selected: DesignFrame[] }) {
   if (selected.length === 0) {
-    const page = doc.pages.find((entry) => entry.id === doc.activePageId);
-    const count = doc.frames.filter((frame) => frame.pageId === doc.activePageId).length;
+    const page = doc.pages.find((entry) => entry.id === pageId);
+    const count = doc.frames.filter((frame) => frame.pageId === pageId).length;
     return (
       <PanelNote>
         {page?.name ?? "This page"} has {count === 1 ? "1 item" : `${count} items`}. Select one to see its properties.
@@ -540,8 +543,8 @@ function layerGroups(layers: readonly DesignLayer[]): Map<string, string[]> {
   return groups;
 }
 
-function LayersTab({ doc, selection, onSelect, update, reorder, step }: DesignSidePanelProps) {
-  const layers = React.useMemo(() => designLayers(doc), [doc]);
+function LayersTab({ doc, pageId, selection, onSelect, update, reorder, step }: DesignSidePanelProps) {
+  const layers = React.useMemo(() => designLayers(doc, pageId), [doc, pageId]);
   const groups = React.useMemo(() => layerGroups(layers), [layers]);
   const [renaming, setRenaming] = React.useState<string | null>(null);
   const listRef = React.useRef<HTMLUListElement>(null);

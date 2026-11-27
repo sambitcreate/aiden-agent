@@ -18,7 +18,16 @@ import { remoteAttachmentStore } from "./aiden-remote-attachments-main.js";
 import { toolOutputStore } from "./tool-output-store.js";
 import { scheduleStore } from "./schedule-store.js";
 import { chatPullRequestStore } from "./chat-pull-request-service-main.js";
-import { designCanvasStore, designGrants, designModeConsent, recentWrittenPages } from "./design-canvas/main.js";
+import {
+  designCanvasCarry,
+  designCanvasChatCleanup,
+  designCanvasStore,
+  designCanvasViews,
+  designGrants,
+  designModeConsent,
+  recentWrittenPages,
+} from "./design-canvas/main.js";
+import { designTurnPages } from "./design-canvas/views.js";
 import { EARLIER_PAGES_LIMIT, pagesWrittenInChat, placeWrittenPagesOnCanvas } from "./design-canvas/written-pages.js";
 import { DESIGN_CANVAS_UPDATED_CHANNEL } from "../handlers/design-canvas.js";
 import { cancelVisualSnapshots } from "./visual-snapshot-service.js";
@@ -42,11 +51,12 @@ export const chatApplicationService = createChatApplicationService({
   piRuntimeEffectStore,
   piCompactionSessionStore,
   chatPullRequestStore,
-  designCanvasStore,
+  designCanvasCleanup: designCanvasChatCleanup,
+  designCanvasCarry,
   designGrants,
   designModeConsent,
   designPagesOnEntry: async (chat, workspaceRoot) => {
-    const frameIds = await placeWrittenPagesOnCanvas({
+    const entered = await placeWrittenPagesOnCanvas({
       chatId: chat.id,
       workspaceRoot,
       // A reply still running has not saved its activity yet; its pages come from this run's record.
@@ -54,12 +64,20 @@ export const chatApplicationService = createChatApplicationService({
       limit: EARLIER_PAGES_LIMIT,
       shouldSave: async () => (await chatStore.getMeta(chat.id))?.designMode === true,
       store: designCanvasStore,
+      pages: designTurnPages({ views: designCanvasViews, chatId: chat.id }),
       broadcast: (update) => ipcMain.broadcast(DESIGN_CANVAS_UPDATED_CHANNEL, update),
       newId: randomUUID,
-      onlyIfEmpty: true,
+      // The chat's earlier pages land on its own page of the shared canvas.
+      entry: {
+        pageName: chat.title,
+        hasView: async (workspaceId) => (await designCanvasViews.get(chat.id, workspaceId)) !== undefined,
+      },
     });
-    // The canvas fits them once it loads, so the person sees them whole.
-    if (frameIds.length > 0) ipcMain.broadcast("designCanvas:focus", { chatId: chat.id, frameIds });
+    // The canvas shows that page and fits them once it loads, so the person sees them whole.
+    const { frameIds, pageId, focusId } = entered;
+    if (pageId && (frameIds.length > 0 || focusId !== undefined)) {
+      ipcMain.broadcast("designCanvas:focus", { chatId: chat.id, pageId, frameIds, ...(focusId !== undefined ? { focusId } : {}) });
+    }
   },
   visualSnapshots: { cancelChat: cancelVisualSnapshots },
   followThrough: { beginMove: beginFollowThroughMove, deleteChat: deleteChatFollowThrough, restoreChat: restoreChatFollowThrough },

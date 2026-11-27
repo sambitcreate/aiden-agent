@@ -6,7 +6,12 @@
 import * as React from "react";
 import { designCanvasApi } from "../lib/ipc";
 
-export type CanvasFocusRequest = { ids: string[]; at: number };
+/**
+ * One focus request: the frames to fit (the whole page when empty), the page
+ * they are on, and main's `focusId` for the page change, which the canvas
+ * echoes back in its view reports.
+ */
+export type CanvasFocusRequest = { ids: string[]; pageId?: string; focusId?: number; at: number };
 
 const latest = new Map<string, CanvasFocusRequest>();
 let installed = false;
@@ -14,10 +19,18 @@ let installed = false;
 /** Parses a `designCanvas:focus` payload; null for another shape. */
 export function canvasFocusFrom(payload: unknown): { chatId: string; request: CanvasFocusRequest } | null {
   if (!payload || typeof payload !== "object") return null;
-  const { chatId, frameIds } = payload as { chatId?: unknown; frameIds?: unknown };
+  const { chatId, frameIds, pageId, focusId } = payload as { chatId?: unknown; frameIds?: unknown; pageId?: unknown; focusId?: unknown };
   if (typeof chatId !== "string") return null;
   const ids = Array.isArray(frameIds) ? frameIds.filter((id): id is string => typeof id === "string") : [];
-  return { chatId, request: { ids, at: Date.now() } };
+  return {
+    chatId,
+    request: {
+      ids,
+      ...(typeof pageId === "string" && pageId.length > 0 ? { pageId } : {}),
+      ...(typeof focusId === "number" && Number.isSafeInteger(focusId) && focusId >= 0 ? { focusId } : {}),
+      at: Date.now(),
+    },
+  };
 }
 
 /** Mounted once with the chat area, so a request is kept even while the canvas is still loading. */
@@ -32,11 +45,14 @@ export function useCanvasFocusRequests(enabled: boolean): void {
   }, [enabled]);
 }
 
-/** The chat's newest focus request if it is at most `maxAgeMs` old, once. */
-export function takeCanvasFocus(chatId: string, maxAgeMs: number): CanvasFocusRequest | null {
+/**
+ * The chat's newest focus request, once, however old: the canvas still
+ * applies an old request's page change and only skips fitting its frames.
+ */
+export function takeCanvasFocus(chatId: string): CanvasFocusRequest | null {
   const request = latest.get(chatId);
   latest.delete(chatId);
-  return request && Date.now() - request.at <= maxAgeMs ? request : null;
+  return request ?? null;
 }
 
 /** Forgets a request the canvas already acted on. */

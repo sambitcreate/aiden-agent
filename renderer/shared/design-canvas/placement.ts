@@ -12,6 +12,7 @@ import {
   type DesignFrame,
   type DesignFrameKind,
 } from "./schema.js";
+import { viewPageId } from "./view.js";
 
 /** Space between a group's frames when one is placed after the last. */
 export const DESIGN_FRAME_GAP = 64;
@@ -27,9 +28,8 @@ export const clampSize = (value: number, kind?: DesignFrameKind) =>
 export const clampCoord = (value: number) =>
   Math.min(DESIGN_CANVAS_LIMITS.maxCoord, Math.max(-DESIGN_CANVAS_LIMITS.maxCoord, Math.round(value)));
 
-/** A frame to place; it goes on `pageId`, or on the page on screen. */
-export type PlaceFrameInput = Omit<DesignFrame, "id" | "x" | "y" | "pageId"> &
-  Partial<Pick<DesignFrame, "x" | "y" | "pageId">>;
+/** A frame to place; it goes on `pageId`, or on the first page when that page is gone. */
+export type PlaceFrameInput = Omit<DesignFrame, "id" | "x" | "y"> & Partial<Pick<DesignFrame, "x" | "y">>;
 
 /**
  * Adds a frame. Without a position it goes 64 px right of the last frame in
@@ -46,8 +46,7 @@ export function placeFrame(
 ): { doc: DesignCanvas; id: string } | { error: "limit" } {
   const w = clampSize(frame.w, frame.kind);
   const h = clampSize(frame.h, frame.kind);
-  const pageId =
-    frame.pageId !== undefined && doc.pages.some((page) => page.id === frame.pageId) ? frame.pageId : doc.activePageId;
+  const pageId = viewPageId(doc, frame);
   const onPage = doc.frames.filter((entry) => entry.pageId === pageId);
   if (doc.frames.length >= DESIGN_CANVAS_LIMITS.frames || onPage.length >= DESIGN_CANVAS_LIMITS.framesPerPage) {
     return { error: "limit" };

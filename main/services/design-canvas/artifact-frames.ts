@@ -5,7 +5,9 @@
 import { canvasView } from "../../../renderer/shared/design-canvas/canvas-summary.js";
 import { placeFrame } from "../../../renderer/shared/design-canvas/placement.js";
 import { DESIGN_CANVAS_LIMITS, type DesignCanvas } from "../../../renderer/shared/design-canvas/schema.js";
-import type { DesignCanvasStore } from "./store.js";
+import type { DesignChatView } from "../../../renderer/shared/design-canvas/view.js";
+import type { DesignCanvasUpdated, DesignChatCanvases } from "./store.js";
+import type { DesignTurnPages } from "./views.js";
 
 /** An artifact frame's box when it first lands, in canvas units. */
 export const ARTIFACT_FRAME_BOX = { w: 640, h: 480 } as const;
@@ -13,21 +15,24 @@ export const ARTIFACT_FRAME_BOX = { w: 640, h: 480 } as const;
 export type CanvasArtifact = { mediaId: string; title: string };
 
 /**
- * Puts one turn's artifacts on the canvas. One already there (same `mediaId`)
- * is left alone. An artifact titled like an unlocked frame Aiden placed before
- * on the page on screen replaces that frame's media and keeps where the person
- * put it; a locked frame, or one on another page, is never swapped. Two visuals
- * of one turn never share a frame, even under one title. The rest are placed
- * beside the frames in view. Returns `changed: false` when nothing moved, so
- * the caller saves and broadcasts only real changes.
+ * Puts one turn's artifacts on the canvas, on the page the chat's turn works
+ * on. One already there (same `mediaId`) is left alone. An artifact titled
+ * like an unlocked frame Aiden placed before for this same chat on that page
+ * replaces that frame's media and keeps where the person put it; a locked
+ * frame, one on another page, or one another chat drew is never swapped. Two
+ * visuals of one turn never share a frame, even under one title. The rest are
+ * placed beside the frames in view, stamped with the chat that drew them.
+ * Returns `changed: false` when nothing moved, so the caller saves and
+ * broadcasts only real changes.
  */
 export function placeArtifactFrames(
   doc: DesignCanvas,
   artifacts: readonly CanvasArtifact[],
   newId: () => string,
-  /** The canvas region's size on the person's screen, when their message said it. */
-  viewSize?: { w: number; h: number },
+  /** The chat that drew them, and its view for the turn (`designTurnPages`). */
+  place: { chatId: string; view: DesignChatView },
 ): { doc: DesignCanvas; changed: boolean } {
+  const { chatId, view } = place;
   let next = doc;
   let changed = false;
   // Frames this turn already filled, so a second visual never lands in the first one's frame.
@@ -42,7 +47,8 @@ export function placeArtifactFrames(
         frame.createdBy === "aiden" &&
         frame.title === title &&
         !frame.locked &&
-        frame.pageId === next.activePageId &&
+        frame.chatId === chatId &&
+        frame.pageId === view.pageId &&
         !filled.has(frame.id)
       ) {
         sameTitle = index;
@@ -58,8 +64,8 @@ export function placeArtifactFrames(
     }
     const placed = placeFrame(
       next,
-      { kind: "artifact", title, mediaId: artifact.mediaId, createdBy: "aiden", ...ARTIFACT_FRAME_BOX },
-      canvasView(next, viewSize),
+      { kind: "artifact", title, mediaId: artifact.mediaId, chatId, pageId: view.pageId, createdBy: "aiden", ...ARTIFACT_FRAME_BOX },
+      canvasView(next, view),
       newId,
     );
     // A full canvas takes no more frames; the visual is still in the chat.
@@ -73,27 +79,45 @@ export function placeArtifactFrames(
 
 const UNCHANGED = Symbol("unchanged");
 
-/**
- * Places the artifacts in the chat's stored canvas and tells open canvases.
- * Saves nothing (and announces nothing) when every artifact is already there.
- */
-export async function placeArtifactsOnCanvas(input: {
+/** What a placement needs to reach the chat's workspace canvas and the page its turn works on. */
+type CanvasPlacement = {
   chatId: string;
-  artifacts: readonly CanvasArtifact[];
-  store: Pick<DesignCanvasStore, "update">;
-  broadcast(update: { chatId: string; revision: number }): void;
+  store: Pick<DesignChatCanvases, "update" | "workspaceIdOf">;
+  /** The turn's page resolver (`designTurnPages`). */
+  pages: Pick<DesignTurnPages, "resolver">;
+  broadcast(update: DesignCanvasUpdated): void;
   newId(): string;
-  /** The canvas region's size on the person's screen, when their message said it. */
-  viewSize?: { w: number; h: number };
-}): Promise<boolean> {
+};
+
+/**
+ * The chat's workspace, resolved once so the save and the broadcast name the
+ * same one, and the turn's view resolver for it.
+ */
+async function placementTurn(input: CanvasPlacement): Promise<{ workspaceId: string; viewOf: (doc: DesignCanvas) => DesignChatView }> {
+  const workspaceId = await input.store.workspaceIdOf(input.chatId);
+  if (workspaceId === null) throw new Error("This chat is no longer available.");
+  return { workspaceId, viewOf: await input.pages.resolver(workspaceId) };
+}
+
+/**
+ * Places the artifacts in the chat's workspace canvas and tells open
+ * canvases. Saves nothing (and announces nothing) when every artifact is
+ * already there.
+ */
+export async function placeArtifactsOnCanvas(input: CanvasPlacement & { artifacts: readonly CanvasArtifact[] }): Promise<boolean> {
   if (input.artifacts.length === 0) return false;
   try {
-    const saved = await input.store.update(input.chatId, (doc) => {
-      const placed = placeArtifactFrames(doc, input.artifacts, input.newId, input.viewSize);
-      if (!placed.changed) throw UNCHANGED;
-      return placed.doc;
-    });
-    input.broadcast({ chatId: input.chatId, revision: saved.revision });
+    const { workspaceId, viewOf } = await placementTurn(input);
+    const { doc: saved } = await input.store.update(
+      input.chatId,
+      (doc) => {
+        const placed = placeArtifactFrames(doc, input.artifacts, input.newId, { chatId: input.chatId, view: viewOf(doc) });
+        if (!placed.changed) throw UNCHANGED;
+        return placed.doc;
+      },
+      { workspaceId },
+    );
+    input.broadcast({ workspaceId, chatId: input.chatId, revision: saved.revision });
     return true;
   } catch (error) {
     if (error === UNCHANGED) return false;
@@ -108,23 +132,24 @@ export type CanvasImage = { path: string; width: number; height: number };
 
 /**
  * Puts images generate_image saved in the workspace on the canvas, each in an
- * image frame sized to its shape. An image already shown on the page on screen
- * (same path) keeps its frame, which now shows the new file. Returns the frame
- * showing each image, in order, as far as the canvas had room.
+ * image frame sized to its shape, on the page the turn works on (`view`). An
+ * image already shown on that page (same path) keeps its frame, which now
+ * shows the new file. Returns the frame showing each image, in order, as far
+ * as the canvas had room.
  */
 export function placeImageFrames(
   doc: DesignCanvas,
   images: readonly CanvasImage[],
   newId: () => string,
-  /** The canvas region's size on the person's screen, when their message said it. */
-  viewSize?: { w: number; h: number },
+  /** The chat's view for the turn (`designTurnPages`). */
+  view: DesignChatView,
 ): { doc: DesignCanvas; changed: boolean; frameIds: string[] } {
   let next = doc;
   let changed = false;
   const frameIds: string[] = [];
   for (const image of images) {
     const shown = next.frames.find(
-      (frame) => frame.kind === "image" && frame.path === image.path && frame.pageId === next.activePageId,
+      (frame) => frame.kind === "image" && frame.path === image.path && frame.pageId === view.pageId,
     );
     if (shown) {
       frameIds.push(shown.id);
@@ -138,11 +163,12 @@ export function placeImageFrames(
         kind: "image",
         title: name.slice(0, DESIGN_CANVAS_LIMITS.titleChars) || "Image",
         path: image.path,
+        pageId: view.pageId,
         createdBy: "aiden",
         w: Math.max(1, image.width * scale),
         h: Math.max(1, image.height * scale),
       },
-      canvasView(next, viewSize),
+      canvasView(next, view),
       newId,
     );
     // A full canvas takes no more frames; the image is still in the workspace.
@@ -155,47 +181,52 @@ export function placeImageFrames(
 }
 
 /**
- * Places saved images in the chat's stored canvas and tells open canvases.
- * Returns the frames showing them, or null when `shouldSave` refused under
- * the canvas lock (design mode went off, or the workspace changed).
+ * Places saved images in the chat's workspace canvas and tells open canvases.
+ * Returns the frames showing them and the page they are on, or null when
+ * `shouldSave` refused under the canvas lock (design mode went off, or the
+ * workspace changed).
  */
-export async function placeImagesOnCanvas(input: {
-  chatId: string;
-  images: readonly CanvasImage[];
-  store: Pick<DesignCanvasStore, "update">;
-  broadcast(update: { chatId: string; revision: number }): void;
-  newId(): string;
-  viewSize?: { w: number; h: number };
-  /** Checked again just before the canvas is written. */
-  shouldSave?: () => Promise<boolean>;
-}): Promise<string[] | null> {
-  if (input.images.length === 0) return [];
+export async function placeImagesOnCanvas(
+  input: CanvasPlacement & {
+    images: readonly CanvasImage[];
+    /** Checked again just before the canvas is written. */
+    shouldSave?: () => Promise<boolean>;
+  },
+): Promise<{ frameIds: string[]; pageId: string } | null> {
   let frameIds: string[] = [];
+  let pageId = "";
   let refused = false;
+  const { workspaceId, viewOf } = await placementTurn(input);
   try {
-    const saved = await input.store.update(
+    const { doc: saved } = await input.store.update(
       input.chatId,
       (doc) => {
-        const placed = placeImageFrames(doc, input.images, input.newId, input.viewSize);
+        const view = viewOf(doc);
+        pageId = view.pageId;
+        if (input.images.length === 0) throw UNCHANGED;
+        const placed = placeImageFrames(doc, input.images, input.newId, view);
         frameIds = placed.frameIds;
         if (!placed.changed) throw UNCHANGED;
         return placed.doc;
       },
-      input.shouldSave
-        ? {
-            beforeWrite: async () => {
-              if (!(await input.shouldSave!())) {
-                refused = true;
-                throw UNCHANGED;
-              }
-            },
-          }
-        : undefined,
+      {
+        workspaceId,
+        ...(input.shouldSave
+          ? {
+              beforeWrite: async () => {
+                if (!(await input.shouldSave!())) {
+                  refused = true;
+                  throw UNCHANGED;
+                }
+              },
+            }
+          : {}),
+      },
     );
-    input.broadcast({ chatId: input.chatId, revision: saved.revision });
-    return frameIds;
+    input.broadcast({ workspaceId, chatId: input.chatId, revision: saved.revision });
+    return { frameIds, pageId };
   } catch (error) {
     if (error !== UNCHANGED) throw error;
-    return refused ? null : frameIds;
+    return refused ? null : { frameIds, pageId };
   }
 }

@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { emptyDesignCanvas, type DesignCanvas } from "../shared/design-canvas/schema";
-import { addPage, deletePage, showPage } from "../shared/design-canvas/pages";
+import { addPage, deletePage, movePage, renamePage } from "../shared/design-canvas/pages";
 import { changesBetween, keepUnchanged, record, redo, takeIn, undo, type CanvasHistory } from "./canvas-history-core";
 
 const state = (label: string): DesignCanvas => ({
@@ -54,22 +54,30 @@ test("undoing a page delete brings the page and its frames back, and keeps a fra
     frames: [...withPage.frames, { ...withPage.frames[0]!, id: "on-p2", pageId: "p2" }],
   };
   const deleted = deletePage(before, "p2");
-  assert.equal(deleted.activePageId, "page-1");
   // Aiden adds a note while the delete is on screen.
   const elsewhere: DesignCanvas = { ...deleted, frames: [...deleted.frames, { ...deleted.frames[0]!, id: "aiden" }] };
   const restored = changesBetween(deleted, before)(elsewhere);
   assert.deepEqual(restored.pages.map((page) => page.name), ["Page 1", "Pricing"]);
-  assert.equal(restored.activePageId, "p2", "the restored page is shown again");
   assert.deepEqual(restored.frames.map((frame) => frame.id).sort(), ["aiden", "kept", "on-p2"]);
 });
 
-test("an undo never shows a page that no longer exists", () => {
-  const two = addPage(state("a"), "p2");
-  const back = showPage(two, "page-1");
-  // Someone else deleted p2 before the undo of "show Page 1" ran.
-  const gone = deletePage(back, "p2");
-  const undone = changesBetween(back, two)(gone);
-  assert.ok(undone.pages.some((page) => page.id === undone.activePageId));
+test("undoing a frame move keeps a page rename another chat made meanwhile", () => {
+  // Two pages; this chat moves a frame on Page 1 while another chat renames Pricing.
+  const two = addPage(state("a"), "p2", "Pricing");
+  const moved: DesignCanvas = { ...two, frames: [{ ...two.frames[0]!, x: 300 }] };
+  const renamedElsewhere = renamePage(moved, "p2", "Plans");
+  const kept = changesBetween(moved, two)(renamedElsewhere);
+  assert.deepEqual(kept, { ...renamedElsewhere, frames: two.frames });
+});
+
+test("undoing a page edit takes the pages back whole, and drops chat pages that point at a page gone", () => {
+  const two: DesignCanvas = { ...addPage(state("a"), "p2"), chatPages: { "chat-1": "p2" } };
+  const reordered = movePage(two, "p2", -1);
+  assert.deepEqual(changesBetween(reordered, two)(reordered).pages.map((page) => page.id), ["page-1", "p2"]);
+  // Undoing the add of p2 takes it away again, and the chat that used it no longer names it.
+  const withoutP2 = changesBetween(two, state("a"))(two);
+  assert.deepEqual(withoutP2.pages.map((page) => page.id), ["page-1"]);
+  assert.deepEqual(withoutP2.chatPages, {});
 });
 
 test("undoing a comment edit keeps comments someone else changed, and a comment goes with its frame", () => {

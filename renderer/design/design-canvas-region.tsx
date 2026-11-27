@@ -13,18 +13,33 @@ const DesignCanvas = React.lazy(() => import("./design-canvas"));
  */
 export function DesignCanvasRegion({
   chatId,
+  workspaceId,
   width,
   placement,
   hidden,
   stackedTopInset = 0,
 }: {
   chatId: string;
+  /** The chat's workspace (normalized: a legacy chat's is "default"), whose canvas this shows. */
+  workspaceId: string;
   width: number;
   placement: "split" | "stacked";
   hidden: boolean;
   /** Extra room below the top bar when stacked, such as the top bar's design mode banner. */
   stackedTopInset?: number;
 }) {
+  // A save can find the chat moved to another workspace before the chat's
+  // metadata says so. The canvas then opens on that workspace at once, until
+  // the metadata names a workspace of its own, which is newer.
+  // It belongs to the chat it was found for: another chat of the same workspace opens on its own.
+  const [moved, setMoved] = React.useState<{ chatId: string; from: string; to: string } | null>(null);
+  const current = moved && moved.chatId === chatId && moved.from === workspaceId ? moved : null;
+  if (moved && !current) setMoved(null);
+  const shownWorkspace = current ? current.to : workspaceId;
+  const onMoved = React.useCallback(
+    (to: string) => setMoved(to === workspaceId ? null : { chatId, from: workspaceId, to }),
+    [chatId, workspaceId],
+  );
   return (
     <section
       data-design-canvas-region={placement}
@@ -45,8 +60,13 @@ export function DesignCanvasRegion({
       }
     >
       <React.Suspense fallback={<DesignCanvasLoading />}>
-        {/* Each chat has its own canvas, so its tool and viewport never carry over. */}
-        <DesignCanvas key={chatId} chatId={chatId} />
+        {/* Each chat has its own view of its workspace's canvas, so its tool and view never carry over. */}
+        <DesignCanvas
+          key={`${shownWorkspace}\n${chatId}`}
+          chatId={chatId}
+          workspaceId={shownWorkspace}
+          onMoved={onMoved}
+        />
       </React.Suspense>
     </section>
   );

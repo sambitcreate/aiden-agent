@@ -35,7 +35,7 @@ const grouped = canvas(
 );
 
 test("groups come first so their frames draw above them, and selection and box carry over", () => {
-  const nodes = nodesFromCanvas(grouped, new Set(["b"]));
+  const nodes = nodesFromCanvas(grouped, "page-1", new Set(["b"]));
   assert.deepEqual(
     nodes.map((node) => node.id),
     ["g", "a", "b", "loose"],
@@ -206,7 +206,7 @@ test("an explicit position is kept, and a size outside the limits is clamped", (
   assert.deepEqual(box(byId(placed.doc, "p1")), { x: 10, y: 20, w: 40, h: 8000 });
 });
 
-test("a page holds at most 400 frames, and the canvas 1 000", () => {
+test("a page holds at most 400 frames, and the canvas 4 000", () => {
   const note = { kind: "note" as const, title: "One more", w: 200, h: 100, text: "", createdBy: "person" as const };
   const view = { x: 0, y: 0, w: 1000, h: 800 };
   const full = canvas(...Array.from({ length: 400 }, (_, index) => frame(`f${index}`)));
@@ -215,16 +215,33 @@ test("a page holds at most 400 frames, and the canvas 1 000", () => {
   assert.equal("doc" in placeFrame(almost, { ...note, pageId: "page-1" }, view, () => "last"), true);
 
   // Another page still has room until the canvas as a whole is full.
-  const second = { ...full, pages: [...full.pages, { id: "page-2", name: "Page 2", viewport: { x: 0, y: 0, zoom: 1 } }] };
+  const pages = Array.from({ length: 10 }, (_, index) => ({ id: index === 0 ? "page-1" : `page-${index + 1}`, name: `Page ${index + 1}` }));
+  const second = { ...full, pages };
   assert.equal("doc" in placeFrame(second, { ...note, pageId: "page-2" }, view, () => "other"), true);
   const everywhere = {
     ...second,
     frames: [
       ...second.frames,
-      ...Array.from({ length: 600 }, (_, index) => frame(`g${index}`, { pageId: "page-2" })),
+      ...pages.slice(1, 9).flatMap((page) => Array.from({ length: 400 }, (_, index) => frame(`${page.id}-${index}`, { pageId: page.id }))),
+      ...Array.from({ length: 400 }, (_, index) => frame(`last-${index}`, { pageId: "page-10" })),
     ],
   };
-  assert.deepEqual(placeFrame(everywhere, { ...note, pageId: "page-2" }, view, () => "over"), { error: "limit" });
+  assert.equal(everywhere.frames.length, 4000);
+  assert.deepEqual(placeFrame({ ...everywhere, pages: [...pages, { id: "page-11", name: "Page 11" }] }, { ...note, pageId: "page-11" }, view, () => "over"), { error: "limit" });
+});
+
+test("placeFrame puts the frame on the given page, and on the first page when that page is gone", () => {
+  const note = { kind: "note" as const, title: "N", w: 200, h: 100, text: "", createdBy: "person" as const };
+  const view = { x: 0, y: 0, w: 1000, h: 800 };
+  const doc = { ...canvas(frame("a")), pages: [{ id: "page-1", name: "Page 1" }, { id: "p2", name: "Page 2" }] };
+  const placed = placeFrame(doc, { ...note, pageId: "p2" }, view, () => "n");
+  if ("error" in placed) return assert.fail(placed.error);
+  assert.equal(byId(placed.doc, "n")!.pageId, "p2");
+  // Page 1's frame at the centre does not push it aside: only frames on its own page count.
+  assert.deepEqual(box(byId(placed.doc, "n")), { x: 400, y: 350, w: 200, h: 100 });
+  const gone = placeFrame(doc, { ...note, pageId: "deleted" }, view, () => "m");
+  if ("error" in gone) return assert.fail(gone.error);
+  assert.equal(byId(gone.doc, "m")!.pageId, "page-1");
 });
 
 test("duplicating frames copies them 32 px down and right with new ids", () => {
@@ -292,14 +309,14 @@ test("an arrow is drawn where its ends are, and only its line takes the pointer"
       ],
     }),
   );
-  const node = nodesFromCanvas(doc, new Set()).find((entry) => entry.id === "ab")!;
+  const node = nodesFromCanvas(doc, "page-1", new Set()).find((entry) => entry.id === "ab")!;
   assert.deepEqual(node.data.ends, [
     { x: 100, y: 30 },
     { x: 400, y: 30 },
   ]);
   assert.deepEqual({ ...node.position, w: node.width }, { x: 88, y: 18, w: 324 });
   assert.equal(node.style?.pointerEvents, "none");
-  assert.equal(nodesFromCanvas(doc, new Set()).find((entry) => entry.id === "a")!.style, undefined);
+  assert.equal(nodesFromCanvas(doc, "page-1", new Set()).find((entry) => entry.id === "a")!.style, undefined);
 });
 
 test("an artboard draws under what is in it and carries it when moved", () => {
@@ -308,7 +325,7 @@ test("an artboard draws under what is in it and carries it when moved", () => {
     frame("board", { kind: "frame", x: 0, y: 0, w: 800, h: 600 }),
   );
   assert.deepEqual(
-    nodesFromCanvas(doc, new Set()).map((node) => node.id),
+    nodesFromCanvas(doc, "page-1", new Set()).map((node) => node.id),
     ["board", "card"],
   );
   const moved = applyNodeChanges(doc, [{ type: "position", id: "board", position: { x: 100, y: 0 }, dragging: true }]);
@@ -362,7 +379,7 @@ test("a hidden frame is not drawn, and an artboard's items hide with it", () => 
     frame("inside", { groupId: "board" }),
     frame("shown"),
   );
-  const hidden = new Map(nodesFromCanvas(doc, new Set()).map((node) => [node.id, node.hidden === true]));
+  const hidden = new Map(nodesFromCanvas(doc, "page-1", new Set()).map((node) => [node.id, node.hidden === true]));
   assert.deepEqual(Object.fromEntries(hidden), { board: true, inside: true, shown: false });
 });
 
@@ -375,7 +392,7 @@ test("a locked frame does not move, resize or go away, and its copy is unlocked"
   ]);
   assert.equal(after, doc);
   assert.deepEqual(box(byId(applyNodeChanges(doc, [{ type: "remove", id: "free" }]), "pinned")), { x: 10, y: 20, w: 200, h: 120 });
-  const node = nodesFromCanvas(doc, new Set(["pinned"])).find((entry) => entry.id === "pinned")!;
+  const node = nodesFromCanvas(doc, "page-1", new Set(["pinned"])).find((entry) => entry.id === "pinned")!;
   assert.equal(node.draggable, false);
   assert.equal(node.deletable, false);
   const copied = duplicateFrames(doc, ["pinned"], newId);

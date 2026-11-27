@@ -43,7 +43,7 @@ import { workspaceMutationGate } from "./workspace-mutation-gate.js";
 import { workspaceOperationRegistry } from "./workspace-operation-registry.js";
 import { createWorkspaceWorktreeApplicationService } from "./workspace-worktree-application-service.js";
 import { removeWorkspaceArtifacts } from "./workspace-artifacts/main.js";
-import { designGrants } from "./design-canvas/main.js";
+import { designGrants, removeDesignCanvasWorkspace } from "./design-canvas/main.js";
 
 export const workspaceWorktreeApplicationService = createWorkspaceWorktreeApplicationService({
   environment: workspaceEnvironmentApplicationService,
@@ -142,6 +142,7 @@ export const workspaceWorktreeApplicationService = createWorkspaceWorktreeApplic
   removeWorkspace: async (workspaceId) => {
     await configStore.removeWorkspace(workspaceId);
     await removeWorkspaceArtifacts(workspaceId);
+    await removeDesignCanvasWorkspace(workspaceId);
   },
   designGrants,
   beginWorkspaceMutation: (workspaceId) => workspaceMutationGate.begin(workspaceId),

@@ -584,7 +584,16 @@ import { desktopHandoffTickets } from "./desktop-stream-handoff-main.js";
 import type { DesktopHandoffLiveStreamSnapshot } from "../../renderer/shared/chat-handoff.js";
 import { randomUUID } from "node:crypto";
 import { designModeEnabled } from "./studio/feature-flags.js";
-import { designCanvasSnapshots, designCanvasStore, designGrants, designModeConsent, designSystemOffers, recentWrittenPages } from "./design-canvas/main.js";
+import {
+  designCanvasSnapshots,
+  designCanvasStore,
+  designCanvasViews,
+  designGrants,
+  designModeConsent,
+  designSystemOffers,
+  recentWrittenPages,
+} from "./design-canvas/main.js";
+import { designTurnPages } from "./design-canvas/views.js";
 import {
   createDesignCanvasTools,
   DESIGN_MODE_PROMPT_SECTION,
@@ -2057,6 +2066,22 @@ async function prepareGeneration(
   // Desktop-only: the Artifacts tab is a Mac and Linux surface, so phone,
   // Telegram and Bot turns get neither the tool nor its skill.
   // Design mode: the canvas tools and the aiden-design skill go together.
+  /**
+   * The canvas page this turn works on, one resolver for the whole turn: the
+   * canvas tools, pages and images placed by themselves, and the canvas status
+   * line all read the page the same way (a page Aiden showed this turn, the
+   * page the message came from, the chat's kept page, the first page).
+   */
+  const designPages = designTurnPages({
+    views: designCanvasViews,
+    chatId: params.chatId,
+    ...(params.designView ? { message: params.designView } : {}),
+  });
+  /** Asks the window showing the chat's canvas to show a page and fit these frames. */
+  const focusDesignCanvas = (request: { pageId: string; frameIds: readonly string[]; focusId?: number }) => {
+    const liveOwner = getOwner();
+    if (!liveOwner.isDestroyed()) liveOwner.send("designCanvas:focus", { chatId: params.chatId, ...request });
+  };
   const designTurn = {
     flagEnabled: designModeEnabled(),
     localRenderer: declaresWindow && initialOwner.kind !== "remote",
@@ -2780,21 +2805,18 @@ async function prepareGeneration(
                   placeImages: async (images: readonly { path: string; width: number; height: number }[]) => {
                     const allowed = async () => (await designModeOn()) && (await imageWorkspaceUnchanged());
                     if (!(await allowed())) return null;
-                    const frameIds = await placeImagesOnCanvas({
+                    const placed = await placeImagesOnCanvas({
                       chatId: params.chatId,
                       images,
-                      ...(params.designView?.viewSize ? { viewSize: params.designView.viewSize } : {}),
                       shouldSave: allowed,
                       store: designCanvasStore,
+                      pages: designPages,
                       broadcast: announceCanvasChange,
                       newId: randomUUID,
                     });
-                    if (frameIds === null) return null;
-                    const liveOwner = getOwner();
-                    if (frameIds.length > 0 && !liveOwner.isDestroyed()) {
-                      liveOwner.send("designCanvas:focus", { chatId: params.chatId, frameIds });
-                    }
-                    return { frameIds };
+                    if (placed === null) return null;
+                    if (placed.frameIds.length > 0) focusDesignCanvas(placed);
+                    return { frameIds: placed.frameIds };
                   },
                 }
               : {}),
@@ -3022,7 +3044,7 @@ async function prepareGeneration(
    * canvas undoes all of one reply's canvas changes as one step.
    */
   const aidenCanvasTurn = randomUUID();
-  const announceCanvasChange = (update: { chatId: string; revision: number }) =>
+  const announceCanvasChange = (update: DesignCanvasUpdated) =>
     ipcMain.broadcast(DESIGN_CANVAS_UPDATED_CHANNEL, { ...update, aidenTurn: aidenCanvasTurn } satisfies DesignCanvasUpdated);
   /** Set while this turn may use the canvas: puts its committed visuals there. */
   let placeCanvasArtifacts: ((artifacts: readonly CanvasArtifact[]) => Promise<void>) | undefined;
@@ -3045,10 +3067,8 @@ async function prepareGeneration(
       workspaceRoot: canvasRoot,
       store: designCanvasStore,
       broadcast: announceCanvasChange,
-      focus: (frameIds) => {
-        const liveOwner = getOwner();
-        if (!liveOwner.isDestroyed()) liveOwner.send("designCanvas:focus", { chatId: params.chatId, frameIds });
-      },
+      pages: designPages,
+      focus: focusDesignCanvas,
       snapshot: async (toolSignal) =>
         supportsImages
           ? designCanvasSnapshots.request({ chatId: params.chatId, owner: getOwner(), signal: toolSignal ?? signal })
@@ -3079,8 +3099,8 @@ async function prepareGeneration(
         await placeArtifactsOnCanvas({
           chatId: params.chatId,
           artifacts,
-          ...(params.designView?.viewSize ? { viewSize: params.designView.viewSize } : {}),
           store: designCanvasStore,
+          pages: designPages,
           broadcast: announceCanvasChange,
           newId: randomUUID,
         });
@@ -3153,8 +3173,8 @@ async function prepareGeneration(
       // as text only: the report is short and costs no picture.
       inspect: async (relativePath) => {
         if (signal.aborted || !(await canSaveWrittenPage())) return null;
-        const doc = await designCanvasStore.get(params.chatId);
-        const frame = frameShowingDesignPage(doc, relativePath);
+        const { doc, workspaceId } = await designCanvasStore.get(params.chatId);
+        const frame = frameShowingDesignPage(doc, relativePath, (await designPages.view(doc, workspaceId)).pageId);
         if (!frame) return null;
         const inspected = await inspectDesignPage({
           workspaceRoot: pageRoot,
@@ -3179,22 +3199,21 @@ async function prepareGeneration(
         // and the chat's workspace folder are checked as they are now.
         if (!(await canSaveWrittenPage())) return;
         let leftOff = false;
-        const placedIds = await placeWrittenPagesOnCanvas({
+        const placed = await placeWrittenPagesOnCanvas({
           chatId: params.chatId,
           workspaceRoot: pageRoot,
           paths: [relativePath],
-          ...(params.designView?.viewSize ? { viewSize: params.designView.viewSize } : {}),
           shouldSave: canSaveWrittenPage,
           store: designCanvasStore,
+          pages: designPages,
           broadcast: announceCanvasChange,
           newId: randomUUID,
           onRemoved: () => {
             leftOff = true;
           },
         });
-        const liveCanvasOwner = getOwner();
-        if (placedIds.length > 0 && !liveCanvasOwner.isDestroyed()) {
-          liveCanvasOwner.send("designCanvas:focus", { chatId: params.chatId, frameIds: placedIds });
+        if (placed.frameIds.length > 0 && placed.pageId) {
+          focusDesignCanvas({ pageId: placed.pageId, frameIds: placed.frameIds });
         }
         if (leftOff) inspector.removed(relativePath);
         else inspector.written(relativePath);
@@ -3250,7 +3269,10 @@ async function prepareGeneration(
     !botContext && !assistantMode && !windowless && permission !== "none" && permission !== "read-only" && !options.excludeToolNames?.has("write_file");
   let offeredDesignSystemFolder: string | undefined;
   const canvasStatusLine = async (): Promise<string> => {
-    const line = canvasPromptLine(await designCanvasStore.get(params.chatId), params.designView?.selection);
+    const { doc, workspaceId } = await designCanvasStore.get(params.chatId);
+    // The canvas is shared by the workspace's chats; the comment count is this chat's own.
+    const own = { ...doc, comments: doc.comments.filter((comment) => comment.chatId === params.chatId) };
+    const line = canvasPromptLine(own, await designPages.view(doc, workspaceId), params.designView?.selection);
     if (!folderPath || !designSystemOfferable) return line;
     try {
       const offer = await designSystemOffers.offerFor(folderPath, signal);

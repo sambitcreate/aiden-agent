@@ -11,8 +11,10 @@ import {
   type DesignComment,
   type DesignCommentAnchor,
   type DesignRect,
+  isDesignChatId,
   isDesignPrintable,
 } from "./schema.js";
+import { viewPageId } from "./view.js";
 
 /** A removed frame takes its comments with it. Returns the same list when none were on those frames. */
 export function commentsWithoutFrames(comments: readonly DesignComment[], removed: ReadonlySet<string>): DesignComment[] {
@@ -71,7 +73,11 @@ export function commentLabel(doc: DesignCanvas, comment: DesignComment): string 
   return comment.anchor ? `${frame.title} › ${elementLabel(comment.anchor)}` : frame.title;
 }
 
-/** Adds a comment. Null when the canvas is full or the frame is gone. */
+/**
+ * Adds a comment. A comment on a frame is on that frame's page; a free pin
+ * is on `pageId` (the first page when that page is gone). `chatId` is the
+ * chat whose window left it. Null when the canvas is full or the frame is gone.
+ */
 export function addComment(
   doc: DesignCanvas,
   input: {
@@ -79,6 +85,8 @@ export function addComment(
     place: DesignCommentPlace;
     note: string;
     createdAt: string;
+    pageId: string;
+    chatId: string;
     queued?: boolean;
     marks?: DesignComment["marks"];
   },
@@ -90,7 +98,7 @@ export function addComment(
   if (place.frameId !== undefined && !frame) return null;
   const comment: DesignComment = {
     id: input.id,
-    pageId: frame?.pageId ?? doc.activePageId,
+    pageId: frame?.pageId ?? viewPageId(doc, input),
     x: place.x,
     y: place.y,
     note: input.note.slice(0, DESIGN_CANVAS_LIMITS.noteChars),
@@ -100,6 +108,7 @@ export function addComment(
   };
   if (frame) comment.frameId = frame.id;
   if (frame && place.frameId !== undefined && place.anchor) comment.anchor = { ...place.anchor, commentId: input.id };
+  if (isDesignChatId(input.chatId)) comment.chatId = input.chatId;
   if (input.queued) comment.queued = true;
   if (input.marks && input.marks.length > 0) comment.marks = input.marks;
   return { ...doc, comments: [...doc.comments, comment] };
@@ -145,30 +154,36 @@ export function deleteComment(doc: DesignCanvas, id: string): DesignCanvas {
     : doc;
 }
 
-/** Puts an open comment in the tray for Aiden, or takes it out. */
-export function setCommentQueued(doc: DesignCanvas, id: string, queued: boolean): DesignCanvas {
+/**
+ * Puts an open comment in the tray for Aiden, or takes it out. Each chat has
+ * its own tray, so a comment queued from `chatId` becomes that chat's, even
+ * when another chat of the workspace left it.
+ */
+export function setCommentQueued(doc: DesignCanvas, id: string, queued: boolean, chatId?: string): DesignCanvas {
   return updateOne(doc, id, (comment) => {
-    if (comment.state !== "open" || Boolean(comment.queued) === queued) return comment;
+    const moves = queued && chatId !== undefined && comment.chatId !== chatId;
+    if (comment.state !== "open" || (Boolean(comment.queued) === queued && !moves)) return comment;
     const next = { ...comment };
     if (queued) next.queued = true;
     else delete next.queued;
+    if (moves) next.chatId = chatId;
     return next;
   });
 }
 
 /** The comments in the tray, oldest first. Only open comments with a note can wait there. */
-export function queuedComments(doc: DesignCanvas): DesignComment[] {
+export function queuedComments(doc: DesignCanvas, chatId: string): DesignComment[] {
   return doc.comments
-    .filter((comment) => comment.queued && comment.state === "open" && comment.note.trim())
+    .filter((comment) => comment.chatId === chatId && comment.queued && comment.state === "open" && comment.note.trim())
     .sort((a, b) => (a.createdAt < b.createdAt ? -1 : a.createdAt > b.createdAt ? 1 : 0));
 }
 
-/** Marks comments as sent to Aiden, and takes them out of the tray. */
-export function markCommentsSent(doc: DesignCanvas, ids: readonly string[], sentAt: string): DesignCanvas {
+/** Marks `chatId`'s comments as sent to Aiden, and takes them out of its tray. Other chats' comments stay as they are. */
+export function markCommentsSent(doc: DesignCanvas, ids: readonly string[], sentAt: string, chatId: string): DesignCanvas {
   const wanted = new Set(ids);
   let changed = false;
   const comments = doc.comments.map((comment) => {
-    if (!wanted.has(comment.id) || comment.state !== "open") return comment;
+    if (!wanted.has(comment.id) || comment.state !== "open" || comment.chatId !== chatId) return comment;
     changed = true;
     const next: DesignComment = { ...comment, state: "sent", sentAt };
     delete next.queued;

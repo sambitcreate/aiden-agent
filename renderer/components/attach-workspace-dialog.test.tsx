@@ -3,6 +3,7 @@ import { installBotTestIpc } from "../main/bots/test-dom";
 import assert from "node:assert/strict";
 import { afterEach, test } from "node:test";
 import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { Toaster } from "./ui";
 import type { Chat, Workspace } from "../lib/types";
 import {
   attachableProjectWorkspaces,
@@ -114,4 +115,26 @@ test("AttachWorkspaceDialog shows scratch-file preflight and respects Trash vs C
   assert.deepEqual(attachCalls, [
     { chatId: "chat-1", targetWorkspaceId: "ws-alpha", fileAction: "trash" },
   ]);
+});
+
+test("AttachWorkspaceDialog says so when the chat's canvas was too large to bring along", async () => {
+  installBotTestIpc({
+    "chats:inspectAttachFiles": () => ({ hasFiles: false, totalBytes: 0, truncated: false, entries: [] }),
+    "chats:attachToWorkspace": () => ({
+      chat: { id: "chat-1", title: "Quick", workspaceId: "ws-beta", createdAt: 1, updatedAt: 2, messages: [] } satisfies Chat,
+      copiedPaths: [],
+      oldWorkspaceId: "nows-1",
+      canvasCarried: false,
+    }),
+  });
+  render(
+    <>
+      <Toaster />
+      <AttachWorkspaceDialog open onOpenChange={() => undefined} chatId="chat-1" workspaces={WORKSPACES} onAttached={() => undefined} />
+    </>,
+  );
+  await act(async () => {
+    fireEvent.click(screen.getByRole("button", { name: /Beta/u }));
+  });
+  assert.ok(await screen.findByText("The canvas was too large to bring along."));
 });

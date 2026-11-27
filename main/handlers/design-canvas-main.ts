@@ -5,7 +5,9 @@ import { persistedChatWorkspaceId } from "../../renderer/shared/chat-workspace.j
 import { chatStore } from "../services/chat-store.js";
 import { configStore } from "../services/config-store.js";
 import {
+  broadcastDesignCanvasUpdate,
   designCanvasStore,
+  designCanvasViews,
   designFileWatcher,
   designGrants,
   designCanvasSnapshots,
@@ -17,7 +19,10 @@ import { exportStoredHtmlArtifact, wrapStoredHtmlArtifact } from "../services/gu
 import { generativeUiArtifactStore } from "../services/generative-ui-artifact-store.js";
 import { rendererDocumentOwner } from "../services/renderer-document-owner.js";
 import { designModeEnabled } from "../services/studio/feature-flags.js";
-import { DESIGN_CANVAS_UPDATED_CHANNEL, registerDesignCanvasHandlers } from "./design-canvas.js";
+import { registerDesignCanvasHandlers } from "./design-canvas.js";
+
+/** Windows whose reload, crash or destruction already unmounts every canvas view. */
+const watchedSenders = new WeakSet<Electron.WebContents>();
 
 export function registerDesignCanvasIpc(): void {
   // The canvas picture Aiden asked for with canvas_read {snapshot: true}.
@@ -43,10 +48,23 @@ export function registerDesignCanvasIpc(): void {
     enabled: () => designModeEnabled(),
     handle: (channel, handler) => ipcMain.handle(channel, handler),
     store: designCanvasStore,
-    broadcast: (update) => ipcMain.broadcast(DESIGN_CANVAS_UPDATED_CHANNEL, update),
+    broadcast: broadcastDesignCanvasUpdate,
     // Index metadata only: these checks never need the transcript.
     getChat: (chatId) => chatStore.getMeta(chatId),
     grants: designGrants,
+    views: designCanvasViews,
+    whenSenderResets: (event, reset) => {
+      const sender = event.sender;
+      if (watchedSenders.has(sender)) return;
+      watchedSenders.add(sender);
+      // A main-frame navigation is a reload: every canvas in the window is gone.
+      sender.on("did-navigate", reset);
+      sender.on("render-process-gone", reset);
+      sender.once("destroyed", reset);
+    },
+    sendFocus: (event, request) => {
+      if (!event.sender.isDestroyed()) event.sender.send("designCanvas:focus", request);
+    },
     workspaceRoot: async (chat) =>
       (await configStore.getWorkspace(persistedChatWorkspaceId(chat.workspaceId)))?.folderPath ??
       null,

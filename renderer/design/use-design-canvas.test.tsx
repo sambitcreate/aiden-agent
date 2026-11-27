@@ -4,9 +4,7 @@ import assert from "node:assert/strict";
 import { afterEach, beforeEach, mock, test } from "node:test";
 import { act, cleanup, render } from "@testing-library/react";
 import {
-  activeDesignPage,
   emptyDesignCanvas,
-  withActiveViewport,
   type DesignCanvas,
   type DesignFrame,
 } from "../shared/design-canvas/schema";
@@ -25,6 +23,7 @@ type Controller = ReturnType<typeof useDesignCanvas>;
 type SaveReply =
   | { ok: true; revision: number }
   | { ok: false; reason: "conflict"; doc: DesignCanvas }
+  | { ok: false; reason: "moved"; workspaceId: string }
   | { ok: false; reason: "invalid"; issues: string[] };
 
 function note(id: string, x = 0): DesignFrame {
@@ -45,9 +44,10 @@ let calls: BotTestIpcCall[];
 let stored: DesignCanvas;
 let saveReplies: Array<(doc: DesignCanvas, base: number) => SaveReply>;
 let controller: Controller;
+let movedTo: string[];
 
-function Probe({ chatId }: { chatId: string }) {
-  controller = useDesignCanvas(chatId);
+function Probe({ chatId, workspaceId = "workspace-1" }: { chatId: string; workspaceId?: string }) {
+  controller = useDesignCanvas(workspaceId, chatId, { onMoved: (id) => movedTo.push(id) });
   return null;
 }
 
@@ -73,6 +73,7 @@ beforeEach(() => {
   mock.timers.enable({ apis: ["setTimeout"] });
   stored = canvas(4, note("a"));
   saveReplies = [];
+  movedTo = [];
   calls = installBotTestIpc({
     "designCanvas:get": () => structuredClone(stored),
     "designCanvas:save": (_chatId, doc, base) => {
@@ -103,9 +104,10 @@ test("the canvas loads, then two quick edits make one save from the loaded revis
   await tick(1);
 
   assert.equal(saves().length, 1);
-  const [chatId, doc, base] = saves()[0]!.args as [string, DesignCanvas, number];
+  const [chatId, doc, base, options] = saves()[0]!.args as [string, DesignCanvas, number, { workspaceId?: string }];
   assert.equal(chatId, "chat-1");
   assert.equal(base, 4);
+  assert.equal(options.workspaceId, "workspace-1", "the save names the workspace whose canvas this is");
   assert.deepEqual(ids(doc), ["a", "b"]);
   assert.equal(xOf(doc, "a"), 50);
   assert.equal(controller.status, "ready");
@@ -160,26 +162,33 @@ test("an update from elsewhere reloads an idle canvas but waits while an edit is
   assert.equal(gets().length, 1);
 
   stored = canvas(5, note("a"), note("remote"));
-  await act(async () => emitBotTestNotification("designCanvas:updated", { chatId: "chat-1", revision: 5 }));
+  await act(async () => emitBotTestNotification("designCanvas:updated", { workspaceId: "workspace-1", chatId: "chat-1", revision: 5 }));
   await settle();
   assert.equal(gets().length, 2);
   assert.deepEqual(ids(controller.doc), ["a", "remote"]);
 
-  await act(async () => emitBotTestNotification("designCanvas:updated", { chatId: "other-chat", revision: 9 }));
-  await act(async () => emitBotTestNotification("designCanvas:updated", { chatId: "chat-1", revision: 5 }));
+  await act(async () => emitBotTestNotification("designCanvas:updated", { workspaceId: "workspace-2", chatId: "chat-1", revision: 9 }));
+  await act(async () => emitBotTestNotification("designCanvas:updated", { workspaceId: "workspace-1", chatId: "chat-1", revision: 5 }));
   await settle();
-  assert.equal(gets().length, 2, "another chat's update and an already-held revision are ignored");
+  assert.equal(gets().length, 2, "another workspace's update and an already-held revision are ignored");
+
+  // Another chat of the same workspace changed the shared canvas.
+  stored = canvas(6, note("a"), note("remote"), note("from-b"));
+  await act(async () => emitBotTestNotification("designCanvas:updated", { workspaceId: "workspace-1", chatId: "chat-b", revision: 6 }));
+  await settle();
+  assert.equal(gets().length, 3);
+  assert.deepEqual(ids(controller.doc), ["a", "remote", "from-b"]);
 
   await act(async () => controller.change(moveTo("a", 70)));
-  stored = canvas(6, note("a"), note("remote"), note("later"));
-  await act(async () => emitBotTestNotification("designCanvas:updated", { chatId: "chat-1", revision: 6 }));
+  stored = canvas(7, note("a"), note("remote"), note("from-b"), note("later"));
+  await act(async () => emitBotTestNotification("designCanvas:updated", { workspaceId: "workspace-1", chatId: "chat-1", revision: 7 }));
   await settle();
-  assert.equal(gets().length, 2, "a pending edit is not thrown away by a reload");
+  assert.equal(gets().length, 3, "a pending edit is not thrown away by a reload");
   assert.equal(xOf(controller.doc, "a"), 70);
 
   saveReplies.push(() => ({ ok: false, reason: "conflict", doc: structuredClone(stored) }));
   await tick(800);
-  assert.deepEqual(ids(controller.doc), ["a", "remote", "later"]);
+  assert.deepEqual(ids(controller.doc), ["a", "remote", "from-b", "later"]);
   assert.equal(xOf(controller.doc, "a"), 70);
 });
 
@@ -337,7 +346,7 @@ test("a save says which pages an undo took off, so the store does not remember t
   await tick(800);
   assert.equal(undoneOf(4), undefined);
   stored = { ...stored, revision: stored.revision + 1, frames: stored.frames.filter((frame) => frame.id !== "p") };
-  await act(async () => emitBotTestNotification("designCanvas:updated", { chatId: "chat-1", revision: stored.revision }));
+  await act(async () => emitBotTestNotification("designCanvas:updated", { workspaceId: "workspace-1", chatId: "chat-1", revision: stored.revision }));
   await settle();
   assert.deepEqual(ids(controller.doc), ["a"]);
   await act(async () => controller.change(moveTo("a", 50)));
@@ -379,7 +388,7 @@ test("after taking in another window's canvas, undo still takes back this window
 /** Aiden saves `doc` in reply `turn` and an idle canvas hears about it. */
 async function aidenSaves(doc: DesignCanvas, turn: string) {
   stored = doc;
-  await act(async () => emitBotTestNotification("designCanvas:updated", { chatId: "chat-1", revision: doc.revision, aidenTurn: turn }));
+  await act(async () => emitBotTestNotification("designCanvas:updated", { workspaceId: "workspace-1", chatId: "chat-1", revision: doc.revision, aidenTurn: turn }));
   await settle();
 }
 
@@ -412,10 +421,10 @@ test("a reply's change the canvas fetched before hearing whose it was still undo
   await tick(800);
   // Aiden has already saved revision 7 by the time the fetch for revision 6 reads the store.
   stored = canvas(7, note("a", 10), note("b", 400), note("c", 800));
-  await act(async () => emitBotTestNotification("designCanvas:updated", { chatId: "chat-1", revision: 6, aidenTurn: "reply-1" }));
+  await act(async () => emitBotTestNotification("designCanvas:updated", { workspaceId: "workspace-1", chatId: "chat-1", revision: 6, aidenTurn: "reply-1" }));
   await settle();
   assert.deepEqual(ids(controller.doc), ["a", "b", "c"]);
-  await act(async () => emitBotTestNotification("designCanvas:updated", { chatId: "chat-1", revision: 7, aidenTurn: "reply-1" }));
+  await act(async () => emitBotTestNotification("designCanvas:updated", { workspaceId: "workspace-1", chatId: "chat-1", revision: 7, aidenTurn: "reply-1" }));
   await settle();
 
   await act(async () => controller.undo());
@@ -431,31 +440,69 @@ test("a reply's change the canvas fetched before hearing whose it was still undo
   saveReplies.push(() => ({ ok: false, reason: "conflict", doc: canvas(8, note("a", 10), note("b", 400), note("c", 800), note("d", 1200)) }));
   await tick(800);
   assert.deepEqual(ids(controller.doc).sort(), ["a", "b", "c", "d"]);
-  await act(async () => emitBotTestNotification("designCanvas:updated", { chatId: "chat-1", revision: 8, aidenTurn: "reply-2" }));
+  await act(async () => emitBotTestNotification("designCanvas:updated", { workspaceId: "workspace-1", chatId: "chat-1", revision: 8, aidenTurn: "reply-2" }));
   await settle();
   await act(async () => controller.undo());
   assert.deepEqual(ids(controller.doc).sort(), ["a", "b", "c"], "the second reply's frame undoes on its own");
 });
 
-test("a long pan while a reply's change waits for its announcement does not stop that change undoing with the reply", async () => {
+test("another chat's reply is never this chat's undo step, and this chat's redo survives it", async () => {
   await mount();
-  // Aiden has saved revisions 5 to 7 by the time the fetch for revision 5 reads the store.
-  stored = canvas(7, note("a"), note("b", 400), note("c", 800));
-  await act(async () => emitBotTestNotification("designCanvas:updated", { chatId: "chat-1", revision: 5, aidenTurn: "reply-1" }));
-  await settle();
-  assert.deepEqual(ids(controller.doc), ["a", "b", "c"]);
-  // Each pan ends in an unrecorded edit of the page's view; far more of them than edits otherwise kept to rebuild from.
-  for (let step = 1; step <= 120; step += 1) {
-    await act(async () => controller.change((doc) => withActiveViewport(doc, { x: -step * 10, y: 0, zoom: 1 }), { record: false }));
-  }
-  for (const revision of [6, 7]) {
-    await act(async () => emitBotTestNotification("designCanvas:updated", { chatId: "chat-1", revision, aidenTurn: "reply-1" }));
-  }
-  await settle();
-
+  await act(async () => controller.change(addNote("mine")));
+  await tick(800);
   await act(async () => controller.undo());
-  assert.deepEqual(ids(controller.doc), ["a"], "the reply's frames still undo as one step");
-  assert.deepEqual(activeDesignPage(controller.doc!).viewport, { x: -1200, y: 0, zoom: 1 }, "and the view stays where the person left it");
+  await tick(800);
+  assert.equal(controller.canRedo, true);
+  // Chat B's reply adds two frames to the shared canvas.
+  const base = stored.revision;
+  stored = canvas(base + 2, note("a"), note("b-1", 400), note("b-2", 800));
+  for (const revision of [base + 1, base + 2]) {
+    await act(async () =>
+      emitBotTestNotification("designCanvas:updated", { workspaceId: "workspace-1", chatId: "chat-b", revision, aidenTurn: "reply-b" }),
+    );
+  }
+  await settle();
+  assert.deepEqual(ids(controller.doc), ["a", "b-1", "b-2"]);
+  assert.equal(controller.canUndo, false, "chat B's frames are not an undo step here");
+  await act(async () => controller.redo());
+  assert.deepEqual(ids(controller.doc).sort(), ["a", "b-1", "b-2", "mine"], "this chat's redo still comes back, beside B's frames");
+  await act(async () => controller.undo());
+  assert.deepEqual(ids(controller.doc), ["a", "b-1", "b-2"], "and undo takes back only this chat's own frame");
+});
+
+test("a save answered moved drops its edits and names the workspace the chat is in now", async () => {
+  const designDirty = () => (document.documentElement.dataset.aidenDirtySources ?? "").split(" ").includes("design");
+  await mount();
+  saveReplies.push(() => ({ ok: false, reason: "moved", workspaceId: "workspace-2" }));
+  await act(async () => controller.change(addNote("b")));
+  assert.equal(designDirty(), true);
+  await tick(800);
+  assert.deepEqual(movedTo, ["workspace-2"]);
+  await tick(10_000);
+  assert.equal(saves().length, 1, "the edits are not tried again on the old workspace");
+  assert.notEqual(controller.status, "saving");
+  assert.equal(designDirty(), false, "quitting does not ask about edits that can no longer be saved");
+});
+
+test("a moved answer reaching a canvas that has already closed does nothing", async () => {
+  const view = await mount();
+  let answer!: (reply: SaveReply) => void;
+  calls = installBotTestIpc({
+    "designCanvas:get": () => structuredClone(stored),
+    "designCanvas:save": () => new Promise<SaveReply>((resolve) => (answer = resolve)),
+  });
+  await act(async () => controller.change(addNote("b")));
+  // Something waits for the edit to be saved, and the canvas unmounts before the answer.
+  let saved: boolean | undefined;
+  const flushed = controller.flush().then((result) => (saved = result));
+  await settle();
+  view.unmount();
+  await act(async () => answer({ ok: false, reason: "moved", workspaceId: "workspace-2" }));
+  await settle();
+  await flushed;
+  assert.equal(saved, false, "the store never got the edit");
+  assert.deepEqual(movedTo, []);
+  assert.equal(saves().length, 1);
 });
 
 test("undoing a reply leaves an edit the person made without a step of its own during it, such as a text frame growing", async () => {
@@ -500,8 +547,8 @@ test("a change no reply announced is carried into the history instead of becomin
   await tick(800);
   // Revision 6 came from another window, 7 from Aiden: together they are not one reply's.
   stored = canvas(7, note("a", 10), note("other", 400), note("aiden", 800));
-  await act(async () => emitBotTestNotification("designCanvas:updated", { chatId: "chat-1", revision: 6 }));
-  await act(async () => emitBotTestNotification("designCanvas:updated", { chatId: "chat-1", revision: 7, aidenTurn: "reply-1" }));
+  await act(async () => emitBotTestNotification("designCanvas:updated", { workspaceId: "workspace-1", chatId: "chat-1", revision: 6 }));
+  await act(async () => emitBotTestNotification("designCanvas:updated", { workspaceId: "workspace-1", chatId: "chat-1", revision: 7, aidenTurn: "reply-1" }));
   await settle();
   assert.deepEqual(ids(controller.doc), ["a", "other", "aiden"]);
 
@@ -522,7 +569,7 @@ test("a visual the person sent to the open canvas undoes as their own step, one 
   ] as const) {
     stored = canvas(revision, ...frames);
     await act(async () =>
-      emitBotTestNotification("designCanvas:updated", { chatId: "chat-1", revision, step: `send-to-canvas:${revision}` }),
+      emitBotTestNotification("designCanvas:updated", { workspaceId: "workspace-1", chatId: "chat-1", revision, step: `send-to-canvas:${revision}` }),
     );
     await settle();
   }
@@ -565,7 +612,7 @@ test("an update from elsewhere that lands while a save is in flight is fetched o
   saveReplies.push((doc, base) => {
     // Another window saves straight after this one, while this save is still on its way back.
     stored = canvas(base + 2, ...doc.frames, note("remote", 900));
-    emitBotTestNotification("designCanvas:updated", { chatId: "chat-1", revision: base + 2 });
+    emitBotTestNotification("designCanvas:updated", { workspaceId: "workspace-1", chatId: "chat-1", revision: base + 2 });
     return { ok: true, revision: base + 1 };
   });
   await act(async () => controller.change(moveTo("a", 10)));
@@ -601,7 +648,7 @@ test("an update announced while the initial read is still in flight is refetched
 
   // Main's designPagesOnEntry saves revision 1 and broadcasts before the initial get resolves.
   stored = canvas(1, note("entry-page"));
-  await act(async () => emitBotTestNotification("designCanvas:updated", { chatId: "chat-1", revision: 1 }));
+  await act(async () => emitBotTestNotification("designCanvas:updated", { workspaceId: "workspace-1", chatId: "chat-1", revision: 1 }));
   await act(async () => resolveInitialGet(canvas(0)));
   await settle();
 
@@ -734,13 +781,13 @@ test("a person's own edit ends unsettled late-announcement tracking, and a non-r
   await mount();
   // Revision 6 is fetched before its announcement arrives, so history is unsettled.
   stored = canvas(6, note("a"), note("b", 400));
-  await act(async () => emitBotTestNotification("designCanvas:updated", { chatId: "chat-1", revision: 5, aidenTurn: "reply-1" }));
+  await act(async () => emitBotTestNotification("designCanvas:updated", { workspaceId: "workspace-1", chatId: "chat-1", revision: 5, aidenTurn: "reply-1" }));
   await settle();
   assert.deepEqual(ids(controller.doc), ["a", "b"]);
 
   // A recorded edit by the person ends unsettled history rebuild before revision 6 is announced.
   await act(async () => controller.change(moveTo("a", 25)));
-  await act(async () => emitBotTestNotification("designCanvas:updated", { chatId: "chat-1", revision: 6, aidenTurn: "reply-1" }));
+  await act(async () => emitBotTestNotification("designCanvas:updated", { workspaceId: "workspace-1", chatId: "chat-1", revision: 6, aidenTurn: "reply-1" }));
   await settle();
 
   // Undo reverts only the person's move; the previously fetched frame stays carried rather than rebuilt.
@@ -1118,4 +1165,203 @@ test("disposing during a failing flush-origin save retries immediately instead o
   assert.equal(saves().length, 2, "close retry runs immediately upon flush failure without waiting for backoff");
   assert.deepEqual(ids(stored), ["a", "b"]);
   assert.equal(designDirty(), false, "guard clears once the immediate close attempt succeeds");
+});
+
+/** A loaded session with one recorded edit whose save is on its way. */
+function savingState() {
+  let state = createInitialDesignCanvasSyncState();
+  state = reduceDesignCanvasSync(state, { type: "load_succeeded", doc: canvas(4, note("a")) }).state;
+  state = reduceDesignCanvasSync(state, { type: "change", mutate: addNote("b"), recordHistory: true }).state;
+  state = reduceDesignCanvasSync(state, { type: "debounce_fired" }).state;
+  assert.equal(state.savePhase.kind, "saving");
+  return state;
+}
+const effectTypes = (transition: { effects: readonly { type: string }[] }) => transition.effects.map((effect) => effect.type);
+
+test("reducer: a save answered moved seals the open canvas, so nothing more is saved, fetched or undone there", () => {
+  let state = savingState();
+  // An announcement newer than the stored canvas is waiting for the save to land.
+  state = reduceDesignCanvasSync(state, { type: "announcement", revision: 9 }).state;
+  assert.equal(selectDesignCanvasView(state).canUndo, true);
+
+  const moved = reduceDesignCanvasSync(state, { type: "save_moved", workspaceId: "ws-2" });
+  state = moved.state;
+  assert.deepEqual(effectTypes(moved), ["unsubscribe", "finish", "moved"]);
+  assert.deepEqual(moved.effects[moved.effects.length - 1], { type: "moved", workspaceId: "ws-2" });
+  assert.deepEqual(selectDesignCanvasGuard(state), { dirty: false, saving: false });
+  const view = selectDesignCanvasView(state);
+  assert.equal(view.status, "ready");
+  assert.equal(view.canUndo, false, "the dropped edits cannot be undone into a canvas that is gone");
+  assert.equal(view.canRedo, false);
+  assert.equal(isDesignCanvasFlushComplete(state), false, "the edits never reached the store");
+
+  for (const event of [
+    { type: "change", mutate: addNote("c"), recordHistory: true },
+    { type: "undo" },
+    { type: "redo" },
+    { type: "announcement", revision: 12, aidenTurn: "reply-9" },
+    { type: "refetch_succeeded", doc: canvas(12, note("x")) },
+    { type: "debounce_fired" },
+    { type: "closed_retry_fired" },
+    { type: "flush_requested" },
+    { type: "save_succeeded", revision: 13 },
+    { type: "save_moved", workspaceId: "ws-3" },
+    { type: "dispose" },
+  ] as const) {
+    const after = reduceDesignCanvasSync(state, event);
+    assert.equal(after.state, state, `${event.type} after a move changes nothing`);
+    assert.deepEqual(after.effects, [], `${event.type} after a move does nothing`);
+  }
+});
+
+test("reducer: a moved answer drops newer edits, their debounce and any queued flush with the rest", () => {
+  for (const queued of ["none", "debounce_fired", "flush_requested"] as const) {
+    let state = savingState();
+    state = reduceDesignCanvasSync(state, { type: "change", mutate: addNote("c"), recordHistory: true }).state;
+    if (queued !== "none") state = reduceDesignCanvasSync(state, { type: queued }).state;
+    const timerWasArmed = state.timer !== null;
+    assert.equal(timerWasArmed, queued === "none");
+
+    const moved = reduceDesignCanvasSync(state, { type: "save_moved", workspaceId: "ws-2" });
+    assert.deepEqual(
+      effectTypes(moved),
+      [...(timerWasArmed ? ["cancel_timer"] : []), "unsubscribe", "finish", "moved"],
+      `queued: ${queued}`,
+    );
+    assert.equal(moved.state.unsent.length, 0);
+    assert.equal(moved.state.timer, null);
+    assert.deepEqual(selectDesignCanvasGuard(moved.state), { dirty: false, saving: false });
+    assert.equal(selectDesignCanvasView(moved.state).canUndo, false);
+    // Nothing the old session still holds can start another save.
+    assert.deepEqual(reduceDesignCanvasSync(moved.state, { type: "debounce_fired" }).effects, []);
+    assert.deepEqual(reduceDesignCanvasSync(moved.state, { type: "flush_requested" }).effects, []);
+  }
+});
+
+test("reducer: a moved answer after a failed save clears the error but still leaves the flush incomplete", () => {
+  let state = savingState();
+  state = reduceDesignCanvasSync(state, { type: "save_failed" }).state;
+  assert.equal(selectDesignCanvasView(state).status, "error");
+  const retry = reduceDesignCanvasSync(state, { type: "flush_requested" });
+  assert.deepEqual(effectTypes(retry), ["start_save"]);
+  const moved = reduceDesignCanvasSync(retry.state, { type: "save_moved", workspaceId: "ws-2" });
+  assert.deepEqual(moved.effects[moved.effects.length - 1], { type: "moved", workspaceId: "ws-2" });
+  assert.notEqual(selectDesignCanvasView(moved.state).status, "error", "no error about edits that are gone");
+  assert.deepEqual(selectDesignCanvasGuard(moved.state), { dirty: false, saving: false });
+  assert.equal(isDesignCanvasFlushComplete(moved.state), false);
+});
+
+test("reducer: a moved answer reaching a closing canvas ends it without opening another workspace", () => {
+  const closingCases = {
+    "the close save": (state: ReturnType<typeof savingState>) => reduceDesignCanvasSync(state, { type: "dispose" }).state,
+    "a closed retry": (state: ReturnType<typeof savingState>) => {
+      let next = reduceDesignCanvasSync(state, { type: "dispose" }).state;
+      // The close queued behind the save tries again at once; the second failure waits.
+      next = reduceDesignCanvasSync(next, { type: "save_failed" }).state;
+      assert.equal(next.savePhase.kind, "saving");
+      next = reduceDesignCanvasSync(next, { type: "save_failed" }).state;
+      assert.equal(next.timer?.kind, "closed_retry");
+      return reduceDesignCanvasSync(next, { type: "closed_retry_fired" }).state;
+    },
+    "a conflict replay": (state: ReturnType<typeof savingState>) => {
+      let next = reduceDesignCanvasSync(state, { type: "save_conflicted", doc: canvas(5, note("a"), note("z")) }).state;
+      assert.equal(next.savePhase.kind === "saving" && next.savePhase.save.replayed, true);
+      next = reduceDesignCanvasSync(next, { type: "dispose" }).state;
+      assert.equal(next.flushQueuedWhileSaving, true);
+      return next;
+    },
+  };
+  for (const [name, close] of Object.entries(closingCases)) {
+    const state = close(savingState());
+    assert.equal(state.lifecycle, "closing", name);
+    const moved = reduceDesignCanvasSync(state, { type: "save_moved", workspaceId: "ws-2" });
+    assert.deepEqual(effectTypes(moved), ["finish"], name);
+    assert.equal(moved.state.unsent.length, 0, name);
+    assert.deepEqual(selectDesignCanvasGuard(moved.state), { dirty: false, saving: false }, name);
+    assert.equal(isDesignCanvasFlushComplete(moved.state), false, `${name}: the dropped edits were never kept`);
+    assert.deepEqual(reduceDesignCanvasSync(moved.state, { type: "flush_requested" }).effects, [], name);
+    assert.deepEqual(reduceDesignCanvasSync(moved.state, { type: "dispose" }).effects, [], name);
+  }
+});
+
+test("reducer: a moved answer with no save on its way is ignored", () => {
+  let state = createInitialDesignCanvasSyncState();
+  state = reduceDesignCanvasSync(state, { type: "load_succeeded", doc: canvas(4, note("a")) }).state;
+  state = reduceDesignCanvasSync(state, { type: "change", mutate: addNote("b"), recordHistory: true }).state;
+  const stale = reduceDesignCanvasSync(state, { type: "save_moved", workspaceId: "ws-2" });
+  assert.equal(stale.state, state);
+  assert.deepEqual(stale.effects, []);
+});
+
+test("reducer: another chat's change between two of a reply's revisions keeps them out of one undo step", () => {
+  let state = createInitialDesignCanvasSyncState();
+  state = reduceDesignCanvasSync(state, { type: "load_succeeded", doc: canvas(4, note("a")) }).state;
+  state = reduceDesignCanvasSync(state, { type: "announcement", revision: 5, aidenTurn: "reply-1" }).state;
+  state = reduceDesignCanvasSync(state, {
+    type: "refetch_succeeded",
+    doc: canvas(7, note("a"), note("b", 400), note("other", 800), note("c", 1200)),
+  }).state;
+  assert.ok(state.unsettled !== null, "revisions 6 and 7 may still be reply-1's");
+  // Revision 6 came from another chat of the workspace: announced without a turn or step.
+  state = reduceDesignCanvasSync(state, { type: "announcement", revision: 6 }).state;
+  assert.equal(state.unsettled, null, "one other writer is enough to know it was not one reply");
+  state = reduceDesignCanvasSync(state, { type: "announcement", revision: 7, aidenTurn: "reply-1" }).state;
+  assert.equal(state.unsettled, null);
+  assert.equal(selectDesignCanvasView(state).canUndo, false, "revisions 5 to 7 are carried, not undoable");
+  assert.deepEqual(ids(state.local ?? undefined), ["a", "b", "other", "c"]);
+});
+
+test("saving now answered moved says the edits were not saved, while quitting still does not ask about them", async () => {
+  const designDirty = () => (document.documentElement.dataset.aidenDirtySources ?? "").split(" ").includes("design");
+  await mount();
+  saveReplies.push(() => ({ ok: false, reason: "moved", workspaceId: "workspace-2" }));
+  await act(async () => controller.change(addNote("b")));
+  let saved!: boolean;
+  await act(async () => {
+    saved = await controller.flush();
+  });
+  assert.equal(saved, false, "main's copy does not have the edit");
+  assert.deepEqual(movedTo, ["workspace-2"]);
+  assert.equal(designDirty(), false);
+  await tick(10_000);
+  assert.equal(saves().length, 1, "the edit is not tried again");
+});
+
+test("an undo or an update for the old workspace before the moved canvas unmounts saves and fetches nothing", async () => {
+  const designDirty = () => (document.documentElement.dataset.aidenDirtySources ?? "").split(" ").includes("design");
+  const view = await mount();
+  saveReplies.push(() => ({ ok: false, reason: "moved", workspaceId: "workspace-2" }));
+  await act(async () => controller.change(addNote("b")));
+  await tick(800);
+  assert.deepEqual(movedTo, ["workspace-2"]);
+  assert.equal(controller.canUndo, false);
+
+  await act(async () => controller.undo());
+  await act(async () => controller.change(addNote("c")));
+  await act(async () =>
+    emitBotTestNotification("designCanvas:updated", { workspaceId: "workspace-1", chatId: "chat-b", revision: 9 }),
+  );
+  await tick(800);
+  assert.equal(designDirty(), false);
+  view.unmount();
+  await settle();
+  assert.equal(saves().length, 1, "nothing more is saved to the workspace the chat left");
+  assert.equal(gets().length, 1, "the canvas of the workspace the chat is in now is not read into this one");
+});
+
+test("a new onMoved is heard without starting the canvas over", async () => {
+  const heard: string[] = [];
+  function MovedProbe({ label }: { label: string }) {
+    controller = useDesignCanvas("workspace-1", "chat-1", { onMoved: (id) => heard.push(`${label}:${id}`) });
+    return null;
+  }
+  const view = render(<MovedProbe label="first" />);
+  await settle();
+  view.rerender(<MovedProbe label="second" />);
+  await settle();
+  saveReplies.push(() => ({ ok: false, reason: "moved", workspaceId: "workspace-2" }));
+  await act(async () => controller.change(addNote("b")));
+  await tick(800);
+  assert.deepEqual(heard, ["second:workspace-2"]);
+  assert.equal(gets().length, 1, "the canvas was read once");
 });

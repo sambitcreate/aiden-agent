@@ -1,6 +1,9 @@
-// IPC for the per-chat design canvas. Registered only while design mode is
-// on (it is, unless AIDEN_DESIGN_MODE=0), and every handler re-checks it the
-// way `chats:setDesignMode` does.
+// IPC for the design canvas. A canvas belongs to a workspace and is shared by
+// its chats, but every handler takes the asking chat's id: that chat is the
+// authority check (an attended chat, and design mode where a handler needs
+// it), and the workspace is the one that chat is in. Registered only while
+// design mode is on (it is, unless AIDEN_DESIGN_MODE=0), and every handler
+// re-checks it the way `chats:setDesignMode` does.
 
 import { createHash, randomUUID } from "node:crypto";
 import path from "node:path";
@@ -32,11 +35,13 @@ import {
   type DesignTextChange,
 } from "../../renderer/shared/design-canvas/text-edit.js";
 import { canvasView, parseDesignViewState } from "../../renderer/shared/design-canvas/canvas-summary.js";
-import { showPage } from "../../renderer/shared/design-canvas/pages.js";
+import { parseDesignChatView, type DesignChatView } from "../../renderer/shared/design-canvas/view.js";
 import { placeFrame } from "../../renderer/shared/design-canvas/placement.js";
 import { isHtmlArtifactMediaId } from "../../renderer/shared/generative-ui.js";
+import { isWorkspaceArtifactWorkspaceId } from "../../renderer/shared/workspace-artifacts.js";
 import { ARTIFACT_FRAME_BOX } from "../services/design-canvas/artifact-frames.js";
 import type { DesignGrantRegistry } from "../services/design-canvas/grants.js";
+import { designTurnPages, type DesignCanvasViews } from "../services/design-canvas/views.js";
 import { validateGenerativeUiHtml } from "../services/generative-ui-html.js";
 import { replaceWorkspaceText } from "../services/design-canvas/text-write.js";
 import { resolveDesignFile } from "../services/design-canvas/resolve-core.js";
@@ -44,18 +49,15 @@ import type { DesignFileWatcher } from "../services/design-canvas/watch.js";
 import { isPathInside } from "../shared/path-containment.js";
 import {
   assertDesignCanvasChatId,
-  type DesignCanvasStore,
+  DESIGN_CANVAS_UPDATED_CHANNEL,
+  type DesignCanvasSaveResult,
+  type DesignCanvasUpdated,
+  type DesignChatCanvases,
 } from "../services/design-canvas/store.js";
+import { persistedChatWorkspaceId } from "../../renderer/shared/chat-workspace.js";
 import type { ChatMeta } from "../services/types.js";
 
-/**
- * Broadcast on `designCanvas:updated` after a save or an Aiden edit lands.
- * `aidenTurn` names the reply whose change it was, so an open canvas can
- * undo all of one reply's canvas changes as one step. `step` marks a change
- * the person made through main (a Send to canvas that placed a frame): an
- * open canvas makes it an undo step of its own, so Cmd+Z takes it back.
- */
-export type DesignCanvasUpdated = { chatId: string; revision: number; aidenTurn?: string; step?: string };
+export { DESIGN_CANVAS_UPDATED_CHANNEL, type DesignCanvasUpdated };
 
 /** The chat fields the canvas handlers decide on. */
 export type DesignCanvasChat = Pick<
@@ -195,31 +197,67 @@ const EXPORT_FILTERS: Readonly<Record<"png" | "pdf", { name: string; extensions:
 /** A frame snapshot's longest side, in pixels. */
 export const DESIGN_CAPTURE_MAX_SIDE = 1024;
 
-export const DESIGN_CANVAS_UPDATED_CHANNEL = "designCanvas:updated";
 const UNAVAILABLE = "Design mode is not available.";
 
-/** The pages a save says the person's undo took off; anything malformed is refused. */
-function saveUndone(options: unknown): string[] {
-  if (options === undefined || options === null) return [];
-  const undone = typeof options === "object" && !Array.isArray(options) ? (options as { undone?: unknown }).undone : null;
-  if (undone === undefined) return [];
+/**
+ * A save's options: the pages it says the person's undo took off, and the
+ * workspace whose canvas the renderer is saving. Anything malformed is refused.
+ */
+function saveOptions(options: unknown): { undone: string[]; workspaceId: string } {
+  // The workspace is required: without it a stale canvas from a workspace the
+  // chat has left could replace the new one whenever their revisions match.
+  if (typeof options !== "object" || options === null || Array.isArray(options)) throw new Error("Invalid canvas save options.");
+  const { undone, workspaceId } = options as { undone?: unknown; workspaceId?: unknown };
   if (
-    !Array.isArray(undone) ||
-    undone.length > DESIGN_CANVAS_LIMITS.frames ||
-    !undone.every((entry) => typeof entry === "string" && isDesignRelativePath(entry))
+    undone !== undefined &&
+    (!Array.isArray(undone) ||
+      undone.length > DESIGN_CANVAS_LIMITS.frames ||
+      !undone.every((entry) => typeof entry === "string" && isDesignRelativePath(entry)))
   ) {
     throw new Error("Invalid canvas save options.");
   }
-  return undone as string[];
+  if (!isWorkspaceArtifactWorkspaceId(workspaceId)) {
+    throw new Error("Invalid canvas save options.");
+  }
+  return { undone: (undone as string[] | undefined) ?? [], workspaceId };
+}
+
+/** The workspace whose canvas a chat works on. */
+/** A `designCanvas:view` report, checked; anything malformed is refused. */
+function parseViewReport(
+  value: unknown,
+): "unmounted" | { workspaceId: string; view: DesignChatView; focusId: number } {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) throw new Error("Invalid canvas view.");
+  const raw = value as Record<string, unknown>;
+  if (raw.mounted === false && Object.keys(raw).length === 1) return "unmounted";
+  const { workspaceId, focusId } = raw;
+  if (!isWorkspaceArtifactWorkspaceId(workspaceId)) throw new Error("Invalid canvas view.");
+  if (typeof focusId !== "number" || !Number.isSafeInteger(focusId) || focusId < 0) throw new Error("Invalid canvas view.");
+  const view = parseDesignChatView(raw.view);
+  if (!view) throw new Error("Invalid canvas view.");
+  return { workspaceId, view, focusId };
+}
+
+export function designCanvasWorkspaceOf(chat: Pick<DesignCanvasChat, "workspaceId">): string {
+  return persistedChatWorkspaceId(chat.workspaceId);
 }
 
 export function registerDesignCanvasHandlers<Event>(deps: {
   enabled: () => boolean;
   handle(channel: string, handler: (event: Event, ...args: unknown[]) => unknown): void;
-  store: Pick<DesignCanvasStore, "get" | "save" | "update">;
+  store: Pick<DesignChatCanvases, "get" | "save" | "update">;
   broadcast(update: DesignCanvasUpdated): void;
   getChat(chatId: string): Promise<DesignCanvasChat | null>;
   grants: Pick<DesignGrantRegistry, "issue" | "revokeChat">;
+  /** Each chat's view of its canvas, as the renderer reports it. */
+  views: Pick<DesignCanvasViews, "report" | "unmount" | "kept" | "unmountAll" | "get" | "viewports" | "showPage">;
+  /**
+   * Calls `reset` whenever the window that sent `event` reloads, crashes or is
+   * destroyed, since every canvas in it is then gone; called for every view report.
+   */
+  whenSenderResets?(event: Event, reset: () => void): void;
+  /** Sends `designCanvas:focus` to the window that sent `event`, if it is still there. */
+  sendFocus?(event: Event, request: { chatId: string; pageId: string; frameIds: string[]; focusId: number }): void;
   /** The chat's workspace folder, or null when the chat has no folder to frame. */
   workspaceRoot(chat: DesignCanvasChat): Promise<string | null>;
   /** The window that sent `event`, or null when it has none (or it is gone). */
@@ -270,7 +308,49 @@ export function registerDesignCanvasHandlers<Event>(deps: {
 
   deps.handle("designCanvas:get", async (_event, chatId) => {
     const chat = await requireChat(chatId);
-    return deps.store.get(chat.id);
+    return (await deps.store.get(chat.id, { workspaceId: designCanvasWorkspaceOf(chat) })).doc;
+  });
+
+  // The canvas's view as the person moves around it: the workspace it shows,
+  // the page on screen, where it looks and how big it is, with the highest
+  // Aiden page change it has seen (`focusId`). `{mounted: false}` says the
+  // canvas unmounted; that needs only a well-formed chat id, so an unmount
+  // after the chat is deleted still lands. A report naming a workspace the
+  // chat has left is dropped: it comes from a canvas about to remount.
+  // A chat's reports are handled in the order they were sent, so the unmount
+  // that follows a last report is never overtaken by it (which would leave the
+  // canvas counted as open).
+  const viewQueues = new Map<string, Promise<void>>();
+  const inViewOrder = (chatId: string, run: () => Promise<void>): Promise<void> => {
+    const next = (viewQueues.get(chatId) ?? Promise.resolve()).then(run, run);
+    const tail = next.catch(() => undefined);
+    viewQueues.set(chatId, tail);
+    void tail.then(() => {
+      if (viewQueues.get(chatId) === tail) viewQueues.delete(chatId);
+    });
+    return next;
+  };
+  deps.handle("designCanvas:view", async (event, chatId, report) => {
+    if (!deps.enabled()) throw new Error(UNAVAILABLE);
+    assertDesignCanvasChatId(chatId);
+    const parsed = parseViewReport(report);
+    if (parsed === "unmounted") {
+      return inViewOrder(chatId, async () => deps.views.unmount(chatId));
+    }
+    return inViewOrder(chatId, async () => {
+      const chat = await requireChat(chatId);
+      deps.whenSenderResets?.(event, () => deps.views.unmountAll());
+      if (parsed.workspaceId !== designCanvasWorkspaceOf(chat)) return;
+      await deps.views.report(chat.id, parsed.workspaceId, parsed.view, parsed.focusId);
+    });
+  });
+
+  // The view main kept for the chat, for a canvas that is mounting: its page,
+  // where it last looked there, and the latest Aiden page change. Null when
+  // main has none, and the canvas opens the first page.
+  deps.handle("designCanvas:view:get", async (_event, chatId) => {
+    const chat = await requireChat(chatId);
+    return (await deps.views.kept(chat.id, designCanvasWorkspaceOf(chat))) ?? null;
   });
 
   deps.handle("designCanvas:save", async (_event, chatId, doc, baseRevision, options) => {
@@ -281,21 +361,29 @@ export function registerDesignCanvasHandlers<Event>(deps: {
     ) {
       throw new Error("Invalid canvas revision.");
     }
-    const undone = saveUndone(options);
+    const { undone, workspaceId: expected } = saveOptions(options);
     const chat = await requireChat(chatId);
-    const result = await deps.store.save(chat.id, doc as DesignCanvas, baseRevision, { undone });
-    if (result.ok) deps.broadcast({ chatId: chat.id, revision: result.revision });
+    // One workspace for the whole save: the one this chat is in now.
+    const workspaceId = designCanvasWorkspaceOf(chat);
+    // The canvas the renderer is saving belongs to a workspace the chat has
+    // since left: nothing is written, and the renderer drops those edits and
+    // opens the canvas of the workspace the chat is in now.
+    if (expected !== workspaceId) {
+      return { ok: false, reason: "moved", workspaceId } satisfies DesignCanvasSaveResult;
+    }
+    const { result } = await deps.store.save(chat.id, doc as DesignCanvas, baseRevision, { undone, workspaceId });
+    if (result.ok) deps.broadcast({ workspaceId, chatId: chat.id, revision: result.revision });
     return result;
   });
 
   // The person's Send to canvas on a visual in the chat: puts that visual on
-  // the page on screen as a frame of their own, beside the frames in view, the
+  // the chat's page as a frame of their own, beside the frames in view, the
   // way Add would. It needs no design mode (the renderer turns it on after),
   // only an attended chat that still holds the visual and HTML that still
   // passes the visual checks. `options.viewSize` is the canvas's size on
   // screen, when the renderer knows it; a size that does not parse is ignored.
   const UNCHANGED = Symbol("unchanged");
-  deps.handle("designCanvas:placeArtifact", async (_event, chatId, mediaId, options): Promise<DesignCanvasPlaceArtifactResult> => {
+  deps.handle("designCanvas:placeArtifact", async (event, chatId, mediaId, options): Promise<DesignCanvasPlaceArtifactResult> => {
     const chat = await requireChat(chatId);
     if (!isHtmlArtifactMediaId(mediaId)) throw new Error("Invalid visual.");
     const viewSize =
@@ -314,45 +402,70 @@ export function registerDesignCanvasHandlers<Event>(deps: {
     }
     const frameTitle = title.trim().slice(0, DESIGN_CANVAS_LIMITS.titleChars) || "Visual";
     let outcome: DesignCanvasPlaceArtifactResult = { error: "full" };
-    // Only a placed frame is the person's undo step; showing the page a frame is on is not.
-    let placedFrame = false as boolean;
+    const workspaceId = designCanvasWorkspaceOf(chat);
+    const pages = designTurnPages({
+      views: deps.views,
+      chatId: chat.id,
+      ...(viewSize ? { message: { selection: [], viewSize } } : {}),
+    });
+    const viewOf = await pages.resolver(workspaceId);
+    // A visual already placed on another page: that page is shown instead.
+    let elsewhere: { pageId: string; frameId: string } | undefined;
     try {
-      const saved = await deps.store.update(chat.id, (doc) => {
-        const existing = doc.frames.find((frame) => frame.kind === "artifact" && frame.mediaId === mediaId);
-        if (existing) {
-          if (existing.pageId === doc.activePageId) {
-            outcome = { status: "already", frameId: existing.id };
+      const saved = await deps.store.update(
+        chat.id,
+        (doc) => {
+          const view = viewOf(doc);
+          const existing = doc.frames.find(
+            (frame) => frame.kind === "artifact" && frame.mediaId === mediaId && (frame.chatId ?? chat.id) === chat.id,
+          );
+          if (existing) {
+            const page = existing.pageId === view.pageId ? undefined : doc.pages.find((entry) => entry.id === existing.pageId)?.name;
+            outcome = { status: "already", frameId: existing.id, ...(page ? { page } : {}) };
+            if (page) elsewhere = { pageId: existing.pageId, frameId: existing.id };
             throw UNCHANGED;
           }
-          // It is on another page: show that page, so the person sees it.
-          const page = doc.pages.find((entry) => entry.id === existing.pageId)?.name;
-          outcome = { status: "already", frameId: existing.id, ...(page ? { page } : {}) };
-          return showPage(doc, existing.pageId);
-        }
-        const placed = placeFrame(
-          doc,
-          { kind: "artifact", title: frameTitle, mediaId, createdBy: "person", ...ARTIFACT_FRAME_BOX },
-          canvasView(doc, viewSize),
-          deps.newId ?? randomUUID,
-        );
-        if ("error" in placed) {
-          outcome = { error: "full" };
-          throw UNCHANGED;
-        }
-        outcome = { status: "placed", frameId: placed.id };
-        placedFrame = true;
-        return placed.doc;
-      });
-      deps.broadcast({
-        chatId: chat.id,
-        revision: saved.revision,
-        ...(placedFrame ? { step: `send-to-canvas:${saved.revision}` } : {}),
-      });
+          const placed = placeFrame(
+            doc,
+            { kind: "artifact", title: frameTitle, mediaId, chatId: chat.id, pageId: view.pageId, createdBy: "person", ...ARTIFACT_FRAME_BOX },
+            canvasView(doc, view),
+            deps.newId ?? randomUUID,
+          );
+          if ("error" in placed) {
+            outcome = { error: "full" };
+            throw UNCHANGED;
+          }
+          outcome = { status: "placed", frameId: placed.id };
+          return placed.doc;
+        },
+        { workspaceId },
+      );
+      // A placed frame is the person's undo step.
+      deps.broadcast({ workspaceId, chatId: chat.id, revision: saved.doc.revision, step: `send-to-canvas:${saved.doc.revision}` });
     } catch (error) {
       if (error !== UNCHANGED) throw error;
     }
+    if (elsewhere) {
+      // Only this chat's view moves; the shared document is unchanged.
+      const focusId = await pages.show(workspaceId, elsewhere.pageId);
+      if (focusId !== undefined) {
+        deps.sendFocus?.(event, { chatId: chat.id, pageId: elsewhere.pageId, frameIds: [elsewhere.frameId], focusId });
+      }
+    }
     return outcome;
   });
+
+  // A visual on the shared canvas belongs to the chat that made it (a frame
+  // from before chats shared canvases, to the chat asking). It is read
+  // through that chat, and only while it still exists and shares the asking
+  // chat's workspace; otherwise null.
+  const artifactOwner = async (chat: DesignCanvasChat, frame: { chatId?: string }): Promise<string | null> => {
+    const ownerId = frame.chatId ?? chat.id;
+    if (ownerId === chat.id) return chat.id;
+    const owner = await deps.getChat(ownerId);
+    // Only an attended chat's visuals: a Bot or routine chat's never show on a canvas.
+    return owner && attended(owner) && designCanvasWorkspaceOf(owner) === designCanvasWorkspaceOf(chat) ? owner.id : null;
+  };
 
   // Only an attended desktop chat in design mode may frame its own workspace
   // folder; Bot and routine chats never get a grant.
@@ -430,24 +543,25 @@ export function registerDesignCanvasHandlers<Event>(deps: {
       const kind = format as DesignExportFormat;
       const chat = await deps.getChat(chatId);
       if (!chat || !attended(chat)) return { error: "unavailable" };
-      const doc = await deps.store.get(chat.id);
+      const { doc } = await deps.store.get(chat.id, { workspaceId: designCanvasWorkspaceOf(chat) });
       const frame = doc.frames.find((entry) => entry.id === frameId);
       if (!frame || !designExportFormats(frame).includes(kind)) return { error: "unavailable" };
 
       let url: string;
       let source: string | null = null;
       if (frame.kind === "artifact") {
-        if (!frame.mediaId) return { error: "unavailable" };
+        const owner = await artifactOwner(chat, frame);
+        if (!frame.mediaId || owner === null) return { error: "unavailable" };
         if (kind === "source") {
           try {
-            const result = await deps.exportArtifactSource(event, chat.id, frame.mediaId);
+            const result = await deps.exportArtifactSource(event, owner, frame.mediaId);
             return result.saved ? { saved: true } : { canceled: true };
           } catch {
             return { error: "failed" };
           }
         }
         // The theme is the renderer's and untrusted; the preview reads only what it knows, and only for a dark frame.
-        const preview = await deps.artifactPreview(chat.id, frame.mediaId, frame.dark ? theme : undefined);
+        const preview = await deps.artifactPreview(owner, frame.mediaId, frame.dark ? theme : undefined);
         if (!preview) return { error: "missing" };
         url = preview.src;
       } else {
@@ -501,10 +615,12 @@ export function registerDesignCanvasHandlers<Event>(deps: {
     }
     const chat = await deps.getChat(chatId);
     if (!chat || !attended(chat)) return { error: "unavailable" };
-    const doc = await deps.store.get(chat.id);
+    const { doc } = await deps.store.get(chat.id, { workspaceId: designCanvasWorkspaceOf(chat) });
     const frame = doc.frames.find((entry) => entry.id === frameId);
     if (frame?.kind === "artifact" && frame.mediaId) {
-      const html = await deps.artifactHtml(chat.id, frame.mediaId).catch(() => undefined);
+      const owner = await artifactOwner(chat, frame);
+      if (owner === null) return { error: "unavailable" };
+      const html = await deps.artifactHtml(owner, frame.mediaId).catch(() => undefined);
       if (html === undefined) return { error: "missing" };
       const bytes = Buffer.from(html, "utf8");
       const truncated = bytes.length > DESIGN_SOURCE_MAX_BYTES;
@@ -550,7 +666,7 @@ export function registerDesignCanvasHandlers<Event>(deps: {
   ): Promise<T | { ok: false; reason: DesignCanvasFileRewriteFailure }> {
     const chat = await deps.getChat(chatId);
     if (!chat || !attended(chat)) return { ok: false, reason: "unavailable" };
-    const doc = await deps.store.get(chat.id);
+    const { doc } = await deps.store.get(chat.id, { workspaceId: designCanvasWorkspaceOf(chat) });
     const frame = doc.frames.find((entry) => entry.id === frameId);
     if (frame?.kind !== "file" || !frame.path) return { ok: false, reason: "unavailable" };
     const root = canFrame(chat) ? await deps.workspaceRoot(chat) : null;

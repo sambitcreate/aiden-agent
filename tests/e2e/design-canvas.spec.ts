@@ -183,8 +183,7 @@ async function savedCanvases(userDataDir: string): Promise<
   Array<{
     version: number;
     frames: Array<{ kind: string; text?: string; title: string; pageId: string }>;
-    pages: Array<{ id: string; name: string; viewport: { zoom: number } }>;
-    activePageId: string;
+    pages: Array<{ id: string; name: string }>;
   }>
 > {
   const root = path.join(userDataDir, "design-canvases");
@@ -199,6 +198,25 @@ async function savedCanvases(userDataDir: string): Promise<
       JSON.parse(await readFile(path.join(root, name), "utf8")),
     ),
   );
+}
+
+/**
+ * Each chat's view of the workspace canvas (the page it shows and where it
+ * looks on each page), which main keeps apart from the shared document. Main
+ * writes it at most once a second.
+ */
+async function savedViews(
+  userDataDir: string,
+): Promise<Array<{ pageId: string; viewports: Record<string, { x: number; y: number; zoom: number }> }>> {
+  const root = path.join(userDataDir, "design-canvas-views");
+  let names: string[] = [];
+  try {
+    names = (await readdir(root)).filter((name) => name.endsWith(".json"));
+  } catch {
+    return [];
+  }
+  const files = await Promise.all(names.map(async (name) => JSON.parse(await readFile(path.join(root, name), "utf8"))));
+  return files.flatMap((file) => Object.values(file as Record<string, { pageId: string; viewports: Record<string, { x: number; y: number; zoom: number }> }>));
 }
 
 async function openDesignChat(
@@ -293,11 +311,14 @@ test("the design canvas keeps notes and workspace pages across a reload, follows
   await expect
     .poll(async () => {
       const [doc] = await savedCanvases(userDataDir);
+      const [view] = await savedViews(userDataDir);
       if (!doc) return null;
+      // Where the person looks is this chat's view, saved apart from the canvas.
+      const viewport = view?.viewports[doc.pages[0]!.id];
       return {
         kinds: doc.frames.map((saved) => saved.kind).sort(),
         note: doc.frames.find((saved) => saved.kind === "note")?.text,
-        zoomedIn: doc.pages[0]!.viewport.zoom >= 0.25,
+        zoomedIn: viewport !== undefined && viewport.zoom >= 0.25,
       };
     })
     .toEqual({
@@ -419,17 +440,19 @@ test("the design canvas keeps notes and workspace pages across a reload, follows
   await expect
     .poll(async () => {
       const [doc] = await savedCanvases(userDataDir);
+      const [view] = await savedViews(userDataDir);
       if (!doc) return null;
       return {
         version: doc.version,
         pages: doc.pages.map((entry) => entry.name),
-        onScreen: doc.pages.find((entry) => entry.id === doc.activePageId)?.name,
+        // The page on screen is this chat's view, not part of the shared canvas.
+        onScreen: doc.pages.find((entry) => entry.id === view?.pageId)?.name,
         renamed: doc.frames.some((saved) => saved.title === "Ideas"),
         secondPage: doc.frames.filter((saved) => saved.pageId === doc.pages[1]?.id).map((saved) => saved.text),
       };
     })
     .toEqual({
-      version: 2,
+      version: 3,
       pages: ["Page 1", "Page 2"],
       onScreen: "Page 1",
       renamed: true,
@@ -931,7 +954,11 @@ test("a page downloads as a PNG, a PDF and its own file, and Present walks the p
   await expect.poll(async () => readFile(sourcePath, "utf8").catch(() => "")).toBe(await readFile(hero, "utf8"));
 
   // Present fills the window and walks the page in reading order, then gives the canvas back.
-  const before = (await savedCanvases(userDataDir))[0]!.pages[0]!.viewport;
+  const firstPage = (await savedCanvases(userDataDir))[0]!.pages[0]!.id;
+  const viewOf = async () => (await savedViews(userDataDir))[0]?.viewports[firstPage];
+  // The view is reported 250 ms after the last move; wait until main has written it.
+  await expect.poll(viewOf).toBeDefined();
+  const before = await viewOf();
   await canvas.getByRole("button", { name: "Present this page" }).click();
   const bar = canvas.getByRole("toolbar", { name: "Presentation" });
   await expect(bar).toContainText("1 of 3 · hero.html");
@@ -959,7 +986,9 @@ test("a page downloads as a PNG, a PDF and its own file, and Present walks the p
   await page.keyboard.press("Escape");
   await expect(bar).toHaveCount(0);
   await expect(canvas.getByRole("toolbar", { name: "Canvas tools" })).toBeVisible();
-  expect((await savedCanvases(userDataDir))[0]!.pages[0]!.viewport).toEqual(before);
+  // Views are written at most once a second, so a moved view would be on disk by now.
+  await page.waitForTimeout(1_500);
+  expect(await viewOf()).toEqual(before);
 
   // Open full window shows one page alone, taking input, until Close.
   await heroFrame.getByRole("button", { name: "Open hero.html in a full window" }).click();

@@ -38,9 +38,9 @@ export {
   type PlaceFrameInput,
 } from "../shared/design-canvas/placement";
 
-/** The page on screen as React Flow nodes; frames on other pages are not drawn. */
-export function nodesFromCanvas(doc: DesignCanvas, selection: ReadonlySet<string>): DesignNode[] {
-  const onPage = doc.frames.filter((frame) => frame.pageId === doc.activePageId);
+/** One page as React Flow nodes; frames on other pages are not drawn. */
+export function nodesFromCanvas(doc: DesignCanvas, pageId: string, selection: ReadonlySet<string>): DesignNode[] {
+  const onPage = doc.frames.filter((frame) => frame.pageId === pageId);
   const containers = onPage.filter((frame) => isDesignContainer(frame.kind));
   const others = onPage.filter((frame) => !isDesignContainer(frame.kind));
   const byId = new Map(doc.frames.map((frame) => [frame.id, frame]));

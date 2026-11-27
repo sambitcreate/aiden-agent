@@ -17,7 +17,10 @@ import {
   placeWrittenPagesOnCanvas,
   writtenPagePath,
 } from "./written-pages.js";
-import { DesignCanvasStore } from "./store.js";
+import type { DesignViewState } from "../../../renderer/shared/design-canvas/canvas-summary.js";
+import type { DesignChatView } from "../../../renderer/shared/design-canvas/view.js";
+import { DesignCanvasStore, DesignChatCanvases } from "./store.js";
+import { DesignCanvasViews, designTurnPages } from "./views.js";
 
 const ids = () => {
   let next = 0;
@@ -26,6 +29,23 @@ const ids = () => {
 
 function canvas(frames: DesignFrame[]): DesignCanvas {
   return { ...emptyDesignCanvas(), frames };
+}
+
+const onPage = (pageId: string): DesignChatView => ({ pageId, viewport: { x: 0, y: 0, zoom: 1 } });
+
+/**
+ * Canvases under `root`: chat-1 and chat-2 share workspace ws-1, any other
+ * chat has a workspace of its own name, and "deleted-chat" is gone.
+ */
+function canvasesAt(root: string) {
+  const workspaceStore = new DesignCanvasStore({ root: () => root });
+  const workspaceOf = (chatId: string) => (chatId === "deleted-chat" ? null : chatId === "chat-1" || chatId === "chat-2" ? "ws-1" : chatId);
+  const store = new DesignChatCanvases({ store: workspaceStore, workspaceIdOf: async (chatId) => workspaceOf(chatId) });
+  const views = new DesignCanvasViews();
+  const pages = (chatId: string, message?: DesignViewState) => designTurnPages({ views, chatId, ...(message ? { message } : {}) });
+  /** What a placement for `chatId` reaches the canvas through. */
+  const via = (chatId: string, message?: DesignViewState) => ({ chatId, store, pages: pages(chatId, message) });
+  return { workspaceStore, store, views, pages, via };
 }
 
 const produced = (relativePath: string, operation: "written" | "edited" = "written") => ({
@@ -61,6 +81,8 @@ test("a new page lands beside what is in view as Aiden's file frame, and a page 
     canvas([mine]),
     ["design/home.html", "design/02-library.html"],
     ids(),
+    new Map(),
+    onPage("page-1"),
   );
   assert.equal(changed, true);
   assert.deepEqual(placedIds, ["frame-1"]);
@@ -71,13 +93,13 @@ test("a new page lands beside what is in view as Aiden's file frame, and a page 
   );
   assert.ok(placed.x >= mine.x + mine.w, "it does not cover the person's page");
 
-  const again = placeWrittenPageFrames(doc, ["design/02-library.html"], ids());
+  const again = placeWrittenPageFrames(doc, ["design/02-library.html"], ids(), new Map(), onPage("page-1"));
   assert.equal(again.changed, false);
   assert.equal(again.doc, doc);
 });
 
 test("several pages written in one reply land in a row without stacking", () => {
-  const { doc } = placeWrittenPageFrames(canvas([]), ["design/a.html", "design/b.html", "design/c.html"], ids());
+  const { doc } = placeWrittenPageFrames(canvas([]), ["design/a.html", "design/b.html", "design/c.html"], ids(), new Map(), onPage("page-1"));
   assert.equal(doc.frames.length, 3);
   for (let i = 0; i < doc.frames.length; i += 1) {
     for (let j = i + 1; j < doc.frames.length; j += 1) {
@@ -112,36 +134,35 @@ test("the pages a chat wrote are read from its saved activity, newest last and e
   assert.deepEqual(pages, ["design/library.html", "design/home.html"]);
 });
 
-test("only pages that exist are placed, the canvas is saved once per change, and a filled canvas is not refilled on entry", async (t) => {
+test("only pages that exist are placed, and the canvas is saved once per change", async (t) => {
   const base = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-written-pages-"));
   t.after(() => fs.rm(base, { recursive: true, force: true }));
   const workspaceRoot = path.join(base, "workspace");
   await fs.mkdir(path.join(workspaceRoot, "design"), { recursive: true });
   await fs.writeFile(path.join(workspaceRoot, "design", "home.html"), "<!doctype html><title>Home</title>");
   await fs.writeFile(path.join(workspaceRoot, "design", "notes.txt"), "not a page");
-  const store = new DesignCanvasStore({ root: () => path.join(base, "canvases") });
+  const { workspaceStore, via } = canvasesAt(path.join(base, "canvases"));
   const broadcasts: number[] = [];
   const newId = ids();
-  const place = (paths: string[], onlyIfEmpty = false) =>
-    placeWrittenPagesOnCanvas({
-      chatId: "chat-1",
-      workspaceRoot,
-      paths,
-      store,
-      broadcast: (update) => broadcasts.push(update.revision),
-      newId,
-      onlyIfEmpty,
-    });
+  const place = async (paths: string[]) =>
+    (
+      await placeWrittenPagesOnCanvas({
+        ...via("chat-1"),
+        workspaceRoot,
+        paths,
+        broadcast: (update) => broadcasts.push(update.revision),
+        newId,
+      })
+    ).frameIds;
 
   assert.deepEqual(await place(["design/missing.html", "design/notes.txt"]), []);
   assert.deepEqual(await place(["design/home.html"]), ["frame-1"]);
   assert.deepEqual(await place(["design/home.html"]), [], "an edit to a page already there changes nothing");
 
   await fs.writeFile(path.join(workspaceRoot, "design", "library.html"), "<!doctype html><title>Library</title>");
-  assert.deepEqual(await place(["design/library.html"], true), [], "entry leaves a canvas with frames alone");
   assert.deepEqual(await place(["design/library.html"]), ["frame-2"]);
 
-  const doc = await store.get("chat-1");
+  const doc = await workspaceStore.get("ws-1");
   assert.deepEqual(doc.frames.map((frame) => frame.path), ["design/home.html", "design/library.html"]);
   assert.deepEqual(broadcasts, [1, 2]);
 });
@@ -152,61 +173,62 @@ test("a page the person takes off the canvas is not put back when Aiden writes i
   const workspaceRoot = path.join(base, "workspace");
   await fs.mkdir(path.join(workspaceRoot, "design"), { recursive: true });
   for (const name of ["home", "about"]) await fs.writeFile(path.join(workspaceRoot, "design", `${name}.html`), "<!doctype html><title>x</title>");
-  const store = new DesignCanvasStore({ root: () => path.join(base, "canvases") });
+  const { workspaceStore: store, via } = canvasesAt(path.join(base, "canvases"));
   const removedSeen: string[][] = [];
   const newId = ids();
-  const place = (paths: string[]) =>
-    placeWrittenPagesOnCanvas({
-      chatId: "chat-1",
-      workspaceRoot,
-      paths,
-      store,
-      broadcast: () => undefined,
-      newId,
-      onRemoved: (removed) => removedSeen.push([...removed]),
-    });
+  const place = async (paths: string[]) =>
+    (
+      await placeWrittenPagesOnCanvas({
+        ...via("chat-1"),
+        workspaceRoot,
+        paths,
+        broadcast: () => undefined,
+        newId,
+        onRemoved: (removed) => removedSeen.push([...removed]),
+      })
+    ).frameIds;
   const [homeId] = await place(["design/home.html"]);
   const [aboutId] = await place(["design/about.html"]);
 
   // Aiden's own removal is not the person's: the page comes back on the next write.
-  await store.update("chat-1", (doc) => ({ ...doc, frames: doc.frames.filter((frame) => frame.id !== aboutId) }));
+  await store.update("ws-1", (doc) => ({ ...doc, frames: doc.frames.filter((frame) => frame.id !== aboutId) }));
   assert.equal((await place(["design/about.html"])).length, 1);
 
   // The person deletes home.html's frame on their canvas (a save), then Aiden edits the page twice.
-  const before = await store.get("chat-1");
-  const saved = await store.save("chat-1", { ...before, frames: before.frames.filter((frame) => frame.id !== homeId) }, before.revision);
+  const before = await store.get("ws-1");
+  const saved = await store.save("ws-1", { ...before, frames: before.frames.filter((frame) => frame.id !== homeId) }, before.revision);
   assert.equal(saved.ok, true);
   assert.deepEqual(await place(["design/home.html"]), []);
   assert.deepEqual(await place(["design/home.html"]), []);
   assert.deepEqual(removedSeen, [["design/home.html"], ["design/home.html"]]);
-  assert.equal((await store.get("chat-1")).frames.some((frame) => frame.path === "design/home.html"), false);
+  assert.equal((await store.get("ws-1")).frames.some((frame) => frame.path === "design/home.html"), false);
 
   // Placing it on purpose (any frame showing it again) clears the memory, and later writes land as before.
-  await store.update("chat-1", (doc) => ({
+  await store.update("ws-1", (doc) => ({
     ...doc,
-    frames: [...doc.frames, { id: "again", kind: "file", title: "home.html", path: "design/home.html", x: 0, y: 3000, w: 640, h: 436, designWidth: 1280, pageId: doc.activePageId, createdBy: "aiden" }],
+    frames: [...doc.frames, { id: "again", kind: "file", title: "home.html", path: "design/home.html", x: 0, y: 3000, w: 640, h: 436, designWidth: 1280, pageId: "page-1", createdBy: "aiden" }],
   }));
-  assert.equal((await store.get("chat-1")).removedPagePaths, undefined);
-  const again = await store.get("chat-1");
-  await store.save("chat-1", { ...again, frames: again.frames.filter((frame) => frame.id !== "again") }, again.revision);
-  assert.deepEqual((await store.get("chat-1")).removedPagePaths, ["design/home.html"]);
+  assert.equal((await store.get("ws-1")).removedPagePaths, undefined);
+  const again = await store.get("ws-1");
+  await store.save("ws-1", { ...again, frames: again.frames.filter((frame) => frame.id !== "again") }, again.revision);
+  assert.deepEqual((await store.get("ws-1")).removedPagePaths, ["design/home.html"]);
   // The person adding it back, even through a canvas that never knew the list, clears it too.
-  const cleared = await store.get("chat-1");
+  const cleared = await store.get("ws-1");
   const { removedPagePaths: _list, ...withoutList } = cleared;
-  await store.save("chat-1", { ...withoutList, frames: [...cleared.frames, { ...again.frames.find((frame) => frame.id === "again")!, id: "mine", createdBy: "person" }] }, cleared.revision);
-  assert.equal((await store.get("chat-1")).removedPagePaths, undefined);
+  await store.save("ws-1", { ...withoutList, frames: [...cleared.frames, { ...again.frames.find((frame) => frame.id === "again")!, id: "mine", createdBy: "person" }] }, cleared.revision);
+  assert.equal((await store.get("ws-1")).removedPagePaths, undefined);
 
   // The person undoing the reply that placed about.html takes it off, but that is no removal of theirs:
   // the next write puts it back.
-  const placed = await store.get("chat-1");
+  const placed = await store.get("ws-1");
   const undoneSave = await store.save(
-    "chat-1",
+    "ws-1",
     { ...placed, frames: placed.frames.filter((frame) => frame.path !== "design/about.html") },
     placed.revision,
     { undone: ["design/about.html"] },
   );
   assert.equal(undoneSave.ok, true);
-  assert.equal((await store.get("chat-1")).removedPagePaths, undefined);
+  assert.equal((await store.get("ws-1")).removedPagePaths, undefined);
   assert.equal((await place(["design/about.html"])).length, 1);
 });
 
@@ -307,41 +329,52 @@ test("deleted newest pages do not starve older surviving pages under limit, and 
   }
   // Pages 12..15 were noted most recently and then deleted before entry.
   // Pages 00..11 still exist on disk and should all 12 land in chronological order.
-  const store = new DesignCanvasStore({ root: () => canvasesDir });
+  const { workspaceStore: store, via } = canvasesAt(canvasesDir);
   const broadcasts: string[] = [];
+  const entry = { pageName: "Landing", hasView: async () => false };
 
-  // First simulate deleting the chat (or leaving design mode) before store.update runs.
+  // A deleted chat places nothing and writes no canvas.
   let canSave = false;
-  const abortedIds = await placeWrittenPagesOnCanvas({
-    chatId: "deleted-chat",
+  const gone = await placeWrittenPagesOnCanvas({
+    ...via("deleted-chat"),
+    workspaceRoot,
+    paths: recent.merged("chat-1", saved),
+    limit: EARLIER_PAGES_LIMIT,
+    shouldSave: () => true,
+    broadcast: (update) => broadcasts.push(`${update.chatId}:${update.revision}`),
+    newId: ids(),
+    entry,
+  });
+  assert.deepEqual(gone.frameIds, [] as string[]);
+  // Leaving design mode (or deleting the chat) before the save keeps the canvas unwritten.
+  const aborted = await placeWrittenPagesOnCanvas({
+    ...via("chat-1"),
     workspaceRoot,
     paths: recent.merged("chat-1", saved),
     limit: EARLIER_PAGES_LIMIT,
     shouldSave: () => canSave,
-    store,
     broadcast: (update) => broadcasts.push(`${update.chatId}:${update.revision}`),
     newId: ids(),
-    onlyIfEmpty: true,
+    entry,
   });
-  assert.deepEqual(abortedIds, [] as string[]);
+  assert.deepEqual(aborted.frameIds, [] as string[]);
   assert.deepEqual(broadcasts, [] as string[]);
-  await assert.rejects(fs.stat(path.join(canvasesDir, "deleted-chat.json")), { code: "ENOENT" });
+  await assert.rejects(fs.stat(path.join(canvasesDir, "ws-1.json")), { code: "ENOENT" });
 
   // Now allow saving and verify all 12 surviving older pages land oldest-to-newest.
   canSave = true;
-  const placedIds = await placeWrittenPagesOnCanvas({
-    chatId: "chat-1",
+  const placed = await placeWrittenPagesOnCanvas({
+    ...via("chat-1"),
     workspaceRoot,
     paths: recent.merged("chat-1", saved),
     limit: EARLIER_PAGES_LIMIT,
     shouldSave: () => canSave,
-    store,
     broadcast: (update) => broadcasts.push(`${update.chatId}:${update.revision}`),
     newId: ids(),
-    onlyIfEmpty: true,
+    entry,
   });
-  assert.equal(placedIds.length, EARLIER_PAGES_LIMIT);
-  const doc = await store.get("chat-1");
+  assert.equal(placed.frameIds.length, EARLIER_PAGES_LIMIT);
+  const doc = await store.get("ws-1");
   assert.deepEqual(
     doc.frames.map((frame) => frame.path),
     Array.from({ length: 12 }, (_, index) => `design/page-${String(index).padStart(2, "0")}.html`),
@@ -355,15 +388,16 @@ test("leaving design mode while the page's save waits keeps the frame off the st
   const workspaceRoot = path.join(base, "workspace");
   await fs.mkdir(path.join(workspaceRoot, "design"), { recursive: true });
   await fs.writeFile(path.join(workspaceRoot, "design", "home.html"), "<!doctype html><title>Home</title>");
-  const store = new DesignCanvasStore({ root: () => path.join(base, "canvases") });
+  const { workspaceStore, store, via } = canvasesAt(path.join(base, "canvases"));
   let designMode = true;
   const broadcasts: number[] = [];
-  const placedIds = await placeWrittenPagesOnCanvas({
-    chatId: "chat-1",
+  const placed = await placeWrittenPagesOnCanvas({
+    ...via("chat-1"),
     workspaceRoot,
     paths: ["design/home.html"],
     // The person leaves design mode once the save is already under way.
     store: {
+      workspaceIdOf: (chatId) => store.workspaceIdOf(chatId),
       update: (chatId, mutate, options) =>
         store.update(
           chatId,
@@ -378,9 +412,9 @@ test("leaving design mode while the page's save waits keeps the frame off the st
     broadcast: (update) => broadcasts.push(update.revision),
     newId: ids(),
   });
-  assert.deepEqual(placedIds, [] as string[]);
+  assert.deepEqual(placed.frameIds, [] as string[]);
   assert.deepEqual(broadcasts, [] as number[]);
-  assert.deepEqual((await store.get("chat-1")).frames, []);
+  assert.deepEqual((await workspaceStore.get("ws-1")).frames, []);
 });
 
 test("leaving design mode while the page's file is being written takes the frame back off, unless the mode is on again", async (t) => {
@@ -390,15 +424,16 @@ test("leaving design mode while the page's file is being written takes the frame
   await fs.mkdir(path.join(workspaceRoot, "design"), { recursive: true });
   await fs.writeFile(path.join(workspaceRoot, "design", "home.html"), "<!doctype html><title>Home</title>");
   const run = async (chatId: string, backOnBeforeRetract: boolean) => {
-    const store = new DesignCanvasStore({ root: () => path.join(base, "canvases") });
+    const { workspaceStore, store, via } = canvasesAt(path.join(base, "canvases"));
     let designMode = true;
     let calls = 0;
     const broadcasts: number[] = [];
-    const placedIds = await placeWrittenPagesOnCanvas({
-      chatId,
+    const placed = await placeWrittenPagesOnCanvas({
+      ...via(chatId),
       workspaceRoot,
       paths: ["design/home.html"],
       store: {
+        workspaceIdOf: (id) => store.workspaceIdOf(id),
         update: async (id, mutate, options) => {
           calls += 1;
           // The person enters design mode again before the take-back runs.
@@ -413,7 +448,7 @@ test("leaving design mode while the page's file is being written takes the frame
       broadcast: (update) => broadcasts.push(update.revision),
       newId: ids(),
     });
-    return { placedIds, broadcasts, frames: (await store.get(chatId)).frames.map((frame) => frame.path) };
+    return { placedIds: placed.frameIds, broadcasts, frames: (await workspaceStore.get(chatId)).frames.map((frame) => frame.path) };
   };
 
   const exited = await run("chat-exit", false);
@@ -466,16 +501,15 @@ test("written pages land at the width they ask for, with that width's box", asyn
   await fs.writeFile(path.join(workspaceRoot, "design", "phone.html"), '<!doctype html><meta name="aiden-design-width" content="390"><title>Phone</title>');
   await fs.writeFile(path.join(workspaceRoot, "design", "tablet.html"), '<!doctype html><meta name="viewport" content="width=768"><title>Tablet</title>');
   await fs.writeFile(path.join(workspaceRoot, "design", "desk.html"), "<!doctype html><title>Desk</title>");
-  const store = new DesignCanvasStore({ root: () => path.join(base, "canvases") });
+  const { workspaceStore, via } = canvasesAt(path.join(base, "canvases"));
   await placeWrittenPagesOnCanvas({
-    chatId: "chat-1",
+    ...via("chat-1"),
     workspaceRoot,
     paths: ["design/phone.html", "design/tablet.html", "design/desk.html"],
-    store,
     broadcast: () => undefined,
     newId: ids(),
   });
-  const doc = await store.get("chat-1");
+  const doc = await workspaceStore.get("ws-1");
   assert.deepEqual(
     doc.frames.map((frame) => [frame.path, frame.designWidth, frame.w, frame.h]),
     [
@@ -498,4 +532,189 @@ test("the width hint is read only from a regular file, never through a symbolic 
   // Only the start of a page is read.
   await fs.writeFile(real, `${" ".repeat(DESIGN_WIDTH_HINT_BYTES)}<meta name="aiden-design-width" content="390">`);
   assert.equal(await readDesignWidthHint(real), undefined);
+});
+
+/** A workspace folder with these design/ pages. */
+async function workspaceWith(t: test.TestContext, names: string[]) {
+  const base = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-written-chat-page-"));
+  t.after(() => fs.rm(base, { recursive: true, force: true }));
+  const workspaceRoot = path.join(base, "workspace");
+  await fs.mkdir(path.join(workspaceRoot, "design"), { recursive: true });
+  for (const name of names) await fs.writeFile(path.join(workspaceRoot, "design", name), `<!doctype html><title>${name}</title>`);
+  return { workspaceRoot, canvases: canvasesAt(path.join(base, "canvases")) };
+}
+
+const fileFrame = (id: string, relativePath: string, pageId: string): DesignFrame => ({
+  id, kind: "file", title: relativePath, path: relativePath, x: 0, y: 0, w: 640, h: 436, designWidth: 1280, pageId, createdBy: "aiden",
+});
+
+test("a written page dedupes only against the chat's view page", () => {
+  const elsewhere: DesignCanvas = {
+    ...canvas([fileFrame("on-p2", "design/home.html", "p2")]),
+    pages: [...emptyDesignCanvas().pages, { id: "p2", name: "Pricing" }],
+  };
+  const placed = placeWrittenPageFrames(elsewhere, ["design/home.html"], ids(), new Map(), onPage("page-1"));
+  assert.deepEqual(placed.placedIds, ["frame-1"], "another page's frame of the file does not count");
+  assert.equal(placed.doc.frames.find((frame) => frame.id === "frame-1")?.pageId, "page-1");
+  const again = placeWrittenPageFrames(placed.doc, ["design/home.html"], ids(), new Map(), onPage("p2"));
+  assert.equal(again.changed, false, "on p2 the page is already there");
+});
+
+test("a turn's message page beats the chat's kept page for a page written mid-turn", async (t) => {
+  const { workspaceRoot, canvases } = await workspaceWith(t, ["home.html"]);
+  await canvases.store.update("chat-1", (doc) => ({ ...doc, pages: [...doc.pages, { id: "p2", name: "Pricing" }] }));
+  await canvases.views.report("chat-1", "ws-1", onPage("p2"), 0);
+  const placed = await placeWrittenPagesOnCanvas({
+    ...canvases.via("chat-1", { selection: [], pageId: "page-1" }),
+    workspaceRoot,
+    paths: ["design/home.html"],
+    broadcast: () => undefined,
+    newId: ids(),
+  });
+  assert.equal(placed.pageId, "page-1");
+  assert.equal((await canvases.workspaceStore.get("ws-1")).frames[0]?.pageId, "page-1");
+});
+
+test("re-entering design mode after a restart, with the pages already on page 1, makes no page and no frame", async (t) => {
+  const { workspaceRoot, canvases } = await workspaceWith(t, ["home.html", "about.html"]);
+  await canvases.store.update("chat-1", (doc) => ({
+    ...doc,
+    frames: [fileFrame("home", "design/home.html", "page-1"), fileFrame("about", "design/about.html", "page-1")],
+  }));
+  const before = await canvases.workspaceStore.get("ws-1");
+  const broadcasts: unknown[] = [];
+  const placed = await placeWrittenPagesOnCanvas({
+    ...canvases.via("chat-1"),
+    workspaceRoot,
+    paths: ["design/home.html", "design/about.html"],
+    broadcast: (update) => broadcasts.push(update),
+    newId: ids(),
+    entry: { pageName: "Landing", hasView: async () => false },
+  });
+  assert.deepEqual(placed.frameIds, []);
+  assert.deepEqual(await canvases.workspaceStore.get("ws-1"), before, "the canvas is untouched");
+  assert.deepEqual(broadcasts, []);
+  assert.equal((await canvases.views.get("chat-1", "ws-1"))?.pageId, "page-1", "the chat's page is where its pages are");
+});
+
+test("chat B entering a workspace whose first page is chat A's gets a page of its own holding B's pages", async (t) => {
+  const { workspaceRoot, canvases } = await workspaceWith(t, ["b-home.html", "b-about.html"]);
+  await canvases.store.update("chat-1", (doc) => ({ ...doc, frames: [fileFrame("a-home", "design/a-home.html", "page-1")] }));
+  const placed = await placeWrittenPagesOnCanvas({
+    ...canvases.via("chat-2"),
+    workspaceRoot,
+    paths: ["design/b-home.html", "design/b-about.html"],
+    broadcast: () => undefined,
+    newId: ids(),
+    entry: { pageName: "Brand refresh", hasView: async () => false },
+  });
+  const doc = await canvases.workspaceStore.get("ws-1");
+  const page = doc.pages.find((entry) => entry.name === "Brand refresh");
+  assert.ok(page, "a page named after chat B");
+  assert.equal(placed.pageId, page.id);
+  assert.equal(placed.focusId, 1, "showing it is an Aiden page change");
+  assert.deepEqual(
+    doc.frames.filter((frame) => frame.pageId === page.id).map((frame) => frame.path),
+    ["design/b-home.html", "design/b-about.html"],
+  );
+  assert.equal(doc.frames.find((frame) => frame.id === "a-home")?.pageId, "page-1", "chat A's page is left alone");
+  assert.equal((await canvases.views.get("chat-2", "ws-1"))?.pageId, page.id, "B's view is its new page");
+});
+
+test("entry puts the missing pages beside the ones already on the canvas, on the page holding most of them", async (t) => {
+  const { workspaceRoot, canvases } = await workspaceWith(t, ["a.html", "b.html", "c.html"]);
+  await canvases.store.update("chat-1", (doc) => ({
+    ...doc,
+    pages: [...doc.pages, { id: "p2", name: "Flows" }],
+    frames: [fileFrame("a", "design/a.html", "p2"), fileFrame("b", "design/b.html", "p2")],
+  }));
+  const placed = await placeWrittenPagesOnCanvas({
+    ...canvases.via("chat-1"),
+    workspaceRoot,
+    paths: ["design/a.html", "design/b.html", "design/c.html"],
+    broadcast: () => undefined,
+    newId: ids(),
+    entry: { pageName: "Landing", hasView: async () => false },
+  });
+  const doc = await canvases.workspaceStore.get("ws-1");
+  assert.equal(doc.pages.length, 2, "no new page");
+  assert.equal(placed.pageId, "p2");
+  assert.deepEqual(placed.frameIds.map((id) => doc.frames.find((frame) => frame.id === id)?.path), ["design/c.html"]);
+  assert.equal(doc.frames.find((frame) => frame.path === "design/c.html")?.pageId, "p2");
+  assert.equal((await canvases.views.get("chat-1", "ws-1"))?.pageId, "p2");
+});
+
+test("a chat with a view of its own enters onto its page, even when that page has frames", async (t) => {
+  const { workspaceRoot, canvases } = await workspaceWith(t, ["mine.html"]);
+  await canvases.store.update("chat-1", (doc) => ({ ...doc, frames: [fileFrame("other", "design/other.html", "page-1")] }));
+  await canvases.views.report("chat-1", "ws-1", onPage("page-1"), 0);
+  const placed = await placeWrittenPagesOnCanvas({
+    ...canvases.via("chat-1"),
+    workspaceRoot,
+    paths: ["design/mine.html"],
+    broadcast: () => undefined,
+    newId: ids(),
+    entry: { pageName: "Landing", hasView: async () => true },
+  });
+  const doc = await canvases.workspaceStore.get("ws-1");
+  assert.equal(doc.pages.length, 1);
+  assert.equal(placed.pageId, "page-1");
+  assert.equal(placed.focusId, undefined, "the page on screen does not change");
+});
+
+test("whether the chat had a view is read before its files, so a canvas opening meanwhile cannot send its pages onto another chat's page", async (t) => {
+  const { workspaceRoot, canvases } = await workspaceWith(t, ["b-home.html"]);
+  await canvases.store.update("chat-1", (doc) => ({ ...doc, frames: [fileFrame("a-home", "design/a-home.html", "page-1")] }));
+  // The canvas this entry opens reports a view of page 1 while the files are being read.
+  let reported = false;
+  const via = canvases.via("chat-2");
+  const placed = await placeWrittenPagesOnCanvas({
+    ...via,
+    pages: {
+      ...via.pages,
+      resolver: async (workspaceId: string) => {
+        reported = true;
+        return via.pages.resolver(workspaceId);
+      },
+    },
+    workspaceRoot,
+    paths: ["design/b-home.html"],
+    broadcast: () => undefined,
+    newId: ids(),
+    entry: { pageName: "Brand refresh", hasView: async () => reported },
+  });
+  const doc = await canvases.workspaceStore.get("ws-1");
+  const page = doc.pages.find((entry) => entry.name === "Brand refresh");
+  assert.ok(page, "chat B still gets a page of its own");
+  assert.equal(placed.pageId, page.id);
+  assert.deepEqual(doc.frames.filter((frame) => frame.pageId === "page-1").map((frame) => frame.id), ["a-home"]);
+});
+
+test("leaving design mode while entry's file is being written takes back the page it added as well as its frames", async (t) => {
+  const { workspaceRoot, canvases } = await workspaceWith(t, ["b-home.html"]);
+  await canvases.store.update("chat-1", (doc) => ({ ...doc, frames: [fileFrame("a-home", "design/a-home.html", "page-1")] }));
+  let designMode = true;
+  let calls = 0;
+  const via = canvases.via("chat-2");
+  await placeWrittenPagesOnCanvas({
+    ...via,
+    store: {
+      workspaceIdOf: (id) => canvases.store.workspaceIdOf(id),
+      update: async (id, mutate, options) => {
+        calls += 1;
+        const saved = await canvases.store.update(id, mutate, options);
+        if (calls === 1) designMode = false;
+        return saved;
+      },
+    },
+    shouldSave: () => designMode,
+    workspaceRoot,
+    paths: ["design/b-home.html"],
+    broadcast: () => undefined,
+    newId: ids(),
+    entry: { pageName: "Brand refresh", hasView: async () => false },
+  });
+  const doc = await canvases.workspaceStore.get("ws-1");
+  assert.deepEqual(doc.pages.map((page) => page.name), ["Page 1"], "no empty page is left on the shared canvas");
+  assert.deepEqual(doc.frames.map((frame) => frame.id), ["a-home"]);
 });

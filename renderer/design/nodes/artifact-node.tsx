@@ -15,7 +15,7 @@ import { cn } from "../../lib/ui-utils";
 import type { DesignNode } from "../canvas-adapter-core";
 import { useFrameSnapshot } from "../frame-snapshots";
 import { useDesignNodeContext } from "./design-node-context";
-import { DesignNodeResizer, FrameSkeleton, useRetiringFrame } from "./frame-parts";
+import { DesignNodeResizer, FrameSkeleton, MissingFrame, useRetiringFrame } from "./frame-parts";
 
 /** A snapshot belongs to one visual: a frame's new media is a new snapshot version. */
 function mediaVersion(mediaId: string | undefined): number {
@@ -32,6 +32,8 @@ export function ArtifactNode({ id, data, selected }: NodeProps<DesignNode>) {
   // Keyed by media, so a swapped visual loads afresh instead of keeping the old one.
   const [loaded, setLoaded] = React.useState<{ mediaId: string; src: string } | null>(null);
   const src = loaded && loaded.mediaId === frame.mediaId ? loaded.src : null;
+  // The visual its chat no longer has (that chat was deleted, say), by media and owner.
+  const [gone, setGone] = React.useState<string | null>(null);
   const version = mediaVersion(frame.mediaId);
   const contentRef = React.useRef<HTMLDivElement | null>(null);
   const retiring = useRetiringFrame({ frameId: id, version, live, showing: src !== null, content: contentRef });
@@ -45,23 +47,34 @@ export function ArtifactNode({ id, data, selected }: NodeProps<DesignNode>) {
   // A new reader when the switch changes, so the live visual is themed again in place.
   const readTheme = React.useCallback(() => readDesignArtifactTheme(dark), [dark]);
 
+  // A visual belongs to the chat that made it, which may be another chat of this workspace.
+  const ownerChatId = frame.chatId ?? canvas.chatId;
+  const goneKey = `${ownerChatId}/${frame.mediaId ?? ""}`;
+  const missing = gone === goneKey;
   React.useEffect(() => {
-    if (!wanted || src !== null || !frame.mediaId) return;
+    if (!wanted || src !== null || missing || !frame.mediaId) return;
     const mediaId = frame.mediaId;
+    const key = `${ownerChatId}/${mediaId}`;
     let cancelled = false;
-    void chatsApi.htmlArtifactSrcdoc(canvas.chatId, mediaId, readDesignArtifactTheme(darkRef.current)).then(
+    void chatsApi.htmlArtifactSrcdoc(ownerChatId, mediaId, readDesignArtifactTheme(darkRef.current)).then(
       (preview) => {
-        if (!cancelled && preview) setLoaded({ mediaId, src: preview.src });
+        if (cancelled) return;
+        if (preview) setLoaded({ mediaId, src: preview.src });
+        else setGone(key);
       },
-      () => undefined,
+      () => {
+        if (!cancelled) setGone(key);
+      },
     );
     return () => {
       cancelled = true;
     };
-  }, [wanted, src, canvas.chatId, frame.mediaId]);
+  }, [wanted, src, missing, ownerChatId, frame.mediaId]);
 
   let body: React.ReactNode;
-  if (wanted && src) {
+  if (missing) {
+    body = <MissingFrame label="Visual no longer available" path={undefined} onRemove={() => canvas.remove(id)} />;
+  } else if (wanted && src) {
     body = (
       <div
         className={cn("h-full w-full", entered && "nodrag nowheel")}

@@ -189,7 +189,7 @@ export function DesignWorkbench({
   return (
     <DesignModeControlsContext.Provider value={controls}>
       <EnvironmentWorkbench suppressed={suppressed} design={design.state}>
-        <DesignLayout chatId={chatId} state={design.state}>
+        <DesignLayout chatId={chatId} workspaceId={design.workspaceId} state={design.state}>
           {children}
         </DesignLayout>
       </EnvironmentWorkbench>
@@ -206,10 +206,16 @@ export function DesignWorkbench({
  */
 export function DesignLayout({
   chatId,
+  workspaceId,
   state,
   children,
-}: React.PropsWithChildren<{ chatId: string | undefined; state: WorkbenchDesignState }>) {
-  const on = state === "active" && Boolean(chatId);
+}: React.PropsWithChildren<{
+  chatId: string | undefined;
+  /** The open chat's workspace while design mode is active, whose canvas is shown. */
+  workspaceId: string | undefined;
+  state: WorkbenchDesignState;
+}>) {
+  const on = state === "active" && Boolean(chatId) && workspaceId !== undefined;
   const containerRef = React.useRef<HTMLDivElement>(null);
   const [containerWidth, setContainerWidth] = React.useState(() => window.innerWidth);
   const chatWidth = useWorkbenchWidth(DESIGN_CHAT_WIDTH_STORAGE_KEY, DESIGN_CHAT_WIDTH_BOUNDS);
@@ -281,7 +287,7 @@ export function DesignLayout({
             >
               {children}
             </div>
-            {on && chatId ? (
+            {on && chatId && workspaceId !== undefined ? (
               <>
                 {stacked ? null : (
                   <DesignChatDivider
@@ -295,6 +301,7 @@ export function DesignLayout({
                 )}
                 <DesignCanvasRegion
                   chatId={chatId}
+                  workspaceId={workspaceId}
                   width={layout.canvasWidth}
                   placement={stacked ? "stacked" : "split"}
                   hidden={canvasHidden}

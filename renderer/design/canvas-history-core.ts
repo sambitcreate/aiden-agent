@@ -105,9 +105,10 @@ export function keepUnchanged(from: DesignCanvas, to: DesignCanvas): DesignCanva
  * different canvas: it adds, removes and replaces only the frames and
  * comments that differ between the two, so ones someone else changed in the
  * meantime are kept. Comments whose frame or page is gone go with it.
- * Pages (names and order) and the page on screen are taken whole when the
- * edit changed them; each page keeps the view it has now, since panning is
- * not an edit. Run on `from` itself it gives exactly `to`.
+ * Pages (names and order) are taken whole when the edit changed them, and a
+ * chat's page that is gone is forgotten. Which page anyone looks at is not
+ * in the document, so an undo never moves anyone's view. Run on `from`
+ * itself it gives exactly `to`.
  */
 export function changesBetween(
   from: DesignCanvas,
@@ -117,20 +118,14 @@ export function changesBetween(
   const commentEdit = itemChanges(from.comments, to.comments);
   const outline = (doc: DesignCanvas) => JSON.stringify(doc.pages.map((page) => [page.id, page.name]));
   const pagesChanged = outline(from) !== outline(to);
-  const activeChanged = from.activePageId !== to.activePageId;
   return (doc) => {
     if (doc === from) return to;
     const frames = frameEdit(doc.frames);
-    const views = new Map(doc.pages.map((page) => [page.id, page.viewport]));
-    const pages = pagesChanged
-      ? to.pages.map((page) => {
-          const viewport = views.get(page.id);
-          return viewport ? { ...page, viewport } : page;
-        })
-      : doc.pages;
-    const wanted = activeChanged ? to.activePageId : doc.activePageId;
-    const activePageId = pages.some((page) => page.id === wanted) ? wanted : pages[0]!.id;
+    const pages = pagesChanged ? to.pages : doc.pages;
     const pageIds = new Set(pages.map((page) => page.id));
+    const chatPages = Object.values(doc.chatPages).every((pageId) => pageIds.has(pageId))
+      ? doc.chatPages
+      : Object.fromEntries(Object.entries(doc.chatPages).filter(([, pageId]) => pageIds.has(pageId)));
     const framePages = new Map(frames.map((frame) => [frame.id, frame.pageId]));
     const comments = commentEdit(doc.comments).flatMap((comment) => {
       if (comment.frameId === undefined) return pageIds.has(comment.pageId) ? [comment] : [];
@@ -138,7 +133,7 @@ export function changesBetween(
       if (pageId === undefined) return [];
       return [pageId === comment.pageId ? comment : { ...comment, pageId }];
     });
-    return { ...doc, frames, pages, activePageId, comments };
+    return { ...doc, frames, pages, chatPages, comments };
   };
 }
 

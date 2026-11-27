@@ -8,7 +8,9 @@ import {
   type DesignCanvas,
 } from "../../renderer/shared/design-canvas/schema.js";
 import { DesignGrantRegistry } from "../services/design-canvas/grants.js";
-import { DesignCanvasStore } from "../services/design-canvas/store.js";
+import { DesignCanvasStore, DesignChatCanvases } from "../services/design-canvas/store.js";
+import { DesignCanvasViews } from "../services/design-canvas/views.js";
+import { persistedChatWorkspaceId } from "../../renderer/shared/chat-workspace.js";
 import {
   DESIGN_CAPTURE_MAX_SIDE,
   DESIGN_SOURCE_MAX_BYTES,
@@ -64,11 +66,18 @@ async function fixture(
   let enabled = options.enabled ?? true;
   const handlers = new Map<string, Handler>();
   const broadcasts: DesignCanvasUpdated[] = [];
-  const store = new DesignCanvasStore({ root: () => root });
   const chats = options.chats ?? {
     "chat-1": { id: "chat-1", workspaceId: "workspace-1", designMode: true },
   };
+  const workspaceStore = new DesignCanvasStore({ root: () => root });
+  const store = new DesignChatCanvases({
+    store: workspaceStore,
+    workspaceIdOf: async (chatId) => (chats[chatId] ? persistedChatWorkspaceId(chats[chatId].workspaceId) : null),
+  });
   const grants = new DesignGrantRegistry();
+  const views = new DesignCanvasViews();
+  const senderWatches: Array<{ event: unknown; reset: () => void }> = [];
+  const focusSent: Array<{ event: unknown; request: unknown }> = [];
   const issued: string[] = [];
   const issuedGrants: string[] = [];
   const issue = grants.issue.bind(grants);
@@ -84,6 +93,7 @@ async function fixture(
   const saveDialogs: DesignCanvasSaveOptions[] = [];
   const renders: DesignFrameRenderRequest[] = [];
   const artifactExports: string[] = [];
+  const artifactReads: string[] = [];
   const artifactThemes: unknown[] = [];
   registerDesignCanvasHandlers({
     enabled: () => enabled,
@@ -95,6 +105,9 @@ async function fixture(
     broadcast: (update) => broadcasts.push(update),
     getChat: async (chatId) => chats[chatId] ?? null,
     grants,
+    views,
+    whenSenderResets: (event, reset) => senderWatches.push({ event, reset }),
+    sendFocus: (event, request) => focusSent.push({ event, request }),
     workspaceRoot:
       options.workspaceRoot ?? (async (chat) => roots[chat.workspaceId ?? ""] ?? null),
     windowFor: options.windowFor ?? (() => null),
@@ -119,12 +132,16 @@ async function fixture(
       renders.push(request);
       return options.renderFrame ? options.renderFrame(request) : new TextEncoder().encode(`${request.format}:${request.url}`);
     },
-    artifactPreview: async (_chatId, mediaId, theme) => {
+    artifactPreview: async (chatId, mediaId, theme) => {
+      artifactReads.push(`preview ${chatId}/${mediaId}`);
       artifactThemes.push(theme);
       const src = options.artifacts?.[mediaId];
       return src ? { src } : undefined;
     },
-    artifactHtml: async (_chatId, mediaId) => options.artifactHtml?.[mediaId],
+    artifactHtml: async (chatId, mediaId) => {
+      artifactReads.push(`html ${chatId}/${mediaId}`);
+      return options.artifactHtml?.[mediaId];
+    },
     artifactTitle: async (_chatId, mediaId) => options.artifactTitles?.[mediaId],
     newId: (() => {
       let next = 0;
@@ -140,10 +157,28 @@ async function fixture(
     if (!handler) throw new Error(`${channel} is not registered`);
     return handler(event, ...args);
   };
-  const invoke = (channel: string, ...args: unknown[]) => invokeFrom({}, channel, ...args);
+  // A save names the workspace whose canvas the renderer is on. Tests that
+  // save from the chat's current workspace leave it out and it is filled in
+  // here; `invokeFrom` sends exactly what it is given.
+  const invoke = (channel: string, ...args: unknown[]) => {
+    const [chatId, , , saveOptions] = args;
+    if (
+      channel === "designCanvas:save" &&
+      typeof chatId === "string" &&
+      chats[chatId] &&
+      (saveOptions === undefined || (typeof saveOptions === "object" && saveOptions !== null && !("workspaceId" in saveOptions)))
+    ) {
+      args[3] = { ...(saveOptions as object | undefined), workspaceId: persistedChatWorkspaceId(chats[chatId]!.workspaceId) };
+    }
+    return invokeFrom({}, channel, ...args);
+  };
   return {
     root,
     store,
+    workspaceStore,
+    views,
+    senderWatches,
+    focusSent,
     grants,
     issued,
     issuedGrants,
@@ -157,6 +192,7 @@ async function fixture(
     saveDialogs,
     renders,
     artifactExports,
+    artifactReads,
     artifactThemes,
     disable: () => (enabled = false),
   };
@@ -174,12 +210,138 @@ test("a successful save broadcasts the new revision and get reads it back", asyn
   const { invoke, broadcasts } = await fixture(t);
   assert.equal(((await invoke("designCanvas:get", "chat-1")) as DesignCanvas).revision, 0);
   assert.deepEqual(await invoke("designCanvas:save", "chat-1", note, 0), { ok: true, revision: 1 });
-  assert.deepEqual(broadcasts, [{ chatId: "chat-1", revision: 1 }]);
+  assert.deepEqual(broadcasts, [{ workspaceId: "workspace-1", chatId: "chat-1", revision: 1 }]);
   const stored = (await invoke("designCanvas:get", "chat-1")) as DesignCanvas;
   assert.deepEqual(
     stored.frames.map((frame) => frame.id),
     ["n"],
   );
+});
+
+test("a save broadcasts the chat's workspace id", async (t) => {
+  const { invoke, broadcasts } = await fixture(t, {
+    chats: {
+      "chat-a": { id: "chat-a", workspaceId: "ws-1", designMode: true },
+      "chat-b": { id: "chat-b", workspaceId: "ws-1", designMode: true },
+      legacy: { id: "legacy", designMode: true },
+    },
+  });
+  await invoke("designCanvas:save", "chat-a", note, 0);
+  assert.deepEqual(broadcasts, [{ workspaceId: "ws-1", chatId: "chat-a", revision: 1 }]);
+  // Chat B is on the same workspace, so it reads chat A's save.
+  assert.deepEqual(((await invoke("designCanvas:get", "chat-b")) as DesignCanvas).frames.map((frame) => frame.id), ["n"]);
+  // A chat from before workspaces were explicit is on the default workspace.
+  await invoke("designCanvas:save", "legacy", note, 0, { workspaceId: "default" });
+  assert.deepEqual(broadcasts[1], { workspaceId: "default", chatId: "legacy", revision: 1 });
+});
+
+test("a save that names another workspace than the chat's is answered moved, and writes nothing", async (t) => {
+  const { invoke, invokeFrom, broadcasts, workspaceStore } = await fixture(t, {
+    chats: { "chat-1": { id: "chat-1", workspaceId: "ws-2", designMode: true } },
+  });
+  await workspaceStore.save("ws-2", { ...note, frames: [] }, 0);
+  // The canvas was opened while the chat was in ws-1; the chat has since moved to ws-2.
+  assert.deepEqual(await invoke("designCanvas:save", "chat-1", note, 1, { workspaceId: "ws-1" }), {
+    ok: false,
+    reason: "moved",
+    workspaceId: "ws-2",
+  });
+  assert.equal((await workspaceStore.get("ws-2")).revision, 1, "ws-2 is unchanged");
+  assert.deepEqual((await workspaceStore.get("ws-1")).revision, 0, "ws-1 is untouched too");
+  assert.deepEqual(broadcasts, []);
+  await assert.rejects(invoke("designCanvas:save", "chat-1", note, 1, { workspaceId: "../ws" }), /save options/u);
+  // A save that does not say which workspace's canvas it is cannot replace any.
+  await assert.rejects(invokeFrom({}, "designCanvas:save", "chat-1", note, 1), /save options/u);
+  await assert.rejects(invokeFrom({}, "designCanvas:save", "chat-1", note, 1, { undone: [] }), /save options/u);
+});
+
+test("designCanvas:view stores a parsed view and refuses a malformed one", async (t) => {
+  const { invoke, views } = await fixture(t);
+  const report = (view: unknown, focusId: unknown = 0, workspaceId: unknown = "workspace-1") => ({ workspaceId, view, focusId });
+  await invoke("designCanvas:view", "chat-1", report({ pageId: "p2", viewport: { x: 10, y: 20, zoom: 9 }, size: { w: 800, h: 600 } }));
+  assert.deepEqual(await views.get("chat-1", "workspace-1"), { pageId: "p2", viewport: { x: 10, y: 20, zoom: 4 }, size: { w: 800, h: 600 } });
+  assert.equal(views.mounted("workspace-1"), 1);
+  const good = { pageId: "p2", viewport: { x: 0, y: 0, zoom: 1 } };
+  for (const bad of [
+    report({ pageId: "p2" }),
+    report({ pageId: "", viewport: { x: 0, y: 0, zoom: 1 } }),
+    report(good, -1),
+    report(good, 1.5),
+    report(good, "1"),
+    report(good, 0, "../ws"),
+    { view: good, focusId: 0 },
+    { mounted: true },
+    "p2",
+    null,
+  ]) {
+    await assert.rejects(invoke("designCanvas:view", "chat-1", bad), /Invalid canvas view/u, JSON.stringify(bad));
+  }
+  assert.equal((await views.get("chat-1", "workspace-1"))?.viewport.x, 10, "a refused report changes nothing");
+  // The canvas reads the kept view back when it mounts.
+  await invoke("designCanvas:view", "chat-1", { mounted: false });
+  assert.equal(views.mounted("workspace-1"), 0);
+  assert.deepEqual(await invoke("designCanvas:view:get", "chat-1"), {
+    pageId: "p2",
+    viewport: { x: 10, y: 20, zoom: 4 },
+    focusId: 0,
+    viewports: { p2: { x: 10, y: 20, zoom: 4 } },
+  });
+});
+
+test("a canvas's last report and its unmount, sent back to back, leave it counted as closed", async (t) => {
+  const { invoke, views } = await fixture(t);
+  const last = invoke("designCanvas:view", "chat-1", { workspaceId: "workspace-1", view: { pageId: "p2", viewport: { x: 3, y: 0, zoom: 1 } }, focusId: 0 });
+  const closed = invoke("designCanvas:view", "chat-1", { mounted: false });
+  await Promise.all([last, closed]);
+  assert.equal(views.mounted("workspace-1"), 0);
+  assert.equal((await views.get("chat-1", "workspace-1"))?.viewport.x, 3, "the last report still counts");
+});
+
+test("designCanvas:view:get answers null for a chat with no kept view", async (t) => {
+  const { invoke } = await fixture(t);
+  assert.equal(await invoke("designCanvas:view:get", "chat-1"), null);
+});
+
+test("a view report naming the chat's old workspace is dropped", async (t) => {
+  const { invoke, views, chats } = await fixture(t);
+  await invoke("designCanvas:view", "chat-1", { workspaceId: "workspace-1", view: { pageId: "p1", viewport: { x: 0, y: 0, zoom: 1 } }, focusId: 0 });
+  chats["chat-1"]!.workspaceId = "workspace-2";
+  await invoke("designCanvas:view", "chat-1", { workspaceId: "workspace-2", view: { pageId: "w2-page", viewport: { x: 7, y: 0, zoom: 1 } }, focusId: 0 });
+  // A canvas still showing W1 reports late; W2's view stays as it was.
+  await invoke("designCanvas:view", "chat-1", { workspaceId: "workspace-1", view: { pageId: "p1", viewport: { x: 99, y: 0, zoom: 1 } }, focusId: 0 });
+  assert.deepEqual(await views.get("chat-1", "workspace-2"), { pageId: "w2-page", viewport: { x: 7, y: 0, zoom: 1 } });
+  assert.equal((await views.get("chat-1", "workspace-1"))?.viewport.x, 0);
+});
+
+test("designCanvas:view refuses a Bot chat, but an unmount needs only a well-formed chat id", async (t) => {
+  const { invoke, views, chats } = await fixture(t, {
+    chats: {
+      "chat-1": { id: "chat-1", workspaceId: "workspace-1", designMode: true },
+      bot: { id: "bot", workspaceId: "workspace-1", botId: "b1" },
+    },
+  });
+  const report = { workspaceId: "workspace-1", view: { pageId: "page-1", viewport: { x: 0, y: 0, zoom: 1 } }, focusId: 0 };
+  await assert.rejects(invoke("designCanvas:view", "bot", report), /not available/u);
+  await assert.rejects(invoke("designCanvas:view:get", "bot"), /not available/u);
+  await assert.rejects(invoke("designCanvas:view", "missing", report), /no longer available/u);
+  assert.equal(await views.get("bot", "workspace-1"), undefined);
+  // The chat is deleted while its canvas is open; the unmount that follows still lands.
+  await invoke("designCanvas:view", "chat-1", report);
+  delete chats["chat-1"];
+  await invoke("designCanvas:view", "chat-1", { mounted: false });
+  assert.equal(views.mounted("workspace-1"), 0);
+  await assert.rejects(invoke("designCanvas:view", "../x", { mounted: false }), /Invalid chat id/u);
+});
+
+test("when the window that reports views reloads, crashes or goes away, every canvas counts as closed", async (t) => {
+  const { invokeFrom, views, senderWatches } = await fixture(t);
+  const sender = { id: "window" };
+  const report = { workspaceId: "workspace-1", view: { pageId: "page-1", viewport: { x: 0, y: 0, zoom: 1 } }, focusId: 0 };
+  await invokeFrom(sender, "designCanvas:view", "chat-1", report);
+  assert.equal(views.mounted("workspace-1"), 1);
+  senderWatches.find((watch) => watch.event === sender)!.reset();
+  assert.equal(views.mounted("workspace-1"), 0);
+  assert.equal((await views.get("chat-1", "workspace-1"))?.pageId, "page-1", "the page is kept");
 });
 
 test("a page a save takes off is remembered as removed, unless the save says the person's undo took it off", async (t) => {
@@ -237,7 +399,7 @@ test("malformed parameters are rejected before the store is used", async (t) => 
 test("a chat that does not exist has no canvas to read or write", async (t) => {
   const { invoke, root } = await fixture(t);
   await assert.rejects(invoke("designCanvas:get", "missing"), /no longer available/u);
-  await assert.rejects(invoke("designCanvas:save", "missing", note, 0), /no longer available/u);
+  await assert.rejects(invoke("designCanvas:save", "missing", note, 0, { workspaceId: "workspace-1" }), /no longer available/u);
   assert.deepEqual(await fs.readdir(root), []);
 });
 
@@ -795,6 +957,50 @@ test("only a frame the stored canvas holds exports, and only in the formats its 
   assert.deepEqual(saveDialogs, []);
 });
 
+test("another chat's visual on the shared canvas previews, exports and shows its code through that chat, while it shares the workspace", async (t) => {
+  let destination = "";
+  const harness = await exportCanvas(t, {
+    chats: {
+      "chat-1": { id: "chat-1", workspaceId: "workspace-1", designMode: true },
+      "chat-a": { id: "chat-a", workspaceId: "workspace-1" },
+      "chat-x": { id: "chat-x", workspaceId: "workspace-2" },
+      routine: { id: "routine", workspaceId: "workspace-1", owner: { kind: "routine", id: "r1" } as never },
+    },
+    saveFile: () => destination,
+    artifacts: { "media-1": "aiden-genui://preview/abc" },
+    artifactHtml: { "media-1": "<svg>chart</svg>" },
+  });
+  const { invoke, out, store, artifactReads, artifactExports } = harness;
+  destination = path.join(out, "chart.png");
+  const box = { x: 0, y: 0, w: 640, h: 436, pageId: "page-1", createdBy: "aiden" as const, kind: "artifact" as const, mediaId: "media-1" };
+  await store.update("chat-1", (doc) => ({
+    ...doc,
+    frames: [
+      ...doc.frames,
+      { ...box, id: "a-chart", title: "A's chart", chatId: "chat-a" },
+      { ...box, id: "x-chart", title: "Moved chat's chart", chatId: "chat-x" },
+      { ...box, id: "gone-chart", title: "Deleted chat's chart", chatId: "chat-deleted" },
+      { ...box, id: "routine-chart", title: "A routine's chart", chatId: "routine" },
+    ],
+  }));
+
+  assert.deepEqual(await invoke("designCanvas:export", "chat-1", "a-chart", "png"), { saved: true });
+  assert.deepEqual(await invoke("designCanvas:export", "chat-1", "a-chart", "source"), { saved: true });
+  assert.deepEqual(await invoke("designCanvas:source", "chat-1", "a-chart"), { text: "<svg>chart</svg>", truncated: false });
+  assert.deepEqual(artifactReads, ["preview chat-a/media-1", "html chat-a/media-1"]);
+  assert.deepEqual(artifactExports, ["chat-a/media-1"]);
+
+  // A chat now in another workspace, or deleted, no longer lends its visuals to this canvas,
+  // and a routine's never does, even in the same workspace.
+  for (const frameId of ["x-chart", "gone-chart", "routine-chart"]) {
+    assert.deepEqual(await invoke("designCanvas:export", "chat-1", frameId, "png"), { error: "unavailable" });
+    assert.deepEqual(await invoke("designCanvas:export", "chat-1", frameId, "source"), { error: "unavailable" });
+    assert.deepEqual(await invoke("designCanvas:source", "chat-1", frameId), { error: "unavailable" });
+  }
+  assert.equal(artifactReads.length, 2, "nothing was read for them");
+  assert.equal(artifactExports.length, 1);
+});
+
 test("the Code tab reads a page's file or an artifact's HTML, cut at 512 KiB, and nothing else", async (t) => {
   const harness = await exportCanvas(t, { artifactHtml: { "media-1": "<svg>chart</svg>" } });
   const { invoke, site } = harness;
@@ -815,8 +1021,8 @@ test("the Code tab reads a page's file or an artifact's HTML, cut at 512 KiB, an
   assert.equal(big.text.length, DESIGN_SOURCE_MAX_BYTES);
 });
 
-test("Send to canvas puts a chat visual on the page on screen as the person's frame, once", async (t) => {
-  const { invoke, broadcasts } = await fixture(t, {
+test("Send to canvas puts a chat visual on the chat's page as the person's frame, once", async (t) => {
+  const { invoke, broadcasts, focusSent } = await fixture(t, {
     // Not in design mode yet: the person's action turns it on after the frame lands.
     chats: { "chat-1": { id: "chat-1", workspaceId: "workspace-1" } },
     artifactTitles: { "media-1": "  Revenue mockup  " },
@@ -825,14 +1031,15 @@ test("Send to canvas puts a chat visual on the page on screen as the person's fr
   const placed = (await invoke("designCanvas:placeArtifact", "chat-1", "media-1")) as DesignCanvasPlaceArtifactResult;
   assert.deepEqual(placed, { status: "placed", frameId: "placed-1" });
   // Announced as the person's own step, so an open canvas can undo it.
-  assert.deepEqual(broadcasts, [{ chatId: "chat-1", revision: 1, step: "send-to-canvas:1" }]);
+  assert.deepEqual(broadcasts, [{ workspaceId: "workspace-1", chatId: "chat-1", revision: 1, step: "send-to-canvas:1" }]);
   const doc = (await invoke("designCanvas:get", "chat-1")) as DesignCanvas;
   const frame = doc.frames.find((entry) => entry.id === "placed-1");
   assert.ok(frame);
   assert.equal(frame.kind, "artifact");
   assert.equal(frame.title, "Revenue mockup");
   assert.equal(frame.createdBy, "person");
-  assert.equal(frame.pageId, doc.activePageId);
+  assert.equal(frame.pageId, "page-1");
+  assert.equal(frame.chatId, "chat-1", "the frame names the chat whose visual it shows");
   assert.ok(frame.kind === "artifact" && frame.mediaId === "media-1");
 
   // Sending it again shows the frame already there and changes nothing.
@@ -842,10 +1049,25 @@ test("Send to canvas puts a chat visual on the page on screen as the person's fr
   });
   assert.equal(broadcasts.length, 1);
   assert.equal(((await invoke("designCanvas:get", "chat-1")) as DesignCanvas).revision, 1);
+  assert.deepEqual(focusSent.map((sent) => sent.request), [], "the frame is already on the page on screen");
 });
 
-test("Send to canvas centres a visual in the canvas the person sees, and shows the page a sent visual is already on", async (t) => {
-  const { invoke, store, broadcasts } = await fixture(t, {
+test("Send to canvas lands on the chat's view page", async (t) => {
+  const { invoke, store, views } = await fixture(t, {
+    chats: { "chat-1": { id: "chat-1", workspaceId: "workspace-1" } },
+    artifactTitles: { "media-1": "Chart" },
+    artifactHtml: { "media-1": "<p>chart</p>" },
+  });
+  await store.update("chat-1", (current) => ({ ...current, pages: [...current.pages, { id: "page-2", name: "Ideas" }] }));
+  await views.report("chat-1", "workspace-1", { pageId: "page-2", viewport: { x: 0, y: 0, zoom: 1 } }, 0);
+  await invoke("designCanvas:placeArtifact", "chat-1", "media-1");
+  const doc = (await invoke("designCanvas:get", "chat-1")) as DesignCanvas;
+  assert.equal(doc.frames[0]?.pageId, "page-2");
+});
+
+test("Send to canvas centres a visual in the canvas the person sees, and focuses the page a sent visual is already on without changing the document", async (t) => {
+  const marker = { id: "window" };
+  const { invoke, invokeFrom, store, views, broadcasts, focusSent } = await fixture(t, {
     chats: { "chat-1": { id: "chat-1", workspaceId: "workspace-1" } },
     artifactTitles: { "media-1": "Wide", "media-2": "Default" },
     artifactHtml: { "media-1": "<p>wide</p>", "media-2": "<p>default</p>" },
@@ -861,22 +1083,21 @@ test("Send to canvas centres a visual in the canvas the person sees, and shows t
   assert.ok(doc.frames.some((frame) => frame.kind === "artifact" && frame.mediaId === "media-2"));
 
   // The person moves to another page; sending the visual again takes them back to it.
-  await store.update("chat-1", (current) => ({
-    ...current,
-    pages: [...current.pages, { id: "page-2", name: "Ideas", viewport: { x: 0, y: 0, zoom: 1 } }],
-    activePageId: "page-2",
-  }));
+  await store.update("chat-1", (current) => ({ ...current, pages: [...current.pages, { id: "page-2", name: "Ideas" }] }));
+  await views.report("chat-1", "workspace-1", { pageId: "page-2", viewport: { x: 0, y: 0, zoom: 1 } }, 0);
+  const revision = ((await invoke("designCanvas:get", "chat-1")) as DesignCanvas).revision;
   const before = broadcasts.length;
-  assert.deepEqual(await invoke("designCanvas:placeArtifact", "chat-1", "media-1"), {
+  assert.deepEqual(await invokeFrom(marker, "designCanvas:placeArtifact", "chat-1", "media-1"), {
     status: "already",
     frameId: wide.id,
     page: "Page 1",
   });
   doc = (await invoke("designCanvas:get", "chat-1")) as DesignCanvas;
-  assert.equal(doc.activePageId, wide.pageId);
+  assert.equal(doc.revision, revision, "the shared document is not changed");
   assert.equal(doc.frames.length, 2, "nothing new is placed");
-  assert.equal(broadcasts.length, before + 1);
-  assert.equal(broadcasts[broadcasts.length - 1]?.step, undefined, "showing another page is no undo step of its own");
+  assert.equal(broadcasts.length, before, "nothing to announce");
+  assert.deepEqual(focusSent, [{ event: marker, request: { chatId: "chat-1", pageId: "page-1", frameIds: [wide.id], focusId: 1 } }]);
+  assert.equal((await views.get("chat-1", "workspace-1"))?.pageId, "page-1", "the chat's view is on that page at once");
 });
 
 test("Send to canvas refuses a visual the chat no longer has, or HTML that fails the visual checks", async (t) => {
@@ -918,7 +1139,7 @@ test("Send to canvas is refused in a Bot or routine chat and reports a full canv
       w: 200,
       h: 120,
       text: "",
-      pageId: doc.activePageId,
+      pageId: doc.pages[0]!.id,
       createdBy: "person" as const,
     })),
   }));

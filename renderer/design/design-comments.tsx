@@ -35,7 +35,6 @@ import {
   type DesignLocated,
   type DesignPageElement,
 } from "../shared/design-canvas/comments";
-import { showPage } from "../shared/design-canvas/pages";
 import type { DesignCanvas, DesignComment, DesignCommentAnchor, DesignFrame } from "../shared/design-canvas/schema";
 import type { DesignNode } from "./canvas-adapter-core";
 import { commentNumbers, marksFromCanvas, marksOnCanvas, pinPlace, type FrameScroll } from "./comment-geometry";
@@ -61,6 +60,10 @@ export type CommentDraft = {
 type CommentsInput = {
   chatId: string;
   doc: DesignCanvas;
+  /** The page on screen, from the chat's view. */
+  pageId: string;
+  /** Shows another page in the chat's view. */
+  showPage(pageId: string): void;
   change(mutate: Mutation, options?: { record?: boolean }): void;
   /** Saves pending edits now rather than after the debounce. */
   flush(): Promise<boolean>;
@@ -93,7 +96,7 @@ function nextFrame(): Promise<void> {
   return new Promise((resolve) => requestAnimationFrame(() => resolve()));
 }
 
-export function useDesignComments({ chatId, doc, change, flush, flow, wrapper, live, versionOf }: CommentsInput) {
+export function useDesignComments({ chatId, doc, pageId, showPage, change, flush, flow, wrapper, live, versionOf }: CommentsInput) {
   const [active, setActiveState] = React.useState(false);
   const [draft, setDraft] = React.useState<CommentDraft | null>(null);
   const [openId, setOpenId] = React.useState<string | null>(null);
@@ -106,10 +109,22 @@ export function useDesignComments({ chatId, doc, change, flush, flow, wrapper, l
 
   const docRef = React.useRef(doc);
   const versionOfRef = React.useRef(versionOf);
+  const pageRef = React.useRef(pageId);
   React.useLayoutEffect(() => {
     docRef.current = doc;
     versionOfRef.current = versionOf;
-  }, [doc, versionOf]);
+    pageRef.current = pageId;
+  }, [doc, versionOf, pageId]);
+  /** A new comment's page and chat: a frame's own page, else the page on screen. */
+  const commentHome = React.useCallback(
+    (place: DesignCommentPlace) => ({
+      pageId:
+        (place.frameId !== undefined ? docRef.current.frames.find((entry) => entry.id === place.frameId)?.pageId : undefined) ??
+        pageRef.current,
+      chatId,
+    }),
+    [chatId],
+  );
   const picks = React.useRef(new Map<string, (picked: Picked | null) => void>());
   const locates = React.useRef(new Map<string, { frameId: string; version: number }>());
   /** The file version each comment was sent at; a newer version that still finds its element resolves it. */
@@ -347,16 +362,17 @@ export function useDesignComments({ chatId, doc, change, flush, flow, wrapper, l
       if (!frame) return false;
       const id = crypto.randomUUID();
       const place = elementPlace(frame, element);
+      const home = commentHome(place);
       let added = false;
       change((latest) => {
-        const next = addComment(latest, { id, place, note, createdAt: new Date().toISOString(), queued: true });
+        const next = addComment(latest, { id, place, note, createdAt: new Date().toISOString(), queued: true, ...home });
         added = next !== null;
         return next ?? latest;
       });
       if (added) void captureSpotRef.current(id, place);
       return added;
     },
-    [change],
+    [change, commentHome],
   );
 
   /** Queues a note on a whole frame, pinned at its top right, for the next message (Tweaks' Send to Aiden). */
@@ -366,16 +382,17 @@ export function useDesignComments({ chatId, doc, change, flush, flow, wrapper, l
       if (!frame) return false;
       const id = crypto.randomUUID();
       const place: DesignCommentPlace = { frameId: frame.id, x: Math.max(0, frame.w - 8), y: 8 };
+      const home = commentHome(place);
       let added = false;
       change((latest) => {
-        const next = addComment(latest, { id, place, note, createdAt: new Date().toISOString(), queued: true });
+        const next = addComment(latest, { id, place, note, createdAt: new Date().toISOString(), queued: true, ...home });
         added = next !== null;
         return next ?? latest;
       });
       if (added) void captureSpotRef.current(id, place);
       return added;
     },
-    [change],
+    [change, commentHome],
   );
 
   const hoverFrame = React.useRef<number | null>(null);
@@ -416,12 +433,10 @@ export function useDesignComments({ chatId, doc, change, flush, flow, wrapper, l
       const comment = docRef.current.comments.find((entry) => entry.id === id);
       if (!comment) return;
       setDraft(null);
-      if (docRef.current.activePageId !== comment.pageId) {
-        change((current) => showPage(current, comment.pageId), { record: false });
-      }
+      if (pageRef.current !== comment.pageId) showPage(comment.pageId);
       setPendingOpen(id);
     },
-    [change],
+    [showPage],
   );
   // Once the comment's page is on screen, bring its pin into view and open it.
   React.useEffect(() => {
@@ -431,7 +446,7 @@ export function useDesignComments({ chatId, doc, change, flush, flow, wrapper, l
       setPendingOpen(null);
       return;
     }
-    if (doc.activePageId !== comment.pageId) return;
+    if (pageId !== comment.pageId) return;
     // The page switch moves the view on its own render; centre on the pin after it.
     const timer = setTimeout(() => {
       setPendingOpen(null);
@@ -441,7 +456,7 @@ export function useDesignComments({ chatId, doc, change, flush, flow, wrapper, l
       openComment(comment.id);
     }, 0);
     return () => clearTimeout(timer);
-  }, [pendingOpen, doc, scroll, flow]);
+  }, [pendingOpen, doc, pageId, scroll, flow]);
 
   // The element a box is open on is outlined inside its page.
   const highlighted = draft?.place.frameId
@@ -494,9 +509,10 @@ export function useDesignComments({ chatId, doc, change, flush, flow, wrapper, l
     let added = true;
     const frame = current.place.frameId ? docRef.current.frames.find((entry) => entry.id === current.place.frameId) : undefined;
     const marks = marksFromCanvas(frame, strokes);
+    const home = commentHome(current.place);
     setDrawing(false);
     change((latest) => {
-      const next = addComment(latest, { id: current.id, place: current.place, note, createdAt, queued, marks });
+      const next = addComment(latest, { id: current.id, place: current.place, note, createdAt, queued, marks, ...home });
       if (!next) {
         added = false;
         return latest;
@@ -516,7 +532,7 @@ export function useDesignComments({ chatId, doc, change, flush, flow, wrapper, l
     const frame = comment?.frameId ? docRef.current.frames.find((entry) => entry.id === comment.frameId) : undefined;
     const marks = marksFromCanvas(frame, strokes);
     setDrawing(false);
-    change((latest) => setCommentQueued(editComment(latest, id, { note, marks }), id, queued));
+    change((latest) => setCommentQueued(editComment(latest, id, { note, marks }), id, queued, chatId));
     // The picture is taken with the marks still on screen and the box hidden.
     if (comment && queued) await captureSpot(id, comment);
     openComment(null);
@@ -543,7 +559,8 @@ export function useDesignComments({ chatId, doc, change, flush, flow, wrapper, l
     openRef.current = open;
   }, [open]);
   React.useEffect(() => {
-    const queued = queuedComments(doc);
+    // The tray holds only this chat's comments; other chats' wait in their own.
+    const queued = queuedComments(doc, chatId);
     publishDesignCommentTray(
       chatId,
       queued.length === 0
@@ -559,7 +576,7 @@ export function useDesignComments({ chatId, doc, change, flush, flow, wrapper, l
                 sentVersions.current.set(id, versionOfRef.current(frame?.path));
               }
               const sentAt = new Date().toISOString();
-              change((latest) => markCommentsSent(latest, ids, sentAt));
+              change((latest) => markCommentsSent(latest, ids, sentAt, chatId));
               const undo = () => {
                 for (const id of ids) sentVersions.current.delete(id);
                 change((latest) => unmarkCommentsSent(latest, ids, sentAt));
@@ -582,6 +599,7 @@ export function useDesignComments({ chatId, doc, change, flush, flow, wrapper, l
   const layer = (
     <CommentLayer
       doc={doc}
+      pageId={pageId}
       scroll={scroll}
       draft={draft}
       openId={openId}
@@ -631,6 +649,7 @@ export function useDesignComments({ chatId, doc, change, flush, flow, wrapper, l
 
 type LayerProps = {
   doc: DesignCanvas;
+  pageId: string;
   scroll: ReadonlyMap<string, FrameScroll>;
   draft: CommentDraft | null;
   openId: string | null;
@@ -654,7 +673,7 @@ type LayerProps = {
 const BOX_SPACE = { w: 340, h: 200 } as const;
 type BoxSide = { left: boolean; up: boolean };
 
-function CommentLayer({ doc, scroll, draft, openId, capturing, strokes, drawing, onDraw, onStrokes, ...actions }: LayerProps) {
+function CommentLayer({ doc, pageId, scroll, draft, openId, capturing, strokes, drawing, onDraw, onStrokes, ...actions }: LayerProps) {
   const zoom = useStore((state) => state.transform[2]) || 1;
   const panX = useStore((state) => state.transform[0]);
   const panY = useStore((state) => state.transform[1]);
@@ -671,7 +690,7 @@ function CommentLayer({ doc, scroll, draft, openId, capturing, strokes, drawing,
     };
   };
   const comments = doc.comments.filter(
-    (comment) => comment.pageId === doc.activePageId && (comment.state !== "resolved" || comment.id === openId),
+    (comment) => comment.pageId === pageId && (comment.state !== "resolved" || comment.id === openId),
   );
   const open = openId ? comments.find((comment) => comment.id === openId) : undefined;
   const draftPlace = draft
@@ -738,7 +757,7 @@ function CommentLayer({ doc, scroll, draft, openId, capturing, strokes, drawing,
         {draft && draftPlace ? (
           <div style={at(draftPlace.x, draftPlace.y)}>
             <CommentPin
-              number={doc.comments.filter((comment) => comment.pageId === doc.activePageId).length + 1}
+              number={doc.comments.filter((comment) => comment.pageId === pageId).length + 1}
               open
               label={draft.label}
             />

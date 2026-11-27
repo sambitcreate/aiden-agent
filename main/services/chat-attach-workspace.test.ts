@@ -132,6 +132,20 @@ test("copyScratchFilesToWorkspace copies cleanly and uses collision-free subfold
   });
 });
 
+test("a copy names each file's path in the scratch folder and where it landed, so frames can follow their files", async () => {
+  await withTempDir(async (dir) => {
+    const scratch = path.join(dir, "scratch");
+    const project = path.join(dir, "project");
+    await fs.mkdir(path.join(scratch, "design"), { recursive: true });
+    await fs.mkdir(path.join(project, "design"), { recursive: true });
+    await fs.writeFile(path.join(scratch, "design", "a.html"), "<p>a</p>");
+    // The project already has a design/ folder, so the copy goes under aiden-scratch/.
+    const copy = await copyScratchFilesToWorkspaceWithRollback(scratch, project);
+    assert.deepEqual(copy.copied, [{ from: "design/a.html", to: "aiden-scratch/design/a.html" }]);
+    assert.deepEqual(copy.copiedPaths, ["aiden-scratch/design/a.html"]);
+  });
+});
+
 test("ephemeral chat stays hidden from listRegular, promotes cleanly, and attaches in-place to a workspace", async () => {
   await withTempDir(async (dir) => {
     const storeDir = path.join(dir, "chats");
@@ -183,6 +197,7 @@ test("ephemeral chat stays hidden from listRegular, promotes cleanly, and attach
     const resetSessions: string[] = [];
     const deletedMemory: string[] = [];
     const releasedWorkspaces: string[] = [];
+    const carried: unknown[] = [];
     const workspaceOperationRegistry = new WorkspaceOperationRegistry();
 
     const service = createChatApplicationService({
@@ -231,6 +246,13 @@ test("ephemeral chat stays hidden from listRegular, promotes cleanly, and attach
         },
       },
       designGrants: { revokeChat: (id) => revokedDesign.push(id) },
+      designCanvasCarry: {
+        carry: async (input) => {
+          // The hidden workspace (and its canvas) must still be there to read.
+          carried.push({ ...input, hiddenReleased: releasedWorkspaces.includes(input.fromWorkspaceId) });
+          return "carried";
+        },
+      },
       releaseChatContext: (id) => releasedContext.push(id),
       invalidateChatWorkspaceContext: (id) => invalidatedWorkspaceContext.push(id),
       resetChatWorkspaceSession: async (id) => {
@@ -318,6 +340,18 @@ test("ephemeral chat stays hidden from listRegular, promotes cleanly, and attach
     assert.deepEqual(resetSessions, [chatId]);
     assert.deepEqual(deletedMemory, [chatId]);
     assert.deepEqual(releasedWorkspaces, ["nows-1"]);
+    // The chat's canvas follows its copied files before its hidden workspace goes.
+    assert.deepEqual(carried, [
+      {
+        chatId,
+        label: attached.chat.title,
+        fromWorkspaceId: "nows-1",
+        toWorkspaceId: "ws-project",
+        copied: [{ from: "plan.md", to: "plan.md" }],
+        hiddenReleased: false,
+      },
+    ]);
+    assert.equal(attached.canvasCarried, undefined);
 
     // Second ephemeral chat tests promoteEphemeral + sweepOrphanedEphemeralChats.
     const savedId = "33333333-3333-4333-8333-333333333333";
@@ -452,6 +486,7 @@ test("legacy shared No-workspace folder refuses copying sibling chats' files and
     await fs.writeFile(path.join(legacyScratchDir, "other-chat.txt"), "belongs to sibling");
 
     const chatStore = createChatStore(async () => storeDir);
+    const carried: unknown[] = [];
     const workspaces: Record<string, Workspace> = {
       "nows-legacy": {
         id: "nows-legacy",
@@ -504,6 +539,12 @@ test("legacy shared No-workspace folder refuses copying sibling chats' files and
       },
       piRuntimeEffectStore: { deleteChat: async () => undefined },
       piCompactionSessionStore: { deleteChat: async () => undefined },
+      designCanvasCarry: {
+        carry: async (input) => {
+          carried.push(input);
+          return "carried";
+        },
+      },
       assertManagedWorktreeAdmission: async () => undefined,
       logError: () => undefined,
     });
@@ -533,6 +574,100 @@ test("legacy shared No-workspace folder refuses copying sibling chats' files and
       await fs.readFile(path.join(legacyScratchDir, "other-chat.txt"), "utf8"),
       "belongs to sibling",
     );
+    // A legacy folder shared with other chats keeps its canvas for them.
+    assert.deepEqual(carried, []);
+  });
+});
+
+test("a canvas that cannot come along does not stop the attach, and the result says it stayed behind", async () => {
+  await withTempDir(async (dir) => {
+    const storeDir = path.join(dir, "chats");
+    const projectDir = path.join(dir, "project");
+    await fs.mkdir(projectDir, { recursive: true });
+    const workspaces: Record<string, Workspace> = {
+      "ws-project": { id: "ws-project", name: "Project", folderPath: projectDir, permission: "ask", createdAt: 1, updatedAt: 1 },
+    };
+    for (const hidden of ["nows-large", "nows-broken", "nows-trash"]) {
+      const folderPath = path.join(dir, hidden);
+      await fs.mkdir(folderPath, { recursive: true });
+      await fs.writeFile(path.join(folderPath, `${hidden}.md`), "draft");
+      workspaces[hidden] = { id: hidden, name: "No workspace", folderPath, permission: "ask", noWorkspace: true, createdAt: 1, updatedAt: 1 };
+    }
+    const chatStore = createChatStore(async () => {
+      await fs.mkdir(storeDir, { recursive: true });
+      return storeDir;
+    });
+    const logged: string[] = [];
+    const carriedFrom: Array<{ from: string; copied: ReadonlyArray<{ from: string; to: string }> }> = [];
+    const service = createChatApplicationService({
+      chatStore,
+      configStore: { getWorkspace: async (id) => workspaces[id] ?? null },
+      llmClient: {
+        isChatOwnedByInactiveRenderer: () => false,
+        isChatBusy: () => false,
+        waitForChatIdle: async () => true,
+        requiresAppendReconciliation: () => false,
+        markAppendReconciliationRequired: () => undefined,
+        clearAppendReconciliationRequired: () => undefined,
+        beginChatWorkspaceChange: () => () => undefined,
+        beginChatDeletion: () => () => undefined,
+        cancelChat: async () => undefined,
+      },
+      displayImageArtifactStore: {
+        availability: () => ({ available: false, reason: "test" }),
+        hasPending: async () => false,
+        deleteChat: async () => undefined,
+      },
+      generativeUiArtifactStore: {
+        availability: () => ({ available: false, reason: "test" }),
+        hasPending: async () => false,
+        deleteChat: async () => undefined,
+      },
+      workspaceMutationGate: new WorkspaceMutationGate(),
+      workspaceOperationRegistry: new WorkspaceOperationRegistry(),
+      subagentRunStore: {
+        deleteChat: async () => undefined,
+        completeChatDeletion: async () => undefined,
+        pendingChatDeletions: async () => [],
+      },
+      piRuntimeEffectStore: { deleteChat: async () => undefined },
+      piCompactionSessionStore: { deleteChat: async () => undefined },
+      designCanvasCarry: {
+        carry: async (input) => {
+          carriedFrom.push({ from: input.fromWorkspaceId, copied: input.copied });
+          if (input.fromWorkspaceId === "nows-broken") throw new Error("disk full");
+          if (input.fromWorkspaceId === "nows-trash") return "carried";
+          return "too-large";
+        },
+      },
+      assertManagedWorktreeAdmission: async () => undefined,
+      logError: (_scope, message) => logged.push(message),
+    });
+
+    const large = "77777777-7777-4777-8777-777777777777";
+    const broken = "88888888-8888-4888-8888-888888888888";
+    await chatStore.create({ id: large, workspaceId: "nows-large" });
+    await chatStore.create({ id: broken, workspaceId: "nows-broken" });
+
+    const tooLarge = await service.attachToWorkspace(large, "ws-project", { fileAction: "copy" });
+    assert.equal(tooLarge.chat.workspaceId, "ws-project");
+    assert.equal(tooLarge.canvasCarried, false);
+    assert.deepEqual(logged, []);
+
+    const failed = await service.attachToWorkspace(broken, "ws-project", { fileAction: "copy" });
+    assert.equal(failed.chat.workspaceId, "ws-project");
+    assert.deepEqual(failed.copiedPaths, ["nows-broken.md"], "the copied files stay");
+    assert.equal(failed.canvasCarried, false);
+    assert.equal(logged.length, 1);
+
+    // Files sent to the Trash still bring the canvas: notes, visuals and comments
+    // come along, with no copied files for page frames to follow.
+    const trashed = "99999999-9999-4999-8999-999999999999";
+    await chatStore.create({ id: trashed, workspaceId: "nows-trash" });
+    const viaTrash = await service.attachToWorkspace(trashed, "ws-project", { fileAction: "trash" });
+    assert.equal(viaTrash.chat.workspaceId, "ws-project");
+    assert.deepEqual(carriedFrom[carriedFrom.length - 1], { from: "nows-trash", copied: [] });
+    assert.equal(viaTrash.canvasCarried, undefined);
   });
 });
 

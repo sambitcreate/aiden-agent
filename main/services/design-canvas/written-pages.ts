@@ -15,16 +15,20 @@ import * as path from "node:path";
 import { canvasView } from "../../../renderer/shared/design-canvas/canvas-summary.js";
 import { placeFrame } from "../../../renderer/shared/design-canvas/placement.js";
 import { parseProducedFile } from "../../../renderer/shared/produced-file.js";
+import { addPage, canAddPage, deletePage } from "../../../renderer/shared/design-canvas/pages.js";
 import {
   DESIGN_CANVAS_LIMITS,
   DESIGN_DEFAULT_FILE_WIDTH,
   defaultFileBox,
+  framesOnPage,
   isDesignRelativePath,
   type DesignCanvas,
   type DesignWidth,
 } from "../../../renderer/shared/design-canvas/schema.js";
+import { DESIGN_FRESH_VIEWPORT, type DesignChatView } from "../../../renderer/shared/design-canvas/view.js";
 import { resolveDesignFile } from "./resolve-core.js";
-import type { DesignCanvasStore } from "./store.js";
+import type { DesignCanvasUpdated, DesignChatCanvases } from "./store.js";
+import type { DesignTurnPages } from "./views.js";
 
 /** How much of a written page is read for a width hint. */
 export const DESIGN_WIDTH_HINT_BYTES = 16 * 1024;
@@ -241,8 +245,8 @@ function basename(relativePath: string): string {
 }
 
 /**
- * Puts each page that is not on the canvas yet (on any page of it) beside the
- * frames in view on the page the person is looking at, at the design width
+ * Puts each page that is not on the chat's page yet beside the frames in view
+ * there (a frame of it on another page is that page's own), at the design width
  * its source asked for (`widths`, 1280 otherwise) and that width's box. A page
  * the person took off the canvas (`removedPagePaths`) is not put back: it is
  * listed in `removed`, and comes back only when Aiden places it with
@@ -253,16 +257,17 @@ export function placeWrittenPageFrames(
   doc: DesignCanvas,
   paths: readonly string[],
   newId: () => string,
-  widths: ReadonlyMap<string, DesignWidth> = new Map(),
-  /** The canvas region's size on the person's screen, when their message said it. */
-  viewSize?: { w: number; h: number },
+  widths: ReadonlyMap<string, DesignWidth>,
+  /** The chat's view for the turn (`designTurnPages`): the pages land on its page, beside what is in view. */
+  view: DesignChatView,
 ): { doc: DesignCanvas; changed: boolean; placedIds: string[]; removed: string[] } {
   let next = doc;
   const placedIds: string[] = [];
   const removed: string[] = [];
   const takenOff = new Set(doc.removedPagePaths ?? []);
   for (const relativePath of paths) {
-    if (next.frames.some((frame) => frame.kind === "file" && frame.path === relativePath)) continue;
+    // Already on this page: the watcher reloads it. Another page's frame of it is that page's.
+    if (next.frames.some((frame) => frame.kind === "file" && frame.path === relativePath && frame.pageId === view.pageId)) continue;
     if (takenOff.has(relativePath)) {
       removed.push(relativePath);
       continue;
@@ -275,10 +280,11 @@ export function placeWrittenPageFrames(
         title: basename(relativePath).slice(0, DESIGN_CANVAS_LIMITS.titleChars),
         path: relativePath,
         designWidth,
+        pageId: view.pageId,
         createdBy: "aiden",
         ...defaultFileBox(designWidth),
       },
-      canvasView(next, viewSize),
+      canvasView(next, view),
       newId,
     );
     // A full canvas takes no more frames; the file is still in the workspace.
@@ -345,29 +351,89 @@ export class RecentWrittenPages {
 const UNCHANGED = Symbol("unchanged");
 
 /**
+ * Where design mode's entry puts the chat's earlier pages (A21), and which
+ * page becomes the chat's. Pages already on the canvas, on any page, are not
+ * placed again: the chat's page becomes the page holding most of them, and
+ * only the missing ones go there. Otherwise they go on the chat's page,
+ * unless the chat has never had a view and that page already holds frames
+ * (another chat's): then a page named after the chat is added for them, but
+ * only when at least one page would actually be placed.
+ */
+function entryPlacement(
+  doc: DesignCanvas,
+  paths: readonly string[],
+  view: DesignChatView,
+  entry: { pageName: string; hasView: boolean },
+  newId: () => string,
+): { doc: DesignCanvas; view: DesignChatView; claim: boolean; missing: string[] } {
+  const takenOff = new Set(doc.removedPagePaths ?? []);
+  const holding = new Map<string, number>();
+  const missing: string[] = [];
+  for (const relativePath of paths) {
+    const shown = doc.frames.filter((frame) => frame.kind === "file" && frame.path === relativePath);
+    if (shown.length === 0) {
+      if (!takenOff.has(relativePath)) missing.push(relativePath);
+      continue;
+    }
+    for (const pageId of new Set(shown.map((frame) => frame.pageId))) holding.set(pageId, (holding.get(pageId) ?? 0) + 1);
+  }
+  const lookAt = (pageId: string): DesignChatView => ({
+    ...view,
+    pageId,
+    viewport: { ...(pageId === view.pageId ? view.viewport : DESIGN_FRESH_VIEWPORT) },
+  });
+  if (holding.size > 0) {
+    // The most of them; on a tie the chat's own page, then the earliest page.
+    const most = Math.max(...holding.values());
+    const pageId =
+      holding.get(view.pageId) === most ? view.pageId : doc.pages.find((page) => holding.get(page.id) === most)!.id;
+    return { doc, view: lookAt(pageId), claim: !entry.hasView || pageId !== view.pageId, missing };
+  }
+  if (!entry.hasView && missing.length > 0 && framesOnPage(doc, view.pageId).length > 0 && canAddPage(doc)) {
+    const pageId = newId();
+    const name = entry.pageName.trim().slice(0, DESIGN_CANVAS_LIMITS.pageNameChars) || "Chat";
+    return { doc: addPage(doc, pageId, name), view: lookAt(pageId), claim: true, missing };
+  }
+  return { doc, view, claim: !entry.hasView, missing };
+}
+
+/**
  * Places the pages that still exist and the canvas can show in the chat's
- * stored canvas, and tells open canvases. Saves and announces nothing when
- * every page is already there. Returns the new frames' ids.
+ * workspace canvas, on the page its turn works on, and tells open canvases.
+ * Saves and announces nothing when every page is already there. Returns the
+ * new frames' ids, the page they are on and, when entry made a page the
+ * chat's, main's `focusId` for that page change.
  */
 export async function placeWrittenPagesOnCanvas(input: {
   chatId: string;
   workspaceRoot: string;
   paths: readonly string[];
-  store: Pick<DesignCanvasStore, "update">;
-  broadcast(update: { chatId: string; revision: number }): void;
+  store: Pick<DesignChatCanvases, "update" | "workspaceIdOf">;
+  /** The turn's page resolver (`designTurnPages`); entry without a message or turn. */
+  pages: Pick<DesignTurnPages, "resolver" | "show">;
+  broadcast(update: DesignCanvasUpdated): void;
   newId(): string;
-  /** Only when the canvas has no frames at all, so a person who cleared it is not refilled. */
-  onlyIfEmpty?: boolean;
+  /**
+   * Design mode opening: the chat's earlier pages, placed by `entryPlacement`.
+   * `pageName` names a page added for them; `hasView` says whether the chat
+   * has ever had a view of this workspace's canvas.
+   */
+  entry?: { pageName: string; hasView(workspaceId: string): Promise<boolean> };
   /** At most this many newest existing pages are placed, in chronological order. */
   limit?: number;
   /** Checked on the canvas's own chain just before the save, so a deleted chat or exited mode is not saved. */
   shouldSave?: () => Promise<boolean> | boolean;
   /** Told the pages left off because the person took them off the canvas. */
   onRemoved?: (paths: readonly string[]) => void;
-  /** The canvas region's size on the person's screen, when their message said it. */
-  viewSize?: { w: number; h: number };
-}): Promise<string[]> {
-  if (input.limit !== undefined && input.limit <= 0) return [];
+}): Promise<{ frameIds: string[]; pageId?: string; focusId?: number }> {
+  if (input.limit !== undefined && input.limit <= 0) return { frameIds: [] };
+  // A chat deleted meanwhile has no canvas to put them on.
+  const workspaceId = await input.store.workspaceIdOf(input.chatId);
+  if (workspaceId === null) return { frameIds: [] };
+  // Whether the chat had a view is read before the files are, so the canvas
+  // this entry is opening cannot report one first and send these pages onto
+  // another chat's page.
+  const entryHasView = input.entry ? await input.entry.hasView(workspaceId) : undefined;
   const newestFirst: string[] = [];
   const widths = new Map<string, DesignWidth>();
   const seen = new Set<string>();
@@ -387,77 +453,116 @@ export async function placeWrittenPagesOnCanvas(input: {
     }
   }
   const showable = newestFirst.reverse();
-  if (showable.length === 0) return [];
+  if (showable.length === 0) return { frameIds: [] };
+  const viewOf = await input.pages.resolver(workspaceId);
+  const entry = input.entry ? { pageName: input.entry.pageName, hasView: entryHasView! } : undefined;
   const shouldSave = input.shouldSave;
   let placedIds: string[] = [];
   let removed: string[] = [];
+  let pageId: string | undefined;
+  // The page entry makes the chat's, shown once the canvas is settled.
+  let claimed: string | undefined;
+  let addedPage = false;
+  // The page entry added in the save that landed, so taking the frames back also takes it.
+  let addedPageId: string | undefined;
   // Reported whether or not anything was saved, once the canvas has been read.
   const reportRemoved = () => {
     if (removed.length > 0) input.onRemoved?.(removed);
   };
+  const claim = async (): Promise<number | undefined> =>
+    claimed === undefined ? undefined : await input.pages.show(workspaceId, claimed);
   try {
-    const saved = await input.store.update(
+    const { doc: saved } = await input.store.update(
       input.chatId,
       (doc) => {
-        if (input.onlyIfEmpty && doc.frames.length > 0) throw UNCHANGED;
-        const placed = placeWrittenPageFrames(doc, showable, input.newId, widths, input.viewSize);
+        let view = viewOf(doc);
+        let base = doc;
+        let paths: readonly string[] = showable;
+        if (entry) {
+          const placement = entryPlacement(doc, showable, view, entry, input.newId);
+          base = placement.doc;
+          view = placement.view;
+          paths = placement.missing;
+          // A page added for them exists only if the save lands, so it is claimed only then.
+          if (placement.claim) claimed = view.pageId;
+          addedPage = placement.doc !== doc;
+          addedPageId = addedPage ? view.pageId : undefined;
+        }
+        pageId = view.pageId;
+        const placed = placeWrittenPageFrames(base, paths, input.newId, widths, view);
         removed = placed.removed;
         if (!placed.changed) throw UNCHANGED;
         placedIds = placed.placedIds;
         return placed.doc;
       },
-      // Leaving design mode (or deleting the chat) while this waited keeps the frames off the stored canvas.
-      shouldSave
-        ? {
-            beforeWrite: async () => {
-              if (!(await shouldSave())) {
-                removed = [];
-                throw UNCHANGED;
-              }
-            },
-          }
-        : {},
+      {
+        workspaceId,
+        // Leaving design mode (or deleting the chat) while this waited keeps the frames off the stored canvas.
+        ...(shouldSave
+          ? {
+              beforeWrite: async () => {
+                if (!(await shouldSave())) {
+                  removed = [];
+                  claimed = undefined;
+                  throw UNCHANGED;
+                }
+              },
+            }
+          : {}),
+      },
     );
     // The mode can still turn off while the file is being written. Then the
     // frames are taken back off, unless the person changed the canvas since
     // or design mode is on again by the time that runs.
     if (shouldSave && !(await shouldSave())) {
-      await retractPlacedFrames(input, saved.revision, placedIds, shouldSave);
-      return [];
+      await retractPlacedFrames(input, workspaceId, saved.revision, placedIds, shouldSave, addedPageId);
+      return { frameIds: [] };
     }
-    input.broadcast({ chatId: input.chatId, revision: saved.revision });
+    input.broadcast({ workspaceId, chatId: input.chatId, revision: saved.revision });
     reportRemoved();
-    return placedIds;
+    const focusId = await claim();
+    return { frameIds: placedIds, ...(pageId ? { pageId } : {}), ...(focusId !== undefined ? { focusId } : {}) };
   } catch (error) {
     if (error === UNCHANGED) {
       reportRemoved();
-      return [];
+      if (addedPage) claimed = undefined;
+      const focusId = await claim();
+      return { frameIds: [], ...(claimed && pageId ? { pageId } : {}), ...(focusId !== undefined ? { focusId } : {}) };
     }
     throw error;
   }
 }
 
 async function retractPlacedFrames(
-  input: { chatId: string; store: Pick<DesignCanvasStore, "update">; broadcast(update: { chatId: string; revision: number }): void },
+  input: { chatId: string; store: Pick<DesignChatCanvases, "update">; broadcast(update: DesignCanvasUpdated): void },
+  workspaceId: string,
   savedRevision: number,
   placedIds: readonly string[],
   shouldSave: () => Promise<boolean> | boolean,
+  /** A page the same save added; it goes too once nothing is left on it. */
+  addedPageId?: string,
 ): Promise<void> {
   const placed = new Set(placedIds);
   try {
-    const retracted = await input.store.update(
+    const { doc: retracted } = await input.store.update(
       input.chatId,
       (doc) => {
         if (doc.revision !== savedRevision) throw UNCHANGED;
-        return { ...doc, frames: doc.frames.filter((frame) => !placed.has(frame.id)) };
+        const frames = doc.frames.filter((frame) => !placed.has(frame.id));
+        const dropPage =
+          addedPageId !== undefined && doc.pages.length > 1 && !frames.some((frame) => frame.pageId === addedPageId);
+        return dropPage
+          ? deletePage({ ...doc, frames }, addedPageId)
+          : { ...doc, frames };
       },
       {
+        workspaceId,
         beforeWrite: async () => {
           if (await shouldSave()) throw UNCHANGED;
         },
       },
     );
-    input.broadcast({ chatId: input.chatId, revision: retracted.revision });
+    input.broadcast({ workspaceId, chatId: input.chatId, revision: retracted.revision });
   } catch (error) {
     if (error !== UNCHANGED) throw error;
   }

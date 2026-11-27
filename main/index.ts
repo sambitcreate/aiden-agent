@@ -170,7 +170,8 @@ import { EmptyChatMigrationSnapshotError } from "./services/empty-chat-migration
 import { migrateLegacyEmptyWorkspaceChats } from "./services/empty-chat-migration-main.js";
 import { ensureUserDataDir } from "./services/data-store.js";
 import { piCompactionSessionStore } from "./services/pi-compaction-session-store.js";
-import { designCanvasStore } from "./services/design-canvas/main.js";
+import { designCanvasChatCleanup, designCanvasViews, removeDesignCanvasWorkspace } from "./services/design-canvas/main.js";
+import { persistedChatWorkspaceId } from "../renderer/shared/chat-workspace.js";
 import {
   reconcileExternalProviderCredentialChanges,
   reconcilePendingProviderCredentialRotation,
@@ -452,6 +453,7 @@ const SHUTDOWN_BUDGET_MS = {
   // grace; the extra second covers aborting and settling around them.
   parentGenerations: 7_000,
   backgroundJobs: 6_000,
+  designViews: 1_000,
   subagentRuntime: 7_000,
   // Each helper conversation's last save; slow saves are left to finish or not.
   subagentConversations: 1_000,
@@ -617,6 +619,8 @@ async function runShutdownAndQuit(settingsPrepared: boolean): Promise<void> {
   // Background jobs and goal checks stop with the app; follows and
   // goals are saved for the next launch. Bounded so a stuck job never holds quit.
   await settleShutdownStep("follow-through", "Background jobs", SHUTDOWN_BUDGET_MS.backgroundJobs, () => shutdownFollowThrough());
+  // Each chat's canvas page and viewports, written at most once a second while running.
+  await settleShutdownStep("design", "Design canvas views", SHUTDOWN_BUDGET_MS.designViews, () => designCanvasViews.flush());
   const subagentShutdown = await settleShutdownStep("main", "Subagent runtime", SHUTDOWN_BUDGET_MS.subagentRuntime, () =>
     subagentRuntimeRegistry.shutdown(),
   );
@@ -2611,7 +2615,9 @@ if (!ownsSingleInstanceLock) {
         }
         await piRuntimeEffectStore.deleteChat(chatId);
         await piCompactionSessionStore.deleteChat(chatId);
-        await designCanvasStore.delete(chatId);
+        // The chat's comments and view leave its workspace's canvas, which stays.
+        const meta = await chatStore.getMeta(chatId);
+        if (meta) await designCanvasChatCleanup.forgetChat(chatId, persistedChatWorkspaceId(meta.workspaceId));
         await chatStore.remove(chatId);
         // The same Inbox cleanup the live delete runs: no snooze or pin is left
         // behind for a chat whose delete a crash cut short.
@@ -2758,6 +2764,7 @@ if (!ownsSingleInstanceLock) {
         removeWorkspaceRecord: async (workspaceId) => {
           await configStore.removeWorkspace(workspaceId);
           await removeWorkspaceArtifacts(workspaceId);
+          await removeDesignCanvasWorkspace(workspaceId);
         },
         finalizeDeletion: async (workspace) => {
           const managed = workspace.managedWorktree!;
