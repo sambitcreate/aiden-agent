@@ -63,6 +63,7 @@ import { isWebSearchKeyPoolProviderId } from "../../shared/web-search-key-pool";
 import { WebSearchKeyPoolEditor } from "./web-search-key-pool";
 import { WebPageSettings } from "./web-page-settings";
 import { isEscapeKey } from "../../lib/dismiss-key";
+import { cn } from "../../lib/ui-utils";
 
 type WebSearchProvider = WebSearchProviderRendererMetadata;
 type CredentialMode = WebSearchRouteEntry["credentialMode"];
@@ -253,6 +254,42 @@ function routeEntryFor(
 
 function LinkIcon() {
   return <ExternalLink aria-hidden="true" className="size-3.5" />;
+}
+
+function RadioChoiceCard({
+  id,
+  value,
+  title,
+  description,
+  disabled,
+  className,
+}: {
+  id: string;
+  value: string;
+  title: string;
+  description: string;
+  disabled?: boolean;
+  className?: string;
+}) {
+  return (
+    <label
+      htmlFor={id}
+      className={cn(
+        "flex cursor-default items-start gap-2.5 rounded-control bg-well px-3 py-2.5 transition-colors duration-150 hover:bg-list-hover has-[[data-state=checked]]:bg-accent/5 motion-reduce:transition-none",
+        className,
+      )}
+    >
+      <RadioGroupItem id={id} value={value} disabled={disabled} className="mt-0.5 shrink-0" />
+      <span className="min-w-0">
+        <Text as="span" variant="small-strong" className="block">
+          {title}
+        </Text>
+        <Text as="span" variant="small" color="secondary" className="mt-0.5 block">
+          {description}
+        </Text>
+      </span>
+    </label>
+  );
 }
 
 function ProviderListGroup({
@@ -826,66 +863,30 @@ function ProviderSetupDialog({
               className="grid gap-2"
             >
               {provider.credentialKind === "optional-api-key" ? (
-                <label
-                  htmlFor={`web-search-${provider.id}-anonymous`}
-                  className="flex cursor-default items-start gap-2.5 rounded-control bg-well px-3 py-2.5 transition-colors duration-150 hover:bg-list-hover has-[[data-state=checked]]:bg-accent/5 motion-reduce:transition-none"
-                >
-                  <RadioGroupItem
-                    id={`web-search-${provider.id}-anonymous`}
-                    value="anonymous"
-                    className="mt-0.5 shrink-0"
-                  />
-                  <span className="min-w-0">
-                    <Text as="span" variant="small-strong" className="block">
-                      Built-in free route
-                    </Text>
-                    <Text as="span" variant="small" color="secondary" className="mt-0.5 block">
-                      Use anonymous access where this provider supports it; provider rate limits may
-                      apply.
-                    </Text>
-                  </span>
-                </label>
+                <RadioChoiceCard
+                  id={`web-search-${provider.id}-anonymous`}
+                  value="anonymous"
+                  title="Built-in free route"
+                  description="Use anonymous access where this provider supports it; provider rate limits may apply."
+                />
               ) : null}
               {provider.credentialKind === "optional-api-key" || providerNeedsApiKey(provider) ? (
-                <label
-                  htmlFor={`web-search-${provider.id}-api-key`}
-                  className="flex cursor-default items-start gap-2.5 rounded-control bg-well px-3 py-2.5 transition-colors duration-150 hover:bg-list-hover has-[[data-state=checked]]:bg-accent/5 motion-reduce:transition-none"
-                >
-                  <RadioGroupItem
-                    id={`web-search-${provider.id}-api-key`}
-                    value="api-key"
-                    className="mt-0.5 shrink-0"
-                  />
-                  <span className="min-w-0">
-                    <Text as="span" variant="small-strong" className="block">
-                      Use my API key
-                    </Text>
-                    <Text as="span" variant="small" color="secondary" className="mt-0.5 block">
-                      Store a provider-specific key encrypted on this device.
-                    </Text>
-                  </span>
-                </label>
+                <RadioChoiceCard
+                  id={`web-search-${provider.id}-api-key`}
+                  value="api-key"
+                  title="Use my API key"
+                  description="Store a provider-specific key encrypted on this device."
+                />
               ) : null}
               {supportsExistingAuth ? (
-                <label
-                  htmlFor={`web-search-${provider.id}-existing-auth`}
-                  className="flex cursor-default items-start gap-2.5 rounded-control bg-well px-3 py-2.5 transition-[background-color,opacity] duration-150 hover:bg-list-hover has-[[data-state=checked]]:bg-accent/5 motion-reduce:transition-none"
-                >
-                  <RadioGroupItem
-                    id={`web-search-${provider.id}-existing-auth`}
-                    value="existing-provider-auth"
-                    disabled={!existingAuthAvailable}
-                    className="mt-0.5 shrink-0"
-                  />
-                  <span className="min-w-0">
-                    <Text as="span" variant="small-strong" className="block">
-                      Use approved OpenAI account
-                    </Text>
-                    <Text as="span" variant="small" color="secondary" className="mt-0.5 block">
-                      Approve the saved account below; OpenAI quota and billing apply.
-                    </Text>
-                  </span>
-                </label>
+                <RadioChoiceCard
+                  id={`web-search-${provider.id}-existing-auth`}
+                  value="existing-provider-auth"
+                  disabled={!existingAuthAvailable}
+                  className="transition-[background-color,opacity]"
+                  title="Use approved OpenAI account"
+                  description="Approve the saved account below; OpenAI quota and billing apply."
+                />
               ) : null}
             </RadioGroup>
           </Field>
@@ -1835,42 +1836,20 @@ export function WebSearchSettings() {
                 aria-label="Web Search routing policy"
                 className="grid gap-2 min-[560px]:grid-cols-2"
               >
-                <label
-                  htmlFor="web-search-routing-automatic"
-                  className="flex cursor-default items-start gap-2.5 rounded-control bg-well px-3 py-3 transition-colors duration-150 hover:bg-list-hover has-[[data-state=checked]]:bg-accent/5 motion-reduce:transition-none"
-                >
-                  <RadioGroupItem
-                    id="web-search-routing-automatic"
-                    value="automatic"
-                    className="mt-0.5 shrink-0"
-                  />
-                  <span className="min-w-0">
-                    <Text as="span" variant="small-strong" className="block">
-                      Automatic
-                    </Text>
-                    <Text as="span" variant="small" color="secondary" className="mt-0.5 block">
-                      Try listed destinations in order after an eligible failure.
-                    </Text>
-                  </span>
-                </label>
-                <label
-                  htmlFor="web-search-routing-fixed"
-                  className="flex cursor-default items-start gap-2.5 rounded-control bg-well px-3 py-3 transition-colors duration-150 hover:bg-list-hover has-[[data-state=checked]]:bg-accent/5 motion-reduce:transition-none"
-                >
-                  <RadioGroupItem
-                    id="web-search-routing-fixed"
-                    value="fixed"
-                    className="mt-0.5 shrink-0"
-                  />
-                  <span className="min-w-0">
-                    <Text as="span" variant="small-strong" className="block">
-                      Fixed provider
-                    </Text>
-                    <Text as="span" variant="small" color="secondary" className="mt-0.5 block">
-                      Send only to one destination; failures stay visible.
-                    </Text>
-                  </span>
-                </label>
+                <RadioChoiceCard
+                  id="web-search-routing-automatic"
+                  value="automatic"
+                  className="py-3"
+                  title="Automatic"
+                  description="Try listed destinations in order after an eligible failure."
+                />
+                <RadioChoiceCard
+                  id="web-search-routing-fixed"
+                  value="fixed"
+                  className="py-3"
+                  title="Fixed provider"
+                  description="Send only to one destination; failures stay visible."
+                />
               </RadioGroup>
             </Field>
 
