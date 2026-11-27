@@ -601,6 +601,8 @@ export function registerDesignCanvasHandlers<Event>(deps: {
     const live = deps.appFrames;
     if (!live || !live.enabled()) return { error: "live-off" };
     const chat = await requireChat(chatId);
+    // Like a workspace file's grant, a live app needs design mode on (D2).
+    if (!canFrame(chat)) return { error: "unavailable" };
     if (typeof request !== "object" || request === null) return { error: "unavailable" };
     const { frameId, mountToken } = request as { frameId?: unknown; mountToken?: unknown };
     if (typeof frameId !== "string" || typeof mountToken !== "string") return { error: "unavailable" };
@@ -615,6 +617,9 @@ export function registerDesignCanvasHandlers<Event>(deps: {
     if (!frame || frame.kind !== "app" || typeof frame.appRoot !== "string") return { error: "unavailable" };
     const origin = await runningAppOrigin(live, workspaceId, frame.appRoot);
     if (!origin) return { error: "app-not-running" };
+    // Design mode may have turned off, or the chat moved, while we awaited.
+    const current = await deps.getChat(chat.id);
+    if (!canFrame(current) || designCanvasWorkspaceOf(current) !== workspaceId) return { error: "unavailable" };
     const registry = live.registry();
     if (!registry) return { error: "unavailable" };
     if (registry.expectPlacement({ frameId, mountToken, expectedOrigin: origin }) !== "ok") return { error: "too-many-frames" };
@@ -730,6 +735,12 @@ export function registerDesignCanvasHandlers<Event>(deps: {
         if (!origin) return { error: "app-not-running" };
         const destination = await deps.saveFile(event, { defaultPath: designExportFileName(frame, kind), filters: [EXPORT_FILTERS[kind]] });
         if (destination === null) return { canceled: true };
+        // The dialog can stay open a long time: the app may have stopped, or
+        // another server taken its port. Only the same app, still running here, is drawn.
+        const current = await deps.getChat(chat.id);
+        if (!current || !attended(current) || !live.enabled()) return { error: "unavailable" };
+        const stillRunning = await runningAppOrigin(live, designCanvasWorkspaceOf(current), frame.appRoot);
+        if (stillRunning !== origin) return { error: "app-not-running" };
         try {
           const bytes = await live.renderApp({
             url: `${origin}${frame.route ?? "/"}`,
