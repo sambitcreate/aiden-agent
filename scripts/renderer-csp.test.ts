@@ -6,6 +6,7 @@ import test from "node:test";
 import { finished } from "node:stream/promises";
 import { build, createServer } from "vite";
 import { createPackage } from "@electron/asar";
+import MAIN_WINDOW_FRAME_SRC from "../renderer/shared/design-canvas/main-window-frame-src.json";
 import { productionRendererCsp } from "./renderer-csp.js";
 // The release verifiers are JavaScript scripts also used outside TypeScript.
 // @ts-expect-error The release script has no declaration file.
@@ -73,7 +74,7 @@ test("release checks reject missing policies, missing required windows and later
 
 // Design mode v2 Phase 3a (D11, S52, deviation 9): the main window may frame
 // loopback app origins, and the release check holds every page's frame-src.
-const mainFrameSrc = ["'self'", "aiden-genui:", "aiden-design:", "http://localhost:*", "http://127.0.0.1:*"];
+const mainFrameSrc = [...MAIN_WINDOW_FRAME_SRC];
 const shippedPolicy = "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'";
 const withFrameSrc = (sources: string[], base = shippedPolicy) => `${base}; frame-src ${sources.join(" ")}`;
 

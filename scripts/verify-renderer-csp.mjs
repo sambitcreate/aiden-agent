@@ -1,4 +1,4 @@
-/* global console, process */
+/* global console, process, URL */
 import { readdir, readFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -6,8 +6,11 @@ import { extractFile, listPackage } from "@electron/asar";
 
 // The main window frames generated UI, design files and, in design mode, the
 // loopback apps the frame guard admits. Chromium ignores `http://[::1]:*`
-// there, so it is left out (design mode v2 Phase 3a, D11, deviation 9).
-const MAIN_WINDOW_FRAME_SRC = ["'self'", "aiden-genui:", "aiden-design:", "http://localhost:*", "http://127.0.0.1:*"];
+// there, so it is left out (design mode v2 Phase 3a, D11, deviation 9). The
+// list is shared with the app frame guard, which must know what it allows.
+const MAIN_WINDOW_FRAME_SRC = JSON.parse(
+  await readFile(new URL("../renderer/shared/design-canvas/main-window-frame-src.json", import.meta.url), "utf8"),
+);
 const LOOPBACK_FRAME_SOURCE = /^http:\/\/(?:localhost|127\.0\.0\.1):(?:\*|\d{1,5})$/u;
 
 function frameSourceAllowed(source) {

@@ -208,15 +208,18 @@ test("flag on: other load failures, other frames and the flag off leave a failed
   assert.deepEqual(off.opened, []);
 });
 
-test("flag on: an app frame's own data: or blob: page, which the window's frame-src refuses, is counted with no toast and put back", () => {
+test("flag on: an app frame's own data:, blob: or [::1] page, which the window's frame-src refuses, is counted with no toast and put back", () => {
   const s = setup({ designLive: true });
   const app = s.placeAndAdmit();
   s.contents.failLoad(app, "data:text/html,<p>preview</p>");
   s.contents.failLoad(app, `blob:${ORIGIN}/5b1c-preview`);
   assert.equal(s.events.some((e) => e.kind === "navigation-refused"), false, "no Open in browser for these");
+  // The window's frame-src names localhost and 127.0.0.1 only (Chromium ignores [::1] there).
+  s.contents.failLoad(app, "http://[::1]:4000/");
   const blocked = s.events.filter((e) => e.kind === "blocked").slice(-1)[0];
-  assert.equal(blocked?.kind === "blocked" && blocked.count, 2);
-  assert.equal(s.events.filter((e) => e.kind === "navigation-restore").length, 2);
+  assert.equal(blocked?.kind === "blocked" && blocked.count, 3);
+  assert.equal(s.events.filter((e) => e.kind === "navigation-restore").length, 3);
+  assert.equal(s.events.some((e) => e.kind === "navigation-refused"), false, "a loopback page isn't outside the app");
 
   // A frame inside the app answers to the app's own policy, and a loopback page that
   // refuses framing (frame-ancestors) isn't a way out: neither touches the app frame.

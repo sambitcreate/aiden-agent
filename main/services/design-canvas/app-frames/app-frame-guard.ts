@@ -9,7 +9,11 @@
 
 import type { AppFrameRegistry } from "./app-frame-registry.js";
 import type { NamedFrameRef } from "./app-frame-ref.js";
+import MAIN_WINDOW_FRAME_SRC from "../../../../renderer/shared/design-canvas/main-window-frame-src.json";
 import { isAppLoopback, isLoopbackHttpOrigin } from "./app-network-policy.js";
+
+/** The loopback hosts the main window's frame-src names (`http://<host>:*`), from the list the release check holds it to. */
+const FRAME_SRC_LOOPBACK_HOSTS = new Set(MAIN_WINDOW_FRAME_SRC.flatMap((source) => /^http:\/\/([^:/]+):\*$/u.exec(source)?.[1] ?? []));
 
 export type GuardNavigation = {
   url: string;
@@ -188,11 +192,15 @@ export function decideBlockedLoad(
   if (id === null || !context.registry.isAppFrame(id)) return null;
   const parsed = parse(load.url);
   // What the main window's frame-src lets an app iframe show: its blocked load
-  // came from the page's own frame-ancestors, not a way out. data: and blob:
-  // are allowed inside the app's frames but not for the app iframe itself.
+  // came from the page's own frame-ancestors, not a way out. data:, blob: and
+  // [::1] are allowed inside the app's frames but not for the app iframe itself.
   const framable =
     parsed !== null &&
-    (parsed.href === "about:blank" || parsed.href === "about:srcdoc" || (parsed.protocol === "http:" && isAppLoopback(parsed.href, context.ownPorts)));
+    (parsed.href === "about:blank" ||
+      parsed.href === "about:srcdoc" ||
+      (parsed.protocol === "http:" && FRAME_SRC_LOOPBACK_HOSTS.has(parsed.hostname) && isAppLoopback(parsed.href, context.ownPorts)));
   if (framable) return null;
-  return { blocked: hostOrScheme(parsed), ...(isWeb(parsed) ? { refusedUrl: load.url } : {}) };
+  // Only a page on the web is offered in the browser: a loopback one isn't outside the app.
+  const offered = isWeb(parsed) && !isLoopbackHttpOrigin(parsed!.origin);
+  return { blocked: hostOrScheme(parsed), ...(offered ? { refusedUrl: load.url } : {}) };
 }
