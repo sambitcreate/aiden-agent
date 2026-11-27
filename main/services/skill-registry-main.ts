@@ -8,8 +8,8 @@ import { SkillRegistry } from "./skill-registry.js";
 import { AIDEN_APP_SKILL } from "./aiden-app-knowledge.js";
 import { AIDEN_ARTIFACTS_SKILL, AIDEN_ARTIFACTS_SKILL_ID } from "./workspace-artifacts/skill.js";
 import { AIDEN_HOOKS_SKILL, AIDEN_HOOKS_SKILL_ID } from "./hooks-skill.js";
-import { AIDEN_DESIGN_SKILL, AIDEN_DESIGN_SKILL_ID } from "./design-canvas/skill.js";
-import { designModeEnabled } from "./studio/feature-flags.js";
+import { designCanvasSkills } from "./design-canvas/skill.js";
+import { designLiveEnabled, designModeEnabled } from "./studio/feature-flags.js";
 
 /** Process-owned registry. Its invocation key is generated once and never leaves main. */
 export const skillRegistry = new SkillRegistry({
@@ -18,9 +18,8 @@ export const skillRegistry = new SkillRegistry({
     { ...AIDEN_ARTIFACTS_SKILL, stableId: AIDEN_ARTIFACTS_SKILL_ID, source: "builtin", enabled: true },
     { ...AIDEN_HOOKS_SKILL, stableId: AIDEN_HOOKS_SKILL_ID, source: "builtin", enabled: true },
     // Gone only while AIDEN_DESIGN_MODE=0 turns design mode off.
-    ...(designModeEnabled()
-      ? [{ ...AIDEN_DESIGN_SKILL, stableId: AIDEN_DESIGN_SKILL_ID, source: "builtin" as const, enabled: true }]
-      : []),
+    // The live version (3b, S86) while live app frames are on.
+    ...designCanvasSkills({ designMode: designModeEnabled(), designLive: designLiveEnabled() }),
   ],
   isEnabled: async () => (await configStore.getSettings()).skillsEnabled !== false,
   getWorkspace: (id) => configStore.getWorkspace(id),

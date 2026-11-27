@@ -3087,6 +3087,8 @@ async function prepareGeneration(
   const designLive = designLiveEnabled();
   // DESIGN.md (S33) only when the live flag is on and this turn doesn't exclude design_system.
   const designMdOn = designMdLive(designLive, options.excludeToolNames);
+  /** 3b (S86): this turn offers design_app, so the design-mode section teaches the live app. */
+  let liveAppsOn = false;
   // The first time design mode is on in a workspace with no design/tokens.css,
   // the note also offers a tokens file and a specimen page built from the
   // workspace's own colours and fonts (see `DesignSystemOffers`): only where
@@ -3184,6 +3186,7 @@ async function prepareGeneration(
           ]
         : []),
     ].filter((tool) => !options.excludeToolNames?.has(tool.name));
+    liveAppsOn = canvasTools.some((tool) => tool.name === "design_app");
     if (canvasTools.length > 0 && !windowless) {
       placeCanvasArtifacts = async (artifacts) => {
         if (!(await designModeOn())) return;
@@ -3229,7 +3232,7 @@ async function prepareGeneration(
       canvasStatusOffered = true;
       generationExtensions.push({
         id: "aiden.design-canvas",
-        systemPrompt: designModePromptSection(designMdOn),
+        systemPrompt: designModePromptSection(designMdOn, liveAppsOn),
         tools: [...canvasTools, ...designModeTool],
       });
     } else {
@@ -3445,7 +3448,9 @@ async function prepareGeneration(
     // The prompt is read-only here: the section is patched into the
     // transcript once, as browser discovery and MCP servers do, and again
     // only if the live flag changed its text since.
-    const messages = withDesignModeSection(context.messages, designModePromptSection(designMdOn), Date.now(), { live: designMdOn });
+    const messages = withDesignModeSection(context.messages, designModePromptSection(designMdOn, liveAppsOn), Date.now(), {
+      live: designMdOn || liveAppsOn,
+    });
     if (additions.length === 0 && messages === context.messages) return withCanvasStatus(context);
     return withCanvasStatus({ ...context, messages, tools: [...(context.tools ?? []), ...additions] });
   };

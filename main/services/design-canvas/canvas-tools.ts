@@ -256,9 +256,41 @@ export const DESIGN_MODE_PROMPT_SECTION = [
 export const DESIGN_MD_PROMPT_BULLET =
   "- The app's DESIGN.md is its design system's source of truth, ahead of design/tokens.css. Use its tokens, never one-off values, and its prose as guidance. The canvas note names it and its lint counts; design_system reads, lints and exports it. When a change adds or alters a token, update DESIGN.md in the same turn, keeping its sections in order and its YAML valid, then run design_system lint.";
 
-/** The design-mode section for a turn: today's text, plus the DESIGN.md bullet when the live flag is on. Static per flag value. */
-export function designModePromptSection(designLive: boolean): string {
-  return designLive ? `${DESIGN_MODE_PROMPT_SECTION}\n${DESIGN_MD_PROMPT_BULLET}` : DESIGN_MODE_PROMPT_SECTION;
+/** The live section's first bullet: a stored copy holding it is replaced on a turn without design_app (S86). */
+export const LIVE_APP_PROMPT_MARKER =
+  "- Design in the real app. When the workspace has a web app, screens are its routes and components, not design/ HTML. Start it with design_app start, and list its pages with design_app routes.";
+
+/**
+ * The design-mode section for a turn that offers design_app (3b, S86): today's
+ * bullets, with the real app first and design/ pages for a workspace with no
+ * web app. Static, like today's.
+ */
+export const LIVE_DESIGN_MODE_PROMPT_SECTION = DESIGN_MODE_PROMPT_SECTION.split("\n")
+  .flatMap((line) => {
+    if (line.startsWith("- Screens and pages you design are workspace HTML files under design/")) {
+      return [
+        LIVE_APP_PROMPT_MARKER,
+        "- A route file you write or edit lands on this chat's page by itself, once, and updates live as you save. Component and style edits update every open frame. Use canvas_place_frame with kind app to show another route, or a device size with device (phone, tablet, laptop or desktop).",
+        "- For a variant of a page, write a route copy such as /pricing-v2 next to the original and place it with variantOf. Keep at most three directions, then ask which to keep.",
+        "- With no web app, screens are workspace HTML files under design/ (a shared design/tokens.css plus one HTML file per screen), not render_artifact visuals. Each design/ page you write, edit or make with a command lands on the canvas by itself and reloads as you save it.",
+      ];
+    }
+    if (line.startsWith("- Pick the design width")) return [line.replace("- Pick the design width", "- For a design/ page, pick the design width")];
+    if (line.startsWith("- canvas_inspect draws one page offline")) {
+      return [line.replace("- canvas_inspect draws one page offline", "- canvas_inspect draws one design/ page offline (not an app frame: canvas_read with snapshot: true shows those)")];
+    }
+    return [line];
+  })
+  .join("\n");
+
+/**
+ * The design-mode section for a turn (S86): today's text; plus the DESIGN.md
+ * bullet when design_system is offered; the live section when design_app is.
+ * Static per pair of values.
+ */
+export function designModePromptSection(designMd: boolean, liveApps = false): string {
+  if (liveApps) return designMd ? `${LIVE_DESIGN_MODE_PROMPT_SECTION}\n${DESIGN_MD_PROMPT_BULLET}` : LIVE_DESIGN_MODE_PROMPT_SECTION;
+  return designMd ? `${DESIGN_MODE_PROMPT_SECTION}\n${DESIGN_MD_PROMPT_BULLET}` : DESIGN_MODE_PROMPT_SECTION;
 }
 
 export type DesignCanvasToolDeps = {
