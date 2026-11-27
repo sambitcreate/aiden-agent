@@ -100,7 +100,9 @@ work while Aiden is in the background.
 | `⇧⌘\` | In design mode, expand the canvas (the sidebar folds away and the chat stays on the left) or minimize it again; the same as the **Expand canvas** / **Minimize canvas** button beside Present. Not offered in a window too narrow to keep the sidebar beside the chat |
 
 On the design canvas (with the canvas focused, not a note or an entered
-page): `⌘Z` / `⇧⌘Z` undo and redo, `⌘D` duplicates the selection, `⌫` or
+page): `⌘Z` / `⇧⌘Z` undo and redo, `⌘D` duplicates the selection (with live
+apps on and exactly one live app frame selected, it copies the page's file as
+a variant instead; see [design mode](design-mode.md#app-viewports)), `⌫` or
 `Delete` removes it, `⇧1` fits everything, `⇧2` fits the selection, `⇧0`
 resets the zoom, `+` / `-` zoom, `V` / `H` pick the Select or Hand tool,
 `N` adds a note, `C` turns on the comment tool (a click on an element of a
@@ -111,7 +113,8 @@ its title; `↩` keeps the name, `Esc` cancels), `M` shows the minimap and
 `I` shows or hides the side panel (in its Layers list, `F2` renames a row and
 `⌥↑` / `⌥↓` bring the item forward or send it back; on a row's grip, `Space`
 picks the item up, `↑` / `↓`, `Home` and `End` move it, `Space` or `↩` drops
-it and `Esc` puts it back).
+it and `Esc` puts it back). Canvas keys are ignored while a menu or popover is
+open.
 The drawing tools: `T` text, `F` an artboard, `R` a rectangle, `O` an oval,
 `L` a line, `⇧L` an arrow, `P` the pencil and `⇧P` the pen (hold `⇧` while
 dragging for a square box or a 45° line; `↩`, `Esc` or a double-click

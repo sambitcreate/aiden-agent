@@ -870,7 +870,7 @@ Read `docs/chatgpt-desktop-ui-inspiration.md` and `docs/chatgpt-ui-element-speci
   - `addAppView`, `duplicateAppPage` and `trashAppPage` in the node context, each after `await flush()`;
   - the `trashing` set;
   - the toasts, Ask Aiden and `onDesignPageFile` filtered by chat;
-  - the Trash toast's Undo, enabled once the canvas reaches `revision`;
+  - the Trash toast's Undo, deferred until the canvas reaches `revision` (the toast waits, with a 5 s fallback toast that has no Undo);
   - focus returned to the canvas region after Trash.
 - Modify: `renderer/shared/built-in-keys.ts` (`canvas-duplicate-page`), `renderer/shared/keybindings.ts:8` (`"designLive"`)
 - Test: `renderer/design/app-frame-menus.test.tsx`, `renderer/design/design-canvas.test.tsx`, `renderer/lib/shortcut-sheet.test.ts`
@@ -1069,4 +1069,23 @@ All 18 findings were checked after merging 3b at `c354b32ba`. Each held. Two are
 
 ## As built
 
-*(Filled in when 3c is built.)*
+Built 2026-11-27 on `t3/design-mode-v2-p3c`, merged up from `origin/t3/design-mode-v2-p3b`. Commits: Task 1 `c51955f63`, Task 2 `8c182b2af`, Task 3 `3f4232ccf`, Task 4 `786142b97`, Task 5 `73f496113`, Task 7 `54fe8d232`, Task 6 `8b7b8d04b` (built after Task 7, whose helpers it shares), Task 8 `0c36e53de`, Task 9 `516d98886`, then Task 10's E2E and Task 12's docs. Review round 3's notes are applied: `withFileLock` is keyed on `path.resolve(workspaceReal, workspaceRelPath)`, `resizeModes` is snapshotted before `change(...)`, the variant error reply has an optional `kept`, S101's scan skips a `createFileRoute(` preceded by `.`, and Task 9's Undo wording above says deferred.
+
+**Probes.**
+- Probe 1 (xyflow 12.11.6) was settled from xyflow's source: `NodeResizeControl` takes a per-control `keepAspectRatio` and bounds, a press with no drag calls no `onResizeEnd`, and the final change is `{type: "dimensions", resizing: false}`. Corners use `keepAspectRatio`, not `shouldResize`.
+- Probe 2 (`gio` in the Space): present, `/usr/bin/gio` from `libglib2.0-bin`, so E and F's Trash checks run in the Space and no host run was needed. `docs/linux.md` lists `gio` as an optional requirement for these two actions.
+
+**Deviations.**
+- Task 2: the rounding example was wrong (at scale 0.25, `w` 320 → 320.4 moves the viewport by 2, not 0); the test uses 320.1 and 320.2. The cleanup tests read the readout, not the side panel. The compact header threshold is measured in canvas px (`APP_COMPACT_HEADER_PX = 240`).
+- Task 1: `placeAppVariant` takes the variant set's root from its caller (`variantRootOf`), so the handler and Aiden's tool share one rule.
+- Task 3: nested `CSSStyleRule`s (CSS nesting) are walked; the bridge's `ready` and `load` are one send; rule kinds are detected by constructor name, since a cross-realm `instanceof` fails; happy-dom needs `CSSMediaRule` and `CSSContainerRule` stubs in the tests.
+- Task 4: the ruler is a slot in `AppFrame`, drawn through a `NodeToolbar`.
+- Task 5: the device button lives in `FrameActions`, and the device menu is off for a locked frame.
+- Task 7: the TanStack router-core in the repo is 1.171.15. The S101 fixture is `posts.tsx` with `@ts-nocheck`. Reads go through `confinedRead`. A namespace import refuses (`relative-imports`). `_index` and `lazy` are flat markers. `pagePath` also cuts at `#`. Reads are stricter (regular files only, capped). `relativeImportsMoved` fails closed on anything it can't parse, and `rewriteTanstackLiteral` falls back to a substring match of the exact literal. Known residuals: an apostrophe in JSX text can make the import scan fail (which refuses, so it's safe), and Astro `<script>` imports aren't checked.
+- Task 6: `liveChat` refuses a Bot chat by throwing, which is `requireChat`'s behaviour, rather than answering `unavailable`.
+- Task 8: the ledger acts only on records of the chat whose save it reads. The Trash removes every app frame of the same app root and page path, ignoring the query, so `/pricing?plan=pro` frames go too. A rollback with no candidate path left answers `no-file`.
+- Task 9: the Trash confirmation names the route ("The file that serves /pricing…"), not the file: no IPC resolves the file before main acts. The success toast names the real file. On a compact frame, Dark and Download fold into More. Focus moves to the canvas when the Trash starts, not only on success, and a confirmed Trash skips `returnFocus`. The page actions live in their own hook module, `renderer/design/app-page-actions.ts`. The 5 s fallback toast is tested at the hook level with mock timers.
+- Task 10: the fixture gets no `src/routes/about.tsx`; case F writes it into its own workspace copy before the app starts, so 3b's picker still lists exactly four routes. Case J uses the iPhone view case D adds (390 wide at scale 0.5, 195 canvas px, under the 240 px compact threshold) instead of a separate 0.25 frame. Case A drags to about 1000 so `data-cols` drops below the 1024 breakpoint, and allows a few px either way for mouse rounding. Case H duplicates a note, since a flag-off canvas shows no app frames.
+- Task 11: `git diff origin/t3/design-mode-v2-p3b -- 'main/services/remote*' ios android` is empty; no Aiden Remote contract changed, and the canvas JSON gains no stored field.
+
+**Results.** Filled in once Task 10's E2E is green.
