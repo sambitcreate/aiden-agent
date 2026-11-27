@@ -17,7 +17,7 @@ import { hostPlatformCapabilities } from "../host-platform-capabilities.js";
 import { goalLoop, onGoalLookingChanged } from "../goal/goal-main.js";
 import { hostRunRegistry } from "../host-runs-main.js";
 import { usageLimits } from "../usage-limit-main.js";
-import { KeepAwakeController, type KeepAwakeInput } from "./keep-awake-core.js";
+import { KeepAwakeController } from "./keep-awake-core.js";
 import {
   backgroundJobKeepAwakeInput,
   doneWhenKeepAwakeInput,
@@ -34,11 +34,6 @@ const unsubscribers: Array<() => void> = [];
 /** What the Settings row shows. */
 export function keepAwakeStatus(): KeepAwakeStatus {
   return controller?.status() ?? KEEP_AWAKE_UNSUPPORTED;
-}
-
-/** Adds a later input (goals) to the running controller. */
-export function addKeepAwakeInput(input: KeepAwakeInput): () => void {
-  return controller?.addInput(input) ?? (() => undefined);
 }
 
 /**
