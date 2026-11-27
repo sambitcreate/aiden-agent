@@ -116,18 +116,21 @@ function asGitComparisonDiffInput(value: unknown): GitComparisonDiffInput {
   };
 }
 
+function workspaceOwner(event: IpcMainInvokeEvent) {
+  return rendererDocumentOwner(
+    event,
+    () => new Error("Workspace access requires the active renderer document."),
+  );
+}
+
 async function withWorkspaceOperation<T>(
   event: IpcMainInvokeEvent,
   workspaceIdValue: unknown,
   operation: (resolved: WorkspaceEnvironmentDirectory, signal: AbortSignal) => Promise<T>,
   allowNoAccess = false,
 ): Promise<T> {
-  const owner = rendererDocumentOwner(
-    event,
-    () => new Error("Workspace access requires the active renderer document."),
-  );
   return workspaceEnvironmentApplicationService.run(
-    owner,
+    workspaceOwner(event),
     asString(workspaceIdValue, "workspaceId"),
     operation,
     { allowNoAccess },
@@ -139,12 +142,8 @@ async function withOptionalWorkspaceOperation<T>(
   workspaceIdValue: unknown,
   operation: (resolved: WorkspaceEnvironmentDirectory | undefined, signal: AbortSignal) => Promise<T>,
 ): Promise<T> {
-  const owner = rendererDocumentOwner(
-    event,
-    () => new Error("Workspace access requires the active renderer document."),
-  );
   return workspaceEnvironmentApplicationService.runOptional(
-    owner,
+    workspaceOwner(event),
     asString(workspaceIdValue, "workspaceId"),
     operation,
   );
@@ -204,10 +203,7 @@ export function registerWorkspaceHandlers(): void {
   registerWorkspaceIntakeHandlers<IpcMainInvokeEvent>({
     handle: (channel, handler) => ipcMain.handle(channel, handler),
     owner: (event) => {
-      const owner = rendererDocumentOwner(
-        event,
-        () => new Error("Workspace access requires the active renderer document."),
-      );
+      const owner = workspaceOwner(event);
       return {
         key: `${owner.id}:${owner.documentId}`,
         isDestroyed: owner.isDestroyed,
@@ -391,10 +387,7 @@ export function registerWorkspaceHandlers(): void {
       workspaceId,
       name,
     );
-    const owner = rendererDocumentOwner(
-      event,
-      () => new Error("Workspace access requires the active renderer document."),
-    );
+    const owner = workspaceOwner(event);
     return workspaceWorktreeApplicationService.create(owner, sourceWorkspaceId, branch);
   });
 
@@ -406,10 +399,7 @@ export function registerWorkspaceHandlers(): void {
         typeof options === "object" &&
         options !== null &&
         (options as { force?: unknown }).force === true;
-      const owner = rendererDocumentOwner(
-        event,
-        () => new Error("Workspace access requires the active renderer document."),
-      );
+      const owner = workspaceOwner(event);
       return workspaceWorktreeApplicationService.remove(owner, id, undefined, { force });
     },
   );
@@ -425,10 +415,7 @@ export function registerWorkspaceHandlers(): void {
         throw new Error("The snapshot identifier is invalid.");
       }
       const requestedName = name === undefined ? undefined : asString(name, "name");
-      const owner = rendererDocumentOwner(
-        event,
-        () => new Error("Workspace access requires the active renderer document."),
-      );
+      const owner = workspaceOwner(event);
       return workspaceWorktreeApplicationService.restore(owner, id, snapshot, requestedName);
     },
   );
@@ -471,11 +458,7 @@ export function registerWorkspaceHandlers(): void {
   // Put back a managed worktree whose folder was deleted outside Aiden.
   ipcMain.handle("workspaces:restoreDeletedWorktree", async (event, workspaceId: unknown) => {
     const id = asString(workspaceId, "workspaceId");
-    const owner = rendererDocumentOwner(
-      event,
-      () => new Error("Workspace access requires the active renderer document."),
-    );
-    return workspaceWorktreeApplicationService.restoreDeleted(owner, id);
+    return workspaceWorktreeApplicationService.restoreDeleted(workspaceOwner(event), id);
   });
 
   // Reveal the workspace folder in Finder. shell.openPath opens a directory itself.
