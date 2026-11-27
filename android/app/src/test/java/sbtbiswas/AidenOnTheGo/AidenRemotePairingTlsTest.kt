@@ -258,10 +258,64 @@ class AidenRemotePairingTlsTest {
 
     @Test
     fun aServerAnswerFromAnotherInstanceStopsTheConnection() = runBlocking {
+        // The first answer names another instance.
+        connectExpectingInstanceMismatch(listOf(MockResponse().setBody(serverJson("desktop_other"))))
+        // The answer re-read after the progress grants names another instance.
+        val tasksServer = """{"protocolVersion":1,"instanceId":"desktop_lan","name":"Studio","capabilities":["server:read"],"serverCapabilities":["server:read","tasks:read"],"features":["chat-tasks-v1"],"appVersion":"1","connectionMode":"lan","serverTime":"2026-11-27T00:00:00.000Z"}"""
+        val granted = connectExpectingInstanceMismatch(listOf(
+            MockResponse().setBody(tasksServer),
+            MockResponse().setBody("""{"capabilities":["server:read","tasks:read"]}"""),
+            MockResponse().setBody(serverJson("desktop_other"))
+        ))
+        assertTrue(AidenRemoteCapability.TASKS_READ !in granted.deviceCapabilities)
+    }
+
+    // F4: only a decoded `credential_revoked` forgets the pairing, as on iOS.
+    @Test
+    fun onlyARevokedCredentialForgetsThePairing() = runBlocking {
+        fun envelope(code: String) = """{"error":{"code":"$code","message":"Nope.","requestId":"req_1","retryable":false}}"""
+        val cases = listOf(
+            MockResponse().setResponseCode(403).setBody(envelope("capability_denied")) to true,
+            MockResponse().setResponseCode(401).setBody("not json") to true,
+            MockResponse().setResponseCode(403).setBody(envelope("credential_revoked")) to false
+        )
+        for ((response, kept) in cases) {
+            val leaf = leaf("localhost")
+            val server = httpsServer(leaf)
+            server.enqueue(response)
+            val root = temp.newFolder()
+            val secure = InMemoryAidenSecureStore()
+            val store = AidenInstallationStore(root, secure)
+            store.addInstallation(
+                sbtbiswas.AidenOnTheGo.models.AidenPairingExchange(
+                    instanceId = "desktop_lan", deviceId = "device_phone", credential = b64url(ByteArray(32)),
+                    capabilities = listOf(AidenRemoteCapability.SERVER_READ), endpoint = endpoint(server),
+                    serverSpkiSha256 = pin(leaf), displayName = "Studio"
+                ),
+                trust
+            )
+            val scope = CoroutineScope(Dispatchers.IO + Job())
+            try {
+                val coordinator = AidenRemoteCoordinator(store, root, scope = scope)
+                withTimeout(10_000) {
+                    while (coordinator.connectionState.value == AidenConnectionState.CONNECTING) delay(10)
+                }
+                val label = "${response.status} kept=$kept"
+                assertEquals(label, if (kept) AidenConnectionState.OFFLINE else AidenConnectionState.NEEDS_PAIRING, coordinator.connectionState.value)
+                assertEquals(label, kept, store.installations.value.any { it.instanceId == "desktop_lan" })
+                assertEquals(label, kept, secure.getCredential("desktop_lan:device_phone") != null)
+            } finally {
+                scope.cancel()
+            }
+        }
+    }
+
+    private suspend fun connectExpectingInstanceMismatch(responses: List<MockResponse>): AidenInstallation {
         val leaf = leaf("localhost")
         val server = httpsServer(leaf)
-        server.enqueue(MockResponse().setBody(serverJson("desktop_other")))
-        val store = AidenInstallationStore(temp.root, InMemoryAidenSecureStore())
+        responses.forEach(server::enqueue)
+        val root = temp.newFolder()
+        val store = AidenInstallationStore(root, InMemoryAidenSecureStore())
         store.addInstallation(
             sbtbiswas.AidenOnTheGo.models.AidenPairingExchange(
                 instanceId = "desktop_lan", deviceId = "device_phone", credential = b64url(ByteArray(32)),
@@ -272,13 +326,15 @@ class AidenRemotePairingTlsTest {
         )
         val scope = CoroutineScope(Dispatchers.IO + Job())
         try {
-            val coordinator = AidenRemoteCoordinator(store, temp.root, scope = scope)
+            val coordinator = AidenRemoteCoordinator(store, root, scope = scope)
             withTimeout(10_000) {
-                while (coordinator.connectionState.value == AidenConnectionState.CONNECTING) delay(10)
+                while (coordinator.connectionState.value != AidenConnectionState.OFFLINE && coordinator.serverInfo.value == null) delay(10)
             }
+            assertEquals(responses.size, server.requestCount)
             assertEquals(AidenConnectionState.OFFLINE, coordinator.connectionState.value)
             assertNull(coordinator.serverInfo.value)
-            assertNull(store.activeInstallation?.serverFeatures)
+            if (responses.size == 1) assertNull(store.activeInstallation?.serverFeatures)
+            return store.activeInstallation!!
         } finally {
             scope.cancel()
         }

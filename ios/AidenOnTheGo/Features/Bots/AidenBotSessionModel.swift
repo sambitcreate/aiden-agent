@@ -2259,6 +2259,14 @@ final class AidenBotSessionModel {
                 purgeForAccessLoss()
                 return
             }
+            if Self.isAccessDenied(error) {
+                // Refused before it ran: it stays as "Couldn’t send · Try again", body
+                // intact, and Try again is a new request.
+                outbox[current].status = .failed
+                outbox[current].keepsKey = false
+                releaseEcho(at: current)
+                return
+            }
             let step = aidenBotOutboxFailureStep(
                 ambiguous: Self.messageFailureIsAmbiguous(error),
                 lostAttachment: !outbox[current].attachments.isEmpty && Self.isLostAttachment(error),
@@ -2332,14 +2340,28 @@ final class AidenBotSessionModel {
         )
     }
 
-    /// 401 or 403, or a pairing that's gone: this phone no longer reaches this Bot.
+    /// The pairing itself is gone: a revoked credential, a missing one, or another
+    /// installation now active. Only this discards what waited to go to the Bot.
     private static func isAccessLoss(_ error: Error) -> Bool {
         guard let error = error as? AidenRemoteClientError else { return false }
         switch error {
-        case let .server(status, _), let .unexpectedStatus(status):
-            return status == 401 || status == 403
+        case .server:
+            return error.isCredentialRevoked
         case .missingCredential, .installationChanged:
             return true
+        default:
+            return false
+        }
+    }
+
+    /// The Mac refused this phone this Bot chat (a 403 `capability_denied`, or another
+    /// 401/403) while the pairing stands. Unsent messages stay, marked failed, for when
+    /// access is back.
+    private static func isAccessDenied(_ error: Error) -> Bool {
+        guard let error = error as? AidenRemoteClientError, !error.isCredentialRevoked else { return false }
+        switch error {
+        case let .server(status, _), let .unexpectedStatus(status):
+            return status == 401 || status == 403
         default:
             return false
         }

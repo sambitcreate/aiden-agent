@@ -80,9 +80,17 @@ sealed class AidenRemoteClientException(message: String, cause: Throwable? = nul
         val retryAfterHeaderSeconds: Int? = null,
         val isDecodedEnvelope: Boolean = true,
     ) : AidenRemoteClientException(body.message) {
+        /**
+         * The desktop revoked this device: only a decoded `credential_revoked` envelope, as on iOS.
+         * Removing a pairing, or discarding unsent work, rests on this alone; a 403
+         * `capability_denied` or an undecodable 401/403 never means revocation.
+         */
         val isCredentialRevoked: Boolean
-            get() = statusCode == 401 || statusCode == 403 ||
-                (isDecodedEnvelope && body.code == AidenRemoteErrorCode.CREDENTIAL_REVOKED)
+            get() = isDecodedEnvelope && body.code == AidenRemoteErrorCode.CREDENTIAL_REVOKED
+
+        /** Any 401 or 403, for presenting a refusal. Never a reason to forget the pairing. */
+        val isUnauthorized: Boolean
+            get() = statusCode == 401 || statusCode == 403
 
         /** A 429 the server marked `retryable`: refused before it ran, so it can be sent again. */
         val isRetryableRateLimit: Boolean

@@ -981,6 +981,9 @@ class AidenRemoteCoordinator(
                 throw error
             }
             server
+        } catch (error: AidenRemoteContractException.InvalidPairingExchange) {
+            // `/server` answered for another desktop instance: stop, never carry on with it.
+            throw error
         } catch (_: Exception) {
             server
         }

@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- **2026-11-27 — A Bot chat refusal keeps unsent messages.** A 403 `capability_denied` (or another 401/403 that isn't `credential_revoked`) on a Bot chat's read, feed or send no longer discards its unsent messages: a refused message stays as "Couldn’t send · Try again" and the refusal is shown. Only a revoked or missing credential, or another active installation, still clears them. No Remote wire or revision change.
+
 - **2026-11-25 — Agent Slider moves to Remote revision 70.** Commands in plain words (`approval:plain-words`) took revision 69 on `main` first, so `chat:agent-slider` is now contract revision 70. The phone still asks for `approval:plain-words` alone after `approval:cards`, and for `chat:agent-slider` alone when the Mac lists it. No behavior change.
 
 - **2026-11-24 — Bots waiting on you (provisional Remote revision 68, `bot:needs-you`).** On a Mac that offers it, the app asks for `bot:needs-you` in a call of its own. A Bot the Mac says waits on the person reads "Waiting for you" on its Bots row and is no longer shown as working, and the Inbox lists it under Needs you with that reason (after an open-issue count). A Bot waiting on an approval the phone can see in its chat reads "Needs your OK" (or "Waiting for your OK on your Mac" when only the Mac may answer) instead, as on Android, with or without this capability. Other Macs look as before.

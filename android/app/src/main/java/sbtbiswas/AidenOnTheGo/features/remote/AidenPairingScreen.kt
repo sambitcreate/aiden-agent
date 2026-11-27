@@ -243,9 +243,10 @@ fun AidenPairDesktopScreen(
     var isPairing by remember { mutableStateOf(false) }
     var errorMessage by remember { mutableStateOf<String?>(null) }
     val fallbackError = stringResource(R.string.pairing_failed)
-    val unverifiedError = stringResource(R.string.pairing_desktop_unverified)
+    val unverifiedSetupCodeError = stringResource(R.string.pairing_desktop_unverified)
+    val unverifiedQrError = stringResource(R.string.pairing_desktop_unverified_qr)
 
-    fun pair(block: suspend () -> Unit, onFailure: () -> Unit = {}) {
+    fun pair(unverifiedError: String, block: suspend () -> Unit, onFailure: () -> Unit = {}) {
         if (isPairing) return
         isPairing = true
         errorMessage = null
@@ -288,12 +289,12 @@ fun AidenPairDesktopScreen(
                 isPairing = isPairing,
                 errorMessage = errorMessage,
                 onScanned = { scanned, retry ->
-                    pair({
+                    pair(unverifiedQrError, {
                         val payload = AidenRemoteClient.decodePairingPayload(scanned.trim())
                         coordinator.pairWithQRCode(payload)
                     }, onFailure = retry)
                 },
-                onManualCode = { code, endpoint -> pair({ coordinator.pairWithManualCode(code, endpoint) }) }
+                onManualCode = { code, endpoint -> pair(unverifiedSetupCodeError, { coordinator.pairWithManualCode(code, endpoint) }) }
             )
         }
     }
@@ -311,8 +312,8 @@ fun AidenPairDesktopScreen(
 }
 
 /**
- * The desktop's certificate didn't verify. With a typed setup code this is usually a desktop whose
- * address or certificate changed; its QR code carries the trust the phone needs.
+ * The desktop's certificate didn't verify. With a typed setup code, its QR code carries the trust
+ * the phone needs; with a QR code, the window is stale or the desktop's certificate changed.
  */
 internal fun aidenPairingFailedTlsVerification(error: Throwable): Boolean =
     generateSequence(error) { it.cause.takeIf { cause -> cause !== it } }

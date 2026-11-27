@@ -1811,7 +1811,7 @@ class AidenRemoteClient(
                     val code: AidenDiagnosticCode
                     when (error) {
                         is AidenRemoteClientException.Server -> {
-                            area = if (error.statusCode == 401 || error.statusCode == 403) AidenDiagnosticArea.AUTHENTICATION else AidenDiagnosticArea.CONNECTION
+                            area = if (error.isUnauthorized) AidenDiagnosticArea.AUTHENTICATION else AidenDiagnosticArea.CONNECTION
                             code = if (area == AidenDiagnosticArea.AUTHENTICATION) AidenDiagnosticCode.UNAUTHORIZED else AidenDiagnosticCode.NETWORK
                         }
                         is IOException -> {

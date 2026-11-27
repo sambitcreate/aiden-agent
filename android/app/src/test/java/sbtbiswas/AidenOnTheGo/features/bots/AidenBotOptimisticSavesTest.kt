@@ -439,7 +439,7 @@ class AidenBotOptimisticSavesTest {
             requests += request to key
             gate?.await()
             if (refuses) throw refused()
-            if (revoked) throw AidenRemoteClientException.UnexpectedStatus(401)
+            if (revoked) throw AidenRemoteClientException.Server(401, AidenRemoteErrorEnvelope.Body(AidenRemoteErrorCode.CREDENTIAL_REVOKED, "Pair again.", "req_1", false))
             val created = made.getOrPut(key) { bot.copy(name = request.name, purpose = request.purpose, revision = "bot_made_${made.size + 1}") }
             if (losesAnswer) {
                 losesAnswer = false

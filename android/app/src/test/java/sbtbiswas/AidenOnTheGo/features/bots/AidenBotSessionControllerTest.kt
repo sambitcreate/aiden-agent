@@ -2229,7 +2229,7 @@ class AidenBotSessionControllerTest {
             val root = tempFolder.newFolder()
             val sessions = store(root, { started })
             val transport = FakeTransport(runningSession)
-            transport.feeds += flow { throw serverError(status, AidenRemoteErrorCode.AUTHENTICATION_REQUIRED) }
+            transport.feeds += flow { throw serverError(status, AidenRemoteErrorCode.CREDENTIAL_REVOKED) }
             val controller = AidenBotSessionController(
                 runningSession.botId, transport, backgroundScope, sessionKey = chatKey, store = sessions, nowMs = { started }
             )
@@ -2243,6 +2243,41 @@ class AidenBotSessionControllerTest {
             assertTrue("nothing unsent stays on disk after $status", root.walkTopDown().none { it.isFile })
             assertNull(sessions.transcript(chatKey))
         }
+    }
+
+    // F15: a refusal of this Bot chat, while the pairing stands, keeps what's unsent. Only a revoked
+    // credential (above) discards it.
+    @Test
+    fun aCapabilityDeniedRefusalKeepsTheUnsentMessageAsFailed() = runTest {
+        val denied = serverError(403, AidenRemoteErrorCode.CAPABILITY_DENIED)
+        val root = tempFolder.newFolder()
+        val sessions = store(root, { started })
+        val transport = FakeTransport(runningSession)
+        transport.sendFailures += denied
+        transport.feeds += flow { throw denied }
+        val controller = AidenBotSessionController(
+            runningSession.botId, transport, backgroundScope, sessionKey = chatKey, store = sessions, nowMs = { started }
+        )
+        assertTrue(controller.send("Plan lunch"))
+        runCurrent()
+        controller.start()
+        runCurrent()
+
+        val kept = controller.state.value.outbox.single()
+        assertEquals("Plan lunch", kept.text)
+        assertEquals(AidenBotOutgoingStatus.FAILED, kept.status)
+        assertTrue("the refusal shows the access hint", controller.state.value.accessLost)
+        assertNotEquals(AidenBotSessionNotice.ACCESS_LOST, controller.state.value.notice)
+        assertTrue("the unsent message stays on disk", root.walkTopDown().any { it.isFile })
+
+        // A later chat of the same pairing restores it.
+        val reopened = AidenBotSessionController(
+            runningSession.botId, FakeTransport(runningSession), backgroundScope, sessionKey = chatKey, store = store(root, { started }), nowMs = { started }
+        )
+        controller.stopFollowing()
+        reopened.refetch()
+        runCurrent()
+        assertEquals(listOf("Plan lunch"), reopened.state.value.outbox.map { it.text })
     }
 
     // PR #479 review: a disk restore whose result lands after an access-loss purge must not bring the purged text back.
@@ -2276,7 +2311,7 @@ class AidenBotSessionControllerTest {
 
         // The Mac answers 403, so its purge is queued on the main thread first. Then the disk read
         // finishes, and its result queues behind that purge.
-        reply.completeExceptionally(serverError(403, AidenRemoteErrorCode.AUTHENTICATION_REQUIRED))
+        reply.completeExceptionally(serverError(403, AidenRemoteErrorCode.CREDENTIAL_REVOKED))
         while (io.isNotEmpty()) io.removeFirst().run()
         runCurrent()
         while (io.isNotEmpty()) io.removeFirst().run()
