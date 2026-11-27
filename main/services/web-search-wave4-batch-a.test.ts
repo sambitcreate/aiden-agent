@@ -1,5 +1,4 @@
 import assert from "node:assert/strict";
-import { readFile } from "node:fs/promises";
 import test from "node:test";
 
 import {
@@ -17,41 +16,27 @@ import {
   WEB_SEARCH_JSON_RESPONSE_MAX_BYTES,
   mapWebSearchJsonHttpError,
 } from "./web-search-json-adapter.js";
-import { WebSearchError } from "./web-search-core.js";
 import type { WebSearchAdapterRequest, WebSearchFetch } from "./web-search-provider-registry.js";
 import { WEB_SEARCH_WAVE4_BATCH_A_ADAPTER_FACTORIES } from "./web-search-wave4-batch-a.js";
+import {
+  adapterTestSupport,
+  fixture as readAdapterFixture,
+  oversizedStreamResponse,
+  type WebSearchAdapterTestSupport,
+} from "./web-search-adapter-test-support.js";
 
 const PRIVATE_KEY = "wave4-batch-a-private-key-5f6a7b";
 const PRIVATE_BODY = "WAVE4_BATCH_A_PRIVATE_UPSTREAM_BODY_5f6a7b";
 
-async function fixture(name: string): Promise<string> {
-  return readFile(new URL(`./fixtures/serpdive-search/${name}`, import.meta.url), "utf8");
-}
+const fixture = (name: string): Promise<string> => readAdapterFixture("serpdive-search", name);
 
-function adapterRequest(signal = new AbortController().signal): WebSearchAdapterRequest {
-  return {
-    query: "current serpdive documentation",
-    numResults: 2,
-    credentialMode: "api-key",
-    credential: PRIVATE_KEY,
-    signal,
-  };
-}
+const support = adapterTestSupport({ key: PRIVATE_KEY, body: PRIVATE_BODY });
+const { assertSecureRequest, createAdapterRequest } = support;
+const assertNoSecretInError: WebSearchAdapterTestSupport["assertNoSecretInError"] =
+  support.assertNoSecretInError;
 
-function assertSecureRequest(init: RequestInit | undefined): void {
-  assert.equal(init?.redirect, "error");
-  assert.equal(init?.credentials, "omit");
-  assert.equal(init?.cache, "no-store");
-  assert.equal(init?.referrerPolicy, "no-referrer");
-  assert.equal(JSON.stringify(init).includes(PRIVATE_BODY), false);
-  assert.equal(JSON.stringify(init).includes(PRIVATE_KEY), true);
-}
-
-function assertNoSecretInError(error: unknown): asserts error is WebSearchError {
-  assert.ok(error instanceof WebSearchError);
-  assert.equal(error.message.includes(PRIVATE_BODY), false);
-  assert.equal(error.message.includes(PRIVATE_KEY), false);
-}
+const adapterRequest = (signal?: AbortSignal): WebSearchAdapterRequest =>
+  createAdapterRequest({ query: "current serpdive documentation", signal });
 
 test("SERPdive builder uses the reviewed free krill request and header-only credentials", () => {
   const request = buildSerpDiveWebSearchRequest("  current SERPdive docs  ", 2, {
@@ -216,19 +201,7 @@ test("SERPdive HTTP, redirect, malformed, and response-size failures stay closed
   });
 
   const streamedOversize = createSerpDiveWebSearchAdapter({
-    fetch: async () => {
-      const stream = new ReadableStream<Uint8Array>({
-        start(controller) {
-          controller.enqueue(new Uint8Array(WEB_SEARCH_JSON_RESPONSE_MAX_BYTES));
-          controller.enqueue(new Uint8Array(1));
-          controller.close();
-        },
-      });
-      return new Response(stream, {
-        status: 200,
-        headers: { "content-type": "application/json" },
-      });
-    },
+    fetch: async () => oversizedStreamResponse(WEB_SEARCH_JSON_RESPONSE_MAX_BYTES),
   });
   await assert.rejects(streamedOversize.search(adapterRequest()), (error: unknown) => {
     assertNoSecretInError(error);
