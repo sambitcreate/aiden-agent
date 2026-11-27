@@ -85,7 +85,7 @@ import { ariaKeyShortcut, prettyAccelerator } from "../shared/keybindings";
 import { removeDeletedChatFromCache } from "../lib/chat-deletion-cache";
 import { useAppUpdateSnapshot } from "../lib/use-app-update-snapshot";
 import { usePresence } from "../lib/use-presence";
-import type { AppUpdateRestartResult, AppUpdateSnapshot } from "../shared/app-update";
+import { updateRestartError, type AppUpdateSnapshot } from "../shared/app-update";
 import { useChatActivityState, useChatReadMarkers } from "../lib/use-chat-activity";
 import { chatRowStateFor } from "../lib/chat-activity";
 import { isChatUnread } from "../shared/chat-row-state";
@@ -242,22 +242,6 @@ function workspaceAccessibleName(workspace: Workspace, preferences: WorkspacePat
   // The Chats group stands for every hidden No workspace folder; its own folder is no name for it.
   if (isNoWorkspace(workspace)) return NO_WORKSPACE_GROUP_LABEL;
   return [workspaceDisplayName(workspace, workspaces), workspaceSecondaryLabel(workspace, preferences)].filter(Boolean).join(", ");
-}
-
-function updateRestartError(result: AppUpdateRestartResult): string | null {
-  if (result.accepted) return null;
-  switch (result.reason) {
-    case "busy":
-      return "Aiden is already preparing another window action.";
-    case "not-ready":
-      return "That update is no longer ready. Check for updates again.";
-    case "unavailable":
-      return "Aiden could not restart into the update.";
-    case "install-cancelled":
-      return "The update wasn’t installed because the password prompt was closed.";
-    case "install-failed":
-      return "Aiden couldn’t install the update. Try again, or install it from GitHub Releases.";
-  }
 }
 
 function updateBannerKey(snapshot: AppUpdateSnapshot): string | null {
