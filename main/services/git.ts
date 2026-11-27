@@ -811,6 +811,10 @@ function reviewStatus(xy: string, recordType: string): GitReviewFileStatus {
   return "modified";
 }
 
+function compareReviewFilePath(left: GitReviewFile, right: GitReviewFile): number {
+  return left.path.localeCompare(right.path, undefined, { numeric: true });
+}
+
 /** Parse workspace-relative `git status --porcelain=v2 -z` entries for Review. */
 export function parseGitReviewStatus(raw: string): GitReviewFile[] {
   const records = raw.split("\u0000");
@@ -844,9 +848,7 @@ export function parseGitReviewStatus(raw: string): GitReviewFile[] {
       unstaged: xy[1] !== ".",
     });
   }
-  return files.sort((left, right) =>
-    left.path.localeCompare(right.path, undefined, { numeric: true }),
-  );
+  return files.sort(compareReviewFilePath);
 }
 
 interface GitNumstat {
@@ -905,29 +907,15 @@ export function parseGitNameStatus(raw: string): GitReviewFile[] {
       filePath = records[index + 1] || firstPath;
       index += 1;
     }
-    const status: GitReviewFileStatus =
-      kind === "A"
-        ? "added"
-        : kind === "D"
-          ? "deleted"
-          : kind === "R"
-            ? "renamed"
-            : kind === "C"
-              ? "copied"
-              : kind === "U"
-                ? "conflicted"
-                : "modified";
     files.push({
       path: filePath,
       ...(previousPath ? { previousPath } : {}),
-      status,
+      status: reviewStatus(kind, "1"),
       staged: false,
       unstaged: false,
     });
   }
-  return files.sort((left, right) =>
-    left.path.localeCompare(right.path, undefined, { numeric: true }),
-  );
+  return files.sort(compareReviewFilePath);
 }
 
 function lexicalWorkspacePath(root: string, relativePath: string): string {
@@ -1006,7 +994,7 @@ export function parseRemoteRefs(raw: string): RemoteRefs {
   return { branches, defaultBranch: preferred?.branch };
 }
 
-export function parseGitWorktrees(raw: string, currentPath: string): GitWorktree[] {
+function parseGitWorktrees(raw: string, currentPath: string): GitWorktree[] {
   const worktrees: GitWorktree[] = [];
   let next: Partial<GitWorktree> = {};
   const finish = () => {
