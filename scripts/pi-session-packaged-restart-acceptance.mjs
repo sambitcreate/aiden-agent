@@ -13,42 +13,17 @@ import {
   unlink,
   writeFile,
 } from "node:fs/promises";
-import net from "node:net";
 import os from "node:os";
 import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import playwright from "playwright";
 import { installedApplicationIdentity } from "../main/services/pi-upgrade-rollout.ts";
+import { findApps, freePort } from "./packaged-acceptance-support.mjs";
 
 const { chromium } = playwright;
 
 const repositoryRoot = path.resolve(import.meta.dirname, "..");
 const timeoutMs = 45_000;
-
-async function findApps(root) {
-  const results = [];
-  for (const entry of await readdir(root, { withFileTypes: true })) {
-    const candidate = path.join(root, entry.name);
-    if (entry.isDirectory() && entry.name.endsWith(".app")) results.push(candidate);
-    else if (entry.isDirectory()) results.push(...(await findApps(candidate)));
-  }
-  return results;
-}
-
-async function freePort() {
-  const server = net.createServer();
-  await new Promise((resolve, reject) => {
-    server.once("error", reject);
-    server.listen(0, "127.0.0.1", resolve);
-  });
-  const address = server.address();
-  if (!address || typeof address === "string")
-    throw new Error("Could not reserve a DevTools port.");
-  await new Promise((resolve, reject) =>
-    server.close((error) => (error ? reject(error) : resolve())),
-  );
-  return address.port;
-}
 
 async function launch(executable, root, userData, config, overrides = {}) {
   const port = await freePort();

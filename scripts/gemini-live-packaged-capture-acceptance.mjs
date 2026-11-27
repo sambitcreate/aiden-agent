@@ -8,6 +8,7 @@ import path from "node:path";
 import { promisify } from "node:util";
 import { fileURLToPath } from "node:url";
 
+import { argumentValue } from "./packaged-acceptance-support.mjs";
 import {
   assertSamePackagedArtifactIdentity,
   discoverPackagedApp,
@@ -39,11 +40,6 @@ const EXPECTED_CHECKS = Object.freeze([
   "replacement_document_denied",
   "replacement_without_chooser_fallback",
 ].sort());
-
-function argumentValue(name) {
-  const index = process.argv.indexOf(name);
-  return index >= 0 ? process.argv[index + 1] : undefined;
-}
 
 async function codeSignatureMetadata(appPath) {
   try {

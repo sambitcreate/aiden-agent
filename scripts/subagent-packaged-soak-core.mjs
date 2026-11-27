@@ -1,6 +1,5 @@
-/* global Buffer */
-
 import { createServer } from "node:http";
+import { readJsonRequest, writeSse } from "./packaged-acceptance-support.mjs";
 
 export const SUBAGENT_PACKAGED_SOAK_SCHEMA_VERSION = 1;
 export const SUBAGENT_PACKAGED_SOAK_CHAT_ID = "subagent-soak";
@@ -291,10 +290,6 @@ function hasSubagentTool(request) {
     : false;
 }
 
-function writeSse(response, value) {
-  response.write(`data: ${JSON.stringify(value)}\n\n`);
-}
-
 function parentToolCallChunks() {
   const common = {
     id: "chatcmpl-aiden-subagent-soak-parent",
@@ -336,17 +331,6 @@ function parentToolCallChunks() {
   ];
 }
 
-async function readJsonRequest(request) {
-  const chunks = [];
-  let bytes = 0;
-  for await (const chunk of request) {
-    bytes += chunk.length;
-    if (bytes > MAX_REQUEST_BYTES) throw new Error("Packaged subagent soak request exceeded 4 MiB.");
-    chunks.push(chunk);
-  }
-  return JSON.parse(Buffer.concat(chunks).toString("utf8"));
-}
-
 /**
  * A capability-authenticated loopback OpenAI fixture. It keeps exactly one
  * child stream open until Aiden cancels it, but retains only aggregate facts.
@@ -375,7 +359,10 @@ export async function startSubagentPackagedSoakModel({ capability }) {
         response.writeHead(404).end();
         return;
       }
-      const body = await readJsonRequest(request);
+      const body = await readJsonRequest(request, {
+        limit: MAX_REQUEST_BYTES,
+        message: "Packaged subagent soak request exceeded 4 MiB.",
+      });
       if (!parentToolIssued && hasSubagentTool(body)) {
         parentToolIssued = true;
         evidence.parentToolCalls += 1;
