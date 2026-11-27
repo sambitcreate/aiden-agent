@@ -53,6 +53,9 @@ export const APP_FRAME_CAPTURE_GAP_MS = 2000;
 export const APP_FRAME_CAPTURE_SETTLE_MS = 400;
 /** Refused navigations show at most one toast per this long per frame; the latest link wins (D16). */
 export const APP_FRAME_REFUSED_TOAST_GAP_MS = 1000;
+/** A frame put back this many times within the window below, leading out again each time, stops being put back. */
+const APP_FRAME_RESTORES_IN_WINDOW = 2;
+const APP_FRAME_RESTORE_WINDOW_MS = 3000;
 /** An in-app path is shown up to this many characters. */
 const PATH_CHARS = 60;
 
@@ -480,7 +483,10 @@ export function AppFrame({ frame, chatId, selected = false, live, entered, onEnt
     if (stale) leaveRef.current();
   }, [stale]);
 
-  const requestCapture = useAppFrameCaptures(frame.id, contentRef, loaded);
+  // Set when the page keeps leading out of the app and the frame stops putting it back (S1).
+  const [stuckKey, setStuckKey] = React.useState<string | null>(null);
+  const stuck = shown !== null && stuckKey === shown.key;
+  const requestCapture = useAppFrameCaptures(frame.id, contentRef, loaded && !stuck);
 
   // S75: one document-level guard while any app frame shows a page.
   const framing = shown !== null;
@@ -499,6 +505,8 @@ export function AppFrame({ frame, chatId, selected = false, live, entered, onEnt
   });
   const shownKey = shown?.key ?? null;
   const shownOrigin = shown?.origin ?? null;
+  /** Set when the page says it is up (ready or a route), so a restore can tell a page that led straight out again. */
+  const pageCameUp = React.useRef(false);
   /** The scheme this mount's page was last told (a page starts light until told). */
   const postedScheme = React.useRef<{ key: string | null; dark: boolean }>({ key: null, dark: false });
   React.useEffect(() => {
@@ -520,11 +528,13 @@ export function AppFrame({ frame, chatId, selected = false, live, entered, onEnt
       used += 1;
       switch (message.type) {
         case "ready":
+          pageCameUp.current = true;
           // A fresh page starts in its own scheme.
           postedScheme.current = { key: shownKey, dark: enteredRef.current.dark };
           if (enteredRef.current.dark) postToAppPage(guest, shownOrigin, { type: "set-scheme", dark: true });
           return;
         case "route":
+          pageCameUp.current = true;
           setPage((current) => ({ ...(current.key === shownKey ? current : { error: null }), key: shownKey, path: message.path }));
           return;
         case "error":
@@ -563,13 +573,49 @@ export function AppFrame({ frame, chatId, selected = false, live, entered, onEnt
 
   // S1, D1: main says the window's frame-src left the frame on Chromium's blocked
   // page; it goes back to the last path its own page reported, or its route.
+  // Bounded: a path that leads straight out again (no word from its page in
+  // between) falls back to the route, and a third way out within 3 s stops
+  // the reloads; the frame then says so and offers Reload.
   const lastPathRef = React.useRef<string | null>(null);
   lastPathRef.current = pageState.path !== null && isAppRoute(pageState.path) ? pageState.path : null;
+  const restores = React.useRef<{ key: string | null; at: number[]; toPath: boolean }>({ key: null, at: [], toPath: false });
+  const stuckRef = React.useRef(stuck);
+  stuckRef.current = stuck;
+  const forgetPath = React.useCallback(() => {
+    lastPathRef.current = null;
+    setPage((current) => (current.key === shownKey ? { ...current, path: null } : current));
+  }, [shownKey]);
   const restore = React.useCallback(() => {
     const iframe = iframeRef.current;
-    if (!iframe || shownOrigin === null) return;
-    iframe.src = `${shownOrigin}${lastPathRef.current ?? route}`;
-  }, [shownOrigin, route]);
+    if (!iframe || shownOrigin === null || shownKey === null || stuckRef.current) return;
+    const now = Date.now();
+    const previous = restores.current.key === shownKey ? restores.current : { key: shownKey, at: [], toPath: false };
+    const recent = previous.at.filter((at) => now - at < APP_FRAME_RESTORE_WINDOW_MS);
+    const straightBack = recent.length > 0 && !pageCameUp.current;
+    recent.push(now);
+    pageCameUp.current = false;
+    if (recent.length > APP_FRAME_RESTORES_IN_WINDOW) {
+      restores.current = { key: shownKey, at: recent, toPath: false };
+      stuckRef.current = true;
+      setStuckKey(shownKey);
+      return;
+    }
+    let path = lastPathRef.current;
+    if (straightBack && previous.toPath) {
+      path = null;
+      forgetPath();
+    }
+    restores.current = { key: shownKey, at: recent, toPath: path !== null && path !== route };
+    iframe.src = `${shownOrigin}${path ?? route}`;
+  }, [shownOrigin, shownKey, route, forgetPath]);
+  const reload = () => {
+    const iframe = iframeRef.current;
+    restores.current = { key: shownKey, at: [], toPath: false };
+    pageCameUp.current = false;
+    forgetPath();
+    setStuckKey(null);
+    if (iframe && shownOrigin !== null) iframe.src = `${shownOrigin}${route}`;
+  };
   const events = useAppFrameEvents(frame.id, shown?.token ?? null, onOpenInBrowser, restore);
 
   // ── What the body shows ──
@@ -665,6 +711,23 @@ export function AppFrame({ frame, chatId, selected = false, live, entered, onEnt
                 colorScheme: dark ? "dark" : "light",
               }}
             />
+          </div>
+        ) : null}
+        {stuck ? (
+          <div className="absolute inset-0">
+            <AppFrameCard title={frame.title} snapshot={snapshot}>
+              <span className="text-strong text-secondary">This page leads outside the app.</span>
+              <Button
+                variant="muted"
+                size="small"
+                className="nodrag"
+                onPointerDown={(event) => event.stopPropagation()}
+                onDoubleClick={(event) => event.stopPropagation()}
+                onClick={reload}
+              >
+                Reload
+              </Button>
+            </AppFrameCard>
           </div>
         ) : null}
       </div>

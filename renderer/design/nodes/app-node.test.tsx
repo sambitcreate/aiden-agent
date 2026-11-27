@@ -516,6 +516,56 @@ test("when main says the frame landed on a blocked page, it goes back to the pag
   assert.equal(iframes()[0]!.src, `${new URL(start!).origin}/pricing/annual`);
 });
 
+test("a page that leads straight out again is put back at most twice, then the frame says so and offers Reload", async () => {
+  const frame = appFrame();
+  const { mounts } = setup();
+  render(<Harness frame={frame} />);
+  const iframe = await liveIframe();
+  const origin = new URL(iframe.getAttribute("src")!).origin;
+  const mountToken = mounts()[0]!.mountToken;
+  const { guest } = giveWindow(iframe);
+  post(guest, { type: "aiden-app:route", path: "/sso" });
+  const restore = () => notify({ kind: "navigation-restore", frameId: frame.id, mountToken });
+
+  restore();
+  assert.equal(iframes()[0]!.src, `${origin}/sso`, "first, the page it was on");
+  restore();
+  assert.equal(iframes()[0]!.src, `${origin}/pricing`, "that led out at once: the frame's route");
+  restore();
+  assert.equal(iframes()[0]!.src, `${origin}/pricing`);
+  assert.ok(screen.getByText("This page leads outside the app."), "the route leads out too: no more reloads");
+  iframes()[0]!.src = `${origin}/untouched`;
+  restore();
+  assert.equal(iframes()[0]!.src, `${origin}/untouched`, "a stuck frame isn't reloaded again");
+
+  fireEvent.click(screen.getByRole("button", { name: "Reload" }));
+  assert.equal(screen.queryByText("This page leads outside the app.")?.textContent ?? null, null);
+  assert.equal(iframes()[0]!.src, `${origin}/pricing`);
+});
+
+test("ways out a while apart are each put back", async () => {
+  const realNow = Date.now;
+  let now = 1_000_000;
+  Date.now = () => now;
+  try {
+    const frame = appFrame();
+    const { mounts } = setup();
+    render(<Harness frame={frame} />);
+    const iframe = await liveIframe();
+    const origin = new URL(iframe.getAttribute("src")!).origin;
+    const { guest } = giveWindow(iframe);
+    for (let index = 0; index < 4; index += 1) {
+      post(guest, { type: "aiden-app:route", path: "/pricing/annual" });
+      now += 10_000;
+      notify({ kind: "navigation-restore", frameId: frame.id, mountToken: mounts()[0]!.mountToken });
+      assert.equal(iframes()[0]!.src, `${origin}/pricing/annual`, `restore ${index + 1}`);
+    }
+    assert.equal(screen.queryByText("This page leads outside the app.")?.textContent ?? null, null);
+  } finally {
+    Date.now = realNow;
+  }
+});
+
 // ── The page's bridge: untrusted and bounded ──
 
 test("the in-app path comes only from this frame's own page, and an error label opens the escaped message", async () => {
