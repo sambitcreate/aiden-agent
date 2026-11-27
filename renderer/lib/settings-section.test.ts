@@ -397,3 +397,17 @@ test("sleep words find the keep-awake row on Scheduled tasks", () => {
     assert.deepEqual(searchSidebar(term), [{ page: "scheduledTasks", target: "scheduledTasks" }], term);
   }
 });
+
+test("Bots → Bubbles is its own page under Autonomy & Devices, found by bubble words, and only where Bots run", () => {
+  const page = availableSettingsPages(LINUX).find((entry) => entry.id === "botBubbles");
+  assert.equal(page?.title, "Bots");
+  assert.equal(page?.group, "Autonomy & Devices");
+  assert.deepEqual(page?.tabs, ["botBubbles"]);
+  for (const term of ["bubbles", "chat heads", "float over apps"]) {
+    assert.deepEqual(searchSidebar(term, LINUX), [{ page: "botBubbles", target: "botBubbles" }], term);
+  }
+  assert.equal(parseSettingsSection("botBubbles"), "botBubbles");
+  const noBots = { ...LINUX, bots: false };
+  assert.equal(availableSettingsPages(noBots).some((entry) => entry.id === "botBubbles"), false);
+  assert.equal(resolveSettingsSection("botBubbles", noBots), "providers");
+});

@@ -76,10 +76,11 @@ The headless Aiden server lives in `packages/cli` as a self-contained npm packag
 
 ## Pull requests, CI, and branches
 
+- Never wait on CI or PR comments inside your own turn: no `sleep` loops around `gh`, `gh run watch`, `gh pr checks --watch` or repeated status glances. After pushing, turn on auto-merge if asked, hand the wait to a watcher (pr-watchd, the Claude app's Auto-fix or Aiden's `follow_pull_request`), and end the turn. Follow the `aiden-pr-ci` skill in `.agents/skills/` for the details and for what to do when woken about a failure.
 - Update a shared PR branch by merging `origin/main` into it. Do not rebase or force-push a branch that already has a PR, reviews, or CI history.
 - Before requesting bot reviews or waiting on hosted CI, run the narrow suites for the touched surfaces locally. Hosted CI and review bots should not be the first place a failure shows up.
 - Treat a PR as mergeable only when CI is green on its exact head commit. After merging `main` in, wait for the new run; do not merge on an earlier head's result.
-- Do not cancel CI runs on `main`. Main CI is the baseline every release is cut from.
+- Do not cancel CI runs on `main` by hand. CI's concurrency group already supersedes an older main run when a newer merge lands. The completed run on the newest main commit is the baseline releases are judged by; if that commit's CI was cancelled, start CI on it again.
 - Flaky tests: a failure that passes on rerun is still a bug. Rerun failed jobs at most once, then record the spec, the symptom, and the run link in the PR description. Do not paper over it by raising timeouts, adding retries, or weakening `--fail-on-flaky-tests`.
 - Known merge-conflict hotspots need a recheck after every `main` merge:
   - the root `package.json` `test` chain. Append new scripts and resolve conflicts by union, keeping every script from both sides.

@@ -253,6 +253,8 @@ import {
 import { formFillTurnNote } from "./form-fill/tool.js";
 import { FORM_FILL_MUTATION_AVAILABLE } from "../../renderer/shared/form-fill-availability.js";
 import { toolApprovalPreview, type ToolApprovalPreview } from "../../renderer/shared/tool-approval-preview.js";
+import { commandReadingForCall } from "../../renderer/shared/command-reading.js";
+import { homedir } from "node:os";
 import { formFillArtifacts, formFillRuntime } from "./form-fill/artifacts.js";
 import {
   EDIT_AUTOMATION_TOOL_NAME,
@@ -362,7 +364,7 @@ import { endRunAfterIgnoredToolRecovery } from "./assistant/tool-loop-guard.js";
 import type { ToolApprovalDetails } from "../../renderer/shared/assistant.js";
 import { DEFAULT_SUBAGENT_CANCELLATION_GRACE_MS } from "./subagents/subagent-child-runner.js";
 import { assistantSettingsPages } from "../../renderer/lib/settings-section.js";
-import { SubagentSupervisor } from "./subagents/subagent-supervisor.js";
+import { SUBAGENT_TRANSCRIPT_TURN_END_WAIT_MS, SubagentSupervisor } from "./subagents/subagent-supervisor.js";
 import { chatActivityRegistry } from "./chat-activity.js";
 import { interruptedWaits } from "./interrupted-waits-main.js";
 import { clipInterruptedWaitSummary } from "./interrupted-reply.js";
@@ -393,7 +395,9 @@ import {
 } from "./subagents/feature-flag.js";
 import { inheritedSubagentReadToolCeiling } from "./subagents/capability-profile.js";
 import { SubagentEventProjector } from "./subagents/subagent-event-projector.js";
-import { subagentRunStore } from "./subagents/subagent-run-store.js";
+import { subagentRunStore, subagentTranscriptStore } from "./subagents/subagent-run-store.js";
+import { createSubagentTranscriptFactory } from "./subagents/subagent-transcript-store.js";
+import type { SubagentTranscriptUpdateV1 } from "../../renderer/shared/subagent-transcript.js";
 import { createForegroundSubagentPersistenceV2 } from "./subagents/subagent-foreground-persistence-v2.js";
 import { subagentHealthMetrics } from "./subagents/subagent-health-metrics.js";
 import { subagentRuntimeRegistry } from "./subagents/child-agent-runtime.js";
@@ -536,6 +540,7 @@ import { chatToolOffers, personWroteChatTurn, offersChildChats, chatTurnArgsTool
 import { createGenerativeUiDraftSession } from "./generative-ui-draft.js";
 import { createUiDraftSession } from "./aiden-ui-draft.js";
 import { withoutVisualSnapshots } from "../../renderer/shared/visual-snapshots.js";
+import { withoutGrabbedElementThumbnails } from "../../renderer/shared/browser-element-grab.js";
 import { displayedAssistantUiCount } from "./aiden-ui-tool.js";
 import { visualSnapshotImages } from "./visual-snapshot-core.js";
 import { enqueueVisualSnapshots } from "./visual-snapshot-service.js";
@@ -1167,6 +1172,24 @@ function settleGeneration<Entry extends GenerationOwnershipEntry>(
   });
 }
 
+/**
+ * Helper conversation updates go only to the window that owns the stream.
+ * They are not journaled: each one is already saved, and a window that joins
+ * later reads the saved copy. Paired devices get nothing until the Remote
+ * protocol carries helper conversations.
+ */
+function sendSubagentTranscript(streamId: string, update: SubagentTranscriptUpdateV1): void {
+  const owner = ownerForStream(streamId);
+  if (!owner || owner.isDestroyed() || owner.kind === "remote") return;
+  // Keep the order with the text and reasoning batches sent before it.
+  deltaCoalescer.flush(streamId);
+  try {
+    owner.send("chat:subagent-transcript", { streamId, update });
+  } catch {
+    // A closed window reads the saved copy when it opens the helper.
+  }
+}
+
 function sendGeneration(streamId: string, channel: NotificationChannel, payload: unknown): boolean {
   const entry = active.get(streamId) ?? initializing.get(streamId);
   const chatId = entry?.chatId;
@@ -1452,7 +1475,9 @@ async function prepareGeneration(
   const generationExtensions: PiAgentRuntimeExtension[] = [];
   const responseImages = () => uniqueResponseImages(sharedImages, displayedImages);
   const modelImageReferences = createPiModelImageReferences({
-    snapshot: chat.messages.flatMap((message) => withoutVisualSnapshots(message.attachments ?? [])),
+    snapshot: chat.messages.flatMap((message) =>
+      withoutGrabbedElementThumbnails(withoutVisualSnapshots(message.attachments ?? [])),
+    ),
     generated: responseImages,
     readCurrent: async (referenceSignal) => {
       signal.throwIfAborted();
@@ -1461,7 +1486,9 @@ async function prepareGeneration(
       signal.throwIfAborted();
       referenceSignal?.throwIfAborted();
       if (!current || persistedChatWorkspaceId(current.workspaceId) !== persistedChatWorkspaceId(params.workspaceId)) throw new Error("The reference image chat is no longer available in this workspace.");
-      return current.messages.flatMap((message) => withoutVisualSnapshots(message.attachments ?? []));
+      return current.messages.flatMap((message) =>
+        withoutGrabbedElementThumbnails(withoutVisualSnapshots(message.attachments ?? [])),
+      );
     },
   });
   const shareImage = (attachment: Attachment, toolCallId: string) => {
@@ -1961,6 +1988,10 @@ async function prepareGeneration(
       ? new SubagentSupervisor({
           compactionEngine: compactionEngineFrom(settings.compactionEngine),
           compactionModelOverrides: settings.compactionModelOverrides,
+          transcripts: createSubagentTranscriptFactory(subagentTranscriptStore, {
+            publish: (update) => sendSubagentTranscript(streamId, update),
+            onError: (error) => logger.warn("subagents", "Could not save a helper conversation.", error),
+          }),
           generationId: streamId,
           chatId: params.chatId,
           workspaceId: workspace.id,
@@ -2002,6 +2033,9 @@ async function prepareGeneration(
             : undefined,
           modelOptions: subagentModelOptions,
           healthMetrics: subagentHealthMetrics,
+          // One supervisor per reply: a Bot reply's helpers get 60 minutes from
+          // the first launch; a chat's helpers have only the 24-hour safety net.
+          policy: { timeLimit: botContext ? "bot" : "chat" },
           projector: subagentProjector,
           // SubagentStop for the chats whose own turns run hooks.
           ...(subagentRunsChatHooks
@@ -2407,7 +2441,9 @@ async function prepareGeneration(
         botContext && !supportsImages && botContext.admission.authority.visionProvider
           ? createVisionAnalysisTool(
               {
-                attachments: chat.messages.flatMap((message) => withoutVisualSnapshots(message.attachments ?? [])),
+                attachments: chat.messages.flatMap((message) =>
+                  withoutGrabbedElementThumbnails(withoutVisualSnapshots(message.attachments ?? [])),
+                ),
                 authority: {
                   providerId: botContext.admission.authority.visionProvider.sourceProviderId,
                   modelId: botContext.admission.authority.visionProvider.sourceModelId,
@@ -4096,8 +4132,9 @@ export const llmClient = {
       }
       try {
         // The inspector store is authoritative. Never announce terminal chat
-        // completion before every accepted child snapshot is durable.
-        await subagentSupervisor?.flush();
+        // completion before every accepted child snapshot is durable. Helper
+        // conversations get a short wait only; their saves finish behind it.
+        await subagentSupervisor?.flush({ transcriptWaitMs: SUBAGENT_TRANSCRIPT_TURN_END_WAIT_MS });
         const chat = await chatStore.appendMessage(
           params.chatId,
           {
@@ -4855,6 +4892,7 @@ export const llmClient = {
                 currentUser.content,
                 currentUser.attachments,
                 SLASH_LIMITS.formattedInvocationBytes,
+                currentUser.grabbedElements,
               ),
               workspaceId!,
               currentUser.id,
@@ -5892,6 +5930,16 @@ export const llmClient = {
                     ? undefined
                     : (artifactApprovalPreview ?? toolApprovalPreview(context.toolCall.name, context.args));
                   return preview ? { preview } : {};
+                })(),
+                // A command in plain words, with Aiden's own tags (plain cards only).
+                ...(() => {
+                  const reading = approvalDetails
+                    ? undefined
+                    : commandReadingForCall(context.toolCall.name, context.args, {
+                        ...(folderPath && !noWorkspace ? { workspaceRoot: folderPath } : {}),
+                        home: homedir(),
+                      });
+                  return reading ? { reading } : {};
                 })(),
                 ...(scopedRuleTarget ? { scopes: SCOPED_APPROVAL_OFFER } : {}),
                 ...(macGrantOffer ? { scopes: MAC_GRANT_OFFER } : {}),

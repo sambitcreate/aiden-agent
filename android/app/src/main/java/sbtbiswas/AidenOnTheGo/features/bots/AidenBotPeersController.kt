@@ -5,6 +5,7 @@ import kotlinx.coroutines.flow.*
 import kotlinx.serialization.Serializable
 import sbtbiswas.AidenOnTheGo.models.*
 import sbtbiswas.AidenOnTheGo.persistence.AidenBotWatchJournal
+import sbtbiswas.AidenOnTheGo.protocol.AidenRemoteFailurePolicy
 import java.util.UUID
 
 interface AidenBotPeersTransport {
@@ -94,7 +95,7 @@ class AidenBotPeersController(val botId:String,private val transport:AidenBotPee
         start(AidenPeerMutation(AidenPeerAction.REVOKE,botId,uuid(),revision,pairId=pair.id,pairRevision=pair.revision))
     }
     private suspend fun start(request:AidenPeerMutation){val attempt=AidenPeerAttempt(request,now());if(retain(_state.value.copy(pending=attempt)))send(attempt,false)}
-    fun retryAllowed()=_state.value.pending?.let{now()-it.startedAt in 0 until RETRY_MS}==true
+    fun retryAllowed()=_state.value.pending?.let{AidenDurablePendingMutation.isRetryAllowed(it.startedAt,now())}==true
     suspend fun retry(){val p=_state.value.pending ?: return;if(!retryAllowed()){_state.update{it.copy(problem=AidenRoutineControlProblem.EXPIRED)};return};send(p,true)}
     private suspend fun send(p:AidenPeerAttempt,unknown:Boolean){
         if(!current() || !canRead() || !canWrite() || storageBlocked || _state.value.busy)return
@@ -105,7 +106,7 @@ class AidenBotPeersController(val botId:String,private val transport:AidenBotPee
             if(r.ok){check(r.mutationId==p.request.mutationId);retain(settled(requireNotNull(r.snapshot),p.request.action==AidenPeerAction.DESCRIBE))}
             else {r.snapshot?.let(::apply);if(_state.value.pending!=null){val keep=unknown || r.code==AidenPeerError.UNAVAILABLE;retain(_state.value.copy(pending=if(keep)p else null,needsReview=_state.value.needsReview || r.code==AidenPeerError.CONFLICT,problem=if(keep)AidenRoutineControlProblem.UNCERTAIN else AidenRoutineControlProblem.FAILED,message=r.error))}}
         }catch(e:CancellationException){if(current())_state.update{it.copy(problem=AidenRoutineControlProblem.UNCERTAIN)};throw e}
-        catch(e:Exception){if(current()){val keep=unknown || aidenBotResumeFailureIsAmbiguous(e);retain(_state.value.copy(pending=if(keep)p else null,problem=if(keep)AidenRoutineControlProblem.UNCERTAIN else AidenRoutineControlProblem.FAILED))}}
+        catch(e:Exception){if(current()){val keep=AidenDurablePendingMutation.settleFailure(e,unknown,AidenRemoteFailurePolicy.BEFORE_EFFECT_REFUSAL)==AidenDurableFailureSettlement.RETAIN_UNCERTAIN;retain(_state.value.copy(pending=if(keep)p else null,problem=if(keep)AidenRoutineControlProblem.UNCERTAIN else AidenRoutineControlProblem.FAILED))}}
         finally{if(current())_state.update{it.copy(busy=false)}}
     }
     suspend fun openExchange(id:String){
@@ -124,7 +125,7 @@ class AidenBotPeersController(val botId:String,private val transport:AidenBotPee
         if(unknown && !retainStop(p))return
         val g=++generation;_state.update{it.copy(busy=true,loading=false,problem=null,message=null)}
         try {
-            if(now()-p.startedAt !in 0 until RETRY_MS) {
+            if(!AidenDurablePendingMutation.isRetryAllowed(p.startedAt,now())) {
                 val row=transport.detail(p.request.exchangeId)
                 if(!current() || !canReadExchanges() || !canWrite() || g!=generation)return
                 applyDetail(row)
@@ -134,9 +135,9 @@ class AidenBotPeersController(val botId:String,private val transport:AidenBotPee
             val r=transport.stop(p.request);if(!current() || !canReadExchanges())return
             r.exchange?.let{check(it.belongsTo(botId) && it.id==p.request.exchangeId)}
             if(r.ok){check(r.mutationId==p.request.mutationId);applyDetail(requireNotNull(r.exchange));if(_state.value.pendingStop!=null)_state.update{it.copy(problem=AidenRoutineControlProblem.UNCERTAIN,message="Stop is pending. Check again for the host’s acknowledgement.")}}
-            else {r.exchange?.let(::applyDetail);if(_state.value.pendingStop!=null){val keep=unknown || r.code==AidenPeerError.UNAVAILABLE;if(!keep)retainStop(null);_state.update{it.copy(problem=if(keep)AidenRoutineControlProblem.UNCERTAIN else AidenRoutineControlProblem.FAILED,message=r.error)}}}
+            else {r.exchange?.let(::applyDetail);if(_state.value.pendingStop!=null){val keep=unknown || r.code==AidenPeerError.UNAVAILABLE;if(!keep)retainStop(null);_state.update{it.copy(problem=if(storageBlocked)AidenRoutineControlProblem.STORAGE else if(keep)AidenRoutineControlProblem.UNCERTAIN else AidenRoutineControlProblem.FAILED,message=r.error)}}}
         }catch(e:CancellationException){if(current())_state.update{it.copy(problem=AidenRoutineControlProblem.UNCERTAIN)};throw e}
-        catch(e:Exception){if(current()){val keep=unknown || aidenBotResumeFailureIsAmbiguous(e);if(!keep)retainStop(null);_state.update{it.copy(problem=if(keep)AidenRoutineControlProblem.UNCERTAIN else AidenRoutineControlProblem.FAILED)}}}
+        catch(e:Exception){if(current()){val keep=AidenDurablePendingMutation.settleFailure(e,unknown,AidenRemoteFailurePolicy.BEFORE_EFFECT_REFUSAL)==AidenDurableFailureSettlement.RETAIN_UNCERTAIN;if(!keep)retainStop(null);_state.update{it.copy(problem=if(storageBlocked)AidenRoutineControlProblem.STORAGE else if(keep)AidenRoutineControlProblem.UNCERTAIN else AidenRoutineControlProblem.FAILED)}}}
         finally{if(current())_state.update{it.copy(busy=false)}}
     }
     suspend fun showEvidence(kind:AidenOpenWorkEvidenceKind){
@@ -148,7 +149,7 @@ class AidenBotPeersController(val botId:String,private val transport:AidenBotPee
     }
     fun closeEvidence(){generation++;_state.update{it.copy(evidence=null,loading=false)}}
     companion object {
-        const val RETRY_MS=23*60*60*1000L
+        const val RETRY_MS=AidenDurablePendingMutation.RETRY_WINDOW_MS
         fun stopMessage(receipt:AidenPeerStopReceipt)=when(receipt.state){AidenPeerStopState.STOPPED->"The host acknowledged Stop. Earlier effects may remain.";AidenPeerStopState.NOT_RUNNING->"The linked work is no longer running.";AidenPeerStopState.BLOCKED->"Stop was refused. The work remains unfinished.";else->"Stop is pending. Check again for the host’s acknowledgement."}
     }
 }

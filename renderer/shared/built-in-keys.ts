@@ -92,9 +92,9 @@ export const BUILT_IN_KEYS: readonly BuiltInKey[] = [
   },
   {
     id: "edit-last",
-    title: "Fix and resend your last message",
-    description: "In an empty message box after a finished reply; pauses during dictation.",
-    keys: ["Up"],
+    title: "Browse sent message history",
+    description: "In an empty message box, shows earlier prompts with each paired reply; Down steps back, Return keeps the prompt, Esc restores the box, and Option+Return (Alt+Enter off macOS) edits a settled turn in a fork.",
+    keys: ["Up", "Down"],
     section: "In a chat",
   },
   {

@@ -16,7 +16,7 @@ import { CHILD_CHATS_TOOL_NAME } from "../../renderer/shared/child-chats.js";
 import { chatSurface } from "../../renderer/shared/chat-visibility.js";
 import { hostInboxPlacement, type HostInboxSignals, type InboxBucket } from "../../renderer/shared/inbox-state.js";
 import { persistedChatWorkspaceId } from "../../renderer/shared/chat-workspace.js";
-import { isGenerationThinkingLevel } from "../../renderer/shared/generation-thinking.js";
+import { isGenerationThinkingLevel, type GenerationThinkingLevel } from "../../renderer/shared/generation-thinking.js";
 import {
   isToolStep,
   parseGenerationTimeline,
@@ -79,7 +79,7 @@ import {
   assertDurableOperationResult,
   assertRevision,
 } from "./aiden-remote-operation-contract.js";
-import type { AidenRemoteModelService } from "./aiden-remote-models.js";
+import { fittedThinkingLevel, type AidenRemoteModelService } from "./aiden-remote-models.js";
 import type { AidenRemoteStreamService } from "./aiden-remote-streams.js";
 import {
   AidenRemoteAttachmentStore,
@@ -255,6 +255,8 @@ export interface AidenRemoteChatProjection {
   title: string;
   providerId?: string;
   modelId?: string;
+  /** Additive (protocol revision 70): the chat's own thinking level, with its model. */
+  thinkingLevel?: GenerationThinkingLevel;
   messages: AidenRemoteMessageProjection[];
   createdAt: string;
   updatedAt: string;
@@ -720,6 +722,21 @@ function projectForkSummary(summary: ChatForkSummaryV1): AidenRemoteChatForkSumm
   };
 }
 
+/**
+ * The chat's own model selection. Its thinking level (revision 70) belongs to
+ * its model, so it is shown only with one, and never for a Bot chat.
+ */
+function projectChatModelSelection(
+  chat: Pick<Chat, "providerId" | "model" | "thinkingLevel" | "botId">,
+): { providerId?: string; modelId?: string; thinkingLevel?: GenerationThinkingLevel } {
+  if (!chat.providerId || !chat.model) return {};
+  return {
+    providerId: chat.providerId,
+    modelId: chat.model,
+    ...(!chat.botId && isGenerationThinkingLevel(chat.thinkingLevel) ? { thinkingLevel: chat.thinkingLevel } : {}),
+  };
+}
+
 function chatRevision(chat: Chat): string {
   const hasModelSelection = Boolean(chat.providerId && chat.model);
   const forkedFrom = projectForkLineage(chat, true);
@@ -731,6 +748,8 @@ function chatRevision(chat: Chat): string {
     title: chat.title,
     providerId: hasModelSelection ? chat.providerId : null,
     model: hasModelSelection ? chat.model : null,
+    // Only when present, so chats without their own level keep their revision.
+    ...(projectChatModelSelection(chat).thinkingLevel ? { thinkingLevel: chat.thinkingLevel } : {}),
     createdAt: chat.createdAt,
     updatedAt: chat.updatedAt,
     messages: chat.messages
@@ -909,6 +928,8 @@ export interface AidenRemoteChatMessagesWindow {
   title: string;
   providerId?: string;
   modelId?: string;
+  /** Additive (protocol revision 70): the chat's own thinking level, with its model. */
+  thinkingLevel?: GenerationThinkingLevel;
   createdAt: string;
   updatedAt: string;
   titlePending?: true;
@@ -951,9 +972,7 @@ export function projectAidenRemoteChatMessagesWindow(
       workspaceId: persistedChatWorkspaceId(chat.workspaceId),
       ...(chat.botId ? { botId: chat.botId } : {}),
       title: boundedUnicodeScalarPrefix(chat.title, 1_024),
-      ...(chat.providerId && chat.model
-        ? { providerId: chat.providerId, modelId: chat.model }
-        : {}),
+      ...projectChatModelSelection(chat),
       createdAt: new Date(chat.createdAt).toISOString(),
       updatedAt: new Date(chat.updatedAt).toISOString(),
       ...(options.titlePending === true ? { titlePending: true as const } : {}),
@@ -1009,9 +1028,7 @@ export function projectAidenRemoteChat(
       workspaceId: persistedChatWorkspaceId(chat.workspaceId),
       ...(chat.botId ? { botId: chat.botId } : {}),
       title: boundedUnicodeScalarPrefix(chat.title, 1_024),
-      ...(chat.providerId && chat.model
-        ? { providerId: chat.providerId, modelId: chat.model }
-        : {}),
+      ...projectChatModelSelection(chat),
       messages: visibleMessages.map((message) => projectMessage(chat, message)),
       createdAt: new Date(chat.createdAt).toISOString(),
       updatedAt: new Date(chat.updatedAt).toISOString(),
@@ -1257,6 +1274,7 @@ function parseTurn(input: unknown): {
   thinkingLevel?: ChatStartParams["thinkingLevel"];
   attachmentIds?: string[];
   skill?: SkillInvocationV1;
+  saveSelection?: true;
 } {
   const record = ownRecord(input);
   const attachmentIds = record?.attachmentIds;
@@ -1268,13 +1286,14 @@ function parseTurn(input: unknown): {
       attachmentIds.every((value) => typeof value === "string"));
   if (
     !record ||
-    !exactKeys(record, ["text"], ["providerId", "modelId", "thinkingLevel", "attachmentIds", "skill"]) ||
+    !exactKeys(record, ["text"], ["providerId", "modelId", "thinkingLevel", "attachmentIds", "skill", "saveSelection"]) ||
     typeof record.text !== "string" ||
     Array.from(record.text).length > 200_000 ||
     (!record.text.trim() && (!Array.isArray(attachmentIds) || attachmentIds.length === 0)) ||
     (record.providerId !== undefined && !boundedString(record.providerId, 256)) ||
     (record.modelId !== undefined && !boundedString(record.modelId, 256)) ||
     (record.thinkingLevel !== undefined && !isGenerationThinkingLevel(record.thinkingLevel)) ||
+    (record.saveSelection !== undefined && typeof record.saveSelection !== "boolean") ||
     !structurallyValidAttachmentIds
   ) {
     throw new AidenRemoteServiceError(
@@ -1304,6 +1323,7 @@ function parseTurn(input: unknown): {
       : {}),
     ...(Array.isArray(attachmentIds) ? { attachmentIds: [...attachmentIds] as string[] } : {}),
     ...(skill ? { skill } : {}),
+    ...(record.saveSelection === true ? { saveSelection: true as const } : {}),
   };
 }
 
@@ -1398,6 +1418,8 @@ export class AidenRemoteChatService {
             model?: string;
             expectedWorkspaceId?: string;
             isCurrent?: () => boolean;
+            /** Revision 70: the chat's own level, saved in the same write as the message. */
+            thinkingLevel?: GenerationThinkingLevel | null;
           },
         ): Promise<Chat>;
       };
@@ -1508,6 +1530,21 @@ export class AidenRemoteChatService {
        * Omission fails closed.
        */
       deviceSupportsContinueInNewChat?: (deviceId: string) => Promise<boolean>;
+      /**
+       * Revision 70: whether a device negotiated `chat:agent-slider`. Such a
+       * device's turn level is fitted to the model instead of refused, and a
+       * turn that asks with `saveSelection` (and names its model) has the
+       * level saved as the chat's own, in the same write as its message. A
+       * host wires this only when its chat store saves `thinkingLevel` on
+       * append and it keeps an Agent Slider; absent, the capability is
+       * neither offered nor served.
+       */
+      deviceSupportsAgentSlider?: (deviceId: string) => Promise<boolean>;
+      /**
+       * Revision 70: whether the host has a readable Agent Slider right now.
+       * A selection is saved only while it does; absent reads as no.
+       */
+      hostHasAgentSlider?: () => Promise<boolean>;
       /**
        * No workspace chats keep a hidden folder each: `target` gives the
        * workspace a new chat that asked for `noWorkspace` goes to, and
@@ -2564,6 +2601,11 @@ export class AidenRemoteChatService {
     return this.options.forks?.service.supportsContinue === true;
   }
 
+  /** Whether a turn can save its selection as the chat's own (revision 70, `chat:agent-slider`). */
+  get supportsAgentSlider(): boolean {
+    return this.options.deviceSupportsAgentSlider !== undefined;
+  }
+
   /** Whether this host can fork with a summary (`chat-fork-summary-v1`). */
   get supportsForkSummaries(): boolean {
     return this.options.forks?.service.supportsSummaries === true &&
@@ -2862,13 +2904,25 @@ export class AidenRemoteChatService {
             });
             supportsCompanionImages = preflightResult?.supportsCompanionImages === true;
           }
+          // Revision 70: a slider device echoes the chat's saved level, which
+          // the desktop may have saved unfitted. It runs at the level the model
+          // offers, as on the desktop; other devices keep the strict check.
+          const holdsAgentSlider = (await this.options.deviceSupportsAgentSlider?.(deviceId)) === true;
           if (
+            !holdsAgentSlider &&
             parsed.thinkingLevel &&
             selection.thinkingLevels.length > 0 &&
             !selection.thinkingLevels.includes(parsed.thinkingLevel)
           ) {
             throw new AidenRemoteServiceError("invalid_request", "That thinking level is unavailable.", 400);
           }
+          const turnThinkingLevel = holdsAgentSlider && parsed.thinkingLevel
+            ? fittedThinkingLevel(
+              selection.providerId,
+              selection.thinkingLevels.filter(isGenerationThinkingLevel),
+              parsed.thinkingLevel,
+            )
+            : parsed.thinkingLevel;
           if (
             this.attachments.requiresImageInput(deviceId, chatId, parsed.attachmentIds) &&
             !selection.supportsImages && !supportsCompanionImages
@@ -2896,7 +2950,7 @@ export class AidenRemoteChatService {
             workspaceId,
             providerId: selection.providerId,
             model: selection.modelId,
-            thinkingLevel: parsed.thinkingLevel,
+            thinkingLevel: turnThinkingLevel,
             ...(authoritative.botId ? { botAudienceId: deviceId } : {}),
             ...(inlineVisuals ? { inlineVisuals } : {}),
             // A lead chat's started chat asks on the desktop card, which always reads questions.
@@ -3025,6 +3079,18 @@ export class AidenRemoteChatService {
                 throw skillInvocationRemoteError(error);
               }
             }
+            // Revision 70: a phone with the Agent Slider keeps the chat on the
+            // stop it chose, as the desktop composer does, only when the turn
+            // asks to and names that stop's model, and the host keeps a slider.
+            // The level that runs is saved in the message's own write, so a
+            // refused send leaves none behind; a model without levels saves none.
+            const savesSliderSelection =
+              holdsAgentSlider &&
+              parsed.saveSelection === true &&
+              parsed.providerId !== undefined &&
+              parsed.modelId !== undefined &&
+              !authoritative.botId &&
+              (await this.options.hostHasAgentSlider?.()) === true;
             appendAttempted = true;
             const chat = await appendChatMessageWithReconciliation({
               messageId,
@@ -3045,6 +3111,7 @@ export class AidenRemoteChatService {
                   expectedWorkspaceId: workspaceId,
                   isCurrent: () =>
                     turn.isActive() && workspaceAdmission?.signal.aborted !== true,
+                  ...(savesSliderSelection ? { thinkingLevel: turnThinkingLevel ?? null } : {}),
                 },
               ),
               recover: () => this.options.chatStore.get(chatId),
@@ -3066,7 +3133,7 @@ export class AidenRemoteChatService {
               reportChatMessageSent({
                 providerId: selection.providerId,
                 model: selection.modelId,
-                thinkingLevel: parsed.thinkingLevel,
+                thinkingLevel: turnThinkingLevel,
                 origin: authoritative.botId
                   ? "bot"
                   : async () => ((await this.options.deviceIsPeer?.(deviceId)) === true ? "peer" : "phone"),

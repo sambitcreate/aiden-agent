@@ -631,6 +631,7 @@ export interface ChatMessage {
   imagePlacements?: import("../shared/chat-artifacts").ChatImagePlacementV1[];
   uiVisuals?: import("../shared/aiden-ui/types").ChatUiVisualV1[];
   visualSnapshots?: import("../shared/visual-snapshots").VisualSnapshotRefV1[];
+  grabbedElements?: import("../shared/browser-element-grab").GrabbedElementContextV1[];
   skill?: SkillProvenanceV1;
   notice?: import("../shared/agent-notices").AgentNoticeV1;
   /** Aiden Live sent this user message for the person ("By voice"). */
@@ -1025,6 +1026,10 @@ export interface AppSettings extends AidenLiveSettingsFields {
   quickChatDefaultPersistence?: import("../shared/quick-chat").QuickChatDefaultPersistence;
   /** Keep the floating Quick Chat mini-modal open when clicking outside. Omitted means true. */
   quickChatKeepOpenOnBlur?: boolean;
+  /** Settings → Bots → Bubbles → Allow bubbles. Omitted means on. */
+  botBubblesEnabled?: boolean;
+  /** Settings → Bots → Bubbles → Float over other apps (macOS only). Omitted means on. */
+  botBubblesFloatOverApps?: boolean;
   /** On-device form fill specialist. Default off; requires macOS + downloaded model. */
   formFillSpecialistEnabled?: boolean;
   /** Omitted in older configs; memory is enabled unless explicitly disabled. */

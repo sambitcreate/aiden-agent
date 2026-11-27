@@ -21,6 +21,7 @@ import type { ProviderFailureV1 } from "../../renderer/shared/provider-failure.j
 import type { ChatHtmlArtifactV1, HtmlArtifactPlacementV1, ChatImagePlacementV1 } from "../../renderer/shared/chat-artifacts.js";
 import type { ChatUiVisualV1 } from "../../renderer/shared/aiden-ui/types.js";
 import type { VisualSnapshotRefV1 } from "../../renderer/shared/visual-snapshots.js";
+import type { GrabbedElementContextV1 } from "../../renderer/shared/browser-element-grab.js";
 import type { ChatForkLineageV1 } from "../../renderer/shared/chat-copy-contract.js";
 import type { ChatStartedByV1 } from "../../renderer/shared/chat-started-by.js";
 import type { AssistantMessage } from "@earendil-works/pi-ai";
@@ -374,6 +375,8 @@ export interface ChatMessage {
   providerFailure?: ProviderFailureV1;
   /** Files presented with this user or assistant message. */
   attachments?: Attachment[];
+  /** Browser elements grabbed from Aiden Browser for this user message; linked thumbnails live in `attachments`. */
+  grabbedElements?: GrabbedElementContextV1[];
   /** Interactive HTML artifacts; bytes remain in the generative-ui store. */
   appPanels?: import("../../renderer/shared/app-controls").AppControlPanel[];
   htmlArtifacts?: ChatHtmlArtifactV1[];
@@ -972,6 +975,10 @@ export interface AppSettings extends AidenLiveSettingsFields {
   quickChatDefaultPersistence?: import("../../renderer/shared/quick-chat.js").QuickChatDefaultPersistence;
   /** Keep the floating Quick Chat mini-modal open when clicking outside. Omitted means true (stays pinned). */
   quickChatKeepOpenOnBlur?: boolean;
+  /** Settings → Bots → Bubbles → Allow bubbles. Omitted means on; off hides every head and the bubble button. */
+  botBubblesEnabled?: boolean;
+  /** Settings → Bots → Bubbles → Float over other apps (macOS only). Omitted means on. */
+  botBubblesFloatOverApps?: boolean;
   /** On-device Form Fill Specialist; gated on Computer Use plus a verified local model package. Default off. */
   formFillSpecialistEnabled?: boolean;
   /** Global scheduler gate. Turning it off pauses jobs without deleting them. */
@@ -1158,6 +1165,7 @@ export interface ChatStartParams {
     role: ChatRole;
     content: string;
     attachments?: Attachment[];
+    grabbedElements?: GrabbedElementContextV1[];
   }>;
 }
 

@@ -1,5 +1,16 @@
 {
   "version": 1,
+  "macos": [
+    "bots-persistence.spec.ts",
+    "environment-devices-agent.spec.ts",
+    "environment-devices-android.spec.ts",
+    "environment-devices-features.spec.ts",
+    "environment-devices-stream.spec.ts",
+    "environment-devices-tab.spec.ts",
+    "guided-setup.spec.ts",
+    "keep-going-goals-computer-use.spec.ts",
+    "settings-simulator-ssh-hosts.spec.ts"
+  ],
   "full": [
     "playwright.config.ts",
     "vite.config.ts",
@@ -29,6 +40,7 @@
     "accessibility.spec.ts": [
       "renderer/components/chat-sidebar",
       "renderer/components/composer",
+      "renderer/components/grabbed-element-chip",
       "renderer/components/command-palette",
       "renderer/components/model-picker",
       "renderer/components/ui.tsx",
@@ -150,6 +162,13 @@
     ],
     "browser-cancellation.spec.ts": [
       "renderer/components/browser",
+      "main/services/browser"
+    ],
+    "browser-grab.spec.ts": [
+      "renderer/components/browser",
+      "renderer/components/grabbed-element-chip",
+      "renderer/shared/browser-element-grab.ts",
+      "renderer/lib/browser-element-grab-delivery.ts",
       "main/services/browser"
     ],
     "browser-initial-crash.spec.ts": [
@@ -422,6 +441,15 @@
     "studio-foundation.spec.ts": [
       "renderer/canvas/studio",
       "main/services/studio"
+    ],
+    "subagent-helper-chat.spec.ts": [
+      "renderer/components/subagent-helper-chat",
+      "renderer/components/subagents-panel",
+      "renderer/components/subagent-chips",
+      "renderer/lib/subagent-helper-chat-store",
+      "renderer/lib/subagent-panel-state",
+      "main/services/subagents/subagent-transcript",
+      "renderer/shared/subagent-transcript"
     ],
     "subagent-pill.spec.ts": [
       "renderer/components/chat-top-bar",

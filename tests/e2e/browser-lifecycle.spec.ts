@@ -718,6 +718,10 @@ for (const replacement of ["different-URL renderer", "same-URL renderer", "same-
       const opened = await command(aiden.page, { action: "create", url: `${base}/original` });
       await expect.poll(() => aiden.app.evaluate(({ webContents }, url) => webContents.getAllWebContents().some((guest) => guest.getURL() === url && guest.getTitle() === "Original document"), `${base}/original`)).toBe(true);
       const id = await aiden.app.evaluate(({ webContents }, url) => webContents.getAllWebContents().find((guest) => guest.getURL() === url)!.id, `${base}/original`);
+      // The stubbed loadURL below creates no pending request, which Chromium would
+      // count as loading. A stop still due from the original document would then
+      // read as the command's own navigation ending, so let that document stop first.
+      await expect.poll(() => aiden.app.evaluate(({ webContents }, id) => webContents.fromId(id)!.isLoading(), id)).toBe(false);
       await installNativeCrashProbe(aiden, id);
       await holdNavigationDeadline(aiden);
       await aiden.app.evaluate(({ webContents }, { id, target, replacement }) => {

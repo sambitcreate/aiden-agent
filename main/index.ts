@@ -154,6 +154,7 @@ import { installStudioAssetProtocol, startStudioAssets } from "./services/studio
 import { studioAssetGrants, studioAssetStore } from "./services/studio-assets/main.js";
 import { subagentRunStore } from "./services/subagents/subagent-run-store.js";
 import { flushSubagentRuntimeDiagnostics } from "./services/subagents/subagent-runtime-diagnostics.js";
+import { flushPendingSubagentTranscripts } from "./services/subagents/subagent-supervisor-core.js";
 import { chatStore } from "./services/chat-store.js";
 import {
   gitDeleteManagedWorktree,
@@ -220,6 +221,7 @@ import {
   prepareQuickChat,
   toggleQuickChat,
 } from "./windows/quick-chat-window.js";
+import { destroyBotBubbleOverlays, releaseBotBubbleOverlays, startBotBubbles } from "./windows/bot-bubbles-window.js";
 import { hostPlatformCapabilities } from "./services/host-platform-capabilities.js";
 import { installElectronConnectorWatchTransport } from "./services/bot-routine-events/connector-watch-startup.js";
 import {
@@ -417,6 +419,7 @@ function cleanupApplication(): void {
   disposeShortcut();
   disposeDictation();
   destroyQuickChat();
+  destroyBotBubbleOverlays();
   disposeLocalSpeech();
   disposeFoundationModelsConnection();
   formFillRuntime.dispose();
@@ -452,6 +455,8 @@ const SHUTDOWN_BUDGET_MS = {
   backgroundJobs: 6_000,
   designViews: 1_000,
   subagentRuntime: 7_000,
+  // Each helper conversation's last save; slow saves are left to finish or not.
+  subagentConversations: 1_000,
   spending: 1_000,
   // analyticsService().shutdown() caps its own send at 1.5 s.
   analytics: 2_000,
@@ -506,11 +511,11 @@ const SHUTDOWN_HARD_CEILING_MS = (() => {
   const b = SHUTDOWN_BUDGET_MS;
   const serial =
     b.storageCleanup + b.geminiLive + b.parentGenerations + b.backgroundJobs +
-    b.subagentRuntime + b.spending + b.analytics + b.soakReceipt + b.remoteAccess;
+    b.subagentRuntime + b.subagentConversations + b.spending + b.analytics + b.soakReceipt + b.remoteAccess;
   const parallel = Math.max(
     b.providerSignIn,
     b.computerUseStatus,
-    b.botIngress + b.botRuntime,
+    b.botIngress + b.botRuntime + b.subagentConversations,
     b.subagentRunStore,
     b.terminalHistory,
     b.imageRuns + b.studioAssets,
@@ -626,6 +631,11 @@ async function runShutdownAndQuit(settingsPrepared: boolean): Promise<void> {
       "Subagent work did not settle before the shutdown deadline; forcing application shutdown.",
     );
   }
+  // Stopped helpers save their conversations in the background; give those
+  // saves a moment so a quit keeps the last of what each helper did.
+  await settleShutdownStep("subagents", "Helper conversations", SHUTDOWN_BUDGET_MS.subagentConversations, () =>
+    flushPendingSubagentTranscripts(),
+  );
   // Every reply has settled: save the last spending, usage-limit and usage changes.
   await settleShutdownStep("main", "Spending, usage limits and usage", SHUTDOWN_BUDGET_MS.spending, () =>
     Promise.all([spending.flush(), usageLimits.flush(), usageStore.flush()]),
@@ -694,6 +704,10 @@ async function runShutdownAndQuit(settingsPrepared: boolean): Promise<void> {
         const { shutdownBotSessionRuntime } = await import("./services/bot-runtime/bot-session-main.js");
         await shutdownBotSessionRuntime();
       });
+      // The Bots' stopped helpers save their conversations the same way.
+      await settleShutdownStep("bots", "Bot helper conversations", SHUTDOWN_BUDGET_MS.subagentConversations, () =>
+        flushPendingSubagentTranscripts(),
+      );
     })(),
     settleShutdownStep("subagents", "Subagent run store", SHUTDOWN_BUDGET_MS.subagentRunStore, async () => {
       await subagentRunStore.flush();
@@ -2289,6 +2303,7 @@ if (!ownsSingleInstanceLock) {
         disposeVisualSnapshots();
         destroyPill();
         destroyQuickChat();
+        releaseBotBubbleOverlays();
       }
     });
   });
@@ -2479,6 +2494,9 @@ if (!ownsSingleInstanceLock) {
       // registered before the window loads: a page only reaches the schemes handled when it
       // loaded, so the canvas's own <img> frames would otherwise fail with an unknown scheme.
       if (designModeEnabled()) startDesignProtocol();
+      // Stored chat images load via aiden-attachment:// <img> tags in the main window, so the
+      // handler must exist before the document commits (same Electron URLLoaderFactory rule).
+      registerChatAttachmentProtocol();
       initialMainWindow = createMainWindow({ startupAdmissionHeld: true });
       // Observed below after reconciliation; never an unhandled rejection.
       initialMainWindow.catch(() => undefined);
@@ -2517,7 +2535,6 @@ if (!ownsSingleInstanceLock) {
       await displayImageArtifactStore.initialize();
       await generativeUiArtifactStore.initialize();
       registerGenerativeUiProtocol();
-      registerChatAttachmentProtocol();
       // Remove picture files left behind by chats deleted while Aiden was closed.
       chatStore.scheduleImageSweep();
       // Phones and other clients that cannot draw a visual get its snapshot.
@@ -2859,6 +2876,23 @@ if (!ownsSingleInstanceLock) {
         );
       }
       refreshFoundationModelsStatus();
+      // Bot bubbles: the saved heads come back on the same side and height.
+      if (hostPlatformCapabilities().bots) {
+        startBotBubbles({
+          current: () => (mainWindow && !mainWindow.isDestroyed() ? mainWindow : null),
+          reveal: async () => {
+            await createMainWindow();
+            if (!(await waitForRendererReady())) return null;
+            const window = mainWindow;
+            if (!window || window.isDestroyed()) return null;
+            if (window.isMinimized()) window.restore();
+            window.show();
+            window.focus();
+            return window;
+          },
+          openExternal: openExternalUrl,
+        });
+      }
       // Voice warm-up, a few seconds after launch so it never competes with the
       // first window: the hidden dictation pill and the on-device voice model.
       setTimeout(() => {

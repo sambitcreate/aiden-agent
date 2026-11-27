@@ -32,6 +32,11 @@ import { BOT_PLAN_CHANNELS, type BotPlanDecision } from "../shared/bot-plans.js"
 import type { AppControlSnapshot, AppControlOperation, AppControlReceipt } from "../shared/app-controls";
 import type { InterruptedWaitV1 } from "../shared/interrupted-reply";
 import type { ChatPendingAttention } from "../shared/chat-pending-attention";
+import {
+  parseSubagentHistoryDetailWithTranscript,
+  type SubagentHistoryDetailWithTranscriptV1,
+  type SubagentTranscriptUpdateV1,
+} from "../shared/subagent-transcript";
 import type { SavedChatIntent } from "../shared/chat-intent";
 import type { CompactionEngine } from "../shared/compaction";
 import type { WorkspaceFolderPresenceResult } from "../shared/workspace-folder-presence";
@@ -227,11 +232,8 @@ import type {
 import type { ToolApprovalDetails } from "../shared/assistant";
 import type { ToolApprovalRuleView, ToolApprovalScope } from "../shared/tool-approval-scope";
 import type { ToolApprovalPreview } from "../shared/tool-approval-preview";
-import {
-  parseSubagentHistoryDetailV1,
-  type SubagentHistoryDetailV1,
-  type SubagentRunSnapshot,
-} from "../shared/subagent-runs";
+import type { CommandReading } from "../shared/command-reading";
+import type { SubagentRunSnapshot } from "../shared/subagent-runs";
 import {
   parseSubagentManagementResultV2,
   type SubagentManagementRequestV2,
@@ -1832,7 +1834,12 @@ export const chatsApi = {
     /** The new-chat pick's effort (an Agent Slider stop), saved on the chat with its model. */
     thinkingLevel?: import("../shared/generation-thinking").GenerationThinkingLevel;
     turnId: string;
-    message: { role: "user"; content: string; attachments?: Attachment[] };
+    message: {
+      role: "user";
+      content: string;
+      attachments?: Attachment[];
+      grabbedElements?: import("../shared/browser-element-grab").GrabbedElementContextV1[];
+    };
     skillInvocation?: SkillInvocationV1;
     /** Aiden Live sent this first message for the person ("By voice"). */
     inputSource?: ChatInputSourceV1;
@@ -1852,7 +1859,12 @@ export const chatsApi = {
     model?: string;
     thinkingLevel?: import("../shared/generation-thinking").GenerationThinkingLevel;
     turnId: string;
-    message: { role: "user"; content: string; attachments?: Attachment[] };
+    message: {
+      role: "user";
+      content: string;
+      attachments?: Attachment[];
+      grabbedElements?: import("../shared/browser-element-grab").GrabbedElementContextV1[];
+    };
     skillInvocation?: SkillInvocationV1;
     inputSource?: ChatInputSourceV1;
     worktree: FirstMessageWorktreeRequest;
@@ -1975,6 +1987,7 @@ export const chatsApi = {
       content: string;
       model?: string;
       attachments?: Attachment[];
+      grabbedElements?: import("../shared/browser-element-grab").GrabbedElementContextV1[];
     },
     meta: {
       providerId?: string;
@@ -2301,8 +2314,8 @@ export const botsApi = {
 };
 
 export const subagentsApi = {
-  get: async (chatId: string, runId: string): Promise<SubagentHistoryDetailV1 | null> =>
-    parseSubagentHistoryDetailV1(await invoke<unknown>("subagents:get", chatId, runId)) ?? null,
+  get: async (chatId: string, runId: string): Promise<SubagentHistoryDetailWithTranscriptV1 | null> =>
+    parseSubagentHistoryDetailWithTranscript(await invoke<unknown>("subagents:get", chatId, runId)) ?? null,
   manage: async (
     chatId: string,
     request: SubagentManagementRequestV2,
@@ -2350,6 +2363,8 @@ export interface ApprovalPrompt {
   details?: ToolApprovalDetails;
   /** The exact command or file change, sent only to the desktop that owns the chat. */
   preview?: ToolApprovalPreview;
+  /** A command in plain words (the model's description) and Aiden's own tags for it. */
+  reading?: CommandReading;
   canAllow?: boolean;
   /** Allow scopes offered for this call; absent means allow once only. */
   scopes?: ToolApprovalScope[];
@@ -2369,6 +2384,8 @@ export interface RemoteApprovalPrompt {
   canAllow: boolean;
   scopes?: ToolApprovalScope[];
   details?: ToolApprovalDetails;
+  /** A command's plain words and Aiden's tags (the Mac's own view only). */
+  reading?: CommandReading;
 }
 
 export interface GenerationHandle {
@@ -2417,6 +2434,8 @@ export interface StreamCallbacks {
   onTimeline?: (timeline: GenerationTimeline) => void;
   onArtifactEvent?: (event: ChatArtifactEventV1) => void;
   onSubagents?: (snapshot: SubagentRunSnapshot) => void;
+  /** One helper's conversation changed; fold with `foldLiveSubagentTranscript`. */
+  onSubagentTranscript?: (update: SubagentTranscriptUpdateV1) => void;
   onTool?: (phase: ToolPhase, toolName: string) => void;
   onApproval?: (prompt: ApprovalPrompt) => void;
   onQuestionnaire?: (prompt: AskUserQuestionPromptV1) => void;

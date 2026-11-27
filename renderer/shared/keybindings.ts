@@ -48,6 +48,7 @@ export const COMMAND_IDS = [
   "navigate.forward",
   "bots.open",
   "bots.search",
+  "bots.bubble",
   "scheduled.open",
   "profile.open",
   "focus.sidebar",
@@ -528,6 +529,20 @@ export const COMMANDS = [
     category: "Navigate",
     keywords: ["bots", "agents", "find", "switch"],
     defaultBinding: null,
+    scope: "app",
+    global: false,
+    allowInEditable: true,
+    paletteWhenAvailable: true,
+    showInPalette: true,
+    showInSettings: true,
+  }),
+  command({
+    id: "bots.bubble",
+    title: "Bubble this Bot",
+    description: "Shrink the open Bot's chat into a floating bubble.",
+    category: "Navigate",
+    keywords: ["bots", "bubble", "head", "float", "chat head", "minimize"],
+    defaultBinding: "Command+Alt+B",
     scope: "app",
     global: false,
     allowInEditable: true,
@@ -1300,6 +1315,7 @@ const INTRODUCED_DEFAULT_COMMANDS: readonly CommandId[] = [
   "quickChat.toggle",
   "agentSlider.previous",
   "agentSlider.next",
+  "bots.bubble",
 ];
 
 function yieldIntroducedDefaults(next: KeybindingOverridesV1): void {

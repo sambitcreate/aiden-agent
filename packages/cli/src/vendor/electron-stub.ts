@@ -22,6 +22,7 @@ const stub = (name: string): any =>
 	});
 
 export const app = stub("app");
+export const BaseWindow = stub("BaseWindow");
 export const BrowserWindow = stub("BrowserWindow");
 export const Notification = stub("Notification");
 export const ShareMenu = stub("ShareMenu");

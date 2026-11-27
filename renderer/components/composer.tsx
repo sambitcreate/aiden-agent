@@ -69,8 +69,21 @@ import { attachmentsApi, browserApi, chatsApi } from "../lib/ipc";
 import { browserAnnotationAttachments, browserAnnotationContext } from "../lib/browser-annotation-context";
 import { terminalContextAttachment, terminalContextDelivery, type TerminalContextSelection } from "../lib/terminal-context";
 import { browserAnnotationDelivery } from "../lib/browser-annotation-delivery";
+import {
+  browserElementGrabDelivery,
+  materializeGrabbedElementDraft,
+} from "../lib/browser-element-grab-delivery";
 import { composerImageAttach } from "../lib/composer-attach";
 import type { BrowserAnnotation } from "../shared/browser";
+import {
+  grabbedElementDedupKey,
+  grabbedElementThumbnailId,
+  MAX_GRABBED_ELEMENTS_PER_MESSAGE,
+  withoutGrabbedElementThumbnails,
+  type GrabbedElementCapture,
+  type GrabbedElementContextV1,
+} from "../shared/browser-element-grab";
+import { GrabbedElementChips } from "./grabbed-element-chip";
 import { applyDictationDictionary, parseDictationDictionary } from "../shared/dictation-dictionary";
 import { useDiscoveredSkills, useProviders, useSettings, useWorkspaceFileIndex } from "../lib/queries";
 import {
@@ -82,13 +95,33 @@ import {
   type ComposerMention,
   type MentionCandidate,
 } from "../lib/composer-mentions";
-import { useLayer } from "../lib/layer-stack";
+import { hasOpenLayer, isOverlayLayer, useLayer } from "../lib/layer-stack";
 import {
   COMPOSER_MENTION_PICKER_ID,
   ComposerMentionChips,
   ComposerMentionPicker,
   mentionOptionId,
 } from "./composer-mention-picker";
+import {
+  CLOSED_COMPOSER_HISTORY,
+  composerHistoryFromMessages,
+  detachComposerHistory,
+  dismissComposerHistory,
+  openComposerHistory,
+  reconcileComposerHistory,
+  resolveComposerHistoryIndex,
+  selectComposerHistoryEntry,
+  stepComposerHistoryDown,
+  stepComposerHistoryUp,
+  type ComposerHistoryEntry,
+  type ComposerHistoryState,
+} from "../lib/composer-history";
+import {
+  COMPOSER_HISTORY_POPOVER_ID,
+  ComposerHistoryPopover,
+  ComposerHistoryPopoverPresence,
+  historyOptionId,
+} from "./composer-history-popover";
 import { isUsable } from "../lib/model-picker-data";
 import { openWorkspaceSettings } from "./workspace-settings-dialog";
 import { aidenLivePreferences } from "../shared/aiden-live-settings";
@@ -144,13 +177,17 @@ import { useDesignModeControls } from "../lib/design-mode";
 import { useExpiredCacheReturn } from "../lib/use-expired-cache-return";
 import {
   loadComposerDraft,
+  loadComposerDraftGrabbedElements,
+  loadComposerDraftGrabbedThumbnails,
   markComposerSubmission,
   mergeRestoredGuidance,
+  saveComposerDraftGrabbedElements,
   saveComposerDraftText,
   settleComposerSubmission,
   subscribeGuidanceRestore,
   subscribeRestoredUnsentMessage,
   subscribeStagedComposerText,
+  mergeStagedComposerText,
   takeComposerAttachmentSeed,
 } from "../lib/composer-draft-store";
 import {
@@ -235,7 +272,12 @@ interface ComposerProps {
     attachments: Attachment[],
     skillInvocation?: SkillInvocationV1,
     /** `goal`: set this chat's keep-going goal once the message is saved, before its answer starts. */
-    options?: { visualize?: boolean; btw?: boolean; goal?: string },
+    options?: {
+      visualize?: boolean;
+      btw?: boolean;
+      goal?: string;
+      grabbedElements?: GrabbedElementContextV1[];
+    },
   ) => Promise<void>;
   onQueue?: ComposerProps["onSend"];
   onSteer?: ComposerProps["onSend"];
@@ -308,7 +350,11 @@ interface ComposerProps {
    */
   contextHistoryPressure?: ChatContextPressureV1 | null;
   /** Draft text/attachment changes so ambient projections (context pressure) can refresh. */
-  onDraftChange?: (text: string, attachments: Attachment[]) => void;
+  onDraftChange?: (
+    text: string,
+    attachments: Attachment[],
+    grabbedElements?: GrabbedElementContextV1[],
+  ) => void;
   currentChatTitle?: string;
   latestAssistantResponse?: string;
   slashNavigationBlockedReason?: string;
@@ -361,6 +407,11 @@ interface ComposerProps {
   machinePicker?: React.ReactNode;
   /** The context bar for a chat whose project lives on another Mac. */
   remoteContext?: React.ReactNode;
+  /**
+   * Past user prompts paired with their replies (oldest → newest) for ↑ history.
+   * When omitted, derived from `sessionChat.messages`.
+   */
+  historyEntries?: readonly ComposerHistoryEntry[];
 }
 
 /** A skill catalog the composer offers after `$`, scoped to one chat or project. */
@@ -405,6 +456,24 @@ function approvalChoicePatch(choice: ApprovalChoice, chatOnly: boolean): Compose
 function skillSourceLabel(source: SkillSource): string {
   if (source === "builtin") return "Built-in";
   return source === "configured" ? "Configured" : source === "workspace" ? "Workspace" : "Global";
+}
+
+function mergeFailedSendGrabbedElements(
+  submitted: readonly GrabbedElementContextV1[],
+  current: readonly GrabbedElementContextV1[],
+): GrabbedElementContextV1[] {
+  if (submitted.length === 0) return [...current];
+  if (current.length === 0) return [...submitted];
+  const merged: GrabbedElementContextV1[] = [];
+  const seen = new Set<string>();
+  for (const element of [...submitted, ...current]) {
+    const key = grabbedElementDedupKey(element);
+    if (seen.has(key)) continue;
+    seen.add(key);
+    merged.push(element);
+    if (merged.length >= MAX_GRABBED_ELEMENTS_PER_MESSAGE) break;
+  }
+  return merged;
 }
 
 interface ComposerDraftState {
@@ -512,8 +581,11 @@ export function Composer({
   hostSkills,
   machinePicker,
   remoteContext,
+  historyEntries,
 }: ComposerProps) {
   const { platform } = useAppCapabilities();
+  const fallbackInputRef = React.useRef<HTMLTextAreaElement | null>(null);
+  const resolvedInputRef = inputRef ?? fallbackInputRef;
   const restoredText = React.useMemo(
     () => initialText || loadComposerDraft(chatId).text,
     [chatId, initialText],
@@ -542,64 +614,147 @@ export function Composer({
   const markSlashInteraction = React.useCallback(() => {
     slashInteractionRevisionRef.current += 1;
   }, []);
-  const setText = React.useCallback((value: React.SetStateAction<string>) => {
-    const current = draftRef.current;
-    const text = typeof value === "function" ? value(current.text) : value;
-    draftRef.current = {
-      text,
-      slashTracker: updateSlashSessionTracker(current.slashTracker, text),
-    };
-    slashInteractionRevisionRef.current += 1;
-    textRevisionRef.current += 1;
-    dispatchDraft({ type: "update", value: text });
-    saveComposerDraftText(chatId, text);
-  }, [chatId]);
+  const setText = React.useCallback(
+    (value: React.SetStateAction<string>, options?: { persist?: boolean }) => {
+      const current = draftRef.current;
+      const text = typeof value === "function" ? value(current.text) : value;
+      draftRef.current = {
+        text,
+        slashTracker: updateSlashSessionTracker(current.slashTracker, text),
+      };
+      slashInteractionRevisionRef.current += 1;
+      textRevisionRef.current += 1;
+      dispatchDraft({ type: "update", value: text });
+      if (options?.persist !== false) saveComposerDraftText(chatId, text);
+    },
+    [chatId],
+  );
+  const [historyState, setHistoryState] = React.useState<ComposerHistoryState>(
+    CLOSED_COMPOSER_HISTORY,
+  );
+  const historyStateRef = React.useRef<ComposerHistoryState>(CLOSED_COMPOSER_HISTORY);
+  const historyCaretRafRef = React.useRef<number | null>(null);
+  const cancelHistoryCaretRaf = React.useCallback(() => {
+    if (historyCaretRafRef.current !== null) {
+      cancelAnimationFrame(historyCaretRafRef.current);
+      historyCaretRafRef.current = null;
+    }
+  }, []);
+  React.useEffect(() => cancelHistoryCaretRaf, [cancelHistoryCaretRaf]);
+  const updateHistoryState = React.useCallback((next: ComposerHistoryState) => {
+    historyStateRef.current = next;
+    setHistoryState(next);
+  }, []);
+  const closeHistoryForExternalUpdate = React.useCallback((): string | null => {
+    if (!historyStateRef.current.open) return null;
+    cancelHistoryCaretRaf();
+    const restored = historyStateRef.current.savedDraft;
+    updateHistoryState(CLOSED_COMPOSER_HISTORY);
+    return restored;
+  }, [cancelHistoryCaretRaf, updateHistoryState]);
+  // The `@` whose picker Escape or a blur closed; typing on in that token keeps it closed.
+  const [mentionDismissedAt, setMentionDismissedAt] = React.useState<number | null>(null);
   React.useEffect(
     () =>
-      subscribeStagedComposerText(chatId, (staged, { notice }) => {
-        setText((current) => mergeRestoredGuidance(current, [staged]));
+      subscribeStagedComposerText(chatId, (staged, { notice, once }) => {
+        const base = closeHistoryForExternalUpdate();
+        setText((current) => mergeStagedComposerText(base ?? current, staged, once));
         const message = notice === undefined ? "A visual added a follow-up to your draft." : notice;
         if (message) toast.info(message);
       }),
-    [chatId, setText],
+    [chatId, closeHistoryForExternalUpdate, setText],
   );
   React.useEffect(
     () =>
       subscribeGuidanceRestore(chatId, (guidance) => {
-        setText((current) => mergeRestoredGuidance(current, guidance));
+        const base = closeHistoryForExternalUpdate();
+        setText((draft) => {
+          const current = base ?? draft;
+          return mergeRestoredGuidance(current, guidance);
+        });
         toast.info("The response ended before Aiden read your guidance. It's back in your draft.");
       }),
-    [chatId, setText],
+    [chatId, closeHistoryForExternalUpdate, setText],
   );
   const dismissSlash = React.useCallback(() => {
     slashInteractionRevisionRef.current += 1;
     dispatchDraft({ type: "dismiss-slash" });
   }, []);
+  const dismissActiveTriggersFor = React.useCallback(
+    (nextText: string, caret: number) => {
+      dismissSlash();
+      const trigger = findMentionTrigger(nextText, caret);
+      if (trigger) setMentionDismissedAt(trigger.start);
+    },
+    [dismissSlash],
+  );
   const [attachments, setAttachments] = React.useState<Attachment[]>([]);
+  const [grabbedElements, setGrabbedElements] = React.useState<GrabbedElementContextV1[]>(() =>
+    loadComposerDraftGrabbedElements(chatId),
+  );
   // `@` mentions picked into chips above the text; send writes them first, as `@path`.
   const [mentions, setMentions] = React.useState<ComposerMention[]>([]);
   const attachmentsRef = React.useRef<Attachment[]>([]);
+  const grabbedElementsRef = React.useRef<GrabbedElementContextV1[]>(grabbedElements);
+  const grabbedElementsRevisionRef = React.useRef(0);
   const updateAttachments = React.useCallback((value: React.SetStateAction<Attachment[]>) => {
     const next = typeof value === "function" ? value(attachmentsRef.current) : value;
     attachmentsRef.current = next;
     setAttachments(next);
   }, []);
+  const updateGrabbedElements = React.useCallback(
+    (
+      value: React.SetStateAction<GrabbedElementContextV1[]>,
+      thumbnails?: readonly Attachment[],
+    ) => {
+      const next = typeof value === "function" ? value(grabbedElementsRef.current) : value;
+      grabbedElementsRef.current = next;
+      setGrabbedElements(next);
+      saveComposerDraftGrabbedElements(chatId, next, thumbnails ?? attachmentsRef.current);
+    },
+    [chatId],
+  );
+  const visibleAttachments = React.useMemo(
+    () => withoutGrabbedElementThumbnails(attachments),
+    [attachments],
+  );
   React.useEffect(() => {
-    const seed = takeComposerAttachmentSeed(chatId);
-    if (seed) updateAttachments(seed);
+    const seed = takeComposerAttachmentSeed(chatId) ?? [];
+    const savedThumbnails = loadComposerDraftGrabbedThumbnails(chatId);
+    const seedIds = new Set(seed.map((attachment) => attachment.id));
+    const merged = [
+      ...seed,
+      ...savedThumbnails.filter((attachment) => !seedIds.has(attachment.id)),
+    ];
+    if (merged.length > 0) {
+      updateAttachments(merged);
+      if (grabbedElementsRef.current.length > 0) {
+        saveComposerDraftGrabbedElements(chatId, grabbedElementsRef.current, merged);
+      }
+    }
   }, [chatId, updateAttachments]);
   // An unsent message handed back after this composer opened (a cancelled
-  // worktree send the user came back to): its text and its attachments.
+  // worktree send the user came back to): its text, attachments, and grabbed elements.
   React.useEffect(
     () =>
       subscribeRestoredUnsentMessage(chatId, (restored) => {
-        setText((current) => failedSendDraft(restored.text, current));
+        const base = closeHistoryForExternalUpdate();
+        setText((current) => failedSendDraft(restored.text, base ?? current));
+        let nextAttachments = attachmentsRef.current;
         if (restored.attachments.length > 0) {
           attachmentRevisionRef.current += 1;
-          updateAttachments((current) => failedSendAttachments(restored.attachments, current));
+          nextAttachments = failedSendAttachments(restored.attachments, attachmentsRef.current);
+          updateAttachments(nextAttachments);
+        }
+        if (restored.grabbedElements && restored.grabbedElements.length > 0) {
+          grabbedElementsRevisionRef.current += 1;
+          updateGrabbedElements(
+            (current) => mergeFailedSendGrabbedElements(restored.grabbedElements!, current),
+            nextAttachments,
+          );
         }
       }),
-    [chatId, setText, updateAttachments],
+    [chatId, closeHistoryForExternalUpdate, setText, updateAttachments, updateGrabbedElements],
   );
   // Ambient projections (context pressure) follow the draft on a quiet cadence.
   const onDraftChangeRef = React.useRef(onDraftChange);
@@ -607,20 +762,24 @@ export function Composer({
     onDraftChangeRef.current = onDraftChange;
   }, [onDraftChange]);
   React.useEffect(() => {
-    onDraftChangeRef.current?.(text, attachments);
-  }, [text, attachments]);
+    onDraftChangeRef.current?.(text, attachments, grabbedElements);
+  }, [text, attachments, grabbedElements]);
   const [skillSelection, dispatchSkillSelection] = React.useReducer(selectedSkillComposerReducer, {
     selected: undefined,
     revision: 0,
   });
   const selectedSkill = skillSelection.selected;
-  const busyMode = effectiveBusySendMode(busyChoice ?? busyDefault, Boolean(onSteer) && attachments.length === 0 && !selectedSkill);
+  const busyMode = effectiveBusySendMode(
+    busyChoice ?? busyDefault,
+    Boolean(onSteer) && attachments.length === 0 && grabbedElements.length === 0 && !selectedSkill,
+  );
   // A blocked send explains itself beside the composer, not in a toast, and the
-  // hint lasts only while the draft, attachments, skill, and send mode are unchanged.
+  // hint lasts only while the draft, attachments, grabbed elements, skill, and send mode are unchanged.
   const [blockedSend, setBlockedSend] = React.useState<{
     reason: string;
     text: string;
     attachments: Attachment[];
+    grabbedElements: GrabbedElementContextV1[];
     skill: typeof selectedSkill;
     busyMode: typeof busyMode;
     generating: boolean;
@@ -641,7 +800,8 @@ export function Composer({
       const comment = annotation.comment.trim();
       const fallback = result.attachments.some((item) => item.kind === "text") ? "" : browserAnnotationContext(annotation);
       const addition = [comment || "Use this browser annotation as context.", fallback].filter(Boolean).join("\n\n");
-      setText((current) => [current.trimEnd(), addition].filter(Boolean).join("\n\n"));
+      const base = closeHistoryForExternalUpdate();
+      setText((current) => [(base ?? current).trimEnd(), addition].filter(Boolean).join("\n\n"));
       if (result.attachments.length) {
         attachmentRevisionRef.current += 1;
         updateAttachments((current) => [...current, ...result.attachments]);
@@ -660,13 +820,56 @@ export function Composer({
       inputRef?.current?.focus({ preventScroll: true });
       return true;
     };
+    const receiveGrabbedElement = (capture: GrabbedElementCapture) => {
+      if (firstSendPendingRef.current || sendPendingRef.current || !available()) return false;
+      const result = materializeGrabbedElementDraft(
+        capture,
+        grabbedElementsRef.current,
+        attachmentsRef.current,
+      );
+      if (!result.accepted) {
+        const message =
+          result.reason === "limit"
+            ? `Up to ${MAX_GRABBED_ELEMENTS_PER_MESSAGE} browser elements per message.`
+            : "This message has reached the browser element data limit.";
+        setAttachmentStatus(message);
+        toast.info(message);
+        return true;
+      }
+      grabbedElementsRevisionRef.current += 1;
+      attachmentRevisionRef.current += 1;
+      updateAttachments(result.attachments);
+      updateGrabbedElements(result.elements, result.attachments);
+      setAttachmentStatus(
+        result.replaced
+          ? `Updated ${result.element.label} in this message.`
+          : result.thumbnailSkipped
+            ? `Added ${result.element.label} without a screenshot because of attachment limits.`
+            : `Added ${result.element.label} to this message.`,
+      );
+      if (!capture.keepActive) {
+        inputRef?.current?.focus({ preventScroll: true });
+      }
+      return true;
+    };
     const unregister = browserAnnotationDelivery.register({ workspaceId: workspace.id, chatId, available, receive });
+    const unregisterGrabbedElement = browserElementGrabDelivery.register({
+      workspaceId: workspace.id,
+      chatId,
+      available,
+      receive: receiveGrabbedElement,
+    });
     const unregisterTerminalContext = terminalContextDelivery.register({ workspaceId: workspace.id, chatId, available, receive: receiveTerminalContext });
     const unsubscribe = browserApi.onEvent((event) => {
       if (event.type === "annotation" && event.workspaceId === workspace.id) receive(event.annotation);
     });
-    return () => { unregister(); unregisterTerminalContext(); unsubscribe(); };
-  }, [workspace?.id, chatId, inputRef, visionSupported, setText, updateAttachments]);
+    return () => {
+      unregister();
+      unregisterGrabbedElement();
+      unregisterTerminalContext();
+      unsubscribe();
+    };
+  }, [workspace?.id, chatId, inputRef, visionSupported, closeHistoryForExternalUpdate, setText, updateAttachments, updateGrabbedElements]);
   const attachmentOperationRef = React.useRef(new ComposerAttachmentOperation());
   const attachmentVisionRef = React.useRef(visionSupported);
   React.useLayoutEffect(() => {
@@ -844,7 +1047,11 @@ export function Composer({
   // While live words show, the draft on screen is not the draft that would be
   // sent, so sending waits for the final text.
   const canSend =
-    (text.trim().length > 0 || attachments.length > 0 || mentions.length > 0 || commentTray !== null) &&
+    (text.trim().length > 0 ||
+      attachments.length > 0 ||
+      grabbedElements.length > 0 ||
+      mentions.length > 0 ||
+      commentTray !== null) &&
     submissionAllowed &&
     !composing &&
     !dictationPreviewing &&
@@ -860,6 +1067,7 @@ export function Composer({
       draftHasContent:
         text.trim().length > 0 ||
         attachments.length > 0 ||
+        grabbedElements.length > 0 ||
         attaching ||
         commentTray !== null ||
         Boolean(selectedSkill) ||
@@ -885,13 +1093,117 @@ export function Composer({
     return forkTurnEligibility(sessionChat.messages, { editInFork: !sessionChat.botId });
   }, [sessionChat]);
   const completedForkTurns = forkEligibility.turns;
-  // The latest prompt, when it has a finished reply and can be edited in a fork.
-  const lastPromptForkId = React.useMemo(() => {
-    if (!onForkChat || !sessionChat) return null;
-    const lastPrompt = [...sessionChat.messages].reverse().find((message) => message.role === "user");
-    const lastTurn = completedForkTurns[completedForkTurns.length - 1];
-    return lastPrompt && lastTurn?.userMessageId === lastPrompt.id ? lastPrompt.id : null;
+  const forkableUserIds = React.useMemo(() => {
+    if (!onForkChat || !sessionChat) return undefined;
+    const ids = new Set<string>();
+    for (const turn of completedForkTurns) {
+      if (turn.userMessageId) ids.add(turn.userMessageId);
+    }
+    return ids;
   }, [completedForkTurns, onForkChat, sessionChat]);
+  const effectiveHistoryEntries = React.useMemo(
+    () =>
+      historyEntries ??
+      (sessionChat ? composerHistoryFromMessages(sessionChat.messages, forkableUserIds) : []),
+    [forkableUserIds, historyEntries, sessionChat],
+  );
+  const reconciledHistory = React.useMemo(
+    () => reconcileComposerHistory(effectiveHistoryEntries, historyState),
+    [effectiveHistoryEntries, historyState],
+  );
+  React.useLayoutEffect(() => {
+    historyStateRef.current = reconciledHistory;
+  }, [reconciledHistory]);
+  const historyOpen = reconciledHistory.open;
+  const activeHistoryIndex = resolveComposerHistoryIndex(
+    effectiveHistoryEntries,
+    reconciledHistory,
+  );
+  const activeHistoryEntry =
+    activeHistoryIndex >= 0 ? effectiveHistoryEntries[activeHistoryIndex] : undefined;
+  const canForkActiveHistory = Boolean(
+    onForkChat &&
+      !isGenerating &&
+      !sending &&
+      !sessionCommandBusy &&
+      !attaching &&
+      !forkEligibility.cloneBlocked &&
+      !slashSessionBlockedReason &&
+      activeHistoryEntry?.forkMessageId,
+  );
+  const applyHistoryText = React.useCallback(
+    (nextText: string, options?: { persist?: boolean; focus?: boolean }) => {
+      cancelHistoryCaretRaf();
+      setText(nextText, { persist: options?.persist ?? false });
+      const caret = nextText.length;
+      setSelection({ start: caret, end: caret });
+      historyCaretRafRef.current = requestAnimationFrame(() => {
+        historyCaretRafRef.current = null;
+        const textarea = resolvedInputRef.current;
+        if (!textarea) return;
+        if (options?.focus) textarea.focus({ preventScroll: true });
+        if (document.activeElement !== textarea) return;
+        textarea.setSelectionRange(caret, caret);
+      });
+    },
+    [cancelHistoryCaretRaf, resolvedInputRef, setText],
+  );
+  const detachHistory = React.useCallback(
+    (caret: number, persistText = true) => {
+      cancelHistoryCaretRaf();
+      updateHistoryState(detachComposerHistory());
+      const currentText = draftRef.current.text;
+      if (persistText) saveComposerDraftText(chatId, currentText);
+      dismissActiveTriggersFor(currentText, caret);
+    },
+    [cancelHistoryCaretRaf, chatId, dismissActiveTriggersFor, updateHistoryState],
+  );
+  React.useEffect(() => {
+    if (!historyState.open) return;
+    if (!reconciledHistory.open) {
+      const dismissed = dismissComposerHistory(historyState);
+      updateHistoryState(dismissed.state);
+      applyHistoryText(dismissed.text, { persist: false });
+      return;
+    }
+    if (reconciledHistory.activeId !== historyState.activeId) {
+      updateHistoryState(reconciledHistory);
+      const next = effectiveHistoryEntries.find(
+        (entry) => entry.id === reconciledHistory.activeId,
+      );
+      if (next) applyHistoryText(next.prompt, { persist: false });
+    }
+  }, [applyHistoryText, effectiveHistoryEntries, historyState, reconciledHistory, updateHistoryState]);
+  const historyBlocked =
+    slashPaletteBlocked ||
+    composerInputLocked ||
+    firstSendPending ||
+    dictationPreviewing ||
+    voice.recording ||
+    voice.transcribing ||
+    renameDialogOpen ||
+    forkDialogOpen ||
+    sessionDialogOpen ||
+    logoutChooserOpen ||
+    logoutConfirmOpen ||
+    permissionMenuOpen;
+  React.useEffect(() => {
+    if (historyState.open && historyBlocked) {
+      const dismissed = dismissComposerHistory(reconciledHistory);
+      updateHistoryState(dismissed.state);
+      applyHistoryText(dismissed.text, { persist: false });
+    }
+  }, [applyHistoryText, historyBlocked, historyState.open, reconciledHistory, updateHistoryState]);
+  useLayer(historyOpen, "popover", {
+    name: "composer-history",
+    onEscape: (event) => {
+      if (!reconciledHistory.open) return;
+      event.preventDefault();
+      const dismissed = dismissComposerHistory(reconciledHistory);
+      updateHistoryState(dismissed.state);
+      applyHistoryText(dismissed.text, { persist: false });
+    },
+  });
   const forkSummaryTurnIds = React.useMemo(
     () => (sessionChat && onForkWithSummary ? forkSummaryRows(sessionChat.messages) : null),
     [onForkWithSummary, sessionChat],
@@ -903,6 +1215,7 @@ export function Composer({
   const slashSession = React.useMemo(() => {
     const session =
       !skillsOffered ||
+      historyOpen ||
       slashPaletteBlocked ||
       renameDialogOpen ||
       forkDialogOpen ||
@@ -925,6 +1238,7 @@ export function Composer({
       surfaces.slashCommands,
       composing,
       forkDialogOpen,
+      historyOpen,
       logoutChooserOpen,
       logoutConfirmOpen,
       permissionMenuOpen,
@@ -1014,14 +1328,19 @@ export function Composer({
         : undefined,
       payloadAfterToken: slashSession
         ? Boolean(
-            consumeSlashToken(text, slashSession).trim() || attachments.length > 0 || selectedSkill,
+            consumeSlashToken(text, slashSession).trim() ||
+              attachments.length > 0 ||
+              grabbedElements.length > 0 ||
+              selectedSkill,
           )
-        : Boolean(text.trim() || attachments.length > 0 || selectedSkill),
-      hasAttachmentsOrSelectedSkill: attachments.length > 0 || Boolean(selectedSkill),
+        : Boolean(text.trim() || attachments.length > 0 || grabbedElements.length > 0 || selectedSkill),
+      hasAttachmentsOrSelectedSkill:
+        attachments.length > 0 || grabbedElements.length > 0 || Boolean(selectedSkill),
       designModeAvailable: designCommandOffered,
     }),
     [
       attachments.length,
+      grabbedElements.length,
       designCommandOffered,
       attaching,
       commandSystem.canExecute,
@@ -1091,13 +1410,12 @@ export function Composer({
   React.useEffect(() => {
     setMentions((current) => (current.length ? [] : current));
   }, [mentionWorkspaceId]);
-  // The `@` whose picker Escape or a blur closed; typing on in that token keeps it closed.
-  const [mentionDismissedAt, setMentionDismissedAt] = React.useState<number | null>(null);
   const [activeMentionIndex, setActiveMentionIndex] = React.useState(0);
   const [mentionAnnouncement, setMentionAnnouncement] = React.useState("");
   const mentionTrigger = React.useMemo(() => {
     if (
       !mentionWorkspaceId ||
+      historyOpen ||
       slashSession ||
       slashPaletteBlocked ||
       composing ||
@@ -1114,6 +1432,7 @@ export function Composer({
     composerInputLocked,
     composing,
     dictationPreviewing,
+    historyOpen,
     mentionDismissedAt,
     mentionWorkspaceId,
     selection.end,
@@ -1303,11 +1622,12 @@ export function Composer({
   settleExpiredCacheRef.current = expiredCacheReturn.settle;
   const typedRef = React.useRef(false);
   React.useEffect(() => {
-    // Starting to type is a return too, unless it is a slash command.
+    // Starting to type is a return too, unless it is a slash command or transient history browsing.
+    if (historyOpen) return;
     const typed = text.trim().length > 0;
     if (typed && !typedRef.current && !text.trimStart().startsWith("/")) expiredCacheReturn.markReturned();
     typedRef.current = typed;
-  }, [expiredCacheReturn.markReturned, text]);
+  }, [expiredCacheReturn.markReturned, historyOpen, text]);
 
   const createWorktreeFromSlash = React.useCallback(
     async (branchName?: string) => {
@@ -1386,6 +1706,7 @@ export function Composer({
       draftText: string;
       sendText: string;
       attachments: Attachment[];
+      grabbedElements?: GrabbedElementContextV1[];
       selectedSkill?: SelectedSkillInvocation;
       skillRevision: number;
       visualize?: boolean;
@@ -1417,10 +1738,14 @@ export function Composer({
       setText("");
       const submittedMentions = payload.mentions ?? [];
       if (submittedMentions.length) setMentions([]);
+      const submittedGrabbedElements = payload.grabbedElements ?? [];
       const optimisticTextRevision = textRevisionRef.current;
       attachmentRevisionRef.current += 1;
       const optimisticAttachmentRevision = attachmentRevisionRef.current;
       updateAttachments([]);
+      grabbedElementsRevisionRef.current += 1;
+      const optimisticGrabbedRevision = grabbedElementsRevisionRef.current;
+      updateGrabbedElements([], []);
       const optimisticSkillRevision = payload.skillRevision + 1;
       dispatchSkillSelection({
         type: "send-started",
@@ -1441,13 +1766,22 @@ export function Composer({
               ? onQueue
               : onSend;
         }
+        const sendOptions =
+          payload.visualize || payload.btw || payload.goal || submittedGrabbedElements.length > 0
+            ? {
+                ...(payload.visualize ? { visualize: payload.visualize } : {}),
+                ...(payload.btw ? { btw: payload.btw } : {}),
+                ...(payload.goal ? { goal: payload.goal } : {}),
+                ...(submittedGrabbedElements.length > 0
+                  ? { grabbedElements: submittedGrabbedElements }
+                  : {}),
+              }
+            : undefined;
         await submit(
           payload.sendText,
           payload.attachments,
           payload.selectedSkill?.invocation,
-          payload.visualize || payload.btw || payload.goal
-            ? { visualize: payload.visualize, btw: payload.btw, ...(payload.goal ? { goal: payload.goal } : {}) }
-            : undefined,
+          sendOptions,
         );
         if (payload.mode === "queue") {
           toast.info(
@@ -1477,12 +1811,28 @@ export function Composer({
           payload.attachments,
           currentAttachments,
         );
+        let finalAttachments = currentAttachments;
         if (
           attachmentRevisionRef.current === optimisticAttachmentRevision ||
           restoredAttachments.length !== currentAttachments.length
         ) {
           attachmentRevisionRef.current += 1;
+          finalAttachments = restoredAttachments;
           updateAttachments(restoredAttachments);
+        }
+        if (submittedGrabbedElements.length > 0) {
+          const currentGrabbed = grabbedElementsRef.current;
+          const restoredGrabbed = mergeFailedSendGrabbedElements(
+            submittedGrabbedElements,
+            currentGrabbed,
+          );
+          if (
+            grabbedElementsRevisionRef.current === optimisticGrabbedRevision ||
+            restoredGrabbed.length !== currentGrabbed.length
+          ) {
+            grabbedElementsRevisionRef.current += 1;
+            updateGrabbedElements(restoredGrabbed, finalAttachments);
+          }
         }
         // Chips, not `@path` text: as text the `@` would reopen the picker.
         if (submittedMentions.length) {
@@ -1502,7 +1852,18 @@ export function Composer({
         setSending(false);
       }
     },
-    [chatId, onSend, onQueue, onSteer, isGenerating, hasQueuedMessages, freezeWhileSending, setText, updateAttachments],
+    [
+      chatId,
+      onSend,
+      onQueue,
+      onSteer,
+      isGenerating,
+      hasQueuedMessages,
+      freezeWhileSending,
+      setText,
+      updateAttachments,
+      updateGrabbedElements,
+    ],
   );
 
   const copyLatestResponse = React.useCallback(async () => {
@@ -1697,8 +2058,8 @@ export function Composer({
             toast.info(missingPromptMessage);
             return false;
           }
-          if (instruction === "btw" && (attachments.length > 0 || selectedSkill)) {
-            toast.info("Remove attachments and the selected skill before asking a side question.");
+          if (instruction === "btw" && (attachments.length > 0 || grabbedElements.length > 0 || selectedSkill)) {
+            toast.info("Remove attachments, browser elements, and the selected skill before asking a side question.");
             return false;
           }
           if (selectedSkillState && selectedSkillState.state !== "valid") {
@@ -1706,12 +2067,14 @@ export function Composer({
             return false;
           }
           const submittedAttachments = attachments;
+          const submittedGrabbedElements = grabbedElements;
           const submittedSkillRevision = skillSelection.revision;
           if (instruction === "visualize") {
             return sendComposerPayload({
               draftText: text,
               sendText: nextPrompt,
               attachments: submittedAttachments,
+              grabbedElements: submittedGrabbedElements,
               selectedSkill,
               skillRevision: submittedSkillRevision,
               visualize: true,
@@ -1721,6 +2084,7 @@ export function Composer({
             draftText: text,
             sendText: nextPrompt,
             attachments: submittedAttachments,
+            grabbedElements: submittedGrabbedElements,
             selectedSkill,
             skillRevision: submittedSkillRevision,
             btw: true,
@@ -1828,6 +2192,7 @@ export function Composer({
       onOpenSettings,
       sendComposerPayload,
       attachments,
+      grabbedElements,
       selectedSkill,
       selectedSkillState,
       skillSelection.revision,
@@ -2142,6 +2507,9 @@ export function Composer({
 
   const handlePaste = (event: React.ClipboardEvent<HTMLTextAreaElement>) => {
     if (firstSendPendingRef.current) { event.preventDefault(); return; }
+    if (historyOpen) {
+      detachHistory(event.currentTarget.selectionStart ?? text.length);
+    }
     // Without attachments, a paste is plain text only.
     if (!surfaces.attachments) return;
     const images = Array.from(event.clipboardData.items).flatMap((item) => {
@@ -2175,10 +2543,25 @@ export function Composer({
     updateAttachments((prev) => prev.filter((a) => a.id !== id));
   };
 
+  const removeGrabbedElement = (id: string) => {
+    if (firstSendPendingRef.current) return;
+    const removed = grabbedElementsRef.current.find((element) => element.id === id);
+    if (!removed) return;
+    const thumbId = removed.thumbnailAttachmentId ?? grabbedElementThumbnailId(removed.id);
+    attachmentRevisionRef.current += 1;
+    grabbedElementsRevisionRef.current += 1;
+    const nextAttachments = attachmentsRef.current.filter((attachment) => attachment.id !== thumbId);
+    const nextElements = grabbedElementsRef.current.filter((element) => element.id !== id);
+    updateAttachments(nextAttachments);
+    updateGrabbedElements(nextElements, nextAttachments);
+    setAttachmentStatus(`Removed ${removed.label}.`);
+  };
+
   const sendBlockedReason =
     blockedSend &&
     blockedSend.text === text &&
     blockedSend.attachments === attachments &&
+    blockedSend.grabbedElements === grabbedElements &&
     blockedSend.skill === selectedSkill &&
     blockedSend.busyMode === busyMode &&
     blockedSend.generating === isGenerating &&
@@ -2190,6 +2573,7 @@ export function Composer({
       reason,
       text,
       attachments,
+      grabbedElements,
       skill: selectedSkill,
       busyMode,
       generating: isGenerating,
@@ -2197,6 +2581,10 @@ export function Composer({
     });
 
   const submit = async (busyModeOverride?: BusySendMode) => {
+    if (historyOpen) {
+      cancelHistoryCaretRaf();
+      updateHistoryState(detachComposerHistory());
+    }
     if (sendPendingRef.current || commentSendPendingRef.current || composing) return;
     if (dictationPreviewing) {
       blockSend("Wait for dictation to finish before sending.");
@@ -2215,7 +2603,12 @@ export function Composer({
       blockSend("Message text exceeds the 1 MB limit.");
       return;
     }
-    if ((!trimmed && attachments.length === 0 && !commentTray) || !submissionAllowed) return;
+    if (
+      (!trimmed && attachments.length === 0 && grabbedElements.length === 0 && !commentTray) ||
+      !submissionAllowed
+    ) {
+      return;
+    }
     // Surfaces without Aiden's slash commands (remote hosts) send the text as written.
     const submittedCommand = surfaces.slashCommands ? parseSubmittedSlashCommand(text, slashCommands) : null;
     if (submittedCommand) {
@@ -2240,8 +2633,8 @@ export function Composer({
       : hasQueuedMessages || queueDuringCompaction || queueForForkSummary
         ? "queue"
         : undefined;
-    if (mode === "steer" && (attachments.length > 0 || selectedSkill)) {
-      blockSend("Steer accepts text only. Remove attachments and the selected skill first.");
+    if (mode === "steer" && (attachments.length > 0 || grabbedElements.length > 0 || selectedSkill)) {
+      blockSend("Steer accepts text only. Remove attachments, browser elements, and the selected skill first.");
       return;
     }
     if (selectedSkillState && selectedSkillState.state !== "valid") {
@@ -2250,7 +2643,7 @@ export function Composer({
     }
     if (
       visionSupported === false &&
-      attachments.some((attachment) => attachment.kind === "image")
+      visibleAttachments.some((attachment) => attachment.kind === "image")
     ) {
       blockSend("Switch to a vision-capable model before sending these images.");
       return;
@@ -2278,7 +2671,7 @@ export function Composer({
             ? "Please make the change in my design comment."
             : "Please make the changes in my design comments.";
       }
-    } else if (!trimmed && attachments.length === 0) {
+    } else if (!trimmed && attachments.length === 0 && grabbedElements.length === 0) {
       return;
     }
     // Marked sent and saved before the message goes, so Aiden's turn finds them sent.
@@ -2300,6 +2693,7 @@ export function Composer({
         draftText: text,
         sendText,
         attachments: sendAttachments,
+        grabbedElements,
         selectedSkill,
         skillRevision: skillSelection.revision,
         mode,
@@ -2319,18 +2713,22 @@ export function Composer({
 
   const handleKeyDown = (event: React.KeyboardEvent<HTMLTextAreaElement>) => {
     const plainKey = !event.altKey && !event.metaKey && !event.ctrlKey && !event.shiftKey;
-    // Backspace at the very start of the text takes the last chip, whole.
+    // Backspace at the very start of the text takes the last chip, whole (mentions first, then grabbed elements).
     if (
       event.key === "Backspace" &&
       plainKey &&
-      mentions.length > 0 &&
+      (mentions.length > 0 || grabbedElements.length > 0) &&
       !isComposingKey(event) &&
       !event.currentTarget.readOnly &&
       event.currentTarget.selectionStart === 0 &&
       event.currentTarget.selectionEnd === 0
     ) {
       event.preventDefault();
-      removeMention(mentions[mentions.length - 1]!.path);
+      if (mentions.length > 0) {
+        removeMention(mentions[mentions.length - 1]!.path);
+      } else {
+        removeGrabbedElement(grabbedElements[grabbedElements.length - 1]!.id);
+      }
       return;
     }
     if (mentionTrigger && !isComposingKey(event)) {
@@ -2416,27 +2814,94 @@ export function Composer({
         }
       }
     }
-    // ↑ in an empty message box brings the last prompt back in a fork, to fix and send again.
+    // Active composer history: ↑/↓ browse & live-fill, ↩ commits to the box,
+    // ⌥↩ edits the highlighted turn in a fork, caret-movement keys detach for editing.
+    if (historyOpen && !isComposingKey(event)) {
+      if (event.key === "ArrowUp" && plainKey) {
+        event.preventDefault();
+        const stepped = stepComposerHistoryUp(effectiveHistoryEntries, reconciledHistory);
+        if (stepped) {
+          updateHistoryState(stepped.state);
+          applyHistoryText(stepped.text, { persist: false });
+        }
+        return;
+      }
+      if (event.key === "ArrowDown" && plainKey) {
+        event.preventDefault();
+        const stepped = stepComposerHistoryDown(effectiveHistoryEntries, reconciledHistory);
+        if (stepped) {
+          updateHistoryState(stepped.state);
+          applyHistoryText(stepped.text, { persist: false });
+        }
+        return;
+      }
+      if (event.key === "Enter" && plainKey) {
+        event.preventDefault();
+        event.stopPropagation();
+        const committedText = activeHistoryEntry ? activeHistoryEntry.prompt : text;
+        cancelHistoryCaretRaf();
+        updateHistoryState(detachComposerHistory());
+        if (committedText !== text) {
+          applyHistoryText(committedText, { persist: true });
+        } else {
+          saveComposerDraftText(chatId, committedText);
+        }
+        dismissActiveTriggersFor(committedText, committedText.length);
+        return;
+      }
+      if (
+        event.key === "Enter" &&
+        event.altKey &&
+        !event.metaKey &&
+        !event.ctrlKey &&
+        !event.shiftKey
+      ) {
+        event.preventDefault();
+        event.stopPropagation();
+        if (canForkActiveHistory && activeHistoryEntry?.forkMessageId) {
+          const dismissed = dismissComposerHistory(reconciledHistory);
+          updateHistoryState(dismissed.state);
+          applyHistoryText(dismissed.text, { persist: false });
+          void forkFromTurn(activeHistoryEntry.forkMessageId, "before");
+        }
+        return;
+      }
+      if (
+        event.key === "ArrowLeft" ||
+        event.key === "ArrowRight" ||
+        event.key === "Home" ||
+        event.key === "End" ||
+        event.key === "PageUp" ||
+        event.key === "PageDown" ||
+        ((event.key === "ArrowUp" || event.key === "ArrowDown") && !plainKey)
+      ) {
+        detachHistory(event.currentTarget.selectionStart ?? text.length);
+      }
+    }
+    // ↑ in an empty message box opens sent-message history and shows its paired reply.
     if (
+      !historyOpen &&
       event.key === "ArrowUp" &&
-      !event.altKey &&
-      !event.metaKey &&
-      !event.ctrlKey &&
-      !event.shiftKey &&
+      plainKey &&
       !event.repeat &&
-      !event.nativeEvent.isComposing &&
+      !isComposingKey(event) &&
+      !event.currentTarget.readOnly &&
+      !historyBlocked &&
+      !hasOpenLayer(isOverlayLayer) &&
       text === "" &&
       attachments.length === 0 &&
+      grabbedElements.length === 0 &&
       mentions.length === 0 &&
       !selectedSkill &&
-      !isGenerating &&
-      // Capture and its final decode own words that have not reached `text` yet.
-      !voice.recording &&
-      !voice.transcribing &&
-      lastPromptForkId
+      commentTray === null &&
+      effectiveHistoryEntries.length > 0
     ) {
       event.preventDefault();
-      void forkFromTurn(lastPromptForkId, "before");
+      const opened = openComposerHistory(effectiveHistoryEntries, text);
+      if (opened) {
+        updateHistoryState(opened.state);
+        applyHistoryText(opened.text, { persist: false });
+      }
       return;
     }
     if (
@@ -2445,8 +2910,13 @@ export function Composer({
         defaultPrevented: event.defaultPrevented,
         isComposing: event.nativeEvent.isComposing,
         repeat: event.repeat,
-        canStop: isGenerating && canStopGeneration,
-        draftEmpty: !text.trim() && attachments.length === 0 && mentions.length === 0 && !selectedSkill,
+        canStop: isGenerating && canStopGeneration && !historyOpen,
+        draftEmpty:
+          !text.trim() &&
+          attachments.length === 0 &&
+          grabbedElements.length === 0 &&
+          mentions.length === 0 &&
+          !selectedSkill,
       })
     ) {
       event.preventDefault();
@@ -2588,6 +3058,27 @@ export function Composer({
               onPick={pickMention}
             />
           ) : null}
+          <ComposerHistoryPopoverPresence
+            present={historyOpen}
+            immediate={historyBlocked}
+          >
+            {historyOpen ? (
+              <ComposerHistoryPopover
+                entries={effectiveHistoryEntries}
+                activeIndex={activeHistoryIndex}
+                canForkActive={canForkActiveHistory}
+                useShortcutLabel={prettyAccelerator("Return")}
+                forkShortcutLabel={prettyAccelerator("Alt+Return")}
+                onSelect={(entry) => {
+                  const picked = selectComposerHistoryEntry(effectiveHistoryEntries, entry.id);
+                  if (!picked) return;
+                  updateHistoryState(picked.state);
+                  applyHistoryText(picked.text, { persist: true, focus: true });
+                  dismissActiveTriggersFor(picked.text, picked.text.length);
+                }}
+              />
+            ) : null}
+          </ComposerHistoryPopoverPresence>
           {queuedMessages}
           {commentTray ? (
             <DesignCommentTray tray={commentTray} disabled={sending || !submissionAllowed} onSend={() => void submit()} />
@@ -2803,9 +3294,20 @@ export function Composer({
             <span className="sr-only" role="status" aria-live="polite">
               {mentionAnnouncement}
             </span>
-            {attachments.length > 0 ? (
+            <GrabbedElementChips
+              elements={grabbedElements}
+              attachments={attachments}
+              mode="composer"
+              disabled={composerInputLocked}
+              textOnlyModel={visionSupported === false}
+              onRemove={(id) => {
+                removeGrabbedElement(id);
+                requestAnimationFrame(() => inputRef?.current?.focus({ preventScroll: true }));
+              }}
+            />
+            {visibleAttachments.length > 0 ? (
               <div className="mb-1.5 flex flex-wrap gap-2 px-1.5">
-                {attachments.map((a) => (
+                {visibleAttachments.map((a) => (
                   <div
                     key={a.id}
                     className="group relative flex min-h-10 items-center gap-1.5 rounded-control bg-control pl-1.5 pr-0"
@@ -2834,24 +3336,43 @@ export function Composer({
               </div>
             ) : null}
             <Textarea
-              ref={inputRef}
+              ref={resolvedInputRef}
               // Approval keys stay off while this holds a draft, wherever focus is; the
               // value marks staged attachments or a skill that the text alone doesn't show.
-              data-message-draft={attachments.length > 0 || mentions.length > 0 || selectedSkill ? "attached" : ""}
+              data-message-draft={
+                attachments.length > 0 ||
+                grabbedElements.length > 0 ||
+                mentions.length > 0 ||
+                selectedSkill
+                  ? "attached"
+                  : ""
+              }
               data-focus-region-entry
               value={composerValue}
               readOnly={composerInputLocked || firstSendPending || dictationPreviewing}
               aria-busy={composerInputLocked || firstSendPending || dictationPreviewing || undefined}
               onChange={(event) => {
                 if (firstSendPendingRef.current || dictationPreviewing) return;
+                const detachingHistory = historyOpen;
+                if (detachingHistory) {
+                  cancelHistoryCaretRaf();
+                  updateHistoryState(detachComposerHistory());
+                }
                 setText(event.target.value);
                 updateSelection({
                   start: event.target.selectionStart,
                   end: event.target.selectionEnd,
                 });
+                // A recalled `/command`, `$skill` or `@mention` stays plain text on the first edit.
+                if (detachingHistory) dismissActiveTriggersFor(event.target.value, event.target.selectionStart);
                 // Until live words appear, dictation follows the caret.
                 if (dictationAnchorRef.current) {
                   setDictationAnchor({ start: event.target.selectionStart, end: event.target.selectionEnd });
+                }
+              }}
+              onPointerDown={(event) => {
+                if (historyOpen) {
+                  detachHistory(event.currentTarget.selectionStart ?? text.length);
                 }
               }}
               onKeyDown={handleKeyDown}
@@ -2867,8 +3388,11 @@ export function Composer({
                   setDictationAnchor({ start: event.currentTarget.selectionStart, end: event.currentTarget.selectionEnd });
                 }
               }}
-              onCompositionStart={() => {
+              onCompositionStart={(event) => {
                 markSlashInteraction();
+                if (historyOpen) {
+                  detachHistory(event.currentTarget.selectionStart ?? text.length);
+                }
                 setComposing(true);
               }}
               onCompositionEnd={(event) => {
@@ -2879,29 +3403,40 @@ export function Composer({
                   end: event.currentTarget.selectionEnd,
                 });
               }}
-              onBlur={() => {
+              onBlur={(event) => {
                 if (slashSession && !sessionCommandBusyRef.current) dismissSlash();
                 if (mentionTrigger) setMentionDismissedAt(mentionTrigger.start);
+                if (historyOpen) {
+                  detachHistory(event.currentTarget.selectionStart ?? text.length);
+                }
               }}
               onFocus={() => {
                 markSlashInteraction();
                 setMentionDismissedAt(null);
               }}
-              aria-autocomplete={slashSession || mentionTrigger ? "list" : undefined}
+              aria-autocomplete={slashSession || mentionTrigger || historyOpen ? "list" : undefined}
               aria-describedby={
                 [surfaces.attachments ? attachmentDescriptionId : null, sendBlockedReason ? sendBlockedId : null]
                   .filter(Boolean)
                   .join(" ") || undefined
               }
               aria-controls={
-                slashSession ? COMPOSER_SLASH_PALETTE_ID : mentionTrigger ? COMPOSER_MENTION_PICKER_ID : undefined
+                slashSession
+                  ? COMPOSER_SLASH_PALETTE_ID
+                  : mentionTrigger
+                    ? COMPOSER_MENTION_PICKER_ID
+                    : historyOpen
+                      ? COMPOSER_HISTORY_POPOVER_ID
+                      : undefined
               }
               aria-activedescendant={
                 slashSession
                   ? effectiveActiveSlashId
                   : mentionTrigger && activeMention
                     ? mentionOptionId(effectiveMentionIndex)
-                    : undefined
+                    : historyOpen && activeHistoryIndex >= 0
+                      ? historyOptionId(activeHistoryIndex)
+                      : undefined
               }
               placeholder={
                 ready && placeholder
@@ -3219,7 +3754,12 @@ export function Composer({
                   <BusySendButton
                     mode={busyMode}
                     canSubmit={canSend}
-                    steerAvailable={Boolean(onSteer) && attachments.length === 0 && !selectedSkill}
+                    steerAvailable={
+                      Boolean(onSteer) &&
+                      attachments.length === 0 &&
+                      grabbedElements.length === 0 &&
+                      !selectedSkill
+                    }
                     onModeChange={setBusyMode}
                     onSubmit={(mode) => void submit(mode)}
                   />
