@@ -1713,28 +1713,6 @@ textarea {
   to { opacity: 1; }
 }
 
-@keyframes aiden-environment-summary-in {
-  from {
-    opacity: 0;
-    transform: translateY(-4px) scale(var(--motion-popup-scale));
-  }
-  to {
-    opacity: 1;
-    transform: translateY(0) scale(1);
-  }
-}
-
-@keyframes aiden-environment-summary-out {
-  from {
-    opacity: 1;
-    transform: translateY(0) scale(1);
-  }
-  to {
-    opacity: 0;
-    transform: translateY(-2px) scale(0.99);
-  }
-}
-
 @keyframes aiden-app-update-banner-in {
   from {
     opacity: 0;
@@ -1788,10 +1766,10 @@ textarea {
     both;
 }
 :root[data-reduce-motion="false"] .quick-view-card[data-state="open"] {
-  animation: aiden-environment-summary-in var(--motion-duration) var(--motion-decelerate-easing) both;
+  animation: aiden-popover-in var(--motion-duration) var(--motion-decelerate-easing) both;
 }
 :root[data-reduce-motion="false"] .quick-view-card[data-state="closed"] {
-  animation: aiden-environment-summary-out 120ms ease-in both;
+  animation: aiden-popover-out 120ms ease-in both;
 }
 /* A Quick View card that appears mid-session (Context after the first message, Subagents after the first run). */
 @keyframes quick-view-card-enter {

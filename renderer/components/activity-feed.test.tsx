@@ -365,7 +365,7 @@ test("the ticker preserves rows and only fades new content", () => {
   const css = styles();
   assert.doesNotMatch(css, /aiden-activity-stack-shift/u);
   assert.match(css, /animation: aiden-activity-row-in 120ms ease-out/u);
-  assert.doesNotMatch(css.slice(css.indexOf("@keyframes aiden-activity-row-in"), css.indexOf("@keyframes aiden-environment-summary-in")), /blur|transform/u);
+  assert.doesNotMatch(css.slice(css.indexOf("@keyframes aiden-activity-row-in"), css.indexOf("@keyframes aiden-app-update-banner-in")), /blur|transform/u);
   assert.match(
     css,
     /\.activity-feed-window\[data-masked="true"\]\s*\{[^}]*mask-image:\s*linear-gradient/u,
