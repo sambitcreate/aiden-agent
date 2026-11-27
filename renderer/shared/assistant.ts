@@ -620,6 +620,51 @@ function scheduleWhenIsValid(details: Record<string, unknown>): boolean {
   return details.cron === "" && details.nextRunAt === 0 && safeApprovalText(details.whenLabel, ASSISTANT_AUTOMATION_CRON_LIMIT);
 }
 
+function approvalProjectIsValid(details: Record<string, unknown>): boolean {
+  return (
+    (details.workspaceId === null && details.workspaceName === null) ||
+    (safeApprovalText(details.workspaceId, ASSISTANT_AUTOMATION_WORKSPACE_ID_LIMIT) &&
+      safeApprovalText(details.workspaceName, ASSISTANT_AUTOMATION_WORKSPACE_NAME_LIMIT))
+  );
+}
+
+function approvalMcpServers(details: Record<string, unknown>): { ids: unknown[]; valid: boolean } {
+  const ids = Array.isArray(details.mcpServerIds) ? details.mcpServerIds : [];
+  const names = Array.isArray(details.mcpServerNames) ? details.mcpServerNames : [];
+  const valid =
+    Array.isArray(details.mcpServerIds) &&
+    Array.isArray(details.mcpServerNames) &&
+    ids.length <= ASSISTANT_AUTOMATION_MCP_SERVER_LIMIT &&
+    ids.length === names.length &&
+    new Set(ids).size === ids.length &&
+    ids.every((id) => safeApprovalText(id, ASSISTANT_AUTOMATION_MCP_SERVER_ID_LIMIT)) &&
+    names.every((name) => safeApprovalText(name, ASSISTANT_AUTOMATION_MCP_SERVER_NAME_LIMIT));
+  return { ids, valid };
+}
+
+function approvalScheduleAndProviderValid(
+  details: Record<string, unknown>,
+  mcp: { ids: unknown[]; valid: boolean },
+): boolean {
+  return (
+    scheduleWhenIsValid(details) &&
+    safeApprovalText(details.timezone, ASSISTANT_AUTOMATION_TIMEZONE_LIMIT) &&
+    typeof details.nextRunAt === "number" &&
+    Number.isFinite(details.nextRunAt) &&
+    details.nextRunAt >= 0 &&
+    typeof details.notify === "boolean" &&
+    (details.permission === "read-only" || details.permission === "full") &&
+    approvalProjectIsValid(details) &&
+    mcp.valid &&
+    (details.workspaceId === null || mcp.ids.length === 0) &&
+    safeApprovalText(details.providerId, ASSISTANT_AUTOMATION_PROVIDER_ID_LIMIT) &&
+    safeApprovalText(details.providerName, ASSISTANT_AUTOMATION_PROVIDER_NAME_LIMIT) &&
+    safeApprovalText(details.model, ASSISTANT_AUTOMATION_MODEL_ID_LIMIT) &&
+    safeApprovalText(details.modelName, ASSISTANT_AUTOMATION_MODEL_NAME_LIMIT) &&
+    (mcp.ids.length === 0 || details.permission === "full")
+  );
+}
+
 export function isAssistantAutomationApprovalDetails(
   value: unknown,
 ): value is AssistantAutomationApprovalDetails {
@@ -631,44 +676,15 @@ export function isAssistantAutomationApprovalDetails(
       : details.action === "edit" &&
         safeApprovalText(details.taskId, ASSISTANT_AUTOMATION_TASK_ID_LIMIT) &&
         typeof details.enabled === "boolean";
-  const projectIsValid =
-    (details.workspaceId === null && details.workspaceName === null) ||
-    (safeApprovalText(details.workspaceId, ASSISTANT_AUTOMATION_WORKSPACE_ID_LIMIT) &&
-      safeApprovalText(details.workspaceName, ASSISTANT_AUTOMATION_WORKSPACE_NAME_LIMIT));
-  const mcpServerIds = Array.isArray(details.mcpServerIds) ? details.mcpServerIds : [];
-  const mcpServerNames = Array.isArray(details.mcpServerNames) ? details.mcpServerNames : [];
-  const mcpServersAreValid =
-    Array.isArray(details.mcpServerIds) &&
-    Array.isArray(details.mcpServerNames) &&
-    mcpServerIds.length <= ASSISTANT_AUTOMATION_MCP_SERVER_LIMIT &&
-    mcpServerIds.length === mcpServerNames.length &&
-    new Set(mcpServerIds).size === mcpServerIds.length &&
-    mcpServerIds.every((id) => safeApprovalText(id, ASSISTANT_AUTOMATION_MCP_SERVER_ID_LIMIT)) &&
-    mcpServerNames.every((name) =>
-      safeApprovalText(name, ASSISTANT_AUTOMATION_MCP_SERVER_NAME_LIMIT),
-    );
+  const mcp = approvalMcpServers(details);
   return (
     details.kind === "assistant-automation" &&
     actionIsValid &&
     safeApprovalText(details.name, ASSISTANT_AUTOMATION_NAME_LIMIT) &&
     safeApprovalText(details.prompt, ASSISTANT_AUTOMATION_PROMPT_LIMIT, true) &&
-    scheduleWhenIsValid(details) &&
-    safeApprovalText(details.timezone, ASSISTANT_AUTOMATION_TIMEZONE_LIMIT) &&
-    typeof details.nextRunAt === "number" &&
-    Number.isFinite(details.nextRunAt) &&
-    details.nextRunAt >= 0 &&
-    typeof details.notify === "boolean" &&
     details.mode === "llm" &&
-    (details.permission === "read-only" || details.permission === "full") &&
-    projectIsValid &&
-    mcpServersAreValid &&
-    (details.workspaceId === null || mcpServerIds.length === 0) &&
-    safeApprovalText(details.providerId, ASSISTANT_AUTOMATION_PROVIDER_ID_LIMIT) &&
-    safeApprovalText(details.providerName, ASSISTANT_AUTOMATION_PROVIDER_NAME_LIMIT) &&
-    safeApprovalText(details.model, ASSISTANT_AUTOMATION_MODEL_ID_LIMIT) &&
-    safeApprovalText(details.modelName, ASSISTANT_AUTOMATION_MODEL_NAME_LIMIT) &&
-    (mcpServerIds.length === 0 || details.permission === "full") &&
-    (details.permission !== "full" || details.workspaceId !== null || mcpServerIds.length > 0) &&
+    approvalScheduleAndProviderValid(details, mcp) &&
+    (details.permission !== "full" || details.workspaceId !== null || mcp.ids.length > 0) &&
     typeof details.schedulerEnabled === "boolean"
   );
 }
@@ -693,22 +709,7 @@ export function isScheduledTaskApprovalDetails(
         typeof details.expectedUpdatedAt === "number" &&
         Number.isSafeInteger(details.expectedUpdatedAt) &&
         details.expectedUpdatedAt >= 0;
-  const projectIsValid =
-    (details.workspaceId === null && details.workspaceName === null) ||
-    (safeApprovalText(details.workspaceId, ASSISTANT_AUTOMATION_WORKSPACE_ID_LIMIT) &&
-      safeApprovalText(details.workspaceName, ASSISTANT_AUTOMATION_WORKSPACE_NAME_LIMIT));
-  const mcpServerIds = Array.isArray(details.mcpServerIds) ? details.mcpServerIds : [];
-  const mcpServerNames = Array.isArray(details.mcpServerNames) ? details.mcpServerNames : [];
-  const mcpServersAreValid =
-    Array.isArray(details.mcpServerIds) &&
-    Array.isArray(details.mcpServerNames) &&
-    mcpServerIds.length <= ASSISTANT_AUTOMATION_MCP_SERVER_LIMIT &&
-    mcpServerIds.length === mcpServerNames.length &&
-    new Set(mcpServerIds).size === mcpServerIds.length &&
-    mcpServerIds.every((id) => safeApprovalText(id, ASSISTANT_AUTOMATION_MCP_SERVER_ID_LIMIT)) &&
-    mcpServerNames.every((name) =>
-      safeApprovalText(name, ASSISTANT_AUTOMATION_MCP_SERVER_NAME_LIMIT),
-    );
+  const mcp = approvalMcpServers(details);
   const contentIsValid =
     details.mode === "llm"
       ? safeApprovalText(details.prompt, ASSISTANT_AUTOMATION_PROMPT_LIMIT, true) &&
@@ -723,21 +724,7 @@ export function isScheduledTaskApprovalDetails(
     typeof details.enabled === "boolean" &&
     safeApprovalText(details.name, ASSISTANT_AUTOMATION_NAME_LIMIT) &&
     contentIsValid &&
-    scheduleWhenIsValid(details) &&
-    safeApprovalText(details.timezone, ASSISTANT_AUTOMATION_TIMEZONE_LIMIT) &&
-    typeof details.nextRunAt === "number" &&
-    Number.isFinite(details.nextRunAt) &&
-    details.nextRunAt >= 0 &&
-    typeof details.notify === "boolean" &&
-    (details.permission === "read-only" || details.permission === "full") &&
-    projectIsValid &&
-    mcpServersAreValid &&
-    (details.workspaceId === null || mcpServerIds.length === 0) &&
-    safeApprovalText(details.providerId, ASSISTANT_AUTOMATION_PROVIDER_ID_LIMIT) &&
-    safeApprovalText(details.providerName, ASSISTANT_AUTOMATION_PROVIDER_NAME_LIMIT) &&
-    safeApprovalText(details.model, ASSISTANT_AUTOMATION_MODEL_ID_LIMIT) &&
-    safeApprovalText(details.modelName, ASSISTANT_AUTOMATION_MODEL_NAME_LIMIT) &&
-    (mcpServerIds.length === 0 || details.permission === "full") &&
+    approvalScheduleAndProviderValid(details, mcp) &&
     typeof details.legacyGlobalMcp === "boolean" &&
     typeof details.schedulerEnabled === "boolean" &&
     (details.postsIn === undefined || details.postsIn === "this_chat" || details.postsIn === "own_chat")
