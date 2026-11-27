@@ -483,7 +483,8 @@
         "main/services/design-canvas/app-frames/app-sw-origins.test.ts",
         "renderer/shared/design-canvas/app-bridge-messages.test.ts",
         "main/services/design-canvas/app-frames/app-bridge-main.test.ts",
-        "main/services/design-canvas/app-frames/app-export-core.test.ts"
+        "main/services/design-canvas/app-frames/app-export-core.test.ts",
+        "main/services/design-canvas/app-frames/app-frame-switches.test.ts"
       ],
       "preserved": [
         "browser"

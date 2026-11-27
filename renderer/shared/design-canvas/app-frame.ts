@@ -39,6 +39,9 @@ const DENIED_FEATURES = [
   "identity-credentials-get",
   "direct-sockets",
   "autoplay",
+  // A page's own focus() can't take focus until the person clicks into it (S75, K1). Takes
+  // effect only with Blink's BlockingFocusWithoutUserActivation, which main turns on with the flag.
+  "focus-without-user-activation",
 ] as const;
 
 /** The iframe's Permissions Policy: every listed feature off (defence in depth beside main's permission layer). */
