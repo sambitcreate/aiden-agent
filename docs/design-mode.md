@@ -28,7 +28,7 @@ Files outside the workspace, including symlinks that point out of it, are refuse
 
 ## Live apps (experimental)
 
-With live apps, design mode runs your workspace's own web app so the canvas can show it. Phase 2b runs the dev server, and Phase 2c adds a status chip, its logs, Retry, and connecting a dev server you already run. Phase 3a adds [app frames](#app-frames): Aiden places the app's routes on the canvas, where they run [live](#live-frames), and you can download them as pictures.
+With live apps, design mode runs your workspace's own web app so the canvas can show it. Phase 2b runs the dev server, and Phase 2c adds a status chip, its logs, Retry, and connecting a dev server you already run. Phase 3a adds [app frames](#app-frames): Aiden places the app's routes on the canvas, where they run [live](#live-frames), and you can download them as pictures. Phase 3b adds [pages from your app](#app-pages): design mode reads the app's routes, you can add any of them, and the routes Aiden writes land on the canvas by themselves.
 
 **Turning it on.** Start Aiden with `AIDEN_EXPERIMENTAL_DESIGN_LIVE=1`. Live apps run on macOS and Linux only. With the flag off, nothing here runs.
 
@@ -62,7 +62,7 @@ With live apps, design mode runs your workspace's own web app so the canvas can 
 
 **In the browser panel.** Running design apps, started or connected, are listed first under **Local servers** in the browser panel, labelled "design mode", so you can open one there.
 
-<a id="app-frames"></a>**App frames.** Aiden can place a route of the running app on the canvas as an app frame, with `canvas_place_frame`. The frame is sized like a browser window (1280 × 800 unless Aiden picks another size), drawn at a scale, and resizing it from a corner keeps its shape. While the app runs, the frame shows the route [live](#live-frames); otherwise it shows its last picture. With live apps off, app frames from an earlier run say "Live apps are off", and Aiden can't place new ones.
+<a id="app-frames"></a>**App frames.** Aiden can place a route of the running app on the canvas as an app frame, with `canvas_place_frame`, and you can with [Add ▸ Page from app…](#app-pages). The frame is sized like a browser window (1280 × 800 unless Aiden picks another size or device), drawn at a scale, and resizing it from a corner keeps its shape. While the app runs, the frame shows the route [live](#live-frames); otherwise it shows its last picture. With live apps off, app frames from an earlier run say "Live apps are off", and Aiden can't place new ones.
 
 <a id="live-frames"></a>**Live frames.** While the app is running, an app frame shows its route live, at the frame's browser size. Up to six frames on screen are live at once; another says "Too many live frames" over its last picture. Until the page has loaded, the frame keeps its last picture. When the app isn't running, the frame shows its picture under the app's state: "Not running" with **Start app** (**Connect** for a server you run), "Waiting for you to allow the app to run", "Starting…" or "Connecting…", or "The app's dev server stopped." with **Retry**.
 
@@ -74,6 +74,32 @@ With live apps, design mode runs your workspace's own web app so the canvas can 
 - **Cookies.** Cookies your app's own server sets are marked `SameSite=None; Secure` for the canvas, so signing in works inside the frame. Cookies from other local ports aren't changed. The app's own pages show even when they send `X-Frame-Options` or `frame-ancestors`.
 - **IPv6.** An app that only listens on `[::1]` isn't shown: the frame asks you to restart it on `127.0.0.1`.
 - **Not covered.** WebTransport (HTTP/3 over QUIC), WebRTC relays over TCP and the dev server's own server-side requests aren't blocked.
+
+<a id="app-pages"></a>**Pages from your app.** Design mode reads your app's routes from its files. It never runs the app's code to find them, never follows a symbolic link, and skips `node_modules` and hidden folders. It stops at 10 folders deep, 2,000 folder entries or 500 routes.
+
+| Framework | Where routes come from |
+|---|---|
+| Next.js | `app/**/page.*` and `pages/**`, each also under `src/`. Route groups `(x)` are dropped; parallel `@slot`, `_private` and intercepting routes, `pages/api`, `_app`, `_document`, `_error`, `404` and `500` are skipped. |
+| TanStack Router and Start | The route list in `src/routeTree.gen.ts`, or else the files under `src/routes/` (flat dots, `index`, `$param`, `_pathless` and `(group)`). |
+| React Router | `app/routes.ts` when it is a plain list of `index()`, `route()`, `layout()` and `prefix()` calls; the flat files under `app/routes/` when it uses `flatRoutes()` or there is no `app/routes.ts`. Any other `app/routes.ts` gives only `/`. |
+| Remix | The flat files under `app/routes/`. |
+| Astro | `src/pages/**` pages (`.astro`, `.md`, `.mdx`, `.html`). |
+| Anything else | Only `/`, plus what `.aiden/canvas.json` lists. |
+
+Every framework's routes are written one way, with brackets: `/blog/[slug]` for one segment, `/docs/[...path]` for the rest of the address and `/[[...lang]]` when that part is optional. A route with brackets is a pattern: it shows only once each bracket has a value.
+
+- **Add ▸ Page from app….** Shown with live apps on, and enabled when the workspace has a web app (one design mode found, started or connected). The dialog lists the app's routes with a filter; arrow keys move and Return adds. A pattern has a field for each bracket, filled from `.aiden/canvas.json` when it gives a value. Typing an address that isn't listed, such as `/blog`, offers "Go to /blog". With two or more apps, choose which one first. A line under the list says where the routes came from: "From your app's files", "From .aiden/canvas.json", or "Only / found: list routes in .aiden/canvas.json". Up to 200 rows show; past that, refine the filter. **Add** puts the route on the page on screen as your own frame, 1280 × 800 drawn at half size, and focuses it. If the page already shows that route, Add focuses the frame that's there. ⌘Z takes it back off.
+- **Listing them yourself.** In `.aiden/canvas.json`, an app's `routes` replaces what design mode found, in your order, and `params` gives values for a pattern with one bracket (up to 20 each). A pattern with two or more brackets takes its values from `routes`, or from the fields in the dialog. Entries that aren't a route or a valid value are dropped without a message. Aiden can write this file for you.
+  ```
+  { "apps": [ { "root": "web", "script": "dev",
+                "routes": ["/", "/pricing", "/blog/hello-world"],
+                "params": { "/blog/[slug]": ["hello-world"] } } ] }
+  ```
+- **Routes Aiden writes land by themselves.** When Aiden writes or edits a route file in design mode (for example `src/routes/about.tsx`), that route lands once on the chat's page as a live frame and is focused. A pattern lands only when `.aiden/canvas.json` gives it a value, and then with the first one. Editing a component or a style places nothing: the frames already on the canvas update as the dev server reloads them. Up to 12 routes land a turn. Files changed by a command don't count.
+- **Entering design mode.** The chat's earlier writes are placed on its page, up to the newest 12, routes and `design/` pages together. A chat that wrote nothing, in a workspace with one web app, gets the app's `/` when its page is empty.
+- **Removed routes stay removed.** When you take a route's last frame off a page, Aiden no longer places it by itself: not when it edits the file again, and not on entering design mode. Aiden's `canvas_place_frame` or your Add can still bring it back, and then it's remembered as shown again. Undoing a placement isn't a removal.
+- **Where Aiden's work lands.** Aiden's frames, written routes and entry placements go on the page Aiden showed this turn, or else the page you sent the message from, or else the page the chat was looking at, or else the chat's own page, or else the first page. Your Add uses the page on screen.
+- **Aiden's tools.** `design_app routes` lists an app's routes and where they came from, even while the app is stopped. `canvas_place_frame` takes a `device` (`phone` 390 × 844, `tablet` 768 × 1024, `laptop` 1280 × 800, `desktop` 1440 × 900), a `variantOf` (the id of a frame of the same app, which puts the new one beside it in one group) and a `label` (shown after the title in the frame's header). `canvas_update_frame` changes an app frame's route, browser size, device or label and keeps its scale. `canvas_read` counts each app frame's blocked requests, without naming the hosts. With live apps on, Aiden's design skill and prompt teach it to design in the real app: new screens as route files, variants as route copies such as `/pricing-v2` placed with `variantOf`, and at most three directions before asking which to keep. A workspace without a web app keeps the `design/` HTML pages.
 
 **Downloading an app frame.** Download saves the route as a PNG, at the frame's width in browser pixels, or as a PDF. Aiden draws it in a hidden window with your app's cookies and storage, and waits until the page has made no new request for half a second, or at most 15 seconds. The app must be running in this workspace: otherwise you see "Start the app to download this frame.", and no Save dialog opens. Frames inside your app draw empty. The hidden window shows no dialogs, opens no windows, starts no downloads and is refused every permission. It reaches only servers on this computer, and not Aiden's own. Other local services stay reachable, as they are from your browser. WebTransport (HTTP/3 over QUIC), WebRTC relays over TCP and the dev server's own server-side requests aren't covered.
 

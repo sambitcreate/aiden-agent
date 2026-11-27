@@ -1207,4 +1207,58 @@ All 14 findings were checked against `20e263fe1` and accepted. One part of M5.3 
 
 ## As built
 
-(Filled in during the build: deviations, build status and Space outcomes.)
+Built 2026-11-27 on `t3/design-mode-v2-p3b`, stacked on 3a (merged from `origin/t3/design-mode-v2-p3a` three times, never rebased), Tasks 0–15. No PR yet. The decisions S78–S88 stand as written, apart from the deviations below.
+
+**Deviations, by task.**
+
+- **Task 1 (route rules).**
+  - Remix `($lang)` optional segments map to `[[...lang]]`, the one optional form S79 allows.
+  - `prefix()` in a literal `app/routes.ts` is read without a spread as well as with one.
+- **Task 3 (canvas.json).**
+  - A `routes` entry is kept when it passes `isConcreteRoute` or `isRoutePattern`, so a pattern listed by the person stays in the list.
+  - An empty `routes` array falls back to discovery: it can't mean "no pages", because `/` is always listed.
+- **Task 4.** `routes()` for a workspace with no app root answers `unknown-root`.
+- **Task 6.**
+  - `variantOf` refuses `nextTo`, `x`, `y` and `groupId`, because a variant's place is decided by its set.
+  - A variant joining an artboard refits it with `refitGroups`.
+- **Task 7.**
+  - `canvas_update_frame` `label: ""` clears the label.
+  - The renderer keeps page paths and route keys in one undone set (a route key holds a NUL no page path can) and splits them into `undone` and `undoneRoutes` only at `saveDesignCanvas`. The behaviour is the plan's, with one set instead of two.
+  - `AppNode` resets on a route change by adjusting state during render (`routeShown`) and resets its restore counters in a layout effect. It also resets `loadedKey`, so the old route's load doesn't count.
+- **Task 8.**
+  - The per-turn logic lives in `createWrittenRouteTurn` (`written-pages.ts`): one shared load, and the 12 cap (`room` and `placed`). llm-client only wires it.
+  - `writtenFilePath` (new) gives any produced file. A route is classified only when the file isn't a `design/` page.
+  - Root owners are the snapshot's candidates and apps plus canvas.json's roots. A root listed only in canvas.json has no framework, so it places nothing, and, being deeper, it shadows a shallower root, as the "deepest root" rule reads.
+  - A failed snapshot or config read degrades to no placement and never throws into the turn.
+  - Three pieces of llm-client wiring have no unit harness: the inspector skip, S88's call site 2 and "flag off notes nothing". The helper tests and Task 13's E2E cover them.
+- **Task 9.**
+  - `createDesignEntry` takes one optional `live: {snapshot, readConfig, onAppFrameAdded}`, present only with the flag on, instead of separate dependencies.
+  - The newest-12 window walks the timeline newest first. A `design/` page counts only while it exists (`isShowablePage`, as today) and a route file only once it maps to a route. On the canvas, pages are placed before routes.
+  - The snapshot doesn't name the single app, so the `/` fallback uses the lone web candidate, else the lone app, and otherwise places nothing. "Wrote nothing" means the chat's timeline is empty.
+- **Task 10.**
+  - `liveAppsOn` is "the filtered canvas tool list contains `design_app`", the plan's condition read from its result, so `excludeToolNames` is covered.
+  - The live prompt is built from today's lines: the `design/` bullet becomes the three live bullets plus a "no web app" bullet, the width bullet says "for a design/ page", and the `canvas_inspect` bullet says it draws `design/` pages, not app frames. The prompt is 1.15× today's length, the live skill 1.34×.
+  - The live skill's "No web app" section is today's HTML method verbatim, so it keeps `data-aiden-comment` for HTML pages. The test checks that the live sections (before "No web app") don't name it.
+  - "Remove the other directions' files" is left out: the skill only says to ask which to keep, so no deletion is implied.
+- **Task 11.**
+  - The picker's app list is the snapshot's candidates, then its started or attached apps, then canvas.json's chosen roots. The label is the package name, else the framework label for `.`, else the root path.
+  - There is no shared `personPlacement` helper. `placeAppRoute` resolves its page with `designTurnPages({message: {pageId, viewSize}})` and places with `placeFrame` plus `canvasView`, the same rule as `placeArtifact`, which is untouched.
+  - Errors: a root not in the picker's list answers `unknown-root`, and so does an invalid `appRoot` string; an invalid route answers `bad-route`. `appRoutes` maps the server's `unknown-root` and `choose-root` to `no-app`.
+- **Task 12.**
+  - The toolbar owns the picker, its open state and the Add trigger's ref, so focus returns to Add. `DesignAddKind` doesn't gain `"app-route"`. `appRoutePlacer` builds `place`: it flushes, then places with the page on screen and its view size.
+  - The menu and dialog cases are in `app-route-picker.test.tsx`, with the toolbar rendered on its own. The flush-before-place order is checked on `appRoutePlacer` with a call log.
+  - The disabled item carries its hint as a second line. The filter is a `combobox` that controls the listbox through `aria-activedescendant`. A dynamic row's fields sit in its row: focusing one makes the row active, Enter in one adds that row, and a double-click adds a row.
+  - A dynamic row's prefill is decoded from the first route the list filled from the same pattern, because the list carries filled routes, not raw `params`.
+  - The load errors read "No web app in this workspace" and "Pages from your app can't be added right now." The latter is also the place `unavailable` copy, which S87 didn't name.
+- **Task 13 (found by the E2E).**
+  - The canvas dropped the person's own Add focus. A focus request is held back for 3 s after the person's last move on the canvas (`FOCUS_QUIET_MS`) so that Aiden can't take the view, and clicking Add and typing in the picker counted as moves. The frame landed out of view and never went live.
+  - The fix: `placeAppRoute` sends its focus with `own: true`, `canvasFocusFrom` keeps it, and `focusYieldsToPerson` (pure, tested) never holds back the person's own request. The handler test checks the flag, and case A is the end-to-end check.
+  - The helper module is `design-live-helpers.ts`, as planned. `openLiveChat` gained a title and `startDesignChat` for a second chat, `seedFixture` gained an `into` folder for the two-app workspace, and `savedCanvas` and `appRoutesOn` read the saved document.
+  - The fixture's `App.tsx` uses the flat-file rule over `import.meta.glob("./routes/*.tsx")`. Route modules export a default component, because `@tanstack/react-router` isn't installed.
+  - Case E holds the fake model's completions (`holdCompletions`) while chat B's canvas is brought back on screen, then releases them.
+  - Screenshots 3 and 4 (two apps and the fallback line) come from one workspace with `workspaces: ["apps/*"]`: `apps/shop` holds the routes fixture and `apps/site` holds 3a's router-less app.
+  - Screenshots 6 and 7 share one shot, `design-live-variants-phone`: the home with two `variantOf` frames, labelled Current, Calm and Bold, and a `device: "phone"` pricing frame.
+  - A second frame of a route already on the page needs `duplicate: true` to become a variant. Without it, `canvas_place_frame` reuses the existing frame and ignores `variantOf` (S85's reuse rule). The case passes `duplicate: true`, and the skill's route copies (`/pricing-v2`) never hit this rule.
+
+**Verification.** Recorded in Task 13's Space runs below and in the FINISH line of the build's status log.
+
