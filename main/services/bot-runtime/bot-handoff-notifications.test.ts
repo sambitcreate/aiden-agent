@@ -1,9 +1,9 @@
 import { createBotAccessRequests } from "./bot-access-requests.js";
 import { accessRequestPrompt } from "./test-support/access-request-fixtures.js";
+import { handoffCard as card } from "./test-support/handoff-fixtures.js";
 import { watchBotAccessRequests } from "./bot-handoff-notifications.js";
 import assert from "node:assert/strict";
 import test from "node:test";
-import type { BotPendingHandoff } from "../../../renderer/shared/bot-handoffs.js";
 import { createBotHandoffs } from "./bot-handoffs.js";
 import {
   createBotHandoffNotifier,
@@ -11,18 +11,6 @@ import {
   type BotHandoffNotificationOptions,
   type BotHandoffNotifierDeps,
 } from "./bot-handoff-notifications.js";
-
-function card(overrides: Partial<BotPendingHandoff> = {}): BotPendingHandoff {
-  return {
-    botId: "bot:ada",
-    waitId: "w-1",
-    toolCallId: "call-1",
-    kind: "action",
-    action: "Enter the 2FA code for your bank",
-    source: "tool",
-    ...overrides,
-  };
-}
 
 function setup(overrides: Partial<BotHandoffNotifierDeps> = {}) {
   const shown: BotHandoffNotificationOptions[] = [];

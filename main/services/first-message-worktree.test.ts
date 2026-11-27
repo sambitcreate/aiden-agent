@@ -24,6 +24,7 @@ import type { RegisteredSkill } from "./skill-registry.js";
 import { WorkspaceOperationRegistry, admitOwnedWorkspaceOperation } from "./workspace-operation-registry.js";
 import { createWorkspaceWorktreeApplicationService } from "./workspace-worktree-application-service.js";
 import type { FirstMessageWorktreeProgress } from "../../renderer/shared/worktree-on-send.js";
+import { fakeDocumentOwner as documentOwner } from "../shared/document-owner-test-support.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -76,23 +77,6 @@ async function repositories(t: test.TestContext) {
     );
   }
   return { root, origin, seed, repository, marker };
-}
-
-function documentOwner() {
-  let destroyed = false;
-  const listeners = new Set<() => void>();
-  return {
-    documentId: randomUUID(),
-    isDestroyed: () => destroyed,
-    onInvalidated: (listener: () => void) => {
-      listeners.add(listener);
-      return () => { listeners.delete(listener); };
-    },
-    invalidate: () => {
-      destroyed = true;
-      for (const listener of [...listeners]) listener();
-    },
-  };
 }
 
 /** The real managed-worktree service over a real GitService, with an in-memory workspace list. */

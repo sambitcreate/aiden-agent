@@ -17,7 +17,7 @@ import {
   FORGET_MEMORY_TOOL_NAME,
 } from "./memory-context.js";
 import { MemoryStore } from "./memory-store.js";
-import type { Chat } from "./types.js";
+import { memoryChat as chat } from "./memory-test-support.js";
 
 async function fixture(t: TestContext) {
   const root = await mkdtemp(path.join(os.tmpdir(), "aiden-memory-context-"));
@@ -27,18 +27,6 @@ async function fixture(t: TestContext) {
     await rm(root, { recursive: true, force: true });
   });
   return store;
-}
-
-function chat(overrides: Partial<Chat> = {}): Chat {
-  return {
-    id: "chat-a",
-    title: "Chat",
-    workspaceId: "workspace-a",
-    messages: [],
-    createdAt: 1,
-    updatedAt: 1,
-    ...overrides,
-  };
 }
 
 test("memory scope derives only from the authoritative workspace; Bot chats have none", () => {

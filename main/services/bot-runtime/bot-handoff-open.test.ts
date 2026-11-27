@@ -1,19 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import type { BotPendingHandoff } from "../../../renderer/shared/bot-handoffs.js";
 import { openBotHandoff, type BotHandoffOpenFrom, type BotHandoffOpeners } from "./bot-handoff-open.js";
-
-function card(overrides: Partial<BotPendingHandoff> = {}): BotPendingHandoff {
-  return {
-    botId: "bot:ada",
-    waitId: "w-1",
-    toolCallId: "call-1",
-    kind: "action",
-    action: "Enter the 2FA code for your bank",
-    source: "tool",
-    ...overrides,
-  };
-}
+import { handoffCard as card } from "./test-support/handoff-fixtures.js";
 
 const LINK = { url: "https://bank.example/verify" };
 const SIGN_IN = card({ kind: "sign_in", action: "Sign in to github.com", origin: "https://github.com", open: { url: "https://github.com/login" } });

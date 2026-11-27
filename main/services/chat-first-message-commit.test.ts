@@ -14,6 +14,7 @@ import { chatForRenderer } from "./visible-chat-projection.js";
 import { SkillRegistry } from "./skill-registry.js";
 import type { RegisteredSkill } from "./skill-registry.js";
 import { temporaryDirectory } from "../shared/temp-dir-test-support.js";
+import { fakeDocumentOwner as documentOwner } from "../shared/document-owner-test-support.js";
 
 let nextTurn = 0;
 function request(overrides: Record<string, unknown> = {}) {
@@ -21,23 +22,6 @@ function request(overrides: Record<string, unknown> = {}) {
     draftId: randomUUID(), workspaceId: "workspace", providerId: "openai", model: "test-model",
     turnId: `turn-${++nextTurn}`, message: { role: "user", content: "Investigate the failing build" },
     ...overrides,
-  };
-}
-
-function documentOwner() {
-  let destroyed = false;
-  const listeners = new Set<() => void>();
-  return {
-    documentId: randomUUID(),
-    isDestroyed: () => destroyed,
-    onInvalidated: (listener: () => void) => {
-      listeners.add(listener);
-      return () => { listeners.delete(listener); };
-    },
-    invalidate: () => {
-      destroyed = true;
-      for (const listener of [...listeners]) listener();
-    },
   };
 }
 

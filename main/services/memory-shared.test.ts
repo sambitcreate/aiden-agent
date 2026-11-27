@@ -11,24 +11,12 @@ import {
   sharedWorkspaceScopeId,
 } from "./memory-shared.js";
 import { MemoryStore, type MemoryScope } from "./memory-store.js";
-import type { Chat } from "./types.js";
+import { memoryChat as chat } from "./memory-test-support.js";
 import { temporaryDirectory } from "../shared/temp-dir-test-support.js";
 
 async function fixture(t: TestContext) {
   const root = await temporaryDirectory(t, "aiden-memory-shared-");
   return root;
-}
-
-function chat(overrides: Partial<Chat> = {}): Chat {
-  return {
-    id: "chat-a",
-    title: "Chat",
-    workspaceId: "workspace-a",
-    messages: [],
-    createdAt: 1,
-    updatedAt: 1,
-    ...overrides,
-  };
 }
 
 test("shared workspace scope hashes the canonical folder path", async (t) => {
