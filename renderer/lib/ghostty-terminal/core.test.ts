@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { isTerminalReport } from "../../shared/terminal-reports";
 import { GhosttyTerminalCore, ghosttyCellText, type GhosttyTheme } from "./core";
 
 const testTheme: GhosttyTheme = {
@@ -122,4 +123,107 @@ test("select all reports the live range and keeps the selected text", async () =
     core.clearSelection();
     assert.equal(core.selectionRange(), null);
   });
+});
+
+test("the terminal's own replies to startup queries read as reports, and no key it encodes does", async () => {
+  const replies: string[] = [];
+  const core = await GhosttyTerminalCore.create(80, 24, 8, 16, testTheme, (data) => replies.push(data));
+  try {
+    // What shell startup files and prompt themes ask: device attributes,
+    // status and cursor reports, mode and keyboard-flag queries, window size,
+    // colors, version and capability queries.
+    const queries = [
+      "\x1b[c",
+      "\x1b[>c",
+      "\x1b[=c",
+      "\x1b[5n",
+      "\x1b[6n",
+      "\x1b[?6n",
+      "\x1b[?2004$p",
+      "\x1b[4$p",
+      "\x1b[?u",
+      "\x1b[14t",
+      "\x1b[16t",
+      "\x1b[18t",
+      "\x1b]10;?\x07",
+      "\x1b]11;?\x1b\\",
+      "\x1b]4;1;?\x07",
+      "\x1b[>q",
+      "\x1bP$qm\x1b\\",
+      "\x1bP+q544e\x1b\\",
+    ];
+    const answered: string[] = [];
+    for (const query of queries) {
+      const before = replies.length;
+      core.write(query);
+      const reply = replies.slice(before).join("");
+      if (reply) answered.push(query);
+      assert.ok(reply === "" || isTerminalReport(reply), `reply to ${JSON.stringify(query)}: ${JSON.stringify(reply)}`);
+    }
+    // The ones every prompt theme sends are answered, so the check above is
+    // not vacuous, and a burst of replies in one write reads as reports too.
+    for (const query of ["\x1b[c", "\x1b[6n", "\x1b[?u", "\x1b[?2004$p"]) {
+      assert.ok(answered.includes(query), `no reply to ${JSON.stringify(query)}`);
+    }
+    assert.ok(isTerminalReport(replies.join("")));
+
+    const codes = [
+      ..."ABCDEFGHIJKLMNOPQRSTUVWXYZ".split("").map((letter) => `Key${letter}`),
+      ..."0123456789".split("").map((digit) => `Digit${digit}`),
+      ...Array.from({ length: 12 }, (_, index) => `F${index + 1}`),
+      "ArrowUp",
+      "ArrowDown",
+      "ArrowLeft",
+      "ArrowRight",
+      "Home",
+      "End",
+      "PageUp",
+      "PageDown",
+      "Insert",
+      "Delete",
+      "Enter",
+      "Tab",
+      "Backspace",
+      "Escape",
+      "Space",
+      "Minus",
+      "Equal",
+      "BracketLeft",
+      "Semicolon",
+      "Slash",
+    ];
+    const keyFor = (code: string) => {
+      if (code.startsWith("Key")) return code.slice(3).toLowerCase();
+      if (code.startsWith("Digit")) return code.slice(5);
+      return code === "Space" ? " " : code;
+    };
+    // Plain keys, application cursor keys, and the kitty keyboard protocol's
+    // disambiguate and report-everything levels.
+    for (const mode of ["", "\x1b[?1h", "\x1b[>1u", "\x1b[>31u"]) {
+      core.write(mode);
+      let encodedKeys = 0;
+      for (const code of codes) {
+        for (let mods = 0; mods < 8; mods += 1) {
+          const event = {
+            code,
+            key: keyFor(code),
+            shiftKey: (mods & 1) !== 0,
+            ctrlKey: (mods & 2) !== 0,
+            altKey: (mods & 4) !== 0,
+            metaKey: false,
+            repeat: false,
+            isComposing: false,
+            getModifierState: () => false,
+          } as unknown as KeyboardEvent;
+          const encoded = core.encodeKey(event);
+          if (encoded) encodedKeys += 1;
+          assert.ok(!isTerminalReport(encoded) || encoded === "", `${mode || "normal"} ${code} mods ${mods}: ${JSON.stringify(encoded)}`);
+        }
+      }
+      assert.ok(encodedKeys > codes.length, `${mode || "normal"} encoded ${encodedKeys} keys`);
+      core.write(mode === "\x1b[?1h" ? "\x1b[?1l" : mode ? "\x1b[<u" : "");
+    }
+  } finally {
+    core.dispose();
+  }
 });

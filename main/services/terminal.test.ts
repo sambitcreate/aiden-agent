@@ -9,7 +9,15 @@ import {
   resolveNodePtyDiskPackageDir,
   resolveNodePtySpawnHelperPaths,
 } from "./terminal-spawn-helper.js";
-import { TerminalInputOrder, TerminalService, foregroundCommandName, parseForegroundState, type ForegroundState } from "./terminal.js";
+import {
+  TerminalInputOrder,
+  TerminalService,
+  foregroundCommandName,
+  parseForegroundState,
+  parseProcStatCpuMs,
+  readForegroundState,
+  type ForegroundState,
+} from "./terminal.js";
 import type { RendererDocumentOwner } from "./renderer-document-owner.js";
 
 function deferred() {
@@ -1076,20 +1084,30 @@ test("the foreground name ignores the shell however the platform spells it", () 
 });
 
 async function foregroundHarness(t: TestContext) {
-  // Polls advance by tick, so a slow machine cannot merge or split them.
-  t.mock.timers.enable({ apis: ["setInterval"] });
+  // Polls and the close check's confirm wait advance by tick, so a slow
+  // machine cannot merge, split or stretch them.
+  t.mock.timers.enable({ apis: ["setInterval", "setTimeout"] });
   const owner = ownerState();
   const child = fakePty();
   const pty = child.pty as unknown as { process: string };
   pty.process = "zsh";
-  const foreground: { state: ForegroundState | null } = { state: null };
+  const foreground: { state: ForegroundState | null; reads: number; queue: Array<ForegroundState | null> } = {
+    state: null,
+    reads: 0,
+    queue: [],
+  };
+  let onRead: (() => void) | undefined;
   const service = new TerminalService({
     prepareSpawnHelper: async () => undefined,
     spawnPty: (() => child.pty) as typeof spawn,
     shellCandidates: () => ["/bin/zsh"],
     shellIsExecutable: () => true,
     foregroundPollMs: 5,
-    readForegroundState: async () => foreground.state,
+    readForegroundState: async () => {
+      foreground.reads += 1;
+      onRead?.();
+      return foreground.queue.length > 0 ? foreground.queue.shift()! : foreground.state;
+    },
   });
   const session = await service.create("workspace-1", "/tmp", owner.owner);
   const activity = () =>
@@ -1099,7 +1117,51 @@ async function foregroundHarness(t: TestContext) {
     poll();
     poll();
   };
-  return { owner, child, pty, service, session, activity, poll, settle, foreground };
+  /** Starts a close check and lets its first reading finish. Boxed, as an async return would wait for it. */
+  const startCheck = async () => {
+    const result = service.foregroundCommand(session.id, owner.owner);
+    await flushAsync();
+    return { result };
+  };
+  /** A whole close check: the first reading, the confirm wait and the second. */
+  const check = async () => {
+    const { result } = await startCheck();
+    t.mock.timers.tick(FOREGROUND_CONFIRM_MS);
+    return result;
+  };
+  const shellState = (extra: Partial<ForegroundState> = {}): ForegroundState => ({
+    group: child.pty.pid,
+    running: false,
+    children: 0,
+    cpuMs: 10,
+    ...extra,
+  });
+  const typed = () => service.write(session.id, "ls\r", owner.owner);
+  const setOnRead = (listener: (() => void) | undefined) => {
+    onRead = listener;
+  };
+  return {
+    owner,
+    child,
+    pty,
+    service,
+    session,
+    activity,
+    poll,
+    settle,
+    foreground,
+    startCheck,
+    check,
+    shellState,
+    typed,
+    setOnRead,
+  };
+}
+
+const FOREGROUND_CONFIRM_MS = 100;
+
+function flushAsync() {
+  return new Promise<void>((resolve) => setImmediate(resolve));
 }
 
 test("a program in the foreground is reported once, and its end at once", async (t) => {
@@ -1136,27 +1198,258 @@ test("closing reads the foreground program fresh and only for its owner", async 
 });
 
 test("closing notices a script that runs under the shell's own name", async (t) => {
-  const { owner, child, service, session, foreground } = await foregroundHarness(t);
-  foreground.state = { group: child.pty.pid, running: false };
-  assert.equal(await service.foregroundCommand(session.id, owner.owner), null);
-  foreground.state = { group: child.pty.pid + 1, running: false };
-  assert.equal(await service.foregroundCommand(session.id, owner.owner), "zsh");
+  const { child, check, foreground, shellState } = await foregroundHarness(t);
+  // A program holding the terminal is a process group of its own: one reading is proof.
+  foreground.state = shellState({ group: child.pty.pid + 1 });
+  assert.equal(await check(), "zsh");
+  assert.equal(foreground.reads, 1);
   foreground.state = null;
-  assert.equal(await service.foregroundCommand(session.id, owner.owner), null);
+  assert.equal(await check(), null);
 });
 
-test("closing notices a loop of shell builtins, which keeps the shell's own group", async (t) => {
-  const { owner, child, service, session, foreground } = await foregroundHarness(t);
-  foreground.state = { group: child.pty.pid, running: true };
-  assert.equal(await service.foregroundCommand(session.id, owner.owner), "zsh");
+test("a close check waits for keystrokes sent before it, so Enter then Close asks", async (t) => {
+  const { service, session, owner, startCheck, foreground, shellState } = await foregroundHarness(t);
+  // Once the Enter lands, the shell starts `x=$(sleep 30)` in its own group.
+  foreground.queue.push(shellState(), shellState({ children: 1 }));
+  // terminal:write took its place, and its access check is still running.
+  const enter = service.input.enter(session.id);
+  const { result } = await startCheck();
+  assert.equal(foreground.reads, 0, "the check read the shell before the Enter reached it");
+  service.write(session.id, "x=$(sleep 30)\r", owner.owner);
+  enter.done();
+  await flushAsync();
+  t.mock.timers.tick(FOREGROUND_CONFIRM_MS);
+  assert.equal(await result, "zsh");
 });
 
-test("ps output reads as the terminal's group and the shell's CPU state", () => {
-  assert.deepEqual(parseForegroundState(" 4242 Ss+\n"), { group: 4242, running: false });
-  assert.deepEqual(parseForegroundState("4242 R+\n"), { group: 4242, running: true });
-  assert.equal(parseForegroundState("    0 S\n"), null);
-  assert.equal(parseForegroundState("   -1 S\n"), null);
-  assert.equal(parseForegroundState(""), null);
+test("a write refused before it reached the shell does not count as typing for a close check", async (t) => {
+  const { service, session, owner, startCheck, foreground, shellState } = await foregroundHarness(t);
+  foreground.state = shellState({ running: true });
+  const refused = service.input.enter(session.id);
+  const { result } = await startCheck();
+  refused.done();
+  assert.equal(await result, null);
+  assert.equal(foreground.reads, 1);
+
+  // Refused because access was lost, which closed the terminal: nothing to ask.
+  const closing = service.input.enter(session.id);
+  const { result: afterClose } = await startCheck();
+  service.close(session.id, owner.owner);
+  closing.done();
+  assert.equal(await afterClose, null);
+  assert.equal(foreground.reads, 1);
+});
+
+test("a terminal nobody has typed in closes without asking while its shell starts", async (t) => {
+  const { child, service, session, owner, check, foreground, shellState, typed } = await foregroundHarness(t);
+  // Startup files keep the shell busy in its own group: on a CPU, with a
+  // `$(...)` child, its CPU time climbing.
+  foreground.queue.push(shellState({ running: true, children: 1, cpuMs: 10 }), shellState({ running: true, children: 1, cpuMs: 60 }));
+  assert.equal(await check(), null);
+  assert.equal(foreground.reads, 1);
+
+  // Answers the terminal sends to the shell's own queries are not typing.
+  for (const report of ["\x1b[?62;22c", "\x1b[24;1R", "\x1b]11;rgb:0000/0000/0000\x1b\\", "\x1b[?2004;1$y", "\x1b[I"]) {
+    service.write(session.id, report, owner.owner);
+  }
+  foreground.reads = 0;
+  foreground.queue.push(shellState({ running: true, children: 1, cpuMs: 10 }), shellState({ running: true, children: 1, cpuMs: 60 }));
+  assert.equal(await check(), null);
+  assert.equal(foreground.reads, 1);
+
+  // A program the startup files run in a group of its own still asks.
+  foreground.queue.length = 0;
+  foreground.state = shellState({ group: child.pty.pid + 1 });
+  assert.equal(await check(), "zsh");
+
+  // Once someone types, the same busy shell is their work.
+  typed();
+  foreground.state = null;
+  foreground.queue.push(shellState({ running: true, children: 1, cpuMs: 10 }), shellState({ running: true, children: 1, cpuMs: 60 }));
+  assert.equal(await check(), "zsh");
+});
+
+test("closing a shell busy in its own group looks again 100 ms later", async (t) => {
+  const { check, startCheck, foreground, shellState, typed } = await foregroundHarness(t);
+  typed();
+  foreground.queue.push(shellState({ running: true }), shellState({ running: true }));
+  const { result } = await startCheck();
+  assert.equal(foreground.reads, 1);
+  t.mock.timers.tick(FOREGROUND_CONFIRM_MS - 1);
+  await flushAsync();
+  assert.equal(foreground.reads, 1);
+  t.mock.timers.tick(1);
+  await flushAsync();
+  assert.equal(foreground.reads, 2);
+  assert.equal(await result, "zsh");
+
+  // A shell idle at its prompt reads the same twice and closes.
+  foreground.queue.push(shellState(), shellState());
+  assert.equal(await check(), null);
+});
+
+test("closing asks when the interval shows the shell doing work in its own group", async (t) => {
+  const { child, check, foreground, shellState, typed } = await foregroundHarness(t);
+  typed();
+  const cases: Array<[string, ForegroundState | null, ForegroundState | null, string | null]> = [
+    ["a `$(...)` subshell still running", shellState(), shellState({ children: 1 }), "zsh"],
+    ["CPU time spent between readings", shellState({ cpuMs: 10 }), shellState({ cpuMs: 12 }), "zsh"],
+    ["on a CPU or in a disk wait at the second reading", shellState(), shellState({ running: true }), "zsh"],
+    ["a program that took the terminal meanwhile", shellState(), shellState({ group: child.pty.pid + 1 }), "zsh"],
+    ["on a CPU for the first reading only", shellState({ running: true }), shellState(), null],
+    ["a child at the first reading only", shellState({ children: 1 }), shellState(), null],
+    ["no second reading", shellState({ running: true }), null, null],
+    ["CPU time unknown", shellState({ cpuMs: null }), shellState({ cpuMs: 50 }), null],
+  ];
+  for (const [label, first, second, expected] of cases) {
+    foreground.queue.push(first, second);
+    assert.equal(await check(), expected, label);
+  }
+});
+
+test("closing reports the program that holds the terminal after the wait", async (t) => {
+  const { pty, check, foreground, shellState, typed, setOnRead } = await foregroundHarness(t);
+  typed();
+  foreground.queue.push(shellState({ running: true }), shellState({ group: 4242 }));
+  setOnRead(() => {
+    if (foreground.reads === 2) pty.process = "vim";
+  });
+  assert.equal(await check(), "vim");
+});
+
+test("a terminal that ends during the close check reads as idle", async (t) => {
+  // Closed while waiting: the second reading never runs.
+  {
+    const { owner, service, session, startCheck, foreground, shellState, typed } = await foregroundHarness(t);
+    typed();
+    foreground.state = shellState({ running: true });
+    const { result } = await startCheck();
+    service.close(session.id, owner.owner);
+    t.mock.timers.tick(FOREGROUND_CONFIRM_MS);
+    assert.equal(await result, null);
+    assert.equal(foreground.reads, 1);
+    t.mock.timers.reset();
+  }
+  // The shell exits while waiting: the check settles without waiting out the timer.
+  {
+    const { child, startCheck, foreground, shellState, typed } = await foregroundHarness(t);
+    typed();
+    foreground.state = shellState({ running: true });
+    const { result } = await startCheck();
+    let settled: string | null | undefined;
+    void result.then((value) => {
+      settled = value;
+    });
+    child.emitExit(0);
+    await flushAsync();
+    assert.equal(settled, null);
+    assert.equal(foreground.reads, 1);
+    t.mock.timers.reset();
+  }
+  // The window goes away while waiting.
+  {
+    const { owner, startCheck, foreground, shellState, typed } = await foregroundHarness(t);
+    typed();
+    foreground.state = shellState({ running: true });
+    const { result } = await startCheck();
+    owner.destroy();
+    t.mock.timers.tick(FOREGROUND_CONFIRM_MS);
+    assert.equal(await result, null);
+    t.mock.timers.reset();
+  }
+  // Closed during the second reading, as a shell that ignores SIGHUP lingers.
+  {
+    const { owner, service, session, check, foreground, shellState, typed, setOnRead } = await foregroundHarness(t);
+    typed();
+    foreground.state = shellState({ running: true });
+    setOnRead(() => {
+      if (foreground.reads === 2) service.close(session.id, owner.owner);
+    });
+    assert.equal(await check(), null);
+    assert.equal(foreground.reads, 2);
+  }
+});
+
+test("ps output reads as the terminal's group, the shell's state, its live children and its CPU time", () => {
+  const table = [
+    "  PID  PGID TPGID STAT      TIME",
+    "    1     1     0 Ss     0:12.00",
+    " 4242  4242  4242 Ss+    0:01.25",
+    // A `$(...)` subshell, and its own child: both hold the substitution open.
+    " 4300  4242  4242 R+     0:00.00",
+    " 4400  4242 S+     0:00.00",
+    // `x=$( (sleep 30 &) )`: the subshell is gone and init adopted the sleep,
+    // which keeps the shell waiting in its own group.
+    " 4500  4242  4242 S+     0:00.00",
+    // A reaped-to-be zombie holds nothing open.
+    " 4301  4242  4242 Z+     0:00.00",
+    // `sleep 30 &` at the prompt: a background job, in a group of its own.
+    " 4302  4302  4242 S      0:00.00",
+  ].join("\n");
+  assert.deepEqual(parseForegroundState(table, 4242), { group: 4242, running: false, children: 3, cpuMs: 1250 });
+  // A disk wait is work too: U on macOS, D on Linux.
+  assert.equal(parseForegroundState(" 4242 4242 4242 Us+ 0:00.10", 4242)?.running, true);
+  assert.equal(parseForegroundState(" 4242 4242 4242 D+ 00:00:01", 4242)?.running, true);
+  assert.equal(parseForegroundState(" 4242 4242 4242 R+ 00:00:01", 4242)?.running, true);
+  assert.equal(parseForegroundState(" 4242 4242 4242 I+ 00:00:01", 4242)?.running, false);
+  // Linux ps counts whole seconds, with hours and days.
+  assert.equal(parseForegroundState(" 4242 4242 4242 S+ 01:02:03", 4242)?.cpuMs, 3_723_000);
+  assert.equal(parseForegroundState(" 4242 4242 4242 S+ 1-00:00:00", 4242)?.cpuMs, 86_400_000);
+  assert.equal(parseForegroundState(" 4242 4242 4242 S+ ?", 4242)?.cpuMs, null);
+  // Sandboxed kernels such as gVisor report group 0, which reads as unknown.
+  assert.equal(parseForegroundState(" 4242 4242 0 S 0:00.00", 4242), null);
+  assert.equal(parseForegroundState(" 4242 4242 -1 S 0:00.00", 4242), null);
+  assert.equal(parseForegroundState(" 4243 4243 4243 S 0:00.00", 4242), null);
+  assert.equal(parseForegroundState("", 4242), null);
+});
+
+test("Linux /proc stat reads as the process's CPU time", () => {
+  // Fields after the name: state, then utime and stime at the 12th and 13th.
+  const rest = "S 1 4242 4242 34816 4242 4194304 1000 0 0 0 125 25 0 0 20 0 1 0 100 0 0";
+  assert.equal(parseProcStatCpuMs(`4242 (zsh) ${rest}`), 1500);
+  assert.equal(parseProcStatCpuMs(`4242 (my (odd) shell) ${rest}`), 1500);
+  assert.equal(parseProcStatCpuMs("4242 (zsh"), null);
+  assert.equal(parseProcStatCpuMs("4242 (zsh) S 1"), null);
+});
+
+test("the foreground state comes from ps, with Linux CPU time from /proc", async () => {
+  const row = " 4242  4242  4242 Ss+  00:00:01";
+  const procStat = "4242 (bash) S 1 4242 4242 34816 4242 4194304 1000 0 0 0 125 25 0 0 20 0 1 0 100 0 0";
+  const errno = (code: string) => Object.assign(new Error(code), { code });
+  const io = (platform: NodeJS.Platform, ps: string | null, stat: () => Promise<string>) => ({
+    platform,
+    ps: async () => ps,
+    procStat: async (pid: number) => {
+      assert.equal(pid, 4242);
+      return stat();
+    },
+  });
+  const linuxState = { group: 4242, running: false, children: 0 };
+
+  // macOS ps counts hundredths, so it answers alone.
+  const mac = await readForegroundState(4242, io("darwin", " 4242 4242 4242 S+ 0:00.50", () => {
+    throw new Error("/proc read on macOS");
+  }));
+  assert.deepEqual(mac, { group: 4242, running: false, children: 0, cpuMs: 500 });
+  assert.deepEqual(await readForegroundState(4242, io("linux", row, async () => procStat)), { ...linuxState, cpuMs: 1500 });
+  // An unreadable /proc leaves CPU time unknown; the rest of the reading stands.
+  assert.deepEqual(await readForegroundState(4242, io("linux", row, async () => Promise.reject(errno("EACCES")))), {
+    ...linuxState,
+    cpuMs: null,
+  });
+  // A shell that exited after ps ran is gone: its stale reading must not say busy.
+  for (const code of ["ENOENT", "ESRCH"]) {
+    const busyRow = " 4242  4242  4242 R+  00:00:01";
+    assert.equal(await readForegroundState(4242, io("linux", busyRow, async () => Promise.reject(errno(code)))), null);
+  }
+  // ps failed, or the shell is not in its table.
+  assert.equal(await readForegroundState(4242, io("linux", null, async () => procStat)), null);
+  assert.equal(await readForegroundState(4242, io("linux", " 1 1 0 Ss 0:00.00", async () => procStat)), null);
+});
+
+test("the system ps answers for a process that is gone as unknown", async () => {
+  // A pid above any kernel's limit: the real ps runs and lists no such process.
+  assert.equal(await readForegroundState(2 ** 31 - 1), null);
 });
 
 test("a closed PTY reads as idle instead of throwing", async (t) => {

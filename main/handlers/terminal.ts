@@ -3,7 +3,7 @@
 import * as fs from "fs/promises";
 import { ipcMain } from "../platform.js";
 import { configStore } from "../services/config-store.js";
-import { TerminalInputOrder, terminalService } from "../services/terminal.js";
+import { terminalService } from "../services/terminal.js";
 import {
   commitWithWorkspaceMutationAdmission,
   workspaceMutationGate,
@@ -92,8 +92,6 @@ function withSessionAccess<T>(
   );
 }
 
-const terminalInput = new TerminalInputOrder();
-
 export function registerTerminalHandlers(): void {
   ipcMain.handle("terminal:create", async (event, workspaceId: unknown) => {
     const owner = terminalOwner(event);
@@ -146,7 +144,7 @@ export function registerTerminalHandlers(): void {
     const id = asSessionId(sessionId);
     // Each keystroke is its own write; their checks run side by side, but they
     // reach the shell in the order they were typed.
-    const place = terminalInput.enter(id);
+    const place = terminalService.input.enter(id);
     try {
       await withSessionAccess(owner, id, () => terminalService.write(id, data, owner), place.previous);
     } finally {

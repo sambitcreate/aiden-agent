@@ -30,6 +30,7 @@ import {
 } from "./ui";
 import { cn } from "../lib/ui-utils";
 import { onNotification, terminalApi, type TerminalSession } from "../lib/ipc";
+import { useTerminalCloseRequest } from "../lib/terminal-close-request";
 import { useLinkOpener } from "../lib/link-opener";
 import { useActiveWorkspace } from "../lib/workspace-context";
 import { APPEARANCE_CHANGE_EVENT } from "../lib/appearance-runtime";
@@ -673,17 +674,22 @@ function TerminalViewport({
   );
 }
 
+const readForegroundCommand = (id: string) => terminalApi.foregroundCommand(id);
+
 export function TerminalDrawer() {
   const { open, requestedOpen, placement, sideTarget, moveTo, sessions, foregroundCommands, activeId, layout, canOpen, toggle, newTerminal, split, select, close } =
     useWorkspaceTerminal();
-  const [closeRequest, setCloseRequest] = React.useState<{ id: string; label: string; command: string } | null>(null);
   // A program can finish while the question is open, and the shell with it.
-  const pendingClose = closeRequest && sessions.some((session) => session.id === closeRequest.id) ? closeRequest : null;
-  const requestClose = async (id: string, label: string) => {
-    const command = await terminalApi.foregroundCommand(id).catch(() => null);
-    if (command) setCloseRequest({ id, label, command });
-    else close(id);
-  };
+  const {
+    pending: pendingClose,
+    requestClose,
+    confirm: confirmClose,
+    dismiss: dismissClose,
+  } = useTerminalCloseRequest({
+    sessionIds: sessions.map((session) => session.id),
+    foregroundCommand: readForegroundCommand,
+    close,
+  });
   const bottomTargetRef = React.useRef<HTMLDivElement>(null);
   const [portalHost] = React.useState(() => { const node = document.createElement("div"); node.className = "h-full min-h-0"; return node; });
   React.useLayoutEffect(() => {
@@ -940,15 +946,12 @@ export function TerminalDrawer() {
     {createPortal(content, portalHost)}
     <AlertDialog
       open={pendingClose !== null}
-      onOpenChange={(next) => { if (!next) setCloseRequest(null); }}
+      onOpenChange={(next) => { if (!next) dismissClose(); }}
       title={`Close ${pendingClose?.label ?? "terminal"}?`}
       description={`${pendingClose?.command ?? "A program"} is still running. Closing the terminal stops it.`}
       confirmLabel="Close terminal"
       confirmVariant="destructive"
-      onConfirm={() => {
-        if (pendingClose) close(pendingClose.id);
-        setCloseRequest(null);
-      }}
+      onConfirm={confirmClose}
     />
   </>;
 }

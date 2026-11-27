@@ -516,8 +516,15 @@ test("closing a terminal asks first only while a program is running", async ({ a
   await drawer.getByRole("button", { name: "New terminal" }).first().click();
   await expect(tab).toBeVisible();
   await expect(drawer.locator("canvas")).toHaveCount(1);
+  // Closed at once, while its shell may still be running its startup files:
+  // nobody has typed into it, so nothing of theirs is running and it closes
+  // without a question. The restored scrollback says nothing about this shell,
+  // so nothing here waits for output.
   await closeTab.click();
-  await expect(tab).toHaveCount(0);
+  // An open question hides the drawer from the accessibility tree, so the tab
+  // would read as gone either way. Its close button leaving the DOM proves the
+  // terminal closed, and only then does no dialog prove there was no question.
+  await expect(drawer.locator('[aria-label="Close Terminal 1"]')).toHaveCount(0);
   await expect(page.getByRole("alertdialog")).toHaveCount(0);
 });
 
