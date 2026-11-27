@@ -14,6 +14,7 @@ import { resolveNodePtySpawnHelperPaths } from "./terminal-spawn-helper.js";
 import { agentCommandEnvironment } from "./agent-command-environment.js";
 import { ManagedWorktreeProcessActiveError } from "./managed-worktree-cleanup-errors.js";
 import { managedWorktreeSessionHasMembers } from "./managed-worktree-remover.js";
+import { isTerminalReport } from "../../renderer/shared/terminal-reports.js";
 
 const MAX_INPUT_CHARS = 64_000;
 const MAX_BUFFER_CHARS = 200_000;
@@ -36,15 +37,6 @@ const FOREGROUND_GROUP_TIMEOUT_MS = 1_000;
 const FOREGROUND_CONFIRM_MS = 100;
 /** Linux reports CPU time in clock ticks of 1/100 s (`USER_HZ`). */
 const PROC_STAT_TICK_MS = 10;
-/**
- * Answers a terminal sends on its own to a program's queries: device
- * attributes, status and cursor reports, mode reports, keyboard flags, window
- * reports, focus events, and OSC or DCS replies. A shell's startup files ask
- * these; none of them is someone typing.
- */
-const TERMINAL_REPORTS =
-  // eslint-disable-next-line no-control-regex -- escape sequences are the point
-  /^(?:\x1b\[[?>=]?[\d;]*[cnRt]|\x1b\[\??[\d;]*\$y|\x1b\[\?\d*u|\x1b\[[IO]|\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)|\x1bP[^\x1b]*\x1b\\)+$/u;
 const MIN_COLS = 20;
 const MAX_COLS = 500;
 const MIN_ROWS = 4;
@@ -653,7 +645,7 @@ export class TerminalService {
       throw new Error("Terminal input must be a non-empty message smaller than 64 KB.");
     }
     const session = this.getOwned(id, owner);
-    if (!session.typed && !TERMINAL_REPORTS.test(data)) session.typed = true;
+    if (!session.typed && !isTerminalReport(data)) session.typed = true;
     session.pty.write(data);
   }
 
