@@ -6,7 +6,8 @@
 // navigation seams. Plan B swaps `ALWAYS_NOW_GATE` for the real gate and
 // starts the deferred flush.
 
-import { BrowserWindow, Notification, app, logger } from "../../platform.js";
+import { Notification, app, logger } from "../../platform.js";
+import { isAidenAppWindowFocused } from "../../windows/bot-bubbles-overlay-registry.js";
 import { requestAppPath } from "../app-navigation.js";
 import { BOT_ROUTINE_FAILED_PREVIEW } from "../scheduled-bot-routines.js";
 import { showScheduledNotification } from "../schedule-notification.js";
@@ -52,7 +53,8 @@ export function botDeliveryFunnel(): BotDeliveryFunnel {
       // is reported, never raised: the row is already durable.
       if (input.class !== "routine_result" || input.routineTask === undefined) {
         try {
-          if (BrowserWindow.getFocusedWindow() !== null) return;
+          // A focused bubble mini chat isn't the app in front.
+          if (isAidenAppWindowFocused()) return;
           if (!Notification.isSupported()) return;
           const notification = new Notification({ title: input.title, body: bannerLine(input.body) });
           notification.on("click", () => {

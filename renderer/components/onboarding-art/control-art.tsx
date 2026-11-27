@@ -176,7 +176,7 @@ export function BotsArt() {
         <div className="oa-bots-head oa-separator-bottom">
           <span className="oa-bots-name">
             <span className="oa-bots-avatar">
-              <AvatarFace avatar={{ version: 1, shape: "drop", color: "peach" }} />
+              <AvatarFace avatar={{ version: 1, shape: "drop", color: "peach" }} small />
             </span>
             Chief
           </span>
@@ -209,6 +209,11 @@ export function BotsArt() {
       <ArtChip icon={MessageSquare} className="oa-bots-routine" style={{ left: 20, top: 230 }}>
         COS replied
       </ArtChip>
+      {/* A Bot chat shrunk into a bubble: a floating head with its unread count. */}
+      <div role="group" aria-label="Chief in a bubble" className="oa-bots-head-bubble oa-anim-pop" style={{ right: 14, top: 44, animationDelay: "1.8s" }}>
+        <AvatarFace avatar={{ version: 1, shape: "drop", color: "peach" }} />
+        <span className="oa-bots-head-count">2</span>
+      </div>
     </>
   );
 }
@@ -252,7 +257,7 @@ export function BotComputersArt() {
           </span>
         </div>
         <span className="oa-bc-pointer oa-anim-float" style={{ left: 110, top: 66 }}>
-          <AvatarFace avatar={{ version: 1, shape: "squircle", color: "aqua" }} />
+          <AvatarFace avatar={{ version: 1, shape: "squircle", color: "aqua" }} small />
         </span>
       </div>
     </ArtWindow>

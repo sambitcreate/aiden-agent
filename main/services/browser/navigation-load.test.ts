@@ -8,19 +8,26 @@ const NEW = "http://127.0.0.1:4000/held";
 
 /**
  * A guest whose loadURL starts its main-frame navigation synchronously, as
- * Chromium does, and whose own promise settles as Electron's does: on the first
- * main-frame finish or failure after the call, whichever document sent it.
+ * Chromium does unless a beforeunload handler defers it, and whose own promise
+ * settles as Electron's does: on the first main-frame finish, failure or stop
+ * after the call, whichever document sent it.
  */
 class FakeGuest extends EventEmitter {
-  loadURL(url: string, startsNavigation = true): Promise<void> {
+  loading = false;
+  defersStart = false;
+  isLoadingMainFrame() { return this.loading; }
+  loadURL(url: string, startsNavigation = !this.defersStart): Promise<void> {
     const native = new Promise<void>((resolve, reject) => {
       this.once("did-finish-load", () => resolve());
       this.once("did-fail-load", (_event, code: number, description: string, failedUrl: string) =>
         reject(new Error(`${description} (${code}) loading '${failedUrl}'`)));
+      this.once("did-stop-loading", () =>
+        reject(Object.assign(new Error(`ERR_FAILED (-2) loading '${url}'`), { errno: -2 })));
     });
     if (startsNavigation) this.emit("did-start-navigation", {}, url, false, true);
     return native;
   }
+  stopLoading() { this.loading = false; this.emit("did-stop-loading"); }
   commit(url = NEW) { this.emit("did-navigate", {}, url, 200, "OK"); }
   finish() { this.emit("did-finish-load", {}); }
   fail(code: number, description: string, url: string, isMainFrame = true) {
@@ -46,6 +53,59 @@ test("replacing a still-loading document waits for the requested page, not the r
   assert.equal(await outcome(load), "pending", "a committed page has not finished loading yet");
   guest.finish();
   assert.equal(await outcome(load), "loaded");
+});
+
+// Chromium counts a navigation waiting on beforeunload as loading, so the
+// replaced document can finish or fail meanwhile, but the tab stops loading
+// only when that navigation starts and ends, or is cancelled.
+const deferredLoad = () => {
+  const guest = new FakeGuest();
+  guest.loading = true;
+  guest.defersStart = true;
+  return { guest, load: loadBrowserUrl(guest, NEW) };
+};
+const replacedCompletes = (guest: FakeGuest, completion: "finish" | "fail") => {
+  if (completion === "finish") guest.finish();
+  else guest.fail(-102, "ERR_CONNECTION_REFUSED", OLD);
+};
+
+test("a still-loading document that finishes or fails before a deferred start cannot settle the new load", async () => {
+  for (const completion of ["finish", "fail"] as const) {
+    const { guest, load } = deferredLoad();
+    replacedCompletes(guest, completion);
+    assert.equal(await outcome(load), "pending", completion);
+    guest.emit("did-start-navigation", {}, NEW, false, true);
+    guest.commit();
+    guest.finish();
+    assert.equal(await outcome(load), "loaded", completion);
+  }
+});
+
+test("a replaced same-URL load that fails before the deferred start does not reject the replacement", async () => {
+  const { guest, load } = deferredLoad();
+  guest.fail(-2, "ERR_FAILED", NEW); // the replaced document was loading NEW too
+  assert.equal(await outcome(load), "pending");
+  guest.emit("did-start-navigation", {}, NEW, false, true);
+  guest.commit();
+  guest.finish();
+  assert.equal(await outcome(load), "loaded");
+});
+
+test("a deferred navigation that ends before it starts rejects on its stop and stops observing", async () => {
+  const cases = [
+    { name: "cancelled after the replaced document finished", before: (guest: FakeGuest) => guest.finish(), error: `Error: ERR_FAILED (-2) loading '${NEW}'` },
+    { name: "the requested URL failed", before: (guest: FakeGuest) => guest.fail(-21, "ERR_NETWORK_CHANGED", NEW), error: `Error: ERR_NETWORK_CHANGED (-21) loading '${NEW}'` },
+  ];
+  for (const { name, before, error } of cases) {
+    const { guest, load } = deferredLoad();
+    before(guest);
+    assert.equal(await outcome(load), "pending", name);
+    guest.stopLoading(); // nothing is loading now, this request included
+    assert.equal(await outcome(load), error, name);
+    // Only the loader observes these, so none left means it let go of the guest.
+    for (const event of ["did-start-navigation", "did-navigate", "destroyed"])
+      assert.equal(guest.listenerCount(event), 0, `${name}: ${event}`);
+  }
 });
 
 test("the requested page's own failures still reject", async () => {

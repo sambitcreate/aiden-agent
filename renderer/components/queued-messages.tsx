@@ -6,6 +6,7 @@ import {
   FileText,
   GripVertical,
   MoreHorizontal,
+  MousePointer2,
   Trash2,
 } from "lucide-react";
 import { Button, Dialog, Textarea, toast } from "./ui";
@@ -14,6 +15,10 @@ import {
   type ChatMessageQueue,
   type QueuedChatMessage,
 } from "../lib/chat-message-queue";
+import {
+  grabbedElementThumbnailId,
+  withoutGrabbedElementThumbnails,
+} from "../shared/browser-element-grab";
 
 export function QueuedMessages({
   queue,
@@ -98,19 +103,31 @@ export function QueuedMessages({
             >
               <GripVertical aria-hidden="true" className="size-3.5" />
             </button>
-            {message.attachments[0] ? (
-              message.attachments[0].kind === "image" ? (
-                <img
-                  src={`data:${message.attachments[0].mimeType};base64,${message.attachments[0].data}`}
-                  alt={message.attachments[0].name}
-                  className="size-8 shrink-0 rounded-md object-cover"
-                />
-              ) : (
-                <FileText aria-hidden="true" className="size-5 shrink-0 text-tertiary" />
-              )
-            ) : null}
+            {(() => {
+              const visibleAttachments = withoutGrabbedElementThumbnails(message.attachments);
+              const firstAttachment = visibleAttachments[0];
+              if (firstAttachment) {
+                return firstAttachment.kind === "image" ? (
+                  <img
+                    src={`data:${firstAttachment.mimeType};base64,${firstAttachment.data}`}
+                    alt={firstAttachment.name}
+                    className="size-8 shrink-0 rounded-md object-cover"
+                  />
+                ) : (
+                  <FileText aria-hidden="true" className="size-5 shrink-0 text-tertiary" />
+                );
+              }
+              if (message.grabbedElements?.length) {
+                return <MousePointer2 aria-hidden="true" className="size-4 shrink-0 text-accent-text" />;
+              }
+              return null;
+            })()}
             <span className="min-w-0 flex-1 truncate text-regular" title={message.text}>
-              {message.text || message.attachments.map((attachment) => attachment.name).join(", ")}
+              {message.text ||
+                [
+                  ...(message.grabbedElements?.map((element) => element.label) ?? []),
+                  ...withoutGrabbedElementThumbnails(message.attachments).map((attachment) => attachment.name),
+                ].join(", ")}
             </span>
             {onSteer ? (
               <Button
@@ -186,7 +203,12 @@ export function QueuedMessages({
         title="Edit queued message"
         description="Save changes to the queued message. Your composer draft stays separate."
         confirmLabel="Save changes"
-        confirmDisabled={!draft || (!draft.text.trim() && draft.attachments.length === 0)}
+        confirmDisabled={
+          !draft ||
+          (!draft.text.trim() &&
+            draft.attachments.length === 0 &&
+            !(draft.grabbedElements?.length))
+        }
         returnFocus={() =>
           editorTrigger.current?.isConnected ? editorTrigger.current : returnFocus()
         }
@@ -218,7 +240,30 @@ export function QueuedMessages({
                 Skill: {draft.skillInvocation.displayName}
               </p>
             ) : null}
-            {draft.attachments.map((attachment) => (
+            {draft.grabbedElements?.map((element) => (
+              <div key={element.id} className="flex items-center gap-2">
+                <MousePointer2 aria-hidden="true" className="size-3.5 shrink-0 text-accent-text" />
+                <span className="min-w-0 flex-1 truncate font-mono text-small">{element.label}</span>
+                <Button
+                  variant="transparent"
+                  size="small"
+                  iconOnly
+                  aria-label={`Remove queued element ${element.label}`}
+                  onClick={() => {
+                    const thumbId = element.thumbnailAttachmentId ?? grabbedElementThumbnailId(element.id);
+                    const nextElements = (draft.grabbedElements ?? []).filter((item) => item.id !== element.id);
+                    setDraft({
+                      ...draft,
+                      grabbedElements: nextElements.length ? nextElements : undefined,
+                      attachments: draft.attachments.filter((item) => item.id !== thumbId),
+                    });
+                  }}
+                >
+                  <Trash2 aria-hidden="true" />
+                </Button>
+              </div>
+            ))}
+            {withoutGrabbedElementThumbnails(draft.attachments).map((attachment) => (
               <div key={attachment.id} className="flex items-center gap-2">
                 <span className="min-w-0 flex-1 truncate text-small">{attachment.name}</span>
                 <Button

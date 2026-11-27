@@ -1,5 +1,5 @@
 {
-  "contractRevision": 65,
+  "contractRevision": 70,
   "peerRouteAdvertisement": {
     "feature": "peer-routes-v1",
     "routes": [
@@ -2299,7 +2299,7 @@
     "instanceId": "instance_fixture_01",
     "displayName": "Fixture Aiden",
     "platform": "mac",
-    "contractRevision": 65,
+    "contractRevision": 70,
     "pairingRequests": true
   },
   "hostFeedEvents": [
@@ -2376,6 +2376,42 @@
       "terminal": false,
       "payload": {
         "id": "workspace_fixture_02"
+      }
+    },
+    {
+      "protocolVersion": 1,
+      "streamId": "host",
+      "sequence": 3,
+      "timestamp": "2026-08-18T19:02:03.000Z",
+      "type": "bot.upsert",
+      "terminal": false,
+      "payload": {
+        "id": "bot_fixture_01",
+        "name": "Scout",
+        "purpose": "Finds the signal in a busy week",
+        "avatar": {
+          "semantic": {
+            "version": 1,
+            "shape": "orb",
+            "color": "rose"
+          },
+          "asset": {
+            "assetRevision": "avatar_revision_3",
+            "mimeType": "image/png",
+            "width": 512,
+            "height": 512,
+            "byteSize": 1024
+          }
+        },
+        "health": "ready",
+        "sessionState": "idle",
+        "createdAt": "2026-08-18T17:00:00.000Z",
+        "updatedAt": "2026-08-18T18:45:00.000Z",
+        "revision": "bot_revision_7",
+        "needsYou": true,
+        "lastReplyAt": "2026-08-18T19:01:30.000Z",
+        "preview": "Three things changed this week: the release moved to Friday, and two reviews are waiting on you.",
+        "summarized": true
       }
     }
   ],
@@ -3349,6 +3385,426 @@
       "lime": "#C6EC7E",
       "plum": "#DDA8F2",
       "graphite": "#C5C5CE"
+    }
+  },
+  "botAvatarSprite": {
+    "gridSize": 16,
+    "viewBox": 48,
+    "smallMaxPx": 24,
+    "smallGlintHex": "#FFFFFF",
+    "bodies": {
+      "wisp": "000000/000011/000111/002111/002111/001111/111111/111211/012111/001111/001101/001000",
+      "orb": "000000/000011/000111/001111/001111/011111/121111/012111/002112/001111/000010/001000",
+      "drop": "000010/000111/000111/002111/001111/011111/111111/121111/001111/001111/000111/001100",
+      "hex": "000010/000111/000121/011111/011111/001111/021111/021211/011111/001101/000000/000000",
+      "cloud": "000001/000011/000211/001111/002111/011111/021111/021111/011112/012101/001111/000000",
+      "peak": "000010/000011/000111/001111/001111/001111/011111/111111/002111/011111/001000/001100",
+      "squircle": "000000/000111/000111/001111/012111/011111/021111/011111/012111/012111/001111/001000",
+      "capsule": "000001/000122/001111/011111/011111/001111/011111/011211/012111/001111/001011/001000"
+    },
+    "tones": {
+      "lilac": {
+        "tint": "#C6A9FF",
+        "shade": "#A87EEE",
+        "deep": "#42246C",
+        "light": "#F8F5FE",
+        "markLight": "#8C58D8",
+        "markDark": "#C6A9FF"
+      },
+      "sky": {
+        "tint": "#83D8FF",
+        "shade": "#2EB7EB",
+        "deep": "#003E54",
+        "light": "#EFF9FD",
+        "markLight": "#0686B0",
+        "markDark": "#83D8FF"
+      },
+      "mint": {
+        "tint": "#88E8B1",
+        "shade": "#35CB84",
+        "deep": "#004427",
+        "light": "#E8FDF0",
+        "markLight": "#0E915A",
+        "markDark": "#88E8B1"
+      },
+      "sun": {
+        "tint": "#FFDA7B",
+        "shade": "#E4B416",
+        "deep": "#463502",
+        "light": "#FEF6E2",
+        "markLight": "#96760D",
+        "markDark": "#FFDA7B"
+      },
+      "periwinkle": {
+        "tint": "#B2BCFF",
+        "shade": "#8C96EE",
+        "deep": "#2C2C74",
+        "light": "#F5F6FC",
+        "markLight": "#676ED0",
+        "markDark": "#B2BCFF"
+      },
+      "coral": {
+        "tint": "#FF9F9B",
+        "shade": "#EB6F6E",
+        "deep": "#681118",
+        "light": "#FFF4F3",
+        "markLight": "#CE4146",
+        "markDark": "#FF9F9B"
+      },
+      "peach": {
+        "tint": "#FFC294",
+        "shade": "#E89858",
+        "deep": "#562B01",
+        "light": "#FDF5EF",
+        "markLight": "#B4620A",
+        "markDark": "#FFC294"
+      },
+      "aqua": {
+        "tint": "#78E8DF",
+        "shade": "#16C8BE",
+        "deep": "#06413E",
+        "light": "#E3FDFA",
+        "markLight": "#008D86",
+        "markDark": "#78E8DF"
+      },
+      "rose": {
+        "tint": "#FFA3C7",
+        "shade": "#E973A6",
+        "deep": "#63123B",
+        "light": "#FEF4F7",
+        "markLight": "#C64080",
+        "markDark": "#FFA3C7"
+      },
+      "lime": {
+        "tint": "#C6EC7E",
+        "shade": "#9DCB1D",
+        "deep": "#2E3F01",
+        "light": "#F2FAE6",
+        "markLight": "#678800",
+        "markDark": "#C6EC7E"
+      },
+      "plum": {
+        "tint": "#DDA8F2",
+        "shade": "#C27CDD",
+        "deep": "#4F1E60",
+        "light": "#FBF4FE",
+        "markLight": "#A251C0",
+        "markDark": "#DDA8F2"
+      },
+      "graphite": {
+        "tint": "#C5C5CE",
+        "shade": "#A2A1B3",
+        "deep": "#36354B",
+        "light": "#F6F6F9",
+        "markLight": "#797988",
+        "markDark": "#C5C5CE"
+      }
+    },
+    "grids": {
+      "wisp": {
+        "full": [
+          "................",
+          "................",
+          "......oooo......",
+          ".....ohhhho.....",
+          "....ohbbbbho....",
+          "....obbbbbbo....",
+          "....obbbbbbo....",
+          "..oohbbbbbbhoo..",
+          ".ohhbbbbbbbbhho.",
+          ".obbbobbbbobbbo.",
+          "..obobbbbbbobo..",
+          "...obbbbbbbbo...",
+          "...obbobbobbo...",
+          "...obo.oo.obo...",
+          "....o......o....",
+          "................"
+        ],
+        "small": [
+          "................",
+          "................",
+          "......oooo......",
+          ".....obbbbo.....",
+          "....obbbbbbo....",
+          "....obbbbbbo....",
+          "....obbbbbbo....",
+          "..oobbbbbbbboo..",
+          ".obbbbbbbbbbbbo.",
+          ".obbbobbbbobbbo.",
+          "..obobbbbbbobo..",
+          "...obbbbbbbbo...",
+          "...obbobbobbo...",
+          "...obo.oo.obo...",
+          "....o......o....",
+          "................"
+        ]
+      },
+      "orb": {
+        "full": [
+          "................",
+          "................",
+          "......oooo......",
+          ".....ohhhho.....",
+          "....ohbbbbho....",
+          "...ohbbbbbbho...",
+          "...obbbbbbbbo...",
+          "..ohbbbbbbbbho..",
+          ".ohobbbbbbbboho.",
+          "..obobbbbbbobo..",
+          "...oobboobboo...",
+          "...obbbbbbbbo...",
+          "....oobooboo....",
+          "...oboo..oobo...",
+          "....o......o....",
+          "................"
+        ],
+        "small": [
+          "................",
+          "................",
+          "......oooo......",
+          ".....obbbbo.....",
+          "....obbbbbbo....",
+          "...obbbbbbbbo...",
+          "...obbbbbbbbo...",
+          "..obbbbbbbbbbo..",
+          ".obobbbbbbbbobo.",
+          "..obobbbbbbobo..",
+          "...oobboobboo...",
+          "...obbbbbbbbo...",
+          "....oobooboo....",
+          "...oboo..oobo...",
+          "....o......o....",
+          "................"
+        ]
+      },
+      "drop": {
+        "full": [
+          "................",
+          "......o..o......",
+          ".....ohooho.....",
+          "....ohbhhbho....",
+          "....obbbbbbo....",
+          "....obbbbbbo....",
+          "...ohbbbbbbho...",
+          "..ohbbbbbbbbho..",
+          ".ohbbbbbbbbbbho.",
+          ".obobbbbbbbbobo.",
+          "..oobbbbbbbboo..",
+          "...obbbbbbbbo...",
+          "....obbbbbbo....",
+          "...obboooobbo...",
+          "....oo....oo....",
+          "................"
+        ],
+        "small": [
+          "................",
+          "......o..o......",
+          ".....oboobo.....",
+          "....obbbbbbo....",
+          "....obbbbbbo....",
+          "....obbbbbbo....",
+          "...obbbbbbbbo...",
+          "..obbbbbbbbbbo..",
+          ".obbbbbbbbbbbbo.",
+          ".obobbbbbbbbobo.",
+          "..oobbbbbbbboo..",
+          "...obbbbbbbbo...",
+          "....obbbbbbo....",
+          "...obboooobbo...",
+          "....oo....oo....",
+          "................"
+        ]
+      },
+      "hex": {
+        "full": [
+          "................",
+          "......o..o......",
+          ".....ohooho.....",
+          "....ohbhhbho....",
+          "...oobobboboo...",
+          "..ohhbhbbhbhho..",
+          "..obbbbbbbbbbo..",
+          "...obbbbbbbbo...",
+          "...obbbbbbbbo...",
+          "...obobbbbobo...",
+          "..obbbbbbbbbbo..",
+          "...obbobbobbo...",
+          "....oo.oo.oo....",
+          "................",
+          "................",
+          "................"
+        ],
+        "small": [
+          "................",
+          "......o..o......",
+          ".....oboobo.....",
+          "....obbbbbbo....",
+          "...oobobboboo...",
+          "..obbbbbbbbbbo..",
+          "..obbbbbbbbbbo..",
+          "...obbbbbbbbo...",
+          "...obbbbbbbbo...",
+          "...obobbbbobo...",
+          "..obbbbbbbbbbo..",
+          "...obbobbobbo...",
+          "....oo.oo.oo....",
+          "................",
+          "................",
+          "................"
+        ]
+      },
+      "cloud": {
+        "full": [
+          "................",
+          ".......oo.......",
+          "......ohho......",
+          ".....ohbbho.....",
+          "....oobbbboo....",
+          "...ohhbbbbhho...",
+          "...oobbbbbboo...",
+          "..ohhbbbbbbhho..",
+          "...obbbbbbbbo...",
+          "...obbbbbbbbo...",
+          "..obbbboobbbbo..",
+          "..obobobbobobo..",
+          "...obbbbbbbbo...",
+          "....oooooooo....",
+          "................",
+          "................"
+        ],
+        "small": [
+          "................",
+          ".......oo.......",
+          "......obbo......",
+          ".....obbbbo.....",
+          "....oobbbboo....",
+          "...obbbbbbbbo...",
+          "...oobbbbbboo...",
+          "..obbbbbbbbbbo..",
+          "...obbbbbbbbo...",
+          "...obbbbbbbbo...",
+          "..obbbboobbbbo..",
+          "..obobobbobobo..",
+          "...obbbbbbbbo...",
+          "....oooooooo....",
+          "................",
+          "................"
+        ]
+      },
+      "peak": {
+        "full": [
+          "................",
+          "......o..o......",
+          ".....ohooho.....",
+          ".....obhhbo.....",
+          "....ohbbbbho....",
+          "...ohbbbbbbho...",
+          "...obbbbbbbbo...",
+          "...obbbbbbbbo...",
+          "..ohbbbbbbbbho..",
+          ".obbbbbbbbbbbbo.",
+          "..ooobbbbbbooo..",
+          "..obbbbbbbbbbo..",
+          "...oboooooobo...",
+          "...obbo..obbo...",
+          "....oo....oo....",
+          "................"
+        ],
+        "small": [
+          "................",
+          "......o..o......",
+          ".....oboobo.....",
+          ".....obbbbo.....",
+          "....obbbbbbo....",
+          "...obbbbbbbbo...",
+          "...obbbbbbbbo...",
+          "...obbbbbbbbo...",
+          "..obbbbbbbbbbo..",
+          ".obbbbbbbbbbbbo.",
+          "..ooobbbbbbooo..",
+          "..obbbbbbbbbbo..",
+          "...oboooooobo...",
+          "...obbo..obbo...",
+          "....oo....oo....",
+          "................"
+        ]
+      },
+      "squircle": {
+        "full": [
+          "................",
+          "................",
+          ".....oooooo.....",
+          "....ohhhhhho....",
+          "....obbbbbbo....",
+          "...ohbbbbbbho...",
+          "..ohobbbbbboho..",
+          "..obhbbbbbbhbo..",
+          "...obbbbbbbbo...",
+          "..obbbbbbbbbbo..",
+          "..obobbbbbbobo..",
+          "..obobbbbbbobo..",
+          "...obbbbbbbbo...",
+          "...oboooooobo...",
+          "....o......o....",
+          "................"
+        ],
+        "small": [
+          "................",
+          "................",
+          ".....oooooo.....",
+          "....obbbbbbo....",
+          "....obbbbbbo....",
+          "...obbbbbbbbo...",
+          "..obobbbbbbobo..",
+          "..obbbbbbbbbbo..",
+          "...obbbbbbbbo...",
+          "..obbbbbbbbbbo..",
+          "..obobbbbbbobo..",
+          "..obobbbbbbobo..",
+          "...obbbbbbbbo...",
+          "...oboooooobo...",
+          "....o......o....",
+          "................"
+        ]
+      },
+      "capsule": {
+        "full": [
+          "................",
+          ".......oo.......",
+          ".....oohhoo.....",
+          "....ohooooho....",
+          "...ohbhhhhbho...",
+          "..ohbbbbbbbbho..",
+          "..obbbbbbbbbbo..",
+          "...obbbbbbbbo...",
+          "..ohbbbbbbbbho..",
+          "..obbobbbbobbo..",
+          "..obobbbbbbobo..",
+          "...obbbbbbbbo...",
+          "...obobbbbobo...",
+          "...oboooooobo...",
+          "....o......o....",
+          "................"
+        ],
+        "small": [
+          "................",
+          ".......oo.......",
+          ".....oobboo.....",
+          "....oboooobo....",
+          "...obbbbbbbbo...",
+          "..obbbbbbbbbbo..",
+          "..obbbbbbbbbbo..",
+          "...obbbbbbbbo...",
+          "..obbbbbbbbbbo..",
+          "..obbobbbbobbo..",
+          "..obobbbbbbobo..",
+          "...obbbbbbbbo...",
+          "...obobbbbobo...",
+          "...oboooooobo...",
+          "....o......o....",
+          "................"
+        ]
+      }
     }
   },
   "botSessionFailedTurns": [
@@ -7314,5 +7770,112 @@
         }
       }
     ]
+  },
+  "agentSlider": {
+    "capability": "chat:agent-slider",
+    "models": {
+      "providers": [
+        {
+          "id": "provider_fixture",
+          "label": "Fixture Provider",
+          "models": [
+            {
+              "id": "model_fixture_quick",
+              "label": "Quick",
+              "supportsImages": false
+            },
+            {
+              "id": "model_fixture",
+              "label": "Fixture Model",
+              "supportsImages": true,
+              "thinkingLevels": ["low", "medium", "high"],
+              "defaultThinkingLevel": "medium"
+            }
+          ]
+        }
+      ],
+      "defaults": {
+        "providerId": "provider_fixture",
+        "modelId": "model_fixture",
+        "thinkingLevel": "high"
+      },
+      "agentSlider": {
+        "stops": [
+          {
+            "id": "stop_0a1b2c3d",
+            "label": "Instant",
+            "providerId": "provider_fixture",
+            "modelId": "model_fixture_quick",
+            "providerLabel": "Fixture Provider",
+            "modelLabel": "Quick",
+            "availability": "ready"
+          },
+          {
+            "id": "stop_1b2c3d4e",
+            "label": "Balanced",
+            "providerId": "provider_fixture",
+            "modelId": "model_fixture",
+            "providerLabel": "Fixture Provider",
+            "modelLabel": "Fixture Model",
+            "thinkingLevel": "medium",
+            "availability": "ready"
+          },
+          {
+            "id": "stop_2c3d4e5f",
+            "label": "Deep",
+            "providerId": "provider_fixture",
+            "modelId": "model_fixture",
+            "providerLabel": "Fixture Provider",
+            "modelLabel": "Fixture Model",
+            "thinkingLevel": "high",
+            "availability": "ready"
+          },
+          {
+            "id": "stop_3d4e5f6a",
+            "label": "Elsewhere",
+            "providerLabel": "Other Provider",
+            "modelLabel": "Other Model",
+            "availability": "not-signed-in"
+          },
+          {
+            "id": "stop_5f6a7b8c",
+            "label": "Agent",
+            "availability": "computer-only"
+          },
+          {
+            "id": "stop_4e5f6a7b",
+            "label": "Choose a model",
+            "availability": "unassigned"
+          }
+        ],
+        "homeStopId": "stop_1b2c3d4e"
+      }
+    },
+    "turnRequest": {
+      "text": "Think harder about this.",
+      "providerId": "provider_fixture",
+      "modelId": "model_fixture",
+      "thinkingLevel": "high",
+      "saveSelection": true
+    },
+    "chat": {
+      "id": "chat_fixture_slider_01",
+      "workspaceId": "workspace_fixture_01",
+      "title": "Slider fixture chat",
+      "providerId": "provider_fixture",
+      "modelId": "model_fixture",
+      "thinkingLevel": "high",
+      "messages": [
+        {
+          "id": "message_fixture_slider_01",
+          "role": "user",
+          "text": "Think harder about this.",
+          "createdAt": "2026-11-24T12:00:00.000Z"
+        }
+      ],
+      "createdAt": "2026-11-24T12:00:00.000Z",
+      "updatedAt": "2026-11-24T12:00:00.000Z",
+      "revision": "chat_revision_slider_1"
+    }
   }
 }

@@ -1,6 +1,6 @@
 export const SETTINGS_SECTIONS = [
   "providers",
-  "modelData",
+  "agentSlider",
   "limits",
   "skills",
   "mcp",
@@ -16,6 +16,7 @@ export const SETTINGS_SECTIONS = [
   "computerUse",
   "bots",
   "botComputers",
+  "botBubbles",
   "simulator",
   "memory",
   "scheduledTasks",
@@ -40,19 +41,18 @@ export const SETTINGS_DESTINATIONS: ReadonlyArray<{
 }> = [
   { id: "providers", title: "Providers", keywords: ["models", "api", "keys", "connect my ai", "chatgpt", "lm studio", "ollama", "custom provider"] },
   {
-    id: "modelData",
-    title: "Model Pad",
+    id: "agentSlider",
+    title: "Agent Slider",
     keywords: [
-      "personal",
       "models",
-      "arrange",
-      "rank",
-      "capability",
-      "speed",
-      "pace",
-      "artificial analysis",
-      "openrouter",
-      "benchmark insights",
+      "model and effort",
+      "effort",
+      "reasoning",
+      "thinking",
+      "stops",
+      "home stop",
+      "local to cloud",
+      "effort ladder",
     ],
   },
   {
@@ -203,6 +203,11 @@ export const SETTINGS_DESTINATIONS: ReadonlyArray<{
     keywords: ["virtual machine", "vm", "lume", "macos", "bot computer", "disk space", "apple silicon"],
   },
   {
+    id: "botBubbles",
+    title: "Bots",
+    keywords: ["bubble", "bubbles", "chat heads", "heads", "floating", "float over apps", "on top", "mini chat", "edge"],
+  },
+  {
     id: "simulator",
     title: "Simulator",
     keywords: ["ios", "iphone", "ipad", "simulator", "xcode", "devices", "agent-device", "npm", "paired macs", "floating", "auto-show"],
@@ -306,7 +311,7 @@ export const SETTINGS_GROUPS: readonly SettingsGroup[] = [
 
 export type SettingsPageId =
   | "providers"
-  | "modelData"
+  | "agentSlider"
   | "limits"
   | "skills"
   | "mcp"
@@ -317,6 +322,7 @@ export type SettingsPageId =
   | "approvals"
   | "scheduledTasks"
   | "computers"
+  | "botBubbles"
   | "simulator"
   | "voiceSpeech"
   | "connections"
@@ -338,7 +344,7 @@ export type SettingsPageEntry = {
 /** The sidebar. `section` stays the only URL state; these pages group sections into tabs. */
 export const SETTINGS_PAGES: readonly SettingsPageEntry[] = [
   { id: "providers", title: "Providers", group: "Models & Context", tabs: ["providers"] },
-  { id: "modelData", title: "Model Pad", group: "Models & Context", tabs: ["modelData"] },
+  { id: "agentSlider", title: "Agent Slider", group: "Models & Context", tabs: ["agentSlider"] },
   { id: "limits", title: "Context & Limits", group: "Models & Context", tabs: ["limits"] },
   { id: "skills", title: "Skills", group: "Capabilities", tabs: ["skills"] },
   { id: "mcp", title: "Connectors", group: "Capabilities", tabs: ["mcp"] },
@@ -349,6 +355,7 @@ export const SETTINGS_PAGES: readonly SettingsPageEntry[] = [
   { id: "approvals", title: "Approvals", group: "Autonomy & Devices", tabs: ["approvals", "appControls"], anchors: ["bots"] },
   { id: "scheduledTasks", title: "Scheduled tasks", group: "Autonomy & Devices", tabs: ["scheduledTasks"] },
   { id: "computers", title: "Computers & VMs", group: "Autonomy & Devices", tabs: ["computerUse", "botComputers"] },
+  { id: "botBubbles", title: "Bots", group: "Autonomy & Devices", tabs: ["botBubbles"] },
   { id: "simulator", title: "Simulator", group: "Autonomy & Devices", tabs: ["simulator"] },
   { id: "voiceSpeech", title: "Voice & Speech", group: "Voice & Channels", tabs: ["voice", "tts", "geminiLive"] },
   { id: "connections", title: "Connections", group: "Voice & Channels", tabs: ["remoteAccess", "peerHosts", "otherApps", "telegram"] },
@@ -371,6 +378,8 @@ export type SettingsCapabilities = {
    * Callers that don't know it leave it out, and the tab stays.
    */
   geminiLive?: boolean;
+  /** Bots on this host (Settings → Bots). Callers that don't know it leave it out, and the page stays. */
+  bots?: boolean;
 };
 
 function isSettingsSectionAvailable(
@@ -383,7 +392,8 @@ function isSettingsSectionAvailable(
     (section !== "botComputers" || capabilities.botComputers) &&
     (section !== "hooks" || capabilities.hooks) &&
     (section !== "otherApps" || capabilities.mcpServer) &&
-    (section !== "geminiLive" || capabilities.geminiLive !== false)
+    (section !== "geminiLive" || capabilities.geminiLive !== false) &&
+    (section !== "botBubbles" || capabilities.bots !== false)
   );
 }
 

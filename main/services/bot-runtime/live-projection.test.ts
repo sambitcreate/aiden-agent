@@ -7,10 +7,12 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { after, test } from "node:test";
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
+import type { WatchEnd } from "@earendil-works/chord/watch";
 import { fauxAssistantMessage, fauxText, fauxThinking, fauxToolCall } from "@earendil-works/pi-ai/providers/faux";
 import {
   applyBotLiveEvent,
   botLastReplyAt,
+  botRecentReplyTimes,
   botRetryableFailedTurn,
   botTranscriptPreview,
   type BotLiveEvent,
@@ -323,6 +325,224 @@ test("a routine turn shows as its label, and a [SILENT] answer hides the whole t
   }
 });
 
+test("a run that ends while its feed is still opening is reported settled, and never reads running again", async () => {
+  const fauxModels = createFauxModels([fauxAssistantMessage("Done already.")]);
+  let release: (() => void) | undefined;
+  let held = true;
+  const opened = new Promise<void>((resolve) => (release = resolve));
+  const settled: Array<{ botId: string; kind: string }> = [];
+  let service: BotSessionRuntime | undefined;
+  const live = await start(fauxModels, {
+    projection: {
+      // Opening the feed waits until the turn is over.
+      conversation: async (botId) => {
+        if (held) await opened;
+        return service!.conversation(botId);
+      },
+      onRunSettled: (botId, state) => settled.push({ botId, kind: state.kind }),
+    },
+  });
+  service = live.service;
+  try {
+    const sent = await live.service.send("bot:a", { text: "Quick one", requestId: "desk-1" });
+    const outcome = await live.service.awaitReply("bot:a", sent.submissionId, new AbortController().signal);
+    assert.equal(outcome.kind, "completed");
+    assert.deepEqual(settled, [], "nothing is reported before the feed opens");
+    held = false;
+    release!();
+    await waitFor(() => settled.length > 0, { what: "the settled run to be reported" });
+    assert.deepEqual(settled, [{ botId: "bot:a", kind: "idle" }]);
+    const view = await live.projection.subscribe("bot:a", recorder().sink);
+    view.unsubscribe();
+    assert.equal(view.snapshot.state.kind, "idle", "the stale running notice was not applied");
+    assert.deepEqual(visibleText(view.snapshot).slice(-1), ["assistant:Done already."]);
+  } finally {
+    await live.close();
+  }
+});
+
+test("a run that ends after its opening feed read the state is reported settled once", async () => {
+  const fauxModels = createFauxModels([fauxAssistantMessage("Done already.")]);
+  let release: (() => void) | undefined;
+  let held = true;
+  const planRead = new Promise<void>((resolve) => (release = resolve));
+  let reachedPlan: (() => void) | undefined;
+  const atPlan = new Promise<void>((resolve) => (reachedPlan = resolve));
+  const settled: string[] = [];
+  const live = await start(fauxModels, {
+    projection: {
+      // The plan is read after the state and the transcript, so the run's last frame is still to come.
+      plan: async () => {
+        if (held) {
+          reachedPlan!();
+          await planRead;
+        }
+        return null;
+      },
+      onRunSettled: (_botId, state) => settled.push(state.kind),
+    },
+  });
+  try {
+    const sent = await live.service.send("bot:a", { text: "Quick one", requestId: "desk-1" });
+    await atPlan;
+    const outcome = await live.service.awaitReply("bot:a", sent.submissionId, new AbortController().signal);
+    assert.equal(outcome.kind, "completed");
+    held = false;
+    release!();
+    await waitFor(() => settled.length > 0, { what: "the settled run to be reported" });
+    // Give a second report, if any, time to arrive.
+    await new Promise((resolve) => setTimeout(resolve, 200));
+    assert.deepEqual(settled, ["idle"], "one run, one report");
+  } finally {
+    await live.close();
+  }
+});
+
+test("a Bot paused while its feed is still opening reads paused, not running", async () => {
+  const fauxModels = createFauxModels([slowAnswer()], { tokensPerSecond: 20 });
+  let release: (() => void) | undefined;
+  let held = true;
+  const opened = new Promise<void>((resolve) => (release = resolve));
+  const settled: string[] = [];
+  let service: BotSessionRuntime | undefined;
+  const live = await start(fauxModels, {
+    projection: {
+      conversation: async (botId) => {
+        if (held) await opened;
+        return service!.conversation(botId);
+      },
+      onRunSettled: (_botId, state) => settled.push(state.kind),
+    },
+  });
+  service = live.service;
+  try {
+    await live.service.send("bot:a", { text: "Take your time", requestId: "desk-1" });
+    assert.equal((await live.service.pause("bot:a", "mac")).kind, "paused");
+    held = false;
+    release!();
+    await waitFor(() => settled.length > 0, { what: "the paused run to be reported" });
+    assert.deepEqual(settled, ["paused"]);
+    const view = await live.projection.subscribe("bot:a", recorder().sink);
+    view.unsubscribe();
+    assert.equal(view.snapshot.state.kind, "paused", "the earlier running notice was not applied");
+  } finally {
+    await live.close();
+  }
+});
+
+test("a Bot paused after its opening feed read the state is still reported paused", async () => {
+  const fauxModels = createFauxModels([slowAnswer()], { tokensPerSecond: 20 });
+  let release: (() => void) | undefined;
+  let held = true;
+  const planRead = new Promise<void>((resolve) => (release = resolve));
+  let reachedPlan: (() => void) | undefined;
+  const atPlan = new Promise<void>((resolve) => (reachedPlan = resolve));
+  const settled: string[] = [];
+  const live = await start(fauxModels, {
+    projection: {
+      // The plan is read after the state, so holding it holds the feed open past its state read.
+      plan: async () => {
+        if (held) {
+          reachedPlan!();
+          await planRead;
+        }
+        return null;
+      },
+      onRunSettled: (_botId, state) => settled.push(state.kind),
+    },
+  });
+  try {
+    await live.service.send("bot:a", { text: "Take your time", requestId: "desk-1" });
+    await atPlan;
+    // A second running notice (a follow-up accepted mid-run) joins the same opening.
+    live.projection.notifyState("bot:a", await live.service.state("bot:a"));
+    assert.equal((await live.service.pause("bot:a", "mac")).kind, "paused");
+    held = false;
+    release!();
+    await waitFor(() => settled.length > 0, { what: "the paused run to be reported" });
+    // Give a second report, if any, time to arrive.
+    await new Promise((resolve) => setTimeout(resolve, 200));
+    assert.deepEqual(settled, ["paused"], "one opening, one report");
+    const view = await live.projection.subscribe("bot:a", recorder().sink);
+    view.unsubscribe();
+    assert.equal(view.snapshot.state.kind, "paused", "the feed shows the pause, not the running state read before it");
+  } finally {
+    await live.close();
+  }
+});
+
+test("a running notice that joins a failed opening behind a notice that wasn't running still reports its run settled", async () => {
+  const fauxModels = createFauxModels([fauxAssistantMessage("unused")]);
+  let endFirstWatch: (() => void) | undefined;
+  const firstWatchEnded = new Promise<WatchEnd>((resolve) => (endFirstWatch = () => resolve({ kind: "ended" })));
+  let failing = false;
+  let failedOpens = 0;
+  let failOpening: (() => void) | undefined;
+  const openingFailed = new Promise<void>((resolve) => (failOpening = resolve));
+  const failure = new Error("the conversation closed while the feed opened");
+  const settled: string[] = [];
+  let reports = 0;
+  let service: BotSessionRuntime | undefined;
+  const live = await start(fauxModels, {
+    // The test sends every state notice itself.
+    service: { onStateChange: () => undefined },
+    projection: {
+      conversation: async (botId) => {
+        if (failing) {
+          failedOpens += 1;
+          await openingFailed;
+          throw failure;
+        }
+        // The first feed follows the real conversation until the test ends its watch.
+        const real = await service!.conversation(botId);
+        return new Proxy(real, {
+          get(target, property) {
+            if (property === "watch") {
+              return async (context: Parameters<typeof real.watch>[0]) => {
+                const watch = await target.watch(context);
+                return new Proxy(watch, {
+                  get(inner, key) {
+                    if (key === "closed") return Promise.race([inner.closed, firstWatchEnded]);
+                    const value = Reflect.get(inner, key, inner) as unknown;
+                    return typeof value === "function" ? value.bind(inner) : value;
+                  },
+                });
+              };
+            }
+            const value = Reflect.get(target, property, target) as unknown;
+            return typeof value === "function" ? value.bind(target) : value;
+          },
+        });
+      },
+      onRunSettled: (_botId, state) => settled.push(state.kind),
+      onError: () => {
+        reports += 1;
+      },
+    },
+  });
+  service = live.service;
+  try {
+    // A window keeps watching the Bot while its feed ends underneath it.
+    const watching = await live.projection.subscribe("bot:a", recorder().sink);
+    endFirstWatch!();
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    // An idle notice reopens the feed for that window; a running notice joins the same opening.
+    failing = true;
+    live.projection.notifyState("bot:a", { kind: "idle" });
+    live.projection.notifyState("bot:a", { kind: "running", submissionId: "sub-joined" });
+    assert.equal(failedOpens, 1, "both notices share one opening");
+    failOpening!();
+    await waitFor(() => settled.length > 0, { what: "the joined running notice's run to be reported" });
+    // Give a second report, if any, time to arrive.
+    await new Promise((resolve) => setTimeout(resolve, 200));
+    assert.deepEqual(settled, ["idle"], "the run the running notice named is reported settled, once");
+    assert.equal(reports, 1, "the failed opening is reported once");
+    watching.unsubscribe();
+  } finally {
+    await live.close();
+  }
+});
+
 test("a failed reply is a typed failed turn, and Retry as a new submission answers after it", async () => {
   const failure = fauxAssistantMessage("", { stopReason: "error", errorMessage: "provider is down" });
   const fauxModels = createFauxModels([failure, fauxAssistantMessage("Here it is.")]);
@@ -338,6 +558,10 @@ test("a failed reply is a typed failed turn, and Retry as a new submission answe
     assert.equal(last?.type === "failed_turn" && last.retryText, "Plan dinner");
     assert.equal(last?.type === "failed_turn" && last.errorMessage, "provider is down");
     assert.equal(botRetryableFailedTurn(failed.snapshot.entries), last);
+    // The sidebar row learns the turn failed, though the session itself is idle again.
+    const failedSummary = await live.projection.summary("bot:a");
+    assert.equal(failedSummary.state.kind, "idle");
+    assert.equal(failedSummary.lastTurnEnd, "failed");
 
     // Retry: the same text, a new request id.
     const retry = await live.service.send("bot:a", { text: last.type === "failed_turn" ? last.retryText! : "", requestId: "desk-2" });
@@ -347,6 +571,7 @@ test("a failed reply is a typed failed turn, and Retry as a new submission answe
     after.unsubscribe();
     assert.deepEqual(visibleText(after.snapshot).slice(-2), ["user:Plan dinner", "assistant:Here it is."]);
     assert.equal(botRetryableFailedTurn(after.snapshot.entries), null);
+    assert.equal((await live.projection.summary("bot:a")).lastTurnEnd, undefined);
   } finally {
     await live.close();
   }
@@ -959,13 +1184,8 @@ test("needsYou agrees with the summary, with or without an open feed, and never 
     const needsYou = await live.projection.needsYou("bot:a");
     assert.equal(transcriptReads, before, `the cheap read opens no transcript (${label})`);
     assert.equal(needsYou, expected, label);
-    const signals = await live.projection.inboxSignals("bot:a");
-    assert.equal(transcriptReads, before, "host-feed signals never open a transcript");
-    assert.equal(signals.needsYou, expected);
     const summary = await live.projection.summary("bot:a");
-    assert.deepEqual(signals.state, summary.state, `host-feed state agrees (${label})`);
     assert.equal(summary.needsYou, expected, `the summary agrees (${label})`);
-    if (label.startsWith("no feed") || label.startsWith("feed closed")) assert.equal(signals.lastReplyAt, null);
   };
   const states = [
     [false, false],
@@ -998,9 +1218,8 @@ test("needsYou agrees with the summary, with or without an open feed, and never 
     await live.service.send("bot:a", { text: "hello", requestId: "feed-signals" });
     await waitFor(() => visibleText(tape.view).includes("assistant:Hello."), { what: "the existing live feed's reply" });
     const before = transcriptReads;
-    assert.equal((await live.projection.inboxSignals("bot:a")).lastReplyAt,
-      (await live.projection.summary("bot:a")).lastReplyAt);
-    assert.equal(transcriptReads, before, "an open feed reuses its admitted entries too");
+    assert.notEqual((await live.projection.summary("bot:a")).lastReplyAt, null);
+    assert.equal(transcriptReads, before, "an open feed reuses its admitted entries");
     watching.unsubscribe();
     issueOpen = true;
     unavailable = true;
@@ -2116,6 +2335,20 @@ test("the last reply time falls back past a reply that has no time", () => {
   );
 });
 
+test("recent reply times list person-facing replies newest first, agreeing with the last reply time", () => {
+  const entries: import("../../../renderer/shared/bot-live.js").BotTranscriptEntry[] = [
+    { id: "a1", type: "assistant", text: "First.", toolCalls: [], stopReason: "stop", at: 10 },
+    { id: "a2", type: "assistant", text: "  ", toolCalls: [], stopReason: "toolUse", at: 20 },
+    { id: "u1", type: "user", text: "More?", imageCount: 0, at: 30 },
+    { id: "a3", type: "assistant", text: "Second.", toolCalls: [], stopReason: "stop", at: 40 },
+    { id: "a4", type: "assistant", text: "Third.", toolCalls: [], stopReason: "stop", at: 50 },
+  ];
+  assert.deepEqual(botRecentReplyTimes(entries), [50, 40, 10]);
+  assert.equal(botRecentReplyTimes(entries)[0], botLastReplyAt(entries));
+  assert.deepEqual(botRecentReplyTimes(entries, 2), [50, 40]);
+  assert.deepEqual(botRecentReplyTimes([]), []);
+});
+
 test("a Bot held by another process is never reported as needing the person", async () => {
   const live = await start(createFauxModels([fauxAssistantMessage("Hello.")]), {
     projection: {
@@ -2322,7 +2555,6 @@ test("a waiting access request reaches subscribers, needs-you and late joiners; 
     const card = requests.pending()[0]!;
     await waitFor(() => tape.view?.accessRequest?.waitId === card.waitId, { what: "the public access event" });
     assert.equal((await live.projection.summary("bot:a")).needsYou, true);
-    assert.equal((await live.projection.inboxSignals("bot:a")).needsYou, true);
     assert.deepEqual(Object.keys(tape.view!.accessRequest!).sort(), ["botId", "waitId", "toolCallId", "target", "label", "place", "why", "choices"].sort());
     await assert.rejects(requests.answer("bot:a", card.waitId, "always", async () => { throw new Error("Access changed"); }), /Access changed/u);
     await live.projection.refreshAccessRequest("bot:a");
@@ -2410,7 +2642,6 @@ test("pending plans need the person offscreen and subscribe catches unannounced 
     for (const status of ["pending", "active", "finished", "stopped", "expired"] as const) {
       plan = planView({ status });
       assert.equal(await live.projection.needsYou("bot:a"), status === "pending");
-      assert.equal((await live.projection.inboxSignals("bot:a")).needsYou, status === "pending");
       assert.equal((await live.projection.summary("bot:a")).needsYou, status === "pending");
     }
     plan = planView();

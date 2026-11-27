@@ -99,6 +99,14 @@ The owner found every Bot message sat on "Getting ready" for 10 s or more, on th
 - iOS and Android: a message on its way has no "Sending…" caption at any wait. It is drawn as sent from the press; the status line ("Getting ready", then "Thinking" once the model starts) carries the wait. Queued, Steer and "Couldn't send · Try again" are unchanged.
 - Not changed: the request phase still refreshes the Bot's registry a second time per step, and the capability store keeps writing its Keychain rollback anchor on each commit. Both are measurable follow-ups if "Getting ready" is still slow on the owner's Mac.
 
+## Follow-up: an unreachable MCP server no longer holds every Bot turn (2026-11-23)
+
+On 0.68.0 the owner still saw about 10 s of "Getting ready". The cause this time was a Bot-granted MCP server that never answered (a stdio server whose Mac app was not running) and one that returned 401. The Bot MCP scope cache (`createBotMcpScopeCache`) cached only successes, so after its 60 s TTL every snapshot waited the full 10 s inspection deadline for the dead server again.
+
+- A failed inspection is now remembered for that server's connection: the next snapshots skip it at once and retry it in the background after 30 s, doubling to at most 5 min. A settings or connection change (inventory revision) makes the retry due at once, still in the background; a changed connection is inspected right away. Only the first inspection of a server can delay a turn. Background failures are reported to diagnostics once.
+- A scope past its 60 s TTL but inside the 5 min grace answers at once and is refreshed behind the turn, instead of making the turn wait for the refresh.
+- Measured tool payload on the owner's Bot: 41 declared tools, about 46k characters (about 11.6k tokens) per model step. Its one MCP tool (`composio`) is 702 characters, so deferring MCP tools behind codemode would save little; the larger built-ins (routines, subagent, propose_plan, update_bot, bot_memory, the browser tools) are the candidates for on-demand loading in a later pass.
+
 ## Out of scope for this pass
 
 Desktop read snapshots that survive a relaunch (cache-first plan D1, D3), the model catalog disk caches on both phones, Files/Git caches (I7, A5), and the paired-Mac remote Bot open on old hosts. These stay on the cache-first plan.

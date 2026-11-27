@@ -7,11 +7,11 @@ Lane B of the explicit state-machine migration: P0 baselines and P2 (authority, 
 - Subagent ledger `consume` is the real fence for child writes and shell. Brokers read authority before awaited checks, so any new revocation path must pair `revokeAuthority` with `approvals.cancelRun`.
 - `tsx --test` of the write and shell suites needs `npm run build:subagent-file-mutator` and `npm run build:subagent-shell-runner` in a fresh worktree. Without them 7 tests fail and 3 are cancelled. That is not a code failure.
 - Pre-existing local failures, identical on base `bc663001f`: `agent-compatibility.test.ts` "forked initial context respects zero recent model budget" (`compaction-failed`), and four `scripts/aiden-remote-lan-transport-spike.test.mjs` tests because OpenSSL 4.1 rejects `x509 -days 0`. Both stop their `&&` chains, so run the later stages of `test:subagents` and `test:aiden-remote` by hand.
-- M028 still needs its transition review now that #730 and #727 are on `main`. The publish-throw leftover noted during #730 is closed: `request`'s `finally` clears `waiting` and withdraws as `unavailable`.
+- M028 (`bot-approvals.ts`) transition review is closed (retained, three fixes) with behavioral tests in `main/services/bot-runtime/bot-approvals.test.ts`: synchronous cleanup + `unavailable` withdrawal on publish throw (including re-entrant replacement), unique per-attempt payload key (`attemptId`) + `finally` drain so aborted/replaced `always` answers cannot leak onto reused `waitId`s, and late `decide` abort guard/rollback.
 
-## Status (2026-11-04)
+## Status (2026-11-24)
 
-- P2 stack open: #737, #738, #739, #740. Later commits merge forward, never rebase.
+- P2 stack (#737, #738, #739, #740) and P3/P4 (#746–#754) have landed on `main`; `backend:M028` is now closed in `docs/audits/state-machine-worksheets-lane-b.md`. Later commits merge forward, never rebase.
 - Same-id approval replacement was first recorded as unreachable. Pullfrog reproduced it and it was fixed, so a reachability argument alone does not close a finding on code this lane added.
 - P3, P4 and P5 PRs opened on 2026-11-05 (#746 to #757, #766, #767, #769), so that dependency has cleared. Recheck overlap before each P6 owner, because file lists move.
 - P6a reviewed and retained: `bot-pause-store`, `bot-pause-steps`, `bot-routine-recovery`.

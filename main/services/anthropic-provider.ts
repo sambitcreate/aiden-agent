@@ -57,11 +57,16 @@ export function enrichAnthropicProviders(
 export function parseAnthropicThinkingSelection(
   modelIdValue: unknown,
   levelValue: unknown,
+  resolveModel: (
+    modelId: string,
+  ) => Pick<Model<Api>, "reasoning" | "thinkingLevelMap"> | undefined = (
+    modelId,
+  ) => modelsById.get(modelId),
 ): { modelId: string; level: AnthropicThinkingLevel } {
   if (typeof modelIdValue !== "string") {
     throw new Error("Invalid Anthropic model.");
   }
-  const model = modelsById.get(modelIdValue);
+  const model = resolveModel(modelIdValue);
   if (!model?.reasoning) {
     throw new Error("This Anthropic model does not support thinking.");
   }

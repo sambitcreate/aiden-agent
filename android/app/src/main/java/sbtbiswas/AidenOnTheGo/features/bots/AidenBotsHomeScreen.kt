@@ -96,13 +96,21 @@ data class AidenBotHomeRow(
     val bot: AidenBotSummary,
     val conversation: AidenBotConversationItem?
 ) {
+    /** A Bot waiting on the person (revision 68) isn't shown as working. */
     val isWorking: Boolean
-        get() = bot.sessionState == AidenBotSessionState.RUNNING ||
-            (conversation != null && conversation.activityState != AidenBotConversationActivityState.IDLE)
+        get() = !bot.needsYou && (
+            bot.sessionState == AidenBotSessionState.RUNNING ||
+                (conversation != null && conversation.activityState != AidenBotConversationActivityState.IDLE)
+            )
 
     /** The line under the name: what needs the person first, then the last message, then the subtitle. */
     val preview: String
         get() {
+            // Revision 68: the Mac says the Bot waits on the person. An approval this phone can
+            // see says more below, so it keeps its own line.
+            if (bot.needsYou && conversation?.activityState != AidenBotConversationActivityState.WAITING_FOR_APPROVAL) {
+                return AidenBotSessionCopy.WAITING_FOR_YOU
+            }
             when (bot.sessionState) {
                 AidenBotSessionState.INTERRUPTED -> return AidenBotSessionCopy.INTERRUPTED_ROW
                 // Revision 37: a Bot the person paused (only `bot:handoffs` phones are told).
@@ -673,7 +681,7 @@ private fun AidenBotHomeRowView(
                 )
                 .padding(horizontal = 12.dp, vertical = 12.dp)
         ) {
-            // A working Bot's face glances (or wears the glance badge); the row says "Working".
+            // A working Bot's sprite shows what it does (a photo wears the badge); the row says "Working".
             Box(Modifier.semantics { if (row.isWorking) stateDescription = workingLabel }) {
                 AidenBotCanonicalAvatarView(
                     coordinator = coordinator,
@@ -681,7 +689,7 @@ private fun AidenBotHomeRowView(
                     avatar = row.bot.avatar,
                     name = row.bot.name,
                     size = 52.dp,
-                    working = row.isWorking
+                    state = rememberAidenBotAvatarState(row.bot.id, aidenBotHomeAvatarTarget(row))
                 )
             }
             Spacer(Modifier.width(14.dp))

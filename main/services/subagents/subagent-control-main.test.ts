@@ -214,6 +214,22 @@ test("trusted chat-scoped stop reaches the owning run without exposing its docum
   assert.equal(stopped, 1);
 });
 
+test("a tracked run reports where it belongs, and that it finished, without its document", async () => {
+  const controls = new SubagentControlMainV2({ now: () => 200 });
+  assert.equal(controls.trackedRun("run-one"), undefined);
+  controls.register(registration(snapshot({ state: "running" })));
+  assert.deepEqual(controls.trackedRun("run-one"), {
+    chatId: "chat-one",
+    workspaceId: "workspace-one",
+    generationId: "generation-one",
+    terminal: false,
+  });
+
+  await controls.stopForChat({ chatId: "chat-one", workspaceId: "workspace-one" }, "run-one");
+  assert.equal(controls.trackedRun("run-one")?.terminal, true);
+  assert.equal(controls.trackedRun("run-unknown"), undefined);
+});
+
 test("main unregisters an exact unlaunched preparation and hides its state", () => {
   const controls = new SubagentControlMainV2();
   controls.register(registration());

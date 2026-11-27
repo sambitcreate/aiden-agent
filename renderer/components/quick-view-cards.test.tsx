@@ -240,7 +240,7 @@ test("pressing a held card's grip puts the card back before a pointer drag start
 test("collapsing Subagents removes its ticking run list even without a transitionend", () => {
   renderCards({ runs: [RUN] });
   const header = () => screen.getByRole("button", { name: /^Subagents/u });
-  const runList = () => screen.queryByRole("group", { name: /^Completed, 1$/u });
+  const runList = () => screen.queryByRole("group", { name: /^Done, 1$/u });
   assert.equal(runList(), null, "a collapsed card mounts no run list");
   fireEvent.click(header());
   assert.ok(runList());

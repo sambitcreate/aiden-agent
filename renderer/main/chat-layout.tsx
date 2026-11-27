@@ -19,7 +19,7 @@ import { useActiveWorkspace } from "../lib/workspace-context";
 import { TerminalDrawer } from "../components/terminal-drawer";
 import { DesignChatBody, DesignWorkbench, useDesignChatState } from "../design/design-layout";
 import type { Chat, ChatMetadataUpdated, ChatMeta } from "../lib/types";
-import { applyChatMetadataUpdate } from "../shared/chat-metadata-update";
+import { applyChatMetaListUpdate, applyChatMetadataUpdate } from "../shared/chat-metadata-update";
 import { useAppendReconciliationRequired } from "../lib/append-reconciliation";
 import { withForkLineage } from "../lib/chat-copy-view";
 import type { ChatForkSummaryChanged } from "../shared/chat-copy-contract";
@@ -100,13 +100,7 @@ export function ChatLayout() {
       });
       qc.setQueriesData<ChatMeta[]>({ queryKey: queryKeys.chats }, (current) => {
         if (!current) return current;
-        return current
-          .map((chat) =>
-            chat.id === update.chatId
-              ? { ...chat, title: update.title, workspaceId: update.workspaceId, updatedAt: update.updatedAt }
-              : chat,
-          )
-          .sort((a, b) => b.updatedAt - a.updatedAt);
+        return applyChatMetaListUpdate(current, update);
       });
       if (update.title !== previousTitle) {
         const reveal = { chatId: update.chatId, version: update.updatedAt, previousTitle };

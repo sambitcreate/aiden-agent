@@ -1,4 +1,4 @@
-import { peerBotSessionCompat } from "./peer-bot-session-compat.js";
+import { peerBotSessionCompat, peerBotSessionPageCompat, peerBotSessionPageCursor } from "./peer-bot-session-compat.js";
 import { validatePeerResponse } from "./peer-response.js";
 import { hostIdentifier } from "../../renderer/shared/peer-host.js";
 import type {
@@ -16,12 +16,24 @@ import {
   AIDEN_REMOTE_CONTEXT_MODEL_ID,
   AIDEN_REMOTE_MAX_ENCODED_ATTACHMENT_NAME,
   encodeAidenRemoteAttachmentName,
+  parseAidenRemoteBotAccessAnswerReceipt,
+  parseAidenRemoteBotAccessAnswerRequest,
   parseAidenRemoteBotConnectionRequestReceipt,
   parseAidenRemoteBotHandoffAnswerReceipt,
   parseAidenRemoteBotHandoffAnswerRequest,
   parseAidenRemoteBotHandoffOpenOnMacReceipt,
   parseAidenRemoteBotMessageReceipt,
+  parseAidenRemoteBotPlanRespondReceipt,
+  parseAidenRemoteBotQueuedWithdrawReceipt,
+  parseAidenRemoteBotSessionEntriesPage,
+  parseAidenRemoteBotSessionEntryId,
+  parseAidenRemoteBotSubmissionId,
+  AIDEN_REMOTE_BOT_SESSION_MAX_ENTRIES,
+  parseAidenRemoteBotPlanRespondRequest,
   parseAidenRemoteBotQuestionAnswerReceipt,
+  parseAidenRemoteBotRoutineProposalId,
+  parseAidenRemoteBotRoutineProposalRespondRequest,
+  parseAidenRemoteBotRoutineProposalRespondResult,
   parseAidenRemoteBotSession,
   parseAidenRemoteBotSessionStateView,
   parseAidenRemoteChatContextPressure,
@@ -58,7 +70,7 @@ const STAGED_ATTACHMENT_ID = /^att_[A-Za-z0-9_-]{43}$/u;
 const BOT_WAIT_ID = /^[A-Za-z0-9-]{1,64}$/u;
 
 /** Operations whose answer is bounded image bytes, not JSON. */
-export const PEER_BINARY_OPERATIONS: ReadonlySet<string> = new Set(["attachmentContent", "botSessionImage"]);
+export const PEER_BINARY_OPERATIONS: ReadonlySet<string> = new Set(["attachmentContent", "botSessionImage", "botAvatar"]);
 
 /** Run-control operations reconcile from the host feed's run state. */
 export const PEER_RUN_OPERATIONS: ReadonlySet<string> = new Set([
@@ -91,6 +103,10 @@ export const PEER_BOT_SESSION_MUTATIONS: ReadonlySet<string> = new Set([
   "botAnswerHandoff",
   "botPause",
   "botUnpause",
+  "botRespondPlan",
+  "botAnswerAccessRequest",
+  "botRespondRoutineProposal",
+  "botWithdrawQueued",
 ]);
 
 /** A fork names one message to cut at and, optionally, a summary of what followed. */
@@ -161,6 +177,17 @@ export async function peerOperationResult(
     await validatePeerResponse(name, session);
     return parseAidenRemoteBotSession(session);
   }
+  if (name === "botSessionEntries") {
+    // Like the session: an entry this client cannot read is left out.
+    const page = peerBotSessionPageCompat(value);
+    await validatePeerResponse(name, page);
+    const parsed = parseAidenRemoteBotSessionEntriesPage(page);
+    // Not part of the wire page: the host's own oldest entry, for the next request,
+    // and how many entries the host sent, read or not, so paging is counted in its entries.
+    const olderCursor = peerBotSessionPageCursor(value);
+    const hostCount = (value as { entries: unknown[] }).entries.length;
+    return { ...parsed, ...(olderCursor === undefined ? {} : { olderCursor }), hostCount };
+  }
   await validatePeerResponse(name, value);
   if (name === "summaries")
     return parseAidenRemoteChatSummaryPage(value, "Peer chat summaries");
@@ -184,6 +211,10 @@ export async function peerOperationResult(
   if (name === "botAnswerHandoff") return parseAidenRemoteBotHandoffAnswerReceipt(value);
   if (name === "botHandoffOpenOnMac") return parseAidenRemoteBotHandoffOpenOnMacReceipt(value);
   if (name === "botConnectionRequest") return parseAidenRemoteBotConnectionRequestReceipt(value);
+  if (name === "botRespondPlan") return parseAidenRemoteBotPlanRespondReceipt(value);
+  if (name === "botAnswerAccessRequest") return parseAidenRemoteBotAccessAnswerReceipt(value);
+  if (name === "botRespondRoutineProposal") return parseAidenRemoteBotRoutineProposalRespondResult(value);
+  if (name === "botWithdrawQueued") return parseAidenRemoteBotQueuedWithdrawReceipt(value);
   return value;
 }
 
@@ -383,6 +414,15 @@ export function peerOperationRequest(
     case "botSessionImage":
       path = `/bots/${id()}/session/images/${item()}`;
       break;
+    case "botAvatar":
+      path = `/bots/${id()}/avatar/${item()}`;
+      break;
+    case "botSessionEntries":
+      path = `/bots/${id()}/session/entries${query([
+        ["before", parseAidenRemoteBotSessionEntryId(input.before)],
+        ["limit", limit(AIDEN_REMOTE_BOT_SESSION_MAX_ENTRIES)],
+      ])}`;
+      break;
     case "createChat":
       path = "/chats";
       method = "POST";
@@ -555,6 +595,33 @@ export function peerOperationRequest(
       path = `/bots/${id()}/connection-requests`;
       method = "POST";
       needsKey = true;
+      break;
+    case "botRespondPlan":
+      path = `/bots/${id()}/plans/${pattern(input.itemId, BOT_WAIT_ID)}/respond`;
+      method = "POST";
+      needsKey = true;
+      // Only `{ decision }` with a known decision reaches the host.
+      body = parseAidenRemoteBotPlanRespondRequest(input.body);
+      break;
+    case "botAnswerAccessRequest":
+      path = `/bots/${id()}/access-requests/${pattern(input.itemId, BOT_WAIT_ID)}/answer`;
+      method = "POST";
+      needsKey = true;
+      body = parseAidenRemoteBotAccessAnswerRequest(input.body);
+      break;
+    case "botRespondRoutineProposal":
+      path = `/bots/${id()}/routine-proposals/${parseAidenRemoteBotRoutineProposalId(input.itemId)}/respond`;
+      method = "POST";
+      needsKey = true;
+      body = parseAidenRemoteBotRoutineProposalRespondRequest(input.body);
+      break;
+    case "botWithdrawQueued":
+      path = `/bots/${id()}/queued/${parseAidenRemoteBotSubmissionId(input.itemId)}/withdraw`;
+      method = "POST";
+      needsKey = true;
+      if (input.body !== undefined && Object.keys(peerRecord(input.body)).length > 0)
+        throw new Error("Invalid peer Bot session request.");
+      body = {};
       break;
     case "uploadBotAttachment":
       // Not keyed, like a chat upload: an unused staged upload expires on the host.

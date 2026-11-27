@@ -175,6 +175,8 @@ test("attended write binds structured preview and commits exactly once", async (
     arguments: args,
   });
   assert.match(result.content[0]?.type === "text" ? result.content[0].text : "", /committed/u);
+  // Line counts, never contents, so the helper's step can show +1 like the main chat.
+  assert.deepEqual(result.details, { kind: "file_line_changes", version: 1, additions: 1, deletions: 0 });
   assert.equal(await readFile(path.join(workspace.folderPath!, "notes.txt"), "utf8"), args.content);
   await assert.rejects(
     broker.execute({
@@ -233,7 +235,8 @@ test("implementer Full makes multiple edits without approval cards", async (t) =
     const id = `call-edit-${index}`;
     const args = { path: "notes.txt", old_string: oldString, new_string: newString };
     assert.equal(await broker.beforeToolCall(call("edit_file", args, id)), undefined);
-    await broker.execute({ toolCallId: id, toolName: "edit_file", arguments: args });
+    const result = await broker.execute({ toolCallId: id, toolName: "edit_file", arguments: args });
+    assert.deepEqual(result.details, { kind: "file_line_changes", version: 1, additions: 1, deletions: 1 });
   }
   assert.equal(await readFile(path.join(workspace.folderPath!, "notes.txt"), "utf8"), "three\n");
   await broker.shutdown();

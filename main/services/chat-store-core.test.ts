@@ -10,8 +10,27 @@ import {
 } from "./chat-store-core.js";
 import type { GenerationTimeline } from "../../renderer/shared/generation-timeline.js";
 import type { SubagentMessageReferenceV1 } from "../../renderer/shared/subagent-runs.js";
-import { chatForRenderer } from "./visible-chat-projection.js";
+import { chatForRenderer, projectVisibleChatMessage } from "./visible-chat-projection.js";
 import { ChatForkError } from "./chat-fork-error.js";
+import { projectAidenChatExport } from "./chat-export.js";
+import {
+  buildChatRenamePrompt,
+  buildChatTitlePrompt,
+  deriveChatTitleSeed,
+} from "./chat-title-policy.js";
+import {
+  GRABBED_ELEMENT_SCHEMA_VERSION,
+  grabbedElementThumbnailId,
+  type GrabbedElementContextV1,
+} from "../../renderer/shared/browser-element-grab.js";
+import { captureAnalyticsEvents } from "./analytics/test-support.js";
+import { createFirstMessageCommitter } from "./chat-first-message-commit.js";
+import { parseChatFirstMessage } from "../handlers/chat-first-message-params.js";
+import { ChatTurnAdmission } from "./chat-turn-admission.js";
+import {
+  WorkspaceOperationRegistry,
+  admitOwnedWorkspaceOperation,
+} from "./workspace-operation-registry.js";
 import { generationModelMeta } from "./chat-model-selection-meta.js";
 
 async function testStore(t: test.TestContext) {
@@ -2171,6 +2190,198 @@ test("getMeta answers from the index without reading the chat's transcript", asy
   assert.equal("designMode" in (await store.getMeta(chat.id))!, false);
 });
 
+const GRAB_TINY_PNG =
+  "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVQIHWP4z8DwHwAFgAI/ScL2aQAAAABJRU5ErkJggg==";
+const GRAB_TINY_PNG_BYTES = Buffer.byteLength(GRAB_TINY_PNG, "base64");
+
+function sampleGrabbedElement(overrides: Partial<GrabbedElementContextV1> = {}): GrabbedElementContextV1 {
+  const id = overrides.id ?? "el_card_1";
+  const base: GrabbedElementContextV1 = {
+    version: GRABBED_ELEMENT_SCHEMA_VERSION,
+    id,
+    label: "<PricingCard />",
+    framework: "react",
+    componentName: "PricingCard",
+    tagName: "article",
+    selector: "section.pricing > article.card",
+    htmlSnippet: '<article class="card"><h2>Pro</h2></article>',
+    boundingBox: { x: 24, y: 120, width: 320, height: 240 },
+    pageUrl: "http://localhost:3000/pricing",
+    thumbnailAttachmentId: grabbedElementThumbnailId(id),
+    capturedAt: 1_700_000_000_000,
+    ...overrides,
+  };
+  if (base.thumbnailAttachmentId === undefined) delete base.thumbnailAttachmentId;
+  return base;
+}
+
+test("grabbedElements round-trip across createWithFirstMessage, append, restart, fork, export, title policy, and renderer projection", async (t) => {
+  const directory = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-chat-grab-"));
+  t.after(() => fs.rm(directory, { recursive: true, force: true }));
+  const store = createChatStore(async () => directory);
+
+  const firstElement = sampleGrabbedElement({ id: "el_first", thumbnailAttachmentId: undefined });
+  const created = await store.createWithFirstMessage({
+    id: "22222222-2222-4222-8222-222222222222",
+    workspaceId: "workspace-1",
+    turnId: "turn-1",
+    fingerprint: "fp-1",
+    message: {
+      id: "msg-1",
+      content: "",
+      grabbedElements: [firstElement],
+    },
+    assertCurrent: () => undefined,
+  });
+  assert.equal(created.title, "Element: <PricingCard />");
+  assert.deepEqual(created.messages[0]?.grabbedElements, [firstElement]);
+
+  const secondElement = sampleGrabbedElement({ id: "el_second", label: "<HeroCta />" });
+  const thumbAttachment = {
+    id: grabbedElementThumbnailId("el_second"),
+    name: "HeroCta.png",
+    mimeType: "image/png",
+    kind: "image" as const,
+    size: GRAB_TINY_PNG_BYTES,
+    data: GRAB_TINY_PNG,
+  };
+  await store.appendMessage(created.id, {
+    role: "assistant",
+    content: "Looks good.",
+    grabbedElements: [secondElement],
+  } as never);
+  await store.appendMessage(created.id, {
+    role: "user",
+    content: "Adjust padding",
+    attachments: [thumbAttachment],
+    grabbedElements: [secondElement],
+  });
+
+  // Cold restart preserves user grabbedElements, strips assistant grabbedElements, and keeps thumbnail hashes.
+  const reopened = createChatStore(async () => directory);
+  const loaded = await reopened.get(created.id);
+  assert.ok(loaded);
+  assert.deepEqual(loaded.messages[0]?.grabbedElements, [firstElement]);
+  assert.equal(loaded.messages[1]?.grabbedElements, undefined);
+  assert.deepEqual(loaded.messages[2]?.grabbedElements, [secondElement]);
+
+  // Renderer projection preserves grabbedElements and turns stored thumbnail into aiden-attachment:// URL.
+  const withRefs = await reopened.getWithImageReferences(created.id);
+  const forRenderer = chatForRenderer(withRefs);
+  assert.deepEqual(forRenderer?.messages[2]?.grabbedElements, [secondElement]);
+  assert.match(forRenderer?.messages[2]?.attachments?.[0]?.url ?? "", /^aiden-attachment:\/\/image\//u);
+
+  // Copy/fork preserves grabbedElements on user messages.
+  const copied = await reopened.copyVisibleHistory({ sourceChatId: created.id });
+  assert.deepEqual(copied.messages[0]?.grabbedElements, [firstElement]);
+  assert.equal(copied.messages[1]?.grabbedElements, undefined);
+  assert.deepEqual(copied.messages[2]?.grabbedElements, [secondElement]);
+
+  // Export preserves grabbedElements and strips thumbnailAttachmentId when image bytes are unavailable.
+  const exported = projectAidenChatExport(loaded);
+  assert.deepEqual(exported.chat.messages[0]?.grabbedElements, [firstElement]);
+  assert.deepEqual(exported.chat.messages[2]?.grabbedElements, [secondElement]);
+  const exportedMissingThumb = projectAidenChatExport({
+    ...loaded,
+    messages: [
+      {
+        ...loaded.messages[2]!,
+        attachments: [{ ...thumbAttachment, data: undefined, sha256: "b".repeat(64) }],
+      },
+    ],
+  });
+  assert.equal(exportedMissingThumb.chat.messages[0]?.grabbedElements?.[0]?.thumbnailAttachmentId, undefined);
+
+  // Title policy seeds from grabbed element and avoids grab-thumb_* filename noise.
+  assert.equal(
+    deriveChatTitleSeed({ content: "", attachments: [thumbAttachment], grabbedElements: [secondElement] }),
+    "Element: <HeroCta />",
+  );
+  const titlePrompt = buildChatTitlePrompt({
+    content: "Tighten spacing",
+    attachments: [thumbAttachment],
+    grabbedElements: [secondElement],
+  });
+  assert.match(titlePrompt, /- Element: <HeroCta \/>/u);
+  assert.doesNotMatch(titlePrompt, /HeroCta\.png/u);
+  const renamePrompt = buildChatRenamePrompt(loaded.messages);
+  assert.match(renamePrompt, /Element: <PricingCard \/>/u);
+  assert.match(renamePrompt, /Element: <HeroCta \/>/u);
+  assert.doesNotMatch(renamePrompt, /Image: HeroCta\.png/u);
+
+  // Corrupt entry on disk is dropped leniently on readChat without losing valid siblings.
+  const file = path.join(directory, `${created.id}.json`);
+  const raw = JSON.parse(await fs.readFile(file, "utf8")) as { messages: Array<Record<string, unknown>> };
+  raw.messages[0]!.grabbedElements = [{ broken: true }, firstElement];
+  await fs.writeFile(file, JSON.stringify(raw));
+  const recovered = await createChatStore(async () => directory).get(created.id);
+  assert.deepEqual(recovered?.messages[0]?.grabbedElements, [firstElement]);
+  const projected = projectVisibleChatMessage(raw.messages[0]);
+  assert.deepEqual(projected?.grabbedElements, [firstElement]);
+});
+
+test("first-message committer reports browser_grab_sent once on commit and not on replay", async (t) => {
+  const sent = captureAnalyticsEvents(t);
+  const directory = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-first-grab-"));
+  t.after(() => fs.rm(directory, { recursive: true, force: true }));
+  const store = createChatStore(async () => directory);
+  const turns = new ChatTurnAdmission();
+  const workspaces = new WorkspaceOperationRegistry();
+  const owner = {
+    documentId: "doc-grab-1",
+    isDestroyed: () => false,
+    onInvalidated: () => () => undefined,
+  };
+  const commit = createFirstMessageCommitter({
+    store,
+    beginTurn: (chatId, turnId, ownerId) => turns.tryBegin(chatId, turnId, ownerId, false),
+    requiresReconciliation: (ownerId) => turns.requiresAppendReconciliation(ownerId),
+    markReconciliation: (ownerId) => turns.markAppendReconciliationRequired(ownerId),
+    clearReconciliation: (ownerId) => turns.clearAppendReconciliationRequired(ownerId),
+    admitWorkspace: (workspaceId, document) => admitOwnedWorkspaceOperation(workspaces, document, workspaceId),
+    getWorkspace: async () => ({}),
+    resolveSkill: async () => {
+      throw new Error("Skill unavailable");
+    },
+  });
+
+  const element = sampleGrabbedElement({ id: "el_analytics" });
+  const parsed = parseChatFirstMessage({
+    draftId: "33333333-3333-4333-8333-333333333333",
+    workspaceId: "workspace-1",
+    providerId: "openai",
+    model: "test-model",
+    turnId: "turn-grab-analytics",
+    message: {
+      role: "user",
+      content: "",
+      attachments: [
+        {
+          id: grabbedElementThumbnailId("el_analytics"),
+          name: "PricingCard.png",
+          mimeType: "image/png",
+          kind: "image",
+          size: GRAB_TINY_PNG_BYTES,
+          data: GRAB_TINY_PNG,
+        },
+      ],
+      grabbedElements: [element],
+    },
+  });
+
+  const committed = await commit(parsed, owner);
+  assert.deepEqual(committed.messages[0]?.grabbedElements, [element]);
+  assert.deepEqual(sent, [
+    { event: "chat_created", props: { workspace_kind: "folder" } },
+    { event: "browser_grab_sent", props: { count_bucket: "1", with_screenshot: true } },
+  ]);
+
+  // Replay confirms delivery without double-counting analytics.
+  turns.releaseMatching(committed.id, parsed.turnId, owner.documentId);
+  await commit(parsed, owner);
+  assert.equal(sent.length, 2);
+});
+
 test("an in-chat task run on another model leaves the chat's own model unchanged", async (t) => {
   const store = await testStore(t);
   const taskModel = { providerId: "task-provider", model: "task-model" };
@@ -2221,4 +2432,44 @@ test("a started chat keeps who started it across a restart, and a damaged record
   const damaged = await createChatStore(async () => directory).get(child.id);
   assert.equal(damaged?.title, "Run the tests");
   assert.equal("startedBy" in damaged!, false);
+});
+
+test("a turn's thinking level is saved in the same write as its message, survives restart, and only on a regular chat with a model", async (t) => {
+  const directory = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-chat-thinking-level-"));
+  t.after(() => fs.rm(directory, { recursive: true, force: true }));
+  const first = createChatStore(async () => directory);
+  const chat = await first.create({ workspaceId: "workspace", providerId: "openai", model: "model-a" });
+
+  const saved = await first.appendMessage(chat.id, { role: "user", content: "Think harder" }, {
+    providerId: "openai", model: "model-b", thinkingLevel: "high",
+  });
+  assert.equal(saved.model, "model-b");
+  assert.equal(saved.thinkingLevel, "high");
+  const restored = await createChatStore(async () => directory).get(chat.id);
+  assert.equal(restored?.thinkingLevel, "high");
+  assert.equal(restored?.messages[restored.messages.length - 1]?.content, "Think harder");
+
+  // An invalid level writes nothing at all, not even the message.
+  await assert.rejects(
+    first.appendMessage(chat.id, { role: "user", content: "Never stored" }, {
+      providerId: "openai", model: "model-b", thinkingLevel: "extreme" as never,
+    }),
+    /Invalid thinking level/u,
+  );
+  const afterRefusal = await createChatStore(async () => directory).get(chat.id);
+  assert.equal(afterRefusal?.messages.length, 1);
+  assert.equal(afterRefusal?.thinkingLevel, "high");
+
+  // Omitted leaves the level; null clears it.
+  assert.equal((await first.appendMessage(chat.id, { role: "user", content: "Same" })).thinkingLevel, "high");
+  const cleared = await first.appendMessage(chat.id, { role: "user", content: "Default" }, {
+    providerId: "openai", model: "model-b", thinkingLevel: null,
+  });
+  assert.equal("thinkingLevel" in cleared, false);
+
+  const bot = await first.create({ botId: "bot:level-owner", providerId: "openai", model: "model-a" });
+  const botSaved = await first.appendMessage(bot.id, { role: "user", content: "Hi" }, {
+    providerId: "openai", model: "model-a", thinkingLevel: "high",
+  });
+  assert.equal("thinkingLevel" in botSaved, false, "a Bot chat never takes a chat level");
 });
