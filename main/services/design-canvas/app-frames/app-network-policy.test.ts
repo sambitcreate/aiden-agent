@@ -314,6 +314,16 @@ test("appResponseHeaders strips frame-blocking and reporting headers and narrows
   assert.equal(doc.nel, undefined);
   assert.equal(doc["Reporting-Endpoints"], undefined);
   assert.deepEqual(doc["Content-Security-Policy"], ["script-src 'self'", APP_CONNECT_SRC]);
+  // Chromium drops `http://[::1]:*` as an invalid source with a console error (probe 6),
+  // so the added policy names only sources it accepts.
+  const sources = APP_CONNECT_SRC.split(/\s+/u).slice(1);
+  assert.deepEqual(
+    sources.filter((source) => source.includes("[")),
+    [],
+  );
+  for (const source of ["'self'", "http://localhost:*", "http://127.0.0.1:*", "ws://localhost:*", "ws://127.0.0.1:*", "data:", "blob:"]) {
+    assert.ok(sources.includes(source), source);
+  }
   assert.deepEqual(doc["Set-Cookie"], ["sid=1; SameSite=None; Secure"]);
   assert.deepEqual(doc["X-DNS-Prefetch-Control"], ["off"]);
   assert.deepEqual(doc["Content-Type"], ["text/html"]);

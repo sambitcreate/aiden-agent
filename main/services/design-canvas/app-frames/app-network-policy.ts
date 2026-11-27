@@ -232,9 +232,13 @@ export class AppCancelCache {
 
 // ---- Response headers (D7) --------------------------------------------------
 
-/** The added `connect-src` for app-context documents and workers (S71). */
+/**
+ * The added `connect-src` for app-context documents and workers (S71). No
+ * `[::1]` source: Chromium rejects it as invalid (probe 6), `[::1]` apps aren't
+ * framed (S74), and `'self'` covers an `[::1]` export window's own origin.
+ */
 export const APP_CONNECT_SRC =
-  "connect-src 'self' http://localhost:* http://127.0.0.1:* http://[::1]:* ws://localhost:* ws://127.0.0.1:* ws://[::1]:* data: blob:";
+  "connect-src 'self' http://localhost:* http://127.0.0.1:* ws://localhost:* ws://127.0.0.1:* data: blob:";
 /** The export window's top-level sandbox (D18). */
 export const APP_EXPORT_SANDBOX_CSP = "sandbox allow-scripts allow-same-origin allow-forms";
 
