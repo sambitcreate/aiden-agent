@@ -712,7 +712,7 @@ export class GhosttyTerminalSurface {
     this.requestedFontFamily = options.font?.family;
     this.fontSize = terminalFontSize(options.font?.size);
     this.resizeObserver = new ResizeObserver(() => this.fit());
-    this.installEvents();
+    this.toggleEvents(true);
     this.watchDevicePixelRatio();
     // Reduce Motion is read live on every blink decision, and watched so that turning it
     // off restarts a blink cycle that has no timer left to notice it.
@@ -1125,7 +1125,7 @@ export class GhosttyTerminalSurface {
     if (this.compositionSuppressionTimer !== null) {
       window.clearTimeout(this.compositionSuppressionTimer);
     }
-    this.removeEvents();
+    this.toggleEvents(false);
     this.core.dispose();
     if (
       this.canvas.parentElement === this.mount ||
@@ -1790,54 +1790,42 @@ export class GhosttyTerminalSurface {
     this.scrollViewport(delta);
   };
 
-  private installEvents(): void {
-    this.input.addEventListener("keydown", this.onKeyDown);
-    this.input.addEventListener("keyup", this.onKeyUp);
-    this.input.addEventListener("focus", this.onFocus);
-    this.input.addEventListener("blur", this.onBlur);
-    this.input.addEventListener("input", this.onInput);
-    this.input.addEventListener("paste", this.onPaste);
-    this.input.addEventListener("copy", this.onCopyEvent);
-    this.input.addEventListener("compositionstart", this.onCompositionStart);
-    this.input.addEventListener("compositionend", this.onCompositionEnd);
-    this.canvas.addEventListener("pointerdown", this.onPointerDown);
-    this.canvas.addEventListener("pointermove", this.onPointerMove);
-    this.canvas.addEventListener("pointerleave", this.onPointerLeave);
-    this.canvas.addEventListener("pointerup", this.onPointerUp);
-    this.canvas.addEventListener("pointercancel", this.onPointerUp);
-    this.canvas.addEventListener("wheel", this.onWheel, { passive: false });
-    this.canvas.addEventListener("mousedown", this.onMouseDown);
-    this.canvas.addEventListener("contextmenu", this.onContextMenu);
-    this.scrollbar.addEventListener("pointerdown", this.onScrollbarPointerDown);
-    this.scrollbar.addEventListener("pointermove", this.onScrollbarPointerMove);
-    this.scrollbar.addEventListener("pointerup", this.onScrollbarPointerUp);
-    this.scrollbar.addEventListener("pointercancel", this.onScrollbarPointerUp);
-    this.scrollbar.addEventListener("keydown", this.onScrollbarKeyDown);
-  }
-
-  private removeEvents(): void {
-    this.input.removeEventListener("keydown", this.onKeyDown);
-    this.input.removeEventListener("keyup", this.onKeyUp);
-    this.input.removeEventListener("focus", this.onFocus);
-    this.input.removeEventListener("blur", this.onBlur);
-    this.input.removeEventListener("input", this.onInput);
-    this.input.removeEventListener("paste", this.onPaste);
-    this.input.removeEventListener("copy", this.onCopyEvent);
-    this.input.removeEventListener("compositionstart", this.onCompositionStart);
-    this.input.removeEventListener("compositionend", this.onCompositionEnd);
-    this.canvas.removeEventListener("pointerdown", this.onPointerDown);
-    this.canvas.removeEventListener("pointermove", this.onPointerMove);
-    this.canvas.removeEventListener("pointerleave", this.onPointerLeave);
-    this.canvas.removeEventListener("pointerup", this.onPointerUp);
-    this.canvas.removeEventListener("pointercancel", this.onPointerUp);
-    this.canvas.removeEventListener("wheel", this.onWheel);
-    this.canvas.removeEventListener("mousedown", this.onMouseDown);
-    this.canvas.removeEventListener("contextmenu", this.onContextMenu);
-    this.scrollbar.removeEventListener("pointerdown", this.onScrollbarPointerDown);
-    this.scrollbar.removeEventListener("pointermove", this.onScrollbarPointerMove);
-    this.scrollbar.removeEventListener("pointerup", this.onScrollbarPointerUp);
-    this.scrollbar.removeEventListener("pointercancel", this.onScrollbarPointerUp);
-    this.scrollbar.removeEventListener("keydown", this.onScrollbarKeyDown);
+  private toggleEvents(active: boolean): void {
+    const toggle = <K extends keyof HTMLElementEventMap>(
+      target: HTMLElement,
+      type: K,
+      listener: (event: HTMLElementEventMap[K]) => void,
+      addOptions?: AddEventListenerOptions,
+    ): void => {
+      if (active) {
+        if (addOptions) target.addEventListener(type, listener, addOptions);
+        else target.addEventListener(type, listener);
+      } else {
+        target.removeEventListener(type, listener);
+      }
+    };
+    toggle(this.input, "keydown", this.onKeyDown);
+    toggle(this.input, "keyup", this.onKeyUp);
+    toggle(this.input, "focus", this.onFocus);
+    toggle(this.input, "blur", this.onBlur);
+    toggle(this.input, "input", this.onInput);
+    toggle(this.input, "paste", this.onPaste);
+    toggle(this.input, "copy", this.onCopyEvent);
+    toggle(this.input, "compositionstart", this.onCompositionStart);
+    toggle(this.input, "compositionend", this.onCompositionEnd);
+    toggle(this.canvas, "pointerdown", this.onPointerDown);
+    toggle(this.canvas, "pointermove", this.onPointerMove);
+    toggle(this.canvas, "pointerleave", this.onPointerLeave);
+    toggle(this.canvas, "pointerup", this.onPointerUp);
+    toggle(this.canvas, "pointercancel", this.onPointerUp);
+    toggle(this.canvas, "wheel", this.onWheel, { passive: false });
+    toggle(this.canvas, "mousedown", this.onMouseDown);
+    toggle(this.canvas, "contextmenu", this.onContextMenu);
+    toggle(this.scrollbar, "pointerdown", this.onScrollbarPointerDown);
+    toggle(this.scrollbar, "pointermove", this.onScrollbarPointerMove);
+    toggle(this.scrollbar, "pointerup", this.onScrollbarPointerUp);
+    toggle(this.scrollbar, "pointercancel", this.onScrollbarPointerUp);
+    toggle(this.scrollbar, "keydown", this.onScrollbarKeyDown);
   }
 
   private scrollViewport(deltaRows: number): void {
