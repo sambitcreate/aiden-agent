@@ -130,7 +130,9 @@ export function AppDeviceMenu({
   const size = `${viewport.width} × ${viewport.height}`;
   const spoken = `Viewport, ${device ? `${APP_DEVICES[device].label}, ` : ""}${viewport.width} by ${viewport.height}`;
   const trigger = React.useRef<HTMLButtonElement | null>(null);
-  // Set when Custom… is chosen, so the closing menu leaves focus to the popover.
+  // Set when Custom… is chosen. The popover opens only once the menu has
+  // closed: opened beside the modal menu, the menu's focus trap would take
+  // focus back and the popover would dismiss itself as focus left it.
   const opening = React.useRef(false);
   const [custom, setCustom] = React.useState(false);
   const close = () => setCustom(false);
@@ -160,6 +162,7 @@ export function AppDeviceMenu({
             if (!opening.current) return;
             opening.current = false;
             event.preventDefault();
+            setCustom(true);
           }}
         >
           <DropdownMenuLabel>Viewport</DropdownMenuLabel>
@@ -180,7 +183,6 @@ export function AppDeviceMenu({
           <DropdownMenuItem
             onSelect={() => {
               opening.current = true;
-              setCustom(true);
             }}
           >
             Custom…
@@ -242,14 +244,14 @@ export function AppMoreMenu({
   const locked = frame.locked === true;
   const trigger = React.useRef<HTMLButtonElement | null>(null);
   const cancel = React.useRef<HTMLButtonElement | null>(null);
-  const opening = React.useRef(false);
+  // The layer chosen in the menu, opened once the menu has closed (as in the device menu).
+  const opening = React.useRef<"custom" | "trash" | null>(null);
   // A confirmed Trash hands focus to the canvas (so ⌘Z undoes it at once), not back to More.
   const confirmed = React.useRef(false);
   const [layer, setLayer] = React.useState<"custom" | "trash" | null>(null);
   const close = () => setLayer(null);
   const open = (next: "custom" | "trash") => {
-    opening.current = true;
-    setLayer(next);
+    opening.current = next;
   };
   const route = frame.route ?? "/";
   const textId = React.useId();
@@ -267,9 +269,11 @@ export function AppMoreMenu({
           align="end"
           className="min-w-56"
           onCloseAutoFocus={(event) => {
-            if (!opening.current) return;
-            opening.current = false;
+            const next = opening.current;
+            if (!next) return;
+            opening.current = null;
             event.preventDefault();
+            setLayer(next);
           }}
         >
           {folded}

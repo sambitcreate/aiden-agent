@@ -1980,8 +1980,8 @@ async function pageWorkspace(t: TestContext, files: Record<string, string | Buff
   return root;
 }
 
-async function exists(file: string): Promise<boolean> {
-  return fs.lstat(file).then(
+async function exists(probe: string): Promise<boolean> {
+  return fs.lstat(probe).then(
     () => true,
     () => false,
   );
@@ -1998,7 +1998,7 @@ async function eventually(check: () => Promise<boolean>, what: string): Promise<
 
 async function pageFixture(
   t: TestContext,
-  options: {
+  setup: {
     files: Record<string, string | Buffer>;
     framework?: DesignAppsSnapshot["candidates"][number]["framework"] | null;
     appRoot?: string;
@@ -2008,35 +2008,35 @@ async function pageFixture(
     pageFs?: Parameters<typeof registerDesignCanvasHandlers>[0]["pageFs"];
   },
 ) {
-  const workspace = await pageWorkspace(t, options.files);
-  const appRoot = options.appRoot ?? ".";
+  const workspace = await pageWorkspace(t, setup.files);
+  const fixtureRoot = setup.appRoot ?? ".";
   const trashDir = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-page-trash-"));
   t.after(() => fs.rm(trashDir, { recursive: true, force: true }));
   const trashed: string[] = [];
   const reported: number[] = [];
   const outcomes: unknown[] = [];
   const access: { permission: "full" | "ask" | "none" | "read-only" } = { permission: "full" };
-  const framework = options.framework === null ? undefined : (options.framework ?? "tanstack-router");
+  const framework = setup.framework === null ? undefined : (setup.framework ?? "tanstack-router");
   const result = await fixture(t, {
-    ...(options.chats ? { chats: options.chats } : {}),
+    ...(setup.chats ? { chats: setup.chats } : {}),
     roots: { "workspace-1": workspace },
     workspaceAccess: async () => ({ root: workspace, permission: access.permission }),
-    ...(options.pageFs ? { pageFs: options.pageFs } : {}),
+    ...(setup.pageFs ? { pageFs: setup.pageFs } : {}),
     appFrames: {
-      enabled: () => options.live ?? true,
+      enabled: () => setup.live ?? true,
       registry: () => null,
       apps: {
         snapshot: async (workspaceId) => ({
           workspaceId,
           target: "single",
           apps: [],
-          candidates: [{ appRoot, ...(framework ? { framework } : {}), frameworkLabel: "TanStack Router" }],
+          candidates: [{ appRoot: fixtureRoot, ...(framework ? { framework } : {}), frameworkLabel: "TanStack Router" }],
           chosen: [],
         }),
         appForOrigin: () => undefined,
       },
       onAppFrameAdded: (width) => reported.push(width),
-      ...(options.trash === false
+      ...(setup.trash === false
         ? {}
         : {
             trash: async (absolute: string) => {
@@ -2077,6 +2077,7 @@ test("3c: appPageVariant copies the route file and places it as a variant, as an
   const answer = (await invoke("designCanvas:appPageVariant", "chat-1", { frameId: "app-1" })) as { placed: string; route: string; file: string; pageId: string };
   assert.deepEqual([answer.route, answer.file, answer.pageId], ["/pricing-v2", "src/routes/pricing-v2.tsx", "page-1"]);
   const copy = path.join(workspace, "src/routes/pricing-v2.tsx");
+  // check-aiden-rules: allow no-source-grep-test reads a page file the handler wrote in a temp workspace, not Aiden source
   assert.equal(await fs.readFile(copy, "utf8"), PLAIN_PAGE, "the same bytes: a plain default export has no literal");
   assert.equal((await fs.stat(copy)).mode & 0o777, 0o600, "and the same mode");
   const doc = (await invoke("designCanvas:get", "chat-1")) as DesignCanvas;
@@ -2107,6 +2108,7 @@ test("3c: appPageVariant rewrites a TanStack createFileRoute literal and nothing
   const { invoke, store, workspace } = await pageFixture(t, { files: { "src/routes/pricing.tsx": source } });
   await seedFrames(store, pageApp());
   assert.equal(((await invoke("designCanvas:appPageVariant", "chat-1", { frameId: "app-1" })) as { route: string }).route, "/pricing-v2");
+  // check-aiden-rules: allow no-source-grep-test reads a page file the handler wrote in a temp workspace, not Aiden source
   assert.equal(await fs.readFile(path.join(workspace, "src/routes/pricing-v2.tsx"), "utf8"), source.replace("createFileRoute('/pricing')", "createFileRoute('/pricing-v2')"));
 });
 
@@ -2121,9 +2123,9 @@ test("3c: appPageVariant skips a taken slot on EEXIST", async (t) => {
   const { invoke, store, workspace } = await pageFixture(t, {
     files: { "src/routes/pricing.tsx": PLAIN_PAGE },
     pageFs: {
-      writeFile: async (file, bytes, mode) => {
-        if (path.basename(file) === "pricing-v2.tsx") throw Object.assign(new Error("exists"), { code: "EEXIST" });
-        await fs.writeFile(file, bytes, { flag: "wx", mode });
+      writeFile: async (probe, bytes, mode) => {
+        if (path.basename(probe) === "pricing-v2.tsx") throw Object.assign(new Error("exists"), { code: "EEXIST" });
+        await fs.writeFile(probe, bytes, { flag: "wx", mode });
       },
     },
   });
@@ -2272,6 +2274,7 @@ test("3c: a failed canvas write after the Trash writes the file back", async (t)
   assert.deepEqual(await invoke("designCanvas:appPageTrash", "chat-1", { frameId: "app-1" }), { error: "io" });
   internals.write = write;
   assert.equal(trashed.length, 1);
+  // check-aiden-rules: allow no-source-grep-test reads a page file the handler wrote in a temp workspace, not Aiden source
   assert.equal(await fs.readFile(path.join(workspace, "src/routes/pricing.tsx"), "utf8"), PLAIN_PAGE);
   assert.deepEqual(((await invoke("designCanvas:get", "chat-1")) as DesignCanvas).frames.map((frame) => frame.id), ["app-1"]);
 });
@@ -2291,6 +2294,7 @@ test("3c: the Trash keeps the bytes it trashed, and re-checks the permission ins
   internals.update = update;
   await invoke("designCanvas:save", "chat-1", before, gone.revision);
   await eventually(() => exists(path.join(workspace, "src/routes/pricing.tsx")), "the page restored");
+  // check-aiden-rules: allow no-source-grep-test reads a page file the handler wrote in a temp workspace, not Aiden source
   assert.equal(await fs.readFile(path.join(workspace, "src/routes/pricing.tsx"), "utf8"), "export default () => 'changed';\n");
 
   const second = await pageFixture(t, { files: { "src/routes/pricing.tsx": PLAIN_PAGE } });
