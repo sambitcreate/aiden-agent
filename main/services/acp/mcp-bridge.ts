@@ -77,11 +77,6 @@ export class AcpMcpBridge {
     return this.tools.length === 0;
   }
 
-  /** Host tool name for a projected MCP name, used to suppress duplicate activity rows. */
-  hostNameFor(mcpName: string): string | undefined {
-    return this.tools.find((tool) => tool.mcpName === mcpName)?.hostName;
-  }
-
   /** Start listening. The catalog may be empty and filled on later turns. */
   async start(): Promise<McpServer> {
     if (this.server && this.url) return this.descriptor();

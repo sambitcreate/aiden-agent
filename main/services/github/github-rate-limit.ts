@@ -64,13 +64,6 @@ export class GitHubRateLimitGovernor {
     return until > this.now() ? until : undefined;
   }
 
-  activePauses(): Array<{ scope: string; until: number }> {
-    const now = this.now();
-    return [...this.scopes.entries()]
-      .filter(([, state]) => state.pausedUntil > now)
-      .map(([scope, state]) => ({ scope, until: state.pausedUntil }));
-  }
-
   private state(scope: string): ScopeState {
     let state = this.scopes.get(scope);
     if (!state) {
