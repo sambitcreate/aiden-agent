@@ -2372,6 +2372,66 @@ async function callBotWatch<T>(operation: () => Promise<T>): Promise<T> {
   }
 }
 
+interface OptInCapabilityGroup {
+  readonly capabilities: readonly AidenRemoteCapability[];
+  readonly requiresBot?: true;
+  readonly wired: (dependencies: AidenRemoteRouterDependencies) => boolean;
+  /**
+   * Present for the 23 aligned opt-in groups negotiated directly by `POST /device/capabilities`.
+   * Omitted for `bot:routine-models`, `bot:peers`, `bot:open-work`, and `bot:watches`, which
+   * stay on the `progressCapabilitySupported` fallback during negotiation.
+   */
+  readonly unavailable?: string;
+}
+
+/**
+ * Ordered opt-in capability groups for `/server` advertisement (`serverCapabilities`) and
+ * `POST /device/capabilities` negotiation. Order is wire-visible.
+ */
+const OPT_IN_CAPABILITY_GROUPS: readonly OptInCapabilityGroup[] = [
+  { capabilities: AIDEN_REMOTE_BOT_CARD_CAPABILITIES, requiresBot: true, wired: (d) => Boolean(d.botSessions), unavailable: "Bot sessions are unavailable on this Aiden installation." },
+  { capabilities: AIDEN_REMOTE_BOT_ACTIVITY_CAPABILITIES, requiresBot: true, wired: botActivityWired, unavailable: "Bot chat activity is unavailable on this Aiden installation." },
+  { capabilities: AIDEN_REMOTE_BOT_MESSAGING_CAPABILITIES, requiresBot: true, wired: botMessagingWired, unavailable: "Bot messaging is unavailable on this Aiden installation." },
+  { capabilities: AIDEN_REMOTE_BOT_ALLOWED_CAPABILITIES, requiresBot: true, wired: botAllowedWired, unavailable: "Bot allow lists are unavailable on this Aiden installation." },
+  { capabilities: AIDEN_REMOTE_BOT_PLAN_CAPABILITIES, requiresBot: true, wired: botPlansWired, unavailable: "Bot plans are unavailable on this Aiden installation." },
+  { capabilities: AIDEN_REMOTE_BOT_ACCESS_REQUEST_CAPABILITIES, requiresBot: true, wired: botAccessRequestsWired, unavailable: "Bot access requests are unavailable on this Aiden installation." },
+  { capabilities: AIDEN_REMOTE_BOT_HANDOFF_CAPABILITIES, requiresBot: true, wired: botHandoffsWired, unavailable: "Bot hand-offs are unavailable on this Aiden installation." },
+  { capabilities: AIDEN_REMOTE_BOT_IMAGE_CAPABILITIES, requiresBot: true, wired: botImagesWired, unavailable: "Bot images are unavailable on this Aiden installation." },
+  { capabilities: AIDEN_REMOTE_BOT_ROUTINE_MODEL_CAPABILITIES, requiresBot: true, wired: botRoutineModelsWired },
+  { capabilities: AIDEN_REMOTE_BOT_PEER_CAPABILITIES, requiresBot: true, wired: botPeersWired },
+  { capabilities: AIDEN_REMOTE_BOT_NEEDS_YOU_CAPABILITIES, requiresBot: true, wired: botNeedsYouWired, unavailable: "Bot attention is unavailable on this Aiden installation." },
+  { capabilities: AIDEN_REMOTE_BOT_OPEN_WORK_CAPABILITIES, requiresBot: true, wired: botOpenWorkWired },
+  { capabilities: AIDEN_REMOTE_BOT_WATCH_CAPABILITIES, requiresBot: true, wired: botWatchesWired },
+  { capabilities: AIDEN_REMOTE_BOT_ISSUE_CAPABILITIES, requiresBot: true, wired: botIssuesWired, unavailable: "Bot issues are unavailable on this Aiden installation." },
+  { capabilities: AIDEN_REMOTE_SCHEDULE_CARD_CAPABILITIES, wired: scheduleCardsWired, unavailable: "Schedule cards are unavailable on this Aiden installation." },
+  { capabilities: AIDEN_REMOTE_APPROVAL_CARD_CAPABILITIES, wired: approvalCardsWired, unavailable: "Approval cards are unavailable on this Aiden installation." },
+  { capabilities: AIDEN_REMOTE_APPROVAL_PLAIN_WORDS_CAPABILITIES, wired: approvalCardsWired, unavailable: "Approval cards are unavailable on this Aiden installation." },
+  { capabilities: AIDEN_REMOTE_APPROVAL_SETTINGS_CAPABILITIES, wired: approvalSettingsWired, unavailable: "Approval settings are unavailable on this Aiden installation." },
+  { capabilities: AIDEN_REMOTE_BOT_SETTINGS_CHANGE_CAPABILITIES, requiresBot: true, wired: botSettingsChangesWired, unavailable: "Bot settings changes are unavailable on this Aiden installation." },
+  { capabilities: AIDEN_REMOTE_BOT_SUGGESTION_CAPABILITIES, requiresBot: true, wired: botSuggestionsWired, unavailable: "Bot suggestions are unavailable on this Aiden installation." },
+  { capabilities: AIDEN_REMOTE_BOT_TEMPLATE_CAPABILITIES, requiresBot: true, wired: botTemplatesWired, unavailable: "Bot templates are unavailable on this Aiden installation." },
+  { capabilities: AIDEN_REMOTE_CHAT_JOB_CAPABILITIES, wired: (d) => Boolean(d.backgroundJobs), unavailable: "Background jobs are unavailable on this Aiden installation." },
+  { capabilities: AIDEN_REMOTE_RAW_UPLOAD_CAPABILITIES, wired: rawUploadsWired, unavailable: "Picture uploads are unavailable on this Aiden installation." },
+  { capabilities: AIDEN_REMOTE_CHAT_NEW_WORKTREE_CAPABILITIES, wired: newWorktreesWired, unavailable: "New worktrees are unavailable on this Aiden installation." },
+  { capabilities: AIDEN_REMOTE_CHAT_CONTINUE_CAPABILITIES, wired: continueInNewChatWired, unavailable: "Continuing in a new chat is unavailable on this Aiden installation." },
+  { capabilities: AIDEN_REMOTE_STREAM_SNAPSHOT_REASON_CAPABILITIES, wired: streamSnapshotReasonsWired, unavailable: "Stream snapshot reasons are unavailable on this Aiden installation." },
+  { capabilities: AIDEN_REMOTE_AGENT_SLIDER_CAPABILITIES, wired: agentSliderWired, unavailable: "The Agent Slider is unavailable on this Aiden installation." },
+];
+
+const ALIGNED_OPT_IN_CAPABILITY_GROUP = new Map<
+  string,
+  OptInCapabilityGroup & { readonly unavailable: string }
+>(
+  OPT_IN_CAPABILITY_GROUPS.flatMap((group) =>
+    group.unavailable === undefined
+      ? []
+      : group.capabilities.map((capability) => [
+          capability,
+          group as OptInCapabilityGroup & { readonly unavailable: string },
+        ] as const),
+  ),
+);
+
 function advertisedServerCapabilities(
   device: AidenRemoteRouterAuthenticatedDevice,
   dependencies: AidenRemoteRouterDependencies,
@@ -2381,62 +2441,11 @@ function advertisedServerCapabilities(
     ...(device.acceptsBotCapabilities === true
       ? AIDEN_REMOTE_BOT_CAPABILITIES
       : []),
-    // Revision 27: the card opt-in is offered wherever Bot sessions are served,
-    // so a client can confirm its negotiated grant from `/server`.
-    ...(device.acceptsBotCapabilities === true && dependencies.botSessions
-      ? AIDEN_REMOTE_BOT_CARD_CAPABILITIES
-      : []),
-    ...(device.acceptsBotCapabilities === true && botActivityWired(dependencies)
-      ? AIDEN_REMOTE_BOT_ACTIVITY_CAPABILITIES
-      : []),
-    ...(device.acceptsBotCapabilities === true && botMessagingWired(dependencies)
-      ? AIDEN_REMOTE_BOT_MESSAGING_CAPABILITIES : []),
-    ...(device.acceptsBotCapabilities === true && botAllowedWired(dependencies)
-      ? AIDEN_REMOTE_BOT_ALLOWED_CAPABILITIES : []),
-    ...(device.acceptsBotCapabilities === true && botPlansWired(dependencies)
-      ? AIDEN_REMOTE_BOT_PLAN_CAPABILITIES : []),
-    ...(device.acceptsBotCapabilities === true && botAccessRequestsWired(dependencies)
-      ? AIDEN_REMOTE_BOT_ACCESS_REQUEST_CAPABILITIES : []),
-    // Revision 37: offered only while the hand-off and pause routes are wired.
-    ...(device.acceptsBotCapabilities === true && botHandoffsWired(dependencies)
-      ? AIDEN_REMOTE_BOT_HANDOFF_CAPABILITIES
-      : []),
-    // Revision 45: offered only while shared images and their route are wired.
-    ...(device.acceptsBotCapabilities === true && botImagesWired(dependencies)
-      ? AIDEN_REMOTE_BOT_IMAGE_CAPABILITIES
-      : []),
-    ...(device.acceptsBotCapabilities === true && botRoutineModelsWired(dependencies) ? AIDEN_REMOTE_BOT_ROUTINE_MODEL_CAPABILITIES : []),
-    ...(device.acceptsBotCapabilities === true && botPeersWired(dependencies) ? AIDEN_REMOTE_BOT_PEER_CAPABILITIES : []),
-    // Revision 68: offered only while the host can say which Bots wait on the person.
-    ...(device.acceptsBotCapabilities === true && botNeedsYouWired(dependencies) ? AIDEN_REMOTE_BOT_NEEDS_YOU_CAPABILITIES : []),
-    ...(device.acceptsBotCapabilities === true && botOpenWorkWired(dependencies) ? AIDEN_REMOTE_BOT_OPEN_WORK_CAPABILITIES : []),
-    ...(device.acceptsBotCapabilities === true && botWatchesWired(dependencies) ? AIDEN_REMOTE_BOT_WATCH_CAPABILITIES : []),
-    // Revision 42: offered only while the issue act route is wired.
-    ...(device.acceptsBotCapabilities === true && botIssuesWired(dependencies)
-      ? AIDEN_REMOTE_BOT_ISSUE_CAPABILITIES
-      : []),
-    // Revision 39: a display opt-in for any device type while approvals are served.
-    ...(scheduleCardsWired(dependencies) ? AIDEN_REMOTE_SCHEDULE_CARD_CAPABILITIES : []),
-    // Revision 61: typed approval cards and the approval settings, offered only where wired.
-    ...(approvalCardsWired(dependencies) ? AIDEN_REMOTE_APPROVAL_CARD_CAPABILITIES : []),
-    // Revision 69: plain words on shell cards, beside the typed cards.
-    ...(approvalCardsWired(dependencies) ? AIDEN_REMOTE_APPROVAL_PLAIN_WORDS_CAPABILITIES : []),
-    ...(approvalSettingsWired(dependencies) ? AIDEN_REMOTE_APPROVAL_SETTINGS_CAPABILITIES : []),
-    ...(device.acceptsBotCapabilities === true && botSettingsChangesWired(dependencies) ? AIDEN_REMOTE_BOT_SETTINGS_CHANGE_CAPABILITIES : []),
-    ...(device.acceptsBotCapabilities === true && botSuggestionsWired(dependencies) ? AIDEN_REMOTE_BOT_SUGGESTION_CAPABILITIES : []),
-    ...(device.acceptsBotCapabilities === true && botTemplatesWired(dependencies) ? AIDEN_REMOTE_BOT_TEMPLATE_CAPABILITIES : []),
-    // Revision 49: offered only while the host runs background jobs.
-    ...(dependencies.backgroundJobs ? AIDEN_REMOTE_CHAT_JOB_CAPABILITIES : []),
-    // Revision 50: offered while chat or Bot uploads are served.
-    ...(rawUploadsWired(dependencies) ? AIDEN_REMOTE_RAW_UPLOAD_CAPABILITIES : []),
-    // Revision 53: offered only while the host makes worktrees for phones.
-    ...(newWorktreesWired(dependencies) ? AIDEN_REMOTE_CHAT_NEW_WORKTREE_CAPABILITIES : []),
-    // Revision 64: offered only while the host can continue a chat elsewhere.
-    ...(continueInNewChatWired(dependencies) ? AIDEN_REMOTE_CHAT_CONTINUE_CAPABILITIES : []),
-    // Revision 65: offered while stream event replay is served.
-    ...(streamSnapshotReasonsWired(dependencies) ? AIDEN_REMOTE_STREAM_SNAPSHOT_REASON_CAPABILITIES : []),
-    // Revision 70: offered while turns can save the chat's own model selection.
-    ...(agentSliderWired(dependencies) ? AIDEN_REMOTE_AGENT_SLIDER_CAPABILITIES : []),
+    ...OPT_IN_CAPABILITY_GROUPS.flatMap((group) =>
+      (!group.requiresBot || device.acceptsBotCapabilities === true) && group.wired(dependencies)
+        ? group.capabilities
+        : [],
+    ),
     ...(device.acceptsProgressCapabilities === true
       ? AIDEN_REMOTE_PROGRESS_CAPABILITIES.filter((capability) =>
           progressCapabilitySupported(dependencies, capability),
@@ -2871,91 +2880,10 @@ export function createAidenRemoteRequestHandler(
         }
         for (const capability of input.accepts) {
           if (capability.startsWith("app-controls:") && !await dependencies.appControls?.enabled()) throw new AidenRemoteServiceError("capability_denied", "Allow paired-device chat controls in Aiden Agent on your computer first.", 403);
-          if ((AIDEN_REMOTE_BOT_CARD_CAPABILITIES as readonly string[]).includes(capability)) {
-            // An opt-in to two session entry types, not an authority: any
-            // device may hold it while the host serves Bot sessions.
-            if (!dependencies.botSessions) {
-              throw new AidenRemoteServiceError("not_found", "Bot sessions are unavailable on this Aiden installation.", 404);
-            }
-          } else if ((AIDEN_REMOTE_BOT_ACTIVITY_CAPABILITIES as readonly string[]).includes(capability)) {
-            // Revision 30: an opt-in to the activity frames and the detail field, offered only while they are wired.
-            if (!botActivityWired(dependencies)) {
-              throw new AidenRemoteServiceError("not_found", "Bot chat activity is unavailable on this Aiden installation.", 404);
-            }
-          } else if ((AIDEN_REMOTE_BOT_ALLOWED_CAPABILITIES as readonly string[]).includes(capability)) {
-            if (!botAllowedWired(dependencies)) throw new AidenRemoteServiceError("not_found", "Bot allow lists are unavailable on this Aiden installation.", 404);
-          } else if ((AIDEN_REMOTE_BOT_PLAN_CAPABILITIES as readonly string[]).includes(capability)) {
-            if (!botPlansWired(dependencies)) throw new AidenRemoteServiceError("not_found", "Bot plans are unavailable on this Aiden installation.", 404);
-          } else if ((AIDEN_REMOTE_BOT_ACCESS_REQUEST_CAPABILITIES as readonly string[]).includes(capability)) {
-            if (!botAccessRequestsWired(dependencies)) throw new AidenRemoteServiceError("not_found", "Bot access requests are unavailable on this Aiden installation.", 404);
-          } else if ((AIDEN_REMOTE_BOT_HANDOFF_CAPABILITIES as readonly string[]).includes(capability)) {
-            // Revision 37: an opt-in to hand-off and pause shapes, offered only while their routes are wired.
-            if (!botHandoffsWired(dependencies)) {
-              throw new AidenRemoteServiceError("not_found", "Bot hand-offs are unavailable on this Aiden installation.", 404);
-            }
-          } else if ((AIDEN_REMOTE_BOT_IMAGE_CAPABILITIES as readonly string[]).includes(capability)) {
-            // Revision 45: an opt-in to shared-image entries, offered only while their route is wired.
-            if (!botImagesWired(dependencies)) {
-              throw new AidenRemoteServiceError("not_found", "Bot images are unavailable on this Aiden installation.", 404);
-            }
-          } else if ((AIDEN_REMOTE_BOT_ISSUE_CAPABILITIES as readonly string[]).includes(capability)) {
-            // Revision 42: an opt-in to issue cards, offered only while their route is wired.
-            if (!botIssuesWired(dependencies)) {
-              throw new AidenRemoteServiceError("not_found", "Bot issues are unavailable on this Aiden installation.", 404);
-            }
-          } else if ((AIDEN_REMOTE_BOT_NEEDS_YOU_CAPABILITIES as readonly string[]).includes(capability)) {
-            // Revision 68: a display opt-in, offered only while the signal is wired.
-            if (!botNeedsYouWired(dependencies)) throw new AidenRemoteServiceError("not_found", "Bot attention is unavailable on this Aiden installation.", 404);
-          } else if ((AIDEN_REMOTE_BOT_MESSAGING_CAPABILITIES as readonly string[]).includes(capability)) {
-            if (!botMessagingWired(dependencies)) throw new AidenRemoteServiceError("not_found", "Bot messaging is unavailable on this Aiden installation.", 404);
-          } else if ((AIDEN_REMOTE_APPROVAL_CARD_CAPABILITIES as readonly string[]).includes(capability)) {
-            // Revision 61: typed approval cards; answers still need approval:respond.
-            if (!approvalCardsWired(dependencies)) throw new AidenRemoteServiceError("not_found", "Approval cards are unavailable on this Aiden installation.", 404);
-          } else if ((AIDEN_REMOTE_APPROVAL_PLAIN_WORDS_CAPABILITIES as readonly string[]).includes(capability)) {
-            // Revision 69: display-only plain words on shell cards; read only with approval:cards.
-            if (!approvalCardsWired(dependencies)) throw new AidenRemoteServiceError("not_found", "Approval cards are unavailable on this Aiden installation.", 404);
-          } else if ((AIDEN_REMOTE_APPROVAL_SETTINGS_CAPABILITIES as readonly string[]).includes(capability)) {
-            if (!approvalSettingsWired(dependencies)) throw new AidenRemoteServiceError("not_found", "Approval settings are unavailable on this Aiden installation.", 404);
-          } else if ((AIDEN_REMOTE_BOT_SETTINGS_CHANGE_CAPABILITIES as readonly string[]).includes(capability)) {
-            if (!botSettingsChangesWired(dependencies)) throw new AidenRemoteServiceError("not_found", "Bot settings changes are unavailable on this Aiden installation.", 404);
-          } else if ((AIDEN_REMOTE_BOT_SUGGESTION_CAPABILITIES as readonly string[]).includes(capability)) {
-            if (!botSuggestionsWired(dependencies)) throw new AidenRemoteServiceError("not_found", "Bot suggestions are unavailable on this Aiden installation.", 404);
-          } else if ((AIDEN_REMOTE_BOT_TEMPLATE_CAPABILITIES as readonly string[]).includes(capability)) {
-            if (!botTemplatesWired(dependencies)) throw new AidenRemoteServiceError("not_found", "Bot templates are unavailable on this Aiden installation.", 404);
-          } else if ((AIDEN_REMOTE_SCHEDULE_CARD_CAPABILITIES as readonly string[]).includes(capability)) {
-            // Revision 39: a display opt-in for scheduled-task approvals; it never changes canAllow.
-            if (!scheduleCardsWired(dependencies)) {
-              throw new AidenRemoteServiceError("not_found", "Schedule cards are unavailable on this Aiden installation.", 404);
-            }
-          } else if ((AIDEN_REMOTE_RAW_UPLOAD_CAPABILITIES as readonly string[]).includes(capability)) {
-            // Revision 50: raw picture uploads, offered while chat or Bot uploads are served.
-            if (!rawUploadsWired(dependencies)) {
-              throw new AidenRemoteServiceError("not_found", "Picture uploads are unavailable on this Aiden installation.", 404);
-            }
-          } else if ((AIDEN_REMOTE_CHAT_JOB_CAPABILITIES as readonly string[]).includes(capability)) {
-            // Revision 49: offered only while the host runs background jobs.
-            if (!dependencies.backgroundJobs) {
-              throw new AidenRemoteServiceError("not_found", "Background jobs are unavailable on this Aiden installation.", 404);
-            }
-          } else if ((AIDEN_REMOTE_CHAT_NEW_WORKTREE_CAPABILITIES as readonly string[]).includes(capability)) {
-            // Revision 53: offered only while the host makes worktrees for phones.
-            if (!newWorktreesWired(dependencies)) {
-              throw new AidenRemoteServiceError("not_found", "New worktrees are unavailable on this Aiden installation.", 404);
-            }
-          } else if ((AIDEN_REMOTE_CHAT_CONTINUE_CAPABILITIES as readonly string[]).includes(capability)) {
-            // Revision 64: offered only while the host can continue a chat elsewhere.
-            if (!continueInNewChatWired(dependencies)) {
-              throw new AidenRemoteServiceError("not_found", "Continuing in a new chat is unavailable on this Aiden installation.", 404);
-            }
-          } else if ((AIDEN_REMOTE_STREAM_SNAPSHOT_REASON_CAPABILITIES as readonly string[]).includes(capability)) {
-            // Revision 65: offered while stream event replay is served.
-            if (!streamSnapshotReasonsWired(dependencies)) {
-              throw new AidenRemoteServiceError("not_found", "Stream snapshot reasons are unavailable on this Aiden installation.", 404);
-            }
-          } else if ((AIDEN_REMOTE_AGENT_SLIDER_CAPABILITIES as readonly string[]).includes(capability)) {
-            // Revision 70: offered while turns can save the chat's own model selection.
-            if (!agentSliderWired(dependencies)) {
-              throw new AidenRemoteServiceError("not_found", "The Agent Slider is unavailable on this Aiden installation.", 404);
+          const optInGroup = ALIGNED_OPT_IN_CAPABILITY_GROUP.get(capability);
+          if (optInGroup) {
+            if (!optInGroup.wired(dependencies)) {
+              throw new AidenRemoteServiceError("not_found", optInGroup.unavailable, 404);
             }
           } else if (capability === "simulators:control") {
             // Refuse non-desktops first so they never learn whether this Mac has simulators.
