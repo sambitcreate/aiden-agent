@@ -162,8 +162,10 @@ export interface ForegroundState {
   /** The shell is on a CPU or in an uninterruptible (disk) wait, so it is not waiting at its prompt. */
   running: boolean;
   /**
-   * Live children of the shell still in its own process group, as a `$(...)`
-   * subshell is. Background jobs have groups of their own and do not count.
+   * Live processes other than the shell in the shell's own process group, as a
+   * `$(...)` subshell and anything it started are, even once init adopts them.
+   * The shell leads its session, so nothing else can join that group, and
+   * background jobs have groups of their own and do not count.
    */
   children: number;
   /** The shell's accumulated CPU time in milliseconds, or null when unknown. */
@@ -180,22 +182,18 @@ function parseCpuTime(value: string): number | null {
 }
 
 /**
- * Reads `ps -A -o pid= -o ppid= -o pgid= -o tpgid= -o stat= -o time=` for one
+ * Reads `ps -A -o pid= -o pgid= -o tpgid= -o stat= -o time=` for one
  * shell. Sandboxed kernels such as gVisor report group 0, which reads as unknown.
  */
 export function parseForegroundState(output: string, shellPid: number): ForegroundState | null {
   let shell: { group: number; stat: string; time: string } | undefined;
   let children = 0;
   for (const line of output.split("\n")) {
-    const [pid, ppid, pgid, tpgid, stat = "", time = ""] = line.trim().split(/\s+/u);
+    const [pid, pgid, tpgid, stat = "", time = ""] = line.trim().split(/\s+/u);
     const id = Number.parseInt(pid ?? "", 10);
     if (id === shellPid) {
       shell = { group: Number.parseInt(tpgid ?? "", 10), stat, time };
-    } else if (
-      Number.parseInt(ppid ?? "", 10) === shellPid &&
-      Number.parseInt(pgid ?? "", 10) === shellPid &&
-      !stat.startsWith("Z")
-    ) {
+    } else if (Number.parseInt(pgid ?? "", 10) === shellPid && !stat.startsWith("Z")) {
       children += 1;
     }
   }
@@ -225,7 +223,7 @@ function readForegroundState(shellPid: number): Promise<ForegroundState | null> 
     execFile(
       "ps",
       // Separate -o flags: a comma list with `=` headers is not portable to BSD ps.
-      ["-A", "-o", "pid=", "-o", "ppid=", "-o", "pgid=", "-o", "tpgid=", "-o", "stat=", "-o", "time="],
+      ["-A", "-o", "pid=", "-o", "pgid=", "-o", "tpgid=", "-o", "stat=", "-o", "time="],
       { timeout: FOREGROUND_GROUP_TIMEOUT_MS, maxBuffer: 8 * 1024 * 1024 },
       (error, stdout) => {
         const state = error ? null : parseForegroundState(stdout, shellPid);

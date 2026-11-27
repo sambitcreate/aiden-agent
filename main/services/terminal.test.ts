@@ -1338,28 +1338,34 @@ test("a terminal that ends during the close check reads as idle", async (t) => {
 
 test("ps output reads as the terminal's group, the shell's state, its live children and its CPU time", () => {
   const table = [
-    "  PID  PPID  PGID TPGID STAT      TIME",
-    "    1     0     1     0 Ss     0:12.00",
-    " 4242  4000  4242  4242 Ss+    0:01.25",
-    " 4300  4242  4242  4242 R+     0:00.00",
-    " 4301  4242  4242  4242 Z+     0:00.00",
-    " 4302  4242  4302  4242 S      0:00.00",
-    " 4400  4300  4242  4242 S+     0:00.00",
+    "  PID  PGID TPGID STAT      TIME",
+    "    1     1     0 Ss     0:12.00",
+    " 4242  4242  4242 Ss+    0:01.25",
+    // A `$(...)` subshell, and its own child: both hold the substitution open.
+    " 4300  4242  4242 R+     0:00.00",
+    " 4400  4242 S+     0:00.00",
+    // `x=$( (sleep 30 &) )`: the subshell is gone and init adopted the sleep,
+    // which keeps the shell waiting in its own group.
+    " 4500  4242  4242 S+     0:00.00",
+    // A reaped-to-be zombie holds nothing open.
+    " 4301  4242  4242 Z+     0:00.00",
+    // `sleep 30 &` at the prompt: a background job, in a group of its own.
+    " 4302  4302  4242 S      0:00.00",
   ].join("\n");
-  assert.deepEqual(parseForegroundState(table, 4242), { group: 4242, running: false, children: 1, cpuMs: 1250 });
+  assert.deepEqual(parseForegroundState(table, 4242), { group: 4242, running: false, children: 3, cpuMs: 1250 });
   // A disk wait is work too: U on macOS, D on Linux.
-  assert.equal(parseForegroundState(" 4242 4000 4242 4242 Us+ 0:00.10", 4242)?.running, true);
-  assert.equal(parseForegroundState(" 4242 4000 4242 4242 D+ 00:00:01", 4242)?.running, true);
-  assert.equal(parseForegroundState(" 4242 4000 4242 4242 R+ 00:00:01", 4242)?.running, true);
-  assert.equal(parseForegroundState(" 4242 4000 4242 4242 I+ 00:00:01", 4242)?.running, false);
+  assert.equal(parseForegroundState(" 4242 4242 4242 Us+ 0:00.10", 4242)?.running, true);
+  assert.equal(parseForegroundState(" 4242 4242 4242 D+ 00:00:01", 4242)?.running, true);
+  assert.equal(parseForegroundState(" 4242 4242 4242 R+ 00:00:01", 4242)?.running, true);
+  assert.equal(parseForegroundState(" 4242 4242 4242 I+ 00:00:01", 4242)?.running, false);
   // Linux ps counts whole seconds, with hours and days.
-  assert.equal(parseForegroundState(" 4242 4000 4242 4242 S+ 01:02:03", 4242)?.cpuMs, 3_723_000);
-  assert.equal(parseForegroundState(" 4242 4000 4242 4242 S+ 1-00:00:00", 4242)?.cpuMs, 86_400_000);
-  assert.equal(parseForegroundState(" 4242 4000 4242 4242 S+ ?", 4242)?.cpuMs, null);
+  assert.equal(parseForegroundState(" 4242 4242 4242 S+ 01:02:03", 4242)?.cpuMs, 3_723_000);
+  assert.equal(parseForegroundState(" 4242 4242 4242 S+ 1-00:00:00", 4242)?.cpuMs, 86_400_000);
+  assert.equal(parseForegroundState(" 4242 4242 4242 S+ ?", 4242)?.cpuMs, null);
   // Sandboxed kernels such as gVisor report group 0, which reads as unknown.
-  assert.equal(parseForegroundState(" 4242 4000 4242 0 S 0:00.00", 4242), null);
-  assert.equal(parseForegroundState(" 4242 4000 4242 -1 S 0:00.00", 4242), null);
-  assert.equal(parseForegroundState(" 4243 4000 4243 4243 S 0:00.00", 4242), null);
+  assert.equal(parseForegroundState(" 4242 4242 0 S 0:00.00", 4242), null);
+  assert.equal(parseForegroundState(" 4242 4242 -1 S 0:00.00", 4242), null);
+  assert.equal(parseForegroundState(" 4243 4243 4243 S 0:00.00", 4242), null);
   assert.equal(parseForegroundState("", 4242), null);
 });
 
