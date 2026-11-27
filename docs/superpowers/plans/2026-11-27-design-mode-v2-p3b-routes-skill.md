@@ -1260,5 +1260,12 @@ Built 2026-11-27 on `t3/design-mode-v2-p3b`, stacked on 3a (merged from `origin/
   - Screenshots 6 and 7 share one shot, `design-live-variants-phone`: the home with two `variantOf` frames, labelled Current, Calm and Bold, and a `device: "phone"` pricing frame.
   - A second frame of a route already on the page needs `duplicate: true` to become a variant. Without it, `canvas_place_frame` reuses the existing frame and ignores `variantOf` (S85's reuse rule). The case passes `duplicate: true`, and the skill's route copies (`/pricing-v2`) never hit this rule.
 
+- **Code review 1 (review-p3b-1, 2026-11-27).** All 6 Majors and 4 Minors were verified and fixed test-first:
+  - `appRoutes` and `placeAppRoute` re-check the chat (still framing, same workspace) after each await and inside `beforeWrite`, and `placeAppRoute` answers `unavailable` for an unavailable workspace.
+  - A variant that needs a new group is refused when the whole canvas has no room for both frames.
+  - `parseReactRouterConfig` falls back when code follows the default export (only a `satisfies`/`as` type, `;`, the end or the next statement may follow), reads `await flatRoutes()`, and still treats `flatRoutes({…})` with options as unreadable.
+  - The picker says when main cut the list short, drops a load that a newer one or a close superseded, keeps double-clicks inside a value field, prefills a mid-pattern catch-all with its own segments only, scrolls on arrow keys, keeps the typed-into row active under a passing pointer, and uses the motion token's default duration.
+  - `isConcreteRoute` refuses `.`, `..` and empty path segments, which also covers canvas.json's `routes` and every placement.
+
 **Verification.** Recorded in Task 13's Space runs below and in the FINISH line of the build's status log.
 
