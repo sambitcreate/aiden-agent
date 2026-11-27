@@ -1,21 +1,14 @@
 import { ipcMain } from "../platform.js";
-import { parseScheduledTaskInput } from "./scheduled-tasks-parse.js";
+import {
+  optionalString,
+  parseScheduledTaskInput,
+  requiredString,
+} from "./scheduled-tasks-parse.js";
 import { scheduledTaskApplicationService } from "../services/scheduled-task-application-service-main.js";
 import { scheduledTaskRevision } from "../services/scheduled-task-application-service.js";
 import { systemTimezone } from "../services/schedule-store.js";
 import { saveConnectorTask } from "../services/scheduled-task-connector-trigger.js";
 import { keepAwakeStatus } from "../services/keep-awake/keep-awake-main.js";
-
-function requiredString(value: unknown, name: string): string {
-  if (typeof value !== "string" || !value.trim()) {
-    throw new Error(`Expected a non-empty string for "${name}".`);
-  }
-  return value;
-}
-
-function optionalString(value: unknown): string | undefined {
-  return typeof value === "string" && value.trim() ? value : undefined;
-}
 
 function requiredUpdatedAt(value: unknown): number {
   if (typeof value !== "number" || !Number.isSafeInteger(value) || value < 0) {
@@ -30,6 +23,14 @@ async function revisionFor(id: string, updatedAt: unknown): Promise<string> {
     throw new Error("This automation changed. Refresh it before trying again.");
   }
   return scheduledTaskRevision(task);
+}
+
+async function idWithRevision(
+  rawId: unknown,
+  updatedAt: unknown,
+): Promise<{ id: string; revision: string }> {
+  const id = requiredString(rawId, "id");
+  return { id, revision: await revisionFor(id, updatedAt) };
 }
 
 export function registerScheduledTaskHandlers(): void {
@@ -49,24 +50,18 @@ export function registerScheduledTaskHandlers(): void {
       needsSource: triggers.markTaskNeedsSource,
     });
   });
-  ipcMain.handle("schedule:remove", async (_event, id: unknown, updatedAt: unknown) =>
-    scheduledTaskApplicationService.remove(
-      requiredString(id, "id"),
-      await revisionFor(requiredString(id, "id"), updatedAt),
-    ),
-  );
-  ipcMain.handle("schedule:pause", async (_event, id: unknown, updatedAt: unknown) =>
-    scheduledTaskApplicationService.pause(
-      requiredString(id, "id"),
-      await revisionFor(requiredString(id, "id"), updatedAt),
-    ),
-  );
-  ipcMain.handle("schedule:resume", async (_event, id: unknown, updatedAt: unknown) =>
-    scheduledTaskApplicationService.resume(
-      requiredString(id, "id"),
-      await revisionFor(requiredString(id, "id"), updatedAt),
-    ),
-  );
+  ipcMain.handle("schedule:remove", async (_event, rawId: unknown, updatedAt: unknown) => {
+    const { id, revision } = await idWithRevision(rawId, updatedAt);
+    return scheduledTaskApplicationService.remove(id, revision);
+  });
+  ipcMain.handle("schedule:pause", async (_event, rawId: unknown, updatedAt: unknown) => {
+    const { id, revision } = await idWithRevision(rawId, updatedAt);
+    return scheduledTaskApplicationService.pause(id, revision);
+  });
+  ipcMain.handle("schedule:resume", async (_event, rawId: unknown, updatedAt: unknown) => {
+    const { id, revision } = await idWithRevision(rawId, updatedAt);
+    return scheduledTaskApplicationService.resume(id, revision);
+  });
   // A link task's link is shown once, when made or rotated; reads never include it.
   ipcMain.handle("schedule:trigger-link:rotate", async (_event, id: unknown) =>
     (await import("../services/scheduled-task-triggers-main.js")).rotateTaskTriggerLink(requiredString(id, "id")),
@@ -78,19 +73,14 @@ export function registerScheduledTaskHandlers(): void {
   ipcMain.handle("schedule:trigger-link:state", async (_event, id: unknown) =>
     (await import("../services/scheduled-task-triggers-main.js")).taskTriggerLinkState(requiredString(id, "id")),
   );
-  ipcMain.handle("schedule:use-own-chat", async (_event, id: unknown, updatedAt: unknown) =>
-    scheduledTaskApplicationService.useOwnChat(
-      requiredString(id, "id"),
-      await revisionFor(requiredString(id, "id"), updatedAt),
-    ),
-  );
-  ipcMain.handle("schedule:runNow", async (_event, id: unknown, updatedAt: unknown) =>
-    scheduledTaskApplicationService.runNow(
-      requiredString(id, "id"),
-      undefined,
-      await revisionFor(requiredString(id, "id"), updatedAt),
-    ),
-  );
+  ipcMain.handle("schedule:use-own-chat", async (_event, rawId: unknown, updatedAt: unknown) => {
+    const { id, revision } = await idWithRevision(rawId, updatedAt);
+    return scheduledTaskApplicationService.useOwnChat(id, revision);
+  });
+  ipcMain.handle("schedule:runNow", async (_event, rawId: unknown, updatedAt: unknown) => {
+    const { id, revision } = await idWithRevision(rawId, updatedAt);
+    return scheduledTaskApplicationService.runNow(id, undefined, revision);
+  });
   ipcMain.handle("schedule:preview", (_event, cron: unknown, timezone: unknown, count: unknown) =>
     scheduledTaskApplicationService.preview(
       requiredString(cron, "cron"),
