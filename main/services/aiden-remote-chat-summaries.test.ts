@@ -586,8 +586,9 @@ test("summary query enforces chat:read, defaults, and hard bounds over HTTP", as
   const serverProjection = await (await fetch(`${base}/server`, {
     headers,
   })).json() as { features?: string[] };
-  // The read-only messages window is advertised to every device that can read chats.
-  assert.deepEqual(serverProjection.features, ["chat-summaries-v1", "chat-skills-v1", "chat-messages-window-v1", "chat-messages-window-metadata-v1", "chat-visuals-v1"]);
+  // The read-only messages window is advertised to every device that can read
+  // chats. This chat service wires no skill catalog, so skills are not.
+  assert.deepEqual(serverProjection.features, ["chat-summaries-v1", "chat-messages-window-v1", "chat-messages-window-metadata-v1", "chat-visuals-v1"]);
 });
 
 test("pathological synthetic history keeps summary responses bounded without payload reads", async () => {

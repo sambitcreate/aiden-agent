@@ -102,7 +102,11 @@ async function fixture(options: {
   streamsAvailable?: boolean;
   runInputAvailable?: boolean;
   questionsAvailable?: boolean;
-  skillsAvailable?: boolean;
+  /**
+   * `false` leaves skills out; `"unwired"` keeps the catalog method a real chat
+   * service always has but reports `supportsSkills: false`, as on `aiden serve`.
+   */
+  skillsAvailable?: boolean | "unwired";
   agentInterruptAvailable?: boolean;
   deviceType?: "iphone" | "ipad" | "android" | "mac" | "linux" | "agent";
   /** The id the registry answers for the credential; a normal device id when absent. */
@@ -568,6 +572,7 @@ async function fixture(options: {
       ...(options.skillsAvailable === false
         ? {}
         : {
+            supportsSkills: options.skillsAvailable !== "unwired",
             chatSkillCatalog: async (deviceId, id) => {
               calls.push(`skill-catalog:${deviceId}:${id}`);
               return {
@@ -4595,6 +4600,38 @@ test("chat skills route gates on negotiated skills:invoke and advertises its fea
     assert.equal(missing.status, 404);
   } finally {
     noSurface.close();
+  }
+
+  // A chat service always has the catalog method; without the catalog, the
+  // invocation resolver and the device gate (`aiden serve`) skills are neither
+  // advertised, offered, granted on upgrade nor listed.
+  const unwired = await fixture({
+    capabilities: ["server:read", "chat:read", "chat:write", "skills:invoke"],
+    acceptsProgressCapabilities: true,
+    skillsAvailable: "unwired",
+  });
+  try {
+    const server = await (await fetch(`${unwired.base}/server`, { headers })).json();
+    assert.equal(server.features.includes("chat-skills-v1"), false);
+    assert.equal(server.serverCapabilities.includes("skills:invoke"), false);
+    // A device that negotiated skills while the host still offered them reads
+    // grants within serverCapabilities, which iOS and Android reject otherwise.
+    assert.deepEqual(
+      server.capabilities.filter((capability: string) => !server.serverCapabilities.includes(capability)),
+      [],
+    );
+    const missing = await fetch(`${unwired.base}/chats/chat-1/skills`, { headers });
+    assert.equal(missing.status, 404);
+    assert.equal(unwired.calls.some((call) => call.startsWith("skill-catalog:")), false);
+    const upgrade = await fetch(`${unwired.base}/device/capabilities`, {
+      method: "POST",
+      headers: { ...headers, "content-type": "application/json" },
+      body: JSON.stringify({ accepts: ["skills:invoke"] }),
+    });
+    assert.equal(upgrade.status, 404);
+    assert.equal(unwired.calls.some((call) => call.startsWith("device-capabilities:")), false);
+  } finally {
+    unwired.close();
   }
 });
 

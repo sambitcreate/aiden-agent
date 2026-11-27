@@ -1323,6 +1323,44 @@ test("renaming the Mac updates authenticated projection and Bonjour without rota
   }
 });
 
+test("a paired device is never granted a capability the host's /server does not offer", async () => {
+  // No workspace API: none of the progress surfaces (tasks, agents, questions,
+  // app controls, skills) is served on this host.
+  const app = await fixture();
+  try {
+    await app.service.setEnabled(true);
+    const { bootstrap } = await app.service.beginPairing("lan");
+    const paired = await insecureJson<{ credential: string; capabilities: string[] }>(
+      app.persisted().lanPort,
+      "/api/aiden/v1/pairing/exchange",
+      {
+        method: "POST",
+        body: {
+          secret: bootstrap.secret,
+          deviceName: "Phone",
+          deviceType: "iphone",
+          clientVersion: "1",
+          acceptsProgressCapabilities: true,
+        },
+      },
+    );
+    assert.equal(paired.status, 200);
+    const server = await insecureJson<{ capabilities: string[]; serverCapabilities: string[] }>(
+      app.persisted().lanPort,
+      "/api/aiden/v1/server",
+      { headers: { authorization: `Bearer ${paired.body.credential}`, "aiden-protocol-version": "1" } },
+    );
+    assert.equal(server.status, 200);
+    assert.deepEqual(
+      paired.body.capabilities.filter((capability) => !server.body.serverCapabilities.includes(capability)),
+      [],
+    );
+    assert.deepEqual([...server.body.capabilities].sort(), [...paired.body.capabilities].sort());
+  } finally {
+    await app.cleanup();
+  }
+});
+
 test("Tailscale connect ownership persists only after connect and explicit disable clears only it", async () => {
   const app = await fixture("both");
   try {

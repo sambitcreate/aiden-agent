@@ -10,7 +10,7 @@ import { createServer as createNetServer, type Server as NetServer, type Socket 
 import os from "node:os";
 import { peerLanInterfaceAddresses } from "./peer-routes.js";
 import type { Duplex } from "node:stream";
-import { AIDEN_REMOTE_BASE_PATH } from "./aiden-remote-protocol.js";
+import { AIDEN_REMOTE_BASE_PATH, type AidenRemoteProgressCapability } from "./aiden-remote-protocol.js";
 import {
   AidenRemotePairingService,
   type AidenRemoteDesktopPairing,
@@ -28,6 +28,7 @@ import {
 import {
   createAidenRemoteRequestHandler,
   createAidenRemoteUpgradeHandler,
+  progressCapabilitySupported,
   type AidenRemoteRouterDependencies,
 } from "./aiden-remote-router.js";
 import {
@@ -599,6 +600,10 @@ export class AidenRemoteService {
       const workspaceApi = await this.options.workspaceApi?.(state.instanceId);
       this.settleRemoteApi = workspaceApi?.settle;
       let pairingRequests: AidenRemotePairingRequestService | null = null;
+      // Pairing grants only the progress capabilities `/server` offers, judged
+      // from the same router dependencies (built below, read at exchange time).
+      const progressSupported = (capability: AidenRemoteProgressCapability) =>
+        progressCapabilitySupported(routerDependencies, capability);
       const pairing = new AidenRemotePairingService(
         state.instanceId,
         this.options.state,
@@ -611,6 +616,7 @@ export class AidenRemoteService {
         this.options.botCapabilitiesSupported,
         // Desktop pairing earns host-wide run authority only where it is served.
         () => Boolean(workspaceApi?.hostFeed && workspaceApi.hostRuns && workspaceApi.chats),
+        progressSupported,
       );
       pairingRequests = this.options.pairingRequestSettings
         ? new AidenRemotePairingRequestService({
@@ -627,6 +633,7 @@ export class AidenRemoteService {
             botCapabilitiesSupported: this.options.botCapabilitiesSupported ?? (() => true),
             hostCapabilitiesSupported: () =>
               Boolean(workspaceApi?.hostFeed && workspaceApi.hostRuns && workspaceApi.chats),
+            progressCapabilitySupported: progressSupported,
             onChanged: () => this.options.notifyPairingRequestsChanged?.(),
             now: this.now,
           })

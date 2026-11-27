@@ -28,6 +28,7 @@ function fixture(options: {
   beforeDeviceList?: () => Promise<void>;
   botCapabilitiesSupported?: boolean;
   hostCapabilitiesSupported?: boolean;
+  progressCapabilitySupported?: (capability: string) => boolean;
 } = {}) {
   let now = 1_000;
   let issued = 0;
@@ -69,6 +70,7 @@ function fixture(options: {
     () => "Studio Mac",
     () => options.botCapabilitiesSupported ?? true,
     () => options.hostCapabilitiesSupported ?? false,
+    ...(options.progressCapabilitySupported ? [options.progressCapabilitySupported] : []),
   );
   return {
     service,
@@ -324,6 +326,28 @@ test("pairing grants progress authority only to clients that explicitly accept i
     ),
   );
   assert.equal((fullResult.capabilities as readonly string[]).includes("simulators:control"), false);
+});
+
+test("pairing grants only the progress capabilities the host serves", async () => {
+  // A host like `aiden serve`: no task, agent, question, app-control or skill surfaces.
+  const served = new Set<string>();
+  const narrow = fixture({ progressCapabilitySupported: (capability) => served.has(capability) });
+  const opened = narrow.service.begin(endpoint, fingerprint);
+  const result = await narrow.service.exchange(exchange(opened.bootstrap.secret, true, true, true), "cli-host");
+  assert.deepEqual(
+    AIDEN_REMOTE_PROGRESS_CAPABILITIES.filter((capability) => (result.capabilities as readonly string[]).includes(capability)),
+    [],
+  );
+  assert.equal(narrow.issuedAcceptsProgressCapabilities(), true, "the device still speaks the vocabulary and can ask later");
+
+  // The predicate is read at exchange time, so a surface wired later is granted then.
+  served.add("questions:respond");
+  const later = narrow.service.begin(endpoint, fingerprint);
+  const next = await narrow.service.exchange(exchange(later.bootstrap.secret, true, true, true), "cli-host-later");
+  assert.deepEqual(
+    AIDEN_REMOTE_PROGRESS_CAPABILITIES.filter((capability) => (next.capabilities as readonly string[]).includes(capability)),
+    ["questions:respond"],
+  );
 });
 
 test("Linux host policy narrows a Bot-aware pairing request to legacy authority", async () => {

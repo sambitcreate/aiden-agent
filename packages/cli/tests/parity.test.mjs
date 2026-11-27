@@ -888,6 +888,15 @@ test("Remote HTTPS serves private workspaces, persists turns once, replays SSE a
   const features = (await request("/server")).data.features;
   assert.ok(features.includes("chat-fork-v1")); assert.ok(!features.includes("chat-fork-summary-v1"));
   assert.ok(!features.includes("bot-durable-session-v1")); assert.ok(!features.includes("bot-memory-v1")); assert.ok(!features.includes("bot-proactive-v1"));
+  // The server has no skill registry, so it neither advertises skills nor grants them.
+  assert.ok(!features.includes("chat-skills-v1"));
+  // A progress-aware device paired here holds only what `/server` offers it.
+  const { bootstrap } = await remote.service.beginPairing("lan");
+  const paired = await request("/pairing/exchange", "POST", { secret: bootstrap.secret, deviceName: "Progress phone", deviceType: "iphone", clientVersion: "test", acceptsBotCapabilities: true, acceptsProgressCapabilities: true });
+  assert.equal(paired.status, 200, JSON.stringify(paired));
+  const pairedServer = (await request("/server", "GET", undefined, undefined, { authorization: `Bearer ${paired.data.credential}` })).data;
+  assert.deepEqual(paired.data.capabilities.filter((capability) => !pairedServer.serverCapabilities.includes(capability)), []);
+  assert.ok(!paired.data.capabilities.includes("skills:invoke"));
   const forked = await request(`/chats/${created.data.id}/fork`, "POST", { messageId: chat.data.messages.at(-1).id, position: "after" }, "fork-cli-test-000001", { "if-match": chat.data.revision });
   assert.equal(forked.status, 201, JSON.stringify(forked));
   assert.equal(forked.data.chat.forkedFrom.chatId, created.data.id);
@@ -1002,6 +1011,71 @@ test("Bots retain one-shot notice, exact Custom tools, revocation and independen
   const resumed = await api.createCliBots(dir, daemon);
   try { assert.equal((await resumed.application.get(bot.id)).name, "Scoped helper"); assert.equal((await resumed.application.noticeStatus(audienceId)).requiresAcknowledgement, true); }
   finally { await resumed.stop(); }
+});
+
+test("a paired phone sends to a default-mode Bot chat only while the server owner's notice is acknowledged", async (t) => {
+  const dir = temporary(t), requests = [];
+  const provider = createServer(async (request, response) => {
+    let body = ""; for await (const chunk of request) body += chunk;
+    requests.push(JSON.parse(body)); response.writeHead(200, { "content-type": "text/event-stream" });
+    response.write(`data: ${JSON.stringify({ id: "bot", object: "chat.completion.chunk", choices: [{ index: 0, delta: { role: "assistant", content: "Bot replied" }, finish_reason: null }] })}\n\n`);
+    response.write(`data: ${JSON.stringify({ id: "bot", object: "chat.completion.chunk", choices: [{ index: 0, delta: {}, finish_reason: "stop" }] })}\n\n`);
+    response.end("data: [DONE]\n\n");
+  });
+  await new Promise((resolve) => provider.listen(0, "127.0.0.1", resolve));
+  t.after(() => { provider.closeAllConnections(); provider.close(); });
+  api.atomicJson(join(dir, "models.json"), { providers: { "cli-test": { api: "openai-completions", baseUrl: `http://127.0.0.1:${provider.address().port}/v1`, apiKey: "test-only", models: [{ id: "test", name: "Test", reasoning: false, input: ["text"], contextWindow: 32000, maxTokens: 4096, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 } }] } } });
+  const original = process.env.AIDEN_CLI_ENTRY; process.env.AIDEN_CLI_ENTRY = join(pkg, "dist/app/cli.js");
+  t.after(() => { if (original === undefined) delete process.env.AIDEN_CLI_ENTRY; else process.env.AIDEN_CLI_ENTRY = original; });
+  const daemon = api.createDaemonChats(dir), scheduler = api.createCliScheduler(dir);
+  const remote = await api.createCliRemote(dir, daemon, scheduler, { discovery: { async start() {}, stop() {} } });
+  t.after(async () => { await remote.stop(); await scheduler.service.stopAndSettle(); });
+  await remote.start();
+  // The owner sets the Bot up on the server, as `aiden bots acknowledge|create|chat` do.
+  const owner = "cli:local", app = remote.bots.application;
+  const notice = await app.noticeStatus(owner);
+  await app.acknowledgeNotice(owner, { version: notice.version, decision: "customize_first", confirmedForeground: true });
+  const catalog = await app.capabilityCatalog(owner);
+  const model = catalog.providers.find((item) => item.label === "cli-test"); assert.ok(model, JSON.stringify(catalog.providers));
+  const custom = { providerId: model.id, modelId: model.models[0].id, fileScopeIds: [], shellEnabled: false, connectionIds: [], skillIds: [], otherCapabilityIds: [] };
+  const bot = await app.createBot({ audienceId: owner, bot: { name: "Ada", instructions: "Help briefly", avatar: { version: 1, shape: "wisp", color: "lilac" } }, access: { accessMode: "custom", catalogRevision: catalog.revision, custom } });
+  const chat = await app.createChat({ audienceId: owner, botId: bot.id, providerId: "cli-test", model: "test" });
+  const status = await remote.service.status();
+  const issued = await remote.state.issueDevice({ name: "Test phone", type: "iphone", clientVersion: "test", capabilities: ["server:read", "chat:read", "chat:write", "bot:read", "bot:write"], acceptsBotCapabilities: true });
+  const ca = readFileSync(join(dir, "remote-tls/ca-certificate.pem"));
+  const request = (path, method = "GET", body, key) => new Promise((resolve, reject) => {
+    const sent = httpsRequest({ hostname: "127.0.0.1", port: status.lanPort, ca, path: `/api/aiden/v1${path}`, method,
+      headers: { authorization: `Bearer ${issued.credential}`, "aiden-protocol-version": "1", ...(body ? { "content-type": "application/json" } : {}), ...(key ? { "idempotency-key": key } : {}) } }, (response) => {
+      let data = ""; response.on("data", (chunk) => { data += chunk; }); response.on("end", () => resolve({ status: response.statusCode, data: response.headers["content-type"]?.includes("json") ? JSON.parse(data) : data }));
+    });
+    sent.setTimeout(15000, () => sent.destroy(new Error(`Remote request timed out: ${method} ${path}`)));
+    sent.on("error", reject); sent.end(body ? JSON.stringify(body) : undefined);
+  });
+  const path = `/chats/${chat.id}/turns`;
+  assert.equal((await request(`/chats/${chat.id}`)).status, 200);
+  const turn = await request(path, "POST", { text: "Hello Ada" }, "bot-turn-from-phone-01");
+  assert.equal(turn.status, 202, JSON.stringify(turn));
+  await daemon.llmClient.waitForChatIdle(chat.id);
+  assert.equal(requests.length, 1);
+  assert.ok(JSON.stringify(requests[0].messages).includes("Help briefly"));
+  assert.equal((await request(`/chats/${chat.id}`)).data.messages.at(-1).text, "Bot replied");
+  // Withdrawing the owner's notice decision refuses the phone too, before anything runs.
+  await app.revokeNoticeAudience(owner);
+  const refused = await request(path, "POST", { text: "Still there?" }, "bot-turn-from-phone-02");
+  assert.equal(refused.status, 404, JSON.stringify(refused));
+  assert.equal(requests.length, 1);
+  // Acknowledged again on the host, the phone's turns run once more.
+  await app.acknowledgeNotice(owner, { version: notice.version, decision: "customize_first", confirmedForeground: true });
+  const resumed = await request(path, "POST", { text: "Still there?" }, "bot-turn-from-phone-03");
+  assert.equal(resumed.status, 202, JSON.stringify(resumed));
+  await daemon.llmClient.waitForChatIdle(chat.id);
+  assert.equal(requests.length, 2);
+  // Let the finished stream reach the journal before the data directory goes.
+  for (let attempt = 0; attempt < 50; attempt += 1) {
+    const archive = existsSync(join(dir, "remote-streams.json")) ? JSON.parse(readFileSync(join(dir, "remote-streams.json"), "utf8")) : { streams: [] };
+    if (archive.streams.some((stream) => stream.streamId === resumed.data.streamId && stream.state === "done")) break;
+    await new Promise((resolve) => setTimeout(resolve, 100));
+  }
 });
 
 test("a paused Bot stops its running turn, refuses new ones and runs again once unpaused", async (t) => {

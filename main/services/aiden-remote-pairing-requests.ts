@@ -6,6 +6,7 @@ import {
   AIDEN_REMOTE_LEGACY_CAPABILITIES,
   AIDEN_REMOTE_PROGRESS_CAPABILITIES,
   AIDEN_REMOTE_PROTOCOL_VERSION,
+  type AidenRemoteProgressCapability,
 } from "./aiden-remote-protocol.js";
 import type { AidenRemotePairingExchangeResponse } from "./aiden-remote-pairing.js";
 import {
@@ -113,6 +114,8 @@ export interface AidenPairingRequestServiceDependencies {
   displayName(): string;
   botCapabilitiesSupported(): boolean;
   hostCapabilitiesSupported(): boolean;
+  /** Which progress capabilities this host serves; omitted, all of them. */
+  progressCapabilitySupported?(capability: AidenRemoteProgressCapability): boolean;
   /** Called whenever the set of prompts or their state may have changed. */
   onChanged?(): void;
   now?(): number;
@@ -583,7 +586,8 @@ export class AidenRemotePairingRequestService {
         capabilities: [
           ...AIDEN_REMOTE_LEGACY_CAPABILITIES,
           ...(acceptsBotCapabilities ? AIDEN_REMOTE_BOT_CAPABILITIES : []),
-          ...AIDEN_REMOTE_PROGRESS_CAPABILITIES,
+          ...AIDEN_REMOTE_PROGRESS_CAPABILITIES.filter((capability) =>
+            this.dependencies.progressCapabilitySupported?.(capability) ?? true),
           ...(this.dependencies.hostCapabilitiesSupported() ? AIDEN_REMOTE_HOST_CAPABILITIES : []),
         ],
         acceptsBotCapabilities,

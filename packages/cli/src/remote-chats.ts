@@ -13,7 +13,7 @@ import type { AidenIdempotencyLedger, AidenIdempotencySnapshot } from "../../../
 import type { AidenRemoteStateRegistry } from "../../../main/services/aiden-remote-state.js";
 import type { createDaemonChats } from "./daemon-chats.ts";
 import type { createCliWorkspaceApplication } from "./workspace-application.ts";
-import type { createCliBots } from "./bots.ts";
+import { CLI_BOT_OWNER_AUDIENCE_ID, type createCliBots } from "./bots.ts";
 import { listCliProviders } from "./providers.ts";
 import { JsonStore, readJson } from "./state.ts";
 import { createCliChatForks } from "./daemon-forks.ts";
@@ -84,6 +84,7 @@ export async function createCliRemoteChats(agentDir: string, daemon: ReturnType<
     snapshot, persist: (write) => journal.save(write), idempotency, persistIdempotency,
     onPersistenceError: () => process.stderr.write("aiden: Remote stream persistence failed.\n"),
   });
+  const botAudience = (_deviceId: string) => CLI_BOT_OWNER_AUDIENCE_ID;
   const chats = new AidenRemoteChatService({ application, chatStore: daemon.chatStore, generation: daemon.llmClient,
     streams, models: modelService, bots: bots.botStore, botMutations: bots.mutationGate,
     isFolderWorkspace: async (workspaceId) => analyticsWorkspaceKind(await workspace.configStore.getWorkspace(workspaceId)) !== "none",
@@ -105,7 +106,12 @@ export async function createCliRemoteChats(agentDir: string, daemon: ReturnType<
     },
     // An outside MCP app's chats and turns are never product analytics.
     deviceReportsAnalytics: async (deviceId) => (await state.snapshot()).devices.find((candidate) => candidate.id === deviceId)?.type !== "agent",
-    retainedBotChatAuthorizer: (input) => bots.application.authorizeRetainedChat({ ...input, audienceId: input.deviceId }),
+    // Paired devices have no route to acknowledge the Bot access notice, so a
+    // device's Bot chat is admitted as the server's owner, whose notice is
+    // acknowledged on the host (`aiden bots acknowledge`). Durable sessions
+    // admit the same owner audience.
+    retainedBotChatAuthorizer: (input) => bots.application.authorizeRetainedChat({ ...input, audienceId: botAudience(input.deviceId) }),
+    botAudience,
     botTurnAuthorityPreflight: (input) => bots.preflight(input),
     // Refused before the ledger records anything, so the same key runs after `aiden bots unpause`.
     botPaused: (botId) => bots.isPaused(botId),

@@ -7,6 +7,7 @@ import {
   AIDEN_REMOTE_PROTOCOL_VERSION,
   assertAidenRemoteEndpoint,
   type AidenRemoteCapability,
+  type AidenRemoteProgressCapability,
 } from "./aiden-remote-protocol.js";
 import { captureAnalyticsReporter } from "./analytics/analytics-report.js";
 import { countBucket } from "./analytics/analytics-sanitize.js";
@@ -244,6 +245,8 @@ export class AidenRemotePairingService {
     private readonly displayName: () => string = () => "Aiden Agent",
     private readonly botCapabilitiesSupported: () => boolean = () => true,
     private readonly hostCapabilitiesSupported: () => boolean = () => false,
+    /** Which progress capabilities this host serves; a device is granted only those. */
+    private readonly progressCapabilitySupported: (capability: AidenRemoteProgressCapability) => boolean = () => true,
   ) {}
 
   begin(
@@ -500,7 +503,8 @@ export class AidenRemotePairingService {
             ? AIDEN_REMOTE_BOT_CAPABILITIES
             : []),
           ...(input.acceptsProgressCapabilities
-            ? AIDEN_REMOTE_PROGRESS_CAPABILITIES
+            ? AIDEN_REMOTE_PROGRESS_CAPABILITIES.filter((capability) =>
+                this.progressCapabilitySupported(capability))
             : []),
           // Host-wide run authority is desktop-only and explicit: a Mac or
           // Linux controller that opts into the progress vocabulary is a
