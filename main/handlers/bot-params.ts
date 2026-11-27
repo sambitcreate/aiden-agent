@@ -1,4 +1,5 @@
 import { parseBotResumeAcknowledgement } from "../../renderer/shared/bot-execution-resume.js";
+import { requireAllowedKeys } from "../shared/guards.js";
 import { parseBotAccessChoice, type BotAccessChoice } from "../../renderer/shared/bot-access-requests.js";
 import {
   BOT_LIMITS,
@@ -38,18 +39,8 @@ const CREATE_WITH_ACCESS_KEYS = new Set(["access", "bot"]);
 const UPDATE_KEYS = new Set([...CREATE_KEYS, "chatActivity", "interruptions", "selfWakeUps", "acceptsBotMessages", "messagesOtherBots", "thinkingLevel", "expectedRevision", "id"]);
 const CHAT_KEYS = new Set(["botId", "model", "providerId", "workspaceId"]);
 const ACCESS_UPDATE_KEYS = new Set(["access", "botId", "expectedRevision"]);
-function exact(value: unknown, keys: ReadonlySet<string>, label: string) {
-  if (!value || typeof value !== "object" || Array.isArray(value))
-    throw new Error(`Invalid ${label}.`);
-  const record = value as Record<string, unknown>;
-  let count = 0;
-  for (const key in record) {
-    if (!Object.prototype.hasOwnProperty.call(record, key)) continue;
-    count += 1;
-    if (count > keys.size || !keys.has(key)) throw new Error(`Invalid ${label}.`);
-  }
-  return record;
-}
+const exact = (value: unknown, keys: ReadonlySet<string>, label: string): Record<string, unknown> =>
+  requireAllowedKeys(value, keys, `Invalid ${label}.`);
 
 function text(value: unknown, label: string, maximum: number, optional = false) {
   if (value === undefined && optional) return undefined;

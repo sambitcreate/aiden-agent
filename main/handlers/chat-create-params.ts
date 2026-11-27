@@ -6,6 +6,7 @@ import {
   MAX_WORKSPACE_ID_BYTES,
   MAX_WORKSPACE_ID_CHARS,
 } from "../../renderer/shared/chat-message-contract.js";
+import { requireAllowedKeys } from "../shared/guards.js";
 
 const CHAT_CREATE_KEYS = new Set([
   "model",
@@ -25,25 +26,6 @@ export interface ParsedChatCreate {
 
 export interface ParsedPublicChatCreate extends ParsedChatCreate {
   workspaceId: string;
-}
-
-function exactRecord(
-  value: unknown,
-  allowed: ReadonlySet<string>,
-  label: string,
-): Record<string, unknown> {
-  if (typeof value !== "object" || value === null || Array.isArray(value)) {
-    throw new Error(`Invalid ${label}.`);
-  }
-  const record = value as Record<string, unknown>;
-  let count = 0;
-  for (const key in record) {
-    if (!Object.prototype.hasOwnProperty.call(record, key)) continue;
-    count += 1;
-    if (count > allowed.size || !allowed.has(key))
-      throw new Error(`Invalid ${label}.`);
-  }
-  return record;
 }
 
 function optionalBoundedString(
@@ -96,7 +78,7 @@ function projectedCreate(record: Record<string, unknown>): ParsedChatCreate {
 
 export function parseChatCreate(value: unknown): ParsedPublicChatCreate {
   const projected = projectedCreate(
-    exactRecord(value, CHAT_CREATE_KEYS, "chat creation fields"),
+    requireAllowedKeys(value, CHAT_CREATE_KEYS, "Invalid chat creation fields."),
   );
   if (!projected.workspaceId) throw new Error("Invalid workspace id.");
   return { ...projected, workspaceId: projected.workspaceId };

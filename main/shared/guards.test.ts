@@ -86,6 +86,22 @@ test("requireAllowedKeys supports single and split error messages", () => {
     () => requireAllowedKeys({ a: 1, extra: 2 }, allowed, { record: "Invalid envelope.", fields: "Invalid fields." }),
     /Invalid fields\./,
   );
+
+  // Lazy rejection: stops inspecting properties on the first disallowed key rather than scanning every key.
+  const keys = ["a", ...Array.from({ length: 1_000 }, (_, index) => `extra-${index}`)];
+  let inspected = 0;
+  const hostile = new Proxy(
+    {},
+    {
+      ownKeys: () => keys,
+      getOwnPropertyDescriptor(_target, key) {
+        inspected += 1;
+        return typeof key === "string" ? { configurable: true, enumerable: true, value: 1 } : undefined;
+      },
+    },
+  );
+  assert.throws(() => requireAllowedKeys(hostile, allowed, "Invalid thing."), /Invalid thing\./);
+  assert.ok(inspected <= (allowed.size + 1) * 2, `expected lazy stop, inspected ${inspected} keys`);
 });
 
 test("requirePlainShape rejects class instances and missing or extra keys", () => {

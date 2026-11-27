@@ -2,6 +2,7 @@ import {
   MAX_FORK_SUMMARY_INSTRUCTIONS_CHARS,
   type ChatForkPosition,
 } from "../../renderer/shared/chat-copy-contract.js";
+import { requireAllowedKeys } from "../shared/guards.js";
 
 const MAX_CHAT_ID_CHARS = 160;
 const MAX_CHAT_ID_BYTES = 640;
@@ -27,25 +28,11 @@ const MAX_CONTEXT_PRESSURE_ATTACHMENTS = 20;
 const MAX_ATTACHMENT_NAME_CHARS = 512;
 const MAX_ATTACHMENT_TEXT_CHARS = 16 * 1024 * 1024;
 
-function exactRecord(
+const exactRecord = (
   value: unknown,
   allowed: ReadonlySet<string>,
   label: string,
-): Record<string, unknown> {
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
-    throw new Error(`Invalid ${label}.`);
-  }
-  const record = value as Record<string, unknown>;
-  let count = 0;
-  for (const key in record) {
-    if (!Object.prototype.hasOwnProperty.call(record, key)) continue;
-    count += 1;
-    if (count > allowed.size || !allowed.has(key)) {
-      throw new Error(`Invalid ${label}.`);
-    }
-  }
-  return record;
-}
+): Record<string, unknown> => requireAllowedKeys(value, allowed, `Invalid ${label}.`);
 
 function boundedId(value: unknown, label: string): string {
   if (

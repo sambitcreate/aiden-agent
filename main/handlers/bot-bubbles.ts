@@ -15,6 +15,7 @@ import {
   type BotBubbleState,
 } from "../../renderer/shared/bot-bubbles.js";
 import type { BotBubbleService } from "../services/bot-bubbles/bot-bubbles-service.js";
+import { requireAllowedKeys } from "../shared/guards.js";
 
 /** What the handlers need from the overlay windows and the main window. */
 export interface BotBubbleWindowPort<Event> {
@@ -55,12 +56,8 @@ export interface BotBubbleHandlerDependencies<Event> {
 
 const INVALID = "Invalid Bot bubble request.";
 
-function fields(raw: unknown, allowed: readonly string[]): Record<string, unknown> {
-  if (typeof raw !== "object" || raw === null || Array.isArray(raw)) throw new Error(INVALID);
-  const value = raw as Record<string, unknown>;
-  if (Object.keys(value).some((key) => !allowed.includes(key))) throw new Error(INVALID);
-  return value;
-}
+const fields = (raw: unknown, allowed: readonly string[]): Record<string, unknown> =>
+  requireAllowedKeys(raw, allowed, INVALID);
 
 function optionalRect(value: unknown): BotBubbleRect | undefined {
   if (value === undefined) return undefined;

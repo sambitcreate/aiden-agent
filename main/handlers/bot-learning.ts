@@ -7,16 +7,13 @@
 // - `bots:lessons:remove({ botId, lessonId })`.
 
 import { parseBotId } from "./bot-params.js";
+import { requireAllowedKeys } from "../shared/guards.js";
 import type { BotLearningOverview } from "../../renderer/shared/bot-learning-overview.js";
 
 const ID = /^[A-Za-z0-9-]{8,64}$/u;
 
-function fields(value: unknown, allowed: readonly string[]): Record<string, unknown> {
-  if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("Invalid learning request.");
-  const record = value as Record<string, unknown>;
-  if (Object.keys(record).some((key) => !allowed.includes(key))) throw new Error("Invalid learning request.");
-  return record;
-}
+const fields = (value: unknown, allowed: readonly string[]): Record<string, unknown> =>
+  requireAllowedKeys(value, allowed, "Invalid learning request.");
 
 function id(value: unknown): string {
   if (typeof value !== "string" || !ID.test(value)) throw new Error("Invalid learning id.");

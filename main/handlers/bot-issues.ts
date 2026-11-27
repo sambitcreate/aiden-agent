@@ -18,19 +18,13 @@ import {
 } from "../../renderer/shared/bot-issues.js";
 import type { BotIssueActResult, BotIssueService } from "../services/bot-issues/service.js";
 import { parseBotId } from "./bot-params.js";
+import { requireAllowedKeys } from "../shared/guards.js";
 
 /** Issues and routines use the same path-safe token shape. */
 const ISSUE_ID = /^[A-Za-z0-9._:-]{1,160}$/u;
 
-function exact(value: unknown, keys: readonly string[]): Record<string, unknown> {
-  if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("Invalid bot issue fields.");
-  const fields = value as Record<string, unknown>;
-  const allowed = new Set(keys);
-  for (const key of Object.keys(fields)) {
-    if (!allowed.has(key)) throw new Error("Invalid bot issue fields.");
-  }
-  return fields;
-}
+const exact = (value: unknown, keys: readonly string[]): Record<string, unknown> =>
+  requireAllowedKeys(value, keys, "Invalid bot issue fields.");
 
 function issueId(value: unknown): string {
   if (typeof value !== "string" || !ISSUE_ID.test(value)) throw new Error("Invalid bot issue id.");

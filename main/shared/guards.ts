@@ -79,9 +79,13 @@ export function requireAllowedKeys(
     throw new Error(typeof error === "string" ? error : error.record);
   }
   const set = allowed instanceof Set ? allowed : new Set(allowed);
-  const keys = Object.keys(value);
-  if (keys.length > set.size || keys.some((key) => !set.has(key))) {
-    throw new Error(typeof error === "string" ? error : error.fields);
+  let count = 0;
+  for (const key in value) {
+    if (!Object.prototype.hasOwnProperty.call(value, key)) continue;
+    count += 1;
+    if (count > set.size || !set.has(key)) {
+      throw new Error(typeof error === "string" ? error : error.fields);
+    }
   }
   return value;
 }

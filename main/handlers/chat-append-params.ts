@@ -1,4 +1,5 @@
 import type { Attachment } from "../services/types.js";
+import { requireAllowedKeys } from "../shared/guards.js";
 import type { SkillInvocationV1 } from "../../renderer/shared/slash-commands.js";
 import { parseSkillInvocationV1 } from "../../renderer/shared/slash-commands.js";
 import { isSafeSubagentIdentifier } from "../../renderer/shared/subagent-runs.js";
@@ -53,25 +54,15 @@ export interface ParsedChatAppend {
   retainedBytes: number;
 }
 
-function recordWithExactKeys(
+const recordWithExactKeys = (
   value: unknown,
   allowed: ReadonlySet<string>,
   label: string,
-): Record<string, unknown> {
-  if (typeof value !== "object" || value === null || Array.isArray(value)) {
-    throw new Error(`Invalid ${label} envelope.`);
-  }
-  const record = value as Record<string, unknown>;
-  let count = 0;
-  for (const key in record) {
-    if (!Object.prototype.hasOwnProperty.call(record, key)) continue;
-    count += 1;
-    if (count > allowed.size || !allowed.has(key)) {
-      throw new Error(`Invalid ${label} fields.`);
-    }
-  }
-  return record;
-}
+): Record<string, unknown> =>
+  requireAllowedKeys(value, allowed, {
+    record: `Invalid ${label} envelope.`,
+    fields: `Invalid ${label} fields.`,
+  });
 
 function boundedString(
   value: unknown,

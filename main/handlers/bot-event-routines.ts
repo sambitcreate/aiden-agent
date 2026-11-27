@@ -11,6 +11,7 @@ import type { BotEventRoutineStore, BotEventRoutineView } from "../services/bot-
 import { viewOf } from "../services/bot-routine-events/store.js";
 import { parseBotRoutineTrigger } from "../../renderer/shared/bot-routine-trigger.js";
 import { parseBotId } from "./bot-params.js";
+import { requireAllowedKeys } from "../shared/guards.js";
 
 export const BOT_EVENT_ROUTINE_CHANNELS = {
   list: "bots:eventRoutines:list",
@@ -22,12 +23,8 @@ export const BOT_EVENT_ROUTINE_CHANNELS = {
 
 const ROUTINE_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/iu;
 
-function fields(value: unknown, allowed: readonly string[]): Record<string, unknown> {
-  if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("Invalid event routine request.");
-  const record = value as Record<string, unknown>;
-  if (Object.keys(record).some((key) => !allowed.includes(key))) throw new Error("Invalid event routine request.");
-  return record;
-}
+const fields = (value: unknown, allowed: readonly string[]): Record<string, unknown> =>
+  requireAllowedKeys(value, allowed, "Invalid event routine request.");
 
 function routineId(value: unknown): string {
   if (typeof value !== "string" || !ROUTINE_ID.test(value)) throw new Error("Invalid event routine id.");
