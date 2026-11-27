@@ -3,30 +3,21 @@ import * as React from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { Field, FieldSet, Switch, Text, toast } from "../ui";
 import { InfoHint } from "../ui-info-hint";
-import { settingsApi, workspacesApi } from "../../lib/ipc";
+import { workspacesApi } from "../../lib/ipc";
 import { queryKeys, useSettings, useWorkspaces } from "../../lib/queries";
-import type { AppSettings, Workspace } from "../../lib/types";
+import { useSettingsSave } from "../../lib/use-settings-save";
+import type { Workspace } from "../../lib/types";
 
 export function MemorySettings() {
   const queryClient = useQueryClient();
   const settings = useSettings();
   const workspaces = useWorkspaces();
-  const [globalSaving, setGlobalSaving] = React.useState(false);
+  const { saving: globalSaving, save: saveGlobal } = useSettingsSave({ guard: "state" });
   const [workspaceSaving, setWorkspaceSaving] = React.useState<Set<string>>(() => new Set());
   const globallyEnabled = settings.data?.memoryEnabled !== false;
 
-  const setGlobalEnabled = async (enabled: boolean) => {
-    if (globalSaving) return;
-    setGlobalSaving(true);
-    try {
-      const saved = await settingsApi.set({ memoryEnabled: enabled });
-      queryClient.setQueryData<AppSettings>(queryKeys.settings, saved);
-    } catch (error) {
-      toast.error(error instanceof Error ? error.message : "Couldn't update memory settings.");
-    } finally {
-      setGlobalSaving(false);
-    }
-  };
+  const setGlobalEnabled = (enabled: boolean) =>
+    saveGlobal({ memoryEnabled: enabled }, "Couldn't update memory settings.");
 
   const setWorkspaceEnabled = async (workspace: Workspace, enabled: boolean) => {
     if (workspaceSaving.has(workspace.id)) return;

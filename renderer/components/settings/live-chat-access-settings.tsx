@@ -1,10 +1,8 @@
 import * as React from "react";
-import { useQueryClient } from "@tanstack/react-query";
-import { settingsApi } from "../../lib/ipc";
-import { queryKeys, useSettings } from "../../lib/queries";
-import type { AppSettings } from "../../lib/types";
+import { useSettings } from "../../lib/queries";
+import { useSettingsSave } from "../../lib/use-settings-save";
 import { aidenLivePreferences } from "../../shared/aiden-live-settings";
-import { Field, FieldSet, Switch, toast } from "../ui";
+import { Field, FieldSet, Switch } from "../ui";
 
 /** The "Chats" group: one switch for Live's chat tools. */
 export function LiveChatAccessSwitch({
@@ -36,26 +34,15 @@ export function LiveChatAccessSwitch({
 /** Settings → Aiden Live → Chats, saved straight to AppSettings. */
 export function LiveChatAccessSettings(): React.ReactElement {
   const settings = useSettings();
-  const queryClient = useQueryClient();
-  const [saving, setSaving] = React.useState(false);
+  const { saving, save } = useSettingsSave({ guard: "state" });
   const preferences = aidenLivePreferences(settings.data);
-  const save = async (checked: boolean) => {
-    if (saving) return;
-    setSaving(true);
-    try {
-      const saved = await settingsApi.set({ aidenLiveChatAccess: checked });
-      queryClient.setQueryData<AppSettings>(queryKeys.settings, saved);
-    } catch (error) {
-      toast.error(error instanceof Error ? error.message : "Couldn’t update Aiden Live settings.");
-    } finally {
-      setSaving(false);
-    }
-  };
   return (
     <LiveChatAccessSwitch
       checked={preferences.chatAccess}
       disabled={settings.isLoading || saving}
-      onChange={(checked) => void save(checked)}
+      onChange={(checked) =>
+        void save({ aidenLiveChatAccess: checked }, "Couldn’t update Aiden Live settings.")
+      }
     />
   );
 }

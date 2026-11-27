@@ -1,11 +1,9 @@
 import * as React from "react";
-import { useQueryClient } from "@tanstack/react-query";
-import { settingsApi } from "../../lib/ipc";
-import { queryKeys, useSettings } from "../../lib/queries";
-import type { AppSettings } from "../../lib/types";
+import { useSettings } from "../../lib/queries";
+import { useSettingsSave } from "../../lib/use-settings-save";
 import { aidenLivePreferences } from "../../shared/aiden-live-settings";
 import { LIVE_VOICE_LANGUAGES, liveVoicePhrases } from "../../shared/live-voice-phrases";
-import { Field, FieldSet, SettingsDisclosure, Switch, Text, toast } from "../ui";
+import { Field, FieldSet, SettingsDisclosure, Switch, Text } from "../ui";
 
 /** "English, Spanish … and Chinese". */
 export function liveVoiceLanguageList(): string {
@@ -45,21 +43,8 @@ export function LiveVoicePhraseList(): React.ReactElement {
 /** Settings → Aiden Live → Answer approvals by voice. */
 export function LiveVoiceApprovalSettings(): React.ReactElement {
   const settings = useSettings();
-  const queryClient = useQueryClient();
-  const [saving, setSaving] = React.useState(false);
+  const { saving, save } = useSettingsSave({ guard: "state" });
   const enabled = aidenLivePreferences(settings.data).voiceApprovals;
-  const save = async (checked: boolean) => {
-    if (saving) return;
-    setSaving(true);
-    try {
-      const saved = await settingsApi.set({ aidenLiveVoiceApprovals: checked });
-      queryClient.setQueryData<AppSettings>(queryKeys.settings, saved);
-    } catch (error) {
-      toast.error(error instanceof Error ? error.message : "Couldn’t update Aiden Live settings.");
-    } finally {
-      setSaving(false);
-    }
-  };
   return (
     <>
       <FieldSet title="Approvals">
@@ -78,7 +63,9 @@ export function LiveVoiceApprovalSettings(): React.ReactElement {
             aria-label="Answer approvals by voice"
             checked={enabled}
             disabled={settings.isLoading || saving}
-            onCheckedChange={(checked) => void save(checked)}
+            onCheckedChange={(checked) =>
+              void save({ aidenLiveVoiceApprovals: checked }, "Couldn’t update Aiden Live settings.")
+            }
           />
         </Field>
       </FieldSet>
