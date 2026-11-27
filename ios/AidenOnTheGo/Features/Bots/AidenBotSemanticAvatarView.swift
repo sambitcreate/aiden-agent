@@ -1,7 +1,8 @@
 import SwiftUI
 
-/// What a Bot's character looks like: a colour and a shape. Every Bot shares
-/// one fixed eye mark, so the older eye and detail fields are not drawn.
+/// What a Bot's character looks like: a colour and a shape. The sprite draws
+/// its own eyes from the colour's tones, so the older eye and detail fields
+/// are not drawn.
 struct AidenBotAvatarPresentation: Equatable {
     let shape: AidenBotAvatarShape
     let color: AidenBotAvatarColor
@@ -10,9 +11,6 @@ struct AidenBotAvatarPresentation: Equatable {
 func aidenBotAvatarPresentation(_ avatar: AidenBotSemanticAvatar) -> AidenBotAvatarPresentation {
     .init(shape: avatar.recipe.shape, color: avatar.recipe.color)
 }
-
-/// The eye mark colour, shared with desktop (`BOT_AVATAR_FACE_HEX`).
-let aidenBotAvatarFaceRGB: UInt32 = 0x292735
 
 extension Color {
     init(aidenRGB rgb: UInt32) {
@@ -79,51 +77,14 @@ extension AidenBotAvatarShape {
     }
 }
 
-/// The canonical face's glance while its Bot works: the eyes look left and
-/// right and blink, on the shared `glance` keyframes. `dx` is a fraction of the
-/// avatar's size; `blink` scales the eyes' height.
-struct AidenBotFaceGlancePose: Equatable {
-    var dx: Double
-    var blink: Double
-
-    static let still = AidenBotFaceGlancePose(dx: 0, blink: 1)
-}
-
-private let aidenBotGlanceSpec = AidenActivityMarkSpec.make(.glance)
-
-/// How a working Bot's avatar says so (ruling 8, R19).
-struct AidenBotWorkingCue: Equatable {
-    /// The canonical face's eyes glance.
-    let glances: Bool
-    /// A small glance mark sits on the avatar's corner.
-    let badge: Bool
-
-    static let none = AidenBotWorkingCue(glances: false, badge: false)
-}
-
-/// A canonical face glances while its Bot works. A photo can't, and a face holds
-/// still under Reduce Motion or Low Power, so both wear the glance badge (whose
-/// mark then holds its still pose): a working Bot always keeps a visible cue.
-func aidenBotWorkingCue(working: Bool, hasPhoto: Bool, motionAllowed: Bool) -> AidenBotWorkingCue {
-    guard working else { return .none }
-    if !hasPhoto, motionAllowed { return AidenBotWorkingCue(glances: true, badge: false) }
-    return AidenBotWorkingCue(glances: false, badge: true)
-}
-
-func aidenBotFaceGlancePose(at time: TimeInterval) -> AidenBotFaceGlancePose {
-    let look = AidenActivityMarkEvaluator.pose(of: aidenBotGlanceSpec.groups[0].tracks, atTime: time)
-    let eye = AidenActivityMarkEvaluator.pose(of: aidenBotGlanceSpec.shapes[0].tracks, atTime: time)
-    // The mark's view box is 24 wide.
-    return AidenBotFaceGlancePose(dx: look.translateX / 24, blink: eye.scaleY)
-}
-
+/// A Bot's drawn avatar: its Hi-bit sprite (docs/plans/hibit-sprite-avatars-plan.md).
 struct AidenBotSemanticAvatarView: View {
     let avatar: AidenBotSemanticAvatar
     let name: String
     let size: CGFloat
     var isDecorative = true
-    /// The Bot is in a running turn: its eyes glance (spec §12, ruling 8).
-    var working = false
+    /// The live state to play. Nil is the still idle sprite lists and pickers show.
+    var state: AidenBotAvatarState?
 
     @Environment(\.accessibilityReduceMotion) private var systemReduceMotion
     @Environment(\.aidenReduceMotion) private var appReduceMotion
@@ -134,142 +95,61 @@ struct AidenBotSemanticAvatarView: View {
     }
 
     var body: some View {
-        ZStack {
-            AidenBotAvatarShapeMask(shape: presentation.shape)
-                .fill(presentation.color.swatch)
-            AidenBotEyeMark(size: size, glancing: working && !systemReduceMotion && !appReduceMotion && !lowPowerMode)
+        let presentation = presentation
+        Group {
+            if let liveState = state, !systemReduceMotion, !appReduceMotion, !lowPowerMode {
+                // A new identity per state, so its clock starts on the frame the state does.
+                AidenBotAnimatedSprite(shape: presentation.shape, color: presentation.color, size: size, state: liveState)
+                    .id(liveState)
+            } else {
+                // Reduce Motion, Low Power, and every resting avatar: the still pose.
+                AidenBotSpriteCanvas(
+                    shape: presentation.shape,
+                    color: presentation.color,
+                    size: size,
+                    pose: AidenBotSpritePose(still: state ?? .idle)
+                )
+            }
         }
         .frame(width: size, height: size)
-        .contentShape(AidenBotAvatarShapeMask(shape: presentation.shape))
+        .contentShape(Rectangle())
         .accessibilityHidden(isDecorative)
         .accessibilityLabel(isDecorative ? "" : "\(name) Bot avatar")
     }
 }
 
-/// A plain character shape, used by the Character card's shape choices.
+/// A sprite playing one state from the moment it appears, so done and error
+/// play once from their start.
+private struct AidenBotAnimatedSprite: View {
+    let shape: AidenBotAvatarShape
+    let color: AidenBotAvatarColor
+    let size: CGFloat
+    let state: AidenBotAvatarState
+
+    @State private var start = Date()
+
+    var body: some View {
+        // Wake only on the pose's step edges: stepped motion needs no frame rate.
+        TimelineView(AidenBotSpriteSchedule(start: start, steps: AidenBotSpriteSteps(state))) { timeline in
+            AidenBotSpriteCanvas(
+                shape: shape,
+                color: color,
+                size: size,
+                pose: AidenBotSpritePose(state: state, elapsed: timeline.date.timeIntervalSince(start))
+            )
+            .equatable()
+        }
+    }
+}
+
+/// A character's sprite body in a colour, used by the Character card's shape choices.
 struct AidenBotShapeSwatch: View {
     let shape: AidenBotAvatarShape
-    let color: Color
+    let color: AidenBotAvatarColor
     let size: CGFloat
 
     var body: some View {
-        AidenBotAvatarShapeMask(shape: shape)
-            .fill(color)
-            .frame(width: size, height: size)
-    }
-}
-
-/// The one eye mark every Bot shares: two short, slightly tilted strokes.
-/// While its Bot works they glance; otherwise (and under Reduce Motion) they hold still.
-private struct AidenBotEyeMark: View {
-    let size: CGFloat
-    var glancing = false
-
-    var body: some View {
-        // 30 frames a second is plenty for a glance and spares the battery.
-        TimelineView(.animation(minimumInterval: 1.0 / 30.0, paused: !glancing)) { context in
-            let pose = glancing ? aidenBotFaceGlancePose(at: context.date.timeIntervalSinceReferenceDate) : .still
-            HStack(spacing: size * 0.09) {
-                Capsule()
-                    .frame(width: size * 0.09, height: size * 0.2)
-                    .scaleEffect(x: 1, y: pose.blink)
-                Capsule()
-                    .frame(width: size * 0.09, height: size * 0.2)
-                    .scaleEffect(x: 1, y: pose.blink)
-            }
-            .foregroundStyle(Color(aidenRGB: aidenBotAvatarFaceRGB))
-            .offset(x: pose.dx * size)
-            .rotationEffect(.degrees(-12))
-            .offset(x: size * 0.08, y: -size * 0.02)
-        }
-        .accessibilityHidden(true)
-    }
-}
-
-private struct AidenBotAvatarShapeMask: Shape {
-    let shape: AidenBotAvatarShape
-
-    func path(in rect: CGRect) -> Path {
-        switch shape {
-        case .orb:
-            return Circle().path(in: rect)
-        case .squircle:
-            return RoundedRectangle(cornerRadius: rect.width * 0.3, style: .continuous).path(in: rect)
-        case .capsule:
-            return Capsule().path(in: rect.insetBy(dx: rect.width * 0.12, dy: 0))
-        case .hex:
-            return polygon(in: rect, points: 6, rotation: -.pi / 2)
-        case .peak:
-            return polygon(in: rect.insetBy(dx: rect.width * 0.05, dy: 0), points: 3, rotation: -.pi / 2)
-        case .drop:
-            var path = Path()
-            path.move(to: CGPoint(x: rect.midX, y: rect.minY))
-            path.addCurve(
-                to: CGPoint(x: rect.midX, y: rect.maxY),
-                control1: CGPoint(x: rect.maxX * 1.04, y: rect.height * 0.38),
-                control2: CGPoint(x: rect.maxX, y: rect.height * 0.78)
-            )
-            path.addCurve(
-                to: CGPoint(x: rect.midX, y: rect.minY),
-                control1: CGPoint(x: rect.minX, y: rect.height * 0.78),
-                control2: CGPoint(x: rect.minX - rect.width * 0.04, y: rect.height * 0.38)
-            )
-            return path
-        case .cloud:
-            var path = RoundedRectangle(
-                cornerRadius: rect.width * 0.28,
-                style: .continuous
-            ).path(in: rect.insetBy(dx: 0, dy: rect.height * 0.13))
-            path.addEllipse(in: CGRect(
-                x: rect.width * 0.22,
-                y: rect.minY,
-                width: rect.width * 0.56,
-                height: rect.height * 0.62
-            ))
-            return path
-        case .wisp:
-            var path = Path()
-            path.move(to: CGPoint(x: rect.midX, y: rect.minY))
-            path.addCurve(
-                to: CGPoint(x: rect.maxX, y: rect.midY),
-                control1: CGPoint(x: rect.width * 0.82, y: rect.minY),
-                control2: CGPoint(x: rect.maxX, y: rect.height * 0.18)
-            )
-            path.addCurve(
-                to: CGPoint(x: rect.midX, y: rect.maxY),
-                control1: CGPoint(x: rect.maxX, y: rect.height * 0.84),
-                control2: CGPoint(x: rect.width * 0.72, y: rect.maxY)
-            )
-            path.addCurve(
-                to: CGPoint(x: rect.minX, y: rect.midY),
-                control1: CGPoint(x: rect.width * 0.28, y: rect.maxY),
-                control2: CGPoint(x: rect.minX, y: rect.height * 0.82)
-            )
-            path.addCurve(
-                to: CGPoint(x: rect.midX, y: rect.minY),
-                control1: CGPoint(x: rect.minX, y: rect.height * 0.2),
-                control2: CGPoint(x: rect.width * 0.2, y: rect.height * 0.08)
-            )
-            return path
-        }
-    }
-
-    private func polygon(in rect: CGRect, points: Int, rotation: CGFloat) -> Path {
-        var path = Path()
-        let radius = min(rect.width, rect.height) / 2
-        for index in 0..<points {
-            let angle = rotation + (CGFloat(index) / CGFloat(points)) * .pi * 2
-            let point = CGPoint(
-                x: rect.midX + cos(angle) * radius,
-                y: rect.midY + sin(angle) * radius
-            )
-            if index == 0 {
-                path.move(to: point)
-            } else {
-                path.addLine(to: point)
-            }
-        }
-        path.closeSubpath()
-        return path
+        AidenBotSpriteCanvas(shape: shape, color: color, size: size, pose: AidenBotSpritePose(still: .idle))
+            .accessibilityHidden(true)
     }
 }

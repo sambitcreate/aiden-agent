@@ -179,7 +179,7 @@ test("the pill sums up the running batch in the same words as its transcript car
     runView("c", "completed"),
   ]);
   const trigger = pillTrigger();
-  assert.match(trigger.textContent ?? "", /^2 working · 1 completed/u);
+  assert.match(trigger.textContent ?? "", /^2 running · 1 done/u);
   // Per-run activity lives in the card and the tray, not the pill.
   assert.doesNotMatch(trigger.textContent ?? "", /Searching workspace text/u);
   // Longest elapsed across the batch, ticking from each run's start.
@@ -188,7 +188,7 @@ test("the pill sums up the running batch in the same words as its transcript car
   assert.equal(trigger.getAttribute("aria-label"), "2 subagents running. Show subagent details.");
   assert.match(trigger.getAttribute("aria-keyshortcuts") ?? "", /^(?:Meta|Control)\+Shift\+S$/u);
   // A batch still working has nothing to dismiss.
-  assert.equal(screen.queryByRole("button", { name: "Dismiss finished subagents" }), null);
+  assert.equal(screen.queryByRole("button", { name: "Dismiss done subagents" }), null);
 });
 
 test("a run waiting on the person leads the summary and names itself to assistive tech", () => {
@@ -196,7 +196,7 @@ test("a run waiting on the person leads the summary and names itself to assistiv
     runView("a", "running", { activity: "Reading README.md", updatedAt: Date.now() }),
     runView("b", "needs_attention", { updatedAt: Date.now() - 30_000 }),
   ]);
-  assert.match(pillTrigger().textContent ?? "", /^1 needs attention · 1 working/u);
+  assert.match(pillTrigger().textContent ?? "", /^1 waiting on you · 1 running/u);
   assert.match(pillTrigger().getAttribute("aria-label") ?? "", /Run b needs your attention/u);
 });
 
@@ -213,7 +213,7 @@ test("the tray lists the batch, opens the headline run's live feed, and closes w
     fireEvent.click(pillTrigger());
   });
   const tray = await screen.findByRole("dialog", { name: "Subagents" });
-  assert.match(tray.textContent ?? "", /1 working · 1 completed/u);
+  assert.match(tray.textContent ?? "", /1 running · 1 done/u);
   const rows = within(tray).getAllByRole("listitem").filter((item) => item.hasAttribute("data-subagent-pill-run-id"));
   assert.deepEqual(
     rows.map((row) => row.getAttribute("data-subagent-pill-run-id")),
@@ -223,16 +223,11 @@ test("the tray lists the batch, opens the headline run's live feed, and closes w
   const runA = within(tray).getByRole("button", { name: /^Run a/u });
   assert.equal(runA.getAttribute("aria-expanded"), "true");
   const feed = within(tray).getByRole("list", { name: "Run a activity" });
-  // The last four milestones, then the live step.
+  // The last four milestones. The live step is read once, by the row above.
+  assert.match(runA.textContent ?? "", /Searching workspace text/u);
   assert.deepEqual(
     within(feed).getAllByRole("listitem").map((item) => item.textContent),
-    [
-      "Listed a workspace directory",
-      "Matched workspace file names",
-      "Searched workspace text",
-      "Read a workspace file",
-      "Searching workspace text",
-    ],
+    ["Looked in a folder", "Found files by name", "Searched the files", "Read a file"],
   );
   assert.match(tray.textContent ?? "", /The parser lives in renderer\/lib\./u);
 
@@ -247,6 +242,49 @@ test("the tray lists the batch, opens the headline run's live feed, and closes w
     fireEvent.keyDown(tray, { key: "Escape" });
   });
   assert.equal(screen.queryByRole("dialog", { name: "Subagents" }), null);
+});
+
+test("a run's feed names its model the way people see it, skips a zero tool count, and words its report by state", async () => {
+  const running = runView("a", "running", {
+    modelId: "custom:lmstudio/aiden-e2e-vision",
+    tools: 0,
+    milestones: ["reading", "composing"],
+  });
+  const { rerender } = mount([running]);
+  await act(async () => {
+    fireEvent.click(pillTrigger());
+  });
+  const tray = await screen.findByRole("dialog", { name: "Subagents" });
+  assert.match(tray.textContent ?? "", /Aiden E2e Vision/u);
+  assert.doesNotMatch(tray.textContent ?? "", /custom:lmstudio|aiden-e2e-vision/u);
+  assert.doesNotMatch(tray.textContent ?? "", /tool call/u);
+  const steps = () =>
+    within(screen.getByRole("list", { name: "Run a activity" }))
+      .getAllByRole("listitem")
+      .map((item) => item.textContent);
+  assert.deepEqual(steps().slice(0, 2), ["Read a file", "Writing its report"]);
+
+  // Once the live status is the same step, the expanded row says it once.
+  rerender([
+    runView("a", "running", {
+      modelId: "custom:lmstudio/aiden-e2e-vision",
+      tools: 0,
+      milestones: ["reading", "composing"],
+      activity: "Writing its report",
+    }),
+  ]);
+  const tray2 = screen.getByRole("dialog", { name: "Subagents" });
+  assert.equal((tray2.textContent ?? "").split("Writing its report").length - 1, 1);
+
+  rerender([
+    runView("a", "completed", {
+      modelId: "custom:lmstudio/aiden-e2e-vision",
+      tools: 2,
+      milestones: ["reading", "composing"],
+    }),
+  ]);
+  assert.deepEqual(steps(), ["Read a file", "Wrote its report"]);
+  assert.match(screen.getByRole("dialog", { name: "Subagents" }).textContent ?? "", /2 tool calls/u);
 });
 
 test("tray actions open runs and the panel, reveal the transcript, and stop foreground runs", async () => {
@@ -277,7 +315,7 @@ test("tray actions open runs and the panel, reveal the transcript, and stop fore
   );
 
   await act(async () => {
-    fireEvent.click(within(tray).getByRole("button", { name: "Open Run a in the side panel" }));
+    fireEvent.click(within(tray).getByRole("button", { name: "Open helper chat for Run a" }));
   });
   assert.deepEqual(calls.opened, ["a"]);
   // The tray row is gone, so the panel hands focus back to the pill.
@@ -318,19 +356,22 @@ test("a run whose Stop is in flight cannot be stopped again", async () => {
 
 test("a settled batch stays as a finished summary until dismissed, and the next run replaces it", () => {
   const { rerender } = mount([runView("a", "running"), runView("b", "running")]);
-  assert.match(pillTrigger().textContent ?? "", /^2 working/u);
+  assert.match(pillTrigger().textContent ?? "", /^2 running/u);
 
   rerender([runView("a", "completed"), runView("b", "failed", { error: "Provider refused" })]);
   const trigger = pillTrigger();
-  assert.match(trigger.textContent ?? "", /^1 failed · 1 completed/u);
-  assert.match(trigger.getAttribute("aria-label") ?? "", /^2 subagents finished\./u);
+  assert.match(trigger.textContent ?? "", /^1 failed · 1 done/u);
+  assert.match(trigger.getAttribute("aria-label") ?? "", /^2 subagents done\./u);
+  // Narrow windows show the bare count in the summary's word, never a second one.
+  assert.match(trigger.textContent ?? "", /2 done/u);
+  assert.doesNotMatch(trigger.textContent ?? "", /finished/u);
 
-  fireEvent.click(screen.getByRole("button", { name: "Dismiss finished subagents" }));
+  fireEvent.click(screen.getByRole("button", { name: "Dismiss done subagents" }));
   assert.equal(screen.queryByRole("button", { name: /subagent details/u }), null);
 
   // Old settled runs do not return; a run started later in the same turn brings the pill back.
   rerender([runView("a", "completed"), runView("b", "failed"), runView("c", "running")]);
-  assert.match(pillTrigger().textContent ?? "", /^1 working/u);
+  assert.match(pillTrigger().textContent ?? "", /^1 running/u);
   assert.doesNotMatch(pillTrigger().textContent ?? "", /Run a|Run b/u);
 });
 
@@ -432,7 +473,7 @@ test("a batch left with only background runs can be hidden until another run sta
   assert.equal(screen.queryByRole("button", { name: /subagent details/u }), null);
 
   rerender([...backgroundOnly, runView("next", "running")]);
-  assert.match(pillTrigger().textContent ?? "", /^1 working/u);
+  assert.match(pillTrigger().textContent ?? "", /^1 running/u);
 });
 
 test("a batch that settles after coming back to the chat ends, even if an earlier turn's runs never return", async () => {
@@ -444,7 +485,7 @@ test("a batch that settles after coming back to the chat ends, even if an earlie
   rerender([], "chat-1");
   rerender([runView("b", "running", { generationId: "generation-2" })]);
   rerender([runView("b", "completed", { generationId: "generation-2" })]);
-  assert.match(pillTrigger().textContent ?? "", /^1 finished/u);
+  assert.match(pillTrigger().textContent ?? "", /^1 done/u);
   // The next turn starts a batch of its own instead of joining the finished one.
   rerender([
     runView("b", "completed", { generationId: "generation-2" }),
@@ -460,7 +501,7 @@ test("dismissing the pill from the keyboard hands focus to the composer", async 
   calls.returnFocus = composer;
   try {
     rerender([runView("a", "completed")]);
-    const dismiss = screen.getByRole("button", { name: "Dismiss finished subagents" });
+    const dismiss = screen.getByRole("button", { name: "Dismiss done subagents" });
     dismiss.focus();
     await act(async () => {
       fireEvent.click(dismiss);
@@ -482,7 +523,7 @@ test("a hidden background run that needs the person brings the pill back until i
   assert.equal(screen.queryByRole("button", { name: /subagent details/u }), null);
 
   rerender([runView("fg", "completed"), runView("bg", "needs_attention", { execution: "background" })]);
-  assert.match(pillTrigger().textContent ?? "", /^1 needs attention/u);
+  assert.match(pillTrigger().textContent ?? "", /^1 waiting on you/u);
   assert.match(pillTrigger().getAttribute("aria-label") ?? "", /Run bg needs your attention/u);
   assert.equal(screen.queryByRole("button", { name: "Hide background subagents" }), null);
 });

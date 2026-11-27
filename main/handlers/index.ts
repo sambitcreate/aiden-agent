@@ -37,9 +37,7 @@ import { registerUsageHandlers } from "./usage.js";
 import { registerProfileHandlers } from "./profile.js";
 import { registerComputerUseHandlers } from "./computer-use.js";
 import { registerFormFillHandlers } from "./form-fill.js";
-import { registerModelInsightsHandlers } from "./model-insights.js";
 import { registerImageGenerationHandlers } from "./image-generation.js";
-import { registerModelPaceHandlers } from "./model-pace.js";
 import { registerUsageLimitHandlers } from "./usage-limits.js";
 import { registerSpendingHandlers } from "./spending.js";
 import { registerHookHandlers } from "./hooks.js";
@@ -73,6 +71,11 @@ import { registerPeerHostHandlers } from "./peer-hosts.js";
 import { registerLocalRunIpc } from "./local-runs-main.js";
 import { registerChatPendingAttentionIpc } from "./chat-pending-attention-main.js";
 import { registerBotHandlers } from "./bots.js";
+import { registerBotBubbleHandlers } from "./bot-bubbles.js";
+import { parseBotId } from "./bot-params.js";
+import { botBubbleService } from "../services/bot-bubbles/bot-bubbles-main.js";
+import { botBubbleOverlayAccess, botBubbleWindowPort, isBotBubbleOverlayEvent } from "../windows/bot-bubbles-window.js";
+import { guardBotBubbleOverlayHandlers } from "../windows/bot-bubbles-overlay-access.js";
 import { registerBotRoutineHandlers } from "./bot-routines.js";
 import { registerBotComputerHandlers } from "./bot-computers.js";
 import { botComputerHandlerDependencies } from "../services/bot-computers/bot-computers-main.js";
@@ -91,7 +94,6 @@ import { registerCreateImagesIpc } from "./create-images/index.js";
 import { registerDesignCanvasIpc } from "./design-canvas-main.js";
 import { initializeAdvisorRuntime } from "../services/advisor-runtime-main.js";
 import { initializeForkSummaries } from "../services/fork-summary-service-main.js";
-import { modelPaceRecorder } from "../services/model-pace-runtime.js";
 import { usageLimits } from "../services/usage-limit-main.js";
 import { spending } from "../services/spending-main.js";
 
@@ -163,12 +165,7 @@ export function registerHandlers(
   registerProfileHandlers();
   registerComputerUseHandlers();
   registerFormFillHandlers();
-  registerModelInsightsHandlers();
   registerImageGenerationHandlers();
-  registerModelPaceHandlers({
-    handle: (channel, handler) => ipcMain.handle(channel, handler),
-    recorder: modelPaceRecorder,
-  });
   registerUsageLimitHandlers({
     handle: (channel, handler) => ipcMain.handle(channel, handler),
     limits: usageLimits,
@@ -242,7 +239,29 @@ export function registerHandlers(
   });
   registerPeerHostHandlers();
   registerLocalRunIpc();
-  if (hostPlatformCapabilities().bots) registerBotHandlers();
+  if (hostPlatformCapabilities().bots) {
+    registerBotHandlers();
+    registerBotBubbleHandlers<IpcMainInvokeEvent>({
+      // An overlay may close, open, move or bring back only its own heads.
+      handle: guardBotBubbleOverlayHandlers<IpcMainInvokeEvent>(
+        (channel, handler) => ipcMain.handle(channel, handler),
+        botBubbleOverlayAccess(),
+      ),
+      isMainWindow,
+      isBubbleOverlayEvent: isBotBubbleOverlayEvent,
+      // Resolved per call: the service reads userData, which is final only once the app starts.
+      service: {
+        state: () => botBubbleService().state(),
+        bubble: (botId, options) => botBubbleService().bubble(botId, options),
+        close: (botId) => botBubbleService().close(botId),
+        open: (botId, options) => botBubbleService().open(botId, options),
+        move: (botId, placement) => botBubbleService().move(botId, placement),
+        forgetRecent: (botId) => botBubbleService().forgetRecent(botId),
+      },
+      windows: botBubbleWindowPort,
+      parseBotId,
+    });
+  }
   registerBtwHandlers();
   registerFollowThroughHandlers();
   registerGoalHandlers({

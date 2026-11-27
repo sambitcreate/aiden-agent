@@ -71,16 +71,16 @@ test("groupSubagentRunsByStatus places every state in its group, in display orde
     groups.map((group) => [group.title, group.runs.map((run) => run.runId)]),
     [
       ["Running", ["running", "starting", "queued"]],
-      ["Needs attention", ["needs_attention"]],
-      ["Failed", ["unknown", "timed_out", "failed"]],
-      ["Stopped", ["interrupted", "stopped"]],
-      ["Completed", ["completed"]],
+      ["Waiting on you", ["needs_attention"]],
+      ["Failed", ["timed_out", "failed"]],
+      ["Stopped", ["unknown", "interrupted", "stopped"]],
+      ["Done", ["completed"]],
     ],
   );
 
   assert.deepEqual(
     groupSubagentRunsByStatus([runView("a", "failed"), runView("b", "completed")]).map((group) => group.title),
-    ["Failed", "Completed"],
+    ["Failed", "Done"],
   );
   assert.deepEqual(groupSubagentRunsByStatus([]), []);
 });
@@ -106,12 +106,12 @@ function mount(
   return { opened, stopped };
 }
 
-test("Completed starts folded and opens to show its runs", () => {
+test("Done starts folded and opens to show its runs", () => {
   mount([runView("live", "running"), runView("c1", "completed"), runView("c2", "completed"), runView("c3", "completed")]);
-  const fold = screen.getByRole("button", { name: /Completed/u });
+  const fold = screen.getByRole("button", { name: /^Done/u });
   assert.equal(fold.getAttribute("aria-expanded"), "false");
   assert.match(fold.textContent ?? "", /3/u);
-  const completed = screen.getByRole("group", { name: "Completed, 3" });
+  const completed = screen.getByRole("group", { name: "Done, 3" });
   assert.equal(within(completed).queryByRole("button", { name: /Run c1/u }), null);
 
   fireEvent.click(fold);

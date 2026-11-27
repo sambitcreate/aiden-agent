@@ -1,4 +1,4 @@
-export const GOOGLE_THINKING_LEVELS = ["off", "low", "medium", "high"] as const;
+export const GOOGLE_THINKING_LEVELS = ["off", "low", "medium", "high", "xhigh"] as const;
 
 export type GoogleThinkingLevel = (typeof GOOGLE_THINKING_LEVELS)[number];
 
@@ -26,9 +26,12 @@ export function googleThinkingLevelsForModel(
   model: GoogleThinkingModelCapabilities,
 ): GoogleThinkingLevel[] {
   if (model.reasoning !== true) return [];
-  return GOOGLE_THINKING_LEVELS.filter(
-    (level) => level === "off" || model.thinkingLevelMap?.[level] !== null,
-  );
+  return GOOGLE_THINKING_LEVELS.filter((level) => {
+    if (level === "off") return true;
+    const mapped = model.thinkingLevelMap?.[level];
+    if (mapped === null) return false;
+    return level === "xhigh" ? mapped !== undefined : true;
+  });
 }
 
 export function googleThinkingCanDisable(model: GoogleThinkingModelCapabilities): boolean {

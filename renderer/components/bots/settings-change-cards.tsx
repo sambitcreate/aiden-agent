@@ -36,8 +36,11 @@ export function SettingsChangeReceipt({
 }: {
   change: BotSettingsChangeEntryData;
   status: "pending" | BotSettingsChangeStatus;
-  /** Resolves to the settled status, or rejects after saying why. */
-  onUndo(): Promise<BotSettingsChangeStatus>;
+  /**
+   * Resolves to the settled status, or rejects after saying why. Left out
+   * where settings can't be changed (the bubble mini chat): no Undo shows.
+   */
+  onUndo?(): Promise<BotSettingsChangeStatus>;
 }) {
   const [busy, setBusy] = React.useState(false);
   const [answered, setAnswered] = React.useState<BotSettingsChangeStatus | null>(null);
@@ -48,7 +51,7 @@ export function SettingsChangeReceipt({
       text={settingsReceiptText(change, settled)}
       data-settings-receipt
       actions={
-        settled === "pending" && change.undoable !== false
+        settled === "pending" && change.undoable !== false && onUndo
           ? [
               {
                 label: busy ? "Undoing…" : "Undo",

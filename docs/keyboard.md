@@ -31,6 +31,7 @@ one starts unassigned.
 | `⌘B` | Toggle sidebar |
 | `⌘O` / `⇧⌘O` | Open workspace in preferred editor / Open folder… |
 | `⌘J` / `⇧⌘E` | Toggle terminal / Toggle Environment |
+| `⌥⌘B` | Bubble this Bot: shrink the open Bot chat into a floating head ([Bot bubbles](bot-bubbles.md)); does nothing elsewhere, while that Bot is already bubbled or with bubbles turned off |
 | `⌘S` | Save file (Files editor) |
 
 ## Moving around the window
@@ -85,13 +86,16 @@ work while Aiden is in the background.
 | `⌘.` | Stop the reply (`Esc` also works from the message box) |
 | `⌘U` | Attach files |
 | `⌘F` | Find in this chat: `↩` / `⇧↩` (or `⌘G` / `⇧⌘G`) next / previous match, `Esc` closes |
-| `↑` | In an empty message box, bring back your last message to fix and send again |
+| `↑` / `↓` | In an empty message box, browse your earlier prompts with each paired reply (`↩` keeps it in the box, `Esc` restores, `⌥↩` edits a settled turn in a fork) |
 | `⌥↑` / `⌥↓` | Step to the previous / next reply and its Copy and Fork buttons |
 | `⌘↩` | Allow once, while an approval is waiting and the message box is empty |
 | `⌘⌫` | Deny, under the same conditions |
 | `/` | Slash commands in the message box |
 | `@` | Mention a file or folder of the chat's workspace: `↑` / `↓` choose, `↩` or `⇥` adds it as a chip, `Esc` closes; `⌫` at the start of the text removes the last chip |
-| `⇧⌘P` / `⇧⌘A` | In the model picker's List, pin the highlighted model or add it to your Pad (again to undo). The row's pin and Pad icons do the same with the mouse |
+| `⌥⌘[` / `⌥⌘]` | Move this chat one Agent Slider stop down / up, skipping stops that can't run. Rebindable in Settings → Keyboard; does nothing in a Bot's chat or while a reply is running. Works in Quick Chat too |
+| `←` / `→`, `Home` / `End` | On the Agent Slider (the composer's model button opens it), move between stops that can run, or to the first / last one. Typing a letter opens the full model list filtered by it |
+| `⌘L` | In the composer's model popover, open **Other models…** (the full, searchable list). `Esc` in the list goes back to the slider; `Esc` again closes it |
+| `⇧⌘P` | In a model list, pin the highlighted model (again to undo). The row's pin icon does the same with the mouse |
 | `⇧⌘L` | Design mode on / off for this chat (`/design` and `/design off` do the same; gone while `AIDEN_DESIGN_MODE=0` turns design mode off). `Esc` never leaves design mode |
 | `⇧⌘\` | In design mode, expand the canvas (the sidebar folds away and the chat stays on the left) or minimize it again; the same as the **Expand canvas** / **Minimize canvas** button beside Present. Not offered in a window too narrow to keep the sidebar beside the chat |
 
@@ -128,11 +132,7 @@ entered page edits them: `↩` or **Done** finishes, `Esc` puts them back, and
 `⌘B`, `⌘I` and `⌘U` work while editing. Back on the canvas, `⌘Z` puts the
 page file's old words back and `⇧⌘Z` writes them again.
 
-`↑` works like **Edit in fork**: it forks the chat just before your last
-message and puts that message back in the box, so the original chat stays as
-it was. It needs that message to have a finished reply, and does nothing while
-a reply is coming, in a Bot chat, when the box holds anything, or while voice
-input is recording or waiting for its final transcript. `⌥↑` works
+`↑` in an empty message box opens message history above the composer, fills the box with your latest sent prompt, and shows its paired reply beneath the list. Press `↑` and `↓` to step through earlier prompts (moving `↓` past the latest entry restores the empty box), `↩` or click a row to keep that prompt in the box for editing or sending, `Esc` to close and restore the box, or `⌥↩` (`Alt+Enter` on Linux and Windows) on a settled turn to open **Edit in fork** just before that prompt. Moving the caret or typing detaches history so arrow keys edit normally. It does nothing when the box already holds text, attachments, mentions, or a skill, or while voice input is recording or waiting for its final transcript. `⌥↑` works
 from the conversation or an empty message box; `⌥↓` past the latest reply
 returns to the message box. Find in chat searches the conversation on screen,
 ignoring case, and keeps counting as replies stream in. A word split by

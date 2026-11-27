@@ -4,7 +4,7 @@ import * as React from "react";
 import { afterEach, test } from "node:test";
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { returnFocus } from "./focus-return";
-import { Dialog, TooltipProvider } from "../components/ui";
+import { AlertDialog, Dialog, TooltipProvider } from "../components/ui";
 import { Tooltip } from "../components/ui-primitives";
 
 afterEach(() => {
@@ -163,3 +163,67 @@ test("a Dialog whose opener was removed while open returns focus to the message 
   await waitFor(() => assert.equal(screen.queryByRole("dialog"), null));
   await waitFor(() => assert.equal(document.activeElement, screen.getByRole("textbox", { name: "Message" })));
 });
+
+/**
+ * Stands in for the stylesheet: open dialog parts play an entrance animation
+ * and closed ones an exit animation, the way `aiden-dialog-in`/`-out` and
+ * `aiden-overlay-in`/`-out` do in the app.
+ */
+function withDialogAnimations(): () => void {
+  const owner = globalThis as { getComputedStyle: typeof window.getComputedStyle };
+  const realGlobal = owner.getComputedStyle;
+  const realWindow = window.getComputedStyle;
+  const animated = ((element: Element) => {
+    const style = realWindow.call(window, element);
+    // A live declaration, like the browser's: it follows later state changes.
+    const animationName = () => {
+      const state = element.getAttribute("data-state");
+      return state === "open" ? "aiden-in" : state === "closed" ? "aiden-out" : "none";
+    };
+    return new Proxy(style, {
+      get: (target, key) => (key === "animationName" ? animationName() : Reflect.get(target, key)),
+    });
+  }) as typeof window.getComputedStyle;
+  owner.getComputedStyle = animated;
+  window.getComputedStyle = animated;
+  // Radix matches animation names through CSS.escape, which happy-dom lacks.
+  const holder = globalThis as { CSS?: { escape(value: string): string } };
+  const realCss = holder.CSS;
+  holder.CSS ??= { escape: (value: string) => value };
+  return () => {
+    owner.getComputedStyle = realGlobal;
+    window.getComputedStyle = realWindow;
+    holder.CSS = realCss;
+  };
+}
+
+function finishExitAnimations(): void {
+  for (const part of document.querySelectorAll('[data-slot="dialog-content"], [data-slot="dialog-overlay"]')) {
+    const event = new Event("animationend", { bubbles: true });
+    Object.defineProperty(event, "animationName", { value: "aiden-out" });
+    part.dispatchEvent(event);
+  }
+}
+
+for (const [kind, Shown] of [
+  ["Dialog", ({ open }: { open: boolean }) => <Dialog open={open} onOpenChange={() => undefined} title="Rename chat" description="Pick a name." />],
+  ["AlertDialog", ({ open }: { open: boolean }) => <AlertDialog open={open} onOpenChange={() => undefined} title="Rename chat" />],
+] as const) {
+  test(`a closing ${kind} stays on screen until its exit animation ends`, async () => {
+    const restore = withDialogAnimations();
+    try {
+      const view = render(<Shown open />);
+      assert.notEqual(screen.queryByRole(kind === "Dialog" ? "dialog" : "alertdialog"), null);
+      await act(async () => view.rerender(<Shown open={false} />));
+      const closing = document.querySelector('[data-slot="dialog-content"]');
+      assert.ok(closing, "the dialog is still mounted while it animates out");
+      assert.equal(closing.getAttribute("data-state"), "closed");
+      assert.equal(document.querySelector('[data-slot="dialog-overlay"]')?.getAttribute("data-state"), "closed");
+      await act(async () => finishExitAnimations());
+      assert.equal(document.querySelector('[data-slot="dialog-content"]'), null);
+      assert.equal(document.querySelector('[data-slot="dialog-overlay"]'), null);
+    } finally {
+      restore();
+    }
+  });
+}

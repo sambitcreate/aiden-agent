@@ -2,7 +2,11 @@ import { normalizeContext } from "@earendil-works/pi-ai";
 import assert from "node:assert/strict";
 import { createServer } from "node:http";
 import test from "node:test";
-import { builtinModels } from "@earendil-works/pi-ai/providers/all";
+import { builtinModels, builtinProviders } from "@earendil-works/pi-ai/providers/all";
+import {
+  adaptGoogleXHighStreamOptions,
+  withAidenPiCompatibility,
+} from "./pi-provider-compatibility.js";
 import {
   canonicalGoogleProvider,
   GOOGLE_BASE_URL,
@@ -115,6 +119,55 @@ test("native thinking mutations reject unsupported or unknown selections", () =>
   assert.throws(
     () => parseGoogleThinkingSelection("unknown", "high"),
     /does not support/u,
+  );
+  const remoteModels = new Map([
+    [
+      "gemini-4-hydrogen",
+      {
+        reasoning: true,
+        thinkingLevelMap: {
+          off: null,
+          minimal: null,
+          low: "low",
+          medium: "medium",
+          high: "high",
+          xhigh: "xhigh",
+          max: null,
+        },
+      },
+    ],
+    [
+      "gemini-4-carbon",
+      {
+        reasoning: true,
+        thinkingLevelMap: {
+          off: null,
+          minimal: null,
+          low: "low",
+          medium: "medium",
+          high: "high",
+          xhigh: null,
+          max: null,
+        },
+      },
+    ],
+  ]);
+  const resolveRemote = (modelId: string) => remoteModels.get(modelId);
+  assert.deepEqual(
+    parseGoogleThinkingSelection("gemini-4-hydrogen", "high", resolveRemote),
+    { modelId: "gemini-4-hydrogen", level: "high" },
+  );
+  assert.deepEqual(
+    parseGoogleThinkingSelection("gemini-4-hydrogen", "xhigh", resolveRemote),
+    { modelId: "gemini-4-hydrogen", level: "xhigh" },
+  );
+  assert.throws(
+    () => parseGoogleThinkingSelection("gemini-4-hydrogen", "max", resolveRemote),
+    /not supported/u,
+  );
+  assert.throws(
+    () => parseGoogleThinkingSelection("gemini-4-carbon", "xhigh", resolveRemote),
+    /not supported/u,
   );
 });
 
@@ -235,4 +288,175 @@ test("native Google streaming sends Gemini thinking through the google-generativ
     thinkingBudget: 24_576,
   });
   assert.doesNotMatch(requestPath, /\/openai/u);
+});
+
+test("Google compatibility wrapper sends XHIGH thinkingLevel for Gemini 4 models on Pi 1.5.2", async (t) => {
+  let requestPath = "";
+  let requestBody = "";
+  let observedPayloadLevel: unknown;
+  const server = createServer((request, response) => {
+    requestPath = request.url ?? "";
+    request.setEncoding("utf-8");
+    request.on("data", (chunk) => {
+      requestBody += String(chunk);
+    });
+    request.on("end", () => {
+      response.writeHead(200, { "content-type": "text/event-stream" });
+      response.end(
+        `data: ${JSON.stringify({
+          candidates: [
+            {
+              content: {
+                role: "model",
+                parts: [
+                  { text: "Deep reasoning", thought: true },
+                  { text: "Done" },
+                ],
+              },
+              finishReason: "STOP",
+            },
+          ],
+        })}\n\n`,
+      );
+    });
+  });
+  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+  t.after(() => new Promise<void>((resolve) => server.close(() => resolve())));
+  const address = server.address();
+  assert.ok(address && typeof address === "object");
+
+  const baseProvider = builtinProviders().find((entry) => entry.id === GOOGLE_PROVIDER_ID);
+  assert.ok(baseProvider);
+  const provider = withAidenPiCompatibility(baseProvider);
+  const baseModel = baseProvider.getModels()[0];
+  assert.ok(baseModel);
+  const hydrogenModel = {
+    ...baseModel,
+    id: "gemini-4-hydrogen",
+    name: "Gemini 4 Hydrogen",
+    baseUrl: `http://127.0.0.1:${address.port}/v1beta`,
+    reasoning: true,
+    thinkingLevelMap: {
+      off: null,
+      minimal: null,
+      low: "low",
+      medium: "medium",
+      high: "high",
+      xhigh: "xhigh",
+      max: null,
+    },
+  };
+
+  const result = await provider
+    .streamSimple(
+      hydrogenModel,
+      normalizeContext({
+        messages: [{ role: "user", content: "Solve", timestamp: 1 }],
+      }),
+      {
+        apiKey: "native-test-key",
+        maxRetries: 0,
+        reasoning: "xhigh",
+        onPayload: (payload) => {
+          observedPayloadLevel = (
+            payload as { config?: { thinkingConfig?: { thinkingLevel?: unknown } } }
+          )?.config?.thinkingConfig?.thinkingLevel;
+          return undefined;
+        },
+      },
+    )
+    .result();
+
+  assert.equal(result.stopReason, "stop");
+  assert.equal(observedPayloadLevel, "XHIGH");
+  assert.match(requestPath, /\/v1beta\/models\/gemini-4-hydrogen:streamGenerateContent/u);
+  const parsedRequest = JSON.parse(requestBody) as {
+    generationConfig?: {
+      thinkingConfig?: { includeThoughts?: boolean; thinkingLevel?: string };
+    };
+  };
+  assert.deepEqual(parsedRequest.generationConfig?.thinkingConfig, {
+    includeThoughts: true,
+    thinkingLevel: "XHIGH",
+  });
+});
+
+test("Google xhigh compatibility covers google-vertex, opencode, fallback levels, and caller onPayload overrides", async () => {
+  const vertexModel = {
+    id: "gemini-4-neon",
+    name: "Gemini 4 Neon",
+    api: "google-vertex" as const,
+    provider: "google-vertex",
+    baseUrl: "https://example.invalid",
+    reasoning: true,
+    thinkingLevelMap: {
+      off: null,
+      minimal: null,
+      low: "low",
+      medium: "medium",
+      high: null,
+      xhigh: "xhigh",
+      max: null,
+    },
+    input: ["text"] as ["text"],
+    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+    contextWindow: 1_048_576,
+    maxTokens: 65_536,
+  };
+  const adapted = adaptGoogleXHighStreamOptions(vertexModel, {
+    reasoning: "xhigh",
+    onPayload: (payload) => ({
+      ...(payload as Record<string, unknown>),
+      extraTag: "kept",
+    }),
+  });
+  assert.equal(adapted?.reasoning, "medium");
+  const patched = await adapted?.onPayload?.(
+    {
+      model: "gemini-4-neon",
+      config: { thinkingConfig: { includeThoughts: true, thinkingLevel: "MEDIUM" } },
+    },
+    vertexModel,
+  );
+  assert.deepEqual(patched, {
+    model: "gemini-4-neon",
+    config: { thinkingConfig: { includeThoughts: true, thinkingLevel: "XHIGH" } },
+    extraTag: "kept",
+  });
+
+  // Budget-based payloads are left untouched rather than mixing thinkingBudget and thinkingLevel.
+  const budgetPayload = {
+    model: "gemini-2.5-pro",
+    config: { thinkingConfig: { includeThoughts: true, thinkingBudget: 8192 } },
+  };
+  const untouched = await adaptGoogleXHighStreamOptions(vertexModel, { reasoning: "xhigh" })?.onPayload?.(
+    budgetPayload,
+    vertexModel,
+  );
+  assert.deepEqual(untouched, budgetPayload);
+
+  // opencode and opencode-go also serve google-generative-ai models and receive xhigh compatibility.
+  for (const providerId of ["opencode", "opencode-go"] as const) {
+    const base = builtinProviders().find((entry) => entry.id === providerId);
+    assert.ok(base);
+    let capturedReasoning: unknown;
+    const wrapped = withAidenPiCompatibility({
+      ...base,
+      streamSimple: (_model, _context, options) => {
+        capturedReasoning = options?.reasoning;
+        throw new Error("intercepted");
+      },
+    });
+    const opencodeGoogleModel = {
+      ...vertexModel,
+      api: "google-generative-ai" as const,
+      provider: providerId,
+      thinkingLevelMap: { low: "low", medium: "medium", high: "high", xhigh: "xhigh" },
+    };
+    assert.throws(
+      () => wrapped.streamSimple(opencodeGoogleModel, normalizeContext({ messages: [] }), { reasoning: "xhigh" }),
+      /intercepted/u,
+    );
+    assert.equal(capturedReasoning, "high");
+  }
 });

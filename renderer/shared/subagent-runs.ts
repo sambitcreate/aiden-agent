@@ -635,11 +635,18 @@ const V2_OPTIONAL_SNAPSHOT_KEYS = new Set([
   "parentRunId",
   "retryOfRunId",
 ]);
-const V2_STATES = new Set<SubagentRunStateV2>([
-  ...RUN_STATES,
+export const SUBAGENT_V2_ACTIVE_STATES: ReadonlySet<SubagentRunStateV2> = new Set([
+  ...SUBAGENT_ACTIVE_STATES,
   "needs_attention",
+]);
+export const SUBAGENT_V2_TERMINAL_STATES: ReadonlySet<SubagentRunStateV2> = new Set([
+  ...SUBAGENT_TERMINAL_STATES,
   "stopped",
   "unknown",
+]);
+const V2_STATES = new Set<SubagentRunStateV2>([
+  ...SUBAGENT_V2_ACTIVE_STATES,
+  ...SUBAGENT_V2_TERMINAL_STATES,
 ]);
 const V2_EXECUTION_MODES = new Set<SubagentExecutionModeV2>(["foreground", "background"]);
 const V2_CONTEXT_MODES = new Set<SubagentContextModeV2>(["fresh", "fork"]);
@@ -761,22 +768,17 @@ export function parseSubagentRunSnapshot(value: unknown): SubagentRunSnapshot | 
       : undefined;
 }
 
-function subagentRunSnapshotIsTerminal(snapshot: SubagentRunSnapshot): boolean {
-  return snapshot.version === 2
-    ? snapshot.state === "completed" ||
-        snapshot.state === "failed" ||
-        snapshot.state === "timed_out" ||
-        snapshot.state === "interrupted" ||
-        snapshot.state === "stopped" ||
-        snapshot.state === "unknown"
-    : SUBAGENT_TERMINAL_STATES.has(snapshot.state);
+export function isSubagentRunStateTerminal(
+  state: SubagentRunState | SubagentRunStateV2,
+): boolean {
+  return SUBAGENT_V2_TERMINAL_STATES.has(state);
 }
 
 function sameOptionalIdentifier(left: string | undefined, right: string | undefined): boolean {
   return left === right;
 }
 
-function sameSubagentRunSnapshotIdentity(
+export function sameSubagentRunSnapshotIdentity(
   current: SubagentRunSnapshot,
   next: SubagentRunSnapshot,
 ): boolean {
@@ -807,14 +809,60 @@ function sameSubagentRunSnapshotIdentity(
   );
 }
 
-function subagentRunStateProgresses(
+export interface SubagentRunStateProgressionOptions {
+  /**
+   * Whether transitioning into `"stopped"` is accepted on this path.
+   * Defaults to `true`. `SubagentControlRegistryV2.update` passes `false`
+   * because stops must go through `SubagentControlRegistryV2.stop` so the
+   * control plane synchronously revokes approvals and emits its own stopped snapshot.
+   */
+  allowStopped?: boolean;
+}
+
+/**
+ * Shared pure lifecycle progression fence for V1 and V2 subagent run states.
+ * Terminal runs never transition again; active runs progress monotonically
+ * (`queued` -> `starting` -> `running` / `needs_attention` -> terminal).
+ */
+export function subagentRunStateProgresses(
+  current: SubagentRunState | SubagentRunStateV2,
+  next: SubagentRunState | SubagentRunStateV2,
+  options: SubagentRunStateProgressionOptions = {},
+): boolean {
+  if (!SUBAGENT_V2_ACTIVE_STATES.has(current) || !V2_STATES.has(next)) return false;
+  if (options.allowStopped === false && next === "stopped") return false;
+  if (current === "queued") return true;
+  if (current === "starting") return next !== "queued";
+  return next !== "queued" && next !== "starting";
+}
+
+/**
+ * Shared monotonic field and state progression check for parsed snapshots of
+ * the same version. Callers that distinguish revision regressions from
+ * lifecycle regressions check `next.revision > current.revision` separately.
+ */
+export function subagentRunSnapshotProgresses(
   current: SubagentRunSnapshot,
   next: SubagentRunSnapshot,
+  options: SubagentRunStateProgressionOptions = {},
 ): boolean {
-  if (subagentRunSnapshotIsTerminal(current)) return false;
-  if (current.state === "queued") return true;
-  if (current.state === "starting") return next.state !== "queued";
-  return next.state !== "queued" && next.state !== "starting";
+  if (current.version !== next.version) return false;
+  const currentMilestones = current.milestones ?? [];
+  const nextMilestones = next.milestones ?? [];
+  return (
+    next.updatedAt >= current.updatedAt &&
+    next.turns >= current.turns &&
+    next.tools >= current.tools &&
+    next.tokens >= current.tokens &&
+    nextMilestones.length >= currentMilestones.length &&
+    currentMilestones.every((milestone, index) => nextMilestones[index] === milestone) &&
+    subagentProjectionNoticesAreMonotonic(
+      current.projectionNotices,
+      next.projectionNotices,
+      isSubagentRunStateTerminal(next.state),
+    ) &&
+    subagentRunStateProgresses(current.state, next.state, options)
+  );
 }
 
 /**
@@ -834,23 +882,7 @@ export function subagentRunSnapshotUpdateIsMonotonic(
   if (next.revision === current.revision) {
     return options.allowExactReplay === true && JSON.stringify(next) === JSON.stringify(current);
   }
-  const currentMilestones = current.milestones ?? [];
-  const nextMilestones = next.milestones ?? [];
-  return (
-    next.revision > current.revision &&
-    next.updatedAt >= current.updatedAt &&
-    next.turns >= current.turns &&
-    next.tools >= current.tools &&
-    next.tokens >= current.tokens &&
-    nextMilestones.length >= currentMilestones.length &&
-    currentMilestones.every((milestone, index) => nextMilestones[index] === milestone) &&
-    subagentProjectionNoticesAreMonotonic(
-      current.projectionNotices,
-      next.projectionNotices,
-      subagentRunSnapshotIsTerminal(next),
-    ) &&
-    subagentRunStateProgresses(current, next)
-  );
+  return next.revision > current.revision && subagentRunSnapshotProgresses(current, next);
 }
 
 export const MAX_SUBAGENT_EFFECT_ACTIVITY = 512;

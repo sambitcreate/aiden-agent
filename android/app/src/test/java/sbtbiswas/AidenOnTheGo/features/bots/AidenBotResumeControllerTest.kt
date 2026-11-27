@@ -109,8 +109,10 @@ class AidenBotResumeControllerTest {
             active=true;visit="next foreground"
             host.answer={throw AidenRemoteClientException.Server(403,AidenRemoteErrorEnvelope.Body(AidenRemoteErrorCode.CAPABILITY_DENIED,"Refused","req",false))}
             restored.request();assertNotNull(restored.state.value.pending)
+            host.answer={throw AidenRemoteClientException.Server(409,AidenRemoteErrorEnvelope.Body(AidenRemoteErrorCode.REVISION_CONFLICT,"Changed","req",false))}
+            restored.request();assertNotNull("a later revision_conflict cannot settle an unknown attempt",restored.state.value.pending)
             host.answer={AidenBotSessionStateView(AidenBotSessionState.RUNNING,false)};assertNotNull(restored.request())
-            assertEquals(1,host.reads);assertEquals(3,host.writes.size)
+            assertEquals(1,host.reads);assertEquals(4,host.writes.size)
             assertTrue(host.writes.all{it.first==nonce && it.second.expectedSubmissionId==source && it.second.expectedCostReceiptId==COST_RECEIPT_A})
             assertNull(restored.state.value.pending);assertNull(journal(secure).read())
         }
@@ -156,13 +158,17 @@ class AidenBotResumeControllerTest {
         restored.request();assertEquals(1,host.writes.size);assertNull(restored.state.value.pending)
     }
     @Test fun firstDefinitiveDenialClearsButStorageFailureAndSecondWindowForbidTransmission()=runTest {
-        val host=Host();host.answer={throw AidenRemoteClientException.Server(403,AidenRemoteErrorEnvelope.Body(AidenRemoteErrorCode.CAPABILITY_DENIED,"Denied","req",false))}
-        val c=controller(host);c.request();assertNull(c.state.value.pending);assertEquals(AidenRoutineControlProblem.FAILED,c.state.value.problem)
+        for((status,code) in listOf(403 to AidenRemoteErrorCode.CAPABILITY_DENIED,409 to AidenRemoteErrorCode.REVISION_CONFLICT)) {
+            val refused=Host();refused.answer={throw AidenRemoteClientException.Server(status,AidenRemoteErrorEnvelope.Body(code,"Refused","req",false))}
+            val secure=InMemoryAidenSecureStore();val c=controller(refused,journal(secure));c.request()
+            assertNull("$status $code clears pending",c.state.value.pending);assertNull(journal(secure).read());assertEquals(AidenRoutineControlProblem.FAILED,c.state.value.problem)
+        }
+        val host=Host()
         val secure=InMemoryAidenSecureStore();val one=controller(host,journal(secure));val two=controller(host,journal(secure))
         host.answer={throw IOException("Lost")};one.request();two.request()
-        assertEquals(2,host.writes.size);assertEquals(AidenRoutineControlProblem.STORAGE,two.state.value.problem)
+        assertEquals(1,host.writes.size);assertEquals(AidenRoutineControlProblem.STORAGE,two.state.value.problem)
         val failed=controller(host,object:AidenBotWatchJournal{override fun read():String?=null;override fun write(record:String?){error("disk")}})
-        failed.request();assertEquals(2,host.writes.size);assertEquals(AidenRoutineControlProblem.STORAGE,failed.state.value.problem)
+        failed.request();assertEquals(1,host.writes.size);assertEquals(AidenRoutineControlProblem.STORAGE,failed.state.value.problem)
     }
     @Test fun failedPreflightAndReadOnlyAccessNeverSendResume()=runTest {
         val host=Host();val c=controller(host);host.statusAnswer={throw IOException("Offline")};assertNull(c.request());assertTrue(host.writes.isEmpty());assertNull(c.state.value.pending)

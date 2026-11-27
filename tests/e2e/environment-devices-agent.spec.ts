@@ -145,8 +145,8 @@ test.describe("Simulator agent tools", () => {
         { name: "device_list", arguments: {} },
         { name: "device_open", arguments: {} },
         { name: "device_screenshot", arguments: {} },
-        { name: "run_command", arguments: { command: "command -v agent-device && agent-device --version" } },
-        { name: "run_command", arguments: { command: "agent-device snapshot -i" } },
+        { name: "run_command", arguments: { command: "command -v agent-device && agent-device --version", description: "Checks that agent-device is installed" } },
+        { name: "run_command", arguments: { command: "agent-device snapshot -i", description: "Takes a snapshot of the device screen" } },
       ];
       const scenario = lmStudio.enqueueToolScenario!({
         prompt,

@@ -275,4 +275,26 @@ class AidenBotWatchControllerTest {
         answer.complete(watchList()); reading.join()
         assertFalse(controller.state.value.view!!.watches.single().enabled)
     }
+
+    @Test fun unknown409Unknown400AndUnexpectedStatusRetainPendingWatchRun() = runTest {
+        val ambiguous = listOf<Exception>(
+            AidenRemoteClientException.Server(409, AidenRemoteErrorEnvelope.Body(AidenRemoteErrorCode.IDEMPOTENCY_IN_FLIGHT, "In flight", "req_1", false)),
+            AidenRemoteClientException.Server(409, AidenRemoteErrorEnvelope.Body(AidenRemoteErrorCode.INTERNAL_ERROR, "Unknown", "req_2", false)),
+            AidenRemoteClientException.Server(400, AidenRemoteErrorEnvelope.Body(AidenRemoteErrorCode("outcome_unknown"), "Unknown", "req_3", false)),
+            AidenRemoteClientException.UnexpectedStatus(400)
+        )
+        for (failure in ambiguous) {
+            val host = Host()
+            val controller = AidenBotWatchController(host, { true }, { true }, { MUTATION_ID })
+            controller.load()
+            host.runError = failure
+            controller.run(host.watches.first())
+            assertTrue("must retain pending on $failure", controller.state.value.pending)
+            assertEquals(AidenBotWatchError.UNCERTAIN, controller.state.value.error)
+            host.runError = null
+            controller.retry()
+            assertFalse(controller.state.value.pending)
+            assertEquals(listOf(MUTATION_ID, MUTATION_ID), host.runs.map { it.mutationId })
+        }
+    }
 }

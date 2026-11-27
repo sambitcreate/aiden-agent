@@ -35,6 +35,7 @@ import {
   resolveProviderAlias,
   resolvedProviderAliasRoutes,
   runtimeSettingsFrom,
+  portableAgentSlider,
   type PortableConfigShape,
   type PortableConfigStores,
   type ProviderModelCacheEntry,
@@ -66,7 +67,15 @@ import {
   type AnthropicThinkingLevel,
 } from "../../renderer/shared/anthropic-thinking.js";
 import { mergeProviderThinkingPreference } from "../../renderer/shared/provider-thinking.js";
-import type { GenerationThinkingLevel } from "../../renderer/shared/generation-thinking.js";
+import {
+  isGenerationThinkingLevel,
+  type GenerationThinkingLevel,
+} from "../../renderer/shared/generation-thinking.js";
+import {
+  parseAgentSliderPatch,
+  remapAgentSliderProvider,
+  type AgentSliderSettings,
+} from "../../renderer/shared/agent-slider.js";
 import { migrateLegacyPiProviderId } from "../../renderer/shared/google-provider.js";
 import {
   hideAllProviderModels,
@@ -75,13 +84,11 @@ import {
   withoutProviderVisibility,
 } from "../../renderer/shared/model-visibility.js";
 import {
-  remapModelPadPlacementsProvider,
   remapPinnedModelsProvider,
   remapRecentModelsProvider,
-  withoutProviderModelPadPlacements,
   withoutProviderPinnedModels,
   withoutProviderRecentModels,
-} from "../../renderer/shared/model-pad-preferences.js";
+} from "../../renderer/shared/model-preferences.js";
 import { hiddenModelsForGeminiScope } from "../../renderer/shared/gemini-usage-scope.js";
 import { ASSISTANT_WORKSPACE_ID } from "../../renderer/shared/assistant.js";
 import { workspaceCapabilityFields } from "./workspace-capabilities.js";
@@ -146,6 +153,19 @@ const PERMISSIONS = new Set(["full", "ask", "none"]);
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value && typeof value === "object" && !Array.isArray(value));
+}
+
+/** Point every Agent Slider stop at its provider's current id, as `lastProviderId` is. */
+function withResolvedStopProviders(
+  slider: AgentSliderSettings,
+  resolve: (id: string) => string,
+): AgentSliderSettings {
+  return {
+    ...slider,
+    stops: slider.stops.map((stop) =>
+      stop.providerId ? { ...stop, providerId: resolve(stop.providerId) } : stop,
+    ),
+  };
 }
 
 function ownRecordEntry<T>(record: Readonly<Record<string, T>>, key: string): T | undefined {
@@ -526,7 +546,6 @@ export function createConfigStore(
         const currentSettings = runtimeSettingsFrom((await settingsStore.load()).settings);
         let lastProviderId = currentSettings.lastProviderId;
         let hiddenModelsByProvider = currentSettings.hiddenModelsByProvider;
-        let modelPadPlacements = currentSettings.modelPadPlacements;
         let pinnedModels = currentSettings.pinnedModels;
         let recentModels = currentSettings.recentModels;
         let migrated: StoredProvider[] = [];
@@ -575,13 +594,6 @@ export function createConfigStore(
           return false;
         }
 
-        if (JSON.stringify(config) !== JSON.stringify(before)) {
-          await portable.save(config);
-        }
-
-        if (!seeded) {
-          await localStore.update((config) => void (config.seeded = true));
-        }
         const activeProviderIds = new Set(config.providers.map((provider) => provider.id));
         const cacheAliasEntries = providerAliasRoutes(aliasRoutesForMigration).filter(
           ([legacyId, targetId]) =>
@@ -589,16 +601,32 @@ export function createConfigStore(
             !activeProviderIds.has(legacyId) &&
             activeProviderIds.has(targetId),
         );
-        secretMigrationAliases = cacheAliasEntries;
         // Apply identity changes to provider/model keyed preferences too. Custom
         // aliases retain precedence over the built-in Azure rename.
-        const providerThinkingByModel = { ...currentSettings.providerThinkingByModel };
-        const compactionModelOverrides = { ...currentSettings.compactionModelOverrides };
         const preferenceRoutes = new Map(cacheAliasEntries);
         if (!preferenceRoutes.has("azure-openai-responses")) preferenceRoutes.set("azure-openai-responses", "azure");
+        // The Agent Slider shares this file with the providers, so its stops
+        // move in the same write that renames them. Only the matching
+        // `providerId` values change; everything else, including a malformed
+        // or newer hand edit, stays as written.
+        if (config.agentSlider !== undefined) {
+          for (const [legacyId, targetId] of preferenceRoutes) {
+            config.agentSlider = remapAgentSliderProvider(config.agentSlider, legacyId, targetId);
+          }
+        }
+
+        if (JSON.stringify(config) !== JSON.stringify(before)) {
+          await portable.save(config);
+        }
+
+        if (!seeded) {
+          await localStore.update((config) => void (config.seeded = true));
+        }
+        secretMigrationAliases = cacheAliasEntries;
+        const providerThinkingByModel = { ...currentSettings.providerThinkingByModel };
+        const compactionModelOverrides = { ...currentSettings.compactionModelOverrides };
         for (const [legacyId, targetId] of preferenceRoutes) {
           hiddenModelsByProvider = remapHiddenModelProvider(hiddenModelsByProvider, legacyId, targetId);
-          modelPadPlacements = remapModelPadPlacementsProvider(modelPadPlacements, legacyId, targetId);
           pinnedModels = remapPinnedModelsProvider(pinnedModels, legacyId, targetId);
           recentModels = remapRecentModelsProvider(recentModels, legacyId, targetId);
           if (Object.prototype.hasOwnProperty.call(providerThinkingByModel, legacyId)) {
@@ -618,14 +646,12 @@ export function createConfigStore(
           lastProviderId !== currentSettings.lastProviderId ||
           JSON.stringify(hiddenModelsByProvider) !==
             JSON.stringify(currentSettings.hiddenModelsByProvider) ||
-          JSON.stringify(modelPadPlacements) !== JSON.stringify(currentSettings.modelPadPlacements) ||
           JSON.stringify(pinnedModels) !== JSON.stringify(currentSettings.pinnedModels) ||
           JSON.stringify(recentModels) !== JSON.stringify(currentSettings.recentModels)
         ) {
           await settingsStore.update((config) => {
             config.settings.lastProviderId = lastProviderId;
             config.settings.hiddenModelsByProvider = hiddenModelsByProvider;
-            if (modelPadPlacements) config.settings.modelPadPlacements = modelPadPlacements;
             if (pinnedModels) config.settings.pinnedModels = pinnedModels;
             if (recentModels) config.settings.recentModels = recentModels;
             if (Object.keys(providerThinkingByModel).length) config.settings.providerThinkingByModel = providerThinkingByModel;
@@ -769,6 +795,40 @@ export function createConfigStore(
   }
 
   let compactionSnapshot: { source: SettingsShape; value: CompactionSettingsSnapshot } | undefined;
+
+  let agentSliderSnapshot:
+    | { source: unknown; value: AgentSliderSettings | undefined; unreadable: boolean }
+    | undefined;
+
+  /**
+   * The settings callers see: settings.json plus the Agent Slider projected
+   * read-only from the portable config.json, its only durable home. The
+   * normalized slider is reused until the portable document changes. A
+   * present but malformed slider (a hand edit) reads as absent and sets
+   * `agentSliderUnreadable`, so the editor can tell it from "never set up".
+   */
+  async function publicSettings(settings: AppSettings): Promise<AppSettings> {
+    const runtime = runtimeSettingsFrom(settings);
+    let document: PortableConfigShape;
+    try {
+      await ensureSeeded();
+      document = await portable.load();
+    } catch {
+      // An unreadable portable root leaves machine-local settings readable.
+      return runtime;
+    }
+    if (agentSliderSnapshot?.source !== document) {
+      const value = portableAgentSlider(document);
+      agentSliderSnapshot = {
+        source: document,
+        value,
+        unreadable: value === undefined && document.agentSlider !== undefined,
+      };
+    }
+    if (agentSliderSnapshot.value) runtime.agentSlider = structuredClone(agentSliderSnapshot.value);
+    else if (agentSliderSnapshot.unreadable) runtime.agentSliderUnreadable = true;
+    return runtime;
+  }
 
   async function mutateSettings<R>(
     mutation: (draft: SettingsShape) => R | Promise<R>,
@@ -936,11 +996,6 @@ export function createConfigStore(
           config.settings.hiddenModelsByProvider,
           id,
         );
-        const modelPadPlacements = withoutProviderModelPadPlacements(
-          config.settings.modelPadPlacements,
-          id,
-        );
-        if (modelPadPlacements) config.settings.modelPadPlacements = modelPadPlacements;
         const pinnedModels = withoutProviderPinnedModels(config.settings.pinnedModels, id);
         if (pinnedModels) config.settings.pinnedModels = pinnedModels;
         const recentModels = withoutProviderRecentModels(config.settings.recentModels, id);
@@ -972,7 +1027,7 @@ export function createConfigStore(
 
     async getSettings(): Promise<AppSettings> {
       await ensureSeeded();
-      return runtimeSettingsFrom((await settingsStore.load()).settings);
+      return publicSettings((await settingsStore.load()).settings);
     },
 
     /**
@@ -1027,7 +1082,7 @@ export function createConfigStore(
         config.settings.webSearch = next;
         return structuredClone(config.settings);
       }, isCurrent);
-      return runtimeSettingsFrom(saved);
+      return publicSettings(saved);
     },
 
     /** Read the `web_fetch` document; a future or invalid one reads as off. */
@@ -1116,6 +1171,10 @@ export function createConfigStore(
         if (appControlRevision(state, operation.control) !== operation.expectedRevision) throw new Error("Settings changed. Refresh this control.");
         if (operation.control === "models.newChat") {
           const selection = parseNewChatModelValue(String(operation.value))!;
+          // A level belongs to its model: another model starts without one.
+          if (config.settings.lastProviderId !== selection.providerId || config.settings.lastModel !== selection.model) {
+            delete config.settings.lastThinkingLevel;
+          }
           config.settings.lastProviderId = selection.providerId;
           config.settings.lastModel = selection.model;
         } else if (operation.control === "appearance.theme") {
@@ -1143,7 +1202,7 @@ export function createConfigStore(
         }
         return structuredClone(config.settings);
       }, isCurrent);
-      return runtimeSettingsFrom(saved);
+      return publicSettings(saved);
     },
 
     async setSettings(
@@ -1167,6 +1226,12 @@ export function createConfigStore(
       }
       if (patch.compactionModelOverrides !== undefined) {
         patch = { ...patch, compactionModelOverrides: parseCompactionModelOverrides(patch.compactionModelOverrides) };
+      }
+      if (patch.lastThinkingLevel !== undefined && !isGenerationThinkingLevel(patch.lastThinkingLevel)) {
+        throw new Error("Invalid thinking level.");
+      }
+      if (Object.prototype.hasOwnProperty.call(patch, "agentSlider")) {
+        throw new Error("The Agent Slider changes only through its own settings call.");
       }
       // Aliases live in the portable store, so the alias lookup and the settings
       // write are no longer one transaction. Safe: providerIdAliases is an
@@ -1203,6 +1268,12 @@ export function createConfigStore(
             ? (resolveProviderAlias(providerIdAliases, patch.lastProviderId) ??
               migrateLegacyPiProviderId(patch.lastProviderId))
             : patch.lastProviderId;
+        // A level belongs to its model: a new-chat model sent without one starts without one.
+        const newChatModelChanged =
+          (lastProviderId !== undefined && lastProviderId !== config.settings.lastProviderId) ||
+          (patch.lastModel !== undefined && patch.lastModel !== config.settings.lastModel);
+        const clearsLevel =
+          newChatModelChanged && !Object.prototype.hasOwnProperty.call(patch, "lastThinkingLevel");
         config.settings = {
           ...config.settings,
           ...patch,
@@ -1211,12 +1282,56 @@ export function createConfigStore(
             : {}),
           ...(lastProviderId !== undefined ? { lastProviderId } : {}),
         };
+        if (clearsLevel) delete config.settings.lastThinkingLevel;
         return structuredClone(config.settings);
       }, isCurrent);
       // Every workspace that follows the global mode now reads differently
       // (its Remote access tier among them), so workspace observers refresh.
       if (approvalModeChanged) notifyListeners(workspaceListeners);
-      return runtimeSettingsFrom(saved);
+      return publicSettings(saved);
+    },
+
+    /**
+     * Replace (or, with null, remove) the Agent Slider in the portable
+     * config.json, its only durable home. Stop providers are resolved through
+     * the aliases in the same write, as `lastProviderId` is.
+     */
+    async setAgentSlider(
+      value: unknown,
+      isCurrent: () => boolean = () => true,
+    ): Promise<AppSettings> {
+      const slider = value === null ? null : parseAgentSliderPatch(value);
+      await mutatePortable((config) => {
+        if (slider === null) {
+          delete config.agentSlider;
+          return;
+        }
+        const resolveId = (id: string): string =>
+          resolveProviderAlias(config.providerIdAliases, id) ?? migrateLegacyPiProviderId(id) ?? id;
+        config.agentSlider = withResolvedStopProviders(slider, resolveId);
+      }, isCurrent);
+      return publicSettings((await settingsStore.load()).settings);
+    },
+
+    /**
+     * Save a first-run slider only while config.json holds none at all. The
+     * check runs inside the same portable update as the write, so two windows
+     * seeding at once leave one slider, and a malformed hand edit (which
+     * reads back as no slider) is never overwritten. Returns the current
+     * settings either way.
+     */
+    async seedAgentSlider(
+      value: unknown,
+      isCurrent: () => boolean = () => true,
+    ): Promise<AppSettings> {
+      const slider = parseAgentSliderPatch(value);
+      await mutatePortable((config) => {
+        if (config.agentSlider !== undefined) return;
+        const resolveId = (id: string): string =>
+          resolveProviderAlias(config.providerIdAliases, id) ?? migrateLegacyPiProviderId(id) ?? id;
+        config.agentSlider = withResolvedStopProviders(slider, resolveId);
+      }, isCurrent);
+      return publicSettings((await settingsStore.load()).settings);
     },
 
     /**
@@ -1239,7 +1354,7 @@ export function createConfigStore(
         );
         return structuredClone(config.settings);
       });
-      return runtimeSettingsFrom(saved);
+      return publicSettings(saved);
     },
 
     /**
@@ -1257,7 +1372,7 @@ export function createConfigStore(
         );
         return structuredClone(config.settings);
       });
-      return runtimeSettingsFrom(saved);
+      return publicSettings(saved);
     },
 
     /** Atomically update one presentation-only model visibility preference. */
@@ -1282,7 +1397,7 @@ export function createConfigStore(
         );
         return structuredClone(config.settings);
       });
-      return runtimeSettingsFrom(saved);
+      return publicSettings(saved);
     },
 
     /** Atomically restore every model for one provider to picker visibility. */
@@ -1300,7 +1415,7 @@ export function createConfigStore(
         );
         return structuredClone(config.settings);
       });
-      return runtimeSettingsFrom(saved);
+      return publicSettings(saved);
     },
 
     /** Atomically hide current and future models for one provider. */
@@ -1312,7 +1427,7 @@ export function createConfigStore(
         );
         return structuredClone(config.settings);
       });
-      return runtimeSettingsFrom(saved);
+      return publicSettings(saved);
     },
 
     /** Atomically merge one validated native-Google preference into current settings. */
@@ -1328,7 +1443,7 @@ export function createConfigStore(
         );
         return structuredClone(config.settings);
       });
-      return runtimeSettingsFrom(saved);
+      return publicSettings(saved);
     },
 
     /** Atomically merge one validated ChatGPT/Codex preference into current settings. */
@@ -1341,7 +1456,7 @@ export function createConfigStore(
         );
         return structuredClone(config.settings);
       });
-      return runtimeSettingsFrom(saved);
+      return publicSettings(saved);
     },
 
     /**
@@ -1365,7 +1480,7 @@ export function createConfigStore(
         else config.settings.compactionModelOverrides = parsed;
         return structuredClone(config.settings);
       });
-      return runtimeSettingsFrom(saved);
+      return publicSettings(saved);
     },
 
     /** Atomically merge one validated Anthropic preference into current settings. */
@@ -1381,7 +1496,7 @@ export function createConfigStore(
         );
         return structuredClone(config.settings);
       });
-      return runtimeSettingsFrom(saved);
+      return publicSettings(saved);
     },
 
     /** Atomically persist a Pi-native thinking preference for any other provider. */
@@ -1399,7 +1514,7 @@ export function createConfigStore(
         );
         return structuredClone(config.settings);
       });
-      return runtimeSettingsFrom(saved);
+      return publicSettings(saved);
     },
 
     // ── MCP servers ──────────────────────────────────────────────────────
