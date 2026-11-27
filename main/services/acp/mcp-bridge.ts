@@ -21,6 +21,7 @@ import { createServer, type IncomingMessage, type Server as HttpServer, type Ser
 import { Value } from "typebox/value";
 
 import { AcpHarnessError } from "./errors.js";
+import { registerListeningPort } from "../loopback-ports.js";
 
 const BODY_LIMIT = 1024 * 1024;
 const SCHEMA_LIMIT = 64 * 1024;
@@ -53,6 +54,7 @@ export class AcpMcpBridge {
   private tools: BridgeTool[];
   private server: HttpServer | undefined;
   private url: string | undefined;
+  private unregisterPort: (() => void) | undefined;
 
   constructor(private readonly options: McpBridgeOptions) {
     this.tools = projectTools(options.tools, this.omissions);
@@ -107,6 +109,7 @@ export class AcpMcpBridge {
       throw new AcpHarnessError("spawn", "The tool bridge could not start.");
     }
     this.server = server;
+    this.unregisterPort = registerListeningPort(server);
     this.url = `http://127.0.0.1:${address.port}/mcp`;
     return this.descriptor();
   }
@@ -115,6 +118,8 @@ export class AcpMcpBridge {
     const server = this.server;
     this.server = undefined;
     this.url = undefined;
+    this.unregisterPort?.();
+    this.unregisterPort = undefined;
     if (!server) return;
     server.closeAllConnections?.();
     await new Promise<void>((resolve) => server.close(() => resolve()));

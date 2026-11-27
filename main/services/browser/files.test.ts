@@ -6,6 +6,7 @@ import * as path from "node:path";
 import { request as httpRequest } from "node:http";
 import { BROWSER_PREVIEW_AUTH_HEADER, BrowserFileService, browserPreviewRequestHeaders, type BrowserFileWorkspace } from "./files.js";
 import { forgetBotBrowserWorkspace, registerBotBrowserWorkspace } from "./bot-workspaces.js";
+import { aidenLoopbackPorts } from "../loopback-ports.js";
 
 async function fixture(beforeRead?: () => Promise<void>, beforeDiscoveryRead?: (filePath: string) => Promise<void>) {
   const folder = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-browser-files-"));
@@ -674,6 +675,22 @@ test("multiple tabs and pending navigation retain a preview until its final cons
     f.service.commitConsumer("workspace", "tab-two", "https://example.com/");
     await assert.rejects(raw(second.url));
     assert.throws(() => f.service.reserveUrl("workspace", second.url), /expired/);
+  } finally {
+    await f.close();
+  }
+});
+
+test("a preview origin's port is Aiden's own until its last consumer leaves", async () => {
+  const f = await fixture();
+  try {
+    const preview = await f.service.open("workspace", "docs/index.html");
+    const port = Number(new URL(preview.url).port);
+    f.service.commitConsumer("workspace", "tab-one", preview.url);
+    preview.release();
+    assert.equal(aidenLoopbackPorts.has(port), true);
+    f.service.commitConsumer("workspace", "tab-one", "https://example.com/");
+    await assert.rejects(raw(preview.url));
+    assert.equal(aidenLoopbackPorts.has(port), false);
   } finally {
     await f.close();
   }

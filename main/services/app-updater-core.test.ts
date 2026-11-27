@@ -384,7 +384,7 @@ test("disposing an already-ready controller preserves the protected restart hand
 
 // Execute the real service with an in-memory SDK and platform. No Electron,
 // network, installed application, or user-data directory is involved.
-async function simulatedService() {
+async function simulatedService(options: { feedUrl?: string } = {}) {
   const { build } = await import("esbuild");
   const { EventEmitter } = await import("node:events");
   const nodePath = await import("node:path");
@@ -395,6 +395,7 @@ async function simulatedService() {
   let installs = 0;
   const loaded: string[] = [];
   const dialogs: unknown[] = [];
+  const proxyPorts: { registered: string[]; released: string[] } = { registered: [], released: [] };
   const updater = Object.assign(new EventEmitter(), {
     checkForUpdates: () => check.promise,
     downloadUpdate: () => {
@@ -412,8 +413,16 @@ async function simulatedService() {
   }
   const mocks: Record<string, unknown> = {
     "electron-updater": { autoUpdater: updater, CancellationToken, AppImageUpdater: class {} },
+    "./loopback-ports.js": {
+      registerLoopbackUrlPort: (read: () => string) => {
+        const url = read();
+        proxyPorts.registered.push(url);
+        return () => proxyPorts.released.push(url);
+      },
+    },
     "../platform.js": {
       app: { getVersion: () => "0.28.31" },
+      autoUpdater: { getFeedURL: () => options.feedUrl ?? "" },
       dialog: {
         showMessageBox: async (options: unknown) => {
           dialogs.push(options);
@@ -479,6 +488,7 @@ async function simulatedService() {
     downloads: () => downloads,
     cancellations: () => cancellations,
     installs: () => installs,
+    proxyPorts,
   };
 }
 
@@ -630,4 +640,23 @@ test("Linux install handoff reports swallowed installer failure so protected shu
   assert.equal(quitScheduled, true);
   // A duplicate or early-return call must not reuse a previous success.
   assert.equal(handoff.run(() => {}), false);
+});
+
+test("the Squirrel.Mac proxy's feed URL is held as Aiden's own port from update-downloaded until disposal", async () => {
+  const fixture = await simulatedService({ feedUrl: "http://127.0.0.1:61234" });
+  try {
+    const operation = fixture.service.checkNow(false);
+    fixture.check.resolve({ isUpdateAvailable: true, updateInfo: { version: "0.28.32" } });
+    fixture.download.resolve([]);
+    assert.deepEqual(await operation, { outcome: "ready" });
+    assert.deepEqual(fixture.proxyPorts.registered, []);
+    fixture.updater.emit("update-downloaded", { version: "0.28.32" });
+    assert.deepEqual(fixture.proxyPorts.registered, ["http://127.0.0.1:61234"]);
+    fixture.updater.emit("update-downloaded", { version: "0.28.32" });
+    assert.deepEqual(fixture.proxyPorts.released, ["http://127.0.0.1:61234"], "a repeat replaces the earlier hold");
+    fixture.service.dispose();
+    assert.deepEqual(fixture.proxyPorts.released, ["http://127.0.0.1:61234", "http://127.0.0.1:61234"]);
+  } finally {
+    fixture.service.dispose();
+  }
 });

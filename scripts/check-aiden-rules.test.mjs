@@ -256,3 +256,27 @@ test("default-session-owner: an allowlisted file passes", () => {
   );
   assert.deepEqual(problems, []);
 });
+
+test("loopback-listen-registered: a listen in main needs its port registered as Aiden's own", () => {
+  const problems = check({
+    "main/services/a.ts": ['import { createServer } from "node:http";', "const server = createServer();", 'server.listen(0, "127.0.0.1");'].join("\n"),
+    "main/services/b.ts": [
+      'import { registerListeningPort } from "./loopback-ports.js";',
+      'server.listen(0, "127.0.0.1", () => registerListeningPort(server));',
+    ].join("\n"),
+    "main/services/c.ts": ['import { aidenLoopbackPorts } from "./loopback-ports.js";', "server.listen(port);", "aidenLoopbackPorts.add(port);"].join("\n"),
+    "main/services/d.ts": 'const script = "server.listen(0)"; // a script string for a remote device',
+    "main/services/a.test.ts": 'server.listen(0, "127.0.0.1");',
+    "main/services/fixtures/serve.ts": 'server.listen(0, "127.0.0.1");',
+    "renderer/lib/e.ts": "server.listen(0);",
+  });
+  assert.deepEqual(summary(problems), ["main/services/a.ts:3 loopback-listen-registered"]);
+});
+
+test("loopback-listen-registered: an allowlisted file passes", () => {
+  const problems = check(
+    { "main/services/peer-pairing-test-host.ts": 'server.listen(0, "127.0.0.1");' },
+    [{ rule: "loopback-listen-registered", file: "main/services/peer-pairing-test-host.ts", reason: "Test-only host." }],
+  );
+  assert.deepEqual(problems, []);
+});

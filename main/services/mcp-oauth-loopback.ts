@@ -9,6 +9,7 @@
 // failure page at once.
 
 import * as http from "node:http";
+import { registerListeningPort } from "./loopback-ports.js";
 
 /** Outcome shown in the browser tab after the redirect. */
 export type McpOAuthCallbackPage = { ok: true } | { ok: false; message: string };
@@ -103,6 +104,7 @@ export function startMcpOAuthLoopback(options: McpOAuthLoopbackOptions): Promise
     /** The browser request that delivered the code, answered by `finish`. */
     let waiting: http.ServerResponse | undefined;
     let answered = false;
+    let unregisterPort: (() => void) | undefined;
 
     const answer = (res: http.ServerResponse, page: McpOAuthCallbackPage): void => {
       res.writeHead(200, { "content-type": "text/html; charset=utf-8", "cache-control": "no-store", connection: "close" });
@@ -149,6 +151,7 @@ export function startMcpOAuthLoopback(options: McpOAuthLoopbackOptions): Promise
       options.signal?.removeEventListener("abort", onAbort);
       if (holders.get(port) === ownership) holders.delete(port);
       finish({ ok: false, message: UNFINISHED });
+      unregisterPort?.();
       if (listening) {
         // Stop listening now (the port is free at once); a tab still being
         // answered gets its page before its connection closes.
@@ -188,6 +191,7 @@ export function startMcpOAuthLoopback(options: McpOAuthLoopbackOptions): Promise
         server.close();
         return;
       }
+      unregisterPort = registerListeningPort(server);
       // A socket error after listen (for example the interface going away)
       // ends this sign-in instead of crashing the main process.
       server.on("error", (error: Error) => {

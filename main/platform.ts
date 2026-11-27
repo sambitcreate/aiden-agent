@@ -3,6 +3,7 @@ import {
   Notification,
   ShareMenu,
   app,
+  autoUpdater,
   clipboard,
   dialog,
   globalShortcut,
@@ -215,6 +216,7 @@ export function registerNativeHandlers(): void {
 
 export {
   app,
+  autoUpdater,
   BrowserWindow,
   Notification,
   ShareMenu,

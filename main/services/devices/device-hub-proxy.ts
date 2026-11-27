@@ -27,6 +27,7 @@ import { connect, isIP, type Socket } from "node:net";
 import type { Duplex, Transform } from "node:stream";
 import { connect as tlsConnect, type ConnectionOptions } from "node:tls";
 import { DEVICE_ID_PATTERN, LOCAL_DEVICE_HOST_ID, type DeviceStreamGrant } from "../../../renderer/shared/devices.js";
+import { registerListeningPort } from "../loopback-ports.js";
 import { mjpegBoundary, repeatStillFrame } from "./mjpeg-still-frame.js";
 
 export const DEVICE_STREAM_GRANT_TTL_MS = 60_000;
@@ -575,6 +576,7 @@ export async function startDeviceHubProxy(options: DeviceHubProxyOptions): Promi
   });
   const address = server.address();
   port = typeof address === "object" && address ? address.port : 0;
+  const unregisterPort = registerListeningPort(server);
   const origin = `http://127.0.0.1:${port}`;
 
   return {
@@ -595,6 +597,7 @@ export async function startDeviceHubProxy(options: DeviceHubProxyOptions): Promi
         grants.clear();
         for (const socket of openSockets) socket.destroy();
         openSockets.clear();
+        unregisterPort();
         server.close(() => resolveClose());
       }),
   };

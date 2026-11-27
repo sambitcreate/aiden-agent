@@ -8,6 +8,7 @@ import { createServer, request as httpRequest, type IncomingHttpHeaders, type Se
 import { connect, type Socket } from "node:net";
 import test from "node:test";
 import { loadOrCreateAidenRemoteTlsIdentity } from "../aiden-remote-tls-identity.js";
+import { aidenLoopbackPorts } from "../loopback-ports.js";
 import { peerTlsOptions } from "../peer-transport.js";
 import {
   decideDeviceHubRoute,
@@ -201,6 +202,14 @@ test("grants are 256-bit loopback tokens that rotate per mint", async () => {
     assert.notEqual(first.token, second.token);
     assert.equal(first.expiresAt, clock.now + 60_000);
   });
+});
+
+test("the proxy's port is Aiden's own while it listens", async () => {
+  const proxy = await startDeviceHubProxy({ resolveHub: () => null, allowedOrigins: ["file://"] });
+  const port = Number(new URL(proxy.origin).port);
+  assert.equal(aidenLoopbackPorts.has(port), true);
+  await proxy.close();
+  assert.equal(aidenLoopbackPorts.has(port), false);
 });
 
 test("missing, wrong, and expired tokens are refused before reaching the hub", async () => {

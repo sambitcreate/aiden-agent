@@ -426,6 +426,35 @@ function defaultSessionOwner(file, text) {
   return hits;
 }
 
+// loopback-listen-registered — design mode v2 Phase 3a (D5, S72): live app frames may reach any
+// loopback port except Aiden's own, so every `.listen(` in main/ sits in a module that registers
+// its port with main/services/loopback-ports.ts (`aidenLoopbackPorts.add`, `registerListeningPort`
+// or `registerLoopbackUrlPort`). Test-only listeners, probes that close at once and other launch
+// modes go on the allowlist with a reason.
+const PORT_REGISTRATION = new Set(["registerListeningPort", "registerLoopbackUrlPort"]);
+function loopbackListenRegistered(file, text) {
+  if (!/^main\/.*\.(?:[cm]?ts|tsx)$/u.test(file) || isTest(file) || /fixture/u.test(file)) return [];
+  if (!text.includes(".listen(")) return [];
+  const sourceFile = parse(file, text);
+  const listens = [];
+  let registers = false;
+  walk(sourceFile, (node) => {
+    if (!ts.isCallExpression(node)) return;
+    const callee = node.expression;
+    if (ts.isPropertyAccessExpression(callee)) {
+      const method = callee.name.text;
+      if (method === "listen") listens.push(node);
+      if (method === "add" && ts.isIdentifier(callee.expression) && callee.expression.text === "aidenLoopbackPorts") registers = true;
+    }
+    if (PORT_REGISTRATION.has(calleeName(node))) registers = true;
+  });
+  if (registers) return [];
+  return listens.map((node) => ({
+    line: lineOf(sourceFile, node),
+    message: "listens without registering the port as Aiden's own; call registerListeningPort (main/services/loopback-ports.ts) or allowlist it with a reason",
+  }));
+}
+
 export const RULES = {
   "no-brain-icon": noBrainIcon,
   "text-input-focus-ring": textInputFocusRing,
@@ -434,6 +463,7 @@ export const RULES = {
   "no-source-grep-test": noSourceGrepTest,
   "literal-motion": literalMotion,
   "default-session-owner": defaultSessionOwner,
+  "loopback-listen-registered": loopbackListenRegistered,
 };
 
 // Ends as a line comment, a CSS comment, or a JSX `{/* ... */}` comment.

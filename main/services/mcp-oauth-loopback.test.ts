@@ -4,6 +4,7 @@ import * as net from "node:net";
 import test from "node:test";
 import { mcpOAuthLoopbackHolder, startMcpOAuthLoopback, type McpOAuthLoopbackOptions } from "./mcp-oauth-loopback.js";
 import { McpOAuthCallbackError } from "./mcp-oauth-session.js";
+import { aidenLoopbackPorts } from "./loopback-ports.js";
 
 async function freePort(): Promise<number> {
   const server = net.createServer();
@@ -144,4 +145,18 @@ test("an already-cancelled sign-in never binds the port", async () => {
   controller.abort(new Error("Sign-in was cancelled."));
   await assert.rejects(startMcpOAuthLoopback(options(port, { signal: controller.signal })), /cancelled/u);
   assert.equal(mcpOAuthLoopbackHolder(port), undefined);
+});
+
+test("the callback port is Aiden's own while the sign-in listens, including a system-chosen one", async () => {
+  const port = await freePort();
+  const fixed = await startMcpOAuthLoopback(options(port));
+  assert.equal(aidenLoopbackPorts.has(port), true);
+  fixed.close();
+  assert.equal(aidenLoopbackPorts.has(port), false);
+
+  const chosen = await startMcpOAuthLoopback(options(0, { redirectUri: "http://127.0.0.1/callback" }));
+  const chosenPort = Number(new URL(chosen.redirectUri).port);
+  assert.equal(aidenLoopbackPorts.has(chosenPort), true);
+  chosen.close();
+  assert.equal(aidenLoopbackPorts.has(chosenPort), false);
 });

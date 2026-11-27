@@ -20,6 +20,7 @@ import { CallToolRequestSchema, ListToolsRequestSchema } from "@modelcontextprot
 import { createServer, type IncomingMessage, type Server as HttpServer, type ServerResponse } from "node:http";
 
 import type { AidenMcpApp, AidenMcpToolRunner } from "./aiden-mcp-tools.js";
+import { registerListeningPort } from "./loopback-ports.js";
 import { reportAnalyticsEvent } from "./analytics/analytics-report.js";
 import type {
   AidenRemoteAgentAccess,
@@ -62,6 +63,7 @@ export function aidenMcpPortCandidates(savedPort: number | undefined, defaultPor
 export class AidenMcpServer {
   private server: HttpServer | undefined;
   private boundPort: number | undefined;
+  private unregisterPort: (() => void) | undefined;
 
   constructor(private readonly options: AidenMcpServerOptions) {}
 
@@ -114,6 +116,7 @@ export class AidenMcpServer {
       }
       this.server = server;
       this.boundPort = address.port;
+      this.unregisterPort = registerListeningPort(server);
       this.options.log?.("started");
       return address.port;
     }
@@ -124,6 +127,8 @@ export class AidenMcpServer {
     const server = this.server;
     this.server = undefined;
     this.boundPort = undefined;
+    this.unregisterPort?.();
+    this.unregisterPort = undefined;
     if (!server) return;
     server.closeAllConnections?.();
     await new Promise<void>((resolve) => server.close(() => resolve()));

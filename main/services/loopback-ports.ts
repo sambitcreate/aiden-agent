@@ -56,3 +56,29 @@ export function registerListeningPort(server: { address(): unknown }): () => voi
     aidenLoopbackPorts.delete(port);
   };
 }
+
+const LOOPBACK_URL_HOSTS = new Set(["127.0.0.1", "localhost", "[::1]"]);
+
+/**
+ * Registers the port of a loopback `http:` URL read from `read` (for
+ * electron-updater's Squirrel.Mac proxy, the native feed URL), and returns
+ * its removal. A throwing reader, another host or no explicit port registers
+ * nothing.
+ */
+export function registerLoopbackUrlPort(read: () => string | null | undefined): () => void {
+  let port: number | undefined;
+  try {
+    const url = new URL(read() ?? "");
+    if (url.protocol === "http:" && LOOPBACK_URL_HOSTS.has(url.hostname) && url.port) port = Number(url.port);
+  } catch {
+    return () => {};
+  }
+  if (!validPort(port)) return () => {};
+  aidenLoopbackPorts.add(port);
+  let removed = false;
+  return () => {
+    if (removed) return;
+    removed = true;
+    aidenLoopbackPorts.delete(port);
+  };
+}
