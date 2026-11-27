@@ -14,8 +14,8 @@ import sbtbiswas.AidenOnTheGo.models.AidenBotSessionEntry
 import sbtbiswas.AidenOnTheGo.models.AidenBotWireJson
 import sbtbiswas.AidenOnTheGo.models.AidenBotSessionWire
 import sbtbiswas.AidenOnTheGo.models.AidenStreamInputMode
+import sbtbiswas.AidenOnTheGo.persistence.AidenSha256
 import java.io.File
-import java.security.MessageDigest
 import java.util.UUID
 import java.util.concurrent.Executor
 import java.util.concurrent.Executors
@@ -682,7 +682,6 @@ class AidenBotSessionStore(
         /** A pairing's time as it is stored (to the millisecond), so a relaunch reads its own pairing's record back. */
         private val AidenPairingIdentity.pairedAtMs: Long get() = pairedAt.toEpochMilli()
 
-        private fun digest(value: String): String =
-            MessageDigest.getInstance("SHA-256").digest(value.toByteArray(Charsets.UTF_8)).joinToString("") { "%02x".format(it) }
+        private fun digest(value: String): String = AidenSha256.hex(value)
     }
 }

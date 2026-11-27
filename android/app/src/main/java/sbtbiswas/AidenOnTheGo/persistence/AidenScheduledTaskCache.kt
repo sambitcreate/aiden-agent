@@ -7,7 +7,6 @@ import sbtbiswas.AidenOnTheGo.models.AidenScheduledRun
 import sbtbiswas.AidenOnTheGo.models.AidenScheduledSettings
 import sbtbiswas.AidenOnTheGo.models.AidenScheduledTask
 import java.io.File
-import java.security.MessageDigest
 
 class AidenScheduledTaskCache(private val root: File) {
     @Serializable
@@ -25,14 +24,8 @@ class AidenScheduledTaskCache(private val root: File) {
         root.mkdirs()
     }
 
-    private fun sha256(input: String): String {
-        val digest = MessageDigest.getInstance("SHA-256")
-        val bytes = digest.digest(input.toByteArray(Charsets.UTF_8))
-        return bytes.joinToString("") { "%02x".format(it) }
-    }
-
     private fun file(instanceId: String): File {
-        return File(root, "${sha256(instanceId)}.json")
+        return File(root, "${AidenSha256.hex(instanceId)}.json")
     }
 
     @Synchronized

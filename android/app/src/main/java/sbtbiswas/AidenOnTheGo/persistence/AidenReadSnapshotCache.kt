@@ -5,7 +5,6 @@ import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonElement
 import java.io.File
-import java.security.MessageDigest
 
 /**
  * Per-installation, size-bounded disk cache for the last successful read of a screen
@@ -88,7 +87,7 @@ class AidenReadSnapshotCache(
 
     @Synchronized
     fun purge(instanceId: String) {
-        File(root, digest(instanceId)).deleteRecursively()
+        File(root, AidenSha256.hex(instanceId)).deleteRecursively()
     }
 
     private fun evictOverflow(directory: File) {
@@ -109,11 +108,7 @@ class AidenReadSnapshotCache(
     }
 
     private fun file(instanceId: String, key: String): File =
-        File(File(root, digest(instanceId)), "${digest(key)}.json")
-
-    private fun digest(value: String): String = MessageDigest.getInstance("SHA-256")
-        .digest(value.toByteArray(Charsets.UTF_8))
-        .joinToString("") { "%02x".format(it) }
+        File(File(root, AidenSha256.hex(instanceId)), "${AidenSha256.hex(key)}.json")
 }
 
 /** Snapshot keys, one namespace per screen so Workspace ids cannot collide across them. */

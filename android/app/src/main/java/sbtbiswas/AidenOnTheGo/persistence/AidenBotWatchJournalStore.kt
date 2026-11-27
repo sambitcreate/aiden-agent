@@ -5,7 +5,6 @@ import kotlinx.serialization.builtins.serializer
 import kotlinx.serialization.json.Json
 import sbtbiswas.AidenOnTheGo.auth.AidenSecureStore
 import sbtbiswas.AidenOnTheGo.auth.AndroidAidenSecureStore
-import java.security.MessageDigest
 import java.time.Instant
 import java.lang.ref.WeakReference
 
@@ -112,7 +111,7 @@ class AidenBotWatchJournalStore(private val secureStore: AidenSecureStore, priva
 
     private fun scope(instanceId: String, deviceId: String, pairedAt: Instant): String {
             val identity = "$instanceId\u001f$deviceId\u001f$pairedAt"
-            val digest = MessageDigest.getInstance("SHA-256").digest(identity.toByteArray(Charsets.UTF_8)).joinToString("") { "%02x".format(it) }
+            val digest = AidenSha256.hex(identity)
             return "aiden:$namespace:v1:$digest"
         }
     private data class BotScope(val scope: String, val botId: String)

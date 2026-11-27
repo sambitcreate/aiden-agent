@@ -16,6 +16,7 @@ import androidx.annotation.StringRes
 import sbtbiswas.AidenOnTheGo.R
 import sbtbiswas.AidenOnTheGo.models.*
 import sbtbiswas.AidenOnTheGo.networking.AidenRemoteClient
+import sbtbiswas.AidenOnTheGo.persistence.AidenSha256
 import sbtbiswas.AidenOnTheGo.protocol.AidenRemoteCapability
 import sbtbiswas.AidenOnTheGo.protocol.AidenRemoteClientException
 import sbtbiswas.AidenOnTheGo.protocol.AidenRemoteErrorCode
@@ -859,8 +860,7 @@ class AidenBotSessionController(
 
     private val imageScope: String by lazy {
         val owner = sessionKey?.let { "${it.instanceId}\u0000${it.deviceId}\u0000" }.orEmpty() + botId
-        java.security.MessageDigest.getInstance("SHA-256").digest(owner.toByteArray())
-            .take(12).joinToString("") { "%02x".format(it) }
+        AidenSha256.hex(owner).take(24)
     }
 
     private fun shownSharedImageIds(): Set<String> =

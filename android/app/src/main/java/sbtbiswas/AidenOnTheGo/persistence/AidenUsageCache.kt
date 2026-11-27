@@ -5,7 +5,6 @@ import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
 import sbtbiswas.AidenOnTheGo.models.AidenUsageSummary
 import java.io.File
-import java.security.MessageDigest
 
 /** A small, installation-scoped warm cache for the privacy-safe 30-day usage summary. */
 class AidenUsageCache(private val root: File) {
@@ -23,12 +22,8 @@ class AidenUsageCache(private val root: File) {
         root.mkdirs()
     }
 
-    private fun file(instanceId: String, range: String): File {
-        val digest = MessageDigest.getInstance("SHA-256")
-            .digest("$instanceId\n$range".toByteArray(Charsets.UTF_8))
-            .joinToString("") { "%02x".format(it) }
-        return File(root, "$digest.json")
-    }
+    private fun file(instanceId: String, range: String): File =
+        File(root, "${AidenSha256.hex("$instanceId\n$range")}.json")
 
     @Synchronized
     fun load(instanceId: String, range: String = "30d"): AidenUsageSummary? {

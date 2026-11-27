@@ -23,7 +23,6 @@ import java.io.FileOutputStream
 import java.nio.file.AtomicMoveNotSupportedException
 import java.nio.file.Files
 import java.nio.file.StandardCopyOption
-import java.security.MessageDigest
 import java.util.Date
 import java.util.concurrent.atomic.AtomicLong
 
@@ -655,16 +654,9 @@ class AidenChatCache(
         _summaries.value = _summaries.value + (instanceId to summaries.associateBy { it.id })
     }
 
-    private fun digest(value: String): String {
-        val md = MessageDigest.getInstance("SHA-256")
-        val hash = md.digest(value.toByteArray(Charsets.UTF_8))
-        return hash.joinToString("") { "%02x".format(it) }
-    }
+    private fun digest(value: String): String = AidenSha256.hex(value)
 
-    private fun digest(value: ByteArray): String {
-        val hash = MessageDigest.getInstance("SHA-256").digest(value)
-        return hash.joinToString("") { "%02x".format(it) }
-    }
+    private fun digest(value: ByteArray): String = AidenSha256.hex(value)
 
     private fun attachmentInstanceDirectory(cacheRoot: File? = null, instanceId: String): File {
         val base = cacheRoot ?: root

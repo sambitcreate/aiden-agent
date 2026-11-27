@@ -11,7 +11,6 @@ import sbtbiswas.AidenOnTheGo.models.AidenRunInputPresentation
 import sbtbiswas.AidenOnTheGo.models.AidenTurnStart
 import java.util.UUID
 import java.io.File
-import java.security.MessageDigest
 import java.util.concurrent.ConcurrentHashMap
 
 @Serializable
@@ -289,11 +288,7 @@ class AidenChatDraftStore(
         return File(root, digest(instanceId))
     }
 
-    private fun digest(value: String): String {
-        val md = MessageDigest.getInstance("SHA-256")
-        val hash = md.digest(value.toByteArray(Charsets.UTF_8))
-        return hash.joinToString("") { "%02x".format(it) }
-    }
+    private fun digest(value: String): String = AidenSha256.hex(value)
 
     companion object {
         val shared = AidenChatDraftStore()

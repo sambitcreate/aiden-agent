@@ -8,7 +8,6 @@ import sbtbiswas.AidenOnTheGo.models.AidenProviderArtwork
 import sbtbiswas.AidenOnTheGo.models.AidenReadAloudStatus
 import sbtbiswas.AidenOnTheGo.models.AidenSpeechStatus
 import java.io.File
-import java.security.MessageDigest
 
 /** The slice of a provider the Settings list shows; the full model catalog is not cached here. */
 @Serializable
@@ -38,10 +37,7 @@ class AidenSettingsCache(private val root: File) {
     private val json = Json { ignoreUnknownKeys = true }
     private val maximumBytes = 1_024 * 1_024
 
-    private fun sha256(input: String): String {
-        val digest = MessageDigest.getInstance("SHA-256")
-        return digest.digest(input.toByteArray(Charsets.UTF_8)).joinToString("") { "%02x".format(it) }
-    }
+    private fun sha256(input: String): String = AidenSha256.hex(input)
 
     private fun file(instanceId: String): File = File(root, "${sha256(instanceId)}.json")
 
