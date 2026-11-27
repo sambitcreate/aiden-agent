@@ -13,10 +13,10 @@ export function cliDurableBotMarker(agentDir: string): CliDurableBotMarker | nul
   return value;
 }
 
-/** Explicit foreground switch. Leaves all source chats, journals, homes and grants intact. */
 /** How long enabling waits for paired devices' in-flight Bot-chat writes before giving up. */
 export const CLI_DURABLE_BOT_DRAIN_MS = 30_000;
 
+/** Explicit foreground switch. Leaves all source chats, journals, homes and grants intact. */
 export async function enableCliDurableBots(agentDir: string, daemon: ReturnType<typeof createDaemonChats>, fence?: LegacyBotChatFence, drainMs = CLI_DURABLE_BOT_DRAIN_MS) {
   const release = acquireLease(join(agentDir, "bot-durable-migration"));
   try {
