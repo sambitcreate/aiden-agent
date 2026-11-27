@@ -32,7 +32,9 @@ if (!informational && !(hasValue("--config") && hasValue("--session"))) {
   console.error("Call device_open first and include its --config and --session flags.");
   process.exit(1);
 }
-const env = { ...process.env, PATH: ${JSON.stringify(path.dirname(nodePath))} + ${JSON.stringify(path.delimiter)} + (process.env.PATH ?? ""), AGENT_DEVICE_NO_UPDATE_NOTIFIER: "1" };
+// No empty PATH entry: it means the working folder, which is the person's repo here.
+const PATH = [${JSON.stringify(path.dirname(nodePath))}, ...(process.env.PATH ?? "").split(${JSON.stringify(path.delimiter)})].filter(entry => entry !== "").join(${JSON.stringify(path.delimiter)});
+const env = { ...process.env, PATH, AGENT_DEVICE_NO_UPDATE_NOTIFIER: "1" };
 delete env.ELECTRON_RUN_AS_NODE;
 delete env.AGENT_DEVICE_DAEMON_BASE_URL;
 delete env.AGENT_DEVICE_DAEMON_AUTH_TOKEN;

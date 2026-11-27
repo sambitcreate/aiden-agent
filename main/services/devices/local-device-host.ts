@@ -32,6 +32,7 @@ import {
   DeviceNodeUnavailableError,
   defaultDeviceNodeResolutionDeps,
   deviceNodeEnvironment,
+  prependPathEntries,
   resolveDeviceNode,
   DEVICE_HUB,
   deviceToolPaths,
@@ -267,13 +268,16 @@ export function androidSdkEnv(env: NodeJS.ProcessEnv, root: string | null, javaH
     ...env,
     ANDROID_HOME: root,
     ...(javaHome ? { JAVA_HOME: javaHome } : {}),
-    PATH: [
-      path.join(root, "platform-tools"),
-      path.join(root, "emulator"),
-      ...(javaHome ? [path.join(javaHome, "bin")] : []),
-      env.PATH ?? "",
-    ].join(":"),
+    PATH: prependPathEntries(
+      [path.join(root, "platform-tools"), path.join(root, "emulator"), ...(javaHome ? [path.join(javaHome, "bin")] : [])],
+      env.PATH,
+    ),
   };
+}
+
+/** Drops inherited empty PATH entries; an unset PATH stays unset, so the shell's default search still applies. */
+function withoutEmptyPathEntries(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
+  return env.PATH === undefined ? env : { ...env, PATH: prependPathEntries([], env.PATH) };
 }
 
 /** The next supervised restart delay: immediate after stable uptime, else 1s doubling to 30s. */
@@ -356,7 +360,7 @@ export function createLocalDeviceHost(deps: LocalDeviceHostDeps): DeviceHost {
       ...(options.stdin === undefined ? {} : { stdin: options.stdin }),
       env: nodePath
         ? deviceNodeEnvironment({ ...sdkEnv, ...options.env }, nodePath)
-        : { ...sdkEnv, ...options.env },
+        : withoutEmptyPathEntries({ ...sdkEnv, ...options.env }),
     });
 
   const ready = (): DeviceHostReady | null =>

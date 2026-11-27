@@ -427,6 +427,29 @@ test("the shim runs the pinned install and refuses commands without device_open'
   }
 });
 
+test("the agent-device launcher puts Node's folder first and never adds an empty PATH entry", async () => {
+  const baseDir = await mkdtemp(path.join(tmpdir(), "aiden-agent-shim-path-"));
+  try {
+    const entryPath = path.join(baseDir, "fake-agent-device.mjs");
+    await writeFile(entryPath, "process.stdout.write(process.env.PATH ?? '<unset>');\n");
+    const { command } = await ensureAgentDeviceShim({ baseDir, nodePath: process.execPath, entryPath });
+    const nodeDir = path.dirname(process.execPath);
+    // The launcher runs from the person's repo, where an empty entry would make a file named node there run.
+    for (const [inherited, expected] of [
+      [undefined, nodeDir],
+      ["", nodeDir],
+      ["/usr/bin::/bin:", `${nodeDir}:/usr/bin:/bin`],
+    ] as const) {
+      const env: NodeJS.ProcessEnv = inherited === undefined ? {} : { PATH: inherited };
+      const result = spawnSync(command, ["--version"], { encoding: "utf8", env });
+      assert.equal(result.status, 0, result.stderr);
+      assert.equal(result.stdout, expected, `PATH ${JSON.stringify(inherited)}`);
+    }
+  } finally {
+    await rm(baseDir, { recursive: true, force: true });
+  }
+});
+
 test("device_screenshot saveTo writes only inside the workspace or Downloads, and asks first under ask", async () => {
   const base = await realpath(await mkdtemp(path.join(tmpdir(), "aiden-device-save-")));
   const workspace = path.join(base, "workspace");

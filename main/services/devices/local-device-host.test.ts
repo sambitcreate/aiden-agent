@@ -18,6 +18,7 @@ import {
 import {
   HUB_RESTART_MAX_DELAY_MS,
   NPM_REQUIRED_REASON,
+  androidSdkEnv,
   androidUnavailableReason,
   createLocalDeviceHost,
   defaultLocalDeviceHostDeps,
@@ -848,6 +849,33 @@ test("a Mac with the Android SDK but no Xcode starts the hub with the SDK on its
   );
 });
 
+
+test("the Android SDK environment puts the SDK tools first and never adds an empty PATH entry", () => {
+  const tools = `${SDK}/platform-tools:${SDK}/emulator`;
+  const jbr = "/opt/jbr";
+  for (const [inherited, rest] of [[undefined, ""], ["", ""], ["/usr/bin::/bin", ":/usr/bin:/bin"]] as const) {
+    const env = androidSdkEnv(inherited === undefined ? { HOME: "/Users/me" } : { HOME: "/Users/me", PATH: inherited }, SDK);
+    assert.equal(env.PATH, `${tools}${rest}`);
+    assert.equal(env.ANDROID_HOME, SDK);
+    assert.equal(env.JAVA_HOME, undefined);
+    const withJava = androidSdkEnv({ PATH: inherited }, SDK, jbr);
+    assert.equal(withJava.PATH, `${tools}:${jbr}/bin${rest}`);
+    assert.equal(withJava.JAVA_HOME, jbr);
+  }
+  const untouched = { PATH: "/usr/bin::/bin" };
+  assert.equal(androidSdkEnv(untouched, null), untouched);
+});
+
+test("host commands run before Node is resolved never inherit an empty PATH entry", async () => {
+  await withHost(async (harness) => {
+    harness.deps.env = { PATH: "/usr/bin::/bin:", HOME: "/Users/me" };
+    const host = createLocalDeviceHost(harness.deps);
+    assert.equal((await host.platformAvailability("ios")).available, true);
+    const xcrun = harness.commands.find((entry) => entry.command === "xcrun");
+    assert.equal(xcrun?.env.PATH, "/usr/bin:/bin");
+    assert.equal(xcrun?.env.HOME, "/Users/me");
+  });
+});
 
 test("missing Node fails before install or spawn, and Retry discovers a newly installed runtime", async () => {
   await withHost(async (harness) => {
