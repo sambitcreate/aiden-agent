@@ -133,6 +133,40 @@ export function ScheduledTaskProviderWarning({ message }: { message: string | un
   );
 }
 
+function SelectField({
+  label,
+  description,
+  ariaLabel,
+  value,
+  onValueChange,
+  disabled,
+  placeholder,
+  after,
+  children,
+}: {
+  label: string;
+  description?: string;
+  ariaLabel: string;
+  value: string | undefined;
+  onValueChange: (value: string) => void;
+  disabled?: boolean;
+  placeholder?: string;
+  after?: React.ReactNode;
+  children: React.ReactNode;
+}) {
+  return (
+    <Field label={label} description={description}>
+      <Select disabled={disabled} value={value} onValueChange={onValueChange}>
+        <SelectTrigger aria-label={ariaLabel}>
+          <SelectValue placeholder={placeholder} />
+        </SelectTrigger>
+        <SelectContent>{children}</SelectContent>
+      </Select>
+      {after}
+    </Field>
+  );
+}
+
 /** What a "When something changes" task checks, and how often. */
 export function WatchTriggerFields({ trigger, scripts, fullAccess, onChange }: {
   trigger: ScheduledTaskWatchTrigger;
@@ -145,23 +179,19 @@ export function WatchTriggerFields({ trigger, scripts, fullAccess, onChange }: {
   const intervals = [...new Set<number>([...SCHEDULED_TASK_WATCH_INTERVALS, trigger.everyMinutes])].sort((a, b) => a - b);
   return (
     <>
-      <Field label="Check" description="An address is fetched without your cookies or sign-ins. A script runs from the project's .aiden/scripts folder; it reports something by printing it.">
-        <Select
-          value={source.type}
-          onValueChange={(type) => onChange({
-            ...trigger,
-            source: type === "script" ? { type: "script", script: scripts[0] ?? "" } : { type: "url", url: "" },
-          })}
-        >
-          <SelectTrigger aria-label="What the task checks">
-            <SelectValue />
-          </SelectTrigger>
-          <SelectContent>
-            <SelectItem value="url">A web address</SelectItem>
-            <SelectItem value="script">A project script</SelectItem>
-          </SelectContent>
-        </Select>
-      </Field>
+      <SelectField
+        label="Check"
+        description="An address is fetched without your cookies or sign-ins. A script runs from the project's .aiden/scripts folder; it reports something by printing it."
+        ariaLabel="What the task checks"
+        value={source.type}
+        onValueChange={(type) => onChange({
+          ...trigger,
+          source: type === "script" ? { type: "script", script: scripts[0] ?? "" } : { type: "url", url: "" },
+        })}
+      >
+        <SelectItem value="url">A web address</SelectItem>
+        <SelectItem value="script">A project script</SelectItem>
+      </SelectField>
       {source.type === "url" ? (
         <Field label="Address" description="https, or http only on this computer.">
           <Input
@@ -173,42 +203,32 @@ export function WatchTriggerFields({ trigger, scripts, fullAccess, onChange }: {
           />
         </Field>
       ) : (
-        <Field
+        <SelectField
           label="Script"
           description={fullAccess
             ? "It can keep notes between checks in the file named by AIDEN_CHECK_STATE (up to 8 KB)."
             : "A script watch runs unattended, so the task needs Full permission below."}
+          ariaLabel="Script to run for each check"
+          value={source.script || undefined}
+          onValueChange={(script) => onChange({ ...trigger, source: { type: "script", script } })}
+          placeholder={scripts.length ? "Choose a script" : "No scripts found"}
         >
-          <Select
-            value={source.script || undefined}
-            onValueChange={(script) => onChange({ ...trigger, source: { type: "script", script } })}
-          >
-            <SelectTrigger aria-label="Script to run for each check">
-              <SelectValue placeholder={scripts.length ? "Choose a script" : "No scripts found"} />
-            </SelectTrigger>
-            <SelectContent>
-              {scripts.map((script) => (
-                <SelectItem value={script} key={script}>{script}</SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
-        </Field>
+          {scripts.map((script) => (
+            <SelectItem value={script} key={script}>{script}</SelectItem>
+          ))}
+        </SelectField>
       )}
-      <Field label="Check every" description="Runs at most once every 5 minutes and 48 times a day.">
-        <Select
-          value={String(trigger.everyMinutes)}
-          onValueChange={(value) => onChange({ ...trigger, everyMinutes: Number(value) })}
-        >
-          <SelectTrigger aria-label="How often to check">
-            <SelectValue />
-          </SelectTrigger>
-          <SelectContent>
-            {intervals.map((minutes) => (
-              <SelectItem value={String(minutes)} key={minutes}>{formatBotWatchInterval(minutes)}</SelectItem>
-            ))}
-          </SelectContent>
-        </Select>
-      </Field>
+      <SelectField
+        label="Check every"
+        description="Runs at most once every 5 minutes and 48 times a day."
+        ariaLabel="How often to check"
+        value={String(trigger.everyMinutes)}
+        onValueChange={(value) => onChange({ ...trigger, everyMinutes: Number(value) })}
+      >
+        {intervals.map((minutes) => (
+          <SelectItem value={String(minutes)} key={minutes}>{formatBotWatchInterval(minutes)}</SelectItem>
+        ))}
+      </SelectField>
       {source.type === "url" && urlInvalid ? (
         <Text role="alert" variant="small" color="red">Use an https address, or http only on this computer.</Text>
       ) : null}
@@ -273,24 +293,20 @@ export function ConnectorTriggerFields({ trigger, savedKind, onChange, findSourc
   };
   return (
     <>
-      <Field label="Watch" description="Mail reads a mailbox through iMCP on a Mac. Calendar reads a calendar through Composio. Checks use only connections you already opened in Settings → Connectors and never sign in.">
-        <Select
-          value={condition.kind}
-          onValueChange={(kind) => {
-            if (kind === condition.kind) return;
-            const next = newConnectorTrigger(kind as BotConnectorWatchCondition["kind"]);
-            onChange({ ...next, everyMinutes: trigger.everyMinutes });
-          }}
-        >
-          <SelectTrigger aria-label="What the task watches">
-            <SelectValue />
-          </SelectTrigger>
-          <SelectContent>
-            <SelectItem value="email">New mail</SelectItem>
-            <SelectItem value="calendar">Upcoming calendar events</SelectItem>
-          </SelectContent>
-        </Select>
-      </Field>
+      <SelectField
+        label="Watch"
+        description="Mail reads a mailbox through iMCP on a Mac. Calendar reads a calendar through Composio. Checks use only connections you already opened in Settings → Connectors and never sign in."
+        ariaLabel="What the task watches"
+        value={condition.kind}
+        onValueChange={(kind) => {
+          if (kind === condition.kind) return;
+          const next = newConnectorTrigger(kind as BotConnectorWatchCondition["kind"]);
+          onChange({ ...next, everyMinutes: trigger.everyMinutes });
+        }}
+      >
+        <SelectItem value="email">New mail</SelectItem>
+        <SelectItem value="calendar">Upcoming calendar events</SelectItem>
+      </SelectField>
       <Field
         label="Source"
         description={trigger.sourceChoiceId || keepsSaved
@@ -358,18 +374,17 @@ export function ConnectorTriggerFields({ trigger, savedKind, onChange, findSourc
           </Field>
         </>
       )}
-      <Field label="Check every" description="The first check only records what's there. The task runs from the next change on.">
-        <Select value={String(trigger.everyMinutes)} onValueChange={(value) => onChange({ ...trigger, everyMinutes: Number(value) as ScheduledTaskConnectorTrigger["everyMinutes"] })}>
-          <SelectTrigger aria-label="How often to check the connected app">
-            <SelectValue />
-          </SelectTrigger>
-          <SelectContent>
-            {SCHEDULED_TASK_CONNECTOR_INTERVALS.map((minutes) => (
-              <SelectItem value={String(minutes)} key={minutes}>{formatBotWatchInterval(minutes)}</SelectItem>
-            ))}
-          </SelectContent>
-        </Select>
-      </Field>
+      <SelectField
+        label="Check every"
+        description="The first check only records what's there. The task runs from the next change on."
+        ariaLabel="How often to check the connected app"
+        value={String(trigger.everyMinutes)}
+        onValueChange={(value) => onChange({ ...trigger, everyMinutes: Number(value) as ScheduledTaskConnectorTrigger["everyMinutes"] })}
+      >
+        {SCHEDULED_TASK_CONNECTOR_INTERVALS.map((minutes) => (
+          <SelectItem value={String(minutes)} key={minutes}>{formatBotWatchInterval(minutes)}</SelectItem>
+        ))}
+      </SelectField>
     </>
   );
 }
@@ -416,18 +431,17 @@ export function LinkTriggerFields({ trigger, onChange }: {
       <Field label="Link" description="After you save, the task's details give you a private link on Aiden On The Go's address to call with a POST. Calls work only while Aiden On The Go is on.">
         <Text variant="small" color="secondary">Made after saving</Text>
       </Field>
-      <Field label="At most every" description="Calls that arrive sooner wait and run together, up to 20.">
-        <Select value={String(trigger.gapMinutes)} onValueChange={(value) => set({ gapMinutes: Number(value) })}>
-          <SelectTrigger aria-label="Shortest gap between runs">
-            <SelectValue />
-          </SelectTrigger>
-          <SelectContent>
-            {gaps.map((minutes) => (
-              <SelectItem value={String(minutes)} key={minutes}>{formatBotWatchInterval(minutes)}</SelectItem>
-            ))}
-          </SelectContent>
-        </Select>
-      </Field>
+      <SelectField
+        label="At most every"
+        description="Calls that arrive sooner wait and run together, up to 20."
+        ariaLabel="Shortest gap between runs"
+        value={String(trigger.gapMinutes)}
+        onValueChange={(value) => set({ gapMinutes: Number(value) })}
+      >
+        {gaps.map((minutes) => (
+          <SelectItem value={String(minutes)} key={minutes}>{formatBotWatchInterval(minutes)}</SelectItem>
+        ))}
+      </SelectField>
       <Field label="Only when" description="One field = value per line, from the JSON body (like action = opened). Calls that don't match are logged and ignored." orientation="vertical">
         <Textarea
           value={filterText}
@@ -830,7 +844,7 @@ export function ScheduledTaskEditor({
       </FieldSet>
       <FieldSet title="When should it run?">
         {draft.mode === "llm" ? (
-          <Field
+          <SelectField
             label="When"
             description={trigger?.kind === "watch"
               ? "Aiden checks on its own and runs the task only when something changed. A check never uses a model."
@@ -839,36 +853,29 @@ export function ScheduledTaskEditor({
                 : trigger?.kind === "connector"
                   ? "Aiden checks a mailbox or calendar on its own and runs the task when something new arrives. A check never uses a model."
                   : "Runs at the times you choose."}
+            ariaLabel="When the task runs"
+            disabled={assistantOwned}
+            value={trigger?.kind ?? "schedule"}
+            onValueChange={(value) => setDraft((current) => ({
+              ...current,
+              // Leaving a trigger task's trigger sends null so main removes it.
+              trigger: value === "watch"
+                ? (current.trigger?.kind === "watch" ? current.trigger : initial.trigger?.kind === "watch" ? initial.trigger
+                  : { kind: "watch", source: { type: "url", url: "" }, everyMinutes: 15 })
+                : value === "webhook"
+                  ? (current.trigger?.kind === "webhook" ? current.trigger : initial.trigger?.kind === "webhook" ? initial.trigger
+                    : { kind: "webhook", gapMinutes: 5 })
+                  : value === "connector"
+                    ? (current.trigger?.kind === "connector" ? current.trigger : initial.trigger?.kind === "connector" ? initial.trigger
+                      : newConnectorTrigger())
+                    : initial.trigger ? null : undefined,
+            }))}
           >
-            <Select
-              disabled={assistantOwned}
-              value={trigger?.kind ?? "schedule"}
-              onValueChange={(value) => setDraft((current) => ({
-                ...current,
-                // Leaving a trigger task's trigger sends null so main removes it.
-                trigger: value === "watch"
-                  ? (current.trigger?.kind === "watch" ? current.trigger : initial.trigger?.kind === "watch" ? initial.trigger
-                    : { kind: "watch", source: { type: "url", url: "" }, everyMinutes: 15 })
-                  : value === "webhook"
-                    ? (current.trigger?.kind === "webhook" ? current.trigger : initial.trigger?.kind === "webhook" ? initial.trigger
-                      : { kind: "webhook", gapMinutes: 5 })
-                    : value === "connector"
-                      ? (current.trigger?.kind === "connector" ? current.trigger : initial.trigger?.kind === "connector" ? initial.trigger
-                        : newConnectorTrigger())
-                      : initial.trigger ? null : undefined,
-              }))}
-            >
-              <SelectTrigger aria-label="When the task runs">
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="schedule">On a schedule</SelectItem>
-                <SelectItem value="watch">When something changes</SelectItem>
-                <SelectItem value="webhook">When its link is called</SelectItem>
-                <SelectItem value="connector">When a connected app has news</SelectItem>
-              </SelectContent>
-            </Select>
-          </Field>
+            <SelectItem value="schedule">On a schedule</SelectItem>
+            <SelectItem value="watch">When something changes</SelectItem>
+            <SelectItem value="webhook">When its link is called</SelectItem>
+            <SelectItem value="connector">When a connected app has news</SelectItem>
+          </SelectField>
         ) : null}
         {trigger?.kind === "watch" ? (
           <WatchTriggerFields
@@ -889,28 +896,23 @@ export function ScheduledTaskEditor({
             onChange={(next) => setDraft((current) => ({ ...current, trigger: next }))}
           />
         ) : <>
-        <Field label="Repeat">
-          <Select
-            value={scheduleDraft.cadence}
-            onValueChange={(value) =>
-              updateSchedule((current) => ({
-                ...current,
-                cadence: value as ScheduledTaskCadence,
-              }))
-            }
-          >
-            <SelectTrigger aria-label="Scheduled task frequency">
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent>
-              {CADENCE_OPTIONS.map((option) => (
-                <SelectItem value={option.value} key={option.value}>
-                  {option.label}
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
-        </Field>
+        <SelectField
+          label="Repeat"
+          ariaLabel="Scheduled task frequency"
+          value={scheduleDraft.cadence}
+          onValueChange={(value) =>
+            updateSchedule((current) => ({
+              ...current,
+              cadence: value as ScheduledTaskCadence,
+            }))
+          }
+        >
+          {CADENCE_OPTIONS.map((option) => (
+            <SelectItem value={option.value} key={option.value}>
+              {option.label}
+            </SelectItem>
+          ))}
+        </SelectField>
         {scheduleDraft.cadence === "minutes" ? (
           <Field label="Interval" description="From 2 to 59 minutes.">
             <div className="flex items-center gap-2">
@@ -934,70 +936,55 @@ export function ScheduledTaskEditor({
           </Field>
         ) : null}
         {scheduleDraft.cadence === "hourly" ? (
-          <Field label="Minute">
-            <Select
-              value={scheduleDraft.time.slice(3)}
-              onValueChange={(minute) =>
-                updateSchedule((current) => ({ ...current, time: `00:${minute}` }))
-              }
-            >
-              <SelectTrigger aria-label="Minute past each hour">
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                {["00", "15", "30", "45", scheduleDraft.time.slice(3)]
-                  .filter((minute, index, minutes) => minutes.indexOf(minute) === index)
-                  .sort()
-                  .map((minute) => (
-                    <SelectItem value={minute} key={minute}>
-                      {minute === "00" ? "At the start of the hour" : `${minute} minutes past`}
-                    </SelectItem>
-                  ))}
-              </SelectContent>
-            </Select>
-          </Field>
+          <SelectField
+            label="Minute"
+            ariaLabel="Minute past each hour"
+            value={scheduleDraft.time.slice(3)}
+            onValueChange={(minute) =>
+              updateSchedule((current) => ({ ...current, time: `00:${minute}` }))
+            }
+          >
+            {["00", "15", "30", "45", scheduleDraft.time.slice(3)]
+              .filter((minute, index, minutes) => minutes.indexOf(minute) === index)
+              .sort()
+              .map((minute) => (
+                <SelectItem value={minute} key={minute}>
+                  {minute === "00" ? "At the start of the hour" : `${minute} minutes past`}
+                </SelectItem>
+              ))}
+          </SelectField>
         ) : null}
         {scheduleDraft.cadence === "weekly" ? (
-          <Field label="Day">
-            <Select
-              value={String(scheduleDraft.weekday)}
-              onValueChange={(weekday) =>
-                updateSchedule((current) => ({ ...current, weekday: Number(weekday) }))
-              }
-            >
-              <SelectTrigger aria-label="Day of week">
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                {WEEKDAYS.map((weekday, index) => (
-                  <SelectItem value={String(index)} key={weekday}>
-                    {weekday}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-          </Field>
+          <SelectField
+            label="Day"
+            ariaLabel="Day of week"
+            value={String(scheduleDraft.weekday)}
+            onValueChange={(weekday) =>
+              updateSchedule((current) => ({ ...current, weekday: Number(weekday) }))
+            }
+          >
+            {WEEKDAYS.map((weekday, index) => (
+              <SelectItem value={String(index)} key={weekday}>
+                {weekday}
+              </SelectItem>
+            ))}
+          </SelectField>
         ) : null}
         {scheduleDraft.cadence === "monthly" ? (
-          <Field label="Day of month">
-            <Select
-              value={String(scheduleDraft.monthDay)}
-              onValueChange={(monthDay) =>
-                updateSchedule((current) => ({ ...current, monthDay: Number(monthDay) }))
-              }
-            >
-              <SelectTrigger aria-label="Day of month">
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                {Array.from({ length: 31 }, (_, index) => index + 1).map((day) => (
-                  <SelectItem value={String(day)} key={day}>
-                    {day}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-          </Field>
+          <SelectField
+            label="Day of month"
+            ariaLabel="Day of month"
+            value={String(scheduleDraft.monthDay)}
+            onValueChange={(monthDay) =>
+              updateSchedule((current) => ({ ...current, monthDay: Number(monthDay) }))
+            }
+          >
+            {Array.from({ length: 31 }, (_, index) => index + 1).map((day) => (
+              <SelectItem value={String(day)} key={day}>
+                {day}
+              </SelectItem>
+            ))}
+          </SelectField>
         ) : null}
         {(["daily", "weekdays", "weekly", "monthly"] as ScheduledTaskCadence[]).includes(
           scheduleDraft.cadence,
@@ -1014,23 +1001,18 @@ export function ScheduledTaskEditor({
             />
           </Field>
         ) : null}
-        <Field label="Time zone">
-          <Select
-            value={draft.timezone ?? localTimezone}
-            onValueChange={(timezone) => setDraft((current) => ({ ...current, timezone }))}
-          >
-            <SelectTrigger aria-label="Scheduled task time zone">
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent>
-              {timezoneOptions.map((timezone) => (
-                <SelectItem value={timezone} key={timezone}>
-                  {timezone === localTimezone ? `Local time · ${timezone}` : timezone}
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
-        </Field>
+        <SelectField
+          label="Time zone"
+          ariaLabel="Scheduled task time zone"
+          value={draft.timezone ?? localTimezone}
+          onValueChange={(timezone) => setDraft((current) => ({ ...current, timezone }))}
+        >
+          {timezoneOptions.map((timezone) => (
+            <SelectItem value={timezone} key={timezone}>
+              {timezone === localTimezone ? `Local time · ${timezone}` : timezone}
+            </SelectItem>
+          ))}
+        </SelectField>
         <Field
           label="Schedule"
           description={formatSchedule(draft.cron, draft.timezone ?? localTimezone)}
@@ -1084,120 +1066,96 @@ export function ScheduledTaskEditor({
       </FieldSet>
       <FieldSet title="Run context">
         {draft.mode === "llm" ? (
-          <Field label="Provider">
-            <Select
-              disabled={assistantOwned}
-              value={draft.providerId ?? APP_DEFAULT_PROVIDER_CHOICE}
-              onValueChange={chooseProvider}
-            >
-              <SelectTrigger aria-label="Scheduled task provider">
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value={APP_DEFAULT_PROVIDER_CHOICE}>
-                  App default (follows your selection)
-                </SelectItem>
-                {usableProviders.map((provider) => (
-                  <SelectItem value={provider.id} key={provider.id}>
-                    <span className="inline-flex min-w-0 items-center gap-2">
-                      <ProviderIcon
-                        providerId={provider.id}
-                        providerLabel={provider.label}
-                        artwork={provider.artwork}
-                        className="size-4 text-secondary"
-                      />
-                      <span className="truncate">{provider.label}</span>
-                    </span>
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-            <ScheduledTaskProviderWarning message={providerGuardrail} />
-          </Field>
+          <SelectField
+            label="Provider"
+            ariaLabel="Scheduled task provider"
+            disabled={assistantOwned}
+            value={draft.providerId ?? APP_DEFAULT_PROVIDER_CHOICE}
+            onValueChange={chooseProvider}
+            after={<ScheduledTaskProviderWarning message={providerGuardrail} />}
+          >
+            <SelectItem value={APP_DEFAULT_PROVIDER_CHOICE}>
+              App default (follows your selection)
+            </SelectItem>
+            {usableProviders.map((provider) => (
+              <SelectItem value={provider.id} key={provider.id}>
+                <span className="inline-flex min-w-0 items-center gap-2">
+                  <ProviderIcon
+                    providerId={provider.id}
+                    providerLabel={provider.label}
+                    artwork={provider.artwork}
+                    className="size-4 text-secondary"
+                  />
+                  <span className="truncate">{provider.label}</span>
+                </span>
+              </SelectItem>
+            ))}
+          </SelectField>
         ) : null}
         {pinnedProvider && providerModelOptions ? (
-          <Field label="Model">
-            <Select
-              disabled={assistantOwned}
-              value={providerModelOptions.model ?? ""}
-              onValueChange={chooseModel}
-            >
-              <SelectTrigger aria-label="Scheduled task model">
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                {providerModelOptions.models.map((model) => {
-                  const display = resolveModelDisplay(model, pinnedModelInfo?.[model]);
-                  return (
-                    <SelectItem value={model} key={model}>
-                      <span className="inline-flex min-w-0 items-center gap-2">
-                        <ProviderIcon
-                          providerId={pinnedProvider.id}
-                          providerLabel={pinnedProvider.label}
-                          modelId={model}
-                          artwork={pinnedProvider.artwork}
-                          className="size-4 text-secondary"
-                        />
-                        <span className="truncate">{display.label}</span>
-                        {display.format ? <span className="text-tertiary">{display.format}</span> : null}
-                      </span>
-                    </SelectItem>
-                  );
-                })}
-              </SelectContent>
-            </Select>
-          </Field>
+          <SelectField
+            label="Model"
+            ariaLabel="Scheduled task model"
+            disabled={assistantOwned}
+            value={providerModelOptions.model ?? ""}
+            onValueChange={chooseModel}
+          >
+            {providerModelOptions.models.map((model) => {
+              const display = resolveModelDisplay(model, pinnedModelInfo?.[model]);
+              return (
+                <SelectItem value={model} key={model}>
+                  <span className="inline-flex min-w-0 items-center gap-2">
+                    <ProviderIcon
+                      providerId={pinnedProvider.id}
+                      providerLabel={pinnedProvider.label}
+                      modelId={model}
+                      artwork={pinnedProvider.artwork}
+                      className="size-4 text-secondary"
+                    />
+                    <span className="truncate">{display.label}</span>
+                    {display.format ? <span className="text-tertiary">{display.format}</span> : null}
+                  </span>
+                </SelectItem>
+              );
+            })}
+          </SelectField>
         ) : null}
       </FieldSet>
       <FieldSet title="Access and notifications">
         {postsIn ? <PostsInField chatTitle={postsIn.chatTitle} onUseOwnChat={postsIn.onUseOwnChat} /> : null}
-        <Field
+        <SelectField
           label="Workspace"
           description="Paths are always re-resolved by Aiden when the task runs."
+          ariaLabel="Scheduled task workspace"
+          disabled={assistantOwned}
+          value={draft.workspaceId ?? "__none__"}
+          onValueChange={(workspaceId) =>
+            setDraft((current) => ({
+              ...current,
+              workspaceId: workspaceId === "__none__" ? undefined : workspaceId,
+              mcpServerIds: workspaceId === "__none__" ? current.mcpServerIds : [],
+            }))
+          }
         >
-          <Select
-            disabled={assistantOwned}
-            value={draft.workspaceId ?? "__none__"}
-            onValueChange={(workspaceId) =>
-              setDraft((current) => ({
-                ...current,
-                workspaceId: workspaceId === "__none__" ? undefined : workspaceId,
-                mcpServerIds: workspaceId === "__none__" ? current.mcpServerIds : [],
-              }))
-            }
-          >
-            <SelectTrigger aria-label="Scheduled task workspace">
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent>
-              <SelectItem value="__none__">No workspace</SelectItem>
-              {workspaces.filter((workspace) => !isNoWorkspace(workspace) || workspace.id === draft.workspaceId).map((workspace) => (
-                <SelectItem value={workspace.id} key={workspace.id}>
-                  {workspace.name}
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
-        </Field>
+          <SelectItem value="__none__">No workspace</SelectItem>
+          {workspaces.filter((workspace) => !isNoWorkspace(workspace) || workspace.id === draft.workspaceId).map((workspace) => (
+            <SelectItem value={workspace.id} key={workspace.id}>
+              {workspace.name}
+            </SelectItem>
+          ))}
+        </SelectField>
         {draft.mode === "llm" ? (
-          <Field
+          <SelectField
             label="Permission"
             description="Read-only can inspect context. Full can edit files and run commands without asking."
+            ariaLabel="Scheduled task permission"
+            disabled={assistantOwned}
+            value={draft.permission ?? "read-only"}
+            onValueChange={(value) => setPermission(value === "full" ? "full" : "read-only")}
           >
-            <Select
-              disabled={assistantOwned}
-              value={draft.permission ?? "read-only"}
-              onValueChange={(value) => setPermission(value === "full" ? "full" : "read-only")}
-            >
-              <SelectTrigger aria-label="Scheduled task permission">
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="read-only">Read-only</SelectItem>
-                <SelectItem value="full">Full</SelectItem>
-              </SelectContent>
-            </Select>
-          </Field>
+            <SelectItem value="read-only">Read-only</SelectItem>
+            <SelectItem value="full">Full</SelectItem>
+          </SelectField>
         ) : (
           <Field
             label="Permission"
