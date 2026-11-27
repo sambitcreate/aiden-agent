@@ -500,9 +500,9 @@ export function remoteBotSessionGap(view: Pick<PeerHostView, "features">): Remot
 export function remoteBotSessionGapDescription(view: Pick<PeerHostView, "features">, hostName: string): string {
   switch (remoteBotSessionGap(view)) {
     case "repair":
-      return `This device can see ${hostName}'s Bots but can't chat with them. Pair it again from ${hostName} to update its access.`;
+      return `This device can see ${hostName}'s Bots but can't chat with them. Pair this device with ${hostName} again to update its access.`;
     case "enable_durable":
-      return `${hostName} keeps its Bots' chats in workspace chats, so open this Bot from All Bots to chat with it. To get the full Bot chat here, run “aiden bots enable-durable” on ${hostName} and restart the server.`;
+      return `Open this Bot from All Bots to use its chat on ${hostName}. To see its full chat here, run “aiden bots enable-durable” on ${hostName} and restart the server.`;
     case "update":
       return `Update Aiden on ${hostName} to chat with its Bots here.`;
   }

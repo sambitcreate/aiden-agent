@@ -266,7 +266,7 @@ test("a host that can't share a Bot's conversation is told the step that would h
   // A desktop at revision 25+ serves durable sessions; this Mac's pairing lacks the grants.
   const repair = { features: ["bot-delete-v1", "bot-durable-session-v1"] };
   assert.equal(remoteBotSessionGap(repair), "repair");
-  assert.match(remoteBotSessionGapDescription(repair, "Studio"), /Pair it again from Studio/);
+  assert.match(remoteBotSessionGapDescription(repair, "Studio"), /Pair this device with Studio again/);
 
   // `aiden serve` with durable Bot sessions off: updating would not help, the server's owner opts in.
   const server = { features: ["bot-delete-v1"] };
