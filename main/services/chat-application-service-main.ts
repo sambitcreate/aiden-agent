@@ -29,7 +29,12 @@ import {
   designPendingEntries,
   designTitleFollow,
   recentWrittenPages,
+  designAppServers,
 } from "./design-canvas/main.js";
+import { readCanvasConfig } from "./design-canvas/canvas-config.js";
+import { designLiveEnabled } from "./studio/feature-flags.js";
+import { reportAnalyticsEvent } from "./analytics/analytics-report.js";
+import { deviceBucket } from "../../renderer/shared/design-canvas/app-devices.js";
 import { createDesignEntry } from "./design-canvas/entry.js";
 import { DESIGN_CANVAS_UPDATED_CHANNEL } from "../handlers/design-canvas.js";
 import { cancelVisualSnapshots } from "./visual-snapshot-service.js";
@@ -69,6 +74,17 @@ export const chatApplicationService = createChatApplicationService({
     broadcast: (update) => ipcMain.broadcast(DESIGN_CANVAS_UPDATED_CHANNEL, update),
     focus: (request) => ipcMain.broadcast("designCanvas:focus", request),
     newId: randomUUID,
+    // 3b (S83): the chat's route files, or a single app's `/`, land as live frames.
+    ...(designLiveEnabled()
+      ? {
+          live: {
+            snapshot: (workspaceId: string) => designAppServers.snapshot(workspaceId),
+            readConfig: readCanvasConfig,
+            onAppFrameAdded: (viewportWidth: number) =>
+              reportAnalyticsEvent("design_app_frame_added", { source: "aiden", device_bucket: deviceBucket(viewportWidth) }),
+          },
+        }
+      : {}),
   }),
   visualSnapshots: { cancelChat: cancelVisualSnapshots },
   followThrough: { beginMove: beginFollowThroughMove, deleteChat: deleteChatFollowThrough, restoreChat: restoreChatFollowThrough },

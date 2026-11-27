@@ -25,6 +25,8 @@ import { rendererDocumentOwner } from "../services/renderer-document-owner.js";
 import { designLiveEnabled, designModeEnabled } from "../services/studio/feature-flags.js";
 import { installedAppNetwork } from "../services/design-canvas/app-frames/app-network-main.js";
 import { renderAppFrame } from "../services/design-canvas/app-frames/app-export.js";
+import { reportAnalyticsEvent } from "../services/analytics/analytics-report.js";
+import { deviceBucket } from "../../renderer/shared/design-canvas/app-devices.js";
 import { registerDesignCanvasHandlers } from "./design-canvas.js";
 import { createDesignModeCardEnter, registerDesignAppHandlers } from "./design-app.js";
 
@@ -76,6 +78,9 @@ export function registerDesignCanvasIpc(): void {
       // Download draws the running app on the default session, as an export window (D18).
       renderApp: (request) => renderAppFrame(request, () => installedAppNetwork()?.registry ?? null),
       apps: designAppServers,
+      // 3b (S88, call site 4): the person's Add ▸ Page from app….
+      onAppFrameAdded: (viewportWidth) =>
+        reportAnalyticsEvent("design_app_frame_added", { source: "person", device_bucket: deviceBucket(viewportWidth) }),
     },
     handle: (channel, handler) => ipcMain.handle(channel, handler),
     store: designCanvasStore,

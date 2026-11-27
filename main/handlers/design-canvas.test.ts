@@ -4,6 +4,8 @@ import * as os from "node:os";
 import * as path from "node:path";
 import test, { type TestContext } from "node:test";
 import {
+  appRouteKey,
+  DESIGN_CANVAS_LIMITS,
   emptyDesignCanvas,
   type DesignCanvas,
 } from "../../renderer/shared/design-canvas/schema.js";
@@ -417,6 +419,30 @@ test("a page a save takes off is remembered as removed, unless the save says the
   assert.deepEqual(((await invoke("designCanvas:get", "chat-1")) as DesignCanvas).removedPagePaths, ["design/b.html"]);
 });
 
+test("3b: an app route a save takes off is remembered, unless the save says the person's undo took it off", async (t) => {
+  const { invoke } = await fixture(t);
+  const app = (id: string, route: string) => ({
+    id,
+    kind: "app" as const,
+    title: route,
+    appRoot: ".",
+    route,
+    viewport: { width: 1280, height: 800 },
+    scale: 0.5,
+    x: 0,
+    y: 0,
+    w: 640,
+    h: 436,
+    pageId: "page-1",
+    createdBy: "aiden" as const,
+  });
+  await invoke("designCanvas:save", "chat-1", { ...note, frames: [...note.frames, app("a", "/pricing"), app("b", "/about")] }, 0);
+  await invoke("designCanvas:save", "chat-1", { ...note, frames: [...note.frames, app("b", "/about")] }, 1, { undoneRoutes: [appRouteKey(".", "/pricing")] });
+  assert.equal(((await invoke("designCanvas:get", "chat-1")) as DesignCanvas).removedAppRoutes, undefined);
+  await invoke("designCanvas:save", "chat-1", note, 2);
+  assert.deepEqual(((await invoke("designCanvas:get", "chat-1")) as DesignCanvas).removedAppRoutes, [appRouteKey(".", "/about")]);
+});
+
 test("a conflicting or invalid save broadcasts nothing", async (t) => {
   const { invoke, broadcasts } = await fixture(t);
   await invoke("designCanvas:save", "chat-1", note, 0);
@@ -443,6 +469,10 @@ test("malformed parameters are rejected before the store is used", async (t) => 
   await assert.rejects(invoke("designCanvas:save", "chat-1", note, 0, { undone: "design/a.html" }), /save options/u);
   await assert.rejects(invoke("designCanvas:save", "chat-1", note, 0, { undone: ["../outside.html"] }), /save options/u);
   await assert.rejects(invoke("designCanvas:save", "chat-1", note, 0, { undone: [42] }), /save options/u);
+  await assert.rejects(invoke("designCanvas:save", "chat-1", note, 0, { undoneRoutes: appRouteKey(".", "/a") }), /save options/u);
+  await assert.rejects(invoke("designCanvas:save", "chat-1", note, 0, { undoneRoutes: ["design/a.html"] }), /save options/u);
+  await assert.rejects(invoke("designCanvas:save", "chat-1", note, 0, { undoneRoutes: [appRouteKey("../x", "/")] }), /save options/u);
+  await assert.rejects(invoke("designCanvas:save", "chat-1", note, 0, { undone: [appRouteKey(".", "/a")] }), /save options/u, "a route key isn't a page path");
   assert.deepEqual(await fs.readdir(root), []);
   assert.deepEqual(broadcasts, []);
 });
@@ -1575,4 +1605,207 @@ test("with live apps off an app frame answers live-off, and its source is unavai
   assert.deepEqual(await on.invoke("designCanvas:export", "chat-1", "app-1", "source"), { error: "unavailable" });
   assert.deepEqual(await on.invoke("designCanvas:source", "chat-1", "app-1"), { error: "unavailable" });
   assert.deepEqual(on.saveDialogs, []);
+});
+
+// ── 3b (S87): Add ▸ Page from app… ──
+
+async function pickerFixture(
+  t: TestContext,
+  options: {
+    live?: boolean;
+    target?: DesignAppsSnapshot["target"];
+    candidates?: DesignAppsSnapshot["candidates"];
+    apps?: DesignAppsSnapshot["apps"];
+    chats?: Record<string, DesignCanvasChat>;
+    /** Runs while main reads the apps snapshot, as a person acting meanwhile. */
+    onSnapshot?: () => void;
+  } = {},
+) {
+  const reported: number[] = [];
+  const routeCalls: Array<string | undefined> = [];
+  const result = await fixture(t, {
+    ...(options.chats ? { chats: options.chats } : {}),
+    appFrames: {
+      enabled: () => options.live ?? true,
+      registry: () => null,
+      apps: {
+        snapshot: async (workspaceId) => {
+          options.onSnapshot?.();
+          return {
+          workspaceId,
+          target: options.target ?? "single",
+          apps: options.apps ?? [],
+          candidates: options.candidates ?? [{ appRoot: ".", framework: "next", frameworkLabel: "Next.js" }],
+          chosen: [],
+          };
+        },
+        appForOrigin: () => undefined,
+        routes: async (_workspaceId, appRoot) => {
+          routeCalls.push(appRoot);
+          return {
+            appRoot: appRoot ?? ".",
+            framework: "next",
+            source: "discovered",
+            truncated: false,
+            routes: [
+              { route: "/", source: "discovered" },
+              { route: "/pricing", source: "discovered" },
+            ],
+          };
+        },
+      },
+      onAppFrameAdded: (width) => reported.push(width),
+    },
+  });
+  return { ...result, reported, routeCalls };
+}
+
+const appFramesIn = (doc: DesignCanvas) => doc.frames.filter((frame) => frame.kind === "app");
+
+test("3b: with live frames off, both picker channels answer unavailable", async (t) => {
+  const { invoke } = await pickerFixture(t, { live: false });
+  assert.deepEqual(await invoke("designCanvas:appRoutes", "chat-1", {}), { error: "unavailable" });
+  assert.deepEqual(await invoke("designCanvas:placeAppRoute", "chat-1", { appRoot: ".", route: "/" }), { error: "unavailable" });
+});
+
+test("3b: appRoutes lists the app's routes; a Bot chat gets nothing; an attached-only app is listed", async (t) => {
+  const { invoke } = await pickerFixture(t, {
+    chats: {
+      "chat-1": { id: "chat-1", workspaceId: "workspace-1", designMode: true },
+      "bot-chat": { id: "bot-chat", workspaceId: "workspace-1", designMode: true, botId: "bot-1" },
+    },
+  });
+  const listed = (await invoke("designCanvas:appRoutes", "chat-1", {})) as { apps: unknown; appRoot: string; list: { framework?: string; routes: { route: string }[] } };
+  assert.deepEqual(listed.apps, [{ appRoot: ".", label: "Next.js" }]);
+  assert.equal(listed.list.framework, "next");
+  assert.deepEqual(listed.list.routes.map((entry) => entry.route), ["/", "/pricing"]);
+  await assert.rejects(invoke("designCanvas:appRoutes", "bot-chat", {}), /not available/u);
+
+  const attached = await pickerFixture(t, {
+    target: "none",
+    candidates: [],
+    apps: [{ workspaceId: "workspace-1", appRoot: "web", source: "attached", frameworkLabel: "App", phase: "running", since: 0, revision: 1 }],
+  });
+  const answer = (await attached.invoke("designCanvas:appRoutes", "chat-1", {})) as { appRoot: string };
+  assert.equal(answer.appRoot, "web");
+  assert.deepEqual(attached.routeCalls, ["web"]);
+});
+
+test("3b: placeAppRoute puts the person's frame centred on the page on screen, as their undo step, and focuses it", async (t) => {
+  const { invoke, store, views, broadcasts, focusSent, reported } = await pickerFixture(t);
+  await store.update("chat-1", (doc) => ({ ...doc, pages: [...doc.pages, { id: "page-2", name: "Two" }] }));
+  await views.report("chat-1", "workspace-1", { pageId: "page-1", viewport: { x: 0, y: 0, zoom: 1 } }, 0);
+  const placed = (await invoke("designCanvas:placeAppRoute", "chat-1", { appRoot: ".", route: "/pricing", pageId: "page-2", viewSize: { w: 3000, h: 2000 } })) as {
+    placed: string;
+    pageId: string;
+  };
+  assert.equal(placed.pageId, "page-2");
+  const doc = (await invoke("designCanvas:get", "chat-1")) as DesignCanvas;
+  const frame = appFramesIn(doc)[0]!;
+  assert.deepEqual([frame.id, frame.pageId, frame.createdBy, frame.route, frame.appRoot], [placed.placed, "page-2", "person", "/pricing", "."]);
+  assert.deepEqual([frame.x + frame.w / 2, frame.y + frame.h / 2], [1500, 1000], "centred in the reported view");
+  assert.match(broadcasts[broadcasts.length - 1]?.step ?? "", /^add-app-route:/u);
+  assert.deepEqual((focusSent[focusSent.length - 1]?.request as { frameIds: string[] }).frameIds, [placed.placed]);
+  assert.equal((focusSent[focusSent.length - 1]?.request as { own?: boolean }).own, true, "the person's own Add, which the canvas doesn't hold back");
+  assert.deepEqual(reported, [1280]);
+
+  const again = (await invoke("designCanvas:placeAppRoute", "chat-1", { appRoot: ".", route: "/pricing", pageId: "page-2" })) as { already: string };
+  assert.equal(again.already, placed.placed);
+  assert.equal(focusSent.length, 2, "an already-there frame is focused too");
+  assert.deepEqual(reported, [1280], "already isn't reported");
+
+  // The Add showed page-2; the person goes back to page-1.
+  const seen = (focusSent[focusSent.length - 1]?.request as { focusId: number }).focusId;
+  await views.report("chat-1", "workspace-1", { pageId: "page-1", viewport: { x: 0, y: 0, zoom: 1 } }, seen);
+  const fallback = (await invoke("designCanvas:placeAppRoute", "chat-1", { appRoot: ".", route: "/", pageId: "no-such-page", viewSize: { w: -5, h: "tall" } })) as { pageId: string };
+  assert.equal(fallback.pageId, "page-1", "an unknown page falls back to the chat's view page; a bad size is ignored");
+});
+
+test("3b: placeAppRoute refuses a bad route or root, and a full page writes nothing", async (t) => {
+  const { invoke, store, reported } = await pickerFixture(t);
+  assert.deepEqual(await invoke("designCanvas:placeAppRoute", "chat-1", { appRoot: ".", route: "https://evil" }), { error: "bad-route" });
+  assert.deepEqual(await invoke("designCanvas:placeAppRoute", "chat-1", { appRoot: ".", route: "/blog/[slug]" }), { error: "bad-route" });
+  assert.deepEqual(await invoke("designCanvas:placeAppRoute", "chat-1", { appRoot: "../x", route: "/" }), { error: "unknown-root" });
+  assert.deepEqual(await invoke("designCanvas:placeAppRoute", "chat-1", { appRoot: "other", route: "/" }), { error: "unknown-root" });
+
+  await store.update("chat-1", (doc) => ({
+    ...doc,
+    frames: Array.from({ length: DESIGN_CANVAS_LIMITS.framesPerPage }, (_, index) => ({
+      id: `n${index}`, kind: "note" as const, title: "n", text: "n", x: index * 10, y: 0, w: 10, h: 10, pageId: "page-1", createdBy: "person" as const,
+    })),
+  }));
+  const before = ((await invoke("designCanvas:get", "chat-1")) as DesignCanvas).revision;
+  assert.deepEqual(await invoke("designCanvas:placeAppRoute", "chat-1", { appRoot: ".", route: "/", pageId: "page-1" }), { error: "full" });
+  assert.equal(((await invoke("designCanvas:get", "chat-1")) as DesignCanvas).revision, before);
+  assert.deepEqual(reported, []);
+});
+
+test("3b: the person can place a route they removed, which forgets the removal", async (t) => {
+  const { invoke } = await pickerFixture(t);
+  await invoke("designCanvas:placeAppRoute", "chat-1", { appRoot: ".", route: "/pricing" });
+  const placed = (await invoke("designCanvas:get", "chat-1")) as DesignCanvas;
+  await invoke("designCanvas:save", "chat-1", { ...placed, frames: [] }, placed.revision);
+  assert.deepEqual(((await invoke("designCanvas:get", "chat-1")) as DesignCanvas).removedAppRoutes, [appRouteKey(".", "/pricing")]);
+  assert.ok("placed" in ((await invoke("designCanvas:placeAppRoute", "chat-1", { appRoot: ".", route: "/pricing" })) as object));
+  assert.equal(((await invoke("designCanvas:get", "chat-1")) as DesignCanvas).removedAppRoutes, undefined);
+});
+
+test("3b: a chat that leaves design mode or moves while main reads its apps gets unavailable, and nothing is placed or listed", async (t) => {
+  for (const change of [
+    (chat: DesignCanvasChat): DesignCanvasChat => {
+      const { designMode: _left, ...rest } = chat;
+      return rest;
+    },
+    (chat: DesignCanvasChat): DesignCanvasChat => ({ ...chat, workspaceId: "workspace-2" }),
+  ]) {
+    const chats: Record<string, DesignCanvasChat> = { "chat-1": { id: "chat-1", workspaceId: "workspace-1", designMode: true } };
+    const original = chats["chat-1"]!;
+    let act = true;
+    const { invoke, store, broadcasts, focusSent, reported, routeCalls } = await pickerFixture(t, {
+      chats,
+      onSnapshot: () => {
+        if (act) chats["chat-1"] = change(original);
+      },
+    });
+    assert.deepEqual(await invoke("designCanvas:appRoutes", "chat-1", {}), { error: "unavailable" });
+    assert.deepEqual(routeCalls, [], "no routes were walked for a chat that left");
+    chats["chat-1"] = original;
+    assert.deepEqual(await invoke("designCanvas:placeAppRoute", "chat-1", { appRoot: ".", route: "/pricing" }), { error: "unavailable" });
+    act = false;
+    chats["chat-1"] = original;
+    const doc = (await store.get("chat-1", { workspaceId: "workspace-1" })).doc;
+    assert.deepEqual(appFramesIn(doc), [], "nothing was written to the canvas it left");
+    assert.deepEqual([broadcasts.length, focusSent.length, reported.length], [0, 0, 0]);
+  }
+});
+
+test("3b: a chat that leaves or moves while main shows the placed frame's page keeps no view there and gets no focus", async (t) => {
+  for (const change of [
+    (chat: DesignCanvasChat): DesignCanvasChat => {
+      const { designMode: _left, ...rest } = chat;
+      return rest;
+    },
+    (chat: DesignCanvasChat): DesignCanvasChat => ({ ...chat, workspaceId: "workspace-2" }),
+  ]) {
+    const chats: Record<string, DesignCanvasChat> = { "chat-1": { id: "chat-1", workspaceId: "workspace-1", designMode: true } };
+    const original = chats["chat-1"]!;
+    const { invoke, views, broadcasts, focusSent } = await pickerFixture(t, { chats });
+    // The views' own load is the await inside showing the page: once the frame is saved, the chat changes during it.
+    const internals = views as unknown as { workspace(id: string): Promise<unknown> };
+    const load = internals.workspace.bind(views);
+    internals.workspace = async (id) => {
+      if (broadcasts.length > 0) chats["chat-1"] = change(original);
+      return load(id);
+    };
+    const answer = await invoke("designCanvas:placeAppRoute", "chat-1", { appRoot: ".", route: "/pricing" });
+    assert.ok("placed" in (answer as object), "the frame was saved before the chat changed");
+    internals.workspace = load;
+    assert.equal(await views.get("chat-1", "workspace-1"), undefined, "no view was kept for the workspace the chat left");
+    assert.deepEqual(focusSent, [], "no focus reached the chat");
+  }
+});
+
+test("3b: placeAppRoute in a workspace whose apps are unavailable answers unavailable", async (t) => {
+  const { invoke } = await pickerFixture(t, { target: "unavailable" });
+  assert.deepEqual(await invoke("designCanvas:placeAppRoute", "chat-1", { appRoot: ".", route: "/pricing" }), { error: "unavailable" });
 });

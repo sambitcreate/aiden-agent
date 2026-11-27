@@ -269,3 +269,17 @@ test("without DESIGN.md this turn, a journaled section naming design_system is r
   assert.doesNotMatch(latest!, /design_system/u);
   assert.equal(withDesignModeSection(now, designModePromptSection(false), 4, { live: false }), now, "then it stays");
 });
+
+test("3b: a stored live section is replaced on a turn without design_app", () => {
+  const user: AgentMessage = { role: "user", content: "hi", timestamp: 1 };
+  const live = withDesignModeSection([user], designModePromptSection(false, true), 2, { live: true });
+  for (const [designMd, flagLive] of [
+    [false, false],
+    [true, true],
+  ] as const) {
+    const now = withDesignModeSection(live, designModePromptSection(designMd), 3, { live: flagLive });
+    const latest = (now[now.length - 1] as { sections?: Record<string, string> }).sections?.[DESIGN_MODE_SECTION];
+    assert.equal(latest, designModePromptSection(designMd));
+    assert.doesNotMatch(latest!, /design_app/u);
+  }
+});

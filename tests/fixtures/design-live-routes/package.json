@@ -1,0 +1,15 @@
+{
+  "name": "design-live-routes-fixture",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "vite"
+  },
+  "devDependencies": {
+    "@tanstack/router-plugin": "^1.120.0",
+    "@vitejs/plugin-react": "^6.0.1",
+    "react": "^19.1.1",
+    "react-dom": "^19.1.1",
+    "vite": "^8.0.2"
+  }
+}

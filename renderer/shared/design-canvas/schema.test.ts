@@ -4,9 +4,11 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
+  appRouteKey,
   type DesignCanvas,
   DESIGN_CANVAS_LIMITS,
   emptyDesignCanvas,
+  isAppRouteKey,
   isDesignRelativePath,
   parseDesignCanvas,
 } from "./schema.js";
@@ -591,4 +593,25 @@ test("app frames: parse, serialize and parse again is a fixed point", () => {
   }
   const tiny = parsed(canvas({ frames: [appFrame({ scale: 0.05, viewport: { width: 200, height: 200 } })] })).doc.frames[0]!;
   assert.equal(tiny.w, 10, "the generic clamp doesn't move the smallest app box");
+});
+
+// 3b (S83): removed app routes.
+test("3b: removedAppRoutes parses valid keys, dedupes them and keeps the newest 200", () => {
+  const keys = Array.from({ length: 250 }, (_, index) => appRouteKey(".", `/r${index}`));
+  const parsed = parseDesignCanvas({ ...emptyDesignCanvas(), removedAppRoutes: [keys[0], keys[0], "no-separator", appRouteKey("../x", "/"), appRouteKey(".", "pricing"), ...keys] });
+  assert.ok(parsed.ok);
+  if (!parsed.ok) return;
+  assert.equal(parsed.doc.removedAppRoutes?.length, 200);
+  assert.equal(parsed.doc.removedAppRoutes?.[199], keys[249]);
+  assert.equal(parsed.doc.removedAppRoutes?.[0], keys[50]);
+});
+
+test("3b: isAppRouteKey needs a valid root, one separator and a valid route", () => {
+  assert.equal(isAppRouteKey(appRouteKey(".", "/pricing")), true);
+  assert.equal(isAppRouteKey(appRouteKey("apps/web", "/a?b=1")), true);
+  assert.equal(isAppRouteKey("../x\u0000/"), false);
+  assert.equal(isAppRouteKey("design/home.html"), false);
+  assert.equal(isAppRouteKey(appRouteKey(".", "/a#b")), false);
+  assert.equal(isAppRouteKey(`.\u0000/a\u0000/b`), false);
+  assert.equal(isAppRouteKey(42), false);
 });

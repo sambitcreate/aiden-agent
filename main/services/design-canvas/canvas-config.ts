@@ -18,6 +18,7 @@ import { writeConfinedWorkspaceText } from "../coding-tools.js";
 import { parseAttachUrl } from "./app-server/app-attach.js";
 import { readBounded } from "./app-server/app-detect.js";
 import { designTarget, isSafeScriptName, type WebAppDetection } from "./app-server/app-server-core.js";
+import { isConcreteRoute, isParamValue, isRoutePattern, patternParams } from "../../../renderer/shared/design-canvas/app-routes.js";
 
 export const CANVAS_CONFIG_PATH = ".aiden/canvas.json";
 export const CANVAS_CONFIG_MAX_BYTES = 65_536;
@@ -30,8 +31,19 @@ const SAFE_SEGMENT = /^[A-Za-z0-9._@+-]+$/;
  * `url` (2c, D7): a loopback origin of a server the person runs, as display
  * text; `urlRefused` when the entry has a `url` Aiden won't connect to. Either
  * makes the root attach-only: it never launches, even with a `script`.
+ *
+ * `routes` and `params` (3b, S81): the app's pages, replacing discovery, and
+ * values for single-parameter patterns. Bad entries are dropped silently.
  */
-export type CanvasConfigApp = { root: string; script?: string; designMd?: string; url?: string; urlRefused?: true };
+export type CanvasConfigApp = {
+  root: string;
+  script?: string;
+  designMd?: string;
+  url?: string;
+  urlRefused?: true;
+  routes?: string[];
+  params?: Record<string, string[]>;
+};
 export type CanvasConfig = { version: 1; apps: CanvasConfigApp[] };
 export type CanvasConfigInspection =
   | { status: "ok"; config: CanvasConfig; raw: Record<string, unknown> }
@@ -68,6 +80,40 @@ export function parseCanvasConfigObject(text: string): Record<string, unknown> |
   }
 }
 
+export const CANVAS_CONFIG_ROUTE_LIMITS = { routes: 200, paramKeys: 50, paramValues: 20 } as const;
+
+/** `routes` (S81): at most 200 concrete routes or bracket patterns, each once; empty or missing gives undefined. */
+function parseRoutes(value: unknown): string[] | undefined {
+  if (!Array.isArray(value)) return undefined;
+  const routes: string[] = [];
+  for (const entry of value.slice(0, CANVAS_CONFIG_ROUTE_LIMITS.routes)) {
+    if (typeof entry !== "string" || routes.includes(entry)) continue;
+    if (isConcreteRoute(entry) || isRoutePattern(entry)) routes.push(entry);
+  }
+  return routes.length > 0 ? routes : undefined;
+}
+
+/** `params` (S81): up to 50 single-parameter patterns, each with up to 20 safe values. */
+function parseParams(value: unknown): Record<string, string[]> | undefined {
+  if (!isRecord(value)) return undefined;
+  const params: Record<string, string[]> = {};
+  let keys = 0;
+  for (const [pattern, values] of Object.entries(value)) {
+    if (keys >= CANVAS_CONFIG_ROUTE_LIMITS.paramKeys) break;
+    if (!isRoutePattern(pattern) || !Array.isArray(values)) continue;
+    const names = patternParams(pattern);
+    if (names.length !== 1) continue;
+    const kept: string[] = [];
+    for (const candidate of values.slice(0, CANVAS_CONFIG_ROUTE_LIMITS.paramValues)) {
+      if (typeof candidate === "string" && isParamValue(candidate, names[0].catchAll) && !kept.includes(candidate)) kept.push(candidate);
+    }
+    if (kept.length === 0) continue;
+    params[pattern] = kept;
+    keys += 1;
+  }
+  return keys > 0 ? params : undefined;
+}
+
 function parseApps(value: unknown): CanvasConfigApp[] {
   if (!Array.isArray(value)) return [];
   const apps: CanvasConfigApp[] = [];
@@ -81,6 +127,10 @@ function parseApps(value: unknown): CanvasConfigApp[] {
       if (url.ok) app.url = url.url;
       else app.urlRefused = true;
     }
+    const routes = parseRoutes(entry.routes);
+    if (routes) app.routes = routes;
+    const params = parseParams(entry.params);
+    if (params) app.params = params;
     apps.push(app);
   }
   return apps;

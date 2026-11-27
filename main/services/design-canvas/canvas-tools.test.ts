@@ -2236,3 +2236,258 @@ test("colorScheme is refused on a frame that isn't an app frame", async (t) => {
   const page = await call("canvas_place_frame", { kind: "file", title: "Home", path: "design/home.html" });
   assert.match(String((await call("canvas_update_frame", { id: page.frame.id, colorScheme: "dark" })).message), /Only a live app frame has a colorScheme/u);
 });
+
+// Live app frames, 3b (S85): devices, variants, labels and the analytics hook.
+
+test("3b: with live apps off, canvas_place_frame stays today's even with the new deps", async (t) => {
+  const { workspace } = await setup(t);
+  const base = { chatId: "chat-1", workspaceRoot: workspace, store: { get: async () => { throw new Error("unused"); }, update: async () => { throw new Error("unused"); }, workspaceIdOf: async () => "ws-1" }, broadcast: () => undefined } as unknown as ToolDeps;
+  const today = createDesignCanvasTools(base);
+  const off = createDesignCanvasTools({ ...base, designLive: false, apps: liveApps(), onAppFrameAdded: () => undefined, blockedFor: () => 3 });
+  for (const name of ["canvas_place_frame", "canvas_update_frame", "canvas_read"]) assert.deepEqual(definition(off, name), definition(today, name), name);
+});
+
+test("3b: device sets the viewport, explicit sides win, and an unknown device names the four", async (t) => {
+  const { call } = await setup(t, { designLive: true, apps: liveApps() });
+  const phone = await call("canvas_place_frame", { kind: "app", title: "Home", route: "/", device: "phone" });
+  assert.deepEqual({ viewport: phone.frame.viewport, scale: phone.frame.scale }, { viewport: { width: 390, height: 844 }, scale: 0.5 });
+  const wide = await call("canvas_place_frame", { kind: "app", title: "Wide", route: "/wide", device: "phone", width: 400 });
+  assert.deepEqual(wide.frame.viewport, { width: 400, height: 844 });
+  const watch = await call("canvas_place_frame", { kind: "app", title: "W", route: "/w", device: "watch" });
+  assert.equal(watch.status, "error");
+  for (const name of ["phone", "tablet", "laptop", "desktop"]) assert.match(String(watch.message), new RegExp(name, "u"));
+});
+
+test("3b: on reuse, device changes the viewport and label replaces the old one", async (t) => {
+  const { call } = await setup(t, { designLive: true, apps: liveApps() });
+  const first = await call("canvas_place_frame", { kind: "app", title: "Pricing", route: "/pricing", label: "Calm" });
+  const reused = await call("canvas_place_frame", { kind: "app", title: "Pricing", route: "/pricing", device: "tablet", label: "Bold" });
+  assert.equal(reused.placed, "reused");
+  assert.equal(reused.frame.id, first.frame.id);
+  assert.deepEqual(reused.frame.viewport, { width: 768, height: 1024 });
+  assert.equal(reused.frame.label, "Bold");
+});
+
+test("3b: label is stored apart from the title and listed; too long is an error", async (t) => {
+  const { call, store } = await setup(t, { designLive: true, apps: liveApps() });
+  const placed = await call("canvas_place_frame", { kind: "app", title: "Pricing", route: "/pricing", label: "Calm" });
+  const saved = (await store.get("chat-1")).frames[0]!;
+  assert.deepEqual({ title: saved.title, label: saved.label }, { title: "Pricing", label: "Calm" });
+  const read = await call("canvas_read");
+  const listed = [...read.inView, ...read.outsideFrames].find((frame: { id: string }) => frame.id === placed.frame.id);
+  assert.equal(listed.label, "Calm");
+  const long = await call("canvas_place_frame", { kind: "app", title: "X", route: "/x", label: "x".repeat(61) });
+  assert.equal(long.status, "error");
+  assert.match(String(long.message), /60/u);
+});
+
+test("3b: variantOf puts the variant 64 to the right, top-aligned, and groups it with the original", async (t) => {
+  const { call, store } = await setup(t, { designLive: true, apps: liveApps() });
+  const original = await call("canvas_place_frame", { kind: "app", title: "Pricing", route: "/pricing", x: 100, y: 200 });
+  const v2 = await call("canvas_place_frame", { kind: "app", title: "Pricing v2", route: "/pricing-v2", variantOf: original.frame.id, label: "Bold" });
+  assert.equal(v2.status, "placed");
+  assert.equal(v2.frame.box.x, original.frame.box.x + original.frame.box.w + 64);
+  assert.equal(v2.frame.box.y, original.frame.box.y);
+  assert.equal(v2.frame.variantOf, original.frame.id);
+  let doc = await store.get("chat-1");
+  const group = doc.frames.find((frame) => frame.kind === "group")!;
+  assert.equal(group.title, "/pricing");
+  assert.deepEqual(
+    doc.frames.filter((frame) => frame.groupId === group.id).map((frame) => frame.id),
+    [original.frame.id, v2.frame.id],
+  );
+  const read = await call("canvas_read");
+  const listed = [...read.inView, ...read.outsideFrames].find((frame: { id: string }) => frame.id === v2.frame.id);
+  assert.equal(listed.variantOf, original.frame.id);
+
+  const v3 = await call("canvas_place_frame", { kind: "app", title: "Pricing v3", route: "/pricing-v3", variantOf: original.frame.id });
+  assert.equal(v3.frame.box.x, v2.frame.box.x + v2.frame.box.w + 64, "right of the rightmost variant");
+  doc = await store.get("chat-1");
+  const members = doc.frames.filter((frame) => frame.groupId === group.id);
+  assert.equal(members.length, 3);
+  const refit = doc.frames.find((frame) => frame.id === group.id)!;
+  for (const member of members) assert.ok(member.x >= refit.x && member.x + member.w <= refit.x + refit.w, "the group holds all three");
+  assert.equal(doc.frames.filter((frame) => frame.kind === "group").length, 1);
+});
+
+test("3b: a variant of a frame inside an artboard goes into that artboard", async (t) => {
+  const { call, store } = await setup(t, { designLive: true, apps: liveApps() });
+  const board = await call("canvas_place_frame", { kind: "frame", title: "Board", x: 0, y: 0, w: 3000, h: 1200 });
+  const original = await call("canvas_place_frame", { kind: "app", title: "Pricing", route: "/pricing", groupId: board.frame.id, x: 40, y: 80 });
+  const variant = await call("canvas_place_frame", { kind: "app", title: "v2", route: "/pricing-v2", variantOf: original.frame.id });
+  const doc = await store.get("chat-1");
+  assert.equal(doc.frames.find((frame) => frame.id === variant.frame.id)!.groupId, board.frame.id);
+  assert.equal(doc.frames.filter((frame) => frame.kind === "group").length, 0, "no new group");
+});
+
+test("3b: variantOf must name an app frame of the same root; locked originals and full pages are refused", async (t) => {
+  const two = await setup(t, { designLive: true, apps: liveApps(["apps/web", "apps/admin"]) });
+  const web = await two.call("canvas_place_frame", { kind: "app", title: "Web", appRoot: "apps/web", route: "/" });
+  const file = await two.call("canvas_place_frame", { kind: "file", title: "Home", path: "design/home.html" });
+  for (const variantOf of ["design/home.html", file.frame.id]) {
+    const refused = await two.call("canvas_place_frame", { kind: "app", title: "v", appRoot: "apps/web", route: "/v", variantOf });
+    assert.equal(refused.status, "error", variantOf);
+  }
+  const otherRoot = await two.call("canvas_place_frame", { kind: "app", title: "v", appRoot: "apps/admin", route: "/v", variantOf: web.frame.id });
+  assert.equal(otherRoot.status, "error");
+
+  const { call, store } = await setup(t, { designLive: true, apps: liveApps() });
+  const original = await call("canvas_place_frame", { kind: "app", title: "Pricing", route: "/pricing" });
+  await call("canvas_update_frame", { id: original.frame.id, locked: true });
+  const locked = await call("canvas_place_frame", { kind: "app", title: "v2", route: "/pricing-v2", variantOf: original.frame.id });
+  assert.match(String(locked.message), /locked/u);
+  await call("canvas_update_frame", { id: original.frame.id, locked: false });
+  const group = await call("canvas_place_frame", { kind: "group", title: "Held", x: -100, y: -100 });
+  await call("canvas_update_frame", { id: original.frame.id, groupId: group.frame.id });
+  await call("canvas_update_frame", { id: group.frame.id, locked: true });
+  const inLocked = await call("canvas_place_frame", { kind: "app", title: "v2", route: "/pricing-v2", variantOf: original.frame.id });
+  assert.match(String(inLocked.message), /locked/u);
+
+  const full = await setup(t, { designLive: true, apps: liveApps() });
+  const first = await full.call("canvas_place_frame", { kind: "app", title: "Pricing", route: "/pricing" });
+  await full.store.update("chat-1", (doc) => ({
+    ...doc,
+    frames: [
+      ...doc.frames,
+      ...Array.from({ length: DESIGN_CANVAS_LIMITS.framesPerPage - 2 }, (_, index) => ({
+        id: `n-${index}`,
+        kind: "note" as const,
+        title: "n",
+        text: "n",
+        pageId: doc.pages[0]!.id,
+        x: 5000 + index * 10,
+        y: 5000,
+        w: 10,
+        h: 10,
+        createdBy: "person" as const,
+      })),
+    ],
+  }));
+  const before = (await full.store.get("chat-1")).frames.length;
+  assert.equal(before, DESIGN_CANVAS_LIMITS.framesPerPage - 1);
+  const refused = await full.call("canvas_place_frame", { kind: "app", title: "v2", route: "/pricing-v2", variantOf: first.frame.id });
+  assert.match(String(refused.message), /That page is full/u);
+  assert.equal((await full.store.get("chat-1")).frames.length, before, "nothing is written");
+  void store;
+});
+
+test("3b: a variant that needs a new group is refused when the whole canvas is one frame from full, and nothing is written", async (t) => {
+  const full = await setup(t, { designLive: true, apps: liveApps() });
+  const first = await full.call("canvas_place_frame", { kind: "app", title: "Pricing", route: "/pricing" });
+  // The original's page has room; the rest of the canvas holds all but one of its frames.
+  const others = DESIGN_CANVAS_LIMITS.frames - 2;
+  const pageCount = Math.ceil(others / DESIGN_CANVAS_LIMITS.framesPerPage);
+  await full.store.update("chat-1", (doc) => ({
+    ...doc,
+    pages: [...doc.pages, ...Array.from({ length: pageCount }, (_, index) => ({ id: `p-${index}`, name: `P${index}` }))],
+    frames: [
+      ...doc.frames,
+      ...Array.from({ length: others }, (_, index) => ({
+        id: `n-${index}`,
+        kind: "note" as const,
+        title: "n",
+        text: "n",
+        pageId: `p-${Math.floor(index / DESIGN_CANVAS_LIMITS.framesPerPage)}`,
+        x: (index % 40) * 20,
+        y: Math.floor((index % DESIGN_CANVAS_LIMITS.framesPerPage) / 40) * 20,
+        w: 10,
+        h: 10,
+        createdBy: "person" as const,
+      })),
+    ],
+  }));
+  const before = await full.store.get("chat-1");
+  assert.equal(before.frames.length, DESIGN_CANVAS_LIMITS.frames - 1);
+  const refused = await full.call("canvas_place_frame", { kind: "app", title: "v2", route: "/pricing-v2", variantOf: first.frame.id });
+  assert.equal(refused.status, "error");
+  assert.match(String(refused.message), /canvas is full/u);
+  const after = await full.store.get("chat-1");
+  assert.equal(after.frames.length, before.frames.length, "nothing is written");
+  assert.equal(after.frames.find((entry) => entry.id === first.frame.id)?.groupId, undefined, "the original stays ungrouped");
+});
+
+test("3b: onAppFrameAdded reports each new or copied app frame's viewport width, never a reuse or a refusal", async (t) => {
+  const widths: number[] = [];
+  const { call } = await setup(t, { designLive: true, apps: liveApps(), onAppFrameAdded: (width) => widths.push(width) });
+  await call("canvas_place_frame", { kind: "app", title: "Home", route: "/", device: "phone" });
+  await call("canvas_place_frame", { kind: "app", title: "Home", route: "/" });
+  await call("canvas_place_frame", { kind: "app", title: "Pricing", route: "/pricing" });
+  await call("canvas_place_frame", { kind: "app", title: "Pricing", route: "/pricing", duplicate: true });
+  await call("canvas_place_frame", { kind: "app", title: "Bad", route: "/bad", device: "watch" });
+  assert.deepEqual(widths, [390, 1280, 1280]);
+});
+
+test("3b: a pattern route is refused with a hint to fill its value", async (t) => {
+  const { call, store } = await setup(t, { designLive: true, apps: liveApps() });
+  const refused = await call("canvas_place_frame", { kind: "app", title: "Post", route: "/blog/[slug]" });
+  assert.equal(refused.status, "error");
+  assert.match(String(refused.message), /\[slug\]/u);
+  assert.match(String(refused.message), /value/u);
+  assert.equal((await store.get("chat-1")).frames.length, 0);
+});
+
+test("3b: canvas_update_frame retargets an app frame's route, keeping its id and box, and a route-equal title follows", async (t) => {
+  const { call, store } = await setup(t, { designLive: true, apps: liveApps() });
+  const routeTitled = await call("canvas_place_frame", { kind: "app", title: "/pricing", route: "/pricing" });
+  const custom = await call("canvas_place_frame", { kind: "app", title: "Checkout", route: "/checkout" });
+  const moved = await call("canvas_update_frame", { id: routeTitled.frame.id, route: "/about" });
+  assert.equal(moved.status, "updated");
+  assert.deepEqual({ id: moved.frame.id, route: moved.frame.route, title: moved.frame.title, box: moved.frame.box }, {
+    id: routeTitled.frame.id,
+    route: "/about",
+    title: "/about",
+    box: routeTitled.frame.box,
+  });
+  const kept = await call("canvas_update_frame", { id: custom.frame.id, route: "/checkout/done" });
+  assert.equal(kept.frame.title, "Checkout");
+  assert.equal((await store.get("chat-1")).frames.find((frame) => frame.id === custom.frame.id)!.route, "/checkout/done");
+  assert.match(String((await call("canvas_update_frame", { id: custom.frame.id, route: "/blog/[slug]" })).message), /pattern/u);
+});
+
+test("3b: a viewport change keeps the scale; a phone switch of a 1440 × 900 frame at scale 1 saves", async (t) => {
+  const { call, store } = await setup(t, { designLive: true, apps: liveApps() });
+  const desk = await call("canvas_place_frame", { kind: "app", title: "Home", route: "/", device: "desktop", scale: 1 });
+  const phone = await call("canvas_update_frame", { id: desk.frame.id, device: "phone" });
+  assert.equal(phone.status, "updated");
+  const saved = (await store.get("chat-1")).frames.find((frame) => frame.id === desk.frame.id)!;
+  assert.deepEqual({ viewport: saved.viewport, scale: saved.scale, w: saved.w, h: saved.h }, { viewport: { width: 390, height: 844 }, scale: 1, w: 390, h: 880 });
+
+  const big = await call("canvas_place_frame", { kind: "app", title: "Big", route: "/big", scale: 2 });
+  await call("canvas_update_frame", { id: big.frame.id, width: 4000, height: 4000 });
+  const fitted = (await store.get("chat-1")).frames.find((frame) => frame.id === big.frame.id)!;
+  assert.ok(fitted.w <= DESIGN_CANVAS_LIMITS.maxSize && fitted.h <= DESIGN_CANVAS_LIMITS.maxSize, "the box stays within maxSize");
+  assert.ok(fitted.scale! < 2);
+  assert.deepEqual(fitted.viewport, { width: 4000, height: 4000 });
+});
+
+test("3b: viewport sides out of range, box with viewport, and a route on a file frame are errors", async (t) => {
+  const { call } = await setup(t, { designLive: true, apps: liveApps() });
+  const app = await call("canvas_place_frame", { kind: "app", title: "Home", route: "/" });
+  for (const width of [199, 4001]) {
+    assert.match(String((await call("canvas_update_frame", { id: app.frame.id, width })).message), /200 to 4000/u);
+  }
+  assert.match(String((await call("canvas_update_frame", { id: app.frame.id, w: 600, device: "phone" })).message), /size or its viewport, not both/u);
+  const page = await call("canvas_place_frame", { kind: "file", title: "Home", path: "design/home.html" });
+  assert.match(String((await call("canvas_update_frame", { id: page.frame.id, route: "/x" })).message), /Only a live app frame/u);
+  const labelled = await call("canvas_update_frame", { id: app.frame.id, label: "Calm" });
+  assert.equal(labelled.frame.label, "Calm");
+  const cleared = await call("canvas_update_frame", { id: app.frame.id, label: "" });
+  assert.equal("label" in cleared.frame, false);
+});
+
+test("3b: canvas_read lists an app frame's blocked count when it isn't 0, and never without the dependency", async (t) => {
+  const counts = new Map<string, number>();
+  const withCounts = await setup(t, { designLive: true, apps: liveApps(), blockedFor: (id) => counts.get(id) ?? 0 });
+  const a = await withCounts.call("canvas_place_frame", { kind: "app", title: "A", route: "/a" });
+  const b = await withCounts.call("canvas_place_frame", { kind: "app", title: "B", route: "/b" });
+  counts.set(a.frame.id, 4);
+  const read = await withCounts.call("canvas_read");
+  const listed = new Map([...read.inView, ...read.outsideFrames].map((frame: { id: string }) => [frame.id, frame as Record<string, unknown>]));
+  assert.equal(listed.get(a.frame.id)!.blocked, 4);
+  assert.equal("blocked" in listed.get(b.frame.id)!, false);
+
+  const without = await setup(t, { designLive: true, apps: liveApps() });
+  await without.call("canvas_place_frame", { kind: "app", title: "A", route: "/a" });
+  const plain = await without.call("canvas_read");
+  assert.ok([...plain.inView, ...plain.outsideFrames].every((frame: Record<string, unknown>) => !("blocked" in frame)));
+});

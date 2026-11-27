@@ -97,6 +97,13 @@ export const ANALYTICS_EVENTS = {
     manager: optional(enumProp("npm", "pnpm", "yarn", "bun")),
     outcome: enumProp("running", "crashed", "failed"),
   },
+  // A live app frame was placed (3b, S88): by the person's Add, or by Aiden's
+  // tool, a written route file or design mode's entry. Its viewport's device
+  // bucket only; never the route, the app root or the framework.
+  design_app_frame_added: {
+    source: enumProp("person", "aiden"),
+    device_bucket: enumProp("phone", "tablet", "laptop", "desktop"),
+  },
   browser_element_grabbed: {
     kind: enumProp("react", "dom"),
     source: enumProp("toolbar", "shortcut"),

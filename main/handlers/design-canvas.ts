@@ -10,6 +10,7 @@ import path from "node:path";
 import * as fs from "node:fs/promises";
 import {
   DESIGN_CANVAS_LIMITS,
+  isAppRouteKey,
   isDesignRelativePath,
   type DesignCanvas,
   type DesignPaper,
@@ -65,6 +66,9 @@ import {
   type DesignAppFrameMountResult,
 } from "../../renderer/shared/design-canvas/app-frame-events.js";
 import type { DesignAppsSnapshot } from "../../renderer/shared/design-app.js";
+import { APP_DEFAULT_VIEWPORT, appFrameBox, fitAppScale, isAppRoot } from "../../renderer/shared/design-canvas/app-frame.js";
+import { isConcreteRoute, type AppRouteList } from "../../renderer/shared/design-canvas/app-routes.js";
+import type { DesignAppRoutesResult } from "../services/design-canvas/app-server/app-server-main.js";
 import type { AppFrameRegistry } from "../services/design-canvas/app-frames/app-frame-registry.js";
 import type { ChatMeta } from "../services/types.js";
 
@@ -87,6 +91,17 @@ export type DesignCanvasPlaceArtifactResult =
   | { status: "placed"; frameId: string }
   | { status: "already"; frameId: string; page?: string }
   | { error: "missing" | "unsafe" | "full" };
+
+/** `designCanvas:appRoutes` reply (3b, S87): the workspace's apps and one app's routes. */
+export type DesignCanvasAppRoutesResult =
+  | { apps: { appRoot: string; label: string }[]; appRoot: string; list: AppRouteList }
+  | { error: "unavailable" | "no-app" };
+
+/** `designCanvas:placeAppRoute` reply (3b, S87). */
+export type DesignCanvasPlaceAppRouteResult =
+  | { placed: string; pageId: string }
+  | { already: string; pageId: string }
+  | { error: "unavailable" | "bad-route" | "unknown-root" | "full" };
 
 /** `designCanvas:grant` reply: an `aiden-design://<grant>/` host, or no access. */
 export type DesignCanvasGrantResult = { grant: string } | { error: "unavailable" };
@@ -241,27 +256,32 @@ export const DESIGN_CAPTURE_MAX_SIDE = 1024;
 
 const UNAVAILABLE = "Design mode is not available.";
 
+function isKeyList(value: unknown, isKey: (entry: string) => boolean): value is string[] | undefined {
+  return (
+    value === undefined ||
+    (Array.isArray(value) &&
+      value.length <= DESIGN_CANVAS_LIMITS.frames &&
+      value.every((entry) => typeof entry === "string" && isKey(entry)))
+  );
+}
+
 /**
- * A save's options: the pages it says the person's undo took off, and the
- * workspace whose canvas the renderer is saving. Anything malformed is refused.
+ * A save's options: the pages and app routes it says the person's undo took
+ * off, and the workspace whose canvas the renderer is saving. Anything
+ * malformed is refused.
  */
-function saveOptions(options: unknown): { undone: string[]; workspaceId: string } {
+function saveOptions(options: unknown): { undone: string[]; undoneRoutes: string[]; workspaceId: string } {
   // The workspace is required: without it a stale canvas from a workspace the
   // chat has left could replace the new one whenever their revisions match.
   if (typeof options !== "object" || options === null || Array.isArray(options)) throw new Error("Invalid canvas save options.");
-  const { undone, workspaceId } = options as { undone?: unknown; workspaceId?: unknown };
-  if (
-    undone !== undefined &&
-    (!Array.isArray(undone) ||
-      undone.length > DESIGN_CANVAS_LIMITS.frames ||
-      !undone.every((entry) => typeof entry === "string" && isDesignRelativePath(entry)))
-  ) {
+  const { undone, undoneRoutes, workspaceId } = options as { undone?: unknown; undoneRoutes?: unknown; workspaceId?: unknown };
+  if (!isKeyList(undone, isDesignRelativePath) || !isKeyList(undoneRoutes, isAppRouteKey)) {
     throw new Error("Invalid canvas save options.");
   }
   if (!isWorkspaceArtifactWorkspaceId(workspaceId)) {
     throw new Error("Invalid canvas save options.");
   }
-  return { undone: (undone as string[] | undefined) ?? [], workspaceId };
+  return { undone: undone ?? [], undoneRoutes: undoneRoutes ?? [], workspaceId };
 }
 
 /** The workspace whose canvas a chat works on. */
@@ -306,7 +326,7 @@ export function registerDesignCanvasHandlers<Event>(deps: {
    */
   senderWindowShown?(event: Event, changed: () => void): () => boolean;
   /** Sends `designCanvas:focus` to the window that sent `event`, if it is still there. */
-  sendFocus?(event: Event, request: { chatId: string; pageId: string; frameIds: string[]; focusId: number }): void;
+  sendFocus?(event: Event, request: { chatId: string; pageId: string; frameIds: string[]; focusId: number; own?: true }): void;
   /** The chat's workspace folder, or null when the chat has no folder to frame. */
   workspaceRoot(chat: DesignCanvasChat): Promise<string | null>;
   /** The window that sent `event`, or null when it has none (or it is gone). */
@@ -357,7 +377,11 @@ export function registerDesignCanvasHandlers<Event>(deps: {
       snapshot(workspaceId: string): Promise<DesignAppsSnapshot>;
       /** 2b/2c's exact-address lookup; undefined while a holder is lost. */
       appForOrigin(origin: string): { workspaceId: string; appRoot: string } | undefined;
+      /** 3b (S81): an app root's routes, for Add ▸ Page from app…. Left out, the picker is unavailable. */
+      routes?(workspaceId: string, appRoot?: string): Promise<DesignAppRoutesResult>;
     };
+    /** 3b (S88, call site 4): each app frame the person's Add placed. */
+    onAppFrameAdded?(viewportWidth: number): void;
   };
 }): void {
   if (!deps.enabled()) return;
@@ -442,7 +466,7 @@ export function registerDesignCanvasHandlers<Event>(deps: {
     ) {
       throw new Error("Invalid canvas revision.");
     }
-    const { undone, workspaceId: expected } = saveOptions(options);
+    const { undone, undoneRoutes, workspaceId: expected } = saveOptions(options);
     const chat = await requireChat(chatId);
     // One workspace for the whole save: the one this chat is in now.
     const workspaceId = designCanvasWorkspaceOf(chat);
@@ -452,7 +476,7 @@ export function registerDesignCanvasHandlers<Event>(deps: {
     if (expected !== workspaceId) {
       return { ok: false, reason: "moved", workspaceId } satisfies DesignCanvasSaveResult;
     }
-    const { result } = await deps.store.save(chat.id, doc as DesignCanvas, baseRevision, { undone, workspaceId });
+    const { result } = await deps.store.save(chat.id, doc as DesignCanvas, baseRevision, { undone, undoneRoutes, workspaceId });
     if (result.ok) deps.broadcast({ workspaceId, chatId: chat.id, revision: result.revision });
     return result;
   });
@@ -632,6 +656,149 @@ export function registerDesignCanvasHandlers<Event>(deps: {
     if (!registry) return { error: "unavailable" };
     if (registry.expectPlacement({ frameId, mountToken, expectedOrigin: origin }) !== "ok") return { error: "too-many-frames" };
     return { origin };
+  });
+
+  // ── 3b (S87): Add ▸ Page from app… ──
+
+  /** The workspace's app roots for the picker: candidates, then started or attached apps, then canvas.json's choices. */
+  const pickerApps = (snapshot: DesignAppsSnapshot): { appRoot: string; label: string }[] => {
+    const apps = new Map<string, string>();
+    for (const candidate of snapshot.candidates) apps.set(candidate.appRoot, candidate.name ?? (candidate.appRoot === "." ? candidate.frameworkLabel : candidate.appRoot));
+    for (const app of snapshot.apps) if (!apps.has(app.appRoot)) apps.set(app.appRoot, app.appRoot === "." ? app.frameworkLabel : app.appRoot);
+    for (const root of snapshot.chosen) if (!apps.has(root)) apps.set(root, root);
+    return [...apps].map(([appRoot, label]) => ({ appRoot, label }));
+  };
+
+  /** A live-flag, design-mode, attended chat and its workspace, or null. */
+  const pickerChat = async (chatId: unknown): Promise<{ chat: DesignCanvasChat; workspaceId: string; live: NonNullable<typeof deps.appFrames> } | null> => {
+    const live = deps.appFrames;
+    if (!live || !live.enabled() || !live.apps.routes) return null;
+    const chat = await requireChat(chatId);
+    if (!canFrame(chat)) return null;
+    return { chat, workspaceId: designCanvasWorkspaceOf(chat), live };
+  };
+
+  /** Whether the chat is still framing in `workspaceId`: design mode on and not moved while main awaited. */
+  const stillFraming = async (chatId: string, workspaceId: string): Promise<boolean> => {
+    const current = await deps.getChat(chatId);
+    return canFrame(current) && designCanvasWorkspaceOf(current) === workspaceId;
+  };
+
+  deps.handle("designCanvas:appRoutes", async (_event, chatId, request): Promise<DesignCanvasAppRoutesResult> => {
+    if (!deps.enabled()) throw new Error(UNAVAILABLE);
+    const asked = await pickerChat(chatId);
+    if (!asked) return { error: "unavailable" };
+    const appRoot = typeof request === "object" && request !== null ? (request as { appRoot?: unknown }).appRoot : undefined;
+    if (appRoot !== undefined && (typeof appRoot !== "string" || !isAppRoot(appRoot))) return { error: "no-app" };
+    const snapshot = await asked.live.apps.snapshot(asked.workspaceId);
+    if (snapshot.target === "unavailable") return { error: "unavailable" };
+    if (!(await stillFraming(asked.chat.id, asked.workspaceId))) return { error: "unavailable" };
+    const apps = pickerApps(snapshot);
+    const root = appRoot ?? apps[0]?.appRoot;
+    if (root === undefined || !apps.some((app) => app.appRoot === root)) return { error: "no-app" };
+    const list = await asked.live.apps.routes!(asked.workspaceId, root);
+    if ("error" in list) return list.error === "unavailable" ? { error: "unavailable" } : { error: "no-app" };
+    if (!(await stillFraming(asked.chat.id, asked.workspaceId))) return { error: "unavailable" };
+    return { apps, appRoot: root, list };
+  });
+
+  deps.handle("designCanvas:placeAppRoute", async (event, chatId, request): Promise<DesignCanvasPlaceAppRouteResult> => {
+    if (!deps.enabled()) throw new Error(UNAVAILABLE);
+    const asked = await pickerChat(chatId);
+    if (!asked) return { error: "unavailable" };
+    if (typeof request !== "object" || request === null || Array.isArray(request)) return { error: "bad-route" };
+    const { appRoot, route, pageId, viewSize: rawSize } = request as { appRoot?: unknown; route?: unknown; pageId?: unknown; viewSize?: unknown };
+    if (typeof appRoot !== "string" || !isAppRoot(appRoot)) return { error: "unknown-root" };
+    if (typeof route !== "string" || !isConcreteRoute(route)) return { error: "bad-route" };
+    const { chat, workspaceId, live } = asked;
+    const snapshot = await live.apps.snapshot(workspaceId);
+    if (snapshot.target === "unavailable") return { error: "unavailable" };
+    if (!(await stillFraming(chat.id, workspaceId))) return { error: "unavailable" };
+    if (!pickerApps(snapshot).some((app) => app.appRoot === appRoot)) return { error: "unknown-root" };
+    const viewSize = rawSize === undefined ? undefined : parseDesignViewState({ selection: [], viewSize: rawSize })?.viewSize;
+    const pages = designTurnPages({
+      views: deps.views,
+      chatId: chat.id,
+      message: {
+        selection: [],
+        ...(typeof pageId === "string" && pageId.length > 0 && pageId.length <= 128 ? { pageId } : {}),
+        ...(viewSize ? { viewSize } : {}),
+      },
+    });
+    const viewOf = await pages.resolver(workspaceId);
+    const viewport = { ...APP_DEFAULT_VIEWPORT };
+    const scale = fitAppScale(viewport, 0.5, DESIGN_CANVAS_LIMITS.maxSize);
+    let outcome: DesignCanvasPlaceAppRouteResult = { error: "full" };
+    try {
+      const saved = await deps.store.update(
+        chat.id,
+        (doc) => {
+          const view = viewOf(doc);
+          const existing = doc.frames.find(
+            (frame) => frame.kind === "app" && frame.pageId === view.pageId && (frame.appRoot ?? ".") === appRoot && (frame.route ?? "/") === route,
+          );
+          if (existing) {
+            outcome = { already: existing.id, pageId: view.pageId };
+            throw UNCHANGED;
+          }
+          const placed = placeFrame(
+            doc,
+            {
+              kind: "app",
+              title: route.slice(0, DESIGN_CANVAS_LIMITS.titleChars),
+              appRoot,
+              route,
+              viewport,
+              scale,
+              pageId: view.pageId,
+              createdBy: "person",
+              ...appFrameBox(viewport, scale),
+            },
+            canvasView(doc, view),
+            deps.newId ?? randomUUID,
+          );
+          if ("error" in placed) {
+            outcome = { error: "full" };
+            throw UNCHANGED;
+          }
+          outcome = { placed: placed.id, pageId: view.pageId };
+          return placed.doc;
+        },
+        {
+          workspaceId,
+          // Leaving design mode, deleting the chat or moving it while this waited writes nothing.
+          beforeWrite: async () => {
+            if (!(await stillFraming(chat.id, workspaceId))) {
+              outcome = { error: "unavailable" };
+              throw UNCHANGED;
+            }
+          },
+        },
+      );
+      // The person's own undo step.
+      deps.broadcast({ workspaceId, chatId: chat.id, revision: saved.doc.revision, step: `add-app-route:${saved.doc.revision}` });
+    } catch (error) {
+      if (error !== UNCHANGED) throw error;
+    }
+    const result = outcome as DesignCanvasPlaceAppRouteResult;
+    if (("placed" in result || "already" in result) && (await stillFraming(chat.id, workspaceId))) {
+      const frameId = "placed" in result ? result.placed : result.already;
+      // Unlike a visual, the frame is focused on its own page too, so the person sees what Add did.
+      // The view is kept only while the chat still frames this workspace, checked again after the show's own load.
+      const focusId = await pages.show(workspaceId, result.pageId, () => stillFraming(chat.id, workspaceId));
+      // The person's own focus: the canvas shows it even though they just clicked there.
+      if (focusId !== undefined && (await stillFraming(chat.id, workspaceId))) {
+        deps.sendFocus?.(event, { chatId: chat.id, pageId: result.pageId, frameIds: [frameId], focusId, own: true });
+      }
+    }
+    if ("placed" in result) {
+      try {
+        live.onAppFrameAdded?.(viewport.width);
+      } catch {
+        // Reporting never changes the placement.
+      }
+    }
+    return result;
   });
 
   deps.handle("designCanvas:designSystem", async (_event, request): Promise<DesignCanvasDesignSystemResult> => {

@@ -115,6 +115,8 @@ import {
   roundAppScale,
 } from "../../../renderer/shared/design-canvas/app-frame.js";
 import type { DesignAppCandidate, DesignAppStatus } from "../../../renderer/shared/design-app.js";
+import { APP_DEVICE_NAMES, APP_DEVICES, isAppDevice } from "../../../renderer/shared/design-canvas/app-devices.js";
+import { isConcreteRoute } from "../../../renderer/shared/design-canvas/app-routes.js";
 import { designPageTweakNames } from "./inspect.js";
 import { claimWithRoom } from "./lazy-claim.js";
 import { resolveDesignFile } from "./resolve-core.js";
@@ -136,7 +138,7 @@ const PLACED_KINDS: readonly PlacedKind[] = ["file", "image", "note", "group", "
 /** With live apps on (design mode v2 Phase 3a, D17), Aiden also places live app frames. */
 const LIVE_PLACED_KINDS: readonly PlacedKind[] = [...PLACED_KINDS, "app"];
 const APP_PLACE_SENTENCE =
-  " kind app shows a route of the workspace's running web app live (appRoot, route; viewport width and height, default 1280 × 800, at scale 0.5); design_app starts the app.";
+  " kind app shows a route of the workspace's running web app live (appRoot, route; viewport width and height, default 1280 × 800, at scale 0.5, or device phone, tablet, laptop or desktop); design_app starts the app and lists its routes. variantOf: an app frame's id puts this one right of it and its other variants, grouped together; label names the variant in the frame's header.";
 const APP_DEFAULT_SCALE = 0.5;
 
 /** Default boxes, matching the canvas's Add menu and drawing tools. A text box's height follows its lines; a page's follows its design width. */
@@ -254,9 +256,41 @@ export const DESIGN_MODE_PROMPT_SECTION = [
 export const DESIGN_MD_PROMPT_BULLET =
   "- The app's DESIGN.md is its design system's source of truth, ahead of design/tokens.css. Use its tokens, never one-off values, and its prose as guidance. The canvas note names it and its lint counts; design_system reads, lints and exports it. When a change adds or alters a token, update DESIGN.md in the same turn, keeping its sections in order and its YAML valid, then run design_system lint.";
 
-/** The design-mode section for a turn: today's text, plus the DESIGN.md bullet when the live flag is on. Static per flag value. */
-export function designModePromptSection(designLive: boolean): string {
-  return designLive ? `${DESIGN_MODE_PROMPT_SECTION}\n${DESIGN_MD_PROMPT_BULLET}` : DESIGN_MODE_PROMPT_SECTION;
+/** The live section's first bullet: a stored copy holding it is replaced on a turn without design_app (S86). */
+export const LIVE_APP_PROMPT_MARKER =
+  "- Design in the real app. When the workspace has a web app, screens are its routes and components, not design/ HTML. Start it with design_app start, and list its pages with design_app routes.";
+
+/**
+ * The design-mode section for a turn that offers design_app (3b, S86): today's
+ * bullets, with the real app first and design/ pages for a workspace with no
+ * web app. Static, like today's.
+ */
+export const LIVE_DESIGN_MODE_PROMPT_SECTION = DESIGN_MODE_PROMPT_SECTION.split("\n")
+  .flatMap((line) => {
+    if (line.startsWith("- Screens and pages you design are workspace HTML files under design/")) {
+      return [
+        LIVE_APP_PROMPT_MARKER,
+        "- A route file you write or edit lands on this chat's page by itself, once, and updates live as you save. Component and style edits update every open frame. Use canvas_place_frame with kind app to show another route, or a device size with device (phone, tablet, laptop or desktop).",
+        "- For a variant of a page, write a route copy such as /pricing-v2 next to the original and place it with variantOf. Keep at most three directions, then ask which to keep.",
+        "- With no web app, screens are workspace HTML files under design/ (a shared design/tokens.css plus one HTML file per screen), not render_artifact visuals. Each design/ page you write, edit or make with a command lands on the canvas by itself and reloads as you save it.",
+      ];
+    }
+    if (line.startsWith("- Pick the design width")) return [line.replace("- Pick the design width", "- For a design/ page, pick the design width")];
+    if (line.startsWith("- canvas_inspect draws one page offline")) {
+      return [line.replace("- canvas_inspect draws one page offline", "- canvas_inspect draws one design/ page offline (not an app frame: canvas_read with snapshot: true shows those)")];
+    }
+    return [line];
+  })
+  .join("\n");
+
+/**
+ * The design-mode section for a turn (S86): today's text; plus the DESIGN.md
+ * bullet when design_system is offered; the live section when design_app is.
+ * Static per pair of values.
+ */
+export function designModePromptSection(designMd: boolean, liveApps = false): string {
+  if (liveApps) return designMd ? `${LIVE_DESIGN_MODE_PROMPT_SECTION}\n${DESIGN_MD_PROMPT_BULLET}` : LIVE_DESIGN_MODE_PROMPT_SECTION;
+  return designMd ? `${DESIGN_MODE_PROMPT_SECTION}\n${DESIGN_MD_PROMPT_BULLET}` : DESIGN_MODE_PROMPT_SECTION;
 }
 
 export type DesignCanvasToolDeps = {
@@ -333,6 +367,13 @@ export type DesignCanvasToolDeps = {
       chosen: readonly string[];
     }>;
   };
+  /**
+   * 3b (S85): how many requests an app frame's live mounts blocked, which
+   * canvas_read lists as `blocked` when it isn't 0. A count only, never hosts.
+   */
+  blockedFor?(frameId: string): number;
+  /** 3b (S88): called once per new or copied app frame, after it was saved, with its viewport width. */
+  onAppFrameAdded?(viewportWidth: number): void;
 };
 
 type ToolContent = { type: "text"; text: string } | { type: "image"; data: string; mimeType: string };
@@ -923,7 +964,34 @@ function appRoute(value: unknown): string {
       `route must start with one / and stay on the app (no // at the start, no backslash), with no hidden characters, at most ${APP_FRAME_LIMITS.routeChars} characters.`,
     );
   }
+  // 3b (S79): a discovered pattern such as /blog/[slug] isn't a page until its value is filled in.
+  if (!isConcreteRoute(route)) {
+    throw new CanvasToolError(
+      `route ${JSON.stringify(route).slice(0, 120)} is a pattern; fill each [bracket] with a real value, such as /blog/hello-world. .aiden/canvas.json params can give the app's values.`,
+    );
+  }
   return route;
+}
+
+/** 3b (S85): a device preset, or undefined. */
+function appDevice(value: unknown): (typeof APP_DEVICES)[keyof typeof APP_DEVICES] | undefined {
+  if (value === undefined || value === null) return undefined;
+  if (!isAppDevice(value)) {
+    throw new CanvasToolError(
+      `device must be one of ${APP_DEVICE_NAMES.map((name) => `"${name}"`).join(", ")} (${APP_DEVICE_NAMES.map((name) => `${APP_DEVICES[name].label} ${APP_DEVICES[name].width} × ${APP_DEVICES[name].height}`).join(", ")}).`,
+    );
+  }
+  return APP_DEVICES[value];
+}
+
+/** 3b (S85): a variant's short label, kept apart from the title. */
+function appLabel(value: unknown): string | undefined {
+  if (value === undefined || value === null) return undefined;
+  if (typeof value !== "string" || value.length > APP_FRAME_LIMITS.labelChars) {
+    throw new CanvasToolError(`label must be text of at most ${APP_FRAME_LIMITS.labelChars} characters.`);
+  }
+  const clean = value.replace(/\s+/gu, " ").trim();
+  return clean.length > 0 ? clean : undefined;
 }
 
 export function createDesignCanvasTools(deps: DesignCanvasToolDeps): AgentTool[] {
@@ -1140,22 +1208,44 @@ export function createDesignCanvasTools(deps: DesignCanvasToolDeps): AgentTool[]
       throw new CanvasToolError(`appRoot ${JSON.stringify(String(p.appRoot)).slice(0, 80)} isn't an app in this workspace. Its apps are ${quoted}.`);
     }
     const route = appRoute(p.route);
-    const viewport = { width: appViewportSide(p.width, "width"), height: appViewportSide(p.height, "height") };
+    const given = (value: unknown) => value !== undefined && value !== null;
+    const device = appDevice(p.device);
+    const viewport = {
+      width: given(p.width) ? appViewportSide(p.width, "width") : (device?.width ?? APP_DEFAULT_VIEWPORT.width),
+      height: given(p.height) ? appViewportSide(p.height, "height") : (device?.height ?? APP_DEFAULT_VIEWPORT.height),
+    };
     const scale = fitAppScale(viewport, appScale(p.scale), DESIGN_CANVAS_LIMITS.maxSize);
     const box = appFrameBox(viewport, scale);
+    const label = appLabel(p.label);
     const x = optionalNumber(p.x, "x");
     const y = optionalNumber(p.y, "y");
     const duplicate = optionalBoolean(p.duplicate, "duplicate") === true;
     const nextTo = p.nextTo === undefined || p.nextTo === null ? undefined : (p.nextTo as Record<string, unknown>);
     if (nextTo && (typeof nextTo !== "object" || Array.isArray(nextTo))) throw new CanvasToolError("nextTo must be { frameId, side }.");
     if (nextTo && (x !== undefined || y !== undefined)) throw new CanvasToolError("Pass nextTo or x and y, not both.");
+    const variantOf = p.variantOf === undefined || p.variantOf === null || p.variantOf === "" ? undefined : p.variantOf;
+    if (variantOf !== undefined && typeof variantOf !== "string") throw new CanvasToolError("variantOf must be the id of an app frame from canvas_read.");
+    if (variantOf !== undefined && (nextTo || x !== undefined || y !== undefined || given(p.groupId))) {
+      throw new CanvasToolError("A variant goes beside its original, in its group; leave out nextTo, x, y and groupId.");
+    }
     const side = nextTo ? besideOf(nextTo.side, "nextTo.side") : undefined;
     // The shared look fields: a guide applies; dark, tweaks, paper and print mode are refused (D15).
     const style = stylePatch("app", undefined, p, undefined);
     const id = newId();
-    return edit<Record<string, unknown>>((doc, view) => {
+    const variantGroupId = variantOf !== undefined ? newId() : undefined;
+    const answer = await edit<Record<string, unknown>>((doc, view) => {
       const anchor = nextTo ? besideFrame(doc, nextTo.frameId, view.pageId) : undefined;
-      const pageId = anchor && (p.page === undefined || p.page === null || p.page === "") ? anchor.pageId : pageOf(doc, p.page, view.pageId);
+      // 3b (S85): a variant's original is an app frame of the same app, named by id.
+      const original = variantOf !== undefined ? doc.frames.find((entry) => entry.id === variantOf) : undefined;
+      if (variantOf !== undefined && (!original || original.kind !== "app")) {
+        throw new CanvasToolError("variantOf must be the id of a live app frame on this canvas; canvas_read lists their ids.");
+      }
+      if (original && original.appRoot !== appRoot) {
+        throw new CanvasToolError(`variantOf names a frame of ${JSON.stringify(original.appRoot ?? ".")}; a variant shows the same app.`);
+      }
+      const named = p.page === undefined || p.page === null || p.page === "" ? undefined : pageOf(doc, p.page, view.pageId);
+      if (original && named !== undefined && named !== original.pageId) throw new CanvasToolError("A variant goes on its original's page.");
+      const pageId = original ? original.pageId : anchor && named === undefined ? anchor.pageId : (named ?? view.pageId);
       if (anchor && anchor.pageId !== pageId) throw new CanvasToolError("nextTo must name a frame on the page it goes on.");
       const same = doc.frames.filter((entry) => entry.kind === "app" && entry.pageId === pageId && entry.appRoot === appRoot && entry.route === route);
       const candidates = duplicate ? [] : same.filter((entry) => !entry.locked);
@@ -1168,15 +1258,17 @@ export function createDesignCanvasTools(deps: DesignCanvasToolDeps): AgentTool[]
       if (adopted) {
         // Reused in place: a new title, and only the viewport sides and scale
         // that were passed; the rest stay the frame's own.
-        const given = (value: unknown) => value !== undefined && value !== null;
         let resize: Partial<DesignFrame> = {};
-        if (given(p.width) || given(p.height) || given(p.scale)) {
+        if (given(p.width) || given(p.height) || given(p.scale) || device) {
           const own = adopted.viewport ?? APP_DEFAULT_VIEWPORT;
-          const merged = { width: given(p.width) ? viewport.width : own.width, height: given(p.height) ? viewport.height : own.height };
+          const merged = {
+            width: given(p.width) || device ? viewport.width : own.width,
+            height: given(p.height) || device ? viewport.height : own.height,
+          };
           const mergedScale = fitAppScale(merged, given(p.scale) ? appScale(p.scale) : (adopted.scale ?? APP_DEFAULT_SCALE), DESIGN_CANVAS_LIMITS.maxSize);
           resize = { viewport: merged, scale: mergedScale, ...appFrameBox(merged, mergedScale) };
         }
-        const frames = doc.frames.map((entry) => (entry.id === adopted.id ? applyStyle({ ...entry, title, ...resize }, style) : entry));
+        const frames = doc.frames.map((entry) => (entry.id === adopted.id ? applyStyle({ ...entry, title, ...resize, ...(label ? { label } : {}) }, style) : entry));
         const next = refitGroups(syncConnectors({ ...doc, frames }), [adopted.groupId]);
         const frame = next.frames.find((entry) => entry.id === adopted.id)!;
         return {
@@ -1190,13 +1282,31 @@ export function createDesignCanvasTools(deps: DesignCanvasToolDeps): AgentTool[]
           },
         };
       }
-      const namedGroup = p.groupId === undefined && anchor ? groupBeside(doc, anchor) : p.groupId;
-      const groupId = groupOf(doc, namedGroup, pageId);
-      const at = anchor
-        ? besideBox(anchor, box, side!, blockersOn(doc, pageId, new Set([anchor.id, groupId])))
-        : x !== undefined && y !== undefined
-          ? { x, y }
-          : undefined;
+      if (original) {
+        if (original.locked) throw new CanvasToolError(LOCKED_MESSAGE);
+        // A variant joins its original's group or artboard (refused when locked), or a new group made around both.
+        if (original.groupId) groupOf(doc, original.groupId, pageId);
+        const adding = original.groupId ? 1 : 2;
+        if (doc.frames.filter((entry) => entry.pageId === pageId).length + adding > DESIGN_CANVAS_LIMITS.framesPerPage) {
+          throw new CanvasToolError(`That page is full (${DESIGN_CANVAS_LIMITS.framesPerPage} frames).`);
+        }
+        // The new group counts too, or the store would drop it on save.
+        if (doc.frames.length + adding > DESIGN_CANVAS_LIMITS.frames) {
+          throw new CanvasToolError(
+            `The canvas is full (${DESIGN_CANVAS_LIMITS.frames} frames, ${DESIGN_CANVAS_LIMITS.framesPerPage} on a page). Remove a frame first.`,
+          );
+        }
+      }
+      const namedGroup = original ? original.groupId : p.groupId === undefined && anchor ? groupBeside(doc, anchor) : p.groupId;
+      const groupId = original ? original.groupId : groupOf(doc, namedGroup, pageId);
+      const variants = original ? doc.frames.filter((entry) => entry.pageId === pageId && (entry.id === original.id || entry.variantOf === original.id)) : [];
+      const at = original
+        ? { x: Math.max(...variants.map((entry) => entry.x + entry.w)) + DESIGN_FRAME_GAP, y: original.y }
+        : anchor
+          ? besideBox(anchor, box, side!, blockersOn(doc, pageId, new Set([anchor.id, groupId])))
+          : x !== undefined && y !== undefined
+            ? { x, y }
+            : undefined;
       const input: PlaceFrameInput = {
         kind: "app",
         title,
@@ -1207,6 +1317,8 @@ export function createDesignCanvasTools(deps: DesignCanvasToolDeps): AgentTool[]
         route,
         viewport,
         scale,
+        ...(label ? { label } : {}),
+        ...(original ? { variantOf: original.id } : {}),
         ...(at ?? {}),
         ...(groupId ? { groupId } : {}),
         ...style.set,
@@ -1217,13 +1329,45 @@ export function createDesignCanvasTools(deps: DesignCanvasToolDeps): AgentTool[]
           `The canvas is full (${DESIGN_CANVAS_LIMITS.frames} frames, ${DESIGN_CANVAS_LIMITS.framesPerPage} on a page). Remove a frame first.`,
         );
       }
-      const placedDoc = refitGroups(placed.doc, [groupId]);
+      let placedDoc = refitGroups(placed.doc, [groupId]);
+      if (original && !original.groupId && variantGroupId) {
+        const grouped = new Set([original.id, id]);
+        placedDoc = fitGroupToMembers(
+          {
+            ...placedDoc,
+            frames: [
+              ...placedDoc.frames.map((entry) => (grouped.has(entry.id) ? { ...entry, groupId: variantGroupId } : entry)),
+              {
+                id: variantGroupId,
+                kind: "group",
+                title: (original.route ?? "/").slice(0, DESIGN_CANVAS_LIMITS.titleChars),
+                pageId,
+                x: original.x,
+                y: original.y,
+                w: DEFAULT_BOX.group.w,
+                h: DEFAULT_BOX.group.h,
+                createdBy: "aiden",
+              },
+            ],
+          },
+          variantGroupId,
+        );
+      }
       const frame = placedDoc.frames.find((entry) => entry.id === id)!;
       return {
         doc: placedDoc,
         value: { status: "placed", placed: same.length > 0 ? "copy" : "new", units: "canvas", frame: summarizeFrame(frame) },
       };
     }, workspaceId);
+    // 3b (S88): only once the frame was saved, and only a new frame or a copy.
+    if (answer.placed === "new" || answer.placed === "copy") {
+      try {
+        deps.onAppFrameAdded?.(viewport.width);
+      } catch {
+        // Reporting never changes the placement.
+      }
+    }
+    return answer;
   };
 
   /** canvas_read's app frames, each with whether its app runs now. */
@@ -1231,8 +1375,20 @@ export function createDesignCanvasTools(deps: DesignCanvasToolDeps): AgentTool[]
     if (!appsOn || ![...answer.inView, ...answer.outsideFrames].some((frame) => frame.kind === "app")) return answer;
     const snapshot = await deps.apps!.snapshot(workspaceId);
     const running = new Set(snapshot.apps.filter((app) => app.phase === "running").map((app) => app.appRoot));
-    const mark = (frame: CanvasFrameSummary): CanvasFrameSummary =>
-      frame.kind === "app" ? { ...frame, live: frame.appRoot !== undefined && running.has(frame.appRoot) } : frame;
+    // 3b (S85): how many requests its live mounts blocked, as a count only (the hosts are the page's text).
+    const blocked = (id: string): number => {
+      try {
+        const count = deps.blockedFor?.(id) ?? 0;
+        return Number.isFinite(count) && count > 0 ? Math.floor(count) : 0;
+      } catch {
+        return 0;
+      }
+    };
+    const mark = (frame: CanvasFrameSummary): CanvasFrameSummary => {
+      if (frame.kind !== "app") return frame;
+      const count = blocked(frame.id);
+      return { ...frame, live: frame.appRoot !== undefined && running.has(frame.appRoot), ...(count > 0 ? { blocked: count } : {}) };
+    };
     return { ...answer, inView: answer.inView.map(mark), outsideFrames: answer.outsideFrames.map(mark) };
   };
 
@@ -1340,6 +1496,9 @@ export function createDesignCanvasTools(deps: DesignCanvasToolDeps): AgentTool[]
                 width: Type.Optional(Type.Number({ description: "app: the viewport's width in CSS pixels." })),
                 height: Type.Optional(Type.Number({ description: "app: the viewport's height in CSS pixels." })),
                 scale: Type.Optional(Type.Number({ description: "app: how large the viewport is drawn on the canvas." })),
+                device: Type.Optional(enumOf(APP_DEVICE_NAMES)),
+                variantOf: Type.Optional(Type.String({ maxLength: 128, description: "app: the id of the app frame this is a variant of." })),
+                label: Type.Optional(Type.String({ maxLength: APP_FRAME_LIMITS.labelChars, description: "app: a short name for the variant, shown in its header." })),
               }
             : {}),
           ...STYLE_PARAMETERS,
@@ -1560,7 +1719,16 @@ export function createDesignCanvasTools(deps: DesignCanvasToolDeps): AgentTool[]
           ),
           aboveFrameId: Type.Optional(Type.String({ description: "Put it just in front of this sibling." })),
           belowFrameId: Type.Optional(Type.String({ description: "Put it just behind this sibling." })),
-          ...(appsOn ? { colorScheme: Type.Optional(enumOf(["light", "dark"] as const)) } : {}),
+          ...(appsOn
+            ? {
+                colorScheme: Type.Optional(enumOf(["light", "dark"] as const)),
+                route: Type.Optional(Type.String({ maxLength: APP_FRAME_LIMITS.routeChars, description: "app: show another route in the same frame." })),
+                width: Type.Optional(Type.Number({ description: "app: the viewport's width in CSS pixels; the frame keeps its scale." })),
+                height: Type.Optional(Type.Number({ description: "app: the viewport's height in CSS pixels." })),
+                device: Type.Optional(enumOf(APP_DEVICE_NAMES)),
+                label: Type.Optional(Type.String({ maxLength: APP_FRAME_LIMITS.labelChars, description: "app: the variant's short name; \"\" clears it." })),
+              }
+            : {}),
           ...STYLE_PARAMETERS,
         }),
         execute: async (_id, raw) =>
@@ -1569,6 +1737,18 @@ export function createDesignCanvasTools(deps: DesignCanvasToolDeps): AgentTool[]
             const colorScheme = appsOn && p.colorScheme !== undefined && p.colorScheme !== null ? p.colorScheme : undefined;
             if (colorScheme !== undefined && colorScheme !== "light" && colorScheme !== "dark") {
               throw new CanvasToolError('colorScheme must be "light" or "dark".');
+            }
+            // 3b (S85): an app frame's route, viewport, device and label.
+            const present = (value: unknown) => appsOn && value !== undefined && value !== null;
+            const appRouteTo = present(p.route) ? appRoute(p.route) : undefined;
+            const appWidth = present(p.width) ? appViewportSide(p.width, "width") : undefined;
+            const appHeight = present(p.height) ? appViewportSide(p.height, "height") : undefined;
+            const appPreset = present(p.device) ? appDevice(p.device) : undefined;
+            const clearLabel = appsOn && p.label === "";
+            const appLabelTo = present(p.label) && !clearLabel ? appLabel(p.label) : undefined;
+            const viewportChange = appWidth !== undefined || appHeight !== undefined || appPreset !== undefined;
+            if (viewportChange && (p.w !== undefined || p.h !== undefined)) {
+              throw new CanvasToolError("Change the frame's size or its viewport, not both in one call.");
             }
             const x = optionalNumber(p.x, "x");
             const y = optionalNumber(p.y, "y");
@@ -1602,6 +1782,9 @@ export function createDesignCanvasTools(deps: DesignCanvasToolDeps): AgentTool[]
               if (p.text !== undefined && !worded) throw new CanvasToolError("Only a note, a text item or a shape has text.");
               if (width !== undefined && frame.kind !== "file") throw new CanvasToolError("Only a file frame has a design width.");
               if (colorScheme !== undefined && frame.kind !== "app") throw new CanvasToolError("Only a live app frame has a colorScheme.");
+              if (frame.kind !== "app" && (appRouteTo !== undefined || viewportChange || appLabelTo !== undefined || clearLabel)) {
+                throw new CanvasToolError("Only a live app frame has a route, a viewport, a device or a label.");
+              }
               if ((fill !== undefined || clearFill) && !takesFill(frame.kind)) {
                 throw new CanvasToolError("Only a shape, a note or an artboard (kind frame) has a fill.");
               }
@@ -1671,6 +1854,18 @@ export function createDesignCanvasTools(deps: DesignCanvasToolDeps): AgentTool[]
                 next = { ...next, scale, ...appFrameBox(current.viewport ?? APP_DEFAULT_VIEWPORT, scale) };
               }
               if (colorScheme !== undefined) next = { ...next, colorScheme };
+              if (current.kind === "app" && viewportChange) {
+                // The frame keeps its scale, refitted so the box stays within the canvas's limits (S85, M1).
+                const own = current.viewport ?? APP_DEFAULT_VIEWPORT;
+                const viewport = { width: appWidth ?? appPreset?.width ?? own.width, height: appHeight ?? appPreset?.height ?? own.height };
+                const scale = fitAppScale(viewport, current.scale ?? APP_DEFAULT_SCALE, DESIGN_CANVAS_LIMITS.maxSize);
+                next = { ...next, viewport, scale, ...appFrameBox(viewport, scale) };
+              }
+              if (current.kind === "app" && appRouteTo !== undefined) {
+                next = { ...next, route: appRouteTo, ...(title === undefined && current.title === current.route ? { title: appRouteTo.slice(0, DESIGN_CANVAS_LIMITS.titleChars) } : {}) };
+              }
+              if (appLabelTo !== undefined) next = { ...next, label: appLabelTo };
+              if (clearLabel) delete next.label;
               if (clearFill) delete next.fill;
               if (hidden === false) delete next.hidden;
               if (locked === false) delete next.locked;

@@ -31,7 +31,7 @@ import {
 import { APP_FRAME_ID_ATTRIBUTE } from "./app-frame-focus-guard";
 import { readDesignArtifactTheme } from "./artifact-theme";
 import { resolveDesignCanvasKey } from "./canvas-keymap-core";
-import { canvasFocusFrom, forgetCanvasFocus, takeCanvasFocus, type CanvasFocusRequest } from "./canvas-focus-requests";
+import { canvasFocusFrom, focusYieldsToPerson, forgetCanvasFocus, takeCanvasFocus, type CanvasFocusRequest } from "./canvas-focus-requests";
 import { DesignCanvasEmpty } from "./design-canvas-empty";
 import { frameIframe, useDesignComments } from "./design-comments";
 import { usePageTextEdits } from "./page-text-edits";
@@ -57,6 +57,7 @@ import {
 } from "./design-side-panel";
 import { reorderLayer, stepLayer, type DesignLayerPlace } from "./layers-core";
 import { DesignToolbar, type DesignAddKind, type DesignPageAction } from "./design-toolbar";
+import { appRoutePlacer, type AppRouteSource } from "./app-route-picker";
 import { selectLiveFrames } from "./live-set-core";
 import {
   DesignNodeContext,
@@ -483,7 +484,7 @@ function LoadedDesignCanvas({
   const showPageOfView = view.showPage;
   React.useEffect(() => {
     if (!pendingFocus) return;
-    if (gesture.current || Date.now() - lastInteraction.current < FOCUS_QUIET_MS) {
+    if (focusYieldsToPerson(pendingFocus, { gesture: gesture.current, sinceInteractionMs: Date.now() - lastInteraction.current, quietMs: FOCUS_QUIET_MS })) {
       setPendingFocus(null);
       return;
     }
@@ -754,6 +755,24 @@ function LoadedDesignCanvas({
       }
     }
   };
+
+  // 3b (S87): Add ▸ Page from app…; main places on the page on screen, after the pending save lands.
+  const pageIdRef = React.useRef(pageId);
+  pageIdRef.current = pageId;
+  const viewSizeRef = React.useRef(viewSize);
+  viewSizeRef.current = viewSize;
+  const appRoutes = React.useMemo<AppRouteSource>(
+    () => ({
+      load: (appRoot) => designCanvasApi.getDesignAppRoutes(chatId, appRoot === undefined ? {} : { appRoot }),
+      place: appRoutePlacer({
+        flush,
+        place: (request) => designCanvasApi.placeDesignAppRoute(chatId, request),
+        pageId: () => pageIdRef.current,
+        viewSize: () => (viewSizeRef.current.w >= 1 && viewSizeRef.current.h >= 1 ? { ...viewSizeRef.current } : undefined),
+      }),
+    }),
+    [chatId, flush],
+  );
 
   const onAdd = (kind: DesignAddKind) => {
     if (kind === "note") {
@@ -1395,6 +1414,7 @@ function LoadedDesignCanvas({
                 onPage={onPage}
                 drawTool={drawTool}
                 onDraw={chooseDrawTool}
+                appRoutes={appRoutes}
               />
             }
           >

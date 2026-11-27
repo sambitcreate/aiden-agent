@@ -239,6 +239,21 @@ export class AppFrameRegistry {
     return this.exportActivity.get(webContentsId);
   }
 
+  /**
+   * 3b (S85, M7): the blocked total of one canvas frame, summed over its mounts
+   * still in the window's frame tree. A dead earlier mount's total stays in
+   * `members` until prune runs, so `liveIds()` decides; with no window it is 0.
+   */
+  blockedForFrame(frameId: string): number {
+    const live = this.options.liveIds();
+    if (!live) return 0;
+    let count = 0;
+    for (const [id, member] of this.members) {
+      if (member.frameId === frameId && live.has(id)) count += this.totals.get(id)?.count ?? 0;
+    }
+    return count;
+  }
+
   /** A blocked request or navigation in app context; counted for its registered frame only. */
   reportBlocked(frame: AppFrameRef | null, hostOrScheme: string): void {
     const id = this.registeredAncestor(frame);

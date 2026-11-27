@@ -8,10 +8,19 @@
 // The design-mode switch runs it once over the pages this chat wrote before
 // the canvas opened. Pages elsewhere in the workspace stay off the canvas
 // unless Aiden or the person places them.
+//
+// With live app frames on (3b, S83), a route file Aiden writes in an app
+// (`app/pricing/page.tsx`) lands the same way, as an `app` frame for its
+// route: read by its path alone, with one app snapshot and canvas.json read
+// per turn and no disk walk, at most 12 a turn, never a route the person took
+// off the canvas.
 
 import { constants as fsConstants, type Dirent } from "node:fs";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
+import type { DesignAppsSnapshot, FrameworkId } from "../../../renderer/shared/design-app.js";
+import { APP_DEFAULT_VIEWPORT, appFrameBox, fitAppScale } from "../../../renderer/shared/design-canvas/app-frame.js";
+import { fillRoute, isConcreteRoute, patternParams } from "../../../renderer/shared/design-canvas/app-routes.js";
 import { canvasView } from "../../../renderer/shared/design-canvas/canvas-summary.js";
 import { placeFrame } from "../../../renderer/shared/design-canvas/placement.js";
 import { parseProducedFile } from "../../../renderer/shared/produced-file.js";
@@ -28,6 +37,7 @@ import {
   type IsChatLive,
 } from "../../../renderer/shared/design-canvas/chat-pages.js";
 import {
+  appRouteKey,
   DESIGN_CANVAS_LIMITS,
   DESIGN_DEFAULT_FILE_WIDTH,
   defaultFileBox,
@@ -37,6 +47,8 @@ import {
   type DesignWidth,
 } from "../../../renderer/shared/design-canvas/schema.js";
 import { DESIGN_FRESH_VIEWPORT, type DesignChatView } from "../../../renderer/shared/design-canvas/view.js";
+import { routeForWrittenFile } from "./app-server/app-routes.js";
+import type { CanvasConfig } from "./canvas-config.js";
 import { claimWithRoom } from "./lazy-claim.js";
 import { resolveDesignFile } from "./resolve-core.js";
 import type { DesignCanvasUpdated, DesignChatCanvases } from "./store.js";
@@ -159,6 +171,14 @@ export function writtenPagePath(toolName: string, details: unknown): string | un
 }
 
 /** Each design/ page's modification stamp, by workspace-relative path. */
+/** The workspace-relative file a completed first-party write or edit produced, whatever it is (3b: route files). */
+export function writtenFilePath(toolName: string, details: unknown): string | undefined {
+  return parseProducedFile(
+    details && typeof details === "object" ? (details as { producedFile?: unknown }).producedFile : undefined,
+    toolName,
+  )?.relativePath;
+}
+
 export type DesignPageStamps = ReadonlyMap<string, { mtimeMs: number; size: number }>;
 
 /**
@@ -307,12 +327,163 @@ export function placeWrittenPageFrames(
   return { doc: next, changed: placedIds.length > 0, placedIds, removed };
 }
 
+/** Whether a design/ page still exists as an HTML file the canvas can show. */
+export async function isShowablePage(workspaceRoot: string, relativePath: string): Promise<boolean> {
+  const resolved = await resolveDesignFile(workspaceRoot, relativePath.split("/").map(encodeURIComponent).join("/"));
+  return resolved.ok && resolved.mimeType.split(";")[0] === "text/html";
+}
+
+/** A route an app frame shows: written-route placement's unit (S83). */
+export type WrittenAppRoute = { appRoot: string; route: string };
+
+/** What a turn resolves written route files against (S83), read once per turn. */
+export type WrittenRouteData = {
+  /** Every app root the workspace knows, with its framework when one is known. */
+  owners: readonly { appRoot: string; framework?: FrameworkId }[];
+  /** canvas.json's `params`, by app root. */
+  params: ReadonlyMap<string, Readonly<Record<string, readonly string[]>>>;
+};
+
+/** The roots of the snapshot's candidates and apps, and canvas.json's described roots, each with its framework. */
+export function writtenRouteData(snapshot: Pick<DesignAppsSnapshot, "apps" | "candidates"> | null, config: CanvasConfig | null): WrittenRouteData {
+  const frameworks = new Map<string, FrameworkId | undefined>();
+  const add = (appRoot: string, framework: FrameworkId | undefined) => {
+    if (!frameworks.has(appRoot) || (frameworks.get(appRoot) === undefined && framework !== undefined)) frameworks.set(appRoot, framework);
+  };
+  for (const candidate of snapshot?.candidates ?? []) add(candidate.appRoot, candidate.framework);
+  for (const app of snapshot?.apps ?? []) add(app.appRoot, app.framework);
+  const params = new Map<string, Record<string, readonly string[]>>();
+  for (const app of config?.apps ?? []) {
+    add(app.root, undefined);
+    if (app.params) params.set(app.root, app.params);
+  }
+  return {
+    owners: [...frameworks].map(([appRoot, framework]) => (framework ? { appRoot, framework } : { appRoot })),
+    params,
+  };
+}
+
+/** The deepest known root holding `relativePath`, or undefined. */
+function routeOwner(relativePath: string, data: WrittenRouteData): WrittenRouteData["owners"][number] | undefined {
+  let best: WrittenRouteData["owners"][number] | undefined;
+  for (const owner of data.owners) {
+    const holds = owner.appRoot === "." || relativePath.startsWith(`${owner.appRoot}/`);
+    if (!holds) continue;
+    const depth = owner.appRoot === "." ? 0 : owner.appRoot.split("/").length;
+    const bestDepth = best === undefined ? -1 : best.appRoot === "." ? 0 : best.appRoot.split("/").length;
+    if (depth > bestDepth) best = owner;
+  }
+  return best;
+}
+
+/** The route pattern a written file declares under its root, by its path alone; null for any other file. */
+export function writtenRoutePattern(relativePath: string, data: WrittenRouteData): { appRoot: string; pattern: string } | null {
+  const owner = routeOwner(relativePath, data);
+  if (!owner) return null;
+  const pattern = routeForWrittenFile(owner.appRoot, owner.framework, relativePath);
+  return pattern === null ? null : { appRoot: owner.appRoot, pattern };
+}
+
+/**
+ * The route a written file shows (S83): its pattern when concrete; a
+ * single-parameter pattern filled with canvas.json's first value for it; null
+ * otherwise (no root, no convention, not a route file, or a pattern nothing fills).
+ */
+export function writtenAppRoute(relativePath: string, data: WrittenRouteData): WrittenAppRoute | null {
+  const found = writtenRoutePattern(relativePath, data);
+  if (!found) return null;
+  if (isConcreteRoute(found.pattern)) return { appRoot: found.appRoot, route: found.pattern };
+  const params = patternParams(found.pattern);
+  if (params.length !== 1) return null;
+  const values = data.params.get(found.appRoot);
+  const first = values && Object.prototype.hasOwnProperty.call(values, found.pattern) ? values[found.pattern]?.[0] : undefined;
+  if (first === undefined) return null;
+  const route = fillRoute(found.pattern, { [params[0]!.name]: first });
+  return route === null ? null : { appRoot: found.appRoot, route };
+}
+
+/**
+ * A turn's written routes (S83): the first route candidate starts the turn's
+ * one data read, which every later write shares, and the turn places at most
+ * `limit` app frames.
+ */
+export function createWrittenRouteTurn(deps: { load(): Promise<WrittenRouteData>; limit?: number }): {
+  routeFor(relativePath: string): Promise<WrittenAppRoute | null>;
+  room(): number;
+  placed(count: number): void;
+} {
+  const limit = deps.limit ?? EARLIER_PAGES_LIMIT;
+  let data: Promise<WrittenRouteData> | undefined;
+  let placed = 0;
+  return {
+    async routeFor(relativePath) {
+      // design/ pages are v1 pages, never route files.
+      if (isAutoPlacedPagePath(relativePath) || !isDesignRelativePath(relativePath)) return null;
+      data ??= deps.load();
+      return writtenAppRoute(relativePath, await data);
+    },
+    room: () => Math.max(0, limit - placed),
+    placed(count) {
+      placed += count;
+    },
+  };
+}
+
+/**
+ * Puts each route not on the view's page yet beside what is in view there, as
+ * an `app` frame at 1280 × 800 and scale 0.5. A route the person took off the
+ * canvas (`removedAppRoutes`) is not put back. `added` lists each new frame's
+ * viewport width.
+ */
+export function placeWrittenAppRoutes(
+  doc: DesignCanvas,
+  routes: readonly WrittenAppRoute[],
+  newId: () => string,
+  view: DesignChatView,
+): { doc: DesignCanvas; placedIds: string[]; added: number[] } {
+  let next = doc;
+  const placedIds: string[] = [];
+  const added: number[] = [];
+  const takenOff = new Set(doc.removedAppRoutes ?? []);
+  for (const { appRoot, route } of routes) {
+    const shown = next.frames.some(
+      (frame) => frame.kind === "app" && frame.pageId === view.pageId && (frame.appRoot ?? ".") === appRoot && (frame.route ?? "/") === route,
+    );
+    if (shown || takenOff.has(appRouteKey(appRoot, route))) continue;
+    const viewport = { ...APP_DEFAULT_VIEWPORT };
+    const scale = fitAppScale(viewport, 0.5, DESIGN_CANVAS_LIMITS.maxSize);
+    const placed = placeFrame(
+      next,
+      {
+        kind: "app",
+        title: route.slice(0, DESIGN_CANVAS_LIMITS.titleChars),
+        appRoot,
+        route,
+        viewport,
+        scale,
+        pageId: view.pageId,
+        createdBy: "aiden",
+        ...appFrameBox(viewport, scale),
+      },
+      canvasView(next, view),
+      newId,
+    );
+    if ("error" in placed) break;
+    next = placed.doc;
+    placedIds.push(placed.id);
+    added.push(viewport.width);
+  }
+  return { doc: next, placedIds, added };
+}
+
 /**
  * The HTML pages this chat's earlier replies wrote or edited, newest last,
  * read from the saved activity of its messages. Each path appears once.
  */
 export function pagesWrittenInChat(
   messages: readonly { timeline?: { steps?: readonly unknown[] } | null }[],
+  /** 3b (S83): also keeps the files this says are route files, in the same timeline. Left out, only design/ pages. */
+  options: { isRouteFile?: (relativePath: string) => boolean } = {},
 ): string[] {
   const seen = new Set<string>();
   const ordered: string[] = [];
@@ -321,7 +492,10 @@ export function pagesWrittenInChat(
       if (!step || typeof step !== "object") continue;
       const tool = step as { kind?: unknown; toolName?: unknown; status?: unknown; producedFile?: unknown };
       if (tool.kind !== "tool" || tool.status !== "completed" || typeof tool.toolName !== "string") continue;
-      const relativePath = writtenPagePath(tool.toolName, { producedFile: tool.producedFile });
+      const details = { producedFile: tool.producedFile };
+      const relativePath =
+        writtenPagePath(tool.toolName, details) ??
+        (options.isRouteFile ? routeFileOf(writtenFilePath(tool.toolName, details), options.isRouteFile) : undefined);
       if (!relativePath) continue;
       // A page edited again moves to the end, so the newest pages are kept.
       if (seen.has(relativePath)) ordered.splice(ordered.indexOf(relativePath), 1);
@@ -330,6 +504,10 @@ export function pagesWrittenInChat(
     }
   }
   return ordered;
+}
+
+function routeFileOf(relativePath: string | undefined, isRouteFile: (relativePath: string) => boolean): string | undefined {
+  return relativePath !== undefined && isRouteFile(relativePath) ? relativePath : undefined;
 }
 
 /**
@@ -523,11 +701,25 @@ export async function placeWrittenPagesOnCanvas(input: {
   pendingEntry?(): Promise<void>;
   /** Which claimed chats are live, asked only when a turn's lazy claim finds `chatPages` full. */
   isLive?(chatIds: string[], workspaceId: string): Promise<Set<string>>;
-}): Promise<{ frameIds: string[]; pageId?: string; focusId?: number }> {
-  if (input.limit !== undefined && input.limit <= 0) return { frameIds: [] };
+  /** 3b (S83): app routes to show as live frames on the same page, after the pages. */
+  routes?: readonly WrittenAppRoute[];
+  /**
+   * 3b (S83, entry): placed only when the target page is still empty after
+   * the pages and routes, and the person hasn't taken it off the canvas.
+   */
+  fallbackRoute?: WrittenAppRoute;
+  /**
+   * The workspace the routes were read from. A chat that is in another one
+   * now places nothing: its routes and roots belong to the canvas it left.
+   */
+  workspaceId?: string;
+}): Promise<{ frameIds: string[]; pageId?: string; focusId?: number; added: number[] }> {
+  if (input.limit !== undefined && input.limit <= 0) return { frameIds: [], added: [] };
   // A chat deleted meanwhile has no canvas to put them on.
   const workspaceId = await input.store.workspaceIdOf(input.chatId);
-  if (workspaceId === null) return { frameIds: [] };
+  if (workspaceId === null) return { frameIds: [], added: [] };
+  if (input.workspaceId !== undefined && input.workspaceId !== workspaceId) return { frameIds: [], added: [] };
+  const routes = input.routes ?? [];
   let rules: EntryRules | undefined;
   if (input.entry) {
     const otherViews = await input.entry.otherViews(workspaceId);
@@ -558,7 +750,7 @@ export async function placeWrittenPagesOnCanvas(input: {
   }
   const showable = newestFirst.reverse();
   // Entry claims a page even when the chat wrote none.
-  if (showable.length === 0 && !rules) return { frameIds: [] };
+  if (showable.length === 0 && !rules && routes.length === 0) return { frameIds: [], added: [] };
   if (!rules) await input.pendingEntry?.();
   const viewOf = await input.pages.resolver(workspaceId);
   // Asked on the canvas's chain before the write, and again after it: the
@@ -569,6 +761,7 @@ export async function placeWrittenPagesOnCanvas(input: {
   const shouldSave = async (): Promise<boolean> =>
     (await input.store.workspaceIdOf(input.chatId)) === workspaceId && (!callerAllows || (await callerAllows()));
   let placedIds: string[] = [];
+  let routeWidths: number[] = [];
   let removed: string[] = [];
   let pageId: string | undefined;
   // The page entry added in the save that landed, so taking the frames back also takes it.
@@ -579,9 +772,13 @@ export async function placeWrittenPagesOnCanvas(input: {
   const reportRemoved = () => {
     if (removed.length > 0) input.onRemoved?.(removed);
   };
-  // Entry always shows the chat's page, so the view and the open canvas move to it.
+  // Entry always shows the chat's page, so the view and the open canvas move to it,
+  // kept only while the chat still owns this workspace right before the change.
   const show = async (): Promise<number | undefined> =>
-    rules && pageId !== undefined ? await input.pages.show(workspaceId, pageId) : undefined;
+    rules && pageId !== undefined ? await input.pages.show(workspaceId, pageId, shouldSave) : undefined;
+  // After the save, every step that changes the canvas, the view or the focus
+  // is fenced by `shouldSave` right before it: a chat that left meanwhile gets
+  // no claim, view, page or focus there (the frames already saved stay).
   try {
     const { doc: saved } = await input.store.update(
       input.chatId,
@@ -598,10 +795,17 @@ export async function placeWrittenPagesOnCanvas(input: {
           addedPageId = placement.added;
         }
         pageId = view.pageId;
-        const placed = placeWrittenPageFrames(base, paths, input.newId, widths, view);
+        const pagesPlaced = placeWrittenPageFrames(base, paths, input.newId, widths, view);
+        let routesPlaced = placeWrittenAppRoutes(pagesPlaced.doc, routes, input.newId, view);
+        if (input.fallbackRoute && framesOnPage(routesPlaced.doc, view.pageId).length === 0) {
+          routesPlaced = placeWrittenAppRoutes(routesPlaced.doc, [input.fallbackRoute], input.newId, view);
+        }
+        const placed = { ...pagesPlaced, doc: routesPlaced.doc, placedIds: [...pagesPlaced.placedIds, ...routesPlaced.placedIds] };
         removed = placed.removed;
+        routeWidths = [];
         if (placed.doc === doc) throw UNCHANGED;
         placedIds = placed.placedIds;
+        routeWidths = routesPlaced.added;
         // A turn's placement claims the page it landed on for a chat with none; entry has claimed already.
         if (rules) return placed.doc;
         landed = landedPageId(doc, placed.doc, view.pageId);
@@ -626,7 +830,7 @@ export async function placeWrittenPagesOnCanvas(input: {
       if (placedIds.length > 0 || addedPageId !== undefined) {
         await retractPlacedFrames(input, workspaceId, saved.revision, placedIds, shouldSave, addedPageId);
       }
-      return { frameIds: [] };
+      return { frameIds: [], added: [] };
     }
     input.broadcast({ workspaceId, chatId: input.chatId, revision: saved.revision });
     await claimWithRoom({
@@ -637,16 +841,21 @@ export async function placeWrittenPagesOnCanvas(input: {
       store: input.store,
       isLive: input.isLive,
       broadcast: input.broadcast,
+      stillOwned: shouldSave,
     });
     reportRemoved();
+    if (!(await shouldSave())) return { frameIds: [], added: routeWidths };
     const focusId = await show();
-    return { frameIds: placedIds, ...(pageId ? { pageId } : {}), ...(focusId !== undefined ? { focusId } : {}) };
+    // The show awaited too: the focus goes back only while the chat is still here.
+    if (!(await shouldSave())) return { frameIds: [], added: routeWidths };
+    return { frameIds: placedIds, ...(pageId ? { pageId } : {}), ...(focusId !== undefined ? { focusId } : {}), added: routeWidths };
   } catch (error) {
     if (error === UNCHANGED) {
       reportRemoved();
-      if (!rules || refused || !(await shouldSave())) return { frameIds: [] };
+      if (!rules || refused || !(await shouldSave())) return { frameIds: [], added: [] };
       const focusId = await show();
-      return { frameIds: [], ...(pageId ? { pageId } : {}), ...(focusId !== undefined ? { focusId } : {}) };
+      if (!(await shouldSave())) return { frameIds: [], added: [] };
+      return { frameIds: [], ...(pageId ? { pageId } : {}), ...(focusId !== undefined ? { focusId } : {}), added: [] };
     }
     throw error;
   }

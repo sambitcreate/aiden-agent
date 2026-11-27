@@ -2371,3 +2371,96 @@ test("construction, snapshot, presence and the flag off never call an attach dep
   h.servers.designModeEntered({ chatId: "chat-1", workspaceId: "ws", owner: h.owner });
   await settle();
 });
+
+// ── 3b: the app's route list (S81) ──
+
+function countingDiscover(h: ReturnType<typeof harness>, patterns: string[] = ["/", "/pricing", "/blog/[slug]"]) {
+  const calls: Array<{ workspaceRoot: string; appRoot: string; framework?: string }> = [];
+  h.deps.discoverRoutes = async (workspaceRoot, appRoot, framework) => {
+    calls.push({ workspaceRoot, appRoot, ...(framework ? { framework } : {}) });
+    return { patterns, truncated: false };
+  };
+  return calls;
+}
+
+test("3b: routes() lists a Next app's discovered routes and runs detection once when nothing is cached", async (t) => {
+  const h = harness(t, { apps: [webApp({ framework: "next" })] });
+  const calls = countingDiscover(h);
+  const list = await h.servers.routes("ws");
+  assert.equal(h.state.calls.detect, 1);
+  assert.deepEqual(calls, [{ workspaceRoot: "/w/ws", appRoot: ".", framework: "next" }]);
+  assert.ok(!("error" in list));
+  assert.equal(list.source, "discovered");
+  assert.equal(list.framework, "next");
+  assert.deepEqual(
+    list.routes.map((entry) => entry.route),
+    ["/", "/pricing", "/blog/[slug]"],
+  );
+});
+
+test("3b: config routes replace discovery, and a canvas.json edit is seen by the next call while the walk stays cached", async (t) => {
+  const h = harness(t, { apps: [webApp({ framework: "next" })] });
+  const calls = countingDiscover(h);
+  const first = await h.servers.routes("ws", ".");
+  assert.ok(!("error" in first) && first.source === "discovered");
+  h.state.config = { version: 1, apps: [{ root: ".", routes: ["/", "/checkout"], params: {} }] };
+  const second = await h.servers.routes("ws", ".");
+  assert.ok(!("error" in second));
+  assert.equal(second.source, "config");
+  assert.deepEqual(
+    second.routes.map((entry) => entry.route),
+    ["/", "/checkout"],
+  );
+  h.state.config = { version: 1, apps: [{ root: ".", params: { "/blog/[slug]": ["hello-world"] } }] };
+  const third = await h.servers.routes("ws", ".");
+  assert.ok(!("error" in third));
+  assert.ok(third.routes.some((entry) => entry.route === "/blog/hello-world"));
+  assert.equal(calls.length, 1, "the walk ran once within 5 s");
+  await h.clock.advance(5_001);
+  await h.servers.routes("ws", ".");
+  assert.equal(calls.length, 2, "and again once 5 s passed");
+});
+
+test("3b: several roots need a root; an unknown root and permission none are refused", async (t) => {
+  const h = harness(t, { apps: [webApp({ root: "apps/web", framework: "next" }), webApp({ root: "apps/site", framework: "astro" })] });
+  countingDiscover(h);
+  assert.deepEqual(await h.servers.routes("ws"), { error: "choose-root", roots: ["apps/web", "apps/site"] });
+  assert.deepEqual(await h.servers.routes("ws", "apps/nope"), { error: "unknown-root", roots: ["apps/web", "apps/site"] });
+  const site = await h.servers.routes("ws", "apps/site");
+  assert.ok(!("error" in site) && site.framework === "astro" && site.appRoot === "apps/site");
+  h.workspaces.set("ws", { id: "ws", path: "/w/ws", permission: "none" });
+  assert.deepEqual(await h.servers.routes("ws", "apps/web"), { error: "unavailable" });
+});
+
+test("3b: a detection change and forgetWorkspace each clear the walk cache", async (t) => {
+  const h = harness(t, { apps: [webApp({ framework: "next" })] });
+  const calls = countingDiscover(h);
+  await h.servers.routes("ws");
+  h.state.apps = [webApp({ framework: "astro" })];
+  await h.servers.snapshot("ws");
+  await h.servers.routes("ws");
+  assert.deepEqual(
+    calls.map((call) => call.framework),
+    ["next", "astro"],
+  );
+  await h.servers.forgetWorkspace("ws");
+  await h.servers.routes("ws");
+  assert.equal(calls.length, 3);
+});
+
+test("3b: an attached-only root lists the fallback /", async (t) => {
+  const h = harness(t, { apps: [], config: { version: 1, apps: [{ root: ".", url: "http://localhost:3000" }] } });
+  const calls: Array<string | undefined> = [];
+  h.deps.discoverRoutes = async (_workspaceRoot, _appRoot, framework) => {
+    calls.push(framework);
+    return null;
+  };
+  const list = await h.servers.routes("ws");
+  assert.ok(!("error" in list));
+  assert.equal(list.source, "fallback");
+  assert.deepEqual(
+    list.routes.map((entry) => entry.route),
+    ["/"],
+  );
+  assert.deepEqual(calls, [undefined]);
+});

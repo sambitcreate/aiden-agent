@@ -5,6 +5,7 @@ import { afterEach, beforeEach, mock, test } from "node:test";
 import { act, cleanup, render } from "@testing-library/react";
 import { deletePage, renamePage } from "../shared/design-canvas/pages";
 import {
+  appRouteKey,
   emptyDesignCanvas,
   type DesignCanvas,
   type DesignFrame,
@@ -354,6 +355,26 @@ test("a save says which pages an undo took off, so the store does not remember t
   await tick(800);
   assert.equal(saves().length, 6);
   assert.equal(undoneOf(5), undefined, "the other window's removal is not called an undo of this one");
+});
+
+test("3b: a save says which app routes an undo took off, apart from its pages", async () => {
+  await mount();
+  const app: DesignFrame = { id: "r", kind: "app", title: "/pricing", appRoot: ".", route: "/pricing", viewport: { width: 1280, height: 800 }, scale: 0.5, x: 0, y: 400, w: 640, h: 436, pageId: "page-1", createdBy: "aiden" };
+  const page: DesignFrame = { id: "p", kind: "file", title: "q.html", path: "design/q.html", x: 700, y: 400, w: 640, h: 436, designWidth: 1280, pageId: "page-1", createdBy: "aiden" };
+  const optionsOf = (index: number) => saves()[index]!.args[3] as { undone?: string[]; undoneRoutes?: string[] } | undefined;
+  await act(async () => controller.change((doc) => ({ ...doc, frames: [...doc.frames, page, app] })));
+  await tick(800);
+  assert.equal(optionsOf(0)?.undoneRoutes, undefined);
+
+  await act(async () => controller.undo());
+  await tick(800);
+  assert.deepEqual(optionsOf(1)?.undone, ["design/q.html"]);
+  assert.deepEqual(optionsOf(1)?.undoneRoutes, [appRouteKey(".", "/pricing")], "the undo took the route off");
+
+  await act(async () => controller.redo());
+  await act(async () => controller.change((doc) => ({ ...doc, frames: doc.frames.filter((frame) => frame.id !== "r") })));
+  await tick(800);
+  assert.equal(optionsOf(2)?.undoneRoutes, undefined, "removing the frame by hand is the person's removal");
 });
 
 test("an undo waiting to save does not take back a frame another window added", async () => {

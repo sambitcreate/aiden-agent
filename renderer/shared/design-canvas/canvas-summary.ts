@@ -258,8 +258,13 @@ export type CanvasFrameSummary = {
   viewport?: { width: number; height: number };
   scale?: number;
   colorScheme?: "light" | "dark";
+  /** app (3b, S85): the variant's short name, and the id of the frame it is a variant of. */
+  label?: string;
+  variantOf?: string;
   /** app: whether its app is running now, which canvas_read adds. */
   live?: boolean;
+  /** app (3b, S85): requests its live mounts blocked, which canvas_read adds when not 0. */
+  blocked?: number;
   openComments?: number;
 };
 
@@ -373,6 +378,8 @@ export function summarizeFrame(frame: DesignFrame, openComments = 0): CanvasFram
           ...(frame.viewport ? { viewport: { ...frame.viewport } } : {}),
           ...(frame.scale !== undefined ? { scale: frame.scale } : {}),
           ...(frame.colorScheme ? { colorScheme: frame.colorScheme } : {}),
+          ...(frame.label ? { label: frame.label } : {}),
+          ...(frame.variantOf ? { variantOf: frame.variantOf } : {}),
         }
       : {}),
     ...(openComments > 0 ? { openComments } : {}),

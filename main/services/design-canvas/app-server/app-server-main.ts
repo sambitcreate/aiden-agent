@@ -66,6 +66,9 @@ import {
   type WebAppDetection,
 } from "./app-server-core.js";
 import type { AppToolchain } from "./app-toolchain.js";
+import type { AppRouteList } from "../../../../renderer/shared/design-canvas/app-routes.js";
+import { mergeRouteList } from "./app-routes-core.js";
+import { discoverRoutes } from "./app-routes.js";
 
 export const DESIGN_APP_PRESENCE_GRACE_MS = 60_000;
 export const DESIGN_APP_READY_IDLE_MS = 120_000;
@@ -135,7 +138,14 @@ export interface DesignAppServersDeps {
   attach?: DesignAppAttachDeps;
   /** 2c: Retry forgets where Node and the package managers were (D5). */
   clearToolchainCache?(): void;
+  /** 3b: the route walk (S78), replaceable so tests can count it. */
+  discoverRoutes?: typeof discoverRoutes;
 }
+
+/** 3b (S81): how long one app root's route walk is reused. canvas.json is read fresh on every call. */
+export const DESIGN_APP_ROUTES_CACHE_MS = 5_000;
+
+export type DesignAppRoutesResult = AppRouteList | { error: "unknown-root" | "choose-root"; roots: string[] } | { error: "unavailable" };
 
 export interface DesignAppLimits {
   readyIdleMs: number;
@@ -324,6 +334,8 @@ export class DesignAppServers {
   private stopTick = 0;
   private readonly stopTicks = new Map<string, number>();
   private readonly cache = new Map<string, { detection: WebAppDetection; config: CanvasConfig | null }>();
+  /** 3b: route walks by `<workspaceId>\0<appRoot>`, with the framework they read and when. */
+  private readonly routeWalks = new Map<string, { at: number; framework: FrameworkId | undefined; walk: Promise<{ patterns: string[]; truncated: boolean } | null> }>();
   private readonly served = new Map<string, Set<string>>();
   private readonly presenceTimers = new Map<string, unknown>();
   private readonly jobWaiters = new Map<string, (view: DesignJobView) => void>();
@@ -366,6 +378,48 @@ export class DesignAppServers {
       else this.cache.delete(workspaceId);
     }
     return this.snapshotNow(workspaceId);
+  }
+
+  /**
+   * 3b (S81, S82): an app root's pages. The walk is cached for 5 s per root;
+   * canvas.json is read fresh, so its `routes` and `params` show at once. With
+   * no detection cached, detection runs first. One root is the default.
+   */
+  async routes(workspaceId: string, appRoot?: string): Promise<DesignAppRoutesResult> {
+    if (!this.available()) return { error: "unavailable" };
+    const workspace = await this.deps.workspace(workspaceId);
+    if (!workspace?.path || workspace.permission === "none") return { error: "unavailable" };
+    const cached = this.cache.get(workspaceId) ?? (await this.detectFor(workspace.id, workspace.path));
+    const config = await this.deps.readConfig(workspace.path).catch(() => null);
+    const roots = this.knownRoots(cached.detection, config);
+    let root = appRoot;
+    if (root === undefined) {
+      if (roots.length !== 1) return roots.length === 0 ? { error: "unknown-root", roots } : { error: "choose-root", roots };
+      root = roots[0];
+    } else if (!roots.includes(root)) {
+      return { error: "unknown-root", roots };
+    }
+    const framework = cached.detection.apps.find((app) => app.root === root && app.kind === "web")?.framework;
+    const key = keyOf(workspaceId, root);
+    let walk = this.routeWalks.get(key);
+    if (!walk || walk.framework !== framework || this.now() - walk.at > DESIGN_APP_ROUTES_CACHE_MS) {
+      const discover = this.deps.discoverRoutes ?? discoverRoutes;
+      const promise = discover(workspace.path, root, framework).catch(() => null);
+      walk = { at: this.now(), framework, walk: promise };
+      this.routeWalks.set(key, walk);
+    }
+    const discovered = await walk.walk;
+    const entry = config?.apps.find((candidate) => candidate.root === root);
+    return mergeRouteList({
+      appRoot: root,
+      ...(framework ? { framework } : {}),
+      discovered,
+      ...(entry && (entry.routes || entry.params) ? { config: { ...(entry.routes ? { routes: entry.routes } : {}), ...(entry.params ? { params: entry.params } : {}) } } : {}),
+    });
+  }
+
+  private forgetRouteWalks(workspaceId: string): void {
+    for (const key of [...this.routeWalks.keys()]) if (key.startsWith(`${workspaceId}\0`)) this.routeWalks.delete(key);
   }
 
   async start(input: DesignAppStartInput): Promise<DesignAppStatus> {
@@ -546,6 +600,7 @@ export class DesignAppServers {
     for (const key of [...this.stopTicks.keys()]) if (key.startsWith(`${workspaceId}\0`)) this.stopTicks.delete(key);
     this.served.delete(workspaceId);
     this.cache.delete(workspaceId);
+    this.forgetRouteWalks(workspaceId);
     this.deps.consent.closeAll(`${workspaceId}\0`);
     await this.deps.records.forgetWorkspace(workspaceId);
     if (originsGo) this.originsChanged();
@@ -1504,6 +1559,8 @@ export class DesignAppServers {
   private async detectFor(workspaceId: string, workspacePath: string) {
     const [detection, config] = await Promise.all([this.deps.detect(workspacePath), this.deps.readConfig(workspacePath).catch(() => null)]);
     const cached = { detection, config };
+    const before = this.cache.get(workspaceId);
+    if (before && detectionShape(before.detection) !== detectionShape(detection)) this.forgetRouteWalks(workspaceId);
     this.cache.set(workspaceId, cached);
     return cached;
   }
@@ -1636,4 +1693,9 @@ export class DesignAppServers {
       return undefined;
     }
   }
+}
+
+/** 3b: what a route walk depends on in a detection — each web root and its framework. */
+function detectionShape(detection: WebAppDetection): string {
+  return JSON.stringify(detection.apps.filter((app) => app.kind === "web").map((app) => [app.root, app.framework ?? null]));
 }

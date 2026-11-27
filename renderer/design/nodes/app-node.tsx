@@ -525,6 +525,15 @@ export function AppFrame({
     path: null,
     error: null,
   });
+  // A new route (3b: canvas_update_frame or the picker retargets the frame)
+  // starts clean: the old route's path, error, load and stuck state don't carry over.
+  const [routeShown, setRouteShown] = React.useState(route);
+  if (routeShown !== route) {
+    setRouteShown(route);
+    setPage({ key: "", path: null, error: null });
+    setLoadedKey(null);
+    setStuckKey(null);
+  }
   const pageState = shown && page.key === shown.key ? page : { key: shown?.key ?? "", path: null, error: null };
   const enteredRef = React.useRef({ entered: inside, onLeave, dark: frame.colorScheme === "dark" });
   React.useLayoutEffect(() => {
@@ -617,6 +626,10 @@ export function AppFrame({
     insideSince.current = clockRef.current();
     restores.current = { ...restores.current, count: 0 };
   }, [inside]);
+  // The new route gets its own restores.
+  React.useLayoutEffect(() => {
+    restores.current = { key: null, count: 0, lastAt: null, toPath: false };
+  }, [route]);
   const stuckRef = React.useRef(stuck);
   stuckRef.current = stuck;
   const forgetPath = React.useCallback(() => {
@@ -774,9 +787,19 @@ export function AppFrame({
     );
   }
 
+  // 3b (S85): a variant's label follows the title, in muted text.
+  const titledRow = frame.label ? (
+    <>
+      {titleSlot ?? <span className="min-w-0 flex-1 truncate text-strong text-primary">{frame.title}</span>}
+      <span className="max-w-[40%] shrink-0 truncate text-secondary">{frame.label}</span>
+    </>
+  ) : (
+    titleSlot
+  );
+
   return (
     <div className="h-full w-full" onDoubleClick={enterable ? onEnter : undefined}>
-      <CanvasNodeChrome title={frame.title} titleSlot={titleSlot} selected={selected} flush status={statusRow} toolbar={actions}>
+      <CanvasNodeChrome title={frame.title} titleSlot={titledRow} selected={selected} flush status={statusRow} toolbar={actions}>
         <div ref={contentRef} className="relative h-full w-full overflow-hidden rounded-b-button">
           {body}
           {frame.guide ? <LayoutGuide guide={frame.guide} scale={scale} /> : null}

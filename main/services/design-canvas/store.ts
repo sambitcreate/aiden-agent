@@ -22,6 +22,7 @@ import {
   emptyDesignCanvas,
   isDesignChatId,
   parseDesignCanvas,
+  withRemovedAppRoutes,
   withRemovedPagePaths,
   type DesignCanvas,
 } from "../../../renderer/shared/design-canvas/schema.js";
@@ -146,6 +147,8 @@ export class DesignCanvasStore {
     baseRevision: number,
     options: {
       undone?: readonly string[];
+      /** 3b (S83): app routes (`appRouteKey`) the person's undo took off, which aren't remembered as removed. */
+      undoneRoutes?: readonly string[];
       beforeWrite?: () => Promise<void> | void;
       /**
        * Which of these chats are live in this workspace. Asked on the chain,
@@ -177,7 +180,12 @@ export class DesignCanvasStore {
       const merged = mergeSavedChatPages(current, parsed.doc, deleted, isLive);
       // A save comes from the person's canvas: a page they took off is remembered,
       // unless it was their undo that took it off.
-      const doc = withRemovedPagePaths(current, { ...merged.doc, revision }, true, new Set(options.undone ?? []));
+      const doc = withRemovedAppRoutes(
+        current,
+        withRemovedPagePaths(current, { ...merged.doc, revision }, true, new Set(options.undone ?? [])),
+        true,
+        new Set(options.undoneRoutes ?? []),
+      );
       // The pages remembered as taken off count too: what is written must read back.
       if (this.tooLarge(doc)) return tooLarge();
       await options.beforeWrite?.();
@@ -211,7 +219,7 @@ export class DesignCanvasStore {
       const parsed = parseDesignCanvas(isRecord(next) ? { ...next, revision } : next);
       if (!parsed.ok) throw new Error(`The canvas update is invalid: ${parsed.issues.join(" ")}`);
       // An update comes from Aiden or the app itself: a page shown again is forgotten, but no removal is noted.
-      const doc = withRemovedPagePaths(current, parsed.doc, false);
+      const doc = withRemovedAppRoutes(current, withRemovedPagePaths(current, parsed.doc, false), false);
       if (this.tooLarge(doc)) throw new Error("The canvas is too large to save.");
       await options.beforeWrite?.();
       await this.write(workspaceId, doc);
@@ -511,12 +519,13 @@ export class DesignChatCanvases {
     chatId: string,
     doc: DesignCanvas,
     baseRevision: number,
-    options: { undone?: readonly string[]; workspaceId?: string } = {},
+    options: { undone?: readonly string[]; undoneRoutes?: readonly string[]; workspaceId?: string } = {},
   ): Promise<DesignChatCanvasSave> {
     const workspaceId = await this.workspaceFor(chatId, options.workspaceId);
     const ask = this.chatIsLive;
     const result = await this.store.save(workspaceId, doc, baseRevision, {
       ...(options.undone ? { undone: options.undone } : {}),
+      ...(options.undoneRoutes ? { undoneRoutes: options.undoneRoutes } : {}),
       beforeWrite: () => this.assertWorkspaceExists(workspaceId),
       ...(ask
         ? {
