@@ -19,7 +19,7 @@ import type { BotSettingsChangeStatus } from "../../shared/bot-settings-changes"
 import { BotInstructionsDialog } from "./bot-instructions-editor";
 import { BotIssueCard } from "../../components/bots/bot-issue-card";
 import { HandoffCard, handoffNoNoteComposerText, handoffSignInComposerText } from "../../components/bots/handoff-card";
-import { NeedsYouAnnouncer, NeedsYouFocusScope, NeedsYouHeader, needsYouSlotState, type NeedsYouItem } from "../../components/bots/needs-you-slot";
+import { NeedsYouAnnouncer, NeedsYouFocusScope, NeedsYouSlotBody, needsYouSlotState, type NeedsYouItem } from "../../components/bots/needs-you-slot";
 import { PlanCard } from "../../components/bots/plan-card";
 import { ApprovalStatusLine } from "../../components/chat-approval-card";
 import { useApprovalStatusLine } from "../../lib/use-approval-status-line";
@@ -1292,18 +1292,10 @@ export function BotChatPane({ botId }: { botId: string }) {
   const footer = (
     <NeedsYouFocusScope currentKey={slot.current?.key} className="flex flex-col">
       <NeedsYouAnnouncer slot={slot} />
-      {slot.count > 0 || approvalStatus.status ? (
-        <div className="aiden-dock-inset chat-content-column flex flex-col gap-2 pb-2" data-needs-you-slot>
-          <NeedsYouHeader slot={slot} />
-          {slot.current?.render ? (
-            <div key={slot.current.key} className="contents" data-needs-you-card>
-              {slot.current.render()}
-            </div>
-          ) : !slot.current && approvalStatus.status ? (
-            <ApprovalStatusLine status={approvalStatus.status} />
-          ) : null}
-        </div>
-      ) : null}
+      <NeedsYouSlotBody
+        slot={slot}
+        fallback={approvalStatus.status ? <ApprovalStatusLine status={approvalStatus.status} /> : null}
+      />
       {/* The question takes the composer's place, as in workspace chats, while the slot shows it. */}
       {question && askingQuestion ? (
         <>
