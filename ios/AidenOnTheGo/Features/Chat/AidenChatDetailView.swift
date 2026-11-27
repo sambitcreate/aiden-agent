@@ -383,6 +383,10 @@ struct AidenChatDetailView: View {
     }
 
     var body: some View {
+        chatLifecycleStack
+    }
+
+    private var chatConfiguredStack: some View {
         chatStack
         .background(palette.canvas.ignoresSafeArea())
         .onChange(of: effectiveAllowsMutations, initial: true) { _, allowed in
@@ -466,6 +470,10 @@ struct AidenChatDetailView: View {
             if url.isFileURL || raw.hasPrefix("/") || raw.hasPrefix("./") || raw.hasPrefix("../") || raw.hasPrefix("~/") { return .discarded }
             return .systemAction
         })
+    }
+
+    private var chatPresentedStack: some View {
+        chatConfiguredStack
         .sheet(isPresented: $showsWorkspaceFile) {
             if let coordinator, let workspace {
                 NavigationStack { AidenWorkspaceFilesView(coordinator: coordinator, workspace: workspace, owner: model.owner, initialReference: workspaceFileReference) }
@@ -541,6 +549,10 @@ struct AidenChatDetailView: View {
                 onChoose: performContinueInNewChat(workspaceID:)
             )
         }
+    }
+
+    private var chatLifecycleStack: some View {
+        chatPresentedStack
         .environment(\.aidenChatScreen, screen)
         // `/server` can grant the slider after the catalog loaded.
         .onChange(of: model.agentSlider != nil) { model.reconcileAgentSliderAvailability() }
