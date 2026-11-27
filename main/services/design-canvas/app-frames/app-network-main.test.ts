@@ -427,6 +427,20 @@ test("display capture and HID/USB choosers fail closed without a frame, deny exp
   }
 });
 
+test("a frame nested deeper than the ancestor walk can see is app context: display capture and HID/USB choosers fail closed", () => {
+  const s = setup();
+  const app = s.admit();
+  s.permissionDispatcher.ownerSlot("gemini-live").setDisplayMediaRequestHandler((_request, callback) => callback({ video: "owner" } as never));
+  let deep: Frame = app;
+  for (let depth = 0; depth < 70; depth++) deep = frame(5000 + depth, deep, "about:srcdoc");
+  let streams: unknown = "unanswered";
+  (s.permissions.state.display as unknown as (...args: unknown[]) => void)({ frame: deep, securityOrigin: "null" }, (value: unknown) => (streams = value));
+  assert.deepEqual(streams, {});
+  for (const event of ["select-hid-device", "select-usb-device"]) {
+    assert.deepEqual(choose(s, event, { frame: deep }), { prevented: true, chosen: "" }, event);
+  }
+});
+
 // ---- Downloads (D8, E3) -------------------------------------------------------
 
 test("downloads from an export window or an app-context frame are cancelled; the main frame's aren't", () => {

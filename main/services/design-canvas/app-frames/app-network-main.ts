@@ -318,10 +318,13 @@ export function installAppNetwork(deps: AppNetworkDeps): AppNetwork | null {
     try {
       if ((frame as { detached?: boolean }).detached === true) return true;
       let top: FrameLike = frame;
-      for (let current: FrameLike | null = frame, depth = 0; current && depth < 64; current = current.parent, depth++) {
+      let current: FrameLike | null = frame;
+      for (let depth = 0; current && depth < 64; current = current.parent, depth++) {
         if (appOriginOf(current.url) || loopbackNotRenderer(originOf(current.url))) return true;
         top = current;
       }
+      // Too deep to see the top: fail closed, as the registry's walk does.
+      if (current) return true;
       const mainId = mainFrameIdOf(deps.mainContents());
       if (mainId === null || top.frameTreeNodeId !== mainId) return false;
       return registry.appContext(appFrameRef(frame, mainId), true) !== null;
