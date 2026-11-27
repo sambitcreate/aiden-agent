@@ -30,6 +30,12 @@ import {
   BOT_BUBBLE_HIT_SELECTOR,
   BotBubbleMiniChat,
 } from "./bot-bubble-mini-chat";
+import {
+  bringBubbleBack,
+  closeBubble,
+  openBubble,
+  tuckBubble,
+} from "./bot-bubble-actions";
 import { botHeadLabel, botUnreadBadge, useBotHeadStatus } from "./bot-head-status";
 import {
   closeTargetCentre,
@@ -84,24 +90,8 @@ interface Gesture {
   samples: { t: number; x: number; y: number }[];
 }
 
-function report(change: Promise<unknown>, fallback: string) {
-  void change.catch((error: unknown) =>
-    toast.error(userFacingErrorMessage(error, fallback)),
-  );
-}
-
 const toggleOpen = (botId: string, openBotId: string | null) =>
-  report(
-    applyBotBubbleChange(
-      botBubblesApi.open(openBotId === botId ? null : botId),
-    ),
-    "Aiden couldn’t open that chat.",
-  );
-const closeBubble = (botId: string) =>
-  report(
-    applyBotBubbleChange(botBubblesApi.close(botId)),
-    "Aiden couldn’t close that bubble.",
-  );
+  openBubble(openBotId === botId ? null : botId);
 
 function velocityOf(samples: Gesture["samples"]): { x: number; y: number } {
   const last = samples[samples.length - 1];
@@ -225,11 +215,7 @@ export function BotBubbleHeads({
   // may have opened a different one, which it must leave alone.
   React.useEffect(() => {
     if (openBotId === null) return;
-    const tuck = () =>
-      report(
-        applyBotBubbleChange(botBubblesApi.open(null, { ifOpen: openBotId })),
-        "Aiden couldn’t tuck that chat away.",
-      );
+    const tuck = () => tuckBubble(openBotId);
     const tuckIfOutside = (event: PointerEvent) => {
       const target = event.target instanceof Element ? event.target : null;
       if (target?.closest(BOT_BUBBLE_HIT_SELECTOR)) return;
@@ -403,10 +389,7 @@ export function BotBubbleHeads({
     }
     if (event.key === "Escape" && openBotId !== null) {
       event.preventDefault();
-      report(
-        applyBotBubbleChange(botBubblesApi.open(null)),
-        "Aiden couldn’t tuck that chat away.",
-      );
+      tuckBubble();
       return;
     }
     if (isHeadMoveKey(event.key)) {
@@ -547,10 +530,9 @@ export function BotBubbleHeads({
                 toggleOpen(bubble.botId, openBotId);
               }}
               onOpenInAiden={() =>
-                report(
-                  applyBotBubbleChange(botBubblesApi.bringBack(bubble.botId)),
-                  "Aiden couldn’t open that chat.",
-                )
+                bringBubbleBack(bubble.botId, {
+                  fallback: "Aiden couldn’t open that chat.",
+                })
               }
               onOpenFromMenu={() => {
                 if (openBotId !== bubble.botId)
