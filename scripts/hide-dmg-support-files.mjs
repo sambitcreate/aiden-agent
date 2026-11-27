@@ -1,8 +1,9 @@
 /* global console, process */
 
 import { spawn } from "node:child_process";
-import { lstat, mkdir, mkdtemp, realpath, rename, rm } from "node:fs/promises";
+import { lstat, mkdir, mkdtemp, rename, rm } from "node:fs/promises";
 import path from "node:path";
+import { assertRegularFile } from "./package-file-guards.mjs";
 
 const DMG_SUPPORT_FILES = Object.freeze([".background.tiff", ".VolumeIcon.icns"]);
 const STAGING_SYSTEM_DIRECTORIES = Object.freeze([".fseventsd"]);
@@ -16,13 +17,6 @@ function run(command, args) {
       else reject(new Error(`${path.basename(command)} failed (${code ?? signal}).`));
     });
   });
-}
-
-async function assertRegularFile(file, description) {
-  const info = await lstat(file);
-  if (!info.isFile() || info.isSymbolicLink() || (await realpath(file)) !== file) {
-    throw new Error(`${description} must be a regular, non-symlinked file: ${file}`);
-  }
 }
 
 async function markStagingSystemDirectoryHidden(mount, name) {
@@ -51,7 +45,7 @@ export async function hideDmgSupportFiles(artifact) {
   }
 
   const dmg = path.resolve(artifact.file);
-  await assertRegularFile(dmg, "DMG artifact");
+  await assertRegularFile(dmg, { describe: "DMG artifact" });
 
   const staging = await mkdtemp(path.join(path.dirname(dmg), ".aiden-dmg-layout-"));
   const writableImage = path.join(staging, "writable.dmg");
@@ -75,7 +69,7 @@ export async function hideDmgSupportFiles(artifact) {
 
     for (const name of DMG_SUPPORT_FILES) {
       const file = path.join(mount, name);
-      await assertRegularFile(file, "DMG support file");
+      await assertRegularFile(file, { describe: "DMG support file" });
       await run("/usr/bin/xcrun", ["SetFile", "-a", "V", file]);
     }
 
@@ -97,7 +91,7 @@ export async function hideDmgSupportFiles(artifact) {
       finalizedImage,
       "-quiet",
     ]);
-    await assertRegularFile(finalizedImage, "Finalized DMG");
+    await assertRegularFile(finalizedImage, { describe: "Finalized DMG" });
     await rename(finalizedImage, dmg);
     console.log(`Finalized hidden Finder support files in ${dmg}`);
   } finally {
