@@ -3,6 +3,7 @@ import { skipToken, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useNavigate } from "@tanstack/react-router";
 import { GitFork, Info, Loader2, MessageCircleQuestion, MoreHorizontal, TriangleAlert } from "lucide-react";
 import { AskUserQuestionComposer } from "../components/ask-user-question-composer";
+import { ChatLineageLine } from "./chat-lineage-line";
 import { ApprovalIcon, ChatApprovalCard, approvalHeadline, type ChatApprovalDecisionOptions } from "../components/chat-approval-card";
 import { Composer, type ComposerSkillCatalog } from "../components/composer";
 import { ForkSummaryCard, ForkSummaryDialog } from "../components/fork-summary-card";
@@ -705,22 +706,20 @@ export function RemoteChatPane({
           <span className="block min-w-0">
             <span className="block truncate">{title}</span>
             {lineage ? (
-              <span className="flex min-w-0 items-center gap-1 text-small font-normal text-secondary" data-chat-fork-lineage>
-                <GitFork aria-hidden="true" className="size-3 shrink-0" />
-                {lineage.sourceTitle !== undefined && onOpenChat ? (
-                  <button
-                    type="button"
-                    className="min-w-0 truncate rounded-control text-left outline-none hover:text-primary focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
-                    onClick={() => onOpenChat(lineage.forkedFrom.chatId)}
-                  >
-                    {forkedFromLabel(lineage.sourceTitle)}
-                  </button>
-                ) : (
-                  <span className="min-w-0 truncate">
-                    {lineage.sourceTitle !== undefined ? forkedFromLabel(lineage.sourceTitle) : "Forked from another chat"}
-                  </span>
-                )}
-              </span>
+              <ChatLineageLine
+                icon={<GitFork aria-hidden="true" className="size-3 shrink-0" />}
+                label={
+                  lineage.sourceTitle !== undefined
+                    ? forkedFromLabel(lineage.sourceTitle)
+                    : "Forked from another chat"
+                }
+                onClick={
+                  lineage.sourceTitle !== undefined && onOpenChat
+                    ? () => onOpenChat(lineage.forkedFrom.chatId)
+                    : undefined
+                }
+                forkLineage
+              />
             ) : null}
           </span>
         }

@@ -1,5 +1,6 @@
 import { hostQueryKeys } from "../lib/hosts/host-query-keys";
 import { PeerProjectCloneDialog } from "./peer-project-clone-dialog";
+import { ChatLineageLine } from "./chat-lineage-line";
 import { remoteNewChatDraftKey } from "../lib/hosts/remote-new-chat";
 import {
   beginChatDraftSend,
@@ -4398,44 +4399,32 @@ export function ChatPane({ chatId }: { chatId: string }) {
             >
               {chatTitleMenu}
               {startedByChat ? (
-                <span className="flex min-w-0 items-center gap-1 text-small font-normal text-secondary">
-                  <MessagesSquare aria-hidden="true" className="size-3 shrink-0" />
-                  {leadChat ? (
-                    <button
-                      type="button"
-                      className="min-w-0 truncate rounded-control text-left outline-none hover:text-primary focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
-                      onClick={() => void navigate({ to: "/chat/$chatId", params: { chatId: leadChat.id } })}
-                    >
-                      {startedByChat}
-                    </button>
-                  ) : (
-                    <span className="min-w-0 truncate">{startedByChat}</span>
-                  )}
-                </span>
+                <ChatLineageLine
+                  icon={<MessagesSquare aria-hidden="true" className="size-3 shrink-0" />}
+                  label={startedByChat}
+                  onClick={
+                    leadChat
+                      ? () => void navigate({ to: "/chat/$chatId", params: { chatId: leadChat.id } })
+                      : undefined
+                  }
+                />
               ) : null}
               {forkSourceLabel ? (
-                <span className="flex min-w-0 items-center gap-1 text-small font-normal text-secondary">
-                  <GitFork aria-hidden="true" className="size-3 shrink-0" />
-                  {forkSource ? (
-                    <button
-                      type="button"
-                      className="min-w-0 truncate rounded-control text-left outline-none hover:text-primary focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
-                      onClick={() =>
-                        void navigate({ to: "/chat/$chatId", params: { chatId: forkSource.id } })
-                      }
-                    >
-                      {forkSourceLabel}
-                    </button>
-                  ) : (
-                    <span className="min-w-0 truncate">{forkSourceLabel}</span>
-                  )}
-                </span>
+                <ChatLineageLine
+                  icon={<GitFork aria-hidden="true" className="size-3 shrink-0" />}
+                  label={forkSourceLabel}
+                  onClick={
+                    forkSource
+                      ? () => void navigate({ to: "/chat/$chatId", params: { chatId: forkSource.id } })
+                      : undefined
+                  }
+                />
               ) : null}
               {startedByLabel ? (
-                <span className="flex min-w-0 items-center gap-1 text-small font-normal text-secondary">
-                  <AppWindow aria-hidden="true" className="size-3 shrink-0" />
-                  <span className="min-w-0 truncate">{startedByLabel}</span>
-                </span>
+                <ChatLineageLine
+                  icon={<AppWindow aria-hidden="true" className="size-3 shrink-0" />}
+                  label={startedByLabel}
+                />
               ) : null}
             </span>
           ) : (
