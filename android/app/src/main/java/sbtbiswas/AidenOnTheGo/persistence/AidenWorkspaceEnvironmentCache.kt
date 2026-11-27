@@ -12,7 +12,6 @@ import sbtbiswas.AidenOnTheGo.models.AidenWorkspaceFileKind
 import sbtbiswas.AidenOnTheGo.models.AidenWorkspaceFileLink
 import sbtbiswas.AidenOnTheGo.protocol.InstantIso8601Serializer
 import java.io.File
-import java.security.MessageDigest
 import java.time.Instant
 
 class AidenWorkspaceEnvironmentCache(private val directory: File) {
@@ -30,11 +29,7 @@ class AidenWorkspaceEnvironmentCache(private val directory: File) {
         directory.mkdirs()
     }
 
-    private fun sha256(input: String): String {
-        val digest = MessageDigest.getInstance("SHA-256")
-        val bytes = digest.digest(input.toByteArray(Charsets.UTF_8))
-        return bytes.joinToString("") { "%02x".format(it) }
-    }
+    private fun sha256(input: String): String = AidenSha256.hex(input)
 
     private fun instanceDigest(instanceId: String): String = sha256(instanceId)
 

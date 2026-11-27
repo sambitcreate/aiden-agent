@@ -118,10 +118,6 @@ data class AidenApprovalCard(
         else copy(buttons = kept, allowOnMac = allowOnMac ?: ALLOW_ON_MAC)
     }
 
-    /** The card without its Always button, for a Bot approval this device can't make standing. */
-    fun withoutAlways(): AidenApprovalCard =
-        copy(buttons = buttons.filter { it.scope != AidenApprovalScope.ALWAYS })
-
     /** `approvalCardAllows`: an allow with [scope] is on one of the card's buttons. */
     fun allows(scope: AidenApprovalScope = AidenApprovalScope.ONCE): Boolean =
         allowButtons.any { it.effectiveScope == scope }

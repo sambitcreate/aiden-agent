@@ -129,18 +129,14 @@ internal fun aidenShouldRequestBotImages(server: AidenServer, installation: Aide
 internal suspend fun aidenRequestBotAllowed(
     client: AidenRemoteClient, server: AidenServer, installation: AidenInstallation,
     stillCurrent: () -> Boolean = { true }
-): AidenSoloCapabilityNegotiation? = aidenRequestCapabilitiesAlone(
-    if (aidenShouldRequestSoloCapability(AidenRemoteCapability.BOT_ALLOWED, server, installation)) listOf(AidenRemoteCapability.BOT_ALLOWED) else emptyList(),
-    client, stillCurrent
-)
+): AidenSoloCapabilityNegotiation? =
+    aidenRequestSoloCapability(AidenRemoteCapability.BOT_ALLOWED, client, server, installation, stillCurrent)
 
 internal suspend fun aidenRequestBotPlans(
     client: AidenRemoteClient, server: AidenServer, installation: AidenInstallation,
     stillCurrent: () -> Boolean = { true }
-): AidenSoloCapabilityNegotiation? = aidenRequestCapabilitiesAlone(
-    if (aidenShouldRequestSoloCapability(AidenRemoteCapability.BOT_PLANS, server, installation)) listOf(AidenRemoteCapability.BOT_PLANS) else emptyList(),
-    client, stillCurrent
-)
+): AidenSoloCapabilityNegotiation? =
+    aidenRequestSoloCapability(AidenRemoteCapability.BOT_PLANS, client, server, installation, stillCurrent)
 
 /**
  * Revision 61 (provisional): `approval:cards`, `approvals:settings`, `bot:settings-changes`,
@@ -157,10 +153,7 @@ internal suspend fun aidenRequestBotUxCapability(
     stillCurrent: () -> Boolean = { true }
 ): AidenSoloCapabilityNegotiation? {
     require(capability in AidenRemoteCapability.BOT_UX)
-    return aidenRequestCapabilitiesAlone(
-        if (aidenShouldRequestSoloCapability(capability, server, installation)) listOf(capability) else emptyList(),
-        client, stillCurrent
-    )
+    return aidenRequestSoloCapability(capability, client, server, installation, stillCurrent)
 }
 
 /**
@@ -171,12 +164,8 @@ internal suspend fun aidenRequestBotUxCapability(
 internal suspend fun aidenRequestApprovalPlainWords(
     client: AidenRemoteClient, server: AidenServer, installation: AidenInstallation,
     stillCurrent: () -> Boolean = { true }
-): AidenSoloCapabilityNegotiation? = aidenRequestCapabilitiesAlone(
-    if (aidenShouldRequestSoloCapability(AidenRemoteCapability.APPROVAL_PLAIN_WORDS, server, installation)) {
-        listOf(AidenRemoteCapability.APPROVAL_PLAIN_WORDS)
-    } else emptyList(),
-    client, stillCurrent
-)
+): AidenSoloCapabilityNegotiation? =
+    aidenRequestSoloCapability(AidenRemoteCapability.APPROVAL_PLAIN_WORDS, client, server, installation, stillCurrent)
 
 internal fun aidenShouldRequestBotAccessRequests(server: AidenServer, installation: AidenInstallation): Boolean =
     aidenShouldRequestSoloCapability(AidenRemoteCapability.BOT_ACCESS_REQUESTS, server, installation)
@@ -184,10 +173,8 @@ internal fun aidenShouldRequestBotAccessRequests(server: AidenServer, installati
 internal suspend fun aidenRequestBotAccessRequests(
     client: AidenRemoteClient, server: AidenServer, installation: AidenInstallation,
     stillCurrent: () -> Boolean = { true }
-): AidenSoloCapabilityNegotiation? = aidenRequestCapabilitiesAlone(
-    if (aidenShouldRequestBotAccessRequests(server, installation)) listOf(AidenRemoteCapability.BOT_ACCESS_REQUESTS) else emptyList(),
-    client, stillCurrent
-)
+): AidenSoloCapabilityNegotiation? =
+    aidenRequestSoloCapability(AidenRemoteCapability.BOT_ACCESS_REQUESTS, client, server, installation, stillCurrent)
 
 internal fun aidenShouldRequestBotIssues(server: AidenServer, installation: AidenInstallation): Boolean =
     aidenShouldRequestSoloCapability(AidenRemoteCapability.BOT_ISSUES, server, installation)
@@ -272,11 +259,7 @@ internal suspend fun aidenRequestScheduleCards(
     installation: AidenInstallation,
     stillCurrent: () -> Boolean = { true }
 ): AidenSoloCapabilityNegotiation? =
-    aidenRequestCapabilitiesAlone(
-        if (aidenShouldRequestScheduleCards(server, installation)) listOf(AidenRemoteCapability.SCHEDULE_CARDS) else emptyList(),
-        client,
-        stillCurrent
-    )
+    aidenRequestSoloCapability(AidenRemoteCapability.SCHEDULE_CARDS, client, server, installation, stillCurrent)
 
 /**
  * Revision 45: asks [server] for `bot:images` alone, exactly as [aidenRequestScheduleCards] asks
@@ -289,28 +272,27 @@ internal suspend fun aidenRequestBotImages(
     installation: AidenInstallation,
     stillCurrent: () -> Boolean = { true }
 ): AidenSoloCapabilityNegotiation? =
-    aidenRequestCapabilitiesAlone(
-        if (aidenShouldRequestBotImages(server, installation)) listOf(AidenRemoteCapability.BOT_IMAGES) else emptyList(),
-        client,
-        stillCurrent
-    )
+    aidenRequestSoloCapability(AidenRemoteCapability.BOT_IMAGES, client, server, installation, stillCurrent)
 
-internal suspend fun aidenRequestBotPeers(client: AidenRemoteClient, server: AidenServer,
-    installation: AidenInstallation, stillCurrent: () -> Boolean = { true }): AidenSoloCapabilityNegotiation? =
-    aidenRequestCapabilitiesAlone(if (aidenShouldRequestSoloCapability(AidenRemoteCapability.BOT_PEERS, server, installation))
-        listOf(AidenRemoteCapability.BOT_PEERS) else emptyList(), client, stillCurrent)
+internal suspend fun aidenRequestBotPeers(
+    client: AidenRemoteClient, server: AidenServer,
+    installation: AidenInstallation, stillCurrent: () -> Boolean = { true }
+): AidenSoloCapabilityNegotiation? =
+    aidenRequestSoloCapability(AidenRemoteCapability.BOT_PEERS, client, server, installation, stillCurrent)
 
 /** Revision 59: routine-only model choices negotiate separately; no feature token. */
-internal suspend fun aidenRequestBotRoutineModels(client: AidenRemoteClient, server: AidenServer,
-    installation: AidenInstallation, stillCurrent: () -> Boolean = { true }): AidenSoloCapabilityNegotiation? =
-    aidenRequestCapabilitiesAlone(if (aidenShouldRequestSoloCapability(AidenRemoteCapability.BOT_ROUTINE_MODELS, server, installation))
-        listOf(AidenRemoteCapability.BOT_ROUTINE_MODELS) else emptyList(), client, stillCurrent)
+internal suspend fun aidenRequestBotRoutineModels(
+    client: AidenRemoteClient, server: AidenServer,
+    installation: AidenInstallation, stillCurrent: () -> Boolean = { true }
+): AidenSoloCapabilityNegotiation? =
+    aidenRequestSoloCapability(AidenRemoteCapability.BOT_ROUTINE_MODELS, client, server, installation, stillCurrent)
 
 /** Revision 59: task text is exposed only after this isolated capability negotiation. */
-internal suspend fun aidenRequestBotOpenWork(client: AidenRemoteClient, server: AidenServer,
-    installation: AidenInstallation, stillCurrent: () -> Boolean = { true }): AidenSoloCapabilityNegotiation? =
-    aidenRequestCapabilitiesAlone(if (aidenShouldRequestSoloCapability(AidenRemoteCapability.BOT_OPEN_WORK, server, installation))
-        listOf(AidenRemoteCapability.BOT_OPEN_WORK) else emptyList(), client, stillCurrent)
+internal suspend fun aidenRequestBotOpenWork(
+    client: AidenRemoteClient, server: AidenServer,
+    installation: AidenInstallation, stillCurrent: () -> Boolean = { true }
+): AidenSoloCapabilityNegotiation? =
+    aidenRequestSoloCapability(AidenRemoteCapability.BOT_OPEN_WORK, client, server, installation, stillCurrent)
 
 /** Revision 59: watches are negotiated alone only when the host offers them. */
 internal suspend fun aidenRequestBotWatches(
@@ -318,10 +300,8 @@ internal suspend fun aidenRequestBotWatches(
     server: AidenServer,
     installation: AidenInstallation,
     stillCurrent: () -> Boolean = { true }
-): AidenSoloCapabilityNegotiation? = aidenRequestCapabilitiesAlone(
-    if (aidenShouldRequestSoloCapability(AidenRemoteCapability.BOT_WATCHES, server, installation))
-        listOf(AidenRemoteCapability.BOT_WATCHES) else emptyList(), client, stillCurrent
-)
+): AidenSoloCapabilityNegotiation? =
+    aidenRequestSoloCapability(AidenRemoteCapability.BOT_WATCHES, client, server, installation, stillCurrent)
 
 /**
  * Revision 42: asks [server] for `bot:issues` alone, exactly as
@@ -334,11 +314,7 @@ internal suspend fun aidenRequestBotIssues(
     installation: AidenInstallation,
     stillCurrent: () -> Boolean = { true }
 ): AidenSoloCapabilityNegotiation? =
-    aidenRequestCapabilitiesAlone(
-        if (aidenShouldRequestBotIssues(server, installation)) listOf(AidenRemoteCapability.BOT_ISSUES) else emptyList(),
-        client,
-        stillCurrent
-    )
+    aidenRequestSoloCapability(AidenRemoteCapability.BOT_ISSUES, client, server, installation, stillCurrent)
 
 /**
  * Revision 49: asks [server] for `chat:jobs` alone, exactly as [aidenRequestScheduleCards] asks
@@ -351,11 +327,7 @@ internal suspend fun aidenRequestChatJobs(
     installation: AidenInstallation,
     stillCurrent: () -> Boolean = { true }
 ): AidenSoloCapabilityNegotiation? =
-    aidenRequestCapabilitiesAlone(
-        if (aidenShouldRequestChatJobs(server, installation)) listOf(AidenRemoteCapability.CHAT_JOBS) else emptyList(),
-        client,
-        stillCurrent
-    )
+    aidenRequestSoloCapability(AidenRemoteCapability.CHAT_JOBS, client, server, installation, stillCurrent)
 
 /**
  * Revision 50: asks [server] for `attachments:raw` alone. A Mac that refuses it (400 or 404)
@@ -367,11 +339,7 @@ internal suspend fun aidenRequestRawUploads(
     installation: AidenInstallation,
     stillCurrent: () -> Boolean = { true }
 ): AidenSoloCapabilityNegotiation? =
-    aidenRequestCapabilitiesAlone(
-        if (aidenShouldRequestRawUploads(server, installation)) listOf(AidenRemoteCapability.ATTACHMENTS_RAW) else emptyList(),
-        client,
-        stillCurrent
-    )
+    aidenRequestSoloCapability(AidenRemoteCapability.ATTACHMENTS_RAW, client, server, installation, stillCurrent)
 
 /**
  * Revision 53: asks [server] for `chat:new-worktree` alone, exactly as [aidenRequestScheduleCards]
@@ -384,11 +352,7 @@ internal suspend fun aidenRequestChatNewWorktree(
     installation: AidenInstallation,
     stillCurrent: () -> Boolean = { true }
 ): AidenSoloCapabilityNegotiation? =
-    aidenRequestCapabilitiesAlone(
-        if (aidenShouldRequestChatNewWorktree(server, installation)) listOf(AidenRemoteCapability.CHAT_NEW_WORKTREE) else emptyList(),
-        client,
-        stillCurrent
-    )
+    aidenRequestSoloCapability(AidenRemoteCapability.CHAT_NEW_WORKTREE, client, server, installation, stillCurrent)
 
 /**
  * Revision 64: asks [server] for `chat:continue-in-new-chat` alone. A Mac that refuses it (400 or
@@ -400,13 +364,7 @@ internal suspend fun aidenRequestChatContinueInNewChat(
     installation: AidenInstallation,
     stillCurrent: () -> Boolean = { true }
 ): AidenSoloCapabilityNegotiation? =
-    aidenRequestCapabilitiesAlone(
-        if (aidenShouldRequestChatContinueInNewChat(server, installation)) {
-            listOf(AidenRemoteCapability.CHAT_CONTINUE_IN_NEW_CHAT)
-        } else emptyList(),
-        client,
-        stillCurrent
-    )
+    aidenRequestSoloCapability(AidenRemoteCapability.CHAT_CONTINUE_IN_NEW_CHAT, client, server, installation, stillCurrent)
 
 /**
  * Revision 65: asks [server] for `stream:snapshot-reasons` alone. A Mac that refuses it (400 or
@@ -418,13 +376,7 @@ internal suspend fun aidenRequestStreamSnapshotReasons(
     installation: AidenInstallation,
     stillCurrent: () -> Boolean = { true }
 ): AidenSoloCapabilityNegotiation? =
-    aidenRequestCapabilitiesAlone(
-        if (aidenShouldRequestStreamSnapshotReasons(server, installation)) {
-            listOf(AidenRemoteCapability.STREAM_SNAPSHOT_REASONS)
-        } else emptyList(),
-        client,
-        stillCurrent
-    )
+    aidenRequestSoloCapability(AidenRemoteCapability.STREAM_SNAPSHOT_REASONS, client, server, installation, stillCurrent)
 
 /**
  * Revision 68: asks [server] for `bot:needs-you` alone. A Mac that refuses it (400 or 404) leaves
@@ -436,22 +388,26 @@ internal suspend fun aidenRequestBotNeedsYou(
     installation: AidenInstallation,
     stillCurrent: () -> Boolean = { true }
 ): AidenSoloCapabilityNegotiation? =
-    aidenRequestCapabilitiesAlone(
-        if (aidenShouldRequestBotNeedsYou(server, installation)) {
-            listOf(AidenRemoteCapability.BOT_NEEDS_YOU)
-        } else emptyList(),
-        client,
-        stillCurrent
-    )
+    aidenRequestSoloCapability(AidenRemoteCapability.BOT_NEEDS_YOU, client, server, installation, stillCurrent)
 
 internal suspend fun aidenRequestBotMessaging(
     client: AidenRemoteClient,
     server: AidenServer,
     installation: AidenInstallation,
     stillCurrent: () -> Boolean = { true }
+): AidenSoloCapabilityNegotiation? =
+    aidenRequestSoloCapability(AidenRemoteCapability.BOT_MESSAGING, client, server, installation, stillCurrent)
+
+private suspend fun aidenRequestSoloCapability(
+    capability: AidenRemoteCapability,
+    client: AidenRemoteClient,
+    server: AidenServer,
+    installation: AidenInstallation,
+    stillCurrent: () -> Boolean
 ): AidenSoloCapabilityNegotiation? = aidenRequestCapabilitiesAlone(
-    if (aidenShouldRequestSoloCapability(AidenRemoteCapability.BOT_MESSAGING, server, installation))
-        listOf(AidenRemoteCapability.BOT_MESSAGING) else emptyList(), client, stillCurrent
+    if (aidenShouldRequestSoloCapability(capability, server, installation)) listOf(capability) else emptyList(),
+    client,
+    stillCurrent
 )
 
 private suspend fun aidenRequestCapabilitiesAlone(

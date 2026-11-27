@@ -172,17 +172,6 @@ class AidenBotsViewModel(
         }
     }
 
-    suspend fun loadBotDetail(botId: String): AidenBotDetail? {
-        val client = coordinator.client.value ?: return botCache?.getBotDetail(botId)
-        return try {
-            val detail = client.bot(botId)
-            botCache?.putBotDetail(detail)
-            detail
-        } catch (_: Exception) {
-            botCache?.getBotDetail(botId)
-        }
-    }
-
     /**
      * Deletes a Bot through [deleter] and drops it from the list and saved snapshot.
      * Returns null on success, or a plain message the screen can show.
@@ -275,16 +264,6 @@ class AidenBotsViewModel(
         val next = list.copy(bots = list.bots.filterNot { it.id == bot.id } + bot)
         _botList.value = next
         botCache?.putBotList(next)
-    }
-
-    fun acceptConversation(conversation: AidenBotConversationItem) {
-        val accepted = aidenCanonicalBotConversations(
-            _conversations.value.filterNot { it.chatId == conversation.chatId } + conversation
-        )
-        _conversations.value = accepted
-        botCache?.botConversations?.value?.let { page ->
-            botCache.putBotConversations(page.copy(conversations = accepted))
-        }
     }
 
     companion object {

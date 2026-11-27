@@ -19,11 +19,9 @@ import sbtbiswas.AidenOnTheGo.models.AidenBotUxContractException
 import sbtbiswas.AidenOnTheGo.models.AidenGenerationTimeline
 import sbtbiswas.AidenOnTheGo.models.AidenQuestionContractCodec
 import sbtbiswas.AidenOnTheGo.models.AidenRemoteRunQuestion
-import sbtbiswas.AidenOnTheGo.protocol.AidenRawJsonDuplicateKeyScanner
 import sbtbiswas.AidenOnTheGo.protocol.AidenRemoteContractException
 import sbtbiswas.AidenOnTheGo.protocol.AidenRemoteEventType
 import sbtbiswas.AidenOnTheGo.protocol.AidenRemoteProtocol
-import sbtbiswas.AidenOnTheGo.protocol.AidenSSEParserException
 import java.io.BufferedReader
 import java.io.InputStream
 import java.io.InputStreamReader
@@ -324,60 +322,17 @@ object AidenRunEventCodec {
 /** SSE framing for run feeds. Identical to the turn parser except that a gap
  * snapshot may carry sequence 0. */
 class AidenRunSSEParser {
-    private var eventID: String? = null
-    private var eventName: String? = null
-    private val dataLines = mutableListOf<String>()
-    private var frameBytes = 0
+    private val frameReader = AidenSSEFrameReader(
+        minSequence = 0,
+        decode = AidenRunEventCodec::decode,
+        sequenceOf = { it.sequence },
+        wireTypeOf = ::wireType
+    )
 
-    fun consume(line: String): AidenRemoteRunEvent? {
-        frameBytes += line.toByteArray(Charsets.UTF_8).size + 1
-        if (frameBytes > AidenRemoteProtocol.MAX_SSE_FRAME_BYTES) throw AidenSSEParserException.FrameTooLarge
-        if (line.isEmpty()) return finishFrame()
-        if (line.startsWith(":")) return null
-        val colon = line.indexOf(':')
-        val field = if (colon == -1) line else line.substring(0, colon)
-        var value = if (colon == -1) "" else line.substring(colon + 1)
-        if (value.startsWith(" ")) value = value.substring(1)
-        when (field) {
-            "id" -> eventID = value
-            "event" -> eventName = value
-            "data" -> dataLines.add(value)
-        }
-        return null
-    }
+    fun consume(line: String): AidenRemoteRunEvent? = frameReader.consume(line)
 
     /** EOF is not a frame delimiter: a truncated frame never applies. */
-    fun finish(): AidenRemoteRunEvent? {
-        reset()
-        return null
-    }
-
-    private fun finishFrame(): AidenRemoteRunEvent? {
-        try {
-            if (dataLines.isEmpty()) {
-                if (eventID == null && eventName == null) return null
-                throw AidenSSEParserException.MissingData
-            }
-            val sequence = eventID?.toIntOrNull()
-            if (sequence == null || sequence < 0) throw AidenSSEParserException.InvalidEventID
-            val rawBytes = dataLines.joinToString("\n").toByteArray(Charsets.UTF_8)
-            if (rawBytes.size > AidenRemoteProtocol.MAX_SSE_FRAME_BYTES) throw AidenRemoteContractException.PayloadTooLarge
-            AidenRawJsonDuplicateKeyScanner.validate(rawBytes)
-            val event = AidenRunEventCodec.decode(rawBytes)
-            if (event.sequence != sequence) throw AidenSSEParserException.EventIDMismatch
-            if (eventName != null && eventName != wireType(event)) throw AidenSSEParserException.EventNameMismatch
-            return event
-        } finally {
-            reset()
-        }
-    }
-
-    private fun reset() {
-        eventID = null
-        eventName = null
-        dataLines.clear()
-        frameBytes = 0
-    }
+    fun finish(): AidenRemoteRunEvent? = frameReader.finish()
 
     companion object {
         fun wireType(event: AidenRemoteRunEvent): String = when (val kind = event.kind) {

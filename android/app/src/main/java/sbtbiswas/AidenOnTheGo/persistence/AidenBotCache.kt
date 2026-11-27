@@ -11,7 +11,6 @@ import sbtbiswas.AidenOnTheGo.models.AidenBotDetail
 import sbtbiswas.AidenOnTheGo.models.AidenBotList
 import sbtbiswas.AidenOnTheGo.models.AidenBotSummary
 import java.io.File
-import java.security.MessageDigest
 
 class AidenBotCache(private val storageDir: File) {
     private val json = Json { ignoreUnknownKeys = true; prettyPrint = true }
@@ -160,7 +159,5 @@ class AidenBotCache(private val storageDir: File) {
         }
     }
 
-    private fun digest(value: String): String = MessageDigest.getInstance("SHA-256")
-        .digest(value.toByteArray(Charsets.UTF_8))
-        .joinToString("") { "%02x".format(it) }
+    private fun digest(value: String): String = AidenSha256.hex(value)
 }

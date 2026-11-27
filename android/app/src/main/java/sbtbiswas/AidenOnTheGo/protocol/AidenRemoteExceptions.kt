@@ -11,7 +11,6 @@ sealed class AidenRemoteContractException(message: String) : Exception(message) 
     object InvalidProtocolVersion : AidenRemoteContractException("Invalid protocol version")
     object InvalidStreamIdentity : AidenRemoteContractException("Invalid stream identity")
     object InvalidSequence : AidenRemoteContractException("Invalid sequence number")
-    object InvalidPairingExchange : AidenRemoteContractException("Invalid pairing exchange")
     class ProtocolViolation(message: String = "Protocol violation") : AidenRemoteContractException(message)
 }
 
@@ -49,8 +48,6 @@ sealed class AidenPairingBootstrapException(message: String) : Exception(message
 
 sealed class AidenPairingPayloadException(message: String) : Exception(message) {
     object InvalidKind : AidenPairingPayloadException("Invalid kind")
-    object InvalidTrust : AidenPairingPayloadException("Invalid trust")
-    object InvalidCACertificateData : AidenPairingPayloadException("Invalid CA certificate data")
 }
 
 sealed class AidenSSEParserException(message: String) : Exception(message) {

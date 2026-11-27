@@ -249,38 +249,18 @@ class AidenScheduledRunNotifier(context: Context) {
     }
 
     private fun postBotRoutine(instanceId: String, item: AidenBotRoutineNotification): Boolean {
-        val link = AidenBotRoutineNotificationDelivery.chatUrl(instanceId, item)
-        val intent = Intent(appContext, MainActivity::class.java).apply {
-            action = Intent.ACTION_VIEW
-            link?.let { data = it.toUri() }
-            flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP
-        }
-        val tag = AidenBotRoutineNotificationDelivery.tag(item)
-        val pendingIntent = PendingIntent.getActivity(
-            appContext,
-            tag.hashCode(),
-            intent,
-            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
-        )
         val routineName = displaySafe(item.routineName, 120)
         val preview = displaySafe(item.preview, 200)
         val body = if (preview.isEmpty()) routineName
         else appContext.getString(R.string.notification_bot_routine_body, routineName, preview)
-        val notification = NotificationCompat.Builder(appContext, AidenOnTheGoApp.SCHEDULED_RUNS_CHANNEL_ID)
-            .setSmallIcon(R.mipmap.ic_launcher)
-            .setContentTitle(displaySafe(item.botName, 80))
-            .setContentText(body)
-            .setStyle(NotificationCompat.BigTextStyle().bigText(body))
-            .setContentIntent(pendingIntent)
-            .setAutoCancel(true)
-            .build()
-        return try {
-            notificationManager.notify(tag, BOT_ROUTINE_NOTIFICATION_ID, notification)
-            true
-        } catch (_: SecurityException) {
-            AidenDiagnostics.record(AidenDiagnosticArea.NOTIFICATION, AidenDiagnosticEvent.NOTIFICATION_FAILED, AidenDiagnosticOutcome.DEGRADED, AidenDiagnosticCode.UNAVAILABLE)
-            false
-        }
+        return postNotification(
+            tag = AidenBotRoutineNotificationDelivery.tag(item),
+            id = BOT_ROUTINE_NOTIFICATION_ID,
+            title = displaySafe(item.botName, 80),
+            body = body,
+            link = AidenBotRoutineNotificationDelivery.chatUrl(instanceId, item),
+            setViewAction = true
+        )
     }
 
     /**
@@ -292,51 +272,24 @@ class AidenScheduledRunNotifier(context: Context) {
     fun postBotHandoff(instanceId: String, botId: String, botName: String, handoff: AidenBotHandoff): Boolean {
         if (!notificationsEnabled()) return false
         val link = AidenDeepLink.botChatUrl(botId, instanceId) ?: return false
-        val intent = Intent(appContext, MainActivity::class.java).apply {
-            action = Intent.ACTION_VIEW
-            data = link.toUri()
-            flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP
-        }
-        val tag = botHandoffTag(instanceId, botId, handoff.waitId)
-        val pendingIntent = PendingIntent.getActivity(
-            appContext,
-            tag.hashCode(),
-            intent,
-            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
-        )
         val body = appContext.getString(
             if (handoff.kind == AidenBotHandoffKind.SIGN_IN) R.string.notification_bot_handoff_sign_in
             else R.string.notification_bot_handoff_action
         )
-        val notification = NotificationCompat.Builder(appContext, AidenOnTheGoApp.SCHEDULED_RUNS_CHANNEL_ID)
-            .setSmallIcon(R.mipmap.ic_launcher)
-            .setContentTitle(displaySafe(botName, 120))
-            .setContentText(body)
-            .setContentIntent(pendingIntent)
-            .setOnlyAlertOnce(true)
-            .setAutoCancel(true)
-            .build()
-        return try {
-            notificationManager.notify(tag, BOT_HANDOFF_NOTIFICATION_ID, notification)
-            true
-        } catch (_: SecurityException) {
-            AidenDiagnostics.record(AidenDiagnosticArea.NOTIFICATION, AidenDiagnosticEvent.NOTIFICATION_FAILED, AidenDiagnosticOutcome.DEGRADED, AidenDiagnosticCode.UNAVAILABLE)
-            false
-        }
+        return postNotification(
+            tag = botHandoffTag(instanceId, botId, handoff.waitId),
+            id = BOT_HANDOFF_NOTIFICATION_ID,
+            title = displaySafe(botName, 120),
+            body = body,
+            link = link,
+            setViewAction = true,
+            bigText = false,
+            onlyAlertOnce = true
+        )
     }
 
     private fun post(item: AidenScheduledRunNotification): Boolean {
-        val intent = Intent(appContext, MainActivity::class.java).apply {
-            flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP
-        }
-        val pendingIntent = PendingIntent.getActivity(
-            appContext,
-            item.id.hashCode(),
-            intent,
-            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
-        )
         val failed = item.status == "failed"
-        val title = displaySafe(item.taskName, 120)
         val body = when {
             failed -> appContext.getString(
                 R.string.notification_scheduled_failed,
@@ -345,16 +298,47 @@ class AidenScheduledRunNotifier(context: Context) {
             !item.summary.isNullOrEmpty() -> displaySafe(item.summary, 200)
             else -> appContext.getString(R.string.notification_scheduled_completed)
         }
-        val notification = NotificationCompat.Builder(appContext, AidenOnTheGoApp.SCHEDULED_RUNS_CHANNEL_ID)
+        return postNotification(
+            tag = null,
+            id = item.id.hashCode(),
+            title = displaySafe(item.taskName, 120),
+            body = body
+        )
+    }
+
+    private fun postNotification(
+        tag: String?,
+        id: Int,
+        title: String,
+        body: String,
+        link: String? = null,
+        setViewAction: Boolean = false,
+        bigText: Boolean = true,
+        onlyAlertOnce: Boolean = false
+    ): Boolean {
+        val intent = Intent(appContext, MainActivity::class.java).apply {
+            if (setViewAction) action = Intent.ACTION_VIEW
+            link?.let { data = it.toUri() }
+            flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP
+        }
+        val pendingIntent = PendingIntent.getActivity(
+            appContext,
+            tag?.hashCode() ?: id,
+            intent,
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+        )
+        val builder = NotificationCompat.Builder(appContext, AidenOnTheGoApp.SCHEDULED_RUNS_CHANNEL_ID)
             .setSmallIcon(R.mipmap.ic_launcher)
             .setContentTitle(title)
             .setContentText(body)
-            .setStyle(NotificationCompat.BigTextStyle().bigText(body))
             .setContentIntent(pendingIntent)
             .setAutoCancel(true)
-            .build()
+        if (bigText) builder.setStyle(NotificationCompat.BigTextStyle().bigText(body))
+        if (onlyAlertOnce) builder.setOnlyAlertOnce(true)
+        val notification = builder.build()
         return try {
-            notificationManager.notify(item.id.hashCode(), notification)
+            if (tag != null) notificationManager.notify(tag, id, notification)
+            else notificationManager.notify(id, notification)
             true
         } catch (_: SecurityException) {
             AidenDiagnostics.record(AidenDiagnosticArea.NOTIFICATION, AidenDiagnosticEvent.NOTIFICATION_FAILED, AidenDiagnosticOutcome.DEGRADED, AidenDiagnosticCode.UNAVAILABLE)

@@ -32,6 +32,7 @@ import androidx.compose.ui.platform.LocalResources
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.contentDescription
@@ -749,20 +750,11 @@ private fun AidenBotSessionSkeleton(shimmer: Boolean) {
 private fun AidenBotSessionMessageRow(message: AidenBotSessionEntry.Message) {
     val palette = AidenTheme.palette
     when (message.role) {
-        AidenBotMessageRole.USER -> Column(Modifier.fillMaxWidth(), horizontalAlignment = Alignment.End) {
-            message.label?.let { label ->
-                Text(label, style = MaterialTheme.typography.labelSmall, color = palette.secondary, modifier = Modifier.padding(bottom = 4.dp, end = 4.dp))
-            }
-            val colors = aidenBotUserBubbleColors(MaterialTheme.colorScheme, palette.accentFill, faded = false)
-            Surface(color = colors.container, shape = AidenBotUserBubbleShape, modifier = Modifier.widthIn(max = 320.dp)) {
-                Text(
-                    message.text,
-                    style = MaterialTheme.typography.bodyLarge,
-                    color = colors.content,
-                    modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp)
-                )
-            }
-        }
+        AidenBotMessageRole.USER -> AidenBotPendingBubbleView(
+            text = message.text,
+            faded = false,
+            label = message.label
+        )
         AidenBotMessageRole.ASSISTANT -> Column(Modifier.fillMaxWidth()) {
             AidenBotAssistantBubble(text = message.text, streaming = false)
             if (message.interrupted == true) {
@@ -825,18 +817,28 @@ fun AidenBotFailedTurnCard(canRetry: Boolean, onRetry: () -> Unit) {
     }
 }
 
+@Composable
+internal fun AidenBotCardIcon(
+    icon: ImageVector,
+    tint: Color = AidenTheme.palette.foreground,
+    background: Color = MaterialTheme.colorScheme.surfaceContainerHigh,
+    contentDescription: String? = null
+) {
+    Box(
+        Modifier.size(36.dp).clip(AidenShape.Button).background(background),
+        contentAlignment = Alignment.Center
+    ) {
+        Icon(icon, contentDescription = contentDescription, tint = tint, modifier = Modifier.size(20.dp))
+    }
+}
+
 /** Shown instead of sending while the Bot has no AI model; Set up opens Advanced. */
 @Composable
 fun AidenBotNeedsModelCard(busy: Boolean = false, onSetUp: () -> Unit = {}) {
     val palette = AidenTheme.palette
     Surface(color = palette.raised, shape = MaterialTheme.shapes.large, modifier = Modifier.fillMaxWidth().testTag(AidenBotSessionTags.NEEDS_MODEL_CARD)) {
         Row(Modifier.padding(16.dp), verticalAlignment = Alignment.CenterVertically) {
-            Box(
-                Modifier.size(36.dp).clip(AidenShape.Button).background(palette.warning.copy(alpha = 0.14f)),
-                contentAlignment = Alignment.Center
-            ) {
-                Icon(Icons.Default.Memory, contentDescription = null, tint = palette.warning, modifier = Modifier.size(20.dp))
-            }
+            AidenBotCardIcon(Icons.Default.Memory, tint = palette.warning, background = palette.warning.copy(alpha = 0.14f))
             Spacer(Modifier.width(12.dp))
             Text(
                 stringResource(R.string.bot_session_needs_model),
@@ -948,12 +950,7 @@ fun AidenBotRoutineProposalCard(
     ) {
         Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
-                Box(
-                    Modifier.size(36.dp).clip(AidenShape.Button).background(MaterialTheme.colorScheme.surfaceContainerHigh),
-                    contentAlignment = Alignment.Center
-                ) {
-                    Icon(Icons.Outlined.EventRepeat, contentDescription = null, tint = palette.foreground, modifier = Modifier.size(20.dp))
-                }
+                AidenBotCardIcon(Icons.Outlined.EventRepeat)
                 Spacer(Modifier.width(12.dp))
                 Column(Modifier.weight(1f)) {
                     Text(
@@ -1028,17 +1025,7 @@ fun AidenBotIssueCard(
         modifier = Modifier.fillMaxWidth().testTag(AidenBotSessionTags.ISSUE_CARD)
     ) {
         Row(Modifier.padding(16.dp), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-            Box(
-                Modifier.size(36.dp).clip(AidenShape.Button).background(MaterialTheme.colorScheme.surfaceContainerHigh),
-                contentAlignment = Alignment.Center
-            ) {
-                Icon(
-                    Icons.Outlined.ErrorOutline,
-                    contentDescription = null,
-                    tint = palette.foreground,
-                    modifier = Modifier.size(20.dp)
-                )
-            }
+            AidenBotCardIcon(Icons.Outlined.ErrorOutline)
             Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(6.dp)) {
                 Text(
                     stringResource(R.string.bot_issue_needs_you),

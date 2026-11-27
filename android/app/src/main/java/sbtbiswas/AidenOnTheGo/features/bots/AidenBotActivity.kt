@@ -367,16 +367,21 @@ fun AidenBotStatusLine(ui: AidenBotSessionUiState) {
     }
 }
 
-/** A person's bubble the Mac's transcript doesn't hold yet, aligned like their sent ones. */
+/** A person's bubble (sent or queued), aligned on the trailing edge. */
 @Composable
-private fun AidenBotPendingBubbleView(
+internal fun AidenBotPendingBubbleView(
     text: String,
     faded: Boolean,
     modifier: Modifier = Modifier,
+    label: String? = null,
     caption: @Composable () -> Unit = {}
 ) {
-    val colors = aidenBotUserBubbleColors(MaterialTheme.colorScheme, AidenTheme.palette.accentFill, faded)
+    val palette = AidenTheme.palette
+    val colors = aidenBotUserBubbleColors(MaterialTheme.colorScheme, palette.accentFill, faded)
     Column(horizontalAlignment = Alignment.End, modifier = modifier.fillMaxWidth()) {
+        label?.let {
+            Text(it, style = MaterialTheme.typography.labelSmall, color = palette.secondary, modifier = Modifier.padding(bottom = 4.dp, end = 4.dp))
+        }
         Surface(color = colors.container, shape = AidenBotUserBubbleShape, modifier = Modifier.widthIn(max = 320.dp)) {
             Text(
                 text,

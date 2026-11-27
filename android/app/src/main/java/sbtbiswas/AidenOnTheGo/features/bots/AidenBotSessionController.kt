@@ -16,6 +16,7 @@ import androidx.annotation.StringRes
 import sbtbiswas.AidenOnTheGo.R
 import sbtbiswas.AidenOnTheGo.models.*
 import sbtbiswas.AidenOnTheGo.networking.AidenRemoteClient
+import sbtbiswas.AidenOnTheGo.persistence.AidenSha256
 import sbtbiswas.AidenOnTheGo.protocol.AidenRemoteCapability
 import sbtbiswas.AidenOnTheGo.protocol.AidenRemoteClientException
 import sbtbiswas.AidenOnTheGo.protocol.AidenRemoteErrorCode
@@ -827,11 +828,6 @@ class AidenBotSessionController(
         feedJob = scope.launch { follow() }
     }
 
-    /** The notice was read. */
-    fun dismissNotice() {
-        _state.update { it.copy(notice = null) }
-    }
-
     /**
      * Revision 45 (`bot:images`): the bytes of an image the Bot shared, or null when the Mac can't
      * send them (it left the chat, or the phone is offline). Images are kept while this chat is open,
@@ -864,8 +860,7 @@ class AidenBotSessionController(
 
     private val imageScope: String by lazy {
         val owner = sessionKey?.let { "${it.instanceId}\u0000${it.deviceId}\u0000" }.orEmpty() + botId
-        java.security.MessageDigest.getInstance("SHA-256").digest(owner.toByteArray())
-            .take(12).joinToString("") { "%02x".format(it) }
+        AidenSha256.hex(owner).take(24)
     }
 
     private fun shownSharedImageIds(): Set<String> =

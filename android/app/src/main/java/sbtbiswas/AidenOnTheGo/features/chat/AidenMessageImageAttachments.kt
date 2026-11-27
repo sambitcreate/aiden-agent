@@ -75,11 +75,11 @@ import sbtbiswas.AidenOnTheGo.ui.theme.AidenActivityDot
 import sbtbiswas.AidenOnTheGo.ui.theme.AidenMotion
 import sbtbiswas.AidenOnTheGo.ui.theme.AidenSkeletonBlock
 import sbtbiswas.AidenOnTheGo.ui.theme.AidenShape
+import sbtbiswas.AidenOnTheGo.persistence.AidenSha256
 import sbtbiswas.AidenOnTheGo.ui.theme.AidenUi
 import sbtbiswas.AidenOnTheGo.ui.theme.AidenTheme
 import sbtbiswas.AidenOnTheGo.ui.theme.aidenReduceMotion
 import sbtbiswas.AidenOnTheGo.ui.theme.tactilePress
-import java.security.MessageDigest
 import kotlin.math.abs
 import kotlin.math.max
 import kotlin.math.roundToInt
@@ -839,9 +839,7 @@ private object AidenAttachmentBitmapCache {
 }
 
 internal fun aidenAttachmentThumbnailCacheKey(data: ByteArray, maximumPixelSize: Int): String =
-    "$maximumPixelSize:" + MessageDigest.getInstance("SHA-256")
-        .digest(data)
-        .joinToString("") { "%02x".format(it) }
+    "$maximumPixelSize:${AidenSha256.hex(data)}"
 
 private suspend fun saveImagesToPhotos(
     context: Context,

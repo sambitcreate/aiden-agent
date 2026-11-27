@@ -11,7 +11,6 @@ import sbtbiswas.AidenOnTheGo.models.AidenRunInputPresentation
 import sbtbiswas.AidenOnTheGo.models.AidenTurnStart
 import java.util.UUID
 import java.io.File
-import java.security.MessageDigest
 import java.util.concurrent.ConcurrentHashMap
 
 @Serializable
@@ -264,24 +263,6 @@ class AidenChatDraftStore(
     @Synchronized
     fun getDraft(chatId: String): AidenChatDraft = _drafts.value[chatId] ?: AidenChatDraft()
 
-    @Synchronized
-    fun saveDraft(chatId: String, draft: AidenChatDraft) {
-        val map = _drafts.value.toMutableMap()
-        if (draft.text.isEmpty() && draft.attachmentIds.isEmpty()) {
-            map.remove(chatId)
-        } else {
-            map[chatId] = draft
-        }
-        _drafts.value = map
-    }
-
-    @Synchronized
-    fun clearDraft(chatId: String) {
-        val map = _drafts.value.toMutableMap()
-        map.remove(chatId)
-        _drafts.value = map
-    }
-
     private fun invalidate(instanceId: String, chatId: String) {
         generations.compute(sessionKey(instanceId, chatId)) { _, current -> (current ?: 0L) + 1L }
     }
@@ -307,11 +288,7 @@ class AidenChatDraftStore(
         return File(root, digest(instanceId))
     }
 
-    private fun digest(value: String): String {
-        val md = MessageDigest.getInstance("SHA-256")
-        val hash = md.digest(value.toByteArray(Charsets.UTF_8))
-        return hash.joinToString("") { "%02x".format(it) }
-    }
+    private fun digest(value: String): String = AidenSha256.hex(value)
 
     companion object {
         val shared = AidenChatDraftStore()

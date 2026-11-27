@@ -158,40 +158,6 @@ object AidenAttachmentPreparation {
         )
     }
 
-    fun fileUpload(file: File, preferredName: String? = null, forceImage: Boolean = false): AidenAttachmentUpload {
-        val displayName = preferredName ?: file.name
-        val isImage = forceImage || isImageFile(file.name)
-        val readLimit = if (isImage) MAXIMUM_SOURCE_IMAGE_BYTES else MAXIMUM_TEXT_BYTES
-        val length = file.length()
-        if (length > readLimit && isImage) {
-            throw AidenRemoteContractException.UnsafePayloadField("file exceeds size limit")
-        }
-        val bytes = file.readBytes()
-        if (isImage) {
-            if (bytes.size > readLimit) {
-                throw AidenRemoteContractException.UnsafePayloadField("file exceeds size limit")
-            }
-            return imageUpload(bytes, displayName)
-        }
-        val mimeType = allowedTextMimeType("text/plain", displayName)
-        val readWasTruncated = bytes.size > MAXIMUM_TEXT_BYTES
-        val prefix = if (readWasTruncated) bytes.copyOfRange(0, MAXIMUM_TEXT_BYTES) else bytes
-        val decoded = String(prefix, Charsets.UTF_8)
-        val suffix = "\n… [truncated]"
-        val scalarWasTruncated = decoded.codePointCount(0, decoded.length) > MAXIMUM_TEXT_SCALARS
-        val shouldTruncate = readWasTruncated || scalarWasTruncated
-        val bounded = if (shouldTruncate) {
-            decoded.take(MAXIMUM_TEXT_SCALARS - suffix.length) + suffix
-        } else {
-            decoded
-        }
-        return AidenAttachmentUpload.Text(
-            name = safeDisplayName(displayName),
-            mimeType = mimeType,
-            text = bounded
-        )
-    }
-
     private fun scaleBitmap(bitmap: Bitmap, maxEdge: Float): Bitmap {
         val width = bitmap.width
         val height = bitmap.height
@@ -201,11 +167,6 @@ object AidenAttachmentPreparation {
         val targetWidth = maxOf(1, Math.floor((width * scale).toDouble()).toInt())
         val targetHeight = maxOf(1, Math.floor((height * scale).toDouble()).toInt())
         return Bitmap.createScaledBitmap(bitmap, targetWidth, targetHeight, true)
-    }
-
-    private fun isImageFile(name: String): Boolean {
-        val ext = File(name).extension.lowercase()
-        return ext in setOf("png", "jpg", "jpeg", "heic", "heif", "webp")
     }
 
     private fun safeImageName(value: String, ext: String): String {

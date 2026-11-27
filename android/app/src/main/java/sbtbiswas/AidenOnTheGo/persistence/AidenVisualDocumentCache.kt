@@ -2,7 +2,6 @@ package sbtbiswas.AidenOnTheGo.persistence
 
 import sbtbiswas.AidenOnTheGo.protocol.AidenRemoteClientException
 import java.io.File
-import java.security.MessageDigest
 
 /** Identifies one cached viewer document: the pairing, chat, visual, scheme and theme. */
 data class AidenVisualDocumentKey(
@@ -15,9 +14,7 @@ data class AidenVisualDocumentKey(
 ) {
     /** SHA-256 hex of the fields, NUL-separated so no two keys can run together. */
     val fileName: String
-        get() = MessageDigest.getInstance("SHA-256")
-            .digest(listOf(hostIdentity, chatId, visualId, scheme, theme).joinToString("\u0000").toByteArray(Charsets.UTF_8))
-            .joinToString("") { "%02x".format(it) }
+        get() = AidenSha256.hex(listOf(hostIdentity, chatId, visualId, scheme, theme).joinToString("\u0000"))
 }
 
 /**

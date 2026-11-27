@@ -56,12 +56,6 @@ enum class AidenFontSize(val title: String, val scaleFactor: Float) {
     EXTRA_LARGE("Extra Large", 1.3f)
 }
 
-@Serializable
-enum class AidenDiffMarkerOption(val title: String) {
-    SYMBOLS("Symbols and color"),
-    COLOR_ONLY("Color only")
-}
-
 data class AidenPalette(
     val canvasHex: String,
     val sidebarHex: String,
@@ -259,9 +253,7 @@ data class AidenAppearanceConfig(
     val preset: AidenThemePresetID = AidenThemePresetID.AIDEN,
     val contrast: Int = 50,
     val fontSize: AidenFontSize = AidenFontSize.MEDIUM,
-    val diffMarkers: AidenDiffMarkerOption = AidenDiffMarkerOption.SYMBOLS,
     val reduceMotion: Boolean = false,
-    val privacyMaskExcerpts: Boolean = false,
     /**
      * Revision 61: Show tool activity in Bot chats on this phone. Off by default, as on the Mac
      * and iPhone; it applies only on a Mac that offers the new cards.
@@ -306,18 +298,8 @@ class AidenAppearanceStore(private val storageDir: File) {
         save()
     }
 
-    fun updateContrast(contrast: Int) {
-        _config.value = _config.value.copy(contrast = contrast.coerceIn(0, 100))
-        save()
-    }
-
     fun updateFontSize(fontSize: AidenFontSize) {
         _config.value = _config.value.copy(fontSize = fontSize)
-        save()
-    }
-
-    fun updateDiffMarkers(option: AidenDiffMarkerOption) {
-        _config.value = _config.value.copy(diffMarkers = option)
         save()
     }
 
@@ -328,11 +310,6 @@ class AidenAppearanceStore(private val storageDir: File) {
 
     fun updateShowToolActivity(show: Boolean) {
         _config.value = _config.value.copy(showToolActivity = show)
-        save()
-    }
-
-    fun updatePrivacyMaskExcerpts(mask: Boolean) {
-        _config.value = _config.value.copy(privacyMaskExcerpts = mask)
         save()
     }
 }
