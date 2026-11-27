@@ -272,6 +272,7 @@ import {
 import { EventPresence } from "../components/event-presence";
 import {
   OPENAI_CODEX_PROVIDER_ID,
+  type AppSettings,
   type Attachment,
   type Chat,
   type ChatMeta,
@@ -3323,157 +3324,88 @@ export function ChatPane({ chatId }: { chatId: string }) {
     if (selectionThinkingLevel && providerId && model) select(providerId, model, null);
   }, [model, providerId, select, selectionThinkingLevel]);
 
-  const changeGoogleThinking = React.useCallback(
-    async (level: GoogleThinkingLevel) => {
-      if (
-        !model ||
-        !googleThinkingSupported ||
-        thinkingSaving ||
-        isStartingGeneration ||
-        isGenerating
-      ) {
-        return;
-      }
+  const saveThinkingSetting = React.useCallback(
+    async (
+      enabled: boolean,
+      failureCopy: string,
+      save: () => Promise<AppSettings>,
+      clearOwnLevel = true,
+    ) => {
+      if (!enabled || thinkingSaving || isStartingGeneration || isGenerating) return;
       setThinkingSaving(true);
       try {
-        const updated = await settingsApi.setGoogleThinking(model, level);
+        const updated = await save();
         qc.setQueryData(queryKeys.settings, updated);
-        clearOwnThinkingLevel();
+        if (clearOwnLevel) clearOwnThinkingLevel();
       } catch (changeError) {
-        toast.error(
-          changeError instanceof Error
-            ? changeError.message
-            : "Couldn't save the Gemini thinking level.",
-        );
+        toast.error(changeError instanceof Error ? changeError.message : failureCopy);
       } finally {
         setThinkingSaving(false);
       }
     },
-    [clearOwnThinkingLevel, googleThinkingSupported, isGenerating, isStartingGeneration, model, qc, thinkingSaving],
+    [clearOwnThinkingLevel, isGenerating, isStartingGeneration, qc, thinkingSaving],
+  );
+
+  const changeGoogleThinking = React.useCallback(
+    (level: GoogleThinkingLevel) => {
+      if (!model) return Promise.resolve();
+      return saveThinkingSetting(
+        googleThinkingSupported,
+        "Couldn't save the Gemini thinking level.",
+        () => settingsApi.setGoogleThinking(model, level),
+      );
+    },
+    [googleThinkingSupported, model, saveThinkingSetting],
   );
 
   const changeCodexThinking = React.useCallback(
-    async (level: CodexThinkingLevel) => {
-      if (
-        !model ||
-        !codexThinkingSupported ||
-        thinkingSaving ||
-        isStartingGeneration ||
-        isGenerating
-      ) {
-        return;
-      }
-      setThinkingSaving(true);
-      try {
-        const updated = await settingsApi.setCodexThinking(model, level);
-        qc.setQueryData(queryKeys.settings, updated);
-        clearOwnThinkingLevel();
-      } catch (changeError) {
-        toast.error(
-          changeError instanceof Error
-            ? changeError.message
-            : "Couldn't save the Codex thinking level.",
-        );
-      } finally {
-        setThinkingSaving(false);
-      }
+    (level: CodexThinkingLevel) => {
+      if (!model) return Promise.resolve();
+      return saveThinkingSetting(
+        codexThinkingSupported,
+        "Couldn't save the Codex thinking level.",
+        () => settingsApi.setCodexThinking(model, level),
+      );
     },
-    [clearOwnThinkingLevel, codexThinkingSupported, isGenerating, isStartingGeneration, model, qc, thinkingSaving],
+    [codexThinkingSupported, model, saveThinkingSetting],
   );
 
   const changeAnthropicThinking = React.useCallback(
-    async (level: AnthropicThinkingLevel) => {
-      if (
-        !model ||
-        !anthropicThinkingSupported ||
-        thinkingSaving ||
-        isStartingGeneration ||
-        isGenerating
-      ) {
-        return;
-      }
-      setThinkingSaving(true);
-      try {
-        const updated = await settingsApi.setAnthropicThinking(model, level);
-        qc.setQueryData(queryKeys.settings, updated);
-        clearOwnThinkingLevel();
-      } catch (changeError) {
-        toast.error(
-          changeError instanceof Error
-            ? changeError.message
-            : "Couldn't save the Claude thinking level.",
-        );
-      } finally {
-        setThinkingSaving(false);
-      }
+    (level: AnthropicThinkingLevel) => {
+      if (!model) return Promise.resolve();
+      return saveThinkingSetting(
+        anthropicThinkingSupported,
+        "Couldn't save the Claude thinking level.",
+        () => settingsApi.setAnthropicThinking(model, level),
+      );
     },
-    [anthropicThinkingSupported, clearOwnThinkingLevel, isGenerating, isStartingGeneration, model, qc, thinkingSaving],
+    [anthropicThinkingSupported, model, saveThinkingSetting],
   );
 
   const changeProviderThinking = React.useCallback(
-    async (level: GenerationThinkingLevel) => {
-      if (
-        !model ||
-        !providerThinkingSupported ||
-        thinkingSaving ||
-        isStartingGeneration ||
-        isGenerating
-      )
-        return;
-      setThinkingSaving(true);
-      try {
-        const updated = await settingsApi.setProviderThinking(providerId, model, level);
-        qc.setQueryData(queryKeys.settings, updated);
-        clearOwnThinkingLevel();
-      } catch (changeError) {
-        toast.error(
-          changeError instanceof Error
-            ? changeError.message
-            : "Couldn't save this model's thinking level.",
-        );
-      } finally {
-        setThinkingSaving(false);
-      }
+    (level: GenerationThinkingLevel) => {
+      if (!model) return Promise.resolve();
+      return saveThinkingSetting(
+        providerThinkingSupported,
+        "Couldn't save this model's thinking level.",
+        () => settingsApi.setProviderThinking(providerId, model, level),
+      );
     },
-    [
-      clearOwnThinkingLevel,
-      isGenerating,
-      isStartingGeneration,
-      model,
-      providerId,
-      providerThinkingSupported,
-      qc,
-      thinkingSaving,
-    ],
+    [model, providerId, providerThinkingSupported, saveThinkingSetting],
   );
 
   const changeLocalReasoningVisibility = React.useCallback(
-    async (visible: boolean) => {
-      if (
-        !localReasoningVisibilitySupported ||
-        thinkingSaving ||
-        isStartingGeneration ||
-        isGenerating
-      ) {
-        return;
-      }
-      setThinkingSaving(true);
-      try {
-        const updated = await settingsApi.set({
-          showLocalModelReasoning: visible,
-        });
-        qc.setQueryData(queryKeys.settings, updated);
-      } catch (changeError) {
-        toast.error(
-          changeError instanceof Error
-            ? changeError.message
-            : "Couldn't save the local reasoning visibility.",
-        );
-      } finally {
-        setThinkingSaving(false);
-      }
-    },
-    [isGenerating, isStartingGeneration, localReasoningVisibilitySupported, qc, thinkingSaving],
+    (visible: boolean) =>
+      saveThinkingSetting(
+        localReasoningVisibilitySupported,
+        "Couldn't save the local reasoning visibility.",
+        () =>
+          settingsApi.set({
+            showLocalModelReasoning: visible,
+          }),
+        false,
+      ),
+    [localReasoningVisibilitySupported, saveThinkingSetting],
   );
 
   // One busy signal for every way of changing a draft's workspace (chip,
