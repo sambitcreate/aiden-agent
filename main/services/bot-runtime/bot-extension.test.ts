@@ -7,19 +7,7 @@ import { after, test } from "node:test";
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
 import { getCurrentSystemPrompt, getCurrentTools, type Message } from "@earendil-works/pi-ai";
 import { fauxAssistantMessage, fauxToolCall } from "@earendil-works/pi-ai/providers/faux";
-import {
-  defineExtension,
-  GenerationTask,
-  Harness,
-  hook,
-  MemoryStorage,
-  ToolResultEntry,
-  ToolTask,
-  type Conversation,
-  type Extension,
-  type GenerationHooks,
-  type ToolHooks,
-} from "@earendil-works/pi-durable";
+import { defineExtension, GenerationTask, Harness, hook, MemoryStorage, ToolTask, type Conversation, type Extension, type GenerationHooks, type ToolHooks } from "@earendil-works/pi-durable";
 import { createBotApprovals, publicBotApprovalPrompt } from "./bot-approvals.js";
 import { renderBotMemorySection, withBotMemoryEdits } from "../bot-memory/prompt.js";
 import { createBotMemoryService, type BotMemoryRuntime } from "../bot-memory/service.js";
@@ -43,6 +31,7 @@ import { spawnHarnessChild } from "./test-support/child.js";
 import { approvalReplayDeps, SCENARIO_RULE_HANDOFF, SCENARIO_SCRIPT_TOOL } from "./test-support/extension-scenario.js";
 import { countingTool, recordingDeps } from "./test-support/fixtures.js";
 import { createFauxModels, FAUX_MODEL_REF, waitFor, type FauxModels } from "./test-support/faux.js";
+import { botToolResults, openBotHarness } from "./test-support/harness.js";
 
 const ctx = BACKGROUND_CONTEXT;
 const scenarioFile = path.join(path.dirname(fileURLToPath(import.meta.url)), "test-support", "extension-scenario.ts");
@@ -56,22 +45,10 @@ after(() => {
   for (const root of roots) rmSync(root, { recursive: true, force: true });
 });
 
-type ToolResultModel = { isError: boolean; toolName: string; toolCallId: string; content: Array<{ text?: string }> };
-
-async function toolResults(root: Conversation): Promise<ToolResultModel[]> {
-  const view = await root.context(ctx);
-  return view.entries
-    .filter((entry) => entry.kind === ToolResultEntry.kind)
-    .map((entry) => (entry as unknown as { model: ToolResultModel[] }).model[0]!);
-}
+const toolResults = (root: Conversation) => botToolResults(root, ctx);
 
 async function memoryHarness(deps: BotExtensionDeps, fauxModels: FauxModels) {
-  const registry = createBotRegistry("bot-1", deps);
-  await registry.refresh();
-  const harness = await Harness.open(new MemoryStorage(), { models: fauxModels.models, registry }, ctx);
-  registry.attachHarness(harness);
-  const root = await harness.root(ctx, { agent: { model: FAUX_MODEL_REF } });
-  return { harness, root, registry };
+  return openBotHarness({ botId: "bot-1", deps, fauxModels, ctx });
 }
 
 /** Reopen a profile that a killed child left behind, with parent-side deps. */
@@ -1328,15 +1305,13 @@ test("(hk6) a PreCompact hook's messages reach the person through the Bot's repo
     reported.push(...lines);
   };
   deps.beforeCompact = async () => ({ summary: "Kept." });
-  const registry = createBotRegistry("bot-1", deps);
-  await registry.refresh();
-  const harness = await Harness.open(
-    new MemoryStorage(),
-    { models: fauxModels.models, registry, settings: { compaction: { keepRecentTokens: 100, backgroundTokens: 0 } } },
+  const { harness, root } = await openBotHarness({
+    botId: "bot-1",
+    deps,
+    fauxModels,
     ctx,
-  );
-  registry.attachHarness(harness);
-  const root = await harness.root(ctx, { agent: { model: FAUX_MODEL_REF } });
+    settings: { compaction: { keepRecentTokens: 100, backgroundTokens: 0 } },
+  });
   try {
     await (await root.submit({ type: "input", content: `Hello. ${"Some background. ".repeat(60)}` }, ctx)).wait(ctx);
     await (await root.submit({ type: "input", content: "ok" }, ctx)).wait(ctx);

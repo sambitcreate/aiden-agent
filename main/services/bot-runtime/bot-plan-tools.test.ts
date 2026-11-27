@@ -6,7 +6,7 @@ import path from "node:path";
 import { test, type TestContext } from "node:test";
 import type { JsonValue } from "@earendil-works/chord/json";
 import { BACKGROUND_CONTEXT as ctx } from "@earendil-works/chord/context";
-import { Harness, LiveDoc, MemoryStorage, ToolResultEntry } from "@earendil-works/pi-durable";
+import { LiveDoc, ToolResultEntry } from "@earendil-works/pi-durable";
 import { fauxAssistantMessage, fauxToolCall } from "@earendil-works/pi-ai/providers/faux";
 import { botMessageRequestId, botMessageTurnOf } from "../../../renderer/shared/bot-messages.js";
 import { createBotPlans } from "../bot-plans/plans.js";
@@ -26,6 +26,7 @@ import { botIngressAllowsTool, type BotToolFacts } from "./bot-tool-policy.js";
 import { assemblyDeps, assemblyState, MAIL_SERVER, SEND_EMAIL_TOOL, testAuthority } from "./test-support/assembly-fixtures.js";
 import { countingTool, recordingDeps } from "./test-support/fixtures.js";
 import { createFauxModels, FAUX_MODEL_REF, waitFor } from "./test-support/faux.js";
+import { openBotHarness } from "./test-support/harness.js";
 import type { BotToolCall } from "./tool-adapter.js";
 import type { BotToolCandidate } from "./bot-tool-assembly.js";
 import { BOT_PLAN_MEMO, planStepCandidate, proposePlanCandidate, type BotPlanToolDeps } from "./bot-plan-tools.js";
@@ -397,12 +398,8 @@ test("replay rejects a changed authoritative deadline instead of renewing its or
 const entryOf = (candidate: BotToolCandidate) => ({ ...candidate, replay: candidate.replay ?? "unsafe" as const });
 async function memoryHarness(f: Awaited<ReturnType<typeof fixture>>, responses: Parameters<typeof createFauxModels>[0], extra: BotToolCandidate[] = []) {
   const deps = { ...recordingDeps({ tools: [f.candidate(), planStepCandidate(BOT, f.deps.plans), ...extra].map(entryOf) }), turnAllows: botIngressAllowsTool };
-  const registry = createBotRegistry(BOT, deps);
-  await registry.refresh();
   const faux = createFauxModels(responses);
-  const harness = await Harness.open(new MemoryStorage(), { registry, models: faux.models }, ctx);
-  registry.attachHarness(harness);
-  const conversation = await harness.root(ctx, { agent: { model: FAUX_MODEL_REF } });
+  const { harness, root: conversation } = await openBotHarness({ botId: BOT, deps, fauxModels: faux, ctx });
   return { harness, conversation, faux, deps };
 }
 const toolStep = (name: string, args: unknown) => fauxAssistantMessage([fauxToolCall(name, JSON.parse(JSON.stringify(args)) as import("@earendil-works/pi-ai").JsonObject)], { stopReason: "toolUse" });
@@ -504,9 +501,7 @@ for (const final of [false, true]) test(`durable mixed tool round ${final ? "end
   const deps = assemblyDeps(state, { plans, candidates: () => [step, { tool, mcp: true }], approve: async () => "deny" });
   const work = fauxToolCall(tool.name, { text: "report" }, { id: "work" }), mark = fauxToolCall("plan_step", { step: 1, status: "done" }, { id: "mark" });
   const faux = createFauxModels([fauxAssistantMessage(final ? [mark, work] : [work, mark], { stopReason: "toolUse" }), fauxAssistantMessage("done")]);
-  const registry = createBotRegistry(BOT, deps); await registry.refresh();
-  const harness = await Harness.open(new MemoryStorage(), { registry, models: faux.models }, ctx); registry.attachHarness(harness);
-  const conversation = await harness.root(ctx, { agent: { model: FAUX_MODEL_REF } });
+  const { harness, root: conversation } = await openBotHarness({ botId: BOT, deps, fauxModels: faux, ctx });
   try {
     arm = !final;
     const submitted = await conversation.submit({ type: "input", content: "Send reports", requestId: "person" }, ctx);

@@ -4,8 +4,8 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { openNodeSqliteStorage } from "@earendil-works/pi-durable/storage/sqlite/node";
-import { createBotRegistry } from "../bot-runtime/bot-extension.js";
 import { recordingDeps } from "../bot-runtime/test-support/fixtures.js";
+import { openBotHarness } from "../bot-runtime/test-support/harness.js";
 import { Harness, MemoryStorage, createRegistry } from "@earendil-works/pi-durable";
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
 import { fauxAssistantMessage, fauxToolCall } from "@earendil-works/pi-ai/providers/faux";
@@ -97,9 +97,14 @@ test("Stop on a reopened paused harness does not resume unrelated compaction or 
 test("continued queued requests still pass the Bot spending gate before any provider effect", async (t) => {
   let entered = false, refuse = false;
   const faux = createFauxModels([(_messages, options) => { entered = true; return new Promise((resolve) => { options?.signal?.addEventListener("abort", () => resolve(fauxAssistantMessage("partial", { stopReason: "aborted" })), { once: true }); }); }, fauxAssistantMessage("must be blocked")]);
-  const registry = createBotRegistry("bot:one", { ...recordingDeps(), spending: { refusal: async () => refuse ? "Bot budget exhausted" : undefined, record: async () => {} } }); await registry.refresh();
-  const harness = await Harness.open(new MemoryStorage(), { models: faux.models, registry }, ctx); registry.attachHarness(harness); t.after(() => harness.close(ctx));
-  const root = await harness.root(ctx, { agent: { model: FAUX_MODEL_REF } }); const a = await root.submit({ type: "input", content: "A", requestId: "person-A" }, ctx); await waitFor(() => entered);
+  const { harness, root } = await openBotHarness({
+    botId: "bot:one",
+    deps: { ...recordingDeps(), spending: { refusal: async () => refuse ? "Bot budget exhausted" : undefined, record: async () => {} } },
+    fauxModels: faux,
+    ctx,
+    t,
+  });
+  const a = await root.submit({ type: "input", content: "A", requestId: "person-A" }, ctx); await waitFor(() => entered);
   const b = await root.submit({ type: "input", content: "B", requestId: "person-B", whenBusy: "followUp" }, ctx); refuse = true;
   assert.equal(await stopLinkedBotWork(harness, root.id, String(a.id), { intentId: "budget-stop", mayContinue: async () => true }), "stopped");
   assert.equal((await b.wait(ctx)).status, "unanswered"); assert.equal(faux.calls(), 1);

@@ -7,7 +7,7 @@ import { after, test } from "node:test";
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
 import { getCurrentTools, type ToolCall } from "@earendil-works/pi-ai";
 import { fauxAssistantMessage, fauxToolCall } from "@earendil-works/pi-ai/providers/faux";
-import { Harness, MemoryStorage, ToolResultEntry, type Conversation } from "@earendil-works/pi-durable";
+import { ToolResultEntry, type Conversation } from "@earendil-works/pi-durable";
 import type { BotTranscriptEntry } from "../../../renderer/shared/bot-live.js";
 import { createBotRegistry, type BotRegistry } from "./bot-extension.js";
 import { createBotHarnessHost, type BotHarnessHost } from "./harness-host.js";
@@ -21,6 +21,7 @@ import { projectBotTranscript } from "./live-projection.js";
 import { spawnHarnessChild } from "./test-support/child.js";
 import { recordingDeps } from "./test-support/fixtures.js";
 import { createFauxModels, FAUX_MODEL_REF, waitFor, type FauxModels } from "./test-support/faux.js";
+import { openBotHarness } from "./test-support/harness.js";
 import { HANDOFF_ARGS, HANDOFF_TOOL_NAME, handoffEntries } from "./test-support/handoff-fixtures.js";
 
 const ctx = BACKGROUND_CONTEXT;
@@ -57,11 +58,7 @@ async function answerRows(conversation: Conversation): Promise<Array<Extract<Bot
 
 async function memoryHarness(botId: string, handoffs: BotHandoffs, fauxModels: FauxModels, handoffDeps: BotHandoffDeps = {}) {
   const deps = recordingDeps({ tools: handoffEntries(handoffs, botId, handoffDeps) });
-  const registry: BotRegistry = createBotRegistry(botId, deps);
-  await registry.refresh();
-  const harness = await Harness.open(new MemoryStorage(), { models: fauxModels.models, registry }, ctx);
-  registry.attachHarness(harness);
-  const root = await harness.root(ctx, { agent: { model: FAUX_MODEL_REF } });
+  const { harness, root } = await openBotHarness({ botId, deps, fauxModels, ctx });
   return { harness, root };
 }
 

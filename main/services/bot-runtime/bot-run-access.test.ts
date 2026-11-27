@@ -11,12 +11,12 @@ import path from "node:path";
 import os from "node:os";
 import { BotAccessRequestStaleError } from "./bot-access-requests.js";
 import { BACKGROUND_CONTEXT as ctx } from "@earendil-works/chord/context";
-import { Harness, MemoryStorage, ToolResultEntry } from "@earendil-works/pi-durable";
+import { ToolResultEntry } from "@earendil-works/pi-durable";
 import { fauxAssistantMessage, fauxToolCall } from "@earendil-works/pi-ai/providers/faux";
-import { createBotRegistry } from "./bot-extension.js";
 import { botFileCandidates } from "./bot-file-candidates.js";
 import { countingTool, recordingDeps } from "./test-support/fixtures.js";
-import { createFauxModels, FAUX_MODEL_REF, waitFor } from "./test-support/faux.js";
+import { createFauxModels, waitFor } from "./test-support/faux.js";
+import { openBotHarness } from "./test-support/harness.js";
 
 const grant: BotRunAccessGrant = {
   requestIds: ["r1"],
@@ -145,13 +145,8 @@ test("real harness shares access with a joined steer but excludes queued and lat
       ...files.map((entry) => ({ ...entry, replay: "safe" as const })),
     ],
   });
-  const registry = createBotRegistry("ada", deps);
-  await registry.refresh();
-  const storage = new MemoryStorage();
-  const harness = await Harness.open(storage, { models: faux.models, registry }, ctx);
-  registry.attachHarness(harness);
+  const { harness, root } = await openBotHarness({ botId: "ada", deps, fauxModels: faux, ctx });
   try {
-    const root = await harness.root(ctx, { agent: { model: FAUX_MODEL_REF } });
     const first = await root.submit({ type: "input", content: "start", requestId: "r1" }, ctx);
     await waitFor(() => entered);
     const stat = await fs.stat(temp, { bigint: true });
@@ -245,19 +240,13 @@ test("read grants block real direct and nested codemode mutations while reads an
             ),
             fauxAssistantMessage("done"),
           ]);
-          const registry = createBotRegistry(
-            "ada",
-            recordingDeps({ tools: tools.map((entry) => ({ ...entry, replay: "safe" as const })) }),
-          );
-          await registry.refresh();
-          const harness = await Harness.open(
-            new MemoryStorage(),
-            { models: faux.models, registry },
+          const { harness, root } = await openBotHarness({
+            botId: "ada",
+            deps: recordingDeps({ tools: tools.map((entry) => ({ ...entry, replay: "safe" as const })) }),
+            fauxModels: faux,
             ctx,
-          );
-          registry.attachHarness(harness);
+          });
           try {
-            const root = await harness.root(ctx, { agent: { model: FAUX_MODEL_REF } });
             await (
               await root.submit({ type: "input", content: "do it", requestId: "r1" }, ctx)
             ).wait(ctx);

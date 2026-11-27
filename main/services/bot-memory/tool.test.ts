@@ -6,11 +6,12 @@ import { after, test } from "node:test";
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
 import { getCurrentTools } from "@earendil-works/pi-ai";
 import { fauxAssistantMessage, fauxToolCall } from "@earendil-works/pi-ai/providers/faux";
-import { Harness, MemoryStorage, ToolResultEntry, type Conversation } from "@earendil-works/pi-durable";
-import { createBotRegistry, type BotExtensionDeps } from "../bot-runtime/bot-extension.js";
+import { ToolResultEntry, type Conversation } from "@earendil-works/pi-durable";
+import { type BotExtensionDeps } from "../bot-runtime/bot-extension.js";
 import { botIngressAllowsTool, botIngressRefusal } from "../bot-runtime/bot-tool-policy.js";
 import { holdNextRead, recordingDeps } from "../bot-runtime/test-support/fixtures.js";
-import { createFauxModels, FAUX_MODEL_REF, type FauxModels } from "../bot-runtime/test-support/faux.js";
+import { botToolResults, openBotHarness } from "../bot-runtime/test-support/harness.js";
+import { createFauxModels, type FauxModels } from "../bot-runtime/test-support/faux.js";
 import { createBotMemoryService } from "./service.js";
 import { createBotMemoryStore } from "./store.js";
 import { botRecallToolEntry } from "./recall.js";
@@ -40,21 +41,12 @@ async function harnessWith(memory: ReturnType<typeof memoryFor>["memory"], fauxM
     turnAllows: withBotMemoryIngress(botIngressAllowsTool),
     turnRefusal: botIngressRefusal,
   };
-  const registry = createBotRegistry(BOT, deps);
-  await registry.refresh();
-  const harness = await Harness.open(new MemoryStorage(), { models: fauxModels.models, registry }, ctx);
-  registry.attachHarness(harness);
-  const root = await harness.root(ctx, { agent: { model: FAUX_MODEL_REF } });
+  const { harness, root } = await openBotHarness({ botId: BOT, deps, fauxModels, ctx });
   return { harness, root };
 }
 
-type ToolResultModel = { isError: boolean; toolName: string; content: Array<{ text?: string }> };
-
 async function memoryResults(root: Conversation): Promise<Array<{ isError: boolean; json: Record<string, unknown> }>> {
-  const view = await root.context(ctx);
-  return view.entries
-    .filter((entry) => entry.kind === ToolResultEntry.kind)
-    .map((entry) => (entry as unknown as { model: ToolResultModel[] }).model[0]!)
+  return (await botToolResults(root, ctx))
     .filter((result) => result.toolName === BOT_MEMORY_TOOL_NAME)
     .map((result) => ({ isError: result.isError, json: JSON.parse(result.content[0]!.text ?? "{}") as Record<string, unknown> }));
 }
@@ -213,15 +205,16 @@ test("a routine can recall person history while memory writes remain withheld", 
     },
     fauxAssistantMessage("Here is your brief."),
   ]);
-  const registry = createBotRegistry(BOT, {
-    ...recordingDeps(),
-    currentTools: async () => [botMemoryToolEntry(BOT, memory), botRecallToolEntry()],
-    turnAllows: withBotMemoryIngress(botIngressAllowsTool),
+  const { harness, root } = await openBotHarness({
+    botId: BOT,
+    deps: {
+      ...recordingDeps(),
+      currentTools: async () => [botMemoryToolEntry(BOT, memory), botRecallToolEntry()],
+      turnAllows: withBotMemoryIngress(botIngressAllowsTool),
+    },
+    fauxModels: faux,
+    ctx,
   });
-  await registry.refresh();
-  const harness = await Harness.open(new MemoryStorage(), { models: faux.models, registry }, ctx);
-  registry.attachHarness(harness);
-  const root = await harness.root(ctx, { agent: { model: FAUX_MODEL_REF } });
   try {
     await (await root.submit({ type: "input", content: "My Lisbon trip is next week." }, ctx)).wait(ctx);
     await (
