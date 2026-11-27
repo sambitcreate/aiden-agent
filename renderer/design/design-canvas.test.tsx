@@ -1090,3 +1090,186 @@ test("3c: a grouped frame changed to Desktop still fits its group", async () => 
     assert.ok(box.y <= app.y && app.y + app.h <= box.y + box.h, "and the taller one");
   }, SAVE_WAIT);
 });
+
+// ── 3c: ⌘D, More, the overlay key guard and the page-file actions (S93–S97) ──
+
+const calledWith = (calls: BotTestIpcCall[], channel: string) => calls.filter((call) => call.channel === channel);
+
+/** A canvas whose saves answer from the revision they were based on, so main can move it on between saves. */
+function serverCanvas(initial: DesignCanvas) {
+  let current = initial;
+  return {
+    get: () => current,
+    set: (next: DesignCanvas) => {
+      current = next;
+    },
+    handlers: {
+      "designCanvas:get": () => current,
+      "designCanvas:save": (...args: unknown[]) => {
+        const next = { ...(args[1] as DesignCanvas), revision: (args[2] as number) + 1 };
+        current = next;
+        return { ok: true, revision: next.revision };
+      },
+    },
+  };
+}
+
+async function openMore() {
+  const more = screen.getByRole("button", { name: "More actions for Pricing" });
+  fireEvent.pointerDown(more, { button: 0, ctrlKey: false, pointerType: "mouse" });
+  await screen.findByRole("menuitem", { name: "Move page file to Trash…" });
+  return more;
+}
+
+test("3c: ⌘D with one app frame selected duplicates its page, after saving what's pending", async () => {
+  const { calls, region } = await mountLiveApp(canvasWith(liveAppFrame()), {
+    "designCanvas:appPageVariant": () => ({ placed: "v2", pageId: "page-1", route: "/pricing-v2", file: "src/routes/pricing-v2.tsx" }),
+  });
+  fireEvent.click(screen.getByRole("group", { name: "Pricing" }));
+  await chooseDevice(/iPad/u);
+  region.focus();
+  fireEvent.keyDown(region, { key: "d", code: "KeyD", ...commandKey });
+  await waitFor(() => assert.equal(calledWith(calls, "designCanvas:appPageVariant").length, 1), SAVE_WAIT);
+  const variant = calls.findIndex((call) => call.channel === "designCanvas:appPageVariant");
+  const lastSave = calls.slice(0, variant).filter((call) => call.channel === "designCanvas:save").pop();
+  assert.deepEqual((lastSave?.args[1] as DesignCanvas).frames[0]?.viewport, { width: 768, height: 1024 }, "the device change was saved first");
+  assert.deepEqual(calls[variant]?.args, ["chat-1", { frameId: "app-1" }]);
+});
+
+test("3c: ⌘D with two frames, a non-app frame, or the flag off duplicates as today", async () => {
+  for (const [frames, live, name] of [
+    [[liveAppFrame(), sticky("n1", "Note")], true, "Pricing"],
+    [[sticky("n1", "Note")], true, "Note"],
+    [[liveAppFrame()], false, "Pricing"],
+  ] as const) {
+    const ipc = setup(canvasWith(...frames), { "designApp:status:get": () => APP_SNAPSHOT });
+    const region = await mount({ designLive: live });
+    if (frames.length === 2) {
+      // xyflow adds to the selection while its multi-select key is held down.
+      const held = isMacPlatform() ? "Meta" : "Control";
+      fireEvent.click(screen.getByRole("group", { name: "Pricing" }));
+      fireEvent.keyDown(document, { key: held, code: held === "Meta" ? "MetaLeft" : "ControlLeft" });
+      fireEvent.click(screen.getByRole("group", { name: "Note" }), { metaKey: held === "Meta", ctrlKey: held === "Control" });
+      fireEvent.keyUp(document, { key: held, code: held === "Meta" ? "MetaLeft" : "ControlLeft" });
+    } else {
+      fireEvent.click(screen.getByRole("group", { name }));
+    }
+    region.focus();
+    fireEvent.keyDown(region, { key: "d", code: "KeyD", ...commandKey });
+    await waitFor(() => assert.equal(ipc.saved()?.frames.length, frames.length * 2, "copies on the canvas"), SAVE_WAIT);
+    assert.equal(calledWith(ipc.calls, "designCanvas:appPageVariant").length, 0);
+    cleanup();
+  }
+});
+
+test("3c: ⌘D and ⌫ do nothing while a frame menu or the Trash confirmation is open", async () => {
+  const { calls, saved } = await mountLiveApp(canvasWith(liveAppFrame()));
+  fireEvent.click(screen.getByRole("group", { name: "Pricing" }));
+  await openMore();
+  const item = screen.getByRole("menuitem", { name: "Move page file to Trash…" });
+  fireEvent.keyDown(item, { key: "Backspace", code: "Backspace" });
+  fireEvent.keyDown(item, { key: "d", code: "KeyD", ...commandKey });
+  fireEvent.click(item);
+  const cancel = await screen.findByRole("button", { name: "Cancel" });
+  fireEvent.keyDown(cancel, { key: "Backspace", code: "Backspace" });
+  fireEvent.keyDown(cancel, { key: "d", code: "KeyD", ...commandKey });
+  await act(async () => {
+    await new Promise((resolve) => setTimeout(resolve, DESIGN_CANVAS_SAVE_DELAY_MS + 50));
+  });
+  assert.ok(screen.getByRole("group", { name: "Pricing" }), "the frame is still there");
+  assert.equal(saved(), undefined, "nothing was changed");
+  assert.equal(calledWith(calls, "designCanvas:appPageVariant").length + calledWith(calls, "designCanvas:appPageTrash").length, 0);
+});
+
+test("3c: ⌫ does nothing while the Download menu is open, with the flag off", async () => {
+  const hero: DesignFrame = { id: "f1", kind: "file", title: "Hero", x: 0, y: 0, w: 640, h: 436, path: "design/hero.html", designWidth: 1280, pageId: "page-1", createdBy: "aiden" };
+  const { saved } = setup(canvasWith(hero));
+  await mount({ designLive: false });
+  fireEvent.click(screen.getByRole("group", { name: "Hero" }));
+  fireEvent.pointerDown(screen.getByRole("button", { name: "Download Hero" }), { button: 0, ctrlKey: false, pointerType: "mouse" });
+  const item = await screen.findByRole("menuitem", { name: "PNG image" });
+  fireEvent.keyDown(item, { key: "Backspace", code: "Backspace" });
+  await act(async () => {
+    await new Promise((resolve) => setTimeout(resolve, DESIGN_CANVAS_SAVE_DELAY_MS + 50));
+  });
+  // The open menu hides the rest of the window from assistive tech, so the frame is looked up past that.
+  assert.ok(screen.getByRole("group", { name: "Hero", hidden: true }));
+  assert.equal(saved(), undefined);
+});
+
+test("3c: a refusal shows its reason, and Ask Aiden queues a note on the frame", async () => {
+  render(<Toaster />);
+  const { saved } = await mountLiveApp(canvasWith(liveAppFrame()), { "designCanvas:appPageVariant": () => ({ error: "dynamic" }) });
+  fireEvent.click(screen.getByRole("group", { name: "Pricing" }));
+  await openMore();
+  fireEvent.click(screen.getByRole("menuitem", { name: /Duplicate page as variant/u }));
+  assert.ok(await screen.findByText("This page comes from a dynamic route, so copying its file would copy every page it serves.", {}, SAVE_WAIT));
+  fireEvent.click(screen.getByRole("button", { name: "Ask Aiden" }));
+  await waitFor(() => {
+    const note = saved()?.comments[0];
+    assert.deepEqual([note?.note, note?.queued, note?.frameId], ["Duplicate this page as a variant named /pricing-v2.", true, "app-1"]);
+  }, SAVE_WAIT);
+});
+
+test("3c: Trash dims the page's frames at once and puts them back on failure", async () => {
+  render(<Toaster />);
+  let answer: (value: unknown) => void = () => undefined;
+  await mountLiveApp(canvasWith(liveAppFrame(), liveAppFrame({ id: "app-2", x: 700, route: "/pricing?plan=pro", title: "Pro" })), {
+    "designCanvas:appPageTrash": () => new Promise((resolve) => (answer = resolve)),
+  });
+  fireEvent.click(screen.getByRole("group", { name: "Pricing" }));
+  await openMore();
+  fireEvent.click(screen.getByRole("menuitem", { name: "Move page file to Trash…" }));
+  fireEvent.click(await screen.findByRole("button", { name: "Move to Trash" }));
+  await waitFor(() => {
+    assert.equal(screen.getByRole("group", { name: "Pricing" }).getAttribute("aria-busy"), "true");
+    assert.equal(screen.getByRole("group", { name: "Pro" }).getAttribute("aria-busy"), "true", "every frame of that page");
+  }, SAVE_WAIT);
+  await act(async () => answer({ error: "locked" }));
+  assert.ok(await screen.findByText("This frame, or a frame of its page, is locked."));
+  assert.equal(screen.getByRole("group", { name: "Pricing" }).hasAttribute("aria-busy"), false);
+  assert.equal(screen.getByRole("group", { name: "Pro" }).hasAttribute("aria-busy"), false);
+});
+
+test("3c: the Trash toast's Undo waits for the canvas to show the Trash, then undoes that step; focus is on the canvas", async () => {
+  render(<Toaster />);
+  const server = serverCanvas({ ...canvasWith(sticky("n1", "Note"), liveAppFrame()), revision: 1 });
+  const { calls, region } = await mountLiveApp(server.get(), {
+    ...server.handlers,
+    "designCanvas:appPageTrash": () => ({ trashed: "src/routes/pricing.tsx", route: "/pricing", removed: ["app-1"], revision: 3 }),
+  });
+  // Something of the person's before the Trash, which the Undo must leave alone.
+  fireEvent.click(screen.getByRole("group", { name: "Note" }));
+  region.focus();
+  fireEvent.keyDown(region, { key: "d", code: "KeyD", ...commandKey });
+  await waitFor(() => assert.equal(server.get().frames.length, 3), SAVE_WAIT);
+
+  fireEvent.click(screen.getByRole("group", { name: "Pricing" }));
+  await openMore();
+  fireEvent.click(screen.getByRole("menuitem", { name: "Move page file to Trash…" }));
+  fireEvent.click(await screen.findByRole("button", { name: "Move to Trash" }));
+  await waitFor(() => assert.equal(calledWith(calls, "designCanvas:appPageTrash").length, 1), SAVE_WAIT);
+  await waitFor(() => assert.equal(document.activeElement, region), SAVE_WAIT);
+  await nextTask();
+  assert.equal(screen.queryByText("Moved src/routes/pricing.tsx to the Trash."), null, "no Undo before the canvas has the Trash");
+
+  // Main's commit lands as the person's own step.
+  server.set({ ...server.get(), revision: 3, frames: server.get().frames.filter((frame) => frame.id !== "app-1") });
+  act(() => emitBotTestNotification("designCanvas:updated", { workspaceId: "workspace-1", chatId: "chat-1", revision: 3, step: "app-page-trash:3" }));
+  assert.ok(await screen.findByText("Moved src/routes/pricing.tsx to the Trash.", {}, SAVE_WAIT));
+  await waitFor(() => assert.equal(screen.queryByRole("group", { name: "Pricing" }), null));
+  fireEvent.click(screen.getByRole("button", { name: "Undo" }));
+  assert.ok(await screen.findByRole("group", { name: "Pricing" }, SAVE_WAIT), "the Trash is undone");
+  await waitFor(() => assert.equal(server.get().frames.length, 3, "and the copy of the note stays"), SAVE_WAIT);
+});
+
+test("3c: a page-file outcome shows a toast in its own chat only", async () => {
+  render(<Toaster />);
+  await mountLiveApp(canvasWith(liveAppFrame()));
+  act(() => emitBotTestNotification("designCanvas:pageFile", { chatId: "chat-2", file: "src/routes/other.tsx", done: "restore" }));
+  act(() => emitBotTestNotification("designCanvas:pageFile", { chatId: "chat-1", file: "src/routes/pricing.tsx", done: "restore" }));
+  assert.ok(await screen.findByText("Put src/routes/pricing.tsx back."));
+  assert.equal(screen.queryByText("Put src/routes/other.tsx back."), null);
+  act(() => emitBotTestNotification("designCanvas:pageFile", { chatId: "chat-1", file: "src/routes/pricing.tsx", failed: "restore", reason: "exists" }));
+  assert.ok(await screen.findByText("Something is already at src/routes/pricing.tsx, so it wasn't put back."));
+});

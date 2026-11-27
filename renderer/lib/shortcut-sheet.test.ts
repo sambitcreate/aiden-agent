@@ -117,3 +117,12 @@ test("searching matches titles, conditions and the keys as shown on this compute
   assert.ok(titles("⌘G").includes("Next / previous match"), "the other way to do it");
   assert.deepEqual(shortcutSheet(defaults(), { platform: "darwin", query: "zzz" }), []);
 });
+
+test("3c: the live-page duplicate row shows only with designLive", () => {
+  const plain = shortcutSheet(defaults(), { platform: "darwin", capabilities: { designMode: true } });
+  assert.equal(row(plain, "Duplicate a live page as a variant"), null);
+  const live = shortcutSheet(defaults(), { platform: "darwin", capabilities: { designMode: true, designLive: true } });
+  const found = row(live, "Duplicate a live page as a variant");
+  assert.deepEqual(found?.keys, ["Command+D"]);
+  assert.equal(found?.section, "Design canvas");
+});

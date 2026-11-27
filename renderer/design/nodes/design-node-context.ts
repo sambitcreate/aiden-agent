@@ -6,6 +6,7 @@ import * as React from "react";
 import type { DesignPoint } from "../../shared/design-canvas/connectors";
 import type { DesignBridgeMessage, DesignTextCommand } from "../../shared/design-canvas/bridge-messages";
 import type { AppResizeMode } from "../../shared/design-canvas/app-frame";
+import type { AppViewSize } from "../app-frame-menus";
 import type { DesignPageElement } from "../../shared/design-canvas/comments";
 import type { DesignExportFormat } from "../../shared/design-canvas/frame-export";
 import type { DesignFrame } from "../../shared/design-canvas/schema";
@@ -96,6 +97,14 @@ export type DesignNodeContextValue = {
   activeResize: { frameId: string; side: AppResizeMode } | null;
   /** 3c (S92): shows a live app frame at another viewport, keeping its scale; one undo step. */
   setViewport(id: string, viewport: { width: number; height: number }): void;
+  /** 3c (S93): places the frame's page again at a device's size or a typed one, beside its set (main places it). */
+  addAppView(id: string, size: AppViewSize): void;
+  /** 3c (S95): Duplicate page as variant: main copies the page's file as name-vN and places it. */
+  duplicateAppPage(id: string): void;
+  /** 3c (S96): Move page file to Trash, already confirmed: every frame of the route dims until main answers. */
+  trashAppPage(id: string): void;
+  /** The frames dimmed while their page's file goes to the Trash. */
+  trashing: ReadonlySet<string>;
 };
 
 export const DesignNodeContext = React.createContext<DesignNodeContextValue | null>(null);

@@ -4,8 +4,8 @@
 
 import type { StudioFeature } from "./studio-routes.js";
 
-/** An app capability a command can depend on: a Studio, or design mode. */
-export type CommandCapability = StudioFeature | "designMode";
+/** An app capability a command can depend on: a Studio, design mode, or design mode's live app frames. */
+export type CommandCapability = StudioFeature | "designMode" | "designLive";
 
 export const COMMAND_IDS = [
   "composer.focus",

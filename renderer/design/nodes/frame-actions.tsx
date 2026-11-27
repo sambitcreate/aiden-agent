@@ -3,7 +3,8 @@
 // the PDF's paper and layout are set in the same menu and kept on the frame.
 // A live app frame (Phase 3a, D16) has a Dark switch and Download (PNG or
 // PDF) only: no full window, no paper or layout, no original file. With
-// design live on (3c, S92), its device button comes first.
+// design live on (3c, S92, S93), its device button comes first and More
+// last; a narrow frame folds Dark and Download into More.
 
 import { Download, Maximize2, Moon } from "lucide-react";
 import * as React from "react";
@@ -15,11 +16,15 @@ import {
   DropdownMenuLabel,
   DropdownMenuRadioGroup,
   DropdownMenuRadioItem,
+  DropdownMenuCheckboxItem,
   DropdownMenuSeparator,
+  DropdownMenuSub,
+  DropdownMenuSubContent,
+  DropdownMenuSubTrigger,
   DropdownMenuTrigger,
 } from "../../components/ui";
 import { useAppCapabilities } from "../../lib/app-capabilities";
-import { AppDeviceMenu } from "../app-frame-menus";
+import { AppDeviceMenu, AppMoreMenu } from "../app-frame-menus";
 import { designExportFormats, type DesignExportFormat } from "../../shared/design-canvas/frame-export";
 import type { DesignFrame, DesignPaper, DesignPrintMode } from "../../shared/design-canvas/schema";
 import { useDesignNodeContext } from "./design-node-context";
@@ -40,10 +45,14 @@ export function FrameActions({ frame, compact = false }: { frame: DesignFrame; /
   const name = frame.title || "frame";
   // Clicks here are the buttons', never a press that drags or selects the frame.
   const stop = (event: React.SyntheticEvent) => event.stopPropagation();
+  const live = app && designLive;
+  // A narrow live frame's header keeps the device button and More; Dark and Download move into More.
+  const fold = live && compact;
+  const toggleDark = () => canvas.update(frame.id, { colorScheme: dark ? undefined : "dark" }, { record: true });
   return (
     <div className="flex items-center gap-0.5" onDoubleClick={stop} onPointerDown={stop}>
-      {app && designLive ? <AppDeviceMenu frame={frame} compact={compact} onViewport={(viewport) => canvas.setViewport(frame.id, viewport)} /> : null}
-      {app ? (
+      {live ? <AppDeviceMenu frame={frame} compact={compact} onViewport={(viewport) => canvas.setViewport(frame.id, viewport)} /> : null}
+      {fold ? null : app ? (
         <Button
           iconOnly
           size="small"
@@ -51,7 +60,7 @@ export function FrameActions({ frame, compact = false }: { frame: DesignFrame; /
           aria-label={`Show ${name} dark`}
           aria-pressed={dark}
           title="Dark"
-          onClick={() => canvas.update(frame.id, { colorScheme: dark ? undefined : "dark" }, { record: true })}
+          onClick={toggleDark}
         >
           <Moon aria-hidden />
         </Button>
@@ -67,7 +76,7 @@ export function FrameActions({ frame, compact = false }: { frame: DesignFrame; /
           <Maximize2 aria-hidden />
         </Button>
       )}
-      {formats.length > 0 ? (
+      {formats.length > 0 && !fold ? (
         <DropdownMenu>
           <DropdownMenuTrigger asChild>
             <Button iconOnly size="small" variant="transparent" aria-label={`Download ${name}`} title="Download">
@@ -107,6 +116,37 @@ export function FrameActions({ frame, compact = false }: { frame: DesignFrame; /
             ) : null}
           </DropdownMenuContent>
         </DropdownMenu>
+      ) : null}
+      {live ? (
+        <AppMoreMenu
+          frame={frame}
+          onAddView={(size) => canvas.addAppView(frame.id, size)}
+          onDuplicate={() => canvas.duplicateAppPage(frame.id)}
+          onTrash={() => canvas.trashAppPage(frame.id)}
+          onRemove={() => canvas.remove(frame.id)}
+          folded={
+            fold ? (
+              <>
+                <DropdownMenuCheckboxItem checked={dark} onCheckedChange={toggleDark}>
+                  Dark
+                </DropdownMenuCheckboxItem>
+                {formats.length > 0 ? (
+                  <DropdownMenuSub>
+                    <DropdownMenuSubTrigger>Download</DropdownMenuSubTrigger>
+                    <DropdownMenuSubContent className="min-w-44">
+                      {formats.map((format) => (
+                        <DropdownMenuItem key={format} onSelect={() => canvas.download(frame.id, format)}>
+                          {FORMAT_LABELS[format]}
+                        </DropdownMenuItem>
+                      ))}
+                    </DropdownMenuSubContent>
+                  </DropdownMenuSub>
+                ) : null}
+                <DropdownMenuSeparator />
+              </>
+            ) : undefined
+          }
+        />
       ) : null}
     </div>
   );

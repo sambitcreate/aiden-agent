@@ -10,6 +10,7 @@ export function CanvasNodeChrome({
   toolbar,
   flush = false,
   tint,
+  busy = false,
   children,
 }: React.PropsWithChildren<{
   title: string;
@@ -23,6 +24,8 @@ export function CanvasNodeChrome({
   flush?: boolean;
   /** A background colour in place of the card's own, such as a coloured note. */
   tint?: string;
+  /** Dimmed and marked busy while an action on it is in flight (a page file going to the Trash). */
+  busy?: boolean;
 }>) {
   return (
     <div
@@ -30,7 +33,10 @@ export function CanvasNodeChrome({
       aria-label={title}
       data-canvas-chrome
       data-selected={selected ? "true" : "false"}
+      aria-busy={busy ? true : undefined}
       className={cn(
+        "transition-opacity duration-(--motion-duration) ease-standard",
+        busy && "opacity-45",
         "flex min-w-40 flex-col overflow-visible rounded-button bg-popover shadow-control",
         flush && "h-full w-full min-w-0 overflow-hidden",
         selected && !tint && "bg-list-selection",

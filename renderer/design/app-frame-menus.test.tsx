@@ -7,7 +7,7 @@ import assert from "node:assert/strict";
 import { afterEach, test } from "node:test";
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import type { DesignFrame } from "../shared/design-canvas/schema";
-import { AppDeviceMenu, type AppViewportSize } from "./app-frame-menus";
+import { AppDeviceMenu, AppMoreMenu, type AppViewSize, type AppViewportSize } from "./app-frame-menus";
 
 afterEach(cleanup);
 
@@ -117,4 +117,77 @@ test("a narrow frame's device button is an icon with its name, and a locked fram
   assert.equal(button.textContent, "");
   view.rerender(<AppDeviceMenu frame={appFrame({ locked: true })} onViewport={() => undefined} />);
   assert.equal((screen.getByRole("button", { name: /^Viewport/u }) as HTMLButtonElement).disabled, true);
+});
+
+// ── More (S93, S96, S98) ──
+
+function moreMenu(frame = appFrame()) {
+  const calls: Array<string | AppViewSize> = [];
+  render(
+    <AppMoreMenu
+      frame={frame}
+      onAddView={(size) => calls.push(size)}
+      onDuplicate={() => calls.push("duplicate")}
+      onTrash={() => calls.push("trash")}
+      onRemove={() => calls.push("remove")}
+    />,
+  );
+  return { calls, button: screen.getByRole("button", { name: "More actions for Pricing" }) };
+}
+
+test("More lists the four actions, and Add view at width offers the devices and Custom…", async () => {
+  const { calls, button } = moreMenu();
+  openMenu(button);
+  const items = await screen.findAllByRole("menuitem");
+  assert.deepEqual(
+    items.map((item) => item.textContent?.replace(/⌘D|⌫|Ctrl\+D|Backspace/gu, "").trim()),
+    ["Add view at width", "Duplicate page as variant", "Move page file to Trash…", "Remove from canvas"],
+  );
+  fireEvent.click(screen.getByRole("menuitem", { name: /Duplicate page as variant/u }));
+  assert.deepEqual(calls, ["duplicate"]);
+
+  openMenu(button);
+  const sub = await screen.findByRole("menuitem", { name: "Add view at width" });
+  fireEvent.keyDown(sub, { key: "ArrowRight", code: "ArrowRight" });
+  fireEvent.click(await screen.findByRole("menuitem", { name: /iPad/u }));
+  assert.deepEqual(calls, ["duplicate", { device: "tablet" }]);
+});
+
+test("Add view at width ▸ Custom… adds a view of a typed size", async () => {
+  const { calls, button } = moreMenu();
+  openMenu(button);
+  const sub = await screen.findByRole("menuitem", { name: "Add view at width" });
+  fireEvent.keyDown(sub, { key: "ArrowRight", code: "ArrowRight" });
+  fireEvent.click(await screen.findByRole("menuitem", { name: "Custom…" }));
+  await screen.findByRole("dialog", { name: "Add view at width" });
+  fireEvent.change(screen.getByRole("textbox", { name: "Width" }), { target: { value: "500" } });
+  fireEvent.click(screen.getByRole("button", { name: "Add view" }));
+  assert.deepEqual(calls, [{ width: 500, height: 800 }]);
+});
+
+test("Move page file to Trash asks first, with focus on Cancel", async () => {
+  const { calls, button } = moreMenu();
+  openMenu(button);
+  fireEvent.click(await screen.findByRole("menuitem", { name: "Move page file to Trash…" }));
+  const dialog = await screen.findByRole("alertdialog", { name: "Move page file to Trash" });
+  assert.match(dialog.textContent ?? "", /\/pricing/u, "it names the page");
+  assert.match(dialog.textContent ?? "", /You can undo this/u);
+  const cancel = screen.getByRole("button", { name: "Cancel" });
+  await waitFor(() => assert.equal(document.activeElement, cancel));
+  fireEvent.click(cancel);
+  await waitFor(() => assert.equal(screen.queryByRole("alertdialog") === null, true));
+  await waitFor(() => assert.equal(document.activeElement, button));
+  assert.deepEqual(calls, [], "Cancel calls nothing");
+
+  openMenu(button);
+  fireEvent.click(await screen.findByRole("menuitem", { name: "Move page file to Trash…" }));
+  fireEvent.click(await screen.findByRole("button", { name: "Move to Trash" }));
+  assert.deepEqual(calls, ["trash"]);
+});
+
+test("a locked frame's More actions are off", async () => {
+  const { button } = moreMenu(appFrame({ locked: true }));
+  openMenu(button);
+  const items = await screen.findAllByRole("menuitem");
+  assert.ok(items.every((item) => item.getAttribute("aria-disabled") === "true" || item.hasAttribute("data-disabled")));
 });

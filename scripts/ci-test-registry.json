@@ -1646,7 +1646,8 @@
         "renderer/main/bots/bot-approvals.test.tsx",
         "renderer/components/settings/bot-bubbles-settings.test.tsx",
         "renderer/design/app-viewport-ruler.test.tsx",
-        "renderer/design/app-frame-menus.test.tsx"
+        "renderer/design/app-frame-menus.test.tsx",
+        "renderer/design/app-page-actions.test.tsx"
       ],
       "preserved": [
         "ios-release-policy",

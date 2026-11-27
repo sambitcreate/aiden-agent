@@ -909,6 +909,10 @@ function nodeContext(update: DesignNodeContextValue["update"]): DesignNodeContex
     resizeStart: noop,
     activeResize: null,
     setViewport: noop,
+    addAppView: noop,
+    duplicateAppPage: noop,
+    trashAppPage: noop,
+    trashing: new Set(),
   };
 }
 
@@ -1057,7 +1061,7 @@ test("3c flag off: no device button, and the size text stays", () => {
   assert.ok(screen.getByText("1180 × 800"));
 });
 
-test("3c: on a narrow frame every header button stays reachable", () => {
+test("3c: on a narrow frame every header action stays reachable, Dark and Download through More", async () => {
   setup();
   // An iPhone at scale 0.25: a 98 px box. happy-dom lays nothing out, so this checks the DOM and tab
   // order; the E2E checks the real boxes.
@@ -1065,11 +1069,14 @@ test("3c: on a narrow frame every header button stays reachable", () => {
   const header = document.querySelector<HTMLElement>("[data-canvas-chrome-header]")!;
   const buttons = Array.from(header.querySelectorAll<HTMLButtonElement>("button"));
   const device = screen.getByRole<HTMLButtonElement>("button", { name: "Viewport, iPhone, 390 by 844" });
+  const more = screen.getByRole<HTMLButtonElement>("button", { name: /^More actions for/u });
   assert.equal(device.textContent, "", "an icon only");
-  assert.ok(buttons.includes(device));
+  assert.deepEqual(buttons, [device, more], "only the device button and More fit");
   for (const button of buttons) {
     assert.equal(button.disabled, false, button.getAttribute("aria-label") ?? "");
     assert.notEqual(button.tabIndex, -1, button.getAttribute("aria-label") ?? "");
   }
-  assert.ok(buttons.some((button) => button.getAttribute("aria-label")?.startsWith("Download")));
+  fireEvent.pointerDown(more, { button: 0, ctrlKey: false, pointerType: "mouse" });
+  assert.ok(await screen.findByRole("menuitemcheckbox", { name: "Dark" }));
+  assert.ok(screen.getByRole("menuitem", { name: "Download" }));
 });

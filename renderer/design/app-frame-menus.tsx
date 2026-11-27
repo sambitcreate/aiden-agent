@@ -1,8 +1,10 @@
 // A live app frame's header menus with design live on (design mode v2 Phase
 // 3c): the device menu, which shows the viewport and changes it to a device
-// size or a typed one (S92), and is the keyboard's way to resize a frame.
+// size or a typed one (S92), and is the keyboard's way to resize a frame; and
+// More (S93, S96, S98): Add view at width, Duplicate page as variant, Move
+// page file to Trash… (confirmed in a popover first) and Remove from canvas.
 
-import { MonitorSmartphone } from "lucide-react";
+import { Ellipsis, MonitorSmartphone } from "lucide-react";
 import * as React from "react";
 import {
   Button,
@@ -13,6 +15,9 @@ import {
   DropdownMenuRadioGroup,
   DropdownMenuRadioItem,
   DropdownMenuSeparator,
+  DropdownMenuSub,
+  DropdownMenuSubContent,
+  DropdownMenuSubTrigger,
   DropdownMenuTrigger,
   Input,
   Popover,
@@ -20,6 +25,7 @@ import {
   PopoverContent,
 } from "../components/ui";
 import { returnFocus } from "../lib/focus-return";
+import { prettyAccelerator } from "../shared/keybindings";
 import { APP_DEVICE_NAMES, APP_DEVICES, isAppDevice, type AppDevice } from "../shared/design-canvas/app-devices";
 import { APP_DEFAULT_VIEWPORT, APP_FRAME_LIMITS, isAppViewportSide } from "../shared/design-canvas/app-frame";
 import type { DesignFrame } from "../shared/design-canvas/schema";
@@ -201,6 +207,156 @@ export function AppDeviceMenu({
               onViewport(next);
             }}
           />
+        ) : null}
+      </PopoverContent>
+    </Popover>
+  );
+}
+
+/** A view's size: a device, or a typed width and height. */
+export type AppViewSize = { device: AppDevice } | AppViewportSize;
+
+/**
+ * More, at the end of a live app frame's header. Custom… and the Trash
+ * confirmation open in a popover on the button, so focus goes back to it;
+ * the Trash asks first, with focus on Cancel (the design guide's
+ * destructive-but-restorable rule: no modal). `folded` holds what a narrow
+ * frame's header has no room for (its Dark switch and Download).
+ */
+export function AppMoreMenu({
+  frame,
+  onAddView,
+  onDuplicate,
+  onTrash,
+  onRemove,
+  folded,
+}: {
+  frame: DesignFrame;
+  onAddView(size: AppViewSize): void;
+  onDuplicate(): void;
+  onTrash(): void;
+  onRemove(): void;
+  folded?: React.ReactNode;
+}) {
+  const name = frame.title || "frame";
+  const locked = frame.locked === true;
+  const trigger = React.useRef<HTMLButtonElement | null>(null);
+  const cancel = React.useRef<HTMLButtonElement | null>(null);
+  const opening = React.useRef(false);
+  // A confirmed Trash hands focus to the canvas (so ⌘Z undoes it at once), not back to More.
+  const confirmed = React.useRef(false);
+  const [layer, setLayer] = React.useState<"custom" | "trash" | null>(null);
+  const close = () => setLayer(null);
+  const open = (next: "custom" | "trash") => {
+    opening.current = true;
+    setLayer(next);
+  };
+  const route = frame.route ?? "/";
+  const textId = React.useId();
+  return (
+    <Popover open={layer !== null} onOpenChange={(next) => (next ? undefined : close())}>
+      <DropdownMenu>
+        <PopoverAnchor asChild>
+          <DropdownMenuTrigger asChild>
+            <Button ref={trigger} iconOnly size="small" variant="transparent" aria-label={`More actions for ${name}`} title="More">
+              <Ellipsis aria-hidden />
+            </Button>
+          </DropdownMenuTrigger>
+        </PopoverAnchor>
+        <DropdownMenuContent
+          align="end"
+          className="min-w-56"
+          onCloseAutoFocus={(event) => {
+            if (!opening.current) return;
+            opening.current = false;
+            event.preventDefault();
+          }}
+        >
+          {folded}
+          <DropdownMenuSub>
+            <DropdownMenuSubTrigger disabled={locked}>Add view at width</DropdownMenuSubTrigger>
+            <DropdownMenuSubContent className="min-w-48">
+              {APP_DEVICE_NAMES.map((device) => (
+                <DropdownMenuItem key={device} onSelect={() => onAddView({ device })}>
+                  <span className="flex-1">{APP_DEVICES[device].label}</span>
+                  <span className="ml-4 text-secondary tabular-nums">{`${APP_DEVICES[device].width} × ${APP_DEVICES[device].height}`}</span>
+                </DropdownMenuItem>
+              ))}
+              <DropdownMenuSeparator />
+              <DropdownMenuItem onSelect={() => open("custom")}>Custom…</DropdownMenuItem>
+            </DropdownMenuSubContent>
+          </DropdownMenuSub>
+          <DropdownMenuItem disabled={locked} aria-keyshortcuts="Meta+D" onSelect={onDuplicate}>
+            <span className="flex-1">Duplicate page as variant</span>
+            <span aria-hidden className="text-tertiary">
+              {prettyAccelerator("Command+D")}
+            </span>
+          </DropdownMenuItem>
+          <DropdownMenuItem disabled={locked} color="status-red" onSelect={() => open("trash")}>
+            Move page file to Trash…
+          </DropdownMenuItem>
+          <DropdownMenuSeparator />
+          <DropdownMenuItem disabled={locked} aria-keyshortcuts="Backspace" onSelect={onRemove}>
+            <span className="flex-1">Remove from canvas</span>
+            <span aria-hidden className="text-tertiary">
+              {prettyAccelerator("Backspace")}
+            </span>
+          </DropdownMenuItem>
+        </DropdownMenuContent>
+      </DropdownMenu>
+      <PopoverContent
+        role={layer === "trash" ? "alertdialog" : "dialog"}
+        aria-label={layer === "trash" ? "Move page file to Trash" : "Add view at width"}
+        aria-describedby={layer === "trash" ? textId : undefined}
+        align="end"
+        className={layer === "trash" ? "w-72 p-3" : "w-auto p-3"}
+        onOpenAutoFocus={(event) => {
+          if (layer !== "trash") return;
+          event.preventDefault();
+          cancel.current?.focus();
+        }}
+        onCloseAutoFocus={(event) => {
+          event.preventDefault();
+          if (confirmed.current) {
+            confirmed.current = false;
+            return;
+          }
+          returnFocus([trigger.current]);
+        }}
+      >
+        {layer === "custom" ? (
+          <AppViewportFields
+            initial={frame.viewport ?? APP_DEFAULT_VIEWPORT}
+            submitLabel="Add view"
+            onCancel={close}
+            onSubmit={(size) => {
+              close();
+              onAddView(size);
+            }}
+          />
+        ) : layer === "trash" ? (
+          <div className="flex flex-col gap-3">
+            <p id={textId} className="text-regular text-primary">
+              {`The file that serves ${route} goes to the Trash, and its frames leave the canvas. You can undo this.`}
+            </p>
+            <div className="flex justify-end gap-2">
+              <Button ref={cancel} type="button" size="small" variant="muted" onClick={close}>
+                Cancel
+              </Button>
+              <Button
+                type="button"
+                size="small"
+                variant="destructive"
+                onClick={() => {
+                  confirmed.current = true;
+                  close();
+                  onTrash();
+                }}
+              >
+                Move to Trash
+              </Button>
+            </div>
+          </div>
         ) : null}
       </PopoverContent>
     </Popover>

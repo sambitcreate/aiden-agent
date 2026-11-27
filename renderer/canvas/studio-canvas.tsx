@@ -16,6 +16,7 @@ import { CanvasZoomControls } from "./canvas-zoom-controls";
 import { resolveCanvasKey, type CanvasKeyEvent, type CanvasTool } from "./canvas-keymap-core";
 import { CANVAS_MAX_ZOOM, CANVAS_MIN_ZOOM } from "./canvas-viewport-core";
 import { useTrailingWindowControlsClearance } from "../lib/window-chrome";
+import { hasOpenLayer, isOverlayLayer } from "../lib/layer-stack";
 
 export type StudioCanvasProps<N extends Node = Node, E extends Edge = Edge> = Omit<
   ReactFlowProps<N, E>,
@@ -109,6 +110,9 @@ function StudioCanvasInner<N extends Node, E extends Edge>({
 
   const onKeyDown = (event: React.KeyboardEvent<HTMLDivElement>) => {
     if (event.defaultPrevented) return;
+    // A menu, popover or dialog owns the keyboard while open (docs/design-guide.md): its keys,
+    // which reach here through React's portal bubbling, never run a canvas command.
+    if (hasOpenLayer(isOverlayLayer)) return;
     // Enter or Space on a focused button (Reload, a frame's actions) is that button's press.
     if ((event.key === "Enter" || event.key === " ") && isPressableTarget(event.target, event.currentTarget)) return;
     const key: CanvasKeyEvent = {

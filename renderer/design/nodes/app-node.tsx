@@ -387,6 +387,8 @@ export type AppFrameProps = {
   now?: () => number;
   /** 3c (S91): what the frame draws with its page's breakpoints (the resize ruler); display only. */
   ruler?: (breakpoints: readonly number[]) => React.ReactNode;
+  /** 3c (S96): dimmed while its page's file goes to the Trash. */
+  busy?: boolean;
 };
 
 /** An app frame's body and title row. */
@@ -403,6 +405,7 @@ export function AppFrame({
   actions,
   now = monotonicNow,
   ruler,
+  busy = false,
 }: AppFrameProps) {
   const { designLive } = useAppCapabilities();
   const snapshotOfApps = useDesignAppsSnapshot(chatId, designLive);
@@ -819,7 +822,7 @@ export function AppFrame({
 
   return (
     <div className="h-full w-full" onDoubleClick={enterable ? onEnter : undefined}>
-      <CanvasNodeChrome title={frame.title} titleSlot={titledRow} selected={selected} flush status={statusRow} toolbar={actions}>
+      <CanvasNodeChrome title={frame.title} titleSlot={titledRow} selected={selected} flush status={statusRow} toolbar={actions} busy={busy}>
         <div ref={contentRef} className="relative h-full w-full overflow-hidden rounded-b-button">
           {body}
           {frame.guide ? <LayoutGuide guide={frame.guide} scale={scale} /> : null}
@@ -883,6 +886,7 @@ export function AppNode({ id, data, selected }: NodeProps<DesignNode>) {
         titleSlot={<FrameTitle frame={frame} />}
         actions={<FrameActions frame={frame} compact={frame.w < APP_COMPACT_HEADER_PX} />}
         ruler={designLive ? ruler : undefined}
+        busy={designLive && canvas.trashing.has(id)}
       />
       {designLive ? (
         <span role="status" aria-live="polite" className="sr-only">

@@ -60,6 +60,8 @@ import {
 import { reorderLayer, stepLayer, type DesignLayerPlace } from "./layers-core";
 import { DesignToolbar, type DesignAddKind, type DesignPageAction } from "./design-toolbar";
 import { appRoutePlacer, type AppRouteSource } from "./app-route-picker";
+import { useAppPageActions } from "./app-page-actions";
+import { useAppCapabilities } from "../lib/app-capabilities";
 import { selectLiveFrames } from "./live-set-core";
 import {
   DesignNodeContext,
@@ -469,6 +471,13 @@ function LoadedDesignCanvas({
     [reloadPaths],
   );
   const textEdits = usePageTextEdits({ chatId, doc, pageWindow, queueComment: comments.queueOnElement, flush, reload: reloadPath });
+  // 3c (S93, S95, S96): the person's actions on a live app frame's page.
+  const { designLive } = useAppCapabilities();
+  const focusCanvas = React.useCallback(() => {
+    const region = wrapper.current?.querySelector<HTMLElement>(".studio-canvas");
+    requestAnimationFrame(() => region?.focus({ preventScroll: true }));
+  }, []);
+  const pageActions = useAppPageActions({ chatId, doc, latestDoc, flush, undo, queueOnFrame: comments.queueOnFrame, focusCanvas });
   forgetTextEdits.current = textEdits.forget;
   const toggleComments = () => {
     const next = !comments.active;
@@ -867,6 +876,14 @@ function LoadedDesignCanvas({
         if (!textEdits.redo()) redo();
         return true;
       case "duplicate":
+        // 3c (S94): one live app frame alone duplicates its page as a variant.
+        if (designLive && selection.size === 1) {
+          const [only] = [...selection];
+          if (doc.frames.find((frame) => frame.id === only)?.kind === "app") {
+            pageActions.duplicateAppPage(only!);
+            return true;
+          }
+        }
         if (selection.size > 0) {
           // Ids are kept across calls so an edit replayed after a save conflict makes the same copies.
           const ids: string[] = [];
@@ -1303,6 +1320,10 @@ function LoadedDesignCanvas({
       resizeStart,
       activeResize,
       setViewport: setAppViewport,
+      addAppView: pageActions.addAppView,
+      duplicateAppPage: pageActions.duplicateAppPage,
+      trashAppPage: pageActions.trashAppPage,
+      trashing: pageActions.trashing,
       moveEnd,
       editing,
       edit: setEditing,
@@ -1335,6 +1356,10 @@ function LoadedDesignCanvas({
       resizeStart,
       activeResize,
       setAppViewport,
+      pageActions.addAppView,
+      pageActions.duplicateAppPage,
+      pageActions.trashAppPage,
+      pageActions.trashing,
       moveEnd,
       editing,
       comments.commentOn,
