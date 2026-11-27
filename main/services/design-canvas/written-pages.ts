@@ -327,6 +327,12 @@ export function placeWrittenPageFrames(
   return { doc: next, changed: placedIds.length > 0, placedIds, removed };
 }
 
+/** Whether a design/ page still exists as an HTML file the canvas can show. */
+export async function isShowablePage(workspaceRoot: string, relativePath: string): Promise<boolean> {
+  const resolved = await resolveDesignFile(workspaceRoot, relativePath.split("/").map(encodeURIComponent).join("/"));
+  return resolved.ok && resolved.mimeType.split(";")[0] === "text/html";
+}
+
 /** A route an app frame shows: written-route placement's unit (S83). */
 export type WrittenAppRoute = { appRoot: string; route: string };
 
@@ -697,6 +703,11 @@ export async function placeWrittenPagesOnCanvas(input: {
   isLive?(chatIds: string[], workspaceId: string): Promise<Set<string>>;
   /** 3b (S83): app routes to show as live frames on the same page, after the pages. */
   routes?: readonly WrittenAppRoute[];
+  /**
+   * 3b (S83, entry): placed only when the target page is still empty after
+   * the pages and routes, and the person hasn't taken it off the canvas.
+   */
+  fallbackRoute?: WrittenAppRoute;
 }): Promise<{ frameIds: string[]; pageId?: string; focusId?: number; added: number[] }> {
   if (input.limit !== undefined && input.limit <= 0) return { frameIds: [], added: [] };
   // A chat deleted meanwhile has no canvas to put them on.
@@ -775,7 +786,10 @@ export async function placeWrittenPagesOnCanvas(input: {
         }
         pageId = view.pageId;
         const pagesPlaced = placeWrittenPageFrames(base, paths, input.newId, widths, view);
-        const routesPlaced = placeWrittenAppRoutes(pagesPlaced.doc, routes, input.newId, view);
+        let routesPlaced = placeWrittenAppRoutes(pagesPlaced.doc, routes, input.newId, view);
+        if (input.fallbackRoute && framesOnPage(routesPlaced.doc, view.pageId).length === 0) {
+          routesPlaced = placeWrittenAppRoutes(routesPlaced.doc, [input.fallbackRoute], input.newId, view);
+        }
         const placed = { ...pagesPlaced, doc: routesPlaced.doc, placedIds: [...pagesPlaced.placedIds, ...routesPlaced.placedIds] };
         removed = placed.removed;
         routeWidths = [];

@@ -1239,3 +1239,135 @@ test("3b: route files join a chat's written timeline only when asked", () => {
   const isRouteFile = (file: string) => writtenAppRoute(file, routeData([nextApp()])) !== null;
   assert.deepEqual(pagesWrittenInChat(messages, { isRouteFile }), ["design/home.html", "app/pricing/page.tsx"]);
 });
+
+// ── 3b (S83): design-mode entry shows the chat's routes, or the app's home ──
+
+const toolStep = (relativePath: string) => ({
+  kind: "tool",
+  toolName: "write_file",
+  status: "completed",
+  producedFile: { relativePath, operation: "written", bytes: 1 },
+});
+const wrote = (...files: string[]) => [{ timeline: { steps: files.map(toolStep) } }];
+
+function liveEntry(
+  canvases: ReturnType<typeof canvasesAt>,
+  options: {
+    target?: "single" | "choose" | "none";
+    candidates?: ReturnType<typeof nextApp>[];
+    recent?: RecentWrittenPages;
+    live?: boolean;
+    newId?: () => string;
+  } = {},
+) {
+  const reported: number[] = [];
+  const candidates = options.candidates ?? [nextApp()];
+  const enter = createDesignEntry({
+    store: canvases.store,
+    views: canvases.views,
+    recent: options.recent ?? new RecentWrittenPages(),
+    pending: new PendingEntries(),
+    titleFollow: { follow: async () => undefined },
+    isLive: async (chatIds) => new Set(chatIds),
+    designModeOn: async () => true,
+    broadcast: () => undefined,
+    focus: () => undefined,
+    newId: options.newId ?? ids(),
+    ...(options.live === false
+      ? {}
+      : {
+          live: {
+            snapshot: async (workspaceId: string) => ({ workspaceId, target: options.target ?? "single", apps: [], candidates, chosen: [] }),
+            readConfig: async () => null,
+            onAppFrameAdded: (width: number) => reported.push(width),
+          },
+        }),
+  });
+  return { enter, reported };
+}
+
+test("3b: entry places the chat's route files beside its pages", async (t) => {
+  const { workspaceRoot, canvases } = await workspaceWith(t, ["home.html"]);
+  const { enter, reported } = liveEntry(canvases);
+  await enter({ id: "chat-1", title: "Chat", messages: wrote("app/pricing/page.tsx", "design/home.html") }, workspaceRoot);
+  const doc = await canvases.workspaceStore.get("ws-1");
+  assert.deepEqual(doc.frames.map((frame) => frame.kind).sort(), ["app", "file"]);
+  assert.deepEqual(appFramesOf(doc).map((frame) => frame.route), ["/pricing"]);
+  assert.deepEqual(reported, [1280]);
+});
+
+test("3b: entry takes the newest 12 of one timeline of pages and routes", async (t) => {
+  const pages = Array.from({ length: 10 }, (_, index) => `p${index}.html`);
+  const { workspaceRoot, canvases } = await workspaceWith(t, pages);
+  // Oldest first: p0 r0 p1 p2 r1 p3 p4 r2 p5 p6 r3 p7 p8 r4 p9.
+  const timeline = ["p0", "r0", "p1", "p2", "r1", "p3", "p4", "r2", "p5", "p6", "r3", "p7", "p8", "r4", "p9"].map((name) =>
+    name.startsWith("p") ? `design/${name}.html` : `app/${name}/page.tsx`,
+  );
+  const { enter } = liveEntry(canvases);
+  await enter({ id: "chat-1", title: "Chat", messages: wrote(...timeline) }, workspaceRoot);
+  const doc = await canvases.workspaceStore.get("ws-1");
+  const shown = doc.frames.map((frame) => (frame.kind === "app" ? frame.route : frame.path)).sort();
+  assert.deepEqual(
+    shown,
+    ["/r1", "/r2", "/r3", "/r4", ...["p2", "p3", "p4", "p5", "p6", "p7", "p8", "p9"].map((name) => `design/${name}.html`)].sort(),
+    "p0, r0 and p1 are the three oldest and stay off",
+  );
+});
+
+test("3b: a chat that wrote nothing in a single-app workspace gets the app's / on its empty page", async (t) => {
+  const { workspaceRoot, canvases } = await workspaceWith(t, []);
+  const first = liveEntry(canvases);
+  await first.enter({ id: "chat-1", title: "A", messages: [] }, workspaceRoot);
+  let doc = await canvases.workspaceStore.get("ws-1");
+  assert.deepEqual(appFramesOf(doc), [{ appRoot: ".", route: "/", pageId: "page-1" }]);
+  assert.deepEqual(first.reported, [1280]);
+
+  // Chat B gets a page of its own, and its own /, though A's page shows / already.
+  const second = liveEntry(canvases, { newId: () => "page-b" });
+  await second.enter({ id: "chat-2", title: "B", messages: [] }, workspaceRoot);
+  doc = await canvases.workspaceStore.get("ws-1");
+  assert.deepEqual(appFramesOf(doc).map((frame) => frame.pageId).sort(), ["page-1", "page-b"]);
+
+  // Entering again with a frame already there adds nothing.
+  await liveEntry(canvases).enter({ id: "chat-1", title: "A", messages: [] }, workspaceRoot);
+  assert.equal(appFramesOf(await canvases.workspaceStore.get("ws-1")).length, 2);
+});
+
+test("3b: no / when the page holds a note, the app has several roots or none, or the person removed it", async (t) => {
+  const noted = await workspaceWith(t, []);
+  await noted.canvases.store.update("chat-1", (doc) => withNoteFrame(doc));
+  await liveEntry(noted.canvases).enter({ id: "chat-1", title: "A", messages: [] }, noted.workspaceRoot);
+  assert.deepEqual(appFramesOf(await noted.canvases.workspaceStore.get("ws-1")), []);
+
+  for (const target of ["choose", "none"] as const) {
+    const other = await workspaceWith(t, []);
+    await liveEntry(other.canvases, { target, candidates: [nextApp("apps/a"), nextApp("apps/b")] }).enter({ id: "chat-1", title: "A", messages: [] }, other.workspaceRoot);
+    assert.deepEqual(appFramesOf(await other.canvases.workspaceStore.get("ws-1")), [], target);
+  }
+
+  const removed = await workspaceWith(t, []);
+  await liveEntry(removed.canvases).enter({ id: "chat-1", title: "A", messages: [] }, removed.workspaceRoot);
+  const placed = await removed.canvases.workspaceStore.get("ws-1");
+  await removed.canvases.workspaceStore.save("ws-1", { ...placed, frames: [] }, placed.revision);
+  await liveEntry(removed.canvases).enter({ id: "chat-1", title: "A", messages: [] }, removed.workspaceRoot);
+  assert.deepEqual(appFramesOf(await removed.canvases.workspaceStore.get("ws-1")), []);
+});
+
+test("3b: a forgotten run's route files aren't placed; flag off, route files never are", async (t) => {
+  const { workspaceRoot, canvases } = await workspaceWith(t, []);
+  const recent = new RecentWrittenPages();
+  recent.note("chat-1", "app/pricing/page.tsx");
+  recent.forget("chat-1");
+  // A note keeps the page non-empty, so no / fallback hides the answer.
+  await canvases.store.update("chat-1", (doc) => withNoteFrame(doc));
+  await liveEntry(canvases, { recent }).enter({ id: "chat-1", title: "A", messages: [] }, workspaceRoot);
+  assert.deepEqual(appFramesOf(await canvases.workspaceStore.get("ws-1")), []);
+
+  const off = await workspaceWith(t, []);
+  await liveEntry(off.canvases, { live: false }).enter({ id: "chat-1", title: "A", messages: wrote("app/pricing/page.tsx") }, off.workspaceRoot);
+  assert.deepEqual(appFramesOf(await off.canvases.workspaceStore.get("ws-1")), []);
+});
+
+function withNoteFrame(doc: DesignCanvas): DesignCanvas {
+  return { ...doc, frames: [...doc.frames, { id: "note", kind: "note", title: "Note", text: "hi", x: 0, y: 0, w: 200, h: 120, pageId: "page-1", createdBy: "person" }] };
+}
