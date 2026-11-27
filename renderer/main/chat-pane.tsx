@@ -1063,6 +1063,36 @@ export function ChatPane({ chatId }: { chatId: string }) {
     }
     setTextStreaming(false);
   }, []);
+  const clearStreamBuffers = React.useCallback(() => {
+    if (deltaFrameRef.current !== null) window.cancelAnimationFrame(deltaFrameRef.current);
+    deltaFrameRef.current = null;
+    pendingDeltaRef.current = "";
+    pendingReasoningDeltaRef.current = "";
+    streamedTextRef.current = "";
+    streamedReasoningRef.current = "";
+    streamingArtifactsRef.current = [];
+    streamHandoffRef.current?.();
+    streamHandoffRef.current = null;
+  }, []);
+  const resetLiveTurnCore = React.useCallback((nextStreamingText: string | null) => {
+    setStreamingText(nextStreamingText);
+    setStreamingReasoning(null);
+    setStreamingArtifacts([]);
+    setVisualDrafts(NO_VISUAL_DRAFTS);
+    setStreamingUiVisuals(NO_UI_VISUALS);
+    setUiDrafts(NO_UI_DRAFTS);
+    setStreamComplete(false);
+    setIsStoppingGeneration(false);
+    setIsModelLoading(false);
+    setModelCallRetry(null);
+    setGenerationTimeline(null);
+    generationTimelineRef.current = null;
+    setLiveSubagents([]);
+    setLiveSubagentTranscripts(NO_LIVE_SUBAGENT_TRANSCRIPTS);
+    setApprovals([]);
+    setQuestionnaire(null);
+    setQuestionnaireSubmitting(false);
+  }, []);
   React.useEffect(
     () => () => {
       if (textStreamingTimerRef.current !== null) {
@@ -1142,17 +1172,9 @@ export function ChatPane({ chatId }: { chatId: string }) {
       ) {
         void chatsApi.btwCancel(departingChatId, sideQuestion.requestId);
       }
-      if (deltaFrameRef.current !== null) window.cancelAnimationFrame(deltaFrameRef.current);
-      deltaFrameRef.current = null;
-      pendingDeltaRef.current = "";
-      pendingReasoningDeltaRef.current = "";
-      streamedTextRef.current = "";
-      streamedReasoningRef.current = "";
-      streamingArtifactsRef.current = [];
-      streamHandoffRef.current?.();
-      streamHandoffRef.current = null;
+      clearStreamBuffers();
     };
-  }, [chatId]);
+  }, [chatId, clearStreamBuffers]);
 
   // Reset transient state when switching chats. This runs as a layout effect so
   // the incoming chatId never paints a frame carrying the outgoing chat's
@@ -2241,20 +2263,11 @@ export function ChatPane({ chatId }: { chatId: string }) {
     (messageTurnId: string) => {
       const generationIntent = generationIntentRef.current;
       setError(null);
-      setIsStoppingGeneration(false);
       setCanStopGeneration(true);
-      setIsModelLoading(false);
-      setModelCallRetry(null);
       setHasUnpersistedResponse(false);
-      setStreamingText("");
-      setStreamingReasoning(null);
+      resetLiveTurnCore("");
       clearTextStreaming();
-      setStreamingArtifacts([]);
-      setVisualDrafts(NO_VISUAL_DRAFTS);
-      setStreamingUiVisuals(NO_UI_VISUALS);
-      setUiDrafts(NO_UI_DRAFTS);
       streamingArtifactsRef.current = [];
-      setStreamComplete(false);
       setPersistedHandoffMessageId(null);
       pendingDeltaRef.current = "";
       pendingReasoningDeltaRef.current = "";
@@ -2262,13 +2275,6 @@ export function ChatPane({ chatId }: { chatId: string }) {
       streamedReasoningRef.current = "";
       streamHandoffRef.current?.();
       streamHandoffRef.current = null;
-      setGenerationTimeline(null);
-      generationTimelineRef.current = null;
-      setLiveSubagents([]);
-      setLiveSubagentTranscripts(NO_LIVE_SUBAGENT_TRANSCRIPTS);
-      setApprovals([]);
-      setQuestionnaire(null);
-      setQuestionnaireSubmitting(false);
       const visualize = visualizeTurnRef.current === true;
       visualizeTurnRef.current = false;
       const goalRoundToken = goalRoundTokenRef.current;
@@ -2314,6 +2320,7 @@ export function ChatPane({ chatId }: { chatId: string }) {
       providerId,
       providerThinkingLevel,
       providerThinkingSupported,
+      resetLiveTurnCore,
       selectionThinkingLevel,
       model,
     ],
@@ -3059,37 +3066,13 @@ export function ChatPane({ chatId }: { chatId: string }) {
     generationRef.current?.cancel("lifecycle");
     generationRef.current = null;
     generationChatIdRef.current = null;
-    if (deltaFrameRef.current !== null) window.cancelAnimationFrame(deltaFrameRef.current);
-    deltaFrameRef.current = null;
-    pendingDeltaRef.current = "";
-    pendingReasoningDeltaRef.current = "";
-    streamedTextRef.current = "";
-    streamedReasoningRef.current = "";
-    streamingArtifactsRef.current = [];
-    streamHandoffRef.current?.();
-    streamHandoffRef.current = null;
-    setStreamingText(null);
-    setStreamingReasoning(null);
-    setStreamingArtifacts([]);
-    setVisualDrafts(NO_VISUAL_DRAFTS);
-    setStreamingUiVisuals(NO_UI_VISUALS);
-    setUiDrafts(NO_UI_DRAFTS);
-    setStreamComplete(false);
+    clearStreamBuffers();
+    resetLiveTurnCore(null);
     setIsStartingGeneration(false);
-    setIsStoppingGeneration(false);
-    setIsModelLoading(false);
-    setModelCallRetry(null);
     setCanStopGeneration(false);
-    setGenerationTimeline(null);
-    generationTimelineRef.current = null;
-    setLiveSubagents([]);
-    setLiveSubagentTranscripts(NO_LIVE_SUBAGENT_TRANSCRIPTS);
-    setApprovals([]);
-    setQuestionnaire(null);
-    setQuestionnaireSubmitting(false);
     decidingApprovalRef.current = null;
     setDecidingApprovalId(null);
-  }, []);
+  }, [clearStreamBuffers, resetLiveTurnCore]);
 
   React.useEffect(() => {
     environmentPanel.setCancelAgentHandler(cancelAgentForContextChange);
