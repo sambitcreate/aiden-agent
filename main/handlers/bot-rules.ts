@@ -9,7 +9,8 @@
 
 import { BOT_RULE_CHANNELS, type BotRulesUpdateResult, type BotRulesView } from "../../renderer/shared/bot-rules.js";
 import type { BotRuleStore } from "../services/bot-rules/store.js";
-import { parseBotId, parseBotRulesUpdate } from "./bot-params.js";
+import { requireBot } from "./bot-memory.js";
+import { parseBotRulesUpdate } from "./bot-params.js";
 
 export interface BotRuleHandlerDependencies {
   handle(channel: string, handler: (event: unknown, ...args: unknown[]) => unknown): void;
@@ -19,11 +20,7 @@ export interface BotRuleHandlerDependencies {
 }
 
 export function registerBotRuleHandlers(dependencies: BotRuleHandlerDependencies): void {
-  async function knownBot(raw: unknown): Promise<string> {
-    const botId = parseBotId(raw);
-    if (!(await dependencies.botExists(botId))) throw new Error("This Bot no longer exists.");
-    return botId;
-  }
+  const knownBot = requireBot(dependencies.botExists);
 
   dependencies.handle(BOT_RULE_CHANNELS.get, async (_event, rawBotId): Promise<BotRulesView> => {
     return dependencies.rules.get(await knownBot(rawBotId));

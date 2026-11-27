@@ -1,5 +1,6 @@
 import type { BotAllowList } from "../services/bot-runtime/bot-allow-list.js";
 import type { BotApprovals } from "../services/bot-runtime/bot-approvals.js";
+import { requireBot } from "./bot-memory.js";
 import { parseBotAllowedList, parseBotAllowedRemove, parseBotApprovalDecision } from "./bot-params.js";
 
 /** Main owns the entries and checks Bot identity before an individual read or removal. */
@@ -10,9 +11,7 @@ export function registerBotAllowedHandlers<Event = unknown>(deps: {
   botExists(botId: string): Promise<boolean>;
   broadcast(channel: "bots:allowed:changed", payload: { botId: string }): void;
 }): () => void {
-  const known = async (botId: string) => {
-    if (!await deps.botExists(botId)) throw new Error("This Bot no longer exists.");
-  };
+  const known = requireBot(deps.botExists);
   deps.handle("bots:allowed:list", async (_event, input) => {
     const botId = parseBotAllowedList(input);
     if (botId !== undefined) await known(botId);
