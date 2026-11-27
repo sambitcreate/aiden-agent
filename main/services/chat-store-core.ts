@@ -1349,6 +1349,39 @@ export function createChatStore(
     }
   }
 
+  async function updateStoredChat(
+    id: string,
+    assertCurrent: (chat: Chat) => void | Promise<void>,
+    mutate: (chat: Chat) => boolean | void,
+  ): Promise<Chat> {
+    return withImageData(await shared([id], true, async () => {
+      const chat = await readChat(id, "owner");
+      if (!chat) throw new Error(`Chat ${id} not found`);
+      await assertCurrent(chat);
+      if (mutate(chat) === false) return chat;
+      chat.updatedAt = Date.now();
+      await writeChatAndMeta(chat);
+      return chat;
+    }));
+  }
+
+  async function replaceChatTitleIf(
+    id: string,
+    title: string,
+    canReplace: (chat: Chat) => boolean,
+  ): Promise<Chat | null> {
+    return withImageData(await shared([id], true, async () => {
+      const chat = await readChat(id, "owner");
+      if (!chat || !canReplace(chat)) return null;
+      const nextTitle = title.trim();
+      if (!nextTitle || nextTitle === chat.title) return null;
+      chat.title = nextTitle;
+      chat.updatedAt = Date.now();
+      await writeChatAndMeta(chat);
+      return chat;
+    }));
+  }
+
   return {
     /**
      * Observe committed summary-index writes (save, delete, metadata). Lets the
@@ -1872,15 +1905,9 @@ export function createChatStore(
       title: string,
       assertCurrent: (chat: Chat) => void | Promise<void> = () => undefined,
     ): Promise<Chat> {
-      return withImageData(await shared([id], true, async () => {
-        const chat = await readChat(id, "owner");
-        if (!chat) throw new Error(`Chat ${id} not found`);
-        await assertCurrent(chat);
+      return updateStoredChat(id, assertCurrent, (chat) => {
         chat.title = title.trim() || chat.title;
-        chat.updatedAt = Date.now();
-        await writeChatAndMeta(chat);
-        return chat;
-      }));
+      });
     },
 
     /**
@@ -1911,16 +1938,7 @@ export function createChatStore(
       expectedTitle: string,
       title: string,
     ): Promise<Chat | null> {
-      return withImageData(await shared([id], true, async () => {
-        const chat = await readChat(id, "owner");
-        if (!chat || chat.title !== expectedTitle) return null;
-        const nextTitle = title.trim();
-        if (!nextTitle || nextTitle === chat.title) return null;
-        chat.title = nextTitle;
-        chat.updatedAt = Date.now();
-        await writeChatAndMeta(chat);
-        return chat;
-      }));
+      return replaceChatTitleIf(id, title, (chat) => chat.title === expectedTitle);
     },
 
     /** Move only an untouched new chat so its workspace can be chosen from the composer. */
@@ -1929,18 +1947,12 @@ export function createChatStore(
       workspaceId: string,
       assertCurrent: (chat: Chat) => void | Promise<void> = () => undefined,
     ): Promise<Chat> {
-      return withImageData(await shared([id], true, async () => {
-        const chat = await readChat(id, "owner");
-        if (!chat) throw new Error(`Chat ${id} not found`);
-        await assertCurrent(chat);
+      return updateStoredChat(id, assertCurrent, (chat) => {
         if (chat.messages.length > 0) {
           throw new Error("Only a new chat can change workspaces.");
         }
         chat.workspaceId = workspaceId;
-        chat.updatedAt = Date.now();
-        await writeChatAndMeta(chat);
-        return chat;
-      }));
+      });
     },
 
     /** Clear the ephemeral marker so a temporary floating chat becomes a durable chat. */
@@ -1948,16 +1960,10 @@ export function createChatStore(
       id: string,
       assertCurrent: (chat: Chat) => void | Promise<void> = () => undefined,
     ): Promise<Chat> {
-      return withImageData(await shared([id], true, async () => {
-        const chat = await readChat(id, "owner");
-        if (!chat) throw new Error(`Chat ${id} not found`);
-        await assertCurrent(chat);
-        if (chat.ephemeral !== true) return chat;
+      return updateStoredChat(id, assertCurrent, (chat) => {
+        if (chat.ephemeral !== true) return false;
         delete chat.ephemeral;
-        chat.updatedAt = Date.now();
-        await writeChatAndMeta(chat);
-        return chat;
-      }));
+      });
     },
 
     /**
@@ -1970,16 +1976,10 @@ export function createChatStore(
       workspaceId: string,
       assertCurrent: (chat: Chat) => void | Promise<void> = () => undefined,
     ): Promise<Chat> {
-      return withImageData(await shared([id], true, async () => {
-        const chat = await readChat(id, "owner");
-        if (!chat) throw new Error(`Chat ${id} not found`);
-        await assertCurrent(chat);
+      return updateStoredChat(id, assertCurrent, (chat) => {
         chat.workspaceId = workspaceId;
         delete chat.ephemeral;
-        chat.updatedAt = Date.now();
-        await writeChatAndMeta(chat);
-        return chat;
-      }));
+      });
     },
 
     /**
@@ -2407,17 +2407,9 @@ export function createChatStore(
       expectedSeed: string,
       title: string,
     ): Promise<Chat | null> {
-      return withImageData(await shared([id], true, async () => {
-        const chat = await readChat(id, "owner");
-        if (!chat || !canReplaceGeneratedChatTitle(chat.title, expectedSeed))
-          return null;
-        const nextTitle = title.trim();
-        if (!nextTitle || nextTitle === chat.title) return null;
-        chat.title = nextTitle;
-        chat.updatedAt = Date.now();
-        await writeChatAndMeta(chat);
-        return chat;
-      }));
+      return replaceChatTitleIf(id, title, (chat) =>
+        canReplaceGeneratedChatTitle(chat.title, expectedSeed),
+      );
     },
   };
 }
