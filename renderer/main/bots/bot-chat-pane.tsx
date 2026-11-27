@@ -77,6 +77,11 @@ import { spendingNotice } from "../../shared/spending";
 
 export const BOT_ACCESS_CHANGED_TEXT = "This Bot's access changed. Review it in Advanced.";
 
+function rethrowWithToast(error: unknown, fallback: string): never {
+  toast.error(userFacingErrorMessage(error, fallback));
+  throw error;
+}
+
 /** The Bot's pending-paused notice: Resume continues the turn, Dismiss drops it. */
 export function BotInterruptedCard({
   name,
@@ -569,11 +574,10 @@ export function BotChatPane({ botId }: { botId: string }) {
   const connectionSetup = useConnectionSetup(() => live.reload());
   const [addingConnection, setAddingConnection] = React.useState(false);
   const approvalStatus = useApprovalStatusLine(botId);
-  const showApprovalStatus = approvalStatus.show;
   // Cards this device is answering: their settlement is this answer, not a stale card.
   const answeringApprovals = React.useRef(new Set<string>());
   const approvals = useBotApprovals(bubbled ? undefined : botId, (waitId) => {
-    if (!answeringApprovals.current.has(waitId)) showApprovalStatus({ decision: "stale" });
+    if (!answeringApprovals.current.has(waitId)) approvalStatus.show({ decision: "stale" });
   });
   const approvalGroups = groupBotApprovalPrompts(approvals.prompts);
   const [answering, setAnswering] = React.useState(false);
@@ -1036,8 +1040,7 @@ export function BotChatPane({ botId }: { botId: string }) {
     try {
       return (await botsApi.skillProposals.respond({ botId: current.id, proposalId, decision })).status;
     } catch (error) {
-      toast.error(userFacingErrorMessage(error, decision === "add" ? "Aiden couldn’t add that skill." : "Aiden couldn’t save that choice."));
-      throw error;
+      rethrowWithToast(error, decision === "add" ? "Aiden couldn’t add that skill." : "Aiden couldn’t save that choice.");
     }
   };
   const respondToSettings = async (changeId: string, decision: "undo" | "apply" | "edited" | "dismiss"): Promise<BotSettingsChangeStatus> => {
@@ -1045,8 +1048,7 @@ export function BotChatPane({ botId }: { botId: string }) {
     try {
       result = await botsApi.settingsChanges.respond({ botId: current.id, changeId, decision });
     } catch (error) {
-      toast.error(userFacingErrorMessage(error, "Aiden couldn’t save that choice."));
-      throw error;
+      rethrowWithToast(error, "Aiden couldn’t save that choice.");
     }
     if (!result.ok) {
       toast.error(result.message);
@@ -1060,8 +1062,7 @@ export function BotChatPane({ botId }: { botId: string }) {
     try {
       return (await botsApi.eventRoutines.rotateLink({ botId: current.id, id: routineId })).link;
     } catch (error) {
-      toast.error(userFacingErrorMessage(error, "Aiden couldn’t make a new link."));
-      throw error;
+      rethrowWithToast(error, "Aiden couldn’t make a new link.");
     }
   };
   const respondToProposal = async (
@@ -1076,13 +1077,10 @@ export function BotChatPane({ botId }: { botId: string }) {
       if (result.status === "accepted") void qc.invalidateQueries({ queryKey: botRoutinesKey(current.id) });
       return result;
     } catch (error) {
-      toast.error(
-        userFacingErrorMessage(
-          error,
-          decision === "accept" ? "Aiden couldn’t add that routine." : "Aiden couldn’t save that choice.",
-        ),
+      rethrowWithToast(
+        error,
+        decision === "accept" ? "Aiden couldn’t add that routine." : "Aiden couldn’t save that choice.",
       );
-      throw error;
     }
   };
 
@@ -1091,8 +1089,7 @@ export function BotChatPane({ botId }: { botId: string }) {
     try {
       await botsApi.routines.runNow(current.id, routineId);
     } catch (error) {
-      toast.error(userFacingErrorMessage(error, "Aiden couldn’t run that routine."));
-      throw error;
+      rethrowWithToast(error, "Aiden couldn’t run that routine.");
     }
   };
 
@@ -1121,8 +1118,7 @@ export function BotChatPane({ botId }: { botId: string }) {
     try {
       await botsApi.issues.act({ botId: current.id, issueId, action });
     } catch (error) {
-      toast.error(userFacingErrorMessage(error, "Aiden couldn’t do that."));
-      throw error;
+      rethrowWithToast(error, "Aiden couldn’t do that.");
     }
   };
 
@@ -1217,21 +1213,27 @@ export function BotChatPane({ botId }: { botId: string }) {
       ),
     });
   }
+  const respondToPlan = async (
+    planId: string,
+    decision: Parameters<typeof botsApi.respondPlan>[0]["decision"],
+  ) => {
+    const { result } = await botsApi.respondPlan({ botId: current.id, planId, decision });
+    if (result === "not_waiting") throw new Error("That plan was already answered or closed.");
+  };
+  const renderPlanCard = (activePlan: NonNullable<typeof plan>) => (
+    <PlanCard
+      plan={activePlan}
+      botName={current.name}
+      avatar={current.avatar}
+      onRespond={(decision) => respondToPlan(activePlan.planId, decision)}
+    />
+  );
+
   if (plan && pendingPlan) {
     slotItems.push({
       key: `plan:${plan.planId}:${plan.revision}`,
       kind: "plan",
-      render: () => (
-        <PlanCard
-          plan={plan}
-          botName={current.name}
-          avatar={current.avatar}
-          onRespond={async (decision) => {
-            const { result } = await botsApi.respondPlan({ botId: current.id, planId: plan.planId, decision });
-            if (result === "not_waiting") throw new Error("That plan was already answered or closed.");
-          }}
-        />
-      ),
+      render: () => renderPlanCard(plan),
     });
   }
   // A change the Bot asked for in a run the person didn't start (§4.6).
@@ -1285,6 +1287,15 @@ export function BotChatPane({ botId }: { botId: string }) {
     plan: plan !== null && plan !== undefined && !pendingPlan,
   });
 
+  const stopRow = (
+    <div className="aiden-dock-inset chat-content-column flex justify-end pb-4 pt-2">
+      <Button variant="filled" size="small" onClick={stop}>
+        <Square aria-hidden="true" />
+        Stop
+      </Button>
+    </div>
+  );
+
   const footer = (
     <NeedsYouFocusScope currentKey={slot.current?.key} className="flex flex-col">
       <NeedsYouAnnouncer slot={slot} />
@@ -1312,12 +1323,7 @@ export function BotChatPane({ botId }: { botId: string }) {
             />
           </div>
           {/* The card replaces the composer, so Stop lives here while it waits. */}
-          <div className="aiden-dock-inset chat-content-column flex justify-end pb-4 pt-2">
-            <Button variant="filled" size="small" onClick={stop}>
-              <Square aria-hidden="true" />
-              Stop
-            </Button>
-          </div>
+          {stopRow}
         </>
       ) : (
         <Composer
@@ -1363,14 +1369,7 @@ export function BotChatPane({ botId }: { botId: string }) {
         />
       )}
       {/* The composer's send answers the card, so Stop lives here while it waits. */}
-      {handoff && !askingQuestion && running ? (
-        <div className="aiden-dock-inset chat-content-column flex justify-end pb-4 pt-2">
-          <Button variant="filled" size="small" onClick={stop}>
-            <Square aria-hidden="true" />
-            Stop
-          </Button>
-        </div>
-      ) : null}
+      {handoff && !askingQuestion && running ? stopRow : null}
     </NeedsYouFocusScope>
   );
 
@@ -1425,8 +1424,7 @@ export function BotChatPane({ botId }: { botId: string }) {
             try {
               return (await botsApi.learning.respondLesson({ botId: current.id, lessonId, decision })).status;
             } catch (error) {
-              toast.error(userFacingErrorMessage(error, "Aiden couldn’t save that choice."));
-              throw error;
+              rethrowWithToast(error, "Aiden couldn’t save that choice.");
             }
           }}
           onUndoLearning={async (target) => {
@@ -1434,8 +1432,7 @@ export function BotChatPane({ botId }: { botId: string }) {
             try {
               result = await botsApi.learning.undoInChat({ botId: current.id, target });
             } catch (error) {
-              toast.error(userFacingErrorMessage(error, "Aiden couldn’t undo that."));
-              throw error;
+              rethrowWithToast(error, "Aiden couldn’t undo that.");
             }
             if (!result.ok) {
               toast.error(result.code === "conflict" ? "This changed since. Edit it on the Memory page." : "Aiden couldn’t undo that.");
@@ -1485,17 +1482,7 @@ export function BotChatPane({ botId }: { botId: string }) {
         <Text as="p" variant="small" color="secondary" role="status">A saved Resume request is awaiting confirmation. Retry keeps its original request and cost acknowledgement.</Text>
         {savedResumes.rows.map((attempt) => <Button key={attempt.requestId} size="small" disabled={resumeSending} onClick={() => void performResume(attempt, true)}>Retry saved Resume</Button>)}
       </div>}
-      {status === "plan" && plan ? (
-        <PlanCard
-          plan={plan}
-          botName={current.name}
-          avatar={current.avatar}
-          onRespond={async (decision) => {
-            const { result } = await botsApi.respondPlan({ botId: current.id, planId: plan.planId, decision });
-            if (result === "not_waiting") throw new Error("That plan was already answered or closed.");
-          }}
-        />
-      ) : null}
+      {status === "plan" && plan ? renderPlanCard(plan) : null}
       <AlertDialog open={costConsent !== null} onOpenChange={(open) => { if (!open) setCostConsent(null); }} title={`Resume ${current.name} with an unconfirmed charge?`} description={BOT_UNKNOWN_COST_CONFIRMATION} confirmLabel="Resume" onConfirm={() => {
         const consent = costConsent; setCostConsent(null);
         if (consent?.botId === current.id && state?.kind === "interrupted" && consent.submissionId === state.submissionId) void answerInterrupted("resume", true, consent.expectedSubmissionId, consent.expectedCostReceiptId);

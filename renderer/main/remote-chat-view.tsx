@@ -3,6 +3,7 @@ import { skipToken, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useNavigate } from "@tanstack/react-router";
 import { GitFork, Info, Loader2, MessageCircleQuestion, MoreHorizontal, TriangleAlert } from "lucide-react";
 import { AskUserQuestionComposer } from "../components/ask-user-question-composer";
+import { ChatLineageLine } from "./chat-lineage-line";
 import { ApprovalIcon, ChatApprovalCard, approvalHeadline, type ChatApprovalDecisionOptions } from "../components/chat-approval-card";
 import { Composer, type ComposerSkillCatalog } from "../components/composer";
 import { ForkSummaryCard, ForkSummaryDialog } from "../components/fork-summary-card";
@@ -442,8 +443,6 @@ export function RemoteChatPane({
   const send = (text: string, attachments?: Attachment[], skill?: SkillInvocationV1) =>
     sendFencedTurn(turnKey, () => sendTurn(text, attachments, skill));
   const generating = live && run?.status === "running";
-  // A run the host is still working on; an idle view with no run is not one.
-  const runActive = live && run?.runId != null;
 
   // A queued turn's run reaches this Mac over the run stream a moment after
   // the host accepts it, so the queue waits until that turn has finished.
@@ -477,7 +476,7 @@ export function RemoteChatPane({
       !unavailable &&
       !stale &&
       Boolean(capabilities?.has("send")) &&
-      !runActive &&
+      runId === null &&
       !state?.sending &&
       !state?.recovering &&
       !unresolved &&
@@ -524,7 +523,7 @@ export function RemoteChatPane({
       Boolean(snapshot?.loaded) &&
       contextRevision !== null &&
       !stale &&
-      !runActive,
+      runId === null,
     // While a reply runs the last reading stays up; the next one follows it.
     placeholderData: (previous) => previous,
     staleTime: Infinity,
@@ -534,7 +533,7 @@ export function RemoteChatPane({
   // The latest reply failed: offer the next step this Mac can take on the host.
   const [failureBusy, setFailureBusy] = React.useState(false);
   const last = messages[messages.length - 1];
-  const failedReplyId = !runActive && last?.role === "assistant" && last.providerFailure ? last.id : undefined;
+  const failedReplyId = runId === null && last?.role === "assistant" && last.providerFailure ? last.id : undefined;
   const failureActions: (ProviderFailureActions & { messageId: string }) | undefined =
     failedReplyId && capabilities?.has("send")
       ? {
@@ -689,7 +688,6 @@ export function RemoteChatPane({
   // Decisions go out one at a time, so only the first approval takes input and
   // the rest wait behind it, the way a local chat queues them.
   const openApproval = approvalAnswerable ? approvals[0] : undefined;
-  const isGenerating = generating;
   const showChatMenu = Boolean(capabilities?.has("rename") || capabilities?.has("remove"));
   const composerKey = snapshot ? hostResourceKey({ hostId: snapshot.hostId, resourceId: snapshot.chatId }) : null;
   const composerWaiting = useComposerWaiting(control);
@@ -705,22 +703,20 @@ export function RemoteChatPane({
           <span className="block min-w-0">
             <span className="block truncate">{title}</span>
             {lineage ? (
-              <span className="flex min-w-0 items-center gap-1 text-small font-normal text-secondary" data-chat-fork-lineage>
-                <GitFork aria-hidden="true" className="size-3 shrink-0" />
-                {lineage.sourceTitle !== undefined && onOpenChat ? (
-                  <button
-                    type="button"
-                    className="min-w-0 truncate rounded-control text-left outline-none hover:text-primary focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
-                    onClick={() => onOpenChat(lineage.forkedFrom.chatId)}
-                  >
-                    {forkedFromLabel(lineage.sourceTitle)}
-                  </button>
-                ) : (
-                  <span className="min-w-0 truncate">
-                    {lineage.sourceTitle !== undefined ? forkedFromLabel(lineage.sourceTitle) : "Forked from another chat"}
-                  </span>
-                )}
-              </span>
+              <ChatLineageLine
+                icon={<GitFork aria-hidden="true" className="size-3 shrink-0" />}
+                label={
+                  lineage.sourceTitle !== undefined
+                    ? forkedFromLabel(lineage.sourceTitle)
+                    : "Forked from another chat"
+                }
+                onClick={
+                  lineage.sourceTitle !== undefined && onOpenChat
+                    ? () => onOpenChat(lineage.forkedFrom.chatId)
+                    : undefined
+                }
+                forkLineage
+              />
             ) : null}
           </span>
         }
@@ -766,7 +762,7 @@ export function RemoteChatPane({
           questions.length,
         ]}
         showScrollToBottomButton
-        streaming={isGenerating}
+        streaming={generating}
         footer={
           <ScrollAreaFooterStack>
             {/* Cards and notices sit on the transcript column. The composers
@@ -935,7 +931,7 @@ export function RemoteChatPane({
                       catalog={models}
                       loading={modelsLoading}
                       selected={selection.model}
-                      disabled={isGenerating || Boolean(state?.sending)}
+                      disabled={generating || Boolean(state?.sending)}
                       onSelect={(model) => setPick({ ...pick, model })}
                       open={modelMenuOpen}
                       onOpenChange={setModelMenuOpen}
@@ -949,7 +945,7 @@ export function RemoteChatPane({
                       level={selection.thinkingLevel}
                       levels={selection.levels}
                       canDisable={selection.canDisable}
-                      disabled={isGenerating || Boolean(state?.sending)}
+                      disabled={generating || Boolean(state?.sending)}
                       disabledReason="Change the effort after this response finishes."
                       onChange={(thinkingLevel) => setPick({ ...pick, thinkingLevel })}
                     />
@@ -974,8 +970,8 @@ export function RemoteChatPane({
                 }
                 onStop={stop}
                 inputRef={composerRef}
-                isGenerating={isGenerating || Boolean(state?.sending)}
-                canStopGeneration={isGenerating && Boolean(runId) && cancelRefusal === null && !state?.stopping}
+                isGenerating={generating || Boolean(state?.sending)}
+                canStopGeneration={generating && Boolean(runId) && cancelRefusal === null && !state?.stopping}
                 stoppingGeneration={Boolean(state?.stopping)}
               />
             ) : control ? (

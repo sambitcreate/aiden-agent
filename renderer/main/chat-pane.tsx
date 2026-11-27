@@ -1,5 +1,6 @@
 import { hostQueryKeys } from "../lib/hosts/host-query-keys";
 import { PeerProjectCloneDialog } from "./peer-project-clone-dialog";
+import { ChatLineageLine } from "./chat-lineage-line";
 import { remoteNewChatDraftKey } from "../lib/hosts/remote-new-chat";
 import {
   beginChatDraftSend,
@@ -167,7 +168,6 @@ import {
   useSubagentComposerPill,
 } from "../components/subagent-composer-pill";
 import { BtwCard, reduceBtwView, type BtwLiveView } from "../components/btw-card";
-import { ModelPicker } from "../components/model-picker";
 import { AgentModelPopover } from "../components/agent-model-popover";
 import { agentSliderComposerState, agentSliderStepTarget, agentSliderStopSetsEffort } from "../lib/agent-slider-view";
 import { RemoteMachinePicker } from "../components/remote-new-chat-pickers";
@@ -272,6 +272,7 @@ import {
 import { EventPresence } from "../components/event-presence";
 import {
   OPENAI_CODEX_PROVIDER_ID,
+  type AppSettings,
   type Attachment,
   type Chat,
   type ChatMeta,
@@ -386,6 +387,8 @@ import {
 import { useChatFind } from "../components/chat-find-bar";
 
 const ANTHROPIC_PROVIDER_ID = "anthropic";
+const VISUAL_ARTIFACT_STAGING_UNAVAILABLE_MESSAGE =
+  "Visual artifact staging is unavailable. Open Settings → About → Diagnostics and choose Reveal to locate the staging file that needs repair.";
 
 /**
  * How long after the last text delta the activity row may keep saying
@@ -402,6 +405,23 @@ const NO_UI_DRAFTS: UiDrafts = new Map();
 const NO_VISUAL_DRAFTS: VisualDrafts = new Map();
 // AGENTS.md size notices are shown once per chat until the file changes.
 const agentsInstructionNotices = createAgentsInstructionNoticeLog();
+
+const defaultGoogleThinkingLevels = () => googleThinkingLevelsForModel({ reasoning: true });
+
+function useDeclaredThinkingLevels<T extends string>(
+  allLevels: readonly T[],
+  declared: readonly string[] | undefined,
+  fallback?: () => T[],
+  ensureLevel?: T,
+): T[] {
+  return React.useMemo(() => {
+    if (!declared?.length) return fallback ? fallback() : [];
+    const supported = allLevels.filter((level) => declared.includes(level));
+    return ensureLevel !== undefined && !supported.includes(ensureLevel)
+      ? [ensureLevel, ...supported]
+      : supported;
+  }, [allLevels, declared, fallback, ensureLevel]);
+}
 
 export function ChatPane({ chatId }: { chatId: string }) {
   const qc = useQueryClient();
@@ -820,12 +840,12 @@ export function ChatPane({ chatId }: { chatId: string }) {
     Boolean(model) &&
     modelInfo.data?.[model]?.reasoning === true;
   const thinkingMetadata = model ? selectedProvider?.modelMetadata?.[model] : undefined;
-  const googleThinkingLevels = React.useMemo<GoogleThinkingLevel[]>(() => {
-    const declared = thinkingMetadata?.thinkingLevels;
-    if (!declared?.length) return googleThinkingLevelsForModel({ reasoning: true });
-    const supported = GOOGLE_THINKING_LEVELS.filter((level) => declared.includes(level));
-    return supported.includes("off") ? supported : ["off", ...supported];
-  }, [thinkingMetadata?.thinkingLevels]);
+  const googleThinkingLevels = useDeclaredThinkingLevels(
+    GOOGLE_THINKING_LEVELS,
+    thinkingMetadata?.thinkingLevels,
+    defaultGoogleThinkingLevels,
+    "off",
+  );
   const storedGoogleThinkingLevel = model
     ? settings.data?.googleThinkingByModel?.[model]
     : undefined;
@@ -833,11 +853,10 @@ export function ChatPane({ chatId }: { chatId: string }) {
     googleThinkingLevels,
     storedGoogleThinkingLevel,
   );
-  const codexThinkingLevels = React.useMemo<CodexThinkingLevel[]>(() => {
-    const declared = thinkingMetadata?.thinkingLevels;
-    if (!declared?.length) return [];
-    return CODEX_THINKING_LEVELS.filter((level) => declared.includes(level));
-  }, [thinkingMetadata?.thinkingLevels]);
+  const codexThinkingLevels = useDeclaredThinkingLevels(
+    CODEX_THINKING_LEVELS,
+    thinkingMetadata?.thinkingLevels,
+  );
   const codexThinkingSupported =
     providerId === OPENAI_CODEX_PROVIDER_ID &&
     Boolean(model) &&
@@ -848,11 +867,10 @@ export function ChatPane({ chatId }: { chatId: string }) {
     codexThinkingLevels,
     storedCodexThinkingLevel,
   );
-  const anthropicThinkingLevels = React.useMemo<AnthropicThinkingLevel[]>(() => {
-    const declared = thinkingMetadata?.thinkingLevels;
-    if (!declared?.length) return [];
-    return ANTHROPIC_THINKING_LEVELS.filter((level) => declared.includes(level));
-  }, [thinkingMetadata?.thinkingLevels]);
+  const anthropicThinkingLevels = useDeclaredThinkingLevels(
+    ANTHROPIC_THINKING_LEVELS,
+    thinkingMetadata?.thinkingLevels,
+  );
   const anthropicThinkingSupported =
     providerId === ANTHROPIC_PROVIDER_ID &&
     Boolean(model) &&
@@ -1047,6 +1065,36 @@ export function ChatPane({ chatId }: { chatId: string }) {
     }
     setTextStreaming(false);
   }, []);
+  const clearStreamBuffers = React.useCallback(() => {
+    if (deltaFrameRef.current !== null) window.cancelAnimationFrame(deltaFrameRef.current);
+    deltaFrameRef.current = null;
+    pendingDeltaRef.current = "";
+    pendingReasoningDeltaRef.current = "";
+    streamedTextRef.current = "";
+    streamedReasoningRef.current = "";
+    streamingArtifactsRef.current = [];
+    streamHandoffRef.current?.();
+    streamHandoffRef.current = null;
+  }, []);
+  const resetLiveTurnCore = React.useCallback((nextStreamingText: string | null) => {
+    setStreamingText(nextStreamingText);
+    setStreamingReasoning(null);
+    setStreamingArtifacts([]);
+    setVisualDrafts(NO_VISUAL_DRAFTS);
+    setStreamingUiVisuals(NO_UI_VISUALS);
+    setUiDrafts(NO_UI_DRAFTS);
+    setStreamComplete(false);
+    setIsStoppingGeneration(false);
+    setIsModelLoading(false);
+    setModelCallRetry(null);
+    setGenerationTimeline(null);
+    generationTimelineRef.current = null;
+    setLiveSubagents([]);
+    setLiveSubagentTranscripts(NO_LIVE_SUBAGENT_TRANSCRIPTS);
+    setApprovals([]);
+    setQuestionnaire(null);
+    setQuestionnaireSubmitting(false);
+  }, []);
   React.useEffect(
     () => () => {
       if (textStreamingTimerRef.current !== null) {
@@ -1126,17 +1174,9 @@ export function ChatPane({ chatId }: { chatId: string }) {
       ) {
         void chatsApi.btwCancel(departingChatId, sideQuestion.requestId);
       }
-      if (deltaFrameRef.current !== null) window.cancelAnimationFrame(deltaFrameRef.current);
-      deltaFrameRef.current = null;
-      pendingDeltaRef.current = "";
-      pendingReasoningDeltaRef.current = "";
-      streamedTextRef.current = "";
-      streamedReasoningRef.current = "";
-      streamingArtifactsRef.current = [];
-      streamHandoffRef.current?.();
-      streamHandoffRef.current = null;
+      clearStreamBuffers();
     };
-  }, [chatId]);
+  }, [chatId, clearStreamBuffers]);
 
   // Reset transient state when switching chats. This runs as a layout effect so
   // the incoming chatId never paints a frame carrying the outgoing chat's
@@ -1457,9 +1497,7 @@ export function ChatPane({ chatId }: { chatId: string }) {
         throw new Error("Reload Aiden before copying this chat.");
       }
       if (imageArtifactRecoveryUnavailable) {
-        throw new Error(
-          "Visual artifact staging is unavailable. Open Settings → About → Diagnostics and choose Reveal to locate the staging file that needs repair.",
-        );
+        throw new Error(VISUAL_ARTIFACT_STAGING_UNAVAILABLE_MESSAGE);
       }
       if (imageArtifactRecoveryPending) {
         throw new Error(
@@ -2225,20 +2263,11 @@ export function ChatPane({ chatId }: { chatId: string }) {
     (messageTurnId: string) => {
       const generationIntent = generationIntentRef.current;
       setError(null);
-      setIsStoppingGeneration(false);
       setCanStopGeneration(true);
-      setIsModelLoading(false);
-      setModelCallRetry(null);
       setHasUnpersistedResponse(false);
-      setStreamingText("");
-      setStreamingReasoning(null);
+      resetLiveTurnCore("");
       clearTextStreaming();
-      setStreamingArtifacts([]);
-      setVisualDrafts(NO_VISUAL_DRAFTS);
-      setStreamingUiVisuals(NO_UI_VISUALS);
-      setUiDrafts(NO_UI_DRAFTS);
       streamingArtifactsRef.current = [];
-      setStreamComplete(false);
       setPersistedHandoffMessageId(null);
       pendingDeltaRef.current = "";
       pendingReasoningDeltaRef.current = "";
@@ -2246,13 +2275,6 @@ export function ChatPane({ chatId }: { chatId: string }) {
       streamedReasoningRef.current = "";
       streamHandoffRef.current?.();
       streamHandoffRef.current = null;
-      setGenerationTimeline(null);
-      generationTimelineRef.current = null;
-      setLiveSubagents([]);
-      setLiveSubagentTranscripts(NO_LIVE_SUBAGENT_TRANSCRIPTS);
-      setApprovals([]);
-      setQuestionnaire(null);
-      setQuestionnaireSubmitting(false);
       const visualize = visualizeTurnRef.current === true;
       visualizeTurnRef.current = false;
       const goalRoundToken = goalRoundTokenRef.current;
@@ -2298,6 +2320,7 @@ export function ChatPane({ chatId }: { chatId: string }) {
       providerId,
       providerThinkingLevel,
       providerThinkingSupported,
+      resetLiveTurnCore,
       selectionThinkingLevel,
       model,
     ],
@@ -2387,9 +2410,7 @@ export function ChatPane({ chatId }: { chatId: string }) {
       readAloudRef.current?.stop();
       visualizeTurnRef.current = options?.visualize === true;
       if (imageArtifactRecoveryUnavailable) {
-        throw new Error(
-          "Visual artifact staging is unavailable. Open Settings → About → Diagnostics and choose Reveal to locate the staging file that needs repair.",
-        );
+        throw new Error(VISUAL_ARTIFACT_STAGING_UNAVAILABLE_MESSAGE);
       }
       if (imageArtifactRecoveryPending) {
         throw new Error(
@@ -3043,37 +3064,13 @@ export function ChatPane({ chatId }: { chatId: string }) {
     generationRef.current?.cancel("lifecycle");
     generationRef.current = null;
     generationChatIdRef.current = null;
-    if (deltaFrameRef.current !== null) window.cancelAnimationFrame(deltaFrameRef.current);
-    deltaFrameRef.current = null;
-    pendingDeltaRef.current = "";
-    pendingReasoningDeltaRef.current = "";
-    streamedTextRef.current = "";
-    streamedReasoningRef.current = "";
-    streamingArtifactsRef.current = [];
-    streamHandoffRef.current?.();
-    streamHandoffRef.current = null;
-    setStreamingText(null);
-    setStreamingReasoning(null);
-    setStreamingArtifacts([]);
-    setVisualDrafts(NO_VISUAL_DRAFTS);
-    setStreamingUiVisuals(NO_UI_VISUALS);
-    setUiDrafts(NO_UI_DRAFTS);
-    setStreamComplete(false);
+    clearStreamBuffers();
+    resetLiveTurnCore(null);
     setIsStartingGeneration(false);
-    setIsStoppingGeneration(false);
-    setIsModelLoading(false);
-    setModelCallRetry(null);
     setCanStopGeneration(false);
-    setGenerationTimeline(null);
-    generationTimelineRef.current = null;
-    setLiveSubagents([]);
-    setLiveSubagentTranscripts(NO_LIVE_SUBAGENT_TRANSCRIPTS);
-    setApprovals([]);
-    setQuestionnaire(null);
-    setQuestionnaireSubmitting(false);
     decidingApprovalRef.current = null;
     setDecidingApprovalId(null);
-  }, []);
+  }, [clearStreamBuffers, resetLiveTurnCore]);
 
   React.useEffect(() => {
     environmentPanel.setCancelAgentHandler(cancelAgentForContextChange);
@@ -3323,157 +3320,88 @@ export function ChatPane({ chatId }: { chatId: string }) {
     if (selectionThinkingLevel && providerId && model) select(providerId, model, null);
   }, [model, providerId, select, selectionThinkingLevel]);
 
-  const changeGoogleThinking = React.useCallback(
-    async (level: GoogleThinkingLevel) => {
-      if (
-        !model ||
-        !googleThinkingSupported ||
-        thinkingSaving ||
-        isStartingGeneration ||
-        isGenerating
-      ) {
-        return;
-      }
+  const saveThinkingSetting = React.useCallback(
+    async (
+      enabled: boolean,
+      failureCopy: string,
+      save: () => Promise<AppSettings>,
+      clearOwnLevel = true,
+    ) => {
+      if (!enabled || thinkingSaving || isStartingGeneration || isGenerating) return;
       setThinkingSaving(true);
       try {
-        const updated = await settingsApi.setGoogleThinking(model, level);
+        const updated = await save();
         qc.setQueryData(queryKeys.settings, updated);
-        clearOwnThinkingLevel();
+        if (clearOwnLevel) clearOwnThinkingLevel();
       } catch (changeError) {
-        toast.error(
-          changeError instanceof Error
-            ? changeError.message
-            : "Couldn't save the Gemini thinking level.",
-        );
+        toast.error(changeError instanceof Error ? changeError.message : failureCopy);
       } finally {
         setThinkingSaving(false);
       }
     },
-    [clearOwnThinkingLevel, googleThinkingSupported, isGenerating, isStartingGeneration, model, qc, thinkingSaving],
+    [clearOwnThinkingLevel, isGenerating, isStartingGeneration, qc, thinkingSaving],
+  );
+
+  const changeGoogleThinking = React.useCallback(
+    (level: GoogleThinkingLevel) => {
+      if (!model) return Promise.resolve();
+      return saveThinkingSetting(
+        googleThinkingSupported,
+        "Couldn't save the Gemini thinking level.",
+        () => settingsApi.setGoogleThinking(model, level),
+      );
+    },
+    [googleThinkingSupported, model, saveThinkingSetting],
   );
 
   const changeCodexThinking = React.useCallback(
-    async (level: CodexThinkingLevel) => {
-      if (
-        !model ||
-        !codexThinkingSupported ||
-        thinkingSaving ||
-        isStartingGeneration ||
-        isGenerating
-      ) {
-        return;
-      }
-      setThinkingSaving(true);
-      try {
-        const updated = await settingsApi.setCodexThinking(model, level);
-        qc.setQueryData(queryKeys.settings, updated);
-        clearOwnThinkingLevel();
-      } catch (changeError) {
-        toast.error(
-          changeError instanceof Error
-            ? changeError.message
-            : "Couldn't save the Codex thinking level.",
-        );
-      } finally {
-        setThinkingSaving(false);
-      }
+    (level: CodexThinkingLevel) => {
+      if (!model) return Promise.resolve();
+      return saveThinkingSetting(
+        codexThinkingSupported,
+        "Couldn't save the Codex thinking level.",
+        () => settingsApi.setCodexThinking(model, level),
+      );
     },
-    [clearOwnThinkingLevel, codexThinkingSupported, isGenerating, isStartingGeneration, model, qc, thinkingSaving],
+    [codexThinkingSupported, model, saveThinkingSetting],
   );
 
   const changeAnthropicThinking = React.useCallback(
-    async (level: AnthropicThinkingLevel) => {
-      if (
-        !model ||
-        !anthropicThinkingSupported ||
-        thinkingSaving ||
-        isStartingGeneration ||
-        isGenerating
-      ) {
-        return;
-      }
-      setThinkingSaving(true);
-      try {
-        const updated = await settingsApi.setAnthropicThinking(model, level);
-        qc.setQueryData(queryKeys.settings, updated);
-        clearOwnThinkingLevel();
-      } catch (changeError) {
-        toast.error(
-          changeError instanceof Error
-            ? changeError.message
-            : "Couldn't save the Claude thinking level.",
-        );
-      } finally {
-        setThinkingSaving(false);
-      }
+    (level: AnthropicThinkingLevel) => {
+      if (!model) return Promise.resolve();
+      return saveThinkingSetting(
+        anthropicThinkingSupported,
+        "Couldn't save the Claude thinking level.",
+        () => settingsApi.setAnthropicThinking(model, level),
+      );
     },
-    [anthropicThinkingSupported, clearOwnThinkingLevel, isGenerating, isStartingGeneration, model, qc, thinkingSaving],
+    [anthropicThinkingSupported, model, saveThinkingSetting],
   );
 
   const changeProviderThinking = React.useCallback(
-    async (level: GenerationThinkingLevel) => {
-      if (
-        !model ||
-        !providerThinkingSupported ||
-        thinkingSaving ||
-        isStartingGeneration ||
-        isGenerating
-      )
-        return;
-      setThinkingSaving(true);
-      try {
-        const updated = await settingsApi.setProviderThinking(providerId, model, level);
-        qc.setQueryData(queryKeys.settings, updated);
-        clearOwnThinkingLevel();
-      } catch (changeError) {
-        toast.error(
-          changeError instanceof Error
-            ? changeError.message
-            : "Couldn't save this model's thinking level.",
-        );
-      } finally {
-        setThinkingSaving(false);
-      }
+    (level: GenerationThinkingLevel) => {
+      if (!model) return Promise.resolve();
+      return saveThinkingSetting(
+        providerThinkingSupported,
+        "Couldn't save this model's thinking level.",
+        () => settingsApi.setProviderThinking(providerId, model, level),
+      );
     },
-    [
-      clearOwnThinkingLevel,
-      isGenerating,
-      isStartingGeneration,
-      model,
-      providerId,
-      providerThinkingSupported,
-      qc,
-      thinkingSaving,
-    ],
+    [model, providerId, providerThinkingSupported, saveThinkingSetting],
   );
 
   const changeLocalReasoningVisibility = React.useCallback(
-    async (visible: boolean) => {
-      if (
-        !localReasoningVisibilitySupported ||
-        thinkingSaving ||
-        isStartingGeneration ||
-        isGenerating
-      ) {
-        return;
-      }
-      setThinkingSaving(true);
-      try {
-        const updated = await settingsApi.set({
-          showLocalModelReasoning: visible,
-        });
-        qc.setQueryData(queryKeys.settings, updated);
-      } catch (changeError) {
-        toast.error(
-          changeError instanceof Error
-            ? changeError.message
-            : "Couldn't save the local reasoning visibility.",
-        );
-      } finally {
-        setThinkingSaving(false);
-      }
-    },
-    [isGenerating, isStartingGeneration, localReasoningVisibilitySupported, qc, thinkingSaving],
+    (visible: boolean) =>
+      saveThinkingSetting(
+        localReasoningVisibilitySupported,
+        "Couldn't save the local reasoning visibility.",
+        () =>
+          settingsApi.set({
+            showLocalModelReasoning: visible,
+          }),
+        false,
+      ),
+    [localReasoningVisibilitySupported, saveThinkingSetting],
   );
 
   // One busy signal for every way of changing a draft's workspace (chip,
@@ -4446,6 +4374,14 @@ export function ChatPane({ chatId }: { chatId: string }) {
     />
   );
 
+  const reasoningVisibilityControl = (
+    <ReasoningVisibilityControl
+      visible={showLocalModelReasoning}
+      disabled={modelChangeBlocked}
+      onChange={(visible) => void changeLocalReasoningVisibility(visible)}
+    />
+  );
+
   return (
     <>
       <ScrollArea
@@ -4468,44 +4404,32 @@ export function ChatPane({ chatId }: { chatId: string }) {
             >
               {chatTitleMenu}
               {startedByChat ? (
-                <span className="flex min-w-0 items-center gap-1 text-small font-normal text-secondary">
-                  <MessagesSquare aria-hidden="true" className="size-3 shrink-0" />
-                  {leadChat ? (
-                    <button
-                      type="button"
-                      className="min-w-0 truncate rounded-control text-left outline-none hover:text-primary focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
-                      onClick={() => void navigate({ to: "/chat/$chatId", params: { chatId: leadChat.id } })}
-                    >
-                      {startedByChat}
-                    </button>
-                  ) : (
-                    <span className="min-w-0 truncate">{startedByChat}</span>
-                  )}
-                </span>
+                <ChatLineageLine
+                  icon={<MessagesSquare aria-hidden="true" className="size-3 shrink-0" />}
+                  label={startedByChat}
+                  onClick={
+                    leadChat
+                      ? () => void navigate({ to: "/chat/$chatId", params: { chatId: leadChat.id } })
+                      : undefined
+                  }
+                />
               ) : null}
               {forkSourceLabel ? (
-                <span className="flex min-w-0 items-center gap-1 text-small font-normal text-secondary">
-                  <GitFork aria-hidden="true" className="size-3 shrink-0" />
-                  {forkSource ? (
-                    <button
-                      type="button"
-                      className="min-w-0 truncate rounded-control text-left outline-none hover:text-primary focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
-                      onClick={() =>
-                        void navigate({ to: "/chat/$chatId", params: { chatId: forkSource.id } })
-                      }
-                    >
-                      {forkSourceLabel}
-                    </button>
-                  ) : (
-                    <span className="min-w-0 truncate">{forkSourceLabel}</span>
-                  )}
-                </span>
+                <ChatLineageLine
+                  icon={<GitFork aria-hidden="true" className="size-3 shrink-0" />}
+                  label={forkSourceLabel}
+                  onClick={
+                    forkSource
+                      ? () => void navigate({ to: "/chat/$chatId", params: { chatId: forkSource.id } })
+                      : undefined
+                  }
+                />
               ) : null}
               {startedByLabel ? (
-                <span className="flex min-w-0 items-center gap-1 text-small font-normal text-secondary">
-                  <AppWindow aria-hidden="true" className="size-3 shrink-0" />
-                  <span className="min-w-0 truncate">{startedByLabel}</span>
-                </span>
+                <ChatLineageLine
+                  icon={<AppWindow aria-hidden="true" className="size-3 shrink-0" />}
+                  label={startedByLabel}
+                />
               ) : null}
             </span>
           ) : (
@@ -4810,7 +4734,7 @@ export function ChatPane({ chatId }: { chatId: string }) {
                 readinessSettingsSection={!chatReadinessMessage && modelReadinessMessage ? "providers" : undefined}
                 readinessMessage={
                   imageArtifactRecoveryUnavailable
-                    ? "Visual artifact staging is unavailable. Open Settings → About → Diagnostics and choose Reveal to locate the staging file that needs repair."
+                    ? VISUAL_ARTIFACT_STAGING_UNAVAILABLE_MESSAGE
                     : imageArtifactRecoveryPending
                       ? "A visual artifact could not be recovered. Delete this chat to discard it before sending another message."
                       : readinessMessage
@@ -4966,17 +4890,13 @@ export function ChatPane({ chatId }: { chatId: string }) {
                 onLogoutProvider={logoutProvider}
                 thinkingControl={
                   stopSetsEffort && !localReasoningVisibilitySupported ? undefined : stopSetsEffort ? (
-                    <ReasoningVisibilityControl
-                      visible={showLocalModelReasoning}
-                      disabled={thinkingSaving || isStartingGeneration || isGenerating}
-                      onChange={(visible) => void changeLocalReasoningVisibility(visible)}
-                    />
+                    reasoningVisibilityControl
                   ) : googleThinkingSupported ? (
                     <ThinkingControl
                       level={ownLevelIn(googleThinkingLevels) ?? googleThinkingLevel}
                       levels={googleThinkingLevels}
                       canDisable={thinkingMetadata?.thinkingCanDisable !== false}
-                      disabled={thinkingSaving || isStartingGeneration || isGenerating}
+                      disabled={modelChangeBlocked}
                       disabledReason={thinkingDisabledReason}
                       onChange={(level) => void changeGoogleThinking(level)}
                     />
@@ -4985,7 +4905,7 @@ export function ChatPane({ chatId }: { chatId: string }) {
                       providerLabel="Codex"
                       level={ownLevelIn(codexThinkingLevels) ?? codexThinkingLevel}
                       levels={codexThinkingLevels}
-                      disabled={thinkingSaving || isStartingGeneration || isGenerating}
+                      disabled={modelChangeBlocked}
                       disabledReason={thinkingDisabledReason}
                       onChange={(level) => void changeCodexThinking(level)}
                     />
@@ -4995,7 +4915,7 @@ export function ChatPane({ chatId }: { chatId: string }) {
                       level={ownLevelIn(anthropicThinkingLevels) ?? anthropicThinkingLevel}
                       levels={anthropicThinkingLevels}
                       canDisable={thinkingMetadata?.thinkingCanDisable !== false}
-                      disabled={thinkingSaving || isStartingGeneration || isGenerating}
+                      disabled={modelChangeBlocked}
                       disabledReason={thinkingDisabledReason}
                       onChange={(level) => void changeAnthropicThinking(level)}
                     />
@@ -5006,16 +4926,12 @@ export function ChatPane({ chatId }: { chatId: string }) {
                       levels={providerThinkingLevels}
                       canDisable={selectedProvider?.kind === "openai" && customModelThinkingLevels(thinkingMetadata?.overrides)
                         ? providerThinkingLevels.includes("off") : thinkingMetadata?.thinkingCanDisable !== false}
-                      disabled={thinkingSaving || isStartingGeneration || isGenerating}
+                      disabled={modelChangeBlocked}
                       disabledReason={thinkingDisabledReason}
                       onChange={(level) => void changeProviderThinking(level)}
                     />
                   ) : localReasoningVisibilitySupported ? (
-                    <ReasoningVisibilityControl
-                      visible={showLocalModelReasoning}
-                      disabled={thinkingSaving || isStartingGeneration || isGenerating}
-                      onChange={(visible) => void changeLocalReasoningVisibility(visible)}
-                    />
+                    reasoningVisibilityControl
                   ) : undefined
                 }
                 contextMeter={
@@ -5023,15 +4939,7 @@ export function ChatPane({ chatId }: { chatId: string }) {
                     <ContextMeter
                       onViewDetails={() => environmentPanel.showTools("context")}
                       pressure={contextPressure}
-                      compacting={
-                        contextCompactPending ||
-                        (displayedGenerationTimeline?.steps.some(
-                          (step) =>
-                            isToolStep(step) &&
-                            step.toolName === "compact_context" &&
-                            (step.status === "pending" || step.status === "running"),
-                        ) ?? false)
-                      }
+                      compacting={contextCompactPending || timelineCompacting}
                       recentlyCompacted={contextCompactedFlash}
                     />
                   )
@@ -5041,43 +4949,29 @@ export function ChatPane({ chatId }: { chatId: string }) {
                   draft ? undefined : contextHistory.chatId === chatId ? contextHistory.pressure : null
                 }
                 modelPicker={
-                  chat.data?.botId ? (
-                    // A Bot's chat keeps the plain list: its model is the Bot's, not a slider stop.
-                    <ModelPicker
-                      providers={pickerProviders}
-                      providerId={providerId}
-                      model={model}
-                      onChange={(nextProviderId, nextModel) => {
-                        if (!getChatDraft(chatId)?.sending) select(nextProviderId, nextModel);
-                      }}
-                      disabled={modelChangeBlocked}
-                      hiddenModelsByProvider={settings.data?.hiddenModelsByProvider}
-                    />
-                  ) : (
-                    <AgentModelPopover
-                      providers={pickerProviders}
-                      providerId={providerId}
-                      model={model}
-                      thinkingLevel={selectionThinkingLevel}
-                      slider={agentSlider}
-                      settingsLoaded={settings.data !== undefined}
-                      seedThinkingLevel={turnThinkingLevel(selectionThinkingLevel, {
-                        google: { supported: googleThinkingSupported, level: googleThinkingLevel },
-                        codex: { supported: codexThinkingSupported, level: codexThinkingLevel },
-                        anthropic: { supported: anthropicThinkingSupported, level: anthropicThinkingLevel },
-                        provider: { supported: providerThinkingSupported, level: providerThinkingLevel },
-                      })}
-                      onChange={(nextProviderId, nextModel) => {
-                        if (!getChatDraft(chatId)?.sending) select(nextProviderId, nextModel);
-                      }}
-                      onSelectStop={(nextProviderId, nextModel, level) => {
-                        if (!getChatDraft(chatId)?.sending) select(nextProviderId, nextModel, level ?? null);
-                      }}
-                      disabled={modelChangeBlocked}
-                      settingsBlockedReason={settingsBlockedReason}
-                      hiddenModelsByProvider={settings.data?.hiddenModelsByProvider}
-                    />
-                  )
+                  <AgentModelPopover
+                    providers={pickerProviders}
+                    providerId={providerId}
+                    model={model}
+                    thinkingLevel={selectionThinkingLevel}
+                    slider={agentSlider}
+                    settingsLoaded={settings.data !== undefined}
+                    seedThinkingLevel={turnThinkingLevel(selectionThinkingLevel, {
+                      google: { supported: googleThinkingSupported, level: googleThinkingLevel },
+                      codex: { supported: codexThinkingSupported, level: codexThinkingLevel },
+                      anthropic: { supported: anthropicThinkingSupported, level: anthropicThinkingLevel },
+                      provider: { supported: providerThinkingSupported, level: providerThinkingLevel },
+                    })}
+                    onChange={(nextProviderId, nextModel) => {
+                      if (!getChatDraft(chatId)?.sending) select(nextProviderId, nextModel);
+                    }}
+                    onSelectStop={(nextProviderId, nextModel, level) => {
+                      if (!getChatDraft(chatId)?.sending) select(nextProviderId, nextModel, level ?? null);
+                    }}
+                    disabled={modelChangeBlocked}
+                    settingsBlockedReason={settingsBlockedReason}
+                    hiddenModelsByProvider={settings.data?.hiddenModelsByProvider}
+                  />
                 }
               />
             )}
@@ -5199,7 +5093,7 @@ export function ChatPane({ chatId }: { chatId: string }) {
                 error={
                   error ??
                   (imageArtifactRecoveryUnavailable
-                    ? "Visual artifact staging is unavailable. Open Settings → About → Diagnostics and choose Reveal to locate the staging file that needs repair."
+                    ? VISUAL_ARTIFACT_STAGING_UNAVAILABLE_MESSAGE
                     : imageArtifactRecoveryPending
                       ? "A visual artifact could not be recovered. Delete this chat to discard it before continuing."
                       : null)

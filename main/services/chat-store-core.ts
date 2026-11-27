@@ -1,5 +1,4 @@
 import { newChatUuid } from "../../renderer/shared/chat-identity.js";
-import { parseAppControlPanels } from "../../renderer/shared/app-controls.js";
 // Chat history persistence: an index.json of metadata + one file per chat.
 //
 // Concurrency model:
@@ -34,8 +33,6 @@ import {
   type ChatForkSummaryV1,
 } from "../../renderer/shared/chat-copy-contract.js";
 import { parseChatStartedByV1, type ChatStartedByV1 } from "../../renderer/shared/chat-started-by.js";
-import { parseGenerationTimeline } from "../../renderer/shared/generation-timeline.js";
-import { parseSubagentMessageReferenceV1 } from "../../renderer/shared/subagent-runs.js";
 import { migrateLegacyPiProviderId } from "../../renderer/shared/google-provider.js";
 import {
   isGenerationThinkingLevel,
@@ -43,19 +40,19 @@ import {
 } from "../../renderer/shared/generation-thinking.js";
 import { parseSkillProvenanceV1 } from "../../renderer/shared/slash-commands.js";
 import { parseChatInputSource } from "../../renderer/shared/chat-input-source.js";
-import { parseAgentNoticeV1 } from "../../renderer/shared/agent-notices.js";
 import { boundedHookBlockedReason, hookBlockedField } from "./hook-blocked-prompt.js";
 import { safeStoredAttachments } from "./attachment-contract.js";
 import { CHAT_IMAGES_DIRECTORY, createChatImageStore, rememberImageHash, type ChatImageStore } from "./chat-image-store.js";
 import { imagePixelSize } from "../../renderer/shared/image-dimensions.js";
-import { parseChatHtmlArtifacts, parseChatImagePlacements, parseHtmlArtifactPlacements } from "../../renderer/shared/chat-artifacts.js";
-import { parseChatUiVisualV1, parseChatUiVisuals } from "../../renderer/shared/aiden-ui/visual.js";
-import { isVisualSnapshotAttachmentId, parseVisualSnapshots } from "../../renderer/shared/visual-snapshots.js";
+import { parseChatUiVisualV1 } from "../../renderer/shared/aiden-ui/visual.js";
+import { isVisualSnapshotAttachmentId } from "../../renderer/shared/visual-snapshots.js";
 import { parseGrabbedElements } from "../../renderer/shared/browser-element-grab.js";
 import { MAX_ATTACHMENT_INLINE_BYTES, MAX_ATTACHMENTS_PER_MESSAGE } from "../../renderer/shared/attachment-contract.js";
 import { remappedHtmlArtifactMediaId } from "./generative-ui-artifact-store.js";
-import { parseStoredPiAssistantMessage } from "./pi-message-storage.js";
-import { parseAssistantTurnStatsV1 } from "../../renderer/shared/assistant-turn-stats.js";
+import {
+  parseStoredAssistantProtocol,
+  parseStoredMessageFields,
+} from "./stored-message-fields.js";
 import {
   projectVisibleChatMessage,
   projectVisibleChatMetadata,
@@ -940,61 +937,15 @@ export function createChatStore(
           privacyMigrationRequired = true;
         }
       }
-      const grabbedElements =
-        message.role === "user"
-          ? parseGrabbedElements(message.grabbedElements, "stored")
-          : undefined;
       return {
         id: message.id,
         role: message.role,
         content: message.content,
         createdAt: message.createdAt,
         model: message.model,
-        attachments: safeStoredAttachments(message.attachments),
-        ...(grabbedElements ? { grabbedElements } : {}),
-        appPanels: assistant ? parseAppControlPanels(message.appPanels) : undefined,
-        htmlArtifacts: assistant
-          ? parseChatHtmlArtifacts(message.htmlArtifacts)
-          : undefined,
-        htmlArtifactPlacements:
-          assistant && message.htmlArtifacts
-            ? parseHtmlArtifactPlacements(message.htmlArtifactPlacements)
-            : undefined,
-        imagePlacements: assistant ? parseChatImagePlacements(message.imagePlacements) : undefined,
-        uiVisuals: assistant ? parseChatUiVisuals(message.uiVisuals) : undefined,
-        visualSnapshots: assistant ? parseVisualSnapshots(message.visualSnapshots) : undefined,
-        reasoning:
-          assistant &&
-          typeof message.reasoning === "string" &&
-          message.reasoning.trim()
-            ? message.reasoning
-            : undefined,
-        pi: assistant
-          ? parseStoredPiAssistantMessage(message.pi)
-          : undefined,
+        ...parseStoredMessageFields(message, { includeFromLeadChat: true }),
+        ...parseStoredAssistantProtocol(message),
         providerFailure,
-        timeline: assistant
-          ? parseGenerationTimeline(message.timeline, message.content.length)
-          : undefined,
-        turnStats: assistant
-          ? parseAssistantTurnStatsV1(message.turnStats)
-          : undefined,
-        subagents: assistant
-          ? parseSubagentMessageReferenceV1(message.subagents)
-          : undefined,
-        skill:
-          message.role === "user"
-            ? parseSkillProvenanceV1(message.skill)
-            : undefined,
-        notice:
-          message.role === "user"
-            ? parseAgentNoticeV1(message.notice)
-            : undefined,
-        inputSource:
-          message.role === "user"
-            ? parseChatInputSource(message.inputSource)
-            : undefined,
-        fromLeadChat: message.role === "user" && message.fromLeadChat === true && !message.notice ? true : undefined,
         // Only a blocked prompt carries the key, so unmarked messages keep their old shape.
         ...hookBlockedField(message),
       };
@@ -1845,10 +1796,6 @@ export function createChatStore(
           if (chargedBytes > MAX_VISIBLE_COPY_BYTES) {
             throw new ChatForkError("too_large", "This chat is too large to copy safely.");
           }
-          const copiedGrabbedElements =
-            message.role === "user"
-              ? parseGrabbedElements(message.grabbedElements, "stored")
-              : undefined;
           sourceMessageIds.push(message.id);
           copiedMessages.push({
             id: randomUUID(),
@@ -1856,8 +1803,10 @@ export function createChatStore(
             content,
             createdAt: message.createdAt,
             model: message.model,
-            attachments: safeStoredAttachments(message.attachments),
-            ...(copiedGrabbedElements ? { grabbedElements: copiedGrabbedElements } : {}),
+            ...parseStoredMessageFields(message, {
+              includeAppPanels: false,
+              includeVisualArtifacts: false,
+            }),
             htmlArtifacts:
               message.role === "assistant"
                 ? (message.htmlArtifacts ?? []).map((artifact) => {
@@ -1873,10 +1822,6 @@ export function createChatStore(
                     ...(placement.layout === "wide" ? { layout: "wide" as const } : {}),
                   }))
                 : undefined,
-            imagePlacements:
-              message.role === "assistant" ? parseChatImagePlacements(message.imagePlacements) : undefined,
-            uiVisuals:
-              message.role === "assistant" ? parseChatUiVisuals(message.uiVisuals) : undefined,
             visualSnapshots:
               message.role === "assistant" && message.visualSnapshots?.length
                 ? message.visualSnapshots.map((ref) => ({
@@ -1885,18 +1830,6 @@ export function createChatStore(
                       : ref.visualId,
                     attachmentId: ref.attachmentId,
                   }))
-                : undefined,
-            skill:
-              message.role === "user"
-                ? parseSkillProvenanceV1(message.skill)
-                : undefined,
-            notice:
-              message.role === "user"
-                ? parseAgentNoticeV1(message.notice)
-                : undefined,
-            inputSource:
-              message.role === "user"
-                ? parseChatInputSource(message.inputSource)
                 : undefined,
             ...hookBlockedField(message),
             providerFailure:
@@ -2428,71 +2361,17 @@ export function createChatStore(
         if (message.role === "user" && forkSummaryHoldsSend(chat.forkedFrom)) {
           throw new Error(FORK_SUMMARY_HOLD_MESSAGE);
         }
-        const grabbedElements =
-          message.role === "user"
-            ? parseGrabbedElements(message.grabbedElements, "stored")
-            : undefined;
         const full: ChatMessage = {
           id: message.id ?? newId(),
           role: message.role,
           content: message.content,
           model: message.model,
-          reasoning:
-            message.role === "assistant" &&
-            typeof message.reasoning === "string" &&
-            message.reasoning.trim()
-              ? message.reasoning
-              : undefined,
-          pi:
-            message.role === "assistant"
-              ? parseStoredPiAssistantMessage(message.pi)
-              : undefined,
+          ...parseStoredAssistantProtocol(message),
           providerFailure:
             message.role === "assistant"
               ? parseProviderFailureV1(message.providerFailure)
               : undefined,
-          attachments: safeStoredAttachments(message.attachments),
-          ...(grabbedElements ? { grabbedElements } : {}),
-          appPanels: message.role === "assistant" ? parseAppControlPanels(message.appPanels) : undefined,
-          htmlArtifacts:
-            message.role === "assistant"
-              ? parseChatHtmlArtifacts(message.htmlArtifacts)
-              : undefined,
-          htmlArtifactPlacements:
-            message.role === "assistant" && message.htmlArtifacts
-              ? parseHtmlArtifactPlacements(message.htmlArtifactPlacements)
-              : undefined,
-          imagePlacements:
-            message.role === "assistant" ? parseChatImagePlacements(message.imagePlacements) : undefined,
-          uiVisuals:
-            message.role === "assistant" ? parseChatUiVisuals(message.uiVisuals) : undefined,
-          visualSnapshots:
-            message.role === "assistant" ? parseVisualSnapshots(message.visualSnapshots) : undefined,
-          skill:
-            message.role === "user"
-              ? parseSkillProvenanceV1(message.skill)
-              : undefined,
-          notice:
-            message.role === "user"
-              ? parseAgentNoticeV1(message.notice)
-              : undefined,
-          inputSource:
-            message.role === "user"
-              ? parseChatInputSource(message.inputSource)
-              : undefined,
-          fromLeadChat: message.role === "user" && message.fromLeadChat === true && !message.notice ? true : undefined,
-          timeline:
-            message.role === "assistant"
-              ? parseGenerationTimeline(message.timeline, message.content.length)
-              : undefined,
-          turnStats:
-            message.role === "assistant"
-              ? parseAssistantTurnStatsV1(message.turnStats)
-              : undefined,
-          subagents:
-            message.role === "assistant"
-              ? parseSubagentMessageReferenceV1(message.subagents)
-              : undefined,
+          ...parseStoredMessageFields(message, { includeFromLeadChat: true }),
           createdAt: message.createdAt ?? Date.now(),
           ...(message.role === "user" && meta?.hookBlockedReason !== undefined
             ? { hookBlocked: { reason: boundedHookBlockedReason(meta.hookBlockedReason) } }
