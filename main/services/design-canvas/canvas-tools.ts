@@ -84,7 +84,18 @@ import {
   isDesignTweakValue,
   type DesignTweakValues,
 } from "../../../renderer/shared/design-canvas/tweaks.js";
+import {
+  ChatPagesFullError,
+  chatsOnPage,
+  claimPage,
+  landedPageId,
+  withLazyClaim,
+  chatsOnCanvas,
+  withoutGoneClaims,
+  type IsChatLive,
+} from "../../../renderer/shared/design-canvas/chat-pages.js";
 import { designPageTweakNames } from "./inspect.js";
+import { claimWithRoom } from "./lazy-claim.js";
 import { resolveDesignFile } from "./resolve-core.js";
 import type { DesignCanvasUpdated, DesignChatCanvases } from "./store.js";
 import { viewPageId, type DesignChatView } from "../../../renderer/shared/design-canvas/view.js";
@@ -206,7 +217,7 @@ export const DESIGN_MODE_PROMPT_SECTION = [
   "- You can move, resize, retitle, restyle, regroup, hide, lock or reorder any unlocked frame, the person's too, with canvas_update_frame. A locked frame stays as it is unless the person asks you to unlock it. Remove a frame the person added only when they ask, with force: true.",
   "- Use canvas_arrange to lay frames out in a tidy row, column or grid, put them in a group (it fits itself around them) or take them out, in one call. Put each direction in its own group.",
   "- For a flow or diagram, draw it in one canvas_build call: boxes (shapes with their labels in text, text, notes) with refs of your own, and connectors between them by ref or frameId; a connector follows its frames when they move. A build counts as one of the turn's canvas calls.",
-  "- The canvas can have several pages. Work on the page the person is looking at unless they name another; canvas_page adds, renames, duplicates, reorders, shows or deletes pages, and canvas_update_frame with page moves a frame to another.",
+  "- The canvas can have several pages. Work on the page the person is looking at, which starts as this chat's own page, unless they name another; canvas_page use makes a page this chat's page. canvas_page adds, renames, duplicates, reorders, shows or deletes pages, and canvas_update_frame with page moves a frame to another.",
   "- After placing or moving frames, call canvas_focus with their ids so the person sees them (canvas_arrange does this by itself). canvas_read with snapshot: true shows you the canvas as the person sees it.",
   "- canvas_inspect draws one page offline at its design width, with its frame's look, and reports script errors, files that did not load, sideways overflow and tweaks that do nothing, with a picture when you can see images. Each page you write is checked the same way without a picture, and the report follows in the conversation before your next step: fix what it lists once, call canvas_inspect for a picture after a big change, and say what you fixed.",
   "- The person's canvas comments come with their message or in canvas_read. After acting on one they sent you, canvas_comment can reply on it in a sentence (what you changed, or a question when it is unclear) and resolve it once it is done. An open comment in canvas_read is still their draft, or one they reopened after your reply, so it is left for them to send.",
@@ -223,12 +234,20 @@ export type DesignCanvasToolDeps = {
   broadcast(update: DesignCanvasUpdated): void;
   /**
    * The page this turn works on (`designTurnPages`): a page Aiden showed this
-   * turn, the page the message came from, the chat's kept page, then the
-   * first page. Built from `viewState` alone when absent.
+   * turn, the page the message came from, the chat's kept page, the chat's
+   * own page, then the first page. Built from `viewState` alone when absent.
    */
   pages?: DesignTurnPages;
   /** False once the chat left design mode or was deleted. Checked on every call. */
   stillAvailable?(): Promise<boolean>;
+  /**
+   * Which of `chatIds` still exist in the workspace, so a deleted or moved
+   * chat's claim neither protects a page nor counts in canvas_page answers.
+   * Left out, every chat counts as live.
+   */
+  isLive?(chatIds: string[], workspaceId: string): Promise<Set<string>>;
+  /** Settles once a design-mode entry running for this chat has claimed its page; writes wait for it. */
+  pendingEntry?(): Promise<void>;
   newId?(): string;
   /**
    * Asks the window showing the chat's canvas to show `pageId` and fit these
@@ -277,6 +296,27 @@ const result = (value: unknown): ToolResult => ({
 });
 
 class CanvasToolError extends Error {}
+
+/** `canvas_page use` found the page already this chat's on the latest canvas. */
+const OWN_PAGE_ALREADY = Symbol("own page already");
+
+const counted = (count: number, one: string, many: string) => `${count} ${count === 1 ? one : many}`;
+
+/**
+ * Why Aiden may not delete a page without force: the person's or locked
+ * frames on it, and other live chats using it as their own page. Undefined
+ * when neither applies.
+ */
+function deleteRefusal(doc: DesignCanvas, pageId: string, isLive: IsChatLive, chatId?: string): string | undefined {
+  const kept = doc.frames.filter((frame) => frame.pageId === pageId && (frame.createdBy === "person" || frame.locked)).length;
+  const others = chatsOnPage(doc, pageId, isLive).filter((other) => other !== chatId).length;
+  const reasons = [
+    ...(kept > 0 ? [`holds ${counted(kept, "frame", "frames")} the person added or locked`] : []),
+    ...(others > 0 ? [`is the page of ${counted(others, "other chat", "other chats")}`] : []),
+  ];
+  if (reasons.length === 0) return undefined;
+  return `That page ${reasons.join(" and ")}. Delete it only if the person asked, and then pass force: true.`;
+}
 
 function text(value: unknown, field: string, max: number): string {
   if (typeof value !== "string" || !value.trim()) throw new CanvasToolError(`${field} must be a non-empty string.`);
@@ -797,7 +837,7 @@ function withCoEditReport<T>(value: T, report: ReturnType<typeof keepPersonsMove
  * request carries fewer tool definitions.
  */
 const CANVAS_CATALOG_LINES: Readonly<Record<string, string>> = {
-  canvas_page: "Add, rename, duplicate, reorder, show or delete design canvas pages, when the canvas needs another page.",
+  canvas_page: "Add, rename, duplicate, reorder, show, use or delete design canvas pages, when the canvas needs another page or this chat another page of its own.",
   canvas_duplicate: "Copy a design canvas frame or group beside it, or lay out a page's light/dark, width or tweak variants in one labelled group.",
 };
 
@@ -880,38 +920,64 @@ export function createDesignCanvasTools(deps: DesignCanvasToolDeps): AgentTool[]
    * person moved since Aiden last saw it keeps the person's box, and the
    * answer says so with its box now. `show` brings a page on screen after
    * the change has landed.
+   *
+   * A chat with no page of its own claims the page the change landed on, in
+   * the same write, once a pending entry is done: the page it shows, else
+   * the page of the frames it touched, else the turn's page. `landed: null`
+   * says it landed on no page (a delete). `answer` builds the value from the
+   * saved document, so it sees that claim.
    */
   const edit = async <T>(
-    change: (doc: DesignCanvas, view: DesignChatView) => { doc: DesignCanvas; value: T; show?: { pageId: string; frameIds: string[] } },
+    change: (
+      doc: DesignCanvas,
+      view: DesignChatView,
+    ) => {
+      doc: DesignCanvas;
+      value: T;
+      show?: { pageId: string; frameIds: string[] };
+      landed?: null;
+      answer?: (saved: DesignCanvas) => T;
+    },
   ): Promise<T> => {
     let value: T | undefined;
+    let answer: ((saved: DesignCanvas) => T) | undefined;
+    let landed: string | undefined;
     let show: { pageId: string; frameIds: string[] } | undefined;
     let report: ReturnType<typeof keepPersonsMoves> | undefined;
     let touched = new Set<string>();
+    await deps.pendingEntry?.();
     const { workspaceId, viewOf } = await turnFor();
     const { doc: saved } = await deps.store.update(
       deps.chatId,
       (doc) => {
-        const next = change(doc, viewOf(doc));
+        const view = viewOf(doc);
+        const next = change(doc, view);
         report = keepPersonsMoves(doc, next.doc, seen);
         const earlier = new Map(doc.frames.map((frame) => [frame.id, JSON.stringify(frame)]));
         touched = new Set(
           report.doc.frames.filter((frame) => earlier.get(frame.id) !== JSON.stringify(frame)).map((frame) => frame.id),
         );
         value = next.value;
+        answer = next.answer;
         show = next.show;
-        return report.doc;
+        landed = undefined;
+        if (next.doc === doc || next.landed === null) return report.doc;
+        const exists = (pageId: string | undefined): pageId is string =>
+          pageId !== undefined && report!.doc.pages.some((page) => page.id === pageId);
+        landed = exists(next.show?.pageId) ? next.show.pageId : landedPageId(doc, report.doc, view.pageId);
+        return withLazyClaim(report.doc, deps.chatId, landed);
       },
       { workspaceId },
     );
     deps.broadcast({ workspaceId, chatId: deps.chatId, revision: saved.revision });
+    await claimWithRoom({ chatId: deps.chatId, workspaceId, pageId: landed, saved, store: deps.store, isLive: deps.isLive, broadcast: deps.broadcast });
     remember(saved.frames.filter((frame) => touched.has(frame.id)));
     for (const entry of report?.changed ?? []) {
       const now = saved.frames.find((frame) => frame.id === entry.id);
       if (now) seen.set(entry.id, boxKey(now));
     }
     if (show) await showOnCanvas(workspaceId, show.pageId, show.frameIds);
-    return withCoEditReport(value as T, report, saved);
+    return withCoEditReport(answer ? answer(saved) : (value as T), report, saved);
   };
 
   const frameIn = (doc: DesignCanvas, id: unknown, onScreen: string): DesignFrame => {
@@ -931,13 +997,30 @@ export function createDesignCanvasTools(deps: DesignCanvasToolDeps): AgentTool[]
     return frame;
   };
 
-  const pagesAnswer = (doc: DesignCanvas, onScreen: string) =>
+  /**
+   * Each page, with whether it is this chat's own page and how many other
+   * live chats use it. Other chats are only counted, never named.
+   */
+  const pagesAnswer = (doc: DesignCanvas, onScreen: string, isLive?: IsChatLive) =>
     doc.pages.map((entry) => ({
       id: entry.id,
       name: entry.name,
       frames: doc.frames.filter((frame) => frame.pageId === entry.id).length,
       onScreen: entry.id === onScreen,
+      yours: Object.prototype.hasOwnProperty.call(doc.chatPages, deps.chatId) && doc.chatPages[deps.chatId] === entry.id,
+      otherChats: chatsOnPage(doc, entry.id, isLive).filter((chatId) => chatId !== deps.chatId).length,
     }));
+
+  /**
+   * Which chats claiming or named on pages in `doc` are live, as a check that
+   * needs no waiting. A claim made after this read counts as a live chat's.
+   */
+  const livenessOf = async (doc: DesignCanvas, workspaceId: string): Promise<IsChatLive> => {
+    const checked = new Set(chatsOnCanvas(doc).filter((chatId) => chatId !== deps.chatId));
+    if (!deps.isLive || checked.size === 0) return () => true;
+    const live = await deps.isLive([...checked], workspaceId);
+    return (chatId) => !checked.has(chatId) || live.has(chatId);
+  };
 
   /** The canvas as this chat may see it: the comments its own messages sent, none of another chat's. */
   const ownComments = (doc: DesignCanvas): DesignCanvas => ({
@@ -1655,9 +1738,9 @@ export function createDesignCanvasTools(deps: DesignCanvasToolDeps): AgentTool[]
         name: "canvas_page",
         label: "Change design canvas pages",
         description:
-          "Add, rename, duplicate (with everything on it), delete (with its frames; never the last; force: true for one holding the person's or locked frames, only when they asked), move (step -1 or 1) or show a design canvas page, named by name or id.",
+          "Add, rename, duplicate (with everything on it), delete (with its frames; never the last), move (step -1 or 1), show, or use (make it this chat's own page and show it) a design canvas page, named by name or id. delete needs force: true for a page holding the person's or locked frames or used by another chat, only when they asked.",
         parameters: Type.Object({
-          action: enumOf(["add", "rename", "duplicate", "delete", "move", "show"] as const),
+          action: enumOf(["add", "rename", "duplicate", "delete", "move", "show", "use"] as const),
           page: Type.Optional(Type.String({ maxLength: 128 })),
           name: Type.Optional(Type.String({ maxLength: DESIGN_CANVAS_LIMITS.pageNameChars })),
           show: Type.Optional(Type.Boolean()),
@@ -1674,89 +1757,132 @@ export function createDesignCanvasTools(deps: DesignCanvasToolDeps): AgentTool[]
                 throw new CanvasToolError(`The ${String(action)} action needs page.`);
               }
             };
-            // Showing a page changes only this chat's view, never the shared canvas.
-            if (action === "show") {
+            // Only show, use and delete read the canvas first, to tell which
+            // claimed chats are live; the other actions count every claim.
+            let isLive: IsChatLive = () => true;
+            let workspaceId = "";
+            if (action === "show" || action === "use" || action === "delete") {
               pageNeeded();
-              const { doc, view, workspaceId } = await read();
-              const pageId = pageOf(doc, p.page, view.pageId);
+              const { doc: current, view: currentView, workspaceId: readWorkspace } = await read();
+              workspaceId = readWorkspace;
+              isLive = await livenessOf(current, workspaceId);
+              // Showing a page changes only this chat's view, never the shared canvas,
+              // and so does using the page that is already this chat's.
+              const pageId = action === "delete" ? "" : pageOf(current, p.page, currentView.pageId);
+              const own = Object.prototype.hasOwnProperty.call(current.chatPages, deps.chatId) && current.chatPages[deps.chatId] === pageId;
+              if (action === "show" || (action === "use" && own)) {
+                await showOnCanvas(workspaceId, pageId, []);
+                return {
+                  status: "done",
+                  action,
+                  page: { id: pageId, name: current.pages.find((entry) => entry.id === pageId)?.name },
+                  pages: pagesAnswer(current, pageId, isLive),
+                };
+              }
+            }
+            // Set when `use` finds the page already this chat's on the latest canvas.
+            let ownAlready: { pageId: string; doc: DesignCanvas } | undefined;
+            try {
+              return await edit((doc, view) => {
+                let next = doc;
+                let pageId: string;
+                // The page that comes on screen after the change, when it changes.
+                let shown: string | undefined;
+                switch (action) {
+                  case "add": {
+                    if (!canAddPage(doc)) throw new CanvasToolError(`The canvas has its most pages (${DESIGN_CANVAS_LIMITS.pages}).`);
+                    pageId = newId();
+                    next = addPage(doc, pageId, name, view.pageId);
+                    if (optionalBoolean(p.show, "show") !== false) shown = pageId;
+                    break;
+                  }
+                  case "rename": {
+                    pageNeeded();
+                    pageId = pageOf(doc, p.page, view.pageId);
+                    if (!name) throw new CanvasToolError("rename needs a non-empty name.");
+                    next = renamePage(doc, pageId, name);
+                    break;
+                  }
+                  case "duplicate": {
+                    pageNeeded();
+                    const source = pageOf(doc, p.page, view.pageId);
+                    if (!canAddPage(doc)) throw new CanvasToolError(`The canvas has its most pages (${DESIGN_CANVAS_LIMITS.pages}).`);
+                    pageId = newId();
+                    next = duplicatePage(doc, source, pageId, newId);
+                    if (next === doc) throw new CanvasToolError(`A copy would pass the canvas's ${DESIGN_CANVAS_LIMITS.frames} frames.`);
+                    if (name) next = renamePage(next, pageId, name);
+                    shown = pageId;
+                    break;
+                  }
+                  case "delete": {
+                    pageNeeded();
+                    pageId = pageOf(doc, p.page, view.pageId);
+                    if (doc.pages.length <= 1) throw new CanvasToolError("The canvas keeps at least one page, so its only page cannot be deleted.");
+                    if (p.force !== true) {
+                      const refusal = deleteRefusal(doc, pageId, isLive, deps.chatId);
+                      if (refusal) throw new CanvasToolError(refusal);
+                    }
+                    next = deletePage(withoutGoneClaims(doc, isLive), pageId);
+                    // Deleting the page on screen brings the one before it on screen.
+                    if (pageId === view.pageId) {
+                      const at = doc.pages.findIndex((entry) => entry.id === pageId);
+                      shown = next.pages[Math.max(0, at - 1)]!.id;
+                    }
+                    break;
+                  }
+                  case "move": {
+                    pageNeeded();
+                    pageId = pageOf(doc, p.page, view.pageId);
+                    if (p.step !== -1 && p.step !== 1) throw new CanvasToolError("move needs step -1 (earlier) or 1 (later).");
+                    next = movePage(doc, pageId, p.step);
+                    break;
+                  }
+                  case "use": {
+                    pageId = pageOf(doc, p.page, view.pageId);
+                    if (Object.prototype.hasOwnProperty.call(doc.chatPages, deps.chatId) && doc.chatPages[deps.chatId] === pageId) {
+                      ownAlready = { pageId, doc };
+                      throw OWN_PAGE_ALREADY;
+                    }
+                    try {
+                      next = claimPage(withoutGoneClaims(doc, isLive), deps.chatId, pageId, isLive);
+                    } catch (error) {
+                      if (error instanceof ChatPagesFullError) throw new CanvasToolError(error.message);
+                      throw error;
+                    }
+                    shown = pageId;
+                    break;
+                  }
+                  default:
+                    throw new CanvasToolError('action must be "add", "rename", "duplicate", "delete", "move", "show" or "use".');
+                }
+                const onScreen = shown ?? viewPageId(next, view);
+                const value = (saved: DesignCanvas) => ({
+                  status: action === "delete" ? "deleted" : "done",
+                  action,
+                  ...(action !== "delete" ? { page: { id: pageId, name: saved.pages.find((entry) => entry.id === pageId)?.name } } : { page: { id: pageId } }),
+                  pages: pagesAnswer(saved, onScreen, isLive),
+                });
+                return {
+                  doc: next,
+                  ...(shown ? { show: { pageId: shown, frameIds: [] } } : {}),
+                  // A delete lands on no page, so it claims none.
+                  ...(action === "delete" ? { landed: null } : {}),
+                  value: value(next),
+                  answer: value,
+                };
+              });
+            } catch (error) {
+              if (error !== OWN_PAGE_ALREADY || !ownAlready) throw error;
+              // Another call made the page this chat's meanwhile: nothing to write, only to show.
+              const { pageId, doc } = ownAlready;
               await showOnCanvas(workspaceId, pageId, []);
               return {
                 status: "done",
                 action,
                 page: { id: pageId, name: doc.pages.find((entry) => entry.id === pageId)?.name },
-                pages: pagesAnswer(doc, pageId),
+                pages: pagesAnswer(doc, pageId, isLive),
               };
             }
-            return edit((doc, view) => {
-              let next = doc;
-              let pageId: string;
-              // The page that comes on screen after the change, when it changes.
-              let shown: string | undefined;
-              switch (action) {
-                case "add": {
-                  if (!canAddPage(doc)) throw new CanvasToolError(`The canvas has its most pages (${DESIGN_CANVAS_LIMITS.pages}).`);
-                  pageId = newId();
-                  next = addPage(doc, pageId, name, view.pageId);
-                  if (optionalBoolean(p.show, "show") !== false) shown = pageId;
-                  break;
-                }
-                case "rename": {
-                  pageNeeded();
-                  pageId = pageOf(doc, p.page, view.pageId);
-                  if (!name) throw new CanvasToolError("rename needs a non-empty name.");
-                  next = renamePage(doc, pageId, name);
-                  break;
-                }
-                case "duplicate": {
-                  pageNeeded();
-                  const source = pageOf(doc, p.page, view.pageId);
-                  if (!canAddPage(doc)) throw new CanvasToolError(`The canvas has its most pages (${DESIGN_CANVAS_LIMITS.pages}).`);
-                  pageId = newId();
-                  next = duplicatePage(doc, source, pageId, newId);
-                  if (next === doc) throw new CanvasToolError(`A copy would pass the canvas's ${DESIGN_CANVAS_LIMITS.frames} frames.`);
-                  if (name) next = renamePage(next, pageId, name);
-                  shown = pageId;
-                  break;
-                }
-                case "delete": {
-                  pageNeeded();
-                  pageId = pageOf(doc, p.page, view.pageId);
-                  if (doc.pages.length <= 1) throw new CanvasToolError("The canvas keeps at least one page, so its only page cannot be deleted.");
-                  const kept = doc.frames.filter((frame) => frame.pageId === pageId && (frame.createdBy === "person" || frame.locked));
-                  if (kept.length > 0 && p.force !== true) {
-                    throw new CanvasToolError(
-                      `That page holds ${kept.length} ${kept.length === 1 ? "frame" : "frames"} the person added or locked. Delete it only if they asked, and then pass force: true.`,
-                    );
-                  }
-                  next = deletePage(doc, pageId);
-                  // Deleting the page on screen brings the one before it on screen.
-                  if (pageId === view.pageId) {
-                    const at = doc.pages.findIndex((entry) => entry.id === pageId);
-                    shown = next.pages[Math.max(0, at - 1)]!.id;
-                  }
-                  break;
-                }
-                case "move": {
-                  pageNeeded();
-                  pageId = pageOf(doc, p.page, view.pageId);
-                  if (p.step !== -1 && p.step !== 1) throw new CanvasToolError("move needs step -1 (earlier) or 1 (later).");
-                  next = movePage(doc, pageId, p.step);
-                  break;
-                }
-                default:
-                  throw new CanvasToolError('action must be "add", "rename", "duplicate", "delete", "move" or "show".');
-              }
-              return {
-                doc: next,
-                ...(shown ? { show: { pageId: shown, frameIds: [] } } : {}),
-                value: {
-                  status: action === "delete" ? "deleted" : "done",
-                  action,
-                  ...(action !== "delete" ? { page: { id: pageId, name: next.pages.find((entry) => entry.id === pageId)?.name } } : { page: { id: pageId } }),
-                  pages: pagesAnswer(next, shown ?? viewPageId(next, view)),
-                },
-              };
-            });
           }),
       },
       "never",

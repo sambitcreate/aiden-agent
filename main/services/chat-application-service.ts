@@ -136,8 +136,9 @@ export interface ChatApplicationDependencies {
   /** Forgets the person's "Not now" on Aiden's design mode card once they open design mode themselves. */
   designModeConsent?: { forgetDecline(chatId: string): void };
   /**
-   * Runs once design mode turns on: puts the HTML pages this chat's earlier
-   * replies wrote on an empty canvas. Never awaited by the switch.
+   * Runs once design mode turns on: the chat claims its page of the
+   * workspace canvas, and the HTML pages its earlier replies wrote go there.
+   * Awaited by the switch only with `awaitEntry`.
    */
   designPagesOnEntry?(chat: Chat, workspaceRoot: string): Promise<unknown>;
   /** Queued visual snapshots; a deleted chat's are dropped, not captured. */
@@ -396,7 +397,14 @@ export function createChatApplicationService(deps: ChatApplicationDependencies) 
      * folder. Turning it off is always allowed. A running reply is not
      * affected, because design mode only changes the layout.
      */
-    async setDesignMode(chatId: string, enabled: boolean, options: ChatApplicationMutationOptions = {}) {
+    async setDesignMode(
+      chatId: string,
+      enabled: boolean,
+      options: ChatApplicationMutationOptions & {
+        /** Answer only once entry has claimed the chat's page (Aiden's card), logging a failure. */
+        awaitEntry?: boolean;
+      } = {},
+    ) {
       let turnedOn = false;
       let workspaceRoot: string | undefined;
       const updated = await deps.chatStore.setDesignMode(chatId, enabled, async (chat) => {
@@ -413,9 +421,10 @@ export function createChatApplicationService(deps: ChatApplicationDependencies) 
       if (!enabled) deps.designGrants?.revokeChat(chatId);
       else deps.designModeConsent?.forgetDecline(chatId);
       if (turnedOn && workspaceRoot && deps.designPagesOnEntry) {
-        void deps.designPagesOnEntry(updated, workspaceRoot).catch((error) => {
-          deps.logError("design", "Could not put earlier pages on the design canvas.", error);
+        const entry = deps.designPagesOnEntry(updated, workspaceRoot).catch((error) => {
+          deps.logError("design", "Could not give the chat its page on the design canvas.", error);
         });
+        if (options.awaitEntry) await entry;
       }
       return chatForRenderer(updated);
     },
@@ -452,9 +461,10 @@ export function createChatApplicationService(deps: ChatApplicationDependencies) 
         );
         // A grant names the old workspace root; the canvas asks again for the new one.
         deps.designGrants?.revokeChat(chatId);
-        // The chat's view and comments on the old workspace's canvas are no one's now.
+        // The chat's view, comments, claim and artifacts on the old workspace's canvas
+        // are no one's now, and an empty page made for it goes.
         await deps.designCanvasCleanup
-          ?.forgetChat(chatId, persistedChatWorkspaceId(current.workspaceId))
+          ?.forgetChat(chatId, persistedChatWorkspaceId(current.workspaceId), "move")
           .catch((error: unknown) => {
             deps.logError("design", "Could not clear the chat's view of its old workspace's canvas.", error);
           });
@@ -707,6 +717,12 @@ export function createChatApplicationService(deps: ChatApplicationDependencies) 
             });
           if (outcome === "too-large" || outcome === "failed") canvasCarried = false;
         }
+        if (sharedLegacyScratch) {
+          // The shared canvas stays for the other chats: this chat leaves it as a moved chat does.
+          await deps.designCanvasCleanup?.forgetChat(chatId, oldWorkspaceId, "move").catch((error: unknown) => {
+            deps.logError("design", "Could not take the attached chat off its old shared canvas.", error);
+          });
+        }
 
         // Release workspace operation admissions BEFORE releasing the old hidden
         // workspace, otherwise `workspaceOperationRegistry.cancelAndSettle(oldWorkspaceId)`
@@ -845,7 +861,7 @@ export function createChatApplicationService(deps: ChatApplicationDependencies) 
         // The workspace the chat was in, read before the delete: its canvas keeps no trace of the chat.
         const canvasWorkspaceId = persistedChatWorkspaceId(current.workspaceId);
         try {
-          await deps.designCanvasCleanup?.forgetChat(chatId, canvasWorkspaceId);
+          await deps.designCanvasCleanup?.forgetChat(chatId, canvasWorkspaceId, "comments");
         } catch (error) {
           deps.logError("design", "Could not remove the chat's comments from its design canvas.", error);
           throw new Error("Aiden could not remove this chat's comments from its design canvas.");
@@ -862,8 +878,9 @@ export function createChatApplicationService(deps: ChatApplicationDependencies) 
         // A canvas save or grant that passed its chat check before the remove
         // committed may have landed since the first cleanup; repeat it.
         deps.designGrants?.revokeChat(chatId);
-        await deps.designCanvasCleanup?.forgetChat(chatId, canvasWorkspaceId).catch((error: unknown) => {
-          deps.logError("design", "Could not remove the deleted chat's comments from its design canvas.", error);
+        // Its claim and artifact frames go only now, so a delete that failed keeps them.
+        await deps.designCanvasCleanup?.forgetChat(chatId, canvasWorkspaceId, "all").catch((error: unknown) => {
+          deps.logError("design", "Could not remove the deleted chat's comments, page claim and artifacts from its design canvas.", error);
         });
         void forgetChatInboxState(deps.inboxState, chatId, deps.logError);
         await deps.scheduledTasks?.releaseOriginChat(chatId).catch((error: unknown) => {

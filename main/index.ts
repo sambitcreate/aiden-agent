@@ -170,8 +170,8 @@ import { EmptyChatMigrationSnapshotError } from "./services/empty-chat-migration
 import { migrateLegacyEmptyWorkspaceChats } from "./services/empty-chat-migration-main.js";
 import { ensureUserDataDir } from "./services/data-store.js";
 import { piCompactionSessionStore } from "./services/pi-compaction-session-store.js";
-import { designCanvasChatCleanup, designCanvasViews, removeDesignCanvasWorkspace } from "./services/design-canvas/main.js";
-import { persistedChatWorkspaceId } from "../renderer/shared/chat-workspace.js";
+import { designCanvasChatCleanup, designCanvasViews, designWorkspaceCanvasStore, removeDesignCanvasWorkspace } from "./services/design-canvas/main.js";
+import { recoverDeletedChatCanvas } from "./services/design-canvas/cleanup.js";
 import {
   reconcileExternalProviderCredentialChanges,
   reconcilePendingProviderCredentialRotation,
@@ -2615,10 +2615,18 @@ if (!ownsSingleInstanceLock) {
         }
         await piRuntimeEffectStore.deleteChat(chatId);
         await piCompactionSessionStore.deleteChat(chatId);
-        // The chat's comments and view leave its workspace's canvas, which stays.
-        const meta = await chatStore.getMeta(chatId);
-        if (meta) await designCanvasChatCleanup.forgetChat(chatId, persistedChatWorkspaceId(meta.workspaceId));
-        await chatStore.remove(chatId);
+        // The chat's comments and view leave its workspace's canvas before the
+        // remove, and its claim and artifact frames after it; the canvas stays.
+        await recoverDeletedChatCanvas(
+          {
+            getMeta: (id) => chatStore.getMeta(id),
+            remove: (id) => chatStore.remove(id),
+            cleanup: designCanvasChatCleanup,
+            workspaceIds: () => designWorkspaceCanvasStore.workspaceIds(),
+            onError: (error) => logger.warn("design", "Could not remove a deleted chat's page claim and artifacts from its design canvas.", error),
+          },
+          chatId,
+        );
         // The same Inbox cleanup the live delete runs: no snooze or pin is left
         // behind for a chat whose delete a crash cut short.
         await forgetChatInboxState({ readMarkers: chatReadMarkers, triage: chatTriage }, chatId, (area, message, error) =>

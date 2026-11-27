@@ -108,6 +108,21 @@ test("when the window goes, every view is unmounted and every page kept", async 
   assert.equal((await views.get("chat-b", "ws-2"))?.pageId, "p3");
 });
 
+test("pageIdsOf lists other chats' kept pages, not the asking chat's, and reads them from the file after a restart", async (t) => {
+  const root = await tempRoot(t);
+  const before = new DesignCanvasViews({ root: () => root });
+  await before.report("chat-a", "ws-1", view("page-1"), 0);
+  await before.report("chat-b", "ws-1", view("page-2"), 0);
+  await before.showPage("chat-c", "ws-1", "page-3");
+  await before.report("chat-d", "ws-2", view("page-4"), 0);
+  assert.deepEqual([...(await before.pageIdsOf("ws-1", "chat-a"))].sort(), ["page-2", "page-3"]);
+  await before.flush();
+
+  const after = new DesignCanvasViews({ root: () => root });
+  assert.deepEqual([...(await after.pageIdsOf("ws-1", "chat-b"))].sort(), ["page-1", "page-3"]);
+  assert.deepEqual([...(await after.pageIdsOf("ws-3", "chat-a"))], []);
+});
+
 test("views survive a restart: a new instance on the same root reads the page, viewports and focusId", async (t) => {
   const root = await tempRoot(t);
   const before = new DesignCanvasViews({ root: () => root });
@@ -247,6 +262,30 @@ test("a turn's page: what Aiden showed this turn, then the message's page, then 
   // A page that no longer exists falls through to the next.
   assert.equal((await turn.view(docWith("p2", "p3"), "ws-1")).pageId, "p2");
   assert.equal((await turn.view(docWith("p9"), "ws-1")).pageId, "p9");
+});
+
+test("with no view, a turn works on the chat's claimed page", async () => {
+  const views = new DesignCanvasViews();
+  const doc = { ...docWith("p1", "p2", "p3"), chatPages: { "chat-a": "p3", "chat-b": "p2" } };
+  assert.equal((await designTurnPages({ views, chatId: "chat-a" }).view(doc, "ws-1")).pageId, "p3");
+  assert.equal((await designTurnPages({ chatId: "chat-b" }).view(doc, "ws-1")).pageId, "p2");
+  assert.equal((await designTurnPages({ views, chatId: "chat-c" }).view(doc, "ws-1")).pageId, "p1", "no claim: the first page");
+});
+
+test("when the view's page is gone, a turn works on the claim before the first page", async () => {
+  const views = new DesignCanvasViews();
+  await views.report("chat-a", "ws-1", view("deleted"), 0);
+  const doc = { ...docWith("p1", "p2"), chatPages: { "chat-a": "p2" } };
+  assert.equal((await designTurnPages({ views, chatId: "chat-a" }).view(doc, "ws-1")).pageId, "p2");
+  // A claim on a page that is gone too falls through to the first page.
+  assert.equal((await designTurnPages({ views, chatId: "chat-a" }).view({ ...doc, chatPages: { "chat-a": "gone" } }, "ws-1")).pageId, "p1");
+});
+
+test("the view still wins over the claim", async () => {
+  const views = new DesignCanvasViews();
+  await views.report("chat-a", "ws-1", view("p1"), 0);
+  const doc = { ...docWith("p1", "p2"), chatPages: { "chat-a": "p2" } };
+  assert.equal((await designTurnPages({ views, chatId: "chat-a" }).view(doc, "ws-1")).pageId, "p1");
 });
 
 test("a turn without the registry still follows its own shown page", async () => {

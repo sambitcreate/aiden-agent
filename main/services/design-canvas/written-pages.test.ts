@@ -3,7 +3,7 @@ import * as fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
-import { emptyDesignCanvas, type DesignCanvas, type DesignFrame } from "../../../renderer/shared/design-canvas/schema.js";
+import { DESIGN_CANVAS_LIMITS, emptyDesignCanvas, type DesignCanvas, type DesignFrame } from "../../../renderer/shared/design-canvas/schema.js";
 import {
   createDesignPageScanner,
   DESIGN_WIDTH_HINT_BYTES,
@@ -21,6 +21,10 @@ import type { DesignViewState } from "../../../renderer/shared/design-canvas/can
 import type { DesignChatView } from "../../../renderer/shared/design-canvas/view.js";
 import { DesignCanvasStore, DesignChatCanvases } from "./store.js";
 import { DesignCanvasViews, designTurnPages } from "./views.js";
+import { placeArtifactsOnCanvas } from "./artifact-frames.js";
+import { createDesignEntry } from "./entry.js";
+import { createDesignTitleFollow } from "./title-follow.js";
+import { PendingEntries } from "./written-pages.js";
 
 const ids = () => {
   let next = 0;
@@ -329,9 +333,10 @@ test("deleted newest pages do not starve older surviving pages under limit, and 
   }
   // Pages 12..15 were noted most recently and then deleted before entry.
   // Pages 00..11 still exist on disk and should all 12 land in chronological order.
-  const { workspaceStore: store, via } = canvasesAt(canvasesDir);
+  const canvases = canvasesAt(canvasesDir);
+  const { workspaceStore: store, via } = canvases;
   const broadcasts: string[] = [];
-  const entry = { pageName: "Landing", hasView: async () => false };
+  const entry = entryFor(canvases, "chat-1", "Landing");
 
   // A deleted chat places nothing and writes no canvas.
   let canSave = false;
@@ -397,6 +402,7 @@ test("leaving design mode while the page's save waits keeps the frame off the st
     paths: ["design/home.html"],
     // The person leaves design mode once the save is already under way.
     store: {
+      get: (chatId, options) => store.get(chatId, options),
       workspaceIdOf: (chatId) => store.workspaceIdOf(chatId),
       update: (chatId, mutate, options) =>
         store.update(
@@ -433,6 +439,7 @@ test("leaving design mode while the page's file is being written takes the frame
       workspaceRoot,
       paths: ["design/home.html"],
       store: {
+        get: (id, options) => store.get(id, options),
         workspaceIdOf: (id) => store.workspaceIdOf(id),
         update: async (id, mutate, options) => {
           calls += 1;
@@ -560,6 +567,22 @@ test("a written page dedupes only against the chat's view page", () => {
   assert.equal(again.changed, false, "on p2 the page is already there");
 });
 
+test("a written page auto-placed in a turn claims for a chat with none", async (t) => {
+  const { workspaceRoot, canvases } = await workspaceWith(t, ["home.html"]);
+  await canvases.store.update("chat-1", (doc) => ({ ...doc, pages: [...doc.pages, { id: "p2", name: "Pricing" }] }));
+  await canvases.views.report("chat-1", "ws-1", onPage("p2"), 0);
+  await placeWrittenPagesOnCanvas({
+    ...canvases.via("chat-1"),
+    workspaceRoot,
+    paths: ["design/home.html"],
+    broadcast: () => undefined,
+    newId: ids(),
+  });
+  const doc = await canvases.workspaceStore.get("ws-1");
+  assert.equal(doc.revision, 2, "the claim rides on the placement's write");
+  assert.deepEqual(doc.chatPages, { "chat-1": "p2" });
+});
+
 test("a turn's message page beats the chat's kept page for a page written mid-turn", async (t) => {
   const { workspaceRoot, canvases } = await workspaceWith(t, ["home.html"]);
   await canvases.store.update("chat-1", (doc) => ({ ...doc, pages: [...doc.pages, { id: "p2", name: "Pricing" }] }));
@@ -575,12 +598,185 @@ test("a turn's message page beats the chat's kept page for a page written mid-tu
   assert.equal((await canvases.workspaceStore.get("ws-1")).frames[0]?.pageId, "page-1");
 });
 
-test("re-entering design mode after a restart, with the pages already on page 1, makes no page and no frame", async (t) => {
+/** Design-mode entry for `chatId`: other chats' views from `views`, and every chat live unless `gone` names it. */
+function entryFor(
+  canvases: ReturnType<typeof canvasesAt>,
+  chatId: string,
+  pageName: string,
+  gone: readonly string[] = [],
+) {
+  return {
+    pageName,
+    otherViews: (workspaceId: string) => canvases.views.pageIdsOf(workspaceId, chatId),
+    isLive: async (chatIds: string[]) => new Set(chatIds.filter((id) => !gone.includes(id))),
+  };
+}
+
+test("the first chat on a fresh canvas claims Page 1 without renaming it, adds no page, and shows it", async (t) => {
+  const { workspaceRoot, canvases } = await workspaceWith(t, []);
+  const placed = await placeWrittenPagesOnCanvas({
+    ...canvases.via("chat-1"),
+    workspaceRoot,
+    paths: [],
+    broadcast: () => undefined,
+    newId: ids(),
+    entry: entryFor(canvases, "chat-1", "Northwind landing"),
+  });
+  const doc = await canvases.workspaceStore.get("ws-1");
+  assert.deepEqual(doc.pages, [{ id: "page-1", name: "Page 1" }]);
+  assert.deepEqual(doc.chatPages, { "chat-1": "page-1" });
+  assert.deepEqual(placed.frameIds, []);
+  assert.equal(placed.pageId, "page-1");
+  assert.equal(placed.focusId, 1, "the claimed page is shown");
+  assert.equal((await canvases.views.get("chat-1", "ws-1"))?.pageId, "page-1");
+});
+
+test("chat B entering a workspace whose first page is chat A's gets a page named after B, claimed and shown", async (t) => {
+  const { workspaceRoot, canvases } = await workspaceWith(t, []);
+  // Page 1 is A's, and empty: an empty page another chat claims is not shared.
+  await canvases.store.update("chat-1", (doc) => ({ ...doc, chatPages: { "chat-1": "page-1" } }));
+  const placed = await placeWrittenPagesOnCanvas({
+    ...canvases.via("chat-2"),
+    workspaceRoot,
+    paths: [],
+    broadcast: () => undefined,
+    newId: ids(),
+    entry: entryFor(canvases, "chat-2", "Pricing table"),
+  });
+  const doc = await canvases.workspaceStore.get("ws-1");
+  assert.deepEqual(doc.pages.map((page) => page.name), ["Page 1", "Pricing table"]);
+  const page = doc.pages[1]!;
+  assert.equal(page.namedFor, "chat-2");
+  assert.deepEqual(doc.chatPages, { "chat-1": "page-1", "chat-2": page.id });
+  assert.equal(placed.pageId, page.id);
+  assert.equal(placed.focusId, 1);
+  assert.equal((await canvases.views.get("chat-2", "ws-1"))?.pageId, page.id);
+});
+
+test("chat B's earlier pages go on the page made for it when the first page is chat A's", async (t) => {
+  const { workspaceRoot, canvases } = await workspaceWith(t, ["b-home.html", "b-about.html"]);
+  await canvases.store.update("chat-1", (doc) => ({
+    ...doc,
+    chatPages: { "chat-1": "page-1" },
+    frames: [fileFrame("a-home", "design/a-home.html", "page-1")],
+  }));
+  const placed = await placeWrittenPagesOnCanvas({
+    ...canvases.via("chat-2"),
+    workspaceRoot,
+    paths: ["design/b-home.html", "design/b-about.html"],
+    broadcast: () => undefined,
+    newId: ids(),
+    entry: entryFor(canvases, "chat-2", "Brand refresh"),
+  });
+  const doc = await canvases.workspaceStore.get("ws-1");
+  const page = doc.pages.find((entry) => entry.name === "Brand refresh");
+  assert.ok(page, "a page named after chat B");
+  assert.equal(placed.pageId, page.id);
+  assert.deepEqual(
+    doc.frames.filter((frame) => frame.pageId === page.id).map((frame) => frame.path),
+    ["design/b-home.html", "design/b-about.html"],
+  );
+  assert.equal(doc.frames.find((frame) => frame.id === "a-home")?.pageId, "page-1", "chat A's page is left alone");
+});
+
+test("a page with frames that another chat's kept view is on is not taken; B gets its own page", async (t) => {
+  const { workspaceRoot, canvases } = await workspaceWith(t, []);
+  await canvases.store.update("chat-1", (doc) => ({ ...doc, frames: [fileFrame("a-home", "design/a-home.html", "page-1")] }));
+  await canvases.views.report("chat-1", "ws-1", onPage("page-1"), 0);
+  const placed = await placeWrittenPagesOnCanvas({
+    ...canvases.via("chat-2"),
+    workspaceRoot,
+    paths: [],
+    broadcast: () => undefined,
+    newId: ids(),
+    entry: entryFor(canvases, "chat-2", "Brand refresh"),
+  });
+  const doc = await canvases.workspaceStore.get("ws-1");
+  assert.deepEqual(doc.pages.map((page) => page.name), ["Page 1", "Brand refresh"]);
+  assert.deepEqual(doc.chatPages, { "chat-2": doc.pages[1]!.id });
+  assert.equal(placed.pageId, doc.pages[1]!.id);
+});
+
+test("a page with frames that only this chat has looked at is claimed as it is", async (t) => {
+  const { workspaceRoot, canvases } = await workspaceWith(t, ["mine.html"]);
+  await canvases.store.update("chat-1", (doc) => ({ ...doc, frames: [fileFrame("other", "design/other.html", "page-1")] }));
+  await canvases.views.report("chat-1", "ws-1", onPage("page-1"), 0);
+  const placed = await placeWrittenPagesOnCanvas({
+    ...canvases.via("chat-1"),
+    workspaceRoot,
+    paths: ["design/mine.html"],
+    broadcast: () => undefined,
+    newId: ids(),
+    entry: entryFor(canvases, "chat-1", "Landing"),
+  });
+  const doc = await canvases.workspaceStore.get("ws-1");
+  assert.deepEqual(doc.pages, [{ id: "page-1", name: "Page 1" }]);
+  assert.deepEqual(doc.chatPages, { "chat-1": "page-1" });
+  assert.equal(placed.pageId, "page-1");
+  assert.equal(doc.frames.find((frame) => frame.path === "design/mine.html")?.pageId, "page-1");
+});
+
+test("a claim of a chat that no longer exists does not stop the page being claimed", async (t) => {
+  const { workspaceRoot, canvases } = await workspaceWith(t, []);
+  await canvases.store.update("chat-1", (doc) => ({ ...doc, chatPages: { "chat-gone": "page-1" } }));
+  const placed = await placeWrittenPagesOnCanvas({
+    ...canvases.via("chat-2"),
+    workspaceRoot,
+    paths: [],
+    broadcast: () => undefined,
+    newId: ids(),
+    entry: entryFor(canvases, "chat-2", "Pricing table", ["chat-gone"]),
+  });
+  const doc = await canvases.workspaceStore.get("ws-1");
+  assert.equal(doc.pages.length, 1);
+  assert.equal(placed.pageId, "page-1");
+  // The gone chat's entry is dropped in the same write.
+  assert.deepEqual(doc.chatPages, { "chat-2": "page-1" });
+});
+
+test("a page named for another chat is never taken by rule 3", async (t) => {
+  const { workspaceRoot, canvases } = await workspaceWith(t, []);
+  await canvases.store.update("chat-1", (doc) => ({ ...doc, pages: [{ id: "page-1", name: "Landing", namedFor: "chat-1" }] }));
+  const placed = await placeWrittenPagesOnCanvas({
+    ...canvases.via("chat-2"),
+    workspaceRoot,
+    paths: [],
+    broadcast: () => undefined,
+    newId: ids(),
+    entry: entryFor(canvases, "chat-2", "Pricing table"),
+  });
+  const doc = await canvases.workspaceStore.get("ws-1");
+  assert.deepEqual(doc.pages.map((page) => [page.name, page.namedFor]), [["Landing", "chat-1"], ["Pricing table", "chat-2"]]);
+  assert.equal(placed.pageId, doc.pages[1]!.id);
+});
+
+test("a page named for a chat that no longer exists is taken by rule 3, and the mark goes in the same write", async (t) => {
+  const { workspaceRoot, canvases } = await workspaceWith(t, []);
+  await canvases.store.update("chat-1", (doc) => ({ ...doc, pages: [{ id: "page-1", name: "Landing", namedFor: "chat-gone" }] }));
+  const placed = await placeWrittenPagesOnCanvas({
+    ...canvases.via("chat-2"),
+    workspaceRoot,
+    paths: [],
+    broadcast: () => undefined,
+    newId: ids(),
+    entry: entryFor(canvases, "chat-2", "Pricing table", ["chat-gone"]),
+  });
+  const doc = await canvases.workspaceStore.get("ws-1");
+  assert.deepEqual(doc.pages, [{ id: "page-1", name: "Landing" }]);
+  assert.equal(placed.pageId, "page-1");
+  assert.deepEqual(doc.chatPages, { "chat-2": "page-1" });
+});
+
+test("a chat entering again keeps its claim, adds no page and still shows it", async (t) => {
   const { workspaceRoot, canvases } = await workspaceWith(t, ["home.html", "about.html"]);
   await canvases.store.update("chat-1", (doc) => ({
     ...doc,
+    pages: [...doc.pages, { id: "p2", name: "Flows" }],
+    chatPages: { "chat-1": "p2" },
     frames: [fileFrame("home", "design/home.html", "page-1"), fileFrame("about", "design/about.html", "page-1")],
   }));
+  // The chat last looked at page 1; its claim is still p2.
+  await canvases.views.report("chat-1", "ws-1", onPage("page-1"), 0);
   const before = await canvases.workspaceStore.get("ws-1");
   const broadcasts: unknown[] = [];
   const placed = await placeWrittenPagesOnCanvas({
@@ -589,39 +785,17 @@ test("re-entering design mode after a restart, with the pages already on page 1,
     paths: ["design/home.html", "design/about.html"],
     broadcast: (update) => broadcasts.push(update),
     newId: ids(),
-    entry: { pageName: "Landing", hasView: async () => false },
+    entry: entryFor(canvases, "chat-1", "Landing"),
   });
   assert.deepEqual(placed.frameIds, []);
   assert.deepEqual(await canvases.workspaceStore.get("ws-1"), before, "the canvas is untouched");
   assert.deepEqual(broadcasts, []);
-  assert.equal((await canvases.views.get("chat-1", "ws-1"))?.pageId, "page-1", "the chat's page is where its pages are");
+  assert.equal(placed.pageId, "p2");
+  assert.equal(placed.focusId, 1);
+  assert.equal((await canvases.views.get("chat-1", "ws-1"))?.pageId, "p2");
 });
 
-test("chat B entering a workspace whose first page is chat A's gets a page of its own holding B's pages", async (t) => {
-  const { workspaceRoot, canvases } = await workspaceWith(t, ["b-home.html", "b-about.html"]);
-  await canvases.store.update("chat-1", (doc) => ({ ...doc, frames: [fileFrame("a-home", "design/a-home.html", "page-1")] }));
-  const placed = await placeWrittenPagesOnCanvas({
-    ...canvases.via("chat-2"),
-    workspaceRoot,
-    paths: ["design/b-home.html", "design/b-about.html"],
-    broadcast: () => undefined,
-    newId: ids(),
-    entry: { pageName: "Brand refresh", hasView: async () => false },
-  });
-  const doc = await canvases.workspaceStore.get("ws-1");
-  const page = doc.pages.find((entry) => entry.name === "Brand refresh");
-  assert.ok(page, "a page named after chat B");
-  assert.equal(placed.pageId, page.id);
-  assert.equal(placed.focusId, 1, "showing it is an Aiden page change");
-  assert.deepEqual(
-    doc.frames.filter((frame) => frame.pageId === page.id).map((frame) => frame.path),
-    ["design/b-home.html", "design/b-about.html"],
-  );
-  assert.equal(doc.frames.find((frame) => frame.id === "a-home")?.pageId, "page-1", "chat A's page is left alone");
-  assert.equal((await canvases.views.get("chat-2", "ws-1"))?.pageId, page.id, "B's view is its new page");
-});
-
-test("entry puts the missing pages beside the ones already on the canvas, on the page holding most of them", async (t) => {
+test("the chat's earlier pages already on the canvas make the page holding most of them its claim", async (t) => {
   const { workspaceRoot, canvases } = await workspaceWith(t, ["a.html", "b.html", "c.html"]);
   await canvases.store.update("chat-1", (doc) => ({
     ...doc,
@@ -634,71 +808,116 @@ test("entry puts the missing pages beside the ones already on the canvas, on the
     paths: ["design/a.html", "design/b.html", "design/c.html"],
     broadcast: () => undefined,
     newId: ids(),
-    entry: { pageName: "Landing", hasView: async () => false },
+    entry: entryFor(canvases, "chat-1", "Landing"),
   });
   const doc = await canvases.workspaceStore.get("ws-1");
   assert.equal(doc.pages.length, 2, "no new page");
+  assert.deepEqual(doc.chatPages, { "chat-1": "p2" });
   assert.equal(placed.pageId, "p2");
   assert.deepEqual(placed.frameIds.map((id) => doc.frames.find((frame) => frame.id === id)?.path), ["design/c.html"]);
   assert.equal(doc.frames.find((frame) => frame.path === "design/c.html")?.pageId, "p2");
   assert.equal((await canvases.views.get("chat-1", "ws-1"))?.pageId, "p2");
 });
 
-test("a chat with a view of its own enters onto its page, even when that page has frames", async (t) => {
-  const { workspaceRoot, canvases } = await workspaceWith(t, ["mine.html"]);
-  await canvases.store.update("chat-1", (doc) => ({ ...doc, frames: [fileFrame("other", "design/other.html", "page-1")] }));
-  await canvases.views.report("chat-1", "ws-1", onPage("page-1"), 0);
+test("a page another live chat claims does not count toward the chat's earlier pages", async (t) => {
+  const { workspaceRoot, canvases } = await workspaceWith(t, ["index.html"]);
+  // A's page holds design/index.html; B wrote the same file in its own replies.
+  await canvases.store.update("chat-1", (doc) => ({
+    ...doc,
+    chatPages: { "chat-1": "page-1" },
+    frames: [fileFrame("a-index", "design/index.html", "page-1")],
+  }));
   const placed = await placeWrittenPagesOnCanvas({
-    ...canvases.via("chat-1"),
+    ...canvases.via("chat-2"),
     workspaceRoot,
-    paths: ["design/mine.html"],
+    paths: ["design/index.html"],
     broadcast: () => undefined,
     newId: ids(),
-    entry: { pageName: "Landing", hasView: async () => true },
+    entry: entryFor(canvases, "chat-2", "Pricing"),
   });
   const doc = await canvases.workspaceStore.get("ws-1");
-  assert.equal(doc.pages.length, 1);
+  assert.notEqual(placed.pageId, "page-1");
+  assert.deepEqual(doc.pages.map((page) => page.name), ["Page 1", "Pricing"]);
+  assert.deepEqual(doc.chatPages, { "chat-1": "page-1", "chat-2": placed.pageId });
+});
+
+test("two chats entering a fresh canvas at once end on Page 1 and a new page", async (t) => {
+  const { workspaceRoot, canvases } = await workspaceWith(t, []);
+  const enter = (chatId: string, title: string) =>
+    placeWrittenPagesOnCanvas({
+      ...canvases.via(chatId),
+      workspaceRoot,
+      paths: [],
+      broadcast: () => undefined,
+      newId: () => `page-${chatId}`,
+      entry: entryFor(canvases, chatId, title),
+    });
+  const [a, b] = await Promise.all([enter("chat-1", "Landing"), enter("chat-2", "Pricing")]);
+  const doc = await canvases.workspaceStore.get("ws-1");
+  assert.equal(doc.pages.length, 2);
+  assert.notEqual(a.pageId, b.pageId);
+  assert.deepEqual(new Set(Object.values(doc.chatPages)), new Set(doc.pages.map((page) => page.id)));
+  assert.deepEqual(doc.chatPages, { "chat-1": a.pageId, "chat-2": b.pageId });
+  assert.equal(doc.pages[0]!.name, "Page 1");
+  const made = doc.pages[1]!;
+  assert.equal(doc.chatPages[made.namedFor!], made.id, "the new page is named for the chat that claimed it");
+});
+
+test("B's new page is numbered when a page already has B's title", async (t) => {
+  const { workspaceRoot, canvases } = await workspaceWith(t, []);
+  await canvases.store.update("chat-1", (doc) => ({
+    ...doc,
+    pages: [...doc.pages, { id: "p2", name: "Pricing" }],
+    chatPages: { "chat-1": "page-1" },
+  }));
+  await placeWrittenPagesOnCanvas({
+    ...canvases.via("chat-2"),
+    workspaceRoot,
+    paths: [],
+    broadcast: () => undefined,
+    newId: () => "page-b",
+    entry: entryFor(canvases, "chat-2", "pricing"),
+  });
+  const doc = await canvases.workspaceStore.get("ws-1");
+  assert.deepEqual(doc.pages.map((page) => page.name), ["Page 1", "pricing 2", "Pricing"]);
+  assert.equal(doc.chatPages["chat-2"], "page-b");
+});
+
+test("at the page limit, a chat whose page is taken shares it", async (t) => {
+  const { workspaceRoot, canvases } = await workspaceWith(t, []);
+  await canvases.store.update("chat-1", (doc) => ({
+    ...doc,
+    pages: Array.from({ length: DESIGN_CANVAS_LIMITS.pages }, (_, index) => ({ id: `page-${index + 1}`, name: `Page ${index + 1}` })),
+    chatPages: { "chat-1": "page-1" },
+  }));
+  const placed = await placeWrittenPagesOnCanvas({
+    ...canvases.via("chat-2"),
+    workspaceRoot,
+    paths: [],
+    broadcast: () => undefined,
+    newId: () => "page-b",
+    entry: entryFor(canvases, "chat-2", "Pricing"),
+  });
+  const doc = await canvases.workspaceStore.get("ws-1");
+  assert.equal(doc.pages.length, DESIGN_CANVAS_LIMITS.pages);
+  assert.deepEqual(doc.chatPages, { "chat-1": "page-1", "chat-2": "page-1" });
   assert.equal(placed.pageId, "page-1");
-  assert.equal(placed.focusId, undefined, "the page on screen does not change");
 });
 
-test("whether the chat had a view is read before its files, so a canvas opening meanwhile cannot send its pages onto another chat's page", async (t) => {
+test("leaving design mode while entry's file is being written takes back the added page and the claim on it", async (t) => {
   const { workspaceRoot, canvases } = await workspaceWith(t, ["b-home.html"]);
-  await canvases.store.update("chat-1", (doc) => ({ ...doc, frames: [fileFrame("a-home", "design/a-home.html", "page-1")] }));
-  // The canvas this entry opens reports a view of page 1 while the files are being read.
-  let reported = false;
-  const via = canvases.via("chat-2");
-  const placed = await placeWrittenPagesOnCanvas({
-    ...via,
-    pages: {
-      ...via.pages,
-      resolver: async (workspaceId: string) => {
-        reported = true;
-        return via.pages.resolver(workspaceId);
-      },
-    },
-    workspaceRoot,
-    paths: ["design/b-home.html"],
-    broadcast: () => undefined,
-    newId: ids(),
-    entry: { pageName: "Brand refresh", hasView: async () => reported },
-  });
-  const doc = await canvases.workspaceStore.get("ws-1");
-  const page = doc.pages.find((entry) => entry.name === "Brand refresh");
-  assert.ok(page, "chat B still gets a page of its own");
-  assert.equal(placed.pageId, page.id);
-  assert.deepEqual(doc.frames.filter((frame) => frame.pageId === "page-1").map((frame) => frame.id), ["a-home"]);
-});
-
-test("leaving design mode while entry's file is being written takes back the page it added as well as its frames", async (t) => {
-  const { workspaceRoot, canvases } = await workspaceWith(t, ["b-home.html"]);
-  await canvases.store.update("chat-1", (doc) => ({ ...doc, frames: [fileFrame("a-home", "design/a-home.html", "page-1")] }));
+  await canvases.store.update("chat-1", (doc) => ({
+    ...doc,
+    chatPages: { "chat-1": "page-1" },
+    frames: [fileFrame("a-home", "design/a-home.html", "page-1")],
+  }));
   let designMode = true;
   let calls = 0;
   const via = canvases.via("chat-2");
-  await placeWrittenPagesOnCanvas({
+  const placed = await placeWrittenPagesOnCanvas({
     ...via,
     store: {
+      get: (id, options) => canvases.store.get(id, options),
       workspaceIdOf: (id) => canvases.store.workspaceIdOf(id),
       update: async (id, mutate, options) => {
         calls += 1;
@@ -712,9 +931,113 @@ test("leaving design mode while entry's file is being written takes back the pag
     paths: ["design/b-home.html"],
     broadcast: () => undefined,
     newId: ids(),
-    entry: { pageName: "Brand refresh", hasView: async () => false },
+    entry: entryFor(canvases, "chat-2", "Brand refresh"),
   });
   const doc = await canvases.workspaceStore.get("ws-1");
   assert.deepEqual(doc.pages.map((page) => page.name), ["Page 1"], "no empty page is left on the shared canvas");
   assert.deepEqual(doc.frames.map((frame) => frame.id), ["a-home"]);
+  assert.deepEqual(doc.chatPages, { "chat-1": "page-1" });
+  assert.equal(placed.focusId, undefined, "nothing is shown");
+});
+
+test("with design mode turned off before the write, no claim is made and nothing is shown", async (t) => {
+  const { workspaceRoot, canvases } = await workspaceWith(t, ["b-home.html"]);
+  await canvases.store.update("chat-1", (doc) => ({ ...doc, chatPages: { "chat-1": "page-1" } }));
+  const before = await canvases.workspaceStore.get("ws-1");
+  const placed = await placeWrittenPagesOnCanvas({
+    ...canvases.via("chat-2"),
+    shouldSave: () => false,
+    workspaceRoot,
+    paths: ["design/b-home.html"],
+    broadcast: () => undefined,
+    newId: ids(),
+    entry: entryFor(canvases, "chat-2", "Brand refresh"),
+  });
+  assert.deepEqual(await canvases.workspaceStore.get("ws-1"), before);
+  assert.deepEqual(placed.frameIds, []);
+  assert.equal(placed.focusId, undefined);
+  assert.equal(await canvases.views.get("chat-2", "ws-1"), undefined);
+});
+
+test("an entry still running when its chat moves to another workspace writes nothing back to the canvas it left", async (t) => {
+  const { workspaceRoot, canvases } = await workspaceWith(t, ["b-home.html"]);
+  await canvases.store.update("chat-1", (doc) => ({ ...doc, chatPages: { "chat-1": "page-1" } }));
+  const before = await canvases.workspaceStore.get("ws-1");
+  // chat-2 starts in ws-1; the move points it at ws-2 while entry waits.
+  const workspaces = new Map([["chat-1", "ws-1"], ["chat-2", "ws-1"]]);
+  const store = new DesignChatCanvases({
+    store: canvases.workspaceStore,
+    workspaceIdOf: async (chatId) => workspaces.get(chatId) ?? null,
+  });
+  let release: () => void = () => undefined;
+  const held = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  let reached: () => void = () => undefined;
+  const waiting = new Promise<void>((resolve) => {
+    reached = resolve;
+  });
+  const entry = placeWrittenPagesOnCanvas({
+    chatId: "chat-2",
+    store,
+    pages: canvases.pages("chat-2"),
+    shouldSave: () => true,
+    workspaceRoot,
+    paths: ["design/b-home.html"],
+    broadcast: () => undefined,
+    newId: ids(),
+    entry: {
+      ...entryFor(canvases, "chat-2", "Brand refresh"),
+      isLive: async (chatIds: string[]) => {
+        reached();
+        await held;
+        return new Set(chatIds);
+      },
+    },
+  });
+  await waiting;
+  // The move commits, then the old canvas's cleanup finds nothing of chat-2's.
+  workspaces.set("chat-2", "ws-2");
+  release();
+  const placed = await entry;
+  assert.deepEqual(await canvases.workspaceStore.get("ws-1"), before, "no claim, named page or frames come back to ws-1");
+  assert.deepEqual(placed.frameIds, []);
+  assert.equal(placed.focusId, undefined);
+});
+
+test("a turn's write while design mode's entry runs waits for it, lands on the chat's new page, and the page takes the newest title", async (t) => {
+  const { workspaceRoot, canvases } = await workspaceWith(t, []);
+  await canvases.store.update("chat-1", (doc) => ({ ...doc, chatPages: { "chat-1": "page-1" } }));
+  const pending = new PendingEntries();
+  // The auto-title lands while entry runs.
+  const titles = new Map([["chat-2", "Pricing table"]]);
+  const focused: { chatId: string; pageId: string; focusId?: number }[] = [];
+  const enter = createDesignEntry({
+    store: canvases.store,
+    views: canvases.views,
+    recent: new RecentWrittenPages(),
+    pending,
+    titleFollow: createDesignTitleFollow({ canvases: canvases.store, titleOf: async (chatId) => titles.get(chatId), broadcast: () => undefined }),
+    isLive: async (chatIds) => new Set(chatIds),
+    designModeOn: async () => true,
+    broadcast: () => undefined,
+    focus: (request) => focused.push(request),
+    newId: () => "page-chat-2",
+  });
+  const entered = enter({ id: "chat-2", title: "New chat", messages: [] }, workspaceRoot);
+  // The turn places a visual right away.
+  const placed = placeArtifactsOnCanvas({
+    ...canvases.via("chat-2"),
+    broadcast: () => undefined,
+    newId: () => "frame-visual",
+    artifacts: [{ mediaId: "m1", title: "Chart" }],
+    pendingEntry: () => pending.wait("chat-2"),
+  });
+  await Promise.all([entered, placed]);
+  const doc = await canvases.workspaceStore.get("ws-1");
+  assert.deepEqual(doc.chatPages, { "chat-1": "page-1", "chat-2": "page-chat-2" });
+  assert.deepEqual(doc.pages.find((page) => page.id === "page-chat-2"), { id: "page-chat-2", name: "Pricing table", namedFor: "chat-2" });
+  assert.equal(doc.frames.find((frame) => frame.id === "frame-visual")?.pageId, "page-chat-2");
+  assert.deepEqual(focused.map(({ chatId, pageId }) => [chatId, pageId]), [["chat-2", "page-chat-2"]]);
+  assert.equal(typeof focused[0]?.focusId, "number");
 });

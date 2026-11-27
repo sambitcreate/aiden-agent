@@ -633,6 +633,61 @@ test("when another chat deletes the page on screen, the canvas goes back to the 
   assert.ok(screen.getByRole("button", { name: "Page: Home" }));
 });
 
+test("when another chat deletes the page on screen, the canvas shows this chat's claim", async () => {
+  const base = twoPageCanvas();
+  let doc: DesignCanvas = {
+    ...base,
+    pages: [...base.pages, { id: "p3", name: "Ideas" }],
+    frames: [...base.frames, sticky("n3", "On ideas", "p3")],
+    chatPages: { "chat-1": "p3" },
+  };
+  setup(doc, { "designCanvas:get": () => doc });
+  await mount();
+  assert.ok(screen.getByRole("button", { name: "Page: Ideas" }), "with no kept view, the canvas opens on the claim");
+  await choosePageItem("Pricing", "menuitemradio");
+  assert.ok(await screen.findByRole("group", { name: "On pricing" }));
+
+  doc = { ...doc, revision: doc.revision + 1, pages: doc.pages.filter((page) => page.id !== "p2"), frames: doc.frames.filter((frame) => frame.pageId !== "p2") };
+  act(() => emitBotTestNotification("designCanvas:updated", { workspaceId: "workspace-1", chatId: "chat-2", revision: doc.revision }));
+  assert.ok(await screen.findByRole("group", { name: "On ideas" }, SAVE_WAIT));
+  assert.ok(screen.getByRole("button", { name: "Page: Ideas" }));
+});
+
+test("the page picker marks this chat's page and counts other chats on theirs", async () => {
+  const doc: DesignCanvas = {
+    ...canvasWith(),
+    pages: [
+      { id: "page-1", name: "Home" },
+      { id: "p2", name: "Pricing" },
+      { id: "p3", name: "Ideas" },
+      { id: "p4", name: "Shared" },
+      { id: "p5", name: "Empty" },
+    ],
+    chatPages: { "chat-1": "p4", "chat-2": "page-1", "chat-3": "p2", "chat-4": "p2", "chat-5": "p4", "chat-6": "p4" },
+  };
+  setup(doc);
+  await mount();
+  const trigger = screen.getByRole("button", { name: /^Page: / });
+  assert.equal(trigger.getAttribute("aria-label"), "Page: Shared", "the trigger names only the page");
+  fireEvent.pointerDown(trigger, { button: 0, ctrlKey: false, pointerType: "mouse" });
+  await screen.findByRole("menuitemradio", { name: /^Home/u });
+  assert.deepEqual(
+    screen.getAllByRole("menuitemradio").map((row) => row.getAttribute("aria-label") ?? row.textContent),
+    ["Home, 1 chat", "Pricing, 2 chats", "Ideas", "Shared, This chat · 2 more", "Empty"],
+  );
+  for (const name of ["Home, 1 chat", "Pricing, 2 chats", "Ideas", "Shared, This chat · 2 more"]) {
+    assert.ok(screen.getByRole("menuitemradio", { name }), name);
+  }
+  assert.equal(screen.queryByText(/chat-\d/u), null, "no other chat is named");
+});
+
+test("the page picker reads This chat on a page only this chat uses", async () => {
+  setup({ ...twoPageCanvas(), chatPages: { "chat-1": "p2" } });
+  await mount();
+  await choosePageItem("Pricing, This chat", "menuitemradio");
+  assert.ok(await screen.findByRole("button", { name: "Page: Pricing" }), "choosing the marked row still shows the page");
+});
+
 test("a new page starts empty and is shown; deleting it can be undone from the toast", async () => {
   const { saved } = setup(canvasWith(sticky("n1", "On home")));
   render(<Toaster />);

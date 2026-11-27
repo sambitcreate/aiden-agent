@@ -225,3 +225,32 @@ test("saved images land on the page the turn works on, which the result names", 
   assert.deepEqual(placed, { frameIds: ["frame-1"], pageId: "p2" });
   assert.equal((await shared.read()).frames[0]!.pageId, "p2");
 });
+
+test("an artifact placed in a turn claims for a chat with none", async (t) => {
+  const base = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-artifact-claim-"));
+  t.after(() => fs.rm(base, { recursive: true, force: true }));
+  const shared = sharedCanvas(base);
+  await shared.store.update("chat-1", (doc) => ({ ...doc, pages: [...doc.pages, { id: "p2", name: "Pricing" }], chatPages: { "chat-1": "page-1" } }));
+  await shared.views.report("chat-2", "ws-1", onPage("p2"), 0);
+  assert.equal(await placeArtifactsOnCanvas({ ...shared.deps("chat-2"), artifacts: [{ mediaId: "m1", title: "Chart" }], newId: ids() }), true);
+  const doc = await shared.read();
+  assert.equal(doc.revision, 2, "the claim rides on the placement's write");
+  assert.deepEqual(doc.chatPages, { "chat-1": "page-1", "chat-2": "p2" });
+  // An artifact already there writes nothing, so it claims nothing either.
+  await shared.store.update("chat-1", (current) => ({ ...current, chatPages: { "chat-1": "page-1" } }));
+  assert.equal(await placeArtifactsOnCanvas({ ...shared.deps("chat-2"), artifacts: [{ mediaId: "m1", title: "Chart" }], newId: ids() }), false);
+  assert.deepEqual((await shared.read()).chatPages, { "chat-1": "page-1" });
+});
+
+test("a saved image placed in a turn claims for a chat with none, and keeps a claim it has", async (t) => {
+  const base = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-image-claim-"));
+  t.after(() => fs.rm(base, { recursive: true, force: true }));
+  const shared = sharedCanvas(base);
+  await shared.store.update("chat-1", (doc) => ({ ...doc, pages: [...doc.pages, { id: "p2", name: "Pricing" }] }));
+  await shared.views.report("chat-1", "ws-1", onPage("p2"), 0);
+  await placeImagesOnCanvas({ ...shared.deps("chat-1"), images: [{ path: "design/a.png", width: 10, height: 10 }], newId: ids() });
+  assert.deepEqual((await shared.read()).chatPages, { "chat-1": "p2" });
+  await shared.views.report("chat-1", "ws-1", onPage("page-1"), 0);
+  await placeImagesOnCanvas({ ...shared.deps("chat-1"), images: [{ path: "design/b.png", width: 10, height: 10 }], newId: () => "frame-b" });
+  assert.deepEqual((await shared.read()).chatPages, { "chat-1": "p2" });
+});

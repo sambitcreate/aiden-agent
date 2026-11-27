@@ -24,6 +24,10 @@ import { filterRemoteVisibleWorkspaces } from "./visible-chat-projection.js";
 import { WorkspaceMutationGate } from "./workspace-mutation-gate.js";
 import { WorkspaceOperationRegistry } from "./workspace-operation-registry.js";
 import type { Workspace } from "./types.js";
+import { createDesignChatCleanup } from "./design-canvas/cleanup.js";
+import { DesignCanvasStore } from "./design-canvas/store.js";
+import { DesignCanvasViews } from "./design-canvas/views.js";
+import type { DesignCanvas } from "../../renderer/shared/design-canvas/schema.js";
 
 async function withTempDir(fn: (dir: string) => Promise<void>): Promise<void> {
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-attach-ws-"));
@@ -487,6 +491,7 @@ test("legacy shared No-workspace folder refuses copying sibling chats' files and
 
     const chatStore = createChatStore(async () => storeDir);
     const carried: unknown[] = [];
+    const canvases = new DesignCanvasStore({ root: () => path.join(dir, "canvases") });
     const workspaces: Record<string, Workspace> = {
       "nows-legacy": {
         id: "nows-legacy",
@@ -545,6 +550,7 @@ test("legacy shared No-workspace folder refuses copying sibling chats' files and
           return "carried";
         },
       },
+      designCanvasCleanup: createDesignChatCleanup({ store: canvases, views: new DesignCanvasViews() }),
       assertManagedWorktreeAdmission: async () => undefined,
       logError: () => undefined,
     });
@@ -553,6 +559,13 @@ test("legacy shared No-workspace folder refuses copying sibling chats' files and
     const chatB = "66666666-6666-4666-8666-666666666666";
     await chatStore.create({ id: chatA, workspaceId: "nows-legacy" });
     await chatStore.create({ id: chatB, workspaceId: "nows-legacy" });
+    // The shared canvas: chat A's own empty page and its artifact, chat B on Page 1.
+    await canvases.update("nows-legacy", (current): DesignCanvas => ({
+      ...current,
+      pages: [...current.pages, { id: "page-a", name: "A", namedFor: chatA }],
+      chatPages: { [chatA]: "page-a", [chatB]: "page-1" },
+      frames: [{ id: "art-a", kind: "artifact", mediaId: "m", chatId: chatA, title: "art", x: 0, y: 0, w: 100, h: 100, pageId: "page-1", createdBy: "aiden" }],
+    }));
 
     // Must not list sibling chats' files for carry-over or trash.
     const inspected = await service.inspectAttachFiles(chatA);
@@ -574,8 +587,12 @@ test("legacy shared No-workspace folder refuses copying sibling chats' files and
       await fs.readFile(path.join(legacyScratchDir, "other-chat.txt"), "utf8"),
       "belongs to sibling",
     );
-    // A legacy folder shared with other chats keeps its canvas for them.
+    // A legacy folder shared with other chats keeps its canvas for them, without chat A on it.
     assert.deepEqual(carried, []);
+    const shared = await canvases.get("nows-legacy");
+    assert.deepEqual(shared.chatPages, { [chatB]: "page-1" });
+    assert.deepEqual(shared.pages.map((page) => page.id), ["page-1"], "chat A's empty page goes");
+    assert.deepEqual(shared.frames, []);
   });
 });
 

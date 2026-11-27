@@ -15,7 +15,18 @@ import * as path from "node:path";
 import { canvasView } from "../../../renderer/shared/design-canvas/canvas-summary.js";
 import { placeFrame } from "../../../renderer/shared/design-canvas/placement.js";
 import { parseProducedFile } from "../../../renderer/shared/produced-file.js";
-import { addPage, canAddPage, deletePage } from "../../../renderer/shared/design-canvas/pages.js";
+import { deletePage } from "../../../renderer/shared/design-canvas/pages.js";
+import {
+  addChatPage,
+  chatsOnPage,
+  ChatPagesFullError,
+  claimPage,
+  landedPageId,
+  withLazyClaim,
+  chatsOnCanvas,
+  withoutGoneClaims,
+  type IsChatLive,
+} from "../../../renderer/shared/design-canvas/chat-pages.js";
 import {
   DESIGN_CANVAS_LIMITS,
   DESIGN_DEFAULT_FILE_WIDTH,
@@ -26,6 +37,7 @@ import {
   type DesignWidth,
 } from "../../../renderer/shared/design-canvas/schema.js";
 import { DESIGN_FRESH_VIEWPORT, type DesignChatView } from "../../../renderer/shared/design-canvas/view.js";
+import { claimWithRoom } from "./lazy-claim.js";
 import { resolveDesignFile } from "./resolve-core.js";
 import type { DesignCanvasUpdated, DesignChatCanvases } from "./store.js";
 import type { DesignTurnPages } from "./views.js";
@@ -348,92 +360,184 @@ export class RecentWrittenPages {
   }
 }
 
+/**
+ * The design-mode entry running for each chat, so a design turn's first
+ * canvas write waits for entry's claim instead of claiming a page first.
+ * Memory only.
+ */
+export class PendingEntries {
+  private readonly byChat = new Map<string, Promise<unknown>>();
+
+  /** Remembers `entry` until it settles, and returns it. */
+  track<T>(chatId: string, entry: Promise<T>): Promise<T> {
+    this.byChat.set(chatId, entry);
+    const clear = () => {
+      if (this.byChat.get(chatId) === entry) this.byChat.delete(chatId);
+    };
+    entry.then(clear, clear);
+    return entry;
+  }
+
+  /** Settles once the chat's running entry has, whether or not it failed. */
+  async wait(chatId: string): Promise<void> {
+    await this.byChat.get(chatId)?.catch(() => undefined);
+  }
+}
+
 const UNCHANGED = Symbol("unchanged");
 
+/** What design mode's entry decides the chat's page by, read before the canvas update. */
+type EntryRules = {
+  chatId: string;
+  /** Names a page made for the chat. */
+  pageName: string;
+  /** The pages other chats' kept views are on. */
+  otherViews: ReadonlySet<string>;
+  isLive: IsChatLive;
+};
+
+/** The claim, or undefined when the canvas has no room for another chat's page. */
+function tryClaim(claim: () => DesignCanvas): DesignCanvas | undefined {
+  try {
+    return claim();
+  } catch (error) {
+    if (error instanceof ChatPagesFullError) return undefined;
+    throw error;
+  }
+}
+
 /**
- * Where design mode's entry puts the chat's earlier pages (A21), and which
- * page becomes the chat's. Pages already on the canvas, on any page, are not
- * placed again: the chat's page becomes the page holding most of them, and
- * only the missing ones go there. Otherwise they go on the chat's page,
- * unless the chat has never had a view and that page already holds frames
- * (another chat's): then a page named after the chat is added for them, but
- * only when at least one page would actually be placed.
+ * Which page design mode's entry makes the chat's own, and which of its
+ * earlier pages go there. In order:
+ * 1. the chat's claim, when it has one, stays;
+ * 2. else the page holding most of its earlier pages already on the canvas,
+ *    leaving out pages another live chat claims (on a tie the resolved page,
+ *    then the earliest page);
+ * 3. else the resolved page as it is, when it is not named for another chat,
+ *    no other live chat claims it, and it holds no frames or no other chat's
+ *    kept view is on it;
+ * 4. else a new page named after the chat, right after the resolved page. At
+ *    the page limit the resolved page is shared instead.
+ * Pages already on the canvas, on any page, are not placed again; the missing
+ * ones go on the chat's page. Claims and `namedFor` marks of chats that are
+ * gone are dropped first, so a gone chat's mark does not keep rule 3 off a page.
  */
 function entryPlacement(
   doc: DesignCanvas,
   paths: readonly string[],
   view: DesignChatView,
-  entry: { pageName: string; hasView: boolean },
+  rules: EntryRules,
   newId: () => string,
-): { doc: DesignCanvas; view: DesignChatView; claim: boolean; missing: string[] } {
-  const takenOff = new Set(doc.removedPagePaths ?? []);
+): { doc: DesignCanvas; view: DesignChatView; missing: string[]; added?: string } {
+  const base = withoutGoneClaims(doc, rules.isLive);
+  const takenOff = new Set(base.removedPagePaths ?? []);
   const holding = new Map<string, number>();
   const missing: string[] = [];
   for (const relativePath of paths) {
-    const shown = doc.frames.filter((frame) => frame.kind === "file" && frame.path === relativePath);
+    const shown = base.frames.filter((frame) => frame.kind === "file" && frame.path === relativePath);
     if (shown.length === 0) {
       if (!takenOff.has(relativePath)) missing.push(relativePath);
       continue;
     }
-    for (const pageId of new Set(shown.map((frame) => frame.pageId))) holding.set(pageId, (holding.get(pageId) ?? 0) + 1);
+    for (const pageId of new Set(shown.map((frame) => frame.pageId))) {
+      // Another live chat's page is not counted: the chat does not take it over.
+      if (claimedByOther(base, pageId, rules)) continue;
+      holding.set(pageId, (holding.get(pageId) ?? 0) + 1);
+    }
   }
   const lookAt = (pageId: string): DesignChatView => ({
     ...view,
     pageId,
     viewport: { ...(pageId === view.pageId ? view.viewport : DESIGN_FRESH_VIEWPORT) },
   });
-  if (holding.size > 0) {
-    // The most of them; on a tie the chat's own page, then the earliest page.
+  const own = base.chatPages[rules.chatId];
+  let pageId: string;
+  if (Object.prototype.hasOwnProperty.call(base.chatPages, rules.chatId) && base.pages.some((page) => page.id === own)) {
+    pageId = own!;
+  } else if (holding.size > 0) {
     const most = Math.max(...holding.values());
-    const pageId =
-      holding.get(view.pageId) === most ? view.pageId : doc.pages.find((page) => holding.get(page.id) === most)!.id;
-    return { doc, view: lookAt(pageId), claim: !entry.hasView || pageId !== view.pageId, missing };
+    pageId = holding.get(view.pageId) === most ? view.pageId : base.pages.find((page) => holding.get(page.id) === most)!.id;
+  } else if (takeAsItIs(base, view.pageId, rules)) {
+    pageId = view.pageId;
+  } else {
+    const id = newId();
+    const added = tryClaim(() => addChatPage(base, rules.chatId, rules.pageName, id, view.pageId, rules.isLive));
+    if (added && added !== base) return { doc: added, view: lookAt(id), missing, added: id };
+    pageId = view.pageId;
   }
-  if (!entry.hasView && missing.length > 0 && framesOnPage(doc, view.pageId).length > 0 && canAddPage(doc)) {
-    const pageId = newId();
-    const name = entry.pageName.trim().slice(0, DESIGN_CANVAS_LIMITS.pageNameChars) || "Chat";
-    return { doc: addPage(doc, pageId, name), view: lookAt(pageId), claim: true, missing };
-  }
-  return { doc, view, claim: !entry.hasView, missing };
+  const claimed = tryClaim(() => claimPage(base, rules.chatId, pageId, rules.isLive)) ?? base;
+  return { doc: claimed, view: lookAt(pageId), missing };
+}
+
+/** Whether another live chat claims the page. */
+function claimedByOther(doc: DesignCanvas, pageId: string, rules: EntryRules): boolean {
+  return chatsOnPage(doc, pageId, rules.isLive).some((chatId) => chatId !== rules.chatId);
+}
+
+/** Rule 3: the resolved page is not another chat's, by name, claim or what it is looking at. */
+function takeAsItIs(doc: DesignCanvas, pageId: string, rules: EntryRules): boolean {
+  const page = doc.pages.find((entry) => entry.id === pageId)!;
+  if (page.namedFor !== undefined && page.namedFor !== rules.chatId) return false;
+  if (claimedByOther(doc, pageId, rules)) return false;
+  return framesOnPage(doc, pageId).length === 0 || !rules.otherViews.has(pageId);
 }
 
 /**
  * Places the pages that still exist and the canvas can show in the chat's
  * workspace canvas, on the page its turn works on, and tells open canvases.
  * Saves and announces nothing when every page is already there. Returns the
- * new frames' ids, the page they are on and, when entry made a page the
- * chat's, main's `focusId` for that page change.
+ * new frames' ids and the page they are on. Entry also returns the chat's
+ * page and main's `focusId` for showing it.
  */
 export async function placeWrittenPagesOnCanvas(input: {
   chatId: string;
   workspaceRoot: string;
   paths: readonly string[];
-  store: Pick<DesignChatCanvases, "update" | "workspaceIdOf">;
+  store: Pick<DesignChatCanvases, "get" | "update" | "workspaceIdOf">;
   /** The turn's page resolver (`designTurnPages`); entry without a message or turn. */
   pages: Pick<DesignTurnPages, "resolver" | "show">;
   broadcast(update: DesignCanvasUpdated): void;
   newId(): string;
   /**
-   * Design mode opening: the chat's earlier pages, placed by `entryPlacement`.
-   * `pageName` names a page added for them; `hasView` says whether the chat
-   * has ever had a view of this workspace's canvas.
+   * Design mode opening: the chat claims its page (`entryPlacement`) and its
+   * earlier pages go there, even when there are none. `pageName` names a page
+   * made for the chat; `otherViews` lists the pages other chats' kept views
+   * are on; `isLive` says which of the claimed chats are live in the workspace.
    */
-  entry?: { pageName: string; hasView(workspaceId: string): Promise<boolean> };
+  entry?: {
+    pageName: string;
+    otherViews(workspaceId: string): Promise<Set<string>>;
+    isLive(chatIds: string[], workspaceId: string): Promise<Set<string>>;
+  };
   /** At most this many newest existing pages are placed, in chronological order. */
   limit?: number;
   /** Checked on the canvas's own chain just before the save, so a deleted chat or exited mode is not saved. */
   shouldSave?: () => Promise<boolean> | boolean;
   /** Told the pages left off because the person took them off the canvas. */
   onRemoved?: (paths: readonly string[]) => void;
+  /**
+   * Settles once a design-mode entry running for this chat has claimed its
+   * page. A turn's placement waits for it, then claims the turn's page for
+   * a chat with none, in the same write. Not used with `entry`.
+   */
+  pendingEntry?(): Promise<void>;
+  /** Which claimed chats are live, asked only when a turn's lazy claim finds `chatPages` full. */
+  isLive?(chatIds: string[], workspaceId: string): Promise<Set<string>>;
 }): Promise<{ frameIds: string[]; pageId?: string; focusId?: number }> {
   if (input.limit !== undefined && input.limit <= 0) return { frameIds: [] };
   // A chat deleted meanwhile has no canvas to put them on.
   const workspaceId = await input.store.workspaceIdOf(input.chatId);
   if (workspaceId === null) return { frameIds: [] };
-  // Whether the chat had a view is read before the files are, so the canvas
-  // this entry is opening cannot report one first and send these pages onto
-  // another chat's page.
-  const entryHasView = input.entry ? await input.entry.hasView(workspaceId) : undefined;
+  let rules: EntryRules | undefined;
+  if (input.entry) {
+    const otherViews = await input.entry.otherViews(workspaceId);
+    const { doc: current } = await input.store.get(input.chatId, { workspaceId });
+    const checked = new Set(chatsOnCanvas(current).filter((chatId) => chatId !== input.chatId));
+    const live = await input.entry.isLive([...checked], workspaceId);
+    // A claim made after this check is a live chat's.
+    const isLive: IsChatLive = (chatId) => !checked.has(chatId) || live.has(chatId);
+    rules = { chatId: input.chatId, pageName: input.entry.pageName, otherViews, isLive };
+  }
   const newestFirst: string[] = [];
   const widths = new Map<string, DesignWidth>();
   const seen = new Set<string>();
@@ -453,24 +557,31 @@ export async function placeWrittenPagesOnCanvas(input: {
     }
   }
   const showable = newestFirst.reverse();
-  if (showable.length === 0) return { frameIds: [] };
+  // Entry claims a page even when the chat wrote none.
+  if (showable.length === 0 && !rules) return { frameIds: [] };
+  if (!rules) await input.pendingEntry?.();
   const viewOf = await input.pages.resolver(workspaceId);
-  const entry = input.entry ? { pageName: input.entry.pageName, hasView: entryHasView! } : undefined;
-  const shouldSave = input.shouldSave;
+  // Asked on the canvas's chain before the write, and again after it: the
+  // chat must still be in design mode, if the caller asks that, and still in
+  // this workspace. A chat that moved while this ran writes nothing back to the
+  // canvas it left, whose cleanup may already have run.
+  const callerAllows = input.shouldSave;
+  const shouldSave = async (): Promise<boolean> =>
+    (await input.store.workspaceIdOf(input.chatId)) === workspaceId && (!callerAllows || (await callerAllows()));
   let placedIds: string[] = [];
   let removed: string[] = [];
   let pageId: string | undefined;
-  // The page entry makes the chat's, shown once the canvas is settled.
-  let claimed: string | undefined;
-  let addedPage = false;
   // The page entry added in the save that landed, so taking the frames back also takes it.
   let addedPageId: string | undefined;
+  let refused = false;
+  let landed: string | undefined;
   // Reported whether or not anything was saved, once the canvas has been read.
   const reportRemoved = () => {
     if (removed.length > 0) input.onRemoved?.(removed);
   };
-  const claim = async (): Promise<number | undefined> =>
-    claimed === undefined ? undefined : await input.pages.show(workspaceId, claimed);
+  // Entry always shows the chat's page, so the view and the open canvas move to it.
+  const show = async (): Promise<number | undefined> =>
+    rules && pageId !== undefined ? await input.pages.show(workspaceId, pageId) : undefined;
   try {
     const { doc: saved } = await input.store.update(
       input.chatId,
@@ -478,56 +589,64 @@ export async function placeWrittenPagesOnCanvas(input: {
         let view = viewOf(doc);
         let base = doc;
         let paths: readonly string[] = showable;
-        if (entry) {
-          const placement = entryPlacement(doc, showable, view, entry, input.newId);
+        addedPageId = undefined;
+        if (rules) {
+          const placement = entryPlacement(doc, showable, view, rules, input.newId);
           base = placement.doc;
           view = placement.view;
           paths = placement.missing;
-          // A page added for them exists only if the save lands, so it is claimed only then.
-          if (placement.claim) claimed = view.pageId;
-          addedPage = placement.doc !== doc;
-          addedPageId = addedPage ? view.pageId : undefined;
+          addedPageId = placement.added;
         }
         pageId = view.pageId;
         const placed = placeWrittenPageFrames(base, paths, input.newId, widths, view);
         removed = placed.removed;
-        if (!placed.changed) throw UNCHANGED;
+        if (placed.doc === doc) throw UNCHANGED;
         placedIds = placed.placedIds;
-        return placed.doc;
+        // A turn's placement claims the page it landed on for a chat with none; entry has claimed already.
+        if (rules) return placed.doc;
+        landed = landedPageId(doc, placed.doc, view.pageId);
+        return withLazyClaim(placed.doc, input.chatId, landed);
       },
       {
         workspaceId,
-        // Leaving design mode (or deleting the chat) while this waited keeps the frames off the stored canvas.
-        ...(shouldSave
-          ? {
-              beforeWrite: async () => {
-                if (!(await shouldSave())) {
-                  removed = [];
-                  claimed = undefined;
-                  throw UNCHANGED;
-                }
-              },
-            }
-          : {}),
+        // Leaving design mode, deleting the chat or moving it while this waited keeps the frames off the stored canvas.
+        beforeWrite: async () => {
+          if (!(await shouldSave())) {
+            removed = [];
+            refused = true;
+            throw UNCHANGED;
+          }
+        },
       },
     );
     // The mode can still turn off while the file is being written. Then the
     // frames are taken back off, unless the person changed the canvas since
     // or design mode is on again by the time that runs.
-    if (shouldSave && !(await shouldSave())) {
-      await retractPlacedFrames(input, workspaceId, saved.revision, placedIds, shouldSave, addedPageId);
+    if (!(await shouldSave())) {
+      if (placedIds.length > 0 || addedPageId !== undefined) {
+        await retractPlacedFrames(input, workspaceId, saved.revision, placedIds, shouldSave, addedPageId);
+      }
       return { frameIds: [] };
     }
     input.broadcast({ workspaceId, chatId: input.chatId, revision: saved.revision });
+    await claimWithRoom({
+      chatId: input.chatId,
+      workspaceId,
+      pageId: landed,
+      saved,
+      store: input.store,
+      isLive: input.isLive,
+      broadcast: input.broadcast,
+    });
     reportRemoved();
-    const focusId = await claim();
+    const focusId = await show();
     return { frameIds: placedIds, ...(pageId ? { pageId } : {}), ...(focusId !== undefined ? { focusId } : {}) };
   } catch (error) {
     if (error === UNCHANGED) {
       reportRemoved();
-      if (addedPage) claimed = undefined;
-      const focusId = await claim();
-      return { frameIds: [], ...(claimed && pageId ? { pageId } : {}), ...(focusId !== undefined ? { focusId } : {}) };
+      if (!rules || refused || !(await shouldSave())) return { frameIds: [] };
+      const focusId = await show();
+      return { frameIds: [], ...(pageId ? { pageId } : {}), ...(focusId !== undefined ? { focusId } : {}) };
     }
     throw error;
   }
@@ -551,9 +670,12 @@ async function retractPlacedFrames(
         const frames = doc.frames.filter((frame) => !placed.has(frame.id));
         const dropPage =
           addedPageId !== undefined && doc.pages.length > 1 && !frames.some((frame) => frame.pageId === addedPageId);
-        return dropPage
-          ? deletePage({ ...doc, frames }, addedPageId)
-          : { ...doc, frames };
+        if (!dropPage) return { ...doc, frames };
+        // The claim on the added page goes with it, rather than moving to the first page.
+        const chatPages = Object.fromEntries(
+          Object.entries(doc.chatPages).filter(([chatId, pageId]) => chatId !== input.chatId || pageId !== addedPageId),
+        );
+        return deletePage({ ...doc, frames, chatPages }, addedPageId);
       },
       {
         workspaceId,

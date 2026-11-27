@@ -164,6 +164,15 @@ export class DesignCanvasViews {
     };
   }
 
+  /** The pages every other chat on the workspace was last on, whether or not its canvas is open. */
+  async pageIdsOf(workspaceId: string, exceptChatId: string): Promise<Set<string>> {
+    const pageIds = new Set<string>();
+    for (const [chatId, entry] of (await this.workspace(workspaceId)).entries) {
+      if (chatId !== exceptChatId) pageIds.add(entry.pageId);
+    }
+    return pageIds;
+  }
+
   /** How many chats have this workspace's canvas open. */
   mounted(workspaceId: string): number {
     let count = 0;
@@ -275,8 +284,10 @@ export class DesignCanvasViews {
  * The page a chat's Aiden turn works on, resolved the same way everywhere in
  * the turn (tools, auto-placed pages and images, the prompt line), in order:
  * a page Aiden showed earlier in this turn, the page the person's message was
- * sent from, the chat's kept page, then the first page. Each counts only while
- * the page exists. Background and entry placements use it without a message.
+ * sent from, the chat's kept page, the chat's own page (`chatPages`), then
+ * the first page. Each counts only while the page exists. The renderer's
+ * canvas falls back in the same order (`useDesignView`). Background and entry
+ * placements use it without a message.
  */
 export type DesignTurnPages = {
   /**
@@ -284,9 +295,9 @@ export type DesignTurnPages = {
    * turn's view for any version of the document without waiting, so a store
    * update's mutate can use it on the latest document.
    */
-  resolver(workspaceId: string): Promise<(doc: Pick<DesignCanvas, "pages">) => DesignChatView>;
+  resolver(workspaceId: string): Promise<(doc: Pick<DesignCanvas, "pages" | "chatPages">) => DesignChatView>;
   /** The chat's view for this turn, on a page that exists in `doc`. */
-  view(doc: Pick<DesignCanvas, "pages">, workspaceId: string): Promise<DesignChatView>;
+  view(doc: Pick<DesignCanvas, "pages" | "chatPages">, workspaceId: string): Promise<DesignChatView>;
   /** Aiden shows `pageId`: later calls in the turn work on it. The change's `focusId`, when main keeps views. */
   show(workspaceId: string, pageId: string): Promise<number | undefined>;
 };
@@ -303,7 +314,10 @@ export function designTurnPages(options: {
     return (doc) => {
       const exists = (pageId: string | undefined): pageId is string =>
         pageId !== undefined && doc.pages.some((page) => page.id === pageId);
-      const pageId = [shown, options.message?.pageId, kept?.pageId].find(exists) ?? doc.pages[0]!.id;
+      const claim = Object.prototype.hasOwnProperty.call(doc.chatPages, options.chatId)
+        ? doc.chatPages[options.chatId]
+        : undefined;
+      const pageId = [shown, options.message?.pageId, kept?.pageId, claim].find(exists) ?? doc.pages[0]!.id;
       const size = options.message?.viewSize ?? kept?.size;
       return {
         pageId,

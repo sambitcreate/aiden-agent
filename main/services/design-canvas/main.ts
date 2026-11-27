@@ -13,15 +13,26 @@ import { createDesignChatCleanup, createDesignWorkspaceCleanup } from "./cleanup
 import { DesignModeConsent } from "./design-mode-tool.js";
 import { DesignSystemOffers } from "./design-system-offers.js";
 import { DesignGrantRegistry } from "./grants.js";
+import { createDesignLiveChats } from "./liveness.js";
 import { DESIGN_CANVAS_UPDATED_CHANNEL, DesignCanvasStore, DesignChatCanvases, type DesignCanvasUpdated } from "./store.js";
+import { createDesignTitleFollow } from "./title-follow.js";
 import { DesignCanvasViews } from "./views.js";
 import { DESIGN_FILES_CHANGED_CHANNEL, DesignFileWatcher } from "./watch.js";
-import { RecentWrittenPages } from "./written-pages.js";
+import { PendingEntries, RecentWrittenPages } from "./written-pages.js";
 
 /** One canvas file per workspace, under `userData/design-canvases/`. */
 export const designWorkspaceCanvasStore = new DesignCanvasStore({
   root: () => path.join(app.getPath("userData"), "design-canvases"),
 });
+
+/** Whether the chat still exists and is in that workspace: a chat that moved away is not live there. */
+async function designChatIsLive(chatId: string, workspaceId: string): Promise<boolean> {
+  const meta = await chatStore.getMeta(chatId);
+  return meta !== null && persistedChatWorkspaceId(meta.workspaceId) === workspaceId;
+}
+
+/** Which of `chatIds` are live in the workspace, for claims on its canvas: one chat index read per check. */
+export const designLiveChats = createDesignLiveChats(chatStore);
 
 /** The workspace canvases seen through chats: what handlers, tools and placements use. */
 export const designCanvasStore = new DesignChatCanvases({
@@ -31,6 +42,7 @@ export const designCanvasStore = new DesignChatCanvases({
     return meta ? persistedChatWorkspaceId(meta.workspaceId) : null;
   },
   workspaceExists: async (workspaceId) => (await configStore.getWorkspace(workspaceId)) !== undefined,
+  chatIsLive: designChatIsLive,
 });
 
 /**
@@ -45,6 +57,15 @@ export function broadcastDesignCanvasUpdate(update: DesignCanvasUpdated): void {
     logger.warn("design", "Could not announce a canvas change.", error);
   }
 }
+
+/** A page made for a chat follows the chat's title; entry runs it once more after claiming. */
+export const designTitleFollow = createDesignTitleFollow({
+  canvases: designCanvasStore,
+  titleOf: async (chatId) => (await chatStore.getMeta(chatId))?.title,
+  broadcast: broadcastDesignCanvasUpdate,
+  onError: (error) => logger.warn("design", "Could not rename the chat's canvas page.", error),
+});
+chatStore.onTitleChanged((chatId) => void designTitleFollow.follow(chatId));
 
 /**
  * Each chat's canvas view (page, viewports, the latest Aiden page change), as
@@ -69,6 +90,7 @@ export const designCanvasCarry = createDesignCanvasCarry({
   views: designCanvasViews,
   broadcast: broadcastDesignCanvasUpdate,
   newId: randomUUID,
+  isLive: designLiveChats,
 });
 
 /** A removed workspace's canvas, its corrupt copies and its chats' views of it. */
@@ -106,6 +128,9 @@ export const designModeConsent = new DesignModeConsent();
 
 /** Pending `canvas_read` snapshot requests. Memory only. */
 export const designCanvasSnapshots = new DesignCanvasSnapshots();
+
+/** Each chat's running design-mode entry, which its turn's canvas writes wait for. Memory only. */
+export const designPendingEntries = new PendingEntries();
 
 /** HTML pages each chat's replies wrote in this run, for opening design mode mid-reply. Memory only. */
 export const recentWrittenPages = new RecentWrittenPages();

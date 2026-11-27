@@ -13,7 +13,7 @@
 import * as React from "react";
 import { designCanvasApi } from "../lib/ipc";
 import type { DesignCanvas, DesignViewport } from "../shared/design-canvas/schema";
-import { DESIGN_FRESH_VIEWPORT, viewPageId } from "../shared/design-canvas/view";
+import { DESIGN_FRESH_VIEWPORT } from "../shared/design-canvas/view";
 
 export const DESIGN_VIEW_REPORT_DELAY_MS = 250;
 
@@ -22,7 +22,7 @@ type Size = { w: number; h: number };
 export interface DesignViewHandle {
   /** False until main's kept view has been read; the canvas waits for it. */
   loaded: boolean;
-  /** The page on screen: the view's page while it exists, else the first page. */
+  /** The page on screen: the view's page while it exists, else the chat's own page, else an earlier or the first page. */
   pageId: string;
   /** Where the person looks at that page. */
   viewport: DesignViewport;
@@ -43,7 +43,12 @@ export interface DesignViewHandle {
 type State = {
   loaded: boolean;
   pageId: string | undefined;
-  /** Pages shown before this one, newest first, so undoing a page's creation goes back to where the person was. */
+  /**
+   * Pages shown before this one, newest first. When the page on screen goes
+   * and the chat has no page of its own that exists, the canvas goes back to
+   * the newest of these, so undoing a page's creation returns to where the
+   * person was.
+   */
   earlier: readonly string[];
   viewports: Readonly<Record<string, DesignViewport>>;
 };
@@ -58,11 +63,17 @@ function showing(state: State, pageId: string): State {
   return { ...state, pageId, earlier: earlier.filter((id) => id !== pageId).slice(0, MAX_EARLIER) };
 }
 
-/** The page on screen: the view's own while it exists, else the newest earlier page that does, else the first. */
-function shownPageId(doc: DesignCanvas, state: State): string {
-  if (state.pageId !== undefined && doc.pages.some((page) => page.id === state.pageId)) return state.pageId;
-  const back = state.earlier.find((id) => doc.pages.some((page) => page.id === id));
-  return viewPageId(doc, back === undefined ? state : { pageId: back });
+/**
+ * The page on screen: the view's own while it exists, else the chat's own
+ * page (`chatPages`), else the newest earlier page that exists, else the
+ * first. Main resolves a turn's page in the same order (`designTurnPages`).
+ */
+function shownPageId(doc: DesignCanvas, state: State, chatId: string): string {
+  const exists = (id: string | undefined): id is string => id !== undefined && doc.pages.some((page) => page.id === id);
+  if (exists(state.pageId)) return state.pageId;
+  const claim = Object.prototype.hasOwnProperty.call(doc.chatPages, chatId) ? doc.chatPages[chatId] : undefined;
+  if (exists(claim)) return claim;
+  return state.earlier.find(exists) ?? doc.pages[0]!.id;
 }
 
 export function useDesignView(workspaceId: string, chatId: string, doc: DesignCanvas | undefined): DesignViewHandle {
@@ -81,7 +92,7 @@ export function useDesignView(workspaceId: string, chatId: string, doc: DesignCa
     const current = stateRef.current;
     const shown = docRef.current;
     if (!current.loaded || !shown) return;
-    const pageId = shownPageId(shown, current);
+    const pageId = shownPageId(shown, current, chatId);
     const view = {
       pageId,
       viewport: current.viewports[pageId] ?? DESIGN_FRESH_VIEWPORT,
@@ -134,11 +145,7 @@ export function useDesignView(workspaceId: string, chatId: string, doc: DesignCa
     };
   }, [chatId, workspaceId, send]);
 
-  // Once loaded, main hears the canvas is open, and what it shows.
   const hasDoc = doc !== undefined;
-  React.useEffect(() => {
-    if (state.loaded && hasDoc) schedule();
-  }, [state.loaded, hasDoc, schedule]);
 
   const showPage = React.useCallback(
     (pageId: string) => {
@@ -152,14 +159,14 @@ export function useDesignView(workspaceId: string, chatId: string, doc: DesignCa
       const shown = docRef.current;
       if (!shown) return;
       setState((current) => {
-        const pageId = shownPageId(shown, current);
+        const pageId = shownPageId(shown, current, chatId);
         const before = current.viewports[pageId];
         if (before && before.x === viewport.x && before.y === viewport.y && before.zoom === viewport.zoom) return current;
         return { ...current, viewports: { ...current.viewports, [pageId]: { x: viewport.x, y: viewport.y, zoom: viewport.zoom } } };
       });
       schedule();
     },
-    [schedule],
+    [schedule, chatId],
   );
   const setSize = React.useCallback(
     (next: Size) => {
@@ -183,7 +190,13 @@ export function useDesignView(workspaceId: string, chatId: string, doc: DesignCa
     [schedule],
   );
 
-  const pageId = doc ? shownPageId(doc, state) : (state.pageId ?? "");
+  const pageId = doc ? shownPageId(doc, state, chatId) : (state.pageId ?? "");
+  // Once loaded, main hears the canvas is open and what it shows, and again
+  // whenever the page on screen changes (a fallback, or the view's page coming
+  // back), so its kept view matches the screen.
+  React.useEffect(() => {
+    if (state.loaded && hasDoc) schedule();
+  }, [state.loaded, hasDoc, pageId, schedule]);
   return {
     loaded: state.loaded,
     pageId,

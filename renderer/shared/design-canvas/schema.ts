@@ -193,15 +193,22 @@ export type DesignComment = {
 
 export type DesignViewport = { x: number; y: number; zoom: number };
 
-/** A page of the canvas. Where each chat looks at it is that chat's view (`view.ts`). */
-export type DesignPage = { id: string; name: string };
+/**
+ * A page of the canvas. Where each chat looks at it is that chat's view
+ * (`view.ts`). `namedFor` is the chat a page was made for: it takes that
+ * chat's title until someone renames it (`chat-pages.ts`).
+ */
+export type DesignPage = { id: string; name: string; namedFor?: string };
 
 export type DesignCanvas = {
   version: 3;
   revision: number;
   /** At least one, in the order the page picker lists them. */
   pages: DesignPage[];
-  /** The page each chat works on, by chat id; every value is one of `pages`. */
+  /**
+   * Each chat's own page, by chat id; every value is one of `pages`. Only
+   * main writes it (`chat-pages.ts`); a person's save is merged in the store.
+   */
   chatPages: Record<string, string>;
   frames: DesignFrame[];
   comments: DesignComment[];
@@ -220,6 +227,7 @@ export const DESIGN_CANVAS_LIMITS = {
   comments: 2000,
   pages: 200,
   pageNameChars: 60,
+  chatPages: 2000,
   minSize: 40,
   maxSize: 8000,
   maxCoord: 1_000_000,
@@ -366,8 +374,8 @@ export function parseDesignCanvas(value: unknown): DesignCanvasParseResult {
   if (!Array.isArray(value.comments)) issues.push("The canvas comments are not a list.");
   if (issues.length > 0) return { ok: false, issues };
 
-  let dropped = 0;
-  const pages = parsePages(value.pages);
+  const { pages, dropped: droppedPages } = parsePages(value.pages);
+  let dropped = droppedPages;
   const pageIds = new Set(pages.map((page) => page.id));
   const firstPageId = pages[0]!.id;
   const pageOf = (raw: unknown) => {
@@ -376,8 +384,16 @@ export function parseDesignCanvas(value: unknown): DesignCanvasParseResult {
   };
   const chatPages: Record<string, string> = {};
   if (isRecord(value.chatPages)) {
+    let kept = 0;
     for (const [chatId, pageId] of Object.entries(value.chatPages)) {
-      if (isDesignChatId(chatId) && typeof pageId === "string" && pageIds.has(pageId)) chatPages[chatId] = pageId;
+      if (!isDesignChatId(chatId) || typeof pageId !== "string" || !pageIds.has(pageId)) continue;
+      // Past the cap an entry is dropped and counted, as frames are, so the canvas is never set aside.
+      if (kept >= DESIGN_CANVAS_LIMITS.chatPages) {
+        dropped += 1;
+        continue;
+      }
+      chatPages[chatId] = pageId;
+      kept += 1;
     }
   }
 
@@ -472,22 +488,28 @@ export function withRemovedPagePaths<T extends DesignCanvas>(
   return (removedPagePaths.length > 0 ? { ...rest, removedPagePaths } : rest) as T;
 }
 
-/** The pages of a document; never empty, and ids are unique. */
-function parsePages(value: unknown): DesignPage[] {
+/** The pages of a document; never empty, and ids are unique. `dropped` counts pages past the limit. */
+function parsePages(value: unknown): { pages: DesignPage[]; dropped: number } {
   const pages: DesignPage[] = [];
   const ids = new Set<string>();
+  let dropped = 0;
   if (Array.isArray(value)) {
     for (const raw of value) {
-      if (pages.length >= DESIGN_CANVAS_LIMITS.pages) break;
       if (!isRecord(raw)) continue;
       const id = identifier(raw.id);
       if (!id || ids.has(id)) continue;
       ids.add(id);
-      pages.push({ id, name: pageName(raw.name, pages.length) });
+      if (pages.length >= DESIGN_CANVAS_LIMITS.pages) {
+        dropped += 1;
+        continue;
+      }
+      const page: DesignPage = { id, name: pageName(raw.name, pages.length) };
+      if (isDesignChatId(raw.namedFor)) page.namedFor = raw.namedFor;
+      pages.push(page);
     }
   }
   if (pages.length === 0) pages.push({ id: DESIGN_FIRST_PAGE_ID, name: "Page 1" });
-  return pages;
+  return { pages, dropped };
 }
 
 function pageName(value: unknown, index: number): string {

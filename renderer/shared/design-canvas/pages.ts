@@ -39,12 +39,15 @@ export function addPage(doc: DesignCanvas, id: string, name?: string, after?: st
   return { ...doc, pages: [...doc.pages.slice(0, at), page, ...doc.pages.slice(at)] };
 }
 
-/** Renames a page. An empty name is refused. */
+/**
+ * Renames a page. An empty name is refused. A page made for a chat stops
+ * following that chat's title once it is renamed.
+ */
 export function renamePage(doc: DesignCanvas, id: string, name: string): DesignCanvas {
   const clean = cleanName(name);
   const page = doc.pages.find((entry) => entry.id === id);
   if (!clean || !page || page.name === clean) return doc;
-  return { ...doc, pages: doc.pages.map((entry) => (entry.id === id ? { ...entry, name: clean } : entry)) };
+  return { ...doc, pages: doc.pages.map((entry) => (entry.id === id ? { id: entry.id, name: clean } : entry)) };
 }
 
 /**
@@ -78,15 +81,19 @@ export function duplicatePage(doc: DesignCanvas, id: string, pageId: string, new
 }
 
 /**
- * Deletes a page with its frames and comments, and forgets it as any chat's
- * page. The last page cannot be deleted. A chat looking at it sees the first
- * page instead (`viewPageId`).
+ * Deletes a page with its frames and comments. Chats whose page it was move
+ * to the first page left. The last page cannot be deleted. A chat looking at
+ * it sees its own page, else the first page, instead (`designTurnPages` in
+ * main, `useDesignView` in the renderer).
  */
 export function deletePage(doc: DesignCanvas, id: string): DesignCanvas {
   const at = doc.pages.findIndex((page) => page.id === id);
   if (at < 0 || doc.pages.length <= 1) return doc;
   const pages = doc.pages.filter((page) => page.id !== id);
-  const chatPages = Object.fromEntries(Object.entries(doc.chatPages).filter(([, pageId]) => pageId !== id));
+  const first = pages[0]!.id;
+  const chatPages = Object.fromEntries(
+    Object.entries(doc.chatPages).map(([chatId, pageId]) => [chatId, pageId === id ? first : pageId]),
+  );
   return {
     ...doc,
     pages,
@@ -143,7 +150,8 @@ export function moveFramesToPage(doc: DesignCanvas, ids: readonly string[], page
  * chat's earlier tool calls still name them, and are only given new ones
  * where the target already uses them, with groups, arrows and comments
  * following. A page or image frame's path goes through `pathMap` (old path to
- * new); one whose file was not copied is dropped. `chatPages` is not copied.
+ * new); one whose file was not copied is dropped. `chatPages` is not copied,
+ * and the new pages are built as `{ id, name }`, so no `namedFor` comes over.
  * All or nothing: null when the result would pass the page, frame or comment
  * limit. `pageIds` are the new pages, in order (none when nothing came over).
  */

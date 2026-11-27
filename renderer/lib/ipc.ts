@@ -2743,9 +2743,13 @@ export const ttsApi = {
     onNotification<TtsServiceEvent>("tts:event", handler),
 };
 
-/** Result of `designCanvas:save`; mirrors main's `DesignCanvasSaveResult`. */
+/**
+ * Result of `designCanvas:save`; mirrors main's `DesignCanvasSaveResult`.
+ * `chatPages` and `namedFor` (page id to chat id) come only when the store
+ * merged in its own chat pages: they are what was stored.
+ */
 export type DesignCanvasSaveResult =
-  | { ok: true; revision: number }
+  | { ok: true; revision: number; chatPages?: Record<string, string>; namedFor?: Record<string, string> }
   | { ok: false; reason: "conflict"; doc: DesignCanvas }
   | { ok: false; reason: "moved"; workspaceId: string }
   | { ok: false; reason: "invalid"; issues: string[] };

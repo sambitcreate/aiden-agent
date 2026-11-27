@@ -34,6 +34,7 @@ import {
   DropdownMenuTrigger,
   Input,
 } from "../components/ui";
+import { chatsOnPage } from "../shared/design-canvas/chat-pages";
 import { canAddPage } from "../shared/design-canvas/pages";
 import { prettyAccelerator } from "../shared/keybindings";
 import { DESIGN_DRAW_SHORTCUTS } from "./canvas-keymap-core";
@@ -77,6 +78,7 @@ const DRAW_MENU: readonly DesignDrawTool[] = ["pencil", "pen"];
 
 export function DesignToolbar({
   doc,
+  chatId,
   pageId,
   tool,
   onToolChange,
@@ -90,6 +92,8 @@ export function DesignToolbar({
   onDraw,
 }: {
   doc: DesignCanvas;
+  /** The chat whose canvas this is; the page picker marks its own page. */
+  chatId: string;
   /** The page on screen, from the chat's view. */
   pageId: string;
   tool: CanvasTool;
@@ -113,7 +117,7 @@ export function DesignToolbar({
       aria-label="Canvas tools"
       className="glass-surface nodrag flex max-w-full flex-wrap items-center gap-0.5 rounded-button p-1 shadow-control"
     >
-      <DesignPageMenu doc={doc} pageId={pageId} onPage={onPage} />
+      <DesignPageMenu doc={doc} chatId={chatId} pageId={pageId} onPage={onPage} />
       <div aria-hidden className="mx-1 h-4 w-px shrink-0 bg-separator" />
       {TOOLS.map(({ tool: item, label, Icon }) => {
         const shortcut = CANVAS_TOOL_SHORTCUTS[item];
@@ -276,8 +280,31 @@ function DrawToolMenu({
   );
 }
 
-/** The page picker: every page, and what can be done to the one on screen. */
-function DesignPageMenu({ doc, pageId, onPage }: { doc: DesignCanvas; pageId: string; onPage(action: DesignPageAction): void }) {
+/**
+ * Which chats use a page as their own, by count only (never a title or id):
+ * "This chat", "This chat · N more", "1 chat", "N chats", or nothing.
+ */
+function pageChatsLabel(doc: DesignCanvas, pageId: string, chatId: string): string | undefined {
+  const chats = chatsOnPage(doc, pageId);
+  const mine = chats.includes(chatId);
+  const others = chats.length - (mine ? 1 : 0);
+  if (mine) return others > 0 ? `This chat · ${others} more` : "This chat";
+  if (others === 0) return undefined;
+  return others === 1 ? "1 chat" : `${others} chats`;
+}
+
+/** The page picker: every page with the chats that use it, and what can be done to the one on screen. */
+function DesignPageMenu({
+  doc,
+  chatId,
+  pageId,
+  onPage,
+}: {
+  doc: DesignCanvas;
+  chatId: string;
+  pageId: string;
+  onPage(action: DesignPageAction): void;
+}) {
   const page = doc.pages.find((entry) => entry.id === pageId) ?? doc.pages[0]!;
   const at = doc.pages.indexOf(page);
   const [renaming, setRenaming] = React.useState(false);
@@ -312,11 +339,24 @@ function DesignPageMenu({ doc, pageId, onPage }: { doc: DesignCanvas; pageId: st
         >
           <DropdownMenuLabel>Pages</DropdownMenuLabel>
           <DropdownMenuRadioGroup value={page.id} onValueChange={(id) => onPage({ type: "show", id })}>
-            {doc.pages.map((entry) => (
-              <DropdownMenuRadioItem key={entry.id} value={entry.id}>
-                <span className="min-w-0 truncate">{entry.name}</span>
-              </DropdownMenuRadioItem>
-            ))}
+            {doc.pages.map((entry) => {
+              const chats = pageChatsLabel(doc, entry.id, chatId);
+              return (
+                <DropdownMenuRadioItem
+                  key={entry.id}
+                  value={entry.id}
+                  textValue={entry.name}
+                  aria-label={chats === undefined ? undefined : `${entry.name}, ${chats}`}
+                >
+                  <span className="min-w-0 flex-1 truncate">{entry.name}</span>
+                  {chats === undefined ? null : (
+                    <span aria-hidden className="ml-4 shrink-0 text-small text-tertiary">
+                      {chats}
+                    </span>
+                  )}
+                </DropdownMenuRadioItem>
+              );
+            })}
           </DropdownMenuRadioGroup>
           <DropdownMenuSeparator />
           <DropdownMenuItem disabled={!canAddPage(doc)} onSelect={() => onPage({ type: "add" })}>

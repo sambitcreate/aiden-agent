@@ -1,7 +1,7 @@
 // Undo and redo for the design canvas: whole documents, newest last. Pure, so
 // the hook can keep the history in React state and tests need no DOM.
 
-import type { DesignCanvas } from "../shared/design-canvas/schema";
+import { DESIGN_CANVAS_LIMITS, type DesignCanvas, type DesignPage } from "../shared/design-canvas/schema";
 
 export interface CanvasHistory {
   past: DesignCanvas[];
@@ -105,10 +105,11 @@ export function keepUnchanged(from: DesignCanvas, to: DesignCanvas): DesignCanva
  * different canvas: it adds, removes and replaces only the frames and
  * comments that differ between the two, so ones someone else changed in the
  * meantime are kept. Comments whose frame or page is gone go with it.
- * Pages (names and order) are taken whole when the edit changed them, and a
- * chat's page that is gone is forgotten. Which page anyone looks at is not
- * in the document, so an undo never moves anyone's view. Run on `from`
- * itself it gives exactly `to`.
+ * Pages change item by item too (`pageChanges`), and so do chats' own pages:
+ * the claims the edit added, moved or removed are applied, and a claim whose
+ * page is gone moves to the first page. Which page anyone looks at is not in
+ * the document, so an undo never moves anyone's view. Run on `from` itself it
+ * gives exactly `to`.
  */
 export function changesBetween(
   from: DesignCanvas,
@@ -116,16 +117,16 @@ export function changesBetween(
 ): (doc: DesignCanvas) => DesignCanvas {
   const frameEdit = itemChanges(from.frames, to.frames);
   const commentEdit = itemChanges(from.comments, to.comments);
-  const outline = (doc: DesignCanvas) => JSON.stringify(doc.pages.map((page) => [page.id, page.name]));
-  const pagesChanged = outline(from) !== outline(to);
+  const pageEdit = pageChanges(from.pages, to.pages);
+  const claimEdit = claimChanges(from.chatPages, to.chatPages);
   return (doc) => {
     if (doc === from) return to;
-    const frames = frameEdit(doc.frames);
-    const pages = pagesChanged ? to.pages : doc.pages;
+    const pages = pageEdit(doc.pages);
     const pageIds = new Set(pages.map((page) => page.id));
-    const chatPages = Object.values(doc.chatPages).every((pageId) => pageIds.has(pageId))
-      ? doc.chatPages
-      : Object.fromEntries(Object.entries(doc.chatPages).filter(([, pageId]) => pageIds.has(pageId)));
+    // A frame left on a page that is gone goes with it, as comments do.
+    const edited = frameEdit(doc.frames);
+    const frames = edited.every((frame) => pageIds.has(frame.pageId)) ? edited : edited.filter((frame) => pageIds.has(frame.pageId));
+    const chatPages = claimEdit(doc.chatPages, pageIds, pages[0]!.id);
     const framePages = new Map(frames.map((frame) => [frame.id, frame.pageId]));
     const comments = commentEdit(doc.comments).flatMap((comment) => {
       if (comment.frameId === undefined) return pageIds.has(comment.pageId) ? [comment] : [];
@@ -134,6 +135,90 @@ export function changesBetween(
       return [pageId === comment.pageId ? comment : { ...comment, pageId }];
     });
     return { ...doc, frames, pages, chatPages, comments };
+  };
+}
+
+/**
+ * The page edit that turns `from` into `to`, run on another page list: the
+ * pages `to` removed go, renames and `namedFor` changes apply, a page `to`
+ * added goes after the nearest page before it in `to` that is there (first
+ * when none is), and pages only the other list has stay. A page's name and
+ * `namedFor` each change only when the edit changed that field. When the
+ * edit reordered pages, the pages both lists share take `to`'s order among
+ * the places they hold. Past the page limit, pages `to` lacks are dropped.
+ */
+function pageChanges(from: readonly DesignPage[], to: readonly DesignPage[]): (pages: readonly DesignPage[]) => DesignPage[] {
+  const before = new Map(from.map((page) => [page.id, page]));
+  const after = new Map(to.map((page) => [page.id, page]));
+  const sharedOrder = (list: readonly DesignPage[]) =>
+    list.filter((page) => before.has(page.id) && after.has(page.id)).map((page) => page.id);
+  const reordered = sharedOrder(from).join("\n") !== sharedOrder(to).join("\n");
+  return (pages) => {
+    let next = pages.flatMap((page): DesignPage[] => {
+      const was = before.get(page.id);
+      if (!was) return [page];
+      const now = after.get(page.id);
+      if (!now) return [];
+      // Each field the edit changed, and only those, so a step's own rename stays.
+      let changed = page;
+      if (was.name !== now.name) changed = { ...changed, name: now.name };
+      if (was.namedFor !== now.namedFor) {
+        const { namedFor: _namedFor, ...rest } = changed;
+        changed = now.namedFor === undefined ? rest : { ...rest, namedFor: now.namedFor };
+      }
+      return [changed];
+    });
+    if (reordered) {
+      const order = new Map(to.map((page, index) => [page.id, index]));
+      const ordered = next.filter((page) => before.has(page.id) && order.has(page.id));
+      ordered.sort((a, b) => order.get(a.id)! - order.get(b.id)!);
+      let at = 0;
+      next = next.map((page) => (before.has(page.id) && order.has(page.id) ? ordered[at++]! : page));
+    }
+    for (const [index, page] of to.entries()) {
+      if (before.has(page.id) || next.some((entry) => entry.id === page.id)) continue;
+      let place = 0;
+      for (let earlier = index - 1; earlier >= 0; earlier -= 1) {
+        const found = next.findIndex((entry) => entry.id === to[earlier]!.id);
+        if (found >= 0) {
+          place = found + 1;
+          break;
+        }
+      }
+      next = [...next.slice(0, place), page, ...next.slice(place)];
+    }
+    // Past the page limit, pages only the step has go first, newest first, so
+    // parsing never drops a page someone else added.
+    const inTo = new Set(to.map((page) => page.id));
+    for (let at = next.length - 1; at >= 0 && next.length > DESIGN_CANVAS_LIMITS.pages; at -= 1) {
+      if (!inTo.has(next[at]!.id)) next = [...next.slice(0, at), ...next.slice(at + 1)];
+    }
+    return next.length > 0 ? next : [...to];
+  };
+}
+
+/**
+ * The claims the edit added, moved or removed, applied to another set; a
+ * claim left on a page that is gone moves to `first`.
+ */
+function claimChanges(
+  from: Record<string, string>,
+  to: Record<string, string>,
+): (chatPages: Record<string, string>, pageIds: ReadonlySet<string>, first: string) => Record<string, string> {
+  const own = (map: Record<string, string>, key: string) =>
+    Object.prototype.hasOwnProperty.call(map, key) ? map[key] : undefined;
+  const changed = [...new Set([...Object.keys(from), ...Object.keys(to)])].filter((chatId) => own(from, chatId) !== own(to, chatId));
+  return (chatPages, pageIds, first) => {
+    const stale = Object.values(chatPages).some((pageId) => !pageIds.has(pageId));
+    if (changed.length === 0 && !stale) return chatPages;
+    const next: Record<string, string> = { ...chatPages };
+    for (const chatId of changed) {
+      const pageId = own(to, chatId);
+      if (pageId === undefined) delete next[chatId];
+      else next[chatId] = pageId;
+    }
+    for (const [chatId, pageId] of Object.entries(next)) if (!pageIds.has(pageId)) next[chatId] = first;
+    return next;
   };
 }
 
