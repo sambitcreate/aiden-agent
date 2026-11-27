@@ -254,6 +254,19 @@ test("the cancel cache skips the walk for a repeated cancel and never caches an 
   assert.equal(w.walks(), after + 3, "after a second the walk runs again");
 });
 
+test("a cancelled blob or about URL never makes the cache cancel an allowed one", () => {
+  const w = world();
+  w.context.cache = new AppCancelCache({ now: () => 0 });
+  const exp = (url: string): AppRequest => ({ url, frame: null, webContentsId: 501, inMainWindow: false });
+  assert.equal(appRequestVerdict(w.fromApp("blob:https://example.com/1"), w.context), "cancel");
+  assert.equal(appRequestVerdict(w.fromApp("blob:http://127.0.0.1:5173/2"), w.context), "allow");
+  assert.equal(appRequestVerdict(w.fromApp("about:evil"), w.context), "cancel");
+  assert.equal(appRequestVerdict(w.fromApp("about:blank"), w.context), "allow");
+  assert.equal(appRequestVerdict(w.fromApp("about:srcdoc"), w.context), "allow");
+  assert.equal(appRequestVerdict(exp("blob:https://example.com/1"), w.context), "cancel");
+  assert.equal(appRequestVerdict(exp("blob:http://127.0.0.1:5173/2"), w.context), "allow", "an export window too");
+});
+
 test("10 000 cancels from one frame stay cheap, and another request is still decided quickly", () => {
   const w = world();
   w.context.cache = new AppCancelCache();

@@ -119,7 +119,9 @@ function appRule(parsed: URL | null, ownPorts: ReadonlySet<number>): "allow" | "
 }
 
 function cacheKey(scope: string, parsed: URL | null): string | null {
-  if (!parsed) return null;
+  // `blob:` and `about:` URLs have no host, so one key would cover them all and
+  // a cancelled one would cancel the allowed ones too. They aren't cached.
+  if (!parsed || parsed.protocol === "blob:" || parsed.protocol === "about:") return null;
   return `${scope}|${parsed.protocol}|${parsed.hostname}|${parsed.port}`;
 }
 
