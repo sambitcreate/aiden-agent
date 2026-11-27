@@ -1,12 +1,15 @@
-import { DEFAULT_SUBAGENT_CHILD_DEADLINE_MS, MAX_SUBAGENT_CHILD_EVENTS, MAX_SUBAGENT_CHILD_TOOL_CALLS, MAX_SUBAGENT_CHILD_TURNS, MAX_SUBAGENT_CHILD_OUTPUT_CHARS, MAX_SUBAGENT_CHILD_PROTOCOL_CHARS } from "../../../main/services/subagents/subagent-child-policy.js";
+import { SUBAGENT_PARTIAL_WORK_NOTE, DEFAULT_SUBAGENT_CHILD_DEADLINE_MS, MAX_SUBAGENT_CHILD_EVENTS, MAX_SUBAGENT_CHILD_TOOL_CALLS, MAX_SUBAGENT_CHILD_TURNS, MAX_SUBAGENT_CHILD_OUTPUT_CHARS, MAX_SUBAGENT_CHILD_PROTOCOL_CHARS } from "../../../main/services/subagents/subagent-child-policy.js";
 import { captureLiveSubagentContext } from "../../../main/services/subagents/forked-context.js";
 import { fork } from "node:child_process";
 import { dirname, join } from "node:path";
 import type { AgentTool, BeforeToolCallContext } from "@earendil-works/pi-agent-core";
 import { validateToolArguments, type AssistantMessage } from "@earendil-works/pi-ai";
-import type { RunSubagentChildInput } from "../../../main/services/subagents/subagent-child-runner.js";
+import { projectSubagentPartialFindings, type RunSubagentChildInput } from "../../../main/services/subagents/subagent-child-runner.js";
 import { subagentRoleSystemPrompt } from "../../../main/services/subagents/role-catalog.js";
 import { MAX_SUBAGENT_SUMMARY_CHARS } from "../../../main/services/subagents/contracts.js";
+import { terminalAssistantActivityAnchors, terminalAssistantText } from "../../../main/services/generation-runtime.js";
+import { safeToolIssueDetails } from "../../../main/services/generation-timeline.js";
+import type { SubagentTranscriptRecorder } from "../../../main/services/subagents/subagent-transcript-recorder.js";
 import { recordUsage } from "./usage-ledger.ts";
 
 /** Inference is isolated; exact tools and approvals remain owned by the parent. */
@@ -21,6 +24,14 @@ export async function runCliSubagent(agentDir: string, input: RunSubagentChildIn
   };
   if (Object.values(limits).some((limit) => !Number.isSafeInteger(limit) || limit < 1)) throw new Error("Invalid subagent execution budget.");
   const startedAt = Date.now(), messages: AssistantMessage[] = [];
+  // Recording the helper's conversation must never break the helper itself.
+  let recordFailed = false;
+  const record = (step: (transcript: SubagentTranscriptRecorder) => void) => {
+    if (!input.transcript) return;
+    try { step(input.transcript); } catch (error) {
+      if (!recordFailed) { recordFailed = true; diagnostic?.(error instanceof Error ? error : new Error(String(error))); }
+    }
+  };
   let text = "", failure: Error | undefined, done = false, toolCalls = 0, turns = 0, events = 0, bytes = 0;
   const child = fork(join(dirname(process.env.AIDEN_CLI_ENTRY!), "subagent-worker.js"), [], { cwd: input.workspaceRoot, stdio: ["ignore", "ignore", "pipe", "ipc"],
     detached: process.platform !== "win32", env: { ...process.env, PI_TELEMETRY: "0", AIDEN_CHILD: "1" }, execArgv: [] });
@@ -40,6 +51,9 @@ export async function runCliSubagent(agentDir: string, input: RunSubagentChildIn
     if (++events > limits.events || (bytes += Buffer.byteLength(JSON.stringify(event))) > limits.protocol) { stop(new Error("Subagent protocol budget exhausted.")); return; }
     if (event.type === "tool") {
       if (++toolCalls > limits.tools) { stop(new Error("Subagent tool budget exhausted.")); return; }
+      // The helper's saved conversation shows each tool once it is allowed to run.
+      let recorded = false;
+      let refused = false;
       const operation = (async () => {
         try {
           if (typeof event.id !== "string" || event.id.length > 256) throw new Error("Invalid child tool call identity.");
@@ -47,6 +61,7 @@ export async function runCliSubagent(agentDir: string, input: RunSubagentChildIn
           if (!tool) throw new Error("Tool outside delegated capability profile.");
           const toolCall = { type: "toolCall" as const, id: event.id, name: tool.name, arguments: event.args };
           const args = validateToolArguments(tool, toolCall);
+          record((transcript) => transcript.toolStarted(event.id, tool.name, args)); recorded = true;
           const assistantMessage = messages.at(-1);
           if (!assistantMessage) throw new Error("Child tool call has no assistant turn.");
           // A stopped child (deadline, budget, cancel) must not leave the run waiting on an approval gate.
@@ -55,7 +70,7 @@ export async function runCliSubagent(agentDir: string, input: RunSubagentChildIn
             toolAbort.signal.addEventListener("abort", cancelled, { once: true });
             if (toolAbort.signal.aborted) cancelled();
             beforeTool(tool.name, event.id, args, { toolCall, args, assistantMessage, context: { messages, tools } }, toolAbort.signal)
-              .then(resolve, reject).finally(() => toolAbort.signal.removeEventListener("abort", cancelled));
+              .then(resolve, (error: unknown) => { if (!toolAbort.signal.aborted) refused = true; reject(error); }).finally(() => toolAbort.signal.removeEventListener("abort", cancelled));
           });
           if (toolAbort.signal.aborted) throw new Error("Subagent cancelled before tool execution.");
           input.telemetry?.toolStarted(tool.name);
@@ -65,19 +80,30 @@ export async function runCliSubagent(agentDir: string, input: RunSubagentChildIn
               event.args?.context === "fork" ? captureLiveSubagentContext({ chatId: input.v2Authority!.chatId, parentRunId: input.runId!, messages: event.messages, descendantContextWindow: input.runtime.model.contextWindow }) : undefined) }], details: {} }
             : await tool.execute(event.id, args, toolAbort.signal);
           if (Buffer.byteLength(JSON.stringify(result)) > 1024 * 1024) throw new Error("The child tool result exceeds its transport budget.");
+          // As in the main chat, a tool that ends after the helper was stopped shows as cancelled.
+          if (recorded) record((transcript) => transcript.toolFinished(event.id, toolAbort.signal.aborted ? "cancelled" : "completed", (result as { details?: unknown }).details));
           reply({ type: "tool-result", id: event.id, result });
-        } catch (error) { reply({ type: "tool-result", id: event.id, error: error instanceof Error ? error.message : String(error) }); }
+        } catch (error) {
+          // As in the main chat: a stop wins, then a refusal, then the failure.
+          const status = toolAbort.signal.aborted ? "cancelled" as const : refused ? "blocked" as const : "failed" as const;
+          if (recorded) record((transcript) => transcript.toolFinished(event.id, status, safeToolIssueDetails(event.name, status, { content: [{ type: "text", text: error instanceof Error ? error.message : String(error) }] })));
+          reply({ type: "tool-result", id: event.id, error: error instanceof Error ? error.message : String(error) });
+        }
       })();
       activeTools.add(operation); void operation.finally(() => activeTools.delete(operation));
-    } else if (event.type === "turn") { if (++turns > limits.turns) stop(new Error("Subagent turn budget exhausted.")); else input.telemetry?.turnStarted(); }
-    else if (event.type === "delta" && typeof event.text === "string") { text += event.text; if (text.length > limits.output) stop(new Error("Subagent output budget exhausted.")); else input.telemetry?.textDelta(event.text); }
+    } else if (event.type === "turn") {
+      // Each model turn's streamed text starts on its own line, so handed-over partial text never runs two turns together.
+      if (text && !text.endsWith("\n")) text += "\n";
+      if (++turns > limits.turns) stop(new Error("Subagent turn budget exhausted.")); else { input.telemetry?.turnStarted(); record((transcript) => transcript.messageStarted()); }
+    }
+    else if (event.type === "delta" && typeof event.text === "string") { text += event.text; if (text.length > limits.output) stop(new Error("Subagent output budget exhausted.")); else { input.telemetry?.textDelta(event.text); record((transcript) => transcript.textDelta(event.text)); } }
     else if (event.type === "protocol" && Number.isSafeInteger(event.chars) && event.chars >= 0) {
       bytes += event.chars; input.telemetry?.protocolDelta?.(event.chars);
       if (bytes > limits.protocol) stop(new Error("Subagent protocol budget exhausted."));
     }
-    else if (event.type === "assistant") { messages.push(event.message); input.telemetry?.usage(event.message); }
+    else if (event.type === "assistant") { messages.push(event.message); input.telemetry?.usage(event.message); record((transcript) => transcript.messageEnded(terminalAssistantText(event.message ?? {}), terminalAssistantActivityAnchors(event.message ?? {}) ?? undefined)); }
     else if (event.type === "done") done = true;
-    else if (event.type === "failure") stop(new Error(typeof event.message === "string" ? event.message : "The child model could not complete this task."));
+    else if (event.type === "failure") stop(new Error(typeof event.message === "string" ? event.message : "The model provider returned an error."));
   });
   try {
     input.telemetry?.starting();
@@ -96,7 +122,12 @@ export async function runCliSubagent(agentDir: string, input: RunSubagentChildIn
     return { role: input.request.role, label: input.request.label, status: "completed" as const, summary: summary.slice(0, MAX_SUBAGENT_SUMMARY_CHARS), ...(summary.length > MAX_SUBAGENT_SUMMARY_CHARS ? { summaryTruncated: true as const } : {}) };
   } catch (error) {
     diagnostic?.(error instanceof Error ? error : new Error(String(error)));
-    return { role: input.request.role, label: input.request.label, status: input.signal?.aborted ? "interrupted" as const : Date.now() - startedAt >= (limits.deadline) ? "timed_out" as const : "failed" as const, summary: "The subagent did not complete this investigation." };
+    const status = input.signal?.aborted ? "interrupted" as const : Date.now() - startedAt >= (limits.deadline) ? "timed_out" as const : "failed" as const;
+    const base = { role: input.request.role, label: input.request.label, status, summary: "", warning: "The subagent did not complete this investigation." };
+    // A failed child's text is not passed on. A stopped or timed-out one hands
+    // over what it streamed, filtered like desktop partial work and marked unverified.
+    const partial = status === "failed" || !text.trim() ? undefined : projectSubagentPartialFindings([text]);
+    return partial?.summary.trim() ? { ...base, ...partial, warning: `${base.warning} ${SUBAGENT_PARTIAL_WORK_NOTE}` } : base;
   } finally {
     toolAbort.abort(); kill("SIGKILL"); clearTimeout(timer); if (escalation) clearTimeout(escalation); input.signal?.removeEventListener("abort", abort);
     await Promise.allSettled(activeTools);

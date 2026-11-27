@@ -39,3 +39,28 @@ Branch `feat/ios-blocking-alerts-needs-answer`.
   - Android: `AidenQuietOpenChatTest`, plus `approvalResolvedOnMacHandsTheWaitToTheSurvivingQuestion` in
     `AidenChatTest` (iOS twin: `testApprovalResolvedOnMacHandsTheWaitToTheSurvivingQuestion`, which uses the
     `.questions` mode of `AidenChatProgressLifecycleURLProtocol` to push frames into a live event stream).
+
+## Alert actions and Live Activity Deny (2026-11-22)
+
+Branch `feature/aiden-ios-notifications-activities-62cf67`, plan `docs/plans/ios-alerts-app-only-plan.md`.
+
+- `AidenRunAlertContent.make` builds every run alert. A blocking alert with an `AidenRunAlertDetail` shows the approval
+  summary or the first question's text (sanitized, 180 chars) when message text is allowed, and sets a category from
+  `AidenRunAlertCategory`: `approval` (Approve needs `.authenticationRequired`, Deny `.destructive`, Open chat),
+  `approvalDenyOnly` when `canAllow` is false, `questionReply` (text input, needs unlock) for a single question, and
+  `question` (Open chat only). Categories are registered in `installPresentationDelegate()`.
+- `userInfo` carries only ids: `aidenURL`, `aidenInstance`, `aiden.chatID`, `aiden.approvalID`, `aiden.runID`,
+  `aiden.promptID`. `AidenAlertAction(actionIdentifier:userInfo:replyText:)` parses them back; a blank reply is nil.
+- `AidenNotificationPresentationDelegate.respond(...)` runs actions through `AidenBackgroundActionBroker.shared`
+  (wired in `AidenOnTheGoApp` to `AidenAlertActionResponder`). `.openApp` queues the chat route via `openTap` and
+  re-adds the original notification so an unanswered ask isn't mistaken for answered.
+- Live Activity: `ContentState.approval` (only while `.waitingForApproval`) drives Review (a `Link`) and Deny
+  (`DenyApprovalIntent`, a `LiveActivityIntent` that runs in the app process). Approve is never on the card.
+- The responder answers once (scope nil); 409 with an `*_already_resolved`/`*_expired`/`approval_resolved` code counts
+  as done; a forgotten Mac drops the action.
+- Summary Live Activity (`AidenRunsSummaryActivityAttributes` + `AidenRunsSummaryPolicy`, app and widget targets):
+  a second live run on the same `instanceID` merges every card for that Mac into one summary (rows keyed by streamID).
+  The manager keeps `summaryRuns[instance][stream]`; `update`/`finish` fall through to the summary when the per-run
+  activity is gone. It ends 300 s after every row is final; `endAll` and `reconcile` handle summaries too. The summary
+  has no buttons; a tap opens the most urgent chat (waiting > failed > working > done, newest first).
+- Background grace: `AidenBackgroundGrace` (Features/Remote) holds one UIKit background task from `.background` while `AidenRemoteLiveActivityManager.hasLiveRuns`; it ends on foreground, iOS expiry, or 3 s after the last run finishes (`onLiveRunsChange`, wired in `AidenOnTheGoApp`). `hasLiveRuns` tracks started-not-finished streams independent of ActivityKit.

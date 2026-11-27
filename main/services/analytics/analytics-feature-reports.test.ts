@@ -108,6 +108,84 @@ test("a connector from the catalog sends its preset id, and a person's own sends
 });
 
 
+/** Four stops: two efforts of one model, an unassigned stop and a second model. */
+const FOUR_STOP_SLIDER = {
+  version: 1,
+  stops: [
+    { id: "stop_00000001", label: "Quick", providerId: "anthropic", model: "claude-sonnet-4-5", thinkingLevel: "low" },
+    { id: "stop_00000002", label: "Careful", providerId: "anthropic", model: "claude-sonnet-4-5", thinkingLevel: "high" },
+    { id: "stop_00000003", label: "Later" },
+    { id: "stop_00000004", label: "Private", providerId: "my-private-gateway", model: "secret-model" },
+  ],
+  homeStopId: "stop_00000002",
+};
+
+async function sliderProps(
+  t: Parameters<typeof captureAnalyticsEvents>[0],
+  sent: { providerId: string; model: string; thinkingLevel?: "low" | "high" },
+  read: Awaited<ReturnType<NonNullable<Parameters<typeof reportChatMessageSent>[0]["agentSlider"]>>> | Error,
+) {
+  const events = captureAnalyticsEvents(t);
+  reportChatMessageSent({
+    ...sent,
+    origin: "desktop",
+    inWorkspace: () => false,
+    agentSlider: async () => {
+      if (read instanceof Error) throw read;
+      return read;
+    },
+  });
+  await analyticsSettled();
+  assert.equal(events.length, 1);
+  return events[0]!.props;
+}
+
+test("a chat on a stop reports that stop, 1-based, and how many stops there are", async (t) => {
+  const props = await sliderProps(
+    t,
+    { providerId: "anthropic", model: "claude-sonnet-4-5", thinkingLevel: "high" },
+    { slider: FOUR_STOP_SLIDER, chatThinkingLevel: "high" },
+  );
+  assert.equal(props?.slider_stop, "2");
+  assert.equal(props?.slider_stop_count, 4);
+  assert.equal(props?.thinking, "high");
+  assert.doesNotMatch(JSON.stringify(props), /Careful|stop_0/u);
+});
+
+test("the chat's own level picks the stop, and a private model's stop sends only its number", async (t) => {
+  // Sent with the per-model level, but the chat itself has no level: no stop of this model matches.
+  const custom = await sliderProps(
+    t,
+    { providerId: "anthropic", model: "claude-sonnet-4-5", thinkingLevel: "low" },
+    { slider: FOUR_STOP_SLIDER },
+  );
+  assert.equal(custom?.slider_stop, "custom");
+  assert.equal(custom?.slider_stop_count, 4);
+
+  const privateStop = await sliderProps(
+    t,
+    { providerId: "my-private-gateway", model: "secret-model" },
+    { slider: FOUR_STOP_SLIDER },
+  );
+  assert.equal(privateStop?.slider_stop, "4");
+  assert.equal(privateStop?.provider_id, "custom");
+  assert.doesNotMatch(JSON.stringify(privateStop), /my-private-gateway|secret-model|Private/u);
+});
+
+test("without a readable slider the message is still counted, with no slider properties", async (t) => {
+  for (const read of [
+    undefined,
+    { slider: undefined },
+    { slider: { version: 1, stops: [{ id: "stop_00000001", label: "Only one" }], homeStopId: "stop_00000001" } },
+    new Error("config unreadable"),
+  ]) {
+    const props = await sliderProps(t, { providerId: "anthropic", model: "claude-sonnet-4-5" }, read);
+    assert.equal(props?.origin, "desktop");
+    assert.equal("slider_stop" in (props ?? {}), false);
+    assert.equal("slider_stop_count" in (props ?? {}), false);
+  }
+});
+
 test("a delayed message cannot move to a replacement analytics sender", async t => {
   const first = captureAnalyticsEvents(t);
   let finish!: (value: boolean) => void;

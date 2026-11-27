@@ -2,26 +2,6 @@ import Photos
 import SwiftUI
 import UniformTypeIdentifiers
 
-private struct AidenBotHeaderNameGlassModifier: ViewModifier {
-    @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
-    @Environment(\.aidenPalette) private var palette
-
-    @ViewBuilder
-    func body(content: Content) -> some View {
-        if reduceTransparency {
-            content.background(palette.raised, in: Capsule())
-        } else {
-            content.glassEffect(.regular.interactive(), in: Capsule())
-        }
-    }
-}
-
-private extension View {
-    func aidenBotHeaderNameGlass() -> some View {
-        modifier(AidenBotHeaderNameGlassModifier())
-    }
-}
-
 enum AidenChatAttachmentCoordinateSpace {
     static let name = "aiden-chat-attachment-coordinate-space"
 }
@@ -250,6 +230,8 @@ struct AidenChatDetailView: View {
     @Environment(\.aidenPalette) private var palette
     @Environment(\.scenePhase) private var scenePhase
     @State private var model: AidenChatViewModel
+    /// What a Bot chat's header avatar shows, spoken by the title capsule.
+    @State private var settledBotAvatar: AidenBotAvatarState = .idle
     /// Lives here, not in the composer, so a question card taking the composer's
     /// place leaves dictation and attachment preparation running.
     @State private var composerSession: AidenComposerSession
@@ -263,6 +245,7 @@ struct AidenChatDetailView: View {
     @State private var botSheet: AidenBotChatSheet?
     @State private var isConfirmingBotDelete = false
     @Environment(\.dismiss) private var dismissChat
+    @Environment(\.aidenConversationMachine) private var conversationMachine
     @State private var workspaceFileReference: String?
     @State private var showsWorkspaceFile = false
     @State private var progressSheet: AidenProgressSheet?
@@ -558,6 +541,9 @@ struct AidenChatDetailView: View {
                 onChoose: performContinueInNewChat(workspaceID:)
             )
         }
+        .environment(\.aidenChatScreen, screen)
+        // `/server` can grant the slider after the catalog loaded.
+        .onChange(of: model.agentSlider != nil) { model.reconcileAgentSliderAvailability() }
         .aidenBotDeleteConfirmation(
             isPresented: $isConfirmingBotDelete,
             botName: botToolsModel?.bot?.name ?? model.chat.title
@@ -619,6 +605,8 @@ struct AidenChatDetailView: View {
             let hidden = { [model, composerSession] in
                 Task { await model.saveDraftNow() }
                 model.setViewPresent(false)
+                // A real leave closes the slider; a Duo fold keeps it open.
+                model.isAgentSliderPresented = false
                 model.readAloud.stop()
                 model.setHapticsActive(false)
                 model.setChatForegrounded(false)
@@ -642,7 +630,10 @@ struct AidenChatDetailView: View {
 
     private var chatStack: some View {
         ZStack(alignment: .bottom) {
-            AidenTranscriptScaffold(dock: dock) { transcript }
+            AidenTranscriptScaffold(dock: dock, showsMachineSubtitle: !showsTitleCapsule) { transcript }
+                // A Bot's name hangs under its avatar in the bar. Always applied,
+                // empty elsewhere, so the transcript isn't rebuilt when it loads.
+                .safeAreaBar(edge: .top, spacing: 0) { stackedBotTitle }
             AidenAttachmentPickerOverlay(
                 picker: attachmentPicker,
                 motionNamespace: attachmentMotionNamespace,
@@ -1138,15 +1129,64 @@ struct AidenChatDetailView: View {
         return botToolsModel?.bot?.name ?? model.chat.title
     }
 
+    /// Whether the bar holds the title capsule, which names the machine itself.
+    private var showsTitleCapsule: Bool {
+        coordinator != nil && (botToolsModel != nil || model.chat.botId == nil)
+    }
+
+    /// Telegram's chat header: the title over a status line in the middle, and
+    /// the other side's avatar on the right.
     @ToolbarContentBuilder
     private var chatToolbar: some ToolbarContent {
         if let coordinator, let botToolsModel {
             ToolbarItem(placement: .principal) {
-                botHeaderPill(coordinator: coordinator, model: botToolsModel)
+                botAvatarHeader(coordinator: coordinator, model: botToolsModel)
             }
             ToolbarItem(placement: .topBarTrailing) { sessionSheetButton }
         } else if model.chat.botId == nil, coordinator != nil {
-            ToolbarItem(placement: .topBarTrailing) { sessionSheetButton }
+            ToolbarItem(placement: .principal) {
+                AidenChatTitleCapsule(
+                    title: model.chat.displayTitle,
+                    status: workspaceTitleStatus,
+                    accessibilityHint: "Shows this chat’s actions"
+                ) {
+                    showsSessionSheet = true
+                }
+            }
+            ToolbarItem(placement: .topBarTrailing) { workspaceAvatarButton }
+        }
+    }
+
+    /// What the agent is doing, or where the chat lives.
+    private var workspaceTitleStatus: AidenChatTitleStatus? {
+        AidenChatTitleStatus.workspace(
+            isStreaming: model.isStreaming,
+            streamState: model.streamState,
+            runningToolName: model.tools.last(where: { $0.status == nil })?.name,
+            hasLiveText: !model.liveText.isEmpty,
+            workspaceName: workspace.flatMap { $0.noWorkspace ? nil : $0.name },
+            branch: workspace?.branchName,
+            machine: conversationMachine
+        )
+    }
+
+    /// The workspace as the chat's avatar. Like the title, it opens this chat's
+    /// actions, and keeps "More" as its name. A chat with no workspace has no
+    /// avatar and no More button: its title opens the same actions. A bar draws
+    /// a Label's title unless its icon is an Image, so the avatar is the label.
+    @ViewBuilder
+    private var workspaceAvatarButton: some View {
+        if let workspace, !workspace.noWorkspace {
+            Button {
+                showsSessionSheet = true
+            } label: {
+                AidenWorkspaceInitialsAvatar(name: workspace.name, size: 34)
+                    .contentShape(Circle())
+            }
+            .buttonBorderShape(.circle)
+            .accessibilityLabel("More")
+            .accessibilityHint("\(workspace.name). Shows this chat’s actions")
+            .accessibilityIdentifier("chat-avatar")
         }
     }
 
@@ -1219,43 +1259,81 @@ struct AidenChatDetailView: View {
         }
     }
 
-    /// A small avatar and the Bot's name. Tapping it opens the Profile.
+    /// The Bot's name capsule under its avatar, once the Bot's tools are known.
+    @ViewBuilder
+    private var stackedBotTitle: some View {
+        if let coordinator, let botToolsModel {
+            AidenChatStackedTitle(capsule: botHeaderPill(coordinator: coordinator, model: botToolsModel))
+        }
+    }
+
+    /// The Bot's name over what it is doing. Tapping it opens the Profile.
     private func botHeaderPill(
         coordinator: AidenRemoteCoordinator,
         model botModel: AidenBotChatToolsModel
-    ) -> some View {
-        Button {
+    ) -> AidenChatTitleCapsule {
+        AidenChatTitleCapsule(
+            title: botModel.bot?.name ?? model.chat.title,
+            status: legacyBotTitleStatus(botModel.bot),
+            accessibilityHint: "Opens the Bot’s profile",
+            settledAvatar: botModel.bot == nil ? nil : settledBotAvatar
+        ) {
             openBotProfile(coordinator: coordinator, model: botModel)
-        } label: {
-            HStack(spacing: 8) {
-                if let bot = botModel.bot {
+        }
+    }
+
+    /// A Bot chat opened as a chat runs like a Workspace chat: its live reply
+    /// says what it is doing, and otherwise the line says what the Bot is for.
+    private func legacyBotTitleStatus(_ bot: AidenBotDetail?) -> AidenChatTitleStatus {
+        if model.isStreaming || model.streamState == .waitingForApproval,
+           let live = AidenChatTitleStatus.workspace(
+               isStreaming: model.isStreaming,
+               streamState: model.streamState,
+               runningToolName: model.tools.last(where: { $0.status == nil })?.name,
+               hasLiveText: !model.liveText.isEmpty,
+               workspaceName: nil
+           ) {
+            return live
+        }
+        return .bot(
+            state: nil, statusWord: nil, waitsForYou: false, purpose: bot?.purpose, machine: conversationMachine
+        )
+    }
+
+    /// The Bot's face in the middle of the bar, over its name; like the name,
+    /// it opens the Profile. It plays what the reply is doing; a pending
+    /// approval or question waits on the person, as in a Bot chat.
+    private func botAvatarHeader(
+        coordinator: AidenRemoteCoordinator,
+        model botModel: AidenBotChatToolsModel
+    ) -> some View {
+        AidenChatHeaderAvatar {
+            openBotProfile(coordinator: coordinator, model: botModel)
+        } avatar: {
+            if let bot = botModel.bot {
+                AidenBotSettledAvatarState(
+                    signal: AidenBotAvatarSignal(
+                        stream: model.streamState,
+                        isStopping: model.isStopping,
+                        awaitingPerson: model.pendingApproval != nil || model.pendingQuestion != nil
+                    ),
+                    onShownChange: { settledBotAvatar = $0 }
+                ) { state in
                     AidenBotCanonicalAvatarView(
                         coordinator: coordinator,
                         machine: pinnedOwner,
                         botID: bot.id,
                         avatar: bot.avatar,
                         name: bot.name,
-                        size: 26
+                        size: AidenChatHeaderAvatar<EmptyView>.size,
+                        state: state == .idle ? nil : state
                     )
-                } else {
-                    Circle()
-                        .fill(palette.raised)
-                        .frame(width: 26, height: 26)
                 }
-                Text(botModel.bot?.name ?? model.chat.title)
-                    .font(.headline)
-                    .foregroundStyle(palette.foreground)
-                    .lineLimit(1)
+            } else {
+                Circle().fill(palette.raised)
             }
-            .padding(.leading, 4)
-            .padding(.trailing, 12)
-            .frame(minHeight: 34)
-            .aidenBotHeaderNameGlass()
-            .contentShape(Capsule())
         }
-        .buttonStyle(.plain)
-        .accessibilityLabel(botModel.bot?.name ?? model.chat.title)
-        .accessibilityHint("Opens the Bot’s profile")
+        .accessibilityIdentifier("chat-avatar")
     }
 
     @ViewBuilder

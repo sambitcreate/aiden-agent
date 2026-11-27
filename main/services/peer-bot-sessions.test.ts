@@ -216,6 +216,32 @@ test("a refused stream ends for good and tells the windows the Bot is gone", asy
   }
 });
 
+test("a busy host's refusal is retried, and the Bot is not reported gone", async () => {
+  const { manager, timers, streams, messages } = harness();
+  try {
+    await manager.whenReady();
+    await settle();
+    await manager.botSessionSubscribe("host_a", "bot_1", "window-a");
+    await settle();
+    streams[0]!.refuse(429);
+    await settle();
+    assert.equal(
+      messages.some((message) => message.kind === "state" && message.state === "gone"),
+      false,
+      "a 429 is not a deleted Bot",
+    );
+    timers.advance(60_000);
+    await settle();
+    assert.equal(streams.length, 2, "the stream is opened again after a backoff");
+    streams[1]!.send(snapshot("e1", "back"));
+    await settle();
+    const seen = events(messages);
+    assert.equal(seen[seen.length - 1]?.type, "snapshot");
+  } finally {
+    manager.close();
+  }
+});
+
 test("a malformed frame drops the connection, forwards nothing and retries", async () => {
   const { manager, timers, streams, messages } = harness();
   try {

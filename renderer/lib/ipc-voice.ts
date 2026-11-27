@@ -11,8 +11,12 @@ import type { AppearanceConfig, AppearancePreviewSnapshot } from "../shared/appe
 import type { LocalSpeechState } from "../shared/local-speech-state";
 import { invoke, onNotification } from "./ipc-bridge";
 
-export type SettingsPatch = Partial<Omit<AppSettings, "voiceProvider">> & {
+export type SettingsPatch = Partial<
+  Omit<AppSettings, "voiceProvider" | "agentSlider" | "lastThinkingLevel">
+> & {
   voiceProvider?: VoiceProvider | null;
+  /** `null` clears the new-chat model's level. */
+  lastThinkingLevel?: AppSettings["lastThinkingLevel"] | null;
 };
 
 export const settingsApi = {
@@ -23,6 +27,18 @@ export const settingsApi = {
     invoke<AppearanceConfig>("settings:previewAppearance", appearance),
   /** `voiceProvider: null` clears the explicit choice (Automatic). */
   set: (patch: SettingsPatch) => invoke<AppSettings>("settings:set", patch),
+  /**
+   * Replace the Agent Slider in the portable config (`null` removes it). It
+   * never goes through `set`, which stores machine-local settings.
+   */
+  setAgentSlider: (slider: NonNullable<AppSettings["agentSlider"]> | null) =>
+    invoke<AppSettings>("settings:setAgentSlider", slider),
+  /**
+   * Save a first-run slider only while config.json holds none (a malformed
+   * hand edit counts as one and is kept). Resolves to the current settings.
+   */
+  seedAgentSlider: (slider: NonNullable<AppSettings["agentSlider"]>) =>
+    invoke<AppSettings>("settings:seedAgentSlider", slider),
   setGeminiVoiceSetup: (scope: NonNullable<AppSettings["geminiUsageScope"]>, model: string) =>
     invoke<AppSettings>("settings:setGeminiVoiceSetup", scope, model),
   setGeminiUsageScope: (scope: NonNullable<AppSettings["geminiUsageScope"]>) =>

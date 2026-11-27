@@ -12,6 +12,12 @@ import {
   parseStoredPiAssistantMessage,
   storedPiAssistantMessage,
 } from "./pi-message-storage.js";
+import { createPiModelImageReferences } from "./pi-model-image-references.js";
+import {
+  GRABBED_ELEMENT_SCHEMA_VERSION,
+  grabbedElementThumbnailId,
+  type GrabbedElementContextV1,
+} from "../../renderer/shared/browser-element-grab.js";
 
 const model: Model<"openai-completions"> = {
   id: "test",
@@ -346,5 +352,266 @@ test("skill message text is rejected before aggregate attachment concatenation e
     (error: unknown) =>
       error instanceof SkillInvocationError &&
       error.code === "instructions_too_large",
+  );
+});
+
+function sampleGrabbedElement(overrides: Partial<GrabbedElementContextV1> = {}): GrabbedElementContextV1 {
+  const id = overrides.id ?? "el_hero_1";
+  return {
+    version: GRABBED_ELEMENT_SCHEMA_VERSION,
+    id,
+    label: "<LandingHeroClient />",
+    framework: "react",
+    componentName: "LandingHeroClient",
+    componentStack: [
+      {
+        name: "LandingHeroClient",
+        environment: "client",
+        source: { filePath: "src/components/LandingHeroClient.tsx", line: 42, column: 7, symbolicated: true },
+      },
+      { name: "HomePage", environment: "server" },
+    ],
+    source: { filePath: "src/components/LandingHeroClient.tsx", line: 42, column: 7, symbolicated: true },
+    props: { variant: "primary", disabled: false },
+    tagName: "section",
+    selector: "main > section.hero",
+    htmlSnippet: '<section class="hero"><h1>Hello</h1></section>',
+    boundingBox: { x: 12, y: 80, width: 960, height: 420 },
+    pageUrl: "http://localhost:3000/",
+    pageTitle: "Landing",
+    thumbnailAttachmentId: grabbedElementThumbnailId(id),
+    capturedAt: 1_700_000_000_000,
+    ...overrides,
+  };
+}
+
+test("grabbed elements serialize deterministically for vision and text-only models without noisy fallbacks", () => {
+  const firstElement = sampleGrabbedElement({ id: "el_one", label: "<Hero />" });
+  const secondElement = sampleGrabbedElement({
+    id: "el_two",
+    label: "button.cta",
+    framework: "dom",
+    componentName: undefined,
+    componentStack: undefined,
+    source: undefined,
+    props: undefined,
+    tagName: "button",
+    selector: "button.cta",
+  });
+  const attachments = [
+    {
+      id: grabbedElementThumbnailId("el_two"),
+      name: "button.png",
+      mimeType: "image/png",
+      kind: "image" as const,
+      size: 4,
+      data: "THUMB_TWO",
+    },
+    {
+      id: "user-photo",
+      name: "photo.png",
+      mimeType: "image/png",
+      kind: "image" as const,
+      size: 4,
+      data: "USER_PHOTO",
+    },
+    {
+      id: grabbedElementThumbnailId("el_one"),
+      name: "hero.png",
+      mimeType: "image/png",
+      kind: "image" as const,
+      size: 4,
+      data: "THUMB_ONE",
+    },
+  ];
+  const message = {
+    id: "msg-grab",
+    role: "user" as const,
+    content: "Tighten spacing",
+    createdAt: 500,
+    attachments,
+    grabbedElements: [firstElement, secondElement],
+  };
+
+  // Vision model: emits <attached-browser-elements> with thumbnail notes + regular image then #1..#N thumbnails.
+  const vision = chatMessageToPiMessage(message, model, true);
+  assert.equal(vision.role, "user");
+  assert.ok(Array.isArray(vision.content));
+  const visionText = vision.content
+    .filter((part) => part.type === "text")
+    .map((part) => part.text)
+    .join("\n");
+  assert.match(visionText, /<attached-browser-elements>/u);
+  assert.match(visionText, /## Element 1: <Hero \/>/u);
+  assert.match(visionText, /## Element 2: button\.cta/u);
+  assert.equal(visionText.match(/- Thumbnail: attached cropped screenshot/gu)?.length, 2);
+  assert.equal(visionText.includes("1700000000000"), false, "capturedAt must never enter prompt");
+  assert.equal(visionText.includes("el_one"), false, "random element id must never enter prompt");
+  const visionImages = vision.content
+    .filter((part) => part.type === "image")
+    .map((part) => part.data);
+  assert.deepEqual(visionImages, ["USER_PHOTO", "THUMB_ONE", "THUMB_TWO"]);
+
+  // Cache stability: changing capturedAt and element/thumbnail ids yields identical prompt text.
+  const reran = chatMessageToPiMessage(
+    {
+      ...message,
+      grabbedElements: [
+        { ...firstElement, id: "el_one_v2", thumbnailAttachmentId: grabbedElementThumbnailId("el_one_v2"), capturedAt: 9_999_999 },
+        { ...secondElement, id: "el_two_v2", thumbnailAttachmentId: grabbedElementThumbnailId("el_two_v2"), capturedAt: 9_999_999 },
+      ],
+      attachments: [
+        { ...attachments[0]!, id: grabbedElementThumbnailId("el_two_v2") },
+        attachments[1]!,
+        { ...attachments[2]!, id: grabbedElementThumbnailId("el_one_v2") },
+      ],
+    },
+    model,
+    true,
+  );
+  assert.ok(Array.isArray(reran.content));
+  const reranText = reran.content
+    .filter((part) => part.type === "text")
+    .map((part) => part.text)
+    .join("\n");
+  assert.equal(reranText, visionText);
+
+  // Text-only model: full structured metadata, NO thumbnail notes, NO image blocks, NO grab-thumb fallback lines.
+  const textOnly = chatMessageToPiMessage(message, model, false);
+  assert.equal(textOnly.role, "user");
+  assert.ok(Array.isArray(textOnly.content));
+  assert.equal(textOnly.content.some((part) => part.type === "image"), false);
+  const textOnlyBody = textOnly.content
+    .filter((part) => part.type === "text")
+    .map((part) => part.text)
+    .join("\n");
+  assert.match(textOnlyBody, /<attached-browser-elements>/u);
+  assert.match(textOnlyBody, /LandingHeroClient\.tsx:42:7/u);
+  assert.doesNotMatch(textOnlyBody, /- Thumbnail:/u);
+  assert.match(textOnlyBody, /Attached image reference: image_user-photo \(photo\.png\)/u);
+  assert.doesNotMatch(textOnlyBody, /grab-thumb_/u);
+  assert.doesNotMatch(textOnlyBody, /hero\.png|button\.png/u);
+});
+
+test("grabbed elements without thumbnails still serialize with empty user text and omit unavailable-image noise", () => {
+  const noThumbElement = sampleGrabbedElement({ id: "el_plain", thumbnailAttachmentId: undefined });
+  const textOnlyGrab = chatMessageToPiMessage(
+    {
+      id: "msg-no-thumb",
+      role: "user",
+      content: "",
+      createdAt: 600,
+      grabbedElements: [noThumbElement],
+    },
+    model,
+    true,
+  );
+  assert.ok(Array.isArray(textOnlyGrab.content));
+  assert.match(JSON.stringify(textOnlyGrab.content), /<attached-browser-elements>/u);
+  assert.doesNotMatch(JSON.stringify(textOnlyGrab.content), /- Thumbnail:/u);
+
+  const missingThumbElement = sampleGrabbedElement({ id: "el_missing_thumb" });
+  const missingThumbMessage = chatMessageToPiMessage(
+    {
+      id: "msg-missing-thumb",
+      role: "user",
+      content: "Check this",
+      createdAt: 601,
+      grabbedElements: [missingThumbElement],
+      attachments: [
+        {
+          id: grabbedElementThumbnailId("el_missing_thumb"),
+          name: "hero.png",
+          mimeType: "image/png",
+          kind: "image",
+          size: 42,
+          sha256: "a".repeat(64),
+        },
+      ],
+    },
+    model,
+    true,
+  );
+  const serialized = JSON.stringify(missingThumbMessage.content);
+  assert.doesNotMatch(serialized, /Image unavailable/u);
+  assert.doesNotMatch(serialized, /- Thumbnail:/u);
+});
+
+test("explicit skill invocation includes grabbed elements once and keeps thumbnails for vision models", () => {
+  const element = sampleGrabbedElement({ id: "el_skill" });
+  const thumb = {
+    id: grabbedElementThumbnailId("el_skill"),
+    name: "hero.png",
+    mimeType: "image/png",
+    kind: "image" as const,
+    size: 4,
+    data: "SKILL_THUMB",
+  };
+  const body = chatUserTextWithAttachments("Fix alignment", [thumb], 100_000, [element]);
+  assert.match(body, /<attached-browser-elements>/u);
+  assert.doesNotMatch(body, /- Thumbnail:/u);
+  assert.match(body, /Fix alignment/u);
+
+  assert.throws(
+    () => chatUserTextWithAttachments("Fix", [thumb], 40, [element]),
+    (error: unknown) =>
+      error instanceof SkillInvocationError && error.code === "instructions_too_large",
+  );
+
+  const wrappedPrompt = `<skill name="Polish">Polish UI.</skill>\n\n${body}`;
+  const persisted = {
+    id: "msg-skill-grab",
+    role: "user" as const,
+    content: "Fix alignment",
+    createdAt: 700,
+    attachments: [thumb],
+    grabbedElements: [element],
+  };
+
+  const vision = chatMessageToPiMessage(persisted, model, true, wrappedPrompt);
+  assert.ok(Array.isArray(vision.content));
+  const visionText = vision.content
+    .filter((part) => part.type === "text")
+    .map((part) => part.text)
+    .join("\n");
+  assert.equal(visionText.match(/<attached-browser-elements>/gu)?.length, 1);
+  assert.deepEqual(
+    vision.content.filter((part) => part.type === "image").map((part) => part.data),
+    ["SKILL_THUMB"],
+  );
+
+  const textOnly = chatMessageToPiMessage(persisted, model, false, wrappedPrompt);
+  assert.ok(Array.isArray(textOnly.content));
+  assert.equal(textOnly.content.some((part) => part.type === "image"), false);
+  assert.doesNotMatch(JSON.stringify(textOnly.content), /Attached image reference/u);
+});
+
+test("model image references exclude grabbed-element thumbnails from list_image_references and resolve", async () => {
+  const userImage = {
+    id: "chat-photo",
+    name: "photo.png",
+    mimeType: "image/png",
+    kind: "image" as const,
+    size: 70,
+    data: "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVQIHWP4z8DwHwAFgAI/ScL2aQAAAABJRU5ErkJggg==",
+  };
+  const grabThumb = {
+    ...userImage,
+    id: grabbedElementThumbnailId("el_1"),
+    name: "LandingHeroClient.png",
+  };
+  const references = createPiModelImageReferences({
+    snapshot: [userImage, grabThumb],
+    readCurrent: async () => [userImage, grabThumb],
+    generated: () => [],
+  });
+  const listed = await references.listImages();
+  assert.deepEqual(
+    listed.map((item) => item.id),
+    ["chat-photo"],
+  );
+  await assert.rejects(
+    references.resolveImage(grabThumb.id),
+    /missing, changed, or does not belong/u,
   );
 });

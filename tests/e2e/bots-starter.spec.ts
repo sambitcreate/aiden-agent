@@ -362,9 +362,10 @@ test("onboarding makes the first Bot by itself and its chat opens on its first m
   ).toBe(1);
 });
 
-// Under Reduce Motion the working face cannot glance, so it holds the glance's
-// look-aside pose: still, and still different from an idle face.
-test("under Reduce Motion a working Bot's face looks aside without moving, and an idle face looks ahead", async ({ aiden }) => {
+// Under Reduce Motion a working Bot's sprite cannot act its state out, so it holds that
+// state's still pose: the thinking face looks up and aside, nothing moves, and an idle
+// Bot looks straight ahead.
+test("under Reduce Motion a working Bot's sprite holds its thinking pose without moving, and an idle one looks ahead", async ({ aiden }) => {
   const { page } = aiden;
   const working = botFixture({ id: "bot-chief", name: "Chief of Staff" });
   const idle = botFixture({ id: "bot-owl", name: "Night Owl" });
@@ -408,16 +409,26 @@ test("under Reduce Motion a working Bot's face looks aside without moving, and a
   await page.emulateMedia({ reducedMotion: "reduce" });
 
   await page.getByRole("button", { name: "Bots", exact: true }).click();
-  const face = (name: string) =>
-    page.getByRole("listitem").filter({ hasText: name }).locator(".bot-avatar-eyes").first();
+  const avatar = (name: string) => page.getByRole("listitem").filter({ hasText: name }).locator(".bot-avatar").first();
   const pose = (name: string) =>
-    face(name).evaluate((eyes) => ({
-      transform: getComputedStyle(eyes).transform,
-      moving: eyes.getAnimations({ subtree: true }).length > 0,
-    }));
+    avatar(name).evaluate((root) => {
+      const look = root.querySelector(".bs-look");
+      const rig = root.querySelector(".bs-rig");
+      return {
+        state: root.getAttribute("data-state"),
+        look: look ? getComputedStyle(look).transform : null,
+        rigAnimation: rig ? getComputedStyle(rig).animationName : null,
+        moving: root.getAnimations({ subtree: true }).length > 0,
+      };
+    });
   await expect(page.getByRole("listitem").filter({ hasText: "Chief of Staff" }).getByText("Thinking…")).toBeAttached();
 
-  await expect.poll(async () => (await pose("Chief of Staff")).transform).not.toBe("none");
-  expect(await pose("Chief of Staff")).toMatchObject({ moving: false });
-  expect(await pose("Night Owl")).toEqual({ transform: "none", moving: false });
+  await expect.poll(async () => (await pose("Chief of Staff")).state).toBe("thinking");
+  const chief = await pose("Chief of Staff");
+  // The thinking glance's still pose: eyes up and to the right of the idle face.
+  const [, , , , x, y] = (chief.look?.match(/-?[\d.]+/g) ?? []).map(Number);
+  expect(x).toBeGreaterThan(0);
+  expect(y).toBeLessThan(0);
+  expect(chief).toMatchObject({ rigAnimation: "none", moving: false });
+  expect(await pose("Night Owl")).toEqual({ state: "idle", look: "none", rigAnimation: "none", moving: false });
 });

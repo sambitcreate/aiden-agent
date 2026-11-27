@@ -2,7 +2,7 @@ import { E2E_MODEL_DISPLAY_NAME, expect, expectSquircleButtons, finishLmStudioOn
 
 const SETTINGS_SECTIONS = [
   "Providers",
-  "Model Pad",
+  "Agent Slider",
   "Skills",
   "Connectors",
   "Web Search",
@@ -27,10 +27,12 @@ async function assertRenderedSettingsDestination(
         page.getByRole("button", { name: "Connect another AI" }),
       ).toBeVisible();
       return;
-    case "Model Pad":
+    case "Agent Slider":
       await expect(
-        page.getByRole("heading", { level: 1, name: "Model Pad", exact: true }),
+        page.getByRole("heading", { level: 1, name: "Agent Slider", exact: true }),
       ).toBeVisible();
+      // Onboarding seeded the slider, so the editor shows its preview.
+      await expect(page.getByRole("slider", { name: "Agent Slider" })).toBeVisible();
       return;
     case "Skills":
       await expect(
@@ -257,17 +259,20 @@ test("every Settings destination renders and a one-model local inventory stays u
   await expect(modelTrigger).toBeVisible();
 
   await modelTrigger.click();
-  await page.getByRole("tab", { name: "List", exact: true }).press("Enter");
+  const otherModels = page.getByRole("button", { name: /^Other models…/u });
+  await otherModels.press("Enter");
   const filter = page.getByRole("combobox", { name: "Chat model" });
   await expect(filter).toBeFocused();
   await filter.fill("this-model-does-not-exist");
   await expect(page.getByText("No models found.", { exact: true })).toBeVisible();
+  // Escape steps back to the slider, then closes the popover.
   await filter.press("Escape");
   await expect(filter).toBeHidden();
+  await page.keyboard.press("Escape");
   await expect(modelTrigger).toBeFocused();
 
   await modelTrigger.click();
-  await page.getByRole("tab", { name: "List", exact: true }).press("Enter");
+  await otherModels.press("Enter");
   const options = page.locator("[cmdk-item]");
   await expect(options).toHaveCount(1);
   await expect(options.first()).toContainText(E2E_MODEL_DISPLAY_NAME);
@@ -276,7 +281,7 @@ test("every Settings destination renders and a one-model local inventory stays u
   await filter.press("Enter");
   await expect(modelTrigger).toHaveAttribute(
     "aria-label",
-    new RegExp(`^Selected model: ${E2E_MODEL_DISPLAY_NAME}\\. Choose a model\\.$`, "u"),
+    new RegExp(`^Selected model: ${E2E_MODEL_DISPLAY_NAME}(, .+ on the Agent Slider)?\\. Choose a model\\.$`, "u"),
   );
 
   await page.getByRole("button", { name: "Settings", exact: true }).click();

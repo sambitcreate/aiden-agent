@@ -1,4 +1,5 @@
 import { createBotMessageLedger } from "../../../main/services/bot-messages/ledger.js";
+import type { BotSessionState } from "../../../main/services/bot-runtime/bot-session-service.js";
 import { createBotMessageCourier } from "../../../main/services/bot-messages/courier.js";
 import { createBotMessageLifecycle } from "../../../main/services/bot-messages/lifecycle.js";
 import { projectBotMessageRoster } from "../../../main/services/bot-messages/roster.js";
@@ -15,6 +16,7 @@ import { BOT_PRESETS } from "../../../renderer/shared/bot-presets.js";
 import { createBotStarter } from "../../../main/services/bot-runtime/bot-starter.js";
 import { createBotCreationKeyStore } from "../../../main/services/bot-creation-keys.js";
 import { newBotId } from "../../../main/services/bot-application-service.js";
+import { SubagentReplyClock } from "../../../main/services/subagents/subagent-supervisor-core.js";
 /** Node host for the shared durable Bot core. No Electron singleton imports. */
 import { lazyStream } from "@earendil-works/pi-ai";
 import { CodemodeSandbox, loadQuickJSWasm } from "@earendil-works/pi-codemode";
@@ -63,6 +65,8 @@ export interface CliDurableBotPorts {
 export interface CliDurableBotToolContext {
   attachments: Attachment[];
   loadChat(): Promise<Chat | null>;
+  /** The reply's helper clock: every subagent call in one Bot turn shares it. */
+  replyClock?: SubagentReplyClock;
 }
 
 /** Immutable visible transcript snapshot for this exact durable tool call. */
@@ -86,9 +90,9 @@ export async function createCliDurableBots(profileDir: string, ports: CliDurable
   const imageInputs = new Map<string, boolean>();
   const approvals = createBotApprovals({ publish: () => {} });
   const memory = createBotMemoryService({ store: createBotMemoryStore({ profileDir }) });
-  const stateListeners = new Set<(botId: string) => void>();
+  const stateListeners = new Set<(botId: string, state: BotSessionState) => void>();
   /** Pause changes commit no entry; open phone streams hear them here. */
-  const stateChanges = (listener: (botId: string) => void) => { stateListeners.add(listener); return () => { stateListeners.delete(listener); }; };
+  const stateChanges = (listener: (botId: string, state: BotSessionState) => void) => { stateListeners.add(listener); return () => { stateListeners.delete(listener); }; };
   const spending = createCliBotSpending(profileDir);
   const spendingRefusal = async (botId: string) => spending.refusal(botId, (await ports.botStore.get(botId))?.name);
   const roster = async () => projectBotMessageRoster(await ports.botStore.list(), {
@@ -130,9 +134,9 @@ export async function createCliDurableBots(profileDir: string, ports: CliDurable
   async function currentTools(botId: string) {
     return admitted(botId, (lease) => ports.tools(lease, { attachments: [], loadChat: async () => null }));
   }
-  function bindTool(botId: string, tool: AgentTool, call: BotToolCall): AgentTool {
+  function bindTool(botId: string, tool: AgentTool, call: BotToolCall, replyClock: SubagentReplyClock): AgentTool {
     return { ...tool, execute: (callId, args, signal, onUpdate) => admitted(botId, async (lease) => {
-      const context = cliDurableBotToolContext(await call.entries(), lease.authority);
+      const context = { ...cliDurableBotToolContext(await call.entries(), lease.authority), replyClock };
       const live = (await ports.tools(lease, context)).find((candidate) => candidate.name === tool.name);
       if (!live) throw new Error("This Bot tool is no longer available.");
       const expected = mcpAgentToolDescriptor(tool), actual = mcpAgentToolDescriptor(live);
@@ -182,10 +186,12 @@ export async function createCliDurableBots(profileDir: string, ports: CliDurable
           messagingEnabled: () => ports.messagingEnabled?.() ?? Promise.resolve(true),
           bot: async () => bot, roster, post: (input) => messages.post(input),
         });
+        // One clock per turn: the next refresh builds new tools and drops it.
+        const replyClock = new SubagentReplyClock();
         return [
           ...(await currentTools(bot.id)).map((tool) => ({
             tool: { ...tool, execute: async () => { throw new Error("A durable Bot tool requires its calling conversation."); } },
-            bind: (call: BotToolCall) => bindTool(bot.id, tool, call),
+            bind: (call: BotToolCall) => bindTool(bot.id, tool, call, replyClock),
             replay: "unsafe" as const, ...(mcpAgentToolDescriptor(tool) ? { mcp: true } : {}),
           })),
           botMemoryToolEntry(bot.id, memory, {
@@ -227,9 +233,9 @@ export async function createCliDurableBots(profileDir: string, ports: CliDurable
       },
     },
     onSessionOpen: (botId) => memory.beginSession(botId),
-    onStateChange: (botId) => {
+    onStateChange: (botId, state) => {
       for (const listener of stateListeners) {
-        try { listener(botId); } catch (error) { process.stderr.write(`Bot ${botId} state listener failed: ${error instanceof Error ? error.message : String(error)}\n`); }
+        try { listener(botId, state); } catch (error) { process.stderr.write(`Bot ${botId} state listener failed: ${error instanceof Error ? error.message : String(error)}\n`); }
       }
     },
     deleteEffects: [(botId) => messages.forgetBot(botId), ports.deleteRoutines, async (botId) => { try { await spending.forgetBot(botId); } catch (error) { process.stderr.write(`Bot ${botId} spending cleanup: ${String(error)}\n`); } }, async (botId) => { memory.forgetBot(botId); models.forget(botId); imageInputs.delete(botId); }, async (botId) => { await ports.pauses.forgetBot(botId); }, async (botId) => { await ports.application.deleteBot({ botId }); }],

@@ -1,6 +1,7 @@
 import type * as React from "react";
-import { Ellipsis, PanelRightClose, PanelRightOpen } from "lucide-react";
+import { Ellipsis, MessageCircle, PanelRightClose, PanelRightOpen } from "lucide-react";
 import { BotAvatar } from "../../components/bot-avatar";
+import type { BotAvatarState } from "../../shared/bot-sprite";
 import {
   Button,
   DropdownMenu,
@@ -9,23 +10,28 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "../../components/ui";
+import { useBotBubbles } from "../../lib/bot-bubbles-api";
 import { useShortcutBinding, useShortcutLabel } from "../../lib/command-system";
+import { isBotBubbled } from "../../shared/bot-bubbles";
 import { ariaKeyShortcut } from "../../shared/keybindings";
 import type { BotDefinition } from "../../shared/bots";
-import { BotMenuItems, type BotMenuAction } from "./bot-menu";
+import { BotMenuItems, botChatSourceRect, bubbleBot, type BotMenuAction } from "./bot-menu";
 import { BOT_PANEL_ID, useBotPanel } from "./bot-panel-context";
 
 /** The chat toolbar's title: the Bot's avatar and name, which open its settings in the side panel. */
 export function BotChatNamePill({
   bot,
   onOpenProfile,
-  working = false,
+  avatarState = "idle",
 }: {
   bot: Pick<BotDefinition, "id" | "name" | "avatar">;
   /** Opens the side panel on the Advanced tab. */
   onOpenProfile(): void;
-  /** The Bot is in a running turn: its face glances. */
-  working?: boolean;
+  /**
+   * The face's live pose (`useBotAvatarState`): it acts out the running turn and its done or
+   * error moment. At idle the face is a static sprite, with no blink.
+   */
+  avatarState?: BotAvatarState;
 }) {
   return (
     <Button
@@ -38,42 +44,68 @@ export function BotChatNamePill({
       aria-controls={BOT_PANEL_ID}
       onClick={onOpenProfile}
     >
-      <BotAvatar botId={bot.id} avatar={bot.avatar} name={bot.name} photoLoading="immediate" size="small" working={working} />
+      <BotAvatar botId={bot.id} avatar={bot.avatar} name={bot.name} photoLoading="immediate" size="small" state={avatarState === "idle" ? undefined : avatarState} />
       <span className="truncate text-strong font-medium">{bot.name}</span>
     </Button>
   );
 }
 
-/** The action side of a Bot chat: the shared Bot ••• menu (spec §10). */
+/**
+ * Shrinks this Bot's chat into a floating head (docs/bot-bubbles.md). Hidden
+ * when bubbles are off, and while the Bot is bubbled (the chat shows the
+ * "in a bubble" card then).
+ */
+export function BotBubbleButton({ bot }: { bot: Pick<BotDefinition, "id" | "name"> }) {
+  const bubbles = useBotBubbles();
+  if (bubbles.host === "off" || isBotBubbled(bubbles, bot.id)) return null;
+  return (
+    <Button
+      iconOnly
+      variant="bar"
+      size="small"
+      aria-label={`Bubble ${bot.name}`}
+      title="Bubble"
+      onClick={(event) => void bubbleBot(bot, botChatSourceRect(event.currentTarget))}
+    >
+      <MessageCircle />
+    </Button>
+  );
+}
+
+/** The action side of a Bot chat: the bubble button and the shared Bot ••• menu (spec §10). */
 export function BotChatActions({
   bot,
   pinned,
   paused = false,
   onAction,
 }: {
-  bot: Pick<BotDefinition, "name">;
+  bot: Pick<BotDefinition, "id" | "name">;
   pinned: boolean;
   /** The person paused this Bot: the menu offers Resume Bot. */
   paused?: boolean;
   onAction(action: BotMenuAction): void;
 }) {
   return (
-    <DropdownMenu>
-      <DropdownMenuTrigger asChild>
-        <Button iconOnly variant="bar" size="small" aria-label={`More for ${bot.name}`}>
-          <Ellipsis />
-        </Button>
-      </DropdownMenuTrigger>
-      <DropdownMenuContent align="end">
-        <BotMenuItems
-          pinned={pinned}
-          paused={paused}
-          Item={DropdownMenuItem}
-          Separator={DropdownMenuSeparator}
-          onAction={onAction}
-        />
-      </DropdownMenuContent>
-    </DropdownMenu>
+    <>
+      <BotBubbleButton bot={bot} />
+      <DropdownMenu>
+        <DropdownMenuTrigger asChild>
+          <Button iconOnly variant="bar" size="small" aria-label={`More for ${bot.name}`}>
+            <Ellipsis />
+          </Button>
+        </DropdownMenuTrigger>
+        <DropdownMenuContent align="end">
+          <BotMenuItems
+            botId={bot.id}
+            pinned={pinned}
+            paused={paused}
+            Item={DropdownMenuItem}
+            Separator={DropdownMenuSeparator}
+            onAction={onAction}
+          />
+        </DropdownMenuContent>
+      </DropdownMenu>
+    </>
   );
 }
 

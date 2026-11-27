@@ -337,6 +337,10 @@ struct AidenBotSummary: Codable, Equatable, Identifiable, Sendable {
     /// Revision 42 (`bot:issues`): how many open "Needs you" cards the Bot
     /// holds. Present only for a device holding `bot:issues`, and only above zero.
     let issueCount: Int?
+    /// Revision 68 (`bot:needs-you`): an approval, a question, a hand-off or an
+    /// open issue waits on the person. A Mac sends it only as `true`, and only
+    /// on `GET /bots` to a device holding `bot:needs-you`.
+    let needsYou: Bool
 
     init(detail: AidenBotDetail) {
         id = detail.id
@@ -350,6 +354,8 @@ struct AidenBotSummary: Codable, Equatable, Identifiable, Sendable {
         sessionState = detail.sessionState
         paused = detail.paused
         issueCount = detail.issueCount
+        // A detail never carries it; the next Bot list says again.
+        needsYou = false
     }
 
     init(from decoder: Decoder) throws {
@@ -375,6 +381,7 @@ struct AidenBotSummary: Codable, Equatable, Identifiable, Sendable {
         )
         paused = try AidenBotWire.pausedFlag(values, forKey: .paused, sessionState: sessionState)
         issueCount = try AidenBotWire.issueCount(values, forKey: .issueCount)
+        needsYou = try AidenBotWire.optional(Bool.self, from: values, forKey: .needsYou) ?? false
         // Archive was replaced by Delete in revision 25 (as the host parser).
         guard try decoder.container(keyedBy: AidenBotDynamicCodingKey.self)
             .allKeys.contains(where: { $0.stringValue == "archivedAt" }) == false else {
