@@ -2515,13 +2515,16 @@ export class PiAgentRuntimeHarness {
         if (compactionResult.messages) {
           this.installCompactedMessages(compactionResult.messages);
         }
+        const abandonedFields = compactionResult.assistantAbandoned
+          ? { finalMessageWasAbandoned: true as const }
+          : {};
         const terminalCompactionHostFault = compactionHostFault(compactionResult);
         if (terminalCompactionHostFault) {
           return await finish({
             kind: "host_failed",
             faultKind: terminalCompactionHostFault,
             finalMessage: assistant,
-            ...(compactionResult.assistantAbandoned ? { finalMessageWasAbandoned: true } : {}),
+            ...abandonedFields,
             attempts,
           });
         }
@@ -2564,7 +2567,7 @@ export class PiAgentRuntimeHarness {
                   ? "context-overflow"
                   : "request-failed",
               finalMessage: assistant,
-              ...(compactionResult.assistantAbandoned ? { finalMessageWasAbandoned: true } : {}),
+              ...abandonedFields,
               attempts,
             });
           }
@@ -2596,7 +2599,7 @@ export class PiAgentRuntimeHarness {
               kind: "host_failed",
               faultKind: "lifecycle",
               finalMessage: assistant,
-              ...(compactionResult.assistantAbandoned ? { finalMessageWasAbandoned: true } : {}),
+              ...abandonedFields,
               attempts,
             });
           }
@@ -2604,7 +2607,7 @@ export class PiAgentRuntimeHarness {
             return await finish({
               kind: "app_cancelled",
               finalMessage: assistant,
-              ...(compactionResult.assistantAbandoned ? { finalMessageWasAbandoned: true } : {}),
+              ...abandonedFields,
               attempts,
             });
           }
@@ -2613,7 +2616,7 @@ export class PiAgentRuntimeHarness {
             return await finish({
               kind: "app_cancelled",
               finalMessage: assistant,
-              ...(compactionResult.assistantAbandoned ? { finalMessageWasAbandoned: true } : {}),
+              ...abandonedFields,
               attempts,
             });
           }
@@ -2630,7 +2633,7 @@ export class PiAgentRuntimeHarness {
           return await finish({
             kind: "app_cancelled",
             finalMessage: assistant,
-            ...(compactionResult.assistantAbandoned ? { finalMessageWasAbandoned: true } : {}),
+            ...abandonedFields,
             attempts,
           });
         }
@@ -2639,7 +2642,7 @@ export class PiAgentRuntimeHarness {
             kind: "host_failed",
             faultKind: this.policyFault ? "policy" : "session",
             finalMessage: assistant,
-            ...(compactionResult.assistantAbandoned ? { finalMessageWasAbandoned: true } : {}),
+            ...abandonedFields,
             attempts,
           });
         }
@@ -2648,7 +2651,7 @@ export class PiAgentRuntimeHarness {
             kind: "host_failed",
             faultKind: "session",
             finalMessage: assistant,
-            ...(compactionResult.assistantAbandoned ? { finalMessageWasAbandoned: true } : {}),
+            ...abandonedFields,
             attempts,
           });
         }
@@ -2671,7 +2674,7 @@ export class PiAgentRuntimeHarness {
                   ? "compaction-failed"
                   : "request-failed",
             finalMessage: assistant,
-            ...(compactionResult.assistantAbandoned ? { finalMessageWasAbandoned: true } : {}),
+            ...abandonedFields,
             attempts,
           });
         }
@@ -2680,7 +2683,7 @@ export class PiAgentRuntimeHarness {
             kind: "provider_failed",
             reason: "interrupted",
             finalMessage: assistant,
-            ...(compactionResult.assistantAbandoned ? { finalMessageWasAbandoned: true } : {}),
+            ...abandonedFields,
             attempts,
           });
         }
@@ -2694,7 +2697,7 @@ export class PiAgentRuntimeHarness {
             kind: "provider_failed",
             reason: "output-limit",
             finalMessage: assistant,
-            ...(compactionResult.assistantAbandoned ? { finalMessageWasAbandoned: true } : {}),
+            ...abandonedFields,
             attempts,
           });
         }
