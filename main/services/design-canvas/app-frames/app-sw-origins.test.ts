@@ -92,6 +92,21 @@ test("one origin failing to clear doesn't stop the rest, and it stays listed so 
   assert.deepEqual(s.logs, ["design-live-sw-clear-failed", "design-live-sw-clear-failed"], "tried again");
 });
 
+test("clear asks whether to keep each origin when it gets to it: one kept, or claimed while its own clear ran, stays listed", async (t) => {
+  const s = await setup(t);
+  for (const port of [5001, 5002, 5003]) await s.origins.remember(`http://127.0.0.1:${port}`);
+  const owned = new Set<string>();
+  // 5002 is claimed while 5001 is being cleared; 5003 is claimed while its own clear runs.
+  const keep = (origin: string) => {
+    if (s.cleared.includes("http://127.0.0.1:5001")) owned.add("http://127.0.0.1:5002");
+    if (s.cleared.includes("http://127.0.0.1:5003")) owned.add("http://127.0.0.1:5003");
+    return owned.has(origin);
+  };
+  await s.origins.clear(undefined, keep);
+  assert.deepEqual(s.cleared, ["http://127.0.0.1:5001", "http://127.0.0.1:5003"], "5002 was claimed before its turn, so it isn't cleared");
+  assert.deepEqual(await s.origins.list(), ["http://127.0.0.1:5002", "http://127.0.0.1:5003"], "both claimed origins stay for their owner's end");
+});
+
 test("a corrupt file clears nothing and is reset", async (t) => {
   const s = await setup(t);
   await s.origins.remember("http://127.0.0.1:5173");

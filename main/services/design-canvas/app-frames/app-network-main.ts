@@ -64,6 +64,8 @@ export type AppNetwork = {
   ownPorts(): ReadonlySet<number>;
   /** Clears the service workers of the app origins admitted for this workspace (S76). */
   forgetWorkspace(workspaceId: string): Promise<void>;
+  /** Resolves once no service-worker clear of `origin` is queued or running (S76). */
+  clearSettled(origin: string): Promise<void>;
   dispose(): void;
 };
 
@@ -175,17 +177,40 @@ export function installAppNetwork(deps: AppNetworkDeps): AppNetwork | null {
    * S76: an origin whose page ran in app context may have registered a
    * service worker. It is remembered for the start-up clear and tied to the
    * workspace of the app it was reached from (`via`, an admitted app origin).
+   *
+   * A page that reached it while a clear of it was running (a G5 navigation
+   * is decided at once, so it can land mid-clear) may have had its worker
+   * taken by that clear. Once the clear is done, its registered frame
+   * (`reload`) is reloaded once, so the page registers the worker again.
    */
-  const rememberPage = (origin: string, via: string | null) => {
+  const rememberPage = (origin: string, via: string | null, reload: number | null) => {
     const workspaceId = via !== null ? deps.appForOrigin?.(via)?.workspaceId : undefined;
     if (workspaceId !== undefined) {
       const origins = workspaceOrigins.get(workspaceId) ?? new Set<string>();
       origins.add(origin);
       workspaceOrigins.set(workspaceId, origins);
     }
+    const clearing = deps.serviceWorkers?.whenCleared(origin) ?? null;
+    if (clearing && reload !== null) {
+      void clearing.then((cleared) => {
+        if (cleared) reloadFrame(reload);
+      }, () => undefined);
+    }
     void deps.serviceWorkers?.remember(origin).catch(() => undefined);
   };
-  removals.push(registry.onAdmit((origin) => rememberPage(origin, origin)));
+  /** Reloads a registered app frame that is still in the main window. */
+  const reloadFrame = (frameTreeNodeId: number) => {
+    if (!registry.isAppFrame(frameTreeNodeId)) return;
+    const contents = deps.mainContents();
+    if (!contents || contents.isDestroyed?.()) return;
+    try {
+      const frames = (contents.mainFrame as unknown as { framesInSubtree?: Array<{ frameTreeNodeId: number; reload?(): boolean }> }).framesInSubtree ?? [];
+      frames.find((entry) => entry.frameTreeNodeId === frameTreeNodeId)?.reload?.();
+    } catch {
+      // A frame that went away meanwhile has nothing to reload.
+    }
+  };
+  removals.push(registry.onAdmit((origin, frameTreeNodeId) => rememberPage(origin, origin, frameTreeNodeId)));
 
   const cache = new AppCancelCache({ now });
   const policy: AppPolicyContext = {
@@ -259,7 +284,7 @@ export function installAppNetwork(deps: AppNetworkDeps): AppNetwork | null {
         const page = details.resourceType === "mainFrame" || details.resourceType === "subFrame";
         const origin = page && decision.context !== null && decision.context !== "frameless-app" && decision.context !== "frameless-unknown" ? originOf(details.url) : null;
         if (origin !== null && origin !== deps.rendererOrigin && isLoopbackHttpOrigin(origin)) {
-          rememberPage(origin, registry.admittedOrigin(frame) ?? (deps.isAppOrigin(origin) ? origin : null));
+          rememberPage(origin, registry.admittedOrigin(frame) ?? (deps.isAppOrigin(origin) ? origin : null), registry.registeredAncestor(frame));
         }
         return undefined;
       }
@@ -423,13 +448,18 @@ export function installAppNetwork(deps: AppNetworkDeps): AppNetwork | null {
       const origins = workspaceOrigins.get(workspaceId);
       workspaceOrigins.delete(workspaceId);
       // An origin another workspace's frames also reached keeps its worker and
-      // its record: a session's worker is per origin, so clearing it now would
+      // its record: a session's worker is per origin, so clearing it would
       // pull it from under a page that is still live. It is cleared when the
-      // last workspace that reached it ends, or at the next start.
-      const stillOwned = new Set([...workspaceOrigins.values()].flatMap((set) => [...set]));
-      const ending = [...(origins ?? [])].filter((origin) => !stillOwned.has(origin));
+      // last workspace that reached it ends, or at the next start. Ownership
+      // is asked live, inside the serialized clear, so a workspace that reaches
+      // the origin while this clear waits keeps it too.
+      const owned = (origin: string) => [...workspaceOrigins.values()].some((set) => set.has(origin));
+      const ending = [...(origins ?? [])].filter((origin) => !owned(origin));
       if (ending.length === 0 || !deps.serviceWorkers) return;
-      await deps.serviceWorkers.clear(ending).catch(() => undefined);
+      await deps.serviceWorkers.clear(ending, owned).catch(() => undefined);
+    },
+    async clearSettled(origin) {
+      await deps.serviceWorkers?.whenCleared(origin);
     },
     dispose() {
       for (const remove of removals.splice(0)) remove();

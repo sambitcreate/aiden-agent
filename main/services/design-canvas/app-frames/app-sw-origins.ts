@@ -16,10 +16,22 @@ const ORIGIN = /^http:\/\/(?:localhost|127\.0\.0\.1|\[::1\])(?::\d{1,5})?$/u;
 export type AppServiceWorkerOrigins = {
   /** Adds an origin; past 64, the oldest are cleared first and dropped once cleared. */
   remember(origin: string): Promise<void>;
-  /** Clears service workers for the given origins (all remembered ones when omitted) and forgets those cleared. */
-  clear(origins?: readonly string[]): Promise<void>;
+  /**
+   * Clears service workers for the given origins (all remembered ones when
+   * omitted) and forgets those cleared. `keep` is asked for each origin at the
+   * moment it would be cleared, in the queue, and again once its clear is
+   * done: an origin it keeps is left alone and listed, so an owner that
+   * appeared while the clear waited still has its worker and its record.
+   */
+  clear(origins?: readonly string[], keep?: (origin: string) => boolean): Promise<void>;
   /** The remembered origins. */
   list(): Promise<string[]>;
+  /**
+   * With a clear that covers `origin` queued or running, a promise for when
+   * those clears are done that says whether one of them cleared it; null
+   * with none pending.
+   */
+  whenCleared(origin: string): Promise<boolean> | null;
 };
 
 export function createAppServiceWorkerOrigins(options: {
@@ -28,6 +40,8 @@ export function createAppServiceWorkerOrigins(options: {
   log?: (event: string, fields: Record<string, unknown>) => void;
 }): AppServiceWorkerOrigins {
   let queue: Promise<unknown> = Promise.resolve();
+  /** Clears queued or running, with the origins each actually cleared. */
+  const pending = new Set<{ only: string[] | null; cleared: Set<string>; done: Promise<void> }>();
   const serial = <T>(work: () => Promise<T>): Promise<T> => {
     const next = queue.then(work, work);
     queue = next.catch(() => undefined);
@@ -55,12 +69,18 @@ export function createAppServiceWorkerOrigins(options: {
     await rename(temporary, options.file);
   };
 
-  /** Clears each origin's service workers; returns those that failed. */
-  const clearEach = async (origins: readonly string[]): Promise<Set<string>> => {
+  /** Clears each origin's service workers; returns those that stay listed (failed, or kept). */
+  const clearEach = async (origins: readonly string[], keep?: (origin: string) => boolean, cleared?: Set<string>): Promise<Set<string>> => {
     const failed = new Set<string>();
     for (const origin of origins) {
+      if (keep?.(origin)) {
+        failed.add(origin);
+        continue;
+      }
       try {
         await options.session.clearStorageData({ origin, storages: ["serviceworkers"] });
+        cleared?.add(origin);
+        if (keep?.(origin)) failed.add(origin);
       } catch (error) {
         failed.add(origin);
         options.log?.("design-live-sw-clear-failed", { error: error instanceof Error ? error.name : "unknown" });
@@ -85,13 +105,30 @@ export function createAppServiceWorkerOrigins(options: {
         const failed = await clearEach(evicted);
         await write(origins.filter((origin) => !evicted.includes(origin) || failed.has(origin)));
       }),
-    clear: (only) =>
-      serial(async () => {
+    clear: (only, keep) => {
+      const entry = {
+        only: only ? [...only] : null,
+        cleared: new Set<string>(),
+        done: Promise.resolve(),
+      };
+      entry.done = serial(async () => {
         const origins = await read();
-        const targets = only ? origins.filter((origin) => only.includes(origin)) : origins;
-        const failed = await clearEach(targets);
+        const targets = entry.only ? origins.filter((origin) => entry.only!.includes(origin)) : origins;
+        const failed = await clearEach(targets, keep, entry.cleared);
         if (targets.length > 0 || origins.length > 0) await write(origins.filter((origin) => !targets.includes(origin) || failed.has(origin)));
-      }),
+      });
+      pending.add(entry);
+      const drop = () => void pending.delete(entry);
+      entry.done.then(drop, drop);
+      return entry.done;
+    },
     list: () => serial(read),
+    whenCleared: (origin) => {
+      const covering = [...pending].filter((entry) => entry.only === null || entry.only.includes(origin));
+      if (covering.length === 0) return null;
+      return Promise.all(covering.map((entry) => entry.done.catch(() => undefined))).then(() =>
+        covering.some((entry) => entry.cleared.has(origin)),
+      );
+    },
   };
 }

@@ -1355,6 +1355,8 @@ async function mountFixture(
     chats?: Record<string, DesignCanvasChat>;
     /** Runs while main awaits the app snapshot. */
     onSnapshot?: () => void;
+    /** Main's wait for a pending service-worker clear of an origin (S76). */
+    clearSettled?: (origin: string) => Promise<void>;
   } = {},
 ) {
   const registry = new AppFrameRegistry({ mainContents: () => ({}), liveIds: () => new Set<number>(), cap: options.cap });
@@ -1370,6 +1372,7 @@ async function mountFixture(
       },
       enabled: () => options.live ?? true,
       registry: () => registry,
+      ...(options.clearSettled ? { clearSettled: options.clearSettled } : {}),
       apps: {
         snapshot: async (workspaceId): Promise<DesignAppsSnapshot> => {
           snapshots.push(workspaceId);
@@ -1416,6 +1419,41 @@ test("appFrameMount needs the frame's app root running in the chat's own workspa
   });
   assert.deepEqual(await elsewhere.invoke("designCanvas:appFrameMount", "chat-1", { frameId: "app-1", mountToken: MOUNT_TOKEN }), { error: "app-not-running" });
   assert.deepEqual(elsewhere.snapshots, ["workspace-1"]);
+});
+
+test("appFrameMount waits for a pending service-worker clear of the app's origin before the frame may load", async (t) => {
+  let release!: () => void;
+  const clearing = new Promise<void>((resolve) => (release = resolve));
+  const asked: string[] = [];
+  let waited!: () => void;
+  const waiting = new Promise<void>((resolve) => (waited = resolve));
+  const { invoke, registry } = await mountFixture(t, {
+    apps: [appStatus("workspace-1", "web", "running", RUNNING)],
+    owners: { [RUNNING]: { workspaceId: "workspace-1", appRoot: "web" } },
+    clearSettled: (origin) => {
+      asked.push(origin);
+      waited();
+      return clearing;
+    },
+  });
+  let reply: unknown;
+  const mounting = invoke("designCanvas:appFrameMount", "chat-1", { frameId: "app-1", mountToken: MOUNT_TOKEN }).then((value) => (reply = value));
+  await Promise.race([waiting, mounting]);
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.deepEqual(asked, [RUNNING]);
+  assert.equal(reply, undefined, "the renderer gets no origin while the clear runs, so the iframe doesn't load");
+  const navigation = {
+    frame: { frameTreeNodeId: 7, name: `aiden-app:app-1:${MOUNT_TOKEN}`, url: "about:blank" },
+    targetUrl: `${RUNNING}/pricing`,
+    isDirectChild: true,
+    initiator: "main-frame" as const,
+    designFrame: false,
+  };
+  assert.equal(registry.admit(navigation), "refused", "and no placement is waiting to admit it");
+  release();
+  await mounting;
+  assert.deepEqual(reply, { origin: RUNNING });
+  assert.equal(registry.admit(navigation), "app");
 });
 
 test("appFrameMount refuses a running entry whose origin main can't tie to that app (a lost holder)", async (t) => {
