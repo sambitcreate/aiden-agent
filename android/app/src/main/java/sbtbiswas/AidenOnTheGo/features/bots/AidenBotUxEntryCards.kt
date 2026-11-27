@@ -2,7 +2,6 @@ package sbtbiswas.AidenOnTheGo.features.bots
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -59,7 +58,6 @@ import sbtbiswas.AidenOnTheGo.models.AidenBotSkillProposalDecision
 import sbtbiswas.AidenOnTheGo.models.AidenBotSkillProposalEntry
 import sbtbiswas.AidenOnTheGo.models.AidenBotSkillProposalStatus
 import sbtbiswas.AidenOnTheGo.ui.theme.AidenPrimaryButton
-import sbtbiswas.AidenOnTheGo.ui.theme.AidenShape
 import sbtbiswas.AidenOnTheGo.ui.theme.AidenTheme
 import sbtbiswas.AidenOnTheGo.ui.theme.AidenTonalButton
 
@@ -369,12 +367,7 @@ private fun AidenBotUxCard(icon: ImageVector, title: String, tag: String, conten
     Surface(color = palette.raised, shape = MaterialTheme.shapes.large, modifier = Modifier.fillMaxWidth().testTag(tag)) {
         Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
-                Box(
-                    Modifier.size(36.dp).clip(AidenShape.Button).background(MaterialTheme.colorScheme.surfaceContainerHigh),
-                    contentAlignment = Alignment.Center
-                ) {
-                    Icon(icon, contentDescription = null, tint = palette.foreground, modifier = Modifier.size(20.dp))
-                }
+                AidenBotCardIcon(icon)
                 Spacer(Modifier.width(12.dp))
                 Text(title, style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.SemiBold, color = palette.foreground)
             }

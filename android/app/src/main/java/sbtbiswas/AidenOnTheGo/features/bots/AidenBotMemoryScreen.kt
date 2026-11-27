@@ -1,6 +1,5 @@
 package sbtbiswas.AidenOnTheGo.features.bots
 
-import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.text.KeyboardOptions
@@ -350,12 +349,7 @@ private fun AidenBotMemoryUnreadableCallout(name: String) {
     val palette = AidenTheme.palette
     Surface(color = palette.raised, shape = MaterialTheme.shapes.large, modifier = Modifier.fillMaxWidth()) {
         Row(Modifier.padding(16.dp), verticalAlignment = Alignment.Top) {
-            Box(
-                Modifier.size(36.dp).clip(AidenShape.Button).background(palette.warning.copy(alpha = 0.14f)),
-                contentAlignment = Alignment.Center
-            ) {
-                Icon(Icons.Outlined.SdStorage, contentDescription = null, tint = palette.warning, modifier = Modifier.size(20.dp))
-            }
+            AidenBotCardIcon(Icons.Outlined.SdStorage, tint = palette.warning, background = palette.warning.copy(alpha = 0.14f))
             Spacer(Modifier.width(12.dp))
             Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
                 Text(
